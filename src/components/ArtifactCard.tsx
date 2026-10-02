@@ -12,10 +12,10 @@ export const ArtifactCard: React.FC<ArtifactCardProps> = ({ artifact, onOpen }) 
     <div 
       data-testid="artifact-card"
       onClick={() => onOpen(artifact)}
-      className="my-3 p-3.5 rounded-xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark hover:border-claude-terracotta/70 shadow-claude-card hover:shadow-md cursor-pointer transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:-translate-y-1 hover:scale-[1.01] group flex items-center justify-between animate-slide-up"
+      className="my-3 p-3.5 rounded-xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark [@media(hover:hover)_and_(pointer:fine)]:hover:border-claude-terracotta/70 shadow-claude-card [@media(hover:hover)_and_(pointer:fine)]:hover:shadow-md cursor-pointer transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] motion-safe:[@media(hover:hover)_and_(pointer:fine)]:hover:-translate-y-1 motion-safe:[@media(hover:hover)_and_(pointer:fine)]:hover:scale-[1.01] group flex items-center justify-between animate-slide-up"
     >
       <div className="flex items-center space-x-3 min-w-0">
-        <div className="w-10 h-10 rounded-lg bg-claude-terracotta/10 text-claude-terracotta flex items-center justify-center flex-shrink-0 group-hover:scale-105 transition-transform">
+        <div className="w-10 h-10 rounded-lg bg-claude-terracotta/10 text-claude-terracotta flex items-center justify-center flex-shrink-0 motion-safe:[@media(hover:hover)_and_(pointer:fine)]:group-hover:scale-105 transition-transform">
           <Layers className="w-5 h-5" />
         </div>
         <div className="min-w-0">

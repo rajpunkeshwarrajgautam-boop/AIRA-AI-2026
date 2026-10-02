@@ -95,7 +95,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
 
           {/* Streaming Cursor */}
           {message.isStreaming && (
-            <span className="inline-block w-2 h-4 ml-1 bg-claude-terracotta animate-pulse-slow align-middle shadow-[0_0_8px_rgba(224,101,75,0.6)]"></span>
+            <span className="inline-block w-2 h-4 ml-1 bg-cyan-500 dark:bg-cyan-400 animate-pulse-slow align-middle shadow-[0_0_8px_rgba(34,211,238,0.6)] rounded-[1px]"></span>
           )}
 
           {/* In-Message Artifact Cards */}

@@ -287,7 +287,9 @@
   opacity: 0.75;
 }
 
-.group:hover .aira-card-glow { transform: scale(1.08); opacity: 1; }
+@media (hover: hover) and (pointer: fine) {
+  .group:hover .aira-card-glow { transform: scale(1.08); opacity: 1; }
+}
 
 /* --- AIRA WHIMSY & DELIGHT SYSTEM --- */
 
@@ -301,18 +303,23 @@
   content: '';
   position: absolute;
   top: 0;
-  left: -100%;
+  left: 0;
   width: 100%;
   height: 100%;
   background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.15), transparent);
-  transition: left 0.5s;
+  transform: translateX(-100%);
+  transition: transform 0.5s;
 }
-.btn-whimsy:hover {
-  transform: translateY(-1px) scale(1.01);
+
+@media (hover: hover) and (pointer: fine) {
+  .btn-whimsy:hover {
+    transform: translateY(-1px) scale(1.01);
+  }
+  .btn-whimsy:hover::before {
+    transform: translateX(100%);
+  }
 }
-.btn-whimsy:hover::before {
-  left: 100%;
-}
+
 .btn-whimsy:active {
   transform: translateY(0) scale(0.98);
 }
@@ -321,8 +328,10 @@
 .icon-btn-whimsy {
   transition: all 0.25s var(--ease-spring);
 }
-.icon-btn-whimsy:hover {
-  transform: scale(1.08) rotate(2deg);
+@media (hover: hover) and (pointer: fine) {
+  .icon-btn-whimsy:hover {
+    transform: scale(1.08) rotate(2deg);
+  }
 }
 .icon-btn-whimsy:active {
   transform: scale(0.92) rotate(-2deg);
@@ -379,3 +388,50 @@
 .form-success-flash {
   animation: sparkle 0.6s ease-in-out;
 }
+
+/* REDUCED MOTION OVERRIDES */
+@media (prefers-reduced-motion: reduce) {
+  .btn-whimsy,
+  .icon-btn-whimsy,
+  .composer-whimsy-focus {
+    transition: none !important;
+  }
+  
+  .btn-whimsy:hover,
+  .btn-whimsy:active,
+  .icon-btn-whimsy:hover,
+  .icon-btn-whimsy:active,
+  .composer-whimsy-focus:focus-within {
+    transform: none !important;
+  }
+
+  .btn-whimsy::before {
+    display: none !important;
+  }
+
+  .shimmer-active::after {
+    animation: none !important;
+    display: none !important;
+  }
+
+  .animate-in-spring,
+  .animate-slide-up,
+  .animate-scale-in,
+  .animate-fade-in {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  .animate-pulse,
+  .animate-pulse-slow {
+    animation: none !important;
+  }
+
+  .stagger-fade-in > * {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+
