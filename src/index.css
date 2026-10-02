@@ -288,3 +288,94 @@
 }
 
 .group:hover .aira-card-glow { transform: scale(1.08); opacity: 1; }
+
+/* --- AIRA WHIMSY & DELIGHT SYSTEM --- */
+
+/* Whimsy Button */
+.btn-whimsy {
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s var(--ease-spring);
+}
+.btn-whimsy::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.15), transparent);
+  transition: left 0.5s;
+}
+.btn-whimsy:hover {
+  transform: translateY(-1px) scale(1.01);
+}
+.btn-whimsy:hover::before {
+  left: 100%;
+}
+.btn-whimsy:active {
+  transform: translateY(0) scale(0.98);
+}
+
+/* Whimsy Icon Button */
+.icon-btn-whimsy {
+  transition: all 0.25s var(--ease-spring);
+}
+.icon-btn-whimsy:hover {
+  transform: scale(1.08) rotate(2deg);
+}
+.icon-btn-whimsy:active {
+  transform: scale(0.92) rotate(-2deg);
+}
+
+/* Composer Active Glow */
+.composer-whimsy-focus {
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.composer-whimsy-focus:focus-within {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 30px -10px rgba(108, 92, 255, 0.25), 0 0 0 1px rgba(108, 92, 255, 0.4);
+}
+
+/* Contextual Tooltip/Dropdown Entrance */
+.animate-in-spring {
+  animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards, fadeIn 0.25s ease-out forwards;
+}
+
+/* Subtle Shimmer for loading states */
+.shimmer-active {
+  position: relative;
+  overflow: hidden;
+}
+.shimmer-active::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 50%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent);
+  animation: shimmerSweep 2.5s infinite;
+}
+.dark .shimmer-active::after {
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.04), transparent);
+}
+
+/* Elegant Fade for Lists */
+.stagger-fade-in > * {
+  opacity: 0;
+  animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.stagger-fade-in > *:nth-child(1) { animation-delay: 0.05s; }
+.stagger-fade-in > *:nth-child(2) { animation-delay: 0.1s; }
+.stagger-fade-in > *:nth-child(3) { animation-delay: 0.15s; }
+.stagger-fade-in > *:nth-child(4) { animation-delay: 0.2s; }
+.stagger-fade-in > *:nth-child(5) { animation-delay: 0.25s; }
+.stagger-fade-in > *:nth-child(6) { animation-delay: 0.3s; }
+.stagger-fade-in > *:nth-child(7) { animation-delay: 0.35s; }
+.stagger-fade-in > *:nth-child(8) { animation-delay: 0.4s; }
+
+/* Form field success animation */
+.form-success-flash {
+  animation: sparkle 0.6s ease-in-out;
+}

@@ -12,7 +12,7 @@ export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({ thinking }) => {
   if (!thinking.text && !thinking.isStreaming) return null;
 
   return (
-    <div className="my-2.5 rounded-xl border border-claude-border-light dark:border-claude-border-dark border-l-2 border-l-claude-terracotta bg-claude-surface2-light/40 dark:bg-claude-surface2-dark/40 overflow-hidden transition-all text-xs shadow-xs">
+    <div className={`my-2.5 rounded-xl border border-claude-border-light dark:border-claude-border-dark border-l-2 border-l-claude-terracotta bg-claude-surface2-light/40 dark:bg-claude-surface2-dark/40 overflow-hidden transition-all text-xs shadow-xs animate-slide-up ${thinking.isStreaming ? 'shimmer-active' : ''}`}>
       {/* Header */}
       <button
         onClick={() => setIsExpanded(!isExpanded)}

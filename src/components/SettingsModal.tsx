@@ -48,7 +48,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="w-full max-w-xl rounded-2xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface-light dark:bg-claude-surface-dark shadow-2xl overflow-hidden">
+      <div className="w-full max-w-xl rounded-2xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface-light dark:bg-claude-surface-dark shadow-2xl overflow-hidden animate-scale-in">
         <header className="px-6 py-4 border-b border-claude-border-light dark:border-claude-border-dark flex items-center justify-between">
           <div className="flex items-center gap-3"><div className="p-2 rounded-xl bg-claude-terracotta/10 text-claude-terracotta"><Settings className="w-5 h-5" /></div><div><h2 className="font-semibold">Aira Settings</h2><p className="text-xs text-claude-muted-light dark:text-claude-muted-dark">Workspace and intelligence preferences.</p></div></div>
           <button onClick={onClose} className="p-2"><X className="w-4 h-4" /></button>
@@ -89,7 +89,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </div>
         <footer className="px-6 py-4 border-t border-claude-border-light dark:border-claude-border-dark flex justify-end gap-2">
           <button onClick={onClose} className="px-4 py-2 text-xs">Cancel</button>
-          <button onClick={save} className="px-4 py-2 rounded-xl bg-claude-terracotta text-white text-xs flex items-center gap-1.5">{saved && <Check className="w-3.5 h-3.5" />}{saved ? 'Saved' : 'Save preferences'}</button>
+          <button onClick={save} className="btn-whimsy px-4 py-2 rounded-xl bg-claude-terracotta text-white text-xs flex items-center gap-1.5">{saved && <Check className="w-3.5 h-3.5" />}{saved ? 'Saved' : 'Save preferences'}</button>
         </footer>
       </div>
     </div>

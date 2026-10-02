@@ -42,7 +42,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
   };
 
   return (
-    <div className={`py-6 px-4 md:px-6 w-full max-w-4xl mx-auto ${isUser ? '' : 'transition-colors'}`}>
+    <div className={`py-6 px-4 md:px-6 w-full max-w-4xl mx-auto animate-slide-up ${isUser ? '' : 'transition-colors'}`}>
       <div className="flex items-start space-x-3.5">
         {/* Avatar */}
         <div className="flex-shrink-0 mt-0.5">
@@ -95,7 +95,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
 
           {/* Streaming Cursor */}
           {message.isStreaming && (
-            <span className="inline-block w-2 h-4 ml-1 bg-claude-terracotta animate-pulse align-middle"></span>
+            <span className="inline-block w-2 h-4 ml-1 bg-claude-terracotta animate-pulse-slow align-middle shadow-[0_0_8px_rgba(224,101,75,0.6)]"></span>
           )}
 
           {/* In-Message Artifact Cards */}

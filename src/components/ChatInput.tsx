@@ -84,7 +84,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
   return (
     <div className="w-full max-w-4xl mx-auto px-4 pb-4">
-      <div className="relative rounded-2xl bg-claude-surface-light/95 dark:bg-claude-surface-dark/95 border border-claude-border-light dark:border-claude-border-dark shadow-claude-input dark:shadow-claude-input-dark p-3.5 transition-all duration-200 focus-within:border-claude-terracotta/50 focus-within:ring-4 focus-within:ring-claude-terracotta/5 backdrop-blur-xl">
+      <div className="relative rounded-2xl bg-claude-surface-light/95 dark:bg-claude-surface-dark/95 border border-claude-border-light dark:border-claude-border-dark shadow-claude-input dark:shadow-claude-input-dark p-3.5 transition-all duration-200 focus-within:border-claude-terracotta/50 focus-within:ring-4 focus-within:ring-claude-terracotta/5 backdrop-blur-xl composer-whimsy-focus">
         {attachments.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-2 pb-2.5 border-b border-claude-border-light/60 dark:border-claude-border-dark/60">
             {attachments.map(att => (
@@ -108,7 +108,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             <div className="relative">
               <button onClick={() => setShowStyleMenu(!showStyleMenu)} className="flex items-center space-x-1 px-2 py-1 rounded-lg text-[11px] text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark transition" title="Response style"><SlidersHorizontal className="w-3 h-3" /><span className="hidden lg:inline">{styleMode}</span></button>
               {showStyleMenu && (
-                <div className="absolute bottom-8 left-0 w-40 rounded-xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-claude-popup p-1 z-50 text-xs">
+                <div className="absolute bottom-8 left-0 w-40 rounded-xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-claude-popup p-1 z-50 text-xs animate-in-spring">
                   {(['Normal', 'Concise', 'Explanatory'] as const).map(mode => (
                     <button type="button" key={mode} onClick={() => { setStyleMode(mode); setShowStyleMenu(false); }} className="w-full px-2.5 py-1.5 rounded-lg cursor-pointer hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark flex items-center justify-between"><span>{mode}</span>{styleMode === mode && <Check className="w-3 h-3 text-claude-terracotta" />}</button>
                   ))}
@@ -118,7 +118,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             {currentModel === 'claude-3-7-sonnet' && extendedThinking && <span className="hidden lg:flex items-center space-x-1.5 text-[10px] text-violet-300 px-2 py-0.5 rounded-full bg-violet-500/10 border border-violet-500/20"><Brain className="w-3 h-3" /><span>Deep reasoning</span></span>}
           </div>
 
-          <button onClick={handleSubmit} disabled={(!inputText.trim() && attachments.length === 0) || isLoading} className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 transition-all duration-150 ${(inputText.trim() || attachments.length > 0) && !isLoading ? 'bg-claude-terracotta hover:bg-claude-terracotta-hover text-white shadow-sm ring-2 ring-claude-terracotta/20 hover:scale-105 active:scale-95' : 'bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light/60 dark:text-claude-muted-dark/60 opacity-60 cursor-not-allowed'}`} title="Send to Aira"><ArrowUp className="w-4 h-4 stroke-[2.5]" /></button>
+          <button onClick={handleSubmit} disabled={(!inputText.trim() && attachments.length === 0) || isLoading} className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 transition-all duration-150 btn-whimsy ${(inputText.trim() || attachments.length > 0) && !isLoading ? 'bg-claude-terracotta hover:bg-claude-terracotta-hover text-white shadow-sm ring-2 ring-claude-terracotta/20 hover:scale-105' : 'bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light/60 dark:text-claude-muted-dark/60 opacity-60 cursor-not-allowed'}`} title="Send to Aira"><ArrowUp className="w-4 h-4 stroke-[2.5]" /></button>
         </div>
       </div>
       <div className="flex items-center justify-center gap-1.5 mt-2.5 text-[10.5px] text-claude-muted-light/75 dark:text-claude-muted-dark/75 tracking-tight"><MessageSquareText className="w-3 h-3" /><span>Aira routes work across intelligence, knowledge, tools, and execution layers.</span></div>

@@ -46,7 +46,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       </button>
 
       {isOpen && (
-        <div className="absolute left-0 mt-2 w-[340px] rounded-2xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-claude-popup p-2 z-50 animate-fadeIn">
+        <div className="absolute left-0 mt-2 w-[340px] rounded-2xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-claude-popup p-2 z-50 animate-in-spring">
           <div className="px-3 py-2 border-b border-claude-border-light/60 dark:border-claude-border-dark/60 mb-1 flex items-center justify-between">
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark">Aira intelligence</div>

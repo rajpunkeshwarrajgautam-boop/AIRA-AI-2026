@@ -116,7 +116,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const navItem = (mode: WorkspaceMode, label: string, icon: React.ReactNode, badge?: string) => (
     <button
       onClick={() => onSelectWorkspace(mode)}
-      className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-all ${workspaceMode === mode ? 'bg-claude-terracotta/12 text-claude-text-light dark:text-claude-text-dark border border-claude-terracotta/20' : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-claude-text-dark hover:bg-claude-surface-light/70 dark:hover:bg-claude-surface-dark/70 border border-transparent'}`}
+      className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-all duration-300 hover:translate-x-1 ${workspaceMode === mode ? 'bg-claude-terracotta/12 text-claude-text-light dark:text-claude-text-dark border border-claude-terracotta/20' : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-claude-text-dark hover:bg-claude-surface-light/70 dark:hover:bg-claude-surface-dark/70 border border-transparent'}`}
     >
       <span className="flex items-center gap-2.5">{icon}<span>{label}</span></span>
       {badge && <span className="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark text-claude-muted-light dark:text-claude-muted-dark">{badge}</span>}
@@ -127,7 +127,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <div
       key={c.id}
       onClick={() => onSelectChat(c.id)}
-      className={`group flex items-center px-2.5 py-2 rounded-lg cursor-pointer transition-all ${activeChatId === c.id ? 'bg-claude-surface-light dark:bg-claude-surface-dark text-claude-text-light dark:text-claude-text-dark shadow-sm border border-claude-border-light/80 dark:border-claude-border-dark/80' : 'text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface-light/60 dark:hover:bg-claude-surface-dark/60 hover:text-claude-text-light dark:hover:text-claude-text-dark border border-transparent'}`}
+      className={`group flex items-center px-2.5 py-2 rounded-lg cursor-pointer transition-all duration-300 hover:translate-x-1 ${activeChatId === c.id ? 'bg-claude-surface-light dark:bg-claude-surface-dark text-claude-text-light dark:text-claude-text-dark shadow-sm border border-claude-border-light/80 dark:border-claude-border-dark/80' : 'text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface-light/60 dark:hover:bg-claude-surface-dark/60 hover:text-claude-text-light dark:hover:text-claude-text-dark border border-transparent'}`}
     >
       <MessageSquareText className="w-3.5 h-3.5 flex-shrink-0 mr-2" />
       {editingChatId === c.id ? (
@@ -174,7 +174,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       <div className="px-3 py-1.5">
-        <button onClick={() => { onSelectWorkspace('chat'); onNewChat(); }} className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-claude-card hover:border-claude-terracotta/40 hover:shadow-sm text-claude-text-light dark:text-claude-text-dark text-xs font-medium transition-all group">
+        <button onClick={() => { onSelectWorkspace('chat'); onNewChat(); }} className="btn-whimsy w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-claude-card hover:border-claude-terracotta/40 hover:shadow-sm text-claude-text-light dark:text-claude-text-dark text-xs font-medium transition-all group">
           <div className="flex items-center space-x-2.5"><Plus className="w-4 h-4 text-claude-terracotta group-hover:rotate-90 transition-transform duration-200" /><span>New task</span></div>
           <kbd className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark border border-claude-border-light/80 dark:border-claude-border-dark/80">Ctrl K</kbd>
         </button>
@@ -184,7 +184,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {navItem('chat', 'Chat', <MessageSquareText className="w-4 h-4" />)}
         {navItem('research', 'Research', <Telescope className="w-4 h-4" />, 'beta')}
         {navItem('library', 'Library', <Library className="w-4 h-4" />, 'shell')}
-        <button onClick={onOpenProjects} className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-all ${activeProjectId ? 'bg-claude-terracotta/12 text-claude-text-light dark:text-claude-text-dark border border-claude-terracotta/20' : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-claude-text-dark hover:bg-claude-surface-light/70 dark:hover:bg-claude-surface-dark/70 border border-transparent'}`}>
+        <button onClick={onOpenProjects} className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-all duration-300 hover:translate-x-1 ${activeProjectId ? 'bg-claude-terracotta/12 text-claude-text-light dark:text-claude-text-dark border border-claude-terracotta/20' : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-claude-text-dark hover:bg-claude-surface-light/70 dark:hover:bg-claude-surface-dark/70 border border-transparent'}`}>
           <span className="flex items-center gap-2.5"><FolderGit2 className="w-4 h-4" /><span>Projects</span></span>
           <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark">{projects.length}</span>
         </button>

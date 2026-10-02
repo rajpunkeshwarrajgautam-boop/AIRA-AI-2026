@@ -83,7 +83,7 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
         {copy.body}
       </p>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full stagger-fade-in">
         {PROMPT_STARTERS.map((starter, index) => (
           <button
             key={index}
