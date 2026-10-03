@@ -246,6 +246,7 @@ export type StreamingEventType = z.infer<typeof StreamingEventTypeSchema>;
 export const StreamingEventSchema = z.object({
   eventId: z.string(),
   runId: z.string(),
+  sequence: z.number().optional(),
   type: StreamingEventTypeSchema,
   timestamp: z.number(),
   data: z.any()

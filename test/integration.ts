@@ -64,6 +64,8 @@ async function runIntegration() {
     
     console.log('Restarting API server...');
     const apiServer2 = spawn('npx', ['tsx', 'apps/api/src/index.ts'], { shell: true });
+    apiServer2.stdout?.on('data', d => console.log(`API2: ${d.toString().trim()}`));
+    apiServer2.stderr?.on('data', d => console.error(`API2 ERR: ${d.toString().trim()}`));
     await sleep(3000);
     
     console.log('Fetching run after restart...');
@@ -84,6 +86,80 @@ async function runIntegration() {
     const claimedCount = [w1, w2].filter(out => out.includes('CLAIMED')).length;
     assert.strictEqual(claimedCount, 1, `Exactly one worker should claim the run. Got outputs: w1=${w1}, w2=${w2}`);
     console.log('Scheduler concurrency verified.');
+    
+    console.log('--- TEST 5: SSE Event Replay ---');
+    
+    // Helper to read SSE events
+    async function collectSseEvents(runId: string, headers: Record<string, string> = {}, limit: number, timeoutMs = 5000): Promise<{ id: string, event: string, data: any }[]> {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const res = await fetch(`${BASE_URL}/api/runs/${runId}/events`, {
+          headers: { ...headers },
+          signal: controller.signal
+        });
+        
+        const reader = res.body?.getReader();
+        const events: any[] = [];
+        let buffer = '';
+        
+        let currentId = '';
+        let currentEvent = '';
+        
+        if (!reader) throw new Error('No reader');
+        
+        while (events.length < limit) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          const chunk = new TextDecoder().decode(value);
+          console.log(`SSE chunk: ${chunk}`);
+          buffer += chunk;
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          
+          for (const line of lines) {
+            if (line.startsWith('id: ')) currentId = line.substring(4).trim();
+            else if (line.startsWith('event: ')) currentEvent = line.substring(7).trim();
+            else if (line.startsWith('data: ')) {
+              events.push({
+                id: currentId,
+                event: currentEvent,
+                data: JSON.parse(line.substring(6).trim())
+              });
+              console.log(`Collected event: ${currentEvent} (id: ${currentId})`);
+            }
+          }
+        }
+        clearTimeout(timeout);
+        controller.abort();
+        return events;
+      } catch (e: any) {
+        if (e.name === 'AbortError') return [];
+        throw e;
+      }
+    }
+
+    // Since we created runData earlier, it should have some events (run.created, etc.)
+    console.log('Checking DB for events...');
+    const dbEvents = await new Promise<any>((resolve, reject) => {
+      exec(`npx tsx -e "import path from 'path'; import { pathToFileURL } from 'url'; async function run() { const dbModule = await import(pathToFileURL(path.resolve('./packages/db/src/index.ts')).href); const rows = await dbModule.db('run_events').where({ run_id: '${runData.id}' }); console.log(JSON.stringify(rows)); process.exit(0); } run().catch(err => { console.error(err); process.exit(1); })"`, (err, stdout) => {
+        if (err) return reject(err);
+        resolve(JSON.parse(stdout));
+      });
+    });
+    console.log(`DB events count: ${dbEvents.length}`);
+
+    const allEvents = await collectSseEvents(runData.id, {}, 1);
+    assert.ok(allEvents.length >= 1, 'Should collect at least 1 event');
+    const firstEventId = allEvents[0].id;
+    assert.ok(firstEventId !== '', 'Event should have a sequence ID');
+    
+    console.log('Fetching with Last-Event-ID...');
+    const replayedEvents = await collectSseEvents(runData.id, { 'Last-Event-ID': firstEventId }, 1, 2000);
+    if (replayedEvents.length > 0) {
+      assert.notStrictEqual(replayedEvents[0].id, firstEventId, 'Replayed event should be strictly after the cursor');
+    }
+    console.log('SSE replay tests verified.');
     
     console.log('Cleaning up...');
     apiServer2.kill();

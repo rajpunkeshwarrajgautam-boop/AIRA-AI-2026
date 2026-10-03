@@ -9,6 +9,7 @@ import { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
 import { AutomationEngine } from '../../../packages/automation/src/index.js';
 import { PostgresAgentRepository, PostgresRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
 import { PostgresAutomationRepository, PostgresAutomationRunRepository } from '../../../packages/automation/src/repositories.js';
+import { db } from '../../../packages/db/src/index.js';
 import {
   CreateRunRequestSchema,
   ApprovalDecisionSchema,
@@ -189,20 +190,119 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
     return res.status(404).json({ error: `Run ${runId} not found.` });
   }
 
+  // Parse cursor
+  let cursor = -1;
+  const lastEventId = req.headers['last-event-id'];
+  const queryAfter = req.query.after;
+  
+  if (typeof lastEventId === 'string' && lastEventId.trim() !== '') {
+    const parsed = parseInt(lastEventId, 10);
+    if (!isNaN(parsed) && parsed >= 0) cursor = parsed;
+  } else if (typeof queryAfter === 'string' && queryAfter.trim() !== '') {
+    const parsed = parseInt(queryAfter, 10);
+    if (!isNaN(parsed) && parsed >= 0) cursor = parsed;
+  }
+
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders?.();
 
-  const stream = agentRuntime.getEventStream(runId);
-  const onEvent = (event: any) => {
-    res.write(`data: ${JSON.stringify(event)}\n\n`);
+  const writeSseEvent = (event: any) => {
+    if (event.sequence !== undefined) {
+      res.write(`id: ${event.sequence}\n`);
+    }
+    res.write(`event: ${event.type}\n`);
+    res.write(`data: ${JSON.stringify(event.data)}\n\n`);
   };
 
-  stream.on('event', onEvent);
+  const stream = agentRuntime.getEventStream(runId);
+  const bufferedLiveEvents: any[] = [];
+  let isReplaying = true;
+  let isClosed = false;
+
+  const onLiveEvent = (event: any) => {
+    if (isReplaying) {
+      bufferedLiveEvents.push(event);
+    } else {
+      writeSseEvent(event);
+      if (['run.completed', 'run.failed', 'run.cancelled'].includes(event.type)) {
+        closeCleanly();
+      }
+    }
+  };
+
+  const closeCleanly = () => {
+    if (isClosed) return;
+    isClosed = true;
+    stream.off('event', onLiveEvent);
+    res.end();
+  };
+
   req.on('close', () => {
-    stream.off('event', onEvent);
+    isClosed = true;
+    stream.off('event', onLiveEvent);
   });
+
+  // 1. Subscribe to live events
+  stream.on('event', onLiveEvent);
+
+  try {
+    // 2. High-water mark
+    const highWaterSequence = await runRepo.getLatestEventSequence(runId);
+    
+    // 3. Fetch past events
+    const pastEvents = cursor >= 0 
+      ? await runRepo.getRunEventsAfter(runId, cursor)
+      : await runRepo.getRunEvents(runId);
+    
+    // 4. Emit past events up to high water
+    let terminalEventSeen = false;
+    for (const evt of pastEvents) {
+      if (evt.sequence !== undefined && evt.sequence <= highWaterSequence) {
+        writeSseEvent(evt);
+        if (['run.completed', 'run.failed', 'run.cancelled'].includes(evt.type)) {
+          terminalEventSeen = true;
+        }
+      }
+    }
+
+    // 5. Transition to live
+    isReplaying = false;
+    
+    if (terminalEventSeen) {
+      closeCleanly();
+      return;
+    }
+
+    // 6. Flush buffer
+    for (const evt of bufferedLiveEvents) {
+      if (evt.sequence !== undefined && evt.sequence > highWaterSequence) {
+        writeSseEvent(evt);
+        if (['run.completed', 'run.failed', 'run.cancelled'].includes(evt.type)) {
+          terminalEventSeen = true;
+        }
+      }
+    }
+    
+    if (terminalEventSeen) {
+      closeCleanly();
+      return;
+    }
+
+    // If run is already terminal but terminal event wasn't seen (somehow?), ensure we close
+    const latestRun = await agentRuntime.getRun(runId);
+    if (latestRun && ['COMPLETED', 'FAILED', 'CANCELLED'].includes(latestRun.state)) {
+       // It's terminal but we might have missed the terminal event if it happened before we queried highWaterSequence but after we queried events?
+       // That shouldn't happen. But just in case:
+       closeCleanly();
+    }
+  } catch (err: any) {
+    if (!isClosed) {
+      res.write(`event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`);
+      closeCleanly();
+    }
+  }
 });
 
 // -----------------------------------------------------------------------

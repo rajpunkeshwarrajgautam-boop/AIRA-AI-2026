@@ -12,6 +12,7 @@ export async function up(knex: Knex): Promise<void> {
     table.integer('max_steps').defaultTo(10);
     table.string('execution_checkpoint'); // KNOWLEDGE_READY, TOOL_SELECTED, WAITING_FOR_APPROVAL, etc.
     table.jsonb('pending_approval');
+    table.jsonb('artifacts').defaultTo('[]');
   });
 
   await knex.schema.alterTable('tool_calls', (table) => {

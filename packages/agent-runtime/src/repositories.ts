@@ -13,8 +13,10 @@ export interface RunRepository {
   getRun(id: string): Promise<Run | undefined>;
   listRuns(): Promise<Run[]>;
   getInterruptedRuns(): Promise<Run[]>;
-  appendRunEvent(event: StreamingEvent): Promise<void>;
+  appendRunEvent(event: StreamingEvent): Promise<StreamingEvent>;
   getRunEvents(runId: string): Promise<StreamingEvent[]>;
+  getRunEventsAfter(runId: string, sequence: number): Promise<StreamingEvent[]>;
+  getLatestEventSequence(runId: string): Promise<number>;
 }
 
 export class PostgresAgentRepository implements AgentRepository {
@@ -115,25 +117,60 @@ export class PostgresRunRepository implements RunRepository {
     return rows.map(this.mapToRun);
   }
 
-  async appendRunEvent(event: StreamingEvent): Promise<void> {
-    await db('run_events').insert({
+  async appendRunEvent(event: StreamingEvent): Promise<StreamingEvent> {
+    const rows = await db('run_events').insert({
       id: event.eventId,
       run_id: event.runId,
       type: event.type,
       payload: JSON.stringify(event.data),
       createdAt: event.timestamp
-    });
+    }).returning('*');
+    
+    const row = rows[0];
+    return {
+      eventId: row.id,
+      runId: row.run_id,
+      sequence: parseInt(row.sequence, 10),
+      type: row.type as any,
+      timestamp: parseInt(row.createdAt, 10),
+      data: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload
+    };
   }
 
   async getRunEvents(runId: string): Promise<StreamingEvent[]> {
-    const rows = await db('run_events').where({ run_id: runId }).orderBy('createdAt', 'asc');
+    const rows = await db('run_events').where({ run_id: runId }).orderBy('sequence', 'asc');
     return rows.map((row: any) => ({
       eventId: row.id,
       runId: row.run_id,
+      sequence: parseInt(row.sequence, 10),
       type: row.type as any,
       timestamp: parseInt(row.createdAt, 10),
       data: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload
     }));
+  }
+
+  async getRunEventsAfter(runId: string, sequence: number): Promise<StreamingEvent[]> {
+    const rows = await db('run_events')
+      .where({ run_id: runId })
+      .andWhere('sequence', '>', sequence)
+      .orderBy('sequence', 'asc');
+    
+    return rows.map((row: any) => ({
+      eventId: row.id,
+      runId: row.run_id,
+      sequence: parseInt(row.sequence, 10),
+      type: row.type as any,
+      timestamp: parseInt(row.createdAt, 10),
+      data: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload
+    }));
+  }
+
+  async getLatestEventSequence(runId: string): Promise<number> {
+    const row = await db('run_events')
+      .where({ run_id: runId })
+      .max('sequence as max_seq')
+      .first();
+    return row && row.max_seq ? parseInt(row.max_seq, 10) : 0;
   }
 
   private mapToRun(row: any): Run {

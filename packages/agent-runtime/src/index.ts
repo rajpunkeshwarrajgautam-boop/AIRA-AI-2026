@@ -53,16 +53,19 @@ export class AgentRuntime extends EventEmitter {
 
   private async emitRunEvent(runId: string, type: StreamingEventType, data: any): Promise<void> {
     const stream = this.getEventStream(runId);
-    const event: StreamingEvent = {
+    let event: StreamingEvent = {
       eventId: `evt_${crypto.randomUUID().slice(0, 8)}`,
       runId,
       type,
       timestamp: Date.now(),
       data
     };
+    
+    // Persist event first to obtain sequence and ensure durability
+    event = await this.runRepo.appendRunEvent(event);
+    
     stream.emit('event', event);
     this.emit('run_event', { runId, event });
-    await this.runRepo.appendRunEvent(event).catch(console.error);
   }
 
   public async createAndExecuteRun(request: CreateRunRequest): Promise<Run> {
