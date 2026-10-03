@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { PanelLeft, Layers, Star, Share2, Check, FolderGit2 } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { PanelLeft, Layers, Bookmark, Share2, Check, FolderGit2 } from 'lucide-react';
 import type { Conversation, Message, Artifact, Attachment, Project, AppSettings, WorkspaceMode } from './types';
 import {
   loadConversations, saveConversations, loadActiveChatId, saveActiveChatId,
@@ -11,10 +11,14 @@ import { Sidebar } from './components/Sidebar';
 import { ChatMessage } from './components/ChatMessage';
 import { ChatInput } from './components/ChatInput';
 import { GreetingScreen } from './components/GreetingScreen';
-import { ArtifactStudio } from './components/ArtifactStudio';
 import { ModelSelector } from './components/ModelSelector';
-import { ProjectsModal } from './components/ProjectsModal';
-import { SettingsModal } from './components/SettingsModal';
+import { AiraMark } from './components/AiraMark';
+
+// Lazy-loaded heavy auxiliary surfaces to optimize FCP and TTI
+const ArtifactStudio = React.lazy(() => import('./components/ArtifactStudio').then(m => ({ default: m.ArtifactStudio })));
+const ProjectsModal = React.lazy(() => import('./components/ProjectsModal').then(m => ({ default: m.ProjectsModal })));
+const SettingsModal = React.lazy(() => import('./components/SettingsModal').then(m => ({ default: m.SettingsModal })));
+import { MemoryVaultModal } from './components/MemoryVaultModal';
 
 const MODE_CONTEXT: Record<WorkspaceMode, string> = {
   chat: '',
@@ -31,9 +35,10 @@ function App() {
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>(() => localStorage.getItem('aira_active_project_id_v1') || undefined);
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('chat');
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(() => typeof window !== 'undefined' ? window.innerWidth >= 768 : true);
   const [isProjectsOpen, setIsProjectsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isMemoryVaultOpen, setIsMemoryVaultOpen] = useState(false);
   const [activeArtifact, setActiveArtifact] = useState<Artifact | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [sharedCopied, setSharedCopied] = useState(false);
@@ -69,6 +74,20 @@ function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [activeConversation?.messages.length]);
 
+  const updateConversation = (id: string, updater: (c: Conversation) => Conversation) => {
+    setConversations(prev => prev.map(c => c.id === id ? updater(c) : c));
+  };
+
+  const handleNewChat = useCallback(() => {
+    const id = 'chat-' + Date.now();
+    const next: Conversation = { id, title: 'New task', messages: [], createdAt: Date.now(), updatedAt: Date.now(), projectId: activeProjectId };
+    setConversations(prev => [next, ...prev]);
+    setActiveChatId(id);
+    saveActiveChatId(id);
+    setActiveArtifact(null);
+    setWorkspaceMode('chat');
+  }, [activeProjectId]);
+
   useEffect(() => {
     const handle = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
@@ -78,21 +97,7 @@ function App() {
     };
     window.addEventListener('keydown', handle);
     return () => window.removeEventListener('keydown', handle);
-  });
-
-  const updateConversation = (id: string, updater: (c: Conversation) => Conversation) => {
-    setConversations(prev => prev.map(c => c.id === id ? updater(c) : c));
-  };
-
-  const handleNewChat = () => {
-    const id = 'chat-' + Date.now();
-    const next: Conversation = { id, title: 'New task', messages: [], createdAt: Date.now(), updatedAt: Date.now(), projectId: activeProjectId };
-    setConversations(prev => [next, ...prev]);
-    setActiveChatId(id);
-    saveActiveChatId(id);
-    setActiveArtifact(null);
-    setWorkspaceMode('chat');
-  };
+  }, [handleNewChat]);
 
   const handleSelectChat = (id: string) => {
     setActiveChatId(id);
@@ -208,7 +213,7 @@ function App() {
         },
         projectContext || undefined
       );
-    } catch (error) {
+    } catch {
       setIsLoading(false);
       updateConversation(id, c => ({
         ...c,
@@ -228,7 +233,7 @@ function App() {
   const updateSettings = (partial: Partial<AppSettings>) => setSettings(prev => ({ ...prev, ...partial }));
 
   return (
-    <div className="h-screen w-screen flex overflow-hidden bg-claude-bg-light dark:bg-claude-bg-dark text-claude-text-light dark:text-claude-text-dark">
+    <div className="h-[100dvh] w-screen flex overflow-hidden bg-claude-bg-light dark:bg-claude-bg-dark text-claude-text-light dark:text-claude-text-dark">
       <Sidebar
         conversations={conversations}
         activeChatId={activeChatId}
@@ -249,11 +254,24 @@ function App() {
         onSelectWorkspace={setWorkspaceMode}
       />
 
-      <main className="flex-1 min-w-0 h-screen flex flex-col">
-        <header className="h-[54px] px-3 md:px-5 flex items-center justify-between border-b border-claude-border-light dark:border-claude-border-dark bg-claude-bg-light/80 dark:bg-claude-bg-dark/80 backdrop-blur-xl">
+      <main className="flex-1 min-w-0 h-[100dvh] flex flex-col overflow-x-hidden w-full max-w-full bg-mesh-canvas">
+        <header className="h-[54px] px-3 md:px-5 flex items-center justify-between border-b border-claude-border-light/80 dark:border-claude-border-dark/80 gradient-fade-header">
           <div className="flex items-center gap-2 min-w-0">
-            {!sidebarOpen && <button onClick={() => setSidebarOpen(true)} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark"><PanelLeft className="w-4 h-4" /></button>}
-            <div className="hidden md:flex items-center gap-1.5 text-[10px] uppercase tracking-[0.14em] text-claude-muted-light dark:text-claude-muted-dark mr-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]" />Aira</div>
+            {(!sidebarOpen || (typeof window !== 'undefined' && window.innerWidth < 768)) && (
+              <>
+                <button 
+                  onClick={() => setSidebarOpen(true)} 
+                  className="p-2 -ml-1 rounded-lg text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark transition-colors touch-manipulation" 
+                  title="Open sidebar"
+                  aria-label="Open sidebar navigation"
+                >
+                  <PanelLeft className="w-4 h-4" />
+                </button>
+                <div className="flex items-center gap-1.5 mr-1">
+                  <AiraMark size="sm" />
+                </div>
+              </>
+            )}
             <ModelSelector
               currentModel={settings.activeModel}
               onSelectModel={model => updateSettings({ activeModel: model })}
@@ -270,22 +288,30 @@ function App() {
                 if (artifact) setActiveArtifact(artifact);
               }
             }} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs ${activeArtifact ? 'bg-claude-terracotta text-white' : 'hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark'}`}><Layers className="w-3.5 h-3.5" /><span className="hidden sm:inline">Output Studio</span></button>}
-            {activeConversation && <button onClick={() => handleToggleStar(activeConversation.id)} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark"><Star className={`w-4 h-4 ${activeConversation.isPinned ? 'fill-amber-400 text-amber-400' : 'text-claude-muted-light dark:text-claude-muted-dark'}`} /></button>}
+            {activeConversation && <button onClick={() => handleToggleStar(activeConversation.id)} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark active:scale-95 transition-all" title={activeConversation.isPinned ? 'Remove bookmark' : 'Bookmark conversation'}><Bookmark className={`w-4 h-4 ${activeConversation.isPinned ? 'fill-claude-terracotta text-claude-terracotta' : 'text-claude-muted-light dark:text-claude-muted-dark'}`} /></button>}
             <button onClick={handleShare} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark">{sharedCopied ? <Check className="w-4 h-4 text-emerald-400" /> : <Share2 className="w-4 h-4 text-claude-muted-light dark:text-claude-muted-dark" />}</button>
           </div>
         </header>
 
         <div className="flex-1 overflow-y-auto flex flex-col">
           {!activeConversation || activeConversation.messages.length === 0 ? (
-            <GreetingScreen userName={settings.userName} workspaceMode={workspaceMode} onSelectStarter={prompt => handleSendMessage(prompt, [])} />
+            <GreetingScreen 
+              userName={settings.userName} 
+              workspaceMode={workspaceMode} 
+              onSelectStarter={prompt => handleSendMessage(prompt, [])} 
+              conversations={conversations}
+              activeProject={currentProject}
+              extendedThinking={settings.extendedThinking}
+              onSelectChat={handleSelectChat}
+            />
           ) : (
-            <div className="flex-1 pb-6 divide-y divide-claude-border-light/40 dark:divide-claude-border-dark/40">
+            <div className="flex-1 pb-6 space-y-4">
               {activeConversation.messages.map(message => <ChatMessage key={message.id} message={message} userName={settings.userName} onOpenArtifact={setActiveArtifact} />)}
               <div ref={messagesEndRef} />
             </div>
           )}
 
-          <div className="sticky bottom-0 pt-4 bg-gradient-to-t from-claude-bg-light via-claude-bg-light/95 to-transparent dark:from-claude-bg-dark dark:via-claude-bg-dark/95">
+          <div className="sticky bottom-0 pt-4 gradient-mask-bottom">
             <ChatInput
               onSendMessage={handleSendMessage}
               isLoading={isLoading}
@@ -298,34 +324,48 @@ function App() {
         </div>
       </main>
 
-      {activeArtifact && <ArtifactStudio artifact={activeArtifact} onClose={() => setActiveArtifact(null)} />}
+      <React.Suspense fallback={null}>
+        {activeArtifact && <ArtifactStudio artifact={activeArtifact} onClose={() => setActiveArtifact(null)} />}
 
-      <ProjectsModal
-        isOpen={isProjectsOpen}
-        onClose={() => setIsProjectsOpen(false)}
-        projects={projects}
-        activeProjectId={activeProjectId}
-        onSelectProject={setActiveProjectId}
-        onSaveProject={project => setProjects(prev => [project, ...prev.filter(p => p.id !== project.id)])}
-        onDeleteProject={id => {
-          setProjects(prev => prev.filter(p => p.id !== id));
-          if (activeProjectId === id) setActiveProjectId(undefined);
-        }}
-      />
+        {isProjectsOpen && (
+          <ProjectsModal
+            isOpen={isProjectsOpen}
+            onClose={() => setIsProjectsOpen(false)}
+            projects={projects}
+            activeProjectId={activeProjectId}
+            onSelectProject={setActiveProjectId}
+            onSaveProject={project => setProjects(prev => [project, ...prev.filter(p => p.id !== project.id)])}
+            onDeleteProject={id => {
+              setProjects(prev => prev.filter(p => p.id !== id));
+              if (activeProjectId === id) setActiveProjectId(undefined);
+            }}
+          />
+        )}
 
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        settings={settings}
-        onSaveSettings={setSettings}
-        conversations={conversations}
-        projects={projects}
-        onImportData={data => { setConversations(data.conversations); setProjects(data.projects); if (data.conversations[0]) handleSelectChat(data.conversations[0].id); }}
-        onClearAll={() => {
-          const fresh = { ...INITIAL_CONVERSATION, id: 'chat-' + Date.now(), createdAt: Date.now(), updatedAt: Date.now() };
-          setConversations([fresh]); setActiveChatId(fresh.id); setProjects([]); setActiveProjectId(undefined); setSettings(loadSettings()); setActiveArtifact(null);
-        }}
-      />
+        {isSettingsOpen && (
+          <SettingsModal
+            isOpen={isSettingsOpen}
+            onClose={() => setIsSettingsOpen(false)}
+            settings={settings}
+            onSaveSettings={setSettings}
+            conversations={conversations}
+            projects={projects}
+            onImportData={data => { setConversations(data.conversations); setProjects(data.projects); if (data.conversations[0]) handleSelectChat(data.conversations[0].id); }}
+            onClearAll={() => {
+              const fresh = { ...INITIAL_CONVERSATION, id: 'chat-' + Date.now(), createdAt: Date.now(), updatedAt: Date.now() };
+              setConversations([fresh]); setActiveChatId(fresh.id); setProjects([]); setActiveProjectId(undefined); setSettings(loadSettings()); setActiveArtifact(null);
+            }}
+            onOpenMemoryVault={() => setIsMemoryVaultOpen(true)}
+          />
+        )}
+
+        {isMemoryVaultOpen && (
+          <MemoryVaultModal
+            isOpen={isMemoryVaultOpen}
+            onClose={() => setIsMemoryVaultOpen(false)}
+          />
+        )}
+      </React.Suspense>
     </div>
   );
 }

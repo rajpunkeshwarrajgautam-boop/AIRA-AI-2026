@@ -1,0 +1,23 @@
+{
+  "projectName": "AIRA-AI-2026",
+  "version": "1.0.0",
+  "tiers": {
+    "working": { "maxTurns": 20, "ttlSeconds": 86400 },
+    "episodic": { "maxEntries": 500, "retentionDays": 90 },
+    "semantic": { "indexing": "hybrid_bm25_vector", "strictPrivacy": true },
+    "procedural": { "autoExtractWorkflows": true }
+  },
+  "privacy": {
+    "stripApiKeys": true,
+    "patterns": [
+      "sk-[a-zA-Z0-9_-]{20,}",
+      "ghp_[a-zA-Z0-9]{30,}",
+      "ey[a-zA-Z0-9_-]{10,}\\.ey[a-zA-Z0-9_-]{10,}",
+      "AIza[0-9A-Za-z-_]{35}"
+    ]
+  },
+  "benchmarks": {
+    "targetRecall": 0.95,
+    "maxTokenBudget": 800
+  }
+}

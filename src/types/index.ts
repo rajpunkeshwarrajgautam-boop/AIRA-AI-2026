@@ -101,11 +101,55 @@ export interface AppSettings {
   theme: ThemeMode;
   activeModel: ModelId;
   extendedThinking: boolean;
-  thinkingBudget: number; // e.g. 1024 to 32000
+  thinkingBudget: number; // e.g. 1024 to 64000
   provider: AIProvider;
   anthropicApiKey: string;
   openRouterApiKey: string;
   customInstructions: string;
   userName: string;
-  aestheticPreset?: 'default' | 'linear-precision' | 'warm-parchment' | 'liquid-glass' | 'industrial-brutalist' | 'nordic-moss';
+  email?: string;
+  userBio?: string;
+  responseStyle?: 'normal' | 'concise' | 'explanatory' | 'academic' | 'code-first';
+  autoOpenArtifacts?: boolean;
+  aestheticPreset?: 'default' | 'linear-precision' | 'warm-parchment' | 'liquid-glass' | 'industrial-brutalist' | 'nordic-moss' | 'solar-gold' | 'tokyo-neon' | 'vanguard-monolith';
+  // Agent Persistent Memory (agentmemory integration)
+  persistentMemoryEnabled?: boolean;
+  autoConsolidateMemory?: boolean;
+  privacyScrubbing?: boolean;
+  memoryTokenBudget?: number;
+}
+
+export type MemoryTier = 'working' | 'episodic' | 'semantic' | 'procedural';
+
+export interface MemoryItem {
+  id: string;
+  tier: MemoryTier;
+  category: 'preference' | 'architecture' | 'decision' | 'workflow' | 'bugfix' | 'general';
+  title: string;
+  content: string;
+  tags: string[];
+  createdAt: number;
+  updatedAt: number;
+  accessCount: number;
+  lastAccessedAt?: number;
+  score?: number; // Hybrid BM25 + vector score
+  sourceSessionId?: string;
+  isPinned?: boolean;
+}
+
+export interface MemoryQuery {
+  query: string;
+  limit?: number;
+  tiers?: MemoryTier[];
+  minScore?: number;
+}
+
+export interface MemoryStats {
+  totalCount: number;
+  workingCount: number;
+  episodicCount: number;
+  semanticCount: number;
+  proceduralCount: number;
+  tokensSavedEstimate: number;
+  lastConsolidationTimestamp?: number;
 }

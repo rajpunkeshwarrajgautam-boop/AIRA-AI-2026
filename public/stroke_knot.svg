@@ -1,0 +1,88 @@
+<svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Ribbon Gradient 1 (Top Apex - Claude warm terracotta to amber) -->
+    <linearGradient id="strokeGrad1" x1="24" y1="8" x2="40" y2="36" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFA88B"/>
+      <stop offset="50%" stop-color="#E0704C"/>
+      <stop offset="100%" stop-color="#A83918"/>
+    </linearGradient>
+
+    <!-- Ribbon Gradient 2 (Right - Manus dimensional agency) -->
+    <linearGradient id="strokeGrad2" x1="40" y1="20" x2="20" y2="44" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFBEA6"/>
+      <stop offset="50%" stop-color="#D97757"/>
+      <stop offset="100%" stop-color="#802610"/>
+    </linearGradient>
+
+    <!-- Ribbon Gradient 3 (Left - OpenAI continuous recursive loop) -->
+    <linearGradient id="strokeGrad3" x1="16" y1="36" x2="36" y2="16" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#C14E2D"/>
+      <stop offset="50%" stop-color="#D97757"/>
+      <stop offset="100%" stop-color="#FFA88B"/>
+    </linearGradient>
+
+    <!-- Soft drop shadow for overlapping ribbon layers -->
+    <filter id="ribbonElevation" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="2" stdDeviation="1.5" flood-color="#000000" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+
+  <!-- Loop 3: Left (240 deg) -->
+  <g transform="rotate(240 32 34)" filter="url(#ribbonElevation)">
+    <!-- Main thick hollow loop -->
+    <path
+      d="M 28.5 35 C 25 28 22 19 25.5 12 C 28 7.5 36 7.5 38.5 12 C 42 19 39 28 35.5 35"
+      stroke="url(#strokeGrad3)"
+      stroke-width="4.2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+    <!-- Specular highlight line along apex ridge -->
+    <path
+      d="M 27 12 C 28.5 9 35.5 9 37 12"
+      stroke="#FFFFFF"
+      stroke-width="1.2"
+      stroke-linecap="round"
+      stroke-opacity="0.8"
+    />
+  </g>
+
+  <!-- Loop 2: Right (120 deg) -->
+  <g transform="rotate(120 32 34)" filter="url(#ribbonElevation)">
+    <path
+      d="M 28.5 35 C 25 28 22 19 25.5 12 C 28 7.5 36 7.5 38.5 12 C 42 19 39 28 35.5 35"
+      stroke="url(#strokeGrad2)"
+      stroke-width="4.2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+    <path
+      d="M 27 12 C 28.5 9 35.5 9 37 12"
+      stroke="#FFFFFF"
+      stroke-width="1.2"
+      stroke-linecap="round"
+      stroke-opacity="0.7"
+    />
+  </g>
+
+  <!-- Loop 1: Top Apex (0 deg - forms the peak of the 'A') -->
+  <g transform="rotate(0 32 34)" filter="url(#ribbonElevation)">
+    <path
+      d="M 28.5 35 C 25 28 22 19 25.5 12 C 28 7.5 36 7.5 38.5 12 C 42 19 39 28 35.5 35"
+      stroke="url(#strokeGrad1)"
+      stroke-width="4.2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+    <path
+      d="M 27 12 C 28.5 9 35.5 9 37 12"
+      stroke="#FFFFFF"
+      stroke-width="1.2"
+      stroke-linecap="round"
+      stroke-opacity="0.9"
+    />
+  </g>
+
+  <!-- Central Nexus Core Spark -->
+  <circle cx="32" cy="34" r="3.2" fill="#FFFFFF" stroke="#D97757" stroke-width="1"/>
+</svg>

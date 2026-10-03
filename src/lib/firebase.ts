@@ -8,7 +8,6 @@ import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
 import {
   getAuth,
   signInAnonymously,
-  onAuthStateChanged,
   User,
   Auth
 } from 'firebase/auth';

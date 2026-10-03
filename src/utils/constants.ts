@@ -44,13 +44,21 @@ export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark',
   activeModel: 'claude-3-7-sonnet',
   extendedThinking: true,
-  thinkingBudget: 4096,
+  thinkingBudget: 8192,
   provider: 'simulated',
   anthropicApiKey: '',
   openRouterApiKey: '',
   customInstructions: '',
-  userName: 'Explorer',
+  userName: '',
+  email: 'user@aira.internal',
+  userBio: 'Full-stack software engineer & researcher working with modern web and AI agent systems.',
+  responseStyle: 'normal',
+  autoOpenArtifacts: true,
   aestheticPreset: 'linear-precision',
+  persistentMemoryEnabled: true,
+  autoConsolidateMemory: true,
+  privacyScrubbing: true,
+  memoryTokenBudget: 800,
 };
 
 export const PROMPT_STARTERS = [

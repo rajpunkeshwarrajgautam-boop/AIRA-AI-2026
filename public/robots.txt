@@ -1,0 +1,8 @@
+# https://www.robotstxt.org/robotstxt.html
+User-agent: *
+Allow: /
+Disallow: /api/
+
+# Host & Sitemaps
+Host: https://aira.ai
+Sitemap: https://aira.ai/sitemap.xml

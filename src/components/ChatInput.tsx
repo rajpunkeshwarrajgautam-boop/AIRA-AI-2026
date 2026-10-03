@@ -1,5 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowUp, Paperclip, X, SlidersHorizontal, Check, Brain, Telescope, Wrench, Bot, MessageSquareText } from 'lucide-react';
+import { 
+  ArrowUp, 
+  Paperclip, 
+  X, 
+  SlidersHorizontal, 
+  Check, 
+  Brain, 
+  Telescope, 
+  Bot
+} from 'lucide-react';
 import type { Attachment, ModelId, WorkspaceMode } from '../types';
 
 interface ChatInputProps {
@@ -15,7 +24,7 @@ interface ChatInputProps {
 export const ChatInput: React.FC<ChatInputProps> = ({
   onSendMessage,
   isLoading,
-  currentModel,
+  currentModel: _currentModel,
   extendedThinking,
   workspaceMode,
   onWorkspaceModeChange,
@@ -35,7 +44,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   }, [inputText]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); }
+    if (e.key === 'Enter' && !e.shiftKey) { 
+      e.preventDefault(); 
+      handleSubmit(); 
+    }
   };
 
   const handleSubmit = () => {
@@ -70,58 +82,159 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const modeButton = (mode: WorkspaceMode, label: string, icon: React.ReactNode) => (
-    <button
-      type="button"
-      onClick={() => onWorkspaceModeChange(workspaceMode === mode ? 'chat' : mode)}
-      className={`hidden sm:flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px] transition border ${workspaceMode === mode ? 'bg-claude-terracotta/12 text-claude-terracotta border-claude-terracotta/25' : 'text-claude-muted-light dark:text-claude-muted-dark border-transparent hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark'}`}
-    >
-      {icon}<span>{label}</span>
-    </button>
-  );
+  const placeholderMap: Record<WorkspaceMode, string> = {
+    chat: 'How can Aira help you today?',
+    research: 'What would you like Aira to research?',
+    agents: 'Describe the outcome you want an agent to deliver...',
+    automations: 'Describe the trigger and action to automate...',
+    library: 'Ask Aira about your workspace knowledge...',
+  };
 
-  const placeholder = workspaceMode === 'research' ? 'What should Aira research?' : workspaceMode === 'agents' ? 'Describe the outcome you want an agent to deliver...' : workspaceMode === 'automations' ? 'Describe the trigger and action to automate...' : workspaceMode === 'library' ? 'Ask Aira about your workspace knowledge...' : 'Ask Aira anything...';
+  const placeholder = placeholderMap[workspaceMode] || placeholderMap.chat;
+  const canSubmit = (inputText.trim() || attachments.length > 0) && !isLoading;
 
   return (
-    <div className="w-full max-w-4xl mx-auto px-4 pb-4">
-      <div className="relative rounded-2xl bg-claude-surface-light/95 dark:bg-claude-surface-dark/95 border border-claude-border-light dark:border-claude-border-dark shadow-claude-input dark:shadow-claude-input-dark p-3.5 transition-all duration-200 focus-within:border-claude-terracotta/50 focus-within:ring-4 focus-within:ring-claude-terracotta/5 backdrop-blur-xl composer-whimsy-focus">
+    <div className="w-full max-w-3xl mx-auto px-4 pb-6">
+      {/* Claude.ai Signature Input Container */}
+      <div className="rounded-2xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark p-3.5 sm:p-4 shadow-[0_4px_20px_-4px_rgba(45,40,30,0.06)] dark:shadow-[0_4px_20px_-4px_rgba(0,0,0,0.5)] focus-within:border-claude-terracotta/40 transition-all duration-200">
+        
+        {/* Attachments Drawer */}
         {attachments.length > 0 && (
-          <div className="flex flex-wrap gap-2 mb-2 pb-2.5 border-b border-claude-border-light/60 dark:border-claude-border-dark/60">
+          <div className="flex flex-wrap gap-2 mb-3 pb-3 border-b border-claude-border-light dark:border-claude-border-dark">
             {attachments.map(att => (
-              <div key={att.id} className="flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-xs text-claude-text-light dark:text-claude-text-dark">
-                <Paperclip className="w-3.5 h-3.5 text-claude-terracotta" /><span className="truncate max-w-[140px] font-medium">{att.name}</span>
-                <button onClick={() => setAttachments(prev => prev.filter(a => a.id !== att.id))} className="hover:text-red-500 ml-1 p-0.5 rounded"><X className="w-3 h-3" /></button>
+              <div 
+                key={att.id} 
+                className="flex items-center space-x-2 px-2.5 py-1.5 rounded-lg bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-xs text-claude-text-light dark:text-claude-text-dark shadow-sm"
+              >
+                <Paperclip className="w-3.5 h-3.5 text-claude-terracotta" />
+                <span className="truncate max-w-[150px] font-medium">{att.name}</span>
+                <span className="text-[10px] text-claude-muted-light dark:text-claude-muted-dark font-mono">({att.size})</span>
+                <button 
+                  onClick={() => setAttachments(prev => prev.filter(a => a.id !== att.id))} 
+                  className="hover:text-red-500 ml-1 p-0.5 rounded transition-colors"
+                >
+                  <X className="w-3 h-3" />
+                </button>
               </div>
             ))}
           </div>
         )}
 
-        <textarea ref={textareaRef} value={inputText} onChange={e => setInputText(e.target.value)} onKeyDown={handleKeyDown} placeholder={placeholder} rows={1} className="w-full bg-transparent resize-none focus:outline-none text-claude-text-light dark:text-claude-text-dark placeholder-claude-muted-light/60 dark:placeholder-claude-muted-dark/60 text-[15px] md:text-base leading-relaxed px-1 max-h-56" />
+        {/* Text Area */}
+        <textarea 
+          ref={textareaRef} 
+          value={inputText} 
+          onChange={e => setInputText(e.target.value)} 
+          onKeyDown={handleKeyDown} 
+          placeholder={placeholder} 
+          rows={1} 
+          className="w-full bg-transparent resize-none focus:outline-none text-claude-text-light dark:text-claude-text-dark placeholder-claude-muted-light/60 dark:placeholder-claude-muted-dark/60 text-base leading-relaxed px-1 max-h-[38vh] font-sans selection:bg-claude-terracotta/20" 
+        />
 
-        <div className="flex items-center justify-between pt-2.5 border-t border-claude-border-light/40 dark:border-claude-border-dark/40 mt-1 select-none gap-2">
-          <div className="flex items-center gap-1 min-w-0 overflow-x-auto">
-            <input type="file" ref={fileInputRef} onChange={handleFileUpload} multiple className="hidden" />
-            <button onClick={() => fileInputRef.current?.click()} className="p-1.5 rounded-lg text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark hover:text-claude-text-light dark:hover:text-claude-text-dark transition" title="Add files"><Paperclip className="w-4 h-4" /></button>
-            {modeButton('research', 'Research', <Telescope className="w-3 h-3" />)}
-            {modeButton('agents', 'Agent', <Bot className="w-3 h-3" />)}
-            <button type="button" className="hidden md:flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px] text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark transition" title="Tool routing shell"><Wrench className="w-3 h-3" /><span>Tools</span></button>
+        {/* Bottom Action Bar */}
+        <div className="flex items-center justify-between pt-2.5 mt-1 select-none gap-2">
+          
+          {/* Left: Attachment + Mode Toggles */}
+          <div className="flex items-center gap-1.5 min-w-0">
+            <input 
+              type="file" 
+              ref={fileInputRef} 
+              onChange={handleFileUpload} 
+              multiple 
+              className="hidden" 
+            />
+            
+            <button 
+              onClick={() => fileInputRef.current?.click()} 
+              className="p-1.5 rounded-lg text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark hover:text-claude-text-light dark:hover:text-claude-text-dark transition-colors" 
+              title="Add documents or images"
+            >
+              <Paperclip className="w-4 h-4" />
+            </button>
+
+            {/* Mode Pills */}
+            <button
+              type="button"
+              onClick={() => onWorkspaceModeChange(workspaceMode === 'research' ? 'chat' : 'research')}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-sans transition-colors ${
+                workspaceMode === 'research'
+                  ? 'bg-claude-terracotta/10 text-claude-terracotta font-medium'
+                  : 'text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark'
+              }`}
+            >
+              <Telescope className="w-3.5 h-3.5" />
+              <span>Research</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onWorkspaceModeChange(workspaceMode === 'agents' ? 'chat' : 'agents')}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-sans transition-colors ${
+                workspaceMode === 'agents'
+                  ? 'bg-claude-terracotta/10 text-claude-terracotta font-medium'
+                  : 'text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark'
+              }`}
+            >
+              <Bot className="w-3.5 h-3.5" />
+              <span>Agents</span>
+            </button>
+
+            {/* Style Selector */}
             <div className="relative">
-              <button onClick={() => setShowStyleMenu(!showStyleMenu)} className="flex items-center space-x-1 px-2 py-1 rounded-lg text-[11px] text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark transition" title="Response style"><SlidersHorizontal className="w-3 h-3" /><span className="hidden lg:inline">{styleMode}</span></button>
+              <button 
+                onClick={() => setShowStyleMenu(!showStyleMenu)} 
+                className="flex items-center space-x-1 px-2 py-1 rounded-lg text-xs text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark transition-colors" 
+                title="Tone options"
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">{styleMode}</span>
+              </button>
+
               {showStyleMenu && (
-                <div className="absolute bottom-8 left-0 w-40 rounded-xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-claude-popup p-1 z-50 text-xs animate-in-spring">
+                <div className="absolute bottom-10 left-0 w-36 rounded-xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-sm p-1 z-50 text-xs">
                   {(['Normal', 'Concise', 'Explanatory'] as const).map(mode => (
-                    <button type="button" key={mode} onClick={() => { setStyleMode(mode); setShowStyleMenu(false); }} className="w-full px-2.5 py-1.5 rounded-lg cursor-pointer hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark flex items-center justify-between"><span>{mode}</span>{styleMode === mode && <Check className="w-3 h-3 text-claude-terracotta" />}</button>
+                    <button 
+                      type="button" 
+                      key={mode} 
+                      onClick={() => { setStyleMode(mode); setShowStyleMenu(false); }} 
+                      className="w-full px-2.5 py-1.5 rounded-lg cursor-pointer hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark flex items-center justify-between transition-colors text-left"
+                    >
+                      <span>{mode}</span>
+                      {styleMode === mode && <Check className="w-3.5 h-3.5 text-claude-terracotta" />}
+                    </button>
                   ))}
                 </div>
               )}
             </div>
-            {currentModel === 'claude-3-7-sonnet' && extendedThinking && <span className="hidden lg:flex items-center space-x-1.5 text-[10px] text-violet-300 px-2 py-0.5 rounded-full bg-violet-500/10 border border-violet-500/20"><Brain className="w-3 h-3" /><span>Deep reasoning</span></span>}
+
+            {extendedThinking && (
+              <span className="flex items-center space-x-1.5 text-[11px] font-medium text-claude-terracotta px-2.5 py-0.5 rounded-full bg-claude-terracotta/10 border border-claude-terracotta/25 select-none shadow-sm">
+                <Brain className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Deep reasoning</span>
+              </span>
+            )}
           </div>
 
-          <button onClick={handleSubmit} disabled={(!inputText.trim() && attachments.length === 0) || isLoading} className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 transition-all duration-150 btn-whimsy ${(inputText.trim() || attachments.length > 0) && !isLoading ? 'bg-claude-terracotta hover:bg-claude-terracotta-hover text-white shadow-sm ring-2 ring-claude-terracotta/20 hover:scale-105' : 'bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light/60 dark:text-claude-muted-dark/60 opacity-60 cursor-not-allowed'}`} title="Send to Aira"><ArrowUp className="w-4 h-4 stroke-[2.5]" /></button>
+          {/* Right: Claude Terracotta Send Circle with Luxury Gradient */}
+          <button 
+            onClick={handleSubmit} 
+            disabled={!canSubmit}
+            title="Send message (Enter)"
+            className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 transition-all ${
+              canSubmit 
+                ? 'gradient-terracotta-btn text-white active:scale-95 cursor-pointer' 
+                : 'bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light/40 dark:text-claude-muted-dark/40 cursor-not-allowed'
+            }`}
+          >
+            <ArrowUp className="w-4 h-4 stroke-[2.2]" />
+          </button>
         </div>
       </div>
-      <div className="flex items-center justify-center gap-1.5 mt-2.5 text-[10.5px] text-claude-muted-light/75 dark:text-claude-muted-dark/75 tracking-tight"><MessageSquareText className="w-3 h-3" /><span>Aira routes work across intelligence, knowledge, tools, and execution layers.</span></div>
+
+      {/* Claude.ai Disclaimer */}
+      <div className="text-center mt-3 text-[11px] text-claude-muted-light dark:text-claude-muted-dark font-sans">
+        Aira can make mistakes. Please verify important information.
+      </div>
     </div>
   );
 };

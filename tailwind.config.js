@@ -51,8 +51,8 @@ export default {
         },
       },
       fontFamily: {
-        serif: ['Newsreader', 'Lora', 'Georgia', 'serif'],
-        sans: ['Plus Jakarta Sans', 'Inter', 'system-ui', '-apple-system', 'sans-serif'],
+        serif: ['Newsreader', 'ui-serif', 'Georgia', 'Cambria', '"Times New Roman"', 'Times', 'serif'],
+        sans: ['Outfit', 'Inter', 'system-ui', '-apple-system', 'sans-serif'],
         mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
       },
       boxShadow: {
@@ -69,7 +69,7 @@ export default {
         },
         pulseSlow: {
           '0%, 100%': { opacity: '1' },
-          '50%': { opacity: '0.4' },
+          '50%': { opacity: '0.35' },
         },
         fadeIn: {
           '0%': { opacity: '0' },
@@ -98,10 +98,10 @@ export default {
       },
       animation: {
         'shimmer': 'shimmer 2s infinite',
-        'pulse-slow': 'pulseSlow 2.5s cubic-bezier(0.4, 0, 0.6, 1) infinite',
-        'fade-in': 'fadeIn 0.25s ease-out forwards',
-        'slide-up': 'slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards',
-        'scale-in': 'scaleIn 0.3s cubic-bezier(0.23, 1, 0.32, 1) forwards',
+        'pulse-slow': 'pulseSlow 3s cubic-bezier(0.2, 0, 0, 1) infinite',
+        'fade-in': 'fadeIn 0.4s cubic-bezier(0.2, 0, 0, 1) forwards',
+        'slide-up': 'slideUp 0.6s cubic-bezier(0.2, 0, 0, 1) forwards',
+        'scale-in': 'scaleIn 0.5s cubic-bezier(0.2, 0, 0, 1) forwards',
         'float': 'float 4s ease-in-out infinite',
         'sparkle': 'sparkle 1.5s ease-in-out infinite',
         'shimmer-sweep': 'shimmerSweep 3s ease-in-out infinite',

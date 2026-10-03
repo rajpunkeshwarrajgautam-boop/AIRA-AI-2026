@@ -1,0 +1,15 @@
+{
+  "$schema": "https://modelcontextprotocol.io/schema.json",
+  "mcpServers": {
+    "agentmemory": {
+      "command": "npx",
+      "args": ["-y", "@agentmemory/agentmemory@latest", "mcp"],
+      "env": {
+        "AGENTMEMORY_PORT": "3113",
+        "AGENTMEMORY_AUTO_SYNC": "true",
+        "AGENTMEMORY_PRIVACY_FILTER": "true"
+      },
+      "description": "Persistent 4-tier memory server for AI coding agents with hybrid BM25 + vector search and automated context capture."
+    }
+  }
+}

@@ -4,93 +4,29 @@
 
 @layer base {
   :root {
-    --bg-main: #F7F8FC;
+    --bg-main: #FAF9F5;
     --bg-surface: #FFFFFF;
-    --bg-surface-secondary: #F0F2F8;
-    --border-color: #E1E5EF;
-    --border-subtle: rgba(45, 40, 30, 0.07);
-    --text-primary: #11131A;
-    --text-muted: #687086;
-    --accent-terracotta: #6D5DFB;
-    --accent-terracotta-hover: #5B4AE8;
+    --bg-surface-secondary: #F5F3ED;
+    --border-color: #E8E5DE;
+    --border-subtle: rgba(45, 40, 30, 0.08);
+    --text-primary: #1F1E1D;
+    --text-muted: #6E6D69;
+    --accent-terracotta: #D97757;
+    --accent-terracotta-hover: #C15335;
     --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+    --ease-vanguard: cubic-bezier(0.32, 0.72, 0, 1);
   }
 
   .dark {
-    --bg-main: #090B12;
-    --bg-surface: #10131D;
-    --bg-surface-secondary: #151A28;
-    --border-color: #242A3A;
+    --bg-main: #1F1E1D;
+    --bg-surface: #272624;
+    --bg-surface-secondary: #2C2B28;
+    --border-color: #383633;
     --border-subtle: rgba(255, 255, 255, 0.08);
-    --text-primary: #F4F6FB;
-    --text-muted: #8C96AD;
-    --accent-terracotta: #7C5CFF;
-    --accent-terracotta-hover: #8D72FF;
-  }
-
-  /* Option 1: Linear Precision (Clean Minimalist / Dark Tech / Cold Luxury) */
-  [data-theme="linear-precision"] {
-    --bg-main: #080A10;
-    --bg-surface: #0F131D;
-    --bg-surface-secondary: #141A27;
-    --border-color: #222A3B;
-    --border-subtle: rgba(255, 255, 255, 0.08);
-    --text-primary: #F4F6FB;
-    --text-muted: #8E98B0;
-    --accent-terracotta: #7C5CFF;
-    --accent-terracotta-hover: #9179FF;
-  }
-
-  /* Option 2: Editorial Warm Parchment (Literary Heritage / Fine Typography) */
-  [data-theme="warm-parchment"] {
-    --bg-main: #FAF5EB;
-    --bg-surface: #FFFDF9;
-    --bg-surface-secondary: #F2E9DC;
-    --border-color: #E2D5C3;
-    --border-subtle: rgba(45, 35, 25, 0.08);
-    --text-primary: #1C1814;
-    --text-muted: #665D52;
-    --accent-terracotta: #BA4E2C;
-    --accent-terracotta-hover: #A03E20;
-  }
-
-  /* Option 3: Frosted Liquid Glass (macOS Spatial / Layered Depth) */
-  [data-theme="liquid-glass"] {
-    --bg-main: #09090E;
-    --bg-surface: #14131C;
-    --bg-surface-secondary: #1D1C28;
-    --border-color: rgba(255, 255, 255, 0.14);
-    --border-subtle: rgba(255, 255, 255, 0.06);
-    --text-primary: #FAF9FC;
-    --text-muted: #9E9BB3;
-    --accent-terracotta: #F43F5E;
-    --accent-terracotta-hover: #E11D48;
-  }
-
-  /* Option 4: Industrial Brutalist Terminal (High Density / Phosphor Amber) */
-  [data-theme="industrial-brutalist"] {
-    --bg-main: #101210;
-    --bg-surface: #161A16;
-    --bg-surface-secondary: #1F241F;
-    --border-color: #2B332B;
-    --border-subtle: rgba(255, 255, 255, 0.1);
-    --text-primary: #EEF2EE;
-    --text-muted: #8A948A;
-    --accent-terracotta: #F59E0B;
-    --accent-terracotta-hover: #D97706;
-  }
-
-  /* Option 5: Nordic Earth & Ceramic Moss (Calm Organic Studio) */
-  [data-theme="nordic-moss"] {
-    --bg-main: #F3F3EC;
-    --bg-surface: #FAF9F4;
-    --bg-surface-secondary: #E8E7DD;
-    --border-color: #D3D2C4;
-    --border-subtle: rgba(30, 45, 35, 0.08);
-    --text-primary: #18201A;
-    --text-muted: #556257;
-    --accent-terracotta: #2E5A44;
-    --accent-terracotta-hover: #224332;
+    --text-primary: #ECEAE4;
+    --text-muted: #9E9D96;
+    --accent-terracotta: #D97757;
+    --accent-terracotta-hover: #E08568;
   }
 
   body {
@@ -104,8 +40,8 @@
 
   /* Refined, whisper-thin scrollbars */
   ::-webkit-scrollbar {
-    width: 5px;
-    height: 5px;
+    width: 6px;
+    height: 6px;
   }
 
   ::-webkit-scrollbar-track {
@@ -122,7 +58,7 @@
   }
 }
 
-/* Reduced Motion Safety (Section 3.E / Section 14) */
+/* Reduced Motion Safety */
 @media (prefers-reduced-motion: reduce) {
   *, ::before, ::after {
     animation-duration: 0.01ms !important;
@@ -132,15 +68,16 @@
   }
 }
 
-/* Aira response typography */
+/* Claude / Aira response typography */
 .aira-prose {
-  font-size: 1.025rem;
-  line-height: 1.78;
+  font-size: 1.05rem;
+  line-height: 1.8;
   letter-spacing: -0.01em;
+  color: var(--text-primary);
 }
 
 .aira-prose p {
-  margin-bottom: 1.15rem;
+  margin-bottom: 1.25rem;
 }
 
 .aira-prose p:last-child {
@@ -148,42 +85,41 @@
 }
 
 .aira-prose h1, .aira-prose h2, .aira-prose h3, .aira-prose h4 {
-  font-family: 'Plus Jakarta Sans', 'Inter', system-ui, sans-serif;
-  font-weight: 650;
-  font-optical-sizing: auto;
-  font-feature-settings: "cv01", "cv02", "ss01", "ss03";
-  margin-top: 1.75rem;
-  margin-bottom: 0.85rem;
+  font-family: 'Newsreader', Georgia, 'Times New Roman', serif;
+  font-weight: 500;
   letter-spacing: -0.02em;
   color: var(--text-primary);
+  margin-top: 1.8rem;
+  margin-bottom: 0.85rem;
 }
 
-.aira-prose h1 { font-size: 1.85rem; line-height: 1.25; }
-.aira-prose h2 { font-size: 1.45rem; line-height: 1.3; }
-.aira-prose h3 { font-size: 1.22rem; line-height: 1.35; }
+.aira-prose h1 { font-size: 1.95rem; line-height: 1.25; }
+.aira-prose h2 { font-size: 1.55rem; line-height: 1.3; }
+.aira-prose h3 { font-size: 1.28rem; line-height: 1.35; }
 
 .aira-prose ul {
   list-style-type: disc;
   margin-left: 1.6rem;
-  margin-bottom: 1.15rem;
+  margin-bottom: 1.25rem;
 }
 
 .aira-prose ol {
   list-style-type: decimal;
   margin-left: 1.6rem;
-  margin-bottom: 1.15rem;
+  margin-bottom: 1.25rem;
 }
 
 .aira-prose li {
-  margin-bottom: 0.4rem;
+  margin-bottom: 0.45rem;
   padding-left: 0.2rem;
 }
 
 .aira-prose blockquote {
-  border-left: 2.5px solid var(--accent-terracotta);
-  padding-left: 1.15rem;
+  border-left: 3px solid var(--accent-terracotta);
+  padding-left: 1.25rem;
   font-style: italic;
-  margin: 1.25rem 0;
+  font-family: 'Newsreader', Georgia, serif;
+  margin: 1.35rem 0;
   color: var(--text-muted);
 }
 
@@ -191,18 +127,18 @@
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.85em;
   padding: 0.18em 0.42em;
-  border-radius: 5px;
+  border-radius: 6px;
   background-color: rgba(140, 135, 125, 0.12);
   border: 1px solid rgba(140, 135, 125, 0.15);
 }
 
 .aira-prose pre {
-  margin: 1.25rem 0;
+  margin: 1.35rem 0;
   border-radius: 12px;
   overflow: hidden;
   border: 1px solid var(--border-color);
-  background-color: #141312 !important;
-  box-shadow: 0 4px 16px -2px rgba(0, 0, 0, 0.15);
+  background-color: #1F1E1D !important;
+  box-shadow: 0 4px 16px -2px rgba(45, 40, 30, 0.08);
 }
 
 .aira-prose pre code {
@@ -212,7 +148,7 @@
   padding: 1.15rem 1.35rem;
   display: block;
   overflow-x: auto;
-  color: #EDECE8;
+  color: #ECEAE4;
 }
 
 .aira-prose table {
@@ -248,190 +184,564 @@
   letter-spacing: 0.02em;
 }
 
-
-/* Aira identity */
+/* Claude Mark Orbit & Glow */
 .aira-mark {
-  background:
-    radial-gradient(circle at 72% 22%, rgba(34, 211, 238, 0.88), transparent 24%),
-    linear-gradient(145deg, #6D4AFF 0%, #6F5BFF 45%, #2F90E8 100%);
-  box-shadow: 0 10px 30px -12px rgba(108, 92, 255, 0.9), inset 0 1px 0 rgba(255,255,255,0.22);
-}
-
-.aira-mark::after {
-  content: '';
-  position: absolute;
-  inset: 1px;
-  border-radius: inherit;
-  border: 1px solid rgba(255,255,255,0.15);
-  pointer-events: none;
+  background: var(--accent-terracotta);
 }
 
 .aira-mark-orbit {
   position: absolute;
-  width: 72%;
-  height: 34%;
-  border: 1px solid rgba(255,255,255,0.46);
-  border-radius: 999px;
-  transform: rotate(-28deg);
+  inset: -150%;
+  background: conic-gradient(from 0deg, transparent, rgba(255, 255, 255, 0.28), transparent 70%);
+  animation: airaOrbit 9s linear infinite;
 }
 
-.aira-card-glow {
+@keyframes airaOrbit {
+  to { transform: rotate(360deg); }
+}
+
+/* Ambient Radial Mesh Canvas */
+.bg-mesh-canvas {
+  background-color: var(--bg-main);
+  background-image: 
+    radial-gradient(at 15% 15%, rgba(217, 119, 87, 0.08) 0px, transparent 48%),
+    radial-gradient(at 85% 85%, rgba(193, 83, 53, 0.06) 0px, transparent 52%),
+    radial-gradient(at 50% 25%, rgba(237, 233, 254, 0.45) 0px, transparent 65%),
+    radial-gradient(at 75% 15%, rgba(245, 227, 220, 0.4) 0px, transparent 40%);
+  background-attachment: fixed;
+}
+
+.dark .bg-mesh-canvas {
+  background-color: var(--bg-main);
+  background-image: 
+    radial-gradient(at 15% 15%, rgba(217, 119, 87, 0.12) 0px, transparent 55%),
+    radial-gradient(at 85% 85%, rgba(124, 58, 237, 0.08) 0px, transparent 60%),
+    radial-gradient(at 50% 25%, rgba(39, 38, 36, 0.9) 0px, transparent 75%),
+    radial-gradient(at 75% 15%, rgba(193, 83, 53, 0.07) 0px, transparent 45%);
+  background-attachment: fixed;
+}
+
+/* Ambient Aura Glow for Aira Cognition Emblem */
+.aura-ambient-glow {
   position: absolute;
-  width: 120px;
-  height: 120px;
-  top: -72px;
-  right: -54px;
-  border-radius: 999px;
-  background: radial-gradient(circle, rgba(124,92,255,0.18), rgba(34,211,238,0.04) 52%, transparent 72%);
-  transition: transform 220ms ease, opacity 220ms ease;
-  opacity: 0.75;
+  inset: -28px;
+  border-radius: 9999px;
+  background: radial-gradient(circle, rgba(217, 119, 87, 0.22) 0%, rgba(245, 163, 132, 0.14) 42%, transparent 72%);
+  filter: blur(14px);
+  pointer-events: none;
+  animation: auraBreathe 5s ease-in-out infinite alternate;
 }
 
-@media (hover: hover) and (pointer: fine) {
-  .group:hover .aira-card-glow { transform: scale(1.08); opacity: 1; }
+.dark .aura-ambient-glow {
+  background: radial-gradient(circle, rgba(217, 119, 87, 0.28) 0%, rgba(240, 154, 122, 0.16) 45%, transparent 75%);
+  filter: blur(16px);
 }
 
-/* --- AIRA WHIMSY & DELIGHT SYSTEM --- */
+@keyframes auraBreathe {
+  0% {
+    transform: scale(0.92);
+    opacity: 0.65;
+  }
+  100% {
+    transform: scale(1.1);
+    opacity: 1;
+  }
+}
 
-/* Whimsy Button */
-.btn-whimsy {
+/* Luxury Multi-Stop Terracotta Gradient Button */
+.gradient-terracotta-btn {
+  background: linear-gradient(135deg, var(--accent-terracotta-hover) 0%, var(--accent-terracotta) 52%, var(--accent-terracotta-hover) 100%);
+  box-shadow: 0 2px 10px -2px color-mix(in srgb, var(--accent-terracotta) 40%, transparent);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.gradient-terracotta-btn:hover:not(:disabled) {
+  filter: brightness(1.1);
+  box-shadow: 0 4px 16px -2px color-mix(in srgb, var(--accent-terracotta) 55%, transparent);
+  transform: translateY(-0.5px);
+}
+
+/* Gradient Card Surfaces with Glass Sheen */
+.gradient-card-surface {
+  background: linear-gradient(180deg, var(--bg-surface) 0%, var(--bg-surface-secondary) 100%);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 4px 12px -2px rgba(0, 0, 0, 0.03);
+}
+
+.gradient-card-surface:hover {
+  border-color: color-mix(in srgb, var(--accent-terracotta) 60%, transparent);
+  box-shadow: 0 4px 20px -3px color-mix(in srgb, var(--accent-terracotta) 20%, transparent), 0 2px 6px rgba(0, 0, 0, 0.04);
+}
+
+/* Frosted Glass Header Gradient */
+.gradient-fade-header {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-main) 94%, transparent) 0%, color-mix(in srgb, var(--bg-main) 78%, transparent) 100%);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+/* Bottom Input Multi-Stop Mask */
+.gradient-mask-bottom {
+  background: linear-gradient(180deg, transparent 0%, color-mix(in srgb, var(--bg-main) 75%, transparent) 28%, color-mix(in srgb, var(--bg-main) 98%, transparent) 70%, var(--bg-main) 100%);
+}
+
+/* ==========================================================================
+   AESTHETIC PRESET 2: Warm Parchment (Literary & Antiquarian Warmth)
+   ========================================================================== */
+[data-theme="warm-parchment"] {
+  --bg-main: #F5EFEB;
+  --bg-surface: #FCFAF7;
+  --bg-surface-secondary: #EBE2D8;
+  --border-color: #D8C9BB;
+  --border-subtle: rgba(80, 55, 35, 0.09);
+  --text-primary: #2C2016;
+  --text-muted: #7E6B5A;
+  --accent-terracotta: #BA582F;
+  --accent-terracotta-hover: #A04722;
+}
+
+[data-theme="warm-parchment"].dark,
+.dark[data-theme="warm-parchment"],
+.dark [data-theme="warm-parchment"] {
+  --bg-main: #1C1612;
+  --bg-surface: #251D18;
+  --bg-surface-secondary: #2E2520;
+  --border-color: #40342C;
+  --border-subtle: rgba(255, 235, 215, 0.08);
+  --text-primary: #F3EAE1;
+  --text-muted: #A39182;
+  --accent-terracotta: #D46F44;
+  --accent-terracotta-hover: #E48259;
+}
+
+[data-theme="warm-parchment"] .bg-mesh-canvas {
+  background-color: var(--bg-main);
+  background-image: 
+    radial-gradient(at 15% 15%, rgba(186, 88, 47, 0.09) 0px, transparent 48%),
+    radial-gradient(at 85% 85%, rgba(145, 68, 30, 0.07) 0px, transparent 52%),
+    radial-gradient(at 50% 25%, rgba(245, 215, 185, 0.45) 0px, transparent 65%),
+    radial-gradient(at 75% 15%, rgba(235, 226, 216, 0.5) 0px, transparent 40%);
+}
+
+.dark[data-theme="warm-parchment"] .bg-mesh-canvas,
+.dark [data-theme="warm-parchment"] .bg-mesh-canvas {
+  background-color: var(--bg-main);
+  background-image: 
+    radial-gradient(at 15% 15%, rgba(212, 111, 68, 0.14) 0px, transparent 55%),
+    radial-gradient(at 85% 85%, rgba(160, 71, 34, 0.1) 0px, transparent 60%),
+    radial-gradient(at 50% 25%, rgba(42, 33, 26, 0.9) 0px, transparent 75%);
+}
+
+/* ==========================================================================
+   AESTHETIC PRESET 3: Liquid Glass (Frosted VisionOS & Translucent Cobalt)
+   ========================================================================== */
+[data-theme="liquid-glass"] {
+  --bg-main: #EDF3F8;
+  --bg-surface: rgba(255, 255, 255, 0.88);
+  --bg-surface-secondary: rgba(232, 242, 250, 0.75);
+  --border-color: rgba(175, 205, 228, 0.55);
+  --border-subtle: rgba(70, 120, 160, 0.1);
+  --text-primary: #0A1629;
+  --text-muted: #536B88;
+  --accent-terracotta: #0284C7;
+  --accent-terracotta-hover: #0369A1;
+}
+
+[data-theme="liquid-glass"].dark,
+.dark[data-theme="liquid-glass"],
+.dark [data-theme="liquid-glass"] {
+  --bg-main: #0B111E;
+  --bg-surface: rgba(17, 26, 44, 0.85);
+  --bg-surface-secondary: rgba(24, 38, 64, 0.75);
+  --border-color: rgba(56, 92, 140, 0.45);
+  --border-subtle: rgba(140, 180, 225, 0.1);
+  --text-primary: #F1F6FB;
+  --text-muted: #8AA4C4;
+  --accent-terracotta: #38BDF8;
+  --accent-terracotta-hover: #7DD3FC;
+}
+
+[data-theme="liquid-glass"] .bg-mesh-canvas {
+  background-color: var(--bg-main);
+  background-image: 
+    radial-gradient(at 15% 15%, rgba(2, 132, 199, 0.09) 0px, transparent 50%),
+    radial-gradient(at 85% 85%, rgba(99, 102, 241, 0.08) 0px, transparent 52%),
+    radial-gradient(at 50% 25%, rgba(224, 242, 254, 0.6) 0px, transparent 65%),
+    radial-gradient(at 80% 20%, rgba(216, 180, 254, 0.25) 0px, transparent 45%);
+}
+
+.dark[data-theme="liquid-glass"] .bg-mesh-canvas,
+.dark [data-theme="liquid-glass"] .bg-mesh-canvas {
+  background-color: var(--bg-main);
+  background-image: 
+    radial-gradient(at 15% 15%, rgba(56, 189, 248, 0.15) 0px, transparent 55%),
+    radial-gradient(at 85% 85%, rgba(129, 140, 248, 0.1) 0px, transparent 60%),
+    radial-gradient(at 50% 25%, rgba(15, 23, 42, 0.95) 0px, transparent 75%);
+}
+
+[data-theme="liquid-glass"] .aura-ambient-glow {
+  background: radial-gradient(circle, rgba(2, 132, 199, 0.25) 0%, rgba(99, 102, 241, 0.15) 45%, transparent 72%);
+}
+
+.dark[data-theme="liquid-glass"] .aura-ambient-glow,
+.dark [data-theme="liquid-glass"] .aura-ambient-glow {
+  background: radial-gradient(circle, rgba(56, 189, 248, 0.3) 0%, rgba(129, 140, 248, 0.18) 45%, transparent 75%);
+}
+
+/* ==========================================================================
+   AESTHETIC PRESET 4: Industrial Brutalist (Stark Monochrome & Hazard Orange)
+   ========================================================================== */
+[data-theme="industrial-brutalist"] {
+  --bg-main: #EDEDEA;
+  --bg-surface: #F8F8F6;
+  --bg-surface-secondary: #E3E3DE;
+  --border-color: #262624;
+  --border-subtle: rgba(0, 0, 0, 0.2);
+  --text-primary: #0F0F0E;
+  --text-muted: #555550;
+  --accent-terracotta: #FF4D00;
+  --accent-terracotta-hover: #D94100;
+}
+
+[data-theme="industrial-brutalist"].dark,
+.dark[data-theme="industrial-brutalist"],
+.dark [data-theme="industrial-brutalist"] {
+  --bg-main: #121212;
+  --bg-surface: #1B1B1B;
+  --bg-surface-secondary: #262626;
+  --border-color: #404040;
+  --border-subtle: rgba(255, 255, 255, 0.14);
+  --text-primary: #F7F7F5;
+  --text-muted: #8F8F89;
+  --accent-terracotta: #FF5E1A;
+  --accent-terracotta-hover: #FF7A42;
+}
+
+[data-theme="industrial-brutalist"] .bg-mesh-canvas {
+  background-color: var(--bg-main);
+  background-image: 
+    radial-gradient(at 15% 15%, rgba(255, 77, 0, 0.08) 0px, transparent 45%),
+    radial-gradient(at 85% 85%, rgba(0, 0, 0, 0.05) 0px, transparent 55%),
+    radial-gradient(at 50% 25%, rgba(227, 227, 222, 0.7) 0px, transparent 65%);
+}
+
+.dark[data-theme="industrial-brutalist"] .bg-mesh-canvas,
+.dark [data-theme="industrial-brutalist"] .bg-mesh-canvas {
+  background-color: var(--bg-main);
+  background-image: 
+    radial-gradient(at 15% 15%, rgba(255, 94, 26, 0.12) 0px, transparent 55%),
+    radial-gradient(at 85% 85%, rgba(40, 40, 40, 0.8) 0px, transparent 60%);
+}
+
+[data-theme="industrial-brutalist"] .aura-ambient-glow {
+  background: radial-gradient(circle, rgba(255, 77, 0, 0.25) 0%, rgba(50, 50, 50, 0.1) 45%, transparent 70%);
+}
+
+.dark[data-theme="industrial-brutalist"] .aura-ambient-glow,
+.dark [data-theme="industrial-brutalist"] .aura-ambient-glow {
+  background: radial-gradient(circle, rgba(255, 94, 26, 0.3) 0%, rgba(80, 80, 80, 0.15) 45%, transparent 72%);
+}
+
+/* ==========================================================================
+   AESTHETIC PRESET 5: Nordic Earth (Biophilic Forest & Aurora Moss)
+   ========================================================================== */
+[data-theme="nordic-moss"],
+[data-theme="nordic-earth"] {
+  --bg-main: #F1F4EE;
+  --bg-surface: #FAFBF9;
+  --bg-surface-secondary: #E5EBE1;
+  --border-color: #C8D4C2;
+  --border-subtle: rgba(40, 60, 42, 0.09);
+  --text-primary: #18261B;
+  --text-muted: #526656;
+  --accent-terracotta: #2E7D52;
+  --accent-terracotta-hover: #226340;
+}
+
+[data-theme="nordic-moss"].dark,
+.dark[data-theme="nordic-moss"],
+.dark [data-theme="nordic-moss"],
+[data-theme="nordic-earth"].dark,
+.dark[data-theme="nordic-earth"],
+.dark [data-theme="nordic-earth"] {
+  --bg-main: #101612;
+  --bg-surface: #17211A;
+  --bg-surface-secondary: #202D24;
+  --border-color: #2D3D32;
+  --border-subtle: rgba(175, 215, 185, 0.08);
+  --text-primary: #E7EFE8;
+  --text-muted: #859D8B;
+  --accent-terracotta: #4ADE80;
+  --accent-terracotta-hover: #6EE7A7;
+}
+
+[data-theme="nordic-moss"] .bg-mesh-canvas,
+[data-theme="nordic-earth"] .bg-mesh-canvas {
+  background-color: var(--bg-main);
+  background-image: 
+    radial-gradient(at 15% 15%, rgba(46, 125, 82, 0.09) 0px, transparent 50%),
+    radial-gradient(at 85% 85%, rgba(34, 99, 64, 0.06) 0px, transparent 52%),
+    radial-gradient(at 50% 25%, rgba(229, 235, 225, 0.6) 0px, transparent 65%),
+    radial-gradient(at 75% 15%, rgba(215, 235, 220, 0.4) 0px, transparent 40%);
+}
+
+.dark[data-theme="nordic-moss"] .bg-mesh-canvas,
+.dark [data-theme="nordic-moss"] .bg-mesh-canvas,
+.dark[data-theme="nordic-earth"] .bg-mesh-canvas,
+.dark [data-theme="nordic-earth"] .bg-mesh-canvas {
+  background-color: var(--bg-main);
+  background-image: 
+    radial-gradient(at 15% 15%, rgba(74, 222, 128, 0.12) 0px, transparent 55%),
+    radial-gradient(at 85% 85%, rgba(34, 197, 94, 0.08) 0px, transparent 60%),
+    radial-gradient(at 50% 25%, rgba(23, 33, 26, 0.95) 0px, transparent 75%);
+}
+
+[data-theme="nordic-moss"] .aura-ambient-glow,
+[data-theme="nordic-earth"] .aura-ambient-glow {
+  background: radial-gradient(circle, rgba(46, 125, 82, 0.22) 0%, rgba(134, 239, 172, 0.12) 45%, transparent 72%);
+}
+
+.dark[data-theme="nordic-moss"] .aura-ambient-glow,
+.dark [data-theme="nordic-moss"] .aura-ambient-glow,
+.dark[data-theme="nordic-earth"] .aura-ambient-glow,
+.dark [data-theme="nordic-earth"] .aura-ambient-glow {
+  background: radial-gradient(circle, rgba(74, 222, 128, 0.28) 0%, rgba(34, 197, 94, 0.15) 45%, transparent 75%);
+}
+
+/* ==========================================================================
+   AESTHETIC PRESET 6: Solaris Gold (Haute Horlogerie & 24K Molten Accent)
+   ========================================================================== */
+[data-theme="solar-gold"] {
+  --bg-main: #F7F5EE;
+  --bg-surface: #FCFAF4;
+  --bg-surface-secondary: #EFE9DA;
+  --border-color: #DCD0B6;
+  --border-subtle: rgba(180, 145, 60, 0.12);
+  --text-primary: #231F15;
+  --text-muted: #7E735B;
+  --accent-terracotta: #D4A017;
+  --accent-terracotta-hover: #B8860B;
+}
+
+[data-theme="solar-gold"].dark,
+.dark[data-theme="solar-gold"],
+.dark [data-theme="solar-gold"] {
+  --bg-main: #0D0C09;
+  --bg-surface: #16140F;
+  --bg-surface-secondary: #211E17;
+  --border-color: #3D3728;
+  --border-subtle: rgba(230, 190, 80, 0.12);
+  --text-primary: #F7F2E6;
+  --text-muted: #9E947E;
+  --accent-terracotta: #E5B94E;
+  --accent-terracotta-hover: #F3D079;
+}
+
+[data-theme="solar-gold"] .bg-mesh-canvas {
+  background-color: var(--bg-main);
+  background-image: 
+    radial-gradient(at 15% 15%, rgba(212, 160, 23, 0.1) 0px, transparent 48%),
+    radial-gradient(at 85% 85%, rgba(184, 134, 11, 0.08) 0px, transparent 52%),
+    radial-gradient(at 50% 25%, rgba(254, 243, 199, 0.5) 0px, transparent 65%),
+    radial-gradient(at 75% 15%, rgba(253, 230, 138, 0.25) 0px, transparent 40%);
+}
+
+.dark[data-theme="solar-gold"] .bg-mesh-canvas,
+.dark [data-theme="solar-gold"] .bg-mesh-canvas {
+  background-color: var(--bg-main);
+  background-image: 
+    radial-gradient(at 15% 15%, rgba(229, 185, 78, 0.15) 0px, transparent 55%),
+    radial-gradient(at 85% 85%, rgba(180, 130, 20, 0.12) 0px, transparent 60%),
+    radial-gradient(at 50% 25%, rgba(22, 20, 15, 0.95) 0px, transparent 75%);
+}
+
+[data-theme="solar-gold"] .aura-ambient-glow {
+  background: radial-gradient(circle, rgba(212, 160, 23, 0.3) 0%, rgba(253, 230, 138, 0.18) 45%, transparent 72%);
+}
+
+.dark[data-theme="solar-gold"] .aura-ambient-glow,
+.dark [data-theme="solar-gold"] .aura-ambient-glow {
+  background: radial-gradient(circle, rgba(229, 185, 78, 0.35) 0%, rgba(180, 130, 20, 0.2) 45%, transparent 75%);
+}
+
+[data-theme="solar-gold"] .gradient-terracotta-btn {
+  background: linear-gradient(135deg, #F59E0B 0%, #D4A017 50%, #B45309 100%);
+  color: #1A1305 !important;
+  font-weight: 700;
+  box-shadow: 0 4px 20px -2px rgba(212, 160, 23, 0.45);
+}
+
+.dark[data-theme="solar-gold"] .gradient-terracotta-btn,
+.dark [data-theme="solar-gold"] .gradient-terracotta-btn {
+  background: linear-gradient(135deg, #FDE68A 0%, #E5B94E 50%, #D97706 100%);
+  color: #181204 !important;
+  font-weight: 700;
+  box-shadow: 0 4px 20px -2px rgba(229, 185, 78, 0.5);
+}
+
+/* ==========================================================================
+   AESTHETIC PRESET 7: Tokyo Cyber (Shibuya Night & Dual-Tone Laser Pulse)
+   ========================================================================== */
+[data-theme="tokyo-neon"] {
+  --bg-main: #F4F1FA;
+  --bg-surface: #FCFAFF;
+  --bg-surface-secondary: #ECE5F7;
+  --border-color: #D6C7EC;
+  --border-subtle: rgba(147, 51, 234, 0.1);
+  --text-primary: #1C0F2F;
+  --text-muted: #6B5784;
+  --accent-terracotta: #9333EA;
+  --accent-terracotta-hover: #7E22CE;
+}
+
+[data-theme="tokyo-neon"].dark,
+.dark[data-theme="tokyo-neon"],
+.dark [data-theme="tokyo-neon"] {
+  --bg-main: #090611;
+  --bg-surface: #120D22;
+  --bg-surface-secondary: #1C1433;
+  --border-color: #38255E;
+  --border-subtle: rgba(236, 72, 153, 0.15);
+  --text-primary: #F7EFFF;
+  --text-muted: #A792C7;
+  --accent-terracotta: #EC4899;
+  --accent-terracotta-hover: #F472B6;
+}
+
+[data-theme="tokyo-neon"] .bg-mesh-canvas {
+  background-color: var(--bg-main);
+  background-image: 
+    radial-gradient(at 15% 15%, rgba(147, 51, 234, 0.1) 0px, transparent 48%),
+    radial-gradient(at 85% 85%, rgba(236, 72, 153, 0.08) 0px, transparent 52%),
+    radial-gradient(at 50% 25%, rgba(238, 222, 255, 0.55) 0px, transparent 65%);
+}
+
+.dark[data-theme="tokyo-neon"] .bg-mesh-canvas,
+.dark [data-theme="tokyo-neon"] .bg-mesh-canvas {
+  background-color: var(--bg-main);
+  background-image: 
+    radial-gradient(at 15% 15%, rgba(236, 72, 153, 0.18) 0px, transparent 55%),
+    radial-gradient(at 85% 85%, rgba(139, 92, 246, 0.14) 0px, transparent 60%),
+    radial-gradient(at 50% 25%, rgba(18, 13, 34, 0.95) 0px, transparent 75%);
+}
+
+[data-theme="tokyo-neon"] .aura-ambient-glow {
+  background: radial-gradient(circle, rgba(147, 51, 234, 0.28) 0%, rgba(236, 72, 153, 0.16) 45%, transparent 72%);
+}
+
+.dark[data-theme="tokyo-neon"] .aura-ambient-glow,
+.dark [data-theme="tokyo-neon"] .aura-ambient-glow {
+  background: radial-gradient(circle, rgba(236, 72, 153, 0.35) 0%, rgba(139, 92, 246, 0.22) 45%, transparent 75%);
+}
+
+[data-theme="tokyo-neon"] .gradient-terracotta-btn {
+  background: linear-gradient(135deg, #EC4899 0%, #A855F7 50%, #6366F1 100%);
+  box-shadow: 0 4px 20px -2px rgba(236, 72, 153, 0.45);
+}
+
+.dark[data-theme="tokyo-neon"] .gradient-terracotta-btn,
+.dark [data-theme="tokyo-neon"] .gradient-terracotta-btn {
+  background: linear-gradient(135deg, #F472B6 0%, #C084FC 50%, #818CF8 100%);
+  color: #120520 !important;
+  font-weight: 700;
+  box-shadow: 0 4px 22px -2px rgba(236, 72, 153, 0.55);
+}
+
+/* ==========================================================================
+   AESTHETIC PRESET 8: Vanguard Monolith (High-Fashion Pure Monochromatic)
+   ========================================================================== */
+[data-theme="vanguard-monolith"] {
+  --bg-main: #F4F4F4;
+  --bg-surface: #FFFFFF;
+  --bg-surface-secondary: #EBEBEB;
+  --border-color: #181818;
+  --border-subtle: rgba(0, 0, 0, 0.16);
+  --text-primary: #000000;
+  --text-muted: #5C5C5C;
+  --accent-terracotta: #111111;
+  --accent-terracotta-hover: #262626;
+}
+
+[data-theme="vanguard-monolith"].dark,
+.dark[data-theme="vanguard-monolith"],
+.dark [data-theme="vanguard-monolith"] {
+  --bg-main: #050505;
+  --bg-surface: #0E0E0E;
+  --bg-surface-secondary: #171717;
+  --border-color: #2E2E2E;
+  --border-subtle: rgba(255, 255, 255, 0.12);
+  --text-primary: #FFFFFF;
+  --text-muted: #8E8E8E;
+  --accent-terracotta: #EDEDED;
+  --accent-terracotta-hover: #FFFFFF;
+}
+
+[data-theme="vanguard-monolith"] .bg-mesh-canvas {
+  background-color: var(--bg-main);
+  background-image: 
+    radial-gradient(at 15% 15%, rgba(0, 0, 0, 0.04) 0px, transparent 50%),
+    radial-gradient(at 85% 85%, rgba(0, 0, 0, 0.03) 0px, transparent 52%);
+}
+
+.dark[data-theme="vanguard-monolith"] .bg-mesh-canvas,
+.dark [data-theme="vanguard-monolith"] .bg-mesh-canvas {
+  background-color: var(--bg-main);
+  background-image: 
+    radial-gradient(at 15% 15%, rgba(255, 255, 255, 0.05) 0px, transparent 55%),
+    radial-gradient(at 85% 85%, rgba(255, 255, 255, 0.03) 0px, transparent 60%);
+}
+
+[data-theme="vanguard-monolith"] .aura-ambient-glow {
+  background: radial-gradient(circle, rgba(0, 0, 0, 0.15) 0%, transparent 70%);
+}
+
+.dark[data-theme="vanguard-monolith"] .aura-ambient-glow,
+.dark [data-theme="vanguard-monolith"] .aura-ambient-glow {
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.22) 0%, rgba(200, 200, 200, 0.08) 45%, transparent 75%);
+}
+
+[data-theme="vanguard-monolith"] .gradient-terracotta-btn {
+  background: #000000;
+  color: #FFFFFF !important;
+  box-shadow: 0 4px 14px -2px rgba(0, 0, 0, 0.4);
+}
+
+.dark[data-theme="vanguard-monolith"] .gradient-terracotta-btn,
+.dark [data-theme="vanguard-monolith"] .gradient-terracotta-btn {
+  background: #FFFFFF;
+  color: #000000 !important;
+  box-shadow: 0 4px 18px -2px rgba(255, 255, 255, 0.45);
+}
+
+/* Interactive Specular Glare Effect for Cards */
+.specular-hover {
   position: relative;
   overflow: hidden;
-  transition: all 0.3s var(--ease-spring);
 }
-.btn-whimsy::before {
+
+.specular-hover::after {
   content: '';
   position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.15), transparent);
-  transform: translateX(-100%);
-  transition: transform 0.5s;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: linear-gradient(
+    60deg,
+    transparent 30%,
+    color-mix(in srgb, var(--accent-terracotta) 12%, transparent) 45%,
+    color-mix(in srgb, var(--accent-terracotta) 25%, transparent) 50%,
+    color-mix(in srgb, var(--accent-terracotta) 12%, transparent) 55%,
+    transparent 70%
+  );
+  transform: translateX(-100%) rotate(25deg);
+  transition: transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+  pointer-events: none;
 }
 
-@media (hover: hover) and (pointer: fine) {
-  .btn-whimsy:hover {
-    transform: translateY(-1px) scale(1.01);
-  }
-  .btn-whimsy:hover::before {
-    transform: translateX(100%);
-  }
+.specular-hover:hover::after {
+  transform: translateX(100%) rotate(25deg);
 }
 
-.btn-whimsy:active {
-  transform: translateY(0) scale(0.98);
-}
 
-/* Whimsy Icon Button */
-.icon-btn-whimsy {
-  transition: all 0.25s var(--ease-spring);
-}
-@media (hover: hover) and (pointer: fine) {
-  .icon-btn-whimsy:hover {
-    transform: scale(1.08) rotate(2deg);
-  }
-}
-.icon-btn-whimsy:active {
-  transform: scale(0.92) rotate(-2deg);
-}
-
-/* Composer Active Glow */
-.composer-whimsy-focus {
-  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-}
-.composer-whimsy-focus:focus-within {
-  transform: translateY(-2px);
-  box-shadow: 0 12px 30px -10px rgba(108, 92, 255, 0.25), 0 0 0 1px rgba(108, 92, 255, 0.4);
-}
-
-/* Contextual Tooltip/Dropdown Entrance */
-.animate-in-spring {
-  animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards, fadeIn 0.25s ease-out forwards;
-}
-
-/* Subtle Shimmer for loading states */
-.shimmer-active {
-  position: relative;
-  overflow: hidden;
-}
-.shimmer-active::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: -100%;
-  width: 50%;
-  height: 100%;
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent);
-  animation: shimmerSweep 2.5s infinite;
-}
-.dark .shimmer-active::after {
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.04), transparent);
-}
-
-/* Elegant Fade for Lists */
-.stagger-fade-in > * {
-  opacity: 0;
-  animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
-.stagger-fade-in > *:nth-child(1) { animation-delay: 0.05s; }
-.stagger-fade-in > *:nth-child(2) { animation-delay: 0.1s; }
-.stagger-fade-in > *:nth-child(3) { animation-delay: 0.15s; }
-.stagger-fade-in > *:nth-child(4) { animation-delay: 0.2s; }
-.stagger-fade-in > *:nth-child(5) { animation-delay: 0.25s; }
-.stagger-fade-in > *:nth-child(6) { animation-delay: 0.3s; }
-.stagger-fade-in > *:nth-child(7) { animation-delay: 0.35s; }
-.stagger-fade-in > *:nth-child(8) { animation-delay: 0.4s; }
-
-/* Form field success animation */
-.form-success-flash {
-  animation: sparkle 0.6s ease-in-out;
-}
-
-/* REDUCED MOTION OVERRIDES */
-@media (prefers-reduced-motion: reduce) {
-  .btn-whimsy,
-  .icon-btn-whimsy,
-  .composer-whimsy-focus {
-    transition: none !important;
-  }
-  
-  .btn-whimsy:hover,
-  .btn-whimsy:active,
-  .icon-btn-whimsy:hover,
-  .icon-btn-whimsy:active,
-  .composer-whimsy-focus:focus-within {
-    transform: none !important;
-  }
-
-  .btn-whimsy::before {
-    display: none !important;
-  }
-
-  .shimmer-active::after {
-    animation: none !important;
-    display: none !important;
-  }
-
-  .animate-in-spring,
-  .animate-slide-up,
-  .animate-scale-in,
-  .animate-fade-in {
-    animation: none !important;
-    opacity: 1 !important;
-    transform: none !important;
-  }
-
-  .animate-pulse,
-  .animate-pulse-slow {
-    animation: none !important;
-  }
-
-  .stagger-fade-in > * {
-    animation: none !important;
-    opacity: 1 !important;
-    transform: none !important;
-  }
-}
 

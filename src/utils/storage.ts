@@ -27,8 +27,8 @@ export function loadConversations(): Conversation[] {
     }
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) && parsed.length > 0 ? parsed : [INITIAL_CONVERSATION];
-  } catch (e) {
-    console.error('Failed to load conversations from localStorage', e);
+  } catch {
+    console.error('Failed to load conversations from localStorage');
     return [INITIAL_CONVERSATION];
   }
 }
@@ -36,8 +36,8 @@ export function loadConversations(): Conversation[] {
 export function saveConversations(conversations: Conversation[]): void {
   try {
     localStorage.setItem(STORAGE_KEYS.CONVERSATIONS, JSON.stringify(conversations));
-  } catch (e) {
-    console.error('Failed to save conversations to localStorage', e);
+  } catch {
+    console.error('Failed to save conversations to localStorage');
   }
 }
 
@@ -54,8 +54,8 @@ export function loadProjects(): Project[] {
     const raw = localStorage.getItem(STORAGE_KEYS.PROJECTS);
     if (!raw) return [];
     return JSON.parse(raw);
-  } catch (e) {
-    console.error('Failed to load projects', e);
+  } catch {
+    console.error('Failed to load projects');
     return [];
   }
 }
@@ -63,8 +63,8 @@ export function loadProjects(): Project[] {
 export function saveProjects(projects: Project[]): void {
   try {
     localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(projects));
-  } catch (e) {
-    console.error('Failed to save projects', e);
+  } catch {
+    console.error('Failed to save projects');
   }
 }
 
@@ -73,7 +73,7 @@ export function loadSettings(): AppSettings {
     const raw = localStorage.getItem(STORAGE_KEYS.SETTINGS);
     if (!raw) return DEFAULT_SETTINGS;
     return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
-  } catch (e) {
+  } catch {
     return DEFAULT_SETTINGS;
   }
 }

@@ -5,21 +5,35 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "server": "node server/index.ts",
+    "server": "tsx apps/api/src/index.ts",
+    "test": "tsx test/verify-runtime.ts",
+    "test:integration": "echo 'No integration tests defined' && exit 0",
+    "test:e2e": "playwright test",
+    "typecheck": "tsc --noEmit",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "memory:init": "npx @agentmemory/agentmemory@latest init",
+    "memory:start": "npx @agentmemory/agentmemory@latest start --port 3113",
+    "memory:ui": "npx @agentmemory/agentmemory@latest ui"
   },
   "dependencies": {
+    "@gsap/react": "^2.1.2",
+    "@phosphor-icons/react": "^2.1.10",
     "canvas-confetti": "^1.9.4",
+    "clsx": "^2.1.1",
     "cors": "^2.8.6",
     "dotenv": "^18.0.4",
     "express": "^5.2.1",
     "firebase": "^12.19.0",
+    "framer-motion": "^14.0.0",
+    "gsap": "^3.15.0",
     "lucide-react": "^1.48.0",
     "marked": "^18.0.14",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "tailwind-merge": "^3.7.0",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/canvas-confetti": "^1.9.0",
