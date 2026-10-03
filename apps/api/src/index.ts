@@ -9,7 +9,6 @@ import { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
 import { AutomationEngine } from '../../../packages/automation/src/index.js';
 import { PostgresAgentRepository, PostgresRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
 import { PostgresAutomationRepository, PostgresAutomationRunRepository } from '../../../packages/automation/src/repositories.js';
-import { db } from '../../../packages/db/src/index.js';
 import {
   CreateRunRequestSchema,
   ApprovalDecisionSchema,
@@ -190,18 +189,42 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
     return res.status(404).json({ error: `Run ${runId} not found.` });
   }
 
-  // Parse cursor
+  // Parse cursor — strict numeric validation.
+  // Accepts only non-negative integers represented as pure digit strings.
+  // Rejects: "abc", "-1", "12abc", "banana", "1.5", empty strings.
+  // Returns HTTP 400 on invalid cursor so clients get deterministic feedback.
   let cursor = -1;
   const lastEventId = req.headers['last-event-id'];
   const queryAfter = req.query.after;
-  
+
+  const STRICT_INT_RE = /^\d+$/; // only decimal digits, no sign, no dots, no whitespace
+
+  const parseStrictCursor = (raw: string): number | null => {
+    const trimmed = raw.trim();
+    if (!STRICT_INT_RE.test(trimmed)) return null;
+    const n = Number(trimmed);
+    if (!Number.isSafeInteger(n) || n < 0) return null;
+    return n;
+  };
+
   if (typeof lastEventId === 'string' && lastEventId.trim() !== '') {
-    const parsed = parseInt(lastEventId, 10);
-    if (!isNaN(parsed) && parsed >= 0) cursor = parsed;
+    const parsed = parseStrictCursor(lastEventId);
+    if (parsed === null) {
+      return res.status(400).json({
+        error: `Invalid Last-Event-ID: "${lastEventId}". Must be a non-negative integer.`
+      });
+    }
+    cursor = parsed;
   } else if (typeof queryAfter === 'string' && queryAfter.trim() !== '') {
-    const parsed = parseInt(queryAfter, 10);
-    if (!isNaN(parsed) && parsed >= 0) cursor = parsed;
+    const parsed = parseStrictCursor(queryAfter);
+    if (parsed === null) {
+      return res.status(400).json({
+        error: `Invalid ?after parameter: "${queryAfter}". Must be a non-negative integer.`
+      });
+    }
+    cursor = parsed;
   }
+
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
