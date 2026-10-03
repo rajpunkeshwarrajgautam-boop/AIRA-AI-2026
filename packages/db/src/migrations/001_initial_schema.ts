@@ -4,6 +4,7 @@ export async function up(knex: Knex): Promise<void> {
   await knex.schema.createTable('agents', (table) => {
     table.string('id').primary();
     table.string('name').notNullable();
+    table.text('description');
     table.text('instructions').notNullable();
     table.jsonb('modelPolicy');
     table.jsonb('tools');
