@@ -32,51 +32,77 @@ export class McpHost {
       throw new Error(`MCP Server with id ${serverId} not found.`);
     }
 
-    const serverToolDef: ToolDefinition = {
-      id: `mcp_${config.id}_ping`,
-      name: `mcp_${config.id}_ping`,
-      description: `Test connectivity and retrieve diagnostics for MCP server ${config.name}.`,
-      parameters: {
-        type: 'object',
-        properties: {},
-        required: []
-      },
-      source: 'mcp',
-      permissionLevel: 'READ',
-      executionRuntime: 'LOCAL'
-    };
+    if (!config.url) {
+      throw new Error(`MCP Server with id ${serverId} requires an HTTP URL for this phase.`);
+    }
 
-    this.toolRegistry.register({
-      definition: serverToolDef,
-      execute: async (_args, _ctx) => {
-        return {
-          toolCallId: 'call_mcp_' + Date.now(),
-          output: {
-            server: config.name,
-            status: 'CONNECTED',
-            protocolVersion: '2024-11-05',
-            capabilities: { tools: true, resources: true, prompts: true }
-          },
-          isError: false,
-          durationMs: 15,
-          timestamp: Date.now()
-        };
+    try {
+      const response = await fetch(`${config.url}/tools`);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch tools from ${config.url}/tools: ${response.statusText}`);
       }
-    });
+      
+      const data = await response.json();
+      const tools = data.tools || [];
+      
+      for (const t of tools) {
+        const serverToolDef: ToolDefinition = {
+          id: `mcp_${config.id}_${t.name}`,
+          name: t.name,
+          description: t.description || `Tool ${t.name} from MCP server ${config.name}`,
+          parameters: t.inputSchema || { type: 'object', properties: {} },
+          source: 'mcp',
+          permissionLevel: 'READ',
+          executionRuntime: 'LOCAL'
+        };
 
-    return true;
+        this.toolRegistry.register({
+          definition: serverToolDef,
+          execute: async (args, ctx) => {
+            const start = Date.now();
+            try {
+              const execResponse = await fetch(`${config.url}/tools/execute`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: t.name, arguments: args })
+              });
+              
+              if (!execResponse.ok) {
+                const text = await execResponse.text();
+                throw new Error(`MCP Execution failed: ${text}`);
+              }
+              
+              const execData = await execResponse.json();
+              
+              return {
+                toolCallId: 'call_mcp_' + Date.now(),
+                output: execData,
+                isError: execData.isError || false,
+                durationMs: Date.now() - start,
+                timestamp: Date.now()
+              };
+            } catch (err: any) {
+              return {
+                toolCallId: 'call_mcp_' + Date.now(),
+                output: err.message,
+                isError: true,
+                error: err.message,
+                durationMs: Date.now() - start,
+                timestamp: Date.now()
+              };
+            }
+          }
+        });
+      }
+
+      return true;
+    } catch (err: any) {
+      console.error(`Failed to connect MCP server ${config.name}:`, err.message);
+      return false;
+    }
   }
 
   private registerDefaultServers(): void {
-    this.registerServer({
-      id: 'knowledge_mcp',
-      name: 'Aira Knowledge MCP Service',
-      url: 'http://localhost:3001/mcp/knowledge'
-    });
-    this.registerServer({
-      id: 'fs_mcp',
-      name: 'Sandboxed Filesystem MCP',
-      url: 'http://localhost:3001/mcp/fs'
-    });
+    // Intentionally empty for real MCP integration unless we configure them from DB/env
   }
 }
