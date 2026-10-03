@@ -1,6 +1,6 @@
 import express from 'express';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
 const app = express();
@@ -64,10 +64,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request: any) => {
   };
 });
 
-let transport: SSEServerTransport;
+let transport: StreamableHTTPServerTransport;
 
 app.get('/mcp', async (req, res) => {
-  transport = new SSEServerTransport('/mcp/messages', res);
+  transport = new StreamableHTTPServerTransport('/mcp/messages', res);
   await server.connect(transport);
 });
 

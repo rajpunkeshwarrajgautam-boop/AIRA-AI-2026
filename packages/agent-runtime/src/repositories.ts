@@ -72,19 +72,30 @@ export class PostgresRunRepository implements RunRepository {
     await db('runs').insert({
       id: run.id,
       agent_id: run.userId,
+      principal_id: run.userId, // We need to decouple this eventually, but using userId for now
+      project_id: run.projectId,
       prompt: run.prompt,
       systemPrompt: run.systemPrompt,
       intent: run.intent,
       status: run.state,
       state: run.state,
       modelPolicy: JSON.stringify(run.modelPolicy),
+      context_data: JSON.stringify(run.context),
+      content: run.content,
+      thinking: run.thinking,
+      error: run.error,
       toolsUsed: JSON.stringify(run.toolsUsed),
       toolCalls: JSON.stringify(run.toolCalls),
       toolResults: JSON.stringify(run.toolResults),
       citations: JSON.stringify(run.citations),
+      artifacts: JSON.stringify(run.artifacts),
+      pending_approval: run.pendingApproval ? JSON.stringify(run.pendingApproval) : null,
       stepCount: run.stepCount,
+      max_steps: run.maxSteps,
+      execution_checkpoint: run.executionCheckpoint,
       createdAt: run.createdAt,
-      updatedAt: run.updatedAt
+      updatedAt: run.updatedAt,
+      completed_at: run.completedAt
     }).onConflict('id').merge();
   }
 
@@ -132,24 +143,29 @@ export class PostgresRunRepository implements RunRepository {
     };
     return {
       id: row.id,
-      userId: row.agent_id || 'user-default',
+      userId: row.agent_id || 'user-default', // userId currently serves as agent ID
+      projectId: row.project_id,
       intent: row.intent as any,
       state: row.state as any,
       modelPolicy: parseJson(row.modelPolicy, {}),
       prompt: row.prompt,
       systemPrompt: row.systemPrompt || '',
-      context: {},
-      content: '',
-      thinking: '',
+      context: parseJson(row.context_data, {}),
+      content: row.content || '',
+      thinking: row.thinking || '',
+      error: row.error,
       toolsUsed: parseJson(row.toolsUsed, []),
       toolCalls: parseJson(row.toolCalls, []),
       toolResults: parseJson(row.toolResults, []),
+      pendingApproval: row.pending_approval ? parseJson(row.pending_approval, undefined) : undefined,
       artifacts: parseJson(row.artifacts, []),
       citations: parseJson(row.citations, []),
       stepCount: row.stepCount || 0,
-      maxSteps: 10,
+      maxSteps: row.max_steps || 10,
+      executionCheckpoint: row.execution_checkpoint,
       createdAt: parseInt(row.createdAt, 10),
-      updatedAt: parseInt(row.updatedAt, 10)
+      updatedAt: parseInt(row.updatedAt, 10),
+      completedAt: row.completed_at ? parseInt(row.completed_at, 10) : undefined
     };
   }
 }

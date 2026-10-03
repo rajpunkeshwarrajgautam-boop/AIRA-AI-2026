@@ -89,3 +89,60 @@ export class PostgresApprovalRepository implements ApprovalRepository {
     });
   }
 }
+
+export interface SessionGrantRepository {
+  grantSession(runId: string, tool: string, principalId: string): Promise<void>;
+  grantAlways(tool: string, principalId: string): Promise<void>;
+  hasSessionGrant(runId: string, tool: string, principalId: string): Promise<boolean>;
+  hasAlwaysGrant(tool: string, principalId: string): Promise<boolean>;
+  clearSession(runId: string): Promise<void>;
+}
+
+export class PostgresSessionGrantRepository implements SessionGrantRepository {
+  async grantSession(runId: string, tool: string, principalId: string): Promise<void> {
+    const id = `gr_${Math.random().toString(36).slice(2,10)}`;
+    await db('session_grants').insert({
+      id,
+      principal_id: principalId,
+      session_id: runId, // using runId as sessionId for now
+      tool,
+      permission: 'SESSION',
+      granted_at: Date.now()
+    });
+  }
+
+  async grantAlways(tool: string, principalId: string): Promise<void> {
+    const id = `gr_${Math.random().toString(36).slice(2,10)}`;
+    await db('session_grants').insert({
+      id,
+      principal_id: principalId,
+      tool,
+      permission: 'ALWAYS',
+      granted_at: Date.now()
+    });
+  }
+
+  async hasSessionGrant(runId: string, tool: string, principalId: string): Promise<boolean> {
+    const row = await db('session_grants').where({
+      principal_id: principalId,
+      session_id: runId,
+      tool,
+      permission: 'SESSION'
+    }).first();
+    return !!row;
+  }
+
+  async hasAlwaysGrant(tool: string, principalId: string): Promise<boolean> {
+    const row = await db('session_grants').where({
+      principal_id: principalId,
+      tool,
+      permission: 'ALWAYS'
+    }).first();
+    return !!row;
+  }
+
+  async clearSession(runId: string): Promise<void> {
+    await db('session_grants').where({ session_id: runId }).delete();
+  }
+}
+

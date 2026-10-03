@@ -104,9 +104,11 @@ export class AutomationEngine {
           // Simplest approximation: if we haven't run it within the current cron period.
           
           if (!auto.lastRun || auto.lastRun < prevRunTime) {
-             // It's due
-             console.log(`[AutomationEngine] Triggering cron automation: ${auto.name}`);
-             await this.triggerNow(auto.id);
+             const claimed = await this.autoRepo.tryClaimAutomationRun(auto.id, prevRunTime, now);
+             if (claimed) {
+               console.log(`[AutomationEngine] Triggering cron automation: ${auto.name}`);
+               await this.triggerNow(auto.id);
+             }
           }
         } catch (e: any) {
           console.error(`[AutomationEngine] Failed to parse cron for ${auto.id}:`, e.message);

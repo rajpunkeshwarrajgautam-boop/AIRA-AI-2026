@@ -127,13 +127,18 @@ export class AgentRuntime extends EventEmitter {
       return false;
     }
     run.pendingApproval = request;
-    await this.runRepo.saveRun(run);
-    await this.emitRunEvent(request.runId, 'approval.resolved', { requestId, decision, approved });
-
+    
     if (decision === 'REJECT') {
+      run.executionCheckpoint = 'COMPLETED';
+      await this.runRepo.saveRun(run);
+      await this.emitRunEvent(request.runId, 'approval.resolved', { requestId, decision, approved });
       await this.transitionRunState(request.runId, 'FAILED', 'User rejected required tool approval.');
       return true;
     }
+
+    run.executionCheckpoint = 'TOOL_APPROVED';
+    await this.runRepo.saveRun(run);
+    await this.emitRunEvent(request.runId, 'approval.resolved', { requestId, decision, approved });
 
     await this.transitionRunState(request.runId, 'RUNNING');
     
@@ -170,97 +175,114 @@ export class AgentRuntime extends EventEmitter {
     let run = await this.runRepo.getRun(runId);
     if (!run) return;
 
-    await this.transitionRunState(runId, 'RUNNING');
-    run = await this.runRepo.getRun(runId); // refresh
-    if (!run) return;
+    if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)) return;
 
-    // 1. Knowledge Search Context
-    const knowledgeResults = this.knowledgeEngine.search(run.prompt, 3);
-    const citations: Citation[] = knowledgeResults.map(r => r.citation);
-    run.citations = citations;
-    await this.runRepo.saveRun(run);
-    for (const cite of citations) {
-      await this.emitRunEvent(runId, 'source.added', cite);
+    if (run.state !== 'RUNNING') {
+      await this.transitionRunState(runId, 'RUNNING');
     }
-
-    // 2. Prepare Messages
-    const messages: ChatMessageInput[] = [];
-    if (run.systemPrompt) {
-      messages.push({ role: 'system', content: run.systemPrompt });
-    } else {
-      messages.push({
-        role: 'system',
-        content: `You are Aira AI, an autonomous intelligence operating workspace. Maintain precise, verified reasoning.`
-      });
-    }
-    messages.push({ role: 'user', content: run.prompt });
-
-    // 3. Tool Execution if requested
-    const isToolAction = run.intent === 'TOOL_ACTION' ||
-      run.prompt.toLowerCase().includes('search') ||
-      run.prompt.toLowerCase().includes('calc') ||
-      run.prompt.toLowerCase().includes('read') ||
-      run.prompt.toLowerCase().includes('shell') ||
-      run.prompt.toLowerCase().includes('run command');
-
-    if (isToolAction) {
-      let selectedToolName = 'web_search';
-      let selectedArgs: Record<string, unknown> = { query: run.prompt };
-
-      if (run.prompt.toLowerCase().includes('calc')) {
-        selectedToolName = 'calculator';
-        selectedArgs = { expression: '1024 * 4' };
-      } else if (run.prompt.toLowerCase().includes('shell') || run.prompt.toLowerCase().includes('run command')) {
-        selectedToolName = 'system_shell';
-        selectedArgs = { command: 'echo Aira Execution Subsystem Online' };
-      } else if (run.prompt.toLowerCase().includes('read')) {
-        selectedToolName = 'file_system_read';
-        selectedArgs = { filePath: 'package.json' };
-      }
-
-      const toolDef = this.toolRegistry.get(selectedToolName)?.definition;
-      const toolCall: ToolCall = {
-        id: `call_${Date.now()}`,
-        toolId: toolDef?.id || `tool_${selectedToolName}`,
-        name: selectedToolName,
-        arguments: selectedArgs,
-        timestamp: Date.now()
-      };
-
-      run.toolsUsed.push(selectedToolName);
-      run.toolCalls.push(toolCall);
-      run.stepCount++;
+    
+    // Checkpoint 1: Knowledge Search Context
+    if (!run.executionCheckpoint) {
+      const knowledgeResults = this.knowledgeEngine.search(run.prompt, 3);
+      const citations: Citation[] = knowledgeResults.map(r => r.citation);
+      run.citations = citations;
+      run.executionCheckpoint = 'KNOWLEDGE_READY';
       await this.runRepo.saveRun(run);
+      for (const cite of citations) {
+        await this.emitRunEvent(runId, 'source.added', cite);
+      }
+    }
 
-      await this.emitRunEvent(runId, 'tool.requested', toolCall);
+    // Checkpoint 2: Prepare tool selection if needed
+    if (run.executionCheckpoint === 'KNOWLEDGE_READY') {
+      const isToolAction = run.intent === 'TOOL_ACTION' ||
+        run.prompt.toLowerCase().includes('search') ||
+        run.prompt.toLowerCase().includes('calc') ||
+        run.prompt.toLowerCase().includes('read') ||
+        run.prompt.toLowerCase().includes('shell') ||
+        run.prompt.toLowerCase().includes('run command');
 
-      // Check permissions and approvals
-      const isApproved = this.approvalKernel.isToolCallApproved(
+      if (isToolAction) {
+        let selectedToolName = 'web_search';
+        let selectedArgs: Record<string, unknown> = { query: run.prompt };
+
+        if (run.prompt.toLowerCase().includes('calc')) {
+          selectedToolName = 'calculator';
+          selectedArgs = { expression: '1024 * 4' };
+        } else if (run.prompt.toLowerCase().includes('shell') || run.prompt.toLowerCase().includes('run command')) {
+          selectedToolName = 'system_shell';
+          selectedArgs = { command: 'echo Aira Execution Subsystem Online' };
+        } else if (run.prompt.toLowerCase().includes('read')) {
+          selectedToolName = 'file_system_read';
+          selectedArgs = { filePath: 'package.json' };
+        }
+
+        const toolDef = this.toolRegistry.get(selectedToolName)?.definition;
+        const toolCall: ToolCall = {
+          id: `call_${Date.now()}`,
+          toolId: toolDef?.id || `tool_${selectedToolName}`,
+          name: selectedToolName,
+          arguments: selectedArgs,
+          timestamp: Date.now()
+        };
+
+        run.toolsUsed.push(selectedToolName);
+        run.toolCalls.push(toolCall);
+        run.stepCount++;
+        run.executionCheckpoint = 'TOOL_SELECTED';
+        await this.runRepo.saveRun(run);
+        await this.emitRunEvent(runId, 'tool.requested', toolCall);
+      } else {
+        run.executionCheckpoint = 'SYNTHESIZING';
+        await this.runRepo.saveRun(run);
+      }
+    }
+
+    // Checkpoint 3: Approval Check
+    if (run.executionCheckpoint === 'TOOL_SELECTED') {
+      const toolCall = run.toolCalls[run.toolCalls.length - 1];
+      const toolDef = this.toolRegistry.get(toolCall.name)?.definition;
+      
+      const isApproved = await this.approvalKernel.isToolCallApproved(
         runId,
-        selectedToolName,
+        toolCall.name,
         toolDef?.permissionLevel || 'READ'
       );
 
       if (!isApproved && toolDef?.permissionLevel === 'DESTRUCTIVE') {
+        run.executionCheckpoint = 'WAITING_FOR_APPROVAL';
+        await this.runRepo.saveRun(run);
+        
         await this.transitionRunState(runId, 'WAITING_FOR_APPROVAL');
         const req = await this.approvalKernel.createRequest(
           runId,
           toolCall,
           toolDef.permissionLevel,
-          `Tool execution "${selectedToolName}" requires user confirmation due to DESTRUCTIVE policy.`
+          `Tool execution "${toolCall.name}" requires user confirmation due to DESTRUCTIVE policy.`
         );
+        run = await this.runRepo.getRun(runId) as Run; // reload
         run.pendingApproval = req;
         await this.runRepo.saveRun(run);
-
         await this.emitRunEvent(runId, 'approval.required', req);
-
-        // Suspend execution loop until resumed
-        return;
+        return; // Suspend
+      } else {
+        run.executionCheckpoint = 'TOOL_APPROVED';
+        await this.runRepo.saveRun(run);
       }
+    }
 
-      // Execute Tool
+    if (run.executionCheckpoint === 'WAITING_FOR_APPROVAL') {
+      return; // Already suspended, waiting for external approval
+    }
+
+    // Checkpoint 4: Execute Tool
+    if (run.executionCheckpoint === 'TOOL_APPROVED') {
+      const toolCall = run.toolCalls[run.toolCalls.length - 1];
+      run.executionCheckpoint = 'TOOL_EXECUTING';
+      await this.runRepo.saveRun(run);
+
       await this.transitionRunState(runId, 'WAITING_FOR_TOOL');
-      await this.emitRunEvent(runId, 'tool.started', { callId: toolCall.id, name: selectedToolName });
+      await this.emitRunEvent(runId, 'tool.started', { callId: toolCall.id, name: toolCall.name });
 
       const toolResult: ToolResult = await this.toolRegistry.execute(toolCall, {
         runId,
@@ -268,61 +290,91 @@ export class AgentRuntime extends EventEmitter {
         sessionGrantedTools: new Set()
       });
 
+      run = await this.runRepo.getRun(runId) as Run; // reload after async tool execution
       run.toolResults.push(toolResult);
+      run.executionCheckpoint = 'TOOL_COMPLETED';
       await this.runRepo.saveRun(run);
       await this.emitRunEvent(runId, 'tool.completed', toolResult);
 
       await this.transitionRunState(runId, 'RUNNING');
-
-      messages.push({
-        role: 'assistant',
-        content: `I executed tool ${selectedToolName}.`
-      });
-      messages.push({
-        role: 'tool',
-        name: selectedToolName,
-        toolCallId: toolCall.id,
-        content: JSON.stringify(toolResult.output || toolResult.error)
-      });
-    }
-
-    // 4. Model Synthesis Stream
-    const adapter = this.modelRouter.getAdapter(run.modelPolicy);
-
-    await adapter.stream(messages, run.modelPolicy, async (delta) => {
-      if (delta.thinking) {
-        run.thinking += delta.thinking;
-        await this.runRepo.saveRun(run);
-        await this.emitRunEvent(runId, 'thinking.delta', { delta: delta.thinking });
-      }
-      if (delta.text) {
-        run.content += delta.text;
-        await this.runRepo.saveRun(run);
-        await this.emitRunEvent(runId, 'content.delta', { delta: delta.text });
-      }
-    });
-
-    // 5. Artifact Extraction if output contains code or structured blocks
-    if (run.content.includes('```')) {
-      const artId = `art_${Date.now()}`;
-      const artifact: Artifact = {
-        id: artId,
-        runId,
-        title: 'Generated Analysis Artifact',
-        type: 'application/vnd.ant.code',
-        content: run.content,
-        version: 1,
-        versions: [{
-          version: 1,
-          content: run.content,
-          timestamp: Date.now()
-        }]
-      };
-      run.artifacts.push(artifact);
+      
+      run = await this.runRepo.getRun(runId) as Run;
+      run.executionCheckpoint = 'SYNTHESIZING';
       await this.runRepo.saveRun(run);
-      await this.emitRunEvent(runId, 'artifact.created', artifact);
     }
 
-    await this.transitionRunState(runId, 'COMPLETED');
+    // Checkpoint 5: Synthesis
+    if (run.executionCheckpoint === 'SYNTHESIZING') {
+      const messages: ChatMessageInput[] = [];
+      if (run.systemPrompt) {
+        messages.push({ role: 'system', content: run.systemPrompt });
+      } else {
+        messages.push({
+          role: 'system',
+          content: `You are Aira AI, an autonomous intelligence operating workspace. Maintain precise, verified reasoning.`
+        });
+      }
+      messages.push({ role: 'user', content: run.prompt });
+
+      if (run.toolCalls.length > 0 && run.toolResults.length > 0) {
+        const lastCall = run.toolCalls[run.toolCalls.length - 1];
+        const lastResult = run.toolResults[run.toolResults.length - 1];
+        messages.push({
+          role: 'assistant',
+          content: `I executed tool ${lastCall.name}.`
+        });
+        messages.push({
+          role: 'tool',
+          name: lastCall.name,
+          toolCallId: lastCall.id,
+          content: JSON.stringify(lastResult.output || lastResult.error)
+        });
+      }
+
+      const adapter = this.modelRouter.getAdapter(run.modelPolicy);
+
+      await adapter.stream(messages, run.modelPolicy, async (delta) => {
+        if (delta.thinking) {
+          run.thinking += delta.thinking;
+          await this.runRepo.saveRun(run);
+          await this.emitRunEvent(runId, 'thinking.delta', { delta: delta.thinking });
+        }
+        if (delta.text) {
+          run.content += delta.text;
+          await this.runRepo.saveRun(run);
+          await this.emitRunEvent(runId, 'content.delta', { delta: delta.text });
+        }
+      });
+
+      run.executionCheckpoint = 'FINALIZING';
+      await this.runRepo.saveRun(run);
+    }
+
+    // Checkpoint 6: Artifacts & Completion
+    if (run.executionCheckpoint === 'FINALIZING') {
+      if (run.content.includes('```')) {
+        const artId = `art_${Date.now()}`;
+        const artifact: Artifact = {
+          id: artId,
+          runId,
+          title: 'Generated Analysis Artifact',
+          type: 'application/vnd.ant.code',
+          content: run.content,
+          version: 1,
+          versions: [{
+            version: 1,
+            content: run.content,
+            timestamp: Date.now()
+          }]
+        };
+        run.artifacts.push(artifact);
+        await this.runRepo.saveRun(run);
+        await this.emitRunEvent(runId, 'artifact.created', artifact);
+      }
+      
+      run.executionCheckpoint = 'COMPLETED';
+      await this.runRepo.saveRun(run);
+      await this.transitionRunState(runId, 'COMPLETED');
+    }
   }
 }

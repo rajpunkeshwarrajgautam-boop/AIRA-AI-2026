@@ -4,26 +4,24 @@ import {
   PermissionLevel,
   ToolCall
 } from '../../contracts/src/index.js';
-import { ApprovalRepository } from './repositories.js';
+import { ApprovalRepository, SessionGrantRepository } from './repositories.js';
 
 export interface ApprovalManagerOptions {
   autoApproveRead?: boolean;
 }
 
 export class ApprovalKernel {
-  private sessionGrants: Set<string> = new Set();
-  private alwaysAllowedTools: Set<string> = new Set();
-
   constructor(
     private repository: ApprovalRepository,
+    private grantRepo: SessionGrantRepository,
     private options: ApprovalManagerOptions = { autoApproveRead: true }
   ) {}
 
-  public isToolCallApproved(runId: string, toolName: string, permission: PermissionLevel): boolean {
-    if (this.alwaysAllowedTools.has(toolName)) {
+  public async isToolCallApproved(runId: string, toolName: string, permission: PermissionLevel, principalId: string = 'user-default'): Promise<boolean> {
+    if (await this.grantRepo.hasAlwaysGrant(toolName, principalId)) {
       return true;
     }
-    if (this.sessionGrants.has(`${runId}:${toolName}`)) {
+    if (await this.grantRepo.hasSessionGrant(runId, toolName, principalId)) {
       return true;
     }
     if (permission === 'READ' && this.options.autoApproveRead) {
@@ -67,7 +65,7 @@ export class ApprovalKernel {
     return this.repository.getPendingForRun(runId);
   }
 
-  public async decide(requestId: string, decision: ApprovalDecision, resolvedBy = 'user'): Promise<{ approved: boolean; request: ApprovalRequest }> {
+  public async decide(requestId: string, decision: ApprovalDecision, resolvedBy = 'user-default'): Promise<{ approved: boolean; request: ApprovalRequest }> {
     const request = await this.repository.getRequest(requestId);
 
     if (!request) {
@@ -85,19 +83,16 @@ export class ApprovalKernel {
     }
 
     if (decision === 'ALLOW_SESSION') {
-      this.sessionGrants.add(`${request.runId}:${request.toolCall.name}`);
+      await this.grantRepo.grantSession(request.runId, request.toolCall.name, resolvedBy);
     } else if (decision === 'ALLOW_ALWAYS_FOR_TOOL') {
-      this.alwaysAllowedTools.add(request.toolCall.name);
+      await this.grantRepo.grantAlways(request.toolCall.name, resolvedBy);
     }
+    // ALLOW_ONCE does nothing more; the pending_approval resolves and executeRunLoop proceeds.
 
     return { approved: true, request };
   }
 
-  public clearSessionGrants(runId: string): void {
-    for (const key of this.sessionGrants) {
-      if (key.startsWith(`${runId}:`)) {
-        this.sessionGrants.delete(key);
-      }
-    }
+  public async clearSessionGrants(runId: string): Promise<void> {
+    await this.grantRepo.clearSession(runId);
   }
 }

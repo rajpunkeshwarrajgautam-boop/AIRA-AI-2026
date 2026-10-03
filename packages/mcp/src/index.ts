@@ -1,12 +1,14 @@
 import { ToolDefinition } from '../../contracts/src/index.js';
 import { ToolRegistry } from '../../tool-runtime/src/index.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 
 export interface McpServerConfig {
   id: string;
   name: string;
   url?: string;
+  transport?: 'streamable_http' | 'sse';
 }
 
 export class McpHost {
@@ -47,7 +49,7 @@ export class McpHost {
     }
 
     try {
-      const transport = new SSEClientTransport(parsedUrl);
+      const transport = config.transport === 'sse' ? new SSEClientTransport(parsedUrl) : new StreamableHTTPClientTransport(parsedUrl);
       const client = new Client({
         name: "aira-mcp-host",
         version: "1.0.0"

@@ -7,6 +7,7 @@ export interface AutomationRepository {
   listAutomations(): Promise<AutomationDefinition[]>;
   getDueAutomations(): Promise<AutomationDefinition[]>;
   updateLastRun(id: string, lastRun: number): Promise<void>;
+  tryClaimAutomationRun(id: string, dueThreshold: number, newLastRun: number): Promise<boolean>;
   deleteAutomation(id: string): Promise<boolean>;
 }
 
@@ -54,6 +55,28 @@ export class PostgresAutomationRepository implements AutomationRepository {
     await db('automations').where({ id }).update({ last_run: lastRun, updatedAt: Date.now() });
   }
   
+  async tryClaimAutomationRun(id: string, dueThreshold: number, newLastRun: number): Promise<boolean> {
+    return db.transaction(async (trx) => {
+      let hash = 0;
+      for (let i = 0; i < id.length; i++) {
+        hash = (hash << 5) - hash + id.charCodeAt(i);
+        hash |= 0;
+      }
+      const lockRes = await trx.raw('SELECT pg_try_advisory_xact_lock(?) as locked', [hash]);
+      if (!lockRes.rows[0].locked) return false;
+
+      const row = await trx('automations').where({ id }).select('last_run').first();
+      if (!row) return false;
+
+      if (parseInt(row.last_run, 10) >= dueThreshold) {
+        return false;
+      }
+
+      await trx('automations').where({ id }).update({ last_run: newLastRun, updatedAt: Date.now() });
+      return true;
+    });
+  }
+
   async deleteAutomation(id: string): Promise<boolean> {
       const deleted = await db('automations').where({ id }).delete();
       return deleted > 0;

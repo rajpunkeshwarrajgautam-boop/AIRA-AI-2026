@@ -195,6 +195,7 @@ export const RunSchema = z.object({
   error: z.string().optional(),
   stepCount: z.number().int().nonnegative().default(0),
   maxSteps: z.number().int().positive().default(10),
+  executionCheckpoint: z.string().optional(),
   createdAt: z.number(),
   updatedAt: z.number(),
   completedAt: z.number().optional()

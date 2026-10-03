@@ -23,9 +23,9 @@ if (process.env.NODE_ENV === 'production') {
   const hasProvider = process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY;
   if (!hasProvider) {
     process.stderr.write(
-      '[STARTUP_ASSERTION] FAIL: Production requires at least one provider key (ANTHROPIC_API_KEY or OPENAI_API_KEY).\n' +
-      'The server will start but all model completions will fail with CONFIGURATION_ERROR.\n'
+      '[STARTUP_ASSERTION] FAIL: Production requires at least one provider key (ANTHROPIC_API_KEY or OPENAI_API_KEY).\n'
     );
+    process.exit(1);
   }
 }
 
@@ -40,8 +40,8 @@ app.use(express.urlencoded({ limit: '2mb', extended: false }));
 // Initialize Core Subsystems
 const modelRouter = new ModelRouter();
 const toolRegistry = new ToolRegistry(process.cwd());
-import { PostgresApprovalRepository } from '../../../packages/approvals/src/repositories.js';
-const approvalKernel = new ApprovalKernel(new PostgresApprovalRepository());
+import { PostgresApprovalRepository, PostgresSessionGrantRepository } from '../../../packages/approvals/src/repositories.js';
+const approvalKernel = new ApprovalKernel(new PostgresApprovalRepository(), new PostgresSessionGrantRepository());
 const knowledgeEngine = new BrainV2KnowledgeEngine();
 const mcpHost = new McpHost(toolRegistry);
 const agentRepo = new PostgresAgentRepository();
