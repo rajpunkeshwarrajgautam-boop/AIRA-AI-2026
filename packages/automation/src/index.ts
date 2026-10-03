@@ -1,14 +1,17 @@
 import * as crypto from 'crypto';
-import { AutomationDefinition } from '../../contracts/src/index.js';
+import { AutomationDefinition, AutomationRun } from '../../contracts/src/index.js';
 import { AgentRuntime } from '../../agent-runtime/src/index.js';
-import { AutomationRepository } from './repositories.js';
+import { AutomationRepository, AutomationRunRepository } from './repositories.js';
 import parser from 'cron-parser';
 
 export class AutomationEngine {
   private timerHandle: NodeJS.Timeout | null = null;
 
-  constructor(private agentRuntime: AgentRuntime, private autoRepo: AutomationRepository) {
-  }
+  constructor(
+    private agentRuntime: AgentRuntime, 
+    private autoRepo: AutomationRepository,
+    private runRepo: AutomationRunRepository
+  ) {}
 
   public async listAutomations(): Promise<AutomationDefinition[]> {
     return this.autoRepo.listAutomations();
@@ -52,25 +55,47 @@ export class AutomationEngine {
     return this.autoRepo.deleteAutomation(id);
   }
 
-  public async triggerNow(id: string): Promise<string> {
+  public async getAutomationRuns(id: string): Promise<AutomationRun[]> {
+    return this.runRepo.getRunsForAutomation(id);
+  }
+
+  public async triggerNow(id: string, scheduledFor: number = Date.now()): Promise<string> {
     const item = await this.autoRepo.getAutomation(id);
     if (!item) {
       throw new Error(`Automation with id "${id}" not found.`);
     }
 
-    const run = await this.agentRuntime.createAndExecuteRun({
-      intent: 'AGENT_MISSION',
-      prompt: `[Automated Trigger: ${item.name}]\nObjective: ${item.objective}`,
-      systemPrompt: 'Execute scheduled automation according to strict operational criteria.',
-      modelPolicy: { 
-        model: 'aira-auto',
-        temperature: 0.2
-      } as any
-    });
+    const claim = await this.runRepo.claimRun(id, scheduledFor);
+    if (!claim) {
+      throw new Error(`Automation run already claimed for ${scheduledFor}`);
+    }
 
-    item.lastRun = Date.now();
-    await this.autoRepo.updateLastRun(item.id, item.lastRun);
-    return run.id;
+    try {
+      const run = await this.agentRuntime.createAndExecuteRun({
+        intent: 'AGENT_MISSION',
+        prompt: `[Automated Trigger: ${item.name}]\nObjective: ${item.objective}`,
+        systemPrompt: 'Execute scheduled automation according to strict operational criteria.',
+        modelPolicy: { 
+          model: 'aira-auto',
+          temperature: 0.2
+        } as any
+      });
+
+      claim.runId = run.id;
+      claim.status = 'COMPLETED';
+      claim.completedAt = Date.now();
+      await this.runRepo.saveRun(claim);
+
+      item.lastRun = Date.now();
+      await this.autoRepo.updateLastRun(item.id, item.lastRun);
+      return run.id;
+    } catch (err: any) {
+      claim.status = 'FAILED';
+      claim.error = err.message;
+      claim.completedAt = Date.now();
+      await this.runRepo.saveRun(claim);
+      throw err;
+    }
   }
 
   public start(): void {
@@ -104,14 +129,16 @@ export class AutomationEngine {
           // Simplest approximation: if we haven't run it within the current cron period.
           
           if (!auto.lastRun || auto.lastRun < prevRunTime) {
-             const claimed = await this.autoRepo.tryClaimAutomationRun(auto.id, prevRunTime, now);
-             if (claimed) {
+             const claim = await this.runRepo.claimRun(auto.id, prevRunTime);
+             if (claim) {
                console.log(`[AutomationEngine] Triggering cron automation: ${auto.name}`);
-               await this.triggerNow(auto.id);
+               this.triggerNow(auto.id, prevRunTime).catch(e => {
+                 console.error(`[AutomationEngine] Execution failed for ${auto.id}:`, e);
+               });
              }
           }
         } catch (e: any) {
-          console.error(`[AutomationEngine] Failed to parse cron for ${auto.id}:`, e.message);
+          console.error(`[AutomationEngine] Failed to process cron for ${auto.id}:`, e.message);
         }
       }
     } catch (err: any) {

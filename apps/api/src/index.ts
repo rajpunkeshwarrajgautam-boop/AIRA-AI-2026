@@ -8,7 +8,7 @@ import { McpHost } from '../../../packages/mcp/src/index.js';
 import { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
 import { AutomationEngine } from '../../../packages/automation/src/index.js';
 import { PostgresAgentRepository, PostgresRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
-import { PostgresAutomationRepository } from '../../../packages/automation/src/repositories.js';
+import { PostgresAutomationRepository, PostgresAutomationRunRepository } from '../../../packages/automation/src/repositories.js';
 import {
   CreateRunRequestSchema,
   ApprovalDecisionSchema,
@@ -47,6 +47,7 @@ const mcpHost = new McpHost(toolRegistry);
 const agentRepo = new PostgresAgentRepository();
 const runRepo = new PostgresRunRepository();
 const autoRepo = new PostgresAutomationRepository();
+const autoRunRepo = new PostgresAutomationRunRepository();
 
 const agentRuntime = new AgentRuntime(
   modelRouter,
@@ -56,7 +57,7 @@ const agentRuntime = new AgentRuntime(
   runRepo,
   process.cwd()
 );
-const automationEngine = new AutomationEngine(agentRuntime, autoRepo);
+const automationEngine = new AutomationEngine(agentRuntime, autoRepo, autoRunRepo);
 automationEngine.start();
 
 // Seed default agent if not exists
@@ -283,30 +284,30 @@ app.get('/api/tools', (_req: Request, res: Response) => {
 // -----------------------------------------------------------------------
 // Knowledge Engine (Brain v2)
 // -----------------------------------------------------------------------
-app.get('/api/knowledge/sources', (_req: Request, res: Response) => {
+app.get('/api/knowledge/sources', async (_req: Request, res: Response) => {
   res.json({
-    sources: knowledgeEngine.getSources(),
-    memories: knowledgeEngine.getMemories()
+    sources: await knowledgeEngine.getSources(),
+    memories: await knowledgeEngine.getMemories()
   });
 });
 
-app.post('/api/knowledge/ingest', (req: Request, res: Response) => {
+app.post('/api/knowledge/ingest', async (req: Request, res: Response) => {
   const { title, content, mimeType, uri } = req.body;
   if (!title || !content) {
     return res.status(400).json({ error: 'title and content are required.' });
   }
-  const result = knowledgeEngine.ingestDocument(title, content, mimeType, uri);
+  const result = await knowledgeEngine.ingestDocument(title, content, mimeType, uri);
   res.status(201).json(result);
 });
 
-app.get('/api/knowledge/graph', (_req: Request, res: Response) => {
-  res.json(knowledgeEngine.getKnowledgeGraph());
+app.get('/api/knowledge/graph', async (_req: Request, res: Response) => {
+  res.json(await knowledgeEngine.getKnowledgeGraph());
 });
 
-app.post('/api/knowledge/search', (req: Request, res: Response) => {
+app.post('/api/knowledge/search', async (req: Request, res: Response) => {
   const { query, limit } = req.body;
   if (!query) return res.status(400).json({ error: 'query is required.' });
-  const results = knowledgeEngine.search(String(query), limit ? Number(limit) : 5);
+  const results = await knowledgeEngine.search(String(query), limit ? Number(limit) : 5);
   res.json({ results });
 });
 
@@ -430,6 +431,15 @@ app.post('/api/automations/:id/trigger', async (req: Request, res: Response) => 
     res.json({ runId, status: 'TRIGGERED' });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/api/automations/:id/runs', async (req: Request, res: Response) => {
+  try {
+    const runs = await automationEngine.getAutomationRuns(req.params.id);
+    res.json(runs);
+  } catch (err: any) {
+    res.status(404).json({ error: err.message });
   }
 });
 

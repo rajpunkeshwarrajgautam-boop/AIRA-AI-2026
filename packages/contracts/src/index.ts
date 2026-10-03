@@ -358,6 +358,20 @@ export const AutomationDefinitionSchema = z.object({
 });
 export type AutomationDefinition = z.infer<typeof AutomationDefinitionSchema>;
 
+export const AutomationRunSchema = z.object({
+  id: z.string(),
+  automationId: z.string(),
+  runId: z.string().optional(),
+  scheduledFor: z.number(),
+  startedAt: z.number(),
+  completedAt: z.number().optional(),
+  attempt: z.number().int().positive().default(1),
+  status: z.enum(['CLAIMED', 'RUNNING', 'COMPLETED', 'FAILED']),
+  error: z.string().optional(),
+  claimedAt: z.number().optional()
+});
+export type AutomationRun = z.infer<typeof AutomationRunSchema>;
+
 // ==========================================
 // 10. ERROR ENVELOPE
 // ==========================================

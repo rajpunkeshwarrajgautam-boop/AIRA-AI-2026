@@ -11,9 +11,10 @@ function sleep(ms: number) {
 }
 
 async function runIntegration() {
-  console.log('Starting DB migration...');
+  console.log('--- TEST 1: Fresh Migration ---');
   await new Promise((resolve, reject) => {
-    exec('npx tsx packages/db/src/scripts/migrate.ts', (err, stdout, stderr) => {
+    const script = `import path from 'path'; import { pathToFileURL } from 'url'; async function clean() { const dbModule = await import(pathToFileURL(path.resolve('./packages/db/src/index.ts')).href); const db = dbModule.db; await db.raw('DROP SCHEMA public CASCADE; CREATE SCHEMA public;'); await db.migrate.latest(); console.log('Clean DB migration PASS'); process.exit(0); } clean().catch((err) => { console.error(err); process.exit(1); });`;
+    exec(`npx tsx -e "${script}"`, (err, stdout, stderr) => {
       if (err) return reject(err);
       console.log('DB Migration complete.');
       resolve(true);
@@ -73,16 +74,18 @@ async function runIntegration() {
     console.log('Run persistence verified.');
     
     console.log('--- TEST 4: Scheduler Concurrency ---');
-    console.log('Starting two API servers concurrently...');
-    const apiServerA = spawn('npx', ['tsx', 'apps/api/src/index.ts'], { shell: true, env: { ...process.env, PORT: '3003' } });
-    const apiServerB = spawn('npx', ['tsx', 'apps/api/src/index.ts'], { shell: true, env: { ...process.env, PORT: '3004' } });
-    await sleep(5000);
-    // Since default automation is every 0 0 * * * (midnight), let's manually update its cron to run every minute and see how many runs are created
-    // But testing that reliably in < 60s is annoying. We'll trust the advisory lock logic for now since it is implemented.
+    console.log('Spawning two claim workers concurrently...');
+    const claimScript = `import path from 'path'; import { pathToFileURL } from 'url'; async function run() { const repoModule = await import(pathToFileURL(path.resolve('./packages/automation/src/repositories.ts')).href); const repo = new repoModule.PostgresAutomationRunRepository(); const claim = await repo.claimRun('auto_default', 10000); console.log(claim ? 'CLAIMED' : 'CONFLICT'); process.exit(0); } run().catch((err) => { console.error(err); process.exit(1); });`;
+    
+    const [w1, w2] = await Promise.all([
+      new Promise(res => exec(`npx tsx -e "${claimScript}"`, (err, stdout) => res(stdout.trim()))),
+      new Promise(res => exec(`npx tsx -e "${claimScript}"`, (err, stdout) => res(stdout.trim())))
+    ]);
+    const claimedCount = [w1, w2].filter(out => out.includes('CLAIMED')).length;
+    assert.strictEqual(claimedCount, 1, `Exactly one worker should claim the run. Got outputs: w1=${w1}, w2=${w2}`);
+    console.log('Scheduler concurrency verified.');
     
     console.log('Cleaning up...');
-    apiServerA.kill();
-    apiServerB.kill();
     apiServer2.kill();
     mcpServer.kill();
     console.log('Integration tests PASS.');

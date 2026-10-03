@@ -32,15 +32,11 @@ export async function up(knex: Knex): Promise<void> {
     table.bigInteger('expires_at');
   });
 
-  await knex.schema.createTable('mcp_servers', (table) => {
-    table.string('id').primary();
-    table.string('name').notNullable();
-    table.string('url').notNullable();
-    table.string('transport').notNullable(); // e.g., 'stdio', 'sse', 'http'
+  await knex.schema.alterTable('mcp_servers', (table) => {
+    table.string('transport').defaultTo('stdio').notNullable();
     table.boolean('enabled').defaultTo(true);
     table.jsonb('metadata');
-    table.bigInteger('created_at').notNullable();
-    table.bigInteger('updated_at').notNullable();
+    table.bigInteger('updated_at').defaultTo(Date.now()).notNullable();
   });
 
   await knex.schema.alterTable('automation_runs', (table) => {
@@ -54,7 +50,13 @@ export async function down(knex: Knex): Promise<void> {
     table.dropColumn('claimed_at');
   });
   
-  await knex.schema.dropTableIfExists('mcp_servers');
+  await knex.schema.alterTable('mcp_servers', (table) => {
+    table.dropColumn('transport');
+    table.dropColumn('enabled');
+    table.dropColumn('metadata');
+    table.dropColumn('updated_at');
+  });
+  
   await knex.schema.dropTableIfExists('session_grants');
 
   await knex.schema.alterTable('tool_calls', (table) => {

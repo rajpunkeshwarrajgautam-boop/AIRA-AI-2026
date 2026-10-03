@@ -7,29 +7,30 @@ import {
   MemoryRecord,
   Citation
 } from '../../contracts/src/index.js';
+import { KnowledgeRepository, PostgresKnowledgeRepository } from './repositories.js';
+
+export * from './repositories.js';
 
 export class BrainV2KnowledgeEngine {
-  private sources: Map<string, KnowledgeSource> = new Map();
-  private chunks: Map<string, KnowledgeChunk> = new Map();
-  private entities: Map<string, KnowledgeEntity> = new Map();
-  private edges: KnowledgeEdge[] = [];
-  private memories: Map<string, MemoryRecord> = new Map();
+  private repo: KnowledgeRepository;
 
-  constructor() {
-    this.seedDefaultKnowledge();
+  constructor(repo?: KnowledgeRepository) {
+    this.repo = repo || new PostgresKnowledgeRepository();
+    // Default seed is now handled asynchronously or by migration, but we can fire and forget if empty
+    this.seedDefaultKnowledge().catch(console.error);
   }
 
   public computeSha256(content: string): string {
     return crypto.createHash('sha256').update(content, 'utf8').digest('hex');
   }
 
-  public ingestDocument(
+  public async ingestDocument(
     title: string,
     rawContent: string,
     mimeType = 'text/markdown',
     uri?: string,
     projectId?: string
-  ): { source: KnowledgeSource; chunks: KnowledgeChunk[] } {
+  ): Promise<{ source: KnowledgeSource; chunks: KnowledgeChunk[] }> {
     const sourceId = `src_${crypto.randomUUID().slice(0, 8)}`;
     const contentHash = this.computeSha256(rawContent);
     const now = Date.now();
@@ -46,7 +47,6 @@ export class BrainV2KnowledgeEngine {
       updatedAt: now
     };
 
-    // Deterministic sliding window chunking
     const chunkSize = 500;
     const overlap = 50;
     const createdChunks: KnowledgeChunk[] = [];
@@ -68,24 +68,28 @@ export class BrainV2KnowledgeEngine {
         contentHash: chunkHash
       };
 
-      this.chunks.set(chunkId, chunk);
       createdChunks.push(chunk);
       chunkIndex++;
     }
 
-    this.sources.set(sourceId, source);
+    await this.repo.upsertSource(source);
+    await this.repo.replaceChunks(sourceId, createdChunks);
 
-    // Extract basic semantic entities
-    this.extractEntitiesFromContent(sourceId, rawContent);
+    await this.extractEntitiesFromContent(sourceId, rawContent);
 
     return { source, chunks: createdChunks };
   }
 
-  public search(query: string, limit = 5): { chunk: KnowledgeChunk; score: number; citation: Citation }[] {
+  public async search(query: string, limit = 5): Promise<{ chunk: KnowledgeChunk; score: number; citation: Citation }[]> {
     const terms = query.toLowerCase().split(/\s+/).filter(t => t.length > 2);
+    if (terms.length === 0) return [];
+    
+    // We can just grab all chunks and do in-memory scoring for now, 
+    // or use searchChunks. We'll use searchChunks with the first term to limit, then score.
+    const searchResults = await this.repo.searchChunks(terms[0], 50);
     const results: { chunk: KnowledgeChunk; score: number; citation: Citation }[] = [];
 
-    for (const chunk of this.chunks.values()) {
+    for (const chunk of searchResults) {
       let matchCount = 0;
       const lower = chunk.text.toLowerCase();
       for (const term of terms) {
@@ -94,7 +98,7 @@ export class BrainV2KnowledgeEngine {
 
       if (matchCount > 0) {
         const score = Math.min(1.0, matchCount / Math.max(1, terms.length));
-        const src = this.sources.get(chunk.sourceId);
+        const src = await this.repo.getSource(chunk.sourceId);
         results.push({
           chunk,
           score,
@@ -113,14 +117,18 @@ export class BrainV2KnowledgeEngine {
     return results.sort((a, b) => b.score - a.score).slice(0, limit);
   }
 
-  public addEntity(name: string, type: string, sourceId: string): KnowledgeEntity {
+  public async addEntity(name: string, type: string, sourceId: string): Promise<KnowledgeEntity> {
     const id = `ent_${name.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
     const now = Date.now();
-    const existing = this.entities.get(id);
+    
+    const entities = await this.repo.listEntities();
+    let existing = entities.find(e => e.id === id);
+    
     if (existing) {
       if (!existing.sourceIds.includes(sourceId)) {
         existing.sourceIds.push(sourceId);
         existing.updatedAt = now;
+        await this.repo.upsertEntity(existing);
       }
       return existing;
     }
@@ -136,17 +144,17 @@ export class BrainV2KnowledgeEngine {
       createdAt: now,
       updatedAt: now
     };
-    this.entities.set(id, entity);
+    await this.repo.upsertEntity(entity);
     return entity;
   }
 
-  public addEdge(
+  public async addEdge(
     sourceEntityId: string,
     targetEntityId: string,
     relation: string,
     provenanceSourceId: string,
     confidence = 1.0
-  ): KnowledgeEdge {
+  ): Promise<KnowledgeEdge> {
     const edge: KnowledgeEdge = {
       id: `edge_${crypto.randomUUID().slice(0, 8)}`,
       sourceEntityId,
@@ -156,31 +164,31 @@ export class BrainV2KnowledgeEngine {
       provenanceSourceId,
       createdAt: Date.now()
     };
-    this.edges.push(edge);
+    await this.repo.saveEdge(edge);
     return edge;
   }
 
-  public getKnowledgeGraph() {
+  public async getKnowledgeGraph() {
     return {
-      entities: Array.from(this.entities.values()),
-      edges: [...this.edges]
+      entities: await this.repo.listEntities(),
+      edges: await this.repo.listEdges()
     };
   }
 
-  public getSources(): KnowledgeSource[] {
-    return Array.from(this.sources.values());
+  public async getSources(): Promise<KnowledgeSource[]> {
+    return await this.repo.listSources();
   }
 
-  public getMemories(): MemoryRecord[] {
-    return Array.from(this.memories.values());
+  public async getMemories(): Promise<MemoryRecord[]> {
+    return await this.repo.listMemories();
   }
 
-  public saveMemory(
+  public async saveMemory(
     key: string,
     value: string,
     category: 'fact' | 'decision' | 'preference' | 'pattern' | 'constraint' = 'fact',
     provenance = 'system'
-  ): MemoryRecord {
+  ): Promise<MemoryRecord> {
     const id = `mem_${crypto.randomUUID().slice(0, 8)}`;
     const now = Date.now();
     const item: MemoryRecord = {
@@ -194,28 +202,31 @@ export class BrainV2KnowledgeEngine {
       createdAt: now,
       updatedAt: now
     };
-    this.memories.set(key, item);
+    await this.repo.saveMemory(item);
     return item;
   }
 
-  private extractEntitiesFromContent(sourceId: string, content: string): void {
+  private async extractEntitiesFromContent(sourceId: string, content: string): Promise<void> {
     const keywords = ['AIRA', 'Rowboat', 'ModelRouter', 'ToolRuntime', 'Approvals', 'BrainV2', 'SSE', 'Vite'];
     for (const kw of keywords) {
       if (content.includes(kw)) {
-        const ent = this.addEntity(kw, 'concept', sourceId);
-        this.addEdge(`ent_source_${sourceId}`, ent.id, 'REFERENCES', sourceId, 0.95);
+        const ent = await this.addEntity(kw, 'concept', sourceId);
+        await this.addEdge(`ent_source_${sourceId}`, ent.id, 'REFERENCES', sourceId, 0.95);
       }
     }
   }
 
-  private seedDefaultKnowledge(): void {
-    this.ingestDocument(
-      'AIRA Architecture Guide',
-      'Aira AI is an autonomous operating workspace uniting intelligence, deterministic run execution, and human oversight. Subsystems include Model Router, Tool Runtime with permission isolation, Approval Kernel, MCP Host, and Brain v2 Knowledge Engine.',
-      'text/markdown',
-      'aira://system/docs/architecture'
-    );
-    this.saveMemory('workspace_identity', 'Aira AI — One workspace. Every intelligence.', 'pattern');
-    this.saveMemory('execution_boundary', 'Zero client-side secrets. Server-authoritative runs only.', 'constraint');
+  private async seedDefaultKnowledge(): Promise<void> {
+    const sources = await this.repo.listSources();
+    if (sources.length === 0) {
+      await this.ingestDocument(
+        'AIRA Architecture Guide',
+        'Aira AI is an autonomous operating workspace uniting intelligence, deterministic run execution, and human oversight. Subsystems include Model Router, Tool Runtime with permission isolation, Approval Kernel, MCP Host, and Brain v2 Knowledge Engine.',
+        'text/markdown',
+        'aira://system/docs/architecture'
+      );
+      await this.saveMemory('workspace_identity', 'Aira AI — One workspace. Every intelligence.', 'pattern');
+      await this.saveMemory('execution_boundary', 'Zero client-side secrets. Server-authoritative runs only.', 'constraint');
+    }
   }
 }

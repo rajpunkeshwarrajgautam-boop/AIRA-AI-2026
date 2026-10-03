@@ -183,7 +183,7 @@ export class AgentRuntime extends EventEmitter {
     
     // Checkpoint 1: Knowledge Search Context
     if (!run.executionCheckpoint) {
-      const knowledgeResults = this.knowledgeEngine.search(run.prompt, 3);
+      const knowledgeResults = await this.knowledgeEngine.search(run.prompt, 3);
       const citations: Citation[] = knowledgeResults.map(r => r.citation);
       run.citations = citations;
       run.executionCheckpoint = 'KNOWLEDGE_READY';
