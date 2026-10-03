@@ -18,8 +18,9 @@ import { ToolRegistry } from '../../tool-runtime/src/index.js';
 import { ApprovalKernel } from '../../approvals/src/index.js';
 import { BrainV2KnowledgeEngine } from '../../knowledge/src/index.js';
 
+import { RunRepository } from './repositories.js';
+
 export class AgentRuntime extends EventEmitter {
-  private runs: Map<string, Run> = new Map();
   private eventStreams: Map<string, EventEmitter> = new Map();
   private pendingResumptions: Map<string, (decision: ApprovalDecision) => void> = new Map();
 
@@ -28,19 +29,18 @@ export class AgentRuntime extends EventEmitter {
     private toolRegistry: ToolRegistry,
     private approvalKernel: ApprovalKernel,
     private knowledgeEngine: BrainV2KnowledgeEngine,
+    private runRepo: RunRepository,
     private workspaceRoot = process.cwd()
   ) {
     super();
   }
 
-  public getRun(runId: string): Run | undefined {
-    return this.runs.get(runId);
+  public async getRun(runId: string): Promise<Run | undefined> {
+    return this.runRepo.getRun(runId);
   }
 
-  public listRuns(): Run[] {
-    return Array.from(this.runs.values()).sort(
-      (a, b) => b.createdAt - a.createdAt
-    );
+  public async listRuns(): Promise<Run[]> {
+    return this.runRepo.listRuns();
   }
 
   public getEventStream(runId: string): EventEmitter {
@@ -52,7 +52,7 @@ export class AgentRuntime extends EventEmitter {
     return stream;
   }
 
-  private emitRunEvent(runId: string, type: StreamingEventType, data: any): void {
+  private async emitRunEvent(runId: string, type: StreamingEventType, data: any): Promise<void> {
     const stream = this.getEventStream(runId);
     const event: StreamingEvent = {
       eventId: `evt_${crypto.randomUUID().slice(0, 8)}`,
@@ -63,6 +63,7 @@ export class AgentRuntime extends EventEmitter {
     };
     stream.emit('event', event);
     this.emit('run_event', { runId, event });
+    await this.runRepo.appendRunEvent(event).catch(console.error);
   }
 
   public async createAndExecuteRun(request: CreateRunRequest): Promise<Run> {
@@ -98,25 +99,25 @@ export class AgentRuntime extends EventEmitter {
       updatedAt: now
     };
 
-    this.runs.set(runId, run);
-    this.emitRunEvent(runId, 'run.created', { runId, state: run.state });
+    await this.runRepo.saveRun(run);
+    await this.emitRunEvent(runId, 'run.created', { runId, state: run.state });
 
     // Asynchronously execute run loop
     setImmediate(() => {
       this.executeRunLoop(runId).catch(err => {
-        this.transitionRunState(runId, 'FAILED', err.message);
+        this.transitionRunState(runId, 'FAILED', err.message).catch(console.error);
       });
     });
 
     return run;
   }
 
-  public cancelRun(runId: string): boolean {
-    const run = this.runs.get(runId);
+  public async cancelRun(runId: string): Promise<boolean> {
+    const run = await this.runRepo.getRun(runId);
     if (!run || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)) {
       return false;
     }
-    this.transitionRunState(runId, 'CANCELLED');
+    await this.transitionRunState(runId, 'CANCELLED');
     const resumeFn = this.pendingResumptions.get(runId);
     if (resumeFn) {
       this.pendingResumptions.delete(runId);
@@ -125,13 +126,14 @@ export class AgentRuntime extends EventEmitter {
     return true;
   }
 
-  public submitApproval(requestId: string, decision: ApprovalDecision): boolean {
+  public async submitApproval(requestId: string, decision: ApprovalDecision): Promise<boolean> {
     const { approved, request } = this.approvalKernel.decide(requestId, decision);
-    const run = this.runs.get(request.runId);
+    const run = await this.runRepo.getRun(request.runId);
     if (run) {
       run.pendingApproval = request;
+      await this.runRepo.saveRun(run);
     }
-    this.emitRunEvent(request.runId, 'approval.resolved', { requestId, decision, approved });
+    await this.emitRunEvent(request.runId, 'approval.resolved', { requestId, decision, approved });
 
     const resumeFn = this.pendingResumptions.get(request.runId);
     if (resumeFn) {
@@ -142,8 +144,8 @@ export class AgentRuntime extends EventEmitter {
     return false;
   }
 
-  private transitionRunState(runId: string, state: RunState, error?: string): void {
-    const run = this.runs.get(runId);
+  private async transitionRunState(runId: string, state: RunState, error?: string): Promise<void> {
+    const run = await this.runRepo.getRun(runId);
     if (!run) return;
 
     run.state = state;
@@ -152,6 +154,7 @@ export class AgentRuntime extends EventEmitter {
     if (state === 'COMPLETED' || state === 'FAILED' || state === 'CANCELLED') {
       run.completedAt = run.updatedAt;
     }
+    await this.runRepo.saveRun(run);
 
     const eventType: StreamingEventType =
       state === 'COMPLETED' ? 'run.completed' :
@@ -159,21 +162,24 @@ export class AgentRuntime extends EventEmitter {
       state === 'CANCELLED' ? 'run.cancelled' :
       state === 'RUNNING' ? 'run.started' : 'run.started';
 
-    this.emitRunEvent(runId, eventType, { state, error });
+    await this.emitRunEvent(runId, eventType, { state, error });
   }
 
   private async executeRunLoop(runId: string): Promise<void> {
-    const run = this.runs.get(runId);
+    let run = await this.runRepo.getRun(runId);
     if (!run) return;
 
-    this.transitionRunState(runId, 'RUNNING');
+    await this.transitionRunState(runId, 'RUNNING');
+    run = await this.runRepo.getRun(runId); // refresh
+    if (!run) return;
 
     // 1. Knowledge Search Context
     const knowledgeResults = this.knowledgeEngine.search(run.prompt, 3);
     const citations: Citation[] = knowledgeResults.map(r => r.citation);
     run.citations = citations;
+    await this.runRepo.saveRun(run);
     for (const cite of citations) {
-      this.emitRunEvent(runId, 'source.added', cite);
+      await this.emitRunEvent(runId, 'source.added', cite);
     }
 
     // 2. Prepare Messages
@@ -223,8 +229,9 @@ export class AgentRuntime extends EventEmitter {
       run.toolsUsed.push(selectedToolName);
       run.toolCalls.push(toolCall);
       run.stepCount++;
+      await this.runRepo.saveRun(run);
 
-      this.emitRunEvent(runId, 'tool.requested', toolCall);
+      await this.emitRunEvent(runId, 'tool.requested', toolCall);
 
       // Check permissions and approvals
       const isApproved = this.approvalKernel.isToolCallApproved(
@@ -234,7 +241,7 @@ export class AgentRuntime extends EventEmitter {
       );
 
       if (!isApproved && toolDef?.permissionLevel === 'DESTRUCTIVE') {
-        this.transitionRunState(runId, 'WAITING_FOR_APPROVAL');
+        await this.transitionRunState(runId, 'WAITING_FOR_APPROVAL');
         const req = this.approvalKernel.createRequest(
           runId,
           toolCall,
@@ -242,8 +249,9 @@ export class AgentRuntime extends EventEmitter {
           `Tool execution "${selectedToolName}" requires user confirmation due to DESTRUCTIVE policy.`
         );
         run.pendingApproval = req;
+        await this.runRepo.saveRun(run);
 
-        this.emitRunEvent(runId, 'approval.required', req);
+        await this.emitRunEvent(runId, 'approval.required', req);
 
         // Await decision
         const decision: ApprovalDecision = await new Promise((resolve) => {
@@ -251,16 +259,16 @@ export class AgentRuntime extends EventEmitter {
         });
 
         if (decision === 'REJECT') {
-          this.transitionRunState(runId, 'FAILED', 'User rejected required tool approval.');
+          await this.transitionRunState(runId, 'FAILED', 'User rejected required tool approval.');
           return;
         }
 
-        this.transitionRunState(runId, 'RUNNING');
+        await this.transitionRunState(runId, 'RUNNING');
       }
 
       // Execute Tool
-      this.transitionRunState(runId, 'WAITING_FOR_TOOL');
-      this.emitRunEvent(runId, 'tool.started', { callId: toolCall.id, name: selectedToolName });
+      await this.transitionRunState(runId, 'WAITING_FOR_TOOL');
+      await this.emitRunEvent(runId, 'tool.started', { callId: toolCall.id, name: selectedToolName });
 
       const toolResult: ToolResult = await this.toolRegistry.execute(toolCall, {
         runId,
@@ -269,9 +277,10 @@ export class AgentRuntime extends EventEmitter {
       });
 
       run.toolResults.push(toolResult);
-      this.emitRunEvent(runId, 'tool.completed', toolResult);
+      await this.runRepo.saveRun(run);
+      await this.emitRunEvent(runId, 'tool.completed', toolResult);
 
-      this.transitionRunState(runId, 'RUNNING');
+      await this.transitionRunState(runId, 'RUNNING');
 
       messages.push({
         role: 'assistant',
@@ -288,14 +297,16 @@ export class AgentRuntime extends EventEmitter {
     // 4. Model Synthesis Stream
     const adapter = this.modelRouter.getAdapter(run.modelPolicy);
 
-    await adapter.stream(messages, run.modelPolicy, (delta) => {
+    await adapter.stream(messages, run.modelPolicy, async (delta) => {
       if (delta.thinking) {
         run.thinking += delta.thinking;
-        this.emitRunEvent(runId, 'thinking.delta', { delta: delta.thinking });
+        await this.runRepo.saveRun(run);
+        await this.emitRunEvent(runId, 'thinking.delta', { delta: delta.thinking });
       }
       if (delta.text) {
         run.content += delta.text;
-        this.emitRunEvent(runId, 'content.delta', { delta: delta.text });
+        await this.runRepo.saveRun(run);
+        await this.emitRunEvent(runId, 'content.delta', { delta: delta.text });
       }
     });
 
@@ -316,9 +327,10 @@ export class AgentRuntime extends EventEmitter {
         }]
       };
       run.artifacts.push(artifact);
-      this.emitRunEvent(runId, 'artifact.created', artifact);
+      await this.runRepo.saveRun(run);
+      await this.emitRunEvent(runId, 'artifact.created', artifact);
     }
 
-    this.transitionRunState(runId, 'COMPLETED');
+    await this.transitionRunState(runId, 'COMPLETED');
   }
 }

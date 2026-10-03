@@ -7,10 +7,12 @@ import { BrainV2KnowledgeEngine } from '../../../packages/knowledge/src/index.js
 import { McpHost } from '../../../packages/mcp/src/index.js';
 import { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
 import { AutomationEngine } from '../../../packages/automation/src/index.js';
+import { PostgresAgentRepository, PostgresRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
 import {
   CreateRunRequestSchema,
   ApprovalDecisionSchema,
-  AutomationDefinitionSchema
+  AutomationDefinitionSchema,
+  AgentDefinition
 } from '../../../packages/contracts/src/index.js';
 
 // -----------------------------------------------------------------------
@@ -40,31 +42,40 @@ const toolRegistry = new ToolRegistry(process.cwd());
 const approvalKernel = new ApprovalKernel();
 const knowledgeEngine = new BrainV2KnowledgeEngine();
 const mcpHost = new McpHost(toolRegistry);
+const agentRepo = new PostgresAgentRepository();
+const runRepo = new PostgresRunRepository();
+
 const agentRuntime = new AgentRuntime(
   modelRouter,
   toolRegistry,
   approvalKernel,
   knowledgeEngine,
+  runRepo,
   process.cwd()
 );
 const automationEngine = new AutomationEngine(agentRuntime);
 automationEngine.start();
 
-// In-memory agents store (Audit 16 — real CRUD)
-interface AgentDefinition {
-  id: string;
-  name: string;
-  instructions: string;
-  modelPolicy?: { model: string };
-  tools?: string[];
-  memoryScopes?: string[];
-  approvalPolicy?: string;
-  maxSteps?: number;
-  timeoutPolicy?: { maxMs: number };
-  createdAt: number;
-  updatedAt: number;
+// Seed default agent if not exists
+async function seedDefaultAgent() {
+  const existing = await agentRepo.getAgent('user-default');
+  if (!existing) {
+    await agentRepo.saveAgent({
+      id: 'user-default',
+      name: 'Default Agent',
+      instructions: 'You are Aira AI, an autonomous intelligence operating workspace. Maintain precise, verified reasoning.',
+      modelPolicy: { model: 'mock-deterministic' },
+      tools: [],
+      memoryScopes: ['workspace'],
+      approvalPolicy: 'autonomous',
+      maxSteps: 10,
+      timeoutMs: 60000,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    } as AgentDefinition);
+  }
 }
-const agentsStore = new Map<string, AgentDefinition>();
+seedDefaultAgent().catch(console.error);
 
 // -----------------------------------------------------------------------
 // Health Check
@@ -108,31 +119,31 @@ app.post('/api/runs', async (req: Request, res: Response) => {
   }
 });
 
-app.get('/api/runs', (_req: Request, res: Response) => {
-  res.json(agentRuntime.listRuns());
+app.get('/api/runs', async (_req: Request, res: Response) => {
+  res.json(await agentRuntime.listRuns());
 });
 
-app.get('/api/runs/:id', (req: Request, res: Response) => {
-  const run = agentRuntime.getRun(req.params.id);
+app.get('/api/runs/:id', async (req: Request, res: Response) => {
+  const run = await agentRuntime.getRun(req.params.id);
   if (!run) {
     return res.status(404).json({ error: `Run with id "${req.params.id}" not found.` });
   }
   res.json(run);
 });
 
-app.post('/api/runs/:id/cancel', (req: Request, res: Response) => {
-  const success = agentRuntime.cancelRun(req.params.id);
+app.post('/api/runs/:id/cancel', async (req: Request, res: Response) => {
+  const success = await agentRuntime.cancelRun(req.params.id);
   if (!success) {
     return res.status(400).json({ error: 'Cannot cancel run (either not found or in terminal state).' });
   }
   res.json({ status: 'CANCELLED', runId: req.params.id });
 });
 
-app.post('/api/runs/:id/approve', (req: Request, res: Response) => {
+app.post('/api/runs/:id/approve', async (req: Request, res: Response) => {
   try {
     const { requestId, decision } = req.body;
     const parsedDecision = ApprovalDecisionSchema.parse(decision);
-    const success = agentRuntime.submitApproval(requestId, parsedDecision);
+    const success = await agentRuntime.submitApproval(requestId, parsedDecision);
     if (!success) {
       return res.status(400).json({ error: 'Could not apply approval decision.' });
     }
@@ -145,9 +156,9 @@ app.post('/api/runs/:id/approve', (req: Request, res: Response) => {
 // -----------------------------------------------------------------------
 // SSE Stream for Run
 // -----------------------------------------------------------------------
-app.get('/api/runs/:id/events', (req: Request, res: Response) => {
+app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
   const runId = req.params.id;
-  const run = agentRuntime.getRun(runId);
+  const run = await agentRuntime.getRun(runId);
 
   if (!run) {
     return res.status(404).json({ error: `Run ${runId} not found.` });
@@ -280,7 +291,7 @@ app.post('/api/knowledge/search', (req: Request, res: Response) => {
 // -----------------------------------------------------------------------
 import crypto from 'crypto';
 
-app.post('/api/agents', (req: Request, res: Response) => {
+app.post('/api/agents', async (req: Request, res: Response) => {
   const { name, instructions, modelPolicy, tools, memoryScopes, approvalPolicy, maxSteps, timeoutPolicy } = req.body;
   if (!name || !instructions) {
     return res.status(400).json({ error: 'name and instructions are required.' });
@@ -289,50 +300,52 @@ app.post('/api/agents', (req: Request, res: Response) => {
   const agent: AgentDefinition = {
     id: `agent_${crypto.randomUUID().slice(0, 8)}`,
     name,
+    description: req.body.description || '',
     instructions,
     modelPolicy,
-    tools,
-    memoryScopes,
-    approvalPolicy,
-    maxSteps,
-    timeoutPolicy,
+    tools: tools || [],
+    memoryScopes: memoryScopes || ['workspace'],
+    approvalPolicy: approvalPolicy || 'autonomous',
+    maxSteps: maxSteps || 10,
+    timeoutMs: timeoutPolicy?.maxMs || 60000,
     createdAt: now,
     updatedAt: now
-  };
-  agentsStore.set(agent.id, agent);
+  } as any;
+  await agentRepo.saveAgent(agent);
   res.status(201).json(agent);
 });
 
-app.get('/api/agents', (_req: Request, res: Response) => {
-  res.json(Array.from(agentsStore.values()));
+app.get('/api/agents', async (_req: Request, res: Response) => {
+  res.json(await agentRepo.listAgents());
 });
 
-app.get('/api/agents/:id', (req: Request, res: Response) => {
-  const agent = agentsStore.get(req.params.id);
+app.get('/api/agents/:id', async (req: Request, res: Response) => {
+  const agent = await agentRepo.getAgent(req.params.id);
   if (!agent) return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
   res.json(agent);
 });
 
-app.patch('/api/agents/:id', (req: Request, res: Response) => {
-  const agent = agentsStore.get(req.params.id);
+app.patch('/api/agents/:id', async (req: Request, res: Response) => {
+  const agent = await agentRepo.getAgent(req.params.id);
   if (!agent) return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
   const updates = req.body as Partial<AgentDefinition>;
   delete (updates as any).id;
   delete (updates as any).createdAt;
   Object.assign(agent, updates, { updatedAt: Date.now() });
+  await agentRepo.saveAgent(agent);
   res.json(agent);
 });
 
-app.delete('/api/agents/:id', (req: Request, res: Response) => {
-  if (!agentsStore.has(req.params.id)) {
+app.delete('/api/agents/:id', async (req: Request, res: Response) => {
+  const deleted = await agentRepo.deleteAgent(req.params.id);
+  if (!deleted) {
     return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
   }
-  agentsStore.delete(req.params.id);
   res.status(204).send();
 });
 
 app.post('/api/agents/:id/run', async (req: Request, res: Response) => {
-  const agent = agentsStore.get(req.params.id);
+  const agent = await agentRepo.getAgent(req.params.id);
   if (!agent) return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
   try {
     const run = await agentRuntime.createAndExecuteRun({
@@ -414,11 +427,12 @@ app.post('/api/automations/:id/disable', (req: Request, res: Response) => {
   }
 });
 
-app.get('/api/automations/:id/runs', (req: Request, res: Response) => {
+app.get('/api/automations/:id/runs', async (req: Request, res: Response) => {
   const item = automationEngine.getAutomation(req.params.id);
   if (!item) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
-  // Return runs associated with this automation (filtered from all runs by prompt prefix)
-  const automationRuns = agentRuntime.listRuns().filter(r =>
+  
+  const allRuns = await agentRuntime.listRuns();
+  const automationRuns = allRuns.filter((r: any) =>
     r.prompt?.startsWith(`[Automated Trigger: ${item.name}]`)
   );
   res.json(automationRuns);
