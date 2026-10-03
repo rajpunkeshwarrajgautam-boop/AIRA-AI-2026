@@ -8,6 +8,7 @@ import { McpHost } from '../../../packages/mcp/src/index.js';
 import { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
 import { AutomationEngine } from '../../../packages/automation/src/index.js';
 import { PostgresAgentRepository, PostgresRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
+import { PostgresAutomationRepository } from '../../../packages/automation/src/repositories.js';
 import {
   CreateRunRequestSchema,
   ApprovalDecisionSchema,
@@ -44,6 +45,7 @@ const knowledgeEngine = new BrainV2KnowledgeEngine();
 const mcpHost = new McpHost(toolRegistry);
 const agentRepo = new PostgresAgentRepository();
 const runRepo = new PostgresRunRepository();
+const autoRepo = new PostgresAutomationRepository();
 
 const agentRuntime = new AgentRuntime(
   modelRouter,
@@ -53,7 +55,7 @@ const agentRuntime = new AgentRuntime(
   runRepo,
   process.cwd()
 );
-const automationEngine = new AutomationEngine(agentRuntime);
+const automationEngine = new AutomationEngine(agentRuntime, autoRepo);
 automationEngine.start();
 
 // Seed default agent if not exists
@@ -76,6 +78,27 @@ async function seedDefaultAgent() {
   }
 }
 seedDefaultAgent().catch(console.error);
+
+async function seedDefaultAutomation() {
+  const existing = await autoRepo.listAutomations();
+  if (existing.length === 0) {
+    await autoRepo.saveAutomation({
+      id: 'auto_default',
+      name: 'System Health Check & Knowledge Refresh',
+      enabled: false,
+      trigger: 'CRON',
+      cronExpression: '0 0 * * *',
+      conditions: {},
+      agentId: 'agent_sys_monitor',
+      objective: 'Audit workspace telemetry, check MCP node freshness, and report health metrics.',
+      approvalPolicy: 'autonomous',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      lastRun: 0
+    });
+  }
+}
+seedDefaultAutomation().catch(console.error);
 
 // -----------------------------------------------------------------------
 // Health Check
@@ -363,39 +386,39 @@ app.post('/api/agents/:id/run', async (req: Request, res: Response) => {
 // -----------------------------------------------------------------------
 // Automations — Full CRUD (Audit 14)
 // -----------------------------------------------------------------------
-app.get('/api/automations', (_req: Request, res: Response) => {
-  res.json(automationEngine.listAutomations());
+app.get('/api/automations', async (_req: Request, res: Response) => {
+  res.json(await automationEngine.listAutomations());
 });
 
-app.post('/api/automations', (req: Request, res: Response) => {
+app.post('/api/automations', async (req: Request, res: Response) => {
   try {
     const parsed = AutomationDefinitionSchema.omit({ id: true }).parse(req.body);
-    const item = automationEngine.createAutomation(parsed);
+    const item = await automationEngine.createAutomation(parsed);
     res.status(201).json(item);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
 });
 
-app.get('/api/automations/:id', (req: Request, res: Response) => {
-  const item = automationEngine.getAutomation(req.params.id);
+app.get('/api/automations/:id', async (req: Request, res: Response) => {
+  const item = await automationEngine.getAutomation(req.params.id);
   if (!item) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
   res.json(item);
 });
 
-app.patch('/api/automations/:id', (req: Request, res: Response) => {
-  const item = automationEngine.getAutomation(req.params.id);
+app.patch('/api/automations/:id', async (req: Request, res: Response) => {
+  const item = await automationEngine.getAutomation(req.params.id);
   if (!item) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
   try {
-    const updated = automationEngine.patchAutomation(req.params.id, req.body);
+    const updated = await automationEngine.patchAutomation(req.params.id, req.body);
     res.json(updated);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
 });
 
-app.delete('/api/automations/:id', (req: Request, res: Response) => {
-  const deleted = automationEngine.deleteAutomation(req.params.id);
+app.delete('/api/automations/:id', async (req: Request, res: Response) => {
+  const deleted = await automationEngine.deleteAutomation(req.params.id);
   if (!deleted) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
   res.status(204).send();
 });
@@ -409,18 +432,18 @@ app.post('/api/automations/:id/trigger', async (req: Request, res: Response) => 
   }
 });
 
-app.post('/api/automations/:id/enable', (req: Request, res: Response) => {
+app.post('/api/automations/:id/enable', async (req: Request, res: Response) => {
   try {
-    const item = automationEngine.toggleAutomation(req.params.id, true);
+    const item = await automationEngine.toggleAutomation(req.params.id, true);
     res.json(item);
   } catch (err: any) {
     res.status(404).json({ error: err.message });
   }
 });
 
-app.post('/api/automations/:id/disable', (req: Request, res: Response) => {
+app.post('/api/automations/:id/disable', async (req: Request, res: Response) => {
   try {
-    const item = automationEngine.toggleAutomation(req.params.id, false);
+    const item = await automationEngine.toggleAutomation(req.params.id, false);
     res.json(item);
   } catch (err: any) {
     res.status(404).json({ error: err.message });
