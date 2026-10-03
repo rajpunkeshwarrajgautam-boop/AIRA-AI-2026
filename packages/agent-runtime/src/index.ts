@@ -22,7 +22,6 @@ import { RunRepository } from './repositories.js';
 
 export class AgentRuntime extends EventEmitter {
   private eventStreams: Map<string, EventEmitter> = new Map();
-  private pendingResumptions: Map<string, (decision: ApprovalDecision) => void> = new Map();
 
   constructor(
     private modelRouter: ModelRouter,
@@ -117,31 +116,33 @@ export class AgentRuntime extends EventEmitter {
     if (!run || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)) {
       return false;
     }
-    await this.transitionRunState(runId, 'CANCELLED');
-    const resumeFn = this.pendingResumptions.get(runId);
-    if (resumeFn) {
-      this.pendingResumptions.delete(runId);
-      resumeFn('REJECT');
-    }
+    await this.transitionRunState(runId, 'CANCELLED', 'Run was cancelled programmatically.');
     return true;
   }
 
   public async submitApproval(requestId: string, decision: ApprovalDecision): Promise<boolean> {
-    const { approved, request } = this.approvalKernel.decide(requestId, decision);
+    const { approved, request } = await this.approvalKernel.decide(requestId, decision);
     const run = await this.runRepo.getRun(request.runId);
-    if (run) {
-      run.pendingApproval = request;
-      await this.runRepo.saveRun(run);
+    if (!run) {
+      return false;
     }
+    run.pendingApproval = request;
+    await this.runRepo.saveRun(run);
     await this.emitRunEvent(request.runId, 'approval.resolved', { requestId, decision, approved });
 
-    const resumeFn = this.pendingResumptions.get(request.runId);
-    if (resumeFn) {
-      this.pendingResumptions.delete(request.runId);
-      resumeFn(decision);
+    if (decision === 'REJECT') {
+      await this.transitionRunState(request.runId, 'FAILED', 'User rejected required tool approval.');
       return true;
     }
-    return false;
+
+    await this.transitionRunState(request.runId, 'RUNNING');
+    
+    // Resume execution asynchronously (do not await)
+    this.executeRunLoop(request.runId).catch(err => {
+      console.error(`Error resuming run loop for ${request.runId}:`, err);
+    });
+    
+    return true;
   }
 
   private async transitionRunState(runId: string, state: RunState, error?: string): Promise<void> {
@@ -242,7 +243,7 @@ export class AgentRuntime extends EventEmitter {
 
       if (!isApproved && toolDef?.permissionLevel === 'DESTRUCTIVE') {
         await this.transitionRunState(runId, 'WAITING_FOR_APPROVAL');
-        const req = this.approvalKernel.createRequest(
+        const req = await this.approvalKernel.createRequest(
           runId,
           toolCall,
           toolDef.permissionLevel,
@@ -253,17 +254,8 @@ export class AgentRuntime extends EventEmitter {
 
         await this.emitRunEvent(runId, 'approval.required', req);
 
-        // Await decision
-        const decision: ApprovalDecision = await new Promise((resolve) => {
-          this.pendingResumptions.set(runId, resolve);
-        });
-
-        if (decision === 'REJECT') {
-          await this.transitionRunState(runId, 'FAILED', 'User rejected required tool approval.');
-          return;
-        }
-
-        await this.transitionRunState(runId, 'RUNNING');
+        // Suspend execution loop until resumed
+        return;
       }
 
       // Execute Tool

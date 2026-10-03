@@ -40,7 +40,8 @@ app.use(express.urlencoded({ limit: '2mb', extended: false }));
 // Initialize Core Subsystems
 const modelRouter = new ModelRouter();
 const toolRegistry = new ToolRegistry(process.cwd());
-const approvalKernel = new ApprovalKernel();
+import { PostgresApprovalRepository } from '../../../packages/approvals/src/repositories.js';
+const approvalKernel = new ApprovalKernel(new PostgresApprovalRepository());
 const knowledgeEngine = new BrainV2KnowledgeEngine();
 const mcpHost = new McpHost(toolRegistry);
 const agentRepo = new PostgresAgentRepository();

@@ -1,21 +1,19 @@
 import { ToolDefinition } from '../../contracts/src/index.js';
 import { ToolRegistry } from '../../tool-runtime/src/index.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 
 export interface McpServerConfig {
   id: string;
   name: string;
-  command?: string;
-  args?: string[];
   url?: string;
-  env?: Record<string, string>;
-  disabled?: boolean;
 }
 
 export class McpHost {
   private servers: Map<string, McpServerConfig> = new Map();
+  private clients: Map<string, Client> = new Map();
 
   constructor(private toolRegistry: ToolRegistry) {
-    this.registerDefaultServers();
   }
 
   public registerServer(config: McpServerConfig): void {
@@ -28,22 +26,38 @@ export class McpHost {
 
   public async connectServer(serverId: string): Promise<boolean> {
     const config = this.servers.get(serverId);
-    if (!config) {
-      throw new Error(`MCP Server with id ${serverId} not found.`);
+    if (!config) throw new Error(`MCP Server with id ${serverId} not found.`);
+    if (!config.url) throw new Error(`MCP Server with id ${serverId} requires an HTTP URL.`);
+
+    // Security Gate 1: URL Validation & SSRF Prevention
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(config.url);
+    } catch {
+      throw new Error(`Invalid URL for MCP server ${serverId}: ${config.url}`);
+    }
+    
+    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+      throw new Error(`Invalid protocol for MCP server ${serverId}. Only http and https are allowed.`);
     }
 
-    if (!config.url) {
-      throw new Error(`MCP Server with id ${serverId} requires an HTTP URL for this phase.`);
+    const isLocal = parsedUrl.hostname === 'localhost' || parsedUrl.hostname === '127.0.0.1' || parsedUrl.hostname === '::1';
+    if (process.env.NODE_ENV === 'production' && isLocal && process.env.AIRA_ALLOW_LOCAL_MCP !== 'true') {
+      throw new Error(`Security Violation: Connecting to localhost MCP endpoints is forbidden in production.`);
     }
 
     try {
-      const response = await fetch(`${config.url}/tools`);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch tools from ${config.url}/tools: ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      const tools = data.tools || [];
+      const transport = new SSEClientTransport(parsedUrl);
+      const client = new Client({
+        name: "aira-mcp-host",
+        version: "1.0.0"
+      }, { capabilities: {} });
+
+      await client.connect(transport);
+      this.clients.set(serverId, client);
+
+      const toolsRes = await client.listTools();
+      const tools = toolsRes.tools || [];
       
       for (const t of tools) {
         const serverToolDef: ToolDefinition = {
@@ -61,23 +75,15 @@ export class McpHost {
           execute: async (args, ctx) => {
             const start = Date.now();
             try {
-              const execResponse = await fetch(`${config.url}/tools/execute`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: t.name, arguments: args })
+              const execResponse = await client.callTool({
+                name: t.name,
+                arguments: args as any
               });
-              
-              if (!execResponse.ok) {
-                const text = await execResponse.text();
-                throw new Error(`MCP Execution failed: ${text}`);
-              }
-              
-              const execData = await execResponse.json();
               
               return {
                 toolCallId: 'call_mcp_' + Date.now(),
-                output: execData,
-                isError: execData.isError || false,
+                output: execResponse.content,
+                isError: execResponse.isError || false,
                 durationMs: Date.now() - start,
                 timestamp: Date.now()
               };
@@ -102,7 +108,10 @@ export class McpHost {
     }
   }
 
-  private registerDefaultServers(): void {
-    // Intentionally empty for real MCP integration unless we configure them from DB/env
+  public async disconnectAll(): Promise<void> {
+    for (const client of this.clients.values()) {
+      await client.close();
+    }
+    this.clients.clear();
   }
 }

@@ -4,17 +4,20 @@ import {
   PermissionLevel,
   ToolCall
 } from '../../contracts/src/index.js';
+import { ApprovalRepository } from './repositories.js';
 
 export interface ApprovalManagerOptions {
   autoApproveRead?: boolean;
 }
 
 export class ApprovalKernel {
-  private pendingRequests: Map<string, ApprovalRequest> = new Map();
   private sessionGrants: Set<string> = new Set();
   private alwaysAllowedTools: Set<string> = new Set();
 
-  constructor(private options: ApprovalManagerOptions = { autoApproveRead: true }) {}
+  constructor(
+    private repository: ApprovalRepository,
+    private options: ApprovalManagerOptions = { autoApproveRead: true }
+  ) {}
 
   public isToolCallApproved(runId: string, toolName: string, permission: PermissionLevel): boolean {
     if (this.alwaysAllowedTools.has(toolName)) {
@@ -29,12 +32,12 @@ export class ApprovalKernel {
     return false;
   }
 
-  public createRequest(
+  public async createRequest(
     runId: string,
     toolCall: ToolCall,
     permission: PermissionLevel,
     impactDescription?: string
-  ): ApprovalRequest {
+  ): Promise<ApprovalRequest> {
     const requestId = `req_${Math.random().toString(36).slice(2, 10)}`;
     const risk = permission === 'DESTRUCTIVE' ? 'critical' : permission === 'FINANCIAL' ? 'high' : 'medium';
     const request: ApprovalRequest = {
@@ -47,22 +50,25 @@ export class ApprovalKernel {
       sanitizedPreview: toolCall.arguments || {},
       requestedAt: Date.now()
     };
-    this.pendingRequests.set(requestId, request);
+    
+    await this.repository.saveRequest(request);
     return request;
   }
 
-  public getPendingRequest(requestId: string): ApprovalRequest | undefined {
-    return this.pendingRequests.get(requestId);
+  public async getPendingRequest(requestId: string): Promise<ApprovalRequest | undefined> {
+    const request = await this.repository.getRequest(requestId);
+    if (request && !request.decision) {
+        return request;
+    }
+    return undefined;
   }
 
-  public getPendingForRun(runId: string): ApprovalRequest[] {
-    return Array.from(this.pendingRequests.values()).filter(
-      r => r.runId === runId && !r.decision
-    );
+  public async getPendingForRun(runId: string): Promise<ApprovalRequest[]> {
+    return this.repository.getPendingForRun(runId);
   }
 
-  public decide(requestId: string, decision: ApprovalDecision, resolvedBy = 'user'): { approved: boolean; request: ApprovalRequest } {
-    const request = this.pendingRequests.get(requestId);
+  public async decide(requestId: string, decision: ApprovalDecision, resolvedBy = 'user'): Promise<{ approved: boolean; request: ApprovalRequest }> {
+    const request = await this.repository.getRequest(requestId);
 
     if (!request) {
       throw new Error(`Approval request with ID "${requestId}" not found.`);
@@ -71,6 +77,8 @@ export class ApprovalKernel {
     request.decision = decision;
     request.resolvedAt = Date.now();
     request.resolvedBy = resolvedBy;
+
+    await this.repository.resolveRequest(requestId, decision, resolvedBy);
 
     if (decision === 'REJECT') {
       return { approved: false, request };

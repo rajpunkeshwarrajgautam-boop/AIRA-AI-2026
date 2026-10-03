@@ -62,7 +62,10 @@ export class AutomationEngine {
       intent: 'AGENT_MISSION',
       prompt: `[Automated Trigger: ${item.name}]\nObjective: ${item.objective}`,
       systemPrompt: 'Execute scheduled automation according to strict operational criteria.',
-      modelPolicy: { model: 'mock-deterministic' } as any
+      modelPolicy: { 
+        model: 'aira-auto',
+        temperature: 0.2
+      } as any
     });
 
     item.lastRun = Date.now();

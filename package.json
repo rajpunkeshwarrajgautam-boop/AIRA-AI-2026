@@ -9,7 +9,7 @@
     "dev": "vite",
     "server": "npx tsx apps/api/src/index.ts",
     "test": "npx tsx test/verify-runtime.ts",
-    "test:integration": "echo 'No integration tests defined' && exit 0",
+    "test:integration": "npx tsx test/integration.ts",
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit",
     "build": "tsc -b && vite build",
@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "@phosphor-icons/react": "^2.1.10",
     "canvas-confetti": "^1.9.4",
     "clsx": "^2.1.1",
@@ -38,6 +39,7 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "tailwind-merge": "^3.7.0",
+    "uuid": "^14.0.2",
     "zod": "^4.6.5"
   },
   "devDependencies": {
@@ -48,6 +50,7 @@
     "@types/pg": "^8.23.1",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
+    "@types/uuid": "^10.0.0",
     "@vitejs/plugin-react": "^6.1.1",
     "autoprefixer": "^10.6.1",
     "oxlint": "^1.81.0",

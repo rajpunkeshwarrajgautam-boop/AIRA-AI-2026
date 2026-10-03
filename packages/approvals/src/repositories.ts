@@ -1,0 +1,91 @@
+import { ApprovalRequest, ApprovalDecision, ToolCall } from '../../contracts/src/index.js';
+import { db } from '../../db/src/index.js';
+
+export interface ApprovalRepository {
+  saveRequest(request: ApprovalRequest): Promise<void>;
+  getRequest(id: string): Promise<ApprovalRequest | undefined>;
+  getPendingForRun(runId: string): Promise<ApprovalRequest[]>;
+  resolveRequest(id: string, decision: ApprovalDecision, resolvedBy: string): Promise<void>;
+}
+
+export class PostgresApprovalRepository implements ApprovalRepository {
+  async saveRequest(request: ApprovalRequest): Promise<void> {
+    await db('approvals').insert({
+      id: request.id,
+      run_id: request.runId,
+      tool_call_id: request.toolCall.id,
+      status: 'PENDING',
+      reason: request.reason,
+      created_at: request.requestedAt
+    }).onConflict('id').merge();
+    
+    // Also save tool_call to make it durable for approvals since tool_calls table exists
+    await db('tool_calls').insert({
+      id: request.toolCall.id,
+      run_id: request.runId,
+      tool: request.toolCall.name,
+      arguments: JSON.stringify(request.toolCall.arguments),
+      status: 'PENDING',
+      started_at: Date.now()
+    }).onConflict('id').ignore();
+  }
+
+  async getRequest(id: string): Promise<ApprovalRequest | undefined> {
+    const row = await db('approvals')
+      .join('tool_calls', 'approvals.tool_call_id', 'tool_calls.id')
+      .where('approvals.id', id).first();
+      
+    if (!row) return undefined;
+    
+    return {
+      id: row.id,
+      runId: row.run_id,
+      toolCall: {
+        id: row.tool_call_id,
+        name: row.tool,
+        arguments: typeof row.arguments === 'string' ? JSON.parse(row.arguments) : row.arguments,
+        timestamp: parseInt(row.started_at, 10)
+      },
+      risk: 'medium', // dynamically computed elsewhere ideally
+      title: `Authorize Action: ${row.tool}`,
+      reason: row.reason || '',
+      sanitizedPreview: typeof row.arguments === 'string' ? JSON.parse(row.arguments) : row.arguments,
+      requestedAt: parseInt(row.created_at, 10),
+      decision: row.status === 'PENDING' ? undefined : row.status as ApprovalDecision,
+      resolvedAt: row.resolved_at ? parseInt(row.resolved_at, 10) : undefined,
+      resolvedBy: row.resolved_by || undefined
+    };
+  }
+
+  async getPendingForRun(runId: string): Promise<ApprovalRequest[]> {
+    const rows = await db('approvals')
+      .join('tool_calls', 'approvals.tool_call_id', 'tool_calls.id')
+      .where('approvals.run_id', runId)
+      .andWhere('approvals.status', 'PENDING');
+      
+    return rows.map((row: any) => ({
+      id: row.id,
+      runId: row.run_id,
+      toolCall: {
+        id: row.tool_call_id,
+        name: row.tool,
+        arguments: typeof row.arguments === 'string' ? JSON.parse(row.arguments) : row.arguments,
+        timestamp: parseInt(row.started_at, 10)
+      },
+      risk: 'medium',
+      title: `Authorize Action: ${row.tool}`,
+      reason: row.reason || '',
+      sanitizedPreview: typeof row.arguments === 'string' ? JSON.parse(row.arguments) : row.arguments,
+      requestedAt: parseInt(row.created_at, 10),
+      decision: undefined
+    }));
+  }
+
+  async resolveRequest(id: string, decision: ApprovalDecision, resolvedBy: string): Promise<void> {
+    await db('approvals').where({ id }).update({
+      status: decision,
+      resolved_at: Date.now(),
+      resolved_by: resolvedBy
+    });
+  }
+}
