@@ -78,6 +78,11 @@ export class PostgresRunRepository implements RunRepository {
       status: run.state,
       state: run.state,
       modelPolicy: JSON.stringify(run.modelPolicy),
+      toolsUsed: JSON.stringify(run.toolsUsed),
+      toolCalls: JSON.stringify(run.toolCalls),
+      toolResults: JSON.stringify(run.toolResults),
+      citations: JSON.stringify(run.citations),
+      stepCount: run.stepCount,
       createdAt: run.createdAt,
       updatedAt: run.updatedAt
     }).onConflict('id').merge();
@@ -121,23 +126,27 @@ export class PostgresRunRepository implements RunRepository {
   }
 
   private mapToRun(row: any): Run {
+    const parseJson = (val: any, def: any) => {
+      if (!val) return def;
+      return typeof val === 'string' ? JSON.parse(val) : val;
+    };
     return {
       id: row.id,
       userId: row.agent_id || 'user-default',
       intent: row.intent as any,
       state: row.state as any,
-      modelPolicy: typeof row.modelPolicy === 'string' ? JSON.parse(row.modelPolicy) : row.modelPolicy,
+      modelPolicy: parseJson(row.modelPolicy, {}),
       prompt: row.prompt,
       systemPrompt: row.systemPrompt || '',
       context: {},
       content: '',
       thinking: '',
-      toolsUsed: [],
-      toolCalls: [],
-      toolResults: [],
-      artifacts: [],
-      citations: [],
-      stepCount: 0,
+      toolsUsed: parseJson(row.toolsUsed, []),
+      toolCalls: parseJson(row.toolCalls, []),
+      toolResults: parseJson(row.toolResults, []),
+      artifacts: parseJson(row.artifacts, []),
+      citations: parseJson(row.citations, []),
+      stepCount: row.stepCount || 0,
       maxSteps: 10,
       createdAt: parseInt(row.createdAt, 10),
       updatedAt: parseInt(row.updatedAt, 10)

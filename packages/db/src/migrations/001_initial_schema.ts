@@ -39,6 +39,11 @@ export async function up(knex: Knex): Promise<void> {
     table.bigInteger('createdAt').notNullable();
     table.bigInteger('updatedAt').notNullable();
     table.jsonb('modelPolicy');
+    table.jsonb('toolsUsed').defaultTo('[]');
+    table.jsonb('toolCalls').defaultTo('[]');
+    table.jsonb('toolResults').defaultTo('[]');
+    table.jsonb('citations').defaultTo('[]');
+    table.integer('stepCount').defaultTo(0);
   });
 
   await knex.schema.createTable('run_events', (table) => {
