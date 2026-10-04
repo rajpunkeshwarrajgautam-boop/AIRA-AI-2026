@@ -26,6 +26,6 @@ export type BotInput = z.infer<typeof BotInputSchema>;
 export type Bot = BotInput & { id: string; createdAt: number; updatedAt: number };
 export const BotTaskSchema = z.object({ prompt: z.string().trim().min(1).max(16000) }).strict();
 export const BotActionSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('tool'), name: BotToolSchema, arguments: z.record(z.string(), z.unknown()) }).strict(),
+  z.object({ type: z.literal('tool'), name: z.string().trim().min(1).max(80), arguments: z.record(z.string(), z.unknown()) }).strict(),
   z.object({ type: z.literal('final'), content: z.string().min(1).max(64000) }).strict()
 ]);
