@@ -138,6 +138,7 @@ export class ToolRegistry {
         },
         source: 'native',
         permissionLevel: 'READ',
+        idempotencyClass: 'SAFE_READ',
         executionRuntime: 'CLOUD'
       },
       execute: async (args, _ctx) => {
@@ -218,6 +219,7 @@ export class ToolRegistry {
         },
         source: 'native',
         permissionLevel: 'READ',
+        idempotencyClass: 'SAFE_READ',
         executionRuntime: 'LOCAL'
       },
       execute: async (args, ctx) => {
@@ -289,6 +291,7 @@ export class ToolRegistry {
         },
         source: 'native',
         permissionLevel: 'READ',
+        idempotencyClass: 'SAFE_READ',
         executionRuntime: 'LOCAL'
       },
       execute: async (args, _ctx) => {
@@ -334,7 +337,7 @@ export class ToolRegistry {
         source: 'native',
         permissionLevel: 'DESTRUCTIVE',
         executionRuntime: 'LOCAL',
-        riskClass: 'CRITICAL'
+        idempotencyClass: 'NON_IDEMPOTENT'
       },
       execute: async (args, ctx) => {
         const start = Date.now();
@@ -473,7 +476,7 @@ export class ToolRegistry {
       },
       execute: async () => {
         await new Promise(r => setTimeout(r, 1000000));
-        return { toolCallId: 'mock', output: 'ok', durationMs: 0, timestamp: Date.now() };
+        return { toolCallId: 'mock', output: 'ok', isError: false, durationMs: 0, timestamp: Date.now() };
       }
     });
 
@@ -490,9 +493,10 @@ export class ToolRegistry {
       },
       execute: async () => {
         await new Promise(r => setTimeout(r, 1000000));
-        return { toolCallId: 'mock', output: 'ok', durationMs: 0, timestamp: Date.now() };
+        return { toolCallId: 'mock', output: 'ok', isError: false, durationMs: 0, timestamp: Date.now() };
       }
     });
   }
 }
+
 

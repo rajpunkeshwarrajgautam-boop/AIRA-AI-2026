@@ -1,3 +1,5 @@
+import { executeBotLoop } from '../../aira-bot/src/loop.js';
+import type { Bot } from '../../aira-bot/src/contracts.js';
 import { EventEmitter } from 'events';
 import * as crypto from 'crypto';
 import {
@@ -69,7 +71,7 @@ export class AgentRuntime extends EventEmitter {
     this.emit('run_event', { runId, event });
   }
 
-  public async createAndExecuteRun(request: CreateRunRequest, principal: ExecutionPrincipal): Promise<Run> {
+  public async createAndExecuteRun(request: CreateRunRequest, principal: ExecutionPrincipal, bot?: Bot, registerTask?: (run: Run) => Promise<void>): Promise<Run> {
     const runId = `run_${crypto.randomUUID().slice(0, 10)}`;
     const now = Date.now();
 
@@ -81,7 +83,7 @@ export class AgentRuntime extends EventEmitter {
     const run: Run = {
       id: runId,
       principalId: principal.userId,
-      agentId: null,
+      agentId: bot?.id || null,
       sessionId: principal.sessionId,
       workspaceId: principal.workspaceId || null,
       projectId: request.projectId || principal.projectId || null,
@@ -91,7 +93,7 @@ export class AgentRuntime extends EventEmitter {
       modelPolicy: policy,
       prompt: request.prompt,
       systemPrompt: request.systemPrompt,
-      context: request.context || {},
+      context: bot ? { airaBot: bot } : (request.context || {}),
       content: '',
       thinking: '',
       toolsUsed: [],
@@ -100,13 +102,19 @@ export class AgentRuntime extends EventEmitter {
       artifacts: [],
       citations: [],
       stepCount: 0,
-      maxSteps: 10,
+      maxSteps: bot?.maxSteps || 10,
       createdAt: now,
       updatedAt: now
     };
 
+    if (bot) this.modelRouter.getAdapter(policy);
     await this.runRepo.saveRun(run);
     await this.emitRunEvent(runId, 'run.created', { runId, state: run.state });
+
+    if (registerTask) {
+      try { await registerTask(run); }
+      catch (err) { await this.transitionRunState(runId, 'FAILED', 'Task registration fails.'); throw err; }
+    }
 
     // Asynchronously execute run loop
     setImmediate(() => {
@@ -128,7 +136,11 @@ export class AgentRuntime extends EventEmitter {
   }
 
   public async submitApproval(requestId: string, decision: ApprovalDecision): Promise<boolean> {
-    const { approved, request } = await this.approvalKernel.decide(requestId, decision);
+    const pending = await this.approvalKernel.getPendingRequest(requestId);
+    if (!pending) return false;
+    const current = await this.runRepo.getRun(pending.runId);
+    if (!current || current.state !== 'WAITING_FOR_APPROVAL' || current.pendingApproval?.id !== requestId) return false;
+    const { approved, request } = await this.approvalKernel.decide(requestId, decision, current.principalId);
     const run = await this.runRepo.getRun(request.runId);
     if (!run) {
       return false;
@@ -151,7 +163,7 @@ export class AgentRuntime extends EventEmitter {
     
     // Resume execution asynchronously (do not await)
     this.executeRunLoop(request.runId).catch(err => {
-      console.error(`Error resuming run loop for ${request.runId}:`, err);
+      this.transitionRunState(request.runId, 'FAILED', err.message).catch(console.error);
     });
     
     return true;
@@ -161,6 +173,7 @@ export class AgentRuntime extends EventEmitter {
     const run = await this.runRepo.getRun(runId);
     if (!run) return;
 
+    if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)) return;
     run.state = state;
     run.updatedAt = Date.now();
     if (error) run.error = error;
@@ -179,6 +192,14 @@ export class AgentRuntime extends EventEmitter {
   }
 
   private async executeRunLoop(runId: string): Promise<void> {
+    const candidate = await this.runRepo.getRun(runId);
+    if (candidate?.agentId?.startsWith('bot_')) {
+      return executeBotLoop(runId, {
+        runs: this.runRepo, models: this.modelRouter, tools: this.toolRegistry, approvals: this.approvalKernel,
+        emit: (id, type, data) => this.emitRunEvent(id, type, data),
+        transition: (id, state, error) => this.transitionRunState(id, state, error)
+      });
+    }
     let run = await this.runRepo.getRun(runId);
     if (!run) return;
 
@@ -238,7 +259,8 @@ export class AgentRuntime extends EventEmitter {
           toolId: toolDef?.id || `tool_${selectedToolName}`,
           name: selectedToolName,
           arguments: selectedArgs,
-          timestamp: Date.now()
+          timestamp: Date.now(),
+          status: 'PENDING'
         };
 
         run.toolsUsed.push(selectedToolName);
@@ -446,3 +468,4 @@ export class AgentRuntime extends EventEmitter {
     await this.executeRunLoop(runId);
   }
 }
+

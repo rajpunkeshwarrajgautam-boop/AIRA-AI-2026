@@ -2,7 +2,7 @@ import * as crypto from 'crypto';
 import { AutomationDefinition, AutomationRun } from '../../contracts/src/index.js';
 import { AgentRuntime } from '../../agent-runtime/src/index.js';
 import { AutomationRepository, AutomationRunRepository } from './repositories.js';
-import parser from 'cron-parser';
+import { CronExpressionParser } from 'cron-parser';
 
 export class AutomationEngine {
   private timerHandle: NodeJS.Timeout | null = null;
@@ -123,7 +123,7 @@ export class AutomationEngine {
       for (const auto of dueAutomations) {
         if (!auto.cronExpression) continue;
         try {
-          const interval = parser.parseExpression(auto.cronExpression);
+          const interval = CronExpressionParser.parse(auto.cronExpression);
           const nextRunTime = interval.next().getTime();
           const prevRunTime = interval.prev().getTime(); // previous theoretically scheduled time
 
@@ -149,3 +149,4 @@ export class AutomationEngine {
     }
   }
 }
+
