@@ -44,10 +44,13 @@ app.use(express.urlencoded({ limit: '2mb', extended: false }));
 // Health and readiness endpoints must never require authenticated identity.
 // They are liveness/readiness signals consumed by orchestrators and proxies.
 // -----------------------------------------------------------------------
+let appState: 'STARTING' | 'RECOVERING' | 'HEALTHY' | 'FAILED' = 'STARTING';
+
 app.get('/api/health', (_req: Request, res: Response) => {
   const providers = modelRouter.listProviders();
   res.json({
     status: 'HEALTHY',
+    appState,
     subsystems: {
       modelRouter: `ONLINE (${providers.length} provider(s): ${providers.join(', ') || 'none — mock-dev only'})`,
       toolRuntime: 'ONLINE',
@@ -64,7 +67,19 @@ app.get('/api/health', (_req: Request, res: Response) => {
 });
 
 app.get('/api/ready', (_req: Request, res: Response) => {
-  res.json({ status: 'READY', timestamp: Date.now() });
+  if (appState === 'HEALTHY') {
+    res.status(200).json({ status: 'READY', timestamp: Date.now() });
+  } else {
+    res.status(503).json({ status: appState, timestamp: Date.now() });
+  }
+});
+
+// Hard gate to block runtime traffic before recovery is complete
+app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
+  if (appState !== 'HEALTHY') {
+    return res.status(503).json({ error: 'Service Unavailable: Runtime is ' + appState });
+  }
+  next();
 });
 
 // Enforce ExecutionPrincipal on all /api routes BELOW this point.
@@ -94,10 +109,7 @@ const agentRuntime = new AgentRuntime(
 const automationEngine = new AutomationEngine(agentRuntime, autoRepo, autoRunRepo);
 automationEngine.start();
 
-// Recover any interrupted runs on boot
-agentRuntime.recoverInterruptedRuns('api-worker-1').catch(err => {
-  console.error('Failed to recover interrupted runs:', err);
-});
+// Recovery is deferred until the HTTP server is bound.
 
 // Seed default agent if not exists
 async function seedDefaultAgent() {
@@ -645,6 +657,16 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   process.stdout.write(`AIRA Runtime API Server v2026.2.0 listening on port ${PORT}\n`);
   process.stdout.write(`NODE_ENV: ${process.env.NODE_ENV || 'development'}\n`);
   process.stdout.write(`Providers: ${modelRouter.listProviders().join(', ') || 'none (dev mock active)'}\n`);
+  
+  appState = 'RECOVERING';
+  agentRuntime.recoverInterruptedRuns('api-worker-1').then(() => {
+    appState = 'HEALTHY';
+    process.stdout.write('Startup recovery complete. API is HEALTHY.\n');
+  }).catch(err => {
+    console.error('Failed to recover interrupted runs. Failing closed:', err);
+    appState = 'FAILED';
+    process.exit(1);
+  });
 });
 
 process.on('SIGINT', () => {

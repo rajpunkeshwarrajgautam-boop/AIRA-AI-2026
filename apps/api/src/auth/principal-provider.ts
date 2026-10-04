@@ -33,11 +33,15 @@ export class DevPrincipalProvider implements PrincipalProvider {
       throw new Error("Unauthorized: No valid principal found on request context");
     }
 
+    if (!user.sessionId) {
+      throw new Error("Unauthorized: No valid session identity found on request context");
+    }
+
     return ExecutionPrincipalSchema.parse({
       userId: user.id,
-      sessionId: user.sessionId || req.headers['x-session-id'] || 'default-session',
-      workspaceId: user.workspaceId || req.headers['x-workspace-id'],
-      projectId: user.projectId || req.headers['x-project-id'],
+      sessionId: user.sessionId,
+      workspaceId: user.workspaceId,
+      projectId: user.projectId,
       roles: user.roles || [],
       scopes: user.scopes || [],
     });

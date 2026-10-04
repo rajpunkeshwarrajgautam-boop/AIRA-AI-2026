@@ -22,7 +22,7 @@ async function startApiServer() {
   // Wait until it responds to health check
   for (let i = 0; i < 20; i++) {
     try {
-      const res = await fetch(`${BASE_URL}/api/health`);
+      const res = await fetch(`${BASE_URL}/api/ready`);
       if (res.ok) return;
     } catch (e) {}
     await sleep(500);

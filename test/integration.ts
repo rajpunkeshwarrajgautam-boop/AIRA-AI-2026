@@ -115,7 +115,7 @@ async function runIntegration() {
   const mcpServer = spawn('npx', ['tsx', 'packages/mcp/src/test-server.ts'], { shell: true });
 
   console.log('Starting API server...');
-  const apiServer = spawn('npx', ['tsx', '--no-cache', 'apps/api/src/index.ts'], { shell: true, env: { ...process.env, TSX_CACHE: 'false' } });
+  const apiServer = spawn('npx', ['tsx', '--no-cache', 'apps/api/src/index.ts'], { shell: true, env: { ...process.env, TSX_CACHE: 'false', NODE_ENV: 'test' } });
   apiServer.stdout?.on('data', d => process.stdout.write(`API: ${d}`));
   apiServer.stderr?.on('data', d => process.stderr.write(`API ERR: ${d}`));
 
@@ -160,7 +160,7 @@ async function runIntegration() {
     await sleep(1000);
 
     console.log('Restarting API server...');
-    const apiServer2 = spawn('npx', ['tsx', '--no-cache', 'apps/api/src/index.ts'], { shell: true, env: { ...process.env, TSX_CACHE: 'false' } });
+    const apiServer2 = spawn('npx', ['tsx', '--no-cache', 'apps/api/src/index.ts'], { shell: true, env: { ...process.env, TSX_CACHE: 'false', NODE_ENV: 'test' } });
     apiServer2.stdout?.on('data', d => process.stdout.write(`API2: ${d}`));
     apiServer2.stderr?.on('data', d => process.stderr.write(`API2 ERR: ${d}`));
     await sleep(3000);
@@ -437,6 +437,9 @@ async function runIntegration() {
     apiServer2.kill();
     mcpServer.kill();
     console.log('Integration tests PASS.');
+    apiServer.kill();
+    mcpServer.kill();
+    process.exit(0);
   } catch (err) {
     console.error('Integration tests FAILED:', err);
     apiServer.kill();

@@ -64,9 +64,9 @@ async function startApiServer() {
   });
   for (let i = 0; i < 30; i++) {
     try {
-      // Health check MUST work without any auth headers (Critical Check 1)
-      const res = await fetch(`${BASE_URL}/api/health`);
-      if (res.ok) { console.log('API server ready (no-auth health check passed)'); return; }
+      // Readiness check MUST wait for recovery to complete
+      const res = await fetch(`${BASE_URL}/api/ready`);
+      if (res.ok) { console.log('API server ready (readiness check passed)'); return; }
     } catch (e) {}
     await sleep(500);
   }
@@ -274,7 +274,58 @@ async function runIdentityTests() {
     assert.ok(!hasProdActivation, "L: DevPrincipalProvider must NOT activate in production mode");
     console.log('PASS Identity L');
 
-    console.log('\n=== ALL IDENTITY A-L TESTS PASSED ===\n');
+    console.log('\n--- Identity M-R: Production Identity Hardening ---');
+    
+    // Import dynamically so it gets the real class
+    const { DevPrincipalProvider } = await import('../apps/api/src/auth/principal-provider.js');
+    const prodProvider = new DevPrincipalProvider();
+    
+    // Preserve and override env
+    const origEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    
+    try {
+      // Helper to mock express Request
+      const makeReq = (userObj: any, headers: any = {}) => ({ user: userObj, headers } as any);
+      
+      // M (formerly A): x-test-user-id cannot spoof identity
+      await assert.rejects(
+        prodProvider.resolve(makeReq(undefined, { 'x-test-user-id': 'spoof-user', 'x-test-session-id': 'spoof-sess' })),
+        /Unauthorized: No valid principal/i,
+        'M: Production must reject test user headers'
+      );
+      
+      // N (formerly B): x-test-session-id cannot spoof session
+      // (covered by M rejecting entirely if test headers are ignored and no real user)
+      
+      // O (formerly C): x-session-id cannot spoof session
+      await assert.rejects(
+        prodProvider.resolve(makeReq({ id: 'real-user' }, { 'x-session-id': 'spoof-sess' })),
+        /Unauthorized: No valid session identity/i,
+        'O: Production must reject client session header and fail closed'
+      );
+      
+      // P (formerly D): x-workspace-id cannot become trusted workspace identity
+      const pPrin = await prodProvider.resolve(makeReq({ id: 'real-user', sessionId: 'real-sess' }, { 'x-workspace-id': 'spoof-ws' }));
+      assert.strictEqual(pPrin.workspaceId, undefined, 'P: Production must ignore client workspace header');
+      
+      // Q (formerly E): x-project-id cannot become trusted project identity
+      const qPrin = await prodProvider.resolve(makeReq({ id: 'real-user', sessionId: 'real-sess' }, { 'x-project-id': 'spoof-proj' }));
+      assert.strictEqual(qPrin.projectId, undefined, 'Q: Production must ignore client project header');
+      
+      // R (formerly F): missing trusted session identity fails closed
+      await assert.rejects(
+        prodProvider.resolve(makeReq({ id: 'real-user' /* no sessionId */ }, {})),
+        /Unauthorized: No valid session identity/i,
+        'R: Production must fail closed on missing session identity'
+      );
+      
+      console.log('PASS Identity M-R (Production Spoofing tests)');
+    } finally {
+      process.env.NODE_ENV = origEnv;
+    }
+
+    console.log('\n=== ALL IDENTITY A-R TESTS PASSED ===\n');
     killApiServer();
     process.exit(0);
 

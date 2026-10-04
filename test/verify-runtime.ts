@@ -28,7 +28,7 @@ async function runTests() {
     let attempts = 0;
     while (attempts < 30) {
       try {
-        const res = await fetch('http://127.0.0.1:3001/api/health');
+        const res = await fetch('http://127.0.0.1:3001/api/ready');
         if (res.status === 200) break;
       } catch (e) {}
       await sleep(1000);
@@ -298,6 +298,7 @@ async function runTests() {
 
   process.stdout.write('\nALL 8 CORE VERIFICATION TESTS PASSED SUCCESSFULLY.\n');
   apiProcess.kill();
+  process.exit(0);
 }
 
 runTests().catch(err => {
