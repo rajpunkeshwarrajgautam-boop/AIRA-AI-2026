@@ -16,7 +16,7 @@ export interface TerminalExecutionResult {
 }
 
 export interface ComputerProvider {
-  readonly kind: ComputerProviderKind;
+  readonly kind?: ComputerProviderKind;
   readonly enabled: boolean;
   readonly terminalEnabled: boolean;
   readonly allowedPrograms: string[];
@@ -26,11 +26,11 @@ export interface ComputerProvider {
   stop(ownerId: string, botId: string): Promise<ComputerStatus>;
 
   open(ownerId: string, botId: string, url: string): Promise<BrowserView>;
-  click(ownerId: string, botId: string, selector: string): Promise<BrowserActionResult>;
-  type(ownerId: string, botId: string, selector: string, text: string, submit?: boolean): Promise<BrowserActionResult>;
-  scroll(ownerId: string, botId: string, deltaY: number): Promise<BrowserActionResult>;
-  waitFor(ownerId: string, botId: string, selector: string, timeoutMs?: number): Promise<BrowserActionResult>;
-  screenshot(ownerId: string, botId: string): Promise<BrowserActionResult>;
+  click?(ownerId: string, botId: string, selector: string): Promise<BrowserActionResult>;
+  type?(ownerId: string, botId: string, selector: string, text: string, submit?: boolean): Promise<BrowserActionResult>;
+  scroll?(ownerId: string, botId: string, deltaY: number): Promise<BrowserActionResult>;
+  waitFor?(ownerId: string, botId: string, selector: string, timeoutMs?: number): Promise<BrowserActionResult>;
+  screenshot?(ownerId: string, botId: string): Promise<BrowserActionResult>;
 
   listFiles(ownerId: string, botId: string): Promise<ComputerFileEntry[]>;
   readText(ownerId: string, botId: string, relativePath: string): Promise<{ path: string; content: string; sizeBytes: number }>;
