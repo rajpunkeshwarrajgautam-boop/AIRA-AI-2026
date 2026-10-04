@@ -141,7 +141,7 @@ export async function executeBotLoop(runId: string, d: BotLoopDependencies): Pro
     }
     const definition = definitions.find(tool => tool.name === action.name);
     if (!definition) throw new Error(`Model requests unavailable tool: ${action.name}`);
-    validateToolArguments(action.name, action.arguments);
+    validateToolArguments(action.name as BotTool, action.arguments);
     const call: ToolCall = { id: `call_${randomUUID()}`, toolId: definition.id, name: action.name, arguments: action.arguments, timestamp: Date.now(), status: 'PENDING' };
     run.toolCalls.push(call);
     run.toolsUsed.push(call.name);
