@@ -57,7 +57,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
               {userName}
             </span>
           )}
-          <div className="w-full bg-claude-surface2-light dark:bg-claude-surface2-dark rounded-2xl px-6 py-4 text-claude-text-light dark:text-claude-text-dark shadow-sm border border-claude-borderMuted-light dark:border-claude-borderMuted-dark">
+          <div className="w-fit bg-claude-surface2-light dark:bg-claude-surface2-dark rounded-2xl px-5 py-3 md:px-6 md:py-4 text-claude-text-light dark:text-claude-text-dark shadow-sm border border-claude-borderMuted-light dark:border-claude-borderMuted-dark">
           {message.attachments && message.attachments.length > 0 && (
             <div className="flex flex-wrap gap-2 pb-3 mb-2 border-b border-claude-border-light dark:border-claude-border-dark">
               {message.attachments.map(att => (
@@ -129,7 +129,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 transition={{ delay: 0.3 }}
-                className="flex items-center space-x-2 pt-3 text-claude-muted-light dark:text-claude-muted-dark opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+                className="flex items-center space-x-2 pt-1 text-claude-muted-light dark:text-claude-muted-dark opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity duration-200"
               >
                 <button
                   onClick={handleCopy}

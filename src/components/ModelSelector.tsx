@@ -100,7 +100,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             <div className="mt-2 pt-2 border-t border-claude-border-light dark:border-claude-border-dark px-2 py-1.5 bg-claude-surface2-light dark:bg-claude-surface2-dark rounded-b-xl">
               <div 
                 onClick={() => onToggleThinking(!extendedThinking)}
-                className="flex items-center justify-between gap-3 p-2 rounded-xl hover:bg-claude-surface-light/60 dark:hover:bg-claude-surface-dark/60 cursor-pointer transition-colors select-none"
+                className="flex items-center justify-between gap-3 p-3 mt-1 rounded-xl hover:bg-claude-surface-light/60 dark:hover:bg-claude-surface-dark/60 cursor-pointer transition-colors select-none group"
               >
                 <div className="flex items-center space-x-3 min-w-0">
                   <div className="w-9 h-9 rounded-xl bg-[#EDE9FE] dark:bg-[#2E274D] flex items-center justify-center flex-shrink-0 shadow-sm">
@@ -111,16 +111,27 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                     <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark leading-snug">Spend more compute on complex tasks.</div>
                   </div>
                 </div>
-                <div 
-                  className="w-11 h-6 rounded-full p-[2px] transition-colors duration-200 flex-shrink-0 flex items-center"
-                  style={{ backgroundColor: extendedThinking ? '#D97757' : '#D5D2CA' }}
+                <button 
+                  type="button"
+                  role="switch"
+                  aria-checked={extendedThinking}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleThinking(!extendedThinking);
+                  }}
+                  className={`group relative inline-flex h-[28px] w-[50px] flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-300 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00BCD4] focus-visible:ring-offset-2 dark:focus-visible:ring-offset-claude-bg-dark ${
+                    extendedThinking ? 'bg-[#00BCD4]' : 'bg-claude-border-light dark:bg-[#4A4740]'
+                  }`}
+                  style={{ boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.15)' }}
                 >
-                  <motion.div 
-                    layout
-                    transition={{ type: "spring", stiffness: 500, damping: 30 }}
-                    className={`w-5 h-5 rounded-full bg-white shadow-sm ${extendedThinking ? 'ml-auto' : 'mr-auto'}`}
+                  <span className="sr-only">Toggle Deep reasoning</span>
+                  <span
+                    aria-hidden="true"
+                    className={`pointer-events-none inline-block h-[24px] w-[24px] transform rounded-full bg-white shadow-[0_2px_5px_rgba(0,0,0,0.2)] ring-0 transition-all duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)] group-active:w-[32px] ${
+                      extendedThinking ? 'translate-x-[22px] group-active:translate-x-[14px]' : 'translate-x-0'
+                    }`}
                   />
-                </div>
+                </button>
               </div>
             </div>
           </motion.div>

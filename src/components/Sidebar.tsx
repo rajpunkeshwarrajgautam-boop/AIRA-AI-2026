@@ -55,6 +55,43 @@ const itemVariants: Variants = {
   show: { opacity: 1, x: 0, transition: { type: "spring", stiffness: 300, damping: 24 } }
 };
 
+const ThemeToggle = ({ theme, onChange }: { theme: 'light' | 'dark' | 'system', onChange: (theme: 'light' | 'dark' | 'system') => void }) => {
+  const options = [
+    { id: 'light', icon: Sun, colorClass: 'from-[#eb6e4b] to-[#d97757]', shadowClass: 'shadow-[0_2px_8px_-2px_rgba(235,110,75,0.4)]' },
+    { id: 'system', icon: Laptop, colorClass: 'from-slate-500 to-slate-600', shadowClass: 'shadow-[0_2px_8px_-2px_rgba(100,116,139,0.4)]' },
+    { id: 'dark', icon: Moon, colorClass: 'from-indigo-500 to-purple-600', shadowClass: 'shadow-[0_2px_8px_-2px_rgba(99,102,241,0.4)]' },
+  ] as const;
+
+  return (
+    <div className="flex items-center gap-0.5 bg-claude-surface-light dark:bg-black/30 p-1 rounded-[14px] border border-claude-border-light dark:border-claude-border-dark shadow-inner relative overflow-hidden">
+      {/* Subtle inner shadow for depth */}
+      <div className="absolute inset-0 shadow-[inset_0_1px_4px_rgba(0,0,0,0.05)] dark:shadow-[inset_0_1px_5px_rgba(0,0,0,0.3)] pointer-events-none rounded-[14px]"></div>
+      
+      {options.map(({ id, icon: Icon, colorClass, shadowClass }) => (
+        <button
+          key={id}
+          onClick={() => onChange(id)}
+          className={`relative p-2 rounded-xl flex items-center justify-center transition-all duration-300 outline-none ${
+            theme === id 
+              ? 'text-white' 
+              : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white'
+          }`}
+          title={id.charAt(0).toUpperCase() + id.slice(1)}
+        >
+          {theme === id && (
+            <motion.div
+              layoutId="theme-active-pill"
+              className={`absolute inset-0 bg-gradient-to-br ${colorClass} rounded-[10px] ${shadowClass}`}
+              transition={{ type: "spring", stiffness: 400, damping: 25 }}
+            />
+          )}
+          <Icon className="w-4 h-4 relative z-10" />
+        </button>
+      ))}
+    </div>
+  );
+};
+
 export const Sidebar: React.FC<SidebarProps> = ({
   conversations,
   activeChatId,
@@ -120,11 +157,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const handleSaveRename = (id: string) => {
     if (editTitle.trim()) onRenameChat(id, editTitle.trim());
     setEditingChatId(null);
-  };
-
-  const cycleTheme = () => {
-    const nextTheme = settings.theme === 'light' ? 'dark' : settings.theme === 'dark' ? 'system' : 'light';
-    onUpdateSettings({ theme: nextTheme });
   };
 
   const handleSelectChatMobile = (id: string) => {
@@ -270,9 +302,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <span>Bookmarked</span>
                     <span className="text-[10px] tabular-nums font-mono bg-claude-surface2-light dark:bg-claude-surface2-dark px-1.5 py-0.5 rounded-md ml-auto">{starred.length}</span>
                   </button>
-                  <AnimatePresence>
+                  <AnimatePresence initial={false}>
                     {starredExpanded && (
-                      <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="mt-2 space-y-1 overflow-hidden">
+                      <motion.div 
+                        variants={{
+                          hidden: { height: 0, opacity: 0 },
+                          show: { height: 'auto', opacity: 1 }
+                        }}
+                        initial="hidden" 
+                        animate="show" 
+                        exit="hidden" 
+                        className="mt-2 space-y-1 overflow-hidden"
+                      >
                         {starred.map(renderChatItem)}
                       </motion.div>
                     )}
@@ -295,9 +336,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <div className="min-w-0 flex-1"><div className="text-[13px] font-bold text-claude-text-light dark:text-white tracking-tight truncate">{settings.userName || 'Aira User'}</div><div className="text-[11px] font-medium text-claude-muted-light dark:text-claude-muted-dark">Workspace settings</div></div>
                 <Settings className="w-4 h-4 text-claude-muted-light dark:text-claude-muted-dark" />
               </button>
-              <button onClick={cycleTheme} className="p-3 rounded-xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-sm text-claude-text-light dark:text-white hover:border-claude-terracotta/50 transition-all duration-300 flex-shrink-0 active:scale-95" title={`Theme: ${settings.theme}`}>
-                {settings.theme === 'light' ? <Sun className="w-4 h-4" /> : settings.theme === 'dark' ? <Moon className="w-4 h-4" /> : <Laptop className="w-4 h-4" />}
-              </button>
+              <ThemeToggle theme={settings.theme} onChange={(t) => onUpdateSettings({ theme: t })} />
             </div>
           </div>
           </motion.aside>

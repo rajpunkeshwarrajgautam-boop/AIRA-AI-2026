@@ -15,7 +15,7 @@ export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({ thinking }) => {
   return (
     <motion.div 
       layout
-      className="my-3 rounded-2xl bg-claude-surface-light dark:bg-claude-surface-dark backdrop-blur-md border border-claude-border-light dark:border-claude-border-dark overflow-hidden text-sm shadow-[inset_0_1px_0_rgba(255,255,255,0.4)] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] transition-shadow hover:shadow-sm"
+      className={`my-3 rounded-2xl bg-claude-surface-light/80 dark:bg-claude-surface-dark/80 backdrop-blur-lg border ${thinking.isStreaming ? 'border-cyan-500/30 dark:border-cyan-400/30 shadow-[0_0_15px_rgba(6,182,212,0.1)]' : 'border-claude-border-light dark:border-claude-border-dark'} overflow-hidden text-sm transition-all duration-500`}
     >
       {/* Header */}
       <button
@@ -38,9 +38,9 @@ export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({ thinking }) => {
 
         <div className="flex items-center space-x-2 text-claude-muted-light dark:text-claude-muted-dark">
           {thinking.isStreaming && (
-            <span className="flex items-center space-x-1.5 text-xs text-claude-terracotta font-medium animate-pulse bg-claude-terracotta/10 px-2 py-1 rounded-full">
+            <span className="flex items-center space-x-1.5 text-xs text-cyan-600 dark:text-cyan-400 font-medium animate-pulse bg-cyan-500/10 dark:bg-cyan-400/10 px-2.5 py-1 rounded-full border border-cyan-500/20 dark:border-cyan-400/20">
               <Cpu className="w-3.5 h-3.5" />
-              <span>Analyzing</span>
+              <span>Analyzing...</span>
             </span>
           )}
           <motion.div

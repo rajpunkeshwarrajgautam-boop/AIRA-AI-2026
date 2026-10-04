@@ -354,16 +354,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           <div className="text-[12px] text-claude-muted-light dark:text-claude-muted-dark leading-snug">Spend more compute on complex tasks.</div>
                         </div>
                       </div>
-                      <div 
-                        className="w-11 h-6 rounded-full p-[2px] transition-colors duration-200 flex-shrink-0 flex items-center"
-                        style={{ backgroundColor: form.extendedThinking ? '#D97757' : '#D5D2CA' }}
+                      <button 
+                        type="button"
+                        role="switch"
+                        aria-checked={form.extendedThinking}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setForm({ ...form, extendedThinking: !form.extendedThinking });
+                        }}
+                        className={`group relative inline-flex h-[28px] w-[50px] flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-300 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00BCD4] focus-visible:ring-offset-2 dark:focus-visible:ring-offset-claude-bg-dark ${
+                          form.extendedThinking ? 'bg-[#00BCD4]' : 'bg-[#D5D2CA] dark:bg-[#4A4740]'
+                        }`}
+                        style={{ boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.15)' }}
                       >
-                        <motion.div 
-                          layout
-                          transition={{ type: "spring", stiffness: 500, damping: 30 }}
-                          className={`w-5 h-5 rounded-full bg-white shadow-sm ${form.extendedThinking ? 'ml-auto' : 'mr-auto'}`}
+                        <span className="sr-only">Toggle Deep reasoning</span>
+                        <span
+                          aria-hidden="true"
+                          className={`pointer-events-none inline-block h-[24px] w-[24px] transform rounded-full bg-white shadow-[0_2px_5px_rgba(0,0,0,0.2)] ring-0 transition-all duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)] group-active:w-[32px] ${
+                            form.extendedThinking ? 'translate-x-[22px] group-active:translate-x-[14px]' : 'translate-x-0'
+                          }`}
                         />
-                      </div>
+                      </button>
                     </div>
 
                     {/* Extended Thinking Token Budget */}
