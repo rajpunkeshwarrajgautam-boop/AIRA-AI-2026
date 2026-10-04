@@ -3,6 +3,17 @@ import type { Run, StreamingEvent } from '../../../packages/contracts/src';
 export type { Bot, BotInput, Run, StreamingEvent };
 export interface Capabilities { models: string[]; tools: string[]; computer: boolean; delegation: boolean; scheduling: boolean }
 export interface TaskRecord { id: string; run_id: string; objective: string; created_at: number; run?: Run }
+export interface ComputerStatus {
+  enabled: boolean;
+  state: 'DISABLED' | 'STOPPED' | 'RUNNING' | 'ERROR';
+  workspaceReady: boolean;
+  browser: { state: 'STOPPED' | 'RUNNING'; url?: string; title?: string; lastScreenshotPath?: string };
+  terminal: { enabled: boolean; allowedPrograms: string[] };
+  lastError?: string;
+}
+export interface ComputerFileEntry { path: string; type: 'file' | 'directory'; sizeBytes: number; updatedAt: number }
+export interface BrowserView { url: string; title: string; text: string; links: Array<{ text: string; href: string }>; screenshotPath: string }
+export interface TerminalResult { program: string; args: string[]; exitCode: number; stdout: string; stderr: string; truncated: boolean }
 
 export async function botApi<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers);

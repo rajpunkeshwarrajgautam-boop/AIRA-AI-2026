@@ -59,7 +59,8 @@ export async function verifyBotBrowser(botId: string, runId: string) {
     await page.getByRole('button', { name: 'Download', exact: true }).click();
     assert.match((await downloadPromise).suggestedFilename(), /^aira-bot-run_.*\.md$/);
     await page.getByRole('tab', { name: 'computer' }).click();
-    await page.getByRole('heading', { name: 'Computer is not connected' }).waitFor();
+    await page.getByText('Computer ready', { exact: true }).waitFor();
+    await page.getByText('Enable Browser in this bot’s capabilities.').waitFor();
     await page.getByRole('tab', { name: 'activity' }).click();
     await page.keyboard.press('ArrowRight');
     assert.equal(await page.getByRole('tab', { name: 'files' }).getAttribute('aria-selected'), 'true');
@@ -82,6 +83,6 @@ export async function verifyBotBrowser(botId: string, runId: string) {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     assert.equal(await page.locator('.ab-primary').first().evaluate(el => getComputedStyle(el).transitionDuration), '0s');
     assert.deepEqual(errors, []);
-    console.log('PASS browser: bot CRUD, memory/skills persistence, task execution, files/download, deep links/back navigation, 390px layout, reduced motion, no page errors');
+    console.log('PASS browser: bot CRUD, memory/skills persistence, task execution, files/download, computer panel, deep links/back navigation, 390px layout, reduced motion, no page errors');
   } finally { await browser.close(); await vite.close(); }
 }
