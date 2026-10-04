@@ -38,6 +38,22 @@ export const AVAILABLE_MODELS: ModelInfo[] = [
     supportsThinking: false,
     contextWindow: '200K tokens',
   },
+  {
+    id: 'meta/llama-3.1-405b-instruct',
+    name: 'Llama 3.1 405B',
+    badge: 'NVIDIA',
+    description: 'Open-weights frontier model running at ultra-low latency on NVIDIA NIM.',
+    supportsThinking: false,
+    contextWindow: '128K tokens',
+  },
+  {
+    id: 'nvidia/llama-3.1-nemotron-70b-instruct',
+    name: 'Nemotron 70B',
+    badge: 'NVIDIA',
+    description: 'Custom fine-tune by NVIDIA optimized for instruction following and reasoning.',
+    supportsThinking: false,
+    contextWindow: '128K tokens',
+  },
 ];
 
 export const DEFAULT_SETTINGS: AppSettings = {

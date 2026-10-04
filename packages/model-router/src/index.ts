@@ -237,6 +237,9 @@ export class ModelRouter {
     if (process.env.OPENAI_API_KEY) {
       this.adapters.set('openai', new OpenAIAdapter());
     }
+    if (process.env.NVIDIA_API_KEY) {
+      this.adapters.set('nvidia', new OpenAIAdapter(process.env.NVIDIA_API_KEY, 'https://integrate.api.nvidia.com/v1'));
+    }
   }
 
   public resolvePolicy(modelId: ModelId, intent?: IntentTaxonomy): ModelPolicy {
@@ -306,6 +309,16 @@ export class ModelRouter {
       throw new Error(
         `CONFIGURATION_ERROR: No OpenAI API key configured for model "${model}". ` +
         'Set OPENAI_API_KEY in environment. No mock fallback is available in production.'
+      );
+    }
+
+    if (model.startsWith('meta/') || model.startsWith('nvidia/')) {
+      if (this.adapters.has('nvidia')) {
+        return this.adapters.get('nvidia')!;
+      }
+      throw new Error(
+        `CONFIGURATION_ERROR: No NVIDIA API key configured for model "${model}". ` +
+        'Set NVIDIA_API_KEY in environment.'
       );
     }
 
