@@ -15,12 +15,13 @@ async function collectSseEvents(
   runId: string,
   headers: Record<string, string> = {},
   limit: number,
-  timeoutMs = 6000
+  timeoutMs = 6000,
+  query = ''
 ): Promise<{ id: string; event: string; data: any }[]> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`${BASE_URL}/api/runs/${runId}/events`, {
+    const res = await fetch(`${BASE_URL}/api/runs/${runId}/events${query}`, {
       headers: { ...headers },
       signal: controller.signal
     });
@@ -107,8 +108,17 @@ async function runIntegration() {
   console.log('Starting MCP server...');
   const mcpServer = spawn('npx', ['tsx', 'packages/mcp/src/test-server.ts'], { shell: true });
 
+  console.log('--- TEST 4: Persist-before-emit invariant ---');
+  await new Promise<void>((resolve, reject) => {
+    exec('npx tsx test/invariant.ts', (err, stdout, stderr) => {
+      if (err) { console.error(stderr); return reject(new Error(`Invariant test failed: ${stdout || stderr}`)); }
+      console.log(stdout.trim());
+      resolve();
+    });
+  });
+
   console.log('Starting API server...');
-  const apiServer = spawn('npx', ['tsx', 'apps/api/src/index.ts'], { shell: true });
+  const apiServer = spawn('npx', ['tsx', '--no-cache', 'apps/api/src/index.ts'], { shell: true, env: { ...process.env, TSX_CACHE: 'false' } });
   apiServer.stdout?.on('data', d => process.stdout.write(`API: ${d}`));
   apiServer.stderr?.on('data', d => process.stderr.write(`API ERR: ${d}`));
 
@@ -153,7 +163,7 @@ async function runIntegration() {
     await sleep(1000);
 
     console.log('Restarting API server...');
-    const apiServer2 = spawn('npx', ['tsx', 'apps/api/src/index.ts'], { shell: true });
+    const apiServer2 = spawn('npx', ['tsx', '--no-cache', 'apps/api/src/index.ts'], { shell: true, env: { ...process.env, TSX_CACHE: 'false' } });
     apiServer2.stdout?.on('data', d => process.stdout.write(`API2: ${d}`));
     apiServer2.stderr?.on('data', d => process.stderr.write(`API2 ERR: ${d}`));
     await sleep(3000);
@@ -181,46 +191,116 @@ async function runIntegration() {
     console.log('Scheduler concurrency verified.');
 
     // -----------------------------------------------------------------------
-    // TEST 5: SSE — Full Disconnect / Replay / Live Continuation
+    // TEST 5a: Real Replay -> Live Continuation (Deterministic)
     // -----------------------------------------------------------------------
-    console.log('--- TEST 5: SSE Disconnect/Replay/Live Continuation ---');
+    console.log('--- TEST 5a: Real Replay -> Live Continuation ---');
+    const liveRunRes = await fetch(`${BASE_URL}/api/runs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        intent: 'TOOL_ACTION',
+        prompt: 'run command', // Triggers system_shell (DESTRUCTIVE), which pauses for approval
+        systemPrompt: 'You are a test agent',
+        modelPolicy: { model: 'mock-deterministic' }
+      })
+    });
+    if (!liveRunRes.ok) throw new Error(`Failed to create live run: ${liveRunRes.status}`);
+    const liveRun = await liveRunRes.json();
+    
+    // Wait for the run to pause at WAITING_FOR_APPROVAL
+    await sleep(2000);
+    
+    // Subscribe to SSE. Should replay created, requested, approval.required events
+    const controller = new AbortController();
+    const liveStreamRes = await fetch(`${BASE_URL}/api/runs/${liveRun.id}/events`, {
+      signal: controller.signal
+    });
+    const reader = liveStreamRes.body?.getReader();
+    if (!reader) throw new Error('No reader');
 
-    // Wait for run to complete and persist all events
-    await sleep(3000);
+    const liveEvents: any[] = [];
+    let buffer = '';
+    let currentId = '';
+    let currentEvent = '';
 
-    // Collect ALL events from seq 0 (no cursor)
-    const allEvents = await collectSseEvents(runData.id, {}, 20, 4000);
-    assert.ok(allEvents.length >= 2, `Should collect at least 2 events (run.created + run.started). Got: ${allEvents.length}`);
-    assert.ok(allEvents[0].id !== '', 'All events must carry a sequence ID');
-    console.log(`Full replay: collected ${allEvents.length} events, ids: ${allEvents.map(e => e.id).join(',')}`);
-
-    // Find an event in the middle to use as cursor
-    const midIndex = Math.floor(allEvents.length / 2);
-    const cursorId = allEvents[midIndex].id;
-    const expectedAfterCursor = allEvents.slice(midIndex + 1);
-    console.log(`Cursor at seq=${cursorId}, expecting ${expectedAfterCursor.length} events after it`);
-
-    // Reconnect with Last-Event-ID = midpoint
-    const replayedEvents = await collectSseEvents(
-      runData.id,
-      { 'Last-Event-ID': cursorId },
-      expectedAfterCursor.length + 2,
-      4000
-    );
-
-    assert.ok(replayedEvents.length >= expectedAfterCursor.length,
-      `Replay with Last-Event-ID=${cursorId} should return ${expectedAfterCursor.length} events, got ${replayedEvents.length}`);
-
-    // Verify no duplicates and strictly increasing sequence
-    const replayIds = replayedEvents.map(e => parseInt(e.id, 10));
-    for (let i = 1; i < replayIds.length; i++) {
-      assert.ok(replayIds[i] > replayIds[i - 1],
-        `Sequences must be strictly increasing: ${replayIds[i]} must be > ${replayIds[i - 1]}`);
+    const readLoop = async () => {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        const chunk = new TextDecoder().decode(value);
+        buffer += chunk;
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (line.startsWith('id: ')) currentId = line.substring(4).trim();
+          else if (line.startsWith('event: ')) currentEvent = line.substring(7).trim();
+          else if (line.startsWith('data: ')) {
+            liveEvents.push({ id: currentId, event: currentEvent, data: JSON.parse(line.substring(6).trim()) });
+            currentId = ''; currentEvent = '';
+          }
+        }
+      }
+    };
+    const readPromise = readLoop();
+    
+    await sleep(1000);
+    const failedEvent = liveEvents.find(e => e.event === 'run.failed');
+    if (failedEvent) console.error('Run failed early:', failedEvent.data);
+    console.log('Received events:', liveEvents.map(e => e.event));
+    const approvalReqEvent = liveEvents.find(e => e.event === 'approval.required');
+    assert.ok(approvalReqEvent, 'Should have received approval.required via replay');
+    
+    console.log('Sending approval to trigger live continuation...');
+    const resApprove = await fetch(`${BASE_URL}/api/runs/${liveRun.id}/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        requestId: approvalReqEvent.data.id,
+        decision: 'ALLOW_ONCE'
+      })
+    });
+    if (!resApprove.ok) {
+      throw new Error(`Approval fetch failed: ${await resApprove.text()}`);
     }
-    // Verify first replayed event is strictly after cursor
-    assert.ok(replayIds[0] > parseInt(cursorId, 10),
-      `First replayed event seq=${replayIds[0]} must be > cursor=${cursorId}`);
-    console.log('TEST 5 PASS: disconnect/replay/live continuation verified.');
+    
+    // Wait for run to finish and emit live events
+    await sleep(4000);
+    controller.abort();
+    try { await readPromise; } catch (e: any) { if (e.name !== 'AbortError') throw e; }
+    
+    const liveToolStarted = liveEvents.find(e => e.event === 'tool.started');
+    const liveRunCompleted = liveEvents.find(e => e.event === 'run.completed' || e.event === 'run.failed');
+    
+    assert.ok(liveToolStarted, 'Should receive tool.started live after replay');
+    assert.ok(liveRunCompleted, 'Should receive run.completed or run.failed live after replay');
+    console.log('TEST 5a PASS: Replay -> Live continuation verified deterministically');
+
+    // -----------------------------------------------------------------------
+    // TEST 5b: Replay/Live Race Test (Barrier/Hook)
+    // -----------------------------------------------------------------------
+    console.log('--- TEST 5b: Replay/Live Race Test ---');
+    const raceRunRes = await fetch(`${BASE_URL}/api/runs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        intent: 'TOOL_ACTION',
+        prompt: 'run command',
+        systemPrompt: 'You are a test agent',
+        modelPolicy: { model: 'mock-deterministic' }
+      })
+    });
+    const raceRun = await raceRunRes.json();
+    
+    // Connect with test hook to induce 500ms delay between subscription and DB fetch
+    const raceEvents = await collectSseEvents(raceRun.id, {}, 5, 4000, `?__test_hook_replay_race=1`);
+    assert.ok(raceEvents.length >= 2, `Should get events despite the race condition. Got: ${raceEvents.length}`);
+    const raceIds = raceEvents.map(e => parseInt(e.id, 10));
+    const uniqueIds = new Set(raceIds);
+    assert.strictEqual(raceIds.length, uniqueIds.size, 'Should not have duplicate events from race condition');
+    for (let i = 1; i < raceIds.length; i++) {
+      assert.ok(raceIds[i] > raceIds[i - 1], `Sequences must be strictly increasing: ${raceIds[i]} must be > ${raceIds[i - 1]}`);
+    }
+    console.log('TEST 5b PASS: Replay/Live race condition handled correctly without duplicates.');
 
     // -----------------------------------------------------------------------
     // TEST 6: Cursor Validation — strict numeric input
@@ -231,6 +311,9 @@ async function runIntegration() {
       { header: 'Last-Event-ID', value: 'abc' },
       { header: 'Last-Event-ID', value: '-1' },
       { header: 'Last-Event-ID', value: '12abc' },
+      { header: 'Last-Event-ID', value: '1.5' },
+      { header: 'Last-Event-ID', value: '0x10' },
+      { header: 'Last-Event-ID', value: String(Number.MAX_SAFE_INTEGER + 1) }
     ];
 
     for (const { header, value } of invalidCursors) {
@@ -329,24 +412,23 @@ async function runIntegration() {
 
     // Two concurrent SSE connections to the same run
     const [subA, subB] = await Promise.all([
-      collectSseEvents(multiRun.id, {}, 10, 8000),
-      collectSseEvents(multiRun.id, {}, 10, 8000),
+      collectSseEvents(multiRun.id, {}, 3, 8000),  // Disconnects early
+      collectSseEvents(multiRun.id, {}, 10, 8000), // Continues receiving
     ]);
 
-    assert.ok(subA.length >= 1, `Subscriber A should receive events, got ${subA.length}`);
-    assert.ok(subB.length >= 1, `Subscriber B should receive events, got ${subB.length}`);
+    assert.ok(subA.length === 3, `Subscriber A should receive exactly 3 events before disconnecting, got ${subA.length}`);
+    assert.ok(subB.length > 3, `Subscriber B should receive more than 3 events, got ${subB.length}`);
 
-    // Both should see the same sequence of events
+    // Both should see the same sequence of events up to the point A disconnected
     const seqA = subA.map(e => e.id);
     const seqB = subB.map(e => e.id);
-    // Check that B got at least the events A got (both see same events up to what they collected)
-    const minLen = Math.min(seqA.length, seqB.length);
-    for (let i = 0; i < minLen; i++) {
+    
+    for (let i = 0; i < seqA.length; i++) {
       assert.strictEqual(seqA[i], seqB[i],
         `Subscribers A and B should see same event at position ${i}: A=${seqA[i]}, B=${seqB[i]}`);
     }
-    console.log(`Subscriber A got ${subA.length} events, B got ${subB.length} events. First ${minLen} match.`);
-    console.log('TEST 9 PASS: multiple subscribers verified.');
+    console.log(`Subscriber A got ${subA.length} events, B got ${subB.length} events. First ${seqA.length} match.`);
+    console.log('TEST 9 PASS: multiple subscribers and disconnect isolation verified.');
 
     // -----------------------------------------------------------------------
     // Cleanup

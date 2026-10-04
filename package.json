@@ -10,7 +10,7 @@
     "server": "npx tsx apps/api/src/index.ts",
     "test": "npx tsx test/verify-runtime.ts",
     "test:integration": "npx tsx test/integration.ts",
-    "test:e2e": "playwright test",
+    "test:e2e": "npx tsx test/e2e-verification.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc -b && vite build",
     "lint": "oxlint",

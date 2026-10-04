@@ -22,10 +22,8 @@ export async function up(knex: Knex): Promise<void> {
 }
 
 export async function down(knex: Knex): Promise<void> {
-  const exists = await knex.schema.hasColumn('runs', 'artifacts');
-  if (exists) {
-    await knex.schema.alterTable('runs', (table) => {
-      table.dropColumn('artifacts');
-    });
-  }
+  // It is unsafe to unconditionally drop the `artifacts` column here because
+  // we cannot prove if migration 006 created it or if the temporarily modified
+  // migration 003 created it. Therefore, this rollback is a no-op to prevent
+  // accidental data loss on databases where 003 was the true owner.
 }

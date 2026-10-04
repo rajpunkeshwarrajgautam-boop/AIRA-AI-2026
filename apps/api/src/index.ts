@@ -270,6 +270,10 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
   // 1. Subscribe to live events
   stream.on('event', onLiveEvent);
 
+  if (req.query.__test_hook_replay_race) {
+    await new Promise(r => setTimeout(r, 500));
+  }
+
   try {
     // 2. High-water mark
     const highWaterSequence = await runRepo.getLatestEventSequence(runId);
@@ -626,3 +630,4 @@ process.on('SIGTERM', () => {
 });
 
 
+console.log('--- API SERVER BOOTING WITH NEW EDITS ---');

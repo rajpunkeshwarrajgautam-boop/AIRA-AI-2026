@@ -10,16 +10,7 @@ export interface ApprovalRepository {
 
 export class PostgresApprovalRepository implements ApprovalRepository {
   async saveRequest(request: ApprovalRequest): Promise<void> {
-    await db('approvals').insert({
-      id: request.id,
-      run_id: request.runId,
-      tool_call_id: request.toolCall.id,
-      status: 'PENDING',
-      reason: request.reason,
-      created_at: request.requestedAt
-    }).onConflict('id').merge();
-    
-    // Also save tool_call to make it durable for approvals since tool_calls table exists
+    // Save tool_call first to satisfy the foreign key constraint from approvals
     await db('tool_calls').insert({
       id: request.toolCall.id,
       run_id: request.runId,
@@ -28,6 +19,15 @@ export class PostgresApprovalRepository implements ApprovalRepository {
       status: 'PENDING',
       started_at: Date.now()
     }).onConflict('id').ignore();
+
+    await db('approvals').insert({
+      id: request.id,
+      run_id: request.runId,
+      tool_call_id: request.toolCall.id,
+      status: 'PENDING',
+      reason: request.reason,
+      created_at: request.requestedAt
+    }).onConflict('id').merge();
   }
 
   async getRequest(id: string): Promise<ApprovalRequest | undefined> {

@@ -45,7 +45,9 @@ export class DeterministicMockAdapter implements ModelAdapter {
       : undefined;
 
     let text = `Processed your request using ${policy.model}.`;
-    if (lastUserMessage.toLowerCase().includes('search') || lastUserMessage.toLowerCase().includes('find')) {
+    if (lastUserMessage.toLowerCase().includes('run command')) {
+      text = `{"type": "tool_call", "name": "system_shell", "arguments": {"command": "echo hello"}}`;
+    } else if (lastUserMessage.toLowerCase().includes('search') || lastUserMessage.toLowerCase().includes('find')) {
       text = `Search query analyzed: "${lastUserMessage}". Findings indicate relevant data across index nodes.`;
     } else if (lastUserMessage.toLowerCase().includes('help') || lastUserMessage.toLowerCase().includes('hello')) {
       text = `Hello. I am Aira AI, your autonomous operating workspace. How can I assist your objectives today?`;
