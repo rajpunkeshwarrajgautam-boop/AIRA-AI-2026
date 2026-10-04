@@ -47,7 +47,7 @@ app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ limit: '2mb', extended: false }));
 
 // -----------------------------------------------------------------------
-// PUBLIC INFRASTRUCTURE PROBES Ã¢â‚¬â€ Registered BEFORE principal middleware.
+// PUBLIC INFRASTRUCTURE PROBES -- Registered BEFORE principal middleware.
 // Health and readiness endpoints must never require authenticated identity.
 // They are liveness/readiness signals consumed by orchestrators and proxies.
 // -----------------------------------------------------------------------
@@ -59,7 +59,7 @@ app.get('/api/health', (_req: Request, res: Response) => {
     status: 'HEALTHY',
     appState,
     subsystems: {
-      modelRouter: `ONLINE (${providers.length} provider(s): ${providers.join(', ') || 'none Ã¢â‚¬â€ mock-dev only'})`,
+      modelRouter: `ONLINE (${providers.length} provider(s): ${providers.join(', ') || 'none -- mock-dev only'})`,
       toolRuntime: 'ONLINE',
       approvalKernel: 'ONLINE',
       mcpHost: 'ONLINE',
@@ -161,7 +161,7 @@ async function seedDefaultAutomation() {
 seedDefaultAutomation().catch(console.error);
 
 // -----------------------------------------------------------------------
-// MCP Servers (protected Ã¢â‚¬â€ requires ExecutionPrincipal)
+// MCP Servers (protected -- requires ExecutionPrincipal)
 // -----------------------------------------------------------------------
 app.get('/api/mcp/servers', (_req: Request, res: Response) => {
   res.json(mcpHost.listServers());
@@ -239,7 +239,7 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
     return res.status(404).json({ error: `Run ${runId} not found.` });
   }
 
-  // Parse cursor Ã¢â‚¬â€ strict numeric validation.
+  // Parse cursor -- strict numeric validation.
   // Accepts only non-negative integers represented as pure digit strings.
   // Rejects: "abc", "-1", "12abc", "banana", "1.5", empty strings.
   // Returns HTTP 400 on invalid cursor so clients get deterministic feedback.
@@ -489,7 +489,7 @@ app.post('/api/knowledge/search', async (req: Request, res: Response) => {
 });
 
 // -----------------------------------------------------------------------
-// Agents Ã¢â‚¬â€ Full CRUD (Audit 16)
+// Agents -- Full CRUD (Audit 16)
 // -----------------------------------------------------------------------
 import crypto from 'crypto';
 
@@ -563,7 +563,7 @@ app.post('/api/agents/:id/run', async (req: Request, res: Response) => {
 });
 
 // -----------------------------------------------------------------------
-// Automations Ã¢â‚¬â€ Full CRUD (Audit 14)
+// Automations -- Full CRUD (Audit 14)
 // -----------------------------------------------------------------------
 app.get('/api/automations', async (_req: Request, res: Response) => {
   res.json(await automationEngine.listAutomations());
@@ -650,7 +650,7 @@ app.get('/api/automations/:id/runs', async (req: Request, res: Response) => {
 });
 
 // -----------------------------------------------------------------------
-// Global Error Handler (Audit 27 Ã¢â‚¬â€ catches uncaught route errors)
+// Global Error Handler (Audit 27 -- catches uncaught route errors)
 // -----------------------------------------------------------------------
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   process.stderr.write(`[API_ERROR] ${err.message}\n`);

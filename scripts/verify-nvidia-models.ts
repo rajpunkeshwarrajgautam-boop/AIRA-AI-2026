@@ -35,10 +35,10 @@ async function verifyNvidiaModels() {
   let missing = false;
   for (const target of targetModels) {
     if (!models.includes(target)) {
-      console.error(`âŒ Model ${target} is NOT available!`);
+      console.error(`[FAIL] Model ${target} is NOT available!`);
       missing = true;
     } else {
-      console.log(`âœ… Model ${target} is available.`);
+      console.log(`[PASS] Model ${target} is available.`);
     }
   }
 
