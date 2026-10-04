@@ -280,7 +280,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <span className="flex items-center gap-3"><FolderGit2 className="w-4 h-4" /><span>Projects</span></span>
               <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark">{projects.length}</span>
             </button>
-            {navItem('agents', 'Agents', <Bot className="w-4 h-4" />, 'shell')}
+            {navItem('bots', 'Aira Bot', <Bot className="w-4 h-4" />)}
             {navItem('automations', 'Automations', <Workflow className="w-4 h-4" />, 'shell')}
           </div>
 
@@ -345,3 +345,4 @@ export const Sidebar: React.FC<SidebarProps> = ({
     </AnimatePresence>
   );
 };
+

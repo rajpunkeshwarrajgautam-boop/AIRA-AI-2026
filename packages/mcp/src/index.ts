@@ -69,6 +69,7 @@ export class McpHost {
           parameters: t.inputSchema || { type: 'object', properties: {} },
           source: 'mcp',
           permissionLevel: 'READ',
+          idempotencyClass: 'NON_IDEMPOTENT',
           executionRuntime: 'LOCAL'
         };
 
@@ -85,7 +86,7 @@ export class McpHost {
               return {
                 toolCallId: 'call_mcp_' + Date.now(),
                 output: execResponse.content,
-                isError: execResponse.isError || false,
+                isError: Boolean(execResponse.isError),
                 durationMs: Date.now() - start,
                 timestamp: Date.now()
               };
@@ -117,3 +118,4 @@ export class McpHost {
     this.clients.clear();
   }
 }
+

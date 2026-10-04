@@ -33,6 +33,7 @@ export class PostgresApprovalRepository implements ApprovalRepository {
   async getRequest(id: string): Promise<ApprovalRequest | undefined> {
     const row = await db('approvals')
       .join('tool_calls', 'approvals.tool_call_id', 'tool_calls.id')
+      .select('approvals.*', 'tool_calls.tool', 'tool_calls.arguments', 'tool_calls.started_at')
       .where('approvals.id', id).first();
       
     if (!row) return undefined;
@@ -42,6 +43,8 @@ export class PostgresApprovalRepository implements ApprovalRepository {
       runId: row.run_id,
       toolCall: {
         id: row.tool_call_id,
+        toolId: `tool_${row.tool}`,
+        status: 'PENDING',
         name: row.tool,
         arguments: typeof row.arguments === 'string' ? JSON.parse(row.arguments) : row.arguments,
         timestamp: parseInt(row.started_at, 10)
@@ -60,6 +63,7 @@ export class PostgresApprovalRepository implements ApprovalRepository {
   async getPendingForRun(runId: string): Promise<ApprovalRequest[]> {
     const rows = await db('approvals')
       .join('tool_calls', 'approvals.tool_call_id', 'tool_calls.id')
+      .select('approvals.*', 'tool_calls.tool', 'tool_calls.arguments', 'tool_calls.started_at')
       .where('approvals.run_id', runId)
       .andWhere('approvals.status', 'PENDING');
       
@@ -68,6 +72,8 @@ export class PostgresApprovalRepository implements ApprovalRepository {
       runId: row.run_id,
       toolCall: {
         id: row.tool_call_id,
+        toolId: `tool_${row.tool}`,
+        status: 'PENDING',
         name: row.tool,
         arguments: typeof row.arguments === 'string' ? JSON.parse(row.arguments) : row.arguments,
         timestamp: parseInt(row.started_at, 10)
@@ -82,11 +88,12 @@ export class PostgresApprovalRepository implements ApprovalRepository {
   }
 
   async resolveRequest(id: string, decision: ApprovalDecision, resolvedBy: string): Promise<void> {
-    await db('approvals').where({ id }).update({
+    const updated = await db('approvals').where({ id, status: 'PENDING' }).update({
       status: decision,
       resolved_at: Date.now(),
       resolved_by: resolvedBy
     });
+    if (!updated) throw new Error('Approval is already resolved.');
   }
 }
 
@@ -145,4 +152,5 @@ export class PostgresSessionGrantRepository implements SessionGrantRepository {
     await db('session_grants').where({ session_id: runId }).delete();
   }
 }
+
 

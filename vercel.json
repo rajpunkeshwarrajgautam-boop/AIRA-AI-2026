@@ -27,5 +27,11 @@
         }
       ]
     }
+  ],
+  "rewrites": [
+    {
+      "source": "/bots/:path*",
+      "destination": "/index.html"
+    }
   ]
 }

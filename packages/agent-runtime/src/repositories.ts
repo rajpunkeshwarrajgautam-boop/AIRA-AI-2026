@@ -105,7 +105,7 @@ export class PostgresRunRepository implements RunRepository {
       createdAt: run.createdAt,
       updatedAt: run.updatedAt,
       completed_at: run.completedAt
-    }).onConflict('id').merge();
+    }).onConflict('id').merge().whereNotIn('runs.state', ['COMPLETED', 'FAILED', 'CANCELLED']);
   }
 
   async getRun(id: string): Promise<Run | undefined> {
@@ -120,7 +120,7 @@ export class PostgresRunRepository implements RunRepository {
   }
 
   async getInterruptedRuns(): Promise<Run[]> {
-    const rows = await db('runs').whereIn('state', ['RUNNING', 'WAITING_FOR_TOOL', 'WAITING_FOR_APPROVAL']).orderBy('createdAt', 'asc');
+    const rows = await db('runs').whereIn('state', ['QUEUED', 'RUNNING', 'WAITING_FOR_TOOL', 'WAITING_FOR_APPROVAL']).orderBy('createdAt', 'asc');
     return rows.map(this.mapToRun);
   }
 
@@ -240,3 +240,4 @@ export class PostgresRunRepository implements RunRepository {
     };
   }
 }
+

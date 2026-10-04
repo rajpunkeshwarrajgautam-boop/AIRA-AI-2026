@@ -1,3 +1,5 @@
+import 'dotenv/config';
+import { createBotRouter } from './aira-bot.js';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import { ModelRouter } from '../../../packages/model-router/src/index.js';
@@ -13,7 +15,8 @@ import {
   CreateRunRequestSchema,
   ApprovalDecisionSchema,
   AutomationDefinitionSchema,
-  AgentDefinition
+  AgentDefinition,
+  ModelPolicySchema
 } from '../../../packages/contracts/src/index.js';
 
 // -----------------------------------------------------------------------
@@ -106,6 +109,8 @@ const agentRuntime = new AgentRuntime(
   runRepo,
   process.cwd()
 );
+app.use('/api/aira-bot', createBotRouter(agentRuntime, runRepo, modelRouter));
+
 const automationEngine = new AutomationEngine(agentRuntime, autoRepo, autoRunRepo);
 automationEngine.start();
 
@@ -118,8 +123,9 @@ async function seedDefaultAgent() {
     await agentRepo.saveAgent({
       id: 'agent-default',
       name: 'Default Agent',
+      description: 'Shared default agent',
       instructions: 'You are Aira AI, an autonomous intelligence operating workspace. Maintain precise, verified reasoning.',
-      modelPolicy: { model: 'mock-deterministic' },
+      modelPolicy: ModelPolicySchema.parse({ model: 'mock-deterministic' }),
       tools: [],
       memoryScopes: ['workspace'],
       approvalPolicy: 'autonomous',
@@ -179,23 +185,23 @@ app.get('/api/runs', async (req: Request, res: Response) => {
 });
 
 app.get('/api/runs/:id', async (req: Request, res: Response) => {
-  const run = await agentRuntime.getRun(req.params.id);
+  const run = await agentRuntime.getRun(String(req.params.id));
   if (!run || run.principalId !== req.principal!.userId) {
-    return res.status(404).json({ error: `Run with id "${req.params.id}" not found.` });
+    return res.status(404).json({ error: `Run with id "${String(req.params.id)}" not found.` });
   }
   res.json(run);
 });
 
 app.post('/api/runs/:id/cancel', async (req: Request, res: Response) => {
-  const run = await agentRuntime.getRun(req.params.id);
+  const run = await agentRuntime.getRun(String(req.params.id));
   if (!run || run.principalId !== req.principal!.userId) {
     return res.status(404).json({ error: 'Run not found.' });
   }
-  const success = await agentRuntime.cancelRun(req.params.id);
+  const success = await agentRuntime.cancelRun(String(req.params.id));
   if (!success) {
     return res.status(400).json({ error: 'Cannot cancel run (either not found or in terminal state).' });
   }
-  res.json({ status: 'CANCELLED', runId: req.params.id });
+  res.json({ status: 'CANCELLED', runId: String(req.params.id) });
 });
 
 app.post('/api/runs/:id/approve', async (req: Request, res: Response) => {
@@ -225,7 +231,7 @@ app.post('/api/runs/:id/approve', async (req: Request, res: Response) => {
 // SSE Stream for Run
 // -----------------------------------------------------------------------
 app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
-  const runId = req.params.id;
+  const runId = String(req.params.id);
   const run = await agentRuntime.getRun(runId);
 
   if (!run || run.principalId !== req.principal!.userId) {
@@ -515,14 +521,14 @@ app.get('/api/agents', async (_req: Request, res: Response) => {
 });
 
 app.get('/api/agents/:id', async (req: Request, res: Response) => {
-  const agent = await agentRepo.getAgent(req.params.id);
-  if (!agent) return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
+  const agent = await agentRepo.getAgent(String(req.params.id));
+  if (!agent) return res.status(404).json({ error: `Agent "${String(req.params.id)}" not found.` });
   res.json(agent);
 });
 
 app.patch('/api/agents/:id', async (req: Request, res: Response) => {
-  const agent = await agentRepo.getAgent(req.params.id);
-  if (!agent) return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
+  const agent = await agentRepo.getAgent(String(req.params.id));
+  if (!agent) return res.status(404).json({ error: `Agent "${String(req.params.id)}" not found.` });
   const updates = req.body as Partial<AgentDefinition>;
   delete (updates as any).id;
   delete (updates as any).createdAt;
@@ -532,16 +538,16 @@ app.patch('/api/agents/:id', async (req: Request, res: Response) => {
 });
 
 app.delete('/api/agents/:id', async (req: Request, res: Response) => {
-  const deleted = await agentRepo.deleteAgent(req.params.id);
+  const deleted = await agentRepo.deleteAgent(String(req.params.id));
   if (!deleted) {
-    return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
+    return res.status(404).json({ error: `Agent "${String(req.params.id)}" not found.` });
   }
   res.status(204).send();
 });
 
 app.post('/api/agents/:id/run', async (req: Request, res: Response) => {
-  const agent = await agentRepo.getAgent(req.params.id);
-  if (!agent) return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
+  const agent = await agentRepo.getAgent(String(req.params.id));
+  if (!agent) return res.status(404).json({ error: `Agent "${String(req.params.id)}" not found.` });
   try {
     const run = await agentRuntime.createAndExecuteRun({
       prompt: req.body.prompt || agent.instructions,
@@ -573,16 +579,16 @@ app.post('/api/automations', async (req: Request, res: Response) => {
 });
 
 app.get('/api/automations/:id', async (req: Request, res: Response) => {
-  const item = await automationEngine.getAutomation(req.params.id);
-  if (!item) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
+  const item = await automationEngine.getAutomation(String(req.params.id));
+  if (!item) return res.status(404).json({ error: `Automation "${String(req.params.id)}" not found.` });
   res.json(item);
 });
 
 app.patch('/api/automations/:id', async (req: Request, res: Response) => {
-  const item = await automationEngine.getAutomation(req.params.id);
-  if (!item) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
+  const item = await automationEngine.getAutomation(String(req.params.id));
+  if (!item) return res.status(404).json({ error: `Automation "${String(req.params.id)}" not found.` });
   try {
-    const updated = await automationEngine.patchAutomation(req.params.id, req.body);
+    const updated = await automationEngine.patchAutomation(String(req.params.id), req.body);
     res.json(updated);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -590,14 +596,14 @@ app.patch('/api/automations/:id', async (req: Request, res: Response) => {
 });
 
 app.delete('/api/automations/:id', async (req: Request, res: Response) => {
-  const deleted = await automationEngine.deleteAutomation(req.params.id);
-  if (!deleted) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
+  const deleted = await automationEngine.deleteAutomation(String(req.params.id));
+  if (!deleted) return res.status(404).json({ error: `Automation "${String(req.params.id)}" not found.` });
   res.status(204).send();
 });
 
 app.post('/api/automations/:id/trigger', async (req: Request, res: Response) => {
   try {
-    const runId = await automationEngine.triggerNow(req.params.id);
+    const runId = await automationEngine.triggerNow(String(req.params.id));
     res.json({ runId, status: 'TRIGGERED' });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -606,7 +612,7 @@ app.post('/api/automations/:id/trigger', async (req: Request, res: Response) => 
 
 app.get('/api/automations/:id/runs', async (req: Request, res: Response) => {
   try {
-    const runs = await automationEngine.getAutomationRuns(req.params.id);
+    const runs = await automationEngine.getAutomationRuns(String(req.params.id));
     res.json(runs);
   } catch (err: any) {
     res.status(404).json({ error: err.message });
@@ -615,7 +621,7 @@ app.get('/api/automations/:id/runs', async (req: Request, res: Response) => {
 
 app.post('/api/automations/:id/enable', async (req: Request, res: Response) => {
   try {
-    const item = await automationEngine.toggleAutomation(req.params.id, true);
+    const item = await automationEngine.toggleAutomation(String(req.params.id), true);
     res.json(item);
   } catch (err: any) {
     res.status(404).json({ error: err.message });
@@ -624,7 +630,7 @@ app.post('/api/automations/:id/enable', async (req: Request, res: Response) => {
 
 app.post('/api/automations/:id/disable', async (req: Request, res: Response) => {
   try {
-    const item = await automationEngine.toggleAutomation(req.params.id, false);
+    const item = await automationEngine.toggleAutomation(String(req.params.id), false);
     res.json(item);
   } catch (err: any) {
     res.status(404).json({ error: err.message });
@@ -632,8 +638,8 @@ app.post('/api/automations/:id/disable', async (req: Request, res: Response) => 
 });
 
 app.get('/api/automations/:id/runs', async (req: Request, res: Response) => {
-  const item = automationEngine.getAutomation(req.params.id);
-  if (!item) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
+  const item = await automationEngine.getAutomation(String(req.params.id));
+  if (!item) return res.status(404).json({ error: `Automation "${String(req.params.id)}" not found.` });
   
   const allRuns = await agentRuntime.listRuns();
   const automationRuns = allRuns.filter((r: any) =>
@@ -681,4 +687,5 @@ process.on('SIGTERM', () => {
   automationEngine.stop();
   server.close(() => process.exit(0));
 });
+
 

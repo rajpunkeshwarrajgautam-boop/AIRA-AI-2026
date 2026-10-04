@@ -85,7 +85,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const placeholderMap: Record<WorkspaceMode, string> = {
     chat: 'How can Aira help you today?',
     research: 'What would you like Aira to research?',
-    agents: 'Describe the outcome you want an agent to deliver...',
+    bots: 'Describe the outcome you want an agent to deliver...',
     automations: 'Describe the trigger and action to automate...',
     library: 'Ask Aira about your workspace knowledge...',
   };
@@ -168,15 +168,15 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
             <button
               type="button"
-              onClick={() => onWorkspaceModeChange(workspaceMode === 'agents' ? 'chat' : 'agents')}
+              onClick={() => onWorkspaceModeChange(workspaceMode === 'bots' ? 'chat' : 'bots')}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-sans transition-colors ${
-                workspaceMode === 'agents'
+                workspaceMode === 'bots'
                   ? 'bg-claude-terracotta/10 text-claude-terracotta font-medium'
                   : 'text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark'
               }`}
             >
               <Bot className="w-3.5 h-3.5" />
-              <span>Agents</span>
+              <span>Aira Bot</span>
             </button>
 
             {/* Style Selector */}
@@ -238,3 +238,4 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     </div>
   );
 };
+

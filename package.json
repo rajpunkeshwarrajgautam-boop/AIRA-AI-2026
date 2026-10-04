@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "db:up": "docker-compose up -d db",
-    "db:migrate": "npx tsx packages/db/src/scripts/migrate.ts",
+    "db:migrate": "node --import tsx packages/db/src/scripts/migrate.ts",
     "dev": "vite",
-    "server": "npx tsx apps/api/src/index.ts",
+    "server": "node --import tsx apps/api/src/index.ts",
     "test": "npx tsx test/verify-runtime.ts",
     "test:integration": "npx tsx test/integration.ts",
     "test:e2e": "npx tsx test/e2e-verification.ts",
@@ -20,7 +20,10 @@
     "preview": "vite preview",
     "memory:init": "npx @agentmemory/agentmemory@latest init",
     "memory:start": "npx @agentmemory/agentmemory@latest start --port 3113",
-    "memory:ui": "npx @agentmemory/agentmemory@latest ui"
+    "memory:ui": "npx @agentmemory/agentmemory@latest ui",
+    "test:bot": "node --import tsx test/aira-bot.ts",
+    "test:bot:browser": "node --import tsx test/aira-bot.ts --browser",
+    "typecheck:api": "tsc -p tsconfig.api.json"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
@@ -33,6 +36,7 @@
     "dotenv": "^18.0.4",
     "express": "^5.2.1",
     "firebase": "^12.19.0",
+    "firebase-admin": "^14.5.0",
     "framer-motion": "^14.0.0",
     "gsap": "^3.15.0",
     "knex": "^3.3.0",
@@ -46,6 +50,8 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@electric-sql/pglite-socket": "^0.2.11",
     "@types/canvas-confetti": "^1.9.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
@@ -60,6 +66,7 @@
     "playwright": "^1.63.0",
     "postcss": "^8.5.28",
     "tailwindcss": "^3.4.19",
+    "tsx": "^4.23.15",
     "typescript": "~6.0.2",
     "vite": "^8.3.0"
   }

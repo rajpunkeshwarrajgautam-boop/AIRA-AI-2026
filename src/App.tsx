@@ -14,6 +14,8 @@ import { GreetingScreen } from './components/GreetingScreen';
 import { ModelSelector } from './components/ModelSelector';
 import { AiraMark } from './components/AiraMark';
 
+const AiraBotWorkspace = React.lazy(() => import('./features/aira-bot/AiraBotWorkspace').then(m => ({ default: m.AiraBotWorkspace })));
+
 // Lazy-loaded heavy auxiliary surfaces to optimize FCP and TTI
 const ArtifactStudio = React.lazy(() => import('./components/ArtifactStudio').then(m => ({ default: m.ArtifactStudio })));
 const ProjectsModal = React.lazy(() => import('./components/ProjectsModal').then(m => ({ default: m.ProjectsModal })));
@@ -24,7 +26,7 @@ const MODE_CONTEXT: Record<WorkspaceMode, string> = {
   chat: '',
   research: 'Work in research mode. Decompose the question, identify evidence needs, distinguish facts from inference, and provide a structured synthesis.',
   library: 'Work in library mode. Prefer the supplied project knowledge and clearly distinguish retrieved context from general reasoning.',
-  agents: 'Work in agent-mission mode. Convert the objective into an executable mission with steps, tools, checkpoints, risks, and a final deliverable.',
+  bots: 'Work in agent-mission mode. Convert the objective into an executable mission with steps, tools, checkpoints, risks, and a final deliverable.',
   automations: 'Work in automation-design mode. Identify the trigger, conditions, cadence, action, failure handling, and expected output.',
 };
 
@@ -34,7 +36,11 @@ function App() {
   const [projects, setProjects] = useState<Project[]>(() => loadProjects());
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>(() => localStorage.getItem('aira_active_project_id_v1') || undefined);
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
-  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('chat');
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>(() => location.pathname.startsWith('/bots') ? 'bots' : 'chat');
+  const [botRoute, setBotRoute] = useState(() => location.pathname);
+  const navigateBot = useCallback((path: string) => { window.history.pushState({}, '', path); setBotRoute(path); setWorkspaceMode('bots'); }, []);
+  const selectWorkspace = useCallback((mode: WorkspaceMode) => { window.history.pushState({}, '', mode === 'bots' ? '/bots' : '/'); setBotRoute(mode === 'bots' ? '/bots' : '/'); setWorkspaceMode(mode); }, []);
+  useEffect(() => { const sync = () => { setBotRoute(location.pathname); setWorkspaceMode(location.pathname.startsWith('/bots') ? 'bots' : 'chat'); }; window.addEventListener('popstate', sync); return () => window.removeEventListener('popstate', sync); }, []);
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window !== 'undefined' ? window.innerWidth >= 768 : true);
   const [isProjectsOpen, setIsProjectsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -85,8 +91,8 @@ function App() {
     setActiveChatId(id);
     saveActiveChatId(id);
     setActiveArtifact(null);
-    setWorkspaceMode('chat');
-  }, [activeProjectId]);
+    selectWorkspace('chat');
+  }, [activeProjectId, selectWorkspace]);
 
   useEffect(() => {
     const handle = (e: KeyboardEvent) => {
@@ -100,6 +106,7 @@ function App() {
   }, [handleNewChat]);
 
   const handleSelectChat = (id: string) => {
+    selectWorkspace('chat');
     setActiveChatId(id);
     saveActiveChatId(id);
     setActiveArtifact(null);
@@ -251,7 +258,7 @@ function App() {
         settings={settings}
         onUpdateSettings={updateSettings}
         workspaceMode={workspaceMode}
-        onSelectWorkspace={setWorkspaceMode}
+        onSelectWorkspace={selectWorkspace}
       />
 
       <main className="flex-1 min-w-0 h-[100dvh] flex flex-col overflow-x-hidden w-full max-w-full bg-mesh-canvas">
@@ -272,16 +279,16 @@ function App() {
                 </div>
               </>
             )}
-            <ModelSelector
+            {workspaceMode === 'bots' ? <span className="text-sm font-medium">Aira Bot</span> : <ModelSelector
               currentModel={settings.activeModel}
               onSelectModel={model => updateSettings({ activeModel: model })}
               extendedThinking={settings.extendedThinking}
               onToggleThinking={enabled => updateSettings({ extendedThinking: enabled })}
-            />
+            />}
             {currentProject && <button onClick={() => setIsProjectsOpen(true)} className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-claude-terracotta/10 text-claude-terracotta text-xs max-w-[180px]"><FolderGit2 className="w-3 h-3" /><span className="truncate">{currentProject.name}</span></button>}
           </div>
-          <div className="flex items-center gap-1.5">
-            {activeConversation?.messages.some(m => (m.artifacts?.length || 0) > 0) && <button onClick={() => {
+          <div className="flex items-center gap-1.5" style={{ display: workspaceMode === 'bots' ? 'none' : undefined }}>
+            {workspaceMode !== 'bots' && activeConversation?.messages.some(m => (m.artifacts?.length || 0) > 0) && <button onClick={() => {
               if (activeArtifact) setActiveArtifact(null);
               else {
                 const artifact = activeConversation.messages.flatMap(m => m.artifacts || [])[0];
@@ -293,7 +300,7 @@ function App() {
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto flex flex-col">
+        {workspaceMode === 'bots' ? <React.Suspense fallback={<div className="p-8" role="status">Loading Aira Bot…</div>}><AiraBotWorkspace path={botRoute} onNavigate={navigateBot} /></React.Suspense> : <div className="flex-1 overflow-y-auto flex flex-col">
           {!activeConversation || activeConversation.messages.length === 0 ? (
             <GreetingScreen 
               userName={settings.userName} 
@@ -318,10 +325,10 @@ function App() {
               currentModel={settings.activeModel}
               extendedThinking={settings.extendedThinking}
               workspaceMode={workspaceMode}
-              onWorkspaceModeChange={setWorkspaceMode}
+              onWorkspaceModeChange={selectWorkspace}
             />
           </div>
-        </div>
+        </div>}
       </main>
 
       <React.Suspense fallback={null}>
@@ -371,3 +378,4 @@ function App() {
 }
 
 export default App;
+
