@@ -1,11 +1,8 @@
 
 export type WorkspaceMode = 'chat' | 'research' | 'library' | 'agents' | 'automations';
 
-export type ModelId = 
-  | 'claude-3-7-sonnet' 
-  | 'claude-3-5-sonnet' 
-  | 'claude-3-5-haiku' 
-  | 'claude-3-opus';
+import type { ModelId } from '../../packages/contracts/src/index.ts';
+export type { ModelId };
 
 export interface ModelInfo {
   id: ModelId;

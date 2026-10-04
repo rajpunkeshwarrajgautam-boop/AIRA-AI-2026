@@ -20,10 +20,17 @@ import {
 // Production startup assertions
 // -----------------------------------------------------------------------
 if (process.env.NODE_ENV === 'production') {
-  const hasProvider = process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY;
+  const hasProvider = process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY || process.env.NVIDIA_API_KEY;
   if (!hasProvider) {
     process.stderr.write(
-      '[STARTUP_ASSERTION] FAIL: Production requires at least one provider key (ANTHROPIC_API_KEY or OPENAI_API_KEY).\n'
+      '[STARTUP_ASSERTION] FAIL: Production requires at least one provider key (ANTHROPIC_API_KEY or OPENAI_API_KEY or NVIDIA_API_KEY).\n'
+    );
+    process.exit(1);
+  }
+
+  if (!process.env.DATABASE_URL) {
+    process.stderr.write(
+      '[STARTUP_ASSERTION] FAIL: Production requires a DATABASE_URL for Postgres connection. (No in-memory DB allowed in prod).\n'
     );
     process.exit(1);
   }
@@ -40,7 +47,7 @@ app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ limit: '2mb', extended: false }));
 
 // -----------------------------------------------------------------------
-// PUBLIC INFRASTRUCTURE PROBES — Registered BEFORE principal middleware.
+// PUBLIC INFRASTRUCTURE PROBES Ã¢â‚¬â€ Registered BEFORE principal middleware.
 // Health and readiness endpoints must never require authenticated identity.
 // They are liveness/readiness signals consumed by orchestrators and proxies.
 // -----------------------------------------------------------------------
@@ -52,7 +59,7 @@ app.get('/api/health', (_req: Request, res: Response) => {
     status: 'HEALTHY',
     appState,
     subsystems: {
-      modelRouter: `ONLINE (${providers.length} provider(s): ${providers.join(', ') || 'none — mock-dev only'})`,
+      modelRouter: `ONLINE (${providers.length} provider(s): ${providers.join(', ') || 'none Ã¢â‚¬â€ mock-dev only'})`,
       toolRuntime: 'ONLINE',
       approvalKernel: 'ONLINE',
       mcpHost: 'ONLINE',
@@ -154,7 +161,7 @@ async function seedDefaultAutomation() {
 seedDefaultAutomation().catch(console.error);
 
 // -----------------------------------------------------------------------
-// MCP Servers (protected — requires ExecutionPrincipal)
+// MCP Servers (protected Ã¢â‚¬â€ requires ExecutionPrincipal)
 // -----------------------------------------------------------------------
 app.get('/api/mcp/servers', (_req: Request, res: Response) => {
   res.json(mcpHost.listServers());
@@ -232,7 +239,7 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
     return res.status(404).json({ error: `Run ${runId} not found.` });
   }
 
-  // Parse cursor — strict numeric validation.
+  // Parse cursor Ã¢â‚¬â€ strict numeric validation.
   // Accepts only non-negative integers represented as pure digit strings.
   // Rejects: "abc", "-1", "12abc", "banana", "1.5", empty strings.
   // Returns HTTP 400 on invalid cursor so clients get deterministic feedback.
@@ -482,7 +489,7 @@ app.post('/api/knowledge/search', async (req: Request, res: Response) => {
 });
 
 // -----------------------------------------------------------------------
-// Agents — Full CRUD (Audit 16)
+// Agents Ã¢â‚¬â€ Full CRUD (Audit 16)
 // -----------------------------------------------------------------------
 import crypto from 'crypto';
 
@@ -556,7 +563,7 @@ app.post('/api/agents/:id/run', async (req: Request, res: Response) => {
 });
 
 // -----------------------------------------------------------------------
-// Automations — Full CRUD (Audit 14)
+// Automations Ã¢â‚¬â€ Full CRUD (Audit 14)
 // -----------------------------------------------------------------------
 app.get('/api/automations', async (_req: Request, res: Response) => {
   res.json(await automationEngine.listAutomations());
@@ -643,7 +650,7 @@ app.get('/api/automations/:id/runs', async (req: Request, res: Response) => {
 });
 
 // -----------------------------------------------------------------------
-// Global Error Handler (Audit 27 — catches uncaught route errors)
+// Global Error Handler (Audit 27 Ã¢â‚¬â€ catches uncaught route errors)
 // -----------------------------------------------------------------------
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   process.stderr.write(`[API_ERROR] ${err.message}\n`);
@@ -651,34 +658,47 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 // -----------------------------------------------------------------------
-// Start Server
+// Start Server (Skip if running as Vercel Serverless Function)
 // -----------------------------------------------------------------------
-const server = app.listen(PORT, '0.0.0.0', () => {
-  process.stdout.write(`AIRA Runtime API Server v2026.2.0 listening on port ${PORT}\n`);
-  process.stdout.write(`NODE_ENV: ${process.env.NODE_ENV || 'development'}\n`);
-  process.stdout.write(`Providers: ${modelRouter.listProviders().join(', ') || 'none (dev mock active)'}\n`);
-  
+if (!process.env.VERCEL) {
+  const server = app.listen(PORT, '0.0.0.0', () => {
+    process.stdout.write(`AIRA Runtime API Server v2026.2.0 listening on port ${PORT}\n`);
+    process.stdout.write(`NODE_ENV: ${process.env.NODE_ENV || 'development'}\n`);
+    process.stdout.write(`Providers: ${modelRouter.listProviders().join(', ') || 'none (dev mock active)'}\n`);
+
+    appState = 'RECOVERING';
+    agentRuntime.recoverInterruptedRuns('api-worker-1').then(() => {
+      appState = 'HEALTHY';
+      process.stdout.write('Startup recovery complete. API is HEALTHY.\n');
+    }).catch(err => {
+      console.error('Failed to recover interrupted runs. Failing closed:', err);
+      appState = 'FAILED';
+      process.exit(1);
+    });
+  });
+
+  process.on('SIGINT', () => {
+    automationEngine.stop();
+    server.close(() => {
+      process.stdout.write('AIRA API Server stopped cleanly.\n');
+      process.exit(0);
+    });
+  });
+
+  process.on('SIGTERM', () => {
+    automationEngine.stop();
+    server.close(() => process.exit(0));
+  });
+} else {
+  // In Vercel serverless environments, we must still initialize the appState
   appState = 'RECOVERING';
-  agentRuntime.recoverInterruptedRuns('api-worker-1').then(() => {
+  agentRuntime.recoverInterruptedRuns('api-worker-serverless').then(() => {
     appState = 'HEALTHY';
-    process.stdout.write('Startup recovery complete. API is HEALTHY.\n');
+    console.log('Vercel Serverless: Startup recovery complete. API is HEALTHY.');
   }).catch(err => {
-    console.error('Failed to recover interrupted runs. Failing closed:', err);
+    console.error('Vercel Serverless: Failed to recover interrupted runs:', err);
     appState = 'FAILED';
-    process.exit(1);
   });
-});
+}
 
-process.on('SIGINT', () => {
-  automationEngine.stop();
-  server.close(() => {
-    process.stdout.write('AIRA API Server stopped cleanly.\n');
-    process.exit(0);
-  });
-});
-
-process.on('SIGTERM', () => {
-  automationEngine.stop();
-  server.close(() => process.exit(0));
-});
-
+export default app;

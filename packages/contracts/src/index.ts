@@ -66,10 +66,13 @@ export const ModelIdSchema = z.enum([
   'claude-3-7-sonnet',
   'claude-3-5-sonnet',
   'claude-3-5-haiku',
+  'claude-3-opus',
   'gpt-4o',
   'gpt-4o-mini',
   'gemini-2-5-pro',
   'gemini-2-5-flash',
+  'meta/llama-3.1-405b-instruct',
+  'nvidia/llama-3.1-nemotron-70b-instruct',
   'mock-deterministic'
 ]);
 export type ModelId = z.infer<typeof ModelIdSchema>;

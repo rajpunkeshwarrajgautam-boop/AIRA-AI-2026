@@ -221,6 +221,63 @@ export class OpenAIAdapter implements ModelAdapter {
   }
 }
 
+export class NvidiaNimAdapter implements ModelAdapter {
+  private apiKey: string;
+  private baseUrl: string;
+
+  constructor(apiKey?: string, baseUrl = 'https://integrate.api.nvidia.com/v1') {
+    this.apiKey = apiKey || process.env.NVIDIA_API_KEY || '';
+    this.baseUrl = baseUrl;
+  }
+
+  async complete(messages: ChatMessageInput[], policy: ModelPolicy): Promise<ModelCompletionResult> {
+    if (!this.apiKey) {
+      throw new Error('NVIDIA API key is not configured.');
+    }
+    const response = await fetch(`${this.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: policy.model,
+        messages: messages.map(m => ({ role: m.role, content: m.content })),
+        max_tokens: policy.maxTokens,
+        temperature: policy.temperature
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`NVIDIA API error (${response.status}): ${errText}`);
+    }
+
+    const data = await response.json();
+    const text = data.choices?.[0]?.message?.content || '';
+
+    return {
+      text,
+      usage: {
+        promptTokens: data.usage?.prompt_tokens || 0,
+        completionTokens: data.usage?.completion_tokens || 0,
+        totalTokens: data.usage?.total_tokens || 0
+      },
+      model: data.model || policy.model
+    };
+  }
+
+  async stream(
+    messages: ChatMessageInput[],
+    policy: ModelPolicy,
+    onChunk: (delta: { text?: string; thinking?: string }) => void
+  ): Promise<ModelCompletionResult> {
+    const res = await this.complete(messages, policy);
+    if (res.text) onChunk({ text: res.text });
+    return res;
+  }
+}
+
 export class ModelRouter {
   private adapters: Map<string, ModelAdapter> = new Map();
 
@@ -236,6 +293,9 @@ export class ModelRouter {
     }
     if (process.env.OPENAI_API_KEY) {
       this.adapters.set('openai', new OpenAIAdapter());
+    }
+    if (process.env.NVIDIA_API_KEY) {
+      this.adapters.set('nvidia', new NvidiaNimAdapter());
     }
   }
 
@@ -306,6 +366,16 @@ export class ModelRouter {
       throw new Error(
         `CONFIGURATION_ERROR: No OpenAI API key configured for model "${model}". ` +
         'Set OPENAI_API_KEY in environment. No mock fallback is available in production.'
+      );
+    }
+
+    if (model.startsWith('meta/') || model.startsWith('nvidia/')) {
+      if (this.adapters.has('nvidia')) {
+        return this.adapters.get('nvidia')!;
+      }
+      throw new Error(
+        `CONFIGURATION_ERROR: No NVIDIA API key configured for model "${model}". ` +
+        'Set NVIDIA_API_KEY in environment. No mock fallback is available in production.'
       );
     }
 
