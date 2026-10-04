@@ -29,6 +29,8 @@ if (process.env.NODE_ENV === 'production') {
   }
 }
 
+import { createPrincipalMiddleware } from './middleware/principal.js';
+
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
 
@@ -36,6 +38,38 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ limit: '2mb', extended: false }));
+
+// -----------------------------------------------------------------------
+// PUBLIC INFRASTRUCTURE PROBES — Registered BEFORE principal middleware.
+// Health and readiness endpoints must never require authenticated identity.
+// They are liveness/readiness signals consumed by orchestrators and proxies.
+// -----------------------------------------------------------------------
+app.get('/api/health', (_req: Request, res: Response) => {
+  const providers = modelRouter.listProviders();
+  res.json({
+    status: 'HEALTHY',
+    subsystems: {
+      modelRouter: `ONLINE (${providers.length} provider(s): ${providers.join(', ') || 'none — mock-dev only'})`,
+      toolRuntime: 'ONLINE',
+      approvalKernel: 'ONLINE',
+      mcpHost: 'ONLINE',
+      knowledgeEngine: 'ONLINE',
+      agentRuntime: 'ONLINE',
+      automationEngine: 'ONLINE'
+    },
+    productionMockFallback: providers.length === 0 ? 'ACTIVE (dev/test only)' : 'DISABLED',
+    version: '2026.2.0',
+    timestamp: Date.now()
+  });
+});
+
+app.get('/api/ready', (_req: Request, res: Response) => {
+  res.json({ status: 'READY', timestamp: Date.now() });
+});
+
+// Enforce ExecutionPrincipal on all /api routes BELOW this point.
+// Routes registered above (health, ready) are public infrastructure probes.
+app.use('/api', createPrincipalMiddleware());
 
 // Initialize Core Subsystems
 const modelRouter = new ModelRouter();
@@ -67,10 +101,10 @@ agentRuntime.recoverInterruptedRuns('api-worker-1').catch(err => {
 
 // Seed default agent if not exists
 async function seedDefaultAgent() {
-  const existing = await agentRepo.getAgent('user-default');
+  const existing = await agentRepo.getAgent('agent-default');
   if (!existing) {
     await agentRepo.saveAgent({
-      id: 'user-default',
+      id: 'agent-default',
       name: 'Default Agent',
       instructions: 'You are Aira AI, an autonomous intelligence operating workspace. Maintain precise, verified reasoning.',
       modelPolicy: { model: 'mock-deterministic' },
@@ -108,29 +142,7 @@ async function seedDefaultAutomation() {
 seedDefaultAutomation().catch(console.error);
 
 // -----------------------------------------------------------------------
-// Health Check
-// -----------------------------------------------------------------------
-app.get('/api/health', (_req: Request, res: Response) => {
-  const providers = modelRouter.listProviders();
-  res.json({
-    status: 'HEALTHY',
-    subsystems: {
-      modelRouter: `ONLINE (${providers.length} provider(s): ${providers.join(', ') || 'none — mock-dev only'})`,
-      toolRuntime: 'ONLINE',
-      approvalKernel: 'ONLINE',
-      mcpHost: 'ONLINE',
-      knowledgeEngine: 'ONLINE',
-      agentRuntime: 'ONLINE',
-      automationEngine: 'ONLINE'
-    },
-    productionMockFallback: providers.length === 0 ? 'ACTIVE (dev/test only)' : 'DISABLED',
-    version: '2026.2.0',
-    timestamp: Date.now()
-  });
-});
-
-// -----------------------------------------------------------------------
-// MCP Servers
+// MCP Servers (protected — requires ExecutionPrincipal)
 // -----------------------------------------------------------------------
 app.get('/api/mcp/servers', (_req: Request, res: Response) => {
   res.json(mcpHost.listServers());
@@ -142,26 +154,31 @@ app.get('/api/mcp/servers', (_req: Request, res: Response) => {
 app.post('/api/runs', async (req: Request, res: Response) => {
   try {
     const parsed = CreateRunRequestSchema.parse(req.body);
-    const run = await agentRuntime.createAndExecuteRun(parsed);
+    const run = await agentRuntime.createAndExecuteRun(parsed, req.principal!);
     res.status(201).json(run);
   } catch (err: any) {
     res.status(400).json({ error: err.message || 'Invalid run creation payload.' });
   }
 });
 
-app.get('/api/runs', async (_req: Request, res: Response) => {
-  res.json(await agentRuntime.listRuns());
+app.get('/api/runs', async (req: Request, res: Response) => {
+  const allRuns = await agentRuntime.listRuns();
+  res.json(allRuns.filter(r => r.principalId === req.principal!.userId));
 });
 
 app.get('/api/runs/:id', async (req: Request, res: Response) => {
   const run = await agentRuntime.getRun(req.params.id);
-  if (!run) {
+  if (!run || run.principalId !== req.principal!.userId) {
     return res.status(404).json({ error: `Run with id "${req.params.id}" not found.` });
   }
   res.json(run);
 });
 
 app.post('/api/runs/:id/cancel', async (req: Request, res: Response) => {
+  const run = await agentRuntime.getRun(req.params.id);
+  if (!run || run.principalId !== req.principal!.userId) {
+    return res.status(404).json({ error: 'Run not found.' });
+  }
   const success = await agentRuntime.cancelRun(req.params.id);
   if (!success) {
     return res.status(400).json({ error: 'Cannot cancel run (either not found or in terminal state).' });
@@ -172,7 +189,16 @@ app.post('/api/runs/:id/cancel', async (req: Request, res: Response) => {
 app.post('/api/runs/:id/approve', async (req: Request, res: Response) => {
   try {
     const { requestId, decision } = req.body;
+    const approval = await approvalKernel.getPendingRequest(requestId);
+    if (!approval) return res.status(404).json({ error: 'Approval request not found.' });
+    
+    const run = await agentRuntime.getRun(approval.runId);
+    if (!run || run.principalId !== req.principal!.userId) {
+      return res.status(404).json({ error: 'Approval request not found.' });
+    }
+
     const parsedDecision = ApprovalDecisionSchema.parse(decision);
+    // Submit approval with current user's identity
     const success = await agentRuntime.submitApproval(requestId, parsedDecision);
     if (!success) {
       return res.status(400).json({ error: 'Could not apply approval decision.' });
@@ -190,7 +216,7 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
   const runId = req.params.id;
   const run = await agentRuntime.getRun(runId);
 
-  if (!run) {
+  if (!run || run.principalId !== req.principal!.userId) {
     return res.status(404).json({ error: `Run ${runId} not found.` });
   }
 
@@ -363,7 +389,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       systemPrompt: (systemPrompt || '') + (contextSubgraph ? `\n\n${contextSubgraph}` : ''),
       context: { history: contextHistory },
       modelPolicy: { model: model || 'aira-auto' }
-    });
+    }, req.principal!);
 
     const stream = agentRuntime.getEventStream(run.id);
 
@@ -510,7 +536,7 @@ app.post('/api/agents/:id/run', async (req: Request, res: Response) => {
       systemPrompt: agent.instructions,
       intent: 'AGENT_MISSION',
       modelPolicy: agent.modelPolicy
-    });
+    }, req.principal!);
     res.status(201).json({ runId: run.id, state: run.state });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -634,5 +660,3 @@ process.on('SIGTERM', () => {
   server.close(() => process.exit(0));
 });
 
-
-console.log('--- API SERVER BOOTING WITH NEW EDITS ---');

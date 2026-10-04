@@ -17,7 +17,7 @@ export class ApprovalKernel {
     private options: ApprovalManagerOptions = { autoApproveRead: true }
   ) {}
 
-  public async isToolCallApproved(runId: string, toolName: string, permission: PermissionLevel, principalId: string = 'user-default'): Promise<boolean> {
+  public async isToolCallApproved(runId: string, toolName: string, permission: PermissionLevel, principalId: string): Promise<boolean> {
     if (await this.grantRepo.hasAlwaysGrant(toolName, principalId)) {
       return true;
     }
@@ -65,7 +65,7 @@ export class ApprovalKernel {
     return this.repository.getPendingForRun(runId);
   }
 
-  public async decide(requestId: string, decision: ApprovalDecision, resolvedBy = 'user-default'): Promise<{ approved: boolean; request: ApprovalRequest }> {
+  public async decide(requestId: string, decision: ApprovalDecision, resolvedBy: string): Promise<{ approved: boolean; request: ApprovalRequest }> {
     const request = await this.repository.getRequest(requestId);
 
     if (!request) {

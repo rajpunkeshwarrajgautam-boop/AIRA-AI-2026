@@ -11,7 +11,8 @@ import {
   ToolResult,
   Citation,
   Artifact,
-  ApprovalDecision
+  ApprovalDecision,
+  ExecutionPrincipal
 } from '../../contracts/src/index.js';
 import { ModelRouter, ChatMessageInput } from '../../model-router/src/index.js';
 import { ToolRegistry } from '../../tool-runtime/src/index.js';
@@ -68,7 +69,7 @@ export class AgentRuntime extends EventEmitter {
     this.emit('run_event', { runId, event });
   }
 
-  public async createAndExecuteRun(request: CreateRunRequest): Promise<Run> {
+  public async createAndExecuteRun(request: CreateRunRequest, principal: ExecutionPrincipal): Promise<Run> {
     const runId = `run_${crypto.randomUUID().slice(0, 10)}`;
     const now = Date.now();
 
@@ -79,9 +80,12 @@ export class AgentRuntime extends EventEmitter {
 
     const run: Run = {
       id: runId,
-      userId: 'user-default',
-      projectId: request.projectId,
-      conversationId: request.conversationId,
+      principalId: principal.userId,
+      agentId: null,
+      sessionId: principal.sessionId,
+      workspaceId: principal.workspaceId || null,
+      projectId: request.projectId || principal.projectId || null,
+      conversationId: request.conversationId || null,
       intent: request.intent || 'ANSWER',
       state: 'QUEUED',
       modelPolicy: policy,
@@ -257,7 +261,8 @@ export class AgentRuntime extends EventEmitter {
       const isApproved = await this.approvalKernel.isToolCallApproved(
         runId,
         toolCall.name,
-        toolDef?.permissionLevel || 'READ'
+        toolDef?.permissionLevel || 'READ',
+        run.principalId
       );
 
       if (!isApproved && toolDef?.permissionLevel === 'DESTRUCTIVE') {

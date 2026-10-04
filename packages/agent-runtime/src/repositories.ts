@@ -74,9 +74,12 @@ export class PostgresRunRepository implements RunRepository {
   async saveRun(run: Run): Promise<void> {
     await db('runs').insert({
       id: run.id,
-      agent_id: run.userId,
-      principal_id: run.userId, // We need to decouple this eventually, but using userId for now
-      project_id: run.projectId,
+      principal_id: run.principalId,
+      agent_id: run.agentId || null,
+      session_id: run.sessionId,
+      workspace_id: run.workspaceId || null,
+      project_id: run.projectId || null,
+      conversation_id: run.conversationId || null,
       prompt: run.prompt,
       systemPrompt: run.systemPrompt,
       intent: run.intent,
@@ -204,8 +207,12 @@ export class PostgresRunRepository implements RunRepository {
     };
     return {
       id: row.id,
-      userId: row.agent_id || 'user-default', // userId currently serves as agent ID
-      projectId: row.project_id,
+      principalId: row.principal_id,
+      agentId: row.agent_id || null,
+      sessionId: row.session_id,
+      workspaceId: row.workspace_id || null,
+      projectId: row.project_id || null,
+      conversationId: row.conversation_id || null,
       intent: row.intent as any,
       state: row.state as any,
       modelPolicy: parseJson(row.modelPolicy, {}),

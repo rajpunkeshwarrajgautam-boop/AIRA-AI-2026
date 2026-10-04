@@ -1,6 +1,20 @@
 import { z } from 'zod';
 
 // ==========================================
+// 0. TRUSTED PRINCIPAL
+// ==========================================
+
+export const ExecutionPrincipalSchema = z.object({
+  userId: z.string().min(1, "userId is required"),
+  sessionId: z.string().min(1, "sessionId is required"),
+  workspaceId: z.string().optional(),
+  projectId: z.string().optional(),
+  roles: z.array(z.string()).optional(),
+  scopes: z.array(z.string()).optional()
+});
+export type ExecutionPrincipal = z.infer<typeof ExecutionPrincipalSchema>;
+
+// ==========================================
 // 1. RUN STATES & INTENT TAXONOMY
 // ==========================================
 
@@ -214,9 +228,12 @@ export type Artifact = z.infer<typeof ArtifactSchema>;
 
 export const RunSchema = z.object({
   id: z.string(),
-  userId: z.string().default('user-default'),
-  projectId: z.string().optional(),
-  conversationId: z.string().optional(),
+  principalId: z.string().min(1, "principalId is required"),
+  agentId: z.string().nullable().optional(),
+  sessionId: z.string().min(1, "sessionId is required"),
+  workspaceId: z.string().nullable().optional(),
+  projectId: z.string().nullable().optional(),
+  conversationId: z.string().nullable().optional(),
   intent: IntentTaxonomySchema.default('ANSWER'),
   state: RunStateSchema.default('QUEUED'),
   modelPolicy: ModelPolicySchema,

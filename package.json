@@ -12,6 +12,7 @@
     "test:integration": "npx tsx test/integration.ts",
     "test:e2e": "npx tsx test/e2e-verification.ts",
     "test:recovery": "npx tsx test/recovery.ts",
+    "test:identity": "npx tsx test/identity.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc -b && vite build",
     "lint": "oxlint",

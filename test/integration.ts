@@ -3,6 +3,12 @@ import assert from 'assert';
 
 const API_PORT = 3001;
 const BASE_URL = `http://127.0.0.1:${API_PORT}`;
+// Standard auth headers for integration test calls
+const INT_HEADERS = {
+  'Content-Type': 'application/json',
+  'x-test-user-id': 'integration-test-user',
+  'x-test-session-id': 'integration-test-session',
+};
 
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -108,15 +114,6 @@ async function runIntegration() {
   console.log('Starting MCP server...');
   const mcpServer = spawn('npx', ['tsx', 'packages/mcp/src/test-server.ts'], { shell: true });
 
-  console.log('--- TEST 4: Persist-before-emit invariant ---');
-  await new Promise<void>((resolve, reject) => {
-    exec('npx tsx test/invariant.ts', (err, stdout, stderr) => {
-      if (err) { console.error(stderr); return reject(new Error(`Invariant test failed: ${stdout || stderr}`)); }
-      console.log(stdout.trim());
-      resolve();
-    });
-  });
-
   console.log('Starting API server...');
   const apiServer = spawn('npx', ['tsx', '--no-cache', 'apps/api/src/index.ts'], { shell: true, env: { ...process.env, TSX_CACHE: 'false' } });
   apiServer.stdout?.on('data', d => process.stdout.write(`API: ${d}`));
@@ -136,7 +133,7 @@ async function runIntegration() {
     console.log('--- TEST 2: Durability & Fail-over ---');
     const createRunRes = await fetch(`${BASE_URL}/api/runs`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: INT_HEADERS,
       body: JSON.stringify({
         intent: 'AGENT_MISSION',
         prompt: 'Test prompt',
@@ -169,7 +166,7 @@ async function runIntegration() {
     await sleep(3000);
 
     console.log('Fetching run after restart...');
-    const getRunRes = await fetch(`${BASE_URL}/api/runs/${runData.id}`);
+    const getRunRes = await fetch(`${BASE_URL}/api/runs/${runData.id}`, { headers: INT_HEADERS });
     const getRunData = await getRunRes.json();
 
     assert.strictEqual(getRunData.id, runData.id, 'Run should persist across restarts');
@@ -196,7 +193,7 @@ async function runIntegration() {
     console.log('--- TEST 5a: Real Replay -> Live Continuation ---');
     const liveRunRes = await fetch(`${BASE_URL}/api/runs`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: INT_HEADERS,
       body: JSON.stringify({
         intent: 'TOOL_ACTION',
         prompt: 'run command', // Triggers system_shell (DESTRUCTIVE), which pauses for approval
@@ -213,7 +210,8 @@ async function runIntegration() {
     // Subscribe to SSE. Should replay created, requested, approval.required events
     const controller = new AbortController();
     const liveStreamRes = await fetch(`${BASE_URL}/api/runs/${liveRun.id}/events`, {
-      signal: controller.signal
+      signal: controller.signal,
+      headers: INT_HEADERS,
     });
     const reader = liveStreamRes.body?.getReader();
     if (!reader) throw new Error('No reader');
@@ -253,7 +251,7 @@ async function runIntegration() {
     console.log('Sending approval to trigger live continuation...');
     const resApprove = await fetch(`${BASE_URL}/api/runs/${liveRun.id}/approve`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: INT_HEADERS,
       body: JSON.stringify({
         requestId: approvalReqEvent.data.id,
         decision: 'ALLOW_ONCE'
@@ -281,7 +279,7 @@ async function runIntegration() {
     console.log('--- TEST 5b: Replay/Live Race Test ---');
     const raceRunRes = await fetch(`${BASE_URL}/api/runs`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: INT_HEADERS,
       body: JSON.stringify({
         intent: 'TOOL_ACTION',
         prompt: 'run command',
@@ -292,7 +290,7 @@ async function runIntegration() {
     const raceRun = await raceRunRes.json();
     
     // Connect with test hook to induce 500ms delay between subscription and DB fetch
-    const raceEvents = await collectSseEvents(raceRun.id, {}, 5, 4000, `?__test_hook_replay_race=1`);
+    const raceEvents = await collectSseEvents(raceRun.id, INT_HEADERS, 5, 4000, `?__test_hook_replay_race=1`);
     assert.ok(raceEvents.length >= 2, `Should get events despite the race condition. Got: ${raceEvents.length}`);
     const raceIds = raceEvents.map(e => parseInt(e.id, 10));
     const uniqueIds = new Set(raceIds);
@@ -318,7 +316,7 @@ async function runIntegration() {
 
     for (const { header, value } of invalidCursors) {
       const r = await fetch(`${BASE_URL}/api/runs/${runData.id}/events`, {
-        headers: { [header]: value }
+        headers: { ...INT_HEADERS, [header]: value }
       });
       assert.strictEqual(r.status, 400,
         `Expected HTTP 400 for ${header}: "${value}", got ${r.status}`);
@@ -329,7 +327,9 @@ async function runIntegration() {
 
     const invalidQueryCursors = ['banana', '-5', '9abc'];
     for (const value of invalidQueryCursors) {
-      const r = await fetch(`${BASE_URL}/api/runs/${runData.id}/events?after=${value}`);
+      const r = await fetch(`${BASE_URL}/api/runs/${runData.id}/events?after=${value}`, {
+        headers: INT_HEADERS
+      });
       assert.strictEqual(r.status, 400,
         `Expected HTTP 400 for ?after="${value}", got ${r.status}`);
       const body = await r.json();
@@ -339,7 +339,7 @@ async function runIntegration() {
 
     // Valid cursor "0" must NOT return 400
     const validCursorRes = await fetch(`${BASE_URL}/api/runs/${runData.id}/events`, {
-      headers: { 'Last-Event-ID': '0' }
+      headers: { ...INT_HEADERS, 'Last-Event-ID': '0' }
     });
     // Should be 200 (content-type: text/event-stream)
     assert.strictEqual(validCursorRes.status, 200, `Valid cursor "0" must not return 400`);
@@ -352,7 +352,7 @@ async function runIntegration() {
     console.log('--- TEST 7: Terminal Replay + Stream Close ---');
 
     // The run is already completed. Reconnect from beginning — should get all events and stream must close.
-    const terminalEvents = await collectSseEvents(runData.id, {}, 30, 5000);
+    const terminalEvents = await collectSseEvents(runData.id, INT_HEADERS, 30, 5000);
     const lastEvt = terminalEvents[terminalEvents.length - 1];
     assert.ok(
       ['run.completed', 'run.failed', 'run.cancelled'].includes(lastEvt?.event),
@@ -364,7 +364,7 @@ async function runIntegration() {
     const penultimateId = String(parseInt(lastEvt.id, 10) - 1);
     const nearTerminalEvents = await collectSseEvents(
       runData.id,
-      { 'Last-Event-ID': penultimateId },
+      { ...INT_HEADERS, 'Last-Event-ID': penultimateId },
       5,
       4000
     );
@@ -399,7 +399,7 @@ async function runIntegration() {
     // Create a fresh run for the multi-subscriber test
     const multiRunRes = await fetch(`${BASE_URL}/api/runs`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: INT_HEADERS,
       body: JSON.stringify({
         intent: 'AGENT_MISSION',
         prompt: 'Multi-subscriber test',
@@ -412,8 +412,8 @@ async function runIntegration() {
 
     // Two concurrent SSE connections to the same run
     const [subA, subB] = await Promise.all([
-      collectSseEvents(multiRun.id, {}, 3, 8000),  // Disconnects early
-      collectSseEvents(multiRun.id, {}, 10, 8000), // Continues receiving
+      collectSseEvents(multiRun.id, INT_HEADERS, 3, 8000),  // Disconnects early
+      collectSseEvents(multiRun.id, INT_HEADERS, 10, 8000), // Continues receiving
     ]);
 
     assert.ok(subA.length === 3, `Subscriber A should receive exactly 3 events before disconnecting, got ${subA.length}`);

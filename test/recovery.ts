@@ -41,7 +41,11 @@ function killApiServer() {
 async function createRun(prompt: string) {
   const createRes = await fetch(`${BASE_URL}/api/runs`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'x-test-user-id': 'test-user',
+      'x-test-session-id': 'test-session',
+      'Content-Type': 'application/json'
+    },
     body: JSON.stringify({
       intent: 'TOOL_ACTION',
       prompt: prompt,
@@ -58,8 +62,9 @@ async function createRun(prompt: string) {
 async function seedRun(id: string, state: string, checkpoint: string, extra: any = {}) {
   await db('runs').insert({
     id,
-    agent_id: 'user-default',
-    principal_id: 'user-default',
+    agent_id: null,
+    principal_id: 'test-user',
+    session_id: 'test-session',
     state,
     status: state,
     execution_checkpoint: checkpoint,

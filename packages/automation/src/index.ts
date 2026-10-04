@@ -79,6 +79,9 @@ export class AutomationEngine {
           model: 'aira-auto',
           temperature: 0.2
         } as any
+      }, {
+        userId: 'system-automation',
+        sessionId: 'automation-session'
       });
 
       claim.runId = run.id;

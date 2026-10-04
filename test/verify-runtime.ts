@@ -108,7 +108,9 @@ async function runTests() {
     const runRepo = new PostgresRunRepository();
     await runRepo.saveRun({
       id: runId,
-      userId: 'user-default',
+      principalId: 'test-user',
+      agentId: null,
+      sessionId: 'test-session',
       state: 'RUNNING',
       prompt: 'dummy',
       modelPolicy: { model: 'mock-deterministic' } as any,
@@ -123,16 +125,16 @@ async function runTests() {
       citations: []
     });
 
-    const isInitiallyApproved = await kernel.isToolCallApproved(runId, 'system_shell', 'DESTRUCTIVE');
+    const isInitiallyApproved = await kernel.isToolCallApproved(runId, 'system_shell', 'DESTRUCTIVE', 'test-user');
     assert.strictEqual(isInitiallyApproved, false);
 
     const request = await kernel.createRequest(runId, toolCall as any, 'DESTRUCTIVE', 'Dangerous shell action');
     assert.strictEqual(request.risk, 'critical');
 
-    const decisionResult = await kernel.decide(request.id, 'ALLOW_SESSION');
+    const decisionResult = await kernel.decide(request.id, 'ALLOW_SESSION', 'test-user');
     assert.strictEqual(decisionResult.approved, true);
 
-    const isNowApproved = await kernel.isToolCallApproved(runId, 'system_shell', 'DESTRUCTIVE');
+    const isNowApproved = await kernel.isToolCallApproved(runId, 'system_shell', 'DESTRUCTIVE', 'test-user');
     assert.strictEqual(isNowApproved, true);
     process.stdout.write('PASS: Approval Kernel lifecycle, grants, and security isolation\n');
   }
@@ -194,6 +196,9 @@ async function runTests() {
       prompt: 'calculate (256 * 4)',
       intent: 'TOOL_ACTION',
       modelPolicy: { model: 'mock-deterministic' } as any
+    }, {
+      userId: 'test-user',
+      sessionId: 'test-session'
     });
 
     assert.ok(run.id.startsWith('run_'));
@@ -243,7 +248,13 @@ async function runTests() {
 
   // Test 8: Live API Server Integration
   {
-    const res = await fetch('http://127.0.0.1:3001/api/health');
+    const authHeaders = {
+      'x-test-user-id': 'test-user',
+      'x-test-session-id': 'test-session',
+      'Content-Type': 'application/json'
+    };
+
+    const res = await fetch('http://127.0.0.1:3001/api/health', { headers: authHeaders });
     assert.strictEqual(res.status, 200);
     const health = await res.json();
     assert.strictEqual(health.status, 'HEALTHY');
@@ -251,18 +262,18 @@ async function runTests() {
     assert.strictEqual(health.subsystems.toolRuntime, 'ONLINE');
     assert.strictEqual(health.subsystems.agentRuntime, 'ONLINE');
 
-    const toolsRes = await fetch('http://127.0.0.1:3001/api/tools');
+    const toolsRes = await fetch('http://127.0.0.1:3001/api/tools', { headers: authHeaders });
     const toolsData = await toolsRes.json();
     assert.ok(toolsData.tools.length >= 4);
 
-    const sourcesRes = await fetch('http://127.0.0.1:3001/api/knowledge/sources');
+    const sourcesRes = await fetch('http://127.0.0.1:3001/api/knowledge/sources', { headers: authHeaders });
     const sourcesData = await sourcesRes.json();
     assert.ok(sourcesData.sources.length >= 1);
 
     // Test API creation of agent and execution
     const agentRes = await fetch('http://127.0.0.1:3001/api/agents', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify({
         name: 'Test Agent API',
         instructions: 'Test instructions'
@@ -273,11 +284,14 @@ async function runTests() {
 
     const agentRunRes = await fetch(`http://127.0.0.1:3001/api/agents/${agent.id}/run`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify({ prompt: 'test prompt API' })
     });
     const agentRun = await agentRunRes.json();
-    assert.ok(agentRun.runId.startsWith('run_'));
+    if (!agentRunRes.ok) {
+      console.error('API Error Response:', agentRun);
+    }
+    assert.ok(agentRun.runId?.startsWith('run_'));
 
     process.stdout.write('PASS: Live API Server endpoints and Postgres Database persistence verified\n');
   }
