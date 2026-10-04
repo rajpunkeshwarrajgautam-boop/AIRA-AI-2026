@@ -11,9 +11,24 @@ export const RunStateSchema = z.enum([
   'WAITING_FOR_APPROVAL',
   'COMPLETED',
   'FAILED',
-  'CANCELLED'
+  'CANCELLED',
+  'INTERRUPTED'
 ]);
 export type RunState = z.infer<typeof RunStateSchema>;
+
+export const ExecutionCheckpointSchema = z.enum([
+  'CREATED',
+  'KNOWLEDGE_READY',
+  'TOOL_SELECTED',
+  'WAITING_FOR_APPROVAL',
+  'TOOL_APPROVED',
+  'TOOL_EXECUTING',
+  'TOOL_COMPLETED',
+  'SYNTHESIZING',
+  'FINALIZING',
+  'COMPLETED'
+]);
+export type ExecutionCheckpoint = z.infer<typeof ExecutionCheckpointSchema>;
 
 export const IntentTaxonomySchema = z.enum([
   'ANSWER',
@@ -71,6 +86,14 @@ export type PermissionLevel = z.infer<typeof PermissionLevelSchema>;
 export const ExecutionRuntimeSchema = z.enum(['CLOUD', 'LOCAL']);
 export type ExecutionRuntime = z.infer<typeof ExecutionRuntimeSchema>;
 
+export const IdempotencyClassSchema = z.enum([
+  'SAFE_READ',
+  'IDEMPOTENT_WRITE',
+  'EXTERNAL_SIDE_EFFECT',
+  'NON_IDEMPOTENT'
+]);
+export type IdempotencyClass = z.infer<typeof IdempotencyClassSchema>;
+
 export const ToolDefinitionSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -79,16 +102,32 @@ export const ToolDefinitionSchema = z.object({
   outputSchema: z.record(z.string(), z.any()).optional(),
   source: z.enum(['native', 'mcp', 'connector', 'local-runner']),
   permissionLevel: PermissionLevelSchema,
-  executionRuntime: ExecutionRuntimeSchema
+  executionRuntime: ExecutionRuntimeSchema,
+  idempotencyClass: IdempotencyClassSchema.default('NON_IDEMPOTENT')
 });
 export type ToolDefinition = z.infer<typeof ToolDefinitionSchema>;
+
+export const ToolCallStatusSchema = z.enum([
+  'PENDING',
+  'WAITING_FOR_APPROVAL',
+  'APPROVED',
+  'RUNNING',
+  'COMPLETED',
+  'FAILED',
+  'CANCELLED',
+  'INTERRUPTED',
+  'RECOVERY_REQUIRED'
+]);
+export type ToolCallStatus = z.infer<typeof ToolCallStatusSchema>;
 
 export const ToolCallSchema = z.object({
   id: z.string(),
   toolId: z.string(),
   name: z.string(),
   arguments: z.record(z.string(), z.any()),
-  timestamp: z.number()
+  timestamp: z.number(),
+  status: ToolCallStatusSchema.default('PENDING'),
+  idempotencyKey: z.string().optional()
 });
 export type ToolCall = z.infer<typeof ToolCallSchema>;
 
@@ -195,7 +234,10 @@ export const RunSchema = z.object({
   error: z.string().optional(),
   stepCount: z.number().int().nonnegative().default(0),
   maxSteps: z.number().int().positive().default(10),
-  executionCheckpoint: z.string().optional(),
+  executionCheckpoint: ExecutionCheckpointSchema.optional(),
+  recoveryOwner: z.string().optional(),
+  recoveryClaimedAt: z.number().optional(),
+  recoveryLeaseUntil: z.number().optional(),
   createdAt: z.number(),
   updatedAt: z.number(),
   completedAt: z.number().optional()

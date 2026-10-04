@@ -47,6 +47,10 @@ export class DeterministicMockAdapter implements ModelAdapter {
     let text = `Processed your request using ${policy.model}.`;
     if (lastUserMessage.toLowerCase().includes('run command')) {
       text = `{"type": "tool_call", "name": "system_shell", "arguments": {"command": "echo hello"}}`;
+    } else if (lastUserMessage.toLowerCase().includes('hang safe')) {
+      text = `{"type": "tool_call", "name": "hang_safe", "arguments": {}}`;
+    } else if (lastUserMessage.toLowerCase().includes('hang unsafe')) {
+      text = `{"type": "tool_call", "name": "hang_unsafe", "arguments": {}}`;
     } else if (lastUserMessage.toLowerCase().includes('search') || lastUserMessage.toLowerCase().includes('find')) {
       text = `Search query analyzed: "${lastUserMessage}". Findings indicate relevant data across index nodes.`;
     } else if (lastUserMessage.toLowerCase().includes('help') || lastUserMessage.toLowerCase().includes('hello')) {

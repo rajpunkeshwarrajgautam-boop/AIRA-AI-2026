@@ -60,6 +60,11 @@ const agentRuntime = new AgentRuntime(
 const automationEngine = new AutomationEngine(agentRuntime, autoRepo, autoRunRepo);
 automationEngine.start();
 
+// Recover any interrupted runs on boot
+agentRuntime.recoverInterruptedRuns('api-worker-1').catch(err => {
+  console.error('Failed to recover interrupted runs:', err);
+});
+
 // Seed default agent if not exists
 async function seedDefaultAgent() {
   const existing = await agentRepo.getAgent('user-default');

@@ -203,7 +203,9 @@ export class AgentRuntime extends EventEmitter {
         run.prompt.toLowerCase().includes('calc') ||
         run.prompt.toLowerCase().includes('read') ||
         run.prompt.toLowerCase().includes('shell') ||
-        run.prompt.toLowerCase().includes('run command');
+        run.prompt.toLowerCase().includes('run command') ||
+        run.prompt.toLowerCase().includes('hang safe') ||
+        run.prompt.toLowerCase().includes('hang unsafe');
 
       if (isToolAction) {
         let selectedToolName = 'web_search';
@@ -218,6 +220,12 @@ export class AgentRuntime extends EventEmitter {
         } else if (run.prompt.toLowerCase().includes('read')) {
           selectedToolName = 'file_system_read';
           selectedArgs = { filePath: 'package.json' };
+        } else if (run.prompt.toLowerCase().includes('hang safe')) {
+          selectedToolName = 'hang_safe';
+          selectedArgs = {};
+        } else if (run.prompt.toLowerCase().includes('hang unsafe')) {
+          selectedToolName = 'hang_unsafe';
+          selectedArgs = {};
         }
 
         const toolDef = this.toolRegistry.get(selectedToolName)?.definition;
@@ -306,6 +314,11 @@ export class AgentRuntime extends EventEmitter {
       await this.runRepo.saveRun(run);
     }
 
+    if (run.executionCheckpoint === 'TOOL_COMPLETED') {
+      run.executionCheckpoint = 'SYNTHESIZING';
+      await this.runRepo.saveRun(run);
+    }
+
     // Checkpoint 5: Synthesis
     if (run.executionCheckpoint === 'SYNTHESIZING') {
       const messages: ChatMessageInput[] = [];
@@ -379,5 +392,52 @@ export class AgentRuntime extends EventEmitter {
       await this.runRepo.saveRun(run);
       await this.transitionRunState(runId, 'COMPLETED');
     }
+  }
+
+  public async recoverInterruptedRuns(owner: string, ttlMs: number = 60000): Promise<void> {
+    const interrupted = await this.runRepo.getInterruptedRuns();
+    for (const run of interrupted) {
+      const claimed = await this.runRepo.claimInterruptedRun(run.id, owner, ttlMs);
+      if (claimed) {
+        console.log(`Recovering interrupted run ${run.id}...`);
+        this.resumeRun(run.id).catch(err => {
+          console.error(`Error recovering run ${run.id}:`, err);
+          this.transitionRunState(run.id, 'FAILED', `Recovery failed: ${err.message}`).catch(console.error);
+        });
+      }
+    }
+  }
+
+  private async resumeRun(runId: string): Promise<void> {
+    let run = await this.runRepo.getRun(runId);
+    if (!run) return;
+
+    if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)) {
+      return;
+    }
+
+    if (run.state === 'WAITING_FOR_APPROVAL' || run.executionCheckpoint === 'WAITING_FOR_APPROVAL') {
+      // Just waiting for user input, do nothing. It will resume when submitApproval is called.
+      return;
+    }
+
+    if (run.executionCheckpoint === 'TOOL_EXECUTING') {
+      const toolCall = run.toolCalls[run.toolCalls.length - 1];
+      const toolDef = this.toolRegistry.get(toolCall?.name)?.definition;
+      const idempotencyClass = toolDef?.idempotencyClass || 'NON_IDEMPOTENT';
+
+      if (idempotencyClass === 'NON_IDEMPOTENT' || idempotencyClass === 'EXTERNAL_SIDE_EFFECT') {
+        await this.transitionRunState(runId, 'FAILED', 'Process crashed during non-idempotent tool execution');
+        return;
+      } else {
+        // Safe to retry
+        run.executionCheckpoint = 'TOOL_APPROVED';
+        run.state = 'RUNNING';
+        await this.runRepo.saveRun(run);
+      }
+    }
+
+    // Otherwise, just kick off the loop from the current checkpoint
+    await this.executeRunLoop(runId);
   }
 }

@@ -17,6 +17,7 @@ export interface RunRepository {
   getRunEvents(runId: string): Promise<StreamingEvent[]>;
   getRunEventsAfter(runId: string, sequence: number): Promise<StreamingEvent[]>;
   getLatestEventSequence(runId: string): Promise<number>;
+  claimInterruptedRun(runId: string, owner: string, ttlMs: number): Promise<boolean>;
 }
 
 export class PostgresAgentRepository implements AgentRepository {
@@ -95,6 +96,9 @@ export class PostgresRunRepository implements RunRepository {
       stepCount: run.stepCount,
       max_steps: run.maxSteps,
       execution_checkpoint: run.executionCheckpoint,
+      recovery_owner: run.recoveryOwner,
+      recovery_claimed_at: run.recoveryClaimedAt,
+      recovery_lease_until: run.recoveryLeaseUntil,
       createdAt: run.createdAt,
       updatedAt: run.updatedAt,
       completed_at: run.completedAt
@@ -113,8 +117,28 @@ export class PostgresRunRepository implements RunRepository {
   }
 
   async getInterruptedRuns(): Promise<Run[]> {
-    const rows = await db('runs').whereIn('state', ['RUNNING', 'WAITING_FOR_TOOL', 'WAITING_FOR_APPROVAL']);
+    const rows = await db('runs').whereIn('state', ['RUNNING', 'WAITING_FOR_TOOL', 'WAITING_FOR_APPROVAL']).orderBy('createdAt', 'asc');
     return rows.map(this.mapToRun);
+  }
+
+  async claimInterruptedRun(runId: string, owner: string, ttlMs: number): Promise<boolean> {
+    const now = Date.now();
+    const until = now + ttlMs;
+
+    const result = await db('runs')
+      .where({ id: runId })
+      .andWhere(function() {
+        this.whereNull('recovery_owner')
+            .orWhere('recovery_lease_until', '<', now);
+      })
+      .update({
+        recovery_owner: owner,
+        recovery_claimed_at: now,
+        recovery_lease_until: until,
+        updatedAt: now
+      });
+
+    return result > 0;
   }
 
   async appendRunEvent(event: StreamingEvent): Promise<StreamingEvent> {
@@ -200,6 +224,9 @@ export class PostgresRunRepository implements RunRepository {
       stepCount: row.stepCount || 0,
       maxSteps: row.max_steps || 10,
       executionCheckpoint: row.execution_checkpoint,
+      recoveryOwner: row.recovery_owner,
+      recoveryClaimedAt: row.recovery_claimed_at ? parseInt(row.recovery_claimed_at, 10) : undefined,
+      recoveryLeaseUntil: row.recovery_lease_until ? parseInt(row.recovery_lease_until, 10) : undefined,
       createdAt: parseInt(row.createdAt, 10),
       updatedAt: parseInt(row.updatedAt, 10),
       completedAt: row.completed_at ? parseInt(row.completed_at, 10) : undefined

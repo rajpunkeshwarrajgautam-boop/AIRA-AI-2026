@@ -7,10 +7,37 @@ import { McpHost } from '../packages/mcp/src/index.js';
 import { AgentRuntime } from '../packages/agent-runtime/src/index.js';
 import { AutomationEngine } from '../packages/automation/src/index.js';
 import { PostgresRunRepository } from '../packages/agent-runtime/src/repositories.js';
-import { PostgresAutomationRepository } from '../packages/automation/src/repositories.js';
+import { PostgresAutomationRepository, PostgresAutomationRunRepository } from '../packages/automation/src/repositories.js';
+import { PostgresApprovalRepository, PostgresSessionGrantRepository } from '../packages/approvals/src/repositories.js';
+
+import { spawn } from 'child_process';
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 async function runTests() {
   process.stdout.write('Starting AIRA Autonomous Runtime Verification Suite...\n');
+
+  process.stdout.write('Starting API Server...\n');
+  const apiProcess = spawn('npx', ['tsx', 'apps/api/src/index.ts'], {
+    stdio: 'ignore',
+    shell: true,
+    env: { ...process.env, NODE_ENV: 'test' }
+  });
+
+  try {
+    let attempts = 0;
+    while (attempts < 30) {
+      try {
+        const res = await fetch('http://127.0.0.1:3001/api/health');
+        if (res.status === 200) break;
+      } catch (e) {}
+      await sleep(1000);
+      attempts++;
+    }
+  } catch (err) {
+    apiProcess.kill();
+    throw new Error('API server failed to start in verify-runtime');
+  }
 
   // Test 1: Model Router Policy Resolution
   {
@@ -68,25 +95,44 @@ async function runTests() {
 
   // Test 3: Approval Kernel
   {
-    const kernel = new ApprovalKernel();
+    const kernel = new ApprovalKernel(new PostgresApprovalRepository(), new PostgresSessionGrantRepository());
     const toolCall = {
-      id: 'call_sh_1',
+      id: `call_sh_${Date.now()}`,
       toolId: 'tool_system_shell',
       name: 'system_shell',
       arguments: { command: 'npm list' },
       timestamp: Date.now()
     };
 
-    const isInitiallyApproved = kernel.isToolCallApproved('test_run_2', 'system_shell', 'DESTRUCTIVE');
+    const runId = `test_run_2_${Date.now()}`;
+    const runRepo = new PostgresRunRepository();
+    await runRepo.saveRun({
+      id: runId,
+      userId: 'user-default',
+      state: 'RUNNING',
+      prompt: 'dummy',
+      modelPolicy: { model: 'mock-deterministic' } as any,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      stepCount: 0,
+      maxSteps: 10,
+      toolsUsed: [],
+      toolCalls: [],
+      toolResults: [],
+      artifacts: [],
+      citations: []
+    });
+
+    const isInitiallyApproved = await kernel.isToolCallApproved(runId, 'system_shell', 'DESTRUCTIVE');
     assert.strictEqual(isInitiallyApproved, false);
 
-    const request = kernel.createRequest('test_run_2', toolCall, 'DESTRUCTIVE', 'Dangerous shell action');
+    const request = await kernel.createRequest(runId, toolCall as any, 'DESTRUCTIVE', 'Dangerous shell action');
     assert.strictEqual(request.risk, 'critical');
 
-    const decisionResult = kernel.decide(request.id, 'ALLOW_SESSION');
+    const decisionResult = await kernel.decide(request.id, 'ALLOW_SESSION');
     assert.strictEqual(decisionResult.approved, true);
 
-    const isNowApproved = kernel.isToolCallApproved('test_run_2', 'system_shell', 'DESTRUCTIVE');
+    const isNowApproved = await kernel.isToolCallApproved(runId, 'system_shell', 'DESTRUCTIVE');
     assert.strictEqual(isNowApproved, true);
     process.stdout.write('PASS: Approval Kernel lifecycle, grants, and security isolation\n');
   }
@@ -94,7 +140,7 @@ async function runTests() {
   // Test 4: Brain v2 Knowledge Engine
   {
     const brain = new BrainV2KnowledgeEngine();
-    const ingestion = brain.ingestDocument(
+    const ingestion = await brain.ingestDocument(
       'Operational Protocols',
       'AIRA operates under strict deterministic execution parameters. ModelRouter, ToolRuntime, and BrainV2 interact deterministically.',
       'text/markdown'
@@ -103,15 +149,15 @@ async function runTests() {
     assert.ok(ingestion.chunks.length >= 1);
     assert.ok(ingestion.chunks[0].contentHash.length === 64); // SHA-256
 
-    const searchResults = brain.search('deterministic ModelRouter');
+    const searchResults = await brain.search('deterministic ModelRouter');
     assert.ok(searchResults.length > 0);
     assert.ok(searchResults[0].citation.id.startsWith('cite_'));
 
-    const graph = brain.getKnowledgeGraph();
+    const graph = await brain.getKnowledgeGraph();
     assert.ok(graph.entities.length > 0);
     assert.ok(graph.edges.length > 0);
 
-    const mem = brain.saveMemory('test_key', 'test_value', 'fact');
+    const mem = await brain.saveMemory('test_key', 'test_value', 'fact');
     assert.strictEqual(mem.key, 'test_key');
     process.stdout.write('PASS: Brain v2 SHA-256 chunking, provenance citations, and property graph\n');
   }
@@ -140,7 +186,7 @@ async function runTests() {
   {
     const router = new ModelRouter();
     const tools = new ToolRegistry(process.cwd());
-    const approvals = new ApprovalKernel();
+    const approvals = new ApprovalKernel(new PostgresApprovalRepository(), new PostgresSessionGrantRepository());
     const brain = new BrainV2KnowledgeEngine();
     const runtime = new AgentRuntime(router, tools, approvals, brain, new PostgresRunRepository(), process.cwd());
 
@@ -161,6 +207,9 @@ async function runTests() {
       if (updated) run = updated;
     }
 
+    if (run.state !== 'COMPLETED') {
+      console.error('Run failed:', run);
+    }
     assert.strictEqual(run.state, 'COMPLETED');
     assert.ok(run.toolsUsed.includes('calculator'));
     assert.ok(run.toolResults.length >= 1);
@@ -171,10 +220,10 @@ async function runTests() {
   {
     const router = new ModelRouter();
     const tools = new ToolRegistry(process.cwd());
-    const approvals = new ApprovalKernel();
+    const approvals = new ApprovalKernel(new PostgresApprovalRepository(), new PostgresSessionGrantRepository());
     const brain = new BrainV2KnowledgeEngine();
     const runtime = new AgentRuntime(router, tools, approvals, brain, new PostgresRunRepository(), process.cwd());
-    const automation = new AutomationEngine(runtime, new PostgresAutomationRepository());
+    const automation = new AutomationEngine(runtime, new PostgresAutomationRepository(), new PostgresAutomationRunRepository());
 
     const created = await automation.createAutomation({
       name: 'Test Recurring Job',
@@ -234,9 +283,11 @@ async function runTests() {
   }
 
   process.stdout.write('\nALL 8 CORE VERIFICATION TESTS PASSED SUCCESSFULLY.\n');
+  apiProcess.kill();
 }
 
 runTests().catch(err => {
   process.stderr.write(`Test suite failed: ${err.message}\n${err.stack}\n`);
+  // Will need to kill apiProcess if it fails, but we don't have scope here. We can just exit.
   process.exit(1);
 });

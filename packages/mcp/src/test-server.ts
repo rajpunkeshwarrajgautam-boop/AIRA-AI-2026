@@ -38,6 +38,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ['a', 'b']
         }
+      },
+      {
+        name: 'hang_safe',
+        description: 'Sleeps forever',
+        inputSchema: { type: 'object', properties: {} }
+      },
+      {
+        name: 'hang_unsafe',
+        description: 'Sleeps forever unsafe',
+        inputSchema: { type: 'object', properties: {} }
       }
     ]
   };
@@ -54,6 +64,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request: any) => {
   } else if (name === 'add') {
     return {
       content: [{ type: 'text', text: String(args.a + args.b) }],
+      isError: false
+    };
+  } else if (name === 'hang_safe' || name === 'hang_unsafe') {
+    await new Promise(resolve => setTimeout(resolve, 1000000));
+    return {
+      content: [{ type: 'text', text: 'Woke up' }],
       isError: false
     };
   }

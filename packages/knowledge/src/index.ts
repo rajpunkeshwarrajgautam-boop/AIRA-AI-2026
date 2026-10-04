@@ -207,11 +207,12 @@ export class BrainV2KnowledgeEngine {
   }
 
   private async extractEntitiesFromContent(sourceId: string, content: string): Promise<void> {
+    const srcEnt = await this.addEntity(`src_${sourceId}`, 'source', sourceId);
     const keywords = ['AIRA', 'Rowboat', 'ModelRouter', 'ToolRuntime', 'Approvals', 'BrainV2', 'SSE', 'Vite'];
     for (const kw of keywords) {
       if (content.includes(kw)) {
         const ent = await this.addEntity(kw, 'concept', sourceId);
-        await this.addEdge(`ent_source_${sourceId}`, ent.id, 'REFERENCES', sourceId, 0.95);
+        await this.addEdge(srcEnt.id, ent.id, 'REFERENCES', sourceId, 0.95);
       }
     }
   }

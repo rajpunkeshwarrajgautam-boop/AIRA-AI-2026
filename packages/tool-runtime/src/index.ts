@@ -460,6 +460,39 @@ export class ToolRegistry {
         });
       }
     });
+    this.register({
+      definition: {
+        id: 'tool_hang_safe',
+        name: 'hang_safe',
+        description: 'Sleeps forever, safely',
+        parameters: { type: 'object', properties: {} },
+        source: 'native',
+        permissionLevel: 'READ',
+        executionRuntime: 'LOCAL',
+        idempotencyClass: 'SAFE_READ'
+      },
+      execute: async () => {
+        await new Promise(r => setTimeout(r, 1000000));
+        return { toolCallId: 'mock', output: 'ok', durationMs: 0, timestamp: Date.now() };
+      }
+    });
+
+    this.register({
+      definition: {
+        id: 'tool_hang_unsafe',
+        name: 'hang_unsafe',
+        description: 'Sleeps forever, unsafely',
+        parameters: { type: 'object', properties: {} },
+        source: 'native',
+        permissionLevel: 'READ',
+        executionRuntime: 'LOCAL',
+        idempotencyClass: 'NON_IDEMPOTENT'
+      },
+      execute: async () => {
+        await new Promise(r => setTimeout(r, 1000000));
+        return { toolCallId: 'mock', output: 'ok', durationMs: 0, timestamp: Date.now() };
+      }
+    });
   }
 }
 
