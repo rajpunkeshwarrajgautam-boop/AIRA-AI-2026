@@ -35,7 +35,6 @@ async function waitTerminal(runtime: InstanceType<typeof AgentRuntime>, id: stri
 }
 
 try {
-  // Old JSON definitions are normalized through the current BotInput schema.
   const now = Date.now();
   await db('aira_bots').insert({
     id: 'bot_legacy', owner_id: owner,
@@ -92,11 +91,10 @@ try {
   const persisted = await runtime.getRun(completed.id);
   assert.equal((persisted!.context.reusableSkillSnapshot as Array<{ instructions: string }>)[0].instructions, 'Cite the evidence behind every conclusion.', 'completed run skill snapshot must remain immutable');
 
-  // Detach, then deletion is allowed.
-  await bots.update(owner, bot.id, { ...bot, skillIds: [] });
+  const { id: _id, createdAt: _createdAt, updatedAt: _updatedAt, ...botInput } = bot;
+  await bots.update(owner, bot.id, { ...botInput, skillIds: [] });
   assert.equal(await skills.remove(owner, skill.id), true);
 
-  // Connector configuration is server-owned and sanitized to clients.
   const connector = new BotConnectorRuntime([{
     id: 'local-test', name: 'Local Test MCP', url: 'http://127.0.0.1:65530/mcp', transport: 'streamable_http', allowedTools: ['lookup']
   }]);
