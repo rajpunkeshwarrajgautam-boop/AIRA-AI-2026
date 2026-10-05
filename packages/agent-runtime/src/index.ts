@@ -1,5 +1,7 @@
 import { executeBotLoop } from '../../aira-bot/src/loop.js';
 import type { Bot } from '../../aira-bot/src/contracts.js';
+import { BotRepository } from '../../aira-bot/src/repository.js';
+import { BotOrchestrationRepository } from '../../aira-bot/src/orchestration.js';
 import { EventEmitter } from 'events';
 import * as crypto from 'crypto';
 import {
@@ -25,6 +27,8 @@ import { RunRepository } from './repositories.js';
 
 export class AgentRuntime extends EventEmitter {
   private eventStreams: Map<string, EventEmitter> = new Map();
+  private botRepo = new BotRepository();
+  private botOrchestration = new BotOrchestrationRepository();
 
   constructor(
     private modelRouter: ModelRouter,
@@ -85,7 +89,7 @@ export class AgentRuntime extends EventEmitter {
       modelPolicy: policy,
       prompt: request.prompt,
       systemPrompt: request.systemPrompt,
-      context: bot ? { airaBot: bot } : (request.context || {}),
+      context: bot ? { ...(request.context || {}), airaBot: bot } : (request.context || {}),
       content: '', thinking: '', toolsUsed: [], toolCalls: [], toolResults: [], artifacts: [], citations: [],
       stepCount: 0, maxSteps: bot?.maxSteps || 10, createdAt: now, updatedAt: now
     };
@@ -102,6 +106,61 @@ export class AgentRuntime extends EventEmitter {
       });
     });
     return run;
+  }
+
+  public async delegateBot(parent: Run, targetBotId: string, objective: string): Promise<unknown> {
+    if (!parent.agentId?.startsWith('bot_')) throw new Error('Only an Aira Bot run can delegate work.');
+    const target = await this.botRepo.get(parent.principalId, targetBotId);
+    if (!target) throw new Error('Target bot is not owned by this user or does not exist.');
+    if (target.id === parent.agentId) throw new Error('A bot cannot delegate a task to itself.');
+    const depth = Number(parent.context.delegationDepth || 0);
+    if (!Number.isSafeInteger(depth) || depth < 0 || depth >= 3) throw new Error('Delegation depth limit reached.');
+    const existingChain = Array.isArray(parent.context.delegationChain) ? parent.context.delegationChain.map(String) : [];
+    const chain = [...existingChain, parent.agentId];
+    if (chain.includes(target.id)) throw new Error('Delegation cycle detected.');
+
+    let delegationId = '';
+    const child = await this.createAndExecuteRun(
+      {
+        prompt: objective,
+        intent: 'AGENT_MISSION',
+        modelPolicy: { model: target.model },
+        context: { delegationDepth: depth + 1, delegationChain: chain, parentRunId: parent.id, parentBotId: parent.agentId }
+      },
+      { userId: parent.principalId, sessionId: parent.sessionId, workspaceId: parent.workspaceId || undefined, projectId: parent.projectId || undefined },
+      target,
+      async created => {
+        await this.botRepo.recordTask(parent.principalId, target.id, created.id, `[Delegated by ${parent.agentId}] ${objective}`);
+        const delegation = await this.botOrchestration.createDelegation({
+          ownerId: parent.principalId,
+          parentBotId: parent.agentId!,
+          targetBotId: target.id,
+          parentRunId: parent.id,
+          childRunId: created.id,
+          objective
+        });
+        delegationId = delegation.id;
+        await this.botOrchestration.notify({ ownerId: parent.principalId, botId: target.id, runId: created.id, kind: 'delegation_started', title: `${target.name} received delegated work`, message: objective });
+      }
+    );
+    return { delegationId, childRunId: child.id, targetBotId: target.id, targetBotName: target.name, state: child.state, depth: depth + 1 };
+  }
+
+  public async delegationStatus(parent: Run, delegationId: string): Promise<unknown> {
+    const delegation = await this.botOrchestration.getDelegation(parent.principalId, delegationId);
+    if (!delegation || delegation.parentBotId !== parent.agentId) throw new Error('Delegation was not created by this bot run owner.');
+    const child = await this.runRepo.getRun(delegation.childRunId);
+    if (!child || child.principalId !== parent.principalId) throw new Error('Delegated child run is unavailable.');
+    const synced = await this.botOrchestration.syncDelegation(parent.principalId, delegation.id, child);
+    if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(child.state) && !delegation.completedAt) {
+      await this.botOrchestration.notify({
+        ownerId: parent.principalId, botId: delegation.targetBotId, runId: child.id,
+        kind: child.state === 'COMPLETED' ? 'delegation_completed' : 'delegation_failed',
+        title: child.state === 'COMPLETED' ? 'Delegated task completed' : 'Delegated task needs attention',
+        message: child.state === 'COMPLETED' ? child.content.slice(0, 500) : (child.error || child.state)
+      });
+    }
+    return { delegation: synced || delegation, childRun: { id: child.id, state: child.state, content: child.content, error: child.error, artifacts: child.artifacts } };
   }
 
   public async cancelRun(runId: string): Promise<boolean> {
@@ -184,7 +243,9 @@ export class AgentRuntime extends EventEmitter {
       return executeBotLoop(runId, {
         runs: this.runRepo, models: this.modelRouter, tools: this.toolRegistry, approvals: this.approvalKernel,
         emit: (id, type, data) => this.emitRunEvent(id, type, data),
-        transition: (id, state, error) => this.transitionRunState(id, state, error)
+        transition: (id, state, error) => this.transitionRunState(id, state, error),
+        delegate: (parent, targetBotId, objective) => this.delegateBot(parent, targetBotId, objective),
+        delegationStatus: (parent, delegationId) => this.delegationStatus(parent, delegationId)
       });
     }
     let run = await this.runRepo.getRun(runId);
