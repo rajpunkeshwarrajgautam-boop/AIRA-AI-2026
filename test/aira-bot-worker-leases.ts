@@ -57,7 +57,6 @@ try {
   assert.equal(await runs.assertExecution(seedRun.id, 'worker-A', a!.fence), false, 'stale worker must lose authority');
   assert.equal(await runs.renewExecution(seedRun.id, 'worker-A', a!.fence, 15_000), undefined);
 
-  // Expiration allows a new claimant, but the stale fence can no longer renew or release it.
   await db('runs').where({ id: seedRun.id }).update({ execution_lease_until: Date.now() - 1 });
   const c = await runs.claimExecution(seedRun.id, 'worker-C', 15_000);
   assert.ok(c);
@@ -67,7 +66,6 @@ try {
   assert.equal((await runs.getExecutionLease(seedRun.id))?.owner, 'worker-C');
   assert.equal(await runs.releaseExecution(seedRun.id, 'worker-C', c!.fence), true);
 
-  // Two AgentRuntime instances race the same Bot run. Only one may reach the model boundary.
   const bots = new BotRepository();
   const bot = await bots.create('lease-owner', {
     name: 'Lease Bot', description: '', instructions: 'Finish the task.', model: 'gpt-4o', tools: [], connectorIds: [],
@@ -97,15 +95,22 @@ try {
   };
   const runtimeA = makeRuntime('runtime-A');
   const runtimeB = makeRuntime('runtime-B');
-  // Keep the lease-race assertion focused on execution ownership. Persist the task
-  // before execution so the PGlite socket shim is not asked to multiplex an unrelated
-  // INSERT while the run is concurrently entering its lease-controlled loop.
-  const started = await runtimeA.createRun(
-    { prompt: 'Return one result.', intent: 'AGENT_MISSION', modelPolicy: { model: 'gpt-4o' } },
-    { userId: 'lease-owner', sessionId: 'lease-session' },
-    bot
-  );
+
+  // Seed the run directly through the repository so this concurrency test does not
+  // depend on createAndExecuteRun's setImmediate auto-start. That lets both runtimes
+  // race the same QUEUED row under explicit test control.
+  const raceNow = Date.now();
+  const started: any = {
+    id: 'run_worker_race', principalId: 'lease-owner', agentId: bot.id, sessionId: 'lease-session', workspaceId: null,
+    projectId: null, conversationId: null, intent: 'AGENT_MISSION', state: 'QUEUED',
+    modelPolicy: { model: 'gpt-4o', maxTokens: 4096, temperature: 0.7, extendedThinking: false, timeoutMs: 60000 },
+    prompt: 'Return one result.', systemPrompt: '', context: { airaBot: bot }, content: '', thinking: '', toolsUsed: [],
+    toolCalls: [], toolResults: [], artifacts: [], citations: [], stepCount: 0, maxSteps: bot.maxSteps,
+    createdAt: raceNow, updatedAt: raceNow
+  };
+  await runs.saveRun(started);
   await bots.recordTask('lease-owner', bot.id, started.id, started.prompt);
+
   const executionA = (runtimeA as any).executeRunLoop(started.id);
   await new Promise(resolve => setTimeout(resolve, 10));
   await (runtimeB as any).executeRunLoop(started.id);
