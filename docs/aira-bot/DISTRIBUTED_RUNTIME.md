@@ -1,61 +1,49 @@
-# Aira Bot Phase 7 — Distributed Runtime Reliability
+# Aira Bot Phase 7 — Live Distributed Runtime
 
-Status: **IN PROGRESS — distributed foundations, not an end-to-end Phase 7 certification.**
+Status: **Integration implemented; exact-head CI and review required before merge.**
 
-This branch continues PR #12 on the merged Phase 6 baseline (`5aabe0e`). PostgreSQL-backed coordination primitives exist for computer ownership, event cursors, scheduler leadership, outbox claims, runtime heartbeats, and desired/observed lifecycle state. The live API is not yet wired to all of them. A green foundations test or repository workflow must not be reported as a complete Phase 7 PASS.
+Draft PR #12 continues merged Phase 6 baseline `5aabe0e`. The PostgreSQL foundations now serve live API startup, managed computer actions, runner authority, routine dispatch and durable event delivery. No production deployment is included.
 
-## Durable computer ownership
+## Durable authority and actions
 
-`aira_computer_leases` stores one lease per AIRA owner. First claims materialize a sentinel row before locking, so a missing row cannot allow concurrent winners. Every ownership change advances a monotonic fence; release expires the row instead of deleting the fencing high-water mark. Bot runs cannot steal a live human lease or another holder's live lease. Human takeover may explicitly preempt BOT ownership. Tokens and optional fences reject stale assertions/releases. Renewal locks the row and reads PostgreSQL wall-clock time after the lock wait; caller clocks never determine lease validity.
+Production uses database-backed computer leases. The in-memory manager remains for explicitly selected local fixtures. Bot authority is bound to the captured run execution owner/fence, not just a reusable run ID. Action preparation locks and validates current run and computer authority using database time.
 
-The existing `ManagedComputerRuntime` and API still use the in-memory `ComputerLeaseManager`. The coordinator is a foundation for replacing that path, not evidence that the live path is horizontally safe. Integration must bind computer authority to the current run execution fence, not just a reusable run ID, and enforce authority at the side-effect boundary.
+Every mutation commits a STARTED action before an external effect. One unresolved action per owner is enforced by a partial unique index. Expiry, takeover and release cannot bypass it. Human callers supply and retain `Idempotency-Key`; changed arguments under the same key are rejected. The browser persists a digest-keyed identifier in session storage across uncertain responses/reloads, clearing it only after a successfully parsed response. Bodies and lease tokens are not persisted there.
 
-## Durable computer events
+The runner requires signed method/route/body/action/lease authority. Its persistent `/data/.control` journal fsyncs fencing high-water marks and STARTED receipts before execution, and completed receipts before replying. Completed replays return stored responses; STARTED replays never execute again. Authority expires no later than the captured run/computer lease. Synchronize runner clocks; PostgreSQL time governs coordination.
 
-`aira_computer_event_sequences` allocates owner-global monotonically increasing cursors transactionally. `aira_computer_events` stores replayable events keyed by `(owner_id, sequence)`. A reconnecting API instance can replay after a cursor without depending on the process that originally observed the action.
+A saved runner receipt recovers a lost API acknowledgement. An effect without a completed receipt is deliberately ambiguous, not exactly-once. New actions remain blocked. Inspect `GET /bots/:id/computer/actions`; explicit acknowledgement uses `POST /bots/:id/computer/actions/:actionId/acknowledge` with `acknowledgeMayHaveExecuted: true`. It first serializes durable runner revocation, blocking delayed replay, then abandons the database action. It does not undo the effect, and the old identifier remains rejected.
 
-## Transactional outbox
+## Durable delivery
 
-`aira_runtime_outbox` provides deduplicated durable delivery records. Claims use row locks with `SKIP LOCKED`; expired claims are reclaimable after worker death. Completion/retry requires the captured attempt number as well as the worker ID and an unexpired claim. Reusing a worker ID cannot acknowledge an older attempt. Consumers must be idempotent by dedupe key: delivery is at least once, not exactly once. No production publisher has been integrated yet.
+Computer events use owner-global cursors for cross-instance polling/SSE replay. Action completion atomically commits its result and outbox record. The live publisher uses attempt-fenced claims, bounded exponential retry and unique event `source_key` deduplication. Delivery is at least once; canonical completion redelivery does not duplicate its event. Direct operational audit events remain separate.
 
-## Scheduler leadership and recovery
+## Lifecycle and readiness
 
-`aira_scheduler_leases` provides fenced leadership using database time and serialized first claims. `RuntimeReliabilityService` heartbeats its runtime instance and renews/acquires the `aira-bot-routines` leadership lease. Leadership assertions consult PostgreSQL rather than trusting a cached token; heartbeat failure clears cached authority. The live routine engine is not yet connected to the service. Routine slot uniqueness prevents duplicate slot claims but does not alone establish crash-safe job delivery after a claim.
+API startup starts receipt recovery, interrupted-run recovery, heartbeat/leadership, guarded lifecycle reconciliation and the publisher. Shutdown stops timers and the routine engine. Lifecycle intent is persisted only inside accepted action authority; observations match exact generations.
 
-## Computer lifecycle reconciliation
+`/api/health` is liveness. `/api/ready` requires completed startup, database availability, a fresh heartbeat, active routine leadership and no lifecycle backlog. Database loss returns 503. Outbox depth is diagnostic, not evidence of successful delivery.
 
-`aira_computer_instances` records desired and observed state with generation numbers. Concurrent first intents are serialized. Observations must match the exact current generation. A reconciler locks the lifecycle row across its idempotent provider lifecycle call, observation, and durable notification. Competing reconcilers cannot concurrently apply the same generation. Provider errors remain in the backlog; process death rolls back database progress. Observation and outbox notification commit together.
+## Routine and worker recovery
 
-Provider lifecycle operations must tolerate retry after an ambiguous crash. PostgreSQL cannot roll back an external Docker/browser action. These primitives do not guarantee exactly-once arbitrary tool side effects. Live API intent, lifecycle calls, and provider failure recovery remain integration work.
+The routine engine checks database-backed leadership. Unique slots have expiring dispatch tokens and monotonic fences. Immutable routine snapshots survive dispatcher death and later configuration edits. Run persistence, task registration and slot attachment commit together under the dispatch fence. Expired orphan claims are reclaimed; stale completion/failure cannot overwrite recovered slots. Cursors never regress.
 
-## Health and readiness contract
+Periodic run recovery skips active execution leases and approval waits. Expired interrupted workers use normal execution fencing. Uncertain external effects are never blindly retried.
 
-`RuntimeReliabilityService.health()` distinguishes liveness from distributed readiness inputs. Database failure reports not ready. Foundation readiness requires a fresh API instance heartbeat, the specific routine leadership lease, and no reconciliation backlog. Historical dead-instance rows are diagnostics rather than a permanent outage. Pending outbox depth is reported, not treated as proof of successful delivery. The live public API probes still need integration and multi-instance HTTP tests.
+## Verification
 
-## Certification
+- `test:bot:worker-leases`: Phase 6 atomic execution writes/events and stale-worker rejection.
+- `test:bot:distributed-runtime`: real PostgreSQL, eight OS workers, skewed clocks, first claims, lock-wait expiry, lifecycle generations, outbox attempts and readiness.
+- `test:bot:live-runtime`: actual BotRouter/AgentRuntime/managed-provider HTTP path in separate API processes and the actual runner. Covers cross-instance ownership/files/events, request-key conflicts, rejected runner authority, killed API receipt recovery, runner crash ambiguity/revocation, killed execution-worker recovery, orphan routine dispatch and real database network interruption.
+- `AIRA_TEST_USE_DOCKER_RUNNER=true`: same integration against a persistent Docker container, including Chromium start/stop.
+- CI repeats leases/foundations five times, builds the image, runs native and Docker live gates, then computer/browser regressions.
 
-`npm run test:bot:distributed-runtime` invokes actual coordinator/service methods against an isolated real PostgreSQL database with the repository migrations. Eight separate OS workers use independent pools and deliberately skewed clocks. Five contention rounds each cover first computer claims, scheduler claims, lifecycle generations, and event allocation. The gate also covers:
+Use only a test PostgreSQL account allowed to create/drop disposable databases. Never point certification at production.
 
-- release/reacquisition fencing and stale owner rejection;
-- expiry during actual row-lock waits;
-- killed lease owners and killed reconcilers;
-- replay from a new coordinator instance;
-- outbox dedupe, exclusive claims, reclaim and same-worker attempt fencing;
-- atomic observation/outbox rollback under an injected database constraint failure;
-- competing reconcilers, provider failure retry, heartbeat loss and readiness inputs.
+## Boundaries
 
-Set `AIRA_TEST_DATABASE_URL` or `DATABASE_URL` to a test PostgreSQL account allowed to create/drop disposable databases. Never point this test at production. The normal workflow repeats the worker and distributed foundation gates five times each before computer/browser E2E.
+API instances must share PostgreSQL, runner secret, Docker engine and durable owner volumes. Multi-host runner routing is not implemented. Arbitrary external effects are not guaranteed exactly once. One runner per owner volume and trusted host/terminal administration are assumed; deleting/modifying the journal invalidates receipt guarantees. Docker CLI lifecycle interruption may require operator restoration before acknowledgement.
 
-## Remaining Phase 7 acceptance gates
+Native tests do not certify the Docker deployment host. The CI container gate tests the image/shared protocol with injected provider address resolution for fixture isolation; production Docker allocation and the deferred Oracle Cloud host smoke remain separate promotion gates. Real model-provider calls and Firebase sign-in still require credentials.
 
-1. Replace process-local computer ownership and event replay in the live managed runtime/API with durable authority and cursors, preserving human takeover behavior.
-2. Fence computer actions at the runner/provider boundary and introduce durable action receipts or an explicit fail-closed ambiguity contract for non-idempotent actions. Cover crash after a side effect but before acknowledgement.
-3. Connect lifecycle intent/reconciliation and truthful readiness to API startup/shutdown. Verify two actual API instances and provider restart recovery.
-4. Connect routine leadership and crash-safe job dispatch; integrate an idempotent outbox publisher with retry/backoff.
-5. Exercise real worker/runner process interruption and database connectivity loss, not only coordinator methods. Re-run all Phase 6 gates and require exact-head terminal CI success before complete Phase 7 certification.
-
-The draft PR must remain unmerged until these integration gates and review are complete.
-
-## Deployment boundary
-
-This phase changes repository schema and coordination semantics but does not run production migrations or mutate the deferred Oracle Cloud host. The deployment-host Docker smoke gate remains separate and must be run before production promotion.
+Migration 014 is additive repository schema work. No production migration, host change or deployment has occurred. Keep PR #12 draft and unmerged until exact-head terminal CI success and review.

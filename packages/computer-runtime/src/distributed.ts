@@ -62,6 +62,10 @@ export class DistributedRuntimeCoordinator {
       const now = await this.databaseTime(trx);
       const active = current && n(current.lease_until) > now;
       const sameHolder = current.holder_id === input.holderId && current.bot_id === input.botId && current.mode === input.mode;
+      if (!sameHolder || !active || input.preemptBot) {
+        const unresolved = await trx('aira_computer_actions').where({ owner_id: input.ownerId }).whereIn('status', ['STARTED', 'AMBIGUOUS']).first();
+        if (unresolved) throw new Error('COMPUTER_ACTION_UNCERTAIN');
+      }
       if (active && !sameHolder) {
         const humanMayPreemptBot = input.preemptBot && input.mode === 'HUMAN' && current.mode === 'BOT';
         if (!humanMayPreemptBot) throw new Error(current.mode === 'HUMAN' ? 'COMPUTER_TAKEN_OVER' : 'COMPUTER_BUSY');
@@ -100,11 +104,14 @@ export class DistributedRuntimeCoordinator {
   }
 
   async releaseComputerLease(ownerId: string, token: string, fence?: number): Promise<boolean> {
-    let query = this.knex('aira_computer_leases').where({ owner_id: ownerId, token });
-    if (fence !== undefined) query = query.andWhere({ fence });
-    // Keep the fencing high-water mark across release/reacquisition.
-    return (await query.whereRaw('lease_until > floor(extract(epoch FROM clock_timestamp()) * 1000)')
-      .update({ lease_until: 0 })) === 1;
+    return this.knex.transaction(async trx => {
+      const row = await trx('aira_computer_leases').where({ owner_id: ownerId }).forUpdate().first();
+      const now = await this.databaseTime(trx);
+      if (!row || row.token !== token || (fence !== undefined && n(row.fence) !== fence) || n(row.lease_until) <= now) return false;
+      if (await trx('aira_computer_actions').where({ owner_id: ownerId }).whereIn('status', ['STARTED', 'AMBIGUOUS']).first()) return false;
+      await trx('aira_computer_leases').where({ owner_id: ownerId }).update({ lease_until: 0 });
+      return true;
+    });
   }
 
   async appendComputerEvent(ownerId: string, botId: string, type: string, data: Record<string, unknown> = {}, timestamp = Date.now()): Promise<DurableComputerEvent> {

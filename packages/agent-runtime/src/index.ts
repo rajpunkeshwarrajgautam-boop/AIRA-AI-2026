@@ -25,6 +25,7 @@ import { ApprovalKernel } from '../../approvals/src/index.js';
 import { BrainV2KnowledgeEngine } from '../../knowledge/src/index.js';
 
 import { RunRepository, withExecutionLease, EXECUTION_LEASE_LOST } from './repositories.js';
+import { computerRuntime, type ManagedComputerRuntime } from '../../computer-runtime/src/managed.js';
 
 function executionLeaseTtl(): number {
   const parsed = Number(process.env.AIRA_RUN_LEASE_TTL_MS || 120_000);
@@ -44,7 +45,8 @@ export class AgentRuntime extends EventEmitter {
     private approvalKernel: ApprovalKernel,
     private knowledgeEngine: BrainV2KnowledgeEngine,
     private runRepo: RunRepository,
-    private workspaceRoot = process.cwd()
+    private workspaceRoot = process.cwd(),
+    private computer: ManagedComputerRuntime = computerRuntime
   ) {
     super();
   }
@@ -82,7 +84,7 @@ export class AgentRuntime extends EventEmitter {
     this.emit('run_event', { runId, event });
   }
 
-  public async createAndExecuteRun(request: CreateRunRequest, principal: ExecutionPrincipal, bot?: Bot, registerTask?: (run: Run) => Promise<void>): Promise<Run> {
+  public async createAndExecuteRun(request: CreateRunRequest, principal: ExecutionPrincipal, bot?: Bot, registerTask?: (run: Run) => Promise<void>, persist?: (run: Run) => Promise<void>): Promise<Run> {
     const runId = `run_${crypto.randomUUID().slice(0, 10)}`;
     const now = Date.now();
     const policy: ModelPolicy = this.modelRouter.resolvePolicy(request.modelPolicy?.model || 'aira-auto', request.intent);
@@ -104,7 +106,8 @@ export class AgentRuntime extends EventEmitter {
       stepCount: 0, maxSteps: bot?.maxSteps || 10, createdAt: now, updatedAt: now
     };
     if (bot) this.modelRouter.getAdapter(policy);
-    await this.runRepo.saveRun(run);
+    if (persist) await persist(run);
+    else await this.runRepo.saveRun(run);
     await this.emitRunEvent(runId, 'run.created', { runId, state: run.state });
     if (registerTask) {
       try { await registerTask(run); }
@@ -296,6 +299,7 @@ export class AgentRuntime extends EventEmitter {
         emit: (id, type, data) => this.emitRunEvent(id, type, data),
         transition: (id, state, error) => this.transitionRunState(id, state, error),
         assertLease,
+        computer: this.computer,
         delegate: (parent, targetBotId, objective) => this.delegateBot(parent, targetBotId, objective),
         delegationStatus: (parent, delegationId) => this.delegationStatus(parent, delegationId)
       });

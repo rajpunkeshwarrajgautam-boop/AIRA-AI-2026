@@ -34,6 +34,7 @@ jobs:
       - run: npm run typecheck:api
       - run: npm run lint
       - run: node --check docker/aira-computer/runner.mjs
+      - run: node --check docker/aira-computer/action-journal.mjs
       - run: npm run test:bot:isolation
       - run: npm run test:bot:orchestration
       - run: npm run test:bot:skills-connectors
@@ -48,6 +49,11 @@ jobs:
             npm run test:bot:distributed-runtime
           done
       - run: npx playwright install --with-deps chromium
+      - run: npm run test:bot:live-runtime
+      - run: docker build -t aira-computer:certified docker/aira-computer
+      - run: npm run test:bot:live-runtime
+        env:
+          AIRA_TEST_USE_DOCKER_RUNNER: 'true'
       - run: npm run test:bot:computer
       - run: npm run test:bot:browser
       - uses: actions/upload-artifact@v4

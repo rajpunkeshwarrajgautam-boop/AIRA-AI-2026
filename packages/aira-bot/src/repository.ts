@@ -27,9 +27,9 @@ export class BotRepository {
     if (await db('aira_bot_tasks').where({ owner_id: owner, bot_id: id }).first()) throw new Error('This bot has task history. Keep it to preserve run records.');
     return (await db('aira_bots').where({ owner_id: owner, id }).delete()) > 0;
   }
-  async recordTask(owner: string, botId: string, runId: string, objective: string) {
+  async recordTask(owner: string, botId: string, runId: string, objective: string, database = db) {
     const task = { id: `task_${randomUUID()}`, bot_id: botId, owner_id: owner, run_id: runId, objective, created_at: Date.now() };
-    await db('aira_bot_tasks').insert(task);
+    await database('aira_bot_tasks').insert(task);
     return task;
   }
   async tasks(owner: string, botId: string) {

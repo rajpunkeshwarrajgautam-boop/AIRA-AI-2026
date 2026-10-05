@@ -9,6 +9,7 @@ export interface RuntimeReliabilityOptions {
   heartbeatMs?: number;
   schedulerLeaseMs?: number;
   reconcileMs?: number;
+  applyState?: (ownerId: string, state: DesiredComputerState) => Promise<void>;
 }
 
 export class RuntimeReliabilityService {
@@ -72,6 +73,7 @@ export class RuntimeReliabilityService {
   }
 
   private async applyDesiredState(ownerId: string, desiredState: DesiredComputerState): Promise<void> {
+    if (this.options.applyState) return this.options.applyState(ownerId, desiredState);
     // Computer providers are per-user; botId is intentionally a reconciliation sentinel.
     // Docker provider ignores bot identity for lifecycle and keeps per-bot workspace separation in /data.
     const botId = '__reconciler__';

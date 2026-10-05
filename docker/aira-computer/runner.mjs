@@ -5,11 +5,12 @@ import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import path from 'node:path';
 import { chromium } from 'playwright';
+import { createActionJournal } from './action-journal.mjs';
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
-const PORT = 7777;
-const DATA_ROOT = '/data';
+const PORT = Number(process.env.AIRA_RUNNER_PORT || 7777);
+const DATA_ROOT = process.env.AIRA_RUNNER_DATA_ROOT || '/data';
 const PROFILE_ROOT = path.join(DATA_ROOT, 'profile');
 const MAX_TEXT_BYTES = 256 * 1024;
 const MAX_TERMINAL_BYTES = 128 * 1024;
@@ -26,6 +27,16 @@ function requireAuth(req, res, next) {
   next();
 }
 app.use(requireAuth);
+const journal = createActionJournal(path.join(DATA_ROOT, '.control'), token);
+app.get('/actions/:id', async (req, res) => {
+  try { const receipt = await journal.receipt(req.params.id); res.status(receipt ? 200 : 404).json(receipt || { error: 'Action receipt not found.' }); }
+  catch (error) { fail(res, 400, error.message); }
+});
+app.post('/actions/:id/revoke', async (req, res) => {
+  try { await journal.revoke(req.params.id); res.json({ revoked: true }); }
+  catch (error) { fail(res, 400, error.message); }
+});
+app.use(journal.middleware);
 
 function botKey(raw) {
   const value = String(raw || '');

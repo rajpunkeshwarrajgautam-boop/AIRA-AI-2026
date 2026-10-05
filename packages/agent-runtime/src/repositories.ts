@@ -1,6 +1,7 @@
 import { AgentDefinition, Run, StreamingEvent } from '../../contracts/src/index.js';
 import { db } from '../../db/src/index.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import type { Knex } from 'knex';
 
 export const EXECUTION_LEASE_LOST = 'EXECUTION_LEASE_LOST';
 const executionLeaseContext = new AsyncLocalStorage<{ runId: string; lease: RunExecutionLease }>();
@@ -11,7 +12,7 @@ export function withExecutionLease<T>(runId: string, lease: RunExecutionLease, e
   return executionLeaseContext.run({ runId, lease }, execute);
 }
 
-function executionLeaseFor(runId: string): RunExecutionLease | undefined {
+export function executionLeaseFor(runId: string): RunExecutionLease | undefined {
   const context = executionLeaseContext.getStore();
   return context?.runId === runId ? context.lease : undefined;
 }
@@ -30,7 +31,7 @@ export interface RunExecutionLease {
 }
 
 export interface RunRepository {
-  saveRun(run: Run): Promise<void>;
+  saveRun(run: Run, database?: Knex): Promise<void>;
   getRun(id: string): Promise<Run | undefined>;
   listRuns(): Promise<Run[]>;
   getInterruptedRuns(): Promise<Run[]>;
@@ -97,7 +98,7 @@ export class PostgresAgentRepository implements AgentRepository {
 }
 
 export class PostgresRunRepository implements RunRepository {
-  async saveRun(run: Run): Promise<void> {
+  async saveRun(run: Run, database: Knex = db): Promise<void> {
     const values = {
       id: run.id,
       principal_id: run.principalId,
@@ -136,7 +137,7 @@ export class PostgresRunRepository implements RunRepository {
     if (lease) {
       // The predicate is checked with the write under PostgreSQL's row lock.
       // Database time also checks expiry after any lock wait, not before dispatch.
-      const updated = await db.transaction<number>(async trx => {
+      const updated = await database.transaction<number>(async trx => {
         await trx('runs').where({ id: run.id }).forUpdate().first('id');
         const rows = await trx('runs')
           .where({ id: run.id, execution_owner: lease.owner, execution_fence: lease.fence })
@@ -148,7 +149,7 @@ export class PostgresRunRepository implements RunRepository {
       if (!updated) throw new Error(EXECUTION_LEASE_LOST);
       return;
     }
-    await db('runs').insert(values).onConflict('id').merge().whereNotIn('runs.state', ['COMPLETED', 'FAILED', 'CANCELLED']);
+    await database('runs').insert(values).onConflict('id').merge().whereNotIn('runs.state', ['COMPLETED', 'FAILED', 'CANCELLED']);
   }
 
   async getRun(id: string): Promise<Run | undefined> {
@@ -168,10 +169,14 @@ export class PostgresRunRepository implements RunRepository {
   }
 
   async claimInterruptedRun(runId: string, owner: string, ttlMs: number): Promise<boolean> {
-    const now = Date.now();
+    const now = Number((await db.raw('SELECT floor(extract(epoch FROM clock_timestamp()) * 1000) AS now')).rows[0].now);
     const until = now + ttlMs;
     const result = await db('runs')
       .where({ id: runId })
+      .whereNotIn('state', ['COMPLETED', 'FAILED', 'CANCELLED', 'WAITING_FOR_APPROVAL'])
+      .andWhere(function() {
+        this.whereNull('execution_owner').orWhereRaw('execution_lease_until < floor(extract(epoch FROM clock_timestamp()) * 1000)');
+      })
       .andWhere(function() {
         this.whereNull('recovery_owner').orWhere('recovery_lease_until', '<', now);
       })
@@ -180,40 +185,34 @@ export class PostgresRunRepository implements RunRepository {
   }
 
   async claimExecution(runId: string, owner: string, ttlMs: number): Promise<RunExecutionLease | undefined> {
-    const now = Date.now();
-    const until = now + Math.max(5_000, ttlMs);
-    const rows = await db('runs')
-      .where({ id: runId })
-      .whereNotIn('state', ['COMPLETED', 'FAILED', 'CANCELLED'])
-      .andWhere(function() {
-        this.whereNull('execution_owner').orWhereNull('execution_lease_until').orWhere('execution_lease_until', '<', now);
-      })
-      .update({
-        execution_owner: owner,
-        execution_lease_until: until,
-        execution_fence: db.raw('COALESCE(execution_fence, 0) + 1')
-      })
-      .returning(['execution_fence', 'execution_lease_until']);
-    if (!rows[0]) return undefined;
-    return { owner, fence: Number(rows[0].execution_fence), leaseUntil: Number(rows[0].execution_lease_until) };
+    return db.transaction(async trx => {
+      const run = await trx('runs').where({ id: runId }).forUpdate().first();
+      const now = Number((await trx.raw('SELECT floor(extract(epoch FROM clock_timestamp()) * 1000) AS now')).rows[0].now);
+      if (!run || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state) ||
+        (run.execution_owner && run.execution_lease_until !== null && Number(run.execution_lease_until) >= now)) return undefined;
+      const fence = Number(run.execution_fence || 0) + 1;
+      const leaseUntil = now + Math.max(5000, ttlMs);
+      await trx('runs').where({ id: runId }).update({ execution_owner: owner, execution_lease_until: leaseUntil, execution_fence: fence });
+      return { owner, fence, leaseUntil };
+    });
   }
 
   async renewExecution(runId: string, owner: string, fence: number, ttlMs: number): Promise<RunExecutionLease | undefined> {
-    const now = Date.now();
-    const until = now + Math.max(5_000, ttlMs);
-    const rows = await db('runs')
-      .where({ id: runId, execution_owner: owner, execution_fence: fence })
-      .andWhere('execution_lease_until', '>=', now)
-      .whereNotIn('state', ['COMPLETED', 'FAILED', 'CANCELLED'])
-      .update({ execution_lease_until: until })
-      .returning(['execution_fence', 'execution_lease_until']);
-    if (!rows[0]) return undefined;
-    return { owner, fence: Number(rows[0].execution_fence), leaseUntil: Number(rows[0].execution_lease_until) };
+    return db.transaction(async trx => {
+      const run = await trx('runs').where({ id: runId }).forUpdate().first();
+      const now = Number((await trx.raw('SELECT floor(extract(epoch FROM clock_timestamp()) * 1000) AS now')).rows[0].now);
+      if (!run || run.execution_owner !== owner || Number(run.execution_fence) !== fence ||
+        run.execution_lease_until === null || Number(run.execution_lease_until) < now ||
+        ['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)) return undefined;
+      const leaseUntil = now + Math.max(5000, ttlMs);
+      await trx('runs').where({ id: runId }).update({ execution_lease_until: leaseUntil });
+      return { owner, fence, leaseUntil };
+    });
   }
 
   async assertExecution(runId: string, owner: string, fence: number): Promise<boolean> {
-    const row = await db('runs').where({ id: runId, execution_owner: owner, execution_fence: fence }).first('execution_lease_until');
-    return Boolean(row && Number(row.execution_lease_until) >= Date.now());
+    return Boolean(await db('runs').where({ id: runId, execution_owner: owner, execution_fence: fence })
+      .whereRaw('execution_lease_until >= floor(extract(epoch FROM clock_timestamp()) * 1000)').first('id'));
   }
 
   async releaseExecution(runId: string, owner: string, fence: number): Promise<boolean> {

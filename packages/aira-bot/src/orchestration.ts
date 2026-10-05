@@ -5,6 +5,7 @@ import { db } from '../../db/src/index.js';
 import type { ExecutionPrincipal, Run } from '../../contracts/src/index.js';
 import type { Bot } from './contracts.js';
 import { BotRepository } from './repository.js';
+import { PostgresRunRepository } from '../../agent-runtime/src/repositories.js';
 
 const validTimezone = (value: string) => {
   try { new Intl.DateTimeFormat('en-US', { timeZone: value }).format(); return true; }
@@ -55,6 +56,9 @@ export interface BotRoutine extends RoutineInput {
 }
 
 export interface BotRoutineRun {
+  dispatchSnapshot?: BotRoutine;
+  dispatchToken?: string;
+  dispatchFence?: number;
   id: string;
   routineId: string;
   ownerId: string;
@@ -159,10 +163,32 @@ export class BotOrchestrationRepository {
   async claimRoutineSlot(routine: BotRoutine, scheduledFor: number): Promise<BotRoutineRun | undefined> {
     const record = {
       id: `rrun_${randomUUID()}`, routine_id: routine.id, owner_id: routine.ownerId, bot_id: routine.botId,
-      scheduled_for: scheduledFor, status: 'CLAIMED', created_at: Date.now()
+      scheduled_for: scheduledFor, status: 'CLAIMED', created_at: Date.now(), dispatch_snapshot: JSON.stringify(routine)
     };
-    const rows = await db('aira_bot_routine_runs').insert(record).onConflict(['routine_id', 'scheduled_for']).ignore().returning('*');
-    return rows[0] ? this.mapRoutineRun(rows[0]) : undefined;
+    return db.transaction(async trx => {
+      await trx('aira_bot_routine_runs').insert(record).onConflict(['routine_id', 'scheduled_for']).ignore();
+      const slot = await trx('aira_bot_routine_runs').where({ routine_id: routine.id, scheduled_for: scheduledFor }).forUpdate().first();
+      const now = Number((await trx.raw('SELECT floor(extract(epoch FROM clock_timestamp()) * 1000) AS now')).rows[0].now);
+      if (!slot || slot.status !== 'CLAIMED' || Number(slot.dispatch_until || 0) > now) return undefined;
+      const dispatch = { dispatch_token: randomUUID(), dispatch_until: now + 30000, dispatch_fence: Number(slot.dispatch_fence || 0) + 1 };
+      await trx('aira_bot_routine_runs').where({ id: slot.id }).update(dispatch);
+      return this.mapRoutineRun({ ...slot, ...dispatch });
+    });
+  }
+
+  async registerRoutineRun(claim: BotRoutineRun, routine: BotRoutine, run: Run): Promise<void> {
+    await db.transaction(async trx => {
+      const slot = await trx('aira_bot_routine_runs').where({ id: claim.id }).forUpdate().first();
+      const now = Number((await trx.raw('SELECT floor(extract(epoch FROM clock_timestamp()) * 1000) AS now')).rows[0].now);
+      if (!slot || slot.status !== 'CLAIMED' || slot.dispatch_token !== claim.dispatchToken ||
+        Number(slot.dispatch_fence) !== claim.dispatchFence || Number(slot.dispatch_until) <= now) throw new Error('ROUTINE_DISPATCH_LEASE_LOST');
+      await new PostgresRunRepository().saveRun(run, trx);
+      await new BotRepository().recordTask(routine.ownerId, routine.botId, run.id, `[Routine: ${routine.name}] ${routine.objective}`, trx);
+      await trx('aira_bot_routine_runs').where({ id: claim.id }).update({ run_id: run.id, status: 'RUNNING', dispatch_token: null, dispatch_until: null });
+      await trx('aira_bot_routines').where({ id: routine.id, owner_id: routine.ownerId })
+        .where(builder => builder.whereNull('last_scheduled_for').orWhere('last_scheduled_for', '<=', claim.scheduledFor))
+        .update({ last_scheduled_for: claim.scheduledFor, last_run_id: run.id, updated_at: now });
+    });
   }
 
   async attachRoutineRun(id: string, runId: string): Promise<void> {
@@ -170,11 +196,21 @@ export class BotOrchestrationRepository {
   }
 
   async updateRoutineCursor(routine: BotRoutine, scheduledFor: number, runId?: string): Promise<void> {
-    await db('aira_bot_routines').where({ id: routine.id, owner_id: routine.ownerId }).update({ last_scheduled_for: scheduledFor, last_run_id: runId || null, updated_at: Date.now() });
+    await db('aira_bot_routines').where({ id: routine.id, owner_id: routine.ownerId })
+      .where(builder => builder.whereNull('last_scheduled_for').orWhere('last_scheduled_for', '<=', scheduledFor))
+      .update({ last_scheduled_for: scheduledFor, last_run_id: runId || null, updated_at: Date.now() });
   }
 
-  async failRoutineRun(id: string, error: string): Promise<void> {
-    await db('aira_bot_routine_runs').where({ id }).update({ status: 'FAILED', error: error.slice(0, 4000), completed_at: Date.now() });
+  async failRoutineRun(id: string, error: string, claim?: BotRoutineRun): Promise<boolean> {
+    let query = db('aira_bot_routine_runs').where({ id });
+    if (claim) query = query.where({ status: 'CLAIMED', dispatch_token: claim.dispatchToken, dispatch_fence: claim.dispatchFence })
+      .whereRaw('dispatch_until > floor(extract(epoch FROM clock_timestamp()) * 1000)');
+    return (await query.update({ status: 'FAILED', error: error.slice(0, 4000), completed_at: Date.now() })) === 1;
+  }
+
+  async pendingRoutineSlots(routineId: string): Promise<number[]> {
+    const rows = await db('aira_bot_routine_runs').where({ routine_id: routineId, status: 'CLAIMED' }).orderBy('scheduled_for');
+    return rows.map(row => Number(row.scheduled_for));
   }
 
   async reconcileRoutineRun(id: string, run: Run): Promise<void> {
@@ -222,12 +258,12 @@ export class BotOrchestrationRepository {
     return { id: row.id, ownerId: row.owner_id, botId: row.bot_id, name: row.name, objective: row.objective, cronExpression: row.cron_expression, timezone: row.timezone, enabled: Boolean(row.enabled), lastScheduledFor: row.last_scheduled_for ? Number(row.last_scheduled_for) : undefined, lastRunId: row.last_run_id || undefined, createdAt: Number(row.created_at), updatedAt: Number(row.updated_at) };
   }
   private mapRoutineRun(row: any): BotRoutineRun {
-    return { id: row.id, routineId: row.routine_id, ownerId: row.owner_id, botId: row.bot_id, runId: row.run_id || undefined, scheduledFor: Number(row.scheduled_for), status: row.status, error: row.error || undefined, createdAt: Number(row.created_at), completedAt: row.completed_at ? Number(row.completed_at) : undefined };
+    return { id: row.id, routineId: row.routine_id, ownerId: row.owner_id, botId: row.bot_id, runId: row.run_id || undefined, scheduledFor: Number(row.scheduled_for), status: row.status, error: row.error || undefined, createdAt: Number(row.created_at), completedAt: row.completed_at ? Number(row.completed_at) : undefined, dispatchToken: row.dispatch_token || undefined, dispatchFence: Number(row.dispatch_fence || 0), dispatchSnapshot: typeof row.dispatch_snapshot === 'string' ? JSON.parse(row.dispatch_snapshot) : row.dispatch_snapshot };
   }
 }
 
 export interface BotRunExecutor {
-  createAndExecuteRun(request: any, principal: ExecutionPrincipal, bot?: Bot, registerTask?: (run: Run) => Promise<void>): Promise<Run>;
+  createAndExecuteRun(request: any, principal: ExecutionPrincipal, bot?: Bot, registerTask?: (run: Run) => Promise<void>, persist?: (run: Run) => Promise<void>): Promise<Run>;
   getRun(runId: string): Promise<Run | undefined>;
 }
 
@@ -236,7 +272,8 @@ export class BotRoutineEngine {
   constructor(
     private readonly runtime: BotRunExecutor,
     private readonly repo = new BotOrchestrationRepository(),
-    private readonly bots = new BotRepository()
+    private readonly bots = new BotRepository(),
+    private readonly isLeader?: () => Promise<boolean>
   ) {}
 
   start(intervalMs = 30_000): void {
@@ -246,30 +283,36 @@ export class BotRoutineEngine {
   stop(): void { if (this.timer) clearInterval(this.timer); this.timer = undefined; }
 
   async tick(now = Date.now()): Promise<void> {
+    if (this.isLeader && !await this.isLeader()) return;
     await this.reconcile();
     for (const routine of await this.repo.listEnabledRoutines()) {
       try {
         const interval = CronExpressionParser.parse(routine.cronExpression, { currentDate: new Date(now), tz: routine.timezone });
-        const scheduledFor = interval.prev().getTime();
-        if (routine.lastScheduledFor && routine.lastScheduledFor >= scheduledFor) continue;
+        const latestSlot = interval.prev().getTime();
+        const pending = await this.repo.pendingRoutineSlots(routine.id);
+        for (const scheduledFor of [...new Set([...pending, latestSlot])].sort((a, b) => a - b)) {
+        if (!pending.includes(scheduledFor) && routine.lastScheduledFor && routine.lastScheduledFor >= scheduledFor) continue;
+        if (this.isLeader && !await this.isLeader()) return;
         const claim = await this.repo.claimRoutineSlot(routine, scheduledFor);
         if (!claim) continue;
+        const dispatched = claim.dispatchSnapshot || routine;
         const bot = await this.bots.get(routine.ownerId, routine.botId);
-        if (!bot) { await this.repo.failRoutineRun(claim.id, 'Routine bot no longer exists.'); continue; }
+        if (!bot) { await this.repo.failRoutineRun(claim.id, 'Routine bot no longer exists.', claim); continue; }
         try {
           const run = await this.runtime.createAndExecuteRun(
-            { prompt: routine.objective, intent: 'AGENT_MISSION', modelPolicy: { model: bot.model }, context: { routineId: routine.id, scheduledFor } },
+            { prompt: dispatched.objective, intent: 'AGENT_MISSION', modelPolicy: { model: bot.model }, context: { routineId: routine.id, scheduledFor } },
             { userId: routine.ownerId, sessionId: `routine:${routine.id}` },
             bot,
-            async created => { await this.bots.recordTask(routine.ownerId, bot.id, created.id, `[Routine: ${routine.name}] ${routine.objective}`); }
+            undefined,
+            async created => { await this.repo.registerRoutineRun(claim, dispatched, created); }
           );
-          await this.repo.attachRoutineRun(claim.id, run.id);
-          await this.repo.updateRoutineCursor(routine, scheduledFor, run.id);
           await this.repo.notify({ ownerId: routine.ownerId, botId: bot.id, runId: run.id, kind: 'routine_started', title: `${routine.name} started`, message: routine.objective });
         } catch (error) {
-          await this.repo.failRoutineRun(claim.id, (error as Error).message);
+          const failed = await this.repo.failRoutineRun(claim.id, (error as Error).message, claim);
+          if (!failed) continue;
           await this.repo.updateRoutineCursor(routine, scheduledFor);
           await this.repo.notify({ ownerId: routine.ownerId, botId: routine.botId, kind: 'routine_failed', title: `${routine.name} could not start`, message: (error as Error).message });
+        }
         }
       } catch (error) { console.error(`[BotRoutineEngine] routine ${routine.id}:`, (error as Error).message); }
     }

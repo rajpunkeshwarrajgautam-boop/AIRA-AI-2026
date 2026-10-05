@@ -29,6 +29,7 @@
     "test:bot:skills-connectors": "node --import tsx test/aira-bot-skills-connectors.ts",
     "test:bot:worker-leases": "node --import tsx test/aira-bot-worker-leases.ts",
     "test:bot:distributed-runtime": "node --import tsx test/aira-bot-distributed-runtime.ts",
+    "test:bot:live-runtime": "node --import tsx test/aira-bot-live-runtime.ts",
     "typecheck:api": "tsc -p tsconfig.api.json"
   },
   "dependencies": {
