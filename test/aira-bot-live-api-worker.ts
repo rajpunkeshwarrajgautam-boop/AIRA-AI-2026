@@ -69,6 +69,8 @@ process.on('message', async (message: any) => {
     if (message.action === 'publish') await live.publisher.tick();
     if (message.action === 'routine-tick') await new BotRoutineEngine(runtime, undefined, undefined, () => live.reliability.isSchedulerLeader()).tick(message.now);
     if (message.action === 'heartbeat') await live.reliability.heartbeat();
+    if (message.action === 'pause-heartbeat') live.reliability.stop();
+    if (message.action === 'resume-heartbeat') await live.reliability.start();
     if (message.action === 'claim-routine') {
       const repository = new BotOrchestrationRepository();
       const routine = await repository.getRoutine(message.owner, message.routineId);

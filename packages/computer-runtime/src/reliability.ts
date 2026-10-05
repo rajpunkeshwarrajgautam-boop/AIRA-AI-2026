@@ -68,7 +68,7 @@ export class RuntimeReliabilityService {
   }
 
   async health() {
-    try { return { live: true as const, ...await this.coordinator.readiness() }; }
+    try { return { live: true as const, ...await this.coordinator.readiness(90_000, this.instanceId) }; }
     catch { return { live: true as const, ready: false, database: false, schedulerLeader: false }; }
   }
 
@@ -77,8 +77,13 @@ export class RuntimeReliabilityService {
     // Computer providers are per-user; botId is intentionally a reconciliation sentinel.
     // Docker provider ignores bot identity for lifecycle and keeps per-bot workspace separation in /data.
     const botId = '__reconciler__';
-    if (desiredState === 'RUNNING') { await this.provider.start(ownerId, botId); return; }
+    if (desiredState === 'RUNNING') {
+      const result = await this.provider.start(ownerId, botId);
+      if (result.state !== 'RUNNING') throw new Error(result.lastError || 'Computer did not reach RUNNING.');
+      return;
+    }
     if (desiredState === 'SUSPENDED' && 'suspend' in this.provider && typeof (this.provider as any).suspend === 'function') { await (this.provider as any).suspend(ownerId); return; }
-    await this.provider.stop(ownerId, botId);
+    const result = await this.provider.stop(ownerId, botId);
+    if (result.state !== 'STOPPED') throw new Error(result.lastError || 'Computer did not reach STOPPED.');
   }
 }

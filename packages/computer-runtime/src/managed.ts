@@ -61,12 +61,18 @@ export class ManagedComputerRuntime {
 
   async reconcileState(ownerId: string, state: 'RUNNING' | 'STOPPED' | 'SUSPENDED') {
     await this.operate(ownerId, '__reconciler__', 'lifecycle.' + state, {}, async () => {
-      if (state === 'RUNNING') return this.provider.start(ownerId, '__reconciler__');
+      if (state === 'RUNNING') {
+        const result = await this.provider.start(ownerId, '__reconciler__');
+        if (result.state !== 'RUNNING') throw new Error(result.lastError || 'Computer did not reach RUNNING.');
+        return result;
+      }
       if (state === 'SUSPENDED' && this.provider instanceof DockerComputerProvider) {
         await this.provider.suspend(ownerId);
         return;
       }
-      return this.provider.stop(ownerId, '__reconciler__');
+      const result = await this.provider.stop(ownerId, '__reconciler__');
+      if (result.state !== 'STOPPED') throw new Error(result.lastError || 'Computer did not reach STOPPED.');
+      return result;
     });
   }
 
@@ -131,7 +137,7 @@ export class ManagedComputerRuntime {
     const result = await this.operate(ownerId, botId, 'computer.stopped', {}, async () => {
       const generation = await this.coordinator?.setComputerDesiredState(ownerId, this.providerKind, 'STOPPED');
       const result = await this.provider.stop(ownerId, botId);
-      if (generation) await this.coordinator!.recordComputerObservation(ownerId, generation, 'STOPPED');
+      if (generation) await this.coordinator!.recordComputerObservation(ownerId, generation, result.state === 'STOPPED' ? 'STOPPED' : 'ERROR', undefined, result.lastError);
       return result;
     });
     await this.emit(ownerId, botId, 'computer.stopped', { state: result.state }); return this.status(ownerId, botId);

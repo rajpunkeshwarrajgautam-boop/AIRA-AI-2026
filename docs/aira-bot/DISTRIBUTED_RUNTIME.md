@@ -22,7 +22,7 @@ Computer events use owner-global cursors for cross-instance polling/SSE replay. 
 
 API startup starts receipt recovery, interrupted-run recovery, heartbeat/leadership, guarded lifecycle reconciliation and the publisher. Shutdown stops timers and the routine engine. Lifecycle intent is persisted only inside accepted action authority; observations match exact generations.
 
-`/api/health` is liveness. `/api/ready` requires completed startup, database availability, a fresh heartbeat, active routine leadership and no lifecycle backlog. Database loss returns 503. Outbox depth is diagnostic, not evidence of successful delivery.
+`/api/health` is liveness. `/api/ready` requires completed startup, database availability, this API instance's own fresh heartbeat, active routine leadership and no lifecycle backlog. Another healthy API cannot hide this instance's stale heartbeat. Database loss returns 503. Outbox depth is diagnostic, not evidence of successful delivery. Provider lifecycle responses reporting ERROR remain unreconciled and are never published as successful transitions.
 
 ## Routine and worker recovery
 

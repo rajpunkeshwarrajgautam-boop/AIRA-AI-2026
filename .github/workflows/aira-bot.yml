@@ -38,6 +38,7 @@ jobs:
       - run: npm run test:bot:isolation
       - run: npm run test:bot:orchestration
       - run: npm run test:bot:skills-connectors
+      - run: npm run test:bot:phase7-review
       - run: |
           for attempt in 1 2 3 4 5; do
             echo "Worker lease certification attempt ${attempt}/5"

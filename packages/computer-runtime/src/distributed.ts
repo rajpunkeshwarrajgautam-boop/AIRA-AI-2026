@@ -256,12 +256,14 @@ export class DistributedRuntimeCoordinator {
     });
   }
 
-  async readiness(heartbeatGraceMs = 90_000): Promise<{ ready: boolean; database: boolean; schedulerLeader: boolean; staleInstances: number; reconciliationBacklog: number; pendingOutbox: number }> {
+  async readiness(heartbeatGraceMs = 90_000, instanceId?: string): Promise<{ ready: boolean; database: boolean; schedulerLeader: boolean; staleInstances: number; reconciliationBacklog: number; pendingOutbox: number }> {
     await this.knex.raw('SELECT 1');
     const now = await this.databaseTime();
     const stale = await this.knex('aira_runtime_instances').where('heartbeat_at', '<', now - heartbeatGraceMs).count<{ count: string }[]>('* as count');
     const leaders = await this.knex('aira_scheduler_leases').where({ name: 'aira-bot-routines' }).andWhere('lease_until', '>', now).count<{ count: string }[]>('* as count');
-    const active = await this.knex('aira_runtime_instances').where({ role: 'aira-bot-api' }).andWhere('heartbeat_at', '>=', now - heartbeatGraceMs).count<{ count: string }[]>('* as count');
+    const activeQuery = this.knex('aira_runtime_instances').where({ role: 'aira-bot-api' }).andWhere('heartbeat_at', '>=', now - heartbeatGraceMs);
+    if (instanceId !== undefined) activeQuery.andWhere({ instance_id: instanceId });
+    const active = await activeQuery.count<{ count: string }[]>('* as count');
     const backlog = await this.knex('aira_computer_instances').whereRaw('generation > observed_generation OR desired_state <> observed_state').count<{ count: string }[]>('* as count');
     const pending = await this.knex('aira_runtime_outbox').whereIn('status', ['PENDING', 'CLAIMED']).count<{ count: string }[]>('* as count');
     const staleInstances = n(stale[0]?.count); const reconciliationBacklog = n(backlog[0]?.count); const pendingOutbox = n(pending[0]?.count); const schedulerLeader = n(leaders[0]?.count) > 0;

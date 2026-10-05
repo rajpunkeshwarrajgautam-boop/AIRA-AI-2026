@@ -138,6 +138,14 @@ try {
   const b = await startApi('phase7-api-B');
   assert.equal((await fetch(a.url + '/api/ready')).status, 200);
   assert.equal((await fetch(b.url + '/api/ready')).status, 200);
+  await command(a, 'pause-heartbeat');
+  await db('aira_runtime_instances').where({ instance_id: 'phase7-api-A' }).update({ heartbeat_at: 0 });
+  assert.equal((await fetch(a.url + '/api/ready')).status, 503);
+  assert.equal((await fetch(a.url + '/api/health')).status, 200);
+  assert.equal((await fetch(b.url + '/api/ready')).status, 200);
+  await command(a, 'resume-heartbeat');
+  assert.equal((await fetch(a.url + '/api/ready')).status, 200);
+  console.log('PASS live readiness requires its own fresh heartbeat, not another API heartbeat');
   const created = await api(a, '/bots', 'POST', {
     name: 'Distributed fixture', description: '', instructions: 'Use bounded tools.', model: 'gpt-4o',
     tools: ['terminal_exec', 'file_read', 'file_write'], approvalPolicy: 'risky_only', memory: '', skills: [], maxSteps: 4
