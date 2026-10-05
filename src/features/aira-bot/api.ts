@@ -10,6 +10,13 @@ export interface Capabilities {
   scheduling: boolean;
 }
 export interface TaskRecord { id: string; run_id: string; objective: string; created_at: number; run?: Run }
+export interface BotRoutine {
+  id: string; ownerId: string; botId: string; name: string; objective: string; cronExpression: string; timezone: string; enabled: boolean;
+  lastScheduledFor?: number; lastRunId?: string; createdAt: number; updatedAt: number;
+}
+export interface BotRoutineRun { id: string; routineId: string; ownerId: string; botId: string; runId?: string; scheduledFor: number; status: 'CLAIMED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED'; error?: string; createdAt: number; completedAt?: number; run?: Run }
+export interface BotDelegation { id: string; ownerId: string; parentBotId: string; targetBotId: string; parentRunId: string; childRunId: string; objective: string; status: 'STARTED' | 'WAITING' | 'COMPLETED' | 'FAILED' | 'CANCELLED'; createdAt: number; updatedAt: number; completedAt?: number; childRun?: Run }
+export interface BotNotification { id: string; ownerId: string; botId?: string; runId?: string; kind: string; title: string; message: string; readAt?: number; createdAt: number }
 export interface ComputerStatus {
   enabled: boolean;
   state: 'DISABLED' | 'STOPPED' | 'RUNNING' | 'ERROR';
