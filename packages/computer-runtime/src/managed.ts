@@ -38,7 +38,7 @@ export class ManagedComputerRuntime {
   toolDefinitions(): ToolDefinition[] {
     if (!this.enabled) return [];
     const definitions: ToolDefinition[] = [
-      { id: 'tool_browser_open', name: 'browser_open', source: this.providerKind === 'docker' ? 'local-runner' : 'local-runner', executionRuntime: 'LOCAL', permissionLevel: 'READ', idempotencyClass: 'SAFE_READ', description: 'Open a public HTTP(S) page in the persistent computer browser.', parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } },
+      { id: 'tool_browser_open', name: 'browser_open', source: 'local-runner', executionRuntime: 'LOCAL', permissionLevel: 'READ', idempotencyClass: 'SAFE_READ', description: 'Open a public HTTP(S) page in the persistent computer browser.', parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } },
       { id: 'tool_file_read', name: 'file_read', source: 'local-runner', executionRuntime: 'LOCAL', permissionLevel: 'READ', idempotencyClass: 'SAFE_READ', description: 'Read a UTF-8 file from the bot workspace.', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } },
       { id: 'tool_file_write', name: 'file_write', source: 'local-runner', executionRuntime: 'LOCAL', permissionLevel: 'WRITE', idempotencyClass: 'IDEMPOTENT_WRITE', description: 'Write a UTF-8 file to the bot workspace.', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] } }
     ];
@@ -71,7 +71,7 @@ export class ManagedComputerRuntime {
     return {
       ...base,
       provider: { kind: this.providerKind, isolation: this.providerKind === 'docker' ? 'docker-container' : 'host-process' },
-      lease: lease ? { token: undefined as never, ownerId: undefined as never, botId: lease.botId, holderId: lease.holderId, mode: lease.mode, acquiredAt: lease.acquiredAt, expiresAt: lease.expiresAt } as ManagedComputerStatus['lease'] : undefined,
+      lease: lease ? { botId: lease.botId, holderId: lease.holderId, mode: lease.mode, acquiredAt: lease.acquiredAt, expiresAt: lease.expiresAt } : undefined,
       humanControl: lease?.mode === 'HUMAN'
     };
   }
