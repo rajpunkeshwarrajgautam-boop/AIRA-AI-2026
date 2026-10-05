@@ -16,7 +16,7 @@ const { BotRepository } = await import('../packages/aira-bot/src/repository.js')
 const { ModelRouter } = await import('../packages/model-router/src/index.js');
 const { ToolRegistry } = await import('../packages/tool-runtime/src/index.js');
 const { AgentRuntime } = await import('../packages/agent-runtime/src/index.js');
-const { PostgresRunRepository } = await import('../packages/agent-runtime/src/repositories.js');
+const { PostgresRunRepository, withExecutionLease } = await import('../packages/agent-runtime/src/repositories.js');
 const { ApprovalKernel } = await import('../packages/approvals/src/index.js');
 const { PostgresApprovalRepository, PostgresSessionGrantRepository } = await import('../packages/approvals/src/repositories.js');
 const { BrainV2KnowledgeEngine } = await import('../packages/knowledge/src/index.js');
@@ -69,9 +69,70 @@ try {
   assert.equal((await runs.getExecutionLease(seedRun.id))?.owner, 'worker-C');
   assert.equal(await runs.releaseExecution(seedRun.id, 'worker-C', c!.fence), true);
 
+  // Pause after A's preflight check, then transfer ownership before its writes.
+  const staleLease = await runs.claimExecution(seedRun.id, 'stale-worker', 15_000);
+  assert(staleLease);
+  const staleRun = await runs.getRun(seedRun.id);
+  assert(staleRun);
+  assert.equal(await runs.assertExecution(seedRun.id, staleLease.owner, staleLease.fence), true);
+  await db('runs').where({ id: seedRun.id }).update({ execution_lease_until: Date.now() - 1 });
+  await assert.rejects(withExecutionLease(seedRun.id, staleLease, () => runs.saveRun(staleRun)), /EXECUTION_LEASE_LOST/,
+    'expiry alone must reject worker writes, before another owner claims');
+  await assert.rejects(withExecutionLease(seedRun.id, staleLease, () => runs.appendRunEvent({
+    eventId: `evt_${randomUUID()}`, runId: seedRun.id, type: 'run.failed', timestamp: Date.now(), data: {}
+  })), /EXECUTION_LEASE_LOST/, 'expiry alone must reject worker events');
+  const currentLease = await runs.claimExecution(seedRun.id, 'current-worker', 15_000);
+  assert(currentLease && currentLease.fence > staleLease.fence);
+  for (const invalidLease of [
+    { ...currentLease, owner: 'wrong-owner' },
+    { ...currentLease, fence: currentLease.fence - 1 }
+  ]) {
+    await assert.rejects(withExecutionLease(seedRun.id, invalidLease, () => runs.saveRun(staleRun)), /EXECUTION_LEASE_LOST/);
+  }
+  await withExecutionLease(seedRun.id, currentLease, async () => {
+    await runs.saveRun({ ...staleRun, content: 'current owner result' });
+    await runs.appendRunEvent({ eventId: `evt_${randomUUID()}`, runId: seedRun.id, type: 'content.delta', timestamp: Date.now(), data: { delta: 'current owner result' } });
+  });
+  await assert.rejects(withExecutionLease(seedRun.id, staleLease, () => runs.saveRun({ ...staleRun, state: 'FAILED', content: 'stale overwrite' })), /EXECUTION_LEASE_LOST/);
+  await assert.rejects(withExecutionLease(seedRun.id, staleLease, () => runs.appendRunEvent({ eventId: `evt_${randomUUID()}`, runId: seedRun.id, type: 'run.failed', timestamp: Date.now(), data: { error: 'stale error' } })), /EXECUTION_LEASE_LOST/);
+  assert.equal((await runs.getRun(seedRun.id))?.content, 'current owner result');
+  assert.equal((await runs.getRun(seedRun.id))?.state, 'QUEUED');
+  assert.equal((await runs.getRunEvents(seedRun.id)).length, 1, 'a stale worker must not append an event');
+  assert.equal(await runs.releaseExecution(seedRun.id, staleLease.owner, staleLease.fence), false);
+  assert.equal(await runs.releaseExecution(seedRun.id, currentLease.owner, currentLease.fence), true);
+
+  // Expiration must be checked after a row-lock wait, using database time.
+  const waitingLease = await runs.claimExecution(seedRun.id, 'waiting-worker', 15_000);
+  assert(waitingLease);
+  const until = Date.now() + 1000;
+  await db('runs').where({ id: seedRun.id }).update({ execution_lease_until: until });
+  const lock = await db.transaction();
+  let blockedWrite: Promise<void> | undefined;
+  try {
+    await lock('runs').where({ id: seedRun.id }).forUpdate().first('id');
+    blockedWrite = withExecutionLease(seedRun.id, waitingLease, () => runs.saveRun({ ...staleRun, content: 'expired while waiting' }));
+    // Attach rejection handling before releasing the blocker.
+    const rejected = assert.rejects(blockedWrite, /EXECUTION_LEASE_LOST/);
+    let waiting = false;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const result = await db.raw('select count(*)::int as waiting from pg_stat_activity where cardinality(pg_blocking_pids(pid)) > 0');
+      if (result.rows[0].waiting > 0) { waiting = true; break; }
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert(waiting, 'the write must actually wait for the run row lock');
+    await new Promise(resolve => setTimeout(resolve, Math.max(0, until - Date.now() + 50)));
+    await lock.commit();
+    await rejected;
+    assert.equal((await runs.getRun(seedRun.id))?.content, 'current owner result');
+  } finally {
+    if (!lock.isCompleted()) await lock.rollback();
+    await blockedWrite?.catch(() => undefined);
+  }
+  assert.equal(await runs.releaseExecution(seedRun.id, waitingLease.owner, waitingLease.fence), true);
+
   // Repeatedly contend from independent pool clients. Exactly one claimant may own each lease,
   // and every ownership transfer must advance the fencing token.
-  let lastFence = c!.fence;
+  let lastFence = waitingLease.fence;
   for (let round = 0; round < 20; round++) {
     const owners = [`stress-A-${round}`, `stress-B-${round}`];
     const claims = await Promise.all(owners.map(owner => runs.claimExecution(seedRun.id, owner, 15_000)));
@@ -127,7 +188,69 @@ try {
   assert.equal(modelCalls, 1, 'execution fence must prevent duplicate model execution');
   assert.equal(await runs.getExecutionLease(started.id), undefined, 'terminal execution releases the lease');
 
-  console.log('Aira Bot worker leases: PASS — atomic claim, renewal, monotonic fencing, stale-worker rejection, expiry takeover, 20 contention rounds, single model execution');
+  // Exercise the actual runtime wiring, including the failure handler. Force a
+  // takeover at the last await between assertLease and saveRun, not during the
+  // model request (which would only test the existing preflight check).
+  const saveRun = runs.saveRun.bind(runs);
+  for (const scenario of ['bot-completion', 'bot-failure', 'streaming']) {
+    const failure = scenario === 'bot-failure';
+    const id = `run_takeover_${randomUUID()}`;
+    await saveRun({ ...seedRun, id, agentId: scenario === 'streaming' ? null : bot.id,
+      context: { airaBot: bot }, executionCheckpoint: scenario === 'streaming' ? 'SYNTHESIZING' : undefined, content: '', artifacts: [] });
+    const takeoverRuntime = makeRuntime(`paused-worker-${scenario}`);
+    const takeoverAdapter = {
+      ...adapter,
+      async complete() {
+        if (failure) throw new Error('model failed before takeover');
+        return { text: JSON.stringify({ type: 'final', content: 'stale final result' }), model: 'fixture' };
+      },
+      async stream(_messages: unknown, _policy: unknown, emit: (delta: { text: string }) => Promise<void>) {
+        await emit({ text: 'stale final result' });
+      }
+    };
+    (takeoverRuntime as any).modelRouter.getAdapter = () => takeoverAdapter;
+    let transferred = false;
+    runs.saveRun = async run => {
+      if (run.id === id && !transferred && (failure ? run.state === 'FAILED' : run.content === 'stale final result')) {
+        transferred = true;
+        await db('runs').where({ id }).update({ execution_lease_until: Date.now() - 1 });
+        const takeover = await runs.claimExecution(id, 'replacement-worker', 15_000);
+        assert(takeover);
+        const fresh = await runs.getRun(id);
+        assert(fresh);
+        await withExecutionLease(id, takeover, () => saveRun({ ...fresh, state: 'RUNNING', content: 'replacement owns this run' }));
+      }
+      await saveRun(run);
+    };
+    try { await (takeoverRuntime as any).executeRunLoop(id); }
+    finally { runs.saveRun = saveRun; }
+    assert(transferred, 'test must reach the write immediately after its preflight check');
+    const fresh = await runs.getRun(id);
+    assert.equal(fresh?.state, 'RUNNING', 'stale completion or error handling must not terminate the new owner');
+    assert.equal(fresh?.content, 'replacement owns this run');
+    assert.equal(fresh?.error, null);
+    assert.equal(fresh?.artifacts.length, 0);
+    assert.equal((await runs.getExecutionLease(id))?.owner, 'replacement-worker', 'stale cleanup cannot release the replacement lease');
+    assert(!(await runs.getRunEvents(id)).some(event => ['run.failed', 'run.completed', 'artifact.created', 'content.delta'].includes(event.type)), 'stale execution must not publish completion or failure events');
+  }
+
+  // Recovery must acquire execution authority before altering a checkpoint or
+  // failing an interrupted side effect owned by a still-live worker.
+  const recoveryId = `run_recovery_${randomUUID()}`;
+  await saveRun({ ...seedRun, id: recoveryId, state: 'WAITING_FOR_TOOL', executionCheckpoint: 'TOOL_EXECUTING',
+    toolCalls: [{ id: 'review-call', name: 'unregistered-side-effect', arguments: {}, timestamp: Date.now(), status: 'PENDING' }] });
+  const liveOwner = await runs.claimExecution(recoveryId, 'live-worker', 15_000);
+  assert(liveOwner);
+  const recovering = makeRuntime('recovery-worker');
+  await (recovering as any).resumeRun(recoveryId);
+  assert.equal((await runs.getRun(recoveryId))?.state, 'WAITING_FOR_TOOL');
+  assert.equal((await runs.getExecutionLease(recoveryId))?.owner, 'live-worker');
+  await db('runs').where({ id: recoveryId }).update({ execution_lease_until: Date.now() - 1 });
+  await (recovering as any).resumeRun(recoveryId);
+  assert.equal((await runs.getRun(recoveryId))?.state, 'FAILED', 'unsafe interrupted tools still fail after legitimate takeover');
+  assert.equal(await runs.getExecutionLease(recoveryId), undefined);
+
+  console.log('Aira Bot worker leases: PASS — atomic claim, renewal, monotonic fencing, expiry takeover, fenced writes/events, lock-wait expiry, stale completion/error/stream rejection, recovery fencing, 20 contention rounds, single model execution');
 } finally {
   delete process.env.AIRA_WORKER_ID;
   await closeDb();
