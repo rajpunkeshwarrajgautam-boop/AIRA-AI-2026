@@ -32,6 +32,39 @@ export async function up(knex: Knex): Promise<void> {
     table.index(['aggregate_type', 'aggregate_id', 'created_at']);
   });
 
+  // run_events is already the durable execution-event source. The trigger makes
+  // event persistence and outbox publication one PostgreSQL transaction, so a
+  // worker crash cannot leave a committed run event without a deliverable record.
+  await knex.raw(`
+    CREATE OR REPLACE FUNCTION aira_outbox_run_event() RETURNS trigger AS $$
+    DECLARE event_owner text;
+    BEGIN
+      SELECT principal_id INTO event_owner FROM runs WHERE id = NEW.run_id;
+      INSERT INTO aira_runtime_outbox
+        (id, topic, aggregate_type, aggregate_id, owner_id, payload, dedupe_key,
+         status, attempts, available_at, created_at, updated_at)
+      VALUES
+        ('out_run_' || NEW.id, 'run.event', 'run', NEW.run_id, event_owner,
+         jsonb_build_object(
+           'eventId', NEW.id,
+           'runId', NEW.run_id,
+           'sequence', NEW.sequence,
+           'type', NEW.type,
+           'timestamp', NEW."createdAt",
+           'data', NEW.payload
+         ),
+         'run-event:' || NEW.id, 'PENDING', 0, NEW."createdAt", NEW."createdAt", NEW."createdAt")
+      ON CONFLICT (dedupe_key) DO NOTHING;
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+  `);
+  await knex.raw(`
+    CREATE TRIGGER aira_run_event_outbox_trigger
+    AFTER INSERT ON run_events
+    FOR EACH ROW EXECUTE FUNCTION aira_outbox_run_event();
+  `);
+
   await knex.schema.createTable('aira_computer_leases', table => {
     table.string('owner_id').primary();
     table.string('bot_id').notNullable();
@@ -86,6 +119,8 @@ export async function down(knex: Knex): Promise<void> {
   await knex.schema.dropTableIfExists('aira_computer_instances');
   await knex.schema.dropTableIfExists('aira_computer_events');
   await knex.schema.dropTableIfExists('aira_computer_leases');
+  await knex.raw('DROP TRIGGER IF EXISTS aira_run_event_outbox_trigger ON run_events');
+  await knex.raw('DROP FUNCTION IF EXISTS aira_outbox_run_event()');
   await knex.schema.dropTableIfExists('aira_runtime_outbox');
   await knex.schema.dropTableIfExists('aira_runtime_leases');
 }
