@@ -12,6 +12,7 @@
   },
   "include": [
     "apps/api/src",
+    "packages/computer-runtime/src",
     "packages/db/src/migrations"
   ]
 }

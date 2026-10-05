@@ -7,9 +7,10 @@ import type { RunRepository } from '../../agent-runtime/src/repositories.js';
 import type { ModelRouter, ChatMessageInput } from '../../model-router/src/index.js';
 import type { ToolRegistry } from '../../tool-runtime/src/index.js';
 import type { ApprovalKernel } from '../../approvals/src/index.js';
-import { computerRuntime } from '../../computer-runtime/src/managed.js';
+import { computerRuntime as defaultComputerRuntime, type ManagedComputerRuntime } from '../../computer-runtime/src/managed.js';
 
 export interface BotLoopDependencies {
+  computer?: ManagedComputerRuntime;
   runs: RunRepository;
   models: ModelRouter;
   tools: ToolRegistry;
@@ -38,6 +39,7 @@ const DELEGATION_DEFINITIONS: ToolDefinition[] = [
 ];
 
 function availableDefinitions(d: BotLoopDependencies, enabled: BotTool[], connectorIds: string[]): ToolDefinition[] {
+  const computerRuntime = d.computer || defaultComputerRuntime;
   const legacy = d.tools.listDefinitions().filter(tool => enabled.includes(tool.name as BotTool));
   const computer = computerRuntime.toolDefinitions().filter(tool => enabled.includes(tool.name as BotTool));
   const delegation = d.delegate && d.delegationStatus ? DELEGATION_DEFINITIONS.filter(tool => enabled.includes(tool.name as BotTool)) : [];
@@ -128,6 +130,7 @@ function nativeResult(call: ToolCall, startedAt: number, output: unknown, error?
 }
 
 export async function executeBotLoop(runId: string, d: BotLoopDependencies): Promise<void> {
+  const computerRuntime = d.computer || defaultComputerRuntime;
   await assertLease(d);
   let run = await d.runs.getRun(runId);
   if (!run || terminal(run)) return;
@@ -245,7 +248,7 @@ export async function executeBotLoop(runId: string, d: BotLoopDependencies): Pro
       await d.runs.saveRun(run);
       await d.emit(runId, 'content.delta', { delta: action.content });
       await d.emit(runId, 'artifact.created', artifact);
-      computerRuntime.releaseRun(run.principalId, run.id);
+      await computerRuntime.releaseRun(run.principalId, run.id);
       await d.transition(runId, 'COMPLETED');
       return;
     }

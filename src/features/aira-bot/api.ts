@@ -45,6 +45,18 @@ export async function botApi<T>(path: string, options: RequestInit = {}): Promis
     headers.set('x-test-session-id', 'aira-local-session');
   }
   if (!headers.has('x-test-user-id') && import.meta.env.VITE_FIREBASE_PROJECT_ID && import.meta.env.VITE_FIREBASE_API_KEY) { const { botToken } = await import('./auth'); const token = await botToken(); if (token) headers.set('Authorization', `Bearer ${token}`); }
+  // Retain the same intent across an uncertain response, including a page reload.
+  // Only a digest is persisted; request bodies and lease tokens are not stored.
+  let intentStorageKey: string | undefined;
+  if (['POST', 'PUT'].includes((options.method || 'GET').toUpperCase()) && headers.has('x-aira-computer-lease') &&
+    path.includes('/computer/') && !/\/computer\/(takeover|release|actions)(\/|$)/.test(path) && !headers.has('Idempotency-Key')) {
+    const bytes = new TextEncoder().encode(JSON.stringify([path, options.method, options.body, headers.get('x-aira-computer-lease')]));
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    intentStorageKey = `aira.computer.intent.${Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')}`;
+    const intent = sessionStorage.getItem(intentStorageKey) || crypto.randomUUID();
+    sessionStorage.setItem(intentStorageKey, intent);
+    headers.set('Idempotency-Key', intent);
+  }
   const response = await fetch(`/api/aira-bot${path}`, { ...options, headers, credentials: 'include' });
   if (!response.ok) {
     let message = `Aira Bot request fails (${response.status}).`;
@@ -52,9 +64,11 @@ export async function botApi<T>(path: string, options: RequestInit = {}): Promis
     if (response.status === 401) message = 'Sign in to AIRA to access your bots. Local development requires VITE_AIRA_DEV_IDENTITY=true and NODE_ENV=development.';
     throw new Error(message);
   }
-  if (response.status === 204) return undefined as T;
+  if (response.status === 204) { if (intentStorageKey) sessionStorage.removeItem(intentStorageKey); return undefined as T; }
   if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('The Aira Bot API is not connected to this deployment. Start or connect the AIRA runtime API.');
-  return response.json();
+  const result = await response.json();
+  if (intentStorageKey) sessionStorage.removeItem(intentStorageKey);
+  return result;
 }
 export const botPath = (id: string) => `/bots/${encodeURIComponent(id)}`;
 export const terminal = (run: Run) => ['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state);
