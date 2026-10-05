@@ -1,6 +1,19 @@
 import type { BrowserView, ComputerFileEntry, ComputerStatus } from './index.js';
 
 export type ComputerProviderKind = 'local' | 'docker';
+export type ComputerProviderDesiredState = 'ACTIVE' | 'SUSPENDED';
+export type ComputerProviderObservedState = 'RUNNING' | 'STOPPED' | 'MISSING' | 'ERROR' | 'UNKNOWN';
+
+export interface ComputerProviderReconcileResult {
+  observedState: ComputerProviderObservedState;
+  recovered: boolean;
+  error?: string;
+}
+
+export interface ComputerProviderHealth {
+  ok: boolean;
+  detail: string;
+}
 
 export interface BrowserActionResult extends BrowserView {
   action: 'open' | 'click' | 'type' | 'scroll' | 'wait' | 'screenshot';
@@ -24,6 +37,10 @@ export interface ComputerProvider {
   status(ownerId: string, botId: string): Promise<ComputerStatus>;
   start(ownerId: string, botId: string): Promise<ComputerStatus>;
   stop(ownerId: string, botId: string): Promise<ComputerStatus>;
+
+  resourceName?(ownerId: string): string;
+  reconcile?(ownerId: string, desiredState: ComputerProviderDesiredState): Promise<ComputerProviderReconcileResult>;
+  health?(): Promise<ComputerProviderHealth>;
 
   open(ownerId: string, botId: string, url: string): Promise<BrowserView>;
   click?(ownerId: string, botId: string, selector: string): Promise<BrowserActionResult>;
