@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
-import { PGlite } from '@electric-sql/pglite';
-import { PGLiteSocketServer } from '@electric-sql/pglite-socket';
+import { randomUUID } from 'node:crypto';
 
 process.env.NODE_ENV = 'test';
-process.env.DATABASE_URL = 'postgres://postgres:postgres@127.0.0.1:55438/postgres';
+process.env.DATABASE_URL = process.env.AIRA_WORKER_LEASE_DATABASE_URL
+  || process.env.DATABASE_URL
+  || 'postgres://aira:aira@127.0.0.1:5432/aira_db';
 process.env.AIRA_RUN_LEASE_TTL_MS = '15000';
-const pg = await PGlite.create();
-const socket = new PGLiteSocketServer({ db: pg, port: 55438, host: '127.0.0.1', maxConnections: 30 });
-await socket.start();
+
+// Worker leasing is intentionally certified against a real PostgreSQL server.
+// The lease contract depends on independent database sessions under contention;
+// an in-process socket multiplexer cannot faithfully model that boundary.
 const { db, runMigrations, closeDb } = await import('../packages/db/src/index.js');
 await runMigrations();
 const { BotRepository } = await import('../packages/aira-bot/src/repository.js');
@@ -22,7 +24,7 @@ const { BrainV2KnowledgeEngine } = await import('../packages/knowledge/src/index
 const runs = new PostgresRunRepository();
 const now = Date.now();
 const seedRun: any = {
-  id: 'run_lease_seed', principalId: 'lease-owner', agentId: null, sessionId: 'lease-session', workspaceId: null,
+  id: `run_lease_seed_${randomUUID()}`, principalId: 'lease-owner', agentId: null, sessionId: 'lease-session', workspaceId: null,
   projectId: null, conversationId: null, intent: 'ANSWER', state: 'QUEUED', modelPolicy: { model: 'gpt-4o' },
   prompt: 'lease seed', systemPrompt: '', context: {}, content: '', thinking: '', toolsUsed: [], toolCalls: [], toolResults: [],
   artifacts: [], citations: [], stepCount: 0, maxSteps: 8, createdAt: now, updatedAt: now
@@ -67,6 +69,22 @@ try {
   assert.equal((await runs.getExecutionLease(seedRun.id))?.owner, 'worker-C');
   assert.equal(await runs.releaseExecution(seedRun.id, 'worker-C', c!.fence), true);
 
+  // Repeatedly contend from independent pool clients. Exactly one claimant may own each lease,
+  // and every ownership transfer must advance the fencing token.
+  let lastFence = c!.fence;
+  for (let round = 0; round < 20; round++) {
+    const owners = [`stress-A-${round}`, `stress-B-${round}`];
+    const claims = await Promise.all(owners.map(owner => runs.claimExecution(seedRun.id, owner, 15_000)));
+    const winners = claims
+      .map((lease, index) => lease ? { lease, owner: owners[index] } : undefined)
+      .filter((winner): winner is { lease: NonNullable<typeof claims[number]>; owner: string } => Boolean(winner));
+    assert.equal(winners.length, 1, `contention round ${round} must have exactly one lease owner`);
+    const winner = winners[0];
+    assert(winner.lease.fence > lastFence, `contention round ${round} must advance the fence`);
+    lastFence = winner.lease.fence;
+    assert.equal(await runs.releaseExecution(seedRun.id, winner.owner, winner.lease.fence), true);
+  }
+
   // Two AgentRuntime instances race the same Bot run. Only one may reach the model boundary.
   const bots = new BotRepository();
   const bot = await bots.create('lease-owner', {
@@ -109,10 +127,8 @@ try {
   assert.equal(modelCalls, 1, 'execution fence must prevent duplicate model execution');
   assert.equal(await runs.getExecutionLease(started.id), undefined, 'terminal execution releases the lease');
 
-  console.log('Aira Bot worker leases: PASS — atomic claim, renewal, monotonic fencing, stale-worker rejection, expiry takeover, single model execution');
+  console.log('Aira Bot worker leases: PASS — atomic claim, renewal, monotonic fencing, stale-worker rejection, expiry takeover, 20 contention rounds, single model execution');
 } finally {
   delete process.env.AIRA_WORKER_ID;
   await closeDb();
-  await socket.stop();
-  await pg.close();
 }
