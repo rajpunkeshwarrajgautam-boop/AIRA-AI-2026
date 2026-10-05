@@ -30,11 +30,11 @@ export async function verifyBotBrowser(botId: string, runId: string) {
     await page.getByLabel('Instructions', { exact: true }).fill('Produce accurate task results.');
     await page.getByLabel('Calculator', { exact: true }).check();
     await page.getByLabel('Approval policy').selectOption('always_ask');
-    await page.getByText('Memory and skills').click();
+    await page.getByText('Memory and skills', { exact: true }).click();
     await page.getByLabel('Saved memory').fill('Reports use INR.');
-    await page.getByRole('button', { name: 'Add a skill' }).click();
-    await page.getByLabel('Skill name').fill('Report');
-    await page.getByLabel('Procedure').fill('State the evidence for each conclusion.');
+    await page.getByRole('button', { name: 'Add bot-only skill' }).click();
+    await page.getByLabel('Bot-only skill name').fill('Report');
+    await page.getByLabel('Procedure', { exact: true }).fill('State the evidence for each conclusion.');
     await page.screenshot({ path: '/tmp/aira-bot-review/create-bot.png' });
     await page.getByRole('dialog').getByRole('button', { name: 'Create bot', exact: true }).click();
     await page.getByRole('heading', { name: 'Browser verified teammate', exact: true }).waitFor();
@@ -43,9 +43,9 @@ export async function verifyBotBrowser(botId: string, runId: string) {
     await page.getByRole('heading', { name: 'Browser verified teammate', exact: true }).waitFor();
     await page.getByRole('button', { name: 'Configure' }).click();
     assert.equal(await page.getByLabel('Name', { exact: true }).inputValue(), 'Browser verified teammate');
-    await page.getByText('Memory and skills').click();
+    await page.getByText('Memory and skills', { exact: true }).click();
     assert.equal(await page.getByLabel('Saved memory').inputValue(), 'Reports use INR.');
-    assert.equal(await page.getByLabel('Skill name').inputValue(), 'Report');
+    assert.equal(await page.getByLabel('Bot-only skill name').inputValue(), 'Report');
     await page.keyboard.press('Escape');
     assert.equal(await page.getByRole('dialog').count(), 0);
     await page.getByLabel('Task objective').fill('Calculate 7*9');
