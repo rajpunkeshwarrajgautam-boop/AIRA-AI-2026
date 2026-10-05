@@ -97,12 +97,19 @@ try {
   };
   const runtimeA = makeRuntime('runtime-A');
   const runtimeB = makeRuntime('runtime-B');
-  const started = await runtimeA.createAndExecuteRun(
+  // Keep the lease-race assertion focused on execution ownership. Persist the task
+  // before execution so the PGlite socket shim is not asked to multiplex an unrelated
+  // INSERT while the run is concurrently entering its lease-controlled loop.
+  const started = await runtimeA.createRun(
     { prompt: 'Return one result.', intent: 'AGENT_MISSION', modelPolicy: { model: 'gpt-4o' } },
-    { userId: 'lease-owner', sessionId: 'lease-session' }, bot,
-    async created => { await bots.recordTask('lease-owner', bot.id, created.id, created.prompt); }
+    { userId: 'lease-owner', sessionId: 'lease-session' },
+    bot
   );
+  await bots.recordTask('lease-owner', bot.id, started.id, started.prompt);
+  const executionA = (runtimeA as any).executeRunLoop(started.id);
+  await new Promise(resolve => setTimeout(resolve, 10));
   await (runtimeB as any).executeRunLoop(started.id);
+  await executionA;
   const completed = await waitTerminal(runtimeA, started.id);
   assert.equal(completed.state, 'COMPLETED');
   assert.equal(completed.content, 'single owner result');
