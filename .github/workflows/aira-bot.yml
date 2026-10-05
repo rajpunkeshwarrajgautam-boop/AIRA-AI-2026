@@ -8,7 +8,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 18
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -22,6 +22,7 @@ jobs:
       - run: node --check docker/aira-computer/runner.mjs
       - run: npm run test:bot:isolation
       - run: npm run test:bot:orchestration
+      - run: npm run test:bot:skills-connectors
       - run: npx playwright install --with-deps chromium
       - run: npm run test:bot:computer
       - run: npm run test:bot:browser
