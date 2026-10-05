@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { BotInputSchema, BotTaskSchema, type BotTool } from '../../../packages/aira-bot/src/contracts.js';
 import { BotRepository } from '../../../packages/aira-bot/src/repository.js';
-import { BotOrchestrationRepository, RoutineInputSchema } from '../../../packages/aira-bot/src/orchestration.js';
+import { BotOrchestrationRepository, BotRoutineEngine, RoutineInputSchema } from '../../../packages/aira-bot/src/orchestration.js';
 import type { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
 import type { RunRepository } from '../../../packages/agent-runtime/src/repositories.js';
 import type { ModelRouter } from '../../../packages/model-router/src/index.js';
@@ -12,6 +12,9 @@ export function createBotRouter(runtime: AgentRuntime, runs: RunRepository, mode
   const router = Router();
   const bots = new BotRepository();
   const orchestration = new BotOrchestrationRepository();
+  const schedulingEnabled = process.env.AIRA_BOT_ROUTINES_ENABLED === 'true' || process.env.NODE_ENV !== 'production';
+  const routineEngine = new BotRoutineEngine(runtime, orchestration, bots);
+  if (schedulingEnabled && process.env.NODE_ENV !== 'test') routineEngine.start();
   const availableComputerTools = () => computerRuntime.toolDefinitions().map(tool => tool.name);
   const availableTools = () => ['calculator', ...(process.env.BRAVE_SEARCH_API_KEY ? ['web_search'] : []), ...availableComputerTools(), 'delegate_bot', 'delegation_status'];
   const terminalStates = new Set(['COMPLETED', 'FAILED', 'CANCELLED']);
@@ -29,7 +32,7 @@ export function createBotRouter(runtime: AgentRuntime, runs: RunRepository, mode
     computer: computerRuntime.enabled,
     computerProvider: { kind: computerRuntime.providerKind, isolation: computerRuntime.providerKind === 'docker' ? 'docker-container' : 'host-process', interactive: availableComputerTools().some(tool => tool === 'browser_click') },
     delegation: true,
-    scheduling: true,
+    scheduling: schedulingEnabled,
     auth: process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test' ? 'development' : 'host-principal'
   }));
 
@@ -64,13 +67,13 @@ export function createBotRouter(runtime: AgentRuntime, runs: RunRepository, mode
     } catch (err) { res.status(409).json({ error: (err as Error).message }); }
   });
 
-  // Durable bot-native routines. The scheduler executes the persisted bot definition under its actual owner identity.
   router.get('/bots/:id/routines', async (req, res) => {
     const owner = req.principal!.userId;
     if (!await bots.get(owner, String(req.params.id))) return res.status(404).json({ error: 'Bot not found.' });
     res.json(await orchestration.listRoutines(owner, String(req.params.id)));
   });
   router.post('/bots/:id/routines', async (req, res) => {
+    if (!schedulingEnabled) return res.status(503).json({ error: 'Bot routines are disabled on this host.' });
     const owner = req.principal!.userId;
     const bot = await bots.get(owner, String(req.params.id));
     if (!bot) return res.status(404).json({ error: 'Bot not found.' });
@@ -79,6 +82,7 @@ export function createBotRouter(runtime: AgentRuntime, runs: RunRepository, mode
     res.status(201).json(await orchestration.createRoutine(owner, bot.id, parsed.data));
   });
   router.patch('/bots/:id/routines/:routineId', async (req, res) => {
+    if (!schedulingEnabled) return res.status(503).json({ error: 'Bot routines are disabled on this host.' });
     const owner = req.principal!.userId;
     if (!await bots.get(owner, String(req.params.id))) return res.status(404).json({ error: 'Bot not found.' });
     const existing = await orchestration.getRoutine(owner, String(req.params.routineId));
@@ -115,7 +119,6 @@ export function createBotRouter(runtime: AgentRuntime, runs: RunRepository, mode
     res.json({ status: 'READ' });
   });
 
-  // Computer routes share the same ownership boundary as Bot task execution.
   router.use('/bots/:id/computer', async (req, res, next) => {
     const bot = await bots.get(req.principal!.userId, String(req.params.id));
     if (!bot) return res.status(404).json({ error: 'Bot not found.' });
