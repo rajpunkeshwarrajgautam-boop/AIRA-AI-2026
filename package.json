@@ -25,6 +25,7 @@
     "test:bot:browser": "node --import tsx test/aira-bot.ts --browser",
     "test:bot:computer": "node --import tsx test/aira-bot-computer.ts",
     "test:bot:isolation": "node --import tsx test/aira-bot-isolation.ts",
+    "test:bot:orchestration": "node --import tsx test/aira-bot-orchestration.ts",
     "typecheck:api": "tsc -p tsconfig.api.json"
   },
   "dependencies": {
