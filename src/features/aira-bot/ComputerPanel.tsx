@@ -42,7 +42,7 @@ export function ComputerPanel({ bot, connected }: { bot: Bot; connected: boolean
   const hasManualComputer = canBrowse || canClick || canType || canScroll || canWait || canWrite || canTerminal;
   const hasOurControl = Boolean(leaseToken && status.humanControl);
   const controlledElsewhere = Boolean(status.humanControl && !leaseToken);
-  const leaseHeaders = leaseToken ? { 'x-aira-computer-lease': leaseToken } : {};
+  const leaseHeaders: Record<string, string> = leaseToken ? { 'x-aira-computer-lease': leaseToken } : {};
 
   const refresh = useCallback(async () => {
     if (!connected) return;
