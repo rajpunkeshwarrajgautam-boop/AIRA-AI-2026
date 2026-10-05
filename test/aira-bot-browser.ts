@@ -30,7 +30,7 @@ export async function verifyBotBrowser(botId: string, runId: string) {
     await page.getByLabel('Instructions', { exact: true }).fill('Produce accurate task results.');
     await page.getByLabel('Calculator', { exact: true }).check();
     await page.getByLabel('Approval policy').selectOption('always_ask');
-    await page.getByText('Memory and reusable skills').click();
+    await page.getByText('Memory and skills').click();
     await page.getByLabel('Saved memory').fill('Reports use INR.');
     await page.getByRole('button', { name: 'Add a skill' }).click();
     await page.getByLabel('Skill name').fill('Report');
@@ -43,7 +43,7 @@ export async function verifyBotBrowser(botId: string, runId: string) {
     await page.getByRole('heading', { name: 'Browser verified teammate', exact: true }).waitFor();
     await page.getByRole('button', { name: 'Configure' }).click();
     assert.equal(await page.getByLabel('Name', { exact: true }).inputValue(), 'Browser verified teammate');
-    await page.getByText('Memory and reusable skills').click();
+    await page.getByText('Memory and skills').click();
     assert.equal(await page.getByLabel('Saved memory').inputValue(), 'Reports use INR.');
     assert.equal(await page.getByLabel('Skill name').inputValue(), 'Report');
     await page.keyboard.press('Escape');
