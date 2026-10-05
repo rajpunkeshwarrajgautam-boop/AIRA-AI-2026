@@ -1,14 +1,17 @@
 import type { Bot, BotInput } from '../../../packages/aira-bot/src/contracts';
 import type { Run, StreamingEvent } from '../../../packages/contracts/src';
 export type { Bot, BotInput, Run, StreamingEvent };
+export interface ConnectorCapability { id: string; name: string; allowedTools: string[] }
 export interface Capabilities {
   models: string[];
   tools: string[];
+  connectors?: ConnectorCapability[];
   computer: boolean;
   computerProvider?: { kind: 'local' | 'docker'; isolation: 'host-process' | 'docker-container'; interactive: boolean };
   delegation: boolean;
   scheduling: boolean;
 }
+export interface BotSkillRecord { id: string; ownerId: string; name: string; description: string; instructions: string; createdAt: number; updatedAt: number }
 export interface TaskRecord { id: string; run_id: string; objective: string; created_at: number; run?: Run }
 export interface BotRoutine {
   id: string; ownerId: string; botId: string; name: string; objective: string; cronExpression: string; timezone: string; enabled: boolean;
