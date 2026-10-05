@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { BotInputSchema, BotTaskSchema, type BotTool } from '../../../packages/aira-bot/src/contracts.js';
 import { BotRepository } from '../../../packages/aira-bot/src/repository.js';
+import { BotOrchestrationRepository, RoutineInputSchema } from '../../../packages/aira-bot/src/orchestration.js';
 import type { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
 import type { RunRepository } from '../../../packages/agent-runtime/src/repositories.js';
 import type { ModelRouter } from '../../../packages/model-router/src/index.js';
@@ -10,8 +11,9 @@ import { computerRuntime } from '../../../packages/computer-runtime/src/managed.
 export function createBotRouter(runtime: AgentRuntime, runs: RunRepository, models: ModelRouter) {
   const router = Router();
   const bots = new BotRepository();
+  const orchestration = new BotOrchestrationRepository();
   const availableComputerTools = () => computerRuntime.toolDefinitions().map(tool => tool.name);
-  const availableTools = () => ['calculator', ...(process.env.BRAVE_SEARCH_API_KEY ? ['web_search'] : []), ...availableComputerTools()];
+  const availableTools = () => ['calculator', ...(process.env.BRAVE_SEARCH_API_KEY ? ['web_search'] : []), ...availableComputerTools(), 'delegate_bot', 'delegation_status'];
   const terminalStates = new Set(['COMPLETED', 'FAILED', 'CANCELLED']);
 
   function leaseToken(req: any): string {
@@ -26,8 +28,8 @@ export function createBotRouter(runtime: AgentRuntime, runs: RunRepository, mode
     tools: availableTools(),
     computer: computerRuntime.enabled,
     computerProvider: { kind: computerRuntime.providerKind, isolation: computerRuntime.providerKind === 'docker' ? 'docker-container' : 'host-process', interactive: availableComputerTools().some(tool => tool === 'browser_click') },
-    delegation: false,
-    scheduling: false,
+    delegation: true,
+    scheduling: true,
     auth: process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test' ? 'development' : 'host-principal'
   }));
 
@@ -62,6 +64,57 @@ export function createBotRouter(runtime: AgentRuntime, runs: RunRepository, mode
     } catch (err) { res.status(409).json({ error: (err as Error).message }); }
   });
 
+  // Durable bot-native routines. The scheduler executes the persisted bot definition under its actual owner identity.
+  router.get('/bots/:id/routines', async (req, res) => {
+    const owner = req.principal!.userId;
+    if (!await bots.get(owner, String(req.params.id))) return res.status(404).json({ error: 'Bot not found.' });
+    res.json(await orchestration.listRoutines(owner, String(req.params.id)));
+  });
+  router.post('/bots/:id/routines', async (req, res) => {
+    const owner = req.principal!.userId;
+    const bot = await bots.get(owner, String(req.params.id));
+    if (!bot) return res.status(404).json({ error: 'Bot not found.' });
+    const parsed = RoutineInputSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid routine configuration.', details: parsed.error.flatten() });
+    res.status(201).json(await orchestration.createRoutine(owner, bot.id, parsed.data));
+  });
+  router.patch('/bots/:id/routines/:routineId', async (req, res) => {
+    const owner = req.principal!.userId;
+    if (!await bots.get(owner, String(req.params.id))) return res.status(404).json({ error: 'Bot not found.' });
+    const existing = await orchestration.getRoutine(owner, String(req.params.routineId));
+    if (!existing || existing.botId !== String(req.params.id)) return res.status(404).json({ error: 'Routine not found.' });
+    const parsed = RoutineInputSchema.safeParse({ name: existing.name, objective: existing.objective, cronExpression: existing.cronExpression, timezone: existing.timezone, enabled: existing.enabled, ...req.body });
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid routine configuration.', details: parsed.error.flatten() });
+    res.json(await orchestration.updateRoutine(owner, existing.id, parsed.data));
+  });
+  router.delete('/bots/:id/routines/:routineId', async (req, res) => {
+    const owner = req.principal!.userId;
+    const existing = await orchestration.getRoutine(owner, String(req.params.routineId));
+    if (!existing || existing.botId !== String(req.params.id)) return res.status(404).json({ error: 'Routine not found.' });
+    await orchestration.deleteRoutine(owner, existing.id);
+    res.status(204).end();
+  });
+  router.get('/bots/:id/routines/:routineId/runs', async (req, res) => {
+    const owner = req.principal!.userId;
+    const existing = await orchestration.getRoutine(owner, String(req.params.routineId));
+    if (!existing || existing.botId !== String(req.params.id)) return res.status(404).json({ error: 'Routine not found.' });
+    const records = await orchestration.routineRuns(owner, existing.id);
+    res.json(await Promise.all(records.map(async record => ({ ...record, run: record.runId ? await runtime.getRun(record.runId) : undefined }))));
+  });
+
+  router.get('/bots/:id/delegations', async (req, res) => {
+    const owner = req.principal!.userId;
+    if (!await bots.get(owner, String(req.params.id))) return res.status(404).json({ error: 'Bot not found.' });
+    const records = await orchestration.listDelegations(owner, String(req.params.id));
+    res.json(await Promise.all(records.map(async delegation => ({ ...delegation, childRun: await runtime.getRun(delegation.childRunId) }))));
+  });
+
+  router.get('/notifications', async (req, res) => res.json(await orchestration.notifications(req.principal!.userId, req.query.unread === 'true')));
+  router.post('/notifications/:id/read', async (req, res) => {
+    if (!await orchestration.markNotificationRead(req.principal!.userId, String(req.params.id))) return res.status(404).json({ error: 'Notification not found.' });
+    res.json({ status: 'READ' });
+  });
+
   // Computer routes share the same ownership boundary as Bot task execution.
   router.use('/bots/:id/computer', async (req, res, next) => {
     const bot = await bots.get(req.principal!.userId, String(req.params.id));
@@ -76,16 +129,12 @@ export function createBotRouter(runtime: AgentRuntime, runs: RunRepository, mode
     catch (err) { res.status(503).json({ error: (err as Error).message }); }
   });
   router.post('/bots/:id/computer/stop', async (req, res) => {
-    try {
-      leaseToken(req);
-      res.json(await computerRuntime.stop(req.principal!.userId, String(req.params.id)));
-    } catch (err) { res.status(409).json({ error: (err as Error).message }); }
+    try { leaseToken(req); res.json(await computerRuntime.stop(req.principal!.userId, String(req.params.id))); }
+    catch (err) { res.status(409).json({ error: (err as Error).message }); }
   });
   router.post('/bots/:id/computer/suspend', async (req, res) => {
-    try {
-      leaseToken(req);
-      res.json(await computerRuntime.suspend(req.principal!.userId, String(req.params.id)));
-    } catch (err) { res.status(409).json({ error: (err as Error).message }); }
+    try { leaseToken(req); res.json(await computerRuntime.suspend(req.principal!.userId, String(req.params.id))); }
+    catch (err) { res.status(409).json({ error: (err as Error).message }); }
   });
 
   router.post('/bots/:id/computer/takeover', async (req, res) => {
