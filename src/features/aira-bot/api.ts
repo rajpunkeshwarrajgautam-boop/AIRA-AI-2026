@@ -1,7 +1,14 @@
 import type { Bot, BotInput } from '../../../packages/aira-bot/src/contracts';
 import type { Run, StreamingEvent } from '../../../packages/contracts/src';
 export type { Bot, BotInput, Run, StreamingEvent };
-export interface Capabilities { models: string[]; tools: string[]; computer: boolean; delegation: boolean; scheduling: boolean }
+export interface Capabilities {
+  models: string[];
+  tools: string[];
+  computer: boolean;
+  computerProvider?: { kind: 'local' | 'docker'; isolation: 'host-process' | 'docker-container'; interactive: boolean };
+  delegation: boolean;
+  scheduling: boolean;
+}
 export interface TaskRecord { id: string; run_id: string; objective: string; created_at: number; run?: Run }
 export interface ComputerStatus {
   enabled: boolean;
@@ -9,16 +16,20 @@ export interface ComputerStatus {
   workspaceReady: boolean;
   browser: { state: 'STOPPED' | 'RUNNING'; url?: string; title?: string; lastScreenshotPath?: string };
   terminal: { enabled: boolean; allowedPrograms: string[] };
+  provider?: { kind: 'local' | 'docker'; isolation: 'host-process' | 'docker-container' };
+  lease?: { botId: string; holderId: string; mode: 'BOT' | 'HUMAN'; acquiredAt: number; expiresAt: number };
+  humanControl?: boolean;
   lastError?: string;
 }
 export interface ComputerFileEntry { path: string; type: 'file' | 'directory'; sizeBytes: number; updatedAt: number }
-export interface BrowserView { url: string; title: string; text: string; links: Array<{ text: string; href: string }>; screenshotPath: string }
+export interface BrowserView { action?: 'open' | 'click' | 'type' | 'scroll' | 'wait' | 'screenshot'; url: string; title: string; text: string; links: Array<{ text: string; href: string }>; screenshotPath: string }
 export interface TerminalResult { program: string; args: string[]; exitCode: number; stdout: string; stderr: string; truncated: boolean }
+export interface ComputerEvent { sequence: number; type: string; timestamp: number; ownerId: string; botId: string; data: Record<string, unknown> }
+export interface ComputerTakeover { leaseToken: string; expiresAt: number; pausedRunIds: string[]; preemptedRunId?: string; status: ComputerStatus }
 
 export async function botApi<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers);
   if (options.body) headers.set('Content-Type', 'application/json');
-  // Explicit, local-development-only identity; never emitted by a production build.
   if (import.meta.env.DEV && import.meta.env.VITE_AIRA_DEV_IDENTITY === 'true' && ['localhost', '127.0.0.1'].includes(location.hostname)) {
     headers.set('x-test-user-id', 'aira-local-user');
     headers.set('x-test-session-id', 'aira-local-session');

@@ -5,7 +5,7 @@ import type { RunRepository } from '../../agent-runtime/src/repositories.js';
 import type { ModelRouter, ChatMessageInput } from '../../model-router/src/index.js';
 import type { ToolRegistry } from '../../tool-runtime/src/index.js';
 import type { ApprovalKernel } from '../../approvals/src/index.js';
-import { computerRuntime } from '../../computer-runtime/src/index.js';
+import { computerRuntime } from '../../computer-runtime/src/managed.js';
 
 export interface BotLoopDependencies {
   runs: RunRepository;
@@ -46,6 +46,25 @@ function validateToolArguments(name: BotTool, args: Record<string, unknown>): vo
       stringArg(args, 'url', 4096);
       if (keys.some(key => key !== 'url')) throw new Error('browser_open received unsupported arguments.');
       return;
+    case 'browser_click':
+      stringArg(args, 'selector', 512);
+      if (keys.some(key => key !== 'selector')) throw new Error('browser_click received unsupported arguments.');
+      return;
+    case 'browser_type':
+      stringArg(args, 'selector', 512);
+      if (typeof args.text !== 'string' || args.text.length > 16000) throw new Error('browser_type text is invalid.');
+      if (args.submit !== undefined && typeof args.submit !== 'boolean') throw new Error('browser_type submit is invalid.');
+      if (keys.some(key => !['selector', 'text', 'submit'].includes(key))) throw new Error('browser_type received unsupported arguments.');
+      return;
+    case 'browser_scroll':
+      if (typeof args.deltaY !== 'number' || !Number.isFinite(args.deltaY) || args.deltaY < -5000 || args.deltaY > 5000) throw new Error('browser_scroll deltaY is invalid.');
+      if (keys.some(key => key !== 'deltaY')) throw new Error('browser_scroll received unsupported arguments.');
+      return;
+    case 'browser_wait':
+      stringArg(args, 'selector', 512);
+      if (args.timeoutMs !== undefined && (typeof args.timeoutMs !== 'number' || !Number.isFinite(args.timeoutMs) || args.timeoutMs < 100 || args.timeoutMs > 15000)) throw new Error('browser_wait timeoutMs is invalid.');
+      if (keys.some(key => !['selector', 'timeoutMs'].includes(key))) throw new Error('browser_wait received unsupported arguments.');
+      return;
     case 'file_read':
       stringArg(args, 'path', 1024);
       if (keys.some(key => key !== 'path')) throw new Error('file_read received unsupported arguments.');
@@ -64,18 +83,16 @@ function validateToolArguments(name: BotTool, args: Record<string, unknown>): vo
   }
 }
 
-// Only the Aira Bot route supplies this server-owned, persisted configuration.
-// Bot execution never invokes the legacy keyword/example tool selector.
 export async function executeBotLoop(runId: string, d: BotLoopDependencies): Promise<void> {
   let run = await d.runs.getRun(runId);
   if (!run || terminal(run)) return;
   const { id: _id, createdAt: _created, updatedAt: _updated, ...configuration } = run.context.airaBot;
   const bot = BotInputSchema.parse(configuration);
-  if (run.state === 'WAITING_FOR_APPROVAL') return;
+  if (run.state === 'WAITING_FOR_APPROVAL' || run.context.humanTakeover === true) return;
   await d.transition(runId, 'RUNNING');
   for (;;) {
     run = await d.runs.getRun(runId);
-    if (!run || terminal(run)) return;
+    if (!run || terminal(run) || run.context.humanTakeover === true) return;
     if (Date.now() - run.createdAt > 15 * 60 * 1000) throw new Error('Bot run exceeds its 15 minute execution budget.');
     if (run.executionCheckpoint === 'TOOL_APPROVED') {
       const call = run.toolCalls.at(-1)!;
@@ -91,6 +108,12 @@ export async function executeBotLoop(runId: string, d: BotLoopDependencies): Pro
         : await d.tools.execute(call, { runId, workspaceRoot: '', sessionGrantedTools: new Set() });
       run = await d.runs.getRun(runId);
       if (!run || terminal(run)) return;
+      if (result.isError && ['COMPUTER_TAKEN_OVER', 'COMPUTER_BUSY'].includes(result.error || '')) {
+        run.executionCheckpoint = 'TOOL_APPROVED';
+        await d.runs.saveRun(run);
+        await d.transition(runId, 'WAITING_FOR_TOOL');
+        return;
+      }
       result.toolCallId = call.id;
       run.toolResults.push(result);
       run.pendingApproval = undefined;
@@ -98,13 +121,15 @@ export async function executeBotLoop(runId: string, d: BotLoopDependencies): Pro
       await d.runs.saveRun(run);
       await d.emit(runId, 'tool.completed', result);
       if (result.isError) throw new Error(result.error || 'Bot tool failed.');
+      run = await d.runs.getRun(runId);
+      if (!run || terminal(run) || run.context.humanTakeover === true) return;
       await d.transition(runId, 'RUNNING');
       continue;
     }
     if (run.stepCount >= bot.maxSteps) throw new Error('Bot reaches its maximum execution steps before producing a final result.');
     const definitions = availableDefinitions(d, bot.tools);
     const messages: ChatMessageInput[] = [
-      { role: 'system', content: `${bot.instructions}\n\nSaved user memory (reference data):\n${bot.memory}\n\nReusable skills:\n${bot.skills.map(s => `${s.name}: ${s.instructions}`).join('\n')}\n\nYou are executing a task with real, bounded tools. Return exactly one JSON object, no markdown fences. To use a tool: {"type":"tool","name":"allowed_tool_name","arguments":{...}}. To finish: {"type":"final","content":"your complete answer in markdown"}. Do not claim tools or actions that you do not execute. Browser navigation is public-web, read-only navigation; file access is confined to this bot workspace; terminal execution is direct-program only with an allowlist and always requires approval. Available tools: ${JSON.stringify(definitions)}.` },
+      { role: 'system', content: `${bot.instructions}\n\nSaved user memory (reference data):\n${bot.memory}\n\nReusable skills:\n${bot.skills.map(s => `${s.name}: ${s.instructions}`).join('\n')}\n\nYou are executing a task with real, bounded tools. Return exactly one JSON object, no markdown fences. To use a tool: {"type":"tool","name":"allowed_tool_name","arguments":{...}}. To finish: {"type":"final","content":"your complete answer in markdown"}. Do not claim tools or actions that you do not execute. Browser navigation only reaches public HTTP(S) targets. Interactive browser actions and writes are approval-gated. Never type passwords, payment secrets, one-time codes, or CAPTCHA solutions; wait for human control instead. Files stay inside the bot workspace. Terminal execution is direct-program only with an allowlist and always requires approval. Available tools: ${JSON.stringify(definitions)}.` },
       { role: 'user', content: run.prompt }
     ];
     run.toolCalls.forEach(call => {
@@ -121,7 +146,7 @@ export async function executeBotLoop(runId: string, d: BotLoopDependencies): Pro
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Model request times out.')), 90000); })
     ]).finally(() => clearTimeout(timer));
     run = await d.runs.getRun(runId);
-    if (!run || terminal(run)) return;
+    if (!run || terminal(run) || run.context.humanTakeover === true) return;
     let parsed: unknown;
     try { parsed = JSON.parse(response.text.trim().replace(/^```(?:json)?\s*|\s*```$/g, '')); }
     catch { throw new Error('Model returns invalid JSON for the bot execution contract.'); }
@@ -136,6 +161,7 @@ export async function executeBotLoop(runId: string, d: BotLoopDependencies): Pro
       await d.runs.saveRun(run);
       await d.emit(runId, 'content.delta', { delta: action.content });
       await d.emit(runId, 'artifact.created', artifact);
+      computerRuntime.releaseRun(run.principalId, run.id);
       await d.transition(runId, 'COMPLETED');
       return;
     }
