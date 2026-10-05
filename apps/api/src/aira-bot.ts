@@ -1,35 +1,80 @@
 import { Router } from 'express';
-import { BotInputSchema, BotTaskSchema, type BotTool } from '../../../packages/aira-bot/src/contracts.js';
+import { BotInputSchema, BotTaskSchema, type BotTool, type BotInput } from '../../../packages/aira-bot/src/contracts.js';
 import { BotRepository } from '../../../packages/aira-bot/src/repository.js';
+import { BotOrchestrationRepository, BotRoutineEngine, RoutineInputSchema } from '../../../packages/aira-bot/src/orchestration.js';
+import { BotSkillRepository, SkillInputSchema } from '../../../packages/aira-bot/src/skills.js';
+import { botConnectorRuntime } from '../../../packages/aira-bot/src/connectors.js';
 import type { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
 import type { RunRepository } from '../../../packages/agent-runtime/src/repositories.js';
 import type { ModelRouter } from '../../../packages/model-router/src/index.js';
 import { ApprovalDecisionSchema } from '../../../packages/contracts/src/index.js';
-import { computerRuntime } from '../../../packages/computer-runtime/src/managed.js';
+import { computerRuntime as defaultComputerRuntime, type ManagedComputerRuntime } from '../../../packages/computer-runtime/src/managed.js';
+import { computerActions } from '../../../packages/computer-runtime/src/actions.js';
+import { randomUUID } from 'node:crypto';
+import { db } from '../../../packages/db/src/index.js';
 
-export function createBotRouter(runtime: AgentRuntime, runs: RunRepository, models: ModelRouter) {
-  const router = Router();
+export function createBotRouter(runtime: AgentRuntime, runs: RunRepository, models: ModelRouter, options: { computer?: ManagedComputerRuntime; routineLeader?: () => Promise<boolean>; manageScheduling?: boolean } = {}) {
+  const computerRuntime = options.computer || defaultComputerRuntime;
+  const router = Object.assign(Router(), { stop: () => {} });
   const bots = new BotRepository();
+  const skills = new BotSkillRepository();
+  const orchestration = new BotOrchestrationRepository();
+  const schedulingEnabled = process.env.AIRA_BOT_ROUTINES_ENABLED === 'true' || process.env.NODE_ENV !== 'production';
+  const routineEngine = new BotRoutineEngine(runtime, orchestration, bots, options.routineLeader);
+  if (schedulingEnabled && process.env.NODE_ENV !== 'test' && options.manageScheduling !== false) routineEngine.start();
+  router.stop = () => routineEngine.stop();
   const availableComputerTools = () => computerRuntime.toolDefinitions().map(tool => tool.name);
-  const availableTools = () => ['calculator', ...(process.env.BRAVE_SEARCH_API_KEY ? ['web_search'] : []), ...availableComputerTools()];
+  const connectorTools = () => botConnectorRuntime.configuredIds().length ? ['connector_list', 'connector_call'] : [];
+  const availableTools = () => ['calculator', ...(process.env.BRAVE_SEARCH_API_KEY ? ['web_search'] : []), ...availableComputerTools(), 'delegate_bot', 'delegation_status', ...connectorTools()];
   const terminalStates = new Set(['COMPLETED', 'FAILED', 'CANCELLED']);
+
+  async function validateBindings(owner: string, input: BotInput): Promise<void> {
+    await skills.requireOwned(owner, input.skillIds);
+    const unavailableConnectors = input.connectorIds.filter(id => !botConnectorRuntime.has(id));
+    if (unavailableConnectors.length) throw new Error(`Unavailable bot connectors: ${unavailableConnectors.join(', ')}`);
+  }
 
   function leaseToken(req: any): string {
     const raw = req.headers['x-aira-computer-lease'];
     if (typeof raw !== 'string' || !raw) throw new Error('Take control of this computer before interacting with it.');
-    computerRuntime.assertHuman(req.principal!.userId, raw);
     return raw;
   }
 
   router.get('/capabilities', (_req, res) => res.json({
     models: models.listProviders().flatMap(p => p === 'anthropic' ? ['claude-3-7-sonnet', 'claude-3-5-sonnet', 'claude-3-5-haiku'] : p === 'openai' ? ['gpt-4o', 'gpt-4o-mini'] : []),
     tools: availableTools(),
+    connectors: botConnectorRuntime.summaries().map(connector => ({ id: connector.id, name: connector.name, allowedTools: connector.allowedTools })),
     computer: computerRuntime.enabled,
     computerProvider: { kind: computerRuntime.providerKind, isolation: computerRuntime.providerKind === 'docker' ? 'docker-container' : 'host-process', interactive: availableComputerTools().some(tool => tool === 'browser_click') },
-    delegation: false,
-    scheduling: false,
+    delegation: true,
+    scheduling: schedulingEnabled,
     auth: process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test' ? 'development' : 'host-principal'
   }));
+
+  // Reusable skills are owner-scoped library objects. Bots store only selected skill IDs;
+  // execution snapshots the current instructions into the run before the first model step.
+  router.get('/skills', async (req, res) => res.json(await skills.list(req.principal!.userId)));
+  router.post('/skills', async (req, res) => {
+    const parsed = SkillInputSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid reusable skill.', details: parsed.error.flatten() });
+    try { res.status(201).json(await skills.create(req.principal!.userId, parsed.data)); }
+    catch (error) { res.status(409).json({ error: (error as Error).message }); }
+  });
+  router.patch('/skills/:id', async (req, res) => {
+    const owner = req.principal!.userId;
+    const current = await skills.get(owner, String(req.params.id));
+    if (!current) return res.status(404).json({ error: 'Reusable skill not found.' });
+    const parsed = SkillInputSchema.safeParse({ name: current.name, description: current.description, instructions: current.instructions, ...req.body });
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid reusable skill.', details: parsed.error.flatten() });
+    try { res.json(await skills.update(owner, current.id, parsed.data)); }
+    catch (error) { res.status(409).json({ error: (error as Error).message }); }
+  });
+  router.delete('/skills/:id', async (req, res) => {
+    try {
+      if (!await skills.remove(req.principal!.userId, String(req.params.id))) return res.status(404).json({ error: 'Reusable skill not found.' });
+      res.status(204).end();
+    } catch (error) { res.status(409).json({ error: (error as Error).message }); }
+  });
 
   router.get('/bots', async (req, res) => res.json(await bots.list(req.principal!.userId)));
   router.post('/bots', async (req, res) => {
@@ -37,6 +82,8 @@ export function createBotRouter(runtime: AgentRuntime, runs: RunRepository, mode
     if (!parsed.success) return res.status(400).json({ error: 'Invalid bot configuration.', details: parsed.error.flatten() });
     const unavailable = parsed.data.tools.filter(tool => !availableTools().includes(tool));
     if (unavailable.length) return res.status(400).json({ error: `Unavailable bot capabilities: ${unavailable.join(', ')}` });
+    try { await validateBindings(req.principal!.userId, parsed.data); }
+    catch (error) { return res.status(400).json({ error: (error as Error).message }); }
     res.status(201).json(await bots.create(req.principal!.userId, parsed.data));
   });
   router.get('/bots/:id', async (req, res) => {
@@ -53,6 +100,8 @@ export function createBotRouter(runtime: AgentRuntime, runs: RunRepository, mode
     if (!parsed.success) return res.status(400).json({ error: 'Invalid bot configuration.' });
     const unavailable = parsed.data.tools.filter(tool => !availableTools().includes(tool));
     if (unavailable.length) return res.status(400).json({ error: `Unavailable bot capabilities: ${unavailable.join(', ')}` });
+    try { await validateBindings(owner, parsed.data); }
+    catch (error) { return res.status(400).json({ error: (error as Error).message }); }
     res.json(await bots.update(owner, bot.id, parsed.data));
   });
   router.delete('/bots/:id', async (req, res) => {
@@ -62,11 +111,72 @@ export function createBotRouter(runtime: AgentRuntime, runs: RunRepository, mode
     } catch (err) { res.status(409).json({ error: (err as Error).message }); }
   });
 
-  // Computer routes share the same ownership boundary as Bot task execution.
+  router.get('/bots/:id/routines', async (req, res) => {
+    const owner = req.principal!.userId;
+    if (!await bots.get(owner, String(req.params.id))) return res.status(404).json({ error: 'Bot not found.' });
+    res.json(await orchestration.listRoutines(owner, String(req.params.id)));
+  });
+  router.post('/bots/:id/routines', async (req, res) => {
+    if (!schedulingEnabled) return res.status(503).json({ error: 'Bot routines are disabled on this host.' });
+    const owner = req.principal!.userId;
+    const bot = await bots.get(owner, String(req.params.id));
+    if (!bot) return res.status(404).json({ error: 'Bot not found.' });
+    const parsed = RoutineInputSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid routine configuration.', details: parsed.error.flatten() });
+    res.status(201).json(await orchestration.createRoutine(owner, bot.id, parsed.data));
+  });
+  router.patch('/bots/:id/routines/:routineId', async (req, res) => {
+    if (!schedulingEnabled) return res.status(503).json({ error: 'Bot routines are disabled on this host.' });
+    const owner = req.principal!.userId;
+    if (!await bots.get(owner, String(req.params.id))) return res.status(404).json({ error: 'Bot not found.' });
+    const existing = await orchestration.getRoutine(owner, String(req.params.routineId));
+    if (!existing || existing.botId !== String(req.params.id)) return res.status(404).json({ error: 'Routine not found.' });
+    const parsed = RoutineInputSchema.safeParse({ name: existing.name, objective: existing.objective, cronExpression: existing.cronExpression, timezone: existing.timezone, enabled: existing.enabled, ...req.body });
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid routine configuration.', details: parsed.error.flatten() });
+    res.json(await orchestration.updateRoutine(owner, existing.id, parsed.data));
+  });
+  router.delete('/bots/:id/routines/:routineId', async (req, res) => {
+    const owner = req.principal!.userId;
+    const existing = await orchestration.getRoutine(owner, String(req.params.routineId));
+    if (!existing || existing.botId !== String(req.params.id)) return res.status(404).json({ error: 'Routine not found.' });
+    await orchestration.deleteRoutine(owner, existing.id);
+    res.status(204).end();
+  });
+  router.get('/bots/:id/routines/:routineId/runs', async (req, res) => {
+    const owner = req.principal!.userId;
+    const existing = await orchestration.getRoutine(owner, String(req.params.routineId));
+    if (!existing || existing.botId !== String(req.params.id)) return res.status(404).json({ error: 'Routine not found.' });
+    const records = await orchestration.routineRuns(owner, existing.id);
+    res.json(await Promise.all(records.map(async record => ({ ...record, run: record.runId ? await runtime.getRun(record.runId) : undefined }))));
+  });
+
+  router.get('/bots/:id/delegations', async (req, res) => {
+    const owner = req.principal!.userId;
+    if (!await bots.get(owner, String(req.params.id))) return res.status(404).json({ error: 'Bot not found.' });
+    const records = await orchestration.listDelegations(owner, String(req.params.id));
+    res.json(await Promise.all(records.map(async delegation => ({ ...delegation, childRun: await runtime.getRun(delegation.childRunId) }))));
+  });
+
+  router.get('/notifications', async (req, res) => res.json(await orchestration.notifications(req.principal!.userId, req.query.unread === 'true')));
+  router.post('/notifications/:id/read', async (req, res) => {
+    if (!await orchestration.markNotificationRead(req.principal!.userId, String(req.params.id))) return res.status(404).json({ error: 'Notification not found.' });
+    res.json({ status: 'READ' });
+  });
+
   router.use('/bots/:id/computer', async (req, res, next) => {
     const bot = await bots.get(req.principal!.userId, String(req.params.id));
     if (!bot) return res.status(404).json({ error: 'Bot not found.' });
     res.locals.ownedBot = bot;
+    if (['POST', 'PUT'].includes(req.method) && !/^\/(takeover|release|actions)(\/|$)/.test(req.path) &&
+      (req.path !== '/start' || req.headers['x-aira-computer-lease'])) {
+      try {
+        const key = req.headers['idempotency-key'] || randomUUID();
+        if (typeof key !== 'string' || key.length > 128 || !/^[A-Za-z0-9._:-]+$/.test(key)) return res.status(400).json({ error: 'Invalid Idempotency-Key.' });
+        res.setHeader('Idempotency-Key', key);
+        await computerRuntime.withHuman(req.principal!.userId, String(req.params.id), leaseToken(req), key, next);
+      } catch (error) { res.status(409).json({ error: (error as Error).message }); }
+      return;
+    }
     next();
   });
 
@@ -76,16 +186,12 @@ export function createBotRouter(runtime: AgentRuntime, runs: RunRepository, mode
     catch (err) { res.status(503).json({ error: (err as Error).message }); }
   });
   router.post('/bots/:id/computer/stop', async (req, res) => {
-    try {
-      leaseToken(req);
-      res.json(await computerRuntime.stop(req.principal!.userId, String(req.params.id)));
-    } catch (err) { res.status(409).json({ error: (err as Error).message }); }
+    try { leaseToken(req); res.json(await computerRuntime.stop(req.principal!.userId, String(req.params.id))); }
+    catch (err) { res.status(409).json({ error: (err as Error).message }); }
   });
   router.post('/bots/:id/computer/suspend', async (req, res) => {
-    try {
-      leaseToken(req);
-      res.json(await computerRuntime.suspend(req.principal!.userId, String(req.params.id)));
-    } catch (err) { res.status(409).json({ error: (err as Error).message }); }
+    try { leaseToken(req); res.json(await computerRuntime.suspend(req.principal!.userId, String(req.params.id))); }
+    catch (err) { res.status(409).json({ error: (err as Error).message }); }
   });
 
   router.post('/bots/:id/computer/takeover', async (req, res) => {
@@ -102,15 +208,20 @@ export function createBotRouter(runtime: AgentRuntime, runs: RunRepository, mode
       }
       paused.push(run.id);
     }
-    const acquisition = computerRuntime.takeover(owner, botId, req.principal!.sessionId);
-    res.json({ leaseToken: acquisition.lease.token, expiresAt: acquisition.lease.expiresAt, pausedRunIds: paused, preemptedRunId: acquisition.preempted?.mode === 'BOT' ? acquisition.preempted.holderId.replace(/^run:/, '') : undefined, status: await computerRuntime.status(owner, botId) });
+    try {
+      const acquisition = await computerRuntime.takeover(owner, botId, req.principal!.sessionId);
+      res.json({ leaseToken: acquisition.lease.token, expiresAt: acquisition.lease.expiresAt, pausedRunIds: paused, preemptedRunId: acquisition.preempted?.mode === 'BOT' ? acquisition.preempted.holderId.replace(/^run:/, '').split(':execution:')[0] : undefined, status: await computerRuntime.status(owner, botId) });
+    } catch (error) {
+      for (const id of paused) await runtime.resumeFromHuman(id, owner, botId).catch(() => false);
+      res.status(409).json({ error: (error as Error).message });
+    }
   });
 
   router.post('/bots/:id/computer/release', async (req, res) => {
     const owner = req.principal!.userId;
     const botId = String(req.params.id);
     const token = typeof req.body?.leaseToken === 'string' ? req.body.leaseToken : '';
-    const released = computerRuntime.releaseHuman(owner, botId, token);
+    const released = await computerRuntime.releaseHuman(owner, botId, token);
     if (!released || released.mode !== 'HUMAN') return res.status(409).json({ error: 'Computer takeover lease is no longer active.' });
     const resumed: string[] = [];
     const runsForBot = (await runtime.listRuns()).filter(run => run.principalId === owner && run.agentId === botId && run.context.humanTakeover === true && !terminalStates.has(run.state));
@@ -121,7 +232,7 @@ export function createBotRouter(runtime: AgentRuntime, runs: RunRepository, mode
   router.get('/bots/:id/computer/events', async (req, res) => {
     const raw = req.query.after;
     if (raw !== undefined && (typeof raw !== 'string' || !/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw)))) return res.status(400).json({ error: 'Invalid computer event cursor.' });
-    res.json(computerRuntime.events(req.principal!.userId, String(req.params.id), raw === undefined ? 0 : Number(raw)));
+    res.json(await computerRuntime.events(req.principal!.userId, String(req.params.id), raw === undefined ? 0 : Number(raw)));
   });
 
   router.get('/bots/:id/computer/events/stream', async (req, res) => {
@@ -134,14 +245,18 @@ export function createBotRouter(runtime: AgentRuntime, runs: RunRepository, mode
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders?.();
-    const flush = () => {
-      for (const event of computerRuntime.events(owner, botId, cursor)) {
+    let flushing = false;
+    const flush = async () => {
+      if (flushing || res.destroyed) return;
+      flushing = true;
+      try { for (const event of await computerRuntime.events(owner, botId, cursor)) {
         cursor = Math.max(cursor, event.sequence);
         res.write(`id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
-      }
+      } } catch { res.end(); }
+      finally { flushing = false; }
     };
-    flush();
-    const timer = setInterval(flush, 750);
+    await flush();
+    const timer = setInterval(() => void flush(), 750);
     const heartbeat = setInterval(() => res.write(': keepalive\n\n'), 15_000);
     req.on('close', () => { clearInterval(timer); clearInterval(heartbeat); });
   });
@@ -150,6 +265,16 @@ export function createBotRouter(runtime: AgentRuntime, runs: RunRepository, mode
     const bot = res.locals.ownedBot as { tools: BotTool[] };
     if (!bot.tools.some(tool => tool === 'file_read' || tool === 'file_write')) return res.status(403).json({ error: 'Enable file access for this bot first.' });
     res.json(await computerRuntime.listFiles(req.principal!.userId, String(req.params.id)));
+  });
+  router.get('/bots/:id/computer/actions', async (req, res) => {
+    res.json(await computerActions.unresolved(req.principal!.userId, String(req.params.id)));
+  });
+  router.post('/bots/:id/computer/actions/:actionId/acknowledge', async (req, res) => {
+    if (req.body?.acknowledgeMayHaveExecuted !== true) return res.status(400).json({ error: 'Explicit acknowledgement that the action may have executed is required.' });
+    try {
+      const changed = await computerActions.acknowledge(req.principal!.userId, String(req.params.id), String(req.params.actionId), computerRuntime.provider);
+      res.status(changed ? 200 : 409).json({ status: changed ? 'ABANDONED' : 'NOT_UNCERTAIN' });
+    } catch (error) { res.status(409).json({ error: (error as Error).message }); }
   });
   router.get('/bots/:id/computer/file', async (req, res) => {
     const bot = res.locals.ownedBot as { tools: BotTool[] };
@@ -220,12 +345,19 @@ export function createBotRouter(runtime: AgentRuntime, runs: RunRepository, mode
     if (!parsed.success) return res.status(400).json({ error: 'A task objective is required (maximum 16,000 characters).' });
     const unavailable = bot.tools.filter(tool => !availableTools().includes(tool));
     if (unavailable.length) return res.status(503).json({ error: `Bot requires unavailable capabilities: ${unavailable.join(', ')}` });
+    const unavailableConnectors = bot.connectorIds.filter(id => !botConnectorRuntime.has(id));
+    if (unavailableConnectors.length) return res.status(503).json({ error: `Bot requires unavailable connectors: ${unavailableConnectors.join(', ')}` });
+    try { await skills.requireOwned(req.principal!.userId, bot.skillIds); }
+    catch (error) { return res.status(409).json({ error: (error as Error).message }); }
     const model = bot.model === 'aira-auto' ? (models.listProviders().includes('anthropic') ? 'claude-3-7-sonnet' : 'gpt-4o') : bot.model;
     try { models.getAdapter(models.resolvePolicy(model, 'AGENT_MISSION')); }
     catch (err) { return res.status(503).json({ error: (err as Error).message }); }
     let task: Awaited<ReturnType<BotRepository['recordTask']>> | undefined;
-    const run = await runtime.createAndExecuteRun({ prompt: parsed.data.prompt, intent: 'AGENT_MISSION', modelPolicy: { model } }, req.principal!, bot, async created => {
-      task = await bots.recordTask(req.principal!.userId, bot.id, created.id, parsed.data.prompt);
+    const run = await runtime.createAndExecuteRun({ prompt: parsed.data.prompt, intent: 'AGENT_MISSION', modelPolicy: { model } }, req.principal!, bot, undefined, async created => {
+      await db.transaction(async trx => {
+        await runs.saveRun(created, trx);
+        task = await bots.recordTask(req.principal!.userId, bot.id, created.id, parsed.data.prompt, trx);
+      });
     });
     res.status(201).json({ task, run });
   });
@@ -252,7 +384,7 @@ export function createBotRouter(runtime: AgentRuntime, runs: RunRepository, mode
   router.post('/runs/:id/cancel', async (_req, res) => {
     const run = res.locals.botRun;
     if (!await runtime.cancelRun(run.id)) return res.status(409).json({ error: 'Run is already terminal.' });
-    computerRuntime.releaseRun(run.principalId, run.id);
+    await computerRuntime.releaseRun(run.principalId, run.id);
     res.json({ state: 'CANCELLED' });
   });
   router.post('/runs/:id/approval', async (req, res) => {
