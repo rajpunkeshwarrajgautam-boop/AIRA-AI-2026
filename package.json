@@ -26,6 +26,8 @@
     "test:bot:computer": "node --import tsx test/aira-bot-computer.ts",
     "test:bot:isolation": "node --import tsx test/aira-bot-isolation.ts",
     "test:bot:orchestration": "node --import tsx test/aira-bot-orchestration.ts",
+    "test:bot:skills-connectors": "node --import tsx test/aira-bot-skills-connectors.ts",
+    "test:bot:worker-leases": "node --import tsx test/aira-bot-worker-leases.ts",
     "typecheck:api": "tsc -p tsconfig.api.json"
   },
   "dependencies": {

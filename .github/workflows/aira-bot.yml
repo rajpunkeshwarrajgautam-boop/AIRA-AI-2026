@@ -8,7 +8,21 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 18
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: aira
+          POSTGRES_PASSWORD: aira
+          POSTGRES_DB: aira_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aira -d aira_db"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -22,6 +36,12 @@ jobs:
       - run: node --check docker/aira-computer/runner.mjs
       - run: npm run test:bot:isolation
       - run: npm run test:bot:orchestration
+      - run: npm run test:bot:skills-connectors
+      - run: |
+          for attempt in 1 2 3 4 5; do
+            echo "Worker lease certification attempt ${attempt}/5"
+            npm run test:bot:worker-leases
+          done
       - run: npx playwright install --with-deps chromium
       - run: npm run test:bot:computer
       - run: npm run test:bot:browser

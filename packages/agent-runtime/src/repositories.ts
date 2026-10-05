@@ -1,11 +1,32 @@
 import { AgentDefinition, Run, StreamingEvent } from '../../contracts/src/index.js';
 import { db } from '../../db/src/index.js';
+import { AsyncLocalStorage } from 'node:async_hooks';
+
+export const EXECUTION_LEASE_LOST = 'EXECUTION_LEASE_LOST';
+const executionLeaseContext = new AsyncLocalStorage<{ runId: string; lease: RunExecutionLease }>();
+
+// Capture the acquired token for this async execution, never the latest token read
+// from the row. Control-plane requests and delegated child runs keep their own scope.
+export function withExecutionLease<T>(runId: string, lease: RunExecutionLease, execute: () => Promise<T>): Promise<T> {
+  return executionLeaseContext.run({ runId, lease }, execute);
+}
+
+function executionLeaseFor(runId: string): RunExecutionLease | undefined {
+  const context = executionLeaseContext.getStore();
+  return context?.runId === runId ? context.lease : undefined;
+}
 
 export interface AgentRepository {
   saveAgent(agent: AgentDefinition): Promise<void>;
   getAgent(id: string): Promise<AgentDefinition | undefined>;
   listAgents(): Promise<AgentDefinition[]>;
   deleteAgent(id: string): Promise<boolean>;
+}
+
+export interface RunExecutionLease {
+  owner: string;
+  fence: number;
+  leaseUntil: number;
 }
 
 export interface RunRepository {
@@ -18,6 +39,11 @@ export interface RunRepository {
   getRunEventsAfter(runId: string, sequence: number): Promise<StreamingEvent[]>;
   getLatestEventSequence(runId: string): Promise<number>;
   claimInterruptedRun(runId: string, owner: string, ttlMs: number): Promise<boolean>;
+  claimExecution(runId: string, owner: string, ttlMs: number): Promise<RunExecutionLease | undefined>;
+  renewExecution(runId: string, owner: string, fence: number, ttlMs: number): Promise<RunExecutionLease | undefined>;
+  assertExecution(runId: string, owner: string, fence: number): Promise<boolean>;
+  releaseExecution(runId: string, owner: string, fence: number): Promise<boolean>;
+  getExecutionLease(runId: string): Promise<RunExecutionLease | undefined>;
 }
 
 export class PostgresAgentRepository implements AgentRepository {
@@ -72,7 +98,7 @@ export class PostgresAgentRepository implements AgentRepository {
 
 export class PostgresRunRepository implements RunRepository {
   async saveRun(run: Run): Promise<void> {
-    await db('runs').insert({
+    const values = {
       id: run.id,
       principal_id: run.principalId,
       agent_id: run.agentId || null,
@@ -105,7 +131,24 @@ export class PostgresRunRepository implements RunRepository {
       createdAt: run.createdAt,
       updatedAt: run.updatedAt,
       completed_at: run.completedAt
-    }).onConflict('id').merge().whereNotIn('runs.state', ['COMPLETED', 'FAILED', 'CANCELLED']);
+    };
+    const lease = executionLeaseFor(run.id);
+    if (lease) {
+      // The predicate is checked with the write under PostgreSQL's row lock.
+      // Database time also checks expiry after any lock wait, not before dispatch.
+      const updated = await db.transaction<number>(async trx => {
+        await trx('runs').where({ id: run.id }).forUpdate().first('id');
+        const rows = await trx('runs')
+          .where({ id: run.id, execution_owner: lease.owner, execution_fence: lease.fence })
+          .whereRaw('execution_lease_until >= floor(extract(epoch from clock_timestamp()) * 1000)')
+          .whereNotIn('state', ['COMPLETED', 'FAILED', 'CANCELLED'])
+          .update(values).returning('id');
+        return rows.length;
+      });
+      if (!updated) throw new Error(EXECUTION_LEASE_LOST);
+      return;
+    }
+    await db('runs').insert(values).onConflict('id').merge().whereNotIn('runs.state', ['COMPLETED', 'FAILED', 'CANCELLED']);
   }
 
   async getRun(id: string): Promise<Run | undefined> {
@@ -116,43 +159,96 @@ export class PostgresRunRepository implements RunRepository {
 
   async listRuns(): Promise<Run[]> {
     const rows = await db('runs').select('*').orderBy('createdAt', 'desc');
-    return rows.map(this.mapToRun);
+    return rows.map(row => this.mapToRun(row));
   }
 
   async getInterruptedRuns(): Promise<Run[]> {
     const rows = await db('runs').whereIn('state', ['QUEUED', 'RUNNING', 'WAITING_FOR_TOOL', 'WAITING_FOR_APPROVAL']).orderBy('createdAt', 'asc');
-    return rows.map(this.mapToRun);
+    return rows.map(row => this.mapToRun(row));
   }
 
   async claimInterruptedRun(runId: string, owner: string, ttlMs: number): Promise<boolean> {
     const now = Date.now();
     const until = now + ttlMs;
-
     const result = await db('runs')
       .where({ id: runId })
       .andWhere(function() {
-        this.whereNull('recovery_owner')
-            .orWhere('recovery_lease_until', '<', now);
+        this.whereNull('recovery_owner').orWhere('recovery_lease_until', '<', now);
       })
-      .update({
-        recovery_owner: owner,
-        recovery_claimed_at: now,
-        recovery_lease_until: until,
-        updatedAt: now
-      });
-
+      .update({ recovery_owner: owner, recovery_claimed_at: now, recovery_lease_until: until, updatedAt: now });
     return result > 0;
   }
 
+  async claimExecution(runId: string, owner: string, ttlMs: number): Promise<RunExecutionLease | undefined> {
+    const now = Date.now();
+    const until = now + Math.max(5_000, ttlMs);
+    const rows = await db('runs')
+      .where({ id: runId })
+      .whereNotIn('state', ['COMPLETED', 'FAILED', 'CANCELLED'])
+      .andWhere(function() {
+        this.whereNull('execution_owner').orWhereNull('execution_lease_until').orWhere('execution_lease_until', '<', now);
+      })
+      .update({
+        execution_owner: owner,
+        execution_lease_until: until,
+        execution_fence: db.raw('COALESCE(execution_fence, 0) + 1')
+      })
+      .returning(['execution_fence', 'execution_lease_until']);
+    if (!rows[0]) return undefined;
+    return { owner, fence: Number(rows[0].execution_fence), leaseUntil: Number(rows[0].execution_lease_until) };
+  }
+
+  async renewExecution(runId: string, owner: string, fence: number, ttlMs: number): Promise<RunExecutionLease | undefined> {
+    const now = Date.now();
+    const until = now + Math.max(5_000, ttlMs);
+    const rows = await db('runs')
+      .where({ id: runId, execution_owner: owner, execution_fence: fence })
+      .andWhere('execution_lease_until', '>=', now)
+      .whereNotIn('state', ['COMPLETED', 'FAILED', 'CANCELLED'])
+      .update({ execution_lease_until: until })
+      .returning(['execution_fence', 'execution_lease_until']);
+    if (!rows[0]) return undefined;
+    return { owner, fence: Number(rows[0].execution_fence), leaseUntil: Number(rows[0].execution_lease_until) };
+  }
+
+  async assertExecution(runId: string, owner: string, fence: number): Promise<boolean> {
+    const row = await db('runs').where({ id: runId, execution_owner: owner, execution_fence: fence }).first('execution_lease_until');
+    return Boolean(row && Number(row.execution_lease_until) >= Date.now());
+  }
+
+  async releaseExecution(runId: string, owner: string, fence: number): Promise<boolean> {
+    const updated = await db('runs')
+      .where({ id: runId, execution_owner: owner, execution_fence: fence })
+      .update({ execution_owner: null, execution_lease_until: null });
+    return updated > 0;
+  }
+
+  async getExecutionLease(runId: string): Promise<RunExecutionLease | undefined> {
+    const row = await db('runs').where({ id: runId }).first('execution_owner', 'execution_fence', 'execution_lease_until');
+    if (!row?.execution_owner || !row?.execution_lease_until) return undefined;
+    return { owner: row.execution_owner, fence: Number(row.execution_fence || 0), leaseUntil: Number(row.execution_lease_until) };
+  }
+
   async appendRunEvent(event: StreamingEvent): Promise<StreamingEvent> {
-    const rows = await db('run_events').insert({
+    const lease = executionLeaseFor(event.runId);
+    const insert = async (query: typeof db) => query('run_events').insert({
       id: event.eventId,
       run_id: event.runId,
       type: event.type,
       payload: JSON.stringify(event.data),
       createdAt: event.timestamp
     }).returning('*');
-    
+    const rows = lease ? await db.transaction(async trx => {
+      // Keep takeover blocked until the event commits. A separate preflight
+      // SELECT cannot protect an INSERT into the event table.
+      const run = await trx('runs').where({ id: event.runId }).forUpdate().first();
+      const time = await trx.raw('select floor(extract(epoch from clock_timestamp()) * 1000) as now');
+      if (!run || run.execution_owner !== lease.owner || Number(run.execution_fence) !== lease.fence
+          || Number(run.execution_lease_until) < Number(time.rows[0].now) || run.execution_lease_until === null) {
+        throw new Error(EXECUTION_LEASE_LOST);
+      }
+      return insert(trx);
+    }) : await insert(db);
     const row = rows[0];
     return {
       eventId: row.id,
@@ -181,7 +277,6 @@ export class PostgresRunRepository implements RunRepository {
       .where({ run_id: runId })
       .andWhere('sequence', '>', sequence)
       .orderBy('sequence', 'asc');
-    
     return rows.map((row: any) => ({
       eventId: row.id,
       runId: row.run_id,
@@ -193,10 +288,7 @@ export class PostgresRunRepository implements RunRepository {
   }
 
   async getLatestEventSequence(runId: string): Promise<number> {
-    const row = await db('run_events')
-      .where({ run_id: runId })
-      .max('sequence as max_seq')
-      .first();
+    const row = await db('run_events').where({ run_id: runId }).max('sequence as max_seq').first();
     return row && row.max_seq ? parseInt(row.max_seq, 10) : 0;
   }
 
@@ -240,4 +332,3 @@ export class PostgresRunRepository implements RunRepository {
     };
   }
 }
-
