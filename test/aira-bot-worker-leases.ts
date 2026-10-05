@@ -33,10 +33,13 @@ const seedRun: any = {
 async function waitTerminal(runtime: InstanceType<typeof AgentRuntime>, id: string) {
   for (let i = 0; i < 160; i++) {
     const run = await runtime.getRun(id);
-    if (run && ['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)) return run;
+    // Terminal state is persisted before its event and the execution finally
+    // block. Wait for both observable state and cleanup, with the same deadline.
+    if (run && ['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)
+        && await runs.getExecutionLease(id) === undefined) return run;
     await new Promise(resolve => setTimeout(resolve, 25));
   }
-  throw new Error(`Run ${id} did not become terminal.`);
+  throw new Error(`Run ${id} did not become terminal and release its execution lease.`);
 }
 
 try {
