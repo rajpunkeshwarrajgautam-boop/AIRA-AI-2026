@@ -1,34 +1,34 @@
 import { ComputerRuntime as LocalComputerProvider, type BrowserView, type ComputerFileEntry, type ComputerStatus } from './index.js';
 import { DockerComputerProvider } from './docker.js';
-import { ComputerLeaseManager, type ComputerLease, type LeaseAcquisition } from './lease.js';
+import { ComputerLeaseManager, type ComputerLease, type ComputerLeaseView, type LeaseAcquisition } from './lease.js';
+import { ComputerEventRepository, type ComputerEvent, type ComputerEventType } from './events.js';
+import { ComputerInstanceRepository } from './lifecycle.js';
 import type { BrowserActionResult, ComputerProvider, ComputerProviderKind, TerminalExecutionResult } from './provider.js';
 import type { Run, ToolCall, ToolDefinition, ToolResult } from '../../contracts/src/index.js';
 
 export interface ManagedComputerStatus extends ComputerStatus {
   provider: { kind: ComputerProviderKind; isolation: 'host-process' | 'docker-container' };
-  lease?: Omit<ComputerLease, 'token' | 'ownerId'>;
+  lease?: Omit<ComputerLeaseView, 'ownerId'>;
   humanControl: boolean;
 }
 
-export interface ComputerEvent {
-  sequence: number;
-  type: 'computer.started' | 'computer.stopped' | 'browser.opened' | 'browser.acted' | 'file.read' | 'file.written' | 'terminal.executed' | 'control.taken' | 'control.released' | 'lease.blocked';
-  timestamp: number;
-  ownerId: string;
-  botId: string;
-  data: Record<string, unknown>;
+export interface ManagedComputerHealth {
+  ok: boolean;
+  provider: { kind: ComputerProviderKind; ok: boolean; detail: string };
+  lifecycle: { tracked: number; unhealthy: number };
 }
 
-const MAX_EVENTS = 500;
 function toolResult(call: ToolCall, startedAt: number, output: unknown, error?: string): ToolResult {
   return { toolCallId: call.id, output: error ? null : output, error, isError: Boolean(error), durationMs: Date.now() - startedAt, timestamp: Date.now() };
 }
 
 export class ManagedComputerRuntime {
-  private readonly eventsByOwner = new Map<string, ComputerEvent[]>();
-  private readonly sequenceByOwner = new Map<string, number>();
-
-  constructor(readonly provider: ComputerProvider, readonly leases = new ComputerLeaseManager()) {}
+  constructor(
+    readonly provider: ComputerProvider,
+    readonly leases = new ComputerLeaseManager(),
+    readonly eventRepository = new ComputerEventRepository(),
+    readonly instances = new ComputerInstanceRepository()
+  ) {}
 
   get enabled(): boolean { return this.provider.enabled; }
   get terminalEnabled(): boolean { return this.provider.terminalEnabled; }
@@ -52,72 +52,168 @@ export class ManagedComputerRuntime {
 
   getDefinition(name: string): ToolDefinition | undefined { return this.toolDefinitions().find(definition => definition.name === name); }
 
-  private emit(ownerId: string, botId: string, type: ComputerEvent['type'], data: Record<string, unknown> = {}): ComputerEvent {
-    const sequence = (this.sequenceByOwner.get(ownerId) || 0) + 1;
-    this.sequenceByOwner.set(ownerId, sequence);
-    const event: ComputerEvent = { sequence, type, timestamp: Date.now(), ownerId, botId, data };
-    const events = [...(this.eventsByOwner.get(ownerId) || []), event].slice(-MAX_EVENTS);
-    this.eventsByOwner.set(ownerId, events);
-    return event;
+  private emit(ownerId: string, botId: string, type: ComputerEventType, data: Record<string, unknown> = {}): Promise<ComputerEvent> {
+    return this.eventRepository.append(ownerId, botId, type, data);
   }
 
-  events(ownerId: string, botId: string, after = 0): ComputerEvent[] {
-    return (this.eventsByOwner.get(ownerId) || []).filter(event => event.botId === botId && event.sequence > after);
+  events(ownerId: string, botId: string, after = 0): Promise<ComputerEvent[]> {
+    return this.eventRepository.list(ownerId, botId, after);
+  }
+
+  private resourceName(ownerId: string): string | undefined {
+    return this.provider.resourceName?.(ownerId);
+  }
+
+  private async markActive(ownerId: string): Promise<void> {
+    if (this.providerKind !== 'docker') return;
+    await this.instances.setDesired(ownerId, this.providerKind, 'ACTIVE', this.resourceName(ownerId));
+  }
+
+  private async markProviderError(ownerId: string, error: unknown): Promise<void> {
+    if (this.providerKind !== 'docker') return;
+    await this.instances.observe(ownerId, 'ERROR', (error as Error).message).catch(() => undefined);
   }
 
   async status(ownerId: string, botId: string): Promise<ManagedComputerStatus> {
     const base = await this.provider.status(ownerId, botId);
-    const lease = this.leases.current(ownerId);
+    const lease = await this.leases.current(ownerId);
     return {
       ...base,
       provider: { kind: this.providerKind, isolation: this.providerKind === 'docker' ? 'docker-container' : 'host-process' },
-      lease: lease ? { botId: lease.botId, holderId: lease.holderId, mode: lease.mode, acquiredAt: lease.acquiredAt, expiresAt: lease.expiresAt } : undefined,
+      lease: lease ? { botId: lease.botId, holderId: lease.holderId, mode: lease.mode, fence: lease.fence, acquiredAt: lease.acquiredAt, expiresAt: lease.expiresAt } : undefined,
       humanControl: lease?.mode === 'HUMAN'
     };
   }
 
   async start(ownerId: string, botId: string): Promise<ManagedComputerStatus> {
-    const result = await this.provider.start(ownerId, botId); this.emit(ownerId, botId, 'computer.started', { state: result.state, provider: this.providerKind }); return this.status(ownerId, botId);
-  }
-  async stop(ownerId: string, botId: string): Promise<ManagedComputerStatus> {
-    const result = await this.provider.stop(ownerId, botId); this.emit(ownerId, botId, 'computer.stopped', { state: result.state }); return this.status(ownerId, botId);
-  }
-  async suspend(ownerId: string, botId: string): Promise<ManagedComputerStatus> {
-    if (this.provider instanceof DockerComputerProvider) await this.provider.suspend(ownerId); else await this.provider.stop(ownerId, botId);
-    this.emit(ownerId, botId, 'computer.stopped', { suspended: true }); return this.status(ownerId, botId);
+    await this.markActive(ownerId);
+    try {
+      const result = await this.provider.start(ownerId, botId);
+      if (this.providerKind === 'docker') await this.instances.observe(ownerId, 'RUNNING');
+      await this.emit(ownerId, botId, 'computer.started', { state: result.state, provider: this.providerKind });
+      return this.status(ownerId, botId);
+    } catch (error) { await this.markProviderError(ownerId, error); throw error; }
   }
 
-  takeover(ownerId: string, botId: string, sessionId: string): LeaseAcquisition {
-    const acquisition = this.leases.takeover(ownerId, botId, sessionId);
-    this.emit(ownerId, botId, 'control.taken', { holderId: acquisition.lease.holderId, preemptedHolderId: acquisition.preempted?.holderId });
+  async stop(ownerId: string, botId: string): Promise<ManagedComputerStatus> {
+    try {
+      const result = await this.provider.stop(ownerId, botId);
+      if (this.providerKind === 'docker') await this.instances.observe(ownerId, 'RUNNING');
+      await this.emit(ownerId, botId, 'computer.stopped', { state: result.state, browserOnly: this.providerKind === 'docker' });
+      return this.status(ownerId, botId);
+    } catch (error) { await this.markProviderError(ownerId, error); throw error; }
+  }
+
+  async suspend(ownerId: string, botId: string): Promise<ManagedComputerStatus> {
+    if (this.providerKind === 'docker') await this.instances.setDesired(ownerId, this.providerKind, 'SUSPENDED', this.resourceName(ownerId));
+    try {
+      if (this.provider instanceof DockerComputerProvider) await this.provider.suspend(ownerId); else await this.provider.stop(ownerId, botId);
+      if (this.providerKind === 'docker') await this.instances.observe(ownerId, 'STOPPED');
+      await this.emit(ownerId, botId, 'computer.stopped', { suspended: true });
+      return this.status(ownerId, botId);
+    } catch (error) { await this.markProviderError(ownerId, error); throw error; }
+  }
+
+  async takeover(ownerId: string, botId: string, sessionId: string): Promise<LeaseAcquisition> {
+    const acquisition = await this.leases.takeover(ownerId, botId, sessionId);
+    await this.emit(ownerId, botId, 'control.taken', { holderId: acquisition.lease.holderId, fence: acquisition.lease.fence, preemptedHolderId: acquisition.preempted?.holderId });
     return acquisition;
   }
-  releaseHuman(ownerId: string, botId: string, token: string): ComputerLease | undefined {
-    const released = this.leases.release(ownerId, token);
-    if (released) this.emit(ownerId, botId, 'control.released', { holderId: released.holderId });
+
+  async releaseHuman(ownerId: string, botId: string, token: string): Promise<ComputerLeaseView | undefined> {
+    const released = await this.leases.release(ownerId, token);
+    if (released) await this.emit(ownerId, botId, 'control.released', { holderId: released.holderId, fence: released.fence });
     return released;
   }
-  assertHuman(ownerId: string, token: string): ComputerLease { return this.leases.assertHuman(ownerId, token); }
-  releaseRun(ownerId: string, runId: string): void { this.leases.releaseRun(ownerId, runId); }
 
-  async open(ownerId: string, botId: string, url: string): Promise<BrowserView> { const value = await this.provider.open(ownerId, botId, url); this.emit(ownerId, botId, 'browser.opened', { url: value.url, title: value.title }); return value; }
-  async click(ownerId: string, botId: string, selector: string): Promise<BrowserActionResult> { if (!this.provider.click) throw new Error('This computer provider does not support interactive browser clicks.'); const value = await this.provider.click(ownerId, botId, selector); this.emit(ownerId, botId, 'browser.acted', { action: 'click', selector, url: value.url }); return value; }
-  async type(ownerId: string, botId: string, selector: string, text: string, submit = false): Promise<BrowserActionResult> { if (!this.provider.type) throw new Error('This computer provider does not support browser typing.'); const value = await this.provider.type(ownerId, botId, selector, text, submit); this.emit(ownerId, botId, 'browser.acted', { action: 'type', selector, submit, url: value.url }); return value; }
-  async scroll(ownerId: string, botId: string, deltaY: number): Promise<BrowserActionResult> { if (!this.provider.scroll) throw new Error('This computer provider does not support browser scrolling.'); const value = await this.provider.scroll(ownerId, botId, deltaY); this.emit(ownerId, botId, 'browser.acted', { action: 'scroll', deltaY, url: value.url }); return value; }
-  async waitFor(ownerId: string, botId: string, selector: string, timeoutMs = 5000): Promise<BrowserActionResult> { if (!this.provider.waitFor) throw new Error('This computer provider does not support browser waits.'); const value = await this.provider.waitFor(ownerId, botId, selector, timeoutMs); this.emit(ownerId, botId, 'browser.acted', { action: 'wait', selector, url: value.url }); return value; }
-  async screenshot(ownerId: string, botId: string): Promise<BrowserActionResult> { if (!this.provider.screenshot) throw new Error('This computer provider does not support browser screenshots.'); const value = await this.provider.screenshot(ownerId, botId); this.emit(ownerId, botId, 'browser.acted', { action: 'screenshot', url: value.url }); return value; }
-  async listFiles(ownerId: string, botId: string): Promise<ComputerFileEntry[]> { return this.provider.listFiles(ownerId, botId); }
-  async readText(ownerId: string, botId: string, relativePath: string) { const value = await this.provider.readText(ownerId, botId, relativePath); this.emit(ownerId, botId, 'file.read', { path: relativePath, sizeBytes: value.sizeBytes }); return value; }
-  async writeText(ownerId: string, botId: string, relativePath: string, content: string) { const value = await this.provider.writeText(ownerId, botId, relativePath, content); this.emit(ownerId, botId, 'file.written', { path: relativePath, sizeBytes: value.sizeBytes }); return value; }
-  async terminal(ownerId: string, botId: string, program: string, args: string[] = [], timeoutMs = 20_000): Promise<TerminalExecutionResult> { const value = await this.provider.terminal(ownerId, botId, program, args, timeoutMs); this.emit(ownerId, botId, 'terminal.executed', { program: value.program, exitCode: value.exitCode }); return value; }
+  assertHuman(ownerId: string, token: string): Promise<ComputerLease> { return this.leases.assertHuman(ownerId, token); }
+  async releaseRun(ownerId: string, runId: string): Promise<void> { await this.leases.releaseRun(ownerId, runId); }
+
+  async open(ownerId: string, botId: string, url: string): Promise<BrowserView> {
+    await this.markActive(ownerId);
+    try { const value = await this.provider.open(ownerId, botId, url); if (this.providerKind === 'docker') await this.instances.observe(ownerId, 'RUNNING'); await this.emit(ownerId, botId, 'browser.opened', { url: value.url, title: value.title }); return value; }
+    catch (error) { await this.markProviderError(ownerId, error); throw error; }
+  }
+  async click(ownerId: string, botId: string, selector: string): Promise<BrowserActionResult> {
+    if (!this.provider.click) throw new Error('This computer provider does not support interactive browser clicks.');
+    await this.markActive(ownerId);
+    try { const value = await this.provider.click(ownerId, botId, selector); if (this.providerKind === 'docker') await this.instances.observe(ownerId, 'RUNNING'); await this.emit(ownerId, botId, 'browser.acted', { action: 'click', selector, url: value.url }); return value; }
+    catch (error) { await this.markProviderError(ownerId, error); throw error; }
+  }
+  async type(ownerId: string, botId: string, selector: string, text: string, submit = false): Promise<BrowserActionResult> {
+    if (!this.provider.type) throw new Error('This computer provider does not support browser typing.');
+    await this.markActive(ownerId);
+    try { const value = await this.provider.type(ownerId, botId, selector, text, submit); if (this.providerKind === 'docker') await this.instances.observe(ownerId, 'RUNNING'); await this.emit(ownerId, botId, 'browser.acted', { action: 'type', selector, submit, url: value.url }); return value; }
+    catch (error) { await this.markProviderError(ownerId, error); throw error; }
+  }
+  async scroll(ownerId: string, botId: string, deltaY: number): Promise<BrowserActionResult> {
+    if (!this.provider.scroll) throw new Error('This computer provider does not support browser scrolling.');
+    await this.markActive(ownerId);
+    try { const value = await this.provider.scroll(ownerId, botId, deltaY); if (this.providerKind === 'docker') await this.instances.observe(ownerId, 'RUNNING'); await this.emit(ownerId, botId, 'browser.acted', { action: 'scroll', deltaY, url: value.url }); return value; }
+    catch (error) { await this.markProviderError(ownerId, error); throw error; }
+  }
+  async waitFor(ownerId: string, botId: string, selector: string, timeoutMs = 5000): Promise<BrowserActionResult> {
+    if (!this.provider.waitFor) throw new Error('This computer provider does not support browser waits.');
+    await this.markActive(ownerId);
+    try { const value = await this.provider.waitFor(ownerId, botId, selector, timeoutMs); if (this.providerKind === 'docker') await this.instances.observe(ownerId, 'RUNNING'); await this.emit(ownerId, botId, 'browser.acted', { action: 'wait', selector, url: value.url }); return value; }
+    catch (error) { await this.markProviderError(ownerId, error); throw error; }
+  }
+  async screenshot(ownerId: string, botId: string): Promise<BrowserActionResult> {
+    if (!this.provider.screenshot) throw new Error('This computer provider does not support browser screenshots.');
+    await this.markActive(ownerId);
+    try { const value = await this.provider.screenshot(ownerId, botId); if (this.providerKind === 'docker') await this.instances.observe(ownerId, 'RUNNING'); await this.emit(ownerId, botId, 'browser.acted', { action: 'screenshot', url: value.url }); return value; }
+    catch (error) { await this.markProviderError(ownerId, error); throw error; }
+  }
+  async listFiles(ownerId: string, botId: string): Promise<ComputerFileEntry[]> {
+    await this.markActive(ownerId);
+    try { const value = await this.provider.listFiles(ownerId, botId); if (this.providerKind === 'docker') await this.instances.observe(ownerId, 'RUNNING'); return value; }
+    catch (error) { await this.markProviderError(ownerId, error); throw error; }
+  }
+  async readText(ownerId: string, botId: string, relativePath: string) {
+    await this.markActive(ownerId);
+    try { const value = await this.provider.readText(ownerId, botId, relativePath); if (this.providerKind === 'docker') await this.instances.observe(ownerId, 'RUNNING'); await this.emit(ownerId, botId, 'file.read', { path: relativePath, sizeBytes: value.sizeBytes }); return value; }
+    catch (error) { await this.markProviderError(ownerId, error); throw error; }
+  }
+  async writeText(ownerId: string, botId: string, relativePath: string, content: string) {
+    await this.markActive(ownerId);
+    try { const value = await this.provider.writeText(ownerId, botId, relativePath, content); if (this.providerKind === 'docker') await this.instances.observe(ownerId, 'RUNNING'); await this.emit(ownerId, botId, 'file.written', { path: relativePath, sizeBytes: value.sizeBytes }); return value; }
+    catch (error) { await this.markProviderError(ownerId, error); throw error; }
+  }
+  async terminal(ownerId: string, botId: string, program: string, args: string[] = [], timeoutMs = 20_000): Promise<TerminalExecutionResult> {
+    await this.markActive(ownerId);
+    try { const value = await this.provider.terminal(ownerId, botId, program, args, timeoutMs); if (this.providerKind === 'docker') await this.instances.observe(ownerId, 'RUNNING'); await this.emit(ownerId, botId, 'terminal.executed', { program: value.program, exitCode: value.exitCode }); return value; }
+    catch (error) { await this.markProviderError(ownerId, error); throw error; }
+  }
+
+  async reconcileAll(): Promise<{ checked: number; recovered: number; failed: number }> {
+    if (this.providerKind !== 'docker') return { checked: 0, recovered: 0, failed: 0 };
+    const records = await this.instances.list(this.providerKind);
+    let recovered = 0;
+    let failed = 0;
+    for (const record of records) {
+      if (!this.provider.reconcile) { failed++; await this.instances.observe(record.ownerId, 'ERROR', 'Computer provider does not implement reconciliation.'); continue; }
+      const result = await this.provider.reconcile(record.ownerId, record.desiredState);
+      await this.instances.observe(record.ownerId, result.observedState, result.error);
+      if (result.recovered) recovered++;
+      if (result.observedState === 'ERROR') failed++;
+    }
+    return { checked: records.length, recovered, failed };
+  }
+
+  async health(): Promise<ManagedComputerHealth> {
+    const providerHealth = this.provider.health ? await this.provider.health() : { ok: true, detail: `${this.providerKind} provider is available.` };
+    const tracked = this.providerKind === 'docker' ? (await this.instances.list(this.providerKind)).length : 0;
+    const unhealthy = this.providerKind === 'docker' ? (await this.instances.unhealthy(this.providerKind)).length : 0;
+    return { ok: providerHealth.ok && unhealthy === 0, provider: { kind: this.providerKind, ok: providerHealth.ok, detail: providerHealth.detail }, lifecycle: { tracked, unhealthy } };
+  }
 
   async execute(run: Run, call: ToolCall): Promise<ToolResult> {
     const startedAt = Date.now();
     if (!run.agentId) return toolResult(call, startedAt, null, 'Computer tools require a bot-owned run.');
-    try { this.leases.acquireBot(run.principalId, run.agentId, run.id); }
+    try { await this.leases.acquireBot(run.principalId, run.agentId, run.id); }
     catch (err) {
       const code = (err as Error).message;
-      this.emit(run.principalId, run.agentId, 'lease.blocked', { runId: run.id, code });
+      await this.emit(run.principalId, run.agentId, 'lease.blocked', { runId: run.id, code }).catch(() => undefined);
       return toolResult(call, startedAt, null, code);
     }
     try {
