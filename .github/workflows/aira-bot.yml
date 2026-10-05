@@ -42,7 +42,11 @@ jobs:
             echo "Worker lease certification attempt ${attempt}/5"
             npm run test:bot:worker-leases
           done
-      - run: npm run test:bot:distributed-runtime
+      - run: |
+          for attempt in 1 2 3 4 5; do
+            echo "Distributed foundation certification attempt ${attempt}/5"
+            npm run test:bot:distributed-runtime
+          done
       - run: npx playwright install --with-deps chromium
       - run: npm run test:bot:computer
       - run: npm run test:bot:browser

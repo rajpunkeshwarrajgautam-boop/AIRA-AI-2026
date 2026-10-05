@@ -1,74 +1,239 @@
 import assert from 'node:assert/strict';
-import { PGlite } from '@electric-sql/pglite';
+import { fork, type ChildProcess } from 'node:child_process';
+import { setTimeout as delay } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
+import { createTestDatabase } from './postgres-fixture.js';
 
-const pg = await PGlite.create();
-const now = 1_800_000_000_000;
-
-try {
-  await pg.exec(`
-    CREATE TABLE aira_computer_leases (owner_id text PRIMARY KEY, bot_id text NOT NULL, holder_id text NOT NULL, mode text NOT NULL, token text NOT NULL UNIQUE, fence bigint NOT NULL DEFAULT 1, acquired_at bigint NOT NULL, lease_until bigint NOT NULL, updated_at bigint NOT NULL);
-    CREATE TABLE aira_computer_event_sequences (owner_id text PRIMARY KEY, sequence bigint NOT NULL DEFAULT 0);
-    CREATE TABLE aira_computer_events (owner_id text NOT NULL, sequence bigint NOT NULL, bot_id text NOT NULL, type text NOT NULL, data jsonb NOT NULL DEFAULT '{}', created_at bigint NOT NULL, PRIMARY KEY(owner_id, sequence));
-    CREATE TABLE aira_runtime_outbox (id text PRIMARY KEY, topic text NOT NULL, aggregate_id text NOT NULL, dedupe_key text NOT NULL UNIQUE, payload jsonb NOT NULL, status text NOT NULL DEFAULT 'PENDING', attempts integer NOT NULL DEFAULT 0, available_at bigint NOT NULL, claimed_by text, claim_until bigint, created_at bigint NOT NULL, published_at bigint, last_error text);
-    CREATE TABLE aira_scheduler_leases (name text PRIMARY KEY, holder_id text NOT NULL, fence bigint NOT NULL DEFAULT 1, lease_until bigint NOT NULL, updated_at bigint NOT NULL);
-    CREATE TABLE aira_runtime_instances (instance_id text PRIMARY KEY, role text NOT NULL, version text NOT NULL, started_at bigint NOT NULL, heartbeat_at bigint NOT NULL, metadata jsonb NOT NULL DEFAULT '{}');
-    CREATE TABLE aira_computer_instances (owner_id text PRIMARY KEY, provider text NOT NULL, desired_state text NOT NULL DEFAULT 'STOPPED', observed_state text NOT NULL DEFAULT 'STOPPED', provider_ref text, generation bigint NOT NULL DEFAULT 0, observed_generation bigint NOT NULL DEFAULT 0, last_reconciled_at bigint, last_error text, updated_at bigint NOT NULL);
-  `);
-
-  // Distributed computer lease: one live owner, human preemption, monotonically increasing fence.
-  await pg.query(`INSERT INTO aira_computer_leases VALUES ($1,$2,$3,$4,$5,1,$6,$7,$6)`, ['owner','bot-a','run:r1','BOT','tok-a',now,now+60_000]);
-  const live = await pg.query(`SELECT * FROM aira_computer_leases WHERE owner_id=$1 AND lease_until>$2`, ['owner', now]);
-  assert.equal(live.rows.length, 1);
-  const blocked = await pg.query(`UPDATE aira_computer_leases SET holder_id=$1 WHERE owner_id=$2 AND (lease_until <= $3 OR holder_id=$1) RETURNING *`, ['run:r2','owner',now]);
-  assert.equal(blocked.rows.length, 0, 'second bot cannot steal a live distributed lease');
-  const takeover = await pg.query(`UPDATE aira_computer_leases SET holder_id='human:s1', mode='HUMAN', token='tok-human', fence=fence+1, lease_until=$2, updated_at=$1 WHERE owner_id='owner' AND mode='BOT' RETURNING fence`, [now, now+300_000]);
-  assert.equal(Number((takeover.rows[0] as any).fence), 2);
-  const staleRelease = await pg.query(`DELETE FROM aira_computer_leases WHERE owner_id='owner' AND token='tok-a' AND fence=1 RETURNING owner_id`);
-  assert.equal(staleRelease.rows.length, 0, 'stale token/fence cannot release takeover lease');
-
-  // Durable event cursor survives process boundaries and is owner-global/monotonic.
-  for (const [bot, type] of [['bot-a','browser.opened'], ['bot-b','file.written'], ['bot-a','control.taken']] as const) {
-    const seq = await pg.query(`INSERT INTO aira_computer_event_sequences(owner_id,sequence) VALUES('owner',1) ON CONFLICT(owner_id) DO UPDATE SET sequence=aira_computer_event_sequences.sequence+1 RETURNING sequence`);
-    await pg.query(`INSERT INTO aira_computer_events(owner_id,sequence,bot_id,type,data,created_at) VALUES('owner',$1,$2,$3,'{}',$4)`, [(seq.rows[0] as any).sequence,bot,type,now]);
+process.env.NODE_ENV = 'test';
+const cleanup = await createTestDatabase();
+const { db, runMigrations, closeDb } = await import('../packages/db/src/index.js');
+const { DistributedRuntimeCoordinator } = await import('../packages/computer-runtime/src/distributed.js');
+const { RuntimeReliabilityService } = await import('../packages/computer-runtime/src/reliability.js');
+const workers: ChildProcess[] = [];
+const coordinator = new DistributedRuntimeCoordinator(db);
+let requestId = 0;
+const input = (ownerId: string, holderId: string, ttlMs = 60000) => ({ ownerId, botId: 'bot', holderId, mode: 'BOT' as const, ttlMs });
+async function until(check: () => Promise<boolean>, message: string, timeout = 10000) {
+  const deadline = performance.now() + timeout;
+  while (performance.now() < deadline) {
+    if (await check()) return;
+    await delay(15);
   }
-  const replay = await pg.query(`SELECT sequence,type FROM aira_computer_events WHERE owner_id='owner' AND bot_id='bot-a' AND sequence>1 ORDER BY sequence`);
-  assert.deepEqual(replay.rows.map((r:any) => [Number(r.sequence), r.type]), [[3,'control.taken']]);
+  assert.fail(message);
+}
+async function spawnWorker(index: number) {
+  const child = fork(fileURLToPath(new URL('./aira-bot-distributed-worker.ts', import.meta.url)), [], {
+    execArgv: ['--import', 'tsx'], stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+    env: { ...process.env, AIRA_TEST_CLOCK: String(index % 2 ? 1 : 9_000_000_000_000) }
+  });
+  workers.push(child);
+  let output = '';
+  child.stderr?.on('data', data => { output += data; });
+  child.stdout?.on('data', data => { output += data; });
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Worker startup timed out: ' + output)), 15000);
+    child.once('error', reject);
+    child.once('exit', code => { clearTimeout(timer); reject(new Error('Worker startup exit ' + code + ': ' + output)); });
+    child.once('message', () => { clearTimeout(timer); resolve(); });
+  });
+  return child;
+}
+function request(child: ChildProcess, action: string, key: string, holder: string): Promise<{ value?: any; error?: string }> {
+  const id = ++requestId;
+  return new Promise((resolve, reject) => {
+    const finish = () => { clearTimeout(timer); child.off('message', onMessage); child.off('exit', onExit); };
+    const onMessage = (message: any) => { if (message.id === id) { finish(); resolve(message); } };
+    const onExit = (code: number | null) => { finish(); reject(new Error('Worker exited before reply: ' + code)); };
+    const timer = setTimeout(() => { finish(); reject(new Error('Worker request timed out: ' + action)); }, 15000);
+    child.on('message', onMessage);
+    child.once('exit', onExit);
+    child.send({ id, action, key, holder });
+  });
+}
+async function blockedUpdate(table: string, predicate: Record<string, unknown>, deadlineColumn: string, action: () => Promise<unknown>, queryPattern: string) {
+  const lock = await db.transaction();
+  let pending: Promise<unknown> | undefined;
+  try {
+    await lock(table).where(predicate).forUpdate().first();
+    pending = action();
+    // Attach rejection immediately; assert the original settled result below.
+    void pending.catch(() => {});
+    await until(async () => {
+      const rows = await db.raw("SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND cardinality(pg_blocking_pids(pid)) > 0 AND query LIKE ?", [queryPattern]);
+      return rows.rows.length > 0;
+    }, 'operation must actually wait for a database row lock');
+    await lock(table).where(predicate).update({ [deadlineColumn]: 0 });
+    await lock.commit();
+    return await pending;
+  } catch (error) {
+    if (!lock.isCompleted()) await lock.rollback();
+    if (pending) await pending.catch(() => {});
+    throw error;
+  }
+}
+try {
+  await runMigrations();
 
-  // Transactional-outbox contract: dedupe, claim expiry and eventual publish.
-  await pg.query(`INSERT INTO aira_runtime_outbox VALUES('o1','computer.reconciled','owner','gen:1','{}','PENDING',0,$1,NULL,NULL,$1,NULL,NULL)`, [now]);
-  await pg.query(`INSERT INTO aira_runtime_outbox VALUES('o2','computer.reconciled','owner','gen:1','{}','PENDING',0,$1,NULL,NULL,$1,NULL,NULL) ON CONFLICT(dedupe_key) DO NOTHING`, [now]);
-  assert.equal(Number((await pg.query(`SELECT count(*)::int AS c FROM aira_runtime_outbox`)).rows[0]!.c), 1);
-  await pg.query(`UPDATE aira_runtime_outbox SET status='CLAIMED',claimed_by='worker-a',claim_until=$1,attempts=attempts+1 WHERE id='o1'`, [now+30_000]);
-  assert.equal((await pg.query(`SELECT status FROM aira_runtime_outbox WHERE id='o1'`)).rows[0]!.status, 'CLAIMED');
-  await pg.query(`UPDATE aira_runtime_outbox SET claimed_by='worker-b',claim_until=$1,attempts=attempts+1 WHERE id='o1' AND claim_until <= $2 RETURNING id`, [now+70_000, now+40_000]);
-  assert.equal((await pg.query(`SELECT claimed_by FROM aira_runtime_outbox WHERE id='o1'`)).rows[0]!.claimed_by, 'worker-b');
-  await pg.query(`UPDATE aira_runtime_outbox SET status='PUBLISHED',published_at=$1,claimed_by=NULL,claim_until=NULL WHERE id='o1' AND claimed_by='worker-b'`, [now+41_000]);
+  const first = await coordinator.acquireComputerLease(input('release', 'A'));
+  assert.equal(await coordinator.releaseComputerLease(first.ownerId, first.token, first.fence), true);
+  const second = await coordinator.acquireComputerLease(input('release', 'B'));
+  assert.ok(second.fence > first.fence, 'release preserves the fencing high-water mark');
+  assert.equal(await coordinator.releaseComputerLease(first.ownerId, first.token, first.fence), false);
+  await assert.rejects(coordinator.renewComputerLease(first.ownerId, first.token, 60000), /COMPUTER_LEASE_LOST/);
+  await assert.rejects(coordinator.assertComputerLease(second.ownerId, second.token, second.fence - 1), /COMPUTER_LEASE_LOST/);
+  await assert.rejects(coordinator.acquireComputerLease(input('invalid', 'A', 0)), /INVALID_LEASE_DURATION/);
+  await assert.rejects(coordinator.acquireComputerLease(input('release', 'C')), /COMPUTER_BUSY/);
+  const human = await coordinator.acquireComputerLease({ ...input('release', 'human'), mode: 'HUMAN', preemptBot: true });
+  assert.ok(human.fence > second.fence);
+  await assert.rejects(coordinator.acquireComputerLease(input('release', 'B')), /COMPUTER_TAKEN_OVER/);
+  await assert.rejects(coordinator.assertComputerLease(second.ownerId, second.token, second.fence), /COMPUTER_LEASE_LOST/);
+  assert.equal(await coordinator.releaseComputerLease(human.ownerId, human.token, human.fence), true);
 
-  // Scheduler leadership: live leader blocks peers; expired leader can be fenced out.
-  await pg.query(`INSERT INTO aira_scheduler_leases VALUES('routines','node-a',1,$1,$2)`, [now+45_000, now]);
-  const peer = await pg.query(`UPDATE aira_scheduler_leases SET holder_id='node-b',fence=fence+1,lease_until=$1 WHERE name='routines' AND lease_until <= $2 RETURNING fence`, [now+90_000, now]);
-  assert.equal(peer.rows.length, 0);
-  const failover = await pg.query(`UPDATE aira_scheduler_leases SET holder_id='node-b',fence=fence+1,lease_until=$1 WHERE name='routines' AND lease_until <= $2 RETURNING fence`, [now+100_000, now+46_000]);
-  assert.equal(Number((failover.rows[0] as any).fence), 2);
+  const waiting = await coordinator.acquireComputerLease(input('lock-wait', 'A'));
+  await assert.rejects(blockedUpdate('aira_computer_leases', { owner_id: waiting.ownerId }, 'lease_until',
+    () => coordinator.renewComputerLease(waiting.ownerId, waiting.token, 60000), '%aira_computer_leases%'), /COMPUTER_LEASE_LOST/);
 
-  // Desired/observed generation model makes container lifecycle restart-safe.
-  await pg.query(`INSERT INTO aira_computer_instances(owner_id,provider,desired_state,observed_state,generation,observed_generation,updated_at) VALUES('owner','docker','RUNNING','UNKNOWN',1,0,$1)`, [now]);
-  let backlog = await pg.query(`SELECT * FROM aira_computer_instances WHERE generation>observed_generation OR desired_state<>observed_state`);
-  assert.equal(backlog.rows.length, 1);
-  await pg.query(`UPDATE aira_computer_instances SET observed_state='RUNNING',observed_generation=1,last_reconciled_at=$1 WHERE owner_id='owner' AND generation>=1 AND observed_generation<=1`, [now+1]);
-  backlog = await pg.query(`SELECT * FROM aira_computer_instances WHERE generation>observed_generation OR desired_state<>observed_state`);
-  assert.equal(backlog.rows.length, 0);
-  await pg.query(`UPDATE aira_computer_instances SET desired_state='SUSPENDED',generation=2,updated_at=$1 WHERE owner_id='owner'`, [now+2]);
-  assert.equal((await pg.query(`SELECT count(*)::int AS c FROM aira_computer_instances WHERE generation>observed_generation OR desired_state<>observed_state`)).rows[0]!.c, 1);
+  await Promise.all(Array.from({ length: 8 }, (_, i) => spawnWorker(i)));
+  for (let round = 0; round < 5; round++) {
+    const claims = await Promise.all(workers.map((worker, i) => request(worker, 'lease', 'race:' + round, 'worker:' + i)));
+    const winners = claims.filter(result => result.value);
+    assert.equal(winners.length, 1, 'exactly one first-time computer owner across eight processes');
+    assert.equal(claims.filter(result => result.error === 'COMPUTER_BUSY').length, 7);
+    const winner = winners[0].value;
+    assert.equal(winner.fence, 1);
+    assert.equal(await coordinator.releaseComputerLease(winner.ownerId, winner.token, winner.fence), true);
+    const replacement = await coordinator.acquireComputerLease(input(winner.ownerId, 'replacement'));
+    assert.equal(replacement.fence, 2);
 
-  // Readiness inputs: heartbeat freshness, leader visibility, reconciliation backlog, outbox depth.
-  await pg.query(`INSERT INTO aira_runtime_instances VALUES('node-a','aira-bot-api','phase7',$1,$2,'{}')`, [now, now]);
-  const stale = await pg.query(`SELECT count(*)::int AS c FROM aira_runtime_instances WHERE heartbeat_at < $1`, [now-90_000]);
-  assert.equal(Number(stale.rows[0]!.c), 0);
-  const leader = await pg.query(`SELECT count(*)::int AS c FROM aira_scheduler_leases WHERE lease_until > $1`, [now+46_000]);
-  assert.equal(Number(leader.rows[0]!.c), 1);
+    const leaders = await Promise.all(workers.map((worker, i) => request(worker, 'scheduler', 'scheduler:' + round, 'worker:' + i)));
+    assert.equal(leaders.filter(result => result.value).length, 1, 'first-time scheduler claim is exclusive');
+    assert.equal(leaders.filter(result => result.error).length, 0);
 
-  console.log('Aira Bot distributed runtime: PASS — durable fenced computer leases, replayable events, outbox dedupe/reclaim, scheduler failover, lifecycle generations, readiness inputs');
+    const generations = await Promise.all(workers.map((worker, i) => request(worker, 'desired', 'lifecycle:' + round, 'worker:' + i)));
+    assert.deepEqual(generations.map(result => result.value).sort((a, b) => a - b), [1, 2, 3, 4, 5, 6, 7, 8]);
+    const events = await Promise.all(workers.map((worker, i) => request(worker, 'event', 'events:' + round, 'worker:' + i)));
+    assert.deepEqual(events.map(result => result.value.sequence).sort((a, b) => a - b), [1, 2, 3, 4, 5, 6, 7, 8]);
+    const replay = await new DistributedRuntimeCoordinator(db).computerEvents('events:' + round, 'bot', 4);
+    assert.deepEqual(replay.map(event => event.sequence), [5, 6, 7, 8]);
+  }
+
+  const dead = workers.pop()!;
+  const crash = (await request(dead, 'crash-lease', 'crashed-worker', 'dead')).value;
+  assert.ok(crash);
+  const exited = new Promise<void>(resolve => dead.once('exit', () => resolve()));
+  dead.kill('SIGKILL');
+  await exited;
+  await until(async () => !await coordinator.currentComputerLease(crash.ownerId), 'dead worker lease expires using database time');
+  const survivor = await coordinator.acquireComputerLease(input(crash.ownerId, 'survivor'));
+  assert.ok(survivor.fence > crash.fence);
+  await assert.rejects(coordinator.assertComputerLease(crash.ownerId, crash.token, crash.fence), /COMPUTER_LEASE_LOST/);
+
+  const crashedGeneration = await coordinator.setComputerDesiredState('crashed-reconciler', 'docker', 'RUNNING');
+  const deadReconciler = workers.pop()!;
+  assert.equal((await request(deadReconciler, 'crash-reconcile', 'crashed-reconciler', 'dead')).value.started, true);
+  const reconcilerExit = new Promise<void>(resolve => deadReconciler.once('exit', () => resolve()));
+  deadReconciler.kill('SIGKILL');
+  await reconcilerExit;
+  assert.equal(await coordinator.reconcileComputer('crashed-reconciler', crashedGeneration, async () => {}), true, 'worker death rolls back its observation; a survivor reconciles the durable intent');
+  assert.equal(Number((await db('aira_runtime_outbox').where({ dedupe_key: 'computer:crashed-reconciler:generation:' + crashedGeneration }).count('* as count'))[0].count), 1);
+  const recoveredNotification = (await coordinator.claimOutbox('recovery-publisher', 1))[0];
+  assert.equal(recoveredNotification.dedupeKey, 'computer:crashed-reconciler:generation:' + crashedGeneration);
+  assert.equal(await coordinator.completeOutbox(recoveredNotification.id, 'recovery-publisher', recoveredNotification.attempts), true);
+
+  const leaderA = await coordinator.acquireSchedulerLease('failover', 'A', 60000);
+  assert.ok(leaderA);
+  assert.equal(await coordinator.acquireSchedulerLease('failover', 'B', 60000), undefined);
+  await db('aira_scheduler_leases').where({ name: 'failover' }).update({ lease_until: 0 });
+  const leaderB = await coordinator.acquireSchedulerLease('failover', 'B', 60000);
+  assert.ok(leaderB && leaderB.fence > leaderA.fence);
+  assert.equal(await coordinator.assertSchedulerLease(leaderA), false);
+  assert.equal(await coordinator.assertSchedulerLease(leaderB), true);
+
+  const outbox = await coordinator.enqueueOutbox('test', 'aggregate', 'dedupe', { value: 1 });
+  assert.ok(outbox);
+  assert.equal(await coordinator.enqueueOutbox('test', 'aggregate', 'dedupe', { value: 2 }), undefined);
+  const claims = await Promise.all(workers.map((worker, i) => request(worker, 'outbox', '', 'outbox:' + i)));
+  assert.equal(claims.flatMap(result => result.value || []).length, 1, 'SKIP LOCKED outbox claim is exclusive across processes');
+  const row = await db('aira_runtime_outbox').where({ id: outbox }).first();
+  const originalAttempt = Number(row.attempts);
+  await db('aira_runtime_outbox').where({ id: outbox }).update({ claim_until: 0 });
+  assert.equal(await coordinator.completeOutbox(outbox, row.claimed_by, originalAttempt), false, 'expired acknowledgements fail even before reclaim');
+  const reclaimed = (await coordinator.claimOutbox(row.claimed_by, 1))[0];
+  assert.equal(reclaimed.attempts, originalAttempt + 1);
+  assert.equal(await coordinator.completeOutbox(outbox, row.claimed_by, originalAttempt), false, 'same worker ID cannot acknowledge an older attempt');
+  assert.equal(await coordinator.failOutbox(outbox, row.claimed_by, originalAttempt, 'stale', 0), false);
+  assert.equal(await coordinator.completeOutbox(outbox, row.claimed_by, reclaimed.attempts), true);
+  const waitingOutbox = await coordinator.enqueueOutbox('test', 'aggregate', 'wait-expiry', {});
+  const waitingClaim = (await coordinator.claimOutbox('wait-worker', 1))[0];
+  assert.equal(await blockedUpdate('aira_runtime_outbox', { id: waitingOutbox }, 'claim_until',
+    () => coordinator.completeOutbox(waitingOutbox!, 'wait-worker', waitingClaim.attempts), '%aira_runtime_outbox%'), false);
+
+  const generation1 = await coordinator.setComputerDesiredState('observe', 'docker', 'RUNNING');
+  const generation2 = await coordinator.setComputerDesiredState('observe', 'docker', 'STOPPED');
+  assert.equal(await coordinator.recordComputerObservation('observe', generation1, 'RUNNING'), false, 'stale generation cannot overwrite a newer intent');
+  await db.raw("ALTER TABLE aira_runtime_outbox ADD CONSTRAINT test_outbox_failure CHECK (aggregate_id <> 'observe')");
+  await assert.rejects(coordinator.recordComputerObservation('observe', generation2, 'STOPPED'), /test_outbox_failure/);
+  assert.equal(Number((await db('aira_computer_instances').where({ owner_id: 'observe' }).first()).observed_generation), 0, 'outbox failure rolls back the observation');
+  await db.raw('ALTER TABLE aira_runtime_outbox DROP CONSTRAINT test_outbox_failure');
+  assert.equal(await coordinator.recordComputerObservation('observe', generation2, 'STOPPED'), true);
+  assert.equal(Number((await db('aira_runtime_outbox').where({ dedupe_key: 'computer:observe:generation:' + generation2 }).count('* as count'))[0].count), 1);
+
+  const reconcileGeneration = await coordinator.setComputerDesiredState('reconcile', 'docker', 'RUNNING');
+  let applied = 0;
+  const apply = async () => { applied++; await delay(25); };
+  const reconciled = await Promise.all(Array.from({ length: 8 }, () => coordinator.reconcileComputer('reconcile', reconcileGeneration, apply)));
+  assert.equal(reconciled.filter(Boolean).length, 1);
+  assert.equal(applied, 1, 'competing reconcilers apply one lifecycle generation only once');
+  const failureGeneration = await coordinator.setComputerDesiredState('reconcile-error', 'docker', 'RUNNING');
+  assert.equal(await coordinator.reconcileComputer('reconcile-error', failureGeneration, async () => { throw new Error('provider unavailable'); }), false);
+  assert.equal((await db('aira_computer_instances').where({ owner_id: 'reconcile-error' }).first()).observed_state, 'ERROR');
+  assert.equal(await coordinator.reconcileComputer('reconcile-error', failureGeneration, async () => {}), true, 'provider failure remains retryable');
+
+  // Readiness must not be vacuously true; dead historical instances remain diagnostic.
+  assert.equal((await coordinator.readiness()).ready, false);
+  await coordinator.heartbeatInstance('old', 'aira-bot-api', 'test');
+  await db('aira_runtime_instances').where({ instance_id: 'old' }).update({ heartbeat_at: 0 });
+  await coordinator.heartbeatInstance('live', 'aira-bot-api', 'test');
+  await coordinator.acquireSchedulerLease('aira-bot-routines', 'live', 60000);
+  assert.equal((await coordinator.readiness()).ready, false, 'unreconciled intent blocks readiness');
+  for (const item of await coordinator.reconciliationBacklog()) await coordinator.recordComputerObservation(item.ownerId, item.generation, item.desiredState);
+  const health = await coordinator.readiness();
+  assert.equal(health.ready, true);
+  assert.equal(health.staleInstances, 1);
+  await db('aira_scheduler_leases').where({ name: 'aira-bot-routines' }).update({ lease_until: 0 });
+  assert.equal((await coordinator.readiness()).ready, false, 'missing routine leadership blocks readiness');
+
+  const provider = { kind: 'docker' as const } as any;
+  const service = new RuntimeReliabilityService(provider, coordinator, { instanceId: 'service-test' });
+  await service.heartbeat();
+  assert.equal(await service.isSchedulerLeader(), true);
+  await db('aira_scheduler_leases').where({ name: 'aira-bot-routines' }).update({ lease_until: 0 });
+  assert.equal(await service.isSchedulerLeader(), false, 'cached leadership is not authority');
+  const heartbeat = coordinator.heartbeatInstance.bind(coordinator);
+  coordinator.heartbeatInstance = async () => { throw new Error('database unavailable'); };
+  await assert.rejects(service.heartbeat(), /database unavailable/);
+  assert.equal(await service.isSchedulerLeader(), false);
+  coordinator.heartbeatInstance = heartbeat;
+  const readiness = coordinator.readiness.bind(coordinator);
+  coordinator.readiness = async () => { throw new Error('database unavailable'); };
+  assert.deepEqual(await service.health(), { live: true, ready: false, database: false, schedulerLeader: false });
+  coordinator.readiness = readiness;
+  service.stop();
+  const localService = new RuntimeReliabilityService({} as any, coordinator, { instanceId: 'local-test' });
+  const localGeneration = await localService.requestState('local-kind-default', 'STOPPED');
+  assert.equal(localGeneration, 1);
+  assert.equal((await db('aira_computer_instances').where({ owner_id: 'local-kind-default' }).first()).provider, 'local');
+  localService.stop();
+
+  console.log('Aira Bot distributed foundations: PASS — actual coordinator methods on PostgreSQL; 8 OS workers; 5 rounds each of computer/scheduler/lifecycle/event contention; clock skew; worker crash/expiry; release fencing; lock-wait expiry; outbox attempt fencing; atomic observation/outbox rollback; serialized reconciliation; fail-closed readiness');
 } finally {
-  await pg.close();
+  await Promise.all(workers.map(child => new Promise<void>(resolve => {
+    if (child.exitCode !== null || child.signalCode !== null) return resolve();
+    child.once('exit', () => resolve());
+    if (child.connected) child.disconnect();
+    const timer = setTimeout(() => child.kill('SIGKILL'), 3000);
+    child.once('exit', () => clearTimeout(timer));
+  })));
+  await closeDb();
+  await cleanup();
 }

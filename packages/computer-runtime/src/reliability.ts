@@ -1,7 +1,7 @@
 import { hostname } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import type { ComputerProvider } from './provider.js';
-import { DistributedRuntimeCoordinator, distributedRuntime, type DesiredComputerState } from './distributed.js';
+import { DistributedRuntimeCoordinator, distributedRuntime, type DesiredComputerState, type SchedulerLease } from './distributed.js';
 
 export interface RuntimeReliabilityOptions {
   instanceId?: string;
@@ -15,7 +15,7 @@ export class RuntimeReliabilityService {
   readonly instanceId: string;
   private heartbeatTimer?: NodeJS.Timeout;
   private reconcileTimer?: NodeJS.Timeout;
-  private schedulerFence?: number;
+  private schedulerLease?: SchedulerLease;
 
   constructor(
     private readonly provider: ComputerProvider,
@@ -26,6 +26,7 @@ export class RuntimeReliabilityService {
   }
 
   async start(): Promise<void> {
+    if (this.heartbeatTimer) return;
     await this.heartbeat();
     await this.reconcile();
     const heartbeatMs = Math.max(5_000, this.options.heartbeatMs || 20_000);
@@ -41,36 +42,33 @@ export class RuntimeReliabilityService {
     if (this.reconcileTimer) clearInterval(this.reconcileTimer);
     this.heartbeatTimer = undefined;
     this.reconcileTimer = undefined;
+    this.schedulerLease = undefined;
   }
 
-  async heartbeat(now = Date.now()): Promise<void> {
-    await this.coordinator.heartbeatInstance(this.instanceId, 'aira-bot-api', this.options.version || process.env.npm_package_version || 'dev', { provider: this.provider.kind }, now);
-    const leadership = await this.coordinator.acquireSchedulerLease('aira-bot-routines', this.instanceId, this.options.schedulerLeaseMs || 45_000, now);
-    this.schedulerFence = leadership?.fence;
+  async heartbeat(): Promise<void> {
+    this.schedulerLease = undefined;
+    await this.coordinator.heartbeatInstance(this.instanceId, 'aira-bot-api', this.options.version || process.env.npm_package_version || 'dev', { provider: this.provider.kind || 'local' });
+    this.schedulerLease = await this.coordinator.acquireSchedulerLease('aira-bot-routines', this.instanceId, this.options.schedulerLeaseMs || 45_000);
   }
 
-  isSchedulerLeader(): boolean { return this.schedulerFence !== undefined; }
+  async isSchedulerLeader(): Promise<boolean> {
+    return this.schedulerLease ? this.coordinator.assertSchedulerLease(this.schedulerLease) : false;
+  }
 
   async requestState(ownerId: string, desiredState: DesiredComputerState): Promise<number> {
-    return this.coordinator.setComputerDesiredState(ownerId, this.provider.kind, desiredState);
+    return this.coordinator.setComputerDesiredState(ownerId, this.provider.kind || 'local', desiredState);
   }
 
   async reconcile(): Promise<void> {
     for (const item of await this.coordinator.reconciliationBacklog(50)) {
-      if (item.provider !== this.provider.kind) continue;
-      try {
-        await this.applyDesiredState(item.ownerId, item.desiredState);
-        await this.coordinator.recordComputerObservation(item.ownerId, item.generation, item.desiredState);
-        await this.coordinator.enqueueOutbox('computer.reconciled', item.ownerId, `computer:${item.ownerId}:generation:${item.generation}`, { ownerId: item.ownerId, generation: item.generation, state: item.desiredState });
-      } catch (error) {
-        await this.coordinator.recordComputerObservation(item.ownerId, item.generation, 'ERROR', undefined, (error as Error).message);
-      }
+      if (item.provider !== (this.provider.kind || 'local')) continue;
+      await this.coordinator.reconcileComputer(item.ownerId, item.generation, state => this.applyDesiredState(item.ownerId, state));
     }
   }
 
-  async health(): Promise<{ live: true; ready: boolean; schedulerLeader: boolean; database: boolean; staleInstances: number; reconciliationBacklog: number; pendingOutbox: number }> {
-    const state = await this.coordinator.readiness();
-    return { live: true, ...state, schedulerLeader: this.isSchedulerLeader() || state.schedulerLeader };
+  async health() {
+    try { return { live: true as const, ...await this.coordinator.readiness() }; }
+    catch { return { live: true as const, ready: false, database: false, schedulerLeader: false }; }
   }
 
   private async applyDesiredState(ownerId: string, desiredState: DesiredComputerState): Promise<void> {
