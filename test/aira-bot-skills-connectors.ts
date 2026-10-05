@@ -1,12 +1,8 @@
 import assert from 'node:assert/strict';
-import { PGlite } from '@electric-sql/pglite';
-import { PGLiteSocketServer } from '@electric-sql/pglite-socket';
+import { createTestDatabase } from './postgres-fixture.js';
 
 process.env.NODE_ENV = 'test';
-process.env.DATABASE_URL = 'postgres://postgres:postgres@127.0.0.1:55437/postgres';
-const pg = await PGlite.create();
-const socket = new PGLiteSocketServer({ db: pg, port: 55437, host: '127.0.0.1', maxConnections: 20 });
-await socket.start();
+const cleanupDatabase = await createTestDatabase();
 const { db, runMigrations, closeDb } = await import('../packages/db/src/index.js');
 await runMigrations();
 const { BotRepository } = await import('../packages/aira-bot/src/repository.js');
@@ -112,6 +108,5 @@ try {
   console.log('Aira Bot skills/connectors: PASS — schema normalization, owner isolation, deletion fence, immutable run snapshot, sanitized connector catalog, approval class, SSRF rejection');
 } finally {
   await closeDb();
-  await socket.stop();
-  await pg.close();
+  await cleanupDatabase();
 }

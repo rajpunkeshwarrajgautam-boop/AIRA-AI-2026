@@ -1,193 +1,260 @@
 import assert from 'node:assert/strict';
-import { PGlite } from '@electric-sql/pglite';
+import { randomUUID } from 'node:crypto';
 
 process.env.NODE_ENV = 'test';
+process.env.DATABASE_URL = process.env.AIRA_WORKER_LEASE_DATABASE_URL
+  || process.env.DATABASE_URL
+  || 'postgres://aira:aira@127.0.0.1:5432/aira_db';
 process.env.AIRA_RUN_LEASE_TTL_MS = '15000';
 
-// Phase 6 certifies the PostgreSQL lease predicate itself. Use PGlite directly here
-// instead of its TCP socket shim: the shim can lose unnamed prepared statements when
-// node-postgres multiplexes concurrent Bind messages, producing protocol error 26000
-// before PostgreSQL/PGlite evaluates the lease UPDATE. Other integration suites cover
-// the application's Knex/socket repository path.
-const pg = await PGlite.create();
+// Worker leasing is intentionally certified against a real PostgreSQL server.
+// The lease contract depends on independent database sessions under contention;
+// an in-process socket multiplexer cannot faithfully model that boundary.
+const { db, runMigrations, closeDb } = await import('../packages/db/src/index.js');
+await runMigrations();
+const { BotRepository } = await import('../packages/aira-bot/src/repository.js');
+const { ModelRouter } = await import('../packages/model-router/src/index.js');
+const { ToolRegistry } = await import('../packages/tool-runtime/src/index.js');
+const { AgentRuntime } = await import('../packages/agent-runtime/src/index.js');
+const { PostgresRunRepository, withExecutionLease } = await import('../packages/agent-runtime/src/repositories.js');
+const { ApprovalKernel } = await import('../packages/approvals/src/index.js');
+const { PostgresApprovalRepository, PostgresSessionGrantRepository } = await import('../packages/approvals/src/repositories.js');
+const { BrainV2KnowledgeEngine } = await import('../packages/knowledge/src/index.js');
 
-const terminalStates = ['COMPLETED', 'FAILED', 'CANCELLED'];
-const leaseTtl = 15_000;
-const leaseUntil = () => Date.now() + leaseTtl;
+const runs = new PostgresRunRepository();
+const now = Date.now();
+const seedRun: any = {
+  id: `run_lease_seed_${randomUUID()}`, principalId: 'lease-owner', agentId: null, sessionId: 'lease-session', workspaceId: null,
+  projectId: null, conversationId: null, intent: 'ANSWER', state: 'QUEUED', modelPolicy: { model: 'gpt-4o' },
+  prompt: 'lease seed', systemPrompt: '', context: {}, content: '', thinking: '', toolsUsed: [], toolCalls: [], toolResults: [],
+  artifacts: [], citations: [], stepCount: 0, maxSteps: 8, createdAt: now, updatedAt: now
+};
 
-async function createRun(id: string, state = 'QUEUED') {
-  await pg.query(`
-    INSERT INTO runs (
-      id, principal_id, session_id, intent, state, model_policy, prompt,
-      system_prompt, context, content, thinking, tools_used, tool_calls,
-      tool_results, artifacts, citations, step_count, max_steps, created_at, updated_at,
-      execution_fence
-    ) VALUES (
-      $1, 'lease-owner', 'lease-session', 'AGENT_MISSION', $2, '{}'::jsonb, 'lease seed',
-      '', '{}'::jsonb, '', '', '[]'::jsonb, '[]'::jsonb,
-      '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, 0, 8, $3, $3, 0
-    )
-  `, [id, state, Date.now()]);
-}
-
-async function claim(id: string, owner: string) {
-  const result = await pg.query<{ execution_fence: number; execution_lease_until: number }>(`
-    UPDATE runs
-       SET execution_owner = $1,
-           execution_lease_until = $2,
-           execution_fence = COALESCE(execution_fence, 0) + 1
-     WHERE id = $3
-       AND state NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')
-       AND (execution_owner IS NULL OR execution_lease_until IS NULL OR execution_lease_until < $4)
-    RETURNING execution_fence, execution_lease_until
-  `, [owner, leaseUntil(), id, Date.now()]);
-  return result.rows[0];
-}
-
-async function renew(id: string, owner: string, fence: number) {
-  const result = await pg.query<{ execution_fence: number; execution_lease_until: number }>(`
-    UPDATE runs
-       SET execution_lease_until = $1
-     WHERE id = $2
-       AND execution_owner = $3
-       AND execution_fence = $4
-       AND execution_lease_until >= $5
-       AND state NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')
-    RETURNING execution_fence, execution_lease_until
-  `, [leaseUntil(), id, owner, fence, Date.now()]);
-  return result.rows[0];
-}
-
-async function assertLease(id: string, owner: string, fence: number) {
-  const result = await pg.query<{ ok: boolean }>(`
-    SELECT EXISTS (
-      SELECT 1 FROM runs
-       WHERE id = $1
-         AND execution_owner = $2
-         AND execution_fence = $3
-         AND execution_lease_until >= $4
-         AND state NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')
-    ) AS ok
-  `, [id, owner, fence, Date.now()]);
-  return Boolean(result.rows[0]?.ok);
-}
-
-async function release(id: string, owner: string, fence: number) {
-  const result = await pg.query<{ id: string }>(`
-    UPDATE runs
-       SET execution_owner = NULL,
-           execution_lease_until = NULL
-     WHERE id = $1 AND execution_owner = $2 AND execution_fence = $3
-    RETURNING id
-  `, [id, owner, fence]);
-  return result.rows.length === 1;
-}
-
-async function expire(id: string) {
-  await pg.query('UPDATE runs SET execution_lease_until = $1 WHERE id = $2', [Date.now() - 1, id]);
-}
-
-async function getLease(id: string) {
-  const result = await pg.query<{ execution_owner: string | null; execution_fence: number; execution_lease_until: number | null }>(
-    'SELECT execution_owner, execution_fence, execution_lease_until FROM runs WHERE id = $1', [id]
-  );
-  return result.rows[0];
+async function waitTerminal(runtime: InstanceType<typeof AgentRuntime>, id: string) {
+  for (let i = 0; i < 160; i++) {
+    const run = await runtime.getRun(id);
+    // Terminal state is persisted before its event and the execution finally
+    // block. Wait for both observable state and cleanup, with the same deadline.
+    if (run && ['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)
+        && await runs.getExecutionLease(id) === undefined) return run;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  throw new Error(`Run ${id} did not become terminal and release its execution lease.`);
 }
 
 try {
-  // Keep this schema intentionally minimal: only columns needed by the production
-  // execution-lease predicate plus run lifecycle state are present.
-  await pg.exec(`
-    CREATE TABLE runs (
-      id text PRIMARY KEY,
-      principal_id text NOT NULL,
-      session_id text,
-      intent text NOT NULL,
-      state text NOT NULL,
-      model_policy jsonb NOT NULL DEFAULT '{}'::jsonb,
-      prompt text NOT NULL DEFAULT '',
-      system_prompt text NOT NULL DEFAULT '',
-      context jsonb NOT NULL DEFAULT '{}'::jsonb,
-      content text NOT NULL DEFAULT '',
-      thinking text NOT NULL DEFAULT '',
-      tools_used jsonb NOT NULL DEFAULT '[]'::jsonb,
-      tool_calls jsonb NOT NULL DEFAULT '[]'::jsonb,
-      tool_results jsonb NOT NULL DEFAULT '[]'::jsonb,
-      artifacts jsonb NOT NULL DEFAULT '[]'::jsonb,
-      citations jsonb NOT NULL DEFAULT '[]'::jsonb,
-      step_count integer NOT NULL DEFAULT 0,
-      max_steps integer NOT NULL DEFAULT 8,
-      created_at bigint NOT NULL,
-      updated_at bigint NOT NULL,
-      execution_owner text,
-      execution_lease_until bigint,
-      execution_fence bigint NOT NULL DEFAULT 0
-    );
-  `);
-
-  const id = 'run_lease_seed';
-  await createRun(id);
-
-  const a = await claim(id, 'worker-A');
+  await runs.saveRun(seedRun);
+  const a = await runs.claimExecution(seedRun.id, 'worker-A', 15_000);
   assert.ok(a);
-  assert.equal(Number(a!.execution_fence), 1);
-  assert.equal(await assertLease(id, 'worker-A', Number(a!.execution_fence)), true);
-  assert.equal(await claim(id, 'worker-B'), undefined, 'a live lease must reject another worker');
+  assert.equal(a!.fence, 1);
+  assert.equal(await runs.assertExecution(seedRun.id, 'worker-A', a!.fence), true);
+  assert.equal(await runs.claimExecution(seedRun.id, 'worker-B', 15_000), undefined, 'a live lease must reject another worker');
 
-  const renewed = await renew(id, 'worker-A', Number(a!.execution_fence));
+  const renewed = await runs.renewExecution(seedRun.id, 'worker-A', a!.fence, 15_000);
   assert.ok(renewed);
-  assert.equal(Number(renewed!.execution_fence), Number(a!.execution_fence));
-  assert.equal(await release(id, 'worker-A', Number(a!.execution_fence) + 1), false, 'wrong fence cannot release an active lease');
-  assert.equal(await release(id, 'worker-A', Number(a!.execution_fence)), true);
+  assert.equal(renewed!.fence, a!.fence);
+  assert.equal(await runs.releaseExecution(seedRun.id, 'worker-A', a!.fence + 1), false, 'wrong fence cannot release an active lease');
+  assert.equal(await runs.releaseExecution(seedRun.id, 'worker-A', a!.fence), true);
 
-  const b = await claim(id, 'worker-B');
+  const b = await runs.claimExecution(seedRun.id, 'worker-B', 15_000);
   assert.ok(b);
-  assert(Number(b!.execution_fence) > Number(a!.execution_fence), 'new ownership must increment the fence token');
-  assert.equal(await assertLease(id, 'worker-A', Number(a!.execution_fence)), false, 'stale worker must lose authority');
-  assert.equal(await renew(id, 'worker-A', Number(a!.execution_fence)), undefined);
+  assert(b!.fence > a!.fence, 'new ownership must increment the fence token');
+  assert.equal(await runs.assertExecution(seedRun.id, 'worker-A', a!.fence), false, 'stale worker must lose authority');
+  assert.equal(await runs.renewExecution(seedRun.id, 'worker-A', a!.fence, 15_000), undefined);
 
-  await expire(id);
-  const c = await claim(id, 'worker-C');
+  // Expiration allows a new claimant, but the stale fence can no longer renew or release it.
+  await db('runs').where({ id: seedRun.id }).update({ execution_lease_until: Date.now() - 1 });
+  const c = await runs.claimExecution(seedRun.id, 'worker-C', 15_000);
   assert.ok(c);
-  assert(Number(c!.execution_fence) > Number(b!.execution_fence));
-  assert.equal(await renew(id, 'worker-B', Number(b!.execution_fence)), undefined);
-  assert.equal(await release(id, 'worker-B', Number(b!.execution_fence)), false);
-  assert.equal((await getLease(id)).execution_owner, 'worker-C');
-  assert.equal(await release(id, 'worker-C', Number(c!.execution_fence)), true);
+  assert(c!.fence > b!.fence);
+  assert.equal(await runs.renewExecution(seedRun.id, 'worker-B', b!.fence, 15_000), undefined);
+  assert.equal(await runs.releaseExecution(seedRun.id, 'worker-B', b!.fence), false);
+  assert.equal((await runs.getExecutionLease(seedRun.id))?.owner, 'worker-C');
+  assert.equal(await runs.releaseExecution(seedRun.id, 'worker-C', c!.fence), true);
 
-  // Real concurrent claims against one PostgreSQL engine: exactly one claimant wins.
-  const raceId = 'run_concurrent_claim';
-  await createRun(raceId);
-  const contenders = await Promise.all(
-    Array.from({ length: 16 }, (_, index) => claim(raceId, `worker-${index}`))
+  // Pause after A's preflight check, then transfer ownership before its writes.
+  const staleLease = await runs.claimExecution(seedRun.id, 'stale-worker', 15_000);
+  assert(staleLease);
+  const staleRun = await runs.getRun(seedRun.id);
+  assert(staleRun);
+  assert.equal(await runs.assertExecution(seedRun.id, staleLease.owner, staleLease.fence), true);
+  await db('runs').where({ id: seedRun.id }).update({ execution_lease_until: Date.now() - 1 });
+  await assert.rejects(withExecutionLease(seedRun.id, staleLease, () => runs.saveRun(staleRun)), /EXECUTION_LEASE_LOST/,
+    'expiry alone must reject worker writes, before another owner claims');
+  await assert.rejects(withExecutionLease(seedRun.id, staleLease, () => runs.appendRunEvent({
+    eventId: `evt_${randomUUID()}`, runId: seedRun.id, type: 'run.failed', timestamp: Date.now(), data: {}
+  })), /EXECUTION_LEASE_LOST/, 'expiry alone must reject worker events');
+  const currentLease = await runs.claimExecution(seedRun.id, 'current-worker', 15_000);
+  assert(currentLease && currentLease.fence > staleLease.fence);
+  for (const invalidLease of [
+    { ...currentLease, owner: 'wrong-owner' },
+    { ...currentLease, fence: currentLease.fence - 1 }
+  ]) {
+    await assert.rejects(withExecutionLease(seedRun.id, invalidLease, () => runs.saveRun(staleRun)), /EXECUTION_LEASE_LOST/);
+  }
+  await withExecutionLease(seedRun.id, currentLease, async () => {
+    await runs.saveRun({ ...staleRun, content: 'current owner result' });
+    await runs.appendRunEvent({ eventId: `evt_${randomUUID()}`, runId: seedRun.id, type: 'content.delta', timestamp: Date.now(), data: { delta: 'current owner result' } });
+  });
+  await assert.rejects(withExecutionLease(seedRun.id, staleLease, () => runs.saveRun({ ...staleRun, state: 'FAILED', content: 'stale overwrite' })), /EXECUTION_LEASE_LOST/);
+  await assert.rejects(withExecutionLease(seedRun.id, staleLease, () => runs.appendRunEvent({ eventId: `evt_${randomUUID()}`, runId: seedRun.id, type: 'run.failed', timestamp: Date.now(), data: { error: 'stale error' } })), /EXECUTION_LEASE_LOST/);
+  assert.equal((await runs.getRun(seedRun.id))?.content, 'current owner result');
+  assert.equal((await runs.getRun(seedRun.id))?.state, 'QUEUED');
+  assert.equal((await runs.getRunEvents(seedRun.id)).length, 1, 'a stale worker must not append an event');
+  assert.equal(await runs.releaseExecution(seedRun.id, staleLease.owner, staleLease.fence), false);
+  assert.equal(await runs.releaseExecution(seedRun.id, currentLease.owner, currentLease.fence), true);
+
+  // Expiration must be checked after a row-lock wait, using database time.
+  const waitingLease = await runs.claimExecution(seedRun.id, 'waiting-worker', 15_000);
+  assert(waitingLease);
+  const until = Date.now() + 1000;
+  await db('runs').where({ id: seedRun.id }).update({ execution_lease_until: until });
+  const lock = await db.transaction();
+  let blockedWrite: Promise<void> | undefined;
+  try {
+    await lock('runs').where({ id: seedRun.id }).forUpdate().first('id');
+    blockedWrite = withExecutionLease(seedRun.id, waitingLease, () => runs.saveRun({ ...staleRun, content: 'expired while waiting' }));
+    // Attach rejection handling before releasing the blocker.
+    const rejected = assert.rejects(blockedWrite, /EXECUTION_LEASE_LOST/);
+    let waiting = false;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const result = await db.raw('select count(*)::int as waiting from pg_stat_activity where cardinality(pg_blocking_pids(pid)) > 0');
+      if (result.rows[0].waiting > 0) { waiting = true; break; }
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert(waiting, 'the write must actually wait for the run row lock');
+    await new Promise(resolve => setTimeout(resolve, Math.max(0, until - Date.now() + 50)));
+    await lock.commit();
+    await rejected;
+    assert.equal((await runs.getRun(seedRun.id))?.content, 'current owner result');
+  } finally {
+    if (!lock.isCompleted()) await lock.rollback();
+    await blockedWrite?.catch(() => undefined);
+  }
+  assert.equal(await runs.releaseExecution(seedRun.id, waitingLease.owner, waitingLease.fence), true);
+
+  // Repeatedly contend from independent pool clients. Exactly one claimant may own each lease,
+  // and every ownership transfer must advance the fencing token.
+  let lastFence = waitingLease.fence;
+  for (let round = 0; round < 20; round++) {
+    const owners = [`stress-A-${round}`, `stress-B-${round}`];
+    const claims = await Promise.all(owners.map(owner => runs.claimExecution(seedRun.id, owner, 15_000)));
+    const winners = claims
+      .map((lease, index) => lease ? { lease, owner: owners[index] } : undefined)
+      .filter((winner): winner is { lease: NonNullable<typeof claims[number]>; owner: string } => Boolean(winner));
+    assert.equal(winners.length, 1, `contention round ${round} must have exactly one lease owner`);
+    const winner = winners[0];
+    assert(winner.lease.fence > lastFence, `contention round ${round} must advance the fence`);
+    lastFence = winner.lease.fence;
+    assert.equal(await runs.releaseExecution(seedRun.id, winner.owner, winner.lease.fence), true);
+  }
+
+  // Two AgentRuntime instances race the same Bot run. Only one may reach the model boundary.
+  const bots = new BotRepository();
+  const bot = await bots.create('lease-owner', {
+    name: 'Lease Bot', description: '', instructions: 'Finish the task.', model: 'gpt-4o', tools: [], connectorIds: [],
+    approvalPolicy: 'risky_only', memory: '', skills: [], skillIds: [], maxSteps: 8
+  });
+  let modelCalls = 0;
+  const adapter = {
+    async complete() {
+      modelCalls++;
+      await new Promise(resolve => setTimeout(resolve, 150));
+      return { text: JSON.stringify({ type: 'final', content: 'single owner result' }), model: 'fixture', usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
+    },
+    async stream() { /* Bot loop uses complete */ }
+  };
+  const makeRuntime = (workerId: string) => {
+    process.env.AIRA_WORKER_ID = workerId;
+    const models = new ModelRouter();
+    models.getAdapter = () => adapter as any;
+    models.listProviders = () => ['openai'];
+    return new AgentRuntime(
+      models,
+      new ToolRegistry(),
+      new ApprovalKernel(new PostgresApprovalRepository(), new PostgresSessionGrantRepository()),
+      new BrainV2KnowledgeEngine(),
+      runs
+    );
+  };
+  const runtimeA = makeRuntime('runtime-A');
+  const runtimeB = makeRuntime('runtime-B');
+  const started = await runtimeA.createAndExecuteRun(
+    { prompt: 'Return one result.', intent: 'AGENT_MISSION', modelPolicy: { model: 'gpt-4o' } },
+    { userId: 'lease-owner', sessionId: 'lease-session' }, bot,
+    async created => { await bots.recordTask('lease-owner', bot.id, created.id, created.prompt); }
   );
-  const winners = contenders.filter(Boolean);
-  assert.equal(winners.length, 1, 'atomic UPDATE predicate must elect exactly one live owner');
-  assert.equal(Number(winners[0]!.execution_fence), 1);
+  await (runtimeB as any).executeRunLoop(started.id);
+  const completed = await waitTerminal(runtimeA, started.id);
+  assert.equal(completed.state, 'COMPLETED');
+  assert.equal(completed.content, 'single owner result');
+  assert.equal(modelCalls, 1, 'execution fence must prevent duplicate model execution');
+  assert.equal(await runs.getExecutionLease(started.id), undefined, 'terminal execution releases the lease');
 
-  const ownerRow = await getLease(raceId);
-  assert.ok(ownerRow.execution_owner);
-  assert.equal(Number(ownerRow.execution_fence), 1);
+  // Exercise the actual runtime wiring, including the failure handler. Force a
+  // takeover at the last await between assertLease and saveRun, not during the
+  // model request (which would only test the existing preflight check).
+  const saveRun = runs.saveRun.bind(runs);
+  for (const scenario of ['bot-completion', 'bot-failure', 'streaming']) {
+    const failure = scenario === 'bot-failure';
+    const id = `run_takeover_${randomUUID()}`;
+    await saveRun({ ...seedRun, id, agentId: scenario === 'streaming' ? null : bot.id,
+      context: { airaBot: bot }, executionCheckpoint: scenario === 'streaming' ? 'SYNTHESIZING' : undefined, content: '', artifacts: [] });
+    const takeoverRuntime = makeRuntime(`paused-worker-${scenario}`);
+    const takeoverAdapter = {
+      ...adapter,
+      async complete() {
+        if (failure) throw new Error('model failed before takeover');
+        return { text: JSON.stringify({ type: 'final', content: 'stale final result' }), model: 'fixture' };
+      },
+      async stream(_messages: unknown, _policy: unknown, emit: (delta: { text: string }) => Promise<void>) {
+        await emit({ text: 'stale final result' });
+      }
+    };
+    (takeoverRuntime as any).modelRouter.getAdapter = () => takeoverAdapter;
+    let transferred = false;
+    runs.saveRun = async run => {
+      if (run.id === id && !transferred && (failure ? run.state === 'FAILED' : run.content === 'stale final result')) {
+        transferred = true;
+        await db('runs').where({ id }).update({ execution_lease_until: Date.now() - 1 });
+        const takeover = await runs.claimExecution(id, 'replacement-worker', 15_000);
+        assert(takeover);
+        const fresh = await runs.getRun(id);
+        assert(fresh);
+        await withExecutionLease(id, takeover, () => saveRun({ ...fresh, state: 'RUNNING', content: 'replacement owns this run' }));
+      }
+      await saveRun(run);
+    };
+    try { await (takeoverRuntime as any).executeRunLoop(id); }
+    finally { runs.saveRun = saveRun; }
+    assert(transferred, 'test must reach the write immediately after its preflight check');
+    const fresh = await runs.getRun(id);
+    assert.equal(fresh?.state, 'RUNNING', 'stale completion or error handling must not terminate the new owner');
+    assert.equal(fresh?.content, 'replacement owns this run');
+    assert.equal(fresh?.error, null);
+    assert.equal(fresh?.artifacts.length, 0);
+    assert.equal((await runs.getExecutionLease(id))?.owner, 'replacement-worker', 'stale cleanup cannot release the replacement lease');
+    assert(!(await runs.getRunEvents(id)).some(event => ['run.failed', 'run.completed', 'artifact.created', 'content.delta'].includes(event.type)), 'stale execution must not publish completion or failure events');
+  }
 
-  // Expire and race again. One new owner wins and the fence must monotonically advance.
-  await expire(raceId);
-  const takeover = await Promise.all(
-    Array.from({ length: 16 }, (_, index) => claim(raceId, `takeover-${index}`))
-  );
-  const takeoverWinners = takeover.filter(Boolean);
-  assert.equal(takeoverWinners.length, 1, 'expired lease takeover must still elect exactly one owner');
-  assert.equal(Number(takeoverWinners[0]!.execution_fence), 2, 'takeover must advance the fence token');
+  // Recovery must acquire execution authority before altering a checkpoint or
+  // failing an interrupted side effect owned by a still-live worker.
+  const recoveryId = `run_recovery_${randomUUID()}`;
+  await saveRun({ ...seedRun, id: recoveryId, state: 'WAITING_FOR_TOOL', executionCheckpoint: 'TOOL_EXECUTING',
+    toolCalls: [{ id: 'review-call', name: 'unregistered-side-effect', arguments: {}, timestamp: Date.now(), status: 'PENDING' }] });
+  const liveOwner = await runs.claimExecution(recoveryId, 'live-worker', 15_000);
+  assert(liveOwner);
+  const recovering = makeRuntime('recovery-worker');
+  await (recovering as any).resumeRun(recoveryId);
+  assert.equal((await runs.getRun(recoveryId))?.state, 'WAITING_FOR_TOOL');
+  assert.equal((await runs.getExecutionLease(recoveryId))?.owner, 'live-worker');
+  await db('runs').where({ id: recoveryId }).update({ execution_lease_until: Date.now() - 1 });
+  await (recovering as any).resumeRun(recoveryId);
+  assert.equal((await runs.getRun(recoveryId))?.state, 'FAILED', 'unsafe interrupted tools still fail after legitimate takeover');
+  assert.equal(await runs.getExecutionLease(recoveryId), undefined);
 
-  const staleOwner = ownerRow.execution_owner!;
-  assert.equal(await renew(raceId, staleOwner, 1), undefined, 'stale owner cannot renew after takeover');
-  assert.equal(await release(raceId, staleOwner, 1), false, 'stale owner cannot release the new lease');
-
-  // Terminal runs are never claimable.
-  const terminalId = 'run_terminal';
-  await createRun(terminalId, terminalStates[0]);
-  assert.equal(await claim(terminalId, 'worker-terminal'), undefined);
-
-  console.log('Aira Bot worker leases: PASS — atomic claim, renewal, monotonic fencing, stale-worker rejection, expiry takeover, 16-way single-winner concurrency');
+  console.log('Aira Bot worker leases: PASS — atomic claim, renewal, monotonic fencing, expiry takeover, fenced writes/events, lock-wait expiry, stale completion/error/stream rejection, recovery fencing, 20 contention rounds, single model execution');
 } finally {
-  await pg.close();
+  delete process.env.AIRA_WORKER_ID;
+  await closeDb();
 }

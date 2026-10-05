@@ -1,5 +1,20 @@
 import { AgentDefinition, Run, StreamingEvent } from '../../contracts/src/index.js';
 import { db } from '../../db/src/index.js';
+import { AsyncLocalStorage } from 'node:async_hooks';
+
+export const EXECUTION_LEASE_LOST = 'EXECUTION_LEASE_LOST';
+const executionLeaseContext = new AsyncLocalStorage<{ runId: string; lease: RunExecutionLease }>();
+
+// Capture the acquired token for this async execution, never the latest token read
+// from the row. Control-plane requests and delegated child runs keep their own scope.
+export function withExecutionLease<T>(runId: string, lease: RunExecutionLease, execute: () => Promise<T>): Promise<T> {
+  return executionLeaseContext.run({ runId, lease }, execute);
+}
+
+function executionLeaseFor(runId: string): RunExecutionLease | undefined {
+  const context = executionLeaseContext.getStore();
+  return context?.runId === runId ? context.lease : undefined;
+}
 
 export interface AgentRepository {
   saveAgent(agent: AgentDefinition): Promise<void>;
@@ -83,7 +98,7 @@ export class PostgresAgentRepository implements AgentRepository {
 
 export class PostgresRunRepository implements RunRepository {
   async saveRun(run: Run): Promise<void> {
-    await db('runs').insert({
+    const values = {
       id: run.id,
       principal_id: run.principalId,
       agent_id: run.agentId || null,
@@ -116,7 +131,24 @@ export class PostgresRunRepository implements RunRepository {
       createdAt: run.createdAt,
       updatedAt: run.updatedAt,
       completed_at: run.completedAt
-    }).onConflict('id').merge().whereNotIn('runs.state', ['COMPLETED', 'FAILED', 'CANCELLED']);
+    };
+    const lease = executionLeaseFor(run.id);
+    if (lease) {
+      // The predicate is checked with the write under PostgreSQL's row lock.
+      // Database time also checks expiry after any lock wait, not before dispatch.
+      const updated = await db.transaction<number>(async trx => {
+        await trx('runs').where({ id: run.id }).forUpdate().first('id');
+        const rows = await trx('runs')
+          .where({ id: run.id, execution_owner: lease.owner, execution_fence: lease.fence })
+          .whereRaw('execution_lease_until >= floor(extract(epoch from clock_timestamp()) * 1000)')
+          .whereNotIn('state', ['COMPLETED', 'FAILED', 'CANCELLED'])
+          .update(values).returning('id');
+        return rows.length;
+      });
+      if (!updated) throw new Error(EXECUTION_LEASE_LOST);
+      return;
+    }
+    await db('runs').insert(values).onConflict('id').merge().whereNotIn('runs.state', ['COMPLETED', 'FAILED', 'CANCELLED']);
   }
 
   async getRun(id: string): Promise<Run | undefined> {
@@ -198,13 +230,25 @@ export class PostgresRunRepository implements RunRepository {
   }
 
   async appendRunEvent(event: StreamingEvent): Promise<StreamingEvent> {
-    const rows = await db('run_events').insert({
+    const lease = executionLeaseFor(event.runId);
+    const insert = async (query: typeof db) => query('run_events').insert({
       id: event.eventId,
       run_id: event.runId,
       type: event.type,
       payload: JSON.stringify(event.data),
       createdAt: event.timestamp
     }).returning('*');
+    const rows = lease ? await db.transaction(async trx => {
+      // Keep takeover blocked until the event commits. A separate preflight
+      // SELECT cannot protect an INSERT into the event table.
+      const run = await trx('runs').where({ id: event.runId }).forUpdate().first();
+      const time = await trx.raw('select floor(extract(epoch from clock_timestamp()) * 1000) as now');
+      if (!run || run.execution_owner !== lease.owner || Number(run.execution_fence) !== lease.fence
+          || Number(run.execution_lease_until) < Number(time.rows[0].now) || run.execution_lease_until === null) {
+        throw new Error(EXECUTION_LEASE_LOST);
+      }
+      return insert(trx);
+    }) : await insert(db);
     const row = rows[0];
     return {
       eventId: row.id,

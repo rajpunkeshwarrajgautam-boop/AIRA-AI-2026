@@ -24,9 +24,8 @@ import { ToolRegistry } from '../../tool-runtime/src/index.js';
 import { ApprovalKernel } from '../../approvals/src/index.js';
 import { BrainV2KnowledgeEngine } from '../../knowledge/src/index.js';
 
-import { RunRepository } from './repositories.js';
+import { RunRepository, withExecutionLease, EXECUTION_LEASE_LOST } from './repositories.js';
 
-const EXECUTION_LEASE_LOST = 'EXECUTION_LEASE_LOST';
 function executionLeaseTtl(): number {
   const parsed = Number(process.env.AIRA_RUN_LEASE_TTL_MS || 120_000);
   return Number.isFinite(parsed) ? Math.max(15_000, Math.min(parsed, 10 * 60_000)) : 120_000;
@@ -112,9 +111,7 @@ export class AgentRuntime extends EventEmitter {
       catch (err) { await this.transitionRunState(runId, 'FAILED', 'Task registration fails.'); throw err; }
     }
     setImmediate(() => {
-      this.executeRunLoop(runId).catch(err => {
-        this.transitionRunState(runId, 'FAILED', err.message).catch(console.error);
-      });
+      this.executeRunLoop(runId).catch(console.error);
     });
     return run;
   }
@@ -204,7 +201,7 @@ export class AgentRuntime extends EventEmitter {
     await this.runRepo.saveRun(run);
     await this.emitRunEvent(runId, 'run.started', { state: 'RUNNING', reason: 'HUMAN_CONTROL_RETURNED' });
     setImmediate(() => {
-      this.executeRunLoop(runId).catch(err => this.transitionRunState(runId, 'FAILED', err.message).catch(console.error));
+      this.executeRunLoop(runId).catch(console.error);
     });
     return true;
   }
@@ -229,9 +226,7 @@ export class AgentRuntime extends EventEmitter {
     await this.runRepo.saveRun(run);
     await this.emitRunEvent(request.runId, 'approval.resolved', { requestId, decision, approved });
     await this.transitionRunState(request.runId, 'RUNNING');
-    this.executeRunLoop(request.runId).catch(err => {
-      this.transitionRunState(request.runId, 'FAILED', err.message).catch(console.error);
-    });
+    this.executeRunLoop(request.runId).catch(console.error);
     return true;
   }
 
@@ -248,7 +243,7 @@ export class AgentRuntime extends EventEmitter {
     await this.emitRunEvent(runId, eventType, { state, error });
   }
 
-  private async executeRunLoop(runId: string): Promise<void> {
+  private async executeRunLoop(runId: string, recovering = false): Promise<void> {
     const lease = await this.runRepo.claimExecution(runId, this.workerId, this.executionLeaseTtlMs);
     if (!lease) return;
     let lost = false;
@@ -272,12 +267,20 @@ export class AgentRuntime extends EventEmitter {
     };
 
     try {
-      await this.executeRunLoopOwned(runId, assertLease);
-    } catch (error) {
-      if ((error as Error).message === EXECUTION_LEASE_LOST || !await this.runRepo.assertExecution(runId, this.workerId, lease.fence)) {
-        return;
-      }
-      throw error;
+      await withExecutionLease(runId, lease, async () => {
+        try {
+          if (recovering && !await this.prepareInterruptedRun(runId)) return;
+          await this.executeRunLoopOwned(runId, assertLease);
+        } catch (error) {
+          if ((error as Error).message === EXECUTION_LEASE_LOST) return;
+          // Error handling is a worker write too: retain the captured token
+          // until FAILED and its event have been persisted, before releasing.
+          try { await this.transitionRunState(runId, 'FAILED', (error as Error).message); }
+          catch (writeError) {
+            if ((writeError as Error).message !== EXECUTION_LEASE_LOST) throw writeError;
+          }
+        }
+      });
     } finally {
       clearInterval(heartbeat);
       await this.runRepo.releaseExecution(runId, this.workerId, lease.fence).catch(() => false);
@@ -399,26 +402,29 @@ export class AgentRuntime extends EventEmitter {
         console.log(`Recovering interrupted run ${run.id}...`);
         this.resumeRun(run.id).catch(err => {
           console.error(`Error recovering run ${run.id}:`, err);
-          this.transitionRunState(run.id, 'FAILED', `Recovery failed: ${err.message}`).catch(console.error);
         });
       }
     }
   }
 
   private async resumeRun(runId: string): Promise<void> {
+    await this.executeRunLoop(runId, true);
+  }
+
+  private async prepareInterruptedRun(runId: string): Promise<boolean> {
     let run = await this.runRepo.getRun(runId);
-    if (!run) return;
-    if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)) return;
-    if (run.state === 'WAITING_FOR_APPROVAL' || run.executionCheckpoint === 'WAITING_FOR_APPROVAL' || run.context.humanTakeover === true) return;
+    if (!run) return false;
+    if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)) return false;
+    if (run.state === 'WAITING_FOR_APPROVAL' || run.executionCheckpoint === 'WAITING_FOR_APPROVAL' || run.context.humanTakeover === true) return false;
     if (run.executionCheckpoint === 'TOOL_EXECUTING') {
       const toolCall = run.toolCalls[run.toolCalls.length - 1];
       const toolDef = this.toolRegistry.get(toolCall?.name)?.definition;
       const idempotencyClass = toolDef?.idempotencyClass || 'NON_IDEMPOTENT';
       if (idempotencyClass === 'NON_IDEMPOTENT' || idempotencyClass === 'EXTERNAL_SIDE_EFFECT') {
-        await this.transitionRunState(runId, 'FAILED', 'Process crashed during non-idempotent tool execution'); return;
+        await this.transitionRunState(runId, 'FAILED', 'Process crashed during non-idempotent tool execution'); return false;
       }
       run.executionCheckpoint = 'TOOL_APPROVED'; run.state = 'RUNNING'; await this.runRepo.saveRun(run);
     }
-    await this.executeRunLoop(runId);
+    return true;
   }
 }
