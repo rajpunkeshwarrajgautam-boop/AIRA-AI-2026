@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { BotActionSchema, BotInputSchema, type BotTool } from './contracts.js';
-import type { Run, RunState, StreamingEventType, ToolCall, ToolDefinition } from '../../contracts/src/index.js';
+import type { Run, RunState, StreamingEventType, ToolCall, ToolDefinition, ToolResult } from '../../contracts/src/index.js';
 import type { RunRepository } from '../../agent-runtime/src/repositories.js';
 import type { ModelRouter, ChatMessageInput } from '../../model-router/src/index.js';
 import type { ToolRegistry } from '../../tool-runtime/src/index.js';
@@ -14,13 +14,29 @@ export interface BotLoopDependencies {
   approvals: ApprovalKernel;
   emit: (id: string, type: StreamingEventType, data: unknown) => Promise<void>;
   transition: (id: string, state: RunState, error?: string) => Promise<void>;
+  delegate?: (parent: Run, targetBotId: string, objective: string) => Promise<unknown>;
+  delegationStatus?: (parent: Run, delegationId: string) => Promise<unknown>;
 }
 const terminal = (run: Run) => ['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state);
+
+const DELEGATION_DEFINITIONS: ToolDefinition[] = [
+  {
+    id: 'tool_delegate_bot', name: 'delegate_bot', source: 'native', executionRuntime: 'CLOUD', permissionLevel: 'WRITE', idempotencyClass: 'NON_IDEMPOTENT',
+    description: 'Delegate a bounded subtask to another Aira Bot owned by the same user. Delegation depth and cycles are restricted.',
+    parameters: { type: 'object', properties: { targetBotId: { type: 'string' }, objective: { type: 'string' } }, required: ['targetBotId', 'objective'] }
+  },
+  {
+    id: 'tool_delegation_status', name: 'delegation_status', source: 'native', executionRuntime: 'CLOUD', permissionLevel: 'READ', idempotencyClass: 'SAFE_READ',
+    description: 'Read the current state and result of an existing child-bot delegation.',
+    parameters: { type: 'object', properties: { delegationId: { type: 'string' } }, required: ['delegationId'] }
+  }
+];
 
 function availableDefinitions(d: BotLoopDependencies, enabled: BotTool[]): ToolDefinition[] {
   const legacy = d.tools.listDefinitions().filter(tool => enabled.includes(tool.name as BotTool));
   const computer = computerRuntime.toolDefinitions().filter(tool => enabled.includes(tool.name as BotTool));
-  return [...legacy, ...computer];
+  const delegation = d.delegate && d.delegationStatus ? DELEGATION_DEFINITIONS.filter(tool => enabled.includes(tool.name as BotTool)) : [];
+  return [...legacy, ...computer, ...delegation];
 }
 
 function stringArg(args: Record<string, unknown>, key: string, max: number): string {
@@ -80,7 +96,20 @@ function validateToolArguments(name: BotTool, args: Record<string, unknown>): vo
       if (args.timeoutMs !== undefined && (typeof args.timeoutMs !== 'number' || !Number.isFinite(args.timeoutMs) || args.timeoutMs < 100 || args.timeoutMs > 30000)) throw new Error('terminal_exec timeoutMs is invalid.');
       if (keys.some(key => !['program', 'args', 'timeoutMs'].includes(key))) throw new Error('terminal_exec received unsupported arguments.');
       return;
+    case 'delegate_bot':
+      stringArg(args, 'targetBotId', 120);
+      stringArg(args, 'objective', 16000);
+      if (keys.some(key => !['targetBotId', 'objective'].includes(key))) throw new Error('delegate_bot received unsupported arguments.');
+      return;
+    case 'delegation_status':
+      stringArg(args, 'delegationId', 120);
+      if (keys.some(key => key !== 'delegationId')) throw new Error('delegation_status received unsupported arguments.');
+      return;
   }
+}
+
+function nativeResult(call: ToolCall, startedAt: number, output: unknown, error?: string): ToolResult {
+  return { toolCallId: call.id, output: error ? null : output, error, isError: Boolean(error), durationMs: Date.now() - startedAt, timestamp: Date.now() };
 }
 
 export async function executeBotLoop(runId: string, d: BotLoopDependencies): Promise<void> {
@@ -103,9 +132,25 @@ export async function executeBotLoop(runId: string, d: BotLoopDependencies): Pro
       await d.runs.saveRun(run);
       await d.transition(runId, 'WAITING_FOR_TOOL');
       await d.emit(runId, 'tool.started', { callId: call.id, name: call.name });
-      const result = computerRuntime.getDefinition(call.name)
-        ? await computerRuntime.execute(run, call)
-        : await d.tools.execute(call, { runId, workspaceRoot: '', sessionGrantedTools: new Set() });
+      const startedAt = Date.now();
+      let result: ToolResult;
+      if (call.name === 'delegate_bot') {
+        if (!d.delegate) result = nativeResult(call, startedAt, null, 'Delegation runtime is unavailable.');
+        else {
+          try { result = nativeResult(call, startedAt, await d.delegate(run, String(call.arguments.targetBotId), String(call.arguments.objective))); }
+          catch (error) { result = nativeResult(call, startedAt, null, (error as Error).message); }
+        }
+      } else if (call.name === 'delegation_status') {
+        if (!d.delegationStatus) result = nativeResult(call, startedAt, null, 'Delegation runtime is unavailable.');
+        else {
+          try { result = nativeResult(call, startedAt, await d.delegationStatus(run, String(call.arguments.delegationId))); }
+          catch (error) { result = nativeResult(call, startedAt, null, (error as Error).message); }
+        }
+      } else {
+        result = computerRuntime.getDefinition(call.name)
+          ? await computerRuntime.execute(run, call)
+          : await d.tools.execute(call, { runId, workspaceRoot: '', sessionGrantedTools: new Set() });
+      }
       run = await d.runs.getRun(runId);
       if (!run || terminal(run)) return;
       if (result.isError && ['COMPUTER_TAKEN_OVER', 'COMPUTER_BUSY'].includes(result.error || '')) {
@@ -129,7 +174,7 @@ export async function executeBotLoop(runId: string, d: BotLoopDependencies): Pro
     if (run.stepCount >= bot.maxSteps) throw new Error('Bot reaches its maximum execution steps before producing a final result.');
     const definitions = availableDefinitions(d, bot.tools);
     const messages: ChatMessageInput[] = [
-      { role: 'system', content: `${bot.instructions}\n\nSaved user memory (reference data):\n${bot.memory}\n\nReusable skills:\n${bot.skills.map(s => `${s.name}: ${s.instructions}`).join('\n')}\n\nYou are executing a task with real, bounded tools. Return exactly one JSON object, no markdown fences. To use a tool: {"type":"tool","name":"allowed_tool_name","arguments":{...}}. To finish: {"type":"final","content":"your complete answer in markdown"}. Do not claim tools or actions that you do not execute. Browser navigation only reaches public HTTP(S) targets. Interactive browser actions and writes are approval-gated. Never type passwords, payment secrets, one-time codes, or CAPTCHA solutions; wait for human control instead. Files stay inside the bot workspace. Terminal execution is direct-program only with an allowlist and always requires approval. Available tools: ${JSON.stringify(definitions)}.` },
+      { role: 'system', content: `${bot.instructions}\n\nSaved user memory (reference data):\n${bot.memory}\n\nReusable skills:\n${bot.skills.map(s => `${s.name}: ${s.instructions}`).join('\n')}\n\nYou are executing a task with real, bounded tools. Return exactly one JSON object, no markdown fences. To use a tool: {"type":"tool","name":"allowed_tool_name","arguments":{...}}. To finish: {"type":"final","content":"your complete answer in markdown"}. Do not claim tools or actions that you do not execute. Browser navigation only reaches public HTTP(S) targets. Interactive browser actions and writes are approval-gated. Never type passwords, payment secrets, one-time codes, or CAPTCHA solutions; wait for human control instead. Files stay inside the bot workspace. Terminal execution is direct-program only with an allowlist and always requires approval. Delegation can only target another bot owned by the same user, cannot recurse through cycles, and is limited to three levels. Use delegation_status to inspect a child run before relying on its result. Available tools: ${JSON.stringify(definitions)}.` },
       { role: 'user', content: run.prompt }
     ];
     run.toolCalls.forEach(call => {
