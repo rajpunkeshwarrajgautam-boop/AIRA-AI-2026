@@ -1,7 +1,9 @@
 import { Router } from 'express';
-import { BotInputSchema, BotTaskSchema, type BotTool } from '../../../packages/aira-bot/src/contracts.js';
+import { BotInputSchema, BotTaskSchema, type BotTool, type BotInput } from '../../../packages/aira-bot/src/contracts.js';
 import { BotRepository } from '../../../packages/aira-bot/src/repository.js';
 import { BotOrchestrationRepository, BotRoutineEngine, RoutineInputSchema } from '../../../packages/aira-bot/src/orchestration.js';
+import { BotSkillRepository, SkillInputSchema } from '../../../packages/aira-bot/src/skills.js';
+import { botConnectorRuntime } from '../../../packages/aira-bot/src/connectors.js';
 import type { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
 import type { RunRepository } from '../../../packages/agent-runtime/src/repositories.js';
 import type { ModelRouter } from '../../../packages/model-router/src/index.js';
@@ -11,13 +13,21 @@ import { computerRuntime } from '../../../packages/computer-runtime/src/managed.
 export function createBotRouter(runtime: AgentRuntime, runs: RunRepository, models: ModelRouter) {
   const router = Router();
   const bots = new BotRepository();
+  const skills = new BotSkillRepository();
   const orchestration = new BotOrchestrationRepository();
   const schedulingEnabled = process.env.AIRA_BOT_ROUTINES_ENABLED === 'true' || process.env.NODE_ENV !== 'production';
   const routineEngine = new BotRoutineEngine(runtime, orchestration, bots);
   if (schedulingEnabled && process.env.NODE_ENV !== 'test') routineEngine.start();
   const availableComputerTools = () => computerRuntime.toolDefinitions().map(tool => tool.name);
-  const availableTools = () => ['calculator', ...(process.env.BRAVE_SEARCH_API_KEY ? ['web_search'] : []), ...availableComputerTools(), 'delegate_bot', 'delegation_status'];
+  const connectorTools = () => botConnectorRuntime.configuredIds().length ? ['connector_list', 'connector_call'] : [];
+  const availableTools = () => ['calculator', ...(process.env.BRAVE_SEARCH_API_KEY ? ['web_search'] : []), ...availableComputerTools(), 'delegate_bot', 'delegation_status', ...connectorTools()];
   const terminalStates = new Set(['COMPLETED', 'FAILED', 'CANCELLED']);
+
+  async function validateBindings(owner: string, input: BotInput): Promise<void> {
+    await skills.requireOwned(owner, input.skillIds);
+    const unavailableConnectors = input.connectorIds.filter(id => !botConnectorRuntime.has(id));
+    if (unavailableConnectors.length) throw new Error(`Unavailable bot connectors: ${unavailableConnectors.join(', ')}`);
+  }
 
   function leaseToken(req: any): string {
     const raw = req.headers['x-aira-computer-lease'];
@@ -29,6 +39,7 @@ export function createBotRouter(runtime: AgentRuntime, runs: RunRepository, mode
   router.get('/capabilities', (_req, res) => res.json({
     models: models.listProviders().flatMap(p => p === 'anthropic' ? ['claude-3-7-sonnet', 'claude-3-5-sonnet', 'claude-3-5-haiku'] : p === 'openai' ? ['gpt-4o', 'gpt-4o-mini'] : []),
     tools: availableTools(),
+    connectors: botConnectorRuntime.summaries().map(connector => ({ id: connector.id, name: connector.name, allowedTools: connector.allowedTools })),
     computer: computerRuntime.enabled,
     computerProvider: { kind: computerRuntime.providerKind, isolation: computerRuntime.providerKind === 'docker' ? 'docker-container' : 'host-process', interactive: availableComputerTools().some(tool => tool === 'browser_click') },
     delegation: true,
@@ -36,12 +47,39 @@ export function createBotRouter(runtime: AgentRuntime, runs: RunRepository, mode
     auth: process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test' ? 'development' : 'host-principal'
   }));
 
+  // Reusable skills are owner-scoped library objects. Bots store only selected skill IDs;
+  // execution snapshots the current instructions into the run before the first model step.
+  router.get('/skills', async (req, res) => res.json(await skills.list(req.principal!.userId)));
+  router.post('/skills', async (req, res) => {
+    const parsed = SkillInputSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid reusable skill.', details: parsed.error.flatten() });
+    try { res.status(201).json(await skills.create(req.principal!.userId, parsed.data)); }
+    catch (error) { res.status(409).json({ error: (error as Error).message }); }
+  });
+  router.patch('/skills/:id', async (req, res) => {
+    const owner = req.principal!.userId;
+    const current = await skills.get(owner, String(req.params.id));
+    if (!current) return res.status(404).json({ error: 'Reusable skill not found.' });
+    const parsed = SkillInputSchema.safeParse({ name: current.name, description: current.description, instructions: current.instructions, ...req.body });
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid reusable skill.', details: parsed.error.flatten() });
+    try { res.json(await skills.update(owner, current.id, parsed.data)); }
+    catch (error) { res.status(409).json({ error: (error as Error).message }); }
+  });
+  router.delete('/skills/:id', async (req, res) => {
+    try {
+      if (!await skills.remove(req.principal!.userId, String(req.params.id))) return res.status(404).json({ error: 'Reusable skill not found.' });
+      res.status(204).end();
+    } catch (error) { res.status(409).json({ error: (error as Error).message }); }
+  });
+
   router.get('/bots', async (req, res) => res.json(await bots.list(req.principal!.userId)));
   router.post('/bots', async (req, res) => {
     const parsed = BotInputSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: 'Invalid bot configuration.', details: parsed.error.flatten() });
     const unavailable = parsed.data.tools.filter(tool => !availableTools().includes(tool));
     if (unavailable.length) return res.status(400).json({ error: `Unavailable bot capabilities: ${unavailable.join(', ')}` });
+    try { await validateBindings(req.principal!.userId, parsed.data); }
+    catch (error) { return res.status(400).json({ error: (error as Error).message }); }
     res.status(201).json(await bots.create(req.principal!.userId, parsed.data));
   });
   router.get('/bots/:id', async (req, res) => {
@@ -58,6 +96,8 @@ export function createBotRouter(runtime: AgentRuntime, runs: RunRepository, mode
     if (!parsed.success) return res.status(400).json({ error: 'Invalid bot configuration.' });
     const unavailable = parsed.data.tools.filter(tool => !availableTools().includes(tool));
     if (unavailable.length) return res.status(400).json({ error: `Unavailable bot capabilities: ${unavailable.join(', ')}` });
+    try { await validateBindings(owner, parsed.data); }
+    catch (error) { return res.status(400).json({ error: (error as Error).message }); }
     res.json(await bots.update(owner, bot.id, parsed.data));
   });
   router.delete('/bots/:id', async (req, res) => {
@@ -272,6 +312,10 @@ export function createBotRouter(runtime: AgentRuntime, runs: RunRepository, mode
     if (!parsed.success) return res.status(400).json({ error: 'A task objective is required (maximum 16,000 characters).' });
     const unavailable = bot.tools.filter(tool => !availableTools().includes(tool));
     if (unavailable.length) return res.status(503).json({ error: `Bot requires unavailable capabilities: ${unavailable.join(', ')}` });
+    const unavailableConnectors = bot.connectorIds.filter(id => !botConnectorRuntime.has(id));
+    if (unavailableConnectors.length) return res.status(503).json({ error: `Bot requires unavailable connectors: ${unavailableConnectors.join(', ')}` });
+    try { await skills.requireOwned(req.principal!.userId, bot.skillIds); }
+    catch (error) { return res.status(409).json({ error: (error as Error).message }); }
     const model = bot.model === 'aira-auto' ? (models.listProviders().includes('anthropic') ? 'claude-3-7-sonnet' : 'gpt-4o') : bot.model;
     try { models.getAdapter(models.resolvePolicy(model, 'AGENT_MISSION')); }
     catch (err) { return res.status(503).json({ error: (err as Error).message }); }
