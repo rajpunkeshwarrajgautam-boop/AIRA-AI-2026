@@ -2,7 +2,7 @@ import { createHash, createHmac } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 import type { BrowserView, ComputerFileEntry, ComputerStatus } from './index.js';
-import type { BrowserActionResult, ComputerProvider, TerminalExecutionResult } from './provider.js';
+import type { BrowserActionResult, ComputerProvider, ComputerProviderHealth, ComputerProviderReconcileResult, ComputerProviderDesiredState, TerminalExecutionResult } from './provider.js';
 
 interface ExecResult { stdout: string; stderr: string; }
 type DockerExecutor = (args: string[], timeoutMs?: number) => Promise<ExecResult>;
@@ -63,6 +63,7 @@ export class DockerComputerProvider implements ComputerProvider {
   containerName(ownerId: string): string { return `aira-computer-${this.ownerKey(ownerId)}`; }
   volumeName(ownerId: string): string { return `aira-computer-data-${this.ownerKey(ownerId)}`; }
   runnerToken(ownerId: string): string { return createHmac('sha256', this.secret).update(ownerId).digest('hex'); }
+  resourceName(ownerId: string): string { return this.containerName(ownerId); }
 
   private async inspectRunning(ownerId: string): Promise<boolean | undefined> {
     try {
@@ -131,6 +132,30 @@ export class DockerComputerProvider implements ComputerProvider {
       catch (err) { last = (err as Error).message; await new Promise(resolve => setTimeout(resolve, 250)); }
     }
     throw new Error(`Isolated computer runner did not become healthy. ${last}`);
+  }
+
+  async health(): Promise<ComputerProviderHealth> {
+    try {
+      const version = await this.executeDocker(['version', '--format', '{{.Server.Version}}'], 10_000);
+      await this.executeDocker(['image', 'inspect', this.image], 10_000);
+      return { ok: true, detail: `Docker ${version.stdout.trim() || 'available'}; image ${this.image} available.` };
+    } catch (error) {
+      return { ok: false, detail: (error as Error).message };
+    }
+  }
+
+  async reconcile(ownerId: string, desiredState: ComputerProviderDesiredState): Promise<ComputerProviderReconcileResult> {
+    try {
+      const before = await this.inspectRunning(ownerId);
+      if (desiredState === 'SUSPENDED') {
+        if (before === true) await this.executeDocker(['stop', '--time', '10', this.containerName(ownerId)], 20_000);
+        return { observedState: 'STOPPED', recovered: before === true };
+      }
+      await this.ensureContainer(ownerId);
+      return { observedState: 'RUNNING', recovered: before !== true };
+    } catch (error) {
+      return { observedState: 'ERROR', recovered: false, error: (error as Error).message };
+    }
   }
 
   async status(ownerId: string, _botId: string): Promise<ComputerStatus> {
