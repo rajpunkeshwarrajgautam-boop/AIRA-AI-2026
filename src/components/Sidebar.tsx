@@ -28,6 +28,8 @@ interface SidebarProps {
   onDeleteChat: (id: string) => void;
   onRenameChat: (id: string, newTitle: string) => void;
   onToggleStar: (id: string) => void;
+  onDuplicateChat: (id: string) => void;
+  onShareChat: (id: string) => void | Promise<void>;
   projects: Project[];
   activeProjectId?: string;
   onOpenProjects: () => void;
@@ -98,6 +100,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onDeleteChat,
   onRenameChat,
   onToggleStar,
+  onDuplicateChat,
+  onShareChat,
   projects,
   activeProjectId,
   onOpenProjects,
@@ -222,6 +226,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           visible={activeChatId === c.id}
           onToggleStar={() => onToggleStar(c.id)}
           onRename={() => handleStartRename(c)}
+          onDuplicate={() => onDuplicateChat(c.id)}
+          onShare={() => onShareChat(c.id)}
           onDelete={() => onDeleteChat(c.id)}
         />
       </div>
