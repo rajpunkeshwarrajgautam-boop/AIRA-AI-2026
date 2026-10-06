@@ -5,7 +5,9 @@ export type ModelId =
   | 'claude-3-7-sonnet' 
   | 'claude-3-5-sonnet' 
   | 'claude-3-5-haiku' 
-  | 'claude-3-opus';
+  | 'claude-3-opus'
+  | 'meta/llama-3.1-405b-instruct'
+  | 'nvidia/llama-3.1-nemotron-70b-instruct';
 
 export interface ModelInfo {
   id: ModelId;
