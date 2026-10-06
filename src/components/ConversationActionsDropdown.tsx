@@ -140,7 +140,7 @@ export const ConversationActionsDropdown: React.FC<ConversationActionsDropdownPr
           exit={reducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.96, y: -4 }}
           transition={reducedMotion ? { duration: 0.12 } : { type: 'spring', stiffness: 340, damping: 27, mass: 0.72 }}
           style={{ position: 'fixed', top: position.top, left: position.left, width: MENU_WIDTH }}
-          className="z-[120] rounded-[14px] border border-claude-border-light dark:border-claude-border-dark bg-white/96 dark:bg-[#1d1c19]/96 p-1.5 shadow-[0_14px_38px_-12px_rgba(29,27,24,0.35)] dark:shadow-[0_18px_42px_-14px_rgba(0,0,0,0.68)] backdrop-blur-xl"
+          className="z-[120] rounded-[14px] border border-claude-border-light dark:border-claude-border-dark bg-white/95 dark:bg-[#1d1c19]/95 p-1.5 shadow-[0_14px_38px_-12px_rgba(29,27,24,0.35)] dark:shadow-[0_18px_42px_-14px_rgba(0,0,0,0.68)] backdrop-blur-xl"
           onClick={event => event.stopPropagation()}
         >
           {items.map(({ id, label, icon: Icon, action, destructive }) => (
