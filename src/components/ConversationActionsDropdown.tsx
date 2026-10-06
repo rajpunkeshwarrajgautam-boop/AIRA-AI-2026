@@ -1,6 +1,6 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Bookmark, Edit3, MoreHorizontal, Trash2 } from 'lucide-react';
+import { Bookmark, Copy, Edit3, MoreHorizontal, Share2, Trash2 } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 
 interface ConversationActionsDropdownProps {
@@ -8,6 +8,8 @@ interface ConversationActionsDropdownProps {
   isPinned?: boolean;
   onToggleStar: () => void;
   onRename: () => void;
+  onDuplicate: () => void;
+  onShare: () => void | Promise<void>;
   onDelete: () => void;
   visible?: boolean;
 }
@@ -18,7 +20,7 @@ type MenuPosition = {
 };
 
 const MENU_WIDTH = 188;
-const MENU_HEIGHT = 142;
+const MENU_HEIGHT = 220;
 const VIEWPORT_GUTTER = 8;
 
 export const ConversationActionsDropdown: React.FC<ConversationActionsDropdownProps> = ({
@@ -26,6 +28,8 @@ export const ConversationActionsDropdown: React.FC<ConversationActionsDropdownPr
   isPinned,
   onToggleStar,
   onRename,
+  onDuplicate,
+  onShare,
   onDelete,
   visible = true,
 }) => {
@@ -66,10 +70,10 @@ export const ConversationActionsDropdown: React.FC<ConversationActionsDropdownPr
     setIsOpen(open => !open);
   };
 
-  const runAction = (event: React.MouseEvent, action: () => void) => {
+  const runAction = (event: React.MouseEvent, action: () => void | Promise<void>) => {
     event.stopPropagation();
     closeMenu();
-    action();
+    void action();
   };
 
   useEffect(() => {
@@ -105,6 +109,20 @@ export const ConversationActionsDropdown: React.FC<ConversationActionsDropdownPr
 
   const items = [
     {
+      id: 'rename',
+      label: 'Rename',
+      icon: Edit3,
+      action: onRename,
+      destructive: false,
+    },
+    {
+      id: 'duplicate',
+      label: 'Duplicate',
+      icon: Copy,
+      action: onDuplicate,
+      destructive: false,
+    },
+    {
       id: 'bookmark',
       label: isPinned ? 'Remove bookmark' : 'Bookmark',
       icon: Bookmark,
@@ -112,10 +130,10 @@ export const ConversationActionsDropdown: React.FC<ConversationActionsDropdownPr
       destructive: false,
     },
     {
-      id: 'rename',
-      label: 'Rename',
-      icon: Edit3,
-      action: onRename,
+      id: 'share',
+      label: 'Share',
+      icon: Share2,
+      action: onShare,
       destructive: false,
     },
     {
@@ -156,7 +174,7 @@ export const ConversationActionsDropdown: React.FC<ConversationActionsDropdownPr
               whileTap={reducedMotion ? undefined : { scale: 0.985 }}
               className={`relative isolate flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-[12px] font-medium outline-none transition-colors ${
                 destructive
-                  ? 'text-red-500 dark:text-red-400'
+                  ? 'mt-1 border-t border-red-100 pt-2 text-red-500 dark:border-red-500/10 dark:text-red-400'
                   : 'text-claude-text-light dark:text-claude-text-dark'
               }`}
             >
