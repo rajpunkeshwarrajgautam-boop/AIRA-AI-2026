@@ -1,0 +1,162 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '24'
+  DATABASE_URL: postgres://aira:aira@127.0.0.1:5432/aira_db
+  NODE_ENV: test
+
+jobs:
+  fast:
+    name: Fast CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: aira
+          POSTGRES_PASSWORD: aira
+          POSTGRES_DB: aira_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U aira -d aira_db"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Scan tracked files for high-risk credential patterns
+        shell: bash
+        run: |
+          set -euo pipefail
+          pattern='(nvapi-[A-Za-z0-9_-]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|sk_live_[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16})'
+          if git grep -IlE "$pattern" -- . ':(exclude)package-lock.json' > /tmp/secret-files; then
+            echo '::error::Potential credential material found in tracked files:'
+            sed 's/^/ - /' /tmp/secret-files
+            exit 1
+          fi
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Run database migrations
+        run: npm run db:migrate
+
+      - name: Runtime verification
+        run: npm test
+
+  certify:
+    name: Main / PR certification
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    needs: fast
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: aira
+          POSTGRES_PASSWORD: aira
+          POSTGRES_DB: aira_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U aira -d aira_db"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run database migrations
+        run: npm run db:migrate
+
+      - name: Integration certification
+        run: npm run test:integration
+
+      - name: Recovery certification
+        run: npm run test:recovery
+
+      - name: Identity certification
+        run: npm run test:identity
+
+      - name: Startup certification
+        run: npm run test:startup
+
+      - name: Install Playwright Edge
+        run: npx playwright install --with-deps msedge
+
+      - name: Start Vite for E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run dev -- --host 127.0.0.1 > /tmp/aira-vite.log 2>&1 &
+          echo $! > /tmp/aira-vite.pid
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:5173/ >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/aira-vite.log
+          exit 1
+
+      - name: E2E certification
+        run: npm run test:e2e
+
+      - name: Stop Vite
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/aira-vite.pid ]; then
+            kill "$(cat /tmp/aira-vite.pid)" 2>/dev/null || true
+          fi
+
+      - name: Upload E2E server log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aira-ci-e2e-log
+          path: /tmp/aira-vite.log
+          if-no-files-found: ignore
