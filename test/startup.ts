@@ -48,7 +48,7 @@ async function runStartupTests() {
   let isRecovered = false;
 
   const startServer = () => {
-    return new Promise<void>((resolve, reject) => {
+    return new Promise<void>((resolve) => {
       apiProcess = spawn('npx', ['tsx', 'apps/api/src/index.ts'], {
         env: { ...process.env, PORT: String(API_PORT), TSX_CACHE: 'false' },
         shell: true
@@ -56,7 +56,6 @@ async function runStartupTests() {
 
       apiProcess.stdout.on('data', (data: any) => {
         const out = data.toString();
-        // console.log(`API: ${out.trim()}`);
         if (out.includes(`listening on port ${API_PORT}`)) {
           isListening = true;
           resolve(); // Resolve when bound to port
@@ -66,31 +65,38 @@ async function runStartupTests() {
         }
       });
 
-      apiProcess.stderr.on('data', (data: any) => {
-        // console.error(`API ERR: ${data.toString().trim()}`);
+      apiProcess.stderr.on('data', (_data: any) => {
+        // Keep stderr attached so child-process errors cannot block on a full pipe.
       });
     });
   };
 
   await startServer();
 
-  console.log('--- 3. Ensure readiness is not HEALTHY before recovery completes ---');
+  console.log('--- 3. Verify readiness during/after startup recovery ---');
   assert.ok(isListening, 'Server should be listening');
-  
-  // Right after binding, we might be RECOVERING or already HEALTHY (if it was super fast)
-  // Let's check. If it's already recovered, we can't assert 503 easily, but we can try.
-  if (!isRecovered) {
-    const readyBefore = await fetch(`${BASE_URL}/api/ready`).catch(() => null);
-    assert.ok(readyBefore, 'Readiness endpoint should respond');
-    assert.strictEqual(readyBefore.status, 503, 'Ready should return 503 while RECOVERING');
+
+  // Recovery can complete between the stdout "listening" event reaching this
+  // process and the first HTTP request. Treat the HTTP readiness contract as
+  // authoritative rather than racing it against stdout delivery.
+  const readyBefore = await fetch(`${BASE_URL}/api/ready`).catch(() => null);
+  assert.ok(readyBefore, 'Readiness endpoint should respond');
+
+  if (readyBefore.status === 503) {
     const bBody = await readyBefore.json();
-    assert.strictEqual(bBody.status, 'RECOVERING');
-    
-    // Test that runtime is blocked
-    const runRes = await fetch(`${BASE_URL}/api/runs`, { headers: { 'x-test-user-id': 'u', 'x-test-session-id': 's' }});
+    assert.strictEqual(bBody.status, 'RECOVERING', '503 readiness must report RECOVERING');
+
+    // Protected runtime traffic must stay closed while recovery is incomplete.
+    const runRes = await fetch(`${BASE_URL}/api/runs`, {
+      headers: { 'x-test-user-id': 'u', 'x-test-session-id': 's' }
+    });
     assert.strictEqual(runRes.status, 503, 'Protected routes must return 503 during recovery');
   } else {
-    console.warn('Recovery was too fast to catch 503 state, skipping 503 assertion.');
+    assert.strictEqual(readyBefore.status, 200, 'Readiness may only be 503/RECOVERING or 200/READY');
+    const bBody = await readyBefore.json();
+    assert.strictEqual(bBody.status, 'READY', '200 readiness must report READY');
+    isRecovered = true;
+    console.warn('Recovery completed before the first readiness request; validated READY state instead.');
   }
 
   console.log('--- 4. Wait for recovery to complete ---');
