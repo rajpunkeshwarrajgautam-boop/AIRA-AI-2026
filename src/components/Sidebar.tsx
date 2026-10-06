@@ -1,9 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import {
   Plus,
-  Bookmark,
-  Trash2,
-  Edit3,
   FolderGit2,
   Settings,
   Search,
@@ -21,6 +18,7 @@ import {
 import { motion, AnimatePresence, Variants } from 'framer-motion';
 import type { Conversation, Project, AppSettings, WorkspaceMode } from '../types';
 import { AiraMark } from './AiraMark';
+import { ConversationActionsDropdown } from './ConversationActionsDropdown';
 
 interface SidebarProps {
   conversations: Conversation[];
@@ -219,13 +217,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
         ) : (
           <span className="text-[13px] font-medium truncate flex-1 tracking-tight">{c.title}</span>
         )}
-        <div className={`flex items-center gap-1 ml-2 ${activeChatId === c.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} transition-opacity`}>
-          <button onClick={e => { e.stopPropagation(); onToggleStar(c.id); }} className="p-1.5 rounded-md hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark transition-colors active:scale-95" title={c.isPinned ? 'Remove bookmark' : 'Bookmark'}>
-            <Bookmark className={`w-3.5 h-3.5 ${c.isPinned ? 'fill-claude-terracotta text-claude-terracotta' : ''}`} />
-          </button>
-          <button onClick={e => handleStartRename(c, e)} className="p-1.5 rounded-md hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark transition-colors" title="Rename"><Edit3 className="w-3.5 h-3.5" /></button>
-          <button onClick={e => { e.stopPropagation(); onDeleteChat(c.id); }} className="p-1.5 rounded-md hover:bg-red-50 dark:hover:bg-red-500/10 hover:text-red-500 transition-colors" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
-        </div>
+        <ConversationActionsDropdown
+          conversationId={c.id}
+          isPinned={c.isPinned}
+          visible={activeChatId === c.id}
+          onToggleStar={() => onToggleStar(c.id)}
+          onRename={() => {
+            setEditingChatId(c.id);
+            setEditTitle(c.title);
+          }}
+          onDelete={() => onDeleteChat(c.id)}
+        />
       </div>
     </motion.div>
   );
