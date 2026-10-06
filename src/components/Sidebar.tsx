@@ -146,8 +146,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     };
   }, [conversations, searchQuery, now]);
 
-  const handleStartRename = (c: Conversation, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleStartRename = (c: Conversation) => {
     setEditingChatId(c.id);
     setEditTitle(c.title);
   };
@@ -222,10 +221,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           isPinned={c.isPinned}
           visible={activeChatId === c.id}
           onToggleStar={() => onToggleStar(c.id)}
-          onRename={() => {
-            setEditingChatId(c.id);
-            setEditTitle(c.title);
-          }}
+          onRename={() => handleStartRename(c)}
           onDelete={() => onDeleteChat(c.id)}
         />
       </div>
