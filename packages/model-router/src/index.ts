@@ -184,7 +184,7 @@ export class OpenAIAdapter implements ModelAdapter {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: policy.model === 'aira-fast' ? 'gpt-4o-mini' : 'gpt-4o',
+        model: policy.model === 'aira-fast' ? 'gpt-4o-mini' : policy.model,
         messages: messages.map(m => ({ role: m.role, content: m.content })),
         max_tokens: policy.maxTokens,
         temperature: policy.temperature
