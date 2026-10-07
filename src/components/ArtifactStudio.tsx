@@ -12,7 +12,6 @@ import {
   Terminal, 
   Layers
 } from 'lucide-react';
-import confetti from 'canvas-confetti';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Artifact } from '../types';
 
@@ -54,16 +53,14 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
 
   const currentContent = artifact.versions?.find(v => v.version === selectedVersion)?.content || artifact.content;
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(currentContent);
-    setIsCopied(true);
-    confetti({
-      particleCount: 25,
-      spread: 45,
-      origin: { y: 0.2, x: 0.8 },
-      colors: ['#D97757', '#C15335', '#F5E3DC']
-    });
-    setTimeout(() => setIsCopied(false), 2000);
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(currentContent);
+      setIsCopied(true);
+      window.setTimeout(() => setIsCopied(false), 1800);
+    } catch {
+      setIsCopied(false);
+    }
   };
 
   const handleDownload = () => {
@@ -171,30 +168,37 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
 
             {/* Tab & Controls */}
             <div className="flex items-center space-x-2">
-              {/* Tab Switcher */}
-              <div className="flex items-center bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark p-1 rounded-xl mr-2 shadow-inner">
-                <button
-                  onClick={() => setActiveTab('preview')}
-                  className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-300 ${
-                    activeTab === 'preview'
-                      ? 'bg-claude-surface-light dark:bg-claude-surface-dark text-claude-terracotta shadow-sm border border-claude-border-light dark:border-claude-border-dark'
-                      : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white border border-transparent'
-                  }`}
-                >
-                  <Play className="w-3.5 h-3.5" />
-                  <span>Preview</span>
-                </button>
-                <button
-                  onClick={() => setActiveTab('code')}
-                  className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-300 ${
-                    activeTab === 'code'
-                      ? 'bg-claude-surface-light dark:bg-claude-surface-dark text-claude-terracotta shadow-sm border border-claude-border-light dark:border-claude-border-dark'
-                      : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white border border-transparent'
-                  }`}
-                >
-                  <Code className="w-3.5 h-3.5" />
-                  <span>Code</span>
-                </button>
+              {/* Watermelon-style continuous tabs */}
+              <div className="relative mr-2 flex items-center rounded-xl border border-claude-border-light bg-claude-surface2-light p-1 shadow-inner dark:border-claude-border-dark dark:bg-claude-surface2-dark">
+                {([
+                  { id: 'preview' as const, label: 'Preview', icon: Play },
+                  { id: 'code' as const, label: 'Code', icon: Code },
+                ]).map(tab => {
+                  const Icon = tab.icon;
+                  const selected = activeTab === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setActiveTab(tab.id)}
+                      className={`relative isolate flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                        selected
+                          ? 'text-claude-terracotta'
+                          : 'text-claude-muted-light hover:text-claude-text-light dark:text-claude-muted-dark dark:hover:text-white'
+                      }`}
+                    >
+                      {selected && (
+                        <motion.span
+                          layoutId="artifact-active-tab"
+                          className="absolute inset-0 -z-10 rounded-lg border border-claude-border-light bg-claude-surface-light shadow-sm dark:border-claude-border-dark dark:bg-claude-surface-dark"
+                          transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+                        />
+                      )}
+                      <Icon className="h-3.5 w-3.5" />
+                      <span>{tab.label}</span>
+                    </button>
+                  );
+                })}
               </div>
 
               <div className="flex items-center gap-1">
