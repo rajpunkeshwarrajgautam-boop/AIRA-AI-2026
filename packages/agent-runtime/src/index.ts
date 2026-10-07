@@ -7,6 +7,7 @@ import {
   StreamingEventType,
   CreateRunRequest,
   ModelPolicy,
+  ModelPolicySchema,
   ToolCall,
   ToolResult,
   Citation,
@@ -73,10 +74,20 @@ export class AgentRuntime extends EventEmitter {
     const runId = `run_${crypto.randomUUID().slice(0, 10)}`;
     const now = Date.now();
 
-    const policy: ModelPolicy = this.modelRouter.resolvePolicy(
+    const basePolicy = this.modelRouter.resolvePolicy(
       request.modelPolicy?.model || 'aira-auto',
       request.intent
     );
+    const requestedPolicy = request.modelPolicy;
+    const extendedThinking = requestedPolicy?.extendedThinking ?? basePolicy.extendedThinking;
+
+    const policy: ModelPolicy = ModelPolicySchema.parse({
+      ...basePolicy,
+      temperature: requestedPolicy?.temperature ?? basePolicy.temperature,
+      maxTokens: requestedPolicy?.maxTokens ?? (extendedThinking ? Math.max(basePolicy.maxTokens, 8192) : basePolicy.maxTokens),
+      extendedThinking,
+      reasoningBudget: requestedPolicy?.reasoningBudget ?? (extendedThinking ? (basePolicy.reasoningBudget ?? 2048) : undefined),
+    });
 
     const run: Run = {
       id: runId,

@@ -407,7 +407,7 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
 // -----------------------------------------------------------------------
 app.post('/api/chat/stream', async (req: Request, res: Response) => {
   try {
-    const { messages, history, prompt, model, systemPrompt, contextSubgraph } = req.body;
+    const { messages, history, prompt, model, extendedThinking, systemPrompt, contextSubgraph } = req.body;
     const promptText = prompt || (Array.isArray(messages)
       ? [...messages].reverse().find((m: any) => m.role === 'user')?.content || ''
       : '');
@@ -427,7 +427,10 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       prompt: promptText,
       systemPrompt: (systemPrompt || '') + (contextSubgraph ? `\n\n${contextSubgraph}` : ''),
       context: { history: contextHistory },
-      modelPolicy: { model: model || 'aira-auto' }
+      modelPolicy: {
+        model: model || 'aira-auto',
+        extendedThinking: Boolean(extendedThinking),
+      }
     }, req.principal!);
 
     const stream = agentRuntime.getEventStream(run.id);
@@ -447,7 +450,19 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         res.write(`event: tool_started\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'tool.completed') {
         res.write(`event: tool_completed\ndata: ${JSON.stringify(evt.data)}\n\n`);
-      } else if (evt.type === 'run.completed' || evt.type === 'run.failed' || evt.type === 'run.cancelled') {
+      } else if (evt.type === 'run.failed') {
+        res.write(`event: error\ndata: ${JSON.stringify({
+          error: evt.data?.error || 'Aira runtime failed before producing a response',
+        })}\n\n`);
+        stream.off('event', handler);
+        res.end();
+      } else if (evt.type === 'run.cancelled') {
+        res.write(`event: error\ndata: ${JSON.stringify({
+          error: evt.data?.error || 'Aira run was cancelled',
+        })}\n\n`);
+        stream.off('event', handler);
+        res.end();
+      } else if (evt.type === 'run.completed') {
         res.write(`event: done\ndata: [DONE]\n\n`);
         stream.off('event', handler);
         res.end();

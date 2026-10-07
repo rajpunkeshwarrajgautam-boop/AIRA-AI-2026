@@ -76,6 +76,9 @@ jobs:
       - name: Runtime verification
         run: npm test
 
+      - name: Model provider routing certification
+        run: npm run test:model-routing
+
   certify:
     name: Main / PR certification
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'

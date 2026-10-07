@@ -167,10 +167,16 @@ export class AnthropicAdapter implements ModelAdapter {
 export class OpenAIAdapter implements ModelAdapter {
   private apiKey: string;
   private baseUrl: string;
+  private airaModel: ModelId;
 
-  constructor(apiKey?: string, baseUrl = 'https://api.openai.com/v1') {
+  constructor(
+    apiKey?: string,
+    baseUrl = 'https://api.openai.com/v1',
+    airaModel: ModelId = 'gpt-4o'
+  ) {
     this.apiKey = apiKey || process.env.OPENAI_API_KEY || '';
     this.baseUrl = baseUrl;
+    this.airaModel = airaModel;
   }
 
   async complete(messages: ChatMessageInput[], policy: ModelPolicy): Promise<ModelCompletionResult> {
@@ -184,7 +190,9 @@ export class OpenAIAdapter implements ModelAdapter {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: policy.model === 'aira-fast' ? 'gpt-4o-mini' : policy.model,
+        model: policy.model.startsWith('aira-')
+          ? (this.baseUrl.includes('api.openai.com') && policy.model === 'aira-fast' ? 'gpt-4o-mini' : this.airaModel)
+          : policy.model,
         messages: messages.map(m => ({ role: m.role, content: m.content })),
         max_tokens: policy.maxTokens,
         temperature: policy.temperature
@@ -238,14 +246,31 @@ export class ModelRouter {
       this.adapters.set('openai', new OpenAIAdapter());
     }
     if (process.env.NVIDIA_API_KEY) {
-      this.adapters.set('nvidia', new OpenAIAdapter(process.env.NVIDIA_API_KEY, 'https://integrate.api.nvidia.com/v1'));
+      this.adapters.set(
+        'nvidia',
+        new OpenAIAdapter(
+          process.env.NVIDIA_API_KEY,
+          'https://integrate.api.nvidia.com/v1',
+          'nvidia/nemotron-3-super-120b-a12b'
+        )
+      );
     }
   }
 
   public resolvePolicy(modelId: ModelId, intent?: IntentTaxonomy): ModelPolicy {
-    let resolvedModel: ModelId = modelId;
+    // Frontend v1 exposed Aira modes using legacy Claude IDs. Treat those IDs as
+    // product-level aliases so persisted browser settings keep working while
+    // routing remains provider-agnostic.
+    const legacyAiraAliases: Partial<Record<ModelId, ModelId>> = {
+      'claude-3-7-sonnet': 'aira-auto',
+      'claude-3-5-sonnet': 'aira-pro',
+      'claude-3-5-haiku': 'aira-fast',
+      'claude-3-opus': 'aira-deep'
+    };
 
-    if (modelId === 'aira-auto') {
+    let resolvedModel: ModelId = legacyAiraAliases[modelId] || modelId;
+
+    if (resolvedModel === 'aira-auto') {
       switch (intent) {
         case 'RESEARCH':
         case 'AGENT_MISSION':
@@ -263,7 +288,7 @@ export class ModelRouter {
       }
     }
 
-    const extendedThinking = resolvedModel === 'aira-deep' || resolvedModel === 'claude-3-7-sonnet';
+    const extendedThinking = resolvedModel === 'aira-deep';
     const maxTokens = extendedThinking ? 8192 : 4096;
     const reasoningBudget = extendedThinking ? 2048 : undefined;
 
@@ -292,23 +317,39 @@ export class ModelRouter {
       return mock;
     }
 
-    if (model.startsWith('claude') || model === 'aira-pro' || model === 'aira-deep') {
+    if (model.startsWith('aira-')) {
+      const providerPreference = model === 'aira-fast'
+        ? ['openai', 'nvidia', 'anthropic']
+        : ['anthropic', 'nvidia', 'openai'];
+
+      for (const provider of providerPreference) {
+        const adapter = this.adapters.get(provider);
+        if (adapter) return adapter;
+      }
+
+      throw new Error(
+        `CONFIGURATION_ERROR: No production model provider is configured for Aira mode "${model}". ` +
+        'Configure NVIDIA_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY.'
+      );
+    }
+
+    if (model.startsWith('claude')) {
       if (this.adapters.has('anthropic')) {
         return this.adapters.get('anthropic')!;
       }
       throw new Error(
         `CONFIGURATION_ERROR: No Anthropic API key configured for model "${model}". ` +
-        'Set ANTHROPIC_API_KEY in environment. No mock fallback is available in production.'
+        'Set ANTHROPIC_API_KEY in environment.'
       );
     }
 
-    if (model.startsWith('gpt') || model === 'aira-fast') {
+    if (model.startsWith('gpt')) {
       if (this.adapters.has('openai')) {
         return this.adapters.get('openai')!;
       }
       throw new Error(
         `CONFIGURATION_ERROR: No OpenAI API key configured for model "${model}". ` +
-        'Set OPENAI_API_KEY in environment. No mock fallback is available in production.'
+        'Set OPENAI_API_KEY in environment.'
       );
     }
 

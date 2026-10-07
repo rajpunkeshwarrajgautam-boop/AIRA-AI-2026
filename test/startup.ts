@@ -87,10 +87,26 @@ async function runStartupTests() {
     assert.strictEqual(bBody.status, 'RECOVERING', '503 readiness must report RECOVERING');
 
     // Protected runtime traffic must stay closed while recovery is incomplete.
+    // Recovery may complete between the readiness probe above and this request,
+    // so both outcomes are valid only if they agree with the current readiness state.
     const runRes = await fetch(`${BASE_URL}/api/runs`, {
       headers: { 'x-test-user-id': 'u', 'x-test-session-id': 's' }
     });
-    assert.strictEqual(runRes.status, 503, 'Protected routes must return 503 during recovery');
+
+    if (runRes.status === 503) {
+      // Still recovering: the runtime gate is correctly closed.
+      assert.strictEqual(runRes.status, 503, 'Protected routes must return 503 while recovery is incomplete');
+    } else {
+      // Recovery completed in the race window. Protected traffic may now be open,
+      // but readiness must have transitioned to READY before we accept that result.
+      assert.strictEqual(runRes.status, 200, 'Protected route may only return 503 or 200 across the recovery boundary');
+      const readyAfterRace = await fetch(`${BASE_URL}/api/ready`);
+      assert.strictEqual(readyAfterRace.status, 200, 'Runtime traffic may only open after readiness becomes 200');
+      const readyAfterRaceBody = await readyAfterRace.json();
+      assert.strictEqual(readyAfterRaceBody.status, 'READY', 'Runtime traffic may only open after READY state');
+      isRecovered = true;
+      console.warn('Recovery completed between readiness and protected-route probes; validated READY transition.');
+    }
   } else {
     assert.strictEqual(readyBefore.status, 200, 'Readiness may only be 503/RECOVERING or 200/READY');
     const bBody = await readyBefore.json();
