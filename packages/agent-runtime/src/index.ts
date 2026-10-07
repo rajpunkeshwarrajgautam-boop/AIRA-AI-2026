@@ -70,7 +70,7 @@ export class AgentRuntime extends EventEmitter {
     this.emit('run_event', { runId, event });
   }
 
-  public async createAndExecuteRun(request: CreateRunRequest, principal: ExecutionPrincipal): Promise<Run> {
+  public async createRun(request: CreateRunRequest, principal: ExecutionPrincipal): Promise<Run> {
     const runId = `run_${crypto.randomUUID().slice(0, 10)}`;
     const now = Date.now();
 
@@ -117,15 +117,26 @@ export class AgentRuntime extends EventEmitter {
     };
 
     await this.runRepo.saveRun(run);
-    await this.emitRunEvent(runId, 'run.created', { runId, state: run.state });
+    return run;
+  }
 
+  public async startRun(runId: string): Promise<void> {
+    const run = await this.runRepo.getRun(runId);
+    if (!run) return;
+    await this.emitRunEvent(runId, 'run.created', { runId, state: run.state });
+    try {
+      await this.executeRunLoop(runId);
+    } catch (err: any) {
+      await this.transitionRunState(runId, 'FAILED', err.message);
+    }
+  }
+
+  public async createAndExecuteRun(request: CreateRunRequest, principal: ExecutionPrincipal): Promise<Run> {
+    const run = await this.createRun(request, principal);
     // Asynchronously execute run loop
     setImmediate(() => {
-      this.executeRunLoop(runId).catch(err => {
-        this.transitionRunState(runId, 'FAILED', err.message).catch(console.error);
-      });
+      this.startRun(run.id).catch(console.error);
     });
-
     return run;
   }
 
@@ -346,6 +357,11 @@ export class AgentRuntime extends EventEmitter {
           content: `You are Aira AI, an autonomous intelligence operating workspace. Maintain precise, verified reasoning.`
         });
       }
+      
+      if (run.context && Array.isArray(run.context.history)) {
+        messages.push(...run.context.history);
+      }
+      
       messages.push({ role: 'user', content: run.prompt });
 
       if (run.toolCalls.length > 0 && run.toolResults.length > 0) {
