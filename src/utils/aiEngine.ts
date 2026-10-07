@@ -170,6 +170,9 @@ export async function streamAIResponse(
                     wrappedCallbacks.onArtifactFound(activeArtifact);
                   }
                   activeArtifact = null;
+                } else if (currentEvent === 'error') {
+                  wrappedCallbacks.onError(data.error || data.message || 'Aira runtime failed before producing a response');
+                  return;
                 } else if (currentEvent === 'done') {
                   wrappedCallbacks.onComplete();
                   return;
