@@ -392,7 +392,9 @@ export const AgentDefinitionSchema = z.object({
   memoryScopes: z.array(z.string()).default(['workspace']),
   approvalPolicy: z.enum(['always_ask', 'risky_only', 'autonomous']).default('risky_only'),
   maxSteps: z.number().int().positive().default(10),
-  timeoutMs: z.number().int().positive().default(60000)
+  timeoutMs: z.number().int().positive().default(60000),
+  createdAt: z.number().optional(),
+  updatedAt: z.number().optional()
 });
 export type AgentDefinition = z.infer<typeof AgentDefinitionSchema>;
 
@@ -406,6 +408,8 @@ export type AutomationTriggerType = z.infer<typeof AutomationTriggerTypeSchema>;
 
 export const AutomationDefinitionSchema = z.object({
   id: z.string(),
+  createdAt: z.number().optional(),
+  updatedAt: z.number().optional(),
   name: z.string(),
   enabled: z.boolean().default(true),
   trigger: AutomationTriggerTypeSchema,
@@ -445,3 +449,4 @@ export const ErrorEnvelopeSchema = z.object({
   timestamp: z.number()
 });
 export type ErrorEnvelope = z.infer<typeof ErrorEnvelopeSchema>;
+

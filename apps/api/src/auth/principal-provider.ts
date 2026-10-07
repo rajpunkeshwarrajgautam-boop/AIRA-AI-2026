@@ -1,3 +1,4 @@
+import { resolveFirebasePrincipal } from './firebase.js';
 import { Request } from 'express';
 import { ExecutionPrincipal, ExecutionPrincipalSchema } from '../../../../packages/contracts/src/index.js';
 
@@ -27,6 +28,11 @@ export class DevPrincipalProvider implements PrincipalProvider {
       }
     }
 
+    // This rollout authenticates the owned Bot domain only. Legacy platform
+    // endpoints still rely on their existing trusted host identity.
+    const firebasePrincipal = req.originalUrl?.startsWith('/api/aira-bot/') ? await resolveFirebasePrincipal(req) : undefined;
+    if (firebasePrincipal) return firebasePrincipal;
+
     // Default authenticated principal resolution
     const user = (req as any).user;
     if (!user || !user.id) {
@@ -47,3 +53,4 @@ export class DevPrincipalProvider implements PrincipalProvider {
     });
   }
 }
+

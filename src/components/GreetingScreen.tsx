@@ -117,7 +117,7 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
   const dynamicGreetingTitle = useMemo(() => {
     // If specific workspace mode is active, reflect it
     if (workspaceMode === 'research') return 'Research & Investigation';
-    if (workspaceMode === 'agents') return 'Autonomous Missions';
+    if (workspaceMode === 'bots') return 'Autonomous Missions';
     if (workspaceMode === 'automations') return 'Workflow Engineering';
     if (workspaceMode === 'library') return 'Workspace Knowledge';
 
@@ -138,7 +138,7 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
     if (workspaceMode === 'research') {
       return 'Cross-examine sources, gather structured citations, and synthesize technical briefs.';
     }
-    if (workspaceMode === 'agents') {
+    if (workspaceMode === 'bots') {
       return 'Delegate multi-step goals with automated checkpoints and verifiable deliverables.';
     }
     if (workspaceMode === 'automations') {
@@ -395,3 +395,4 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
     </div>
   );
 };
+

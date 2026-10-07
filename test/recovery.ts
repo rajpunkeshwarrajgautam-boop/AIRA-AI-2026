@@ -14,7 +14,9 @@ let apiServer: any;
 async function startApiServer() {
   console.log('Starting API Server...');
   apiServer = spawn('npx', ['tsx', 'apps/api/src/index.ts'], {
-    env: { ...process.env, PORT: API_PORT.toString(), NODE_ENV: 'test', AIRA_ALLOW_MOCK: 'true' },
+    // Pin the worker identity for deterministic recovery-owner assertions.
+    // Production remains on unique generated IDs unless AIRA_WORKER_ID is explicitly configured.
+    env: { ...process.env, PORT: API_PORT.toString(), NODE_ENV: 'test', AIRA_ALLOW_MOCK: 'true', AIRA_WORKER_ID: 'api-worker-1' },
     stdio: 'inherit',
     shell: true
   });
@@ -97,6 +99,21 @@ async function runRecoveryTests() {
   // Kill the server abruptly
   killApiServer();
   await sleep(1000);
+
+  // Phase 6+ uses durable execution fencing. A replacement worker must not
+  // steal an unexpired lease from another worker, even if that process appears
+  // to have disappeared. This test is about post-TTL crash recovery, while the
+  // dedicated worker-leasing suite separately certifies the no-steal window.
+  // Simulate the crashed worker's lease TTL having elapsed before restart.
+  const crashed = await db('runs')
+    .whereIn('id', [runSafeId, runUnsafeId])
+    .select('id', 'execution_owner', 'execution_lease_until');
+  assert.strictEqual(crashed.length, 2);
+  assert.ok(crashed.every((row: any) => row.execution_owner && row.execution_lease_until),
+    'Interrupted tool runs should hold durable execution leases before simulated expiry');
+  await db('runs')
+    .whereIn('id', [runSafeId, runUnsafeId])
+    .update({ execution_lease_until: Date.now() - 1 });
 
   console.log('\n--- 2. Prepare Static Runs for Startup Verification ---');
   

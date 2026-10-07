@@ -1,5 +1,5 @@
 
-export type WorkspaceMode = 'chat' | 'research' | 'library' | 'agents' | 'automations';
+export type WorkspaceMode = 'chat' | 'research' | 'library' | 'bots' | 'automations';
 
 export type ModelId = 
   | 'claude-3-7-sonnet' 
@@ -155,3 +155,4 @@ export interface MemoryStats {
   tokensSavedEstimate: number;
   lastConsolidationTimestamp?: number;
 }
+

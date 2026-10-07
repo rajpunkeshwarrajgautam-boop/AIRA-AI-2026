@@ -51,3 +51,8 @@ A full Vite bundle was not generated in the Linux inspection environment because
 ## Next transformation pass
 
 Phase 2 should wire the Aira shell into the real Aira execution architecture: intent routing, research/citations, library persistence, provider routing, tool actions, workflows, automations, agents, authentication, and the production data layer.
+
+
+## Aira Bot
+
+The dedicated Aira Bot workspace is available at `/bots`. It includes persistent owned bots, model-driven tasks, read tools, approvals, memory, skills and downloadable results. See [setup, verification and remaining infrastructure](docs/aira-bot/README.md).
