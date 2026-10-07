@@ -125,6 +125,8 @@ export async function streamAIResponse(
         let buffer = '';
         let activeArtifact: Artifact | null = null;
         let artifactCode = '';
+        let currentEvent = 'message';
+        let emittedArtifact = false;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -133,13 +135,18 @@ export async function streamAIResponse(
           const lines = buffer.split('\n');
           buffer = lines.pop() || '';
 
-          let currentEvent = 'message';
           for (const line of lines) {
             if (line.startsWith('event: ')) {
               currentEvent = line.slice(7).trim();
             } else if (line.startsWith('data: ')) {
               const dataStr = line.slice(6).trim();
-              if (dataStr === '[DONE]') continue;
+              if (dataStr === '[DONE]') {
+                if (currentEvent === 'done') {
+                  wrappedCallbacks.onComplete();
+                  return;
+                }
+                continue;
+              }
               try {
                 const data = JSON.parse(dataStr);
                 if ((currentEvent === 'thinking_delta' || data.thinking) && wrappedCallbacks.onThinkingChunk && !data.text) {
@@ -168,9 +175,10 @@ export async function streamAIResponse(
                   }];
                   if (wrappedCallbacks.onArtifactFound) {
                     wrappedCallbacks.onArtifactFound(activeArtifact);
+                    emittedArtifact = true;
                   }
                   activeArtifact = null;
-                } else if (currentEvent === 'error') {
+                } else if (currentEvent === 'error' || data.error) {
                   wrappedCallbacks.onError(data.error || data.message || 'Aira runtime failed before producing a response');
                   return;
                 } else if (currentEvent === 'done') {
@@ -182,6 +190,11 @@ export async function streamAIResponse(
               }
             }
           }
+        }
+
+        if (!accumulatedResponse.trim() && !emittedArtifact) {
+          wrappedCallbacks.onError('Aira runtime closed the stream without producing a response.');
+          return;
         }
 
         wrappedCallbacks.onComplete();
