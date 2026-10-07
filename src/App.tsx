@@ -13,6 +13,7 @@ import { ChatInput } from './components/ChatInput';
 import { GreetingScreen } from './components/GreetingScreen';
 import { ModelSelector } from './components/ModelSelector';
 import { AiraMark } from './components/AiraMark';
+import { CommandPalette } from './components/CommandPalette';
 
 // Lazy-loaded heavy auxiliary surfaces to optimize FCP and TTI
 const ArtifactStudio = React.lazy(() => import('./components/ArtifactStudio').then(m => ({ default: m.ArtifactStudio })));
@@ -39,6 +40,7 @@ function App() {
   const [isProjectsOpen, setIsProjectsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isMemoryVaultOpen, setIsMemoryVaultOpen] = useState(false);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [activeArtifact, setActiveArtifact] = useState<Artifact | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [sharedCopied, setSharedCopied] = useState(false);
@@ -91,6 +93,11 @@ function App() {
   useEffect(() => {
     const handle = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setIsCommandPaletteOpen(true);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
         e.preventDefault();
         handleNewChat();
       }
@@ -309,6 +316,18 @@ function App() {
         onUpdateSettings={updateSettings}
         workspaceMode={workspaceMode}
         onSelectWorkspace={setWorkspaceMode}
+      />
+
+      <CommandPalette
+        isOpen={isCommandPaletteOpen}
+        conversations={conversations}
+        projects={projects}
+        onClose={() => setIsCommandPaletteOpen(false)}
+        onNewChat={handleNewChat}
+        onSelectChat={handleSelectChat}
+        onSelectWorkspace={setWorkspaceMode}
+        onOpenProjects={() => setIsProjectsOpen(true)}
+        onOpenSettings={() => setIsSettingsOpen(true)}
       />
 
       <main className="flex-1 min-w-0 h-[100dvh] flex flex-col overflow-x-hidden w-full max-w-full bg-mesh-canvas">
