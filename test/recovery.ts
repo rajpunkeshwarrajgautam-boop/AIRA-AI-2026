@@ -98,6 +98,21 @@ async function runRecoveryTests() {
   killApiServer();
   await sleep(1000);
 
+  // Phase 6+ uses durable execution fencing. A replacement worker must not
+  // steal an unexpired lease from another worker, even if that process appears
+  // to have disappeared. This test is about post-TTL crash recovery, while the
+  // dedicated worker-leasing suite separately certifies the no-steal window.
+  // Simulate the crashed worker's lease TTL having elapsed before restart.
+  const crashed = await db('runs')
+    .whereIn('id', [runSafeId, runUnsafeId])
+    .select('id', 'execution_owner', 'execution_lease_until');
+  assert.strictEqual(crashed.length, 2);
+  assert.ok(crashed.every((row: any) => row.execution_owner && row.execution_lease_until),
+    'Interrupted tool runs should hold durable execution leases before simulated expiry');
+  await db('runs')
+    .whereIn('id', [runSafeId, runUnsafeId])
+    .update({ execution_lease_until: Date.now() - 1 });
+
   console.log('\n--- 2. Prepare Static Runs for Startup Verification ---');
   
   // Test A: WAITING_FOR_APPROVAL
