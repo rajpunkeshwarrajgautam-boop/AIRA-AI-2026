@@ -13,6 +13,7 @@
     "test:e2e": "npx tsx test/e2e-verification.ts",
     "test:recovery": "npx tsx test/recovery.ts",
     "test:identity": "npx tsx test/identity.ts",
+    "test:session-auth": "npx tsx test/session-auth.ts",
     "test:startup": "npx tsx test/startup.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc -b && vite build",
