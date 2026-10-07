@@ -7,7 +7,7 @@ export type ModelId =
   | 'claude-3-5-haiku' 
   | 'claude-3-opus'
   | 'meta/llama-3.1-405b-instruct'
-  | 'nvidia/llama-3.1-nemotron-70b-instruct';
+  | 'nvidia/nemotron-3-super-120b-a12b';
 
 export interface ModelInfo {
   id: ModelId;
