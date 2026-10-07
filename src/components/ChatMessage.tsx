@@ -1,12 +1,11 @@
 import React, { useState } from 'react';
-import { 
-  Copy, 
-  Check, 
-  RotateCw, 
-  FileText
+import {
+  Check,
+  Copy,
+  FileText,
+  RotateCw,
 } from 'lucide-react';
-import confetti from 'canvas-confetti';
-import { motion } from 'framer-motion';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import type { Message, Artifact } from '../types';
 import { AVAILABLE_MODELS } from '../utils/constants';
 import { AiraMark } from './AiraMark';
@@ -28,86 +27,85 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
   onRetry,
 }) => {
   const [copied, setCopied] = useState(false);
+  const reducedMotion = useReducedMotion();
   const isUser = message.role === 'user';
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(message.content);
-    setCopied(true);
-    confetti({
-      particleCount: 20,
-      spread: 40,
-      origin: { y: 0.6, x: 0.5 },
-      colors: ['#D97757', '#C15335', '#F5E3DC']
-    });
-    setTimeout(() => setCopied(false), 2000);
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setCopied(false);
+    }
   };
 
   return (
-    <motion.div 
+    <motion.div
       layout
-      initial={{ opacity: 0, y: 15, scale: 0.98 }}
+      initial={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 12, scale: 0.99 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
-      transition={{ type: 'spring', stiffness: 120, damping: 20, mass: 0.8 }}
-      className={`py-5 px-4 md:px-6 w-full max-w-4xl mx-auto group ${isUser ? 'flex justify-end' : ''}`}
+      transition={reducedMotion ? { duration: 0.08 } : { type: 'spring', stiffness: 140, damping: 22, mass: 0.78 }}
+      className={`group mx-auto w-full max-w-4xl px-4 py-5 md:px-6 ${isUser ? 'flex justify-end' : ''}`}
     >
       {isUser ? (
-        <div className="flex flex-col items-end max-w-[85%]">
+        <div className="flex max-w-[85%] flex-col items-end">
           {userName && (
-            <span className="text-[11px] font-mono text-claude-muted-light/70 dark:text-claude-muted-dark/70 mb-1.5 px-1">
+            <span className="mb-1.5 px-1 font-mono text-[11px] text-claude-muted-light/70 dark:text-claude-muted-dark/70">
               {userName}
             </span>
           )}
-          <div className="w-fit bg-claude-surface2-light dark:bg-claude-surface2-dark rounded-2xl px-5 py-3 md:px-6 md:py-4 text-claude-text-light dark:text-claude-text-dark shadow-sm border border-claude-borderMuted-light dark:border-claude-borderMuted-dark">
-          {message.attachments && message.attachments.length > 0 && (
-            <div className="flex flex-wrap gap-2 pb-3 mb-2 border-b border-claude-border-light dark:border-claude-border-dark">
-              {message.attachments.map(att => (
-                <div key={att.id} className="flex items-center space-x-2 px-3 py-1.5 rounded-lg bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-borderMuted-light dark:border-claude-borderMuted-dark text-xs shadow-sm">
-                  <FileText className="w-3.5 h-3.5 text-claude-terracotta" />
-                  <span className="truncate max-w-[140px] font-medium">{att.name}</span>
-                </div>
-              ))}
-            </div>
-          )}
-          <div 
-            className="aira-prose text-base leading-relaxed break-words whitespace-pre-wrap font-sans"
-            dangerouslySetInnerHTML={{ __html: renderMarkdownToHtml(message.content) }}
-          />
+          <div className="w-fit rounded-2xl border border-claude-borderMuted-light bg-claude-surface2-light px-5 py-3 text-claude-text-light shadow-sm md:px-6 md:py-4 dark:border-claude-borderMuted-dark dark:bg-claude-surface2-dark dark:text-claude-text-dark">
+            {message.attachments && message.attachments.length > 0 && (
+              <div className="mb-2 flex flex-wrap gap-2 border-b border-claude-border-light pb-3 dark:border-claude-border-dark">
+                {message.attachments.map(attachment => (
+                  <div
+                    key={attachment.id}
+                    className="flex items-center gap-2 rounded-lg border border-claude-borderMuted-light bg-claude-surface-light px-3 py-1.5 text-xs shadow-sm dark:border-claude-borderMuted-dark dark:bg-claude-surface-dark"
+                  >
+                    <FileText className="h-3.5 w-3.5 text-claude-terracotta" />
+                    <span className="max-w-[140px] truncate font-medium">{attachment.name}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div
+              className="aira-prose whitespace-pre-wrap break-words font-sans text-base leading-relaxed"
+              dangerouslySetInnerHTML={{ __html: renderMarkdownToHtml(message.content) }}
+            />
+          </div>
         </div>
-      </div>
       ) : (
-        <div className="flex items-start space-x-5 w-full">
-          <div className="flex-shrink-0 mt-1">
+        <div className="flex w-full items-start gap-5">
+          <div className="mt-1 shrink-0">
             <AiraMark size="sm" />
           </div>
 
-          <div className="flex-1 min-w-0 space-y-3">
-            <div className="flex items-center space-x-2.5">
+          <div className="min-w-0 flex-1 space-y-3">
+            <div className="flex items-center gap-2.5">
               <span className="text-sm font-semibold tracking-tight text-claude-text-light dark:text-claude-text-dark">
                 Aira
               </span>
               {message.modelUsed && (
-                <span className="text-[10px] uppercase font-bold tracking-wider text-claude-muted-light dark:text-claude-muted-dark bg-claude-surface2-light dark:bg-claude-surface2-dark px-2 py-0.5 rounded-full">
+                <span className="rounded-full bg-claude-surface2-light px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-claude-muted-light dark:bg-claude-surface2-dark dark:text-claude-muted-dark">
                   {AVAILABLE_MODELS.find(model => model.id === message.modelUsed)?.name}
                 </span>
               )}
             </div>
 
-            {message.thinking && (
-              <ThinkingBlock thinking={message.thinking} />
-            )}
+            {message.thinking && <ThinkingBlock thinking={message.thinking} />}
 
             <motion.div layout>
-              <div 
-                className="aira-prose text-claude-text-light dark:text-claude-text-dark text-base md:text-[17px] leading-[1.7] break-words font-sans"
+              <div
+                className="aira-prose break-words font-sans text-base leading-[1.7] text-claude-text-light md:text-[17px] dark:text-claude-text-dark"
                 dangerouslySetInnerHTML={{ __html: renderMarkdownToHtml(message.content) }}
               />
-              
               {message.isStreaming && (
-                <motion.span 
+                <motion.span
                   initial={{ opacity: 0 }}
                   animate={{ opacity: [0, 1, 0] }}
-                  transition={{ duration: 1.5, repeat: Infinity, ease: 'linear' }}
-                  className="inline-block w-[6px] h-[18px] ml-1.5 bg-claude-terracotta align-middle rounded-full"
+                  transition={{ duration: 1.35, repeat: Infinity, ease: 'linear' }}
+                  className="ml-1.5 inline-block h-[18px] w-[5px] rounded-full bg-claude-terracotta align-middle"
                 />
               )}
             </motion.div>
@@ -115,38 +113,57 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
             {message.artifacts && message.artifacts.length > 0 && (
               <motion.div layout className="pt-3">
                 {message.artifacts.map(artifact => (
-                  <ArtifactCard 
-                    key={artifact.id} 
-                    artifact={artifact} 
-                    onOpen={onOpenArtifact} 
+                  <ArtifactCard
+                    key={artifact.id}
+                    artifact={artifact}
+                    onOpen={onOpenArtifact}
                   />
                 ))}
               </motion.div>
             )}
 
             {!message.isStreaming && (
-              <motion.div 
+              <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                transition={{ delay: 0.3 }}
-                className="flex items-center space-x-2 pt-1 text-claude-muted-light dark:text-claude-muted-dark opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+                transition={{ delay: reducedMotion ? 0 : 0.18 }}
+                className="flex min-h-8 items-center gap-1.5 pt-1 text-claude-muted-light opacity-100 sm:opacity-0 sm:transition-opacity sm:duration-200 sm:group-hover:opacity-100 dark:text-claude-muted-dark"
               >
-                <button
+                <motion.button
+                  type="button"
                   onClick={handleCopy}
-                  className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark hover:text-claude-text-light dark:hover:text-claude-text-dark text-xs flex items-center space-x-1.5 transition-all duration-200 active:scale-95"
+                  whileTap={reducedMotion ? undefined : { scale: 0.94 }}
+                  className={`flex items-center gap-1.5 rounded-[9px] px-2 py-1.5 text-[11px] font-medium transition-colors ${
+                    copied
+                      ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                      : 'hover:bg-claude-surface2-light hover:text-claude-text-light dark:hover:bg-claude-surface2-dark dark:hover:text-white'
+                  }`}
                   title="Copy message"
                 >
-                  {copied ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
-                </button>
+                  {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                  <AnimatePresence mode="wait" initial={false}>
+                    <motion.span
+                      key={copied ? 'copied' : 'copy'}
+                      initial={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 2 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={reducedMotion ? { opacity: 0 } : { opacity: 0, y: -2 }}
+                    >
+                      {copied ? 'Copied' : 'Copy'}
+                    </motion.span>
+                  </AnimatePresence>
+                </motion.button>
 
                 {onRetry && (
-                  <button
+                  <motion.button
+                    type="button"
                     onClick={onRetry}
-                    className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark hover:text-claude-text-light dark:hover:text-claude-text-dark text-xs flex items-center space-x-1.5 transition-all duration-200 active:scale-95"
+                    whileTap={reducedMotion ? undefined : { scale: 0.94 }}
+                    className="flex items-center gap-1.5 rounded-[9px] px-2 py-1.5 text-[11px] font-medium transition-colors hover:bg-claude-surface2-light hover:text-claude-text-light dark:hover:bg-claude-surface2-dark dark:hover:text-white"
                     title="Retry response"
                   >
-                    <RotateCw className="w-4 h-4" />
-                  </button>
+                    <RotateCw className="h-3.5 w-3.5" />
+                    Retry
+                  </motion.button>
                 )}
               </motion.div>
             )}
