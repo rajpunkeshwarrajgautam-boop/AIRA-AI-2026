@@ -80,8 +80,10 @@ app.get('/api/ready', async (_req: Request, res: Response) => {
   }
 
   const health = await liveRuntime.readiness();
-  res.status(appState === 'HEALTHY' && health.ready ? 200 : 503)
-    .json({ status: appState === 'HEALTHY' && health.ready ? 'READY' : 'NOT_READY', ...health, timestamp: Date.now() });
+  const ready = appState === 'HEALTHY' && health.ready;
+  const readinessStatus = ready ? 'READY' : appState !== 'HEALTHY' ? appState : 'NOT_READY';
+  res.status(ready ? 200 : 503)
+    .json({ status: readinessStatus, ...health, timestamp: Date.now() });
 });
 
 // Hard gate to block runtime traffic before recovery is complete
