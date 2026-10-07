@@ -203,17 +203,17 @@ async function runTests() {
 
     assert.ok(run.id.startsWith('run_'));
 
-    // Wait for execution completion
-    let attempts = 0;
-    while (attempts < 20 && run.state !== 'COMPLETED') {
+    // Wait for a terminal state. CI database scheduling can vary, so certify
+    // the state machine outcome rather than assuming completion within exactly 2s.
+    const executionDeadline = Date.now() + 10_000;
+    while (Date.now() < executionDeadline && !['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)) {
       await new Promise(r => setTimeout(r, 100));
-      attempts++;
       const updated = await runtime.getRun(run.id);
       if (updated) run = updated;
     }
 
     if (run.state !== 'COMPLETED') {
-      console.error('Run failed:', run);
+      console.error('Run did not complete successfully:', run);
     }
     assert.strictEqual(run.state, 'COMPLETED');
     assert.ok(run.toolsUsed.includes('calculator'));
