@@ -14,7 +14,9 @@ let apiServer: any;
 async function startApiServer() {
   console.log('Starting API Server...');
   apiServer = spawn('npx', ['tsx', 'apps/api/src/index.ts'], {
-    env: { ...process.env, PORT: API_PORT.toString(), NODE_ENV: 'test', AIRA_ALLOW_MOCK: 'true' },
+    // Pin the worker identity for deterministic recovery-owner assertions.
+    // Production remains on unique generated IDs unless AIRA_WORKER_ID is explicitly configured.
+    env: { ...process.env, PORT: API_PORT.toString(), NODE_ENV: 'test', AIRA_ALLOW_MOCK: 'true', AIRA_WORKER_ID: 'api-worker-1' },
     stdio: 'inherit',
     shell: true
   });
