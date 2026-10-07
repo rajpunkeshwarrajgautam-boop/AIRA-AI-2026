@@ -1,6 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { ChevronDown, Zap, Brain, Check } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useEffect, useRef, useState } from 'react';
+import { Brain, Check, ChevronDown, Gauge, Sparkles, Zap } from 'lucide-react';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import type { ModelId } from '../types';
 import { AVAILABLE_MODELS } from '../utils/constants';
 
@@ -11,6 +11,13 @@ interface ModelSelectorProps {
   onToggleThinking: (enabled: boolean) => void;
 }
 
+const modelGlyph = (name: string) => {
+  if (name.includes('Fast')) return Zap;
+  if (name.includes('Deep') || name.includes('Nemotron')) return Brain;
+  if (name.includes('Auto')) return Sparkles;
+  return Gauge;
+};
+
 export const ModelSelector: React.FC<ModelSelectorProps> = ({
   currentModel,
   onSelectModel,
@@ -18,121 +25,172 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   onToggleThinking,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const [activeRow, setActiveRow] = useState(currentModel);
   const containerRef = useRef<HTMLDivElement>(null);
-  const activeModelInfo = AVAILABLE_MODELS.find(m => m.id === currentModel) || AVAILABLE_MODELS[0];
+  const reducedMotion = useReducedMotion();
+  const activeModelInfo = AVAILABLE_MODELS.find(model => model.id === currentModel) || AVAILABLE_MODELS[0];
+  const ActiveIcon = modelGlyph(activeModelInfo.name);
 
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setIsOpen(false);
+    if (!isOpen) return;
+    const handlePointer = (event: PointerEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) setIsOpen(false);
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsOpen(false);
+        (containerRef.current?.querySelector('button') as HTMLButtonElement | null)?.focus();
+      }
+    };
+    document.addEventListener('pointerdown', handlePointer);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointer);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [isOpen]);
+
+  const selectModel = (model: (typeof AVAILABLE_MODELS)[number]) => {
+    onSelectModel(model.id);
+    if (!model.supportsThinking && extendedThinking) onToggleThinking(false);
+    setIsOpen(false);
+  };
 
   return (
-    <div className="relative inline-block z-50" ref={containerRef}>
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark text-sm font-medium text-claude-text-light dark:text-claude-text-dark transition-colors"
+    <div className="relative z-50 inline-block" ref={containerRef}>
+      <motion.button
+        type="button"
+        onClick={() => setIsOpen(open => !open)}
+        whileTap={reducedMotion ? undefined : { scale: 0.98 }}
+        aria-haspopup="listbox"
+        aria-expanded={isOpen}
+        className="group flex items-center gap-2 rounded-xl px-2.5 py-1.5 text-left transition-colors hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark"
       >
-        <span>{activeModelInfo.name}</span>
-        {activeModelInfo.badge && (
-          <span className="hidden sm:inline text-[10px] font-mono px-1.5 py-0.2 rounded bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark">
-            {activeModelInfo.badge}
+        <span className="flex h-7 w-7 items-center justify-center rounded-[9px] bg-claude-terracotta/10 text-claude-terracotta">
+          <ActiveIcon className="h-3.5 w-3.5" />
+        </span>
+        <span className="min-w-0">
+          <span className="flex items-center gap-1.5">
+            <span className="max-w-[180px] truncate text-[13px] font-semibold text-claude-text-light dark:text-white">{activeModelInfo.name}</span>
+            {extendedThinking && activeModelInfo.supportsThinking && <Brain className="h-3.5 w-3.5 text-claude-terracotta" />}
           </span>
-        )}
-        {currentModel === 'claude-3-7-sonnet' && extendedThinking && <Brain className="w-3.5 h-3.5 text-claude-terracotta" />}
-        <motion.div animate={{ rotate: isOpen ? 180 : 0 }} transition={{ type: "spring", stiffness: 300, damping: 20 }}>
-          <ChevronDown className="w-3.5 h-3.5 text-claude-muted-light dark:text-claude-muted-dark" />
-        </motion.div>
-      </button>
+          <span className="hidden text-[10px] font-medium text-claude-muted-light sm:block dark:text-claude-muted-dark">
+            {activeModelInfo.badge || 'Aira'} · {activeModelInfo.contextWindow}
+          </span>
+        </span>
+        <motion.span
+          animate={reducedMotion ? undefined : { rotate: isOpen ? 180 : 0 }}
+          transition={{ type: 'spring', stiffness: 360, damping: 28 }}
+          className="ml-0.5 text-claude-muted-light dark:text-claude-muted-dark"
+        >
+          <ChevronDown className="h-3.5 w-3.5" />
+        </motion.span>
+      </motion.button>
 
       <AnimatePresence>
         {isOpen && (
-          <motion.div 
-            initial={{ opacity: 0, y: 8, scale: 0.98 }}
+          <motion.div
+            initial={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 8, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 4, scale: 0.98 }}
-            transition={{ type: "spring", stiffness: 400, damping: 30 }}
-            className="absolute left-0 mt-2 w-[calc(100vw-24px)] sm:w-[340px] max-w-[340px] rounded-2xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-[0_4px_24px_rgba(45,40,30,0.08)] dark:shadow-[0_4px_24px_rgba(0,0,0,0.5)] p-2 z-50 origin-top-left overflow-hidden"
+            exit={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 5, scale: 0.985 }}
+            transition={reducedMotion ? { duration: 0.08 } : { type: 'spring', stiffness: 390, damping: 31 }}
+            className="absolute left-0 mt-2 w-[calc(100vw-24px)] max-w-[380px] overflow-hidden rounded-[18px] border border-claude-border-light bg-white/95 p-2 shadow-[0_20px_55px_-22px_rgba(45,40,30,0.5)] backdrop-blur-2xl dark:border-claude-border-dark dark:bg-[#1c1b18]/95 dark:shadow-[0_24px_60px_-24px_rgba(0,0,0,0.9)]"
           >
-            <div className="px-3 py-2.5 border-b border-claude-border-light dark:border-claude-border-dark mb-1.5 flex items-center justify-between bg-claude-surface2-light dark:bg-claude-surface2-dark rounded-t-xl">
+            <div className="flex items-center justify-between px-2.5 pb-2 pt-1.5">
               <div>
-                <div className="text-[10px] font-bold uppercase tracking-[0.15em] text-claude-text-light dark:text-white">Aira intelligence</div>
-                <div className="text-[11px] font-medium text-claude-muted-light dark:text-claude-muted-dark mt-0.5">Choose how Aira approaches the task.</div>
+                <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-claude-muted-light dark:text-claude-muted-dark">Aira intelligence</div>
+                <div className="mt-0.5 text-[12px] font-medium text-claude-text-light dark:text-white">Choose the engine for this task</div>
               </div>
-              <div className="p-1.5 bg-claude-terracotta/10 rounded-lg">
-                <Zap className="w-4 h-4 text-claude-terracotta" />
-              </div>
+              <span className="rounded-lg bg-claude-terracotta/10 p-1.5 text-claude-terracotta">
+                <Sparkles className="h-4 w-4" />
+              </span>
             </div>
 
-            <div className="space-y-1">
-              {AVAILABLE_MODELS.map((model, idx) => {
-                const isSelected = model.id === currentModel;
+            <div role="listbox" aria-label="Available Aira models" className="space-y-1">
+              {AVAILABLE_MODELS.map(model => {
+                const selected = model.id === currentModel;
+                const focused = model.id === activeRow;
+                const Icon = modelGlyph(model.name);
                 return (
-                  <motion.button
-                    initial={{ opacity: 0, x: -10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: idx * 0.05 }}
-                    type="button"
+                  <button
                     key={model.id}
-                    onClick={() => { onSelectModel(model.id); setIsOpen(false); }}
-                    className={`w-full text-left p-3 rounded-xl transition-all duration-300 relative group overflow-hidden ${isSelected ? 'shadow-sm' : 'hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark border-transparent'}`}
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    onMouseEnter={() => setActiveRow(model.id)}
+                    onFocus={() => setActiveRow(model.id)}
+                    onClick={() => selectModel(model)}
+                    className="relative isolate flex w-full items-start gap-3 rounded-[13px] px-3 py-2.5 text-left outline-none"
                   >
-                    {isSelected && (
-                      <motion.div layoutId="model-active-bg" className="absolute inset-0 bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark shadow-sm rounded-xl -z-10" />
+                    {(focused || selected) && (
+                      <motion.span
+                        layoutId="aira-model-row"
+                        className={`absolute inset-0 -z-10 rounded-[13px] border ${
+                          selected
+                            ? 'border-claude-terracotta/20 bg-claude-terracotta/[0.07]'
+                            : 'border-transparent bg-claude-surface2-light dark:bg-claude-surface2-dark'
+                        }`}
+                        transition={reducedMotion ? { duration: 0 } : { type: 'spring', stiffness: 430, damping: 35 }}
+                      />
                     )}
-                    <div className="relative z-10">
-                      <div className="flex items-center justify-between mb-1">
-                        <div className="flex items-center space-x-2.5">
-                          <span className={`text-[13px] font-bold tracking-tight ${isSelected ? 'text-claude-terracotta dark:text-white' : 'text-claude-text-light dark:text-white'}`}>{model.name}</span>
-                          {model.badge && <span className="text-[9px] font-bold px-2 py-0.5 rounded-md bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark uppercase tracking-wider">{model.badge}</span>}
-                        </div>
-                        {isSelected && <Check className="w-4 h-4 text-claude-terracotta" />}
-                      </div>
-                      <p className="text-[12px] font-medium text-claude-muted-light dark:text-claude-muted-dark leading-[1.4] pr-4">{model.description}</p>
-                    </div>
-                  </motion.button>
+                    <span className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] ${
+                      selected
+                        ? 'bg-claude-terracotta text-white'
+                        : 'bg-claude-surface2-light text-claude-muted-light dark:bg-claude-surface2-dark dark:text-claude-muted-dark'
+                    }`}>
+                      <Icon className="h-4 w-4" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-2">
+                        <span className="truncate text-[13px] font-semibold text-claude-text-light dark:text-white">{model.name}</span>
+                        {model.badge && (
+                          <span className="rounded-md bg-claude-surface2-light px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-claude-muted-light dark:bg-claude-surface2-dark dark:text-claude-muted-dark">
+                            {model.badge}
+                          </span>
+                        )}
+                      </span>
+                      <span className="mt-0.5 block text-[11px] leading-relaxed text-claude-muted-light dark:text-claude-muted-dark">{model.description}</span>
+                      <span className="mt-1.5 flex items-center gap-1.5 text-[9px] font-medium uppercase tracking-wider text-claude-muted-light/80 dark:text-claude-muted-dark/80">
+                        <span>{model.contextWindow}</span>
+                        {model.supportsThinking && <><span>•</span><span>Deep reasoning</span></>}
+                      </span>
+                    </span>
+                    {selected && <Check className="mt-1 h-4 w-4 shrink-0 text-claude-terracotta" />}
+                  </button>
                 );
               })}
             </div>
 
-            <div className="mt-2 pt-2 border-t border-claude-border-light dark:border-claude-border-dark px-2 py-1.5 bg-claude-surface2-light dark:bg-claude-surface2-dark rounded-b-xl">
-              <div 
-                onClick={() => onToggleThinking(!extendedThinking)}
-                className="flex items-center justify-between gap-3 p-3 mt-1 rounded-xl hover:bg-claude-surface-light/60 dark:hover:bg-claude-surface-dark/60 cursor-pointer transition-colors select-none group"
+            <div className="mt-2 border-t border-claude-border-light pt-2 dark:border-claude-border-dark">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={extendedThinking && activeModelInfo.supportsThinking}
+                disabled={!activeModelInfo.supportsThinking}
+                onClick={() => activeModelInfo.supportsThinking && onToggleThinking(!extendedThinking)}
+                className="flex w-full items-center justify-between gap-3 rounded-[13px] px-3 py-2.5 text-left transition-colors hover:bg-claude-surface2-light disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-claude-surface2-dark"
               >
-                <div className="flex items-center space-x-3 min-w-0">
-                  <div className="w-9 h-9 rounded-xl bg-[#EDE9FE] dark:bg-[#2E274D] flex items-center justify-center flex-shrink-0 shadow-sm">
-                    <Brain className="w-5 h-5 text-[#7C3AED] dark:text-[#A78BFA]" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-[13px] font-semibold tracking-tight text-claude-text-light dark:text-white">Deep reasoning</div>
-                    <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark leading-snug">Spend more compute on complex tasks.</div>
-                  </div>
-                </div>
-                <button 
-                  type="button"
-                  role="switch"
-                  aria-checked={extendedThinking}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onToggleThinking(!extendedThinking);
-                  }}
-                  className={`group relative inline-flex h-[28px] w-[50px] flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-300 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00BCD4] focus-visible:ring-offset-2 dark:focus-visible:ring-offset-claude-bg-dark ${
-                    extendedThinking ? 'bg-[#00BCD4]' : 'bg-claude-border-light dark:bg-[#4A4740]'
-                  }`}
-                  style={{ boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.15)' }}
-                >
-                  <span className="sr-only">Toggle Deep reasoning</span>
-                  <span
-                    aria-hidden="true"
-                    className={`pointer-events-none inline-block h-[24px] w-[24px] transform rounded-full bg-white shadow-[0_2px_5px_rgba(0,0,0,0.2)] ring-0 transition-all duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)] group-active:w-[32px] ${
-                      extendedThinking ? 'translate-x-[22px] group-active:translate-x-[14px]' : 'translate-x-0'
-                    }`}
+                <span className="flex min-w-0 items-center gap-2.5">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] bg-claude-terracotta/10 text-claude-terracotta">
+                    <Brain className="h-4 w-4" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-[12px] font-semibold text-claude-text-light dark:text-white">Deep reasoning</span>
+                    <span className="block truncate text-[10px] text-claude-muted-light dark:text-claude-muted-dark">
+                      {activeModelInfo.supportsThinking ? 'Use more compute for complex work' : 'Not available for this model'}
+                    </span>
+                  </span>
+                </span>
+                <span className={`relative h-6 w-10 shrink-0 rounded-full transition-colors ${
+                  extendedThinking && activeModelInfo.supportsThinking ? 'bg-claude-terracotta' : 'bg-claude-border-light dark:bg-[#47443f]'
+                }`}>
+                  <motion.span
+                    className="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm"
+                    animate={{ x: extendedThinking && activeModelInfo.supportsThinking ? 16 : 0 }}
+                    transition={reducedMotion ? { duration: 0 } : { type: 'spring', stiffness: 500, damping: 30 }}
                   />
-                </button>
-              </div>
+                </span>
+              </button>
             </div>
           </motion.div>
         )}
