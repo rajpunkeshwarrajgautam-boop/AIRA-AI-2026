@@ -20,10 +20,10 @@ import {
 // Production startup assertions
 // -----------------------------------------------------------------------
 if (process.env.NODE_ENV === 'production') {
-  const hasProvider = process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY;
+  const hasProvider = process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY || process.env.NVIDIA_API_KEY;
   if (!hasProvider) {
     process.stderr.write(
-      '[STARTUP_ASSERTION] FAIL: Production requires at least one provider key (ANTHROPIC_API_KEY or OPENAI_API_KEY).\n'
+      '[STARTUP_ASSERTION] FAIL: Production requires at least one provider key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or NVIDIA_API_KEY).\n'
     );
     process.exit(1);
   }
@@ -653,32 +653,40 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 // -----------------------------------------------------------------------
 // Start Server
 // -----------------------------------------------------------------------
-const server = app.listen(PORT, '0.0.0.0', () => {
-  process.stdout.write(`AIRA Runtime API Server v2026.2.0 listening on port ${PORT}\n`);
-  process.stdout.write(`NODE_ENV: ${process.env.NODE_ENV || 'development'}\n`);
-  process.stdout.write(`Providers: ${modelRouter.listProviders().join(', ') || 'none (dev mock active)'}\n`);
-  
-  appState = 'RECOVERING';
-  agentRuntime.recoverInterruptedRuns('api-worker-1').then(() => {
-    appState = 'HEALTHY';
-    process.stdout.write('Startup recovery complete. API is HEALTHY.\n');
-  }).catch(err => {
-    console.error('Failed to recover interrupted runs. Failing closed:', err);
-    appState = 'FAILED';
-    process.exit(1);
+if (!process.env.VERCEL) {
+  const server = app.listen(PORT, '0.0.0.0', () => {
+    process.stdout.write(`AIRA Runtime API Server v2026.2.0 listening on port ${PORT}\n`);
+    process.stdout.write(`NODE_ENV: ${process.env.NODE_ENV || 'development'}\n`);
+    process.stdout.write(`Providers: ${modelRouter.listProviders().join(', ') || 'none (dev mock active)'}\n`);
+    
+    appState = 'RECOVERING';
+    agentRuntime.recoverInterruptedRuns('api-worker-1').then(() => {
+      appState = 'HEALTHY';
+      process.stdout.write('Startup recovery complete. API is HEALTHY.\n');
+    }).catch(err => {
+      console.error('Failed to recover interrupted runs. Failing closed:', err);
+      appState = 'FAILED';
+      process.exit(1);
+    });
   });
-});
 
-process.on('SIGINT', () => {
-  automationEngine.stop();
-  server.close(() => {
-    process.stdout.write('AIRA API Server stopped cleanly.\n');
-    process.exit(0);
+  process.on('SIGINT', () => {
+    automationEngine.stop();
+    server.close(() => {
+      process.stdout.write('AIRA API Server stopped cleanly.\n');
+      process.exit(0);
+    });
   });
-});
 
-process.on('SIGTERM', () => {
-  automationEngine.stop();
-  server.close(() => process.exit(0));
-});
+  process.on('SIGTERM', () => {
+    automationEngine.stop();
+    server.close(() => process.exit(0));
+  });
+} else {
+  // When running as a Vercel serverless function, immediately mark as healthy 
+  // so the middleware does not block requests with 503.
+  appState = 'HEALTHY';
+}
+
+export default app;
 
