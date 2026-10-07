@@ -9,6 +9,58 @@ export interface StreamCallbacks {
   onError: (error: string) => void;
 }
 
+let sessionBootstrapPromise: Promise<void> | null = null;
+
+async function ensureApiSession(forceRefresh = false): Promise<void> {
+  if (forceRefresh) sessionBootstrapPromise = null;
+  if (sessionBootstrapPromise) return sessionBootstrapPromise;
+
+  sessionBootstrapPromise = (async () => {
+    const response = await fetch('/api/auth/session', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+      },
+      credentials: 'same-origin',
+    });
+
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(`Session bootstrap failed (${response.status})${detail ? `: ${detail}` : ''}`);
+    }
+  })();
+
+  try {
+    await sessionBootstrapPromise;
+  } catch (error) {
+    sessionBootstrapPromise = null;
+    throw error;
+  }
+}
+
+async function postChatStream(body: unknown): Promise<Response> {
+  await ensureApiSession();
+
+  const request = () => fetch('/api/chat/stream', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    credentials: 'same-origin',
+    body: JSON.stringify(body),
+  });
+
+  let response = await request();
+
+  // Recover once from an expired/invalid session by issuing a fresh signed cookie.
+  if (response.status === 401) {
+    await ensureApiSession(true);
+    response = await request();
+  }
+
+  return response;
+}
+
 
 
 export async function streamAIResponse(
@@ -52,19 +104,13 @@ export async function streamAIResponse(
 
   // 1. Try Backend SSE Streaming Server (/api/chat/stream)
   try {
-    const backendRes = await fetch('/api/chat/stream', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        prompt,
-        history,
-        model,
-        extendedThinking: isThinking,
-        apiKey: settings.provider === 'anthropic' ? settings.anthropicApiKey : undefined,
-        contextSubgraph: enrichedContext,
-      }),
+    const backendRes = await postChatStream({
+      prompt,
+      history,
+      model,
+      extendedThinking: isThinking,
+      apiKey: settings.provider === 'anthropic' ? settings.anthropicApiKey : undefined,
+      contextSubgraph: enrichedContext,
     });
 
       if (!backendRes.ok) {
