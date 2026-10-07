@@ -272,7 +272,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <Plus className="w-4 h-4 text-claude-terracotta" />
                   <span>Start new chat</span>
                 </div>
-                <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-claude-muted-light dark:text-claude-muted-dark">Ctrl K</kbd>
+                <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-claude-muted-light dark:text-claude-muted-dark">Ctrl N</kbd>
               </button>
             </div>
 
