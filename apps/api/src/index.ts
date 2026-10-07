@@ -423,7 +423,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders?.();
 
-    const run = await agentRuntime.createAndExecuteRun({
+    const run = await agentRuntime.createRun({
       prompt: promptText,
       systemPrompt: (systemPrompt || '') + (contextSubgraph ? `\n\n${contextSubgraph}` : ''),
       context: { history: contextHistory },
@@ -473,6 +473,8 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     req.on('close', () => {
       stream.off('event', handler);
     });
+
+    await agentRuntime.startRun(run.id);
   } catch (err: any) {
     if (!res.headersSent) {
       res.status(500).json({ error: err.message });
