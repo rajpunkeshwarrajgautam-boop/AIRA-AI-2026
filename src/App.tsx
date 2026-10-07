@@ -14,6 +14,7 @@ import { GreetingScreen } from './components/GreetingScreen';
 import { ModelSelector } from './components/ModelSelector';
 import { AiraMark } from './components/AiraMark';
 import { CommandPalette } from './components/CommandPalette';
+import { InlineToast } from './components/InlineToast';
 
 // Lazy-loaded heavy auxiliary surfaces to optimize FCP and TTI
 const ArtifactStudio = React.lazy(() => import('./components/ArtifactStudio').then(m => ({ default: m.ArtifactStudio })));
@@ -44,6 +45,8 @@ function App() {
   const [activeArtifact, setActiveArtifact] = useState<Artifact | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [sharedCopied, setSharedCopied] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const activeConversation = useMemo(
@@ -80,6 +83,19 @@ function App() {
     setConversations(prev => prev.map(c => c.id === id ? updater(c) : c));
   };
 
+  const showToast = useCallback((message: string) => {
+    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
+    setToastMessage(message);
+    toastTimerRef.current = window.setTimeout(() => {
+      setToastMessage(null);
+      toastTimerRef.current = null;
+    }, 1800);
+  }, []);
+
+  useEffect(() => () => {
+    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
+  }, []);
+
   const handleNewChat = useCallback(() => {
     const id = 'chat-' + Date.now();
     const next: Conversation = { id, title: 'New task', messages: [], createdAt: Date.now(), updatedAt: Date.now(), projectId: activeProjectId };
@@ -113,6 +129,7 @@ function App() {
   };
 
   const handleDeleteChat = (id: string) => {
+    if (!conversations.some(conversation => conversation.id === id)) return;
     setConversations(prev => {
       const filtered = prev.filter(c => c.id !== id);
       const next = filtered.length ? filtered : [{ ...INITIAL_CONVERSATION, id: 'chat-' + Date.now(), createdAt: Date.now(), updatedAt: Date.now() }];
@@ -122,6 +139,7 @@ function App() {
       }
       return next;
     });
+    showToast('Conversation deleted');
   };
 
   const handleRenameChat = (id: string, title: string) => updateConversation(id, c => ({ ...c, title, updatedAt: Date.now() }));
@@ -152,6 +170,7 @@ function App() {
     saveActiveChatId(duplicate.id);
     setActiveArtifact(null);
     setWorkspaceMode('chat');
+    showToast('Conversation duplicated');
   };
 
   const shareConversation = async (conversation: Conversation): Promise<boolean> => {
@@ -179,7 +198,8 @@ function App() {
   const handleShareChat = async (id: string) => {
     const conversation = conversations.find(c => c.id === id);
     if (!conversation) return;
-    await shareConversation(conversation);
+    const shared = await shareConversation(conversation);
+    if (shared) showToast('Conversation shared');
   };
 
   const handleSendMessage = async (rawText: string, attachments: Attachment[]) => {
@@ -289,6 +309,7 @@ function App() {
     const shared = await shareConversation(activeConversation);
     if (!shared) return;
     setSharedCopied(true);
+    showToast('Conversation shared');
     setTimeout(() => setSharedCopied(false), 1500);
   };
 
@@ -329,6 +350,8 @@ function App() {
         onOpenProjects={() => setIsProjectsOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
       />
+
+      <InlineToast message={toastMessage} />
 
       <main className="flex-1 min-w-0 h-[100dvh] flex flex-col overflow-x-hidden w-full max-w-full bg-mesh-canvas">
         <header className="h-[54px] px-3 md:px-5 flex items-center justify-between border-b border-claude-border-light/80 dark:border-claude-border-dark/80 gradient-fade-header relative z-50 bg-claude-bg-light/95 dark:bg-claude-bg-dark/95 backdrop-blur-md">
