@@ -47,8 +47,8 @@ export const AVAILABLE_MODELS: ModelInfo[] = [
     contextWindow: '128K tokens',
   },
   {
-    id: 'nvidia/llama-3.1-nemotron-70b-instruct',
-    name: 'Nemotron 70B',
+    id: 'nvidia/nemotron-3-super-120b-a12b',
+    name: 'Nemotron 3 Super 120B-A12B',
     badge: 'NVIDIA',
     description: 'Custom fine-tune by NVIDIA optimized for instruction following and reasoning.',
     supportsThinking: false,
