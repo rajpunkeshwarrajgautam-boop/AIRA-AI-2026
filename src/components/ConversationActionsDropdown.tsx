@@ -1,6 +1,6 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Bookmark, Copy, Edit3, MoreHorizontal, Share2, Trash2 } from 'lucide-react';
+import { Bookmark, Copy, Edit3, MoreHorizontal, Share2, Trash2, X } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 
 interface ConversationActionsDropdownProps {
@@ -19,8 +19,8 @@ type MenuPosition = {
   left: number;
 };
 
-const MENU_WIDTH = 188;
-const MENU_HEIGHT = 220;
+const MENU_WIDTH = 196;
+const MENU_HEIGHT = 264;
 const VIEWPORT_GUTTER = 8;
 
 export const ConversationActionsDropdown: React.FC<ConversationActionsDropdownProps> = ({
@@ -35,6 +35,7 @@ export const ConversationActionsDropdown: React.FC<ConversationActionsDropdownPr
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [activeAction, setActiveAction] = useState<string | null>(null);
+  const [deleteArmed, setDeleteArmed] = useState(false);
   const [position, setPosition] = useState<MenuPosition>({ top: 0, left: 0 });
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -62,11 +63,15 @@ export const ConversationActionsDropdown: React.FC<ConversationActionsDropdownPr
   const closeMenu = () => {
     setIsOpen(false);
     setActiveAction(null);
+    setDeleteArmed(false);
   };
 
   const toggleMenu = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
-    if (!isOpen) updatePosition();
+    if (!isOpen) {
+      updatePosition();
+      setDeleteArmed(false);
+    }
     setIsOpen(open => !open);
   };
 
@@ -87,6 +92,10 @@ export const ConversationActionsDropdown: React.FC<ConversationActionsDropdownPr
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        if (deleteArmed) {
+          setDeleteArmed(false);
+          return;
+        }
         closeMenu();
         triggerRef.current?.focus();
       }
@@ -105,44 +114,18 @@ export const ConversationActionsDropdown: React.FC<ConversationActionsDropdownPr
       window.removeEventListener('resize', handleViewportChange);
       document.removeEventListener('scroll', handleViewportChange, true);
     };
-  }, [isOpen]);
+  }, [deleteArmed, isOpen]);
 
   const items = [
-    {
-      id: 'rename',
-      label: 'Rename',
-      icon: Edit3,
-      action: onRename,
-      destructive: false,
-    },
-    {
-      id: 'duplicate',
-      label: 'Duplicate',
-      icon: Copy,
-      action: onDuplicate,
-      destructive: false,
-    },
+    { id: 'rename', label: 'Rename', icon: Edit3, action: onRename },
+    { id: 'duplicate', label: 'Duplicate', icon: Copy, action: onDuplicate },
     {
       id: 'bookmark',
       label: isPinned ? 'Remove bookmark' : 'Bookmark',
       icon: Bookmark,
       action: onToggleStar,
-      destructive: false,
     },
-    {
-      id: 'share',
-      label: 'Share',
-      icon: Share2,
-      action: onShare,
-      destructive: false,
-    },
-    {
-      id: 'delete',
-      label: 'Delete',
-      icon: Trash2,
-      action: onDelete,
-      destructive: true,
-    },
+    { id: 'share', label: 'Share', icon: Share2, action: onShare },
   ] as const;
 
   const menu = (
@@ -161,42 +144,107 @@ export const ConversationActionsDropdown: React.FC<ConversationActionsDropdownPr
           className="z-[120] rounded-[14px] border border-claude-border-light dark:border-claude-border-dark bg-white/95 dark:bg-[#1d1c19]/95 p-1.5 shadow-[0_14px_38px_-12px_rgba(29,27,24,0.35)] dark:shadow-[0_18px_42px_-14px_rgba(0,0,0,0.68)] backdrop-blur-xl"
           onClick={event => event.stopPropagation()}
         >
-          {items.map(({ id, label, icon: Icon, action, destructive }) => (
-            <motion.button
-              key={id}
-              type="button"
-              role="menuitem"
-              onHoverStart={() => setActiveAction(id)}
-              onHoverEnd={() => setActiveAction(current => current === id ? null : current)}
-              onFocus={() => setActiveAction(id)}
-              onBlur={() => setActiveAction(current => current === id ? null : current)}
-              onClick={event => runAction(event, action)}
-              whileTap={reducedMotion ? undefined : { scale: 0.985 }}
-              className={`relative isolate flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-[12px] font-medium outline-none transition-colors ${
-                destructive
-                  ? 'mt-1 border-t border-red-100 pt-2 text-red-500 dark:border-red-500/10 dark:text-red-400'
-                  : 'text-claude-text-light dark:text-claude-text-dark'
-              }`}
-            >
-              {activeAction === id && (
-                <motion.span
-                  layoutId={`conversation-action-highlight-${conversationId}`}
-                  className={`absolute inset-0 -z-10 rounded-[10px] ${
-                    destructive
-                      ? 'bg-red-50 dark:bg-red-500/10'
-                      : 'bg-claude-surface2-light dark:bg-claude-surface2-dark'
-                  }`}
-                  transition={reducedMotion ? { duration: 0 } : { type: 'spring', stiffness: 420, damping: 32 }}
-                />
-              )}
-              <Icon
-                className={`h-3.5 w-3.5 shrink-0 ${
-                  id === 'bookmark' && isPinned ? 'fill-claude-terracotta text-claude-terracotta' : ''
-                }`}
-              />
-              <span className="flex-1">{label}</span>
-            </motion.button>
-          ))}
+          <AnimatePresence mode="wait" initial={false}>
+            {!deleteArmed ? (
+              <motion.div
+                key="actions"
+                initial={reducedMotion ? { opacity: 0 } : { opacity: 0, x: -6 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={reducedMotion ? { opacity: 0 } : { opacity: 0, x: -6 }}
+                transition={{ duration: reducedMotion ? 0.08 : 0.16 }}
+              >
+                {items.map(({ id, label, icon: Icon, action }) => (
+                  <motion.button
+                    key={id}
+                    type="button"
+                    role="menuitem"
+                    onHoverStart={() => setActiveAction(id)}
+                    onHoverEnd={() => setActiveAction(current => current === id ? null : current)}
+                    onFocus={() => setActiveAction(id)}
+                    onBlur={() => setActiveAction(current => current === id ? null : current)}
+                    onClick={event => runAction(event, action)}
+                    whileTap={reducedMotion ? undefined : { scale: 0.985 }}
+                    className="relative isolate flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-[12px] font-medium outline-none transition-colors text-claude-text-light dark:text-claude-text-dark"
+                  >
+                    {activeAction === id && (
+                      <motion.span
+                        layoutId={`conversation-action-highlight-${conversationId}`}
+                        className="absolute inset-0 -z-10 rounded-[10px] bg-claude-surface2-light dark:bg-claude-surface2-dark"
+                        transition={reducedMotion ? { duration: 0 } : { type: 'spring', stiffness: 420, damping: 32 }}
+                      />
+                    )}
+                    <Icon
+                      className={`h-3.5 w-3.5 shrink-0 ${
+                        id === 'bookmark' && isPinned ? 'fill-claude-terracotta text-claude-terracotta' : ''
+                      }`}
+                    />
+                    <span className="flex-1">{label}</span>
+                  </motion.button>
+                ))}
+
+                <div className="mx-1 my-1 h-px bg-claude-border-light dark:bg-claude-border-dark" />
+
+                <motion.button
+                  type="button"
+                  role="menuitem"
+                  onClick={event => {
+                    event.stopPropagation();
+                    setActiveAction(null);
+                    setDeleteArmed(true);
+                  }}
+                  whileTap={reducedMotion ? undefined : { scale: 0.985 }}
+                  className="flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-[12px] font-medium text-red-500 dark:text-red-400 outline-none hover:bg-red-50 dark:hover:bg-red-500/10"
+                >
+                  <Trash2 className="h-3.5 w-3.5 shrink-0" />
+                  <span>Delete</span>
+                </motion.button>
+              </motion.div>
+            ) : (
+              <motion.div
+                key="confirm"
+                initial={reducedMotion ? { opacity: 0 } : { opacity: 0, x: 8 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={reducedMotion ? { opacity: 0 } : { opacity: 0, x: 8 }}
+                transition={{ duration: reducedMotion ? 0.08 : 0.16 }}
+                className="p-1"
+              >
+                <div className="flex items-start gap-2.5 rounded-xl bg-red-50/80 dark:bg-red-500/10 p-3">
+                  <div className="mt-0.5 rounded-lg bg-red-100 dark:bg-red-500/15 p-1.5 text-red-600 dark:text-red-300">
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-[12px] font-semibold text-claude-text-light dark:text-white">Delete this chat?</div>
+                    <div className="mt-1 text-[11px] leading-relaxed text-claude-muted-light dark:text-claude-muted-dark">
+                      This removes the conversation from this workspace.
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-2 flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={event => {
+                      event.stopPropagation();
+                      setDeleteArmed(false);
+                    }}
+                    className="flex flex-1 items-center justify-center gap-1.5 rounded-[10px] px-2.5 py-2 text-[12px] font-medium text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                    Cancel
+                  </button>
+                  <motion.button
+                    type="button"
+                    onClick={event => runAction(event, onDelete)}
+                    whileTap={reducedMotion ? undefined : { scale: 0.97 }}
+                    className="flex flex-1 items-center justify-center gap-1.5 rounded-[10px] bg-red-500 px-2.5 py-2 text-[12px] font-semibold text-white shadow-sm hover:bg-red-600"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Delete
+                  </motion.button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </motion.div>
       )}
     </AnimatePresence>
