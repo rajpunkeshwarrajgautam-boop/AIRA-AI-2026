@@ -27,9 +27,17 @@ if (process.env.NODE_ENV === 'production') {
     );
     process.exit(1);
   }
+
+  if (!process.env.AIRA_SESSION_SECRET || process.env.AIRA_SESSION_SECRET.trim().length < 32) {
+    process.stderr.write(
+      '[STARTUP_ASSERTION] FAIL: Production requires AIRA_SESSION_SECRET with at least 32 characters.\n'
+    );
+    process.exit(1);
+  }
 }
 
 import { createPrincipalMiddleware } from './middleware/principal.js';
+import { createSessionAuthMiddleware, ensureAuthenticatedSession } from './auth/session-auth.js';
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
@@ -38,6 +46,25 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ limit: '2mb', extended: false }));
+
+// Resolve a trusted first-party session cookie before principal enforcement.
+// This middleware never trusts client-supplied user/session headers in production.
+app.use(createSessionAuthMiddleware());
+
+// Public bootstrap endpoint used by the browser before protected API calls.
+// It issues or refreshes an opaque, signed, HttpOnly session cookie.
+app.post('/api/auth/session', (req: Request, res: Response) => {
+  try {
+    const session = ensureAuthenticatedSession(req, res);
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json({ status: 'AUTHENTICATED', ...session });
+  } catch (error: any) {
+    res.status(500).json({
+      error: 'Session initialization failed',
+      message: error?.message || 'Unable to initialize an authenticated session',
+    });
+  }
+});
 
 // -----------------------------------------------------------------------
 // PUBLIC INFRASTRUCTURE PROBES — Registered BEFORE principal middleware.
