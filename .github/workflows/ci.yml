@@ -121,6 +121,9 @@ jobs:
       - name: Identity certification
         run: npm run test:identity
 
+      - name: Browser session bridge certification
+        run: npm run test:session-auth
+
       - name: Startup certification
         run: npm run test:startup
 
