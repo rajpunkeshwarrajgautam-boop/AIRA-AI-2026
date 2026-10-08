@@ -49,6 +49,10 @@ export class ConnectorRegistry {
     return Array.from(this.connectors.values());
   }
 
+  listConnectors(): Array<{ id: string; name: string; provider: string; description: string }> {
+    return this.list().map(c => ({ id: c.id, name: c.name, provider: c.provider, description: c.description }));
+  }
+
   async getStatusForPrincipal(principal: ExecutionPrincipal): Promise<Array<{
     id: string;
     name: string;

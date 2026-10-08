@@ -565,10 +565,13 @@ app.post('/api/tools/execute', async (req: Request, res: Response) => {
   }
 });
 
-app.get('/api/tools/connectors', (_req: Request, res: Response) => {
-  res.json({
-    connectors: toolGateway.getConnectorRegistry().listConnectors()
-  });
+app.get('/api/tools/connectors', async (req: Request, res: Response) => {
+  try {
+    const connectors = await toolGateway.getConnectorRegistry().getStatusForPrincipal(req.principal!);
+    res.json({ connectors });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/tools/calls', async (req: Request, res: Response) => {
