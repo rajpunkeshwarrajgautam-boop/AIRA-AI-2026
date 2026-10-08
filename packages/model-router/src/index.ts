@@ -193,7 +193,12 @@ export class OpenAIAdapter implements ModelAdapter {
         model: policy.model.startsWith('aira-')
           ? (this.baseUrl.includes('api.openai.com') && policy.model === 'aira-fast' ? 'gpt-4o-mini' : this.airaModel)
           : policy.model,
-        messages: messages.map(m => ({ role: m.role, content: m.content })),
+        messages: messages.map(m => {
+          if (m.role === 'tool') {
+            return { role: 'tool', content: m.content, tool_call_id: m.toolCallId || 'call_default' };
+          }
+          return { role: m.role, content: m.content };
+        }),
         max_tokens: policy.maxTokens,
         temperature: policy.temperature
       })

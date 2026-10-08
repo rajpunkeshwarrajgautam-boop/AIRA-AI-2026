@@ -1,8 +1,11 @@
+import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
+import crypto from 'crypto';
 import { ModelRouter } from '../../../packages/model-router/src/index.js';
 import { ToolRegistry } from '../../../packages/tool-runtime/src/index.js';
 import { ApprovalKernel } from '../../../packages/approvals/src/index.js';
+import { PostgresApprovalRepository, PostgresSessionGrantRepository } from '../../../packages/approvals/src/repositories.js';
 import { BrainV2KnowledgeEngine } from '../../../packages/knowledge/src/index.js';
 import { McpHost } from '../../../packages/mcp/src/index.js';
 import { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
@@ -85,7 +88,9 @@ app.get('/api/health', (_req: Request, res: Response) => {
       mcpHost: 'ONLINE',
       knowledgeEngine: 'ONLINE',
       agentRuntime: 'ONLINE',
-      automationEngine: 'ONLINE'
+      automationEngine: 'ONLINE',
+      capabilityRegistry: 'ONLINE',
+      intentRouter: 'ONLINE'
     },
     productionMockFallback: providers.length === 0 ? 'ACTIVE (dev/test only)' : 'DISABLED',
     version: '2026.2.0',
@@ -116,7 +121,6 @@ app.use('/api', createPrincipalMiddleware());
 // Initialize Core Subsystems
 const modelRouter = new ModelRouter();
 const toolRegistry = new ToolRegistry(process.cwd());
-import { PostgresApprovalRepository, PostgresSessionGrantRepository } from '../../../packages/approvals/src/repositories.js';
 const approvalKernel = new ApprovalKernel(new PostgresApprovalRepository(), new PostgresSessionGrantRepository());
 const knowledgeEngine = new BrainV2KnowledgeEngine();
 const mcpHost = new McpHost(toolRegistry);
@@ -185,6 +189,15 @@ seedDefaultAutomation().catch(console.error);
 // -----------------------------------------------------------------------
 app.get('/api/mcp/servers', (_req: Request, res: Response) => {
   res.json(mcpHost.listServers());
+});
+
+// -----------------------------------------------------------------------
+// Server-Authoritative Capability Registry
+// -----------------------------------------------------------------------
+app.get('/api/capabilities', (_req: Request, res: Response) => {
+  res.json({
+    capabilities: agentRuntime.getCapabilityRegistry().list()
+  });
 });
 
 // -----------------------------------------------------------------------
@@ -436,7 +449,11 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     const stream = agentRuntime.getEventStream(run.id);
 
     const handler = (evt: any) => {
-      if (evt.type === 'content.delta') {
+      if (evt.type === 'routing.decision') {
+        res.write(`event: routing_decision\ndata: ${JSON.stringify(evt.data)}\n\n`);
+      } else if (evt.type === 'capability.unready') {
+        res.write(`event: capability_unready\ndata: ${JSON.stringify(evt.data)}\n\n`);
+      } else if (evt.type === 'content.delta') {
         res.write(`event: content_delta\ndata: ${JSON.stringify({ text: evt.data.delta })}\n\n`);
       } else if (evt.type === 'thinking.delta') {
         res.write(`event: thinking_delta\ndata: ${JSON.stringify({ thinking: evt.data.delta })}\n\n`);
@@ -446,6 +463,9 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         res.write(`event: artifact_close\ndata: ${JSON.stringify({ id: evt.data.id })}\n\n`);
       } else if (evt.type === 'approval.required') {
         res.write(`event: approval_required\ndata: ${JSON.stringify(evt.data)}\n\n`);
+        res.write(`event: done\ndata: [DONE]\n\n`);
+        stream.off('event', handler);
+        res.end();
       } else if (evt.type === 'tool.started') {
         res.write(`event: tool_started\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'tool.completed') {
@@ -528,7 +548,6 @@ app.post('/api/knowledge/search', async (req: Request, res: Response) => {
 // -----------------------------------------------------------------------
 // Agents — Full CRUD (Audit 16)
 // -----------------------------------------------------------------------
-import crypto from 'crypto';
 
 app.post('/api/agents', async (req: Request, res: Response) => {
   const { name, instructions, modelPolicy, tools, memoryScopes, approvalPolicy, maxSteps, timeoutPolicy } = req.body;

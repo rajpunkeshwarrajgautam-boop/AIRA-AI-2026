@@ -54,6 +54,50 @@ export const IntentTaxonomySchema = z.enum([
 ]);
 export type IntentTaxonomy = z.infer<typeof IntentTaxonomySchema>;
 
+export const SideEffectLevelSchema = z.enum([
+  'NONE',
+  'READ',
+  'WRITE',
+  'DESTRUCTIVE'
+]);
+export type SideEffectLevel = z.infer<typeof SideEffectLevelSchema>;
+
+export const ExecutionTargetSchema = z.enum([
+  'CHAT_STREAM',
+  'RESEARCH_SYNTHESIS',
+  'TOOL_PIPELINE',
+  'AGENT_PLANNER',
+  'WORKFLOW_ENGINE',
+  'AUTOMATION_ENGINE',
+  'CAPABILITY_NOT_READY'
+]);
+export type ExecutionTarget = z.infer<typeof ExecutionTargetSchema>;
+
+export const RoutingDecisionSchema = z.object({
+  intent: IntentTaxonomySchema,
+  confidence: z.number().min(0).max(1),
+  reason: z.string().max(280),
+  executionTarget: ExecutionTargetSchema,
+  sideEffectLevel: SideEffectLevelSchema,
+  approvalRequired: z.boolean(),
+  capabilities: z.array(z.string()).default([]),
+  metadata: z.record(z.string(), z.any()).default({})
+});
+export type RoutingDecision = z.infer<typeof RoutingDecisionSchema>;
+
+export const CapabilityDefinitionSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  executionType: IntentTaxonomySchema,
+  availability: z.enum(['GA', 'BETA', 'PREVIEW', 'COMING_SOON', 'DISABLED']),
+  sideEffectClass: SideEffectLevelSchema,
+  approvalPolicy: z.enum(['autonomous', 'require_approval', 'always_ask']),
+  requiredPrincipalScope: z.array(z.string()).default([]),
+  handler: z.string(),
+  status: z.enum(['READY', 'NOT_READY', 'DEPRECATED'])
+});
+export type CapabilityDefinition = z.infer<typeof CapabilityDefinitionSchema>;
+
 // ==========================================
 // 2. MODEL ROUTING & POLICIES
 // ==========================================
@@ -237,6 +281,7 @@ export const RunSchema = z.object({
   projectId: z.string().nullable().optional(),
   conversationId: z.string().nullable().optional(),
   intent: IntentTaxonomySchema.default('ANSWER'),
+  routingDecision: RoutingDecisionSchema.optional(),
   state: RunStateSchema.default('QUEUED'),
   modelPolicy: ModelPolicySchema,
   prompt: z.string(),
@@ -288,6 +333,7 @@ export type CreateRunRequest = z.infer<typeof CreateRunRequestSchema>;
 export const StreamingEventTypeSchema = z.enum([
   'run.created',
   'run.started',
+  'routing.decision',
   'thinking.delta',
   'content.delta',
   'tool.requested',
@@ -295,6 +341,7 @@ export const StreamingEventTypeSchema = z.enum([
   'tool.completed',
   'approval.required',
   'approval.resolved',
+  'capability.unready',
   'artifact.created',
   'artifact.updated',
   'source.added',

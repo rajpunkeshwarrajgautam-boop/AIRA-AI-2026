@@ -15,6 +15,7 @@
     "test:identity": "npx tsx test/identity.ts",
     "test:session-auth": "npx tsx test/session-auth.ts",
     "test:model-routing": "npx tsx test/model-router-provider-routing.ts",
+    "test:router": "npx tsx test/intent-router.ts",
     "test:startup": "npx tsx test/startup.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc -b && vite build",
