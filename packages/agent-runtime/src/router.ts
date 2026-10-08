@@ -92,7 +92,7 @@ export class ServerIntentRouter {
 
     // Read / Inspection patterns
     const readPatterns = [
-      /\b(research|search|lookup|inspect|read\s+file|calculate|calc\s+|check\s+status|fetch\s+url)\b/,
+      /\b(research|search|lookup|inspect|read\s+(file\s+)?[a-zA-Z0-9_\-./\\]+|calculate|calc\s+|check\s+status|fetch\s+url)\b/,
       /\b(cite\s+sources|find\s+sources|extract\s+the\s+table|open\s+this\s+url|open\s+https?:\/\/|navigate\s+to\s+https?:\/\/)\b/,
       /\b(tell\s+me\s+the\s+(page\s+)?heading|page\s+heading|heading\s+of|extract\s+heading|latest\s+commit|git\s+status|git\s+log|git\s+diff)\b/,
       /\b(capture\s+screenshot|take\s+screenshot|screenshot\s+of|extract\s+(the\s+)?main\s+text|extract\s+text)\b/
@@ -188,7 +188,7 @@ export class ServerIntentRouter {
       /\b(open\s+https?:\/\/|navigate\s+to\s+https?:\/\/|open\s+this\s+url|extract\s+the\s+table|tell\s+me\s+the\s+(page\s+)?heading)\b/.test(text) ||
       /\b(open\s+the\s+website|open\s+the\s+(aira\s+)?github\s+repository|latest\s+commit|git\s+status|git\s+diff|git\s+log)\b/.test(text) ||
       /\b(populate\s+form|fill\s+(in\s+)?(the\s+)?form|submit\s+this\s+form|submit\s+form|click\s+(the\s+)?button)\b/.test(text) ||
-      /\b(calculate\s+|calc\s+|read\s+file\s+|search\s+the\s+web\s+for|run\s+(shell\s+)?command|download\s+file|capture\s+screenshot)\b/.test(text) ||
+      /\b(calculate\s+|calc\s+|read\s+(file\s+)?[a-zA-Z0-9_\-./\\]+|search\s+the\s+web\s+for|run\s+(shell\s+)?command|download\s+file|capture\s+screenshot)\b/.test(text) ||
       (advisoryIntent === 'TOOL_ACTION')
     );
     if (isTool) {
