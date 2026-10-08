@@ -1,0 +1,60 @@
+{
+  "name": "aira-workflow-engine",
+  "version": "1.0.0",
+  "nodes": [
+    {
+      "name": "existing_system_investigator",
+      "system": "Inspect existing workflow, task, step, DAG, and orchestration code across packages, apps, and database schema."
+    },
+    {
+      "name": "workflow_architect",
+      "depends_on": ["existing_system_investigator"],
+      "system": "Define typed workflow contract, step dependencies, DAG validation, and state machine model."
+    },
+    {
+      "name": "persistence_architect",
+      "depends_on": ["workflow_architect"],
+      "system": "Design durable PostgreSQL schema migrations and repositories for workflows, steps, and events."
+    },
+    {
+      "name": "runtime_implementer",
+      "depends_on": ["persistence_architect"],
+      "system": "Implement DAG scheduler, step executors, retries with backoff, cancellation, and streaming events."
+    },
+    {
+      "name": "security_approval_reviewer",
+      "depends_on": ["runtime_implementer"],
+      "system": "Enforce ExecutionPrincipal isolation, side-effect policy, and ApprovalKernel integration."
+    },
+    {
+      "name": "recovery_idempotency_reviewer",
+      "depends_on": ["security_approval_reviewer"],
+      "system": "Verify durable idempotency keys, crash recovery, and worker lease reconciliation."
+    },
+    {
+      "name": "frontend_integration_engineer",
+      "depends_on": ["recovery_idempotency_reviewer"],
+      "system": "Expose authenticated APIs and update client interface to render workflow steps and approvals."
+    },
+    {
+      "name": "test_engineer",
+      "depends_on": ["frontend_integration_engineer"],
+      "system": "Implement comprehensive unit, DAG, retry, approval, recovery, and security test matrices."
+    },
+    {
+      "name": "browser_verifier",
+      "depends_on": ["test_engineer"],
+      "system": "Execute browser end-to-end tests for natural-language workflow dispatch and approval interactions."
+    },
+    {
+      "name": "evidence_collector",
+      "depends_on": ["browser_verifier"],
+      "system": "Gather empirical evidence proving durable execution, artifact creation, and zero fake success."
+    },
+    {
+      "name": "reality_checker",
+      "depends_on": ["evidence_collector"],
+      "system": "Adversarial check disproving mock success, race conditions, lease leaks, and approval bypasses."
+    }
+  ]
+}

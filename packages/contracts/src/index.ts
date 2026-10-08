@@ -38,6 +38,7 @@ export const ExecutionCheckpointSchema = z.enum([
   'TOOL_APPROVED',
   'TOOL_EXECUTING',
   'TOOL_COMPLETED',
+  'WORKFLOW_RUNNING',
   'SYNTHESIZING',
   'FINALIZING',
   'COMPLETED'
@@ -347,7 +348,17 @@ export const StreamingEventTypeSchema = z.enum([
   'source.added',
   'run.completed',
   'run.failed',
-  'run.cancelled'
+  'run.cancelled',
+  'workflow.created',
+  'workflow.started',
+  'workflow.step.ready',
+  'workflow.step.started',
+  'workflow.step.progress',
+  'workflow.step.completed',
+  'workflow.step.failed',
+  'workflow.completed',
+  'workflow.failed',
+  'workflow.cancelled'
 ]);
 export type StreamingEventType = z.infer<typeof StreamingEventTypeSchema>;
 
@@ -480,6 +491,193 @@ export const AutomationRunSchema = z.object({
   claimedAt: z.number().optional()
 });
 export type AutomationRun = z.infer<typeof AutomationRunSchema>;
+
+// ==========================================
+// 9.5 WORKFLOW CONTRACTS & DAG ENGINE
+// ==========================================
+
+export const WorkflowStateSchema = z.enum([
+  'CREATED',
+  'QUEUED',
+  'RUNNING',
+  'WAITING_FOR_APPROVAL',
+  'PAUSED',
+  'COMPLETED',
+  'FAILED',
+  'CANCELLED'
+]);
+export type WorkflowState = z.infer<typeof WorkflowStateSchema>;
+
+export const WorkflowStepStateSchema = z.enum([
+  'PENDING',
+  'READY',
+  'RUNNING',
+  'WAITING_FOR_APPROVAL',
+  'COMPLETED',
+  'FAILED',
+  'SKIPPED',
+  'CANCELLED'
+]);
+export type WorkflowStepState = z.infer<typeof WorkflowStepStateSchema>;
+
+export const WorkflowStepTypeSchema = z.enum([
+  'CAPABILITY',
+  'TOOL',
+  'SYNTHESIS',
+  'APPROVAL',
+  'TRANSFORM'
+]);
+export type WorkflowStepType = z.infer<typeof WorkflowStepTypeSchema>;
+
+export const StepRetryPolicySchema = z.object({
+  maxAttempts: z.number().int().min(1).default(3),
+  backoffMs: z.number().int().min(50).default(1000),
+  factor: z.number().min(1).default(2)
+});
+export type StepRetryPolicy = z.infer<typeof StepRetryPolicySchema>;
+
+export const WorkflowStepDefinitionSchema = z.object({
+  stepId: z.string().min(1),
+  name: z.string().min(1),
+  type: WorkflowStepTypeSchema.default('CAPABILITY'),
+  capability: IntentTaxonomySchema.optional(),
+  toolName: z.string().optional(),
+  dependsOn: z.array(z.string()).default([]),
+  input: z.record(z.string(), z.any()).default({}),
+  sideEffectLevel: SideEffectLevelSchema.default('NONE'),
+  approvalRequired: z.boolean().default(false),
+  timeoutMs: z.number().int().positive().default(60000),
+  retry: StepRetryPolicySchema.default({ maxAttempts: 3, backoffMs: 1000, factor: 2 }),
+  idempotencyKey: z.string().optional()
+});
+export type WorkflowStepDefinition = z.infer<typeof WorkflowStepDefinitionSchema>;
+
+export const WorkflowDefinitionSchema = z.object({
+  workflowId: z.string().min(1),
+  version: z.number().int().positive().default(1),
+  name: z.string().min(1),
+  description: z.string().optional(),
+  principalId: z.string().optional(),
+  inputSchema: z.record(z.string(), z.any()).default({}),
+  steps: z.array(WorkflowStepDefinitionSchema).min(1),
+  executionPolicy: z.object({
+    maxConcurrentSteps: z.number().int().positive().default(3),
+    timeoutMs: z.number().int().positive().default(300000)
+  }).default({ maxConcurrentSteps: 3, timeoutMs: 300000 }),
+  outputSchema: z.record(z.string(), z.any()).default({}),
+  createdAt: z.number().default(() => Date.now()),
+  updatedAt: z.number().default(() => Date.now())
+});
+export type WorkflowDefinition = z.infer<typeof WorkflowDefinitionSchema>;
+
+export const WorkflowStepExecutionSchema = z.object({
+  id: z.string(),
+  workflowRunId: z.string(),
+  stepId: z.string(),
+  name: z.string(),
+  state: WorkflowStepStateSchema,
+  dependsOn: z.array(z.string()),
+  attempt: z.number().int().positive().default(1),
+  input: z.any().optional(),
+  output: z.any().optional(),
+  error: z.string().optional(),
+  sideEffectLevel: SideEffectLevelSchema,
+  approvalRequired: z.boolean(),
+  idempotencyKey: z.string().optional(),
+  startedAt: z.number().optional(),
+  completedAt: z.number().optional()
+});
+export type WorkflowStepExecution = z.infer<typeof WorkflowStepExecutionSchema>;
+
+export const WorkflowRunSchema = z.object({
+  id: z.string(),
+  workflowId: z.string(),
+  runId: z.string(),
+  principalId: z.string(),
+  sessionId: z.string(),
+  state: WorkflowStateSchema,
+  stepStates: z.record(z.string(), WorkflowStepStateSchema),
+  stepOutputs: z.record(z.string(), z.any()).default({}),
+  stepAttempts: z.record(z.string(), z.number()).default({}),
+  pendingApprovalStepId: z.string().optional(),
+  artifacts: z.array(ArtifactSchema).default([]),
+  error: z.string().optional(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  completedAt: z.number().optional()
+});
+export type WorkflowRun = z.infer<typeof WorkflowRunSchema>;
+
+export interface DagValidationResult {
+  valid: boolean;
+  error?: string;
+  executionWaves?: string[][];
+}
+
+export function validateWorkflowDag(definition: WorkflowDefinition): DagValidationResult {
+  const stepIds = new Set<string>();
+  for (const step of definition.steps) {
+    if (stepIds.has(step.stepId)) {
+      return { valid: false, error: `Duplicate step ID: "${step.stepId}"` };
+    }
+    stepIds.add(step.stepId);
+  }
+
+  // Validate dependencies exist and no self-dependency
+  for (const step of definition.steps) {
+    for (const dep of step.dependsOn) {
+      if (dep === step.stepId) {
+        return { valid: false, error: `Step "${step.stepId}" cannot depend on itself.` };
+      }
+      if (!stepIds.has(dep)) {
+        return { valid: false, error: `Step "${step.stepId}" depends on non-existent step "${dep}".` };
+      }
+    }
+  }
+
+  // Topological wave sort (Kahn's algorithm)
+  const inDegree: Map<string, number> = new Map();
+  const outgoing: Map<string, string[]> = new Map();
+
+  for (const step of definition.steps) {
+    inDegree.set(step.stepId, step.dependsOn.length);
+    outgoing.set(step.stepId, []);
+  }
+
+  for (const step of definition.steps) {
+    for (const dep of step.dependsOn) {
+      outgoing.get(dep)!.push(step.stepId);
+    }
+  }
+
+  const waves: string[][] = [];
+  let remainingCount = definition.steps.length;
+
+  while (remainingCount > 0) {
+    const currentWave: string[] = [];
+    for (const [id, deg] of inDegree.entries()) {
+      if (deg === 0) {
+        currentWave.push(id);
+      }
+    }
+
+    if (currentWave.length === 0) {
+      return { valid: false, error: 'Cycle detected in workflow dependency graph.' };
+    }
+
+    waves.push(currentWave);
+    for (const id of currentWave) {
+      inDegree.set(id, -1); // mark visited
+      remainingCount--;
+      for (const next of outgoing.get(id)!) {
+        const d = inDegree.get(next)!;
+        inDegree.set(next, d - 1);
+      }
+    }
+  }
+
+  return { valid: true, executionWaves: waves };
+}
 
 // ==========================================
 // 10. ERROR ENVELOPE

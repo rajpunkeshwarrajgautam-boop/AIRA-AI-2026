@@ -65,15 +65,16 @@ async function runTests() {
   console.log('PASS: Routed to AUTOMATION_CREATE (AUTOMATION_ENGINE) with approvalRequired=true');
 
   // Test 5: WORKFLOW
-  console.log('\n[TEST 5] "Run my approved weekly reporting workflow" -> WORKFLOW (CAPABILITY_NOT_READY)');
+  console.log('\n[TEST 5] "Run my approved weekly reporting workflow" -> WORKFLOW (WORKFLOW_ENGINE)');
   const res5 = await router.route({
     prompt: 'Run my approved weekly reporting workflow',
     principal: testPrincipal
   });
   assert.strictEqual(res5.intent, 'WORKFLOW');
-  assert.strictEqual(res5.executionTarget, 'CAPABILITY_NOT_READY');
+  assert.strictEqual(res5.executionTarget, 'WORKFLOW_ENGINE');
+  assert.deepStrictEqual(res5.capabilities, ['cap_workflow_engine']);
   assert.strictEqual(res5.sideEffectLevel, 'WRITE');
-  console.log('PASS: Routed to WORKFLOW with truthful CAPABILITY_NOT_READY target');
+  console.log('PASS: Routed to WORKFLOW with certified WORKFLOW_ENGINE target');
 
   // Test 6: AGENT_MISSION
   console.log('\n[TEST 6] "Investigate this bug, inspect the repo, fix it and verify it" -> AGENT_MISSION');
