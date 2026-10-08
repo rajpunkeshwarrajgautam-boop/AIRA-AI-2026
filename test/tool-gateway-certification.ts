@@ -4,10 +4,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import {
   ToolGateway,
-  PostgresToolCallRepository,
-  FileSystemAdapter,
-  RepositoryAdapter,
-  GitHubConnectorAdapter
+  PostgresToolCallRepository
 } from '../packages/tool-runtime/src/index.js';
 import { ApprovalKernel } from '../packages/approvals/src/index.js';
 import {
@@ -16,8 +13,7 @@ import {
 } from '../packages/approvals/src/repositories.js';
 import {
   ExecutionPrincipal,
-  ToolGatewayErrorCodes,
-  ToolResult
+  ToolGatewayErrorCodes
 } from '../packages/contracts/src/index.js';
 import { db } from '../packages/db/src/index.js';
 
