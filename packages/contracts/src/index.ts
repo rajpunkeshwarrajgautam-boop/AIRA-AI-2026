@@ -155,16 +155,98 @@ export const IdempotencyClassSchema = z.enum([
 ]);
 export type IdempotencyClass = z.infer<typeof IdempotencyClassSchema>;
 
+export const ToolCategorySchema = z.enum([
+  'browser',
+  'files',
+  'repo',
+  'mcp',
+  'connector',
+  'utility',
+  'system'
+]);
+export type ToolCategory = z.infer<typeof ToolCategorySchema>;
+
+export const ToolAvailabilitySchema = z.enum([
+  'READY',
+  'DEGRADED',
+  'NOT_READY',
+  'DISABLED'
+]);
+export type ToolAvailability = z.infer<typeof ToolAvailabilitySchema>;
+
+export const ToolAdapterTypeSchema = z.enum([
+  'browser',
+  'files',
+  'repo',
+  'mcp',
+  'connector',
+  'native',
+  'local-runner'
+]);
+export type ToolAdapterType = z.infer<typeof ToolAdapterTypeSchema>;
+
+export const ToolApprovalPolicySchema = z.enum([
+  'autonomous',
+  'require_approval',
+  'always_ask'
+]);
+export type ToolApprovalPolicy = z.infer<typeof ToolApprovalPolicySchema>;
+
+export const ToolExecutionModeSchema = z.enum(['sync', 'async']);
+export type ToolExecutionMode = z.infer<typeof ToolExecutionModeSchema>;
+
+export const ToolRetryPolicySchema = z.object({
+  maxAttempts: z.number().int().min(1).default(1),
+  backoffMs: z.number().int().min(0).default(500),
+  factor: z.number().min(1).default(2),
+  retryableErrorCodes: z.array(z.string()).default([])
+});
+export type ToolRetryPolicy = z.infer<typeof ToolRetryPolicySchema>;
+
+export const ToolIdempotencyPolicySchema = z.object({
+  required: z.boolean().default(false),
+  keyField: z.string().optional()
+});
+export type ToolIdempotencyPolicy = z.infer<typeof ToolIdempotencyPolicySchema>;
+
+export const ToolLifecycleStateSchema = z.enum([
+  'DISCOVERED',
+  'RESOLVED',
+  'VALIDATED',
+  'WAITING_FOR_APPROVAL',
+  'QUEUED',
+  'RUNNING',
+  'COMPLETED',
+  'FAILED',
+  'CANCELLED'
+]);
+export type ToolLifecycleState = z.infer<typeof ToolLifecycleStateSchema>;
+
 export const ToolDefinitionSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   description: z.string(),
   parameters: z.record(z.string(), z.any()),
+  inputSchema: z.record(z.string(), z.any()).optional(),
   outputSchema: z.record(z.string(), z.any()).optional(),
   source: z.enum(['native', 'mcp', 'connector', 'local-runner']),
   permissionLevel: PermissionLevelSchema,
   executionRuntime: ExecutionRuntimeSchema,
-  idempotencyClass: IdempotencyClassSchema.default('NON_IDEMPOTENT')
+  idempotencyClass: IdempotencyClassSchema.default('NON_IDEMPOTENT'),
+  // Enhanced Unified Tool Contract Properties
+  version: z.union([z.string(), z.number()]).default(1),
+  category: ToolCategorySchema.default('utility'),
+  sideEffectLevel: SideEffectLevelSchema.optional(),
+  permissionScopes: z.array(z.string()).default([]),
+  approvalPolicy: ToolApprovalPolicySchema.default('autonomous'),
+  executionMode: ToolExecutionModeSchema.default('sync'),
+  timeoutMs: z.number().int().positive().default(30000),
+  retryPolicy: ToolRetryPolicySchema.default({ maxAttempts: 1, backoffMs: 500, factor: 2, retryableErrorCodes: [] }),
+  idempotencyPolicy: ToolIdempotencyPolicySchema.default({ required: false }),
+  availability: ToolAvailabilitySchema.default('READY'),
+  adapter: ToolAdapterTypeSchema.default('native'),
+  provider: z.string().default('aira-built-in'),
+  metadata: z.record(z.string(), z.any()).default({})
 });
 export type ToolDefinition = z.infer<typeof ToolDefinitionSchema>;
 
@@ -192,15 +274,54 @@ export const ToolCallSchema = z.object({
 });
 export type ToolCall = z.infer<typeof ToolCallSchema>;
 
+export const DurableToolCallSchema = z.object({
+  id: z.string(),
+  runId: z.string(),
+  workflowRunId: z.string().optional(),
+  agentMissionId: z.string().optional(),
+  principalId: z.string(),
+  toolId: z.string(),
+  toolName: z.string(),
+  adapter: ToolAdapterTypeSchema.default('native'),
+  sideEffectLevel: SideEffectLevelSchema.default('NONE'),
+  permissionScopes: z.array(z.string()).default([]),
+  lifecycleState: ToolLifecycleStateSchema.default('RESOLVED'),
+  arguments: z.record(z.string(), z.any()).default({}),
+  output: z.any().optional(),
+  error: z.string().optional(),
+  errorCode: z.string().optional(),
+  attemptCount: z.number().int().positive().default(1),
+  approvalId: z.string().optional(),
+  idempotencyKey: z.string().optional(),
+  startedAt: z.number(),
+  completedAt: z.number().optional(),
+  durationMs: z.number().nonnegative().optional()
+});
+export type DurableToolCall = z.infer<typeof DurableToolCallSchema>;
+
 export const ToolResultSchema = z.object({
   toolCallId: z.string(),
   output: z.any(),
   error: z.string().optional(),
+  errorCode: z.string().optional(),
   isError: z.boolean().default(false),
   durationMs: z.number().nonnegative(),
-  timestamp: z.number()
+  timestamp: z.number(),
+  artifacts: z.array(z.any()).default([])
 });
 export type ToolResult = z.infer<typeof ToolResultSchema>;
+
+export const ToolGatewayErrorCodes = {
+  TOOL_NOT_FOUND: 'TOOL_NOT_FOUND',
+  CAPABILITY_NOT_READY: 'CAPABILITY_NOT_READY',
+  TOOL_PERMISSION_DENIED: 'TOOL_PERMISSION_DENIED',
+  TOOL_INPUT_INVALID: 'TOOL_INPUT_INVALID',
+  TOOL_EXECUTION_FAILED: 'TOOL_EXECUTION_FAILED',
+  TOOL_APPROVAL_DENIED: 'TOOL_APPROVAL_DENIED',
+  TOOL_CANCELLED: 'TOOL_CANCELLED',
+  TOOL_TIMEOUT: 'TOOL_TIMEOUT'
+} as const;
+export type ToolGatewayErrorCode = typeof ToolGatewayErrorCodes[keyof typeof ToolGatewayErrorCodes];
 
 // ==========================================
 // 4. APPROVAL KERNEL
@@ -338,8 +459,17 @@ export const StreamingEventTypeSchema = z.enum([
   'thinking.delta',
   'content.delta',
   'tool.requested',
+  'tool.resolved',
+  'tool.validation_failed',
+  'tool.approval_required',
   'tool.started',
+  'tool.progress',
   'tool.completed',
+  'tool.failed',
+  'tool.cancelled',
+  'browser.navigation',
+  'browser.action',
+  'browser.download',
   'approval.required',
   'approval.resolved',
   'capability.unready',

@@ -16,7 +16,7 @@ import {
   ExecutionPrincipal
 } from '../../contracts/src/index.js';
 import { ModelRouter, ChatMessageInput } from '../../model-router/src/index.js';
-import { ToolRegistry } from '../../tool-runtime/src/index.js';
+import { ToolRegistry, ToolGateway, PostgresToolCallRepository } from '../../tool-runtime/src/index.js';
 import { ApprovalKernel } from '../../approvals/src/index.js';
 import { BrainV2KnowledgeEngine } from '../../knowledge/src/index.js';
 
@@ -33,6 +33,7 @@ export class AgentRuntime extends EventEmitter {
   private workflowRepo: WorkflowRepository;
   private workflowEngine: WorkflowEngine;
   private workflowCompiler: WorkflowCompiler;
+  private toolGateway: ToolGateway;
 
   constructor(
     private modelRouter: ModelRouter,
@@ -45,9 +46,11 @@ export class AgentRuntime extends EventEmitter {
     router?: ServerIntentRouter,
     workflowRepo?: WorkflowRepository,
     workflowEngine?: WorkflowEngine,
-    workflowCompiler?: WorkflowCompiler
+    workflowCompiler?: WorkflowCompiler,
+    toolGateway?: ToolGateway
   ) {
     super();
+    this.toolGateway = toolGateway || new ToolGateway(new PostgresToolCallRepository(), this.approvalKernel, this.workspaceRoot);
     this.router = router || new ServerIntentRouter(this.capabilityRegistry, this.modelRouter);
     this.workflowRepo = workflowRepo || new PostgresWorkflowRepository();
     this.workflowCompiler = workflowCompiler || new WorkflowCompiler(this.modelRouter);
@@ -58,8 +61,13 @@ export class AgentRuntime extends EventEmitter {
       this.toolRegistry,
       this.modelRouter,
       this.workspaceRoot,
-      (runId, type, data) => this.emitRunEvent(runId, type, data)
+      (runId, type, data) => this.emitRunEvent(runId, type, data),
+      this.toolGateway
     );
+  }
+
+  public getToolGateway(): ToolGateway {
+    return this.toolGateway;
   }
 
   public getCapabilityRegistry(): CapabilityRegistry {
@@ -374,9 +382,23 @@ export class AgentRuntime extends EventEmitter {
         let selectedToolName = 'web_search';
         let selectedArgs: Record<string, unknown> = { query: run.prompt };
 
-        if (run.prompt.toLowerCase().includes('calc') || /calculate|\b\d+\s*[-+*/]\s*\d+/.test(run.prompt.toLowerCase())) {
+        const urlMatch = run.prompt.match(/https?:\/\/[^\s"'<>]+/);
+        if (urlMatch) {
+          selectedToolName = 'browser_navigate';
+          selectedArgs = { url: urlMatch[0] };
+        } else if (run.prompt.toLowerCase().includes('form') && (run.prompt.toLowerCase().includes('populate') || run.prompt.toLowerCase().includes('fill') || run.prompt.toLowerCase().includes('submit'))) {
+          selectedToolName = 'browser_type';
+          selectedArgs = { selector: 'form input', text: 'AIRA 2026 Test' };
+        } else if (run.prompt.toLowerCase().includes('github') && run.prompt.toLowerCase().includes('commit')) {
+          selectedToolName = 'repo_git_log';
+          selectedArgs = { count: 1 };
+        } else if (run.prompt.toLowerCase().includes('git status') || run.prompt.toLowerCase().includes('repo status')) {
+          selectedToolName = 'repo_git_status';
+          selectedArgs = {};
+        } else if (run.prompt.toLowerCase().includes('calc') || /calculate|\b\d+\s*[-+*/]\s*\d+/.test(run.prompt.toLowerCase())) {
           selectedToolName = 'calculator';
-          selectedArgs = { expression: '1024 * 4' };
+          const exprMatch = run.prompt.match(/([0-9+\-*/().^ ]+)/);
+          selectedArgs = { expression: exprMatch ? exprMatch[0].trim() : '1024 * 4' };
         } else if (
           run.routingDecision?.sideEffectLevel === 'DESTRUCTIVE' ||
           run.prompt.toLowerCase().includes('shell') ||
@@ -403,7 +425,7 @@ export class AgentRuntime extends EventEmitter {
           selectedArgs = {};
         }
 
-        const toolDef = this.toolRegistry.get(selectedToolName)?.definition;
+        const toolDef = this.toolGateway.getTool(selectedToolName)?.definition || this.toolRegistry.get(selectedToolName)?.definition;
         const toolCall: ToolCall = {
           id: `call_${Date.now()}`,
           toolId: toolDef?.id || `tool_${selectedToolName}`,
@@ -427,7 +449,7 @@ export class AgentRuntime extends EventEmitter {
     // Checkpoint 3: Approval Check
     if (run.executionCheckpoint === 'TOOL_SELECTED') {
       const toolCall = run.toolCalls[run.toolCalls.length - 1];
-      const toolDef = this.toolRegistry.get(toolCall.name)?.definition;
+      const toolDef = this.toolGateway.getTool(toolCall.name)?.definition || this.toolRegistry.get(toolCall.name)?.definition;
       
       const isApproved = await this.approvalKernel.isToolCallApproved(
         runId,
@@ -438,6 +460,7 @@ export class AgentRuntime extends EventEmitter {
 
       const requiresApproval = (!isApproved) && (
         toolDef?.permissionLevel === 'DESTRUCTIVE' ||
+        toolDef?.sideEffectLevel === 'DESTRUCTIVE' ||
         run.routingDecision?.sideEffectLevel === 'DESTRUCTIVE' ||
         (Boolean(run.routingDecision?.approvalRequired) && toolDef?.permissionLevel !== 'READ')
       );
@@ -477,11 +500,30 @@ export class AgentRuntime extends EventEmitter {
       await this.transitionRunState(runId, 'WAITING_FOR_TOOL');
       await this.emitRunEvent(runId, 'tool.started', { callId: toolCall.id, name: toolCall.name });
 
-      const toolResult: ToolResult = await this.toolRegistry.execute(toolCall, {
-        runId,
-        workspaceRoot: this.workspaceRoot,
-        sessionGrantedTools: new Set()
-      });
+      let toolResult: ToolResult;
+      const registeredWithGateway = this.toolGateway.getTool(toolCall.name);
+      if (registeredWithGateway) {
+        toolResult = await this.toolGateway.execute({
+          toolName: toolCall.name,
+          arguments: toolCall.arguments,
+          context: {
+            runId,
+            principal: {
+              userId: run.principalId,
+              sessionId: run.sessionId,
+              roles: ['member']
+            },
+            workspaceRoot: this.workspaceRoot
+          },
+          callId: toolCall.id
+        });
+      } else {
+        toolResult = await this.toolRegistry.execute(toolCall, {
+          runId,
+          workspaceRoot: this.workspaceRoot,
+          sessionGrantedTools: new Set()
+        });
+      }
 
       run = await this.runRepo.getRun(runId) as Run; // reload after async tool execution
       run.toolResults.push(toolResult);

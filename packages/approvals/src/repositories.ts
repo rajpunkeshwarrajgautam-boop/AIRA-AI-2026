@@ -1,4 +1,4 @@
-import { ApprovalRequest, ApprovalDecision, ToolCall } from '../../contracts/src/index.js';
+import { ApprovalRequest, ApprovalDecision } from '../../contracts/src/index.js';
 import { db } from '../../db/src/index.js';
 
 export interface ApprovalRepository {
@@ -10,6 +10,20 @@ export interface ApprovalRepository {
 
 export class PostgresApprovalRepository implements ApprovalRepository {
   async saveRequest(request: ApprovalRequest): Promise<void> {
+    const existingRun = await db('runs').where({ id: request.runId }).first();
+    if (!existingRun) {
+      await db('runs').insert({
+        id: request.runId,
+        prompt: `Action Approval: ${request.toolCall.name}`,
+        status: 'RUNNING',
+        state: 'RUNNING',
+        createdAt: request.requestedAt,
+        updatedAt: request.requestedAt,
+        principal_id: 'usr_system',
+        session_id: 'approval_session'
+      }).onConflict('id').ignore();
+    }
+
     // Save tool_call first to satisfy the foreign key constraint from approvals
     await db('tool_calls').insert({
       id: request.toolCall.id,

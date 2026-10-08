@@ -83,7 +83,8 @@ export class ServerIntentRouter {
       /\b(create\s+(a\s+|an\s+)?automation|schedule\s+(a\s+|an\s+)?(daily|weekly|hourly|cron))\b/,
       /\b(every\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|day|hour|week|month))\b/,
       /\b(fix\s+it\s+and\s+verify|patch\s+and\s+verify|write\s+file|create\s+table|modify\s+repo)\b/,
-      /\b(save\s+automation|update\s+setting|execute\s+workflow|run\s+workflow)\b/
+      /\b(save\s+automation|update\s+setting|execute\s+workflow|run\s+workflow|submit\s+form|populate\s+form|fill\s+(in\s+)?(the\s+)?form)\b/,
+      /\b(click\s+(the\s+)?(submit|button|login|save|delete|create))\b/
     ];
     if (writePatterns.some(p => p.test(text))) {
       return 'WRITE';
@@ -92,7 +93,8 @@ export class ServerIntentRouter {
     // Read / Inspection patterns
     const readPatterns = [
       /\b(research|search|lookup|inspect|read\s+file|calculate|calc\s+|check\s+status|fetch\s+url)\b/,
-      /\b(cite\s+sources|find\s+sources|extract\s+the\s+table|open\s+this\s+url)\b/
+      /\b(cite\s+sources|find\s+sources|extract\s+the\s+table|open\s+this\s+url|open\s+https?:\/\/|navigate\s+to\s+https?:\/\/)\b/,
+      /\b(tell\s+me\s+the\s+(page\s+)?heading|page\s+heading|heading\s+of|extract\s+heading|latest\s+commit|git\s+status|git\s+log|git\s+diff)\b/
     ];
     if (readPatterns.some(p => p.test(text))) {
       return 'READ';
@@ -169,7 +171,26 @@ export class ServerIntentRouter {
       };
     }
 
-    // Rule E: Research & Source Investigation
+    // Rule E: Direct Tool Invocations (Browser, Files, Repo, System, Calculator, Connectors)
+    const isTool = (
+      /\b(open\s+https?:\/\/|navigate\s+to\s+https?:\/\/|open\s+this\s+url|extract\s+the\s+table|tell\s+me\s+the\s+(page\s+)?heading)\b/.test(text) ||
+      /\b(open\s+the\s+website|open\s+the\s+(aira\s+)?github\s+repository|latest\s+commit|git\s+status|git\s+diff|git\s+log)\b/.test(text) ||
+      /\b(populate\s+form|fill\s+(in\s+)?(the\s+)?form|submit\s+this\s+form|submit\s+form|click\s+(the\s+)?button)\b/.test(text) ||
+      /\b(calculate\s+|calc\s+|read\s+file\s+|search\s+the\s+web\s+for|run\s+(shell\s+)?command|download\s+file|capture\s+screenshot)\b/.test(text) ||
+      (advisoryIntent === 'TOOL_ACTION')
+    );
+    if (isTool) {
+      const toolSideEffect = sideEffect === 'DESTRUCTIVE' ? 'DESTRUCTIVE' : sideEffect === 'WRITE' ? 'WRITE' : 'READ';
+      return {
+        intent: 'TOOL_ACTION',
+        confidence: 0.94,
+        reason: 'Identified verified tool execution request.',
+        sideEffectLevel: toolSideEffect,
+        approvalRequired: toolSideEffect === 'DESTRUCTIVE' || toolSideEffect === 'WRITE'
+      };
+    }
+
+    // Rule F: Research & Source Investigation
     const isResearch = /\b(research\s+(the\s+|latest\s+|recent\s+|advances\s+in\s+)?|deep\s+dive\s+into.*sources|investigate.*cite\s+sources|find\s+sources\s+and\s+compare)\b/.test(text) ||
       (advisoryIntent === 'RESEARCH');
     if (isResearch) {
@@ -179,20 +200,6 @@ export class ServerIntentRouter {
         reason: 'Identified deep research and evidence citation request.',
         sideEffectLevel: 'READ',
         approvalRequired: false
-      };
-    }
-
-    // Rule F: Direct Tool Invocations
-    const isTool = /\b(open\s+this\s+url|extract\s+the\s+table|calculate\s+|calc\s+|read\s+file\s+|search\s+the\s+web\s+for|run\s+(shell\s+)?command)\b/.test(text) ||
-      (advisoryIntent === 'TOOL_ACTION');
-    if (isTool) {
-      const toolSideEffect = sideEffect === 'DESTRUCTIVE' ? 'DESTRUCTIVE' : sideEffect === 'WRITE' ? 'WRITE' : 'READ';
-      return {
-        intent: 'TOOL_ACTION',
-        confidence: 0.91,
-        reason: 'Identified verified tool execution request.',
-        sideEffectLevel: toolSideEffect,
-        approvalRequired: toolSideEffect === 'DESTRUCTIVE' || toolSideEffect === 'WRITE'
       };
     }
 

@@ -12,7 +12,7 @@ import {
 import { WorkflowRepository } from './workflow-repositories.js';
 import { RunRepository } from './repositories.js';
 import { ApprovalKernel } from '../../approvals/src/index.js';
-import { ToolRegistry } from '../../tool-runtime/src/index.js';
+import { ToolRegistry, ToolGateway } from '../../tool-runtime/src/index.js';
 import { ModelRouter } from '../../model-router/src/index.js';
 
 export class WorkflowEngine {
@@ -23,7 +23,8 @@ export class WorkflowEngine {
     private toolRegistry: ToolRegistry,
     private modelRouter: ModelRouter,
     private workspaceRoot: string = process.cwd(),
-    private eventEmitterCallback?: (runId: string, type: any, data: any) => Promise<void>
+    private eventEmitterCallback?: (runId: string, type: any, data: any) => Promise<void>,
+    private toolGateway?: ToolGateway
   ) {}
 
   /**
@@ -196,7 +197,7 @@ export class WorkflowEngine {
       const stepsToRun = readySteps.slice(0, maxConcurrency);
 
       // Execute ready steps in parallel
-      const stepPromises = stepsToRun.map(step => this.executeStep(workflowRun!, step, definition));
+      const stepPromises = stepsToRun.map(step => this.executeStep(workflowRunId, step, definition));
       await Promise.all(stepPromises);
 
       // Reload workflow run state to reflect step completions
@@ -207,23 +208,42 @@ export class WorkflowEngine {
     }
   }
 
+  private runLocks: Map<string, Promise<any>> = new Map();
+
+  private async withRunLock<T>(workflowRunId: string, fn: () => Promise<T>): Promise<T> {
+    const currentLock = this.runLocks.get(workflowRunId) || Promise.resolve();
+    let release: () => void;
+    const nextLock = new Promise<void>((resolve) => { release = resolve; });
+    this.runLocks.set(workflowRunId, currentLock.then(() => nextLock));
+    try {
+      await currentLock;
+      return await fn();
+    } finally {
+      release!();
+    }
+  }
+
   /**
    * Execute a single workflow step with retries, approvals, and idempotency
    */
   private async executeStep(
-    workflowRun: WorkflowRun,
+    workflowRunId: string,
     stepDef: WorkflowStepDefinition,
     _definition: WorkflowDefinition
   ): Promise<void> {
+    let workflowRun = (await this.workflowRepo.getWorkflowRun(workflowRunId))!;
     const runId = workflowRun.runId;
 
     // 1. Idempotency Check
     if (stepDef.idempotencyKey) {
       const existing = await this.workflowRepo.getStepByIdempotencyKey(stepDef.idempotencyKey);
       if (existing && existing.state === 'COMPLETED') {
-        workflowRun.stepStates[stepDef.stepId] = 'COMPLETED';
-        workflowRun.stepOutputs[stepDef.stepId] = existing.output;
-        await this.workflowRepo.saveWorkflowRun(workflowRun);
+        await this.withRunLock(workflowRunId, async () => {
+          const fresh = (await this.workflowRepo.getWorkflowRun(workflowRunId))!;
+          fresh.stepStates[stepDef.stepId] = 'COMPLETED';
+          fresh.stepOutputs[stepDef.stepId] = existing.output;
+          await this.workflowRepo.saveWorkflowRun(fresh);
+        });
         await this.emitWorkflowEvent(runId, 'workflow.step.completed', {
           stepId: stepDef.stepId,
           name: stepDef.name,
@@ -249,11 +269,14 @@ export class WorkflowEngine {
       );
 
       if (!isApproved) {
-        workflowRun.state = 'WAITING_FOR_APPROVAL';
-        workflowRun.pendingApprovalStepId = stepDef.stepId;
-        workflowRun.stepStates[stepDef.stepId] = 'WAITING_FOR_APPROVAL';
-        workflowRun.updatedAt = Date.now();
-        await this.workflowRepo.saveWorkflowRun(workflowRun);
+        await this.withRunLock(workflowRunId, async () => {
+          const fresh = (await this.workflowRepo.getWorkflowRun(workflowRunId))!;
+          fresh.state = 'WAITING_FOR_APPROVAL';
+          fresh.pendingApprovalStepId = stepDef.stepId;
+          fresh.stepStates[stepDef.stepId] = 'WAITING_FOR_APPROVAL';
+          fresh.updatedAt = Date.now();
+          await this.workflowRepo.saveWorkflowRun(fresh);
+        });
 
         await this.updateStepState(workflowRun.id, stepDef.stepId, 'WAITING_FOR_APPROVAL');
 
@@ -284,10 +307,16 @@ export class WorkflowEngine {
     }
 
     // 3. Mark Step RUNNING
-    workflowRun.stepStates[stepDef.stepId] = 'RUNNING';
-    const attempt = (workflowRun.stepAttempts[stepDef.stepId] || 0) + 1;
-    workflowRun.stepAttempts[stepDef.stepId] = attempt;
-    await this.workflowRepo.saveWorkflowRun(workflowRun);
+    let attempt = 1;
+    await this.withRunLock(workflowRunId, async () => {
+      const fresh = (await this.workflowRepo.getWorkflowRun(workflowRunId))!;
+      fresh.stepStates[stepDef.stepId] = 'RUNNING';
+      attempt = (fresh.stepAttempts[stepDef.stepId] || 0) + 1;
+      fresh.stepAttempts[stepDef.stepId] = attempt;
+      fresh.updatedAt = Date.now();
+      await this.workflowRepo.saveWorkflowRun(fresh);
+      workflowRun = fresh;
+    });
 
     await this.updateStepState(workflowRun.id, stepDef.stepId, 'RUNNING', undefined, undefined, attempt);
     await this.emitWorkflowEvent(runId, 'workflow.step.started', {
@@ -328,15 +357,30 @@ export class WorkflowEngine {
         const delay = initialBackoff * Math.pow(backoffFactor, currentAttempt - 1);
         await new Promise(r => setTimeout(r, Math.min(delay, 5000)));
         currentAttempt++;
-        workflowRun.stepAttempts[stepDef.stepId] = currentAttempt;
-        await this.workflowRepo.saveWorkflowRun(workflowRun);
+        await this.withRunLock(workflowRunId, async () => {
+          const fresh = (await this.workflowRepo.getWorkflowRun(workflowRunId))!;
+          fresh.stepAttempts[stepDef.stepId] = currentAttempt;
+          await this.workflowRepo.saveWorkflowRun(fresh);
+          workflowRun = fresh;
+        });
       }
     }
 
     // 6. Handle Step Outcome
+    await this.withRunLock(workflowRunId, async () => {
+      const fresh = (await this.workflowRepo.getWorkflowRun(workflowRunId))!;
+      if (stepError) {
+        fresh.stepStates[stepDef.stepId] = 'FAILED';
+      } else {
+        fresh.stepStates[stepDef.stepId] = 'COMPLETED';
+        fresh.stepOutputs[stepDef.stepId] = stepOutput;
+      }
+      fresh.updatedAt = Date.now();
+      await this.workflowRepo.saveWorkflowRun(fresh);
+      workflowRun = fresh;
+    });
+
     if (stepError) {
-      workflowRun.stepStates[stepDef.stepId] = 'FAILED';
-      await this.workflowRepo.saveWorkflowRun(workflowRun);
       await this.updateStepState(workflowRun.id, stepDef.stepId, 'FAILED', undefined, stepError, currentAttempt);
       await this.emitWorkflowEvent(runId, 'workflow.step.failed', {
         stepId: stepDef.stepId,
@@ -345,9 +389,6 @@ export class WorkflowEngine {
         attempts: currentAttempt
       });
     } else {
-      workflowRun.stepStates[stepDef.stepId] = 'COMPLETED';
-      workflowRun.stepOutputs[stepDef.stepId] = stepOutput;
-      await this.workflowRepo.saveWorkflowRun(workflowRun);
       await this.updateStepState(workflowRun.id, stepDef.stepId, 'COMPLETED', stepOutput, undefined, currentAttempt);
       await this.emitWorkflowEvent(runId, 'workflow.step.completed', {
         stepId: stepDef.stepId,
@@ -371,6 +412,29 @@ export class WorkflowEngine {
     if (stepDef.type === 'TOOL' || capability === 'TOOL_ACTION') {
       const toolName = stepDef.toolName || input.toolName || 'calculator';
       const args = input.args || input;
+
+      if (this.toolGateway) {
+        const result = await this.toolGateway.execute({
+          toolName,
+          arguments: args,
+          context: {
+            runId: workflowRun.runId,
+            workflowRunId: workflowRun.id,
+            principal: {
+              userId: workflowRun.principalId,
+              sessionId: workflowRun.sessionId,
+              roles: ['member']
+            },
+            idempotencyKey: stepDef.idempotencyKey,
+            workspaceRoot: this.workspaceRoot
+          }
+        });
+        if (result.isError) {
+          throw new Error(result.error || `Tool "${toolName}" failed.`);
+        }
+        return result.output;
+      }
+
       const result = await this.toolRegistry.execute(
         {
           id: `tool_${Date.now()}`,

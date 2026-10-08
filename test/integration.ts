@@ -60,6 +60,7 @@ async function collectSseEvents(
           events.push({ id: currentId, event: currentEvent, data: JSON.parse(line.substring(6).trim()) });
           currentId = '';
           currentEvent = '';
+          if (events.length >= limit) break;
         }
       }
     }

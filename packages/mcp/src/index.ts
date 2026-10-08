@@ -1,5 +1,5 @@
 import { ToolDefinition } from '../../contracts/src/index.js';
-import { ToolRegistry } from '../../tool-runtime/src/index.js';
+import { ToolRegistry, ToolGateway } from '../../tool-runtime/src/index.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
@@ -15,7 +15,7 @@ export class McpHost {
   private servers: Map<string, McpServerConfig> = new Map();
   private clients: Map<string, Client> = new Map();
 
-  constructor(private toolRegistry: ToolRegistry) {
+  constructor(private toolRegistryOrGateway: ToolRegistry | ToolGateway) {
   }
 
   public registerServer(config: McpServerConfig): void {
@@ -65,42 +65,60 @@ export class McpHost {
         const serverToolDef: ToolDefinition = {
           id: `mcp_${config.id}_${t.name}`,
           name: t.name,
+          version: 1,
           description: t.description || `Tool ${t.name} from MCP server ${config.name}`,
+          category: 'mcp',
           parameters: t.inputSchema || { type: 'object', properties: {} },
           source: 'mcp',
           permissionLevel: 'READ',
-          executionRuntime: 'LOCAL'
+          sideEffectLevel: 'READ',
+          permissionScopes: ['mcp.invoke'],
+          approvalPolicy: 'autonomous',
+          executionRuntime: 'LOCAL',
+          availability: 'READY',
+          adapter: 'mcp',
+          provider: config.name,
+          metadata: { serverId: config.id }
         };
 
-        this.toolRegistry.register({
-          definition: serverToolDef,
-          execute: async (args, ctx) => {
-            const start = Date.now();
-            try {
-              const execResponse = await client.callTool({
-                name: t.name,
-                arguments: args as any
-              });
-              
-              return {
-                toolCallId: 'call_mcp_' + Date.now(),
-                output: execResponse.content,
-                isError: execResponse.isError || false,
-                durationMs: Date.now() - start,
-                timestamp: Date.now()
-              };
-            } catch (err: any) {
-              return {
-                toolCallId: 'call_mcp_' + Date.now(),
-                output: err.message,
-                isError: true,
-                error: err.message,
-                durationMs: Date.now() - start,
-                timestamp: Date.now()
-              };
-            }
+        const execAdapter = async (args: any, _ctx: any) => {
+          const start = Date.now();
+          try {
+            const execResponse = await client.callTool({
+              name: t.name,
+              arguments: args as any
+            });
+            return {
+              toolCallId: 'call_mcp_' + Date.now(),
+              output: execResponse.content,
+              isError: execResponse.isError || false,
+              durationMs: Date.now() - start,
+              timestamp: Date.now()
+            };
+          } catch (err: any) {
+            return {
+              toolCallId: 'call_mcp_' + Date.now(),
+              output: err.message,
+              isError: true,
+              error: err.message,
+              durationMs: Date.now() - start,
+              timestamp: Date.now()
+            };
           }
-        });
+        };
+
+        if ('registerTool' in this.toolRegistryOrGateway) {
+          (this.toolRegistryOrGateway as ToolGateway).registerTool({
+            definition: serverToolDef,
+            execute: execAdapter
+          });
+        }
+        if ('register' in this.toolRegistryOrGateway) {
+          (this.toolRegistryOrGateway as ToolRegistry).register({
+            definition: serverToolDef,
+            execute: execAdapter as any
+          });
+        }
       }
 
       return true;

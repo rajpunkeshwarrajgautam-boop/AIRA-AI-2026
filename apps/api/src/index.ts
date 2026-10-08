@@ -3,7 +3,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
 import { ModelRouter } from '../../../packages/model-router/src/index.js';
-import { ToolRegistry } from '../../../packages/tool-runtime/src/index.js';
+import { ToolRegistry, ToolGateway, PostgresToolCallRepository } from '../../../packages/tool-runtime/src/index.js';
 import { ApprovalKernel } from '../../../packages/approvals/src/index.js';
 import { PostgresApprovalRepository, PostgresSessionGrantRepository } from '../../../packages/approvals/src/repositories.js';
 import { BrainV2KnowledgeEngine } from '../../../packages/knowledge/src/index.js';
@@ -86,6 +86,7 @@ app.get('/api/health', (_req: Request, res: Response) => {
     subsystems: {
       modelRouter: `ONLINE (${providers.length} provider(s): ${providers.join(', ') || 'none — mock-dev only'})`,
       toolRuntime: 'ONLINE',
+      toolGateway: 'ONLINE',
       approvalKernel: 'ONLINE',
       mcpHost: 'ONLINE',
       knowledgeEngine: 'ONLINE',
@@ -125,8 +126,10 @@ app.use('/api', createPrincipalMiddleware());
 const modelRouter = new ModelRouter();
 const toolRegistry = new ToolRegistry(process.cwd());
 const approvalKernel = new ApprovalKernel(new PostgresApprovalRepository(), new PostgresSessionGrantRepository());
+const toolCallRepo = new PostgresToolCallRepository();
+const toolGateway = new ToolGateway(toolCallRepo, approvalKernel, process.cwd());
 const knowledgeEngine = new BrainV2KnowledgeEngine();
-const mcpHost = new McpHost(toolRegistry);
+const mcpHost = new McpHost(toolGateway);
 const agentRepo = new PostgresAgentRepository();
 const runRepo = new PostgresRunRepository();
 const autoRepo = new PostgresAutomationRepository();
@@ -138,7 +141,13 @@ const agentRuntime = new AgentRuntime(
   approvalKernel,
   knowledgeEngine,
   runRepo,
-  process.cwd()
+  process.cwd(),
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  toolGateway
 );
 const automationEngine = new AutomationEngine(agentRuntime, autoRepo, autoRunRepo);
 automationEngine.start();
@@ -524,13 +533,78 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
 });
 
 // -----------------------------------------------------------------------
-// Tool Definitions
+// Tool Gateway & Definitions
 // -----------------------------------------------------------------------
 app.get('/api/tools', (_req: Request, res: Response) => {
   res.json({
-    tools: toolRegistry.listDefinitions(),
+    tools: toolGateway.listDefinitions(),
     audit: toolRegistry.getAuditLog().slice(-20)
   });
+});
+
+app.post('/api/tools/execute', async (req: Request, res: Response) => {
+  try {
+    const { toolName, toolId, arguments: args, input, idempotencyKey, runId } = req.body;
+    const name = toolName || toolId;
+    if (!name) {
+      return res.status(400).json({ error: 'toolName or toolId is required.' });
+    }
+    const effectiveRunId = runId || `run_direct_${Date.now()}`;
+    const result = await toolGateway.execute({
+      toolName: name,
+      arguments: args || input || {},
+      context: {
+        runId: effectiveRunId,
+        principal: req.principal!,
+        idempotencyKey
+      }
+    });
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/tools/connectors', async (req: Request, res: Response) => {
+  try {
+    const connectors = await toolGateway.getConnectorRegistry().getStatusForPrincipal(req.principal!);
+    res.json({ connectors });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/tools/calls', async (req: Request, res: Response) => {
+  try {
+    const calls = await toolCallRepo.listToolCallsForPrincipal(req.principal!.userId);
+    res.json(calls);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/tools/calls/:id', async (req: Request, res: Response) => {
+  try {
+    const call = await toolCallRepo.getToolCall(req.params.id);
+    if (!call || call.principalId !== req.principal!.userId) {
+      return res.status(404).json({ error: `Tool call with id "${req.params.id}" not found.` });
+    }
+    res.json(call);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/tools/calls/:id/cancel', async (req: Request, res: Response) => {
+  try {
+    const success = await toolGateway.cancel(req.params.id, req.principal!);
+    if (!success) {
+      return res.status(400).json({ error: 'Cannot cancel tool call (either not found, not owned, or already terminal).' });
+    }
+    res.json({ status: 'CANCELLED', toolCallId: req.params.id });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // -----------------------------------------------------------------------
