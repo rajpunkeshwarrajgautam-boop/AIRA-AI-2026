@@ -228,7 +228,7 @@ export class AgentRuntime extends EventEmitter {
     run.pendingApproval = request;
     
     // Check if this approval was for a workflow step
-    if (request.toolCall?.toolId.startsWith('workflow_step_')) {
+    if (typeof request.toolCall?.toolId === 'string' && request.toolCall.toolId.startsWith('workflow_step_')) {
       const wfRun = await this.workflowRepo.getWorkflowRunByRunId(request.runId);
       if (wfRun && wfRun.state === 'WAITING_FOR_APPROVAL' && wfRun.pendingApprovalStepId) {
         const principal: ExecutionPrincipal = {
