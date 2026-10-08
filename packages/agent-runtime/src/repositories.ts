@@ -205,6 +205,8 @@ export class PostgresRunRepository implements RunRepository {
       if (!val) return def;
       return typeof val === 'string' ? JSON.parse(val) : val;
     };
+    const context = parseJson(row.context_data, {});
+    const routingDecision = context?.routingDecision || undefined;
     return {
       id: row.id,
       principalId: row.principal_id,
@@ -214,11 +216,12 @@ export class PostgresRunRepository implements RunRepository {
       projectId: row.project_id || null,
       conversationId: row.conversation_id || null,
       intent: row.intent as any,
+      routingDecision,
       state: row.state as any,
       modelPolicy: parseJson(row.modelPolicy, {}),
       prompt: row.prompt,
       systemPrompt: row.systemPrompt || '',
-      context: parseJson(row.context_data, {}),
+      context,
       content: row.content || '',
       thinking: row.thinking || '',
       error: row.error,

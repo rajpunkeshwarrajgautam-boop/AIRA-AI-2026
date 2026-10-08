@@ -149,7 +149,11 @@ export async function streamAIResponse(
               }
               try {
                 const data = JSON.parse(dataStr);
-                if ((currentEvent === 'thinking_delta' || data.thinking) && wrappedCallbacks.onThinkingChunk && !data.text) {
+                if (currentEvent === 'capability_unready' && data.message) {
+                  wrappedCallbacks.onContentChunk(data.message);
+                } else if (currentEvent === 'approval_required' && data.reason) {
+                  wrappedCallbacks.onContentChunk(`\n\n> ⚠️ **Approval Required**: ${data.reason}\n`);
+                } else if ((currentEvent === 'thinking_delta' || data.thinking) && wrappedCallbacks.onThinkingChunk && !data.text) {
                   wrappedCallbacks.onThinkingChunk(data.thinking);
                 } else if ((currentEvent === 'content_delta' || data.text) && data.text) {
                   wrappedCallbacks.onContentChunk(data.text);

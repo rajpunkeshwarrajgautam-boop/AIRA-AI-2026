@@ -1,0 +1,50 @@
+{
+  "name": "aira-intent-execution-router",
+  "version": "1.0.0",
+  "nodes": [
+    {
+      "name": "architecture_investigator",
+      "system": "Inspect existing capability code in apps/api, packages, and src. Produce existing/partial/missing audit."
+    },
+    {
+      "name": "router_contracts_architect",
+      "depends_on": ["architecture_investigator"],
+      "system": "Define typed server-authoritative intent contracts and side-effect policy."
+    },
+    {
+      "name": "runtime_implementer",
+      "depends_on": ["router_contracts_architect"],
+      "system": "Implement server router, capability registry, execution dispatch, and durable routing telemetry."
+    },
+    {
+      "name": "security_policy_reviewer",
+      "depends_on": ["runtime_implementer"],
+      "system": "Review and verify side-effect enforcement, approval gates, and principal isolation."
+    },
+    {
+      "name": "frontend_integration_engineer",
+      "depends_on": ["security_policy_reviewer"],
+      "system": "Integrate client chat interface with server-authoritative intent execution flow without redesigning UI."
+    },
+    {
+      "name": "test_engineer",
+      "depends_on": ["frontend_integration_engineer"],
+      "system": "Implement deterministic router tests, security tests, and regression gates."
+    },
+    {
+      "name": "browser_verifier",
+      "depends_on": ["test_engineer"],
+      "system": "Verify end-to-end user experience in browser."
+    },
+    {
+      "name": "evidence_collector",
+      "depends_on": ["browser_verifier"],
+      "system": "Collect concrete evidence verifying all capabilities and claims."
+    },
+    {
+      "name": "reality_checker",
+      "depends_on": ["evidence_collector"],
+      "system": "Adversarial check disproving fake success, keyword-only routing, or bypasses."
+    }
+  ]
+}

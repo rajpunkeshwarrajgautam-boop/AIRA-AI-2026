@@ -21,9 +21,12 @@ import { ApprovalKernel } from '../../approvals/src/index.js';
 import { BrainV2KnowledgeEngine } from '../../knowledge/src/index.js';
 
 import { RunRepository } from './repositories.js';
+import { CapabilityRegistry } from './registry.js';
+import { ServerIntentRouter } from './router.js';
 
 export class AgentRuntime extends EventEmitter {
   private eventStreams: Map<string, EventEmitter> = new Map();
+  private router: ServerIntentRouter;
 
   constructor(
     private modelRouter: ModelRouter,
@@ -31,9 +34,20 @@ export class AgentRuntime extends EventEmitter {
     private approvalKernel: ApprovalKernel,
     private knowledgeEngine: BrainV2KnowledgeEngine,
     private runRepo: RunRepository,
-    private workspaceRoot = process.cwd()
+    private workspaceRoot = process.cwd(),
+    private capabilityRegistry: CapabilityRegistry = new CapabilityRegistry(),
+    router?: ServerIntentRouter
   ) {
     super();
+    this.router = router || new ServerIntentRouter(this.capabilityRegistry, this.modelRouter);
+  }
+
+  public getCapabilityRegistry(): CapabilityRegistry {
+    return this.capabilityRegistry;
+  }
+
+  public getRouter(): ServerIntentRouter {
+    return this.router;
   }
 
   public async getRun(runId: string): Promise<Run | undefined> {
@@ -74,9 +88,17 @@ export class AgentRuntime extends EventEmitter {
     const runId = `run_${crypto.randomUUID().slice(0, 10)}`;
     const now = Date.now();
 
+    // 1. Authoritative Server Intent Routing & Policy Gate
+    const routingDecision = await this.router.route({
+      prompt: request.prompt,
+      principal,
+      advisoryIntent: request.intent,
+      context: request.context
+    });
+
     const basePolicy = this.modelRouter.resolvePolicy(
       request.modelPolicy?.model || 'aira-auto',
-      request.intent
+      routingDecision.intent
     );
     const requestedPolicy = request.modelPolicy;
     const extendedThinking = requestedPolicy?.extendedThinking ?? basePolicy.extendedThinking;
@@ -97,12 +119,16 @@ export class AgentRuntime extends EventEmitter {
       workspaceId: principal.workspaceId || null,
       projectId: request.projectId || principal.projectId || null,
       conversationId: request.conversationId || null,
-      intent: request.intent || 'ANSWER',
+      intent: routingDecision.intent,
+      routingDecision,
       state: 'QUEUED',
       modelPolicy: policy,
       prompt: request.prompt,
       systemPrompt: request.systemPrompt,
-      context: request.context || {},
+      context: {
+        ...(request.context || {}),
+        routingDecision
+      },
       content: '',
       thinking: '',
       toolsUsed: [],
@@ -124,6 +150,9 @@ export class AgentRuntime extends EventEmitter {
     const run = await this.runRepo.getRun(runId);
     if (!run) return;
     await this.emitRunEvent(runId, 'run.created', { runId, state: run.state });
+    if (run.routingDecision) {
+      await this.emitRunEvent(runId, 'routing.decision', run.routingDecision);
+    }
     try {
       await this.executeRunLoop(runId);
     } catch (err: any) {
@@ -206,13 +235,30 @@ export class AgentRuntime extends EventEmitter {
 
     if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)) return;
 
+    // Checkpoint 0: Capability readiness gate
+    if (run.routingDecision?.executionTarget === 'CAPABILITY_NOT_READY') {
+      const msg = `The requested capability (${run.intent}) is currently in development and not yet available for direct execution. (Target: ${run.routingDecision.executionTarget})`;
+      run.content = msg;
+      run.executionCheckpoint = 'COMPLETED';
+      await this.runRepo.saveRun(run);
+      await this.emitRunEvent(runId, 'capability.unready', {
+        intent: run.intent,
+        target: run.routingDecision.executionTarget,
+        message: msg
+      });
+      await this.emitRunEvent(runId, 'content.delta', { delta: msg });
+      await this.transitionRunState(runId, 'COMPLETED');
+      return;
+    }
+
     if (run.state !== 'RUNNING') {
       await this.transitionRunState(runId, 'RUNNING');
     }
     
     // Checkpoint 1: Knowledge Search Context
     if (!run.executionCheckpoint) {
-      const knowledgeResults = await this.knowledgeEngine.search(run.prompt, 3);
+      const searchCount = run.intent === 'RESEARCH' ? 5 : 3;
+      const knowledgeResults = await this.knowledgeEngine.search(run.prompt, searchCount);
       const citations: Citation[] = knowledgeResults.map(r => r.citation);
       run.citations = citations;
       run.executionCheckpoint = 'KNOWLEDGE_READY';
@@ -224,26 +270,32 @@ export class AgentRuntime extends EventEmitter {
 
     // Checkpoint 2: Prepare tool selection if needed
     if (run.executionCheckpoint === 'KNOWLEDGE_READY') {
-      const isToolAction = run.intent === 'TOOL_ACTION' ||
-        run.prompt.toLowerCase().includes('search') ||
-        run.prompt.toLowerCase().includes('calc') ||
-        run.prompt.toLowerCase().includes('read') ||
-        run.prompt.toLowerCase().includes('shell') ||
-        run.prompt.toLowerCase().includes('run command') ||
-        run.prompt.toLowerCase().includes('hang safe') ||
-        run.prompt.toLowerCase().includes('hang unsafe');
+      const isToolAction = run.intent === 'TOOL_ACTION';
+      const isAgentMission = run.intent === 'AGENT_MISSION';
 
-      if (isToolAction) {
+      if (isToolAction || isAgentMission) {
         let selectedToolName = 'web_search';
         let selectedArgs: Record<string, unknown> = { query: run.prompt };
 
-        if (run.prompt.toLowerCase().includes('calc')) {
+        if (run.prompt.toLowerCase().includes('calc') || /calculate|\b\d+\s*[-+*/]\s*\d+/.test(run.prompt.toLowerCase())) {
           selectedToolName = 'calculator';
           selectedArgs = { expression: '1024 * 4' };
-        } else if (run.prompt.toLowerCase().includes('shell') || run.prompt.toLowerCase().includes('run command')) {
+        } else if (
+          run.routingDecision?.sideEffectLevel === 'DESTRUCTIVE' ||
+          run.prompt.toLowerCase().includes('shell') ||
+          run.prompt.toLowerCase().includes('run command') ||
+          run.prompt.toLowerCase().includes('rm -rf') ||
+          run.prompt.toLowerCase().includes('delete') ||
+          run.prompt.toLowerCase().includes('drop')
+        ) {
           selectedToolName = 'system_shell';
-          selectedArgs = { command: 'echo Aira Execution Subsystem Online' };
-        } else if (run.prompt.toLowerCase().includes('read')) {
+          selectedArgs = { command: run.prompt };
+        } else if (
+          run.prompt.toLowerCase().includes('read') ||
+          run.prompt.toLowerCase().includes('inspect') ||
+          run.prompt.toLowerCase().includes('structure') ||
+          run.prompt.toLowerCase().includes('analyze')
+        ) {
           selectedToolName = 'file_system_read';
           selectedArgs = { filePath: 'package.json' };
         } else if (run.prompt.toLowerCase().includes('hang safe')) {
@@ -287,7 +339,13 @@ export class AgentRuntime extends EventEmitter {
         run.principalId
       );
 
-      if (!isApproved && toolDef?.permissionLevel === 'DESTRUCTIVE') {
+      const requiresApproval = (!isApproved) && (
+        toolDef?.permissionLevel === 'DESTRUCTIVE' ||
+        run.routingDecision?.sideEffectLevel === 'DESTRUCTIVE' ||
+        (Boolean(run.routingDecision?.approvalRequired) && toolDef?.permissionLevel !== 'READ')
+      );
+
+      if (requiresApproval) {
         run.executionCheckpoint = 'WAITING_FOR_APPROVAL';
         await this.runRepo.saveRun(run);
         
@@ -295,8 +353,8 @@ export class AgentRuntime extends EventEmitter {
         const req = await this.approvalKernel.createRequest(
           runId,
           toolCall,
-          toolDef.permissionLevel,
-          `Tool execution "${toolCall.name}" requires user confirmation due to DESTRUCTIVE policy.`
+          toolDef?.permissionLevel || 'DESTRUCTIVE',
+          `Tool execution "${toolCall.name}" requires user confirmation due to ${run.routingDecision?.sideEffectLevel || toolDef?.permissionLevel || 'DESTRUCTIVE'} policy.`
         );
         run = await this.runRepo.getRun(runId) as Run; // reload
         run.pendingApproval = req;
@@ -351,6 +409,16 @@ export class AgentRuntime extends EventEmitter {
       const messages: ChatMessageInput[] = [];
       if (run.systemPrompt) {
         messages.push({ role: 'system', content: run.systemPrompt });
+      } else if (run.intent === 'RESEARCH') {
+        messages.push({
+          role: 'system',
+          content: `You are Aira AI operating in rigorous Research mode. Provide evidence-backed synthesis, cite available sources, decompose key claims, and distinguish established facts from inference.`
+        });
+      } else if (run.intent === 'AGENT_MISSION') {
+        messages.push({
+          role: 'system',
+          content: `You are Aira AI operating in Autonomous Mission mode. Deliver clear execution results, steps undertaken, verification findings, and a concise summary.`
+        });
       } else {
         messages.push({
           role: 'system',
@@ -368,14 +436,8 @@ export class AgentRuntime extends EventEmitter {
         const lastCall = run.toolCalls[run.toolCalls.length - 1];
         const lastResult = run.toolResults[run.toolResults.length - 1];
         messages.push({
-          role: 'assistant',
-          content: `I executed tool ${lastCall.name}.`
-        });
-        messages.push({
-          role: 'tool',
-          name: lastCall.name,
-          toolCallId: lastCall.id,
-          content: JSON.stringify(lastResult.output || lastResult.error)
+          role: 'user',
+          content: `[System Tool Execution Result for ${lastCall.name}]:\n${JSON.stringify(lastResult.output || lastResult.error, null, 2)}\n\nPlease synthesize your execution findings and provide the final mission plan and summary.`
         });
       }
 
@@ -412,6 +474,24 @@ export class AgentRuntime extends EventEmitter {
           versions: [{
             version: 1,
             content: run.content,
+            timestamp: Date.now()
+          }]
+        };
+        run.artifacts.push(artifact);
+        await this.runRepo.saveRun(run);
+        await this.emitRunEvent(runId, 'artifact.created', artifact);
+      } else if (run.intent === 'AGENT_MISSION') {
+        const artId = `art_mission_${Date.now()}`;
+        const artifact: Artifact = {
+          id: artId,
+          runId,
+          title: `Mission Report: ${run.prompt.slice(0, 36)}`,
+          type: 'text/markdown',
+          content: `# Mission Execution Summary\n\n**Objective**: ${run.prompt}\n\n**Outcome**: ${run.content}\n\n**Status**: COMPLETED`,
+          version: 1,
+          versions: [{
+            version: 1,
+            content: `# Mission Execution Summary\n\n**Objective**: ${run.prompt}\n\n**Outcome**: ${run.content}\n\n**Status**: COMPLETED`,
             timestamp: Date.now()
           }]
         };

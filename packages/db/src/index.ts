@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import knex from 'knex';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
