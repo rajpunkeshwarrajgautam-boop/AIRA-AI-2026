@@ -46,6 +46,14 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [sharedCopied, setSharedCopied] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [pendingApproval, setPendingApproval] = useState<{
+    id: string;
+    runId: string;
+    toolName?: string;
+    reason?: string;
+  } | null>(null);
+  const [isSubmittingApproval, setIsSubmittingApproval] = useState(false);
+  const [executionStatus, setExecutionStatus] = useState<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -273,7 +281,19 @@ function App() {
               messages: c.messages.map(m => m.id === assistantId ? { ...m, artifacts: [...(m.artifacts || []), artifact] } : m),
             }));
           },
+          onApprovalRequired: approval => {
+            setPendingApproval({
+              id: approval.id,
+              runId: approval.runId,
+              toolName: approval.toolCall?.name,
+              reason: approval.reason
+            });
+          },
+          onStatusUpdate: status => {
+            setExecutionStatus(status);
+          },
           onComplete: () => {
+            setExecutionStatus(null);
             updateConversation(id, c => ({
               ...c,
               updatedAt: Date.now(),
@@ -286,6 +306,7 @@ function App() {
             setIsLoading(false);
           },
           onError: error => {
+            setExecutionStatus(null);
             updateConversation(id, c => ({
               ...c,
               messages: c.messages.map(m => m.id === assistantId ? { ...m, content: `Aira encountered an execution error: ${error}`, isStreaming: false } : m),
@@ -296,11 +317,38 @@ function App() {
         projectContext || undefined
       );
     } catch {
+      setExecutionStatus(null);
       setIsLoading(false);
       updateConversation(id, c => ({
         ...c,
         messages: c.messages.map(m => m.id === assistantId ? { ...m, content: 'Aira could not complete this request.', isStreaming: false } : m),
       }));
+    }
+  };
+
+  const handleApprovalDecision = async (decision: 'APPROVE' | 'REJECT') => {
+    if (!pendingApproval) return;
+    setIsSubmittingApproval(true);
+    try {
+      const res = await fetch(`/api/runs/${pendingApproval.runId}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          requestId: pendingApproval.id,
+          decision
+        })
+      });
+      if (!res.ok) {
+        showToast('Approval submission failed.');
+      } else {
+        showToast(decision === 'APPROVE' ? 'Action approved. Resuming execution...' : 'Action rejected.');
+        setPendingApproval(null);
+      }
+    } catch (e: any) {
+      showToast(`Error: ${e.message}`);
+    } finally {
+      setIsSubmittingApproval(false);
     }
   };
 
@@ -411,6 +459,50 @@ function App() {
           )}
 
           <div className="sticky bottom-0 pt-4 gradient-mask-bottom">
+            {executionStatus && (
+              <div className="max-w-2xl mx-auto px-4 mb-2">
+                <div className="flex items-center gap-2 text-xs text-orange-600 dark:text-orange-400 bg-orange-50/90 dark:bg-orange-950/40 border border-orange-200/60 dark:border-orange-800/50 rounded-lg px-3 py-1.5 shadow-sm backdrop-blur">
+                  <div className="w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
+                  <span className="font-medium">{executionStatus}</span>
+                </div>
+              </div>
+            )}
+
+            {pendingApproval && (
+              <div className="max-w-2xl mx-auto px-4 mb-3">
+                <div className="p-4 bg-amber-500/10 dark:bg-amber-950/40 border border-amber-500/30 rounded-xl backdrop-blur-md text-sm text-claude-text-light dark:text-claude-text-dark shadow-lg">
+                  <div className="flex items-start justify-between gap-3 mb-2">
+                    <div className="flex items-center gap-2 font-medium text-amber-600 dark:text-amber-400">
+                      <span className="text-base">⚠️</span>
+                      <span>Tool Execution Approval Required</span>
+                    </div>
+                    <span className="text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-700 dark:text-amber-300 font-mono">
+                      {pendingApproval.toolName || 'system_action'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-claude-muted-light dark:text-claude-muted-dark mb-3">
+                    {pendingApproval.reason || 'This tool execution produces state changes or destructive side effects that require explicit user authorization.'}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleApprovalDecision('APPROVE')}
+                      disabled={isSubmittingApproval}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs shadow-sm transition disabled:opacity-50"
+                    >
+                      {isSubmittingApproval ? 'Submitting...' : 'Approve Execution'}
+                    </button>
+                    <button
+                      onClick={() => handleApprovalDecision('REJECT')}
+                      disabled={isSubmittingApproval}
+                      className="px-3 py-1.5 rounded-lg bg-rose-600/10 hover:bg-rose-600/20 text-rose-600 dark:text-rose-400 font-medium text-xs transition disabled:opacity-50"
+                    >
+                      Deny
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <ChatInput
               onSendMessage={handleSendMessage}
               isLoading={isLoading}

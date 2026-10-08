@@ -79,6 +79,22 @@ jobs:
       - name: Model provider routing certification
         run: npm run test:model-routing
 
+      - name: Router and policy verification
+        run: npm run test:router
+
+      - name: Workflow engine verification
+        run: npm run test:workflow
+
+      - name: Tool gateway certification
+        run: npm run test:tools
+
+      - name: Browser execution suite
+        run: npm run test:browser
+
+      - name: Capability reality audit suite
+        run: npm run test:reality
+
+
   certify:
     name: Main / PR certification
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'

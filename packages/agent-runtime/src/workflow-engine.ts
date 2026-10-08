@@ -414,6 +414,7 @@ export class WorkflowEngine {
       const args = input.args || input;
 
       if (this.toolGateway) {
+        const parentRun = await this.runRepo.getRun(workflowRun.runId);
         const result = await this.toolGateway.execute({
           toolName,
           arguments: args,
@@ -423,7 +424,8 @@ export class WorkflowEngine {
             principal: {
               userId: workflowRun.principalId,
               sessionId: workflowRun.sessionId,
-              roles: ['member']
+              roles: ['member'],
+              scopes: parentRun?.principalScopes || ['*']
             },
             idempotencyKey: stepDef.idempotencyKey,
             workspaceRoot: this.workspaceRoot

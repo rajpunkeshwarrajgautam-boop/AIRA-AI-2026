@@ -172,6 +172,17 @@ export class ServerIntentRouter {
       };
     }
 
+    // Rule for Computer Use / OS Control
+    if (/\b(mouse\s+click|desktop\s+coordinate|computer\s+use|screen\s+coordinate|os\s+control|desktop\s+screen|native\s+app\s+control)\b/.test(text)) {
+      return {
+        intent: 'TOOL_ACTION',
+        confidence: 0.95,
+        reason: 'Identified computer use / OS control request.',
+        sideEffectLevel: 'WRITE',
+        approvalRequired: true
+      };
+    }
+
     // Rule E: Direct Tool Invocations (Browser, Files, Repo, System, Calculator, Connectors)
     const isTool = (
       /\b(open\s+https?:\/\/|navigate\s+to\s+https?:\/\/|open\s+this\s+url|extract\s+the\s+table|tell\s+me\s+the\s+(page\s+)?heading)\b/.test(text) ||

@@ -95,7 +95,7 @@ export const CapabilityDefinitionSchema = z.object({
   approvalPolicy: z.enum(['autonomous', 'require_approval', 'always_ask']),
   requiredPrincipalScope: z.array(z.string()).default([]),
   handler: z.string(),
-  status: z.enum(['READY', 'NOT_READY', 'DEPRECATED'])
+  status: z.enum(['READY', 'PARTIAL', 'DEGRADED', 'NOT_READY', 'DEPRECATED'])
 });
 export type CapabilityDefinition = z.infer<typeof CapabilityDefinitionSchema>;
 
@@ -397,6 +397,7 @@ export type Artifact = z.infer<typeof ArtifactSchema>;
 export const RunSchema = z.object({
   id: z.string(),
   principalId: z.string().min(1, "principalId is required"),
+  principalScopes: z.array(z.string()).default([]),
   agentId: z.string().nullable().optional(),
   sessionId: z.string().min(1, "sessionId is required"),
   workspaceId: z.string().nullable().optional(),
@@ -443,7 +444,8 @@ export const CreateRunRequestSchema = z.object({
   systemPrompt: z.string().optional(),
   context: z.record(z.string(), z.any()).optional(),
   conversationId: z.string().optional(),
-  projectId: z.string().optional()
+  projectId: z.string().optional(),
+  attachments: z.array(z.any()).optional()
 });
 export type CreateRunRequest = z.infer<typeof CreateRunRequestSchema>;
 
@@ -594,6 +596,7 @@ export type AutomationTriggerType = z.infer<typeof AutomationTriggerTypeSchema>;
 
 export const AutomationDefinitionSchema = z.object({
   id: z.string(),
+  principalId: z.string().optional(),
   name: z.string(),
   enabled: z.boolean().default(true),
   trigger: AutomationTriggerTypeSchema,

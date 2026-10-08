@@ -434,8 +434,7 @@ export class ToolGateway extends EventEmitter {
   private verifyPermissionScopes(principal: ExecutionPrincipal, def: ToolDefinition): string | null {
     if (!def.permissionScopes || def.permissionScopes.length === 0) return null;
     if (!principal.scopes || principal.scopes.length === 0) {
-      // If principal has no explicit scope restrictions, allow by default
-      return null;
+      return `TOOL_PERMISSION_DENIED: ExecutionPrincipal lacks required scope "${def.permissionScopes[0]}".`;
     }
 
     for (const requiredScope of def.permissionScopes) {

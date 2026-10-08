@@ -12,6 +12,8 @@ export interface RunRepository {
   saveRun(run: Run): Promise<void>;
   getRun(id: string): Promise<Run | undefined>;
   listRuns(): Promise<Run[]>;
+  listRunsForPrincipal(principalId: string, limit?: number): Promise<Run[]>;
+  searchRunsForPrincipal(principalId: string, query: string, limit?: number): Promise<Run[]>;
   getInterruptedRuns(): Promise<Run[]>;
   appendRunEvent(event: StreamingEvent): Promise<StreamingEvent>;
   getRunEvents(runId: string): Promise<StreamingEvent[]>;
@@ -86,7 +88,10 @@ export class PostgresRunRepository implements RunRepository {
       status: run.state,
       state: run.state,
       modelPolicy: JSON.stringify(run.modelPolicy),
-      context_data: JSON.stringify(run.context),
+      context_data: JSON.stringify({
+        ...(run.context || {}),
+        principalScopes: run.principalScopes || []
+      }),
       content: run.content,
       thinking: run.thinking,
       error: run.error,
@@ -116,6 +121,44 @@ export class PostgresRunRepository implements RunRepository {
 
   async listRuns(): Promise<Run[]> {
     const rows = await db('runs').select('*').orderBy('createdAt', 'desc');
+    return rows.map(this.mapToRun);
+  }
+
+  async listRunsForPrincipal(principalId: string, limit = 50): Promise<Run[]> {
+    const rows = await db('runs')
+      .where({ principal_id: principalId })
+      .orderBy('createdAt', 'desc')
+      .limit(limit);
+    return rows.map(this.mapToRun);
+  }
+
+  async searchRunsForPrincipal(principalId: string, query: string, limit = 5): Promise<Run[]> {
+    const stopwords = new Set([
+      'a', 'an', 'the', 'and', 'or', 'for', 'with', 'about', 'what', 'when', 'where',
+      'that', 'this', 'have', 'from', 'you', 'remember', 'talked', 'discuss', 'discussed',
+      'tell', 'me', 'our', 'conversation', 'chat', 'give'
+    ]);
+    const terms = query
+      .toLowerCase()
+      .replace(/[^\w\s]/g, ' ')
+      .split(/\s+/)
+      .filter(t => t.length > 2 && !stopwords.has(t));
+
+    let builder = db('runs')
+      .where({ principal_id: principalId })
+      .whereIn('state', ['COMPLETED', 'RUNNING'])
+      .orderBy('createdAt', 'desc');
+
+    if (terms.length > 0) {
+      builder = builder.andWhere(function() {
+        for (const term of terms.slice(0, 5)) {
+          this.orWhere('prompt', 'ilike', `%${term}%`)
+              .orWhere('content', 'ilike', `%${term}%`);
+        }
+      });
+    }
+
+    const rows = await builder.limit(limit);
     return rows.map(this.mapToRun);
   }
 
@@ -207,9 +250,11 @@ export class PostgresRunRepository implements RunRepository {
     };
     const context = parseJson(row.context_data, {});
     const routingDecision = context?.routingDecision || undefined;
+    const principalScopes = context?.principalScopes || [];
     return {
       id: row.id,
       principalId: row.principal_id,
+      principalScopes,
       agentId: row.agent_id || null,
       sessionId: row.session_id,
       workspaceId: row.workspace_id || null,

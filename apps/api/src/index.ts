@@ -150,6 +150,7 @@ const agentRuntime = new AgentRuntime(
   toolGateway
 );
 const automationEngine = new AutomationEngine(agentRuntime, autoRepo, autoRunRepo);
+agentRuntime.setAutomationEngine(automationEngine);
 automationEngine.start();
 
 // Recovery is deferred until the HTTP server is bound.
@@ -432,7 +433,7 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
 // -----------------------------------------------------------------------
 app.post('/api/chat/stream', async (req: Request, res: Response) => {
   try {
-    const { messages, history, prompt, model, extendedThinking, systemPrompt, contextSubgraph } = req.body;
+    const { messages, history, prompt, model, extendedThinking, systemPrompt, contextSubgraph, attachments, conversationId } = req.body;
     const promptText = prompt || (Array.isArray(messages)
       ? [...messages].reverse().find((m: any) => m.role === 'user')?.content || ''
       : '');
@@ -450,6 +451,8 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
 
     const run = await agentRuntime.createRun({
       prompt: promptText,
+      conversationId: conversationId || undefined,
+      attachments: Array.isArray(attachments) ? attachments : undefined,
       systemPrompt: (systemPrompt || '') + (contextSubgraph ? `\n\n${contextSubgraph}` : ''),
       context: { history: contextHistory },
       modelPolicy: {
@@ -698,28 +701,34 @@ app.post('/api/agents/:id/run', async (req: Request, res: Response) => {
   const agent = await agentRepo.getAgent(req.params.id);
   if (!agent) return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
   try {
-    const run = await agentRuntime.createAndExecuteRun({
+    const run = await agentRuntime.createRun({
       prompt: req.body.prompt || agent.instructions,
       systemPrompt: agent.instructions,
       intent: 'AGENT_MISSION',
       modelPolicy: agent.modelPolicy
     }, req.principal!);
-    res.status(201).json({ runId: run.id, state: run.state });
+    await agentRuntime.startRun(run.id);
+    const completedRun = await agentRuntime.getRun(run.id);
+    res.status(201).json({ runId: run.id, state: completedRun?.state || 'COMPLETED', content: completedRun?.content });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // -----------------------------------------------------------------------
-// Automations — Full CRUD (Audit 14)
+// Automations — Full CRUD (Audit 14 & 12 Ownership Enforced)
 // -----------------------------------------------------------------------
-app.get('/api/automations', async (_req: Request, res: Response) => {
-  res.json(await automationEngine.listAutomations());
+app.get('/api/automations', async (req: Request, res: Response) => {
+  res.json(await automationEngine.listAutomations(req.principal?.userId));
 });
 
 app.post('/api/automations', async (req: Request, res: Response) => {
   try {
-    const parsed = AutomationDefinitionSchema.omit({ id: true }).parse(req.body);
+    const raw = {
+      ...req.body,
+      principalId: req.body.principalId || req.principal?.userId || 'usr_anonymous'
+    };
+    const parsed = AutomationDefinitionSchema.omit({ id: true }).parse(raw);
     const item = await automationEngine.createAutomation(parsed);
     res.status(201).json(item);
   } catch (err: any) {
@@ -728,16 +737,14 @@ app.post('/api/automations', async (req: Request, res: Response) => {
 });
 
 app.get('/api/automations/:id', async (req: Request, res: Response) => {
-  const item = await automationEngine.getAutomation(req.params.id);
+  const item = await automationEngine.getAutomation(req.params.id, req.principal?.userId);
   if (!item) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
   res.json(item);
 });
 
 app.patch('/api/automations/:id', async (req: Request, res: Response) => {
-  const item = await automationEngine.getAutomation(req.params.id);
-  if (!item) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
   try {
-    const updated = await automationEngine.patchAutomation(req.params.id, req.body);
+    const updated = await automationEngine.patchAutomation(req.params.id, req.body, req.principal?.userId);
     res.json(updated);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -745,14 +752,14 @@ app.patch('/api/automations/:id', async (req: Request, res: Response) => {
 });
 
 app.delete('/api/automations/:id', async (req: Request, res: Response) => {
-  const deleted = await automationEngine.deleteAutomation(req.params.id);
+  const deleted = await automationEngine.deleteAutomation(req.params.id, req.principal?.userId);
   if (!deleted) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
   res.status(204).send();
 });
 
 app.post('/api/automations/:id/trigger', async (req: Request, res: Response) => {
   try {
-    const runId = await automationEngine.triggerNow(req.params.id);
+    const runId = await automationEngine.triggerNow(req.params.id, req.principal?.userId);
     res.json({ runId, status: 'TRIGGERED' });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -761,6 +768,8 @@ app.post('/api/automations/:id/trigger', async (req: Request, res: Response) => 
 
 app.get('/api/automations/:id/runs', async (req: Request, res: Response) => {
   try {
+    const item = await automationEngine.getAutomation(req.params.id, req.principal?.userId);
+    if (!item) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
     const runs = await automationEngine.getAutomationRuns(req.params.id);
     res.json(runs);
   } catch (err: any) {
@@ -770,7 +779,7 @@ app.get('/api/automations/:id/runs', async (req: Request, res: Response) => {
 
 app.post('/api/automations/:id/enable', async (req: Request, res: Response) => {
   try {
-    const item = await automationEngine.toggleAutomation(req.params.id, true);
+    const item = await automationEngine.toggleAutomation(req.params.id, true, req.principal?.userId);
     res.json(item);
   } catch (err: any) {
     res.status(404).json({ error: err.message });
@@ -779,10 +788,20 @@ app.post('/api/automations/:id/enable', async (req: Request, res: Response) => {
 
 app.post('/api/automations/:id/disable', async (req: Request, res: Response) => {
   try {
-    const item = await automationEngine.toggleAutomation(req.params.id, false);
+    const item = await automationEngine.toggleAutomation(req.params.id, false, req.principal?.userId);
     res.json(item);
   } catch (err: any) {
     res.status(404).json({ error: err.message });
+  }
+});
+
+// Platform / Serverless cron execution endpoint
+app.post('/api/automations/cron/execute', async (_req: Request, res: Response) => {
+  try {
+    await automationEngine.runScheduledCronCycle();
+    res.json({ status: 'CRON_CYCLE_EXECUTED', timestamp: Date.now() });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 

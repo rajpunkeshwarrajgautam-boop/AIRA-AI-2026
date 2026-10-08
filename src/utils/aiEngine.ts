@@ -5,6 +5,8 @@ export interface StreamCallbacks {
   onThinkingChunk?: (chunk: string) => void;
   onContentChunk: (chunk: string) => void;
   onArtifactFound?: (artifact: Artifact) => void;
+  onApprovalRequired?: (approval: { id: string; runId: string; toolCall?: { name: string; arguments: any }; reason?: string }) => void;
+  onStatusUpdate?: (status: string) => void;
   onComplete: () => void;
   onError: (error: string) => void;
 }
@@ -68,7 +70,7 @@ export async function streamAIResponse(
   history: Array<{ role: 'user' | 'assistant'; content: string }>,
   model: ModelId,
   settings: AppSettings,
-  _attachments: Attachment[] | undefined,
+  attachments: Attachment[] | undefined,
   callbacks: StreamCallbacks,
   contextSubgraph?: string
 ): Promise<void> {
@@ -110,6 +112,13 @@ export async function streamAIResponse(
       model,
       extendedThinking: isThinking,
       apiKey: settings.provider === 'anthropic' ? settings.anthropicApiKey : undefined,
+      systemPrompt: settings.customInstructions || undefined,
+      attachments: attachments?.map(a => ({
+        name: a.name,
+        type: a.type,
+        size: a.size,
+        content: a.content || ''
+      })),
       contextSubgraph: enrichedContext,
     });
 
@@ -151,8 +160,24 @@ export async function streamAIResponse(
                 const data = JSON.parse(dataStr);
                 if (currentEvent === 'capability_unready' && data.message) {
                   wrappedCallbacks.onContentChunk(data.message);
-                } else if (currentEvent === 'approval_required' && data.reason) {
-                  wrappedCallbacks.onContentChunk(`\n\n> ⚠️ **Approval Required**: ${data.reason}\n`);
+                } else if (currentEvent === 'approval_required') {
+                  wrappedCallbacks.onApprovalRequired?.(data);
+                  wrappedCallbacks.onStatusUpdate?.('Waiting for approval...');
+                  if (data.reason) {
+                    wrappedCallbacks.onContentChunk(`\n\n> ⚠️ **Approval Required**: ${data.reason}\n`);
+                  }
+                } else if (currentEvent === 'tool_started') {
+                  wrappedCallbacks.onStatusUpdate?.(`Executing tool: ${data.name || 'tool'}...`);
+                } else if (currentEvent === 'tool_completed') {
+                  wrappedCallbacks.onStatusUpdate?.(`Completed tool: ${data.name || data.toolId || 'action'}`);
+                } else if (currentEvent === 'workflow_started') {
+                  wrappedCallbacks.onStatusUpdate?.('Executing multi-step workflow...');
+                } else if (currentEvent === 'workflow_step_started') {
+                  wrappedCallbacks.onStatusUpdate?.(`Workflow step "${data.stepId}" in progress...`);
+                } else if (currentEvent === 'workflow_step_progress') {
+                  wrappedCallbacks.onStatusUpdate?.(`Workflow step "${data.stepId}": ${data.progress || 'working'}...`);
+                } else if (currentEvent === 'workflow_step_completed') {
+                  wrappedCallbacks.onStatusUpdate?.(`Workflow step "${data.stepId}" completed.`);
                 } else if ((currentEvent === 'thinking_delta' || data.thinking) && wrappedCallbacks.onThinkingChunk && !data.text) {
                   wrappedCallbacks.onThinkingChunk(data.thinking);
                 } else if ((currentEvent === 'content_delta' || data.text) && data.text) {

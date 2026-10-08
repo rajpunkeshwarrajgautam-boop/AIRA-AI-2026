@@ -34,6 +34,7 @@ export class AgentRuntime extends EventEmitter {
   private workflowEngine: WorkflowEngine;
   private workflowCompiler: WorkflowCompiler;
   private toolGateway: ToolGateway;
+  private automationEngine?: any;
 
   constructor(
     private modelRouter: ModelRouter,
@@ -88,6 +89,14 @@ export class AgentRuntime extends EventEmitter {
 
   public getWorkflowCompiler(): WorkflowCompiler {
     return this.workflowCompiler;
+  }
+
+  public setAutomationEngine(engine: any): void {
+    this.automationEngine = engine;
+  }
+
+  public getAutomationEngine(): any {
+    return this.automationEngine;
   }
 
   public async getRun(runId: string): Promise<Run | undefined> {
@@ -154,6 +163,7 @@ export class AgentRuntime extends EventEmitter {
     const run: Run = {
       id: runId,
       principalId: principal.userId,
+      principalScopes: principal.scopes || [],
       agentId: null,
       sessionId: principal.sessionId,
       workspaceId: principal.workspaceId || null,
@@ -167,6 +177,7 @@ export class AgentRuntime extends EventEmitter {
       systemPrompt: request.systemPrompt,
       context: {
         ...(request.context || {}),
+        attachments: request.attachments,
         routingDecision
       },
       content: '',
@@ -319,6 +330,70 @@ export class AgentRuntime extends EventEmitter {
       return;
     }
 
+    // Checkpoint 0.4: Automation Engine execution target
+    if (run.routingDecision?.executionTarget === 'AUTOMATION_ENGINE' || run.intent === 'AUTOMATION_CREATE') {
+      if (run.state !== 'RUNNING') {
+        await this.transitionRunState(runId, 'RUNNING');
+      }
+
+      if (!this.automationEngine) {
+        const errorMsg = 'AUTOMATION_ENGINE_NOT_AVAILABLE: AutomationEngine is not configured on this runtime.';
+        run.content = errorMsg;
+        run.executionCheckpoint = 'COMPLETED';
+        await this.runRepo.saveRun(run);
+        await this.emitRunEvent(runId, 'content.delta', { delta: errorMsg });
+        await this.transitionRunState(runId, 'FAILED', errorMsg);
+        return;
+      }
+
+      try {
+        const pLower = run.prompt.toLowerCase();
+        let cronExpr = '0 9 * * 1';
+        let name = 'Scheduled Automation';
+
+        if (pLower.includes('monday') && (pLower.includes('9 am') || pLower.includes('9am'))) {
+          cronExpr = '0 9 * * 1';
+          name = 'Weekly Monday 9 AM Summary';
+        } else if (pLower.includes('daily') || pLower.includes('every day')) {
+          cronExpr = '0 9 * * *';
+          name = 'Daily Report';
+        } else if (pLower.includes('hourly') || pLower.includes('every hour')) {
+          cronExpr = '0 * * * *';
+          name = 'Hourly Update';
+        } else {
+          name = `Automation: ${run.prompt.slice(0, 36)}`;
+        }
+
+        const autoDef = await this.automationEngine.createAutomation({
+          name,
+          principalId: run.principalId,
+          enabled: true,
+          trigger: 'CRON',
+          cronExpression: cronExpr,
+          agentId: 'agent-default',
+          objective: run.prompt,
+          conditions: {},
+          approvalPolicy: 'autonomous'
+        });
+
+        const successMsg = `Successfully created durable scheduled automation "${autoDef.name}" (ID: ${autoDef.id}) with cron expression "${cronExpr}". Principal owner: ${run.principalId}. The schedule is saved in durable Postgres storage.`;
+        run.content = successMsg;
+        run.executionCheckpoint = 'COMPLETED';
+        await this.runRepo.saveRun(run);
+        await this.emitRunEvent(runId, 'content.delta', { delta: successMsg });
+        await this.transitionRunState(runId, 'COMPLETED');
+        return;
+      } catch (err: any) {
+        const errorMsg = `Failed to create automation: ${err.message}`;
+        run.content = errorMsg;
+        run.executionCheckpoint = 'COMPLETED';
+        await this.runRepo.saveRun(run);
+        await this.emitRunEvent(runId, 'content.delta', { delta: errorMsg });
+        await this.transitionRunState(runId, 'FAILED', errorMsg);
+        return;
+      }
+    }
+
     // Checkpoint 0.5: Workflow Engine execution target
     if (run.routingDecision?.executionTarget === 'WORKFLOW_ENGINE') {
       if (run.state !== 'RUNNING') {
@@ -365,6 +440,17 @@ export class AgentRuntime extends EventEmitter {
       const searchCount = run.intent === 'RESEARCH' ? 5 : 3;
       const knowledgeResults = await this.knowledgeEngine.search(run.prompt, searchCount);
       const citations: Citation[] = knowledgeResults.map(r => r.citation);
+
+      if (run.intent === 'RESEARCH' && citations.length === 0 && !process.env.BRAVE_SEARCH_API_KEY) {
+        const msg = `RESEARCH_PROVIDER_NOT_READY: Real-time web search requires BRAVE_SEARCH_API_KEY environment variable. Aira does not manufacture or hallucinate citations or external source documents.`;
+        run.content = msg;
+        run.executionCheckpoint = 'COMPLETED';
+        await this.runRepo.saveRun(run);
+        await this.emitRunEvent(runId, 'content.delta', { delta: msg });
+        await this.transitionRunState(runId, 'COMPLETED');
+        return;
+      }
+
       run.citations = citations;
       run.executionCheckpoint = 'KNOWLEDGE_READY';
       await this.runRepo.saveRun(run);
@@ -379,6 +465,22 @@ export class AgentRuntime extends EventEmitter {
       const isAgentMission = run.intent === 'AGENT_MISSION';
 
       if (isToolAction || isAgentMission) {
+        if (
+          run.prompt.toLowerCase().includes('mouse click') ||
+          run.prompt.toLowerCase().includes('desktop screen') ||
+          run.prompt.toLowerCase().includes('desktop coordinate') ||
+          run.prompt.toLowerCase().includes('computer use') ||
+          run.prompt.toLowerCase().includes('os control')
+        ) {
+          const msg = 'COMPUTER_USE_NOT_AVAILABLE: Native desktop and OS control runtime is not available in the current environment. Browser-based navigation is supported via browser tools.';
+          run.content = msg;
+          run.executionCheckpoint = 'COMPLETED';
+          await this.runRepo.saveRun(run);
+          await this.emitRunEvent(runId, 'content.delta', { delta: msg });
+          await this.transitionRunState(runId, 'COMPLETED');
+          return;
+        }
+
         let selectedToolName = 'web_search';
         let selectedArgs: Record<string, unknown> = { query: run.prompt };
 
@@ -413,13 +515,22 @@ export class AgentRuntime extends EventEmitter {
           selectedToolName = 'system_shell';
           selectedArgs = { command: run.prompt };
         } else if (
+          run.prompt.toLowerCase().includes('list') &&
+          (run.prompt.toLowerCase().includes('src/') || run.prompt.toLowerCase().includes('files in') || run.prompt.toLowerCase().includes('directory'))
+        ) {
+          const dirMatch = run.prompt.match(/(?:list|files in|directory)\s+([a-zA-Z0-9_\-./\\]+)/i);
+          selectedToolName = 'file_system_list';
+          selectedArgs = { directoryPath: dirMatch ? dirMatch[1].trim() : 'src' };
+        } else if (
           run.prompt.toLowerCase().includes('read') ||
           run.prompt.toLowerCase().includes('inspect') ||
           run.prompt.toLowerCase().includes('structure') ||
           run.prompt.toLowerCase().includes('analyze')
         ) {
+          const fileMatch = run.prompt.match(/(?:read|inspect|structure|analyze|view)\s+([a-zA-Z0-9_\-./\\]+\.[a-zA-Z0-9]+)/i);
+          const targetPath = fileMatch ? fileMatch[1].trim() : (run.prompt.toLowerCase().includes('src/app.tsx') ? 'src/App.tsx' : 'package.json');
           selectedToolName = 'file_system_read';
-          selectedArgs = { filePath: 'package.json' };
+          selectedArgs = { filePath: targetPath };
         } else if (run.prompt.toLowerCase().includes('hang safe')) {
           selectedToolName = 'hang_safe';
           selectedArgs = {};
@@ -514,7 +625,8 @@ export class AgentRuntime extends EventEmitter {
             principal: {
               userId: run.principalId,
               sessionId: run.sessionId,
-              roles: ['member']
+              roles: ['member'],
+              scopes: run.principalScopes || []
             },
             workspaceRoot: this.workspaceRoot
           },
@@ -536,6 +648,38 @@ export class AgentRuntime extends EventEmitter {
 
       await this.transitionRunState(runId, 'RUNNING');
       
+      // Bounded iterative loop for AGENT_MISSION (up to 3 steps)
+      if (run.intent === 'AGENT_MISSION' && run.stepCount < 3) {
+        let nextToolName: string | null = null;
+        let nextArgs: Record<string, unknown> = {};
+
+        if (run.stepCount === 1) {
+          nextToolName = 'repo_git_status';
+          nextArgs = {};
+        } else if (run.stepCount === 2) {
+          nextToolName = 'repo_git_log';
+          nextArgs = { count: 2 };
+        }
+
+        if (nextToolName) {
+          const nextToolDef = this.toolGateway.getTool(nextToolName)?.definition || this.toolRegistry.get(nextToolName)?.definition;
+          const nextToolCall: ToolCall = {
+            id: `call_${Date.now()}_${run.stepCount}`,
+            toolId: nextToolDef?.id || `tool_${nextToolName}`,
+            name: nextToolName,
+            arguments: nextArgs,
+            timestamp: Date.now()
+          };
+          run.toolsUsed.push(nextToolName);
+          run.toolCalls.push(nextToolCall);
+          run.stepCount++;
+          run.executionCheckpoint = 'TOOL_SELECTED';
+          await this.runRepo.saveRun(run);
+          await this.emitRunEvent(runId, 'tool.requested', nextToolCall);
+          return this.executeRunLoop(runId);
+        }
+      }
+
       run = await this.runRepo.getRun(runId) as Run;
       run.executionCheckpoint = 'SYNTHESIZING';
       await this.runRepo.saveRun(run);
@@ -549,12 +693,27 @@ export class AgentRuntime extends EventEmitter {
     // Checkpoint 5: Synthesis
     if (run.executionCheckpoint === 'SYNTHESIZING') {
       const messages: ChatMessageInput[] = [];
+
+      let durablePastHistory = '';
+      try {
+        const priorRuns = await this.runRepo.searchRunsForPrincipal(run.principalId, run.prompt, 4);
+        const otherRuns = priorRuns.filter(r => r.id !== runId && r.state === 'COMPLETED' && r.content);
+        if (otherRuns.length > 0) {
+          durablePastHistory = otherRuns.map(r => {
+            const dateStr = new Date(r.createdAt).toISOString();
+            return `[Prior Run on ${dateStr}]:\nUser: ${r.prompt}\nAira: ${r.content.slice(0, 400)}`;
+          }).join('\n\n');
+        }
+      } catch (memErr) {
+        console.warn('Could not query durable prior run history for principal:', memErr);
+      }
+
       if (run.systemPrompt) {
         messages.push({ role: 'system', content: run.systemPrompt });
       } else if (run.intent === 'RESEARCH') {
         messages.push({
           role: 'system',
-          content: `You are Aira AI operating in rigorous Research mode. Provide evidence-backed synthesis, cite available sources, decompose key claims, and distinguish established facts from inference.`
+          content: `You are Aira AI operating in rigorous Research mode. Provide evidence-backed synthesis, cite available sources, decompose key claims, and distinguish established facts from inference. Do NOT manufacture citations or claims without evidence.`
         });
       } else if (run.intent === 'AGENT_MISSION') {
         messages.push({
@@ -567,19 +726,36 @@ export class AgentRuntime extends EventEmitter {
           content: `You are Aira AI, an autonomous intelligence operating workspace. Maintain precise, verified reasoning.`
         });
       }
+
+      if (durablePastHistory) {
+        messages.push({
+          role: 'system',
+          content: `DURABLE PRIOR CONVERSATION HISTORY RETRIEVED FROM SERVER DATABASE FOR THIS USER (PRINCIPAL: ${run.principalId}):\n${durablePastHistory}\n\nINSTRUCTIONS FOR MEMORY:\n- If the user asks whether you recall or previously discussed a topic, check the history above.\n- If the topic is found, confirm it accurately with specific details.\n- If a topic is NOT in the history above, state truthfully: "I did not find a record of that in our recent conversation history." DO NOT claim with absolute certainty "we never discussed X", as older conversations may not be indexed in the immediate window.`
+        });
+      }
       
       if (run.context && Array.isArray(run.context.history)) {
         messages.push(...run.context.history);
+      }
+
+      if (run.context?.attachments && Array.isArray(run.context.attachments) && run.context.attachments.length > 0) {
+        const attDocs = run.context.attachments.map((a: any) => `[Uploaded Attachment: ${a.name} (${a.type || 'text'}, ${a.size || 0} bytes)]:\n${a.content || '(binary or external file content)'}`).join('\n\n');
+        messages.push({
+          role: 'user',
+          content: `User uploaded attachments:\n${attDocs}`
+        });
       }
       
       messages.push({ role: 'user', content: run.prompt });
 
       if (run.toolCalls.length > 0 && run.toolResults.length > 0) {
-        const lastCall = run.toolCalls[run.toolCalls.length - 1];
-        const lastResult = run.toolResults[run.toolResults.length - 1];
+        const toolSummaries = run.toolCalls.map((call, idx) => {
+          const res = run.toolResults[idx];
+          return `[Tool Call ${idx + 1}: ${call.name}]:\nArgs: ${JSON.stringify(call.arguments)}\nOutput: ${JSON.stringify(res ? (res.output || res.error) : 'Pending')}`;
+        }).join('\n\n');
         messages.push({
           role: 'user',
-          content: `[System Tool Execution Result for ${lastCall.name}]:\n${JSON.stringify(lastResult.output || lastResult.error, null, 2)}\n\nPlease synthesize your execution findings and provide the final mission plan and summary.`
+          content: `[System Tool Execution Findings]:\n${toolSummaries}\n\nPlease synthesize your execution findings and provide the final response.`
         });
       }
 

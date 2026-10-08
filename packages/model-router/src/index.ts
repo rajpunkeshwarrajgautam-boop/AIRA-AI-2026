@@ -341,7 +341,7 @@ export class ModelRouter {
   }
 
   public getAdapter(policy: ModelPolicy): ModelAdapter {
-    const model = policy.model;
+    const model = policy?.model || 'aira-auto';
 
     // Test/dev only: explicit injection via model name
     if (model === 'mock-deterministic') {
