@@ -383,7 +383,10 @@ export class AgentRuntime extends EventEmitter {
         let selectedArgs: Record<string, unknown> = { query: run.prompt };
 
         const urlMatch = run.prompt.match(/https?:\/\/[^\s"'<>]+/);
-        if (urlMatch) {
+        if (urlMatch && run.prompt.toLowerCase().includes('screenshot')) {
+          selectedToolName = 'browser_screenshot';
+          selectedArgs = { url: urlMatch[0] };
+        } else if (urlMatch) {
           selectedToolName = 'browser_navigate';
           selectedArgs = { url: urlMatch[0] };
         } else if (run.prompt.toLowerCase().includes('form') && (run.prompt.toLowerCase().includes('populate') || run.prompt.toLowerCase().includes('fill') || run.prompt.toLowerCase().includes('submit'))) {

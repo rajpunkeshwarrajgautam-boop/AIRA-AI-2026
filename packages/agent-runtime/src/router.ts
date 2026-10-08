@@ -94,7 +94,8 @@ export class ServerIntentRouter {
     const readPatterns = [
       /\b(research|search|lookup|inspect|read\s+file|calculate|calc\s+|check\s+status|fetch\s+url)\b/,
       /\b(cite\s+sources|find\s+sources|extract\s+the\s+table|open\s+this\s+url|open\s+https?:\/\/|navigate\s+to\s+https?:\/\/)\b/,
-      /\b(tell\s+me\s+the\s+(page\s+)?heading|page\s+heading|heading\s+of|extract\s+heading|latest\s+commit|git\s+status|git\s+log|git\s+diff)\b/
+      /\b(tell\s+me\s+the\s+(page\s+)?heading|page\s+heading|heading\s+of|extract\s+heading|latest\s+commit|git\s+status|git\s+log|git\s+diff)\b/,
+      /\b(capture\s+screenshot|take\s+screenshot|screenshot\s+of|extract\s+(the\s+)?main\s+text|extract\s+text)\b/
     ];
     if (readPatterns.some(p => p.test(text))) {
       return 'READ';

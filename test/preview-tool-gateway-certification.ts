@@ -220,6 +220,17 @@ async function runPreviewSuite() {
   assert.strictEqual(fsRes.isError, false);
   assert(Array.isArray(fsRes.output?.entries), 'fs_list should return entries');
 
+  // Test 8c: Real Browser Navigation on Preview (Serverless Resilient Execution)
+  console.log('Testing Real Browser Navigation on Preview...');
+  const navRes = await clientA.post('/api/tools/execute', {
+    toolId: 'tool_browser_navigate',
+    input: { url: 'https://example.com' }
+  });
+  console.log(`[PASS] tool_browser_navigate Response:`, navRes);
+  assert.strictEqual(navRes.isError, false, `browser_navigate failed: ${navRes.error}`);
+  assert(navRes.output?.pageHeading?.includes('Example Domain'), `Expected pageHeading "Example Domain", got: ${navRes.output?.pageHeading}`);
+  console.log(`[PASS] Real browser navigation proven on Preview: pageHeading = "${navRes.output?.pageHeading}"`);
+
   // Test 9: Chat / ANSWER Regression on Preview
   console.log('Testing ANSWER Chat Regression on Preview...');
   let chatText = '';

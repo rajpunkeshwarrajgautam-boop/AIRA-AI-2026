@@ -111,6 +111,28 @@ async function runTests() {
   assert.strictEqual(res8.approvalRequired, false);
   console.log('PASS: Safely fell back to non-privileged ANSWER');
 
+  // Test 9: Explicit Browser Navigation & Extraction Prompts (Phase 3 Remediation Gate)
+  console.log('\n[TEST 9] Explicit browser URL prompts route to TOOL_ACTION with READ and approvalRequired=false');
+  const browserPrompts = [
+    'Open https://example.com and tell me the page heading.',
+    'Navigate to https://example.com',
+    'Open https://example.com',
+    'Open https://example.com and extract the main text.',
+    'Capture screenshot of https://example.com.'
+  ];
+
+  for (const prompt of browserPrompts) {
+    const res = await router.route({
+      prompt,
+      principal: testPrincipal
+    });
+    assert.strictEqual(res.intent, 'TOOL_ACTION', `Prompt "${prompt}" must route to TOOL_ACTION, got ${res.intent}`);
+    assert.strictEqual(res.executionTarget, 'TOOL_PIPELINE', `Prompt "${prompt}" executionTarget must be TOOL_PIPELINE`);
+    assert.strictEqual(res.sideEffectLevel, 'READ', `Prompt "${prompt}" sideEffectLevel must be READ, got ${res.sideEffectLevel}`);
+    assert.strictEqual(res.approvalRequired, false, `Prompt "${prompt}" must not require approval`);
+    console.log(`PASS: "${prompt}" -> TOOL_ACTION (TOOL_PIPELINE, READ, approval=false)`);
+  }
+
   console.log('\n=== ALL ROUTER & POLICY TESTS PASSED ===');
 }
 
