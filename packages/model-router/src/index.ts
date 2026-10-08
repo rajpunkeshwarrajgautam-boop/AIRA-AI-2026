@@ -56,7 +56,7 @@ export class DeterministicMockAdapter implements ModelAdapter {
     } else if (lastUserMessage.toLowerCase().includes('help') || lastUserMessage.toLowerCase().includes('hello')) {
       text = `Hello. I am Aira AI, your autonomous operating workspace. How can I assist your objectives today?`;
     } else {
-      text = `Execution complete. Objective: "${lastUserMessage}". Policy: ${policy.model} (maxTokens: ${policy.maxTokens}).`;
+      text = `Execution complete. Objective: "${lastUserMessage.slice(0, 100)}". Policy: ${policy.model} (maxTokens: ${policy.maxTokens}).`;
     }
 
     return {

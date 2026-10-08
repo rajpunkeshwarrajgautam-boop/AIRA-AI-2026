@@ -290,7 +290,12 @@ export class AgentRuntime extends EventEmitter {
         ) {
           selectedToolName = 'system_shell';
           selectedArgs = { command: run.prompt };
-        } else if (run.prompt.toLowerCase().includes('read') || isAgentMission) {
+        } else if (
+          run.prompt.toLowerCase().includes('read') ||
+          run.prompt.toLowerCase().includes('inspect') ||
+          run.prompt.toLowerCase().includes('structure') ||
+          run.prompt.toLowerCase().includes('analyze')
+        ) {
           selectedToolName = 'file_system_read';
           selectedArgs = { filePath: 'package.json' };
         } else if (run.prompt.toLowerCase().includes('hang safe')) {
