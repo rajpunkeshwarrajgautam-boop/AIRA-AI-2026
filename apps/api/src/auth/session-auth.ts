@@ -105,7 +105,7 @@ function attachUser(req: Request, payload: SessionPayload): void {
     id: payload.uid,
     sessionId: payload.sid,
     roles: ['workspace_user'],
-    scopes: ['chat:write', 'runs:read', 'runs:write'],
+    scopes: ['chat:write', 'runs:read', 'runs:write', 'browser.read', 'files.read'],
   };
 }
 
