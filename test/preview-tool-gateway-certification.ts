@@ -70,6 +70,53 @@ class PreviewClient {
       body: JSON.stringify(body)
     });
   }
+
+  async postStream(path: string, body: any, onEvent: (event: string, data: any) => void): Promise<void> {
+    const res = await fetch(`${PREVIEW_URL}${path}`, {
+      method: 'POST',
+      headers: {
+        ...BYPASS_HEADER,
+        'Content-Type': 'application/json',
+        Cookie: this.cookie
+      },
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(`POST ${path} stream returned ${res.status}: ${txt}`);
+    }
+
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let currentEvent = 'message';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          currentEvent = line.slice(7).trim();
+        } else if (line.startsWith('data: ')) {
+          const dataStr = line.slice(6).trim();
+          if (dataStr === '[DONE]') {
+            onEvent('done', '[DONE]');
+            continue;
+          }
+          try {
+            const parsed = JSON.parse(dataStr);
+            onEvent(currentEvent, parsed);
+          } catch {
+            onEvent(currentEvent, dataStr);
+          }
+        }
+      }
+    }
+  }
 }
 
 async function runPreviewSuite() {
@@ -175,10 +222,20 @@ async function runPreviewSuite() {
 
   // Test 9: Chat / ANSWER Regression on Preview
   console.log('Testing ANSWER Chat Regression on Preview...');
-  const chatRes = await clientA.post('/api/chat', {
-    messages: [{ role: 'user', content: 'What is 2 + 2? Reply with just the number 4.' }]
-  });
-  console.log(`[PASS] Chat response:`, chatRes);
+  let chatText = '';
+  await clientA.postStream(
+    '/api/chat/stream',
+    { messages: [{ role: 'user', content: 'What is 2 + 2? Reply with just the number 4.' }] },
+    (event, data) => {
+      if (event === 'content' && typeof data === 'string') {
+        chatText += data;
+      } else if (data && typeof data === 'object' && data.text) {
+        chatText += data.text;
+      }
+    }
+  );
+  console.log(`[PASS] Chat response received: "${chatText.trim()}"`);
+  assert(chatText.length > 0, 'Chat response must not be empty');
 
   console.log('\n========================================');
   console.log('PREVIEW CERTIFICATION COMPLETED SUCCESSFULLY!');
