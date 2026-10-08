@@ -45,7 +45,20 @@ export class DeterministicMockAdapter implements ModelAdapter {
       : undefined;
 
     let text = `Processed your request using ${policy.model}.`;
-    if (lastUserMessage.toLowerCase().includes('run command')) {
+    if (lastUserMessage.includes('[System Tool Execution Result')) {
+      if (lastUserMessage.includes('browser_navigate') || lastUserMessage.includes('pageHeading')) {
+        let heading = 'Example Domain';
+        const match = lastUserMessage.match(/"pageHeading":\s*"([^"]+)"/);
+        if (match) heading = match[1];
+        text = `The heading of the page is: ${heading}. Browser navigation and DOM extraction were completed successfully.`;
+      } else if (lastUserMessage.includes('repo_git_log') || lastUserMessage.includes('latest commit')) {
+        text = `Repository inspection complete. Retrieved commit history successfully.`;
+      } else if (lastUserMessage.includes('calculator')) {
+        text = `Calculation completed successfully. Result: 4096.`;
+      } else {
+        text = `Tool execution completed. Findings synthesized successfully.`;
+      }
+    } else if (lastUserMessage.toLowerCase().includes('run command')) {
       text = `{"type": "tool_call", "name": "system_shell", "arguments": {"command": "echo hello"}}`;
     } else if (lastUserMessage.toLowerCase().includes('hang safe')) {
       text = `{"type": "tool_call", "name": "hang_safe", "arguments": {}}`;

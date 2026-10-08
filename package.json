@@ -17,6 +17,8 @@
     "test:model-routing": "npx tsx test/model-router-provider-routing.ts",
     "test:router": "npx tsx test/intent-router.ts",
     "test:workflow": "npx tsx test/workflow-engine.ts",
+    "test:tools": "npx tsx test/tool-gateway-certification.ts",
+    "test:browser": "npx tsx test/browser-execution-suite.ts",
     "test:startup": "npx tsx test/startup.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc -b && vite build",
