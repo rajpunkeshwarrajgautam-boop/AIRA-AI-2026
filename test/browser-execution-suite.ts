@@ -283,6 +283,33 @@ async function runBrowserExecutionSuite() {
     assert(extractA.output?.title !== undefined);
     console.log('  -> PASS: Browser contexts isolated per ExecutionPrincipal.');
 
+    // -------------------------------------------------------------------------
+    // TEST BROWSER-8: BRAVE_SEARCH_API_KEY Absent Regression Test
+    // -------------------------------------------------------------------------
+    console.log('\n[TEST BROWSER-8] BRAVE_SEARCH_API_KEY unset regression: explicit browser URL -> browser_navigate SUCCESS');
+    const originalBraveKey = process.env.BRAVE_SEARCH_API_KEY;
+    delete process.env.BRAVE_SEARCH_API_KEY;
+
+    try {
+      const b8Res = await gateway.execute({
+        toolName: 'browser_navigate',
+        arguments: { url: 'https://example.com' },
+        context: {
+          runId: 'run_b8_brave_unset_' + sessionTag,
+          principal: principalA
+        }
+      });
+
+      assert.strictEqual(b8Res.isError, false, 'browser_navigate must succeed with BRAVE_SEARCH_API_KEY unset');
+      assert.strictEqual(b8Res.output?.status, 200);
+      assert(b8Res.output?.pageHeading.includes('Example Domain'), `Expected "Example Domain", got: ${b8Res.output?.pageHeading}`);
+      console.log(`  -> PASS: browser_navigate executed successfully without BRAVE_SEARCH_API_KEY: pageHeading = "${b8Res.output.pageHeading}"`);
+    } finally {
+      if (originalBraveKey) {
+        process.env.BRAVE_SEARCH_API_KEY = originalBraveKey;
+      }
+    }
+
     console.log('\n================================================================');
     console.log('  ALL BROWSER EXECUTION CERTIFICATION TESTS PASSED (100% GREEN)');
     console.log('================================================================');

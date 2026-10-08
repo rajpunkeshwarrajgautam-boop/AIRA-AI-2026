@@ -603,12 +603,13 @@ export class ToolGateway extends EventEmitter {
         id: 'tool_browser_screenshot',
         name: 'browser_screenshot',
         version: 1,
-        description: 'Capture a screenshot of the current page.',
+        description: 'Capture a screenshot of the current page or a specified URL.',
         category: 'browser',
         source: 'native',
         parameters: {
           type: 'object',
           properties: {
+            url: { type: 'string', description: 'Optional URL to navigate to before capturing screenshot' },
             selector: { type: 'string', description: 'Optional element selector to screenshot' }
           }
         },
@@ -622,6 +623,9 @@ export class ToolGateway extends EventEmitter {
         provider: 'aira-browser'
       },
       execute: async (args, ctx) => {
+        if (args.url) {
+          await this.browserAdapter.navigate(ctx.principal, String(args.url));
+        }
         return this.browserAdapter.screenshot(ctx.principal, args.selector);
       }
     });
