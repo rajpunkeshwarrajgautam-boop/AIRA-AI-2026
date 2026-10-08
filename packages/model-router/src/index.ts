@@ -97,16 +97,10 @@ export class DeterministicMockAdapter implements ModelAdapter {
   ): Promise<ModelCompletionResult> {
     const result = await this.complete(messages, policy);
     if (result.thinking) {
-      const thinkingParts = result.thinking.split(' ');
-      for (const part of thinkingParts) {
-        onChunk({ thinking: part + ' ' });
-        await new Promise(r => setTimeout(r, 10));
-      }
+      onChunk({ thinking: result.thinking });
     }
-    const textParts = result.text.split(' ');
-    for (const part of textParts) {
-      onChunk({ text: part + ' ' });
-      await new Promise(r => setTimeout(r, 15));
+    if (result.text) {
+      onChunk({ text: result.text });
     }
     return result;
   }
