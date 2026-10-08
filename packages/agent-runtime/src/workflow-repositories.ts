@@ -23,9 +23,10 @@ export interface WorkflowRepository {
 
 export class PostgresWorkflowRepository implements WorkflowRepository {
   async saveWorkflowDefinition(def: WorkflowDefinition): Promise<void> {
+    const now = Date.now();
     await db('workflow_definitions').insert({
       id: def.workflowId,
-      version: def.version,
+      version: def.version || 1,
       name: def.name,
       description: def.description || null,
       principal_id: def.principalId || null,
@@ -33,8 +34,8 @@ export class PostgresWorkflowRepository implements WorkflowRepository {
       steps: JSON.stringify(def.steps),
       execution_policy: JSON.stringify(def.executionPolicy || {}),
       output_schema: JSON.stringify(def.outputSchema || {}),
-      created_at: def.createdAt,
-      updated_at: def.updatedAt
+      created_at: def.createdAt ?? now,
+      updated_at: def.updatedAt ?? now
     }).onConflict('id').merge();
   }
 

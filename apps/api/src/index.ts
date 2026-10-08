@@ -16,7 +16,9 @@ import {
   CreateRunRequestSchema,
   ApprovalDecisionSchema,
   AutomationDefinitionSchema,
-  AgentDefinition
+  AgentDefinition,
+  WorkflowDefinitionSchema,
+  validateWorkflowDag
 } from '../../../packages/contracts/src/index.js';
 
 // -----------------------------------------------------------------------
@@ -750,7 +752,17 @@ app.post('/api/workflows/runs', async (req: Request, res: Response) => {
     const wfCompiler = agentRuntime.getWorkflowCompiler();
     const wfEngine = agentRuntime.getWorkflowEngine();
 
-    const wfDef = definition || await wfCompiler.compile(prompt, principal);
+    let wfDef: any;
+    if (definition) {
+      wfDef = WorkflowDefinitionSchema.parse(definition);
+      const dagValidation = validateWorkflowDag(wfDef);
+      if (!dagValidation.valid) {
+        return res.status(400).json({ error: dagValidation.error || 'Invalid workflow DAG' });
+      }
+    } else {
+      wfDef = await wfCompiler.compile(prompt, principal);
+    }
+
     const airaRun = await agentRuntime.createRun({
       prompt: prompt || wfDef.name,
       intent: 'WORKFLOW'
