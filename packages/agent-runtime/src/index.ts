@@ -23,10 +23,16 @@ import { BrainV2KnowledgeEngine } from '../../knowledge/src/index.js';
 import { RunRepository } from './repositories.js';
 import { CapabilityRegistry } from './registry.js';
 import { ServerIntentRouter } from './router.js';
+import { WorkflowRepository, PostgresWorkflowRepository } from './workflow-repositories.js';
+import { WorkflowEngine } from './workflow-engine.js';
+import { WorkflowCompiler } from './workflow-compiler.js';
 
 export class AgentRuntime extends EventEmitter {
   private eventStreams: Map<string, EventEmitter> = new Map();
   private router: ServerIntentRouter;
+  private workflowRepo: WorkflowRepository;
+  private workflowEngine: WorkflowEngine;
+  private workflowCompiler: WorkflowCompiler;
 
   constructor(
     private modelRouter: ModelRouter,
@@ -36,10 +42,24 @@ export class AgentRuntime extends EventEmitter {
     private runRepo: RunRepository,
     private workspaceRoot = process.cwd(),
     private capabilityRegistry: CapabilityRegistry = new CapabilityRegistry(),
-    router?: ServerIntentRouter
+    router?: ServerIntentRouter,
+    workflowRepo?: WorkflowRepository,
+    workflowEngine?: WorkflowEngine,
+    workflowCompiler?: WorkflowCompiler
   ) {
     super();
     this.router = router || new ServerIntentRouter(this.capabilityRegistry, this.modelRouter);
+    this.workflowRepo = workflowRepo || new PostgresWorkflowRepository();
+    this.workflowCompiler = workflowCompiler || new WorkflowCompiler(this.modelRouter);
+    this.workflowEngine = workflowEngine || new WorkflowEngine(
+      this.workflowRepo,
+      this.runRepo,
+      this.approvalKernel,
+      this.toolRegistry,
+      this.modelRouter,
+      this.workspaceRoot,
+      (runId, type, data) => this.emitRunEvent(runId, type, data)
+    );
   }
 
   public getCapabilityRegistry(): CapabilityRegistry {
@@ -48,6 +68,18 @@ export class AgentRuntime extends EventEmitter {
 
   public getRouter(): ServerIntentRouter {
     return this.router;
+  }
+
+  public getWorkflowEngine(): WorkflowEngine {
+    return this.workflowEngine;
+  }
+
+  public getWorkflowRepository(): WorkflowRepository {
+    return this.workflowRepo;
+  }
+
+  public getWorkflowCompiler(): WorkflowCompiler {
+    return this.workflowCompiler;
   }
 
   public async getRun(runId: string): Promise<Run | undefined> {
@@ -174,6 +206,15 @@ export class AgentRuntime extends EventEmitter {
     if (!run || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)) {
       return false;
     }
+    const wfRun = await this.workflowRepo.getWorkflowRunByRunId(runId);
+    if (wfRun && ['CREATED', 'QUEUED', 'RUNNING', 'WAITING_FOR_APPROVAL'].includes(wfRun.state)) {
+      const principal: ExecutionPrincipal = {
+        userId: run.principalId,
+        sessionId: run.sessionId,
+        role: 'user'
+      };
+      await this.workflowEngine.cancelWorkflow(wfRun.id, principal);
+    }
     await this.transitionRunState(runId, 'CANCELLED', 'Run was cancelled programmatically.');
     return true;
   }
@@ -186,6 +227,25 @@ export class AgentRuntime extends EventEmitter {
     }
     run.pendingApproval = request;
     
+    // Check if this approval was for a workflow step
+    if (typeof request.toolCall?.toolId === 'string' && request.toolCall.toolId.startsWith('workflow_step_')) {
+      const wfRun = await this.workflowRepo.getWorkflowRunByRunId(request.runId);
+      if (wfRun && wfRun.state === 'WAITING_FOR_APPROVAL' && wfRun.pendingApprovalStepId) {
+        const principal: ExecutionPrincipal = {
+          userId: run.principalId,
+          sessionId: run.sessionId,
+          role: 'user'
+        };
+        await this.workflowEngine.resolveStepApproval(
+          wfRun.id,
+          wfRun.pendingApprovalStepId,
+          decision === 'APPROVE' ? 'APPROVED' : 'REJECTED',
+          principal
+        );
+        return true;
+      }
+    }
+
     if (decision === 'REJECT') {
       run.executionCheckpoint = 'COMPLETED';
       await this.runRepo.saveRun(run);
@@ -248,6 +308,43 @@ export class AgentRuntime extends EventEmitter {
       });
       await this.emitRunEvent(runId, 'content.delta', { delta: msg });
       await this.transitionRunState(runId, 'COMPLETED');
+      return;
+    }
+
+    // Checkpoint 0.5: Workflow Engine execution target
+    if (run.routingDecision?.executionTarget === 'WORKFLOW_ENGINE') {
+      if (run.state !== 'RUNNING') {
+        await this.transitionRunState(runId, 'RUNNING');
+      }
+
+      let wfRun = await this.workflowRepo.getWorkflowRunByRunId(runId);
+      if (!wfRun) {
+        const principal: ExecutionPrincipal = {
+          userId: run.principalId,
+          sessionId: run.sessionId || `sess_${run.principalId}`,
+          role: 'user',
+          workspaceId: run.workspaceId || undefined
+        };
+        const wfDef = await this.workflowCompiler.compile(run.prompt, principal);
+        wfRun = await this.workflowEngine.createWorkflowRun(wfDef, run, principal);
+        run.executionCheckpoint = 'WORKFLOW_RUNNING';
+        await this.runRepo.saveRun(run);
+      }
+
+      await this.workflowEngine.executeWorkflowRun(wfRun.id);
+
+      const updatedWfRun = await this.workflowRepo.getWorkflowRun(wfRun.id);
+      if (updatedWfRun?.state === 'COMPLETED') {
+        const freshRun = await this.runRepo.getRun(runId);
+        if (freshRun && freshRun.state !== 'COMPLETED') {
+          await this.transitionRunState(runId, 'COMPLETED');
+        }
+      } else if (updatedWfRun?.state === 'FAILED') {
+        const freshRun = await this.runRepo.getRun(runId);
+        if (freshRun && freshRun.state !== 'FAILED') {
+          await this.transitionRunState(runId, 'FAILED', updatedWfRun.error || 'Workflow execution failed.');
+        }
+      }
       return;
     }
 
@@ -549,7 +646,22 @@ export class AgentRuntime extends EventEmitter {
       }
     }
 
+    if (run.executionCheckpoint === 'WORKFLOW_RUNNING') {
+      const wfRun = await this.workflowRepo.getWorkflowRunByRunId(runId);
+      if (wfRun && ['RUNNING', 'CREATED', 'QUEUED'].includes(wfRun.state)) {
+        await this.workflowEngine.executeWorkflowRun(wfRun.id);
+        return;
+      }
+    }
+
     // Otherwise, just kick off the loop from the current checkpoint
     await this.executeRunLoop(runId);
   }
 }
+
+export * from './workflow-engine.js';
+export * from './workflow-compiler.js';
+export * from './workflow-repositories.js';
+export * from './registry.js';
+export * from './router.js';
+export * from './repositories.js';

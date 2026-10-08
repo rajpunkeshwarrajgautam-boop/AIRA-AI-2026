@@ -131,16 +131,26 @@ export class ServerIntentRouter {
     }
 
     // Rule C: Workflows
+    const isMultiStepPipeline = (
+      /\b(research|investigate|study)\b/.test(text) &&
+      /\b(summarize|extract|analyze)\b/.test(text) &&
+      /\b(report|brief|synthesize|document|whitepaper)\b/.test(text)
+    );
     const isWorkflow = (
       /\b(run|execute|trigger|start)\s+(my\s+|the\s+)?(approved\s+|weekly\s+|reporting\s+)*workflow\b/.test(text) ||
-      (/\bworkflow\b/.test(text) && /\b(run|execute|trigger|start)\b/.test(text))
+      (/\bworkflow\b/.test(text) && /\b(run|execute|trigger|start)\b/.test(text)) ||
+      isMultiStepPipeline ||
+      (advisoryIntent === 'WORKFLOW')
     );
     if (isWorkflow) {
+      const isDestructive = sideEffect === 'DESTRUCTIVE';
       return {
         intent: 'WORKFLOW',
-        confidence: 0.91,
-        reason: 'Identified multi-step workflow execution intent.',
-        sideEffectLevel: 'WRITE',
+        confidence: 0.95,
+        reason: isMultiStepPipeline
+          ? 'Identified multi-step DAG pipeline (research -> extract findings -> synthesize report).'
+          : 'Identified multi-step workflow execution intent.',
+        sideEffectLevel: isDestructive ? 'DESTRUCTIVE' : 'WRITE',
         approvalRequired: true
       };
     }

@@ -133,12 +133,12 @@ export class CapabilityRegistry {
       id: 'cap_workflow_engine',
       name: 'Multi-Step Workflow Engine',
       executionType: 'WORKFLOW',
-      availability: 'COMING_SOON',
+      availability: 'GA',
       sideEffectClass: 'WRITE',
       approvalPolicy: 'require_approval',
       requiredPrincipalScope: [],
       handler: 'workflow_engine',
-      status: 'NOT_READY'
+      status: 'READY'
     });
   }
 }

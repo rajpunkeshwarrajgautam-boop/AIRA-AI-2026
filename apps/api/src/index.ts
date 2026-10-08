@@ -16,7 +16,9 @@ import {
   CreateRunRequestSchema,
   ApprovalDecisionSchema,
   AutomationDefinitionSchema,
-  AgentDefinition
+  AgentDefinition,
+  WorkflowDefinitionSchema,
+  validateWorkflowDag
 } from '../../../packages/contracts/src/index.js';
 
 // -----------------------------------------------------------------------
@@ -90,7 +92,8 @@ app.get('/api/health', (_req: Request, res: Response) => {
       agentRuntime: 'ONLINE',
       automationEngine: 'ONLINE',
       capabilityRegistry: 'ONLINE',
-      intentRouter: 'ONLINE'
+      intentRouter: 'ONLINE',
+      workflowEngine: 'ONLINE'
     },
     productionMockFallback: providers.length === 0 ? 'ACTIVE (dev/test only)' : 'DISABLED',
     version: '2026.2.0',
@@ -457,6 +460,21 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         res.write(`event: content_delta\ndata: ${JSON.stringify({ text: evt.data.delta })}\n\n`);
       } else if (evt.type === 'thinking.delta') {
         res.write(`event: thinking_delta\ndata: ${JSON.stringify({ thinking: evt.data.delta })}\n\n`);
+      } else if (evt.type === 'workflow.created' || evt.type === 'workflow.started') {
+        res.write(`event: workflow_started\ndata: ${JSON.stringify(evt.data)}\n\n`);
+      } else if (evt.type === 'workflow.step.started') {
+        res.write(`event: workflow_step_started\ndata: ${JSON.stringify(evt.data)}\n\n`);
+      } else if (evt.type === 'workflow.step.progress') {
+        res.write(`event: workflow_step_progress\ndata: ${JSON.stringify(evt.data)}\n\n`);
+      } else if (evt.type === 'workflow.step.completed') {
+        res.write(`event: workflow_step_completed\ndata: ${JSON.stringify(evt.data)}\n\n`);
+      } else if (evt.type === 'workflow.step.failed') {
+        res.write(`event: workflow_step_failed\ndata: ${JSON.stringify(evt.data)}\n\n`);
+      } else if (evt.type === 'workflow.completed') {
+        res.write(`event: workflow_completed\ndata: ${JSON.stringify(evt.data)}\n\n`);
+        res.write(`event: done\ndata: [DONE]\n\n`);
+        stream.off('event', handler);
+        res.end();
       } else if (evt.type === 'artifact.created') {
         res.write(`event: artifact_open\ndata: ${JSON.stringify(evt.data)}\n\n`);
         res.write(`event: artifact_delta\ndata: ${JSON.stringify({ chunk: evt.data.content })}\n\n`);
@@ -694,15 +712,122 @@ app.post('/api/automations/:id/disable', async (req: Request, res: Response) => 
   }
 });
 
-app.get('/api/automations/:id/runs', async (req: Request, res: Response) => {
-  const item = automationEngine.getAutomation(req.params.id);
-  if (!item) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
-  
-  const allRuns = await agentRuntime.listRuns();
-  const automationRuns = allRuns.filter((r: any) =>
-    r.prompt?.startsWith(`[Automated Trigger: ${item.name}]`)
-  );
-  res.json(automationRuns);
+// -----------------------------------------------------------------------
+// Workflows — Server-Authoritative Execution Engine (Phase 18)
+// -----------------------------------------------------------------------
+
+app.get('/api/workflows/runs', async (req: Request, res: Response) => {
+  try {
+    const wfRepo = agentRuntime.getWorkflowRepository();
+    const runs = await wfRepo.listWorkflowRuns(req.principal!.userId);
+    res.json(runs);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/workflows/runs/:id', async (req: Request, res: Response) => {
+  try {
+    const wfRepo = agentRuntime.getWorkflowRepository();
+    const wfRun = await wfRepo.getWorkflowRun(req.params.id);
+    if (!wfRun || wfRun.principalId !== req.principal!.userId) {
+      return res.status(404).json({ error: `Workflow run "${req.params.id}" not found.` });
+    }
+    const steps = await wfRepo.getWorkflowSteps(wfRun.id);
+    const definition = await wfRepo.getWorkflowDefinition(wfRun.workflowId);
+    res.json({ ...wfRun, steps, definition });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/workflows/runs', async (req: Request, res: Response) => {
+  try {
+    const { prompt, definition } = req.body;
+    if (!prompt && !definition) {
+      return res.status(400).json({ error: 'Either "prompt" or "definition" is required.' });
+    }
+
+    const principal = req.principal!;
+    const wfCompiler = agentRuntime.getWorkflowCompiler();
+    const wfEngine = agentRuntime.getWorkflowEngine();
+
+    let wfDef: any;
+    if (definition) {
+      wfDef = WorkflowDefinitionSchema.parse(definition);
+      const dagValidation = validateWorkflowDag(wfDef);
+      if (!dagValidation.valid) {
+        return res.status(400).json({ error: dagValidation.error || 'Invalid workflow DAG' });
+      }
+    } else {
+      wfDef = await wfCompiler.compile(prompt, principal);
+    }
+
+    const airaRun = await agentRuntime.createRun({
+      prompt: prompt || wfDef.name,
+      intent: 'WORKFLOW'
+    }, principal);
+
+    const wfRun = await wfEngine.createWorkflowRun(wfDef, airaRun, principal);
+    await wfEngine.executeWorkflowRun(wfRun.id);
+    const updatedWfRun = await agentRuntime.getWorkflowRepository().getWorkflowRun(wfRun.id);
+    const steps = await agentRuntime.getWorkflowRepository().getWorkflowSteps(wfRun.id);
+
+    res.status(201).json({ ...(updatedWfRun || wfRun), steps });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/workflows/runs/:id/cancel', async (req: Request, res: Response) => {
+  try {
+    const wfRepo = agentRuntime.getWorkflowRepository();
+    const wfRun = await wfRepo.getWorkflowRun(req.params.id);
+    if (!wfRun || wfRun.principalId !== req.principal!.userId) {
+      return res.status(404).json({ error: `Workflow run "${req.params.id}" not found.` });
+    }
+
+    const wfEngine = agentRuntime.getWorkflowEngine();
+    const cancelled = await wfEngine.cancelWorkflow(wfRun.id, req.principal!);
+    if (!cancelled) {
+      return res.status(400).json({ error: 'Cannot cancel workflow run (not found or in terminal state).' });
+    }
+
+    res.json({ status: 'CANCELLED', workflowRunId: wfRun.id });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/workflows/runs/:id/steps/:stepId/approve', async (req: Request, res: Response) => {
+  try {
+    const { decision } = req.body;
+    if (!['APPROVE', 'REJECT'].includes(decision)) {
+      return res.status(400).json({ error: 'decision must be APPROVE or REJECT' });
+    }
+
+    const wfRepo = agentRuntime.getWorkflowRepository();
+    const wfRun = await wfRepo.getWorkflowRun(req.params.id);
+    if (!wfRun || wfRun.principalId !== req.principal!.userId) {
+      return res.status(404).json({ error: `Workflow run "${req.params.id}" not found.` });
+    }
+
+    const wfEngine = agentRuntime.getWorkflowEngine();
+    const success = await wfEngine.resolveStepApproval(
+      wfRun.id,
+      req.params.stepId,
+      decision === 'APPROVE' ? 'APPROVED' : 'REJECTED',
+      req.principal!
+    );
+
+    if (!success) {
+      return res.status(400).json({ error: 'Could not resolve approval for step.' });
+    }
+
+    res.json({ status: 'DECISION_RECORDED', decision });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 // -----------------------------------------------------------------------
