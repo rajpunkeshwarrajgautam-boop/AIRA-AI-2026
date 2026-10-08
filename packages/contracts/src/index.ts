@@ -360,7 +360,12 @@ export const CitationSchema = z.object({
   sourceTitle: z.string(),
   uri: z.string().optional(),
   snippet: z.string(),
-  score: z.number().min(0).max(1).optional()
+  score: z.number().min(0).max(1).optional(),
+  provenance: z.object({
+    toolCallId: z.string().optional(),
+    retrievalMechanism: z.string(),
+    timestamp: z.number()
+  }).optional()
 });
 export type Citation = z.infer<typeof CitationSchema>;
 

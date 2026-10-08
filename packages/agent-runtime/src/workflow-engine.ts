@@ -14,6 +14,7 @@ import { RunRepository } from './repositories.js';
 import { ApprovalKernel } from '../../approvals/src/index.js';
 import { ToolRegistry, ToolGateway } from '../../tool-runtime/src/index.js';
 import { ModelRouter } from '../../model-router/src/index.js';
+import { ResearchService } from './research.js';
 
 export class WorkflowEngine {
   constructor(
@@ -24,7 +25,8 @@ export class WorkflowEngine {
     private modelRouter: ModelRouter,
     private workspaceRoot: string = process.cwd(),
     private eventEmitterCallback?: (runId: string, type: any, data: any) => Promise<void>,
-    private toolGateway?: ToolGateway
+    private toolGateway?: ToolGateway,
+    private researchService?: ResearchService
   ) {}
 
   /**
@@ -459,13 +461,30 @@ export class WorkflowEngine {
 
     if (capability === 'RESEARCH') {
       const topic = input.topic || input.prompt || stepDef.name;
+      
+      let researchResults = '';
+      if (this.researchService) {
+        const res = await this.researchService.executeResearch({ prompt: topic, runId: workflowRun.runId });
+        if (res.freshnessRequired && !res.providerReady) {
+          researchResults = 'RESEARCH_PROVIDER_NOT_READY: Current/fresh data unavailable.';
+        } else {
+          researchResults = res.citations.map(c => `[${c.sourceTitle}] ${c.snippet}`).join('\n\n');
+        }
+      }
+
       const airaRun = await this.runRepo.getRun(workflowRun.runId);
       const requestedModel = airaRun?.modelPolicy?.model || 'aira-auto';
       const policy = this.modelRouter.resolvePolicy(requestedModel, 'RESEARCH');
       const adapter = this.modelRouter.getAdapter(policy);
-      const prompt = `Conduct comprehensive research on: "${topic}". Decompose key claims, cite authoritative sources with DOI/dates, and synthesize findings.`;
+      
+      const now = new Date();
+      const currentContextMsg = `AIRA RUNTIME CONTEXT
+Current date: ${now.toDateString()}
+Current UTC time: ${now.toISOString()}`;
+
+      const prompt = `Conduct comprehensive research on: "${topic}". Decompose key claims, cite authoritative sources with DOI/dates, and synthesize findings.\n\nRetrieved Evidence:\n${researchResults}`;
       const res = await adapter.complete([
-        { role: 'system', content: 'You are Aira AI operating in rigorous research mode. Deliver evidence-backed synthesis with citations.' },
+        { role: 'system', content: 'You are Aira AI operating in rigorous research mode. Deliver evidence-backed synthesis with citations.\n' + currentContextMsg },
         { role: 'user', content: prompt }
       ], policy);
       return { topic, summary: res.text };
