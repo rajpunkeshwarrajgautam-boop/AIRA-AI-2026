@@ -1,7 +1,8 @@
 import { chromium } from 'playwright';
 import assert from 'assert';
 
-const PREVIEW_URL = 'https://aira-ai-2026-7rma0ejza-rajpunkeshwarrajgautam-boops-projects.vercel.app';
+const PREVIEW_URL = 'https://aira-ai-2026-i6v9bc3p0-rajpunkeshwarrajgautam-boops-projects.vercel.app';
+const BYPASS_SECRET = 'QQUvz2kp1hnrbJeAicx0ZyH3kL18z54r';
 
 async function runPreviewSuite() {
   process.stdout.write('=== VERCEL PREVIEW CERTIFICATION SUITE ===\n');
@@ -17,12 +18,27 @@ async function runPreviewSuite() {
     }
   });
 
+  // Intercept requests and inject bypass header only for vercel.app
+  await page.route('**/*', async (route, request) => {
+    const url = request.url();
+    if (url.includes('vercel.app')) {
+      const headers = {
+        ...request.headers(),
+        'x-vercel-protection-bypass': BYPASS_SECRET,
+      };
+      await route.continue({ headers });
+    } else {
+      await route.continue();
+    }
+  });
+
   try {
-    process.stdout.write('Navigating to preview deployment...\n');
-    await page.goto(PREVIEW_URL, { waitUntil: 'networkidle', timeout: 30000 });
+    process.stdout.write('Navigating to preview deployment with bypass secret...\n');
+    await page.goto(PREVIEW_URL, { waitUntil: 'networkidle', timeout: 35000 });
 
     const title = await page.title();
     process.stdout.write(`Preview page loaded: "${title}"\n`);
+    assert.ok(!title.includes('Login – Vercel'), 'Failed to bypass Vercel SSO protection');
 
     const textarea = page.locator('textarea');
     await textarea.waitFor({ state: 'visible', timeout: 15000 });
@@ -66,6 +82,15 @@ async function runPreviewSuite() {
       const count = await proseElements.count();
       return (await proseElements.nth(count - 1).innerText()).trim();
     }
+
+    // -------------------------------------------------------------
+    // PREVIEW TEST 0: PREVIEW_RELEASE_OK SMOKE
+    // -------------------------------------------------------------
+    process.stdout.write('\n--- PREVIEW TEST 0 (PREVIEW_RELEASE_OK SMOKE) ---\n');
+    const smoke = await sendMessageAndWaitForResponse('Reply exactly with PREVIEW_RELEASE_OK');
+    process.stdout.write(`Smoke response:\n${smoke}\n`);
+    assert.ok(/PREVIEW_RELEASE_OK/i.test(smoke), 'Preview smoke failed: PREVIEW_RELEASE_OK missing');
+    process.stdout.write('✅ PREVIEW TEST 0 PASSED: Visible PREVIEW_RELEASE_OK received.\n');
 
     // -------------------------------------------------------------
     // PREVIEW TEST A: ANSWER
@@ -118,7 +143,7 @@ async function runPreviewSuite() {
     process.stdout.write('✅ PREVIEW TEST E PASSED: Server policy enforced; destructive operation halted with approval requirement banner.\n');
 
     process.stdout.write('\n==================================================\n');
-    process.stdout.write('ALL PREVIEW CERTIFICATION TESTS (A-E) PASSED!\n');
+    process.stdout.write('ALL PREVIEW CERTIFICATION TESTS (0, A-E) PASSED!\n');
     process.stdout.write('==================================================\n');
   } catch (err: any) {
     process.stderr.write(`Preview certification failed: ${err.message}\n`);

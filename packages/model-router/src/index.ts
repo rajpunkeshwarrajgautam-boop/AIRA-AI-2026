@@ -183,44 +183,64 @@ export class OpenAIAdapter implements ModelAdapter {
     if (!this.apiKey) {
       throw new Error('OpenAI API key is not configured.');
     }
-    const response = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: policy.model.startsWith('aira-')
-          ? (this.baseUrl.includes('api.openai.com') && policy.model === 'aira-fast' ? 'gpt-4o-mini' : this.airaModel)
-          : policy.model,
-        messages: messages.map(m => {
-          if (m.role === 'tool') {
-            return { role: 'tool', content: m.content, tool_call_id: m.toolCallId || 'call_default' };
-          }
-          return { role: m.role, content: m.content };
-        }),
-        max_tokens: policy.maxTokens,
-        temperature: policy.temperature
-      })
-    });
+    const maxRetries = 2;
+    let lastError: Error | null = null;
 
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`OpenAI API error (${response.status}): ${errText}`);
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const response = await fetch(`${this.baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${this.apiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model: policy.model.startsWith('aira-')
+              ? (this.baseUrl.includes('api.openai.com') && policy.model === 'aira-fast' ? 'gpt-4o-mini' : this.airaModel)
+              : policy.model,
+            messages: messages.map(m => {
+              if (m.role === 'tool') {
+                return { role: 'tool', content: m.content, tool_call_id: m.toolCallId || 'call_default' };
+              }
+              return { role: m.role, content: m.content };
+            }),
+            max_tokens: policy.maxTokens,
+            temperature: policy.temperature
+          })
+        });
+
+        if (!response.ok) {
+          const errText = await response.text();
+          if ((response.status >= 500 || response.status === 429) && attempt < maxRetries) {
+            await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+            continue;
+          }
+          throw new Error(`OpenAI API error (${response.status}): ${errText}`);
+        }
+
+        const data = await response.json();
+        const text = data.choices?.[0]?.message?.content || '';
+
+        return {
+          text,
+          usage: {
+            promptTokens: data.usage?.prompt_tokens || 0,
+            completionTokens: data.usage?.completion_tokens || 0,
+            totalTokens: data.usage?.total_tokens || 0
+          },
+          model: data.model || policy.model
+        };
+      } catch (err: any) {
+        lastError = err;
+        if (attempt < maxRetries && (err.message.includes('500') || err.message.includes('429') || err.message.includes('fetch failed'))) {
+          await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+          continue;
+        }
+        throw err;
+      }
     }
 
-    const data = await response.json();
-    const text = data.choices?.[0]?.message?.content || '';
-
-    return {
-      text,
-      usage: {
-        promptTokens: data.usage?.prompt_tokens || 0,
-        completionTokens: data.usage?.completion_tokens || 0,
-        totalTokens: data.usage?.total_tokens || 0
-      },
-      model: data.model || policy.model
-    };
+    throw lastError || new Error('Provider request failed after retries.');
   }
 
   async stream(
