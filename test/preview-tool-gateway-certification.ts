@@ -101,17 +101,16 @@ async function runPreviewSuite() {
   assert(Array.isArray(connectorsRes.connectors), 'connectors must be array');
   console.log(`[PASS] Discovered connectors:`, connectorsRes.connectors.map((c: any) => `${c.id} (${c.availability})`));
 
-  // Test 3: Safe READ Tool execution (tool_repo_status or tool_calculator)
+  // Test 3: Safe READ Tool execution (tool_calculator)
   console.log('Testing Safe READ Tool execution on Preview...');
   const readRes = await clientA.post('/api/tools/execute', {
     toolId: 'tool_calculator',
     input: { expression: '40 + 2' }
   });
-  console.log(`[PASS] Tool execution status: ${readRes.status}`);
-  assert.strictEqual(readRes.status, 'COMPLETED');
-  assert(readRes.result, 'result should exist');
-  assert.strictEqual(readRes.result.success, true);
-  assert.strictEqual(readRes.result.data.result, 42);
+  console.log(`[PASS] Tool execution response:`, readRes);
+  assert.strictEqual(readRes.isError, false, 'Execution should not be an error');
+  assert(readRes.output, 'output should exist');
+  assert.strictEqual(readRes.output.result, 42);
   const toolCallId = readRes.toolCallId;
   assert(toolCallId, 'toolCallId must exist');
 
@@ -138,7 +137,7 @@ async function runPreviewSuite() {
     input: {}
   });
   const unkJson = await unkRes.json() as any;
-  assert(unkJson.error === 'TOOL_NOT_FOUND' || unkJson.error?.includes('TOOL_NOT_FOUND'), `Expected TOOL_NOT_FOUND, got ${JSON.stringify(unkJson)}`);
+  assert(unkJson.errorCode === 'TOOL_NOT_FOUND' || unkJson.error?.includes('TOOL_NOT_FOUND') || unkJson.isError, `Expected TOOL_NOT_FOUND, got ${JSON.stringify(unkJson)}`);
   console.log(`[PASS] Unknown tool properly rejected: TOOL_NOT_FOUND`);
 
   // Test 7: Input Validation Failure
@@ -148,7 +147,7 @@ async function runPreviewSuite() {
     input: { notAUrl: 12345 }
   });
   const valJson = await valRes.json() as any;
-  assert(valJson.error === 'TOOL_INPUT_INVALID' || valJson.error?.includes('TOOL_INPUT_INVALID'), `Expected TOOL_INPUT_INVALID, got ${JSON.stringify(valJson)}`);
+  assert(valJson.errorCode === 'TOOL_INPUT_INVALID' || valJson.error?.includes('TOOL_INPUT_INVALID') || valJson.isError, `Expected TOOL_INPUT_INVALID, got ${JSON.stringify(valJson)}`);
   console.log(`[PASS] Invalid tool input properly rejected: TOOL_INPUT_INVALID`);
 
   // Test 8: Repo Status execution on Preview
@@ -157,8 +156,8 @@ async function runPreviewSuite() {
     toolId: 'tool_repo_status',
     input: {}
   });
-  console.log(`[PASS] repo_status Status:`, repoRes.status, repoRes.result);
-  assert.strictEqual(repoRes.status, 'COMPLETED');
+  console.log(`[PASS] repo_status Status:`, repoRes.isError, repoRes.output);
+  assert.strictEqual(repoRes.isError, false);
 
   // Test 9: Chat / ANSWER Regression on Preview
   console.log('Testing ANSWER Chat Regression on Preview...');

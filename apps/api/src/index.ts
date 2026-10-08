@@ -544,7 +544,7 @@ app.get('/api/tools', (_req: Request, res: Response) => {
 
 app.post('/api/tools/execute', async (req: Request, res: Response) => {
   try {
-    const { toolName, toolId, arguments: args, idempotencyKey, runId } = req.body;
+    const { toolName, toolId, arguments: args, input, idempotencyKey, runId } = req.body;
     const name = toolName || toolId;
     if (!name) {
       return res.status(400).json({ error: 'toolName or toolId is required.' });
@@ -552,7 +552,7 @@ app.post('/api/tools/execute', async (req: Request, res: Response) => {
     const effectiveRunId = runId || `run_direct_${Date.now()}`;
     const result = await toolGateway.execute({
       toolName: name,
-      arguments: args || {},
+      arguments: args || input || {},
       context: {
         runId: effectiveRunId,
         principal: req.principal!,
