@@ -1,6 +1,6 @@
 import assert from 'node:assert';
 
-const PREVIEW_URL = 'https://aira-ai-2026-git-f-50a13b-rajpunkeshwarrajgautam-boops-projects.vercel.app';
+const PREVIEW_URL = process.env.PREVIEW_URL || 'https://aira-ai-2026-b53sxkkko-rajpunkeshwarrajgautam-boops-projects.vercel.app';
 const BYPASS_HEADER = { 'x-vercel-protection-bypass': 'QQUvz2kp1hnrbJeAicx0ZyH3kL18z54r' };
 
 class PreviewClient {
@@ -150,6 +150,7 @@ async function runPreviewWorkflowCertification() {
   assert.strictEqual(routingDecision.executionTarget, 'WORKFLOW_ENGINE', 'TEST A FAIL: target must be WORKFLOW_ENGINE');
   assert.ok(workflowStarted, 'TEST A FAIL: workflow_started event missing');
   assert.ok(workflowCompleted, 'TEST A FAIL: workflow_completed event missing');
+  assert.ok(artifactReceived, 'TEST A FAIL: artifact_open event missing');
   assert.ok(stepEvents.length >= 3, `TEST A FAIL: expected multiple step events, got ${stepEvents.length}`);
   console.log('✅ TEST A PASSED: Real Natural Language Workflow executed and completed via SSE streaming.\n');
 

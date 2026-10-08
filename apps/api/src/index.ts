@@ -769,11 +769,11 @@ app.post('/api/workflows/runs', async (req: Request, res: Response) => {
     }, principal);
 
     const wfRun = await wfEngine.createWorkflowRun(wfDef, airaRun, principal);
-    setImmediate(() => {
-      wfEngine.executeWorkflowRun(wfRun.id).catch(console.error);
-    });
+    await wfEngine.executeWorkflowRun(wfRun.id);
+    const updatedWfRun = await agentRuntime.getWorkflowRepository().getWorkflowRun(wfRun.id);
+    const steps = await agentRuntime.getWorkflowRepository().getWorkflowSteps(wfRun.id);
 
-    res.status(201).json(wfRun);
+    res.status(201).json({ ...(updatedWfRun || wfRun), steps });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
