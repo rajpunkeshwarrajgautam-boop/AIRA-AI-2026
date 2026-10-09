@@ -70,7 +70,7 @@ export async function up(knex: Knex): Promise<void> {
       table.bigInteger('embedding_indexed_at');
       table.jsonb('metadata').notNullable().defaultTo('{}');
 
-      table.unique(['message_id'], { indexName: 'uq_conversation_search_message' });
+      table.unique(['message_id'], 'uq_conversation_search_message');
       table.index(['principal_id', 'updated_at'], 'idx_conv_search_principal_updated');
       table.index(['principal_id', 'project_id', 'updated_at'], 'idx_conv_search_principal_project_updated');
       table.index(['conversation_id'], 'idx_conv_search_conversation');
