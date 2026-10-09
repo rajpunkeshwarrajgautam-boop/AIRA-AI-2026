@@ -68,6 +68,24 @@ async function main() {
       ]
     });
 
+    // Two principals may legitimately carry the same client/localStorage IDs.
+    // Server persistence must isolate them instead of returning 403 ownership
+    // mismatches or leaking one principal's transcript into the other.
+    await repo.syncConversation(principalB, {
+      id: 'search_test_conv_amd',
+      title: 'Same client ID, different tenant',
+      createdAt: now - 3200,
+      updatedAt: now - 3100,
+      messages: [
+        {
+          id: 'search_test_msg_amd_user',
+          role: 'user',
+          content: 'same-client-id tenant B content only',
+          createdAt: now - 3200
+        }
+      ]
+    });
+
     const exactCode = await repo.search(principalA, { query: 'AmdTools64' });
     assert.equal(exactCode[0]?.conversationId, 'search_test_conv_amd');
     assert.match(exactCode[0]?.snippet || '', /AmdTools64/i);
@@ -98,6 +116,13 @@ async function main() {
     const isolation = await repo.search(principalA, { query: 'violet-orbit-731' });
     assert.equal(isolation.length, 0, 'principal A must never see principal B search candidates');
 
+    const sameClientTenantB = await repo.search(principalB, { query: 'same-client-id' });
+    assert.equal(sameClientTenantB[0]?.conversationId, 'search_test_conv_amd');
+    assert.equal(sameClientTenantB[0]?.messageId, 'search_test_msg_amd_user');
+
+    const sameClientLeak = await repo.search(principalA, { query: 'same-client-id' });
+    assert.equal(sameClientLeak.length, 0, 'same client IDs across principals must remain isolated');
+
     const deleted = await repo.deleteConversation(principalA, 'search_test_conv_amd');
     assert.equal(deleted, true);
     const afterDelete = await repo.search(principalA, { query: 'AmdTools64' });
@@ -107,6 +132,7 @@ async function main() {
     console.log('PASS: title search and snippets');
     console.log('PASS: project scoping');
     console.log('PASS: cross-principal isolation');
+    console.log('PASS: same client conversation/message IDs are tenant-safe');
     console.log('PASS: deletion removes search visibility');
   } finally {
     await db('conversation_search_documents').whereIn('principal_id', [principalA, principalB]).delete();
