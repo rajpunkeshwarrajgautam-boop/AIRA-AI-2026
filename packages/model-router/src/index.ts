@@ -228,7 +228,15 @@ export class OpenAIAdapter implements ModelAdapter {
             await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
             continue;
           }
-          throw new Error(`OpenAI API error (${response.status}): ${errText}`);
+          if (response.status === 404 && this.baseUrl.includes('integrate.api.nvidia.com')) {
+            throw new Error(
+              `NVIDIA NIM returned 404 for model "${policy.model}". ` +
+              'The model may be unavailable or inaccessible with this API key. ' +
+              'Select a supported model in Aira.'
+            );
+          }
+          const provider = this.baseUrl.includes('integrate.api.nvidia.com') ? 'NVIDIA NIM' : 'OpenAI';
+          throw new Error(`${provider} API error (${response.status}): ${errText}`);
         }
 
         const data = await response.json();
@@ -303,7 +311,10 @@ export class ModelRouter {
       'claude-3-7-sonnet': 'aira-auto',
       'claude-3-5-sonnet': 'aira-pro',
       'claude-3-5-haiku': 'aira-fast',
-      'claude-3-opus': 'aira-deep'
+      'claude-3-opus': 'aira-deep',
+      // The hosted Llama 3.1 405B endpoint is not a current NVIDIA catalog option.
+      // Old browser state and direct API callers must use the supported replacement.
+      'meta/llama-3.1-405b-instruct': 'nvidia/nemotron-3-super-120b-a12b'
     };
 
     let resolvedModel: ModelId = legacyAiraAliases[modelId] || modelId;

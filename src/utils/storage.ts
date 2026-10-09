@@ -1,5 +1,17 @@
-import { Conversation, Project, AppSettings } from '../types';
-import { DEFAULT_SETTINGS } from './constants';
+import type { Conversation, Project, AppSettings } from '../types';
+import { AVAILABLE_MODELS, DEFAULT_SETTINGS } from './constants';
+
+export function normalizeStoredModelId(model: unknown): AppSettings['activeModel'] {
+  // Existing users can carry the formerly hosted Llama 405B ID in localStorage.
+  // Migrate that explicit selection to the currently supported NVIDIA route.
+  const migrated = model === 'meta/llama-3.1-405b-instruct'
+    ? 'nvidia/nemotron-3-super-120b-a12b'
+    : model;
+
+  return AVAILABLE_MODELS.some(candidate => candidate.id === migrated)
+    ? migrated as AppSettings['activeModel']
+    : DEFAULT_SETTINGS.activeModel;
+}
 
 const STORAGE_KEYS = {
   CONVERSATIONS: 'aira_conversations_v1',
@@ -72,7 +84,9 @@ export function loadSettings(): AppSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.SETTINGS);
     if (!raw) return DEFAULT_SETTINGS;
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    const saved = JSON.parse(raw);
+    const merged = { ...DEFAULT_SETTINGS, ...saved };
+    return { ...merged, activeModel: normalizeStoredModelId(merged.activeModel) };
   } catch {
     return DEFAULT_SETTINGS;
   }

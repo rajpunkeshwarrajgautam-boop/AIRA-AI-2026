@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { ModelRouter, OpenAIAdapter } from '../packages/model-router/src/index.js';
+import { AVAILABLE_MODELS } from '../src/utils/constants.js';
+import { normalizeStoredModelId } from '../src/utils/storage.js';
 
 async function run() {
   const original = {
@@ -30,7 +32,54 @@ async function run() {
     assert.equal(directNvidia.model, 'nvidia/nemotron-3-super-120b-a12b');
     assert.ok(router.getAdapter(directNvidia) instanceof OpenAIAdapter);
 
+    const retired = 'meta/llama-3.1-405b-instruct';
+    const replacement = 'nvidia/nemotron-3-super-120b-a12b';
+    assert.equal(AVAILABLE_MODELS.some(model => model.id === retired), false,
+      'retired Llama 405B must not remain selectable');
+    assert.equal(normalizeStoredModelId(retired), replacement,
+      'retired saved selections must migrate to an actual selectable NVIDIA model');
+    assert.equal(normalizeStoredModelId(replacement), replacement);
+    assert.equal(normalizeStoredModelId('nonexistent-model'), 'claude-3-7-sonnet');
+
+    const migratedPolicy = router.resolvePolicy(retired, 'ANSWER');
+    assert.equal(migratedPolicy.model, replacement,
+      'legacy callers must never forward retired Llama 405B to the provider');
+
+    const originalFetch = globalThis.fetch;
+    try {
+      const requests: Array<{ url: string; model: string }> = [];
+      globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body || '{}'));
+        requests.push({ url: String(url), model: body.model });
+        return new Response(JSON.stringify({
+          model: body.model,
+          choices: [{ message: { content: 'working answer' } }]
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }) as typeof fetch;
+      const result = await router.getAdapter(migratedPolicy).complete([
+        { role: 'user', content: 'How does an induction motor start?' }
+      ], migratedPolicy);
+      assert.equal(result.text, 'working answer');
+      assert.equal(requests.length, 1);
+      assert.equal(requests[0].url, 'https://integrate.api.nvidia.com/v1/chat/completions');
+      assert.equal(requests[0].model, replacement);
+
+      globalThis.fetch = (async () =>
+        new Response('404 page not found', { status: 404 })) as typeof fetch;
+      await assert.rejects(
+        () => router.getAdapter(directNvidia).complete([
+          { role: 'user', content: 'Test unavailable provider model' }
+        ], directNvidia),
+        /NVIDIA NIM returned 404/,
+        'unavailable NVIDIA models must produce an actionable provider-specific error'
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
     console.log('MODEL ROUTER PROVIDER ROUTING PASS');
+    console.log('PASS: retired model hidden, old settings migrated, server requests use current NVIDIA ID');
+    console.log('PASS: unavailable NVIDIA routes report an actionable provider-specific error');
   } finally {
     for (const [key, value] of Object.entries(original)) {
       if (value === undefined) delete process.env[key];

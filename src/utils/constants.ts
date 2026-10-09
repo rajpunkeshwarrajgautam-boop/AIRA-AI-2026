@@ -1,9 +1,9 @@
 import { ModelInfo, AppSettings } from '../types';
 
 /**
- * Phase 1 keeps the existing provider/model IDs underneath so the prototype's
- * current streaming path continues to work. The UI exposes Aira intelligence
- * modes; provider routing can move behind the server-authoritative router next.
+ * The selectable catalog only shows explicitly supported model routes.
+ * Historical IDs remain accepted by the server for backward-compatible migration,
+ * but retired hosted models must never be offered as working choices.
  */
 export const AVAILABLE_MODELS: ModelInfo[] = [
   {
@@ -37,14 +37,6 @@ export const AVAILABLE_MODELS: ModelInfo[] = [
     description: 'Deliberate mode for complex research, architecture, and open-ended analysis.',
     supportsThinking: false,
     contextWindow: '200K tokens',
-  },
-  {
-    id: 'meta/llama-3.1-405b-instruct',
-    name: 'Llama 3.1 405B',
-    badge: 'NVIDIA',
-    description: 'Open-weights frontier model running at ultra-low latency on NVIDIA NIM.',
-    supportsThinking: false,
-    contextWindow: '128K tokens',
   },
   {
     id: 'nvidia/nemotron-3-super-120b-a12b',
