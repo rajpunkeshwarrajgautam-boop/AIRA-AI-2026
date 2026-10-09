@@ -29,7 +29,8 @@ async function ensureSearchSession(force = false): Promise<void> {
     const response = await fetch('/api/auth/session', {
       method: 'POST',
       credentials: 'same-origin',
-      headers: { Accept: 'application/json' }
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(1500)
     });
     if (!response.ok) throw new Error(`Session bootstrap failed (${response.status})`);
   })();
@@ -44,10 +45,11 @@ async function ensureSearchSession(force = false): Promise<void> {
 
 async function authenticatedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   await ensureSearchSession();
-  let response = await fetch(input, { ...init, credentials: 'same-origin' });
+  const withTimeout = { ...init, credentials: 'same-origin' as RequestCredentials, signal: init?.signal || AbortSignal.timeout(2500) };
+  let response = await fetch(input, withTimeout);
   if (response.status === 401) {
     await ensureSearchSession(true);
-    response = await fetch(input, { ...init, credentials: 'same-origin' });
+    response = await fetch(input, withTimeout);
   }
   return response;
 }
