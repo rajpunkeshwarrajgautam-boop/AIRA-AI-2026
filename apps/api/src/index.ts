@@ -13,6 +13,12 @@ import { AutomationEngine } from '../../../packages/automation/src/index.js';
 import { PostgresAgentRepository, PostgresRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
 import { PostgresAutomationRepository, PostgresAutomationRunRepository } from '../../../packages/automation/src/repositories.js';
 import {
+  ConversationSearchRepository,
+  ConversationEmbeddingIndexer,
+  HybridConversationSearchService,
+  createEmbeddingProvider
+} from '../../../packages/retrieval/src/index.js';
+import {
   CreateRunRequestSchema,
   ApprovalDecisionSchema,
   AutomationDefinitionSchema,
@@ -94,7 +100,8 @@ app.get('/api/health', (_req: Request, res: Response) => {
       automationEngine: 'ONLINE',
       capabilityRegistry: 'ONLINE',
       intentRouter: 'ONLINE',
-      workflowEngine: 'ONLINE'
+      workflowEngine: 'ONLINE',
+      conversationSearch: 'ONLINE'
     },
     productionMockFallback: providers.length === 0 ? 'ACTIVE (dev/test only)' : 'DISABLED',
     version: '2026.2.0',
@@ -134,6 +141,10 @@ const agentRepo = new PostgresAgentRepository();
 const runRepo = new PostgresRunRepository();
 const autoRepo = new PostgresAutomationRepository();
 const autoRunRepo = new PostgresAutomationRunRepository();
+const conversationSearchRepo = new ConversationSearchRepository();
+const conversationEmbeddingProvider = createEmbeddingProvider();
+const conversationEmbeddingIndexer = new ConversationEmbeddingIndexer(conversationSearchRepo, conversationEmbeddingProvider);
+const conversationHybridSearch = new HybridConversationSearchService(conversationSearchRepo, conversationEmbeddingProvider);
 
 const agentRuntime = new AgentRuntime(
   modelRouter,
@@ -212,6 +223,124 @@ app.get('/api/capabilities', (_req: Request, res: Response) => {
     capabilities: agentRuntime.getCapabilityRegistry().list()
   });
 });
+
+// -----------------------------------------------------------------------
+// Durable Conversations + Hybrid Search Foundation
+// -----------------------------------------------------------------------
+app.post('/api/conversations/sync', async (req: Request, res: Response) => {
+  try {
+    const body = req.body || {};
+    if (!body.id || !body.title || !Number.isFinite(Number(body.createdAt)) || !Number.isFinite(Number(body.updatedAt))) {
+      return res.status(400).json({ error: 'id, title, createdAt and updatedAt are required.' });
+    }
+
+    const rawMessages = Array.isArray(body.messages) ? body.messages : [];
+    if (rawMessages.length > 1000) {
+      return res.status(413).json({ error: 'Conversation sync exceeds the 1000-message safety limit.' });
+    }
+
+    await conversationSearchRepo.syncConversation(req.principal!.userId, {
+      id: String(body.id),
+      title: String(body.title),
+      projectId: body.projectId ? String(body.projectId) : undefined,
+      isPinned: Boolean(body.isPinned),
+      createdAt: Number(body.createdAt),
+      updatedAt: Number(body.updatedAt),
+      messages: rawMessages.map((message: any) => ({
+        id: String(message.id || ''),
+        role: message.role === 'assistant' ? 'assistant' : 'user',
+        content: String(message.content || ''),
+        createdAt: Number(message.createdAt || message.timestamp || body.updatedAt),
+        runId: message.runId ? String(message.runId) : undefined
+      }))
+    });
+
+    const indexing = await conversationEmbeddingIndexer.indexConversation(
+      req.principal!.userId,
+      String(body.id),
+      64
+    );
+
+    res.status(200).json({
+      status: 'SYNCED',
+      conversationId: String(body.id),
+      indexing
+    });
+  } catch (err: any) {
+    const status = String(err?.message || '').includes('ownership mismatch') ? 403 : 400;
+    res.status(status).json({ error: err?.message || 'Conversation sync failed.' });
+  }
+});
+
+app.get('/api/conversations/:id', async (req: Request, res: Response) => {
+  try {
+    const conversation = await conversationSearchRepo.getConversation(
+      req.principal!.userId,
+      req.params.id
+    );
+
+    if (!conversation) {
+      return res.status(404).json({ error: 'Conversation not found.' });
+    }
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ conversation });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Conversation retrieval failed.' });
+  }
+});
+
+app.delete('/api/conversations/:id', async (req: Request, res: Response) => {
+  try {
+    const deleted = await conversationSearchRepo.deleteConversation(req.principal!.userId, req.params.id);
+    if (!deleted) return res.status(404).json({ error: 'Conversation not found.' });
+    res.status(204).send();
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Conversation deletion failed.' });
+  }
+});
+
+app.get('/api/search/conversations', async (req: Request, res: Response) => {
+  try {
+    const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    if (!query) return res.status(400).json({ error: 'q is required.' });
+    if (query.length > 500) return res.status(400).json({ error: 'Search query exceeds 500 characters.' });
+
+    const parsedLimit = typeof req.query.limit === 'string' ? Number(req.query.limit) : 10;
+    const role = req.query.role === 'user' || req.query.role === 'assistant' ? req.query.role : undefined;
+    const projectId = typeof req.query.projectId === 'string' && req.query.projectId.trim()
+      ? req.query.projectId.trim()
+      : undefined;
+
+    const result = await conversationHybridSearch.search(req.principal!.userId, {
+      query,
+      limit: Number.isFinite(parsedLimit) ? parsedLimit : 10,
+      role,
+      projectId
+    });
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Conversation search failed.' });
+  }
+});
+
+app.get('/api/search/capabilities', async (_req: Request, res: Response) => {
+  try {
+    const vector = await conversationSearchRepo.getVectorCapability();
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      lexical: 'READY',
+      pgvector: vector.ready ? 'READY' : 'NOT_READY',
+      embeddingProvider: conversationEmbeddingProvider.isConfigured() ? 'READY' : 'NOT_CONFIGURED',
+      hybrid: vector.ready && conversationEmbeddingProvider.isConfigured() ? 'READY' : 'DEGRADED_LEXICAL'
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Search capability inspection failed.' });
+  }
+});
+
 
 // -----------------------------------------------------------------------
 // Runs Management

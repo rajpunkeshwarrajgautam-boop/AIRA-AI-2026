@@ -73,6 +73,11 @@ jobs:
       - name: Run database migrations
         run: npm run db:migrate
 
+      - name: Verify deploy database contract (lexical fallback)
+        env:
+          AIRA_SEMANTIC_SEARCH: 'false'
+        run: npm run db:verify:deploy
+
       - name: Runtime verification
         run: npm test
 
@@ -94,14 +99,70 @@ jobs:
       - name: Search provider failover certification (mocked)
         run: npm run test:search
 
+      - name: Conversation search certification
+        run: npm run test:conversation-search
+
+      - name: Search timeout and cancellation regression
+        run: npm run test:conversation-search-client
+
+      - name: Long-prompt persistence regression
+        run: npm run test:long-prompt-persistence
+
+      - name: Memory context regression certification
+        run: npm run test:memory-context
+
+      - name: Embedding provider regression certification
+        run: npm run test:embedding-provider
+
       - name: Capability reality audit suite
         run: npm run test:reality
+
+
+  semantic-search:
+    name: Semantic Search CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_USER: aira
+          POSTGRES_PASSWORD: aira
+          POSTGRES_DB: aira_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U aira -d aira_db"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run database migrations with pgvector
+        run: npm run db:migrate
+
+      - name: Verify deploy database contract (semantic)
+        run: npm run db:verify:deploy
+
+      - name: Semantic conversation search certification
+        run: npm run test:conversation-search-semantic
 
 
   certify:
     name: Main / PR certification
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
-    needs: fast
+    needs: [fast, semantic-search]
     runs-on: ubuntu-latest
     timeout-minutes: 40
     services:
@@ -133,6 +194,11 @@ jobs:
 
       - name: Run database migrations
         run: npm run db:migrate
+
+      - name: Verify deploy database contract (lexical fallback)
+        env:
+          AIRA_SEMANTIC_SEARCH: 'false'
+        run: npm run db:verify:deploy
 
       - name: Integration certification
         run: npm run test:integration

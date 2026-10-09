@@ -28,7 +28,14 @@
     "preview": "vite preview",
     "memory:init": "npx @agentmemory/agentmemory@latest init",
     "memory:start": "npx @agentmemory/agentmemory@latest start --port 3113",
-    "memory:ui": "npx @agentmemory/agentmemory@latest ui"
+    "memory:ui": "npx @agentmemory/agentmemory@latest ui",
+    "test:conversation-search": "npx tsx test/conversation-search.ts",
+    "test:conversation-search-semantic": "npx tsx test/conversation-search-semantic.ts",
+    "db:verify:deploy": "npx tsx packages/db/src/scripts/verify-deploy.ts",
+    "test:memory-context": "npx tsx test/memory-context-policy.ts",
+    "test:embedding-provider": "npx tsx test/embedding-provider.ts",
+    "test:conversation-search-client": "npx tsx test/conversation-search-client.ts",
+    "test:long-prompt-persistence": "npx tsx test/long-prompt-persistence.ts"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",

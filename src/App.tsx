@@ -14,7 +14,9 @@ import { GreetingScreen } from './components/GreetingScreen';
 import { ModelSelector } from './components/ModelSelector';
 import { AiraMark } from './components/AiraMark';
 import { CommandPalette } from './components/CommandPalette';
+import { ConversationSearchOverlay } from './components/ConversationSearchOverlay';
 import { InlineToast } from './components/InlineToast';
+import { backfillConversationsBestEffort, deleteConversationFromServer, fetchConversationFromServer, syncConversationToServer } from './utils/conversationSearch';
 
 // Lazy-loaded heavy auxiliary surfaces to optimize FCP and TTI
 const ArtifactStudio = React.lazy(() => import('./components/ArtifactStudio').then(m => ({ default: m.ArtifactStudio })));
@@ -42,6 +44,9 @@ function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isMemoryVaultOpen, setIsMemoryVaultOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [isConversationSearchOpen, setIsConversationSearchOpen] = useState(false);
+  const [conversationSearchSeed, setConversationSearchSeed] = useState('');
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [activeArtifact, setActiveArtifact] = useState<Artifact | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [sharedCopied, setSharedCopied] = useState(false);
@@ -56,6 +61,8 @@ function App() {
   const [executionStatus, setExecutionStatus] = useState<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const conversationSyncVersionsRef = useRef<Map<string, string>>(new Map());
+  const initialConversationBackfillRef = useRef(false);
 
   const activeConversation = useMemo(
     () => conversations.find(c => c.id === activeChatId) || conversations[0],
@@ -67,6 +74,33 @@ function App() {
   );
 
   useEffect(() => saveConversations(conversations), [conversations]);
+  useEffect(() => {
+    if (!initialConversationBackfillRef.current) {
+      initialConversationBackfillRef.current = true;
+      for (const conversation of conversations) {
+        const stableMessages = conversation.messages.filter(message => !message.isStreaming).length;
+        conversationSyncVersionsRef.current.set(
+          conversation.id,
+          `${conversation.updatedAt}:${stableMessages}:${conversation.title}:${Boolean(conversation.isPinned)}`
+        );
+      }
+      void backfillConversationsBestEffort(conversations);
+      return;
+    }
+
+    for (const conversation of conversations) {
+      // Never persist a partially streamed assistant response into the durable
+      // transcript. Existing local state remains the immediate UI source.
+      if (conversation.messages.some(message => message.isStreaming)) continue;
+
+      const stableMessages = conversation.messages.length;
+      const version = `${conversation.updatedAt}:${stableMessages}:${conversation.title}:${Boolean(conversation.isPinned)}`;
+      if (conversationSyncVersionsRef.current.get(conversation.id) === version) continue;
+
+      conversationSyncVersionsRef.current.set(conversation.id, version);
+      void syncConversationToServer(conversation);
+    }
+  }, [conversations]);
   useEffect(() => saveProjects(projects), [projects]);
   useEffect(() => saveSettings(settings), [settings]);
   useEffect(() => {
@@ -136,6 +170,45 @@ function App() {
     setActiveArtifact(null);
   };
 
+  const handleOpenConversationSearch = (query = '') => {
+    setConversationSearchSeed(query);
+    setIsConversationSearchOpen(true);
+  };
+
+  const handleSelectSearchResult = async (conversationId: string, messageId?: string) => {
+    let available = conversations.some(conversation => conversation.id === conversationId);
+
+    if (!available) {
+      const hydrated = await fetchConversationFromServer(conversationId);
+      if (!hydrated) {
+        showToast('Conversation could not be loaded');
+        return;
+      }
+
+      setConversations(prev => {
+        if (prev.some(conversation => conversation.id === hydrated.id)) return prev;
+        return [hydrated, ...prev];
+      });
+      available = true;
+    }
+
+    if (!available) return;
+
+    setWorkspaceMode('chat');
+    handleSelectChat(conversationId);
+
+    if (!messageId) return;
+
+    setHighlightedMessageId(messageId);
+    window.setTimeout(() => {
+      document.getElementById(`message-${messageId}`)?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center'
+      });
+    }, 120);
+    window.setTimeout(() => setHighlightedMessageId(current => current === messageId ? null : current), 1800);
+  };
+
   const handleDeleteChat = (id: string) => {
     if (!conversations.some(conversation => conversation.id === id)) return;
     setConversations(prev => {
@@ -147,11 +220,13 @@ function App() {
       }
       return next;
     });
+    conversationSyncVersionsRef.current.delete(id);
+    void deleteConversationFromServer(id);
     showToast('Conversation deleted');
   };
 
   const handleRenameChat = (id: string, title: string) => updateConversation(id, c => ({ ...c, title, updatedAt: Date.now() }));
-  const handleToggleStar = (id: string) => updateConversation(id, c => ({ ...c, isPinned: !c.isPinned }));
+  const handleToggleStar = (id: string) => updateConversation(id, c => ({ ...c, isPinned: !c.isPinned, updatedAt: Date.now() }));
 
   const handleDuplicateChat = (id: string) => {
     const source = conversations.find(c => c.id === id);
@@ -314,7 +389,8 @@ function App() {
             setIsLoading(false);
           },
         },
-        projectContext || undefined
+        projectContext || undefined,
+        id
       );
     } catch {
       setExecutionStatus(null);
@@ -379,6 +455,7 @@ function App() {
         activeProjectId={activeProjectId}
         onOpenProjects={() => setIsProjectsOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenSearch={handleOpenConversationSearch}
         isOpen={sidebarOpen}
         onToggleOpen={() => setSidebarOpen(v => !v)}
         settings={settings}
@@ -397,6 +474,15 @@ function App() {
         onSelectWorkspace={setWorkspaceMode}
         onOpenProjects={() => setIsProjectsOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
+      />
+
+      <ConversationSearchOverlay
+        isOpen={isConversationSearchOpen}
+        initialQuery={conversationSearchSeed}
+        conversations={conversations}
+        projects={projects}
+        onClose={() => setIsConversationSearchOpen(false)}
+        onSelectChat={handleSelectSearchResult}
       />
 
       <InlineToast message={toastMessage} />
@@ -453,7 +539,17 @@ function App() {
             />
           ) : (
             <div className="flex-1 pb-6 space-y-4">
-              {activeConversation.messages.map(message => <ChatMessage key={message.id} message={message} userName={settings.userName} onOpenArtifact={setActiveArtifact} />)}
+              {activeConversation.messages.map(message => (
+                <div
+                  id={`message-${message.id}`}
+                  key={message.id}
+                  className={highlightedMessageId === message.id
+                    ? 'rounded-xl ring-2 ring-claude-terracotta/35 bg-claude-terracotta/[0.035] transition-all duration-500'
+                    : 'transition-all duration-500'}
+                >
+                  <ChatMessage message={message} userName={settings.userName} onOpenArtifact={setActiveArtifact} />
+                </div>
+              ))}
               <div ref={messagesEndRef} />
             </div>
           )}

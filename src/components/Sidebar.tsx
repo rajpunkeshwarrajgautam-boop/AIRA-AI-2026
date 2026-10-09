@@ -34,6 +34,7 @@ interface SidebarProps {
   activeProjectId?: string;
   onOpenProjects: () => void;
   onOpenSettings: () => void;
+  onOpenSearch: (query?: string) => void;
   isOpen: boolean;
   onToggleOpen: () => void;
   settings: AppSettings;
@@ -106,6 +107,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   activeProjectId,
   onOpenProjects,
   onOpenSettings,
+  onOpenSearch,
   isOpen,
   onToggleOpen,
   settings,
@@ -290,9 +292,36 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
           <div className="px-4 pt-4 pb-2">
             <div className="relative flex items-center group">
-              <Search className="w-4 h-4 absolute left-3.5 text-claude-muted-light dark:text-claude-muted-dark group-focus-within:text-claude-text-light dark:group-focus-within:text-white transition-colors" />
-              <input type="text" placeholder="Search workspace..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="w-full text-[13px] font-medium pl-10 pr-4 py-2.5 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark placeholder-claude-muted-light dark:placeholder-claude-muted-dark focus:outline-none focus:border-claude-terracotta/50 focus:shadow-[0_0_0_2px_rgba(235,110,75,0.1)] text-claude-text-light dark:text-white transition-all duration-300" />
+              <button
+                type="button"
+                onClick={() => onOpenSearch(searchQuery)}
+                className="absolute left-2.5 z-10 rounded-md p-1 text-claude-muted-light transition-colors hover:text-claude-terracotta dark:text-claude-muted-dark"
+                title="Search all conversation content"
+                aria-label="Search all conversation content"
+              >
+                <Search className="w-4 h-4" />
+              </button>
+              <input
+                type="text"
+                placeholder="Search workspace..."
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    onOpenSearch(searchQuery);
+                  }
+                }}
+                className="w-full text-[13px] font-medium pl-10 pr-4 py-2.5 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark placeholder-claude-muted-light dark:placeholder-claude-muted-dark focus:outline-none focus:border-claude-terracotta/50 focus:shadow-[0_0_0_2px_rgba(235,110,75,0.1)] text-claude-text-light dark:text-white transition-all duration-300"
+              />
             </div>
+            <button
+              type="button"
+              onClick={() => onOpenSearch(searchQuery)}
+              className="mt-1.5 w-full px-1 text-left text-[10px] font-medium text-claude-muted-light/80 transition-colors hover:text-claude-terracotta dark:text-claude-muted-dark/80"
+            >
+              Search inside messages · Enter
+            </button>
           </div>
 
           <div className="flex-1 overflow-y-auto px-3 py-3 overflow-x-hidden">

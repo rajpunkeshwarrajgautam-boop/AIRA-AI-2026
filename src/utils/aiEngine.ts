@@ -72,7 +72,8 @@ export async function streamAIResponse(
   settings: AppSettings,
   attachments: Attachment[] | undefined,
   callbacks: StreamCallbacks,
-  contextSubgraph?: string
+  contextSubgraph?: string,
+  conversationId?: string
 ): Promise<void> {
   const isThinking = (model === 'claude-3-7-sonnet' && settings.extendedThinking);
 
@@ -120,6 +121,7 @@ export async function streamAIResponse(
         content: a.content || ''
       })),
       contextSubgraph: enrichedContext,
+      conversationId,
     });
 
       if (!backendRes.ok) {
