@@ -29,12 +29,12 @@ export class CapabilityRegistry {
 
   public isAvailable(id: string): boolean {
     const cap = this.get(id);
-    return cap?.status === 'READY' && (cap.availability === 'GA' || cap.availability === 'BETA');
+    return (cap?.status === 'READY' || cap?.status === 'PARTIAL') && (cap.availability === 'GA' || cap.availability === 'BETA');
   }
 
-  public resolveExecutionTarget(intent: IntentTaxonomy): { target: ExecutionTarget; capabilityId: string; status: 'READY' | 'NOT_READY' } {
+  public resolveExecutionTarget(intent: IntentTaxonomy): { target: ExecutionTarget; capabilityId: string; status: 'READY' | 'PARTIAL' | 'NOT_READY' } {
     const matching = this.getByExecutionType(intent);
-    const readyCap = matching.find(c => c.status === 'READY');
+    const readyCap = matching.find(c => c.status === 'READY' || c.status === 'PARTIAL');
     if (readyCap) {
       let target: ExecutionTarget = 'CHAT_STREAM';
       switch (intent) {
@@ -57,7 +57,7 @@ export class CapabilityRegistry {
           target = 'WORKFLOW_ENGINE';
           break;
       }
-      return { target, capabilityId: readyCap.id, status: 'READY' };
+      return { target, capabilityId: readyCap.id, status: readyCap.status as 'READY' | 'PARTIAL' };
     }
 
     // Downstream capability is not yet ready or implemented
@@ -90,7 +90,7 @@ export class CapabilityRegistry {
       approvalPolicy: 'autonomous',
       requiredPrincipalScope: [],
       handler: 'agent_runtime_research',
-      status: 'READY'
+      status: 'PARTIAL'
     });
 
     this.register({

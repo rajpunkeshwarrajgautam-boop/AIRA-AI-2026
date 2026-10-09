@@ -13,12 +13,17 @@ export class AutomationEngine {
     private runRepo: AutomationRunRepository
   ) {}
 
-  public async listAutomations(): Promise<AutomationDefinition[]> {
-    return this.autoRepo.listAutomations();
+  public async listAutomations(principalId?: string): Promise<AutomationDefinition[]> {
+    return this.autoRepo.listAutomations(principalId);
   }
 
-  public async getAutomation(id: string): Promise<AutomationDefinition | undefined> {
-    return this.autoRepo.getAutomation(id);
+  public async getAutomation(id: string, principalId?: string): Promise<AutomationDefinition | undefined> {
+    const item = await this.autoRepo.getAutomation(id);
+    if (!item) return undefined;
+    if (principalId && item.principalId !== principalId) {
+      throw new Error(`ACCESS_DENIED: Automation "${id}" belongs to another user.`);
+    }
+    return item;
   }
 
   public async createAutomation(input: Omit<AutomationDefinition, 'id'>): Promise<AutomationDefinition> {
@@ -31,8 +36,8 @@ export class AutomationEngine {
     return automation;
   }
 
-  public async toggleAutomation(id: string, enabled: boolean): Promise<AutomationDefinition> {
-    const item = await this.autoRepo.getAutomation(id);
+  public async toggleAutomation(id: string, enabled: boolean, principalId?: string): Promise<AutomationDefinition> {
+    const item = await this.getAutomation(id, principalId);
     if (!item) {
       throw new Error(`Automation with id "${id}" not found.`);
     }
@@ -41,26 +46,44 @@ export class AutomationEngine {
     return item;
   }
 
-  public async patchAutomation(id: string, updates: Partial<AutomationDefinition>): Promise<AutomationDefinition> {
-    const item = await this.autoRepo.getAutomation(id);
+  public async patchAutomation(id: string, updates: Partial<AutomationDefinition>, principalId?: string): Promise<AutomationDefinition> {
+    const item = await this.getAutomation(id, principalId);
     if (!item) {
       throw new Error(`Automation with id "${id}" not found.`);
     }
-    const updated = { ...item, ...updates, id }; // Ensure ID cannot be overridden
+    const updated = { ...item, ...updates, id, principalId: item.principalId };
     await this.autoRepo.saveAutomation(updated);
     return updated;
   }
 
-  public async deleteAutomation(id: string): Promise<boolean> {
+  public async deleteAutomation(id: string, principalId?: string): Promise<boolean> {
+    const item = await this.getAutomation(id, principalId);
+    if (!item) {
+      return false;
+    }
     return this.autoRepo.deleteAutomation(id);
   }
 
-  public async getAutomationRuns(id: string): Promise<AutomationRun[]> {
+  public async getAutomationRuns(id: string, principalId?: string): Promise<AutomationRun[]> {
+    await this.getAutomation(id, principalId);
     return this.runRepo.getRunsForAutomation(id);
   }
 
-  public async triggerNow(id: string, scheduledFor: number = Date.now()): Promise<string> {
-    const item = await this.autoRepo.getAutomation(id);
+  public async triggerNow(
+    id: string, 
+    scheduledForOrPrincipal?: number | string, 
+    explicitPrincipalId?: string
+  ): Promise<string> {
+    let scheduledFor = Date.now();
+    let principalId: string | undefined = explicitPrincipalId;
+
+    if (typeof scheduledForOrPrincipal === 'number') {
+      scheduledFor = scheduledForOrPrincipal;
+    } else if (typeof scheduledForOrPrincipal === 'string') {
+      principalId = scheduledForOrPrincipal;
+    }
+
+    const item = await this.getAutomation(id, principalId);
     if (!item) {
       throw new Error(`Automation with id "${id}" not found.`);
     }
@@ -71,7 +94,7 @@ export class AutomationEngine {
     }
 
     try {
-      const run = await this.agentRuntime.createAndExecuteRun({
+      const run = await this.agentRuntime.createRun({
         intent: 'AGENT_MISSION',
         prompt: `[Automated Trigger: ${item.name}]\nObjective: ${item.objective}`,
         systemPrompt: 'Execute scheduled automation according to strict operational criteria.',
@@ -80,13 +103,26 @@ export class AutomationEngine {
           temperature: 0.2
         } as any
       }, {
-        userId: 'system-automation',
-        sessionId: 'automation-session'
+        userId: item.principalId || 'system-automation',
+        sessionId: `automation-session-${item.id}`
       });
 
       claim.runId = run.id;
-      claim.status = 'COMPLETED';
-      claim.completedAt = Date.now();
+      claim.status = 'RUNNING';
+      await this.runRepo.saveRun(claim);
+
+      // Await real execution loop to terminal outcome
+      await this.agentRuntime.startRun(run.id);
+
+      const finishedRun = await this.agentRuntime.getRun(run.id);
+      if (finishedRun?.state === 'COMPLETED') {
+        claim.status = 'COMPLETED';
+        claim.completedAt = Date.now();
+      } else {
+        claim.status = 'FAILED';
+        claim.error = finishedRun?.error || 'Automation child run failed.';
+        claim.completedAt = Date.now();
+      }
       await this.runRepo.saveRun(claim);
 
       item.lastRun = Date.now();
@@ -102,9 +138,14 @@ export class AutomationEngine {
   }
 
   public start(): void {
+    if (process.env.VERCEL) {
+      // In Vercel serverless environment, background setInterval is unsafe and frozen.
+      // Scheduled automations must be triggered via authenticated /api/automations/cron/execute endpoint.
+      return;
+    }
     if (this.timerHandle) return;
     this.timerHandle = setInterval(() => {
-      this.evaluateSchedules();
+      this.evaluateSchedules().catch(console.error);
     }, 60000);
   }
 
@@ -115,37 +156,37 @@ export class AutomationEngine {
     }
   }
 
-  private async evaluateSchedules(): Promise<void> {
+  public async runScheduledCronCycle(): Promise<{ evaluated: number; triggered: string[] }> {
+    return this.evaluateSchedules();
+  }
+
+  private async evaluateSchedules(): Promise<{ evaluated: number; triggered: string[] }> {
+    const triggered: string[] = [];
     try {
       const dueAutomations = await this.autoRepo.getDueAutomations();
-      const now = Date.now();
 
       for (const auto of dueAutomations) {
         if (!auto.cronExpression) continue;
         try {
           const interval = parser.parseExpression(auto.cronExpression);
-          const nextRunTime = interval.next().getTime();
-          const prevRunTime = interval.prev().getTime(); // previous theoretically scheduled time
+          const prevRunTime = interval.prev().getTime();
 
-          // If the previous scheduled time is strictly greater than the last time we ran it (with some tolerance)
-          // it means it is due. Alternatively, we can check if now >= nextRun from last execution.
-          // Simplest approximation: if we haven't run it within the current cron period.
-          
           if (!auto.lastRun || auto.lastRun < prevRunTime) {
-             const claim = await this.runRepo.claimRun(auto.id, prevRunTime);
-             if (claim) {
-               console.log(`[AutomationEngine] Triggering cron automation: ${auto.name}`);
-               this.triggerNow(auto.id, prevRunTime).catch(e => {
-                 console.error(`[AutomationEngine] Execution failed for ${auto.id}:`, e);
-               });
-             }
+            const claim = await this.runRepo.claimRun(auto.id, prevRunTime);
+            if (claim) {
+              console.log(`[AutomationEngine] Triggering cron automation: ${auto.name}`);
+              const runId = await this.triggerNow(auto.id, prevRunTime);
+              triggered.push(runId);
+            }
           }
         } catch (e: any) {
           console.error(`[AutomationEngine] Failed to process cron for ${auto.id}:`, e.message);
         }
       }
+      return { evaluated: dueAutomations.length, triggered };
     } catch (err: any) {
       console.error(`[AutomationEngine] Schedule evaluation failed:`, err.message);
+      return { evaluated: 0, triggered };
     }
   }
 }

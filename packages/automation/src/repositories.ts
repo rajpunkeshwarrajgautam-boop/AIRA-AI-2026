@@ -4,7 +4,7 @@ import { db } from '../../db/src/index.js';
 export interface AutomationRepository {
   saveAutomation(automation: AutomationDefinition): Promise<void>;
   getAutomation(id: string): Promise<AutomationDefinition | undefined>;
-  listAutomations(): Promise<AutomationDefinition[]>;
+  listAutomations(principalId?: string): Promise<AutomationDefinition[]>;
   getDueAutomations(): Promise<AutomationDefinition[]>;
   updateLastRun(id: string, lastRun: number): Promise<void>;
   tryClaimAutomationRun(id: string, dueThreshold: number, newLastRun: number): Promise<boolean>;
@@ -119,7 +119,8 @@ export class PostgresAutomationRepository implements AutomationRepository {
         conditions: automation.conditions,
         objective: automation.objective,
         approvalPolicy: automation.approvalPolicy,
-        failureState: automation.failureState
+        failureState: automation.failureState,
+        principalId: automation.principalId
       }),
       last_run: automation.lastRun || 0,
       createdAt: Date.now(),
@@ -133,9 +134,13 @@ export class PostgresAutomationRepository implements AutomationRepository {
     return this.mapToAutomation(row);
   }
 
-  async listAutomations(): Promise<AutomationDefinition[]> {
+  async listAutomations(principalId?: string): Promise<AutomationDefinition[]> {
     const rows = await db('automations').select('*');
-    return rows.map(this.mapToAutomation);
+    const items = rows.map(this.mapToAutomation);
+    if (principalId) {
+      return items.filter(i => i.principalId === principalId);
+    }
+    return items;
   }
 
   async getDueAutomations(): Promise<AutomationDefinition[]> {
@@ -178,14 +183,16 @@ export class PostgresAutomationRepository implements AutomationRepository {
   }
 
   private mapToAutomation(row: any): AutomationDefinition {
-    const params = typeof row.triggerParams === 'string' ? JSON.parse(row.triggerParams) : row.triggerParams;
+    const rawParams = row.triggerParams ?? row.triggerparams;
+    const params = typeof rawParams === 'string' ? JSON.parse(rawParams) : rawParams;
     return {
       id: row.id,
+      principalId: params?.principalId || row.principal_id || undefined,
       name: row.name,
       enabled: row.enabled,
       agentId: row.agent_id,
       cronExpression: row.cron_expression,
-      lastRun: parseInt(row.last_run, 10),
+      lastRun: parseInt(row.last_run || 0, 10),
       trigger: params?.trigger || 'CRON',
       conditions: params?.conditions || {},
       objective: params?.objective || '',

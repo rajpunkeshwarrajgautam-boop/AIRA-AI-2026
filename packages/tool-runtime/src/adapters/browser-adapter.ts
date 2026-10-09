@@ -221,14 +221,7 @@ export class BrowserAdapter {
     }
 
     if (!session) {
-      return {
-        title: 'Example Domain',
-        headings: ['Example Domain'],
-        extractedText: 'This domain is for use in documentation examples without prior coordination or permission.',
-        inputs: [],
-        links: [{ text: 'More information...', href: 'https://www.iana.org/domains/example' }],
-        untrustedExternalData: true
-      };
+      throw new Error('BROWSER_RUNTIME_NOT_AVAILABLE: No active headless browser session is available for DOM extraction.');
     }
 
     const page = session.activePage;
@@ -299,7 +292,12 @@ export class BrowserAdapter {
     typedLength: number;
     success: boolean;
   }> {
-    const session = await this.getSession(principal);
+    let session: BrowserSessionInfo;
+    try {
+      session = await this.getSession(principal);
+    } catch {
+      throw new Error('BROWSER_RUNTIME_NOT_AVAILABLE: Headless browser is not available for typing interactions.');
+    }
     const page = session.activePage;
     const loc = page.locator(selector).first();
 
@@ -328,7 +326,12 @@ export class BrowserAdapter {
     newUrl?: string;
     success: boolean;
   }> {
-    const session = await this.getSession(principal);
+    let session: BrowserSessionInfo;
+    try {
+      session = await this.getSession(principal);
+    } catch {
+      throw new Error('BROWSER_RUNTIME_NOT_AVAILABLE: Headless browser is not available for clicking interactions.');
+    }
     const page = session.activePage;
     const loc = page.locator(selector).first();
 
@@ -364,13 +367,7 @@ export class BrowserAdapter {
     }
 
     if (!session) {
-      // 1x1 transparent PNG fallback in headless/serverless environments without Chromium
-      const transparentPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
-      return {
-        format: 'image/png',
-        base64: transparentPng,
-        url: 'https://example.com'
-      };
+      throw new Error('SCREENSHOT_NOT_AVAILABLE: Headless browser runtime is not available to capture screenshots.');
     }
 
     const page = session.activePage;
