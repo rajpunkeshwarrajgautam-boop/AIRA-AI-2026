@@ -16,7 +16,7 @@ import { AiraMark } from './components/AiraMark';
 import { CommandPalette } from './components/CommandPalette';
 import { ConversationSearchOverlay } from './components/ConversationSearchOverlay';
 import { InlineToast } from './components/InlineToast';
-import { backfillConversationsBestEffort, deleteConversationFromServer, syncConversationToServer } from './utils/conversationSearch';
+import { backfillConversationsBestEffort, deleteConversationFromServer, fetchConversationFromServer, syncConversationToServer } from './utils/conversationSearch';
 
 // Lazy-loaded heavy auxiliary surfaces to optimize FCP and TTI
 const ArtifactStudio = React.lazy(() => import('./components/ArtifactStudio').then(m => ({ default: m.ArtifactStudio })));
@@ -175,8 +175,28 @@ function App() {
     setIsConversationSearchOpen(true);
   };
 
-  const handleSelectSearchResult = (conversationId: string, messageId?: string) => {
+  const handleSelectSearchResult = async (conversationId: string, messageId?: string) => {
+    let available = conversations.some(conversation => conversation.id === conversationId);
+
+    if (!available) {
+      const hydrated = await fetchConversationFromServer(conversationId);
+      if (!hydrated) {
+        showToast('Conversation could not be loaded');
+        return;
+      }
+
+      setConversations(prev => {
+        if (prev.some(conversation => conversation.id === hydrated.id)) return prev;
+        return [hydrated, ...prev];
+      });
+      available = true;
+    }
+
+    if (!available) return;
+
+    setWorkspaceMode('chat');
     handleSelectChat(conversationId);
+
     if (!messageId) return;
 
     setHighlightedMessageId(messageId);
@@ -185,7 +205,7 @@ function App() {
         behavior: 'smooth',
         block: 'center'
       });
-    }, 60);
+    }, 120);
     window.setTimeout(() => setHighlightedMessageId(current => current === messageId ? null : current), 1800);
   };
 
