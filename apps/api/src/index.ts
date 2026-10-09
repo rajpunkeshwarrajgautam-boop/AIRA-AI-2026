@@ -272,6 +272,24 @@ app.post('/api/conversations/sync', async (req: Request, res: Response) => {
   }
 });
 
+app.get('/api/conversations/:id', async (req: Request, res: Response) => {
+  try {
+    const conversation = await conversationSearchRepo.getConversation(
+      req.principal!.userId,
+      req.params.id
+    );
+
+    if (!conversation) {
+      return res.status(404).json({ error: 'Conversation not found.' });
+    }
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ conversation });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Conversation retrieval failed.' });
+  }
+});
+
 app.delete('/api/conversations/:id', async (req: Request, res: Response) => {
   try {
     const deleted = await conversationSearchRepo.deleteConversation(req.principal!.userId, req.params.id);
