@@ -45,6 +45,18 @@ async function ensureSearchSession(force = false): Promise<void> {
   }
 }
 
+// Always enforce the request deadline, even when the search overlay supplies
+// its own AbortController to cancel obsolete queries.
+export function composeRequestSignal(
+  callerSignal: AbortSignal | null | undefined,
+  timeoutMs: number
+): AbortSignal {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  return callerSignal
+    ? AbortSignal.any([callerSignal, timeoutSignal])
+    : timeoutSignal;
+}
+
 async function authenticatedFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
@@ -54,7 +66,7 @@ async function authenticatedFetch(
   const makeRequest = () => fetch(input, {
     ...init,
     credentials: 'same-origin' as RequestCredentials,
-    signal: init?.signal || AbortSignal.timeout(timeoutMs)
+    signal: composeRequestSignal(init?.signal, timeoutMs)
   });
 
   let response = await makeRequest();

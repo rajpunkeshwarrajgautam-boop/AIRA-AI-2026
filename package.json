@@ -33,7 +33,9 @@
     "test:conversation-search-semantic": "npx tsx test/conversation-search-semantic.ts",
     "db:verify:deploy": "npx tsx packages/db/src/scripts/verify-deploy.ts",
     "test:memory-context": "npx tsx test/memory-context-policy.ts",
-    "test:embedding-provider": "npx tsx test/embedding-provider.ts"
+    "test:embedding-provider": "npx tsx test/embedding-provider.ts",
+    "test:conversation-search-client": "npx tsx test/conversation-search-client.ts",
+    "test:long-prompt-persistence": "npx tsx test/long-prompt-persistence.ts"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",

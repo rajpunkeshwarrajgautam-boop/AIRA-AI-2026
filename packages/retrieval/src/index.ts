@@ -734,6 +734,7 @@ export class HybridConversationSearchService {
     const canUseSemantic = capability.ready && this.embeddingProvider.isConfigured();
 
     let semantic: ConversationSearchResult[] = [];
+    let semanticOperational = canUseSemantic;
     if (canUseSemantic) {
       try {
         const queryEmbedding = await this.embeddingProvider.embed([query], 'query');
@@ -745,9 +746,10 @@ export class HybridConversationSearchService {
           queryEmbedding.modelVersion
         );
       } catch {
-        // Fail open to lexical search. Semantic retrieval is an enhancement,
-        // never a dependency for chat/search availability.
+        // Fail open to lexical search, and report degraded capability accurately.
+        // An unreachable embedding provider is NOT semantically available.
         semantic = [];
+        semanticOperational = false;
       }
     }
 
@@ -755,7 +757,7 @@ export class HybridConversationSearchService {
       return {
         query,
         mode: 'lexical',
-        semanticAvailable: canUseSemantic,
+        semanticAvailable: semanticOperational,
         results: lexical.slice(0, limit)
       };
     }

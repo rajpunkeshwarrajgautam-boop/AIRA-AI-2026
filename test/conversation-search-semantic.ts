@@ -153,6 +153,44 @@ async function main() {
       'semantic retrieval must filter by principal before ranking'
     );
 
+    // Inject a real embedding-call failure after the pgvector-backed search
+    // has been confirmed. Lexical retrieval must survive a provider outage.
+    const failedProvider: EmbeddingProvider = {
+      providerId: 'simulated-nvidia-503',
+      isConfigured: () => true,
+      embed: async () => { throw new Error('SIMULATED_NVIDIA_EMBEDDING_503'); }
+    };
+    const failedSearch = new HybridConversationSearchService(repo, failedProvider);
+    const lexicalAfterProviderFailure = await failedSearch.search(principalA, {
+      query: 'Production routing incident',
+      limit: 5
+    });
+    assert.equal(lexicalAfterProviderFailure.mode, 'lexical');
+    assert.equal(lexicalAfterProviderFailure.semanticAvailable, false);
+    assert.equal(lexicalAfterProviderFailure.results[0]?.conversationId, 'semantic_conv_browser');
+    assert.equal(
+      (await failedSearch.search(principalA, {
+        query: 'Private browser navigation record',
+        limit: 10
+      })).results.some(result => result.conversationId === 'semantic_conv_private'),
+      false,
+      'lexical fallback must remain principal-isolated during provider failure'
+    );
+
+    const disabledProvider: EmbeddingProvider = {
+      providerId: 'disabled-semantic-test',
+      isConfigured: () => false,
+      embed: async () => { throw new Error('DISABLED_PROVIDER_MUST_NOT_BE_CALLED'); }
+    };
+    const unconfiguredSearch = new HybridConversationSearchService(repo, disabledProvider);
+    const noProvider = await unconfiguredSearch.search(principalA, {
+      query: 'Production routing incident',
+      limit: 5
+    });
+    assert.equal(noProvider.mode, 'lexical');
+    assert.equal(noProvider.semanticAvailable, false);
+    assert.equal(noProvider.results[0]?.conversationId, 'semantic_conv_browser');
+
     const pendingAfterIndex = await repo.listPendingEmbeddingDocuments(
       principalA,
       'semantic_conv_browser',
@@ -185,6 +223,8 @@ async function main() {
     console.log('PASS: lexical + semantic RRF hybrid ranking');
     console.log('PASS: semantic tenant isolation');
     console.log('PASS: unchanged content preserves embedding state');
+    console.log('PASS: simulated NVIDIA 503 degrades to tenant-isolated lexical search');
+    console.log('PASS: unconfigured embedding provider degrades to lexical search');
   } finally {
     await cleanup([principalA, principalB]);
     await closeDb();
