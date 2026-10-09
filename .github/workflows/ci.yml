@@ -94,6 +94,9 @@ jobs:
       - name: Search provider failover certification (mocked)
         run: npm run test:search
 
+      - name: Conversation search certification
+        run: npm run test:conversation-search
+
       - name: Capability reality audit suite
         run: npm run test:reality
 
