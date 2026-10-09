@@ -80,6 +80,16 @@ export interface PendingEmbeddingDocument {
   content: string;
 }
 
+export interface DurableConversationResult {
+  id: string;
+  title: string;
+  projectId?: string;
+  isPinned: boolean;
+  createdAt: number;
+  updatedAt: number;
+  messages: ConversationSyncMessage[];
+}
+
 export interface ConversationIndexingResult {
   semanticAvailable: boolean;
   indexed: number;
@@ -306,6 +316,51 @@ export class ConversationSearchRepository {
           .merge(mergePayload);
       }
     });
+  }
+
+
+  async getConversation(
+    principalId: string,
+    conversationId: string
+  ): Promise<DurableConversationResult | null> {
+    const conversation = await db('conversations')
+      .where({ principal_id: principalId, client_id: conversationId })
+      .whereNull('deleted_at')
+      .first();
+
+    if (!conversation) return null;
+
+    const messages = await db('conversation_messages')
+      .where({
+        principal_id: principalId,
+        conversation_id: conversation.id
+      })
+      .orderBy('created_at', 'asc')
+      .select(
+        'client_message_id',
+        'role',
+        'content',
+        'created_at',
+        'run_id',
+        'metadata'
+      );
+
+    return {
+      id: conversation.client_id,
+      title: conversation.title,
+      projectId: conversation.project_id || undefined,
+      isPinned: Boolean(conversation.is_pinned),
+      createdAt: Number(conversation.created_at),
+      updatedAt: Number(conversation.updated_at),
+      messages: messages.map(message => ({
+        id: message.client_message_id,
+        role: message.role,
+        content: message.content || '',
+        createdAt: Number(message.created_at),
+        runId: message.run_id || undefined,
+        metadata: message.metadata || undefined
+      }))
+    };
   }
 
   async deleteConversation(principalId: string, conversationId: string): Promise<boolean> {
