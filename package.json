@@ -31,7 +31,8 @@
     "memory:ui": "npx @agentmemory/agentmemory@latest ui",
     "test:conversation-search": "npx tsx test/conversation-search.ts",
     "test:conversation-search-semantic": "npx tsx test/conversation-search-semantic.ts",
-    "db:verify:deploy": "npx tsx packages/db/src/scripts/verify-deploy.ts"
+    "db:verify:deploy": "npx tsx packages/db/src/scripts/verify-deploy.ts",
+    "test:memory-context": "npx tsx test/memory-context-policy.ts"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
