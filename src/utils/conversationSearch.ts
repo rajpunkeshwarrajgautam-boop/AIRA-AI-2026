@@ -11,11 +11,13 @@ export interface ConversationSearchResult {
   updatedAt: number;
   messageCreatedAt: number;
   isPinned: boolean;
-  matchType: 'title' | 'exact' | 'lexical';
+  matchType: 'title' | 'exact' | 'lexical' | 'semantic' | 'hybrid';
 }
 
 export interface ConversationSearchResponse {
   query: string;
+  mode: 'hybrid' | 'lexical';
+  semanticAvailable: boolean;
   results: ConversationSearchResult[];
 }
 
