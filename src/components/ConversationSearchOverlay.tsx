@@ -132,16 +132,20 @@ export const ConversationSearchOverlay: React.FC<ConversationSearchOverlayProps>
     }
 
     let cancelled = false;
+    const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       setIsSearching(true);
       try {
-        const response = await searchConversationsServer(trimmed, { limit: 20 });
+        const response = await searchConversationsServer(trimmed, {
+          limit: 20,
+          signal: controller.signal
+        });
         if (!cancelled) {
           setServerResults(response.results);
           setServerAvailable(true);
         }
-      } catch {
-        if (!cancelled) {
+      } catch (error) {
+        if (!cancelled && !(error instanceof DOMException && error.name === 'AbortError')) {
           setServerResults([]);
           setServerAvailable(false);
         }
@@ -152,6 +156,7 @@ export const ConversationSearchOverlay: React.FC<ConversationSearchOverlayProps>
 
     return () => {
       cancelled = true;
+      controller.abort();
       window.clearTimeout(timer);
     };
   }, [isOpen, query]);
