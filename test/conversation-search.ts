@@ -86,6 +86,18 @@ async function main() {
       ]
     });
 
+    const hydratedA = await repo.getConversation(principalA, 'search_test_conv_amd');
+    assert.equal(hydratedA?.id, 'search_test_conv_amd');
+    assert.equal(hydratedA?.messages[0]?.id, 'search_test_msg_amd_user');
+    assert.equal(hydratedA?.messages[1]?.id, 'search_test_msg_amd_assistant');
+
+    const hydratedB = await repo.getConversation(principalB, 'search_test_conv_amd');
+    assert.equal(hydratedB?.id, 'search_test_conv_amd');
+    assert.equal(hydratedB?.messages[0]?.content, 'same-client-id tenant B content only');
+
+    const isolatedHydration = await repo.getConversation(principalA, 'search_test_conv_private');
+    assert.equal(isolatedHydration, null, 'principal A must not hydrate principal B conversations');
+
     const exactCode = await repo.search(principalA, { query: 'AmdTools64' });
     assert.equal(exactCode[0]?.conversationId, 'search_test_conv_amd');
     assert.match(exactCode[0]?.snippet || '', /AmdTools64/i);
@@ -134,6 +146,7 @@ async function main() {
     console.log('PASS: cross-principal isolation');
     console.log('PASS: same client conversation/message IDs are tenant-safe');
     console.log('PASS: deletion removes search visibility');
+    console.log('PASS: durable search results hydrate with client IDs and tenant isolation');
   } finally {
     await db('conversation_search_documents').whereIn('principal_id', [principalA, principalB]).delete();
     await db('conversation_messages').whereIn('principal_id', [principalA, principalB]).delete();
