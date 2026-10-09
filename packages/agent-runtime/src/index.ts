@@ -138,6 +138,12 @@ export class AgentRuntime extends EventEmitter {
   }
 
   public async createRun(request: CreateRunRequest, principal: ExecutionPrincipal): Promise<Run> {
+    if (request.prompt && request.prompt.length > 1000000) {
+      const err = new Error('PROMPT_TOO_LARGE');
+      (err as any).code = 'PROMPT_TOO_LARGE';
+      throw err;
+    }
+
     const runId = `run_${crypto.randomUUID().slice(0, 10)}`;
     const now = Date.now();
 
