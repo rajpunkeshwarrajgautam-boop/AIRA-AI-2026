@@ -73,6 +73,11 @@ jobs:
       - name: Run database migrations
         run: npm run db:migrate
 
+      - name: Verify deploy database contract (lexical fallback)
+        env:
+          AIRA_SEMANTIC_SEARCH: 'false'
+        run: npm run db:verify:deploy
+
       - name: Runtime verification
         run: npm test
 
@@ -135,6 +140,9 @@ jobs:
       - name: Run database migrations with pgvector
         run: npm run db:migrate
 
+      - name: Verify deploy database contract (semantic)
+        run: npm run db:verify:deploy
+
       - name: Semantic conversation search certification
         run: npm run test:conversation-search-semantic
 
@@ -174,6 +182,11 @@ jobs:
 
       - name: Run database migrations
         run: npm run db:migrate
+
+      - name: Verify deploy database contract (lexical fallback)
+        env:
+          AIRA_SEMANTIC_SEARCH: 'false'
+        run: npm run db:verify:deploy
 
       - name: Integration certification
         run: npm run test:integration
