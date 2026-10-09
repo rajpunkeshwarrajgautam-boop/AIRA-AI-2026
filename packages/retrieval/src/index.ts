@@ -450,8 +450,8 @@ export class ConversationSearchRepository {
 
     const rows = await builder
       .select(
-        'd.conversation_id',
-        'd.message_id',
+        'c.client_id as conversation_id',
+        'm.client_message_id as message_id',
         'd.role',
         'd.content',
         'd.created_at as message_created_at',
@@ -525,7 +525,9 @@ export class ConversationSearchRepository {
 
     const builder = db('conversation_search_documents as d')
       .join('conversations as c', 'c.id', 'd.conversation_id')
+      .join('conversation_messages as m', 'm.id', 'd.message_id')
       .where('d.principal_id', principalId)
+      .andWhere('m.principal_id', principalId)
       .andWhere('c.principal_id', principalId)
       .whereNull('c.deleted_at')
       .andWhere('d.embedding_status', 'READY')
@@ -541,8 +543,8 @@ export class ConversationSearchRepository {
 
     const rows = await builder
       .select(
-        'd.conversation_id',
-        'd.message_id',
+        'c.client_id as conversation_id',
+        'm.client_message_id as message_id',
         'd.role',
         'd.content',
         'd.created_at as message_created_at',
