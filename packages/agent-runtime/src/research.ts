@@ -1,5 +1,5 @@
-import { ToolGateway, ToolCall } from '../../tool-runtime/src/index.js';
-import { Citation, Run } from '../../contracts/src/index.js';
+import { ToolRegistry, ToolCall } from '../../tool-runtime/src/index.js';
+import { Citation } from '../../contracts/src/index.js';
 import { BrainV2KnowledgeEngine } from '../../knowledge/src/index.js';
 
 export interface ResearchOptions {
@@ -16,7 +16,7 @@ export interface ResearchResult {
 
 export class ResearchService {
   constructor(
-    private toolGateway: ToolGateway,
+    private toolRegistry: ToolRegistry,
     private knowledgeEngine: BrainV2KnowledgeEngine
   ) {}
 
@@ -38,7 +38,7 @@ export class ResearchService {
     // Check provider capability
     // In our system, web_search tool capability requires BRAVE_SEARCH_API_KEY
     const isBraveConfigured = !!process.env.BRAVE_SEARCH_API_KEY;
-    const providerReady = isBraveConfigured;
+    let providerReady = isBraveConfigured;
 
     let citations: Citation[] = [];
     const toolCalls: ToolCall[] = [];
@@ -48,7 +48,7 @@ export class ResearchService {
     if (freshnessRequired) {
       if (providerReady) {
         // Execute real live web search tool
-        const toolDef = this.toolGateway.getTool('web_search')?.definition;
+        const toolDef = this.toolRegistry.get('web_search')?.definition;
         const toolCall: ToolCall = {
           id: `call_${Date.now()}_research`,
           toolId: toolDef?.id || 'tool_web_search',
@@ -59,26 +59,37 @@ export class ResearchService {
         toolCalls.push(toolCall);
         
         try {
-          const result = await this.toolGateway.executeTool(toolCall.name, toolCall.arguments, { principalId: 'system' } as any);
-          if (result.success && result.data && typeof result.data === 'object' && Array.isArray((result.data as any).results)) {
-            const searchResults = (result.data as any).results;
-            
-            citations = searchResults.map((res: any, idx: number) => ({
-              id: `live_${timestamp}_${idx}`,
-              sourceId: `web_${idx}`,
-              sourceTitle: res.title || 'Live Search Result',
-              uri: res.url,
-              snippet: res.description || res.snippet || '',
-              score: 1.0,
-              provenance: {
-                toolCallId: toolCall.id,
-                retrievalMechanism: 'web_search',
-                timestamp
-              }
-            }));
+          const result = await this.toolRegistry.execute(toolCall, {
+            runId,
+            workspaceRoot: process.cwd(),
+            sessionGrantedTools: new Set<string>()
+          });
+          const output = result.output;
+          if (!result.isError && output && typeof output === 'object' && Array.isArray((output as any).results)) {
+            const searchResults = (output as any).results as Array<{ title?: string; url?: string; snippet?: string; description?: string }>;
+            citations = searchResults
+              .filter(res => typeof res.url === 'string' && /^https?:\/\//.test(res.url))
+              .map((res, idx) => ({
+                id: `live_${timestamp}_${idx}`,
+                sourceId: `web_${idx}`,
+                sourceTitle: res.title || 'Live Search Result',
+                uri: res.url!,
+                snippet: res.snippet || res.description || '',
+                score: 1.0,
+                provenance: {
+                  toolCallId: toolCall.id,
+                  retrievalMechanism: 'web_search',
+                  timestamp
+                }
+              }));
+            // A configured API key alone does not prove that evidence was retrieved.
+            providerReady = citations.length > 0;
+          } else {
+            providerReady = false;
           }
-        } catch (e) {
-          // Fall through
+        } catch {
+          // Fail closed on network/provider errors. Do not invent research evidence.
+          providerReady = false;
         }
       }
     } else {

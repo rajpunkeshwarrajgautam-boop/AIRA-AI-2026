@@ -462,15 +462,14 @@ export class WorkflowEngine {
     if (capability === 'RESEARCH') {
       const topic = input.topic || input.prompt || stepDef.name;
       
-      let researchResults = '';
-      if (this.researchService) {
-        const res = await this.researchService.executeResearch({ prompt: topic, runId: workflowRun.runId });
-        if (res.freshnessRequired && !res.providerReady) {
-          researchResults = 'RESEARCH_PROVIDER_NOT_READY: Current/fresh data unavailable.';
-        } else {
-          researchResults = res.citations.map(c => `[${c.sourceTitle}] ${c.snippet}`).join('\n\n');
-        }
+      if (!this.researchService) {
+        return { topic, status: 'RESEARCH_PROVIDER_NOT_READY', summary: 'Research service is unavailable.' };
       }
+      const evidence = await this.researchService.executeResearch({ prompt: topic, runId: workflowRun.runId });
+      if (evidence.freshnessRequired && (!evidence.providerReady || evidence.citations.length === 0)) {
+        return { topic, status: 'RESEARCH_PROVIDER_NOT_READY', summary: 'Live research evidence is unavailable; no current claims synthesized.' };
+      }
+      const researchResults = evidence.citations.map(c => `[${c.sourceTitle}] ${c.snippet}`).join('\n\n');
 
       const airaRun = await this.runRepo.getRun(workflowRun.runId);
       const requestedModel = airaRun?.modelPolicy?.model || 'aira-auto';

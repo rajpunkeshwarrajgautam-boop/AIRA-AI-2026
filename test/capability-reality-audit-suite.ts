@@ -10,6 +10,7 @@ import { PostgresAutomationRepository, PostgresAutomationRunRepository } from '.
 import { AutomationEngine } from '../packages/automation/src/index.js';
 import { ExecutionPrincipal } from '../packages/contracts/src/index.js';
 import { BrowserAdapter } from '../packages/tool-runtime/src/adapters/browser-adapter.js';
+import { ResearchService } from '../packages/agent-runtime/src/research.js';
 
 async function executeAuditRun(runtime: AgentRuntime, createdRun: { id: string }, allowedStates: string[]) {
   await runtime.startRun(createdRun.id);
@@ -366,7 +367,41 @@ async function runRealityAuditSuite() {
   assert.strictEqual(executedWorkflow?.state, 'COMPLETED', 'Research workflow must complete, not merely be created');
   assert.strictEqual(executedWorkflow?.stepStates.step1, 'COMPLETED');
   assert.ok(executedWorkflow?.stepOutputs.step1, 'Research step output must be persisted');
+  if (!process.env.BRAVE_SEARCH_API_KEY) {
+    assert.strictEqual((executedWorkflow?.stepOutputs.step1 as any).status, 'RESEARCH_PROVIDER_NOT_READY');
+  }
   console.log('  -> PASS: Research workflow step executed and persisted.');
+
+  // -------------------------------------------------------------
+  // TEST 15: Research provider adapter contract (synthetic fixture)
+  // -------------------------------------------------------------
+  console.log('\n--- TEST 15: RESEARCH PROVIDER RESULT PARSING ---');
+  const fixtureRegistry = new ToolRegistry();
+  const definition = fixtureRegistry.get('web_search')?.definition;
+  assert.ok(definition, 'web_search must be registered');
+  fixtureRegistry.register({
+    definition,
+    execute: async () => ({
+      toolCallId: 'call_research_fixture',
+      output: { results: [{ title: 'Synthetic research fixture', url: 'https://example.org/fixture', snippet: 'Synthetic fixture; not a real search result.' }] },
+      isError: false,
+      durationMs: 0,
+      timestamp: Date.now()
+    })
+  });
+  const previousKey = process.env.BRAVE_SEARCH_API_KEY;
+  process.env.BRAVE_SEARCH_API_KEY = 'audit-test-placeholder';
+  try {
+    const service = new ResearchService(fixtureRegistry, knowledgeEngine);
+    const verified = await service.executeResearch({ prompt: 'What is the latest research?', runId: 'run_research_fixture' });
+    assert.strictEqual(verified.providerReady, true, 'Web search adapter returned structured evidence');
+    assert.strictEqual(verified.citations.length, 1);
+    assert.strictEqual(verified.citations[0].uri, 'https://example.org/fixture');
+  } finally {
+    if (previousKey === undefined) delete process.env.BRAVE_SEARCH_API_KEY;
+    else process.env.BRAVE_SEARCH_API_KEY = previousKey;
+  }
+  console.log('  -> PASS: Provider adapter produces citations from returned evidence (fixture only).');
 
   console.log('\n================================================================');
   console.log('  ALL PHASE 3.2 CAPABILITY REALITY AUDIT TESTS PASSED!          ');

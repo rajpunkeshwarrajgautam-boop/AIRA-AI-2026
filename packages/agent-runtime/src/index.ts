@@ -57,6 +57,7 @@ export class AgentRuntime extends EventEmitter {
     this.router = router || new ServerIntentRouter(this.capabilityRegistry, this.modelRouter);
     this.workflowRepo = workflowRepo || new PostgresWorkflowRepository();
     this.workflowCompiler = workflowCompiler || new WorkflowCompiler(this.modelRouter);
+    this.researchService = new ResearchService(this.toolRegistry, this.knowledgeEngine);
     this.workflowEngine = workflowEngine || new WorkflowEngine(
       this.workflowRepo,
       this.runRepo,
@@ -66,9 +67,8 @@ export class AgentRuntime extends EventEmitter {
       this.workspaceRoot,
       (runId, type, data) => this.emitRunEvent(runId, type, data),
       this.toolGateway,
-      new ResearchService(this.toolGateway || new ToolGateway(new PostgresToolCallRepository(), this.approvalKernel, this.workspaceRoot), this.knowledgeEngine)
+      this.researchService
     );
-    this.researchService = new ResearchService(this.toolGateway, this.knowledgeEngine);
   }
 
   public getToolGateway(): ToolGateway {
