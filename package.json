@@ -29,7 +29,8 @@
     "memory:init": "npx @agentmemory/agentmemory@latest init",
     "memory:start": "npx @agentmemory/agentmemory@latest start --port 3113",
     "memory:ui": "npx @agentmemory/agentmemory@latest ui",
-    "test:conversation-search": "npx tsx test/conversation-search.ts"
+    "test:conversation-search": "npx tsx test/conversation-search.ts",
+    "test:conversation-search-semantic": "npx tsx test/conversation-search-semantic.ts"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
