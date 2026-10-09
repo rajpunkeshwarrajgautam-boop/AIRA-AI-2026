@@ -102,6 +102,9 @@ jobs:
       - name: Conversation search certification
         run: npm run test:conversation-search
 
+      - name: Memory context regression certification
+        run: npm run test:memory-context
+
       - name: Capability reality audit suite
         run: npm run test:reality
 
