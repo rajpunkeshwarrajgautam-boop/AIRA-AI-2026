@@ -45,13 +45,22 @@ async function ensureSearchSession(force = false): Promise<void> {
   }
 }
 
-async function authenticatedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+async function authenticatedFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+  timeoutMs = 2500
+): Promise<Response> {
   await ensureSearchSession();
-  const withTimeout = { ...init, credentials: 'same-origin' as RequestCredentials, signal: init?.signal || AbortSignal.timeout(2500) };
-  let response = await fetch(input, withTimeout);
+  const makeRequest = () => fetch(input, {
+    ...init,
+    credentials: 'same-origin' as RequestCredentials,
+    signal: init?.signal || AbortSignal.timeout(timeoutMs)
+  });
+
+  let response = await makeRequest();
   if (response.status === 401) {
     await ensureSearchSession(true);
-    response = await fetch(input, withTimeout);
+    response = await makeRequest();
   }
   return response;
 }
@@ -77,7 +86,7 @@ export async function syncConversationToServer(conversation: Conversation): Prom
             createdAt: message.timestamp
           }))
       })
-    });
+    }, 20000);
     return response.ok;
   } catch {
     // Search persistence is additive. Existing local conversation behavior must
@@ -148,7 +157,12 @@ export async function deleteConversationFromServer(conversationId: string): Prom
 
 export async function searchConversationsServer(
   query: string,
-  options: { limit?: number; projectId?: string; role?: 'user' | 'assistant' } = {}
+  options: {
+    limit?: number;
+    projectId?: string;
+    role?: 'user' | 'assistant';
+    signal?: AbortSignal;
+  } = {}
 ): Promise<ConversationSearchResponse> {
   const params = new URLSearchParams({
     q: query,
@@ -157,7 +171,11 @@ export async function searchConversationsServer(
   if (options.projectId) params.set('projectId', options.projectId);
   if (options.role) params.set('role', options.role);
 
-  const response = await authenticatedFetch(`/api/search/conversations?${params.toString()}`);
+  const response = await authenticatedFetch(
+    `/api/search/conversations?${params.toString()}`,
+    { signal: options.signal },
+    12000
+  );
   if (!response.ok) {
     throw new Error(`Search failed (${response.status})`);
   }
