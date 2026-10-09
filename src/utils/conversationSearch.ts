@@ -86,6 +86,55 @@ export async function syncConversationToServer(conversation: Conversation): Prom
   }
 }
 
+export async function fetchConversationFromServer(
+  conversationId: string
+): Promise<Conversation | null> {
+  try {
+    const response = await authenticatedFetch(
+      `/api/conversations/${encodeURIComponent(conversationId)}`
+    );
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(`Conversation hydration failed (${response.status})`);
+
+    const body = await response.json() as {
+      conversation?: {
+        id: string;
+        title: string;
+        projectId?: string;
+        isPinned?: boolean;
+        createdAt: number;
+        updatedAt: number;
+        messages?: Array<{
+          id: string;
+          role: 'user' | 'assistant';
+          content: string;
+          createdAt: number;
+        }>;
+      };
+    };
+
+    const conversation = body.conversation;
+    if (!conversation) return null;
+
+    return {
+      id: conversation.id,
+      title: conversation.title,
+      projectId: conversation.projectId,
+      isPinned: Boolean(conversation.isPinned),
+      createdAt: Number(conversation.createdAt),
+      updatedAt: Number(conversation.updatedAt),
+      messages: (conversation.messages || []).map(message => ({
+        id: message.id,
+        role: message.role,
+        content: message.content,
+        timestamp: Number(message.createdAt)
+      }))
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function deleteConversationFromServer(conversationId: string): Promise<boolean> {
   try {
     const response = await authenticatedFetch(`/api/conversations/${encodeURIComponent(conversationId)}`, {
