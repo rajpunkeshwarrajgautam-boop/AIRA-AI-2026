@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { searchWeb, WebSearchError } from './search-providers.js';
 import {
   ToolDefinition,
   ToolCall,
@@ -123,12 +124,12 @@ export class ToolRegistry {
   }
 
   private registerBuiltIns(_workspaceRoot: string): void {
-    // 1. Web Search Tool
+    // 1. Tavily primary / Exa fallback: no API credentials exposed to the frontend.
     this.register({
       definition: {
         id: 'tool_web_search',
         name: 'web_search',
-        description: 'Search the public web for verified facts and technical documentation via Brave Search API.',
+        description: 'Search real public web sources using Tavily with Exa failover.',
         parameters: {
           type: 'object',
           properties: {
@@ -141,64 +142,27 @@ export class ToolRegistry {
         executionRuntime: 'CLOUD'
       },
       execute: async (args, _ctx) => {
-        const start = Date.now();
-        const query = String(args.query || '');
-
-        const braveKey = process.env.BRAVE_SEARCH_API_KEY;
-        if (!braveKey) {
+        const started = Date.now();
+        const callId = 'call_' + Math.random().toString(36).slice(2, 9);
+        try {
+          const { provider, results } = await searchWeb(String(args.query || ''));
           return {
-            toolCallId: 'call_' + Math.random().toString(36).slice(2, 9),
+            toolCallId: callId,
+            output: { provider, query: String(args.query || ''), totalResults: results.length, results },
+            isError: false,
+            durationMs: Date.now() - started,
+            timestamp: Date.now()
+          };
+        } catch (error) {
+          return {
+            toolCallId: callId,
             output: null,
-            error: 'PROVIDER_NOT_CONFIGURED: web_search requires BRAVE_SEARCH_API_KEY environment variable. ' +
-                   'Set this key to enable real web search. This tool does not return simulated results.',
+            error: error instanceof WebSearchError ? error.code : 'SEARCH_PROVIDER_UNAVAILABLE',
             isError: true,
-            durationMs: Date.now() - start,
+            durationMs: Date.now() - started,
             timestamp: Date.now()
           };
         }
-
-        // Real Brave Search API call
-        const response = await fetch(
-          `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=5`,
-          {
-            headers: {
-              'Accept': 'application/json',
-              'Accept-Encoding': 'gzip',
-              'X-Subscription-Token': braveKey
-            }
-          }
-        );
-
-        if (!response.ok) {
-          const errText = await response.text();
-          return {
-            toolCallId: 'call_' + Math.random().toString(36).slice(2, 9),
-            output: null,
-            error: `Brave Search API error (${response.status}): ${errText}`,
-            isError: true,
-            durationMs: Date.now() - start,
-            timestamp: Date.now()
-          };
-        }
-
-        const data = await response.json() as any;
-        const results = (data.web?.results || []).map((r: any) => ({
-          title: r.title,
-          url: r.url,
-          snippet: r.description || ''
-        }));
-
-        return {
-          toolCallId: 'call_' + Math.random().toString(36).slice(2, 9),
-          output: {
-            query,
-            totalResults: results.length,
-            results
-          },
-          isError: false,
-          durationMs: Date.now() - start,
-          timestamp: Date.now()
-        };
       }
     });
 
