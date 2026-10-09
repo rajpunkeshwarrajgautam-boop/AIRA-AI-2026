@@ -17,6 +17,7 @@ import {
 } from '../../contracts/src/index.js';
 import { ModelRouter, ChatMessageInput } from '../../model-router/src/index.js';
 import { ToolRegistry, ToolGateway, PostgresToolCallRepository } from '../../tool-runtime/src/index.js';
+import { configuredSearchProviders } from '../../tool-runtime/src/search-providers.js';
 import { ApprovalKernel } from '../../approvals/src/index.js';
 import { BrainV2KnowledgeEngine } from '../../knowledge/src/index.js';
 
@@ -27,6 +28,7 @@ import { ResearchService } from './research.js';
 import { WorkflowRepository, PostgresWorkflowRepository } from './workflow-repositories.js';
 import { WorkflowEngine } from './workflow-engine.js';
 import { WorkflowCompiler } from './workflow-compiler.js';
+import { buildDurableHistorySystemMessage } from './memory-policy.js';
 
 export class AgentRuntime extends EventEmitter {
   private eventStreams: Map<string, EventEmitter> = new Map();
@@ -749,16 +751,21 @@ export class AgentRuntime extends EventEmitter {
       if (durablePastHistory) {
         messages.push({
           role: 'system',
-          content: `DURABLE PRIOR CONVERSATION HISTORY RETRIEVED FROM SERVER DATABASE FOR THIS USER (PRINCIPAL: ${run.principalId}):\n${durablePastHistory}\n\nINSTRUCTIONS FOR MEMORY:\n- If the user asks whether you recall or previously discussed a topic, check the history above.\n- If the topic is found, confirm it accurately with specific details.\n- If a topic is NOT in the history above, state truthfully: "I did not find a record of that in our recent conversation history." DO NOT claim with absolute certainty "we never discussed X", as older conversations may not be indexed in the immediate window.`
+          content: buildDurableHistorySystemMessage(
+            run.principalId,
+            durablePastHistory,
+            run.prompt
+          )
         });
       }
       
       const now = new Date();
+      const liveSearchProviders = configuredSearchProviders();
       const currentContextMsg = `AIRA RUNTIME CONTEXT
 Current date: ${now.toDateString()}
 Current UTC time: ${now.toISOString()}
 Provider Capabilities:
-- webSearch: ${process.env.BRAVE_SEARCH_API_KEY ? 'READY' : 'PROVIDER_NOT_CONFIGURED'}
+- webSearch: ${liveSearchProviders.length > 0 ? `READY (${liveSearchProviders.join(', ')})` : 'PROVIDER_NOT_CONFIGURED'}
 - researchEvidenceCount: ${run.citations?.length || 0}`;
 
       messages.push({
