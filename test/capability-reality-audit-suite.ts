@@ -11,6 +11,14 @@ import { AutomationEngine } from '../packages/automation/src/index.js';
 import { ExecutionPrincipal } from '../packages/contracts/src/index.js';
 import { BrowserAdapter } from '../packages/tool-runtime/src/adapters/browser-adapter.js';
 
+async function executeAuditRun(runtime: AgentRuntime, createdRun: { id: string }, allowedStates: string[]) {
+  await runtime.startRun(createdRun.id);
+  const run = await runtime.getRun(createdRun.id);
+  assert.ok(run, 'Run was not persisted: ' + createdRun.id);
+  assert.ok(allowedStates.includes(run.state), 'Unexpected run state ' + run.state + ': ' + (run.error || run.content));
+  return run;
+}
+
 async function runRealityAuditSuite() {
   console.log('================================================================');
   console.log('  AIRA-AI-2026 — PHASE 3.2 CAPABILITY REALITY AUDIT SUITE       ');
@@ -276,7 +284,7 @@ async function runRealityAuditSuite() {
   const tempRunId = await agentRuntime.createRun({
     prompt: "What is today's date?"
   }, principalA);
-  let tempRun = await waitForRun(agentRuntime, tempRunId, ['COMPLETED', 'WAITING_FOR_APPROVAL']);
+  const tempRun = await executeAuditRun(agentRuntime, tempRunId, ['COMPLETED', 'WAITING_FOR_APPROVAL']);
   // intent should be resolved
   assert.ok(tempRun?.intent);
   console.log(`  -> PASS: Intent resolved for temporal request.`);
@@ -290,9 +298,9 @@ async function runRealityAuditSuite() {
   
   const researchRunId = await agentRuntime.createRun({
     prompt: 'What is the current box office collection for latest movie?',
-    advisoryIntent: 'RESEARCH'
+    intent: 'RESEARCH'
   }, principalA);
-  const researchRun = await waitForRun(agentRuntime, researchRunId, ['COMPLETED']);
+  const researchRun = await executeAuditRun(agentRuntime, researchRunId, ['COMPLETED']);
   
   assert.strictEqual(researchRun?.state, 'COMPLETED');
   assert.ok(
@@ -310,9 +318,9 @@ async function runRealityAuditSuite() {
   console.log('\n--- TEST 12: EXACT SCREENSHOT DEFECT REGRESSION ---');
   const defectRunId = await agentRuntime.createRun({
     prompt: "What is Dhurandhar's latest box office collection? Why is this figure authoritative?",
-    advisoryIntent: 'RESEARCH'
+    intent: 'RESEARCH'
   }, principalA);
-  const defectRun = await waitForRun(agentRuntime, defectRunId, ['COMPLETED']);
+  const defectRun = await executeAuditRun(agentRuntime, defectRunId, ['COMPLETED']);
   const content = defectRun?.content?.toLowerCase() || '';
   
   assert.ok(!content.includes('july 2024'), 'Must not claim July 2024 cutoff');
@@ -328,9 +336,9 @@ async function runRealityAuditSuite() {
   console.log('\n--- TEST 13: AGENT MISSION RESEARCH GROUNDING ---');
   const missionRunId = await agentRuntime.createRun({
     prompt: 'Find the latest information about recent tech layoffs, compare the sources, and summarize what changed recently.',
-    advisoryIntent: 'AGENT_MISSION'
+    intent: 'AGENT_MISSION'
   }, principalA);
-  const missionRun = await waitForRun(agentRuntime, missionRunId, ['COMPLETED', 'WAITING_FOR_TOOL', 'WAITING_FOR_APPROVAL']);
+  const missionRun = await executeAuditRun(agentRuntime, missionRunId, ['COMPLETED', 'WAITING_FOR_TOOL', 'WAITING_FOR_APPROVAL']);
   assert.ok(missionRun, 'Mission run started');
   console.log('  -> PASS: Agent mission cleanly handles freshness requirements.');
 
@@ -344,16 +352,21 @@ async function runRealityAuditSuite() {
     description: 'Test research capabilities',
     version: 1,
     steps: [
-      { stepId: 'step1', name: 'latest smartphone releases', type: 'RESEARCH', dependencies: [] }
+      { stepId: 'step1', name: 'latest smartphone releases', type: 'CAPABILITY', capability: 'RESEARCH', dependsOn: [], input: { topic: 'latest smartphone releases' } }
     ]
   };
   const wfAiraRun = await agentRuntime.createRun({
     prompt: 'Run the research workflow',
-    advisoryIntent: 'WORKFLOW'
+    intent: 'WORKFLOW'
   }, principalA);
-  const wfRunIdObj = await agentRuntime.getWorkflowEngine().createWorkflowRun(wfDef as any, await agentRuntime.getRun(wfAiraRun) as any, principalA);
+  const wfRunIdObj = await agentRuntime.getWorkflowEngine().createWorkflowRun(wfDef as any, wfAiraRun, principalA);
   assert.ok(wfRunIdObj, 'Workflow run created');
-  console.log('  -> PASS: Workflow research step execution path is verified.');
+  await agentRuntime.getWorkflowEngine().executeWorkflowRun(wfRunIdObj.id);
+  const executedWorkflow = await agentRuntime.getWorkflowRepository().getWorkflowRun(wfRunIdObj.id);
+  assert.strictEqual(executedWorkflow?.state, 'COMPLETED', 'Research workflow must complete, not merely be created');
+  assert.strictEqual(executedWorkflow?.stepStates.step1, 'COMPLETED');
+  assert.ok(executedWorkflow?.stepOutputs.step1, 'Research step output must be persisted');
+  console.log('  -> PASS: Research workflow step executed and persisted.');
 
   console.log('\n================================================================');
   console.log('  ALL PHASE 3.2 CAPABILITY REALITY AUDIT TESTS PASSED!          ');
