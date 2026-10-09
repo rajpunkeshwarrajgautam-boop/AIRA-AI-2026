@@ -101,10 +101,48 @@ jobs:
         run: npm run test:reality
 
 
+  semantic-search:
+    name: Semantic Search CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_USER: aira
+          POSTGRES_PASSWORD: aira
+          POSTGRES_DB: aira_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U aira -d aira_db"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run database migrations with pgvector
+        run: npm run db:migrate
+
+      - name: Semantic conversation search certification
+        run: npm run test:conversation-search-semantic
+
+
   certify:
     name: Main / PR certification
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
-    needs: fast
+    needs: [fast, semantic-search]
     runs-on: ubuntu-latest
     timeout-minutes: 40
     services:
