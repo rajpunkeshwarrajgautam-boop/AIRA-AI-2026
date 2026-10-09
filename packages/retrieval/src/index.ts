@@ -521,9 +521,14 @@ export class ConversationSearchRepository {
       .orderByRaw('d.embedding_vector <=> ?::vector ASC', [literal])
       .limit(Math.min(limit * 5, 200));
 
+    const minSemanticScore = Math.min(
+      Math.max(Number(process.env.AIRA_SEMANTIC_MIN_SCORE) || 0.35, -1),
+      1
+    );
     const byConversation = new Map<string, ConversationSearchResult>();
     for (const row of rows) {
       const score = Number(row.score) || 0;
+      if (score < minSemanticScore) continue;
       const result: ConversationSearchResult = {
         conversationId: row.conversation_id,
         messageId: row.message_id,
@@ -710,11 +715,14 @@ export class HybridConversationSearchService {
     const ranked = Array.from(fused.values())
       .map(entry => {
         const ageDays = Math.max(0, (now - entry.result.updatedAt) / 86_400_000);
-        const recencyBoost = Math.max(0, 0.004 * (1 - Math.min(ageDays, 30) / 30));
+        // RRF is the primary rank signal. Contextual boosts are deliberately
+        // small so recency/pinning can break close ties but never overpower a
+        // clearly stronger semantic match.
+        const recencyBoost = Math.max(0, 0.001 * (1 - Math.min(ageDays, 30) / 30));
         const exactBoost =
-          entry.result.matchType === 'title' ? 0.012 :
-          entry.result.matchType === 'exact' ? 0.008 : 0;
-        const pinBoost = entry.result.isPinned ? 0.002 : 0;
+          entry.result.matchType === 'title' ? 0.003 :
+          entry.result.matchType === 'exact' ? 0.002 : 0;
+        const pinBoost = entry.result.isPinned ? 0.0005 : 0;
 
         return {
           ...entry.result,
