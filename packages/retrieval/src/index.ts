@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { db } from '../../db/src/index.js';
 import type { EmbeddingProvider } from './embeddings.js';
 
@@ -121,6 +122,17 @@ function makeSnippet(content: string, query: string, maxLength = 280): string {
   return (start > 0 ? '…' : '') + clean.slice(start, end) + (end < clean.length ? '…' : '');
 }
 
+function storageId(kind: 'conversation' | 'message' | 'search', principalId: string, clientId: string): string {
+  const digest = createHash('sha256')
+    .update(kind)
+    .update('\0')
+    .update(principalId)
+    .update('\0')
+    .update(clientId)
+    .digest('hex');
+  return `${kind === 'conversation' ? 'conv' : kind === 'message' ? 'msg' : 'search'}_${digest}`;
+}
+
 function vectorLiteral(vector: number[]): string {
   if (!Array.isArray(vector) || vector.length === 0) throw new Error('EMPTY_EMBEDDING_VECTOR');
   if (!vector.every(value => typeof value === 'number' && Number.isFinite(value))) {
@@ -138,20 +150,24 @@ function vectorLiteral(vector: number[]): string {
 export class ConversationSearchRepository {
   async syncConversation(principalId: string, input: ConversationSyncInput): Promise<void> {
     if (!principalId) throw new Error('principalId is required');
-    if (!input.id?.trim()) throw new Error('conversation id is required');
+    const clientConversationId = input.id?.trim();
+    if (!clientConversationId) throw new Error('conversation id is required');
 
     const title = input.title?.trim() || 'Untitled conversation';
     const messages = Array.isArray(input.messages) ? input.messages : [];
 
     await db.transaction(async trx => {
-      const existing = await trx('conversations').where({ id: input.id }).first();
-      if (existing && existing.principal_id !== principalId) {
-        throw new Error('Conversation ownership mismatch');
-      }
+      const existingConversation = await trx('conversations')
+        .where({ principal_id: principalId, client_id: clientConversationId })
+        .first();
+
+      const conversationStorageId =
+        existingConversation?.id || storageId('conversation', principalId, clientConversationId);
 
       await trx('conversations')
         .insert({
-          id: input.id,
+          id: conversationStorageId,
+          client_id: clientConversationId,
           principal_id: principalId,
           project_id: input.projectId || null,
           title,
@@ -163,6 +179,7 @@ export class ConversationSearchRepository {
         })
         .onConflict('id')
         .merge({
+          client_id: clientConversationId,
           project_id: input.projectId || null,
           title,
           is_pinned: Boolean(input.isPinned),
@@ -171,49 +188,55 @@ export class ConversationSearchRepository {
           metadata: JSON.stringify(input.metadata || {})
         });
 
-      const incomingIds = messages.map(message => message.id).filter(Boolean);
+      const incomingClientIds = messages
+        .map(message => message.id?.trim())
+        .filter((id): id is string => Boolean(id));
 
-      if (incomingIds.length === 0) {
+      if (incomingClientIds.length === 0) {
         await trx('conversation_search_documents')
-          .where({ conversation_id: input.id, principal_id: principalId })
+          .where({ conversation_id: conversationStorageId, principal_id: principalId })
           .delete();
         await trx('conversation_messages')
-          .where({ conversation_id: input.id, principal_id: principalId })
+          .where({ conversation_id: conversationStorageId, principal_id: principalId })
           .delete();
       } else {
         const staleRows = await trx('conversation_messages')
-          .where({ conversation_id: input.id, principal_id: principalId })
-          .whereNotIn('id', incomingIds)
+          .where({ conversation_id: conversationStorageId, principal_id: principalId })
+          .whereNotIn('client_message_id', incomingClientIds)
           .select('id');
 
-        const staleIds = staleRows.map(row => row.id);
-        if (staleIds.length > 0) {
+        const staleStorageIds = staleRows.map(row => row.id);
+        if (staleStorageIds.length > 0) {
           await trx('conversation_search_documents')
-            .where({ conversation_id: input.id, principal_id: principalId })
-            .whereIn('message_id', staleIds)
+            .where({ conversation_id: conversationStorageId, principal_id: principalId })
+            .whereIn('message_id', staleStorageIds)
             .delete();
           await trx('conversation_messages')
-            .where({ conversation_id: input.id, principal_id: principalId })
-            .whereIn('id', staleIds)
+            .where({ conversation_id: conversationStorageId, principal_id: principalId })
+            .whereIn('id', staleStorageIds)
             .delete();
         }
       }
 
       for (const message of messages) {
-        if (!message.id?.trim()) continue;
+        const clientMessageId = message.id?.trim();
+        if (!clientMessageId) continue;
         if (message.role !== 'user' && message.role !== 'assistant') continue;
 
-        const messageExisting = await trx('conversation_messages').where({ id: message.id }).first();
-        if (messageExisting && messageExisting.principal_id !== principalId) {
-          throw new Error('Conversation message ownership mismatch');
-        }
+        const existingMessage = await trx('conversation_messages')
+          .where({
+            principal_id: principalId,
+            conversation_id: conversationStorageId,
+            client_message_id: clientMessageId
+          })
+          .first();
+
+        const messageStorageId =
+          existingMessage?.id || storageId('message', principalId, clientMessageId);
 
         const searchExisting = await trx('conversation_search_documents')
-          .where({ message_id: message.id })
+          .where({ message_id: messageStorageId, principal_id: principalId })
           .first();
-        if (searchExisting && searchExisting.principal_id !== principalId) {
-          throw new Error('Conversation search document ownership mismatch');
-        }
 
         const content = String(message.content || '');
         const updatedAt = Math.max(message.createdAt || input.updatedAt, input.updatedAt);
@@ -225,8 +248,9 @@ export class ConversationSearchRepository {
 
         await trx('conversation_messages')
           .insert({
-            id: message.id,
-            conversation_id: input.id,
+            id: messageStorageId,
+            client_message_id: clientMessageId,
+            conversation_id: conversationStorageId,
             principal_id: principalId,
             run_id: message.runId || null,
             role: message.role,
@@ -237,6 +261,7 @@ export class ConversationSearchRepository {
           })
           .onConflict('id')
           .merge({
+            client_message_id: clientMessageId,
             run_id: message.runId || null,
             role: message.role,
             content,
@@ -264,9 +289,9 @@ export class ConversationSearchRepository {
 
         await trx('conversation_search_documents')
           .insert({
-            id: `search_${message.id}`,
-            conversation_id: input.id,
-            message_id: message.id,
+            id: storageId('search', principalId, clientMessageId),
+            conversation_id: conversationStorageId,
+            message_id: messageStorageId,
             principal_id: principalId,
             project_id: input.projectId || null,
             role: message.role,
@@ -286,22 +311,22 @@ export class ConversationSearchRepository {
   async deleteConversation(principalId: string, conversationId: string): Promise<boolean> {
     return db.transaction(async trx => {
       const conversation = await trx('conversations')
-        .where({ id: conversationId, principal_id: principalId })
+        .where({ client_id: conversationId, principal_id: principalId })
         .whereNull('deleted_at')
         .first();
 
       if (!conversation) return false;
 
       await trx('conversation_search_documents')
-        .where({ conversation_id: conversationId, principal_id: principalId })
+        .where({ conversation_id: conversation.id, principal_id: principalId })
         .delete();
 
       await trx('conversation_messages')
-        .where({ conversation_id: conversationId, principal_id: principalId })
+        .where({ conversation_id: conversation.id, principal_id: principalId })
         .delete();
 
       await trx('conversations')
-        .where({ id: conversationId, principal_id: principalId })
+        .where({ id: conversation.id, principal_id: principalId })
         .update({
           deleted_at: Date.now(),
           updated_at: Date.now()
@@ -341,14 +366,21 @@ export class ConversationSearchRepository {
   ): Promise<PendingEmbeddingDocument[]> {
     const rows = await db('conversation_search_documents as d')
       .join('conversations as c', 'c.id', 'd.conversation_id')
+      .join('conversation_messages as m', 'm.id', 'd.message_id')
       .where('d.principal_id', principalId)
       .andWhere('c.principal_id', principalId)
-      .andWhere('d.conversation_id', conversationId)
+      .andWhere('m.principal_id', principalId)
+      .andWhere('c.client_id', conversationId)
       .whereNull('c.deleted_at')
       .andWhere(builder => {
         builder.whereNull('d.embedding_status').orWhereNot('d.embedding_status', 'READY');
       })
-      .select('d.id', 'd.conversation_id', 'd.message_id', 'd.content')
+      .select(
+        'd.id',
+        'c.client_id as conversation_id',
+        'm.client_message_id as message_id',
+        'd.content'
+      )
       .orderBy('d.created_at', 'asc')
       .limit(Math.min(Math.max(limit, 1), 128));
 
@@ -396,7 +428,9 @@ export class ConversationSearchRepository {
 
     const builder = db('conversation_search_documents as d')
       .join('conversations as c', 'c.id', 'd.conversation_id')
+      .join('conversation_messages as m', 'm.id', 'd.message_id')
       .where('d.principal_id', principalId)
+      .andWhere('m.principal_id', principalId)
       .andWhere('c.principal_id', principalId)
       .whereNull('c.deleted_at');
 
