@@ -12,7 +12,12 @@ import { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
 import { AutomationEngine } from '../../../packages/automation/src/index.js';
 import { PostgresAgentRepository, PostgresRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
 import { PostgresAutomationRepository, PostgresAutomationRunRepository } from '../../../packages/automation/src/repositories.js';
-import { ConversationSearchRepository } from '../../../packages/retrieval/src/index.js';
+import {
+  ConversationSearchRepository,
+  ConversationEmbeddingIndexer,
+  HybridConversationSearchService,
+  createEmbeddingProvider
+} from '../../../packages/retrieval/src/index.js';
 import {
   CreateRunRequestSchema,
   ApprovalDecisionSchema,
@@ -137,6 +142,9 @@ const runRepo = new PostgresRunRepository();
 const autoRepo = new PostgresAutomationRepository();
 const autoRunRepo = new PostgresAutomationRunRepository();
 const conversationSearchRepo = new ConversationSearchRepository();
+const conversationEmbeddingProvider = createEmbeddingProvider();
+const conversationEmbeddingIndexer = new ConversationEmbeddingIndexer(conversationSearchRepo, conversationEmbeddingProvider);
+const conversationHybridSearch = new HybridConversationSearchService(conversationSearchRepo, conversationEmbeddingProvider);
 
 const agentRuntime = new AgentRuntime(
   modelRouter,
@@ -247,7 +255,17 @@ app.post('/api/conversations/sync', async (req: Request, res: Response) => {
       }))
     });
 
-    res.status(200).json({ status: 'SYNCED', conversationId: String(body.id) });
+    const indexing = await conversationEmbeddingIndexer.indexConversation(
+      req.principal!.userId,
+      String(body.id),
+      64
+    );
+
+    res.status(200).json({
+      status: 'SYNCED',
+      conversationId: String(body.id),
+      indexing
+    });
   } catch (err: any) {
     const status = String(err?.message || '').includes('ownership mismatch') ? 403 : 400;
     res.status(status).json({ error: err?.message || 'Conversation sync failed.' });
@@ -276,7 +294,7 @@ app.get('/api/search/conversations', async (req: Request, res: Response) => {
       ? req.query.projectId.trim()
       : undefined;
 
-    const results = await conversationSearchRepo.search(req.principal!.userId, {
+    const result = await conversationHybridSearch.search(req.principal!.userId, {
       query,
       limit: Number.isFinite(parsedLimit) ? parsedLimit : 10,
       role,
@@ -284,11 +302,27 @@ app.get('/api/search/conversations', async (req: Request, res: Response) => {
     });
 
     res.setHeader('Cache-Control', 'no-store');
-    res.json({ query, results });
+    res.json(result);
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Conversation search failed.' });
   }
 });
+
+app.get('/api/search/capabilities', async (_req: Request, res: Response) => {
+  try {
+    const vector = await conversationSearchRepo.getVectorCapability();
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      lexical: 'READY',
+      pgvector: vector.ready ? 'READY' : 'NOT_READY',
+      embeddingProvider: conversationEmbeddingProvider.isConfigured() ? 'READY' : 'NOT_CONFIGURED',
+      hybrid: vector.ready && conversationEmbeddingProvider.isConfigured() ? 'READY' : 'DEGRADED_LEXICAL'
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Search capability inspection failed.' });
+  }
+});
+
 
 // -----------------------------------------------------------------------
 // Runs Management
