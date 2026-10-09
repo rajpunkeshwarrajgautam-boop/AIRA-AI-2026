@@ -1,6 +1,7 @@
 import { ToolRegistry, ToolCall } from '../../tool-runtime/src/index.js';
 import { Citation } from '../../contracts/src/index.js';
 import { BrainV2KnowledgeEngine } from '../../knowledge/src/index.js';
+import { configuredSearchProviders } from '../../tool-runtime/src/search-providers.js';
 
 export interface ResearchOptions {
   prompt: string;
@@ -35,10 +36,8 @@ export class ResearchService {
     const { prompt, runId } = options;
     const freshnessRequired = this.isFreshnessRequired(prompt);
     
-    // Check provider capability
-    // In our system, web_search tool capability requires BRAVE_SEARCH_API_KEY
-    const isBraveConfigured = !!process.env.BRAVE_SEARCH_API_KEY;
-    let providerReady = isBraveConfigured;
+    // Availability is dynamic, but providerReady becomes true only after verified results.
+    let providerReady = configuredSearchProviders().length > 0;
 
     let citations: Citation[] = [];
     const toolCalls: ToolCall[] = [];

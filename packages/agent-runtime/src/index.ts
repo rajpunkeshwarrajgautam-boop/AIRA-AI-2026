@@ -448,7 +448,7 @@ export class AgentRuntime extends EventEmitter {
         });
 
         if (researchResult.freshnessRequired && !researchResult.providerReady) {
-          const msg = `RESEARCH_PROVIDER_NOT_READY: Real-time web search requires BRAVE_SEARCH_API_KEY environment variable. Aira does not manufacture or hallucinate citations or external source documents.`;
+          const msg = `RESEARCH_PROVIDER_NOT_READY: Live web-search evidence is unavailable. Configure TAVILY_API_KEY or EXA_API_KEY, or check provider quota and connectivity. Aira does not invent citations.`;
           run.content = msg;
           run.executionCheckpoint = 'COMPLETED';
           await this.runRepo.saveRun(run);

@@ -91,6 +91,9 @@ jobs:
       - name: Browser execution suite
         run: npm run test:browser
 
+      - name: Search provider failover certification (mocked)
+        run: npm run test:search
+
       - name: Capability reality audit suite
         run: npm run test:reality
 

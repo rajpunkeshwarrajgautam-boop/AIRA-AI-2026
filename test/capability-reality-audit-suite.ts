@@ -129,8 +129,8 @@ async function runRealityAuditSuite() {
   }
   assert.strictEqual(completedResearch?.state, 'COMPLETED');
   console.log('  -> Research response:', completedResearch?.content.slice(0, 160));
-  // Without BRAVE_SEARCH_API_KEY, must fail truthfully with RESEARCH_PROVIDER_NOT_READY
-  if (!process.env.BRAVE_SEARCH_API_KEY) {
+  // Without either search provider, research must fail truthfully without invented sources
+  if (!process.env.TAVILY_API_KEY && !process.env.EXA_API_KEY) {
     assert.ok(
       completedResearch?.content.includes('RESEARCH_PROVIDER_NOT_READY'),
       'Must return typed RESEARCH_PROVIDER_NOT_READY instead of fabricating DOIs'
@@ -294,8 +294,10 @@ async function runRealityAuditSuite() {
   // TEST 11: Freshness Sensitive Request without API Key
   // -------------------------------------------------------------
   console.log('\n--- TEST 11: FRESHNESS POLICY WITHOUT PROVIDER ---');
-  const tempKey = process.env.BRAVE_SEARCH_API_KEY;
-  delete process.env.BRAVE_SEARCH_API_KEY; // Force no provider
+  const oldTavilyKey = process.env.TAVILY_API_KEY;
+  const oldExaKey = process.env.EXA_API_KEY;
+  delete process.env.TAVILY_API_KEY;
+  delete process.env.EXA_API_KEY; // Force both providers unavailable
   
   const researchRunId = await agentRuntime.createRun({
     prompt: 'What is the current box office collection for latest movie?',
@@ -310,8 +312,11 @@ async function runRealityAuditSuite() {
   );
   console.log('  -> PASS: Truthful provider-unavailable state correctly engaged.');
 
-  // Restore API key if it existed
-  if (tempKey) process.env.BRAVE_SEARCH_API_KEY = tempKey;
+  // Restore previous provider configuration.
+  if (oldTavilyKey === undefined) delete process.env.TAVILY_API_KEY;
+  else process.env.TAVILY_API_KEY = oldTavilyKey;
+  if (oldExaKey === undefined) delete process.env.EXA_API_KEY;
+  else process.env.EXA_API_KEY = oldExaKey;
 
   // -------------------------------------------------------------
   // TEST 12: EXACT SCREENSHOT DEFECT REGRESSION (No Fake Agency Protocol)
@@ -326,7 +331,7 @@ async function runRealityAuditSuite() {
   
   assert.ok(!content.includes('july 2024'), 'Must not claim July 2024 cutoff');
   assert.ok(!content.includes('agency protocol'), 'Must not invent agency protocol');
-  if (!process.env.BRAVE_SEARCH_API_KEY) {
+  if (!process.env.TAVILY_API_KEY && !process.env.EXA_API_KEY) {
     assert.ok(content.includes('research_provider_not_ready'), 'Must gracefully fail if no live search');
   }
   console.log('  -> PASS: No fabricated July 2024 cutoff or agency protocol.');
@@ -367,7 +372,7 @@ async function runRealityAuditSuite() {
   assert.strictEqual(executedWorkflow?.state, 'COMPLETED', 'Research workflow must complete, not merely be created');
   assert.strictEqual(executedWorkflow?.stepStates.step1, 'COMPLETED');
   assert.ok(executedWorkflow?.stepOutputs.step1, 'Research step output must be persisted');
-  if (!process.env.BRAVE_SEARCH_API_KEY) {
+  if (!process.env.TAVILY_API_KEY && !process.env.EXA_API_KEY) {
     assert.strictEqual((executedWorkflow?.stepOutputs.step1 as any).status, 'RESEARCH_PROVIDER_NOT_READY');
   }
   console.log('  -> PASS: Research workflow step executed and persisted.');
@@ -389,8 +394,8 @@ async function runRealityAuditSuite() {
       timestamp: Date.now()
     })
   });
-  const previousKey = process.env.BRAVE_SEARCH_API_KEY;
-  process.env.BRAVE_SEARCH_API_KEY = 'audit-test-placeholder';
+  const previousKey = process.env.TAVILY_API_KEY;
+  process.env.TAVILY_API_KEY = 'audit-test-placeholder';
   try {
     const service = new ResearchService(fixtureRegistry, knowledgeEngine);
     const verified = await service.executeResearch({ prompt: 'What is the latest research?', runId: 'run_research_fixture' });
@@ -398,8 +403,8 @@ async function runRealityAuditSuite() {
     assert.strictEqual(verified.citations.length, 1);
     assert.strictEqual(verified.citations[0].uri, 'https://example.org/fixture');
   } finally {
-    if (previousKey === undefined) delete process.env.BRAVE_SEARCH_API_KEY;
-    else process.env.BRAVE_SEARCH_API_KEY = previousKey;
+    if (previousKey === undefined) delete process.env.TAVILY_API_KEY;
+    else process.env.TAVILY_API_KEY = previousKey;
   }
   console.log('  -> PASS: Provider adapter produces citations from returned evidence (fixture only).');
 
