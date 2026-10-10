@@ -25,6 +25,30 @@ function entries(value: DependencyMap | undefined): [string, string][] {
 const registry = 'https://registry.npmjs.org/';
 const unsafeProtocol = /^(?:file:|link:|git:|git\+|https?:|workspace:|npm:)/i;
 
+/**
+ * Exact approved direct versions are provisioned by the worker operator in
+ * an offline cache. Generated projects may not request arbitrary packages.
+ */
+export function validateApprovedDependencySpecs(packageJson: string, allowed: Record<string, string>): boolean {
+  const pkg = readJson<PackageManifest & Record<string, unknown>>(packageJson);
+  const deps = [...entries(pkg.dependencies), ...entries(pkg.devDependencies)];
+  if (deps.length === 0) return false;
+  if (deps.length > 30 || pkg.overrides || pkg.workspaces || pkg.bundledDependencies ||
+      pkg.bundleDependencies || pkg.resolutions || pkg.publishConfig) {
+    throw new Error('UNSUPPORTED_PACKAGE_FEATURE');
+  }
+  const names = new Set<string>();
+  for (const [name, version] of deps) {
+    if (!/^(@[a-z0-9._-]+\/)?[a-z0-9._-]+$/i.test(name) ||
+        !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version) ||
+        names.has(name) || allowed[name] !== version) {
+      throw new Error('DEPENDENCY_NOT_APPROVED');
+    }
+    names.add(name);
+  }
+  return true;
+}
+
 /** Validates exact declared dependency-to-lock mappings and remote tarball hashes. */
 export function validateOfflineDependencyLock(packageJson: string, lockJson: string): void {
   const pkg = readJson<PackageManifest>(packageJson);
