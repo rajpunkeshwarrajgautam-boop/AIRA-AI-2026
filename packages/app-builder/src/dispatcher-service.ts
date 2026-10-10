@@ -21,6 +21,10 @@ async function main(): Promise<void> {
     { leaseMs: 60_000, heartbeatMs: 5_000, pollMs: 1_000 }
   );
   const controller = new AbortController();
+  const reconciliation = setInterval(() => {
+    void reconcileTerminalBuildRuns().catch(err =>
+      console.error('[aira-builder-dispatcher] reconcile failed:', err instanceof Error ? err.message : 'unknown'));
+  }, 15_000);
   const shutdown = () => {
     dispatcher.stop();
     controller.abort();
@@ -32,6 +36,7 @@ async function main(): Promise<void> {
     console.log('[aira-builder-dispatcher] ready (separate long-lived process)');
     await dispatcher.serve(controller.signal);
   } finally {
+    clearInterval(reconciliation);
     await db.destroy();
   }
 }
