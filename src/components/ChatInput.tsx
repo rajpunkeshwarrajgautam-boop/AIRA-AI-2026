@@ -221,7 +221,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           rows={1}
-          className="max-h-[38vh] w-full resize-none bg-transparent px-4 pb-2 pt-3.5 text-base leading-relaxed text-claude-text-light outline-hidden selection:bg-claude-terracotta/20 placeholder:text-claude-muted-light/55 dark:text-claude-text-dark dark:placeholder:text-claude-muted-dark/55"
+          className="max-h-[38vh] w-full resize-none bg-transparent px-4 pb-2 pt-3.5 text-base leading-relaxed text-claude-text-light outline-hidden selection:bg-claude-terracotta/20 placeholder:text-claude-muted-light dark:text-claude-text-dark dark:placeholder:text-claude-muted-dark"
         />
 
         <div className="flex items-center justify-between gap-2 px-3 pb-3 pt-1">
