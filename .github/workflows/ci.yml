@@ -90,6 +90,9 @@ jobs:
       - name: Private object storage integration
         run: npm run test:app-builder-objects
 
+      - name: Compiled preview and grant certification
+        run: npm run test:app-builder-preview-grants
+
       - name: Runtime verification
         run: npm test
 
