@@ -75,7 +75,8 @@ try {
   assert.equal(await refs.get(jobId, stranger, 'source'), undefined);
   assert.equal(await refs.get(jobId, owner, 'compiled'), undefined);
   await refs.save(jobId, owner, run, 'source', source);
-  await assert.rejects(refs.save(jobId, owner, run, 'source', { ...source, sha256: 'a'.repeat(64) }),
+  await assert.rejects(refs.save(jobId, owner, run, 'source', { ...source,
+    key: source.key.slice(0, -64) + 'a'.repeat(64), sha256: 'a'.repeat(64) }),
     /BUILD_OBJECT_IMMUTABILITY_CONFLICT/);
 
   const compiled = await objectsClient.put(owner, 'compiled',
