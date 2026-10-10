@@ -17,6 +17,8 @@ export class PreviewGrantStore {
     if (!uuid.test(queueJobId) || !ownerId || ownerId.length > 160) throw new Error('INVALID_PREVIEW_REQUEST');
     const job = await db('aira_app_build_jobs').where({ id: queueJobId, owner_id: ownerId }).first();
     if (!job || job.state !== 'COMPLETED') throw new Error('PREVIEW_BUILD_NOT_COMPLETE');
+    const result = typeof job.result === 'string' ? JSON.parse(job.result) : job.result;
+    if (!result || result.buildStatus !== 'BUILD_PASSED') throw new Error('PREVIEW_BUILD_NOT_VERIFIED');
     const compiled = await new PostgresObjectRefStore().get(queueJobId, ownerId, 'compiled');
     if (!compiled) throw new Error('PREVIEW_COMPILED_ARTIFACT_MISSING');
     const ticket = randomBytes(32).toString('hex');
