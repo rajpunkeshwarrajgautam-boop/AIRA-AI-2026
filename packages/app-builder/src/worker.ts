@@ -17,7 +17,7 @@ const SourceFile = z.object({
 export const BuildInput = z.object({
   ownerId: z.string().min(1).max(120),
   files: z.array(SourceFile).min(1).max(50),
-  steps: z.array(z.enum(['syntax', 'build', 'test'])).min(1).max(3)
+  steps: z.tuple([z.literal('syntax'), z.literal('build'), z.literal('test')])
 }).strict();
 
 export type BuildRequest = z.infer<typeof BuildInput>;
