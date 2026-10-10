@@ -164,7 +164,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const handleSelectChatMobile = (id: string) => {
     onSelectChat(id);
-    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+    if (typeof window !== 'undefined' && window.innerWidth < 1280) {
       onToggleOpen();
     }
   };
@@ -172,7 +172,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const handleNewChatMobile = () => {
     onSelectWorkspace('chat');
     onNewChat();
-    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+    if (typeof window !== 'undefined' && window.innerWidth < 1280) {
       onToggleOpen();
     }
   };
@@ -181,7 +181,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <button
       onClick={() => {
         onSelectWorkspace(mode);
-        if (typeof window !== 'undefined' && window.innerWidth < 768) onToggleOpen();
+        if (typeof window !== 'undefined' && window.innerWidth < 1280) onToggleOpen();
       }}
       className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-[13px] font-semibold transition-all duration-300 ${workspaceMode === mode ? 'bg-claude-surface-light dark:bg-claude-surface-dark text-claude-text-light dark:text-white shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] border border-claude-border-light dark:border-claude-border-dark' : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark border border-transparent'}`}
     >
@@ -246,7 +246,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={onToggleOpen}
-            className="fixed inset-0 bg-stone-900/40 dark:bg-black/60 backdrop-blur-sm z-40 md:hidden"
+            className="fixed inset-0 bg-stone-900/40 dark:bg-black/60 backdrop-blur-sm z-40 xl:hidden"
             aria-hidden="true"
           />
           <motion.aside 
@@ -254,7 +254,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             animate={{ x: 0, opacity: 1 }}
             exit={{ x: -320, opacity: 0 }}
             transition={{ type: "spring", stiffness: 320, damping: 32 }}
-            className="fixed inset-y-0 left-0 z-50 md:relative md:z-30 w-72 md:w-80 h-[100dvh] flex flex-col bg-claude-surface2-light dark:bg-claude-surface2-dark border-r border-claude-border-light dark:border-claude-border-dark select-none flex-shrink-0 shadow-2xl md:shadow-none"
+            className="fixed inset-y-0 left-0 z-50 xl:relative xl:z-30 w-72 xl:w-80 h-[100dvh] flex flex-col bg-claude-surface2-light dark:bg-claude-surface2-dark border-r border-claude-border-light dark:border-claude-border-dark select-none flex-shrink-0 shadow-2xl xl:shadow-none"
           >
             <div className="p-4 pb-3 flex items-center justify-between">
               <div className="flex items-center space-x-2.5">
