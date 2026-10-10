@@ -19,7 +19,7 @@ export const BuildInput = z.object({
 }).strict();
 
 export type BuildRequest = z.infer<typeof BuildInput>;
-export type BuildState = 'QUEUED' | 'RUNNING' | 'BUILD_PASSED' | 'FAILED' | 'BLOCKED';
+export type BuildState = 'QUEUED' | 'RUNNING' | 'BUILD_PASSED' | 'FAILED' | 'BLOCKED' | 'CANCELLED';
 export interface BuildJob {
   id: string;
   ownerId: string;
@@ -95,6 +95,7 @@ export class DockerProjectWorker {
   private jobs = new Map<string, BuildJob>();
   private tickets = new Map<string, { jobId: string; expires: number }>();
   private active = 0;
+  private controllers = new Map<string, AbortController>();
   constructor(readonly config: WorkerConfig) {
     if (config.token.length < 32) throw new Error('WORKER_TOKEN_TOO_SHORT');
     if (!Number.isInteger(config.port) || !Number.isInteger(config.previewPort) || config.port === config.previewPort) throw new Error('INVALID_WORKER_PORTS');
@@ -137,7 +138,7 @@ export class DockerProjectWorker {
     if (!job || job.ownerId !== ownerId) return undefined;
     return { ...job, steps: [...job.steps] };
   }
-  private async docker(workspace: string, args: string[]): Promise<{ exitCode: number; output: string }> {
+  private async docker(workspace: string, args: string[], signal: AbortSignal): Promise<{ exitCode: number; output: string }> {
     const uid = process.getuid?.();
     const gid = process.getgid?.();
     if (!uid || gid === undefined) throw new Error('DEDICATED_UNPRIVILEGED_WORKER_REQUIRED');
@@ -157,7 +158,7 @@ export class DockerProjectWorker {
     ];
     try {
       const out = await execFileAsync('docker', dockerArgs, {
-        timeout: 45_000, maxBuffer: 256_000, windowsHide: true
+        timeout: 45_000, maxBuffer: 256_000, windowsHide: true, signal
       });
       return { exitCode: 0, output: (out.stdout + '\n' + out.stderr).slice(-8_000) };
     } catch (error: unknown) {
@@ -193,7 +194,12 @@ export class DockerProjectWorker {
       };
       this.jobs.set(id, job);
       await this.persist(job);
-      void this.execute(job, validated, root).finally(() => { this.active -= 1; });
+      const controller = new AbortController();
+      this.controllers.set(id, controller);
+      void this.execute(job, validated, root, controller.signal).finally(() => {
+        this.controllers.delete(id);
+        this.active -= 1;
+      });
       return { ...job };
     } catch (error) {
       this.active -= 1;
@@ -201,8 +207,9 @@ export class DockerProjectWorker {
       throw error;
     }
   }
-  private async execute(job: BuildJob, request: BuildRequest, root: string): Promise<void> {
+  private async execute(job: BuildJob, request: BuildRequest, root: string, signal: AbortSignal): Promise<void> {
     try {
+      if (signal.aborted) return;
       job.state = 'RUNNING';
       await this.persist(job);
       // Dependency installation is intentionally unavailable until a constrained registry
@@ -215,6 +222,7 @@ export class DockerProjectWorker {
         }
       }
       for (const step of request.steps) {
+        if (signal.aborted) throw new Error('BUILD_CANCELLED');
         let argv: string[];
         if (step === 'syntax') {
           const js = request.files.find(f => f.path.endsWith('.js'));
@@ -226,11 +234,13 @@ export class DockerProjectWorker {
           if (!scripts[step]) throw new Error('SCRIPT_NOT_DEFINED_' + step.toUpperCase());
           argv = ['npm', 'run', step, '--offline'];
         }
-        const result = await this.docker(root, argv);
+        const result = await this.docker(root, argv, signal);
+        if (signal.aborted) throw new Error('BUILD_CANCELLED');
         job.steps.push({ name: step, exitCode: result.exitCode, output: result.output });
         await this.persist(job);
         if (result.exitCode !== 0) throw new Error('STEP_FAILED_' + step.toUpperCase());
       }
+      if (signal.aborted) throw new Error('BUILD_CANCELLED');
       const index = request.files.find(f => f.path === 'index.html');
       if (!index) throw new Error('STATIC_PREVIEW_REQUIRES_INDEX_HTML');
       job.state = 'BUILD_PASSED'; // Build steps passed only; not functional gameplay certification.
@@ -240,12 +250,26 @@ export class DockerProjectWorker {
       job.previewUrl = this.config.previewOrigin + '/p/' + ticket + '/index.html';
       await this.persist(job);
     } catch (err: unknown) {
-      job.state = 'FAILED';
-      job.error = err instanceof Error ? err.message : String(err);
+      job.state = signal.aborted ? 'CANCELLED' : 'FAILED';
+      job.error = signal.aborted ? 'BUILD_CANCELLED' : (err instanceof Error ? err.message : String(err));
       job.previewTicket = undefined;
       job.previewUrl = undefined;
       await this.persist(job);
     }
+  }
+  async cancelJob(id: string, ownerId: string): Promise<BuildJob | undefined> {
+    const job = this.jobs.get(id);
+    if (!job || job.ownerId !== ownerId) return undefined;
+    if (job.state === 'QUEUED' || job.state === 'RUNNING') {
+      job.state = 'CANCELLED';
+      job.error = 'BUILD_CANCELLED';
+      job.previewTicket = undefined;
+      job.previewUrl = undefined;
+      for (const [ticket, grant] of this.tickets) if (grant.jobId === id) this.tickets.delete(ticket);
+      this.controllers.get(id)?.abort();
+      await this.persist(job);
+    }
+    return this.getJob(id, ownerId);
   }
   private authenticate(req: IncomingMessage): boolean {
     const header = req.headers.authorization || '';
@@ -306,6 +330,11 @@ export class DockerProjectWorker {
         return;
       }
       const match = req.url?.match(/^\/v1\/jobs\/([0-9a-f-]{36})$/);
+      if (match && req.method === 'DELETE') {
+        const job = await this.cancelJob(match[1], owner);
+        if (!job) return this.send(res, 404, { error: 'JOB_NOT_FOUND' });
+        return this.send(res, 200, job);
+      }
       if (match && req.method === 'GET') {
         const job = this.getJob(match[1], owner);
         if (!job) return this.send(res, 404, { error: 'JOB_NOT_FOUND' });
