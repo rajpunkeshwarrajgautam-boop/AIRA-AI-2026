@@ -69,6 +69,20 @@ export class CapabilityRegistry {
   }
 
   private registerBuiltIns(): void {
+    // Explicitly advertise the currently missing sandboxed application build capability.
+    // No adapter is registered: marking READY would falsely imply project execution.
+    this.register({
+      id: 'cap_application_build',
+      name: 'Sandboxed Application Builder',
+      executionType: 'APPLICATION_BUILD',
+      availability: 'COMING_SOON',
+      sideEffectClass: 'WRITE',
+      approvalPolicy: 'require_approval',
+      requiredPrincipalScope: ['projects.write'],
+      handler: 'unavailable_build_sandbox',
+      status: 'NOT_READY'
+    });
+
     this.register({
       id: 'cap_chat_answer',
       name: 'Direct Conversational Synthesis',
