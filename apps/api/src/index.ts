@@ -343,6 +343,24 @@ app.get('/api/search/capabilities', async (_req: Request, res: Response) => {
 });
 
 
+// An authenticated principal may cancel their own live build. The worker enforces
+// ownership independently; cancellation is never an unscoped tool action.
+app.post('/api/app-builder/jobs/:id/cancel', async (req: Request, res: Response) => {
+  try {
+    const principal = req.principal!;
+    if (!principal.scopes?.includes('*') && !principal.scopes?.includes('projects.write')) {
+      return res.status(403).json({ error: 'PROJECT_WRITE_PERMISSION_DENIED' });
+    }
+    const client = new ApplicationBuildClient();
+    const result = await client.cancel(req.params.id, principal.userId);
+    return res.status(200).json({ jobId: result.id, state: result.state });
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : '';
+    return res.status(detail === 'BUILD_CANCEL_FAILED_404' ? 404 : 503)
+      .json({ error: detail === 'BUILD_CANCEL_FAILED_404' ? 'JOB_NOT_FOUND' : 'BUILD_CANCEL_UNAVAILABLE' });
+  }
+});
+
 // Download generated project source through the authenticated control plane.
 // Preview/source ownership is independently revalidated by the worker.
 app.get('/api/app-builder/jobs/:id/source', async (req: Request, res: Response) => {
