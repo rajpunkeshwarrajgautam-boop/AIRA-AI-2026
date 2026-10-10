@@ -105,14 +105,15 @@ export class DockerProjectWorker {
 
   private async persist(job: BuildJob): Promise<void> {
     job.updatedAt = Date.now();
-    await writeFile(join(this.config.root, job.id, 'job-state.json'), JSON.stringify(job), { mode: 0o600 });
+    await writeFile(join(this.config.root, '_state', job.id + '.json'), JSON.stringify(job), { mode: 0o600 });
   }
   async initialize(): Promise<void> {
     await mkdir(this.config.root, { recursive: true, mode: 0o700 });
+    await mkdir(join(this.config.root, '_state'), { recursive: true, mode: 0o700 });
     // A previously running job cannot be assumed to have succeeded after a crash.
     for (const name of await readdir(this.config.root)) {
       if (!/^[0-9a-f-]{36}$/.test(name)) continue;
-      const file = join(this.config.root, name, 'job-state.json');
+      const file = join(this.config.root, '_state', name + '.json');
       try {
         const record = JSON.parse(await readFile(file, 'utf8')) as BuildJob;
         if (!record.ownerId || !record.id) continue;
@@ -352,6 +353,7 @@ export class DockerProjectWorker {
     for (const [key, value] of this.tickets) if (value.jobId === jobId) this.tickets.delete(key);
     this.jobs.delete(jobId);
     await rm(resolve(this.config.root, jobId), { recursive: true, force: true });
+    await rm(join(this.config.root, '_state', jobId + '.json'), { force: true });
   }
 }
 
