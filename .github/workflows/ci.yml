@@ -78,6 +78,9 @@ jobs:
           AIRA_SEMANTIC_SEARCH: 'false'
         run: npm run db:verify:deploy
 
+      - name: Durable application build queue certification
+        run: npm run test:app-builder-queue
+
       - name: Runtime verification
         run: npm test
 
