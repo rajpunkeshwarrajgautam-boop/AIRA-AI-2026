@@ -6,6 +6,8 @@ import { PostgresRunRepository } from '../../agent-runtime/src/repositories.js';
 import type { Artifact, Run, StreamingEvent } from '../../contracts/src/index.js';
 import { ApplicationBuildClient, generateApplicationDraft } from './client.js';
 import { PostgresBuildArchiveStore } from './artifact-store.js';
+import { objectStoreFromEnvironment } from './object-store.js';
+import { PostgresObjectRefStore } from './object-ref-store.js';
 import type { QueuedBuild } from './queue.js';
 import type { DispatchOutcome } from './dispatcher.js';
 
