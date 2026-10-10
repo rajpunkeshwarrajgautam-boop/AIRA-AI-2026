@@ -6,6 +6,7 @@ import {
   loadProjects, saveProjects, loadSettings, saveSettings, INITIAL_CONVERSATION
 } from './utils/storage';
 import { streamAIResponse } from './utils/aiEngine';
+import { followAiraRun } from './utils/runEvents';
 import { retrieveRelevantSubgraph } from './utils/knowledgeGraph';
 import { Sidebar } from './components/Sidebar';
 import { ChatMessage } from './components/ChatMessage';
@@ -54,6 +55,8 @@ function App() {
   const [pendingApproval, setPendingApproval] = useState<{
     id: string;
     runId: string;
+    assistantId?: string;
+    conversationId?: string;
     toolName?: string;
     reason?: string;
   } | null>(null);
@@ -372,6 +375,8 @@ function App() {
             setPendingApproval({
               id: approval.id,
               runId: approval.runId,
+              assistantId,
+              conversationId: id,
               toolName: approval.toolCall?.name,
               reason: approval.reason
             });
@@ -417,14 +422,15 @@ function App() {
   const handleApprovalDecision = async (decision: 'APPROVE' | 'REJECT') => {
     if (!pendingApproval) return;
     setIsSubmittingApproval(true);
+    const approval = pendingApproval;
     try {
-      const res = await fetch(`/api/runs/${pendingApproval.runId}/approve`, {
+      const res = await fetch(`/api/runs/${approval.runId}/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
         body: JSON.stringify({
-          requestId: pendingApproval.id,
-          decision
+          requestId: approval.id,
+          decision: decision === 'APPROVE' ? 'ALLOW_ONCE' : 'REJECT'
         })
       });
       if (!res.ok) {
@@ -432,6 +438,63 @@ function App() {
       } else {
         showToast(decision === 'APPROVE' ? 'Action approved. Resuming execution...' : 'Action rejected.');
         setPendingApproval(null);
+        if (decision === 'APPROVE' && approval.assistantId && approval.conversationId) {
+          const assistantId = approval.assistantId;
+          const conversationId = approval.conversationId;
+          updateConversation(conversationId, c => ({
+            ...c, messages: c.messages.map(m => m.id === assistantId ? {
+              ...m, content: '', isStreaming: true
+            } : m)
+          }));
+          setIsLoading(true);
+          setExecutionStatus('Resuming approved run...');
+          void followAiraRun(approval.runId, event => {
+            if (event.type === 'content.delta') {
+              const delta = String(event.data.delta || '');
+              updateConversation(conversationId, c => ({
+                ...c, messages: c.messages.map(m => m.id === assistantId ? { ...m, content: m.content + delta } : m)
+              }));
+            } else if (event.type === 'artifact.created') {
+              const raw = event.data;
+              if (typeof raw.id === 'string' && typeof raw.content === 'string' &&
+                  typeof raw.type === 'string' && typeof raw.title === 'string') {
+                const artifact = {
+                  id: raw.id, title: raw.title, content: raw.content,
+                  type: raw.type, language: typeof raw.language === 'string' ? raw.language : undefined,
+                  version: typeof raw.version === 'number' ? raw.version : 1,
+                  versions: Array.isArray(raw.versions) ? raw.versions : []
+                } as Artifact;
+                setActiveArtifact(artifact);
+                updateConversation(conversationId, c => ({
+                  ...c, messages: c.messages.map(m => m.id === assistantId ? {
+                    ...m, artifacts: [...(m.artifacts || []), artifact]
+                  } : m)
+                }));
+              }
+            } else if (event.type === 'tool.started') {
+              setExecutionStatus('Running approved tool...');
+            } else if (event.type === 'tool.completed') {
+              setExecutionStatus('Checking execution results...');
+            } else if (event.type === 'run.completed' || event.type === 'run.failed' || event.type === 'run.cancelled') {
+              if (event.type !== 'run.completed') {
+                const failure = String(event.data.error || 'Approved execution failed.');
+                updateConversation(conversationId, c => ({
+                  ...c, messages: c.messages.map(m => m.id === assistantId ?
+                    { ...m, content: m.content || failure } : m)
+                }));
+              }
+              updateConversation(conversationId, c => ({
+                ...c, messages: c.messages.map(m => m.id === assistantId ? { ...m, isStreaming: false } : m)
+              }));
+              setIsLoading(false);
+              setExecutionStatus(null);
+            }
+          }).catch(error => {
+            setIsLoading(false);
+            setExecutionStatus(null);
+            showToast('Could not reconnect to approved run: ' + String(error));
+          });
+        }
       }
     } catch (e: any) {
       showToast(`Error: ${e.message}`);
