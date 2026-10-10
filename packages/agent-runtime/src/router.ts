@@ -18,6 +18,19 @@ export interface RoutingInput {
 export class ServerIntentRouter {
   private static readonly CONFIDENCE_THRESHOLD_PRIVILEGED = 0.70;
 
+  /**
+   * Deliberately narrow: distinguish a request to PRODUCE runnable software
+   * from an explanation, example, plan, research query or automation.
+   * A matched request fails closed until a real build sandbox is provisioned.
+   */
+  private isApplicationBuildRequest(text: string): boolean {
+    const action = /^(?:(?:please|kindly)\s+|(?:can|could|would)\s+you\s+(?:please\s+)?)?(?:build|create|develop|implement|make|scaffold|code|generate)\b/;
+    if (!action.test(text)) return false;
+    const informationalObject = /^(?:(?:please|kindly)\s+|(?:can|could|would)\s+you\s+(?:please\s+)?)?(?:build|create|develop|implement|make|scaffold|code|generate)\s+(?:me\s+)?(?:a\s+|an\s+|the\s+)?(?:plan|outline|guide|tutorial|example|proposal)\b/;
+    if (informationalObject.test(text)) return false;
+    return /\b(?:game|website|web\s+(?:app|application|site|page)|app(?:lication)?|dashboard|landing\s+page|(?:react|vue|svelte|next\.?js|three\.?js)\s+(?:app|application|dashboard|project)|(?:python|javascript|typescript|node(?:\.js)?)\s+(?:program|project|application)|software|program|api|interactive\s+demo)\b/.test(text);
+  }
+
   constructor(
     private registry: CapabilityRegistry,
     private modelRouter?: ModelRouter
@@ -78,6 +91,9 @@ export class ServerIntentRouter {
       return 'DESTRUCTIVE';
     }
 
+    // An implementation request implies intended project writes, even if execution is unavailable.
+    if (this.isApplicationBuildRequest(text)) return 'WRITE';
+
     // Write / State Mutation patterns
     const writePatterns = [
       /\b(create\s+(a\s+|an\s+)?automation|schedule\s+(a\s+|an\s+)?(daily|weekly|hourly|cron))\b/,
@@ -128,6 +144,18 @@ export class ServerIntentRouter {
         intent: 'AUTOMATION_CREATE',
         confidence: 0.93,
         reason: 'Identified scheduled automation intent.',
+        sideEffectLevel: 'WRITE',
+        approvalRequired: true
+      };
+    }
+
+    // A build request must never silently degrade into a code tutorial or git-status mission.
+    // The registered builder is explicitly NOT_READY until real isolation/build/preview exists.
+    if (this.isApplicationBuildRequest(text)) {
+      return {
+        intent: 'APPLICATION_BUILD',
+        confidence: 0.99,
+        reason: 'Explicit request to create runnable software; isolated build execution is not yet available.',
         sideEffectLevel: 'WRITE',
         approvalRequired: true
       };
@@ -245,10 +273,11 @@ Classify the user prompt into exactly ONE intent:
 - WORKFLOW: Running a predefined business or technical workflow.
 - AUTOMATION_CREATE: Setting up a recurring schedule, cron job, or triggered automation.
 - AGENT_MISSION: Autonomous multi-step goal (investigating a bug, repairing a codebase, verifying fixes).
+- APPLICATION_BUILD: Explicitly build a runnable app, game, website, or project; NOT_READY until isolated build runtime exists.
 
 Return a JSON object only:
 {
-  "intent": "ANSWER" | "RESEARCH" | "TOOL_ACTION" | "WORKFLOW" | "AUTOMATION_CREATE" | "AGENT_MISSION",
+  "intent": "ANSWER" | "RESEARCH" | "TOOL_ACTION" | "WORKFLOW" | "AUTOMATION_CREATE" | "AGENT_MISSION" | "APPLICATION_BUILD",
   "confidence": <number between 0.0 and 1.0>,
   "reason": "<short justification under 200 chars without internal reasoning>"
 }
@@ -282,7 +311,7 @@ User prompt: "${prompt.slice(0, 500).replace(/"/g, '\\"')}"`;
       if (!jsonMatch) return null;
 
       const parsed = JSON.parse(jsonMatch[0]);
-      const validIntents: IntentTaxonomy[] = ['ANSWER', 'RESEARCH', 'TOOL_ACTION', 'WORKFLOW', 'AUTOMATION_CREATE', 'AGENT_MISSION'];
+      const validIntents: IntentTaxonomy[] = ['ANSWER', 'RESEARCH', 'TOOL_ACTION', 'WORKFLOW', 'AUTOMATION_CREATE', 'AGENT_MISSION', 'APPLICATION_BUILD'];
       if (!validIntents.includes(parsed.intent)) return null;
 
       const confidence = typeof parsed.confidence === 'number' ? Math.max(0, Math.min(1, parsed.confidence)) : 0.8;
@@ -316,10 +345,13 @@ User prompt: "${prompt.slice(0, 500).replace(/"/g, '\\"')}"`;
     policyApprovalMandatory: boolean
   ): RoutingDecision {
     const intent: IntentTaxonomy = partial.intent || 'ANSWER';
-    const sideEffectLevel: SideEffectLevel = partial.sideEffectLevel || (policyApprovalMandatory ? 'WRITE' : 'NONE');
+    const sideEffectLevel: SideEffectLevel = intent === 'APPLICATION_BUILD'
+      ? 'WRITE'
+      : (partial.sideEffectLevel || (policyApprovalMandatory ? 'WRITE' : 'NONE'));
+
     
     // Approval policy: Server policy strictly overrides. If side effect is DESTRUCTIVE or WRITE, approval is mandatory.
-    const approvalRequired = policyApprovalMandatory || Boolean(partial.approvalRequired);
+    const approvalRequired = policyApprovalMandatory || intent === 'APPLICATION_BUILD' || Boolean(partial.approvalRequired);
 
     const targetResolution = this.registry.resolveExecutionTarget(intent);
 
