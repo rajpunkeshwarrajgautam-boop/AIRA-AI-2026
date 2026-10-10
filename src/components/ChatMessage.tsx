@@ -1,15 +1,17 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Check,
   Copy,
   FileText,
   RotateCw,
+  ClipboardPaste,
 } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import type { Message, Artifact } from '../types';
 import { AVAILABLE_MODELS } from '../utils/constants';
 import { AiraMark } from './AiraMark';
 import { renderMarkdownToHtml } from '../utils/markdown';
+import { copyMessageAsRichText } from '../utils/richClipboard';
 import { ThinkingBlock } from './ThinkingBlock';
 import { ArtifactCard } from './ArtifactCard';
 
@@ -27,6 +29,8 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
   onRetry,
 }) => {
   const [copied, setCopied] = useState(false);
+  const [richCopyStatus, setRichCopyStatus] = useState<'rich' | 'fallback' | 'failed' | null>(null);
+  const assistantContentRef = useRef<HTMLDivElement>(null);
   const reducedMotion = useReducedMotion();
   const isUser = message.role === 'user';
 
@@ -38,6 +42,17 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
     } catch {
       setCopied(false);
     }
+  };
+
+  const handleRichCopy = async () => {
+    if (!assistantContentRef.current) return;
+    try {
+      const result = await copyMessageAsRichText(message.content, assistantContentRef.current);
+      setRichCopyStatus(result === 'rich' ? 'rich' : 'fallback');
+    } catch {
+      setRichCopyStatus('failed');
+    }
+    window.setTimeout(() => setRichCopyStatus(null), 2600);
   };
 
   return (
@@ -97,6 +112,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
 
             <motion.div layout>
               <div
+                ref={assistantContentRef}
                 className="aira-prose break-words font-sans text-base leading-[1.7] text-claude-text-light md:text-[17px] dark:text-claude-text-dark"
                 dangerouslySetInnerHTML={{ __html: renderMarkdownToHtml(message.content) }}
               />
@@ -152,6 +168,29 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                     </motion.span>
                   </AnimatePresence>
                 </motion.button>
+
+                <motion.button
+                  type="button"
+                  onClick={handleRichCopy}
+                  whileTap={reducedMotion ? undefined : { scale: 0.94 }}
+                  className="flex items-center gap-1.5 rounded-[9px] px-2 py-1.5 text-[11px] font-medium transition-colors hover:bg-claude-surface2-light hover:text-claude-text-light dark:hover:bg-claude-surface2-dark dark:hover:text-white"
+                  aria-label="Copy as Rich Text"
+                  title="Copy formatted text, tables and math for compatible editors"
+                >
+                  {richCopyStatus === 'rich'
+                    ? <Check className="h-3.5 w-3.5 text-emerald-600" />
+                    : <ClipboardPaste className="h-3.5 w-3.5" />}
+                  <span>{richCopyStatus === 'rich' ? 'Rich text copied'
+                    : richCopyStatus === 'fallback' ? 'Markdown copied (rich text unavailable)'
+                    : richCopyStatus === 'failed' ? 'Copy failed'
+                    : 'Copy as Rich Text'}</span>
+                </motion.button>
+                <span className="sr-only" aria-live="polite">
+                  {richCopyStatus === 'rich' ? 'Rich text copied to clipboard'
+                    : richCopyStatus === 'fallback' ? 'Rich clipboard unavailable; Markdown copied instead'
+                    : richCopyStatus === 'failed' ? 'Unable to copy message'
+                    : ''}
+                </span>
 
                 {onRetry && (
                   <motion.button
