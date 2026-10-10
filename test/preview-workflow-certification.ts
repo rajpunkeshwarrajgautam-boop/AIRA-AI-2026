@@ -1,7 +1,9 @@
 import assert from 'node:assert';
 
 const PREVIEW_URL = process.env.PREVIEW_URL || 'https://aira-ai-2026-b53sxkkko-rajpunkeshwarrajgautam-boops-projects.vercel.app';
-const BYPASS_HEADER = { 'x-vercel-protection-bypass': 'QQUvz2kp1hnrbJeAicx0ZyH3kL18z54r' };
+const BYPASS_HEADER = process.env.VERCEL_AUTOMATION_BYPASS_SECRET
+  ? { 'x-vercel-protection-bypass': process.env.VERCEL_AUTOMATION_BYPASS_SECRET }
+  : {};
 
 class PreviewClient {
   private cookie: string = '';
