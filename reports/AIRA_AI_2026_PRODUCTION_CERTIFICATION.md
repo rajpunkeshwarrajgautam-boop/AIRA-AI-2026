@@ -3,7 +3,49 @@
 **Audit date:** 2026-10-10  
 **Decision: NOT CERTIFIED — BLOCKERS REMAIN**
 
-This report replaces historical readiness claims with the observations below. PR #38 remains open and unmerged because mandatory gates do not pass. Main and staging were not advanced. Domains `aira-ai.in` and `www.aira-ai.in`, and backup project `aira-ai-live`, were not modified. No database migration was executed. Live production API tests created small certification records through normal authenticated application endpoints; existing records were not deleted.
+This report replaces historical readiness claims with the observations below. PR #38 remains open and unmerged because mandatory deployed and application certification gates do not pass. Main and staging were not advanced. Domains `aira-ai.in` and `www.aira-ai.in`, and backup project `aira-ai-live`, were not modified. No Neon database migration was executed; CI migrated its own ephemeral databases. Live production API tests created small certification records through normal authenticated application endpoints; existing records were not deleted.
+
+## Continuation evidence — 10 October 2026
+
+**Verified code SHA: `f2b21a7704ec0c652542969114215068e357fb31`.** PR [#38](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/38) still targets staging on the original repair branch. Actions [38065902944](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/actions/runs/38065902944) completed **SUCCESS** on this SHA. Fast CI (`114253373564`), Semantic Search CI (`114253373383`), Main / PR certification (`114253701195`), Dependency Security (`114253373602`) and Tailwind Visual Regression (`114253373520`) all passed. Deployed staging acceptance (`114254263395`) was **SKIPPED**, so workflow-level SUCCESS is not production certification. Earlier source run [38065225731](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/actions/runs/38065225731) also passed on approval-fix SHA `e1f0e19facbdcd839739336257f63d7e0916f13b`, with deployed acceptance skipped.
+
+### Dependency and visual repair — resolved in source
+
+The five high Tailwind findings are resolved by a complete Tailwind/PostCSS 4.3.3 migration, lockfile regeneration, explicit source discovery, retained custom theme, preflight compatibility and utility updates. The full dependency graph audit in final CI reports **zero vulnerabilities**. No dependency exclusion or audit waiver was used.
+
+Real Chromium compared compiled baseline `f2e9e36b2fac6ab0e524b606ed9253b89176ffe0` against the candidate: 12 home/composer comparisons at 390, 1024 and 1440 pixels, light and dark themes. Final artifact **`11674482909`**, `tailwind-visual-evidence`, contains before/after/diff PNGs and metrics, digest `sha256:09762014fc99b9edff9a14c739b5ebc641bc60d0f8e2fe44fc28aeb65886ec70`. Downloaded metrics show maximum changed-pixel ratio **0.298861%** and maximum composer geometry change **0 px**, within unchanged 1% / 2 px thresholds. Earlier failures led to an actual responsive line-height correction; thresholds were not relaxed. UI comparison uses controlled API fixtures and blocked external requests. It certifies these UI states, not live authentication, providers or the production browser runtime.
+
+### Runtime and authorization repairs — passed source regressions
+
+| Commit | Change |
+| --- | --- |
+| `83a408219a52533e49d6ef1b572f762ab189e91a` | Tailwind migration and mandatory real-browser visual job |
+| `5af7c4698bc8af54ec9226bd648bf83c78633cd1` | Settle animation springs before screenshot comparison |
+| `eeeebbfa75978579ff65649f767f5f818e171e5b` | Responsive line height; cron-parser API; remove duplicate scheduling claim; principal-bound automation owner; authenticated cron endpoint |
+| `a4523a30c1cfe8c396580f4cb40d8299ede7b9ad` | Forward deterministic cycle time into schedule evaluation |
+| `5c40c57f1f77e59835957c6186c2fe25bb7e35ba` | API regressions for owner spoofing, cross-owner trigger and guest cron denial |
+| `e1f0e19facbdcd839739336257f63d7e0916f13b` | Approval actor ownership and resolved-by propagation; valid ALLOW decisions resume workflows; principal role shape |
+| `eed9879c3caa7873ea3b6204451b5c3281dbb044` | Readable composer placeholder and separate API compiler diagnostic evidence |
+| `f2b21a7704ec0c652542969114215068e357fb31` | Browser destination, DNS, redirect and subresource policy; TLS verification enabled |
+
+Scheduled-claim regression uses real ephemeral PostgreSQL repositories and deterministic child execution fixtures. It verifies exactly one claim across stale/concurrent ticks; it does not prove an external scheduler or live AI execution. Cron requires a configured `CRON_SECRET` of at least 32 characters and uses timing-safe bearer comparison. Missing configuration returns 503, unauthorized access 401. Cron authorization is separate from guest workspace sessions.
+
+Approval regressions verify wrong-owner decisions do not mutate state, correct actor identity is propagated, ALLOW_ONCE resumes an approved workflow, and REJECT stays rejected. Browser regressions cover private/reserved addresses, mixed DNS results and private redirects. Loopback fixtures are permitted only in local test environments without Vercel deployment metadata. DNS validation/connect time-of-check-to-time-of-use and rebinding remain unresolved; network egress isolation or connection pinning is still required for complete browser security certification.
+
+### New live automation evidence — functional failure
+
+At `https://aira-ai-2026.vercel.app`, guest-authenticated creation of disabled MANUAL fixture `auto_f43b43b4` returned 201. Trigger returned 200 / TRIGGERED, run `run_bc2b6d43-e`; automation record `autorun_1791646921849_681` and API readback reported COMPLETED. Read-only production SQL confirmed COMPLETED, content length 186 and three tool results. **All three tool calls failed**: calculator input lacked required `expression`; two subsequent calls lacked `repo.read` permission. The harmless calculator objective was not fulfilled. COMPLETED is lifecycle metadata, not successful task execution. Agent tool generation/recovery and objective-success reporting therefore remain blockers. Fixture stays disabled and cannot schedule future work. This evidence does not attest the serving commit or any repair deployment.
+
+### Newly clarified release blockers
+
+- Target Vercel team is visible, but project `aira-ai-2026` is absent from the connected team's listing; lookup returns 404. Listing shows the untouched backup `aira-ai-live` and an unrelated project. This establishes a connection/resource-identity problem, not that the target was deleted. Do not recreate it or operate on the backup. Latest code's GitHub Vercel status was PENDING at inspector `2VH8LLSYgLyGX9yBJzNfHfKVsSEV`; direct lookup of corresponding deployment `dpl_2VH8LLSYgLyGX9yBJzNfHfKVsSEV` returned 404. Earlier approval SHA's GitHub Vercel status reports FAILURE at `dpl_9o7t1moLCyu891jBgWQCV4K63Q1S`. Failure logs remain inaccessible, as do original failed deployment `dpl_FoGytvK4T9jZqKiwcEFHS2r4yhNa` logs. None is attested READY.
+- Missing staging Actions credentials remain unresolved; exact-SHA deployed acceptance has no passing result. Restore authorized target-project access and configure account secrets in supported settings before retrying. An isolated premerge deployment path is still required without weakening the staging migration guard.
+- Main/staging metadata still reports `protected=false`. Administrative protection reads are denied to the integration. Ruleset API additionally reports a private-repository plan restriction: "Upgrade to GitHub Pro or make this repository public to enable this feature." An administrator must resolve plan eligibility and configure protections. This audit does not change billing or make the repository public.
+- Root TypeScript references cover frontend/Vite, not the API runtime. A separate API/imported-package compiler diagnostic still fails with **82 diagnostics**, even with strict mode disabled. See [API diagnostic evidence](AIRA_AI_2026_API_TYPECHECK_DIAGNOSTICS.md). Proper API project configuration, contract repairs and a mandatory API typecheck are outstanding; source CI's existing Typecheck step does not certify the backend.
+- Account login, independently successful Tavily execution, broad agent missions, live cron delivery/recovery, deployed approval behavior, production screenshots/actions and exact live deployment attestation remain unverified. Exa retrieval and basic deterministic workflow results below are narrower evidence.
+- AIRA Bot PR #18 remains unintegrated with conflicts. Its production design requires a dedicated Docker worker/runner; production local-provider fallback is rejected. No authorized worker host/runtime access is established. Resolve integration and exercise isolated non-root containers, resources, persistence/restart, lease fencing, terminal/path restrictions, authenticated runner access and outbound network policy before enabling it. CI browser installation does not provision a deployed Bot/browser worker.
+
+The historical sections below are retained for traceability. In particular, the historical five-high audit failure is superseded by the zero-vulnerability final source audit above. Deployment and application blockers are not superseded.
 
 ## Source and Actions evidence
 
@@ -35,7 +77,7 @@ The lifecycle repair is source-level mitigation of a request-lifetime risk, **no
 
 Local validation: build, typecheck, lint and all 16 policy tests passed. The lifecycle regression passed with Node plus the tsx import loader; invoking the tsx CLI itself was blocked by this workspace's IPC socket permissions. Existing lint warnings remain. Production-mode staging build correctly rejected the environment before child commands.
 
-## Security gate
+## Historical security gate failure — resolved by continuation
 
 Initial install/audit: 11 findings (9 high, 2 moderate). After dependency repairs: **5 high**, no moderate, in the Tailwind 3 development dependency chain (`braces`, `chokidar`, `fast-glob`, `micromatch`, `tailwindcss`). Runtime-only `npm audit --omit=dev --audit-level=moderate` passed with zero vulnerabilities; this does not override the full-graph mandatory gate.
 
@@ -87,11 +129,11 @@ Historical staging URL tested: **https://aira-ai-2026-n9dqzwb2g-rajpunkeshwarraj
 
 ## Release blockers and required next evidence
 
-1. Resolve the five high dependency findings with a complete Tailwind migration and actual visual verification; full-graph security gate must pass.
+1. Preserve the now-passing full-graph dependency audit and visual migration gate. Repair the separate API compiler findings and add mandatory backend typechecking; complete tenant-sensitive application security certification and browser network isolation.
 2. Restore intended Vercel access and configure CI credentials safely. Certify an exact-SHA isolated preview, then staging, with passing attestation and deployed acceptance; do not waive either.
 3. Verify the runtime lifetime repair on an exact-SHA deployment, rendered research grounding and failure/recovery behavior; independently exercise Tavily (Exa retrieval and eventual completion were observed).
 4. Provision and verify the real browser runtime (screenshots and interactive actions).
-5. Resolve PR #18 integration conflicts and certify AIRA Bot; verify real account authentication, agents, scheduling and tenant isolation across execution APIs.
+5. Resolve PR #18 integration conflicts and certify AIRA Bot; verify real account authentication, agents, scheduling and tenant isolation across execution APIs. Repair and re-test the live automation objective failure; do not use COMPLETED as proof of successful tool execution.
 6. Configure required branch checks and complete application security review. Verify production's exact deployment identity and all mandatory live gates before domain cutover.
 
 **No domain cutover is authorized by this report. NOT CERTIFIED — BLOCKERS REMAIN.**
