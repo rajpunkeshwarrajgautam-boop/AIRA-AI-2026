@@ -133,6 +133,47 @@ async function runTests() {
     console.log(`PASS: "${prompt}" -> TOOL_ACTION (TOOL_PIPELINE, READ, approval=false)`);
   }
 
+  // Test 10: build requests must not be answered with fabricated implementations.
+  console.log('\n[TEST 10] Application-building instructions fail closed to unready capability');
+  const applicationPrompts = [
+    'BUILD A PINBALL GAME 3D',
+    'Build a playable 3D pinball game',
+    'Create a working website',
+    'Develop a React dashboard',
+    'Build and test this Python program',
+    'Make an interactive app',
+    'Please scaffold a web application'
+  ];
+  for (const prompt of applicationPrompts) {
+    const res = await router.route({ prompt, principal: testPrincipal, advisoryIntent: 'ANSWER' });
+    assert.strictEqual(res.intent, 'APPLICATION_BUILD', prompt);
+    assert.strictEqual(res.executionTarget, 'CAPABILITY_NOT_READY', prompt);
+    assert.deepStrictEqual(res.capabilities, ['cap_application_build'], prompt);
+    assert.strictEqual(res.sideEffectLevel, 'WRITE', prompt);
+    assert.strictEqual(res.approvalRequired, true, prompt);
+  }
+  const builder = registry.get('cap_application_build');
+  assert.strictEqual(builder?.status, 'NOT_READY');
+  assert.strictEqual(builder?.availability, 'COMING_SOON');
+  assert.strictEqual(registry.isAvailable('cap_application_build'), false);
+
+  for (const prompt of [
+    'Explain how Three.js works',
+    'Show me an example of a pinball game',
+    'Create a tutorial about building a website',
+    'Create a plan for a 3D game'
+  ]) {
+    const res = await router.route({ prompt, principal: testPrincipal });
+    assert.strictEqual(res.intent, 'ANSWER', 'Informational request misrouted: ' + prompt);
+  }
+  const researchBuild = await router.route({ prompt: 'Research physics engines for web games', principal: testPrincipal });
+  assert.strictEqual(researchBuild.intent, 'RESEARCH');
+  const destructiveBuild = await router.route({ prompt: 'Delete all project files', principal: testPrincipal, advisoryIntent: 'APPLICATION_BUILD' });
+  assert.strictEqual(destructiveBuild.sideEffectLevel, 'DESTRUCTIVE');
+  assert.strictEqual(destructiveBuild.approvalRequired, true);
+  assert.notStrictEqual(destructiveBuild.executionTarget, 'CHAT_STREAM');
+  console.log('PASS: Build routing is explicit, truthful, and cannot be downgraded by advisoryIntent.');
+
   console.log('\n=== ALL ROUTER & POLICY TESTS PASSED ===');
 }
 
