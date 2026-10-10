@@ -93,6 +93,9 @@ jobs:
       - name: Compiled preview and grant certification
         run: npm run test:app-builder-preview-grants
 
+      - name: Isolated compiled preview HTTP integration
+        run: npm run test:app-builder-preview-http
+
       - name: Runtime verification
         run: npm test
 
