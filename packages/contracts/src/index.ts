@@ -386,6 +386,7 @@ export const ArtifactSchema = z.object({
   type: z.enum([
     'application/vnd.ant.code',
     'application/vnd.ant.react',
+    'application/vnd.ant.project',
     'image/svg+xml',
     'text/html',
     'text/markdown',
