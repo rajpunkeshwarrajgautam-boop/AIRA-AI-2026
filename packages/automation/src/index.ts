@@ -157,10 +157,10 @@ export class AutomationEngine {
   }
 
   public async runScheduledCronCycle(now = Date.now()): Promise<{ evaluated: number; triggered: string[] }> {
-    return this.evaluateSchedules();
+    return this.evaluateSchedules(now);
   }
 
-  private async evaluateSchedules(): Promise<{ evaluated: number; triggered: string[] }> {
+  private async evaluateSchedules(now = Date.now()): Promise<{ evaluated: number; triggered: string[] }> {
     const triggered: string[] = [];
     try {
       const dueAutomations = await this.autoRepo.getDueAutomations();
