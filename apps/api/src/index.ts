@@ -2,6 +2,9 @@ import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
+import { waitUntil } from '@vercel/functions';
+import { requireCronAuthorization } from './auth/cron-auth.js';
+import { createAccountMiddleware, createAccountLoginHandler, createAccountLogoutHandler } from './auth/firebase-account.js';
 import { ModelRouter } from '../../../packages/model-router/src/index.js';
 import { ToolRegistry, ToolGateway, PostgresToolCallRepository } from '../../../packages/tool-runtime/src/index.js';
 import { ApprovalKernel } from '../../../packages/approvals/src/index.js';
@@ -22,7 +25,8 @@ import {
   CreateRunRequestSchema,
   ApprovalDecisionSchema,
   AutomationDefinitionSchema,
-  AgentDefinition,
+  AgentDefinitionSchema,
+  ModelPolicySchema,
   WorkflowDefinitionSchema,
   validateWorkflowDag
 } from '../../../packages/contracts/src/index.js';
@@ -50,6 +54,14 @@ if (process.env.NODE_ENV === 'production') {
 import { createPrincipalMiddleware } from './middleware/principal.js';
 import { createSessionAuthMiddleware, ensureAuthenticatedSession } from './auth/session-auth.js';
 
+function routeParam(req: Request, name: string): string {
+  const value = req.params[name];
+  if (typeof value !== 'string' || !value.trim()) {
+    throw Object.assign(new Error(`Invalid route parameter: ${name}`), { status: 400 });
+  }
+  return value;
+}
+
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
 
@@ -60,7 +72,10 @@ app.use(express.urlencoded({ limit: '2mb', extended: false }));
 
 // Resolve a trusted first-party session cookie before principal enforcement.
 // This middleware never trusts client-supplied user/session headers in production.
+app.use(createAccountMiddleware());
 app.use(createSessionAuthMiddleware());
+app.post('/api/auth/account', createAccountLoginHandler());
+app.post('/api/auth/logout', createAccountLogoutHandler());
 
 // Public bootstrap endpoint used by the browser before protected API calls.
 // It issues or refreshes an opaque, signed, HttpOnly session cookie.
@@ -125,6 +140,20 @@ app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
+// Platform scheduler authenticates independently of a workspace user session.
+app.route('/api/automations/cron/execute')
+  .get(requireCronAuthorization, executeCronCycle)
+  .post(requireCronAuthorization, executeCronCycle);
+
+async function executeCronCycle(_req: Request, res: Response) {
+  try {
+    const result = await automationEngine.runScheduledCronCycle();
+    res.json({ status: 'CRON_CYCLE_EXECUTED', ...result, timestamp: Date.now() });
+  } catch {
+    res.status(500).json({ error: 'CRON_CYCLE_FAILED' });
+  }
+}
+
 // Enforce ExecutionPrincipal on all /api routes BELOW this point.
 // Routes registered above (health, ready) are public infrastructure probes.
 app.use('/api', createPrincipalMiddleware());
@@ -170,11 +199,12 @@ automationEngine.start();
 async function seedDefaultAgent() {
   const existing = await agentRepo.getAgent('agent-default');
   if (!existing) {
-    await agentRepo.saveAgent({
+    await agentRepo.saveAgent(AgentDefinitionSchema.parse({
       id: 'agent-default',
       name: 'Default Agent',
+      description: 'Default workspace agent',
       instructions: 'You are Aira AI, an autonomous intelligence operating workspace. Maintain precise, verified reasoning.',
-      modelPolicy: { model: 'mock-deterministic' },
+      modelPolicy: ModelPolicySchema.parse({ model: process.env.NODE_ENV === 'test' ? 'mock-deterministic' : 'aira-auto' }),
       tools: [],
       memoryScopes: ['workspace'],
       approvalPolicy: 'autonomous',
@@ -182,7 +212,7 @@ async function seedDefaultAgent() {
       timeoutMs: 60000,
       createdAt: Date.now(),
       updatedAt: Date.now()
-    } as AgentDefinition);
+    }));
   }
 }
 seedDefaultAgent().catch(console.error);
@@ -200,8 +230,6 @@ async function seedDefaultAutomation() {
       agentId: 'agent_sys_monitor',
       objective: 'Audit workspace telemetry, check MCP node freshness, and report health metrics.',
       approvalPolicy: 'autonomous',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
       lastRun: 0
     });
   }
@@ -276,7 +304,7 @@ app.get('/api/conversations/:id', async (req: Request, res: Response) => {
   try {
     const conversation = await conversationSearchRepo.getConversation(
       req.principal!.userId,
-      req.params.id
+      routeParam(req, 'id')
     );
 
     if (!conversation) {
@@ -292,7 +320,7 @@ app.get('/api/conversations/:id', async (req: Request, res: Response) => {
 
 app.delete('/api/conversations/:id', async (req: Request, res: Response) => {
   try {
-    const deleted = await conversationSearchRepo.deleteConversation(req.principal!.userId, req.params.id);
+    const deleted = await conversationSearchRepo.deleteConversation(req.principal!.userId, routeParam(req, 'id'));
     if (!deleted) return res.status(404).json({ error: 'Conversation not found.' });
     res.status(204).send();
   } catch (err: any) {
@@ -348,7 +376,7 @@ app.get('/api/search/capabilities', async (_req: Request, res: Response) => {
 app.post('/api/runs', async (req: Request, res: Response) => {
   try {
     const parsed = CreateRunRequestSchema.parse(req.body);
-    const run = await agentRuntime.createAndExecuteRun(parsed, req.principal!);
+    const run = await agentRuntime.createAndExecuteRun(parsed, req.principal!, process.env.VERCEL === '1' ? waitUntil : undefined);
     res.status(201).json(run);
   } catch (err: any) {
     res.status(400).json({ error: err.message || 'Invalid run creation payload.' });
@@ -361,23 +389,23 @@ app.get('/api/runs', async (req: Request, res: Response) => {
 });
 
 app.get('/api/runs/:id', async (req: Request, res: Response) => {
-  const run = await agentRuntime.getRun(req.params.id);
+  const run = await agentRuntime.getRun(routeParam(req, 'id'));
   if (!run || run.principalId !== req.principal!.userId) {
-    return res.status(404).json({ error: `Run with id "${req.params.id}" not found.` });
+    return res.status(404).json({ error: `Run with id "${routeParam(req, 'id')}" not found.` });
   }
   res.json(run);
 });
 
 app.post('/api/runs/:id/cancel', async (req: Request, res: Response) => {
-  const run = await agentRuntime.getRun(req.params.id);
+  const run = await agentRuntime.getRun(routeParam(req, 'id'));
   if (!run || run.principalId !== req.principal!.userId) {
     return res.status(404).json({ error: 'Run not found.' });
   }
-  const success = await agentRuntime.cancelRun(req.params.id);
+  const success = await agentRuntime.cancelRun(routeParam(req, 'id'));
   if (!success) {
     return res.status(400).json({ error: 'Cannot cancel run (either not found or in terminal state).' });
   }
-  res.json({ status: 'CANCELLED', runId: req.params.id });
+  res.json({ status: 'CANCELLED', runId: routeParam(req, 'id') });
 });
 
 app.post('/api/runs/:id/approve', async (req: Request, res: Response) => {
@@ -393,7 +421,7 @@ app.post('/api/runs/:id/approve', async (req: Request, res: Response) => {
 
     const parsedDecision = ApprovalDecisionSchema.parse(decision);
     // Submit approval with current user's identity
-    const success = await agentRuntime.submitApproval(requestId, parsedDecision);
+    const success = await agentRuntime.submitApproval(requestId, parsedDecision, req.principal!.userId);
     if (!success) {
       return res.status(400).json({ error: 'Could not apply approval decision.' });
     }
@@ -407,7 +435,7 @@ app.post('/api/runs/:id/approve', async (req: Request, res: Response) => {
 // SSE Stream for Run
 // -----------------------------------------------------------------------
 app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
-  const runId = req.params.id;
+  const runId = routeParam(req, 'id');
   const run = await agentRuntime.getRun(runId);
 
   if (!run || run.principalId !== req.principal!.userId) {
@@ -717,9 +745,9 @@ app.get('/api/tools/calls', async (req: Request, res: Response) => {
 
 app.get('/api/tools/calls/:id', async (req: Request, res: Response) => {
   try {
-    const call = await toolCallRepo.getToolCall(req.params.id);
+    const call = await toolCallRepo.getToolCall(routeParam(req, 'id'));
     if (!call || call.principalId !== req.principal!.userId) {
-      return res.status(404).json({ error: `Tool call with id "${req.params.id}" not found.` });
+      return res.status(404).json({ error: `Tool call with id "${routeParam(req, 'id')}" not found.` });
     }
     res.json(call);
   } catch (err: any) {
@@ -729,11 +757,11 @@ app.get('/api/tools/calls/:id', async (req: Request, res: Response) => {
 
 app.post('/api/tools/calls/:id/cancel', async (req: Request, res: Response) => {
   try {
-    const success = await toolGateway.cancel(req.params.id, req.principal!);
+    const success = await toolGateway.cancel(routeParam(req, 'id'), req.principal!);
     if (!success) {
       return res.status(400).json({ error: 'Cannot cancel tool call (either not found, not owned, or already terminal).' });
     }
-    res.json({ status: 'CANCELLED', toolCallId: req.params.id });
+    res.json({ status: 'CANCELLED', toolCallId: routeParam(req, 'id') });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -774,61 +802,47 @@ app.post('/api/knowledge/search', async (req: Request, res: Response) => {
 // -----------------------------------------------------------------------
 
 app.post('/api/agents', async (req: Request, res: Response) => {
-  const { name, instructions, modelPolicy, tools, memoryScopes, approvalPolicy, maxSteps, timeoutPolicy } = req.body;
-  if (!name || !instructions) {
-    return res.status(400).json({ error: 'name and instructions are required.' });
-  }
   const now = Date.now();
-  const agent: AgentDefinition = {
-    id: `agent_${crypto.randomUUID().slice(0, 8)}`,
-    name,
-    description: req.body.description || '',
-    instructions,
-    modelPolicy,
-    tools: tools || [],
-    memoryScopes: memoryScopes || ['workspace'],
-    approvalPolicy: approvalPolicy || 'autonomous',
-    maxSteps: maxSteps || 10,
-    timeoutMs: timeoutPolicy?.maxMs || 60000,
-    createdAt: now,
-    updatedAt: now
-  } as any;
-  await agentRepo.saveAgent(agent);
-  res.status(201).json(agent);
+  const parsed = AgentDefinitionSchema.safeParse({
+    ...req.body, id: `agent_${crypto.randomUUID()}`, principalId: req.principal!.userId,
+    description: req.body.description || '', modelPolicy: req.body.modelPolicy || { model: 'aira-auto' },
+    tools: req.body.tools || [], createdAt: now, updatedAt: now,
+    timeoutMs: req.body.timeoutMs || req.body.timeoutPolicy?.maxMs || 60000
+  });
+  if (!parsed.success) return res.status(400).json({ error: 'AGENT_INPUT_INVALID' });
+  await agentRepo.saveAgent(parsed.data);
+  res.status(201).json(parsed.data);
 });
 
-app.get('/api/agents', async (_req: Request, res: Response) => {
-  res.json(await agentRepo.listAgents());
+app.get('/api/agents', async (req: Request, res: Response) => {
+  res.json(await agentRepo.listAgents(req.principal!.userId));
 });
 
 app.get('/api/agents/:id', async (req: Request, res: Response) => {
-  const agent = await agentRepo.getAgent(req.params.id);
-  if (!agent) return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
+  const agent = await agentRepo.getAgent(routeParam(req, 'id'), req.principal!.userId);
+  if (!agent) return res.status(404).json({ error: 'Agent not found.' });
   res.json(agent);
 });
 
 app.patch('/api/agents/:id', async (req: Request, res: Response) => {
-  const agent = await agentRepo.getAgent(req.params.id);
-  if (!agent) return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
-  const updates = req.body as Partial<AgentDefinition>;
-  delete (updates as any).id;
-  delete (updates as any).createdAt;
-  Object.assign(agent, updates, { updatedAt: Date.now() });
-  await agentRepo.saveAgent(agent);
-  res.json(agent);
+  const agent = await agentRepo.getAgent(routeParam(req, 'id'), req.principal!.userId);
+  if (!agent || agent.principalId !== req.principal!.userId) return res.status(404).json({ error: 'Agent not found.' });
+  const parsed = AgentDefinitionSchema.safeParse({ ...agent, ...req.body,
+    id: agent.id, principalId: agent.principalId, createdAt: agent.createdAt, updatedAt: Date.now() });
+  if (!parsed.success) return res.status(400).json({ error: 'AGENT_INPUT_INVALID' });
+  await agentRepo.saveAgent(parsed.data);
+  res.json(parsed.data);
 });
 
 app.delete('/api/agents/:id', async (req: Request, res: Response) => {
-  const deleted = await agentRepo.deleteAgent(req.params.id);
-  if (!deleted) {
-    return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
-  }
+  const deleted = await agentRepo.deleteAgent(routeParam(req, 'id'), req.principal!.userId);
+  if (!deleted) return res.status(404).json({ error: 'Agent not found.' });
   res.status(204).send();
 });
 
 app.post('/api/agents/:id/run', async (req: Request, res: Response) => {
-  const agent = await agentRepo.getAgent(req.params.id);
-  if (!agent) return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
+  const agent = await agentRepo.getAgent(routeParam(req, 'id'), req.principal!.userId);
+  if (!agent) return res.status(404).json({ error: `Agent "${routeParam(req, 'id')}" not found.` });
   try {
     const run = await agentRuntime.createRun({
       prompt: req.body.prompt || agent.instructions,
@@ -836,9 +850,13 @@ app.post('/api/agents/:id/run', async (req: Request, res: Response) => {
       intent: 'AGENT_MISSION',
       modelPolicy: agent.modelPolicy
     }, req.principal!);
+    run.agentId = agent.id;
+    run.maxSteps = agent.maxSteps;
+    run.context = { ...run.context, agentAllowedTools: agent.tools };
+    await runRepo.saveRun(run);
     await agentRuntime.startRun(run.id);
     const completedRun = await agentRuntime.getRun(run.id);
-    res.status(201).json({ runId: run.id, state: completedRun?.state || 'COMPLETED', content: completedRun?.content });
+    res.status(201).json({ runId: run.id, state: completedRun?.state || 'FAILED', content: completedRun?.content });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -855,7 +873,7 @@ app.post('/api/automations', async (req: Request, res: Response) => {
   try {
     const raw = {
       ...req.body,
-      principalId: req.body.principalId || req.principal?.userId || 'usr_anonymous'
+      principalId: req.principal!.userId
     };
     const parsed = AutomationDefinitionSchema.omit({ id: true }).parse(raw);
     const item = await automationEngine.createAutomation(parsed);
@@ -866,14 +884,14 @@ app.post('/api/automations', async (req: Request, res: Response) => {
 });
 
 app.get('/api/automations/:id', async (req: Request, res: Response) => {
-  const item = await automationEngine.getAutomation(req.params.id, req.principal?.userId);
-  if (!item) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
+  const item = await automationEngine.getAutomation(routeParam(req, 'id'), req.principal?.userId);
+  if (!item) return res.status(404).json({ error: `Automation "${routeParam(req, 'id')}" not found.` });
   res.json(item);
 });
 
 app.patch('/api/automations/:id', async (req: Request, res: Response) => {
   try {
-    const updated = await automationEngine.patchAutomation(req.params.id, req.body, req.principal?.userId);
+    const updated = await automationEngine.patchAutomation(routeParam(req, 'id'), req.body, req.principal?.userId);
     res.json(updated);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -881,14 +899,14 @@ app.patch('/api/automations/:id', async (req: Request, res: Response) => {
 });
 
 app.delete('/api/automations/:id', async (req: Request, res: Response) => {
-  const deleted = await automationEngine.deleteAutomation(req.params.id, req.principal?.userId);
-  if (!deleted) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
+  const deleted = await automationEngine.deleteAutomation(routeParam(req, 'id'), req.principal?.userId);
+  if (!deleted) return res.status(404).json({ error: `Automation "${routeParam(req, 'id')}" not found.` });
   res.status(204).send();
 });
 
 app.post('/api/automations/:id/trigger', async (req: Request, res: Response) => {
   try {
-    const runId = await automationEngine.triggerNow(req.params.id, req.principal?.userId);
+    const runId = await automationEngine.triggerNow(routeParam(req, 'id'), req.principal?.userId);
     res.json({ runId, status: 'TRIGGERED' });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -897,9 +915,9 @@ app.post('/api/automations/:id/trigger', async (req: Request, res: Response) => 
 
 app.get('/api/automations/:id/runs', async (req: Request, res: Response) => {
   try {
-    const item = await automationEngine.getAutomation(req.params.id, req.principal?.userId);
-    if (!item) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
-    const runs = await automationEngine.getAutomationRuns(req.params.id);
+    const item = await automationEngine.getAutomation(routeParam(req, 'id'), req.principal?.userId);
+    if (!item) return res.status(404).json({ error: `Automation "${routeParam(req, 'id')}" not found.` });
+    const runs = await automationEngine.getAutomationRuns(routeParam(req, 'id'));
     res.json(runs);
   } catch (err: any) {
     res.status(404).json({ error: err.message });
@@ -908,7 +926,7 @@ app.get('/api/automations/:id/runs', async (req: Request, res: Response) => {
 
 app.post('/api/automations/:id/enable', async (req: Request, res: Response) => {
   try {
-    const item = await automationEngine.toggleAutomation(req.params.id, true, req.principal?.userId);
+    const item = await automationEngine.toggleAutomation(routeParam(req, 'id'), true, req.principal?.userId);
     res.json(item);
   } catch (err: any) {
     res.status(404).json({ error: err.message });
@@ -917,20 +935,10 @@ app.post('/api/automations/:id/enable', async (req: Request, res: Response) => {
 
 app.post('/api/automations/:id/disable', async (req: Request, res: Response) => {
   try {
-    const item = await automationEngine.toggleAutomation(req.params.id, false, req.principal?.userId);
+    const item = await automationEngine.toggleAutomation(routeParam(req, 'id'), false, req.principal?.userId);
     res.json(item);
   } catch (err: any) {
     res.status(404).json({ error: err.message });
-  }
-});
-
-// Platform / Serverless cron execution endpoint
-app.post('/api/automations/cron/execute', async (_req: Request, res: Response) => {
-  try {
-    await automationEngine.runScheduledCronCycle();
-    res.json({ status: 'CRON_CYCLE_EXECUTED', timestamp: Date.now() });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
   }
 });
 
@@ -951,9 +959,9 @@ app.get('/api/workflows/runs', async (req: Request, res: Response) => {
 app.get('/api/workflows/runs/:id', async (req: Request, res: Response) => {
   try {
     const wfRepo = agentRuntime.getWorkflowRepository();
-    const wfRun = await wfRepo.getWorkflowRun(req.params.id);
+    const wfRun = await wfRepo.getWorkflowRun(routeParam(req, 'id'));
     if (!wfRun || wfRun.principalId !== req.principal!.userId) {
-      return res.status(404).json({ error: `Workflow run "${req.params.id}" not found.` });
+      return res.status(404).json({ error: `Workflow run "${routeParam(req, 'id')}" not found.` });
     }
     const steps = await wfRepo.getWorkflowSteps(wfRun.id);
     const definition = await wfRepo.getWorkflowDefinition(wfRun.workflowId);
@@ -1004,9 +1012,9 @@ app.post('/api/workflows/runs', async (req: Request, res: Response) => {
 app.post('/api/workflows/runs/:id/cancel', async (req: Request, res: Response) => {
   try {
     const wfRepo = agentRuntime.getWorkflowRepository();
-    const wfRun = await wfRepo.getWorkflowRun(req.params.id);
+    const wfRun = await wfRepo.getWorkflowRun(routeParam(req, 'id'));
     if (!wfRun || wfRun.principalId !== req.principal!.userId) {
-      return res.status(404).json({ error: `Workflow run "${req.params.id}" not found.` });
+      return res.status(404).json({ error: `Workflow run "${routeParam(req, 'id')}" not found.` });
     }
 
     const wfEngine = agentRuntime.getWorkflowEngine();
@@ -1029,15 +1037,15 @@ app.post('/api/workflows/runs/:id/steps/:stepId/approve', async (req: Request, r
     }
 
     const wfRepo = agentRuntime.getWorkflowRepository();
-    const wfRun = await wfRepo.getWorkflowRun(req.params.id);
+    const wfRun = await wfRepo.getWorkflowRun(routeParam(req, 'id'));
     if (!wfRun || wfRun.principalId !== req.principal!.userId) {
-      return res.status(404).json({ error: `Workflow run "${req.params.id}" not found.` });
+      return res.status(404).json({ error: `Workflow run "${routeParam(req, 'id')}" not found.` });
     }
 
     const wfEngine = agentRuntime.getWorkflowEngine();
     const success = await wfEngine.resolveStepApproval(
       wfRun.id,
-      req.params.stepId,
+      routeParam(req, 'stepId'),
       decision === 'APPROVE' ? 'APPROVED' : 'REJECTED',
       req.principal!
     );
@@ -1099,4 +1107,5 @@ if (!process.env.VERCEL) {
 }
 
 export default app;
+
 

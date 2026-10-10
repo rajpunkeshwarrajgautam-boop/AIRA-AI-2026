@@ -30,6 +30,7 @@ import { WorkflowRepository, PostgresWorkflowRepository } from './workflow-repos
 import { WorkflowEngine } from './workflow-engine.js';
 import { WorkflowCompiler } from './workflow-compiler.js';
 import { buildDurableHistorySystemMessage } from './memory-policy.js';
+import { planMissionStep, missionEvidenceError } from './mission-planner.js';
 
 export class AgentRuntime extends EventEmitter {
   private eventStreams: Map<string, EventEmitter> = new Map();
@@ -57,6 +58,18 @@ export class AgentRuntime extends EventEmitter {
   ) {
     super();
     this.toolGateway = toolGateway || new ToolGateway(new PostgresToolCallRepository(), this.approvalKernel, this.workspaceRoot);
+    // Share the real search adapter with the authoritative gateway so provider-
+    // specific execution is principal-checked, persisted and directly testable.
+    const searchTool = this.toolRegistry.get('web_search');
+    if (searchTool && !this.toolGateway.getTool('web_search')) {
+      this.toolGateway.registerTool({ definition: searchTool.definition, execute: async (args, context) => {
+        const result = await this.toolRegistry.execute({ id: `search_${crypto.randomUUID()}`,
+          toolId: searchTool.definition.id, name: 'web_search', arguments: args, timestamp: Date.now(), status: 'PENDING' },
+          { runId: context.runId, workspaceRoot: this.workspaceRoot, sessionGrantedTools: new Set() });
+        if (result.isError) throw new Error(result.error || 'SEARCH_PROVIDER_UNAVAILABLE');
+        return result.output;
+      } });
+    }
     this.router = router || new ServerIntentRouter(this.capabilityRegistry, this.modelRouter);
     this.workflowRepo = workflowRepo || new PostgresWorkflowRepository();
     this.workflowCompiler = workflowCompiler || new WorkflowCompiler(this.modelRouter);
@@ -224,12 +237,13 @@ export class AgentRuntime extends EventEmitter {
     }
   }
 
-  public async createAndExecuteRun(request: CreateRunRequest, principal: ExecutionPrincipal): Promise<Run> {
+  public async createAndExecuteRun(request: CreateRunRequest, principal: ExecutionPrincipal, trackExecution?: (execution: Promise<void>) => void): Promise<Run> {
     const run = await this.createRun(request, principal);
-    // Asynchronously execute run loop
-    setImmediate(() => {
-      this.startRun(run.id).catch(console.error);
-    });
+    // Register the entire deferred execution with the hosting request lifecycle.
+    const execution = new Promise<void>((resolve, reject) => {
+      setImmediate(() => { this.startRun(run.id).then(resolve, reject); });
+    }).catch(console.error);
+    trackExecution?.(execution);
     return run;
   }
 
@@ -243,7 +257,7 @@ export class AgentRuntime extends EventEmitter {
       const principal: ExecutionPrincipal = {
         userId: run.principalId,
         sessionId: run.sessionId,
-        role: 'user'
+        roles: ['user']
       };
       await this.workflowEngine.cancelWorkflow(wfRun.id, principal);
     }
@@ -251,12 +265,14 @@ export class AgentRuntime extends EventEmitter {
     return true;
   }
 
-  public async submitApproval(requestId: string, decision: ApprovalDecision): Promise<boolean> {
-    const { approved, request } = await this.approvalKernel.decide(requestId, decision);
-    const run = await this.runRepo.getRun(request.runId);
-    if (!run) {
+  public async submitApproval(requestId: string, decision: ApprovalDecision, resolvedBy: string): Promise<boolean> {
+    const pending = await this.approvalKernel.getPendingRequest(requestId);
+    if (!pending) return false;
+    const run = await this.runRepo.getRun(pending.runId);
+    if (!run || run.principalId !== resolvedBy) {
       return false;
     }
+    const { approved, request } = await this.approvalKernel.decide(requestId, decision, resolvedBy);
     run.pendingApproval = request;
     
     // Check if this approval was for a workflow step
@@ -266,12 +282,12 @@ export class AgentRuntime extends EventEmitter {
         const principal: ExecutionPrincipal = {
           userId: run.principalId,
           sessionId: run.sessionId,
-          role: 'user'
+          roles: ['user']
         };
         await this.workflowEngine.resolveStepApproval(
           wfRun.id,
           wfRun.pendingApprovalStepId,
-          decision === 'APPROVE' ? 'APPROVED' : 'REJECTED',
+          approved ? 'APPROVED' : 'REJECTED',
           principal
         );
         return true;
@@ -418,7 +434,7 @@ export class AgentRuntime extends EventEmitter {
         const principal: ExecutionPrincipal = {
           userId: run.principalId,
           sessionId: run.sessionId || `sess_${run.principalId}`,
-          role: 'user',
+          roles: ['user'],
           workspaceId: run.workspaceId || undefined
         };
         const wfDef = await this.workflowCompiler.compile(run.prompt, principal);
@@ -493,7 +509,9 @@ export class AgentRuntime extends EventEmitter {
       const isToolAction = run.intent === 'TOOL_ACTION';
       const isAgentMission = run.intent === 'AGENT_MISSION';
 
-      if (isToolAction || isAgentMission) {
+      if (isAgentMission) {
+        await this.selectMissionAction(run);
+      } else if (isToolAction) {
         if (
           run.prompt.toLowerCase().includes('mouse click') ||
           run.prompt.toLowerCase().includes('desktop screen') ||
@@ -531,8 +549,9 @@ export class AgentRuntime extends EventEmitter {
           selectedArgs = {};
         } else if (run.prompt.toLowerCase().includes('calc') || /calculate|\b\d+\s*[-+*/]\s*\d+/.test(run.prompt.toLowerCase())) {
           selectedToolName = 'calculator';
-          const exprMatch = run.prompt.match(/([0-9+\-*/().^ ]+)/);
-          selectedArgs = { expression: exprMatch ? exprMatch[0].trim() : '1024 * 4' };
+          const exprMatch = run.prompt.match(/\d[0-9+\-*/().^ ]*[+*/^\-][0-9+\-*/().^ ]*\d/);
+          if (!exprMatch) throw new Error('CALCULATOR_INPUT_MISSING: Supply an explicit arithmetic expression.');
+          selectedArgs = { expression: exprMatch[0].trim() };
         } else if (
           run.routingDecision?.sideEffectLevel === 'DESTRUCTIVE' ||
           run.prompt.toLowerCase().includes('shell') ||
@@ -574,7 +593,8 @@ export class AgentRuntime extends EventEmitter {
           toolId: toolDef?.id || `tool_${selectedToolName}`,
           name: selectedToolName,
           arguments: selectedArgs,
-          timestamp: Date.now()
+          timestamp: Date.now(),
+          status: 'PENDING'
         };
 
         run.toolsUsed.push(selectedToolName);
@@ -602,6 +622,10 @@ export class AgentRuntime extends EventEmitter {
       );
 
       const requiresApproval = (!isApproved) && (
+        toolDef?.approvalPolicy === 'require_approval' ||
+        toolDef?.approvalPolicy === 'always_ask' ||
+        toolDef?.permissionLevel === 'WRITE' ||
+        toolDef?.sideEffectLevel === 'WRITE' ||
         toolDef?.permissionLevel === 'DESTRUCTIVE' ||
         toolDef?.sideEffectLevel === 'DESTRUCTIVE' ||
         run.routingDecision?.sideEffectLevel === 'DESTRUCTIVE' ||
@@ -670,6 +694,11 @@ export class AgentRuntime extends EventEmitter {
       }
 
       run = await this.runRepo.getRun(runId) as Run; // reload after async tool execution
+      if (!run || ['CANCELLED', 'FAILED', 'COMPLETED'].includes(run.state)) return;
+      toolResult.toolCallId = toolCall.id;
+      toolCall.status = toolResult.isError ? 'FAILED' : 'COMPLETED';
+      const persistedCall = run.toolCalls.find(call => call.id === toolCall.id);
+      if (persistedCall) persistedCall.status = toolCall.status;
       run.toolResults.push(toolResult);
       run.executionCheckpoint = 'TOOL_COMPLETED';
       await this.runRepo.saveRun(run);
@@ -677,36 +706,9 @@ export class AgentRuntime extends EventEmitter {
 
       await this.transitionRunState(runId, 'RUNNING');
       
-      // Bounded iterative loop for AGENT_MISSION (up to 3 steps)
-      if (run.intent === 'AGENT_MISSION' && run.stepCount < 3) {
-        let nextToolName: string | null = null;
-        let nextArgs: Record<string, unknown> = {};
-
-        if (run.stepCount === 1) {
-          nextToolName = 'repo_git_status';
-          nextArgs = {};
-        } else if (run.stepCount === 2) {
-          nextToolName = 'repo_git_log';
-          nextArgs = { count: 2 };
-        }
-
-        if (nextToolName) {
-          const nextToolDef = this.toolGateway.getTool(nextToolName)?.definition || this.toolRegistry.get(nextToolName)?.definition;
-          const nextToolCall: ToolCall = {
-            id: `call_${Date.now()}_${run.stepCount}`,
-            toolId: nextToolDef?.id || `tool_${nextToolName}`,
-            name: nextToolName,
-            arguments: nextArgs,
-            timestamp: Date.now()
-          };
-          run.toolsUsed.push(nextToolName);
-          run.toolCalls.push(nextToolCall);
-          run.stepCount++;
-          run.executionCheckpoint = 'TOOL_SELECTED';
-          await this.runRepo.saveRun(run);
-          await this.emitRunEvent(runId, 'tool.requested', nextToolCall);
-          return this.executeRunLoop(runId);
-        }
+      if (run.intent === 'AGENT_MISSION') {
+        await this.selectMissionAction(run);
+        return this.executeRunLoop(runId);
       }
 
       run = await this.runRepo.getRun(runId) as Run;
@@ -715,6 +717,10 @@ export class AgentRuntime extends EventEmitter {
     }
 
     if (run.executionCheckpoint === 'TOOL_COMPLETED') {
+      if (run.intent === 'AGENT_MISSION') {
+        await this.selectMissionAction(run);
+        return this.executeRunLoop(runId);
+      }
       run.executionCheckpoint = 'SYNTHESIZING';
       await this.runRepo.saveRun(run);
     }
@@ -843,12 +849,24 @@ Provider Capabilities:
         await this.emitRunEvent(runId, 'content.delta', { delta: finalText });
       }
 
+      const fresh = await this.runRepo.getRun(runId);
+      if (!fresh || ['CANCELLED', 'FAILED', 'COMPLETED'].includes(fresh.state)) return;
       run.executionCheckpoint = 'FINALIZING';
       await this.runRepo.saveRun(run);
     }
 
     // Checkpoint 6: Artifacts & Completion
     if (run.executionCheckpoint === 'FINALIZING') {
+      const executionError = run.intent === 'AGENT_MISSION'
+        ? (run.context?.missionFailure || missionEvidenceError(run))
+        : run.intent === 'TOOL_ACTION' && run.toolResults.some(result => result.isError)
+          ? 'TOOL_ACTION_FAILED: Tool execution did not succeed.' : undefined;
+      const terminalState = executionError ? 'FAILED' : 'COMPLETED';
+      if (executionError) {
+        const notice = `\n\nExecution outcome: FAILED. ${executionError}`;
+        run.content += notice;
+        await this.emitRunEvent(runId, 'content.delta', { delta: notice });
+      }
       if (run.content.includes('```')) {
         const artId = `art_${Date.now()}`;
         const artifact: Artifact = {
@@ -874,11 +892,11 @@ Provider Capabilities:
           runId,
           title: `Mission Report: ${run.prompt.slice(0, 36)}`,
           type: 'text/markdown',
-          content: `# Mission Execution Summary\n\n**Objective**: ${run.prompt}\n\n**Outcome**: ${run.content}\n\n**Status**: COMPLETED`,
+          content: `# Mission Execution Summary\n\n**Objective**: ${run.prompt}\n\n**Outcome**: ${run.content}\n\n**Status**: ${terminalState}`,
           version: 1,
           versions: [{
             version: 1,
-            content: `# Mission Execution Summary\n\n**Objective**: ${run.prompt}\n\n**Outcome**: ${run.content}\n\n**Status**: COMPLETED`,
+            content: `# Mission Execution Summary\n\n**Objective**: ${run.prompt}\n\n**Outcome**: ${run.content}\n\n**Status**: ${terminalState}`,
             timestamp: Date.now()
           }]
         };
@@ -889,7 +907,39 @@ Provider Capabilities:
       
       run.executionCheckpoint = 'COMPLETED';
       await this.runRepo.saveRun(run);
-      await this.transitionRunState(runId, 'COMPLETED');
+      await this.transitionRunState(runId, terminalState, executionError);
+    }
+  }
+
+  private async selectMissionAction(run: Run): Promise<void> {
+    const definitions = new Map([
+      ...this.toolRegistry.listDefinitions(), ...this.toolGateway.listDefinitions()
+    ].map(definition => [definition.name, definition]));
+    const allowed = Array.isArray(run.context?.agentAllowedTools) ? run.context.agentAllowedTools : [];
+    const candidates = [...definitions.values()].filter(definition => !allowed.length || allowed.includes(definition.name));
+    const decision = await planMissionStep(run, candidates, this.modelRouter.getAdapter(run.modelPolicy));
+    const fresh = await this.runRepo.getRun(run.id);
+    if (!fresh || ['CANCELLED', 'FAILED', 'COMPLETED'].includes(fresh.state)) return;
+    if (decision.kind === 'tool') {
+      if (run.stepCount >= Math.min(run.maxSteps, 10)) {
+        throw new Error('MISSION_STEP_BUDGET_EXHAUSTED: Objective remains unverified.');
+      }
+      const definition = definitions.get(decision.name)!;
+      const call: ToolCall = {
+        id: `call_${crypto.randomUUID()}`, toolId: definition.id, name: definition.name,
+        arguments: decision.arguments, timestamp: Date.now(), status: 'PENDING'
+      };
+      run.toolCalls.push(call);
+      run.toolsUsed.push(call.name);
+      run.stepCount++;
+      run.executionCheckpoint = 'TOOL_SELECTED';
+      await this.runRepo.saveRun(run);
+      await this.emitRunEvent(run.id, 'tool.requested', call);
+    } else {
+      run.context = { ...run.context, missionPlanSummary: decision.kind === 'finish' ? decision.summary : undefined,
+        missionFailure: decision.kind === 'blocked' ? `MISSION_BLOCKED: ${decision.reason}` : missionEvidenceError(run) };
+      run.executionCheckpoint = 'SYNTHESIZING';
+      await this.runRepo.saveRun(run);
     }
   }
 
@@ -955,3 +1005,4 @@ export * from './workflow-repositories.js';
 export * from './registry.js';
 export * from './router.js';
 export * from './repositories.js';
+

@@ -70,13 +70,13 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
               {userName}
             </span>
           )}
-          <div className="w-fit rounded-2xl border border-claude-borderMuted-light bg-claude-surface2-light px-5 py-3 text-claude-text-light shadow-sm md:px-6 md:py-4 dark:border-claude-borderMuted-dark dark:bg-claude-surface2-dark dark:text-claude-text-dark">
+          <div className="w-fit rounded-2xl border border-claude-borderMuted-light bg-claude-surface2-light px-5 py-3 text-claude-text-light shadow-xs md:px-6 md:py-4 dark:border-claude-borderMuted-dark dark:bg-claude-surface2-dark dark:text-claude-text-dark">
             {message.attachments && message.attachments.length > 0 && (
               <div className="mb-2 flex flex-wrap gap-2 border-b border-claude-border-light pb-3 dark:border-claude-border-dark">
                 {message.attachments.map(attachment => (
                   <div
                     key={attachment.id}
-                    className="flex items-center gap-2 rounded-lg border border-claude-borderMuted-light bg-claude-surface-light px-3 py-1.5 text-xs shadow-sm dark:border-claude-borderMuted-dark dark:bg-claude-surface-dark"
+                    className="flex items-center gap-2 rounded-lg border border-claude-borderMuted-light bg-claude-surface-light px-3 py-1.5 text-xs shadow-xs dark:border-claude-borderMuted-dark dark:bg-claude-surface-dark"
                   >
                     <FileText className="h-3.5 w-3.5 text-claude-terracotta" />
                     <span className="max-w-[140px] truncate font-medium">{attachment.name}</span>

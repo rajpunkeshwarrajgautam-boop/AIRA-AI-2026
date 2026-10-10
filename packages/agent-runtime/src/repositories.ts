@@ -3,9 +3,9 @@ import { db } from '../../db/src/index.js';
 
 export interface AgentRepository {
   saveAgent(agent: AgentDefinition): Promise<void>;
-  getAgent(id: string): Promise<AgentDefinition | undefined>;
-  listAgents(): Promise<AgentDefinition[]>;
-  deleteAgent(id: string): Promise<boolean>;
+  getAgent(id: string, principalId?: string): Promise<AgentDefinition | undefined>;
+  listAgents(principalId?: string): Promise<AgentDefinition[]>;
+  deleteAgent(id: string, principalId?: string): Promise<boolean>;
 }
 
 export interface RunRepository {
@@ -26,6 +26,7 @@ export class PostgresAgentRepository implements AgentRepository {
   async saveAgent(agent: AgentDefinition): Promise<void> {
     await db('agents').insert({
       id: agent.id,
+      principal_id: agent.principalId || null,
       name: agent.name,
       description: agent.description || '',
       instructions: agent.instructions,
@@ -40,25 +41,34 @@ export class PostgresAgentRepository implements AgentRepository {
     }).onConflict('id').merge();
   }
 
-  async getAgent(id: string): Promise<AgentDefinition | undefined> {
-    const row = await db('agents').where({ id }).first();
+  async getAgent(id: string, principalId?: string): Promise<AgentDefinition | undefined> {
+    const query = db('agents').where({ id });
+    if (principalId) query.andWhere(builder => builder.where('principal_id', principalId).orWhere(inner => inner.whereNull('principal_id').andWhere('id', 'agent-default')));
+    const row = await query.first();
     if (!row) return undefined;
     return this.mapToAgent(row);
   }
 
-  async listAgents(): Promise<AgentDefinition[]> {
-    const rows = await db('agents').select('*');
+  async listAgents(principalId?: string): Promise<AgentDefinition[]> {
+    const query = db('agents').select('*');
+    if (principalId) query.where(builder => builder.where('principal_id', principalId).orWhere(inner => inner.whereNull('principal_id').andWhere('id', 'agent-default')));
+    const rows = await query;
     return rows.map(this.mapToAgent);
   }
 
-  async deleteAgent(id: string): Promise<boolean> {
-    const deleted = await db('agents').where({ id }).delete();
+  async deleteAgent(id: string, principalId?: string): Promise<boolean> {
+    const query = db('agents').where({ id });
+    if (principalId) query.andWhere('principal_id', principalId);
+    const deleted = await query.delete();
     return deleted > 0;
   }
 
   private mapToAgent(row: any): AgentDefinition {
     return {
       id: row.id,
+      principalId: row.principal_id || undefined,
+      createdAt: Number(row.createdAt),
+      updatedAt: Number(row.updatedAt),
       name: row.name,
       description: row.description || '',
       instructions: row.instructions,
@@ -288,3 +298,4 @@ export class PostgresRunRepository implements RunRepository {
     };
   }
 }
+

@@ -211,7 +211,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       value={form.userName} 
                       onChange={e => setForm({ ...form, userName: e.target.value })} 
                       placeholder="Enter your name (e.g. Punkeshwar)" 
-                      className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-medium outline-none focus:border-claude-terracotta focus:shadow-[0_0_0_2px_rgba(217,119,87,0.15)] transition-all placeholder:text-claude-muted-light/50" 
+                      className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-medium outline-hidden focus:border-claude-terracotta focus:shadow-[0_0_0_2px_rgba(217,119,87,0.15)] transition-all placeholder:text-claude-muted-light/50" 
                     />
                     <p className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-1">Used to personalize dynamic greetings and conversation synthesis.</p>
                   </div>
@@ -221,7 +221,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <input 
                       value={form.email || 'user@aira.internal'} 
                       onChange={e => setForm({ ...form, email: e.target.value })} 
-                      className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-medium outline-none focus:border-claude-terracotta transition-all" 
+                      className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-medium outline-hidden focus:border-claude-terracotta transition-all" 
                     />
                   </div>
 
@@ -238,7 +238,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           }} 
                           className={`py-2.5 rounded-xl border text-[13px] font-bold capitalize transition-all ${
                             form.theme === theme 
-                              ? 'border-claude-terracotta bg-claude-terracotta text-white shadow-sm' 
+                              ? 'border-claude-terracotta bg-claude-terracotta text-white shadow-xs' 
                               : 'border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark hover:border-claude-terracotta/40'
                           }`}
                         >
@@ -298,7 +298,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                 {theme.name}
                               </span>
                               {isSelected && (
-                                <Check className="w-4 h-4 text-claude-terracotta flex-shrink-0" />
+                                <Check className="w-4 h-4 text-claude-terracotta shrink-0" />
                               )}
                             </div>
 
@@ -325,7 +325,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           onClick={() => setForm({ ...form, activeModel: model.id })}
                           className={`p-3 rounded-xl border cursor-pointer transition-all ${
                             form.activeModel === model.id
-                              ? 'border-claude-terracotta bg-claude-terracotta/5 dark:bg-claude-terracotta/10 shadow-sm'
+                              ? 'border-claude-terracotta bg-claude-terracotta/5 dark:bg-claude-terracotta/10 shadow-xs'
                               : 'border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light dark:bg-claude-surface2-dark hover:border-claude-border-light/80'
                           }`}
                         >
@@ -340,13 +340,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
 
                   {/* Deep Reasoning exact screenshot component */}
-                  <div className="p-3.5 sm:p-4 rounded-2xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light dark:bg-claude-surface2-dark shadow-sm">
+                  <div className="p-3.5 sm:p-4 rounded-2xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light dark:bg-claude-surface2-dark shadow-xs">
                     <div 
                       onClick={() => setForm({ ...form, extendedThinking: !form.extendedThinking })}
                       className="flex items-center justify-between gap-3 cursor-pointer select-none"
                     >
                       <div className="flex items-center space-x-3 min-w-0">
-                        <div className="w-10 h-10 rounded-xl bg-[#EDE9FE] dark:bg-[#2E274D] flex items-center justify-center flex-shrink-0 shadow-sm">
+                        <div className="w-10 h-10 rounded-xl bg-[#EDE9FE] dark:bg-[#2E274D] flex items-center justify-center shrink-0 shadow-xs">
                           <Brain className="w-5 h-5 text-[#7C3AED] dark:text-[#A78BFA]" />
                         </div>
                         <div className="min-w-0">
@@ -362,7 +362,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           e.stopPropagation();
                           setForm({ ...form, extendedThinking: !form.extendedThinking });
                         }}
-                        className={`group relative inline-flex h-[28px] w-[50px] flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-300 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00BCD4] focus-visible:ring-offset-2 dark:focus-visible:ring-offset-claude-bg-dark ${
+                        className={`group relative inline-flex h-[28px] w-[50px] shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-300 ease-in-out focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[#00BCD4] focus-visible:ring-offset-2 dark:focus-visible:ring-offset-claude-bg-dark ${
                           form.extendedThinking ? 'bg-[#00BCD4]' : 'bg-[#D5D2CA] dark:bg-[#4A4740]'
                         }`}
                         style={{ boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.15)' }}
@@ -432,13 +432,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
                     <div 
                       onClick={() => setForm({ ...form, persistentMemoryEnabled: !(form.persistentMemoryEnabled ?? true) })}
-                      className="w-11 h-6 rounded-full p-[2px] transition-colors duration-200 cursor-pointer flex-shrink-0 flex items-center"
+                      className="w-11 h-6 rounded-full p-[2px] transition-colors duration-200 cursor-pointer shrink-0 flex items-center"
                       style={{ backgroundColor: (form.persistentMemoryEnabled ?? true) ? '#D97757' : '#D5D2CA' }}
                     >
                       <motion.div 
                         layout
                         transition={{ type: "spring", stiffness: 500, damping: 30 }}
-                        className={`w-5 h-5 rounded-full bg-white shadow-sm ${(form.persistentMemoryEnabled ?? true) ? 'ml-auto' : 'mr-auto'}`}
+                        className={`w-5 h-5 rounded-full bg-white shadow-xs ${(form.persistentMemoryEnabled ?? true) ? 'ml-auto' : 'mr-auto'}`}
                       />
                     </div>
                   </div>
@@ -451,13 +451,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
                     <div 
                       onClick={() => setForm({ ...form, autoConsolidateMemory: !(form.autoConsolidateMemory ?? true) })}
-                      className="w-11 h-6 rounded-full p-[2px] transition-colors duration-200 cursor-pointer flex-shrink-0 flex items-center"
+                      className="w-11 h-6 rounded-full p-[2px] transition-colors duration-200 cursor-pointer shrink-0 flex items-center"
                       style={{ backgroundColor: (form.autoConsolidateMemory ?? true) ? '#D97757' : '#D5D2CA' }}
                     >
                       <motion.div 
                         layout
                         transition={{ type: "spring", stiffness: 500, damping: 30 }}
-                        className={`w-5 h-5 rounded-full bg-white shadow-sm ${(form.autoConsolidateMemory ?? true) ? 'ml-auto' : 'mr-auto'}`}
+                        className={`w-5 h-5 rounded-full bg-white shadow-xs ${(form.autoConsolidateMemory ?? true) ? 'ml-auto' : 'mr-auto'}`}
                       />
                     </div>
                   </div>
@@ -501,7 +501,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         onClose();
                         if (onOpenMemoryVault) onOpenMemoryVault();
                       }}
-                      className="flex-1 py-2.5 px-4 rounded-xl bg-claude-terracotta text-white font-semibold text-xs hover:bg-claude-terracotta-hover transition-colors shadow-sm"
+                      className="flex-1 py-2.5 px-4 rounded-xl bg-claude-terracotta text-white font-semibold text-xs hover:bg-claude-terracotta-hover transition-colors shadow-xs"
                     >
                       Open Memory Vault Inspector
                     </button>
@@ -527,7 +527,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       value={form.userBio || ''} 
                       onChange={e => setForm({ ...form, userBio: e.target.value })} 
                       placeholder="e.g. Senior frontend engineer building responsive TypeScript applications, prefers direct answers and production-ready code." 
-                      className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-medium outline-none focus:border-claude-terracotta transition-all resize-none placeholder:text-claude-muted-light/50" 
+                      className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-medium outline-hidden focus:border-claude-terracotta transition-all resize-none placeholder:text-claude-muted-light/50" 
                     />
                   </div>
 
@@ -538,7 +538,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       value={form.customInstructions} 
                       onChange={e => setForm({ ...form, customInstructions: e.target.value })} 
                       placeholder="e.g. Provide concise responses, highlight critical edge cases, prefer modern vanilla CSS and TypeScript, avoid unnecessary conversational filler." 
-                      className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-medium outline-none focus:border-claude-terracotta transition-all resize-none placeholder:text-claude-muted-light/50" 
+                      className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-medium outline-hidden focus:border-claude-terracotta transition-all resize-none placeholder:text-claude-muted-light/50" 
                     />
                   </div>
 
@@ -580,13 +580,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
                     <div 
                       onClick={() => setForm({ ...form, autoOpenArtifacts: !(form.autoOpenArtifacts ?? true) })}
-                      className="w-11 h-6 rounded-full p-[2px] transition-colors duration-200 cursor-pointer flex-shrink-0 flex items-center"
+                      className="w-11 h-6 rounded-full p-[2px] transition-colors duration-200 cursor-pointer shrink-0 flex items-center"
                       style={{ backgroundColor: (form.autoOpenArtifacts ?? true) ? '#D97757' : '#D5D2CA' }}
                     >
                       <motion.div 
                         layout
                         transition={{ type: "spring", stiffness: 500, damping: 30 }}
-                        className={`w-5 h-5 rounded-full bg-white shadow-sm ${(form.autoOpenArtifacts ?? true) ? 'ml-auto' : 'mr-auto'}`}
+                        className={`w-5 h-5 rounded-full bg-white shadow-xs ${(form.autoOpenArtifacts ?? true) ? 'ml-auto' : 'mr-auto'}`}
                       />
                     </div>
                   </div>
@@ -620,7 +620,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         whileHover={{ scale: 1.02 }} 
                         whileTap={{ scale: 0.98 }} 
                         onClick={exportData} 
-                        className="flex-1 p-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-bold text-claude-text-light dark:text-white flex items-center justify-center gap-2 hover:border-claude-terracotta/50 transition-colors shadow-sm"
+                        className="flex-1 p-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-bold text-claude-text-light dark:text-white flex items-center justify-center gap-2 hover:border-claude-terracotta/50 transition-colors shadow-xs"
                       >
                         <Download className="w-4 h-4 text-claude-terracotta" />
                         <span>Export Data (JSON)</span>
@@ -628,7 +628,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <motion.label 
                         whileHover={{ scale: 1.02 }} 
                         whileTap={{ scale: 0.98 }} 
-                        className="flex-1 p-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-bold text-claude-text-light dark:text-white flex items-center justify-center gap-2 cursor-pointer hover:border-claude-terracotta/50 transition-colors shadow-sm"
+                        className="flex-1 p-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-bold text-claude-text-light dark:text-white flex items-center justify-center gap-2 cursor-pointer hover:border-claude-terracotta/50 transition-colors shadow-xs"
                       >
                         <Upload className="w-4 h-4 text-claude-terracotta" />
                         <span>Import Backup</span>
@@ -658,7 +658,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   whileHover={{ scale: 1.02 }} 
                   whileTap={{ scale: 0.98 }} 
                   onClick={save} 
-                  className="px-5 py-2 rounded-xl bg-claude-terracotta text-white text-[13px] font-bold hover:bg-claude-terracotta-hover transition-colors flex items-center gap-2 shadow-sm"
+                  className="px-5 py-2 rounded-xl bg-claude-terracotta text-white text-[13px] font-bold hover:bg-claude-terracotta-hover transition-colors flex items-center gap-2 shadow-xs"
                 >
                   {saved && <Check className="w-4 h-4" />}{saved ? 'Preferences Saved' : 'Save Changes'}
                 </motion.button>

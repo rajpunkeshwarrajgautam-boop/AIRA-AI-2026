@@ -22,8 +22,8 @@
     "test:reality": "npx tsx test/capability-reality-audit-suite.ts",
     "test:search": "npx tsx test/search-provider-failover.ts",
     "test:startup": "npx tsx test/startup.ts",
-    "typecheck": "tsc --noEmit",
-    "build": "tsc -b && vite build",
+    "typecheck": "npm run typecheck:frontend && npm run typecheck:api",
+    "build": "npm run typecheck:api && tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
     "memory:init": "npx @agentmemory/agentmemory@latest init",
@@ -40,12 +40,23 @@
     "test:preview-identity": "npx tsx test/preview-identity-guard.ts",
     "test:research-evidence": "npx tsx test/research-evidence.ts",
     "test:staging:deployed": "npx tsx test/staging-deployed-acceptance.ts",
-    "test:staging:attest": "npx tsx test/staging-deployment-attestation.ts"
+    "test:staging:attest": "npx tsx test/staging-deployment-attestation.ts",
+    "test:staging:db-policy": "node --test test/staging-db-policy.test.mjs",
+    "test:run-lifetime": "npx tsx test/run-execution-lifetime.ts",
+    "test:tailwind:visual": "node test/tailwind-visual-regression.mjs",
+    "test:automation:scheduler": "npx tsx test/automation-scheduler-regression.ts",
+    "test:approval:actor": "npx tsx test/approval-actor-regression.ts",
+    "test:browser:url-policy": "npx tsx test/public-url-policy.ts",
+    "typecheck:api": "tsc -p tsconfig.api.json",
+    "typecheck:frontend": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.node.json --noEmit",
+    "test:mission:execution": "npx tsx test/mission-execution-regression.ts",
+    "test:account:auth": "npx tsx test/account-auth-regression.ts"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
     "@modelcontextprotocol/sdk": "^1.32.0",
     "@phosphor-icons/react": "^2.1.10",
+    "@vercel/functions": "3.9.11",
     "canvas-confetti": "^1.9.4",
     "clsx": "^2.1.1",
     "cors": "^2.8.6",
@@ -53,8 +64,10 @@
     "dotenv": "^18.0.4",
     "express": "^5.2.1",
     "firebase": "^12.19.0",
+    "firebase-admin": "14.5.0",
     "framer-motion": "^14.0.0",
     "gsap": "^3.15.0",
+    "katex": "0.18.7",
     "knex": "^3.3.0",
     "lucide-react": "^1.48.0",
     "marked": "^18.0.14",
@@ -63,10 +76,10 @@
     "react-dom": "^19.2.8",
     "tailwind-merge": "^3.7.0",
     "uuid": "^14.0.2",
-    "zod": "^4.6.5",
-    "katex": "0.18.7"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "4.3.3",
     "@types/canvas-confetti": "^1.9.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
@@ -78,10 +91,16 @@
     "@vitejs/plugin-react": "^6.1.1",
     "autoprefixer": "^10.6.1",
     "oxlint": "^1.81.0",
+    "pixelmatch": "7.1.0",
     "playwright": "^1.63.0",
+    "pngjs": "7.0.0",
     "postcss": "^8.5.28",
-    "tailwindcss": "^3.4.19",
+    "tailwindcss": "4.3.3",
     "typescript": "~6.0.2",
     "vite": "^8.3.0"
+  },
+  "overrides": {
+    "@grpc/grpc-js": "1.13.6",
+    "postcss-selector-parser": "7.1.6"
   }
 }

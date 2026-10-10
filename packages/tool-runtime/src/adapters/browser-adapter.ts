@@ -1,5 +1,6 @@
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import { ExecutionPrincipal } from '../../../contracts/src/index.js';
+import { assertPublicUrl } from '../public-url-policy.js';
 
 export interface BrowserSessionInfo {
   sessionKey: string;
@@ -81,7 +82,13 @@ export class BrowserAdapter {
     const context = await browser.newContext({
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 AIRA/2026',
       viewport: { width: 1280, height: 720 },
-      ignoreHTTPSErrors: true
+      ignoreHTTPSErrors: false
+    });
+
+    // Inspect every browser network destination, including redirects/resources.
+    await context.route('**/*', async (route) => {
+      try { await this.validateUrl(route.request().url()); await route.continue(); }
+      catch { await route.abort('blockedbyclient'); }
     });
 
     const activePage = await context.newPage();
@@ -113,7 +120,7 @@ export class BrowserAdapter {
     untrustedContentSnippet: string;
     untrustedExternalData: true;
   }> {
-    this.validateUrl(url);
+    await this.validateUrl(url);
 
     let session: BrowserSessionInfo | null = null;
     try {
@@ -153,13 +160,24 @@ export class BrowserAdapter {
     }
 
     // Serverless Resilient Fallback: Safe direct HTTP navigation & HTML parsing
-    const res = await fetch(url, {
+    let target = url;
+    let res!: Response;
+    for (let redirect = 0; redirect <= 5; redirect++) {
+      await this.validateUrl(target);
+      res = await fetch(target, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 AIRA/2026',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
       },
-      signal: AbortSignal.timeout(Math.min(timeoutMs, 15000))
-    });
+        signal: AbortSignal.timeout(Math.min(timeoutMs, 15000)),
+        redirect: 'manual'
+      });
+      if (![301, 302, 303, 307, 308].includes(res.status)) break;
+      const location = res.headers.get('location');
+      await res.body?.cancel();
+      if (!location || redirect === 5) throw new Error('BROWSER_REDIRECT_LIMIT');
+      target = new URL(location, target).toString();
+    }
 
     const html = await res.text();
     const status = res.status;
@@ -391,27 +409,11 @@ export class BrowserAdapter {
   /**
    * Validate destination URL to prevent SSRF against cloud internal metadata or forbidden protocols
    */
-  private validateUrl(rawUrl: string): void {
-    let parsed: URL;
-    try {
-      parsed = new URL(rawUrl);
-    } catch {
-      throw new Error(`Invalid URL: "${rawUrl}"`);
-    }
-
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      throw new Error(`Forbidden protocol: "${parsed.protocol}". Only http and https are permitted.`);
-    }
-
-    // SSRF protections: Block access to cloud metadata services (169.254.169.254, metadata.google.internal)
-    const hostname = parsed.hostname.toLowerCase();
-    if (
-      hostname === '169.254.169.254' ||
-      hostname.endsWith('.internal') ||
-      hostname.endsWith('.local')
-    ) {
-      throw new Error(`SECURITY_REJECTED: Destination "${hostname}" is blocked to prevent SSRF.`);
-    }
+  private async validateUrl(rawUrl: string): Promise<void> {
+    // Only local CI's owned loopback fixtures are exempt; deployed environments
+    // never accept loopback regardless of caller-supplied headers or arguments.
+    const allowLoopbackFixture = process.env.NODE_ENV === 'test' && !process.env.VERCEL && !process.env.VERCEL_ENV;
+    await assertPublicUrl(rawUrl, { allowLoopbackFixture });
   }
 
   /**
@@ -440,3 +442,4 @@ export class BrowserAdapter {
     }
   }
 }
+

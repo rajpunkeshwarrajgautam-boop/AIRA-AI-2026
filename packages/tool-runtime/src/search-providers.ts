@@ -22,7 +22,7 @@ export interface SearchResponse {
 }
 
 export class WebSearchError extends Error {
-  constructor(public readonly code: 'SEARCH_PROVIDER_NOT_READY' | 'SEARCH_PROVIDER_UNAVAILABLE') {
+  constructor(public readonly code: 'SEARCH_PROVIDER_NOT_READY' | 'SEARCH_PROVIDER_UNAVAILABLE' | 'SEARCH_PROVIDER_INVALID') {
     super(code);
     this.name = 'WebSearchError';
   }
@@ -116,12 +116,14 @@ async function exaSearch(query: string, apiKey: string, fetcher: typeof fetch): 
 export async function searchWeb(
   query: string,
   credentials: SearchCredentials = readSearchCredentials(),
-  fetcher: typeof fetch = fetch
+  fetcher: typeof fetch = fetch,
+  options: { provider?: SearchProviderName | 'auto' } = {}
 ): Promise<SearchResponse> {
   const text = query.trim().slice(0, 500);
   if (!text) throw new WebSearchError('SEARCH_PROVIDER_UNAVAILABLE');
 
-  const providers = configuredSearchProviders(credentials);
+  if (options.provider && !['auto', 'tavily', 'exa'].includes(options.provider)) throw new WebSearchError('SEARCH_PROVIDER_INVALID');
+  const providers = configuredSearchProviders(credentials).filter(provider => !options.provider || options.provider === 'auto' || provider === options.provider);
   if (providers.length === 0) throw new WebSearchError('SEARCH_PROVIDER_NOT_READY');
 
   for (const provider of providers) {
@@ -136,3 +138,4 @@ export async function searchWeb(
   }
   throw new WebSearchError('SEARCH_PROVIDER_UNAVAILABLE');
 }
+

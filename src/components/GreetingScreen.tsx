@@ -308,7 +308,7 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
     >
       {/* Toast Notification */}
       {toastMessage && (
-        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-sm flex items-center gap-2 text-xs font-sans text-claude-text-light dark:text-claude-text-dark animate-fade-in">
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-xs flex items-center gap-2 text-xs font-sans text-claude-text-light dark:text-claude-text-dark animate-fade-in">
           <Zap className="w-3.5 h-3.5 text-claude-terracotta" />
           <span>{toastMessage}</span>
         </div>
@@ -336,7 +336,7 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
 
       {/* Dynamic Situation Subtitle */}
       <p 
-        className="claude-fade-up text-sm sm:text-base text-claude-muted-light dark:text-claude-muted-dark font-sans leading-relaxed mb-6 max-w-lg"
+        className="claude-fade-up text-sm sm:text-base text-claude-muted-light dark:text-claude-muted-dark font-sans leading-relaxed sm:leading-[1.5] mb-6 max-w-lg"
         style={{ textWrap: 'balance' }}
       >
         {dynamicSubtitle}
@@ -350,7 +350,7 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
             className="w-full flex items-center justify-between p-2.5 px-3.5 rounded-xl gradient-card-surface hover:border-claude-terracotta/40 text-left transition-all duration-300 group active:scale-[0.99]"
           >
             <div className="flex items-center gap-2.5 min-w-0">
-              <span className="p-1 rounded-lg bg-gradient-to-br from-claude-terracotta/20 to-claude-terracotta/5 text-claude-terracotta">
+              <span className="p-1 rounded-lg bg-linear-to-br from-claude-terracotta/20 to-claude-terracotta/5 text-claude-terracotta">
                 <RotateCcw className="w-3.5 h-3.5" />
               </span>
               <div className="min-w-0">
@@ -358,7 +358,7 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
                 <span className="text-xs font-semibold text-claude-text-light dark:text-white truncate block">{recentHistory.recentChat.title}</span>
               </div>
             </div>
-            <ArrowUpRight className="w-4 h-4 text-claude-muted-light group-hover:text-claude-terracotta group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-all flex-shrink-0" />
+            <ArrowUpRight className="w-4 h-4 text-claude-muted-light group-hover:text-claude-terracotta group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-all shrink-0" />
           </button>
         </div>
       )}

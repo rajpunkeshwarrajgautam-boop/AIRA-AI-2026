@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "vite",
-  "buildCommand": "npx tsx scripts/staging-db-guard.ts && npm run db:migrate && npm run db:verify:deploy && npm run build",
+  "buildCommand": "node scripts/staging-build.mjs",
   "outputDirectory": "dist",
   "installCommand": "npm ci",
   "rewrites": [

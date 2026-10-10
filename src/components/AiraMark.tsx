@@ -37,7 +37,7 @@ export const AiraMark: React.FC<AiraMarkProps> = ({
   if (isCompact) {
     return (
       <div 
-        className={`relative inline-flex items-center justify-center flex-shrink-0 select-none ${sizeMap[size]} ${className}`}
+        className={`relative inline-flex items-center justify-center shrink-0 select-none ${sizeMap[size]} ${className}`}
         aria-label="Aira Neural Knot"
       >
         <svg 
@@ -72,7 +72,7 @@ export const AiraMark: React.FC<AiraMarkProps> = ({
       whileHover={{ scale: 1.08 }}
       whileTap={{ scale: 0.95 }}
       transition={{ type: 'spring', stiffness: 380, damping: 22 }}
-      className={`relative inline-flex items-center justify-center flex-shrink-0 select-none ${sizeMap[size]} ${className}`}
+      className={`relative inline-flex items-center justify-center shrink-0 select-none ${sizeMap[size]} ${className}`}
       aria-label="Aira Celestial Neural Knot"
     >
       {/* Ambient Pulsing Atmospheric Planetary Nebula Aura (Hero Scale) */}
@@ -87,7 +87,7 @@ export const AiraMark: React.FC<AiraMarkProps> = ({
             repeat: Infinity,
             ease: 'easeInOut',
           }}
-          className="absolute inset-0 -m-8 bg-gradient-to-tr from-claude-terracotta/35 via-amber-500/25 to-claude-terracotta/35 blur-3xl rounded-full pointer-events-none -z-10"
+          className="absolute inset-0 -m-8 bg-linear-to-tr from-claude-terracotta/35 via-amber-500/25 to-claude-terracotta/35 blur-3xl rounded-full pointer-events-none -z-10"
         />
       )}
 

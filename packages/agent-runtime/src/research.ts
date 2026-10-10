@@ -54,7 +54,8 @@ export class ResearchService {
           toolId: toolDef?.id || 'tool_web_search',
           name: 'web_search',
           arguments: { query: prompt },
-          timestamp
+          timestamp,
+          status: 'PENDING'
         };
         toolCalls.push(toolCall);
         
@@ -82,7 +83,7 @@ export class ResearchService {
                   toolCallId: toolCall.id,
                   retrievalMechanism: 'web_search',
                   timestamp
-                }
+                , artifacts: [], isError: false }
               }));
             // A configured API key alone does not prove that evidence was retrieved.
             providerReady = citations.length > 0;
@@ -110,3 +111,4 @@ export class ResearchService {
     };
   }
 }
+

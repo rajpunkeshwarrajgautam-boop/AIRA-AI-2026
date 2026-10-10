@@ -53,6 +53,10 @@ async function main() {
     throw new Error('DEPLOY_DB_SCHEMA_INCOMPLETE: ' + missingTables.join(', '));
   }
 
+  if (!(await db.schema.hasColumn('agents', 'principal_id'))) {
+    throw new Error('DEPLOY_DB_AGENT_OWNER_COLUMN_MISSING');
+  }
+
   const searchColumns = await db('information_schema.columns')
     .where({
       table_schema: 'public',
@@ -107,3 +111,4 @@ main()
   .finally(async () => {
     await closeDb();
   });
+

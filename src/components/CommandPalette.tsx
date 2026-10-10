@@ -218,7 +218,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                   }
                 }}
                 placeholder="Search chats, workspaces and actions..."
-                className="h-14 min-w-0 flex-1 bg-transparent text-[14px] text-claude-text-light outline-none placeholder:text-claude-muted-light/60 dark:text-white dark:placeholder:text-claude-muted-dark/60"
+                className="h-14 min-w-0 flex-1 bg-transparent text-[14px] text-claude-text-light outline-hidden placeholder:text-claude-muted-light/60 dark:text-white dark:placeholder:text-claude-muted-dark/60"
               />
               <div className="hidden items-center gap-1 rounded-lg border border-claude-border-light bg-claude-surface2-light px-2 py-1 text-[10px] font-medium text-claude-muted-light sm:flex dark:border-claude-border-dark dark:bg-claude-surface2-dark dark:text-claude-muted-dark">
                 ESC
@@ -234,7 +234,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                       type="button"
                       onMouseEnter={() => setActiveIndex(index)}
                       onClick={() => closeAndRun(item.run)}
-                      className="relative flex w-full items-center gap-3 rounded-[12px] px-3 py-2.5 text-left outline-none"
+                      className="relative flex w-full items-center gap-3 rounded-[12px] px-3 py-2.5 text-left outline-hidden"
                     >
                       {activeIndex === index && (
                         <motion.span

@@ -2,7 +2,7 @@ import * as crypto from 'crypto';
 import { AutomationDefinition, AutomationRun } from '../../contracts/src/index.js';
 import { AgentRuntime } from '../../agent-runtime/src/index.js';
 import { AutomationRepository, AutomationRunRepository } from './repositories.js';
-import parser from 'cron-parser';
+import { CronExpressionParser } from 'cron-parser';
 
 export class AutomationEngine {
   private timerHandle: NodeJS.Timeout | null = null;
@@ -156,11 +156,11 @@ export class AutomationEngine {
     }
   }
 
-  public async runScheduledCronCycle(): Promise<{ evaluated: number; triggered: string[] }> {
-    return this.evaluateSchedules();
+  public async runScheduledCronCycle(now = Date.now()): Promise<{ evaluated: number; triggered: string[] }> {
+    return this.evaluateSchedules(now);
   }
 
-  private async evaluateSchedules(): Promise<{ evaluated: number; triggered: string[] }> {
+  private async evaluateSchedules(now = Date.now()): Promise<{ evaluated: number; triggered: string[] }> {
     const triggered: string[] = [];
     try {
       const dueAutomations = await this.autoRepo.getDueAutomations();
@@ -168,16 +168,14 @@ export class AutomationEngine {
       for (const auto of dueAutomations) {
         if (!auto.cronExpression) continue;
         try {
-          const interval = parser.parseExpression(auto.cronExpression);
+          const interval = CronExpressionParser.parse(auto.cronExpression, { tz: 'UTC', currentDate: now });
           const prevRunTime = interval.prev().getTime();
 
           if (!auto.lastRun || auto.lastRun < prevRunTime) {
-            const claim = await this.runRepo.claimRun(auto.id, prevRunTime);
-            if (claim) {
-              console.log(`[AutomationEngine] Triggering cron automation: ${auto.name}`);
-              const runId = await this.triggerNow(auto.id, prevRunTime);
-              triggered.push(runId);
-            }
+            // triggerNow owns the atomic claim. Preclaiming here consumes the
+            // unique schedule slot and prevents the child run from executing.
+            const runId = await this.triggerNow(auto.id, prevRunTime);
+            triggered.push(runId);
           }
         } catch (e: any) {
           console.error(`[AutomationEngine] Failed to process cron for ${auto.id}:`, e.message);
@@ -190,3 +188,4 @@ export class AutomationEngine {
     }
   }
 }
+

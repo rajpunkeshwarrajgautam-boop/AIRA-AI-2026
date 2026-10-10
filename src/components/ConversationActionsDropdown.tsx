@@ -164,7 +164,7 @@ export const ConversationActionsDropdown: React.FC<ConversationActionsDropdownPr
                     onBlur={() => setActiveAction(current => current === id ? null : current)}
                     onClick={event => runAction(event, action)}
                     whileTap={reducedMotion ? undefined : { scale: 0.985 }}
-                    className="relative isolate flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-[12px] font-medium outline-none transition-colors text-claude-text-light dark:text-claude-text-dark"
+                    className="relative isolate flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-[12px] font-medium outline-hidden transition-colors text-claude-text-light dark:text-claude-text-dark"
                   >
                     {activeAction === id && (
                       <motion.span
@@ -193,7 +193,7 @@ export const ConversationActionsDropdown: React.FC<ConversationActionsDropdownPr
                     setDeleteArmed(true);
                   }}
                   whileTap={reducedMotion ? undefined : { scale: 0.985 }}
-                  className="flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-[12px] font-medium text-red-500 dark:text-red-400 outline-none hover:bg-red-50 dark:hover:bg-red-500/10"
+                  className="flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-[12px] font-medium text-red-500 dark:text-red-400 outline-hidden hover:bg-red-50 dark:hover:bg-red-500/10"
                 >
                   <Trash2 className="h-3.5 w-3.5 shrink-0" />
                   <span>Delete</span>
@@ -236,7 +236,7 @@ export const ConversationActionsDropdown: React.FC<ConversationActionsDropdownPr
                     type="button"
                     onClick={event => runAction(event, onDelete)}
                     whileTap={reducedMotion ? undefined : { scale: 0.97 }}
-                    className="flex flex-1 items-center justify-center gap-1.5 rounded-[10px] bg-red-500 px-2.5 py-2 text-[12px] font-semibold text-white shadow-sm hover:bg-red-600"
+                    className="flex flex-1 items-center justify-center gap-1.5 rounded-[10px] bg-red-500 px-2.5 py-2 text-[12px] font-semibold text-white shadow-xs hover:bg-red-600"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                     Delete
@@ -261,7 +261,7 @@ export const ConversationActionsDropdown: React.FC<ConversationActionsDropdownPr
         aria-controls={isOpen ? menuId : undefined}
         onClick={toggleMenu}
         whileTap={reducedMotion ? undefined : { scale: 0.9 }}
-        className={`rounded-lg p-1.5 outline-none transition-colors ${
+        className={`rounded-lg p-1.5 outline-hidden transition-colors ${
           isOpen
             ? 'bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-text-light dark:text-white'
             : 'hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark'

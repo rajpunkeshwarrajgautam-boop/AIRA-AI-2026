@@ -72,7 +72,7 @@ const ThemeToggle = ({ theme, onChange }: { theme: 'light' | 'dark' | 'system', 
         <button
           key={id}
           onClick={() => onChange(id)}
-          className={`relative p-2 rounded-xl flex items-center justify-center transition-all duration-300 outline-none ${
+          className={`relative p-2 rounded-xl flex items-center justify-center transition-all duration-300 outline-hidden ${
             theme === id 
               ? 'text-white' 
               : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white'
@@ -82,7 +82,7 @@ const ThemeToggle = ({ theme, onChange }: { theme: 'light' | 'dark' | 'system', 
           {theme === id && (
             <motion.div
               layoutId="theme-active-pill"
-              className={`absolute inset-0 bg-gradient-to-br ${colorClass} rounded-[10px] ${shadowClass}`}
+              className={`absolute inset-0 bg-linear-to-br ${colorClass} rounded-[10px] ${shadowClass}`}
               transition={{ type: "spring", stiffness: 400, damping: 25 }}
             />
           )}
@@ -200,12 +200,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {activeChatId === c.id && (
         <motion.div 
           layoutId="active-chat-indicator"
-          className="absolute inset-0 bg-gradient-to-r from-claude-surface-light via-claude-surface-light to-claude-surface2-light/60 dark:from-claude-surface-dark dark:via-claude-surface-dark dark:to-claude-surface2-dark/60 rounded-xl shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] border border-claude-border-light dark:border-claude-border-dark z-0"
+          className="absolute inset-0 bg-linear-to-r from-claude-surface-light via-claude-surface-light to-claude-surface2-light/60 dark:from-claude-surface-dark dark:via-claude-surface-dark dark:to-claude-surface2-dark/60 rounded-xl shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] border border-claude-border-light dark:border-claude-border-dark z-0"
           transition={{ type: "spring", stiffness: 400, damping: 30 }}
         />
       )}
       <div className="relative z-10 flex items-center w-full min-w-0">
-        <MessageSquareText className="w-4 h-4 flex-shrink-0 mr-3 opacity-70" />
+        <MessageSquareText className="w-4 h-4 shrink-0 mr-3 opacity-70" />
         {editingChatId === c.id ? (
           <input
             autoFocus
@@ -217,7 +217,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               if (e.key === 'Enter') handleSaveRename(c.id);
               if (e.key === 'Escape') setEditingChatId(null);
             }}
-            className="flex-1 min-w-0 text-[13px] font-medium bg-transparent outline-none border-b border-claude-terracotta"
+            className="flex-1 min-w-0 text-[13px] font-medium bg-transparent outline-hidden border-b border-claude-terracotta"
           />
         ) : (
           <span className="text-[13px] font-medium truncate flex-1 tracking-tight">{c.title}</span>
@@ -246,7 +246,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={onToggleOpen}
-            className="fixed inset-0 bg-stone-900/40 dark:bg-black/60 backdrop-blur-sm z-40 md:hidden"
+            className="fixed inset-0 bg-stone-900/40 dark:bg-black/60 backdrop-blur-xs z-40 md:hidden"
             aria-hidden="true"
           />
           <motion.aside 
@@ -254,7 +254,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             animate={{ x: 0, opacity: 1 }}
             exit={{ x: -320, opacity: 0 }}
             transition={{ type: "spring", stiffness: 320, damping: 32 }}
-            className="fixed inset-y-0 left-0 z-50 md:relative md:z-30 w-72 md:w-80 h-[100dvh] flex flex-col bg-claude-surface2-light dark:bg-claude-surface2-dark border-r border-claude-border-light dark:border-claude-border-dark select-none flex-shrink-0 shadow-2xl md:shadow-none"
+            className="fixed inset-y-0 left-0 z-50 md:relative md:z-30 w-72 md:w-80 h-[100dvh] flex flex-col bg-claude-surface2-light dark:bg-claude-surface2-dark border-r border-claude-border-light dark:border-claude-border-dark select-none shrink-0 shadow-2xl md:shadow-none"
           >
             <div className="p-4 pb-3 flex items-center justify-between">
               <div className="flex items-center space-x-2.5">
@@ -269,7 +269,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
 
             <div className="px-3.5 py-1.5">
-              <button onClick={handleNewChatMobile} className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-gradient-to-b from-white/95 to-white/80 dark:from-[#2A2926] dark:to-[#22211F] border border-claude-border-light dark:border-claude-border-dark text-claude-text-light dark:text-claude-text-dark text-[13px] font-medium transition-all shadow-[0_1px_3px_rgba(45,40,30,0.04)] hover:border-claude-terracotta/40 hover:shadow-[0_4px_14px_-2px_rgba(217,119,87,0.12)] active:scale-[0.98] group">
+              <button onClick={handleNewChatMobile} className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-linear-to-b from-white/95 to-white/80 dark:from-[#2A2926] dark:to-[#22211F] border border-claude-border-light dark:border-claude-border-dark text-claude-text-light dark:text-claude-text-dark text-[13px] font-medium transition-all shadow-[0_1px_3px_rgba(45,40,30,0.04)] hover:border-claude-terracotta/40 hover:shadow-[0_4px_14px_-2px_rgba(217,119,87,0.12)] active:scale-[0.98] group">
                 <div className="flex items-center space-x-2.5">
                   <Plus className="w-4 h-4 text-claude-terracotta" />
                   <span>Start new chat</span>
@@ -312,7 +312,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     onOpenSearch(searchQuery);
                   }
                 }}
-                className="w-full text-[13px] font-medium pl-10 pr-4 py-2.5 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark placeholder-claude-muted-light dark:placeholder-claude-muted-dark focus:outline-none focus:border-claude-terracotta/50 focus:shadow-[0_0_0_2px_rgba(235,110,75,0.1)] text-claude-text-light dark:text-white transition-all duration-300"
+                className="w-full text-[13px] font-medium pl-10 pr-4 py-2.5 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark placeholder-claude-muted-light dark:placeholder-claude-muted-dark focus:outline-hidden focus:border-claude-terracotta/50 focus:shadow-[0_0_0_2px_rgba(235,110,75,0.1)] text-claude-text-light dark:text-white transition-all duration-300"
               />
             </div>
             <button
@@ -364,8 +364,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
           <div className="p-4 bg-claude-surface2-light dark:bg-claude-surface2-dark/50 backdrop-blur-md border-t border-claude-border-light dark:border-claude-border-dark">
             <div className="flex items-center justify-between gap-2">
-              <button onClick={onOpenSettings} className="flex items-center space-x-3 p-2.5 rounded-xl hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark hover:shadow-sm border border-transparent hover:border-claude-border-light dark:hover:border-claude-border-dark transition-all duration-300 flex-1 min-w-0 text-left active:scale-[0.98]">
-                <div className="w-8 h-8 rounded-[10px] bg-gradient-to-br from-claude-terracotta to-claude-terracotta-hover text-white font-medium text-xs flex items-center justify-center flex-shrink-0 shadow-sm border border-white/20">{settings.userName ? settings.userName.slice(0, 2).toUpperCase() : 'AI'}</div>
+              <button onClick={onOpenSettings} className="flex items-center space-x-3 p-2.5 rounded-xl hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark hover:shadow-xs border border-transparent hover:border-claude-border-light dark:hover:border-claude-border-dark transition-all duration-300 flex-1 min-w-0 text-left active:scale-[0.98]">
+                <div className="w-8 h-8 rounded-[10px] bg-linear-to-br from-claude-terracotta to-claude-terracotta-hover text-white font-medium text-xs flex items-center justify-center shrink-0 shadow-xs border border-white/20">{settings.userName ? settings.userName.slice(0, 2).toUpperCase() : 'AI'}</div>
                 <div className="min-w-0 flex-1"><div className="text-[13px] font-bold text-claude-text-light dark:text-white tracking-tight truncate">{settings.userName || 'Aira User'}</div><div className="text-[11px] font-medium text-claude-muted-light dark:text-claude-muted-dark">Workspace settings</div></div>
                 <Settings className="w-4 h-4 text-claude-muted-light dark:text-claude-muted-dark" />
               </button>
