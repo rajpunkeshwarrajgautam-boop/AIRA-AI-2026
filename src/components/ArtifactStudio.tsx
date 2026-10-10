@@ -61,7 +61,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
   const projectInfo = (() => {
     if (artifact.type !== 'application/vnd.ant.project') return null;
     try {
-      const value = JSON.parse(currentContent) as { previewUrl?: string; jobId?: string; queueJobId?: string; archiveSha256?: string; status?: string };
+      const value = JSON.parse(currentContent) as { previewUrl?: string; jobId?: string; queueJobId?: string; archiveSha256?: string; compiledSha256?: string; status?: string };
       if (!value.jobId || !/^[a-f0-9-]{36}$/.test(value.jobId) || value.status !== 'BUILD_PASSED') return null;
       return value;
     } catch { return null; }
