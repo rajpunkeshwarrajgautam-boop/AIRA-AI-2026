@@ -258,6 +258,25 @@ async function runIdentityTests() {
     assert.ok(spoofRes.ok, `K: request with spoofed body must succeed (auth from headers)`);
     const spoofedRun = await spoofRes.json();
     assert.strictEqual(spoofedRun.principalId, USER_A.userId, `K: principalId must come from headers not body`);
+    const automationSpoof = await fetch(`${BASE_URL}/api/automations`, {
+      method: 'POST',
+      headers: authHeaders(USER_A.userId, USER_A.sessionId),
+      body: JSON.stringify({ name: 'Identity automation fixture', principalId: USER_B.userId, enabled: false, trigger: 'MANUAL', conditions: {}, agentId: 'agent-default', objective: 'Identity fixture only', approvalPolicy: 'autonomous' }),
+    });
+    assert.strictEqual(automationSpoof.status, 201);
+    const ownedAutomation = await automationSpoof.json();
+    assert.strictEqual(ownedAutomation.principalId, USER_A.userId, 'Automation owner must come from authenticated principal');
+    const unauthorizedTrigger = await fetch(`${BASE_URL}/api/automations/${ownedAutomation.id}/trigger`, {
+      method: 'POST', headers: authHeaders(USER_B.userId, USER_B.sessionId), body: '{}',
+    });
+    assert.strictEqual(unauthorizedTrigger.status, 400, 'Other principal must not trigger automation');
+    const unauthorizedCron = await fetch(`${BASE_URL}/api/automations/cron/execute`, {
+      method: 'POST', headers: authHeaders(USER_A.userId, USER_A.sessionId), body: '{}',
+    });
+    assert.ok([401, 503].includes(unauthorizedCron.status), 'Workspace authentication must not authorize global scheduler');
+    await fetch(`${BASE_URL}/api/automations/${ownedAutomation.id}`, {
+      method: 'DELETE', headers: authHeaders(USER_A.userId, USER_A.sessionId),
+    });
     console.log('PASS Identity K');
 
     // L: Production test-auth guard
