@@ -25,6 +25,7 @@ export class ApplicationBuildDispatcher {
   readonly pollMs: number;
   readonly maxAttempts: number;
   private stopping = false;
+  private activeControllers = new Set<AbortController>();
   constructor(
     readonly queue: PostgresApplicationBuildQueue,
     readonly handler: BuildJobHandler,
@@ -42,7 +43,10 @@ export class ApplicationBuildDispatcher {
     if (this.maxAttempts < 1 || this.maxAttempts > 5) throw new Error('INVALID_DISPATCH_ATTEMPTS');
   }
 
-  stop(): void { this.stopping = true; }
+  stop(): void {
+    this.stopping = true;
+    for (const controller of this.activeControllers) controller.abort();
+  }
 
   /** Claim at most one job; all queue mutations are generation-fenced. */
   async runOnce(): Promise<boolean> {
@@ -53,6 +57,7 @@ export class ApplicationBuildDispatcher {
     const generation = job.generation;
     if (!await this.queue.start(job.id, this.workerId, generation)) return true;
     const controller = new AbortController();
+    this.activeControllers.add(controller);
     let leaseLost = false;
     let cancelled = false;
     let watching = true;
@@ -109,6 +114,7 @@ export class ApplicationBuildDispatcher {
     } finally {
       watching = false;
       controller.abort();
+      this.activeControllers.delete(controller);
       await monitor;
     }
   }
