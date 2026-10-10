@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, readFile, mkdir } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { validateOfflineDependencyLock } from '../packages/app-builder/src/dependencies.js';
+import { validateOfflineDependencyLock, approvedLockfileKey } from '../packages/app-builder/src/dependencies.js';
 const execFileAsync = promisify(execFile);
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -199,6 +199,9 @@ try {
         '--no-audit', '--no-fund', '--cache', config.npmCache
       ], { cwd: fixture, timeout: 30_000 });
       const lockfile = await readFile(join(fixture, 'package-lock.json'), 'utf8');
+      const trustedLocks = join(config.npmCache, 'approved-locks');
+      await mkdir(trustedLocks, { recursive: true });
+      await writeFile(join(trustedLocks, approvedLockfileKey(dependencyPackage) + '.json'), lockfile);
       assert.doesNotThrow(() => validateOfflineDependencyLock(dependencyPackage, lockfile));
       const invalidLock = JSON.parse(lockfile);
       invalidLock.packages['node_modules/three'].resolved = 'http://127.0.0.1/evil.tgz';
@@ -239,7 +242,7 @@ try {
       assert.equal(autoLock.status, 202);
       const autoJob = await waitFor((await autoLock.json()).jobId);
       assert.equal(autoJob.state, 'BUILD_PASSED', JSON.stringify(autoJob));
-      assert.equal(autoJob.steps[0].name, 'resolve', 'Lockfile is resolved by sandbox from vetted cache');
+      assert.equal(autoJob.steps[0].name, 'resolve', 'Lockfile is taken from vetted operator cache');
       assert.ok(autoJob.manifest.some((file: { path: string }) => file.path === 'package-lock.json'));
       const autoArchive = await fetch('http://127.0.0.1:4101/v1/jobs/' + autoJob.id + '/source', { headers: auth });
       assert.equal(autoArchive.status, 200);
