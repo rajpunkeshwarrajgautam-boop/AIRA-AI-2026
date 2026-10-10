@@ -1,6 +1,7 @@
 import { readFile, lstat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { gzipSync } from 'node:zlib';
+import { createHash } from 'node:crypto';
 
 /** Minimal deterministic ustar archive for manifest-validated project files only. */
 export async function createSourceArchive(
@@ -14,12 +15,19 @@ export async function createSourceArchive(
         name.split('/').some(p => p === '..' || p.startsWith('.'))) {
       throw new Error('INVALID_ARCHIVE_PATH');
     }
-    const absolute = join(root, name);
+    const absolute = resolve(root, name);
+    if (!absolute.startsWith(resolve(root) + sep)) throw new Error('INVALID_ARCHIVE_PATH');
+    let cursor = resolve(root);
+    for (const part of name.split('/')) {
+      cursor = join(cursor, part);
+      if ((await lstat(cursor)).isSymbolicLink()) throw new Error('ARCHIVE_SYMLINK_REJECTED');
+    }
     const meta = await lstat(absolute);
     if (!meta.isFile() || meta.isSymbolicLink() || meta.size > 256_000) {
       throw new Error('INVALID_ARCHIVE_FILE');
     }
     const data = await readFile(absolute);
+    if (createHash('sha256').update(data).digest('hex') !== item.sha256) throw new Error('SOURCE_INTEGRITY_MISMATCH');
     total += data.length;
     if (total > 1_000_000) throw new Error('ARCHIVE_TOO_LARGE');
     const header = Buffer.alloc(512);
