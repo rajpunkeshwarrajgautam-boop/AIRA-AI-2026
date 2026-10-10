@@ -71,6 +71,7 @@ export const ExecutionTargetSchema = z.enum([
   'AGENT_PLANNER',
   'WORKFLOW_ENGINE',
   'AUTOMATION_ENGINE',
+  'APPLICATION_BUILDER',
   'CAPABILITY_NOT_READY'
 ]);
 export type ExecutionTarget = z.infer<typeof ExecutionTargetSchema>;
