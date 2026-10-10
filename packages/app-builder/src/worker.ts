@@ -166,23 +166,31 @@ export class DockerProjectWorker {
     if (validated.files.reduce((n, f) => n + Buffer.byteLength(f.content), 0) > 1_000_000) throw new Error('PROJECT_SIZE_EXCEEDED');
     const id = randomUUID();
     const root = resolve(this.config.root, id);
-    await mkdir(root, { recursive: false, mode: 0o700 });
-    for (const f of validated.files) {
-      const target = safePath(root, f.path);
-      await noSymlinkParents(root, target);
-      await mkdir(resolve(target, '..'), { recursive: true, mode: 0o700 });
-      await writeFile(target, f.content, { flag: 'wx', mode: 0o600 });
+    for (const f of validated.files) safePath(root, f.path);
+    // Reserve before the first asynchronous operation; concurrent requests cannot exceed quota.
+    this.active += 1;
+    try {
+      await mkdir(root, { recursive: false, mode: 0o700 });
+      for (const f of validated.files) {
+        const target = safePath(root, f.path);
+        await noSymlinkParents(root, target);
+        await mkdir(resolve(target, '..'), { recursive: true, mode: 0o700 });
+        await writeFile(target, f.content, { flag: 'wx', mode: 0o600 });
+      }
+      const job: BuildJob = {
+        id, ownerId: validated.ownerId, state: 'QUEUED',
+        createdAt: Date.now(), updatedAt: Date.now(), steps: [],
+        manifest: validated.files.map(f => ({ path: f.path, sha256: createHash('sha256').update(f.content).digest('hex') }))
+      };
+      this.jobs.set(id, job);
+      await this.persist(job);
+      void this.execute(job, validated, root).finally(() => { this.active -= 1; });
+      return { ...job };
+    } catch (error) {
+      this.active -= 1;
+      await rm(root, { recursive: true, force: true });
+      throw error;
     }
-    const job: BuildJob = {
-      id, ownerId: validated.ownerId, state: 'QUEUED',
-      createdAt: Date.now(), updatedAt: Date.now(), steps: [],
-      manifest: validated.files.map(f => ({ path: f.path, sha256: createHash('sha256').update(f.content).digest('hex') }))
-    };
-    this.jobs.set(id, job);
-    await this.persist(job);
-    this.active += 1;  // Reserve capacity synchronously before yielding.
-    void this.execute(job, validated, root).finally(() => { this.active -= 1; });
-    return { ...job };
   }
   private async execute(job: BuildJob, request: BuildRequest, root: string): Promise<void> {
     try {
