@@ -41,6 +41,9 @@ async function capture(root, width, theme, filled) {
     if (filled) await composer.fill('Verify accessible composition and the established Aira workspace layout.');
     await page.evaluate(async () => { await document.fonts.ready; });
     await page.addStyleTag({ content: '*,::before,::after{animation:none!important;transition:none!important;caret-color:transparent!important}' });
+    // CSS screenshot controls do not settle Framer Motion's JS springs. Advance
+    // the same virtual interval in both builds before measuring or capturing.
+    await page.clock.runFor(3000);
     assert.deepEqual(errors, [], 'UI must render without JavaScript errors');
     const geometry = await composer.boundingBox();
     assert.ok(geometry && geometry.width > 100 && geometry.y >= 0 && geometry.y + geometry.height <= 900, 'composer must remain usable in viewport');
