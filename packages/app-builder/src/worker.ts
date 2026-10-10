@@ -16,15 +16,24 @@ const SourceFile = z.object({
 }).strict();
 export const BuildInput = z.object({
   ownerId: z.string().min(1).max(120),
+  idempotencyKey: z.string().regex(/^[a-zA-Z0-9:_-]{1,180}$/).optional(),
   files: z.array(SourceFile).min(1).max(50),
   steps: z.tuple([z.literal('syntax'), z.literal('build'), z.literal('test')])
 }).strict();
 
 export type BuildRequest = z.infer<typeof BuildInput>;
+/** Stable, owner-scoped remote job identifier for recovery after lost responses. */
+export function stableBuildJobId(ownerId: string, idempotencyKey: string): string {
+  const digest = createHash('sha256').update(ownerId + '\0' + idempotencyKey).digest('hex');
+  return digest.slice(0, 8) + '-' + digest.slice(8, 12) + '-4' + digest.slice(13, 16) +
+    '-a' + digest.slice(17, 20) + '-' + digest.slice(20, 32);
+}
 export type BuildState = 'QUEUED' | 'RUNNING' | 'BUILD_PASSED' | 'FAILED' | 'BLOCKED' | 'CANCELLED';
 export interface BuildJob {
   id: string;
   ownerId: string;
+  idempotencyKey?: string;
+  requestDigest?: string;
   state: BuildState;
   createdAt: number;
   updatedAt: number;
@@ -220,15 +229,31 @@ export class DockerProjectWorker {
   async submit(input: BuildRequest): Promise<BuildJob> {
     const validated = BuildInput.parse(input);
     denyDangerousSource(validated.files.map(f => f.path));
+    const requestDigest = createHash('sha256').update(JSON.stringify({
+      ownerId: validated.ownerId, files: validated.files, steps: validated.steps
+    })).digest('hex');
+    const id = validated.idempotencyKey
+      ? stableBuildJobId(validated.ownerId, validated.idempotencyKey)
+      : randomUUID();
+    const already = this.jobs.get(id);
+    if (already) {
+      if (already.ownerId !== validated.ownerId || already.requestDigest !== requestDigest ||
+          already.idempotencyKey !== validated.idempotencyKey) {
+        throw new Error('BUILD_IDEMPOTENCY_CONFLICT');
+      }
+      return { ...already, steps: [...already.steps] };
+    }
     if (this.active >= 2) throw new Error('WORKER_CAPACITY_EXCEEDED');
     if (validated.files.reduce((n, f) => n + Buffer.byteLength(f.content), 0) > 1_000_000) throw new Error('PROJECT_SIZE_EXCEEDED');
-    const id = randomUUID();
     const root = resolve(this.config.root, id);
     for (const f of validated.files) safePath(root, f.path);
-    // Reserve before the first asynchronous operation; concurrent requests cannot exceed quota.
+    // Stable directory creation is an atomic cross-request guard. Do not delete
+    // an existing keyed workspace when a concurrent request loses the race.
     this.active += 1;
+    let created = false;
     try {
       await mkdir(root, { recursive: false, mode: 0o700 });
+      created = true;
       for (const f of validated.files) {
         const target = safePath(root, f.path);
         await noSymlinkParents(root, target);
@@ -236,7 +261,8 @@ export class DockerProjectWorker {
         await writeFile(target, f.content, { flag: 'wx', mode: 0o600 });
       }
       const job: BuildJob = {
-        id, ownerId: validated.ownerId, state: 'QUEUED',
+        id, ownerId: validated.ownerId, idempotencyKey: validated.idempotencyKey,
+        requestDigest, state: 'QUEUED',
         createdAt: Date.now(), updatedAt: Date.now(), steps: [],
         manifest: validated.files.map(f => ({ path: f.path, sha256: createHash('sha256').update(f.content).digest('hex') }))
       };
@@ -251,7 +277,7 @@ export class DockerProjectWorker {
       return { ...job };
     } catch (error) {
       this.active -= 1;
-      await rm(root, { recursive: true, force: true });
+      if (created) await rm(root, { recursive: true, force: true });
       throw error;
     }
   }
