@@ -70,6 +70,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Validate Vercel Preview build/deployment policy contract
+        run: node test/vercel-staging-policy.mjs
+
       - name: Run database migrations
         run: npm run db:migrate
 
@@ -261,11 +264,55 @@ jobs:
           path: /tmp/aira-vite.log
           if-no-files-found: ignore
 
+  staging-db-readiness:
+    name: Live staging Neon readiness
+    # An independent, read-only release gate. Only a staging push can access
+    # this protected environment. No migrations run in this job.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
+    needs: [fast, semantic-search, certify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: staging
+    permissions:
+      contents: read
+    env:
+      DATABASE_URL: ${{ secrets.AIRA_STAGING_DATABASE_URL }}
+      AIRA_SEMANTIC_SEARCH: 'true'
+      VERCEL_ENV: preview
+      VERCEL_GIT_COMMIT_REF: staging
+    steps:
+      - name: Checkout exact staging SHA
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Fail closed if staging-only database secret is absent
+        shell: bash
+        run: |
+          if [ -z "${DATABASE_URL:-}" ]; then
+            echo "::error::AIRA_STAGING_DATABASE_URL must be set in GitHub's protected staging environment; never use production or a generic Preview URL."
+            exit 1
+          fi
+          echo "::add-mask::$DATABASE_URL"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate staging database host and branch scope
+        run: npx tsx scripts/staging-db-guard.ts
+
+      - name: Verify applied staging migrations, schema and pgvector (read-only)
+        run: npm run db:verify:deploy
+
   staging-deployed:
     name: Deployed staging acceptance
     # Fail-closed staging-only gate. NEVER runs for main/production.
     if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
-    needs: [fast, semantic-search, certify]
+    needs: [fast, semantic-search, certify, staging-db-readiness]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
