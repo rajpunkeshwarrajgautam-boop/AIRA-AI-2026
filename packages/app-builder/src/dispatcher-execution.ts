@@ -42,10 +42,25 @@ export async function executeQueuedBuild(job: QueuedBuild, signal: AbortSignal):
     const objective = previousFailure
       ? run.prompt + '\n\nRepair this previous real build failure:\n' + previousFailure.slice(-2500)
       : run.prompt;
-    await event(run.id, 'tool.started', { name: 'project_build', attempt, queueJobId: job.id });
-    const files = await generateApplicationDraft(objective, modelRouter, run.modelPolicy, approvedPackages);
-    if (signal.aborted) throw new Error('BUILD_CANCELLED');
-    const workerJobId = await client.create({ ownerId: run.principalId, ...files });
+    // A dispatcher may crash after the worker accepted a build but before
+    // the queue could persist its result. Reconcile the deterministic worker
+    // submission BEFORE making another model call or spawning another container.
+    const submissionKey = 'queue:' + job.id + ':attempt:' + attempt;
+    const existing = await client.findByKey(submissionKey, run.principalId);
+    await event(run.id, 'tool.started', {
+      name: 'project_build', attempt, queueJobId: job.id,
+      recoveredWorkerJobId: existing?.id
+    });
+    let workerJobId: string;
+    if (existing) {
+      workerJobId = existing.id;
+    } else {
+      const files = await generateApplicationDraft(objective, modelRouter, run.modelPolicy, approvedPackages);
+      if (signal.aborted) throw new Error('BUILD_CANCELLED');
+      workerJobId = await client.create({
+        ownerId: run.principalId, ...files, idempotencyKey: submissionKey
+      });
+    }
     let remoteTerminal = false;
     const cancelRemote = () => { void client.cancel(workerJobId, run.principalId).catch(() => {}); };
     signal.addEventListener('abort', cancelRemote, { once: true });
