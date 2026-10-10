@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import { createSourceArchive } from './archive.js';
+import { validateOfflineDependencyLock } from './dependencies.js';
 
 const execFileAsync = promisify(execFile);
 const SourceFile = z.object({
@@ -40,6 +41,7 @@ export interface WorkerConfig {
   previewOrigin: string;
   frameOrigin: string;
   image: string;
+  npmCache?: string;
 }
 export const workerConfig = (): WorkerConfig => ({
   root: process.env.AIRA_WORKER_ROOT || '/tmp/aira-build-worker',
@@ -48,7 +50,8 @@ export const workerConfig = (): WorkerConfig => ({
   previewPort: Number(process.env.AIRA_WORKER_PREVIEW_PORT || 4102),
   previewOrigin: process.env.AIRA_WORKER_PREVIEW_ORIGIN || 'http://127.0.0.1:4102',
   frameOrigin: process.env.AIRA_WORKER_FRAME_ORIGIN || 'http://127.0.0.1:5173',
-  image: process.env.AIRA_WORKER_IMAGE || 'node:24-alpine'
+  image: process.env.AIRA_WORKER_IMAGE || 'node:24-alpine',
+  npmCache: process.env.AIRA_WORKER_NPM_CACHE || undefined
 });
 
 function safePath(root: string, file: string): string {
@@ -74,7 +77,7 @@ async function noSymlinkParents(root: string, filename: string): Promise<void> {
 function denyDangerousSource(paths: string[]): void {
   if (new Set(paths).size !== paths.length) throw new Error('DUPLICATE_FILES');
   for (const p of paths) {
-    if (/^(?:job-state\.json|package-lock\.json|node_modules|dist|\.env|\.git)(?:\/|$)/i.test(p)) {
+    if (/^(?:job-state\.json|node_modules|dist|\.env|\.git)(?:\/|$)/i.test(p)) {
       throw new Error('RESERVED_PROJECT_PATH');
     }
   }
@@ -111,6 +114,13 @@ export class DockerProjectWorker {
   async initialize(): Promise<void> {
     await mkdir(this.config.root, { recursive: true, mode: 0o700 });
     await mkdir(join(this.config.root, '_state'), { recursive: true, mode: 0o700 });
+    if (this.config.npmCache) {
+      if (!this.config.npmCache.startsWith('/')) throw new Error('NPM_CACHE_MUST_BE_ABSOLUTE');
+      const source = resolve(this.config.npmCache);
+      if (source.startsWith(resolve(this.config.root) + sep)) throw new Error('NPM_CACHE_MUST_BE_OUTSIDE_PROJECTS');
+      const info = await lstat(source);
+      if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('NPM_CACHE_NOT_TRUSTED_DIRECTORY');
+    }
     // A previously running job cannot be assumed to have succeeded after a crash.
     for (const name of await readdir(this.config.root)) {
       if (!/^[0-9a-f-]{36}$/.test(name)) continue;
@@ -153,6 +163,7 @@ export class DockerProjectWorker {
       '--env', 'HOME=/tmp', '--env', 'npm_config_cache=/tmp/.npm',
       '--tmpfs', '/tmp:rw,nosuid,size=64m',
       '--mount', 'type=bind,src=' + workspace + ',dst=/workspace',
+      ...(this.config.npmCache ? ['--mount', 'type=bind,src=' + resolve(this.config.npmCache) + ',dst=/npm-cache,readonly'] : []),
       '--workdir', '/workspace',
       this.config.image, ...args
     ];
@@ -212,13 +223,25 @@ export class DockerProjectWorker {
       if (signal.aborted) return;
       job.state = 'RUNNING';
       await this.persist(job);
-      // Dependency installation is intentionally unavailable until a constrained registry
-      // mirror/egress service exists. No ambient network access for generated code.
+      // Trusted-cache mode enables reproducible dependencies without outbound
+      // networking in user-code containers. npm lifecycle scripts are disabled.
       const pkg = request.files.find(f => f.path === 'package.json');
       if (pkg) {
         const data = JSON.parse(pkg.content) as { dependencies?: object; devDependencies?: object };
-        if (Object.keys(data.dependencies || {}).length || Object.keys(data.devDependencies || {}).length) {
-          throw new Error('DEPENDENCY_INSTALL_NOT_CONFIGURED');
+        const hasDeps = Boolean(Object.keys(data.dependencies || {}).length || Object.keys(data.devDependencies || {}).length);
+        if (hasDeps) {
+          if (!this.config.npmCache) throw new Error('DEPENDENCY_INSTALL_NOT_CONFIGURED');
+          const lock = request.files.find(f => f.path === 'package-lock.json');
+          if (!lock) throw new Error('DEPENDENCY_LOCKFILE_REQUIRED');
+          validateOfflineDependencyLock(pkg.content, lock.content);
+          const result = await this.docker(root, [
+            'npm', 'ci', '--offline', '--ignore-scripts', '--no-audit', '--no-fund',
+            '--cache', '/npm-cache'
+          ], signal);
+          if (signal.aborted) throw new Error('BUILD_CANCELLED');
+          job.steps.push({ name: 'install', exitCode: result.exitCode, output: result.output });
+          await this.persist(job);
+          if (result.exitCode !== 0) throw new Error('DEPENDENCY_INSTALL_FAILED');
         }
       }
       for (const step of request.steps) {
@@ -294,7 +317,7 @@ export class DockerProjectWorker {
     return createServer(async (req, res) => {
       if (req.url === '/health' && req.method === 'GET') {
         if (!this.authenticate(req)) return this.send(res, 401, { error: 'UNAUTHORIZED' });
-        return this.send(res, 200, { status: 'PARTIAL', runtime: 'docker', network: 'none', dependencyInstall: false });
+        return this.send(res, 200, { status: 'PARTIAL', runtime: 'docker', network: 'none', dependencyInstall: Boolean(this.config.npmCache) });
       }
       if (!this.authenticate(req)) return this.send(res, 401, { error: 'UNAUTHORIZED' });
       const owner = req.headers['x-aira-owner'];
