@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { ModelPolicy } from '../../contracts/src/index.js';
 import { ModelRouter } from '../../model-router/src/index.js';
-import { BuildInput, type BuildJob, type BuildRequest } from './worker.js';
+import { BuildInput, stableBuildJobId, type BuildJob, type BuildRequest } from './worker.js';
 
 const BuildDraft = BuildInput.omit({ ownerId: true });
 const JobAccepted = z.object({ jobId: z.string().uuid(), state: z.string() });
@@ -49,6 +49,16 @@ export class ApplicationBuildClient {
     const valid = BuildInput.parse(input);
     const result = await this.request('/v1/jobs', valid.ownerId, valid);
     return JobAccepted.parse(result).jobId;
+  }
+  /** Reconcile work created before an API/dispatcher process crashed. */
+  async findByKey(idempotencyKey: string, ownerId: string): Promise<BuildJob | undefined> {
+    if (!/^[a-zA-Z0-9:_-]{1,180}$/.test(idempotencyKey)) throw new Error('INVALID_BUILD_IDEMPOTENCY_KEY');
+    try {
+      return await this.inspect(stableBuildJobId(ownerId, idempotencyKey), ownerId);
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('BUILD_WORKER_HTTP_404:')) return undefined;
+      throw error;
+    }
   }
   async cancel(jobId: string, ownerId: string): Promise<BuildJob> {
     if (!/^[0-9a-f-]{36}$/.test(jobId)) throw new Error('INVALID_BUILD_JOB_ID');
