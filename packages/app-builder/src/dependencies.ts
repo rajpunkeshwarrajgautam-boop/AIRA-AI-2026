@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 /**
  * Deny-by-default policy for dependency execution inside a network-disconnected
  * sandbox. A trusted, separately provisioned npm cache supplies package bytes.
@@ -47,6 +48,18 @@ export function validateApprovedDependencySpecs(packageJson: string, allowed: Re
     names.add(name);
   }
   return true;
+}
+
+/** Stable filename key for operator-curated lockfiles. No path is model-controlled. */
+export function approvedLockfileKey(packageJson: string): string {
+  const pkg = readJson<PackageManifest>(packageJson);
+  const normalized = [
+    ...entries(pkg.dependencies).map(([name, version]) => 'prod:' + name + '@' + version),
+    ...entries(pkg.devDependencies).map(([name, version]) => 'dev:' + name + '@' + version)
+  ].sort();
+  if (!normalized.length) throw new Error('NO_EXTERNAL_DEPENDENCIES');
+  // Uses only approved exact dependency name/version pairs at the call site.
+  return createHash('sha256').update(JSON.stringify(normalized)).digest('hex');
 }
 
 /** Validates exact declared dependency-to-lock mappings and remote tarball hashes. */
