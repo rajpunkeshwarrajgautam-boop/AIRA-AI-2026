@@ -20,7 +20,7 @@ assert.match(String(marked.parse(legacy)), /class="katex-display"/);
 assert.match(String(marked.parse(legacy)), /120/);
 
 // Markdown/code blocks must not be parsed as executable TeX.
-const fenced = '``' + String.raw'$E=mc^2$' + '``';
+const fenced = '```text\n$E=mc^2$\n```';
 assert.doesNotMatch(String(marked.parse(fenced)), /class="katex"/);
 assert.match(String(marked.parse(fenced)), /E=mc/);
 assert.doesNotMatch(String(marked.parse('A [label](https://example.com)')), /class="katex"/);
