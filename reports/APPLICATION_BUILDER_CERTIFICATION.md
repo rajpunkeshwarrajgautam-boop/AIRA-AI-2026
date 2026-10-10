@@ -16,7 +16,7 @@ Feature: [Draft PR #42](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2
 | Docker worker and ownership | PASS, intermediate | Real Docker integration suite |
 | Controlled offline dependency install | PASS, intermediate | Actual pinned Three.js module installed and imported |
 | Lockfile policy and disallowed package denial | PASS, intermediate | Real worker negative tests |
-| Sandboxed package-lock resolution | IMPLEMENTED, LATEST CI PENDING | Model-style request without supplied lockfile |
+| Operator-provisioned lockfile reuse | IMPLEMENTED, LATEST CI PENDING | Network-disabled model-style request backed by reviewed lock template |
 | Compiled `dist/` manifest preview | IMPLEMENTED, LATEST CI PENDING | Real generated test-fixture output, Chromium UI interaction |
 | Job cancellation and source blocking | PASS, intermediate | Running Docker process cancellation, owner check |
 | Postgres queue idempotency/lease/fencing | PASS, intermediate | Database-backed queue suite in Fast CI |
