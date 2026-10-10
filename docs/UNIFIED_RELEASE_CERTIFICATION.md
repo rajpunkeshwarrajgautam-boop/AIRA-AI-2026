@@ -28,3 +28,19 @@
 
 ## Deferred research-quality work
 Once staging is operational and gates proven, implement together on staging: freshness-aware ranking, publisher-date extraction and provenance, requested citation-count alignment, and claim-to-evidence quality verification. Run full regression before any production promotion.
+
+
+## Automated staging deployment gate
+`.github/workflows/ci.yml` runs **Deployed staging acceptance** only on staging pushes,
+after Fast, Semantic Search, and Main/PR certification pass. It fails closed until
+the following non-secret GitHub repository variables and secret are configured:
+- Variable `AIRA_STAGING_BASE_URL`: immutable, READY Vercel Preview URL for the *same* staging HEAD.
+- Variable `VERCEL_TEAM_ID`: connected Vercel team id if API token requires team scope.
+- Secret `VERCEL_TOKEN`: limited-scope Vercel API token for read-only deployment metadata.
+- Optional secret `VERCEL_AUTOMATION_BYPASS_SECRET`: only if Preview deployment protection blocks browser access.
+
+The attestation rejects production targets and mismatched Git commit SHAs.
+Deployed Playwright checks both desktop and mobile viewport containment.
+The gate is **not certified** until those values and an isolated staging DB exist.
+GitHub main remains unprotected until account-level merge rules can be enabled;
+do not mistake this test job for a protected-branch policy.

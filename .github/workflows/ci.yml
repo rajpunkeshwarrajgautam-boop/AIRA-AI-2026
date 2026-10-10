@@ -260,3 +260,41 @@ jobs:
           name: aira-ci-e2e-log
           path: /tmp/aira-vite.log
           if-no-files-found: ignore
+
+  staging-deployed:
+    name: Deployed staging acceptance
+    # Fail-closed staging-only gate. NEVER runs for main/production.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
+    needs: [fast, semantic-search, certify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout staging SHA
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Attest Vercel Preview exact staging SHA
+        env:
+          STAGING_BASE_URL: ${{ vars.AIRA_STAGING_BASE_URL }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_TEAM_ID: ${{ vars.VERCEL_TEAM_ID }}
+          EXPECTED_SHA: ${{ github.sha }}
+        run: npm run test:staging:attest
+
+      - name: Install Playwright Edge
+        run: npx playwright install --with-deps msedge
+
+      - name: Test deployed staging desktop and mobile
+        env:
+          STAGING_BASE_URL: ${{ vars.AIRA_STAGING_BASE_URL }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: npm run test:staging:deployed
+

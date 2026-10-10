@@ -39,7 +39,8 @@
     "test:math-rendering": "npx tsx test/math-rendering.ts",
     "test:preview-identity": "npx tsx test/preview-identity-guard.ts",
     "test:research-evidence": "npx tsx test/research-evidence.ts",
-    "test:staging:deployed": "npx tsx test/staging-deployed-acceptance.ts"
+    "test:staging:deployed": "npx tsx test/staging-deployed-acceptance.ts",
+    "test:staging:attest": "npx tsx test/staging-deployment-attestation.ts"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
