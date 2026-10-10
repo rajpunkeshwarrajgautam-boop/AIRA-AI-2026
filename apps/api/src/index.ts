@@ -389,6 +389,10 @@ app.post('/api/app-builder/queue/:id/preview', async (req: Request, res: Respons
   if (process.env.AIRA_PREVIEW_GATEWAY_ENABLED !== 'true') {
     return res.status(503).json({ error: 'PREVIEW_GATEWAY_DISABLED' });
   }
+  const trustedOrigin = process.env.AIRA_PREVIEW_APP_ORIGIN;
+  if (!trustedOrigin || req.headers.origin !== trustedOrigin) {
+    return res.status(403).json({ error: 'PREVIEW_ORIGIN_DENIED' });
+  }
   const principal = req.principal!;
   if (!principal.scopes?.includes('*') && !principal.scopes?.includes('projects.read') &&
       !principal.scopes?.includes('projects.write')) {
@@ -411,6 +415,10 @@ app.post('/api/app-builder/queue/:id/preview', async (req: Request, res: Respons
   }
 });
 app.post('/api/app-builder/queue/:id/preview/revoke', async (req: Request, res: Response) => {
+  const trustedOrigin = process.env.AIRA_PREVIEW_APP_ORIGIN;
+  if (!trustedOrigin || req.headers.origin !== trustedOrigin) {
+    return res.status(403).json({ error: 'PREVIEW_ORIGIN_DENIED' });
+  }
   const principal = req.principal!;
   if (!principal.scopes?.includes('*') && !principal.scopes?.includes('projects.write')) {
     return res.status(403).json({ error: 'PROJECT_WRITE_PERMISSION_DENIED' });
