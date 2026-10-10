@@ -85,6 +85,7 @@ export class ServerIntentRouter {
       /\b(rm\s+-rf|format\s+[a-z]:|kill\s+-9)\b/,
       /\bdrop\s+.*(table|database|schema)\b/,
       /\bdelete\s+.*(database|tables?|schema|all\s+files)\b/,
+      /\bdelete\s+(?:all\s+)?(?:project|workspace|repository|repo)\s+files\b/,
       /\b(truncate\s+table|wipe\s+(disk|system)|hang_unsafe|destroy\s+all|purge\s+database)\b/
     ];
     if (destructivePatterns.some(p => p.test(text))) {
