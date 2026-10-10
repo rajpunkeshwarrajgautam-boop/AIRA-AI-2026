@@ -34,13 +34,13 @@ Once staging is operational and gates proven, implement together on staging: fre
 `.github/workflows/ci.yml` runs **Deployed staging acceptance** only on staging pushes,
 after Fast, Semantic Search, and Main/PR certification pass. It fails closed until
 the following non-secret GitHub repository variables and secret are configured:
-- Variable `AIRA_STAGING_BASE_URL`: immutable, READY Vercel Preview URL for the *same* staging HEAD.
-- Variable `VERCEL_TEAM_ID`: connected Vercel team id if API token requires team scope.
-- Secret `VERCEL_TOKEN`: limited-scope Vercel API token for read-only deployment metadata.
-- Optional secret `VERCEL_AUTOMATION_BYPASS_SECRET`: only if Preview deployment protection blocks browser access.
+- Secret `VERCEL_TOKEN`: Vercel access token scoped to the team, used to discover and attest the matching immutable Preview deployment automatically on every staging SHA.
+- Optional variable `VERCEL_TEAM_ID`: Vercel team id (default is the Aira deployment team).
+- Secret `VERCEL_AUTOMATION_BYPASS_SECRET`: required while Vercel Preview SSO is enabled; generate in Vercel deployment protection and store **only** as an Actions secret, never in Git.
+- No `AIRA_STAGING_BASE_URL` variable is needed. The gate resolves the unique Preview URL for the exact commit and passes it securely to the next CI step.
 
 The attestation rejects production targets and mismatched Git commit SHAs.
 Deployed Playwright checks both desktop and mobile viewport containment.
-The gate is **not certified** until those values and an isolated staging DB exist.
+The isolated staging Neon project is `mute-frost-50372225` (separately created, never cloned from production); its staging-only branch-scoped Vercel `DATABASE_URL` is sensitive. Its migrations are guarded and run only in Vercel Preview builds with the known staging endpoint. The gate is **not certified** until Vercel token, Preview SSO bypass, and deployed acceptance pass.
 GitHub main remains unprotected until account-level merge rules can be enabled;
 do not mistake this test job for a protected-branch policy.
