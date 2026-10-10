@@ -355,9 +355,11 @@ export class AgentRuntime extends EventEmitter {
         return;
       }
       let buildClient: ApplicationBuildClient;
+      let approvedPackages: Record<string, string> = {};
       try {
         buildClient = new ApplicationBuildClient();
-        await buildClient.health();
+        const workerHealth = await buildClient.health();
+        approvedPackages = workerHealth.dependencyInstall ? (workerHealth.approvedPackages || {}) : {};
         if (this.modelRouter.listProviders().length === 0) {
           throw new Error('APPLICATION_BUILD_MODEL_NOT_CONFIGURED');
         }
@@ -395,7 +397,7 @@ export class AgentRuntime extends EventEmitter {
           const requestText = previousFailure
             ? run.prompt + '\n\nPrevious build failed. Repair the generated project using these actual errors:\n' + previousFailure.slice(-2_500)
             : run.prompt;
-          const files = await generateApplicationDraft(requestText, this.modelRouter, run.modelPolicy);
+          const files = await generateApplicationDraft(requestText, this.modelRouter, run.modelPolicy, approvedPackages);
           await this.emitRunEvent(runId, 'tool.started', { name: 'project_build', attempt });
           const id = await buildClient.create({ ownerId: run.principalId, ...files });
           lastJobId = id;
