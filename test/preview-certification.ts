@@ -2,7 +2,7 @@ import { chromium } from 'playwright';
 import assert from 'assert';
 
 const PREVIEW_URL = 'https://aira-ai-2026-i6v9bc3p0-rajpunkeshwarrajgautam-boops-projects.vercel.app';
-const BYPASS_SECRET = 'QQUvz2kp1hnrbJeAicx0ZyH3kL18z54r';
+const BYPASS_SECRET = process.env.VERCEL_AUTOMATION_BYPASS_SECRET || '';
 
 async function runPreviewSuite() {
   process.stdout.write('=== VERCEL PREVIEW CERTIFICATION SUITE ===\n');
@@ -24,7 +24,7 @@ async function runPreviewSuite() {
     if (url.includes('vercel.app')) {
       const headers = {
         ...request.headers(),
-        'x-vercel-protection-bypass': BYPASS_SECRET,
+        ...(BYPASS_SECRET ? { 'x-vercel-protection-bypass': BYPASS_SECRET } : {}),
       };
       await route.continue({ headers });
     } else {

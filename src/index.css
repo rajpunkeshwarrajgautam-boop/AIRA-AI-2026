@@ -796,3 +796,9 @@
 
 
 
+
+/* Inline and display equations use self-hosted KaTeX fonts/CSS. */
+.aira-prose .katex { font-size: 1em; letter-spacing: normal; }
+.aira-prose .aira-math-block { max-width: 100%; overflow-x: auto; overflow-y: hidden; margin: 1.25rem 0; padding: 0.3rem 0; }
+.aira-prose .katex-display { margin: 0; overflow-x: auto; overflow-y: hidden; }
+.aira-prose .katex-error { color: var(--accent-terracotta); overflow-wrap: anywhere; }

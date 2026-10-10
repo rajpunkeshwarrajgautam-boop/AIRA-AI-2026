@@ -84,6 +84,12 @@ jobs:
       - name: Model provider routing certification
         run: npm run test:model-routing
 
+      - name: Math typesetting and sanitization regression
+        run: npm run test:math-rendering
+
+      - name: Preview principal spoofing guard
+        run: npm run test:preview-identity
+
       - name: Router and policy verification
         run: npm run test:router
 

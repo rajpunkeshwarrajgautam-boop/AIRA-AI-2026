@@ -2,6 +2,67 @@ import { marked } from 'marked';
 
 marked.setOptions({ gfm: true, breaks: true });
 
+import katex from 'katex';
+
+function renderMath(expression: string, displayMode: boolean): string {
+  return katex.renderToString(expression.trim(), {
+    displayMode,
+    throwOnError: false,
+    trust: false,
+    strict: 'ignore',
+    output: 'htmlAndMathml'
+  });
+}
+
+// Math is tokenized by Marked, so fenced/inline code remains literal.
+// Supports TeX \[...\], \(...\), $...$, $...$,
+// and legacy model output with a lone [ / ] on separate lines.
+marked.use({
+  extensions: [
+    {
+      name: 'airaMathBlock',
+      level: 'block',
+      start(src: string) {
+        const match = src.search(/\\\[|\$\$|(?:^|\n)[ \t]*\[[ \t]*(?:\r?\n)/);
+        return match < 0 ? undefined : match;
+      },
+      tokenizer(src: string) {
+        const normalBracket = src.match(/^ {0,3}\[\s*\r?\n([\s\S]+?)\r?\n {0,3}\][ \t]*(?:\r?\n|$)/);
+        const explicit = src.match(/^ {0,3}\\\[([\s\S]+?)\\\][ \t]*(?:\r?\n|$)/);
+        const dollar = src.match(/^ {0,3}\$\$([\s\S]+?)\$\$[ \t]*(?:\r?\n|$)/);
+        const chosen = explicit || dollar || (
+          normalBracket && /\\[a-zA-Z]+|[=^_]/.test(normalBracket[1])
+            ? normalBracket : null
+        );
+        if (!chosen) return undefined;
+        return { type: 'airaMathBlock', raw: chosen[0], text: chosen[1] };
+      },
+      renderer(token) {
+        return '<div class="aira-math-block">' + renderMath(token.text, true) + '</div>\n';
+      }
+    },
+    {
+      name: 'airaMathInline',
+      level: 'inline',
+      start(src: string) {
+        const match = src.search(/\\\(|\$/);
+        return match < 0 ? undefined : match;
+      },
+      tokenizer(src: string) {
+        const explicit = src.match(/^\\\((.+?)\\\)/s);
+        const dollar = src.match(/^\$([^\r\n$]+?)\$(?!\$)/);
+        const chosen = explicit || dollar;
+        if (!chosen || !chosen[1].trim()) return undefined;
+        return { type: 'airaMathInline', raw: chosen[0], text: chosen[1] };
+      },
+      renderer(token) {
+        return renderMath(token.text, false);
+      }
+    }
+  ]
+});
+
+
 const BLOCKED_TAGS = new Set(['script', 'style', 'iframe', 'object', 'embed', 'link', 'meta', 'base', 'form']);
 const URL_ATTRS = new Set(['href', 'src', 'xlink:href', 'formaction']);
 

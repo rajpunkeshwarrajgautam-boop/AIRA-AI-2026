@@ -7,7 +7,8 @@ export interface PrincipalProvider {
 
 export class DevPrincipalProvider implements PrincipalProvider {
   async resolve(req: Request): Promise<ExecutionPrincipal> {
-    const isDevOrTest = process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'development' || process.env.VERCEL_ENV === 'preview';
+    // Never trust caller-supplied principal headers on a deployed Vercel environment.
+    const isDevOrTest = !process.env.VERCEL_ENV && (process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'development');
 
     if (isDevOrTest) {
       const testUserId = req.headers['x-test-user-id'] as string;
