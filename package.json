@@ -40,7 +40,8 @@
     "test:preview-identity": "npx tsx test/preview-identity-guard.ts",
     "test:research-evidence": "npx tsx test/research-evidence.ts",
     "worker:build": "npx tsx packages/app-builder/src/worker.ts",
-    "test:app-builder": "npx tsx test/app-builder-worker.ts"
+    "test:app-builder": "npx tsx test/app-builder-worker.ts",
+    "test:app-builder-queue": "npx tsx test/app-builder-queue.ts"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
