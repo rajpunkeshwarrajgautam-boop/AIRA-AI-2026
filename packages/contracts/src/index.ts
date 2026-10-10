@@ -359,6 +359,7 @@ export const CitationSchema = z.object({
   sourceId: z.string(),
   sourceTitle: z.string(),
   uri: z.string().optional(),
+  publishedDate: z.string().optional(),
   snippet: z.string(),
   score: z.number().min(0).max(1).optional(),
   provenance: z.object({

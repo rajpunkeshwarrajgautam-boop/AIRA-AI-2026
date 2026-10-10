@@ -13,6 +13,7 @@ export interface SearchHit {
   title: string;
   url: string;
   snippet: string;
+  publishedDate?: string;
 }
 
 export interface SearchResponse {
@@ -64,10 +65,14 @@ function normalizeHits(raw: unknown): SearchHit[] {
       typeof candidate.text === 'string' ? candidate.text :
       typeof candidate.snippet === 'string' ? candidate.snippet :
       typeof candidate.description === 'string' ? candidate.description : '';
+    const rawDate = candidate.publishedDate ?? candidate.published_date ?? candidate.published_at;
+    const publishedDate = typeof rawDate === 'string' && /^\d{4}-\d{2}-\d{2}/.test(rawDate)
+      ? rawDate.slice(0, 10) : undefined;
     hits.push({
       title: (typeof candidate.title === 'string' ? candidate.title : url.hostname).slice(0, 250),
       url: normalized,
-      snippet: snippet.slice(0, 1400)
+      snippet: snippet.slice(0, 1400),
+      ...(publishedDate ? { publishedDate } : {})
     });
     if (hits.length >= 5) break;
   }
