@@ -17,7 +17,8 @@ const config = {
   previewOrigin: 'http://127.0.0.1:4102',
   frameOrigin: 'http://127.0.0.1:5173',
   image: 'node:24-alpine',
-  npmCache: process.env.AIRA_WORKER_NPM_CACHE || undefined
+  npmCache: process.env.AIRA_WORKER_NPM_CACHE || undefined,
+  approvedPackages: process.env.AIRA_WORKER_NPM_CACHE ? { three: '0.180.0' } : {}
 };
 const worker = new DockerProjectWorker(config);
 await worker.initialize();
@@ -139,13 +140,13 @@ try {
     body: JSON.stringify({ ownerId: 'alice', files: [
       { path: 'index.html', content: '<html>deps</html>' },
       { path: 'app.js', content: 'console.log(1)' },
-      { path: 'package.json', content: JSON.stringify({ dependencies: { three: '^0.180.0' } }) }
+      { path: 'package.json', content: JSON.stringify({ dependencies: { 'left-pad': '1.3.0' } }) }
     ], steps: ['syntax'] })
   });
   assert.equal(deps.status, 202);
   const blocked = await waitFor((await deps.json()).jobId);
   assert.equal(blocked.state, 'FAILED');
-  assert.equal(blocked.error, config.npmCache ? 'DEPENDENCY_LOCKFILE_REQUIRED' : 'DEPENDENCY_INSTALL_NOT_CONFIGURED');
+  assert.equal(blocked.error, config.npmCache ? 'DEPENDENCY_NOT_APPROVED' : 'DEPENDENCY_INSTALL_NOT_CONFIGURED');
   assert.equal(blocked.previewUrl, undefined);
 
   const slow = await fetch('http://127.0.0.1:4101/v1/jobs', {
@@ -220,6 +221,28 @@ try {
       assert.deepEqual(threeJob.steps.map((step: { name: string }) => step.name),
         ['install', 'syntax', 'build', 'test']);
       assert.ok(threeJob.steps.some((step: { output: string }) => step.output.includes('REAL_THREE_MODULE_LOADED')));
+
+      const autoLock = await fetch('http://127.0.0.1:4101/v1/jobs', {
+        method: 'POST', headers: auth,
+        body: JSON.stringify({
+          ownerId: 'alice',
+          files: [
+            { path: 'index.html', content: '<html><body>Model requested approved Three package</body></html>' },
+            { path: 'app.js', content: "import { Scene } from 'three'; console.log(new Scene().type);" },
+            { path: 'test.js', content: "import assert from 'node:assert/strict'; import { Scene } from 'three'; assert.equal(new Scene().type, 'Scene');" },
+            { path: 'package.json', content: dependencyPackage }
+          ],
+          steps: ['syntax', 'build', 'test']
+        })
+      });
+      assert.equal(autoLock.status, 202);
+      const autoJob = await waitFor((await autoLock.json()).jobId);
+      assert.equal(autoJob.state, 'BUILD_PASSED', JSON.stringify(autoJob));
+      assert.equal(autoJob.steps[0].name, 'resolve', 'Lockfile is resolved by sandbox from vetted cache');
+      assert.ok(autoJob.manifest.some((file: { path: string }) => file.path === 'package-lock.json'));
+      const autoArchive = await fetch('http://127.0.0.1:4101/v1/jobs/' + autoJob.id + '/source', { headers: auth });
+      assert.equal(autoArchive.status, 200);
+
       console.log('PASS: real Three.js dependency installed offline from immutable lockfile and trusted cache.');
     } finally {
       await rm(fixture, { recursive: true, force: true });
