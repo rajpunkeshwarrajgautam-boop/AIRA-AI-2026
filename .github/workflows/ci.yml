@@ -188,6 +188,9 @@ jobs:
       - name: Pull isolated Node runtime image
         run: docker pull node:24-alpine
 
+      - name: Install Playwright Chromium for real preview interaction
+        run: npx playwright install --with-deps chromium
+
       - name: Run real Docker application worker integration
         run: npm run test:app-builder
 
