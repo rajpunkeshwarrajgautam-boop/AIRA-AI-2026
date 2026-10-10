@@ -173,6 +173,28 @@ async function runIntegration() {
     assert.strictEqual(getRunData.id, runData.id, 'Run should persist across restarts');
     console.log('Run persistence verified.');
 
+    // The dispatcher writes events in a DIFFERENT Node process. Verify that
+    // the API SSE stream observes a durable PostgreSQL event without a local
+    // EventEmitter notification.
+    console.log('--- TEST 3b: Cross-process durable dispatcher event replay ---');
+    const dbEvents = collectSseEvents(runData.id, INT_HEADERS, 1, 6000, '?after=0');
+    await sleep(500);
+    const { PostgresRunRepository } = await import('../packages/agent-runtime/src/repositories.js');
+    const { randomUUID } = await import('node:crypto');
+    await new PostgresRunRepository().appendRunEvent({
+      eventId: 'evt_' + randomUUID().slice(0, 8),
+      runId: runData.id,
+      type: 'tool.completed',
+      timestamp: Date.now(),
+      data: { name: 'dispatcher_external_writer', evidence: 'durable_postgres_event' }
+    });
+    const delivered = await dbEvents;
+    assert.ok(delivered.some(e => e.event === 'tool.completed' &&
+      e.data?.evidence === 'durable_postgres_event'),
+      'API did not replay the event written by another process to PostgreSQL');
+    console.log('PASS: API SSE delivered a dispatcher event from durable Postgres storage.');
+
+
     // -----------------------------------------------------------------------
     // TEST 4: Scheduler Concurrency
     // -----------------------------------------------------------------------
