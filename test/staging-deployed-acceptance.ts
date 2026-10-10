@@ -38,21 +38,22 @@ try {
       }
       const input = page.locator('main textarea').first();
       await input.waitFor({ state: 'visible', timeout: 25000 });
-      const now = Date.now();
-      await page.evaluate(`(() => {
+      // Pass the fixture as an evaluated argument so LaTeX delimiters survive both
+      // Node and browser serialization without double-escaping.
+      await page.evaluate((mathFixture) => {
         const messages = Array.from({ length: 48 }, (_, i) => ({
           id: 'stage-scroll-' + i,
           role: i % 2 === 0 ? 'user' : 'assistant',
           content: i === 47
-            ? 'Final display math: \\[n_s=\\frac{120f}{P}\\]'
+            ? mathFixture
             : 'Staging fixture ' + i + ' ' + 'Content for long chat scroll. '.repeat(25),
           timestamp: Date.now() + i
         }));
-        const chat = { id:'staging-deployed-fixture', title:'Deployed staging acceptance',
-          createdAt:Date.now(), updatedAt:Date.now(), messages };
+        const chat = { id: 'staging-deployed-fixture', title: 'Deployed staging acceptance',
+          createdAt: Date.now(), updatedAt: Date.now(), messages };
         localStorage.setItem('aira_conversations_v1', JSON.stringify([chat]));
         localStorage.setItem('aira_active_chat_id_v1', chat.id);
-      })()`);
+      }, String.raw`Final display math: \[n_s=\frac{120f}{P}\]`);
       await page.reload({ waitUntil: 'domcontentloaded' });
       await page.getByText('Final display math', { exact:false }).waitFor({timeout:25000});
       const region = page.locator('[data-testid="chat-scroll-region"]');
