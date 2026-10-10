@@ -6,6 +6,8 @@ import { PostgresRunRepository } from '../../agent-runtime/src/repositories.js';
 import type { Artifact, Run, StreamingEvent } from '../../contracts/src/index.js';
 import { ApplicationBuildClient, generateApplicationDraft } from './client.js';
 import { PostgresBuildArchiveStore } from './artifact-store.js';
+import { objectStoreFromEnvironment } from './object-store.js';
+import { PostgresObjectRefStore } from './object-ref-store.js';
 import type { QueuedBuild } from './queue.js';
 import type { DispatchOutcome } from './dispatcher.js';
 
@@ -76,10 +78,27 @@ export async function executeQueuedBuild(job: QueuedBuild, signal: AbortSignal):
           // A source link tied solely to an ephemeral worker is not durable.
           // Persist the verified worker export BEFORE committing queue success.
           const archive = await client.sourceArchive(workerJobId, run.principalId);
-          const stored = await new PostgresBuildArchiveStore().save({
-            queueJobId: job.id, ownerId: run.principalId, runId: run.id,
-            workerJobId, archive
-          });
+          let sourceSha256: string;
+          let compiledSha256: string | undefined;
+          const objectStore = objectStoreFromEnvironment();
+          if (objectStore) {
+            const refs = new PostgresObjectRefStore();
+            const source = await objectStore.put(run.principalId, 'source', archive);
+            await refs.save(job.id, run.principalId, run.id, 'source', source);
+            sourceSha256 = source.sha256;
+            const compiledBytes = await client.compiledArchive(workerJobId, run.principalId);
+            if (compiledBytes) {
+              const built = await objectStore.put(run.principalId, 'compiled', compiledBytes);
+              await refs.save(job.id, run.principalId, run.id, 'compiled', built);
+              compiledSha256 = built.sha256;
+            }
+          } else {
+            const stored = await new PostgresBuildArchiveStore().save({
+              queueJobId: job.id, ownerId: run.principalId, runId: run.id,
+              workerJobId, archive
+            });
+            sourceSha256 = stored.sha256;
+          }
           const outcome: DispatchOutcome = {
             state: 'COMPLETED',
             result: {
@@ -87,7 +106,8 @@ export async function executeQueuedBuild(job: QueuedBuild, signal: AbortSignal):
               independentAcceptance: false,
               workerJobId,
               queueJobId: job.id,
-              archiveSha256: stored.sha256,
+              archiveSha256: sourceSha256,
+              compiledSha256,
               sourceDurable: true,
               attempt,
               previewUrl: result.previewUrl,
@@ -140,7 +160,8 @@ async function resolveRun(job: QueuedBuild, state: 'COMPLETED' | 'FAILED' | 'CAN
   if (passed) {
     const artifactData = JSON.stringify({
       jobId: result.workerJobId, queueJobId: job.id,
-      archiveSha256: result.archiveSha256, previewUrl: result.previewUrl,
+      archiveSha256: result.archiveSha256, compiledSha256: result.compiledSha256,
+      previewUrl: result.previewUrl,
       status: 'BUILD_PASSED', summary: message
     });
     const artifact: Artifact = {

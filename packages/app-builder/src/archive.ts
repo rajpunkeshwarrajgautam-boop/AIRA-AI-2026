@@ -5,8 +5,12 @@ import { createHash } from 'node:crypto';
 
 /** Minimal deterministic ustar archive for manifest-validated project files only. */
 export async function createSourceArchive(
-  root: string, manifest: Array<{ path: string; sha256: string }>
+  root: string, manifest: Array<{ path: string; sha256: string }>,
+  limits: { maxFileBytes: number; maxTotalBytes: number; maxFiles: number } = {
+    maxFileBytes: 256_000, maxTotalBytes: 1_000_000, maxFiles: 50
+  }
 ): Promise<Buffer> {
+  if (manifest.length === 0 || manifest.length > limits.maxFiles) throw new Error('ARCHIVE_FILE_COUNT_EXCEEDED');
   const chunks: Buffer[] = [];
   let total = 0;
   for (const item of manifest) {
@@ -23,13 +27,13 @@ export async function createSourceArchive(
       if ((await lstat(cursor)).isSymbolicLink()) throw new Error('ARCHIVE_SYMLINK_REJECTED');
     }
     const meta = await lstat(absolute);
-    if (!meta.isFile() || meta.isSymbolicLink() || meta.size > 256_000) {
+    if (!meta.isFile() || meta.isSymbolicLink() || meta.size > limits.maxFileBytes) {
       throw new Error('INVALID_ARCHIVE_FILE');
     }
     const data = await readFile(absolute);
     if (createHash('sha256').update(data).digest('hex') !== item.sha256) throw new Error('SOURCE_INTEGRITY_MISMATCH');
     total += data.length;
-    if (total > 1_000_000) throw new Error('ARCHIVE_TOO_LARGE');
+    if (total > limits.maxTotalBytes) throw new Error('ARCHIVE_TOO_LARGE');
     const header = Buffer.alloc(512);
     const stringAt = (s: string, offset: number, max: number) => {
       const bytes = Buffer.from(s);
