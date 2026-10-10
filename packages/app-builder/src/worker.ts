@@ -73,7 +73,7 @@ async function noSymlinkParents(root: string, filename: string): Promise<void> {
 function denyDangerousSource(paths: string[]): void {
   if (new Set(paths).size !== paths.length) throw new Error('DUPLICATE_FILES');
   for (const p of paths) {
-    if (/^(?:package-lock\.json|node_modules|dist|\.env|\.git)(?:\/|$)/i.test(p)) {
+    if (/^(?:job-state\.json|package-lock\.json|node_modules|dist|\.env|\.git)(?:\/|$)/i.test(p)) {
       throw new Error('RESERVED_PROJECT_PATH');
     }
   }
@@ -142,6 +142,7 @@ export class DockerProjectWorker {
       '--security-opt', 'no-new-privileges', '--cap-drop', 'ALL',
       '--pids-limit', '64', '--memory', '512m', '--cpus', '1',
       '--user', String(uid) + ':' + String(gid),
+      '--env', 'HOME=/tmp', '--env', 'npm_config_cache=/tmp/.npm',
       '--tmpfs', '/tmp:rw,nosuid,size=64m',
       '--mount', 'type=bind,src=' + workspace + ',dst=/workspace',
       '--workdir', '/workspace',
@@ -289,6 +290,7 @@ export class DockerProjectWorker {
       if (!grant || grant.expires <= Date.now()) return this.send(res, 404, { error: 'PREVIEW_EXPIRED' });
       const job = this.jobs.get(grant.jobId);
       if (!job || job.state !== 'VERIFIED') return this.send(res, 404, { error: 'PREVIEW_NOT_VERIFIED' });
+      if (!job.manifest?.some(f => f.path === match[2])) return this.send(res, 404, { error: 'PREVIEW_FILE_UNAUTHORIZED' });
       try {
         const filename = safePath(resolve(this.config.root, grant.jobId), match[2]);
         await noSymlinkParents(resolve(this.config.root, grant.jobId), filename);
