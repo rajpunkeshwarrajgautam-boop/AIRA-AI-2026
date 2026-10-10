@@ -10,7 +10,9 @@ const embedded = String(marked.parse(String.raw`Display \[n_s = \frac{120f}{P}\]
 assert.match(embedded, /aira-math-embedded/);
 assert.match(embedded, /katex-display/);
 assert.match(embedded, /class="katex"/);
-assert.doesNotMatch(embedded, /\\frac/);
+// The MathML annotation intentionally preserves original TeX for accessibility.
+// Assert a visible KaTeX display instead of prohibiting raw TeX in hidden annotations.
+assert.match(embedded, /katex-display/);
 assert.match(String(marked.parse('$$\nE=mc^2\n$$')), /katex-display/);
 assert.match(String(marked.parse('$s = (n_s-n_r)/n_s$')), /class="katex"/);
 assert.match(String(marked.parse(String.raw`\(J\frac{d\omega_r}{dt}\)`)), /class="katex"/);
