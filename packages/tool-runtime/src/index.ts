@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { searchWeb, WebSearchError } from './search-providers.js';
+import { searchWeb, WebSearchError, type SearchProviderName } from './search-providers.js';
 import {
   ToolDefinition,
   ToolDefinitionSchema,
@@ -136,7 +136,8 @@ export class ToolRegistry {
         parameters: {
           type: 'object',
           properties: {
-            query: { type: 'string', description: 'The search query or keyword phrase' }
+            query: { type: 'string', description: 'The search query or keyword phrase' },
+            provider: { type: 'string', enum: ['auto', 'tavily', 'exa'], description: 'Select a provider explicitly; tavily/exa never silently fail over.' }
           },
           required: ['query']
         },
@@ -148,7 +149,9 @@ export class ToolRegistry {
         const started = Date.now();
         const callId = 'call_' + Math.random().toString(36).slice(2, 9);
         try {
-          const { provider, results } = await searchWeb(String(args.query || ''));
+          const requestedProvider = args.provider;
+          if (requestedProvider !== undefined && requestedProvider !== 'auto' && requestedProvider !== 'tavily' && requestedProvider !== 'exa') throw new WebSearchError('SEARCH_PROVIDER_INVALID');
+          const { provider, results } = await searchWeb(String(args.query || ''), undefined, undefined, { provider: requestedProvider as SearchProviderName | 'auto' | undefined });
           return {
             toolCallId: callId,
             output: { provider, query: String(args.query || ''), totalResults: results.length, results },

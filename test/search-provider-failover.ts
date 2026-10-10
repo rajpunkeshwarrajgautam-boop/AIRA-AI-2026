@@ -28,7 +28,7 @@ async function main(): Promise<void> {
   assert.equal((primaryCalls[0].options.headers as Record<string, string>).Authorization, 'Bearer test-tavily-key');
   assert.equal(JSON.parse(String(primaryCalls[0].options.body)).search_depth, 'basic');
 
-  // Tavily HTTP failure leads to Exa and retrieves real evidence.
+  // Tavily HTTP failure leads to Exa fixture evidence.
   const fallbackCalls: Array<{ url: string; options: RequestInit }> = [];
   const fallback = await searchWeb('scientific research', credentials, mockFetch([
     { ok: false },
@@ -67,6 +67,21 @@ async function main(): Promise<void> {
     { ok: true, results: [{ title: 'Paper', url: 'https://example.org/paper', text: 'A source' }] }
   ], []));
   assert.equal(exaOnly.provider, 'exa');
+
+  // Explicit provider selection must never silently certify a fallback provider.
+  const selectedExaCalls: Array<{ url: string; options: RequestInit }> = [];
+  const selectedExa = await searchWeb('owned provider fixture', credentials, mockFetch([
+    { ok: true, results: [{ url: 'https://example.org/source', text: 'Fixture evidence' }] }
+  ], selectedExaCalls), { provider: 'exa' });
+  assert.equal(selectedExa.provider, 'exa');
+  assert.equal(selectedExaCalls.length, 1);
+  assert.equal(selectedExaCalls[0].url, 'https://api.exa.ai/search');
+  const selectedTavilyCalls: Array<{ url: string; options: RequestInit }> = [];
+  await assert.rejects(searchWeb('owned provider fixture', credentials, mockFetch([{ ok: false }], selectedTavilyCalls), { provider: 'tavily' }),
+    (error: unknown) => error instanceof WebSearchError && error.code === 'SEARCH_PROVIDER_UNAVAILABLE');
+  assert.equal(selectedTavilyCalls.length, 1, 'Selected Tavily failure must not call Exa');
+  await assert.rejects(searchWeb('owned provider fixture', { exaApiKey: 'test-exa-key' }, mockFetch([], []), { provider: 'tavily' }),
+    (error: unknown) => error instanceof WebSearchError && error.code === 'SEARCH_PROVIDER_NOT_READY');
 
   console.log('PASS: Tavily primary, Exa fallback, empty/invalid evidence, Exa-only, and fail-closed errors.');
 }

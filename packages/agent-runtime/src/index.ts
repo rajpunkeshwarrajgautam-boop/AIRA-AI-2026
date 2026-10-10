@@ -58,6 +58,18 @@ export class AgentRuntime extends EventEmitter {
   ) {
     super();
     this.toolGateway = toolGateway || new ToolGateway(new PostgresToolCallRepository(), this.approvalKernel, this.workspaceRoot);
+    // Share the real search adapter with the authoritative gateway so provider-
+    // specific execution is principal-checked, persisted and directly testable.
+    const searchTool = this.toolRegistry.get('web_search');
+    if (searchTool && !this.toolGateway.getTool('web_search')) {
+      this.toolGateway.registerTool({ definition: searchTool.definition, execute: async (args, context) => {
+        const result = await this.toolRegistry.execute({ id: `search_${crypto.randomUUID()}`,
+          toolId: searchTool.definition.id, name: 'web_search', arguments: args, timestamp: Date.now(), status: 'PENDING' },
+          { runId: context.runId, workspaceRoot: this.workspaceRoot, sessionGrantedTools: new Set() });
+        if (result.isError) throw new Error(result.error || 'SEARCH_PROVIDER_UNAVAILABLE');
+        return result.output;
+      } });
+    }
     this.router = router || new ServerIntentRouter(this.capabilityRegistry, this.modelRouter);
     this.workflowRepo = workflowRepo || new PostgresWorkflowRepository();
     this.workflowCompiler = workflowCompiler || new WorkflowCompiler(this.modelRouter);
