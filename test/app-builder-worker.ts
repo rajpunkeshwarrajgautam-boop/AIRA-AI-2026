@@ -127,7 +127,7 @@ try {
     body: JSON.stringify({ ownerId: 'alice', files: [
       { path: 'index.html', content: '<html>broken</html>' },
       { path: 'broken.js', content: 'function unfinished( {' }
-    ], steps: ['syntax'] })
+    ], steps: ['syntax', 'build', 'test'] })
   });
   assert.equal(broken.status, 202);
   const bad = await waitFor((await broken.json()).jobId);
@@ -141,7 +141,7 @@ try {
       { path: 'index.html', content: '<html>deps</html>' },
       { path: 'app.js', content: 'console.log(1)' },
       { path: 'package.json', content: JSON.stringify({ dependencies: { 'left-pad': '1.3.0' } }) }
-    ], steps: ['syntax'] })
+    ], steps: ['syntax', 'build', 'test'] })
   });
   assert.equal(deps.status, 202);
   const blocked = await waitFor((await deps.json()).jobId);
@@ -155,12 +155,13 @@ try {
       ownerId: 'alice',
       files: [
         { path: 'index.html', content: '<html><body>slow job must never preview</body></html>' },
+        { path: 'slow.js', content: 'console.log("waiting");' },
         { path: 'package.json', content: JSON.stringify({
           name: 'test-cancellation', version: '1.0.0',
-          scripts: { build: 'node -e "setTimeout(() => {}, 30000)"' }
+          scripts: { build: 'node -e "setTimeout(() => {}, 30000)"', test: 'node --check slow.js' }
         }) }
       ],
-      steps: ['build']
+      steps: ['syntax', 'build', 'test']
     })
   });
   assert.equal(slow.status, 202);
