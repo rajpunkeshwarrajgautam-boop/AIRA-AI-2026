@@ -160,7 +160,8 @@ async function resolveRun(job: QueuedBuild, state: 'COMPLETED' | 'FAILED' | 'CAN
   if (passed) {
     const artifactData = JSON.stringify({
       jobId: result.workerJobId, queueJobId: job.id,
-      archiveSha256: result.archiveSha256, previewUrl: result.previewUrl,
+      archiveSha256: result.archiveSha256, compiledSha256: result.compiledSha256,
+      previewUrl: result.previewUrl,
       status: 'BUILD_PASSED', summary: message
     });
     const artifact: Artifact = {
