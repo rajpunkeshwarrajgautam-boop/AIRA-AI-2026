@@ -38,7 +38,7 @@ for (let attempt = 0; attempt < 20; attempt++) {
   const sameCommit = (listing.deployments ?? []).filter(d =>
     d.meta?.githubCommitSha === expected &&
     d.meta?.githubCommitRef === 'staging' &&
-    d.projectId === projectId &&
+    (!d.projectId || d.projectId === projectId) &&
     d.target !== 'production'
   );
   matched = sameCommit.find(d => (d.readyState ?? d.state) === 'READY' && d.id && d.url);
