@@ -5,7 +5,7 @@ import { BuildInput, type BuildJob, type BuildRequest } from './worker.js';
 
 const BuildDraft = BuildInput.omit({ ownerId: true });
 const JobAccepted = z.object({ jobId: z.string().uuid(), state: z.string() });
-const WorkerHealth = z.object({ status: z.literal('PARTIAL'), runtime: z.literal('docker'), dependencyInstall: z.boolean() });
+const WorkerHealth = z.object({ status: z.literal('PARTIAL'), runtime: z.literal('docker'), dependencyInstall: z.boolean(), approvedPackages: z.record(z.string(), z.string()).optional() });
 
 function requiredConfig(): { url: string; token: string } {
   if (process.env.AIRA_BUILDER_ENABLED !== 'true') throw new Error('APPLICATION_BUILD_NOT_ENABLED');
@@ -41,10 +41,9 @@ export class ApplicationBuildClient {
     if (!res.ok) throw new Error('BUILD_WORKER_HTTP_' + res.status + ': ' + String((data as { error?: string }).error || 'Request failed'));
     return data;
   }
-  async health(): Promise<boolean> {
+  async health(): Promise<z.infer<typeof WorkerHealth>> {
     const data = await this.request('/health', 'health-probe');
-    WorkerHealth.parse(data);
-    return true;
+    return WorkerHealth.parse(data);
   }
   async create(input: BuildRequest): Promise<string> {
     const valid = BuildInput.parse(input);
@@ -95,19 +94,24 @@ export class ApplicationBuildClient {
 export async function generateApplicationDraft(
   prompt: string,
   modelRouter: ModelRouter,
-  policy: ModelPolicy
+  policy: ModelPolicy,
+  approvedPackages: Record<string, string> = {}
 ): Promise<z.infer<typeof BuildDraft>> {
   if (modelRouter.listProviders().length === 0 || policy.model === 'mock-deterministic') {
     throw new Error('APPLICATION_BUILD_MODEL_NOT_CONFIGURED');
   }
   const adapter = modelRouter.getAdapter(policy);
+  const approved = Object.entries(approvedPackages);
+  const dependencyPolicy = approved.length
+    ? 'Only these operator-approved exact dependency versions are supported: ' + approved.map(([name, version]) => name + '@' + version).join(', ') + '. You may use these in package.json dependencies/devDependencies. Do not invent a package-lock.json; the isolated worker resolves one from its pre-approved offline package cache. For bundled applications, set relative asset paths/base. '
+    : 'Do not use external npm dependencies. ';
   const response = await adapter.complete([
     { role: 'system', content:
       'You are writing a real self-contained browser application. Return a single JSON object only: ' +
       '{"files":[{"path":"index.html","content":"..."},{"path":"app.js","content":"..."},' +
       '{"path":"test.js","content":"..."},{"path":"package.json","content":"..."}],' +
       '"steps":["syntax","build","test"]}. ' +
-      'Do not use external packages, CDNs, fetch, remote assets, npm dependencies or imports from third-party modules. ' +
+      dependencyPolicy + 'Do not use CDNs, fetch or remote assets. ' +
       'Use package.json scripts build and test with built-in Node only. Keep all browser assets relative. ' +
       'Include executable Node assertions in test.js. Render the requested user interactions in index.html/app.js. ' +
       'Generated tests are not independent product acceptance evidence. Do not output Markdown fences or commentary.'
@@ -130,8 +134,7 @@ export async function generateApplicationDraft(
   try {
     const value = JSON.parse(pkg!.content) as { scripts?: Record<string, string>; dependencies?: object; devDependencies?: object };
     if (!value.scripts?.build || !value.scripts?.test ||
-        Object.keys(value.dependencies || {}).length > 0 ||
-        Object.keys(value.devDependencies || {}).length > 0) {
+        [...Object.entries(value.dependencies || {}), ...Object.entries(value.devDependencies || {})].some(([name, version]) => approvedPackages[name] !== version)) {
       throw new Error('APPLICATION_BUILD_UNSUPPORTED_DEPENDENCIES_OR_SCRIPTS');
     }
   } catch (err) {
