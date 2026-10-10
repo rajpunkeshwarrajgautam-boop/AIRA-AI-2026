@@ -44,7 +44,7 @@ async function runE2E() {
       '| Quantity | Value |',
       '|---|---|',
       '| Slip | $s=\\frac{1500-1440}{1500}$ |',
-    ].join('\\n');
+    ].join('\n');
     await page.evaluate((markdown) => {
       const conversation = {
         id: 'rich-clipboard-e2e',
@@ -91,7 +91,7 @@ async function runE2E() {
       throw new Error('Rich clipboard missing HTML and plain MIME types');
     }
     if (!copied.html.includes('katex') || !copied.html.includes('katex-display') ||
-        !copied.html.includes('MathML') && !copied.html.includes('mathml') ||
+        (!copied.html.includes('MathML') && !copied.html.includes('mathml')) ||
         !copied.html.includes('border:1px') || !copied.html.includes('Induction motor') ||
         !copied.html.includes('StartFragment')) {
       throw new Error('Rich clipboard did not preserve formatted equations, table or heading');
@@ -112,7 +112,7 @@ async function runE2E() {
     const fallbackText = await page.evaluate(() => (window as any).__fallbackCopiedText);
     if (fallbackText !== richExample) throw new Error('Rich clipboard fallback did not copy Markdown');
 
-    process.stdout.write('Verified: Rich clipboard MIME, KaTeX/table formatting and fallback.\\n');
+    process.stdout.write('Verified: Rich clipboard MIME, KaTeX/table formatting and fallback.\n');
 
     process.stdout.write('\nPLAYWRIGHT E2E UI VERIFICATION PASSED.\n');
   } catch (err: any) {
