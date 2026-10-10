@@ -426,9 +426,9 @@ export class AgentRuntime extends EventEmitter {
               'This build is not production certified.';
             const artifact: Artifact = {
               id: 'art_build_' + crypto.randomUUID(), runId,
-              title: 'Build Output (not product certified)',
-              type: 'text/markdown', content: description, version: 1,
-              versions: [{ version: 1, content: description, timestamp: Date.now() }]
+              title: 'Built Project (not product certified)',
+              type: 'application/vnd.ant.project', content: JSON.stringify({ jobId: id, previewUrl: result.previewUrl, status: 'BUILD_PASSED', summary: description }), version: 1,
+              versions: [{ version: 1, content: JSON.stringify({ jobId: id, previewUrl: result.previewUrl, status: 'BUILD_PASSED', summary: description }), timestamp: Date.now() }]
             };
             run.artifacts.push(artifact);
             run.content = description;
