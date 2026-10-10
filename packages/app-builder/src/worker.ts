@@ -6,7 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import { createSourceArchive } from './archive.js';
-import { validateOfflineDependencyLock, validateApprovedDependencySpecs } from './dependencies.js';
+import { validateOfflineDependencyLock, validateApprovedDependencySpecs, approvedLockfileKey } from './dependencies.js';
 import { collectCompiledPreview, type PreviewFile } from './preview-output.js';
 
 const execFileAsync = promisify(execFile);
@@ -272,19 +272,25 @@ export class DockerProjectWorker {
           const lock = request.files.find(f => f.path === 'package-lock.json');
           let lockText = lock?.content;
           if (!lockText) {
-            const resolution = await this.docker(root, [
-              'npm', 'install', '--package-lock-only', '--offline', '--ignore-scripts',
-              '--no-audit', '--no-fund', '--cache', '/npm-cache'
-            ], signal);
-            if (signal.aborted) throw new Error('BUILD_CANCELLED');
-            job.steps.push({ name: 'resolve', exitCode: resolution.exitCode, output: resolution.output });
-            await this.persist(job);
-            if (resolution.exitCode !== 0) throw new Error('OFFLINE_LOCK_RESOLUTION_FAILED');
-            lockText = await readFile(join(root, 'package-lock.json'), 'utf8');
+            // An offline cache can contain package bytes without the registry
+            // metadata required for lockfile resolution. A reviewed lockfile
+            // template is supplied by the operator OUTSIDE untrusted code.
+            const key = approvedLockfileKey(pkg.content);
+            const approvedFile = join(this.config.npmCache, 'approved-locks', key + '.json');
+            const approvedInfo = await lstat(approvedFile).catch(() => null);
+            if (!approvedInfo?.isFile() || approvedInfo.isSymbolicLink() || approvedInfo.size > 500_000) {
+              throw new Error('APPROVED_LOCKFILE_NOT_PROVISIONED');
+            }
+            const template = JSON.parse(await readFile(approvedFile, 'utf8')) as Record<string, unknown>;
+            lockText = JSON.stringify(template);
+            validateOfflineDependencyLock(pkg.content, lockText);
+            await writeFile(join(root, 'package-lock.json'), lockText, { flag: 'wx', mode: 0o600 });
+            job.steps.push({ name: 'resolve', exitCode: 0, output: 'Loaded validated operator-curated lockfile template; no network resolution performed.' });
             job.manifest?.push({
               path: 'package-lock.json',
               sha256: createHash('sha256').update(lockText).digest('hex')
             });
+            await this.persist(job);
           }
           validateOfflineDependencyLock(pkg.content, lockText);
           const result = await this.docker(root, [
