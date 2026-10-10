@@ -6,7 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import { createSourceArchive } from './archive.js';
-import { validateOfflineDependencyLock } from './dependencies.js';
+import { validateOfflineDependencyLock, validateApprovedDependencySpecs } from './dependencies.js';
 import { collectCompiledPreview, type PreviewFile } from './preview-output.js';
 
 const execFileAsync = promisify(execFile);
@@ -45,6 +45,7 @@ export interface WorkerConfig {
   frameOrigin: string;
   image: string;
   npmCache?: string;
+  approvedPackages?: Record<string, string>;
 }
 export const workerConfig = (): WorkerConfig => ({
   root: process.env.AIRA_WORKER_ROOT || '/tmp/aira-build-worker',
@@ -54,7 +55,8 @@ export const workerConfig = (): WorkerConfig => ({
   previewOrigin: process.env.AIRA_WORKER_PREVIEW_ORIGIN || 'http://127.0.0.1:4102',
   frameOrigin: process.env.AIRA_WORKER_FRAME_ORIGIN || 'http://127.0.0.1:5173',
   image: process.env.AIRA_WORKER_IMAGE || 'node:24-alpine',
-  npmCache: process.env.AIRA_WORKER_NPM_CACHE || undefined
+  npmCache: process.env.AIRA_WORKER_NPM_CACHE || undefined,
+  approvedPackages: JSON.parse(process.env.AIRA_WORKER_APPROVED_PACKAGES_JSON || '{}') as Record<string, string>
 });
 
 function safePath(root: string, file: string): string {
@@ -138,6 +140,17 @@ export class DockerProjectWorker {
     }
     await mkdir(this.config.root, { recursive: true, mode: 0o700 });
     await mkdir(join(this.config.root, '_state'), { recursive: true, mode: 0o700 });
+    if (this.config.approvedPackages) {
+      for (const [name, version] of Object.entries(this.config.approvedPackages)) {
+        if (!/^(@[a-z0-9._-]+\/)?[a-z0-9._-]+$/i.test(name) ||
+            !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
+          throw new Error('INVALID_APPROVED_PACKAGE_CONFIGURATION');
+        }
+      }
+      if (Object.keys(this.config.approvedPackages).length && !this.config.npmCache) {
+        throw new Error('APPROVED_PACKAGES_REQUIRE_OFFLINE_CACHE');
+      }
+    }
     if (this.config.npmCache) {
       if (!this.config.npmCache.startsWith('/')) throw new Error('NPM_CACHE_MUST_BE_ABSOLUTE');
       const source = resolve(this.config.npmCache);
@@ -255,9 +268,25 @@ export class DockerProjectWorker {
         const hasDeps = Boolean(Object.keys(data.dependencies || {}).length || Object.keys(data.devDependencies || {}).length);
         if (hasDeps) {
           if (!this.config.npmCache) throw new Error('DEPENDENCY_INSTALL_NOT_CONFIGURED');
+          validateApprovedDependencySpecs(pkg.content, this.config.approvedPackages || {});
           const lock = request.files.find(f => f.path === 'package-lock.json');
-          if (!lock) throw new Error('DEPENDENCY_LOCKFILE_REQUIRED');
-          validateOfflineDependencyLock(pkg.content, lock.content);
+          let lockText = lock?.content;
+          if (!lockText) {
+            const resolution = await this.docker(root, [
+              'npm', 'install', '--package-lock-only', '--offline', '--ignore-scripts',
+              '--no-audit', '--no-fund', '--cache', '/npm-cache'
+            ], signal);
+            if (signal.aborted) throw new Error('BUILD_CANCELLED');
+            job.steps.push({ name: 'resolve', exitCode: resolution.exitCode, output: resolution.output });
+            await this.persist(job);
+            if (resolution.exitCode !== 0) throw new Error('OFFLINE_LOCK_RESOLUTION_FAILED');
+            lockText = await readFile(join(root, 'package-lock.json'), 'utf8');
+            job.manifest?.push({
+              path: 'package-lock.json',
+              sha256: createHash('sha256').update(lockText).digest('hex')
+            });
+          }
+          validateOfflineDependencyLock(pkg.content, lockText);
           const result = await this.docker(root, [
             'npm', 'ci', '--offline', '--ignore-scripts', '--no-audit', '--no-fund',
             '--cache', '/npm-cache'
@@ -344,7 +373,7 @@ export class DockerProjectWorker {
     return createServer(async (req, res) => {
       if (req.url === '/health' && req.method === 'GET') {
         if (!this.authenticate(req)) return this.send(res, 401, { error: 'UNAUTHORIZED' });
-        return this.send(res, 200, { status: 'PARTIAL', runtime: 'docker', network: 'none', dependencyInstall: Boolean(this.config.npmCache) });
+        return this.send(res, 200, { status: 'PARTIAL', runtime: 'docker', network: 'none', dependencyInstall: Boolean(this.config.npmCache && Object.keys(this.config.approvedPackages || {}).length), approvedPackages: this.config.npmCache ? (this.config.approvedPackages || {}) : {} });
       }
       if (!this.authenticate(req)) return this.send(res, 401, { error: 'UNAUTHORIZED' });
       const owner = req.headers['x-aira-owner'];
