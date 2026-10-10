@@ -83,6 +83,9 @@ jobs:
           AIRA_SEMANTIC_SEARCH: 'false'
         run: npm run db:verify:deploy
 
+      - name: Scheduled automation claims and authorization regression
+        run: npm run test:automation:scheduler
+
       - name: Runtime verification
         run: npm test
 

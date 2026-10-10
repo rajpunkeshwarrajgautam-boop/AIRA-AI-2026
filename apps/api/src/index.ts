@@ -3,6 +3,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
 import { waitUntil } from '@vercel/functions';
+import { requireCronAuthorization } from './auth/cron-auth.js';
 import { ModelRouter } from '../../../packages/model-router/src/index.js';
 import { ToolRegistry, ToolGateway, PostgresToolCallRepository } from '../../../packages/tool-runtime/src/index.js';
 import { ApprovalKernel } from '../../../packages/approvals/src/index.js';
@@ -125,6 +126,20 @@ app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
   }
   next();
 });
+
+// Platform scheduler authenticates independently of a workspace user session.
+app.route('/api/automations/cron/execute')
+  .get(requireCronAuthorization, executeCronCycle)
+  .post(requireCronAuthorization, executeCronCycle);
+
+async function executeCronCycle(_req: Request, res: Response) {
+  try {
+    const result = await automationEngine.runScheduledCronCycle();
+    res.json({ status: 'CRON_CYCLE_EXECUTED', ...result, timestamp: Date.now() });
+  } catch {
+    res.status(500).json({ error: 'CRON_CYCLE_FAILED' });
+  }
+}
 
 // Enforce ExecutionPrincipal on all /api routes BELOW this point.
 // Routes registered above (health, ready) are public infrastructure probes.
@@ -856,7 +871,7 @@ app.post('/api/automations', async (req: Request, res: Response) => {
   try {
     const raw = {
       ...req.body,
-      principalId: req.body.principalId || req.principal?.userId || 'usr_anonymous'
+      principalId: req.principal!.userId
     };
     const parsed = AutomationDefinitionSchema.omit({ id: true }).parse(raw);
     const item = await automationEngine.createAutomation(parsed);
@@ -922,16 +937,6 @@ app.post('/api/automations/:id/disable', async (req: Request, res: Response) => 
     res.json(item);
   } catch (err: any) {
     res.status(404).json({ error: err.message });
-  }
-});
-
-// Platform / Serverless cron execution endpoint
-app.post('/api/automations/cron/execute', async (_req: Request, res: Response) => {
-  try {
-    await automationEngine.runScheduledCronCycle();
-    res.json({ status: 'CRON_CYCLE_EXECUTED', timestamp: Date.now() });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
   }
 });
 

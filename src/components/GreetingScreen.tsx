@@ -336,7 +336,7 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
 
       {/* Dynamic Situation Subtitle */}
       <p 
-        className="claude-fade-up text-sm sm:text-base text-claude-muted-light dark:text-claude-muted-dark font-sans leading-relaxed mb-6 max-w-lg"
+        className="claude-fade-up text-sm sm:text-base text-claude-muted-light dark:text-claude-muted-dark font-sans leading-relaxed sm:leading-[1.5] mb-6 max-w-lg"
         style={{ textWrap: 'balance' }}
       >
         {dynamicSubtitle}

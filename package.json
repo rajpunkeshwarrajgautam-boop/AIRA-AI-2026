@@ -43,7 +43,8 @@
     "test:staging:attest": "npx tsx test/staging-deployment-attestation.ts",
     "test:staging:db-policy": "node --test test/staging-db-policy.test.mjs",
     "test:run-lifetime": "npx tsx test/run-execution-lifetime.ts",
-    "test:tailwind:visual": "node test/tailwind-visual-regression.mjs"
+    "test:tailwind:visual": "node test/tailwind-visual-regression.mjs",
+    "test:automation:scheduler": "npx tsx test/automation-scheduler-regression.ts"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
