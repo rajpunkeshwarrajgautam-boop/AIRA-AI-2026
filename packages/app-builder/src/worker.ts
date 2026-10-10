@@ -420,6 +420,31 @@ export class DockerProjectWorker {
           return this.send(res, 400, { error: err instanceof Error ? err.message : 'INVALID_JOB' });
         }
       }
+      // Export immutable compiled dist bytes through the authenticated
+      // control plane, never through a public or model-controlled file path.
+      const compiledMatch = req.url?.match(/^\/v1\/jobs\/([0-9a-f-]{36})\/compiled$/);
+      if (compiledMatch && req.method === 'GET') {
+        const job = this.getJob(compiledMatch[1], owner);
+        if (!job || job.state !== 'BUILD_PASSED' || job.previewMode !== 'compiled' ||
+            !job.previewManifest?.length) {
+          return this.send(res, 404, { error: 'COMPILED_OUTPUT_NOT_AVAILABLE' });
+        }
+        try {
+          const archive = await createSourceArchive(
+            resolve(this.config.root, job.id, 'dist'), job.previewManifest,
+            { maxFileBytes: 1_500_000, maxTotalBytes: 8_000_000, maxFiles: 200 }
+          );
+          res.writeHead(200, {
+            'Content-Type': 'application/gzip',
+            'Cache-Control': 'no-store',
+            'X-Content-Type-Options': 'nosniff'
+          });
+          res.end(archive);
+        } catch {
+          this.send(res, 409, { error: 'COMPILED_OUTPUT_INTEGRITY_FAILED' });
+        }
+        return;
+      }
       const sourceMatch = req.url?.match(/^\/v1\/jobs\/([0-9a-f-]{36})\/source$/);
       if (sourceMatch && req.method === 'GET') {
         const job = this.getJob(sourceMatch[1], owner);
