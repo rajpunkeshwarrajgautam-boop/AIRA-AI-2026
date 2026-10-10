@@ -105,6 +105,9 @@ jobs:
       - name: Search provider failover certification (mocked)
         run: npm run test:search
 
+      - name: Research evidence grounding regression
+        run: npm run test:research-evidence
+
       - name: Conversation search certification
         run: npm run test:conversation-search
 

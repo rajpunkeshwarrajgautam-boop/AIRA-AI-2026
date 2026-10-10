@@ -1,4 +1,4 @@
-import { ToolRegistry, ToolCall } from '../../tool-runtime/src/index.js';
+import { ToolRegistry, ToolCall, ToolResult } from '../../tool-runtime/src/index.js';
 import { Citation } from '../../contracts/src/index.js';
 import { BrainV2KnowledgeEngine } from '../../knowledge/src/index.js';
 import { configuredSearchProviders } from '../../tool-runtime/src/search-providers.js';
@@ -13,6 +13,7 @@ export interface ResearchResult {
   freshnessRequired: boolean;
   providerReady: boolean;
   toolCalls: ToolCall[];
+  toolResults: ToolResult[];
 }
 
 export class ResearchService {
@@ -41,11 +42,12 @@ export class ResearchService {
 
     let citations: Citation[] = [];
     const toolCalls: ToolCall[] = [];
+    const toolResults: ToolResult[] = [];
     const timestamp = Date.now();
 
-    // 1. Freshness required - use live tools
-    if (freshnessRequired) {
-      if (providerReady) {
+    // Every configured Research run attempts live evidence, not only temporal prompts.
+    if (providerReady) {
+      {
         // Execute real live web search tool
         const toolDef = this.toolRegistry.get('web_search')?.definition;
         const toolCall: ToolCall = {
@@ -63,9 +65,10 @@ export class ResearchService {
             workspaceRoot: process.cwd(),
             sessionGrantedTools: new Set<string>()
           });
+          toolResults.push(result);
           const output = result.output;
           if (!result.isError && output && typeof output === 'object' && Array.isArray((output as any).results)) {
-            const searchResults = (output as any).results as Array<{ title?: string; url?: string; snippet?: string; description?: string }>;
+            const searchResults = (output as any).results as Array<{ title?: string; url?: string; snippet?: string; description?: string; publishedDate?: string }>;
             citations = searchResults
               .filter(res => typeof res.url === 'string' && /^https?:\/\//.test(res.url))
               .map((res, idx) => ({
@@ -73,6 +76,7 @@ export class ResearchService {
                 sourceId: `web_${idx}`,
                 sourceTitle: res.title || 'Live Search Result',
                 uri: res.url!,
+                ...(res.publishedDate ? { publishedDate: res.publishedDate } : {}),
                 snippet: res.snippet || res.description || '',
                 score: 1.0,
                 provenance: {
@@ -91,8 +95,10 @@ export class ResearchService {
           providerReady = false;
         }
       }
-    } else {
-      // 2. Not freshness sensitive - use internal knowledge engine + live search as fallback
+    }
+    // Only use internal evidence for non-freshness queries when live search
+    // is unconfigured or unavailable. Never invent live sources.
+    if (!providerReady && !freshnessRequired) {
       const internalResults = await this.knowledgeEngine.search(prompt, 3);
       citations = internalResults.map(r => r.citation);
     }
@@ -101,7 +107,8 @@ export class ResearchService {
       citations,
       freshnessRequired,
       providerReady,
-      toolCalls
+      toolCalls,
+      toolResults
     };
   }
 }

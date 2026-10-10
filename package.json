@@ -37,7 +37,8 @@
     "test:conversation-search-client": "npx tsx test/conversation-search-client.ts",
     "test:long-prompt-persistence": "npx tsx test/long-prompt-persistence.ts",
     "test:math-rendering": "npx tsx test/math-rendering.ts",
-    "test:preview-identity": "npx tsx test/preview-identity-guard.ts"
+    "test:preview-identity": "npx tsx test/preview-identity-guard.ts",
+    "test:research-evidence": "npx tsx test/research-evidence.ts"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
