@@ -46,7 +46,8 @@
     "test:app-builder-dispatcher": "npx tsx test/app-builder-dispatcher.ts",
     "test:app-builder-artifacts": "npx tsx test/app-builder-artifact-store.ts",
     "test:app-builder-objects": "npx tsx test/app-builder-object-store.ts",
-    "test:app-builder-preview-grants": "npx tsx test/app-builder-preview-grants.ts"
+    "test:app-builder-preview-grants": "npx tsx test/app-builder-preview-grants.ts",
+    "worker:preview-gateway": "npx tsx packages/app-builder/src/preview-gateway.ts"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
