@@ -123,6 +123,10 @@ export class DockerProjectWorker {
           record.previewUrl = undefined;
           await writeFile(file, JSON.stringify(record), { mode: 0o600 });
         }
+        // Tickets are process-local bearer capabilities. After restart they are
+        // no longer valid and must not appear as functioning previews.
+        record.previewTicket = undefined;
+        record.previewUrl = undefined;
         this.jobs.set(name, record);
       } catch { /* unrelated files are not trusted */ }
     }
@@ -138,8 +142,9 @@ export class DockerProjectWorker {
     if (!uid || gid === undefined) throw new Error('DEDICATED_UNPRIVILEGED_WORKER_REQUIRED');
     // Docker runs only on the separately deployed trusted worker, never on the AIRA API host.
     // Only fixed commands are passed as argv; never invoke a shell.
+    const containerName = 'aira-build-' + randomUUID().replaceAll('-', '');
     const dockerArgs = [
-      'run', '--rm', '--network', 'none', '--read-only', '--init',
+      'run', '--name', containerName, '--rm', '--network', 'none', '--read-only', '--init',
       '--security-opt', 'no-new-privileges', '--cap-drop', 'ALL',
       '--pids-limit', '64', '--memory', '512m', '--cpus', '1',
       '--user', String(uid) + ':' + String(gid),
@@ -155,6 +160,8 @@ export class DockerProjectWorker {
       });
       return { exitCode: 0, output: (out.stdout + '\n' + out.stderr).slice(-8_000) };
     } catch (error: unknown) {
+      // A timed-out Docker CLI must not leave an untracked build container running.
+      await execFileAsync('docker', ['rm', '-f', containerName], { timeout: 5_000, maxBuffer: 4096 }).catch(() => {});
       const e = error as { code?: number | string; stdout?: string; stderr?: string; message?: string };
       return { exitCode: typeof e.code === 'number' ? e.code : 1,
         output: String(e.stdout || '') .slice(-4000) + '\n' + String(e.stderr || e.message || '').slice(-4000) };
@@ -327,8 +334,13 @@ export class DockerProjectWorker {
         if (!meta.isFile() || meta.size > 1_000_000) throw new Error('INVALID_PREVIEW_FILE');
         const mime = contentTypes[extname(filename)];
         if (!mime) throw new Error('UNSUPPORTED_PREVIEW_CONTENT');
+        const originalHash = job.manifest?.find(f => f.path === match[2])?.sha256;
+        const bytes = await readFile(filename);
+        if (!originalHash || createHash('sha256').update(bytes).digest('hex') !== originalHash) {
+          throw new Error('PREVIEW_SOURCE_CHANGED');
+        }
         res.writeHead(200, { 'Content-Type': mime });
-        res.end(await readFile(filename));
+        res.end(bytes);
       } catch {
         this.send(res, 404, { error: 'PREVIEW_FILE_NOT_FOUND' });
       }
