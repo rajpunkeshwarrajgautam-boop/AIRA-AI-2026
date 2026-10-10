@@ -41,7 +41,9 @@
     "test:research-evidence": "npx tsx test/research-evidence.ts",
     "worker:build": "npx tsx packages/app-builder/src/worker.ts",
     "test:app-builder": "npx tsx test/app-builder-worker.ts",
-    "test:app-builder-queue": "npx tsx test/app-builder-queue.ts"
+    "test:app-builder-queue": "npx tsx test/app-builder-queue.ts",
+    "worker:dispatcher": "npx tsx packages/app-builder/src/dispatcher-service.ts",
+    "test:app-builder-dispatcher": "npx tsx test/app-builder-dispatcher.ts"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
