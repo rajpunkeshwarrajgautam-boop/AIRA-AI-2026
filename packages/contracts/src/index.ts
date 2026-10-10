@@ -51,7 +51,8 @@ export const IntentTaxonomySchema = z.enum([
   'TOOL_ACTION',
   'WORKFLOW',
   'AUTOMATION_CREATE',
-  'AGENT_MISSION'
+  'AGENT_MISSION',
+  'APPLICATION_BUILD'
 ]);
 export type IntentTaxonomy = z.infer<typeof IntentTaxonomySchema>;
 
