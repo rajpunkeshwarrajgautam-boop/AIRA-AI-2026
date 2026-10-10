@@ -29,6 +29,7 @@ import { buildResearchEvidenceContext, buildResearchSourcesAppendix, isResearchT
 import { WorkflowRepository, PostgresWorkflowRepository } from './workflow-repositories.js';
 import { WorkflowEngine } from './workflow-engine.js';
 import { WorkflowCompiler } from './workflow-compiler.js';
+import { ApplicationBuildClient, generateApplicationDraft } from '../../app-builder/src/client.js';
 import { buildDurableHistorySystemMessage } from './memory-policy.js';
 
 export class AgentRuntime extends EventEmitter {
@@ -57,6 +58,15 @@ export class AgentRuntime extends EventEmitter {
   ) {
     super();
     this.toolGateway = toolGateway || new ToolGateway(new PostgresToolCallRepository(), this.approvalKernel, this.workspaceRoot);
+    // Partial and opt-in: wiring exists, but worker health and real model availability
+    // are checked on each run. Never switch this capability to READY from config alone.
+    if (process.env.AIRA_BUILDER_ENABLED === 'true' &&
+        process.env.AIRA_BUILD_WORKER_URL && process.env.AIRA_BUILD_WORKER_TOKEN) {
+      const builder = this.capabilityRegistry.get('cap_application_build');
+      if (builder) this.capabilityRegistry.register({
+        ...builder, availability: 'BETA', status: 'PARTIAL', handler: 'isolated_app_builder'
+      });
+    }
     this.router = router || new ServerIntentRouter(this.capabilityRegistry, this.modelRouter);
     this.workflowRepo = workflowRepo || new PostgresWorkflowRepository();
     this.workflowCompiler = workflowCompiler || new WorkflowCompiler(this.modelRouter);
@@ -326,6 +336,119 @@ export class AgentRuntime extends EventEmitter {
     if (!run) return;
 
     if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)) return;
+
+    // Application builds: explicit user approval, real provider, real isolated worker.
+    // Never classify generated Markdown or self-authored tests as verified gameplay.
+    if (run.intent === 'APPLICATION_BUILD' &&
+        run.routingDecision?.executionTarget === 'APPLICATION_BUILDER') {
+      const reportFailure = async (message: string): Promise<void> => {
+        run.content = message;
+        await this.runRepo.saveRun(run);
+        await this.emitRunEvent(runId, 'content.delta', { delta: message });
+        await this.transitionRunState(runId, 'FAILED', message.slice(0, 240));
+      };
+      if (!run.principalScopes.includes('*') && !run.principalScopes.includes('projects.write')) {
+        await reportFailure('APPLICATION_BUILD_PERMISSION_DENIED: projects.write scope is required.');
+        return;
+      }
+      let buildClient: ApplicationBuildClient;
+      try {
+        buildClient = new ApplicationBuildClient();
+        await buildClient.health();
+        if (this.modelRouter.listProviders().length === 0) {
+          throw new Error('APPLICATION_BUILD_MODEL_NOT_CONFIGURED');
+        }
+      } catch (error: unknown) {
+        await reportFailure('APPLICATION_BUILD_UNAVAILABLE: ' + (error instanceof Error ? error.message : 'worker not reachable'));
+        return;
+      }
+
+      if (run.executionCheckpoint !== 'TOOL_APPROVED') {
+        const call: ToolCall = {
+          id: 'build_approval_' + crypto.randomUUID(),
+          toolId: 'tool_project_build',
+          name: 'project_build',
+          arguments: { objective: run.prompt.slice(0, 256) },
+          timestamp: Date.now()
+        };
+        const alreadyApproved = await this.approvalKernel.isToolCallApproved(runId, 'project_build', 'WRITE', run.principalId);
+        if (!alreadyApproved) {
+          const request = await this.approvalKernel.createRequest(
+            runId, call, 'WRITE', 'Create and execute generated project files inside an isolated build worker.'
+          );
+          run.executionCheckpoint = 'WAITING_FOR_APPROVAL';
+          run.pendingApproval = request;
+          await this.runRepo.saveRun(run);
+          await this.transitionRunState(runId, 'WAITING_FOR_APPROVAL');
+          await this.emitRunEvent(runId, 'approval.required', request);
+          return;
+        }
+      }
+      await this.transitionRunState(runId, 'RUNNING');
+      try {
+        let previousFailure = '';
+        let lastJobId: string | null = null;
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          const requestText = previousFailure
+            ? run.prompt + '\n\nPrevious build failed. Repair the generated project using these actual errors:\n' + previousFailure.slice(-2_500)
+            : run.prompt;
+          const files = await generateApplicationDraft(requestText, this.modelRouter, run.modelPolicy);
+          await this.emitRunEvent(runId, 'tool.started', { name: 'project_build', attempt });
+          const id = await buildClient.create({ ownerId: run.principalId, ...files });
+          lastJobId = id;
+          const result = await buildClient.awaitTerminal(id, run.principalId, 43_000);
+          const call: ToolCall = {
+            id: 'call_build_' + crypto.randomUUID(),
+            toolId: 'tool_project_build', name: 'project_build',
+            arguments: { jobId: id, attempt },
+            timestamp: Date.now()
+          };
+          run.toolCalls.push(call);
+          run.toolsUsed.push('project_build');
+          run.stepCount += 1;
+          run.toolResults.push({
+            toolCallId: call.id,
+            output: { jobId: id, state: result.state, steps: result.steps, manifest: result.manifest, previewUrl: result.previewUrl },
+            isError: result.state !== 'BUILD_PASSED',
+            error: result.error,
+            durationMs: 0, timestamp: Date.now(), artifacts: []
+          });
+          await this.runRepo.saveRun(run);
+          await this.emitRunEvent(runId, 'tool.completed', { name: 'project_build', jobId: id, state: result.state, attempt });
+          if (result.state === 'BUILD_PASSED') {
+            const preview = result.previewUrl || '(preview unavailable)';
+            const description =
+              'AIRA isolated worker executed the generated source and its declared scripts successfully.\n\n' +
+              'Worker job: ' + id + '\n' +
+              'Build preview: ' + preview + '\n' +
+              'Steps: ' + result.steps.map(s => s.name + ' exit=' + s.exitCode).join(', ') + '\n\n' +
+              'Important: passing compiler and model-authored tests does NOT independently verify requested gameplay or all UI requirements. ' +
+              'This build is not production certified.';
+            const artifact: Artifact = {
+              id: 'art_build_' + crypto.randomUUID(), runId,
+              title: 'Build Output (not product certified)',
+              type: 'text/markdown', content: description, version: 1,
+              versions: [{ version: 1, content: description, timestamp: Date.now() }]
+            };
+            run.artifacts.push(artifact);
+            run.content = description;
+            run.executionCheckpoint = 'COMPLETED';
+            await this.runRepo.saveRun(run);
+            await this.emitRunEvent(runId, 'artifact.created', artifact);
+            await this.emitRunEvent(runId, 'content.delta', { delta: description });
+            await this.transitionRunState(runId, 'COMPLETED');
+            return;
+          }
+          previousFailure = (result.error || 'BUILD_FAILED') + '\n' +
+            result.steps.map(s => s.output.slice(-800)).join('\n');
+        }
+        await reportFailure('APPLICATION_BUILD_FAILED: build attempt(s) did not pass. Last job: ' +
+          (lastJobId || 'none') + '. ' + previousFailure.slice(-1000));
+      } catch (error: unknown) {
+        await reportFailure('APPLICATION_BUILD_FAILED: ' + (error instanceof Error ? error.message : 'unknown failure'));
+      }
+      return;
+    }
 
     // Checkpoint 0: Capability readiness gate
     if (run.routingDecision?.executionTarget === 'CAPABILITY_NOT_READY') {
