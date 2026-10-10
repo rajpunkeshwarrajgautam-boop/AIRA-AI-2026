@@ -56,8 +56,12 @@ export function validateOfflineDependencyLock(packageJson: string, lockJson: str
     if (!/^node_modules\/(?:@[a-z0-9._-]+\/)?[a-z0-9._/-]+$/i.test(path) ||
         path.split('/').includes('..') || path.length > 240) throw new Error('UNSAFE_LOCKFILE_PATH');
     if (item.link || item.inBundle || item.hasInstallScript) throw new Error('UNSAFE_DEPENDENCY_PACKAGE');
-    if (typeof item.resolved !== 'string' || !item.resolved.startsWith(registry) ||
-        item.resolved.includes('@') || item.resolved.includes('\\') ||
+    let url: URL;
+    try { url = new URL(item.resolved || 'invalid'); }
+    catch { throw new Error('UNTRUSTED_DEPENDENCY_ARCHIVE'); }
+    if (url.origin !== 'https://registry.npmjs.org' || url.username || url.password ||
+        url.search || url.hash || !item.resolved?.startsWith(registry) ||
+        item.resolved.includes('\\') ||
         typeof item.integrity !== 'string' || !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(item.integrity)) {
       throw new Error('UNTRUSTED_DEPENDENCY_ARCHIVE');
     }
