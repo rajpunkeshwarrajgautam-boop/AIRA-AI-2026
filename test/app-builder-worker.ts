@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { chromium } from 'playwright';
 import { once } from 'node:events';
 import { DockerProjectWorker, validateProjectPath } from '../packages/app-builder/src/worker.js';
 
@@ -51,8 +52,8 @@ try {
   const payload = {
     ownerId: 'alice',
     files: [
-      { path: 'index.html', content: '<!doctype html><title>Calculator</title><button id="calculate">=</button><script src="./calc.js"></script>' },
-      { path: 'calc.js', content: 'export function add(a,b) { return a + b; }\n' },
+      { path: 'index.html', content: '<!doctype html><title>Calculator</title><input id="a"><input id="b"><button id="calculate">=</button><output id="result"></output><script type="module" src="./calc.js"></script>' },
+      { path: 'calc.js', content: "export function add(a,b) { return a + b; }\nif (typeof document !== 'undefined') { document.querySelector('#calculate').addEventListener('click', () => {document.querySelector('#result').textContent = String(add(Number(document.querySelector('#a').value), Number(document.querySelector('#b').value)));}); }\n" },
       { path: 'test.js', content: "import assert from 'node:assert'; import { add } from './calc.js'; assert.equal(add(2,3),5); console.log('CALCULATION_OK');\n" },
       { path: 'package.json', content: JSON.stringify({ name: 'aira-test-calc', version: '1.0.0', type: 'module', scripts: {
         build: 'node --check calc.js', test: 'node test.js'
@@ -89,6 +90,29 @@ try {
   const visible = await fetch(success.previewUrl);
   assert.equal(visible.status, 200);
   assert.match(await visible.text(), /Calculator/);
+  // This is a real browser interaction against the isolated static preview.
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    const browserErrors: string[] = [];
+    page.on('pageerror', err => browserErrors.push(err.message));
+    await page.goto(success.previewUrl!);
+    await page.locator('#a').fill('2');
+    await page.locator('#b').fill('3');
+    await page.locator('#calculate').click();
+    assert.equal(await page.locator('#result').textContent(), '5');
+    assert.deepEqual(browserErrors, []);
+  } finally {
+    await browser.close();
+  }
+  const archive = await fetch('http://127.0.0.1:4101/v1/jobs/' + jobId + '/source', { headers: auth });
+  assert.equal(archive.status, 200);
+  assert.equal(archive.headers.get('content-type'), 'application/gzip');
+  assert.ok((await archive.arrayBuffer()).byteLength > 500);
+  const crossOwnerExport = await fetch('http://127.0.0.1:4101/v1/jobs/' + jobId + '/source',
+    { headers: { ...auth, 'x-aira-owner': 'bob' } });
+  assert.equal(crossOwnerExport.status, 404);
+
   const forbidden = await fetch('http://127.0.0.1:4102/p/' + success.previewTicket + '/job-state.json');
   assert.equal(forbidden.status, 404);
 
