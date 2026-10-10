@@ -261,12 +261,15 @@ export class AgentRuntime extends EventEmitter {
     return true;
   }
 
-  public async submitApproval(requestId: string, decision: ApprovalDecision): Promise<boolean> {
-    const { approved, request } = await this.approvalKernel.decide(requestId, decision);
-    const run = await this.runRepo.getRun(request.runId);
-    if (!run) {
-      return false;
-    }
+  public async submitApproval(requestId: string, decision: ApprovalDecision, principalId?: string): Promise<boolean> {
+    const pending = await this.approvalKernel.getPendingRequest(requestId);
+    if (!pending) return false;
+    const run = await this.runRepo.getRun(pending.runId);
+    if (!run) return false;
+    if (principalId && run.principalId !== principalId) throw new Error('APPROVAL_OWNER_MISMATCH');
+    const { approved, request } = await this.approvalKernel.decide(
+      requestId, decision, principalId || run.principalId
+    );
     run.pendingApproval = request;
     
     // Check if this approval was for a workflow step
