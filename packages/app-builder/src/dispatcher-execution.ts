@@ -46,6 +46,7 @@ export async function executeQueuedBuild(job: QueuedBuild, signal: AbortSignal):
     const files = await generateApplicationDraft(objective, modelRouter, run.modelPolicy, approvedPackages);
     if (signal.aborted) throw new Error('BUILD_CANCELLED');
     const workerJobId = await client.create({ ownerId: run.principalId, ...files });
+    let remoteTerminal = false;
     const cancelRemote = () => { void client.cancel(workerJobId, run.principalId).catch(() => {}); };
     signal.addEventListener('abort', cancelRemote, { once: true });
     try {
@@ -55,6 +56,7 @@ export async function executeQueuedBuild(job: QueuedBuild, signal: AbortSignal):
         if (signal.aborted) throw new Error('BUILD_CANCELLED');
         const result = await client.inspect(workerJobId, run.principalId);
         if (result.state === 'BUILD_PASSED') {
+          remoteTerminal = true;
           const outcome: DispatchOutcome = {
             state: 'COMPLETED',
             result: {
@@ -71,6 +73,7 @@ export async function executeQueuedBuild(job: QueuedBuild, signal: AbortSignal):
           return outcome;
         }
         if (['FAILED', 'BLOCKED', 'CANCELLED'].includes(result.state)) {
+          remoteTerminal = true;
           previousFailure = String(result.error || result.state) + '\n' +
             result.steps.map(s => s.output.slice(-700)).join('\n');
           await event(run.id, 'tool.completed', {
@@ -87,6 +90,9 @@ export async function executeQueuedBuild(job: QueuedBuild, signal: AbortSignal):
       }
     } finally {
       signal.removeEventListener('abort', cancelRemote);
+      // Never silently abandon an in-flight remote build when polling fails,
+      // the dispatcher is stopping, or execution exceeds the deadline.
+      if (!remoteTerminal) await client.cancel(workerJobId, run.principalId).catch(() => {});
     }
   }
   return { state: 'FAILED', result: { error: 'APPLICATION_BUILD_FAILED', detail: previousFailure.slice(-1600) } };
