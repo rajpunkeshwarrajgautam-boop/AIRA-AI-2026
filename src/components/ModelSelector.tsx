@@ -120,7 +120,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                     onMouseEnter={() => setActiveRow(model.id)}
                     onFocus={() => setActiveRow(model.id)}
                     onClick={() => selectModel(model)}
-                    className="relative isolate flex w-full items-start gap-3 rounded-[13px] px-3 py-2.5 text-left outline-none"
+                    className="relative isolate flex w-full items-start gap-3 rounded-[13px] px-3 py-2.5 text-left outline-hidden"
                   >
                     {(focused || selected) && (
                       <motion.span
@@ -185,7 +185,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                   extendedThinking && activeModelInfo.supportsThinking ? 'bg-claude-terracotta' : 'bg-claude-border-light dark:bg-[#47443f]'
                 }`}>
                   <motion.span
-                    className="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm"
+                    className="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-xs"
                     animate={{ x: extendedThinking && activeModelInfo.supportsThinking ? 16 : 0 }}
                     transition={reducedMotion ? { duration: 0 } : { type: 'spring', stiffness: 500, damping: 30 }}
                   />

@@ -162,7 +162,7 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
           {/* Header */}
           <div className="p-5 border-b border-claude-border-light dark:border-claude-border-dark flex items-center justify-between bg-claude-surface2-light/60 dark:bg-black/20">
             <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 rounded-xl bg-claude-terracotta/10 border border-claude-terracotta/30 flex items-center justify-center text-claude-terracotta shadow-sm">
+              <div className="w-10 h-10 rounded-xl bg-claude-terracotta/10 border border-claude-terracotta/30 flex items-center justify-center text-claude-terracotta shadow-xs">
                 <Brain className="w-5 h-5" />
               </div>
               <div>
@@ -183,7 +183,7 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
             <div className="flex items-center space-x-2">
               <button
                 onClick={() => setIsAdding(!isAdding)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-medium flex items-center space-x-1.5 transition-all shadow-sm ${
+                className={`px-3 py-1.5 rounded-xl text-xs font-medium flex items-center space-x-1.5 transition-all shadow-xs ${
                   isAdding
                     ? 'bg-claude-surface2-light dark:bg-stone-800 text-claude-text-light dark:text-white'
                     : 'bg-claude-terracotta text-white hover:bg-claude-terracotta-hover active:scale-95'
@@ -274,7 +274,7 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
                     <select
                       value={newTier}
                       onChange={e => setNewTier(e.target.value as MemoryTier)}
-                      className="w-full text-xs p-2 rounded-xl bg-claude-surface-light dark:bg-stone-900 border border-claude-border-light dark:border-stone-800 text-claude-text-light dark:text-white focus:outline-none focus:border-claude-terracotta"
+                      className="w-full text-xs p-2 rounded-xl bg-claude-surface-light dark:bg-stone-900 border border-claude-border-light dark:border-stone-800 text-claude-text-light dark:text-white focus:outline-hidden focus:border-claude-terracotta"
                     >
                       <option value="semantic">Semantic (Knowledge & Decisions)</option>
                       <option value="procedural">Procedural (Workflows & Commands)</option>
@@ -290,7 +290,7 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
                     <select
                       value={newCategory}
                       onChange={e => setNewCategory(e.target.value as MemoryItem['category'])}
-                      className="w-full text-xs p-2 rounded-xl bg-claude-surface-light dark:bg-stone-900 border border-claude-border-light dark:border-stone-800 text-claude-text-light dark:text-white focus:outline-none focus:border-claude-terracotta"
+                      className="w-full text-xs p-2 rounded-xl bg-claude-surface-light dark:bg-stone-900 border border-claude-border-light dark:border-stone-800 text-claude-text-light dark:text-white focus:outline-hidden focus:border-claude-terracotta"
                     >
                       <option value="preference">User Preference</option>
                       <option value="architecture">Architecture Rule</option>
@@ -310,7 +310,7 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
                       placeholder="e.g. react, api, lint"
                       value={newTags}
                       onChange={e => setNewTags(e.target.value)}
-                      className="w-full text-xs p-2 rounded-xl bg-claude-surface-light dark:bg-stone-900 border border-claude-border-light dark:border-stone-800 text-claude-text-light dark:text-white focus:outline-none focus:border-claude-terracotta"
+                      className="w-full text-xs p-2 rounded-xl bg-claude-surface-light dark:bg-stone-900 border border-claude-border-light dark:border-stone-800 text-claude-text-light dark:text-white focus:outline-hidden focus:border-claude-terracotta"
                     />
                   </div>
                 </div>
@@ -321,7 +321,7 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
                     placeholder="Memory title (e.g. API Schema Strict Typing Convention)"
                     value={newTitle}
                     onChange={e => setNewTitle(e.target.value)}
-                    className="w-full text-xs p-2.5 rounded-xl bg-claude-surface-light dark:bg-stone-900 border border-claude-border-light dark:border-stone-800 text-claude-text-light dark:text-white focus:outline-none focus:border-claude-terracotta mb-2"
+                    className="w-full text-xs p-2.5 rounded-xl bg-claude-surface-light dark:bg-stone-900 border border-claude-border-light dark:border-stone-800 text-claude-text-light dark:text-white focus:outline-hidden focus:border-claude-terracotta mb-2"
                   />
                   <textarea
                     rows={3}
@@ -329,7 +329,7 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
                     value={newContent}
                     onChange={e => setNewContent(e.target.value)}
                     required
-                    className="w-full text-xs p-2.5 rounded-xl bg-claude-surface-light dark:bg-stone-900 border border-claude-border-light dark:border-stone-800 text-claude-text-light dark:text-white focus:outline-none focus:border-claude-terracotta resize-none"
+                    className="w-full text-xs p-2.5 rounded-xl bg-claude-surface-light dark:bg-stone-900 border border-claude-border-light dark:border-stone-800 text-claude-text-light dark:text-white focus:outline-hidden focus:border-claude-terracotta resize-none"
                   />
                 </div>
 
@@ -354,7 +354,7 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
                     </button>
                     <button
                       type="submit"
-                      className="px-4 py-1.5 rounded-xl text-xs font-medium bg-claude-terracotta text-white hover:bg-claude-terracotta-hover shadow-sm"
+                      className="px-4 py-1.5 rounded-xl text-xs font-medium bg-claude-terracotta text-white hover:bg-claude-terracotta-hover shadow-xs"
                     >
                       Commit Memory
                     </button>
@@ -374,7 +374,7 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
                 placeholder="Hybrid search memory (BM25 + semantic similarity)..."
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 text-xs rounded-xl bg-claude-surface2-light dark:bg-stone-900 border border-claude-border-light dark:border-stone-800 placeholder-claude-muted-light dark:placeholder-stone-500 text-claude-text-light dark:text-white focus:outline-none focus:border-claude-terracotta"
+                className="w-full pl-10 pr-4 py-2 text-xs rounded-xl bg-claude-surface2-light dark:bg-stone-900 border border-claude-border-light dark:border-stone-800 placeholder-claude-muted-light dark:placeholder-stone-500 text-claude-text-light dark:text-white focus:outline-hidden focus:border-claude-terracotta"
               />
             </div>
 
@@ -386,7 +386,7 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
                   onClick={() => setActiveTier(tier)}
                   className={`px-3 py-1 rounded-lg capitalize whitespace-nowrap transition-all ${
                     activeTier === tier
-                      ? 'bg-claude-surface-light dark:bg-stone-800 text-claude-text-light dark:text-white font-semibold shadow-sm'
+                      ? 'bg-claude-surface-light dark:bg-stone-800 text-claude-text-light dark:text-white font-semibold shadow-xs'
                       : 'text-claude-muted-light dark:text-stone-400 hover:text-claude-text-light dark:hover:text-white'
                   }`}
                 >
@@ -427,7 +427,7 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
                     animate={{ opacity: 1, y: 0 }}
                     className={`group p-4 rounded-xl border transition-all ${
                       mem.isPinned
-                        ? 'bg-claude-surface-light dark:bg-[#201F1D] border-claude-terracotta/30 shadow-sm'
+                        ? 'bg-claude-surface-light dark:bg-[#201F1D] border-claude-terracotta/30 shadow-xs'
                         : 'bg-claude-surface-light dark:bg-[#1A1918] border-claude-border-light dark:border-stone-800 hover:border-claude-terracotta/20'
                     }`}
                   >
@@ -479,7 +479,7 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
                       </div>
 
                       {/* Card Actions */}
-                      <div className="flex items-center space-x-1 opacity-70 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                      <div className="flex items-center space-x-1 opacity-70 group-hover:opacity-100 transition-opacity shrink-0">
                         <button
                           onClick={e => handleTogglePin(mem.id, !!mem.isPinned, e)}
                           className={`p-1.5 rounded-lg border transition-colors ${

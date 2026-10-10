@@ -221,7 +221,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           rows={1}
-          className="max-h-[38vh] w-full resize-none bg-transparent px-4 pb-2 pt-3.5 text-base leading-relaxed text-claude-text-light outline-none selection:bg-claude-terracotta/20 placeholder:text-claude-muted-light/55 dark:text-claude-text-dark dark:placeholder:text-claude-muted-dark/55"
+          className="max-h-[38vh] w-full resize-none bg-transparent px-4 pb-2 pt-3.5 text-base leading-relaxed text-claude-text-light outline-hidden selection:bg-claude-terracotta/20 placeholder:text-claude-muted-light/55 dark:text-claude-text-dark dark:placeholder:text-claude-muted-dark/55"
         />
 
         <div className="flex items-center justify-between gap-2 px-3 pb-3 pt-1">
@@ -275,7 +275,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                             onWorkspaceModeChange(mode.id);
                             setShowModeMenu(false);
                           }}
-                          className="relative isolate flex w-full items-center gap-2.5 rounded-[11px] px-2.5 py-2 text-left outline-none"
+                          className="relative isolate flex w-full items-center gap-2.5 rounded-[11px] px-2.5 py-2 text-left outline-hidden"
                         >
                           {selected && (
                             <motion.span
@@ -358,7 +358,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             title={isLoading ? 'Aira is responding' : 'Send message (Enter)'}
             className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors ${
               canSubmit
-                ? 'gradient-terracotta-btn text-white shadow-sm'
+                ? 'gradient-terracotta-btn text-white shadow-xs'
                 : 'bg-claude-surface2-light text-claude-muted-light/40 dark:bg-claude-surface2-dark dark:text-claude-muted-dark/40'
             }`}
           >

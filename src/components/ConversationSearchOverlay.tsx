@@ -243,7 +243,7 @@ export const ConversationSearchOverlay: React.FC<ConversationSearchOverlayProps>
                   }
                 }}
                 placeholder="Search titles and everything inside your chats..."
-                className="h-16 min-w-0 flex-1 bg-transparent text-[15px] text-claude-text-light outline-none placeholder:text-claude-muted-light/60 dark:text-white dark:placeholder:text-claude-muted-dark/60"
+                className="h-16 min-w-0 flex-1 bg-transparent text-[15px] text-claude-text-light outline-hidden placeholder:text-claude-muted-light/60 dark:text-white dark:placeholder:text-claude-muted-dark/60"
               />
               {isSearching && (
                 <span className="text-[10px] font-medium text-claude-muted-light dark:text-claude-muted-dark">
@@ -286,7 +286,7 @@ export const ConversationSearchOverlay: React.FC<ConversationSearchOverlayProps>
                         type="button"
                         onMouseEnter={() => setActiveIndex(index)}
                         onClick={() => choose(result)}
-                        className="relative flex w-full gap-3 rounded-[14px] px-3 py-3 text-left outline-none"
+                        className="relative flex w-full gap-3 rounded-[14px] px-3 py-3 text-left outline-hidden"
                       >
                         {activeIndex === index && (
                           <motion.span

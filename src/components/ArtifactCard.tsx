@@ -20,7 +20,7 @@ export const ArtifactCard: React.FC<ArtifactCardProps> = ({ artifact, onOpen }) 
       className="my-3 p-3.5 sm:p-4 rounded-xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-[0_1px_3px_rgba(45,40,30,0.04)] hover:border-claude-terracotta/40 cursor-pointer transition-all duration-200 group flex items-center justify-between"
     >
       <div className="flex items-center space-x-3.5 min-w-0">
-        <div className="w-10 h-10 rounded-lg bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-terracotta flex items-center justify-center flex-shrink-0 group-hover:bg-claude-terracotta/10 transition-colors">
+        <div className="w-10 h-10 rounded-lg bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-terracotta flex items-center justify-center shrink-0 group-hover:bg-claude-terracotta/10 transition-colors">
           <Layers className="w-5 h-5" strokeWidth={1.5} />
         </div>
         <div className="min-w-0">
@@ -42,7 +42,7 @@ export const ArtifactCard: React.FC<ArtifactCardProps> = ({ artifact, onOpen }) 
         </div>
       </div>
 
-      <div className="flex items-center space-x-2 flex-shrink-0 ml-3">
+      <div className="flex items-center space-x-2 shrink-0 ml-3">
         <div className="flex items-center space-x-1 text-xs text-claude-muted-light dark:text-claude-muted-dark group-hover:text-claude-terracotta transition-colors">
           <span className="hidden sm:inline">View</span>
           <ArrowRight className="w-3.5 h-3.5" />

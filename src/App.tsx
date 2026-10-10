@@ -570,7 +570,7 @@ function App() {
           <div className="shrink-0 relative z-10 pt-4 gradient-mask-bottom">
             {executionStatus && (
               <div className="max-w-2xl mx-auto px-4 mb-2">
-                <div className="flex items-center gap-2 text-xs text-orange-600 dark:text-orange-400 bg-orange-50/90 dark:bg-orange-950/40 border border-orange-200/60 dark:border-orange-800/50 rounded-lg px-3 py-1.5 shadow-sm backdrop-blur">
+                <div className="flex items-center gap-2 text-xs text-orange-600 dark:text-orange-400 bg-orange-50/90 dark:bg-orange-950/40 border border-orange-200/60 dark:border-orange-800/50 rounded-lg px-3 py-1.5 shadow-xs backdrop-blur">
                   <div className="w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
                   <span className="font-medium">{executionStatus}</span>
                 </div>
@@ -596,7 +596,7 @@ function App() {
                     <button
                       onClick={() => handleApprovalDecision('APPROVE')}
                       disabled={isSubmittingApproval}
-                      className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs shadow-sm transition disabled:opacity-50"
+                      className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs shadow-xs transition disabled:opacity-50"
                     >
                       {isSubmittingApproval ? 'Submitting...' : 'Approve Execution'}
                     </button>

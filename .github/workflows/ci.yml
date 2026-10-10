@@ -132,6 +132,38 @@ jobs:
         run: npm run test:reality
 
 
+  tailwind-visual:
+    name: Tailwind Visual Regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Checkout verified pre-migration source
+        uses: actions/checkout@v4
+        with:
+          ref: f2e9e36b2fac6ab0e524b606ed9253b89176ffe0
+          path: .visual-baseline
+      - name: Build baseline without migrations or deployment
+        working-directory: .visual-baseline
+        run: npm ci --ignore-scripts && npm run build
+      - name: Install real browser
+        run: npx playwright install --with-deps chromium
+      - name: Compare desktop/mobile and light/dark UI
+        run: npm run test:tailwind:visual
+      - name: Upload screenshots and metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tailwind-visual-evidence
+          path: test-results/tailwind-visual
+          if-no-files-found: warn
+
   dependency-security:
     name: Dependency Security
     runs-on: ubuntu-latest
@@ -287,7 +319,7 @@ jobs:
     name: Deployed staging acceptance
     # Fail-closed staging-only gate. NEVER runs for main/production.
     if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
-    needs: [fast, semantic-search, certify, dependency-security]
+    needs: [fast, semantic-search, certify, dependency-security, tailwind-visual]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
