@@ -5,7 +5,7 @@ import {
   KnowledgeEntity, 
   KnowledgeEdge, 
   MemoryRecord 
-} from './index.js';
+} from '../../contracts/src/index.js';
 
 export interface KnowledgeRepository {
   upsertSource(source: KnowledgeSource): Promise<void>;
@@ -215,3 +215,4 @@ export class PostgresKnowledgeRepository implements KnowledgeRepository {
     };
   }
 }
+

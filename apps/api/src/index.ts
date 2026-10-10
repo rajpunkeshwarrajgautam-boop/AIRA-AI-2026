@@ -409,7 +409,7 @@ app.post('/api/runs/:id/approve', async (req: Request, res: Response) => {
 
     const parsedDecision = ApprovalDecisionSchema.parse(decision);
     // Submit approval with current user's identity
-    const success = await agentRuntime.submitApproval(requestId, parsedDecision);
+    const success = await agentRuntime.submitApproval(requestId, parsedDecision, req.principal!.userId);
     if (!success) {
       return res.status(400).json({ error: 'Could not apply approval decision.' });
     }

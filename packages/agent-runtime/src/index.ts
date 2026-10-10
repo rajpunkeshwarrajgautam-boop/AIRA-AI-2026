@@ -244,7 +244,7 @@ export class AgentRuntime extends EventEmitter {
       const principal: ExecutionPrincipal = {
         userId: run.principalId,
         sessionId: run.sessionId,
-        role: 'user'
+        roles: ['user']
       };
       await this.workflowEngine.cancelWorkflow(wfRun.id, principal);
     }
@@ -252,12 +252,14 @@ export class AgentRuntime extends EventEmitter {
     return true;
   }
 
-  public async submitApproval(requestId: string, decision: ApprovalDecision): Promise<boolean> {
-    const { approved, request } = await this.approvalKernel.decide(requestId, decision);
-    const run = await this.runRepo.getRun(request.runId);
-    if (!run) {
+  public async submitApproval(requestId: string, decision: ApprovalDecision, resolvedBy: string): Promise<boolean> {
+    const pending = await this.approvalKernel.getPendingRequest(requestId);
+    if (!pending) return false;
+    const run = await this.runRepo.getRun(pending.runId);
+    if (!run || run.principalId !== resolvedBy) {
       return false;
     }
+    const { approved, request } = await this.approvalKernel.decide(requestId, decision, resolvedBy);
     run.pendingApproval = request;
     
     // Check if this approval was for a workflow step
@@ -267,12 +269,12 @@ export class AgentRuntime extends EventEmitter {
         const principal: ExecutionPrincipal = {
           userId: run.principalId,
           sessionId: run.sessionId,
-          role: 'user'
+          roles: ['user']
         };
         await this.workflowEngine.resolveStepApproval(
           wfRun.id,
           wfRun.pendingApprovalStepId,
-          decision === 'APPROVE' ? 'APPROVED' : 'REJECTED',
+          approved ? 'APPROVED' : 'REJECTED',
           principal
         );
         return true;
@@ -419,7 +421,7 @@ export class AgentRuntime extends EventEmitter {
         const principal: ExecutionPrincipal = {
           userId: run.principalId,
           sessionId: run.sessionId || `sess_${run.principalId}`,
-          role: 'user',
+          roles: ['user'],
           workspaceId: run.workspaceId || undefined
         };
         const wfDef = await this.workflowCompiler.compile(run.prompt, principal);
@@ -789,12 +791,12 @@ Provider Capabilities:
       if (run.context?.attachments && Array.isArray(run.context.attachments) && run.context.attachments.length > 0) {
         const attDocs = run.context.attachments.map((a: any) => `[Uploaded Attachment: ${a.name} (${a.type || 'text'}, ${a.size || 0} bytes)]:\n${a.content || '(binary or external file content)'}`).join('\n\n');
         messages.push({
-          role: 'user',
+          roles: ['user'],
           content: `User uploaded attachments:\n${attDocs}`
         });
       }
       
-      messages.push({ role: 'user', content: run.prompt });
+      messages.push({ roles: ['user'], content: run.prompt });
 
       if (run.toolCalls.length > 0 && run.toolResults.length > 0) {
         const toolSummaries = run.toolCalls.map((call, idx) => {
@@ -802,7 +804,7 @@ Provider Capabilities:
           return `[Tool Call ${idx + 1}: ${call.name}]:\nArgs: ${JSON.stringify(call.arguments)}\nOutput: ${JSON.stringify(res ? (res.output || res.error) : 'Pending')}`;
         }).join('\n\n');
         messages.push({
-          role: 'user',
+          roles: ['user'],
           content: `[System Tool Execution Findings]:\n${toolSummaries}\n\nPlease synthesize your execution findings and provide the final response.`
         });
       }

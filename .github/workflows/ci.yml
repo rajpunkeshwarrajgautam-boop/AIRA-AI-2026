@@ -66,6 +66,9 @@ jobs:
       - name: Run execution lifecycle regression
         run: npm run test:run-lifetime
 
+      - name: Approval actor and workflow decision regression
+        run: npm run test:approval:actor
+
       - name: Lint
         run: npm run lint
 
