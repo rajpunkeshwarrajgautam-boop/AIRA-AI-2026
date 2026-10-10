@@ -323,6 +323,7 @@ export class ModelRouter {
       switch (intent) {
         case 'RESEARCH':
         case 'AGENT_MISSION':
+        case 'APPLICATION_BUILD':
           resolvedModel = 'aira-deep';
           break;
         case 'TOOL_ACTION':
