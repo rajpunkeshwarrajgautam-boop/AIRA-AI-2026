@@ -3,15 +3,22 @@ import { randomUUID } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { db } from '../packages/db/src/index.js';
 import { PostgresBuildArchiveStore } from '../packages/app-builder/src/artifact-store.js';
+import { PostgresApplicationBuildQueue } from '../packages/app-builder/src/queue.js';
 
 const store = new PostgresBuildArchiveStore();
 const ownerId = 'archive_' + randomUUID().replaceAll('-', '');
-const queueJobId = randomUUID();
+let queueJobId = '';
 const workerJobId = randomUUID();
 const runId = 'run_' + randomUUID().replaceAll('-', '').slice(0, 12);
 const archive = gzipSync(Buffer.from('fake tar bytes for storage integrity test', 'utf8'));
 try {
+  const queued = await new PostgresApplicationBuildQueue().enqueue(
+    ownerId, 'Build immutable archived project', 'archive-test-' + randomUUID(), runId
+  );
+  queueJobId = queued.id;
   const data = { ownerId, queueJobId, workerJobId, runId, archive };
+  await assert.rejects(store.save({ ...data, ownerId: 'different_owner' }),
+    /BUILD_ARCHIVE_QUEUE_OWNER_MISMATCH/);
   const first = await store.save(data);
   assert.equal(first.sha256.length, 64);
   const duplicate = await store.save(data);
@@ -35,6 +42,9 @@ try {
 
   console.log('PASS: immutable PostgreSQL source archives, owner isolation, key conflict, size bound and checksum tampering denial.');
 } finally {
-  await db('aira_app_build_archives').where({ queue_job_id: queueJobId }).delete();
+  if (queueJobId) {
+    await db('aira_app_build_archives').where({ queue_job_id: queueJobId }).delete();
+    await db('aira_app_build_jobs').where({ id: queueJobId }).delete();
+  }
   await db.destroy();
 }
