@@ -56,7 +56,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
   const projectInfo = (() => {
     if (artifact.type !== 'application/vnd.ant.project') return null;
     try {
-      const value = JSON.parse(currentContent) as { previewUrl?: string; jobId?: string; status?: string };
+      const value = JSON.parse(currentContent) as { previewUrl?: string; jobId?: string; queueJobId?: string; archiveSha256?: string; status?: string };
       if (!value.jobId || !/^[a-f0-9-]{36}$/.test(value.jobId) || value.status !== 'BUILD_PASSED') return null;
       return value;
     } catch { return null; }
@@ -87,11 +87,21 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
     if (artifact.type === 'application/vnd.ant.project') {
       if (!projectInfo?.jobId) return;
       try {
-        const response = await fetch('/api/app-builder/jobs/' + encodeURIComponent(projectInfo.jobId) + '/source', {
-          credentials: 'same-origin'
-        });
+        // Prefer the owner-scoped durable archive for queued builds. Legacy
+        // worker-only artifacts retain their existing download behavior.
+        const endpoint = projectInfo.queueJobId && /^[a-f0-9-]{36}$/.test(projectInfo.queueJobId)
+          ? '/api/app-builder/queue/' + encodeURIComponent(projectInfo.queueJobId) + '/source'
+          : '/api/app-builder/jobs/' + encodeURIComponent(projectInfo.jobId) + '/source';
+        const response = await fetch(endpoint, { credentials: 'same-origin' });
         if (!response.ok) throw new Error('Source archive unavailable');
-        const url = URL.createObjectURL(await response.blob());
+        const bytes = await response.arrayBuffer();
+        if (projectInfo.archiveSha256) {
+          if (!/^[a-f0-9]{64}$/.test(projectInfo.archiveSha256)) throw new Error('Invalid archive digest');
+          const hash = await crypto.subtle.digest('SHA-256', bytes);
+          const actual = Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, '0')).join('');
+          if (actual !== projectInfo.archiveSha256) throw new Error('Archive integrity mismatch');
+        }
+        const url = URL.createObjectURL(new Blob([bytes], { type: 'application/gzip' }));
         const link = document.createElement('a');
         link.href = url;
         link.download = 'aira-project-source.tar.gz';
