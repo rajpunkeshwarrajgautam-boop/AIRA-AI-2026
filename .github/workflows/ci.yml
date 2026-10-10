@@ -315,6 +315,7 @@ jobs:
     needs: [fast, semantic-search, certify, staging-db-readiness]
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    environment: staging
     steps:
       - name: Checkout staging SHA
         uses: actions/checkout@v4
