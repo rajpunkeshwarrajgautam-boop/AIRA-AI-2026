@@ -26,6 +26,10 @@ export class PostgresBuildArchiveStore {
         input.archive.byteLength > MAX_ARCHIVE) throw new Error('INVALID_BUILD_ARCHIVE_INPUT');
     const sha256 = digest(input.archive);
     return db.transaction(async trx => {
+      const queue = await trx('aira_app_build_jobs').where({
+        id: input.queueJobId, owner_id: input.ownerId, project_id: input.runId
+      }).first();
+      if (!queue) throw new Error('BUILD_ARCHIVE_QUEUE_OWNER_MISMATCH');
       await trx(table).insert({
         queue_job_id: input.queueJobId, owner_id: input.ownerId,
         run_id: input.runId, worker_job_id: input.workerJobId,
