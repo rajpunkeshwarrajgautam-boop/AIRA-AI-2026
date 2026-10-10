@@ -1,5 +1,5 @@
-import { ToolRegistry, ToolCall, ToolResult } from '../../tool-runtime/src/index.js';
-import { Citation } from '../../contracts/src/index.js';
+import { ToolRegistry } from '../../tool-runtime/src/index.js';
+import { Citation, ToolCall, ToolResult } from '../../contracts/src/index.js';
 import { BrainV2KnowledgeEngine } from '../../knowledge/src/index.js';
 import { configuredSearchProviders } from '../../tool-runtime/src/search-providers.js';
 
@@ -47,7 +47,6 @@ export class ResearchService {
 
     // Every configured Research run attempts live evidence, not only temporal prompts.
     if (providerReady) {
-      {
         // Execute real live web search tool
         const toolDef = this.toolRegistry.get('web_search')?.definition;
         const toolCall: ToolCall = {
@@ -94,7 +93,6 @@ export class ResearchService {
           // Fail closed on network/provider errors. Do not invent research evidence.
           providerReady = false;
         }
-      }
     }
     // Only use internal evidence for non-freshness queries when live search
     // is unconfigured or unavailable. Never invent live sources.

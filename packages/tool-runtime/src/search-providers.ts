@@ -66,7 +66,7 @@ function normalizeHits(raw: unknown): SearchHit[] {
       typeof candidate.snippet === 'string' ? candidate.snippet :
       typeof candidate.description === 'string' ? candidate.description : '';
     const rawDate = candidate.publishedDate ?? candidate.published_date ?? candidate.published_at;
-    const publishedDate = typeof rawDate === 'string' && /^\\d{4}-\\d{2}-\\d{2}/.test(rawDate)
+    const publishedDate = typeof rawDate === 'string' && /^\d{4}-\d{2}-\d{2}/.test(rawDate)
       ? rawDate.slice(0, 10) : undefined;
     hits.push({
       title: (typeof candidate.title === 'string' ? candidate.title : url.hostname).slice(0, 250),
