@@ -10,7 +10,7 @@ const connection = process.env.DATABASE_URL;
 if (env !== 'preview') {
   throw new Error('STAGING_DB_GUARD: Vercel environment must be Preview');
 }
-if (branch && branch !== 'staging') {
+if (branch !== 'staging') {
   throw new Error('STAGING_DB_GUARD: branch must be staging');
 }
 if (!connection) {
