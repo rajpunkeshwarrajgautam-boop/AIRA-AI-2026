@@ -77,6 +77,37 @@ try {
   assert.equal(await q.start(stale.id, 'dispatch_recovered', 2), true);
   assert.equal(await q.finish(stale.id, 'dispatch_recovered', 2, 'COMPLETED', { certified: false }), true);
 
+  const exhausted = await q.enqueue(owner, 'Never retry infinitely', 'retry-limit');
+  const expiring = await q.claim('dispatch_exhausted', 5000);
+  assert.equal(expiring?.id, exhausted.id);
+  await db('aira_app_build_jobs').where({ id: exhausted.id }).update({
+    attempts: 3,
+    lease_expires_at: db.raw("NOW() - INTERVAL '2 seconds'")
+  });
+  assert.equal(await q.recoverExpired(), 1);
+  const bounded = await q.get(exhausted.id, owner);
+  assert.equal(bounded?.state, 'FAILED');
+  assert.equal(bounded?.result?.error, 'BUILD_LEASE_RETRY_LIMIT_EXCEEDED');
+
+  const stopJob = await q.enqueue(owner, 'Abort on dispatcher shutdown', 'stopping');
+  let stopStarted = false;
+  const stopping = new ApplicationBuildDispatcher(q, async (_item, signal) => {
+    stopStarted = true;
+    await new Promise<void>(resolve => {
+      if (signal.aborted) return resolve();
+      signal.addEventListener('abort', () => resolve(), { once: true });
+    });
+    return { state: 'COMPLETED', result: { shouldNotCommit: true } };
+  }, undefined, undefined,
+  { heartbeatMs: 130, leaseMs: 5_000, pollMs: 75, workerId: 'dispatch_stopping' });
+  const shutdownTask = stopping.runOnce();
+  for (let i = 0; !stopStarted && i < 80; i++) await sleep(15);
+  assert.ok(stopStarted);
+  stopping.stop();
+  await shutdownTask;
+  assert.notEqual((await q.get(stopJob.id, owner))?.state, 'COMPLETED',
+    'Shutdown must not commit a late result');
+
   assert.deepEqual(errors, []);
   console.log('PASS: dispatched real PostgreSQL jobs with competing workers, fenced terminal result, cancellation, abort and lost-lease recovery');
 } finally {
