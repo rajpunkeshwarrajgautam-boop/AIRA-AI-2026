@@ -6,19 +6,11 @@ import '../src/utils/markdown.js';
 const display = String.raw`\[n_s = \frac{120f}{P}\]`;
 assert.match(String(marked.parse(display)), /katex-display/);
 assert.match(String(marked.parse(display)), /class="katex"/);
-const embedded = String(marked.parse(String.raw`Display \\[n_s = \\frac{120f}{P}\\] and inline $s=\\frac{n_s-n_r}{n_s}import assert from 'node:assert/strict';
-import { marked } from 'marked';
-import '../src/utils/markdown.js';
-
-// Math expressions render, while code and prose remain unchanged.
-const display = String.raw`\[n_s = \frac{120f}{P}\]`;
-assert.match(String(marked.parse(display)), /katex-display/);
-));
+const embedded = String(marked.parse(String.raw`Display \[n_s = \frac{120f}{P}\] and inline $s=\frac{n_s-n_r}{n_s}$`));
 assert.match(embedded, /aira-math-embedded/);
 assert.match(embedded, /katex-display/);
 assert.match(embedded, /class="katex"/);
-assert.doesNotMatch(embedded, /\\\\frac/);
-
+assert.doesNotMatch(embedded, /\\frac/);
 assert.match(String(marked.parse('$$\nE=mc^2\n$$')), /katex-display/);
 assert.match(String(marked.parse('$s = (n_s-n_r)/n_s$')), /class="katex"/);
 assert.match(String(marked.parse(String.raw`\(J\frac{d\omega_r}{dt}\)`)), /class="katex"/);
