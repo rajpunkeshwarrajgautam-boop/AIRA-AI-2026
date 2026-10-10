@@ -170,7 +170,6 @@ jobs:
 
   application-worker:
     name: Isolated Application Worker
-    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
