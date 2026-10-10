@@ -1,4 +1,22 @@
-# API typecheck diagnostic evidence
+# API typecheck evidence — current strict check passes
+
+**Historical 82-diagnostic finding resolved in source.** Commit `b838bb802e46230835e0db0920f6684a7e72132d` introduced `tsconfig.api.json` and repaired the contracts/runtime. Strict API/runtime compilation initially exposed 89 diagnostics; the mandatory current check reports **zero diagnostics**.
+
+```sh
+npm run typecheck:api
+# tsc -p tsconfig.api.json — exit 0, no compiler diagnostics
+```
+
+Configuration includes API entries, imported packages and serverless entry points; `strict: true`, NodeNext and `noEmit`. Dependency declaration checking uses standard `skipLibCheck`; application diagnostics are not suppressed. Frontend and API checks are distinct mandatory Fast CI steps, and build also requires the API check.
+
+Actual PR CI runs [38068604114](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/actions/runs/38068604114) and [38069322921](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/actions/runs/38069322921) completed SUCCESS. API/runtime strict typecheck passed. The latter checked `1c291ac44b97630b265df2db7b537817b4284b30`. Deployed staging acceptance was SKIPPED; type correctness is not live production certification.
+
+Latest candidate `bff2a240e6c6222ed35d8e039b420e9557e409c8` also passed strict API typecheck in Fast CI `114264321892`; PR Actions [38069665271](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/actions/runs/38069665271) completed SUCCESS.
+
+The diagnostic transcript below is retained for traceability and does not describe the repaired source.
+
+## Historical API typecheck diagnostic evidence
+
 
 Source: `e1f0e19facbdcd839739336257f63d7e0916f13b`.
 
