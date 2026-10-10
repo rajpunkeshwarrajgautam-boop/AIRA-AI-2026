@@ -41,7 +41,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
   if (artifact && artifactKey !== prevArtifactKey) {
     setPrevArtifactKey(artifactKey);
     setSelectedVersion(artifact.version);
-    if (artifact.type.includes('html') || artifact.type.includes('svg') || artifact.type.includes('react')) {
+    if (artifact.type.includes('html') || artifact.type.includes('svg') || artifact.type.includes('react') || artifact.type === 'application/vnd.ant.project') {
       setActiveTab('preview');
     } else {
       setActiveTab('code');
@@ -53,6 +53,26 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
 
   const currentContent = artifact.versions?.find(v => v.version === selectedVersion)?.content || artifact.content;
 
+  const projectInfo = (() => {
+    if (artifact.type !== 'application/vnd.ant.project') return null;
+    try {
+      const value = JSON.parse(currentContent) as { previewUrl?: string; jobId?: string; status?: string };
+      if (!value.jobId || !/^[a-f0-9-]{36}$/.test(value.jobId) || value.status !== 'BUILD_PASSED') return null;
+      return value;
+    } catch { return null; }
+  })();
+  const projectPreviewUrl = (() => {
+    try {
+      if (!projectInfo?.previewUrl) return null;
+      const url = new URL(projectInfo.previewUrl);
+      const allowedOrigin = import.meta.env.VITE_AIRA_PREVIEW_ORIGIN as string | undefined;
+      if (allowedOrigin && url.origin === new URL(allowedOrigin).origin && url.protocol === 'https:') return url.href;
+      if (import.meta.env.DEV && url.hostname === '127.0.0.1' && url.port === '4102' && url.protocol === 'http:') return url.href;
+      return null;
+    } catch { return null; }
+  })();
+
+
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(currentContent);
@@ -63,7 +83,23 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
     }
   };
 
-  const handleDownload = () => {
+  const handleDownload = async () => {
+    if (artifact.type === 'application/vnd.ant.project') {
+      if (!projectInfo?.jobId) return;
+      try {
+        const response = await fetch('/api/app-builder/jobs/' + encodeURIComponent(projectInfo.jobId) + '/source', {
+          credentials: 'same-origin'
+        });
+        if (!response.ok) throw new Error('Source archive unavailable');
+        const url = URL.createObjectURL(await response.blob());
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'aira-project-source.tar.gz';
+        link.click();
+        URL.revokeObjectURL(url);
+      } catch (err) { console.error('Source archive download failed:', err); }
+      return;
+    }
     const ext = artifact.language === 'python' ? '.py' : 
                 artifact.type.includes('html') ? '.html' : 
                 artifact.type.includes('svg') ? '.svg' : 
@@ -227,7 +263,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                   <div className="h-9 px-4 flex items-center justify-between bg-claude-surface-light dark:bg-claude-surface-dark border-b border-claude-border-light dark:border-claude-border-dark text-xs text-claude-muted-light dark:text-claude-muted-dark select-none">
                     <div className="flex items-center space-x-2">
                       <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)] animate-pulse"></span>
-                      <span className="font-bold tracking-tight text-claude-text-light dark:text-white">Live Sandbox</span>
+                      <span className="font-bold tracking-tight text-claude-text-light dark:text-white">{artifact.type === 'application/vnd.ant.project' ? 'Isolated Build Preview (not product certified)' : 'HTML Preview'}</span>
                     </div>
                     <div className="flex items-center space-x-2">
                       <button
@@ -251,14 +287,22 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                   </div>
 
                   {/* Live iframe */}
-                  <iframe
-                    key={refreshKey}
-                    ref={iframeRef}
-                    srcDoc={getIframeSrcDoc()}
-                    sandbox="allow-scripts allow-modals allow-forms"
-                    className="w-full flex-1 border-0 bg-white"
-                    title={artifact.title}
-                  />
+                  {artifact.type === 'application/vnd.ant.project' && !projectPreviewUrl ? (
+                    <div className="p-6 text-sm text-amber-500" role="status">
+                      Isolated build preview is unavailable or its configured origin is not trusted. This is not a product certification.
+                    </div>
+                  ) : (
+                    <iframe
+                      key={refreshKey}
+                      ref={iframeRef}
+                      src={projectPreviewUrl || undefined}
+                      srcDoc={projectPreviewUrl ? undefined : getIframeSrcDoc()}
+                      sandbox="allow-scripts"
+                      referrerPolicy="no-referrer"
+                      className="w-full flex-1 border-0 bg-white"
+                      title={artifact.title}
+                    />
+                  )}
 
                   {/* Bottom Console Drawer */}
                   <AnimatePresence>
