@@ -115,6 +115,27 @@ export class DockerProjectWorker {
     await writeFile(join(this.config.root, '_state', job.id + '.json'), JSON.stringify(job), { mode: 0o600 });
   }
   async initialize(): Promise<void> {
+    // Production must run on a reviewed rootless Docker daemon with an
+    // immutable runtime image. CI/dev may test rootful Docker but may not
+    // report production sandbox isolation certification.
+    if (process.env.NODE_ENV === 'production') {
+      if (!/@sha256:[a-f0-9]{64}$/.test(this.config.image)) {
+        throw new Error('PRODUCTION_WORKER_IMAGE_DIGEST_REQUIRED');
+      }
+      if (new URL(this.config.previewOrigin).protocol !== 'https:' ||
+          new URL(this.config.frameOrigin).protocol !== 'https:') {
+        throw new Error('PRODUCTION_PREVIEW_HTTPS_REQUIRED');
+      }
+      const info = await execFileAsync('docker', ['info', '--format', '{{json .SecurityOptions}}'], {
+        timeout: 8_000, maxBuffer: 8192
+      });
+      let options: unknown;
+      try { options = JSON.parse(info.stdout); }
+      catch { throw new Error('DOCKER_SECURITY_OPTIONS_UNAVAILABLE'); }
+      if (!Array.isArray(options) || !options.some(item => typeof item === 'string' && /(?:^|=)rootless(?:$|,)/.test(item))) {
+        throw new Error('PRODUCTION_REQUIRES_ROOTLESS_DOCKER');
+      }
+    }
     await mkdir(this.config.root, { recursive: true, mode: 0o700 });
     await mkdir(join(this.config.root, '_state'), { recursive: true, mode: 0o700 });
     if (this.config.npmCache) {
