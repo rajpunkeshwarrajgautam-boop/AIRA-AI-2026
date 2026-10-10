@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { z } from 'zod';
 import { createSourceArchive } from './archive.js';
 import { validateOfflineDependencyLock } from './dependencies.js';
+import { collectCompiledPreview, type PreviewFile } from './preview-output.js';
 
 const execFileAsync = promisify(execFile);
 const SourceFile = z.object({
@@ -30,6 +31,8 @@ export interface BuildJob {
   steps: Array<{ name: string; exitCode: number | null; output: string }>;
   error?: string;
   manifest?: Array<{ path: string; sha256: string }>;
+  previewManifest?: PreviewFile[];
+  previewMode?: 'compiled' | 'source';
   previewTicket?: string;
   previewUrl?: string;
 }
@@ -264,8 +267,11 @@ export class DockerProjectWorker {
         if (result.exitCode !== 0) throw new Error('STEP_FAILED_' + step.toUpperCase());
       }
       if (signal.aborted) throw new Error('BUILD_CANCELLED');
+      const compiled = await collectCompiledPreview(root);
       const index = request.files.find(f => f.path === 'index.html');
-      if (!index) throw new Error('STATIC_PREVIEW_REQUIRES_INDEX_HTML');
+      if (!compiled && !index) throw new Error('STATIC_PREVIEW_REQUIRES_INDEX_HTML');
+      job.previewMode = compiled ? 'compiled' : 'source';
+      job.previewManifest = compiled || job.manifest;
       job.state = 'BUILD_PASSED'; // Build steps passed only; not functional gameplay certification.
       const ticket = randomBytes(24).toString('hex');
       this.tickets.set(ticket, { jobId: job.id, expires: Date.now() + 15 * 60_000 });
@@ -379,15 +385,16 @@ export class DockerProjectWorker {
       if (!grant || grant.expires <= Date.now()) return this.send(res, 404, { error: 'PREVIEW_EXPIRED' });
       const job = this.jobs.get(grant.jobId);
       if (!job || job.state !== 'BUILD_PASSED') return this.send(res, 404, { error: 'PREVIEW_NOT_BUILD_PASSED' });
-      if (!job.manifest?.some(f => f.path === match[2])) return this.send(res, 404, { error: 'PREVIEW_FILE_UNAUTHORIZED' });
+      if (!job.previewManifest?.some(f => f.path === match[2])) return this.send(res, 404, { error: 'PREVIEW_FILE_UNAUTHORIZED' });
       try {
-        const filename = safePath(resolve(this.config.root, grant.jobId), match[2]);
-        await noSymlinkParents(resolve(this.config.root, grant.jobId), filename);
+        const sourceRoot = resolve(this.config.root, grant.jobId, ...(job.previewMode === 'compiled' ? ['dist'] : []));
+        const filename = safePath(sourceRoot, match[2]);
+        await noSymlinkParents(sourceRoot, filename);
         const meta = await stat(filename);
         if (!meta.isFile() || meta.size > 1_000_000) throw new Error('INVALID_PREVIEW_FILE');
         const mime = contentTypes[extname(filename)];
         if (!mime) throw new Error('UNSUPPORTED_PREVIEW_CONTENT');
-        const originalHash = job.manifest?.find(f => f.path === match[2])?.sha256;
+        const originalHash = job.previewManifest?.find(f => f.path === match[2])?.sha256;
         const bytes = await readFile(filename);
         if (!originalHash || createHash('sha256').update(bytes).digest('hex') !== originalHash) {
           throw new Error('PREVIEW_SOURCE_CHANGED');
