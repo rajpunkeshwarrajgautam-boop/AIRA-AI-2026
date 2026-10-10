@@ -43,7 +43,7 @@ try {
   const claimed = await queue.claim('preview_test_worker', 60_000);
   assert.equal(claimed?.id, job.id);
   assert.equal(await queue.start(job.id, 'preview_test_worker', claimed.generation), true);
-  assert.equal(await queue.finish(job.id, 'preview_test_worker', claimed.generation, 'COMPLETED', {}), true);
+  assert.equal(await queue.finish(job.id, 'preview_test_worker', claimed.generation, 'COMPLETED', { buildStatus: 'BUILD_PASSED' }), true);
   const ref = {
     key: 'aira-build/v1/' + createHash('sha256').update(owner).digest('hex').slice(0, 32) +
       '/compiled/' + createHash('sha256').update(packed).digest('hex'),
