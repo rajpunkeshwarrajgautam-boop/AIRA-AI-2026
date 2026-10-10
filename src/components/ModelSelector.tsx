@@ -57,21 +57,21 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   };
 
   return (
-    <div className="relative z-50 inline-block" ref={containerRef}>
+    <div className="relative z-50 inline-block min-w-0" ref={containerRef}>
       <motion.button
         type="button"
         onClick={() => setIsOpen(open => !open)}
         whileTap={reducedMotion ? undefined : { scale: 0.98 }}
         aria-haspopup="listbox"
         aria-expanded={isOpen}
-        className="group flex items-center gap-2 rounded-xl px-2.5 py-1.5 text-left transition-colors hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark"
+        className="group flex min-w-0 max-w-full items-center gap-1 sm:gap-2 rounded-xl px-1.5 sm:px-2.5 py-1.5 text-left transition-colors hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark"
       >
-        <span className="flex h-7 w-7 items-center justify-center rounded-[9px] bg-claude-terracotta/10 text-claude-terracotta">
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[9px] bg-claude-terracotta/10 text-claude-terracotta">
           <ActiveIcon className="h-3.5 w-3.5" />
         </span>
         <span className="min-w-0">
           <span className="flex items-center gap-1.5">
-            <span className="max-w-[180px] truncate text-[13px] font-semibold text-claude-text-light dark:text-white">{activeModelInfo.name}</span>
+            <span className="block max-w-[88px] min-[375px]:max-w-[116px] sm:max-w-[180px] truncate text-[12px] sm:text-[13px] font-semibold text-claude-text-light dark:text-white">{activeModelInfo.name}</span>
             {extendedThinking && activeModelInfo.supportsThinking && <Brain className="h-3.5 w-3.5 text-claude-terracotta" />}
           </span>
           <span className="hidden text-[10px] font-medium text-claude-muted-light sm:block dark:text-claude-muted-dark">
@@ -94,7 +94,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 5, scale: 0.985 }}
             transition={reducedMotion ? { duration: 0.08 } : { type: 'spring', stiffness: 390, damping: 31 }}
-            className="absolute left-0 mt-2 w-[calc(100vw-24px)] max-w-[380px] overflow-hidden rounded-[18px] border border-claude-border-light bg-white/95 p-2 shadow-[0_20px_55px_-22px_rgba(45,40,30,0.5)] backdrop-blur-2xl dark:border-claude-border-dark dark:bg-[#1c1b18]/95 dark:shadow-[0_24px_60px_-24px_rgba(0,0,0,0.9)]"
+            className="absolute left-0 mt-2 w-[calc(100vw-96px)] sm:w-[calc(100vw-120px)] max-w-[380px] overflow-hidden rounded-[18px] border border-claude-border-light bg-white/95 p-2 shadow-[0_20px_55px_-22px_rgba(45,40,30,0.5)] backdrop-blur-2xl dark:border-claude-border-dark dark:bg-[#1c1b18]/95 dark:shadow-[0_24px_60px_-24px_rgba(0,0,0,0.9)]"
           >
             <div className="flex items-center justify-between px-2.5 pb-2 pt-1.5">
               <div>
