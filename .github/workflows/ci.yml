@@ -69,14 +69,20 @@ jobs:
       - name: Approval actor and workflow decision regression
         run: npm run test:approval:actor
 
+      - name: Mission planning and execution outcomes regression
+        run: npm run test:mission:execution
+
       - name: Browser destination security regression
         run: npm run test:browser:url-policy
 
       - name: Lint
         run: npm run lint
 
-      - name: Typecheck
-        run: npm run typecheck
+      - name: Frontend typecheck
+        run: npm run typecheck:frontend
+
+      - name: API / runtime strict typecheck
+        run: npm run typecheck:api
 
       - name: Build
         run: npm run build

@@ -266,7 +266,7 @@ export class WorkflowEngine {
       const isApproved = await this.approvalKernel.isToolCallApproved(
         runId,
         `workflow_step_${stepDef.stepId}`,
-        stepDef.sideEffectLevel,
+        stepDef.sideEffectLevel === 'NONE' ? 'READ' : stepDef.sideEffectLevel,
         workflowRun.principalId
       );
 
@@ -289,9 +289,10 @@ export class WorkflowEngine {
             toolId: `workflow_step_${stepDef.stepId}`,
             name: stepDef.name,
             arguments: stepDef.input,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            status: 'PENDING'
           },
-          stepDef.sideEffectLevel,
+          stepDef.sideEffectLevel === 'NONE' ? 'READ' : stepDef.sideEffectLevel,
           `Workflow step "${stepDef.name}" requires user approval before execution.`
         );
 
@@ -345,7 +346,7 @@ export class WorkflowEngine {
         stepError = null;
         break; // Success!
       } catch (err: any) {
-        stepError = err.message || String(err);
+        stepError = err instanceof Error ? err.message : String(err);
         const isNonRetryable = stepError.includes('Access denied') ||
           stepError.includes('Cycle detected') ||
           stepError.includes('Validation failed') ||
@@ -427,7 +428,7 @@ export class WorkflowEngine {
               userId: workflowRun.principalId,
               sessionId: workflowRun.sessionId,
               roles: ['member'],
-              scopes: parentRun?.principalScopes || ['*']
+              scopes: parentRun?.principalScopes || []
             },
             idempotencyKey: stepDef.idempotencyKey,
             workspaceRoot: this.workspaceRoot
@@ -445,7 +446,8 @@ export class WorkflowEngine {
           name: toolName,
           toolId: `tool_${toolName}`,
           arguments: args,
-          timestamp: Date.now()
+          timestamp: Date.now(),
+          status: 'PENDING'
         },
         {
           runId: workflowRun.runId,
@@ -774,3 +776,4 @@ Current UTC time: ${now.toISOString()}`;
     }
   }
 }
+

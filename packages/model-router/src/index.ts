@@ -44,6 +44,24 @@ export class DeterministicMockAdapter implements ModelAdapter {
       ? `Analyzing intent for request: "${lastUserMessage.slice(0, 80)}...". Resolving execution strategy via deterministic model policy ${policy.model}.`
       : undefined;
 
+    if (messages.some(message => message.role === 'system' && message.content.startsWith('AIRA_MISSION_PLANNER_V1'))) {
+      const input = JSON.parse(messages.find(message => message.role === 'user')!.content);
+      const objective = String(input.objective).toLowerCase();
+      const index = input.calls.length;
+      // Explicit mock-only fixtures; these do not certify autonomous generation.
+      const sequence = /git status|repo history|workspace files/.test(objective)
+        ? [{ name: 'file_system_read', arguments: { filePath: 'package.json' } },
+           { name: 'repo_git_status', arguments: {} }, { name: 'repo_git_log', arguments: { count: 2 } }]
+        : /calculate|calculator/.test(objective)
+          ? [{ name: 'calculator', arguments: { expression: '2+2' } }]
+          : /latest|recent|sources/.test(objective)
+            ? [{ name: 'web_search', arguments: { query: input.objective } }] : [];
+      const decision = sequence[index] ? { kind: 'tool', ...sequence[index] }
+        : sequence.length ? { kind: 'finish', summary: 'Mock planner fixture finished; inspect actual tool evidence.' }
+          : { kind: 'blocked', reason: 'No deterministic planning fixture exists for this objective.' };
+      return { text: JSON.stringify(decision), model: 'mock-deterministic', usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
+    }
+
     let text = `Processed your request using ${policy.model}.`;
     if (lastUserMessage.includes('[System Tool Execution Result')) {
       if (lastUserMessage.includes('browser_navigate') || lastUserMessage.includes('pageHeading')) {
@@ -311,8 +329,7 @@ export class ModelRouter {
       'claude-3-7-sonnet': 'aira-auto',
       'claude-3-5-sonnet': 'aira-pro',
       'claude-3-5-haiku': 'aira-fast',
-      'claude-3-opus': 'aira-deep',
-      // The hosted Llama 3.1 405B endpoint is not a current NVIDIA catalog option.
+            // The hosted Llama 3.1 405B endpoint is not a current NVIDIA catalog option.
       // Old browser state and direct API callers must use the supported replacement.
       'meta/llama-3.1-405b-instruct': 'nvidia/nemotron-3-super-120b-a12b'
     };
@@ -428,3 +445,4 @@ export class ModelRouter {
     return Array.from(this.adapters.keys()).filter(k => k !== 'mock');
   }
 }
+

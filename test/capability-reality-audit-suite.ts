@@ -55,14 +55,14 @@ async function runRealityAuditSuite() {
   const principalA: ExecutionPrincipal = {
     userId: 'usr_audit_a_' + Date.now(),
     sessionId: 'sess_audit_a_' + Date.now(),
-    role: 'user',
+    roles: ['user'],
     scopes: ['*']
   };
 
   const principalB: ExecutionPrincipal = {
     userId: 'usr_audit_b_' + Date.now(),
     sessionId: 'sess_audit_b_' + Date.now(),
-    role: 'user',
+    roles: ['user'],
     scopes: ['*']
   };
 
@@ -262,7 +262,7 @@ async function runRealityAuditSuite() {
   const unscopedPrincipal: ExecutionPrincipal = {
     userId: 'usr_unscoped_' + Date.now(),
     sessionId: 'sess_unscoped_' + Date.now(),
-    role: 'user',
+    roles: ['user'],
     scopes: [] // No scopes granted
   };
   const scopeResult = await toolGateway.execute({
@@ -344,9 +344,12 @@ async function runRealityAuditSuite() {
     prompt: 'Find the latest information about recent tech layoffs, compare the sources, and summarize what changed recently.',
     intent: 'AGENT_MISSION'
   }, principalA);
-  const missionRun = await executeAuditRun(agentRuntime, missionRunId, ['COMPLETED', 'WAITING_FOR_TOOL', 'WAITING_FOR_APPROVAL']);
+  const missionRun = await executeAuditRun(agentRuntime, missionRunId, ['COMPLETED', 'FAILED', 'WAITING_FOR_TOOL', 'WAITING_FOR_APPROVAL']);
+  if (missionRun.toolResults.some(result => result.isError)) {
+    assert.equal(missionRun.state, 'FAILED', 'Unresolved research tool failures cannot certify mission success');
+  }
   assert.ok(missionRun, 'Mission run started');
-  console.log('  -> PASS: Agent mission cleanly handles freshness requirements.');
+  console.log('  -> PASS: Mission reports actual freshness execution state (mock planner fixture, not live research certification).');
 
   // -------------------------------------------------------------
   // TEST 14: WORKFLOW RESEARCH STEP

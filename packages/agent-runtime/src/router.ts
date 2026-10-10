@@ -146,14 +146,13 @@ export class ServerIntentRouter {
       (advisoryIntent === 'WORKFLOW')
     );
     if (isWorkflow) {
-      const isDestructive = sideEffect === 'DESTRUCTIVE';
       return {
         intent: 'WORKFLOW',
         confidence: 0.95,
         reason: isMultiStepPipeline
           ? 'Identified multi-step DAG pipeline (research -> extract findings -> synthesize report).'
           : 'Identified multi-step workflow execution intent.',
-        sideEffectLevel: isDestructive ? 'DESTRUCTIVE' : 'WRITE',
+        sideEffectLevel: 'WRITE',
         approvalRequired: true
       };
     }
@@ -162,7 +161,7 @@ export class ServerIntentRouter {
     const isAgentMission = /\b(investigate\s+(this\s+|the\s+)?(bug|system|repo|project|codebase)|inspect\s+the\s+repo|mission\s+plan|agent\s+mission|autonomous\s+mission|execute\s+mission)\b/.test(text) ||
       (advisoryIntent === 'AGENT_MISSION' && text.length > 10);
     if (isAgentMission) {
-      const isMutating = sideEffect === 'WRITE' || sideEffect === 'DESTRUCTIVE';
+      const isMutating = sideEffect === 'WRITE';
       return {
         intent: 'AGENT_MISSION',
         confidence: 0.92,
@@ -192,13 +191,13 @@ export class ServerIntentRouter {
       (advisoryIntent === 'TOOL_ACTION')
     );
     if (isTool) {
-      const toolSideEffect = sideEffect === 'DESTRUCTIVE' ? 'DESTRUCTIVE' : sideEffect === 'WRITE' ? 'WRITE' : 'READ';
+      const toolSideEffect = sideEffect === 'WRITE' ? 'WRITE' : 'READ';
       return {
         intent: 'TOOL_ACTION',
         confidence: 0.94,
         reason: 'Identified verified tool execution request.',
         sideEffectLevel: toolSideEffect,
-        approvalRequired: toolSideEffect === 'DESTRUCTIVE' || toolSideEffect === 'WRITE'
+        approvalRequired: toolSideEffect === 'WRITE'
       };
     }
 
@@ -335,3 +334,4 @@ User prompt: "${prompt.slice(0, 500).replace(/"/g, '\\"')}"`;
     };
   }
 }
+

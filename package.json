@@ -22,8 +22,8 @@
     "test:reality": "npx tsx test/capability-reality-audit-suite.ts",
     "test:search": "npx tsx test/search-provider-failover.ts",
     "test:startup": "npx tsx test/startup.ts",
-    "typecheck": "tsc --noEmit",
-    "build": "tsc -b && vite build",
+    "typecheck": "npm run typecheck:frontend && npm run typecheck:api",
+    "build": "npm run typecheck:api && tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
     "memory:init": "npx @agentmemory/agentmemory@latest init",
@@ -46,7 +46,10 @@
     "test:tailwind:visual": "node test/tailwind-visual-regression.mjs",
     "test:automation:scheduler": "npx tsx test/automation-scheduler-regression.ts",
     "test:approval:actor": "npx tsx test/approval-actor-regression.ts",
-    "test:browser:url-policy": "npx tsx test/public-url-policy.ts"
+    "test:browser:url-policy": "npx tsx test/public-url-policy.ts",
+    "typecheck:api": "tsc -p tsconfig.api.json",
+    "typecheck:frontend": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.node.json --noEmit",
+    "test:mission:execution": "npx tsx test/mission-execution-regression.ts"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",

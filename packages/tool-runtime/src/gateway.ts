@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import {
   ToolDefinition,
+  ToolDefinitionSchema,
   DurableToolCall,
   ToolResult,
   ExecutionPrincipal,
@@ -214,7 +215,8 @@ export class ToolGateway extends EventEmitter {
           toolId: def.id,
           name: def.name,
           arguments: args,
-          timestamp: startTime
+          timestamp: startTime,
+          status: 'PENDING'
         };
 
         const approvalReq = await this.approvalKernel.createRequest(
@@ -236,6 +238,7 @@ export class ToolGateway extends EventEmitter {
           sideEffectLevel,
           permissionScopes: def.permissionScopes,
           lifecycleState: 'WAITING_FOR_APPROVAL',
+          attemptCount: 1,
           arguments: args,
           approvalId: approvalReq.id,
           idempotencyKey: context.idempotencyKey,
@@ -302,7 +305,7 @@ export class ToolGateway extends EventEmitter {
         error = null;
         break;
       } catch (err: any) {
-        error = err.message || String(err);
+        error = err instanceof Error ? err.message : String(err);
         const isTransient = this.isTransientError(error, def);
         if (!isTransient || attempt >= maxAttempts) {
           errorCode = ToolGatewayErrorCodes.TOOL_EXECUTION_FAILED;
@@ -461,7 +464,7 @@ export class ToolGateway extends EventEmitter {
     // 1. Browser Navigate
     // -------------------------------------------------------------------------
     this.registerTool({
-      definition: {
+      definition: ToolDefinitionSchema.parse({
         id: 'tool_browser_navigate',
         name: 'browser_navigate',
         version: 1,
@@ -484,7 +487,7 @@ export class ToolGateway extends EventEmitter {
         availability: 'READY',
         adapter: 'browser',
         provider: 'aira-browser'
-      },
+      }),
       execute: async (args, ctx) => {
         const res = await this.browserAdapter.navigate(ctx.principal, String(args.url), args.timeoutMs);
         this.emit('browser.navigation', { runId: ctx.runId, url: res.url, status: res.status });
@@ -496,7 +499,7 @@ export class ToolGateway extends EventEmitter {
     // 2. Browser Extract DOM
     // -------------------------------------------------------------------------
     this.registerTool({
-      definition: {
+      definition: ToolDefinitionSchema.parse({
         id: 'tool_browser_extract',
         name: 'browser_extract',
         version: 1,
@@ -517,7 +520,7 @@ export class ToolGateway extends EventEmitter {
         availability: 'READY',
         adapter: 'browser',
         provider: 'aira-browser'
-      },
+      }),
       execute: async (args, ctx) => {
         return this.browserAdapter.extractDom(ctx.principal, args.selector);
       }
@@ -527,7 +530,7 @@ export class ToolGateway extends EventEmitter {
     // 3. Browser Type
     // -------------------------------------------------------------------------
     this.registerTool({
-      definition: {
+      definition: ToolDefinitionSchema.parse({
         id: 'tool_browser_type',
         name: 'browser_type',
         version: 1,
@@ -551,7 +554,7 @@ export class ToolGateway extends EventEmitter {
         availability: 'READY',
         adapter: 'browser',
         provider: 'aira-browser'
-      },
+      }),
       execute: async (args, ctx) => {
         const res = await this.browserAdapter.type(ctx.principal, String(args.selector), String(args.text), args.clear !== false);
         this.emit('browser.action', { runId: ctx.runId, action: 'type', selector: args.selector });
@@ -563,7 +566,7 @@ export class ToolGateway extends EventEmitter {
     // 4. Browser Click
     // -------------------------------------------------------------------------
     this.registerTool({
-      definition: {
+      definition: ToolDefinitionSchema.parse({
         id: 'tool_browser_click',
         name: 'browser_click',
         version: 1,
@@ -586,7 +589,7 @@ export class ToolGateway extends EventEmitter {
         availability: 'READY',
         adapter: 'browser',
         provider: 'aira-browser'
-      },
+      }),
       execute: async (args, ctx) => {
         const res = await this.browserAdapter.click(ctx.principal, String(args.selector), args.timeoutMs);
         this.emit('browser.action', { runId: ctx.runId, action: 'click', selector: args.selector });
@@ -598,7 +601,7 @@ export class ToolGateway extends EventEmitter {
     // 5. Browser Screenshot
     // -------------------------------------------------------------------------
     this.registerTool({
-      definition: {
+      definition: ToolDefinitionSchema.parse({
         id: 'tool_browser_screenshot',
         name: 'browser_screenshot',
         version: 1,
@@ -620,7 +623,7 @@ export class ToolGateway extends EventEmitter {
         availability: 'READY',
         adapter: 'browser',
         provider: 'aira-browser'
-      },
+      }),
       execute: async (args, ctx) => {
         if (args.url) {
           await this.browserAdapter.navigate(ctx.principal, String(args.url));
@@ -633,7 +636,7 @@ export class ToolGateway extends EventEmitter {
     // 6. File System List
     // -------------------------------------------------------------------------
     this.registerTool({
-      definition: {
+      definition: ToolDefinitionSchema.parse({
         id: 'tool_fs_list',
         name: 'file_system_list',
         version: 1,
@@ -654,7 +657,7 @@ export class ToolGateway extends EventEmitter {
         availability: 'READY',
         adapter: 'files',
         provider: 'aira-fs'
-      },
+      }),
       execute: async (args) => {
         return this.fileAdapter.list(args.path || '.');
       }
@@ -664,7 +667,7 @@ export class ToolGateway extends EventEmitter {
     // 7. File System Read
     // -------------------------------------------------------------------------
     this.registerTool({
-      definition: {
+      definition: ToolDefinitionSchema.parse({
         id: 'tool_fs_read',
         name: 'file_system_read',
         version: 1,
@@ -686,7 +689,7 @@ export class ToolGateway extends EventEmitter {
         availability: 'READY',
         adapter: 'files',
         provider: 'aira-fs'
-      },
+      }),
       execute: async (args) => {
         return this.fileAdapter.read(String(args.filePath));
       }
@@ -696,7 +699,7 @@ export class ToolGateway extends EventEmitter {
     // 8. File System Write
     // -------------------------------------------------------------------------
     this.registerTool({
-      definition: {
+      definition: ToolDefinitionSchema.parse({
         id: 'tool_fs_write',
         name: 'file_system_write',
         version: 1,
@@ -719,7 +722,7 @@ export class ToolGateway extends EventEmitter {
         availability: 'READY',
         adapter: 'files',
         provider: 'aira-fs'
-      },
+      }),
       execute: async (args) => {
         return this.fileAdapter.write(String(args.filePath), String(args.content));
       }
@@ -729,7 +732,7 @@ export class ToolGateway extends EventEmitter {
     // 9. File System Patch
     // -------------------------------------------------------------------------
     this.registerTool({
-      definition: {
+      definition: ToolDefinitionSchema.parse({
         id: 'tool_fs_patch',
         name: 'file_system_patch',
         version: 1,
@@ -753,7 +756,7 @@ export class ToolGateway extends EventEmitter {
         availability: 'READY',
         adapter: 'files',
         provider: 'aira-fs'
-      },
+      }),
       execute: async (args) => {
         return this.fileAdapter.patch(String(args.filePath), String(args.targetText), String(args.replacementText));
       }
@@ -763,7 +766,7 @@ export class ToolGateway extends EventEmitter {
     // 10. File System Delete (DESTRUCTIVE)
     // -------------------------------------------------------------------------
     this.registerTool({
-      definition: {
+      definition: ToolDefinitionSchema.parse({
         id: 'tool_fs_delete',
         name: 'file_system_delete',
         version: 1,
@@ -785,7 +788,7 @@ export class ToolGateway extends EventEmitter {
         availability: 'READY',
         adapter: 'files',
         provider: 'aira-fs'
-      },
+      }),
       execute: async (args) => {
         return this.fileAdapter.delete(String(args.filePath));
       }
@@ -795,7 +798,7 @@ export class ToolGateway extends EventEmitter {
     // 11. Git Repository Status
     // -------------------------------------------------------------------------
     this.registerTool({
-      definition: {
+      definition: ToolDefinitionSchema.parse({
         id: 'tool_repo_status',
         name: 'repo_git_status',
         version: 1,
@@ -811,7 +814,7 @@ export class ToolGateway extends EventEmitter {
         availability: 'READY',
         adapter: 'repo',
         provider: 'aira-git'
-      },
+      }),
       execute: async () => {
         return this.repoAdapter.getStatus();
       }
@@ -821,7 +824,7 @@ export class ToolGateway extends EventEmitter {
     // 12. Git Repository Log
     // -------------------------------------------------------------------------
     this.registerTool({
-      definition: {
+      definition: ToolDefinitionSchema.parse({
         id: 'tool_repo_log',
         name: 'repo_git_log',
         version: 1,
@@ -842,7 +845,7 @@ export class ToolGateway extends EventEmitter {
         availability: 'READY',
         adapter: 'repo',
         provider: 'aira-git'
-      },
+      }),
       execute: async (args) => {
         return this.repoAdapter.getLog(args.count ? Number(args.count) : 5);
       }
@@ -852,7 +855,7 @@ export class ToolGateway extends EventEmitter {
     // 13. Calculator (Safe arithmetic utility)
     // -------------------------------------------------------------------------
     this.registerTool({
-      definition: {
+      definition: ToolDefinitionSchema.parse({
         id: 'tool_calculator',
         name: 'calculator',
         version: 1,
@@ -874,7 +877,7 @@ export class ToolGateway extends EventEmitter {
         availability: 'READY',
         adapter: 'native',
         provider: 'aira-math'
-      },
+      }),
       execute: async (args) => {
         const expr = String(args.expression || '').replace(/[^0-9+\-*/().^ ]/g, '');
         try {
@@ -894,7 +897,7 @@ export class ToolGateway extends EventEmitter {
     if (ghConnector) {
       for (const action of ghConnector.listActions()) {
         this.registerTool({
-          definition: {
+          definition: ToolDefinitionSchema.parse({
             id: `tool_connector_github_${action.name}`,
             name: `github_${action.name}`,
             version: 1,
@@ -914,7 +917,7 @@ export class ToolGateway extends EventEmitter {
             availability: 'READY',
             adapter: 'connector',
             provider: 'github'
-          },
+          }),
           execute: async (args, ctx) => {
             return ghConnector.executeAction(action.name, args, ctx.principal);
           }
@@ -927,3 +930,4 @@ export class ToolGateway extends EventEmitter {
     await this.browserAdapter.shutdown();
   }
 }
+

@@ -30,6 +30,7 @@ import { WorkflowRepository, PostgresWorkflowRepository } from './workflow-repos
 import { WorkflowEngine } from './workflow-engine.js';
 import { WorkflowCompiler } from './workflow-compiler.js';
 import { buildDurableHistorySystemMessage } from './memory-policy.js';
+import { planMissionStep, missionEvidenceError } from './mission-planner.js';
 
 export class AgentRuntime extends EventEmitter {
   private eventStreams: Map<string, EventEmitter> = new Map();
@@ -496,7 +497,9 @@ export class AgentRuntime extends EventEmitter {
       const isToolAction = run.intent === 'TOOL_ACTION';
       const isAgentMission = run.intent === 'AGENT_MISSION';
 
-      if (isToolAction || isAgentMission) {
+      if (isAgentMission) {
+        await this.selectMissionAction(run);
+      } else if (isToolAction) {
         if (
           run.prompt.toLowerCase().includes('mouse click') ||
           run.prompt.toLowerCase().includes('desktop screen') ||
@@ -534,8 +537,9 @@ export class AgentRuntime extends EventEmitter {
           selectedArgs = {};
         } else if (run.prompt.toLowerCase().includes('calc') || /calculate|\b\d+\s*[-+*/]\s*\d+/.test(run.prompt.toLowerCase())) {
           selectedToolName = 'calculator';
-          const exprMatch = run.prompt.match(/([0-9+\-*/().^ ]+)/);
-          selectedArgs = { expression: exprMatch ? exprMatch[0].trim() : '1024 * 4' };
+          const exprMatch = run.prompt.match(/\d[0-9+\-*/().^ ]*[+*/^\-][0-9+\-*/().^ ]*\d/);
+          if (!exprMatch) throw new Error('CALCULATOR_INPUT_MISSING: Supply an explicit arithmetic expression.');
+          selectedArgs = { expression: exprMatch[0].trim() };
         } else if (
           run.routingDecision?.sideEffectLevel === 'DESTRUCTIVE' ||
           run.prompt.toLowerCase().includes('shell') ||
@@ -577,7 +581,8 @@ export class AgentRuntime extends EventEmitter {
           toolId: toolDef?.id || `tool_${selectedToolName}`,
           name: selectedToolName,
           arguments: selectedArgs,
-          timestamp: Date.now()
+          timestamp: Date.now(),
+          status: 'PENDING'
         };
 
         run.toolsUsed.push(selectedToolName);
@@ -605,6 +610,10 @@ export class AgentRuntime extends EventEmitter {
       );
 
       const requiresApproval = (!isApproved) && (
+        toolDef?.approvalPolicy === 'require_approval' ||
+        toolDef?.approvalPolicy === 'always_ask' ||
+        toolDef?.permissionLevel === 'WRITE' ||
+        toolDef?.sideEffectLevel === 'WRITE' ||
         toolDef?.permissionLevel === 'DESTRUCTIVE' ||
         toolDef?.sideEffectLevel === 'DESTRUCTIVE' ||
         run.routingDecision?.sideEffectLevel === 'DESTRUCTIVE' ||
@@ -673,6 +682,11 @@ export class AgentRuntime extends EventEmitter {
       }
 
       run = await this.runRepo.getRun(runId) as Run; // reload after async tool execution
+      if (!run || ['CANCELLED', 'FAILED', 'COMPLETED'].includes(run.state)) return;
+      toolResult.toolCallId = toolCall.id;
+      toolCall.status = toolResult.isError ? 'FAILED' : 'COMPLETED';
+      const persistedCall = run.toolCalls.find(call => call.id === toolCall.id);
+      if (persistedCall) persistedCall.status = toolCall.status;
       run.toolResults.push(toolResult);
       run.executionCheckpoint = 'TOOL_COMPLETED';
       await this.runRepo.saveRun(run);
@@ -680,36 +694,9 @@ export class AgentRuntime extends EventEmitter {
 
       await this.transitionRunState(runId, 'RUNNING');
       
-      // Bounded iterative loop for AGENT_MISSION (up to 3 steps)
-      if (run.intent === 'AGENT_MISSION' && run.stepCount < 3) {
-        let nextToolName: string | null = null;
-        let nextArgs: Record<string, unknown> = {};
-
-        if (run.stepCount === 1) {
-          nextToolName = 'repo_git_status';
-          nextArgs = {};
-        } else if (run.stepCount === 2) {
-          nextToolName = 'repo_git_log';
-          nextArgs = { count: 2 };
-        }
-
-        if (nextToolName) {
-          const nextToolDef = this.toolGateway.getTool(nextToolName)?.definition || this.toolRegistry.get(nextToolName)?.definition;
-          const nextToolCall: ToolCall = {
-            id: `call_${Date.now()}_${run.stepCount}`,
-            toolId: nextToolDef?.id || `tool_${nextToolName}`,
-            name: nextToolName,
-            arguments: nextArgs,
-            timestamp: Date.now()
-          };
-          run.toolsUsed.push(nextToolName);
-          run.toolCalls.push(nextToolCall);
-          run.stepCount++;
-          run.executionCheckpoint = 'TOOL_SELECTED';
-          await this.runRepo.saveRun(run);
-          await this.emitRunEvent(runId, 'tool.requested', nextToolCall);
-          return this.executeRunLoop(runId);
-        }
+      if (run.intent === 'AGENT_MISSION') {
+        await this.selectMissionAction(run);
+        return this.executeRunLoop(runId);
       }
 
       run = await this.runRepo.getRun(runId) as Run;
@@ -718,6 +705,10 @@ export class AgentRuntime extends EventEmitter {
     }
 
     if (run.executionCheckpoint === 'TOOL_COMPLETED') {
+      if (run.intent === 'AGENT_MISSION') {
+        await this.selectMissionAction(run);
+        return this.executeRunLoop(runId);
+      }
       run.executionCheckpoint = 'SYNTHESIZING';
       await this.runRepo.saveRun(run);
     }
@@ -791,12 +782,12 @@ Provider Capabilities:
       if (run.context?.attachments && Array.isArray(run.context.attachments) && run.context.attachments.length > 0) {
         const attDocs = run.context.attachments.map((a: any) => `[Uploaded Attachment: ${a.name} (${a.type || 'text'}, ${a.size || 0} bytes)]:\n${a.content || '(binary or external file content)'}`).join('\n\n');
         messages.push({
-          roles: ['user'],
+          role: 'user',
           content: `User uploaded attachments:\n${attDocs}`
         });
       }
       
-      messages.push({ roles: ['user'], content: run.prompt });
+      messages.push({ role: 'user', content: run.prompt });
 
       if (run.toolCalls.length > 0 && run.toolResults.length > 0) {
         const toolSummaries = run.toolCalls.map((call, idx) => {
@@ -804,7 +795,7 @@ Provider Capabilities:
           return `[Tool Call ${idx + 1}: ${call.name}]:\nArgs: ${JSON.stringify(call.arguments)}\nOutput: ${JSON.stringify(res ? (res.output || res.error) : 'Pending')}`;
         }).join('\n\n');
         messages.push({
-          roles: ['user'],
+          role: 'user',
           content: `[System Tool Execution Findings]:\n${toolSummaries}\n\nPlease synthesize your execution findings and provide the final response.`
         });
       }
@@ -846,12 +837,24 @@ Provider Capabilities:
         await this.emitRunEvent(runId, 'content.delta', { delta: finalText });
       }
 
+      const fresh = await this.runRepo.getRun(runId);
+      if (!fresh || ['CANCELLED', 'FAILED', 'COMPLETED'].includes(fresh.state)) return;
       run.executionCheckpoint = 'FINALIZING';
       await this.runRepo.saveRun(run);
     }
 
     // Checkpoint 6: Artifacts & Completion
     if (run.executionCheckpoint === 'FINALIZING') {
+      const executionError = run.intent === 'AGENT_MISSION'
+        ? (run.context?.missionFailure || missionEvidenceError(run))
+        : run.intent === 'TOOL_ACTION' && run.toolResults.some(result => result.isError)
+          ? 'TOOL_ACTION_FAILED: Tool execution did not succeed.' : undefined;
+      const terminalState = executionError ? 'FAILED' : 'COMPLETED';
+      if (executionError) {
+        const notice = `\n\nExecution outcome: FAILED. ${executionError}`;
+        run.content += notice;
+        await this.emitRunEvent(runId, 'content.delta', { delta: notice });
+      }
       if (run.content.includes('```')) {
         const artId = `art_${Date.now()}`;
         const artifact: Artifact = {
@@ -877,11 +880,11 @@ Provider Capabilities:
           runId,
           title: `Mission Report: ${run.prompt.slice(0, 36)}`,
           type: 'text/markdown',
-          content: `# Mission Execution Summary\n\n**Objective**: ${run.prompt}\n\n**Outcome**: ${run.content}\n\n**Status**: COMPLETED`,
+          content: `# Mission Execution Summary\n\n**Objective**: ${run.prompt}\n\n**Outcome**: ${run.content}\n\n**Status**: ${terminalState}`,
           version: 1,
           versions: [{
             version: 1,
-            content: `# Mission Execution Summary\n\n**Objective**: ${run.prompt}\n\n**Outcome**: ${run.content}\n\n**Status**: COMPLETED`,
+            content: `# Mission Execution Summary\n\n**Objective**: ${run.prompt}\n\n**Outcome**: ${run.content}\n\n**Status**: ${terminalState}`,
             timestamp: Date.now()
           }]
         };
@@ -892,7 +895,37 @@ Provider Capabilities:
       
       run.executionCheckpoint = 'COMPLETED';
       await this.runRepo.saveRun(run);
-      await this.transitionRunState(runId, 'COMPLETED');
+      await this.transitionRunState(runId, terminalState, executionError);
+    }
+  }
+
+  private async selectMissionAction(run: Run): Promise<void> {
+    const definitions = new Map([
+      ...this.toolRegistry.listDefinitions(), ...this.toolGateway.listDefinitions()
+    ].map(definition => [definition.name, definition]));
+    const decision = await planMissionStep(run, [...definitions.values()], this.modelRouter.getAdapter(run.modelPolicy));
+    const fresh = await this.runRepo.getRun(run.id);
+    if (!fresh || ['CANCELLED', 'FAILED', 'COMPLETED'].includes(fresh.state)) return;
+    if (decision.kind === 'tool') {
+      if (run.stepCount >= Math.min(run.maxSteps, 10)) {
+        throw new Error('MISSION_STEP_BUDGET_EXHAUSTED: Objective remains unverified.');
+      }
+      const definition = definitions.get(decision.name)!;
+      const call: ToolCall = {
+        id: `call_${crypto.randomUUID()}`, toolId: definition.id, name: definition.name,
+        arguments: decision.arguments, timestamp: Date.now(), status: 'PENDING'
+      };
+      run.toolCalls.push(call);
+      run.toolsUsed.push(call.name);
+      run.stepCount++;
+      run.executionCheckpoint = 'TOOL_SELECTED';
+      await this.runRepo.saveRun(run);
+      await this.emitRunEvent(run.id, 'tool.requested', call);
+    } else {
+      run.context = { ...run.context, missionPlanSummary: decision.kind === 'finish' ? decision.summary : undefined,
+        missionFailure: decision.kind === 'blocked' ? `MISSION_BLOCKED: ${decision.reason}` : missionEvidenceError(run) };
+      run.executionCheckpoint = 'SYNTHESIZING';
+      await this.runRepo.saveRun(run);
     }
   }
 

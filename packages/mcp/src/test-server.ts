@@ -80,22 +80,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request: any) => {
   };
 });
 
-let transport: StreamableHTTPServerTransport;
+const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+await server.connect(transport);
 
-app.get('/mcp', async (req, res) => {
-  transport = new StreamableHTTPServerTransport('/mcp/messages', res);
-  await server.connect(transport);
-});
-
-app.post('/mcp/messages', async (req, res) => {
-  if (transport) {
-    await transport.handlePostMessage(req, res);
-  } else {
-    res.status(500).send('No active MCP session');
-  }
+app.all(['/mcp', '/mcp/messages'], async (req, res) => {
+  await transport.handleRequest(req, res, req.body);
 });
 
 const PORT = process.env.PORT || 3002;
 app.listen(PORT, () => {
   console.log(`MCP Test Server running on port ${PORT}`);
 });
+

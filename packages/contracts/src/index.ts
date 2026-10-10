@@ -583,6 +583,8 @@ export const AgentDefinitionSchema = z.object({
   name: z.string(),
   description: z.string(),
   instructions: z.string(),
+  createdAt: z.number().nonnegative().optional(),
+  updatedAt: z.number().nonnegative().optional(),
   modelPolicy: ModelPolicySchema,
   tools: z.array(z.string()),
   memoryScopes: z.array(z.string()).default(['workspace']),
@@ -829,3 +831,4 @@ export const ErrorEnvelopeSchema = z.object({
   timestamp: z.number()
 });
 export type ErrorEnvelope = z.infer<typeof ErrorEnvelopeSchema>;
+

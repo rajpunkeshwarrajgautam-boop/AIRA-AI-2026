@@ -3,6 +3,7 @@ import * as path from 'path';
 import { searchWeb, WebSearchError } from './search-providers.js';
 import {
   ToolDefinition,
+  ToolDefinitionSchema,
   ToolCall,
   ToolResult,
   PermissionLevel
@@ -65,7 +66,8 @@ export class ToolRegistry {
         error: `Tool "${call.name}" is not registered in the runtime.`,
         isError: true,
         durationMs: Date.now() - startTime,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        artifacts: []
       };
       this.recordAudit(context.runId, call.name, 'READ', startTime, false, errRes.error);
       return errRes;
@@ -81,7 +83,7 @@ export class ToolRegistry {
         !result.isError,
         result.error
       );
-      return result;
+      return { ...result, toolCallId: call.id };
     } catch (err: any) {
       const durationMs = Date.now() - startTime;
       const errorMsg = err instanceof Error ? err.message : String(err);
@@ -99,7 +101,8 @@ export class ToolRegistry {
         error: errorMsg,
         isError: true,
         durationMs,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        artifacts: []
       };
     }
   }
@@ -126,7 +129,7 @@ export class ToolRegistry {
   private registerBuiltIns(_workspaceRoot: string): void {
     // 1. Tavily primary / Exa fallback: no API credentials exposed to the frontend.
     this.register({
-      definition: {
+      definition: ToolDefinitionSchema.parse({
         id: 'tool_web_search',
         name: 'web_search',
         description: 'Search real public web sources using Tavily with Exa failover.',
@@ -140,7 +143,7 @@ export class ToolRegistry {
         source: 'native',
         permissionLevel: 'READ',
         executionRuntime: 'CLOUD'
-      },
+      }),
       execute: async (args, _ctx) => {
         const started = Date.now();
         const callId = 'call_' + Math.random().toString(36).slice(2, 9);
@@ -151,7 +154,8 @@ export class ToolRegistry {
             output: { provider, query: String(args.query || ''), totalResults: results.length, results },
             isError: false,
             durationMs: Date.now() - started,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            artifacts: []
           };
         } catch (error) {
           return {
@@ -160,7 +164,8 @@ export class ToolRegistry {
             error: error instanceof WebSearchError ? error.code : 'SEARCH_PROVIDER_UNAVAILABLE',
             isError: true,
             durationMs: Date.now() - started,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            artifacts: []
           };
         }
       }
@@ -169,7 +174,7 @@ export class ToolRegistry {
 
     // 2. Safe File System Read Tool
     this.register({
-      definition: {
+      definition: ToolDefinitionSchema.parse({
         id: 'tool_fs_read',
         name: 'file_system_read',
         description: 'Read the contents of a safe local file inside the workspace root sandbox.',
@@ -183,7 +188,7 @@ export class ToolRegistry {
         source: 'native',
         permissionLevel: 'READ',
         executionRuntime: 'LOCAL'
-      },
+      }),
       execute: async (args, ctx) => {
         const start = Date.now();
         const rawPath = String(args.filePath || '');
@@ -196,7 +201,8 @@ export class ToolRegistry {
             error: 'Access denied: Path is outside workspace root sandbox.',
             isError: true,
             durationMs: Date.now() - start,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            artifacts: []
           };
         }
 
@@ -207,7 +213,8 @@ export class ToolRegistry {
             error: `File not found: ${rawPath}`,
             isError: true,
             durationMs: Date.now() - start,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            artifacts: []
           };
         }
 
@@ -219,7 +226,8 @@ export class ToolRegistry {
             output: { isDirectory: true, files },
             isError: false,
             durationMs: Date.now() - start,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            artifacts: []
           };
         }
 
@@ -233,14 +241,15 @@ export class ToolRegistry {
           },
           isError: false,
           durationMs: Date.now() - start,
-          timestamp: Date.now()
+          timestamp: Date.now(),
+          artifacts: []
         };
       }
     });
 
     // 3. Calculator Tool
     this.register({
-      definition: {
+      definition: ToolDefinitionSchema.parse({
         id: 'tool_calculator',
         name: 'calculator',
         description: 'Evaluate an arithmetic mathematical expression safely.',
@@ -254,7 +263,7 @@ export class ToolRegistry {
         source: 'native',
         permissionLevel: 'READ',
         executionRuntime: 'LOCAL'
-      },
+      }),
       execute: async (args, _ctx) => {
         const start = Date.now();
         const expr = String(args.expression || '').replace(/[^0-9+\-*/().^ ]/g, '');
@@ -266,7 +275,8 @@ export class ToolRegistry {
             output: { expression: expr, result },
             isError: false,
             durationMs: Date.now() - start,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            artifacts: []
           };
         } catch {
           return {
@@ -275,7 +285,8 @@ export class ToolRegistry {
             error: `Invalid mathematical expression: ${expr}`,
             isError: true,
             durationMs: Date.now() - start,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            artifacts: []
           };
         }
       }
@@ -283,7 +294,7 @@ export class ToolRegistry {
 
     // 4. System Shell Tool (DESTRUCTIVE — approval enforced upstream by AgentRuntime)
     this.register({
-      definition: {
+      definition: ToolDefinitionSchema.parse({
         id: 'tool_system_shell',
         name: 'system_shell',
         description: 'Execute a vetted shell command in the workspace sandbox. Requires explicit user approval. Blocked in production deployments.',
@@ -298,8 +309,11 @@ export class ToolRegistry {
         source: 'native',
         permissionLevel: 'DESTRUCTIVE',
         executionRuntime: 'LOCAL',
-        riskClass: 'CRITICAL'
-      },
+        category: 'system',
+        permissionScopes: ['system.execute'],
+        sideEffectLevel: 'DESTRUCTIVE',
+        approvalPolicy: 'require_approval'
+      }),
       execute: async (args, ctx) => {
         const start = Date.now();
         const command = String(args.command || '').trim();
@@ -313,7 +327,8 @@ export class ToolRegistry {
                    'Set AIRA_ALLOW_SHELL=true only in approved local-runner environments.',
             isError: true,
             durationMs: Date.now() - start,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            artifacts: []
           };
         }
 
@@ -324,7 +339,8 @@ export class ToolRegistry {
             error: 'Empty command rejected.',
             isError: true,
             durationMs: Date.now() - start,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            artifacts: []
           };
         }
 
@@ -337,7 +353,8 @@ export class ToolRegistry {
             error: 'SECURITY_REJECTED: Command contains potentially unsafe path traversal patterns.',
             isError: true,
             durationMs: Date.now() - start,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            artifacts: []
           };
         }
 
@@ -374,7 +391,8 @@ export class ToolRegistry {
                   error: `TIMEOUT: Command exceeded ${timeoutMs}ms limit.`,
                   isError: true,
                   durationMs,
-                  timestamp: Date.now()
+                  timestamp: Date.now(),
+                  artifacts: []
                 });
                 return;
               }
@@ -385,7 +403,8 @@ export class ToolRegistry {
                   error: `Shell error (exit ${(err as any).code ?? 1}): ${stderr || err.message}`,
                   isError: true,
                   durationMs,
-                  timestamp: Date.now()
+                  timestamp: Date.now(),
+                  artifacts: []
                 });
                 return;
               }
@@ -401,7 +420,8 @@ export class ToolRegistry {
                 },
                 isError: false,
                 durationMs,
-                timestamp: Date.now()
+                timestamp: Date.now(),
+                artifacts: []
               });
             }
           );
@@ -413,7 +433,8 @@ export class ToolRegistry {
               error: `Process spawn error: ${err.message}`,
               isError: true,
               durationMs: Date.now() - start,
-              timestamp: Date.now()
+              timestamp: Date.now(),
+              artifacts: []
             });
           });
 
@@ -425,7 +446,7 @@ export class ToolRegistry {
       }
     });
     this.register({
-      definition: {
+      definition: ToolDefinitionSchema.parse({
         id: 'tool_hang_safe',
         name: 'hang_safe',
         description: 'Sleeps forever, safely',
@@ -434,15 +455,15 @@ export class ToolRegistry {
         permissionLevel: 'READ',
         executionRuntime: 'LOCAL',
         idempotencyClass: 'SAFE_READ'
-      },
+      }),
       execute: async () => {
         await new Promise(r => setTimeout(r, 1000000));
-        return { toolCallId: 'mock', output: 'ok', durationMs: 0, timestamp: Date.now() };
+        return { toolCallId: 'mock', output: 'ok', durationMs: 0, timestamp: Date.now() , artifacts: [], isError: false };
       }
     });
 
     this.register({
-      definition: {
+      definition: ToolDefinitionSchema.parse({
         id: 'tool_hang_unsafe',
         name: 'hang_unsafe',
         description: 'Sleeps forever, unsafely',
@@ -451,10 +472,10 @@ export class ToolRegistry {
         permissionLevel: 'READ',
         executionRuntime: 'LOCAL',
         idempotencyClass: 'NON_IDEMPOTENT'
-      },
+      }),
       execute: async () => {
         await new Promise(r => setTimeout(r, 1000000));
-        return { toolCallId: 'mock', output: 'ok', durationMs: 0, timestamp: Date.now() };
+        return { toolCallId: 'mock', output: 'ok', durationMs: 0, timestamp: Date.now() , artifacts: [], isError: false };
       }
     });
   }
@@ -466,3 +487,4 @@ export * from './adapters/browser-adapter.js';
 export * from './adapters/file-adapter.js';
 export * from './adapters/repo-adapter.js';
 export * from './adapters/connector-adapter.js';
+
