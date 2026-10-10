@@ -56,7 +56,7 @@ try {
   const lease = await q.claim('preview_http_test', 60_000);
   assert.equal(lease?.id, jobId);
   assert.equal(await q.start(jobId, 'preview_http_test', lease.generation), true);
-  assert.equal(await q.finish(jobId, 'preview_http_test', lease.generation, 'COMPLETED', {}), true);
+  assert.equal(await q.finish(jobId, 'preview_http_test', lease.generation, 'COMPLETED', { buildStatus: 'BUILD_PASSED' }), true);
 
   const html = '<!doctype html><html><body>COMPILED_PREVIEW_HTTP</body></html>';
   await writeFile(join(root, 'index.html'), html);
