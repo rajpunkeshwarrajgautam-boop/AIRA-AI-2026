@@ -509,27 +509,33 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
   const bufferedLiveEvents: any[] = [];
   let isReplaying = true;
   let isClosed = false;
+  let lastDelivered = cursor;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let isPolling = false;
 
+  const deliver = (event: any) => {
+    if (isClosed) return;
+    if (typeof event.sequence === 'number' && event.sequence <= lastDelivered) return;
+    if (typeof event.sequence === 'number') lastDelivered = event.sequence;
+    writeSseEvent(event);
+    if (['run.completed', 'run.failed', 'run.cancelled'].includes(event.type)) closeCleanly();
+  };
   const onLiveEvent = (event: any) => {
-    if (isReplaying) {
-      bufferedLiveEvents.push(event);
-    } else {
-      writeSseEvent(event);
-      if (['run.completed', 'run.failed', 'run.cancelled'].includes(event.type)) {
-        closeCleanly();
-      }
-    }
+    if (isReplaying) bufferedLiveEvents.push(event);
+    else deliver(event);
   };
 
   const closeCleanly = () => {
     if (isClosed) return;
     isClosed = true;
+    if (pollTimer) clearInterval(pollTimer);
     stream.off('event', onLiveEvent);
     res.end();
   };
 
   req.on('close', () => {
     isClosed = true;
+    if (pollTimer) clearInterval(pollTimer);
     stream.off('event', onLiveEvent);
   });
 
@@ -553,7 +559,7 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
     let terminalEventSeen = false;
     for (const evt of pastEvents) {
       if (evt.sequence !== undefined && evt.sequence <= highWaterSequence) {
-        writeSseEvent(evt);
+        deliver(evt);
         if (['run.completed', 'run.failed', 'run.cancelled'].includes(evt.type)) {
           terminalEventSeen = true;
         }
@@ -571,7 +577,7 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
     // 6. Flush buffer
     for (const evt of bufferedLiveEvents) {
       if (evt.sequence !== undefined && evt.sequence > highWaterSequence) {
-        writeSseEvent(evt);
+        deliver(evt);
         if (['run.completed', 'run.failed', 'run.cancelled'].includes(evt.type)) {
           terminalEventSeen = true;
         }
@@ -586,10 +592,29 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
     // If run is already terminal but terminal event wasn't seen (somehow?), ensure we close
     const latestRun = await agentRuntime.getRun(runId);
     if (latestRun && ['COMPLETED', 'FAILED', 'CANCELLED'].includes(latestRun.state)) {
-       // It's terminal but we might have missed the terminal event if it happened before we queried highWaterSequence but after we queried events?
-       // That shouldn't happen. But just in case:
-       closeCleanly();
+      closeCleanly();
+      return;
     }
+    // Durable dispatcher runs in ANOTHER process; local EventEmitter events
+    // are not visible here. Poll persisted events with sequence deduplication
+    // so clients can observe progress across API replicas and HTTP reconnects.
+    pollTimer = setInterval(() => {
+      if (isClosed || isPolling) return;
+      isPolling = true;
+      void (async () => {
+        try {
+          const events = await runRepo.getRunEventsAfter(runId, Math.max(0, lastDelivered));
+          for (const next of events) {
+            if (isClosed) break;
+            deliver(next);
+          }
+        } catch (error) {
+          console.error('durable run event poll failed', error instanceof Error ? error.message : 'unknown');
+        } finally {
+          isPolling = false;
+        }
+      })();
+    }, 1000);
   } catch (err: any) {
     if (!isClosed) {
       res.write(`event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`);
