@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { once } from 'node:events';
 import { DockerProjectWorker, validateProjectPath, stableBuildJobId } from '../packages/app-builder/src/worker.js';
+import { ApplicationBuildClient } from '../packages/app-builder/src/client.js';
 
 const root = await mkdtemp(join(tmpdir(), 'aira-build-e2e-'));
 const config = {
@@ -132,6 +133,9 @@ try {
   assert.equal(keyed.status, 202);
   const keyedId = (await keyed.json()).jobId as string;
   assert.equal(keyedId, stableBuildJobId('alice', submissionKey));
+  const client = new ApplicationBuildClient({ url: 'http://127.0.0.1:4101', token: config.token });
+  assert.equal((await client.findByKey(submissionKey, 'alice'))?.id, keyedId);
+  assert.equal(await client.findByKey(submissionKey, 'bob'), undefined);
   const keyedCompleted = await waitFor(keyedId);
   assert.equal(keyedCompleted.state, 'BUILD_PASSED');
 
