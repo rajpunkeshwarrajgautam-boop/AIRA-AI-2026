@@ -5,7 +5,7 @@ import { BuildInput, type BuildJob, type BuildRequest } from './worker.js';
 
 const BuildDraft = BuildInput.omit({ ownerId: true });
 const JobAccepted = z.object({ jobId: z.string().uuid(), state: z.string() });
-const WorkerHealth = z.object({ status: z.literal('PARTIAL'), runtime: z.literal('docker'), dependencyInstall: z.literal(false) });
+const WorkerHealth = z.object({ status: z.literal('PARTIAL'), runtime: z.literal('docker'), dependencyInstall: z.boolean() });
 
 function requiredConfig(): { url: string; token: string } {
   if (process.env.AIRA_BUILDER_ENABLED !== 'true') throw new Error('APPLICATION_BUILD_NOT_ENABLED');
