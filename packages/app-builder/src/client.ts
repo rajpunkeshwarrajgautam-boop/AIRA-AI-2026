@@ -51,6 +51,17 @@ export class ApplicationBuildClient {
     const result = await this.request('/v1/jobs', valid.ownerId, valid);
     return JobAccepted.parse(result).jobId;
   }
+  async sourceArchive(jobId: string, ownerId: string): Promise<Buffer> {
+    if (!/^[0-9a-f-]{36}$/.test(jobId)) throw new Error('INVALID_BUILD_JOB_ID');
+    const res = await fetch(this.config.url + '/v1/jobs/' + jobId + '/source', {
+      headers: { Authorization: 'Bearer ' + this.config.token, 'x-aira-owner': ownerId },
+      signal: AbortSignal.timeout(15_000)
+    });
+    if (!res.ok) throw new Error('BUILD_SOURCE_NOT_AVAILABLE_' + res.status);
+    const content = await res.arrayBuffer();
+    if (content.byteLength > 1_500_000) throw new Error('BUILD_SOURCE_TOO_LARGE');
+    return Buffer.from(content);
+  }
   async inspect(jobId: string, ownerId: string): Promise<BuildJob> {
     const result = await this.request('/v1/jobs/' + encodeURIComponent(jobId), ownerId);
     return result as BuildJob;
