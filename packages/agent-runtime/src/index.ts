@@ -30,6 +30,7 @@ import { WorkflowRepository, PostgresWorkflowRepository } from './workflow-repos
 import { WorkflowEngine } from './workflow-engine.js';
 import { WorkflowCompiler } from './workflow-compiler.js';
 import { ApplicationBuildClient, generateApplicationDraft } from '../../app-builder/src/client.js';
+import { PostgresApplicationBuildQueue } from '../../app-builder/src/queue.js';
 import { buildDurableHistorySystemMessage } from './memory-policy.js';
 
 export class AgentRuntime extends EventEmitter {
@@ -388,6 +389,25 @@ export class AgentRuntime extends EventEmitter {
           await this.emitRunEvent(runId, 'approval.required', request);
           return;
         }
+      }
+      // Durable execution opt-in: approved requests are queued and picked up by
+      // a separately deployed, long-lived dispatcher. No model/build loop runs
+      // inside this HTTP request when this flag is enabled.
+      if (process.env.AIRA_BUILDER_DISPATCHER_ENABLED === 'true') {
+        try {
+          const queue = new PostgresApplicationBuildQueue();
+          const queued = await queue.enqueue(run.principalId, run.prompt, 'run:' + run.id, run.id);
+          run.executionCheckpoint = 'BUILD_QUEUED';
+          await this.runRepo.saveRun(run);
+          await this.transitionRunState(runId, 'RUNNING');
+          await this.emitRunEvent(runId, 'tool.requested', {
+            name: 'project_build', queueJobId: queued.id, state: 'QUEUED'
+          });
+        } catch (error: unknown) {
+          await reportFailure('APPLICATION_BUILD_QUEUE_FAILED: ' +
+            (error instanceof Error ? error.message.slice(0, 240) : 'unknown'));
+        }
+        return;
       }
       await this.transitionRunState(runId, 'RUNNING');
       try {

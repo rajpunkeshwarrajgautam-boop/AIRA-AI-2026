@@ -10,6 +10,7 @@ import { BrainV2KnowledgeEngine } from '../../../packages/knowledge/src/index.js
 import { McpHost } from '../../../packages/mcp/src/index.js';
 import { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
 import { ApplicationBuildClient } from '../../../packages/app-builder/src/client.js';
+import { PostgresApplicationBuildQueue } from '../../../packages/app-builder/src/queue.js';
 import { AutomationEngine } from '../../../packages/automation/src/index.js';
 import { PostgresAgentRepository, PostgresRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
 import { PostgresAutomationRepository, PostgresAutomationRunRepository } from '../../../packages/automation/src/repositories.js';
@@ -343,6 +344,39 @@ app.get('/api/search/capabilities', async (_req: Request, res: Response) => {
 });
 
 
+// Durable build queue: principal-owned status and cancellation, independent
+// of the browser connection and direct worker job lifecycle.
+app.get('/api/app-builder/queue/:id', async (req: Request, res: Response) => {
+  try {
+    const principal = req.principal!;
+    if (!principal.scopes?.includes('*') && !principal.scopes?.includes('projects.read') &&
+        !principal.scopes?.includes('projects.write')) {
+      return res.status(403).json({ error: 'PROJECT_READ_PERMISSION_DENIED' });
+    }
+    const record = await new PostgresApplicationBuildQueue().get(req.params.id, principal.userId);
+    if (!record) return res.status(404).json({ error: 'BUILD_JOB_NOT_FOUND' });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).json(record);
+  } catch {
+    return res.status(503).json({ error: 'BUILD_QUEUE_UNAVAILABLE' });
+  }
+});
+
+app.post('/api/app-builder/queue/:id/cancel', async (req: Request, res: Response) => {
+  try {
+    const principal = req.principal!;
+    if (!principal.scopes?.includes('*') && !principal.scopes?.includes('projects.write')) {
+      return res.status(403).json({ error: 'PROJECT_WRITE_PERMISSION_DENIED' });
+    }
+    const record = await new PostgresApplicationBuildQueue().requestCancellation(req.params.id, principal.userId);
+    if (!record) return res.status(404).json({ error: 'BUILD_JOB_NOT_FOUND' });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).json({ jobId: record.id, state: record.state, cancelRequested: record.cancelRequested });
+  } catch {
+    return res.status(503).json({ error: 'BUILD_QUEUE_UNAVAILABLE' });
+  }
+});
+
 // An authenticated principal may cancel their own live build. The worker enforces
 // ownership independently; cancellation is never an unscoped tool action.
 app.post('/api/app-builder/jobs/:id/cancel', async (req: Request, res: Response) => {
@@ -509,27 +543,33 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
   const bufferedLiveEvents: any[] = [];
   let isReplaying = true;
   let isClosed = false;
+  let lastDelivered = cursor;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let isPolling = false;
 
+  const deliver = (event: any) => {
+    if (isClosed) return;
+    if (typeof event.sequence === 'number' && event.sequence <= lastDelivered) return;
+    if (typeof event.sequence === 'number') lastDelivered = event.sequence;
+    writeSseEvent(event);
+    if (['run.completed', 'run.failed', 'run.cancelled'].includes(event.type)) closeCleanly();
+  };
   const onLiveEvent = (event: any) => {
-    if (isReplaying) {
-      bufferedLiveEvents.push(event);
-    } else {
-      writeSseEvent(event);
-      if (['run.completed', 'run.failed', 'run.cancelled'].includes(event.type)) {
-        closeCleanly();
-      }
-    }
+    if (isReplaying) bufferedLiveEvents.push(event);
+    else deliver(event);
   };
 
   const closeCleanly = () => {
     if (isClosed) return;
     isClosed = true;
+    if (pollTimer) clearInterval(pollTimer);
     stream.off('event', onLiveEvent);
     res.end();
   };
 
   req.on('close', () => {
     isClosed = true;
+    if (pollTimer) clearInterval(pollTimer);
     stream.off('event', onLiveEvent);
   });
 
@@ -553,7 +593,7 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
     let terminalEventSeen = false;
     for (const evt of pastEvents) {
       if (evt.sequence !== undefined && evt.sequence <= highWaterSequence) {
-        writeSseEvent(evt);
+        deliver(evt);
         if (['run.completed', 'run.failed', 'run.cancelled'].includes(evt.type)) {
           terminalEventSeen = true;
         }
@@ -571,7 +611,7 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
     // 6. Flush buffer
     for (const evt of bufferedLiveEvents) {
       if (evt.sequence !== undefined && evt.sequence > highWaterSequence) {
-        writeSseEvent(evt);
+        deliver(evt);
         if (['run.completed', 'run.failed', 'run.cancelled'].includes(evt.type)) {
           terminalEventSeen = true;
         }
@@ -586,10 +626,29 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
     // If run is already terminal but terminal event wasn't seen (somehow?), ensure we close
     const latestRun = await agentRuntime.getRun(runId);
     if (latestRun && ['COMPLETED', 'FAILED', 'CANCELLED'].includes(latestRun.state)) {
-       // It's terminal but we might have missed the terminal event if it happened before we queried highWaterSequence but after we queried events?
-       // That shouldn't happen. But just in case:
-       closeCleanly();
+      closeCleanly();
+      return;
     }
+    // Durable dispatcher runs in ANOTHER process; local EventEmitter events
+    // are not visible here. Poll persisted events with sequence deduplication
+    // so clients can observe progress across API replicas and HTTP reconnects.
+    pollTimer = setInterval(() => {
+      if (isClosed || isPolling) return;
+      isPolling = true;
+      void (async () => {
+        try {
+          const events = await runRepo.getRunEventsAfter(runId, Math.max(0, lastDelivered));
+          for (const next of events) {
+            if (isClosed) break;
+            deliver(next);
+          }
+        } catch (error) {
+          console.error('durable run event poll failed', error instanceof Error ? error.message : 'unknown');
+        } finally {
+          isPolling = false;
+        }
+      })();
+    }, 1000);
   } catch (err: any) {
     if (!isClosed) {
       res.write(`event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`);
