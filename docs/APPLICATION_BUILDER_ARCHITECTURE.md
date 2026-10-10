@@ -1,44 +1,46 @@
-# AIRA AI — Application Builder Architecture
+# AIRA Application Builder — Implemented Architecture
 
-**Status: PARTIAL, NOT PRODUCTION CERTIFIED.** Built in draft PR #42 (stacked on #40); tracking Issue #41.
+**Release verdict: NOT CERTIFIED.** Draft [PR #42](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/42) builds upon PR #40; tracked by Issue #41.
 
-## Request path
+## Control-plane flow
 
 ```text
-Chat composer → /api/chat/stream → ServerIntentRouter(APPLICATION_BUILD)
-→ CapabilityRegistry(PARTIAL only when explicit opt-in configured)
-→ AgentRuntime (principal projects.write → ApprovalKernel WRITE)
-→ ModelRouter real configured provider (structured multi-file draft)
-→ ApplicationBuildClient HTTPS/loopback → dedicated DockerProjectWorker
-→ per-job files → real docker node/npm checks (network none)
-→ state/manifest/hashes on worker filesystem → short-lived static preview
-→ tool events → text and distinct project artifact → Artifact Studio
+AIRA chat → server-authoritative APPLICATION_BUILD intent and capability registry
+→ projects.write scope and explicit WRITE approval
+→ ModelRouter live provider → structured source draft
+→ ApplicationBuildClient (authenticated) → dedicated DockerProjectWorker
+→ operator-approved offline cache resolution → npm lockfile validation
+→ sandboxed npm ci --offline --ignore-scripts → syntax/build/test commands
+→ verified source manifest and optional compiled dist manifest
+→ short-lived preview → scoped source archive → project artifact
 ```
 
-The model-generated source is untrusted. The trusted API never invokes Docker. Docker is invoked solely on a separately deployed trusted worker host, running as a non-root OS account with access to a carefully managed daemon. The generated project is mounted only into an ephemeral isolated container. The worker must not run on Vercel.
+`packages/app-builder/src/worker.ts`: localhost control server, per-owner jobs, source/path checks, cancellation via AbortSignal + Docker cleanup, bounded concurrent jobs, offline package cache, per-job source files, compiled-preview tickets and integrity hashes. Worker state is kept outside untrusted source mounts.
 
-## Existing implementation
+`packages/app-builder/src/dependencies.ts`: exact operator allowlist checks; integrity/registry checks for lockfiles; rejects unsupported specs, lifecycle-install packages, non-npm registry URLs and untrusted lockfile paths. Lockfiles may be generated with `npm install --package-lock-only --offline --ignore-scripts` inside the sandbox from an operator-curated cache, followed by real `npm ci --offline --ignore-scripts`. No general network access is granted to generated code.
 
-- `packages/app-builder/src/worker.ts`: token-authenticated loopback control server, owner checks, source validation, bounded resources, typed build job states, manifest, static preview service.
-- `packages/app-builder/src/archive.ts`: manifest-only tar.gz export with file hash checks and symlink rejection.
-- `packages/app-builder/src/client.ts`: configured worker client and real-provider structured draft generator.
-- `packages/agent-runtime/src/index.ts`: scoped/approved application-build branch, worker health preflight, two bounded generation/build attempts, evidence-bearing result. No claims of independently verified gameplay.
-- `src/components/ArtifactStudio.tsx`: explicit project artifact type with allowlisted preview origin and source archive download.
-- `src/utils/runEvents.ts` and `src/App.tsx`: approval value correction and SSE reconnect to persisted events.
-- `test/app-builder-worker.ts`: actual Docker job, browser calculator fixture, negative cases, owner isolation and source export.
+`packages/app-builder/src/preview-output.ts`: compiled `dist/` collection with supported extensions, bounded size/count, symlink rejection and per-file hashes. `dist/` output takes precedence over raw source preview; a source archive contains source and generated lockfile, not arbitrary build caches.
 
-## Critical limitations
+`packages/app-builder/src/queue.ts` and `packages/db/src/migrations/016_app_build_durable_queue.ts`: **PostgreSQL queue primitives**, not yet a complete dispatcher. Implement idempotent enqueue, atomic `FOR UPDATE SKIP LOCKED` claim, fencing generations, leased starts/heartbeats/finish, owner-scoped cancellation, cancellation acknowledgment and lease expiry recovery. These primitives are covered by `test/app-builder-queue.ts`.
 
-1. Package installation requiring network remains **not configured**. Worker rejects projects with third-party dependencies, including Three.js packages. This prevents the original 3D pinball benchmark from being certified.
-2. The tested calculator is a **test fixture supplied by the certification suite**, not a model-created project. The model-driven user request path has not been certified against a live provider and deployed worker.
-3. Only static files originally in the source manifest are served by the preview. A Vite dist lifecycle and arbitrary compiled assets are not yet implemented.
-4. Job state is written to worker-local JSON and reloaded after restart with in-progress jobs marked BLOCKED. It is not a durable distributed queue and is not safe for horizontally scaled multi-worker production.
-5. The API currently waits for bounded worker completion inside a request. Vercel execution time constraints and detached job streaming need engineering before production.
-6. No independent generated-game gameplay tests, comprehensive artifact provenance signatures, full worker crash/cancellation safety, disk quotas, registry egress control, package lockfile supply-chain controls, or staging runtime certification yet.
-7. The preview control server binds loopback and has an origin setting; safe public proxy routing, authentication, cleanup and production certificates require separate infrastructure.
+`packages/agent-runtime/src/index.ts`: server-side scope and approval gate, worker health, capability-aware prompt, bounded model generation and real tool result recording. This path is still request-bound and does **not** yet use the new durable queue as an asynchronous scheduler. A successful model-authored test is never equivalent to independent product certification.
 
-The registry remains NOT_READY unless explicitly enabled; when enabled it is PARTIAL/BETA and must pass worker health for each request. Full readiness should be tied to production-certified worker health and independently verified acceptance checks.
+`src/components/ArtifactStudio.tsx`: dedicated project artifact type, separate trusted preview origin; cross-origin project iframe allows scripts and same-origin only for validated independent preview origin, while ordinary HTML snippets retain a stricter sandbox. Project source downloads require authentication and independent worker owner checks.
 
-## Acceptance definitions
+## Verified tests versus product acceptance
 
-`BUILD_PASSED` means configured command steps exited zero inside the worker. It does **not** mean user requirements were independently verified. Full project certification requires externally defined browser/product assertions in addition to model-authored tests and successful compilation.
+The Docker/Chromium worker test exercises real build and browser interaction for a **supplied calculator fixture**, cancel/denial, source export, compiled `dist` assets and offline Three.js install. It does **not** demonstrate an AI-generated calculator or playable AI-generated pinball.
+
+The database test verifies queue/fencing primitives but does **not** demonstrate durable end-to-end background job execution on Vercel.
+
+## Unresolved architectural work
+
+- Independent live-model software-generation acceptance, model-driven calculator and 3D pinball.
+- Vite/React/Three.js compiled application E2E with an approved full dependency cache, not just a Three.js module import.
+- Production-grade execution isolation (rootless daemon/microVM and adversarial security verification).
+- Durable worker-polling dispatcher, out-of-process agent execution, heartbeat orchestration and cancellation propagation from queue to worker.
+- Hardened public preview gateway with per-user authorization, HTTPS, revocation and reliable TTL cleanup.
+- Artifact object storage, source versioning and robust per-tenant quotas.
+- Security assessment and staging certification.
+
+**Do not advertise a general-purpose production coding agent from these infrastructure checks.**

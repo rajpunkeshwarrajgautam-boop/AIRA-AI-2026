@@ -1,27 +1,26 @@
-# Application Builder Security Notes
+# Application Builder — Security and Trust Boundaries
 
-**Trust boundary:** untrusted generated source never executes in the application/API process. Worker auth requires a high-entropy token and an owner identity from the authenticated API. Never expose the token or Docker daemon to the browser.
+## Implemented safeguards
 
-## Implemented mitigations
+- Authenticated AIRA principal and explicit `projects.write` approval before project execution.
+- Owner check on worker job controls and project export; client cannot choose a different server principal.
+- Loopback-only worker control endpoint, high-entropy token, no shell execution endpoint.
+- Docker container runs as non-root, with no-new-privileges, dropped capabilities, disabled network, read-only root filesystem, temporary directory limits, process/CPU/memory bounds and command timeout.
+- Docker job cancellation through AbortSignal and forced container removal on failed/aborted CLI invocation.
+- Worker job metadata stored outside untrusted mounted workspace; source paths, archive paths and compiled preview paths checked for escapes and symlinks.
+- Short-lived preview tickets, manifest allowlist, file hashes and CSP; compiled builds serve only validated `dist` assets.
+- Offline npm installation from separate operator-curated cache; exact approved package/version maps, lockfile registry/integrity verification, `--ignore-scripts`, no sandbox network.
+- PostgreSQL queue concurrency through row locks and generation fencing; user cancellation prevents late successful commits to a leased job.
 
-- Explicit `projects.write` scope plus WRITE approval before project generation and execution.
-- Worker access token compared using timing-safe equality; control listener bound to loopback.
-- Worker must run as a non-root OS account; Docker-run is non-root, network disabled, root filesystem read-only, caps dropped, no-new-privileges, resource limits and isolated temporary directory.
-- Worker only invokes fixed argv operations: Node syntax check and npm build/test scripts. No arbitrary command endpoint.
-- Per-job randomized workspace directories, path-component validation, size limits, maximum files, symlink restrictions and source hash manifests.
-- Owner-checked job lookups and authenticated source archives; public preview uses random short-lived ticket and manifest-only file serving, with frame-origin CSP, no-referrer and no-store.
-- Distinct BUILD_PASSED state prevents equating successful build commands with independent gameplay certification.
+## Significant remaining threats / release blockers
 
-## Unresolved high-priority security work
+1. **Rootful Docker daemon**: running a worker as non-root does not make access to a privileged Docker daemon safe. Production startup now requires detectable rootless Docker, pinned image digest and HTTPS preview/frame origins; security review still needed.
+2. **Package supply chain**: integrity hashes protect lockfile tarball identity but do not prove malware-free code. Operator-curated cache must be scanned, pinned and independently provisioned. npm scripts are ignored on install but project build/test scripts execute inside the sandbox.
+3. **Distributed lifecycle**: PostgreSQL lease/recovery primitives exist, but API/runtime still use request-bound worker polling; no durable background dispatcher/fencing orchestration or full process tree audit.
+4. **Public previews**: production TLS routing, account-level authorization, preview revocation, rate limits and serving untrusted browser code on a dedicated origin must be independently tested. Bearer tickets alone do not establish all of these.
+5. **Host resources**: disk quotas, network-hardening at host level, per-tenant scheduling quotas, orchestration fencing, storage retention and external audit logs are incomplete.
+6. **Filesystem races**: path validation and hash verification reduce risk but comprehensive TOCTOU/hardlink tests and openat-style root confinement remain outstanding.
+7. **Autonomous generation**: fixture builds are not security or functional certification of arbitrary AI-generated apps; no live model-generated pinball accepted.
+8. **Object storage**: distributed durable source/compiled output storage and integrity attestations are incomplete.
 
-1. Worker Docker daemon access must be isolated from other workloads (non-root worker process alone does **not** make a rootful Docker socket safe). Prefer rootless, microVM or otherwise hardened runner with independent security review.
-2. Container termination must be hardened for CLI timeout, host restarts and orphan cleanup. Current 45-second command timeout is not a complete cancellation protocol.
-3. Enforce disk quota, storage retention, job expiry, global and per-tenant quotas, robust audit logs, idempotency, durable queue/leases and concurrent worker fencing.
-4. External dependency installation needs tightly constrained registry-only egress, reproducible lockfiles, malware/supply-chain controls, integrity pins and vulnerability checks before it may be enabled.
-5. Dedicated HTTPS preview routing, explicit per-user authorization, origin separation, replay protection and ticket invalidation need independent testing.
-6. Generated JS/browser preview does not yet have a complete automated security/a11y/gameplay acceptance suite.
-7. Worker source paths and archives should undergo adversarial symlink, hardlink, Unicode and TOCTOU testing. Audit potential data retention and log leak risks.
-8. `node:24-alpine` is currently selected by mutable tag for local CI; pin a reviewed immutable digest before staged deployment.
-9. No evidence of remote production deployment or provider-driven model source generation is established by current worker fixture tests.
-
-**Production verdict:** NOT CERTIFIED. Do not deploy the worker to a public reachable execution environment or claim production-grade isolation until all blocking issues are resolved.
+**Security verdict: NOT CERTIFIED FOR PUBLIC MULTITENANT USE.** Do not change production secrets, domain mapping, `aira-ai-live` or production Neon.
