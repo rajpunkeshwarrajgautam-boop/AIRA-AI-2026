@@ -42,6 +42,26 @@ marked.use({
       }
     },
     {
+      // A TeX display expression may appear inside a normal sentence.
+      // The block-level tokenizer cannot see these because Marked treats
+      // the surrounding sentence as a paragraph.
+      name: 'airaMathEmbeddedDisplay',
+      level: 'inline',
+      start(src: string) {
+        const index = src.indexOf('\u005c[');
+        return index < 0 ? undefined : index;
+      },
+      tokenizer(src: string) {
+        const match = src.match(/^\\\[([\s\S]+?)\\\]/);
+        if (!match || !match[1].trim()) return undefined;
+        return { type: 'airaMathEmbeddedDisplay', raw: match[0], text: match[1] };
+      },
+      renderer(token) {
+        return '<span class="aira-math-embedded">' + renderMath(token.text, true) + '</span>';
+      }
+    },
+
+    {
       name: 'airaMathInline',
       level: 'inline',
       start(src: string) {
