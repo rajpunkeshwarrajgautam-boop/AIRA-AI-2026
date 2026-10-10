@@ -20,6 +20,7 @@ async function event(runId: string, type: StreamingEvent['type'], data: Record<s
 function runForJob(job: QueuedBuild, run?: Run): Run {
   if (!run || !job.projectId || run.id !== job.projectId || run.principalId !== job.ownerId ||
       run.intent !== 'APPLICATION_BUILD' ||
+      ['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state) ||
       run.routingDecision?.executionTarget !== 'APPLICATION_BUILDER' ||
       !['TOOL_APPROVED', 'BUILD_QUEUED'].includes(run.executionCheckpoint || '') ||
       !run.principalScopes.some(x => x === '*' || x === 'projects.write')) {
