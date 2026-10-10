@@ -168,10 +168,34 @@ jobs:
         run: npm run test:conversation-search-semantic
 
 
+  application-worker:
+    name: Isolated Application Worker
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Pull isolated Node runtime image
+        run: docker pull node:24-alpine
+
+      - name: Run real Docker application worker integration
+        run: npm run test:app-builder
+
   certify:
     name: Main / PR certification
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
-    needs: [fast, semantic-search]
+    needs: [fast, semantic-search, application-worker]
     runs-on: ubuntu-latest
     timeout-minutes: 40
     services:
