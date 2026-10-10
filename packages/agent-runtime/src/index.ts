@@ -329,7 +329,9 @@ export class AgentRuntime extends EventEmitter {
 
     // Checkpoint 0: Capability readiness gate
     if (run.routingDecision?.executionTarget === 'CAPABILITY_NOT_READY') {
-      const msg = `The requested capability (${run.intent}) is currently in development and not yet available for direct execution. (Target: ${run.routingDecision.executionTarget})`;
+      const msg = run.intent === 'APPLICATION_BUILD'
+        ? 'APPLICATION_BUILD_NOT_AVAILABLE: Aira cannot create project files, install dependencies, run builds or tests, or launch a playable preview in this environment. No application was created or verified. You can request illustrative source code or a tutorial, but it must not be presented as a working build.'
+        : `The requested capability (${run.intent}) is currently in development and not yet available for direct execution. (Target: ${run.routingDecision.executionTarget})`;
       run.content = msg;
       run.executionCheckpoint = 'COMPLETED';
       await this.runRepo.saveRun(run);
