@@ -5,6 +5,7 @@ import { resolve, relative, extname, join, sep } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { z } from 'zod';
+import { createSourceArchive } from './archive.js';
 
 const execFileAsync = promisify(execFile);
 const SourceFile = z.object({
@@ -275,6 +276,26 @@ export class DockerProjectWorker {
         } catch (err: unknown) {
           return this.send(res, 400, { error: err instanceof Error ? err.message : 'INVALID_JOB' });
         }
+      }
+      const sourceMatch = req.url?.match(/^\/v1\/jobs\/([0-9a-f-]{36})\/source$/);
+      if (sourceMatch && req.method === 'GET') {
+        const job = this.getJob(sourceMatch[1], owner);
+        if (!job || job.state !== 'BUILD_PASSED' || !job.manifest) {
+          return this.send(res, 404, { error: 'SOURCE_NOT_AVAILABLE' });
+        }
+        try {
+          const archive = await createSourceArchive(resolve(this.config.root, job.id), job.manifest);
+          res.writeHead(200, {
+            'Content-Type': 'application/gzip',
+            'Content-Disposition': 'attachment; filename="aira-project-source.tar.gz"',
+            'Cache-Control': 'no-store',
+            'X-Content-Type-Options': 'nosniff'
+          });
+          res.end(archive);
+        } catch (err: unknown) {
+          return this.send(res, 409, { error: err instanceof Error ? err.message : 'EXPORT_ERROR' });
+        }
+        return;
       }
       const match = req.url?.match(/^\/v1\/jobs\/([0-9a-f-]{36})$/);
       if (match && req.method === 'GET') {
