@@ -84,7 +84,7 @@ async function runE2E() {
       });
     })()`);
     await page.getByRole('button', { name: 'Copy as Rich Text' }).click();
-    await page.getByText('Rich text copied').waitFor({ timeout: 10000 });
+    await page.getByText('Rich text copied', { exact: true }).waitFor({ timeout: 10000 });
     const copied = await page.evaluate('window.__richClipboardCapture');
     if (!copied?.types?.includes('text/html') || !copied?.types?.includes('text/plain')) {
       throw new Error('Rich clipboard missing HTML and plain MIME types');
