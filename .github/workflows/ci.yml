@@ -81,6 +81,9 @@ jobs:
       - name: Durable application build queue certification
         run: npm run test:app-builder-queue
 
+      - name: Durable application dispatcher integration
+        run: npm run test:app-builder-dispatcher
+
       - name: Runtime verification
         run: npm test
 
