@@ -105,7 +105,7 @@ function attachUser(req: Request, payload: SessionPayload): void {
     id: payload.uid,
     sessionId: payload.sid,
     roles: ['workspace_user'],
-    scopes: ['chat:write', 'runs:read', 'runs:write', 'browser.read', 'files.read'],
+    scopes: ['chat:write', 'runs:read', 'runs:write', 'browser.read'],
   };
 }
 
@@ -170,6 +170,11 @@ export function createSessionAuthMiddleware() {
 }
 
 export function ensureAuthenticatedSession(req: Request, res: Response) {
+  const accountRequest = req as Request & { account?: { uid: string; sessionId: string; expiresAt: number; email?: string } };
+  if (accountRequest.account) {
+    return { userId: `firebase:${accountRequest.account.uid}`, sessionId: accountRequest.account.sessionId,
+      expiresAt: accountRequest.account.expiresAt, account: true, email: accountRequest.account.email || null };
+  }
   let payload = readSessionPayload(req);
   const now = Math.floor(Date.now() / 1000);
 
@@ -195,3 +200,4 @@ export function ensureAuthenticatedSession(req: Request, res: Response) {
 }
 
 export const SESSION_COOKIE_NAME = SESSION_COOKIE;
+

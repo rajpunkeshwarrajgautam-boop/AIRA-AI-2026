@@ -49,7 +49,8 @@
     "test:browser:url-policy": "npx tsx test/public-url-policy.ts",
     "typecheck:api": "tsc -p tsconfig.api.json",
     "typecheck:frontend": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.node.json --noEmit",
-    "test:mission:execution": "npx tsx test/mission-execution-regression.ts"
+    "test:mission:execution": "npx tsx test/mission-execution-regression.ts",
+    "test:account:auth": "npx tsx test/account-auth-regression.ts"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
@@ -63,6 +64,7 @@
     "dotenv": "^18.0.4",
     "express": "^5.2.1",
     "firebase": "^12.19.0",
+    "firebase-admin": "14.5.0",
     "framer-motion": "^14.0.0",
     "gsap": "^3.15.0",
     "katex": "0.18.7",

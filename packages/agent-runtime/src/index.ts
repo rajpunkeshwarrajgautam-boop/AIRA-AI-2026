@@ -903,7 +903,9 @@ Provider Capabilities:
     const definitions = new Map([
       ...this.toolRegistry.listDefinitions(), ...this.toolGateway.listDefinitions()
     ].map(definition => [definition.name, definition]));
-    const decision = await planMissionStep(run, [...definitions.values()], this.modelRouter.getAdapter(run.modelPolicy));
+    const allowed = Array.isArray(run.context?.agentAllowedTools) ? run.context.agentAllowedTools : [];
+    const candidates = [...definitions.values()].filter(definition => !allowed.length || allowed.includes(definition.name));
+    const decision = await planMissionStep(run, candidates, this.modelRouter.getAdapter(run.modelPolicy));
     const fresh = await this.runRepo.getRun(run.id);
     if (!fresh || ['CANCELLED', 'FAILED', 'COMPLETED'].includes(fresh.state)) return;
     if (decision.kind === 'tool') {

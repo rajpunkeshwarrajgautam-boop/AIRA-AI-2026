@@ -279,6 +279,42 @@ async function runIdentityTests() {
     });
     console.log('PASS Identity K');
 
+    // S: Agent CRUD/run ownership and immutable shared template.
+    console.log('\n--- Identity S: Agent ownership isolation ---');
+    const agentCreate = await fetch(`${BASE_URL}/api/agents`, {
+      method: 'POST', headers: authHeaders(USER_A.userId, USER_A.sessionId),
+      body: JSON.stringify({ name: 'Owned identity fixture', instructions: 'Calculate 2+2.',
+        principalId: USER_B.userId, id: 'agent-default', tools: ['calculator'], modelPolicy: { model: 'mock-deterministic' } })
+    });
+    assert.equal(agentCreate.status, 201);
+    const ownedAgent = await agentCreate.json();
+    assert.equal(ownedAgent.principalId, USER_A.userId);
+    assert.notEqual(ownedAgent.id, 'agent-default');
+    const otherHeaders = authHeaders(USER_B.userId, USER_B.sessionId);
+    for (const [method, suffix] of [['GET', ''], ['PATCH', ''], ['DELETE', ''], ['POST', '/run']]) {
+      const response = await fetch(`${BASE_URL}/api/agents/${ownedAgent.id}${suffix}`, {
+        method, headers: otherHeaders, ...(method === 'PATCH' || method === 'POST' ? { body: '{}' } : {})
+      });
+      assert.equal(response.status, 404, `Other principal cannot ${method} owned agent${suffix}`);
+    }
+    const otherAgents = await (await fetch(`${BASE_URL}/api/agents`, { headers: otherHeaders })).json();
+    assert.ok(!otherAgents.some((agent: any) => agent.id === ownedAgent.id));
+    const ownPatch = await fetch(`${BASE_URL}/api/agents/${ownedAgent.id}`, {
+      method: 'PATCH', headers: authHeaders(USER_A.userId, USER_A.sessionId),
+      body: JSON.stringify({ name: 'Updated owned fixture', principalId: USER_B.userId, id: 'spoofed-agent' })
+    });
+    assert.equal(ownPatch.status, 200);
+    const updatedAgent = await ownPatch.json();
+    assert.equal(updatedAgent.principalId, USER_A.userId);
+    assert.equal(updatedAgent.id, ownedAgent.id);
+    assert.equal(updatedAgent.createdAt, ownedAgent.createdAt);
+    const templatePatch = await fetch(`${BASE_URL}/api/agents/agent-default`, {
+      method: 'PATCH', headers: authHeaders(USER_A.userId, USER_A.sessionId), body: JSON.stringify({ name: 'Spoof template' })
+    });
+    assert.equal(templatePatch.status, 404, 'Shared system agent must be immutable to workspace users');
+    assert.equal((await fetch(`${BASE_URL}/api/agents/${ownedAgent.id}`, { method: 'DELETE', headers: authHeaders(USER_A.userId, USER_A.sessionId) })).status, 204);
+    console.log('PASS Identity S: Agent owner/list/read/update/delete/run boundaries');
+
     // L: Production test-auth guard
     console.log('\n--- Identity L: Production test-auth guard ---');
     // Static analysis: DevPrincipalProvider must gate on NODE_ENV

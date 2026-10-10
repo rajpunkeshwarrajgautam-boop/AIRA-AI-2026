@@ -580,6 +580,7 @@ export type MemoryRecord = z.infer<typeof MemoryRecordSchema>;
 
 export const AgentDefinitionSchema = z.object({
   id: z.string(),
+  principalId: z.string().min(1).optional(),
   name: z.string(),
   description: z.string(),
   instructions: z.string(),

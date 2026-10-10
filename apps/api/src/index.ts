@@ -4,6 +4,7 @@ import cors from 'cors';
 import crypto from 'crypto';
 import { waitUntil } from '@vercel/functions';
 import { requireCronAuthorization } from './auth/cron-auth.js';
+import { createAccountMiddleware, createAccountLoginHandler, createAccountLogoutHandler } from './auth/firebase-account.js';
 import { ModelRouter } from '../../../packages/model-router/src/index.js';
 import { ToolRegistry, ToolGateway, PostgresToolCallRepository } from '../../../packages/tool-runtime/src/index.js';
 import { ApprovalKernel } from '../../../packages/approvals/src/index.js';
@@ -24,7 +25,6 @@ import {
   CreateRunRequestSchema,
   ApprovalDecisionSchema,
   AutomationDefinitionSchema,
-  AgentDefinition,
   AgentDefinitionSchema,
   ModelPolicySchema,
   WorkflowDefinitionSchema,
@@ -72,7 +72,10 @@ app.use(express.urlencoded({ limit: '2mb', extended: false }));
 
 // Resolve a trusted first-party session cookie before principal enforcement.
 // This middleware never trusts client-supplied user/session headers in production.
+app.use(createAccountMiddleware());
 app.use(createSessionAuthMiddleware());
+app.post('/api/auth/account', createAccountLoginHandler());
+app.post('/api/auth/logout', createAccountLogoutHandler());
 
 // Public bootstrap endpoint used by the browser before protected API calls.
 // It issues or refreshes an opaque, signed, HttpOnly session cookie.
@@ -799,60 +802,46 @@ app.post('/api/knowledge/search', async (req: Request, res: Response) => {
 // -----------------------------------------------------------------------
 
 app.post('/api/agents', async (req: Request, res: Response) => {
-  const { name, instructions, modelPolicy, tools, memoryScopes, approvalPolicy, maxSteps, timeoutPolicy } = req.body;
-  if (!name || !instructions) {
-    return res.status(400).json({ error: 'name and instructions are required.' });
-  }
   const now = Date.now();
-  const agent: AgentDefinition = {
-    id: `agent_${crypto.randomUUID().slice(0, 8)}`,
-    name,
-    description: req.body.description || '',
-    instructions,
-    modelPolicy,
-    tools: tools || [],
-    memoryScopes: memoryScopes || ['workspace'],
-    approvalPolicy: approvalPolicy || 'autonomous',
-    maxSteps: maxSteps || 10,
-    timeoutMs: timeoutPolicy?.maxMs || 60000,
-    createdAt: now,
-    updatedAt: now
-  } as any;
-  await agentRepo.saveAgent(agent);
-  res.status(201).json(agent);
+  const parsed = AgentDefinitionSchema.safeParse({
+    ...req.body, id: `agent_${crypto.randomUUID()}`, principalId: req.principal!.userId,
+    description: req.body.description || '', modelPolicy: req.body.modelPolicy || { model: 'aira-auto' },
+    tools: req.body.tools || [], createdAt: now, updatedAt: now,
+    timeoutMs: req.body.timeoutMs || req.body.timeoutPolicy?.maxMs || 60000
+  });
+  if (!parsed.success) return res.status(400).json({ error: 'AGENT_INPUT_INVALID' });
+  await agentRepo.saveAgent(parsed.data);
+  res.status(201).json(parsed.data);
 });
 
-app.get('/api/agents', async (_req: Request, res: Response) => {
-  res.json(await agentRepo.listAgents());
+app.get('/api/agents', async (req: Request, res: Response) => {
+  res.json(await agentRepo.listAgents(req.principal!.userId));
 });
 
 app.get('/api/agents/:id', async (req: Request, res: Response) => {
-  const agent = await agentRepo.getAgent(routeParam(req, 'id'));
-  if (!agent) return res.status(404).json({ error: `Agent "${routeParam(req, 'id')}" not found.` });
+  const agent = await agentRepo.getAgent(routeParam(req, 'id'), req.principal!.userId);
+  if (!agent) return res.status(404).json({ error: 'Agent not found.' });
   res.json(agent);
 });
 
 app.patch('/api/agents/:id', async (req: Request, res: Response) => {
-  const agent = await agentRepo.getAgent(routeParam(req, 'id'));
-  if (!agent) return res.status(404).json({ error: `Agent "${routeParam(req, 'id')}" not found.` });
-  const updates = req.body as Partial<AgentDefinition>;
-  delete (updates as any).id;
-  delete (updates as any).createdAt;
-  Object.assign(agent, updates, { updatedAt: Date.now() });
-  await agentRepo.saveAgent(agent);
-  res.json(agent);
+  const agent = await agentRepo.getAgent(routeParam(req, 'id'), req.principal!.userId);
+  if (!agent || agent.principalId !== req.principal!.userId) return res.status(404).json({ error: 'Agent not found.' });
+  const parsed = AgentDefinitionSchema.safeParse({ ...agent, ...req.body,
+    id: agent.id, principalId: agent.principalId, createdAt: agent.createdAt, updatedAt: Date.now() });
+  if (!parsed.success) return res.status(400).json({ error: 'AGENT_INPUT_INVALID' });
+  await agentRepo.saveAgent(parsed.data);
+  res.json(parsed.data);
 });
 
 app.delete('/api/agents/:id', async (req: Request, res: Response) => {
-  const deleted = await agentRepo.deleteAgent(routeParam(req, 'id'));
-  if (!deleted) {
-    return res.status(404).json({ error: `Agent "${routeParam(req, 'id')}" not found.` });
-  }
+  const deleted = await agentRepo.deleteAgent(routeParam(req, 'id'), req.principal!.userId);
+  if (!deleted) return res.status(404).json({ error: 'Agent not found.' });
   res.status(204).send();
 });
 
 app.post('/api/agents/:id/run', async (req: Request, res: Response) => {
-  const agent = await agentRepo.getAgent(routeParam(req, 'id'));
+  const agent = await agentRepo.getAgent(routeParam(req, 'id'), req.principal!.userId);
   if (!agent) return res.status(404).json({ error: `Agent "${routeParam(req, 'id')}" not found.` });
   try {
     const run = await agentRuntime.createRun({
@@ -861,9 +850,13 @@ app.post('/api/agents/:id/run', async (req: Request, res: Response) => {
       intent: 'AGENT_MISSION',
       modelPolicy: agent.modelPolicy
     }, req.principal!);
+    run.agentId = agent.id;
+    run.maxSteps = agent.maxSteps;
+    run.context = { ...run.context, agentAllowedTools: agent.tools };
+    await runRepo.saveRun(run);
     await agentRuntime.startRun(run.id);
     const completedRun = await agentRuntime.getRun(run.id);
-    res.status(201).json({ runId: run.id, state: completedRun?.state || 'COMPLETED', content: completedRun?.content });
+    res.status(201).json({ runId: run.id, state: completedRun?.state || 'FAILED', content: completedRun?.content });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
