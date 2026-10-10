@@ -226,6 +226,56 @@ try {
     }
   }
 
+  // Compile a genuinely different dist/ project and verify the preview serves
+  // compiled assets, never merely the original source index.html.
+  const compiledSource = {
+    ownerId: 'alice',
+    files: [
+      { path: 'index.html', content: '<html><body>SOURCE_ONLY_MARKER</body></html>' },
+      { path: 'build.js', content: [
+        "import fs from 'node:fs';",
+        "fs.mkdirSync('dist/assets', { recursive: true });",
+        "fs.writeFileSync('dist/index.html', '<html><body><button id=\"compiled\">Open</button><output id=\"answer\"></output><script type=\"module\" src=\"./assets/main.js\"></script></body></html>');",
+        "fs.writeFileSync('dist/assets/main.js', 'document.querySelector(\"#compiled\").onclick = () => document.querySelector(\"#answer\").textContent = \"COMPILED_OK\";');"
+      ].join('\n') },
+      { path: 'test.js', content: "import assert from 'node:assert/strict'; assert.equal(4, 2+2);" },
+      { path: 'package.json', content: JSON.stringify({
+        name: 'aira-compiled-preview-test', version: '1.0.0', type: 'module',
+        scripts: { build: 'node build.js', test: 'node test.js' }
+      }) }
+    ],
+    steps: ['syntax', 'build', 'test']
+  };
+  const builtResponse = await fetch('http://127.0.0.1:4101/v1/jobs', {
+    method: 'POST', headers: auth, body: JSON.stringify(compiledSource)
+  });
+  assert.equal(builtResponse.status, 202);
+  const compiledJob = await waitFor((await builtResponse.json()).jobId);
+  assert.equal(compiledJob.state, 'BUILD_PASSED', JSON.stringify(compiledJob));
+  assert.equal(compiledJob.previewMode, 'compiled');
+  assert.ok(compiledJob.previewManifest.some((file: { path: string }) => file.path === 'assets/main.js'));
+  const servedBuiltIndex = await fetch(compiledJob.previewUrl);
+  assert.equal(servedBuiltIndex.status, 200);
+  const servedBuiltText = await servedBuiltIndex.text();
+  assert.match(servedBuiltText, /id="compiled"/);
+  assert.doesNotMatch(servedBuiltText, /SOURCE_ONLY_MARKER/);
+  const builtBrowser = await chromium.launch({ headless: true });
+  try {
+    const page = await builtBrowser.newPage();
+    const errors: string[] = [];
+    page.on('pageerror', e => errors.push(e.message));
+    await page.goto(compiledJob.previewUrl);
+    await page.locator('#compiled').click();
+    assert.equal(await page.locator('#answer').textContent(), 'COMPILED_OK');
+    assert.deepEqual(errors, []);
+  } finally {
+    await builtBrowser.close();
+  }
+  const privateBuildSource = await fetch(
+    'http://127.0.0.1:4102/p/' + compiledJob.previewTicket + '/build.js'
+  );
+  assert.equal(privateBuildSource.status, 404, 'Compiled preview must not expose source scripts');
+
   console.log('PASS: Docker worker real container executed syntax, npm build, npm tests, owner isolation, preview, authorization, cancellation and negative cases.');
 } finally {
   await Promise.all([
