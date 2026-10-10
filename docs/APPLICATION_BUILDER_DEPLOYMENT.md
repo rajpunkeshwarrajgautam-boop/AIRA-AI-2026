@@ -6,7 +6,7 @@
 
 - Dedicated non-root Linux service account, Node.js 24, a separately managed Docker daemon.
 - A reviewed worker image; production requires an immutable `@sha256:...` digest and a verified rootless Docker daemon.
-- Trusted npm cache, if supporting third-party dependencies. A trusted operations job must prefetch vetted packages; user-generated code never gets registry/network access.
+- Trusted npm cache, if supporting third-party dependencies. A trusted operations job must prefetch vetted packages; user-generated code never gets registry/network access. For model-generated dependency manifests, a trusted operator must additionally publish matching validated npm lockfile templates under `$AIRA_WORKER_NPM_CACHE/approved-locks/<approvedLockfileKey(package.json)>.json`; the helper `approvedLockfileKey` is exported from `packages/app-builder/src/dependencies.ts`. Missing templates fail closed, and the worker never performs live registry resolution.
 
 Example **development** configuration (use a secret manager for the token):
 
