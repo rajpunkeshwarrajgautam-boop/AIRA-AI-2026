@@ -66,7 +66,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
       if (!projectInfo?.previewUrl) return null;
       const url = new URL(projectInfo.previewUrl);
       const allowedOrigin = import.meta.env.VITE_AIRA_PREVIEW_ORIGIN as string | undefined;
-      if (allowedOrigin && url.origin === new URL(allowedOrigin).origin && url.protocol === 'https:') return url.href;
+      if (allowedOrigin && url.origin === new URL(allowedOrigin).origin && url.origin !== window.location.origin && url.protocol === 'https:') return url.href;
       if (import.meta.env.DEV && url.hostname === '127.0.0.1' && url.port === '4102' && url.protocol === 'http:') return url.href;
       return null;
     } catch { return null; }
@@ -297,7 +297,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                       ref={iframeRef}
                       src={projectPreviewUrl || undefined}
                       srcDoc={projectPreviewUrl ? undefined : getIframeSrcDoc()}
-                      sandbox="allow-scripts"
+                      sandbox={projectPreviewUrl ? "allow-scripts allow-same-origin" : "allow-scripts"}
                       referrerPolicy="no-referrer"
                       className="w-full flex-1 border-0 bg-white"
                       title={artifact.title}
