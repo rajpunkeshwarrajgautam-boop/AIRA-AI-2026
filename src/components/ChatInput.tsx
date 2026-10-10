@@ -155,7 +155,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   };
 
   return (
-    <div className="mx-auto w-full max-w-3xl px-4 pb-6" ref={controlsRef}>
+    <div className="mx-auto w-full min-w-0 max-w-3xl px-3 sm:px-4 pb-3 sm:pb-6" ref={controlsRef}>
       <motion.div
         layout
         className="overflow-visible rounded-[20px] border border-claude-border-light bg-claude-surface-light shadow-[0_8px_30px_-12px_rgba(45,40,30,0.16)] transition-colors focus-within:border-claude-terracotta/35 dark:border-claude-border-dark dark:bg-claude-surface-dark dark:shadow-[0_12px_36px_-14px_rgba(0,0,0,0.65)]"
@@ -224,7 +224,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           className="max-h-[38vh] w-full resize-none bg-transparent px-4 pb-2 pt-3.5 text-base leading-relaxed text-claude-text-light outline-none selection:bg-claude-terracotta/20 placeholder:text-claude-muted-light/55 dark:text-claude-text-dark dark:placeholder:text-claude-muted-dark/55"
         />
 
-        <div className="flex items-center justify-between gap-2 px-3 pb-3 pt-1">
+        <div className="flex min-w-0 items-center justify-between gap-1.5 px-2.5 sm:px-3 pb-3 pt-1">
           <div className="flex min-w-0 items-center gap-1.5">
             <input ref={fileInputRef} type="file" multiple onChange={handleFileUpload} className="hidden" />
             <motion.button
@@ -262,7 +262,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 6, scale: 0.98 }}
                     transition={reducedMotion ? { duration: 0.08 } : { type: 'spring', stiffness: 390, damping: 31 }}
-                    className="absolute bottom-10 left-0 z-50 w-[260px] rounded-[16px] border border-claude-border-light bg-white/95 p-1.5 shadow-[0_16px_44px_-18px_rgba(45,40,30,0.45)] backdrop-blur-xl dark:border-claude-border-dark dark:bg-[#1d1c19]/95"
+                    className="absolute bottom-10 left-0 z-50 w-[min(260px,calc(100vw-96px))] rounded-[16px] border border-claude-border-light bg-white/95 p-1.5 shadow-[0_16px_44px_-18px_rgba(45,40,30,0.45)] backdrop-blur-xl dark:border-claude-border-dark dark:bg-[#1d1c19]/95"
                   >
                     {MODE_OPTIONS.map(mode => {
                       const Icon = mode.icon;
@@ -367,7 +367,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         </div>
       </motion.div>
 
-      <div className="mt-3 text-center text-[11px] text-claude-muted-light dark:text-claude-muted-dark">
+      <div className="mt-1 sm:mt-3 text-center text-[10px] sm:text-[11px] text-claude-muted-light dark:text-claude-muted-dark">
         Aira can make mistakes. Verify important information.
       </div>
     </div>
