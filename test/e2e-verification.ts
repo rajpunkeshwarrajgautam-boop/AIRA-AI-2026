@@ -45,7 +45,8 @@ async function runE2E() {
       '|---|---|',
       '| Slip | $s=\\frac{1500-1440}{1500}$ |',
     ].join('\n');
-    await page.evaluate((markdown) => {
+    await page.evaluate(`(() => {
+      const markdown = ${JSON.stringify(richExample)};
       const conversation = {
         id: 'rich-clipboard-e2e',
         title: 'Rich clipboard certification',
@@ -61,32 +62,30 @@ async function runE2E() {
       };
       localStorage.setItem('aira_conversations_v1', JSON.stringify([conversation]));
       localStorage.setItem('aira_active_chat_id_v1', conversation.id);
-    }, richExample);
+    })()`);
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.getByRole('button', { name: 'Copy as Rich Text' }).waitFor({ timeout: 10000 });
 
-    await page.evaluate(() => {
-      (window as any).__richClipboardCapture = null;
+    await page.evaluate(`(() => {
+      window.__richClipboardCapture = null;
       Object.defineProperty(navigator, 'clipboard', {
         configurable: true,
         value: {
-          write: async (items: ClipboardItem[]) => {
+          write: async (items) => {
             const entry = items[0];
             const [html, plain] = await Promise.all([
               entry.getType('text/html').then(blob => blob.text()),
               entry.getType('text/plain').then(blob => blob.text())
             ]);
-            (window as any).__richClipboardCapture = { html, plain, types: entry.types };
+            window.__richClipboardCapture = { html, plain, types: entry.types };
           },
-          writeText: async (_text: string) => {
-            throw new Error('Unexpected plain clipboard fallback');
-          }
+          writeText: async () => { throw new Error('Unexpected Markdown fallback'); }
         }
       });
-    });
+    })()`);
     await page.getByRole('button', { name: 'Copy as Rich Text' }).click();
     await page.getByText('Rich text copied').waitFor({ timeout: 10000 });
-    const copied = await page.evaluate(() => (window as any).__richClipboardCapture);
+    const copied = await page.evaluate('window.__richClipboardCapture');
     if (!copied?.types?.includes('text/html') || !copied?.types?.includes('text/plain')) {
       throw new Error('Rich clipboard missing HTML and plain MIME types');
     }
@@ -98,18 +97,18 @@ async function runE2E() {
     }
     if (copied.plain !== richExample) throw new Error('Plain clipboard payload not preserved');
 
-    await page.evaluate(() => {
+    await page.evaluate(`(() => {
       Object.defineProperty(navigator, 'clipboard', {
         configurable: true,
         value: {
           write: async () => { throw new Error('NotAllowedError'); },
-          writeText: async (text: string) => { (window as any).__fallbackCopiedText = text; }
+          writeText: async (text) => { window.__fallbackCopiedText = text; }
         }
       });
-    });
+    })()`);
     await page.getByRole('button', { name: 'Copy as Rich Text' }).click();
     await page.getByText('Markdown copied (rich text unavailable)').waitFor({ timeout: 10000 });
-    const fallbackText = await page.evaluate(() => (window as any).__fallbackCopiedText);
+    const fallbackText = await page.evaluate('window.__fallbackCopiedText');
     if (fallbackText !== richExample) throw new Error('Rich clipboard fallback did not copy Markdown');
 
     process.stdout.write('Verified: Rich clipboard MIME, KaTeX/table formatting and fallback.\n');
