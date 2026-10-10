@@ -113,6 +113,74 @@ async function runE2E() {
 
     process.stdout.write('Verified: Rich clipboard MIME, KaTeX/table formatting and fallback.\n');
 
+    // Regression: long chat must scroll *inside* the message region only.
+    // Scrolling the document itself previously moved the entire workspace
+    // (including sidebar and composer) out of view, leaving a blank page.
+    await page.evaluate(`(() => {
+      const now = Date.now();
+      const messages = Array.from({ length: 48 }, (_, i) => ({
+        id: 'scroll-message-' + i,
+        role: i % 2 === 0 ? 'user' : 'assistant',
+        content: 'Scroll regression message ' + i + '. ' +
+          'Aira must keep its composer visible while scrolling. '.repeat(24),
+        timestamp: now + i
+      }));
+      const conversation = {
+        id: 'scroll-regression-conversation',
+        title: 'Long scroll regression',
+        createdAt: now,
+        updatedAt: now,
+        messages
+      };
+      localStorage.setItem('aira_conversations_v1', JSON.stringify([conversation]));
+      localStorage.setItem('aira_active_chat_id_v1', conversation.id);
+    })()`);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.getByText('Scroll regression message 47', { exact: false }).waitFor({ timeout: 15000 });
+    const beforeScroll = await page.evaluate(`(() => {
+      const region = document.querySelector('[data-testid="chat-scroll-region"]');
+      return { contentHeight: region.scrollHeight, viewportHeight: region.clientHeight };
+    })()`);
+    if (beforeScroll.contentHeight <= beforeScroll.viewportHeight + 100) {
+      throw new Error('Long chat regression fixture does not overflow');
+    }
+    await page.mouse.move(1050, 420);
+    await page.mouse.wheel(0, 10000);
+    await page.waitForTimeout(150);
+    const downward = await page.evaluate(`(() => {
+      const region = document.querySelector('[data-testid="chat-scroll-region"]');
+      const composer = document.querySelector('main textarea').getBoundingClientRect();
+      const header = document.querySelector('main header').getBoundingClientRect();
+      return {
+        bodyScroll: window.scrollY,
+        rootScroll: document.documentElement.scrollTop,
+        chatTop: region.scrollTop,
+        composerBottom: composer.bottom,
+        composerTop: composer.top,
+        headerTop: header.top,
+        screenHeight: window.innerHeight
+      };
+    })()`);
+    if (downward.bodyScroll !== 0 || downward.rootScroll !== 0 ||
+      downward.headerTop < -1 || downward.composerTop < 0 ||
+      downward.composerBottom > downward.screenHeight + 1 ||
+      downward.chatTop <= 0) {
+      throw new Error('Viewport displaced by chat scrolling: ' + JSON.stringify(downward));
+    }
+    await page.mouse.wheel(0, -10000);
+    await page.waitForTimeout(150);
+    const upward = await page.evaluate(`(() => {
+      const region = document.querySelector('[data-testid="chat-scroll-region"]');
+      const composer = document.querySelector('main textarea').getBoundingClientRect();
+      return { chatTop: region.scrollTop, bodyScroll: window.scrollY,
+        composerBottom: composer.bottom, screenHeight: window.innerHeight };
+    })()`);
+    if (upward.chatTop >= downward.chatTop || upward.bodyScroll !== 0 ||
+      upward.composerBottom > upward.screenHeight + 1) {
+      throw new Error('Scroll up failed or displaced the composer: ' + JSON.stringify(upward));
+    }
+    process.stdout.write('Verified: long chat scroll stays internal; header, sidebar and composer remain visible.\n');
+
     process.stdout.write('\nPLAYWRIGHT E2E UI VERIFICATION PASSED.\n');
   } catch (err: any) {
     process.stderr.write(`E2E test error: ${err.message}\n`);
