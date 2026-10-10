@@ -12,6 +12,8 @@ import { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
 import { ApplicationBuildClient } from '../../../packages/app-builder/src/client.js';
 import { PostgresApplicationBuildQueue } from '../../../packages/app-builder/src/queue.js';
 import { PostgresBuildArchiveStore } from '../../../packages/app-builder/src/artifact-store.js';
+import { PostgresObjectRefStore } from '../../../packages/app-builder/src/object-ref-store.js';
+import { objectStoreFromEnvironment } from '../../../packages/app-builder/src/object-store.js';
 import { AutomationEngine } from '../../../packages/automation/src/index.js';
 import { PostgresAgentRepository, PostgresRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
 import { PostgresAutomationRepository, PostgresAutomationRunRepository } from '../../../packages/automation/src/repositories.js';
@@ -355,14 +357,26 @@ app.get('/api/app-builder/queue/:id/source', async (req: Request, res: Response)
         !principal.scopes?.includes('projects.write')) {
       return res.status(403).json({ error: 'PROJECT_READ_PERMISSION_DENIED' });
     }
-    const record = await new PostgresBuildArchiveStore().get(req.params.id, principal.userId);
-    if (!record) return res.status(404).json({ error: 'BUILD_SOURCE_NOT_FOUND' });
+    const reference = await new PostgresObjectRefStore().get(req.params.id, principal.userId, 'source');
+    let source: Buffer;
+    let sha256: string;
+    if (reference) {
+      const store = objectStoreFromEnvironment();
+      if (!store) return res.status(503).json({ error: 'OBJECT_STORE_NOT_CONFIGURED' });
+      source = await store.get(reference);
+      sha256 = reference.sha256;
+    } else {
+      const record = await new PostgresBuildArchiveStore().get(req.params.id, principal.userId);
+      if (!record) return res.status(404).json({ error: 'BUILD_SOURCE_NOT_FOUND' });
+      source = record.archive;
+      sha256 = record.sha256;
+    }
     res.setHeader('Content-Type', 'application/gzip');
     res.setHeader('Content-Disposition', 'attachment; filename="aira-project-source.tar.gz"');
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Aira-Archive-Sha256', record.sha256);
-    return res.end(record.archive);
+    res.setHeader('X-Aira-Archive-Sha256', sha256);
+    return res.end(source);
   } catch {
     return res.status(503).json({ error: 'BUILD_SOURCE_UNAVAILABLE' });
   }
