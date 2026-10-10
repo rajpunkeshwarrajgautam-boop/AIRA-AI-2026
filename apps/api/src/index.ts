@@ -10,6 +10,7 @@ import { BrainV2KnowledgeEngine } from '../../../packages/knowledge/src/index.js
 import { McpHost } from '../../../packages/mcp/src/index.js';
 import { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
 import { ApplicationBuildClient } from '../../../packages/app-builder/src/client.js';
+import { PostgresApplicationBuildQueue } from '../../../packages/app-builder/src/queue.js';
 import { AutomationEngine } from '../../../packages/automation/src/index.js';
 import { PostgresAgentRepository, PostgresRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
 import { PostgresAutomationRepository, PostgresAutomationRunRepository } from '../../../packages/automation/src/repositories.js';
@@ -342,6 +343,39 @@ app.get('/api/search/capabilities', async (_req: Request, res: Response) => {
   }
 });
 
+
+// Durable build queue: principal-owned status and cancellation, independent
+// of the browser connection and direct worker job lifecycle.
+app.get('/api/app-builder/queue/:id', async (req: Request, res: Response) => {
+  try {
+    const principal = req.principal!;
+    if (!principal.scopes?.includes('*') && !principal.scopes?.includes('projects.read') &&
+        !principal.scopes?.includes('projects.write')) {
+      return res.status(403).json({ error: 'PROJECT_READ_PERMISSION_DENIED' });
+    }
+    const record = await new PostgresApplicationBuildQueue().get(req.params.id, principal.userId);
+    if (!record) return res.status(404).json({ error: 'BUILD_JOB_NOT_FOUND' });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).json(record);
+  } catch {
+    return res.status(503).json({ error: 'BUILD_QUEUE_UNAVAILABLE' });
+  }
+});
+
+app.post('/api/app-builder/queue/:id/cancel', async (req: Request, res: Response) => {
+  try {
+    const principal = req.principal!;
+    if (!principal.scopes?.includes('*') && !principal.scopes?.includes('projects.write')) {
+      return res.status(403).json({ error: 'PROJECT_WRITE_PERMISSION_DENIED' });
+    }
+    const record = await new PostgresApplicationBuildQueue().requestCancellation(req.params.id, principal.userId);
+    if (!record) return res.status(404).json({ error: 'BUILD_JOB_NOT_FOUND' });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).json({ jobId: record.id, state: record.state, cancelRequested: record.cancelRequested });
+  } catch {
+    return res.status(503).json({ error: 'BUILD_QUEUE_UNAVAILABLE' });
+  }
+});
 
 // An authenticated principal may cancel their own live build. The worker enforces
 // ownership independently; cancellation is never an unscoped tool action.
