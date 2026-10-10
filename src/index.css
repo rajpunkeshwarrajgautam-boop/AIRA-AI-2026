@@ -29,6 +29,16 @@
     --accent-terracotta-hover: #E08568;
   }
 
+  /* Aira is a viewport-locked workspace: only the conversation/sidebar scroll.
+     Prevent browser document scroll or scrollIntoView from pushing the whole
+     app above the viewport and leaving an apparent infinite blank page. */
+  html, body, #root {
+    height: 100%;
+    max-height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
   body {
     background-color: var(--bg-main);
     color: var(--text-primary);

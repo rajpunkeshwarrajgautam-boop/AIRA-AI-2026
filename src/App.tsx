@@ -60,7 +60,7 @@ function App() {
   const [isSubmittingApproval, setIsSubmittingApproval] = useState(false);
   const [executionStatus, setExecutionStatus] = useState<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
   const conversationSyncVersionsRef = useRef<Map<string, string>>(new Map());
   const initialConversationBackfillRef = useRef(false);
 
@@ -117,9 +117,13 @@ function App() {
     else delete root.dataset.theme;
   }, [settings.theme, settings.aestheticPreset]);
 
+  // Only scroll the conversation region; scrollIntoView can also move the
+  // document/root viewport and leave a blank page after long conversations.
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [activeConversation?.messages.length]);
+    const scrollRegion = chatScrollRef.current;
+    if (!scrollRegion) return;
+    scrollRegion.scrollTo({ top: scrollRegion.scrollHeight, behavior: 'instant' });
+  }, [activeConversation?.id, activeConversation?.messages.length]);
 
   const updateConversation = (id: string, updater: (c: Conversation) => Conversation) => {
     setConversations(prev => prev.map(c => c.id === id ? updater(c) : c));
@@ -201,9 +205,17 @@ function App() {
 
     setHighlightedMessageId(messageId);
     window.setTimeout(() => {
-      document.getElementById(`message-${messageId}`)?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'center'
+      const scrollRegion = chatScrollRef.current;
+      const target = document.getElementById(`message-${messageId}`);
+      if (!scrollRegion || !target || !scrollRegion.contains(target)) return;
+      const containerRect = scrollRegion.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const targetScrollTop = scrollRegion.scrollTop +
+        targetRect.top - containerRect.top -
+        (scrollRegion.clientHeight - targetRect.height) / 2;
+      scrollRegion.scrollTo({
+        top: Math.max(0, targetScrollTop),
+        behavior: 'smooth'
       });
     }, 120);
     window.setTimeout(() => setHighlightedMessageId(current => current === messageId ? null : current), 1800);
@@ -487,8 +499,8 @@ function App() {
 
       <InlineToast message={toastMessage} />
 
-      <main className="flex-1 min-w-0 h-[100dvh] flex flex-col overflow-x-hidden w-full max-w-full bg-mesh-canvas">
-        <header className="h-[54px] px-3 md:px-5 flex items-center justify-between border-b border-claude-border-light/80 dark:border-claude-border-dark/80 gradient-fade-header relative z-50 bg-claude-bg-light/95 dark:bg-claude-bg-dark/95 backdrop-blur-md">
+      <main className="flex-1 min-w-0 min-h-0 h-[100dvh] flex flex-col overflow-hidden w-full max-w-full bg-mesh-canvas">
+        <header className="h-[54px] shrink-0 px-3 md:px-5 flex items-center justify-between border-b border-claude-border-light/80 dark:border-claude-border-dark/80 gradient-fade-header relative z-50 bg-claude-bg-light/95 dark:bg-claude-bg-dark/95 backdrop-blur-md">
           <div className="flex items-center gap-2 min-w-0">
             {(!sidebarOpen || (typeof window !== 'undefined' && window.innerWidth < 768)) && (
               <>
@@ -526,7 +538,7 @@ function App() {
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto flex flex-col">
+        <div ref={chatScrollRef} data-testid="chat-scroll-region" className="flex-1 min-h-0 overflow-x-hidden overflow-y-auto overscroll-contain flex flex-col">
           {!activeConversation || activeConversation.messages.length === 0 ? (
             <GreetingScreen 
               userName={settings.userName} 
@@ -550,11 +562,12 @@ function App() {
                   <ChatMessage message={message} userName={settings.userName} onOpenArtifact={setActiveArtifact} />
                 </div>
               ))}
-              <div ref={messagesEndRef} />
             </div>
           )}
 
-          <div className="sticky bottom-0 pt-4 gradient-mask-bottom">
+        </div>
+
+          <div className="shrink-0 relative z-10 pt-4 gradient-mask-bottom">
             {executionStatus && (
               <div className="max-w-2xl mx-auto px-4 mb-2">
                 <div className="flex items-center gap-2 text-xs text-orange-600 dark:text-orange-400 bg-orange-50/90 dark:bg-orange-950/40 border border-orange-200/60 dark:border-orange-800/50 rounded-lg px-3 py-1.5 shadow-sm backdrop-blur">
@@ -608,7 +621,6 @@ function App() {
               onWorkspaceModeChange={setWorkspaceMode}
             />
           </div>
-        </div>
       </main>
 
       <React.Suspense fallback={null}>
