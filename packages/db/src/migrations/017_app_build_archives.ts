@@ -4,7 +4,7 @@ import type { Knex } from 'knex';
 export async function up(knex: Knex): Promise<void> {
   if (await knex.schema.hasTable('aira_app_build_archives')) return;
   await knex.schema.createTable('aira_app_build_archives', table => {
-    table.uuid('queue_job_id').primary();
+    table.uuid('queue_job_id').primary().references('id').inTable('aira_app_build_jobs').onDelete('CASCADE');
     table.string('owner_id', 160).notNullable();
     table.string('run_id', 160).notNullable();
     table.uuid('worker_job_id').notNullable();
