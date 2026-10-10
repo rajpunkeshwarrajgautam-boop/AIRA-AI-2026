@@ -194,7 +194,14 @@ jobs:
       - name: Install Playwright Chromium for real preview interaction
         run: npx playwright install --with-deps chromium
 
+      - name: Prefetch reviewed Three.js fixture into trusted offline cache
+        run: |
+          mkdir -p /tmp/aira-approved-npm-cache
+          npm cache add three@0.180.0 --cache /tmp/aira-approved-npm-cache --ignore-scripts --no-audit --no-fund
+
       - name: Run real Docker application worker integration
+        env:
+          AIRA_WORKER_NPM_CACHE: /tmp/aira-approved-npm-cache
         run: npm run test:app-builder
 
   certify:
