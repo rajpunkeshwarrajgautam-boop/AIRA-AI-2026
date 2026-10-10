@@ -61,7 +61,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
       initial={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 12, scale: 0.99 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={reducedMotion ? { duration: 0.08 } : { type: 'spring', stiffness: 140, damping: 22, mass: 0.78 }}
-      className={`group mx-auto w-full max-w-4xl px-4 py-5 md:px-6 ${isUser ? 'flex justify-end' : ''}`}
+      className={`group mx-auto w-full min-w-0 max-w-4xl px-3 sm:px-4 py-4 sm:py-5 md:px-6 ${isUser ? 'flex justify-end' : ''}`}
     >
       {isUser ? (
         <div className="flex max-w-[85%] flex-col items-end">
@@ -113,7 +113,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
             <motion.div layout>
               <div
                 ref={assistantContentRef}
-                className="aira-prose break-words font-sans text-base leading-[1.7] text-claude-text-light md:text-[17px] dark:text-claude-text-dark"
+                className="aira-prose min-w-0 break-words font-sans text-base leading-[1.7] text-claude-text-light md:text-[17px] dark:text-claude-text-dark"
                 dangerouslySetInnerHTML={{ __html: renderMarkdownToHtml(message.content) }}
               />
               {message.isStreaming && (
