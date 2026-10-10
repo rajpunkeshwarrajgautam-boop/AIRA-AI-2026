@@ -224,12 +224,13 @@ export class AgentRuntime extends EventEmitter {
     }
   }
 
-  public async createAndExecuteRun(request: CreateRunRequest, principal: ExecutionPrincipal): Promise<Run> {
+  public async createAndExecuteRun(request: CreateRunRequest, principal: ExecutionPrincipal, trackExecution?: (execution: Promise<void>) => void): Promise<Run> {
     const run = await this.createRun(request, principal);
-    // Asynchronously execute run loop
-    setImmediate(() => {
-      this.startRun(run.id).catch(console.error);
-    });
+    // Register the entire deferred execution with the hosting request lifecycle.
+    const execution = new Promise<void>((resolve, reject) => {
+      setImmediate(() => { this.startRun(run.id).then(resolve, reject); });
+    }).catch(console.error);
+    trackExecution?.(execution);
     return run;
   }
 
@@ -955,3 +956,4 @@ export * from './workflow-repositories.js';
 export * from './registry.js';
 export * from './router.js';
 export * from './repositories.js';
+

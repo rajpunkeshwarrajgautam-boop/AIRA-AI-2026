@@ -41,12 +41,14 @@
     "test:research-evidence": "npx tsx test/research-evidence.ts",
     "test:staging:deployed": "npx tsx test/staging-deployed-acceptance.ts",
     "test:staging:attest": "npx tsx test/staging-deployment-attestation.ts",
-    "test:staging:db-policy": "node --test test/staging-db-policy.test.mjs"
+    "test:staging:db-policy": "node --test test/staging-db-policy.test.mjs",
+    "test:run-lifetime": "npx tsx test/run-execution-lifetime.ts"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
     "@modelcontextprotocol/sdk": "^1.32.0",
     "@phosphor-icons/react": "^2.1.10",
+    "@vercel/functions": "3.9.11",
     "canvas-confetti": "^1.9.4",
     "clsx": "^2.1.1",
     "cors": "^2.8.6",

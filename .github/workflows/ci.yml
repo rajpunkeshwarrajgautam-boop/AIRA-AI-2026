@@ -63,6 +63,8 @@ jobs:
 
       - name: Staging migration safety regression
         run: npm run test:staging:db-policy
+      - name: Run execution lifecycle regression
+        run: npm run test:run-lifetime
 
       - name: Lint
         run: npm run lint

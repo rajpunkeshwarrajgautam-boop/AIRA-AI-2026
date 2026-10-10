@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
+import { waitUntil } from '@vercel/functions';
 import { ModelRouter } from '../../../packages/model-router/src/index.js';
 import { ToolRegistry, ToolGateway, PostgresToolCallRepository } from '../../../packages/tool-runtime/src/index.js';
 import { ApprovalKernel } from '../../../packages/approvals/src/index.js';
@@ -348,7 +349,7 @@ app.get('/api/search/capabilities', async (_req: Request, res: Response) => {
 app.post('/api/runs', async (req: Request, res: Response) => {
   try {
     const parsed = CreateRunRequestSchema.parse(req.body);
-    const run = await agentRuntime.createAndExecuteRun(parsed, req.principal!);
+    const run = await agentRuntime.createAndExecuteRun(parsed, req.principal!, process.env.VERCEL === '1' ? waitUntil : undefined);
     res.status(201).json(run);
   } catch (err: any) {
     res.status(400).json({ error: err.message || 'Invalid run creation payload.' });
@@ -1099,4 +1100,5 @@ if (!process.env.VERCEL) {
 }
 
 export default app;
+
 
