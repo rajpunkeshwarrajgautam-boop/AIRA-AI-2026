@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { validateOfflineDependencyLock } from '../packages/app-builder/src/dependencies.js';
+const execFileAsync = promisify(execFile);
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
@@ -12,7 +16,8 @@ const config = {
   port: 4101, previewPort: 4102,
   previewOrigin: 'http://127.0.0.1:4102',
   frameOrigin: 'http://127.0.0.1:5173',
-  image: 'node:24-alpine'
+  image: 'node:24-alpine',
+  npmCache: process.env.AIRA_WORKER_NPM_CACHE || undefined
 };
 const worker = new DockerProjectWorker(config);
 await worker.initialize();
@@ -47,7 +52,7 @@ try {
 
   const health = await fetch('http://127.0.0.1:4101/health', { headers: auth });
   assert.equal(health.status, 200);
-  assert.equal((await health.json()).dependencyInstall, false);
+  assert.equal((await health.json()).dependencyInstall, Boolean(config.npmCache));
 
   const payload = {
     ownerId: 'alice',
@@ -140,7 +145,7 @@ try {
   assert.equal(deps.status, 202);
   const blocked = await waitFor((await deps.json()).jobId);
   assert.equal(blocked.state, 'FAILED');
-  assert.equal(blocked.error, 'DEPENDENCY_INSTALL_NOT_CONFIGURED');
+  assert.equal(blocked.error, config.npmCache ? 'DEPENDENCY_LOCKFILE_REQUIRED' : 'DEPENDENCY_INSTALL_NOT_CONFIGURED');
   assert.equal(blocked.previewUrl, undefined);
 
   const slow = await fetch('http://127.0.0.1:4101/v1/jobs', {
@@ -175,6 +180,51 @@ try {
   assert.equal((await cancelled.json()).state, 'CANCELLED');
   const cancelledSource = await fetch('http://127.0.0.1:4101/v1/jobs/' + slowId + '/source', { headers: auth });
   assert.equal(cancelledSource.status, 404);
+
+  if (config.npmCache) {
+    // CI provisions only a reviewed, pinned test tarball into the trusted cache.
+    // No user-generated project code receives network access.
+    const fixture = await mkdtemp(join(tmpdir(), 'aira-dependency-fixture-'));
+    try {
+      const dependencyPackage = JSON.stringify({
+        name: 'aira-three-dependency-test', version: '1.0.0', type: 'module',
+        dependencies: { three: '0.180.0' },
+        scripts: { build: 'node --check app.js', test: 'node test.js' }
+      });
+      await writeFile(join(fixture, 'package.json'), dependencyPackage);
+      await execFileAsync('npm', [
+        'install', '--package-lock-only', '--offline', '--ignore-scripts',
+        '--no-audit', '--no-fund', '--cache', config.npmCache
+      ], { cwd: fixture, timeout: 30_000 });
+      const lockfile = await readFile(join(fixture, 'package-lock.json'), 'utf8');
+      assert.doesNotThrow(() => validateOfflineDependencyLock(dependencyPackage, lockfile));
+      const invalidLock = JSON.parse(lockfile);
+      invalidLock.packages['node_modules/three'].resolved = 'http://127.0.0.1/evil.tgz';
+      assert.throws(() => validateOfflineDependencyLock(dependencyPackage, JSON.stringify(invalidLock)),
+        /UNTRUSTED_DEPENDENCY_ARCHIVE/);
+      const trustedThree = await fetch('http://127.0.0.1:4101/v1/jobs', {
+        method: 'POST', headers: auth,
+        body: JSON.stringify({
+          ownerId: 'alice', files: [
+            { path: 'index.html', content: '<html><body>Three dependency installed</body></html>' },
+            { path: 'app.js', content: "import { Scene } from 'three'; console.log(new Scene().type);" },
+            { path: 'test.js', content: "import assert from 'node:assert/strict'; import { Scene } from 'three'; assert.equal(new Scene().type, 'Scene'); console.log('REAL_THREE_MODULE_LOADED');" },
+            { path: 'package.json', content: dependencyPackage },
+            { path: 'package-lock.json', content: lockfile }
+          ], steps: ['syntax', 'build', 'test']
+        })
+      });
+      assert.equal(trustedThree.status, 202);
+      const threeJob = await waitFor((await trustedThree.json()).jobId);
+      assert.equal(threeJob.state, 'BUILD_PASSED', JSON.stringify(threeJob));
+      assert.deepEqual(threeJob.steps.map((step: { name: string }) => step.name),
+        ['install', 'syntax', 'build', 'test']);
+      assert.ok(threeJob.steps.some((step: { output: string }) => step.output.includes('REAL_THREE_MODULE_LOADED')));
+      console.log('PASS: real Three.js dependency installed offline from immutable lockfile and trusted cache.');
+    } finally {
+      await rm(fixture, { recursive: true, force: true });
+    }
+  }
 
   console.log('PASS: Docker worker real container executed syntax, npm build, npm tests, owner isolation, preview, authorization, cancellation and negative cases.');
 } finally {
