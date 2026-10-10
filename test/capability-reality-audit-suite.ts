@@ -66,6 +66,27 @@ async function runRealityAuditSuite() {
     scopes: ['*']
   };
 
+  // Application building is not implemented: the runtime must not make up tool calls
+  // or claim a playable game was created. This exercises persistence and run events.
+  console.log('\\n--- APPLICATION BUILD REALITY GATE ---');
+  const buildRequest = await agentRuntime.createRun({ prompt: 'BUILD A PINBALL GAME 3D' }, principalA);
+  const buildEvents: string[] = [];
+  const buildListener = (event: { type: string }) => buildEvents.push(event.type);
+  const buildStream = agentRuntime.getEventStream(buildRequest.id);
+  buildStream.on('event', buildListener);
+  await agentRuntime.startRun(buildRequest.id);
+  buildStream.off('event', buildListener);
+  const blockedBuild = await agentRuntime.getRun(buildRequest.id);
+  assert.strictEqual(blockedBuild?.intent, 'APPLICATION_BUILD');
+  assert.strictEqual(blockedBuild?.routingDecision?.executionTarget, 'CAPABILITY_NOT_READY');
+  assert.ok(blockedBuild?.content.includes('APPLICATION_BUILD_NOT_AVAILABLE'));
+  assert.strictEqual(blockedBuild?.toolCalls.length, 0, 'No tools may be fabricated');
+  assert.strictEqual(blockedBuild?.artifacts.length, 0, 'No fake playable game artifact');
+  assert.ok(buildEvents.includes('capability.unready'), 'Typed unready event missing');
+  assert.strictEqual(buildEvents.filter(t => t === 'content.delta').length, 1, 'Emit a single content response');
+  assert.ok(!buildEvents.includes('tool.started'), 'Blocked build must not start tools');
+  console.log('  -> PASS: Pinball build request truthfully reported unsupported without fake artifacts.');
+
   // -------------------------------------------------------------
   // TEST 1: Cross-Conversation Memory (Server-Authoritative)
   // -------------------------------------------------------------
