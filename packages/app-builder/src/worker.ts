@@ -18,7 +18,7 @@ export const BuildInput = z.object({
 }).strict();
 
 export type BuildRequest = z.infer<typeof BuildInput>;
-export type BuildState = 'QUEUED' | 'RUNNING' | 'VERIFIED' | 'FAILED' | 'BLOCKED';
+export type BuildState = 'QUEUED' | 'RUNNING' | 'BUILD_PASSED' | 'FAILED' | 'BLOCKED';
 export interface BuildJob {
   id: string;
   ownerId: string;
@@ -216,7 +216,7 @@ export class DockerProjectWorker {
       }
       const index = request.files.find(f => f.path === 'index.html');
       if (!index) throw new Error('STATIC_PREVIEW_REQUIRES_INDEX_HTML');
-      job.state = 'VERIFIED'; // Verified steps only; not functional gameplay certification.
+      job.state = 'BUILD_PASSED'; // Build steps passed only; not functional gameplay certification.
       const ticket = randomBytes(24).toString('hex');
       this.tickets.set(ticket, { jobId: job.id, expires: Date.now() + 15 * 60_000 });
       job.previewTicket = ticket;
@@ -289,7 +289,7 @@ export class DockerProjectWorker {
       const grant = this.tickets.get(match[1]);
       if (!grant || grant.expires <= Date.now()) return this.send(res, 404, { error: 'PREVIEW_EXPIRED' });
       const job = this.jobs.get(grant.jobId);
-      if (!job || job.state !== 'VERIFIED') return this.send(res, 404, { error: 'PREVIEW_NOT_VERIFIED' });
+      if (!job || job.state !== 'BUILD_PASSED') return this.send(res, 404, { error: 'PREVIEW_NOT_BUILD_PASSED' });
       if (!job.manifest?.some(f => f.path === match[2])) return this.send(res, 404, { error: 'PREVIEW_FILE_UNAUTHORIZED' });
       try {
         const filename = safePath(resolve(this.config.root, grant.jobId), match[2]);
