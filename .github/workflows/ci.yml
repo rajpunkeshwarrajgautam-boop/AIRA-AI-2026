@@ -87,6 +87,9 @@ jobs:
       - name: Immutable application artifact archive certification
         run: npm run test:app-builder-artifacts
 
+      - name: Private object storage integration
+        run: npm run test:app-builder-objects
+
       - name: Runtime verification
         run: npm test
 
