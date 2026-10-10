@@ -143,7 +143,40 @@ try {
   assert.equal(blocked.error, 'DEPENDENCY_INSTALL_NOT_CONFIGURED');
   assert.equal(blocked.previewUrl, undefined);
 
-  console.log('PASS: Docker worker real container executed syntax, npm build, npm tests, owner isolation, preview and negative cases.');
+  const slow = await fetch('http://127.0.0.1:4101/v1/jobs', {
+    method: 'POST', headers: auth,
+    body: JSON.stringify({
+      ownerId: 'alice',
+      files: [
+        { path: 'index.html', content: '<html><body>slow job must never preview</body></html>' },
+        { path: 'package.json', content: JSON.stringify({
+          name: 'test-cancellation', version: '1.0.0',
+          scripts: { build: 'node -e "setTimeout(() => {}, 30000)"' }
+        }) }
+      ],
+      steps: ['build']
+    })
+  });
+  assert.equal(slow.status, 202);
+  const slowId = (await slow.json()).jobId as string;
+  const deniedCancel = await fetch('http://127.0.0.1:4101/v1/jobs/' + slowId, {
+    method: 'DELETE', headers: { ...auth, 'x-aira-owner': 'bob' }
+  });
+  assert.equal(deniedCancel.status, 404);
+  // Let the worker enter its container phase before testing cancellation.
+  await new Promise(resolve => setTimeout(resolve, 1200));
+  const stop = await fetch('http://127.0.0.1:4101/v1/jobs/' + slowId, {
+    method: 'DELETE', headers: auth
+  });
+  assert.equal(stop.status, 200);
+  assert.equal((await stop.json()).state, 'CANCELLED');
+  await new Promise(resolve => setTimeout(resolve, 1500));
+  const cancelled = await fetch('http://127.0.0.1:4101/v1/jobs/' + slowId, { headers: auth });
+  assert.equal((await cancelled.json()).state, 'CANCELLED');
+  const cancelledSource = await fetch('http://127.0.0.1:4101/v1/jobs/' + slowId + '/source', { headers: auth });
+  assert.equal(cancelledSource.status, 404);
+
+  console.log('PASS: Docker worker real container executed syntax, npm build, npm tests, owner isolation, preview, authorization, cancellation and negative cases.');
 } finally {
   await Promise.all([
     new Promise<void>(r => controller.close(() => r())),
