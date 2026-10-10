@@ -51,6 +51,16 @@ export class ApplicationBuildClient {
     const result = await this.request('/v1/jobs', valid.ownerId, valid);
     return JobAccepted.parse(result).jobId;
   }
+  async cancel(jobId: string, ownerId: string): Promise<BuildJob> {
+    if (!/^[0-9a-f-]{36}$/.test(jobId)) throw new Error('INVALID_BUILD_JOB_ID');
+    const res = await fetch(this.config.url + '/v1/jobs/' + jobId, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer ' + this.config.token, 'x-aira-owner': ownerId },
+      signal: AbortSignal.timeout(15_000)
+    });
+    if (!res.ok) throw new Error('BUILD_CANCEL_FAILED_' + res.status);
+    return await res.json() as BuildJob;
+  }
   async sourceArchive(jobId: string, ownerId: string): Promise<Buffer> {
     if (!/^[0-9a-f-]{36}$/.test(jobId)) throw new Error('INVALID_BUILD_JOB_ID');
     const res = await fetch(this.config.url + '/v1/jobs/' + jobId + '/source', {
@@ -70,7 +80,7 @@ export class ApplicationBuildClient {
     const stopAt = Date.now() + maxWaitMs;
     while (Date.now() < stopAt) {
       const result = await this.inspect(jobId, ownerId);
-      if (result.state === 'BUILD_PASSED' || result.state === 'FAILED' || result.state === 'BLOCKED') return result;
+      if (result.state === 'BUILD_PASSED' || result.state === 'FAILED' || result.state === 'BLOCKED' || result.state === 'CANCELLED') return result;
       await new Promise(resolve => setTimeout(resolve, 850));
     }
     throw new Error('BUILD_STILL_RUNNING: ' + jobId);
