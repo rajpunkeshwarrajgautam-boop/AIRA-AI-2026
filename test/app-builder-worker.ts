@@ -30,7 +30,7 @@ const waitFor = async (id: string) => {
     const response = await fetch('http://127.0.0.1:4101/v1/jobs/' + id, { headers: auth });
     assert.equal(response.status, 200);
     const job = await response.json();
-    if (job.state === 'VERIFIED' || job.state === 'FAILED' || job.state === 'BLOCKED') return job;
+    if (job.state === 'BUILD_PASSED' || job.state === 'FAILED' || job.state === 'BLOCKED') return job;
     await new Promise(resolve => setTimeout(resolve, 350));
   }
   throw new Error('WORKER_DID_NOT_TERMINATE');
@@ -81,7 +81,7 @@ try {
   assert.equal(hidden.status, 404);
 
   const success = await waitFor(jobId);
-  assert.equal(success.state, 'VERIFIED', JSON.stringify(success));
+  assert.equal(success.state, 'BUILD_PASSED', JSON.stringify(success));
   assert.deepEqual(success.steps.map((s: { exitCode: number }) => s.exitCode), [0, 0, 0]);
   assert.ok(success.steps.some((s: { output: string }) => s.output.includes('CALCULATION_OK')));
   assert.equal(success.manifest.length, payload.files.length);
