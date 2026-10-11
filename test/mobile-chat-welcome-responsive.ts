@@ -38,6 +38,7 @@ async function main() {
         await page.locator('.aira-prose').waitFor();
       };
       await openHistory();
+      await page.evaluate(() => document.fonts.ready.then(() => undefined));
       assert.match(await page.locator('.aira-prose').innerText(), /Saved response/);
       assert.equal(await page.locator('.aira-prose table').count(), 1);
       assert.equal(await page.locator('.aira-prose pre code').count(), 1);
@@ -50,8 +51,12 @@ async function main() {
         });
         assert(reading.left <= 24, 'Mobile reply retains excessive avatar indentation');
         assert(reading.line <= 1.56, 'Mobile prose line spacing is excessive');
-        const composer = await page.locator('main textarea').evaluate(el => el.parentElement!.getBoundingClientRect().height);
-        assert(composer <= 145, 'Empty mobile composer is too tall');
+        // Measure layout height, independent of the preserved Framer layout transition.
+        const composer = await page.locator('main textarea').evaluate(el => ({
+          height: (el.parentElement as HTMLElement).offsetHeight,
+          textarea: (el as HTMLElement).offsetHeight,
+        }));
+        assert(composer.height <= 145, `Empty mobile composer is too tall: ${JSON.stringify(composer)}`);
       }
       for (let visit = 0; visit < 2; visit++) {
         await page.reload();
@@ -73,6 +78,10 @@ async function main() {
           }, { preset, dark });
           await trigger.click();
           await menu.waitFor();
+          await page.waitForFunction(() => {
+            const menu = document.querySelector('[data-testid="model-menu"]');
+            return menu && getComputedStyle(menu).opacity === '1';
+          });
           const geometry = await menu.evaluate(el => {
             const box = el.getBoundingClientRect();
             const css = getComputedStyle(el);
