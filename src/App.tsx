@@ -17,6 +17,7 @@ import { CommandPalette } from './components/CommandPalette';
 import { ConversationSearchOverlay } from './components/ConversationSearchOverlay';
 import { InlineToast } from './components/InlineToast';
 import { backfillConversationsBestEffort, deleteConversationFromServer, fetchConversationFromServer, syncConversationToServer } from './utils/conversationSearch';
+import { useAnimatedFavicon } from './utils/animatedFavicon';
 
 // Lazy-loaded heavy auxiliary surfaces to optimize FCP and TTI
 const ArtifactStudio = React.lazy(() => import('./components/ArtifactStudio').then(m => ({ default: m.ArtifactStudio })));
@@ -33,6 +34,7 @@ const MODE_CONTEXT: Record<WorkspaceMode, string> = {
 };
 
 function App() {
+  useAnimatedFavicon();
   const [conversations, setConversations] = useState<Conversation[]>(() => loadConversations());
   // Root visits start on a transient welcome draft. History is untouched;
   // persist this draft only when the user actually sends a message.

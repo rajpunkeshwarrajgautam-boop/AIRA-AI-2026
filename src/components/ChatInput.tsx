@@ -71,8 +71,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
   useEffect(() => {
     if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 220)}px`;
+      if (!inputText) {
+        textareaRef.current.style.height = '';
+      } else {
+        textareaRef.current.style.height = 'auto';
+        textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 220)}px`;
+      }
     }
   }, [inputText]);
 
@@ -123,7 +127,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     onSendMessage(finalPrompt, attachments);
     setInputText('');
     setAttachments([]);
-    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    if (textareaRef.current) textareaRef.current.style.height = '';
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
