@@ -70,6 +70,10 @@ export class ToolGateway extends EventEmitter {
     return this.tools.get(nameOrId);
   }
 
+  public hasTool(nameOrId: string): boolean {
+    return this.tools.has(nameOrId);
+  }
+
   public listDefinitions(): ToolDefinition[] {
     const unique = new Map<string, ToolDefinition>();
     for (const t of this.tools.values()) {

@@ -126,4 +126,17 @@ describe('AIRA Behavioral Intelligence — Semantic Reasoning & Intent Routing',
     });
     assert.strictEqual(automation.primaryIntent, 'AUTOMATION_CREATE');
   });
+
+  it('preserves advisory AGENT_MISSION intent, decomposes multi-step mission clauses, and avoids single-step tool hijacking', async () => {
+    const analysis = await reasoner.analyze({
+      prompt: 'Inspect workspace files, check git status, and summarize repo history.',
+      advisoryIntent: 'AGENT_MISSION'
+    });
+
+    assert.strictEqual(analysis.primaryIntent, 'AGENT_MISSION');
+    assert.strictEqual(analysis.fastPathUsed, true);
+    assert.strictEqual(analysis.isMultiPart, true);
+    assert.ok(analysis.subTasks.length >= 3, `Expected at least 3 subtasks, got ${analysis.subTasks.length}`);
+    assert.ok(analysis.confidence >= 0.85);
+  });
 });

@@ -47,7 +47,8 @@ export class SemanticReasoner {
       contextualReferents,
       isExplanationOnly,
       isExecutionRequested,
-      input.sideEffectLevel
+      input.sideEffectLevel,
+      input.advisoryIntent
     );
 
     if (fastPathResult) {
@@ -205,9 +206,10 @@ Respond with valid JSON only:
   }
 
   private decomposeMultiPart(prompt: string): string[] {
-    // Detect conjunctions connecting independent imperative clauses
+    // Detect conjunctions or clause separators connecting independent imperative clauses
     // e.g. "Calculate 1024 * 4 and also research solar cell records"
-    const parts = prompt.split(/\b(?:and\s+also|and\s+then|additionally|also)\b/i);
+    // e.g. "Inspect workspace files, check git status, and summarize repo history."
+    const parts = prompt.split(/\b(?:and\s+also|and\s+then|additionally|also)\b|,\s*(?:and\s+)?/i);
     if (parts.length > 1 && parts.every(p => p.trim().length > 5)) {
       return parts.map(p => p.trim());
     }
@@ -238,6 +240,7 @@ Respond with valid JSON only:
       /\b(run|execute|trigger|start|deploy|compile)\b/,
       /\b(open\s+https?:\/\/|navigate\s+to)\b/,
       /\b(fix\s+it\s+and\s+verify|repair\s+the\s+repo)\b/,
+      /\b(inspect|check|examine|investigate|audit)\s+(the\s+)?(workspace|repo|repository|codebase|files|git|status)\b/,
       /\b(calculate|calc)\s+[0-9]/,
       /\b(schedule|create\s+automation)\b/
     ];
@@ -251,7 +254,8 @@ Respond with valid JSON only:
     contextualReferents: Record<string, string>,
     isExplanationOnly: boolean,
     isExecutionRequested: boolean,
-    sideEffectLevel?: SideEffectLevel
+    sideEffectLevel?: SideEffectLevel,
+    advisoryIntent?: IntentTaxonomy
   ): Partial<SemanticIntentAnalysis> | null {
     // Fast Path A: Trivial Greetings & Pleasantries (Zero Extra Model Calls)
     if (/^(hi|hello|hey|good\s+(morning|afternoon|evening)|howdy|greetings|thanks|thank\s+you)[!.?]?$/i.test(promptLower)) {
@@ -274,8 +278,8 @@ Respond with valid JSON only:
     }
 
     // Fast Path C: Explanation vs Execution Nuance
-    // If clearly explanation only and no execution requested:
-    if (isExplanationOnly && !isExecutionRequested) {
+    // If clearly explanation only and no execution requested, and not explicitly routed to specialized mode:
+    if (isExplanationOnly && !isExecutionRequested && (!advisoryIntent || advisoryIntent === 'ANSWER')) {
       return {
         primaryIntent: 'ANSWER',
         secondaryIntents: [],
@@ -285,7 +289,10 @@ Respond with valid JSON only:
     }
 
     // Fast Path D: Scheduled Automations
-    const isAutomation = /\b(every\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|day|morning|night|week|month|hour)|schedule\s+.*(job|automation|task|run|check|backup)|create\s+(an?\s+)?automation|cron\s+expression)\b/i.test(promptLower);
+    const isAutomation = (
+      /\b(every\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|day|morning|night|week|month|hour)|schedule\s+.*(job|automation|task|run|check|backup)|create\s+(an?\s+)?automation|cron\s+expression)\b/i.test(promptLower) ||
+      (advisoryIntent === 'AUTOMATION_CREATE')
+    );
     if (isAutomation) {
       return {
         primaryIntent: 'AUTOMATION_CREATE',
@@ -301,7 +308,8 @@ Respond with valid JSON only:
       /\b(summarize|extract|analyze)\b/i.test(promptLower) &&
       /\b(report|brief|synthesize|document|whitepaper)\b/i.test(promptLower)
     );
-    const isWorkflow = isMultiStepPipeline || /\b(run|execute|trigger|start)\s+(the\s+|my\s+)?([a-z\s_-]+)?(workflow|pipeline|dag)\b/i.test(promptLower);
+    const isWorkflow = isMultiStepPipeline || /\b(run|execute|trigger|start)\s+(the\s+|my\s+)?([a-z\s_-]+)?(workflow|pipeline|dag)\b/i.test(promptLower) ||
+      (advisoryIntent === 'WORKFLOW');
     if (isWorkflow) {
       return {
         primaryIntent: 'WORKFLOW',
@@ -312,7 +320,10 @@ Respond with valid JSON only:
     }
 
     // Fast Path F: Agent Missions (Autonomous multi-step coding/repair)
-    const isAgentMission = /\b(investigate\s+(this\s+|the\s+|repository\s+)?(bug|system|repo|project|codebase|test\s+failures?|failures?|issue)|inspect\s+the\s+repo|mission\s+plan|agent\s+mission|autonomous\s+mission|execute\s+mission|build\s+(an?\s+)?application|build\s+a\s+website\s+and\s+preview|fix\s+(the\s+)?failing\s+tests|verify\s+the\s+build)\b/i.test(promptLower);
+    const isAgentMission = (
+      /\b(investigate\s+(this\s+|the\s+|repository\s+)?(bug|system|repo|project|codebase|test\s+failures?|failures?|issue)|inspect\s+(the\s+)?(workspace(\s+files)?|repo|repository|codebase)|mission\s+plan|agent\s+mission|autonomous\s+mission|execute\s+mission|build\s+(an?\s+)?application|build\s+a\s+website\s+and\s+preview|fix\s+(the\s+)?failing\s+tests|verify\s+the\s+build)\b/i.test(promptLower) ||
+      (advisoryIntent === 'AGENT_MISSION' && rawPrompt.length > 10)
+    );
     if (isAgentMission) {
       return {
         primaryIntent: 'AGENT_MISSION',
@@ -364,7 +375,10 @@ Respond with valid JSON only:
     }
 
     // Fast Path H: Deep Research & Citations
-    const isResearch = /\b(research\s+(the\s+|latest\s+|recent\s+|advances\s+in\s+)?|deep\s+dive\s+into|investigate.*cite\s+sources|find\s+sources\s+and\s+compare)\b/i.test(promptLower);
+    const isResearch = (
+      /\b(research\s+(the\s+|latest\s+|recent\s+|advances\s+in\s+)?|deep\s+dive\s+into|investigate.*cite\s+sources|find\s+sources\s+and\s+compare)\b/i.test(promptLower) ||
+      (advisoryIntent === 'RESEARCH')
+    );
     if (isResearch) {
       return {
         primaryIntent: 'RESEARCH',

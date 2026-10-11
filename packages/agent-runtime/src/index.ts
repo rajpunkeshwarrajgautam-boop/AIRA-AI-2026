@@ -453,7 +453,16 @@ export class AgentRuntime extends EventEmitter {
     
     // Checkpoint 1: Knowledge Search Context
     if (!run.executionCheckpoint) {
-      if (run.intent === 'RESEARCH') {
+      const isResearchIntent = run.intent === 'RESEARCH';
+      const isAgentMissionWithResearch = run.intent === 'AGENT_MISSION' && (
+        run.prompt.toLowerCase().includes('latest') ||
+        run.prompt.toLowerCase().includes('recent') ||
+        run.prompt.toLowerCase().includes('compare the sources') ||
+        run.prompt.toLowerCase().includes('sources') ||
+        run.prompt.toLowerCase().includes('research')
+      );
+
+      if (isResearchIntent || isAgentMissionWithResearch) {
         const researchResult = await this.researchService.executeResearch({
           prompt: run.prompt,
           runId
@@ -529,6 +538,13 @@ export class AgentRuntime extends EventEmitter {
         } else if (run.prompt.toLowerCase().includes('github') && run.prompt.toLowerCase().includes('commit')) {
           selectedToolName = 'repo_git_log';
           selectedArgs = { count: 1 };
+        } else if (
+          isAgentMission && (run.prompt.toLowerCase().includes('workspace') || run.prompt.toLowerCase().includes('inspect'))
+        ) {
+          const fileMatch = run.prompt.match(/(?:read|inspect|structure|analyze|view)\s+([a-zA-Z0-9_\-./\\]+\.[a-zA-Z0-9]+)/i);
+          const targetPath = fileMatch ? fileMatch[1].trim() : (run.prompt.toLowerCase().includes('src/app.tsx') ? 'src/App.tsx' : 'package.json');
+          selectedToolName = 'file_system_read';
+          selectedArgs = { filePath: targetPath };
         } else if (run.prompt.toLowerCase().includes('git status') || run.prompt.toLowerCase().includes('repo status')) {
           selectedToolName = 'repo_git_status';
           selectedArgs = {};
@@ -708,9 +724,9 @@ export class AgentRuntime extends EventEmitter {
           });
           await new Promise(r => setTimeout(r, 100 * attempt));
 
-          if (this.toolGateway.hasTool(toolCall.name)) {
-            finalToolResult = await this.toolGateway.executeTool({
-              name: toolCall.name,
+          if (this.toolGateway.getTool(toolCall.name)) {
+            finalToolResult = await this.toolGateway.execute({
+              toolName: toolCall.name,
               arguments: toolCall.arguments,
               context: {
                 runId,
@@ -734,9 +750,9 @@ export class AgentRuntime extends EventEmitter {
             fallbackTool,
             explanation: decision.explanation
           });
-          if (this.toolGateway.hasTool(fallbackTool)) {
-            finalToolResult = await this.toolGateway.executeTool({
-              name: fallbackTool,
+          if (this.toolGateway.getTool(fallbackTool)) {
+            finalToolResult = await this.toolGateway.execute({
+              toolName: fallbackTool,
               arguments: toolCall.arguments,
               context: {
                 runId,
@@ -769,61 +785,63 @@ export class AgentRuntime extends EventEmitter {
 
       if (!completionCheck.verified) {
         // Enforce zero fabricated success: failed tool must NEVER emit tool.completed or advance to TOOL_COMPLETED
+        run.executionCheckpoint = 'TOOL_FAILED';
         run.state = 'FAILED';
-        run.error = completionCheck.reason;
+        run.error = completionCheck.reason || 'Tool execution failed verification';
         await this.runRepo.saveRun(run);
         await this.emitRunEvent(runId, 'tool.failed', {
           toolName: toolCall.name,
           error: completionCheck.reason,
           state: completionCheck.state
         });
+        await this.transitionRunState(runId, 'FAILED', run.error);
         return;
-      }
+      } else {
+        run.executionCheckpoint = 'TOOL_COMPLETED';
+        await this.runRepo.saveRun(run);
+        await this.emitRunEvent(runId, 'tool.completed', finalToolResult);
 
-      run.executionCheckpoint = 'TOOL_COMPLETED';
-      await this.runRepo.saveRun(run);
-      await this.emitRunEvent(runId, 'tool.completed', finalToolResult);
+        await this.transitionRunState(runId, 'RUNNING');
+        
+        // Bounded iterative loop for AGENT_MISSION (up to 3 steps)
+        if (run.intent === 'AGENT_MISSION' && run.stepCount < 3) {
+          let nextToolName: string | null = null;
+          let nextArgs: Record<string, unknown> = {};
 
-      await this.transitionRunState(runId, 'RUNNING');
-      
-      // Bounded iterative loop for AGENT_MISSION (up to 3 steps)
-      if (run.intent === 'AGENT_MISSION' && run.stepCount < 3) {
-        let nextToolName: string | null = null;
-        let nextArgs: Record<string, unknown> = {};
+          if (run.stepCount === 1) {
+            nextToolName = 'repo_git_status';
+            nextArgs = {};
+          } else if (run.stepCount === 2) {
+            nextToolName = 'repo_git_log';
+            nextArgs = { count: 2 };
+          }
 
-        if (run.stepCount === 1) {
-          nextToolName = 'repo_git_status';
-          nextArgs = {};
-        } else if (run.stepCount === 2) {
-          nextToolName = 'repo_git_log';
-          nextArgs = { count: 2 };
+          if (nextToolName) {
+            const nextToolDef = this.toolGateway.getTool(nextToolName)?.definition || this.toolRegistry.get(nextToolName)?.definition;
+            const nextToolCall: ToolCall = {
+              id: `call_${Date.now()}_${run.stepCount}`,
+              toolId: nextToolDef?.id || `tool_${nextToolName}`,
+              name: nextToolName,
+              arguments: nextArgs,
+              timestamp: Date.now()
+            };
+            run.toolsUsed.push(nextToolName);
+            run.toolCalls.push(nextToolCall);
+            run.stepCount++;
+            run.executionCheckpoint = 'TOOL_SELECTED';
+            await this.runRepo.saveRun(run);
+            await this.emitRunEvent(runId, 'tool.requested', nextToolCall);
+            return this.executeRunLoop(runId);
+          }
         }
 
-        if (nextToolName) {
-          const nextToolDef = this.toolGateway.getTool(nextToolName)?.definition || this.toolRegistry.get(nextToolName)?.definition;
-          const nextToolCall: ToolCall = {
-            id: `call_${Date.now()}_${run.stepCount}`,
-            toolId: nextToolDef?.id || `tool_${nextToolName}`,
-            name: nextToolName,
-            arguments: nextArgs,
-            timestamp: Date.now()
-          };
-          run.toolsUsed.push(nextToolName);
-          run.toolCalls.push(nextToolCall);
-          run.stepCount++;
-          run.executionCheckpoint = 'TOOL_SELECTED';
-          await this.runRepo.saveRun(run);
-          await this.emitRunEvent(runId, 'tool.requested', nextToolCall);
-          return this.executeRunLoop(runId);
-        }
+        run = await this.runRepo.getRun(runId) as Run;
+        run.executionCheckpoint = 'SYNTHESIZING';
+        await this.runRepo.saveRun(run);
       }
-
-      run = await this.runRepo.getRun(runId) as Run;
-      run.executionCheckpoint = 'SYNTHESIZING';
-      await this.runRepo.saveRun(run);
     }
 
-    if (run.executionCheckpoint === 'TOOL_COMPLETED') {
+    if (run.executionCheckpoint === 'TOOL_COMPLETED' || run.executionCheckpoint === 'TOOL_FAILED') {
       run.executionCheckpoint = 'SYNTHESIZING';
       await this.runRepo.saveRun(run);
     }
