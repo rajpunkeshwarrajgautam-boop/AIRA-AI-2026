@@ -47,6 +47,14 @@ async function main() {
       }
       const drawer = page.getByTestId('sidebar-drawer');
       await drawer.waitFor({ state: 'visible', timeout: 10_000 });
+      // Framer Motion can mark the drawer visible while its spring translation
+      // still places the scroll target outside the viewport. Wait for arrival.
+      await page.waitForFunction(() => {
+        const drawer = document.querySelector('[data-testid="sidebar-drawer"]');
+        if (!drawer) return false;
+        const box = drawer.getBoundingClientRect();
+        return box.left > -1 && box.right > Math.min(window.innerWidth, 150);
+      }, undefined, { timeout: 5000 });
       const scroll = page.getByTestId('sidebar-scroll-region');
       const footer = page.getByTestId('sidebar-footer');
       const settings = page.getByRole('button', { name: 'Open settings' });
@@ -69,8 +77,31 @@ async function main() {
       );
       await page.mouse.wheel(0, 60_000);
       await page.waitForTimeout(200);
-      const down = await scrollSurface.evaluate(el => el.scrollTop);
-      assert(down > 100, label + ' real mouse wheel did not scroll sidebar (' + down + ')');
+      let down = await scrollSurface.evaluate(el => el.scrollTop);
+      if (down <= 100) {
+        // Retry only as a user would: another wheel gesture after the animation settles.
+        await page.waitForTimeout(500);
+        await page.mouse.wheel(0, 60_000);
+        await page.waitForTimeout(250);
+        down = await scrollSurface.evaluate(el => el.scrollTop);
+      }
+      if (down <= 100) {
+        const diagnostic = await page.evaluate(() => {
+          const aside = document.querySelector('[data-testid="sidebar-drawer"]');
+          const region = document.querySelector('[data-testid="sidebar-scroll-region"]');
+          const rect = region?.getBoundingClientRect();
+          const hit = rect && document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+          return {
+            aside: aside?.getBoundingClientRect().toJSON(),
+            region: rect?.toJSON(),
+            scrollTop: region?.scrollTop,
+            scrollHeight: region?.scrollHeight,
+            clientHeight: region?.clientHeight,
+            hit: hit?.tagName + '.' + String(hit?.className).slice(0, 60),
+          };
+        });
+        throw new Error(label + ' wheel scroll failed: ' + JSON.stringify(diagnostic));
+      }
 
       // Verify the *actual* oldest conversation is on-screen, not merely in the DOM.
       const lastConversation = page.getByText('Mobile sidebar fixture 109', { exact: false });
