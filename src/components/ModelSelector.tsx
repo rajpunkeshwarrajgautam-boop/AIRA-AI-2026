@@ -89,6 +89,17 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     (containerRef.current?.querySelector('button') as HTMLButtonElement | null)?.focus();
   };
 
+  const revealOption = (option: HTMLButtonElement) => {
+    const menu = menuRef.current;
+    if (!menu) return;
+    const bounds = menu.getBoundingClientRect();
+    const row = option.getBoundingClientRect();
+    const top = bounds.top + menu.clientTop + 8;
+    const bottom = bounds.top + menu.clientTop + menu.clientHeight - 8;
+    if (row.top < top) menu.scrollTop += row.top - top;
+    else if (row.bottom > bottom) menu.scrollTop += row.bottom - bottom;
+  };
+
   return (
     <div className="relative z-50 inline-block min-w-0" ref={containerRef}>
       <motion.button
@@ -104,7 +115,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             requestAnimationFrame(() => {
               const options = menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]');
               const option = event.key === 'ArrowUp' ? options?.[options.length - 1] : options?.[0];
-              option?.focus();
+              option?.focus({ preventScroll: true });
             });
           }
         }}
@@ -172,11 +183,14 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                         : event.key === 'ArrowUp' ? (index + options.length - 1) % options.length : -1;
                       if (next >= 0) {
                         event.preventDefault();
-                        options[next]?.focus();
+                        options[next]?.focus({ preventScroll: true });
                       }
                     }}
                     onMouseEnter={() => setActiveRow(model.id)}
-                    onFocus={() => setActiveRow(model.id)}
+                    onFocus={event => {
+                      setActiveRow(model.id);
+                      revealOption(event.currentTarget);
+                    }}
                     onClick={() => selectModel(model)}
                     className="relative isolate flex w-full items-start gap-3 rounded-[13px] px-3 py-2.5 text-left outline-none"
                   >
