@@ -156,24 +156,28 @@ async function main() {
             ['Vanguard Monolith', 'vanguard-monolith'],
           ];
           const checkContrast = async (element: ReturnType<typeof dialog.getByRole>, description: string) => {
-            // Using source text avoids tsx-injected __name dependencies inside
-            // browser-evaluated functions.
-            const ratio = await element.evaluate(`element => {
-              const toLuminance = value => {
-                const channels = (value.match(/[\\d.]+/g) || []).slice(0, 3).map(Number);
-                if (channels.length !== 3) return null;
-                return channels.map(channel => {
-                  const v = channel / 255;
-                  return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
-                }).reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
-              };
-              const css = getComputedStyle(element);
-              const a = toLuminance(css.color);
-              const b = toLuminance(css.backgroundColor);
-              if (a === null || b === null) return 0;
-              return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
-            }`);
-            assert(ratio >= 4.5, description + ' contrast ' + ratio.toFixed(2) + ':1 below 4.5:1');
+            // Keep this callback free of nested functions: tsx can inject
+            // helper names unavailable inside Playwright browser execution.
+            const ratio = await element.evaluate(element => {
+              const styles = getComputedStyle(element);
+              const values = [styles.color, styles.backgroundColor];
+              const luminosities: number[] = [];
+              for (const value of values) {
+                const channels = value.match(/[0-9.]+/g) || [];
+                if (channels.length < 3) return 0;
+                let lum = 0;
+                const weights = [0.2126, 0.7152, 0.0722];
+                for (let i = 0; i < 3; i++) {
+                  const v = Number(channels[i]) / 255;
+                  const linear = v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+                  lum += linear * weights[i];
+                }
+                luminosities.push(lum);
+              }
+              return (Math.max(luminosities[0], luminosities[1]) + 0.05) /
+                (Math.min(luminosities[0], luminosities[1]) + 0.05);
+            });
+            assert(ratio >= 4.5, description + ' contrast ' + String(ratio) + ':1 below 4.5:1');
           };
           const saveButton = dialog.getByTestId('settings-save');
           for (const [name, id] of presets) {
