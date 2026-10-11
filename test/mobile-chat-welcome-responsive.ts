@@ -101,7 +101,7 @@ async function main() {
         const box = document.querySelector('[data-testid="model-menu"]')?.getBoundingClientRect();
         return !!box && box.bottom <= window.innerHeight + 1;
       });
-      await page.locator('main textarea').click();
+      await page.locator('header').click({ position: { x: 5, y: 5 } });
       await menu.waitFor({ state: 'hidden' });
       await page.setViewportSize({ width, height });
       await trigger.click();
