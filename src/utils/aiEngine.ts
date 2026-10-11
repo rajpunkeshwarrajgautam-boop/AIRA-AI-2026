@@ -161,7 +161,8 @@ export async function streamAIResponse(
               try {
                 const data = JSON.parse(dataStr);
                 if (currentEvent === 'capability_unready' && data.message) {
-                  wrappedCallbacks.onContentChunk(data.message);
+                  // The backend also emits content_delta; avoid showing the same notice twice.
+                  wrappedCallbacks.onStatusUpdate?.('Capability unavailable');
                 } else if (currentEvent === 'approval_required') {
                   wrappedCallbacks.onApprovalRequired?.(data);
                   wrappedCallbacks.onStatusUpdate?.('Waiting for approval...');
