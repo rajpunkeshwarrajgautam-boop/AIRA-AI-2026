@@ -6,6 +6,7 @@ import {
 } from '../../contracts/src/index.js';
 import { ModelRouter } from '../../model-router/src/index.js';
 import { CapabilityRegistry } from './registry.js';
+import { SemanticReasoner } from './behavioral/semantic-reasoner.js';
 
 export interface RoutingInput {
   prompt: string;
@@ -17,6 +18,7 @@ export interface RoutingInput {
 
 export class ServerIntentRouter {
   private static readonly CONFIDENCE_THRESHOLD_PRIVILEGED = 0.70;
+  private reasoner = new SemanticReasoner();
 
   constructor(
     private registry: CapabilityRegistry,
@@ -32,6 +34,41 @@ export class ServerIntentRouter {
     // that cannot be bypassed by client headers, advisory intents, or prompt injection.
     const sideEffectLevel = this.classifySideEffect(promptLower);
     const policyApprovalMandatory = (sideEffectLevel === 'DESTRUCTIVE' || sideEffectLevel === 'WRITE');
+
+    // 2. Semantic Analysis (Contextual Referents, Fast Paths, Explanation vs Execution)
+    const semanticAnalysis = this.reasoner.analyze({
+      prompt: rawPrompt,
+      conversationHistory: input.conversationHistory,
+      advisoryIntent: input.advisoryIntent,
+      sideEffectLevel
+    });
+
+    if (semanticAnalysis.confidence >= 0.90) {
+      const intentSideEffect: SideEffectLevel =
+        sideEffectLevel === 'DESTRUCTIVE'
+          ? 'DESTRUCTIVE'
+          : sideEffectLevel === 'WRITE' || semanticAnalysis.primaryIntent === 'WORKFLOW' || semanticAnalysis.primaryIntent === 'AUTOMATION_CREATE'
+          ? 'WRITE'
+          : semanticAnalysis.primaryIntent === 'TOOL_ACTION' || semanticAnalysis.primaryIntent === 'AGENT_MISSION' || semanticAnalysis.primaryIntent === 'RESEARCH'
+          ? (sideEffectLevel === 'NONE' ? 'READ' : sideEffectLevel)
+          : 'NONE';
+
+      const decision: Partial<RoutingDecision> = {
+        intent: semanticAnalysis.primaryIntent,
+        confidence: semanticAnalysis.confidence,
+        reason: `Semantic reasoner: ${semanticAnalysis.reasoningStrategy} (explanation: ${semanticAnalysis.isExplanationOnly}, execution: ${semanticAnalysis.isExecutionRequested})`,
+        sideEffectLevel: intentSideEffect,
+        approvalRequired: policyApprovalMandatory || intentSideEffect === 'DESTRUCTIVE' || (intentSideEffect === 'WRITE' && semanticAnalysis.primaryIntent !== 'ANSWER'),
+        metadata: {
+          securityOverride: sideEffectLevel === 'DESTRUCTIVE' ? true : undefined,
+          fastPath: semanticAnalysis.fastPathUsed,
+          referents: semanticAnalysis.contextualReferents,
+          isMultiPart: semanticAnalysis.isMultiPart,
+          subTasks: semanticAnalysis.subTasks
+        }
+      };
+      return this.finalizeDecision(decision, policyApprovalMandatory);
+    }
 
     // 2. Deterministic Rule Matching
     const deterministicDecision = this.matchDeterministicRules(promptLower, input.advisoryIntent, sideEffectLevel);
@@ -69,7 +106,7 @@ export class ServerIntentRouter {
   private classifySideEffect(text: string): SideEffectLevel {
     // Critical / Destructive patterns
     const destructivePatterns = [
-      /\b(rm\s+-rf|format\s+[a-z]:|kill\s+-9)\b/,
+      /\b(rm\s+-rf|format\s+[a-z]:?|kill\s+-9)/i,
       /\bdrop\s+.*(table|database|schema)\b/,
       /\bdelete\s+.*(database|tables?|schema|all\s+files)\b/,
       /\b(truncate\s+table|wipe\s+(disk|system)|hang_unsafe|destroy\s+all|purge\s+database)\b/

@@ -829,3 +829,6 @@ export const ErrorEnvelopeSchema = z.object({
   timestamp: z.number()
 });
 export type ErrorEnvelope = z.infer<typeof ErrorEnvelopeSchema>;
+
+export * from './behavioral.js';
+

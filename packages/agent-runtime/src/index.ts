@@ -30,6 +30,9 @@ import { WorkflowRepository, PostgresWorkflowRepository } from './workflow-repos
 import { WorkflowEngine } from './workflow-engine.js';
 import { WorkflowCompiler } from './workflow-compiler.js';
 import { buildDurableHistorySystemMessage } from './memory-policy.js';
+import { InstructionResolver } from './behavioral/instruction-resolver.js';
+import { AdaptiveSynthesizer } from './behavioral/adaptive-synthesizer.js';
+import { ToolRecoveryEngine } from './behavioral/tool-recovery-engine.js';
 
 export class AgentRuntime extends EventEmitter {
   private eventStreams: Map<string, EventEmitter> = new Map();
@@ -671,6 +674,13 @@ export class AgentRuntime extends EventEmitter {
 
       run = await this.runRepo.getRun(runId) as Run; // reload after async tool execution
       run.toolResults.push(toolResult);
+
+      const recoveryEngine = new ToolRecoveryEngine();
+      const completionCheck = recoveryEngine.verifyCompletion(toolCall.name, toolResult);
+      if (!completionCheck.verified) {
+        run.error = completionCheck.reason;
+      }
+
       run.executionCheckpoint = 'TOOL_COMPLETED';
       await this.runRepo.saveRun(run);
       await this.emitRunEvent(runId, 'tool.completed', toolResult);
@@ -737,22 +747,38 @@ export class AgentRuntime extends EventEmitter {
         console.warn('Could not query durable prior run history for principal:', memErr);
       }
 
-      if (run.systemPrompt) {
-        messages.push({ role: 'system', content: run.systemPrompt });
-      } else if (run.intent === 'RESEARCH') {
+      const instructionResolver = new InstructionResolver();
+      const adaptiveSynthesizer = new AdaptiveSynthesizer();
+
+      const resolvedInstructions = instructionResolver.resolve({
+        userPrompt: run.prompt,
+        activeProjectId: run.projectId || undefined,
+        activeUserId: run.principalId,
+        customInstructions: run.systemPrompt
+      });
+
+      const writingProfile = adaptiveSynthesizer.deriveProfile(run.prompt, resolvedInstructions);
+      const systemDirective = adaptiveSynthesizer.buildSystemDirective(writingProfile);
+
+      if (run.intent === 'RESEARCH') {
         messages.push({
           role: 'system',
-          content: `You are Aira AI operating in rigorous Research mode. Provide evidence-backed synthesis, cite available sources, decompose key claims, and distinguish established facts from inference. Do NOT manufacture citations or claims without evidence.`
+          content: `${systemDirective}\n\nYou are operating in rigorous Research mode. Provide evidence-backed synthesis, cite available sources, decompose key claims, and distinguish established facts from inference. Do NOT manufacture citations or claims without evidence.`
         });
       } else if (run.intent === 'AGENT_MISSION') {
         messages.push({
           role: 'system',
-          content: `You are Aira AI operating in Autonomous Mission mode. Deliver clear execution results, steps undertaken, verification findings, and a concise summary.`
+          content: `${systemDirective}\n\nYou are operating in Autonomous Mission mode. Deliver clear execution results, steps undertaken, verification findings, and a concise summary.`
+        });
+      } else if (resolvedInstructions.effectiveInstructions.length > 0) {
+        messages.push({
+          role: 'system',
+          content: `${systemDirective}\n\nContextual Guidelines:\n${resolvedInstructions.effectiveInstructions.join('\n')}`
         });
       } else {
         messages.push({
           role: 'system',
-          content: `You are Aira AI, an autonomous intelligence operating workspace. Maintain precise, verified reasoning.`
+          content: systemDirective
         });
       }
 

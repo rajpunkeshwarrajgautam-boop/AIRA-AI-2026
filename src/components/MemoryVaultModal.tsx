@@ -466,7 +466,7 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
                         {/* Tags */}
                         {mem.tags && mem.tags.length > 0 && (
                           <div className="flex flex-wrap items-center gap-1.5 mt-2.5">
-                            {mem.tags.map(tag => (
+                            {mem.tags.map((tag: string) => (
                               <span
                                 key={tag}
                                 className="text-[10px] px-2 py-0.5 rounded-md bg-claude-surface2-light dark:bg-stone-800/80 text-claude-muted-light dark:text-stone-400 border border-claude-border-light dark:border-stone-700/40"

@@ -137,6 +137,8 @@ export interface MemoryItem {
   score?: number; // Hybrid BM25 + vector score
   sourceSessionId?: string;
   isPinned?: boolean;
+  projectId?: string;
+  userId?: string;
 }
 
 export interface MemoryQuery {
@@ -144,6 +146,8 @@ export interface MemoryQuery {
   limit?: number;
   tiers?: MemoryTier[];
   minScore?: number;
+  activeProjectId?: string;
+  activeUserId?: string;
 }
 
 export interface MemoryStats {
