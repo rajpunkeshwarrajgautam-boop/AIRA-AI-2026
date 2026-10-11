@@ -232,7 +232,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               whileTap={reducedMotion ? undefined : { scale: 0.92 }}
               onClick={() => fileInputRef.current?.click()}
               title="Add documents or images"
-              className="min-h-10 min-w-10 rounded-[9px] p-2 text-claude-muted-light transition-colors hover:bg-claude-surface2-light hover:text-claude-text-light dark:text-claude-muted-dark dark:hover:bg-claude-surface2-dark dark:hover:text-white"
+              className="min-h-10 min-w-10 sm:min-h-0 sm:min-w-0 rounded-[9px] p-2 text-claude-muted-light transition-colors hover:bg-claude-surface2-light hover:text-claude-text-light dark:text-claude-muted-dark dark:hover:bg-claude-surface2-dark dark:hover:text-white"
             >
               <Paperclip className="h-4 w-4" />
             </motion.button>
