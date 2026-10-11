@@ -76,7 +76,7 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
           >
             <header className="px-5 sm:px-8 py-4 sm:py-5 border-b border-claude-border-light dark:border-claude-border-dark flex items-center justify-between bg-claude-surface2-light dark:bg-claude-surface2-dark">
               <div className="flex items-center gap-3 sm:gap-4">
-                <div className="p-2 sm:p-2.5 rounded-2xl bg-claude-terracotta/10 text-claude-terracotta shadow-[inset_0_1px_0_rgba(255,255,255,0.2)]">
+                <div className="p-2 sm:p-2.5 rounded-2xl bg-claude-terracotta/10 text-claude-accentInk shadow-[inset_0_1px_0_rgba(255,255,255,0.2)]">
                   <FolderGit2 className="w-5 h-5 sm:w-6 sm:h-6" />
                 </div>
                 <div>
@@ -104,7 +104,7 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
                         whileHover={{ scale: 1.02 }}
                         whileTap={{ scale: 0.98 }}
                         onClick={() => setCreating(true)} 
-                        className="px-4 py-2.5 rounded-xl bg-claude-text-light dark:bg-claude-text-dark hover:bg-claude-terracotta transition-colors text-claude-bg-light dark:text-claude-bg-dark text-[13px] font-bold shadow-sm flex gap-2 items-center"
+                        className="px-4 py-2.5 rounded-xl bg-claude-text-light dark:bg-claude-text-dark hover:bg-claude-terracotta hover:text-claude-onAccent transition-colors text-claude-bg-light dark:text-claude-bg-dark text-[13px] font-bold shadow-sm flex gap-2 items-center"
                       >
                         <Plus className="w-4 h-4" /> Create project
                       </motion.button>
@@ -112,7 +112,7 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
                     <div className="grid gap-4">
                       {projects.length === 0 && (
                         <div className="py-20 px-8 text-center border-2 border-dashed border-claude-border-light dark:border-claude-border-dark rounded-[2rem] bg-claude-surface2-light dark:bg-claude-surface2-dark">
-                          <FolderGit2 className="w-12 h-12 mx-auto mb-4 text-claude-terracotta/40" />
+                          <FolderGit2 className="w-12 h-12 mx-auto mb-4 text-claude-accentInk/40" />
                           <h3 className="text-base font-bold text-claude-text-light dark:text-white mb-2">No projects yet</h3>
                           <p className="text-[13px] text-claude-muted-light dark:text-claude-muted-dark max-w-sm mx-auto mb-6 leading-relaxed font-medium">
                             Projects give Aira persistent context. Group your conversations, reference files, and custom instructions together to help Aira understand your specific goals.
@@ -139,10 +139,10 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
                             <div className="min-w-0 flex-1">
                               <h3 className="text-base font-bold truncate tracking-tight text-claude-text-light dark:text-white">{project.name}</h3>
                               {project.description && <p className="text-[13px] font-medium mt-1 text-claude-muted-light dark:text-claude-muted-dark leading-snug">{project.description}</p>}
-                              <p className="text-[11px] font-bold uppercase tracking-wider mt-3 text-claude-muted-light dark:text-claude-muted-dark flex items-center gap-1.5"><FileText className="w-3.5 h-3.5 text-claude-terracotta" />{project.docs.length} knowledge docs</p>
+                              <p className="text-[11px] font-bold uppercase tracking-wider mt-3 text-claude-muted-light dark:text-claude-muted-dark flex items-center gap-1.5"><FileText className="w-3.5 h-3.5 text-claude-accentInk" />{project.docs.length} knowledge docs</p>
                             </div>
                             <div className="flex gap-2.5 shrink-0">
-                              <button onClick={() => { onSelectProject(project.id === activeProjectId ? undefined : project.id); onClose(); }} className={`px-4 py-2 rounded-xl font-bold text-[13px] transition-colors ${project.id === activeProjectId ? 'bg-claude-terracotta text-white shadow-sm' : 'bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-text-light dark:text-claude-text-dark hover:bg-claude-border-light dark:hover:bg-claude-border-dark'}`}>
+                              <button onClick={() => { onSelectProject(project.id === activeProjectId ? undefined : project.id); onClose(); }} className={`px-4 py-2 rounded-xl font-bold text-[13px] transition-colors ${project.id === activeProjectId ? 'bg-claude-terracotta text-claude-onAccent shadow-sm' : 'bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-text-light dark:text-claude-text-dark hover:bg-claude-border-light dark:hover:bg-claude-border-dark'}`}>
                                 {project.id === activeProjectId ? 'Clear' : 'Open'}
                               </button>
                               <button onClick={() => onDeleteProject(project.id)} className="p-2.5 rounded-xl hover:bg-red-50 dark:hover:bg-red-500/10 text-claude-muted-light dark:text-claude-muted-dark hover:text-red-500 transition-colors"><Trash2 className="w-4 h-4" /></button>
@@ -169,7 +169,7 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
 
                     <div className="flex justify-end gap-3 pt-4 border-t border-claude-border-light dark:border-claude-border-dark">
                       <button onClick={() => setCreating(false)} className="px-5 py-2.5 rounded-xl text-[13px] font-bold text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-claude-text-dark transition-colors">Cancel</button>
-                      <button onClick={createProject} disabled={!name.trim()} className="px-5 py-2.5 rounded-xl bg-claude-text-light dark:bg-claude-text-dark hover:bg-claude-terracotta text-claude-bg-light dark:text-claude-bg-dark text-[13px] font-bold transition-all shadow-sm disabled:opacity-40 disabled:hover:bg-claude-text-light disabled:dark:hover:bg-claude-text-dark">Create project</button>
+                      <button onClick={createProject} disabled={!name.trim()} className="px-5 py-2.5 rounded-xl bg-claude-text-light dark:bg-claude-text-dark hover:bg-claude-terracotta hover:text-claude-onAccent text-claude-bg-light dark:text-claude-bg-dark text-[13px] font-bold transition-all shadow-sm disabled:opacity-40 disabled:hover:bg-claude-text-light disabled:dark:hover:bg-claude-text-dark">Create project</button>
                     </div>
                   </motion.div>
                 )}

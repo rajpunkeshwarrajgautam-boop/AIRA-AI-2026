@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { 
   Settings, 
   X, 
@@ -105,6 +105,68 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [form, setForm] = useState<AppSettings>({ ...settings });
   const [saved, setSaved] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const closeHandler = useRef(onClose);
+  closeHandler.current = onClose;
+  const [viewport, setViewport] = useState(() => ({
+    top: 0, left: 0,
+    width: typeof window === 'undefined' ? 1024 : window.innerWidth,
+    height: typeof window === 'undefined' ? 768 : window.innerHeight,
+  }));
+  const compactHeight = viewport.height < 430;
+
+  // Browser chrome and the mobile keyboard can change the visual viewport
+  // without resizing the layout viewport. Keep every dialog edge visible.
+  useEffect(() => {
+    if (!isOpen) return;
+    const visual = window.visualViewport;
+    const measure = () => setViewport({
+      top: visual?.offsetTop ?? 0,
+      left: visual?.offsetLeft ?? 0,
+      width: visual?.width ?? window.innerWidth,
+      height: visual?.height ?? window.innerHeight,
+    });
+    const previousFocus = document.activeElement as HTMLElement | null;
+    measure();
+    window.addEventListener('resize', measure);
+    visual?.addEventListener('resize', measure);
+    visual?.addEventListener('scroll', measure);
+    const focusFrame = requestAnimationFrame(() => closeButtonRef.current?.focus({ preventScroll: true }));
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeHandler.current();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const tabbable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]):not([tabindex="-1"]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href]'
+      ) || []).filter(element => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== 'hidden');
+      if (!tabbable.length) return;
+      const first = tabbable[0], last = tabbable[tabbable.length - 1];
+      if (!dialogRef.current?.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+        return;
+      }
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault(); last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault(); first.focus();
+      }
+    };
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      cancelAnimationFrame(focusFrame);
+      document.removeEventListener('keydown', handleKey);
+      window.removeEventListener('resize', measure);
+      visual?.removeEventListener('resize', measure);
+      visual?.removeEventListener('scroll', measure);
+      previousFocus?.focus?.({ preventScroll: true });
+    };
+  }, [isOpen]);
+
 
   const save = () => {
     onSaveSettings(form);
@@ -144,7 +206,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   return (
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 select-none">
+        <div data-testid="settings-viewport"
+          className="fixed z-[70] flex items-center justify-center p-2 sm:p-6 select-none"
+          style={{ top: viewport.top, left: viewport.left, width: viewport.width, height: viewport.height }}>
           <motion.div 
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -153,43 +217,71 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             className="absolute inset-0 bg-stone-900/40 dark:bg-black/60 backdrop-blur-md"
             onClick={onClose}
           />
-          <motion.div 
+          <motion.div
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="aira-settings-title"
+            tabIndex={-1}
+            data-testid="settings-dialog"
             initial={{ opacity: 0, scale: 0.96, y: 15 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.96, y: 10 }}
             transition={{ type: "spring", stiffness: 350, damping: 28 }}
-            className="w-full max-w-2xl max-h-[90vh] overflow-hidden rounded-[1.75rem] border border-claude-border-light dark:border-claude-border-dark bg-claude-surface-light dark:bg-claude-surface-dark shadow-[0_20px_60px_-15px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_60px_-15px_rgba(0,0,0,0.7)] flex flex-col relative z-10"
+            style={{ maxHeight: Math.max(0, viewport.height - (viewport.width >= 640 ? 48 : 16)) }}
+            className={`aira-settings-dialog w-full min-w-0 max-w-2xl h-full max-h-full sm:h-auto sm:max-h-[min(90dvh,900px)] rounded-2xl sm:rounded-[1.75rem] border border-claude-border-light dark:border-claude-border-dark bg-claude-surface-light dark:bg-claude-surface-dark shadow-[0_20px_60px_-15px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_60px_-15px_rgba(0,0,0,0.7)] flex flex-col relative z-10 ${compactHeight ? 'overflow-y-auto overscroll-contain' : 'overflow-hidden'}`}
           >
             {/* Header */}
-            <header className="px-5 sm:px-7 py-4 border-b border-claude-border-light dark:border-claude-border-dark flex items-center justify-between bg-claude-surface2-light dark:bg-claude-surface2-dark">
-              <div className="flex items-center gap-3">
-                <div className="p-2 rounded-xl bg-claude-terracotta/10 text-claude-terracotta">
+            <header data-testid="settings-header" className="shrink-0 px-3 sm:px-7 py-3 sm:py-4 border-b border-claude-border-light dark:border-claude-border-dark flex items-start justify-between gap-2 bg-claude-surface2-light dark:bg-claude-surface2-dark">
+              <div className="flex min-w-0 items-start gap-2 sm:gap-3">
+                <div className="shrink-0 p-2 rounded-xl bg-claude-terracotta/10 text-claude-accentInk">
                   <Settings className="w-5 h-5" />
                 </div>
-                <div>
-                  <h2 className="font-bold text-base sm:text-lg tracking-tight text-claude-text-light dark:text-white">Workspace Settings</h2>
+                <div className="min-w-0">
+                  <h2 id="aira-settings-title" className="font-bold text-base sm:text-lg tracking-tight leading-snug text-claude-text-light dark:text-white">Workspace Settings</h2>
                   <p className="text-[11px] font-medium text-claude-muted-light dark:text-claude-muted-dark">Preferences, intelligence, and system personality</p>
                 </div>
               </div>
-              <motion.button 
+              <motion.button
+                ref={closeButtonRef}
+                type="button"
+                aria-label="Close settings"
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
-                onClick={onClose} 
-                className="p-2 rounded-xl hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark text-claude-muted-light dark:text-claude-muted-dark transition-colors"
+                onClick={onClose}
+                className="shrink-0 p-2 rounded-xl hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark text-claude-muted-light dark:text-claude-muted-dark transition-colors"
               >
                 <X className="w-5 h-5" />
               </motion.button>
             </header>
 
-            {/* Sub-navigation Tabs */}
-            <div className="flex border-b border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/60 dark:bg-claude-surface2-dark/60 px-5 sm:px-7 overflow-x-auto no-scrollbar gap-1 pt-2">
+            {/* Native mobile picker keeps all six settings sections accessible. */}
+            <div data-testid="settings-mobile-navigation" className="shrink-0 px-3 py-2 border-b border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/60 dark:bg-claude-surface2-dark/60 sm:hidden">
+              <label htmlFor="aira-settings-section" className="block mb-1 text-[11px] font-semibold text-claude-muted-light dark:text-claude-muted-dark">Settings section</label>
+              <select
+                id="aira-settings-section"
+                aria-label="Settings section"
+                value={activeTab}
+                onChange={event => setActiveTab(event.target.value as SettingsTab)}
+                className="w-full min-w-0 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface-light dark:bg-claude-surface-dark text-claude-text-light dark:text-white px-3 py-2.5 text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta"
+              >
+                {tabs.map(tab => <option key={tab.id} value={tab.id}>{tab.label}</option>)}
+              </select>
+            </div>
+            {/* Full-width tab strip remains for tablet and desktop. */}
+            <div role="tablist" aria-label="Settings categories" data-testid="settings-desktop-tabs" className="hidden sm:flex shrink-0 border-b border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/60 dark:bg-claude-surface2-dark/60 px-5 sm:px-7 overflow-x-auto gap-1 pt-2">
               {tabs.map(tab => (
                 <button
                   key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === tab.id}
                   onClick={() => setActiveTab(tab.id)}
-                  className={`flex items-center gap-2 px-3 py-2.5 text-xs font-semibold rounded-t-xl transition-all border-b-2 whitespace-nowrap ${
+                  id={`aira-settings-tab-${tab.id}`}
+                  aria-controls="aira-settings-panel"
+                  className={`shrink-0 flex items-center gap-2 px-3 py-2.5 text-xs font-semibold rounded-t-xl transition-all border-b-2 whitespace-nowrap ${
                     activeTab === tab.id
-                      ? 'border-claude-terracotta text-claude-terracotta bg-claude-surface-light dark:bg-claude-surface-dark shadow-[0_-2px_10px_-4px_rgba(0,0,0,0.03)]'
+                      ? 'border-claude-terracotta text-claude-accentInk bg-claude-surface-light dark:bg-claude-surface-dark shadow-[0_-2px_10px_-4px_rgba(0,0,0,0.03)]'
                       : 'border-transparent text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white'
                   }`}
                 >
@@ -200,14 +292,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
 
             {/* Body Content */}
-            <div className="p-5 sm:p-7 space-y-6 overflow-y-auto flex-1 bg-transparent">
+            <div id="aira-settings-panel" data-testid="settings-content" className={`min-w-0 p-3 sm:p-7 space-y-6 bg-transparent ${compactHeight ? 'shrink-0' : 'min-h-0 flex-1 overflow-y-auto overscroll-contain'}`}>
               
               {/* TAB 1: GENERAL */}
               {activeTab === 'general' && (
                 <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
                   <div>
-                    <label className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark block mb-2">Display Name</label>
+                    <label htmlFor="aira-settings-name" className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark block mb-2">Display Name</label>
                     <input 
+                      id="aira-settings-name"
                       value={form.userName} 
                       onChange={e => setForm({ ...form, userName: e.target.value })} 
                       placeholder="Enter your name (e.g. Punkeshwar)" 
@@ -217,8 +310,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
 
                   <div>
-                    <label className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark block mb-2">Account Email</label>
+                    <label htmlFor="aira-settings-email" className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark block mb-2">Account Email</label>
                     <input 
+                      id="aira-settings-email"
                       value={form.email || 'user@aira.internal'} 
                       onChange={e => setForm({ ...form, email: e.target.value })} 
                       className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-medium outline-none focus:border-claude-terracotta transition-all" 
@@ -238,7 +332,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           }} 
                           className={`py-2.5 rounded-xl border text-[13px] font-bold capitalize transition-all ${
                             form.theme === theme 
-                              ? 'border-claude-terracotta bg-claude-terracotta text-white shadow-sm' 
+                              ? 'border-claude-terracotta bg-claude-terracotta text-claude-onAccent shadow-sm' 
                               : 'border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark hover:border-claude-terracotta/40'
                           }`}
                         >
@@ -253,7 +347,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <label className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark block">
                         Aesthetic Preset & Interactive Features
                       </label>
-                      <span className="text-[10px] font-semibold text-claude-terracotta bg-claude-terracotta/10 px-2 py-0.5 rounded-full flex items-center gap-1">
+                      <span className="text-[10px] font-semibold text-claude-accentInk bg-claude-terracotta/10 px-2 py-0.5 rounded-full flex items-center gap-1">
                         <Palette className="w-3 h-3" />
                         <span>8 Curated Themes</span>
                       </span>
@@ -294,11 +388,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             </div>
 
                             <div className="flex items-center justify-between">
-                              <span className="text-[13px] font-bold text-claude-text-light dark:text-white group-hover:text-claude-terracotta transition-colors">
+                              <span className="text-[13px] font-bold text-claude-text-light dark:text-white group-hover:text-claude-accentInk transition-colors">
                                 {theme.name}
                               </span>
                               {isSelected && (
-                                <Check className="w-4 h-4 text-claude-terracotta flex-shrink-0" />
+                                <Check className="w-4 h-4 text-claude-accentInk flex-shrink-0" />
                               )}
                             </div>
 
@@ -330,7 +424,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           }`}
                         >
                           <div className="flex items-center justify-between mb-1">
-                            <span className={`text-[13px] font-bold ${form.activeModel === model.id ? 'text-claude-terracotta' : 'text-claude-text-light dark:text-white'}`}>{model.name}</span>
+                            <span className={`text-[13px] font-bold ${form.activeModel === model.id ? 'text-claude-accentInk' : 'text-claude-text-light dark:text-white'}`}>{model.name}</span>
                             {model.badge && <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-claude-surface-light dark:bg-claude-surface-dark text-claude-muted-light dark:text-claude-muted-dark">{model.badge}</span>}
                           </div>
                           <p className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark line-clamp-2 leading-relaxed">{model.description}</p>
@@ -475,7 +569,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <div className="p-4 rounded-2xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light dark:bg-claude-surface2-dark">
                     <div className="flex items-center justify-between mb-2">
                       <div className="text-[13px] font-bold text-claude-text-light dark:text-white">Memory Context Budget</div>
-                      <span className="text-xs font-mono font-bold text-claude-terracotta">{form.memoryTokenBudget || 800} tokens</span>
+                      <span className="text-xs font-mono font-bold text-claude-accentInk">{form.memoryTokenBudget || 800} tokens</span>
                     </div>
                     <input
                       type="range"
@@ -501,7 +595,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         onClose();
                         if (onOpenMemoryVault) onOpenMemoryVault();
                       }}
-                      className="flex-1 py-2.5 px-4 rounded-xl bg-claude-terracotta text-white font-semibold text-xs hover:bg-claude-terracotta-hover transition-colors shadow-sm"
+                      className="flex-1 py-2.5 px-4 rounded-xl bg-claude-terracotta text-claude-onAccent font-semibold text-xs hover:bg-claude-terracotta-hover transition-colors shadow-sm"
                     >
                       Open Memory Vault Inspector
                     </button>
@@ -558,7 +652,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           onClick={() => setForm({ ...form, responseStyle: style.id as AppSettings['responseStyle'] })}
                           className={`p-2.5 rounded-xl border text-xs font-semibold text-center transition-all ${
                             form.responseStyle === style.id
-                              ? 'border-claude-terracotta bg-claude-terracotta/10 text-claude-terracotta'
+                              ? 'border-claude-terracotta bg-claude-terracotta/10 text-claude-accentInk'
                               : 'border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark hover:border-claude-terracotta/40'
                           }`}
                         >
@@ -606,11 +700,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
                   <div className="p-4 rounded-2xl border border-claude-terracotta/20 bg-claude-terracotta/5 dark:bg-claude-terracotta/10 flex items-center justify-between">
                     <div>
-                      <div className="text-xs uppercase font-bold tracking-wider text-claude-terracotta">Subscription Plan</div>
+                      <div className="text-xs uppercase font-bold tracking-wider text-claude-accentInk">Subscription Plan</div>
                       <div className="text-sm font-bold text-claude-text-light dark:text-white mt-0.5">Aira Pro (Claude 3.7 Extended Limits)</div>
                       <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">200K token context window with hybrid reasoning.</div>
                     </div>
-                    <span className="text-xs font-bold px-3 py-1 rounded-full bg-claude-terracotta text-white">Active</span>
+                    <span className="text-xs font-bold px-3 py-1 rounded-full bg-claude-terracotta text-claude-onAccent">Active</span>
                   </div>
 
                   <div className="pt-2">
@@ -622,7 +716,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         onClick={exportData} 
                         className="flex-1 p-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-bold text-claude-text-light dark:text-white flex items-center justify-center gap-2 hover:border-claude-terracotta/50 transition-colors shadow-sm"
                       >
-                        <Download className="w-4 h-4 text-claude-terracotta" />
+                        <Download className="w-4 h-4 text-claude-accentInk" />
                         <span>Export Data (JSON)</span>
                       </motion.button>
                       <motion.label 
@@ -630,7 +724,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         whileTap={{ scale: 0.98 }} 
                         className="flex-1 p-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-bold text-claude-text-light dark:text-white flex items-center justify-center gap-2 cursor-pointer hover:border-claude-terracotta/50 transition-colors shadow-sm"
                       >
-                        <Upload className="w-4 h-4 text-claude-terracotta" />
+                        <Upload className="w-4 h-4 text-claude-accentInk" />
                         <span>Import Backup</span>
                         <input type="file" accept=".json" onChange={importData} className="hidden" />
                       </motion.label>
@@ -650,15 +744,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
 
             {/* Footer */}
-            <footer className="px-5 sm:px-7 py-3.5 border-t border-claude-border-light dark:border-claude-border-dark flex items-center justify-between gap-3 bg-claude-surface2-light dark:bg-claude-surface2-dark">
-              <span className="text-[11px] font-medium tracking-tight text-claude-muted-light dark:text-claude-muted-dark">Product of Virexa AI Ventures</span>
-              <div className="flex items-center gap-2.5">
-                <button onClick={onClose} className="px-4 py-2 text-[13px] font-medium text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white transition-colors">Cancel</button>
+            <footer data-testid="settings-footer" className="shrink-0 px-3 sm:px-7 py-2.5 sm:py-3.5 border-t border-claude-border-light dark:border-claude-border-dark flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3 bg-claude-surface2-light dark:bg-claude-surface2-dark" style={{ paddingBottom: 'max(0.625rem, env(safe-area-inset-bottom, 0px))' }}>
+              <span className="block text-center sm:text-left text-[11px] font-medium tracking-tight text-claude-muted-light dark:text-claude-muted-dark">Product of Virexa AI Ventures</span>
+              <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 min-w-0">
+                <button type="button" onClick={onClose} className="min-w-0 px-3 py-2.5 rounded-xl text-[13px] font-medium text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white transition-colors">Cancel</button>
                 <motion.button 
                   whileHover={{ scale: 1.02 }} 
                   whileTap={{ scale: 0.98 }} 
-                  onClick={save} 
-                  className="px-5 py-2 rounded-xl bg-claude-terracotta text-white text-[13px] font-bold hover:bg-claude-terracotta-hover transition-colors flex items-center gap-2 shadow-sm"
+                  onClick={save}
+                  data-testid="settings-save"
+                  className="min-w-0 justify-center px-3 sm:px-5 py-2.5 rounded-xl bg-claude-terracotta text-claude-onAccent text-[13px] font-bold hover:bg-claude-terracotta-hover transition-colors flex items-center gap-1.5 shadow-sm"
                 >
                   {saved && <Check className="w-4 h-4" />}{saved ? 'Preferences Saved' : 'Save Changes'}
                 </motion.button>

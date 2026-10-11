@@ -11,8 +11,11 @@
     --border-subtle: rgba(45, 40, 30, 0.08);
     --text-primary: #1F1E1D;
     --text-muted: #6E6D69;
-    --accent-terracotta: #D97757;
-    --accent-terracotta-hover: #C15335;
+    /* Accessible foregrounds on accent fills and on neutral surfaces. */
+  --accent-on: #090909;
+  --accent-ink: #B34C2C;
+  --accent-terracotta: #D97757;
+    --accent-terracotta-hover: #C86244;
     --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
     --ease-vanguard: cubic-bezier(0.32, 0.72, 0, 1);
   }
@@ -25,7 +28,10 @@
     --border-subtle: rgba(255, 255, 255, 0.08);
     --text-primary: #ECEAE4;
     --text-muted: #9E9D96;
-    --accent-terracotta: #D97757;
+    /* Accessible foregrounds on accent fills and on neutral surfaces. */
+  --accent-on: #090909;
+  --accent-ink: #F2A080;
+  --accent-terracotta: #D97757;
     --accent-terracotta-hover: #E08568;
   }
 
@@ -162,6 +168,10 @@
 }
 
 .aira-prose table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
@@ -169,7 +179,7 @@
   font-size: 0.92rem;
   border: 1px solid var(--border-color);
   border-radius: 10px;
-  overflow: hidden;
+  overflow-x: auto;
 }
 
 .aira-prose th, .aira-prose td {
@@ -306,6 +316,9 @@
   --border-subtle: rgba(80, 55, 35, 0.09);
   --text-primary: #2C2016;
   --text-muted: #7E6B5A;
+  /* Accessible foregrounds on accent fills and on neutral surfaces. */
+  --accent-on: #FFFFFF;
+  --accent-ink: #A04722;
   --accent-terracotta: #BA582F;
   --accent-terracotta-hover: #A04722;
 }
@@ -320,6 +333,9 @@
   --border-subtle: rgba(255, 235, 215, 0.08);
   --text-primary: #F3EAE1;
   --text-muted: #A39182;
+  /* Accessible foregrounds on accent fills and on neutral surfaces. */
+  --accent-on: #090909;
+  --accent-ink: #FF9C78;
   --accent-terracotta: #D46F44;
   --accent-terracotta-hover: #E48259;
 }
@@ -385,8 +401,11 @@
   --border-subtle: rgba(70, 120, 160, 0.1);
   --text-primary: #0A1629;
   --text-muted: #536B88;
+  /* Accessible foregrounds on accent fills and on neutral surfaces. */
+  --accent-on: #090909;
+  --accent-ink: #0369A1;
   --accent-terracotta: #0284C7;
-  --accent-terracotta-hover: #0369A1;
+  --accent-terracotta-hover: #0382C4;
 }
 
 [data-theme="liquid-glass"].dark,
@@ -399,6 +418,9 @@
   --border-subtle: rgba(140, 180, 225, 0.1);
   --text-primary: #F1F6FB;
   --text-muted: #8AA4C4;
+  /* Accessible foregrounds on accent fills and on neutral surfaces. */
+  --accent-on: #090909;
+  --accent-ink: #7DD3FC;
   --accent-terracotta: #38BDF8;
   --accent-terracotta-hover: #7DD3FC;
 }
@@ -460,8 +482,11 @@
   --border-subtle: rgba(0, 0, 0, 0.2);
   --text-primary: #0F0F0E;
   --text-muted: #555550;
+  /* Accessible foregrounds on accent fills and on neutral surfaces. */
+  --accent-on: #090909;
+  --accent-ink: #B63A00;
   --accent-terracotta: #FF4D00;
-  --accent-terracotta-hover: #D94100;
+  --accent-terracotta-hover: #DC4600;
 }
 
 [data-theme="industrial-brutalist"].dark,
@@ -474,6 +499,9 @@
   --border-subtle: rgba(255, 255, 255, 0.14);
   --text-primary: #F7F7F5;
   --text-muted: #8F8F89;
+  /* Accessible foregrounds on accent fills and on neutral surfaces. */
+  --accent-on: #090909;
+  --accent-ink: #FFAD85;
   --accent-terracotta: #FF5E1A;
   --accent-terracotta-hover: #FF7A42;
 }
@@ -515,6 +543,9 @@
   --border-subtle: rgba(40, 60, 42, 0.09);
   --text-primary: #18261B;
   --text-muted: #526656;
+  /* Accessible foregrounds on accent fills and on neutral surfaces. */
+  --accent-on: #FFFFFF;
+  --accent-ink: #226340;
   --accent-terracotta: #2E7D52;
   --accent-terracotta-hover: #226340;
 }
@@ -532,6 +563,9 @@
   --border-subtle: rgba(175, 215, 185, 0.08);
   --text-primary: #E7EFE8;
   --text-muted: #859D8B;
+  /* Accessible foregrounds on accent fills and on neutral surfaces. */
+  --accent-on: #090909;
+  --accent-ink: #6EE7A7;
   --accent-terracotta: #4ADE80;
   --accent-terracotta-hover: #6EE7A7;
 }
@@ -580,6 +614,9 @@
   --border-subtle: rgba(180, 145, 60, 0.12);
   --text-primary: #231F15;
   --text-muted: #7E735B;
+  /* Accessible foregrounds on accent fills and on neutral surfaces. */
+  --accent-on: #090909;
+  --accent-ink: #806200;
   --accent-terracotta: #D4A017;
   --accent-terracotta-hover: #B8860B;
 }
@@ -594,6 +631,9 @@
   --border-subtle: rgba(230, 190, 80, 0.12);
   --text-primary: #F7F2E6;
   --text-muted: #9E947E;
+  /* Accessible foregrounds on accent fills and on neutral surfaces. */
+  --accent-on: #090909;
+  --accent-ink: #F3D079;
   --accent-terracotta: #E5B94E;
   --accent-terracotta-hover: #F3D079;
 }
@@ -626,7 +666,7 @@
 }
 
 [data-theme="solar-gold"] .gradient-terracotta-btn {
-  background: linear-gradient(135deg, #F59E0B 0%, #D4A017 50%, #B45309 100%);
+  background: linear-gradient(135deg, #F59E0B 0%, #D4A017 50%, #C26D09 100%);
   color: #1A1305 !important;
   font-weight: 700;
   box-shadow: 0 4px 20px -2px rgba(212, 160, 23, 0.45);
@@ -651,6 +691,9 @@
   --border-subtle: rgba(147, 51, 234, 0.1);
   --text-primary: #1C0F2F;
   --text-muted: #6B5784;
+  /* Accessible foregrounds on accent fills and on neutral surfaces. */
+  --accent-on: #FFFFFF;
+  --accent-ink: #7E22CE;
   --accent-terracotta: #9333EA;
   --accent-terracotta-hover: #7E22CE;
 }
@@ -665,6 +708,9 @@
   --border-subtle: rgba(236, 72, 153, 0.15);
   --text-primary: #F7EFFF;
   --text-muted: #A792C7;
+  /* Accessible foregrounds on accent fills and on neutral surfaces. */
+  --accent-on: #090909;
+  --accent-ink: #F472B6;
   --accent-terracotta: #EC4899;
   --accent-terracotta-hover: #F472B6;
 }
@@ -696,7 +742,7 @@
 }
 
 [data-theme="tokyo-neon"] .gradient-terracotta-btn {
-  background: linear-gradient(135deg, #EC4899 0%, #A855F7 50%, #6366F1 100%);
+  background: linear-gradient(135deg, #BE185D 0%, #7E22CE 50%, #3730A3 100%);
   box-shadow: 0 4px 20px -2px rgba(236, 72, 153, 0.45);
 }
 
@@ -719,6 +765,9 @@
   --border-subtle: rgba(0, 0, 0, 0.16);
   --text-primary: #000000;
   --text-muted: #5C5C5C;
+  /* Accessible foregrounds on accent fills and on neutral surfaces. */
+  --accent-on: #FFFFFF;
+  --accent-ink: #111111;
   --accent-terracotta: #111111;
   --accent-terracotta-hover: #262626;
 }
@@ -733,6 +782,9 @@
   --border-subtle: rgba(255, 255, 255, 0.12);
   --text-primary: #FFFFFF;
   --text-muted: #8E8E8E;
+  /* Accessible foregrounds on accent fills and on neutral surfaces. */
+  --accent-on: #090909;
+  --accent-ink: #FFFFFF;
   --accent-terracotta: #EDEDED;
   --accent-terracotta-hover: #FFFFFF;
 }
@@ -815,3 +867,26 @@
 
 /* TeX display notation embedded in a prose line is still rendered as a block. */
 .aira-prose .aira-math-embedded { display: block; max-width: 100%; overflow-x: auto; overflow-y: hidden; margin: 0.85rem 0; padding: 0.25rem 0; }
+
+
+/* Mobile sidebar: the middle navigation/history is the sole scroll owner.
+   On very short landscape screens the whole rail scrolls, including the footer,
+   rather than rendering unreachable controls below the visual viewport. */
+.aira-sidebar-scroll {
+  -webkit-overflow-scrolling: touch;
+}
+.aira-sidebar-footer {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
+}
+@media (max-height: 460px) {
+  .aira-sidebar-shell {
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .aira-sidebar-scroll {
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+}

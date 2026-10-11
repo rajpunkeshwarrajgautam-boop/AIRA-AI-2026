@@ -39,7 +39,7 @@ function App() {
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>(() => localStorage.getItem('aira_active_project_id_v1') || undefined);
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('chat');
-  const [sidebarOpen, setSidebarOpen] = useState(() => typeof window !== 'undefined' ? window.innerWidth >= 768 : true);
+  const [sidebarOpen, setSidebarOpen] = useState(() => typeof window !== 'undefined' ? window.innerWidth >= 1280 : true);
   const [isProjectsOpen, setIsProjectsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isMemoryVaultOpen, setIsMemoryVaultOpen] = useState(false);
@@ -72,6 +72,15 @@ function App() {
     () => projects.find(p => p.id === activeProjectId),
     [projects, activeProjectId]
   );
+
+  // The sidebar is a desktop rail at xl and a temporary drawer below xl.
+  // Reconcile visibility when an orientation change crosses that boundary.
+  useEffect(() => {
+    const desktop = window.matchMedia('(min-width: 1280px)');
+    const onBreakpointChange = (event: MediaQueryListEvent) => setSidebarOpen(event.matches);
+    desktop.addEventListener('change', onBreakpointChange);
+    return () => desktop.removeEventListener('change', onBreakpointChange);
+  }, []);
 
   useEffect(() => saveConversations(conversations), [conversations]);
   useEffect(() => {
@@ -110,11 +119,16 @@ function App() {
 
   useEffect(() => {
     const root = document.documentElement;
-    const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    const dark = settings.theme === 'dark' || (settings.theme === 'system' && systemDark);
-    root.classList.toggle('dark', dark);
-    if (settings.aestheticPreset && settings.aestheticPreset !== 'default') root.dataset.theme = settings.aestheticPreset;
-    else delete root.dataset.theme;
+    const systemColor = window.matchMedia('(prefers-color-scheme: dark)');
+    const applyTheme = () => {
+      const dark = settings.theme === 'dark' || (settings.theme === 'system' && systemColor.matches);
+      root.classList.toggle('dark', dark);
+      if (settings.aestheticPreset && settings.aestheticPreset !== 'default') root.dataset.theme = settings.aestheticPreset;
+      else delete root.dataset.theme;
+    };
+    applyTheme();
+    systemColor.addEventListener('change', applyTheme);
+    return () => systemColor.removeEventListener('change', applyTheme);
   }, [settings.theme, settings.aestheticPreset]);
 
   // Only scroll the conversation region; scrollIntoView can also move the
@@ -452,7 +466,7 @@ function App() {
   const updateSettings = (partial: Partial<AppSettings>) => setSettings(prev => ({ ...prev, ...partial }));
 
   return (
-    <div className="h-[100dvh] w-screen flex overflow-hidden bg-claude-bg-light dark:bg-claude-bg-dark text-claude-text-light dark:text-claude-text-dark">
+    <div className="h-[100dvh] w-full min-w-0 flex overflow-hidden bg-claude-bg-light dark:bg-claude-bg-dark text-claude-text-light dark:text-claude-text-dark">
       <Sidebar
         conversations={conversations}
         activeChatId={activeChatId}
@@ -501,8 +515,8 @@ function App() {
 
       <main className="flex-1 min-w-0 min-h-0 h-[100dvh] flex flex-col overflow-hidden w-full max-w-full bg-mesh-canvas">
         <header className="h-[54px] shrink-0 px-3 md:px-5 flex items-center justify-between border-b border-claude-border-light/80 dark:border-claude-border-dark/80 gradient-fade-header relative z-50 bg-claude-bg-light/95 dark:bg-claude-bg-dark/95 backdrop-blur-md">
-          <div className="flex items-center gap-2 min-w-0">
-            {(!sidebarOpen || (typeof window !== 'undefined' && window.innerWidth < 768)) && (
+          <div className="flex flex-1 items-center gap-1 min-w-0">
+            {(!sidebarOpen || (typeof window !== 'undefined' && window.innerWidth < 1280)) && (
               <>
                 <button 
                   onClick={() => setSidebarOpen(true)} 
@@ -523,22 +537,22 @@ function App() {
               extendedThinking={settings.extendedThinking}
               onToggleThinking={enabled => updateSettings({ extendedThinking: enabled })}
             />
-            {currentProject && <button onClick={() => setIsProjectsOpen(true)} className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-claude-terracotta/10 text-claude-terracotta text-xs max-w-[180px]"><FolderGit2 className="w-3 h-3" /><span className="truncate">{currentProject.name}</span></button>}
+            {currentProject && <button onClick={() => setIsProjectsOpen(true)} className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-claude-terracotta/10 text-claude-accentInk text-xs max-w-[180px]"><FolderGit2 className="w-3 h-3" /><span className="truncate">{currentProject.name}</span></button>}
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
             {activeConversation?.messages.some(m => (m.artifacts?.length || 0) > 0) && <button onClick={() => {
               if (activeArtifact) setActiveArtifact(null);
               else {
                 const artifact = activeConversation.messages.flatMap(m => m.artifacts || [])[0];
                 if (artifact) setActiveArtifact(artifact);
               }
-            }} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs ${activeArtifact ? 'bg-claude-terracotta text-white' : 'hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark'}`}><Layers className="w-3.5 h-3.5" /><span className="hidden sm:inline">Output Studio</span></button>}
-            {activeConversation && <button onClick={() => handleToggleStar(activeConversation.id)} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark active:scale-95 transition-all" title={activeConversation.isPinned ? 'Remove bookmark' : 'Bookmark conversation'}><Bookmark className={`w-4 h-4 ${activeConversation.isPinned ? 'fill-claude-terracotta text-claude-terracotta' : 'text-claude-muted-light dark:text-claude-muted-dark'}`} /></button>}
+            }} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs ${activeArtifact ? 'bg-claude-terracotta text-claude-onAccent' : 'hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark'}`}><Layers className="w-3.5 h-3.5" /><span className="hidden sm:inline">Output Studio</span></button>}
+            {activeConversation && <button onClick={() => handleToggleStar(activeConversation.id)} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark active:scale-95 transition-all" title={activeConversation.isPinned ? 'Remove bookmark' : 'Bookmark conversation'}><Bookmark className={`w-4 h-4 ${activeConversation.isPinned ? 'fill-claude-terracotta text-claude-accentInk' : 'text-claude-muted-light dark:text-claude-muted-dark'}`} /></button>}
             <button onClick={handleShare} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark">{sharedCopied ? <Check className="w-4 h-4 text-emerald-400" /> : <Share2 className="w-4 h-4 text-claude-muted-light dark:text-claude-muted-dark" />}</button>
           </div>
         </header>
 
-        <div ref={chatScrollRef} data-testid="chat-scroll-region" className="flex-1 min-h-0 overflow-x-hidden overflow-y-auto overscroll-contain flex flex-col">
+        <div ref={chatScrollRef} data-testid="chat-scroll-region" className="flex-1 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain flex flex-col">
           {!activeConversation || activeConversation.messages.length === 0 ? (
             <GreetingScreen 
               userName={settings.userName} 
@@ -567,7 +581,7 @@ function App() {
 
         </div>
 
-          <div className="shrink-0 relative z-10 pt-4 gradient-mask-bottom">
+          <div className="shrink-0 min-w-0 relative z-10 pt-2 sm:pt-4 gradient-mask-bottom">
             {executionStatus && (
               <div className="max-w-2xl mx-auto px-4 mb-2">
                 <div className="flex items-center gap-2 text-xs text-orange-600 dark:text-orange-400 bg-orange-50/90 dark:bg-orange-950/40 border border-orange-200/60 dark:border-orange-800/50 rounded-lg px-3 py-1.5 shadow-sm backdrop-blur">

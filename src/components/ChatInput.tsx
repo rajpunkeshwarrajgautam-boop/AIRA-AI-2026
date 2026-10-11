@@ -155,14 +155,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   };
 
   return (
-    <div className="mx-auto w-full max-w-3xl px-4 pb-6" ref={controlsRef}>
+    <div className="mx-auto w-full min-w-0 max-w-3xl px-3 sm:px-4 pb-3 sm:pb-6" ref={controlsRef}>
       <motion.div
         layout
         className="overflow-visible rounded-[20px] border border-claude-border-light bg-claude-surface-light shadow-[0_8px_30px_-12px_rgba(45,40,30,0.16)] transition-colors focus-within:border-claude-terracotta/35 dark:border-claude-border-dark dark:bg-claude-surface-dark dark:shadow-[0_12px_36px_-14px_rgba(0,0,0,0.65)]"
       >
         <div className="flex items-center justify-between gap-3 border-b border-claude-border-light/70 px-3.5 py-2 dark:border-claude-border-dark/70">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[8px] bg-claude-terracotta/10 text-claude-terracotta">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[8px] bg-claude-terracotta/10 text-claude-accentInk">
               <ModeIcon className="h-3.5 w-3.5" />
             </span>
             <span className="min-w-0">
@@ -173,7 +173,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           <div className="hidden shrink-0 items-center gap-1.5 text-[10px] text-claude-muted-light sm:flex dark:text-claude-muted-dark">
             <span className="rounded-md bg-claude-surface2-light px-2 py-1 font-medium dark:bg-claude-surface2-dark">{modelInfo.name}</span>
             {extendedThinking && modelInfo.supportsThinking && (
-              <span className="flex items-center gap-1 rounded-md bg-claude-terracotta/10 px-2 py-1 font-medium text-claude-terracotta">
+              <span className="flex items-center gap-1 rounded-md bg-claude-terracotta/10 px-2 py-1 font-medium text-claude-accentInk">
                 <Brain className="h-3 w-3" />
                 Deep
               </span>
@@ -196,7 +196,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                     key={attachment.id}
                     className="group flex max-w-full items-center gap-2 rounded-[10px] border border-claude-border-light bg-claude-surface2-light px-2.5 py-1.5 text-xs text-claude-text-light dark:border-claude-border-dark dark:bg-claude-surface2-dark dark:text-claude-text-dark"
                   >
-                    <Paperclip className="h-3.5 w-3.5 shrink-0 text-claude-terracotta" />
+                    <Paperclip className="h-3.5 w-3.5 shrink-0 text-claude-accentInk" />
                     <span className="max-w-[180px] truncate font-medium">{attachment.name}</span>
                     <span className="hidden font-mono text-[9px] text-claude-muted-light sm:inline dark:text-claude-muted-dark">{attachment.size}</span>
                     <button
@@ -224,7 +224,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           className="max-h-[38vh] w-full resize-none bg-transparent px-4 pb-2 pt-3.5 text-base leading-relaxed text-claude-text-light outline-none selection:bg-claude-terracotta/20 placeholder:text-claude-muted-light/55 dark:text-claude-text-dark dark:placeholder:text-claude-muted-dark/55"
         />
 
-        <div className="flex items-center justify-between gap-2 px-3 pb-3 pt-1">
+        <div className="flex min-w-0 items-center justify-between gap-1.5 px-2.5 sm:px-3 pb-3 pt-1">
           <div className="flex min-w-0 items-center gap-1.5">
             <input ref={fileInputRef} type="file" multiple onChange={handleFileUpload} className="hidden" />
             <motion.button
@@ -246,7 +246,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 }}
                 className={`flex items-center gap-1.5 rounded-[9px] px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
                   showModeMenu || workspaceMode !== 'chat'
-                    ? 'bg-claude-terracotta/10 text-claude-terracotta'
+                    ? 'bg-claude-terracotta/10 text-claude-accentInk'
                     : 'text-claude-muted-light hover:bg-claude-surface2-light dark:text-claude-muted-dark dark:hover:bg-claude-surface2-dark'
                 }`}
               >
@@ -262,7 +262,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 6, scale: 0.98 }}
                     transition={reducedMotion ? { duration: 0.08 } : { type: 'spring', stiffness: 390, damping: 31 }}
-                    className="absolute bottom-10 left-0 z-50 w-[260px] rounded-[16px] border border-claude-border-light bg-white/95 p-1.5 shadow-[0_16px_44px_-18px_rgba(45,40,30,0.45)] backdrop-blur-xl dark:border-claude-border-dark dark:bg-[#1d1c19]/95"
+                    className="absolute bottom-10 left-0 z-50 w-[min(260px,calc(100vw-96px))] rounded-[16px] border border-claude-border-light bg-white/95 p-1.5 shadow-[0_16px_44px_-18px_rgba(45,40,30,0.45)] backdrop-blur-xl dark:border-claude-border-dark dark:bg-[#1d1c19]/95"
                   >
                     {MODE_OPTIONS.map(mode => {
                       const Icon = mode.icon;
@@ -285,7 +285,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                             />
                           )}
                           <span className={`flex h-7 w-7 items-center justify-center rounded-[9px] ${
-                            selected ? 'bg-claude-terracotta/10 text-claude-terracotta' : 'text-claude-muted-light dark:text-claude-muted-dark'
+                            selected ? 'bg-claude-terracotta/10 text-claude-accentInk' : 'text-claude-muted-light dark:text-claude-muted-dark'
                           }`}>
                             <Icon className="h-3.5 w-3.5" />
                           </span>
@@ -293,7 +293,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                             <span className="block text-[11px] font-semibold text-claude-text-light dark:text-white">{mode.label}</span>
                             <span className="block truncate text-[9px] text-claude-muted-light dark:text-claude-muted-dark">{mode.hint}</span>
                           </span>
-                          {selected && <Check className="h-3.5 w-3.5 text-claude-terracotta" />}
+                          {selected && <Check className="h-3.5 w-3.5 text-claude-accentInk" />}
                         </button>
                       );
                     })}
@@ -340,7 +340,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                             <span className="block text-[11px] font-semibold text-claude-text-light dark:text-white">{style.id}</span>
                             <span className="block text-[9px] text-claude-muted-light dark:text-claude-muted-dark">{style.hint}</span>
                           </span>
-                          {selected && <Check className="h-3.5 w-3.5 text-claude-terracotta" />}
+                          {selected && <Check className="h-3.5 w-3.5 text-claude-accentInk" />}
                         </button>
                       );
                     })}
@@ -358,7 +358,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             title={isLoading ? 'Aira is responding' : 'Send message (Enter)'}
             className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors ${
               canSubmit
-                ? 'gradient-terracotta-btn text-white shadow-sm'
+                ? 'gradient-terracotta-btn text-claude-onAccent shadow-sm'
                 : 'bg-claude-surface2-light text-claude-muted-light/40 dark:bg-claude-surface2-dark dark:text-claude-muted-dark/40'
             }`}
           >
@@ -367,7 +367,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         </div>
       </motion.div>
 
-      <div className="mt-3 text-center text-[11px] text-claude-muted-light dark:text-claude-muted-dark">
+      <div className="mt-1 sm:mt-3 text-center text-[10px] sm:text-[11px] text-claude-muted-light dark:text-claude-muted-dark">
         Aira can make mistakes. Verify important information.
       </div>
     </div>

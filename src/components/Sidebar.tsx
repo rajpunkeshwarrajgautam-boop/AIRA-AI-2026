@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   Plus,
   FolderGit2,
@@ -71,6 +71,9 @@ const ThemeToggle = ({ theme, onChange }: { theme: 'light' | 'dark' | 'system', 
       {options.map(({ id, icon: Icon, colorClass, shadowClass }) => (
         <button
           key={id}
+          type="button"
+          aria-label={`Use ${id} theme`}
+          aria-pressed={theme === id}
           onClick={() => onChange(id)}
           className={`relative p-2 rounded-xl flex items-center justify-center transition-all duration-300 outline-none ${
             theme === id 
@@ -116,6 +119,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectWorkspace,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const drawerRef = useRef<HTMLElement>(null);
+
+  // Temporary navigation behaves as a keyboard-accessible drawer.
+  useEffect(() => {
+    if (!isOpen || window.innerWidth >= 1280) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onToggleOpen();
+    };
+    document.addEventListener('keydown', handleEscape);
+    const closeButton = drawerRef.current?.querySelector<HTMLButtonElement>('[aria-label="Close sidebar navigation"]');
+    closeButton?.focus({ preventScroll: true });
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [isOpen, onToggleOpen]);
   const [editingChatId, setEditingChatId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [starredExpanded, setStarredExpanded] = useState(true);
@@ -164,7 +180,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const handleSelectChatMobile = (id: string) => {
     onSelectChat(id);
-    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+    if (typeof window !== 'undefined' && window.innerWidth < 1280) {
       onToggleOpen();
     }
   };
@@ -172,7 +188,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const handleNewChatMobile = () => {
     onSelectWorkspace('chat');
     onNewChat();
-    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+    if (typeof window !== 'undefined' && window.innerWidth < 1280) {
       onToggleOpen();
     }
   };
@@ -181,7 +197,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <button
       onClick={() => {
         onSelectWorkspace(mode);
-        if (typeof window !== 'undefined' && window.innerWidth < 768) onToggleOpen();
+        if (typeof window !== 'undefined' && window.innerWidth < 1280) onToggleOpen();
       }}
       className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-[13px] font-semibold transition-all duration-300 ${workspaceMode === mode ? 'bg-claude-surface-light dark:bg-claude-surface-dark text-claude-text-light dark:text-white shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] border border-claude-border-light dark:border-claude-border-dark' : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark border border-transparent'}`}
     >
@@ -246,38 +262,43 @@ export const Sidebar: React.FC<SidebarProps> = ({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={onToggleOpen}
-            className="fixed inset-0 bg-stone-900/40 dark:bg-black/60 backdrop-blur-sm z-40 md:hidden"
+            className="fixed inset-0 bg-stone-900/40 dark:bg-black/60 backdrop-blur-sm z-40 xl:hidden"
             aria-hidden="true"
           />
           <motion.aside 
+            ref={drawerRef}
+            data-testid="sidebar-drawer"
+            aria-label="Workspace navigation"
             initial={{ x: -320, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
             exit={{ x: -320, opacity: 0 }}
             transition={{ type: "spring", stiffness: 320, damping: 32 }}
-            className="fixed inset-y-0 left-0 z-50 md:relative md:z-30 w-72 md:w-80 h-[100dvh] flex flex-col bg-claude-surface2-light dark:bg-claude-surface2-dark border-r border-claude-border-light dark:border-claude-border-dark select-none flex-shrink-0 shadow-2xl md:shadow-none"
+            className="aira-sidebar-shell fixed inset-y-0 left-0 z-50 xl:relative xl:z-30 w-[min(20rem,100vw)] xl:w-80 h-[100dvh] min-h-0 overflow-hidden flex flex-col bg-claude-surface2-light dark:bg-claude-surface2-dark border-r border-claude-border-light dark:border-claude-border-dark select-none flex-shrink-0 shadow-2xl xl:shadow-none"
           >
-            <div className="p-4 pb-3 flex items-center justify-between">
+            <div className="shrink-0 p-4 pb-3 flex items-center justify-between">
               <div className="flex items-center space-x-2.5">
                 <AiraMark size="md" />
                 <div>
                   <div className="font-serif font-medium text-[19px] tracking-tight text-claude-text-light dark:text-claude-text-dark leading-none">Aira</div>
                 </div>
               </div>
-              <button onClick={onToggleOpen} className="p-1.5 rounded-lg text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark hover:text-claude-text-light dark:hover:text-claude-text-dark transition-colors" title="Close sidebar">
+              <button type="button" aria-label="Close sidebar navigation" onClick={onToggleOpen} className="p-1.5 rounded-lg text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark hover:text-claude-text-light dark:hover:text-claude-text-dark transition-colors" title="Close sidebar">
                 <PanelLeftClose className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="px-3.5 py-1.5">
+            <div className="shrink-0 px-3.5 py-1.5">
               <button onClick={handleNewChatMobile} className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-gradient-to-b from-white/95 to-white/80 dark:from-[#2A2926] dark:to-[#22211F] border border-claude-border-light dark:border-claude-border-dark text-claude-text-light dark:text-claude-text-dark text-[13px] font-medium transition-all shadow-[0_1px_3px_rgba(45,40,30,0.04)] hover:border-claude-terracotta/40 hover:shadow-[0_4px_14px_-2px_rgba(217,119,87,0.12)] active:scale-[0.98] group">
                 <div className="flex items-center space-x-2.5">
-                  <Plus className="w-4 h-4 text-claude-terracotta" />
+                  <Plus className="w-4 h-4 text-claude-accentInk" />
                   <span>Start new chat</span>
                 </div>
                 <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-claude-muted-light dark:text-claude-muted-dark">Ctrl N</kbd>
               </button>
             </div>
 
+          {/* Navigation, search and all conversation groups share one genuine touch-scroll surface. */}
+          <div data-testid="sidebar-scroll-region" className="aira-sidebar-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain touch-pan-y">
           <div className="px-4 pt-3 pb-2 space-y-1">
             {navItem('chat', 'Chat', <MessageSquareText className="w-4 h-4" />)}
             {navItem('research', 'Research', <Telescope className="w-4 h-4" />, 'beta')}
@@ -295,7 +316,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <button
                 type="button"
                 onClick={() => onOpenSearch(searchQuery)}
-                className="absolute left-2.5 z-10 rounded-md p-1 text-claude-muted-light transition-colors hover:text-claude-terracotta dark:text-claude-muted-dark"
+                className="absolute left-2.5 z-10 rounded-md p-1 text-claude-muted-light transition-colors hover:text-claude-accentInk dark:text-claude-muted-dark"
                 title="Search all conversation content"
                 aria-label="Search all conversation content"
               >
@@ -318,13 +339,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               type="button"
               onClick={() => onOpenSearch(searchQuery)}
-              className="mt-1.5 w-full px-1 text-left text-[10px] font-medium text-claude-muted-light/80 transition-colors hover:text-claude-terracotta dark:text-claude-muted-dark/80"
+              className="mt-1.5 w-full px-1 text-left text-[10px] font-medium text-claude-muted-light/80 transition-colors hover:text-claude-accentInk dark:text-claude-muted-dark/80"
             >
               Search inside messages · Enter
             </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto px-3 py-3 overflow-x-hidden">
+          <div className="px-3 pt-3 pb-4">
             <motion.div variants={listVariants} initial="hidden" animate="show" className="space-y-6">
               {starred.length > 0 && (
                 <div>
@@ -362,14 +383,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </motion.div>
           </div>
 
-          <div className="p-4 bg-claude-surface2-light dark:bg-claude-surface2-dark/50 backdrop-blur-md border-t border-claude-border-light dark:border-claude-border-dark">
-            <div className="flex items-center justify-between gap-2">
-              <button onClick={onOpenSettings} className="flex items-center space-x-3 p-2.5 rounded-xl hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark hover:shadow-sm border border-transparent hover:border-claude-border-light dark:hover:border-claude-border-dark transition-all duration-300 flex-1 min-w-0 text-left active:scale-[0.98]">
-                <div className="w-8 h-8 rounded-[10px] bg-gradient-to-br from-claude-terracotta to-claude-terracotta-hover text-white font-medium text-xs flex items-center justify-center flex-shrink-0 shadow-sm border border-white/20">{settings.userName ? settings.userName.slice(0, 2).toUpperCase() : 'AI'}</div>
+          </div>
+
+          <div data-testid="sidebar-footer" className="aira-sidebar-footer shrink-0 p-3 bg-claude-surface2-light dark:bg-claude-surface2-dark/50 backdrop-blur-md border-t border-claude-border-light dark:border-claude-border-dark">
+            <div className="flex flex-col gap-2">
+              <button type="button" aria-label="Open settings" onClick={onOpenSettings} className="flex w-full min-w-0 items-center space-x-3 p-2 rounded-xl hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark hover:shadow-sm border border-transparent hover:border-claude-border-light dark:hover:border-claude-border-dark transition-all duration-300 flex-1 min-w-0 text-left active:scale-[0.98]">
+                <div className="w-8 h-8 rounded-[10px] bg-gradient-to-br from-claude-terracotta to-claude-terracotta-hover text-claude-onAccent font-medium text-xs flex items-center justify-center flex-shrink-0 shadow-sm border border-white/20">{settings.userName ? settings.userName.slice(0, 2).toUpperCase() : 'AI'}</div>
                 <div className="min-w-0 flex-1"><div className="text-[13px] font-bold text-claude-text-light dark:text-white tracking-tight truncate">{settings.userName || 'Aira User'}</div><div className="text-[11px] font-medium text-claude-muted-light dark:text-claude-muted-dark">Workspace settings</div></div>
                 <Settings className="w-4 h-4 text-claude-muted-light dark:text-claude-muted-dark" />
               </button>
-              <ThemeToggle theme={settings.theme} onChange={(t) => onUpdateSettings({ theme: t })} />
+              <div className="flex items-center justify-between gap-2 px-1">
+                <span className="text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark">Theme</span>
+                <ThemeToggle theme={settings.theme} onChange={(t) => onUpdateSettings({ theme: t })} />
+              </div>
             </div>
           </div>
           </motion.aside>
