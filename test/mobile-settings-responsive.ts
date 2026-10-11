@@ -142,6 +142,212 @@ async function main() {
         }
         assert.equal(await name.inputValue(), 'Responsive check ' + label);
 
+        // Run the complete theme-mode contrast matrix once per test run. The
+        // assertions read computed styles, not merely Tailwind class names.
+        if (width === 390) {
+          const presets: Array<[string, string]> = [
+            ['Claude Editorial', 'linear-precision'],
+            ['Warm Parchment', 'warm-parchment'],
+            ['Liquid Glass', 'liquid-glass'],
+            ['Industrial Brutalist', 'industrial-brutalist'],
+            ['Nordic Earth', 'nordic-moss'],
+            ['Solaris Gold', 'solar-gold'],
+            ['Tokyo Cyber', 'tokyo-neon'],
+            ['Vanguard Monolith', 'vanguard-monolith'],
+          ];
+          const checkContrast = async (element: ReturnType<typeof dialog.getByRole>, description: string) => {
+            const ratio = await element.evaluate(`element => {
+              const parse = value => {
+                const channels = (value.match(/[\\d.]+/g) || []).slice(0, 3).map(Number);
+                if (channels.length !== 3) return null;
+                return channels.map(channel => {
+                  const normalized = channel / 255;
+                  return normalized <= 0.04045 ? normalized / 12.92 : Math.pow((normalized + 0.055) / 1.055, 2.4);
+                }).reduce((sum, channel, i) => sum + channel * [0.2126, 0.7152, 0.0722][i], 0);
+              };
+              const css = getComputedStyle(element);
+              const fg = parse(css.color);
+              const bg = parse(css.backgroundColor);
+              if (fg === null || bg === null) return 0;
+              return (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05);
+            }`);
+            assert(ratio >= 4.5, description + ' contrast ' + ratio.toFixed(2) + ':1 below WCAG AA');
+          };
+          const saveButton = dialog.getByTestId('settings-save');
+          for (const [name, id] of presets) {
+            await dialog.getByText(name, { exact: true }).click();
+            await page.waitForFunction(expected => document.documentElement.dataset.theme === expected, id);
+            for (const mode of ['light', 'dark', 'system'] as const) {
+              if (mode === 'system') await page.emulateMedia({ colorScheme: 'dark' });
+              await dialog.getByRole('button', {name: new RegExp('^' + mode + '
+        const short = height < 430;
+        if (short) {
+          const region = page.getByTestId('settings-dialog');
+          const r = (await region.boundingBox())!;
+          await page.mouse.move(r.x + r.width/2, r.y + r.height/2);
+          await page.mouse.wheel(0, 10000);
+          await page.waitForTimeout(250);
+          const measured = await metrics(page);
+          assert((measured.dialogScrollTop ?? 0) > 0, label + ' short-screen settings cannot scroll');
+        } else {
+          // With normal-height screens the actions should remain accessible without scrolling.
+          const measured = await metrics(page);
+          assert(measured.footer!.top >= measured.viewport.top - 3 &&
+            measured.footer!.bottom <= measured.viewport.top + measured.viewport.height + 3,
+            label + ' Save/Cancel/footer below visible viewport');
+        }
+        const save = dialog.getByRole('button', {name: 'Save Changes'});
+        const cancel = dialog.getByRole('button', {name: 'Cancel'});
+        const footer = page.getByTestId('settings-footer');
+        await footer.getByText('Product of Virexa AI Ventures').waitFor({ state: 'visible' });
+        for (const control of [save,cancel]) {
+          const box = await control.boundingBox();
+          const mm = await metrics(page);
+          assert(box && box.y >= mm.viewport.top-3 &&
+            box.y+box.height <= mm.viewport.top+mm.viewport.height+3 &&
+            box.x >= -3 && box.x+box.width <= width+3,
+            label + ' action clipped: ' + JSON.stringify(box));
+          const hit = await control.evaluate(element => {
+            const r=element.getBoundingClientRect();
+            const center=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);
+            return element===center || element.contains(center);
+          });
+          assert(hit,label+' action intercepted by application overlay');
+        }
+
+        // Form persists through the actual Save action, not just a state assertion.
+        await save.click();
+        await dialog.waitFor({state:'hidden',timeout:7000});
+        const stored=await page.evaluate(() => JSON.parse(localStorage.getItem('aira_settings_v1')||'{}').userName);
+        assert.equal(stored, 'Responsive check ' + label, label + ' save did not persist');
+        assert.equal(errors.length,0,label+' page errors: '+errors.join(' | '));
+        const overflow=await page.evaluate(() => document.documentElement.scrollWidth>window.innerWidth+2);
+        assert(!overflow,label+' page horizontal overflow');
+        console.log('PASS mobile settings ' + label + ' header/tabs/footer/actions/save');
+
+        if (width===390) {
+          // Shrinking the simulated visible screen (analogous to keyboard/browser
+          // viewport changes) must keep the dialog within the new viewport.
+          await openSettings(page,width);
+          await page.setViewportSize({width,height:360});
+          await page.waitForTimeout(150);
+          const reduced=await metrics(page);
+          assert(reduced.dialog && reduced.dialog.bottom <= 363,
+            'settings modal escaped after viewport height reduction');
+          await page.setViewportSize({width,height});
+          await page.waitForTimeout(150);
+          const restored=await metrics(page);
+          assert(restored.dialog && restored.dialog.bottom<=restored.viewport.height+3,
+            'settings modal did not recover after viewport restoration');
+          await page.getByRole('button',{name:'Close settings'}).click();
+        }
+      } catch(err) {
+        console.error('FAILED viewport '+label+' '+String(err));
+        try{await page.screenshot({path:'/tmp/aira-settings-modal-failure.png',fullPage:false});}catch{}
+        throw err;
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await browser.close();
+  }
+}
+main().catch(error => { console.error(error); process.exitCode=1; });
+, 'i')}).click();
+              await page.waitForFunction(expected => document.documentElement.classList.contains('dark') === expected, mode !== 'light');
+              await checkContrast(saveButton, name + ' ' + mode + ' Save Changes');
+              const selectedMode = dialog.getByRole('button', {name: new RegExp('^' + mode + '
+        const short = height < 430;
+        if (short) {
+          const region = page.getByTestId('settings-dialog');
+          const r = (await region.boundingBox())!;
+          await page.mouse.move(r.x + r.width/2, r.y + r.height/2);
+          await page.mouse.wheel(0, 10000);
+          await page.waitForTimeout(250);
+          const measured = await metrics(page);
+          assert((measured.dialogScrollTop ?? 0) > 0, label + ' short-screen settings cannot scroll');
+        } else {
+          // With normal-height screens the actions should remain accessible without scrolling.
+          const measured = await metrics(page);
+          assert(measured.footer!.top >= measured.viewport.top - 3 &&
+            measured.footer!.bottom <= measured.viewport.top + measured.viewport.height + 3,
+            label + ' Save/Cancel/footer below visible viewport');
+        }
+        const save = dialog.getByRole('button', {name: 'Save Changes'});
+        const cancel = dialog.getByRole('button', {name: 'Cancel'});
+        const footer = page.getByTestId('settings-footer');
+        await footer.getByText('Product of Virexa AI Ventures').waitFor({ state: 'visible' });
+        for (const control of [save,cancel]) {
+          const box = await control.boundingBox();
+          const mm = await metrics(page);
+          assert(box && box.y >= mm.viewport.top-3 &&
+            box.y+box.height <= mm.viewport.top+mm.viewport.height+3 &&
+            box.x >= -3 && box.x+box.width <= width+3,
+            label + ' action clipped: ' + JSON.stringify(box));
+          const hit = await control.evaluate(element => {
+            const r=element.getBoundingClientRect();
+            const center=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);
+            return element===center || element.contains(center);
+          });
+          assert(hit,label+' action intercepted by application overlay');
+        }
+
+        // Form persists through the actual Save action, not just a state assertion.
+        await save.click();
+        await dialog.waitFor({state:'hidden',timeout:7000});
+        const stored=await page.evaluate(() => JSON.parse(localStorage.getItem('aira_settings_v1')||'{}').userName);
+        assert.equal(stored, 'Responsive check ' + label, label + ' save did not persist');
+        assert.equal(errors.length,0,label+' page errors: '+errors.join(' | '));
+        const overflow=await page.evaluate(() => document.documentElement.scrollWidth>window.innerWidth+2);
+        assert(!overflow,label+' page horizontal overflow');
+        console.log('PASS mobile settings ' + label + ' header/tabs/footer/actions/save');
+
+        if (width===390) {
+          // Shrinking the simulated visible screen (analogous to keyboard/browser
+          // viewport changes) must keep the dialog within the new viewport.
+          await openSettings(page,width);
+          await page.setViewportSize({width,height:360});
+          await page.waitForTimeout(150);
+          const reduced=await metrics(page);
+          assert(reduced.dialog && reduced.dialog.bottom <= 363,
+            'settings modal escaped after viewport height reduction');
+          await page.setViewportSize({width,height});
+          await page.waitForTimeout(150);
+          const restored=await metrics(page);
+          assert(restored.dialog && restored.dialog.bottom<=restored.viewport.height+3,
+            'settings modal did not recover after viewport restoration');
+          await page.getByRole('button',{name:'Close settings'}).click();
+        }
+      } catch(err) {
+        console.error('FAILED viewport '+label+' '+String(err));
+        try{await page.screenshot({path:'/tmp/aira-settings-modal-failure.png',fullPage:false});}catch{}
+        throw err;
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await browser.close();
+  }
+}
+main().catch(error => { console.error(error); process.exitCode=1; });
+, 'i')});
+              await checkContrast(selectedMode, name + ' ' + mode + ' selected mode');
+              if (mode === 'system') {
+                await page.emulateMedia({ colorScheme: 'light' });
+                await page.waitForFunction(() => !document.documentElement.classList.contains('dark'));
+                await checkContrast(saveButton, name + ' system/light Save Changes');
+                await page.emulateMedia({ colorScheme: 'dark' });
+                await page.waitForFunction(() => document.documentElement.classList.contains('dark'));
+              }
+            }
+          }
+          // Continue viewport acceptance with the original dark fixture palette.
+          await page.emulateMedia({ colorScheme: 'light' });
+          await dialog.getByRole('button', {name: /^dark$/i}).click();
+        }
+
         // Verify footer is actually reachable via wheel scrolling at short heights.
         const short = height < 430;
         if (short) {

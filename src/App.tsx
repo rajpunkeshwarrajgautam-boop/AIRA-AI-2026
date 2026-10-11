@@ -119,11 +119,16 @@ function App() {
 
   useEffect(() => {
     const root = document.documentElement;
-    const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    const dark = settings.theme === 'dark' || (settings.theme === 'system' && systemDark);
-    root.classList.toggle('dark', dark);
-    if (settings.aestheticPreset && settings.aestheticPreset !== 'default') root.dataset.theme = settings.aestheticPreset;
-    else delete root.dataset.theme;
+    const systemColor = window.matchMedia('(prefers-color-scheme: dark)');
+    const applyTheme = () => {
+      const dark = settings.theme === 'dark' || (settings.theme === 'system' && systemColor.matches);
+      root.classList.toggle('dark', dark);
+      if (settings.aestheticPreset && settings.aestheticPreset !== 'default') root.dataset.theme = settings.aestheticPreset;
+      else delete root.dataset.theme;
+    };
+    applyTheme();
+    systemColor.addEventListener('change', applyTheme);
+    return () => systemColor.removeEventListener('change', applyTheme);
   }, [settings.theme, settings.aestheticPreset]);
 
   // Only scroll the conversation region; scrollIntoView can also move the
@@ -532,7 +537,7 @@ function App() {
               extendedThinking={settings.extendedThinking}
               onToggleThinking={enabled => updateSettings({ extendedThinking: enabled })}
             />
-            {currentProject && <button onClick={() => setIsProjectsOpen(true)} className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-claude-terracotta/10 text-claude-terracotta text-xs max-w-[180px]"><FolderGit2 className="w-3 h-3" /><span className="truncate">{currentProject.name}</span></button>}
+            {currentProject && <button onClick={() => setIsProjectsOpen(true)} className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-claude-terracotta/10 text-claude-accentInk text-xs max-w-[180px]"><FolderGit2 className="w-3 h-3" /><span className="truncate">{currentProject.name}</span></button>}
           </div>
           <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
             {activeConversation?.messages.some(m => (m.artifacts?.length || 0) > 0) && <button onClick={() => {
@@ -541,8 +546,8 @@ function App() {
                 const artifact = activeConversation.messages.flatMap(m => m.artifacts || [])[0];
                 if (artifact) setActiveArtifact(artifact);
               }
-            }} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs ${activeArtifact ? 'bg-claude-terracotta text-white' : 'hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark'}`}><Layers className="w-3.5 h-3.5" /><span className="hidden sm:inline">Output Studio</span></button>}
-            {activeConversation && <button onClick={() => handleToggleStar(activeConversation.id)} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark active:scale-95 transition-all" title={activeConversation.isPinned ? 'Remove bookmark' : 'Bookmark conversation'}><Bookmark className={`w-4 h-4 ${activeConversation.isPinned ? 'fill-claude-terracotta text-claude-terracotta' : 'text-claude-muted-light dark:text-claude-muted-dark'}`} /></button>}
+            }} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs ${activeArtifact ? 'bg-claude-terracotta text-claude-onAccent' : 'hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark'}`}><Layers className="w-3.5 h-3.5" /><span className="hidden sm:inline">Output Studio</span></button>}
+            {activeConversation && <button onClick={() => handleToggleStar(activeConversation.id)} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark active:scale-95 transition-all" title={activeConversation.isPinned ? 'Remove bookmark' : 'Bookmark conversation'}><Bookmark className={`w-4 h-4 ${activeConversation.isPinned ? 'fill-claude-terracotta text-claude-accentInk' : 'text-claude-muted-light dark:text-claude-muted-dark'}`} /></button>}
             <button onClick={handleShare} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark">{sharedCopied ? <Check className="w-4 h-4 text-emerald-400" /> : <Share2 className="w-4 h-4 text-claude-muted-light dark:text-claude-muted-dark" />}</button>
           </div>
         </header>

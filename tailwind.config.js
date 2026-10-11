@@ -37,6 +37,8 @@ export default {
             light: 'var(--text-muted)',
             dark: 'var(--text-muted)',
           },
+          onAccent: 'var(--accent-on)',
+          accentInk: 'var(--accent-ink)',
           terracotta: {
             DEFAULT: 'var(--accent-terracotta)',
             hover: 'var(--accent-terracotta-hover)',

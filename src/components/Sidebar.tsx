@@ -290,7 +290,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <div className="shrink-0 px-3.5 py-1.5">
               <button onClick={handleNewChatMobile} className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-gradient-to-b from-white/95 to-white/80 dark:from-[#2A2926] dark:to-[#22211F] border border-claude-border-light dark:border-claude-border-dark text-claude-text-light dark:text-claude-text-dark text-[13px] font-medium transition-all shadow-[0_1px_3px_rgba(45,40,30,0.04)] hover:border-claude-terracotta/40 hover:shadow-[0_4px_14px_-2px_rgba(217,119,87,0.12)] active:scale-[0.98] group">
                 <div className="flex items-center space-x-2.5">
-                  <Plus className="w-4 h-4 text-claude-terracotta" />
+                  <Plus className="w-4 h-4 text-claude-accentInk" />
                   <span>Start new chat</span>
                 </div>
                 <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-claude-muted-light dark:text-claude-muted-dark">Ctrl N</kbd>
@@ -316,7 +316,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <button
                 type="button"
                 onClick={() => onOpenSearch(searchQuery)}
-                className="absolute left-2.5 z-10 rounded-md p-1 text-claude-muted-light transition-colors hover:text-claude-terracotta dark:text-claude-muted-dark"
+                className="absolute left-2.5 z-10 rounded-md p-1 text-claude-muted-light transition-colors hover:text-claude-accentInk dark:text-claude-muted-dark"
                 title="Search all conversation content"
                 aria-label="Search all conversation content"
               >
@@ -339,7 +339,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               type="button"
               onClick={() => onOpenSearch(searchQuery)}
-              className="mt-1.5 w-full px-1 text-left text-[10px] font-medium text-claude-muted-light/80 transition-colors hover:text-claude-terracotta dark:text-claude-muted-dark/80"
+              className="mt-1.5 w-full px-1 text-left text-[10px] font-medium text-claude-muted-light/80 transition-colors hover:text-claude-accentInk dark:text-claude-muted-dark/80"
             >
               Search inside messages · Enter
             </button>
@@ -388,7 +388,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div data-testid="sidebar-footer" className="aira-sidebar-footer shrink-0 p-3 bg-claude-surface2-light dark:bg-claude-surface2-dark/50 backdrop-blur-md border-t border-claude-border-light dark:border-claude-border-dark">
             <div className="flex flex-col gap-2">
               <button type="button" aria-label="Open settings" onClick={onOpenSettings} className="flex w-full min-w-0 items-center space-x-3 p-2 rounded-xl hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark hover:shadow-sm border border-transparent hover:border-claude-border-light dark:hover:border-claude-border-dark transition-all duration-300 flex-1 min-w-0 text-left active:scale-[0.98]">
-                <div className="w-8 h-8 rounded-[10px] bg-gradient-to-br from-claude-terracotta to-claude-terracotta-hover text-white font-medium text-xs flex items-center justify-center flex-shrink-0 shadow-sm border border-white/20">{settings.userName ? settings.userName.slice(0, 2).toUpperCase() : 'AI'}</div>
+                <div className="w-8 h-8 rounded-[10px] bg-gradient-to-br from-claude-terracotta to-claude-terracotta-hover text-claude-onAccent font-medium text-xs flex items-center justify-center flex-shrink-0 shadow-sm border border-white/20">{settings.userName ? settings.userName.slice(0, 2).toUpperCase() : 'AI'}</div>
                 <div className="min-w-0 flex-1"><div className="text-[13px] font-bold text-claude-text-light dark:text-white tracking-tight truncate">{settings.userName || 'Aira User'}</div><div className="text-[11px] font-medium text-claude-muted-light dark:text-claude-muted-dark">Workspace settings</div></div>
                 <Settings className="w-4 h-4 text-claude-muted-light dark:text-claude-muted-dark" />
               </button>
