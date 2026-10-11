@@ -97,9 +97,13 @@ async function main() {
           await options.first().focus();
           await page.keyboard.press('End');
           assert(await options.last().evaluate(el => el === document.activeElement));
-          const last = (await options.last().boundingBox())!;
-          assert(last.y >= geometry.top - 1 && last.y + last.height <= geometry.bottom + 1,
-            `Last model is unreachable: ${width}x${height} ${preset} dark=${dark} menu=${JSON.stringify(geometry)} row=${JSON.stringify(last)}`);
+          const last = await options.last().evaluate(el => {
+            const row = el.getBoundingClientRect();
+            const menu = el.closest('[data-testid="model-menu"]')!.getBoundingClientRect();
+            return { rowTop: row.top, rowBottom: row.bottom, menuTop: menu.top, menuBottom: menu.bottom };
+          });
+          assert(last.rowTop >= last.menuTop - 1 && last.rowBottom <= last.menuBottom + 1,
+            `Last model is unreachable: ${width}x${height} ${preset} dark=${dark} ${JSON.stringify(last)}`);
           await page.keyboard.press('Escape');
           await menu.waitFor({ state: 'hidden' });
           assert(await trigger.evaluate(el => el === document.activeElement), 'Escape does not return focus');

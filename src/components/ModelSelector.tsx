@@ -29,13 +29,18 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   const [activeRow, setActiveRow] = useState(currentModel);
   const containerRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const [menuBounds, setMenuBounds] = useState({ left: 12, top: 62, width: 296, maxHeight: 400 });
+  const [menuBounds, setMenuBounds] = useState<{
+    left: number; top: number; width: number; maxHeight: number;
+  } | null>(null);
   const reducedMotion = useReducedMotion();
   const activeModelInfo = AVAILABLE_MODELS.find(model => model.id === currentModel) || AVAILABLE_MODELS[0];
   const ActiveIcon = modelGlyph(activeModelInfo.name);
 
   useLayoutEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      setMenuBounds(null);
+      return;
+    }
     const placeMenu = () => {
       const anchor = containerRef.current?.getBoundingClientRect();
       if (!anchor) return;
@@ -143,7 +148,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       </motion.button>
 
       {createPortal(<AnimatePresence>
-        {isOpen && (
+        {isOpen && menuBounds && (
           <motion.div
             ref={menuRef}
             data-testid="model-menu"
