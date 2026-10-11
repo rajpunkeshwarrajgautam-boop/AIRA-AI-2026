@@ -673,17 +673,116 @@ export class AgentRuntime extends EventEmitter {
       }
 
       run = await this.runRepo.getRun(runId) as Run; // reload after async tool execution
-      run.toolResults.push(toolResult);
 
       const recoveryEngine = new ToolRecoveryEngine();
-      const completionCheck = recoveryEngine.verifyCompletion(toolCall.name, toolResult);
+      let finalToolResult = toolResult;
+      let completionCheck = recoveryEngine.verifyCompletion(toolCall.name, finalToolResult);
+
+      const toolDef = this.toolGateway.getTool(toolCall.name)?.definition || this.toolRegistry.get(toolCall.name)?.definition;
+      const isIdempotent = toolDef ? (toolDef.sideEffects === 'NONE' || toolDef.sideEffects === 'READ') : false;
+      const alternativeTools: string[] = [];
+      if (toolCall.name === 'web_search') alternativeTools.push('tavily_search', 'exa_search');
+      else if (toolCall.name === 'browser_navigate') alternativeTools.push('browser_screenshot');
+
+      let attempt = 0;
+      while (!completionCheck.verified && attempt < 2) {
+        const decision = recoveryEngine.evaluateFailure(
+          {
+            toolName: toolCall.name,
+            arguments: toolCall.arguments,
+            isIdempotent,
+            requiresApproval: toolDef?.requiresApproval || false,
+            alternativeTools
+          },
+          attempt,
+          completionCheck.reason || 'Tool execution unverified',
+          finalToolResult
+        );
+
+        if (decision.action === 'RETRY') {
+          attempt = decision.attempt;
+          await this.emitRunEvent(runId, 'tool.progress', {
+            status: 'RETRYING',
+            attempt,
+            explanation: decision.explanation
+          });
+          await new Promise(r => setTimeout(r, 100 * attempt));
+
+          if (this.toolGateway.hasTool(toolCall.name)) {
+            finalToolResult = await this.toolGateway.executeTool({
+              name: toolCall.name,
+              arguments: toolCall.arguments,
+              context: {
+                runId,
+                principal: { userId: run.principalId, sessionId: run.sessionId, roles: ['member'], scopes: run.principalScopes || [] },
+                workspaceRoot: this.workspaceRoot
+              },
+              callId: `${toolCall.id}_retry_${attempt}`
+            });
+          } else {
+            finalToolResult = await this.toolRegistry.execute(toolCall, {
+              runId,
+              workspaceRoot: this.workspaceRoot,
+              sessionGrantedTools: new Set()
+            });
+          }
+          completionCheck = recoveryEngine.verifyCompletion(toolCall.name, finalToolResult);
+        } else if (decision.action === 'FALLBACK_TOOL' && decision.alternativeTool) {
+          const fallbackTool = decision.alternativeTool;
+          await this.emitRunEvent(runId, 'tool.progress', {
+            status: 'FALLBACK',
+            fallbackTool,
+            explanation: decision.explanation
+          });
+          if (this.toolGateway.hasTool(fallbackTool)) {
+            finalToolResult = await this.toolGateway.executeTool({
+              name: fallbackTool,
+              arguments: toolCall.arguments,
+              context: {
+                runId,
+                principal: { userId: run.principalId, sessionId: run.sessionId, roles: ['member'], scopes: run.principalScopes || [] },
+                workspaceRoot: this.workspaceRoot
+              },
+              callId: `${toolCall.id}_fallback_${fallbackTool}`
+            });
+          }
+          completionCheck = recoveryEngine.verifyCompletion(fallbackTool, finalToolResult);
+          break;
+        } else if (decision.action === 'ASK_APPROVAL') {
+          run.executionCheckpoint = 'WAITING_FOR_APPROVAL';
+          run.state = 'BLOCKED';
+          run.error = decision.explanation;
+          run.toolResults.push(finalToolResult);
+          await this.runRepo.saveRun(run);
+          await this.emitRunEvent(runId, 'tool.approval_required', {
+            toolName: toolCall.name,
+            explanation: decision.explanation
+          });
+          return;
+        } else {
+          // ABORT_PERMANENT_ERROR
+          break;
+        }
+      }
+
+      run.toolResults.push(finalToolResult);
+
       if (!completionCheck.verified) {
+        // Enforce zero fabricated success: failed tool must NEVER emit tool.completed or advance to TOOL_COMPLETED
+        run.state = 'FAILED';
         run.error = completionCheck.reason;
+        await this.runRepo.saveRun(run);
+        await this.emitRunEvent(runId, 'tool.failed', {
+          toolName: toolCall.name,
+          error: completionCheck.reason,
+          state: completionCheck.state
+        });
+        return;
       }
 
       run.executionCheckpoint = 'TOOL_COMPLETED';
       await this.runRepo.saveRun(run);
-      await this.emitRunEvent(runId, 'tool.completed', toolResult);
+      await this.emitRunEvent(runId, 'tool.completed', finalToolResult);
 
       await this.transitionRunState(runId, 'RUNNING');
       
