@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { 
   Settings, 
   X, 
@@ -105,6 +105,63 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [form, setForm] = useState<AppSettings>({ ...settings });
   const [saved, setSaved] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const closeHandler = useRef(onClose);
+  closeHandler.current = onClose;
+  const [viewport, setViewport] = useState(() => ({
+    top: 0, left: 0,
+    width: typeof window === 'undefined' ? 1024 : window.innerWidth,
+    height: typeof window === 'undefined' ? 768 : window.innerHeight,
+  }));
+  const compactHeight = viewport.height < 430;
+
+  // Browser chrome and the mobile keyboard can change the visual viewport
+  // without resizing the layout viewport. Keep every dialog edge visible.
+  useEffect(() => {
+    if (!isOpen) return;
+    const visual = window.visualViewport;
+    const measure = () => setViewport({
+      top: visual?.offsetTop ?? 0,
+      left: visual?.offsetLeft ?? 0,
+      width: visual?.width ?? window.innerWidth,
+      height: visual?.height ?? window.innerHeight,
+    });
+    const previousFocus = document.activeElement as HTMLElement | null;
+    measure();
+    window.addEventListener('resize', measure);
+    visual?.addEventListener('resize', measure);
+    visual?.addEventListener('scroll', measure);
+    const focusFrame = requestAnimationFrame(() => closeButtonRef.current?.focus({ preventScroll: true }));
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeHandler.current();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const tabbable = dialogRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]):not([tabindex="-1"]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href]'
+      );
+      if (!tabbable?.length) return;
+      const first = tabbable[0], last = tabbable[tabbable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault(); last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault(); first.focus();
+      }
+    };
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      cancelAnimationFrame(focusFrame);
+      document.removeEventListener('keydown', handleKey);
+      window.removeEventListener('resize', measure);
+      visual?.removeEventListener('resize', measure);
+      visual?.removeEventListener('scroll', measure);
+      previousFocus?.focus?.({ preventScroll: true });
+    };
+  }, [isOpen]);
+
 
   const save = () => {
     onSaveSettings(form);
@@ -144,7 +201,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   return (
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 select-none">
+        <div data-testid="settings-viewport"
+          className="fixed z-[70] flex items-center justify-center p-2 sm:p-6 select-none"
+          style={{ top: viewport.top, left: viewport.left, width: viewport.width, height: viewport.height }}>
           <motion.div 
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -153,29 +212,38 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             className="absolute inset-0 bg-stone-900/40 dark:bg-black/60 backdrop-blur-md"
             onClick={onClose}
           />
-          <motion.div 
+          <motion.div
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="aira-settings-title"
+            tabIndex={-1}
+            data-testid="settings-dialog"
             initial={{ opacity: 0, scale: 0.96, y: 15 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.96, y: 10 }}
             transition={{ type: "spring", stiffness: 350, damping: 28 }}
-            className="w-full max-w-2xl max-h-[90vh] overflow-hidden rounded-[1.75rem] border border-claude-border-light dark:border-claude-border-dark bg-claude-surface-light dark:bg-claude-surface-dark shadow-[0_20px_60px_-15px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_60px_-15px_rgba(0,0,0,0.7)] flex flex-col relative z-10"
+            className={`aira-settings-dialog w-full min-w-0 max-w-2xl h-full max-h-full sm:h-auto sm:max-h-[min(90dvh,900px)] rounded-2xl sm:rounded-[1.75rem] border border-claude-border-light dark:border-claude-border-dark bg-claude-surface-light dark:bg-claude-surface-dark shadow-[0_20px_60px_-15px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_60px_-15px_rgba(0,0,0,0.7)] flex flex-col relative z-10 ${compactHeight ? 'overflow-y-auto overscroll-contain' : 'overflow-hidden'}`}
           >
             {/* Header */}
-            <header className="px-5 sm:px-7 py-4 border-b border-claude-border-light dark:border-claude-border-dark flex items-center justify-between bg-claude-surface2-light dark:bg-claude-surface2-dark">
-              <div className="flex items-center gap-3">
-                <div className="p-2 rounded-xl bg-claude-terracotta/10 text-claude-terracotta">
+            <header data-testid="settings-header" className="shrink-0 px-3 sm:px-7 py-3 sm:py-4 border-b border-claude-border-light dark:border-claude-border-dark flex items-start justify-between gap-2 bg-claude-surface2-light dark:bg-claude-surface2-dark">
+              <div className="flex min-w-0 items-start gap-2 sm:gap-3">
+                <div className="shrink-0 p-2 rounded-xl bg-claude-terracotta/10 text-claude-terracotta">
                   <Settings className="w-5 h-5" />
                 </div>
-                <div>
-                  <h2 className="font-bold text-base sm:text-lg tracking-tight text-claude-text-light dark:text-white">Workspace Settings</h2>
+                <div className="min-w-0">
+                  <h2 id="aira-settings-title" className="font-bold text-base sm:text-lg tracking-tight leading-snug text-claude-text-light dark:text-white">Workspace Settings</h2>
                   <p className="text-[11px] font-medium text-claude-muted-light dark:text-claude-muted-dark">Preferences, intelligence, and system personality</p>
                 </div>
               </div>
-              <motion.button 
+              <motion.button
+                ref={closeButtonRef}
+                type="button"
+                aria-label="Close settings"
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
-                onClick={onClose} 
-                className="p-2 rounded-xl hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark text-claude-muted-light dark:text-claude-muted-dark transition-colors"
+                onClick={onClose}
+                className="shrink-0 p-2 rounded-xl hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark text-claude-muted-light dark:text-claude-muted-dark transition-colors"
               >
                 <X className="w-5 h-5" />
               </motion.button>
