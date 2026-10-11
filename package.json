@@ -11,6 +11,7 @@
     "test": "npx tsx test/verify-runtime.ts",
     "test:integration": "npx tsx test/integration.ts",
     "test:e2e": "npx tsx test/e2e-verification.ts",
+    "test:mobile-sidebar": "npx tsx test/mobile-sidebar-responsive.ts",
     "test:recovery": "npx tsx test/recovery.ts",
     "test:identity": "npx tsx test/identity.ts",
     "test:session-auth": "npx tsx test/session-auth.ts",
