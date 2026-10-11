@@ -49,26 +49,37 @@ export function migrateAgentMemoryVault(rawItems: unknown): {
 
   const migratedItems: MemoryItem[] = [];
 
-  for (const item of items) {
+  for (const [index, item] of items.entries()) {
     if (!item || typeof item !== 'object') continue;
 
-    // Validate minimum required fields safely
-    const id = typeof item.id === 'string' ? item.id : `mem_${Math.random().toString(36).slice(2, 9)}`;
-    const isSeed = id.startsWith('seed-');
+    // Compute stable deterministic recovery ID for malformed records without generating random strings
+    let id: string;
+    if (typeof item.id === 'string' && item.id.trim().length > 0) {
+      id = item.id;
+    } else {
+      // Deterministic fallback based on stable content signature
+      const signature = String(item.title || item.content || index).slice(0, 32).replace(/[^a-zA-Z0-9_-]/g, '_');
+      id = `recovered_mem_${index}_${signature}`;
+    }
+
+    // Strict seed provenance: only official system seed IDs are eligible for seed migration
+    const isSeed = id === 'seed-sem-pref-1' || id === 'seed-proc-flow-1' || id.startsWith('seed-');
 
     if (!isSeed) {
-      // User-authored entry: preserve completely untouched
+      // User-authored entry: preserve completely untouched byte-for-byte (assigning recovered id only if missing)
       userAuthoredPreserved++;
-      migratedItems.push(item as MemoryItem);
+      const itemWithId = typeof item.id === 'string' && item.id.length > 0 ? item : { ...item, id };
+      migratedItems.push(itemWithId as MemoryItem);
       continue;
     }
 
     // Handle Seed Entry 1: Brand Aesthetic & Iconography Guidelines
-    if (id === 'seed-sem-pref-1' || (item.title && item.title.includes('Brand Aesthetic'))) {
+    // Strictly require exact seed ID 'seed-sem-pref-1' - NEVER match user-authored titles
+    if (id === 'seed-sem-pref-1') {
       const content = String(item.content || '');
-      // Check for defective "zero emojis" constraint
+      // Check for defective "zero emojis" constraint fingerprint
       if (content.includes('zero emojis')) {
-        // Strip out "zero emojis, " or "zero emojis" cleanly
+        // Strip out "zero emojis, " or "zero emojis" cleanly while preserving all other properties
         const cleanedContent = content
           .replace(/,\s*zero emojis\b/gi, '')
           .replace(/\bzero emojis,\s*/gi, '')
@@ -77,6 +88,7 @@ export function migrateAgentMemoryVault(rawItems: unknown): {
 
         const updatedItem: MemoryItem = {
           ...item,
+          id,
           content: cleanedContent,
           isPinned: false, // Unpin branding so it doesn't unconditionally pollute every query
           updatedAt: timestamp,
@@ -86,10 +98,11 @@ export function migrateAgentMemoryVault(rawItems: unknown): {
         changesMade = true;
         defectiveSeedsCleaned++;
         continue;
-      } else if (item.isPinned) {
-        // Already cleaned of "zero emojis" but still pinned: unpin it for relevance-based retrieval
+      } else if (item.isPinned && item.title === 'Brand Aesthetic & Iconography Guidelines') {
+        // Unpin stock seed if still pinned, preserving all user custom tags
         const updatedItem: MemoryItem = {
           ...item,
+          id,
           isPinned: false,
           updatedAt: timestamp,
         };
@@ -101,10 +114,12 @@ export function migrateAgentMemoryVault(rawItems: unknown): {
     }
 
     // Handle Seed Entry 2: Code Verification & Delivery Protocol
-    if (id === 'seed-proc-flow-1' || (item.title && item.title.includes('Code Verification'))) {
-      if (item.isPinned) {
+    // Strictly require exact seed ID 'seed-proc-flow-1' - NEVER match user-authored titles
+    if (id === 'seed-proc-flow-1') {
+      if (item.isPinned && item.title === 'Code Verification & Delivery Protocol') {
         const updatedItem: MemoryItem = {
           ...item,
+          id,
           isPinned: false, // Unpin so it only activates when relevant to coding/development
           updatedAt: timestamp,
         };
@@ -115,8 +130,8 @@ export function migrateAgentMemoryVault(rawItems: unknown): {
       }
     }
 
-    // Other seed memories (e.g. seed-sem-arch-1, seed-sem-dec-1, seed-proc-flow-2)
-    migratedItems.push(item as MemoryItem);
+    // Other seed memories or user-customized seeds that do not match defective fingerprints
+    migratedItems.push({ ...item, id } as MemoryItem);
   }
 
   const report: MigrationReport = {

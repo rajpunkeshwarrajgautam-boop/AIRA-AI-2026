@@ -217,4 +217,69 @@ describe('AIRA Behavioral Intelligence — Memory Migration & Relevance Isolatio
     const leakedAlpha = betaQuery.some(m => m.title.includes('Tenant Alpha'));
     assert.strictEqual(leakedAlpha, false, 'Tenant Alpha memory must not leak to Tenant Beta');
   });
+
+  it('strictly preserves user-authored memory even if title matches "Brand Aesthetic" or "Code Verification"', () => {
+    const userBrandingMemory: MemoryItem = {
+      id: 'usr_brand_guidelines_99',
+      tier: 'semantic',
+      category: 'preference',
+      title: 'Brand Aesthetic Guidelines for Client Project',
+      content: 'Client Brand Aesthetic: Use primary navy #001F3F, gold accents #FFD700, zero emojis.',
+      tags: ['client', 'brand', 'navy'],
+      createdAt: 5000,
+      updatedAt: 5000,
+      accessCount: 1,
+      isPinned: true
+    };
+
+    const userVerificationMemory: MemoryItem = {
+      id: 'usr_code_verification_custom',
+      tier: 'procedural',
+      category: 'workflow',
+      title: 'Code Verification Protocol for Microservices',
+      content: 'Run pytest and black before committing.',
+      tags: ['python', 'testing'],
+      createdAt: 6000,
+      updatedAt: 6000,
+      accessCount: 3,
+      isPinned: true
+    };
+
+    const { migratedItems, report } = migrateAgentMemoryVault([userBrandingMemory, userVerificationMemory]);
+
+    assert.strictEqual(report.changesMade, false, 'User authored memories must never be migrated based on title');
+    assert.strictEqual(report.userAuthoredPreserved, 2);
+    assert.deepStrictEqual(migratedItems[0], userBrandingMemory, 'User branding memory must be preserved byte-for-byte');
+    assert.deepStrictEqual(migratedItems[1], userVerificationMemory, 'User verification memory must be preserved byte-for-byte');
+  });
+
+  it('preserves user explicit preference for no emojis byte-for-byte', () => {
+    const explicitNoEmojiPreference: MemoryItem = {
+      id: 'usr_pref_strict_no_emoji',
+      tier: 'semantic',
+      category: 'preference',
+      title: 'Strict No Emojis In Any Response',
+      content: 'I have sensory sensitivities, please use zero emojis under any circumstances.',
+      tags: ['accessibility', 'tone', 'preference'],
+      createdAt: 3000,
+      updatedAt: 3000,
+      accessCount: 12,
+      isPinned: true
+    };
+
+    const { migratedItems, report } = migrateAgentMemoryVault([explicitNoEmojiPreference]);
+    assert.strictEqual(report.changesMade, false);
+    assert.deepStrictEqual(migratedItems[0], explicitNoEmojiPreference);
+  });
+
+  it('recovers malformed record with deterministic ID without randomness', () => {
+    const malformed1 = { title: 'Legacy Note Without ID', content: 'Important note content', tags: ['note'] };
+    const malformed2 = { title: 'Legacy Note Without ID', content: 'Important note content', tags: ['note'] };
+
+    const run1 = migrateAgentMemoryVault([malformed1]);
+    const run2 = migrateAgentMemoryVault([malformed2]);
+
+    assert.strictEqual(run1.migratedItems[0].id, run2.migratedItems[0].id, 'Recovery ID must be deterministic across runs');
+    assert.ok(run1.migratedItems[0].id.startsWith('recovered_mem_'));
+  });
 });
