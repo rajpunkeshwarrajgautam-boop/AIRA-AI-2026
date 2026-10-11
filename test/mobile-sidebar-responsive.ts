@@ -165,6 +165,15 @@ async function main() {
     await page.setViewportSize({ width: 360, height: 640 });
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
     await page.getByRole('button', { name: 'Open sidebar navigation' }).click();
+    // Touch scroll must target the drawer only after its translated entrance
+    // animation has completed; offscreen touch events cannot scroll it.
+    await page.waitForFunction(() => {
+      const sidebar = document.querySelector('[data-testid="sidebar-drawer"]');
+      if (!sidebar) return false;
+      const r = sidebar.getBoundingClientRect();
+      return r.left > -1 && r.right > 150;
+    }, undefined, { timeout: 5000 });
+    await page.waitForTimeout(300);
     const scroll = page.getByTestId('sidebar-scroll-region');
     const bounds = (await scroll.boundingBox())!;
     const x = bounds.x + bounds.width / 2;
@@ -182,7 +191,15 @@ async function main() {
     await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     await page.waitForTimeout(350);
     const touchTop = await scroll.evaluate(el => el.scrollTop);
-    assert(touchTop > 10, 'Native touch swipe did not move sidebar scrollTop: ' + touchTop);
+    if (touchTop <= 10) {
+      const geometry = await scroll.evaluate(el => ({
+        clientHeight: el.clientHeight, scrollHeight: el.scrollHeight,
+        overflowY: getComputedStyle(el).overflowY,
+        touchAction: getComputedStyle(el).touchAction,
+        box: el.getBoundingClientRect().toJSON(),
+      }));
+      throw new Error('Native touch swipe did not scroll sidebar: ' + JSON.stringify(geometry));
+    }
     console.log('PASS native touch swipe scrollTop=' + touchTop);
   } finally {
     await browser.close();
