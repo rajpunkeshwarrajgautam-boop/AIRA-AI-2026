@@ -1,4 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Brain, Check, ChevronDown, Gauge, Sparkles, Zap } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import type { ModelId } from '../types';
@@ -27,14 +28,50 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   const [isOpen, setIsOpen] = useState(false);
   const [activeRow, setActiveRow] = useState(currentModel);
   const containerRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [menuBounds, setMenuBounds] = useState<{
+    left: number; top: number; width: number; maxHeight: number;
+  } | null>(null);
   const reducedMotion = useReducedMotion();
   const activeModelInfo = AVAILABLE_MODELS.find(model => model.id === currentModel) || AVAILABLE_MODELS[0];
   const ActiveIcon = modelGlyph(activeModelInfo.name);
 
+  useLayoutEffect(() => {
+    if (!isOpen) {
+      setMenuBounds(null);
+      return;
+    }
+    const placeMenu = () => {
+      const anchor = containerRef.current?.getBoundingClientRect();
+      if (!anchor) return;
+      const viewport = window.visualViewport;
+      const leftEdge = (viewport?.offsetLeft || 0) + 12;
+      const topEdge = (viewport?.offsetTop || 0) + 12;
+      const rightEdge = leftEdge + (viewport?.width || window.innerWidth) - 24;
+      const bottomEdge = topEdge + (viewport?.height || window.innerHeight) - 24;
+      const width = Math.min(380, rightEdge - leftEdge);
+      const top = Math.max(topEdge, Math.min(anchor.bottom + 8, bottomEdge - 100));
+      setMenuBounds({
+        left: Math.max(leftEdge, Math.min(anchor.left, rightEdge - width)),
+        top, width, maxHeight: Math.max(0, bottomEdge - top),
+      });
+    };
+    placeMenu();
+    window.addEventListener('resize', placeMenu);
+    window.visualViewport?.addEventListener('resize', placeMenu);
+    window.visualViewport?.addEventListener('scroll', placeMenu);
+    return () => {
+      window.removeEventListener('resize', placeMenu);
+      window.visualViewport?.removeEventListener('resize', placeMenu);
+      window.visualViewport?.removeEventListener('scroll', placeMenu);
+    };
+  }, [isOpen]);
+
   useEffect(() => {
     if (!isOpen) return;
     const handlePointer = (event: PointerEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) setIsOpen(false);
+      if (!containerRef.current?.contains(event.target as Node) &&
+          !menuRef.current?.contains(event.target as Node)) setIsOpen(false);
     };
     const handleKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -54,6 +91,18 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     onSelectModel(model.id);
     if (!model.supportsThinking && extendedThinking) onToggleThinking(false);
     setIsOpen(false);
+    (containerRef.current?.querySelector('button') as HTMLButtonElement | null)?.focus();
+  };
+
+  const revealOption = (option: HTMLButtonElement) => {
+    const menu = menuRef.current;
+    if (!menu) return;
+    const bounds = menu.getBoundingClientRect();
+    const row = option.getBoundingClientRect();
+    const top = bounds.top + menu.clientTop + 8;
+    const bottom = bounds.top + menu.clientTop + menu.clientHeight - 8;
+    if (row.top < top) menu.scrollTop += row.top - top;
+    else if (row.bottom > bottom) menu.scrollTop += row.bottom - bottom;
   };
 
   return (
@@ -64,6 +113,17 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         whileTap={reducedMotion ? undefined : { scale: 0.98 }}
         aria-haspopup="listbox"
         aria-expanded={isOpen}
+        onKeyDown={event => {
+          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault();
+            setIsOpen(true);
+            requestAnimationFrame(() => {
+              const options = menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]');
+              const option = event.key === 'ArrowUp' ? options?.[options.length - 1] : options?.[0];
+              option?.focus({ preventScroll: true });
+            });
+          }
+        }}
         className="group flex min-w-0 max-w-full items-center gap-1 sm:gap-2 rounded-xl px-1.5 sm:px-2.5 py-1.5 text-left transition-colors hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark"
       >
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[9px] bg-claude-terracotta/10 text-claude-accentInk">
@@ -87,14 +147,17 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         </motion.span>
       </motion.button>
 
-      <AnimatePresence>
-        {isOpen && (
+      {createPortal(<AnimatePresence>
+        {isOpen && menuBounds && (
           <motion.div
+            ref={menuRef}
+            data-testid="model-menu"
+            style={{ ...menuBounds, backgroundColor: 'var(--bg-main)' }}
             initial={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 8, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 5, scale: 0.985 }}
             transition={reducedMotion ? { duration: 0.08 } : { type: 'spring', stiffness: 390, damping: 31 }}
-            className="absolute left-0 mt-2 w-[calc(100vw-96px)] sm:w-[calc(100vw-120px)] max-w-[380px] overflow-hidden rounded-[18px] border border-claude-border-light bg-white/95 p-2 shadow-[0_20px_55px_-22px_rgba(45,40,30,0.5)] backdrop-blur-2xl dark:border-claude-border-dark dark:bg-[#1c1b18]/95 dark:shadow-[0_24px_60px_-24px_rgba(0,0,0,0.9)]"
+            className="fixed z-[100] overflow-x-hidden overflow-y-auto overscroll-contain rounded-[18px] border border-claude-border-light p-2 shadow-[0_20px_55px_-22px_rgba(45,40,30,0.5)] dark:border-claude-border-dark dark:shadow-[0_24px_60px_-24px_rgba(0,0,0,0.9)]"
           >
             <div className="flex items-center justify-between px-2.5 pb-2 pt-1.5">
               <div>
@@ -117,8 +180,22 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                     type="button"
                     role="option"
                     aria-selected={selected}
+                    onKeyDown={event => {
+                      const options = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]') || []);
+                      const index = options.indexOf(event.currentTarget);
+                      const next = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1
+                        : event.key === 'ArrowDown' ? (index + 1) % options.length
+                        : event.key === 'ArrowUp' ? (index + options.length - 1) % options.length : -1;
+                      if (next >= 0) {
+                        event.preventDefault();
+                        options[next]?.focus({ preventScroll: true });
+                      }
+                    }}
                     onMouseEnter={() => setActiveRow(model.id)}
-                    onFocus={() => setActiveRow(model.id)}
+                    onFocus={event => {
+                      setActiveRow(model.id);
+                      revealOption(event.currentTarget);
+                    }}
                     onClick={() => selectModel(model)}
                     className="relative isolate flex w-full items-start gap-3 rounded-[13px] px-3 py-2.5 text-left outline-none"
                   >
@@ -194,7 +271,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             </div>
           </motion.div>
         )}
-      </AnimatePresence>
+      </AnimatePresence>, document.body)}
     </div>
   );
 };

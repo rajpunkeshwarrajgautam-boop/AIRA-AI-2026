@@ -61,7 +61,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
       initial={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 12, scale: 0.99 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={reducedMotion ? { duration: 0.08 } : { type: 'spring', stiffness: 140, damping: 22, mass: 0.78 }}
-      className={`group mx-auto w-full min-w-0 max-w-4xl px-3 sm:px-4 py-4 sm:py-5 md:px-6 ${isUser ? 'flex justify-end' : ''}`}
+      className={`group mx-auto w-full min-w-0 max-w-4xl px-3 sm:px-4 py-3 sm:py-5 md:px-6 ${isUser ? 'flex justify-end' : ''}`}
     >
       {isUser ? (
         <div className="flex max-w-[85%] flex-col items-end">
@@ -91,8 +91,8 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
           </div>
         </div>
       ) : (
-        <div className="flex w-full items-start gap-5">
-          <div className="mt-1 shrink-0">
+        <div className="flex w-full items-start gap-2 sm:gap-5">
+          <div className="mt-1 hidden shrink-0 sm:block">
             <AiraMark size="sm" />
           </div>
 

@@ -242,6 +242,9 @@ jobs:
           cat /tmp/aira-vite.log
           exit 1
 
+      - name: Mobile chat, model menu and welcome regression
+        run: npx tsx test/mobile-chat-welcome-responsive.ts
+
       - name: E2E certification
         run: npm run test:e2e
 
