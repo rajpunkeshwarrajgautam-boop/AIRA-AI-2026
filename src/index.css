@@ -819,3 +819,26 @@
 
 /* TeX display notation embedded in a prose line is still rendered as a block. */
 .aira-prose .aira-math-embedded { display: block; max-width: 100%; overflow-x: auto; overflow-y: hidden; margin: 0.85rem 0; padding: 0.25rem 0; }
+
+
+/* Mobile sidebar: the middle navigation/history is the sole scroll owner.
+   On very short landscape screens the whole rail scrolls, including the footer,
+   rather than rendering unreachable controls below the visual viewport. */
+.aira-sidebar-scroll {
+  -webkit-overflow-scrolling: touch;
+}
+.aira-sidebar-footer {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
+}
+@media (max-height: 460px) {
+  .aira-sidebar-shell {
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .aira-sidebar-scroll {
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+}
