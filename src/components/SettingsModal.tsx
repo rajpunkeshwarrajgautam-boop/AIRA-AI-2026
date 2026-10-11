@@ -249,13 +249,29 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </motion.button>
             </header>
 
-            {/* Sub-navigation Tabs */}
-            <div className="flex border-b border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/60 dark:bg-claude-surface2-dark/60 px-5 sm:px-7 overflow-x-auto no-scrollbar gap-1 pt-2">
+            {/* Native mobile picker keeps all six settings sections accessible. */}
+            <div data-testid="settings-mobile-navigation" className="shrink-0 px-3 py-2 border-b border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/60 dark:bg-claude-surface2-dark/60 sm:hidden">
+              <label htmlFor="aira-settings-section" className="block mb-1 text-[11px] font-semibold text-claude-muted-light dark:text-claude-muted-dark">Settings section</label>
+              <select
+                id="aira-settings-section"
+                aria-label="Settings section"
+                value={activeTab}
+                onChange={event => setActiveTab(event.target.value as SettingsTab)}
+                className="w-full min-w-0 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface-light dark:bg-claude-surface-dark text-claude-text-light dark:text-white px-3 py-2.5 text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta"
+              >
+                {tabs.map(tab => <option key={tab.id} value={tab.id}>{tab.label}</option>)}
+              </select>
+            </div>
+            {/* Full-width tab strip remains for tablet and desktop. */}
+            <div role="tablist" aria-label="Settings categories" data-testid="settings-desktop-tabs" className="hidden sm:flex shrink-0 border-b border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/60 dark:bg-claude-surface2-dark/60 px-5 sm:px-7 overflow-x-auto gap-1 pt-2">
               {tabs.map(tab => (
                 <button
                   key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === tab.id}
                   onClick={() => setActiveTab(tab.id)}
-                  className={`flex items-center gap-2 px-3 py-2.5 text-xs font-semibold rounded-t-xl transition-all border-b-2 whitespace-nowrap ${
+                  className={`shrink-0 flex items-center gap-2 px-3 py-2.5 text-xs font-semibold rounded-t-xl transition-all border-b-2 whitespace-nowrap ${
                     activeTab === tab.id
                       ? 'border-claude-terracotta text-claude-terracotta bg-claude-surface-light dark:bg-claude-surface-dark shadow-[0_-2px_10px_-4px_rgba(0,0,0,0.03)]'
                       : 'border-transparent text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white'
@@ -268,7 +284,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
 
             {/* Body Content */}
-            <div className="p-5 sm:p-7 space-y-6 overflow-y-auto flex-1 bg-transparent">
+            <div data-testid="settings-content" className={`min-w-0 p-3 sm:p-7 space-y-6 bg-transparent ${compactHeight ? 'shrink-0' : 'min-h-0 flex-1 overflow-y-auto overscroll-contain'}`}>
               
               {/* TAB 1: GENERAL */}
               {activeTab === 'general' && (
@@ -718,15 +734,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
 
             {/* Footer */}
-            <footer className="px-5 sm:px-7 py-3.5 border-t border-claude-border-light dark:border-claude-border-dark flex items-center justify-between gap-3 bg-claude-surface2-light dark:bg-claude-surface2-dark">
-              <span className="text-[11px] font-medium tracking-tight text-claude-muted-light dark:text-claude-muted-dark">Product of Virexa AI Ventures</span>
-              <div className="flex items-center gap-2.5">
-                <button onClick={onClose} className="px-4 py-2 text-[13px] font-medium text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white transition-colors">Cancel</button>
+            <footer data-testid="settings-footer" className="shrink-0 px-3 sm:px-7 py-2.5 sm:py-3.5 border-t border-claude-border-light dark:border-claude-border-dark flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3 bg-claude-surface2-light dark:bg-claude-surface2-dark" style={{ paddingBottom: 'max(0.625rem, env(safe-area-inset-bottom, 0px))' }}>
+              <span className="block text-center sm:text-left text-[11px] font-medium tracking-tight text-claude-muted-light dark:text-claude-muted-dark">Product of Virexa AI Ventures</span>
+              <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 min-w-0">
+                <button type="button" onClick={onClose} className="min-w-0 px-3 py-2.5 rounded-xl text-[13px] font-medium text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white transition-colors">Cancel</button>
                 <motion.button 
                   whileHover={{ scale: 1.02 }} 
                   whileTap={{ scale: 0.98 }} 
                   onClick={save} 
-                  className="px-5 py-2 rounded-xl bg-claude-terracotta text-white text-[13px] font-bold hover:bg-claude-terracotta-hover transition-colors flex items-center gap-2 shadow-sm"
+                  className="min-w-0 justify-center px-3 sm:px-5 py-2.5 rounded-xl bg-claude-terracotta text-white text-[13px] font-bold hover:bg-claude-terracotta-hover transition-colors flex items-center gap-1.5 shadow-sm"
                 >
                   {saved && <Check className="w-4 h-4" />}{saved ? 'Preferences Saved' : 'Save Changes'}
                 </motion.button>
