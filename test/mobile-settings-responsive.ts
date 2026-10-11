@@ -37,8 +37,10 @@ async function openSettings(page: Page, width: number) {
 }
 
 async function metrics(page: Page) {
-  return page.evaluate(() => {
-    const rect = (testId: string) => {
+  // Pass browser script as source text: tsx otherwise injects an unavailable
+  // __name helper when serializing nested functions into page.evaluate.
+  return page.evaluate(`(() => {
+    const rect = (testId) => {
       const e = document.querySelector('[data-testid="' + testId + '"]');
       return e?.getBoundingClientRect().toJSON();
     };
@@ -59,7 +61,7 @@ async function metrics(page: Page) {
       bodyClientHeight: document.querySelector('[data-testid="settings-content"]')?.clientHeight,
       bodyScrollTop: document.querySelector('[data-testid="settings-content"]')?.scrollTop,
     };
-  });
+  })()`);
 }
 
 async function main() {
