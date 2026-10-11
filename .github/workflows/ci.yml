@@ -126,6 +126,12 @@ jobs:
       - name: Capability reality audit suite
         run: npm run test:reality
 
+      - name: Behavioral intelligence regression suite
+        run: npm run test:behavioral
+
+      - name: Behavioral intelligence security suite
+        run: npm run test:behavioral:security
+
 
   semantic-search:
     name: Semantic Search CI
