@@ -24,6 +24,7 @@
     "test:reality": "npx tsx test/capability-reality-audit-suite.ts",
     "test:search": "npx tsx test/search-provider-failover.ts",
     "test:startup": "npx tsx test/startup.ts",
+    "test:browser-branding": "npx tsx test/browser-branding-favicon.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
