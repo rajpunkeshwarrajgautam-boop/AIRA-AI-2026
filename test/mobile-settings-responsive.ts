@@ -188,11 +188,15 @@ async function main() {
               const selectedMode = dialog.getByRole('button', { name: mode, exact: true });
               await selectedMode.click();
               await page.waitForFunction(expected => document.documentElement.classList.contains('dark') === expected, mode !== 'light');
+              // Tailwind transition-all animates foreground/background on theme
+              // change: audit settled colors, not an in-between transition frame.
+              await page.waitForTimeout(300);
               await checkContrast(saveButton, name + ' ' + mode + ' Save Changes');
               await checkContrast(selectedMode, name + ' ' + mode + ' selected mode');
               if (mode === 'system') {
                 await page.emulateMedia({ colorScheme: 'light' });
                 await page.waitForFunction(() => !document.documentElement.classList.contains('dark'));
+                await page.waitForTimeout(300);
                 await checkContrast(saveButton, name + ' system/light Save Changes');
                 await page.emulateMedia({ colorScheme: 'dark' });
                 await page.waitForFunction(() => document.documentElement.classList.contains('dark'));
