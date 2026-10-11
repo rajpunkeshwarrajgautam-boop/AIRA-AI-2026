@@ -890,3 +890,15 @@
     overflow: visible;
   }
 }
+
+/* Compact reading rhythm on phones; keep Markdown hierarchy and desktop prose. */
+@media (max-width: 639px) {
+  .aira-prose { font-size: 1rem; line-height: 1.55; }
+  .aira-prose p { margin-bottom: 0.75rem; }
+  .aira-prose p:last-child { margin-bottom: 0; }
+  .aira-prose ul, .aira-prose ol { margin-bottom: 0.75rem; }
+  .aira-prose li { margin-bottom: 0.25rem; }
+  .aira-prose h1, .aira-prose h2, .aira-prose h3, .aira-prose h4 {
+    margin-top: 1.25rem; margin-bottom: 0.6rem;
+  }
+}

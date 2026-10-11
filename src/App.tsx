@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { PanelLeft, Layers, Bookmark, Share2, Check, FolderGit2 } from 'lucide-react';
 import type { Conversation, Message, Artifact, Attachment, Project, AppSettings, WorkspaceMode } from './types';
 import {
-  loadConversations, saveConversations, loadActiveChatId, saveActiveChatId,
+  loadConversations, saveConversations, saveActiveChatId,
   loadProjects, saveProjects, loadSettings, saveSettings, INITIAL_CONVERSATION
 } from './utils/storage';
 import { streamAIResponse } from './utils/aiEngine';
@@ -34,7 +34,13 @@ const MODE_CONTEXT: Record<WorkspaceMode, string> = {
 
 function App() {
   const [conversations, setConversations] = useState<Conversation[]>(() => loadConversations());
-  const [activeChatId, setActiveChatId] = useState(() => loadActiveChatId());
+  // Root visits start on a transient welcome draft. History is untouched;
+  // persist this draft only when the user actually sends a message.
+  const [activeChatId, setActiveChatId] = useState('');
+  const [welcomeConversation] = useState<Conversation>(() => ({
+    ...INITIAL_CONVERSATION, id: `chat-${crypto.randomUUID()}`,
+    createdAt: Date.now(), updatedAt: Date.now(), messages: [],
+  }));
   const [projects, setProjects] = useState<Project[]>(() => loadProjects());
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>(() => localStorage.getItem('aira_active_project_id_v1') || undefined);
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
@@ -65,8 +71,8 @@ function App() {
   const initialConversationBackfillRef = useRef(false);
 
   const activeConversation = useMemo(
-    () => conversations.find(c => c.id === activeChatId) || conversations[0],
-    [conversations, activeChatId]
+    () => conversations.find(c => c.id === activeChatId) || welcomeConversation,
+    [conversations, activeChatId, welcomeConversation]
   );
   const currentProject = useMemo(
     () => projects.find(p => p.id === activeProjectId),
@@ -317,6 +323,13 @@ function App() {
     if (!conversation) return;
 
     const id = conversation.id;
+    if (!conversations.some(c => c.id === id)) {
+      conversation = { ...conversation, projectId: activeProjectId };
+      const draft = conversation;
+      setConversations(prev => [draft, ...prev]);
+      setActiveChatId(id);
+      saveActiveChatId(id);
+    }
     const cleanTitle = rawText.replace(/^\[[^\]]+\]\s*/, '').trim();
     const userMessage: Message = {
       id: 'user-' + Date.now(),

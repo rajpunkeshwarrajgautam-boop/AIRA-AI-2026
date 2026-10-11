@@ -64,6 +64,7 @@ async function runE2E() {
       localStorage.setItem('aira_active_chat_id_v1', conversation.id);
     })()`);
     await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.getByText('Rich clipboard certification', { exact: true }).first().click();
     await page.getByRole('button', { name: 'Copy as Rich Text' }).waitFor({ timeout: 10000 });
 
     await page.evaluate(`(() => {
@@ -136,6 +137,7 @@ async function runE2E() {
       localStorage.setItem('aira_active_chat_id_v1', conversation.id);
     })()`);
     await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.getByText('Long scroll regression', { exact: true }).first().click();
     await page.getByText('Scroll regression message 47', { exact: false }).waitFor({ timeout: 15000 });
     const beforeScroll = await page.evaluate(`(() => {
       const region = document.querySelector('[data-testid="chat-scroll-region"]');
@@ -194,3 +196,4 @@ runE2E().catch(err => {
   process.stderr.write(`E2E failure: ${err}\n`);
   process.exit(1);
 });
+
