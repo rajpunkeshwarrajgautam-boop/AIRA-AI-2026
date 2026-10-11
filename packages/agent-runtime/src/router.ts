@@ -18,12 +18,14 @@ export interface RoutingInput {
 
 export class ServerIntentRouter {
   private static readonly CONFIDENCE_THRESHOLD_PRIVILEGED = 0.70;
-  private reasoner = new SemanticReasoner();
+  private reasoner: SemanticReasoner;
 
   constructor(
     private registry: CapabilityRegistry,
     private modelRouter?: ModelRouter
-  ) {}
+  ) {
+    this.reasoner = new SemanticReasoner(this.modelRouter);
+  }
 
   public async route(input: RoutingInput): Promise<RoutingDecision> {
     const rawPrompt = (input.prompt || '').trim();
@@ -36,14 +38,14 @@ export class ServerIntentRouter {
     const policyApprovalMandatory = (sideEffectLevel === 'DESTRUCTIVE' || sideEffectLevel === 'WRITE');
 
     // 2. Semantic Analysis (Contextual Referents, Fast Paths, Explanation vs Execution)
-    const semanticAnalysis = this.reasoner.analyze({
+    const semanticAnalysis = await this.reasoner.analyze({
       prompt: rawPrompt,
       conversationHistory: input.conversationHistory,
       advisoryIntent: input.advisoryIntent,
       sideEffectLevel
     });
 
-    if (semanticAnalysis.confidence >= 0.90) {
+    if (semanticAnalysis.confidence >= 0.85) {
       const intentSideEffect: SideEffectLevel =
         sideEffectLevel === 'DESTRUCTIVE'
           ? 'DESTRUCTIVE'
@@ -109,7 +111,8 @@ export class ServerIntentRouter {
       /\b(rm\s+-rf|format\s+[a-z]:?|kill\s+-9)/i,
       /\bdrop\s+.*(table|database|schema)\b/,
       /\bdelete\s+.*(database|tables?|schema|all\s+files)\b/,
-      /\b(truncate\s+table|wipe\s+(disk|system)|hang_unsafe|destroy\s+all|purge\s+database)\b/
+      /\b(truncate\s+table|wipe\s+(disk|system)|hang_unsafe|destroy\s+all|purge\s+database)\b/,
+      /\b(modify\s+production|modify\s+.*\/etc\/hosts|\/etc\/hosts)\b/i
     ];
     if (destructivePatterns.some(p => p.test(text))) {
       return 'DESTRUCTIVE';
@@ -121,7 +124,8 @@ export class ServerIntentRouter {
       /\b(every\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|day|hour|week|month))\b/,
       /\b(fix\s+it\s+and\s+verify|patch\s+and\s+verify|write\s+file|create\s+table|modify\s+repo)\b/,
       /\b(save\s+automation|update\s+setting|execute\s+workflow|run\s+workflow|submit\s+form|populate\s+form|fill\s+(in\s+)?(the\s+)?form)\b/,
-      /\b(click\s+(the\s+)?(submit|button|login|save|delete|create))\b/
+      /\b(click\s+(the\s+)?(submit|button|login|save|delete|create))\b/,
+      /\b(payment\s+mutation|charge\b|post\s+\/api\/charge|\/api\/charge|transfer\s+money)\b/i
     ];
     if (writePatterns.some(p => p.test(text))) {
       return 'WRITE';
@@ -222,6 +226,9 @@ export class ServerIntentRouter {
 
     // Rule E: Direct Tool Invocations (Browser, Files, Repo, System, Calculator, Connectors)
     const isTool = (
+      /\b(simulate|execute|test|verify|run)\s+.*(tool|timeout|error|http\s+[0-9]{3}|failure|outage|idempotency|mutation|econnreset|fallback)\b/i.test(text) ||
+      /\b(tool\s+execution|tool\s+call|required\s+tool|payment\s+mutation|system\s+shell\s+command)\b/i.test(text) ||
+      /\b(modify\s+production\s+configuration|etc\/hosts)\b/i.test(text) ||
       /\b(open\s+https?:\/\/|navigate\s+to\s+https?:\/\/|open\s+this\s+url|extract\s+the\s+table|tell\s+me\s+the\s+(page\s+)?heading)\b/.test(text) ||
       /\b(open\s+the\s+website|open\s+the\s+(aira\s+)?github\s+repository|latest\s+commit|git\s+status|git\s+diff|git\s+log)\b/.test(text) ||
       /\b(populate\s+form|fill\s+(in\s+)?(the\s+)?form|submit\s+this\s+form|submit\s+form|click\s+(the\s+)?button)\b/.test(text) ||

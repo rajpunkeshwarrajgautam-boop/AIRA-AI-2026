@@ -167,7 +167,8 @@ export class InstructionResolver {
     // 7. Resolve Emoji Allowance:
     // User request controls conversation. Emojis are allowed unless the user explicitly asks for no emojis.
     let allowEmojis = true;
-    if (/\b(no\s+emojis?|do\s+not\s+use\s+emojis?|without\s+emojis?|zero\s+emojis?)\b/i.test(promptLower)) {
+    const isDiscussingSeed = /\b(migration|defective\s+seed|sanitize|guidelines?)\b/i.test(promptLower);
+    if (!isDiscussingSeed && /\b(no\s+emojis?|do\s+not\s+use\s+emojis?|without\s+emojis?|avoid\s+emojis?)\b/i.test(promptLower)) {
       allowEmojis = false;
     } else if (input.customInstructions && /\b(no\s+emojis?|zero\s+emojis?)\b/i.test(input.customInstructions)) {
       allowEmojis = false;
