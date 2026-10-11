@@ -248,6 +248,9 @@ jobs:
       - name: Mobile sidebar responsive acceptance
         run: npm run test:mobile-sidebar
 
+      - name: Settings modal responsive acceptance
+        run: npm run test:mobile-settings
+
       - name: Stop Vite
         if: always()
         shell: bash
