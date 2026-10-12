@@ -154,11 +154,17 @@ export class AgentRuntime extends EventEmitter {
     const now = Date.now();
 
     // 1. Authoritative Server Intent Routing & Policy Gate
+    const conversationHistory = (
+      request.context?.conversationHistory ||
+      request.context?.history
+    ) as Array<{ role: string; content: string }> | undefined;
+
     const routingDecision = await this.router.route({
       prompt: request.prompt,
       principal,
       advisoryIntent: request.intent,
-      context: request.context
+      context: request.context,
+      conversationHistory
     });
 
     const basePolicy = this.modelRouter.resolvePolicy(
@@ -477,8 +483,18 @@ export class AgentRuntime extends EventEmitter {
       );
 
       if (isResearchIntent || isAgentMissionWithResearch) {
+        const detectedSubject = run.routingDecision?.metadata?.detectedSubject;
+        const topic = run.routingDecision?.metadata?.topic;
+        const researchPrompt = detectedSubject && topic === 'FINANCIAL' && !/\b(?:share|stock|price|quote|trading)\b/i.test(run.prompt)
+          ? `${detectedSubject} current share price stock quote`
+          : detectedSubject && topic === 'WEATHER' && !/\b(?:weather|forecast|temperature)\b/i.test(run.prompt)
+          ? `${detectedSubject} current weather forecast`
+          : detectedSubject && topic === 'BOX_OFFICE' && !/\b(?:box\s+office|gross|collection)\b/i.test(run.prompt)
+          ? `${detectedSubject} box office collection gross`
+          : run.prompt;
+
         const researchResult = await this.researchService.executeResearch({
-          prompt: run.prompt,
+          prompt: researchPrompt,
           runId
         });
 

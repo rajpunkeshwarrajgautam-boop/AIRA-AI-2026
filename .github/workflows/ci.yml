@@ -132,6 +132,12 @@ jobs:
       - name: Behavioral intelligence security suite
         run: npm run test:behavioral:security
 
+      - name: Behavioral intelligence precedence regression
+        run: npm run test:behavioral:precedence
+
+      - name: Behavioral intelligence 120-scenario benchmark
+        run: npm run test:behavioral:benchmark
+
 
   semantic-search:
     name: Semantic Search CI

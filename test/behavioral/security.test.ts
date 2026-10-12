@@ -184,4 +184,86 @@ describe('AIRA Behavioral Intelligence — Adversarial Security Acceptance Suite
     assert.strictEqual(decision.approvalRequired, true);
     assert.strictEqual(decision.sideEffectLevel, 'DESTRUCTIVE');
   });
+
+  // Invariant 11: Live tool execution attempts with denied or missing permissions are strictly blocked
+  it('Invariant 11: Real unauthorized execution attempts against ToolGateway are blocked at runtime', async () => {
+    const { ToolGateway } = await import('../../packages/tool-runtime/src/gateway.js');
+    const { ApprovalKernel } = await import('../../packages/approvals/src/index.js');
+    const { ToolLifecycleState, DurableToolCall, ApprovalRequest, ApprovalDecision } = await import('../../packages/contracts/src/index.js');
+
+    // In-memory isolated test repository to exercise runtime gateway mechanics without external DB dependencies
+    class TestToolCallRepo {
+      private calls = new Map<string, any>();
+      async saveToolCall(c: any) { this.calls.set(c.id, c); }
+      async getToolCall(id: string) { return this.calls.get(id); }
+      async getToolCallByIdempotencyKey() { return undefined; }
+      async listToolCallsForRun(runId: string) { return Array.from(this.calls.values()).filter(c => c.runId === runId); }
+      async listToolCallsForPrincipal(pId: string) { return Array.from(this.calls.values()).filter(c => c.principalId === pId); }
+      async updateToolCallStatus(id: string, s: any) { const c = this.calls.get(id); if (c) c.lifecycleState = s; }
+    }
+
+    class TestApprovalRepo {
+      private reqs = new Map<string, any>();
+      async saveRequest(r: any) { this.reqs.set(r.id, r); }
+      async getRequest(id: string) { return this.reqs.get(id); }
+      async getPendingForRun(runId: string) { return Array.from(this.reqs.values()).filter(r => r.runId === runId && !r.decision); }
+      async resolveRequest(id: string, d: any, by: string) { const r = this.reqs.get(id); if (r) { r.decision = d; r.resolvedBy = by; } }
+    }
+
+    class TestGrantRepo {
+      async hasAlwaysGrant() { return false; }
+      async hasSessionGrant() { return false; }
+      async saveAlwaysGrant() {}
+      async saveSessionGrant() {}
+      async listAlwaysGrants() { return []; }
+    }
+
+    const testToolRepo = new TestToolCallRepo();
+    const testApprovalRepo = new TestApprovalRepo();
+    const testGrantRepo = new TestGrantRepo();
+    const kernel = new ApprovalKernel(testApprovalRepo as any, testGrantRepo as any, { autoApproveRead: true });
+    const gateway = new ToolGateway(testToolRepo as any, kernel);
+
+    // Sub-test 11A: Principal lacks required write scope -> Hard permission rejection
+    const readOnlyPrincipal = {
+      userId: 'usr_guest_403',
+      sessionId: 'sess_guest_403',
+      roles: ['guest'],
+      scopes: ['files.read'] // missing files.write
+    };
+
+    const deniedResult = await gateway.execute({
+      toolName: 'file_system_write',
+      arguments: { filePath: 'test.txt', content: 'unauthorized write' },
+      context: {
+        runId: 'run_denied_1',
+        principal: readOnlyPrincipal
+      }
+    });
+
+    assert.strictEqual(deniedResult.isError, true, 'Tool invocation without required scope must error');
+    assert.strictEqual(deniedResult.errorCode, 'TOOL_PERMISSION_DENIED', 'Must return TOOL_PERMISSION_DENIED');
+    assert.ok(deniedResult.error?.includes('lacks required scope'), 'Error must identify missing scope');
+
+    // Sub-test 11B: Principal has scopes but operation requires user approval -> Gateway suspends and halts execution
+    const authorizedPrincipal = {
+      userId: 'usr_dev_100',
+      sessionId: 'sess_dev_100',
+      roles: ['developer'],
+      scopes: ['files.read', 'files.write', 'browser.write']
+    };
+
+    const approvalSuspensionResult = await gateway.execute({
+      toolName: 'browser_click',
+      arguments: { selector: '#purchase-now-btn' },
+      context: {
+        runId: 'run_approval_suspended_1',
+        principal: authorizedPrincipal
+      }
+    });
+
+    // Execution must NOT proceed autonomously; must be suspended awaiting approval
+    assert.strictEqual((approvalSuspensionResult.output as any)?.status, 'WAITING_FOR_APPROVAL', 'Execution must suspend awaiting human approval');
+    assert.ok((approvalSuspensionResult.output as any)?.requestId, 'Must generate approval request');
+  });
 });

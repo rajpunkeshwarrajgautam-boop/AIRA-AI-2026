@@ -38,9 +38,14 @@ export class ServerIntentRouter {
     const policyApprovalMandatory = (sideEffectLevel === 'DESTRUCTIVE' || sideEffectLevel === 'WRITE');
 
     // 2. Semantic Analysis (Contextual Referents, Fast Paths, Explanation vs Execution)
+    const history = input.conversationHistory ||
+      (input.context?.history as any) ||
+      (input.context?.conversationHistory as any) ||
+      [];
+
     const semanticAnalysis = await this.reasoner.analyze({
       prompt: rawPrompt,
-      conversationHistory: input.conversationHistory,
+      conversationHistory: history,
       advisoryIntent: input.advisoryIntent,
       sideEffectLevel
     });
@@ -69,7 +74,9 @@ export class ServerIntentRouter {
           subTasks: semanticAnalysis.subTasks,
           isFreshnessRequired: semanticAnalysis.isFreshnessRequired,
           clarificationPrompt: semanticAnalysis.clarificationPrompt,
-          reasoningStrategy: semanticAnalysis.reasoningStrategy
+          reasoningStrategy: semanticAnalysis.reasoningStrategy,
+          detectedSubject: semanticAnalysis.detectedSubject,
+          topic: semanticAnalysis.topic
         }
       };
       return this.finalizeDecision(decision, policyApprovalMandatory);

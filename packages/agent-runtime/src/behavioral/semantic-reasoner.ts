@@ -62,6 +62,8 @@ export class SemanticReasoner {
         isExplanationOnly,
         isExecutionRequested,
         isFreshnessRequired: fastPathResult.isFreshnessRequired ?? freshnessEval.requiresFreshness,
+        detectedSubject: (fastPathResult as any).detectedSubject ?? freshnessEval.detectedSubject,
+        topic: (fastPathResult as any).topic ?? freshnessEval.topic,
         contextualReferents,
         isMultiPart,
         subTasks: isMultiPart ? subTasks : [],
@@ -238,6 +240,21 @@ Respond with valid JSON only:
         referents['movie'] = movieMatch[1];
         if (/\b(its|their|the\s+movie|the\s+film|box\s+office)\b/i.test(lower) || (hasIt && !referents['it'])) {
           referents['it'] = movieMatch[1];
+        }
+      }
+
+      // Check if immediate prior turn was an assistant clarification
+      const lastAssistant = history.filter(h => h.role === 'assistant').slice(-1)[0]?.content || '';
+      if (lastAssistant) {
+        if (/(?:company\s+or\s+(?:stock\s+)?ticker|share\s+price)/i.test(lastAssistant)) {
+          referents['company'] = prompt.trim();
+          referents['subject'] = prompt.trim();
+        } else if (/(?:city\s+or\s+location|weather\s+forecast)/i.test(lastAssistant)) {
+          referents['location'] = prompt.trim();
+          referents['subject'] = prompt.trim();
+        } else if (/(?:which\s+movie|box\s+office)/i.test(lastAssistant)) {
+          referents['movie'] = prompt.trim();
+          referents['subject'] = prompt.trim();
         }
       }
     }
@@ -435,16 +452,20 @@ Respond with valid JSON only:
           confidence: 0.88,
           reasoningStrategy: 'CLARIFY_AMBIGUOUS',
           clarificationPrompt: freshnessEval.clarificationPrompt,
-          isFreshnessRequired: true
-        };
+          isFreshnessRequired: true,
+          detectedSubject: freshnessEval.detectedSubject,
+          topic: freshnessEval.topic
+        } as any;
       }
       return {
         primaryIntent: 'RESEARCH',
         secondaryIntents: [],
         confidence: 0.95,
         reasoningStrategy: 'CHAIN_OF_THOUGHT',
-        isFreshnessRequired: true
-      };
+        isFreshnessRequired: true,
+        detectedSubject: freshnessEval.detectedSubject,
+        topic: freshnessEval.topic
+      } as any;
     }
 
     // Fast Path I: Explanation vs Execution Nuance (Timeless Concepts & Explanations)
@@ -674,6 +695,56 @@ export function evaluateFreshness(
     return undefined;
   };
 
+  // 0. Assistant Clarification Continuation Resolution
+  if (history.length > 0) {
+    const lastAssistant = history.filter(h => h.role === 'assistant').slice(-1)[0]?.content || '';
+    if (lastAssistant && !/^(?:cancel|stop|nevermind|no|exit|quit)$/i.test(promptLower)) {
+      if (/(?:company\s+or\s+(?:stock\s+)?ticker(?:\s+symbol)?|share\s+price\s+for)/i.test(lastAssistant)) {
+        const subject = extractFinancialSubject() || rawPrompt.trim();
+        return {
+          requiresFreshness: true,
+          isAmbiguous: false,
+          topic: 'FINANCIAL',
+          detectedSubject: subject
+        };
+      }
+      if (/(?:city\s+or\s+location|weather\s+forecast\s+for)/i.test(lastAssistant)) {
+        const location = extractLocationSubject() || rawPrompt.trim();
+        return {
+          requiresFreshness: true,
+          isAmbiguous: false,
+          topic: 'WEATHER',
+          detectedSubject: location
+        };
+      }
+      if (/(?:which\s+movie|box\s+office\s+collection\s+for|box\s+office\s+rankings)/i.test(lastAssistant)) {
+        const movie = extractMovieSubject() || rawPrompt.trim();
+        return {
+          requiresFreshness: true,
+          isAmbiguous: false,
+          topic: 'BOX_OFFICE',
+          detectedSubject: movie
+        };
+      }
+      if (/(?:organization\s+or\s+company.*current\s+leadership)/i.test(lastAssistant)) {
+        return {
+          requiresFreshness: true,
+          isAmbiguous: false,
+          topic: 'FACTUAL_UPDATE',
+          detectedSubject: rawPrompt.trim()
+        };
+      }
+      if (/(?:game,\s*match,\s*or\s+team.*latest\s+score)/i.test(lastAssistant)) {
+        return {
+          requiresFreshness: true,
+          isAmbiguous: false,
+          topic: 'SPORTS',
+          detectedSubject: rawPrompt.trim()
+        };
+      }
+    }
+  }
+
   // 1. Box Office & Theatrical Releases
   const isBoxOffice = /\b(?:box\s+office|opening\s+weekend\s+gross|worldwide\s+gross|grossing\s+movie[s]?|box\s+office\s+collection|movie\s+earn(?:ed)?|did\s+.*movie\s+earn)\b/i.test(promptLower);
   if (isBoxOffice) {
@@ -779,7 +850,7 @@ export function evaluateFreshness(
   // 6. Recent Releases & Product Versions
   const isRelease = (
     /\b(?:current\s+version\s+of|latest\s+version\s+of|latest\s+release\s+of|newest\s+version\s+of|newest\s+model\s+released\s+by|latest\s+update\s+to|what\s+is\s+the\s+latest\s+(?:stable\s+)?release|what\s+changed\s+in\s+the\s+latest|available\s+yet|is\s+the\s+new\s+.*available|rolled\s+out|brand\s+new\s+updates?|updates?\s+this\s+week)\b/i.test(promptLower) ||
-    /\b(?:latest|newest|recent)\s+(?:[a-zA-Z0-9_\-]+\s+)?(?:releases?|versions?|updates?|models?)\b/i.test(promptLower)
+    /\b(?:latest|newest|recent)\s+(?:[a-zA-Z0-9_-]+\s+)?(?:releases?|versions?|updates?|models?)\b/i.test(promptLower)
   );
   if (isRelease) {
     return {

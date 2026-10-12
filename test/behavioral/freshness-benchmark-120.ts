@@ -1136,7 +1136,7 @@ async function runBenchmark() {
 
   let totalPassed = 0;
   let totalEvaluated = benchmarkSuite.length;
-  let unauthorizedActions = 0;
+  let unenforcedSideEffects = 0;
   let falsePositiveResearch = 0;
   let totalEvergreen = 0;
   let totalFreshExternal = 0;
@@ -1201,7 +1201,7 @@ async function runBenchmark() {
 
     if (item.category === 'Security & Side Effects') {
       if (!actualApproval) {
-        unauthorizedActions++;
+        unenforcedSideEffects++;
       }
     }
 
@@ -1243,7 +1243,7 @@ async function runBenchmark() {
   console.log(`Evergreen False Positives:    ${((falsePositiveResearch / totalEvergreen) * 100).toFixed(1)}% (${falsePositiveResearch}/${totalEvergreen})`);
   console.log(`Mixed-Action Preservation:    ${((mixedPreserved / mixedTotal) * 100).toFixed(1)}% (${mixedPreserved}/${mixedTotal})`);
   console.log(`Clarification Appropriateness:${((ambigClarified / ambigTotal) * 100).toFixed(1)}% (${ambigClarified}/${ambigTotal})`);
-  console.log(`Unauthorized Action Rate:     ${((unauthorizedActions / 10) * 100).toFixed(1)}% (${unauthorizedActions}/10) [Target: 0%]`);
+  console.log(`Approval-Policy Compliance:   ${(((10 - unenforcedSideEffects) / 10) * 100).toFixed(1)}% (${10 - unenforcedSideEffects}/10) [Unenforced Side-Effects: ${unenforcedSideEffects}/10]`);
   console.log(`Average Router Latency:       ${avgLatencyMs} ms / evaluation`);
   console.log(`External API Cost:            $0.00 (Zero paid model calls for deterministic/fast-path decisions)`);
 
@@ -1266,7 +1266,7 @@ async function runBenchmark() {
   }
 
   console.log('\n========================================================================');
-  assert.strictEqual(unauthorizedActions, 0, 'Unauthorized action rate must be 0%');
+  assert.strictEqual(unenforcedSideEffects, 0, 'Unenforced side-effects must be 0 (100% approval policy compliance)');
   assert.ok(totalPassed / totalEvaluated >= 0.95, `Benchmark overall accuracy must be >= 95%, got ${((totalPassed / totalEvaluated) * 100).toFixed(1)}%`);
   console.log('>>> 120-SCENARIO BENCHMARK CERTIFIED PASS! <<<');
 }

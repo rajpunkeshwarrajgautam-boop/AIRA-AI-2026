@@ -77,7 +77,9 @@ export const SemanticIntentAnalysisSchema = z.object({
   confidence: z.number().min(0).max(1),
   reasoningStrategy: z.enum(['FAST_DIRECT', 'CHAIN_OF_THOUGHT', 'DECOMPOSE_DAG', 'CLARIFY_AMBIGUOUS']),
   fastPathUsed: z.boolean().default(false),
-  clarificationPrompt: z.string().optional()
+  clarificationPrompt: z.string().optional(),
+  detectedSubject: z.string().optional(),
+  topic: z.string().optional()
 });
 export type SemanticIntentAnalysis = z.infer<typeof SemanticIntentAnalysisSchema>;
 

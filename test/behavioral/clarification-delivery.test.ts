@@ -143,4 +143,86 @@ describe('AIRA Behavioral Intelligence — End-to-End Clarification Delivery', (
       'User B must demand clarification and NOT inherit User A history'
     );
   });
+
+  it('resolves share price clarification follow-up ("NVIDIA") and resumes research without re-clarifying', async () => {
+    // Turn 1: Initial ambiguous request
+    const turn1 = await executePrompt('What is the current share price?', userA);
+    assert.ok(turn1.content.toLowerCase().includes('company') || turn1.content.toLowerCase().includes('ticker'));
+
+    // Turn 2: User provides missing entity "NVIDIA"
+    const history = [
+      { role: 'user', content: 'What is the current share price?' },
+      { role: 'assistant', content: turn1.content }
+    ];
+    const turn2 = await executePrompt('NVIDIA', userA, history);
+    assert.ok(turn2.completed, 'Turn 2 run must complete');
+    // Must NOT ask for company or ticker symbol again
+    assert.strictEqual(
+      turn2.content.toLowerCase().includes('which company or stock ticker'),
+      false,
+      'Must not repeatedly ask the same clarification'
+    );
+    // Verified routing on Turn 2
+    const decision = await runtime.getRouter().route({
+      prompt: 'NVIDIA',
+      conversationHistory: history,
+      principal: userA
+    });
+    assert.strictEqual(decision.intent, 'RESEARCH', 'Must route to RESEARCH');
+    assert.strictEqual(decision.executionTarget, 'RESEARCH_SYNTHESIS', 'Must target RESEARCH_SYNTHESIS');
+    assert.strictEqual(decision.metadata?.isFreshnessRequired, true, 'Must require freshness');
+    assert.strictEqual(decision.metadata?.detectedSubject, 'NVIDIA', 'Must bind NVIDIA as subject');
+  });
+
+  it('resolves weather clarification follow-up ("Tokyo") and resumes research without re-clarifying', async () => {
+    const turn1 = await executePrompt('What is the weather today?', userA);
+    assert.ok(turn1.content.toLowerCase().includes('city') || turn1.content.toLowerCase().includes('location'));
+
+    const history = [
+      { role: 'user', content: 'What is the weather today?' },
+      { role: 'assistant', content: turn1.content }
+    ];
+    const turn2 = await executePrompt('Tokyo', userA, history);
+    assert.ok(turn2.completed, 'Turn 2 run must complete');
+    assert.strictEqual(
+      turn2.content.toLowerCase().includes('which city or location'),
+      false,
+      'Must not repeatedly ask weather clarification'
+    );
+
+    const decision = await runtime.getRouter().route({
+      prompt: 'Tokyo',
+      conversationHistory: history,
+      principal: userA
+    });
+    assert.strictEqual(decision.intent, 'RESEARCH', 'Must route to RESEARCH');
+    assert.strictEqual(decision.executionTarget, 'RESEARCH_SYNTHESIS', 'Must target RESEARCH_SYNTHESIS');
+    assert.strictEqual(decision.metadata?.detectedSubject, 'Tokyo', 'Must bind Tokyo as location');
+  });
+
+  it('resolves box office clarification follow-up ("Avatar 3") and resumes research without re-clarifying', async () => {
+    const turn1 = await executePrompt('What is the latest box office collection?', userA);
+    assert.ok(turn1.content.toLowerCase().includes('movie') || turn1.content.toLowerCase().includes('rankings'));
+
+    const history = [
+      { role: 'user', content: 'What is the latest box office collection?' },
+      { role: 'assistant', content: turn1.content }
+    ];
+    const turn2 = await executePrompt('Avatar 3', userA, history);
+    assert.ok(turn2.completed, 'Turn 2 run must complete');
+    assert.strictEqual(
+      turn2.content.toLowerCase().includes('which movie would you like'),
+      false,
+      'Must not repeatedly ask box office clarification'
+    );
+
+    const decision = await runtime.getRouter().route({
+      prompt: 'Avatar 3',
+      conversationHistory: history,
+      principal: userA
+    });
+    assert.strictEqual(decision.intent, 'RESEARCH', 'Must route to RESEARCH');
+    assert.strictEqual(decision.executionTarget, 'RESEARCH_SYNTHESIS', 'Must target RESEARCH_SYNTHESIS');
+    assert.strictEqual(decision.metadata?.detectedSubject, 'Avatar 3', 'Must bind Avatar 3 as movie');
+  });
 });
