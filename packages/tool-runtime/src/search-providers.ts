@@ -42,6 +42,19 @@ export function configuredSearchProviders(credentials: SearchCredentials = readS
   return providers;
 }
 
+function cleanSearchText(str: string): string {
+  return str
+    .replace(/&amp;/g, '&')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function normalizeHits(raw: unknown): SearchHit[] {
   if (!Array.isArray(raw)) return [];
   const seen = new Set<string>();
@@ -68,10 +81,11 @@ function normalizeHits(raw: unknown): SearchHit[] {
     const rawDate = candidate.publishedDate ?? candidate.published_date ?? candidate.published_at;
     const publishedDate = typeof rawDate === 'string' && /^\d{4}-\d{2}-\d{2}/.test(rawDate)
       ? rawDate.slice(0, 10) : undefined;
+    const rawTitle = typeof candidate.title === 'string' ? candidate.title : url.hostname;
     hits.push({
-      title: (typeof candidate.title === 'string' ? candidate.title : url.hostname).slice(0, 250),
+      title: cleanSearchText(rawTitle).slice(0, 250) || url.hostname,
       url: normalized,
-      snippet: snippet.slice(0, 1400),
+      snippet: cleanSearchText(snippet).slice(0, 1400),
       ...(publishedDate ? { publishedDate } : {})
     });
     if (hits.length >= 5) break;

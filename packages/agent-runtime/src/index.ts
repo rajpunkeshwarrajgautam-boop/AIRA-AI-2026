@@ -25,7 +25,7 @@ import { RunRepository } from './repositories.js';
 import { CapabilityRegistry } from './registry.js';
 import { ServerIntentRouter } from './router.js';
 import { ResearchService } from './research.js';
-import { buildResearchEvidenceContext, buildResearchSourcesAppendix, isResearchToolCallDump, renderGroundedResearchFallback, verifiedWebCitations } from './research-evidence.js';
+import { buildResearchEvidenceContext, buildResearchSourcesAppendix, isResearchToolCallDump, renderGroundedResearchFallback, sanitizeCitationMarkers, verifiedWebCitations } from './research-evidence.js';
 import { WorkflowRepository, PostgresWorkflowRepository } from './workflow-repositories.js';
 import { WorkflowEngine } from './workflow-engine.js';
 import { WorkflowCompiler } from './workflow-compiler.js';
@@ -486,11 +486,11 @@ export class AgentRuntime extends EventEmitter {
         const detectedSubject = run.routingDecision?.metadata?.detectedSubject;
         const topic = run.routingDecision?.metadata?.topic;
         const researchPrompt = detectedSubject && topic === 'FINANCIAL' && !/\b(?:share|stock|price|quote|trading)\b/i.test(run.prompt)
-          ? `${detectedSubject} current share price stock quote`
+          ? `${detectedSubject} current share price stock quote premarket regular market timestamp`
           : detectedSubject && topic === 'WEATHER' && !/\b(?:weather|forecast|temperature)\b/i.test(run.prompt)
-          ? `${detectedSubject} current weather forecast`
+          ? `${detectedSubject} weather today current conditions forecast`
           : detectedSubject && topic === 'BOX_OFFICE' && !/\b(?:box\s+office|gross|collection)\b/i.test(run.prompt)
-          ? `${detectedSubject} box office collection gross`
+          ? `${detectedSubject} box office worldwide gross Box Office Mojo The Numbers`
           : run.prompt;
 
         const researchResult = await this.researchService.executeResearch({
@@ -981,7 +981,8 @@ Provider Capabilities:
 
       const liveEvidence = run.intent === 'RESEARCH' ? verifiedWebCitations(run.citations) : [];
       if (liveEvidence.length > 0) {
-        messages.push({ role: 'system', content: buildResearchEvidenceContext(liveEvidence) });
+        const topic = run.routingDecision?.metadata?.topic;
+        messages.push({ role: 'system', content: buildResearchEvidenceContext(liveEvidence, topic) });
       }
       const adapter = this.modelRouter.getAdapter(run.modelPolicy);
       // Research text must be screened before it is exposed to the UI.
@@ -1010,7 +1011,8 @@ Provider Capabilities:
         const answer = (!synthesized || isResearchToolCallDump(synthesized))
           ? renderGroundedResearchFallback(liveEvidence)
           : synthesized;
-        const finalText = answer + buildResearchSourcesAppendix(liveEvidence);
+        const sanitizedAnswer = sanitizeCitationMarkers(answer);
+        const finalText = sanitizedAnswer + buildResearchSourcesAppendix(liveEvidence);
         run.content += finalText;
         await this.runRepo.saveRun(run);
         await this.emitRunEvent(runId, 'content.delta', { delta: finalText });
@@ -1022,6 +1024,7 @@ Provider Capabilities:
 
     // Checkpoint 6: Artifacts & Completion
     if (run.executionCheckpoint === 'FINALIZING') {
+      run.content = sanitizeCitationMarkers(run.content);
       if (run.content.includes('```')) {
         const artId = `art_${Date.now()}`;
         const artifact: Artifact = {

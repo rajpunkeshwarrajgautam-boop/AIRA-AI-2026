@@ -123,9 +123,20 @@ function sanitizeHtml(html: string): string {
   return doc.body.innerHTML;
 }
 
+export function sanitizeCitationMarkers(text: string): string {
+  if (!text) return '';
+  return text
+    .replace(/\[(?:Source\s*)?(\d+)†[^\]]*\]/gi, '[Source $1]')
+    .replace(/【(\d+)(?::\d+)?†[^】]*】/g, '[Source $1]')
+    .replace(/\[†[^\]]*\]/g, '')
+    .replace(/†L\d+(?:-L\d+)?/g, '')
+    .replace(/†/g, '');
+}
+
 export function renderMarkdownToHtml(markdown: string): string {
   try {
-    return sanitizeHtml(marked.parse(markdown) as string);
+    const cleaned = sanitizeCitationMarkers(markdown);
+    return sanitizeHtml(marked.parse(cleaned) as string);
   } catch (e) {
     console.error('Markdown parse error', e);
     return escapeHtml(markdown);

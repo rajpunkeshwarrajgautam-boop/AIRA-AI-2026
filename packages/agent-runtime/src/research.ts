@@ -3,6 +3,7 @@ import { Citation, ToolCall, ToolResult } from '../../contracts/src/index.js';
 import { BrainV2KnowledgeEngine } from '../../knowledge/src/index.js';
 import { configuredSearchProviders } from '../../tool-runtime/src/search-providers.js';
 import { evaluateFreshness } from './behavioral/semantic-reasoner.js';
+import { normalizeSourceTitle, normalizeSnippetText } from './research-evidence.js';
 
 export interface ResearchOptions {
   prompt: string;
@@ -67,10 +68,10 @@ export class ResearchService {
               .map((res, idx) => ({
                 id: `live_${timestamp}_${idx}`,
                 sourceId: `web_${idx}`,
-                sourceTitle: res.title || 'Live Search Result',
+                sourceTitle: normalizeSourceTitle(res.title || 'Live Search Result'),
                 uri: res.url!,
                 ...(res.publishedDate ? { publishedDate: res.publishedDate } : {}),
-                snippet: res.snippet || res.description || '',
+                snippet: normalizeSnippetText(res.snippet || res.description || ''),
                 score: 1.0,
                 provenance: {
                   toolCallId: toolCall.id,
