@@ -2,6 +2,7 @@ import { ToolRegistry } from '../../tool-runtime/src/index.js';
 import { Citation, ToolCall, ToolResult } from '../../contracts/src/index.js';
 import { BrainV2KnowledgeEngine } from '../../knowledge/src/index.js';
 import { configuredSearchProviders } from '../../tool-runtime/src/search-providers.js';
+import { evaluateFreshness } from './behavioral/semantic-reasoner.js';
 
 export interface ResearchOptions {
   prompt: string;
@@ -23,14 +24,7 @@ export class ResearchService {
   ) {}
 
   public isFreshnessRequired(prompt: string): boolean {
-    const text = prompt.toLowerCase();
-    const temporalKeywords = [
-      'today', 'currently', 'current', 'latest', 'recent', 'recently',
-      'this week', 'this month', 'new', 'newest', 'as of now', 'right now',
-      'current price', 'current status', 'latest collection', 'latest news',
-      'latest release', 'latest version'
-    ];
-    return temporalKeywords.some(kw => text.includes(kw));
+    return evaluateFreshness(prompt).requiresFreshness;
   }
 
   public async executeResearch(options: ResearchOptions): Promise<ResearchResult> {

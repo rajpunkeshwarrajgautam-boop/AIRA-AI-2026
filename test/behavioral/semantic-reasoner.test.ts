@@ -139,4 +139,171 @@ describe('AIRA Behavioral Intelligence — Semantic Reasoning & Intent Routing',
     assert.ok(analysis.subTasks.length >= 3, `Expected at least 3 subtasks, got ${analysis.subTasks.length}`);
     assert.ok(analysis.confidence >= 0.85);
   });
+
+  it('routes time-sensitive current information requests to RESEARCH without advisoryIntent', async () => {
+    const currentQueries = [
+      'What is the current box office collection for latest movie?',
+      'What is the current box office collection for the latest movie?',
+      'What happened in AI news today?',
+      'What is the current share price of NVIDIA?',
+      'Who won the latest Formula 1 race?',
+      'What is the latest version of Next.js?',
+      'Who is the current CEO of Twitter?',
+      'Compare the latest AI models with citations.',
+      'Research this and summarize the findings.'
+    ];
+
+    for (const prompt of currentQueries) {
+      const res = await reasoner.analyze({ prompt });
+      assert.strictEqual(res.primaryIntent, 'RESEARCH', `Prompt "${prompt}" should route to RESEARCH, got ${res.primaryIntent}`);
+      assert.strictEqual(res.isFreshnessRequired, true, `Prompt "${prompt}" should require freshness`);
+      assert.ok(res.confidence >= 0.90, `Confidence for "${prompt}" should be >= 0.90, got ${res.confidence}`);
+    }
+  });
+
+  it('routes timeless explanations, conceptual mechanics, and historical questions to ANSWER', async () => {
+    const timelessQueries = [
+      'What is quantum entanglement?',
+      'Explain how box office revenue works.',
+      'What were the highest-grossing movies of 1997?',
+      'Write a fictional story about a movie premiere.',
+      'What is an electric current?',
+      'Explain how electric current creates a magnetic field.',
+      'What is the current directory in Linux?'
+    ];
+
+    for (const prompt of timelessQueries) {
+      const res = await reasoner.analyze({ prompt });
+      assert.strictEqual(res.primaryIntent, 'ANSWER', `Prompt "${prompt}" should route to ANSWER, got ${res.primaryIntent}`);
+      assert.strictEqual(res.isFreshnessRequired, false, `Prompt "${prompt}" should NOT require freshness`);
+    }
+  });
+
+  it('demands clarification on ambiguous current-information requests when key entities are missing', async () => {
+    // 1. Ambiguous share price query with no company/ticker
+    const ambiguousStock = await reasoner.analyze({
+      prompt: 'What is the current share price?'
+    });
+    assert.strictEqual(ambiguousStock.primaryIntent, 'ANSWER');
+    assert.strictEqual(ambiguousStock.reasoningStrategy, 'CLARIFY_AMBIGUOUS');
+    assert.strictEqual(ambiguousStock.isFreshnessRequired, true);
+    assert.ok(ambiguousStock.clarificationPrompt, 'Must include clarificationPrompt');
+    assert.ok(ambiguousStock.clarificationPrompt.toLowerCase().includes('company') || ambiguousStock.clarificationPrompt.toLowerCase().includes('ticker'));
+
+    // 2. Ambiguous weather query with no city/location
+    const ambiguousWeather = await reasoner.analyze({
+      prompt: 'What is the weather today?'
+    });
+    assert.strictEqual(ambiguousWeather.primaryIntent, 'ANSWER');
+    assert.strictEqual(ambiguousWeather.reasoningStrategy, 'CLARIFY_AMBIGUOUS');
+    assert.strictEqual(ambiguousWeather.isFreshnessRequired, true);
+    assert.ok(ambiguousWeather.clarificationPrompt, 'Must include clarificationPrompt');
+    assert.ok(ambiguousWeather.clarificationPrompt.toLowerCase().includes('city') || ambiguousWeather.clarificationPrompt.toLowerCase().includes('location'));
+  });
+
+  it('resolves multi-turn freshness references using conversational context', async () => {
+    // Multi-turn stock query resolving pronoun "its" to NVIDIA
+    const stockHistory = [
+      { role: 'user', content: 'Tell me about NVIDIA and its GPU architecture.' },
+      { role: 'assistant', content: 'NVIDIA is a technology leader in high-performance computing GPUs.' }
+    ];
+
+    const followUpStock = await reasoner.analyze({
+      prompt: 'What is its current share price?',
+      conversationHistory: stockHistory
+    });
+
+    assert.strictEqual(followUpStock.primaryIntent, 'RESEARCH');
+    assert.strictEqual(followUpStock.isFreshnessRequired, true);
+    assert.ok(followUpStock.confidence >= 0.90);
+
+    // Multi-turn weather query resolving location "there" to Tokyo
+    const travelHistory = [
+      { role: 'user', content: 'I am planning a trip to Tokyo next month.' },
+      { role: 'assistant', content: 'Tokyo is an incredible city with wonderful culture and sights.' }
+    ];
+
+    const followUpWeather = await reasoner.analyze({
+      prompt: 'What is the weather there today?',
+      conversationHistory: travelHistory
+    });
+
+    assert.strictEqual(followUpWeather.primaryIntent, 'RESEARCH');
+    assert.strictEqual(followUpWeather.isFreshnessRequired, true);
+    assert.ok(followUpWeather.confidence >= 0.90);
+  });
+
+  it('evaluates dedicated current-information and evergreen benchmark achieving >=95% accuracy and <=5% false positive rate', async () => {
+    const currentSet = [
+      'What is the current box office collection for latest movie?',
+      'What is the current box office collection for the latest movie?',
+      'What is the box office gross of the latest Marvel release?',
+      'What happened in AI news today?',
+      'What is the latest breaking news regarding OpenAI?',
+      'What is the current share price of NVIDIA?',
+      'What is the current price of Bitcoin?',
+      'What is the current market cap of Apple?',
+      'Who won the latest Formula 1 race?',
+      'Who won the latest Champions League match?',
+      'What is the weather in Tokyo today?',
+      'What is the weather forecast for Paris this weekend?',
+      'What is the latest version of Next.js?',
+      'What is the newest model released by Anthropic?',
+      'Who is the current CEO of Twitter?',
+      'Who is currently the prime minister of the UK?',
+      'Compare the latest AI models with citations.',
+      'Research the latest developments in nuclear fusion and summarize.',
+      'What is the current inflation rate in the US?',
+      'What is the current world record for the 100m sprint?'
+    ];
+
+    const evergreenSet = [
+      'What is quantum entanglement?',
+      'What is photosynthesis?',
+      'Explain how box office revenue works.',
+      'Explain how a stock exchange operates.',
+      'What were the highest-grossing movies of 1997?',
+      'Who won the 1994 World Cup?',
+      'What happened during the 1969 moon landing?',
+      'Write a fictional story about a movie premiere.',
+      'Write a poem about the sunrise today.',
+      'What is an electric current?',
+      'Explain the relationship between voltage, current, and resistance.',
+      'What is an ocean current?',
+      'What is the current directory in Linux?',
+      'Explain how current directory is determined in Unix.',
+      'Today is a great day to learn programming, what should I start with?',
+      'Why do people say live for today?',
+      'Explain how the immune system defends against viruses.',
+      'What is the theory of general relativity?',
+      'Define object-oriented programming.',
+      'Explain the difference between TCP and UDP.'
+    ];
+
+    let currentCorrect = 0;
+    for (const prompt of currentSet) {
+      const res = await reasoner.analyze({ prompt });
+      if (res.primaryIntent === 'RESEARCH') {
+        currentCorrect++;
+      }
+    }
+    const currentAccuracy = currentCorrect / currentSet.length;
+
+    let evergreenFalsePositives = 0;
+    for (const prompt of evergreenSet) {
+      const res = await reasoner.analyze({ prompt });
+      if (res.primaryIntent === 'RESEARCH') {
+        evergreenFalsePositives++;
+      }
+    }
+    const falsePositiveRate = evergreenFalsePositives / evergreenSet.length;
+
+    console.log(`\nBenchmark Results:`);
+    console.log(`Current Information Accuracy: ${(currentAccuracy * 100).toFixed(1)}% (${currentCorrect}/${currentSet.length}) [Target >= 95%]`);
+    console.log(`Evergreen False Positive Rate: ${(falsePositiveRate * 100).toFixed(1)}% (${evergreenFalsePositives}/${evergreenSet.length}) [Target <= 5%]`);
+
+    assert.ok(currentAccuracy >= 0.95, `Current info accuracy must be >= 95%, got ${(currentAccuracy * 100).toFixed(1)}%`);
+    assert.ok(falsePositiveRate <= 0.05, `False positive rate must be <= 5%, got ${(falsePositiveRate * 100).toFixed(1)}%`);
+  });
 });
+

@@ -6,7 +6,7 @@ import {
 } from '../../contracts/src/index.js';
 import { ModelRouter } from '../../model-router/src/index.js';
 import { CapabilityRegistry } from './registry.js';
-import { SemanticReasoner } from './behavioral/semantic-reasoner.js';
+import { SemanticReasoner, evaluateFreshness } from './behavioral/semantic-reasoner.js';
 
 export interface RoutingInput {
   prompt: string;
@@ -66,7 +66,10 @@ export class ServerIntentRouter {
           fastPath: semanticAnalysis.fastPathUsed,
           referents: semanticAnalysis.contextualReferents,
           isMultiPart: semanticAnalysis.isMultiPart,
-          subTasks: semanticAnalysis.subTasks
+          subTasks: semanticAnalysis.subTasks,
+          isFreshnessRequired: semanticAnalysis.isFreshnessRequired,
+          clarificationPrompt: semanticAnalysis.clarificationPrompt,
+          reasoningStrategy: semanticAnalysis.reasoningStrategy
         }
       };
       return this.finalizeDecision(decision, policyApprovalMandatory);
@@ -246,21 +249,26 @@ export class ServerIntentRouter {
       };
     }
 
-    // Rule F: Research & Source Investigation
+    // Rule F: Research & Source Investigation (including verified freshness-sensitive requests)
+    const freshness = evaluateFreshness(text);
     const isResearch = /\b(research\s+(the\s+|latest\s+|recent\s+|advances\s+in\s+)?|deep\s+dive\s+into.*sources|investigate.*cite\s+sources|find\s+sources\s+and\s+compare)\b/.test(text) ||
-      (advisoryIntent === 'RESEARCH');
+      (advisoryIntent === 'RESEARCH') ||
+      (freshness.requiresFreshness && !freshness.isAmbiguous);
     if (isResearch) {
       return {
         intent: 'RESEARCH',
         confidence: 0.94,
         reason: 'Identified deep research and evidence citation request.',
         sideEffectLevel: 'READ',
-        approvalRequired: false
+        approvalRequired: false,
+        metadata: {
+          isFreshnessRequired: freshness.requiresFreshness
+        }
       };
     }
 
-    // Rule G: Unambiguous Question / Answer / Explanation
-    const isQuestion = /^(explain|what\s+is|what\s+are|how\s+does|why\s+is|define|summarize|tell\s+me|who\s+was)\b/.test(text);
+    // Rule G: Unambiguous Question / Answer / Explanation (Timeless concepts only)
+    const isQuestion = !freshness.requiresFreshness && /^(explain|what\s+is|what\s+are|how\s+does|why\s+is|define|summarize|tell\s+me|who\s+was)\b/.test(text);
     if (isQuestion) {
       return {
         intent: 'ANSWER',

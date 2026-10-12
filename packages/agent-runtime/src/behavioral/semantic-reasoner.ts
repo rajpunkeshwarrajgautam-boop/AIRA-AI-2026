@@ -19,7 +19,7 @@ export class SemanticReasoner {
 
   /**
    * Analyzes prompt semantics using a 3-tier hybrid reasoning architecture:
-   * Tier 1: Deterministic safe fast-paths (<1ms, zero LLM cost) for greetings, calculations, commands.
+   * Tier 1: Deterministic safe fast-paths (<1ms, zero LLM cost) for greetings, calculations, commands, and freshness-sensitive research.
    * Tier 2: Context-aware model classification for ambiguous, multi-turn, or nuanced requests.
    * Tier 3: Safe uncertainty handling with graceful non-privileged fallbacks.
    */
@@ -31,20 +31,25 @@ export class SemanticReasoner {
     // 1. Contextual Referent Resolution
     const contextualReferents = this.resolveReferents(rawPrompt, history);
 
-    // 2. Multi-Part Decomposition
+    // 2. Freshness & Time-Sensitive Information Evaluation
+    const freshnessEval = evaluateFreshness(rawPrompt, history, contextualReferents);
+
+    // 3. Multi-Part Decomposition
     const subTasks = this.decomposeMultiPart(rawPrompt);
     const isMultiPart = subTasks.length > 1;
 
-    // 3. Explanation vs Execution Differentiation
-    const isExplanationOnly = this.isExplanationIntent(promptLower);
+    // 4. Explanation vs Execution Differentiation
+    // If live freshness is required, the query demands external facts, not timeless conceptual explanation.
+    const isExplanationOnly = !freshnessEval.requiresFreshness && this.isExplanationIntent(promptLower);
     const isExecutionRequested = this.isExecutionIntent(promptLower);
 
-    // 4. Tier 1: Deterministic Safe Fast Path Evaluation
+    // 5. Tier 1: Deterministic Safe Fast Path Evaluation
     const fastPathResult = this.evaluateFastPath(
       rawPrompt,
       promptLower,
       history,
       contextualReferents,
+      freshnessEval,
       isExplanationOnly,
       isExecutionRequested,
       input.sideEffectLevel,
@@ -56,6 +61,7 @@ export class SemanticReasoner {
         ...fastPathResult,
         isExplanationOnly,
         isExecutionRequested,
+        isFreshnessRequired: fastPathResult.isFreshnessRequired ?? freshnessEval.requiresFreshness,
         contextualReferents,
         isMultiPart,
         subTasks: isMultiPart ? subTasks : [],
@@ -63,7 +69,7 @@ export class SemanticReasoner {
       } as SemanticIntentAnalysis;
     }
 
-    // 5. Follow-Up Contextual Resolution (e.g. "Now make it faster", "Can you improve it?")
+    // 6. Follow-Up Contextual Resolution (e.g. "Now make it faster", "Can you improve it?")
     if (this.isFollowUp(promptLower) && history.length > 0) {
       const inheritedIntent = this.resolveFollowUpIntent(history);
       return {
@@ -71,6 +77,7 @@ export class SemanticReasoner {
         secondaryIntents: [],
         isExplanationOnly: isExplanationOnly || inheritedIntent === 'ANSWER',
         isExecutionRequested: !isExplanationOnly && inheritedIntent !== 'ANSWER',
+        isFreshnessRequired: freshnessEval.requiresFreshness,
         contextualReferents,
         isMultiPart,
         subTasks: isMultiPart ? subTasks : [],
@@ -80,7 +87,7 @@ export class SemanticReasoner {
       };
     }
 
-    // 6. Tier 2: Context-Aware Semantic Model Classification
+    // 7. Tier 2: Context-Aware Semantic Model Classification
     if (this.modelRouter && this.modelRouter.listProviders().length > 0 && rawPrompt.length > 10) {
       try {
         const modelAnalysis = await this.classifyWithModel(
@@ -89,7 +96,8 @@ export class SemanticReasoner {
           contextualReferents,
           subTasks,
           isExplanationOnly,
-          isExecutionRequested
+          isExecutionRequested,
+          freshnessEval.requiresFreshness
         );
         if (modelAnalysis) {
           return modelAnalysis;
@@ -99,7 +107,7 @@ export class SemanticReasoner {
       }
     }
 
-    // 7. Tier 3: Safe Uncertainty Fallback
+    // 8. Tier 3: Safe Uncertainty Fallback
     const isHypotheticalOrQuestion = /^(what\s+if|could\s+you\s+describe|how\s+would|can\s+we\s+discuss)\b/i.test(promptLower);
     const needsClarification = promptLower.length < 15 && /^(help|build|run|test|deploy)$/i.test(promptLower);
 
@@ -108,6 +116,7 @@ export class SemanticReasoner {
       secondaryIntents: isMultiPart ? ['RESEARCH'] : [],
       isExplanationOnly: true,
       isExecutionRequested: false,
+      isFreshnessRequired: freshnessEval.requiresFreshness,
       contextualReferents,
       isMultiPart,
       subTasks: isMultiPart ? subTasks : [],
@@ -126,7 +135,8 @@ export class SemanticReasoner {
     contextualReferents: Record<string, string>,
     subTasks: string[],
     isExplanationOnly: boolean,
-    isExecutionRequested: boolean
+    isExecutionRequested: boolean,
+    isFreshnessRequired: boolean
   ): Promise<SemanticIntentAnalysis | null> {
     if (!this.modelRouter) return null;
 
@@ -144,6 +154,7 @@ Respond with valid JSON only:
   "secondaryIntents": [],
   "isExplanationOnly": true,
   "isExecutionRequested": false,
+  "isFreshnessRequired": ${isFreshnessRequired},
   "confidence": 0.90,
   "reasoningStrategy": "CHAIN_OF_THOUGHT"
 }`;
@@ -168,6 +179,7 @@ Respond with valid JSON only:
       secondaryIntents: Array.isArray(parsed.secondaryIntents) ? parsed.secondaryIntents.filter((i: any) => validIntents.includes(i)) : [],
       isExplanationOnly: typeof parsed.isExplanationOnly === 'boolean' ? parsed.isExplanationOnly : isExplanationOnly,
       isExecutionRequested: typeof parsed.isExecutionRequested === 'boolean' ? parsed.isExecutionRequested : isExecutionRequested,
+      isFreshnessRequired: typeof parsed.isFreshnessRequired === 'boolean' ? parsed.isFreshnessRequired : isFreshnessRequired,
       contextualReferents,
       isMultiPart: subTasks.length > 1,
       subTasks,
@@ -185,7 +197,7 @@ Respond with valid JSON only:
     const lower = prompt.toLowerCase();
 
     // Check for pronoun referents
-    const hasIt = /\b(it|that|this|the same)\b/.test(lower);
+    const hasIt = /\b(it|that|this|the same|its|their|there)\b/.test(lower);
     if (hasIt && history.length > 0) {
       // Search across the recent conversation history
       const recentHistoryText = history.slice(-4).map(h => h.content).join('\n');
@@ -199,6 +211,26 @@ Respond with valid JSON only:
         referents['it'] = 'the application';
       } else {
         referents['it'] = 'the previous subject';
+      }
+    }
+
+    // Extract financial entities and locations across history to resolve multi-turn references
+    if (history.length > 0) {
+      const recentHistoryText = history.slice(-4).map(h => h.content).join('\n');
+      const companyMatch = recentHistoryText.match(/\b(nvidia|nvda|apple|aapl|microsoft|msft|google|googl|alphabet|amazon|amzn|tesla|tsla|meta|netflix|nflx|amd|intel|intc|tsmc|openai|anthropic|bitcoin|btc|ethereum|eth|solana|sol)\b/i);
+      if (companyMatch) {
+        referents['company'] = companyMatch[1];
+        if (/\b(its|their|the\s+stock|the\s+share)\b/i.test(lower) || (hasIt && !referents['it'])) {
+          referents['it'] = companyMatch[1];
+        }
+      }
+
+      const cityMatch = recentHistoryText.match(/\b(tokyo|paris|london|new\s+york|berlin|san\s+francisco|seattle|chicago|los\s+angeles|sydney|toronto|mumbai|singapore|dubai)\b/i);
+      if (cityMatch) {
+        referents['location'] = cityMatch[1];
+        if (/\bthere\b/i.test(lower)) {
+          referents['there'] = cityMatch[1];
+        }
       }
     }
 
@@ -252,6 +284,7 @@ Respond with valid JSON only:
     promptLower: string,
     history: Array<{ role: string; content: string }>,
     contextualReferents: Record<string, string>,
+    freshnessEval: FreshnessEvaluation,
     isExplanationOnly: boolean,
     isExecutionRequested: boolean,
     sideEffectLevel?: SideEffectLevel,
@@ -263,7 +296,8 @@ Respond with valid JSON only:
         primaryIntent: 'ANSWER',
         secondaryIntents: [],
         confidence: 0.99,
-        reasoningStrategy: 'FAST_DIRECT'
+        reasoningStrategy: 'FAST_DIRECT',
+        isFreshnessRequired: false
       };
     }
 
@@ -273,18 +307,41 @@ Respond with valid JSON only:
         primaryIntent: 'TOOL_ACTION',
         secondaryIntents: [],
         confidence: 0.99,
-        reasoningStrategy: 'FAST_DIRECT'
+        reasoningStrategy: 'FAST_DIRECT',
+        isFreshnessRequired: false
       };
     }
 
-    // Fast Path C: Explanation vs Execution Nuance
-    // If clearly explanation only and no execution requested, and not explicitly routed to specialized mode:
-    if (isExplanationOnly && !isExecutionRequested && (!advisoryIntent || advisoryIntent === 'ANSWER')) {
+    // Fast Path Freshness Gate: Genuinely Time-Sensitive External Information
+    if (freshnessEval.requiresFreshness && (!advisoryIntent || advisoryIntent === 'RESEARCH' || advisoryIntent === 'ANSWER')) {
+      if (freshnessEval.isAmbiguous) {
+        return {
+          primaryIntent: 'ANSWER',
+          secondaryIntents: ['RESEARCH'],
+          confidence: 0.88,
+          reasoningStrategy: 'CLARIFY_AMBIGUOUS',
+          clarificationPrompt: freshnessEval.clarificationPrompt,
+          isFreshnessRequired: true
+        };
+      }
+      return {
+        primaryIntent: 'RESEARCH',
+        secondaryIntents: [],
+        confidence: 0.95,
+        reasoningStrategy: 'CHAIN_OF_THOUGHT',
+        isFreshnessRequired: true
+      };
+    }
+
+    // Fast Path C: Explanation vs Execution Nuance (Timeless Concepts & Explanations)
+    // If clearly explanation only, not requiring freshness, and no execution requested:
+    if (!freshnessEval.requiresFreshness && isExplanationOnly && !isExecutionRequested && (!advisoryIntent || advisoryIntent === 'ANSWER')) {
       return {
         primaryIntent: 'ANSWER',
         secondaryIntents: [],
         confidence: 0.97,
-        reasoningStrategy: 'FAST_DIRECT'
+        reasoningStrategy: 'FAST_DIRECT',
+        isFreshnessRequired: false
       };
     }
 
@@ -298,7 +355,8 @@ Respond with valid JSON only:
         primaryIntent: 'AUTOMATION_CREATE',
         secondaryIntents: [],
         confidence: 0.96,
-        reasoningStrategy: 'FAST_DIRECT'
+        reasoningStrategy: 'FAST_DIRECT',
+        isFreshnessRequired: false
       };
     }
 
@@ -315,7 +373,8 @@ Respond with valid JSON only:
         primaryIntent: 'WORKFLOW',
         secondaryIntents: ['RESEARCH', 'TOOL_ACTION'],
         confidence: 0.95,
-        reasoningStrategy: 'DECOMPOSE_DAG'
+        reasoningStrategy: 'DECOMPOSE_DAG',
+        isFreshnessRequired: freshnessEval.requiresFreshness
       };
     }
 
@@ -329,7 +388,8 @@ Respond with valid JSON only:
         primaryIntent: 'AGENT_MISSION',
         secondaryIntents: ['TOOL_ACTION'],
         confidence: 0.94,
-        reasoningStrategy: 'CHAIN_OF_THOUGHT'
+        reasoningStrategy: 'CHAIN_OF_THOUGHT',
+        isFreshnessRequired: false
       };
     }
 
@@ -340,7 +400,8 @@ Respond with valid JSON only:
         primaryIntent: 'ANSWER',
         secondaryIntents: [],
         confidence: 0.95,
-        reasoningStrategy: 'FAST_DIRECT'
+        reasoningStrategy: 'FAST_DIRECT',
+        isFreshnessRequired: false
       };
     }
 
@@ -350,7 +411,8 @@ Respond with valid JSON only:
         primaryIntent: 'ANSWER',
         secondaryIntents: [],
         confidence: 0.95,
-        reasoningStrategy: 'FAST_DIRECT'
+        reasoningStrategy: 'FAST_DIRECT',
+        isFreshnessRequired: false
       };
     }
 
@@ -370,7 +432,8 @@ Respond with valid JSON only:
         primaryIntent: 'TOOL_ACTION',
         secondaryIntents: [],
         confidence: 0.95,
-        reasoningStrategy: 'FAST_DIRECT'
+        reasoningStrategy: 'FAST_DIRECT',
+        isFreshnessRequired: false
       };
     }
 
@@ -384,7 +447,8 @@ Respond with valid JSON only:
         primaryIntent: 'RESEARCH',
         secondaryIntents: [],
         confidence: 0.94,
-        reasoningStrategy: 'CHAIN_OF_THOUGHT'
+        reasoningStrategy: 'CHAIN_OF_THOUGHT',
+        isFreshnessRequired: freshnessEval.requiresFreshness
       };
     }
 
@@ -419,4 +483,254 @@ Respond with valid JSON only:
     }
     return 'ANSWER';
   }
+}
+
+export interface FreshnessEvaluation {
+  requiresFreshness: boolean;
+  isAmbiguous: boolean;
+  topic?: string;
+  clarificationPrompt?: string;
+  detectedSubject?: string;
+}
+
+/**
+ * Robust, context-aware evaluation of whether a prompt requires up-to-date,
+ * live external information (market figures, box office, breaking news, sports, weather, releases).
+ * Disqualifies timeless explanations, mechanisms, historical dates, and casual inquiries.
+ */
+export function evaluateFreshness(
+  rawPrompt: string,
+  history: Array<{ role: string; content: string }> = [],
+  contextualReferents: Record<string, string> = {}
+): FreshnessEvaluation {
+  const promptLower = (rawPrompt || '').trim().toLowerCase();
+  if (!promptLower) {
+    return { requiresFreshness: false, isAmbiguous: false };
+  }
+
+  // ==========================================
+  // 1. NEGATIVE OVERRIDES (Disqualifiers)
+  // ==========================================
+
+  // A. Creative writing requests (fiction, stories, poems, scripts)
+  const isCreativeWriting = /^(?:write|compose|draft|create|tell)\s+(?:a\s+|an\s+)?(?:fictional\s+|sci-fi\s+|bedtime\s+)?(?:story|poem|song|script|play|novel|fable|parable|dialogue|fairy\s+tale)\b/i.test(promptLower);
+  if (isCreativeWriting) {
+    return { requiresFreshness: false, isAmbiguous: false };
+  }
+
+  // B. Mechanical / conceptual / industry explanations ("Explain how box office revenue works")
+  const isMechanismExplanation = (
+    /\b(?:explain\s+how|how\s+does|how\s+do|the\s+mechanism\s+of|the\s+concept\s+of|the\s+theory\s+of)\s+.*\s+(?:works?|functions?|operate[s]?)\b/i.test(promptLower) ||
+    /\bexplain\s+(?:how|why)\s+(?:box\s+office|stock\s+markets?|financial\s+markets?|revenue|weather|inflation)\s+(?:revenue\s+)?(?:works?|is\s+calculated)\b/i.test(promptLower)
+  );
+  if (isMechanismExplanation) {
+    return { requiresFreshness: false, isAmbiguous: false };
+  }
+
+  // C. Timeless scientific / philosophical / academic definitions
+  const isTimelessDefinition = /^(?:what\s+is|what\s+are|define|explain)\s+(?:quantum\s+entanglement|photosynthesis|gravity|general\s+relativity|dark\s+matter|special\s+relativity|string\s+theory|thermodynamics|plate\s+tectonics|mitosis|meiosis|dna|rna|cellular\s+respiration|schrodinger(?:'s)?\s+cat|fermi\s+paradox|newton(?:'s)?\s+laws?|black\s+holes?|evolution)\b/i.test(promptLower);
+  if (isTimelessDefinition) {
+    return { requiresFreshness: false, isAmbiguous: false };
+  }
+
+  // D. Explicit past historical timeframe ("highest-grossing movies of 1997", "in 1994", etc.)
+  const hasHistoricalYear = /\b(?:in|of|during|from)\s+(?:18\d\d|19\d\d|20[01]\d|202[0-4])\b/i.test(promptLower) ||
+    /\b(?:in\s+the\s+(?:19\d0s|2000s|2010s)|during\s+world\s+war|in\s+ancient\s+rome|in\s+the\s+middle\s+ages)\b/i.test(promptLower);
+  const mentionsLiveFreshness = /\b(?:current|latest|today|now|recently|newest|as\s+compared\s+to\s+today)\b/i.test(promptLower);
+  if (hasHistoricalYear && !mentionsLiveFreshness) {
+    return { requiresFreshness: false, isAmbiguous: false };
+  }
+
+  // E. Polysemy of "current" (electric current, ocean current, current directory)
+  const isPolysemicCurrent = (
+    /\b(?:electric(?:al)?|alternating|direct|ocean|gulf\s+stream|rip|air|fluid)\s+current[s]?\b/i.test(promptLower) ||
+    /\bcurrent\s+(?:directory|working\s+directory|branch|process|thread|buffer)\b/i.test(promptLower) ||
+    /\b(?:flow\s+of\s+current|amperage|voltage\s+and\s+current|circuit)\b/i.test(promptLower)
+  );
+  if (isPolysemicCurrent && !/\b(?:share\s+price|stock|box\s+office|news|weather|ceo|president|winner|record)\b/i.test(promptLower)) {
+    return { requiresFreshness: false, isAmbiguous: false };
+  }
+
+  // F. Casual / idiomatic "today"
+  const isCasualToday = /\b(?:today\s+is\s+a\s+great\s+day|live\s+for\s+today|in\s+today's\s+(?:society|world)|quote\s+(?:for|of)\s+today|poem\s+about\s+today)\b/i.test(promptLower);
+  if (isCasualToday) {
+    return { requiresFreshness: false, isAmbiguous: false };
+  }
+
+  // ==========================================
+  // 2. POSITIVE FRESHNESS EVALUATION
+  // ==========================================
+
+  // Helper to extract financial/stock entity from prompt, referents, or history
+  const extractFinancialSubject = (): string | undefined => {
+    // Check prompt for "of <entity>" or "for <entity>"
+    const match = promptLower.match(/\b(?:of|for)\s+([a-zA-Z0-9.\-_$]+(?:\s+[a-zA-Z0-9]+)?)/i);
+    let candidate = match ? match[1].trim() : undefined;
+    if (candidate && /^(?:the\s+company|a\s+share|the\s+stock|the\s+ticker|a\s+stock|all\s+companies)$/i.test(candidate)) {
+      candidate = undefined;
+    }
+    if (candidate) return candidate;
+
+    // Check referents
+    if (contextualReferents['company']) return contextualReferents['company'];
+    if (contextualReferents['subject']) return contextualReferents['subject'];
+    if (contextualReferents['it'] && !contextualReferents['it'].includes('previous')) return contextualReferents['it'];
+
+    // Check recent history
+    for (const h of history.slice(-4).reverse()) {
+      const text = h.content;
+      const knownEntity = text.match(/\b(nvidia|nvda|apple|aapl|microsoft|msft|google|googl|alphabet|amazon|amzn|tesla|tsla|meta|netflix|nflx|amd|intel|intc|tsmc|openai|anthropic|bitcoin|btc|ethereum|eth|solana|sol)\b/i);
+      if (knownEntity) return knownEntity[1];
+    }
+    return undefined;
+  };
+
+  // Helper to extract location from prompt, referents, or history
+  const extractLocationSubject = (): string | undefined => {
+    const match = promptLower.match(/\b(?:in|for|at)\s+([a-zA-Z\s]+?)(?:\s+(?:today|tomorrow|this\s+week|this\s+weekend|now|right\s+now))?$/i) ||
+      promptLower.match(/\b(?:in|for|at)\s+([a-zA-Z\s]+)/i);
+    let candidate = match ? match[1].trim() : undefined;
+    if (candidate && /^(?:the\s+city|my\s+area|here|there|today|now)$/i.test(candidate)) {
+      candidate = undefined;
+    }
+    if (candidate) return candidate;
+
+    if (contextualReferents['location']) return contextualReferents['location'];
+    if (contextualReferents['there']) return contextualReferents['there'];
+
+    for (const h of history.slice(-4).reverse()) {
+      const text = h.content;
+      const knownCity = text.match(/\b(tokyo|paris|london|new\s+york|berlin|san\s+francisco|seattle|chicago|los\s+angeles|sydney|toronto|mumbai|singapore|dubai)\b/i);
+      if (knownCity) return knownCity[1];
+    }
+    return undefined;
+  };
+
+  // 1. Box Office & Theatrical Releases
+  const isBoxOffice = /\b(?:box\s+office|opening\s+weekend\s+gross|worldwide\s+gross|grossing\s+movie[s]?|box\s+office\s+collection)\b/i.test(promptLower);
+  if (isBoxOffice) {
+    return {
+      requiresFreshness: true,
+      isAmbiguous: false,
+      topic: 'BOX_OFFICE',
+      detectedSubject: 'box office collection'
+    };
+  }
+
+  // 2. Financial & Asset Prices
+  const isFinancialPrice = (
+    /\b(?:share\s+price|stock\s+price|stock\s+quote|market\s+cap|trading\s+at|crypto\s+price|price\s+of\s+(?:bitcoin|btc|eth|ethereum|solana)|exchange\s+rate|currency\s+rate)\b/i.test(promptLower) ||
+    (/\b(?:current|latest|today['s]?|real-time)\s+price\b/i.test(promptLower) && !/\b(?:historic|history|all-time)\b/i.test(promptLower))
+  );
+  if (isFinancialPrice) {
+    const subject = extractFinancialSubject();
+    if (!subject) {
+      return {
+        requiresFreshness: true,
+        isAmbiguous: true,
+        topic: 'FINANCIAL',
+        clarificationPrompt: 'Which company or stock ticker symbol would you like to check the current share price for?'
+      };
+    }
+    return {
+      requiresFreshness: true,
+      isAmbiguous: false,
+      topic: 'FINANCIAL',
+      detectedSubject: subject
+    };
+  }
+
+  // 3. News & Current Events
+  const isNews = /\b(?:what\s+happened\s+in\s+.*news|news\s+today|today['s]?\s+news|breaking\s+news|latest\s+news|latest\s+developments\s+in|what\s+happened\s+today|headlines\s+today)\b/i.test(promptLower);
+  if (isNews) {
+    return {
+      requiresFreshness: true,
+      isAmbiguous: false,
+      topic: 'NEWS'
+    };
+  }
+
+  // 4. Sports Results & Live Competitions
+  const isSports = (
+    /\b(?:who\s+won\s+(?:the\s+)?(?:latest|recent|today['s]?|yesterday['s]?)|latest\s+(?:formula\s+1|f1|nba|nfl|premier\s+league|champions\s+league|world\s+series|super\s+bowl|grand\s+slam|ufc|race|match|game))\b/i.test(promptLower) ||
+    /\b(?:latest|current)\s+score\s+of\b/i.test(promptLower) ||
+    /\bwho\s+won\s+the\s+latest\b/i.test(promptLower)
+  );
+  if (isSports) {
+    return {
+      requiresFreshness: true,
+      isAmbiguous: false,
+      topic: 'SPORTS'
+    };
+  }
+
+  // 5. Weather Forecasts
+  const isWeather = /\b(?:weather|forecast|temperature|rain\s+forecast)\b/i.test(promptLower);
+  if (isWeather) {
+    const location = extractLocationSubject();
+    if (!location) {
+      return {
+        requiresFreshness: true,
+        isAmbiguous: true,
+        topic: 'WEATHER',
+        clarificationPrompt: 'Which city or location would you like the weather forecast for?'
+      };
+    }
+    return {
+      requiresFreshness: true,
+      isAmbiguous: false,
+      topic: 'WEATHER',
+      detectedSubject: location
+    };
+  }
+
+  // 6. Recent Releases & Product Versions
+  const isRelease = (
+    /\b(?:latest\s+version\s+of|latest\s+release\s+of|newest\s+version\s+of|newest\s+model\s+released\s+by|latest\s+update\s+to|what\s+is\s+the\s+latest\s+(?:stable\s+)?release)\b/i.test(promptLower) ||
+    /\b(?:latest|newest|recent)\s+(?:[a-zA-Z0-9_\-]+\s+)?(?:releases?|versions?|updates?|models?)\b/i.test(promptLower)
+  );
+  if (isRelease) {
+    return {
+      requiresFreshness: true,
+      isAmbiguous: false,
+      topic: 'RELEASE'
+    };
+  }
+
+  // 7. Present-Day Facts That Change Over Time
+  const isFactualUpdate = /\b(?:current\s+(?:ceo|cto|cfo|president|prime\s+minister|chancellor|leader|pope|governor|mayor)\s+of|who\s+is\s+currently\s+(?:the\s+)?(?:ceo|leader|president|prime\s+minister|chancellor)|who\s+currently\s+leads|current\s+world\s+record\s+for|current\s+status\s+of)\b/i.test(promptLower);
+  if (isFactualUpdate) {
+    return {
+      requiresFreshness: true,
+      isAmbiguous: false,
+      topic: 'FACTUAL_UPDATE'
+    };
+  }
+
+  // 8. Explicit Research / Citations / Comparative Study / Source Investigation
+  const isExplicitResearch = (
+    /\b(?:compare\s+the\s+latest\s+.*with\s+citations|research\s+this\s+and\s+summarize|find\s+sources\s+and\s+compare|compare\s+(?:the\s+)?sources|research\s+the\s+latest|investigate.*cite\s+sources)\b/i.test(promptLower) ||
+    /\b(?:latest|recent)\s+(?:information|updates?|developments?|news|reports?|figures?|numbers?|data|statistics|events?)\s+(?:about|on|regarding|in)\b/i.test(promptLower) ||
+    /\bwhat\s+changed\s+recently\b/i.test(promptLower)
+  );
+  if (isExplicitResearch) {
+    return {
+      requiresFreshness: true,
+      isAmbiguous: false,
+      topic: 'RESEARCH'
+    };
+  }
+
+  // 9. Temporal Modifiers on Dynamic Topics
+  const hasTemporalKeyword = /\b(?:currently|current|latest|recent|recently|today|as\s+of\s+now|right\s+now|this\s+week|this\s+month|newest)\b/i.test(promptLower);
+  const isDynamicTopic = /\b(?:inflation\s+rate|interest\s+rate|unemployment\s+rate|gas\s+price|ticket\s+price|population\s+of|election\s+results?|layoffs?|downsizing|strikes?|protests?|outages?|mergers?|acquisitions?|earnings|bankruptcies?)\b/i.test(promptLower);
+  if (hasTemporalKeyword && isDynamicTopic) {
+    return {
+      requiresFreshness: true,
+      isAmbiguous: false,
+      topic: 'GENERAL_FRESHNESS'
+    };
+  }
+
+  return { requiresFreshness: false, isAmbiguous: false };
 }

@@ -70,6 +70,7 @@ export const SemanticIntentAnalysisSchema = z.object({
   secondaryIntents: z.array(IntentTaxonomySchema).default([]),
   isExplanationOnly: z.boolean().default(false),     // e.g. "Explain how to build X" -> true
   isExecutionRequested: z.boolean().default(false),  // e.g. "Build X and show me" -> true
+  isFreshnessRequired: z.boolean().default(false),   // e.g. Live market/news/releases -> true
   contextualReferents: z.record(z.string(), z.string()).default({}), // e.g. { "it": "the auth module" }
   isMultiPart: z.boolean().default(false),
   subTasks: z.array(z.string()).default([]),

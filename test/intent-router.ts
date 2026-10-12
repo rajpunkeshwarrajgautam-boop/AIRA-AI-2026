@@ -133,6 +133,83 @@ async function runTests() {
     console.log(`PASS: "${prompt}" -> TOOL_ACTION (TOOL_PIPELINE, READ, approval=false)`);
   }
 
+  // Test 10: Automatic Research Routing for Current-Information Prompts (Freshness Detection without advisoryIntent)
+  console.log('\n[TEST 10] Automatic routing of time-sensitive queries to RESEARCH (RESEARCH_SYNTHESIS)');
+  const freshnessPrompts = [
+    'What is the current box office collection for latest movie?',
+    'What is the current box office collection for the latest movie?',
+    'What happened in AI news today?',
+    'What is the current share price of NVIDIA?',
+    'Who won the latest Formula 1 race?',
+    'What is the latest version of Next.js?',
+    'Compare the latest AI models with citations.'
+  ];
+
+  for (const prompt of freshnessPrompts) {
+    const res = await router.route({
+      prompt,
+      principal: testPrincipal
+    });
+    assert.strictEqual(res.intent, 'RESEARCH', `Prompt "${prompt}" must route to RESEARCH, got ${res.intent}`);
+    assert.strictEqual(res.executionTarget, 'RESEARCH_SYNTHESIS', `Prompt "${prompt}" executionTarget must be RESEARCH_SYNTHESIS`);
+    assert.strictEqual(res.sideEffectLevel, 'READ', `Prompt "${prompt}" sideEffectLevel must be READ, got ${res.sideEffectLevel}`);
+    assert.strictEqual(res.approvalRequired, false, `Prompt "${prompt}" must not require approval`);
+    assert.strictEqual(res.metadata?.isFreshnessRequired, true, `Prompt "${prompt}" must have isFreshnessRequired=true`);
+    console.log(`PASS: "${prompt}" -> RESEARCH (RESEARCH_SYNTHESIS, READ, approval=false)`);
+  }
+
+  // Multi-turn contextual resolution
+  console.log('\n[TEST 10B] Multi-turn contextual resolution for current information');
+  const multiTurnRes = await router.route({
+    prompt: 'What is its current share price?',
+    conversationHistory: [
+      { role: 'user', content: 'Tell me about NVIDIA and their GPU lineup.' },
+      { role: 'assistant', content: 'NVIDIA manufactures leading GPUs for AI.' }
+    ],
+    principal: testPrincipal
+  });
+  assert.strictEqual(multiTurnRes.intent, 'RESEARCH');
+  assert.strictEqual(multiTurnRes.executionTarget, 'RESEARCH_SYNTHESIS');
+  assert.strictEqual(multiTurnRes.metadata?.isFreshnessRequired, true);
+  console.log('PASS: Resolved "its" to NVIDIA and routed to RESEARCH');
+
+  // Test 11: Timeless Explanations, Mechanisms, Historical Queries, and Polysemy Route to ANSWER
+  console.log('\n[TEST 11] Timeless questions, mechanisms, and historical queries route to ANSWER');
+  const timelessPrompts = [
+    'What is quantum entanglement?',
+    'Explain how box office revenue works.',
+    'What were the highest-grossing movies of 1997?',
+    'Write a fictional story about a movie premiere.',
+    'What is an electric current?',
+    'Explain how electric current creates a magnetic field.',
+    'What is the current directory in Linux?'
+  ];
+
+  for (const prompt of timelessPrompts) {
+    const res = await router.route({
+      prompt,
+      principal: testPrincipal
+    });
+    assert.strictEqual(res.intent, 'ANSWER', `Prompt "${prompt}" must route to ANSWER, got ${res.intent}`);
+    assert.strictEqual(res.executionTarget, 'CHAT_STREAM', `Prompt "${prompt}" executionTarget must be CHAT_STREAM`);
+    assert.strictEqual(res.sideEffectLevel, 'NONE', `Prompt "${prompt}" sideEffectLevel must be NONE, got ${res.sideEffectLevel}`);
+    assert.strictEqual(res.approvalRequired, false, `Prompt "${prompt}" must not require approval`);
+    console.log(`PASS: "${prompt}" -> ANSWER (CHAT_STREAM, NONE, approval=false)`);
+  }
+
+  // Test 12: Ambiguous Current-Information Prompts Demand Clarification
+  console.log('\n[TEST 12] Ambiguous current-information prompts route with CLARIFY_AMBIGUOUS');
+  const ambiguousRes = await router.route({
+    prompt: 'What is the current share price?',
+    principal: testPrincipal
+  });
+  assert.strictEqual(ambiguousRes.intent, 'ANSWER');
+  assert.strictEqual(ambiguousRes.executionTarget, 'CHAT_STREAM');
+  assert.strictEqual(ambiguousRes.metadata?.reasoningStrategy, 'CLARIFY_AMBIGUOUS');
+  assert.strictEqual(ambiguousRes.metadata?.isFreshnessRequired, true);
+  assert.ok(ambiguousRes.metadata?.clarificationPrompt, 'Must supply clarificationPrompt');
+  console.log(`PASS: "What is the current share price?" -> CLARIFY_AMBIGUOUS with: "${ambiguousRes.metadata?.clarificationPrompt}"`);
+
   console.log('\n=== ALL ROUTER & POLICY TESTS PASSED ===');
 }
 
@@ -140,3 +217,4 @@ runTests().catch(err => {
   console.error('FAIL:', err);
   process.exit(1);
 });
+
