@@ -123,14 +123,48 @@ function sanitizeHtml(html: string): string {
   return doc.body.innerHTML;
 }
 
-export function sanitizeCitationMarkers(text: string): string {
+export function sanitizeCitationMarkers(text: string, validSourceCount?: number): string {
   if (!text) return '';
-  return text
-    .replace(/\[(?:Source\s*)?(\d+)†[^\]]*\]/gi, '[Source $1]')
-    .replace(/【(\d+)(?::\d+)?†[^】]*】/g, '[Source $1]')
+
+  const codeBlocks: string[] = [];
+  const placeholder = '___CODE_MD_HOLD_' + Math.random().toString(36).substring(2, 8) + '_';
+
+  let protectedText = text.replace(/(```[\s\S]*?```)/g, (match) => {
+    const idx = codeBlocks.length;
+    codeBlocks.push(match);
+    return `${placeholder}${idx}___`;
+  });
+
+  protectedText = protectedText.replace(/(`[^`\n]+`)/g, (match) => {
+    const idx = codeBlocks.length;
+    codeBlocks.push(match);
+    return `${placeholder}${idx}___`;
+  });
+
+  const formatSourceRef = (_fullMatch: string, numStr: string): string => {
+    const num = parseInt(numStr, 10);
+    if (isNaN(num) || num <= 0) return '';
+    if (validSourceCount !== undefined) {
+      if (num >= 1 && num <= validSourceCount) {
+        return `[Source ${num}]`;
+      }
+      return '';
+    }
+    return `[Source ${num}]`;
+  };
+
+  protectedText = protectedText
+    .replace(/\[(?:Source\s*)?(\d+)†[^\]]*\]/gi, formatSourceRef)
+    .replace(/【(\d+)(?::\d+)?†[^】]*】/g, formatSourceRef)
+    .replace(/\[(?:Source\s*)?-\d+†[^\]]*\]/gi, '')
     .replace(/\[†[^\]]*\]/g, '')
     .replace(/†L\d+(?:-L\d+)?/g, '')
     .replace(/†/g, '');
+
+  return protectedText.replace(new RegExp(`${placeholder}(\\d+)___`, 'g'), (_, idxStr) => {
+    const idx = parseInt(idxStr, 10);
+    return codeBlocks[idx] ?? '';
+  });
 }
 
 export function renderMarkdownToHtml(markdown: string): string {

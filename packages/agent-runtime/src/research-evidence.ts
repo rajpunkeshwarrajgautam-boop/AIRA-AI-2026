@@ -24,22 +24,61 @@ export function verifiedWebCitations(citations: Citation[]): Citation[] {
 
 /**
  * Strips or converts raw search-engine / model chunk citation markers.
- * Converts [5†L9-L13] or [1†source] or 【4:1†source】 into [Source 5], [Source 1], [Source 4].
- * Removes stray daggers, line ranges, or internal chunk references so they never leak into UI.
+ * Converts [5†L9-L13] or [1†source] or 【4:1†source】 into [Source 5], [Source 1], [Source 4]
+ * ONLY if the index maps to an actual retrieved source (1 <= N <= validSourceCount).
+ * Unsupported or out-of-bounds indices are safely neutralized.
+ * Code blocks and inline code are protected and preserved verbatim.
  */
-export function sanitizeCitationMarkers(text: string): string {
+export function sanitizeCitationMarkers(text: string, validSourceCount?: number): string {
   if (!text) return '';
-  return text
-    // Handle standard bracketed daggers: [5†L9-L13], [1†source], [2†L1-L4], [Source 5†L9-L13]
-    .replace(/\[(?:Source\s*)?(\d+)†[^\]]*\]/gi, '[Source $1]')
-    // Handle Chinese / special bracketed daggers: 【5:1†source】, 【5†source】
-    .replace(/【(\d+)(?::\d+)?†[^】]*】/g, '[Source $1]')
-    // Handle bracketed daggers with no source number: [†L1-L4] -> remove
+
+  // 1. Protect fenced code blocks (```...```) and inline code (`...`)
+  const codeBlocks: string[] = [];
+  const placeholder = '___CODE_BLOCK_HOLD_' + Math.random().toString(36).substring(2, 8) + '_';
+
+  let protectedText = text.replace(/(```[\s\S]*?```)/g, (match) => {
+    const idx = codeBlocks.length;
+    codeBlocks.push(match);
+    return `${placeholder}${idx}___`;
+  });
+
+  protectedText = protectedText.replace(/(`[^`\n]+`)/g, (match) => {
+    const idx = codeBlocks.length;
+    codeBlocks.push(match);
+    return `${placeholder}${idx}___`;
+  });
+
+  const formatSourceRef = (_fullMatch: string, numStr: string): string => {
+    const num = parseInt(numStr, 10);
+    if (isNaN(num) || num <= 0) return '';
+    if (validSourceCount !== undefined) {
+      if (num >= 1 && num <= validSourceCount) {
+        return `[Source ${num}]`;
+      }
+      return ''; // Neutralize unsupported index when count is provided
+    }
+    return `[Source ${num}]`;
+  };
+
+  protectedText = protectedText
+    // Standard bracketed daggers: [5†L9-L13], [1†source], [2†L1-L4], [Source 5†L9-L13]
+    .replace(/\[(?:Source\s*)?(\d+)†[^\]]*\]/gi, formatSourceRef)
+    // Chinese / special bracketed daggers: 【5:1†source】, 【5†source】
+    .replace(/【(\d+)(?::\d+)?†[^】]*】/g, formatSourceRef)
+    // Negative or invalid indices
+    .replace(/\[(?:Source\s*)?-\d+†[^\]]*\]/gi, '')
+    // Bracketed daggers with no source number: [†L1-L4] -> remove
     .replace(/\[†[^\]]*\]/g, '')
-    // Handle stray raw daggers with line ranges: †L9-L13, †L1-L4
+    // Stray raw daggers with line ranges: †L9-L13, †L1-L4
     .replace(/†L\d+(?:-L\d+)?/g, '')
     // Remove isolated dagger characters
     .replace(/†/g, '');
+
+  // 2. Restore protected code blocks
+  return protectedText.replace(new RegExp(`${placeholder}(\\d+)___`, 'g'), (_, idxStr) => {
+    const idx = parseInt(idxStr, 10);
+    return codeBlocks[idx] ?? '';
+  });
 }
 
 /**
@@ -155,16 +194,26 @@ export function buildDomainResearchGuidelines(topic?: ResearchTopic | string): s
   if (t === 'FINANCIAL') {
     return [
       '--- FINANCIAL QUOTE RULES ---',
-      '1. Quote Session Alignment: Explicitly identify the quote type for each value cited:',
-      '   - Regular Session Last Trade (market hours: 9:30 AM – 4:00 PM ET)',
-      '   - Premarket Quote (e.g., 4:00 AM – 9:30 AM ET)',
-      '   - After-Hours Quote (e.g., 4:00 PM – 8:00 PM ET)',
-      '   - Previous Close',
-      '   - Delayed Quote (and delay duration, e.g. 15-min delayed)',
-      '2. Mandatory Timestamps: Disclose the specific quote timestamp, exchange (e.g., NASDAQ, NYSE), and time zone (e.g., EDT/EST) whenever provided in the sources.',
-      '3. No Synthetic Blending: NEVER blend, average, or synthesize differently timed quotes into an unsupported "consensus" price. If one source reports a premarket trade of $229.69 and another reports previous close of $229.30, report each value separately with its session label and timestamp.',
-      '4. Conflict Disclosure: If contemporaneously inspected sources differ (e.g. differing premarket ticks), state the exact numbers and their respective sources rather than picking one arbitrarily.',
-      '5. Explicit Data Limits: If search excerpts cannot verify an actual current trade or quote for the exact moment of inquiry, state that limitation clearly. NEVER invent prices, tickers, or timestamps.'
+      '1. Quote Session Alignment (America/New_York / Eastern Time):',
+      '   - Regular Session: 9:30 AM to 4:00 PM Eastern. A quote timestamped at 9:30 AM Eastern is the Regular Session Opening trade. NEVER label, describe, or call a 9:30 AM quote premarket without authoritative evidence of a special delayed opening.',
+      '   - Premarket Session: 4:00 AM to 9:30 AM Eastern (strictly before 9:30 AM Eastern).',
+      '   - After-Hours Session: 4:00 PM to 8:00 PM Eastern.',
+      '   - Previous Close: Final closing price of the prior regular trading session.',
+      '   - Delayed Quote: Any quote subject to exchange dissemination delay (e.g., 15-min delayed).',
+      '2. Timezone Precision (EDT vs EST):',
+      '   - U.S. Eastern markets observe Eastern Daylight Time (EDT, UTC-4) during Daylight Saving Time (second Sunday of March through first Sunday of November, including October).',
+      '   - Eastern Standard Time (EST, UTC-5) is observed ONLY in winter (first Sunday of November through second Sunday of March).',
+      '   - For autumn dates (such as October), cite EDT or Eastern Time (ET). NEVER label October daylight quotes as EST.',
+      '3. Mandatory Timestamps & Verified Exchange Metadata:',
+      '   - Disclose the specific quote timestamp (date, time, time zone) whenever provided in source excerpts.',
+      '   - If a source excerpt lacks a specific quote trade timestamp, explicitly state: "Specific quote timestamp was not provided by the source excerpt." Refuse to describe such quotes as live or real-time.',
+      '   - Attribute exchanges (e.g., NASDAQ, NYSE) ONLY when explicitly reported by the source. NEVER assume an exchange or label an exchange as "assumed" in evidence summaries or tables.',
+      '4. No Synthetic Blending:',
+      '   - NEVER blend, average, or synthesize differently timed quotes or different sessions into an unsupported "consensus" price.',
+      '   - If multiple sources report quotes from different sessions (e.g., premarket vs previous close), report each figure separately with its explicit session label, exchange, and timestamp.',
+      '5. Conflict Disclosure & Data Limits:',
+      '   - If contemporaneous sources report differing quotes for the same session, state both figures with their respective sources.',
+      '   - If search excerpts cannot verify an actual trade for the requested moment, state that limitation clearly. NEVER invent prices, tickers, or timestamps.'
     ].join('\n');
   }
 
@@ -172,13 +221,16 @@ export function buildDomainResearchGuidelines(topic?: ResearchTopic | string): s
     return [
       '--- WEATHER RESEARCH RULES ---',
       '1. Strict Category Distinction: Strictly separate:',
-      '   - Current Observed Conditions (real-time temperature, sky, humidity, wind)',
-      '   - Today\'s Dated Forecast (high/low and conditions for the requested date)',
+      '   - Current Observed Conditions (real-time temperature, sky, humidity, wind, observation timestamp)',
+      '   - Today\'s Dated Forecast (high/low and conditions for the requested calendar date)',
       '   - Hourly Forecast',
       '   - Upcoming Multi-Day Outlook (e.g., next 5–7 days)',
-      '   - Seasonal / Historical Climate Averages (e.g. typical monthly averages)',
-      '2. Target Location & Local Time: Explicitly state the target location and local date/time zone.',
-      '3. No Climate Extrapolation: For time-sensitive weather inquiries ("today", "current"), NEVER infer, extrapolate, or estimate today\'s weather or temperatures from monthly climate averages or future dates (e.g., do NOT use general October climate or upcoming Oct 13–18 forecasts to deduce today\'s weather).',
+      '   - Seasonal / Historical Climate Averages (e.g. typical monthly averages, tourism guides)',
+      '2. Target Location & Local IANA Time Zone:',
+      '   - Explicitly identify the target location and local date/time in the target location\'s IANA time zone (e.g., Asia/Tokyo for Tokyo).',
+      '3. No Historical or Monthly Climate Extrapolation:',
+      '   - For time-sensitive weather inquiries ("today", "current"), NEVER infer, extrapolate, or estimate today\'s weather or temperatures from monthly climate averages or future dates.',
+      '   - Reject seasonal tourism guides (e.g. "What to wear in Tokyo in December") as evidence for today\'s observed weather.',
       '4. Truthful Limitation: If retrieved search results only provide monthly climate averages, tourism guides, or future dates without an authoritative date-specific observation or forecast for today, explicitly state: "Authoritative date-specific weather observations or forecasts for today could not be verified from the retrieved sources." NEVER invent a forecast.'
     ].join('\n');
   }
@@ -187,17 +239,109 @@ export function buildDomainResearchGuidelines(topic?: ResearchTopic | string): s
     return [
       '--- BOX OFFICE & TRACKER RULES ---',
       '1. Explicit Tracker Attribution: Attribute all domestic, international, and worldwide grosses to their specific reporting tracker (e.g., Box Office Mojo, The Numbers).',
-      '2. No Cross-Tracker Consensus: Different trackers often calculate international and worldwide totals differently (e.g., Box Office Mojo reporting $1,485,999,890 vs The Numbers reporting $1,490,386,712). NEVER blend or average figures from different trackers into a fabricated consensus. Report the figures per tracker.',
+      '2. No Cross-Tracker Consensus: Trackers often calculate international and worldwide totals differently due to distinct reporting schedules and distributor feeds. NEVER blend or average figures from different trackers into a fabricated consensus. Report the figures per tracker.',
       '3. Date Distinction: Strictly separate:',
       '   - Source Retrieval Date (when search was executed)',
       '   - Source Publication Date (when the article/page was published)',
       '   - Reporting Cutoff / As-Of Date (the exact date through which ticket sales are counted by the tracker)',
       '4. Cutoff Verification: Never claim a cumulative gross is "through [Requested Date]" unless the cited source explicitly verifies that as-of date. If the source only reports through a prior weekend or release week, state that exact cutoff date.',
-      '5. Numerical Accuracy: Retain exact reported digits without unprompted rounding.'
+      '5. Numerical Accuracy: Retain exact reported digits without unprompted rounding.',
+      '6. Evidence Sufficiency: If retrieved sources only provide domestic daily grosses or regional country figures without the requested worldwide summary totals, explicitly state that worldwide summary figures were not present in the retrieved excerpts.'
     ].join('\n');
   }
 
   return '';
+}
+
+/**
+ * Filters out seasonal/monthly tourism guides and ranks operational forecast providers at the top.
+ */
+export function rankAndFilterWeatherCitations(citations: Citation[], queryLocation?: string): Citation[] {
+  const verified = verifiedWebCitations(citations);
+  if (!verified.length) return [];
+
+  const seasonalPatterns = /\b(tourism|travel|best\s+time\s+to\s+visit|monthly\s+weather|climate-data|climate\s+guide|what\s+to\s+wear|in\s+(?:january|february|march|april|may|june|july|august|september|october|november|december))\b/i;
+  const operationalDomains = /(accuweather\.com|weather\.com|wunderground\.com|jma\.go\.jp|tenki\.jp|noaa\.gov|weather-forecast\.com|bbc\.com\/weather)/i;
+  const operationalKeywords = /\b(current\s+conditions|forecast|today|hourly|radar|temperature|humidity|high|low|precip)\b/i;
+
+  const scored = verified.map(citation => {
+    let score = 50;
+    const text = `${citation.sourceTitle} ${citation.snippet} ${citation.uri}`.toLowerCase();
+
+    if (operationalDomains.test(citation.uri)) score += 40;
+    if (operationalKeywords.test(text)) score += 20;
+
+    // Penalize seasonal tourism/climate guides if not on an operational domain
+    if (seasonalPatterns.test(text) && !operationalDomains.test(citation.uri)) {
+      score -= 50;
+    }
+
+    if (queryLocation && text.includes(queryLocation.toLowerCase())) {
+      score += 15;
+    }
+
+    return { citation, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+
+  const hasOperational = scored.some(s => s.score >= 70);
+  const filtered = hasOperational
+    ? scored.filter(s => s.score >= 40).map(s => s.citation)
+    : scored.map(s => s.citation);
+
+  return filtered.length > 0 ? filtered : verified;
+}
+
+export interface EvidenceSufficiency {
+  isSufficient: boolean;
+  missingDimension?: 'WORLDWIDE_TOTAL' | 'CURRENT_WEATHER' | 'FINANCIAL_QUOTE';
+}
+
+/**
+ * Determines whether retrieved citations contain sufficient data for explicit numerical/factual inquiries.
+ */
+export function evaluateEvidenceSufficiency(
+  prompt: string,
+  citations: Citation[]
+): EvidenceSufficiency {
+  const p = prompt.toLowerCase();
+  const allText = citations.map(c => `${c.sourceTitle} ${c.snippet} ${c.uri}`).join(' ').toLowerCase();
+
+  // Box Office Worldwide total requests
+  if (/\b(?:worldwide|global|all-time)\b/i.test(p) && /\b(?:box\s*office|gross|collection|mojo|numbers)\b/i.test(p)) {
+    const hasWorldwideEvidence = /\b(?:worldwide|global|all-time)\s*(?:gross|total|collection|\$|cume)?\s*:?\s*\$?\d+/i.test(allText) ||
+      (allText.includes('boxofficemojo.com/title/') && allText.includes('worldwide')) ||
+      (allText.includes('the-numbers.com/movie/') && allText.includes('worldwide'));
+
+    if (!hasWorldwideEvidence) {
+      return { isSufficient: false, missingDimension: 'WORLDWIDE_TOTAL' };
+    }
+  }
+
+  return { isSufficient: true };
+}
+
+/**
+ * Builds a precision targeted query when initial search lacks the required dimension.
+ */
+export function buildTargetedSearchQuery(
+  prompt: string,
+  topic: ResearchTopic | string,
+  missingDimension?: string
+): string {
+  const cleanedPrompt = prompt
+    .replace(/^(?:what\s+is|what\s+are|tell\s+me|find|how\s+much\s+is)\s+/i, '')
+    .trim();
+
+  if (topic === 'BOX_OFFICE' || missingDimension === 'WORLDWIDE_TOTAL') {
+    const match = cleanedPrompt.match(/^(?:the\s+)?worldwide\s+gross\s+of\s+(.+?)(?:\s+according|\s+through|\s*\?|$)/i) ||
+      cleanedPrompt.match(/^(.+?)(?:\s+worldwide|\s+box\s+office)/i);
+    const title = match ? match[1].trim() : cleanedPrompt;
+    return `${title} worldwide gross Box Office Mojo The Numbers site:boxofficemojo.com OR site:the-numbers.com`;
+  }
+
+  return prompt;
 }
 
 export function buildResearchEvidenceContext(citations: Citation[], topic?: ResearchTopic | string): string {

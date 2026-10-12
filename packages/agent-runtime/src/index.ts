@@ -495,7 +495,9 @@ export class AgentRuntime extends EventEmitter {
 
         const researchResult = await this.researchService.executeResearch({
           prompt: researchPrompt,
-          runId
+          runId,
+          topic,
+          location: topic === 'WEATHER' ? (detectedSubject || undefined) : undefined
         });
 
         if (researchResult.freshnessRequired && !researchResult.providerReady) {
@@ -1011,7 +1013,7 @@ Provider Capabilities:
         const answer = (!synthesized || isResearchToolCallDump(synthesized))
           ? renderGroundedResearchFallback(liveEvidence)
           : synthesized;
-        const sanitizedAnswer = sanitizeCitationMarkers(answer);
+        const sanitizedAnswer = sanitizeCitationMarkers(answer, liveEvidence.length);
         const finalText = sanitizedAnswer + buildResearchSourcesAppendix(liveEvidence);
         run.content += finalText;
         await this.runRepo.saveRun(run);
@@ -1024,7 +1026,7 @@ Provider Capabilities:
 
     // Checkpoint 6: Artifacts & Completion
     if (run.executionCheckpoint === 'FINALIZING') {
-      run.content = sanitizeCitationMarkers(run.content);
+      run.content = sanitizeCitationMarkers(run.content, run.citations?.length || 5);
       if (run.content.includes('```')) {
         const artId = `art_${Date.now()}`;
         const artifact: Artifact = {
