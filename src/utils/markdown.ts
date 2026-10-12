@@ -161,15 +161,25 @@ export function sanitizeCitationMarkers(text: string, validSourceCount?: number)
     .replace(/†L\d+(?:-L\d+)?/g, '')
     .replace(/†/g, '');
 
+  if (validSourceCount !== undefined) {
+    protectedText = protectedText.replace(/\[Source\s+(\d+)\]/gi, (match, numStr) => {
+      const num = parseInt(numStr, 10);
+      if (isNaN(num) || num <= 0 || num > validSourceCount) {
+        return '';
+      }
+      return match;
+    });
+  }
+
   return protectedText.replace(new RegExp(`${placeholder}(\\d+)___`, 'g'), (_, idxStr) => {
     const idx = parseInt(idxStr, 10);
     return codeBlocks[idx] ?? '';
   });
 }
 
-export function renderMarkdownToHtml(markdown: string): string {
+export function renderMarkdownToHtml(markdown: string, validSourceCount?: number): string {
   try {
-    const cleaned = sanitizeCitationMarkers(markdown);
+    const cleaned = sanitizeCitationMarkers(markdown, validSourceCount);
     return sanitizeHtml(marked.parse(cleaned) as string);
   } catch (e) {
     console.error('Markdown parse error', e);

@@ -74,6 +74,17 @@ export function sanitizeCitationMarkers(text: string, validSourceCount?: number)
     // Remove isolated dagger characters
     .replace(/†/g, '');
 
+  // When validSourceCount is provided, also neutralize existing [Source N] that exceed validSourceCount
+  if (validSourceCount !== undefined) {
+    protectedText = protectedText.replace(/\[Source\s+(\d+)\]/gi, (match, numStr) => {
+      const num = parseInt(numStr, 10);
+      if (isNaN(num) || num <= 0 || num > validSourceCount) {
+        return '';
+      }
+      return match;
+    });
+  }
+
   // 2. Restore protected code blocks
   return protectedText.replace(new RegExp(`${placeholder}(\\d+)___`, 'g'), (_, idxStr) => {
     const idx = parseInt(idxStr, 10);
@@ -264,20 +275,28 @@ export function rankAndFilterWeatherCitations(citations: Citation[], queryLocati
   const operationalDomains = /(accuweather\.com|weather\.com|wunderground\.com|jma\.go\.jp|tenki\.jp|noaa\.gov|weather-forecast\.com|bbc\.com\/weather)/i;
   const operationalKeywords = /\b(current\s+conditions|forecast|today|hourly|radar|temperature|humidity|high|low|precip)\b/i;
 
+  const loc = queryLocation?.trim().toLowerCase();
+
   const scored = verified.map(citation => {
     let score = 50;
     const text = `${citation.sourceTitle} ${citation.snippet} ${citation.uri}`.toLowerCase();
+    const isSeasonal = seasonalPatterns.test(text);
 
-    if (operationalDomains.test(citation.uri)) score += 40;
-    if (operationalKeywords.test(text)) score += 20;
+    if (operationalDomains.test(citation.uri) && !isSeasonal) score += 40;
+    if (operationalKeywords.test(text) && !isSeasonal) score += 20;
 
-    // Penalize seasonal tourism/climate guides if not on an operational domain
-    if (seasonalPatterns.test(text) && !operationalDomains.test(citation.uri)) {
+    // Penalize seasonal tourism/climate guides REGARDLESS of domain (even on operational domains)
+    if (isSeasonal) {
       score -= 50;
     }
 
-    if (queryLocation && text.includes(queryLocation.toLowerCase())) {
-      score += 15;
+    if (loc) {
+      if (text.includes(loc)) {
+        score += 25;
+      } else {
+        // Citation lacks requested location
+        score -= 35;
+      }
     }
 
     return { citation, score };
@@ -306,15 +325,49 @@ export function evaluateEvidenceSufficiency(
   citations: Citation[]
 ): EvidenceSufficiency {
   const p = prompt.toLowerCase();
-  const allText = citations.map(c => `${c.sourceTitle} ${c.snippet} ${c.uri}`).join(' ').toLowerCase();
+
+  if (!citations.length) {
+    if (/\b(?:box\s*office|gross|collection|mojo|numbers|weather|forecast|share\s*price|stock)\b/i.test(p)) {
+      const missingDimension = /\b(?:worldwide|global|all-time)\b/i.test(p) ? 'WORLDWIDE_TOTAL' :
+        /\b(?:weather|forecast)\b/i.test(p) ? 'CURRENT_WEATHER' : 'FINANCIAL_QUOTE';
+      return { isSufficient: false, missingDimension };
+    }
+    return { isSufficient: false };
+  }
 
   // Box Office Worldwide total requests
   if (/\b(?:worldwide|global|all-time)\b/i.test(p) && /\b(?:box\s*office|gross|collection|mojo|numbers)\b/i.test(p)) {
-    const hasWorldwideEvidence = /\b(?:worldwide|global|all-time)\s*(?:gross|total|collection|\$|cume)?\s*:?\s*\$?\d+/i.test(allText) ||
-      (allText.includes('boxofficemojo.com/title/') && allText.includes('worldwide')) ||
-      (allText.includes('the-numbers.com/movie/') && allText.includes('worldwide'));
+    // Regex requiring actual numerical dollar figures or amounts attached to worldwide / global / total
+    const numericalWorldwidePattern = /\b(?:worldwide|global|all-time)\s*(?:gross|total|collection|box\s*office|\$|cume)?\s*:?\s*\$?\d[\d,.]*(?:\s*(?:billion|million|b|m))?/i;
+    const reversedNumericalWorldwidePattern = /\$(?:\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?\s*(?:billion|million))\s*(?:worldwide|globally)/i;
 
-    if (!hasWorldwideEvidence) {
+    const asksMojo = /\b(?:box\s*office\s*mojo|mojo)\b/i.test(p);
+    const asksNumbers = /\b(?:the\s*numbers|numbers)\b/i.test(p);
+
+    const hasNumericalWorldwide = (text: string) =>
+      numericalWorldwidePattern.test(text) || reversedNumericalWorldwidePattern.test(text);
+
+    // If both trackers are explicitly requested, BOTH must have numerical worldwide totals
+    if (asksMojo && asksNumbers) {
+      const mojoText = citations
+        .filter(c => /boxofficemojo\.com/i.test(c.uri) || /box\s*office\s*mojo/i.test(c.sourceTitle))
+        .map(c => `${c.sourceTitle} ${c.snippet}`).join(' ');
+      const numbersText = citations
+        .filter(c => /the-numbers\.com/i.test(c.uri) || /the\s*numbers/i.test(c.sourceTitle))
+        .map(c => `${c.sourceTitle} ${c.snippet}`).join(' ');
+
+      const mojoHasWorldwide = hasNumericalWorldwide(mojoText);
+      const numbersHasWorldwide = hasNumericalWorldwide(numbersText);
+
+      if (!mojoHasWorldwide || !numbersHasWorldwide) {
+        return { isSufficient: false, missingDimension: 'WORLDWIDE_TOTAL' };
+      }
+      return { isSufficient: true };
+    }
+
+    // Single tracker or general query
+    const allText = citations.map(c => `${c.sourceTitle} ${c.snippet}`).join(' ');
+    if (!hasNumericalWorldwide(allText)) {
       return { isSufficient: false, missingDimension: 'WORLDWIDE_TOTAL' };
     }
   }
@@ -342,6 +395,75 @@ export function buildTargetedSearchQuery(
   }
 
   return prompt;
+}
+
+export interface TradingSessionInfo {
+  session: 'PREMARKET' | 'REGULAR_SESSION_OPEN' | 'REGULAR_SESSION' | 'AFTER_HOURS' | 'CLOSED';
+  timezone: 'EDT' | 'EST';
+  isPremarket: boolean;
+  isRegularSession: boolean;
+  isAfterHours: boolean;
+  isClosed: boolean;
+}
+
+/**
+ * Returns whether America/New_York is in Daylight Saving Time (EDT, UTC-4) for the given date.
+ */
+export function isEasternDaylightTime(date: Date): boolean {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    timeZoneName: 'short'
+  });
+  const parts = formatter.formatToParts(date);
+  const tzName = parts.find(p => p.type === 'timeZoneName')?.value;
+  return tzName === 'EDT' || tzName === 'GMT-4';
+}
+
+/**
+ * Resolves trading session for a given timestamp in America/New_York.
+ * Regular Session: 9:30 AM to 4:00 PM Eastern.
+ * 9:30 AM Eastern is the Regular Session Opening trade, NEVER premarket.
+ * Premarket: 4:00 AM to 9:30 AM Eastern (strictly before 9:30 AM).
+ * After-Hours: 4:00 PM to 8:00 PM Eastern.
+ */
+export function resolveTradingSession(date: Date): TradingSessionInfo {
+  const isEDT = isEasternDaylightTime(date);
+  const timezone: 'EDT' | 'EST' = isEDT ? 'EDT' : 'EST';
+
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour12: false,
+    hour: 'numeric',
+    minute: 'numeric',
+    second: 'numeric'
+  });
+  const parts = formatter.formatToParts(date);
+  const hour = parseInt(parts.find(p => p.type === 'hour')?.value || '0', 10);
+  const minute = parseInt(parts.find(p => p.type === 'minute')?.value || '0', 10);
+  const second = parseInt(parts.find(p => p.type === 'second')?.value || '0', 10);
+  const totalMinutes = hour * 60 + minute;
+
+  let session: TradingSessionInfo['session'] = 'CLOSED';
+  if (totalMinutes >= 240 && totalMinutes < 570) {
+    session = 'PREMARKET';
+  } else if (totalMinutes === 570 && second === 0) {
+    session = 'REGULAR_SESSION_OPEN';
+  } else if (totalMinutes >= 570 && totalMinutes < 960) {
+    session = 'REGULAR_SESSION';
+  } else if (totalMinutes >= 960 && totalMinutes < 1200) {
+    session = 'AFTER_HOURS';
+  } else {
+    session = 'CLOSED';
+  }
+
+  return {
+    session,
+    timezone,
+    isPremarket: session === 'PREMARKET',
+    isRegularSession: session === 'REGULAR_SESSION' || session === 'REGULAR_SESSION_OPEN',
+    isAfterHours: session === 'AFTER_HOURS',
+    isClosed: session === 'CLOSED'
+  };
 }
 
 export function buildResearchEvidenceContext(citations: Citation[], topic?: ResearchTopic | string): string {

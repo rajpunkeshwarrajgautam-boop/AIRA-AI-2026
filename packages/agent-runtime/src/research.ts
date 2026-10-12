@@ -88,65 +88,63 @@ export class ResearchService {
                 }
               }));
 
-            // Bounded Stage-2 Targeted Search for explicit factual questions lacking sufficient evidence
-            if (citations.length > 0) {
-              const sufficiency = evaluateEvidenceSufficiency(prompt, citations);
-              if (!sufficiency.isSufficient && sufficiency.missingDimension) {
-                const targetedQuery = buildTargetedSearchQuery(prompt, topic || 'GENERAL', sufficiency.missingDimension);
-                if (targetedQuery && targetedQuery !== prompt) {
-                  const timestamp2 = Date.now();
-                  const toolCall2: ToolCall = {
-                    id: `call_${timestamp2}_targeted`,
-                    toolId: toolDef?.id || 'tool_web_search',
-                    name: 'web_search',
-                    arguments: { query: targetedQuery },
-                    timestamp: timestamp2
-                  };
-                  toolCalls.push(toolCall2);
-                  try {
-                    const result2 = await this.toolRegistry.execute(toolCall2, {
-                      runId,
-                      workspaceRoot: process.cwd(),
-                      sessionGrantedTools: new Set<string>()
-                    });
-                    toolResults.push(result2);
-                    const output2 = result2.output;
-                    if (!result2.isError && output2 && typeof output2 === 'object' && Array.isArray((output2 as any).results)) {
-                      const stage2Results = (output2 as any).results as Array<{ title?: string; url?: string; snippet?: string; description?: string; publishedDate?: string }>;
-                      const stage2Citations = stage2Results
-                        .filter(res => typeof res.url === 'string' && /^https?:\/\//.test(res.url))
-                        .map((res, idx) => ({
-                          id: `live_s2_${timestamp2}_${idx}`,
-                          sourceId: `web_s2_${idx}`,
-                          sourceTitle: normalizeSourceTitle(res.title || 'Live Search Result'),
-                          uri: res.url!,
-                          ...(res.publishedDate ? { publishedDate: res.publishedDate } : {}),
-                          snippet: normalizeSnippetText(res.snippet || res.description || ''),
-                          score: 1.0,
-                          provenance: {
-                            toolCallId: toolCall2.id,
-                            retrievalMechanism: 'web_search',
-                            timestamp: timestamp2
-                          }
-                        }));
+            // Bounded Stage-2 Targeted Search for explicit factual questions lacking sufficient evidence (including zero-result initial searches)
+            const sufficiency = evaluateEvidenceSufficiency(prompt, citations);
+            if (!sufficiency.isSufficient && sufficiency.missingDimension) {
+              const targetedQuery = buildTargetedSearchQuery(prompt, topic || 'GENERAL', sufficiency.missingDimension);
+              if (targetedQuery && targetedQuery !== prompt) {
+                const timestamp2 = Date.now();
+                const toolCall2: ToolCall = {
+                  id: `call_${timestamp2}_targeted`,
+                  toolId: toolDef?.id || 'tool_web_search',
+                  name: 'web_search',
+                  arguments: { query: targetedQuery },
+                  timestamp: timestamp2
+                };
+                toolCalls.push(toolCall2);
+                try {
+                  const result2 = await this.toolRegistry.execute(toolCall2, {
+                    runId,
+                    workspaceRoot: process.cwd(),
+                    sessionGrantedTools: new Set<string>()
+                  });
+                  toolResults.push(result2);
+                  const output2 = result2.output;
+                  if (!result2.isError && output2 && typeof output2 === 'object' && Array.isArray((output2 as any).results)) {
+                    const stage2Results = (output2 as any).results as Array<{ title?: string; url?: string; snippet?: string; description?: string; publishedDate?: string }>;
+                    const stage2Citations = stage2Results
+                      .filter(res => typeof res.url === 'string' && /^https?:\/\//.test(res.url))
+                      .map((res, idx) => ({
+                        id: `live_s2_${timestamp2}_${idx}`,
+                        sourceId: `web_s2_${idx}`,
+                        sourceTitle: normalizeSourceTitle(res.title || 'Live Search Result'),
+                        uri: res.url!,
+                        ...(res.publishedDate ? { publishedDate: res.publishedDate } : {}),
+                        snippet: normalizeSnippetText(res.snippet || res.description || ''),
+                        score: 1.0,
+                        provenance: {
+                          toolCallId: toolCall2.id,
+                          retrievalMechanism: 'web_search',
+                          timestamp: timestamp2
+                        }
+                      }));
 
-                      // Merge Stage-2 authoritative summary pages with Stage-1 hits, de-duplicating by URL
-                      const seenUrls = new Set<string>();
-                      const merged: Citation[] = [];
-                      for (const c of [...stage2Citations, ...citations]) {
-                        try {
-                          const u = new URL(c.uri).href;
-                          if (!seenUrls.has(u)) {
-                            seenUrls.add(u);
-                            merged.push(c);
-                          }
-                        } catch {}
-                      }
-                      citations = merged.slice(0, 5);
+                    // Merge Stage-2 authoritative summary pages with Stage-1 hits, de-duplicating by URL
+                    const seenUrls = new Set<string>();
+                    const merged: Citation[] = [];
+                    for (const c of [...stage2Citations, ...citations]) {
+                      try {
+                        const u = new URL(c.uri).href;
+                        if (!seenUrls.has(u)) {
+                          seenUrls.add(u);
+                          merged.push(c);
+                        }
+                      } catch {}
                     }
-                  } catch {
-                    // Gracefully retain initial stage citations on secondary search error
+                    citations = merged.slice(0, 5);
                   }
+                } catch {
+                  // Gracefully retain initial stage citations on secondary search error
                 }
               }
             }
