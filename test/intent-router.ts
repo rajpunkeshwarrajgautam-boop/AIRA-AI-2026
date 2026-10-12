@@ -210,6 +210,82 @@ async function runTests() {
   assert.ok(ambiguousRes.metadata?.clarificationPrompt, 'Must supply clarificationPrompt');
   console.log(`PASS: "What is the current share price?" -> CLARIFY_AMBIGUOUS with: "${ambiguousRes.metadata?.clarificationPrompt}"`);
 
+  // Test 13: Freshness Routing Precedence vs Actions (Automations, Workflows, Missions, Tools)
+  console.log('\n[TEST 13] Freshness routing precedence vs actions');
+  const precedenceCases = [
+    {
+      prompt: "Schedule a daily check of NVIDIA's current share price.",
+      expectedIntent: 'AUTOMATION_CREATE',
+      expectedTarget: 'AUTOMATION_ENGINE',
+      expectedApproval: true
+    },
+    {
+      prompt: "Create an automation to summarize the latest AI news every morning.",
+      expectedIntent: 'AUTOMATION_CREATE',
+      expectedTarget: 'AUTOMATION_ENGINE',
+      expectedApproval: true
+    },
+    {
+      prompt: "Run my workflow to research today's market developments and publish a report.",
+      expectedIntent: 'WORKFLOW',
+      expectedTarget: 'WORKFLOW_ENGINE',
+      expectedApproval: true
+    },
+    {
+      prompt: "Investigate the latest failing deployment and fix the affected source code.",
+      expectedIntent: 'AGENT_MISSION',
+      expectedTarget: 'AGENT_PLANNER',
+      expectedApproval: true
+    },
+    {
+      prompt: "Open a website and find today's published exchange rate.",
+      expectedIntent: 'TOOL_ACTION',
+      expectedTarget: 'TOOL_PIPELINE',
+      expectedApproval: false
+    },
+    {
+      prompt: "What is the current share price of NVIDIA?",
+      expectedIntent: 'RESEARCH',
+      expectedTarget: 'RESEARCH_SYNTHESIS',
+      expectedApproval: false
+    },
+    {
+      prompt: "Explain how the latest stock exchange regulations work.",
+      expectedIntent: 'ANSWER',
+      expectedTarget: 'CHAT_STREAM',
+      expectedApproval: false
+    },
+    {
+      prompt: "Delete the scheduled market report automation.",
+      expectedIntent: 'TOOL_ACTION',
+      expectedTarget: 'TOOL_PIPELINE',
+      expectedApproval: true
+    },
+    {
+      prompt: "Compare the latest AI models using reliable sources.",
+      expectedIntent: 'RESEARCH',
+      expectedTarget: 'RESEARCH_SYNTHESIS',
+      expectedApproval: false
+    },
+    {
+      prompt: "Inspect the current Git branch and summarize recent commits.",
+      expectedIntent: 'TOOL_ACTION',
+      expectedTarget: 'TOOL_PIPELINE',
+      expectedApproval: false
+    }
+  ];
+
+  for (const tc of precedenceCases) {
+    const res = await router.route({
+      prompt: tc.prompt,
+      principal: testPrincipal
+    });
+    assert.strictEqual(res.intent, tc.expectedIntent, `Prompt "${tc.prompt}" intent must be ${tc.expectedIntent}, got ${res.intent}`);
+    assert.strictEqual(res.executionTarget, tc.expectedTarget, `Prompt "${tc.prompt}" target must be ${tc.expectedTarget}, got ${res.executionTarget}`);
+    assert.strictEqual(res.approvalRequired, tc.expectedApproval, `Prompt "${tc.prompt}" approvalRequired must be ${tc.expectedApproval}, got ${res.approvalRequired}`);
+    console.log(`PASS: "${tc.prompt}" -> ${res.intent} (${res.executionTarget}, approval=${res.approvalRequired})`);
+  }
+
   console.log('\n=== ALL ROUTER & POLICY TESTS PASSED ===');
 }
 

@@ -232,6 +232,14 @@ Respond with valid JSON only:
           referents['there'] = cityMatch[1];
         }
       }
+
+      const movieMatch = recentHistoryText.match(/\b(avatar|dune|oppenheimer|barbie|wicked|gladiator|marvel|batman|superman|spider-man|star\s+wars|deadpool)\b/i);
+      if (movieMatch) {
+        referents['movie'] = movieMatch[1];
+        if (/\b(its|their|the\s+movie|the\s+film|box\s+office)\b/i.test(lower) || (hasIt && !referents['it'])) {
+          referents['it'] = movieMatch[1];
+        }
+      }
     }
 
     return referents;
@@ -312,32 +320,11 @@ Respond with valid JSON only:
       };
     }
 
-    // Fast Path Freshness Gate: Genuinely Time-Sensitive External Information
-    if (freshnessEval.requiresFreshness && (!advisoryIntent || advisoryIntent === 'RESEARCH' || advisoryIntent === 'ANSWER')) {
-      if (freshnessEval.isAmbiguous) {
-        return {
-          primaryIntent: 'ANSWER',
-          secondaryIntents: ['RESEARCH'],
-          confidence: 0.88,
-          reasoningStrategy: 'CLARIFY_AMBIGUOUS',
-          clarificationPrompt: freshnessEval.clarificationPrompt,
-          isFreshnessRequired: true
-        };
-      }
+    // Fast Path C: Automation Management (Delete/Cancel/Disable scheduled jobs)
+    const isAutomationManagement = /\b(delete|cancel|remove|stop|disable|drop)\s+.*(automation|job|task|cron|workflow)\b/i.test(promptLower);
+    if (isAutomationManagement) {
       return {
-        primaryIntent: 'RESEARCH',
-        secondaryIntents: [],
-        confidence: 0.95,
-        reasoningStrategy: 'CHAIN_OF_THOUGHT',
-        isFreshnessRequired: true
-      };
-    }
-
-    // Fast Path C: Explanation vs Execution Nuance (Timeless Concepts & Explanations)
-    // If clearly explanation only, not requiring freshness, and no execution requested:
-    if (!freshnessEval.requiresFreshness && isExplanationOnly && !isExecutionRequested && (!advisoryIntent || advisoryIntent === 'ANSWER')) {
-      return {
-        primaryIntent: 'ANSWER',
+        primaryIntent: 'TOOL_ACTION',
         secondaryIntents: [],
         confidence: 0.97,
         reasoningStrategy: 'FAST_DIRECT',
@@ -345,9 +332,9 @@ Respond with valid JSON only:
       };
     }
 
-    // Fast Path D: Scheduled Automations
+    // Fast Path D: Scheduled Automations (Creation & Scheduling)
     const isAutomation = (
-      /\b(every\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|day|morning|night|week|month|hour)|schedule\s+.*(job|automation|task|run|check|backup)|create\s+(an?\s+)?automation|cron\s+expression)\b/i.test(promptLower) ||
+      /\b(every\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|day|morning|night|week|month|hour)|(?:run|execute|schedule)\s+(an?\s+)?(?:daily|weekly|hourly|monthly)\s+(?:job|task|check|run|automation)|schedule\s+.*(job|automation|task|run|check|backup)|create\s+(an?\s+)?automation|setup\s+(an?\s+)?automation|cron\s+expression)\b/i.test(promptLower) ||
       (advisoryIntent === 'AUTOMATION_CREATE')
     );
     if (isAutomation) {
@@ -356,7 +343,7 @@ Respond with valid JSON only:
         secondaryIntents: [],
         confidence: 0.96,
         reasoningStrategy: 'FAST_DIRECT',
-        isFreshnessRequired: false
+        isFreshnessRequired: freshnessEval.requiresFreshness
       };
     }
 
@@ -380,7 +367,7 @@ Respond with valid JSON only:
 
     // Fast Path F: Agent Missions (Autonomous multi-step coding/repair)
     const isAgentMission = (
-      /\b(investigate\s+(this\s+|the\s+|repository\s+)?(bug|system|repo|project|codebase|test\s+failures?|failures?|issue)|inspect\s+(the\s+)?(workspace(\s+files)?|repo|repository|codebase)|mission\s+plan|agent\s+mission|autonomous\s+mission|execute\s+mission|build\s+(an?\s+)?application|build\s+a\s+website\s+and\s+preview|fix\s+(the\s+)?failing\s+tests|verify\s+the\s+build)\b/i.test(promptLower) ||
+      /\b(investigate\s+.*(bug|failure|failing|deployment|build|pipeline|ci|issue|incident|repo|codebase|system)|fix\s+.*(source\s+code|code|repo|tests?|implementation)|inspect\s+(the\s+)?(workspace(\s+files)?|repo|repository|codebase)|mission\s+plan|agent\s+mission|autonomous\s+mission|execute\s+mission|build\s+(an?\s+)?application|build\s+a\s+website\s+and\s+preview|fix\s+(the\s+)?failing\s+tests|verify\s+the\s+build)\b/i.test(promptLower) ||
       (advisoryIntent === 'AGENT_MISSION' && rawPrompt.length > 10)
     );
     if (isAgentMission) {
@@ -389,7 +376,7 @@ Respond with valid JSON only:
         secondaryIntents: ['TOOL_ACTION'],
         confidence: 0.94,
         reasoningStrategy: 'CHAIN_OF_THOUGHT',
-        isFreshnessRequired: false
+        isFreshnessRequired: freshnessEval.requiresFreshness
       };
     }
 
@@ -420,12 +407,13 @@ Respond with valid JSON only:
       /\b(simulate|execute|test|verify|run)\s+.*(tool|timeout|error|http\s+[0-9]{3}|failure|outage|idempotency|mutation|econnreset|fallback)\b/i.test(promptLower) ||
       /\b(tool\s+execution|tool\s+call|required\s+tool|payment\s+mutation|system\s+shell\s+command)\b/i.test(promptLower) ||
       /\b(modify\s+production\s+configuration|etc\/hosts)\b/i.test(promptLower) ||
-      /\b(open\s+https?:\/\/|navigate\s+to|extract\s+the\s+table|tell\s+me\s+the\s+(page\s+)?heading|take\s+(a\s+)?screenshot)\b/i.test(promptLower) ||
+      /\b(open\s+(a|the|this)?\s*(website|web\s+page|url|page|site)|browse\s+(to\s+)?(a|the)?\s*(website|url|site)|navigate\s+to|open\s+https?:\/\/|extract\s+the\s+table|tell\s+me\s+the\s+(page\s+)?heading|take\s+(a\s+)?screenshot)\b/i.test(promptLower) ||
       /\b(populate\s+form|fill\s+(in\s+)?form|submit\s+this\s+form|submit\s+form|click\s+button)\b/i.test(promptLower) ||
       /\b(calculate|calc)\s+[0-9+\-*/().^ ]+/i.test(promptLower) ||
-      /\b(read\s+(file\s+)?[a-zA-Z0-9_\-./\\]+|list\s+directory|git\s+status|git\s+log|latest\s+commit|package\.json|branch\s+status)\b/i.test(promptLower) ||
+      /\b(read\s+(file\s+)?[a-zA-Z0-9_\-./\\]+|list\s+directory|git\s+status|git\s+log|latest\s+commit|package\.json|branch\s+status|(current\s+)?git\s+branch|(recent|latest)\s+commits?|summarize\s+(recent\s+)?commits?)\b/i.test(promptLower) ||
       /\b(inspect|read|cat)\s+(file\s+)?[a-zA-Z0-9_\-./\\]+\.[a-zA-Z0-9]+\b/i.test(promptLower) ||
-      /\b(deploy\s+this\s+now|deploy\s+.*(container|cluster|service|production|staging))\b/i.test(promptLower)
+      /\b(deploy\s+this\s+now|deploy\s+.*(container|cluster|service|production|staging))\b/i.test(promptLower) ||
+      (advisoryIntent === 'TOOL_ACTION')
     );
     if (isTool) {
       return {
@@ -433,11 +421,45 @@ Respond with valid JSON only:
         secondaryIntents: [],
         confidence: 0.95,
         reasoningStrategy: 'FAST_DIRECT',
+        isFreshnessRequired: freshnessEval.requiresFreshness
+      };
+    }
+
+    // Fast Path H: Freshness Gate: Genuinely Time-Sensitive External Information
+    // Evaluated only if prompt is NOT an automation, workflow, agent mission, or direct tool invocation
+    if (freshnessEval.requiresFreshness && (!advisoryIntent || advisoryIntent === 'RESEARCH' || advisoryIntent === 'ANSWER')) {
+      if (freshnessEval.isAmbiguous) {
+        return {
+          primaryIntent: 'ANSWER',
+          secondaryIntents: ['RESEARCH'],
+          confidence: 0.88,
+          reasoningStrategy: 'CLARIFY_AMBIGUOUS',
+          clarificationPrompt: freshnessEval.clarificationPrompt,
+          isFreshnessRequired: true
+        };
+      }
+      return {
+        primaryIntent: 'RESEARCH',
+        secondaryIntents: [],
+        confidence: 0.95,
+        reasoningStrategy: 'CHAIN_OF_THOUGHT',
+        isFreshnessRequired: true
+      };
+    }
+
+    // Fast Path I: Explanation vs Execution Nuance (Timeless Concepts & Explanations)
+    // If clearly explanation only, not requiring freshness, and no execution requested:
+    if (!freshnessEval.requiresFreshness && isExplanationOnly && !isExecutionRequested && (!advisoryIntent || advisoryIntent === 'ANSWER')) {
+      return {
+        primaryIntent: 'ANSWER',
+        secondaryIntents: [],
+        confidence: 0.97,
+        reasoningStrategy: 'FAST_DIRECT',
         isFreshnessRequired: false
       };
     }
 
-    // Fast Path H: Deep Research & Citations
+    // Fast Path J: Deep Research & Citations
     const isResearch = (
       /\b(research\s+(the\s+|latest\s+|recent\s+|advances\s+in\s+)?|deep\s+dive\s+into|investigate.*cite\s+sources|find\s+sources\s+and\s+compare)\b/i.test(promptLower) ||
       (advisoryIntent === 'RESEARCH')
@@ -513,7 +535,7 @@ export function evaluateFreshness(
   // ==========================================
 
   // A. Creative writing requests (fiction, stories, poems, scripts)
-  const isCreativeWriting = /^(?:write|compose|draft|create|tell)\s+(?:a\s+|an\s+)?(?:fictional\s+|sci-fi\s+|bedtime\s+)?(?:story|poem|song|script|play|novel|fable|parable|dialogue|fairy\s+tale)\b/i.test(promptLower);
+  const isCreativeWriting = /^(?:write|compose|draft|create|tell)\s+(?:a\s+|an\s+)?(?:fictional\s+|sci-fi\s+|bedtime\s+)?(?:story|news\s+story|poem|song|script|play|novel|fable|parable|dialogue|fairy\s+tale)\b/i.test(promptLower);
   if (isCreativeWriting) {
     return { requiresFreshness: false, isAmbiguous: false };
   }
@@ -533,11 +555,12 @@ export function evaluateFreshness(
     return { requiresFreshness: false, isAmbiguous: false };
   }
 
-  // D. Explicit past historical timeframe ("highest-grossing movies of 1997", "in 1994", etc.)
+  // D. Explicit past historical timeframe or history inquiry ("Tell me about the history of the stock market", "movies of 1997")
+  const isHistoryQuery = /\b(?:history\s+of|historical\s+overview|in\s+the\s+past|origin\s+of)\b/i.test(promptLower);
   const hasHistoricalYear = /\b(?:in|of|during|from)\s+(?:18\d\d|19\d\d|20[01]\d|202[0-4])\b/i.test(promptLower) ||
     /\b(?:in\s+the\s+(?:19\d0s|2000s|2010s)|during\s+world\s+war|in\s+ancient\s+rome|in\s+the\s+middle\s+ages)\b/i.test(promptLower);
   const mentionsLiveFreshness = /\b(?:current|latest|today|now|recently|newest|as\s+compared\s+to\s+today)\b/i.test(promptLower);
-  if (hasHistoricalYear && !mentionsLiveFreshness) {
+  if ((hasHistoricalYear || isHistoryQuery) && !mentionsLiveFreshness) {
     return { requiresFreshness: false, isAmbiguous: false };
   }
 
@@ -563,10 +586,20 @@ export function evaluateFreshness(
 
   // Helper to extract financial/stock entity from prompt, referents, or history
   const extractFinancialSubject = (): string | undefined => {
-    // Check prompt for "of <entity>" or "for <entity>"
-    const match = promptLower.match(/\b(?:of|for)\s+([a-zA-Z0-9.\-_$]+(?:\s+[a-zA-Z0-9]+)?)/i);
+    // Check for possessive "<entity>'s (share|stock) price"
+    const possessiveMatch = promptLower.match(/([a-zA-Z0-9.\-_$]+)'s\s+(?:current\s+|latest\s+|real-time\s+)?(?:share\s+price|stock\s+price|stock|market\s+cap)/i);
+    if (possessiveMatch && !/^(?:it|that|this|today)$/i.test(possessiveMatch[1])) {
+      return possessiveMatch[1].trim();
+    }
+
+    // Check prompt for "is <entity> trading" or "of/for <entity>"
+    const match = promptLower.match(/\bis\s+([a-zA-Z0-9.\-_$]+)\s+(?:trading|priced|valued|changing)\b/i) ||
+      promptLower.match(/\b(?:of|for)\s+([a-zA-Z0-9.\-_$]+(?:\s+to\s+[a-zA-Z0-9]+)?(?:\s+[a-zA-Z0-9]+)?)/i);
     let candidate = match ? match[1].trim() : undefined;
-    if (candidate && /^(?:the\s+company|a\s+share|the\s+stock|the\s+ticker|a\s+stock|all\s+companies)$/i.test(candidate)) {
+    if (candidate && /^(?:the\s+(?:company|stock|share|ticker|price|current|latest|market|exchange|rate|value|crypto|asset|index)|a\s+share|a\s+stock|all\s+companies|it|that|this|there|now|today)$/i.test(candidate)) {
+      candidate = undefined;
+    }
+    if (candidate && candidate.toLowerCase().startsWith('the current')) {
       candidate = undefined;
     }
     if (candidate) return candidate;
@@ -579,7 +612,7 @@ export function evaluateFreshness(
     // Check recent history
     for (const h of history.slice(-4).reverse()) {
       const text = h.content;
-      const knownEntity = text.match(/\b(nvidia|nvda|apple|aapl|microsoft|msft|google|googl|alphabet|amazon|amzn|tesla|tsla|meta|netflix|nflx|amd|intel|intc|tsmc|openai|anthropic|bitcoin|btc|ethereum|eth|solana|sol)\b/i);
+      const knownEntity = text.match(/\b(nvidia|nvda|apple|aapl|microsoft|msft|google|googl|alphabet|amazon|amzn|tesla|tsla|meta|netflix|nflx|amd|intel|intc|tsmc|openai|anthropic|palantir|pltr|bitcoin|btc|ethereum|eth|solana|sol)\b/i);
       if (knownEntity) return knownEntity[1];
     }
     return undefined;
@@ -587,10 +620,15 @@ export function evaluateFreshness(
 
   // Helper to extract location from prompt, referents, or history
   const extractLocationSubject = (): string | undefined => {
+    const possessiveMatch = promptLower.match(/([a-zA-Z0-9.\-_]+)'s\s+(?:current\s+|today's\s+)?(?:weather|temperature|forecast)/i);
+    if (possessiveMatch && !/^(?:it|that|this|today|tomorrow)$/i.test(possessiveMatch[1])) {
+      return possessiveMatch[1].trim();
+    }
+
     const match = promptLower.match(/\b(?:in|for|at)\s+([a-zA-Z\s]+?)(?:\s+(?:today|tomorrow|this\s+week|this\s+weekend|now|right\s+now))?$/i) ||
       promptLower.match(/\b(?:in|for|at)\s+([a-zA-Z\s]+)/i);
     let candidate = match ? match[1].trim() : undefined;
-    if (candidate && /^(?:the\s+city|my\s+area|here|there|today|now)$/i.test(candidate)) {
+    if (candidate && /^(?:the\s+city|my\s+area|here|there|today|tomorrow|now)$/i.test(candidate)) {
       candidate = undefined;
     }
     if (candidate) return candidate;
@@ -600,27 +638,67 @@ export function evaluateFreshness(
 
     for (const h of history.slice(-4).reverse()) {
       const text = h.content;
-      const knownCity = text.match(/\b(tokyo|paris|london|new\s+york|berlin|san\s+francisco|seattle|chicago|los\s+angeles|sydney|toronto|mumbai|singapore|dubai)\b/i);
+      const knownCity = text.match(/\b(tokyo|paris|london|new\s+york|berlin|san\s+francisco|seattle|chicago|los\s+angeles|sydney|toronto|mumbai|singapore|dubai|new\s+delhi|delhi|bengaluru|bangalore)\b/i);
       if (knownCity) return knownCity[1];
     }
     return undefined;
   };
 
+  // Helper to extract movie from prompt, referents, or history
+  const extractMovieSubject = (): string | undefined => {
+    // Check possessive: "<Movie>'s (latest/current) box office"
+    const possessiveMatch = promptLower.match(/([a-zA-Z0-9.\-_]+)'s\s+(?:current\s+|latest\s+|weekend\s+)?(?:box\s+office|gross)/i);
+    if (possessiveMatch && !/^(?:it|that|this|today|yesterday)$/i.test(possessiveMatch[1])) {
+      return possessiveMatch[1].trim();
+    }
+
+    if (/\b(?:for|of)\s+(?:the\s+)?(?:latest|newest|current)\s+movie\b/i.test(promptLower) || /\b(?:the\s+)?new\s+movie\b/i.test(promptLower)) {
+      return 'the latest movie release';
+    }
+    const match = promptLower.match(/\b(?:for|of)\s+([a-zA-Z0-9.\-_$]+(?:\s+[a-zA-Z0-9]+)?)/i);
+    let candidate = match ? match[1].trim() : undefined;
+    if (candidate && /^(?:the\s+box\s+office|the\s+movie|a\s+movie|the\s+film|all\s+movies|it|that)$/i.test(candidate)) {
+      candidate = undefined;
+    }
+    if (candidate) return candidate;
+
+    if (contextualReferents['movie']) return contextualReferents['movie'];
+    if (contextualReferents['film']) return contextualReferents['film'];
+    if (contextualReferents['it'] && !contextualReferents['it'].includes('previous')) return contextualReferents['it'];
+
+    for (const h of history.slice(-4).reverse()) {
+      const text = h.content;
+      const movieMatch = text.match(/\b(avatar|dune|oppenheimer|barbie|wicked|gladiator|marvel|batman|superman|spider-man|star\s+wars|deadpool)\b/i);
+      if (movieMatch) return movieMatch[1];
+    }
+    return undefined;
+  };
+
   // 1. Box Office & Theatrical Releases
-  const isBoxOffice = /\b(?:box\s+office|opening\s+weekend\s+gross|worldwide\s+gross|grossing\s+movie[s]?|box\s+office\s+collection)\b/i.test(promptLower);
+  const isBoxOffice = /\b(?:box\s+office|opening\s+weekend\s+gross|worldwide\s+gross|grossing\s+movie[s]?|box\s+office\s+collection|movie\s+earn(?:ed)?|did\s+.*movie\s+earn)\b/i.test(promptLower);
   if (isBoxOffice) {
+    const movie = extractMovieSubject();
+    if (!movie) {
+      return {
+        requiresFreshness: true,
+        isAmbiguous: true,
+        topic: 'BOX_OFFICE',
+        clarificationPrompt: 'Which movie would you like to check the box office collection for, or are you looking for the latest weekend box office rankings?'
+      };
+    }
     return {
       requiresFreshness: true,
       isAmbiguous: false,
       topic: 'BOX_OFFICE',
-      detectedSubject: 'box office collection'
+      detectedSubject: movie
     };
   }
 
   // 2. Financial & Asset Prices
   const isFinancialPrice = (
-    /\b(?:share\s+price|stock\s+price|stock\s+quote|market\s+cap|trading\s+at|crypto\s+price|price\s+of\s+(?:bitcoin|btc|eth|ethereum|solana)|exchange\s+rate|currency\s+rate)\b/i.test(promptLower) ||
-    (/\b(?:current|latest|today['s]?|real-time)\s+price\b/i.test(promptLower) && !/\b(?:historic|history|all-time)\b/i.test(promptLower))
+    /\b(?:share\s+price|stock\s+price|stock\s+quote|market\s+cap|trading\s+at|trading\s+for|crypto\s+price|price\s+of\s+(?:bitcoin|btc|eth|ethereum|solana)|exchange\s+rate|currency\s+rate)\b/i.test(promptLower) ||
+    (/\b(?:current|latest|today['s]?|real-time)\s+price\b/i.test(promptLower) && !/\b(?:historic|history|all-time)\b/i.test(promptLower)) ||
+    /\b(?:how\s+much\s+is\s+.*trading\s+for|changing\s+hands|shares?\s+of\s+.*changing\s+hands)\b/i.test(promptLower)
   );
   if (isFinancialPrice) {
     const subject = extractFinancialSubject();
@@ -653,19 +731,33 @@ export function evaluateFreshness(
   // 4. Sports Results & Live Competitions
   const isSports = (
     /\b(?:who\s+won\s+(?:the\s+)?(?:latest|recent|today['s]?|yesterday['s]?)|latest\s+(?:formula\s+1|f1|nba|nfl|premier\s+league|champions\s+league|world\s+series|super\s+bowl|grand\s+slam|ufc|race|match|game))\b/i.test(promptLower) ||
-    /\b(?:latest|current)\s+score\s+of\b/i.test(promptLower) ||
+    /\b(?:latest|current)\s+score\b/i.test(promptLower) ||
     /\bwho\s+won\s+the\s+latest\b/i.test(promptLower)
   );
   if (isSports) {
+    const match = promptLower.match(/\b(?:score\s+of|score\s+for|in\s+the|between)\s+([a-zA-Z0-9\s]+)/i);
+    let subject = match ? match[1].trim() : undefined;
+    if (!subject && (contextualReferents['match'] || contextualReferents['game'] || contextualReferents['team'])) {
+      subject = contextualReferents['match'] || contextualReferents['game'] || contextualReferents['team'];
+    }
+    if (/\b(?:latest|current)\s+score\b/i.test(promptLower) && !subject) {
+      return {
+        requiresFreshness: true,
+        isAmbiguous: true,
+        topic: 'SPORTS',
+        clarificationPrompt: 'Which game, match, or team would you like the latest score for?'
+      };
+    }
     return {
       requiresFreshness: true,
       isAmbiguous: false,
-      topic: 'SPORTS'
+      topic: 'SPORTS',
+      detectedSubject: subject
     };
   }
 
   // 5. Weather Forecasts
-  const isWeather = /\b(?:weather|forecast|temperature|rain\s+forecast)\b/i.test(promptLower);
+  const isWeather = /\b(?:weather|forecast|temperature|rain\s+forecast|is\s+it\s+raining)\b/i.test(promptLower);
   if (isWeather) {
     const location = extractLocationSubject();
     if (!location) {
@@ -686,7 +778,7 @@ export function evaluateFreshness(
 
   // 6. Recent Releases & Product Versions
   const isRelease = (
-    /\b(?:latest\s+version\s+of|latest\s+release\s+of|newest\s+version\s+of|newest\s+model\s+released\s+by|latest\s+update\s+to|what\s+is\s+the\s+latest\s+(?:stable\s+)?release)\b/i.test(promptLower) ||
+    /\b(?:current\s+version\s+of|latest\s+version\s+of|latest\s+release\s+of|newest\s+version\s+of|newest\s+model\s+released\s+by|latest\s+update\s+to|what\s+is\s+the\s+latest\s+(?:stable\s+)?release|what\s+changed\s+in\s+the\s+latest|available\s+yet|is\s+the\s+new\s+.*available|rolled\s+out|brand\s+new\s+updates?|updates?\s+this\s+week)\b/i.test(promptLower) ||
     /\b(?:latest|newest|recent)\s+(?:[a-zA-Z0-9_\-]+\s+)?(?:releases?|versions?|updates?|models?)\b/i.test(promptLower)
   );
   if (isRelease) {
@@ -698,7 +790,33 @@ export function evaluateFreshness(
   }
 
   // 7. Present-Day Facts That Change Over Time
-  const isFactualUpdate = /\b(?:current\s+(?:ceo|cto|cfo|president|prime\s+minister|chancellor|leader|pope|governor|mayor)\s+of|who\s+is\s+currently\s+(?:the\s+)?(?:ceo|leader|president|prime\s+minister|chancellor)|who\s+currently\s+leads|current\s+world\s+record\s+for|current\s+status\s+of)\b/i.test(promptLower);
+  const isLeadership = /\b(?:current\s+(?:ceo|cto|cfo|president|prime\s+minister|chancellor|leader|pope|governor|mayor)\s+of|who\s+is\s+(?:currently\s+(?:the\s+)?|their\s+|the\s+|its\s+|current\s+)?(?:current\s+)?(?:ceo|leader|president|prime\s+minister|chancellor)|who\s+currently\s+leads)\b/i.test(promptLower);
+  if (isLeadership) {
+    const orgMatch = promptLower.match(/\b(?:of|leads)\s+([a-zA-Z0-9\s]+)/i);
+    let org = orgMatch ? orgMatch[1].trim() : undefined;
+    if (org && /^(?:the\s+organization|the\s+company|the\s+group|it|them)$/i.test(org)) {
+      org = undefined;
+    }
+    if (!org && (contextualReferents['company'] || contextualReferents['organization'])) {
+      org = contextualReferents['company'] || contextualReferents['organization'];
+    }
+    if (!org) {
+      return {
+        requiresFreshness: true,
+        isAmbiguous: true,
+        topic: 'FACTUAL_UPDATE',
+        clarificationPrompt: 'Which organization or company would you like to know the current leadership for?'
+      };
+    }
+    return {
+      requiresFreshness: true,
+      isAmbiguous: false,
+      topic: 'FACTUAL_UPDATE',
+      detectedSubject: org
+    };
+  }
+
+  const isFactualUpdate = /\b(?:current\s+world\s+record\s+for|current\s+status\s+of)\b/i.test(promptLower);
   if (isFactualUpdate) {
     return {
       requiresFreshness: true,
@@ -723,7 +841,7 @@ export function evaluateFreshness(
 
   // 9. Temporal Modifiers on Dynamic Topics
   const hasTemporalKeyword = /\b(?:currently|current|latest|recent|recently|today|as\s+of\s+now|right\s+now|this\s+week|this\s+month|newest)\b/i.test(promptLower);
-  const isDynamicTopic = /\b(?:inflation\s+rate|interest\s+rate|unemployment\s+rate|gas\s+price|ticket\s+price|population\s+of|election\s+results?|layoffs?|downsizing|strikes?|protests?|outages?|mergers?|acquisitions?|earnings|bankruptcies?)\b/i.test(promptLower);
+  const isDynamicTopic = /\b(?:inflation\s+rates?|interest\s+rates?|unemployment\s+rates?|gas\s+prices?|ticket\s+prices?|population\s+of|election\s+results?|layoffs?|downsizing|strikes?|protests?|outages?|mergers?|acquisitions?|earnings|bankruptcies?)\b/i.test(promptLower);
   if (hasTemporalKeyword && isDynamicTopic) {
     return {
       requiresFreshness: true,

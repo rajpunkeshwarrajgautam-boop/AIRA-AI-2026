@@ -346,6 +346,20 @@ export class AgentRuntime extends EventEmitter {
       return;
     }
 
+    // Checkpoint 0.1: Immediate Clarification Delivery for Ambiguous Queries
+    if (run.routingDecision?.metadata?.reasoningStrategy === 'CLARIFY_AMBIGUOUS' && run.routingDecision?.metadata?.clarificationPrompt) {
+      if (run.state !== 'RUNNING') {
+        await this.transitionRunState(runId, 'RUNNING');
+      }
+      const clarificationMsg = run.routingDecision.metadata.clarificationPrompt;
+      run.content = clarificationMsg;
+      run.executionCheckpoint = 'COMPLETED';
+      await this.runRepo.saveRun(run);
+      await this.emitRunEvent(runId, 'content.delta', { delta: clarificationMsg });
+      await this.transitionRunState(runId, 'COMPLETED');
+      return;
+    }
+
     // Checkpoint 0.4: Automation Engine execution target
     if (run.routingDecision?.executionTarget === 'AUTOMATION_ENGINE' || run.intent === 'AUTOMATION_CREATE') {
       if (run.state !== 'RUNNING') {

@@ -123,11 +123,13 @@ export class ServerIntentRouter {
 
     // Write / State Mutation patterns
     const writePatterns = [
-      /\b(create\s+(a\s+|an\s+)?automation|schedule\s+(a\s+|an\s+)?(daily|weekly|hourly|cron))\b/,
+      /\b(create\s+(a\s+|an\s+)?automation|schedule\s+(a\s+|an\s+)?(daily|weekly|hourly|cron)|run\s+a\s+(daily|weekly|hourly|monthly)\s+(job|task|automation))\b/,
+      /\b(delete|cancel|remove|stop|disable)\s+.*(automation|job|task|cron|workflow)\b/i,
       /\b(every\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|day|hour|week|month))\b/,
-      /\b(fix\s+it\s+and\s+verify|patch\s+and\s+verify|write\s+file|create\s+table|modify\s+repo)\b/,
+      /\b(fix\s+it\s+and\s+verify|patch\s+and\s+verify|write\s+file|create\s+table|modify\s+repo|fix\s+.*(source\s+code|code|repo|tests?|implementation)|patch\s+.*(code|source|repo|tests?))\b/,
       /\b(save\s+automation|update\s+setting|execute\s+workflow|run\s+workflow|submit\s+form|populate\s+form|fill\s+(in\s+)?(the\s+)?form)\b/,
       /\b(click\s+(the\s+)?(submit|button|login|save|delete|create))\b/,
+      /\b(deploy\s+.*(container|cluster|service|production|staging)|deploy\s+this\s+now)\b/i,
       /\b(payment\s+mutation|charge\b|post\s+\/api\/charge|\/api\/charge|transfer\s+money)\b/i
     ];
     if (writePatterns.some(p => p.test(text))) {
@@ -138,7 +140,9 @@ export class ServerIntentRouter {
     const readPatterns = [
       /\b(research|search|lookup|inspect|read\s+(file\s+)?[a-zA-Z0-9_\-./\\]+|calculate|calc\s+|check\s+status|fetch\s+url)\b/,
       /\b(cite\s+sources|find\s+sources|extract\s+the\s+table|open\s+this\s+url|open\s+https?:\/\/|navigate\s+to\s+https?:\/\/)\b/,
+      /\b(open\s+(a|the|this)?\s*(website|web\s+page|url|page|site)|browse\s+(to\s+)?(a|the)?\s*(website|url|site))\b/i,
       /\b(tell\s+me\s+the\s+(page\s+)?heading|page\s+heading|heading\s+of|extract\s+heading|latest\s+commit|git\s+status|git\s+log|git\s+diff)\b/,
+      /\b(git\s+branch|(current\s+)?git\s+branch|(recent|latest)\s+commits?|summarize\s+(recent\s+)?commits?)\b/i,
       /\b(capture\s+screenshot|take\s+screenshot|screenshot\s+of|extract\s+(the\s+)?main\s+text|extract\s+text)\b/
     ];
     if (readPatterns.some(p => p.test(text))) {
@@ -165,8 +169,12 @@ export class ServerIntentRouter {
       };
     }
 
-    // Rule B: Scheduled Automations
-    const isAutomation = /\b(every\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|day|morning|night|week|month|hour)|schedule\s+(a\s+|an\s+)?(job|automation|task|run|check)|create\s+(an?\s+)?automation|cron\s+expression)\b/.test(text);
+    // Rule B: Scheduled Automations (Creation vs Management)
+    const isAutomationManagement = /\b(delete|cancel|remove|stop|disable|drop)\s+.*(automation|job|task|cron|workflow)\b/i.test(text);
+    const isAutomation = !isAutomationManagement && (
+      /\b(every\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|day|morning|night|week|month|hour)|(?:run|execute|schedule)\s+(an?\s+)?(?:daily|weekly|hourly|monthly)\s+(?:job|task|check|run|automation)|schedule\s+.*(job|automation|task|run|check|backup)|create\s+(an?\s+)?automation|setup\s+(an?\s+)?automation|cron\s+expression)\b/.test(text) ||
+      (advisoryIntent === 'AUTOMATION_CREATE')
+    );
     if (isAutomation) {
       return {
         intent: 'AUTOMATION_CREATE',
@@ -203,7 +211,7 @@ export class ServerIntentRouter {
     }
 
     // Rule D: Agent Missions
-    const isAgentMission = /\b(investigate\s+(this\s+|the\s+)?(bug|system|repo|project|codebase)|inspect\s+the\s+repo|mission\s+plan|agent\s+mission|autonomous\s+mission|execute\s+mission)\b/.test(text) ||
+    const isAgentMission = /\b(investigate\s+.*(bug|failure|failing|deployment|build|pipeline|ci|issue|incident|repo|codebase|system)|fix\s+.*(source\s+code|code|repo|tests?|implementation)|inspect\s+the\s+repo|mission\s+plan|agent\s+mission|autonomous\s+mission|execute\s+mission)\b/.test(text) ||
       (advisoryIntent === 'AGENT_MISSION' && text.length > 10);
     if (isAgentMission) {
       const isMutating = sideEffect === 'WRITE' || sideEffect === 'DESTRUCTIVE';
@@ -227,13 +235,16 @@ export class ServerIntentRouter {
       };
     }
 
-    // Rule E: Direct Tool Invocations (Browser, Files, Repo, System, Calculator, Connectors)
+    // Rule E: Direct Tool Invocations (Browser, Files, Repo, System, Calculator, Connectors, Automation Management)
     const isTool = (
+      isAutomationManagement ||
       /\b(simulate|execute|test|verify|run)\s+.*(tool|timeout|error|http\s+[0-9]{3}|failure|outage|idempotency|mutation|econnreset|fallback)\b/i.test(text) ||
       /\b(tool\s+execution|tool\s+call|required\s+tool|payment\s+mutation|system\s+shell\s+command)\b/i.test(text) ||
       /\b(modify\s+production\s+configuration|etc\/hosts)\b/i.test(text) ||
       /\b(open\s+https?:\/\/|navigate\s+to\s+https?:\/\/|open\s+this\s+url|extract\s+the\s+table|tell\s+me\s+the\s+(page\s+)?heading)\b/.test(text) ||
+      /\b(open\s+(a|the|this)?\s*(website|web\s+page|url|page|site)|browse\s+(to\s+)?(a|the)?\s*(website|url|site))\b/i.test(text) ||
       /\b(open\s+the\s+website|open\s+the\s+(aira\s+)?github\s+repository|latest\s+commit|git\s+status|git\s+diff|git\s+log)\b/.test(text) ||
+      /\b(git\s+branch|(current\s+)?git\s+branch|(recent|latest)\s+commits?|summarize\s+(recent\s+)?commits?)\b/i.test(text) ||
       /\b(populate\s+form|fill\s+(in\s+)?(the\s+)?form|submit\s+this\s+form|submit\s+form|click\s+(the\s+)?button)\b/.test(text) ||
       /\b(calculate\s+|calc\s+|read\s+(file\s+)?[a-zA-Z0-9_\-./\\]+|search\s+the\s+web\s+for|run\s+(shell\s+)?command|download\s+file|capture\s+screenshot)\b/.test(text) ||
       (advisoryIntent === 'TOOL_ACTION')
