@@ -353,6 +353,20 @@ Respond with valid JSON only:
       };
     }
 
+    // Explicit memory-save language is conversational unless a real side-effect
+    // is independently classified. Do not invent a tool or try web research.
+    // Memory persistence/availability is described accurately by the model context.
+    const explicitMemoryRequest = /^(?:please\s+)?(?:remember|keep\s+in\s+mind)\s+(?:that\b|my\b|across\s+(?:future\s+)?conversations?\b|for\s+future\s+(?:chats?|conversations?)\b)/i.test(promptLower);
+    if (explicitMemoryRequest && (!sideEffectLevel || sideEffectLevel === 'NONE') && (!advisoryIntent || advisoryIntent === 'ANSWER')) {
+      return {
+        primaryIntent: 'ANSWER',
+        secondaryIntents: [],
+        confidence: 0.98,
+        reasoningStrategy: 'FAST_DIRECT',
+        isFreshnessRequired: false
+      };
+    }
+
     // Fast Path C: Automation Management (Delete/Cancel/Disable scheduled jobs)
     const isAutomationManagement = /\b(delete|cancel|remove|stop|disable|drop)\s+.*(automation|job|task|cron|workflow)\b/i.test(promptLower);
     if (isAutomationManagement) {
