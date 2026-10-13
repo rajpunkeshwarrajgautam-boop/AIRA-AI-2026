@@ -5,8 +5,47 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const TARGET_COMMIT = process.env.AIRA_TARGET_COMMIT || execSync('git rev-parse HEAD', { encoding: 'utf-8' }).trim();
-const TARGET_DEPLOYMENT_ID = process.env.AIRA_TARGET_DEPLOYMENT_ID || 'dpl_7TVyrcD2F7DCAqhugzCL5SJSrmHb';
-const PREVIEW_URL = process.env.AIRA_PREVIEW_URL || 'https://aira-ai-2026-9cm8vna36-rajpunkeshwarrajgautam-boops-projects.vercel.app/';
+
+function resolveTargetDeployment(targetCommit: string) {
+  if (process.env.AIRA_TARGET_DEPLOYMENT_ID && process.env.AIRA_PREVIEW_URL) {
+    return {
+      deploymentId: process.env.AIRA_TARGET_DEPLOYMENT_ID,
+      previewUrl: process.env.AIRA_PREVIEW_URL
+    };
+  }
+  try {
+    const rawStatuses = execSync(`gh api repos/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/commits/${targetCommit}/statuses`, { encoding: 'utf-8' });
+    const statuses = JSON.parse(rawStatuses);
+    const vercelStatus = statuses.find((s: any) =>
+      s.context === 'Vercel' &&
+      (s.state === 'success' || s.description?.toLowerCase().includes('completed'))
+    );
+    if (vercelStatus?.target_url) {
+      const match = vercelStatus.target_url.match(/aira-ai-2026\/([a-zA-Z0-9]+)/);
+      if (match) {
+        const shortId = match[1];
+        const deploymentId = shortId.startsWith('dpl_') ? shortId : `dpl_${shortId}`;
+        const inspectOut = execSync(`npx vercel inspect ${deploymentId} --json`, { encoding: 'utf-8' });
+        const jsonStart = inspectOut.indexOf('{');
+        const inspectData = JSON.parse(jsonStart >= 0 ? inspectOut.slice(jsonStart) : inspectOut);
+        if (inspectData?.url) {
+          const previewUrl = `https://${inspectData.url}/`;
+          return { deploymentId, previewUrl };
+        }
+      }
+    }
+  } catch {
+    // fallback
+  }
+  return {
+    deploymentId: process.env.AIRA_TARGET_DEPLOYMENT_ID || 'dpl_9sEKkjVbifyBWNTcfkpqA9okRpjt',
+    previewUrl: process.env.AIRA_PREVIEW_URL || 'https://aira-ai-2026-aqxcupqs0-rajpunkeshwarrajgautam-boops-projects.vercel.app/'
+  };
+}
+
+const resolvedDep = resolveTargetDeployment(TARGET_COMMIT);
+const TARGET_DEPLOYMENT_ID = resolvedDep.deploymentId;
+const PREVIEW_URL = resolvedDep.previewUrl;
 const AUTH_STATE_PATH = process.env.AIRA_AUTH_STATE_PATH || 'C:\\Users\\WORKSTATION\\AppData\\Local\\AIRA-Test\\preview-auth-state.json';
 const OUTPUT_DIR = path.resolve(process.cwd(), 'test-results/preview-acceptance');
 const ARTIFACTS_DIR = path.resolve(process.cwd(), 'artifacts/preview-acceptance');
