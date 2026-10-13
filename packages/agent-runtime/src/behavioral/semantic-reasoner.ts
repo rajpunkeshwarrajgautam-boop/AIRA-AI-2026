@@ -337,6 +337,22 @@ Respond with valid JSON only:
       };
     }
 
+    // Context-free booking references must be clarified before tool selection.
+    // A missing referent is not a reason to execute research or make reservations.
+    // Existing conversation history is deliberately left to contextual resolution.
+    const unidentifiedBooking = history.length === 0 &&
+      /^(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?(?:book|reserve)\s+(?:it|that|this)\b/i.test(promptLower);
+    if (unidentifiedBooking) {
+      return {
+        primaryIntent: 'ANSWER',
+        secondaryIntents: [],
+        confidence: 0.98,
+        reasoningStrategy: 'CLARIFY_AMBIGUOUS',
+        clarificationPrompt: 'What would you like me to book or reserve? Please identify the place, appointment, or service.',
+        isFreshnessRequired: false
+      };
+    }
+
     // Fast Path C: Automation Management (Delete/Cancel/Disable scheduled jobs)
     const isAutomationManagement = /\b(delete|cancel|remove|stop|disable|drop)\s+.*(automation|job|task|cron|workflow)\b/i.test(promptLower);
     if (isAutomationManagement) {
