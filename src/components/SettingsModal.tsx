@@ -701,7 +701,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <div className="p-4 rounded-2xl border border-claude-terracotta/20 bg-claude-terracotta/5 dark:bg-claude-terracotta/10 flex items-center justify-between">
                     <div>
                       <div className="text-xs uppercase font-bold tracking-wider text-claude-accentInk">Subscription Plan</div>
-                      <div className="text-sm font-bold text-claude-text-light dark:text-white mt-0.5">Aira Pro (Claude 3.7 Extended Limits)</div>
+                      <div className="text-sm font-bold text-claude-text-light dark:text-white mt-0.5">Aira Pro (Multi-Model Extended Intelligence)</div>
                       <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">200K token context window with hybrid reasoning.</div>
                     </div>
                     <span className="text-xs font-bold px-3 py-1 rounded-full bg-claude-terracotta text-claude-onAccent">Active</span>

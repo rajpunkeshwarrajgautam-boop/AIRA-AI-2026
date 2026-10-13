@@ -4,6 +4,7 @@ import { agentMemory } from './agentMemoryEngine';
 export interface StreamCallbacks {
   onThinkingChunk?: (chunk: string) => void;
   onContentChunk: (chunk: string) => void;
+  onProvenance?: (provenance: any) => void;
   onArtifactFound?: (artifact: Artifact) => void;
   onApprovalRequired?: (approval: { id: string; runId: string; toolCall?: { name: string; arguments: any }; reason?: string }) => void;
   onStatusUpdate?: (status: string) => void;
@@ -160,7 +161,9 @@ export async function streamAIResponse(
               }
               try {
                 const data = JSON.parse(dataStr);
-                if (currentEvent === 'capability_unready' && data.message) {
+                if (currentEvent === 'model_provenance' || (data.requestedModel && data.executedModel)) {
+                  wrappedCallbacks.onProvenance?.(data);
+                } else if (currentEvent === 'capability_unready' && data.message) {
                   wrappedCallbacks.onContentChunk(data.message);
                 } else if (currentEvent === 'approval_required') {
                   wrappedCallbacks.onApprovalRequired?.(data);

@@ -86,8 +86,8 @@ const INITIAL_SEED_MEMORIES: MemoryItem[] = [
     tier: 'semantic',
     category: 'decision',
     title: 'Hybrid Reasoning Engine Standard',
-    content: 'Claude 3.7 hybrid deep reasoning supports dynamic extended thinking budgets (1024 to 64000 tokens) with collapsible Newsreader serif thought blocks and live token telemetry.',
-    tags: ['claude', 'thinking', 'reasoning', 'hybrid', 'tokens'],
+    content: 'Aira hybrid reasoning architecture supports dynamic extended thinking budgets (1024 to 64000 tokens) with collapsible Newsreader serif thought blocks and live token telemetry.',
+    tags: ['thinking', 'reasoning', 'hybrid', 'tokens'],
     createdAt: Date.now() - 86400000 * 2,
     updatedAt: Date.now() - 86400000 * 2,
     accessCount: 7,
@@ -386,22 +386,27 @@ class AgentMemoryEngine {
     const rrfK = 40;
 
     sortedBM25.forEach((item, rank) => {
+      const bmScore = bm25Scores.get(item.id) || 0;
+      if (bmScore <= 0) return;
       const current = rrfScores.get(item.id) || 0;
       rrfScores.set(item.id, current + 1 / (rrfK + rank + 1));
     });
 
     sortedVec.forEach((item, rank) => {
+      const vecScore = vectorScores.get(item.id) || 0;
+      if (vecScore <= 0) return;
       const current = rrfScores.get(item.id) || 0;
       rrfScores.set(item.id, current + 1 / (rrfK + rank + 1));
     });
 
     // Normalize and filter with RELEVANCE-FIRST rule:
-    // Pinned status provides a modest boost (+0.08), but cannot bypass the minScore threshold.
+    // Pinned status provides a modest boost (+0.08), but cannot bypass the minScore threshold,
+    // and cannot boost zero-match items into relevance.
     const scoredList = candidateItems
       .map(item => {
         const finalScore = rrfScores.get(item.id) || 0;
-        let score = Math.min(1, Number((finalScore * 25).toFixed(3)));
-        if (item.isPinned) {
+        let score = finalScore > 0 ? Math.min(1, Number((finalScore * 25).toFixed(3))) : 0;
+        if (item.isPinned && score > 0) {
           score = Math.min(1, Number((score + 0.08).toFixed(3)));
         }
         return {

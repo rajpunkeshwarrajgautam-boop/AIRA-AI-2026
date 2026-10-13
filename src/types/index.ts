@@ -66,6 +66,17 @@ export interface Message {
   timestamp: number;
   modelUsed?: ModelId;
   isStreaming?: boolean;
+  provenance?: {
+    requestedModel: string;
+    resolvedPolicyModel: string;
+    provider: 'nvidia' | 'anthropic' | 'openai' | 'mock' | 'unknown';
+    executedModel: string;
+    fallbackOccurred: boolean;
+    fallbackReason?: string;
+    verified: boolean;
+    executionStatus: 'SUCCESS' | 'FALLBACK' | 'FAILED' | 'UNKNOWN';
+    timestamp: number;
+  };
 }
 
 export interface Conversation {

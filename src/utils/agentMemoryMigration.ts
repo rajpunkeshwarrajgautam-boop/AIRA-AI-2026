@@ -2,7 +2,7 @@ import type { MemoryItem } from '../types/index.js';
 
 export const STORAGE_KEY = 'aira_agentmemory_vault_v1';
 export const STORAGE_MIGRATION_VERSION_KEY = 'aira_agentmemory_vault_migration_version';
-export const CURRENT_MIGRATION_VERSION = 20260210;
+export const CURRENT_MIGRATION_VERSION = 20260211;
 
 export interface MigrationReport {
   version: number;
@@ -126,6 +126,29 @@ export function migrateAgentMemoryVault(rawItems: unknown): {
         migratedItems.push(updatedItem);
         changesMade = true;
         unpinnedProcedureSeeds++;
+        continue;
+      }
+    }
+
+    // Handle Seed Entry 3: Hybrid Reasoning Engine Standard
+    // Sanitize any stale "Claude 3.7" claims from persistent browser memory
+    if (id === 'seed-sem-dec-1') {
+      const content = String(item.content || '');
+      if (content.includes('Claude 3.7') || (Array.isArray(item.tags) && item.tags.includes('claude'))) {
+        const cleanedContent = content.replace(/Claude\s+3\.7\s+hybrid\s+deep\s+reasoning/gi, 'Aira hybrid reasoning architecture');
+        const cleanedTags = Array.isArray(item.tags) ? item.tags.filter((t: string) => t !== 'claude') : [];
+
+        const updatedItem: MemoryItem = {
+          ...item,
+          id,
+          content: cleanedContent,
+          tags: cleanedTags,
+          updatedAt: timestamp,
+        };
+
+        migratedItems.push(updatedItem);
+        changesMade = true;
+        defectiveSeedsCleaned++;
         continue;
       }
     }

@@ -13,7 +13,8 @@ import {
   Citation,
   Artifact,
   ApprovalDecision,
-  ExecutionPrincipal
+  ExecutionPrincipal,
+  ModelProvenance
 } from '../../contracts/src/index.js';
 import { ModelRouter, ChatMessageInput } from '../../model-router/src/index.js';
 import { ToolRegistry, ToolGateway, PostgresToolCallRepository } from '../../tool-runtime/src/index.js';
@@ -167,10 +168,12 @@ export class AgentRuntime extends EventEmitter {
       conversationHistory
     });
 
-    const basePolicy = this.modelRouter.resolvePolicy(
+    const execution = this.modelRouter.resolveExecution(
       request.modelPolicy?.model || 'aira-auto',
       routingDecision.intent
     );
+
+    const basePolicy = execution.policy;
     const requestedPolicy = request.modelPolicy;
     const extendedThinking = requestedPolicy?.extendedThinking ?? basePolicy.extendedThinking;
 
@@ -181,6 +184,18 @@ export class AgentRuntime extends EventEmitter {
       extendedThinking,
       reasoningBudget: requestedPolicy?.reasoningBudget ?? (extendedThinking ? (basePolicy.reasoningBudget ?? 2048) : undefined),
     });
+
+    const provenance: ModelProvenance = {
+      requestedModel: request.modelPolicy?.model || 'aira-auto',
+      resolvedPolicyModel: execution.policy.model,
+      provider: execution.provider,
+      executedModel: execution.executedModel,
+      fallbackOccurred: execution.fallbackOccurred,
+      fallbackReason: execution.fallbackReason,
+      verified: execution.verified,
+      executionStatus: execution.fallbackOccurred ? 'FALLBACK' : 'SUCCESS',
+      timestamp: now
+    };
 
     const run: Run = {
       id: runId,
@@ -193,6 +208,7 @@ export class AgentRuntime extends EventEmitter {
       conversationId: request.conversationId || null,
       intent: routingDecision.intent,
       routingDecision,
+      provenance,
       state: 'QUEUED',
       modelPolicy: policy,
       prompt: request.prompt,
@@ -942,14 +958,45 @@ export class AgentRuntime extends EventEmitter {
         });
       }
       
+      if (run.provenance) {
+        await this.emitRunEvent(runId, 'model.provenance', run.provenance);
+      }
+
       const now = new Date();
       const liveSearchProviders = configuredSearchProviders();
-      const currentContextMsg = `AIRA RUNTIME CONTEXT
+      const prov = run.provenance;
+      const executedModel = prov?.executedModel || run.modelPolicy.model;
+      const executedProvider = prov?.provider || 'unknown';
+      const providerLabel = executedProvider === 'nvidia' ? 'NVIDIA NIM'
+        : executedProvider === 'anthropic' ? 'Anthropic'
+        : executedProvider === 'openai' ? 'OpenAI'
+        : executedProvider === 'mock' ? 'Deterministic Mock'
+        : 'Unknown Provider';
+
+      const currentContextMsg = `AIRA RUNTIME CONTEXT & IDENTITY PROVENANCE:
 Current date: ${now.toDateString()}
 Current UTC time: ${now.toISOString()}
-Provider Capabilities:
-- webSearch: ${liveSearchProviders.length > 0 ? `READY (${liveSearchProviders.join(', ')})` : 'PROVIDER_NOT_CONFIGURED'}
-- researchEvidenceCount: ${run.citations?.length || 0}`;
+Platform: AIRA AI 2026 (Autonomous Operating Workspace)
+Execution Model: ${executedModel}
+Execution Provider: ${providerLabel}
+Requested Model: ${prov?.requestedModel || run.modelPolicy.model}
+${prov?.fallbackOccurred ? `Routing Notice: Provider fallback occurred (${prov.fallbackReason || 'preferred provider unavailable'}).` : ''}
+
+CAPABILITY & IDENTITY INVARIANTS:
+1. Model Identity Accuracy:
+   - When asked what model powers you or generated this response, state truthfully that you are AIRA AI operating with ${executedModel} via ${providerLabel}.
+   - Never claim to be "powered by Claude 3.7", "Anthropic Claude", "OpenAI GPT", or any other model unless that model is explicitly the Execution Model above.
+   - Do NOT adopt model claims from retrieved memories, project conventions, or conversational context that contradict your runtime Execution Model.
+2. Operational Capabilities:
+   - Web Search: ${liveSearchProviders.length > 0 ? `OPERATIONAL (${liveSearchProviders.join(', ')})` : 'NOT_CONFIGURED'}
+   - Multi-step Workflows: OPERATIONAL (via workflow engine DAG execution).
+   - Tool Execution: OPERATIONAL (system tools execute subject to principal permissions).
+   - Memory Vault: OPERATIONAL (agent memory retrieves contextual preferences and decisions).
+   - You must NOT claim access to tools or features that are not operational. You do not have unrestricted local OS or device access without tool execution.
+3. Model vs Platform Distinction:
+   - AIRA AI is the workspace and application platform.
+   - The foundation model powering this generation is ${executedModel}.
+   - Distinguish the platform features from the underlying model capabilities.`;
 
       messages.push({
         role: 'system',

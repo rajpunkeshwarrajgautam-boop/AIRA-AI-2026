@@ -408,6 +408,14 @@ function App() {
             ...c,
             messages: c.messages.map(m => m.id === assistantId ? { ...m, content: m.content + chunk } : m),
           })),
+          onProvenance: provenance => updateConversation(id, c => ({
+            ...c,
+            messages: c.messages.map(m => m.id === assistantId ? {
+              ...m,
+              provenance,
+              modelUsed: (provenance.executedModel || m.modelUsed) as any
+            } : m),
+          })),
           onArtifactFound: artifact => {
             setActiveArtifact(artifact);
             updateConversation(id, c => ({

@@ -397,6 +397,23 @@ export const ArtifactSchema = z.object({
 export type Artifact = z.infer<typeof ArtifactSchema>;
 
 // ==========================================
+// 5.5 MODEL PROVENANCE & EXECUTION CONTRACT
+// ==========================================
+
+export const ModelProvenanceSchema = z.object({
+  requestedModel: z.string(),
+  resolvedPolicyModel: z.string(),
+  provider: z.enum(['nvidia', 'anthropic', 'openai', 'mock', 'unknown']),
+  executedModel: z.string(),
+  fallbackOccurred: z.boolean(),
+  fallbackReason: z.string().optional(),
+  verified: z.boolean(),
+  executionStatus: z.enum(['SUCCESS', 'FALLBACK', 'FAILED', 'UNKNOWN']),
+  timestamp: z.number()
+});
+export type ModelProvenance = z.infer<typeof ModelProvenanceSchema>;
+
+// ==========================================
 // 6. RUN CONTRACT
 // ==========================================
 
@@ -411,6 +428,7 @@ export const RunSchema = z.object({
   conversationId: z.string().nullable().optional(),
   intent: IntentTaxonomySchema.default('ANSWER'),
   routingDecision: RoutingDecisionSchema.optional(),
+  provenance: ModelProvenanceSchema.optional(),
   state: RunStateSchema.default('QUEUED'),
   modelPolicy: ModelPolicySchema,
   prompt: z.string(),
@@ -464,6 +482,7 @@ export const StreamingEventTypeSchema = z.enum([
   'run.created',
   'run.started',
   'routing.decision',
+  'model.provenance',
   'thinking.delta',
   'content.delta',
   'tool.requested',

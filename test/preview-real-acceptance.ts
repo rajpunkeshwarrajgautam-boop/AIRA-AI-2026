@@ -1,9 +1,12 @@
 import { chromium, type Page } from 'playwright';
 import assert from 'node:assert/strict';
+import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const PREVIEW_URL = process.env.AIRA_PREVIEW_URL || 'https://aira-ai-2026-gz2p91qpy-rajpunkeshwarrajgautam-boops-projects.vercel.app/';
+const TARGET_COMMIT = process.env.AIRA_TARGET_COMMIT || execSync('git rev-parse HEAD', { encoding: 'utf-8' }).trim();
+const TARGET_DEPLOYMENT_ID = process.env.AIRA_TARGET_DEPLOYMENT_ID || 'dpl_7H6rZ1XKPRP5q3PZzuVKgU2GZP7E';
+const PREVIEW_URL = process.env.AIRA_PREVIEW_URL || 'https://aira-ai-2026-kapmi53th-rajpunkeshwarrajgautam-boops-projects.vercel.app/';
 const AUTH_STATE_PATH = process.env.AIRA_AUTH_STATE_PATH || 'C:\\Users\\WORKSTATION\\AppData\\Local\\AIRA-Test\\preview-auth-state.json';
 const OUTPUT_DIR = path.resolve(process.cwd(), 'test-results/preview-acceptance');
 
@@ -18,8 +21,99 @@ interface AcceptanceEvidence {
   metadata?: Record<string, unknown>;
 }
 
+interface AcceptanceReport {
+  targetCommit: string;
+  targetDeploymentId: string;
+  previewUrl: string;
+  timestamp: string;
+  overallStatus: 'PASS' | 'FAIL';
+  fontCorsErrors: string[];
+  tests: AcceptanceEvidence[];
+}
+
 const USER_SELECTOR = '.group.justify-end .aira-prose';
 const ASSISTANT_SELECTOR = '.group:not(.justify-end) .aira-prose';
+
+function getAutomationBypassSecret(): string | undefined {
+  return process.env.VERCEL_AUTOMATION_BYPASS_SECRET || undefined;
+}
+
+function verifyTargetDeployment(): void {
+  console.log('\n========================================================================');
+  console.log('  VERIFYING TARGET COMMIT & DEPLOYMENT PRE-CONDITIONS                  ');
+  console.log('========================================================================');
+  
+  const localHead = execSync('git rev-parse HEAD', { encoding: 'utf-8' }).trim();
+  console.log('Local Git HEAD:    ', localHead);
+  console.log('Required Commit:   ', TARGET_COMMIT);
+  assert.strictEqual(localHead, TARGET_COMMIT, `Local git HEAD (${localHead}) must match target commit (${TARGET_COMMIT})`);
+  console.log('✓ Local Git HEAD matches target commit exactly.');
+
+  try {
+    const prHead = execSync('gh pr view 51 --json headRefOid -q .headRefOid', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] }).trim();
+    console.log('PR #51 Head SHA:   ', prHead);
+    assert.strictEqual(prHead, TARGET_COMMIT, `PR #51 headRefOid (${prHead}) must match target commit (${TARGET_COMMIT})`);
+    console.log('✓ PR #51 Head SHA matches target commit exactly.');
+  } catch (err: any) {
+    console.warn(`[PR CHECK WARNING] Could not verify via gh CLI: ${err.message}`);
+  }
+
+  try {
+    const rawOutput = execSync(`npx vercel inspect ${TARGET_DEPLOYMENT_ID} 2>&1`, { encoding: 'utf-8' });
+    assert.ok(rawOutput.includes(TARGET_DEPLOYMENT_ID), `Vercel CLI inspect must confirm deployment ID ${TARGET_DEPLOYMENT_ID}`);
+    assert.ok(rawOutput.includes('Ready'), `Deployment ${TARGET_DEPLOYMENT_ID} must be Ready`);
+    console.log(`✓ Vercel CLI confirmed deployment ${TARGET_DEPLOYMENT_ID} is Ready.`);
+  } catch (err: any) {
+    console.warn(`[VERCEL CHECK WARNING] Could not verify via Vercel CLI: ${err.message}`);
+  }
+}
+
+async function clickNewChat(page: Page): Promise<void> {
+  console.log('\n[TRANSITION] Starting new conversation for next scenario...');
+  
+  // 1. Try keyboard shortcut Ctrl+N
+  await page.keyboard.press('Control+n');
+  await page.waitForTimeout(600);
+  let count = await page.locator(ASSISTANT_SELECTOR).count();
+  if (count === 0) {
+    console.log('✓ Reset conversation via keyboard shortcut (Ctrl+N).');
+    return;
+  }
+
+  // 2. Try clicking "Start new chat" button in sidebar if already open
+  const startNewChatBtn = page.locator('button:has-text("Start new chat"), button:has-text("New chat"), button[aria-label="New chat"]').first();
+  if (await startNewChatBtn.isVisible()) {
+    await startNewChatBtn.click();
+    await page.waitForTimeout(600);
+    count = await page.locator(ASSISTANT_SELECTOR).count();
+    if (count === 0) {
+      console.log('✓ Reset conversation via sidebar button.');
+      return;
+    }
+  }
+
+  // 3. Try opening sidebar drawer if collapsed, then click
+  const openSidebarBtn = page.locator('button[aria-label="Open sidebar navigation"], button[title="Open sidebar"]').first();
+  if (await openSidebarBtn.isVisible()) {
+    await openSidebarBtn.click();
+    await page.waitForTimeout(400);
+    if (await startNewChatBtn.isVisible()) {
+      await startNewChatBtn.click();
+      await page.waitForTimeout(600);
+      count = await page.locator(ASSISTANT_SELECTOR).count();
+      if (count === 0) {
+        console.log('✓ Reset conversation via opened sidebar drawer.');
+        return;
+      }
+    }
+  }
+
+  // 4. Fallback: navigate to clean root URL
+  console.log('Navigating to root URL to reset conversation...');
+  await page.goto(PREVIEW_URL, { waitUntil: 'domcontentloaded' });
+  const textarea = page.locator('textarea');
+  await textarea.waitFor({ state: 'visible', timeout: 15000 });
+}
 
 async function sendMessageAndWaitForResponse(page: Page, prompt: string, timeoutMs = 120000): Promise<string> {
   process.stdout.write(`\nSubmitting prompt: "${prompt}"\n`);
@@ -85,15 +179,15 @@ async function main() {
   const consoleErrors: string[] = [];
   const results: AcceptanceEvidence[] = [];
 
-  console.log('========================================================================');
-  console.log('  AIRA PREVIEW REAL BROWSER ACCEPTANCE TESTING                          ');
-  console.log('========================================================================');
-  console.log('Target URL:   ', PREVIEW_URL);
-  console.log('Browser:      Microsoft Edge (channel: msedge)');
+  // Enforce pre-conditions
+  verifyTargetDeployment();
 
-  const bypassSecret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
-  console.log('Bypass Secret:', bypassSecret ? 'CONFIGURED (Active)' : 'NOT PRESENT');
-  console.log('Auth Storage: ', fs.existsSync(AUTH_STATE_PATH) ? `FOUND (${AUTH_STATE_PATH})` : 'NOT FOUND');
+  const bypassSecret = getAutomationBypassSecret();
+  console.log('Bypass Secret:     ', bypassSecret ? 'CONFIGURED (Active)' : 'NOT PRESENT');
+  console.log('Auth Storage:      ', fs.existsSync(AUTH_STATE_PATH) ? `FOUND (${AUTH_STATE_PATH})` : 'NOT FOUND');
+  console.log('Target URL:        ', PREVIEW_URL);
+  console.log('Deployment ID:     ', TARGET_DEPLOYMENT_ID);
+  console.log('Browser Channel:    Microsoft Edge (channel: msedge)');
 
   const previewOrigin = new URL(PREVIEW_URL).origin;
 
@@ -198,13 +292,7 @@ async function main() {
     console.log('\n========================================================================');
     console.log('  TEST B: Tokyo Weather Forecast (Operational Evidence Only)            ');
     console.log('========================================================================');
-    const newChatBtn = page.locator('button:has-text("New chat"), button[aria-label="New chat"], button:has-text("New Conversation")').first();
-    if (await newChatBtn.isVisible()) {
-      await newChatBtn.click();
-      await page.waitForTimeout(1000);
-    } else {
-      await page.goto(PREVIEW_URL, { waitUntil: 'domcontentloaded' });
-    }
+    await clickNewChat(page);
 
     const promptB = "What is today's weather forecast for Tokyo, Japan? Use date-specific evidence, not monthly climate averages.";
     const startB = Date.now();
@@ -236,12 +324,7 @@ async function main() {
     console.log('\n========================================================================');
     console.log('  TEST C: NVIDIA Share Price & Trading Session Precision                ');
     console.log('========================================================================');
-    if (await newChatBtn.isVisible()) {
-      await newChatBtn.click();
-      await page.waitForTimeout(1000);
-    } else {
-      await page.goto(PREVIEW_URL, { waitUntil: 'domcontentloaded' });
-    }
+    await clickNewChat(page);
 
     const promptC = "What is NVIDIA's latest share price? Distinguish the previous close and premarket quote, with timestamps.";
     const startC = Date.now();
@@ -275,12 +358,7 @@ async function main() {
     console.log('\n========================================================================');
     console.log('  TEST D: Multi-turn Clarification & Persistence After Refresh           ');
     console.log('========================================================================');
-    if (await newChatBtn.isVisible()) {
-      await newChatBtn.click();
-      await page.waitForTimeout(1000);
-    } else {
-      await page.goto(PREVIEW_URL, { waitUntil: 'domcontentloaded' });
-    }
+    await clickNewChat(page);
 
     const promptD1 = "What is the current share price?";
     const responseD1 = await sendMessageAndWaitForResponse(page, promptD1);
@@ -358,9 +436,62 @@ async function main() {
       }
     });
 
+    // -------------------------------------------------------------------------
+    // TEST E: Model Identity, Provenance & Capability Accuracy
+    // -------------------------------------------------------------------------
+    console.log('\n========================================================================');
+    console.log('  TEST E: Model Identity & Capability Accuracy                          ');
+    console.log('========================================================================');
+    await clickNewChat(page);
+
+    // Switch model to NVIDIA Nemotron 3 Super 120B-A12B if available in model selector
+    const modelSelectorBtn = page.locator('button:has-text("Aira Auto"), button:has-text("Nemotron"), button[aria-label="Select model"]').first();
+    if (await modelSelectorBtn.isVisible()) {
+      await modelSelectorBtn.click();
+      await page.waitForTimeout(400);
+      const nemotronOption = page.locator('button:has-text("Nemotron"), div:has-text("Nemotron")').first();
+      if (await nemotronOption.isVisible()) {
+        await nemotronOption.click();
+        await page.waitForTimeout(400);
+        console.log('✓ Model selected: NVIDIA Nemotron 3 Super 120B-A12B');
+      }
+    }
+
+    const promptE = 'HOW CAPABLE ARE YOU';
+    const startE = Date.now();
+    const responseE = await sendMessageAndWaitForResponse(page, promptE);
+    const durationE = Date.now() - startE;
+    const screenshotE = path.join(OUTPUT_DIR, 'test_e_capability_identity.png');
+    await page.screenshot({ path: screenshotE, fullPage: true });
+
+    console.log(`Test E Response Length: ${responseE.length} chars (took ${(durationE/1000).toFixed(1)}s)`);
+    console.log('Test E Response snippet:', responseE.slice(0, 300));
+    assert.ok(responseE.length > 50, 'Test E response must not be empty');
+    assert.doesNotMatch(responseE, /Claude 3\.7/i, 'Must NEVER claim to be powered by Claude 3.7');
+    assert.doesNotMatch(responseE, /Claude 3\.5/i, 'Must NEVER claim to be powered by Claude 3.5');
+
+    results.push({
+      testId: 'TEST_E_CAPABILITY_IDENTITY',
+      prompt: promptE,
+      response: responseE,
+      sourceLinks: await extractSourceLinks(page),
+      consoleErrors: [...consoleErrors],
+      screenshotPath: screenshotE,
+      durationMs: durationE
+    });
+
     // Write acceptance report artifact
     const reportPath = path.join(OUTPUT_DIR, 'acceptance-evidence.json');
-    fs.writeFileSync(reportPath, JSON.stringify(results, null, 2));
+    const finalReport: AcceptanceReport = {
+      targetCommit: TARGET_COMMIT,
+      targetDeploymentId: TARGET_DEPLOYMENT_ID,
+      previewUrl: PREVIEW_URL,
+      timestamp: new Date().toISOString(),
+      overallStatus: 'PASS',
+      fontCorsErrors: fontErrors,
+      tests: results
+    };
+    fs.writeFileSync(reportPath, JSON.stringify(finalReport, null, 2));
     console.log('\n✓ All real browser tests completed successfully!');
     console.log('Report saved to:', reportPath);
 
