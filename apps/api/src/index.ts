@@ -49,6 +49,7 @@ if (process.env.NODE_ENV === 'production') {
 
 import { createPrincipalMiddleware } from './middleware/principal.js';
 import { createSessionAuthMiddleware, ensureAuthenticatedSession } from './auth/session-auth.js';
+import { isTemporaryDatabaseError } from './utils/storage-errors.js';
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
@@ -267,6 +268,13 @@ app.post('/api/conversations/sync', async (req: Request, res: Response) => {
       indexing
     });
   } catch (err: any) {
+    if (isTemporaryDatabaseError(err)) {
+      res.setHeader('Retry-After', '2');
+      return res.status(503).json({
+        code: 'CONVERSATION_STORAGE_TEMPORARILY_UNAVAILABLE',
+        error: 'Conversation storage is temporarily unavailable. Retry shortly.'
+      });
+    }
     const status = String(err?.message || '').includes('ownership mismatch') ? 403 : 400;
     res.status(status).json({ error: err?.message || 'Conversation sync failed.' });
   }
