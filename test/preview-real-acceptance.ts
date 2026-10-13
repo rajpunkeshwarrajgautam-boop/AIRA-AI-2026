@@ -5,10 +5,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const TARGET_COMMIT = process.env.AIRA_TARGET_COMMIT || execSync('git rev-parse HEAD', { encoding: 'utf-8' }).trim();
-const TARGET_DEPLOYMENT_ID = process.env.AIRA_TARGET_DEPLOYMENT_ID || 'dpl_98wTTTj5iukSPtL8W9u3nUCzwCrj';
-const PREVIEW_URL = process.env.AIRA_PREVIEW_URL || 'https://aira-ai-2026-1awofqqbj-rajpunkeshwarrajgautam-boops-projects.vercel.app/';
+const TARGET_DEPLOYMENT_ID = process.env.AIRA_TARGET_DEPLOYMENT_ID || 'dpl_EbZA7vDuC49HvWnq9zYPAbQXafmM';
+const PREVIEW_URL = process.env.AIRA_PREVIEW_URL || 'https://aira-ai-2026-j6m3g6w29-rajpunkeshwarrajgautam-boops-projects.vercel.app/';
 const AUTH_STATE_PATH = process.env.AIRA_AUTH_STATE_PATH || 'C:\\Users\\WORKSTATION\\AppData\\Local\\AIRA-Test\\preview-auth-state.json';
 const OUTPUT_DIR = path.resolve(process.cwd(), 'test-results/preview-acceptance');
+const ARTIFACTS_DIR = path.resolve(process.cwd(), 'artifacts/preview-acceptance');
 
 interface AcceptanceEvidence {
   testId: string;
@@ -43,7 +44,8 @@ function getAutomationBypassSecret(): string | undefined {
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'ignore']
     });
-    const data = JSON.parse(out);
+    const jsonStart = out.indexOf('{');
+    const data = JSON.parse(jsonStart >= 0 ? out.slice(jsonStart) : out);
     if (data.protectionBypass) {
       const secret = Object.keys(data.protectionBypass)[0];
       if (secret) return secret;
@@ -189,8 +191,21 @@ async function extractSourceLinks(page: Page): Promise<string[]> {
   return Array.from(new Set(links));
 }
 
+async function saveEvidenceScreenshot(page: Page, filename: string): Promise<string> {
+  const p1 = path.join(OUTPUT_DIR, filename);
+  const p2 = path.join(ARTIFACTS_DIR, filename);
+  await page.screenshot({ path: p1, fullPage: true });
+  try {
+    fs.copyFileSync(p1, p2);
+  } catch (err: any) {
+    console.warn(`[WARN] Could not copy screenshot to ${p2}: ${err.message}`);
+  }
+  return p1;
+}
+
 async function main() {
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+  fs.mkdirSync(ARTIFACTS_DIR, { recursive: true });
 
   const consoleErrors: string[] = [];
   const results: AcceptanceEvidence[] = [];
@@ -281,8 +296,7 @@ async function main() {
     const responseA = await sendMessageAndWaitForResponse(page, promptA);
     const durationA = Date.now() - startA;
     const sourcesA = await extractSourceLinks(page);
-    const screenshotA = path.join(OUTPUT_DIR, 'test_a_avatar_box_office.png');
-    await page.screenshot({ path: screenshotA, fullPage: true });
+    const screenshotA = await saveEvidenceScreenshot(page, 'test_a_avatar_box_office.png');
 
     console.log(`Test A Response Length: ${responseA.length} chars (took ${(durationA/1000).toFixed(1)}s)`);
     console.log('Test A Sources Found:', sourcesA);
@@ -315,8 +329,7 @@ async function main() {
     const responseB = await sendMessageAndWaitForResponse(page, promptB);
     const durationB = Date.now() - startB;
     const sourcesB = await extractSourceLinks(page);
-    const screenshotB = path.join(OUTPUT_DIR, 'test_b_tokyo_weather.png');
-    await page.screenshot({ path: screenshotB, fullPage: true });
+    const screenshotB = await saveEvidenceScreenshot(page, 'test_b_tokyo_weather.png');
 
     console.log(`Test B Response Length: ${responseB.length} chars (took ${(durationB/1000).toFixed(1)}s)`);
     console.log('Test B Sources Found:', sourcesB);
@@ -347,8 +360,7 @@ async function main() {
     const responseC = await sendMessageAndWaitForResponse(page, promptC);
     const durationC = Date.now() - startC;
     const sourcesC = await extractSourceLinks(page);
-    const screenshotC = path.join(OUTPUT_DIR, 'test_c_nvidia_financial.png');
-    await page.screenshot({ path: screenshotC, fullPage: true });
+    const screenshotC = await saveEvidenceScreenshot(page, 'test_c_nvidia_financial.png');
 
     console.log(`Test C Response Length: ${responseC.length} chars (took ${(durationC/1000).toFixed(1)}s)`);
     console.log('Test C Sources Found:', sourcesC);
@@ -433,8 +445,7 @@ async function main() {
     const postRefreshAssistantText = await page.locator(ASSISTANT_SELECTOR).last().innerText();
     assert.match(postRefreshAssistantText, /NVIDIA|NVDA/i, 'Persisted conversation content must match resolution response');
 
-    const screenshotD = path.join(OUTPUT_DIR, 'test_d_multi_turn_persistence.png');
-    await page.screenshot({ path: screenshotD, fullPage: true });
+    const screenshotD = await saveEvidenceScreenshot(page, 'test_d_multi_turn_persistence.png');
 
     results.push({
       testId: 'TEST_D_MULTI_TURN_PERSISTENCE',
@@ -463,7 +474,7 @@ async function main() {
     await clickNewChat(page);
 
     // Switch model to NVIDIA Nemotron 3 Super 120B-A12B via role="option" in model-menu
-    const modelSelectorTrigger = page.locator('button:has-text("Aira Auto"), button:has-text("Nemotron"), button[aria-haspopup="listbox"]').first();
+    const modelSelectorTrigger = page.locator('header button[aria-haspopup="listbox"]').first();
     await modelSelectorTrigger.waitFor({ state: 'visible', timeout: 10000 });
     await modelSelectorTrigger.click();
     await page.waitForSelector('[data-testid="model-menu"]', { state: 'visible', timeout: 5000 });
@@ -481,8 +492,7 @@ async function main() {
     const startE1 = Date.now();
     const responseE1 = await sendMessageAndWaitForResponse(page, promptE1);
     const durationE1 = Date.now() - startE1;
-    const screenshotE1 = path.join(OUTPUT_DIR, 'test_e1_explicit_nemotron.png');
-    await page.screenshot({ path: screenshotE1, fullPage: true });
+    const screenshotE1 = await saveEvidenceScreenshot(page, 'test_e1_explicit_nemotron.png');
 
     console.log(`Test E1 Response Length: ${responseE1.length} chars (took ${(durationE1/1000).toFixed(1)}s)`);
     console.log('Test E1 Response snippet:', responseE1.slice(0, 300));
@@ -534,8 +544,7 @@ async function main() {
     const startE2 = Date.now();
     const responseE2 = await sendMessageAndWaitForResponse(page, promptE2);
     const durationE2 = Date.now() - startE2;
-    const screenshotE2 = path.join(OUTPUT_DIR, 'test_e2_aira_auto.png');
-    await page.screenshot({ path: screenshotE2, fullPage: true });
+    const screenshotE2 = await saveEvidenceScreenshot(page, 'test_e2_aira_auto.png');
 
     console.log(`Test E2 Response Length: ${responseE2.length} chars (took ${(durationE2/1000).toFixed(1)}s)`);
     assert.ok(responseE2.length > 50, 'Test E2 response must not be empty');
@@ -572,6 +581,11 @@ async function main() {
       tests: results
     };
     fs.writeFileSync(reportPath, JSON.stringify(finalReport, null, 2));
+    try {
+      fs.writeFileSync(path.join(ARTIFACTS_DIR, 'acceptance-evidence.json'), JSON.stringify(finalReport, null, 2));
+    } catch (err: any) {
+      console.warn(`[WARN] Could not copy report to artifacts dir: ${err.message}`);
+    }
     console.log('\n✓ All real browser tests completed successfully!');
     console.log('Report saved to:', reportPath);
 

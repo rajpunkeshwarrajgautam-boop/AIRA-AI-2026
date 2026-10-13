@@ -27,3 +27,4 @@ dist-ssr
 graphify-out/
 .neon
 test-results/preview-acceptance/
+artifacts/
