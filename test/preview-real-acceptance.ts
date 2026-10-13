@@ -4,15 +4,24 @@ import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const TARGET_COMMIT = process.env.AIRA_TARGET_COMMIT || execSync('git rev-parse HEAD', { encoding: 'utf-8' }).trim();
+export function isRequestTargetingOrigin(requestUrl: string, expectedOrigin: string): boolean {
+  try {
+    const targetOrigin = new URL(requestUrl).origin.toLowerCase();
+    const allowedOrigin = new URL(expectedOrigin).origin.toLowerCase();
+    return targetOrigin === allowedOrigin;
+  } catch {
+    return false;
+  }
+}
 
-function resolveTargetDeployment(targetCommit: string) {
+export function resolveTargetDeployment(targetCommit: string) {
   if (process.env.AIRA_TARGET_DEPLOYMENT_ID && process.env.AIRA_PREVIEW_URL) {
     return {
       deploymentId: process.env.AIRA_TARGET_DEPLOYMENT_ID,
       previewUrl: process.env.AIRA_PREVIEW_URL
     };
   }
+  let lookupError: Error | undefined;
   try {
     const rawStatuses = execSync(`gh api repos/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/commits/${targetCommit}/statuses`, { encoding: 'utf-8' });
     const statuses = JSON.parse(rawStatuses);
@@ -34,18 +43,32 @@ function resolveTargetDeployment(targetCommit: string) {
         }
       }
     }
-  } catch {
-    // fallback
+  } catch (err: any) {
+    lookupError = err;
   }
-  return {
-    deploymentId: process.env.AIRA_TARGET_DEPLOYMENT_ID || 'dpl_9sEKkjVbifyBWNTcfkpqA9okRpjt',
-    previewUrl: process.env.AIRA_PREVIEW_URL || 'https://aira-ai-2026-aqxcupqs0-rajpunkeshwarrajgautam-boops-projects.vercel.app/'
-  };
+  throw new Error(
+    `RESOLVE_DEPLOYMENT_FAILED: No matching successful Vercel deployment could be dynamically resolved for commit ${targetCommit}. ` +
+    `Dynamic lookup failures will not silently substitute a stale preview. ` +
+    `Explicit parameters (AIRA_TARGET_DEPLOYMENT_ID and AIRA_PREVIEW_URL) may be provided, subject to strict verification.` +
+    (lookupError ? ` Cause: ${lookupError.message}` : '')
+  );
 }
 
-const resolvedDep = resolveTargetDeployment(TARGET_COMMIT);
-const TARGET_DEPLOYMENT_ID = resolvedDep.deploymentId;
-const PREVIEW_URL = resolvedDep.previewUrl;
+let cachedDep: { targetCommit: string; deploymentId: string; previewUrl: string } | undefined;
+
+export function getDeploymentContext() {
+  if (!cachedDep) {
+    const targetCommit = process.env.AIRA_TARGET_COMMIT || execSync('git rev-parse HEAD', { encoding: 'utf-8' }).trim();
+    const resolved = resolveTargetDeployment(targetCommit);
+    cachedDep = {
+      targetCommit,
+      deploymentId: resolved.deploymentId,
+      previewUrl: resolved.previewUrl
+    };
+  }
+  return cachedDep;
+}
+
 const AUTH_STATE_PATH = process.env.AIRA_AUTH_STATE_PATH || 'C:\\Users\\WORKSTATION\\AppData\\Local\\AIRA-Test\\preview-auth-state.json';
 const OUTPUT_DIR = path.resolve(process.cwd(), 'test-results/preview-acceptance');
 const ARTIFACTS_DIR = path.resolve(process.cwd(), 'artifacts/preview-acceptance');
@@ -96,6 +119,7 @@ function getAutomationBypassSecret(): string | undefined {
 }
 
 function verifyTargetDeployment(): void {
+  const { targetCommit: TARGET_COMMIT, deploymentId: TARGET_DEPLOYMENT_ID, previewUrl: PREVIEW_URL } = getDeploymentContext();
   console.log('\n========================================================================');
   console.log('  VERIFYING TARGET COMMIT & DEPLOYMENT PRE-CONDITIONS                  ');
   console.log('========================================================================');
@@ -276,6 +300,7 @@ async function saveEvidenceScreenshot(page: Page, filename: string): Promise<str
 }
 
 async function main() {
+  const { targetCommit: TARGET_COMMIT, deploymentId: TARGET_DEPLOYMENT_ID, previewUrl: PREVIEW_URL } = getDeploymentContext();
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
   fs.mkdirSync(ARTIFACTS_DIR, { recursive: true });
 
@@ -311,7 +336,7 @@ async function main() {
   if (bypassSecret) {
     await context.route('**/*', async (route, request) => {
       const reqUrl = request.url();
-      if (reqUrl.startsWith(previewOrigin)) {
+      if (isRequestTargetingOrigin(reqUrl, previewOrigin)) {
         const headers = {
           ...request.headers(),
           'x-vercel-protection-bypass': bypassSecret,
@@ -581,6 +606,9 @@ async function main() {
     assert.match(badgeTextE1, /NEMOTRON/i, 'Badge must indicate Nemotron model');
     assert.doesNotMatch(badgeTextE1, /fallback/i, 'Explicit Nemotron must NOT be labeled as fallback');
     assert.doesNotMatch(badgeTextE1, /failed/i, 'Successful response must NOT be labeled as failed');
+    assert.doesNotMatch(badgeTextE1, /unconfirmed/i, 'Confirmed Nemotron response must NOT be labeled as unconfirmed');
+    const verifiedAttrE1 = await badgeE1.getAttribute('data-verified');
+    assert.strictEqual(verifiedAttrE1, 'true', 'Explicit Nemotron response must have confirmed/verified model identity');
 
     results.push({
       testId: 'TEST_E1_EXPLICIT_NVIDIA_NEMOTRON',
@@ -629,6 +657,9 @@ async function main() {
     assert.match(badgeTextE2, /NVIDIA/i, 'Badge must indicate routed NVIDIA execution');
     assert.match(badgeTextE2, /Fallback/i, 'Aira Auto on Preview must show fallback notice because Anthropic key is absent');
     assert.doesNotMatch(badgeTextE2, /failed/i, 'Successful response must NOT be labeled as failed');
+    assert.doesNotMatch(badgeTextE2, /unconfirmed/i, 'Aira Auto fallback with verified upstream model must NOT be labeled as unconfirmed');
+    const verifiedAttrE2 = await badgeE2.getAttribute('data-verified');
+    assert.strictEqual(verifiedAttrE2, 'true', 'Aira Auto fallback response must have verified model identity');
 
     results.push({
       testId: 'TEST_E2_AIRA_AUTO_ROUTING',
@@ -666,7 +697,15 @@ async function main() {
   }
 }
 
-main().catch(err => {
-  console.error('\n❌ Acceptance Test Failure:', err.message);
-  process.exit(1);
-});
+const isExecutedDirectly = Boolean(
+  process.argv[1] &&
+  (path.resolve(process.argv[1]).endsWith('preview-real-acceptance.ts') ||
+   path.resolve(process.argv[1]).endsWith('preview-real-acceptance.js'))
+);
+
+if (isExecutedDirectly) {
+  main().catch(err => {
+    console.error('\n❌ Acceptance Test Failure:', err.message);
+    process.exit(1);
+  });
+}
