@@ -342,6 +342,10 @@ export class AgentRuntime extends EventEmitter {
     }
     await this.runRepo.saveRun(run);
 
+    if (state === 'FAILED' && run.provenance) {
+      await this.emitRunEvent(runId, 'model.provenance', run.provenance);
+    }
+
     const eventType: StreamingEventType =
       state === 'COMPLETED' ? 'run.completed' :
       state === 'FAILED' ? 'run.failed' :
@@ -349,9 +353,6 @@ export class AgentRuntime extends EventEmitter {
       state === 'RUNNING' ? 'run.started' : 'run.started';
 
     await this.emitRunEvent(runId, eventType, { state, error });
-    if (state === 'FAILED' && run.provenance) {
-      await this.emitRunEvent(runId, 'model.provenance', run.provenance);
-    }
   }
 
   private async executeRunLoop(runId: string): Promise<void> {
@@ -1065,12 +1066,6 @@ CAPABILITY & IDENTITY INVARIANTS:
           }
         });
       } catch (streamErr: any) {
-        if (run.provenance) {
-          run.provenance.verified = false;
-          run.provenance.executionStatus = 'FAILED';
-          await this.runRepo.saveRun(run);
-          await this.emitRunEvent(runId, 'model.provenance', run.provenance);
-        }
         await this.transitionRunState(runId, 'FAILED', streamErr.message);
         throw streamErr;
       }
