@@ -405,10 +405,13 @@ export const ModelProvenanceSchema = z.object({
   resolvedPolicyModel: z.string(),
   provider: z.enum(['nvidia', 'anthropic', 'openai', 'mock', 'unknown']),
   executedModel: z.string(),
+  plannedModel: z.string().optional(),
+  outboundModel: z.string().optional(),
+  upstreamResponseModel: z.string().optional(),
   fallbackOccurred: z.boolean(),
   fallbackReason: z.string().optional(),
   verified: z.boolean(),
-  executionStatus: z.enum(['SUCCESS', 'FALLBACK', 'FAILED', 'UNKNOWN']),
+  executionStatus: z.enum(['PENDING', 'SUCCESS', 'FALLBACK', 'FAILED', 'UNKNOWN']),
   timestamp: z.number()
 });
 export type ModelProvenance = z.infer<typeof ModelProvenanceSchema>;

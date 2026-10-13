@@ -455,47 +455,109 @@ async function main() {
     });
 
     // -------------------------------------------------------------------------
-    // TEST E: Model Identity, Provenance & Capability Accuracy
+    // TEST E1: Explicit NVIDIA Nemotron Selection (Authoritative Provenance)
     // -------------------------------------------------------------------------
     console.log('\n========================================================================');
-    console.log('  TEST E: Model Identity & Capability Accuracy                          ');
+    console.log('  TEST E1: Explicit NVIDIA Nemotron Selection (No Fallback)             ');
     console.log('========================================================================');
     await clickNewChat(page);
 
-    // Switch model to NVIDIA Nemotron 3 Super 120B-A12B if available in model selector
-    const modelSelectorBtn = page.locator('button:has-text("Aira Auto"), button:has-text("Nemotron"), button[aria-label="Select model"]').first();
-    if (await modelSelectorBtn.isVisible()) {
-      await modelSelectorBtn.click();
-      await page.waitForTimeout(400);
-      const nemotronOption = page.locator('button:has-text("Nemotron"), div:has-text("Nemotron")').first();
-      if (await nemotronOption.isVisible()) {
-        await nemotronOption.click();
-        await page.waitForTimeout(400);
-        console.log('✓ Model selected: NVIDIA Nemotron 3 Super 120B-A12B');
-      }
-    }
+    // Switch model to NVIDIA Nemotron 3 Super 120B-A12B via role="option" in model-menu
+    const modelSelectorTrigger = page.locator('button:has-text("Aira Auto"), button:has-text("Nemotron"), button[aria-haspopup="listbox"]').first();
+    await modelSelectorTrigger.waitFor({ state: 'visible', timeout: 10000 });
+    await modelSelectorTrigger.click();
+    await page.waitForSelector('[data-testid="model-menu"]', { state: 'visible', timeout: 5000 });
 
-    const promptE = 'HOW CAPABLE ARE YOU';
-    const startE = Date.now();
-    const responseE = await sendMessageAndWaitForResponse(page, promptE);
-    const durationE = Date.now() - startE;
-    const screenshotE = path.join(OUTPUT_DIR, 'test_e_capability_identity.png');
-    await page.screenshot({ path: screenshotE, fullPage: true });
+    const nemotronOption = page.locator('[data-testid="model-menu"] [role="option"]:has-text("Nemotron")').first();
+    await nemotronOption.click();
+    await page.waitForTimeout(500);
 
-    console.log(`Test E Response Length: ${responseE.length} chars (took ${(durationE/1000).toFixed(1)}s)`);
-    console.log('Test E Response snippet:', responseE.slice(0, 300));
-    assert.ok(responseE.length > 50, 'Test E response must not be empty');
-    assert.doesNotMatch(responseE, /Claude 3\.7/i, 'Must NEVER claim to be powered by Claude 3.7');
-    assert.doesNotMatch(responseE, /Claude 3\.5/i, 'Must NEVER claim to be powered by Claude 3.5');
+    // Verify selector trigger text now reflects explicit Nemotron
+    const triggerTextAfterNemotron = (await modelSelectorTrigger.innerText()).trim();
+    console.log('Trigger after Nemotron selection:', triggerTextAfterNemotron);
+    assert.match(triggerTextAfterNemotron, /Nemotron/i, 'Trigger button must show Nemotron when explicitly selected');
+
+    const promptE1 = 'HOW CAPABLE ARE YOU';
+    const startE1 = Date.now();
+    const responseE1 = await sendMessageAndWaitForResponse(page, promptE1);
+    const durationE1 = Date.now() - startE1;
+    const screenshotE1 = path.join(OUTPUT_DIR, 'test_e1_explicit_nemotron.png');
+    await page.screenshot({ path: screenshotE1, fullPage: true });
+
+    console.log(`Test E1 Response Length: ${responseE1.length} chars (took ${(durationE1/1000).toFixed(1)}s)`);
+    console.log('Test E1 Response snippet:', responseE1.slice(0, 300));
+    assert.ok(responseE1.length > 50, 'Test E1 response must not be empty');
+    assert.doesNotMatch(responseE1, /Claude 3\.7/i, 'Must NEVER claim to be powered by Claude 3.7');
+    assert.doesNotMatch(responseE1, /Claude 3\.5/i, 'Must NEVER claim to be powered by Claude 3.5');
+
+    // Verify explicit Nemotron provenance badge
+    const badgeE1 = page.locator('[data-testid="model-provenance-badge"]').last();
+    await badgeE1.waitFor({ state: 'visible', timeout: 10000 });
+    const badgeTextE1 = (await badgeE1.innerText()).trim();
+    console.log('Test E1 Provenance Badge Text:', badgeTextE1);
+    assert.match(badgeTextE1, /NVIDIA/i, 'Badge must indicate NVIDIA provider');
+    assert.match(badgeTextE1, /NEMOTRON/i, 'Badge must indicate Nemotron model');
+    assert.doesNotMatch(badgeTextE1, /fallback/i, 'Explicit Nemotron must NOT be labeled as fallback');
+    assert.doesNotMatch(badgeTextE1, /failed/i, 'Successful response must NOT be labeled as failed');
 
     results.push({
-      testId: 'TEST_E_CAPABILITY_IDENTITY',
-      prompt: promptE,
-      response: responseE,
+      testId: 'TEST_E1_EXPLICIT_NVIDIA_NEMOTRON',
+      prompt: promptE1,
+      response: responseE1,
       sourceLinks: await extractSourceLinks(page),
       consoleErrors: [...consoleErrors],
-      screenshotPath: screenshotE,
-      durationMs: durationE
+      screenshotPath: screenshotE1,
+      durationMs: durationE1,
+      metadata: { badgeText: badgeTextE1 }
+    });
+
+    // -------------------------------------------------------------------------
+    // TEST E2: AIRA Auto Selection (Dynamic Routing with Preview Fallback)
+    // -------------------------------------------------------------------------
+    console.log('\n========================================================================');
+    console.log('  TEST E2: AIRA Auto Selection (Intent Routing & Preview Notice)        ');
+    console.log('========================================================================');
+    await clickNewChat(page);
+
+    // Switch model back to Aira Auto
+    await modelSelectorTrigger.click();
+    await page.waitForSelector('[data-testid="model-menu"]', { state: 'visible', timeout: 5000 });
+    const autoOption = page.locator('[data-testid="model-menu"] [role="option"]:has-text("Aira Auto")').first();
+    await autoOption.click();
+    await page.waitForTimeout(500);
+
+    const triggerTextAfterAuto = (await modelSelectorTrigger.innerText()).trim();
+    console.log('Trigger after Aira Auto selection:', triggerTextAfterAuto);
+    assert.match(triggerTextAfterAuto, /Aira Auto/i, 'Trigger button must show Aira Auto');
+
+    const promptE2 = 'HOW CAPABLE ARE YOU';
+    const startE2 = Date.now();
+    const responseE2 = await sendMessageAndWaitForResponse(page, promptE2);
+    const durationE2 = Date.now() - startE2;
+    const screenshotE2 = path.join(OUTPUT_DIR, 'test_e2_aira_auto.png');
+    await page.screenshot({ path: screenshotE2, fullPage: true });
+
+    console.log(`Test E2 Response Length: ${responseE2.length} chars (took ${(durationE2/1000).toFixed(1)}s)`);
+    assert.ok(responseE2.length > 50, 'Test E2 response must not be empty');
+    assert.doesNotMatch(responseE2, /Claude 3\.7/i, 'Must NEVER claim to be powered by Claude 3.7');
+
+    const badgeE2 = page.locator('[data-testid="model-provenance-badge"]').last();
+    await badgeE2.waitFor({ state: 'visible', timeout: 10000 });
+    const badgeTextE2 = (await badgeE2.innerText()).trim();
+    console.log('Test E2 Provenance Badge Text:', badgeTextE2);
+    assert.match(badgeTextE2, /NVIDIA/i, 'Badge must indicate routed NVIDIA execution');
+    assert.match(badgeTextE2, /Fallback/i, 'Aira Auto on Preview must show fallback notice because Anthropic key is absent');
+    assert.doesNotMatch(badgeTextE2, /failed/i, 'Successful response must NOT be labeled as failed');
+
+    results.push({
+      testId: 'TEST_E2_AIRA_AUTO_ROUTING',
+      prompt: promptE2,
+      response: responseE2,
+      sourceLinks: await extractSourceLinks(page),
+      consoleErrors: [...consoleErrors],
+      screenshotPath: screenshotE2,
+      durationMs: durationE2,
+      metadata: { badgeText: badgeTextE2 }
     });
 
     // Write acceptance report artifact

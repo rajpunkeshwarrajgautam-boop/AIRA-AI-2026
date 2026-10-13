@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { ModelRouter, DeterministicMockAdapter } from '../../packages/model-router/src/index.js';
+import { ModelRouter, DeterministicMockAdapter, AnthropicAdapter } from '../../packages/model-router/src/index.js';
 import { ModelProvenanceSchema, type ModelProvenance } from '../../packages/contracts/src/index.js';
 import { AgentRuntime } from '../../packages/agent-runtime/src/index.js';
 import { InMemoryRunRepository } from '../../packages/agent-runtime/src/repositories.js';
@@ -376,4 +376,243 @@ describe('MISSION: Model Provenance, Runtime Identity & Capability Accuracy', ()
       assert.equal(finalRun2?.content.includes('Claude 3.7'), false);
     });
   });
+
+  describe('ISSUE 1 & 2 REGRESSIONS: Provenance Integrity, Reconciliation & Alias Fidelity', () => {
+    // 1. Issue 2: Anthropic Model Alias Mismatch & Request Body Verification
+    it('Issue 2: AnthropicAdapter sends exact model predicted by resolveExecution for all AIRA modes', async () => {
+      const savedEnv = { ...process.env };
+      const interceptedRequests: Array<{ url: string; body: any }> = [];
+      const originalFetch = globalThis.fetch;
+
+      try {
+        process.env.ANTHROPIC_API_KEY = 'sk-ant-test-key-mock';
+        process.env.NODE_ENV = 'production';
+        delete process.env.NVIDIA_API_KEY;
+        delete process.env.OPENAI_API_KEY;
+
+        globalThis.fetch = async (url: any, init: any) => {
+          const body = JSON.parse(init?.body as string || '{}');
+          interceptedRequests.push({ url: String(url), body });
+          return new Response(JSON.stringify({
+            id: 'msg_test',
+            type: 'message',
+            role: 'assistant',
+            model: body.model,
+            content: [{ type: 'text', text: 'Test response from mock Anthropic' }],
+            usage: { input_tokens: 10, output_tokens: 15 }
+          }), { status: 200, headers: { 'content-type': 'application/json' } });
+        };
+
+        const router = new ModelRouter();
+
+        const modes = [
+          { mode: 'aira-pro' as const, intent: 'TOOL_ACTION' as const, expectedPredicted: 'claude-3-5-sonnet-20241022' },
+          { mode: 'aira-fast' as const, intent: 'ANSWER' as const, expectedPredicted: 'claude-3-5-haiku-20241022' },
+          { mode: 'aira-deep' as const, intent: 'RESEARCH' as const, expectedPredicted: 'claude-3-opus-20240229' },
+          { mode: 'aira-auto' as const, intent: 'ANSWER' as const, expectedPredicted: 'claude-3-5-haiku-20241022' },
+          { mode: 'aira-auto' as const, intent: 'RESEARCH' as const, expectedPredicted: 'claude-3-opus-20240229' },
+          { mode: 'aira-auto' as const, intent: 'WORKFLOW' as const, expectedPredicted: 'claude-3-5-sonnet-20241022' },
+        ];
+
+        for (const { mode, intent, expectedPredicted } of modes) {
+          interceptedRequests.length = 0;
+          const execution = router.resolveExecution(mode, intent);
+          assert.equal(
+            execution.executedModel,
+            expectedPredicted,
+            `Predicted executedModel for ${mode} (${intent}) must be ${expectedPredicted}`
+          );
+
+          const result = await execution.adapter.complete([{ role: 'user', content: 'hello' }], execution.policy);
+          assert.equal(interceptedRequests.length, 1, `Must have sent 1 request for ${mode} (${intent})`);
+          assert.equal(
+            interceptedRequests[0].body.model,
+            expectedPredicted,
+            `Actual HTTP request payload model for ${mode} (${intent}) must equal predicted model ${expectedPredicted}`
+          );
+          assert.equal(
+            result.model,
+            expectedPredicted,
+            `Returned result.model must match ${expectedPredicted}`
+          );
+        }
+
+        // Direct AnthropicAdapter complete with unrouted aira-pro and aira-auto policies
+        const directAdapter = new AnthropicAdapter();
+        interceptedRequests.length = 0;
+        await directAdapter.complete([{ role: 'user', content: 'hi' }], { model: 'aira-pro', maxTokens: 1024, temperature: 0.7 });
+        assert.equal(interceptedRequests[0].body.model, 'claude-3-5-sonnet-20241022', 'Direct aira-pro policy must map to claude-3-5-sonnet-20241022');
+
+        interceptedRequests.length = 0;
+        await directAdapter.complete([{ role: 'user', content: 'hi' }], { model: 'aira-auto', maxTokens: 1024, temperature: 0.7 });
+        assert.equal(interceptedRequests[0].body.model, 'claude-3-7-sonnet-20250219', 'Direct aira-auto policy must map to claude-3-7-sonnet-20250219');
+      } finally {
+        globalThis.fetch = originalFetch;
+        process.env = savedEnv;
+      }
+    });
+
+    // 2. Issue 1: Premature verification prevention — createRun sets verified: false, PENDING
+    it('Issue 1: createRun sets verified: false and executionStatus: PENDING', async () => {
+      const runRepo = new InMemoryRunRepository();
+      const modelRouter = new ModelRouter();
+      const toolRegistry = new ToolRegistry();
+      const approvalKernel = new ApprovalKernel({} as any, {} as any);
+      const knowledgeEngine = new BrainV2KnowledgeEngine();
+      const runtime = new AgentRuntime(
+        modelRouter,
+        toolRegistry,
+        approvalKernel,
+        knowledgeEngine,
+        runRepo,
+        process.cwd()
+      );
+
+      const principal = { userId: 'u1', sessionId: 's1' };
+      const run = await runtime.createRun({
+        prompt: 'test prompt',
+        modelPolicy: { model: 'mock-deterministic' }
+      }, principal);
+
+      assert.ok(run.provenance);
+      assert.equal(run.provenance.verified, false, 'Initial provenance MUST NOT be marked verified before execution');
+      assert.equal(run.provenance.executionStatus, 'PENDING', 'Initial provenance executionStatus must be PENDING');
+      assert.equal(run.provenance.plannedModel, 'mock-deterministic', 'Planned model must be recorded');
+    });
+
+    // 3. Issue 1: Post-execution reconciliation & verification with execution evidence
+    it('Issue 1: Reconciles actual outbound and upstream models and verifies upon successful completion', async () => {
+      const runRepo = new InMemoryRunRepository();
+      const modelRouter = new ModelRouter();
+      const toolRegistry = new ToolRegistry();
+      const approvalKernel = new ApprovalKernel({} as any, {} as any);
+      const knowledgeEngine = new BrainV2KnowledgeEngine();
+      const runtime = new AgentRuntime(
+        modelRouter,
+        toolRegistry,
+        approvalKernel,
+        knowledgeEngine,
+        runRepo,
+        process.cwd()
+      );
+
+      const principal = { userId: 'u1', sessionId: 's1' };
+      const run = await runtime.createRun({
+        prompt: 'Generate an analysis',
+        modelPolicy: { model: 'mock-deterministic' }
+      }, principal);
+
+      const events: any[] = [];
+      const stream = runtime.getEventStream(run.id);
+      stream.on('event', evt => events.push(evt));
+
+      const donePromise = new Promise<void>((resolve) => {
+        stream.on('event', (evt) => {
+          if (evt.type === 'run.completed' || evt.type === 'run.failed') resolve();
+        });
+      });
+
+      await runtime.startRun(run.id);
+      await donePromise;
+
+      const finalRun = await runtime.getRun(run.id);
+      assert.ok(finalRun?.provenance);
+      assert.equal(finalRun.provenance.verified, true, 'Provenance must be verified after successful response');
+      assert.equal(finalRun.provenance.executionStatus, 'SUCCESS', 'Execution status must be SUCCESS');
+      assert.ok(finalRun.provenance.outboundModel, 'Must capture outbound model');
+      assert.ok(finalRun.provenance.upstreamResponseModel, 'Must capture upstream response model');
+
+      // Verify that emitted provenance event was updated
+      const provEvents = events.filter(e => e.type === 'model.provenance');
+      assert.ok(provEvents.length >= 2, 'Must emit initial planned and final confirmed provenance events');
+      const finalProvEvent = provEvents[provEvents.length - 1];
+      assert.equal(finalProvEvent.data.verified, true);
+      assert.equal(finalProvEvent.data.executionStatus, 'SUCCESS');
+    });
+
+    // 4. Issue 1: Failed execution transition preserves FAILED status and verified: false
+    it('Issue 1: Failed inference updates provenance to FAILED and verified: false without retaining SUCCESS', async () => {
+      const runRepo = new InMemoryRunRepository();
+      const modelRouter = new ModelRouter();
+      // Inject adapter that fails
+      const failingAdapter = {
+        provider: 'mock' as const,
+        complete: async () => { throw new Error('Upstream provider connection timeout'); },
+        stream: async () => { throw new Error('Upstream provider connection timeout'); },
+        toJSON: () => ({ provider: 'mock' })
+      };
+      (modelRouter as any).adapters.set('mock', failingAdapter);
+
+      const toolRegistry = new ToolRegistry();
+      const approvalKernel = new ApprovalKernel({} as any, {} as any);
+      const knowledgeEngine = new BrainV2KnowledgeEngine();
+      const runtime = new AgentRuntime(
+        modelRouter,
+        toolRegistry,
+        approvalKernel,
+        knowledgeEngine,
+        runRepo,
+        process.cwd()
+      );
+
+      const principal = { userId: 'u1', sessionId: 's1' };
+      const run = await runtime.createRun({
+        prompt: 'test prompt',
+        modelPolicy: { model: 'mock-deterministic' }
+      }, principal);
+
+      const events: any[] = [];
+      const stream = runtime.getEventStream(run.id);
+      stream.on('event', evt => events.push(evt));
+
+      const donePromise = new Promise<void>((resolve) => {
+        stream.on('event', (evt) => {
+          if (evt.type === 'run.completed' || evt.type === 'run.failed') resolve();
+        });
+      });
+
+      await runtime.startRun(run.id);
+      await donePromise;
+
+      const finalRun = await runtime.getRun(run.id);
+      assert.ok(finalRun?.provenance);
+      assert.equal(finalRun.provenance.verified, false, 'Failed execution must NOT be verified');
+      assert.equal(finalRun.provenance.executionStatus, 'FAILED', 'Failed execution must have status FAILED');
+
+      const provEvents = events.filter(e => e.type === 'model.provenance');
+      const lastProv = provEvents[provEvents.length - 1];
+      assert.equal(lastProv.data.executionStatus, 'FAILED');
+      assert.equal(lastProv.data.verified, false);
+    });
+
+    // 5. Additional verification: Explicit Nemotron vs Auto Fallback distinction
+    it('Additional: Explicit Nemotron has fallbackOccurred: false, whereas Auto without primary provider has fallbackOccurred: true', () => {
+      const savedEnv = { ...process.env };
+      try {
+        process.env.NODE_ENV = 'production';
+        process.env.NVIDIA_API_KEY = 'nvapi-mock-test';
+        delete process.env.ANTHROPIC_API_KEY;
+        delete process.env.OPENAI_API_KEY;
+
+        const router = new ModelRouter();
+
+        // 1. Explicit Nemotron
+        const explicitNemotron = router.resolveExecution('nvidia/nemotron-3-super-120b-a12b', 'ANSWER');
+        assert.equal(explicitNemotron.provider, 'nvidia');
+        assert.equal(explicitNemotron.executedModel, 'nvidia/nemotron-3-super-120b-a12b');
+        assert.equal(explicitNemotron.fallbackOccurred, false, 'Explicit Nemotron must NOT be labeled as fallback');
+        assert.equal(explicitNemotron.fallbackReason, undefined, 'Explicit Nemotron has no fallback reason');
+
+        // 2. Aira Auto
+        const airaAuto = router.resolveExecution('aira-auto', 'ANSWER');
+        assert.equal(airaAuto.provider, 'nvidia');
+        assert.equal(airaAuto.executedModel, 'nvidia/nemotron-3-super-120b-a12b');
+        assert.equal(airaAuto.fallbackOccurred, true, 'Aira Auto routing to NVIDIA due to missing OpenAI/Anthropic must be labeled as fallback');
+        assert.ok(airaAuto.fallbackReason, 'Aira Auto must provide documented fallback reason');
+      } finally {
+        process.env = savedEnv;
+      }
+    });
+  });
 });
+

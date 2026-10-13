@@ -190,10 +190,11 @@ export class AgentRuntime extends EventEmitter {
       resolvedPolicyModel: execution.policy.model,
       provider: execution.provider,
       executedModel: execution.executedModel,
+      plannedModel: execution.plannedModel || execution.executedModel,
       fallbackOccurred: execution.fallbackOccurred,
       fallbackReason: execution.fallbackReason,
-      verified: execution.verified,
-      executionStatus: execution.fallbackOccurred ? 'FALLBACK' : 'SUCCESS',
+      verified: false,
+      executionStatus: 'PENDING',
       timestamp: now
     };
 
@@ -335,6 +336,10 @@ export class AgentRuntime extends EventEmitter {
     if (state === 'COMPLETED' || state === 'FAILED' || state === 'CANCELLED') {
       run.completedAt = run.updatedAt;
     }
+    if (state === 'FAILED' && run.provenance) {
+      run.provenance.verified = false;
+      run.provenance.executionStatus = 'FAILED';
+    }
     await this.runRepo.saveRun(run);
 
     const eventType: StreamingEventType =
@@ -344,6 +349,9 @@ export class AgentRuntime extends EventEmitter {
       state === 'RUNNING' ? 'run.started' : 'run.started';
 
     await this.emitRunEvent(runId, eventType, { state, error });
+    if (state === 'FAILED' && run.provenance) {
+      await this.emitRunEvent(runId, 'model.provenance', run.provenance);
+    }
   }
 
   private async executeRunLoop(runId: string): Promise<void> {
@@ -1038,22 +1046,46 @@ CAPABILITY & IDENTITY INVARIANTS:
       // A model emitting repeated JSON search arguments is NOT executing tools.
       let researchDraft = '';
 
-      await adapter.stream(messages, run.modelPolicy, async (delta) => {
-        if (delta.thinking) {
-          run.thinking += delta.thinking;
-          await this.runRepo.saveRun(run);
-          await this.emitRunEvent(runId, 'thinking.delta', { delta: delta.thinking });
-        }
-        if (delta.text) {
-          if (liveEvidence.length > 0) {
-            researchDraft += delta.text;
-          } else {
-            run.content += delta.text;
+      let completionResult: ModelCompletionResult;
+      try {
+        completionResult = await adapter.stream(messages, run.modelPolicy, async (delta) => {
+          if (delta.thinking) {
+            run.thinking += delta.thinking;
             await this.runRepo.saveRun(run);
-            await this.emitRunEvent(runId, 'content.delta', { delta: delta.text });
+            await this.emitRunEvent(runId, 'thinking.delta', { delta: delta.thinking });
           }
+          if (delta.text) {
+            if (liveEvidence.length > 0) {
+              researchDraft += delta.text;
+            } else {
+              run.content += delta.text;
+              await this.runRepo.saveRun(run);
+              await this.emitRunEvent(runId, 'content.delta', { delta: delta.text });
+            }
+          }
+        });
+      } catch (streamErr: any) {
+        if (run.provenance) {
+          run.provenance.verified = false;
+          run.provenance.executionStatus = 'FAILED';
+          await this.runRepo.saveRun(run);
+          await this.emitRunEvent(runId, 'model.provenance', run.provenance);
         }
-      });
+        await this.transitionRunState(runId, 'FAILED', streamErr.message);
+        throw streamErr;
+      }
+
+      // Reconcile outbound & upstream models and confirm execution provenance
+      if (run.provenance) {
+        run.provenance.outboundModel = completionResult?.outboundModel || run.provenance.plannedModel || run.provenance.executedModel;
+        run.provenance.upstreamResponseModel = completionResult?.model || run.provenance.outboundModel || run.provenance.executedModel;
+        run.provenance.executedModel = run.provenance.upstreamResponseModel;
+        run.provenance.verified = true;
+        run.provenance.executionStatus = run.provenance.fallbackOccurred ? 'FALLBACK' : 'SUCCESS';
+        run.provenance.timestamp = Date.now();
+        await this.runRepo.saveRun(run);
+        await this.emitRunEvent(runId, 'model.provenance', run.provenance);
+      }
 
       if (liveEvidence.length > 0) {
         const synthesized = researchDraft.trim();

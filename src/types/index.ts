@@ -71,10 +71,13 @@ export interface Message {
     resolvedPolicyModel: string;
     provider: 'nvidia' | 'anthropic' | 'openai' | 'mock' | 'unknown';
     executedModel: string;
+    plannedModel?: string;
+    outboundModel?: string;
+    upstreamResponseModel?: string;
     fallbackOccurred: boolean;
     fallbackReason?: string;
     verified: boolean;
-    executionStatus: 'SUCCESS' | 'FALLBACK' | 'FAILED' | 'UNKNOWN';
+    executionStatus: 'PENDING' | 'SUCCESS' | 'FALLBACK' | 'FAILED' | 'UNKNOWN';
     timestamp: number;
   };
 }

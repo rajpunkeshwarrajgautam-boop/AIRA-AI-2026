@@ -103,11 +103,12 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
               </span>
               {message.provenance ? (
                 <span
+                  data-testid="model-provenance-badge"
                   className="rounded-full bg-claude-surface2-light px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-claude-muted-light dark:bg-claude-surface2-dark dark:text-claude-muted-dark"
                   title={`Provider: ${message.provenance.provider.toUpperCase()} | Executed Model: ${message.provenance.executedModel}${message.provenance.fallbackOccurred ? ` (Fallback: ${message.provenance.fallbackReason})` : ''}`}
                 >
                   {message.provenance.provider === 'nvidia' ? 'NVIDIA' : message.provenance.provider === 'anthropic' ? 'Anthropic' : message.provenance.provider === 'openai' ? 'OpenAI' : 'Aira'} · {message.provenance.executedModel.split('/').pop()}
-                  {message.provenance.fallbackOccurred && ' (Fallback)'}
+                  {message.provenance.executionStatus === 'FAILED' ? ' (Failed)' : message.provenance.fallbackOccurred ? ' (Fallback)' : ''}
                 </span>
               ) : message.modelUsed && (
                 <span className="rounded-full bg-claude-surface2-light px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-claude-muted-light dark:bg-claude-surface2-dark dark:text-claude-muted-dark">

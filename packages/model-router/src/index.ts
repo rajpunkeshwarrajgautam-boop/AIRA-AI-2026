@@ -26,6 +26,7 @@ export interface ModelCompletionResult {
     totalTokens: number;
   };
   model: string;
+  outboundModel?: string;
 }
 
 export interface ModelAdapter {
@@ -105,7 +106,8 @@ export class DeterministicMockAdapter implements ModelAdapter {
         completionTokens: Math.max(20, Math.floor(text.length / 4)),
         totalTokens: Math.max(32, Math.floor((lastUserMessage.length + text.length) / 4))
       },
-      model: policy.model
+      model: policy.model,
+      outboundModel: policy.model
     };
   }
 
@@ -125,9 +127,57 @@ export class DeterministicMockAdapter implements ModelAdapter {
   }
 }
 
+export function resolveAnthropicModel(model: ModelId | string): string {
+  switch (model) {
+    case 'aira-pro':
+    case 'claude-3-5-sonnet-20241022':
+      return 'claude-3-5-sonnet-20241022';
+    case 'aira-fast':
+    case 'claude-3-5-haiku-20241022':
+      return 'claude-3-5-haiku-20241022';
+    case 'aira-deep':
+    case 'claude-3-opus-20240229':
+      return 'claude-3-opus-20240229';
+    case 'aira-auto':
+    case 'claude-3-7-sonnet-20250219':
+      return 'claude-3-7-sonnet-20250219';
+    case 'claude-3-5-sonnet':
+      return 'claude-3-5-sonnet';
+    case 'claude-3-5-haiku':
+      return 'claude-3-5-haiku';
+    case 'claude-3-opus':
+      return 'claude-3-opus';
+    case 'claude-3-7-sonnet':
+      return 'claude-3-7-sonnet';
+    default:
+      if (typeof model === 'string' && model.startsWith('claude-')) {
+        return model;
+      }
+      return 'claude-3-7-sonnet-20250219';
+  }
+}
+
+export function resolveOpenAIModel(model: ModelId | string): string {
+  switch (model) {
+    case 'aira-fast':
+      return 'gpt-4o-mini';
+    case 'aira-pro':
+    case 'aira-deep':
+    case 'aira-auto':
+      return 'gpt-4o';
+    default:
+      if (typeof model === 'string' && model.startsWith('gpt-')) {
+        return model;
+      }
+      return 'gpt-4o';
+  }
+}
+
 export class AnthropicAdapter implements ModelAdapter {
   readonly provider = 'anthropic' as const;
   private apiKey: string;
+  private baseUrl: string;
+
   constructor(apiKey?: string, baseUrl = 'https://api.anthropic.com/v1') {
     this.apiKey = apiKey || process.env.ANTHROPIC_API_KEY || '';
     this.baseUrl = baseUrl;
@@ -149,6 +199,7 @@ export class AnthropicAdapter implements ModelAdapter {
         content: m.content
       }));
 
+    const outboundModel = resolveAnthropicModel(policy.model);
     const response = await fetch(`${this.baseUrl}/messages`, {
       method: 'POST',
       headers: {
@@ -157,7 +208,7 @@ export class AnthropicAdapter implements ModelAdapter {
         'content-type': 'application/json'
       },
       body: JSON.stringify({
-        model: policy.model === 'aira-pro' ? 'claude-3-7-sonnet-20250219' : policy.model,
+        model: outboundModel,
         max_tokens: policy.maxTokens,
         temperature: policy.temperature,
         system: systemMessage,
@@ -182,7 +233,8 @@ export class AnthropicAdapter implements ModelAdapter {
         completionTokens: data.usage?.output_tokens || 0,
         totalTokens: (data.usage?.input_tokens || 0) + (data.usage?.output_tokens || 0)
       },
-      model: data.model || policy.model
+      outboundModel,
+      model: data.model || outboundModel
     };
   }
 
@@ -227,6 +279,10 @@ export class OpenAIAdapter implements ModelAdapter {
     const maxRetries = 2;
     let lastError: Error | null = null;
 
+    const outboundModel = policy.model.startsWith('aira-')
+      ? (this.baseUrl.includes('api.openai.com') ? resolveOpenAIModel(policy.model) : this.airaModel)
+      : policy.model;
+
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         const response = await fetch(`${this.baseUrl}/chat/completions`, {
@@ -236,9 +292,7 @@ export class OpenAIAdapter implements ModelAdapter {
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
-            model: policy.model.startsWith('aira-')
-              ? (this.baseUrl.includes('api.openai.com') && policy.model === 'aira-fast' ? 'gpt-4o-mini' : this.airaModel)
-              : policy.model,
+            model: outboundModel,
             messages: messages.map(m => {
               if (m.role === 'tool') {
                 return { role: 'tool', content: m.content, tool_call_id: m.toolCallId || 'call_default' };
@@ -277,7 +331,8 @@ export class OpenAIAdapter implements ModelAdapter {
             completionTokens: data.usage?.completion_tokens || 0,
             totalTokens: data.usage?.total_tokens || 0
           },
-          model: data.model || policy.model
+          outboundModel,
+          model: data.model || outboundModel
         };
       } catch (err: any) {
         lastError = err;
@@ -308,6 +363,7 @@ export interface ResolvedExecution {
   adapter: ModelAdapter;
   provider: 'nvidia' | 'anthropic' | 'openai' | 'mock' | 'unknown';
   executedModel: string;
+  plannedModel: string;
   fallbackOccurred: boolean;
   fallbackReason?: string;
   verified: boolean;
@@ -407,6 +463,7 @@ export class ModelRouter {
         adapter: mock,
         provider: 'mock',
         executedModel: 'mock-deterministic',
+        plannedModel: 'mock-deterministic',
         fallbackOccurred: false,
         verified: true
       };
@@ -463,7 +520,7 @@ export class ModelRouter {
         } else if (requestedModelId === 'claude-3-7-sonnet') {
           executedModel = 'claude-3-7-sonnet';
         } else {
-          executedModel = model === 'aira-pro' ? 'claude-3-5-sonnet-20241022' : (model === 'aira-fast' ? 'claude-3-5-haiku-20241022' : (model === 'aira-deep' ? 'claude-3-opus-20240229' : 'claude-3-7-sonnet-20250219'));
+          executedModel = resolveAnthropicModel(model);
         }
       } else if (selectedProvider === 'openai') {
         executedModel = model === 'aira-fast' ? 'gpt-4o-mini' : 'gpt-4o';
@@ -476,6 +533,7 @@ export class ModelRouter {
         adapter: selectedAdapter,
         provider: selectedProvider,
         executedModel,
+        plannedModel: executedModel,
         fallbackOccurred,
         fallbackReason,
         verified: selectedProvider !== 'mock'
@@ -484,11 +542,13 @@ export class ModelRouter {
 
     if (model.startsWith('claude')) {
       if (this.adapters.has('anthropic')) {
+        const planned = requestedModelId === 'claude-3-5-sonnet' ? 'claude-3-5-sonnet' : (requestedModelId === 'claude-3-5-haiku' ? 'claude-3-5-haiku' : (requestedModelId === 'claude-3-opus' ? 'claude-3-opus' : (requestedModelId === 'claude-3-7-sonnet' ? 'claude-3-7-sonnet' : model)));
         return {
           policy,
           adapter: this.adapters.get('anthropic')!,
           provider: 'anthropic',
-          executedModel: requestedModelId === 'claude-3-5-sonnet' ? 'claude-3-5-sonnet' : (requestedModelId === 'claude-3-5-haiku' ? 'claude-3-5-haiku' : (requestedModelId === 'claude-3-opus' ? 'claude-3-opus' : (requestedModelId === 'claude-3-7-sonnet' ? 'claude-3-7-sonnet' : model))),
+          executedModel: planned,
+          plannedModel: planned,
           fallbackOccurred: false,
           verified: true
         };
@@ -506,6 +566,7 @@ export class ModelRouter {
           adapter: this.adapters.get('openai')!,
           provider: 'openai',
           executedModel: model,
+          plannedModel: model,
           fallbackOccurred: false,
           verified: true
         };
@@ -524,6 +585,7 @@ export class ModelRouter {
           adapter: this.adapters.get('nvidia')!,
           provider: 'nvidia',
           executedModel: 'nvidia/nemotron-3-super-120b-a12b',
+          plannedModel: 'nvidia/nemotron-3-super-120b-a12b',
           fallbackOccurred: isLegacyLlama,
           fallbackReason: isLegacyLlama ? 'Retired Llama 405B migrated to NVIDIA Nemotron' : undefined,
           verified: true
