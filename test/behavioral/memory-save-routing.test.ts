@@ -35,11 +35,23 @@ describe('Explicit memory-intent routing', () => {
     assert.equal(decision.approvalRequired, true);
   });
 
-  it('does not change an explicit tool action disguised as memory', async () => {
+  it('does not execute a tool when describing a remembered preference', async () => {
     const decision = await router.route({
       prompt: 'Remember that I want you to execute the tool to check its status.',
       principal
     });
-    assert.notEqual(decision.intent, 'ANSWER');
+    // This is a request to store a preference, not authorization to execute a tool now.
+    assert.equal(decision.intent, 'ANSWER');
+    assert.equal(decision.executionTarget, 'CHAT_STREAM');
+    assert.equal(decision.approvalRequired, false);
+  });
+
+  it('still routes a separate explicit tool-execution command to the Tool Gateway', async () => {
+    const decision = await router.route({
+      prompt: 'Please execute the tool to check its status now.',
+      principal
+    });
+    assert.equal(decision.intent, 'TOOL_ACTION');
+    assert.equal(decision.executionTarget, 'TOOL_PIPELINE');
   });
 });
