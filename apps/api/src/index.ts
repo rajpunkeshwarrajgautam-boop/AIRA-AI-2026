@@ -595,6 +595,8 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     const handler = (evt: any) => {
       if (evt.type === 'routing.decision') {
         res.write(`event: routing_decision\ndata: ${JSON.stringify(evt.data)}\n\n`);
+      } else if (evt.type === 'model.provenance') {
+        res.write(`event: model_provenance\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'capability.unready') {
         res.write(`event: capability_unready\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'content.delta') {

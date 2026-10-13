@@ -32,6 +32,14 @@ async function main() {
       assert.equal(await page.locator('.aira-prose').count(), 0, 'Root must show welcome, not saved messages');
       assert.equal(await page.locator('main textarea').inputValue(), '');
       const history = await page.evaluate(() => localStorage.getItem('aira_conversations_v1'));
+      for (let visit = 0; visit < 2; visit++) {
+        await page.reload();
+        await page.locator('main textarea').waitFor();
+        assert.equal(await page.locator('.aira-prose').count(), 0, 'Root reload must show welcome when no chat is active');
+        assert.equal(await page.evaluate(() => localStorage.getItem('aira_conversations_v1')), history,
+          'Reload changes history or creates an empty conversation');
+      }
+
       const openHistory = async () => {
         if (width < 1280) await page.getByRole('button', { name: 'Open sidebar navigation' }).click();
         await page.getByRole('complementary').getByText('Preserved frontend history', { exact: true }).click();
@@ -58,14 +66,12 @@ async function main() {
         }));
         assert(composer.height <= 145, `Empty mobile composer is too tall: ${JSON.stringify(composer)}`);
       }
-      for (let visit = 0; visit < 2; visit++) {
-        await page.reload();
-        await page.locator('main textarea').waitFor();
-        assert.equal(await page.locator('.aira-prose').count(), 0);
-        assert.equal(await page.evaluate(() => localStorage.getItem('aira_conversations_v1')), history,
-          'Reload changes history or creates an empty conversation');
-      }
-      await openHistory();
+
+      // Verify active conversation persists across reload
+      await page.reload();
+      await page.locator('main textarea').waitFor();
+      await page.locator('.aira-prose').waitFor();
+      assert.match(await page.locator('.aira-prose').innerText(), /Saved response/, 'Selected conversation must persist across reload');
 
       const trigger = page.locator('[aria-haspopup="listbox"]');
       const menu = page.getByTestId('model-menu');

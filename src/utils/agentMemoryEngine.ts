@@ -1,6 +1,5 @@
-import type { MemoryItem, MemoryTier, MemoryQuery, MemoryStats } from '../types';
-
-const STORAGE_KEY = 'aira_agentmemory_vault_v1';
+import type { MemoryItem, MemoryTier, MemoryQuery, MemoryStats } from '../types/index.js';
+import { migrateAgentMemoryVault, STORAGE_KEY } from './agentMemoryMigration.js';
 
 /**
  * Secret & Privacy Filter (agentmemory specification)
@@ -43,7 +42,7 @@ function tokenize(text: string): string[] {
 }
 
 /**
- * Baseline Seed Memories for AIRA AI 2026
+ * Baseline Seed Memories for AIRA AI 2026 (Cleaned of restrictive unconditional rules)
  */
 const INITIAL_SEED_MEMORIES: MemoryItem[] = [
   {
@@ -56,19 +55,19 @@ const INITIAL_SEED_MEMORIES: MemoryItem[] = [
     createdAt: Date.now() - 86400000 * 5,
     updatedAt: Date.now() - 86400000 * 5,
     accessCount: 12,
-    isPinned: true,
+    isPinned: false,
   },
   {
     id: 'seed-sem-pref-1',
     tier: 'semantic',
     category: 'preference',
     title: 'Brand Aesthetic & Iconography Guidelines',
-    content: 'All UI elements adhere to premium agency aesthetics: rich dark/light themes, warm terracotta accents (#D97757), zero emojis, and the 6-fold celestial neural knot logo. Star icons are replaced with Zap, Cpu, or Bookmark.',
+    content: 'All UI elements adhere to premium agency aesthetics: rich dark/light themes, warm terracotta accents (#D97757), and the 6-fold celestial neural knot logo. Star icons are replaced with Zap, Cpu, or Bookmark.',
     tags: ['aesthetic', 'theme', 'terracotta', 'logo', 'design'],
     createdAt: Date.now() - 86400000 * 4,
     updatedAt: Date.now() - 86400000 * 4,
     accessCount: 9,
-    isPinned: true,
+    isPinned: false,
   },
   {
     id: 'seed-proc-flow-1',
@@ -80,15 +79,15 @@ const INITIAL_SEED_MEMORIES: MemoryItem[] = [
     createdAt: Date.now() - 86400000 * 3,
     updatedAt: Date.now() - 86400000 * 3,
     accessCount: 18,
-    isPinned: true,
+    isPinned: false,
   },
   {
     id: 'seed-sem-dec-1',
     tier: 'semantic',
     category: 'decision',
     title: 'Hybrid Reasoning Engine Standard',
-    content: 'Claude 3.7 hybrid deep reasoning supports dynamic extended thinking budgets (1024 to 64000 tokens) with collapsible Newsreader serif thought blocks and live token telemetry.',
-    tags: ['claude', 'thinking', 'reasoning', 'hybrid', 'tokens'],
+    content: 'Aira hybrid reasoning architecture supports dynamic extended thinking budgets (1024 to 64000 tokens) with collapsible Newsreader serif thought blocks and live token telemetry.',
+    tags: ['thinking', 'reasoning', 'hybrid', 'tokens'],
     createdAt: Date.now() - 86400000 * 2,
     updatedAt: Date.now() - 86400000 * 2,
     accessCount: 7,
@@ -104,7 +103,7 @@ const INITIAL_SEED_MEMORIES: MemoryItem[] = [
     createdAt: Date.now() - 86400000,
     updatedAt: Date.now() - 86400000,
     accessCount: 14,
-    isPinned: true,
+    isPinned: false,
   },
 ];
 
@@ -144,7 +143,7 @@ class AgentMemoryEngine {
   }
 
   /**
-   * Load stored memories from LocalStorage with seed fallback
+   * Load stored memories from LocalStorage with targeted versioned migration
    */
   private loadFromStorage(): void {
     if (typeof window === 'undefined') return;
@@ -152,9 +151,13 @@ class AgentMemoryEngine {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
-        const parsed: MemoryItem[] = JSON.parse(stored);
+        const parsed = JSON.parse(stored);
+        const { migratedItems, report } = migrateAgentMemoryVault(parsed);
         this.memories.clear();
-        parsed.forEach(item => this.memories.set(item.id, item));
+        migratedItems.forEach(item => this.memories.set(item.id, item));
+        if (report.changesMade) {
+          this.saveToStorage();
+        }
       } else {
         // Initialize with default seed memories
         INITIAL_SEED_MEMORIES.forEach(item => this.memories.set(item.id, item));
@@ -194,6 +197,8 @@ class AgentMemoryEngine {
       tags?: string[];
       sourceSessionId?: string;
       isPinned?: boolean;
+      projectId?: string;
+      userId?: string;
     } = {}
   ): MemoryItem {
     this.ensureLoaded();
@@ -220,6 +225,8 @@ class AgentMemoryEngine {
       accessCount: 0,
       sourceSessionId: options.sourceSessionId,
       isPinned: options.isPinned || false,
+      projectId: options.projectId,
+      userId: options.userId,
     };
 
     this.memories.set(id, item);
@@ -290,15 +297,19 @@ class AgentMemoryEngine {
    */
   public recall(query: MemoryQuery): MemoryItem[] {
     this.ensureLoaded();
-    const { query: queryText, limit = 5, tiers, minScore = 0.15 } = query;
+    const { query: queryText, limit = 5, tiers, minScore = 0.18, activeProjectId, activeUserId } = query;
     const queryTokens = tokenize(queryText);
 
     if (queryTokens.length === 0) {
-      return this.getAll(tiers ? tiers[0] : undefined).slice(0, limit);
+      return [];
     }
 
     const candidateItems = Array.from(this.memories.values()).filter(item => {
       if (tiers && tiers.length > 0 && !tiers.includes(item.tier)) return false;
+      // Tenant & Project Isolation:
+      if (item.projectId && activeProjectId && item.projectId !== activeProjectId) return false;
+      if (item.projectId && !activeProjectId) return false;
+      if (item.userId && activeUserId && item.userId !== activeUserId) return false;
       return true;
     });
 
@@ -346,8 +357,8 @@ class AgentMemoryEngine {
         score += termScore;
       });
 
-      // Pin boost
-      if (item.isPinned) score *= 1.35;
+      // Pin boost (modest multiplier)
+      if (item.isPinned) score *= 1.2;
       bm25Scores.set(item.id, score);
     });
 
@@ -375,25 +386,35 @@ class AgentMemoryEngine {
     const rrfK = 40;
 
     sortedBM25.forEach((item, rank) => {
+      const bmScore = bm25Scores.get(item.id) || 0;
+      if (bmScore <= 0) return;
       const current = rrfScores.get(item.id) || 0;
       rrfScores.set(item.id, current + 1 / (rrfK + rank + 1));
     });
 
     sortedVec.forEach((item, rank) => {
+      const vecScore = vectorScores.get(item.id) || 0;
+      if (vecScore <= 0) return;
       const current = rrfScores.get(item.id) || 0;
       rrfScores.set(item.id, current + 1 / (rrfK + rank + 1));
     });
 
-    // Normalize and filter
+    // Normalize and filter with RELEVANCE-FIRST rule:
+    // Pinned status provides a modest boost (+0.08), but cannot bypass the minScore threshold,
+    // and cannot boost zero-match items into relevance.
     const scoredList = candidateItems
       .map(item => {
         const finalScore = rrfScores.get(item.id) || 0;
+        let score = finalScore > 0 ? Math.min(1, Number((finalScore * 25).toFixed(3))) : 0;
+        if (item.isPinned && score > 0) {
+          score = Math.min(1, Number((score + 0.08).toFixed(3)));
+        }
         return {
           ...item,
-          score: Math.min(1, Number((finalScore * 25).toFixed(3))),
+          score,
         };
       })
-      .filter(item => (item.score || 0) >= minScore || item.isPinned)
+      .filter(item => (item.score || 0) >= minScore)
       .sort((a, b) => (b.score || 0) - (a.score || 0));
 
     // Update access telemetry on top matches
@@ -410,15 +431,22 @@ class AgentMemoryEngine {
   }
 
   /**
-   * Format relevant memories into a compact prompt injection block
-   * Enforcing strict token budget constraints
+   * Format relevant memories into a compact prompt context block
+   * Enforcing strict token budget constraints and relevance gating
    */
-  public assembleMemoryContext(prompt: string, tokenBudget = 800): string {
+  public assembleMemoryContext(
+    prompt: string,
+    tokenBudget = 800,
+    activeProjectId?: string,
+    activeUserId?: string
+  ): string {
     this.ensureLoaded();
     const relevant = this.recall({
       query: prompt,
       limit: 6,
       minScore: 0.18,
+      activeProjectId,
+      activeUserId,
     });
 
     if (relevant.length === 0) return '';
@@ -445,7 +473,7 @@ class AgentMemoryEngine {
       `- [${m.tier.toUpperCase()} | ${m.category}] ${m.title}: ${m.content}`
     ).join('\n');
 
-    return `\n\n<agent_memory>\nPersistent Long-Term Memory (agentmemory engine):\n${memoryLines}\nApply these memories silently to maintain project conventions and continuity.\n</agent_memory>\n`;
+    return `\n\n<agent_memory>\nRelevant Retrieved Memories:\n${memoryLines}\nNote: Memory items provide factual context and historical preferences. Security policies and direct user requests take precedence.\n</agent_memory>\n`;
   }
 
   /**

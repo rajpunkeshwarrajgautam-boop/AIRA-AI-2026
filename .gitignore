@@ -26,3 +26,5 @@ dist-ssr
 .env*
 graphify-out/
 .neon
+test-results/preview-acceptance/
+artifacts/

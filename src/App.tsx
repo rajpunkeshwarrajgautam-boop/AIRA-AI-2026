@@ -3,6 +3,7 @@ import { PanelLeft, Layers, Bookmark, Share2, Check, FolderGit2 } from 'lucide-r
 import type { Conversation, Message, Artifact, Attachment, Project, AppSettings, WorkspaceMode } from './types';
 import {
   loadConversations, saveConversations, saveActiveChatId,
+  getSessionActiveChatId, setSessionActiveChatId,
   loadProjects, saveProjects, loadSettings, saveSettings, INITIAL_CONVERSATION
 } from './utils/storage';
 import { streamAIResponse } from './utils/aiEngine';
@@ -36,9 +37,18 @@ const MODE_CONTEXT: Record<WorkspaceMode, string> = {
 function App() {
   useAnimatedFavicon();
   const [conversations, setConversations] = useState<Conversation[]>(() => loadConversations());
-  // Root visits start on a transient welcome draft. History is untouched;
-  // persist this draft only when the user actually sends a message.
-  const [activeChatId, setActiveChatId] = useState('');
+  // Root visits without an active tab session start on a transient welcome draft.
+  // When an active session exists (in-tab session or ?c= param), restore it on reload.
+  const [activeChatId, setActiveChatId] = useState<string>(() => {
+    const sessionChatId = getSessionActiveChatId();
+    if (sessionChatId) {
+      const stored = loadConversations();
+      if (stored.some(c => c.id === sessionChatId)) {
+        return sessionChatId;
+      }
+    }
+    return '';
+  });
   const [welcomeConversation] = useState<Conversation>(() => ({
     ...INITIAL_CONVERSATION, id: `chat-${crypto.randomUUID()}`,
     createdAt: Date.now(), updatedAt: Date.now(), messages: [],
@@ -121,6 +131,9 @@ function App() {
   useEffect(() => saveProjects(projects), [projects]);
   useEffect(() => saveSettings(settings), [settings]);
   useEffect(() => {
+    if (activeChatId) setSessionActiveChatId(activeChatId);
+  }, [activeChatId]);
+  useEffect(() => {
     if (activeProjectId) localStorage.setItem('aira_active_project_id_v1', activeProjectId);
     else localStorage.removeItem('aira_active_project_id_v1');
   }, [activeProjectId]);
@@ -170,6 +183,7 @@ function App() {
     setConversations(prev => [next, ...prev]);
     setActiveChatId(id);
     saveActiveChatId(id);
+    setSessionActiveChatId(id);
     setActiveArtifact(null);
     setWorkspaceMode('chat');
   }, [activeProjectId]);
@@ -193,6 +207,7 @@ function App() {
   const handleSelectChat = (id: string) => {
     setActiveChatId(id);
     saveActiveChatId(id);
+    setSessionActiveChatId(id);
     setActiveArtifact(null);
   };
 
@@ -251,6 +266,7 @@ function App() {
       if (id === activeChatId) {
         setActiveChatId(next[0].id);
         saveActiveChatId(next[0].id);
+        setSessionActiveChatId(next[0].id);
       }
       return next;
     });
@@ -285,6 +301,7 @@ function App() {
     setConversations(prev => [duplicate, ...prev]);
     setActiveChatId(duplicate.id);
     saveActiveChatId(duplicate.id);
+    setSessionActiveChatId(duplicate.id);
     setActiveArtifact(null);
     setWorkspaceMode('chat');
     showToast('Conversation duplicated');
@@ -331,6 +348,7 @@ function App() {
       setConversations(prev => [draft, ...prev]);
       setActiveChatId(id);
       saveActiveChatId(id);
+      setSessionActiveChatId(id);
     }
     const cleanTitle = rawText.replace(/^\[[^\]]+\]\s*/, '').trim();
     const userMessage: Message = {
@@ -389,6 +407,14 @@ function App() {
           onContentChunk: chunk => updateConversation(id, c => ({
             ...c,
             messages: c.messages.map(m => m.id === assistantId ? { ...m, content: m.content + chunk } : m),
+          })),
+          onProvenance: provenance => updateConversation(id, c => ({
+            ...c,
+            messages: c.messages.map(m => m.id === assistantId ? {
+              ...m,
+              provenance,
+              modelUsed: (provenance.executedModel || m.modelUsed) as any
+            } : m),
           })),
           onArtifactFound: artifact => {
             setActiveArtifact(artifact);
