@@ -5,8 +5,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const TARGET_COMMIT = process.env.AIRA_TARGET_COMMIT || execSync('git rev-parse HEAD', { encoding: 'utf-8' }).trim();
-const TARGET_DEPLOYMENT_ID = process.env.AIRA_TARGET_DEPLOYMENT_ID || 'dpl_EbZA7vDuC49HvWnq9zYPAbQXafmM';
-const PREVIEW_URL = process.env.AIRA_PREVIEW_URL || 'https://aira-ai-2026-j6m3g6w29-rajpunkeshwarrajgautam-boops-projects.vercel.app/';
+const TARGET_DEPLOYMENT_ID = process.env.AIRA_TARGET_DEPLOYMENT_ID || 'dpl_7TVyrcD2F7DCAqhugzCL5SJSrmHb';
+const PREVIEW_URL = process.env.AIRA_PREVIEW_URL || 'https://aira-ai-2026-9cm8vna36-rajpunkeshwarrajgautam-boops-projects.vercel.app/';
 const AUTH_STATE_PATH = process.env.AIRA_AUTH_STATE_PATH || 'C:\\Users\\WORKSTATION\\AppData\\Local\\AIRA-Test\\preview-auth-state.json';
 const OUTPUT_DIR = path.resolve(process.cwd(), 'test-results/preview-acceptance');
 const ARTIFACTS_DIR = path.resolve(process.cwd(), 'artifacts/preview-acceptance');
@@ -62,28 +62,61 @@ function verifyTargetDeployment(): void {
   console.log('========================================================================');
   
   const localHead = execSync('git rev-parse HEAD', { encoding: 'utf-8' }).trim();
-  console.log('Local Git HEAD:    ', localHead);
-  console.log('Required Commit:   ', TARGET_COMMIT);
+  console.log('Local Git HEAD:       ', localHead);
+  console.log('Required Target SHA:  ', TARGET_COMMIT);
   assert.strictEqual(localHead, TARGET_COMMIT, `Local git HEAD (${localHead}) must match target commit (${TARGET_COMMIT})`);
   console.log('✓ Local Git HEAD matches target commit exactly.');
 
+  // PR #51 Head Check (Must strictly match; failure blocks certification)
+  const prHead = execSync('gh pr view 51 --json headRefOid -q .headRefOid', { encoding: 'utf-8' }).trim();
+  console.log('PR #51 Head SHA:      ', prHead);
+  assert.strictEqual(prHead, TARGET_COMMIT, `PR #51 headRefOid (${prHead}) must match target commit (${TARGET_COMMIT})`);
+  console.log('✓ PR #51 Head SHA matches target commit exactly.');
+
+  // Vercel Deployment Metadata Check (Must strictly match; failure blocks certification)
+  let deploymentMeta: any;
   try {
-    const prHead = execSync('gh pr view 51 --json headRefOid -q .headRefOid', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] }).trim();
-    console.log('PR #51 Head SHA:   ', prHead);
-    assert.strictEqual(prHead, TARGET_COMMIT, `PR #51 headRefOid (${prHead}) must match target commit (${TARGET_COMMIT})`);
-    console.log('✓ PR #51 Head SHA matches target commit exactly.');
+    const apiOutput = execSync(`npx vercel api /v13/deployments/${TARGET_DEPLOYMENT_ID}`, { encoding: 'utf-8' });
+    deploymentMeta = JSON.parse(apiOutput);
   } catch (err: any) {
-    console.warn(`[PR CHECK WARNING] Could not verify via gh CLI: ${err.message}`);
+    const inspectOutput = execSync(`npx vercel inspect ${TARGET_DEPLOYMENT_ID} --json`, { encoding: 'utf-8' });
+    const jsonStart = inspectOutput.indexOf('{');
+    deploymentMeta = JSON.parse(jsonStart >= 0 ? inspectOutput.slice(jsonStart) : inspectOutput);
   }
 
-  try {
-    const rawOutput = execSync(`npx vercel inspect ${TARGET_DEPLOYMENT_ID} 2>&1`, { encoding: 'utf-8' });
-    assert.ok(rawOutput.includes(TARGET_DEPLOYMENT_ID), `Vercel CLI inspect must confirm deployment ID ${TARGET_DEPLOYMENT_ID}`);
-    assert.ok(rawOutput.includes('Ready'), `Deployment ${TARGET_DEPLOYMENT_ID} must be Ready`);
-    console.log(`✓ Vercel CLI confirmed deployment ${TARGET_DEPLOYMENT_ID} is Ready.`);
-  } catch (err: any) {
-    console.warn(`[VERCEL CHECK WARNING] Could not verify via Vercel CLI: ${err.message}`);
-  }
+  assert.ok(deploymentMeta, `Must successfully retrieve Vercel deployment metadata for ${TARGET_DEPLOYMENT_ID}`);
+  console.log('Deployment ID:        ', deploymentMeta.id);
+  assert.strictEqual(deploymentMeta.id, TARGET_DEPLOYMENT_ID, `Deployment ID (${deploymentMeta.id}) must match target deployment ID (${TARGET_DEPLOYMENT_ID})`);
+  assert.strictEqual(deploymentMeta.readyState, 'READY', `Vercel deployment ${TARGET_DEPLOYMENT_ID} must be READY (found: ${deploymentMeta.readyState})`);
+  console.log('✓ Target deployment exists and is READY.');
+
+  const deployedGitSha = deploymentMeta.meta?.githubCommitSha || deploymentMeta.meta?.gitCommitSha || deploymentMeta.gitSource?.sha;
+  console.log('Deployed Git SHA:     ', deployedGitSha);
+  assert.ok(deployedGitSha, `Vercel deployment ${TARGET_DEPLOYMENT_ID} must report a deployed Git commit SHA in metadata`);
+  assert.strictEqual(deployedGitSha, TARGET_COMMIT, `Deployed Git commit SHA (${deployedGitSha}) must match target commit (${TARGET_COMMIT})`);
+  console.log('✓ Deployed Git SHA matches target commit exactly.');
+
+  const expectedHost = new URL(PREVIEW_URL).hostname.toLowerCase();
+  const actualHost = String(deploymentMeta.url || '').replace(/^https?:\/\//i, '').replace(/\/$/, '').toLowerCase();
+  console.log('Target Preview Host:  ', expectedHost);
+  console.log('Deployed Host:        ', actualHost);
+  assert.strictEqual(actualHost, expectedHost, `Deployed host (${actualHost}) must match target preview host (${expectedHost})`);
+  console.log('✓ Deployed host matches target preview URL host exactly.');
+
+  // GitHub Commit Status Cross-Reference (Must confirm Vercel deployment for TARGET_COMMIT)
+  const rawStatuses = execSync(`gh api repos/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/commits/${TARGET_COMMIT}/statuses`, { encoding: 'utf-8' });
+  const statuses = JSON.parse(rawStatuses);
+  const shortId = TARGET_DEPLOYMENT_ID.replace('dpl_', '');
+  const vercelStatus = statuses.find((s: any) =>
+    s.context === 'Vercel' &&
+    (s.state === 'success' || s.description?.toLowerCase().includes('completed')) &&
+    (s.target_url?.includes(TARGET_DEPLOYMENT_ID) || s.target_url?.includes(shortId))
+  );
+  assert.ok(
+    vercelStatus,
+    `GitHub commit status for ${TARGET_COMMIT} must confirm successful Vercel deployment matching ${TARGET_DEPLOYMENT_ID}`
+  );
+  console.log(`✓ GitHub commit status confirms Vercel deployment ${TARGET_DEPLOYMENT_ID} on commit ${TARGET_COMMIT}.`);
 }
 
 async function clickNewChat(page: Page): Promise<void> {

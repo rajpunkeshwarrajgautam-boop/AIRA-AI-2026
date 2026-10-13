@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { ModelRouter, DeterministicMockAdapter, AnthropicAdapter } from '../../packages/model-router/src/index.js';
+import { ModelRouter, DeterministicMockAdapter, AnthropicAdapter, isModelMatch } from '../../packages/model-router/src/index.js';
 import { ModelProvenanceSchema, type ModelProvenance } from '../../packages/contracts/src/index.js';
 import { AgentRuntime } from '../../packages/agent-runtime/src/index.js';
 import { InMemoryRunRepository } from '../../packages/agent-runtime/src/repositories.js';
@@ -583,6 +583,184 @@ describe('MISSION: Model Provenance, Runtime Identity & Capability Accuracy', ()
       const lastProv = provEvents[provEvents.length - 1];
       assert.equal(lastProv.data.executionStatus, 'FAILED');
       assert.equal(lastProv.data.verified, false);
+    });
+
+    // 5. Missing upstream model identifier: Provider executes successfully but omits model ID
+    it('Discrepancy 2: Response omitting model ID retains outbound model, leaves upstreamResponseModel undefined, and sets verified: false', async () => {
+      const runRepo = new InMemoryRunRepository();
+      const modelRouter = new ModelRouter();
+
+      const missingModelAdapter = {
+        provider: 'mock' as const,
+        complete: async () => ({
+          text: 'Successful response without model ID',
+          usage: { promptTokens: 12, completionTokens: 15, totalTokens: 27 },
+          outboundModel: 'mock-deterministic'
+          // model is deliberately omitted
+        }),
+        stream: async (_messages: any, _policy: any, onChunk: any) => {
+          onChunk({ text: 'Successful response without model ID' });
+          return {
+            text: 'Successful response without model ID',
+            usage: { promptTokens: 12, completionTokens: 15, totalTokens: 27 },
+            outboundModel: 'mock-deterministic'
+            // model is deliberately omitted
+          };
+        },
+        toJSON: () => ({ provider: 'mock' })
+      };
+      (modelRouter as any).adapters.set('mock', missingModelAdapter);
+
+      const toolRegistry = new ToolRegistry();
+      const approvalKernel = new ApprovalKernel({} as any, {} as any);
+      const knowledgeEngine = new BrainV2KnowledgeEngine();
+      const runtime = new AgentRuntime(
+        modelRouter,
+        toolRegistry,
+        approvalKernel,
+        knowledgeEngine,
+        runRepo,
+        process.cwd()
+      );
+
+      const principal = { userId: 'u1', sessionId: 's1' };
+      const run = await runtime.createRun({
+        prompt: 'test prompt for missing model id',
+        modelPolicy: { model: 'mock-deterministic' }
+      }, principal);
+
+      const events: any[] = [];
+      const stream = runtime.getEventStream(run.id);
+      stream.on('event', evt => events.push(evt));
+
+      const donePromise = new Promise<void>((resolve) => {
+        stream.on('event', (evt) => {
+          if (evt.type === 'run.completed' || evt.type === 'run.failed') resolve();
+        });
+      });
+
+      await runtime.startRun(run.id);
+      await donePromise;
+
+      const finalRun = await runtime.getRun(run.id);
+      assert.ok(finalRun?.provenance);
+      // Successful provider execution
+      assert.equal(finalRun.provenance.executionStatus, 'SUCCESS', 'Execution status must be SUCCESS when provider succeeds');
+      // Retains known outbound model
+      assert.equal(finalRun.provenance.outboundModel, 'mock-deterministic', 'Must retain known outbound model');
+      assert.equal(finalRun.provenance.executedModel, 'mock-deterministic', 'Executed model defaults to known outbound model');
+      // Upstream response model is omitted, not fabricated
+      assert.equal(finalRun.provenance.upstreamResponseModel, undefined, 'Must not manufacture upstream response model when omitted');
+      // Must not misrepresent as independently verified
+      assert.equal(finalRun.provenance.verified, false, 'Must NOT claim verified when upstream omits model ID');
+
+      const provEvents = events.filter(e => e.type === 'model.provenance');
+      const lastProv = provEvents[provEvents.length - 1];
+      assert.equal(lastProv.data.executionStatus, 'SUCCESS');
+      assert.equal(lastProv.data.verified, false);
+      assert.equal(lastProv.data.outboundModel, 'mock-deterministic');
+      assert.equal(lastProv.data.upstreamResponseModel, undefined);
+    });
+
+    // 6. Mismatched upstream model identifier: Provider returns different model ID than outbound
+    it('Discrepancy 2: Response returning mismatched model ID records both models, marks verified: false, and reflects SUCCESS execution', async () => {
+      const runRepo = new InMemoryRunRepository();
+      const modelRouter = new ModelRouter();
+
+      const mismatchedModelAdapter = {
+        provider: 'mock' as const,
+        complete: async () => ({
+          text: 'Response from mismatched upstream model',
+          usage: { promptTokens: 14, completionTokens: 18, totalTokens: 32 },
+          outboundModel: 'mock-deterministic',
+          model: 'unexpected-provider-model-v2'
+        }),
+        stream: async (_messages: any, _policy: any, onChunk: any) => {
+          onChunk({ text: 'Response from mismatched upstream model' });
+          return {
+            text: 'Response from mismatched upstream model',
+            usage: { promptTokens: 14, completionTokens: 18, totalTokens: 32 },
+            outboundModel: 'mock-deterministic',
+            model: 'unexpected-provider-model-v2'
+          };
+        },
+        toJSON: () => ({ provider: 'mock' })
+      };
+      (modelRouter as any).adapters.set('mock', mismatchedModelAdapter);
+
+      const toolRegistry = new ToolRegistry();
+      const approvalKernel = new ApprovalKernel({} as any, {} as any);
+      const knowledgeEngine = new BrainV2KnowledgeEngine();
+      const runtime = new AgentRuntime(
+        modelRouter,
+        toolRegistry,
+        approvalKernel,
+        knowledgeEngine,
+        runRepo,
+        process.cwd()
+      );
+
+      const principal = { userId: 'u1', sessionId: 's1' };
+      const run = await runtime.createRun({
+        prompt: 'test prompt for mismatched model id',
+        modelPolicy: { model: 'mock-deterministic' }
+      }, principal);
+
+      const events: any[] = [];
+      const stream = runtime.getEventStream(run.id);
+      stream.on('event', evt => events.push(evt));
+
+      const donePromise = new Promise<void>((resolve) => {
+        stream.on('event', (evt) => {
+          if (evt.type === 'run.completed' || evt.type === 'run.failed') resolve();
+        });
+      });
+
+      await runtime.startRun(run.id);
+      await donePromise;
+
+      const finalRun = await runtime.getRun(run.id);
+      assert.ok(finalRun?.provenance);
+      // Successful provider execution
+      assert.equal(finalRun.provenance.executionStatus, 'SUCCESS', 'Execution status must be SUCCESS');
+      // Distinguishes outbound vs actual upstream response model
+      assert.equal(finalRun.provenance.outboundModel, 'mock-deterministic', 'Must retain requested outbound model');
+      assert.equal(finalRun.provenance.upstreamResponseModel, 'unexpected-provider-model-v2', 'Must record upstream response model accurately');
+      assert.equal(finalRun.provenance.executedModel, 'unexpected-provider-model-v2', 'Executed model reflects upstream actual model');
+      // Mismatch must NOT be verified against requested outbound model
+      assert.equal(finalRun.provenance.verified, false, 'Mismatched model ID must NOT be verified');
+
+      const provEvents = events.filter(e => e.type === 'model.provenance');
+      const lastProv = provEvents[provEvents.length - 1];
+      assert.equal(lastProv.data.executionStatus, 'SUCCESS');
+      assert.equal(lastProv.data.verified, false);
+      assert.equal(lastProv.data.outboundModel, 'mock-deterministic');
+      assert.equal(lastProv.data.upstreamResponseModel, 'unexpected-provider-model-v2');
+    });
+
+    // 7. Unit tests for isModelMatch model identity reconciliation helper
+    it('isModelMatch: correctly validates matching, normalized, missing, and mismatched identifiers', () => {
+      // Exact matches
+      assert.equal(isModelMatch('mock-deterministic', 'mock-deterministic'), true);
+      assert.equal(isModelMatch('nvidia/nemotron-3-super-120b-a12b', 'nvidia/nemotron-3-super-120b-a12b'), true);
+      
+      // Namespace normalization
+      assert.equal(isModelMatch('nvidia/nemotron-3-super-120b-a12b', 'nemotron-3-super-120b-a12b'), true);
+      assert.equal(isModelMatch('nemotron-3-super-120b-a12b', 'nvidia/nemotron-3-super-120b-a12b'), true);
+
+      // Date / snapshot suffixes
+      assert.equal(isModelMatch('gpt-4o', 'gpt-4o-2024-08-06'), true);
+      assert.equal(isModelMatch('claude-3-5-sonnet', 'claude-3-5-sonnet-20241022'), true);
+
+      // Mismatches
+      assert.equal(isModelMatch('nvidia/nemotron-3-super-120b-a12b', 'meta/llama-3.1-8b-instruct'), false);
+      assert.equal(isModelMatch('mock-deterministic', 'unexpected-model'), false);
+      assert.equal(isModelMatch('gpt-4o', 'gpt-4o-mini'), false);
+
+      // Missing / undefined
+      assert.equal(isModelMatch('mock-deterministic', undefined), false);
+      assert.equal(isModelMatch(undefined, 'mock-deterministic'), false);
+      assert.equal(isModelMatch('', ''), false);
     });
 
     // 5. Additional verification: Explicit Nemotron vs Auto Fallback distinction

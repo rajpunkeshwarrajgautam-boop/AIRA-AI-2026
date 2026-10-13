@@ -25,8 +25,32 @@ export interface ModelCompletionResult {
     completionTokens: number;
     totalTokens: number;
   };
-  model: string;
+  model?: string;
   outboundModel?: string;
+}
+
+export function isModelMatch(outboundModel?: string, upstreamResponseModel?: string): boolean {
+  if (!outboundModel || !upstreamResponseModel) return false;
+  const cleanOutbound = outboundModel.trim().toLowerCase();
+  const cleanUpstream = upstreamResponseModel.trim().toLowerCase();
+  if (cleanOutbound === cleanUpstream) return true;
+  const stripNamespace = (m: string) => m.includes('/') ? m.split('/').pop()! : m;
+  const bareOutbound = stripNamespace(cleanOutbound);
+  const bareUpstream = stripNamespace(cleanUpstream);
+  if (bareOutbound === bareUpstream) return true;
+
+  // Handle snapshot / date suffixes only (e.g. gpt-4o vs gpt-4o-2024-08-06, claude-3-5-sonnet vs claude-3-5-sonnet-20241022)
+  const isDateSnapshotSuffix = (base: string, candidate: string) => {
+    if (!candidate.startsWith(base + '-')) return false;
+    const suffix = candidate.slice(base.length + 1);
+    return /^\d{4}(-\d{2}-\d{2})?$|^\d{8}$|^\d{4}$/.test(suffix);
+  };
+
+  if (isDateSnapshotSuffix(bareOutbound, bareUpstream) || isDateSnapshotSuffix(bareUpstream, bareOutbound)) {
+    return true;
+  }
+
+  return false;
 }
 
 export interface ModelAdapter {
@@ -234,7 +258,7 @@ export class AnthropicAdapter implements ModelAdapter {
         totalTokens: (data.usage?.input_tokens || 0) + (data.usage?.output_tokens || 0)
       },
       outboundModel,
-      model: data.model || outboundModel
+      model: typeof data.model === 'string' && data.model.trim().length > 0 ? data.model.trim() : undefined
     };
   }
 
@@ -332,7 +356,7 @@ export class OpenAIAdapter implements ModelAdapter {
             totalTokens: data.usage?.total_tokens || 0
           },
           outboundModel,
-          model: data.model || outboundModel
+          model: typeof data.model === 'string' && data.model.trim().length > 0 ? data.model.trim() : undefined
         };
       } catch (err: any) {
         lastError = err;

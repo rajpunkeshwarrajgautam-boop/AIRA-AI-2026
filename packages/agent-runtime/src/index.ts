@@ -16,7 +16,7 @@ import {
   ExecutionPrincipal,
   ModelProvenance
 } from '../../contracts/src/index.js';
-import { ModelRouter, ChatMessageInput } from '../../model-router/src/index.js';
+import { ModelRouter, ChatMessageInput, isModelMatch } from '../../model-router/src/index.js';
 import { ToolRegistry, ToolGateway, PostgresToolCallRepository } from '../../tool-runtime/src/index.js';
 import { configuredSearchProviders } from '../../tool-runtime/src/search-providers.js';
 import { ApprovalKernel } from '../../approvals/src/index.js';
@@ -1072,10 +1072,17 @@ CAPABILITY & IDENTITY INVARIANTS:
 
       // Reconcile outbound & upstream models and confirm execution provenance
       if (run.provenance) {
-        run.provenance.outboundModel = completionResult?.outboundModel || run.provenance.plannedModel || run.provenance.executedModel;
-        run.provenance.upstreamResponseModel = completionResult?.model || run.provenance.outboundModel || run.provenance.executedModel;
-        run.provenance.executedModel = run.provenance.upstreamResponseModel;
-        run.provenance.verified = true;
+        const outboundModel = completionResult?.outboundModel || run.provenance.plannedModel || run.provenance.executedModel;
+        const upstreamModel = (typeof completionResult?.model === 'string' && completionResult.model.trim().length > 0)
+          ? completionResult.model.trim()
+          : undefined;
+
+        run.provenance.outboundModel = outboundModel;
+        run.provenance.upstreamResponseModel = upstreamModel;
+        run.provenance.executedModel = upstreamModel || outboundModel;
+
+        const isVerified = Boolean(upstreamModel && isModelMatch(outboundModel, upstreamModel));
+        run.provenance.verified = isVerified;
         run.provenance.executionStatus = run.provenance.fallbackOccurred ? 'FALLBACK' : 'SUCCESS';
         run.provenance.timestamp = Date.now();
         await this.runRepo.saveRun(run);
