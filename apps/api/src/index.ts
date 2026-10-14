@@ -570,7 +570,7 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
 // -----------------------------------------------------------------------
 app.post('/api/chat/stream', async (req: Request, res: Response) => {
   try {
-    const { messages, history, prompt, model, extendedThinking, systemPrompt, contextSubgraph, attachments, conversationId } = req.body;
+    const { messages, history, prompt, model, extendedThinking, systemPrompt, contextSubgraph, attachments, conversationId, timeZone } = req.body;
     const promptText = prompt || (Array.isArray(messages)
       ? [...messages].reverse().find((m: any) => m.role === 'user')?.content || ''
       : '');
@@ -591,7 +591,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       conversationId: conversationId || undefined,
       attachments: Array.isArray(attachments) ? attachments : undefined,
       systemPrompt: (systemPrompt || '') + (contextSubgraph ? `\n\n${contextSubgraph}` : ''),
-      context: { history: contextHistory },
+      context: { history: contextHistory, timeZone: typeof timeZone === 'string' ? timeZone.slice(0, 100) : undefined },
       modelPolicy: {
         model: model || 'aira-auto',
         extendedThinking: Boolean(extendedThinking),
