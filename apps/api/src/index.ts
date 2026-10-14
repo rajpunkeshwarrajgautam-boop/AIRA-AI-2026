@@ -6,7 +6,7 @@ import { ModelRouter } from '../../../packages/model-router/src/index.js';
 import { ToolRegistry, ToolGateway, PostgresToolCallRepository } from '../../../packages/tool-runtime/src/index.js';
 import { ApprovalKernel } from '../../../packages/approvals/src/index.js';
 import { PostgresApprovalRepository, PostgresSessionGrantRepository } from '../../../packages/approvals/src/repositories.js';
-import { BrainV2KnowledgeEngine } from '../../../packages/knowledge/src/index.js';
+import { BrainV2KnowledgeEngine, PrincipalScope } from '../../../packages/knowledge/src/index.js';
 import { McpHost } from '../../../packages/mcp/src/index.js';
 import { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
 import { AutomationEngine } from '../../../packages/automation/src/index.js';
@@ -750,33 +750,93 @@ app.post('/api/tools/calls/:id/cancel', async (req: Request, res: Response) => {
 });
 
 // -----------------------------------------------------------------------
-// Knowledge Engine (Brain v2)
+// Knowledge Engine (Brain v2) — Principal-Scoped & Isolated (P0 Security)
 // -----------------------------------------------------------------------
-app.get('/api/knowledge/sources', async (_req: Request, res: Response) => {
+app.get('/api/knowledge/sources', async (req: Request, res: Response) => {
+  const scope: PrincipalScope = {
+    principalId: req.principal?.userId,
+    workspaceId: req.principal?.workspaceId,
+    isSystem: false
+  };
   res.json({
-    sources: await knowledgeEngine.getSources(),
-    memories: await knowledgeEngine.getMemories()
+    sources: await knowledgeEngine.getSources(scope),
+    memories: await knowledgeEngine.getMemories(scope)
   });
 });
 
+app.get('/api/knowledge/sources/:id', async (req: Request, res: Response) => {
+  const scope: PrincipalScope = {
+    principalId: req.principal?.userId,
+    workspaceId: req.principal?.workspaceId,
+    isSystem: false
+  };
+  const source = await knowledgeEngine.getSource(req.params.id, scope);
+  if (!source) {
+    return res.status(404).json({ error: 'Source not found or access denied.' });
+  }
+  res.json({ source });
+});
+
+app.delete('/api/knowledge/sources/:id', async (req: Request, res: Response) => {
+  const scope: PrincipalScope = {
+    principalId: req.principal?.userId,
+    workspaceId: req.principal?.workspaceId,
+    isSystem: false
+  };
+  const deleted = await knowledgeEngine.deleteSource(req.params.id, scope);
+  if (!deleted) {
+    return res.status(404).json({ error: 'Source not found or deletion not permitted.' });
+  }
+  res.json({ success: true, id: req.params.id });
+});
+
 app.post('/api/knowledge/ingest', async (req: Request, res: Response) => {
-  const { title, content, mimeType, uri } = req.body;
+  const { title, content, mimeType, uri, projectId } = req.body;
   if (!title || !content) {
     return res.status(400).json({ error: 'title and content are required.' });
   }
-  const result = await knowledgeEngine.ingestDocument(title, content, mimeType, uri);
+  const scope: PrincipalScope = {
+    principalId: req.principal?.userId,
+    workspaceId: req.principal?.workspaceId,
+    isSystem: false
+  };
+  const result = await knowledgeEngine.ingestDocument(title, content, mimeType, uri, projectId, scope);
   res.status(201).json(result);
 });
 
-app.get('/api/knowledge/graph', async (_req: Request, res: Response) => {
-  res.json(await knowledgeEngine.getKnowledgeGraph());
+app.get('/api/knowledge/graph', async (req: Request, res: Response) => {
+  const scope: PrincipalScope = {
+    principalId: req.principal?.userId,
+    workspaceId: req.principal?.workspaceId,
+    isSystem: false
+  };
+  res.json(await knowledgeEngine.getKnowledgeGraph(scope));
 });
 
 app.post('/api/knowledge/search', async (req: Request, res: Response) => {
   const { query, limit } = req.body;
   if (!query) return res.status(400).json({ error: 'query is required.' });
-  const results = await knowledgeEngine.search(String(query), limit ? Number(limit) : 5);
+  const scope: PrincipalScope = {
+    principalId: req.principal?.userId,
+    workspaceId: req.principal?.workspaceId,
+    isSystem: false
+  };
+  const results = await knowledgeEngine.search(String(query), limit ? Number(limit) : 5, scope);
   res.json({ results });
+});
+
+app.post('/api/knowledge/memories', async (req: Request, res: Response) => {
+  const { key, value, category, provenance } = req.body;
+  if (!key || !value) {
+    return res.status(400).json({ error: 'key and value are required.' });
+  }
+  const scope: PrincipalScope = {
+    principalId: req.principal?.userId,
+    workspaceId: req.principal?.workspaceId,
+    isSystem: false
+  };
+  const memory = await knowledgeEngine.saveMemory(key, value, category || 'fact', provenance || 'user', scope);
+  res.status(201).json({ memory });
 });
 
 // -----------------------------------------------------------------------

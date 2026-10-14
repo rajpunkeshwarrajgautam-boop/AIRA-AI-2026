@@ -1,5 +1,5 @@
 import { ToolRegistry } from '../../tool-runtime/src/index.js';
-import { Citation, ToolCall, ToolResult } from '../../contracts/src/index.js';
+import { Citation, ToolCall, ToolResult, ExecutionPrincipal } from '../../contracts/src/index.js';
 import { BrainV2KnowledgeEngine } from '../../knowledge/src/index.js';
 import { configuredSearchProviders } from '../../tool-runtime/src/search-providers.js';
 import { evaluateFreshness } from './behavioral/semantic-reasoner.js';
@@ -16,6 +16,7 @@ export interface ResearchOptions {
   runId: string;
   topic?: string;
   location?: string;
+  principal?: ExecutionPrincipal;
 }
 
 export interface ResearchResult {
@@ -167,7 +168,8 @@ export class ResearchService {
     // Only use internal evidence for non-freshness queries when live search
     // is unconfigured or unavailable. Never invent live sources.
     if (!providerReady && !freshnessRequired) {
-      const internalResults = await this.knowledgeEngine.search(prompt, 3);
+      const scope = options.principal ? { principalId: options.principal.userId, workspaceId: options.principal.workspaceId, isSystem: false } : undefined;
+      const internalResults = await this.knowledgeEngine.search(prompt, 3, scope);
       citations = internalResults.map(r => r.citation);
     }
 

@@ -25,6 +25,9 @@ const ArtifactStudio = React.lazy(() => import('./components/ArtifactStudio').th
 const ProjectsModal = React.lazy(() => import('./components/ProjectsModal').then(m => ({ default: m.ProjectsModal })));
 const SettingsModal = React.lazy(() => import('./components/SettingsModal').then(m => ({ default: m.SettingsModal })));
 import { MemoryVaultModal } from './components/MemoryVaultModal';
+import { LibraryView } from './components/LibraryView';
+import { AgentsView } from './components/AgentsView';
+import { AutomationsView } from './components/AutomationsView';
 
 const MODE_CONTEXT: Record<WorkspaceMode, string> = {
   chat: '',
@@ -594,7 +597,13 @@ function App() {
         </header>
 
         <div ref={chatScrollRef} data-testid="chat-scroll-region" className="flex-1 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain flex flex-col">
-          {!activeConversation || activeConversation.messages.length === 0 ? (
+          {workspaceMode === 'library' ? (
+            <LibraryView />
+          ) : workspaceMode === 'agents' ? (
+            <AgentsView />
+          ) : workspaceMode === 'automations' ? (
+            <AutomationsView />
+          ) : (!activeConversation || activeConversation.messages.length === 0 ? (
             <GreetingScreen 
               userName={settings.userName} 
               workspaceMode={workspaceMode} 
@@ -618,8 +627,7 @@ function App() {
                 </div>
               ))}
             </div>
-          )}
-
+          ))}
         </div>
 
           <div className="shrink-0 min-w-0 relative z-10 pt-2 sm:pt-4 gradient-mask-bottom">

@@ -536,8 +536,19 @@ export type StreamingEvent = z.infer<typeof StreamingEventSchema>;
 // 8. KNOWLEDGE GRAPH & BRAIN V2
 // ==========================================
 
+export const PrincipalScopeSchema = z.object({
+  principalId: z.string().optional(),
+  workspaceId: z.string().optional(),
+  isSystem: z.boolean().default(false)
+});
+export type PrincipalScope = z.infer<typeof PrincipalScopeSchema>;
+
 export const KnowledgeSourceSchema = z.object({
   id: z.string(),
+  principalId: z.string().optional(),
+  workspaceId: z.string().optional(),
+  isSystem: z.boolean().default(false),
+  visibility: z.enum(['private', 'workspace', 'system', 'quarantined']).default('private'),
   projectId: z.string().optional(),
   title: z.string(),
   uri: z.string().optional(),
@@ -552,6 +563,8 @@ export type KnowledgeSource = z.infer<typeof KnowledgeSourceSchema>;
 export const KnowledgeChunkSchema = z.object({
   id: z.string(),
   sourceId: z.string(),
+  principalId: z.string().optional(),
+  isSystem: z.boolean().default(false),
   chunkIndex: z.number().int().nonnegative(),
   text: z.string(),
   tokenCount: z.number().int().positive(),
@@ -561,6 +574,9 @@ export type KnowledgeChunk = z.infer<typeof KnowledgeChunkSchema>;
 
 export const KnowledgeEntitySchema = z.object({
   id: z.string(),
+  principalId: z.string().optional(),
+  workspaceId: z.string().optional(),
+  isSystem: z.boolean().default(false),
   name: z.string(),
   type: z.string(), // concept, service, decision, constraint, person, task
   confidence: z.number().min(0).max(1),
@@ -574,6 +590,8 @@ export type KnowledgeEntity = z.infer<typeof KnowledgeEntitySchema>;
 
 export const KnowledgeEdgeSchema = z.object({
   id: z.string(),
+  principalId: z.string().optional(),
+  isSystem: z.boolean().default(false),
   sourceEntityId: z.string(),
   targetEntityId: z.string(),
   relation: z.string(), // DEPENDS_ON, CONFLICTS_WITH, DEFINES, REFERENCES
@@ -585,6 +603,9 @@ export type KnowledgeEdge = z.infer<typeof KnowledgeEdgeSchema>;
 
 export const MemoryRecordSchema = z.object({
   id: z.string(),
+  principalId: z.string().optional(),
+  workspaceId: z.string().optional(),
+  isSystem: z.boolean().default(false),
   key: z.string(),
   value: z.string(),
   category: z.enum(['fact', 'decision', 'preference', 'pattern', 'constraint']),
