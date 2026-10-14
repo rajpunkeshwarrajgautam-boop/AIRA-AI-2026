@@ -18,9 +18,52 @@ export interface AutomationRunRepository {
   getRun(id: string): Promise<AutomationRun | undefined>;
   getRunsForAutomation(automationId: string): Promise<AutomationRun[]>;
   claimRun(automationId: string, scheduledFor: number): Promise<AutomationRun | undefined>;
+  publishNotification?(input: { automationRunId: string; automationId: string; principalId: string; title: string; message: string; scheduledFor: number }): Promise<void>;
+  listNotifications?(principalId: string, limit?: number): Promise<ReminderNotification[]>;
+  markNotificationRead?(principalId: string, id: string): Promise<boolean>;
+}
+
+export interface ReminderNotification {
+  id: string;
+  automationId: string;
+  title: string;
+  message: string;
+  scheduledFor: number;
+  createdAt: number;
+  readAt: number | null;
 }
 
 export class PostgresAutomationRunRepository implements AutomationRunRepository {
+  async publishNotification(input: { automationRunId: string; automationId: string; principalId: string; title: string; message: string; scheduledFor: number }): Promise<void> {
+    await db('automation_notifications').insert({
+      id: `notice_${crypto.randomUUID()}`,
+      automation_run_id: input.automationRunId,
+      automation_id: input.automationId,
+      principal_id: input.principalId,
+      title: input.title,
+      message: input.message,
+      scheduled_for: input.scheduledFor,
+      created_at: Date.now()
+    }).onConflict('automation_run_id').ignore();
+  }
+
+  async listNotifications(principalId: string, limit = 50): Promise<ReminderNotification[]> {
+    const rows = await db('automation_notifications').where({ principal_id: principalId })
+      .orderBy('created_at', 'desc').limit(Math.min(Math.max(limit, 1), 100));
+    return rows.map(row => ({
+      id: row.id, automationId: row.automation_id,
+      title: row.title, message: row.message,
+      scheduledFor: Number(row.scheduled_for), createdAt: Number(row.created_at),
+      readAt: row.read_at ? Number(row.read_at) : null
+    }));
+  }
+
+  async markNotificationRead(principalId: string, id: string): Promise<boolean> {
+    const changed = await db('automation_notifications').where({ principal_id: principalId, id })
+      .whereNull('read_at').update({ read_at: Date.now() });
+    return changed > 0;
+  }
+
   async saveRun(run: AutomationRun): Promise<void> {
     await db('automation_runs').insert({
       id: run.id,
