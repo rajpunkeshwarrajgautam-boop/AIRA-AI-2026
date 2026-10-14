@@ -76,6 +76,28 @@ async function run() {
     assert.equal(isResearchToolCallDump('{"tool":"web_search","args":{"query":"NASA Artemis II"}}'), true);
     assert.equal(isResearchToolCallDump('[{"tool":"exa_search","args":{"query":"NASA"}},{"tool":"web_search","args":{"query":"moon"}}]'), true);
     assert.equal(isResearchToolCallDump('The mission needs primary NASA sources.'), false);
+    // Results may arrive out of order; the original implementation paired by
+    // array index, allowing the wrong search request to certify source evidence.
+    const orderedCalls = [
+      { id: 'call_alpha', name: 'web_search', arguments: {}, timestamp: 100 },
+      { id: 'call_beta', name: 'calculator', arguments: {}, timestamp: 101 }
+    ] as any;
+    const unrelatedReceipt = [{ toolCallId: 'call_beta', timestamp: 120, isError: false, output: result }] as any;
+    assert.equal(verifiedSearchCitationsFromToolResults(orderedCalls, unrelatedReceipt).length, 0,
+      'Calculator output cannot be promoted to web evidence because of matching position');
+    assert.equal(verifiedSearchCitationsFromToolResults(orderedCalls, [
+      { toolCallId: 'forged-unrelated-id', timestamp: 120, isError: false, output: result }
+    ] as any).length, 0, 'Unmatched receipt cannot certify a citation');
+    assert.equal(verifiedSearchCitationsFromToolResults(orderedCalls, [
+      { toolCallId: 'call_alpha_retry_1', timestamp: 120, isError: false, output: result }
+    ] as any)[0].provenance?.toolCallId, 'call_alpha_retry_1');
+    assert.equal(verifiedSearchCitationsFromToolResults(orderedCalls, [
+      { toolCallId: 'call_alpha_fallback_exa_search', timestamp: 120, isError: false, output: result }
+    ] as any)[0].provenance?.toolCallId, 'call_alpha_fallback_exa_search');
+    assert.equal(verifiedSearchCitationsFromToolResults(orderedCalls, [
+      { toolCallId: 'call_alpha_fallback_browser_navigate', timestamp: 120, isError: false, output: result }
+    ] as any).length, 0, 'Unapproved fallback tool cannot become verified web evidence');
+
     console.log('PASS: live source propagation, executed-tool evidence, and JSON suppression');
   } finally {
     if (originalTavily === undefined) delete process.env.TAVILY_API_KEY;

@@ -25,10 +25,38 @@ export function verifiedWebCitations(citations: Citation[]): Citation[] {
 
 /** Derive verifiable citations only from completed search tool results, never model-generated tool JSON. */
 export function verifiedSearchCitationsFromToolResults(toolCalls: ToolCall[], toolResults: ToolResult[]): Citation[] {
+  const searchTools = new Set(['web_search', 'tavily_search', 'exa_search']);
+  const callsById = new Map(toolCalls.map(call => [call.id, call]));
   const citations: Citation[] = [];
-  for (const [index, result] of toolResults.entries()) {
-    const call = toolCalls[index];
-    if (!call || !['web_search', 'tavily_search', 'exa_search'].includes(call.name) || result.isError) continue;
+
+  for (const result of toolResults) {
+    if (result.isError || !result.toolCallId) continue;
+    const receiptId = result.toolCallId;
+    let call = callsById.get(receiptId);
+    let executedTool = call?.name;
+
+    // Recovery-tool receipts differ from the original request ID. Only match
+    // known runtime-generated retry/fallback IDs, never arbitrary list positions.
+    if (!call) {
+      for (const candidate of toolCalls) {
+        if (receiptId.startsWith(candidate.id + '_retry_') &&
+            /^\\d+$/.test(receiptId.slice((candidate.id + '_retry_').length))) {
+          call = candidate;
+          executedTool = candidate.name;
+          break;
+        }
+        for (const fallback of searchTools) {
+          if (receiptId === candidate.id + '_fallback_' + fallback) {
+            call = candidate;
+            executedTool = fallback;
+            break;
+          }
+        }
+        if (call) break;
+      }
+    }
+    if (!call || !executedTool || !searchTools.has(executedTool)) continue;
+
     const output = result.output;
     if (!output || typeof output !== 'object') continue;
     const hits = (output as { results?: unknown }).results;
@@ -40,14 +68,16 @@ export function verifiedSearchCitationsFromToolResults(toolCalls: ToolCall[], to
       let url: URL;
       try { url = new URL(source.url); } catch { continue; }
       if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) continue;
+
       const snippet = typeof source.snippet === 'string' ? source.snippet
         : typeof source.description === 'string' ? source.description
         : typeof source.text === 'string' ? source.text
         : typeof source.content === 'string' ? source.content : '';
-      const publishedDate = typeof source.publishedDate === 'string' && /^\d{4}-\d{2}-\d{2}/.test(source.publishedDate)
-        ? source.publishedDate.slice(0, 10) : undefined;
+      const rawDate = source.publishedDate ?? source.published_date ?? source.published_at;
+      const publishedDate = typeof rawDate === 'string' && /^\\d{4}-\\d{2}-\\d{2}/.test(rawDate)
+        ? rawDate.slice(0, 10) : undefined;
       citations.push({
-        id: `executed_web_${call.id}_${citations.length}`,
+        id: `executed_web_${receiptId}_${citations.length}`,
         sourceId: `executed_web_${citations.length}`,
         sourceTitle: normalizeSourceTitle(typeof source.title === 'string' ? source.title : url.hostname),
         uri: url.href,
@@ -55,7 +85,7 @@ export function verifiedSearchCitationsFromToolResults(toolCalls: ToolCall[], to
         snippet: normalizeSnippetText(snippet),
         score: 1.0,
         provenance: {
-          toolCallId: result.toolCallId || call.id,
+          toolCallId: receiptId,
           retrievalMechanism: 'web_search',
           timestamp: result.timestamp || call.timestamp
         }
