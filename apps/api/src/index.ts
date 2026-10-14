@@ -82,6 +82,15 @@ app.post('/api/auth/session', (req: Request, res: Response) => {
   }
 });
 
+// Staging-only identity probe. Requires a valid Neon Auth JWT; signed guest
+// browser cookies do not count as a durable account identity.
+app.get('/api/auth/identity', (req: Request, res: Response) => {
+  const verified = (req as any).managedIdentity as { userId: string; sessionId: string; provider: string } | undefined;
+  res.setHeader('Cache-Control', 'no-store');
+  if (!verified) return res.status(401).json({ error: 'Verified managed account required' });
+  return res.status(200).json({ status: 'AUTHENTICATED', userId: verified.userId, provider: verified.provider });
+});
+
 // -----------------------------------------------------------------------
 // PUBLIC INFRASTRUCTURE PROBES — Registered BEFORE principal middleware.
 // Health and readiness endpoints must never require authenticated identity.
