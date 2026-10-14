@@ -835,12 +835,9 @@ export class AgentRuntime extends EventEmitter {
 
         await this.transitionRunState(runId, 'RUNNING');
         
-        // Mission advancement occurs from the durable TOOL_COMPLETED checkpoint
-        // below, so a process restart cannot silently skip the next step.
-
+        // Leave TOOL_COMPLETED durable until evidence is checked and the next
+        // mission step is dispatched below, including after process recovery.
         run = await this.runRepo.getRun(runId) as Run;
-        run.executionCheckpoint = 'SYNTHESIZING';
-        await this.runRepo.saveRun(run);
       }
     }
 
