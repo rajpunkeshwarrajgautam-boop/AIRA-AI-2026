@@ -1,4 +1,5 @@
 import type { ToolResult } from '../../contracts/src/index.js';
+import { isDeepStrictEqual } from 'node:util';
 
 export type MissionToolName = 'file_system_list' | 'file_system_read' |
   'repo_git_status' | 'repo_git_log';
@@ -138,7 +139,7 @@ export function validateDurableMission(prompt: string, progress: DurableMissionP
       progress.dispatched > expected.steps.length || !Array.isArray(progress.verified) ||
       typeof progress.currentCallId !== 'string') return false;
 
-  return JSON.stringify(progress.plan) === JSON.stringify(expected) &&
+  return isDeepStrictEqual(progress.plan, expected) &&
     progress.verified.length <= progress.dispatched &&
     progress.verified.every((id, index) => id === expected.steps[index].id);
 }
