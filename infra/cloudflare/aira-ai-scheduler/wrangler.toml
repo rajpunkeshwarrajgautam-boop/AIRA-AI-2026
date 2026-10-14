@@ -1,0 +1,14 @@
+# Dedicated external clock for AIRA AI 2026, staged ONLY.
+# No production AIRA aliases, domains, or routes are configured.
+# Deploying this configuration schedules ticks but DOES NOT dispatch to AIRA:
+# DISPATCH_ENABLED remains false until staging authorization and testing.
+name = "aira-ai-scheduler"
+main = "src/worker.mjs"
+compatibility_date = "2026-10-14"
+workers_dev = true
+
+[vars]
+DISPATCH_ENABLED = "false"
+
+[triggers]
+crons = ["* * * * *"]
