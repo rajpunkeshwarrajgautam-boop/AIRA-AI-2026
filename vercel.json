@@ -33,11 +33,5 @@
         }
       ]
     }
-  ],
-  "crons": [
-    {
-      "path": "/api/automations/cron/execute",
-      "schedule": "* * * * *"
-    }
   ]
 }
