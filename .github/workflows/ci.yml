@@ -99,6 +99,9 @@ jobs:
       - name: Durable mission planning and verification regression
         run: npm run test:mission-planner
 
+      - name: Model mission and independent verification security
+        run: npm run test:agent-v2
+
       - name: Workflow engine verification
         run: npm run test:workflow
 
