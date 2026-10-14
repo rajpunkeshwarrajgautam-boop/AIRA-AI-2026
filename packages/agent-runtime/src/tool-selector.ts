@@ -53,6 +53,20 @@ export function selectExecutableTool(
     return unresolved('FORM_INPUT_NOT_SPECIFIED', 'Browser form interaction needs a verified live session, field targets, values, and any required approval. No sample data was submitted.');
   }
 
+  // A fully specified read-only repository audit has a real three-tool path.
+  if (intent === 'AGENT_MISSION' &&
+      /\b(?:inspect|list)\s+(?:the\s+)?workspace\s+files\b/i.test(prompt) &&
+      /\b(?:git|repo)\s+status\b/i.test(prompt)) {
+    return executable('file_system_list', { directoryPath: '.' });
+  }
+
+  // Research missions use a real web lookup rather than arbitrary local repository tools.
+  if (intent === 'AGENT_MISSION' &&
+      /\b(find|compare|research|investigate)\b/i.test(prompt) &&
+      /\b(latest|recent|web\s+sources?|sources)\b/i.test(prompt)) {
+    return executable('web_search', { query: prompt });
+  }
+
   const urlMatch = prompt.match(/https?:\/\/[^\s"'<>]+/i);
   if (urlMatch) {
     const url = urlMatch[0].replace(/[),;.!?]+$/, '');
@@ -106,4 +120,17 @@ export function selectExecutableTool(
   }
 
   return unresolved('ACTION_TARGET_UNRESOLVED', 'No executable single-tool target can be identified from this request. AIRA does not substitute a random web search, file, command or calculator input.');
+}
+
+/** Continue only a recognized, user-requested, read-only repository inspection. */
+export function selectMissionFollowUp(prompt: string, completedSteps: number): ExecutableToolSelection | null {
+  const isRepositoryAudit =
+    /\b(?:inspect|list)\s+(?:the\s+)?workspace\s+files\b/i.test(prompt) &&
+    /\b(?:git|repo)\s+status\b/i.test(prompt) &&
+    /\b(?:repo|repository)\s+history\b/i.test(prompt);
+
+  if (!isRepositoryAudit) return null;
+  if (completedSteps === 1) return executable('repo_git_status', {});
+  if (completedSteps === 2) return executable('repo_git_log', { count: 2 });
+  return null;
 }
