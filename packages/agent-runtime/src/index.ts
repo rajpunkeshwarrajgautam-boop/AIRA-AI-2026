@@ -392,6 +392,44 @@ export class AgentRuntime extends EventEmitter {
       return;
     }
 
+    // Read-only follow-up verification: inspect the stored schedule instead of
+    // generating another automation or allowing the model to guess success.
+    const verifySchedule = /\\b(?:did you (?:create|set|schedule)|are you sure (?:you )?(?:created|scheduled|saved)|(?:check|verify) (?:my|the|that)?\\s*(?:reminder|schedule)|is (?:that|it) (?:scheduled|saved)|what (?:reminders|automations) (?:are|did|do))\\b/i.test(run.prompt);
+    if (verifySchedule && this.automationEngine && !run.executionCheckpoint) {
+      if (run.state !== 'RUNNING') await this.transitionRunState(runId, 'RUNNING');
+      const list = (await this.automationEngine.listAutomations(run.principalId)).filter(a => a.enabled);
+      const history = Array.isArray(run.context?.history) ? run.context.history : [];
+      const lastRequest = [...history].reverse().find((entry: any) =>
+        entry?.role === 'user' && /\\bremind me to\\b/i.test(String(entry?.content || ''))
+      );
+      const prior = lastRequest
+        ? parseReminderIntent(String(lastRequest.content), String(run.context?.timeZone || ''))
+        : null;
+      const matching = prior?.kind === 'create'
+        ? list.find(item =>
+          item.objective.toLowerCase().trim() === prior.objective.toLowerCase().trim() &&
+          item.cronExpression === prior.cronExpression &&
+          item.conditions?.timeZone === prior.timeZone
+        )
+        : null;
+      let text: string;
+      if (prior?.kind === 'create') {
+        text = matching
+          ? `I checked your saved automations. Your reminder to "${prior.objective}" is enabled for ${prior.summary}. Its database schedule is verified; cloud triggering and external push/email delivery are separate checks.`
+          : `I checked your saved automations but could not find an enabled reminder matching "${prior.objective}" at ${prior.summary}. I cannot confirm that it was scheduled correctly.`;
+      } else if (list.length) {
+        text = `I checked your saved automations: ${list.length} active item(s) are present. Tell me the reminder name so I can verify its exact time and timezone.`;
+      } else {
+        text = 'I checked your saved automations. There are no active reminders under this account.';
+      }
+      run.content = text;
+      run.executionCheckpoint = 'COMPLETED';
+      await this.runRepo.saveRun(run);
+      await this.emitRunEvent(runId, 'content.delta', { delta: text });
+      await this.transitionRunState(runId, 'COMPLETED');
+      return;
+    }
+
     // Checkpoint 0.4: Automation Engine execution target
     if (run.routingDecision?.executionTarget === 'AUTOMATION_ENGINE' || run.intent === 'AUTOMATION_CREATE') {
       if (run.state !== 'RUNNING') {
