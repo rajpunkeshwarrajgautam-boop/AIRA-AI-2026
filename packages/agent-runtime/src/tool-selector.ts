@@ -36,7 +36,6 @@ export function selectExecutableTool(
   intent: 'TOOL_ACTION' | 'AGENT_MISSION'
 ): ToolSelection {
   const prompt = rawPrompt.trim();
-  const lower = prompt.toLowerCase();
 
   if (/\b(mouse\s+click|desktop\s+coordinate|computer\s+use|screen\s+coordinate|os\s+control|native\s+app\s+control)\b/i.test(prompt)) {
     return unresolved('COMPUTER_USE_NOT_AVAILABLE', 'Native desktop control requires an attached, verified computer-use runtime.');
