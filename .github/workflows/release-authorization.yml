@@ -1,0 +1,71 @@
+name: Release Authorization Attestation (No Deployment)
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Number of the release pull request"
+        required: true
+        type: string
+      candidate_sha:
+        description: "Exact full 40-character PR head SHA"
+        required: true
+        type: string
+      approval_phrase:
+        description: "Type GO LIVE followed by one space and the candidate SHA"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  attestation:
+    name: Human Production Authorization (Attestation Only)
+    runs-on: ubuntu-latest
+    if: github.actor == github.repository_owner
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ inputs.pr_number }}
+      EXPECTED_SHA: ${{ inputs.candidate_sha }}
+      APPROVAL_PHRASE: ${{ inputs.approval_phrase }}
+    steps:
+      - name: Verify explicit release approval and exact PR head
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "::error::Expected a full 40-character commit SHA"; exit 1;
+          }
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || {
+            echo "::error::Expected a numeric pull request number"; exit 1;
+          }
+          [[ "$APPROVAL_PHRASE" == "GO LIVE $EXPECTED_SHA" ]] || {
+            echo "::error::Explicit exact-commit GO LIVE phrase is required"; exit 1;
+          }
+          PR_JSON=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")
+          ACTUAL_SHA=$(jq -r '.head.sha' <<<"$PR_JSON")
+          TARGET_BRANCH=$(jq -r '.base.ref' <<<"$PR_JSON")
+          STATE=$(jq -r '.state' <<<"$PR_JSON")
+          [[ "$ACTUAL_SHA" == "$EXPECTED_SHA" ]] || {
+            echo "::error::Release candidate SHA changed"; exit 1;
+          }
+          [[ "$TARGET_BRANCH" == "prod-release" && "$STATE" == "open" ]] || {
+            echo "::error::PR must be an open release candidate into prod-release"; exit 1;
+          }
+          {
+            echo "### AIRA Production Authorization — Audit Only"
+            echo "- Approved by GitHub actor: `$GITHUB_ACTOR`"
+            echo "- Repository: `$GITHUB_REPOSITORY`"
+            echo "- PR: #$PR_NUMBER"
+            echo "- Candidate SHA: `$EXPECTED_SHA`"
+            echo "- Target: `prod-release`"
+            echo "- UTC time: `$(date -u +'%Y-%m-%dT%H:%M:%SZ')`"
+            echo ""
+            echo "**This workflow does not change production.** It does not merge,"
+            echo "modify secrets, apply migrations, or promote a deployment."
+            echo "Release actors must separately check required CI and live"
+            echo "staging evidence, then obtain current user authorization."
+          } >>"$GITHUB_STEP_SUMMARY"
