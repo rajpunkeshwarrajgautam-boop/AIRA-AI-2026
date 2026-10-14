@@ -131,7 +131,7 @@ app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
 // with its Authorization: Bearer header (no browser cookie).
 const executeCronCycle = async (req: Request, res: Response) => {
   const secret = process.env.CRON_SECRET;
-  const supplied = req.headers.authorization?.replace(/^Bearer\\s+/i, '') || '';
+  const supplied = req.headers.authorization?.replace(/^Bearer\s+/i, '') || '';
   const expected = Buffer.from(secret || '');
   const actual = Buffer.from(supplied);
   if (!secret || secret.length < 32 || actual.length !== expected.length ||
