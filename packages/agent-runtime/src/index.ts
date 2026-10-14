@@ -398,12 +398,30 @@ export class AgentRuntime extends EventEmitter {
     )) {
       if (run.state !== 'RUNNING') await this.transitionRunState(runId, 'RUNNING');
       const automations = await this.automationEngine.listAutomations(run.principalId);
-      const entries = automations.filter((a: any) => a.principalId === run.principalId).slice(-10);
-      const msg = entries.length
-        ? 'I checked your saved schedules:\\n' + entries.map((a: any) =>
-          `- **${a.name}**: ${a.enabled ? 'enabled' : 'disabled'}, ${a.cronExpression || 'manual'}, ${a.conditions?.timeZone || 'time zone unspecified'} (ID: ${a.id}).`
-        ).join('\\n') + '\\nThese records show saved schedules, not proof that notifications were delivered.'
-        : 'I checked your saved automations and found none. I have not created a new schedule.';
+      const entries = automations.filter((a: any) => a.principalId === run.principalId);
+      const history = Array.isArray(run.context?.history) ? run.context.history as Array<{ role: string; content: string }> : [];
+      const previousUserRequest = [...history].reverse().find(item =>
+        item.role === 'user' && /\\b(?:remind|reminder|schedule|automation)\\b/i.test(item.content)
+      );
+      const parsedPrior = previousUserRequest
+        ? parseReminderRequest(previousUserRequest.content, run.context?.timeZone as string | undefined)
+        : null;
+      const matching = parsedPrior?.kind === 'ready'
+        ? entries.find((a: any) =>
+            a.enabled &&
+            a.objective.trim().toLowerCase() === parsedPrior.reminder.objective.trim().toLowerCase() &&
+            a.cronExpression === parsedPrior.reminder.cronExpression &&
+            a.conditions?.timeZone === parsedPrior.reminder.timeZone)
+        : undefined;
+      const msg = parsedPrior?.kind === 'ready'
+        ? matching
+          ? `I checked the saved schedule. **${matching.name}** is enabled for ${parsedPrior.reminder.description}. This verifies database persistence, not notification delivery.`
+          : `I checked your saved schedules. I could not find an enabled reminder for **${parsedPrior.reminder.objective}** at ${parsedPrior.reminder.description}. I have not created another reminder.`
+        : entries.length
+          ? 'I checked your saved schedules:\\n' + entries.slice(-10).map((a: any) =>
+              `- **${a.name}**: ${a.enabled ? 'enabled' : 'disabled'}, ${a.cronExpression || 'manual'}, ${a.conditions?.timeZone || 'time zone unspecified'}.`
+            ).join('\\n') + '\\nA saved record does not confirm notification delivery.'
+          : 'I checked your saved automations and found none. I have not created a new schedule.';
       run.content = msg;
       run.executionCheckpoint = 'COMPLETED';
       await this.runRepo.saveRun(run);
