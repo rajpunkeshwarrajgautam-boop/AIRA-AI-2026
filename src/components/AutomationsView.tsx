@@ -162,12 +162,17 @@ export const AutomationsView: React.FC = () => {
           agentId: formAgentId,
           objective: formObjective.trim(),
           approvalPolicy: formApproval,
+          conditions: { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
           enabled: true
         })
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || 'Failed to create automation.');
+      }
+      const receipt = await res.json();
+      if (receipt.alreadyExists) {
+        alert('This reminder already exists with the same objective, time, and time zone. No duplicate was created.');
       }
       setIsCreateOpen(false);
       setFormName('');
