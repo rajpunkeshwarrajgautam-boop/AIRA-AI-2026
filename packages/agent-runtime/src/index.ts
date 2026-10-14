@@ -34,7 +34,7 @@ import { buildDurableHistorySystemMessage } from './memory-policy.js';
 import { InstructionResolver } from './behavioral/instruction-resolver.js';
 import { AdaptiveSynthesizer } from './behavioral/adaptive-synthesizer.js';
 import { ToolRecoveryEngine } from './behavioral/tool-recovery-engine.js';
-import { selectExecutableTool } from './tool-selector.js';
+import { selectExecutableTool, selectMissionFollowUp } from './tool-selector.js';
 
 export class AgentRuntime extends EventEmitter {
   private eventStreams: Map<string, EventEmitter> = new Map();
@@ -807,36 +807,38 @@ export class AgentRuntime extends EventEmitter {
 
         await this.transitionRunState(runId, 'RUNNING');
         
-        // Bounded iterative loop for AGENT_MISSION (up to 3 steps)
-        if (run.intent === 'AGENT_MISSION' && run.stepCount < 3) {
-          let nextToolName: string | null = null;
-          let nextArgs: Record<string, unknown> = {};
-
-          if (run.stepCount === 1) {
-            nextToolName = 'repo_git_status';
-            nextArgs = {};
-          } else if (run.stepCount === 2) {
-            nextToolName = 'repo_git_log';
-            nextArgs = { count: 2 };
-          }
-
-          if (nextToolName) {
-            const nextToolDef = this.toolGateway.getTool(nextToolName)?.definition || this.toolRegistry.get(nextToolName)?.definition;
-            const nextToolCall: ToolCall = {
-              id: `call_${Date.now()}_${run.stepCount}`,
-              toolId: nextToolDef?.id || `tool_${nextToolName}`,
-              name: nextToolName,
-              arguments: nextArgs,
-              timestamp: Date.now()
-            };
-            run.toolsUsed.push(nextToolName);
-            run.toolCalls.push(nextToolCall);
-            run.stepCount++;
-            run.executionCheckpoint = 'TOOL_SELECTED';
+        // A mission continues only with steps that match the objective; do not
+        // automatically run repo status / history for unrelated user requests.
+        const continuation = run.intent === 'AGENT_MISSION'
+          ? selectMissionFollowUp(run.prompt, run.stepCount)
+          : null;
+        if (continuation) {
+          const nextToolDef = this.toolGateway.getTool(continuation.name)?.definition ||
+            this.toolRegistry.get(continuation.name)?.definition;
+          if (!nextToolDef) {
+            const message = `TOOL_UNAVAILABLE: mission step ${continuation.name} is not registered.`;
+            run.error = message;
+            run.content = message;
+            run.executionCheckpoint = 'TOOL_FAILED';
             await this.runRepo.saveRun(run);
-            await this.emitRunEvent(runId, 'tool.requested', nextToolCall);
-            return this.executeRunLoop(runId);
+            await this.transitionRunState(runId, 'FAILED', message);
+            return;
           }
+
+          const nextToolCall: ToolCall = {
+            id: `call_${Date.now()}_${run.stepCount}`,
+            toolId: nextToolDef.id,
+            name: continuation.name,
+            arguments: continuation.args,
+            timestamp: Date.now()
+          };
+          run.toolsUsed.push(continuation.name);
+          run.toolCalls.push(nextToolCall);
+          run.stepCount++;
+          run.executionCheckpoint = 'TOOL_SELECTED';
+          await this.runRepo.saveRun(run);
+          await this.emitRunEvent(runId, 'tool.requested', nextToolCall);
+          return this.executeRunLoop(runId);
         }
 
         run = await this.runRepo.getRun(runId) as Run;
