@@ -69,7 +69,7 @@ export function selectExecutableTool(
   if (/\b(git\s+status|repo\s+status|repository\s+status)\b/i.test(prompt)) {
     return executable('repo_git_status', {});
   }
-  if (/\b(git\s+log|latest\s+commits?|recent\s+commits?|commit\s+history)\b/i.test(prompt)) {
+  if (/\b(git\s+log|latest\s+commits?|recent\s+commits?|commit\s+history|(?:last|latest|recent)\s+\d{1,2}\s+commits?)\b/i.test(prompt)) {
     const n = prompt.match(/\b(?:last|latest|recent)\s+(\d{1,2})\s+commits?\b/i);
     return executable('repo_git_log', { count: n ? Math.min(20, Math.max(1, Number(n[1]))) : 5 });
   }
