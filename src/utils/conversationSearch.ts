@@ -1,4 +1,5 @@
 import type { Conversation } from '../types';
+import { neonAuth } from '../lib/neonAuth';
 
 export interface ConversationSearchResult {
   conversationId: string;
@@ -63,14 +64,21 @@ async function authenticatedFetch(
   timeoutMs = 2500
 ): Promise<Response> {
   await ensureSearchSession();
+  const jwt = await neonAuth.getValidJwt().catch(() => null);
+  const headers = new Headers(init?.headers || {});
+  if (jwt && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${jwt}`);
+  }
+
   const makeRequest = () => fetch(input, {
     ...init,
+    headers,
     credentials: 'same-origin' as RequestCredentials,
     signal: composeRequestSignal(init?.signal, timeoutMs)
   });
 
   let response = await makeRequest();
-  if (response.status === 401) {
+  if (response.status === 401 && !jwt) {
     await ensureSearchSession(true);
     response = await makeRequest();
   }

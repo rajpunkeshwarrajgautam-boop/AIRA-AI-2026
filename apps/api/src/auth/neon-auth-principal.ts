@@ -10,6 +10,8 @@ export type ManagedPrincipal = {
   userId: string;
   sessionId: string;
   provider: 'neon_auth';
+  email?: string;
+  name?: string;
 };
 
 let cachedKeys: Jwks | null = null;
@@ -101,7 +103,9 @@ export async function verifyNeonAuthToken(token: string): Promise<ManagedPrincip
   return {
     userId: 'neon_user_' + payload.sub,
     sessionId: 'neon_session_' + createHash('sha256').update(token).digest('hex').slice(0, 24),
-    provider: 'neon_auth'
+    provider: 'neon_auth',
+    email: typeof payload.email === 'string' ? payload.email : undefined,
+    name: typeof payload.name === 'string' ? payload.name : undefined
   };
 }
 

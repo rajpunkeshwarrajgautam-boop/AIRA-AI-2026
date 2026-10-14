@@ -25,6 +25,8 @@ const ArtifactStudio = React.lazy(() => import('./components/ArtifactStudio').th
 const ProjectsModal = React.lazy(() => import('./components/ProjectsModal').then(m => ({ default: m.ProjectsModal })));
 const SettingsModal = React.lazy(() => import('./components/SettingsModal').then(m => ({ default: m.SettingsModal })));
 import { MemoryVaultModal } from './components/MemoryVaultModal';
+import { AuthModal } from './components/AuthModal';
+import { neonAuth } from './lib/neonAuth';
 import { LibraryView } from './components/LibraryView';
 import { AgentsView } from './components/AgentsView';
 import { AutomationsView } from './components/AutomationsView';
@@ -63,6 +65,7 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window !== 'undefined' ? window.innerWidth >= 1280 : true);
   const [isProjectsOpen, setIsProjectsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [isMemoryVaultOpen, setIsMemoryVaultOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isConversationSearchOpen, setIsConversationSearchOpen] = useState(false);
@@ -101,6 +104,18 @@ function App() {
     const onBreakpointChange = (event: MediaQueryListEvent) => setSidebarOpen(event.matches);
     desktop.addEventListener('change', onBreakpointChange);
     return () => desktop.removeEventListener('change', onBreakpointChange);
+  }, []);
+
+  useEffect(() => {
+    return neonAuth.onAuthStateChange((user) => {
+      if (user) {
+        setSettings(s => ({
+          ...s,
+          userName: user.name || s.userName,
+          email: user.email || s.email,
+        }));
+      }
+    });
   }, []);
 
   useEffect(() => saveConversations(conversations), [conversations]);
@@ -525,6 +540,7 @@ function App() {
         activeProjectId={activeProjectId}
         onOpenProjects={() => setIsProjectsOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenAuth={() => setIsAuthOpen(true)}
         onOpenSearch={handleOpenConversationSearch}
         isOpen={sidebarOpen}
         onToggleOpen={() => setSidebarOpen(v => !v)}
@@ -727,6 +743,19 @@ function App() {
             onClose={() => setIsMemoryVaultOpen(false)}
           />
         )}
+
+        <AuthModal
+          isOpen={isAuthOpen}
+          onClose={() => setIsAuthOpen(false)}
+          onAuthSuccess={(user) => {
+            setSettings(s => ({
+              ...s,
+              userName: user.name || s.userName,
+              email: user.email || s.email,
+            }));
+            setToastMessage(`Welcome, ${user.name}! Sync active.`);
+          }}
+        />
       </React.Suspense>
     </div>
   );

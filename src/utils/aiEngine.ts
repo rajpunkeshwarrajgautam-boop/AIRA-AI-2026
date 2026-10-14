@@ -1,5 +1,6 @@
 import type { AppSettings, Artifact, Attachment, ModelId, ArtifactType } from '../types';
 import { agentMemory } from './agentMemoryEngine';
+import { neonAuth } from '../lib/neonAuth';
 
 export interface StreamCallbacks {
   onThinkingChunk?: (chunk: string) => void;
@@ -44,19 +45,25 @@ async function ensureApiSession(forceRefresh = false): Promise<void> {
 async function postChatStream(body: unknown): Promise<Response> {
   await ensureApiSession();
 
+  const jwt = await neonAuth.getValidJwt().catch(() => null);
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (jwt) {
+    headers['Authorization'] = `Bearer ${jwt}`;
+  }
+
   const request = () => fetch('/api/chat/stream', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     credentials: 'same-origin',
     body: JSON.stringify(body),
   });
 
   let response = await request();
 
-  // Recover once from an expired/invalid session by issuing a fresh signed cookie.
-  if (response.status === 401) {
+  // Recover once from an expired/invalid session by issuing a fresh signed cookie if guest
+  if (response.status === 401 && !jwt) {
     await ensureApiSession(true);
     response = await request();
   }
