@@ -26,7 +26,7 @@ import { RunRepository } from './repositories.js';
 import { CapabilityRegistry } from './registry.js';
 import { ServerIntentRouter } from './router.js';
 import { ResearchService } from './research.js';
-import { buildResearchEvidenceContext, buildResearchSourcesAppendix, isResearchToolCallDump, renderGroundedResearchFallback, sanitizeCitationMarkers, verifiedWebCitations } from './research-evidence.js';
+import { buildResearchEvidenceContext, buildResearchSourcesAppendix, isResearchToolCallDump, renderGroundedResearchFallback, sanitizeCitationMarkers, verifiedWebCitations, verifiedSearchCitationsFromToolResults } from './research-evidence.js';
 import { WorkflowRepository, PostgresWorkflowRepository } from './workflow-repositories.js';
 import { WorkflowEngine } from './workflow-engine.js';
 import { WorkflowCompiler } from './workflow-compiler.js';
@@ -1028,10 +1028,25 @@ CAPABILITY & IDENTITY INVARIANTS:
       }
       
       messages.push({ role: 'user', content: run.prompt });
+      // TOOL_ACTION web searches must use the same guarded synthesis as RESEARCH.
+      const executedSearchEvidence = verifiedSearchCitationsFromToolResults(run.toolCalls, run.toolResults);
+      const liveEvidence = verifiedWebCitations([...(run.citations || []), ...executedSearchEvidence]);
+      if (executedSearchEvidence.length > 0) {
+        run.citations = liveEvidence;
+        await this.runRepo.saveRun(run);
+      }
+      const hasExecutedSearch = run.toolCalls.some(call =>
+        ['web_search', 'tavily_search', 'exa_search'].includes(call.name)
+      );
+      const guardedSearchSynthesis = liveEvidence.length > 0 || hasExecutedSearch;
+
 
       if (run.toolCalls.length > 0 && run.toolResults.length > 0) {
         const toolSummaries = run.toolCalls.map((call, idx) => {
           const res = run.toolResults[idx];
+          if (['web_search', 'tavily_search', 'exa_search'].includes(call.name) && liveEvidence.length > 0) {
+            return `[Tool Call ${idx + 1}: ${call.name}]: Executed web-search results are supplied separately as verified source data. Answer the user; do not emit search-request JSON.`;
+          }
           return `[Tool Call ${idx + 1}: ${call.name}]:\nArgs: ${JSON.stringify(call.arguments)}\nOutput: ${JSON.stringify(res ? (res.output || res.error) : 'Pending')}`;
         }).join('\n\n');
         messages.push({
@@ -1040,7 +1055,6 @@ CAPABILITY & IDENTITY INVARIANTS:
         });
       }
 
-      const liveEvidence = run.intent === 'RESEARCH' ? verifiedWebCitations(run.citations) : [];
       if (liveEvidence.length > 0) {
         const topic = run.routingDecision?.metadata?.topic;
         messages.push({ role: 'system', content: buildResearchEvidenceContext(liveEvidence, topic) });
@@ -1059,7 +1073,7 @@ CAPABILITY & IDENTITY INVARIANTS:
             await this.emitRunEvent(runId, 'thinking.delta', { delta: delta.thinking });
           }
           if (delta.text) {
-            if (liveEvidence.length > 0) {
+            if (guardedSearchSynthesis) {
               researchDraft += delta.text;
             } else {
               run.content += delta.text;
@@ -1092,9 +1106,11 @@ CAPABILITY & IDENTITY INVARIANTS:
         await this.emitRunEvent(runId, 'model.provenance', run.provenance);
       }
 
-      if (liveEvidence.length > 0) {
+      if (guardedSearchSynthesis) {
         const synthesized = researchDraft.trim();
-        const answer = (!synthesized || isResearchToolCallDump(synthesized))
+        const answer = liveEvidence.length === 0
+          ? 'Live web search did not return verified sources. I cannot provide a sourced answer for this request.'
+          : (!synthesized || isResearchToolCallDump(synthesized))
           ? renderGroundedResearchFallback(liveEvidence)
           : synthesized;
         const sanitizedAnswer = sanitizeCitationMarkers(answer, liveEvidence.length);

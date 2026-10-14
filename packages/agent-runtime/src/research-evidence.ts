@@ -1,4 +1,4 @@
-import type { Citation } from '../../contracts/src/index.js';
+import type { Citation, ToolCall, ToolResult } from '../../contracts/src/index.js';
 
 export type ResearchTopic = 'FINANCIAL' | 'WEATHER' | 'BOX_OFFICE' | 'GENERAL';
 
@@ -20,6 +20,81 @@ export function verifiedWebCitations(citations: Citation[]): Citation[] {
       return false;
     }
   }).slice(0, 5);
+}
+
+
+/** Derive verifiable citations only from completed search tool results, never model-generated tool JSON. */
+export function verifiedSearchCitationsFromToolResults(toolCalls: ToolCall[], toolResults: ToolResult[]): Citation[] {
+  const searchTools = new Set(['web_search', 'tavily_search', 'exa_search']);
+  const callsById = new Map(toolCalls.map(call => [call.id, call]));
+  const citations: Citation[] = [];
+
+  for (const result of toolResults) {
+    if (result.isError || !result.toolCallId) continue;
+    const receiptId = result.toolCallId;
+    let call = callsById.get(receiptId);
+    let executedTool = call?.name;
+
+    // Recovery-tool receipts differ from the original request ID. Only match
+    // known runtime-generated retry/fallback IDs, never arbitrary list positions.
+    if (!call) {
+      for (const candidate of toolCalls) {
+        if (receiptId.startsWith(candidate.id + '_retry_') &&
+            /^\d+$/.test(receiptId.slice((candidate.id + '_retry_').length))) {
+          call = candidate;
+          executedTool = candidate.name;
+          break;
+        }
+        for (const fallback of searchTools) {
+          if (receiptId === candidate.id + '_fallback_' + fallback) {
+            call = candidate;
+            executedTool = fallback;
+            break;
+          }
+        }
+        if (call) break;
+      }
+    }
+    if (!call || !executedTool || !searchTools.has(executedTool)) continue;
+
+    const output = result.output;
+    if (!output || typeof output !== 'object') continue;
+    const hits = (output as { results?: unknown }).results;
+    if (!Array.isArray(hits)) continue;
+    for (const hit of hits) {
+      if (!hit || typeof hit !== 'object') continue;
+      const source = hit as Record<string, unknown>;
+      if (typeof source.url !== 'string') continue;
+      let url: URL;
+      // Treat provider-supplied URL text as untrusted: remove only trailing
+      // Markdown emphasis, then apply the strict HTTP(S) URL checks below.
+      try { url = new URL(source.url.trim().replace(/\*{2,}$/, '')); } catch { continue; }
+      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) continue;
+
+      const snippet = typeof source.snippet === 'string' ? source.snippet
+        : typeof source.description === 'string' ? source.description
+        : typeof source.text === 'string' ? source.text
+        : typeof source.content === 'string' ? source.content : '';
+      const rawDate = source.publishedDate ?? source.published_date ?? source.published_at;
+      const publishedDate = typeof rawDate === 'string' && /^\\d{4}-\\d{2}-\\d{2}/.test(rawDate)
+        ? rawDate.slice(0, 10) : undefined;
+      citations.push({
+        id: `executed_web_${receiptId}_${citations.length}`,
+        sourceId: `executed_web_${citations.length}`,
+        sourceTitle: normalizeSourceTitle(typeof source.title === 'string' ? source.title : url.hostname),
+        uri: url.href,
+        ...(publishedDate ? { publishedDate } : {}),
+        snippet: normalizeSnippetText(snippet),
+        score: 1.0,
+        provenance: {
+          toolCallId: receiptId,
+          retrievalMechanism: 'web_search',
+          timestamp: result.timestamp || call.timestamp
+        }
+      });
+    }
+  }
+  return verifiedWebCitations(citations);
 }
 
 /**
@@ -513,9 +588,13 @@ export function buildResearchSourcesAppendix(citations: Citation[]): string {
 export function isResearchToolCallDump(text: string): boolean {
   const trimmed = text.trim();
   const matches = trimmed.match(/"query"\s*:/g) || [];
-  return matches.length >= 2 && /"max_results"\s*:|"region"\s*:|"pages"\s*:/.test(trimmed) ||
-    /^\{\s*"query"\s*:\s*"[^"]+"[\s\S]*\}\s*$/.test(trimmed) &&
-    /"max_results"\s*:|"region"\s*:|"pages"\s*:/.test(trimmed);
+  const explicitSearchTool = /"(?:tool|name)"\s*:\s*"(?:web_search|tavily_search|exa_search)"/i.test(trimmed);
+  const jsonEnvelope = trimmed.startsWith('{') || trimmed.startsWith('[') || trimmed.startsWith('```');
+  const repeatedToolRequests = (trimmed.match(/"(?:tool|name)"\s*:/g) || []).length >= 2;
+  if (explicitSearchTool && (jsonEnvelope || repeatedToolRequests)) return true;
+  const hasQueryParameters = /"max_results"\s*:|"region"\s*:|"pages"\s*:/.test(trimmed);
+  return (matches.length >= 2 && hasQueryParameters) ||
+    (/^\{\s*"query"\s*:\s*"[^"]+"[\s\S]*\}\s*$/.test(trimmed) && hasQueryParameters);
 }
 
 export function renderGroundedResearchFallback(citations: Citation[]): string {
