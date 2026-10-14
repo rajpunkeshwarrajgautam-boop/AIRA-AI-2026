@@ -401,7 +401,7 @@ export class AgentRuntime extends EventEmitter {
       const entries = automations.filter((a: any) => a.principalId === run.principalId);
       const history = Array.isArray(run.context?.history) ? run.context.history as Array<{ role: string; content: string }> : [];
       const previousUserRequest = [...history].reverse().find(item =>
-        item.role === 'user' && /\\b(?:remind|reminder|schedule|automation)\\b/i.test(item.content)
+        item.role === 'user' && /\b(?:remind|reminder|schedule|automation)\b/i.test(item.content)
       );
       const parsedPrior = previousUserRequest
         ? parseReminderRequest(previousUserRequest.content, run.context?.timeZone as string | undefined)
