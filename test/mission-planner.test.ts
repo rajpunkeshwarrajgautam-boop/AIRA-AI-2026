@@ -32,6 +32,17 @@ const progress: DurableMissionProgress = {
   version: 1, plan: comparison, dispatched: 1, verified: [], currentCallId: 'call_1'
 };
 assert.equal(validateDurableMission(comparePrompt, progress), true);
+function reorderKeys(value: any): any {
+  if (Array.isArray(value)) return value.map(reorderKeys);
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value).reverse();
+    return Object.fromEntries(entries.map(([key, child]) => [key, reorderKeys(child)]));
+  }
+  return value;
+}
+assert.equal(validateDurableMission(comparePrompt, reorderKeys(progress)), true,
+  'JSONB key reordering must not fail an otherwise authentic persisted plan');
+
 const mutated = structuredClone(progress);
 mutated.plan.steps[0].arguments = { filePath: 'secrets.txt' };
 assert.equal(validateDurableMission(comparePrompt, mutated), false,
