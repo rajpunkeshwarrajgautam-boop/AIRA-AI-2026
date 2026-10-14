@@ -1253,7 +1253,23 @@ CAPABILITY & IDENTITY INVARIANTS:
       const toolDef = this.toolRegistry.get(toolCall?.name)?.definition;
       const idempotencyClass = toolDef?.idempotencyClass || 'NON_IDEMPOTENT';
 
-      if (idempotencyClass === 'NON_IDEMPOTENT' || idempotencyClass === 'EXTERNAL_SIDE_EFFECT') {
+      // The durable compiler only emits read-only steps. Its exact plan and
+      // call arguments must match before resuming an interrupted adapter call.
+      // Other operations still follow the existing non-idempotent crash fence.
+      const progress = run.context?.__airaMissionV1 as DurableMissionProgress | undefined;
+      const step = progress?.plan?.steps?.[progress.dispatched - 1];
+      const gatewayDefinition = toolCall ? this.toolGateway.getTool(toolCall.name)?.definition : undefined;
+      const replayableMissionRead = Boolean(
+        progress && validateDurableMission(run.prompt, progress) &&
+        step && toolCall && progress.currentCallId === toolCall.id &&
+        step.toolName === toolCall.name &&
+        JSON.stringify(step.arguments) === JSON.stringify(toolCall.arguments) &&
+        gatewayDefinition?.permissionLevel === 'READ' &&
+        gatewayDefinition.sideEffectLevel === 'READ'
+      );
+
+      if (!replayableMissionRead &&
+          (idempotencyClass === 'NON_IDEMPOTENT' || idempotencyClass === 'EXTERNAL_SIDE_EFFECT')) {
         await this.transitionRunState(runId, 'FAILED', 'Process crashed during non-idempotent tool execution');
         return;
       } else {
