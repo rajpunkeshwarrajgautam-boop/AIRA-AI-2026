@@ -126,6 +126,12 @@ jobs:
       - name: Capability reality audit suite
         run: npm run test:reality
 
+      - name: Knowledge and memory principal isolation certification
+        run: npm run test:knowledge-isolation
+
+      - name: Production SEO and capability claims audit
+        run: npm run test:seo
+
       - name: Behavioral intelligence regression suite
         run: npm run test:behavioral
 
