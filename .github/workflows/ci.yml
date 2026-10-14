@@ -126,6 +126,9 @@ jobs:
       - name: Capability reality audit suite
         run: npm run test:reality
 
+      - name: Verify legacy graph provenance quarantine
+        run: npm run test:legacy-graph-provenance
+
       - name: Knowledge and memory principal isolation certification
         run: npm run test:knowledge-isolation
 
