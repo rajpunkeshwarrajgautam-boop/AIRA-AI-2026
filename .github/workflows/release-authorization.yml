@@ -84,19 +84,19 @@ jobs:
             -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
           {
-            echo "### AIRA Production Authorization — Attestation & Status Emitted"
-            echo "- Approved by GitHub actor: `$GITHUB_ACTOR`"
-            echo "- Repository: `$GITHUB_REPOSITORY`"
-            echo "- PR: #$PR_NUMBER"
-            echo "- Candidate SHA: `$EXPECTED_SHA`"
-            echo "- Target branch: `prod-release`"
-            echo "- Status context: `release/go-live-authorized` $\rightarrow$ **success**"
-            echo "- UTC time: `$(date -u +'%Y-%m-%dT%H:%M:%SZ')`"
-            echo ""
-            echo "**This workflow does not change production.** It does not merge,"
-            echo "modify secrets, apply migrations, or promote a deployment."
-            echo "Release actors must separately check required CI and live"
-            echo "staging evidence, then obtain current user authorization."
+            printf '%s\n' '### AIRA Production Authorization — Attestation & Status Emitted'
+            printf '%s\n' "- Approved by GitHub actor: \`$GITHUB_ACTOR\`"
+            printf '%s\n' "- Repository: \`$GITHUB_REPOSITORY\`"
+            printf '%s\n' "- PR: #$PR_NUMBER"
+            printf '%s\n' "- Candidate SHA: \`$EXPECTED_SHA\`"
+            printf '%s\n' '- Target branch: `prod-release`'
+            printf '%s\n' '- Status context: `release/go-live-authorized` → **success**'
+            printf '%s\n' "- UTC time: \`$(date -u +'%Y-%m-%dT%H:%M:%SZ')\`"
+            printf '%s\n' ''
+            printf '%s\n' '**This workflow does not change production.** It does not merge,'
+            printf '%s\n' 'modify secrets, apply migrations, or promote a deployment.'
+            printf '%s\n' 'Release actors must separately check required CI and live'
+            printf '%s\n' 'staging evidence, then obtain current user authorization.'
           } >>"$GITHUB_STEP_SUMMARY"
 
       - name: Mark status failed on attestation abort, failure, or cancellation
