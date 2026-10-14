@@ -945,13 +945,21 @@ app.get('/api/automations', async (req: Request, res: Response) => {
 
 app.post('/api/automations', async (req: Request, res: Response) => {
   try {
+    if (process.env.VERCEL && (process.env.AIRA_SCHEDULER_ACTIVE !== 'true' ||
+        !process.env.CRON_SECRET || process.env.CRON_SECRET.length < 32)) {
+      return res.status(503).json({ error: 'Cloud reminder scheduler is not enabled; nothing was created' });
+    }
     const raw = {
       ...req.body,
-      principalId: req.principal!.userId
+      principalId: req.principal!.userId,
+      conditions: {
+        ...(req.body.conditions || {}),
+        timeZone: req.body.conditions?.timeZone
+      }
     };
     const parsed = AutomationDefinitionSchema.omit({ id: true }).parse(raw);
-    const item = await automationEngine.createAutomation(parsed);
-    res.status(201).json(item);
+    const { automation, created } = await automationEngine.createOrFindMatchingAutomation(parsed);
+    res.status(created ? 201 : 200).json({ ...automation, alreadyExists: !created });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
