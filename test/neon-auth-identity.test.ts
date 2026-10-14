@@ -77,6 +77,7 @@ async function run() {
   const valid = await invoke(req);
   assert.equal(valid.nextCalled, true);
   assert.equal(req.user.id, verified.userId, 'verified principal must override anonymous cookie identity');
+  assert.equal(req.managedIdentity.provider, 'neon_auth');
   const denied = await invoke({ headers: { authorization: 'Bearer invalid' }, user: { id: 'old-valid-cookie' } });
   assert.equal(denied.nextCalled, false);
   assert.equal(denied.res.statusCode, 401, 'invalid bearer must not downgrade to a cookie');
