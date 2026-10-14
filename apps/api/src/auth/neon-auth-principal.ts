@@ -122,6 +122,7 @@ export function createNeonAuthPrincipalMiddleware() {
     }
     try {
       const identity = await verifyNeonAuthToken(auth.replace(/^Bearer\s+/i, ''));
+      (req as any).managedIdentity = identity;
       (req as any).user = {
         id: identity.userId,
         sessionId: identity.sessionId,
