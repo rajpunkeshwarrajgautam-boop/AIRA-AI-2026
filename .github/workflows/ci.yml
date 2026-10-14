@@ -90,6 +90,9 @@ jobs:
       - name: Preview principal spoofing guard
         run: npm run test:preview-identity
 
+      - name: Release authorization policy guard
+        run: npm run test:release-auth
+
       - name: Router and policy verification
         run: npm run test:router
 

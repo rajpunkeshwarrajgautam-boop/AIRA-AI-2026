@@ -41,6 +41,28 @@ approval or an explicit production deployment authorization.
 Do NOT weaken this ruleset to merge a PR. If mandatory checks are missing,
 repair CI and verify that the exact commit has run all required checks.
 
-Vercel production Git deployment behavior must still be verified and
-separately constrained. A green PR/CI or GitHub ruleset does NOT constitute
-the user's GO LIVE authorization.
+## Verified Vercel production release architecture & controls (2026-10-14)
+Live Vercel API and project inspection confirm the following configuration:
+- Project: `aira-ai-2026` (`prj_FZLU4vBIYSsBn28AI6drkpD5WfbH`)
+- Organization: `team_0IZkX9o2Ab319UsAPW9oq1SL` (rajpunkeshwarrajgautam-boop's projects)
+- Account tier: `Hobby` (Personal account)
+- Tracked production branch: `prod-release`
+- Canonical production URL: `https://aira-ai-2026.vercel.app`
+- Auto-deploy: `gitProviderOptions.createDeployments: "enabled"`
+- Ignored build step: `[ "$VERCEL_GIT_COMMIT_REF" = "main" ] && exit 0 || exit 1`
+  (Pushes to `main` are ignored with exit 0; pushes/merges to `prod-release` exit 1 and build immediately)
+- Native deployment approval: NOT supported on Hobby tier (requires Enterprise/Pro).
+- Build database gate: `vercel.json` enforces `npm run db:verify:deploy` on production builds
+  prior to `npm run build`. Builds fail and abort if Neon PostgreSQL migrations or schemas are missing.
+
+### Strict release consequence:
+Because Vercel triggers a production deployment automatically upon receiving any commit on `prod-release`:
+1. **Merging a PR into `prod-release` IS the live production deployment trigger.**
+2. No agent, automated script, or CI process may merge any PR into `prod-release` without prior,
+   explicit, human GO LIVE authorization from repository owner `rajpunkeshwarrajgautam-boop`.
+3. Manual promotion via Vercel CLI (`vercel promote`) is strictly forbidden for agents.
+4. Programmatic release authorization guard `test/release-authorization-guard.ts` (`npm run test:release-auth`)
+   verifies that owner attestation workflow `.github/workflows/release-authorization.yml` has run with
+   exact phrase `GO LIVE <candidate_sha>`.
+5. An agent must STOP and present all verified evidence, awaiting human authorization.
+
