@@ -100,5 +100,5 @@ export function isAutomationVerificationRequest(prompt: string, history: Array<{
   if (!/\b(?:did you|are you sure|was it|is it|check|verify|already|existing|show|list)\b/i.test(prompt) ||
       !/\b(?:remind|reminder|schedule|automation|created|saved|it)\b/i.test(prompt)) return false;
   return /\b(?:remind|schedule|automation)\b/i.test(prompt) ||
-    history.slice(-4).some(item => /\b(?:reminder|automation|schedule)\b/i.test(item.content));
+    history.slice(-4).some(item => /\b(?:remind|reminder|automation|schedule)\b/i.test(item.content));
 }
