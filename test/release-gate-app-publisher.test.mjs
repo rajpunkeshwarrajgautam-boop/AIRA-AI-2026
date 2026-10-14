@@ -36,6 +36,7 @@ const request = async (url, init) => {
   calls.push({ url, method: init.method, auth: init.headers.Authorization, payload: init.body ? JSON.parse(init.body) : null });
   if (url.endsWith('/actions/runs/' + runId)) return response(run());
   if (url.endsWith('/pulls/68')) return response(pr());
+  if (url.endsWith('/commits/' + sha + '/statuses?per_page=100')) return response([]);
   if (url.endsWith('/statuses/' + sha)) return response({ state: 'success', context: STATUS_CONTEXT });
   return response({ message: 'not found' }, 404);
 };
@@ -91,12 +92,13 @@ test('trusted app publisher verifies real API records, then posts success using 
   assert.ok(calls.every(c => c.method === 'GET' && c.auth === 'Bearer READ_ONLY_TOKEN_EXAMPLE'));
   calls.length = 0;
   await publishApprovedStatus({ runId, now, readToken: 'READ_ONLY_TOKEN_EXAMPLE', appToken: 'APP_INSTALLATION_TOKEN', request });
-  assert.equal(calls.length, 3);
-  assert.equal(calls[2].method, 'POST');
-  assert.equal(calls[2].auth, 'Bearer APP_INSTALLATION_TOKEN');
-  assert.equal(calls[2].payload.context, STATUS_CONTEXT);
-  assert.equal(calls[2].payload.state, 'success');
-  assert.equal(calls[2].payload.target_url, 'https://github.com/' + RELEASE_REPO + '/actions/runs/' + runId);
+  assert.equal(calls.length, 4);
+  assert.equal(calls[2].method, 'GET');
+  assert.equal(calls[3].method, 'POST');
+  assert.equal(calls[3].auth, 'Bearer APP_INSTALLATION_TOKEN');
+  assert.equal(calls[3].payload.context, STATUS_CONTEXT);
+  assert.equal(calls[3].payload.state, 'success');
+  assert.equal(calls[3].payload.target_url, 'https://github.com/' + RELEASE_REPO + '/actions/runs/' + runId);
 });
 test('publisher must not emit any status on failed candidate verification', async () => {
   const badRequest = async (url, init) => {
@@ -113,4 +115,21 @@ test('publisher refuses absent App installation credential', async () => {
   calls.length = 0;
   await assert.rejects(() => publishApprovedStatus({ runId, now, readToken: 'READ_ONLY_TOKEN_EXAMPLE', appToken: '', request }), /APP_TOKEN_REQUIRED/);
   assert.equal(calls.length, 0);
+});
+
+test('older owner approval cannot overwrite a later App-issued revocation', async () => {
+  const statusHistory = [{ context: STATUS_CONTEXT, state: 'failure',
+    description: 'REVOKED by owner for PR #68', created_at: '2026-10-14T22:01:00Z' }];
+  const observed = [];
+  const revokedRequest = async (url, init) => {
+    observed.push({ url, method: init.method });
+    if (url.endsWith('/actions/runs/' + runId)) return response(run());
+    if (url.endsWith('/pulls/68')) return response(pr());
+    if (url.endsWith('/commits/' + sha + '/statuses?per_page=100')) return response(statusHistory);
+    throw new Error('Unexpected status publication after revocation');
+  };
+  await assert.rejects(() => publishApprovedStatus({
+    runId, now, readToken: 'READ_ONLY_TOKEN_EXAMPLE', appToken: 'APP_INSTALLATION_TOKEN', request: revokedRequest
+  }), /PRIOR_APPROVAL_REVOKED/);
+  assert.equal(observed.filter(c => c.method === 'POST').length, 0);
 });
