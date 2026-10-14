@@ -372,6 +372,34 @@ export class AgentRuntime extends EventEmitter {
 
     if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)) return;
 
+    // No persisted model-plan tool can ever reach the approval or execution
+    // gateway without passing the server HMAC, scope and exact-call gates.
+    // Recheck on every restart, not only after the tool returned.
+    const stored = run.context?.__airaMissionV1 as AnyMissionProgress | undefined;
+    if (stored?.version === 2) {
+      const step = stored.plan?.steps?.[stored.dispatched - 1];
+      const tool = run.toolCalls[run.toolCalls.length - 1];
+      const definition = tool ? this.toolGateway.getTool(tool.name)?.definition : undefined;
+      const valid = validateStoredModelMission(
+        run.prompt, stored, process.env.AIRA_AGENT_PLAN_SIGNING_KEY || '',
+        this.toolGateway.listDefinitions(), run.principalScopes || []
+      );
+      if (!valid || !step || !tool || stored.currentCallId !== tool.id ||
+          tool.name !== step.toolName ||
+          !isDeepStrictEqual(tool.arguments, step.arguments) ||
+          definition?.permissionLevel !== 'READ' ||
+          (definition?.sideEffectLevel !== 'READ' && definition?.sideEffectLevel !== 'NONE')) {
+        const msg = 'MODEL_MISSION_INTEGRITY_FAILURE: persisted executable plan or tool call was not authorized.';
+        run.content = msg;
+        run.error = msg;
+        run.executionCheckpoint = 'TOOL_FAILED';
+        await this.runRepo.saveRun(run);
+        await this.emitRunEvent(runId, 'content.delta', { delta: msg });
+        await this.transitionRunState(runId, 'FAILED', msg);
+        return;
+      }
+    }
+
     // Checkpoint 0: Capability readiness gate
     if (run.routingDecision?.executionTarget === 'CAPABILITY_NOT_READY') {
       const msg = `The requested capability (${run.intent}) is currently in development and not yet available for direct execution. (Target: ${run.routingDecision.executionTarget})`;
