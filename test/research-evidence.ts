@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { ResearchService } from '../packages/agent-runtime/src/research.js';
 import { searchWeb } from '../packages/tool-runtime/src/search-providers.js';
+import { ToolRegistry } from '../packages/tool-runtime/src/index.js';
 import { buildResearchEvidenceContext, buildResearchSourcesAppendix, isResearchToolCallDump, renderGroundedResearchFallback, verifiedSearchCitationsFromToolResults } from '../packages/agent-runtime/src/research-evidence.js';
 
 async function run() {
@@ -64,6 +65,39 @@ async function run() {
     );
     assert.equal(toolEvidence.length, 2);
     assert.equal(toolEvidence[0].provenance?.toolCallId, 'call_real');
+
+    // Actual production defect: ToolRegistry web_search generated a random
+    // receipt ID, which made executed search evidence fail request-ID matching.
+    // The registry must enforce the ID of the issued call for all native tools.
+    const nativeRegistry = new ToolRegistry();
+    const nativeSearch = nativeRegistry.get('web_search');
+    assert.ok(nativeSearch, 'Native registry must expose web_search');
+    nativeRegistry.register({
+      definition: nativeSearch!.definition,
+      execute: async () => ({
+        toolCallId: 'random-native-receipt',
+        output: result,
+        isError: false,
+        timestamp: Date.now(),
+        durationMs: 0
+      })
+    });
+    const issuedSearchCall = {
+      id: 'call_provenance_regression',
+      name: 'web_search',
+      toolId: 'tool_web_search',
+      arguments: { query: 'NASA Artemis II' },
+      timestamp: Date.now()
+    } as any;
+    const nativeReceipt = await nativeRegistry.execute(issuedSearchCall, {
+      runId: 'research-receipt-regression',
+      workspaceRoot: process.cwd(),
+      sessionGrantedTools: new Set()
+    });
+    assert.equal(nativeReceipt.toolCallId, issuedSearchCall.id,
+      'A native tool must not replace the issued request ID with a random receipt');
+    assert.equal(verifiedSearchCitationsFromToolResults([issuedSearchCall], [nativeReceipt]).length, 2,
+      'A successful native search receipt must produce verifiable citations');
     assert.equal(toolEvidence[0].uri, 'https://www.nasa.gov/artemis-ii/');
     assert.equal(verifiedSearchCitationsFromToolResults(
       [{ id: 'failed', name: 'web_search', arguments: {}, timestamp: 123 } as any],
