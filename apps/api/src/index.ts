@@ -947,7 +947,7 @@ app.post('/api/automations', async (req: Request, res: Response) => {
   try {
     const raw = {
       ...req.body,
-      principalId: req.body.principalId || req.principal?.userId || 'usr_anonymous'
+      principalId: req.principal!.userId
     };
     const parsed = AutomationDefinitionSchema.omit({ id: true }).parse(raw);
     const item = await automationEngine.createAutomation(parsed);
