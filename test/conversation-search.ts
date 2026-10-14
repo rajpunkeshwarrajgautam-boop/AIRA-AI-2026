@@ -177,6 +177,37 @@ async function main() {
     assert.equal((await repo.search(principalA, { query: 'must survive an older sync retry' }))[0]?.conversationId,
       'search_test_conv_amd', 'Newer search evidence must survive stale retries');
 
+    // Real deployed regression: two valid snapshots can share the same
+    // millisecond updatedAt. A new message must append without allowing a stale
+    // same-version snapshot to delete or alter already committed data.
+    const equalTimeAppend = {
+      ...newerSnapshot,
+      title: 'Equal-time incoming title must not overwrite stored title',
+      messages: [...newerSnapshot.messages, {
+        id: 'search_test_msg_equal_time',
+        role: 'assistant' as const,
+        content: 'Legitimate message appended within the same millisecond.',
+        createdAt: now + 1000
+      }]
+    };
+    await repo.syncConversation(principalA, equalTimeAppend);
+    let afterEqualTime = await repo.getConversation(principalA, 'search_test_conv_amd');
+    assert.equal(afterEqualTime?.messages.length, 4,
+      'Equal-timestamp strict message superset must preserve the new message');
+    assert.equal(afterEqualTime?.title, 'Updated AMD troubleshooting',
+      'Equal-timestamp append must not overwrite already accepted metadata');
+    assert.equal(afterEqualTime?.messages.some(message => message.id === 'search_test_msg_equal_time'), true);
+
+    await repo.syncConversation(principalA, {
+      ...equalTimeAppend,
+      title: 'Stale equal-version snapshot',
+      messages: stableMessages.slice(0, 1)
+    });
+    afterEqualTime = await repo.getConversation(principalA, 'search_test_conv_amd');
+    assert.equal(afterEqualTime?.messages.length, 4,
+      'Stale equal-version replay must not delete newer messages');
+    assert.equal(afterEqualTime?.title, 'Updated AMD troubleshooting');
+
     const deleted = await repo.deleteConversation(principalA, 'search_test_conv_amd');
     assert.equal(deleted, true);
     const afterDelete = await repo.search(principalA, { query: 'AmdTools64' });
