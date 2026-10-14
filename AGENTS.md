@@ -29,15 +29,18 @@ ChatGPT Work, CI assistants and other development agents in this repository.
 7. Roll back when authorized by incident policy or when the user expressly
    requests rollback. Never claim success before verification.
 
-## GitHub Free limitation
-This PRIVATE repository currently cannot enforce branch protection/rulesets
-under the current GitHub plan. These agent instructions and CI checks are
-valuable controls but NOT platform-level protections. The repository owner
-must enable GitHub Pro/Team (or an eligible plan) and configure required
-branch rules to truly block unauthorized direct pushes.
+## Verified platform protection (2026-10-14)
+GitHub Pro is active. Ruleset `AIRA Production Protection` (ID `25079946`)
+is ACTIVE on `refs/heads/prod-release`, with NO bypass actors.
+GitHub API verifies `prod-release.protected=true`, mandatory PRs,
+conversation resolution, Fast CI, Semantic Search CI and Main / PR
+certification, strict up-to-date checks, force-push and deletion denial.
+Approval count is 0 (sole maintainer); this is NOT independent reviewer
+approval or an explicit production deployment authorization.
 
-Production release automation must not be wired to manual approval workflows
-until actual branch protections and Vercel deployment settings are verified.
+Do NOT weaken this ruleset to merge a PR. If mandatory checks are missing,
+repair CI and verify that the exact commit has run all required checks.
 
-Do not report production branch protection as PASS while GitHub says
-`prod-release.protected=false`.
+Vercel production Git deployment behavior must still be verified and
+separately constrained. A green PR/CI or GitHub ruleset does NOT constitute
+the user's GO LIVE authorization.
