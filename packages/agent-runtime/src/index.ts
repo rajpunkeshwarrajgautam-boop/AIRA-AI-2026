@@ -566,7 +566,7 @@ export class AgentRuntime extends EventEmitter {
       const isAgentMission = run.intent === 'AGENT_MISSION';
 
       if (isToolAction || isAgentMission) {
-        const selected = selectExecutableTool(run.prompt, isAgentMission ? 'AGENT_MISSION' : 'TOOL_ACTION');
+        const selected = selectExecutableTool(run.prompt, isAgentMission ? 'AGENT_MISSION' : 'TOOL_ACTION', { allowDiagnosticTools: process.env.NODE_ENV === 'test' });
         if (!selected.ok) {
           const message = `${selected.code}: ${selected.reason}`;
           run.content = message;
