@@ -394,7 +394,7 @@ export class AgentRuntime extends EventEmitter {
 
     // Read-only follow-up verification: inspect the stored schedule instead of
     // generating another automation or allowing the model to guess success.
-    const verifySchedule = /\\b(?:did you (?:create|set|schedule)|are you sure (?:you )?(?:created|scheduled|saved)|(?:check|verify) (?:my|the|that)?\\s*(?:reminder|schedule)|is (?:that|it) (?:scheduled|saved)|what (?:reminders|automations) (?:are|did|do))\\b/i.test(run.prompt);
+    const verifySchedule = /\b(?:did you (?:create|set|schedule)|are you sure (?:you )?(?:created|scheduled|saved)|(?:check|verify) (?:my|the|that)?\s*(?:reminder|schedule)|is (?:that|it) (?:scheduled|saved)|what (?:reminders|automations) (?:are|did|do))\b/i.test(run.prompt);
     if (verifySchedule && this.automationEngine && !run.executionCheckpoint) {
       if (run.state !== 'RUNNING') await this.transitionRunState(runId, 'RUNNING');
       const list = (await this.automationEngine.listAutomations(run.principalId)).filter(a => a.enabled);
