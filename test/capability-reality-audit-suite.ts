@@ -203,7 +203,21 @@ async function runRealityAuditSuite() {
   await agentRuntime.startRun(reminderRepeat.id);
   const repeatOutcome = await agentRuntime.getRun(reminderRepeat.id);
   assert.ok(repeatOutcome?.content.includes('already have an active reminder'));
-  console.log('  -> PASS: Verified natural-language reminder creation and duplicate suppression.');
+  const verifyRun = await agentRuntime.createRun({
+    prompt: 'Are you sure you created that reminder?',
+    context: {
+      timeZone: 'UTC',
+      history: [
+        { role: 'user', content: reminderPrompt },
+        { role: 'assistant', content: completedAuto?.content || '' }
+      ]
+    }
+  }, principalA);
+  await agentRuntime.startRun(verifyRun.id);
+  const verified = await agentRuntime.getRun(verifyRun.id);
+  assert.ok(verified?.content.includes('database schedule is verified'), 'Follow-up must read the existing schedule');
+  console.log('  -> PASS: Natural-language creation, dedupe, and database-backed verification.');
+
 
   // List automations for User A
   const userAAutos = await automationEngine.listAutomations(principalA.userId);
