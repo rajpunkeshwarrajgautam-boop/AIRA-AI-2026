@@ -304,13 +304,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div className="px-4 pt-3 pb-2 space-y-1">
             {navItem('chat', 'Chat', <MessageSquareText className="w-4 h-4" />)}
             {navItem('research', 'Research', <Telescope className="w-4 h-4" />, 'beta')}
-            {navItem('library', 'Library', <Library className="w-4 h-4" />, 'shell')}
+            {navItem('library', 'Library', <Library className="w-4 h-4" />)}
             <button onClick={onOpenProjects} className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-[13px] font-semibold transition-all duration-300 ${activeProjectId ? 'bg-claude-surface-light dark:bg-claude-surface-dark text-claude-text-light dark:text-white shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] border border-claude-border-light dark:border-claude-border-dark' : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark border border-transparent'}`}>
               <span className="flex items-center gap-3"><FolderGit2 className="w-4 h-4" /><span>Projects</span></span>
               <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark">{projects.length}</span>
             </button>
-            {navItem('agents', 'Agents', <Bot className="w-4 h-4" />, 'shell')}
-            {navItem('automations', 'Automations', <Workflow className="w-4 h-4" />, 'shell')}
+            {navItem('agents', 'Agents', <Bot className="w-4 h-4" />)}
+            {navItem('automations', 'Automations', <Workflow className="w-4 h-4" />)}
           </div>
 
           <div className="px-4 pt-4 pb-2">
