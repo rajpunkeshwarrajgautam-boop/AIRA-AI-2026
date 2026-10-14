@@ -107,12 +107,25 @@ export async function verifyLiveReleaseAuthorization(args: CliArgs): Promise<{
   console.log(`  - State: ${prState}`);
   console.log(`  - Current HEAD SHA: ${prHeadSha}`);
 
+  // Tier B: fail closed until the dedicated GitHub App identity is configured.
+  // The GitHub ruleset must also require this context from the App integration ID.
+  const expectedAppIssuer = process.env.AIRA_RELEASE_GATE_APP_BOT_LOGIN;
+  if (!expectedAppIssuer || !/^[a-zA-Z0-9-]+\\[bot\\]$/.test(expectedAppIssuer) ||
+      expectedAppIssuer === 'github-actions[bot]') {
+    return {
+      authorized: false,
+      code: 'APP_ISSUER_NOT_CONFIGURED',
+      reason: 'Set AIRA_RELEASE_GATE_APP_BOT_LOGIN to the dedicated GitHub App bot identity before live verification.'
+    };
+  }
+
   const candidateCtx: ReleaseCandidateContext = {
     prNumber: args.prNumber,
     candidateSha: args.candidateSha,
     approvalPhrase: `GO LIVE ${args.candidateSha}`,
     actor: AUTHORIZED_REPOSITORY_OWNER,
     expectedRepo: args.repo,
+    expectedStatusIssuerLogin: expectedAppIssuer,
     prTargetBranch,
     prState,
     prHeadSha
