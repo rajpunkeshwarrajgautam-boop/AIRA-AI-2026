@@ -439,6 +439,20 @@ export class AgentRuntime extends EventEmitter {
           return;
         }
 
+        // Serverless functions cannot maintain background timers. Refuse a
+        // schedule when no authenticated external clock is actually enabled.
+        if (process.env.VERCEL &&
+            (process.env.AIRA_SCHEDULER_ACTIVE !== 'true' ||
+             !process.env.CRON_SECRET || process.env.CRON_SECRET.length < 32)) {
+          const msg = 'Cloud reminder scheduling is not enabled yet. I have not created a new reminder; an authenticated minute-precision scheduler must be configured first.';
+          run.content = msg;
+          run.executionCheckpoint = 'COMPLETED';
+          await this.runRepo.saveRun(run);
+          await this.emitRunEvent(runId, 'content.delta', { delta: msg });
+          await this.transitionRunState(runId, 'COMPLETED');
+          return;
+        }
+
         const detail = parsed.reminder;
         const result = await this.automationEngine.createOrFindMatchingAutomation({
           name: detail.name,
