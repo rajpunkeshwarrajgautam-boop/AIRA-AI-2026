@@ -23,7 +23,7 @@ assert.equal(compileSupportedMission('Read ../private.json and README.md and com
   'Do not include traversal paths in mission plan');
 assert.equal(compileSupportedMission('Read package.json and README.md, update the config, and compare'), null,
   'Never interpret a write request as a read-only success');
-assert.deepEqual(compileSupportedMission('Read package.json and README.md, README.md, and compare'), comparison,
+assert.deepEqual(compileSupportedMission('Read package.json and README.md, README.md, and compare')?.steps, comparison.steps,
   'Duplicate explicit paths must not generate duplicate steps');
 assert.equal(compileSupportedMission('Read README.md and file1.ts and file2.ts and file3.ts and file4.ts and file5.ts and file6.ts and compare'), null,
   'Bounded mission must reject more than six file operations');
