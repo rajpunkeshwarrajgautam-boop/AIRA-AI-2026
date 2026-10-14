@@ -123,6 +123,7 @@ export async function streamAIResponse(
       })),
       contextSubgraph: enrichedContext,
       conversationId,
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     });
 
       if (!backendRes.ok) {
