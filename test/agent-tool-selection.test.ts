@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { selectExecutableTool } from '../packages/agent-runtime/src/tool-selector.js';
+import { selectExecutableTool, selectMissionFollowUp } from '../packages/agent-runtime/src/tool-selector.js';
 
 const select = (prompt: string, intent: 'TOOL_ACTION' | 'AGENT_MISSION' = 'TOOL_ACTION') =>
   selectExecutableTool(prompt, intent);
@@ -60,5 +60,17 @@ if (!mission.ok) assert.equal(mission.code, 'MISSION_EXECUTOR_NOT_READY');
 const desktop = select('Use computer use to click my desktop');
 assert.equal(desktop.ok, false);
 if (!desktop.ok) assert.equal(desktop.code, 'COMPUTER_USE_NOT_AVAILABLE');
+
+const repoMission = 'Inspect workspace files, check git status, and summarize repo history.';
+assert.deepEqual(select(repoMission, 'AGENT_MISSION'),
+  { ok: true, name: 'file_system_list', args: { directoryPath: '.' } });
+assert.deepEqual(selectMissionFollowUp(repoMission, 1),
+  { ok: true, name: 'repo_git_status', args: {} });
+assert.deepEqual(selectMissionFollowUp(repoMission, 2),
+  { ok: true, name: 'repo_git_log', args: { count: 2 } });
+assert.equal(selectMissionFollowUp(repoMission, 3), null);
+assert.equal(selectMissionFollowUp('Find the latest published battery research and summarize it.', 1), null);
+assert.deepEqual(select('Find the latest published battery research and summarize it.', 'AGENT_MISSION'),
+  { ok: true, name: 'web_search', args: { query: 'Find the latest published battery research and summarize it.' } });
 
 console.log('PASS: 8 grounded selections, ambiguous-target guards and multi-step mission rejection');
