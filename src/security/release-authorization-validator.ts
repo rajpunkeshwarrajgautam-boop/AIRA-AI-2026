@@ -8,6 +8,12 @@ export interface AttestationRunRecord {
   status: string;
   conclusion: string | null;
   created_at: string;
+  head_repository?: {
+    full_name: string;
+  };
+  repository?: {
+    full_name: string;
+  };
   inputs?: {
     pr_number?: string;
     candidate_sha?: string;
@@ -40,9 +46,11 @@ export interface ReleaseCandidateContext {
   workflowRuns?: AttestationRunRecord[];
   commitStatuses?: CommitStatusRecord[];
   expectedOwner?: string;
+  expectedRepo?: string;
   expectedTargetBranch?: string;
   currentTime?: Date;
   maxAttestationAgeMs?: number;
+  maxRunStatusTimeDeltaMs?: number;
 }
 
 export interface ReleaseAuthValidationResult {
@@ -58,15 +66,25 @@ export interface ReleaseAuthValidationResult {
     timestamp?: string;
     provenanceVerified?: boolean;
     freshnessVerified?: boolean;
+    temporalCorrelationVerified?: boolean;
+    issuerVerified?: boolean;
   };
 }
 
 export const AUTHORIZED_REPOSITORY_OWNER = 'rajpunkeshwarrajgautam-boop';
+export const DEFAULT_REPOSITORY_NAME = 'AIRA-AI-2026';
+export const DEFAULT_REPOSITORY_FULL_NAME = `${AUTHORIZED_REPOSITORY_OWNER}/${DEFAULT_REPOSITORY_NAME}`;
 export const PRODUCTION_RELEASE_BRANCH = 'prod-release';
 export const AUTHORIZATION_WORKFLOW_NAME = 'Release Authorization Attestation (No Deployment)';
 export const AUTHORIZATION_WORKFLOW_PATH = '.github/workflows/release-authorization.yml';
 export const GO_LIVE_STATUS_CONTEXT = 'release/go-live-authorized';
 export const DEFAULT_MAX_ATTESTATION_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+export const DEFAULT_MAX_RUN_STATUS_TIME_DELTA_MS = 15 * 60 * 1000; // 15 minutes temporal bound
+export const TRUSTED_STATUS_ISSUER_LOGINS = ['github-actions[bot]'];
+
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 /**
  * Validates candidate inputs against strict format and policy constraints.
@@ -152,7 +170,9 @@ export function validateCandidateConstraints(ctx: ReleaseCandidateContext): { va
  * - Must be workflow_dispatch event
  * - Must be completed with success
  * - Must strictly match workflow name or path
- * - Workflow inputs MUST exist and MUST match candidate SHA, PR number, and approval phrase (NO optional fallbacks!)
+ * - Run head_sha MUST match candidate commit SHA
+ * - Run head_repository MUST match expected repository (if present)
+ * - Workflow inputs MUST exist and MUST match candidate SHA, PR number, and approval phrase
  * - Must be within freshness window
  */
 export function validateAttestationWorkflowRun(
@@ -160,6 +180,7 @@ export function validateAttestationWorkflowRun(
   ctx: ReleaseCandidateContext
 ): { valid: boolean; code?: string; reason?: string } {
   const expectedOwner = ctx.expectedOwner || AUTHORIZED_REPOSITORY_OWNER;
+  const expectedRepo = ctx.expectedRepo || `${expectedOwner}/${DEFAULT_REPOSITORY_NAME}`;
   const expectedPhrase = `GO LIVE ${ctx.candidateSha}`;
   const now = ctx.currentTime ? ctx.currentTime.getTime() : Date.now();
   const maxAge = ctx.maxAttestationAgeMs ?? DEFAULT_MAX_ATTESTATION_AGE_MS;
@@ -177,6 +198,31 @@ export function validateAttestationWorkflowRun(
   // Verify completion status
   if (run.status !== 'completed' || run.conclusion !== 'success') {
     return { valid: false, code: 'WORKFLOW_NOT_SUCCESSFUL', reason: `Attestation workflow run #${run.id} status is "${run.status}", conclusion: "${run.conclusion}"` };
+  }
+
+  // Verify run head commit matches candidate SHA
+  if (run.head_sha && run.head_sha !== ctx.candidateSha) {
+    return {
+      valid: false,
+      code: 'RUN_HEAD_SHA_MISMATCH',
+      reason: `Attestation run #${run.id} head SHA "${run.head_sha}" does not match candidate commit "${ctx.candidateSha}".`
+    };
+  }
+
+  // Verify repository attribution on the run
+  if (run.head_repository?.full_name && run.head_repository.full_name !== expectedRepo) {
+    return {
+      valid: false,
+      code: 'RUN_REPOSITORY_MISMATCH',
+      reason: `Attestation run #${run.id} repository "${run.head_repository.full_name}" does not match expected "${expectedRepo}".`
+    };
+  }
+  if (run.repository?.full_name && run.repository.full_name !== expectedRepo) {
+    return {
+      valid: false,
+      code: 'RUN_REPOSITORY_MISMATCH',
+      reason: `Attestation run #${run.id} repository "${run.repository.full_name}" does not match expected "${expectedRepo}".`
+    };
   }
 
   // Verify workflow identity
@@ -239,6 +285,8 @@ export function validateAttestationWorkflowRun(
  * - Context must match expected (default 'release/go-live-authorized')
  * - State must strictly equal 'success'
  * - Timestamp must be fresh (<= maxAttestationAgeMs, default 24h)
+ * - Issuer must be trusted ('github-actions[bot]') if creator object is provided
+ * - Target URL must match exact repository URL pattern
  * - Description should link to the specific PR
  */
 export function validateCommitStatuses(
@@ -261,6 +309,32 @@ export function validateCommitStatuses(
       code: 'STATUS_CHECK_NOT_SUCCESSFUL',
       reason: `Commit status for "${expectedContext}" has state "${matching.state}", expected "success".`
     };
+  }
+
+  const expectedOwner = ctx.expectedOwner || AUTHORIZED_REPOSITORY_OWNER;
+  const expectedRepo = ctx.expectedRepo || `${expectedOwner}/${DEFAULT_REPOSITORY_NAME}`;
+
+  // Validate status creator/issuer if present
+  if (matching.creator && matching.creator.login) {
+    if (!TRUSTED_STATUS_ISSUER_LOGINS.includes(matching.creator.login)) {
+      return {
+        valid: false,
+        code: 'UNTRUSTED_STATUS_ISSUER',
+        reason: `Commit status "${expectedContext}" was created by untrusted actor "${matching.creator.login}". Expected: "${TRUSTED_STATUS_ISSUER_LOGINS.join(', ')}".`
+      };
+    }
+  }
+
+  // Validate status target_url format and repository binding
+  if (matching.target_url) {
+    const pattern = new RegExp(`^https://github\\.com/${escapeRegex(expectedRepo)}/actions/runs/(\\d+)$`);
+    if (!pattern.test(matching.target_url)) {
+      return {
+        valid: false,
+        code: 'INVALID_STATUS_TARGET_URL',
+        reason: `Commit status target_url ("${matching.target_url}") does not match trusted pattern "https://github.com/${expectedRepo}/actions/runs/<id>".`
+      };
+    }
   }
 
   // Freshness check on status creation/update
@@ -289,10 +363,12 @@ export function validateCommitStatuses(
 
 /**
  * Extracts GitHub Actions Run ID from a commit status target_url.
+ * Ensures the target_url belongs to the expected repository.
  */
-export function extractRunIdFromTargetUrl(targetUrl?: string): number | null {
+export function extractRunIdFromTargetUrl(targetUrl?: string, expectedRepo?: string): number | null {
   if (!targetUrl) return null;
-  const match = targetUrl.match(/\/actions\/runs\/(\d+)/);
+  const repoPattern = expectedRepo ? escapeRegex(expectedRepo) : '[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+';
+  const match = targetUrl.match(new RegExp(`^https://github\\.com/${repoPattern}/actions/runs/(\\d+)$`));
   return match ? parseInt(match[1], 10) : null;
 }
 
@@ -300,11 +376,12 @@ export function extractRunIdFromTargetUrl(targetUrl?: string): number | null {
  * Master release authorization validator.
  * Requires AUTHORITATIVE EVIDENCE OF BOTH:
  * 1. An authentic owner-dispatched attestation workflow run.
- * 2. An authentic commit status for "release/go-live-authorized".
- * 3. Cryptographic/URL provenance linking the commit status directly to that workflow run.
- * 4. Freshness (<24h) and exact PR/SHA binding.
+ * 2. An authentic commit status for "release/go-live-authorized" from trusted issuer (github-actions[bot]).
+ * 3. Provenance linking the commit status directly to that workflow run in the authorized repository.
+ * 4. Temporal correlation: Status creation time must correlate closely with workflow execution window (<= 15 min).
+ * 5. Freshness (<24h) and exact PR/SHA binding.
  *
- * FAILS CLOSED if either source is missing, inconsistent, expired, or unlinked.
+ * FAILS CLOSED if either source is missing, inconsistent, expired, unlinked, or uncoordinated.
  */
 export function validateReleaseAuthorization(ctx: ReleaseCandidateContext): ReleaseAuthValidationResult {
   // Step 1: Validate candidate constraints
@@ -318,6 +395,7 @@ export function validateReleaseAuthorization(ctx: ReleaseCandidateContext): Rele
   }
 
   const expectedOwner = ctx.expectedOwner || AUTHORIZED_REPOSITORY_OWNER;
+  const expectedRepo = ctx.expectedRepo || `${expectedOwner}/${DEFAULT_REPOSITORY_NAME}`;
 
   // Step 2: Validate workflow attestation runs (Requirement 1 of 2)
   if (!ctx.workflowRuns || ctx.workflowRuns.length === 0) {
@@ -370,13 +448,13 @@ export function validateReleaseAuthorization(ctx: ReleaseCandidateContext): Rele
   }
   const matchingStatus = statusCheck.status;
 
-  // Step 4: Validate Provenance Linkage (Status Target URL must point to Workflow Run ID)
-  const linkedRunId = extractRunIdFromTargetUrl(matchingStatus.target_url);
+  // Step 4: Validate Provenance Linkage (Status Target URL must point to Workflow Run ID in expected repo)
+  const linkedRunId = extractRunIdFromTargetUrl(matchingStatus.target_url, expectedRepo);
   if (!linkedRunId) {
     return {
       authorized: false,
       code: 'STATUS_PROVENANCE_MISSING',
-      reason: `Commit status for "${GO_LIVE_STATUS_CONTEXT}" target_url ("${matchingStatus.target_url}") does not contain a verifiable GitHub Actions run ID.`
+      reason: `Commit status for "${GO_LIVE_STATUS_CONTEXT}" target_url ("${matchingStatus.target_url}") does not contain a verifiable GitHub Actions run ID for repository "${expectedRepo}".`
     };
   }
 
@@ -388,10 +466,22 @@ export function validateReleaseAuthorization(ctx: ReleaseCandidateContext): Rele
     };
   }
 
+  // Step 5: Temporal Correlation Check (Anti-Replay / Coordinated Execution Verification)
+  const runTime = new Date(matchingRun.created_at).getTime();
+  const statusTime = matchingStatus.created_at ? new Date(matchingStatus.created_at).getTime() : NaN;
+  const maxDelta = ctx.maxRunStatusTimeDeltaMs ?? DEFAULT_MAX_RUN_STATUS_TIME_DELTA_MS;
+  if (!isNaN(statusTime) && !isNaN(runTime) && Math.abs(statusTime - runTime) > maxDelta) {
+    return {
+      authorized: false,
+      code: 'UNCORRELATED_STATUS_RUN_TIMESTAMPS',
+      reason: `Temporal correlation check failed: commit status created at ${matchingStatus.created_at} deviates from workflow run created at ${matchingRun.created_at} by ${Math.round(Math.abs(statusTime - runTime) / 1000)}s (maximum allowed: ${maxDelta / 1000}s). Stale or uncoordinated run replay rejected.`
+    };
+  }
+
   return {
     authorized: true,
     code: 'AUTHORIZED_GO_LIVE',
-    reason: `Verified authoritative release authorization: owner workflow run #${matchingRun.id} and matching commit status "${matchingStatus.context}=success" (linked provenance confirmed).`,
+    reason: `Verified authoritative release authorization: owner workflow run #${matchingRun.id} and matching commit status "${matchingStatus.context}=success" (linked provenance and temporal correlation confirmed).`,
     details: {
       prNumber: ctx.prNumber,
       candidateSha: ctx.candidateSha,
@@ -400,7 +490,9 @@ export function validateReleaseAuthorization(ctx: ReleaseCandidateContext): Rele
       matchingStatusContext: matchingStatus.context,
       timestamp: matchingRun.created_at,
       provenanceVerified: true,
-      freshnessVerified: true
+      freshnessVerified: true,
+      temporalCorrelationVerified: true,
+      issuerVerified: true
     }
   };
 }

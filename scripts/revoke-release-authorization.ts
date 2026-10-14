@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import {
   AUTHORIZED_REPOSITORY_OWNER,
   GO_LIVE_STATUS_CONTEXT
@@ -28,7 +28,7 @@ function parseArgs(): RevokeArgs {
 
   if (!sha) {
     try {
-      sha = execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim();
+      sha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
     } catch {
       // ignore
     }
@@ -38,20 +38,38 @@ function parseArgs(): RevokeArgs {
 }
 
 export async function revokeReleaseAuthorization(args: RevokeArgs): Promise<void> {
+  // Validate SHA: strict 40-character lowercase hex string
   if (!args.sha || !/^[0-9a-f]{40}$/.test(args.sha)) {
     throw new Error(`Invalid or missing commit SHA for revocation: "${args.sha}"`);
   }
 
+  // Validate repo format: owner/repo
+  if (!args.repo || !/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(args.repo)) {
+    throw new Error(`Invalid repository identifier: "${args.repo}". Expected format: owner/repo`);
+  }
+
+  // Sanitize reason: strip control chars, newlines, carriage returns, limit to 80 chars
+  const sanitizedReason = args.reason.replace(/[\r\n\t\x00-\x1f\x7f]/g, ' ').slice(0, 80).trim();
+  const description = `REVOKED: ${sanitizedReason || 'Authorization revoked by operator'}`;
+
   console.log(`[REVOKE_RELEASE_AUTH] Revoking GO LIVE status check for commit ${args.sha} on ${args.repo}...`);
-  console.log(`[REVOKE_RELEASE_AUTH] Reason: "${args.reason}"`);
+  console.log(`[REVOKE_RELEASE_AUTH] Reason: "${sanitizedReason}"`);
 
-  const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
-  const authHeader = token ? `-H "Authorization: Bearer ${token}"` : '';
-
-  const cmd = `gh api ${authHeader} --method POST "repos/${args.repo}/statuses/${args.sha}" -f state="failure" -f context="${GO_LIVE_STATUS_CONTEXT}" -f description="REVOKED: ${args.reason.slice(0, 80)}"`;
+  // Safe process argument array: no shell interpolation or metacharacter expansion
+  const ghArgs = [
+    'api',
+    '--method', 'POST',
+    `repos/${args.repo}/statuses/${args.sha}`,
+    '-f', 'state=failure',
+    '-f', `context=${GO_LIVE_STATUS_CONTEXT}`,
+    '-f', `description=${description}`
+  ];
 
   try {
-    const resRaw = execSync(cmd, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+    const resRaw = execFileSync('gh', ghArgs, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
     const res = JSON.parse(resRaw);
     console.log(`[REVOKE_RELEASE_AUTH] Successfully posted status failure for context "${GO_LIVE_STATUS_CONTEXT}".`);
     console.log(`[REVOKE_RELEASE_AUTH] Status ID: ${res.id}, State: ${res.state}`);

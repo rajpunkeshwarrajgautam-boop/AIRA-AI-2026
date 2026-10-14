@@ -20,7 +20,7 @@ import {
  * unauthorized, expired, unlinked, or forged authorization claims.
  */
 export async function runSecurityRegressionTests() {
-  console.log('[RELEASE_AUTH_TEST] Starting 31 isolated security & policy boundary tests...');
+  console.log('[RELEASE_AUTH_TEST] Starting 37 isolated security & policy boundary tests...');
 
   const validCandidateSha = 'bbf02ea572f4f710bec185890b8b86c45da15057';
   const testPr = 64;
@@ -38,6 +38,8 @@ export async function runSecurityRegressionTests() {
     status: 'completed',
     conclusion: 'success',
     created_at: new Date('2026-10-14T14:30:00Z').toISOString(),
+    head_repository: { full_name: `${owner}/AIRA-AI-2026` },
+    repository: { full_name: `${owner}/AIRA-AI-2026` },
     inputs: {
       pr_number: String(testPr),
       candidate_sha: validCandidateSha,
@@ -52,6 +54,7 @@ export async function runSecurityRegressionTests() {
     description: `Explicit owner GO LIVE verified by ${owner} for PR #${testPr}`,
     target_url: `https://github.com/${owner}/AIRA-AI-2026/actions/runs/${validRunId}`,
     created_at: new Date('2026-10-14T14:30:00Z').toISOString(),
+    creator: { login: 'github-actions[bot]' },
     ...overrides
   });
 
@@ -470,7 +473,7 @@ export async function runSecurityRegressionTests() {
 
   // Test 28: Commit status target_url missing run ID provenance
   {
-    const noProvenanceStatus = createValidStatus({ target_url: 'https://example.com/arbitrary' });
+    const noProvenanceStatus = createValidStatus({ target_url: undefined });
     const res = validateReleaseAuthorization({
       ...baseValidCtx,
       workflowRuns: [createValidRun()],
@@ -526,10 +529,113 @@ export async function runSecurityRegressionTests() {
     assert.equal(res.details?.actor, owner);
     assert.equal(res.details?.provenanceVerified, true);
     assert.equal(res.details?.freshnessVerified, true);
+    assert.equal(res.details?.temporalCorrelationVerified, true);
+    assert.equal(res.details?.issuerVerified, true);
     console.log('  ✓ Test 31: Full dual-evidence positive path verified with provenance & freshness');
   }
 
-  console.log('[RELEASE_AUTH_TEST] All 31 security & policy boundary tests PASSED successfully.');
+  // Test 32: Untrusted status issuer / creator login rejected
+  {
+    const untrustedStatus = createValidStatus({
+      creator: { login: 'malicious-attacker' }
+    });
+    const res = validateReleaseAuthorization({
+      ...baseValidCtx,
+      workflowRuns: [createValidRun()],
+      commitStatuses: [untrustedStatus]
+    });
+    assert.equal(res.authorized, false);
+    assert.equal(res.code, 'UNTRUSTED_STATUS_ISSUER');
+    console.log('  ✓ Test 32: Untrusted status issuer (non-github-actions[bot]) rejected');
+  }
+
+  // Test 33: Forged status target_url pointing to unauthorized external repository rejected
+  {
+    const forgedRepoStatus = createValidStatus({
+      target_url: `https://github.com/attacker-org/AIRA-AI-2026/actions/runs/${validRunId}`
+    });
+    const res = validateReleaseAuthorization({
+      ...baseValidCtx,
+      workflowRuns: [createValidRun()],
+      commitStatuses: [forgedRepoStatus]
+    });
+    assert.equal(res.authorized, false);
+    assert.equal(res.code, 'INVALID_STATUS_TARGET_URL');
+    console.log('  ✓ Test 33: Forged target_url pointing to external/unauthorized repository rejected');
+  }
+
+  // Test 34: Forged status target_url with non-numeric or malformed run ID rejected
+  {
+    const malformedUrlStatus = createValidStatus({
+      target_url: `https://github.com/${owner}/AIRA-AI-2026/actions/runs/not-a-number`
+    });
+    const res = validateReleaseAuthorization({
+      ...baseValidCtx,
+      workflowRuns: [createValidRun()],
+      commitStatuses: [malformedUrlStatus]
+    });
+    assert.equal(res.authorized, false);
+    assert.equal(res.code, 'INVALID_STATUS_TARGET_URL');
+    console.log('  ✓ Test 34: Forged target_url with malformed run ID rejected');
+  }
+
+  // Test 35: Workflow run head SHA mismatch rejected
+  {
+    const mismatchedShaRun = createValidRun({
+      head_sha: '0000000000000000000000000000000000000000'
+    });
+    const runCheck = validateAttestationWorkflowRun(mismatchedShaRun, baseValidCtx);
+    assert.equal(runCheck.valid, false);
+    assert.equal(runCheck.code, 'RUN_HEAD_SHA_MISMATCH');
+
+    const res = validateReleaseAuthorization({
+      ...baseValidCtx,
+      workflowRuns: [mismatchedShaRun],
+      commitStatuses: [createValidStatus()]
+    });
+    assert.equal(res.authorized, false);
+    assert.equal(res.code, 'NO_MATCHING_AUTHORIZATION_ATTESTATION');
+    console.log('  ✓ Test 35: Workflow run head SHA mismatch rejected');
+  }
+
+  // Test 36: Workflow run repository mismatch rejected
+  {
+    const mismatchedRepoRun = createValidRun({
+      head_repository: { full_name: 'attacker-org/AIRA-AI-2026' }
+    });
+    const runCheck = validateAttestationWorkflowRun(mismatchedRepoRun, baseValidCtx);
+    assert.equal(runCheck.valid, false);
+    assert.equal(runCheck.code, 'RUN_REPOSITORY_MISMATCH');
+
+    const res = validateReleaseAuthorization({
+      ...baseValidCtx,
+      workflowRuns: [mismatchedRepoRun],
+      commitStatuses: [createValidStatus()]
+    });
+    assert.equal(res.authorized, false);
+    assert.equal(res.code, 'NO_MATCHING_AUTHORIZATION_ATTESTATION');
+    console.log('  ✓ Test 36: Workflow run repository mismatch rejected');
+  }
+
+  // Test 37: Uncorrelated status and workflow run timestamps (>15 min delta replay attack) rejected
+  {
+    const runOld = createValidRun({
+      created_at: new Date(now.getTime() - 2 * 60 * 60 * 1000).toISOString() // 2 hours ago
+    });
+    const statusNew = createValidStatus({
+      created_at: new Date(now.getTime() - 5 * 60 * 1000).toISOString() // 5 minutes ago
+    });
+    const res = validateReleaseAuthorization({
+      ...baseValidCtx,
+      workflowRuns: [runOld],
+      commitStatuses: [statusNew]
+    });
+    assert.equal(res.authorized, false);
+    assert.equal(res.code, 'UNCORRELATED_STATUS_RUN_TIMESTAMPS');
+    console.log('  ✓ Test 37: Uncorrelated status and run timestamps (>15 min delta replay attack) rejected');
+  }
+
+  console.log('[RELEASE_AUTH_TEST] All 37 security & policy boundary tests PASSED successfully.');
 }
 
 async function main() {

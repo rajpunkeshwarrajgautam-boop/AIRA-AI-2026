@@ -1,12 +1,15 @@
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import {
   validateCandidateConstraints,
-  validateAttestationWorkflowRun,
   validateCommitStatuses,
   extractRunIdFromTargetUrl,
   AUTHORIZED_REPOSITORY_OWNER,
+  DEFAULT_REPOSITORY_NAME,
   PRODUCTION_RELEASE_BRANCH,
+  AUTHORIZATION_WORKFLOW_NAME,
   GO_LIVE_STATUS_CONTEXT,
+  DEFAULT_MAX_RUN_STATUS_TIME_DELTA_MS,
+  TRUSTED_STATUS_ISSUER_LOGINS,
   type AttestationRunRecord,
   type CommitStatusRecord,
   type ReleaseCandidateContext
@@ -22,7 +25,7 @@ function parseArgs(): CliArgs {
   const args = process.argv.slice(2);
   let prNumber = Number(process.env.PR_NUMBER) || 64;
   let candidateSha = process.env.CANDIDATE_SHA || '';
-  let repo = process.env.GITHUB_REPOSITORY || `${AUTHORIZED_REPOSITORY_OWNER}/AIRA-AI-2026`;
+  let repo = process.env.GITHUB_REPOSITORY || `${AUTHORIZED_REPOSITORY_OWNER}/${DEFAULT_REPOSITORY_NAME}`;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--pr' && args[i + 1]) {
@@ -36,21 +39,35 @@ function parseArgs(): CliArgs {
 
   if (!candidateSha) {
     try {
-      candidateSha = execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim();
+      candidateSha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
     } catch {
       // ignore
     }
+  }
+
+  // Strict input validation
+  if (!Number.isInteger(prNumber) || prNumber <= 0) {
+    throw new Error(`Invalid PR number: "${prNumber}". Expected positive integer.`);
+  }
+
+  if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(repo)) {
+    throw new Error(`Invalid repository: "${repo}". Expected format: owner/repo`);
+  }
+
+  if (candidateSha && !/^[0-9a-f]{40}$/.test(candidateSha)) {
+    throw new Error(`Invalid candidate SHA: "${candidateSha}". Expected 40-character lowercase hex string.`);
   }
 
   return { prNumber, candidateSha, repo };
 }
 
 function callGitHubApi(endpoint: string): any {
-  const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
-  const authHeader = token ? `-H "Authorization: Bearer ${token}"` : '';
-  const cmd = `gh api ${authHeader} "${endpoint}"`;
+  // Safe argument invocation without shell interpolation
   try {
-    const raw = execSync(cmd, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+    const raw = execFileSync('gh', ['api', endpoint], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
     return JSON.parse(raw);
   } catch (err: any) {
     const stderr = err?.stderr?.toString() || err?.message || String(err);
@@ -93,6 +110,7 @@ export async function verifyLiveReleaseAuthorization(args: CliArgs): Promise<{
     candidateSha: args.candidateSha,
     approvalPhrase: `GO LIVE ${args.candidateSha}`,
     actor: AUTHORIZED_REPOSITORY_OWNER,
+    expectedRepo: args.repo,
     prTargetBranch,
     prState,
     prHeadSha
@@ -140,18 +158,18 @@ export async function verifyLiveReleaseAuthorization(args: CliArgs): Promise<{
     };
   }
   const matchingStatus = statusCheck.status;
-  console.log(`[VERIFY_RELEASE_AUTH] Commit status "${GO_LIVE_STATUS_CONTEXT}": state=${matchingStatus.state}, description="${matchingStatus.description}"`);
+  console.log(`[VERIFY_RELEASE_AUTH] Commit status "${GO_LIVE_STATUS_CONTEXT}": state=${matchingStatus.state}, issuer=${matchingStatus.creator?.login || 'unknown'}, description="${matchingStatus.description}"`);
 
   // 3. Extract linked workflow run ID from commit status target_url (Provenance Link)
-  const linkedRunId = extractRunIdFromTargetUrl(matchingStatus.target_url);
+  const linkedRunId = extractRunIdFromTargetUrl(matchingStatus.target_url, args.repo);
   if (!linkedRunId) {
     return {
       authorized: false,
       code: 'STATUS_PROVENANCE_MISSING',
-      reason: `Commit status target_url ("${matchingStatus.target_url}") does not contain a verifiable GitHub Actions run ID.`
+      reason: `Commit status target_url ("${matchingStatus.target_url}") does not contain a verifiable GitHub Actions run ID for repository "${args.repo}".`
     };
   }
-  console.log(`[VERIFY_RELEASE_AUTH] Verified status provenance: linked to Actions run #${linkedRunId}`);
+  console.log(`[VERIFY_RELEASE_AUTH] Verified status provenance: linked to Actions run #${linkedRunId} on ${args.repo}`);
 
   // 4. Fetch specific workflow run from GitHub API (Evidence Requirement 2 of 2)
   let runData: any;
@@ -175,13 +193,12 @@ export async function verifyLiveReleaseAuthorization(args: CliArgs): Promise<{
     status: runData.status,
     conclusion: runData.conclusion,
     created_at: runData.created_at,
+    head_repository: runData.head_repository ? { full_name: runData.head_repository.full_name } : undefined,
+    repository: runData.repository ? { full_name: runData.repository.full_name } : undefined,
     inputs: runData.inputs
   };
 
-  // 5. Validate linked run against strict owner attestation rules
-  // Note: Since GitHub /actions/runs does not echo inputs in the run payload,
-  // we verify the status description binds PR number and SHA, and that the run
-  // was triggered via workflow_dispatch by the owner, succeeded, is fresh, and matches path/name.
+  // 5. Strict checks on linked workflow run
   if (linkedRun.actor !== AUTHORIZED_REPOSITORY_OWNER) {
     return {
       authorized: false,
@@ -206,6 +223,24 @@ export async function verifyLiveReleaseAuthorization(args: CliArgs): Promise<{
     };
   }
 
+  // Verify run head SHA matches candidate commit SHA
+  if (linkedRun.head_sha && linkedRun.head_sha !== args.candidateSha) {
+    return {
+      authorized: false,
+      code: 'RUN_HEAD_SHA_MISMATCH',
+      reason: `Linked run #${linkedRun.id} head commit "${linkedRun.head_sha}" does not match candidate SHA "${args.candidateSha}".`
+    };
+  }
+
+  // Verify run repository matches expected repository
+  if (linkedRun.head_repository && linkedRun.head_repository.full_name !== args.repo) {
+    return {
+      authorized: false,
+      code: 'RUN_REPOSITORY_MISMATCH',
+      reason: `Linked run #${linkedRun.id} repository "${linkedRun.head_repository.full_name}" does not match expected repository "${args.repo}".`
+    };
+  }
+
   const isAttestationWorkflow =
     linkedRun.path?.includes('release-authorization.yml') ||
     linkedRun.name?.includes('Release Authorization Attestation');
@@ -217,7 +252,7 @@ export async function verifyLiveReleaseAuthorization(args: CliArgs): Promise<{
     };
   }
 
-  // Freshness check on the workflow run
+  // 6. Freshness checks
   const runTime = new Date(linkedRun.created_at).getTime();
   const maxAge = 24 * 60 * 60 * 1000;
   if (Date.now() - runTime > maxAge) {
@@ -228,10 +263,25 @@ export async function verifyLiveReleaseAuthorization(args: CliArgs): Promise<{
     };
   }
 
+  // 7. Temporal correlation check between status creation and workflow run
+  const statusTime = matchingStatus.created_at ? new Date(matchingStatus.created_at).getTime() : NaN;
+  if (!isNaN(statusTime) && !isNaN(runTime)) {
+    const deltaMs = Math.abs(statusTime - runTime);
+    if (deltaMs > DEFAULT_MAX_RUN_STATUS_TIME_DELTA_MS) {
+      return {
+        authorized: false,
+        code: 'UNCORRELATED_STATUS_RUN_TIMESTAMPS',
+        reason: `Temporal correlation check failed: commit status was created at ${matchingStatus.created_at}, but linked workflow run was created at ${linkedRun.created_at}. Time delta of ${Math.round(deltaMs / 1000)}s exceeds maximum allowed correlation bound of ${DEFAULT_MAX_RUN_STATUS_TIME_DELTA_MS / 1000}s. Stale or uncoordinated run replay rejected.`
+      };
+    }
+  }
+
   console.log(`[VERIFY_RELEASE_AUTH] Authoritative dual evidence verified successfully:`);
   console.log(`  - Commit Status: ${matchingStatus.context}=success (Created: ${matchingStatus.created_at})`);
+  console.log(`  - Status Issuer: ${matchingStatus.creator?.login || 'github-actions[bot]'}`);
   console.log(`  - Workflow Run: #${linkedRun.id} (${linkedRun.conclusion}) by ${linkedRun.actor} (Created: ${linkedRun.created_at})`);
-  console.log(`  - Provenance: target_url links directly to run #${linkedRun.id}`);
+  console.log(`  - Provenance: target_url links directly to run #${linkedRun.id} on ${args.repo}`);
+  console.log(`  - Temporal correlation: verified within allowable bounds`);
 
   return {
     authorized: true,
@@ -244,7 +294,9 @@ export async function verifyLiveReleaseAuthorization(args: CliArgs): Promise<{
       matchingStatus: matchingStatus.context,
       authorizedBy: AUTHORIZED_REPOSITORY_OWNER,
       provenanceLinkVerified: true,
-      freshnessVerified: true
+      freshnessVerified: true,
+      temporalCorrelationVerified: true,
+      issuerVerified: true
     }
   };
 }

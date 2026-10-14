@@ -1,6 +1,6 @@
 # AIRA AI 2026 — Explicit Production Release Authorization Policy
 
-**Status: GitHub Pro ruleset ACTIVE (ID: 25079946); Vercel Hobby deployment architecture INSPECTED; Dual-Evidence Provenance & Safe Bootstrap Sequence IMPLEMENTED.**
+**Status: GitHub Pro ruleset ACTIVE (ID: 25079946); Vercel Hobby deployment architecture INSPECTED; Dual-Evidence Provenance, Issuer Hardening & Safe Bootstrap Sequence IMPLEMENTED.**
 
 The production branch is `prod-release`. The production Vercel project is
 `aira-ai-2026`, ID `prj_FZLU4vBIYSsBn28AI6drkpD5WfbH`.
@@ -79,29 +79,39 @@ To ensure that no automated agent, script, or speculative run can ever deploy to
 
 ### Layer 3: Authoritative Dual-Evidence Verification (`npm run verify:release-auth`)
 - **Deterministic Unit Testing (`npm run test:release-auth:unit`)**:
-  - Executed in `Fast CI` to verify the authorization rules engine across 31 isolated security boundaries.
-  - Validates fail-closed handling of malformed SHAs, uppercase SHAs, short SHAs, invalid phrases, wrong actors, closed PRs, moved HEADs, failed runs, expired attestations, missing commit status, unlinked status, expired status, and forged metadata.
+  - Executed in `Fast CI` to verify the authorization rules engine across 37 isolated security boundaries.
+  - Validates fail-closed handling of malformed SHAs, uppercase SHAs, short SHAs, invalid phrases, wrong actors, closed PRs, moved HEADs, failed runs, expired attestations, missing commit status, unlinked status, expired status, untrusted status issuers, forged target URLs, run head SHA mismatches, run repo mismatches, uncorrelated replay timestamps, and forged metadata.
   - Passing this step proves code correctness of the rules engine, but does NOT grant GO LIVE authorization.
 - **Authoritative Live Release Verification (`npm run verify:release-auth -- --pr <num> --sha <sha>`)**:
-  - Executed via `scripts/verify-release-authorization.ts`.
+  - Executed via `scripts/verify-release-authorization.ts` using safe `execFileSync` process execution.
   - Requires **BOTH**:
     1. An authentic owner workflow run (`rajpunkeshwarrajgautam-boop`, `workflow_dispatch`, `completed`, `success`, fresh <24h).
-    2. An authentic commit status `release/go-live-authorized` on the candidate commit SHA (`state: success`, fresh <24h).
-    3. **Verified Provenance Linkage**: The commit status `target_url` must link directly to the verified workflow run ID.
-  - Fails closed (`exit 1`) if either evidence source is missing, inconsistent, expired, or unlinked.
+    2. An authentic commit status `release/go-live-authorized` on the candidate commit SHA (`state: success`, fresh <24h, issuer `github-actions[bot]`).
+    3. **Verified Provenance Linkage**: The commit status `target_url` must link directly to the verified workflow run ID in the authorized repository.
+    4. **Temporal Correlation Anti-Replay Bound**: The status creation timestamp must correlate within 15 minutes of the workflow execution window.
+  - Fails closed (`exit 1`) if either evidence source is missing, inconsistent, expired, untrusted, or unlinked.
 
-### Layer 4: Enforceable Freshness & Active Revocation (`npm run revoke:release-auth`)
-- **Platform Reality**: GitHub commit statuses do not natively expire or have a TTL. Once set to `success` on a commit SHA, GitHub rulesets treat them as green indefinitely for that SHA.
-- **Verification-Time Expiration**: Both `validateReleaseAuthorization()` and `scripts/verify-release-authorization.ts` inspect `created_at`. Authorizations older than 24 hours are rejected (`EXPIRED_COMMIT_STATUS` / `EXPIRED_AUTHORIZATION_ATTESTATION`).
-- **Active Revocation Mechanism**:
-  - If an authorization needs to be invalidated before merge:
-    ```bash
-    npm run revoke:release-auth -- --sha <candidate_sha> --reason "<reason>"
-    ```
-  - Posts `state: failure` on `release/go-live-authorized`, immediately locking GitHub's PR merge gate server-side.
-- **Code Mutation Invalidation**: Any new push to the PR changes `head.sha`, automatically invalidating previous statuses.
+### Layer 4: True Merge-Time Expiration Reality & Active Revocation
+- **Platform Reality**: GitHub Commit Statuses do **NOT** natively expire or have a TTL. Once set to `success` on a commit SHA, GitHub rulesets treat them as green indefinitely for that SHA as long as it remains the PR HEAD.
+- **Enforcement Boundaries**:
+  1. *Verification-Time Enforcement*: Both `validateReleaseAuthorization()` and `scripts/verify-release-authorization.ts` inspect `created_at`. Authorizations older than 24 hours are rejected (`EXPIRED_COMMIT_STATUS` / `EXPIRED_AUTHORIZATION_ATTESTATION`).
+  2. *Active Revocation Tooling (`npm run revoke:release-auth`)*:
+     - Uses safe argument execution (`execFileSync`) without shell command interpolation:
+       ```bash
+       npm run revoke:release-auth -- --sha <candidate_sha> --reason "<reason>"
+       ```
+     - Posts `state: failure` on `release/go-live-authorized`, immediately locking GitHub's PR merge gate server-side.
+  3. *Code Mutation Invalidation*: Any new push to the PR changes `head.sha`, automatically invalidating previous statuses.
+  4. *Un-revoked Inactivity*: If an authorized commit sits unmerged past 24 hours without a new push or active revocation, GitHub's native web UI merge button would still see the status as passing unless explicitly revoked. We do not claim automatic ruleset-level expiration by GitHub.
 
-### Layer 5: Safe 4-Step Bootstrap Sequence
+### Layer 5: Canary PR & Ruleset Verification
+- Verified on disposable canary PR #66 and temporary ruleset ID `25095321`:
+  - Confirmed `mergeable_state: 'blocked'` when status was absent.
+  - Confirmed PR checks pass when `release/go-live-authorized: success` was posted.
+  - Confirmed active revocation (`revoke:release-auth`) posted `state: failure` and immediately blocked merge gating.
+  - All canary artifacts deleted; production ruleset `25079946` was completely untouched.
+
+### Layer 6: Safe 4-Step Bootstrap Sequence
 - **Deadlock Prevention**: Because `release-authorization.yml` is being introduced in PR #64, it does not yet exist on the default branch (`prod-release`). GitHub Actions does not allow `workflow_dispatch` on workflows not yet present on the default branch.
 - **Sequence**:
   1. *Bootstrap Merge*: PR #64 is reviewed and merged into `prod-release` under the current ruleset (Fast CI, Semantic Search CI, Main / PR certification).
@@ -109,7 +119,7 @@ To ensure that no automated agent, script, or speculative run can ever deploy to
   3. *Ruleset Activation*: Owner updates Ruleset `25079946` to add `release/go-live-authorized` to `required_status_checks`.
   4. *Ongoing Enforcement*: All subsequent PRs targeting `prod-release` are locked until explicit owner dispatch.
 
-### Layer 6: Mandatory Agent Stop Rule
+### Layer 7: Mandatory Agent Stop Rule
 - All automated agents (Antigravity, Agency Agents, ChatGPT Work, etc.) operate under the strict constraint:
   - **NEVER execute `gh pr merge`, `git push origin prod-release`, `vercel --prod`, or `vercel promote` autonomously.**
   - An agent must prepare the release, run all CI checks, obtain staging verification evidence, present the final candidate SHA and diff to the user, and **STOP**.
