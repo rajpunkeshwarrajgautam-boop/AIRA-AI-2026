@@ -572,7 +572,7 @@ export class AgentRuntime extends EventEmitter {
       const isAgentMission = run.intent === 'AGENT_MISSION';
 
       if (isToolAction || isAgentMission) {
-        const missionPlan = isAgentMission ? compileSupportedMission(run.prompt) : null;
+        const missionPlan = compileSupportedMission(run.prompt);
         const firstMissionStep = missionPlan?.steps[0];
         const selected = firstMissionStep
           ? { ok: true as const, name: firstMissionStep.toolName, args: firstMissionStep.arguments }
@@ -844,7 +844,7 @@ export class AgentRuntime extends EventEmitter {
       }
     }
 
-    if (run.executionCheckpoint === 'TOOL_COMPLETED' && run.intent === 'AGENT_MISSION') {
+    if (run.executionCheckpoint === 'TOOL_COMPLETED' && (run.intent === 'AGENT_MISSION' || run.intent === 'TOOL_ACTION')) {
       const progress = run.context?.__airaMissionV1 as DurableMissionProgress | undefined;
       if (progress) {
         const lastCall = run.toolCalls[run.toolCalls.length - 1];
