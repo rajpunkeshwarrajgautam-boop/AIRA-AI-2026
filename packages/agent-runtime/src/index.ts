@@ -31,6 +31,7 @@ import { WorkflowRepository, PostgresWorkflowRepository } from './workflow-repos
 import { WorkflowEngine } from './workflow-engine.js';
 import { WorkflowCompiler } from './workflow-compiler.js';
 import { buildDurableHistorySystemMessage } from './memory-policy.js';
+import { parseReminderRequest, isAutomationVerificationRequest } from '../../automation/src/reminder-parser.js';
 import { InstructionResolver } from './behavioral/instruction-resolver.js';
 import { AdaptiveSynthesizer } from './behavioral/adaptive-synthesizer.js';
 import { ToolRecoveryEngine } from './behavioral/tool-recovery-engine.js';
@@ -391,6 +392,26 @@ export class AgentRuntime extends EventEmitter {
       return;
     }
 
+    // Verify previously created schedules without creating a new one.
+    if (this.automationEngine && isAutomationVerificationRequest(
+      run.prompt, (run.context?.history || []) as Array<{ role: string; content: string }>
+    )) {
+      if (run.state !== 'RUNNING') await this.transitionRunState(runId, 'RUNNING');
+      const automations = await this.automationEngine.listAutomations(run.principalId);
+      const entries = automations.filter((a: any) => a.principalId === run.principalId).slice(-10);
+      const msg = entries.length
+        ? 'I checked your saved schedules:\\n' + entries.map((a: any) =>
+          `- **${a.name}**: ${a.enabled ? 'enabled' : 'disabled'}, ${a.cronExpression || 'manual'}, ${a.conditions?.timeZone || 'time zone unspecified'} (ID: ${a.id}).`
+        ).join('\\n') + '\\nThese records show saved schedules, not proof that notifications were delivered.'
+        : 'I checked your saved automations and found none. I have not created a new schedule.';
+      run.content = msg;
+      run.executionCheckpoint = 'COMPLETED';
+      await this.runRepo.saveRun(run);
+      await this.emitRunEvent(runId, 'content.delta', { delta: msg });
+      await this.transitionRunState(runId, 'COMPLETED');
+      return;
+    }
+
     // Checkpoint 0.4: Automation Engine execution target
     if (run.routingDecision?.executionTarget === 'AUTOMATION_ENGINE' || run.intent === 'AUTOMATION_CREATE') {
       if (run.state !== 'RUNNING') {
@@ -408,36 +429,33 @@ export class AgentRuntime extends EventEmitter {
       }
 
       try {
-        const pLower = run.prompt.toLowerCase();
-        let cronExpr = '0 9 * * 1';
-        let name = 'Scheduled Automation';
-
-        if (pLower.includes('monday') && (pLower.includes('9 am') || pLower.includes('9am'))) {
-          cronExpr = '0 9 * * 1';
-          name = 'Weekly Monday 9 AM Summary';
-        } else if (pLower.includes('daily') || pLower.includes('every day')) {
-          cronExpr = '0 9 * * *';
-          name = 'Daily Report';
-        } else if (pLower.includes('hourly') || pLower.includes('every hour')) {
-          cronExpr = '0 * * * *';
-          name = 'Hourly Update';
-        } else {
-          name = `Automation: ${run.prompt.slice(0, 36)}`;
+        const parsed = parseReminderRequest(run.prompt, run.context?.timeZone as string | undefined);
+        if (parsed.kind === 'clarify') {
+          run.content = parsed.message;
+          run.executionCheckpoint = 'COMPLETED';
+          await this.runRepo.saveRun(run);
+          await this.emitRunEvent(runId, 'content.delta', { delta: parsed.message });
+          await this.transitionRunState(runId, 'COMPLETED');
+          return;
         }
 
-        const autoDef = await this.automationEngine.createAutomation({
-          name,
+        const detail = parsed.reminder;
+        const result = await this.automationEngine.createOrFindMatchingAutomation({
+          name: detail.name,
           principalId: run.principalId,
           enabled: true,
           trigger: 'CRON',
-          cronExpression: cronExpr,
+          cronExpression: detail.cronExpression,
           agentId: 'agent-default',
-          objective: run.prompt,
-          conditions: {},
-          approvalPolicy: 'autonomous'
+          objective: detail.objective,
+          conditions: { timeZone: detail.timeZone, deliveryChannel: 'NOT_CONFIGURED' },
+          approvalPolicy: 'risky_only'
         });
-
-        const successMsg = `Successfully created durable scheduled automation "${autoDef.name}" (ID: ${autoDef.id}) with cron expression "${cronExpr}". Principal owner: ${run.principalId}. The schedule is saved in durable Postgres storage.`;
+        // A persisted scheduled *job* is not a delivered reminder. No notification
+        // transport is configured in this runtime, so never promise delivery.
+        const successMsg = result.created
+          ? `I saved **${detail.name}** to run ${detail.description}. You can review it in Automations. **Reminder notifications are not configured**, so I cannot promise an alert will reach you. The schedule has been saved, but delivery has not been verified.`
+          : `I checked your saved automations: **${detail.name}** already exists for ${detail.description}. I did not create a duplicate. Reminder notifications are not configured, so delivery is not yet available.`;
         run.content = successMsg;
         run.executionCheckpoint = 'COMPLETED';
         await this.runRepo.saveRun(run);
