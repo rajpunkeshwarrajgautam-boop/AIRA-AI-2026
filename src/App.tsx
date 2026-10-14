@@ -557,7 +557,7 @@ function App() {
       <main className="flex-1 min-w-0 min-h-0 h-[100dvh] flex flex-col overflow-hidden w-full max-w-full bg-mesh-canvas">
         <header className="h-[54px] shrink-0 px-3 md:px-5 flex items-center justify-between border-b border-claude-border-light/80 dark:border-claude-border-dark/80 gradient-fade-header relative z-50 bg-claude-bg-light/95 dark:bg-claude-bg-dark/95 backdrop-blur-md">
           <div className="flex flex-1 items-center gap-1 min-w-0">
-            {(!sidebarOpen || (typeof window !== 'undefined' && window.innerWidth < 1280)) && (
+            {!sidebarOpen && (
               <>
                 <button 
                   onClick={() => setSidebarOpen(true)} 
