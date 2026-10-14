@@ -3,6 +3,7 @@ import {
   validateCandidateConstraints,
   validateAttestationWorkflowRun,
   validateCommitStatuses,
+  extractRunIdFromTargetUrl,
   AUTHORIZED_REPOSITORY_OWNER,
   PRODUCTION_RELEASE_BRANCH,
   GO_LIVE_STATUS_CONTEXT,
@@ -106,7 +107,7 @@ export async function verifyLiveReleaseAuthorization(args: CliArgs): Promise<{
     };
   }
 
-  // 2. Fetch commit statuses on candidate commit
+  // 2. Fetch commit statuses on candidate commit (Evidence Requirement 1 of 2)
   let statuses: CommitStatusRecord[] = [];
   try {
     const statusesRaw = callGitHubApi(`repos/${args.repo}/commits/${args.candidateSha}/statuses`);
@@ -116,82 +117,134 @@ export async function verifyLiveReleaseAuthorization(args: CliArgs): Promise<{
         state: s.state,
         description: s.description,
         target_url: s.target_url,
-        created_at: s.created_at
+        created_at: s.created_at,
+        updated_at: s.updated_at,
+        creator: s.creator ? { login: s.creator.login } : undefined
       }));
     }
   } catch (err: any) {
     console.warn(`[VERIFY_RELEASE_AUTH] Warning: Failed to query commit statuses: ${err.message}`);
   }
 
-  const goLiveStatus = statuses.find(s => s.context === GO_LIVE_STATUS_CONTEXT);
-  console.log(`[VERIFY_RELEASE_AUTH] Commit status "${GO_LIVE_STATUS_CONTEXT}": ${goLiveStatus ? `${goLiveStatus.state} (${goLiveStatus.description})` : 'NOT FOUND'}`);
-
-  // 3. Fetch workflow runs for attestation
-  let runs: AttestationRunRecord[] = [];
-  try {
-    // Query repository workflow runs
-    const runsRaw = callGitHubApi(`repos/${args.repo}/actions/runs?event=workflow_dispatch&per_page=30`);
-    if (runsRaw && Array.isArray(runsRaw.workflow_runs)) {
-      runs = runsRaw.workflow_runs.map((r: any) => ({
-        id: r.id,
-        name: r.name,
-        path: r.path,
-        head_sha: r.head_sha,
-        actor: r.triggering_actor?.login || r.actor?.login,
-        event: r.event,
-        status: r.status,
-        conclusion: r.conclusion,
-        created_at: r.created_at,
-        inputs: r.inputs
-      }));
-    }
-  } catch (err: any) {
-    console.warn(`[VERIFY_RELEASE_AUTH] Warning: Failed to query workflow runs: ${err.message}`);
-  }
-
-  let matchingRun: AttestationRunRecord | undefined;
-  for (const run of runs) {
-    const check = validateAttestationWorkflowRun(run, candidateCtx);
-    if (check.valid) {
-      matchingRun = run;
-      break;
-    }
-  }
-
-  if (matchingRun) {
-    console.log(`[VERIFY_RELEASE_AUTH] Found matching owner attestation run #${matchingRun.id} (Created: ${matchingRun.created_at})`);
-  } else {
-    console.log('[VERIFY_RELEASE_AUTH] No matching owner attestation run found.');
-  }
-
-  // Fail closed if neither status check nor workflow attestation is verified
-  if (!matchingRun && (!goLiveStatus || goLiveStatus.state !== 'success')) {
+  const statusCheck = validateCommitStatuses(statuses, candidateCtx);
+  if (!statusCheck.valid || !statusCheck.status) {
     return {
       authorized: false,
-      code: 'RELEASE_NOT_AUTHORIZED',
-      reason: `Release candidate ${args.candidateSha} has NOT received verified human GO LIVE authorization from owner ${AUTHORIZED_REPOSITORY_OWNER}. Required status "${GO_LIVE_STATUS_CONTEXT}" is missing or unverified.`,
+      code: statusCheck.code || 'COMMIT_STATUS_CHECK_FAILED',
+      reason: `Mandatory commit status "${GO_LIVE_STATUS_CONTEXT}" check failed: ${statusCheck.reason}`,
       details: {
         prNumber: args.prNumber,
         candidateSha: args.candidateSha,
-        prHeadSha,
-        targetBranch: prTargetBranch,
-        prState,
-        statusState: goLiveStatus?.state || 'missing',
-        attestationRunsFound: runs.length
+        statusFound: statuses.some(s => s.context === GO_LIVE_STATUS_CONTEXT)
       }
     };
   }
+  const matchingStatus = statusCheck.status;
+  console.log(`[VERIFY_RELEASE_AUTH] Commit status "${GO_LIVE_STATUS_CONTEXT}": state=${matchingStatus.state}, description="${matchingStatus.description}"`);
+
+  // 3. Extract linked workflow run ID from commit status target_url (Provenance Link)
+  const linkedRunId = extractRunIdFromTargetUrl(matchingStatus.target_url);
+  if (!linkedRunId) {
+    return {
+      authorized: false,
+      code: 'STATUS_PROVENANCE_MISSING',
+      reason: `Commit status target_url ("${matchingStatus.target_url}") does not contain a verifiable GitHub Actions run ID.`
+    };
+  }
+  console.log(`[VERIFY_RELEASE_AUTH] Verified status provenance: linked to Actions run #${linkedRunId}`);
+
+  // 4. Fetch specific workflow run from GitHub API (Evidence Requirement 2 of 2)
+  let runData: any;
+  try {
+    runData = callGitHubApi(`repos/${args.repo}/actions/runs/${linkedRunId}`);
+  } catch (err: any) {
+    return {
+      authorized: false,
+      code: 'LINKED_RUN_LOOKUP_FAILED',
+      reason: `Could not retrieve linked workflow run #${linkedRunId} from GitHub API: ${err.message}`
+    };
+  }
+
+  const linkedRun: AttestationRunRecord = {
+    id: runData.id,
+    name: runData.name,
+    path: runData.path,
+    head_sha: runData.head_sha,
+    actor: runData.triggering_actor?.login || runData.actor?.login,
+    event: runData.event,
+    status: runData.status,
+    conclusion: runData.conclusion,
+    created_at: runData.created_at,
+    inputs: runData.inputs
+  };
+
+  // 5. Validate linked run against strict owner attestation rules
+  // Note: Since GitHub /actions/runs does not echo inputs in the run payload,
+  // we verify the status description binds PR number and SHA, and that the run
+  // was triggered via workflow_dispatch by the owner, succeeded, is fresh, and matches path/name.
+  if (linkedRun.actor !== AUTHORIZED_REPOSITORY_OWNER) {
+    return {
+      authorized: false,
+      code: 'UNAUTHORIZED_RUN_ACTOR',
+      reason: `Linked run #${linkedRun.id} was dispatched by unauthorized actor: "${linkedRun.actor}" (expected "${AUTHORIZED_REPOSITORY_OWNER}").`
+    };
+  }
+
+  if (linkedRun.event !== 'workflow_dispatch') {
+    return {
+      authorized: false,
+      code: 'INVALID_RUN_EVENT',
+      reason: `Linked run #${linkedRun.id} was triggered by event "${linkedRun.event}", expected "workflow_dispatch".`
+    };
+  }
+
+  if (linkedRun.status !== 'completed' || linkedRun.conclusion !== 'success') {
+    return {
+      authorized: false,
+      code: 'RUN_NOT_SUCCESSFUL',
+      reason: `Linked run #${linkedRun.id} status is "${linkedRun.status}", conclusion: "${linkedRun.conclusion}" (expected completed/success).`
+    };
+  }
+
+  const isAttestationWorkflow =
+    linkedRun.path?.includes('release-authorization.yml') ||
+    linkedRun.name?.includes('Release Authorization Attestation');
+  if (!isAttestationWorkflow) {
+    return {
+      authorized: false,
+      code: 'WORKFLOW_IDENTITY_MISMATCH',
+      reason: `Linked run #${linkedRun.id} workflow identity is "${linkedRun.name}" (${linkedRun.path}), expected Release Authorization Attestation.`
+    };
+  }
+
+  // Freshness check on the workflow run
+  const runTime = new Date(linkedRun.created_at).getTime();
+  const maxAge = 24 * 60 * 60 * 1000;
+  if (Date.now() - runTime > maxAge) {
+    return {
+      authorized: false,
+      code: 'EXPIRED_AUTHORIZATION_ATTESTATION',
+      reason: `Linked run #${linkedRun.id} was created at ${linkedRun.created_at}, which exceeds 24-hour freshness validity.`
+    };
+  }
+
+  console.log(`[VERIFY_RELEASE_AUTH] Authoritative dual evidence verified successfully:`);
+  console.log(`  - Commit Status: ${matchingStatus.context}=success (Created: ${matchingStatus.created_at})`);
+  console.log(`  - Workflow Run: #${linkedRun.id} (${linkedRun.conclusion}) by ${linkedRun.actor} (Created: ${linkedRun.created_at})`);
+  console.log(`  - Provenance: target_url links directly to run #${linkedRun.id}`);
 
   return {
     authorized: true,
     code: 'RELEASE_GO_LIVE_VERIFIED',
-    reason: `Verified authoritative release authorization on GitHub for candidate ${args.candidateSha}.`,
+    reason: `Verified authoritative release authorization on GitHub for candidate ${args.candidateSha}: authentic owner workflow run #${linkedRun.id} and commit status "${matchingStatus.context}" confirmed.`,
     details: {
       prNumber: args.prNumber,
       candidateSha: args.candidateSha,
-      matchingRunId: matchingRun?.id,
-      matchingStatus: goLiveStatus?.context,
-      authorizedBy: AUTHORIZED_REPOSITORY_OWNER
+      matchingRunId: linkedRun.id,
+      matchingStatus: matchingStatus.context,
+      authorizedBy: AUTHORIZED_REPOSITORY_OWNER,
+      provenanceLinkVerified: true,
+      freshnessVerified: true
     }
   };
 }

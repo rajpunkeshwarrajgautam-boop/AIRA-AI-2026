@@ -78,14 +78,22 @@ To eliminate the risk of automated or accidental deployment, releases require ex
      - `candidate_sha`: Full 40-character lowercase hex SHA.
      - `approval_phrase`: Exact string `GO LIVE <candidate_sha>`.
    - Execution: Asserts PR state, target branch, and HEAD match; posts commit status `release/go-live-authorized` (`state: success`) on the candidate commit SHA; generates an immutable step summary.
-3. **Separation of Deterministic Unit Tests & Live Authorization Verification**:
+3. **Authoritative Dual-Evidence Verification & Freshness**:
    - **Deterministic Unit Testing (`npm run test:release-auth:unit`)**:
-     - Executed in `Fast CI` to verify the authorization rules engine across 24 isolated security boundaries.
+     - Executed in `Fast CI` to verify the authorization rules engine across 31 isolated security boundaries.
      - Proves rules engine correctness in code, but does NOT grant GO LIVE authorization.
-   - **Live Authorization Verification (`npm run verify:release-auth -- --pr <num> --sha <sha>`)**:
+   - **Authoritative Live Release Verification (`npm run verify:release-auth -- --pr <num> --sha <sha>`)**:
      - Location: `scripts/verify-release-authorization.ts`
-     - Queries authoritative GitHub REST API for open PR state, exact candidate SHA match, owner identity, commit status `release/go-live-authorized`, and fresh owner attestation workflow runs.
-     - Fails closed on any discrepancy.
+     - Queries authoritative GitHub REST API and requires BOTH:
+       1. Authentic owner workflow run (`rajpunkeshwarrajgautam-boop`, `workflow_dispatch`, `completed`, `success`, fresh <24h).
+       2. Authentic commit status `release/go-live-authorized` on the candidate commit SHA (`state: success`, fresh <24h).
+       3. Verified provenance linking (status `target_url` points directly to that workflow run ID).
+     - Fails closed on any discrepancy or missing evidence.
+4. **Enforceable Freshness & Active Revocation**:
+   - GitHub statuses lack native TTL; freshness (<24h) is enforced at verification time.
+   - Revocation script `npm run revoke:release-auth -- --sha <candidate_sha> --reason "<reason>"` posts `state: failure`, instantly locking GitHub PR merge gating.
+5. **Safe 4-Step Bootstrap Sequence**:
+   - PR #64 must be merged under current rules before the owner updates ruleset `25079946` to require `release/go-live-authorized`, preventing a workflow-registration deadlock. Each production-changing step requires separate owner approval.
 
 ---
 

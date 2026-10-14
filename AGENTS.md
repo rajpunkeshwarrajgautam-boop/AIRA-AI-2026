@@ -68,6 +68,6 @@ Because Vercel triggers a production deployment automatically upon receiving any
 3. Manual promotion via Vercel CLI (`vercel promote`) is strictly forbidden for agents.
 4. **Separation of unit tests from live authorization**:
    - `npm run test:release-auth:unit` runs in Fast CI to verify the authorization rules engine deterministically. Passing this test does NOT grant GO LIVE authorization.
-   - Authoritative live verification is executed via `npm run verify:release-auth -- --pr <num> --sha <sha>`, which verifies GitHub API evidence: open PR state, exact candidate SHA match, owner identity, and commit status `release/go-live-authorized` emitted by owner dispatch of `.github/workflows/release-authorization.yml`.
+   - Authoritative live verification is executed via `npm run verify:release-auth -- --pr <num> --sha <sha>`, which verifies GitHub API dual evidence: authentic owner workflow run (`rajpunkeshwarrajgautam-boop`), matching commit status `release/go-live-authorized=success`, verified provenance linkage (`target_url` points to run ID), and <24h freshness. Active revocation is available via `npm run revoke:release-auth`.
 5. An agent must STOP and present all verified evidence, awaiting human authorization.
 

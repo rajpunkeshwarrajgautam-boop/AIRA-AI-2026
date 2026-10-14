@@ -1,6 +1,6 @@
-# AIRA AI 2026 — Explicit Production Release Authorization
+# AIRA AI 2026 — Explicit Production Release Authorization Policy
 
-**Status: GitHub Pro ruleset ACTIVE (ID: 25079946); Vercel Hobby deployment architecture INSPECTED; Separation of Deterministic Unit Tests & Live GitHub API Attestation IMPLEMENTED.**
+**Status: GitHub Pro ruleset ACTIVE (ID: 25079946); Vercel Hobby deployment architecture INSPECTED; Dual-Evidence Provenance & Safe Bootstrap Sequence IMPLEMENTED.**
 
 The production branch is `prod-release`. The production Vercel project is
 `aira-ai-2026`, ID `prj_FZLU4vBIYSsBn28AI6drkpD5WfbH`.
@@ -12,7 +12,7 @@ The production branch is `prod-release`. The production Vercel project is
 - Ruleset `AIRA Production Protection`, ID `25079946`, is ACTIVE,
   matching exactly `refs/heads/prod-release`.
 - Pull requests, conversation resolution, Fast CI, Semantic Search CI,
-  Main / PR certification and branch-up-to-date checks are required.
+  Main / PR certification and strict branch-up-to-date checks are required.
 - Force pushes and branch deletion are denied.
 - Required approving reviews: 0 because there is currently one maintainer (`rajpunkeshwarrajgautam-boop`).
   This is an explicit accepted platform limitation: GitHub does not permit the sole maintainer
@@ -40,13 +40,15 @@ Live inspection of Vercel project `aira-ai-2026` via authenticated Vercel API an
 - **Native Deployment Approvals & Limitations**:
   - Vercel Hobby tier does **not** support enterprise/pro deployment approval gates, release-hold policies, or preview-only git deployments.
   - Consequently, **merging a pull request into `prod-release` triggers an automatic, unprompted production deployment**.
-  - Therefore, production deployment control is **NOT FULLY ENFORCEABLE natively at the Vercel layer** on the Hobby plan. Protection against premature production releases depends entirely on upstream pull request merge gating on GitHub.
+  - Therefore, production deployment control is **NOT FULLY ENFORCEABLE natively at the Vercel hosting layer** on the Hobby plan. Protection against premature production releases depends entirely on upstream pull request merge gating on GitHub.
 - **Production Build Database Safeguard**:
   - In `vercel.json`:
     ```json
     "buildCommand": "if [ \"$VERCEL_ENV\" = \"production\" ] || [ \"$VERCEL_GIT_COMMIT_REF\" = \"staging\" ]; then npm run db:verify:deploy || exit 1; fi; npm run build"
     ```
   - Before Vite build runs in production, `packages/db/src/scripts/verify-deploy.ts` checks database migrations, pgvector, and core schema tables.
+
+---
 
 ## Supported human GO LIVE authorization controls
 
@@ -58,6 +60,7 @@ To ensure that no automated agent, script, or speculative run can ever deploy to
 - Direct pushes to `prod-release` are blocked by GitHub ruleset.
 - Only pull requests can merge into `prod-release`.
 - Mandatory status checks (`Fast CI`, `Semantic Search CI`, `Main / PR certification`) must all pass on the exact head commit.
+- Strict up-to-date policy is active (`strict_required_status_checks_policy: true`).
 
 ### Layer 2: Human GO LIVE attestation workflow (`.github/workflows/release-authorization.yml`)
 - Triggered exclusively by manual `workflow_dispatch` by repository owner `rajpunkeshwarrajgautam-boop` (`if: github.actor == github.repository_owner`).
@@ -70,27 +73,49 @@ To ensure that no automated agent, script, or speculative run can ever deploy to
   - Exact phrase match.
   - PR exists, is open, targets `prod-release`, and `head.sha == candidate_sha`.
 - With `statuses: write` permission, it posts an authenticated GitHub commit status `release/go-live-authorized` (`state: success`) directly on the candidate commit SHA.
+- The commit status description links the PR (`PR #<number>`) and its `target_url` links directly to the GitHub Actions run ID.
 - Writes an immutable audit entry to GitHub Actions Step Summary.
 - **Does not merge, migrate, or deploy.**
 
-### Layer 3: Separation of Deterministic Unit Tests & Live Release Verification
+### Layer 3: Authoritative Dual-Evidence Verification (`npm run verify:release-auth`)
 - **Deterministic Unit Testing (`npm run test:release-auth:unit`)**:
-  - Executed in `Fast CI` to verify the authorization rules engine across 24 isolated security boundaries.
-  - Validates fail-closed handling of malformed SHAs, uppercase SHAs, short SHAs, invalid phrases, wrong actors, closed PRs, moved HEADs, failed runs, expired attestations, and forged metadata.
-  - **Unit test execution is NOT live release authorization.** Passing this step proves code correctness of the rules engine, but does NOT certify that the candidate commit has been approved for release.
-- **Authoritative Live Release Verification (`npm run verify:release-auth`)**:
+  - Executed in `Fast CI` to verify the authorization rules engine across 31 isolated security boundaries.
+  - Validates fail-closed handling of malformed SHAs, uppercase SHAs, short SHAs, invalid phrases, wrong actors, closed PRs, moved HEADs, failed runs, expired attestations, missing commit status, unlinked status, expired status, and forged metadata.
+  - Passing this step proves code correctness of the rules engine, but does NOT grant GO LIVE authorization.
+- **Authoritative Live Release Verification (`npm run verify:release-auth -- --pr <num> --sha <sha>`)**:
   - Executed via `scripts/verify-release-authorization.ts`.
-  - Queries authoritative GitHub REST API for:
-    1. PR state (`open`), target branch (`prod-release`), and current HEAD SHA match.
-    2. Commit status `release/go-live-authorized` on the candidate commit SHA (`state: success`).
-    3. Workflow runs for `release-authorization.yml` verifying owner actor (`rajpunkeshwarrajgautam-boop`), event `workflow_dispatch`, status `completed`, conclusion `success`, exact input matches, and freshness (<24 hours).
-  - Fails closed (`exit 1`) if authorization is absent, stale, forged, or unverifiable.
+  - Requires **BOTH**:
+    1. An authentic owner workflow run (`rajpunkeshwarrajgautam-boop`, `workflow_dispatch`, `completed`, `success`, fresh <24h).
+    2. An authentic commit status `release/go-live-authorized` on the candidate commit SHA (`state: success`, fresh <24h).
+    3. **Verified Provenance Linkage**: The commit status `target_url` must link directly to the verified workflow run ID.
+  - Fails closed (`exit 1`) if either evidence source is missing, inconsistent, expired, or unlinked.
 
-### Layer 4: Mandatory agent stop rule
+### Layer 4: Enforceable Freshness & Active Revocation (`npm run revoke:release-auth`)
+- **Platform Reality**: GitHub commit statuses do not natively expire or have a TTL. Once set to `success` on a commit SHA, GitHub rulesets treat them as green indefinitely for that SHA.
+- **Verification-Time Expiration**: Both `validateReleaseAuthorization()` and `scripts/verify-release-authorization.ts` inspect `created_at`. Authorizations older than 24 hours are rejected (`EXPIRED_COMMIT_STATUS` / `EXPIRED_AUTHORIZATION_ATTESTATION`).
+- **Active Revocation Mechanism**:
+  - If an authorization needs to be invalidated before merge:
+    ```bash
+    npm run revoke:release-auth -- --sha <candidate_sha> --reason "<reason>"
+    ```
+  - Posts `state: failure` on `release/go-live-authorized`, immediately locking GitHub's PR merge gate server-side.
+- **Code Mutation Invalidation**: Any new push to the PR changes `head.sha`, automatically invalidating previous statuses.
+
+### Layer 5: Safe 4-Step Bootstrap Sequence
+- **Deadlock Prevention**: Because `release-authorization.yml` is being introduced in PR #64, it does not yet exist on the default branch (`prod-release`). GitHub Actions does not allow `workflow_dispatch` on workflows not yet present on the default branch.
+- **Sequence**:
+  1. *Bootstrap Merge*: PR #64 is reviewed and merged into `prod-release` under the current ruleset (Fast CI, Semantic Search CI, Main / PR certification).
+  2. *Registration Verification*: Owner verifies that `Release Authorization Attestation (No Deployment)` appears in GitHub Actions on `prod-release`.
+  3. *Ruleset Activation*: Owner updates Ruleset `25079946` to add `release/go-live-authorized` to `required_status_checks`.
+  4. *Ongoing Enforcement*: All subsequent PRs targeting `prod-release` are locked until explicit owner dispatch.
+
+### Layer 6: Mandatory Agent Stop Rule
 - All automated agents (Antigravity, Agency Agents, ChatGPT Work, etc.) operate under the strict constraint:
   - **NEVER execute `gh pr merge`, `git push origin prod-release`, `vercel --prod`, or `vercel promote` autonomously.**
   - An agent must prepare the release, run all CI checks, obtain staging verification evidence, present the final candidate SHA and diff to the user, and **STOP**.
   - Merging and production release require the user's explicit, real-time instruction in the active session.
+
+---
 
 ## Emergency and rollback procedure
 
@@ -100,4 +125,3 @@ If an incident or regression occurs post-release:
 2. **Reversible Fix**: Prepare a hotfix on a dedicated branch against `prod-release`.
 3. **Database Safety**: Never run destructive down-migrations that drop tables or delete production data. Use forward-fix additive migrations.
 4. **Attestation**: Run through the full release certification protocol before promoting any replacement deployment.
-

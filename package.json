@@ -51,7 +51,8 @@
     "test:research-evidence": "npx tsx test/research-evidence.ts",
     "test:release-auth": "npx tsx test/release-authorization-guard.ts",
     "test:release-auth:unit": "npx tsx test/release-authorization-guard.test.ts",
-    "verify:release-auth": "npx tsx scripts/verify-release-authorization.ts"
+    "verify:release-auth": "npx tsx scripts/verify-release-authorization.ts",
+    "revoke:release-auth": "npx tsx scripts/revoke-release-authorization.ts"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
