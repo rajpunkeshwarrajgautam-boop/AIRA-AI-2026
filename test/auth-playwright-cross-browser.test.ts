@@ -58,8 +58,17 @@ async function main() {
   killPort(3001);
   killPort(5173);
 
-  const stagingDbUrl = process.env.DATABASE_URL ||
-    'postgresql://neondb_owner:npg_iYU0dXlB9rms@ep-empty-field-b36mqqq6.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require';
+  const stagingDbUrl = process.env.STAGING_DATABASE_URL || process.env.DATABASE_URL;
+  if (!stagingDbUrl) {
+    console.error('\n❌ ERROR: Staging database credentials not provided.');
+    console.error('Set STAGING_DATABASE_URL or DATABASE_URL before running Playwright auth tests.');
+    console.error('Refusing to run with fallback or production database.\n');
+    process.exit(1);
+  }
+  if (stagingDbUrl.includes('prod') || stagingDbUrl.includes('production')) {
+    console.error('\n❌ SECURITY GUARD: Staging tests cannot run against production database.\n');
+    process.exit(1);
+  }
 
   // 1. Start API Server on port 3001
   console.log('[1/10] Starting API Server on port 3001...');

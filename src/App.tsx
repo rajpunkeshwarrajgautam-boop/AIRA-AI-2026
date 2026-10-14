@@ -92,6 +92,8 @@ function App() {
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const conversationSyncVersionsRef = useRef<Map<string, string>>(new Map());
   const initialConversationBackfillRef = useRef(false);
+  const authEpochRef = useRef(0);
+  const conversationsOwnerRef = useRef<string | null>(currentUserId);
 
   const activeConversation = useMemo(
     () => conversations.find(c => c.id === activeChatId) || welcomeConversation,
@@ -113,7 +115,18 @@ function App() {
 
   useEffect(() => {
     return neonAuth.onAuthStateChange(async (user) => {
+      const epoch = ++authEpochRef.current;
       const nextUserId = user?.id || null;
+
+      // Identity transition boundary: immediately isolate and purge prior account in-memory state
+      if (nextUserId !== currentUserId) {
+        setActiveChatId('');
+        setSessionActiveChatId(null);
+        setActiveArtifact(null);
+        setHighlightedMessageId(null);
+        conversationSyncVersionsRef.current.clear();
+      }
+
       setCurrentUserId(nextUserId);
 
       if (user) {
@@ -123,21 +136,25 @@ function App() {
           email: user.email || s.email,
         }));
 
+        // Immediately load cached conversations belonging to this verified user
+        const cached = loadConversations(user.id);
+        conversationsOwnerRef.current = user.id;
+        setConversations(cached);
+
         // Hydrate persistent conversations from PostgreSQL server
         try {
           const serverConvs = await fetchAllConversationsFromServer();
+          // Discard stale hydration response if user logged out or switched accounts while fetch was in flight
+          if (authEpochRef.current !== epoch) return;
+
           if (serverConvs && serverConvs.length > 0) {
+            conversationsOwnerRef.current = user.id;
             setConversations(serverConvs);
             saveConversations(serverConvs, user.id);
-            setActiveChatId(prev => (serverConvs.some(c => c.id === prev) ? prev : serverConvs[0].id));
-          } else {
-            const cached = loadConversations(user.id);
-            setConversations(cached);
-            setActiveChatId(prev => (cached.some(c => c.id === prev) ? prev : cached[0]?.id || ''));
+            setActiveChatId(prev => (serverConvs.some(c => c.id === prev) ? prev : ''));
           }
         } catch {
-          const cached = loadConversations(user.id);
-          setConversations(cached);
+          // Server fetch failed: cached local state remains active
         }
       } else {
         // Account signed out: revert to isolated guest state and clear memory
@@ -146,16 +163,22 @@ function App() {
           userName: 'Guest User',
           email: '',
         }));
+        conversationsOwnerRef.current = null;
         const guestConvs = loadConversations();
         setConversations(guestConvs);
-        setActiveChatId(guestConvs[0]?.id || '');
+        // Preserve root welcome screen contract on fresh tab; restore only if already active
+        setActiveChatId(prev => (guestConvs.some(c => c.id === prev) ? prev : ''));
       }
     });
-  }, []);
+  }, [currentUserId]);
 
   useEffect(() => {
-    saveConversations(conversations, currentUserId || undefined);
+    // Only persist conversations if in-memory data strictly belongs to current active user
+    if (conversationsOwnerRef.current === currentUserId) {
+      saveConversations(conversations, currentUserId || undefined);
+    }
   }, [conversations, currentUserId]);
+
   useEffect(() => {
     if (!initialConversationBackfillRef.current) {
       initialConversationBackfillRef.current = true;
@@ -183,10 +206,11 @@ function App() {
       void syncConversationToServer(conversation);
     }
   }, [conversations]);
+
   useEffect(() => saveProjects(projects), [projects]);
   useEffect(() => saveSettings(settings), [settings]);
   useEffect(() => {
-    if (activeChatId) setSessionActiveChatId(activeChatId);
+    setSessionActiveChatId(activeChatId || null);
   }, [activeChatId]);
   useEffect(() => {
     if (activeProjectId) localStorage.setItem('aira_active_project_id_v1', activeProjectId);

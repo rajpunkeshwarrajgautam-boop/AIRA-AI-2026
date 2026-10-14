@@ -54,12 +54,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          pattern='(nvapi-[A-Za-z0-9_-]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|sk_live_[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16})'
+          pattern='(nvapi-[A-Za-z0-9_-]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|sk_live_[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|npg_[A-Za-z0-9_-]{10,})'
           if git grep -IlE "$pattern" -- . ':(exclude)package-lock.json' > /tmp/secret-files; then
             echo '::error::Potential credential material found in tracked files:'
             sed 's/^/ - /' /tmp/secret-files
             exit 1
           fi
+          npm run test:secrets
 
       - name: Lint
         run: npm run lint

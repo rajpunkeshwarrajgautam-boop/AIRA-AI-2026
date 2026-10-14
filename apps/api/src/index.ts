@@ -121,7 +121,7 @@ app.post('/api/auth/link-guest', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'No verifiable active guest session found to link' });
     }
 
-    if (!candidateGuest.startsWith('usr_')) {
+    if (!candidateGuest.startsWith('usr_') && !candidateGuest.startsWith('user_')) {
       return res.status(400).json({ error: 'Only guest sessions may be linked to accounts' });
     }
 
