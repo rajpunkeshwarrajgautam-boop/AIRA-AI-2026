@@ -34,6 +34,7 @@ import { buildDurableHistorySystemMessage } from './memory-policy.js';
 import { InstructionResolver } from './behavioral/instruction-resolver.js';
 import { AdaptiveSynthesizer } from './behavioral/adaptive-synthesizer.js';
 import { ToolRecoveryEngine } from './behavioral/tool-recovery-engine.js';
+import { selectExecutableTool } from './tool-selector.js';
 
 export class AgentRuntime extends EventEmitter {
   private eventStreams: Map<string, EventEmitter> = new Map();
@@ -565,85 +566,29 @@ export class AgentRuntime extends EventEmitter {
       const isAgentMission = run.intent === 'AGENT_MISSION';
 
       if (isToolAction || isAgentMission) {
-        if (
-          run.prompt.toLowerCase().includes('mouse click') ||
-          run.prompt.toLowerCase().includes('desktop screen') ||
-          run.prompt.toLowerCase().includes('desktop coordinate') ||
-          run.prompt.toLowerCase().includes('computer use') ||
-          run.prompt.toLowerCase().includes('os control')
-        ) {
-          const msg = 'COMPUTER_USE_NOT_AVAILABLE: Native desktop and OS control runtime is not available in the current environment. Browser-based navigation is supported via browser tools.';
-          run.content = msg;
-          run.executionCheckpoint = 'COMPLETED';
+        const selected = selectExecutableTool(run.prompt, isAgentMission ? 'AGENT_MISSION' : 'TOOL_ACTION');
+        if (!selected.ok) {
+          const message = `${selected.code}: ${selected.reason}`;
+          run.content = message;
+          run.error = message;
+          run.executionCheckpoint = 'TOOL_FAILED';
           await this.runRepo.saveRun(run);
-          await this.emitRunEvent(runId, 'content.delta', { delta: msg });
-          await this.transitionRunState(runId, 'COMPLETED');
+          await this.emitRunEvent(runId, 'content.delta', { delta: message });
+          await this.transitionRunState(runId, 'FAILED', message);
           return;
         }
 
-        let selectedToolName = 'web_search';
-        let selectedArgs: Record<string, unknown> = { query: run.prompt };
-
-        const urlMatch = run.prompt.match(/https?:\/\/[^\s"'<>]+/);
-        if (urlMatch && run.prompt.toLowerCase().includes('screenshot')) {
-          selectedToolName = 'browser_screenshot';
-          selectedArgs = { url: urlMatch[0] };
-        } else if (urlMatch) {
-          selectedToolName = 'browser_navigate';
-          selectedArgs = { url: urlMatch[0] };
-        } else if (run.prompt.toLowerCase().includes('form') && (run.prompt.toLowerCase().includes('populate') || run.prompt.toLowerCase().includes('fill') || run.prompt.toLowerCase().includes('submit'))) {
-          selectedToolName = 'browser_type';
-          selectedArgs = { selector: 'form input', text: 'AIRA 2026 Test' };
-        } else if (run.prompt.toLowerCase().includes('github') && run.prompt.toLowerCase().includes('commit')) {
-          selectedToolName = 'repo_git_log';
-          selectedArgs = { count: 1 };
-        } else if (
-          isAgentMission && (run.prompt.toLowerCase().includes('workspace') || run.prompt.toLowerCase().includes('inspect'))
-        ) {
-          const fileMatch = run.prompt.match(/(?:read|inspect|structure|analyze|view)\s+([a-zA-Z0-9_\-./\\]+\.[a-zA-Z0-9]+)/i);
-          const targetPath = fileMatch ? fileMatch[1].trim() : (run.prompt.toLowerCase().includes('src/app.tsx') ? 'src/App.tsx' : 'package.json');
-          selectedToolName = 'file_system_read';
-          selectedArgs = { filePath: targetPath };
-        } else if (run.prompt.toLowerCase().includes('git status') || run.prompt.toLowerCase().includes('repo status')) {
-          selectedToolName = 'repo_git_status';
-          selectedArgs = {};
-        } else if (run.prompt.toLowerCase().includes('calc') || /calculate|\b\d+\s*[-+*/]\s*\d+/.test(run.prompt.toLowerCase())) {
-          selectedToolName = 'calculator';
-          const exprMatch = run.prompt.match(/([0-9+\-*/().^ ]+)/);
-          selectedArgs = { expression: exprMatch ? exprMatch[0].trim() : '1024 * 4' };
-        } else if (
-          run.routingDecision?.sideEffectLevel === 'DESTRUCTIVE' ||
-          run.prompt.toLowerCase().includes('shell') ||
-          run.prompt.toLowerCase().includes('run command') ||
-          run.prompt.toLowerCase().includes('rm -rf') ||
-          run.prompt.toLowerCase().includes('delete') ||
-          run.prompt.toLowerCase().includes('drop')
-        ) {
-          selectedToolName = 'system_shell';
-          selectedArgs = { command: run.prompt };
-        } else if (
-          run.prompt.toLowerCase().includes('list') &&
-          (run.prompt.toLowerCase().includes('src/') || run.prompt.toLowerCase().includes('files in') || run.prompt.toLowerCase().includes('directory'))
-        ) {
-          const dirMatch = run.prompt.match(/(?:list|files in|directory)\s+([a-zA-Z0-9_\-./\\]+)/i);
-          selectedToolName = 'file_system_list';
-          selectedArgs = { directoryPath: dirMatch ? dirMatch[1].trim() : 'src' };
-        } else if (
-          run.prompt.toLowerCase().includes('read') ||
-          run.prompt.toLowerCase().includes('inspect') ||
-          run.prompt.toLowerCase().includes('structure') ||
-          run.prompt.toLowerCase().includes('analyze')
-        ) {
-          const fileMatch = run.prompt.match(/(?:read|inspect|structure|analyze|view)\s+([a-zA-Z0-9_\-./\\]+\.[a-zA-Z0-9]+)/i);
-          const targetPath = fileMatch ? fileMatch[1].trim() : (run.prompt.toLowerCase().includes('src/app.tsx') ? 'src/App.tsx' : 'package.json');
-          selectedToolName = 'file_system_read';
-          selectedArgs = { filePath: targetPath };
-        } else if (run.prompt.toLowerCase().includes('hang safe')) {
-          selectedToolName = 'hang_safe';
-          selectedArgs = {};
-        } else if (run.prompt.toLowerCase().includes('hang unsafe')) {
-          selectedToolName = 'hang_unsafe';
-          selectedArgs = {};
+        const selectedToolName = selected.name;
+        const selectedArgs = selected.args;
+        if (!this.toolGateway.getTool(selectedToolName) && !this.toolRegistry.get(selectedToolName)) {
+          const message = `TOOL_UNAVAILABLE: ${selectedToolName} is not registered in this runtime. No simulated execution was performed.`;
+          run.content = message;
+          run.error = message;
+          run.executionCheckpoint = 'TOOL_FAILED';
+          await this.runRepo.saveRun(run);
+          await this.emitRunEvent(runId, 'content.delta', { delta: message });
+          await this.transitionRunState(runId, 'FAILED', message);
+          return;
         }
 
         const toolDef = this.toolGateway.getTool(selectedToolName)?.definition || this.toolRegistry.get(selectedToolName)?.definition;
