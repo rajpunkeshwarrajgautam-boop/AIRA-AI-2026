@@ -49,6 +49,7 @@ if (process.env.NODE_ENV === 'production') {
 
 import { createPrincipalMiddleware } from './middleware/principal.js';
 import { createSessionAuthMiddleware, ensureAuthenticatedSession } from './auth/session-auth.js';
+import { createNeonAuthPrincipalMiddleware } from './auth/neon-auth-principal.js';
 import { isTemporaryDatabaseError } from './utils/storage-errors.js';
 
 const app = express();
@@ -62,6 +63,9 @@ app.use(express.urlencoded({ limit: '2mb', extended: false }));
 // Resolve a trusted first-party session cookie before principal enforcement.
 // This middleware never trusts client-supplied user/session headers in production.
 app.use(createSessionAuthMiddleware());
+// Staging opt-in: verified Neon Auth bearer identity overrides browser-local
+// guest sessions only after cryptographic signature verification.
+app.use(createNeonAuthPrincipalMiddleware());
 
 // Public bootstrap endpoint used by the browser before protected API calls.
 // It issues or refreshes an opaque, signed, HttpOnly session cookie.
