@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import * as crypto from 'crypto';
+import { isDeepStrictEqual } from 'node:util';
 import {
   Run,
   RunState,
@@ -853,7 +854,7 @@ export class AgentRuntime extends EventEmitter {
 
         if (!valid || !currentStep || progress.currentCallId !== lastCall?.id ||
             currentStep.toolName !== lastCall.name ||
-            JSON.stringify(currentStep.arguments) !== JSON.stringify(lastCall.arguments) ||
+            !isDeepStrictEqual(currentStep.arguments, lastCall.arguments) ||
             !evidence.verified) {
           const message = 'MISSION_VERIFICATION_FAILED: ' +
             (!valid ? 'Persisted plan does not match the original request.' : evidence.reason);
@@ -1260,7 +1261,7 @@ CAPABILITY & IDENTITY INVARIANTS:
         progress && validateDurableMission(run.prompt, progress) &&
         step && toolCall && progress.currentCallId === toolCall.id &&
         step.toolName === toolCall.name &&
-        JSON.stringify(step.arguments) === JSON.stringify(toolCall.arguments) &&
+        isDeepStrictEqual(step.arguments, toolCall.arguments) &&
         gatewayDefinition?.permissionLevel === 'READ' &&
         gatewayDefinition.sideEffectLevel === 'READ'
       );
