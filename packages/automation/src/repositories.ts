@@ -1,8 +1,10 @@
+import * as crypto from 'node:crypto';
 import { AutomationDefinition, AutomationRun } from '../../contracts/src/index.js';
 import { db } from '../../db/src/index.js';
 
 export interface AutomationRepository {
   saveAutomation(automation: AutomationDefinition): Promise<void>;
+  createIfMissing?(input: Omit<AutomationDefinition, 'id'>): Promise<{ automation: AutomationDefinition; created: boolean }>;
   getAutomation(id: string): Promise<AutomationDefinition | undefined>;
   listAutomations(principalId?: string): Promise<AutomationDefinition[]>;
   getDueAutomations(): Promise<AutomationDefinition[]>;
@@ -107,6 +109,50 @@ export class PostgresAutomationRunRepository implements AutomationRunRepository 
 }
 
 export class PostgresAutomationRepository implements AutomationRepository {
+  /**
+   * Serialize competing creates for the same principal, objective and schedule.
+   * Advisory transaction lock provides cross-process idempotence without schema changes.
+   */
+  async createIfMissing(input: Omit<AutomationDefinition, 'id'>): Promise<{ automation: AutomationDefinition; created: boolean }> {
+    if (!input.principalId) throw new Error('An authenticated principal is required to create an automation.');
+    const objective = input.objective.trim().replace(/\s+/g, ' ').toLowerCase();
+    const timeZone = String(input.conditions?.timeZone || 'UTC');
+    const key = [input.principalId, objective, input.cronExpression || '', timeZone, input.trigger].join('|');
+    return db.transaction(async trx => {
+      await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [key]);
+      const existingRows = await trx('automations').where({ enabled: true }).select('*');
+      const existing = existingRows.map(row => this.mapToAutomation(row)).find(item =>
+        item.principalId === input.principalId &&
+        item.objective.trim().replace(/\s+/g, ' ').toLowerCase() === objective &&
+        item.cronExpression === input.cronExpression &&
+        String(item.conditions?.timeZone || 'UTC') === timeZone &&
+        item.trigger === input.trigger
+      );
+      if (existing) return { automation: existing, created: false };
+      const automation: AutomationDefinition = { ...input, id: `auto_${crypto.randomUUID().slice(0, 12)}` };
+      const now = Date.now();
+      await trx('automations').insert({
+        id: automation.id,
+        name: automation.name,
+        agent_id: automation.agentId,
+        cron_expression: automation.cronExpression || '',
+        enabled: automation.enabled,
+        triggerParams: JSON.stringify({
+          trigger: automation.trigger,
+          conditions: automation.conditions,
+          objective: automation.objective,
+          approvalPolicy: automation.approvalPolicy,
+          failureState: automation.failureState,
+          principalId: automation.principalId
+        }),
+        last_run: automation.lastRun || 0,
+        createdAt: now,
+        updatedAt: now
+      });
+      return { automation, created: true };
+    });
+  }
+
   async saveAutomation(automation: AutomationDefinition): Promise<void> {
     await db('automations').insert({
       id: automation.id,
