@@ -52,7 +52,8 @@
     "test:release-auth": "npx tsx test/release-authorization-guard.ts",
     "test:release-auth:unit": "npx tsx test/release-authorization-guard.test.ts",
     "verify:release-auth": "npx tsx scripts/verify-release-authorization.ts",
-    "revoke:release-auth": "npx tsx scripts/revoke-release-authorization.ts"
+    "revoke:release-auth": "npx tsx scripts/revoke-release-authorization.ts",
+    "test:release-auth:app": "node --test test/release-gate-app-publisher.test.mjs"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
