@@ -96,6 +96,9 @@ jobs:
       - name: Agent execution truth regression
         run: npm run test:agent-tool-selection
 
+      - name: Durable mission planning and verification regression
+        run: npm run test:mission-planner
+
       - name: Workflow engine verification
         run: npm run test:workflow
 
