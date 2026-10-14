@@ -93,6 +93,9 @@ jobs:
       - name: Router and policy verification
         run: npm run test:router
 
+      - name: Agent execution truth regression
+        run: npm run test:agent-tool-selection
+
       - name: Workflow engine verification
         run: npm run test:workflow
 
