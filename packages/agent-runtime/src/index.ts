@@ -31,6 +31,7 @@ import { WorkflowRepository, PostgresWorkflowRepository } from './workflow-repos
 import { WorkflowEngine } from './workflow-engine.js';
 import { WorkflowCompiler } from './workflow-compiler.js';
 import { buildDurableHistorySystemMessage } from './memory-policy.js';
+import { parseReminderIntent } from '../../automation/src/reminder-intent.js';
 import { InstructionResolver } from './behavioral/instruction-resolver.js';
 import { AdaptiveSynthesizer } from './behavioral/adaptive-synthesizer.js';
 import { ToolRecoveryEngine } from './behavioral/tool-recovery-engine.js';
@@ -361,6 +362,44 @@ export class AgentRuntime extends EventEmitter {
 
     if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)) return;
 
+    // Read-only follow-up verification: inspect the stored schedule instead of
+    // generating another automation or allowing the model to guess success.
+    const verifySchedule = /\b(?:did you (?:create|set|schedule)|are you sure (?:you )?(?:created|scheduled|saved)|(?:check|verify) (?:my|the|that)?\s*(?:reminder|schedule)|is (?:that|it) (?:scheduled|saved)|what (?:reminders|automations) (?:are|did|do))\b/i.test(run.prompt);
+    if (verifySchedule && this.automationEngine && !run.executionCheckpoint) {
+      if (run.state !== 'RUNNING') await this.transitionRunState(runId, 'RUNNING');
+      const list = (await this.automationEngine.listAutomations(run.principalId)).filter(a => a.enabled);
+      const history = Array.isArray(run.context?.history) ? run.context.history : [];
+      const lastRequest = [...history].reverse().find((entry: any) =>
+        entry?.role === 'user' && /\\bremind me to\\b/i.test(String(entry?.content || ''))
+      );
+      const prior = lastRequest
+        ? parseReminderIntent(String(lastRequest.content), String(run.context?.timeZone || ''))
+        : null;
+      const matching = prior?.kind === 'create'
+        ? list.find(item =>
+          item.objective.toLowerCase().trim() === prior.objective.toLowerCase().trim() &&
+          item.cronExpression === prior.cronExpression &&
+          item.conditions?.timeZone === prior.timeZone
+        )
+        : null;
+      let text: string;
+      if (prior?.kind === 'create') {
+        text = matching
+          ? `I checked your saved automations. Your reminder to "${prior.objective}" is enabled for ${prior.summary}. Its database schedule is verified; cloud triggering and external push/email delivery are separate checks.`
+          : `I checked your saved automations but could not find an enabled reminder matching "${prior.objective}" at ${prior.summary}. I cannot confirm that it was scheduled correctly.`;
+      } else if (list.length) {
+        text = `I checked your saved automations: ${list.length} active item(s) are present. Tell me the reminder name so I can verify its exact time and timezone.`;
+      } else {
+        text = 'I checked your saved automations. There are no active reminders under this account.';
+      }
+      run.content = text;
+      run.executionCheckpoint = 'COMPLETED';
+      await this.runRepo.saveRun(run);
+      await this.emitRunEvent(runId, 'content.delta', { delta: text });
+      await this.transitionRunState(runId, 'COMPLETED');
+      return;
+    }
+
     // Checkpoint 0: Capability readiness gate
     if (run.routingDecision?.executionTarget === 'CAPABILITY_NOT_READY') {
       const msg = `The requested capability (${run.intent}) is currently in development and not yet available for direct execution. (Target: ${run.routingDecision.executionTarget})`;
@@ -408,40 +447,60 @@ export class AgentRuntime extends EventEmitter {
       }
 
       try {
-        const pLower = run.prompt.toLowerCase();
-        let cronExpr = '0 9 * * 1';
-        let name = 'Scheduled Automation';
-
-        if (pLower.includes('monday') && (pLower.includes('9 am') || pLower.includes('9am'))) {
-          cronExpr = '0 9 * * 1';
-          name = 'Weekly Monday 9 AM Summary';
-        } else if (pLower.includes('daily') || pLower.includes('every day')) {
-          cronExpr = '0 9 * * *';
-          name = 'Daily Report';
-        } else if (pLower.includes('hourly') || pLower.includes('every hour')) {
-          cronExpr = '0 * * * *';
-          name = 'Hourly Update';
-        } else {
-          name = `Automation: ${run.prompt.slice(0, 36)}`;
+        const parsed = parseReminderIntent(
+          run.prompt,
+          typeof run.context?.timeZone === 'string' ? run.context.timeZone : undefined
+        );
+        if (parsed.kind === 'clarify') {
+          run.content = parsed.message;
+          run.executionCheckpoint = 'COMPLETED';
+          await this.runRepo.saveRun(run);
+          await this.emitRunEvent(runId, 'content.delta', { delta: parsed.message });
+          await this.transitionRunState(runId, 'COMPLETED');
+          return;
         }
 
-        const autoDef = await this.automationEngine.createAutomation({
-          name,
+        // Vercel freezes background timers. Never pretend a cloud reminder is
+        // active without an authenticated external scheduler configuration.
+        if (process.env.VERCEL && (process.env.AIRA_SCHEDULER_ACTIVE !== 'true' || !process.env.CRON_SECRET || process.env.CRON_SECRET.length < 32)) {
+          const msg = 'I cannot activate cloud reminders yet because a minute-precision scheduler has not been connected. Nothing was scheduled.';
+          run.content = msg;
+          run.executionCheckpoint = 'COMPLETED';
+          await this.runRepo.saveRun(run);
+          await this.emitRunEvent(runId, 'content.delta', { delta: msg });
+          await this.transitionRunState(runId, 'COMPLETED');
+          return;
+        }
+
+        const { automation: scheduled, created } = await this.automationEngine.createAutomationWithReceipt({
+          name: parsed.name,
           principalId: run.principalId,
           enabled: true,
           trigger: 'CRON',
-          cronExpression: cronExpr,
+          cronExpression: parsed.cronExpression,
           agentId: 'agent-default',
-          objective: run.prompt,
-          conditions: {},
-          approvalPolicy: 'autonomous'
+          objective: parsed.objective,
+          conditions: {
+            kind: 'REMINDER',
+            timeZone: parsed.timeZone,
+            notBefore: Date.now()
+          },
+          approvalPolicy: 'risky_only'
         });
 
-        const successMsg = `Successfully created durable scheduled automation "${autoDef.name}" (ID: ${autoDef.id}) with cron expression "${cronExpr}". Principal owner: ${run.principalId}. The schedule is saved in durable Postgres storage.`;
-        run.content = successMsg;
+        const confirmed = await this.automationEngine.getAutomation(scheduled.id, run.principalId);
+        if (!confirmed || confirmed.cronExpression !== parsed.cronExpression ||
+            confirmed.conditions?.timeZone !== parsed.timeZone || !confirmed.enabled) {
+          throw new Error('Saved reminder failed its verification check.');
+        }
+
+        const text = created
+          ? `I've scheduled a reminder to "${parsed.objective}" ${parsed.summary}. It will appear in your AIRA reminder inbox when due. You can review it under Automations. Notifications outside AIRA (push or email) are not configured.`
+          : `You already have an active reminder to "${parsed.objective}" ${parsed.summary}. I verified its existing schedule; no duplicate was created. It will appear in your AIRA reminder inbox when due.`;
+        run.content = text;
         run.executionCheckpoint = 'COMPLETED';
         await this.runRepo.saveRun(run);
-        await this.emitRunEvent(runId, 'content.delta', { delta: successMsg });
+        await this.emitRunEvent(runId, 'content.delta', { delta: text });
         await this.transitionRunState(runId, 'COMPLETED');
         return;
       } catch (err: any) {

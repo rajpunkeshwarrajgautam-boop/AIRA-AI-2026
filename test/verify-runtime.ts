@@ -232,6 +232,7 @@ async function runTests() {
 
     const created = await automation.createAutomation({
       name: 'Test Recurring Job',
+      principalId: 'test-user',
       enabled: true,
       trigger: 'MANUAL',
       conditions: {},

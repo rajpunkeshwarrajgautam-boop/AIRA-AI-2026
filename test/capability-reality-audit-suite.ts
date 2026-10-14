@@ -187,14 +187,37 @@ async function runRealityAuditSuite() {
   // TEST 6: Automation Create & Ownership Isolation
   // -------------------------------------------------------------
   console.log('\n--- TEST 6: AUTOMATION CREATE FROM CHAT & PRINCIPAL ISOLATION ---');
+  const reminderPrompt = 'Remind me to summarize repository commits every Monday at 9 AM.';
   const runAuto = await agentRuntime.createRun({
-    prompt: 'Every Monday at 9 AM summarize repository commits.'
+    prompt: reminderPrompt,
+    context: { timeZone: 'UTC' }
   }, principalA);
   await agentRuntime.startRun(runAuto.id);
   const completedAuto = await agentRuntime.getRun(runAuto.id);
   assert.strictEqual(completedAuto?.state, 'COMPLETED');
-  assert.ok(completedAuto?.content.includes('Successfully created durable scheduled automation'));
-  console.log('  -> PASS: Scheduled automation created from chat.');
+  assert.ok(completedAuto?.content.includes('I\'ve scheduled a reminder'));
+  const reminderRepeat = await agentRuntime.createRun({
+    prompt: reminderPrompt,
+    context: { timeZone: 'UTC' }
+  }, principalA);
+  await agentRuntime.startRun(reminderRepeat.id);
+  const repeatOutcome = await agentRuntime.getRun(reminderRepeat.id);
+  assert.ok(repeatOutcome?.content.includes('already have an active reminder'));
+  const verifyRun = await agentRuntime.createRun({
+    prompt: 'Are you sure you created that reminder?',
+    context: {
+      timeZone: 'UTC',
+      history: [
+        { role: 'user', content: reminderPrompt },
+        { role: 'assistant', content: completedAuto?.content || '' }
+      ]
+    }
+  }, principalA);
+  await agentRuntime.startRun(verifyRun.id);
+  const verified = await agentRuntime.getRun(verifyRun.id);
+  assert.ok(verified?.content.includes('database schedule is verified'), 'Follow-up must read the existing schedule');
+  console.log('  -> PASS: Natural-language creation, dedupe, and database-backed verification.');
+
 
   // List automations for User A
   const userAAutos = await automationEngine.listAutomations(principalA.userId);

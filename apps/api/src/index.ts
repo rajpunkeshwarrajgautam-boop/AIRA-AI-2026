@@ -128,6 +128,24 @@ app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
 
 // Enforce ExecutionPrincipal on all /api routes BELOW this point.
 // Routes registered above (health, ready) are public infrastructure probes.
+// Vercel Cron signs requests with CRON_SECRET. A browser session alone must
+// never be able to run every user's scheduled automations.
+app.get('/api/automations/cron/execute', async (req: Request, res: Response) => {
+  const secret = process.env.CRON_SECRET || '';
+  const supplied = req.headers.authorization || '';
+  const expected = `Bearer ${secret}`;
+  const allowed = secret.length >= 32 &&
+    Buffer.byteLength(supplied) === Buffer.byteLength(expected) &&
+    crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(expected));
+  if (!allowed) return res.status(401).json({ error: 'Unauthorized scheduler request' });
+  try {
+    const result = await automationEngine.runScheduledCronCycle();
+    return res.json({ status: 'CRON_CYCLE_EXECUTED', ...result, timestamp: Date.now() });
+  } catch (error: any) {
+    return res.status(503).json({ error: 'Scheduled automation processing unavailable' });
+  }
+});
+
 app.use('/api', createPrincipalMiddleware());
 
 // Initialize Core Subsystems
@@ -591,7 +609,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       conversationId: conversationId || undefined,
       attachments: Array.isArray(attachments) ? attachments : undefined,
       systemPrompt: (systemPrompt || '') + (contextSubgraph ? `\n\n${contextSubgraph}` : ''),
-      context: { history: contextHistory },
+      context: { history: contextHistory, timeZone: typeof req.body.timeZone === 'string' ? req.body.timeZone : undefined },
       modelPolicy: {
         model: model || 'aira-auto',
         extendedThinking: Boolean(extendedThinking),
@@ -917,19 +935,44 @@ app.post('/api/agents/:id/run', async (req: Request, res: Response) => {
 // -----------------------------------------------------------------------
 // Automations — Full CRUD (Audit 14 & 12 Ownership Enforced)
 // -----------------------------------------------------------------------
+// Durable in-app reminder delivery (session/principal scoped).
+app.get('/api/reminders/inbox', async (req: Request, res: Response) => {
+  try {
+    const items = await autoRunRepo.listNotifications!(req.principal!.userId);
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ notifications: items });
+  } catch {
+    res.status(503).json({ error: 'Reminder inbox temporarily unavailable' });
+  }
+});
+
+app.post('/api/reminders/inbox/:id/read', async (req: Request, res: Response) => {
+  try {
+    const marked = await autoRunRepo.markNotificationRead!(req.principal!.userId, req.params.id);
+    if (!marked) return res.status(404).json({ error: 'Reminder not found or already read' });
+    return res.json({ status: 'READ' });
+  } catch {
+    return res.status(503).json({ error: 'Reminder inbox temporarily unavailable' });
+  }
+});
+
 app.get('/api/automations', async (req: Request, res: Response) => {
   res.json(await automationEngine.listAutomations(req.principal?.userId));
 });
 
 app.post('/api/automations', async (req: Request, res: Response) => {
   try {
+    if (process.env.VERCEL && (process.env.AIRA_SCHEDULER_ACTIVE !== 'true' || !process.env.CRON_SECRET || process.env.CRON_SECRET.length < 32)) {
+      return res.status(503).json({ error: 'Cloud scheduler not configured; automation was not created' });
+    }
     const raw = {
       ...req.body,
-      principalId: req.body.principalId || req.principal?.userId || 'usr_anonymous'
+      principalId: req.principal!.userId,
+      conditions: { ...(req.body.conditions || {}), notBefore: Date.now() }
     };
     const parsed = AutomationDefinitionSchema.omit({ id: true }).parse(raw);
-    const item = await automationEngine.createAutomation(parsed);
-    res.status(201).json(item);
+    const { automation, created } = await automationEngine.createAutomationWithReceipt(parsed);
+    res.status(created ? 201 : 200).json({ ...automation, alreadyExists: !created });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
@@ -995,13 +1038,9 @@ app.post('/api/automations/:id/disable', async (req: Request, res: Response) => 
 });
 
 // Platform / Serverless cron execution endpoint
-app.post('/api/automations/cron/execute', async (_req: Request, res: Response) => {
-  try {
-    await automationEngine.runScheduledCronCycle();
-    res.json({ status: 'CRON_CYCLE_EXECUTED', timestamp: Date.now() });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
+// Cron is GET-only and accepts only the server scheduler's secret, not sessions.
+app.post('/api/automations/cron/execute', (_req: Request, res: Response) => {
+  res.status(405).json({ error: 'Use authenticated Vercel Cron GET endpoint' });
 });
 
 // -----------------------------------------------------------------------
