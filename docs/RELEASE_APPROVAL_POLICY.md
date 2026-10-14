@@ -1,3 +1,5 @@
+> **Tier B transition — branch implementation only (2026-10-14):** The new dedicated GitHub App-backed approval publisher supersedes the legacy `github-actions[bot]` commit-status design described in historical sections below. See [RELEASE_GATE_TIER_B_SETUP.md](./RELEASE_GATE_TIER_B_SETUP.md) for the authoritative current architecture and required owner setup. Neither the App nor its protected Environment is provisioned, and production Ruleset 25079946 has not changed. The old shared-token `npm run revoke:release-auth` CLI intentionally fails closed; use the App-issued revocation workflow after authorized bootstrap. No production GO LIVE has been granted.
+
 # AIRA AI 2026 — Explicit Production Release Authorization Policy
 
 **Status: GitHub Pro ruleset ACTIVE (ID: 25079946); Vercel Hobby deployment architecture INSPECTED; Dual-Evidence Provenance, Issuer Hardening & Safe Bootstrap Sequence IMPLEMENTED.**
