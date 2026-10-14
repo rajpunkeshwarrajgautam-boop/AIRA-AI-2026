@@ -12,7 +12,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: release-app-publisher-${{ github.event.workflow_run.id }}
+  group: release-gate-app-status-writes
   cancel-in-progress: false
 
 jobs:
