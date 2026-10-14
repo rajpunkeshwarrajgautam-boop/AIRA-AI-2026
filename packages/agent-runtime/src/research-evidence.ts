@@ -40,7 +40,7 @@ export function verifiedSearchCitationsFromToolResults(toolCalls: ToolCall[], to
     if (!call) {
       for (const candidate of toolCalls) {
         if (receiptId.startsWith(candidate.id + '_retry_') &&
-            /^\\d+$/.test(receiptId.slice((candidate.id + '_retry_').length))) {
+            /^\d+$/.test(receiptId.slice((candidate.id + '_retry_').length))) {
           call = candidate;
           executedTool = candidate.name;
           break;
