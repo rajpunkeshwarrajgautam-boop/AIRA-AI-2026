@@ -7,8 +7,28 @@ export class FileSystemAdapter {
   private resolveSafePath(relPath: string): string {
     const root = path.resolve(this.workspaceRoot);
     const resolved = path.resolve(root, relPath);
-    if (!resolved.startsWith(root)) {
+    const relative = path.relative(root, resolved);
+    if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) {
       throw new Error(`SECURITY_REJECTED: Access denied. Path "${relPath}" is outside workspace sandbox.`);
+    }
+
+    // The old startsWith(root) comparison allowed sibling workspaces sharing
+    // a name prefix. Reject symlink traversal, including symlinked parents and
+    // final targets, rather than trusting lexical containment alone.
+    let segment = root;
+    if (fs.existsSync(segment) && fs.lstatSync(segment).isSymbolicLink()) {
+      throw new Error('SECURITY_REJECTED: Symlinked workspace roots are unsupported.');
+    }
+    for (const part of relative.split(path.sep).filter(Boolean)) {
+      segment = path.join(segment, part);
+      try {
+        if (fs.lstatSync(segment).isSymbolicLink()) {
+          throw new Error('SECURITY_REJECTED: Symlink traversal is forbidden inside workspaces.');
+        }
+      } catch (err: any) {
+        if (err?.code === 'ENOENT') continue;
+        throw err;
+      }
     }
     return resolved;
   }
