@@ -265,7 +265,8 @@ async function runRealityAuditSuite() {
   }, principalA);
   await agentRuntime.startRun(multiFileRun.id);
   const completedMulti = await agentRuntime.getRun(multiFileRun.id);
-  assert.strictEqual(completedMulti?.state, 'COMPLETED',
+  assert.ok(completedMulti, 'Multi-file run must be persisted');
+  assert.strictEqual(completedMulti.state, 'COMPLETED',
     'Multi-file mission must only finish when both actual files are read and verified');
   const fileCalls = completedMulti.toolCalls.filter(call => call.name === 'file_system_read');
   assert.strictEqual(fileCalls.length, 2, 'Mission must read exactly two named files');
