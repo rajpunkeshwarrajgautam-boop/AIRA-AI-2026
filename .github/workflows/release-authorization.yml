@@ -17,10 +17,11 @@ on:
         required: true
         type: string
 
+# This workflow has zero status-write and zero App credentials.
+# Only a separate workflow_run publisher can emit App-issued success AFTER this run completes.
 permissions:
   contents: read
   pull-requests: read
-  statuses: write
 
 concurrency:
   group: release-auth-${{ inputs.pr_number }}
@@ -28,9 +29,12 @@ concurrency:
 
 jobs:
   attestation:
-    name: Human Production Authorization (Attestation Only)
+    name: Owner Approval Validation (Read-Only)
     runs-on: ubuntu-latest
-    if: github.actor == github.repository_owner
+    if: >-
+      github.actor == github.repository_owner &&
+      github.repository == 'rajpunkeshwarrajgautam-boop/AIRA-AI-2026' &&
+      github.ref == 'refs/heads/prod-release'
     timeout-minutes: 5
     env:
       GH_TOKEN: ${{ github.token }}
@@ -38,76 +42,28 @@ jobs:
       EXPECTED_SHA: ${{ inputs.candidate_sha }}
       APPROVAL_PHRASE: ${{ inputs.approval_phrase }}
     steps:
-      - name: Initialize pending status on candidate commit
+      - name: Verify explicit owner approval and exact PR HEAD (no status publishing)
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Posting interim pending status on candidate $EXPECTED_SHA..."
-            gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$EXPECTED_SHA" \
-              -f state="pending" \
-              -f context="release/go-live-authorized" \
-              -f description="Attestation verification in progress by $GITHUB_ACTOR for PR #$PR_NUMBER" \
-              -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
-          fi
-
-      - name: Verify explicit release approval and exact PR head
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || {
-            echo "::error::Expected a full 40-character commit SHA"; exit 1;
-          }
-          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || {
-            echo "::error::Expected a numeric pull request number"; exit 1;
-          }
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Invalid SHA"; exit 1; }
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || { echo "::error::Invalid PR number"; exit 1; }
           [[ "$APPROVAL_PHRASE" == "GO LIVE $EXPECTED_SHA" ]] || {
-            echo "::error::Explicit exact-commit GO LIVE phrase is required"; exit 1;
+            echo "::error::Exact owner GO LIVE phrase required"; exit 1;
           }
           PR_JSON=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")
-          ACTUAL_SHA=$(jq -r '.head.sha' <<<"$PR_JSON")
-          TARGET_BRANCH=$(jq -r '.base.ref' <<<"$PR_JSON")
-          STATE=$(jq -r '.state' <<<"$PR_JSON")
-          [[ "$ACTUAL_SHA" == "$EXPECTED_SHA" ]] || {
-            echo "::error::Release candidate SHA changed"; exit 1;
+          jq -e --arg sha "$EXPECTED_SHA" --arg repo "$GITHUB_REPOSITORY" '
+            .state == "open" and .draft == false and
+            .head.sha == $sha and .head.repo.full_name == $repo and
+            .base.ref == "prod-release" and .base.repo.full_name == $repo
+          ' <<<"$PR_JSON" >/dev/null || {
+            echo "::error::Candidate PR does not match trusted owner approval"; exit 1;
           }
-          [[ "$TARGET_BRANCH" == "prod-release" && "$STATE" == "open" ]] || {
-            echo "::error::PR must be an open release candidate into prod-release"; exit 1;
-          }
-
-          # Post tamper-resistant commit status bound strictly to candidate SHA only upon full verification pass
-          echo "Posting verified commit status release/go-live-authorized on $EXPECTED_SHA..."
-          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$EXPECTED_SHA" \
-            -f state="success" \
-            -f context="release/go-live-authorized" \
-            -f description="Explicit owner GO LIVE verified by $GITHUB_ACTOR for PR #$PR_NUMBER" \
-            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-
           {
-            printf '%s\n' '### AIRA Production Authorization — Attestation & Status Emitted'
-            printf '%s\n' "- Approved by GitHub actor: \`$GITHUB_ACTOR\`"
-            printf '%s\n' "- Repository: \`$GITHUB_REPOSITORY\`"
+            printf '%s\n' '### AIRA Tier B — Owner Attestation Complete (READ ONLY)'
+            printf '%s\n' "- Approved by: \`$GITHUB_ACTOR\`"
             printf '%s\n' "- PR: #$PR_NUMBER"
             printf '%s\n' "- Candidate SHA: \`$EXPECTED_SHA\`"
-            printf '%s\n' '- Target branch: `prod-release`'
-            printf '%s\n' '- Status context: `release/go-live-authorized` → **success**'
-            printf '%s\n' "- UTC time: \`$(date -u +'%Y-%m-%dT%H:%M:%SZ')\`"
-            printf '%s\n' ''
-            printf '%s\n' '**This workflow does not change production.** It does not merge,'
-            printf '%s\n' 'modify secrets, apply migrations, or promote a deployment.'
-            printf '%s\n' 'Release actors must separately check required CI and live'
-            printf '%s\n' 'staging evidence, then obtain current user authorization.'
+            printf '%s\n' '- Publication occurs ONLY in the separate GitHub App publisher after this workflow completes successfully.'
+            printf '%s\n' '- This attestation cannot publish statuses, merge, deploy or edit production.'
           } >>"$GITHUB_STEP_SUMMARY"
-
-      - name: Mark status failed on attestation abort, failure, or cancellation
-        if: failure() || cancelled()
-        shell: bash
-        run: |
-          if [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Attestation step failed or cancelled; posting failure status on $EXPECTED_SHA..."
-            gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$EXPECTED_SHA" \
-              -f state="failure" \
-              -f context="release/go-live-authorized" \
-              -f description="Authorization attestation failed or cancelled for PR #$PR_NUMBER" \
-              -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
-          fi
