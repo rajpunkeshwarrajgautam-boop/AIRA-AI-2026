@@ -197,7 +197,7 @@ async function runIntegration() {
       headers: INT_HEADERS,
       body: JSON.stringify({
         intent: 'TOOL_ACTION',
-        prompt: 'run command', // Triggers system_shell (DESTRUCTIVE), which pauses for approval
+        prompt: 'Run command: echo approval-check', // Triggers system_shell (DESTRUCTIVE), which pauses for approval
         systemPrompt: 'You are a test agent',
         modelPolicy: { model: 'mock-deterministic' }
       })
@@ -283,7 +283,7 @@ async function runIntegration() {
       headers: INT_HEADERS,
       body: JSON.stringify({
         intent: 'TOOL_ACTION',
-        prompt: 'run command',
+        prompt: 'Run command: echo approval-check',
         systemPrompt: 'You are a test agent',
         modelPolicy: { model: 'mock-deterministic' }
       })
@@ -403,7 +403,7 @@ async function runIntegration() {
       headers: INT_HEADERS,
       body: JSON.stringify({
         intent: 'AGENT_MISSION',
-        prompt: 'Multi-subscriber test',
+        prompt: 'Inspect workspace files, check git status, and summarize repo history.',
         systemPrompt: 'You are a test agent',
         modelPolicy: { model: 'mock-deterministic' }
       })
