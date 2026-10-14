@@ -656,6 +656,7 @@ export const AutomationDefinitionSchema = z.object({
   approvalPolicy: z.enum(['always_ask', 'risky_only', 'autonomous']).default('autonomous'),
   lastRun: z.number().optional(),
   nextRun: z.number().optional(),
+  createdAt: z.number().optional(),
   failureState: z.string().optional()
 });
 export type AutomationDefinition = z.infer<typeof AutomationDefinitionSchema>;

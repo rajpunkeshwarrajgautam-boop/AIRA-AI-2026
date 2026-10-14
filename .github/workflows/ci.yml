@@ -81,6 +81,9 @@ jobs:
       - name: Runtime verification
         run: npm test
 
+      - name: Reminder scheduling and cron single-claim regression
+        run: npm run test:automation-reminders
+
       - name: Model provider routing certification
         run: npm run test:model-routing
 

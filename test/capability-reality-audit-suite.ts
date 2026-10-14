@@ -188,12 +188,12 @@ async function runRealityAuditSuite() {
   // -------------------------------------------------------------
   console.log('\n--- TEST 6: AUTOMATION CREATE FROM CHAT & PRINCIPAL ISOLATION ---');
   const runAuto = await agentRuntime.createRun({
-    prompt: 'Every Monday at 9 AM summarize repository commits.'
+    prompt: 'Remind me to summarize repository commits every Monday at 9 AM UTC'
   }, principalA);
   await agentRuntime.startRun(runAuto.id);
   const completedAuto = await agentRuntime.getRun(runAuto.id);
   assert.strictEqual(completedAuto?.state, 'COMPLETED');
-  assert.ok(completedAuto?.content.includes('Successfully created durable scheduled automation'));
+  assert.ok(completedAuto?.content.includes('I saved **') && completedAuto.content.includes('09:00') && completedAuto.content.includes('UTC'), 'Must save the requested 9 AM UTC schedule with a truthful confirmation');
   console.log('  -> PASS: Scheduled automation created from chat.');
 
   // List automations for User A

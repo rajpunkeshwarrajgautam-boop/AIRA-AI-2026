@@ -3,6 +3,7 @@ import { db } from '../../db/src/index.js';
 
 export interface AutomationRepository {
   saveAutomation(automation: AutomationDefinition): Promise<void>;
+  createOrFindMatching(automation: AutomationDefinition): Promise<{ automation: AutomationDefinition; created: boolean }>;
   getAutomation(id: string): Promise<AutomationDefinition | undefined>;
   listAutomations(principalId?: string): Promise<AutomationDefinition[]>;
   getDueAutomations(): Promise<AutomationDefinition[]>;
@@ -107,6 +108,43 @@ export class PostgresAutomationRunRepository implements AutomationRunRepository 
 }
 
 export class PostgresAutomationRepository implements AutomationRepository {
+  /** Serialize creations for the same principal so retried chat requests cannot double-create. */
+  async createOrFindMatching(automation: AutomationDefinition): Promise<{ automation: AutomationDefinition; created: boolean }> {
+    if (!automation.principalId) throw new Error('AUTOMATION_PRINCIPAL_REQUIRED');
+    return db.transaction(async trx => {
+      await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', ['aira-automation-' + automation.principalId]);
+      const rows = await trx('automations').select('*');
+      const normalize = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase();
+      const existing = rows.map(row => this.mapToAutomation(row)).find(item =>
+        item.principalId === automation.principalId &&
+        item.enabled &&
+        normalize(item.objective) === normalize(automation.objective) &&
+        item.cronExpression === automation.cronExpression &&
+        (item.conditions?.timeZone || 'UTC') === (automation.conditions?.timeZone || 'UTC')
+      );
+      if (existing) return { automation: existing, created: false };
+      await trx('automations').insert({
+        id: automation.id,
+        name: automation.name,
+        agent_id: automation.agentId,
+        cron_expression: automation.cronExpression || '',
+        enabled: automation.enabled,
+        triggerParams: JSON.stringify({
+          trigger: automation.trigger,
+          conditions: automation.conditions,
+          objective: automation.objective,
+          approvalPolicy: automation.approvalPolicy,
+          failureState: automation.failureState,
+          principalId: automation.principalId
+        }),
+        last_run: automation.lastRun || 0,
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      });
+      return { automation, created: true };
+    });
+  }
+
   async saveAutomation(automation: AutomationDefinition): Promise<void> {
     await db('automations').insert({
       id: automation.id,
@@ -193,6 +231,7 @@ export class PostgresAutomationRepository implements AutomationRepository {
       agentId: row.agent_id,
       cronExpression: row.cron_expression,
       lastRun: parseInt(row.last_run || 0, 10),
+      createdAt: Number(row.createdAt ?? row.createdat ?? 0),
       trigger: params?.trigger || 'CRON',
       conditions: params?.conditions || {},
       objective: params?.objective || '',

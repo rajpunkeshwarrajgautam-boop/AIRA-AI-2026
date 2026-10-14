@@ -162,12 +162,17 @@ export const AutomationsView: React.FC = () => {
           agentId: formAgentId,
           objective: formObjective.trim(),
           approvalPolicy: formApproval,
+          conditions: { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
           enabled: true
         })
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || 'Failed to create automation.');
+      }
+      const receipt = await res.json();
+      if (receipt.alreadyExists) {
+        alert('This reminder already exists with the same objective, time, and time zone. No duplicate was created.');
       }
       setIsCreateOpen(false);
       setFormName('');
@@ -293,7 +298,7 @@ export const AutomationsView: React.FC = () => {
                     <div className="flex flex-wrap items-center gap-4 pt-1 text-[11px] font-mono text-claude-muted-light dark:text-claude-muted-dark">
                       <div className="flex items-center gap-1.5">
                         <Calendar className="w-3.5 h-3.5 text-claude-accentInk" />
-                        <span>Schedule: {formatScheduleText(auto.cronExpression)}</span>
+                        <span>Schedule: {formatScheduleText(auto.cronExpression)} {auto.conditions?.timeZone ? `(${auto.conditions.timeZone})` : '(time zone not specified)'}</span>
                       </div>
                       <div className="flex items-center gap-1.5">
                         <Activity className="w-3.5 h-3.5 text-claude-accentInk" />

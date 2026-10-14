@@ -126,6 +126,28 @@ app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
+// Scheduler entry point: inaccessible without a server-to-server CRON_SECRET.
+// Registered above the session principal middleware so Vercel Cron can authenticate
+// with its Authorization: Bearer header (no browser cookie).
+const executeCronCycle = async (req: Request, res: Response) => {
+  const secret = process.env.CRON_SECRET;
+  const supplied = req.headers.authorization?.replace(/^Bearer\s+/i, '') || '';
+  const expected = Buffer.from(secret || '');
+  const actual = Buffer.from(supplied);
+  if (!secret || secret.length < 32 || actual.length !== expected.length ||
+      !crypto.timingSafeEqual(expected, actual)) {
+    return res.status(401).json({ error: 'Unauthorized scheduler request' });
+  }
+  try {
+    const result = await automationEngine.runScheduledCronCycle();
+    return res.json({ status: 'CRON_CYCLE_EXECUTED', ...result, timestamp: Date.now() });
+  } catch {
+    return res.status(503).json({ error: 'Scheduled execution failed' });
+  }
+};
+app.get('/api/automations/cron/execute', executeCronCycle);
+app.post('/api/automations/cron/execute', executeCronCycle);
+
 // Enforce ExecutionPrincipal on all /api routes BELOW this point.
 // Routes registered above (health, ready) are public infrastructure probes.
 app.use('/api', createPrincipalMiddleware());
@@ -570,7 +592,7 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
 // -----------------------------------------------------------------------
 app.post('/api/chat/stream', async (req: Request, res: Response) => {
   try {
-    const { messages, history, prompt, model, extendedThinking, systemPrompt, contextSubgraph, attachments, conversationId } = req.body;
+    const { messages, history, prompt, model, extendedThinking, systemPrompt, contextSubgraph, attachments, conversationId, timeZone } = req.body;
     const promptText = prompt || (Array.isArray(messages)
       ? [...messages].reverse().find((m: any) => m.role === 'user')?.content || ''
       : '');
@@ -591,7 +613,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       conversationId: conversationId || undefined,
       attachments: Array.isArray(attachments) ? attachments : undefined,
       systemPrompt: (systemPrompt || '') + (contextSubgraph ? `\n\n${contextSubgraph}` : ''),
-      context: { history: contextHistory },
+      context: { history: contextHistory, timeZone: typeof timeZone === 'string' ? timeZone.slice(0, 100) : undefined },
       modelPolicy: {
         model: model || 'aira-auto',
         extendedThinking: Boolean(extendedThinking),
@@ -923,13 +945,21 @@ app.get('/api/automations', async (req: Request, res: Response) => {
 
 app.post('/api/automations', async (req: Request, res: Response) => {
   try {
+    if (process.env.VERCEL && (process.env.AIRA_SCHEDULER_ACTIVE !== 'true' ||
+        !process.env.CRON_SECRET || process.env.CRON_SECRET.length < 32)) {
+      return res.status(503).json({ error: 'Cloud reminder scheduler is not enabled; nothing was created' });
+    }
     const raw = {
       ...req.body,
-      principalId: req.body.principalId || req.principal?.userId || 'usr_anonymous'
+      principalId: req.principal!.userId,
+      conditions: {
+        ...(req.body.conditions || {}),
+        timeZone: req.body.conditions?.timeZone
+      }
     };
     const parsed = AutomationDefinitionSchema.omit({ id: true }).parse(raw);
-    const item = await automationEngine.createAutomation(parsed);
-    res.status(201).json(item);
+    const { automation, created } = await automationEngine.createOrFindMatchingAutomation(parsed);
+    res.status(created ? 201 : 200).json({ ...automation, alreadyExists: !created });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
@@ -994,15 +1024,7 @@ app.post('/api/automations/:id/disable', async (req: Request, res: Response) => 
   }
 });
 
-// Platform / Serverless cron execution endpoint
-app.post('/api/automations/cron/execute', async (_req: Request, res: Response) => {
-  try {
-    await automationEngine.runScheduledCronCycle();
-    res.json({ status: 'CRON_CYCLE_EXECUTED', timestamp: Date.now() });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
+// The authenticated scheduler route is registered before principal middleware.
 
 // -----------------------------------------------------------------------
 // Workflows — Server-Authoritative Execution Engine (Phase 18)
