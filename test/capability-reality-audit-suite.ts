@@ -233,7 +233,13 @@ async function runRealityAuditSuite() {
   }, principalA);
   await agentRuntime.startRun(runMission.id);
   const completedMission = await agentRuntime.getRun(runMission.id);
-  assert.strictEqual(completedMission?.state, 'COMPLETED');
+  assert.strictEqual(completedMission?.state, 'COMPLETED',
+    'Mission failed: ' + String(completedMission?.error || completedMission?.content?.slice(0, 120)) +
+    '; tools=' + JSON.stringify(completedMission?.toolCalls.map(call => call.name)) +
+    '; progress=' + JSON.stringify(completedMission?.context?.__airaMissionV1 && {
+      dispatched: completedMission.context.__airaMissionV1.dispatched,
+      verified: completedMission.context.__airaMissionV1.verified
+    }));
   assert.ok(completedMission?.stepCount >= 3, `Expected at least 3 steps in iterative mission, got ${completedMission?.stepCount}`);
   assert.ok(completedMission?.toolCalls.length >= 3, 'Multiple tool calls recorded');
   assert.ok(completedMission?.toolResults.length >= 3, 'Multiple tool results recorded');
