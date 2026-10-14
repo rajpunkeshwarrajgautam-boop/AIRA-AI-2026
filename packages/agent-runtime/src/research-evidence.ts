@@ -66,7 +66,9 @@ export function verifiedSearchCitationsFromToolResults(toolCalls: ToolCall[], to
       const source = hit as Record<string, unknown>;
       if (typeof source.url !== 'string') continue;
       let url: URL;
-      try { url = new URL(source.url); } catch { continue; }
+      // Treat provider-supplied URL text as untrusted: remove only trailing
+      // Markdown emphasis, then apply the strict HTTP(S) URL checks below.
+      try { url = new URL(source.url.trim().replace(/\*{2,}$/, '')); } catch { continue; }
       if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) continue;
 
       const snippet = typeof source.snippet === 'string' ? source.snippet
