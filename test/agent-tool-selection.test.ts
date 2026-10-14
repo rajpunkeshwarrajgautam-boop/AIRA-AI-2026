@@ -73,4 +73,14 @@ assert.equal(selectMissionFollowUp('Find the latest published battery research a
 assert.deepEqual(select('Find the latest published battery research and summarize it.', 'AGENT_MISSION'),
   { ok: true, name: 'web_search', args: { query: 'Find the latest published battery research and summarize it.' } });
 
+assert.equal(select('hang safe').ok, false, 'Do not expose diagnostic hang tools by default');
+assert.deepEqual(
+  selectExecutableTool('hang safe', 'TOOL_ACTION', { allowDiagnosticTools: true }),
+  { ok: true, name: 'hang_safe', args: {} }
+);
+assert.deepEqual(
+  selectExecutableTool('hang unsafe', 'TOOL_ACTION', { allowDiagnosticTools: true }),
+  { ok: true, name: 'hang_unsafe', args: {} }
+);
+
 console.log('PASS: 8 grounded selections, ambiguous-target guards and multi-step mission rejection');
