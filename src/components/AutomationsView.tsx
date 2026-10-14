@@ -298,7 +298,7 @@ export const AutomationsView: React.FC = () => {
                     <div className="flex flex-wrap items-center gap-4 pt-1 text-[11px] font-mono text-claude-muted-light dark:text-claude-muted-dark">
                       <div className="flex items-center gap-1.5">
                         <Calendar className="w-3.5 h-3.5 text-claude-accentInk" />
-                        <span>Schedule: {formatScheduleText(auto.cronExpression)}</span>
+                        <span>Schedule: {formatScheduleText(auto.cronExpression)} {auto.conditions?.timeZone ? `(${auto.conditions.timeZone})` : '(time zone not specified)'}</span>
                       </div>
                       <div className="flex items-center gap-1.5">
                         <Activity className="w-3.5 h-3.5 text-claude-accentInk" />
