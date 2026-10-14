@@ -177,17 +177,33 @@ export class ConversationSearchRepository {
         .where({ principal_id: principalId, client_id: clientConversationId })
         .first();
 
-      // This is a full-snapshot replacement API, not an append-only message API.
-      // Treat an equal or older version as idempotent/no-op rather than resetting
-      // metadata or deleting newer messages on a late HTTP retry.
-      if (existingConversation && Number(existingConversation.updated_at) >= input.updatedAt) {
-        return;
+      // Older snapshots cannot erase newer data. Millisecond timestamp collisions
+      // still allow strict append-only message supersets, without overwriting
+      // existing messages or metadata. Ambiguous equal-version edits are rejected.
+      let equalTimestampAppend = false;
+      if (existingConversation) {
+        const storedVersion = Number(existingConversation.updated_at);
+        if (storedVersion > input.updatedAt) return;
+        if (storedVersion === input.updatedAt) {
+          if (existingConversation.deleted_at != null) return;
+          const stored = await trx('conversation_messages')
+            .where({ principal_id: principalId, conversation_id: existingConversation.id })
+            .select('client_message_id');
+          const existingIds = new Set(stored.map(row => String(row.client_message_id)));
+          const incomingIds = new Set(messages
+            .filter(message => message.role === 'user' || message.role === 'assistant')
+            .map(message => message.id?.trim())
+            .filter((id): id is string => Boolean(id)));
+          equalTimestampAppend = incomingIds.size > existingIds.size &&
+            [...existingIds].every(id => incomingIds.has(id));
+          if (!equalTimestampAppend) return;
+        }
       }
 
       const conversationStorageId =
         existingConversation?.id || lockKey;
 
-      await trx('conversations')
+      if (!equalTimestampAppend) await trx('conversations')
         .insert({
           id: conversationStorageId,
           client_id: clientConversationId,
@@ -253,6 +269,10 @@ export class ConversationSearchRepository {
             client_message_id: clientMessageId
           })
           .first();
+
+        // Preserve existing content, embeddings and provenance on same-version
+        // retries; only genuinely new message IDs are eligible for appending.
+        if (equalTimestampAppend && existingMessage) continue;
 
         const messageStorageId =
           existingMessage?.id || storageId('message', principalId, clientMessageId);
