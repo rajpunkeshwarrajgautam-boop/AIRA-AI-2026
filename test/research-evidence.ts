@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { ResearchService } from '../packages/agent-runtime/src/research.js';
 import { searchWeb } from '../packages/tool-runtime/src/search-providers.js';
-import { buildResearchEvidenceContext, buildResearchSourcesAppendix, isResearchToolCallDump, renderGroundedResearchFallback } from '../packages/agent-runtime/src/research-evidence.js';
+import { buildResearchEvidenceContext, buildResearchSourcesAppendix, isResearchToolCallDump, renderGroundedResearchFallback, verifiedSearchCitationsFromToolResults } from '../packages/agent-runtime/src/research-evidence.js';
 
 async function run() {
   const credentials = { tavilyApiKey: 'stub-primary', exaApiKey: 'stub-fallback' };
@@ -57,7 +57,26 @@ async function run() {
     assert.match(renderGroundedResearchFallback(research.citations), /retrieved excerpts/);
     assert.ok(!buildResearchSourcesAppendix([{ ...research.citations[0], provenance: undefined }]).includes('nasa.gov'),
       'Never identify fabricated citations as verified web evidence');
-    console.log('PASS: live source propagation, dates, links, single invocation, and JSON search-loop suppression');
+
+    const toolEvidence = verifiedSearchCitationsFromToolResults(
+      [{ id: 'call_real', name: 'web_search', arguments: { query: 'NASA' }, timestamp: 123 } as any],
+      [{ toolCallId: 'call_real', timestamp: 124, isError: false, output: result } as any]
+    );
+    assert.equal(toolEvidence.length, 2);
+    assert.equal(toolEvidence[0].provenance?.toolCallId, 'call_real');
+    assert.equal(toolEvidence[0].uri, 'https://www.nasa.gov/artemis-ii/');
+    assert.equal(verifiedSearchCitationsFromToolResults(
+      [{ id: 'failed', name: 'web_search', arguments: {}, timestamp: 123 } as any],
+      [{ toolCallId: 'failed', timestamp: 123, isError: true, output: result } as any]
+    ).length, 0, 'Failed calls never generate verifiable citations');
+    assert.equal(verifiedSearchCitationsFromToolResults(
+      [{ id: 'not_web', name: 'calculator', arguments: {}, timestamp: 123 } as any],
+      [{ toolCallId: 'not_web', timestamp: 123, isError: false, output: result } as any]
+    ).length, 0);
+    assert.equal(isResearchToolCallDump('{"tool":"web_search","args":{"query":"NASA Artemis II"}}'), true);
+    assert.equal(isResearchToolCallDump('[{"tool":"exa_search","args":{"query":"NASA"}},{"tool":"web_search","args":{"query":"moon"}}]'), true);
+    assert.equal(isResearchToolCallDump('The mission needs primary NASA sources.'), false);
+    console.log('PASS: live source propagation, executed-tool evidence, and JSON suppression');
   } finally {
     if (originalTavily === undefined) delete process.env.TAVILY_API_KEY;
     else process.env.TAVILY_API_KEY = originalTavily;

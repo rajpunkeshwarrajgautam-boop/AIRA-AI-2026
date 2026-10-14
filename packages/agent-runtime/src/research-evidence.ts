@@ -1,4 +1,4 @@
-import type { Citation } from '../../contracts/src/index.js';
+import type { Citation, ToolCall, ToolResult } from '../../contracts/src/index.js';
 
 export type ResearchTopic = 'FINANCIAL' | 'WEATHER' | 'BOX_OFFICE' | 'GENERAL';
 
@@ -20,6 +20,49 @@ export function verifiedWebCitations(citations: Citation[]): Citation[] {
       return false;
     }
   }).slice(0, 5);
+}
+
+
+/** Derive verifiable citations only from completed search tool results, never model-generated tool JSON. */
+export function verifiedSearchCitationsFromToolResults(toolCalls: ToolCall[], toolResults: ToolResult[]): Citation[] {
+  const citations: Citation[] = [];
+  for (const [index, result] of toolResults.entries()) {
+    const call = toolCalls[index];
+    if (!call || !['web_search', 'tavily_search', 'exa_search'].includes(call.name) || result.isError) continue;
+    const output = result.output;
+    if (!output || typeof output !== 'object') continue;
+    const hits = (output as { results?: unknown }).results;
+    if (!Array.isArray(hits)) continue;
+    for (const hit of hits) {
+      if (!hit || typeof hit !== 'object') continue;
+      const source = hit as Record<string, unknown>;
+      if (typeof source.url !== 'string') continue;
+      let url: URL;
+      try { url = new URL(source.url); } catch { continue; }
+      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) continue;
+      const snippet = typeof source.snippet === 'string' ? source.snippet
+        : typeof source.description === 'string' ? source.description
+        : typeof source.text === 'string' ? source.text
+        : typeof source.content === 'string' ? source.content : '';
+      const publishedDate = typeof source.publishedDate === 'string' && /^\d{4}-\d{2}-\d{2}/.test(source.publishedDate)
+        ? source.publishedDate.slice(0, 10) : undefined;
+      citations.push({
+        id: `executed_web_${call.id}_${citations.length}`,
+        sourceId: `executed_web_${citations.length}`,
+        sourceTitle: normalizeSourceTitle(typeof source.title === 'string' ? source.title : url.hostname),
+        uri: url.href,
+        ...(publishedDate ? { publishedDate } : {}),
+        snippet: normalizeSnippetText(snippet),
+        score: 1.0,
+        provenance: {
+          toolCallId: result.toolCallId || call.id,
+          retrievalMechanism: 'web_search',
+          timestamp: result.timestamp || call.timestamp
+        }
+      });
+    }
+  }
+  return verifiedWebCitations(citations);
 }
 
 /**
@@ -513,9 +556,13 @@ export function buildResearchSourcesAppendix(citations: Citation[]): string {
 export function isResearchToolCallDump(text: string): boolean {
   const trimmed = text.trim();
   const matches = trimmed.match(/"query"\s*:/g) || [];
-  return matches.length >= 2 && /"max_results"\s*:|"region"\s*:|"pages"\s*:/.test(trimmed) ||
-    /^\{\s*"query"\s*:\s*"[^"]+"[\s\S]*\}\s*$/.test(trimmed) &&
-    /"max_results"\s*:|"region"\s*:|"pages"\s*:/.test(trimmed);
+  const explicitSearchTool = /"(?:tool|name)"\s*:\s*"(?:web_search|tavily_search|exa_search)"/i.test(trimmed);
+  const jsonEnvelope = trimmed.startsWith('{') || trimmed.startsWith('[') || trimmed.startsWith('```');
+  const repeatedToolRequests = (trimmed.match(/"(?:tool|name)"\s*:/g) || []).length >= 2;
+  if (explicitSearchTool && (jsonEnvelope || repeatedToolRequests)) return true;
+  const hasQueryParameters = /"max_results"\s*:|"region"\s*:|"pages"\s*:/.test(trimmed);
+  return (matches.length >= 2 && hasQueryParameters) ||
+    (/^\{\s*"query"\s*:\s*"[^"]+"[\s\S]*\}\s*$/.test(trimmed) && hasQueryParameters);
 }
 
 export function renderGroundedResearchFallback(citations: Citation[]): string {
