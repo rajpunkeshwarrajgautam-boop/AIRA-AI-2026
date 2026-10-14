@@ -33,9 +33,17 @@ function executable(name: string, args: Record<string, unknown>): ExecutableTool
 
 export function selectExecutableTool(
   rawPrompt: string,
-  intent: 'TOOL_ACTION' | 'AGENT_MISSION'
+  intent: 'TOOL_ACTION' | 'AGENT_MISSION',
+  options: { allowDiagnosticTools?: boolean } = {}
 ): ToolSelection {
   const prompt = rawPrompt.trim();
+
+  // Controlled test fixtures for crash/recovery certification only.
+  // These hang-inducing tools are never selected for public production requests.
+  if (options.allowDiagnosticTools) {
+    if (/^hang safe$/i.test(prompt)) return executable('hang_safe', {});
+    if (/^hang unsafe$/i.test(prompt)) return executable('hang_unsafe', {});
+  }
 
   if (/\b(mouse\s+click|desktop\s+coordinate|computer\s+use|screen\s+coordinate|os\s+control|native\s+app\s+control)\b/i.test(prompt)) {
     return unresolved('COMPUTER_USE_NOT_AVAILABLE', 'Native desktop control requires an attached, verified computer-use runtime.');
