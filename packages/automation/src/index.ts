@@ -2,7 +2,8 @@ import * as crypto from 'crypto';
 import { AutomationDefinition, AutomationRun } from '../../contracts/src/index.js';
 import { AgentRuntime } from '../../agent-runtime/src/index.js';
 import { AutomationRepository, AutomationRunRepository } from './repositories.js';
-import parser from 'cron-parser';
+import { CronExpressionParser } from 'cron-parser';
+import { validTimeZone } from './reminder-intent.js';
 
 export class AutomationEngine {
   private timerHandle: NodeJS.Timeout | null = null;
@@ -26,14 +27,28 @@ export class AutomationEngine {
     return item;
   }
 
-  public async createAutomation(input: Omit<AutomationDefinition, 'id'>): Promise<AutomationDefinition> {
-    const id = `auto_${crypto.randomUUID().slice(0, 8)}`;
-    const automation: AutomationDefinition = {
-      ...input,
-      id
-    };
+  public async createAutomationWithReceipt(input: Omit<AutomationDefinition, 'id'>): Promise<{ automation: AutomationDefinition; created: boolean }> {
+    if (!input.principalId) throw new Error('An authenticated principal is required.');
+    if (input.trigger === 'CRON') {
+      if (!input.cronExpression) throw new Error('A recurring automation requires a cron expression.');
+      const timeZone = validTimeZone(input.conditions?.timeZone);
+      if (!timeZone) throw new Error('A valid IANA timezone is required for recurring schedules.');
+      CronExpressionParser.parse(input.cronExpression, { tz: timeZone }).next();
+    }
+    if (this.autoRepo.createIfMissing) return this.autoRepo.createIfMissing(input);
+    const existing = (await this.autoRepo.listAutomations(input.principalId)).find(item =>
+      item.enabled && item.objective === input.objective &&
+      item.cronExpression === input.cronExpression &&
+      item.conditions?.timeZone === input.conditions?.timeZone
+    );
+    if (existing) return { automation: existing, created: false };
+    const automation: AutomationDefinition = { ...input, id: `auto_${crypto.randomUUID().slice(0, 12)}` };
     await this.autoRepo.saveAutomation(automation);
-    return automation;
+    return { automation, created: true };
+  }
+
+  public async createAutomation(input: Omit<AutomationDefinition, 'id'>): Promise<AutomationDefinition> {
+    return (await this.createAutomationWithReceipt(input)).automation;
   }
 
   public async toggleAutomation(id: string, enabled: boolean, principalId?: string): Promise<AutomationDefinition> {
@@ -94,6 +109,24 @@ export class AutomationEngine {
     }
 
     try {
+      if (item.conditions?.kind === 'REMINDER') {
+        if (!item.principalId || !this.runRepo.publishNotification) {
+          throw new Error('REMINDER_DELIVERY_NOT_CONFIGURED');
+        }
+        await this.runRepo.publishNotification({
+          automationRunId: claim.id,
+          automationId: item.id,
+          principalId: item.principalId,
+          title: item.name,
+          message: item.objective,
+          scheduledFor
+        });
+        claim.status = 'COMPLETED';
+        claim.completedAt = Date.now();
+        await this.runRepo.saveRun(claim);
+        await this.autoRepo.updateLastRun(item.id, scheduledFor);
+        return claim.id; // durable automation run, not a model-run ID
+      }
       const run = await this.agentRuntime.createRun({
         intent: 'AGENT_MISSION',
         prompt: `[Automated Trigger: ${item.name}]\nObjective: ${item.objective}`,
@@ -125,7 +158,7 @@ export class AutomationEngine {
       }
       await this.runRepo.saveRun(claim);
 
-      item.lastRun = Date.now();
+      item.lastRun = scheduledFor;
       await this.autoRepo.updateLastRun(item.id, item.lastRun);
       return run.id;
     } catch (err: any) {
@@ -168,15 +201,22 @@ export class AutomationEngine {
       for (const auto of dueAutomations) {
         if (!auto.cronExpression) continue;
         try {
-          const interval = parser.parseExpression(auto.cronExpression);
-          const prevRunTime = interval.prev().getTime();
-
+          const timeZone = validTimeZone(auto.conditions?.timeZone);
+          if (!timeZone) throw new Error('Missing or invalid automation timezone');
+          const now = Date.now();
+          const prevRunTime = CronExpressionParser.parse(auto.cronExpression, {
+            currentDate: new Date(now + 1000),
+            tz: timeZone
+          }).prev().getTime();
+          const notBefore = Number(auto.conditions?.notBefore || 0);
+          // Ignore prior slots before creation; process a recently due slot once.
+          if (prevRunTime <= notBefore || prevRunTime > now || now - prevRunTime > 5 * 60_000) continue;
           if (!auto.lastRun || auto.lastRun < prevRunTime) {
-            const claim = await this.runRepo.claimRun(auto.id, prevRunTime);
-            if (claim) {
-              console.log(`[AutomationEngine] Triggering cron automation: ${auto.name}`);
+            try {
               const runId = await this.triggerNow(auto.id, prevRunTime);
               triggered.push(runId);
+            } catch (error: any) {
+              if (!String(error?.message).includes('already claimed')) throw error;
             }
           }
         } catch (e: any) {
