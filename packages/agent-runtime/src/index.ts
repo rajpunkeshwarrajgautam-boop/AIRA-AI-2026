@@ -424,8 +424,8 @@ export class AgentRuntime extends EventEmitter {
 
         // Vercel freezes background timers. Never pretend a cloud reminder is
         // active without an authenticated external scheduler configuration.
-        if (process.env.VERCEL && (!process.env.CRON_SECRET || process.env.CRON_SECRET.length < 32)) {
-          const msg = 'I cannot activate cloud reminders yet because the scheduler is not configured. Nothing was scheduled.';
+        if (process.env.VERCEL && (process.env.AIRA_SCHEDULER_ACTIVE !== 'true' || !process.env.CRON_SECRET || process.env.CRON_SECRET.length < 32)) {
+          const msg = 'I cannot activate cloud reminders yet because a minute-precision scheduler has not been connected. Nothing was scheduled.';
           run.content = msg;
           run.executionCheckpoint = 'COMPLETED';
           await this.runRepo.saveRun(run);
