@@ -1,15 +1,19 @@
 import * as crypto from 'crypto';
-import {
+import type {
   KnowledgeSource,
   KnowledgeChunk,
   KnowledgeEntity,
   KnowledgeEdge,
   MemoryRecord,
-  Citation
+  Citation,
+  PrincipalScope
 } from '../../contracts/src/index.js';
-import { KnowledgeRepository, PostgresKnowledgeRepository } from './repositories.js';
+import { PrincipalScopeSchema } from '../../contracts/src/index.js';
+import { KnowledgeRepository, PostgresKnowledgeRepository, InMemoryKnowledgeRepository } from './repositories.js';
 
 export * from './repositories.js';
+export type { PrincipalScope };
+export { PrincipalScopeSchema };
 
 export class BrainV2KnowledgeEngine {
   private repo: KnowledgeRepository;
@@ -18,6 +22,10 @@ export class BrainV2KnowledgeEngine {
     this.repo = repo || new PostgresKnowledgeRepository();
     // Default seed is now handled asynchronously or by migration, but we can fire and forget if empty
     this.seedDefaultKnowledge().catch(console.error);
+  }
+
+  public getRepository(): KnowledgeRepository {
+    return this.repo;
   }
 
   public computeSha256(content: string): string {
@@ -29,14 +37,24 @@ export class BrainV2KnowledgeEngine {
     rawContent: string,
     mimeType = 'text/markdown',
     uri?: string,
-    projectId?: string
+    projectId?: string,
+    scope?: PrincipalScope
   ): Promise<{ source: KnowledgeSource; chunks: KnowledgeChunk[] }> {
     const sourceId = `src_${crypto.randomUUID().slice(0, 8)}`;
     const contentHash = this.computeSha256(rawContent);
     const now = Date.now();
 
+    const isSystem = Boolean(scope?.isSystem);
+    const principalId = scope?.principalId || (isSystem ? 'system' : 'anonymous');
+    const workspaceId = scope?.workspaceId;
+    const visibility = isSystem ? 'system' : (workspaceId ? 'workspace' : 'private');
+
     const source: KnowledgeSource = {
       id: sourceId,
+      principalId,
+      workspaceId,
+      isSystem,
+      visibility: visibility as any,
       projectId,
       title,
       uri: uri || `aira://knowledge/sources/${sourceId}`,
@@ -62,6 +80,8 @@ export class BrainV2KnowledgeEngine {
       const chunk: KnowledgeChunk = {
         id: chunkId,
         sourceId,
+        principalId,
+        isSystem,
         chunkIndex,
         text,
         tokenCount: Math.max(1, Math.ceil(text.length / 4)),
@@ -75,18 +95,20 @@ export class BrainV2KnowledgeEngine {
     await this.repo.upsertSource(source);
     await this.repo.replaceChunks(sourceId, createdChunks);
 
-    await this.extractEntitiesFromContent(sourceId, rawContent);
+    await this.extractEntitiesFromContent(sourceId, rawContent, scope);
 
     return { source, chunks: createdChunks };
   }
 
-  public async search(query: string, limit = 5): Promise<{ chunk: KnowledgeChunk; score: number; citation: Citation }[]> {
+  public async search(
+    query: string,
+    limit = 5,
+    scope?: PrincipalScope
+  ): Promise<{ chunk: KnowledgeChunk; score: number; citation: Citation }[]> {
     const terms = query.toLowerCase().split(/\s+/).filter(t => t.length > 2);
     if (terms.length === 0) return [];
     
-    // We can just grab all chunks and do in-memory scoring for now, 
-    // or use searchChunks. We'll use searchChunks with the first term to limit, then score.
-    const searchResults = await this.repo.searchChunks(terms[0], 50);
+    const searchResults = await this.repo.searchChunks(terms[0], 50, scope);
     const results: { chunk: KnowledgeChunk; score: number; citation: Citation }[] = [];
 
     for (const chunk of searchResults) {
@@ -98,15 +120,17 @@ export class BrainV2KnowledgeEngine {
 
       if (matchCount > 0) {
         const score = Math.min(1.0, matchCount / Math.max(1, terms.length));
-        const src = await this.repo.getSource(chunk.sourceId);
+        const src = await this.repo.getSource(chunk.sourceId, scope);
+        if (!src) continue; // Denied / inaccessible under principal scope
+
         results.push({
           chunk,
           score,
           citation: {
             id: `cite_${chunk.id}`,
             sourceId: chunk.sourceId,
-            sourceTitle: src?.title || 'System Source',
-            uri: src?.uri,
+            sourceTitle: src.title || 'System Source',
+            uri: src.uri,
             snippet: chunk.text.slice(0, 160) + (chunk.text.length > 160 ? '...' : ''),
             score
           }
@@ -117,11 +141,19 @@ export class BrainV2KnowledgeEngine {
     return results.sort((a, b) => b.score - a.score).slice(0, limit);
   }
 
-  public async addEntity(name: string, type: string, sourceId: string): Promise<KnowledgeEntity> {
-    const id = `ent_${name.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+  public async addEntity(
+    name: string,
+    type: string,
+    sourceId: string,
+    scope?: PrincipalScope
+  ): Promise<KnowledgeEntity> {
+    const isSystem = Boolean(scope?.isSystem);
+    const principalId = scope?.principalId || (isSystem ? 'system' : 'anonymous');
+    const workspaceId = scope?.workspaceId;
+    const id = `ent_${principalId ? `${principalId}_` : ''}${name.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
     const now = Date.now();
     
-    const entities = await this.repo.listEntities();
+    const entities = await this.repo.listEntities(scope);
     let existing = entities.find(e => e.id === id);
     
     if (existing) {
@@ -135,6 +167,9 @@ export class BrainV2KnowledgeEngine {
 
     const entity: KnowledgeEntity = {
       id,
+      principalId,
+      workspaceId,
+      isSystem,
       name,
       type,
       confidence: 0.95,
@@ -153,10 +188,15 @@ export class BrainV2KnowledgeEngine {
     targetEntityId: string,
     relation: string,
     provenanceSourceId: string,
-    confidence = 1.0
+    confidence = 1.0,
+    scope?: PrincipalScope
   ): Promise<KnowledgeEdge> {
+    const isSystem = Boolean(scope?.isSystem);
+    const principalId = scope?.principalId || (isSystem ? 'system' : 'anonymous');
     const edge: KnowledgeEdge = {
       id: `edge_${crypto.randomUUID().slice(0, 8)}`,
+      principalId,
+      isSystem,
       sourceEntityId,
       targetEntityId,
       relation,
@@ -168,31 +208,47 @@ export class BrainV2KnowledgeEngine {
     return edge;
   }
 
-  public async getKnowledgeGraph() {
+  public async getKnowledgeGraph(scope?: PrincipalScope) {
     return {
-      entities: await this.repo.listEntities(),
-      edges: await this.repo.listEdges()
+      entities: await this.repo.listEntities(scope),
+      edges: await this.repo.listEdges(scope)
     };
   }
 
-  public async getSources(): Promise<KnowledgeSource[]> {
-    return await this.repo.listSources();
+  public async getSources(scope?: PrincipalScope): Promise<KnowledgeSource[]> {
+    return await this.repo.listSources(scope);
   }
 
-  public async getMemories(): Promise<MemoryRecord[]> {
-    return await this.repo.listMemories();
+  public async getSource(id: string, scope?: PrincipalScope): Promise<KnowledgeSource | undefined> {
+    return await this.repo.getSource(id, scope);
+  }
+
+  public async deleteSource(id: string, scope?: PrincipalScope): Promise<boolean> {
+    return await this.repo.deleteSource(id, scope);
+  }
+
+  public async getMemories(scope?: PrincipalScope): Promise<MemoryRecord[]> {
+    return await this.repo.listMemories(scope);
   }
 
   public async saveMemory(
     key: string,
     value: string,
     category: 'fact' | 'decision' | 'preference' | 'pattern' | 'constraint' = 'fact',
-    provenance = 'system'
+    provenance = 'system',
+    scope?: PrincipalScope
   ): Promise<MemoryRecord> {
     const id = `mem_${crypto.randomUUID().slice(0, 8)}`;
     const now = Date.now();
+    const isSystem = Boolean(scope?.isSystem);
+    const principalId = scope?.principalId || (isSystem ? 'system' : 'anonymous');
+    const workspaceId = scope?.workspaceId;
+
     const item: MemoryRecord = {
       id,
+      principalId,
+      workspaceId,
+      isSystem,
       key,
       value,
       category,
@@ -206,28 +262,31 @@ export class BrainV2KnowledgeEngine {
     return item;
   }
 
-  private async extractEntitiesFromContent(sourceId: string, content: string): Promise<void> {
-    const srcEnt = await this.addEntity(`src_${sourceId}`, 'source', sourceId);
+  private async extractEntitiesFromContent(sourceId: string, content: string, scope?: PrincipalScope): Promise<void> {
+    const srcEnt = await this.addEntity(`src_${sourceId}`, 'source', sourceId, scope);
     const keywords = ['AIRA', 'Rowboat', 'ModelRouter', 'ToolRuntime', 'Approvals', 'BrainV2', 'SSE', 'Vite'];
     for (const kw of keywords) {
       if (content.includes(kw)) {
-        const ent = await this.addEntity(kw, 'concept', sourceId);
-        await this.addEdge(srcEnt.id, ent.id, 'REFERENCES', sourceId, 0.95);
+        const ent = await this.addEntity(kw, 'concept', sourceId, scope);
+        await this.addEdge(srcEnt.id, ent.id, 'REFERENCES', sourceId, 0.95, scope);
       }
     }
   }
 
   private async seedDefaultKnowledge(): Promise<void> {
-    const sources = await this.repo.listSources();
+    const systemScope: PrincipalScope = { isSystem: true, principalId: 'system' };
+    const sources = await this.repo.listSources(systemScope);
     if (sources.length === 0) {
       await this.ingestDocument(
         'AIRA Architecture Guide',
         'Aira AI is an autonomous operating workspace uniting intelligence, deterministic run execution, and human oversight. Subsystems include Model Router, Tool Runtime with permission isolation, Approval Kernel, MCP Host, and Brain v2 Knowledge Engine.',
         'text/markdown',
-        'aira://system/docs/architecture'
+        'aira://system/docs/architecture',
+        undefined,
+        systemScope
       );
-      await this.saveMemory('workspace_identity', 'Aira AI — One workspace. Every intelligence.', 'pattern');
-      await this.saveMemory('execution_boundary', 'Zero client-side secrets. Server-authoritative runs only.', 'constraint');
+      await this.saveMemory('workspace_identity', 'Aira AI — One workspace. Every intelligence.', 'pattern', 'system', systemScope);
+      await this.saveMemory('execution_boundary', 'Zero client-side secrets. Server-authoritative runs only.', 'constraint', 'system', systemScope);
     }
   }
 }

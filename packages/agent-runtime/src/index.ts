@@ -522,7 +522,8 @@ export class AgentRuntime extends EventEmitter {
           prompt: researchPrompt,
           runId,
           topic,
-          location: topic === 'WEATHER' ? (detectedSubject || undefined) : undefined
+          location: topic === 'WEATHER' ? (detectedSubject || undefined) : undefined,
+          principal: run.principal
         });
 
         if (researchResult.freshnessRequired && !researchResult.providerReady) {
@@ -547,7 +548,8 @@ export class AgentRuntime extends EventEmitter {
           run.toolResults.push(...researchResult.toolResults);
         }
       } else {
-        const knowledgeResults = await this.knowledgeEngine.search(run.prompt, 3);
+        const scope = run.principal ? { principalId: run.principal.userId, workspaceId: run.principal.workspaceId, isSystem: false } : undefined;
+        const knowledgeResults = await this.knowledgeEngine.search(run.prompt, 3, scope);
         run.citations = knowledgeResults.map(r => r.citation);
       }
       run.executionCheckpoint = 'KNOWLEDGE_READY';

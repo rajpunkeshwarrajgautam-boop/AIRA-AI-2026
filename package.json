@@ -16,6 +16,8 @@
     "test:recovery": "npx tsx test/recovery.ts",
     "test:identity": "npx tsx test/identity.ts",
     "test:session-auth": "npx tsx test/session-auth.ts",
+    "test:knowledge-isolation": "npx tsx test/knowledge-isolation.test.ts",
+    "test:seo": "npx tsx test/seo-metadata.test.ts",
     "test:model-routing": "npx tsx test/model-router-provider-routing.ts",
     "test:router": "npx tsx test/intent-router.ts",
     "test:workflow": "npx tsx test/workflow-engine.ts",
