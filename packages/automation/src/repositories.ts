@@ -114,7 +114,7 @@ export class PostgresAutomationRepository implements AutomationRepository {
     return db.transaction(async trx => {
       await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', ['aira-automation-' + automation.principalId]);
       const rows = await trx('automations').select('*');
-      const normalize = (s: string) => s.trim().replace(/\\s+/g, ' ').toLowerCase();
+      const normalize = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase();
       const existing = rows.map(row => this.mapToAutomation(row)).find(item =>
         item.principalId === automation.principalId &&
         item.enabled &&
