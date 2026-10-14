@@ -132,6 +132,26 @@ async function run() {
       { toolCallId: 'call_alpha_fallback_browser_navigate', timestamp: 120, isError: false, output: result }
     ] as any).length, 0, 'Unapproved fallback tool cannot become verified web evidence');
 
+    const decoratedResult = await searchWeb('NASA updates', { tavilyApiKey: 'stub-only' }, (async () => ({
+      ok: true,
+      json: async () => ({
+        results: [{
+          title: 'Official NASA mission',
+          url: 'https://www.nasa.gov/mission/artemis-ii/**',
+          content: 'Test source URL with Markdown emphasis accidentally appended.'
+        }]
+      })
+    })) as typeof fetch);
+    assert.equal(decoratedResult.results[0].url, 'https://www.nasa.gov/mission/artemis-ii/',
+      'Provider-normalized source URLs must not retain Markdown delimiter artifacts');
+    const decoratedEvidence = verifiedSearchCitationsFromToolResults(
+      [{ id: 'call_decorated', name: 'web_search', arguments: {}, timestamp: 10 } as any],
+      [{ toolCallId: 'call_decorated', isError: false, timestamp: 11,
+        output: { results: [{ url: 'https://www.nasa.gov/mission/artemis-ii/**', title: 'NASA', snippet: 'NASA source' }] } } as any]
+    );
+    assert.equal(decoratedEvidence[0]?.uri, 'https://www.nasa.gov/mission/artemis-ii/',
+      'Receipt-to-citation validation must independently canonicalize source URLs');
+
     console.log('PASS: live source propagation, executed-tool evidence, and JSON suppression');
   } finally {
     if (originalTavily === undefined) delete process.env.TAVILY_API_KEY;
