@@ -49,7 +49,9 @@
     "test:math-rendering": "npx tsx test/math-rendering.ts",
     "test:preview-identity": "npx tsx test/preview-identity-guard.ts",
     "test:research-evidence": "npx tsx test/research-evidence.ts",
-    "test:release-auth": "npx tsx test/release-authorization-guard.ts"
+    "test:release-auth": "npx tsx test/release-authorization-guard.ts",
+    "test:release-auth:unit": "npx tsx test/release-authorization-guard.test.ts",
+    "verify:release-auth": "npx tsx scripts/verify-release-authorization.ts"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",

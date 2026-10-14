@@ -31,12 +31,15 @@ ChatGPT Work, CI assistants and other development agents in this repository.
 
 ## Verified platform protection (2026-10-14)
 GitHub Pro is active. Ruleset `AIRA Production Protection` (ID `25079946`)
-is ACTIVE on `refs/heads/prod-release`, with NO bypass actors.
+is ACTIVE on `refs/heads/prod-release`.
 GitHub API verifies `prod-release.protected=true`, mandatory PRs,
 conversation resolution, Fast CI, Semantic Search CI and Main / PR
 certification, strict up-to-date checks, force-push and deletion denial.
 Approval count is 0 (sole maintainer); this is NOT independent reviewer
 approval or an explicit production deployment authorization.
+Note: "Zero bypass guarantees" must not be claimed; repository administrators
+retain organization-level management rights. The ruleset prevents accidental
+non-PR pushes and enforces CI gates before merge.
 
 Do NOT weaken this ruleset to merge a PR. If mandatory checks are missing,
 repair CI and verify that the exact commit has run all required checks.
@@ -55,14 +58,16 @@ Live Vercel API and project inspection confirm the following configuration:
 - Build database gate: `vercel.json` enforces `npm run db:verify:deploy` on production builds
   prior to `npm run build`. Builds fail and abort if Neon PostgreSQL migrations or schemas are missing.
 
-### Strict release consequence:
+### Strict release consequence & deployment reality:
 Because Vercel triggers a production deployment automatically upon receiving any commit on `prod-release`:
 1. **Merging a PR into `prod-release` IS the live production deployment trigger.**
+   Production deployment controls are NOT natively enforceable inside Vercel on the Hobby tier.
+   Upstream PR merge gating on GitHub is the primary barrier preventing unauthorized production deployment.
 2. No agent, automated script, or CI process may merge any PR into `prod-release` without prior,
    explicit, human GO LIVE authorization from repository owner `rajpunkeshwarrajgautam-boop`.
 3. Manual promotion via Vercel CLI (`vercel promote`) is strictly forbidden for agents.
-4. Programmatic release authorization guard `test/release-authorization-guard.ts` (`npm run test:release-auth`)
-   verifies that owner attestation workflow `.github/workflows/release-authorization.yml` has run with
-   exact phrase `GO LIVE <candidate_sha>`.
+4. **Separation of unit tests from live authorization**:
+   - `npm run test:release-auth:unit` runs in Fast CI to verify the authorization rules engine deterministically. Passing this test does NOT grant GO LIVE authorization.
+   - Authoritative live verification is executed via `npm run verify:release-auth -- --pr <num> --sha <sha>`, which verifies GitHub API evidence: open PR state, exact candidate SHA match, owner identity, and commit status `release/go-live-authorized` emitted by owner dispatch of `.github/workflows/release-authorization.yml`.
 5. An agent must STOP and present all verified evidence, awaiting human authorization.
 

@@ -22,7 +22,7 @@ Production stability is enforced server-side by GitHub Pro rulesets:
     1. `Fast CI`
     2. `Semantic Search CI`
     3. `Main / PR certification`
-- **Bypass Configuration**: `bypass_actors: []`, `current_user_can_bypass: "never"`.
+- **Bypass Configuration**: `bypass_actors: []`. Note: "Zero bypass guarantees" must not be claimed; repository administrators retain settings management privileges. The ruleset prevents non-PR pushes and enforces CI gates before merge.
 - **Maintainer Limitation Notice**:
   The repository has a single maintainer (`rajpunkeshwarrajgautam-boop`). Under GitHub's model, a PR author cannot review or approve their own pull request. Therefore `required_approving_review_count` is set to `0`. This is an accepted platform constraint and does NOT grant automated agents permission to merge.
 
@@ -45,10 +45,12 @@ Live inspection of Vercel project `aira-ai-2026` via authenticated API confirms:
   ```
   - Commits on `main` exit 0 (Vercel cancels the build).
   - Commits on `prod-release` exit 1 (Vercel builds and deploys immediately).
+  - *Operational Notice*: Ignored Build Step is an operational mechanism, not a tamper-proof security boundary.
 
 ### The Critical Vercel Hobby Constraint:
-Native Vercel Deployment Approvals and Promotion Protections are enterprise/pro features not present on the Hobby tier.
+Native Vercel Deployment Approvals, release-hold policies, and selective preview-only git deployments are enterprise/pro features not present on the Hobby tier.
 Because Vercel automatically builds and deploys any commit merged into `prod-release`, **merging a pull request into `prod-release` IS the live production deployment trigger.**
+Consequently, production deployment control is **NOT FULLY ENFORCEABLE natively at the Vercel hosting layer**. Protection relies entirely on upstream PR merge gating on GitHub.
 
 ### Database Schema Safeguard:
 In `vercel.json`:
@@ -75,12 +77,15 @@ To eliminate the risk of automated or accidental deployment, releases require ex
      - `pr_number`: Open PR targeting `prod-release`.
      - `candidate_sha`: Full 40-character lowercase hex SHA.
      - `approval_phrase`: Exact string `GO LIVE <candidate_sha>`.
-   - Execution: Asserts PR state, target branch, and HEAD match; generates an immutable step summary.
-3. **Programmatic Guard**:
-   - Location: `test/release-authorization-guard.ts`
-   - Script: `npm run test:release-auth`
-   - Test Coverage: 12 isolated security & policy boundary tests verifying fail-closed behavior across all input permutations.
-   - Fast CI Integration: Executed as a required check in `Fast CI`.
+   - Execution: Asserts PR state, target branch, and HEAD match; posts commit status `release/go-live-authorized` (`state: success`) on the candidate commit SHA; generates an immutable step summary.
+3. **Separation of Deterministic Unit Tests & Live Authorization Verification**:
+   - **Deterministic Unit Testing (`npm run test:release-auth:unit`)**:
+     - Executed in `Fast CI` to verify the authorization rules engine across 24 isolated security boundaries.
+     - Proves rules engine correctness in code, but does NOT grant GO LIVE authorization.
+   - **Live Authorization Verification (`npm run verify:release-auth -- --pr <num> --sha <sha>`)**:
+     - Location: `scripts/verify-release-authorization.ts`
+     - Queries authoritative GitHub REST API for open PR state, exact candidate SHA match, owner identity, commit status `release/go-live-authorized`, and fresh owner attestation workflow runs.
+     - Fails closed on any discrepancy.
 
 ---
 
