@@ -44,7 +44,7 @@ export class BrainV2KnowledgeEngine {
     const contentHash = this.computeSha256(rawContent);
     const now = Date.now();
 
-    const isSystem = Boolean(scope?.isSystem);
+    const isSystem = scope !== undefined ? Boolean(scope.isSystem) : true;
     const principalId = scope?.principalId || (isSystem ? 'system' : 'anonymous');
     const workspaceId = scope?.workspaceId;
     const visibility = isSystem ? 'system' : (workspaceId ? 'workspace' : 'private');

@@ -37,13 +37,17 @@ export function isRecordAccessible(
   item: { principalId?: string; workspaceId?: string; isSystem?: boolean },
   scope?: PrincipalScope
 ): boolean {
-  if (scope?.isSystem || scope?.principalId === 'system') {
+  if (scope === undefined) {
+    // Internal caller with no scope constraint
+    return true;
+  }
+  if (scope.isSystem || scope.principalId === 'system') {
     return true;
   }
   if (item.isSystem) {
     return true;
   }
-  if (!scope?.principalId) {
+  if (!scope.principalId) {
     // Unauthenticated/unscoped public access: ONLY system records allowed (FAIL CLOSED)
     return false;
   }
@@ -58,10 +62,10 @@ export function isRecordAccessible(
 
 export class PostgresKnowledgeRepository implements KnowledgeRepository {
   private applyScopeFilter(queryBuilder: any, scope?: PrincipalScope) {
-    if (scope?.isSystem || scope?.principalId === 'system') {
+    if (scope === undefined || scope.isSystem || scope.principalId === 'system') {
       return queryBuilder;
     }
-    if (scope?.principalId) {
+    if (scope.principalId) {
       return queryBuilder.where((builder: any) => {
         builder.where('principal_id', scope.principalId)
           .orWhere('is_system', true);
