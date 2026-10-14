@@ -20,9 +20,10 @@ import {
  * unauthorized, expired, unlinked, or forged authorization claims.
  */
 export async function runSecurityRegressionTests() {
-  console.log('[RELEASE_AUTH_TEST] Starting 37 isolated security & policy boundary tests...');
+  console.log('[RELEASE_AUTH_TEST] Starting 47 isolated security & policy boundary tests...');
 
   const validCandidateSha = 'bbf02ea572f4f710bec185890b8b86c45da15057';
+  const prodReleaseExecutionSha = 'b1635e132544d0772358cb463131d1e6cd4d40a9';
   const testPr = 64;
   const owner = AUTHORIZED_REPOSITORY_OWNER;
   const now = new Date('2026-10-14T15:00:00Z');
@@ -32,7 +33,9 @@ export async function runSecurityRegressionTests() {
     id: validRunId,
     name: AUTHORIZATION_WORKFLOW_NAME,
     path: '.github/workflows/release-authorization.yml',
-    head_sha: validCandidateSha,
+    head_branch: 'prod-release',
+    head_sha: prodReleaseExecutionSha,
+    display_title: `Release Authorization: PR #${testPr} [${validCandidateSha}] [GO LIVE ${validCandidateSha}]`,
     actor: owner,
     event: 'workflow_dispatch',
     status: 'completed',
@@ -579,23 +582,23 @@ export async function runSecurityRegressionTests() {
     console.log('  ✓ Test 34: Forged target_url with malformed run ID rejected');
   }
 
-  // Test 35: Workflow run head SHA mismatch rejected
+  // Test 35: Malformed workflow execution commit SHA rejected
   {
-    const mismatchedShaRun = createValidRun({
-      head_sha: '0000000000000000000000000000000000000000'
+    const invalidShaRun = createValidRun({
+      head_sha: 'invalid-non-hex-commit-sha'
     });
-    const runCheck = validateAttestationWorkflowRun(mismatchedShaRun, baseValidCtx);
+    const runCheck = validateAttestationWorkflowRun(invalidShaRun, baseValidCtx);
     assert.equal(runCheck.valid, false);
-    assert.equal(runCheck.code, 'RUN_HEAD_SHA_MISMATCH');
+    assert.equal(runCheck.code, 'INVALID_WORKFLOW_EXECUTION_SHA');
 
     const res = validateReleaseAuthorization({
       ...baseValidCtx,
-      workflowRuns: [mismatchedShaRun],
+      workflowRuns: [invalidShaRun],
       commitStatuses: [createValidStatus()]
     });
     assert.equal(res.authorized, false);
     assert.equal(res.code, 'NO_MATCHING_AUTHORIZATION_ATTESTATION');
-    console.log('  ✓ Test 35: Workflow run head SHA mismatch rejected');
+    console.log('  ✓ Test 35: Malformed workflow execution commit SHA rejected');
   }
 
   // Test 36: Workflow run repository mismatch rejected
@@ -635,7 +638,192 @@ export async function runSecurityRegressionTests() {
     console.log('  ✓ Test 37: Uncorrelated status and run timestamps (>15 min delta replay attack) rejected');
   }
 
-  console.log('[RELEASE_AUTH_TEST] All 37 security & policy boundary tests PASSED successfully.');
+  // Test 38: Workflow run dispatched on untrusted feature branch rejected
+  {
+    const featureBranchRun = createValidRun({
+      head_branch: 'feat/untrusted-release-bypass'
+    });
+    const runCheck = validateAttestationWorkflowRun(featureBranchRun, baseValidCtx);
+    assert.equal(runCheck.valid, false);
+    assert.equal(runCheck.code, 'UNTRUSTED_WORKFLOW_BRANCH');
+
+    const res = validateReleaseAuthorization({
+      ...baseValidCtx,
+      workflowRuns: [featureBranchRun],
+      commitStatuses: [createValidStatus()]
+    });
+    assert.equal(res.authorized, false);
+    assert.equal(res.code, 'NO_MATCHING_AUTHORIZATION_ATTESTATION');
+    console.log('  ✓ Test 38: Workflow run on untrusted feature branch rejected');
+  }
+
+  // Test 39: Workflow inputs missing, but authentic server display_title verifies candidate, PR, and phrase
+  {
+    const titleOnlyRun = createValidRun({
+      inputs: undefined,
+      display_title: `Release Authorization: PR #${testPr} [${validCandidateSha}] [GO LIVE ${validCandidateSha}]`
+    });
+    const runCheck = validateAttestationWorkflowRun(titleOnlyRun, baseValidCtx);
+    assert.equal(runCheck.valid, true);
+
+    const res = validateReleaseAuthorization({
+      ...baseValidCtx,
+      workflowRuns: [titleOnlyRun],
+      commitStatuses: [createValidStatus()]
+    });
+    assert.equal(res.authorized, true);
+    assert.equal(res.code, 'AUTHORIZED_GO_LIVE');
+    console.log('  ✓ Test 39: Missing run.inputs with verified display_title accepted');
+  }
+
+  // Test 40: Workflow inputs missing and display_title lacks candidate SHA
+  {
+    const badShaTitleRun = createValidRun({
+      inputs: undefined,
+      display_title: `Release Authorization: PR #${testPr} [0000000000000000000000000000000000000000] [GO LIVE ${validCandidateSha}]`
+    });
+    const runCheck = validateAttestationWorkflowRun(badShaTitleRun, baseValidCtx);
+    assert.equal(runCheck.valid, false);
+    assert.equal(runCheck.code, 'RUN_TITLE_SHA_MISMATCH');
+
+    const res = validateReleaseAuthorization({
+      ...baseValidCtx,
+      workflowRuns: [badShaTitleRun],
+      commitStatuses: [createValidStatus()]
+    });
+    assert.equal(res.authorized, false);
+    assert.equal(res.code, 'NO_MATCHING_AUTHORIZATION_ATTESTATION');
+    console.log('  ✓ Test 40: Display title with mismatched candidate SHA rejected');
+  }
+
+  // Test 41: Workflow inputs missing and display_title lacks PR number
+  {
+    const badPrTitleRun = createValidRun({
+      inputs: undefined,
+      display_title: `Release Authorization: PR #999 [${validCandidateSha}] [GO LIVE ${validCandidateSha}]`
+    });
+    const runCheck = validateAttestationWorkflowRun(badPrTitleRun, baseValidCtx);
+    assert.equal(runCheck.valid, false);
+    assert.equal(runCheck.code, 'RUN_TITLE_PR_MISMATCH');
+
+    const res = validateReleaseAuthorization({
+      ...baseValidCtx,
+      workflowRuns: [badPrTitleRun],
+      commitStatuses: [createValidStatus()]
+    });
+    assert.equal(res.authorized, false);
+    assert.equal(res.code, 'NO_MATCHING_AUTHORIZATION_ATTESTATION');
+    console.log('  ✓ Test 41: Display title with mismatched PR number rejected');
+  }
+
+  // Test 42: Workflow inputs missing and display_title lacks approval phrase
+  {
+    const badPhraseTitleRun = createValidRun({
+      inputs: undefined,
+      display_title: `Release Authorization: PR #${testPr} [${validCandidateSha}] [unapproved phrase]`
+    });
+    const runCheck = validateAttestationWorkflowRun(badPhraseTitleRun, baseValidCtx);
+    assert.equal(runCheck.valid, false);
+    assert.equal(runCheck.code, 'RUN_TITLE_PHRASE_MISMATCH');
+
+    const res = validateReleaseAuthorization({
+      ...baseValidCtx,
+      workflowRuns: [badPhraseTitleRun],
+      commitStatuses: [createValidStatus()]
+    });
+    assert.equal(res.authorized, false);
+    assert.equal(res.code, 'NO_MATCHING_AUTHORIZATION_ATTESTATION');
+    console.log('  ✓ Test 42: Display title with mismatched approval phrase rejected');
+  }
+
+  // Test 43: Inputs and display_title both present, but display_title contradicts candidate SHA
+  {
+    const contradictingTitleRun = createValidRun({
+      inputs: {
+        pr_number: String(testPr),
+        candidate_sha: validCandidateSha,
+        approval_phrase: `GO LIVE ${validCandidateSha}`
+      },
+      display_title: `Release Authorization: PR #${testPr} [0000000000000000000000000000000000000000] [GO LIVE ${validCandidateSha}]`
+    });
+    const runCheck = validateAttestationWorkflowRun(contradictingTitleRun, baseValidCtx);
+    assert.equal(runCheck.valid, false);
+    assert.equal(runCheck.code, 'RUN_TITLE_SHA_MISMATCH');
+    console.log('  ✓ Test 43: Contradicting display title rejected even if inputs present');
+  }
+
+  // Test 44: Interim workflow state — commit status is pending while workflow executes
+  {
+    const pendingStatus = createValidStatus({
+      state: 'pending',
+      description: `Attestation verification in progress by ${owner} for PR #${testPr}`
+    });
+    const res = validateReleaseAuthorization({
+      ...baseValidCtx,
+      workflowRuns: [createValidRun()],
+      commitStatuses: [pendingStatus]
+    });
+    assert.equal(res.authorized, false);
+    assert.equal(res.code, 'STATUS_CHECK_NOT_SUCCESSFUL');
+    console.log('  ✓ Test 44: Interim pending commit status rejected (no interim merge window)');
+  }
+
+  // Test 45: Interim workflow state — commit status is failure when attestation aborts
+  {
+    const failureStatus = createValidStatus({
+      state: 'failure',
+      description: `Authorization attestation failed for PR #${testPr}`
+    });
+    const res = validateReleaseAuthorization({
+      ...baseValidCtx,
+      workflowRuns: [createValidRun()],
+      commitStatuses: [failureStatus]
+    });
+    assert.equal(res.authorized, false);
+    assert.equal(res.code, 'STATUS_CHECK_NOT_SUCCESSFUL');
+    console.log('  ✓ Test 45: Failed commit status on aborted attestation rejected');
+  }
+
+  // Test 46: Candidate SHA mismatch in inputs rejected
+  {
+    const inputMismatchedRun = createValidRun({
+      inputs: {
+        pr_number: String(testPr),
+        candidate_sha: '0000000000000000000000000000000000000000',
+        approval_phrase: `GO LIVE ${validCandidateSha}`
+      }
+    });
+    const runCheck = validateAttestationWorkflowRun(inputMismatchedRun, baseValidCtx);
+    assert.equal(runCheck.valid, false);
+    assert.equal(runCheck.code, 'INPUT_SHA_MISMATCH');
+    console.log('  ✓ Test 46: Mismatched candidate SHA in workflow inputs rejected');
+  }
+
+  // Test 47: Distinct workflow execution commit on prod-release authorizes candidate PR SHA
+  {
+    const distinctExecutionRun = createValidRun({
+      head_branch: 'prod-release',
+      head_sha: '1111222233334444555566667777888899990000', // distinct prod-release HEAD
+      inputs: {
+        pr_number: String(testPr),
+        candidate_sha: validCandidateSha,
+        approval_phrase: `GO LIVE ${validCandidateSha}`
+      },
+      display_title: `Release Authorization: PR #${testPr} [${validCandidateSha}] [GO LIVE ${validCandidateSha}]`
+    });
+    const res = validateReleaseAuthorization({
+      ...baseValidCtx,
+      workflowRuns: [distinctExecutionRun],
+      commitStatuses: [createValidStatus()]
+    });
+    assert.equal(res.authorized, true);
+    assert.equal(res.code, 'AUTHORIZED_GO_LIVE');
+    assert.equal(res.details?.candidateSha, validCandidateSha);
+    assert.equal(res.details?.matchingRunId, validRunId);
+    console.log('  ✓ Test 47: Distinct execution commit on prod-release authorizes candidate PR SHA');
+  }
+
+  console.log('[RELEASE_AUTH_TEST] All 47 security & policy boundary tests PASSED successfully.');
 }
 
 async function main() {

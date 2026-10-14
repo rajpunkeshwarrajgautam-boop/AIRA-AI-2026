@@ -2,7 +2,9 @@ export interface AttestationRunRecord {
   id: number;
   name: string;
   path?: string;
+  head_branch?: string;
   head_sha: string;
+  display_title?: string;
   actor: string;
   event: string;
   status: string;
@@ -170,18 +172,169 @@ export function validateCandidateConstraints(ctx: ReleaseCandidateContext): { va
  * - Must be workflow_dispatch event
  * - Must be completed with success
  * - Must strictly match workflow name or path
- * - Run head_sha MUST match candidate commit SHA
+ * - Run head_sha MUST be a valid 40-character commit SHA (workflow execution commit)
+ * - Run head_branch MUST match the protected target branch (default prod-release)
  * - Run head_repository MUST match expected repository (if present)
- * - Workflow inputs MUST exist and MUST match candidate SHA, PR number, and approval phrase
+ * - Workflow identity must match release-authorization.yml
+ * - Workflow inputs or server-set display_title MUST bind candidate SHA, PR number, and approval phrase
  * - Must be within freshness window
  */
+export function extractOrVerifyRunInputs(
+  run: AttestationRunRecord,
+  ctx: ReleaseCandidateContext
+): { valid: boolean; code?: string; reason?: string; inputs?: { pr_number: string; candidate_sha: string; approval_phrase: string } } {
+  const expectedPhrase = `GO LIVE ${ctx.candidateSha}`;
+
+  // Case 1: Direct inputs dictionary (from test mocks, webhooks, or API if populated)
+  if (run.inputs && typeof run.inputs === 'object' && Object.keys(run.inputs).length > 0) {
+    if (!run.inputs.candidate_sha) {
+      return { valid: false, code: 'MISSING_INPUT_CANDIDATE_SHA', reason: `Run #${run.id} inputs missing candidate_sha.` };
+    }
+    if (run.inputs.candidate_sha !== ctx.candidateSha) {
+      return {
+        valid: false,
+        code: 'INPUT_SHA_MISMATCH',
+        reason: `Run #${run.id} input candidate_sha "${run.inputs.candidate_sha}" does not match candidate SHA "${ctx.candidateSha}".`
+      };
+    }
+    if (!run.inputs.pr_number) {
+      return { valid: false, code: 'MISSING_INPUT_PR_NUMBER', reason: `Run #${run.id} inputs missing pr_number.` };
+    }
+    if (String(run.inputs.pr_number) !== String(ctx.prNumber)) {
+      return {
+        valid: false,
+        code: 'INPUT_PR_MISMATCH',
+        reason: `Run #${run.id} input pr_number "${run.inputs.pr_number}" does not match PR #${ctx.prNumber}.`
+      };
+    }
+    if (!run.inputs.approval_phrase) {
+      return { valid: false, code: 'MISSING_INPUT_APPROVAL_PHRASE', reason: `Run #${run.id} inputs missing approval_phrase.` };
+    }
+    if (run.inputs.approval_phrase !== expectedPhrase) {
+      return {
+        valid: false,
+        code: 'INPUT_PHRASE_MISMATCH',
+        reason: `Run #${run.id} input approval_phrase does not match expected "${expectedPhrase}".`
+      };
+    }
+
+    // If display_title is ALSO present alongside inputs, ensure it does not contradict
+    if (run.display_title) {
+      const match = run.display_title.match(/^Release Authorization:\s*PR\s*#?(\d+)\s*\[([0-9a-fA-F]{40})\]\s*\[(.*)\]$/i);
+      if (match) {
+        const titlePr = match[1];
+        const titleSha = match[2].toLowerCase();
+        const titlePhrase = match[3].trim();
+        if (titleSha !== ctx.candidateSha.toLowerCase()) {
+          return {
+            valid: false,
+            code: 'RUN_TITLE_SHA_MISMATCH',
+            reason: `Run #${run.id} display title SHA ("${titleSha}") contradicts candidate SHA "${ctx.candidateSha}".`
+          };
+        }
+        if (titlePr !== String(ctx.prNumber)) {
+          return {
+            valid: false,
+            code: 'RUN_TITLE_PR_MISMATCH',
+            reason: `Run #${run.id} display title PR ("${titlePr}") contradicts PR #${ctx.prNumber}.`
+          };
+        }
+        if (titlePhrase !== expectedPhrase) {
+          return {
+            valid: false,
+            code: 'RUN_TITLE_PHRASE_MISMATCH',
+            reason: `Run #${run.id} display title approval phrase ("${titlePhrase}") contradicts expected phrase "${expectedPhrase}".`
+          };
+        }
+      } else {
+        if (!run.display_title.toLowerCase().includes(ctx.candidateSha.toLowerCase())) {
+          return {
+            valid: false,
+            code: 'RUN_TITLE_SHA_MISMATCH',
+            reason: `Run #${run.id} display title ("${run.display_title}") contradicts candidate SHA "${ctx.candidateSha}".`
+          };
+        }
+        if (!run.display_title.includes(`PR #${ctx.prNumber}`)) {
+          return {
+            valid: false,
+            code: 'RUN_TITLE_PR_MISMATCH',
+            reason: `Run #${run.id} display title ("${run.display_title}") contradicts PR #${ctx.prNumber}.`
+          };
+        }
+      }
+    }
+
+    return {
+      valid: true,
+      inputs: {
+        pr_number: String(run.inputs.pr_number),
+        candidate_sha: run.inputs.candidate_sha,
+        approval_phrase: run.inputs.approval_phrase
+      }
+    };
+  }
+
+  // Case 2: Immutable display_title set by GitHub Actions run-name
+  if (run.display_title) {
+    const title = run.display_title;
+    const match = title.match(/^Release Authorization:\s*PR\s*#?(\d+)\s*\[([0-9a-fA-F]{40})\]\s*\[(.*)\]$/i);
+    if (!match) {
+      return {
+        valid: false,
+        code: 'RUN_TITLE_FORMAT_INVALID',
+        reason: `Run #${run.id} display title ("${title}") does not match expected attestation format "Release Authorization: PR #<num> [<sha>] [<phrase>]".`
+      };
+    }
+
+    const titlePr = match[1];
+    const titleSha = match[2].toLowerCase();
+    const titlePhrase = match[3].trim();
+
+    if (titleSha !== ctx.candidateSha.toLowerCase()) {
+      return {
+        valid: false,
+        code: 'RUN_TITLE_SHA_MISMATCH',
+        reason: `Run #${run.id} display title candidate SHA "${titleSha}" does not match candidate SHA "${ctx.candidateSha}".`
+      };
+    }
+    if (titlePr !== String(ctx.prNumber)) {
+      return {
+        valid: false,
+        code: 'RUN_TITLE_PR_MISMATCH',
+        reason: `Run #${run.id} display title PR #${titlePr} does not match PR #${ctx.prNumber}.`
+      };
+    }
+    if (titlePhrase !== expectedPhrase) {
+      return {
+        valid: false,
+        code: 'RUN_TITLE_PHRASE_MISMATCH',
+        reason: `Run #${run.id} display title approval phrase "${titlePhrase}" does not match expected "${expectedPhrase}".`
+      };
+    }
+
+    return {
+      valid: true,
+      inputs: {
+        pr_number: titlePr,
+        candidate_sha: titleSha,
+        approval_phrase: titlePhrase
+      }
+    };
+  }
+
+  return {
+    valid: false,
+    code: 'MISSING_WORKFLOW_INPUTS',
+    reason: `Run #${run.id} lacks verified dispatch inputs (neither inputs payload nor run display_title matched candidate SHA and PR number).`
+  };
+}
+
 export function validateAttestationWorkflowRun(
   run: AttestationRunRecord,
   ctx: ReleaseCandidateContext
 ): { valid: boolean; code?: string; reason?: string } {
   const expectedOwner = ctx.expectedOwner || AUTHORIZED_REPOSITORY_OWNER;
   const expectedRepo = ctx.expectedRepo || `${expectedOwner}/${DEFAULT_REPOSITORY_NAME}`;
-  const expectedPhrase = `GO LIVE ${ctx.candidateSha}`;
   const now = ctx.currentTime ? ctx.currentTime.getTime() : Date.now();
   const maxAge = ctx.maxAttestationAgeMs ?? DEFAULT_MAX_ATTESTATION_AGE_MS;
 
@@ -200,12 +353,22 @@ export function validateAttestationWorkflowRun(
     return { valid: false, code: 'WORKFLOW_NOT_SUCCESSFUL', reason: `Attestation workflow run #${run.id} status is "${run.status}", conclusion: "${run.conclusion}"` };
   }
 
-  // Verify run head commit matches candidate SHA
-  if (run.head_sha && run.head_sha !== ctx.candidateSha) {
+  // Verify workflow execution commit SHA format
+  if (!run.head_sha || !/^[0-9a-f]{40}$/.test(run.head_sha)) {
     return {
       valid: false,
-      code: 'RUN_HEAD_SHA_MISMATCH',
-      reason: `Attestation run #${run.id} head SHA "${run.head_sha}" does not match candidate commit "${ctx.candidateSha}".`
+      code: 'INVALID_WORKFLOW_EXECUTION_SHA',
+      reason: `Attestation run #${run.id} head SHA "${run.head_sha}" is not a valid 40-character commit SHA.`
+    };
+  }
+
+  // Verify workflow ref / branch: must execute from protected target branch, not untrusted feature branch
+  const trustedBranch = ctx.prTargetBranch || ctx.expectedTargetBranch || PRODUCTION_RELEASE_BRANCH;
+  if (run.head_branch && run.head_branch !== trustedBranch && run.head_branch !== `refs/heads/${trustedBranch}`) {
+    return {
+      valid: false,
+      code: 'UNTRUSTED_WORKFLOW_BRANCH',
+      reason: `Attestation workflow must execute from protected branch "${trustedBranch}", got: "${run.head_branch}". Feature branch execution rejected.`
     };
   }
 
@@ -233,32 +396,13 @@ export function validateAttestationWorkflowRun(
     return { valid: false, code: 'WORKFLOW_IDENTITY_MISMATCH', reason: `Run #${run.id} is not the release authorization attestation workflow.` };
   }
 
-  // Mandatory Inputs Verification — Reject missing or empty inputs
-  if (!run.inputs) {
-    return { valid: false, code: 'MISSING_WORKFLOW_INPUTS', reason: `Run #${run.id} lacks workflow_dispatch inputs.` };
-  }
-
-  if (run.inputs.candidate_sha !== ctx.candidateSha) {
+  // Verify inputs / approval evidence binding candidate SHA, PR number, and approval phrase
+  const inputCheck = extractOrVerifyRunInputs(run, ctx);
+  if (!inputCheck.valid) {
     return {
       valid: false,
-      code: 'INPUT_SHA_MISMATCH',
-      reason: `Run #${run.id} input candidate_sha "${run.inputs.candidate_sha}" does not match candidate SHA "${ctx.candidateSha}".`
-    };
-  }
-
-  if (String(run.inputs.pr_number) !== String(ctx.prNumber)) {
-    return {
-      valid: false,
-      code: 'INPUT_PR_MISMATCH',
-      reason: `Run #${run.id} input pr_number "${run.inputs.pr_number}" does not match PR #${ctx.prNumber}.`
-    };
-  }
-
-  if (run.inputs.approval_phrase !== expectedPhrase) {
-    return {
-      valid: false,
-      code: 'INPUT_PHRASE_MISMATCH',
-      reason: `Run #${run.id} input approval_phrase does not match expected "${expectedPhrase}".`
+      code: inputCheck.code || 'MISSING_WORKFLOW_INPUTS',
+      reason: inputCheck.reason
     };
   }
 

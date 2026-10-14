@@ -1,4 +1,5 @@
 name: Release Authorization Attestation (No Deployment)
+run-name: "Release Authorization: PR #${{ inputs.pr_number }} [${{ inputs.candidate_sha }}] [${{ inputs.approval_phrase }}]"
 
 on:
   workflow_dispatch:
@@ -21,6 +22,10 @@ permissions:
   pull-requests: read
   statuses: write
 
+concurrency:
+  group: release-auth-${{ inputs.pr_number }}
+  cancel-in-progress: true
+
 jobs:
   attestation:
     name: Human Production Authorization (Attestation Only)
@@ -33,6 +38,19 @@ jobs:
       EXPECTED_SHA: ${{ inputs.candidate_sha }}
       APPROVAL_PHRASE: ${{ inputs.approval_phrase }}
     steps:
+      - name: Initialize pending status on candidate commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Posting interim pending status on candidate $EXPECTED_SHA..."
+            gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$EXPECTED_SHA" \
+              -f state="pending" \
+              -f context="release/go-live-authorized" \
+              -f description="Attestation verification in progress by $GITHUB_ACTOR for PR #$PR_NUMBER" \
+              -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
+          fi
+
       - name: Verify explicit release approval and exact PR head
         shell: bash
         run: |
@@ -57,8 +75,8 @@ jobs:
             echo "::error::PR must be an open release candidate into prod-release"; exit 1;
           }
 
-          # Post tamper-resistant commit status bound strictly to candidate SHA
-          echo "Posting commit status release/go-live-authorized on $EXPECTED_SHA..."
+          # Post tamper-resistant commit status bound strictly to candidate SHA only upon full verification pass
+          echo "Posting verified commit status release/go-live-authorized on $EXPECTED_SHA..."
           gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$EXPECTED_SHA" \
             -f state="success" \
             -f context="release/go-live-authorized" \
@@ -80,3 +98,16 @@ jobs:
             echo "Release actors must separately check required CI and live"
             echo "staging evidence, then obtain current user authorization."
           } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Mark status failed on attestation abort or error
+        if: failure()
+        shell: bash
+        run: |
+          if [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Attestation step failed; posting failure status on $EXPECTED_SHA..."
+            gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$EXPECTED_SHA" \
+              -f state="failure" \
+              -f context="release/go-live-authorized" \
+              -f description="Authorization attestation failed for PR #$PR_NUMBER" \
+              -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
+          fi

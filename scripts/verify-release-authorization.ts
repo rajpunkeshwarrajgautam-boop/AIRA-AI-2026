@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import {
   validateCandidateConstraints,
   validateCommitStatuses,
+  validateReleaseAuthorization,
   extractRunIdFromTargetUrl,
   AUTHORIZED_REPOSITORY_OWNER,
   DEFAULT_REPOSITORY_NAME,
@@ -12,7 +13,8 @@ import {
   TRUSTED_STATUS_ISSUER_LOGINS,
   type AttestationRunRecord,
   type CommitStatusRecord,
-  type ReleaseCandidateContext
+  type ReleaseCandidateContext,
+  type ReleaseAuthValidationResult
 } from '../src/security/release-authorization-validator.js';
 
 interface CliArgs {
@@ -187,7 +189,9 @@ export async function verifyLiveReleaseAuthorization(args: CliArgs): Promise<{
     id: runData.id,
     name: runData.name,
     path: runData.path,
+    head_branch: runData.head_branch,
     head_sha: runData.head_sha,
+    display_title: runData.display_title,
     actor: runData.triggering_actor?.login || runData.actor?.login,
     event: runData.event,
     status: runData.status,
@@ -198,107 +202,28 @@ export async function verifyLiveReleaseAuthorization(args: CliArgs): Promise<{
     inputs: runData.inputs
   };
 
-  // 5. Strict checks on linked workflow run
-  if (linkedRun.actor !== AUTHORIZED_REPOSITORY_OWNER) {
-    return {
-      authorized: false,
-      code: 'UNAUTHORIZED_RUN_ACTOR',
-      reason: `Linked run #${linkedRun.id} was dispatched by unauthorized actor: "${linkedRun.actor}" (expected "${AUTHORIZED_REPOSITORY_OWNER}").`
-    };
-  }
+  // 5. Authoritative validation via master release validator engine
+  const fullCtx: ReleaseCandidateContext = {
+    ...candidateCtx,
+    commitStatuses: statuses,
+    workflowRuns: [linkedRun]
+  };
 
-  if (linkedRun.event !== 'workflow_dispatch') {
-    return {
-      authorized: false,
-      code: 'INVALID_RUN_EVENT',
-      reason: `Linked run #${linkedRun.id} was triggered by event "${linkedRun.event}", expected "workflow_dispatch".`
-    };
-  }
-
-  if (linkedRun.status !== 'completed' || linkedRun.conclusion !== 'success') {
-    return {
-      authorized: false,
-      code: 'RUN_NOT_SUCCESSFUL',
-      reason: `Linked run #${linkedRun.id} status is "${linkedRun.status}", conclusion: "${linkedRun.conclusion}" (expected completed/success).`
-    };
-  }
-
-  // Verify run head SHA matches candidate commit SHA
-  if (linkedRun.head_sha && linkedRun.head_sha !== args.candidateSha) {
-    return {
-      authorized: false,
-      code: 'RUN_HEAD_SHA_MISMATCH',
-      reason: `Linked run #${linkedRun.id} head commit "${linkedRun.head_sha}" does not match candidate SHA "${args.candidateSha}".`
-    };
-  }
-
-  // Verify run repository matches expected repository
-  if (linkedRun.head_repository && linkedRun.head_repository.full_name !== args.repo) {
-    return {
-      authorized: false,
-      code: 'RUN_REPOSITORY_MISMATCH',
-      reason: `Linked run #${linkedRun.id} repository "${linkedRun.head_repository.full_name}" does not match expected repository "${args.repo}".`
-    };
-  }
-
-  const isAttestationWorkflow =
-    linkedRun.path?.includes('release-authorization.yml') ||
-    linkedRun.name?.includes('Release Authorization Attestation');
-  if (!isAttestationWorkflow) {
-    return {
-      authorized: false,
-      code: 'WORKFLOW_IDENTITY_MISMATCH',
-      reason: `Linked run #${linkedRun.id} workflow identity is "${linkedRun.name}" (${linkedRun.path}), expected Release Authorization Attestation.`
-    };
-  }
-
-  // 6. Freshness checks
-  const runTime = new Date(linkedRun.created_at).getTime();
-  const maxAge = 24 * 60 * 60 * 1000;
-  if (Date.now() - runTime > maxAge) {
-    return {
-      authorized: false,
-      code: 'EXPIRED_AUTHORIZATION_ATTESTATION',
-      reason: `Linked run #${linkedRun.id} was created at ${linkedRun.created_at}, which exceeds 24-hour freshness validity.`
-    };
-  }
-
-  // 7. Temporal correlation check between status creation and workflow run
-  const statusTime = matchingStatus.created_at ? new Date(matchingStatus.created_at).getTime() : NaN;
-  if (!isNaN(statusTime) && !isNaN(runTime)) {
-    const deltaMs = Math.abs(statusTime - runTime);
-    if (deltaMs > DEFAULT_MAX_RUN_STATUS_TIME_DELTA_MS) {
-      return {
-        authorized: false,
-        code: 'UNCORRELATED_STATUS_RUN_TIMESTAMPS',
-        reason: `Temporal correlation check failed: commit status was created at ${matchingStatus.created_at}, but linked workflow run was created at ${linkedRun.created_at}. Time delta of ${Math.round(deltaMs / 1000)}s exceeds maximum allowed correlation bound of ${DEFAULT_MAX_RUN_STATUS_TIME_DELTA_MS / 1000}s. Stale or uncoordinated run replay rejected.`
-      };
-    }
+  const authResult = validateReleaseAuthorization(fullCtx);
+  if (!authResult.authorized) {
+    return authResult;
   }
 
   console.log(`[VERIFY_RELEASE_AUTH] Authoritative dual evidence verified successfully:`);
   console.log(`  - Commit Status: ${matchingStatus.context}=success (Created: ${matchingStatus.created_at})`);
   console.log(`  - Status Issuer: ${matchingStatus.creator?.login || 'github-actions[bot]'}`);
-  console.log(`  - Workflow Run: #${linkedRun.id} (${linkedRun.conclusion}) by ${linkedRun.actor} (Created: ${linkedRun.created_at})`);
+  console.log(`  - Workflow Run: #${linkedRun.id} (${linkedRun.conclusion}) by ${linkedRun.actor} on ${linkedRun.head_branch || 'prod-release'} (Created: ${linkedRun.created_at})`);
+  console.log(`  - Workflow Execution SHA: ${linkedRun.head_sha}`);
+  console.log(`  - Candidate PR SHA: ${args.candidateSha}`);
   console.log(`  - Provenance: target_url links directly to run #${linkedRun.id} on ${args.repo}`);
   console.log(`  - Temporal correlation: verified within allowable bounds`);
 
-  return {
-    authorized: true,
-    code: 'RELEASE_GO_LIVE_VERIFIED',
-    reason: `Verified authoritative release authorization on GitHub for candidate ${args.candidateSha}: authentic owner workflow run #${linkedRun.id} and commit status "${matchingStatus.context}" confirmed.`,
-    details: {
-      prNumber: args.prNumber,
-      candidateSha: args.candidateSha,
-      matchingRunId: linkedRun.id,
-      matchingStatus: matchingStatus.context,
-      authorizedBy: AUTHORIZED_REPOSITORY_OWNER,
-      provenanceLinkVerified: true,
-      freshnessVerified: true,
-      temporalCorrelationVerified: true,
-      issuerVerified: true
-    }
-  };
+  return authResult;
 }
 
 async function main() {

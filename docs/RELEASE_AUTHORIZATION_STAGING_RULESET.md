@@ -94,7 +94,7 @@ flowchart TD
 ## 3. Problem 2 & 3 Remediation: Hardened Dual-Evidence & Trustworthy Provenance
 
 Previous verifier implementations used permissive fallback logic (`matchingRun || matchingStatus`).
-The revised architecture enforces **Authoritative Dual Evidence, Trusted Issuer Attribution, and Temporal Correlation**:
+The revised architecture enforces **Authoritative Dual Evidence, Trusted Issuer Attribution, Server-Bound Input Provenance, Temporal Correlation, and Branch Safety**:
 
 ### Verification Requirements:
 1. **Authentic Workflow Run**:
@@ -102,7 +102,10 @@ The revised architecture enforces **Authoritative Dual Evidence, Trusted Issuer 
    - Event must strictly equal `workflow_dispatch`.
    - Workflow identity must match `.github/workflows/release-authorization.yml`.
    - Status must be `completed` and conclusion must be `success`.
-   - Head SHA must strictly match candidate SHA (`run.head_sha === candidateSha`).
+   - **Workflow Execution SHA vs Candidate PR SHA**:
+     * Privileged attestation workflows MUST execute from the protected default branch `prod-release` (`run.head_branch === 'prod-release'`). Feature-branch execution is rejected (`UNTRUSTED_WORKFLOW_BRANCH`).
+     * `run.head_sha` is verified as a valid 40-character hex commit SHA representing the trusted execution ref.
+     * The candidate PR SHA being authorized is bound through GitHub Actions `run-name` (which produces the authentic server-side `run.display_title`: `Release Authorization: PR #<num> [<candidate_sha>] [GO LIVE <candidate_sha>]`) and dispatch inputs.
    - Repository must match expected repository (`run.head_repository.full_name === expectedRepo`).
    - Timestamp must be within 24 hours of release verification.
 2. **Authentic Commit Status & Trusted Issuer**:
@@ -113,14 +116,21 @@ The revised architecture enforces **Authoritative Dual Evidence, Trusted Issuer 
      `^https:\/\/github\.com\/:owner\/:repo\/actions\/runs\/(\d+)$`
    - Description must bind the specific PR number (`PR #<number>`).
    - Timestamp must be within 24 hours of release verification.
-3. **Cryptographic / URL Provenance Linkage**:
+3. **Status Publisher Trust Boundary Analysis & Residual Risk**:
+   - *Platform Limitation*: In GitHub Actions, commit statuses are repository-scoped string contexts. Any workflow within the repository granted `statuses: write` permission can emit statuses under any context name. GitHub Rulesets inspect only the context string and state, not the workflow name or issuing token.
+   - *Remediation*: The authoritative verifier (`npm run verify:release-auth`) bridges this platform gap by verifying dual evidence: it parses `target_url`, resolves the exact run ID from GitHub's REST API, and verifies that the status was emitted by the authorized owner workflow on `prod-release`.
+4. **Interim Merge Window Prevention**:
+   - At workflow start, the runner posts `state: pending` on `release/go-live-authorized`.
+   - All assertions (PR target, candidate SHA, approval phrase, PR open status) must pass before posting `state: success`.
+   - On any assertion failure or job cancellation, an `if: failure()` trap posts `state: failure`, preventing any partially executed run from satisfying ruleset gates.
+5. **Cryptographic / URL Provenance Linkage**:
    - The verifier extracts `:run_id` from the commit status `target_url` and fetches `/actions/runs/:run_id` from the GitHub API.
    - It verifies that the status was emitted by the exact run inspected (`linkedRunId === matchingRun.id`).
-4. **Temporal Correlation Anti-Replay Guard**:
+6. **Temporal Correlation Anti-Replay Guard**:
    - Both status `created_at` and workflow run `created_at` are compared.
    - Maximum allowable difference: **15 minutes** (`Math.abs(statusTime - runTime) <= 900,000 ms`).
    - Replay attacks using authentic historical workflow runs are rejected with `UNCORRELATED_STATUS_RUN_TIMESTAMPS`.
-5. **Safe Process Argument Handling**:
+7. **Safe Process Argument Handling**:
    - `scripts/verify-release-authorization.ts` and `scripts/revoke-release-authorization.ts` use `execFileSync` directly without shell interpolation.
    - Validates candidate SHA (`/^[0-9a-f]{40}$/`), repository (`/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/`), and sanitizes user-supplied reason strings.
 

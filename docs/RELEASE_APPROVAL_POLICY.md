@@ -79,16 +79,17 @@ To ensure that no automated agent, script, or speculative run can ever deploy to
 
 ### Layer 3: Authoritative Dual-Evidence Verification (`npm run verify:release-auth`)
 - **Deterministic Unit Testing (`npm run test:release-auth:unit`)**:
-  - Executed in `Fast CI` to verify the authorization rules engine across 37 isolated security boundaries.
-  - Validates fail-closed handling of malformed SHAs, uppercase SHAs, short SHAs, invalid phrases, wrong actors, closed PRs, moved HEADs, failed runs, expired attestations, missing commit status, unlinked status, expired status, untrusted status issuers, forged target URLs, run head SHA mismatches, run repo mismatches, uncorrelated replay timestamps, and forged metadata.
+  - Executed in `Fast CI` to verify the authorization rules engine across 47 isolated security boundaries.
+  - Validates fail-closed handling of malformed SHAs, uppercase SHAs, short SHAs, invalid phrases, wrong actors, closed PRs, moved HEADs, failed runs, expired attestations, missing commit status, unlinked status, expired status, untrusted status issuers, forged target URLs, untrusted workflow branch execution (`head_branch !== 'prod-release'`), malformed workflow execution commit SHAs, workflow run repo mismatches, uncorrelated replay timestamps, display_title input binding (candidate SHA, PR number, approval phrase mismatches), interim states (pending / failure), and forged metadata.
   - Passing this step proves code correctness of the rules engine, but does NOT grant GO LIVE authorization.
 - **Authoritative Live Release Verification (`npm run verify:release-auth -- --pr <num> --sha <sha>`)**:
-  - Executed via `scripts/verify-release-authorization.ts` using safe `execFileSync` process execution.
+  - Executed via `scripts/verify-release-authorization.ts` delegating directly to `validateReleaseAuthorization()`.
   - Requires **BOTH**:
-    1. An authentic owner workflow run (`rajpunkeshwarrajgautam-boop`, `workflow_dispatch`, `completed`, `success`, fresh <24h).
-    2. An authentic commit status `release/go-live-authorized` on the candidate commit SHA (`state: success`, fresh <24h, issuer `github-actions[bot]`).
-    3. **Verified Provenance Linkage**: The commit status `target_url` must link directly to the verified workflow run ID in the authorized repository.
-    4. **Temporal Correlation Anti-Replay Bound**: The status creation timestamp must correlate within 15 minutes of the workflow execution window.
+    1. An authentic owner workflow run (`rajpunkeshwarrajgautam-boop`, `workflow_dispatch`, `completed`, `success`, executed from protected `prod-release`, fresh <24h).
+    2. Input verification binding candidate PR SHA, PR number, and approval phrase via authentic server-set `display_title` (and `run.inputs` when present).
+    3. An authentic commit status `release/go-live-authorized` on the candidate commit SHA (`state: success`, fresh <24h, issuer `github-actions[bot]`).
+    4. **Verified Provenance Linkage**: The commit status `target_url` must link directly to the verified workflow run ID in the authorized repository.
+    5. **Temporal Correlation Anti-Replay Bound**: The status creation timestamp must correlate within 15 minutes of the workflow execution window.
   - Fails closed (`exit 1`) if either evidence source is missing, inconsistent, expired, untrusted, or unlinked.
 
 ### Layer 4: True Merge-Time Expiration Reality & Active Revocation
