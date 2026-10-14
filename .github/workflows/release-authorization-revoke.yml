@@ -30,7 +30,7 @@ jobs:
     timeout-minutes: 5
     environment: release-gate
     concurrency:
-      group: release-gate-revoke-${{ inputs.candidate_sha }}
+      group: release-gate-app-status-writes
       cancel-in-progress: false
     env:
       PR_NUMBER: ${{ inputs.pr_number }}
