@@ -902,7 +902,7 @@ app.get('/api/automations', async (req: Request, res: Response) => {
 
 app.post('/api/automations', async (req: Request, res: Response) => {
   try {
-    if (process.env.VERCEL && (!process.env.CRON_SECRET || process.env.CRON_SECRET.length < 32)) {
+    if (process.env.VERCEL && (process.env.AIRA_SCHEDULER_ACTIVE !== 'true' || !process.env.CRON_SECRET || process.env.CRON_SECRET.length < 32)) {
       return res.status(503).json({ error: 'Cloud scheduler not configured; automation was not created' });
     }
     const raw = {
