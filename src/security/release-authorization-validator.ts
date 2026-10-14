@@ -473,7 +473,7 @@ export function validateCommitStatuses(
   const expectedOwner = ctx.expectedOwner || AUTHORIZED_REPOSITORY_OWNER;
   const expectedRepo = ctx.expectedRepo || `${expectedOwner}/${DEFAULT_REPOSITORY_NAME}`;
 
-  // Validate status creator/issuer: must be present and trusted (github-actions[bot])
+  // Validate status creator/issuer: must be present and match the dedicated App bot
   if (!matching.creator || !matching.creator.login) {
     return {
       valid: false,
@@ -481,7 +481,8 @@ export function validateCommitStatuses(
       reason: `Commit status "${expectedContext}" lacks mandatory creator/issuer identity.`
     };
   }
-  if (!TRUSTED_STATUS_ISSUER_LOGINS.includes(matching.creator.login)) {
+  const trustedIssuer = ctx.expectedStatusIssuerLogin || TRUSTED_STATUS_ISSUER_LOGINS[0];
+  if (matching.creator.login !== trustedIssuer) {
     return {
       valid: false,
       code: 'UNTRUSTED_STATUS_ISSUER',
