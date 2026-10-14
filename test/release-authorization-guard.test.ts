@@ -57,7 +57,7 @@ export async function runSecurityRegressionTests() {
     description: `Explicit owner GO LIVE verified by ${owner} for PR #${testPr}`,
     target_url: `https://github.com/${owner}/AIRA-AI-2026/actions/runs/${validRunId}`,
     created_at: new Date('2026-10-14T14:30:00Z').toISOString(),
-    creator: { login: 'github-actions[bot]' },
+    creator: { login: 'aira-release-gate[bot]' },
     ...overrides
   });
 
