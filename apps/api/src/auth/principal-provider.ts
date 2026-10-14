@@ -7,10 +7,23 @@ export interface PrincipalProvider {
 
 export class DevPrincipalProvider implements PrincipalProvider {
   async resolve(req: Request): Promise<ExecutionPrincipal> {
+    // Verified managed identity takes absolute precedence — cryptographic proof cannot be overridden by headers.
+    const managedIdentity = (req as any).managedIdentity;
+    if (managedIdentity && managedIdentity.userId) {
+      return ExecutionPrincipalSchema.parse({
+        userId: managedIdentity.userId,
+        sessionId: managedIdentity.sessionId,
+        workspaceId: undefined,
+        projectId: undefined,
+        roles: ['workspace_user'],
+        scopes: ['chat:write', 'runs:read', 'runs:write', 'browser.read', 'files.read'],
+      });
+    }
+
     // Never trust caller-supplied principal headers on a deployed Vercel environment.
     const isDevOrTest = !process.env.VERCEL_ENV && (process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'development');
 
-    if (isDevOrTest) {
+    if (isDevOrTest && !req.headers.authorization) {
       const testUserId = req.headers['x-test-user-id'] as string;
       const testSessionId = req.headers['x-test-session-id'] as string;
       const testWorkspaceId = req.headers['x-workspace-id'] as string;

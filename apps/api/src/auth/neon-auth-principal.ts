@@ -71,21 +71,19 @@ export async function verifyNeonAuthToken(token: string): Promise<ManagedPrincip
   if (parts.length !== 3) throw new Error('INVALID_NEON_AUTH_JWT');
   const header = parseSegment<JwtHeader>(parts[0]);
   const payload = parseSegment<JwtPayload>(parts[1]);
-  const allowed = header.alg === 'EdDSA' || header.alg === 'RS256';
-  if (!allowed || typeof header.kid !== 'string' || header.kid.length > 200) {
-    throw new Error('INVALID_NEON_AUTH_JWT_HEADER');
+  if (header.alg !== 'EdDSA' || typeof header.kid !== 'string' || header.kid.length > 200) {
+    throw new Error('INVALID_NEON_AUTH_JWT_HEADER: only EdDSA algorithm is permitted');
   }
   const { issuer, jwksUrl } = authConfig();
   const publicKeys = await loadJwks(jwksUrl);
   const jwk = publicKeys.keys.find(k => k.kid === header.kid &&
     (k.use === undefined || k.use === 'sig') &&
-    (k.alg === undefined || k.alg === header.alg));
+    (k.alg === undefined || k.alg === 'EdDSA'));
   if (!jwk) throw new Error('NEON_AUTH_SIGNING_KEY_NOT_FOUND');
   const key = createPublicKey({ key: jwk, format: 'jwk' });
   const data = Buffer.from(parts[0] + '.' + parts[1]);
   const signature = Buffer.from(parts[2], 'base64url');
-  const valid = verifySignature(header.alg === 'EdDSA' ? null : 'RSA-SHA256',
-    data, key, signature);
+  const valid = verifySignature(null, data, key, signature);
   if (!valid) throw new Error('INVALID_NEON_AUTH_JWT_SIGNATURE');
 
   const now = Math.floor(Date.now() / 1000);
@@ -95,6 +93,14 @@ export async function verifyNeonAuthToken(token: string): Promise<ManagedPrincip
       !Number.isInteger(payload.iat) || payload.iat! > now + 60 ||
       (payload.nbf !== undefined && (!Number.isInteger(payload.nbf) || payload.nbf > now + 60))) {
     throw new Error('INVALID_NEON_AUTH_JWT_CLAIMS');
+  }
+  const validAud = typeof payload.aud === 'string'
+    ? (payload.aud === issuer || payload.aud === issuer + '/neondb/auth')
+    : Array.isArray(payload.aud)
+      ? (payload.aud.includes(issuer) || payload.aud.includes(issuer + '/neondb/auth'))
+      : false;
+  if (!validAud) {
+    throw new Error('INVALID_NEON_AUTH_JWT_AUDIENCE');
   }
   if (payload.is_anonymous === true || payload.isAnonymous === true) {
     throw new Error('NEON_ANONYMOUS_TOKEN_NOT_ACCOUNT_IDENTITY');
@@ -126,6 +132,7 @@ export function createNeonAuthPrincipalMiddleware() {
     }
     try {
       const identity = await verifyNeonAuthToken(auth.replace(/^Bearer\s+/i, ''));
+      (req as any).guestSession = (req as any).user;
       (req as any).managedIdentity = identity;
       (req as any).user = {
         id: identity.userId,

@@ -17,7 +17,7 @@ import { AiraMark } from './components/AiraMark';
 import { CommandPalette } from './components/CommandPalette';
 import { ConversationSearchOverlay } from './components/ConversationSearchOverlay';
 import { InlineToast } from './components/InlineToast';
-import { backfillConversationsBestEffort, deleteConversationFromServer, fetchConversationFromServer, syncConversationToServer } from './utils/conversationSearch';
+import { backfillConversationsBestEffort, deleteConversationFromServer, fetchAllConversationsFromServer, fetchConversationFromServer, syncConversationToServer } from './utils/conversationSearch';
 import { useAnimatedFavicon } from './utils/animatedFavicon';
 
 // Lazy-loaded heavy auxiliary surfaces to optimize FCP and TTI
@@ -41,13 +41,18 @@ const MODE_CONTEXT: Record<WorkspaceMode, string> = {
 
 function App() {
   useAnimatedFavicon();
-  const [conversations, setConversations] = useState<Conversation[]>(() => loadConversations());
+  const [currentUserId, setCurrentUserId] = useState<string | null>(() => neonAuth.getCurrentUser()?.id || null);
+  const [conversations, setConversations] = useState<Conversation[]>(() => {
+    const user = neonAuth.getCurrentUser();
+    return loadConversations(user?.id);
+  });
   // Root visits without an active tab session start on a transient welcome draft.
   // When an active session exists (in-tab session or ?c= param), restore it on reload.
   const [activeChatId, setActiveChatId] = useState<string>(() => {
     const sessionChatId = getSessionActiveChatId();
     if (sessionChatId) {
-      const stored = loadConversations();
+      const user = neonAuth.getCurrentUser();
+      const stored = loadConversations(user?.id);
       if (stored.some(c => c.id === sessionChatId)) {
         return sessionChatId;
       }
@@ -107,18 +112,50 @@ function App() {
   }, []);
 
   useEffect(() => {
-    return neonAuth.onAuthStateChange((user) => {
+    return neonAuth.onAuthStateChange(async (user) => {
+      const nextUserId = user?.id || null;
+      setCurrentUserId(nextUserId);
+
       if (user) {
         setSettings(s => ({
           ...s,
           userName: user.name || s.userName,
           email: user.email || s.email,
         }));
+
+        // Hydrate persistent conversations from PostgreSQL server
+        try {
+          const serverConvs = await fetchAllConversationsFromServer();
+          if (serverConvs && serverConvs.length > 0) {
+            setConversations(serverConvs);
+            saveConversations(serverConvs, user.id);
+            setActiveChatId(prev => (serverConvs.some(c => c.id === prev) ? prev : serverConvs[0].id));
+          } else {
+            const cached = loadConversations(user.id);
+            setConversations(cached);
+            setActiveChatId(prev => (cached.some(c => c.id === prev) ? prev : cached[0]?.id || ''));
+          }
+        } catch {
+          const cached = loadConversations(user.id);
+          setConversations(cached);
+        }
+      } else {
+        // Account signed out: revert to isolated guest state and clear memory
+        setSettings(s => ({
+          ...s,
+          userName: 'Guest User',
+          email: '',
+        }));
+        const guestConvs = loadConversations();
+        setConversations(guestConvs);
+        setActiveChatId(guestConvs[0]?.id || '');
       }
     });
   }, []);
 
-  useEffect(() => saveConversations(conversations), [conversations]);
+  useEffect(() => {
+    saveConversations(conversations, currentUserId || undefined);
+  }, [conversations, currentUserId]);
   useEffect(() => {
     if (!initialConversationBackfillRef.current) {
       initialConversationBackfillRef.current = true;

@@ -37,6 +37,7 @@ async function run() {
   const now = Math.floor(Date.now() / 1000);
   const good = jwt({
     iss: AUTH_ORIGIN,
+    aud: AUTH_ORIGIN,
     sub: 'stable-user-123',
     iat: now - 30,
     exp: now + 600
@@ -47,16 +48,19 @@ async function run() {
   assert.equal((await verifyNeonAuthToken(good)).userId, verified.userId);
   assert.equal(jwksFetches, 1, 'JWKS should cache between requests');
 
-  const other = jwt({ iss: AUTH_ORIGIN, sub: 'separate-account-456', iat: now - 30, exp: now + 600 });
+  const other = jwt({ iss: AUTH_ORIGIN, aud: AUTH_ORIGIN, sub: 'separate-account-456', iat: now - 30, exp: now + 600 });
   assert.notEqual((await verifyNeonAuthToken(other)).userId, verified.userId,
     'two independent accounts must get distinct principal IDs');
 
   const bad = [
-    jwt({ iss: AUTH_ORIGIN, sub: 'stable-user-123', iat: now - 30, exp: now - 1 }),
-    jwt({ iss: 'https://evil.example', sub: 'stable-user-123', iat: now - 30, exp: now + 600 }),
-    jwt({ iss: AUTH_ORIGIN, sub: 'stable-user-123', iat: now - 30, exp: now + 600, is_anonymous: true }),
+    jwt({ iss: AUTH_ORIGIN, aud: AUTH_ORIGIN, sub: 'stable-user-123', iat: now - 30, exp: now - 1 }),
+    jwt({ iss: 'https://evil.example', aud: AUTH_ORIGIN, sub: 'stable-user-123', iat: now - 30, exp: now + 600 }),
+    jwt({ iss: AUTH_ORIGIN, aud: 'https://attacker.example', sub: 'stable-user-123', iat: now - 30, exp: now + 600 }),
+    jwt({ iss: AUTH_ORIGIN, sub: 'stable-user-123', iat: now - 30, exp: now + 600 }), // missing aud
+    jwt({ iss: AUTH_ORIGIN, aud: AUTH_ORIGIN, sub: 'stable-user-123', iat: now - 30, exp: now + 600, is_anonymous: true }),
     good.slice(0, -5) + 'AAAAA',
-    Buffer.from(JSON.stringify({ alg: 'none', kid: 'test-key-1' })).toString('base64url') + '.' + good.split('.')[1] + '.' + good.split('.')[2]
+    Buffer.from(JSON.stringify({ alg: 'none', kid: 'test-key-1' })).toString('base64url') + '.' + good.split('.')[1] + '.' + good.split('.')[2],
+    Buffer.from(JSON.stringify({ alg: 'RS256', kid: 'test-key-1' })).toString('base64url') + '.' + good.split('.')[1] + '.' + good.split('.')[2]
   ];
   for (const token of bad) {
     await assert.rejects(verifyNeonAuthToken(token), undefined, 'invalid JWT must fail closed');

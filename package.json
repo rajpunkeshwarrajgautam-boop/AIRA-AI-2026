@@ -50,7 +50,9 @@
     "test:preview-identity": "npx tsx test/preview-identity-guard.ts",
     "test:research-evidence": "npx tsx test/research-evidence.ts",
     "test:neon-auth-identity": "npx tsx test/neon-auth-identity.test.ts",
-    "test:neon-auth-e2e": "npx tsx test/neon-auth-staging-e2e.test.ts"
+    "test:neon-auth-e2e": "npx tsx test/neon-auth-staging-e2e.test.ts",
+    "test:auth-security": "npx tsx test/auth-security-authorization.test.ts",
+    "test:auth-playwright": "npx tsx test/auth-playwright-cross-browser.test.ts"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",

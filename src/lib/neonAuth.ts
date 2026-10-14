@@ -30,8 +30,7 @@ export interface AuthStateListener {
 }
 
 const STORAGE_KEYS = {
-  SESSION: 'aira_neon_auth_session_v1',
-  GUEST_LINKED: 'aira_guest_linked_accounts_v1'
+  SESSION: 'aira_neon_auth_session_v1'
 };
 
 // Staging Neon Auth service URL as configured on branch br-soft-pine-b3gw5nyr
@@ -42,12 +41,36 @@ export class NeonAuthClient {
   private currentSession: NeonSessionData | null = null;
   private listeners: Set<AuthStateListener> = new Set();
   private tokenRefreshPromise: Promise<string | null> | null = null;
+  private syncChannel: BroadcastChannel | null = null;
 
   constructor() {
     this.baseUrl = (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_NEON_AUTH_URL) ||
       DEFAULT_AUTH_URL;
 
     this.currentSession = this.loadStoredSession();
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('storage', (event) => {
+        if (event.key === STORAGE_KEYS.SESSION) {
+          this.currentSession = this.loadStoredSession();
+          this.notifyListeners();
+        }
+      });
+
+      if (typeof BroadcastChannel !== 'undefined') {
+        try {
+          this.syncChannel = new BroadcastChannel('aira_neon_auth_sync');
+          this.syncChannel.onmessage = (event) => {
+            if (event.data?.type === 'AUTH_SYNC') {
+              this.currentSession = this.loadStoredSession();
+              this.notifyListeners();
+            }
+          };
+        } catch {
+          // BroadcastChannel unavailable
+        }
+      }
+    }
   }
 
   public getBaseUrl(): string {
@@ -82,6 +105,7 @@ export class NeonAuthClient {
       } else {
         localStorage.removeItem(STORAGE_KEYS.SESSION);
       }
+      this.syncChannel?.postMessage({ type: 'AUTH_SYNC' });
     } catch {
       // LocalStorage access failure
     }
@@ -133,11 +157,13 @@ export class NeonAuthClient {
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
-    if (cookie) {
-      headers['Cookie'] = cookie;
-    }
-    if (typeof window !== 'undefined' && window.location?.origin) {
-      headers['Origin'] = window.location.origin;
+    // In browser, credentials: 'include' automatically sends session cookies.
+    // Setting Cookie or Origin manually in browser JavaScript is forbidden by the Fetch standard.
+    if (typeof window === 'undefined') {
+      if (cookie) {
+        headers['Cookie'] = cookie;
+      }
+      headers['Origin'] = this.baseUrl;
     }
 
     const response = await fetch(`${this.baseUrl}/token`, {
@@ -211,7 +237,11 @@ export class NeonAuthClient {
         return token;
       } catch (err) {
         console.warn('Failed to refresh Neon Auth JWT:', err);
-        return this.currentSession?.jwt || null;
+        // Security requirement: Never return a stale, expired token on refresh failure
+        if (this.currentSession?.jwt && (this.currentSession.jwtExpiresAt || 0) > Date.now()) {
+          return this.currentSession.jwt;
+        }
+        return null;
       } finally {
         this.tokenRefreshPromise = null;
       }
@@ -230,12 +260,16 @@ export class NeonAuthClient {
     preserveGuestData?: boolean;
   }): Promise<{ user: NeonUser; session: NeonSessionData }> {
     const origin = (typeof window !== 'undefined' && window.location?.origin) || 'http://localhost:5173';
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (typeof window === 'undefined') {
+      headers['Origin'] = origin;
+    }
+
     const response = await fetch(`${this.baseUrl}/sign-up/email`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Origin': origin
-      },
+      headers,
       credentials: 'include',
       body: JSON.stringify({
         email: params.email.trim(),
@@ -268,7 +302,11 @@ export class NeonAuthClient {
     this.saveSession(session);
 
     if (params.preserveGuestData) {
-      this.recordGuestDataLink(user.id);
+      try {
+        await this.linkGuestSessionToServer();
+      } catch (err) {
+        console.warn('Server guest linking notice:', err);
+      }
     }
 
     return { user, session };
@@ -283,12 +321,16 @@ export class NeonAuthClient {
     preserveGuestData?: boolean;
   }): Promise<{ user: NeonUser; session: NeonSessionData }> {
     const origin = (typeof window !== 'undefined' && window.location?.origin) || 'http://localhost:5173';
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (typeof window === 'undefined') {
+      headers['Origin'] = origin;
+    }
+
     const response = await fetch(`${this.baseUrl}/sign-in/email`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Origin': origin
-      },
+      headers,
       credentials: 'include',
       body: JSON.stringify({
         email: params.email.trim(),
@@ -320,7 +362,11 @@ export class NeonAuthClient {
     this.saveSession(session);
 
     if (params.preserveGuestData) {
-      this.recordGuestDataLink(user.id);
+      try {
+        await this.linkGuestSessionToServer();
+      } catch (err) {
+        console.warn('Server guest linking notice:', err);
+      }
     }
 
     return { user, session };
@@ -340,10 +386,12 @@ export class NeonAuthClient {
       try {
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
-          'Origin': origin,
         };
+        if (typeof window === 'undefined') {
+          headers['Origin'] = origin;
+          if (cookie) headers['Cookie'] = cookie;
+        }
         if (sessionToken) headers['Authorization'] = `Bearer ${sessionToken}`;
-        if (cookie) headers['Cookie'] = cookie;
 
         await fetch(`${this.baseUrl}/sign-out`, {
           method: 'POST',
@@ -362,12 +410,15 @@ export class NeonAuthClient {
    */
   public async requestPasswordReset(email: string): Promise<{ status: boolean; message: string }> {
     const origin = (typeof window !== 'undefined' && window.location?.origin) || 'http://localhost:5173';
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json'
+    };
+    if (typeof window === 'undefined') {
+      headers['Origin'] = origin;
+    }
     const response = await fetch(`${this.baseUrl}/request-password-reset`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Origin': origin
-      },
+      headers,
       body: JSON.stringify({ email: email.trim() })
     });
 
@@ -388,12 +439,15 @@ export class NeonAuthClient {
    */
   public async resetPassword(params: { token: string; newPassword: string }): Promise<{ status: boolean; message?: string }> {
     const origin = (typeof window !== 'undefined' && window.location?.origin) || 'http://localhost:5173';
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json'
+    };
+    if (typeof window === 'undefined') {
+      headers['Origin'] = origin;
+    }
     const response = await fetch(`${this.baseUrl}/reset-password`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Origin': origin
-      },
+      headers,
       body: JSON.stringify(params)
     });
 
@@ -420,7 +474,8 @@ export class NeonAuthClient {
     const jwt = await this.getValidJwt();
     if (!jwt) throw new Error('No active authenticated session');
 
-    const response = await fetch('/api/auth/identity', {
+    const base = typeof window !== 'undefined' ? '' : ((globalThis as any).process?.env?.AIRA_API_URL || 'http://localhost:3000');
+    const response = await fetch(`${base}/api/auth/identity`, {
       method: 'GET',
       headers: {
         'Accept': 'application/json',
@@ -436,17 +491,32 @@ export class NeonAuthClient {
     return response.json();
   }
 
-  private recordGuestDataLink(userId: string): void {
-    if (typeof window === 'undefined') return;
-    try {
-      const links = JSON.parse(localStorage.getItem(STORAGE_KEYS.GUEST_LINKED) || '[]');
-      if (!links.includes(userId)) {
-        links.push(userId);
-        localStorage.setItem(STORAGE_KEYS.GUEST_LINKED, JSON.stringify(links));
-      }
-    } catch {
-      // Ignore local storage error
+  /**
+   * Link existing signed guest session data to the authenticated user account on the server.
+   * Invokes POST /api/auth/link-guest which validates both the server-signed guest cookie
+   * and the verified managed account JWT.
+   */
+  public async linkGuestSessionToServer(): Promise<{ success: boolean; transferredConversations: number }> {
+    const jwt = await this.getValidJwt();
+    if (!jwt) throw new Error('No authenticated user session for linking');
+
+    const base = typeof window !== 'undefined' ? '' : ((globalThis as any).process?.env?.AIRA_API_URL || 'http://localhost:3000');
+    const response = await fetch(`${base}/api/auth/link-guest`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${jwt}`
+      },
+      credentials: 'include',
+      body: JSON.stringify({})
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ error: 'Guest link failed' }));
+      throw new Error(err.error || `Guest link failed (${response.status})`);
     }
+
+    return response.json();
   }
 }
 
