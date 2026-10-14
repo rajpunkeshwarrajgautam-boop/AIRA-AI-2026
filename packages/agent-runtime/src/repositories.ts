@@ -90,6 +90,7 @@ export class PostgresRunRepository implements RunRepository {
       modelPolicy: JSON.stringify(run.modelPolicy),
       context_data: JSON.stringify({
         ...(run.context || {}),
+        provenance: run.provenance,
         principalScopes: run.principalScopes || []
       }),
       content: run.content,
@@ -251,6 +252,7 @@ export class PostgresRunRepository implements RunRepository {
     const context = parseJson(row.context_data, {});
     const routingDecision = context?.routingDecision || undefined;
     const principalScopes = context?.principalScopes || [];
+    const provenance = context?.provenance || undefined;
     return {
       id: row.id,
       principalId: row.principal_id,
@@ -262,6 +264,7 @@ export class PostgresRunRepository implements RunRepository {
       conversationId: row.conversation_id || null,
       intent: row.intent as any,
       routingDecision,
+      provenance,
       state: row.state as any,
       modelPolicy: parseJson(row.modelPolicy, {}),
       prompt: row.prompt,
@@ -286,5 +289,67 @@ export class PostgresRunRepository implements RunRepository {
       updatedAt: parseInt(row.updatedAt, 10),
       completedAt: row.completed_at ? parseInt(row.completed_at, 10) : undefined
     };
+  }
+}
+
+export class InMemoryRunRepository implements RunRepository {
+  private runs: Map<string, Run> = new Map();
+  private events: Map<string, StreamingEvent[]> = new Map();
+  private sequences: Map<string, number> = new Map();
+
+  async saveRun(run: Run): Promise<void> {
+    this.runs.set(run.id, { ...run });
+  }
+
+  async getRun(id: string): Promise<Run | undefined> {
+    const r = this.runs.get(id);
+    return r ? { ...r } : undefined;
+  }
+
+  async listRuns(): Promise<Run[]> {
+    return Array.from(this.runs.values());
+  }
+
+  async listRunsForPrincipal(principalId: string, limit = 50): Promise<Run[]> {
+    return Array.from(this.runs.values())
+      .filter(r => r.principalId === principalId)
+      .slice(0, limit);
+  }
+
+  async searchRunsForPrincipal(principalId: string, query: string, limit = 5): Promise<Run[]> {
+    const q = query.toLowerCase();
+    return Array.from(this.runs.values())
+      .filter(r => r.principalId === principalId && (r.prompt.toLowerCase().includes(q) || r.content.toLowerCase().includes(q)))
+      .slice(0, limit);
+  }
+
+  async getInterruptedRuns(): Promise<Run[]> {
+    return [];
+  }
+
+  async appendRunEvent(event: StreamingEvent): Promise<StreamingEvent> {
+    const list = this.events.get(event.runId) || [];
+    const seq = (this.sequences.get(event.runId) || 0) + 1;
+    this.sequences.set(event.runId, seq);
+    const assigned: StreamingEvent = { ...event, sequence: seq };
+    list.push(assigned);
+    this.events.set(event.runId, list);
+    return assigned;
+  }
+
+  async getRunEvents(runId: string): Promise<StreamingEvent[]> {
+    return this.events.get(runId) || [];
+  }
+
+  async getRunEventsAfter(runId: string, sequence: number): Promise<StreamingEvent[]> {
+    return (this.events.get(runId) || []).filter(e => (e.sequence || 0) > sequence);
+  }
+
+  async getLatestEventSequence(runId: string): Promise<number> {
+    return this.sequences.get(runId) || 0;
+  }
+
+  async claimInterruptedRun(runId: string, owner: string, ttlMs: number): Promise<boolean> {
+    return true;
   }
 }

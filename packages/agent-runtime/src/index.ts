@@ -13,9 +13,10 @@ import {
   Citation,
   Artifact,
   ApprovalDecision,
-  ExecutionPrincipal
+  ExecutionPrincipal,
+  ModelProvenance
 } from '../../contracts/src/index.js';
-import { ModelRouter, ChatMessageInput } from '../../model-router/src/index.js';
+import { ModelRouter, ChatMessageInput, isModelMatch } from '../../model-router/src/index.js';
 import { ToolRegistry, ToolGateway, PostgresToolCallRepository } from '../../tool-runtime/src/index.js';
 import { configuredSearchProviders } from '../../tool-runtime/src/search-providers.js';
 import { ApprovalKernel } from '../../approvals/src/index.js';
@@ -25,11 +26,14 @@ import { RunRepository } from './repositories.js';
 import { CapabilityRegistry } from './registry.js';
 import { ServerIntentRouter } from './router.js';
 import { ResearchService } from './research.js';
-import { buildResearchEvidenceContext, buildResearchSourcesAppendix, isResearchToolCallDump, renderGroundedResearchFallback, verifiedWebCitations } from './research-evidence.js';
+import { buildResearchEvidenceContext, buildResearchSourcesAppendix, isResearchToolCallDump, renderGroundedResearchFallback, sanitizeCitationMarkers, verifiedWebCitations, verifiedSearchCitationsFromToolResults } from './research-evidence.js';
 import { WorkflowRepository, PostgresWorkflowRepository } from './workflow-repositories.js';
 import { WorkflowEngine } from './workflow-engine.js';
 import { WorkflowCompiler } from './workflow-compiler.js';
 import { buildDurableHistorySystemMessage } from './memory-policy.js';
+import { InstructionResolver } from './behavioral/instruction-resolver.js';
+import { AdaptiveSynthesizer } from './behavioral/adaptive-synthesizer.js';
+import { ToolRecoveryEngine } from './behavioral/tool-recovery-engine.js';
 
 export class AgentRuntime extends EventEmitter {
   private eventStreams: Map<string, EventEmitter> = new Map();
@@ -151,17 +155,25 @@ export class AgentRuntime extends EventEmitter {
     const now = Date.now();
 
     // 1. Authoritative Server Intent Routing & Policy Gate
+    const conversationHistory = (
+      request.context?.conversationHistory ||
+      request.context?.history
+    ) as Array<{ role: string; content: string }> | undefined;
+
     const routingDecision = await this.router.route({
       prompt: request.prompt,
       principal,
       advisoryIntent: request.intent,
-      context: request.context
+      context: request.context,
+      conversationHistory
     });
 
-    const basePolicy = this.modelRouter.resolvePolicy(
+    const execution = this.modelRouter.resolveExecution(
       request.modelPolicy?.model || 'aira-auto',
       routingDecision.intent
     );
+
+    const basePolicy = execution.policy;
     const requestedPolicy = request.modelPolicy;
     const extendedThinking = requestedPolicy?.extendedThinking ?? basePolicy.extendedThinking;
 
@@ -172,6 +184,19 @@ export class AgentRuntime extends EventEmitter {
       extendedThinking,
       reasoningBudget: requestedPolicy?.reasoningBudget ?? (extendedThinking ? (basePolicy.reasoningBudget ?? 2048) : undefined),
     });
+
+    const provenance: ModelProvenance = {
+      requestedModel: request.modelPolicy?.model || 'aira-auto',
+      resolvedPolicyModel: execution.policy.model,
+      provider: execution.provider,
+      executedModel: execution.executedModel,
+      plannedModel: execution.plannedModel || execution.executedModel,
+      fallbackOccurred: execution.fallbackOccurred,
+      fallbackReason: execution.fallbackReason,
+      verified: false,
+      executionStatus: 'PENDING',
+      timestamp: now
+    };
 
     const run: Run = {
       id: runId,
@@ -184,6 +209,7 @@ export class AgentRuntime extends EventEmitter {
       conversationId: request.conversationId || null,
       intent: routingDecision.intent,
       routingDecision,
+      provenance,
       state: 'QUEUED',
       modelPolicy: policy,
       prompt: request.prompt,
@@ -310,7 +336,15 @@ export class AgentRuntime extends EventEmitter {
     if (state === 'COMPLETED' || state === 'FAILED' || state === 'CANCELLED') {
       run.completedAt = run.updatedAt;
     }
+    if (state === 'FAILED' && run.provenance) {
+      run.provenance.verified = false;
+      run.provenance.executionStatus = 'FAILED';
+    }
     await this.runRepo.saveRun(run);
+
+    if (state === 'FAILED' && run.provenance) {
+      await this.emitRunEvent(runId, 'model.provenance', run.provenance);
+    }
 
     const eventType: StreamingEventType =
       state === 'COMPLETED' ? 'run.completed' :
@@ -339,6 +373,20 @@ export class AgentRuntime extends EventEmitter {
         message: msg
       });
       await this.emitRunEvent(runId, 'content.delta', { delta: msg });
+      await this.transitionRunState(runId, 'COMPLETED');
+      return;
+    }
+
+    // Checkpoint 0.1: Immediate Clarification Delivery for Ambiguous Queries
+    if (run.routingDecision?.metadata?.reasoningStrategy === 'CLARIFY_AMBIGUOUS' && run.routingDecision?.metadata?.clarificationPrompt) {
+      if (run.state !== 'RUNNING') {
+        await this.transitionRunState(runId, 'RUNNING');
+      }
+      const clarificationMsg = run.routingDecision.metadata.clarificationPrompt;
+      run.content = clarificationMsg;
+      run.executionCheckpoint = 'COMPLETED';
+      await this.runRepo.saveRun(run);
+      await this.emitRunEvent(runId, 'content.delta', { delta: clarificationMsg });
       await this.transitionRunState(runId, 'COMPLETED');
       return;
     }
@@ -450,10 +498,31 @@ export class AgentRuntime extends EventEmitter {
     
     // Checkpoint 1: Knowledge Search Context
     if (!run.executionCheckpoint) {
-      if (run.intent === 'RESEARCH') {
+      const isResearchIntent = run.intent === 'RESEARCH';
+      const isAgentMissionWithResearch = run.intent === 'AGENT_MISSION' && (
+        run.prompt.toLowerCase().includes('latest') ||
+        run.prompt.toLowerCase().includes('recent') ||
+        run.prompt.toLowerCase().includes('compare the sources') ||
+        run.prompt.toLowerCase().includes('sources') ||
+        run.prompt.toLowerCase().includes('research')
+      );
+
+      if (isResearchIntent || isAgentMissionWithResearch) {
+        const detectedSubject = run.routingDecision?.metadata?.detectedSubject;
+        const topic = run.routingDecision?.metadata?.topic;
+        const researchPrompt = detectedSubject && topic === 'FINANCIAL' && !/\b(?:share|stock|price|quote|trading)\b/i.test(run.prompt)
+          ? `${detectedSubject} current share price stock quote premarket regular market timestamp`
+          : detectedSubject && topic === 'WEATHER' && !/\b(?:weather|forecast|temperature)\b/i.test(run.prompt)
+          ? `${detectedSubject} weather today current conditions forecast`
+          : detectedSubject && topic === 'BOX_OFFICE' && !/\b(?:box\s+office|gross|collection)\b/i.test(run.prompt)
+          ? `${detectedSubject} box office worldwide gross Box Office Mojo The Numbers`
+          : run.prompt;
+
         const researchResult = await this.researchService.executeResearch({
-          prompt: run.prompt,
-          runId
+          prompt: researchPrompt,
+          runId,
+          topic,
+          location: topic === 'WEATHER' ? (detectedSubject || undefined) : undefined
         });
 
         if (researchResult.freshnessRequired && !researchResult.providerReady) {
@@ -526,6 +595,13 @@ export class AgentRuntime extends EventEmitter {
         } else if (run.prompt.toLowerCase().includes('github') && run.prompt.toLowerCase().includes('commit')) {
           selectedToolName = 'repo_git_log';
           selectedArgs = { count: 1 };
+        } else if (
+          isAgentMission && (run.prompt.toLowerCase().includes('workspace') || run.prompt.toLowerCase().includes('inspect'))
+        ) {
+          const fileMatch = run.prompt.match(/(?:read|inspect|structure|analyze|view)\s+([a-zA-Z0-9_\-./\\]+\.[a-zA-Z0-9]+)/i);
+          const targetPath = fileMatch ? fileMatch[1].trim() : (run.prompt.toLowerCase().includes('src/app.tsx') ? 'src/App.tsx' : 'package.json');
+          selectedToolName = 'file_system_read';
+          selectedArgs = { filePath: targetPath };
         } else if (run.prompt.toLowerCase().includes('git status') || run.prompt.toLowerCase().includes('repo status')) {
           selectedToolName = 'repo_git_status';
           selectedArgs = {};
@@ -670,51 +746,159 @@ export class AgentRuntime extends EventEmitter {
       }
 
       run = await this.runRepo.getRun(runId) as Run; // reload after async tool execution
-      run.toolResults.push(toolResult);
-      run.executionCheckpoint = 'TOOL_COMPLETED';
-      await this.runRepo.saveRun(run);
-      await this.emitRunEvent(runId, 'tool.completed', toolResult);
 
-      await this.transitionRunState(runId, 'RUNNING');
-      
-      // Bounded iterative loop for AGENT_MISSION (up to 3 steps)
-      if (run.intent === 'AGENT_MISSION' && run.stepCount < 3) {
-        let nextToolName: string | null = null;
-        let nextArgs: Record<string, unknown> = {};
+      const recoveryEngine = new ToolRecoveryEngine();
+      let finalToolResult = toolResult;
+      let completionCheck = recoveryEngine.verifyCompletion(toolCall.name, finalToolResult);
 
-        if (run.stepCount === 1) {
-          nextToolName = 'repo_git_status';
-          nextArgs = {};
-        } else if (run.stepCount === 2) {
-          nextToolName = 'repo_git_log';
-          nextArgs = { count: 2 };
-        }
+      const toolDef = this.toolGateway.getTool(toolCall.name)?.definition || this.toolRegistry.get(toolCall.name)?.definition;
+      const isIdempotent = toolDef ? (toolDef.sideEffects === 'NONE' || toolDef.sideEffects === 'READ') : false;
+      const alternativeTools: string[] = [];
+      if (toolCall.name === 'web_search') alternativeTools.push('tavily_search', 'exa_search');
+      else if (toolCall.name === 'browser_navigate') alternativeTools.push('browser_screenshot');
 
-        if (nextToolName) {
-          const nextToolDef = this.toolGateway.getTool(nextToolName)?.definition || this.toolRegistry.get(nextToolName)?.definition;
-          const nextToolCall: ToolCall = {
-            id: `call_${Date.now()}_${run.stepCount}`,
-            toolId: nextToolDef?.id || `tool_${nextToolName}`,
-            name: nextToolName,
-            arguments: nextArgs,
-            timestamp: Date.now()
-          };
-          run.toolsUsed.push(nextToolName);
-          run.toolCalls.push(nextToolCall);
-          run.stepCount++;
-          run.executionCheckpoint = 'TOOL_SELECTED';
+      let attempt = 0;
+      while (!completionCheck.verified && attempt < 2) {
+        const decision = recoveryEngine.evaluateFailure(
+          {
+            toolName: toolCall.name,
+            arguments: toolCall.arguments,
+            isIdempotent,
+            requiresApproval: toolDef?.requiresApproval || false,
+            alternativeTools
+          },
+          attempt,
+          completionCheck.reason || 'Tool execution unverified',
+          finalToolResult
+        );
+
+        if (decision.action === 'RETRY') {
+          attempt = decision.attempt;
+          await this.emitRunEvent(runId, 'tool.progress', {
+            status: 'RETRYING',
+            attempt,
+            explanation: decision.explanation
+          });
+          await new Promise(r => setTimeout(r, 100 * attempt));
+
+          if (this.toolGateway.getTool(toolCall.name)) {
+            finalToolResult = await this.toolGateway.execute({
+              toolName: toolCall.name,
+              arguments: toolCall.arguments,
+              context: {
+                runId,
+                principal: { userId: run.principalId, sessionId: run.sessionId, roles: ['member'], scopes: run.principalScopes || [] },
+                workspaceRoot: this.workspaceRoot
+              },
+              callId: `${toolCall.id}_retry_${attempt}`
+            });
+          } else {
+            finalToolResult = await this.toolRegistry.execute(toolCall, {
+              runId,
+              workspaceRoot: this.workspaceRoot,
+              sessionGrantedTools: new Set()
+            });
+          }
+          completionCheck = recoveryEngine.verifyCompletion(toolCall.name, finalToolResult);
+        } else if (decision.action === 'FALLBACK_TOOL' && decision.alternativeTool) {
+          const fallbackTool = decision.alternativeTool;
+          await this.emitRunEvent(runId, 'tool.progress', {
+            status: 'FALLBACK',
+            fallbackTool,
+            explanation: decision.explanation
+          });
+          if (this.toolGateway.getTool(fallbackTool)) {
+            finalToolResult = await this.toolGateway.execute({
+              toolName: fallbackTool,
+              arguments: toolCall.arguments,
+              context: {
+                runId,
+                principal: { userId: run.principalId, sessionId: run.sessionId, roles: ['member'], scopes: run.principalScopes || [] },
+                workspaceRoot: this.workspaceRoot
+              },
+              callId: `${toolCall.id}_fallback_${fallbackTool}`
+            });
+          }
+          completionCheck = recoveryEngine.verifyCompletion(fallbackTool, finalToolResult);
+          break;
+        } else if (decision.action === 'ASK_APPROVAL') {
+          run.executionCheckpoint = 'WAITING_FOR_APPROVAL';
+          run.state = 'BLOCKED';
+          run.error = decision.explanation;
+          run.toolResults.push(finalToolResult);
           await this.runRepo.saveRun(run);
-          await this.emitRunEvent(runId, 'tool.requested', nextToolCall);
-          return this.executeRunLoop(runId);
+          await this.emitRunEvent(runId, 'tool.approval_required', {
+            toolName: toolCall.name,
+            explanation: decision.explanation
+          });
+          return;
+        } else {
+          // ABORT_PERMANENT_ERROR
+          break;
         }
       }
 
-      run = await this.runRepo.getRun(runId) as Run;
-      run.executionCheckpoint = 'SYNTHESIZING';
-      await this.runRepo.saveRun(run);
+      run.toolResults.push(finalToolResult);
+
+      if (!completionCheck.verified) {
+        // Enforce zero fabricated success: failed tool must NEVER emit tool.completed or advance to TOOL_COMPLETED
+        run.executionCheckpoint = 'TOOL_FAILED';
+        run.state = 'FAILED';
+        run.error = completionCheck.reason || 'Tool execution failed verification';
+        await this.runRepo.saveRun(run);
+        await this.emitRunEvent(runId, 'tool.failed', {
+          toolName: toolCall.name,
+          error: completionCheck.reason,
+          state: completionCheck.state
+        });
+        await this.transitionRunState(runId, 'FAILED', run.error);
+        return;
+      } else {
+        run.executionCheckpoint = 'TOOL_COMPLETED';
+        await this.runRepo.saveRun(run);
+        await this.emitRunEvent(runId, 'tool.completed', finalToolResult);
+
+        await this.transitionRunState(runId, 'RUNNING');
+        
+        // Bounded iterative loop for AGENT_MISSION (up to 3 steps)
+        if (run.intent === 'AGENT_MISSION' && run.stepCount < 3) {
+          let nextToolName: string | null = null;
+          let nextArgs: Record<string, unknown> = {};
+
+          if (run.stepCount === 1) {
+            nextToolName = 'repo_git_status';
+            nextArgs = {};
+          } else if (run.stepCount === 2) {
+            nextToolName = 'repo_git_log';
+            nextArgs = { count: 2 };
+          }
+
+          if (nextToolName) {
+            const nextToolDef = this.toolGateway.getTool(nextToolName)?.definition || this.toolRegistry.get(nextToolName)?.definition;
+            const nextToolCall: ToolCall = {
+              id: `call_${Date.now()}_${run.stepCount}`,
+              toolId: nextToolDef?.id || `tool_${nextToolName}`,
+              name: nextToolName,
+              arguments: nextArgs,
+              timestamp: Date.now()
+            };
+            run.toolsUsed.push(nextToolName);
+            run.toolCalls.push(nextToolCall);
+            run.stepCount++;
+            run.executionCheckpoint = 'TOOL_SELECTED';
+            await this.runRepo.saveRun(run);
+            await this.emitRunEvent(runId, 'tool.requested', nextToolCall);
+            return this.executeRunLoop(runId);
+          }
+        }
+
+        run = await this.runRepo.getRun(runId) as Run;
+        run.executionCheckpoint = 'SYNTHESIZING';
+        await this.runRepo.saveRun(run);
+      }
     }
 
-    if (run.executionCheckpoint === 'TOOL_COMPLETED') {
+    if (run.executionCheckpoint === 'TOOL_COMPLETED' || run.executionCheckpoint === 'TOOL_FAILED') {
       run.executionCheckpoint = 'SYNTHESIZING';
       await this.runRepo.saveRun(run);
     }
@@ -737,22 +921,38 @@ export class AgentRuntime extends EventEmitter {
         console.warn('Could not query durable prior run history for principal:', memErr);
       }
 
-      if (run.systemPrompt) {
-        messages.push({ role: 'system', content: run.systemPrompt });
-      } else if (run.intent === 'RESEARCH') {
+      const instructionResolver = new InstructionResolver();
+      const adaptiveSynthesizer = new AdaptiveSynthesizer();
+
+      const resolvedInstructions = instructionResolver.resolve({
+        userPrompt: run.prompt,
+        activeProjectId: run.projectId || undefined,
+        activeUserId: run.principalId,
+        customInstructions: run.systemPrompt
+      });
+
+      const writingProfile = adaptiveSynthesizer.deriveProfile(run.prompt, resolvedInstructions);
+      const systemDirective = adaptiveSynthesizer.buildSystemDirective(writingProfile);
+
+      if (run.intent === 'RESEARCH') {
         messages.push({
           role: 'system',
-          content: `You are Aira AI operating in rigorous Research mode. Provide evidence-backed synthesis, cite available sources, decompose key claims, and distinguish established facts from inference. Do NOT manufacture citations or claims without evidence.`
+          content: `${systemDirective}\n\nYou are operating in rigorous Research mode. Provide evidence-backed synthesis, cite available sources, decompose key claims, and distinguish established facts from inference. Do NOT manufacture citations or claims without evidence.`
         });
       } else if (run.intent === 'AGENT_MISSION') {
         messages.push({
           role: 'system',
-          content: `You are Aira AI operating in Autonomous Mission mode. Deliver clear execution results, steps undertaken, verification findings, and a concise summary.`
+          content: `${systemDirective}\n\nYou are operating in Autonomous Mission mode. Deliver clear execution results, steps undertaken, verification findings, and a concise summary.`
+        });
+      } else if (resolvedInstructions.effectiveInstructions.length > 0) {
+        messages.push({
+          role: 'system',
+          content: `${systemDirective}\n\nContextual Guidelines:\n${resolvedInstructions.effectiveInstructions.join('\n')}`
         });
       } else {
         messages.push({
           role: 'system',
-          content: `You are Aira AI, an autonomous intelligence operating workspace. Maintain precise, verified reasoning.`
+          content: systemDirective
         });
       }
 
@@ -767,14 +967,48 @@ export class AgentRuntime extends EventEmitter {
         });
       }
       
+      if (run.provenance) {
+        await this.emitRunEvent(runId, 'model.provenance', run.provenance);
+      }
+
       const now = new Date();
       const liveSearchProviders = configuredSearchProviders();
-      const currentContextMsg = `AIRA RUNTIME CONTEXT
+      const prov = run.provenance;
+      const executedModel = prov?.executedModel || run.modelPolicy.model;
+      const executedProvider = prov?.provider || 'unknown';
+      const providerLabel = executedProvider === 'nvidia' ? 'NVIDIA NIM'
+        : executedProvider === 'anthropic' ? 'Anthropic'
+        : executedProvider === 'openai' ? 'OpenAI'
+        : executedProvider === 'mock' ? 'Deterministic Mock'
+        : 'Unknown Provider';
+
+      const currentContextMsg = `AIRA RUNTIME CONTEXT & IDENTITY PROVENANCE:
 Current date: ${now.toDateString()}
 Current UTC time: ${now.toISOString()}
-Provider Capabilities:
-- webSearch: ${liveSearchProviders.length > 0 ? `READY (${liveSearchProviders.join(', ')})` : 'PROVIDER_NOT_CONFIGURED'}
-- researchEvidenceCount: ${run.citations?.length || 0}`;
+Platform: AIRA AI 2026 (Autonomous Operating Workspace)
+Execution Model: ${executedModel}
+Execution Provider: ${providerLabel}
+Requested Model: ${prov?.requestedModel || run.modelPolicy.model}
+${prov?.fallbackOccurred ? `Routing Notice: Provider fallback occurred (${prov.fallbackReason || 'preferred provider unavailable'}).` : ''}
+
+CAPABILITY & IDENTITY INVARIANTS:
+1. Model Identity Accuracy:
+   - When asked what model powers you or generated this response, state truthfully that you are AIRA AI operating with ${executedModel} via ${providerLabel}.
+   - Never claim to be "powered by Claude 3.7", "Anthropic Claude", "OpenAI GPT", or any other model unless that model is explicitly the Execution Model above.
+   - Do NOT adopt model claims from retrieved memories, project conventions, or conversational context that contradict your runtime Execution Model.
+2. Operational Capabilities:
+   - Web Search: ${liveSearchProviders.length > 0 ? `OPERATIONAL (${liveSearchProviders.join(', ')})` : 'NOT_CONFIGURED'}
+   - Multi-step Workflows: OPERATIONAL (via workflow engine DAG execution).
+   - Tool Execution: OPERATIONAL (system tools execute subject to principal permissions).
+   - Memory Vault UI: BROWSER_LOCAL_ONLY. Vault entries persist in that browser's localStorage for the user's own reference, but they are NOT connected to this server-side chat model.
+   - This server chat cannot automatically access, read, search, or recall Memory Vault UI entries, even in a later conversation in the same browser. Never imply that manually adding a Vault entry enables Aira to recall it in future chats.
+   - Recent completed server-side run history may be retrieved for the same principal as bounded conversational context; it is separate from the browser-local Vault and is NOT a guaranteed permanent user-controlled memory store.
+   - For a request to remember a fact across future conversations, never assert the fact was saved, persisted to Memory Vault, or will automatically be recalled later. Explain that a manual Vault entry can preserve it for the user to view, but server chat cannot read Vault entries automatically.
+   - You must NOT claim access to tools or features that are not operational. You do not have unrestricted local OS or device access without tool execution.
+3. Model vs Platform Distinction:
+   - AIRA AI is the workspace and application platform.
+   - The foundation model powering this generation is ${executedModel}.
+   - Distinguish the platform features from the underlying model capabilities.`;
 
       messages.push({
         role: 'system',
@@ -794,10 +1028,25 @@ Provider Capabilities:
       }
       
       messages.push({ role: 'user', content: run.prompt });
+      // TOOL_ACTION web searches must use the same guarded synthesis as RESEARCH.
+      const executedSearchEvidence = verifiedSearchCitationsFromToolResults(run.toolCalls, run.toolResults);
+      const liveEvidence = verifiedWebCitations([...(run.citations || []), ...executedSearchEvidence]);
+      if (executedSearchEvidence.length > 0) {
+        run.citations = liveEvidence;
+        await this.runRepo.saveRun(run);
+      }
+      const hasExecutedSearch = run.toolCalls.some(call =>
+        ['web_search', 'tavily_search', 'exa_search'].includes(call.name)
+      );
+      const guardedSearchSynthesis = liveEvidence.length > 0 || hasExecutedSearch;
+
 
       if (run.toolCalls.length > 0 && run.toolResults.length > 0) {
         const toolSummaries = run.toolCalls.map((call, idx) => {
           const res = run.toolResults[idx];
+          if (['web_search', 'tavily_search', 'exa_search'].includes(call.name) && liveEvidence.length > 0) {
+            return `[Tool Call ${idx + 1}: ${call.name}]: Executed web-search results are supplied separately as verified source data. Answer the user; do not emit search-request JSON.`;
+          }
           return `[Tool Call ${idx + 1}: ${call.name}]:\nArgs: ${JSON.stringify(call.arguments)}\nOutput: ${JSON.stringify(res ? (res.output || res.error) : 'Pending')}`;
         }).join('\n\n');
         messages.push({
@@ -806,38 +1055,66 @@ Provider Capabilities:
         });
       }
 
-      const liveEvidence = run.intent === 'RESEARCH' ? verifiedWebCitations(run.citations) : [];
       if (liveEvidence.length > 0) {
-        messages.push({ role: 'system', content: buildResearchEvidenceContext(liveEvidence) });
+        const topic = run.routingDecision?.metadata?.topic;
+        messages.push({ role: 'system', content: buildResearchEvidenceContext(liveEvidence, topic) });
       }
       const adapter = this.modelRouter.getAdapter(run.modelPolicy);
       // Research text must be screened before it is exposed to the UI.
       // A model emitting repeated JSON search arguments is NOT executing tools.
       let researchDraft = '';
 
-      await adapter.stream(messages, run.modelPolicy, async (delta) => {
-        if (delta.thinking) {
-          run.thinking += delta.thinking;
-          await this.runRepo.saveRun(run);
-          await this.emitRunEvent(runId, 'thinking.delta', { delta: delta.thinking });
-        }
-        if (delta.text) {
-          if (liveEvidence.length > 0) {
-            researchDraft += delta.text;
-          } else {
-            run.content += delta.text;
+      let completionResult: ModelCompletionResult;
+      try {
+        completionResult = await adapter.stream(messages, run.modelPolicy, async (delta) => {
+          if (delta.thinking) {
+            run.thinking += delta.thinking;
             await this.runRepo.saveRun(run);
-            await this.emitRunEvent(runId, 'content.delta', { delta: delta.text });
+            await this.emitRunEvent(runId, 'thinking.delta', { delta: delta.thinking });
           }
-        }
-      });
+          if (delta.text) {
+            if (guardedSearchSynthesis) {
+              researchDraft += delta.text;
+            } else {
+              run.content += delta.text;
+              await this.runRepo.saveRun(run);
+              await this.emitRunEvent(runId, 'content.delta', { delta: delta.text });
+            }
+          }
+        });
+      } catch (streamErr: any) {
+        await this.transitionRunState(runId, 'FAILED', streamErr.message);
+        throw streamErr;
+      }
 
-      if (liveEvidence.length > 0) {
+      // Reconcile outbound & upstream models and confirm execution provenance
+      if (run.provenance) {
+        const outboundModel = completionResult?.outboundModel || run.provenance.plannedModel || run.provenance.executedModel;
+        const upstreamModel = (typeof completionResult?.model === 'string' && completionResult.model.trim().length > 0)
+          ? completionResult.model.trim()
+          : undefined;
+
+        run.provenance.outboundModel = outboundModel;
+        run.provenance.upstreamResponseModel = upstreamModel;
+        run.provenance.executedModel = upstreamModel || outboundModel;
+
+        const isVerified = Boolean(upstreamModel && isModelMatch(outboundModel, upstreamModel));
+        run.provenance.verified = isVerified;
+        run.provenance.executionStatus = run.provenance.fallbackOccurred ? 'FALLBACK' : 'SUCCESS';
+        run.provenance.timestamp = Date.now();
+        await this.runRepo.saveRun(run);
+        await this.emitRunEvent(runId, 'model.provenance', run.provenance);
+      }
+
+      if (guardedSearchSynthesis) {
         const synthesized = researchDraft.trim();
-        const answer = (!synthesized || isResearchToolCallDump(synthesized))
+        const answer = liveEvidence.length === 0
+          ? 'Live web search did not return verified sources. I cannot provide a sourced answer for this request.'
+          : (!synthesized || isResearchToolCallDump(synthesized))
           ? renderGroundedResearchFallback(liveEvidence)
           : synthesized;
-        const finalText = answer + buildResearchSourcesAppendix(liveEvidence);
+        const sanitizedAnswer = sanitizeCitationMarkers(answer, liveEvidence.length);
+        const finalText = sanitizedAnswer + buildResearchSourcesAppendix(liveEvidence);
         run.content += finalText;
         await this.runRepo.saveRun(run);
         await this.emitRunEvent(runId, 'content.delta', { delta: finalText });
@@ -849,6 +1126,7 @@ Provider Capabilities:
 
     // Checkpoint 6: Artifacts & Completion
     if (run.executionCheckpoint === 'FINALIZING') {
+      run.content = sanitizeCitationMarkers(run.content, run.citations?.length || 5);
       if (run.content.includes('```')) {
         const artId = `art_${Date.now()}`;
         const artifact: Artifact = {

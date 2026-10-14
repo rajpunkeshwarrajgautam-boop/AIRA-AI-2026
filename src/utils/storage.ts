@@ -16,6 +16,7 @@ export function normalizeStoredModelId(model: unknown): AppSettings['activeModel
 const STORAGE_KEYS = {
   CONVERSATIONS: 'aira_conversations_v1',
   ACTIVE_CHAT: 'aira_active_chat_id_v1',
+  SESSION_ACTIVE_CHAT: 'aira_active_chat_session',
   PROJECTS: 'aira_projects_v1',
   ACTIVE_PROJECT: 'aira_active_project_id_v1',
   SETTINGS: 'aira_settings_v1',
@@ -59,6 +60,40 @@ export function loadActiveChatId(): string {
 
 export function saveActiveChatId(id: string): void {
   localStorage.setItem(STORAGE_KEYS.ACTIVE_CHAT, id);
+}
+
+export function getSessionActiveChatId(): string | null {
+  try {
+    if (typeof window === 'undefined') return null;
+    const urlParam = new URLSearchParams(window.location.search).get('c');
+    if (urlParam) return urlParam;
+    return window.sessionStorage?.getItem(STORAGE_KEYS.SESSION_ACTIVE_CHAT) || null;
+  } catch {
+    return null;
+  }
+}
+
+export function setSessionActiveChatId(id: string | null): void {
+  try {
+    if (typeof window === 'undefined') return;
+    if (id) {
+      window.sessionStorage?.setItem(STORAGE_KEYS.SESSION_ACTIVE_CHAT, id);
+      const url = new URL(window.location.href);
+      if (url.searchParams.get('c') !== id) {
+        url.searchParams.set('c', id);
+        window.history?.replaceState(null, '', url.toString());
+      }
+    } else {
+      window.sessionStorage?.removeItem(STORAGE_KEYS.SESSION_ACTIVE_CHAT);
+      const url = new URL(window.location.href);
+      if (url.searchParams.has('c')) {
+        url.searchParams.delete('c');
+        window.history?.replaceState(null, '', url.pathname + (url.search ? url.search : ''));
+      }
+    }
+  } catch {
+    // Non-blocking
+  }
 }
 
 export function loadProjects(): Project[] {

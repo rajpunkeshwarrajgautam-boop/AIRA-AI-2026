@@ -156,26 +156,53 @@ async function main() {
             ['Vanguard Monolith', 'vanguard-monolith'],
           ];
           const checkContrast = async (element: ReturnType<typeof dialog.getByRole>, description: string) => {
-            // Keep this callback free of nested functions: tsx can inject
-            // helper names unavailable inside Playwright browser execution.
-            const ratio = await element.evaluate(element => {
-              const styles = getComputedStyle(element);
-              const values = [styles.color, styles.backgroundColor];
-              const luminosities: number[] = [];
-              for (const value of values) {
-                const channels = value.match(/[0-9.]+/g) || [];
-                if (channels.length < 3) return 0;
-                let lum = 0;
-                const weights = [0.2126, 0.7152, 0.0722];
-                for (let i = 0; i < 3; i++) {
-                  const v = Number(channels[i]) / 255;
-                  const linear = v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
-                  lum += linear * weights[i];
+            const handle = await element.elementHandle();
+            assert(handle, description + ' handle not found');
+            // Allow active CSS transitions (e.g. Tailwind transition-colors) to settle
+            // to compliant colors without sampling a transient transition frame.
+            const ratio = await page.waitForFunction(
+              (el: Element) => {
+                const styles = getComputedStyle(el);
+                const values = [styles.color, styles.backgroundColor];
+                const luminosities: number[] = [];
+                for (let k = 0; k < values.length; k++) {
+                  const channels = values[k].match(/[0-9.]+/g) || [];
+                  if (channels.length < 3) return null;
+                  let lum = 0;
+                  const weights = [0.2126, 0.7152, 0.0722];
+                  for (let i = 0; i < 3; i++) {
+                    const v = Number(channels[i]) / 255;
+                    const linear = v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+                    lum += linear * weights[i];
+                  }
+                  luminosities.push(lum);
                 }
-                luminosities.push(lum);
-              }
-              return (Math.max(luminosities[0], luminosities[1]) + 0.05) /
-                (Math.min(luminosities[0], luminosities[1]) + 0.05);
+                const cr = (Math.max(luminosities[0], luminosities[1]) + 0.05) /
+                  (Math.min(luminosities[0], luminosities[1]) + 0.05);
+                return cr >= 4.5 ? cr : null;
+              },
+              handle,
+              { timeout: 3500 }
+            ).then(h => h.jsonValue() as Promise<number>).catch(async () => {
+              return await element.evaluate((el: Element) => {
+                const styles = getComputedStyle(el);
+                const values = [styles.color, styles.backgroundColor];
+                const luminosities: number[] = [];
+                for (let k = 0; k < values.length; k++) {
+                  const channels = values[k].match(/[0-9.]+/g) || [];
+                  if (channels.length < 3) return 0;
+                  let lum = 0;
+                  const weights = [0.2126, 0.7152, 0.0722];
+                  for (let i = 0; i < 3; i++) {
+                    const v = Number(channels[i]) / 255;
+                    const linear = v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+                    lum += linear * weights[i];
+                  }
+                  luminosities.push(lum);
+                }
+                return (Math.max(luminosities[0], luminosities[1]) + 0.05) /
+                  (Math.min(luminosities[0], luminosities[1]) + 0.05);
+              });
             });
             assert(ratio >= 4.5, description + ' contrast ' + String(ratio) + ':1 below 4.5:1');
           };

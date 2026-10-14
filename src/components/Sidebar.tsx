@@ -255,26 +255,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <AnimatePresence>
       {isOpen && (
-        <>
-          {/* Mobile backdrop */}
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={onToggleOpen}
-            className="fixed inset-0 bg-stone-900/40 dark:bg-black/60 backdrop-blur-sm z-40 xl:hidden"
-            aria-hidden="true"
-          />
-          <motion.aside 
-            ref={drawerRef}
-            data-testid="sidebar-drawer"
-            aria-label="Workspace navigation"
-            initial={{ x: -320, opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            exit={{ x: -320, opacity: 0 }}
-            transition={{ type: "spring", stiffness: 320, damping: 32 }}
-            className="aira-sidebar-shell fixed inset-y-0 left-0 z-50 xl:relative xl:z-30 w-[min(20rem,100vw)] xl:w-80 h-[100dvh] min-h-0 overflow-hidden flex flex-col bg-claude-surface2-light dark:bg-claude-surface2-dark border-r border-claude-border-light dark:border-claude-border-dark select-none flex-shrink-0 shadow-2xl xl:shadow-none"
-          >
+        <motion.div 
+          key="sidebar-backdrop"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0, pointerEvents: 'none' }}
+          onClick={onToggleOpen}
+          className="fixed inset-0 bg-stone-900/40 dark:bg-black/60 backdrop-blur-sm z-[60] xl:hidden"
+          aria-hidden="true"
+        />
+      )}
+      {isOpen && (
+        <motion.aside 
+          key="sidebar-drawer"
+          ref={drawerRef}
+          data-testid="sidebar-drawer"
+          aria-label="Workspace navigation"
+          initial={{ x: -320, opacity: 0 }}
+          animate={{ x: 0, opacity: 1 }}
+          exit={{ x: -320, opacity: 0, pointerEvents: 'none' }}
+          transition={{ type: "spring", stiffness: 320, damping: 32 }}
+          className="aira-sidebar-shell fixed inset-y-0 left-0 z-[70] xl:relative xl:z-30 w-[min(20rem,100vw)] xl:w-80 h-[100dvh] min-h-0 overflow-hidden flex flex-col bg-claude-surface2-light dark:bg-claude-surface2-dark border-r border-claude-border-light dark:border-claude-border-dark select-none flex-shrink-0 shadow-2xl xl:shadow-none"
+        >
             <div className="shrink-0 p-4 pb-3 flex items-center justify-between">
               <div className="flex items-center space-x-2.5">
                 <AiraMark size="md" />
@@ -399,7 +401,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
           </div>
           </motion.aside>
-        </>
       )}
     </AnimatePresence>
   );

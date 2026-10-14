@@ -78,33 +78,56 @@ async function authenticatedFetch(
 }
 
 export async function syncConversationToServer(conversation: Conversation): Promise<boolean> {
-  try {
-    const response = await authenticatedFetch('/api/conversations/sync', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        id: conversation.id,
-        title: conversation.title,
-        projectId: conversation.projectId,
-        isPinned: Boolean(conversation.isPinned),
-        createdAt: conversation.createdAt,
-        updatedAt: conversation.updatedAt,
-        messages: conversation.messages
-          .filter(message => !message.isStreaming)
-          .map(message => ({
-            id: message.id,
-            role: message.role,
-            content: message.content,
-            createdAt: message.timestamp
-          }))
-      })
-    }, 20000);
-    return response.ok;
-  } catch {
-    // Search persistence is additive. Existing local conversation behavior must
-    // remain functional if the server/search subsystem is temporarily down.
-    return false;
+  const payload = JSON.stringify({
+    id: conversation.id,
+    title: conversation.title,
+    projectId: conversation.projectId,
+    isPinned: Boolean(conversation.isPinned),
+    createdAt: conversation.createdAt,
+    updatedAt: conversation.updatedAt,
+    messages: conversation.messages
+      .filter(message => !message.isStreaming)
+      .map(message => ({
+        id: message.id,
+        role: message.role,
+        content: message.content,
+        createdAt: message.timestamp
+      }))
+  });
+
+  // Sync is idempotent per principal/conversation/message ID on the server.
+  // A bounded second attempt covers transient Neon wakeups without retrying
+  // authorization or client-validation failures.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let delayMs = 1200;
+    try {
+      const response = await authenticatedFetch('/api/conversations/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload
+      }, 20000);
+      if (response.ok) return true;
+      if (response.status !== 503 && response.status !== 429) return false;
+
+      const retryAfter = Number(response.headers.get('Retry-After'));
+      if (Number.isFinite(retryAfter) && retryAfter > 0) {
+        delayMs = Math.min(Math.max(retryAfter * 1000, 500), 3000);
+      }
+    } catch (error) {
+      // The request uses its own deadline; there is no external cancellation
+      // for this additive background sync. Retry only network/timeout failures.
+      const retryable = error instanceof TypeError ||
+        (error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name));
+      if (!retryable) return false;
+    }
+
+    if (attempt === 0) {
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
   }
+
+  // Existing local conversation history remains usable if persistence is down.
+  return false;
 }
 
 export async function fetchConversationFromServer(

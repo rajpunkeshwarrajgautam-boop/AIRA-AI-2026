@@ -49,6 +49,7 @@ if (process.env.NODE_ENV === 'production') {
 
 import { createPrincipalMiddleware } from './middleware/principal.js';
 import { createSessionAuthMiddleware, ensureAuthenticatedSession } from './auth/session-auth.js';
+import { isTemporaryDatabaseError } from './utils/storage-errors.js';
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
@@ -267,6 +268,13 @@ app.post('/api/conversations/sync', async (req: Request, res: Response) => {
       indexing
     });
   } catch (err: any) {
+    if (isTemporaryDatabaseError(err)) {
+      res.setHeader('Retry-After', '2');
+      return res.status(503).json({
+        code: 'CONVERSATION_STORAGE_TEMPORARILY_UNAVAILABLE',
+        error: 'Conversation storage is temporarily unavailable. Retry shortly.'
+      });
+    }
     const status = String(err?.message || '').includes('ownership mismatch') ? 403 : 400;
     res.status(status).json({ error: err?.message || 'Conversation sync failed.' });
   }
@@ -595,6 +603,8 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     const handler = (evt: any) => {
       if (evt.type === 'routing.decision') {
         res.write(`event: routing_decision\ndata: ${JSON.stringify(evt.data)}\n\n`);
+      } else if (evt.type === 'model.provenance') {
+        res.write(`event: model_provenance\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'capability.unready') {
         res.write(`event: capability_unready\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'content.delta') {
