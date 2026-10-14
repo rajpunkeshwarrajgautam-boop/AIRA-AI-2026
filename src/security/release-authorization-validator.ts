@@ -364,7 +364,14 @@ export function validateAttestationWorkflowRun(
 
   // Verify workflow ref / branch: must execute from protected target branch, not untrusted feature branch
   const trustedBranch = ctx.prTargetBranch || ctx.expectedTargetBranch || PRODUCTION_RELEASE_BRANCH;
-  if (run.head_branch && run.head_branch !== trustedBranch && run.head_branch !== `refs/heads/${trustedBranch}`) {
+  if (!run.head_branch) {
+    return {
+      valid: false,
+      code: 'MISSING_WORKFLOW_BRANCH',
+      reason: `Attestation run #${run.id} is missing head_branch. Privileged attestation must execute from protected branch "${trustedBranch}".`
+    };
+  }
+  if (run.head_branch !== trustedBranch && run.head_branch !== `refs/heads/${trustedBranch}`) {
     return {
       valid: false,
       code: 'UNTRUSTED_WORKFLOW_BRANCH',
@@ -407,6 +414,13 @@ export function validateAttestationWorkflowRun(
   }
 
   // Freshness check: attestation must not exceed max age
+  if (!run.created_at) {
+    return {
+      valid: false,
+      code: 'MISSING_ATTESTATION_TIMESTAMP',
+      reason: `Attestation run #${run.id} lacks mandatory created_at timestamp.`
+    };
+  }
   const runCreatedAt = new Date(run.created_at).getTime();
   if (isNaN(runCreatedAt)) {
     return { valid: false, code: 'INVALID_ATTESTATION_TIMESTAMP', reason: `Run #${run.id} has invalid created_at timestamp: "${run.created_at}"` };
@@ -458,34 +472,58 @@ export function validateCommitStatuses(
   const expectedOwner = ctx.expectedOwner || AUTHORIZED_REPOSITORY_OWNER;
   const expectedRepo = ctx.expectedRepo || `${expectedOwner}/${DEFAULT_REPOSITORY_NAME}`;
 
-  // Validate status creator/issuer if present
-  if (matching.creator && matching.creator.login) {
-    if (!TRUSTED_STATUS_ISSUER_LOGINS.includes(matching.creator.login)) {
-      return {
-        valid: false,
-        code: 'UNTRUSTED_STATUS_ISSUER',
-        reason: `Commit status "${expectedContext}" was created by untrusted actor "${matching.creator.login}". Expected: "${TRUSTED_STATUS_ISSUER_LOGINS.join(', ')}".`
-      };
-    }
+  // Validate status creator/issuer: must be present and trusted (github-actions[bot])
+  if (!matching.creator || !matching.creator.login) {
+    return {
+      valid: false,
+      code: 'MISSING_STATUS_ISSUER',
+      reason: `Commit status "${expectedContext}" lacks mandatory creator/issuer identity.`
+    };
+  }
+  if (!TRUSTED_STATUS_ISSUER_LOGINS.includes(matching.creator.login)) {
+    return {
+      valid: false,
+      code: 'UNTRUSTED_STATUS_ISSUER',
+      reason: `Commit status "${expectedContext}" was created by untrusted actor "${matching.creator.login}". Expected: "${TRUSTED_STATUS_ISSUER_LOGINS.join(', ')}".`
+    };
   }
 
-  // Validate status target_url format and repository binding
-  if (matching.target_url) {
-    const pattern = new RegExp(`^https://github\\.com/${escapeRegex(expectedRepo)}/actions/runs/(\\d+)$`);
-    if (!pattern.test(matching.target_url)) {
-      return {
-        valid: false,
-        code: 'INVALID_STATUS_TARGET_URL',
-        reason: `Commit status target_url ("${matching.target_url}") does not match trusted pattern "https://github.com/${expectedRepo}/actions/runs/<id>".`
-      };
-    }
+  // Validate status target_url format and repository binding: mandatory provenance
+  if (!matching.target_url) {
+    return {
+      valid: false,
+      code: 'STATUS_PROVENANCE_MISSING',
+      reason: `Commit status for "${expectedContext}" lacks mandatory target_url linking to attestation workflow run.`
+    };
+  }
+  const pattern = new RegExp(`^https://github\\.com/${escapeRegex(expectedRepo)}/actions/runs/(\\d+)$`);
+  if (!pattern.test(matching.target_url)) {
+    return {
+      valid: false,
+      code: 'INVALID_STATUS_TARGET_URL',
+      reason: `Commit status target_url ("${matching.target_url}") does not match trusted pattern "https://github.com/${expectedRepo}/actions/runs/<id>".`
+    };
   }
 
-  // Freshness check on status creation/update
+  // Freshness check on status creation/update: mandatory valid timestamp
   const now = ctx.currentTime ? ctx.currentTime.getTime() : Date.now();
   const maxAge = ctx.maxAttestationAgeMs ?? DEFAULT_MAX_ATTESTATION_AGE_MS;
-  const statusTime = matching.created_at ? new Date(matching.created_at).getTime() : NaN;
-  if (!isNaN(statusTime) && (now - statusTime > maxAge)) {
+  if (!matching.created_at) {
+    return {
+      valid: false,
+      code: 'MISSING_STATUS_TIMESTAMP',
+      reason: `Commit status "${expectedContext}" lacks mandatory created_at timestamp.`
+    };
+  }
+  const statusTime = new Date(matching.created_at).getTime();
+  if (isNaN(statusTime)) {
+    return {
+      valid: false,
+      code: 'INVALID_STATUS_TIMESTAMP',
+      reason: `Commit status "${expectedContext}" has invalid created_at timestamp: "${matching.created_at}".`
+    };
+  }
+  if (now - statusTime > maxAge) {
     return {
       valid: false,
       code: 'EXPIRED_COMMIT_STATUS',

@@ -20,7 +20,7 @@ import {
  * unauthorized, expired, unlinked, or forged authorization claims.
  */
 export async function runSecurityRegressionTests() {
-  console.log('[RELEASE_AUTH_TEST] Starting 47 isolated security & policy boundary tests...');
+  console.log('[RELEASE_AUTH_TEST] Starting 52 isolated security & policy boundary tests...');
 
   const validCandidateSha = 'bbf02ea572f4f710bec185890b8b86c45da15057';
   const prodReleaseExecutionSha = 'b1635e132544d0772358cb463131d1e6cd4d40a9';
@@ -823,7 +823,90 @@ export async function runSecurityRegressionTests() {
     console.log('  ✓ Test 47: Distinct execution commit on prod-release authorizes candidate PR SHA');
   }
 
-  console.log('[RELEASE_AUTH_TEST] All 47 security & policy boundary tests PASSED successfully.');
+  // Test 48: Missing head_branch on workflow run rejected
+  {
+    const missingBranchRun = createValidRun({
+      head_branch: undefined
+    });
+    const runCheck = validateAttestationWorkflowRun(missingBranchRun, baseValidCtx);
+    assert.equal(runCheck.valid, false);
+    assert.equal(runCheck.code, 'MISSING_WORKFLOW_BRANCH');
+
+    const res = validateReleaseAuthorization({
+      ...baseValidCtx,
+      workflowRuns: [missingBranchRun],
+      commitStatuses: [createValidStatus()]
+    });
+    assert.equal(res.authorized, false);
+    assert.equal(res.code, 'NO_MATCHING_AUTHORIZATION_ATTESTATION');
+    console.log('  ✓ Test 48: Missing head_branch on workflow run rejected');
+  }
+
+  // Test 49: Missing status creator / issuer rejected
+  {
+    const missingIssuerStatus = createValidStatus({
+      creator: undefined
+    });
+    const res = validateReleaseAuthorization({
+      ...baseValidCtx,
+      workflowRuns: [createValidRun()],
+      commitStatuses: [missingIssuerStatus]
+    });
+    assert.equal(res.authorized, false);
+    assert.equal(res.code, 'MISSING_STATUS_ISSUER');
+    console.log('  ✓ Test 49: Missing status creator/issuer identity rejected');
+  }
+
+  // Test 50: Missing status created_at timestamp rejected
+  {
+    const missingTimestampStatus = createValidStatus({
+      created_at: undefined
+    });
+    const res = validateReleaseAuthorization({
+      ...baseValidCtx,
+      workflowRuns: [createValidRun()],
+      commitStatuses: [missingTimestampStatus]
+    });
+    assert.equal(res.authorized, false);
+    assert.equal(res.code, 'MISSING_STATUS_TIMESTAMP');
+    console.log('  ✓ Test 50: Missing status created_at timestamp rejected');
+  }
+
+  // Test 51: Malformed status created_at timestamp rejected
+  {
+    const invalidTimestampStatus = createValidStatus({
+      created_at: 'not-a-valid-date-string'
+    });
+    const res = validateReleaseAuthorization({
+      ...baseValidCtx,
+      workflowRuns: [createValidRun()],
+      commitStatuses: [invalidTimestampStatus]
+    });
+    assert.equal(res.authorized, false);
+    assert.equal(res.code, 'INVALID_STATUS_TIMESTAMP');
+    console.log('  ✓ Test 51: Malformed status created_at timestamp rejected');
+  }
+
+  // Test 52: Missing workflow run created_at timestamp rejected
+  {
+    const missingTimestampRun = createValidRun({
+      created_at: undefined as any
+    });
+    const runCheck = validateAttestationWorkflowRun(missingTimestampRun, baseValidCtx);
+    assert.equal(runCheck.valid, false);
+    assert.equal(runCheck.code, 'MISSING_ATTESTATION_TIMESTAMP');
+
+    const res = validateReleaseAuthorization({
+      ...baseValidCtx,
+      workflowRuns: [missingTimestampRun],
+      commitStatuses: [createValidStatus()]
+    });
+    assert.equal(res.authorized, false);
+    assert.equal(res.code, 'NO_MATCHING_AUTHORIZATION_ATTESTATION');
+    console.log('  ✓ Test 52: Missing workflow run created_at timestamp rejected');
+  }
+
+  console.log('[RELEASE_AUTH_TEST] All 52 security & policy boundary tests PASSED successfully.');
 }
 
 async function main() {

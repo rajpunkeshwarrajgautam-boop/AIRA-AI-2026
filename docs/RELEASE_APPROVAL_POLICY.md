@@ -79,8 +79,8 @@ To ensure that no automated agent, script, or speculative run can ever deploy to
 
 ### Layer 3: Authoritative Dual-Evidence Verification (`npm run verify:release-auth`)
 - **Deterministic Unit Testing (`npm run test:release-auth:unit`)**:
-  - Executed in `Fast CI` to verify the authorization rules engine across 47 isolated security boundaries.
-  - Validates fail-closed handling of malformed SHAs, uppercase SHAs, short SHAs, invalid phrases, wrong actors, closed PRs, moved HEADs, failed runs, expired attestations, missing commit status, unlinked status, expired status, untrusted status issuers, forged target URLs, untrusted workflow branch execution (`head_branch !== 'prod-release'`), malformed workflow execution commit SHAs, workflow run repo mismatches, uncorrelated replay timestamps, display_title input binding (candidate SHA, PR number, approval phrase mismatches), interim states (pending / failure), and forged metadata.
+  - Executed in `Fast CI` to verify the authorization rules engine across 52 isolated security boundaries.
+  - Validates fail-closed handling of malformed SHAs, uppercase SHAs, short SHAs, invalid phrases, wrong actors, closed PRs, moved HEADs, failed runs, expired attestations, missing commit status, unlinked status, expired status, untrusted status issuers, forged target URLs, missing/untrusted workflow branch execution (`head_branch !== 'prod-release'`), missing status creator identity, missing/malformed status timestamps, missing run timestamps, malformed workflow execution commit SHAs, workflow run repo mismatches, uncorrelated replay timestamps, display_title input binding (candidate SHA, PR number, approval phrase mismatches), interim states (pending / failure), and forged metadata.
   - Passing this step proves code correctness of the rules engine, but does NOT grant GO LIVE authorization.
 - **Authoritative Live Release Verification (`npm run verify:release-auth -- --pr <num> --sha <sha>`)**:
   - Executed via `scripts/verify-release-authorization.ts` delegating directly to `validateReleaseAuthorization()`.

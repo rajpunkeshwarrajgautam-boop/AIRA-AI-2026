@@ -122,7 +122,7 @@ The revised architecture enforces **Authoritative Dual Evidence, Trusted Issuer 
 4. **Interim Merge Window Prevention**:
    - At workflow start, the runner posts `state: pending` on `release/go-live-authorized`.
    - All assertions (PR target, candidate SHA, approval phrase, PR open status) must pass before posting `state: success`.
-   - On any assertion failure or job cancellation, an `if: failure()` trap posts `state: failure`, preventing any partially executed run from satisfying ruleset gates.
+   - On any assertion failure or job cancellation, an `if: failure() || cancelled()` trap posts `state: failure`, preventing any partially executed, aborted, or cancelled run from satisfying ruleset gates.
 5. **Cryptographic / URL Provenance Linkage**:
    - The verifier extracts `:run_id` from the commit status `target_url` and fetches `/actions/runs/:run_id` from the GitHub API.
    - It verifies that the status was emitted by the exact run inspected (`linkedRunId === matchingRun.id`).

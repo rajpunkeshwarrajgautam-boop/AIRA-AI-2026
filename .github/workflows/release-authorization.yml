@@ -99,15 +99,15 @@ jobs:
             echo "staging evidence, then obtain current user authorization."
           } >>"$GITHUB_STEP_SUMMARY"
 
-      - name: Mark status failed on attestation abort or error
-        if: failure()
+      - name: Mark status failed on attestation abort, failure, or cancellation
+        if: failure() || cancelled()
         shell: bash
         run: |
           if [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Attestation step failed; posting failure status on $EXPECTED_SHA..."
+            echo "Attestation step failed or cancelled; posting failure status on $EXPECTED_SHA..."
             gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$EXPECTED_SHA" \
               -f state="failure" \
               -f context="release/go-live-authorized" \
-              -f description="Authorization attestation failed for PR #$PR_NUMBER" \
+              -f description="Authorization attestation failed or cancelled for PR #$PR_NUMBER" \
               -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
           fi
