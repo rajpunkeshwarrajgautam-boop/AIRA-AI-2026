@@ -1,38 +1,42 @@
 # AIRA AI 2026 — Explicit Production Release Authorization
 
-**Status: pending platform-enforced production guardrail.**
+**Status: GitHub production branch ruleset ACTIVE; separate Vercel deployment approval remains unverified.**
 
 The production branch is `prod-release`. The production Vercel project is
 `aira-ai-2026`, ID `prj_FZLU4vBIYSsBn28AI6drkpD5WfbH`.
 
-## Current constraints (verified 2026-10-14)
+## GitHub protections (independently verified 2026-10-14)
 
-- GitHub reports `prod-release` as **unprotected**.
-- Repository is private, and GitHub's API returns HTTP 403 with
-  "Upgrade to GitHub Pro or make this repository public to enable this feature."
-- The current GitHub MCP GitHub App cannot mutate branch protection/rulesets.
-- GitHub Actions succeeding does NOT block a direct push to an unprotected
-  branch. A push can independently trigger a Vercel production build.
-- The separate manual attestation workflow only creates a reviewable
-  authorization checkpoint; it does not enforce production deployment.
+- GitHub Pro is active; the repository remains private.
+- GitHub reports `prod-release.protected=true`.
+- Ruleset `AIRA Production Protection`, ID `25079946`, is ACTIVE,
+  matching exactly `refs/heads/prod-release`.
+- No bypass actors are configured.
+- Pull requests, conversation resolution, Fast CI, Semantic Search CI,
+  Main / PR certification and branch-up-to-date checks are required.
+- Force pushes and branch deletion are denied.
+- Required approving reviews: 0 because there is currently one maintainer.
+  This is an explicit accepted limitation: it does NOT enforce a second
+  person's approval.
+- Manual GO LIVE attestation is an audit checkpoint and not a platform
+  deployment approval gate.
+- Vercel Git-driven production deployment behavior still requires separate
+  confirmation: merging into `prod-release` may trigger deployment.
 
-## Owner action needed before declaring release controls complete
+## Remaining release-control work
 
-1. Keep the repository private. Upgrade the applicable GitHub owner plan to
-   **GitHub Pro** for a personal repository or **GitHub Team** for an organization
-   if necessary. Do not make the source code public merely for protection.
-2. Open GitHub repo Settings → Branches or Rules → Rulesets.
-3. Protect `prod-release`, require pull requests, require 1+ qualified
-   approving review(s), successful **Fast CI**, **Semantic Search CI**, and
-   **Main / PR certification** on the exact candidate (verify job names).
-4. Disallow force pushes and branch deletion; enforce for administrators.
-5. Verify that Vercel's Production Branch and Git auto-deploy behavior
-   cannot promote unreviewed commits without a separately authorized release.
-   GitHub alone cannot impose a human GO LIVE requirement on Vercel.
-6. Re-read the effective GitHub ruleset; verify an unauthorized direct push
-   is rejected safely on a disposable canary/test branch before considering
-   production protected.
-7. Keep a known-good deployment for rollback and a documented incident path.
+1. Preserve the active GitHub ruleset and review its effective rules after any
+   material CI or branch naming changes.
+2. Verify Vercel's production branch, auto-deploy triggers, ignored-build
+   policy and promotion authorizations so a merge alone cannot bypass the
+   owner's explicit GO LIVE decision.
+3. Add an independent reviewer as the team grows, then increase required
+   approvals to 1 or more. Do not impose an impossible self-review gate on
+   the sole maintainer.
+4. Keep a known-good deployment for rollback and document the incident path.
+5. Verify with an innocuous test branch that effective rules protect the
+   intended production branch; never test unauthorized pushes directly
+   against live `prod-release`.
 
 ## Human approval attestation
 
