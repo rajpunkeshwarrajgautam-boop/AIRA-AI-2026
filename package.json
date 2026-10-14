@@ -48,7 +48,8 @@
     "test:long-prompt-persistence": "npx tsx test/long-prompt-persistence.ts",
     "test:math-rendering": "npx tsx test/math-rendering.ts",
     "test:preview-identity": "npx tsx test/preview-identity-guard.ts",
-    "test:research-evidence": "npx tsx test/research-evidence.ts"
+    "test:research-evidence": "npx tsx test/research-evidence.ts",
+    "test:automation-reminders": "npx tsx test/automation-reminders.ts"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
