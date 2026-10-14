@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import * as crypto from 'crypto';
+import { isDeepStrictEqual } from 'node:util';
 import {
   Run,
   RunState,
@@ -35,6 +36,7 @@ import { InstructionResolver } from './behavioral/instruction-resolver.js';
 import { AdaptiveSynthesizer } from './behavioral/adaptive-synthesizer.js';
 import { ToolRecoveryEngine } from './behavioral/tool-recovery-engine.js';
 import { selectExecutableTool, selectMissionFollowUp } from './tool-selector.js';
+import { compileSupportedMission, validateDurableMission, verifyMissionEvidence, type DurableMissionProgress } from './mission-plan.js';
 
 export class AgentRuntime extends EventEmitter {
   private eventStreams: Map<string, EventEmitter> = new Map();
@@ -199,6 +201,11 @@ export class AgentRuntime extends EventEmitter {
       timestamp: now
     };
 
+    // Never accept execution plans from client-provided request context.
+    // The persisted mission state is exclusively created and advanced by the server.
+    const safeContext = { ...(request.context || {}) };
+    delete safeContext.__airaMissionV1;
+
     const run: Run = {
       id: runId,
       principalId: principal.userId,
@@ -216,7 +223,7 @@ export class AgentRuntime extends EventEmitter {
       prompt: request.prompt,
       systemPrompt: request.systemPrompt,
       context: {
-        ...(request.context || {}),
+        ...safeContext,
         attachments: request.attachments,
         routingDecision
       },
@@ -566,7 +573,13 @@ export class AgentRuntime extends EventEmitter {
       const isAgentMission = run.intent === 'AGENT_MISSION';
 
       if (isToolAction || isAgentMission) {
-        const selected = selectExecutableTool(run.prompt, isAgentMission ? 'AGENT_MISSION' : 'TOOL_ACTION', { allowDiagnosticTools: process.env.NODE_ENV === 'test' });
+        const missionPlan = compileSupportedMission(run.prompt);
+        const firstMissionStep = missionPlan?.steps[0];
+        const selected = firstMissionStep
+          ? { ok: true as const, name: firstMissionStep.toolName, args: firstMissionStep.arguments }
+          : selectExecutableTool(run.prompt, isAgentMission ? 'AGENT_MISSION' : 'TOOL_ACTION', {
+              allowDiagnosticTools: process.env.NODE_ENV === 'test'
+            });
         if (!selected.ok) {
           const message = `${selected.code}: ${selected.reason}`;
           run.content = message;
@@ -603,8 +616,24 @@ export class AgentRuntime extends EventEmitter {
         run.toolsUsed.push(selectedToolName);
         run.toolCalls.push(toolCall);
         run.stepCount++;
+        if (missionPlan) {
+          run.context.__airaMissionV1 = {
+            version: 1,
+            plan: missionPlan,
+            dispatched: 1,
+            verified: [],
+            currentCallId: toolCall.id
+          } satisfies DurableMissionProgress;
+        }
         run.executionCheckpoint = 'TOOL_SELECTED';
         await this.runRepo.saveRun(run);
+        if (missionPlan) {
+          await this.emitRunEvent(runId, 'tool.progress', {
+            status: 'MISSION_PLANNED',
+            objective: run.prompt,
+            steps: missionPlan.steps.map(step => ({ id: step.id, tool: step.toolName, purpose: step.purpose }))
+          });
+        }
         await this.emitRunEvent(runId, 'tool.requested', toolCall);
       } else {
         run.executionCheckpoint = 'SYNTHESIZING';
@@ -807,16 +836,51 @@ export class AgentRuntime extends EventEmitter {
 
         await this.transitionRunState(runId, 'RUNNING');
         
-        // A mission continues only with steps that match the objective; do not
-        // automatically run repo status / history for unrelated user requests.
-        const continuation = run.intent === 'AGENT_MISSION'
-          ? selectMissionFollowUp(run.prompt, run.stepCount)
-          : null;
-        if (continuation) {
-          const nextToolDef = this.toolGateway.getTool(continuation.name)?.definition ||
-            this.toolRegistry.get(continuation.name)?.definition;
-          if (!nextToolDef) {
-            const message = `TOOL_UNAVAILABLE: mission step ${continuation.name} is not registered.`;
+        // Leave TOOL_COMPLETED durable until evidence is checked and the next
+        // mission step is dispatched below, including after process recovery.
+        run = await this.runRepo.getRun(runId) as Run;
+      }
+    }
+
+    if (run.executionCheckpoint === 'TOOL_COMPLETED' && (run.intent === 'AGENT_MISSION' || run.intent === 'TOOL_ACTION')) {
+      const progress = run.context?.__airaMissionV1 as DurableMissionProgress | undefined;
+      if (progress) {
+        const lastCall = run.toolCalls[run.toolCalls.length - 1];
+        const lastResult = run.toolResults[run.toolResults.length - 1];
+        const currentStep = progress.plan?.steps?.[progress.dispatched - 1];
+        const valid = validateDurableMission(run.prompt, progress);
+        const evidence = currentStep ? verifyMissionEvidence(currentStep, lastResult) :
+          { verified: false, reason: 'Missing mission step' };
+
+        if (!valid || !currentStep || progress.currentCallId !== lastCall?.id ||
+            currentStep.toolName !== lastCall.name ||
+            !isDeepStrictEqual(currentStep.arguments, lastCall.arguments) ||
+            !evidence.verified) {
+          const message = 'MISSION_VERIFICATION_FAILED: ' +
+            (!valid ? 'Persisted plan does not match the original request.' : evidence.reason);
+          run.error = message;
+          run.content = message;
+          run.executionCheckpoint = 'TOOL_FAILED';
+          await this.runRepo.saveRun(run);
+          await this.emitRunEvent(runId, 'content.delta', { delta: message });
+          await this.transitionRunState(runId, 'FAILED', message);
+          return;
+        }
+
+        if (progress.verified.length === progress.dispatched - 1) {
+          progress.verified.push(currentStep.id);
+          await this.runRepo.saveRun(run);
+          await this.emitRunEvent(runId, 'tool.progress', {
+            status: 'MISSION_STEP_VERIFIED', stepId: currentStep.id,
+            step: progress.dispatched, total: progress.plan.steps.length,
+            evidence: evidence.reason
+          });
+        }
+
+        const nextStep = progress.plan.steps[progress.dispatched];
+        if (nextStep) {
+          if (run.stepCount >= run.maxSteps) {
+            const message = 'MISSION_STEP_LIMIT: Execution stopped at the configured maxSteps bound.';
             run.error = message;
             run.content = message;
             run.executionCheckpoint = 'TOOL_FAILED';
@@ -825,25 +889,60 @@ export class AgentRuntime extends EventEmitter {
             return;
           }
 
-          const nextToolCall: ToolCall = {
-            id: `call_${Date.now()}_${run.stepCount}`,
-            toolId: nextToolDef.id,
-            name: continuation.name,
-            arguments: continuation.args,
+          const toolDef = this.toolGateway.getTool(nextStep.toolName)?.definition ||
+            this.toolRegistry.get(nextStep.toolName)?.definition;
+          if (!toolDef || toolDef.permissionLevel !== 'READ') {
+            const message = 'MISSION_TOOL_UNAVAILABLE: Next mission step is not an available read-only tool.';
+            run.error = message;
+            run.content = message;
+            run.executionCheckpoint = 'TOOL_FAILED';
+            await this.runRepo.saveRun(run);
+            await this.transitionRunState(runId, 'FAILED', message);
+            return;
+          }
+
+          const nextCall: ToolCall = {
+            id: `call_${crypto.randomUUID()}`,
+            toolId: toolDef.id,
+            name: nextStep.toolName,
+            arguments: nextStep.arguments,
             timestamp: Date.now()
           };
-          run.toolsUsed.push(continuation.name);
-          run.toolCalls.push(nextToolCall);
+          run.toolsUsed.push(nextCall.name);
+          run.toolCalls.push(nextCall);
           run.stepCount++;
+          progress.dispatched++;
+          progress.currentCallId = nextCall.id;
           run.executionCheckpoint = 'TOOL_SELECTED';
           await this.runRepo.saveRun(run);
-          await this.emitRunEvent(runId, 'tool.requested', nextToolCall);
+          await this.emitRunEvent(runId, 'tool.requested', nextCall);
           return this.executeRunLoop(runId);
         }
 
-        run = await this.runRepo.getRun(runId) as Run;
+        // All steps have verified tool evidence, now synthesize one final answer.
         run.executionCheckpoint = 'SYNTHESIZING';
         await this.runRepo.saveRun(run);
+      } else {
+        // Preserve bounded mission behavior for in-flight legacy runs.
+        const continuation = selectMissionFollowUp(run.prompt, run.stepCount);
+        if (continuation) {
+          const def = this.toolGateway.getTool(continuation.name)?.definition ||
+            this.toolRegistry.get(continuation.name)?.definition;
+          if (def && def.permissionLevel === 'READ' && run.stepCount < run.maxSteps) {
+            const nextCall: ToolCall = {
+              id: `call_${crypto.randomUUID()}`,
+              toolId: def.id, name: continuation.name,
+              arguments: continuation.args, timestamp: Date.now()
+            };
+            run.toolsUsed.push(nextCall.name);
+            run.toolCalls.push(nextCall);
+            run.stepCount++;
+            run.executionCheckpoint = 'TOOL_SELECTED';
+            await this.runRepo.saveRun(run);
+            await this.emitRunEvent(runId, 'tool.requested', nextCall);
+            return this.executeRunLoop(runId);
+          }
+        }
       }
     }
 
@@ -891,7 +990,7 @@ export class AgentRuntime extends EventEmitter {
       } else if (run.intent === 'AGENT_MISSION') {
         messages.push({
           role: 'system',
-          content: `${systemDirective}\n\nYou are operating in Autonomous Mission mode. Deliver clear execution results, steps undertaken, verification findings, and a concise summary.`
+          content: `${systemDirective}\n\nYou are operating in Autonomous Mission mode. Distinguish observed tool outputs from analysis, report each actually verified action, and never claim edits, deployments, browser interactions, or other actions not evidenced by the execution results. If evidence is insufficient, explicitly state the limitation.`
         });
       } else if (resolvedInstructions.effectiveInstructions.length > 0) {
         messages.push({
@@ -1152,7 +1251,23 @@ CAPABILITY & IDENTITY INVARIANTS:
       const toolDef = this.toolRegistry.get(toolCall?.name)?.definition;
       const idempotencyClass = toolDef?.idempotencyClass || 'NON_IDEMPOTENT';
 
-      if (idempotencyClass === 'NON_IDEMPOTENT' || idempotencyClass === 'EXTERNAL_SIDE_EFFECT') {
+      // The durable compiler only emits read-only steps. Its exact plan and
+      // call arguments must match before resuming an interrupted adapter call.
+      // Other operations still follow the existing non-idempotent crash fence.
+      const progress = run.context?.__airaMissionV1 as DurableMissionProgress | undefined;
+      const step = progress?.plan?.steps?.[progress.dispatched - 1];
+      const gatewayDefinition = toolCall ? this.toolGateway.getTool(toolCall.name)?.definition : undefined;
+      const replayableMissionRead = Boolean(
+        progress && validateDurableMission(run.prompt, progress) &&
+        step && toolCall && progress.currentCallId === toolCall.id &&
+        step.toolName === toolCall.name &&
+        isDeepStrictEqual(step.arguments, toolCall.arguments) &&
+        gatewayDefinition?.permissionLevel === 'READ' &&
+        gatewayDefinition.sideEffectLevel === 'READ'
+      );
+
+      if (!replayableMissionRead &&
+          (idempotencyClass === 'NON_IDEMPOTENT' || idempotencyClass === 'EXTERNAL_SIDE_EFFECT')) {
         await this.transitionRunState(runId, 'FAILED', 'Process crashed during non-idempotent tool execution');
         return;
       } else {
