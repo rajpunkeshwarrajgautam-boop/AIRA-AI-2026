@@ -2,7 +2,7 @@ import * as crypto from 'crypto';
 import { AutomationDefinition, AutomationRun } from '../../contracts/src/index.js';
 import { AgentRuntime } from '../../agent-runtime/src/index.js';
 import { AutomationRepository, AutomationRunRepository } from './repositories.js';
-import parser from 'cron-parser';
+import { CronExpressionParser } from 'cron-parser';
 
 export class AutomationEngine {
   private timerHandle: NodeJS.Timeout | null = null;
@@ -34,6 +34,24 @@ export class AutomationEngine {
     };
     await this.autoRepo.saveAutomation(automation);
     return automation;
+  }
+
+  /** Create once for each principal/objective/local schedule, even during concurrent retries. */
+  public async createOrFindMatchingAutomation(input: Omit<AutomationDefinition, 'id'>): Promise<{ automation: AutomationDefinition; created: boolean }> {
+    if (!input.principalId) throw new Error('AUTOMATION_PRINCIPAL_REQUIRED');
+    if (input.trigger === 'CRON') {
+      if (!input.cronExpression) throw new Error('AUTOMATION_CRON_REQUIRED');
+      const timeZone = input.conditions?.timeZone;
+      if (typeof timeZone !== 'string') throw new Error('AUTOMATION_TIMEZONE_REQUIRED');
+      try {
+        new Intl.DateTimeFormat('en-US', { timeZone });
+        CronExpressionParser.parse(input.cronExpression, { tz: timeZone });
+      } catch { throw new Error('AUTOMATION_SCHEDULE_INVALID'); }
+    }
+    return this.autoRepo.createOrFindMatching({
+      ...input,
+      id: `auto_${crypto.randomUUID().slice(0, 8)}`,
+    });
   }
 
   public async toggleAutomation(id: string, enabled: boolean, principalId?: string): Promise<AutomationDefinition> {
@@ -125,8 +143,8 @@ export class AutomationEngine {
       }
       await this.runRepo.saveRun(claim);
 
-      item.lastRun = Date.now();
-      await this.autoRepo.updateLastRun(item.id, item.lastRun);
+      item.lastRun = scheduledFor;
+      await this.autoRepo.updateLastRun(item.id, scheduledFor);
       return run.id;
     } catch (err: any) {
       claim.status = 'FAILED';
@@ -168,15 +186,20 @@ export class AutomationEngine {
       for (const auto of dueAutomations) {
         if (!auto.cronExpression) continue;
         try {
-          const interval = parser.parseExpression(auto.cronExpression);
+          const timeZone = typeof auto.conditions?.timeZone === 'string' ? auto.conditions.timeZone : 'UTC';
+          const interval = CronExpressionParser.parse(auto.cronExpression, { tz: timeZone });
           const prevRunTime = interval.prev().getTime();
 
+          // Newly created schedules must not run a past occurrence immediately.
+          if (auto.createdAt && auto.createdAt > prevRunTime) continue;
           if (!auto.lastRun || auto.lastRun < prevRunTime) {
-            const claim = await this.runRepo.claimRun(auto.id, prevRunTime);
-            if (claim) {
-              console.log(`[AutomationEngine] Triggering cron automation: ${auto.name}`);
+            // triggerNow owns the single transactional claim. Never claim twice.
+            // Contention is expected in parallel serverless invocations.
+            try {
               const runId = await this.triggerNow(auto.id, prevRunTime);
               triggered.push(runId);
+            } catch (error: any) {
+              if (!String(error?.message).includes('already claimed')) throw error;
             }
           }
         } catch (e: any) {
