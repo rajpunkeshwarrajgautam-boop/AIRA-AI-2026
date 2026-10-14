@@ -87,6 +87,9 @@ jobs:
       - name: Math typesetting and sanitization regression
         run: npm run test:math-rendering
 
+      - name: Managed account JWT signature and principal boundary regression
+        run: npm run test:neon-auth-identity
+
       - name: Preview principal spoofing guard
         run: npm run test:preview-identity
 
