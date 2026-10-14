@@ -17,6 +17,7 @@ import { AiraMark } from './components/AiraMark';
 import { CommandPalette } from './components/CommandPalette';
 import { ConversationSearchOverlay } from './components/ConversationSearchOverlay';
 import { InlineToast } from './components/InlineToast';
+import ReminderInbox from './components/ReminderInbox';
 import { backfillConversationsBestEffort, deleteConversationFromServer, fetchConversationFromServer, syncConversationToServer } from './utils/conversationSearch';
 import { useAnimatedFavicon } from './utils/animatedFavicon';
 
@@ -589,6 +590,7 @@ function App() {
               }
             }} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs ${activeArtifact ? 'bg-claude-terracotta text-claude-onAccent' : 'hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark'}`}><Layers className="w-3.5 h-3.5" /><span className="hidden sm:inline">Output Studio</span></button>}
             {activeConversation && <button onClick={() => handleToggleStar(activeConversation.id)} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark active:scale-95 transition-all" title={activeConversation.isPinned ? 'Remove bookmark' : 'Bookmark conversation'}><Bookmark className={`w-4 h-4 ${activeConversation.isPinned ? 'fill-claude-terracotta text-claude-accentInk' : 'text-claude-muted-light dark:text-claude-muted-dark'}`} /></button>}
+            <ReminderInbox />
             <button onClick={handleShare} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark">{sharedCopied ? <Check className="w-4 h-4 text-emerald-400" /> : <Share2 className="w-4 h-4 text-claude-muted-light dark:text-claude-muted-dark" />}</button>
           </div>
         </header>
