@@ -126,6 +126,28 @@ app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
+// Scheduler entry point: inaccessible without a server-to-server CRON_SECRET.
+// Registered above the session principal middleware so Vercel Cron can authenticate
+// with its Authorization: Bearer header (no browser cookie).
+const executeCronCycle = async (req: Request, res: Response) => {
+  const secret = process.env.CRON_SECRET;
+  const supplied = req.headers.authorization?.replace(/^Bearer\\s+/i, '') || '';
+  const expected = Buffer.from(secret || '');
+  const actual = Buffer.from(supplied);
+  if (!secret || secret.length < 32 || actual.length !== expected.length ||
+      !crypto.timingSafeEqual(expected, actual)) {
+    return res.status(401).json({ error: 'Unauthorized scheduler request' });
+  }
+  try {
+    const result = await automationEngine.runScheduledCronCycle();
+    return res.json({ status: 'CRON_CYCLE_EXECUTED', ...result, timestamp: Date.now() });
+  } catch {
+    return res.status(503).json({ error: 'Scheduled execution failed' });
+  }
+};
+app.get('/api/automations/cron/execute', executeCronCycle);
+app.post('/api/automations/cron/execute', executeCronCycle);
+
 // Enforce ExecutionPrincipal on all /api routes BELOW this point.
 // Routes registered above (health, ready) are public infrastructure probes.
 app.use('/api', createPrincipalMiddleware());
@@ -994,15 +1016,7 @@ app.post('/api/automations/:id/disable', async (req: Request, res: Response) => 
   }
 });
 
-// Platform / Serverless cron execution endpoint
-app.post('/api/automations/cron/execute', async (_req: Request, res: Response) => {
-  try {
-    await automationEngine.runScheduledCronCycle();
-    res.json({ status: 'CRON_CYCLE_EXECUTED', timestamp: Date.now() });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
+// The authenticated scheduler route is registered before principal middleware.
 
 // -----------------------------------------------------------------------
 // Workflows — Server-Authoritative Execution Engine (Phase 18)
