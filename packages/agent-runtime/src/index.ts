@@ -362,36 +362,6 @@ export class AgentRuntime extends EventEmitter {
 
     if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)) return;
 
-    // Checkpoint 0: Capability readiness gate
-    if (run.routingDecision?.executionTarget === 'CAPABILITY_NOT_READY') {
-      const msg = `The requested capability (${run.intent}) is currently in development and not yet available for direct execution. (Target: ${run.routingDecision.executionTarget})`;
-      run.content = msg;
-      run.executionCheckpoint = 'COMPLETED';
-      await this.runRepo.saveRun(run);
-      await this.emitRunEvent(runId, 'capability.unready', {
-        intent: run.intent,
-        target: run.routingDecision.executionTarget,
-        message: msg
-      });
-      await this.emitRunEvent(runId, 'content.delta', { delta: msg });
-      await this.transitionRunState(runId, 'COMPLETED');
-      return;
-    }
-
-    // Checkpoint 0.1: Immediate Clarification Delivery for Ambiguous Queries
-    if (run.routingDecision?.metadata?.reasoningStrategy === 'CLARIFY_AMBIGUOUS' && run.routingDecision?.metadata?.clarificationPrompt) {
-      if (run.state !== 'RUNNING') {
-        await this.transitionRunState(runId, 'RUNNING');
-      }
-      const clarificationMsg = run.routingDecision.metadata.clarificationPrompt;
-      run.content = clarificationMsg;
-      run.executionCheckpoint = 'COMPLETED';
-      await this.runRepo.saveRun(run);
-      await this.emitRunEvent(runId, 'content.delta', { delta: clarificationMsg });
-      await this.transitionRunState(runId, 'COMPLETED');
-      return;
-    }
-
     // Read-only follow-up verification: inspect the stored schedule instead of
     // generating another automation or allowing the model to guess success.
     const verifySchedule = /\b(?:did you (?:create|set|schedule)|are you sure (?:you )?(?:created|scheduled|saved)|(?:check|verify) (?:my|the|that)?\s*(?:reminder|schedule)|is (?:that|it) (?:scheduled|saved)|what (?:reminders|automations) (?:are|did|do))\b/i.test(run.prompt);
@@ -426,6 +396,36 @@ export class AgentRuntime extends EventEmitter {
       run.executionCheckpoint = 'COMPLETED';
       await this.runRepo.saveRun(run);
       await this.emitRunEvent(runId, 'content.delta', { delta: text });
+      await this.transitionRunState(runId, 'COMPLETED');
+      return;
+    }
+
+    // Checkpoint 0: Capability readiness gate
+    if (run.routingDecision?.executionTarget === 'CAPABILITY_NOT_READY') {
+      const msg = `The requested capability (${run.intent}) is currently in development and not yet available for direct execution. (Target: ${run.routingDecision.executionTarget})`;
+      run.content = msg;
+      run.executionCheckpoint = 'COMPLETED';
+      await this.runRepo.saveRun(run);
+      await this.emitRunEvent(runId, 'capability.unready', {
+        intent: run.intent,
+        target: run.routingDecision.executionTarget,
+        message: msg
+      });
+      await this.emitRunEvent(runId, 'content.delta', { delta: msg });
+      await this.transitionRunState(runId, 'COMPLETED');
+      return;
+    }
+
+    // Checkpoint 0.1: Immediate Clarification Delivery for Ambiguous Queries
+    if (run.routingDecision?.metadata?.reasoningStrategy === 'CLARIFY_AMBIGUOUS' && run.routingDecision?.metadata?.clarificationPrompt) {
+      if (run.state !== 'RUNNING') {
+        await this.transitionRunState(runId, 'RUNNING');
+      }
+      const clarificationMsg = run.routingDecision.metadata.clarificationPrompt;
+      run.content = clarificationMsg;
+      run.executionCheckpoint = 'COMPLETED';
+      await this.runRepo.saveRun(run);
+      await this.emitRunEvent(runId, 'content.delta', { delta: clarificationMsg });
       await this.transitionRunState(runId, 'COMPLETED');
       return;
     }
