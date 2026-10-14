@@ -65,7 +65,10 @@ function normalizeHits(raw: unknown): SearchHit[] {
     if (typeof candidate.url !== 'string') continue;
     let url: URL;
     try {
-      url = new URL(candidate.url);
+      // Some search providers include Markdown bold delimiters after a URL.
+      // Strip only that unambiguous decoration before validating/citing it.
+      const rawUrl = candidate.url.trim().replace(/\*{2,}$/, '');
+      url = new URL(rawUrl);
       if (url.protocol !== 'https:' && url.protocol !== 'http:') continue;
       if (url.username || url.password) continue;
     } catch {
