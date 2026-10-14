@@ -167,12 +167,25 @@ export class ConversationSearchRepository {
     const messages = Array.isArray(input.messages) ? input.messages : [];
 
     await db.transaction(async trx => {
+      // Serialize concurrent snapshots for one principal/conversation. A delayed
+      // retry must never delete messages introduced by a newer successful sync.
+      // Use a deterministic key without exposing principal identifiers to SQL logs.
+      const lockKey = storageId('conversation', principalId, clientConversationId);
+      await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [lockKey]);
+
       const existingConversation = await trx('conversations')
         .where({ principal_id: principalId, client_id: clientConversationId })
         .first();
 
+      // This is a full-snapshot replacement API, not an append-only message API.
+      // Treat an equal or older version as idempotent/no-op rather than resetting
+      // metadata or deleting newer messages on a late HTTP retry.
+      if (existingConversation && Number(existingConversation.updated_at) >= input.updatedAt) {
+        return;
+      }
+
       const conversationStorageId =
-        existingConversation?.id || storageId('conversation', principalId, clientConversationId);
+        existingConversation?.id || lockKey;
 
       await trx('conversations')
         .insert({
