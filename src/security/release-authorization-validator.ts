@@ -50,6 +50,7 @@ export interface ReleaseCandidateContext {
   expectedOwner?: string;
   expectedRepo?: string;
   expectedTargetBranch?: string;
+  expectedStatusIssuerLogin?: string;
   currentTime?: Date;
   maxAttestationAgeMs?: number;
   maxRunStatusTimeDeltaMs?: number;
@@ -82,7 +83,7 @@ export const AUTHORIZATION_WORKFLOW_PATH = '.github/workflows/release-authorizat
 export const GO_LIVE_STATUS_CONTEXT = 'release/go-live-authorized';
 export const DEFAULT_MAX_ATTESTATION_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 export const DEFAULT_MAX_RUN_STATUS_TIME_DELTA_MS = 15 * 60 * 1000; // 15 minutes temporal bound
-export const TRUSTED_STATUS_ISSUER_LOGINS = ['github-actions[bot]'];
+export const TRUSTED_STATUS_ISSUER_LOGINS = ['aira-release-gate[bot]'];
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -484,7 +485,7 @@ export function validateCommitStatuses(
     return {
       valid: false,
       code: 'UNTRUSTED_STATUS_ISSUER',
-      reason: `Commit status "${expectedContext}" was created by untrusted actor "${matching.creator.login}". Expected: "${TRUSTED_STATUS_ISSUER_LOGINS.join(', ')}".`
+      reason: `Commit status "${expectedContext}" was created by untrusted actor "${matching.creator.login}". Expected: "${trustedIssuer}".`
     };
   }
 
