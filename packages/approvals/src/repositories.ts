@@ -5,6 +5,8 @@ export interface ApprovalRepository {
   saveRequest(request: ApprovalRequest): Promise<void>;
   getRequest(id: string): Promise<ApprovalRequest | undefined>;
   getPendingForRun(runId: string): Promise<ApprovalRequest[]>;
+  /** Optional for legacy memory repositories; fail closed for strict write tools. */
+  getApprovedForToolCall?(runId: string, toolCallId: string): Promise<ApprovalRequest | undefined>;
   resolveRequest(id: string, decision: ApprovalDecision, resolvedBy: string): Promise<void>;
 }
 
@@ -93,6 +95,18 @@ export class PostgresApprovalRepository implements ApprovalRepository {
       requestedAt: parseInt(row.created_at, 10),
       decision: undefined
     }));
+  }
+
+  async getApprovedForToolCall(runId: string, toolCallId: string): Promise<ApprovalRequest | undefined> {
+    const row = await db('approvals')
+      .join('tool_calls', 'approvals.tool_call_id', 'tool_calls.id')
+      .select('approvals.id as approval_request_id')
+      .where('approvals.run_id', runId)
+      .andWhere('approvals.tool_call_id', toolCallId)
+      .whereIn('approvals.status', ['ALLOW_ONCE','ALLOW_SESSION','ALLOW_ALWAYS_FOR_TOOL'])
+      .orderBy('approvals.resolved_at', 'desc')
+      .first();
+    return row ? this.getRequest(String(row.approval_request_id)) : undefined;
   }
 
   async resolveRequest(id: string, decision: ApprovalDecision, resolvedBy: string): Promise<void> {
