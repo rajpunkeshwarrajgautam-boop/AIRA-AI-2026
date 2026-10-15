@@ -79,6 +79,24 @@ export class DurableDelegations {
     return saved;
   }
 
+  async byChild(ownerId:string, childRunId:string):Promise<Delegation|undefined>{
+    const row=await db('v2_delegations')
+      .where({owner_id:ownerId,child_run_id:childRunId}).first();
+    return row?asDelegation(row):undefined;
+  }
+
+  /** Restart a suspended child only following its previously recorded
+   * authenticated approval decision; never resume it in the API process.
+   */
+  async wakeApprovedChild(ownerId:string,childRunId:string):Promise<boolean>{
+    const now=Date.now();
+    const n=await db('v2_delegations')
+      .where({owner_id:ownerId,child_run_id:childRunId,status:'WAITING'})
+      .whereNull('worker_owner').whereNull('lease_until')
+      .update({status:'QUEUED',fence:db.raw('fence + 1'),updated_at:now});
+    return n===1;
+  }
+
   async get(ownerId:string, delegationId:string):Promise<Delegation|undefined>{
     const row=await db('v2_delegations').where({id:delegationId,owner_id:ownerId}).first();
     return row?asDelegation(row):undefined;
