@@ -195,23 +195,34 @@ export class DurableDelegations {
   }
 
   async cancelTree(ownerId:string,parentRunId:string):Promise<number>{
-    // Database recursion is bounded independently from user supplied inputs.
-    const runs=new Set<string>([parentRunId]);
-    let total=0;
-    for(let depth=0;depth<4;depth++){
-      const children=await db('v2_delegations').where({owner_id:ownerId}).whereIn('parent_run_id',[...runs])
-        .whereNotIn('status',['FAILED','CANCELLED','COMPLETED']);
-      if(!children.length)break;
+    // Traverse ALL lineage edges, including previously COMPLETED children:
+    // their descendants may still be running. Never skip a subtree simply
+    // because an intermediate child completed earlier.
+    const seen=new Set<string>([parentRunId]);
+    let frontier=[parentRunId],total=0;
+    for(let depth=0;depth<4 && frontier.length;depth++){
+      const children=await db('v2_delegations').where({owner_id:ownerId})
+        .whereIn('parent_run_id',frontier).orderBy('created_at','asc');
+      const next:string[]=[];
       for(const record of children){
-        runs.add(record.child_run_id);
-        await db('v2_delegations').where({id:record.id,owner_id:ownerId}).whereNotIn('status',['FAILED','CANCELLED','COMPLETED'])
-          .update({status:'CANCELLED',fence:db.raw('fence + 1'),worker_owner:null,lease_until:null,updated_at:Date.now()});
+        if(!seen.has(record.child_run_id)){
+          seen.add(record.child_run_id);
+          next.push(record.child_run_id);
+        }
+        if(seen.size>100)throw new Error('DELEGATION_CANCEL_TREE_TOO_LARGE');
+        if(['FAILED','CANCELLED','COMPLETED'].includes(record.status))continue;
+        const count=await db('v2_delegations')
+          .where({id:record.id,owner_id:ownerId})
+          .whereNotIn('status',['FAILED','CANCELLED','COMPLETED'])
+          .update({status:'CANCELLED',fence:db.raw('fence + 1'),
+            worker_owner:null,lease_until:null,updated_at:Date.now()});
+        if(count!==1)continue;
         await db('runs').where({id:record.child_run_id,principal_id:ownerId})
           .whereNotIn('state',['COMPLETED','FAILED','CANCELLED'])
           .update({state:'CANCELLED',status:'CANCELLED',updatedAt:Date.now()});
         total++;
       }
+      frontier=next;
     }
     return total;
-  }
-}
+  }}
