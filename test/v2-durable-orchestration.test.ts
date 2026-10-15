@@ -64,6 +64,18 @@ try{
   const d1=await repo.register(run(root),run(child,owner,['repo.read']),
     'repository',objective,['repo.read'],key);
   assert.equal(d1.depth,1);
+  assert.equal((await repo.assertChildAuthorized(
+    run(child,owner,['repo.read']),root,'repository','repo_git_status'
+  )).childRunId,child);
+  await assert.rejects(repo.assertChildAuthorized(
+    run(child,owner,['repo.read']),root,'repository','file_system_write'
+  ),/DELEGATED_TOOL_NOT_ALLOWED/);
+  await assert.rejects(repo.assertChildAuthorized(
+    run(child,owner,['repo.read','files.write']),root,'repository','repo_git_status'
+  ),/DELEGATED_CHILD_SCOPE_TAMPERED/);
+  await assert.rejects(repo.assertChildAuthorized(
+    run(child,owner,['repo.read']),root,'research','repo_git_status'
+  ),/DELEGATED_CHILD_NOT_AUTHORIZED/);
   assert.equal((await repo.list(owner,root)).length,1);
   assert.equal(await repo.get(other,d1.id),undefined);
   await assert.rejects(repo.claim(other,d1.id,'worker-other'),/NOT_CLAIMABLE/);
@@ -102,7 +114,8 @@ try{
     'repository','Cross-tenant delegated task',['repo.read'],'key_'+id()),/OWNER_OR_SCOPE_MISMATCH/);
   await assert.rejects(repo.register(run(root),run(root),
     'repository','Self-delegation attempt',['repo.read'],'key_'+id()),/CYCLE/);
-  const canceled=await repo.cancelTree(owner,child);
+  // A completed intermediate delegation must NOT hide its active descendants.
+  const canceled=await repo.cancelTree(owner,root);
   assert.ok(canceled>=2);
   assert.equal((await db('runs').where({id:grandchild}).first()).state,'CANCELLED');
   assert.equal((await repo.get(owner,d3.id))?.status,'CANCELLED');
