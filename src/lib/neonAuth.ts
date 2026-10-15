@@ -204,11 +204,13 @@ export class NeonAuthClient {
       if (!raw) return null;
       const parsed = JSON.parse(raw);
       if (parsed && parsed.user) {
+        // If legacy localStorage contains jwt or secret tokens, purge them immediately
+        if (parsed.jwt || (parsed.token && parsed.token !== 'bff_session')) {
+          localStorage.setItem(STORAGE_KEYS.SESSION, JSON.stringify({ user: parsed.user }));
+        }
         return {
           user: parsed.user,
-          token: parsed.token || 'bff_session',
-          jwt: parsed.jwt,
-          jwtExpiresAt: parsed.jwtExpiresAt
+          token: 'bff_session'
         };
       }
     } catch {
@@ -263,14 +265,11 @@ export class NeonAuthClient {
   private persistSession(session: NeonSessionData | null): void {
     if (typeof window === 'undefined') return;
     try {
-      if (session) {
-        // In BFF mode: persist user profile metadata for instant display hydration,
-        // NEVER storing sensitive bearer credentials or raw JWTs in localStorage!
+      if (session && session.user) {
+        // In BFF mode: persist ONLY public user profile metadata for instant display hydration.
+        // ZERO bearer credentials, ZERO session tokens, and ZERO raw JWTs in localStorage!
         const safeCache = {
-          user: session.user,
-          token: session.jwt ? session.token : 'bff_session',
-          // Only preserve JWT if explicitly provided in test/node fixtures
-          ...(session.jwt ? { jwt: session.jwt, jwtExpiresAt: session.jwtExpiresAt } : {})
+          user: session.user
         };
         localStorage.setItem(STORAGE_KEYS.SESSION, JSON.stringify(safeCache));
       } else {

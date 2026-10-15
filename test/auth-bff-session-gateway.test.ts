@@ -60,7 +60,7 @@ async function testOpaqueCookieAndServerStore() {
   console.log('Testing: Opaque session cookie architecture and server-side store ownership...');
 
   process.env.AIRA_SESSION_SECRET = 'test-secret-at-least-32-characters-long-for-testing';
-  bffSessionStore.clear();
+  await bffSessionStore.clear();
 
   const sessionId = generateSessionId();
   const csrfToken = generateCsrfToken();
@@ -80,7 +80,7 @@ async function testOpaqueCookieAndServerStore() {
     lastRotatedAt: now
   };
 
-  bffSessionStore.set(session);
+  await bffSessionStore.set(session);
   const serialized = serializeBffToken(session);
 
   // Assert cookie contains ONLY opaque ID and signature, ZERO JSON or credentials
@@ -98,7 +98,7 @@ async function testOpaqueCookieAndServerStore() {
     }
   } as any;
 
-  const parsed = readBffSessionFromCookie(mockReqValid);
+  const parsed = await readBffSessionFromCookie(mockReqValid);
   assert(parsed !== null, 'Valid opaque cookie must resolve to server session');
   assert.equal(parsed?.userId, 'usr_neon_123');
   assert.equal(parsed?.sessionToken, 'neon_sess_tok_12345');
@@ -111,15 +111,15 @@ async function testOpaqueCookieAndServerStore() {
     }
   } as any;
   assert.equal(
-    readBffSessionFromCookie(mockReqTampered),
+    await readBffSessionFromCookie(mockReqTampered),
     null,
     'Tampered signature must fail closed'
   );
 
   // Server-side revocation test: delete from store
-  bffSessionStore.delete(sessionId);
+  await bffSessionStore.delete(sessionId);
   assert.equal(
-    readBffSessionFromCookie(mockReqValid),
+    await readBffSessionFromCookie(mockReqValid),
     null,
     'Revoked server-side session must be immediately rejected even with valid cookie signature'
   );
@@ -359,7 +359,7 @@ async function testBffMiddlewarePrincipalBindingWithoutBearerHeader() {
       expiresAt: Date.now() + 3600_000,
       lastRotatedAt: Date.now()
     };
-    bffSessionStore.set(session);
+    await bffSessionStore.set(session);
 
     const cookieToken = serializeBffToken(session);
 
@@ -387,7 +387,7 @@ async function testBffMiddlewarePrincipalBindingWithoutBearerHeader() {
     // Mutual consistency check: verify that mismatched JWT subject is rejected
     const mismatchedJwt = makeMockEdDsaJwt('usr_attacker_sub');
     const mismatchedSessionId = generateSessionId();
-    bffSessionStore.set({
+    await bffSessionStore.set({
       id: mismatchedSessionId,
       userId: 'usr_victim_id', // Victim session ID, but JWT signed for attacker!
       sessionToken: 'tok_mismatch',
@@ -451,7 +451,7 @@ async function testBffSignOutRevocation() {
       expiresAt: Date.now() + 3600_000,
       lastRotatedAt: Date.now()
     };
-    bffSessionStore.set(session);
+    await bffSessionStore.set(session);
 
     const cookieToken = serializeBffToken(session);
 
@@ -480,7 +480,7 @@ async function testBffSignOutRevocation() {
     assert.equal(remoteSignOutCalled, true, 'Remote Neon Auth /sign-out must be invoked');
     assert.equal(authHeaderSent, 'Bearer neon_sess_tok_to_revoke');
     assert(Array.isArray(setCookieHeader) && setCookieHeader[0].includes('Max-Age=0'), 'Cookie must be cleared');
-    assert.equal(bffSessionStore.get(sessionId), null, 'Session must be deleted from server-side store');
+    assert.equal(await bffSessionStore.get(sessionId), null, 'Session must be deleted from server-side store');
 
     console.log('  ✓ BFF sign-out safely executes two-phase invalidation, store purge, and cookie clearing');
   } finally {

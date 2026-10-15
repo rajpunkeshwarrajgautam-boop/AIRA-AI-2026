@@ -52,6 +52,7 @@ import { createSessionAuthMiddleware, ensureAuthenticatedSession } from './auth/
 import { createNeonAuthPrincipalMiddleware } from './auth/neon-auth-principal.js';
 import {
   createBffSessionMiddleware,
+  createCsrfProtectionMiddleware,
   handleBffSignUp,
   handleBffSignIn,
   handleBffSession,
@@ -91,6 +92,8 @@ app.use(createSessionAuthMiddleware());
 app.use(createNeonAuthPrincipalMiddleware());
 // First-party BFF gateway: resolves secure HttpOnly cookie sessions into verified ExecutionPrincipals
 app.use(createBffSessionMiddleware());
+// Cryptographic CSRF and origin protection on mutating endpoints
+app.use(createCsrfProtectionMiddleware());
 
 // First-party BFF authentication routes
 app.post('/api/auth/sign-in', (req: Request, res: Response) => {
