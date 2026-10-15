@@ -50,6 +50,21 @@ export class AgentRuntime extends EventEmitter {
   private toolGateway: ToolGateway;
   private researchService: ResearchService;
   private automationEngine?: any;
+  private readonly delegatedLeases=new Map<string,{
+    id:string;owner:string;worker:string;fence:number
+  }>();
+  private async assertDelegatedLease(runId:string):Promise<void>{
+    const run=await this.runRepo.getRun(runId);
+    if(!run?.context?.delegatedFrom)return;
+    if(process.env.AIRA_SPECIALIST_WORKER_PROCESS!=='true')
+      throw new Error('DELEGATION_DEDICATED_WORKER_REQUIRED');
+    const lease=this.delegatedLeases.get(runId);
+    if(!lease||lease.owner!==run.principalId)
+      throw new Error('DELEGATED_WORKER_CLAIM_REQUIRED');
+    await new DurableDelegations().assertClaim(
+      lease.owner,lease.id,lease.worker,lease.fence
+    );
+  }
 
   constructor(
     private modelRouter: ModelRouter,
@@ -333,6 +348,8 @@ export class AgentRuntime extends EventEmitter {
     if(['COMPLETED','FAILED','CANCELLED'].includes(child.state))return 'TERMINAL';
     if(child.state==='WAITING_FOR_APPROVAL' ||
        child.executionCheckpoint==='WAITING_FOR_APPROVAL') return 'WAITING';
+    this.delegatedLeases.set(child.id,{id:delegationId,owner:ownerId,worker,fence});
+    try{
     // Reclaimed execution always goes through the existing crash-recovery
     // classifier, including the non-idempotent replay fence.
     if(recovered || child.executionCheckpoint==='TOOL_EXECUTING') {
@@ -347,6 +364,9 @@ export class AgentRuntime extends EventEmitter {
     if(fresh.state==='WAITING_FOR_APPROVAL' ||
        fresh.executionCheckpoint==='WAITING_FOR_APPROVAL')return 'WAITING';
     return 'STILL_RUNNING';
+    } finally {
+      this.delegatedLeases.delete(child.id);
+    }
   }
 
   public async listSpecialistDelegations(parentRunId: string, principal: ExecutionPrincipal): Promise<Delegation[]> {
@@ -494,6 +514,7 @@ export class AgentRuntime extends EventEmitter {
     // or prior approval as authorization. Reconcile with PostgreSQL on every
     // entry/recovery and again before dispatching additional tool calls.
     const childParent = run.context?.delegatedFrom;
+    if(childParent)await this.assertDelegatedLease(runId);
     const childSpecialist = run.context?.specialist;
     if (childParent !== undefined || childSpecialist !== undefined) {
       try {
@@ -925,6 +946,7 @@ export class AgentRuntime extends EventEmitter {
 
     // Checkpoint 4: Execute Tool
     if (run.executionCheckpoint === 'TOOL_APPROVED') {
+      await this.assertDelegatedLease(runId);
       const toolCall = run.toolCalls[run.toolCalls.length - 1];
       run.executionCheckpoint = 'TOOL_EXECUTING';
       await this.runRepo.saveRun(run);
@@ -935,6 +957,7 @@ export class AgentRuntime extends EventEmitter {
       let toolResult: ToolResult;
       const registeredWithGateway = this.toolGateway.getTool(toolCall.name);
       if (registeredWithGateway) {
+        await this.assertDelegatedLease(runId);
         toolResult = await this.toolGateway.execute({
           toolName: toolCall.name,
           arguments: toolCall.arguments,
@@ -1041,7 +1064,8 @@ export class AgentRuntime extends EventEmitter {
           run.executionCheckpoint = 'WAITING_FOR_APPROVAL';
           run.state = 'BLOCKED';
           run.error = decision.explanation;
-          run.toolResults.push(finalToolResult);
+          if(childParent)await this.assertDelegatedLease(runId);
+      run.toolResults.push(finalToolResult);
           await this.runRepo.saveRun(run);
           await this.emitRunEvent(runId, 'tool.approval_required', {
             toolName: toolCall.name,
