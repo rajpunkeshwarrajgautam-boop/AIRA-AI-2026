@@ -4,6 +4,7 @@ import cors from 'cors';
 import crypto from 'crypto';
 import { z } from 'zod';
 import { DurableBrowserSessions } from '../../../packages/agent-runtime/src/browser-sessions.js';
+import { DurableDelegations } from '../../../packages/agent-runtime/src/specialist-delegation.js';
 import { ModelRouter } from '../../../packages/model-router/src/index.js';
 import { ToolRegistry, ToolGateway, PostgresToolCallRepository } from '../../../packages/tool-runtime/src/index.js';
 import { ApprovalKernel } from '../../../packages/approvals/src/index.js';
@@ -413,6 +414,20 @@ app.get('/api/runs/:id/delegations', phase3IdentityGate, async (req: Request, re
   } catch (err:any) {
     res.status(404).json({error:err?.message||'DELEGATION_PARENT_NOT_FOUND'});
   }
+});
+app.get('/api/runs/:id/delegations/:delegationId/verification', phase3IdentityGate, async (req:Request,res:Response)=>{
+  try{
+    const parent=await agentRuntime.getRun(req.params.id);
+    if(!parent||parent.principalId!==req.principal!.userId)
+      return res.status(404).json({error:'DELEGATION_PARENT_NOT_FOUND'});
+    const records=new DurableDelegations();
+    const child=await records.get(req.principal!.userId,req.params.delegationId);
+    if(!child||child.parentRunId!==parent.id)
+      return res.status(404).json({error:'DELEGATION_NOT_FOUND'});
+    const evidence=await records.verification(req.principal!.userId,child.id);
+    res.setHeader('Cache-Control','no-store');
+    res.json(evidence);
+  }catch(err:any){res.status(400).json({error:err?.message||'DELEGATION_NOT_VERIFIED'});}
 });
 const browserSessions=new DurableBrowserSessions();
 app.post('/api/runs/:id/browser-sessions', phase3IdentityGate, async (req: Request, res: Response) => {
