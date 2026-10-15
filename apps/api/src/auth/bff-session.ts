@@ -24,6 +24,7 @@ export interface BffServerSession {
   email?: string;
   name?: string;
   sessionToken: string; // Better Auth session token (server-side only)
+  upstreamCookie?: string; // Captured upstream Set-Cookie header for verified session continuity
   jwt: string; // EdDSA JWT (server-side only)
   jwtExpiresAt: number;
   csrfToken: string; // Per-session cryptographic CSRF token
@@ -319,14 +320,23 @@ export function verifyCsrfAndOrigin(req: Request, session?: BffServerSession | n
 /**
  * Fetch a fresh EdDSA JWT token directly from Neon Auth using server-held session token.
  */
-async function fetchNeonJwtFromServer(sessionToken: string): Promise<{ token: string; expiresAt: number }> {
+async function fetchNeonJwtFromServer(
+  sessionToken: string,
+  upstreamCookie?: string,
+  origin = 'http://localhost:5173'
+): Promise<{ token: string; expiresAt: number }> {
   const baseUrl = getAuthBaseUrl();
+  const headers: Record<string, string> = {
+    'Authorization': `Bearer ${sessionToken}`,
+    'Content-Type': 'application/json',
+    'Origin': origin
+  };
+  if (upstreamCookie) {
+    headers['Cookie'] = upstreamCookie;
+  }
   const res = await fetch(`${baseUrl}/token`, {
     method: 'GET',
-    headers: {
-      'Authorization': `Bearer ${sessionToken}`,
-      'Content-Type': 'application/json'
-    }
+    headers
   });
 
   if (!res.ok) {
@@ -377,7 +387,7 @@ export function createBffSessionMiddleware() {
       // Proactive JWT refresh if within 60 seconds of expiration
       if (session.jwtExpiresAt - Date.now() < 60_000) {
         try {
-          const fresh = await fetchNeonJwtFromServer(session.sessionToken);
+          const fresh = await fetchNeonJwtFromServer(session.sessionToken, session.upstreamCookie);
           session.jwt = fresh.token;
           session.jwtExpiresAt = fresh.expiresAt;
           session.lastRotatedAt = Date.now();
@@ -434,9 +444,13 @@ export async function handleBffSignIn(req: Request, res: Response): Promise<void
   }
 
   const baseUrl = getAuthBaseUrl();
+  const clientOrigin = (req.headers.origin as string) || (req.headers.referer as string) || 'http://localhost:5173';
   const upstreamRes = await fetch(`${baseUrl}/sign-in/email`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Origin': clientOrigin
+    },
     body: JSON.stringify({ email: String(email).trim(), password: String(password) })
   });
 
@@ -446,12 +460,13 @@ export async function handleBffSignIn(req: Request, res: Response): Promise<void
     return;
   }
 
+  const upstreamCookie = upstreamRes.headers.get('set-cookie') || undefined;
   const data = await upstreamRes.json();
   const sessionToken = data.token;
   const user = data.user;
 
   // Obtain initial EdDSA JWT
-  const { token: jwt, expiresAt: jwtExpiresAt } = await fetchNeonJwtFromServer(sessionToken);
+  const { token: jwt, expiresAt: jwtExpiresAt } = await fetchNeonJwtFromServer(sessionToken, upstreamCookie, clientOrigin);
 
   const sessionId = generateSessionId();
   const csrfToken = generateCsrfToken();
@@ -463,6 +478,7 @@ export async function handleBffSignIn(req: Request, res: Response): Promise<void
     email: user.email,
     name: user.name,
     sessionToken,
+    upstreamCookie,
     jwt,
     jwtExpiresAt,
     csrfToken,
@@ -502,9 +518,13 @@ export async function handleBffSignUp(req: Request, res: Response): Promise<void
   }
 
   const baseUrl = getAuthBaseUrl();
+  const clientOrigin = (req.headers.origin as string) || (req.headers.referer as string) || 'http://localhost:5173';
   const upstreamRes = await fetch(`${baseUrl}/sign-up/email`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Origin': clientOrigin
+    },
     body: JSON.stringify({
       email: String(email).trim(),
       password: String(password),
@@ -518,11 +538,12 @@ export async function handleBffSignUp(req: Request, res: Response): Promise<void
     return;
   }
 
+  const upstreamCookie = upstreamRes.headers.get('set-cookie') || undefined;
   const data = await upstreamRes.json();
   const sessionToken = data.token;
   const user = data.user;
 
-  const { token: jwt, expiresAt: jwtExpiresAt } = await fetchNeonJwtFromServer(sessionToken);
+  const { token: jwt, expiresAt: jwtExpiresAt } = await fetchNeonJwtFromServer(sessionToken, upstreamCookie, clientOrigin);
 
   const sessionId = generateSessionId();
   const csrfToken = generateCsrfToken();
@@ -534,6 +555,7 @@ export async function handleBffSignUp(req: Request, res: Response): Promise<void
     email: user.email,
     name: user.name,
     sessionToken,
+    upstreamCookie,
     jwt,
     jwtExpiresAt,
     csrfToken,
@@ -595,12 +617,19 @@ export async function handleBffSignOut(req: Request, res: Response): Promise<voi
     bffSessionStore.delete(session.id);
     try {
       const baseUrl = getAuthBaseUrl();
+      const clientOrigin = (req.headers.origin as string) || (req.headers.referer as string) || 'http://localhost:5173';
+      const headers: Record<string, string> = {
+        'Authorization': `Bearer ${session.sessionToken}`,
+        'Content-Type': 'application/json',
+        'Origin': clientOrigin
+      };
+      if (session.upstreamCookie) {
+        headers['Cookie'] = session.upstreamCookie;
+      }
       await fetch(`${baseUrl}/sign-out`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.sessionToken}`,
-          'Content-Type': 'application/json'
-        }
+        headers,
+        body: JSON.stringify({})
       });
     } catch (err) {
       console.warn('[BffSignOut] Remote signout notice:', err);
