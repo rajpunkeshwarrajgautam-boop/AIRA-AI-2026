@@ -60,6 +60,7 @@ export class DurableDelegations {
   async register(
     parent:Run,child:Run,specialist:Specialist,objective:string,scopes:string[],key:string
   ):Promise<Delegation>{
+    if(parent.id===child.id)throw new Error('DELEGATION_CYCLE');
     if(parent.principalId!==child.principalId ||
        child.sessionId!==parent.sessionId ||
        !child.principalScopes.every(s=>scopes.includes(s)) ||
@@ -67,7 +68,6 @@ export class DurableDelegations {
     if(objective.length<5||objective.length>16000||key.length<8||key.length>180)
       throw new Error('DELEGATION_INVALID_INPUT');
     delegatedScopes(parent.principalScopes,scopes,specialist);
-    if(parent.id===child.id)throw new Error('DELEGATION_CYCLE');
     const now=Date.now();
     return db.transaction(async trx=>{
       const parentRow=await trx('runs').select('id','principal_id','state').where({id:parent.id}).first();
