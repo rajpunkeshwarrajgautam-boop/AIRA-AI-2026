@@ -24,6 +24,7 @@ const cookie='AIRA_BROWSER_ISOLATION_VERIFIED';
     assert.equal(found.find(x=>x.name==='aira_stored')?.value,cookie);
     await context.close();
     console.log('DOCKER_BROWSER_SEEDED_REAL_PROFILE');
+    process.exit(0);
   }else if(mode==='crash'||mode==='restore'){
     const found=await context.cookies('https://example.org/');
     assert.equal(found.find(x=>x.name==='aira_stored')?.value,cookie,
@@ -34,5 +35,6 @@ const cookie='AIRA_BROWSER_ISOLATION_VERIFIED';
     }
     await context.close();
     console.log('DOCKER_BROWSER_RESTORED_AFTER_SIGKILL');
+    process.exit(0);
   }else throw new Error('UNKNOWN_MODE');
 })().catch(e=>{console.error(e);process.exitCode=1});
