@@ -380,12 +380,20 @@ app.get('/api/runs/:id', async (req: Request, res: Response) => {
 
 // Feature-gated Phase 3 control plane; authenticated principal is provided by
 // middleware, never by model arguments or client-controlled owner IDs.
+const phase3IdentityGate = (_req:Request,res:Response,next:NextFunction) => {
+  // PR #65 (verified principal) has not been integrated into this stack.
+  // A signed anonymous bootstrap cookie is not sufficient authorization
+  // for durable cross-session computer control or delegated workloads.
+  if (process.env.NODE_ENV === 'production')
+    return res.status(503).json({error:'VERIFIED_PRINCIPAL_IDENTITY_NOT_CERTIFIED'});
+  next();
+};
 const delegationRequest = z.object({
   specialist: z.enum(['repository','research','verification']),
   objective: z.string().min(5).max(16000),
   scopes: z.array(z.string()).min(1).max(3)
 }).strict();
-app.post('/api/runs/:id/delegations', async (req: Request, res: Response) => {
+app.post('/api/runs/:id/delegations', phase3IdentityGate, async (req: Request, res: Response) => {
   try {
     const payload = delegationRequest.parse(req.body);
     const child = await agentRuntime.delegateSpecialist(
@@ -397,7 +405,7 @@ app.post('/api/runs/:id/delegations', async (req: Request, res: Response) => {
     res.status(403).json({ error: err?.message || 'DELEGATION_BLOCKED' });
   }
 });
-app.get('/api/runs/:id/delegations', async (req: Request, res: Response) => {
+app.get('/api/runs/:id/delegations', phase3IdentityGate, async (req: Request, res: Response) => {
   try {
     const rows=await agentRuntime.listSpecialistDelegations(req.params.id,req.principal!);
     res.setHeader('Cache-Control','no-store');
@@ -407,9 +415,11 @@ app.get('/api/runs/:id/delegations', async (req: Request, res: Response) => {
   }
 });
 const browserSessions=new DurableBrowserSessions();
-app.post('/api/runs/:id/browser-sessions', async (req: Request, res: Response) => {
+app.post('/api/runs/:id/browser-sessions', phase3IdentityGate, async (req: Request, res: Response) => {
   if(process.env.AIRA_DURABLE_BROWSER_ENABLED!=='true')
     return res.status(503).json({error:'PERSISTENT_BROWSER_NOT_ENABLED'});
+  if(!(req.principal!.scopes || []).includes('browser.read'))
+    return res.status(403).json({error:'BROWSER_SCOPE_REQUIRED'});
   try {
     const run=await agentRuntime.getRun(req.params.id);
     if(!run||run.principalId!==req.principal!.userId||
@@ -421,17 +431,21 @@ app.post('/api/runs/:id/browser-sessions', async (req: Request, res: Response) =
     res.status(400).json({error:err?.message||'BROWSER_SESSION_ERROR'});
   }
 });
-app.get('/api/browser-sessions/:sessionId', async (req: Request, res: Response) => {
+app.get('/api/browser-sessions/:sessionId', phase3IdentityGate, async (req: Request, res: Response) => {
   if(process.env.AIRA_DURABLE_BROWSER_ENABLED!=='true')
     return res.status(503).json({error:'PERSISTENT_BROWSER_NOT_ENABLED'});
+  if(!(req.principal!.scopes || []).includes('browser.read'))
+    return res.status(403).json({error:'BROWSER_SCOPE_REQUIRED'});
   const value=await browserSessions.read(req.principal!.userId,req.params.sessionId);
   if(!value)return res.status(404).json({error:'BROWSER_SESSION_NOT_FOUND'});
   res.setHeader('Cache-Control','no-store');
   res.json(value);
 });
-app.post('/api/browser-sessions/:sessionId/takeover', async(req:Request,res:Response)=>{
+app.post('/api/browser-sessions/:sessionId/takeover', phase3IdentityGate, async(req:Request,res:Response)=>{
   if(process.env.AIRA_DURABLE_BROWSER_ENABLED!=='true')
     return res.status(503).json({error:'PERSISTENT_BROWSER_NOT_ENABLED'});
+  if(!(req.principal!.scopes || []).includes('browser.read'))
+    return res.status(403).json({error:'BROWSER_SCOPE_REQUIRED'});
   try {
     const lease=await browserSessions.takeover(
       req.principal!.userId,req.params.sessionId,req.principal!.userId
