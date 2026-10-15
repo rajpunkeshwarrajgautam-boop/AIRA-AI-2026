@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import assert from 'assert';
 import { db } from '../packages/db/src/index.js'; // to seed/verify DB states directly
+import { compileSupportedMission } from '../packages/agent-runtime/src/mission-plan.js';
 
 const API_PORT = 3003;
 const BASE_URL = `http://127.0.0.1:${API_PORT}`;
@@ -141,6 +142,33 @@ async function runRecoveryTests() {
     toolCalls: JSON.stringify([{ id: 'call_1', toolId: 'tool_1', name: 'dummy', arguments: {}, timestamp: Date.now(), status: 'APPROVED' }])
   });
 
+  // Test J: A crash during a confirmed read-only mission step can replay that
+  // exact step. The rest of the plan must remain bound to the original prompt.
+  const durableMissionId = 'run_mission_read_recovery';
+  const missionPrompt = 'Inspect package.json and README.md and compare both files as an agent mission.';
+  const missionPlan = compileSupportedMission(missionPrompt);
+  assert.ok(missionPlan, 'Recovery fixture must compile to a real two-file mission');
+  const firstCallId = 'call_mission_read_recovery_1';
+  await seedRun(durableMissionId, 'WAITING_FOR_TOOL', 'TOOL_EXECUTING', {
+    prompt: missionPrompt,
+    intent: 'AGENT_MISSION',
+    context_data: JSON.stringify({
+      principalScopes: ['*'],
+      __airaMissionV1: {
+        version: 1, plan: missionPlan, dispatched: 1,
+        verified: [], currentCallId: firstCallId
+      }
+    }),
+    toolCalls: JSON.stringify([{
+      id: firstCallId,
+      toolId: 'tool_fs_read',
+      name: 'file_system_read',
+      arguments: { filePath: 'package.json' },
+      timestamp: Date.now()
+    }]),
+    stepCount: 1,
+  });
+
   console.log('\n--- 3. Restart API Server (Triggers Startup Recovery) ---');
   // Start server again. On boot, recoverInterruptedRuns is called.
   await startApiServer();
@@ -199,6 +227,31 @@ async function runRecoveryTests() {
   // Expired lease SHOULD be taken over by this worker ('api-worker-1')
   assert.strictEqual(checkExpired.recovery_owner, 'api-worker-1');
   console.log('✅ Test 6 & I (Lease expiry/takeover works): Passed');
+  
+  // A real Postgres recovery must replay the interrupted READ, execute
+  // README.md next and persist both observations before marking completed.
+  let recoveredMission: any = null;
+  for (let poll = 0; poll < 30; poll++) {
+    recoveredMission = await db('runs').where({ id: durableMissionId }).first();
+    if (['COMPLETED', 'FAILED'].includes(recoveredMission?.state)) break;
+    await sleep(250);
+  }
+  assert.strictEqual(recoveredMission?.state, 'COMPLETED',
+    'Interrupted read-only mission must complete both actual steps: ' +
+    String(recoveredMission?.error || recoveredMission?.state));
+  const recoveredContext = typeof recoveredMission.context_data === 'string'
+    ? JSON.parse(recoveredMission.context_data)
+    : recoveredMission.context_data;
+  assert.deepStrictEqual(recoveredContext?.__airaMissionV1?.verified,
+    ['file_1', 'file_2'], 'Both read-only steps must persist independent verified evidence');
+  const recoveredCalls = typeof recoveredMission.toolCalls === 'string'
+    ? JSON.parse(recoveredMission.toolCalls)
+    : recoveredMission.toolCalls;
+  assert.deepStrictEqual(recoveredCalls.map((c: any) => c.arguments.filePath),
+    ['package.json', 'README.md'], 'Recovery must not substitute unrelated actions');
+  console.log('✅ Test J (Durable read-only mission resumes with real tool evidence): Passed');
+
+
 
   console.log('\nAll A-I Tests Passed Successfully!');
   killApiServer();

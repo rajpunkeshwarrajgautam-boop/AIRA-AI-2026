@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import { isDeepStrictEqual } from 'node:util';
 import {
   ToolDefinition,
   DurableToolCall,
@@ -14,6 +15,9 @@ import { PostgresToolCallRepository, ToolCallRepository } from './repository.js'
 import { BrowserAdapter } from './adapters/browser-adapter.js';
 import { FileSystemAdapter } from './adapters/file-adapter.js';
 import { RepositoryAdapter } from './adapters/repo-adapter.js';
+import { IsolatedBuildBridge } from './adapters/isolated-build-bridge.js';
+import { BrowserWorkerClient } from '../../agent-runtime/src/browser-worker-transport.js';
+import { db } from '../../db/src/index.js';
 import { ConnectorRegistry, GitHubConnectorAdapter } from './adapters/connector-adapter.js';
 
 export interface GatewayExecutionContext {
@@ -187,6 +191,15 @@ export class ToolGateway extends EventEmitter {
     if (context.idempotencyKey) {
       const cached = await this.repository.getToolCallByIdempotencyKey(context.idempotencyKey);
       if (cached && cached.lifecycleState === 'COMPLETED') {
+        if (cached.principalId !== principal.userId ||
+            cached.toolName !== def.name || !isDeepStrictEqual(cached.arguments, args)) {
+          return {
+            toolCallId: callId, output: null, isError: true,
+            error: 'TOOL_IDEMPOTENCY_COLLISION: Cached result belongs to another principal, run or payload.',
+            errorCode: ToolGatewayErrorCodes.TOOL_PERMISSION_DENIED,
+            durationMs: Date.now() - startTime, timestamp: Date.now(), artifacts: []
+          };
+        }
         return {
           toolCallId: cached.id,
           output: cached.output,
@@ -203,13 +216,22 @@ export class ToolGateway extends EventEmitter {
       sideEffectLevel === 'DESTRUCTIVE' ||
       sideEffectLevel === 'WRITE';
 
+    if (requiresApproval && !this.approvalKernel) {
+      return {
+        toolCallId: callId, output: null, isError: true,
+        error: 'TOOL_APPROVAL_KERNEL_REQUIRED: Mutating tools cannot execute without the approval service.',
+        errorCode: ToolGatewayErrorCodes.TOOL_PERMISSION_DENIED,
+        durationMs: Date.now() - startTime, timestamp: Date.now(), artifacts: []
+      };
+    }
     if (requiresApproval && this.approvalKernel) {
-      const isApproved = await this.approvalKernel.isToolCallApproved(
-        runId,
-        def.name,
-        def.permissionLevel,
-        principal.userId
-      );
+      const isApproved = def.name === 'isolated_application_build'
+        ? await this.approvalKernel.isExactToolCallApproved(runId, {
+            id: callId, toolId: def.id, name: def.name, arguments: args, timestamp: startTime
+          }, principal.userId)
+        : await this.approvalKernel.isToolCallApproved(
+            runId, def.name, def.permissionLevel, principal.userId
+          );
 
       if (!isApproved) {
         // Suspend execution and create ApprovalRequest
@@ -263,7 +285,14 @@ export class ToolGateway extends EventEmitter {
             status: 'WAITING_FOR_APPROVAL',
             reason: approvalReq.reason
           },
-          isError: false,
+          // An awaiting approval is never a successful tool execution.
+          // Especially for isolated builds, this stops workflows from
+          // mistaking a pending user decision for a completed build.
+          isError: def.name === 'isolated_application_build',
+          ...(def.name === 'isolated_application_build' ? {
+            error: 'ISOLATED_BUILD_APPROVAL_REQUIRED',
+            errorCode: ToolGatewayErrorCodes.TOOL_PERMISSION_DENIED
+          } : {}),
           durationMs: Date.now() - startTime,
           timestamp: Date.now(),
           artifacts: []
@@ -461,6 +490,111 @@ export class ToolGateway extends EventEmitter {
   }
 
   private registerBuiltInTools(): void {
+    // Feature is off until a dedicated browser worker and verified identity
+    // are certified. This does not expose clicks, navigation or browser writes.
+    if (process.env.AIRA_DURABLE_BROWSER_ENABLED === 'true' &&
+        process.env.NODE_ENV !== 'production') {
+      const client = new BrowserWorkerClient();
+      this.registerTool({
+        definition: {
+          id: 'tool_browser_session_inspect',
+          name: 'browser_session_inspect',
+          version: 1,
+          description: 'Read the actual currently open page of an explicitly named, owner-bound persistent browser session. Does not navigate or mutate.',
+          category: 'browser',
+          source: 'native',
+          parameters: {
+            type: 'object', properties: {
+              sessionId: { type: 'string', description: 'Explicit bs_UUID session identifier already created for the authenticated user' }
+            }, required: ['sessionId']
+          },
+          permissionLevel: 'READ',
+          sideEffectLevel: 'READ',
+          permissionScopes: ['browser.read'],
+          approvalPolicy: 'autonomous',
+          idempotencyClass: 'IDEMPOTENT',
+          retryPolicy: { maxAttempts: 1, backoffMs: 500, factor: 1, retryableErrorCodes: [] },
+          executionRuntime: 'CLOUD',
+          timeoutMs: 26000,
+          availability: 'READY',
+          adapter: 'native',
+          provider: 'aira-durable-browser-worker'
+        },
+        execute: async (args, ctx) => {
+          const sessionId = args.sessionId;
+          if (typeof sessionId !== 'string' ||
+              !/^bs_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(sessionId) ||
+              Object.keys(args).length !== 1) {
+            throw new Error('BROWSER_SESSION_ID_INVALID');
+          }
+          const run = await db('runs').select('principal_id').where({ id:ctx.runId }).first();
+          if (!run || run.principal_id !== ctx.principal.userId)
+            throw new Error('BROWSER_RUN_OWNER_MISMATCH');
+          const row = await db('v2_browser_sessions')
+            .select('state').where({id:sessionId,owner_id:ctx.principal.userId}).first();
+          if (!row || row.state === 'CLOSED')
+            throw new Error('BROWSER_SESSION_NOT_AVAILABLE');
+          const observed = await client.observe(ctx.principal.userId,sessionId,'inspect') as any;
+          if (observed?.operation !== 'inspect' ||
+              observed?.sessionId !== sessionId ||
+              observed?.workerVerified !== true ||
+              typeof observed.url !== 'string' ||
+              typeof observed.title !== 'string' ||
+              typeof observed.heading !== 'string' ||
+              typeof observed.text !== 'string') {
+            throw new Error('BROWSER_WORKER_OBSERVATION_INVALID');
+          }
+          return observed;
+        }
+      });
+    }
+
+    // The existing isolated Docker worker (PR #42–45) is a separate service.
+    // Never expose this privileged tool unless an operator enabled the bridge
+    // AND a real approval kernel is present. The gateway further requires an
+    // exact call-ID/arguments/principal approval before any remote submission.
+    if (process.env.AIRA_ISOLATED_BUILD_ENABLED === 'true' && this.approvalKernel) {
+      const bridge = new IsolatedBuildBridge();
+      this.registerTool({
+        definition: {
+          id: 'tool_isolated_application_build',
+          name: 'isolated_application_build',
+          version: 1,
+          description: 'Send explicitly authorized source files to a separate isolated Docker build worker and verify source archive and build/test results.',
+          category: 'system',
+          source: 'native',
+          parameters: {
+            type: 'object',
+            properties: {
+              files: { type: 'array', description: 'Verified project files [{path, content}]' },
+              steps: { type: 'array', description: 'Exactly [syntax, build, test]' }
+            },
+            required: ['files','steps']
+          },
+          permissionLevel: 'WRITE',
+          sideEffectLevel: 'WRITE',
+          permissionScopes: ['builder.execute'],
+          approvalPolicy: 'require_approval',
+          idempotencyClass: 'NON_IDEMPOTENT',
+          retryPolicy: { maxAttempts: 1, backoffMs: 500, factor: 1, retryableErrorCodes: [] },
+          executionRuntime: 'CLOUD',
+          timeoutMs: 55000,
+          availability: 'READY',
+          adapter: 'native',
+          provider: 'aira-isolated-builder'
+        },
+        execute: async (args, ctx) => {
+          // Verify the run owner against the authoritative PostgreSQL record.
+          // The principal attached to a ToolGateway invocation is not itself
+          // proof that an arbitrary runId belongs to that account.
+          const ownedRun = await db('runs').select('principal_id').where({ id: ctx.runId }).first();
+          if (!ownedRun || ownedRun.principal_id !== ctx.principal.userId) {
+            throw new Error('ISOLATED_BUILD_RUN_OWNER_MISMATCH');
+          }
+          return bridge.execute(ctx.principal.userId, ctx.runId, args);
+        }
+      });
+    }
     // -------------------------------------------------------------------------
     // 1. Browser Navigate
     // -------------------------------------------------------------------------
@@ -803,7 +937,7 @@ export class ToolGateway extends EventEmitter {
         id: 'tool_repo_status',
         name: 'repo_git_status',
         version: 1,
-        description: 'Inspect the git status, current branch, and changed files of workspace.',
+        description: 'Inspect the git status, current branch, HEAD revision SHA, and changed files of workspace.',
         category: 'repo',
         source: 'native',
         parameters: { type: 'object', properties: {} },

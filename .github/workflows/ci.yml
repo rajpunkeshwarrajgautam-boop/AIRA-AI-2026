@@ -3,7 +3,7 @@ name: CI
 on:
   push:
   pull_request:
-    branches: [main, prod-release]
+    branches: [main, prod-release, feat/agent-execution-truth-20261014, feat/durable-autonomous-missions-20261014, feat/aira-autonomous-agent-runtime-v2-20261014, feat/aira-v2-isolated-build-bridge-20261015, feat/aira-v2-persistent-browser-delegation-20261015]
   workflow_dispatch:
 
 permissions:
@@ -109,6 +109,24 @@ jobs:
       - name: Router and policy verification
         run: npm run test:router
 
+      - name: Agent execution truth regression
+        run: npm run test:agent-tool-selection
+
+      - name: Durable mission planning and verification regression
+        run: npm run test:mission-planner
+
+      - name: Model mission and independent verification security
+        run: npm run test:agent-v2
+
+      - name: Isolated build and exact approvals
+        run: npm run test:isolated-build
+
+      - name: Persistent browser and specialist delegation PostgreSQL certification
+        run: npm run test:v2-durable
+
+      - name: Durable specialist SIGKILL recovery and fencing
+        run: npm run test:v2-worker-recovery
+
       - name: Workflow engine verification
         run: npm run test:workflow
 
@@ -160,6 +178,83 @@ jobs:
       - name: Behavioral intelligence 120-scenario benchmark
         run: npm run test:behavioral:benchmark
 
+
+  docker-browser-cert:
+    name: Real Docker / Chromium Isolation
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Docker real isolated Chromium certification
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="aira-browser-cert:${{ github.sha }}"
+          volume="aira-v2-browser-${{ github.run_id }}-${{ github.run_attempt }}"
+          docker build -f docker/v2-browser-certification/Dockerfile -t "$image" .
+          docker volume create "$volume" >/dev/null
+          container="aira-v2-crash-recovery"
+          trap 'docker rm -f "$container" >/dev/null 2>&1 || true; docker volume rm "$volume" >/dev/null 2>&1 || true' EXIT
+          browser() {
+            local mode="$1"
+            docker run --rm \
+              --network none --read-only --cap-drop ALL \
+              --security-opt no-new-privileges:true \
+              --pids-limit 256 --memory 1536m --shm-size 512m \
+              --tmpfs /tmp:rw,nosuid,nodev,size=512m \
+              -v "$volume":/profiles -e MODE="$mode" "$image"
+          }
+          browser seed | tee /tmp/browser-seed.out
+          grep -q 'DOCKER_BROWSER_SEEDED_REAL_PROFILE' /tmp/browser-seed.out
+          # Start Chromium in a real detached Docker process. Then kill
+          # the container externally from its host (not via Node itself).
+          docker run -d --name "$container" \
+            --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --pids-limit 256 --memory 1536m --shm-size 512m \
+            --tmpfs /tmp:rw,nosuid,nodev,size=512m \
+            -v "$volume":/profiles -e MODE=crash "$image" >/dev/null
+          for i in {1..30}; do
+            docker logs "$container" > /tmp/browser-crashing.out 2>&1
+            if grep -q 'DOCKER_BROWSER_READY_FOR_FORCED_SIGKILL' /tmp/browser-crashing.out; then break; fi
+            sleep 1
+          done
+          cat /tmp/browser-crashing.out
+          grep -q 'DOCKER_BROWSER_READY_FOR_FORCED_SIGKILL' /tmp/browser-crashing.out
+          docker kill --signal KILL "$container" >/dev/null
+          status=$(docker inspect --format '{{.State.ExitCode}}' "$container")
+          echo "DOCKER_CERT_HOST_SIGKILL_EXIT=$status"
+          test "$status" -eq 137
+          docker rm "$container" >/dev/null
+          echo "DOCKER_CERT_STAGE=RESTORE_BEGIN"
+          set +e
+          browser restore > /tmp/browser-restored.out 2>&1
+          restore_status=$?
+          set -e
+          cat /tmp/browser-restored.out
+          echo "DOCKER_CERT_RESTORE_EXIT=$restore_status"
+          test "$restore_status" -eq 0
+          grep -q 'DOCKER_BROWSER_RESTORED_AFTER_SIGKILL' /tmp/browser-restored.out
+          echo "DOCKER_CERT_STAGE=NETWORK_BEGIN"
+          # Run a separate genuine TCP probe in the same read-only/no-network
+          # container; capture and print the outcome before asserting so
+          # Docker/startup errors cannot masquerade as network blocking.
+          set +e
+          network_result=$(docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+            --entrypoint node "$image" -e \
+            "const net=require('node:net');const c=net.connect({host:'1.1.1.1',port:80});c.setTimeout(1500);c.on('connect',()=>{console.log('NETWORK_PROBE_UNEXPECTED_CONNECT');process.exit(11)});c.on('timeout',()=>{console.log('NETWORK_PROBE_DENIED_TIMEOUT');process.exit(0)});c.on('error',e=>{console.log('NETWORK_PROBE_DENIED_'+e.code);process.exit(0)});" 2>&1)
+          network_status=$?
+          set -e
+          echo "DOCKER_CERT_NETWORK_EXIT=$network_status"
+          echo "$network_result"
+          test "$network_status" -eq 0
+          grep -q 'NETWORK_PROBE_DENIED' <<< "$network_result"
+          echo "PASS: real nonroot Chromium in capability-dropped, no-network Docker; persistent profile and SIGKILL recovery"
 
   semantic-search:
     name: Semantic Search CI
@@ -260,6 +355,12 @@ jobs:
 
       - name: Install Playwright Edge
         run: npx playwright install --with-deps msedge
+
+      - name: Persistent Chromium real-process acceptance
+        env:
+          AIRA_BROWSER_WORKER_PROCESS: 'true'
+          AIRA_CHROMIUM_PATH: /usr/bin/microsoft-edge
+        run: npm run test:v2-browser-live
 
       - name: Start Vite for E2E
         shell: bash

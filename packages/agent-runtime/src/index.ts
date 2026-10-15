@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import * as crypto from 'crypto';
+import { isDeepStrictEqual } from 'node:util';
 import {
   Run,
   RunState,
@@ -34,6 +35,11 @@ import { buildDurableHistorySystemMessage } from './memory-policy.js';
 import { InstructionResolver } from './behavioral/instruction-resolver.js';
 import { AdaptiveSynthesizer } from './behavioral/adaptive-synthesizer.js';
 import { ToolRecoveryEngine } from './behavioral/tool-recovery-engine.js';
+import { selectExecutableTool, selectMissionFollowUp } from './tool-selector.js';
+import { compileSupportedMission, validateDurableMission, verifyMissionEvidence, type DurableMissionProgress } from './mission-plan.js';
+import { compileModelMission, validateStoredModelMission, type AnyMissionProgress } from './model-mission.js';
+import { verifyFinalMissionOutcome } from './independent-outcome.js';
+import { DurableDelegations, delegatedScopes, delegationKey, type Specialist, type Delegation } from './specialist-delegation.js';
 
 export class AgentRuntime extends EventEmitter {
   private eventStreams: Map<string, EventEmitter> = new Map();
@@ -44,6 +50,21 @@ export class AgentRuntime extends EventEmitter {
   private toolGateway: ToolGateway;
   private researchService: ResearchService;
   private automationEngine?: any;
+  private readonly delegatedLeases=new Map<string,{
+    id:string;owner:string;worker:string;fence:number
+  }>();
+  private async assertDelegatedLease(runId:string):Promise<void>{
+    const run=await this.runRepo.getRun(runId);
+    if(!run?.context?.delegatedFrom)return;
+    if(process.env.AIRA_SPECIALIST_WORKER_PROCESS!=='true')
+      throw new Error('DELEGATION_DEDICATED_WORKER_REQUIRED');
+    const lease=this.delegatedLeases.get(runId);
+    if(!lease||lease.owner!==run.principalId)
+      throw new Error('DELEGATED_WORKER_CLAIM_REQUIRED');
+    await new DurableDelegations().assertClaim(
+      lease.owner,lease.id,lease.worker,lease.fence
+    );
+  }
 
   constructor(
     private modelRouter: ModelRouter,
@@ -198,6 +219,12 @@ export class AgentRuntime extends EventEmitter {
       timestamp: now
     };
 
+    // Never accept execution plans from client-provided request context.
+    // The persisted mission state is exclusively created and advanced by the server.
+    const safeContext = { ...(request.context || {}) };
+    delete safeContext.__airaMissionV1;
+    delete safeContext.__airaOutcomeVerificationV2;
+
     const run: Run = {
       id: runId,
       principalId: principal.userId,
@@ -215,7 +242,7 @@ export class AgentRuntime extends EventEmitter {
       prompt: request.prompt,
       systemPrompt: request.systemPrompt,
       context: {
-        ...(request.context || {}),
+        ...safeContext,
         attachments: request.attachments,
         routingDecision
       },
@@ -236,6 +263,119 @@ export class AgentRuntime extends EventEmitter {
     return run;
   }
 
+  /**
+   * Delegates a real, read-only child run with narrowed permissions and a
+   * PostgreSQL parent/child record. Cannot invoke browser writes or shells.
+   * This is server-authoritative orchestration; model planning of delegations
+   * is NOT enabled until planner policies explicitly support it.
+   */
+  public async delegateSpecialist(
+    parentRunId: string,
+    specialist: Specialist,
+    objective: string,
+    requestedScopes: string[],
+    principal: ExecutionPrincipal
+  ): Promise<Delegation> {
+    if (process.env.AIRA_SPECIALIST_DELEGATION_ENABLED !== 'true')
+      throw new Error('SPECIALIST_DELEGATION_NOT_ENABLED');
+    // Never accept durable child tasks unless a continuously polling worker
+    // is configured. API setImmediate is not a durable scheduler.
+    if(process.env.AIRA_SPECIALIST_WORKER_ENABLED !== 'true')
+      throw new Error('SPECIALIST_WORKER_NOT_CONFIGURED');
+    if (typeof objective !== 'string' || objective.length < 5 || objective.length > 16000)
+      throw new Error('DELEGATION_INVALID_OBJECTIVE');
+    const parent = await this.runRepo.getRun(parentRunId);
+    if (!parent || parent.principalId !== principal.userId ||
+        parent.sessionId !== principal.sessionId ||
+        !['QUEUED','RUNNING','WAITING_FOR_APPROVAL','WAITING_FOR_TOOL'].includes(parent.state))
+      throw new Error('DELEGATION_PARENT_NOT_AUTHORIZED');
+    const scopes = delegatedScopes(
+      parent.principalScopes.filter(s => (principal.scopes || []).includes(s)),
+      requestedScopes, specialist
+    );
+    const repo = new DurableDelegations();
+    const key = delegationKey(parent.id, specialist, objective);
+    const existing = await repo.findByKey(principal.userId, parent.id, key);
+    if (existing) {
+      if (!isDeepStrictEqual(existing.scopes, scopes))
+        throw new Error('DELEGATION_IDEMPOTENCY_SCOPE_CONFLICT');
+      return existing;
+    }
+    // Create a real AIRA run; never create an artificial specialist response.
+    const childPrincipal: ExecutionPrincipal = {
+      ...principal, scopes, workspaceId: parent.workspaceId || undefined,
+      projectId: parent.projectId || undefined
+    };
+    const child = await this.createRun({
+      prompt: objective, intent: 'AGENT_MISSION',
+      modelPolicy: { model: parent.modelPolicy.model },
+      context: { specialist, delegatedFrom: parent.id }
+    }, childPrincipal);
+    try {
+      if (child.provenance?.provider === 'mock') throw new Error('DELEGATION_LIVE_MODEL_REQUIRED');
+      const row = await repo.register(parent, child, specialist, objective, scopes, key);
+      // Commit-and-return: dedicated worker acquires this durable row.
+      // Never execute the child inside the ephemeral HTTP request process.
+      return row;
+    } catch (err) {
+      // Never leave an unlinked orphan child runnable after a racing request.
+      child.state = 'CANCELLED';
+      child.error = 'DELEGATION_REGISTRATION_ABORTED';
+      await this.runRepo.saveRun(child);
+      const winner = await repo.findByKey(principal.userId, parent.id, key);
+      if (winner && isDeepStrictEqual(winner.scopes, scopes)) return winner;
+      throw err;
+    }
+  }
+
+  /** Only the separate worker process may execute a DB-claimed child. */
+  public async executeClaimedSpecialist(
+    delegationId:string, ownerId:string, worker:string, fence:number,recovered:boolean
+  ):Promise<'TERMINAL'|'WAITING'|'STILL_RUNNING'>{
+    if(process.env.AIRA_SPECIALIST_WORKER_PROCESS!=='true' ||
+       process.env.AIRA_SPECIALIST_WORKER_ENABLED!=='true')
+      throw new Error('DELEGATION_DEDICATED_WORKER_REQUIRED');
+    const registry=new DurableDelegations();
+    await registry.assertClaim(ownerId,delegationId,worker,fence);
+    const record=await registry.get(ownerId,delegationId);
+    if(!record)throw new Error('DELEGATION_NOT_FOUND');
+    const child=await this.runRepo.getRun(record.childRunId);
+    if(!child || child.principalId!==ownerId)
+      throw new Error('DELEGATION_CHILD_OWNER_MISMATCH');
+    await registry.assertChildAuthorized(
+      child,record.parentRunId,record.specialist
+    );
+    if(['COMPLETED','FAILED','CANCELLED'].includes(child.state))return 'TERMINAL';
+    if(child.state==='WAITING_FOR_APPROVAL' ||
+       child.executionCheckpoint==='WAITING_FOR_APPROVAL') return 'WAITING';
+    this.delegatedLeases.set(child.id,{id:delegationId,owner:ownerId,worker,fence});
+    try{
+    // Reclaimed execution always goes through the existing crash-recovery
+    // classifier, including the non-idempotent replay fence.
+    if(recovered || child.executionCheckpoint==='TOOL_EXECUTING') {
+      await this.resumeRun(child.id);
+    } else {
+      await this.startRun(child.id);
+    }
+    await registry.assertClaim(ownerId,delegationId,worker,fence);
+    const fresh=await this.runRepo.getRun(child.id);
+    if(!fresh)throw new Error('DELEGATION_CHILD_DISAPPEARED');
+    if(['COMPLETED','FAILED','CANCELLED'].includes(fresh.state))return 'TERMINAL';
+    if(fresh.state==='WAITING_FOR_APPROVAL' ||
+       fresh.executionCheckpoint==='WAITING_FOR_APPROVAL')return 'WAITING';
+    return 'STILL_RUNNING';
+    } finally {
+      this.delegatedLeases.delete(child.id);
+    }
+  }
+
+  public async listSpecialistDelegations(parentRunId: string, principal: ExecutionPrincipal): Promise<Delegation[]> {
+    const parent = await this.runRepo.getRun(parentRunId);
+    if (!parent || parent.principalId !== principal.userId)
+      throw new Error('DELEGATION_PARENT_NOT_AUTHORIZED');
+    return new DurableDelegations().list(principal.userId, parentRunId);
+  }
+
   public async startRun(runId: string): Promise<void> {
     const run = await this.runRepo.getRun(runId);
     if (!run) return;
@@ -246,6 +386,15 @@ export class AgentRuntime extends EventEmitter {
     try {
       await this.executeRunLoop(runId);
     } catch (err: any) {
+      const latest=await this.runRepo.getRun(runId);
+      if(latest?.context?.delegatedFrom){
+        try{await this.assertDelegatedLease(runId);}
+        catch{
+          // An expired/fenced old process cannot mark a newer worker's
+          // child FAILED after it lost execution authority.
+          return;
+        }
+      }
       await this.transitionRunState(runId, 'FAILED', err.message);
     }
   }
@@ -273,16 +422,25 @@ export class AgentRuntime extends EventEmitter {
       };
       await this.workflowEngine.cancelWorkflow(wfRun.id, principal);
     }
+    if(process.env.AIRA_SPECIALIST_DELEGATION_ENABLED === 'true'){
+      // Bounded DB cascade before closing parent prevents orphaned descendants.
+      await new DurableDelegations().cancelTree(run.principalId,runId);
+    }
     await this.transitionRunState(runId, 'CANCELLED', 'Run was cancelled programmatically.');
     return true;
   }
 
   public async submitApproval(requestId: string, decision: ApprovalDecision): Promise<boolean> {
-    const { approved, request } = await this.approvalKernel.decide(requestId, decision);
-    const run = await this.runRepo.getRun(request.runId);
-    if (!run) {
-      return false;
-    }
+    const pending = await this.approvalKernel.getPendingRequest(requestId);
+    if (!pending) return false;
+    const run = await this.runRepo.getRun(pending.runId);
+    if (!run) return false;
+    // The API verifies request ownership before invoking this method. Persist
+    // the authenticated run owner as the approval principal, not an absent
+    // or caller-supplied resolvedBy value.
+    const { approved, request } = await this.approvalKernel.decide(
+      requestId, decision, run.principalId
+    );
     run.pendingApproval = request;
     
     // Check if this approval was for a workflow step
@@ -317,8 +475,17 @@ export class AgentRuntime extends EventEmitter {
     await this.emitRunEvent(request.runId, 'approval.resolved', { requestId, decision, approved });
 
     await this.transitionRunState(request.runId, 'RUNNING');
-    
-    // Resume execution asynchronously (do not await)
+
+    if(run.context?.delegatedFrom){
+      const resumed=await new DurableDelegations().wakeApprovedChild(
+        run.principalId,request.runId
+      );
+      if(!resumed)throw new Error('DELEGATED_APPROVAL_RECOVERY_NOT_QUEUED');
+      // Child execution is owned by the dedicated worker; never run here.
+      return true;
+    }
+
+    // Ordinary non-delegated run resumes its existing execution path.
     this.executeRunLoop(request.runId).catch(err => {
       console.error(`Error resuming run loop for ${request.runId}:`, err);
     });
@@ -360,6 +527,71 @@ export class AgentRuntime extends EventEmitter {
     if (!run) return;
 
     if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)) return;
+
+    // A delegated child may not treat its own context, model-selected tool,
+    // or prior approval as authorization. Reconcile with PostgreSQL on every
+    // entry/recovery and again before dispatching additional tool calls.
+    const childParent = run.context?.delegatedFrom;
+    if(childParent)await this.assertDelegatedLease(runId);
+    const childSpecialist = run.context?.specialist;
+    if (childParent !== undefined || childSpecialist !== undefined) {
+      try {
+        if(typeof childParent!=='string' || !['repository','research','verification'].includes(childSpecialist) ||
+          !['AGENT_MISSION','TOOL_ACTION'].includes(run.intent)) {
+          throw new Error('DELEGATED_CHILD_POLICY_INVALID');
+        }
+        const checkpointTool=['TOOL_SELECTED','TOOL_APPROVED','TOOL_EXECUTING','TOOL_COMPLETED'].includes(
+          run.executionCheckpoint||''
+        ) ? run.toolCalls[run.toolCalls.length-1]?.name : undefined;
+        await new DurableDelegations().assertChildAuthorized(
+          run,childParent,childSpecialist,checkpointTool
+        );
+        if(checkpointTool){
+          const def=this.toolGateway.getTool(checkpointTool)?.definition||
+            this.toolRegistry.get(checkpointTool)?.definition;
+          if(!def || def.permissionLevel!=='READ' ||
+            (def.sideEffectLevel!=='READ'&&def.sideEffectLevel!=='NONE')) {
+            throw new Error('DELEGATED_TOOL_REQUIRES_UNAUTHORIZED_MUTATION');
+          }
+        }
+      } catch(err:any){
+        const message='DELEGATED_EXECUTION_BLOCKED: '+String(err?.message||err);
+        run.error=message;
+        run.content=message;
+        run.executionCheckpoint='TOOL_FAILED';
+        await this.runRepo.saveRun(run);
+        await this.transitionRunState(runId,'FAILED',message);
+        return;
+      }
+    }
+
+    // No persisted model-plan tool can ever reach the approval or execution
+    // gateway without passing the server HMAC, scope and exact-call gates.
+    // Recheck on every restart, not only after the tool returned.
+    const stored = run.context?.__airaMissionV1 as AnyMissionProgress | undefined;
+    if (stored?.version === 2) {
+      const step = stored.plan?.steps?.[stored.dispatched - 1];
+      const tool = run.toolCalls[run.toolCalls.length - 1];
+      const definition = tool ? this.toolGateway.getTool(tool.name)?.definition : undefined;
+      const valid = validateStoredModelMission(
+        run.prompt, stored, process.env.AIRA_AGENT_PLAN_SIGNING_KEY || '',
+        this.toolGateway.listDefinitions(), run.principalScopes || []
+      );
+      if (!valid || !step || !tool || stored.currentCallId !== tool.id ||
+          tool.name !== step.toolName ||
+          !isDeepStrictEqual(tool.arguments, step.arguments) ||
+          definition?.permissionLevel !== 'READ' ||
+          (definition?.sideEffectLevel !== 'READ' && definition?.sideEffectLevel !== 'NONE')) {
+        const msg = 'MODEL_MISSION_INTEGRITY_FAILURE: persisted executable plan or tool call was not authorized.';
+        run.content = msg;
+        run.error = msg;
+        run.executionCheckpoint = 'TOOL_FAILED';
+        await this.runRepo.saveRun(run);
+        await this.emitRunEvent(runId, 'content.delta', { delta: msg });
+        await this.transitionRunState(runId, 'FAILED', msg);
+        return;
+      }
+    }
 
     // Checkpoint 0: Capability readiness gate
     if (run.routingDecision?.executionTarget === 'CAPABILITY_NOT_READY') {
@@ -565,85 +797,73 @@ export class AgentRuntime extends EventEmitter {
       const isAgentMission = run.intent === 'AGENT_MISSION';
 
       if (isToolAction || isAgentMission) {
-        if (
-          run.prompt.toLowerCase().includes('mouse click') ||
-          run.prompt.toLowerCase().includes('desktop screen') ||
-          run.prompt.toLowerCase().includes('desktop coordinate') ||
-          run.prompt.toLowerCase().includes('computer use') ||
-          run.prompt.toLowerCase().includes('os control')
-        ) {
-          const msg = 'COMPUTER_USE_NOT_AVAILABLE: Native desktop and OS control runtime is not available in the current environment. Browser-based navigation is supported via browser tools.';
-          run.content = msg;
-          run.executionCheckpoint = 'COMPLETED';
+        let missionPlan: ReturnType<typeof compileSupportedMission> | import('./model-mission.js').ModelMissionPlan =
+          compileSupportedMission(run.prompt);
+        let planSignature: string | undefined;
+        // The model can propose only when no real deterministic mission matches.
+        // Fail closed rather than inventing an unsupported task if planning fails.
+        if (!missionPlan && isAgentMission && process.env.AIRA_MODEL_MISSIONS_ENABLED === 'true') {
+          try {
+            const proposed = await compileModelMission(
+              run.prompt, this.modelRouter, run.modelPolicy,
+              this.toolGateway.listDefinitions(), run.principalScopes || [],
+              process.env.AIRA_AGENT_PLAN_SIGNING_KEY || ''
+            );
+            missionPlan = proposed.plan;
+            planSignature = proposed.planSignature;
+          } catch (err: any) {
+            const message = 'MODEL_MISSION_PLANNING_FAILED: ' + String(err?.message || err);
+            run.content = message;
+            run.error = message;
+            run.executionCheckpoint = 'TOOL_FAILED';
+            await this.runRepo.saveRun(run);
+            await this.emitRunEvent(runId, 'content.delta', { delta: message });
+            await this.transitionRunState(runId, 'FAILED', message);
+            return;
+          }
+        }
+        const firstMissionStep = missionPlan?.steps[0];
+        const selected = firstMissionStep
+          ? { ok: true as const, name: firstMissionStep.toolName, args: firstMissionStep.arguments }
+          : selectExecutableTool(run.prompt, isAgentMission ? 'AGENT_MISSION' : 'TOOL_ACTION', {
+              allowDiagnosticTools: process.env.NODE_ENV === 'test'
+            });
+        if (!selected.ok) {
+          const message = `${selected.code}: ${selected.reason}`;
+          run.content = message;
+          run.error = message;
+          run.executionCheckpoint = 'TOOL_FAILED';
           await this.runRepo.saveRun(run);
-          await this.emitRunEvent(runId, 'content.delta', { delta: msg });
-          await this.transitionRunState(runId, 'COMPLETED');
+          await this.emitRunEvent(runId, 'content.delta', { delta: message });
+          await this.transitionRunState(runId, 'FAILED', message);
           return;
         }
 
-        let selectedToolName = 'web_search';
-        let selectedArgs: Record<string, unknown> = { query: run.prompt };
-
-        const urlMatch = run.prompt.match(/https?:\/\/[^\s"'<>]+/);
-        if (urlMatch && run.prompt.toLowerCase().includes('screenshot')) {
-          selectedToolName = 'browser_screenshot';
-          selectedArgs = { url: urlMatch[0] };
-        } else if (urlMatch) {
-          selectedToolName = 'browser_navigate';
-          selectedArgs = { url: urlMatch[0] };
-        } else if (run.prompt.toLowerCase().includes('form') && (run.prompt.toLowerCase().includes('populate') || run.prompt.toLowerCase().includes('fill') || run.prompt.toLowerCase().includes('submit'))) {
-          selectedToolName = 'browser_type';
-          selectedArgs = { selector: 'form input', text: 'AIRA 2026 Test' };
-        } else if (run.prompt.toLowerCase().includes('github') && run.prompt.toLowerCase().includes('commit')) {
-          selectedToolName = 'repo_git_log';
-          selectedArgs = { count: 1 };
-        } else if (
-          isAgentMission && (run.prompt.toLowerCase().includes('workspace') || run.prompt.toLowerCase().includes('inspect'))
-        ) {
-          const fileMatch = run.prompt.match(/(?:read|inspect|structure|analyze|view)\s+([a-zA-Z0-9_\-./\\]+\.[a-zA-Z0-9]+)/i);
-          const targetPath = fileMatch ? fileMatch[1].trim() : (run.prompt.toLowerCase().includes('src/app.tsx') ? 'src/App.tsx' : 'package.json');
-          selectedToolName = 'file_system_read';
-          selectedArgs = { filePath: targetPath };
-        } else if (run.prompt.toLowerCase().includes('git status') || run.prompt.toLowerCase().includes('repo status')) {
-          selectedToolName = 'repo_git_status';
-          selectedArgs = {};
-        } else if (run.prompt.toLowerCase().includes('calc') || /calculate|\b\d+\s*[-+*/]\s*\d+/.test(run.prompt.toLowerCase())) {
-          selectedToolName = 'calculator';
-          const exprMatch = run.prompt.match(/([0-9+\-*/().^ ]+)/);
-          selectedArgs = { expression: exprMatch ? exprMatch[0].trim() : '1024 * 4' };
-        } else if (
-          run.routingDecision?.sideEffectLevel === 'DESTRUCTIVE' ||
-          run.prompt.toLowerCase().includes('shell') ||
-          run.prompt.toLowerCase().includes('run command') ||
-          run.prompt.toLowerCase().includes('rm -rf') ||
-          run.prompt.toLowerCase().includes('delete') ||
-          run.prompt.toLowerCase().includes('drop')
-        ) {
-          selectedToolName = 'system_shell';
-          selectedArgs = { command: run.prompt };
-        } else if (
-          run.prompt.toLowerCase().includes('list') &&
-          (run.prompt.toLowerCase().includes('src/') || run.prompt.toLowerCase().includes('files in') || run.prompt.toLowerCase().includes('directory'))
-        ) {
-          const dirMatch = run.prompt.match(/(?:list|files in|directory)\s+([a-zA-Z0-9_\-./\\]+)/i);
-          selectedToolName = 'file_system_list';
-          selectedArgs = { directoryPath: dirMatch ? dirMatch[1].trim() : 'src' };
-        } else if (
-          run.prompt.toLowerCase().includes('read') ||
-          run.prompt.toLowerCase().includes('inspect') ||
-          run.prompt.toLowerCase().includes('structure') ||
-          run.prompt.toLowerCase().includes('analyze')
-        ) {
-          const fileMatch = run.prompt.match(/(?:read|inspect|structure|analyze|view)\s+([a-zA-Z0-9_\-./\\]+\.[a-zA-Z0-9]+)/i);
-          const targetPath = fileMatch ? fileMatch[1].trim() : (run.prompt.toLowerCase().includes('src/app.tsx') ? 'src/App.tsx' : 'package.json');
-          selectedToolName = 'file_system_read';
-          selectedArgs = { filePath: targetPath };
-        } else if (run.prompt.toLowerCase().includes('hang safe')) {
-          selectedToolName = 'hang_safe';
-          selectedArgs = {};
-        } else if (run.prompt.toLowerCase().includes('hang unsafe')) {
-          selectedToolName = 'hang_unsafe';
-          selectedArgs = {};
+        const selectedToolName = selected.name;
+        const selectedArgs = selected.args;
+        if (typeof childParent === 'string' && childSpecialist) {
+          try {
+            await new DurableDelegations().assertChildAuthorized(
+              run,childParent,childSpecialist,selectedToolName
+            );
+          }catch(err:any){
+            const message='DELEGATED_TOOL_REJECTED: '+String(err?.message||err);
+            run.error=message;
+            run.executionCheckpoint='TOOL_FAILED';
+            await this.runRepo.saveRun(run);
+            await this.transitionRunState(runId,'FAILED',message);
+            return;
+          }
+        }
+        if (!this.toolGateway.getTool(selectedToolName) && !this.toolRegistry.get(selectedToolName)) {
+          const message = `TOOL_UNAVAILABLE: ${selectedToolName} is not registered in this runtime. No simulated execution was performed.`;
+          run.content = message;
+          run.error = message;
+          run.executionCheckpoint = 'TOOL_FAILED';
+          await this.runRepo.saveRun(run);
+          await this.emitRunEvent(runId, 'content.delta', { delta: message });
+          await this.transitionRunState(runId, 'FAILED', message);
+          return;
         }
 
         const toolDef = this.toolGateway.getTool(selectedToolName)?.definition || this.toolRegistry.get(selectedToolName)?.definition;
@@ -658,8 +878,33 @@ export class AgentRuntime extends EventEmitter {
         run.toolsUsed.push(selectedToolName);
         run.toolCalls.push(toolCall);
         run.stepCount++;
+        if (missionPlan) {
+          run.context.__airaMissionV1 = missionPlan.version === 2
+            ? {
+                version: 2,
+                plan: missionPlan,
+                dispatched: 1,
+                verified: [],
+                currentCallId: toolCall.id,
+                planSignature: planSignature || ''
+              }
+            : {
+                version: 1,
+                plan: missionPlan,
+                dispatched: 1,
+                verified: [],
+                currentCallId: toolCall.id
+              } satisfies AnyMissionProgress;
+        }
         run.executionCheckpoint = 'TOOL_SELECTED';
         await this.runRepo.saveRun(run);
+        if (missionPlan) {
+          await this.emitRunEvent(runId, 'tool.progress', {
+            status: 'MISSION_PLANNED',
+            objective: run.prompt,
+            steps: missionPlan.steps.map(step => ({ id: step.id, tool: step.toolName, purpose: step.purpose }))
+          });
+        }
         await this.emitRunEvent(runId, 'tool.requested', toolCall);
       } else {
         run.executionCheckpoint = 'SYNTHESIZING';
@@ -672,14 +917,19 @@ export class AgentRuntime extends EventEmitter {
       const toolCall = run.toolCalls[run.toolCalls.length - 1];
       const toolDef = this.toolGateway.getTool(toolCall.name)?.definition || this.toolRegistry.get(toolCall.name)?.definition;
       
-      const isApproved = await this.approvalKernel.isToolCallApproved(
-        runId,
-        toolCall.name,
-        toolDef?.permissionLevel || 'READ',
-        run.principalId
-      );
+      const isApproved = toolCall.name === 'isolated_application_build'
+        ? await this.approvalKernel.isExactToolCallApproved(runId, toolCall, run.principalId)
+        : await this.approvalKernel.isToolCallApproved(
+            runId, toolCall.name, toolDef?.permissionLevel || 'READ', run.principalId
+          );
 
       const requiresApproval = (!isApproved) && (
+        toolDef?.approvalPolicy === 'require_approval' ||
+        toolDef?.approvalPolicy === 'always_ask' ||
+        toolDef?.permissionLevel === 'WRITE' ||
+        toolDef?.permissionLevel === 'EXTERNAL_COMMUNICATION' ||
+        toolDef?.permissionLevel === 'FINANCIAL' ||
+        toolDef?.sideEffectLevel === 'WRITE' ||
         toolDef?.permissionLevel === 'DESTRUCTIVE' ||
         toolDef?.sideEffectLevel === 'DESTRUCTIVE' ||
         run.routingDecision?.sideEffectLevel === 'DESTRUCTIVE' ||
@@ -714,6 +964,7 @@ export class AgentRuntime extends EventEmitter {
 
     // Checkpoint 4: Execute Tool
     if (run.executionCheckpoint === 'TOOL_APPROVED') {
+      await this.assertDelegatedLease(runId);
       const toolCall = run.toolCalls[run.toolCalls.length - 1];
       run.executionCheckpoint = 'TOOL_EXECUTING';
       await this.runRepo.saveRun(run);
@@ -724,6 +975,7 @@ export class AgentRuntime extends EventEmitter {
       let toolResult: ToolResult;
       const registeredWithGateway = this.toolGateway.getTool(toolCall.name);
       if (registeredWithGateway) {
+        await this.assertDelegatedLease(runId);
         toolResult = await this.toolGateway.execute({
           toolName: toolCall.name,
           arguments: toolCall.arguments,
@@ -748,6 +1000,9 @@ export class AgentRuntime extends EventEmitter {
       }
 
       run = await this.runRepo.getRun(runId) as Run; // reload after async tool execution
+      // Parent cancellation can mark a child CANCELLED during an asynchronous
+      // read. Never resurrect that cancelled run with a late tool result.
+      if(!run || ['CANCELLED','FAILED'].includes(run.state)) return;
 
       const recoveryEngine = new ToolRecoveryEngine();
       let finalToolResult = toolResult;
@@ -827,7 +1082,8 @@ export class AgentRuntime extends EventEmitter {
           run.executionCheckpoint = 'WAITING_FOR_APPROVAL';
           run.state = 'BLOCKED';
           run.error = decision.explanation;
-          run.toolResults.push(finalToolResult);
+          if(childParent)await this.assertDelegatedLease(runId);
+      run.toolResults.push(finalToolResult);
           await this.runRepo.saveRun(run);
           await this.emitRunEvent(runId, 'tool.approval_required', {
             toolName: toolCall.name,
@@ -862,41 +1118,142 @@ export class AgentRuntime extends EventEmitter {
 
         await this.transitionRunState(runId, 'RUNNING');
         
-        // Bounded iterative loop for AGENT_MISSION (up to 3 steps)
-        if (run.intent === 'AGENT_MISSION' && run.stepCount < 3) {
-          let nextToolName: string | null = null;
-          let nextArgs: Record<string, unknown> = {};
+        // Leave TOOL_COMPLETED durable until evidence is checked and the next
+        // mission step is dispatched below, including after process recovery.
+        run = await this.runRepo.getRun(runId) as Run;
+      }
+    }
 
-          if (run.stepCount === 1) {
-            nextToolName = 'repo_git_status';
-            nextArgs = {};
-          } else if (run.stepCount === 2) {
-            nextToolName = 'repo_git_log';
-            nextArgs = { count: 2 };
+    if (run.executionCheckpoint === 'TOOL_COMPLETED' && (run.intent === 'AGENT_MISSION' || run.intent === 'TOOL_ACTION')) {
+      const progress = run.context?.__airaMissionV1 as AnyMissionProgress | undefined;
+      if (progress) {
+        const lastCall = run.toolCalls[run.toolCalls.length - 1];
+        const lastResult = run.toolResults[run.toolResults.length - 1];
+        const currentStep = progress.plan?.steps?.[progress.dispatched - 1];
+        const valid = progress.version === 2
+          ? validateStoredModelMission(run.prompt, progress,
+              process.env.AIRA_AGENT_PLAN_SIGNING_KEY || '',
+              this.toolGateway.listDefinitions(), run.principalScopes || [])
+          : validateDurableMission(run.prompt, progress);
+        const evidence = currentStep ? verifyMissionEvidence(currentStep, lastResult) :
+          { verified: false, reason: 'Missing mission step' };
+
+        if (!valid || !currentStep || progress.currentCallId !== lastCall?.id ||
+            currentStep.toolName !== lastCall.name ||
+            !isDeepStrictEqual(currentStep.arguments, lastCall.arguments) ||
+            !evidence.verified) {
+          const message = 'MISSION_VERIFICATION_FAILED: ' +
+            (!valid ? 'Persisted plan does not match the original request.' : evidence.reason);
+          run.error = message;
+          run.content = message;
+          run.executionCheckpoint = 'TOOL_FAILED';
+          await this.runRepo.saveRun(run);
+          await this.emitRunEvent(runId, 'content.delta', { delta: message });
+          await this.transitionRunState(runId, 'FAILED', message);
+          return;
+        }
+
+        if (progress.verified.length === progress.dispatched - 1) {
+          progress.verified.push(currentStep.id);
+          await this.runRepo.saveRun(run);
+          await this.emitRunEvent(runId, 'tool.progress', {
+            status: 'MISSION_STEP_VERIFIED', stepId: currentStep.id,
+            step: progress.dispatched, total: progress.plan.steps.length,
+            evidence: evidence.reason
+          });
+        }
+
+        const nextStep = progress.plan.steps[progress.dispatched];
+        if (nextStep) {
+          if (run.stepCount >= run.maxSteps) {
+            const message = 'MISSION_STEP_LIMIT: Execution stopped at the configured maxSteps bound.';
+            run.error = message;
+            run.content = message;
+            run.executionCheckpoint = 'TOOL_FAILED';
+            await this.runRepo.saveRun(run);
+            await this.transitionRunState(runId, 'FAILED', message);
+            return;
           }
 
-          if (nextToolName) {
-            const nextToolDef = this.toolGateway.getTool(nextToolName)?.definition || this.toolRegistry.get(nextToolName)?.definition;
-            const nextToolCall: ToolCall = {
-              id: `call_${Date.now()}_${run.stepCount}`,
-              toolId: nextToolDef?.id || `tool_${nextToolName}`,
-              name: nextToolName,
-              arguments: nextArgs,
-              timestamp: Date.now()
+          const toolDef = this.toolGateway.getTool(nextStep.toolName)?.definition ||
+            this.toolRegistry.get(nextStep.toolName)?.definition;
+          if (!toolDef || toolDef.permissionLevel !== 'READ' ||
+              (toolDef.sideEffectLevel !== 'READ' && toolDef.sideEffectLevel !== 'NONE')) {
+            const message = 'MISSION_TOOL_UNAVAILABLE: Next mission step is not an available read-only tool.';
+            run.error = message;
+            run.content = message;
+            run.executionCheckpoint = 'TOOL_FAILED';
+            await this.runRepo.saveRun(run);
+            await this.transitionRunState(runId, 'FAILED', message);
+            return;
+          }
+
+          const nextCall: ToolCall = {
+            id: `call_${crypto.randomUUID()}`,
+            toolId: toolDef.id,
+            name: nextStep.toolName,
+            arguments: nextStep.arguments,
+            timestamp: Date.now()
+          };
+          run.toolsUsed.push(nextCall.name);
+          run.toolCalls.push(nextCall);
+          run.stepCount++;
+          progress.dispatched++;
+          progress.currentCallId = nextCall.id;
+          run.executionCheckpoint = 'TOOL_SELECTED';
+          await this.runRepo.saveRun(run);
+          await this.emitRunEvent(runId, 'tool.requested', nextCall);
+          return this.executeRunLoop(runId);
+        }
+
+        // Independent readback is a separate gate from successful adapter calls.
+        if (progress.version === 2) {
+          const outcome = await verifyFinalMissionOutcome(
+            progress.plan.steps, run.toolCalls, run.toolResults, this.workspaceRoot, run.principalId
+          );
+          run.context.__airaOutcomeVerificationV2 = outcome;
+          await this.runRepo.saveRun(run);
+          await this.emitRunEvent(runId, 'tool.progress', {
+            status: outcome.status,
+            verifiedSteps: outcome.evidence.filter(e => e.verified).length,
+            totalSteps: progress.plan.steps.length
+          });
+          if (outcome.status !== 'COMPLETED_VERIFIED') {
+            const message = 'MISSION_OUTCOME_NOT_VERIFIED: ' +
+              String(outcome.evidence.find(item => !item.verified)?.reason || 'Missing independent evidence');
+            run.error = message;
+            run.content = message;
+            run.executionCheckpoint = 'TOOL_FAILED';
+            await this.runRepo.saveRun(run);
+            await this.emitRunEvent(runId, 'content.delta', { delta: message });
+            await this.transitionRunState(runId, 'FAILED', message);
+            return;
+          }
+        }
+        // All steps and their independently observable postconditions are now verified.
+        run.executionCheckpoint = 'SYNTHESIZING';
+        await this.runRepo.saveRun(run);
+      } else {
+        // Preserve bounded mission behavior for in-flight legacy runs.
+        const continuation = selectMissionFollowUp(run.prompt, run.stepCount);
+        if (continuation) {
+          const def = this.toolGateway.getTool(continuation.name)?.definition ||
+            this.toolRegistry.get(continuation.name)?.definition;
+          if (def && def.permissionLevel === 'READ' && run.stepCount < run.maxSteps) {
+            const nextCall: ToolCall = {
+              id: `call_${crypto.randomUUID()}`,
+              toolId: def.id, name: continuation.name,
+              arguments: continuation.args, timestamp: Date.now()
             };
-            run.toolsUsed.push(nextToolName);
-            run.toolCalls.push(nextToolCall);
+            run.toolsUsed.push(nextCall.name);
+            run.toolCalls.push(nextCall);
             run.stepCount++;
             run.executionCheckpoint = 'TOOL_SELECTED';
             await this.runRepo.saveRun(run);
-            await this.emitRunEvent(runId, 'tool.requested', nextToolCall);
+            await this.emitRunEvent(runId, 'tool.requested', nextCall);
             return this.executeRunLoop(runId);
           }
         }
-
-        run = await this.runRepo.getRun(runId) as Run;
-        run.executionCheckpoint = 'SYNTHESIZING';
-        await this.runRepo.saveRun(run);
       }
     }
 
@@ -944,7 +1301,7 @@ export class AgentRuntime extends EventEmitter {
       } else if (run.intent === 'AGENT_MISSION') {
         messages.push({
           role: 'system',
-          content: `${systemDirective}\n\nYou are operating in Autonomous Mission mode. Deliver clear execution results, steps undertaken, verification findings, and a concise summary.`
+          content: `${systemDirective}\n\nYou are operating in Autonomous Mission mode. Distinguish observed tool outputs from analysis, report each actually verified action, and never claim edits, deployments, browser interactions, or other actions not evidenced by the execution results. If evidence is insufficient, explicitly state the limitation.`
         });
       } else if (resolvedInstructions.effectiveInstructions.length > 0) {
         messages.push({
@@ -1176,6 +1533,10 @@ CAPABILITY & IDENTITY INVARIANTS:
   public async recoverInterruptedRuns(owner: string, ttlMs: number = 60000): Promise<void> {
     const interrupted = await this.runRepo.getInterruptedRuns();
     for (const run of interrupted) {
+      // Delegated child runs belong exclusively to the separately leased
+      // specialist dispatcher. General API startup recovery must not steal
+      // their authority or mark them failed without a worker fence.
+      if(run.context?.delegatedFrom)continue;
       const claimed = await this.runRepo.claimInterruptedRun(run.id, owner, ttlMs);
       if (claimed) {
         console.log(`Recovering interrupted run ${run.id}...`);
@@ -1205,7 +1566,27 @@ CAPABILITY & IDENTITY INVARIANTS:
       const toolDef = this.toolRegistry.get(toolCall?.name)?.definition;
       const idempotencyClass = toolDef?.idempotencyClass || 'NON_IDEMPOTENT';
 
-      if (idempotencyClass === 'NON_IDEMPOTENT' || idempotencyClass === 'EXTERNAL_SIDE_EFFECT') {
+      // Only server-validated read-only plans may replay. Their exact plan and
+      // call arguments must match before resuming an interrupted adapter call.
+      // Other operations still follow the existing non-idempotent crash fence.
+      const progress = run.context?.__airaMissionV1 as AnyMissionProgress | undefined;
+      const step = progress?.plan?.steps?.[progress.dispatched - 1];
+      const gatewayDefinition = toolCall ? this.toolGateway.getTool(toolCall.name)?.definition : undefined;
+      const replayableMissionRead = Boolean(
+        progress && (progress.version === 2
+          ? validateStoredModelMission(run.prompt, progress,
+              process.env.AIRA_AGENT_PLAN_SIGNING_KEY || '',
+              this.toolGateway.listDefinitions(), run.principalScopes || [])
+          : validateDurableMission(run.prompt, progress)) &&
+        step && toolCall && progress.currentCallId === toolCall.id &&
+        step.toolName === toolCall.name &&
+        isDeepStrictEqual(step.arguments, toolCall.arguments) &&
+        gatewayDefinition?.permissionLevel === 'READ' &&
+        gatewayDefinition.sideEffectLevel === 'READ'
+      );
+
+      if (!replayableMissionRead &&
+          (idempotencyClass === 'NON_IDEMPOTENT' || idempotencyClass === 'EXTERNAL_SIDE_EFFECT')) {
         await this.transitionRunState(runId, 'FAILED', 'Process crashed during non-idempotent tool execution');
         return;
       } else {
@@ -1235,3 +1616,4 @@ export * from './workflow-repositories.js';
 export * from './registry.js';
 export * from './router.js';
 export * from './repositories.js';
+export * from './git-policy.js';
