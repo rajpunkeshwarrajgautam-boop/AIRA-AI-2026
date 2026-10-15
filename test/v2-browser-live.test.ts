@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { db,runMigrations,closeDb } from '../packages/db/src/index.js';
 import { DurableBrowserSessions } from '../packages/agent-runtime/src/browser-sessions.js';
 import { PersistentChromiumWorker,enforceBrowserEgress } from '../packages/agent-runtime/src/persistent-browser-worker.js';
+import { BrowserWorkerHttp,BrowserWorkerClient } from '../packages/agent-runtime/src/browser-worker-transport.js';
 
 process.env.AIRA_BROWSER_WORKER_PROCESS='true';
 const root=await mkdtemp(join(tmpdir(),'aira-v2-browser-'));
@@ -63,6 +64,31 @@ try{
   const resumed=await sessions.claimBot(owner,sessionId,'recovered-chromium-worker',60000);
   assert.ok(resumed.fence>lease.fence);
   assert.equal((await browserB.inspect(resumed)).heading,'Cookie persisted');
+  await sessions.release(resumed);
+  const token='browser-worker-test-only-secret-min-length';
+  const workerHttp=new BrowserWorkerHttp(browserB,sessions,token);
+  const control=workerHttp.server();
+  control.listen(0,'127.0.0.1');
+  await once(control,'listening');
+  try{
+    const socket=control.address();
+    if(!socket||typeof socket==='string')throw Error('BROWSER_CONTROL_NOT_LISTENING');
+    const client=new BrowserWorkerClient({
+      origin:'http://127.0.0.1:'+socket.port,token
+    });
+    const observed=await client.observe(owner,sessionId,'inspect') as any;
+    assert.equal(observed.heading,'Cookie persisted');
+    assert.equal(observed.workerVerified,true);
+    const captured=await client.observe(owner,sessionId,'screenshotDigest') as any;
+    assert.match(captured.sha256,/^[a-f0-9]{64}$/);
+    await assert.rejects(client.observe(other,sessionId,'inspect'),/BROWSER_WORKER_409/);
+    const invalid=new BrowserWorkerClient({
+      origin:'http://127.0.0.1:'+socket.port,token:'not-the-real-worker-token'
+    });
+    await assert.rejects(invalid.observe(owner,sessionId,'inspect'),/BROWSER_WORKER_401/);
+  }finally{
+    await new Promise<void>(resolve=>control.close(()=>resolve()));
+  }
   await browserB.closeContext(sessionId);
   await sessions.close(owner,sessionId);
   await assert.rejects(browserB.inspect(resumed),/STALE/);
