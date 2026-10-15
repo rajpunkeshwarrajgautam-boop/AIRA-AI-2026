@@ -111,6 +111,7 @@ export const ModelIdSchema = z.enum([
   'claude-3-7-sonnet',
   'claude-3-5-sonnet',
   'claude-3-5-haiku',
+  'claude-3-opus', // Legacy UI ID; model router maps it to a supported Aira policy.
   'gpt-4o',
   'gpt-4o-mini',
   'gemini-2-5-pro',

@@ -1,3 +1,4 @@
+import { createBuilderRoutes } from './builder-routes.js';
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
@@ -132,6 +133,7 @@ app.use('/api', createPrincipalMiddleware());
 
 // Initialize Core Subsystems
 const modelRouter = new ModelRouter();
+app.use('/api/builder', createBuilderRoutes(modelRouter));
 const toolRegistry = new ToolRegistry(process.cwd());
 const approvalKernel = new ApprovalKernel(new PostgresApprovalRepository(), new PostgresSessionGrantRepository());
 const toolCallRepo = new PostgresToolCallRepository();

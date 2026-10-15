@@ -28,3 +28,6 @@ graphify-out/
 .neon
 test-results/preview-acceptance/
 artifacts/
+
+# Local builder browser acceptance screenshots and receipts
+test-results/builder/
