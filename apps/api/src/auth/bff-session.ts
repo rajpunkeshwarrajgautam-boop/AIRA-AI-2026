@@ -377,6 +377,12 @@ export function verifyCsrfAndOrigin(req: Request, session?: BffServerSession | n
     return true;
   }
 
+  // In dev/test environments, allow direct test harness callers with test principal headers
+  const isDevOrTest = !process.env.VERCEL_ENV && (process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'development');
+  if (isDevOrTest && req.headers['x-test-user-id']) {
+    return true;
+  }
+
   // 1. Fetch Metadata check: reject cross-site requests unconditionally on mutations
   const secFetchSite = req.headers['sec-fetch-site'];
   if (secFetchSite === 'cross-site') {
