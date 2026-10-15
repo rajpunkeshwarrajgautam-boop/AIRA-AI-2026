@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import { isDeepStrictEqual } from 'node:util';
 import {
   ToolDefinition,
   DurableToolCall,
@@ -188,6 +189,15 @@ export class ToolGateway extends EventEmitter {
     if (context.idempotencyKey) {
       const cached = await this.repository.getToolCallByIdempotencyKey(context.idempotencyKey);
       if (cached && cached.lifecycleState === 'COMPLETED') {
+        if (cached.principalId !== principal.userId || cached.runId !== runId ||
+            cached.toolName !== def.name || !isDeepStrictEqual(cached.arguments, args)) {
+          return {
+            toolCallId: callId, output: null, isError: true,
+            error: 'TOOL_IDEMPOTENCY_COLLISION: Cached result belongs to another principal, run or payload.',
+            errorCode: ToolGatewayErrorCodes.TOOL_PERMISSION_DENIED,
+            durationMs: Date.now() - startTime, timestamp: Date.now(), artifacts: []
+          };
+        }
         return {
           toolCallId: cached.id,
           output: cached.output,
