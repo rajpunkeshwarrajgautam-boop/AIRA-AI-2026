@@ -16,7 +16,7 @@ const owner='browser-ci-'+randomUUID(),other='other-'+randomUUID(),run='run_'+ra
 const http=createServer((req,res)=>{
   res.setHeader('Content-Type','text/html; charset=utf-8');
   if(req.url==='/start'){
-    res.setHeader('Set-Cookie','persisted=AIRA_V2; HttpOnly; Path=/; SameSite=Lax');
+    res.setHeader('Set-Cookie','persisted=AIRA_V2; HttpOnly; Path=/; SameSite=Lax; Max-Age=3600');
     res.end('<!doctype html><html><title>Start</title><body><h1>Real Chromium Session</h1>Browser is running</body></html>');
   }else if(req.url==='/continue'){
     const value=String(req.headers.cookie||'').includes('persisted=AIRA_V2')?'Cookie persisted':'Cookie missing';
@@ -48,6 +48,8 @@ try{
   const first=await browserA.screenshotDigest(lease);
   assert.match(first.sha256,/^[a-f0-9]{64}$/);
   assert.ok(first.bytes>100);
+  const inProcess=await browserA.navigate(lease,url+'/continue');
+  assert.equal(inProcess.heading,'Cookie persisted','Real HTTP cookie must exist before restarting Chromium');
   await browserA.closeContext(sessionId);
   // Closing Chromium and creating an entirely fresh worker must still
   // preserve the HttpOnly cookie inside the encrypted-at-rest operator volume.
