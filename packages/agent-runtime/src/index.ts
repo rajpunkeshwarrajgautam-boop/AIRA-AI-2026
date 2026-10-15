@@ -466,8 +466,17 @@ export class AgentRuntime extends EventEmitter {
     await this.emitRunEvent(request.runId, 'approval.resolved', { requestId, decision, approved });
 
     await this.transitionRunState(request.runId, 'RUNNING');
-    
-    // Resume execution asynchronously (do not await)
+
+    if(run.context?.delegatedFrom){
+      const resumed=await new DurableDelegations().wakeApprovedChild(
+        run.principalId,request.runId
+      );
+      if(!resumed)throw new Error('DELEGATED_APPROVAL_RECOVERY_NOT_QUEUED');
+      // Child execution is owned by the dedicated worker; never run here.
+      return true;
+    }
+
+    // Ordinary non-delegated run resumes its existing execution path.
     this.executeRunLoop(request.runId).catch(err => {
       console.error(`Error resuming run loop for ${request.runId}:`, err);
     });
