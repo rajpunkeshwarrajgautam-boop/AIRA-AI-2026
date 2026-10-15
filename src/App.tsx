@@ -28,7 +28,7 @@ import { MemoryVaultModal } from './components/MemoryVaultModal';
 import { AuthModal } from './components/AuthModal';
 import { neonAuth, authenticatedApiFetch } from './lib/neonAuth';
 import { LibraryView } from './components/LibraryView';
-import { AgentsView } from './components/AgentsView';
+import { BuilderWorkspace } from './components/BuilderWorkspace';
 import { AutomationsView } from './components/AutomationsView';
 
 const MODE_CONTEXT: Record<WorkspaceMode, string> = {
@@ -683,7 +683,7 @@ function App() {
           {workspaceMode === 'library' ? (
             <LibraryView />
           ) : workspaceMode === 'agents' ? (
-            <AgentsView />
+            <BuilderWorkspace model={settings.activeModel} />
           ) : workspaceMode === 'automations' ? (
             <AutomationsView />
           ) : (!activeConversation || activeConversation.messages.length === 0 ? (
@@ -713,7 +713,7 @@ function App() {
           ))}
         </div>
 
-          <div className="shrink-0 min-w-0 relative z-10 pt-2 sm:pt-4 gradient-mask-bottom">
+          {workspaceMode !== 'agents' && (<div className="shrink-0 min-w-0 relative z-10 pt-2 sm:pt-4 gradient-mask-bottom">
             {executionStatus && (
               <div className="max-w-2xl mx-auto px-4 mb-2">
                 <div className="flex items-center gap-2 text-xs text-orange-600 dark:text-orange-400 bg-orange-50/90 dark:bg-orange-950/40 border border-orange-200/60 dark:border-orange-800/50 rounded-lg px-3 py-1.5 shadow-sm backdrop-blur">
@@ -766,7 +766,7 @@ function App() {
               workspaceMode={workspaceMode}
               onWorkspaceModeChange={setWorkspaceMode}
             />
-          </div>
+          </div>)}
       </main>
 
       <React.Suspense fallback={null}>

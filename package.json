@@ -66,7 +66,12 @@
     "test:release-auth:unit": "npx tsx test/release-authorization-guard.test.ts",
     "verify:release-auth": "npx tsx scripts/verify-release-authorization.ts",
     "revoke:release-auth": "npx tsx scripts/revoke-release-authorization.ts",
-    "test:release-auth:app": "node --test test/release-gate-app-publisher.test.mjs"
+    "test:release-auth:app": "node --test test/release-gate-app-publisher.test.mjs",
+    "test:builder": "tsx --test test/builder-agent.test.ts test/builder-auth-client.test.ts test/sandbox-providers.test.ts test/lightning-provider.test.ts",
+    "test:sandbox-providers": "tsx --test test/sandbox-providers.test.ts",
+    "test:lightning-provider": "tsx --test test/lightning-provider.test.ts",
+    "typecheck:builder": "tsc --ignoreConfig --noEmit --target ES2023 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck packages/builder-runtime/src/index.ts apps/api/src/builder-routes.ts",
+    "test:builder:ui": "tsx test/builder-ui.ts"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
@@ -77,6 +82,7 @@
     "cors": "^2.8.6",
     "cron-parser": "^5.10.1",
     "dotenv": "^18.0.4",
+    "e2b": "2.55.0",
     "express": "^5.2.1",
     "firebase": "^12.19.0",
     "framer-motion": "^14.0.0",
@@ -107,6 +113,7 @@
     "playwright": "^1.63.0",
     "postcss": "^8.5.28",
     "tailwindcss": "^3.4.19",
+    "tsx": "4.23.15",
     "typescript": "~6.0.2",
     "vite": "^8.3.0"
   },

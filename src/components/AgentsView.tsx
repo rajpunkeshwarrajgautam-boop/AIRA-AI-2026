@@ -59,7 +59,7 @@ export const AgentsView: React.FC = () => {
   const [formInstructions, setFormInstructions] = useState('');
   const [formModel, setFormModel] = useState('aira-fast');
   const [formApproval, setFormApproval] = useState<'autonomous' | 'risky_only' | 'always_ask'>('risky_only');
-  const [formTools, setFormTools] = useState<string[]>(['web_search', 'read_file']);
+  const [formTools, setFormTools] = useState<string[]>(['web_search', 'file_system_read']);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -71,10 +71,9 @@ export const AgentsView: React.FC = () => {
 
   const availableToolsList = [
     { id: 'web_search', label: 'Live Web Research (Tavily/Exa)' },
-    { id: 'read_file', label: 'Read Workspace Files' },
-    { id: 'write_file', label: 'Write Code / Files' },
-    { id: 'run_command', label: 'Execute Shell Command' },
-    { id: 'browser_action', label: 'Browser Automation' }
+    { id: 'file_system_read', label: 'Read Workspace Files (legacy runner)' },
+    { id: 'file_system_write', label: 'Write Workspace Files (legacy runner)' },
+    { id: 'browser_navigate', label: 'Browser Navigation' }
   ];
 
   const fetchAgents = async () => {
