@@ -54,7 +54,7 @@
     "verify:release-auth": "npx tsx scripts/verify-release-authorization.ts",
     "revoke:release-auth": "npx tsx scripts/revoke-release-authorization.ts",
     "test:release-auth:app": "node --test test/release-gate-app-publisher.test.mjs",
-    "test:builder": "tsx --test test/builder-agent.test.ts",
+    "test:builder": "tsx --test test/builder-agent.test.ts test/builder-auth-client.test.ts",
     "typecheck:builder": "tsc --ignoreConfig --noEmit --target ES2023 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck packages/builder-runtime/src/index.ts apps/api/src/builder-routes.ts",
     "test:builder:ui": "tsx test/builder-ui.ts"
   },
