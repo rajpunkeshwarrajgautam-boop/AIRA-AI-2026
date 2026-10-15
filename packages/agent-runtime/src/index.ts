@@ -263,6 +263,10 @@ export class AgentRuntime extends EventEmitter {
   ): Promise<Delegation> {
     if (process.env.AIRA_SPECIALIST_DELEGATION_ENABLED !== 'true')
       throw new Error('SPECIALIST_DELEGATION_NOT_ENABLED');
+    // Never accept durable child tasks unless a continuously polling worker
+    // is configured. API setImmediate is not a durable scheduler.
+    if(process.env.AIRA_SPECIALIST_WORKER_ENABLED !== 'true')
+      throw new Error('SPECIALIST_WORKER_NOT_CONFIGURED');
     if (typeof objective !== 'string' || objective.length < 5 || objective.length > 16000)
       throw new Error('DELEGATION_INVALID_OBJECTIVE');
     const parent = await this.runRepo.getRun(parentRunId);
@@ -295,10 +299,8 @@ export class AgentRuntime extends EventEmitter {
     try {
       if (child.provenance?.provider === 'mock') throw new Error('DELEGATION_LIVE_MODEL_REQUIRED');
       const row = await repo.register(parent, child, specialist, objective, scopes, key);
-      // Only launch after a verified persisted delegation exists.
-      setImmediate(() => this.startDelegatedChild(row.id, principal.userId).catch(
-        err => console.error('Delegated child execution failed:', err)
-      ));
+      // Commit-and-return: dedicated worker acquires this durable row.
+      // Never execute the child inside the ephemeral HTTP request process.
       return row;
     } catch (err) {
       // Never leave an unlinked orphan child runnable after a racing request.
@@ -311,20 +313,40 @@ export class AgentRuntime extends EventEmitter {
     }
   }
 
-  public async startDelegatedChild(delegationId: string, ownerId: string): Promise<void> {
-    const repo = new DurableDelegations();
-    const record = await repo.get(ownerId, delegationId);
-    if (!record || record.status === 'CANCELLED' ||
-        record.status === 'COMPLETED' || record.status === 'FAILED') return;
-    const child = await this.runRepo.getRun(record.childRunId);
-    if (!child || child.principalId !== ownerId || child.state === 'CANCELLED')
-      throw new Error('DELEGATION_CHILD_NOT_AUTHORIZED');
-    const worker = 'delegation_' + crypto.randomUUID();
-    const claimed = await repo.claim(ownerId, delegationId, worker, 120000);
-    // Existing recovery for interrupted read-only missions is preserved.
-    // Lease expiration is not a license to replay consequential actions.
-    await this.startRun(child.id);
-    await repo.finalize(ownerId, claimed.id, worker, claimed.fence);
+  /** Only the separate worker process may execute a DB-claimed child. */
+  public async executeClaimedSpecialist(
+    delegationId:string, ownerId:string, worker:string, fence:number,recovered:boolean
+  ):Promise<'TERMINAL'|'WAITING'|'STILL_RUNNING'>{
+    if(process.env.AIRA_SPECIALIST_WORKER_PROCESS!=='true' ||
+       process.env.AIRA_SPECIALIST_WORKER_ENABLED!=='true')
+      throw new Error('DELEGATION_DEDICATED_WORKER_REQUIRED');
+    const registry=new DurableDelegations();
+    await registry.assertClaim(ownerId,delegationId,worker,fence);
+    const record=await registry.get(ownerId,delegationId);
+    if(!record)throw new Error('DELEGATION_NOT_FOUND');
+    const child=await this.runRepo.getRun(record.childRunId);
+    if(!child || child.principalId!==ownerId)
+      throw new Error('DELEGATION_CHILD_OWNER_MISMATCH');
+    await registry.assertChildAuthorized(
+      child,record.parentRunId,record.specialist
+    );
+    if(['COMPLETED','FAILED','CANCELLED'].includes(child.state))return 'TERMINAL';
+    if(child.state==='WAITING_FOR_APPROVAL' ||
+       child.executionCheckpoint==='WAITING_FOR_APPROVAL') return 'WAITING';
+    // Reclaimed execution always goes through the existing crash-recovery
+    // classifier, including the non-idempotent replay fence.
+    if(recovered || child.executionCheckpoint==='TOOL_EXECUTING') {
+      await this.resumeRun(child.id);
+    } else {
+      await this.startRun(child.id);
+    }
+    await registry.assertClaim(ownerId,delegationId,worker,fence);
+    const fresh=await this.runRepo.getRun(child.id);
+    if(!fresh)throw new Error('DELEGATION_CHILD_DISAPPEARED');
+    if(['COMPLETED','FAILED','CANCELLED'].includes(fresh.state))return 'TERMINAL';
+    if(fresh.state==='WAITING_FOR_APPROVAL' ||
+       fresh.executionCheckpoint==='WAITING_FOR_APPROVAL')return 'WAITING';
+    return 'STILL_RUNNING';
   }
 
   public async listSpecialistDelegations(parentRunId: string, principal: ExecutionPrincipal): Promise<Delegation[]> {
