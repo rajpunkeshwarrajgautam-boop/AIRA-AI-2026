@@ -30,6 +30,14 @@ export function delegatedScopes(parent: readonly string[], requested: readonly s
   }
   return Array.from(new Set(requested));
 }
+const executableSpecialistTools: Record<Specialist, readonly string[]> = {
+  repository: ['file_system_list','file_system_read','repo_git_status','repo_git_log'],
+  research: ['browser_session_inspect'],
+  verification: ['file_system_list','file_system_read','repo_git_status','repo_git_log','browser_session_inspect']
+};
+export function specialistMayExecute(specialist: Specialist, toolName: string): boolean {
+  return (executableSpecialistTools[specialist] || []).includes(toolName);
+}
 export function delegationKey(parentId: string, specialist: Specialist, objective: string): string {
   return createHash('sha256').update(parentId).update('\0').update(specialist).update('\0').update(objective).digest('hex');
 }
@@ -45,6 +53,32 @@ const asDelegation=(r:any):Delegation=>({
  * Work is launched separately by AgentRuntime only after the DB record commits.
  */
 export class DurableDelegations {
+  /**
+   * A child context or requested tool name is NEVER authority. Every checkpoint
+   * must match the immutable DB delegation, real owner and scope intersection.
+   */
+  async assertChildAuthorized(
+    child:Run, parentRunId:string, specialist:Specialist, toolName?:string
+  ):Promise<Delegation>{
+    const row=await db('v2_delegations')
+      .where({owner_id:child.principalId,child_run_id:child.id,parent_run_id:parentRunId})
+      .whereIn('status',['QUEUED','RUNNING','WAITING']).first();
+    if(!row || row.specialist!==specialist)throw new Error('DELEGATED_CHILD_NOT_AUTHORIZED');
+    const saved=asDelegation(row);
+    const expected=[...saved.scopes].sort(),actual=[...child.principalScopes].sort();
+    if(expected.length!==actual.length||expected.some((s,i)=>s!==actual[i]))
+      throw new Error('DELEGATED_CHILD_SCOPE_TAMPERED');
+    if(!saved.scopes.every(s=>specialistScopes[specialist]?.includes(s)))
+      throw new Error('DELEGATED_SPECIALIST_SCOPE_INVALID');
+    const parent=await db('runs').select('principal_id','state').where({id:parentRunId}).first();
+    if(!parent || parent.principal_id!==child.principalId ||
+       ['FAILED','CANCELLED'].includes(parent.state))
+      throw new Error('DELEGATED_PARENT_NOT_ACTIVE');
+    if(toolName && !specialistMayExecute(specialist,toolName))
+      throw new Error('DELEGATED_TOOL_NOT_ALLOWED');
+    return saved;
+  }
+
   async get(ownerId:string, delegationId:string):Promise<Delegation|undefined>{
     const row=await db('v2_delegations').where({id:delegationId,owner_id:ownerId}).first();
     return row?asDelegation(row):undefined;
