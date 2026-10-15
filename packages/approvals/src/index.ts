@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import {
   ApprovalRequest,
   ApprovalDecision,
@@ -28,6 +29,23 @@ export class ApprovalKernel {
       return true;
     }
     return false;
+  }
+
+  /**
+   * High-risk tools require a decision tied to the exact immutable call ID,
+   * tool, arguments and authenticated principal. A generic per-tool grant
+   * must not authorize a different payload.
+   */
+  public async isExactToolCallApproved(
+    runId: string, call: ToolCall, principalId: string
+  ): Promise<boolean> {
+    if (!this.repository.getApprovedForToolCall) return false;
+    const approved = await this.repository.getApprovedForToolCall(runId, call.id);
+    return Boolean(approved && approved.runId === runId &&
+      approved.toolCall.id === call.id && approved.toolCall.name === call.name &&
+      isDeepStrictEqual(approved.toolCall.arguments, call.arguments) &&
+      approved.resolvedBy === principalId &&
+      approved.decision !== 'REJECT');
   }
 
   public async createRequest(
@@ -68,8 +86,11 @@ export class ApprovalKernel {
   public async decide(requestId: string, decision: ApprovalDecision, resolvedBy: string): Promise<{ approved: boolean; request: ApprovalRequest }> {
     const request = await this.repository.getRequest(requestId);
 
-    if (!request) {
-      throw new Error(`Approval request with ID "${requestId}" not found.`);
+    if (!request || request.decision) {
+      throw new Error('APPROVAL_REQUEST_NOT_PENDING');
+    }
+    if (!resolvedBy || typeof resolvedBy !== 'string') {
+      throw new Error('APPROVAL_RESOLVED_BY_REQUIRED');
     }
 
     request.decision = decision;
