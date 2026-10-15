@@ -132,7 +132,7 @@ try {
     $portText = docker port $pgName '5432/tcp' | Out-String
     $port = [regex]::Match($portText,'(\d+)\s*$').Groups[1].Value
     if(-not $port){throw 'Could not discover PostgreSQL local port'}
-    $env:DATABASE_URL = "postgres://aira_qa:${pgPassword}@127.0.0.1:${port}/aira_qa"
+    $env:DATABASE_URL = "postgres://aira_qa:" + $pgPassword + "@127.0.0.1:" + $port + "/aira_qa"
     $ready = $false
     for($i=0;$i -lt 45;$i++){
         docker exec $pgName pg_isready -U aira_qa -d aira_qa -q 2>$null

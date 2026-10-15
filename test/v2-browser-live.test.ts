@@ -14,6 +14,7 @@ import { verifyFinalMissionOutcome } from '../packages/agent-runtime/src/indepen
 import type { ToolCall,ToolResult } from '../packages/contracts/src/index.js';
 
 process.env.AIRA_BROWSER_WORKER_PROCESS='true';
+process.env.NODE_ENV='test';
 const root=await mkdtemp(join(tmpdir(),'aira-v2-browser-'));
 const owner='browser-ci-'+randomUUID(),other='other-'+randomUUID(),run='run_'+randomUUID();
 const http=createServer((req,res)=>{

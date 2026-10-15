@@ -75,7 +75,7 @@ try {
   // PostgreSQL service, not a mock runtime or an in-memory claim.
   const subprocess=String.raw`
 const {Client}=require('pg');
-(async()=>{const c=new Client({connectionString:process.env.DATABASE_URL});
+(async()=>{const c=new Client({connectionString:process.env.DATABASE_URL || 'postgres://aira:aira@localhost:5432/aira_db'});
 await c.connect();const until=Date.now()+10000;
 const r=await c.query(
 "UPDATE v2_delegations SET worker_owner=$1,lease_until=$2, fence=fence+1,status='RUNNING' WHERE id=$3 AND status='QUEUED' RETURNING id,fence",
@@ -86,7 +86,7 @@ setInterval(()=>{},1000);
 })().catch(e=>{console.error(e);process.exit(2)});
 `;
   const processChild=spawn(process.execPath,['-e',subprocess],{
-    env:{...process.env,TEST_DELEGATION_ID:second.id},
+    env:{...process.env,TEST_DELEGATION_ID:second.id,DATABASE_URL:process.env.DATABASE_URL||'postgres://aira:aira@localhost:5432/aira_db'},
     stdio:['ignore','pipe','pipe']
   });
   let output='',err='';
