@@ -199,8 +199,16 @@ jobs:
           cat /tmp/browser-killed.out
           test "$status" -eq 137
           grep -q 'DOCKER_BROWSER_READY_FOR_FORCED_SIGKILL' /tmp/browser-killed.out
-          browser restore | tee /tmp/browser-restored.out
+          echo "DOCKER_CERT_STAGE=RESTORE_BEGIN"
+          set +e
+          browser restore > /tmp/browser-restored.out 2>&1
+          restore_status=$?
+          set -e
+          cat /tmp/browser-restored.out
+          echo "DOCKER_CERT_RESTORE_EXIT=$restore_status"
+          test "$restore_status" -eq 0
           grep -q 'DOCKER_BROWSER_RESTORED_AFTER_SIGKILL' /tmp/browser-restored.out
+          echo "DOCKER_CERT_STAGE=NETWORK_BEGIN"
           # Run a separate genuine TCP probe in the same read-only/no-network
           # container; capture and print the outcome before asserting so
           # Docker/startup errors cannot masquerade as network blocking.
@@ -212,6 +220,7 @@ jobs:
             "const net=require('node:net');const c=net.connect({host:'1.1.1.1',port:80});c.setTimeout(1500);c.on('connect',()=>{console.log('NETWORK_PROBE_UNEXPECTED_CONNECT');process.exit(11)});c.on('timeout',()=>{console.log('NETWORK_PROBE_DENIED_TIMEOUT');process.exit(0)});c.on('error',e=>{console.log('NETWORK_PROBE_DENIED_'+e.code);process.exit(0)});" 2>&1)
           network_status=$?
           set -e
+          echo "DOCKER_CERT_NETWORK_EXIT=$network_status"
           echo "$network_result"
           test "$network_status" -eq 0
           grep -q 'NETWORK_PROBE_DENIED' <<< "$network_result"
