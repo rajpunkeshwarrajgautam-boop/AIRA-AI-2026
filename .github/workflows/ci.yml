@@ -3,7 +3,7 @@ name: CI
 on:
   push:
   pull_request:
-    branches: [main, prod-release, feat/agent-execution-truth-20261014, feat/durable-autonomous-missions-20261014]
+    branches: [main, prod-release, feat/agent-execution-truth-20261014, feat/durable-autonomous-missions-20261014, feat/aira-autonomous-agent-runtime-v2-20261014]
   workflow_dispatch:
 
 permissions:
@@ -101,6 +101,9 @@ jobs:
 
       - name: Model mission and independent verification security
         run: npm run test:agent-v2
+
+      - name: Isolated build and exact approvals
+        run: npm run test:isolated-build
 
       - name: Workflow engine verification
         run: npm run test:workflow
