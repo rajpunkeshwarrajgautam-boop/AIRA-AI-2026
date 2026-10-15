@@ -204,13 +204,11 @@ export class NeonAuthClient {
       if (!raw) return null;
       const parsed = JSON.parse(raw);
       if (parsed && parsed.user) {
-        // If legacy localStorage contains jwt or secret tokens, purge them immediately
-        if (parsed.jwt || (parsed.token && parsed.token !== 'bff_session')) {
-          localStorage.setItem(STORAGE_KEYS.SESSION, JSON.stringify({ user: parsed.user }));
-        }
         return {
           user: parsed.user,
-          token: 'bff_session'
+          token: parsed.token || 'bff_session',
+          jwt: parsed.jwt,
+          jwtExpiresAt: parsed.jwtExpiresAt
         };
       }
     } catch {
