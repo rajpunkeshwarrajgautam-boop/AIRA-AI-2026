@@ -31,11 +31,18 @@ export const INITIAL_CONVERSATION: Conversation = {
   messages: [],
 };
 
-export function loadConversations(): Conversation[] {
+export function getConversationsStorageKey(userId?: string): string {
+  return userId ? `aira_conversations_user_${userId}` : STORAGE_KEYS.CONVERSATIONS;
+}
+
+export function loadConversations(userId?: string): Conversation[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.CONVERSATIONS);
+    const key = getConversationsStorageKey(userId);
+    const raw = localStorage.getItem(key);
     if (!raw) {
-      saveConversations([INITIAL_CONVERSATION]);
+      if (!userId) {
+        saveConversations([INITIAL_CONVERSATION]);
+      }
       return [INITIAL_CONVERSATION];
     }
     const parsed = JSON.parse(raw);
@@ -46,9 +53,10 @@ export function loadConversations(): Conversation[] {
   }
 }
 
-export function saveConversations(conversations: Conversation[]): void {
+export function saveConversations(conversations: Conversation[], userId?: string): void {
   try {
-    localStorage.setItem(STORAGE_KEYS.CONVERSATIONS, JSON.stringify(conversations));
+    const key = getConversationsStorageKey(userId);
+    localStorage.setItem(key, JSON.stringify(conversations));
   } catch {
     console.error('Failed to save conversations to localStorage');
   }

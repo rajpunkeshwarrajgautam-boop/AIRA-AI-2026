@@ -14,11 +14,13 @@ import {
   Bot,
   Workflow,
   MessageSquareText,
+  ShieldCheck,
 } from 'lucide-react';
 import { motion, AnimatePresence, Variants } from 'framer-motion';
 import type { Conversation, Project, AppSettings, WorkspaceMode } from '../types';
 import { AiraMark } from './AiraMark';
 import { ConversationActionsDropdown } from './ConversationActionsDropdown';
+import { neonAuth, NeonUser } from '../lib/neonAuth';
 
 interface SidebarProps {
   conversations: Conversation[];
@@ -34,6 +36,7 @@ interface SidebarProps {
   activeProjectId?: string;
   onOpenProjects: () => void;
   onOpenSettings: () => void;
+  onOpenAuth?: () => void;
   onOpenSearch: (query?: string) => void;
   isOpen: boolean;
   onToggleOpen: () => void;
@@ -110,6 +113,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   activeProjectId,
   onOpenProjects,
   onOpenSettings,
+  onOpenAuth,
   onOpenSearch,
   isOpen,
   onToggleOpen,
@@ -119,7 +123,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectWorkspace,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const [neonUser, setNeonUser] = useState<NeonUser | null>(() => neonAuth.getCurrentUser());
   const drawerRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    return neonAuth.onAuthStateChange((user) => setNeonUser(user));
+  }, []);
 
   // Temporary navigation behaves as a keyboard-accessible drawer.
   useEffect(() => {
@@ -389,11 +398,44 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
           <div data-testid="sidebar-footer" className="aira-sidebar-footer shrink-0 p-3 bg-claude-surface2-light dark:bg-claude-surface2-dark/50 backdrop-blur-md border-t border-claude-border-light dark:border-claude-border-dark">
             <div className="flex flex-col gap-2">
-              <button type="button" aria-label="Open settings" onClick={onOpenSettings} className="flex w-full min-w-0 items-center space-x-3 p-2 rounded-xl hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark hover:shadow-sm border border-transparent hover:border-claude-border-light dark:hover:border-claude-border-dark transition-all duration-300 flex-1 min-w-0 text-left active:scale-[0.98]">
-                <div className="w-8 h-8 rounded-[10px] bg-gradient-to-br from-claude-terracotta to-claude-terracotta-hover text-claude-onAccent font-medium text-xs flex items-center justify-center flex-shrink-0 shadow-sm border border-white/20">{settings.userName ? settings.userName.slice(0, 2).toUpperCase() : 'AI'}</div>
-                <div className="min-w-0 flex-1"><div className="text-[13px] font-bold text-claude-text-light dark:text-white tracking-tight truncate">{settings.userName || 'Aira User'}</div><div className="text-[11px] font-medium text-claude-muted-light dark:text-claude-muted-dark">Workspace settings</div></div>
-                <Settings className="w-4 h-4 text-claude-muted-light dark:text-claude-muted-dark" />
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  aria-label={neonUser ? "View account details" : "Sign in or register persistent account"}
+                  onClick={onOpenAuth}
+                  className="flex min-w-0 items-center space-x-2.5 p-2 rounded-xl hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark border border-claude-border-light/60 dark:border-claude-border-dark/60 transition-all flex-1 text-left active:scale-[0.98]"
+                >
+                  <div className="w-7 h-7 rounded-[8px] bg-gradient-to-br from-claude-terracotta to-[#eb6e4b] text-white font-semibold text-xs flex items-center justify-center flex-shrink-0 shadow-sm">
+                    {neonUser ? (neonUser.name ? neonUser.name.slice(0, 2).toUpperCase() : 'AI') : <ShieldCheck className="w-3.5 h-3.5" />}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[12px] font-bold text-claude-text-light dark:text-white tracking-tight truncate">
+                      {neonUser ? neonUser.name || neonUser.email : 'Guest Workspace'}
+                    </div>
+                    <div className="text-[10px] font-medium text-claude-muted-light dark:text-claude-muted-dark flex items-center space-x-1">
+                      {neonUser ? (
+                        <>
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                          <span>Neon Staging Sync</span>
+                        </>
+                      ) : (
+                        <span>Sign in · Persistent sync</span>
+                      )}
+                    </div>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  aria-label="Open settings"
+                  onClick={onOpenSettings}
+                  className="p-2 rounded-xl hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark border border-claude-border-light/60 dark:border-claude-border-dark/60 text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light transition-all"
+                  title="Settings"
+                >
+                  <Settings className="w-4 h-4" />
+                </button>
+              </div>
+
               <div className="flex items-center justify-between gap-2 px-1">
                 <span className="text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark">Theme</span>
                 <ThemeToggle theme={settings.theme} onChange={(t) => onUpdateSettings({ theme: t })} />

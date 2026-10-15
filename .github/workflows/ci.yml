@@ -54,12 +54,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          pattern='(nvapi-[A-Za-z0-9_-]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|sk_live_[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16})'
+          pattern='(nvapi-[A-Za-z0-9_-]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|sk_live_[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|npg_[A-Za-z0-9_-]{10,})'
           if git grep -IlE "$pattern" -- . ':(exclude)package-lock.json' > /tmp/secret-files; then
             echo '::error::Potential credential material found in tracked files:'
             sed 's/^/ - /' /tmp/secret-files
             exit 1
           fi
+          npm run test:secrets
 
       - name: Lint
         run: npm run lint
@@ -86,6 +87,21 @@ jobs:
 
       - name: Math typesetting and sanitization regression
         run: npm run test:math-rendering
+
+      - name: Managed account JWT signature and principal boundary regression
+        run: npm run test:neon-auth-identity
+
+      - name: Managed account token refresh concurrency and race regression
+        run: npm run test:auth-token-race
+
+      - name: Authenticated fail-closed request policy regression
+        run: npm run test:auth-fail-closed
+
+      - name: Identity transition lifecycle and session revocation regression
+        run: npm run test:auth-lifecycle
+
+      - name: First-party BFF session security gateway certification
+        run: npm run test:auth-bff
 
       - name: Preview principal spoofing guard
         run: npm run test:preview-identity

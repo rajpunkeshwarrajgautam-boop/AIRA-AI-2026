@@ -1,4 +1,5 @@
 import type { Conversation } from '../types';
+import { neonAuth, authenticatedApiFetch } from '../lib/neonAuth';
 
 export interface ConversationSearchResult {
   conversationId: string;
@@ -21,30 +22,6 @@ export interface ConversationSearchResponse {
   results: ConversationSearchResult[];
 }
 
-let sessionPromise: Promise<void> | null = null;
-
-async function ensureSearchSession(force = false): Promise<void> {
-  if (force) sessionPromise = null;
-  if (sessionPromise) return sessionPromise;
-
-  sessionPromise = (async () => {
-    const response = await fetch('/api/auth/session', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { Accept: 'application/json' },
-      signal: AbortSignal.timeout(1500)
-    });
-    if (!response.ok) throw new Error(`Session bootstrap failed (${response.status})`);
-  })();
-
-  try {
-    await sessionPromise;
-  } catch (error) {
-    sessionPromise = null;
-    throw error;
-  }
-}
-
 // Always enforce the request deadline, even when the search overlay supplies
 // its own AbortController to cancel obsolete queries.
 export function composeRequestSignal(
@@ -60,21 +37,11 @@ export function composeRequestSignal(
 async function authenticatedFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
-  timeoutMs = 2500
+  timeoutMs = 15000
 ): Promise<Response> {
-  await ensureSearchSession();
-  const makeRequest = () => fetch(input, {
-    ...init,
-    credentials: 'same-origin' as RequestCredentials,
+  return authenticatedApiFetch(input, init, {
     signal: composeRequestSignal(init?.signal, timeoutMs)
   });
-
-  let response = await makeRequest();
-  if (response.status === 401) {
-    await ensureSearchSession(true);
-    response = await makeRequest();
-  }
-  return response;
 }
 
 export async function syncConversationToServer(conversation: Conversation): Promise<boolean> {
@@ -231,3 +198,58 @@ export async function backfillConversationsBestEffort(
     await Promise.allSettled(batch.map(syncConversationToServer));
   }
 }
+
+/**
+ * Fetch all conversations owned by the authenticated principal from Postgres.
+ */
+export async function fetchAllConversationsFromServer(): Promise<Conversation[]> {
+  try {
+    const response = await authenticatedFetch('/api/conversations', {
+      method: 'GET',
+      headers: { Accept: 'application/json' }
+    }, 15000);
+    if (!response.ok) {
+      console.warn('[fetchAllConversationsFromServer] response not ok:', response.status);
+      return [];
+    }
+
+    const body = await response.json() as {
+      conversations?: Array<{
+        id: string;
+        title: string;
+        projectId?: string;
+        isPinned?: boolean;
+        createdAt: number;
+        updatedAt: number;
+        messages?: Array<{
+          id: string;
+          role: 'user' | 'assistant';
+          content: string;
+          createdAt: number;
+        }>;
+      }>;
+    };
+
+    if (!Array.isArray(body?.conversations)) return [];
+    console.log('[fetchAllConversationsFromServer] hydrated count:', body.conversations.length);
+
+    return body.conversations.map(c => ({
+      id: c.id,
+      title: c.title,
+      projectId: c.projectId,
+      isPinned: Boolean(c.isPinned),
+      createdAt: Number(c.createdAt),
+      updatedAt: Number(c.updatedAt),
+      messages: (c.messages || []).map(m => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        timestamp: Number(m.createdAt)
+      }))
+    }));
+  } catch (err) {
+    console.error('[fetchAllConversationsFromServer error]', err);
+    return [];
+  }
+}
+
