@@ -260,6 +260,12 @@ jobs:
       - name: Install Playwright Edge
         run: npx playwright install --with-deps msedge
 
+      - name: Persistent Chromium real-process acceptance
+        env:
+          AIRA_BROWSER_WORKER_PROCESS: 'true'
+          AIRA_CHROMIUM_PATH: /usr/bin/microsoft-edge
+        run: npm run test:v2-browser-live
+
       - name: Start Vite for E2E
         shell: bash
         run: |
