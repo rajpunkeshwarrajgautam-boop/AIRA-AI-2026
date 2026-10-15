@@ -27,7 +27,7 @@
     "test:v2-durable": "npx tsx test/v2-durable-orchestration.test.ts",
     "test:v2-browser-live": "npx tsx test/v2-browser-live.test.ts",
     "browser-worker:start": "npx tsx apps/browser-worker/src/index.ts",
-    "specialist-worker:start": "npx tsx apps/specialist-worker/src/index.ts",
+    "specialist-worker:start": "tsx apps/specialist-worker/src/index.ts",
     "test:v2-worker-recovery": "npx tsx test/v2-specialist-worker-recovery.test.ts",
     "test:workflow": "npx tsx test/workflow-engine.ts",
     "test:tools": "npx tsx test/tool-gateway-certification.ts",
@@ -92,6 +92,7 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "tailwind-merge": "^3.7.0",
+    "tsx": "4.23.15",
     "uuid": "^14.0.2",
     "zod": "^4.6.5"
   },

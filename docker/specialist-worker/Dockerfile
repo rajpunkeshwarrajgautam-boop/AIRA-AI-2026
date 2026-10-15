@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./
-RUN npm ci --no-audit --no-fund && npm install --no-save tsx
+RUN npm ci --no-audit --no-fund
 
 COPY packages/ ./packages/
 COPY apps/specialist-worker/ ./apps/specialist-worker/
