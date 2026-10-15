@@ -16,6 +16,7 @@ import { BrowserAdapter } from './adapters/browser-adapter.js';
 import { FileSystemAdapter } from './adapters/file-adapter.js';
 import { RepositoryAdapter } from './adapters/repo-adapter.js';
 import { IsolatedBuildBridge } from './adapters/isolated-build-bridge.js';
+import { db } from '../../db/src/index.js';
 import { ConnectorRegistry, GitHubConnectorAdapter } from './adapters/connector-adapter.js';
 
 export interface GatewayExecutionContext {
@@ -522,7 +523,16 @@ export class ToolGateway extends EventEmitter {
           adapter: 'native',
           provider: 'aira-isolated-builder'
         },
-        execute: async (args, ctx) => bridge.execute(ctx.principal.userId, ctx.runId, args)
+        execute: async (args, ctx) => {
+          // Verify the run owner against the authoritative PostgreSQL record.
+          // The principal attached to a ToolGateway invocation is not itself
+          // proof that an arbitrary runId belongs to that account.
+          const ownedRun = await db('runs').select('principal_id').where({ id: ctx.runId }).first();
+          if (!ownedRun || ownedRun.principal_id !== ctx.principal.userId) {
+            throw new Error('ISOLATED_BUILD_RUN_OWNER_MISMATCH');
+          }
+          return bridge.execute(ctx.principal.userId, ctx.runId, args);
+        }
       });
     }
     // -------------------------------------------------------------------------
