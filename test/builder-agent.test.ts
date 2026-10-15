@@ -12,10 +12,10 @@ import { createBuilderRoutes } from '../apps/api/src/builder-routes.js';
 import { streamBuilder } from '../src/utils/builderClient.js';
 
 const owner:ExecutionPrincipal={userId:'owner',sessionId:'session',roles:[],scopes:[]};
-function configure(){process.env.AIRA_BUILDER_ENABLED='true';process.env.AIRA_BUILDER_ALLOWED_USER_IDS='owner';process.env.E2B_API_KEY='test-key-not-a-real-key';process.env.AIRA_BUILDER_SIGNING_SECRET='test-builder-signing-secret-minimum-32-characters';}
+function configure(){process.env.AIRA_BUILDER_ENABLED='true';process.env.AIRA_BUILDER_ALLOWED_USER_IDS='owner';process.env.LIGHTNING_SANDBOX_API_KEY='test-lightning-key';process.env.E2B_API_KEY='test-key-not-a-real-key';process.env.AIRA_BUILDER_SIGNING_SECRET='test-builder-signing-secret-minimum-32-characters';}
 function ticket(extra:Partial<WorkspaceTicket>={}):WorkspaceTicket{return {version:1,purpose:'workspace',userId:'owner',sessionId:'session',sandboxId:'sandbox_test',expiresAt:Date.now()+60000,allowInternet:false,allowPreview:false,...extra};}
 class FakeSandbox implements BuilderSandbox {
- id='sandbox_test';files=new Map<string,Uint8Array>();killed=false;previewed=false;
+ id='sandbox_test';provider='lightning';files=new Map<string,Uint8Array>();killed=false;previewed=false;
  async write(path:string,content:string){this.files.set(path,Buffer.from(content));return {path};}
  async read(path:string){const bytes=this.files.get(path);if(!bytes)throw new Error('File not found');return bytes;}
  async list(){return [...this.files.keys()];}

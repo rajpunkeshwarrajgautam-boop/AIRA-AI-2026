@@ -1,7 +1,24 @@
 import { authenticatedApiFetch, neonAuth } from '../lib/neonAuth';
 
 export interface BuilderEvent { type: string; data: Record<string, any> }
-export interface BuilderStatus { ready: boolean; enabled: boolean; allowed: boolean; configured: boolean; providerConfigured: boolean; reason: string; principalId: string; temporaryMinutes: number }
+export interface BuilderStatus {
+  ready: boolean;
+  enabled: boolean;
+  allowed: boolean;
+  configured: boolean;
+  providerConfigured: boolean;
+  reason: string;
+  principalId: string;
+  temporaryMinutes: number;
+  sandboxProvider?: string;
+  sandboxProviderConfigured?: boolean;
+  teamspaceConfigured?: boolean;
+  runtime?: string;
+  instanceType?: string;
+  workspaceTtlMinutes?: number;
+  previewPort?: number;
+  fallbackProvider?: string;
+}
 async function session() {
   if (!neonAuth.isAuthenticated()) {
     const response = await fetch('/api/auth/session', { method: 'POST', credentials: 'same-origin' });

@@ -53,7 +53,40 @@ export const BuilderWorkspace:React.FC<{model:ModelId}> = ({model}) => {
       </div>
     </div>
     {tab==='saved'?<AgentsView/>:<>
-      {(!ready||statusError)&&<div className={`${shell} mb-5 p-4 text-sm`} role="status"><p className="font-medium">{statusError||status?.reason||'Checking builder configuration…'}</p>{status?.reason==='Ready'&&!status.providerConfigured&&<p>Configure a real model provider.</p>}<p className="mt-2 text-xs text-claude-muted-light dark:text-claude-muted-dark">The owner must configure E2B, enable the beta and approve your Aira user ID. No sandbox is created until setup is complete.</p>{status&&<p className="mt-2 break-all font-mono text-xs">Your user ID: {status.principalId}</p>}<button onClick={refresh} className="mt-3 min-h-11 text-claude-terracotta underline">Check setup again</button></div>}
+      {(!ready||statusError)&&<div className={`${shell} mb-5 p-4 text-sm`} role="status">
+        <p className="font-medium">{statusError||status?.reason||'Checking builder configuration…'}</p>
+        {status?.reason==='Ready'&&!status.providerConfigured&&<p>Configure a real model provider.</p>}
+        {status&&(
+          <div className="my-3 grid grid-cols-2 gap-2 rounded-xl bg-black/[0.03] p-3 text-xs dark:bg-white/[0.03] sm:grid-cols-4">
+            <div><span className="font-medium text-claude-terracotta">Sandbox provider:</span> {status.sandboxProvider ? (status.sandboxProvider.charAt(0).toUpperCase() + status.sandboxProvider.slice(1)) : 'Lightning'}</div>
+            <div><span className="font-medium text-claude-terracotta">Provider configured:</span> {status.sandboxProviderConfigured ? 'Yes' : (status.configured ? 'Yes' : 'No')}</div>
+            <div><span className="font-medium text-claude-terracotta">Teamspace configured:</span> {status.teamspaceConfigured ? 'Yes' : 'No'}</div>
+            <div><span className="font-medium text-claude-terracotta">Runtime:</span> {status.runtime || 'node24'}</div>
+            <div><span className="font-medium text-claude-terracotta">Instance:</span> {status.instanceType || 'cpu-2'}</div>
+            <div><span className="font-medium text-claude-terracotta">Workspace TTL:</span> {status.workspaceTtlMinutes || status.temporaryMinutes || 15} minutes</div>
+            <div><span className="font-medium text-claude-terracotta">Preview port:</span> {status.previewPort || 3000}</div>
+            <div><span className="font-medium text-claude-terracotta">Fallback provider:</span> {status.fallbackProvider ? (status.fallbackProvider === 'disabled' ? 'disabled' : status.fallbackProvider.toUpperCase()) : 'disabled'}</div>
+          </div>
+        )}
+        <p className="mt-2 text-xs text-claude-muted-light dark:text-claude-muted-dark">The owner must configure the sandbox provider, enable the beta and approve your Aira user ID. No sandbox is created until setup is complete.</p>
+        {status&&<p className="mt-2 break-all font-mono text-xs">Your user ID: {status.principalId}</p>}
+        <button onClick={refresh} className="mt-3 min-h-11 text-claude-terracotta underline">Check setup again</button>
+      </div>}
+      {ready&&status&&(
+        <details className={`${shell} mb-5 p-3 text-xs`} data-testid="builder-diagnostics">
+          <summary className="cursor-pointer font-medium text-claude-muted-light dark:text-claude-muted-dark">Sandbox diagnostics ({status.sandboxProvider ? (status.sandboxProvider.charAt(0).toUpperCase() + status.sandboxProvider.slice(1)) : 'Lightning'})</summary>
+          <div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+            <div><span className="font-medium text-claude-terracotta">Sandbox provider:</span> {status.sandboxProvider ? (status.sandboxProvider.charAt(0).toUpperCase() + status.sandboxProvider.slice(1)) : 'Lightning'}</div>
+            <div><span className="font-medium text-claude-terracotta">Provider configured:</span> {status.sandboxProviderConfigured ? 'Yes' : (status.configured ? 'Yes' : 'No')}</div>
+            <div><span className="font-medium text-claude-terracotta">Teamspace configured:</span> {status.teamspaceConfigured ? 'Yes' : 'No'}</div>
+            <div><span className="font-medium text-claude-terracotta">Runtime:</span> {status.runtime || 'node24'}</div>
+            <div><span className="font-medium text-claude-terracotta">Instance:</span> {status.instanceType || 'cpu-2'}</div>
+            <div><span className="font-medium text-claude-terracotta">Workspace TTL:</span> {status.workspaceTtlMinutes || status.temporaryMinutes || 15} minutes</div>
+            <div><span className="font-medium text-claude-terracotta">Preview port:</span> {status.previewPort || 3000}</div>
+            <div><span className="font-medium text-claude-terracotta">Fallback provider:</span> {status.fallbackProvider ? (status.fallbackProvider === 'disabled' ? 'disabled' : status.fallbackProvider.toUpperCase()) : 'disabled'}</div>
+          </div>
+        </details>
+      )}
       <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="min-w-0 space-y-4">
           <form onSubmit={run} className={`${shell} p-4`}>
