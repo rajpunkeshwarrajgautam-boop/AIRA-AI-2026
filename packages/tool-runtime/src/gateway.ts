@@ -483,7 +483,7 @@ export class ToolGateway extends EventEmitter {
           name: 'isolated_application_build',
           version: 1,
           description: 'Send explicitly authorized source files to a separate isolated Docker build worker and verify source archive and build/test results.',
-          category: 'code',
+          category: 'system',
           source: 'native',
           parameters: {
             type: 'object',
