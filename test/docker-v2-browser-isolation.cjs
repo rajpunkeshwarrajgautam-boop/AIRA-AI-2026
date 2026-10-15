@@ -31,7 +31,10 @@ const cookie='AIRA_BROWSER_ISOLATION_VERIFIED';
       'Persistent cookie must survive the previous Docker process');
     if(mode==='crash'){
       console.log('DOCKER_BROWSER_READY_FOR_FORCED_SIGKILL');
-      process.kill(process.pid,'SIGKILL');
+      // Keep the real browser alive. CI will docker kill --signal KILL
+      // externally, then verify exit 137 and restore this mounted profile.
+      await new Promise(()=>setInterval(()=>{},1000));
+      throw new Error('DOCKER_CRASH_TEST_SHOULD_HAVE_BEEN_KILLED');
     }
     await context.close();
     console.log('DOCKER_BROWSER_RESTORED_AFTER_SIGKILL');
