@@ -180,7 +180,8 @@ jobs:
           volume="aira-v2-browser-${{ github.run_id }}-${{ github.run_attempt }}"
           docker build -f docker/v2-browser-certification/Dockerfile -t "$image" .
           docker volume create "$volume" >/dev/null
-          trap 'docker volume rm "$volume" >/dev/null 2>&1 || true' EXIT
+          container="aira-v2-crash-$"
+          trap 'docker rm -f "$container" >/dev/null 2>&1 || true; docker volume rm "$volume" >/dev/null 2>&1 || true' EXIT
           browser() {
             local mode="$1"
             docker run --rm \
@@ -192,13 +193,26 @@ jobs:
           }
           browser seed | tee /tmp/browser-seed.out
           grep -q 'DOCKER_BROWSER_SEEDED_REAL_PROFILE' /tmp/browser-seed.out
-          set +e
-          browser crash > /tmp/browser-killed.out 2>&1
-          status=$?
-          set -e
-          cat /tmp/browser-killed.out
+          # Start Chromium in a real detached Docker process. Then kill
+          # the container externally from its host (not via Node itself).
+          docker run -d --name "$container" \
+            --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --pids-limit 256 --memory 1536m --shm-size 512m \
+            --tmpfs /tmp:rw,nosuid,nodev,size=512m \
+            -v "$volume":/profiles -e MODE=crash "$image" >/dev/null
+          for i in {1..30}; do
+            docker logs "$container" > /tmp/browser-crashing.out 2>&1
+            if grep -q 'DOCKER_BROWSER_READY_FOR_FORCED_SIGKILL' /tmp/browser-crashing.out; then break; fi
+            sleep 1
+          done
+          cat /tmp/browser-crashing.out
+          grep -q 'DOCKER_BROWSER_READY_FOR_FORCED_SIGKILL' /tmp/browser-crashing.out
+          docker kill --signal KILL "$container" >/dev/null
+          status=$(docker inspect --format '{{.State.ExitCode}}' "$container")
+          echo "DOCKER_CERT_HOST_SIGKILL_EXIT=$status"
           test "$status" -eq 137
-          grep -q 'DOCKER_BROWSER_READY_FOR_FORCED_SIGKILL' /tmp/browser-killed.out
+          docker rm "$container" >/dev/null
           echo "DOCKER_CERT_STAGE=RESTORE_BEGIN"
           set +e
           browser restore > /tmp/browser-restored.out 2>&1
