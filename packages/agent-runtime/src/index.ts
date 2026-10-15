@@ -386,6 +386,15 @@ export class AgentRuntime extends EventEmitter {
     try {
       await this.executeRunLoop(runId);
     } catch (err: any) {
+      const latest=await this.runRepo.getRun(runId);
+      if(latest?.context?.delegatedFrom){
+        try{await this.assertDelegatedLease(runId);}
+        catch{
+          // An expired/fenced old process cannot mark a newer worker's
+          // child FAILED after it lost execution authority.
+          return;
+        }
+      }
       await this.transitionRunState(runId, 'FAILED', err.message);
     }
   }
@@ -1524,6 +1533,10 @@ CAPABILITY & IDENTITY INVARIANTS:
   public async recoverInterruptedRuns(owner: string, ttlMs: number = 60000): Promise<void> {
     const interrupted = await this.runRepo.getInterruptedRuns();
     for (const run of interrupted) {
+      // Delegated child runs belong exclusively to the separately leased
+      // specialist dispatcher. General API startup recovery must not steal
+      // their authority or mark them failed without a worker fence.
+      if(run.context?.delegatedFrom)continue;
       const claimed = await this.runRepo.claimInterruptedRun(run.id, owner, ttlMs);
       if (claimed) {
         console.log(`Recovering interrupted run ${run.id}...`);
