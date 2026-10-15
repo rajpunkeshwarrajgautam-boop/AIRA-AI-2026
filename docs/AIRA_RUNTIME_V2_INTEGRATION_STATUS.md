@@ -126,3 +126,75 @@ before production enablement.
 Current CI runs exercise actual local HTTP request/response, transport ownership,
 source gzip readback and tamper detection using a test server; **these tests do
 not claim live Docker container or independent game/application acceptance**.
+
+
+## Phase 3 (15 October 2026) — Browser/session and specialist integration (draft PR #71)
+
+**Engineering state:** reviewable code; production readiness BLOCKED until verified
+principal identity (PR #65), isolated browser worker deployment, live worker
+fencing and full acceptance matrix are independently certified.
+
+### Implemented and feature-gated
+
+- PostgreSQL \`017_v2_browser_delegation.ts\` creates durable owner-scoped
+  browser sessions with monotonically increasing fence counters and durable
+  parent/child specialist records. No cookies or profile data in this table.
+- \`DurableBrowserSessions\`: atomic BOT claims, human takeover, expiry,
+  renewal, stale lease rejection and persisted browser observations.
+- \`PersistentChromiumWorker\`: real Playwright persistent browser contexts in
+  a dedicated worker process. Profile directories are hashed per owner/session
+  and fail closed on symlink roots. Browser observations include title,
+  heading and body text from actual DOM; screenshots report digest only.
+- \`BrowserWorkerHttp\` and \`BrowserWorkerClient\`: authenticated read-only
+  worker HTTP protocol for navigate, inspect and screenshot-digest. The
+  external URL must use HTTPS; local HTTP is permitted in controlled tests.
+- \`apps/browser-worker/src/index.ts\`: runnable non-root, loopback-listening
+  worker service. Operator-provisioned trusted HTTPS reverse proxy and durable
+  encrypted profile storage are **not** supplied by this PR.
+- \`DurableDelegations\`: bounded specialist registry (repository, research,
+  verification), scope intersection, owner-bound child lineage, unique
+  idempotency keys, fenced claims and cancellation. \`AgentRuntime\` creates
+  real child AIRA runs and never substitutes hardcoded specialist output.
+- Authenticated API routes expose feature-gated browser read observations and
+  specialist child progress/evidence. A child COMPLETED status alone is **not**
+  a verified result; verification reads independently persisted V2 evidence.
+
+### Required environment
+
+- AIRA_DURABLE_BROWSER_ENABLED=true
+- AIRA_BROWSER_WORKER_PROCESS=true on dedicated worker, never on Vercel
+- AIRA_BROWSER_WORKER_TOKEN (server-to-server secret, >=32 chars)
+- AIRA_BROWSER_WORKER_URL (HTTPS; HTTP loopback only in NODE_ENV=test)
+- AIRA_BROWSER_PROFILE_ROOT (durable secure absolute path on browser worker)
+- AIRA_SPECIALIST_DELEGATION_ENABLED=true
+
+Production additionally requires externally certified browser network egress
+blocking, authenticated real-user principal, worker isolation, and a durable
+service with secure secret delivery. The current API **returns 503 in
+production** for Phase 3 endpoints because this stacked branch predates
+the certified Neon verified-principal integration.
+
+### Acceptance honesty
+
+The \`test:v2-durable\` suite uses an actual PostgreSQL database. It covers
+cross-principal ownership, atomic browser leases, human preemption, stale worker
+rejection, depth/cycle bounds, delegated scope denial and non-fabricated child
+completion. The \`test:v2-browser-live\` suite uses a real Playwright Chromium
+process and HTTP test server to demonstrate profile cookie persistence,
+DOM/screenshot readbacks, worker-to-worker bearer authorization, and isolation.
+
+Neither suite proves a deployed rootless Docker computer host, encrypted
+production profile volume, complete SSRF/DNS-rebinding protection, cross-worker
+mutation fencing in the browser runner, mutative clicks/uploads, external
+accounts, model-directed multi-agent missions or independent functional
+verification of arbitrary delegated research. Those remain BLOCKED; do not
+advertise them as general availability. The historical Bot runner is used as
+a reference only; its in-memory leases and direct Docker-on-API-host design
+were intentionally not merged blindly.
+
+### Release protection
+
+PR #71 must remain stacked on draft PR #70, which depends on #69 → #68 → #67.
+Do not merge or deploy to prod-release without exact-SHA owner GO LIVE and
+separate live acceptance evidence. Domains, backup AIRA project, production
+Neon credentials and datasets are untouched.
