@@ -3,7 +3,7 @@ name: CI
 on:
   push:
   pull_request:
-    branches: [main, prod-release, feat/agent-execution-truth-20261014, feat/durable-autonomous-missions-20261014, feat/aira-autonomous-agent-runtime-v2-20261014, feat/aira-v2-isolated-build-bridge-20261015]
+    branches: [main, prod-release, feat/agent-execution-truth-20261014, feat/durable-autonomous-missions-20261014, feat/aira-autonomous-agent-runtime-v2-20261014, feat/aira-v2-isolated-build-bridge-20261015, feat/aira-v2-persistent-browser-delegation-20261015]
   workflow_dispatch:
 
 permissions:
