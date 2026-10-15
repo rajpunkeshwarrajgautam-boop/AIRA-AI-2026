@@ -108,6 +108,9 @@ jobs:
       - name: Persistent browser and specialist delegation PostgreSQL certification
         run: npm run test:v2-durable
 
+      - name: Durable specialist SIGKILL recovery and fencing
+        run: npm run test:v2-worker-recovery
+
       - name: Workflow engine verification
         run: npm run test:workflow
 
@@ -159,6 +162,50 @@ jobs:
       - name: Behavioral intelligence 120-scenario benchmark
         run: npm run test:behavioral:benchmark
 
+
+  docker-browser-cert:
+    name: Real Docker / Chromium Isolation
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Docker real isolated Chromium certification
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="aira-browser-cert:${{ github.sha }}"
+          volume="aira-v2-browser-${{ github.run_id }}-${{ github.run_attempt }}"
+          docker build -f docker/v2-browser-certification/Dockerfile -t "$image" .
+          docker volume create "$volume" >/dev/null
+          trap 'docker volume rm "$volume" >/dev/null 2>&1 || true' EXIT
+          browser() {
+            local mode="$1"
+            docker run --rm \
+              --network none --read-only --cap-drop ALL \
+              --security-opt no-new-privileges:true \
+              --pids-limit 256 --memory 1536m --shm-size 512m \
+              --tmpfs /tmp:rw,nosuid,nodev,size=512m \
+              -v "$volume":/profiles -e MODE="$mode" "$image"
+          }
+          browser seed | tee /tmp/browser-seed.out
+          grep -q 'DOCKER_BROWSER_SEEDED_REAL_PROFILE' /tmp/browser-seed.out
+          set +e
+          browser crash > /tmp/browser-killed.out 2>&1
+          status=$?
+          set -e
+          cat /tmp/browser-killed.out
+          test "$status" -eq 137
+          grep -q 'DOCKER_BROWSER_READY_FOR_FORCED_SIGKILL' /tmp/browser-killed.out
+          browser restore | tee /tmp/browser-restored.out
+          grep -q 'DOCKER_BROWSER_RESTORED_AFTER_SIGKILL' /tmp/browser-restored.out
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --entrypoint node "$image" -e \
+            "const net=require('net');const c=net.connect({host:'1.1.1.1',port:80});c.setTimeout(1200);c.on('connect',()=>process.exit(11));c.on('timeout',()=>process.exit(0));c.on('error',()=>process.exit(0));"
+          echo "PASS: real nonroot Chromium in capability-dropped, no-network Docker; persistent profile and SIGKILL recovery"
 
   semantic-search:
     name: Semantic Search CI
