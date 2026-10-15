@@ -102,7 +102,7 @@ assert.equal(expected.content,'file contents');
 await assert.rejects(adapter.read('../'+path.basename(sibling)+'/private.txt'),/SECURITY_REJECTED/,
   'Sibling-prefix traversal must be blocked');
 await assert.rejects(adapter.write('../'+path.basename(sibling)+'/bad.txt','unsafe'),/SECURITY_REJECTED/);
-fs.symlinkSync(sibling,path.join(root,'linked'),'dir');
+fs.symlinkSync(sibling,path.join(root,'linked'),process.platform==='win32'?'junction':'dir');
 await assert.rejects(adapter.read('linked/private.txt'),/SECURITY_REJECTED/,
   'Symlinked parent must not escape');
 await assert.rejects(adapter.write('linked/new.txt','unsafe'),/SECURITY_REJECTED/);

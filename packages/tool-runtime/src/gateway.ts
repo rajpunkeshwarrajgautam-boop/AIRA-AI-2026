@@ -937,7 +937,7 @@ export class ToolGateway extends EventEmitter {
         id: 'tool_repo_status',
         name: 'repo_git_status',
         version: 1,
-        description: 'Inspect the git status, current branch, and changed files of workspace.',
+        description: 'Inspect the git status, current branch, HEAD revision SHA, and changed files of workspace.',
         category: 'repo',
         source: 'native',
         parameters: { type: 'object', properties: {} },

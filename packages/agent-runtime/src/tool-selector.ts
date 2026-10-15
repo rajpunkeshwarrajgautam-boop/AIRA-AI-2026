@@ -16,9 +16,10 @@ export type UnresolvedToolSelection = {
   reason: string;
 };
 
+import { hasMutationIntent } from './git-policy.js';
+
 export type ToolSelection = ExecutableToolSelection | UnresolvedToolSelection;
 
-const commandVerbs = /\b(fix|patch|edit|implement|build|deploy|create|modify|update|write|delete|remove|submit|send|publish|install|configure|refactor|commit|merge)\b/i;
 const browserFormIntent = /\b(form|input|button|field|submit|log\s*in|sign\s*in)\b/i;
 const browserMutation = /\b(fill|populate|type|click|submit|save|log\s*in|sign\s*in)\b/i;
 const fileVerb = /\b(read|inspect|view|open|analy[sz]e|examine|show|summarize)\b/i;
@@ -50,7 +51,7 @@ export function selectExecutableTool(
   }
 
   // A multi-step mutation must not be reported complete after merely reading a file or searching.
-  if (intent === 'AGENT_MISSION' && commandVerbs.test(prompt)) {
+  if (intent === 'AGENT_MISSION' && hasMutationIntent(prompt)) {
     return unresolved('MISSION_EXECUTOR_NOT_READY', 'This request requires a multi-step execution plan with real write-capable tools and verifiable outcomes. The current single-tool agent path cannot complete it.');
   }
 

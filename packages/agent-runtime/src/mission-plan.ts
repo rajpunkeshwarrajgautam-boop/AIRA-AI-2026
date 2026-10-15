@@ -1,5 +1,6 @@
 import type { ToolResult } from '../../contracts/src/index.js';
 import { isDeepStrictEqual } from 'node:util';
+import { hasMutationIntent } from './git-policy.js';
 
 export type MissionToolName = 'file_system_list' | 'file_system_read' |
   'repo_git_status' | 'repo_git_log' | 'browser_session_inspect';
@@ -26,8 +27,6 @@ export interface DurableMissionProgress {
   currentCallId: string;
 }
 
-const unsafeVerbs = /\b(fix|patch|edit|implement|build|deploy|create|modify|update|write|delete|remove|submit|send|publish|install|configure|refactor|commit|merge|push|rebase)\b/i;
-
 function step(id: string, purpose: string, toolName: MissionToolName, args: Record<string, unknown>): MissionStep {
   return { id, purpose, toolName, arguments: args };
 }
@@ -40,12 +39,12 @@ function step(id: string, purpose: string, toolName: MissionToolName, args: Reco
  */
 export function compileSupportedMission(prompt: string): MissionPlan | null {
   const text = prompt.trim();
-  if (!text || unsafeVerbs.test(text)) return null;
+  if (!text || hasMutationIntent(text)) return null;
 
   const workspaceAudit =
     /\b(?:inspect|list)\s+(?:the\s+)?workspace\s+files\b/i.test(text) &&
     /\b(?:git|repo)\s+status\b/i.test(text) &&
-    /\b(?:repo|repository)\s+history\b/i.test(text);
+    /\b(?:repo|repository|commit)\s+history\b/i.test(text);
   if (workspaceAudit) {
     return {
       version: 1, objective: text, steps: [

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { ModelPolicy, ToolDefinition } from '../../contracts/src/index.js';
 import type { ModelRouter } from '../../model-router/src/index.js';
 import type { MissionStep } from './mission-plan.js';
+import { hasMutationIntent } from './git-policy.js';
 
 /**
  * V2: The model can propose a plan, but it cannot register tools, grant scopes,
@@ -40,8 +41,6 @@ export interface ModelMissionProgress {
 }
 export type AnyMissionProgress = ModelMissionProgress | import('./mission-plan.js').DurableMissionProgress;
 
-const writeIntent = /\b(fix|patch|edit|implement|build|deploy|create|modify|update|write|delete|remove|submit|send|publish|install|configure|refactor|commit|merge|push|rebase|upload|purchase|pay)\b/i;
-
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
   if (value && typeof value === 'object') {
@@ -70,7 +69,7 @@ export function validateModelMission(
   definitions: ToolDefinition[],
   allowedScopes: string[] = []
 ): ModelMissionPlan {
-  if (writeIntent.test(prompt)) throw new Error('MODEL_MISSION_WRITE_NOT_CERTIFIED');
+  if (hasMutationIntent(prompt)) throw new Error('MODEL_MISSION_WRITE_NOT_CERTIFIED');
   const plan = ModelMissionPlanSchema.parse(untrustedPlan);
   if (plan.objective !== prompt) throw new Error('MODEL_MISSION_OBJECTIVE_MISMATCH');
 
@@ -113,7 +112,7 @@ export function validateModelMission(
         throw new Error('MODEL_MISSION_GIT_LOG_INVALID');
       }
     } else if (step.toolName === 'repo_git_status') {
-      if (!/\b(git|repo|repository|codebase)\b/i.test(prompt) ||
+      if (!/\b(git|repo|repository|codebase|branch|commit|status|revision)\b/i.test(prompt) ||
           Object.keys(step.arguments).length !== 0) {
         throw new Error('MODEL_MISSION_GIT_STATUS_INVALID');
       }
@@ -176,7 +175,7 @@ export async function compileModelMission(
     def.permissionScopes.every(scope => scopes.includes(scope) || scopes.includes('*'))
   );
   if (!visible.length) throw new Error('MODEL_MISSION_NO_AUTHORIZED_TOOLS');
-  if (writeIntent.test(prompt)) throw new Error('MODEL_MISSION_WRITE_NOT_CERTIFIED');
+  if (hasMutationIntent(prompt)) throw new Error('MODEL_MISSION_WRITE_NOT_CERTIFIED');
   const adapter = router.getAdapter(policy);
   if (adapter.provider === 'mock') throw new Error('MODEL_MISSION_LIVE_PROVIDER_REQUIRED');
   const response = await adapter.complete([
