@@ -4,5 +4,5 @@ Allow: /
 Disallow: /api/
 
 # Host & Sitemaps
-Host: https://aira.ai
-Sitemap: https://aira.ai/sitemap.xml
+Host: https://aira-ai-2026.vercel.app
+Sitemap: https://aira-ai-2026.vercel.app/sitemap.xml

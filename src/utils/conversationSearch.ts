@@ -1,4 +1,5 @@
 import type { Conversation } from '../types';
+import { neonAuth, authenticatedApiFetch } from '../lib/neonAuth';
 
 export interface ConversationSearchResult {
   conversationId: string;
@@ -21,30 +22,6 @@ export interface ConversationSearchResponse {
   results: ConversationSearchResult[];
 }
 
-let sessionPromise: Promise<void> | null = null;
-
-async function ensureSearchSession(force = false): Promise<void> {
-  if (force) sessionPromise = null;
-  if (sessionPromise) return sessionPromise;
-
-  sessionPromise = (async () => {
-    const response = await fetch('/api/auth/session', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { Accept: 'application/json' },
-      signal: AbortSignal.timeout(1500)
-    });
-    if (!response.ok) throw new Error(`Session bootstrap failed (${response.status})`);
-  })();
-
-  try {
-    await sessionPromise;
-  } catch (error) {
-    sessionPromise = null;
-    throw error;
-  }
-}
-
 // Always enforce the request deadline, even when the search overlay supplies
 // its own AbortController to cancel obsolete queries.
 export function composeRequestSignal(
@@ -60,51 +37,64 @@ export function composeRequestSignal(
 async function authenticatedFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
-  timeoutMs = 2500
+  timeoutMs = 15000
 ): Promise<Response> {
-  await ensureSearchSession();
-  const makeRequest = () => fetch(input, {
-    ...init,
-    credentials: 'same-origin' as RequestCredentials,
+  return authenticatedApiFetch(input, init, {
     signal: composeRequestSignal(init?.signal, timeoutMs)
   });
-
-  let response = await makeRequest();
-  if (response.status === 401) {
-    await ensureSearchSession(true);
-    response = await makeRequest();
-  }
-  return response;
 }
 
 export async function syncConversationToServer(conversation: Conversation): Promise<boolean> {
-  try {
-    const response = await authenticatedFetch('/api/conversations/sync', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        id: conversation.id,
-        title: conversation.title,
-        projectId: conversation.projectId,
-        isPinned: Boolean(conversation.isPinned),
-        createdAt: conversation.createdAt,
-        updatedAt: conversation.updatedAt,
-        messages: conversation.messages
-          .filter(message => !message.isStreaming)
-          .map(message => ({
-            id: message.id,
-            role: message.role,
-            content: message.content,
-            createdAt: message.timestamp
-          }))
-      })
-    }, 20000);
-    return response.ok;
-  } catch {
-    // Search persistence is additive. Existing local conversation behavior must
-    // remain functional if the server/search subsystem is temporarily down.
-    return false;
+  const payload = JSON.stringify({
+    id: conversation.id,
+    title: conversation.title,
+    projectId: conversation.projectId,
+    isPinned: Boolean(conversation.isPinned),
+    createdAt: conversation.createdAt,
+    updatedAt: conversation.updatedAt,
+    messages: conversation.messages
+      .filter(message => !message.isStreaming)
+      .map(message => ({
+        id: message.id,
+        role: message.role,
+        content: message.content,
+        createdAt: message.timestamp
+      }))
+  });
+
+  // Sync is idempotent per principal/conversation/message ID on the server.
+  // A bounded second attempt covers transient Neon wakeups without retrying
+  // authorization or client-validation failures.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let delayMs = 1200;
+    try {
+      const response = await authenticatedFetch('/api/conversations/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload
+      }, 20000);
+      if (response.ok) return true;
+      if (response.status !== 503 && response.status !== 429) return false;
+
+      const retryAfter = Number(response.headers.get('Retry-After'));
+      if (Number.isFinite(retryAfter) && retryAfter > 0) {
+        delayMs = Math.min(Math.max(retryAfter * 1000, 500), 3000);
+      }
+    } catch (error) {
+      // The request uses its own deadline; there is no external cancellation
+      // for this additive background sync. Retry only network/timeout failures.
+      const retryable = error instanceof TypeError ||
+        (error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name));
+      if (!retryable) return false;
+    }
+
+    if (attempt === 0) {
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
   }
+
+  // Existing local conversation history remains usable if persistence is down.
+  return false;
 }
 
 export async function fetchConversationFromServer(
@@ -208,3 +198,58 @@ export async function backfillConversationsBestEffort(
     await Promise.allSettled(batch.map(syncConversationToServer));
   }
 }
+
+/**
+ * Fetch all conversations owned by the authenticated principal from Postgres.
+ */
+export async function fetchAllConversationsFromServer(): Promise<Conversation[]> {
+  try {
+    const response = await authenticatedFetch('/api/conversations', {
+      method: 'GET',
+      headers: { Accept: 'application/json' }
+    }, 15000);
+    if (!response.ok) {
+      console.warn('[fetchAllConversationsFromServer] response not ok:', response.status);
+      return [];
+    }
+
+    const body = await response.json() as {
+      conversations?: Array<{
+        id: string;
+        title: string;
+        projectId?: string;
+        isPinned?: boolean;
+        createdAt: number;
+        updatedAt: number;
+        messages?: Array<{
+          id: string;
+          role: 'user' | 'assistant';
+          content: string;
+          createdAt: number;
+        }>;
+      }>;
+    };
+
+    if (!Array.isArray(body?.conversations)) return [];
+    console.log('[fetchAllConversationsFromServer] hydrated count:', body.conversations.length);
+
+    return body.conversations.map(c => ({
+      id: c.id,
+      title: c.title,
+      projectId: c.projectId,
+      isPinned: Boolean(c.isPinned),
+      createdAt: Number(c.createdAt),
+      updatedAt: Number(c.updatedAt),
+      messages: (c.messages || []).map(m => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        timestamp: Number(m.createdAt)
+      }))
+    }));
+  } catch (err) {
+    console.error('[fetchAllConversationsFromServer error]', err);
+    return [];
+  }
+}
+

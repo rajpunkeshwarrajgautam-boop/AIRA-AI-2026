@@ -81,7 +81,10 @@ export class ToolRegistry {
         !result.isError,
         result.error
       );
-      return result;
+      // The registry owns request/receipt correlation. Native implementations
+      // must not substitute a randomized ID: verified research citations and
+      // execution audits depend on the original issued tool-call identity.
+      return { ...result, toolCallId: call.id };
     } catch (err: any) {
       const durationMs = Date.now() - startTime;
       const errorMsg = err instanceof Error ? err.message : String(err);

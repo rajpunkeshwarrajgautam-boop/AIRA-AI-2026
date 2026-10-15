@@ -2,7 +2,8 @@
 import assert from 'node:assert/strict';
 import { ResearchService } from '../packages/agent-runtime/src/research.js';
 import { searchWeb } from '../packages/tool-runtime/src/search-providers.js';
-import { buildResearchEvidenceContext, buildResearchSourcesAppendix, isResearchToolCallDump, renderGroundedResearchFallback } from '../packages/agent-runtime/src/research-evidence.js';
+import { ToolRegistry } from '../packages/tool-runtime/src/index.js';
+import { buildResearchEvidenceContext, buildResearchSourcesAppendix, isResearchToolCallDump, renderGroundedResearchFallback, verifiedSearchCitationsFromToolResults } from '../packages/agent-runtime/src/research-evidence.js';
 
 async function run() {
   const credentials = { tavilyApiKey: 'stub-primary', exaApiKey: 'stub-fallback' };
@@ -57,7 +58,101 @@ async function run() {
     assert.match(renderGroundedResearchFallback(research.citations), /retrieved excerpts/);
     assert.ok(!buildResearchSourcesAppendix([{ ...research.citations[0], provenance: undefined }]).includes('nasa.gov'),
       'Never identify fabricated citations as verified web evidence');
-    console.log('PASS: live source propagation, dates, links, single invocation, and JSON search-loop suppression');
+
+    const toolEvidence = verifiedSearchCitationsFromToolResults(
+      [{ id: 'call_real', name: 'web_search', arguments: { query: 'NASA' }, timestamp: 123 } as any],
+      [{ toolCallId: 'call_real', timestamp: 124, isError: false, output: result } as any]
+    );
+    assert.equal(toolEvidence.length, 2);
+    assert.equal(toolEvidence[0].provenance?.toolCallId, 'call_real');
+
+    // Actual production defect: ToolRegistry web_search generated a random
+    // receipt ID, which made executed search evidence fail request-ID matching.
+    // The registry must enforce the ID of the issued call for all native tools.
+    const nativeRegistry = new ToolRegistry();
+    const nativeSearch = nativeRegistry.get('web_search');
+    assert.ok(nativeSearch, 'Native registry must expose web_search');
+    nativeRegistry.register({
+      definition: nativeSearch!.definition,
+      execute: async () => ({
+        toolCallId: 'random-native-receipt',
+        output: result,
+        isError: false,
+        timestamp: Date.now(),
+        durationMs: 0
+      })
+    });
+    const issuedSearchCall = {
+      id: 'call_provenance_regression',
+      name: 'web_search',
+      toolId: 'tool_web_search',
+      arguments: { query: 'NASA Artemis II' },
+      timestamp: Date.now()
+    } as any;
+    const nativeReceipt = await nativeRegistry.execute(issuedSearchCall, {
+      runId: 'research-receipt-regression',
+      workspaceRoot: process.cwd(),
+      sessionGrantedTools: new Set()
+    });
+    assert.equal(nativeReceipt.toolCallId, issuedSearchCall.id,
+      'A native tool must not replace the issued request ID with a random receipt');
+    assert.equal(verifiedSearchCitationsFromToolResults([issuedSearchCall], [nativeReceipt]).length, 2,
+      'A successful native search receipt must produce verifiable citations');
+    assert.equal(toolEvidence[0].uri, 'https://www.nasa.gov/artemis-ii/');
+    assert.equal(verifiedSearchCitationsFromToolResults(
+      [{ id: 'failed', name: 'web_search', arguments: {}, timestamp: 123 } as any],
+      [{ toolCallId: 'failed', timestamp: 123, isError: true, output: result } as any]
+    ).length, 0, 'Failed calls never generate verifiable citations');
+    assert.equal(verifiedSearchCitationsFromToolResults(
+      [{ id: 'not_web', name: 'calculator', arguments: {}, timestamp: 123 } as any],
+      [{ toolCallId: 'not_web', timestamp: 123, isError: false, output: result } as any]
+    ).length, 0);
+    assert.equal(isResearchToolCallDump('{"tool":"web_search","args":{"query":"NASA Artemis II"}}'), true);
+    assert.equal(isResearchToolCallDump('[{"tool":"exa_search","args":{"query":"NASA"}},{"tool":"web_search","args":{"query":"moon"}}]'), true);
+    assert.equal(isResearchToolCallDump('The mission needs primary NASA sources.'), false);
+    // Results may arrive out of order; the original implementation paired by
+    // array index, allowing the wrong search request to certify source evidence.
+    const orderedCalls = [
+      { id: 'call_alpha', name: 'web_search', arguments: {}, timestamp: 100 },
+      { id: 'call_beta', name: 'calculator', arguments: {}, timestamp: 101 }
+    ] as any;
+    const unrelatedReceipt = [{ toolCallId: 'call_beta', timestamp: 120, isError: false, output: result }] as any;
+    assert.equal(verifiedSearchCitationsFromToolResults(orderedCalls, unrelatedReceipt).length, 0,
+      'Calculator output cannot be promoted to web evidence because of matching position');
+    assert.equal(verifiedSearchCitationsFromToolResults(orderedCalls, [
+      { toolCallId: 'forged-unrelated-id', timestamp: 120, isError: false, output: result }
+    ] as any).length, 0, 'Unmatched receipt cannot certify a citation');
+    assert.equal(verifiedSearchCitationsFromToolResults(orderedCalls, [
+      { toolCallId: 'call_alpha_retry_1', timestamp: 120, isError: false, output: result }
+    ] as any)[0].provenance?.toolCallId, 'call_alpha_retry_1');
+    assert.equal(verifiedSearchCitationsFromToolResults(orderedCalls, [
+      { toolCallId: 'call_alpha_fallback_exa_search', timestamp: 120, isError: false, output: result }
+    ] as any)[0].provenance?.toolCallId, 'call_alpha_fallback_exa_search');
+    assert.equal(verifiedSearchCitationsFromToolResults(orderedCalls, [
+      { toolCallId: 'call_alpha_fallback_browser_navigate', timestamp: 120, isError: false, output: result }
+    ] as any).length, 0, 'Unapproved fallback tool cannot become verified web evidence');
+
+    const decoratedResult = await searchWeb('NASA updates', { tavilyApiKey: 'stub-only' }, (async () => ({
+      ok: true,
+      json: async () => ({
+        results: [{
+          title: 'Official NASA mission',
+          url: 'https://www.nasa.gov/mission/artemis-ii/**',
+          content: 'Test source URL with Markdown emphasis accidentally appended.'
+        }]
+      })
+    })) as typeof fetch);
+    assert.equal(decoratedResult.results[0].url, 'https://www.nasa.gov/mission/artemis-ii/',
+      'Provider-normalized source URLs must not retain Markdown delimiter artifacts');
+    const decoratedEvidence = verifiedSearchCitationsFromToolResults(
+      [{ id: 'call_decorated', name: 'web_search', arguments: {}, timestamp: 10 } as any],
+      [{ toolCallId: 'call_decorated', isError: false, timestamp: 11,
+        output: { results: [{ url: 'https://www.nasa.gov/mission/artemis-ii/**', title: 'NASA', snippet: 'NASA source' }] } } as any]
+    );
+    assert.equal(decoratedEvidence[0]?.uri, 'https://www.nasa.gov/mission/artemis-ii/',
+      'Receipt-to-citation validation must independently canonicalize source URLs');
+
+    console.log('PASS: live source propagation, executed-tool evidence, and JSON suppression');
   } finally {
     if (originalTavily === undefined) delete process.env.TAVILY_API_KEY;
     else process.env.TAVILY_API_KEY = originalTavily;

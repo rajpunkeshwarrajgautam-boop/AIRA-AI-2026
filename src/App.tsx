@@ -17,7 +17,7 @@ import { AiraMark } from './components/AiraMark';
 import { CommandPalette } from './components/CommandPalette';
 import { ConversationSearchOverlay } from './components/ConversationSearchOverlay';
 import { InlineToast } from './components/InlineToast';
-import { backfillConversationsBestEffort, deleteConversationFromServer, fetchConversationFromServer, syncConversationToServer } from './utils/conversationSearch';
+import { backfillConversationsBestEffort, deleteConversationFromServer, fetchAllConversationsFromServer, fetchConversationFromServer, syncConversationToServer } from './utils/conversationSearch';
 import { useAnimatedFavicon } from './utils/animatedFavicon';
 
 // Lazy-loaded heavy auxiliary surfaces to optimize FCP and TTI
@@ -25,6 +25,11 @@ const ArtifactStudio = React.lazy(() => import('./components/ArtifactStudio').th
 const ProjectsModal = React.lazy(() => import('./components/ProjectsModal').then(m => ({ default: m.ProjectsModal })));
 const SettingsModal = React.lazy(() => import('./components/SettingsModal').then(m => ({ default: m.SettingsModal })));
 import { MemoryVaultModal } from './components/MemoryVaultModal';
+import { AuthModal } from './components/AuthModal';
+import { neonAuth, authenticatedApiFetch } from './lib/neonAuth';
+import { LibraryView } from './components/LibraryView';
+import { AgentsView } from './components/AgentsView';
+import { AutomationsView } from './components/AutomationsView';
 
 const MODE_CONTEXT: Record<WorkspaceMode, string> = {
   chat: '',
@@ -36,13 +41,18 @@ const MODE_CONTEXT: Record<WorkspaceMode, string> = {
 
 function App() {
   useAnimatedFavicon();
-  const [conversations, setConversations] = useState<Conversation[]>(() => loadConversations());
+  const [currentUserId, setCurrentUserId] = useState<string | null>(() => neonAuth.getCurrentUser()?.id || null);
+  const [conversations, setConversations] = useState<Conversation[]>(() => {
+    const user = neonAuth.getCurrentUser();
+    return loadConversations(user?.id);
+  });
   // Root visits without an active tab session start on a transient welcome draft.
   // When an active session exists (in-tab session or ?c= param), restore it on reload.
   const [activeChatId, setActiveChatId] = useState<string>(() => {
     const sessionChatId = getSessionActiveChatId();
     if (sessionChatId) {
-      const stored = loadConversations();
+      const user = neonAuth.getCurrentUser();
+      const stored = loadConversations(user?.id);
       if (stored.some(c => c.id === sessionChatId)) {
         return sessionChatId;
       }
@@ -60,6 +70,7 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window !== 'undefined' ? window.innerWidth >= 1280 : true);
   const [isProjectsOpen, setIsProjectsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [isMemoryVaultOpen, setIsMemoryVaultOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isConversationSearchOpen, setIsConversationSearchOpen] = useState(false);
@@ -81,6 +92,8 @@ function App() {
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const conversationSyncVersionsRef = useRef<Map<string, string>>(new Map());
   const initialConversationBackfillRef = useRef(false);
+  const authEpochRef = useRef(0);
+  const conversationsOwnerRef = useRef<string | null>(currentUserId);
 
   const activeConversation = useMemo(
     () => conversations.find(c => c.id === activeChatId) || welcomeConversation,
@@ -100,7 +113,79 @@ function App() {
     return () => desktop.removeEventListener('change', onBreakpointChange);
   }, []);
 
-  useEffect(() => saveConversations(conversations), [conversations]);
+  // Proactively restore first-party BFF session from HttpOnly cookie on mount
+  useEffect(() => {
+    neonAuth.restoreSession().catch((err) => {
+      console.warn('[App] First-party session restore notice:', err);
+    });
+  }, []);
+
+  useEffect(() => {
+    return neonAuth.onAuthStateChange(async (user) => {
+      const epoch = ++authEpochRef.current;
+      const nextUserId = user?.id || null;
+
+      // Identity transition boundary: immediately isolate and purge prior account in-memory state
+      if (nextUserId !== currentUserId) {
+        setActiveChatId('');
+        setSessionActiveChatId(null);
+        setActiveArtifact(null);
+        setHighlightedMessageId(null);
+        conversationSyncVersionsRef.current.clear();
+      }
+
+      setCurrentUserId(nextUserId);
+
+      if (user) {
+        setSettings(s => ({
+          ...s,
+          userName: user.name || s.userName,
+          email: user.email || s.email,
+        }));
+
+        // Immediately load cached conversations belonging to this verified user
+        const cached = loadConversations(user.id);
+        conversationsOwnerRef.current = user.id;
+        setConversations(cached);
+
+        // Hydrate persistent conversations from PostgreSQL server
+        try {
+          const serverConvs = await fetchAllConversationsFromServer();
+          // Discard stale hydration response if user logged out or switched accounts while fetch was in flight
+          if (authEpochRef.current !== epoch) return;
+
+          if (serverConvs && serverConvs.length > 0) {
+            conversationsOwnerRef.current = user.id;
+            setConversations(serverConvs);
+            saveConversations(serverConvs, user.id);
+            setActiveChatId(prev => (serverConvs.some(c => c.id === prev) ? prev : ''));
+          }
+        } catch {
+          // Server fetch failed: cached local state remains active
+        }
+      } else {
+        // Account signed out: revert to isolated guest state and clear memory
+        setSettings(s => ({
+          ...s,
+          userName: 'Guest User',
+          email: '',
+        }));
+        conversationsOwnerRef.current = null;
+        const guestConvs = loadConversations();
+        setConversations(guestConvs);
+        // Preserve root welcome screen contract on fresh tab; restore only if already active
+        setActiveChatId(prev => (guestConvs.some(c => c.id === prev) ? prev : ''));
+      }
+    });
+  }, [currentUserId]);
+
+  useEffect(() => {
+    // Only persist conversations if in-memory data strictly belongs to current active user
+    if (conversationsOwnerRef.current === currentUserId) {
+      saveConversations(conversations, currentUserId || undefined);
+    }
+  }, [conversations, currentUserId]);
+
   useEffect(() => {
     if (!initialConversationBackfillRef.current) {
       initialConversationBackfillRef.current = true;
@@ -128,10 +213,11 @@ function App() {
       void syncConversationToServer(conversation);
     }
   }, [conversations]);
+
   useEffect(() => saveProjects(projects), [projects]);
   useEffect(() => saveSettings(settings), [settings]);
   useEffect(() => {
-    if (activeChatId) setSessionActiveChatId(activeChatId);
+    setSessionActiveChatId(activeChatId || null);
   }, [activeChatId]);
   useEffect(() => {
     if (activeProjectId) localStorage.setItem('aira_active_project_id_v1', activeProjectId);
@@ -473,10 +559,9 @@ function App() {
     if (!pendingApproval) return;
     setIsSubmittingApproval(true);
     try {
-      const res = await fetch(`/api/runs/${pendingApproval.runId}/approve`, {
+      const res = await authenticatedApiFetch(`/api/runs/${pendingApproval.runId}/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
         body: JSON.stringify({
           requestId: pendingApproval.id,
           decision
@@ -522,6 +607,7 @@ function App() {
         activeProjectId={activeProjectId}
         onOpenProjects={() => setIsProjectsOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenAuth={() => setIsAuthOpen(true)}
         onOpenSearch={handleOpenConversationSearch}
         isOpen={sidebarOpen}
         onToggleOpen={() => setSidebarOpen(v => !v)}
@@ -557,7 +643,7 @@ function App() {
       <main className="flex-1 min-w-0 min-h-0 h-[100dvh] flex flex-col overflow-hidden w-full max-w-full bg-mesh-canvas">
         <header className="h-[54px] shrink-0 px-3 md:px-5 flex items-center justify-between border-b border-claude-border-light/80 dark:border-claude-border-dark/80 gradient-fade-header relative z-50 bg-claude-bg-light/95 dark:bg-claude-bg-dark/95 backdrop-blur-md">
           <div className="flex flex-1 items-center gap-1 min-w-0">
-            {(!sidebarOpen || (typeof window !== 'undefined' && window.innerWidth < 1280)) && (
+            {!sidebarOpen && (
               <>
                 <button 
                   onClick={() => setSidebarOpen(true)} 
@@ -594,7 +680,13 @@ function App() {
         </header>
 
         <div ref={chatScrollRef} data-testid="chat-scroll-region" className="flex-1 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain flex flex-col">
-          {!activeConversation || activeConversation.messages.length === 0 ? (
+          {workspaceMode === 'library' ? (
+            <LibraryView />
+          ) : workspaceMode === 'agents' ? (
+            <AgentsView />
+          ) : workspaceMode === 'automations' ? (
+            <AutomationsView />
+          ) : (!activeConversation || activeConversation.messages.length === 0 ? (
             <GreetingScreen 
               userName={settings.userName} 
               workspaceMode={workspaceMode} 
@@ -618,8 +710,7 @@ function App() {
                 </div>
               ))}
             </div>
-          )}
-
+          ))}
         </div>
 
           <div className="shrink-0 min-w-0 relative z-10 pt-2 sm:pt-4 gradient-mask-bottom">
@@ -719,6 +810,19 @@ function App() {
             onClose={() => setIsMemoryVaultOpen(false)}
           />
         )}
+
+        <AuthModal
+          isOpen={isAuthOpen}
+          onClose={() => setIsAuthOpen(false)}
+          onAuthSuccess={(user) => {
+            setSettings(s => ({
+              ...s,
+              userName: user.name || s.userName,
+              email: user.email || s.email,
+            }));
+            setToastMessage(`Welcome, ${user.name}! Sync active.`);
+          }}
+        />
       </React.Suspense>
     </div>
   );

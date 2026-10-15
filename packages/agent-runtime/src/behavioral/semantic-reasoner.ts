@@ -337,6 +337,36 @@ Respond with valid JSON only:
       };
     }
 
+    // Context-free booking references must be clarified before tool selection.
+    // A missing referent is not a reason to execute research or make reservations.
+    // Existing conversation history is deliberately left to contextual resolution.
+    const unidentifiedBooking = history.length === 0 &&
+      /^(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?(?:book|reserve)\s+(?:it|that|this)\b/i.test(promptLower);
+    if (unidentifiedBooking) {
+      return {
+        primaryIntent: 'ANSWER',
+        secondaryIntents: [],
+        confidence: 0.98,
+        reasoningStrategy: 'CLARIFY_AMBIGUOUS',
+        clarificationPrompt: 'What would you like me to book or reserve? Please identify the place, appointment, or service.',
+        isFreshnessRequired: false
+      };
+    }
+
+    // Explicit memory-save language is conversational unless a real side-effect
+    // is independently classified. Do not invent a tool or try web research.
+    // Memory persistence/availability is described accurately by the model context.
+    const explicitMemoryRequest = /^(?:please\s+)?(?:remember|keep\s+in\s+mind)\s+(?:that\b|my\b|across\s+(?:future\s+)?conversations?\b|for\s+future\s+(?:chats?|conversations?)\b)/i.test(promptLower);
+    if (explicitMemoryRequest && (!sideEffectLevel || sideEffectLevel === 'NONE') && (!advisoryIntent || advisoryIntent === 'ANSWER')) {
+      return {
+        primaryIntent: 'ANSWER',
+        secondaryIntents: [],
+        confidence: 0.98,
+        reasoningStrategy: 'FAST_DIRECT',
+        isFreshnessRequired: false
+      };
+    }
+
     // Fast Path C: Automation Management (Delete/Cancel/Disable scheduled jobs)
     const isAutomationManagement = /\b(delete|cancel|remove|stop|disable|drop)\s+.*(automation|job|task|cron|workflow)\b/i.test(promptLower);
     if (isAutomationManagement) {

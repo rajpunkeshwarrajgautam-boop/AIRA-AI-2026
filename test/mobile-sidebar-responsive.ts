@@ -148,6 +148,12 @@ async function main() {
         await drawer.waitFor({ state: 'hidden', timeout: 7000 });
         await page.getByRole('button', { name: 'Open sidebar navigation' }).click();
         await drawer.waitFor({ state: 'visible', timeout: 7000 });
+        // Real deployed regression: header z-index previously intercepted clicks
+        // on the mobile drawer's close button despite that button being visible.
+        await page.getByRole('button', { name: 'Close sidebar navigation' }).click();
+        await drawer.waitFor({ state: 'hidden', timeout: 7000 });
+        await page.getByRole('button', { name: 'Open sidebar navigation' }).click();
+        await drawer.waitFor({ state: 'visible', timeout: 7000 });
         await page.keyboard.press('Escape');
         await drawer.waitFor({ state: 'hidden', timeout: 7000 });
       }

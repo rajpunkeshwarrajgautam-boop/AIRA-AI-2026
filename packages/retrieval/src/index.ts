@@ -167,14 +167,43 @@ export class ConversationSearchRepository {
     const messages = Array.isArray(input.messages) ? input.messages : [];
 
     await db.transaction(async trx => {
+      // Serialize concurrent snapshots for one principal/conversation. A delayed
+      // retry must never delete messages introduced by a newer successful sync.
+      // Use a deterministic key without exposing principal identifiers to SQL logs.
+      const lockKey = storageId('conversation', principalId, clientConversationId);
+      await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [lockKey]);
+
       const existingConversation = await trx('conversations')
         .where({ principal_id: principalId, client_id: clientConversationId })
         .first();
 
-      const conversationStorageId =
-        existingConversation?.id || storageId('conversation', principalId, clientConversationId);
+      // Older snapshots cannot erase newer data. Millisecond timestamp collisions
+      // still allow strict append-only message supersets, without overwriting
+      // existing messages or metadata. Ambiguous equal-version edits are rejected.
+      let equalTimestampAppend = false;
+      if (existingConversation) {
+        const storedVersion = Number(existingConversation.updated_at);
+        if (storedVersion > input.updatedAt) return;
+        if (storedVersion === input.updatedAt) {
+          if (existingConversation.deleted_at != null) return;
+          const stored = await trx('conversation_messages')
+            .where({ principal_id: principalId, conversation_id: existingConversation.id })
+            .select('client_message_id');
+          const existingIds = new Set(stored.map(row => String(row.client_message_id)));
+          const incomingIds = new Set(messages
+            .filter(message => message.role === 'user' || message.role === 'assistant')
+            .map(message => message.id?.trim())
+            .filter((id): id is string => Boolean(id)));
+          equalTimestampAppend = incomingIds.size > existingIds.size &&
+            [...existingIds].every(id => incomingIds.has(id));
+          if (!equalTimestampAppend) return;
+        }
+      }
 
-      await trx('conversations')
+      const conversationStorageId =
+        existingConversation?.id || lockKey;
+
+      if (!equalTimestampAppend) await trx('conversations')
         .insert({
           id: conversationStorageId,
           client_id: clientConversationId,
@@ -240,6 +269,10 @@ export class ConversationSearchRepository {
             client_message_id: clientMessageId
           })
           .first();
+
+        // Preserve existing content, embeddings and provenance on same-version
+        // retries; only genuinely new message IDs are eligible for appending.
+        if (equalTimestampAppend && existingMessage) continue;
 
         const messageStorageId =
           existingMessage?.id || storageId('message', principalId, clientMessageId);
@@ -388,6 +421,90 @@ export class ConversationSearchRepository {
         });
 
       return true;
+    });
+  }
+
+  async listConversations(principalId: string): Promise<DurableConversationResult[]> {
+    if (!principalId) return [];
+
+    const rows = await db('conversations')
+      .where({ principal_id: principalId })
+      .whereNull('deleted_at')
+      .orderBy('updated_at', 'desc');
+
+    if (rows.length === 0) return [];
+
+    const conversationStorageIds = rows.map(r => r.id);
+    const messages = await db('conversation_messages')
+      .where({ principal_id: principalId })
+      .whereIn('conversation_id', conversationStorageIds)
+      .orderBy('created_at', 'asc')
+      .select('conversation_id', 'client_message_id', 'role', 'content', 'created_at', 'run_id', 'metadata');
+
+    const messagesByConv = new Map<string, ConversationSyncMessage[]>();
+    for (const msg of messages) {
+      const list = messagesByConv.get(msg.conversation_id) || [];
+      list.push({
+        id: msg.client_message_id,
+        role: msg.role as ConversationMessageRole,
+        content: msg.content || '',
+        createdAt: Number(msg.created_at),
+        runId: msg.run_id || undefined,
+        metadata: msg.metadata || undefined
+      });
+      messagesByConv.set(msg.conversation_id, list);
+    }
+
+    return rows.map(conv => ({
+      id: conv.client_id,
+      title: conv.title,
+      projectId: conv.project_id || undefined,
+      isPinned: Boolean(conv.is_pinned),
+      createdAt: Number(conv.created_at),
+      updatedAt: Number(conv.updated_at),
+      messages: messagesByConv.get(conv.id) || []
+    }));
+  }
+
+  async transferGuestData(
+    guestPrincipalId: string,
+    targetPrincipalId: string
+  ): Promise<{ transferredConversations: number }> {
+    if (!guestPrincipalId || !targetPrincipalId || guestPrincipalId === targetPrincipalId) {
+      throw new Error('INVALID_TRANSFER_PRINCIPALS');
+    }
+
+    return db.transaction(async trx => {
+      const guestRows = await trx('conversations')
+        .where({ principal_id: guestPrincipalId })
+        .whereNull('deleted_at');
+
+      let transferredCount = 0;
+      for (const conv of guestRows) {
+        const existingTarget = await trx('conversations')
+          .where({ principal_id: targetPrincipalId, client_id: conv.client_id })
+          .first();
+
+        if (existingTarget) {
+          continue;
+        }
+
+        await trx('conversations')
+          .where({ id: conv.id, principal_id: guestPrincipalId })
+          .update({ principal_id: targetPrincipalId, updated_at: Date.now() });
+
+        await trx('conversation_messages')
+          .where({ conversation_id: conv.id, principal_id: guestPrincipalId })
+          .update({ principal_id: targetPrincipalId });
+
+        await trx('conversation_search_documents')
+          .where({ conversation_id: conv.id, principal_id: guestPrincipalId })
+          .update({ principal_id: targetPrincipalId });
+
+        transferredCount++;
+      }
+
+      return { transferredConversations: transferredCount };
     });
   }
 
