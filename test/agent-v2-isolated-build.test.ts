@@ -123,6 +123,17 @@ assert.equal(await kernel.isExactToolCallApproved(run,{...call,arguments:{...sou
 assert.equal(await kernel.isExactToolCallApproved(run,call,'other_principal'),false);
 assert.equal(await kernel.isExactToolCallApproved('other_run',call,owner),false);
 assert.equal(await kernel.isExactToolCallApproved(run,{...call,id:'new_call'},owner),false);
+const decisionKernel=new ApprovalKernel({
+  getRequest:async()=>({...approved,decision:undefined,resolvedAt:undefined,resolvedBy:undefined})
+} as any,grantRepo as any);
+await assert.rejects(
+  decisionKernel.decide('approval_unique','ALLOW_ALWAYS_FOR_TOOL',owner),
+  /ISOLATED_BUILD_REQUIRES_APPROVE_ONCE/
+);
+await assert.rejects(
+  decisionKernel.decide('approval_unique','ALLOW_SESSION',owner),
+  /ISOLATED_BUILD_REQUIRES_APPROVE_ONCE/
+);
 // Fail closed before any persisted tool call when a mutating gateway has no kernel.
 const gateway=new ToolGateway(undefined,undefined,process.cwd());
 const denied=await gateway.execute({toolName:'file_system_write',
