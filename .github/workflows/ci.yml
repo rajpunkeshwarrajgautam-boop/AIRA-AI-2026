@@ -180,7 +180,7 @@ jobs:
           volume="aira-v2-browser-${{ github.run_id }}-${{ github.run_attempt }}"
           docker build -f docker/v2-browser-certification/Dockerfile -t "$image" .
           docker volume create "$volume" >/dev/null
-          container="aira-v2-crash-$"
+          container="aira-v2-crash-recovery"
           trap 'docker rm -f "$container" >/dev/null 2>&1 || true; docker volume rm "$volume" >/dev/null 2>&1 || true' EXIT
           browser() {
             local mode="$1"
