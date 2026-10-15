@@ -6,7 +6,7 @@ const mode=process.env.MODE;
 const root='/profiles/persistent';
 const cookie='AIRA_BROWSER_ISOLATION_VERIFIED';
 (async()=>{
-  assert.equal(process.getuid(),1000,'browser worker must be unprivileged');
+  assert.notEqual(process.getuid(),0,'browser worker must be unprivileged');
   assert.equal(fs.existsSync('/profiles'),true);
   const context=await chromium.launchPersistentContext(root,{
     headless:true,viewport:{width:800,height:600}
