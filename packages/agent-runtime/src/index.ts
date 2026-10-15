@@ -289,11 +289,16 @@ export class AgentRuntime extends EventEmitter {
   }
 
   public async submitApproval(requestId: string, decision: ApprovalDecision): Promise<boolean> {
-    const { approved, request } = await this.approvalKernel.decide(requestId, decision);
-    const run = await this.runRepo.getRun(request.runId);
-    if (!run) {
-      return false;
-    }
+    const pending = await this.approvalKernel.getPendingRequest(requestId);
+    if (!pending) return false;
+    const run = await this.runRepo.getRun(pending.runId);
+    if (!run) return false;
+    // The API verifies request ownership before invoking this method. Persist
+    // the authenticated run owner as the approval principal, not an absent
+    // or caller-supplied resolvedBy value.
+    const { approved, request } = await this.approvalKernel.decide(
+      requestId, decision, run.principalId
+    );
     run.pendingApproval = request;
     
     // Check if this approval was for a workflow step
@@ -718,6 +723,12 @@ export class AgentRuntime extends EventEmitter {
       );
 
       const requiresApproval = (!isApproved) && (
+        toolDef?.approvalPolicy === 'require_approval' ||
+        toolDef?.approvalPolicy === 'always_ask' ||
+        toolDef?.permissionLevel === 'WRITE' ||
+        toolDef?.permissionLevel === 'EXTERNAL_COMMUNICATION' ||
+        toolDef?.permissionLevel === 'FINANCIAL' ||
+        toolDef?.sideEffectLevel === 'WRITE' ||
         toolDef?.permissionLevel === 'DESTRUCTIVE' ||
         toolDef?.sideEffectLevel === 'DESTRUCTIVE' ||
         run.routingDecision?.sideEffectLevel === 'DESTRUCTIVE' ||
