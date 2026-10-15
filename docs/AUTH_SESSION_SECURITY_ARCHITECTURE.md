@@ -58,32 +58,37 @@ To achieve zero-JavaScript-credential exposure, the production deployment must a
 ```
 
 ### 3.1 First-Party Cookie Contract
-- **Cookie Name**: `__Host-aira_auth_session`
+- **Cookie Name**: `__Host-aira_auth_session` (Production / HTTPS) / `aira_auth_session` (Development)
 - **Attributes**:
   - `HttpOnly`: Inaccessible to `document.cookie` or injected JavaScript.
-  - `Secure`: Transmitted solely over TLS.
-  - `SameSite=Strict`: Immune to cross-site request forgery in modern browsers.
+  - `Secure`: Transmitted solely over TLS in production environments.
+  - `SameSite=Lax`: Immune to cross-site request forgery while preserving top-level navigation authentication.
   - `Path=/`: Scoped to the entire origin.
-- **CSRF Defense**: Double-submit CSRF header (`X-AIRA-CSRF-TOKEN`) verified against an HMAC cookie, or strict origin validation via `Sec-Fetch-Site: same-origin`.
+  - `Max-Age=2592000`: 30-day bounded session lifetime matching database session grants.
+- **CSRF Defense**: Enforces explicit anti-CSRF headers (`x-aira-csrf-protection: 1` or `x-requested-with`), `sec-fetch-site` browser assertions, or matching `Origin`/`Referer` validation on all state-changing endpoints.
 
-### 3.2 Vercel Edge Rewrite / Gateway Route
-In `vercel.json` (or Express API `apps/api/src/index.ts`), proxy auth endpoints:
-```json
-{
-  "rewrites": [
-    {
-      "source": "/api/auth/provider/:match*",
-      "destination": "https://ep-empty-field-b36mqqq6.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth/:match*"
-    }
-  ]
-}
-```
+### 3.2 Implemented BFF Gateway Endpoints (`apps/api/src/auth/bff-session.ts`)
+The first-party BFF session security gateway is implemented and mounted in `apps/api/src/index.ts`:
+- `POST /api/auth/sign-in`: Authenticates with Neon Auth server-side, sets `HttpOnly` session cookie, and returns user profile without exposing credentials to frontend JS.
+- `POST /api/auth/sign-up`: Registers account with Neon Auth server-side, sets `HttpOnly` session cookie, returns public user profile.
+- `GET /api/auth/session`: Reads `HttpOnly` cookie, returns verified session profile or anonymous state without token exposure.
+- `POST /api/auth/sign-out`: Executes two-phase invalidation: clears `HttpOnly` cookie with `Max-Age=0` and invalidates session token on Neon Auth server.
+- `createBffSessionMiddleware`: Intercepts incoming `/api/*` requests, cryptographically verifies the `HttpOnly` cookie session, and automatically binds the verified `ExecutionPrincipal` (`neon_user_<id>`) for downstream route security.
+
+### 3.3 Verification Suite
+- Verified via `test/auth-bff-session-gateway.test.ts` (`npm run test:auth-bff`):
+  - Cookie serialization & HMAC-SHA256 signature verification.
+  - Tamper rejection fail-closed.
+  - CSRF & origin enforcement on POST/PUT/DELETE.
+  - Zero-token response contract (no session tokens or raw JWTs in response JSON).
+  - Downstream `ExecutionPrincipal` resolution without client Bearer headers.
+  - Server-side session invalidation and cookie clearing on logout.
 
 ---
 
-## 4. Release Blocker Definition
+## 4. Release Blocker Definition & Resolution Path
 
-Until the first-party BFF gateway proxy is configured and deployed to Vercel production infrastructure:
-1. `localStorage` credential storage is certified for staging and pre-production evaluation with fail-closed concurrency and revocation enforcement.
-2. Full production certification requires deploying the first-party BFF gateway proxy to prevent any client-side JavaScript access to long-lived session credentials.
-3. This requirement is tracked as **RELEASE-BLOCKER-AUTH-001** for the final production deployment sign-off.
+- **Status**: **IMPLEMENTED ON AUTH BRANCH — PRE-PROD GATE ACTIVE**
+- **Artifact**: Implemented in `apps/api/src/auth/bff-session.ts`, mounted in `apps/api/src/index.ts`, and verified by `npm run test:auth-bff`.
+- **Production Integration Note**: While the first-party BFF gateway code is 100% functional and tested, deploying to the custom production domain (`aira.ai`) requires final DNS and Vercel routing verification during the coordinated release cycle.
+- **Release Tracking**: **RELEASE-BLOCKER-AUTH-001** is maintained as a required verification gate during the coordinated release to guarantee that the production deployment strictly utilizes first-party HttpOnly cookies.

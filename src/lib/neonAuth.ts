@@ -70,10 +70,19 @@ export class NeonAuthClient {
     if (typeof window !== 'undefined') {
       window.addEventListener('storage', (event) => {
         if (event.key === STORAGE_KEYS.SESSION) {
-          this.authEpoch++;
-          this.activeRefresh = null;
-          this.abortActiveRequests('Cross-tab session change detected');
-          this.currentSession = this.loadStoredSession();
+          const newSession = this.loadStoredSession();
+          const isSameIdentity =
+            this.currentSession &&
+            newSession &&
+            this.currentSession.user?.id === newSession.user?.id &&
+            this.currentSession.token === newSession.token;
+
+          if (!isSameIdentity) {
+            this.authEpoch++;
+            this.activeRefresh = null;
+            this.abortActiveRequests('Cross-tab session change detected');
+          }
+          this.currentSession = newSession;
           this.notifyListeners();
         }
       });
@@ -83,10 +92,19 @@ export class NeonAuthClient {
           this.syncChannel = new BroadcastChannel('aira_neon_auth_sync');
           this.syncChannel.onmessage = (event) => {
             if (event.data?.type === 'AUTH_SYNC') {
-              this.authEpoch++;
-              this.activeRefresh = null;
-              this.abortActiveRequests('Cross-tab session change detected');
-              this.currentSession = this.loadStoredSession();
+              const newSession = this.loadStoredSession();
+              const isSameIdentity =
+                this.currentSession &&
+                newSession &&
+                this.currentSession.user?.id === newSession.user?.id &&
+                this.currentSession.token === newSession.token;
+
+              if (!isSameIdentity) {
+                this.authEpoch++;
+                this.activeRefresh = null;
+                this.abortActiveRequests('Cross-tab session change detected');
+              }
+              this.currentSession = newSession;
               this.notifyListeners();
             }
           };
@@ -155,9 +173,19 @@ export class NeonAuthClient {
   }
 
   private saveSession(session: NeonSessionData | null): void {
-    this.authEpoch++;
-    this.activeRefresh = null;
-    this.abortActiveRequests('Session transitioned or invalidated');
+    const isSameIdentity =
+      session !== null &&
+      this.currentSession !== null &&
+      this.currentSession.user?.id === session.user?.id &&
+      this.currentSession.token === session.token;
+
+    if (!isSameIdentity) {
+      // True session transition: login, logout, account switch, or replaced session
+      this.authEpoch++;
+      this.activeRefresh = null;
+      this.abortActiveRequests('Session transitioned or invalidated');
+    }
+
     this.currentSession = session;
     if (typeof window === 'undefined') return;
     try {
@@ -335,9 +363,19 @@ export class NeonAuthClient {
       } catch (err: any) {
         console.warn('Failed to refresh Neon Auth JWT:', err);
         // If the authentication service rejected the session token with 401, purge the invalid local session
+        // ONLY if the active session is still the same session token and identity that was rejected!
         if (err?.message && /401|revoked|invalid/i.test(err.message)) {
-          console.warn('[NeonAuth] Session token invalid or revoked on server; purging local session');
-          this.saveSession(null);
+          if (
+            this.currentSession &&
+            this.currentSession.token === currentToken &&
+            (this.currentSession.user?.id || '') === currentUserId &&
+            this.authEpoch === currentEpoch
+          ) {
+            console.warn('[NeonAuth] Session token invalid or revoked on server; purging local session');
+            this.saveSession(null);
+          } else {
+            console.warn('[NeonAuth] Delayed revocation for obsolete session ignored; active session preserved');
+          }
           return null;
         }
         // Fail-closed fallback: return existing token ONLY if identity still matches and token is unexpired
@@ -345,6 +383,7 @@ export class NeonAuthClient {
           this.authEpoch === currentEpoch &&
           this.currentSession &&
           (this.currentSession.user?.id || '') === currentUserId &&
+          this.currentSession.token === currentToken &&
           this.currentSession.jwt &&
           (this.currentSession.jwtExpiresAt || 0) > Date.now()
         ) {
@@ -804,8 +843,6 @@ export async function authenticatedApiFetch(
       throw err;
     }
 
-    cleanupInFlight();
-
     // Post-response revalidation: verify identity has NOT transitioned while waiting for network response
     if (
       neonAuth.getAuthEpoch() !== initiatingEpoch ||
@@ -813,6 +850,7 @@ export async function authenticatedApiFetch(
       neonAuth.getCurrentUser()?.id !== initiatingUserId ||
       neonAuth.getCurrentSession()?.token !== initiatingSessionToken
     ) {
+      cleanupInFlight();
       console.warn('[authenticatedApiFetch] In-flight response discarded: authentication transitioned before response arrival');
       throw new AuthenticationRequiredError(
         'Authentication identity transitioned while request was in-flight; response discarded to prevent cross-account contamination.'
@@ -820,12 +858,83 @@ export async function authenticatedApiFetch(
     }
 
     if (res.status === 401) {
+      cleanupInFlight();
       console.warn('[authenticatedApiFetch] Server rejected authentication credentials (401)');
       throw new AuthenticationRequiredError(
         'Server rejected authentication credentials (401). Please re-authenticate.'
       );
     }
 
+    // Wrap streaming response bodies so in-flight abort registration remains active until stream ends
+    if (res.body) {
+      let isClosed = false;
+      const doCleanup = () => {
+        if (!isClosed) {
+          isClosed = true;
+          cleanupInFlight();
+        }
+      };
+
+      const rawReader = res.body.getReader();
+      const identityBoundStream = new ReadableStream({
+        async pull(controller) {
+          try {
+            if (
+              neonAuth.getAuthEpoch() !== initiatingEpoch ||
+              neonAuth.getCurrentUser()?.id !== initiatingUserId
+            ) {
+              const abortErr = new AuthenticationRequiredError(
+                'Authentication identity transitioned while response stream was active; stream terminated.'
+              );
+              controller.error(abortErr);
+              doCleanup();
+              try { await rawReader.cancel(abortErr); } catch {}
+              return;
+            }
+
+            const { done, value } = await rawReader.read();
+            if (done) {
+              controller.close();
+              doCleanup();
+            } else {
+              if (
+                neonAuth.getAuthEpoch() !== initiatingEpoch ||
+                neonAuth.getCurrentUser()?.id !== initiatingUserId
+              ) {
+                const abortErr = new AuthenticationRequiredError(
+                  'Authentication identity transitioned while response stream was active; stream terminated.'
+                );
+                controller.error(abortErr);
+                doCleanup();
+                try { await rawReader.cancel(abortErr); } catch {}
+                return;
+              }
+              controller.enqueue(value);
+            }
+          } catch (err) {
+            controller.error(err);
+            doCleanup();
+          }
+        },
+        async cancel(reason) {
+          doCleanup();
+          try { await rawReader.cancel(reason); } catch {}
+        }
+      });
+
+      internalAbortController.signal.addEventListener('abort', () => {
+        doCleanup();
+        try { rawReader.cancel(internalAbortController.signal.reason); } catch {}
+      }, { once: true });
+
+      return new Response(identityBoundStream, {
+        status: res.status,
+        statusText: res.statusText,
+        headers: res.headers
+      });
+    }
+
+    cleanupInFlight();
     return res;
   }
 

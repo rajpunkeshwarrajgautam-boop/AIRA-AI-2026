@@ -93,6 +93,16 @@ export async function streamAIResponse(
       }
 
       if (backendRes.body) {
+        const streamInitiatingEpoch = neonAuth.getAuthEpoch();
+        const streamInitiatingUserId = neonAuth.getCurrentUser()?.id || '';
+
+        const isIdentityValid = () => {
+          return (
+            neonAuth.getAuthEpoch() === streamInitiatingEpoch &&
+            (neonAuth.getCurrentUser()?.id || '') === streamInitiatingUserId
+          );
+        };
+
         const reader = backendRes.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
@@ -102,13 +112,30 @@ export async function streamAIResponse(
         let emittedArtifact = false;
 
         while (true) {
+          if (!isIdentityValid()) {
+            console.warn('[streamAIResponse] Stream processing aborted: auth identity changed during stream');
+            try { await reader.cancel(); } catch {}
+            return;
+          }
+
           const { done, value } = await reader.read();
           if (done) break;
+
+          if (!isIdentityValid()) {
+            console.warn('[streamAIResponse] Stream chunk discarded: auth identity changed during chunk arrival');
+            try { await reader.cancel(); } catch {}
+            return;
+          }
+
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split('\n');
           buffer = lines.pop() || '';
 
           for (const line of lines) {
+            if (!isIdentityValid()) {
+              try { await reader.cancel(); } catch {}
+              return;
+            }
             if (line.startsWith('event: ')) {
               currentEvent = line.slice(7).trim();
             } else if (line.startsWith('data: ')) {
@@ -185,6 +212,11 @@ export async function streamAIResponse(
               }
             }
           }
+        }
+
+        if (!isIdentityValid()) {
+          console.warn('[streamAIResponse] Stream completion suppressed: auth identity changed during stream');
+          return;
         }
 
         if (!accumulatedResponse.trim() && !emittedArtifact) {

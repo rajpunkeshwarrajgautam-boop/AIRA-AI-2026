@@ -50,6 +50,13 @@ if (process.env.NODE_ENV === 'production') {
 import { createPrincipalMiddleware } from './middleware/principal.js';
 import { createSessionAuthMiddleware, ensureAuthenticatedSession } from './auth/session-auth.js';
 import { createNeonAuthPrincipalMiddleware } from './auth/neon-auth-principal.js';
+import {
+  createBffSessionMiddleware,
+  handleBffSignUp,
+  handleBffSignIn,
+  handleBffSession,
+  handleBffSignOut
+} from './auth/bff-session.js';
 import { isTemporaryDatabaseError } from './utils/storage-errors.js';
 
 const app = express();
@@ -71,6 +78,26 @@ app.use(createSessionAuthMiddleware());
 // Staging opt-in: verified Neon Auth bearer identity overrides browser-local
 // guest sessions only after cryptographic signature verification.
 app.use(createNeonAuthPrincipalMiddleware());
+// First-party BFF gateway: resolves secure HttpOnly cookie sessions into verified ExecutionPrincipals
+app.use(createBffSessionMiddleware());
+
+// First-party BFF authentication routes
+app.post('/api/auth/sign-in', (req: Request, res: Response) => {
+  handleBffSignIn(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'BFF sign in failed' });
+  });
+});
+app.post('/api/auth/sign-up', (req: Request, res: Response) => {
+  handleBffSignUp(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'BFF sign up failed' });
+  });
+});
+app.get('/api/auth/session', handleBffSession);
+app.post('/api/auth/sign-out', (req: Request, res: Response) => {
+  handleBffSignOut(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'BFF sign out failed' });
+  });
+});
 
 // Public bootstrap endpoint used by the browser before protected API calls.
 // It issues or refreshes an opaque, signed, HttpOnly session cookie.

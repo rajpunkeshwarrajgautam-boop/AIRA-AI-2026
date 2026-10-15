@@ -100,6 +100,9 @@ jobs:
       - name: Identity transition lifecycle and session revocation regression
         run: npm run test:auth-lifecycle
 
+      - name: First-party BFF session security gateway certification
+        run: npm run test:auth-bff
+
       - name: Preview principal spoofing guard
         run: npm run test:preview-identity
 

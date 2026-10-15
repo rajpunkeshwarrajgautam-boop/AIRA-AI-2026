@@ -343,6 +343,171 @@ async function testProductionAuthUrlFailClosed() {
   console.log('  ✓ Unconfigured production Auth URL fails closed');
 }
 
+async function testSameAccountJwtRefreshDoesNotAbortLegitimateRequest() {
+  console.log('Testing: Real JWT refresh on same account must not abort legitimate request...');
+
+  const { neonAuth } = await import('../src/lib/neonAuth.js');
+  const originalFetchJwtToken = neonAuth.fetchJwtToken;
+  const originalFetch = globalThis.fetch;
+  localStorage.clear();
+
+  try {
+    const session: NeonSessionData = {
+      user: { id: 'usr_refresh_user', email: 'refresh@example.com', name: 'Refresh User' },
+      token: 'tok_refresh_session',
+      jwt: undefined, // Requires refresh
+      jwtExpiresAt: undefined
+    };
+    (neonAuth as any).saveSession(session);
+
+    (neonAuth as any).fetchJwtToken = async () => {
+      return { token: 'jwt_refreshed_valid', expiresAt: Date.now() + 600_000 };
+    };
+
+    let endpointReached = false;
+    (globalThis as any).fetch = async (url: any, init: any) => {
+      if (String(url) === '/api/user/profile') {
+        endpointReached = true;
+        assert.equal(init?.headers?.get('Authorization'), 'Bearer jwt_refreshed_valid');
+        return new Response(JSON.stringify({ status: 'ok' }), { status: 200 });
+      }
+      return new Response('Not found', { status: 404 });
+    };
+
+    const res = await authenticatedApiFetch('/api/user/profile', { method: 'GET' });
+    assert.equal(res.status, 200);
+    assert.equal(endpointReached, true, 'API endpoint must be reached after same-account JWT refresh');
+    console.log('  ✓ Real JWT refresh on same account succeeded without aborting dispatch');
+  } finally {
+    (neonAuth as any).fetchJwtToken = originalFetchJwtToken;
+    globalThis.fetch = originalFetch;
+  }
+}
+
+async function testDelayed401DoesNotClearActiveAccountB() {
+  console.log('Testing: Delayed 401 rejection from Account A must not wipe Account B or guest...');
+
+  const { neonAuth } = await import('../src/lib/neonAuth.js');
+  const originalFetchJwtToken = neonAuth.fetchJwtToken;
+  localStorage.clear();
+
+  try {
+    // 1. Account A logs in
+    const sessionA: NeonSessionData = {
+      user: { id: 'usr_A', email: 'a@example.com', name: 'User A' },
+      token: 'tok_A',
+      jwt: undefined,
+      jwtExpiresAt: undefined
+    };
+    (neonAuth as any).saveSession(sessionA);
+
+    // 2. Account A initiates refresh that gets deferred
+    const tokenDeferred = defer<{ token: string; expiresAt: number }>();
+    (neonAuth as any).fetchJwtToken = () => tokenDeferred.promise;
+
+    const refreshPromise = neonAuth.getValidJwt();
+
+    // 3. User switches to Account B
+    const sessionB: NeonSessionData = {
+      user: { id: 'usr_B', email: 'b@example.com', name: 'User B' },
+      token: 'tok_B',
+      jwt: 'jwt_B_valid',
+      jwtExpiresAt: Date.now() + 600_000
+    };
+    (neonAuth as any).saveSession(sessionB);
+    assert.equal(neonAuth.getCurrentUser()?.id, 'usr_B');
+
+    // 4. Account A's deferred refresh rejects with 401
+    tokenDeferred.reject(new Error('Failed to obtain JWT token (401): session revoked'));
+    await refreshPromise;
+
+    // 5. Account B must remain completely intact
+    assert.equal(neonAuth.getCurrentUser()?.id, 'usr_B', 'Account B must not be cleared by delayed 401 from Account A');
+    assert.equal(neonAuth.getCurrentSession()?.token, 'tok_B', 'Account B token must remain active');
+    console.log('  ✓ Delayed 401 from obsolete session safely discarded without wiping active session');
+  } finally {
+    (neonAuth as any).fetchJwtToken = originalFetchJwtToken;
+  }
+}
+
+async function testStreamCancellationAndChunkDiscardOnIdentitySwitch() {
+  console.log('Testing: SSE streaming request cancels and suppresses callbacks on identity transition...');
+
+  const { neonAuth } = await import('../src/lib/neonAuth.js');
+  const { streamAIResponse } = await import('../src/utils/aiEngine.js');
+  const originalFetch = globalThis.fetch;
+  localStorage.clear();
+
+  try {
+    const sessionA: NeonSessionData = {
+      user: { id: 'usr_stream_A', email: 'stream@example.com', name: 'Stream User A' },
+      token: 'tok_stream_A',
+      jwt: 'jwt_stream_A',
+      jwtExpiresAt: Date.now() + 600_000
+    };
+    (neonAuth as any).saveSession(sessionA);
+
+    const chunkDeferred1 = defer<string>();
+    const chunkDeferred2 = defer<string>();
+
+    const stream = new ReadableStream({
+      async start(controller) {
+        controller.enqueue(new TextEncoder().encode(`event: message\ndata: ${JSON.stringify({ text: 'Chunk 1 ' })}\n\n`));
+        await chunkDeferred1.promise;
+        controller.enqueue(new TextEncoder().encode(`event: message\ndata: ${JSON.stringify({ text: 'Chunk 2 ' })}\n\n`));
+        await chunkDeferred2.promise;
+        controller.enqueue(new TextEncoder().encode(`event: done\ndata: [DONE]\n\n`));
+        controller.close();
+      }
+    });
+
+    (globalThis as any).fetch = async (url: any) => {
+      if (String(url) === '/api/chat/stream') {
+        return new Response(stream, {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' }
+        });
+      }
+      return new Response('Not found', { status: 404 });
+    };
+
+    const chunks: string[] = [];
+    let completed = false;
+
+    const streamPromise = streamAIResponse(
+      'Test',
+      [],
+      'claude-3-7-sonnet',
+      { extendedThinking: false, persistentMemoryEnabled: false } as any,
+      undefined,
+      {
+        onContentChunk: (c) => chunks.push(c),
+        onComplete: () => { completed = true; },
+        onError: () => {}
+      }
+    );
+
+    // Allow chunk 1 to arrive
+    await new Promise(r => setTimeout(r, 20));
+    assert.deepEqual(chunks, ['Chunk 1 ']);
+
+    // User switches accounts or logs out mid-stream
+    (neonAuth as any).saveSession(null);
+
+    // Release downstream chunks
+    chunkDeferred1.resolve('go');
+    chunkDeferred2.resolve('go');
+
+    await streamPromise;
+
+    assert.equal(chunks.length, 1, 'Subsequent chunks after logout must be discarded');
+    assert.equal(completed, false, 'onComplete must not be invoked for an obsolete session');
+    console.log('  ✓ Stream safely aborted and obsolete chunks discarded on identity transition');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
 async function main() {
   console.log('\n=== AIRA AI 2026 — IDENTITY TRANSITION & REVOCATION SUITE ===\n');
 
@@ -353,8 +518,11 @@ async function main() {
     await testRemoteLogoutFailureResilience();
     await testSessionRestorationRejectionAfterRevocation();
     await testProductionAuthUrlFailClosed();
+    await testSameAccountJwtRefreshDoesNotAbortLegitimateRequest();
+    await testDelayed401DoesNotClearActiveAccountB();
+    await testStreamCancellationAndChunkDiscardOnIdentitySwitch();
 
-    console.log('\nALL IDENTITY TRANSITION & REVOCATION CHECKS PASSED!\n');
+    console.log('\nALL 9 IDENTITY TRANSITION & REVOCATION CHECKS PASSED!\n');
     process.exit(0);
   } catch (err) {
     console.error('\nFAILED IDENTITY TRANSITION CHECK:', err);
