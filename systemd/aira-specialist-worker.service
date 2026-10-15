@@ -1,0 +1,44 @@
+[Unit]
+Description=AIRA AI 2026 — Dedicated Specialist Worker Service
+Documentation=https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aira
+Group=aira
+WorkingDirectory=/opt/aira-worker
+EnvironmentFile=/etc/aira/specialist-worker.env
+ExecStart=/usr/bin/node /opt/aira-worker/node_modules/tsx/dist/cli.mjs apps/specialist-worker/src/index.ts
+Restart=always
+RestartSec=5s
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Security Hardening & Isolation
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+
+# Resource Constraints
+MemoryMax=1536M
+CPUQuota=150%
+LimitNOFILE=65536
+
+# Observability
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aira-specialist-worker
+
+[Install]
+WantedBy=multi-user.target

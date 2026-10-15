@@ -13,6 +13,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Request, Response, NextFunction } from 'express';
 import { verifyNeonAuthToken, ManagedPrincipal } from './neon-auth-principal.js';
+import { db } from '../../../../packages/db/src/index.js';
 
 export const BFF_COOKIE_NAME_PROD = '__Host-aira_auth_session';
 export const BFF_COOKIE_NAME_DEV = 'aira_auth_session';
@@ -31,6 +32,7 @@ export interface BffServerSession {
   createdAt: number;
   expiresAt: number;
   lastRotatedAt: number;
+  revokedAt?: number;
 }
 
 // Retained for backward-compatible test fixtures if needed
@@ -41,39 +43,153 @@ export class BffSessionStore {
 
   constructor() {
     // Periodic sweep for expired sessions every 10 minutes
-    const timer = setInterval(() => this.pruneExpired(), 10 * 60 * 1000);
+    const timer = setInterval(() => {
+      this.pruneExpired().catch(() => {});
+    }, 10 * 60 * 1000);
     if (timer.unref) timer.unref();
   }
 
   public get(sessionId: string): BffServerSession | null {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
-    if (Date.now() >= session.expiresAt) {
+    if (session.revokedAt || Date.now() >= session.expiresAt) {
       this.sessions.delete(sessionId);
       return null;
     }
     return session;
   }
 
+  public async getAsync(sessionId: string): Promise<BffServerSession | null> {
+    const cached = this.get(sessionId);
+    if (cached) return cached;
+
+    // Distributed fallback: query persistent PostgreSQL bff_sessions table
+    try {
+      const row = await db('bff_sessions')
+        .where({ id: sessionId })
+        .whereNull('revoked_at')
+        .first();
+
+      if (!row) {
+        this.sessions.delete(sessionId);
+        return null;
+      }
+
+      const expiresAt = Number(row.expires_at);
+      if (Date.now() >= expiresAt) {
+        this.sessions.delete(sessionId);
+        await db('bff_sessions').where({ id: sessionId }).delete().catch(() => {});
+        return null;
+      }
+
+      const session: BffServerSession = {
+        id: row.id,
+        userId: row.user_id,
+        email: row.email || undefined,
+        name: row.name || undefined,
+        sessionToken: row.session_token,
+        upstreamCookie: row.upstream_cookie || undefined,
+        jwt: row.jwt,
+        jwtExpiresAt: Number(row.jwt_expires_at),
+        csrfToken: row.csrf_token,
+        createdAt: Number(row.created_at),
+        expiresAt,
+        lastRotatedAt: Number(row.last_rotated_at),
+        revokedAt: row.revoked_at ? Number(row.revoked_at) : undefined
+      };
+
+      this.sessions.set(session.id, session);
+      return session;
+    } catch {
+      return this.sessions.get(sessionId) || null;
+    }
+  }
+
   public set(session: BffServerSession): void {
     this.sessions.set(session.id, session);
+    this.setAsync(session).catch(() => {});
+  }
+
+  public async setAsync(session: BffServerSession): Promise<void> {
+    this.sessions.set(session.id, session);
+    try {
+      await db('bff_sessions')
+        .insert({
+          id: session.id,
+          user_id: session.userId,
+          email: session.email || null,
+          name: session.name || null,
+          session_token: session.sessionToken,
+          upstream_cookie: session.upstreamCookie || null,
+          jwt: session.jwt,
+          jwt_expires_at: session.jwtExpiresAt,
+          csrf_token: session.csrfToken,
+          created_at: session.createdAt,
+          expires_at: session.expiresAt,
+          last_rotated_at: session.lastRotatedAt,
+          revoked_at: session.revokedAt || null
+        })
+        .onConflict('id')
+        .merge({
+          user_id: session.userId,
+          email: session.email || null,
+          name: session.name || null,
+          session_token: session.sessionToken,
+          upstream_cookie: session.upstreamCookie || null,
+          jwt: session.jwt,
+          jwt_expires_at: session.jwtExpiresAt,
+          csrf_token: session.csrfToken,
+          expires_at: session.expiresAt,
+          last_rotated_at: session.lastRotatedAt,
+          revoked_at: session.revokedAt || null
+        });
+    } catch {
+      // In standalone tests or unconfigured DB environments, in-memory store remains operational
+    }
   }
 
   public delete(sessionId: string): boolean {
-    return this.sessions.delete(sessionId);
+    const existed = this.sessions.delete(sessionId);
+    this.deleteAsync(sessionId).catch(() => {});
+    return existed;
+  }
+
+  public async deleteAsync(sessionId: string): Promise<boolean> {
+    this.sessions.delete(sessionId);
+    try {
+      const count = await db('bff_sessions')
+        .where({ id: sessionId })
+        .update({ revoked_at: Date.now() });
+      return count > 0;
+    } catch {
+      return false;
+    }
   }
 
   public clear(): void {
     this.sessions.clear();
   }
 
-  public pruneExpired(): void {
+  public async clearAsync(): Promise<void> {
+    this.sessions.clear();
+    try {
+      await db('bff_sessions').delete();
+    } catch {}
+  }
+
+  public async pruneExpired(): Promise<void> {
     const now = Date.now();
     for (const [id, session] of this.sessions.entries()) {
-      if (now >= session.expiresAt) {
+      if (session.revokedAt || now >= session.expiresAt) {
         this.sessions.delete(id);
       }
     }
+    try {
+      await db('bff_sessions')
+        .where('expires_at', '<=', now)
+        .orWhereNotNull('revoked_at')
+        .delete();
+    } catch {}
   }
 
   public size(): number {
@@ -174,6 +290,20 @@ export function readBffSessionFromCookie(req: Request): BffServerSession | null 
   if (!sessionId) return null;
 
   const session = bffSessionStore.get(sessionId);
+  if (!session) return null;
+
+  return session;
+}
+
+export async function readBffSessionFromCookieAsync(req: Request): Promise<BffServerSession | null> {
+  const cookies = parseCookies(req.headers.cookie);
+  const rawToken = cookies[BFF_COOKIE_NAME_PROD] || cookies[BFF_COOKIE_NAME_DEV];
+  if (!rawToken) return null;
+
+  const sessionId = parseSignedSessionId(rawToken);
+  if (!sessionId) return null;
+
+  const session = await bffSessionStore.getAsync(sessionId);
   if (!session) return null;
 
   return session;
@@ -376,7 +506,7 @@ export function createBffSessionMiddleware() {
       return next();
     }
 
-    const session = readBffSessionFromCookie(req);
+    const session = await readBffSessionFromCookieAsync(req);
     if (!session) {
       return next();
     }
@@ -391,7 +521,7 @@ export function createBffSessionMiddleware() {
           session.jwt = fresh.token;
           session.jwtExpiresAt = fresh.expiresAt;
           session.lastRotatedAt = Date.now();
-          bffSessionStore.set(session);
+          await bffSessionStore.setAsync(session);
           jwtToVerify = fresh.token;
         } catch {
           // If refresh fails, try verifying existing JWT before rejecting
@@ -404,7 +534,7 @@ export function createBffSessionMiddleware() {
       const expectedSubject = identity.userId.replace(/^neon_user_/, '');
       if (expectedSubject !== session.userId && identity.userId !== session.userId) {
         console.warn(`[BffSession] CRITICAL: JWT subject mismatch! JWT sub=${identity.userId}, Session userId=${session.userId}`);
-        bffSessionStore.delete(session.id);
+        await bffSessionStore.deleteAsync(session.id);
         clearBffSessionCookie(res);
         return next();
       }
@@ -421,7 +551,7 @@ export function createBffSessionMiddleware() {
       next();
     } catch (err: any) {
       console.warn('[BffSession] Invalid or expired BFF cookie session:', err?.message || err);
-      bffSessionStore.delete(session.id);
+      await bffSessionStore.deleteAsync(session.id);
       clearBffSessionCookie(res);
       next();
     }
@@ -487,7 +617,7 @@ export async function handleBffSignIn(req: Request, res: Response): Promise<void
     lastRotatedAt: now
   };
 
-  bffSessionStore.set(session);
+  await bffSessionStore.setAsync(session);
   setBffSessionCookie(res, sessionId);
 
   // Return ONLY public user profile and csrfToken to browser JavaScript (zero session tokens exposed!)
@@ -564,7 +694,7 @@ export async function handleBffSignUp(req: Request, res: Response): Promise<void
     lastRotatedAt: now
   };
 
-  bffSessionStore.set(session);
+  await bffSessionStore.setAsync(session);
   setBffSessionCookie(res, sessionId);
 
   res.status(200).json({
@@ -581,8 +711,8 @@ export async function handleBffSignUp(req: Request, res: Response): Promise<void
 /**
  * BFF Endpoint: GET /api/auth/session
  */
-export function handleBffSession(req: Request, res: Response): void {
-  const session = readBffSessionFromCookie(req);
+export async function handleBffSession(req: Request, res: Response): Promise<void> {
+  const session = await readBffSessionFromCookieAsync(req);
   res.setHeader('Cache-Control', 'no-store');
 
   if (!session) {
@@ -605,7 +735,7 @@ export function handleBffSession(req: Request, res: Response): void {
  * BFF Endpoint: POST /api/auth/sign-out
  */
 export async function handleBffSignOut(req: Request, res: Response): Promise<void> {
-  const session = readBffSessionFromCookie(req);
+  const session = await readBffSessionFromCookieAsync(req);
   if (!verifyCsrfAndOrigin(req, session)) {
     res.status(403).json({ error: 'CSRF validation failed: missing origin or anti-CSRF token' });
     return;
@@ -614,7 +744,7 @@ export async function handleBffSignOut(req: Request, res: Response): Promise<voi
   clearBffSessionCookie(res);
 
   if (session) {
-    bffSessionStore.delete(session.id);
+    await bffSessionStore.deleteAsync(session.id);
     try {
       const baseUrl = getAuthBaseUrl();
       const clientOrigin = (req.headers.origin as string) || (req.headers.referer as string) || 'http://localhost:5173';

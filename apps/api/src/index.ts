@@ -107,7 +107,11 @@ app.post('/api/auth/sign-up', (req: Request, res: Response) => {
     res.status(500).json({ error: err.message || 'BFF sign up failed' });
   });
 });
-app.get('/api/auth/session', handleBffSession);
+app.get('/api/auth/session', (req: Request, res: Response) => {
+  handleBffSession(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'BFF session retrieval failed' });
+  });
+});
 app.post('/api/auth/sign-out', (req: Request, res: Response) => {
   handleBffSignOut(req, res).catch((err) => {
     res.status(500).json({ error: err.message || 'BFF sign out failed' });

@@ -67,6 +67,7 @@
     "test:auth-fail-closed": "npx tsx test/auth-fail-closed-policy.test.ts",
     "test:auth-lifecycle": "npx tsx test/auth-identity-transition-lifecycle.test.ts",
     "test:auth-bff": "npx tsx test/auth-bff-session-gateway.test.ts",
+    "test:auth-distributed": "npx tsx test/auth-distributed-multi-instance.test.ts",
     "test:guest-linking": "npx tsx test/guest-linking-positive.test.ts",
     "test:secrets": "npx tsx test/tracked-secrets-hygiene.test.ts"
   },

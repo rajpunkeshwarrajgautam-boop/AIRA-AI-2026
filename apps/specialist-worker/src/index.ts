@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { ModelRouter } from '../../../packages/model-router/src/index.js';
 import { ToolRegistry,ToolGateway,PostgresToolCallRepository } from '../../../packages/tool-runtime/src/index.js';
 import { ApprovalKernel } from '../../../packages/approvals/src/index.js';
@@ -7,7 +8,7 @@ import { BrainV2KnowledgeEngine } from '../../../packages/knowledge/src/index.js
 import { PostgresRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
 import { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
 import { DurableSpecialistDispatcher } from '../../../packages/agent-runtime/src/specialist-dispatcher.js';
-import { closeDb } from '../../../packages/db/src/index.js';
+import { db, closeDb } from '../../../packages/db/src/index.js';
 
 if(process.env.AIRA_SPECIALIST_WORKER_PROCESS!=='true'||
    process.env.AIRA_SPECIALIST_WORKER_ENABLED!=='true' ||
@@ -36,19 +37,106 @@ const dispatcher=new DurableSpecialistDispatcher(runtime,{
   leaseMs:30000,
   heartbeatMs:5000,
   onLeaseLost:(error)=>{
-    console.error('FATAL_SPECIALIST_LEASE_LOSS',error.message);
+    console.error(JSON.stringify({
+      level:'error',
+      event:'FATAL_SPECIALIST_LEASE_LOSS',
+      workerId:dispatcher.id,
+      error:error.message,
+      timestamp:new Date().toISOString()
+    }));
     // The safe response to losing a lease is to kill this process rather than
     // allow a stale model/tool computation to continue in the old worker.
     process.exit(71);
   }
 });
-process.once('SIGTERM',()=>{exitSignal.abort();dispatcher.stop()});
-process.once('SIGINT',()=>{exitSignal.abort();dispatcher.stop()});
+
+// Production Liveness & Readiness HTTP Probe Server
+const healthPort=parseInt(process.env.PORT||process.env.HEALTH_PORT||'8080',10);
+const healthServer=createServer(async(req:IncomingMessage,res:ServerResponse)=>{
+  if(req.method==='GET'&&(req.url==='/health'||req.url==='/live'||req.url==='/')){
+    res.writeHead(200,{'Content-Type':'application/json'});
+    res.end(JSON.stringify({
+      status:'HEALTHY',
+      kind:'specialist-worker',
+      workerId:dispatcher.id,
+      uptime:process.uptime(),
+      timestamp:new Date().toISOString()
+    }));
+    return;
+  }
+  if(req.method==='GET'&&req.url==='/ready'){
+    try{
+      await db.raw('SELECT 1');
+      res.writeHead(200,{'Content-Type':'application/json'});
+      res.end(JSON.stringify({
+        status:'READY',
+        kind:'specialist-worker',
+        workerId:dispatcher.id,
+        leaseMs:30000,
+        heartbeatMs:5000,
+        database:'CONNECTED',
+        timestamp:new Date().toISOString()
+      }));
+    }catch(err:any){
+      res.writeHead(503,{'Content-Type':'application/json'});
+      res.end(JSON.stringify({
+        status:'NOT_READY',
+        error:'DATABASE_UNREACHABLE',
+        message:err?.message||'Database health check failed'
+      }));
+    }
+    return;
+  }
+  res.writeHead(404,{'Content-Type':'application/json'});
+  res.end(JSON.stringify({error:'NOT_FOUND'}));
+});
+
+healthServer.listen(healthPort,'0.0.0.0',()=>{
+  console.log(JSON.stringify({
+    level:'info',
+    event:'HEALTH_PROBE_SERVER_LISTENING',
+    port:healthPort,
+    workerId:dispatcher.id,
+    timestamp:new Date().toISOString()
+  }));
+});
+
+function handleShutdown(signal:string){
+  console.log(JSON.stringify({
+    level:'info',
+    event:'SHUTDOWN_SIGNAL_RECEIVED',
+    signal,
+    workerId:dispatcher.id,
+    timestamp:new Date().toISOString()
+  }));
+  exitSignal.abort();
+  dispatcher.stop();
+  healthServer.close();
+}
+
+process.once('SIGTERM',()=>handleShutdown('SIGTERM'));
+process.once('SIGINT',()=>handleShutdown('SIGINT'));
+
 try{
-  console.log(JSON.stringify({status:'STARTED',kind:'specialist-worker',
-    workerId:dispatcher.id,executeMode:'server-policy-read-only'}));
+  console.log(JSON.stringify({
+    level:'info',
+    status:'STARTED',
+    kind:'specialist-worker',
+    workerId:dispatcher.id,
+    executeMode:'server-policy-read-only',
+    healthPort,
+    timestamp:new Date().toISOString()
+  }));
   await dispatcher.run(exitSignal.signal,1000);
 }finally{
+  healthServer.close();
   await gateway.shutdown();
   await closeDb();
+  console.log(JSON.stringify({
+    level:'info',
+    event:'WORKER_SHUTDOWN_CLEAN',
+    workerId:dispatcher.id,
+    timestamp:new Date().toISOString()
+  }));
 }
+
