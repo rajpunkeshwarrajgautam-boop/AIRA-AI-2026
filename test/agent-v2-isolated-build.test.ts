@@ -132,4 +132,23 @@ const denied=await gateway.execute({toolName:'file_system_write',
 assert.equal(denied.isError,true);
 assert.match(String(denied.error),/APPROVAL_KERNEL_REQUIRED/);
 await gateway.shutdown();
+// A shared cache key cannot return another run or principal's stored output.
+const crossUserCache = new ToolGateway({
+  getToolCallByIdempotencyKey: async () => ({
+    id: 'cached_foreign', runId: 'foreign_run', principalId: 'foreign_owner',
+    toolId: 'tool_repo_status', toolName: 'repo_git_status',
+    adapter: 'repo', sideEffectLevel: 'READ', permissionScopes: ['repo.read'],
+    lifecycleState: 'COMPLETED', arguments: {}, output: {secret:'never-return'},
+    startedAt: Date.now()
+  })
+} as any);
+const collision = await crossUserCache.execute({
+  toolName:'repo_git_status',arguments:{},
+  context:{runId:run,idempotencyKey:'same-cache-key',
+    principal:{userId:owner,sessionId:'owner_sess',role:'user',scopes:['repo.read']}}
+});
+assert.equal(collision.isError,true);
+assert.match(String(collision.error),/IDEMPOTENCY_COLLISION/);
+assert.equal(collision.output,null);
+await crossUserCache.shutdown();
 console.log('PASS: strict isolated worker transport, durable job reconciliation, source readback, owner-scoped exact approval');
