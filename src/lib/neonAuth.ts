@@ -48,6 +48,11 @@ export class NeonAuthClient {
     token: string;
   } | null = null;
   private syncChannel: BroadcastChannel | null = null;
+  private inFlightRequests: Set<{
+    controller: AbortController;
+    epoch: number;
+    userId: string;
+  }> = new Set();
 
   constructor() {
     const isProd = typeof import.meta !== 'undefined' && Boolean((import.meta as any).env?.PROD);
@@ -67,6 +72,7 @@ export class NeonAuthClient {
         if (event.key === STORAGE_KEYS.SESSION) {
           this.authEpoch++;
           this.activeRefresh = null;
+          this.abortActiveRequests('Cross-tab session change detected');
           this.currentSession = this.loadStoredSession();
           this.notifyListeners();
         }
@@ -79,6 +85,7 @@ export class NeonAuthClient {
             if (event.data?.type === 'AUTH_SYNC') {
               this.authEpoch++;
               this.activeRefresh = null;
+              this.abortActiveRequests('Cross-tab session change detected');
               this.currentSession = this.loadStoredSession();
               this.notifyListeners();
             }
@@ -102,6 +109,36 @@ export class NeonAuthClient {
     return this.authEpoch;
   }
 
+  /**
+   * Register an in-flight API request AbortController bound to an immutable identity epoch.
+   * Returns a cleanup callback to unregister once the request terminates.
+   */
+  public registerInFlightRequest(
+    controller: AbortController,
+    epoch: number,
+    userId: string
+  ): () => void {
+    const entry = { controller, epoch, userId };
+    this.inFlightRequests.add(entry);
+    return () => {
+      this.inFlightRequests.delete(entry);
+    };
+  }
+
+  /**
+   * Abort all currently in-flight requests bound to obsolete or transitioning auth epochs.
+   */
+  public abortActiveRequests(reason = 'Authentication state transitioned'): void {
+    for (const item of this.inFlightRequests) {
+      try {
+        item.controller.abort(new Error(reason));
+      } catch {
+        // Safe catch for already aborted controllers
+      }
+    }
+    this.inFlightRequests.clear();
+  }
+
   private loadStoredSession(): NeonSessionData | null {
     if (typeof window === 'undefined') return null;
     try {
@@ -120,6 +157,7 @@ export class NeonAuthClient {
   private saveSession(session: NeonSessionData | null): void {
     this.authEpoch++;
     this.activeRefresh = null;
+    this.abortActiveRequests('Session transitioned or invalidated');
     this.currentSession = session;
     if (typeof window === 'undefined') return;
     try {
@@ -294,8 +332,14 @@ export class NeonAuthClient {
         this.currentSession.jwtExpiresAt = newExp;
         this.saveSession({ ...this.currentSession });
         return token;
-      } catch (err) {
+      } catch (err: any) {
         console.warn('Failed to refresh Neon Auth JWT:', err);
+        // If the authentication service rejected the session token with 401, purge the invalid local session
+        if (err?.message && /401|revoked|invalid/i.test(err.message)) {
+          console.warn('[NeonAuth] Session token invalid or revoked on server; purging local session');
+          this.saveSession(null);
+          return null;
+        }
         // Fail-closed fallback: return existing token ONLY if identity still matches and token is unexpired
         if (
           this.authEpoch === currentEpoch &&
@@ -448,13 +492,19 @@ export class NeonAuthClient {
 
   /**
    * Sign out the active session locally and remotely.
+   * Purges local state, increments authEpoch, aborts in-flight requests,
+   * and requests server-side session invalidation on the Neon Auth provider.
    */
-  public async signOut(): Promise<void> {
+  public async signOut(): Promise<{ remoteSuccess: boolean; error?: string }> {
     const sessionToken = this.currentSession?.token;
     const cookie = this.currentSession?.cookie;
     const origin = (typeof window !== 'undefined' && window.location?.origin) || 'http://localhost:5173';
 
+    // Clear local state first to immediately isolate the browser
     this.saveSession(null);
+
+    let remoteSuccess = true;
+    let remoteError: string | undefined;
 
     if (sessionToken || cookie) {
       try {
@@ -467,16 +517,32 @@ export class NeonAuthClient {
         }
         if (sessionToken) headers['Authorization'] = `Bearer ${sessionToken}`;
 
-        await fetch(`${this.baseUrl}/sign-out`, {
+        const res = await fetch(`${this.baseUrl}/sign-out`, {
           method: 'POST',
           headers,
           credentials: 'include',
           body: JSON.stringify({})
         });
-      } catch (err) {
+        if (!res.ok) {
+          remoteSuccess = false;
+          remoteError = `Remote signout HTTP ${res.status}`;
+          console.warn(`[NeonAuth] Remote signout HTTP ${res.status}`);
+        }
+      } catch (err: any) {
+        remoteSuccess = false;
+        remoteError = err?.message || 'Remote signout network failure';
         console.warn('Neon Auth remote signout notice:', err);
       }
     }
+
+    return { remoteSuccess, error: remoteError };
+  }
+
+  /**
+   * Explicitly revoke the session both remotely on the Neon Auth provider and locally.
+   */
+  public async revokeSession(): Promise<{ remoteSuccess: boolean; error?: string }> {
+    return this.signOut();
   }
 
   /**
@@ -642,16 +708,25 @@ export async function ensureGuestSession(force = false): Promise<void> {
 
 /**
  * Universal authenticated API fetch helper.
- * Fail-closed policy:
- * - When user is authenticated: REQUIRES a valid unexpired JWT. If JWT cannot be retrieved or server returns 401,
- *   throws AuthenticationRequiredError. NEVER silently falls back to anonymous guest cookie session!
- * - When in guest mode: bootstraps signed guest session cookie with same-origin credentials.
+ * Fail-closed policy with identity-bound request lifecycle:
+ * - Captures immutable user ID, session identity, and auth epoch.
+ * - Revalidates immediately after JWT retrieval; aborts dispatch if identity transitioned.
+ * - Manages in-flight AbortControllers tied to the initiating auth epoch.
+ * - Revalidates identity upon network response resolution; discards responses from obsolete sessions.
+ * - Guards against guest bootstrap completing after account login.
+ * - When in account mode: REQUIRES a valid unexpired JWT. If JWT cannot be retrieved, or server returns 401,
+ *   or identity transitions, throws AuthenticationRequiredError. NEVER silently falls back to anonymous guest cookie!
  */
 export async function authenticatedApiFetch(
   input: RequestInfo | URL,
   init: RequestInit = {},
   options?: { signal?: AbortSignal; timeoutMs?: number }
 ): Promise<Response> {
+  const initiatingEpoch = neonAuth.getAuthEpoch();
+  const initiatingUser = neonAuth.getCurrentUser();
+  const initiatingUserId = initiatingUser?.id || '';
+  const initiatingSession = neonAuth.getCurrentSession();
+  const initiatingSessionToken = initiatingSession?.token || '';
   const isAccountUser = neonAuth.isAuthenticated();
 
   if (isAccountUser) {
@@ -665,6 +740,18 @@ export async function authenticatedApiFetch(
       );
     }
 
+    // Pre-dispatch revalidation: verify that authentication state, epoch, and user ID did NOT change during JWT retrieval
+    if (
+      neonAuth.getAuthEpoch() !== initiatingEpoch ||
+      !neonAuth.isAuthenticated() ||
+      neonAuth.getCurrentUser()?.id !== initiatingUserId ||
+      neonAuth.getCurrentSession()?.token !== initiatingSessionToken
+    ) {
+      throw new AuthenticationRequiredError(
+        'Authentication identity transitioned during token resolution; dispatch aborted to prevent cross-account contamination.'
+      );
+    }
+
     if (!jwt) {
       throw new AuthenticationRequiredError(
         'Account session expired or token is invalid. Please sign in again.'
@@ -674,12 +761,63 @@ export async function authenticatedApiFetch(
     const headers = new Headers(init.headers || {});
     headers.set('Authorization', `Bearer ${jwt}`);
 
-    const res = await fetch(input, {
-      ...init,
-      headers,
-      credentials: init.credentials || 'same-origin',
-      signal: options?.signal || init.signal
-    });
+    // Manage in-flight abort controller bound to initiating identity
+    const internalAbortController = new AbortController();
+    const cleanupInFlight = neonAuth.registerInFlightRequest(
+      internalAbortController,
+      initiatingEpoch,
+      initiatingUserId
+    );
+
+    let effectiveSignal: AbortSignal = internalAbortController.signal;
+    const callerSignal = options?.signal || init.signal;
+    if (callerSignal) {
+      if (typeof (AbortSignal as any).any === 'function') {
+        effectiveSignal = (AbortSignal as any).any([callerSignal, internalAbortController.signal]);
+      } else {
+        callerSignal.addEventListener(
+          'abort',
+          () => internalAbortController.abort((callerSignal as any).reason),
+          { once: true }
+        );
+      }
+    }
+
+    let res: Response;
+    try {
+      res = await fetch(input, {
+        ...init,
+        headers,
+        credentials: init.credentials || 'same-origin',
+        signal: effectiveSignal
+      });
+    } catch (err: any) {
+      cleanupInFlight();
+      if (
+        neonAuth.getAuthEpoch() !== initiatingEpoch ||
+        neonAuth.getCurrentUser()?.id !== initiatingUserId
+      ) {
+        throw new AuthenticationRequiredError(
+          'Authentication identity transitioned while request was in-flight; operation aborted.'
+        );
+      }
+      throw err;
+    }
+
+    cleanupInFlight();
+
+    // Post-response revalidation: verify identity has NOT transitioned while waiting for network response
+    if (
+      neonAuth.getAuthEpoch() !== initiatingEpoch ||
+      !neonAuth.isAuthenticated() ||
+      neonAuth.getCurrentUser()?.id !== initiatingUserId ||
+      neonAuth.getCurrentSession()?.token !== initiatingSessionToken
+    ) {
+      console.warn('[authenticatedApiFetch] In-flight response discarded: authentication transitioned before response arrival');
+      throw new AuthenticationRequiredError(
+        'Authentication identity transitioned while request was in-flight; response discarded to prevent cross-account contamination.'
+      );
+    }
 
     if (res.status === 401) {
       console.warn('[authenticatedApiFetch] Server rejected authentication credentials (401)');
@@ -692,7 +830,17 @@ export async function authenticatedApiFetch(
   }
 
   // Legitimate Guest User path
+  // If user signed in while we entered guest branch, re-check immediately
+  if (neonAuth.isAuthenticated()) {
+    return authenticatedApiFetch(input, init, options);
+  }
+
   await ensureGuestSession();
+
+  // Guard against user signing in during guest session bootstrap
+  if (neonAuth.isAuthenticated()) {
+    return authenticatedApiFetch(input, init, options);
+  }
 
   const headers = new Headers(init.headers || {});
   let res = await fetch(input, {
@@ -702,15 +850,30 @@ export async function authenticatedApiFetch(
     signal: options?.signal || init.signal
   });
 
+  // Check again after response: if user signed in while guest fetch was in-flight, discard response
+  if (neonAuth.isAuthenticated()) {
+    throw new AuthenticationRequiredError(
+      'Account authentication established while guest operation was in-flight; guest response discarded.'
+    );
+  }
+
   if (res.status === 401) {
     // Retry once for legitimate guest session renewal
     await ensureGuestSession(true);
+    if (neonAuth.isAuthenticated()) {
+      return authenticatedApiFetch(input, init, options);
+    }
     res = await fetch(input, {
       ...init,
       headers,
       credentials: init.credentials || 'same-origin',
       signal: options?.signal || init.signal
     });
+    if (neonAuth.isAuthenticated()) {
+      throw new AuthenticationRequiredError(
+        'Account authentication established while guest operation was in-flight; guest response discarded.'
+      );
+    }
   }
 
   return res;

@@ -97,6 +97,9 @@ jobs:
       - name: Authenticated fail-closed request policy regression
         run: npm run test:auth-fail-closed
 
+      - name: Identity transition lifecycle and session revocation regression
+        run: npm run test:auth-lifecycle
+
       - name: Preview principal spoofing guard
         run: npm run test:preview-identity
 
