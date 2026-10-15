@@ -92,6 +92,12 @@ export class ApprovalKernel {
     if (!resolvedBy || typeof resolvedBy !== 'string') {
       throw new Error('APPROVAL_RESOLVED_BY_REQUIRED');
     }
+    // Isolated builds must never produce blanket grants: generated source
+    // changes on every task, so only approval of this exact call is valid.
+    if (request.toolCall.name === 'isolated_application_build' &&
+        decision !== 'ALLOW_ONCE' && decision !== 'REJECT') {
+      throw new Error('ISOLATED_BUILD_REQUIRES_APPROVE_ONCE');
+    }
 
     request.decision = decision;
     request.resolvedAt = Date.now();
