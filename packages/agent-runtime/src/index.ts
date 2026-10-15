@@ -371,6 +371,10 @@ export class AgentRuntime extends EventEmitter {
       };
       await this.workflowEngine.cancelWorkflow(wfRun.id, principal);
     }
+    if(process.env.AIRA_SPECIALIST_DELEGATION_ENABLED === 'true'){
+      // Bounded DB cascade before closing parent prevents orphaned descendants.
+      await new DurableDelegations().cancelTree(run.principalId,runId);
+    }
     await this.transitionRunState(runId, 'CANCELLED', 'Run was cancelled programmatically.');
     return true;
   }
