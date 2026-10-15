@@ -88,3 +88,41 @@ Aira Bot or hosted build-worker integration has passed.
 6. Obtain a fresh owner GO LIVE authorization for the **exact candidate SHA**.
 7. Only after all mandatory security, CI and live acceptance gates can
    the protected `prod-release` branch be considered for merge.
+
+## Phase 2 (15 October 2026): isolated Docker build integration bridge
+
+This phase is **draft PR #70**, stacked on draft PR #69. It provides an actual
+authenticated HTTP client compatible with the experimental Docker worker
+protocol already developed under draft PRs #42–45. It does not copy the
+container engine onto the API host and does not claim the worker is deployed.
+
+**Default OFF**. The optional bridge requires:
+
+- `AIRA_ISOLATED_BUILD_ENABLED=true` on an isolated review/staging environment
+- `AIRA_BUILD_WORKER_URL` (HTTPS outside local development)
+- `AIRA_BUILD_WORKER_TOKEN` (at least 32 secret characters; server-side only)
+- Principal scope `builder.execute` and an approved request tied to **exact**
+  run ID, call ID, owner, tool name and arguments
+- A separately deployed worker with authenticated control endpoint from PRs
+  #42–45; rootless Docker and other live hardening still require certification
+
+`isolated_application_build` accepts a bounded explicit source-file array and
+the fixed `syntax → build → test` sequence. It uses a stable owner-keyed worker
+job identity, queries existing jobs before posting, and reconciles unknown
+submission outcomes without blind duplicate POST. It checks the worker's actual
+recorded command exit codes, obtains the authenticated source archive and
+compares every source SHA-256 against both the manifest and the requested text.
+Only then may it return `BUILD_VERIFIED`.
+
+**Limitations:** build-step completion is not equivalent to independent UI
+functional acceptance. No arbitrary shell from natural-language requests is
+exposed. The run-side approval precheck and ToolGateway enforce a fail-closed
+owner-bound exact-call decision for isolated writes; regular file/browser write
+policies remain subject to additional audit. Long builds that exceed bounded
+polling report `ISOLATED_BUILD_PENDING` rather than success; a separately
+deployed durable dispatcher must handle continuous progress and cancellation
+before production enablement.
+
+Current CI runs exercise actual local HTTP request/response, transport ownership,
+source gzip readback and tamper detection using a test server; **these tests do
+not claim live Docker container or independent game/application acceptance**.
