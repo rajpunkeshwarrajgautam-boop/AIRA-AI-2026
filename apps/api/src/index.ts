@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import { z } from 'zod';
 import { DurableBrowserSessions } from '../../../packages/agent-runtime/src/browser-sessions.js';
 import { DurableDelegations } from '../../../packages/agent-runtime/src/specialist-delegation.js';
+import { BrowserWorkerClient } from '../../../packages/agent-runtime/src/browser-worker-transport.js';
 import { ModelRouter } from '../../../packages/model-router/src/index.js';
 import { ToolRegistry, ToolGateway, PostgresToolCallRepository } from '../../../packages/tool-runtime/src/index.js';
 import { ApprovalKernel } from '../../../packages/approvals/src/index.js';
@@ -455,6 +456,33 @@ app.get('/api/browser-sessions/:sessionId', phase3IdentityGate, async (req: Requ
   if(!value)return res.status(404).json({error:'BROWSER_SESSION_NOT_FOUND'});
   res.setHeader('Cache-Control','no-store');
   res.json(value);
+});
+// These endpoints reach the actual isolated browser worker; they never
+// claim a browser action succeeded without that worker's direct readback.
+const browserReadRequest=z.object({
+  operation:z.enum(['navigate','inspect','screenshotDigest']),
+  url:z.string().url().max(2048).optional()
+}).strict();
+app.post('/api/browser-sessions/:sessionId/observe',phase3IdentityGate,async(req:Request,res:Response)=>{
+  if(process.env.AIRA_DURABLE_BROWSER_ENABLED!=='true')
+    return res.status(503).json({error:'PERSISTENT_BROWSER_NOT_ENABLED'});
+  if(!(req.principal!.scopes||[]).includes('browser.read'))
+    return res.status(403).json({error:'BROWSER_SCOPE_REQUIRED'});
+  try{
+    const payload=browserReadRequest.parse(req.body);
+    if(payload.operation==='navigate'&&!payload.url)
+      return res.status(400).json({error:'BROWSER_URL_REQUIRED'});
+    const session=await browserSessions.read(req.principal!.userId,req.params.sessionId);
+    if(!session)return res.status(404).json({error:'BROWSER_SESSION_NOT_FOUND'});
+    const client=new BrowserWorkerClient();
+    const observation=await client.observe(
+      req.principal!.userId,req.params.sessionId,payload.operation,payload.url
+    );
+    res.setHeader('Cache-Control','no-store');
+    return res.json({status:'OBSERVED_FROM_WORKER',evidence:observation});
+  }catch(err:any){
+    return res.status(503).json({error:err?.message||'BROWSER_WORKER_UNAVAILABLE'});
+  }
 });
 app.post('/api/browser-sessions/:sessionId/takeover', phase3IdentityGate, async(req:Request,res:Response)=>{
   if(process.env.AIRA_DURABLE_BROWSER_ENABLED!=='true')
