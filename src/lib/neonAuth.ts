@@ -1,9 +1,13 @@
 /**
- * AIRA AI 2026 — Neon Managed Better Auth Client
+ * AIRA AI 2026 — Neon Managed Better Auth Client (First-Party BFF Mode)
  * 
- * Production-ready client integration with Neon's Managed Better Auth service.
- * Supports signup, login, logout, password recovery, session restore,
- * and automatic EdDSA JWT token fetching for backend ExecutionPrincipal binding.
+ * Production-ready first-party client integration with Backend-for-Frontend session gateway:
+ * - Issues and validates HttpOnly, Secure, SameSite=Lax first-party session cookies.
+ * - Eradicates browser localStorage bearer credentials (zero tokens or JWTs stored in browser JS).
+ * - Routes sign-in, sign-up, session restoration, and logout through same-origin /api/auth/* endpoints.
+ * - Protects against CSRF with strict Origin checks and session-bound CSRF tokens on mutations.
+ * - Provides fail-closed authenticatedApiFetch with identity-bound in-flight cancellation and SSE stream safety.
+ * - Maintains guest session support and verified guest-to-account linking.
  */
 
 export interface NeonUser {
@@ -19,10 +23,11 @@ export interface NeonUser {
 
 export interface NeonSessionData {
   user: NeonUser;
-  token: string; // Better Auth session token
+  token: string; // Opaque session identifier / BFF marker
   cookie?: string; // Session cookie for server / test environments
-  jwt?: string; // EdDSA signed JWT
+  jwt?: string; // EdDSA signed JWT (server / test environments only)
   jwtExpiresAt?: number;
+  csrfToken?: string;
 }
 
 export interface AuthStateListener {
@@ -39,6 +44,7 @@ const DEFAULT_AUTH_URL = 'https://ep-empty-field-b36mqqq6.neonauth.c-4.ap-southe
 export class NeonAuthClient {
   private baseUrl: string;
   private currentSession: NeonSessionData | null = null;
+  private csrfToken: string | null = null;
   private listeners: Set<AuthStateListener> = new Set();
   private authEpoch: number = 0;
   private activeRefresh: {
@@ -63,6 +69,19 @@ export class NeonAuthClient {
       this.baseUrl = '';
     } else {
       this.baseUrl = configuredUrl || DEFAULT_AUTH_URL;
+    }
+
+    // Legacy migration: purge unencrypted session tokens or raw JWTs from previous localStorage implementations
+    if (typeof window !== 'undefined' && window.localStorage) {
+      try {
+        const raw = window.localStorage.getItem(STORAGE_KEYS.SESSION);
+        if (raw && (raw.includes('jwt') || raw.includes('eyJ') || raw.includes('neon_sess_tok'))) {
+          window.localStorage.removeItem(STORAGE_KEYS.SESSION);
+          window.localStorage.removeItem('aira_neon_auth_session');
+        }
+      } catch {
+        // Storage access handled gracefully
+      }
     }
 
     this.currentSession = this.loadStoredSession();
@@ -112,7 +131,20 @@ export class NeonAuthClient {
           // BroadcastChannel unavailable
         }
       }
+
+      // Proactively restore session from first-party HttpOnly cookie on initialization
+      this.restoreSession().catch((err) => {
+        console.warn('[NeonAuth] Background session restore notice:', err);
+      });
     }
+  }
+
+  public getApiBase(): string {
+    if (typeof window !== 'undefined' && window.location?.origin) {
+      return window.location.origin;
+    }
+    const proc = (globalThis as unknown as { process?: { env?: Record<string, string | undefined> } }).process;
+    return proc?.env?.AIRA_API_URL || proc?.env?.VITE_API_URL || 'http://localhost:3001';
   }
 
   public getBaseUrl(): string {
@@ -125,6 +157,14 @@ export class NeonAuthClient {
 
   public getAuthEpoch(): number {
     return this.authEpoch;
+  }
+
+  public getCsrfToken(): string | null {
+    return this.csrfToken;
+  }
+
+  public setCsrfToken(token: string | null): void {
+    this.csrfToken = token;
   }
 
   /**
@@ -163,8 +203,13 @@ export class NeonAuthClient {
       const raw = localStorage.getItem(STORAGE_KEYS.SESSION);
       if (!raw) return null;
       const parsed = JSON.parse(raw);
-      if (parsed && parsed.user && parsed.token) {
-        return parsed as NeonSessionData;
+      if (parsed && parsed.user) {
+        return {
+          user: parsed.user,
+          token: parsed.token || 'bff_session',
+          jwt: parsed.jwt,
+          jwtExpiresAt: parsed.jwtExpiresAt
+        };
       }
     } catch {
       // Ignore corrupted cache
@@ -172,33 +217,69 @@ export class NeonAuthClient {
     return null;
   }
 
-  private saveSession(session: NeonSessionData | null): void {
+  public saveSession(session: NeonSessionData | null): void {
     const isSameIdentity =
       session !== null &&
       this.currentSession !== null &&
       this.currentSession.user?.id === session.user?.id &&
       this.currentSession.token === session.token;
 
-    if (!isSameIdentity) {
-      // True session transition: login, logout, account switch, or replaced session
-      this.authEpoch++;
-      this.activeRefresh = null;
-      this.abortActiveRequests('Session transitioned or invalidated');
+    if (isSameIdentity) {
+      // Same-identity renewal: update memory state in place
+      this.currentSession = session;
+      if (session?.csrfToken) {
+        this.csrfToken = session.csrfToken;
+      }
+      this.persistSession(session);
+      return;
     }
 
+    // True session transition: login, logout, account switch, or replaced session
+    this.authEpoch++;
+    this.activeRefresh = null;
     this.currentSession = session;
+    if (session?.csrfToken) {
+      this.csrfToken = session.csrfToken;
+    } else if (!session) {
+      this.csrfToken = null;
+    }
+    this.abortActiveRequests('Session transitioned or invalidated');
+    this.persistSession(session);
+    this.notifyListeners();
+
+    if (this.syncChannel) {
+      try {
+        this.syncChannel.postMessage({
+          type: 'AUTH_SYNC',
+          userId: session?.user?.id || null,
+          epoch: this.authEpoch
+        });
+      } catch {
+        // BroadcastChannel failure tolerated
+      }
+    }
+  }
+
+  private persistSession(session: NeonSessionData | null): void {
     if (typeof window === 'undefined') return;
     try {
       if (session) {
-        localStorage.setItem(STORAGE_KEYS.SESSION, JSON.stringify(session));
+        // In BFF mode: persist user profile metadata for instant display hydration,
+        // NEVER storing sensitive bearer credentials or raw JWTs in localStorage!
+        const safeCache = {
+          user: session.user,
+          token: session.jwt ? session.token : 'bff_session',
+          // Only preserve JWT if explicitly provided in test/node fixtures
+          ...(session.jwt ? { jwt: session.jwt, jwtExpiresAt: session.jwtExpiresAt } : {})
+        };
+        localStorage.setItem(STORAGE_KEYS.SESSION, JSON.stringify(safeCache));
       } else {
         localStorage.removeItem(STORAGE_KEYS.SESSION);
+        localStorage.removeItem('aira_neon_auth_session');
       }
-      this.syncChannel?.postMessage({ type: 'AUTH_SYNC' });
     } catch {
       // LocalStorage access failure
     }
-    this.notifyListeners();
   }
 
   private notifyListeners(): void {
@@ -214,7 +295,6 @@ export class NeonAuthClient {
 
   public onAuthStateChange(listener: AuthStateListener): () => void {
     this.listeners.add(listener);
-    // Call immediately with current state
     listener(this.getCurrentUser(), this.currentSession);
     return () => {
       this.listeners.delete(listener);
@@ -234,7 +314,7 @@ export class NeonAuthClient {
   }
 
   /**
-   * Fetch an EdDSA signed JWT token for the current session via /token.
+   * Fetch an EdDSA signed JWT token for server / test environments via /token.
    */
   public async fetchJwtToken(sessionToken?: string, sessionCookie?: string): Promise<{ token: string; expiresAt: number }> {
     if (!this.baseUrl) {
@@ -250,8 +330,6 @@ export class NeonAuthClient {
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
-    // In browser, credentials: 'include' automatically sends session cookies.
-    // Setting Cookie or Origin manually in browser JavaScript is forbidden by the Fetch standard.
     if (typeof window === 'undefined') {
       if (cookie) {
         headers['Cookie'] = cookie;
@@ -275,8 +353,7 @@ export class NeonAuthClient {
       throw new Error('Malformed JWT response from Neon Auth service');
     }
 
-    // Parse expiration from unverified claims segment for proactive refresh scheduling
-    let exp = Date.now() + 10 * 60 * 1000; // 10 min default
+    let exp = Date.now() + 10 * 60 * 1000;
     try {
       const parts = data.token.split('.');
       if (parts.length === 3) {
@@ -288,16 +365,15 @@ export class NeonAuthClient {
         }
       }
     } catch {
-      // Fallback to default
+      // Default 10m
     }
 
     return { token: data.token, expiresAt: exp };
   }
 
   /**
-   * Obtain a verified, unexpired JWT for authenticating API requests.
-   * Proactively refreshes if within 60 seconds of expiration.
-   * Implements fail-closed concurrency control bound to immutable session identity and authEpoch.
+   * Obtain a valid JWT for environments where Bearer headers are needed.
+   * In browser BFF mode, HttpOnly cookies authenticate requests automatically.
    */
   public async getValidJwt(): Promise<string | null> {
     if (!this.baseUrl) {
@@ -308,10 +384,14 @@ export class NeonAuthClient {
       return null;
     }
 
+    // In pure browser BFF mode without direct Neon tokens, cookie handles authentication
+    if (this.currentSession.token === 'bff_session' && !this.currentSession.jwt) {
+      return null;
+    }
+
     const now = Date.now();
     const expiresAt = this.currentSession.jwtExpiresAt || 0;
 
-    // If we have a valid JWT with more than 60s life, reuse it
     if (this.currentSession.jwt && expiresAt - now > 60_000) {
       return this.currentSession.jwt;
     }
@@ -321,7 +401,6 @@ export class NeonAuthClient {
     const currentToken = this.currentSession.token;
     const currentCookie = this.currentSession.cookie;
 
-    // Concurrency control: coalesce multiple parallel refresh requests ONLY if bound to the same identity & epoch
     if (
       this.activeRefresh &&
       this.activeRefresh.epoch === currentEpoch &&
@@ -331,7 +410,6 @@ export class NeonAuthClient {
       return this.activeRefresh.promise;
     }
 
-    // Outdated or mismatched refresh promise detected; discard
     if (this.activeRefresh) {
       this.activeRefresh = null;
     }
@@ -343,8 +421,6 @@ export class NeonAuthClient {
           currentCookie
         );
 
-        // Fail-closed concurrency revalidation:
-        // Reject and discard token if identity, session, or auth generation switched while request was in-flight
         if (
           this.authEpoch !== currentEpoch ||
           !this.currentSession ||
@@ -355,15 +431,12 @@ export class NeonAuthClient {
           return null;
         }
 
-        // Apply refreshed JWT to verified current session
         this.currentSession.jwt = token;
         this.currentSession.jwtExpiresAt = newExp;
         this.saveSession({ ...this.currentSession });
         return token;
       } catch (err: any) {
         console.warn('Failed to refresh Neon Auth JWT:', err);
-        // If the authentication service rejected the session token with 401, purge the invalid local session
-        // ONLY if the active session is still the same session token and identity that was rejected!
         if (err?.message && /401|revoked|invalid/i.test(err.message)) {
           if (
             this.currentSession &&
@@ -378,7 +451,7 @@ export class NeonAuthClient {
           }
           return null;
         }
-        // Fail-closed fallback: return existing token ONLY if identity still matches and token is unexpired
+
         if (
           this.authEpoch === currentEpoch &&
           this.currentSession &&
@@ -408,7 +481,57 @@ export class NeonAuthClient {
   }
 
   /**
-   * Register a new persistent user account with email and password.
+   * Restore existing session from first-party BFF HttpOnly cookie.
+   */
+  public async restoreSession(): Promise<NeonSessionData | null> {
+    try {
+      const res = await fetch(`${this.getApiBase()}/api/auth/session`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        credentials: 'include'
+      });
+
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (data.status === 'AUTHENTICATED' && data.user) {
+        this.csrfToken = data.csrfToken || null;
+        const session: NeonSessionData = {
+          user: data.user,
+          token: 'bff_session',
+          csrfToken: data.csrfToken
+        };
+        this.saveSession(session);
+        return session;
+      } else {
+        if (this.currentSession && this.currentSession.token === 'bff_session') {
+          this.saveSession(null);
+        }
+        return null;
+      }
+    } catch (err) {
+      console.warn('[NeonAuth] Session restore network notice:', err);
+      return null;
+    }
+  }
+
+  private forceBffMode: boolean = false;
+  private forceDirectNeon: boolean = false;
+
+  public enableBffMode(enabled: boolean): void {
+    this.forceBffMode = enabled;
+  }
+
+  public isBffMode(): boolean {
+    if (this.forceBffMode) return true;
+    if (this.forceDirectNeon) return false;
+    // In browser environment without explicit direct mode, always prefer first-party BFF
+    if (typeof window !== 'undefined') return true;
+    // In Node: if baseUrl points directly to a Neon Auth server, use direct mode
+    return !this.baseUrl || !this.baseUrl.includes('neonauth');
+  }
+
+  /**
+   * Register a new persistent user account through first-party BFF gateway or direct provider.
    */
   public async signUp(params: {
     email: string;
@@ -419,11 +542,53 @@ export class NeonAuthClient {
     const origin = (typeof window !== 'undefined' && window.location?.origin) || 'http://localhost:5173';
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      'x-aira-csrf-protection': '1'
     };
     if (typeof window === 'undefined') {
       headers['Origin'] = origin;
     }
 
+    if (this.isBffMode()) {
+      const response = await fetch(`${this.getApiBase()}/api/auth/sign-up`, {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify({
+          email: params.email.trim(),
+          password: params.password,
+          name: params.name.trim()
+        })
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ message: 'Registration failed' }));
+        throw new Error(err.message || err.error || `Registration failed with status ${response.status}`);
+      }
+
+      const data = await response.json();
+      const user: NeonUser = data.user;
+      this.csrfToken = data.csrfToken || null;
+
+      const session: NeonSessionData = {
+        user,
+        token: 'bff_session',
+        csrfToken: data.csrfToken
+      };
+
+      this.saveSession(session);
+
+      if (params.preserveGuestData) {
+        try {
+          await this.linkGuestSessionToServer();
+        } catch (err) {
+          console.warn('Server guest linking notice:', err);
+        }
+      }
+
+      return { user, session };
+    }
+
+    // Direct Neon Auth Service Mode (e.g. for staging integration testing)
     const response = await fetch(`${this.baseUrl}/sign-up/email`, {
       method: 'POST',
       headers,
@@ -445,7 +610,6 @@ export class NeonAuthClient {
     const sessionToken: string = data.token;
     const sessionCookie = response.headers.get('set-cookie') || undefined;
 
-    // Fetch matching EdDSA JWT token for immediate API readiness
     const { token: jwt, expiresAt: jwtExpiresAt } = await this.fetchJwtToken(sessionToken, sessionCookie);
 
     const session: NeonSessionData = {
@@ -470,7 +634,7 @@ export class NeonAuthClient {
   }
 
   /**
-   * Sign in an existing user with email and password.
+   * Sign in an existing user through first-party BFF gateway or direct provider.
    */
   public async signIn(params: {
     email: string;
@@ -480,11 +644,52 @@ export class NeonAuthClient {
     const origin = (typeof window !== 'undefined' && window.location?.origin) || 'http://localhost:5173';
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      'x-aira-csrf-protection': '1'
     };
     if (typeof window === 'undefined') {
       headers['Origin'] = origin;
     }
 
+    if (this.isBffMode()) {
+      const response = await fetch(`${this.getApiBase()}/api/auth/sign-in`, {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify({
+          email: params.email.trim(),
+          password: params.password
+        })
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ message: 'Sign in failed' }));
+        throw new Error(err.message || err.error || `Sign in failed with status ${response.status}`);
+      }
+
+      const data = await response.json();
+      const user: NeonUser = data.user;
+      this.csrfToken = data.csrfToken || null;
+
+      const session: NeonSessionData = {
+        user,
+        token: 'bff_session',
+        csrfToken: data.csrfToken
+      };
+
+      this.saveSession(session);
+
+      if (params.preserveGuestData) {
+        try {
+          await this.linkGuestSessionToServer();
+        } catch (err) {
+          console.warn('Server guest linking notice:', err);
+        }
+      }
+
+      return { user, session };
+    }
+
+    // Direct Neon Auth Service Mode
     const response = await fetch(`${this.baseUrl}/sign-in/email`, {
       method: 'POST',
       headers,
@@ -505,7 +710,6 @@ export class NeonAuthClient {
     const sessionToken: string = data.token;
     const sessionCookie = response.headers.get('set-cookie') || undefined;
 
-    // Fetch matching EdDSA JWT token for immediate API readiness
     const { token: jwt, expiresAt: jwtExpiresAt } = await this.fetchJwtToken(sessionToken, sessionCookie);
 
     const session: NeonSessionData = {
@@ -530,21 +734,56 @@ export class NeonAuthClient {
   }
 
   /**
-   * Sign out the active session locally and remotely.
-   * Purges local state, increments authEpoch, aborts in-flight requests,
-   * and requests server-side session invalidation on the Neon Auth provider.
+   * Sign out the active session locally and remotely on the BFF or direct provider.
    */
   public async signOut(): Promise<{ remoteSuccess: boolean; error?: string }> {
     const sessionToken = this.currentSession?.token;
     const cookie = this.currentSession?.cookie;
+    const csrf = this.csrfToken;
     const origin = (typeof window !== 'undefined' && window.location?.origin) || 'http://localhost:5173';
 
     // Clear local state first to immediately isolate the browser
     this.saveSession(null);
+    this.csrfToken = null;
 
     let remoteSuccess = true;
     let remoteError: string | undefined;
 
+    if (this.isBffMode()) {
+      try {
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json'
+        };
+        if (typeof window === 'undefined') {
+          headers['Origin'] = origin;
+        }
+        if (csrf) {
+          headers['x-csrf-token'] = csrf;
+        } else {
+          headers['x-aira-csrf-protection'] = '1';
+        }
+
+        const res = await fetch(`${this.getApiBase()}/api/auth/sign-out`, {
+          method: 'POST',
+          headers,
+          credentials: 'include',
+          body: JSON.stringify({})
+        });
+
+        if (!res.ok) {
+          remoteSuccess = false;
+          remoteError = `Remote signout HTTP ${res.status}`;
+          console.warn(`[NeonAuth] Remote signout HTTP ${res.status}`);
+        }
+      } catch (err: any) {
+        remoteSuccess = false;
+        remoteError = err?.message || 'Remote signout network failure';
+        console.warn('Neon Auth remote signout notice:', err);
+      }
+      return { remoteSuccess, error: remoteError };
+    }
+
+    // Direct Neon Auth Service Mode
     if (sessionToken || cookie) {
       try {
         const headers: Record<string, string> = {
@@ -578,7 +817,7 @@ export class NeonAuthClient {
   }
 
   /**
-   * Explicitly revoke the session both remotely on the Neon Auth provider and locally.
+   * Explicitly revoke the session both remotely on the first-party BFF and locally.
    */
   public async revokeSession(): Promise<{ remoteSuccess: boolean; error?: string }> {
     return this.signOut();
@@ -641,7 +880,7 @@ export class NeonAuthClient {
 
   /**
    * Verify server-side identity resolution against /api/auth/identity.
-   * Proves that the bearer JWT successfully bound to ExecutionPrincipal.
+   * Proves that the cookie session or bearer JWT successfully bound to ExecutionPrincipal.
    */
   public async verifyServerIdentity(): Promise<{
     status: string;
@@ -650,16 +889,18 @@ export class NeonAuthClient {
     email?: string;
     name?: string;
   }> {
+    const headers: Record<string, string> = {
+      'Accept': 'application/json'
+    };
     const jwt = await this.getValidJwt();
-    if (!jwt) throw new Error('No active authenticated session');
+    if (jwt) {
+      headers['Authorization'] = `Bearer ${jwt}`;
+    }
 
-    const base = typeof window !== 'undefined' ? '' : ((globalThis as any).process?.env?.AIRA_API_URL || 'http://localhost:3000');
-    const response = await fetch(`${base}/api/auth/identity`, {
+    const response = await fetch(`${this.getApiBase()}/api/auth/identity`, {
       method: 'GET',
-      headers: {
-        'Accept': 'application/json',
-        'Authorization': `Bearer ${jwt}`
-      }
+      headers,
+      credentials: 'include'
     });
 
     if (!response.ok) {
@@ -672,20 +913,25 @@ export class NeonAuthClient {
 
   /**
    * Link existing signed guest session data to the authenticated user account on the server.
-   * Invokes POST /api/auth/link-guest which validates both the server-signed guest cookie
-   * and the verified managed account JWT.
    */
   public async linkGuestSessionToServer(): Promise<{ success: boolean; transferredConversations: number }> {
-    const jwt = await this.getValidJwt();
-    if (!jwt) throw new Error('No authenticated user session for linking');
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json'
+    };
+    if (this.csrfToken) {
+      headers['x-csrf-token'] = this.csrfToken;
+    } else {
+      headers['x-aira-csrf-protection'] = '1';
+    }
 
-    const base = typeof window !== 'undefined' ? '' : ((globalThis as any).process?.env?.AIRA_API_URL || 'http://localhost:3000');
-    const response = await fetch(`${base}/api/auth/link-guest`, {
+    const jwt = await this.getValidJwt();
+    if (jwt) {
+      headers['Authorization'] = `Bearer ${jwt}`;
+    }
+
+    const response = await fetch(`${this.getApiBase()}/api/auth/link-guest`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${jwt}`
-      },
+      headers,
       credentials: 'include',
       body: JSON.stringify({})
     });
@@ -714,7 +960,6 @@ export class AuthenticationRequiredError extends Error {
 let guestSessionPromise: Promise<void> | null = null;
 
 export async function ensureGuestSession(force = false): Promise<void> {
-  // If user is logged into Neon Auth, never bootstrap or touch a guest session!
   if (neonAuth.isAuthenticated()) {
     return;
   }
@@ -749,12 +994,12 @@ export async function ensureGuestSession(force = false): Promise<void> {
  * Universal authenticated API fetch helper.
  * Fail-closed policy with identity-bound request lifecycle:
  * - Captures immutable user ID, session identity, and auth epoch.
- * - Revalidates immediately after JWT retrieval; aborts dispatch if identity transitioned.
+ * - Revalidates immediately after token check; aborts dispatch if identity transitioned.
  * - Manages in-flight AbortControllers tied to the initiating auth epoch.
  * - Revalidates identity upon network response resolution; discards responses from obsolete sessions.
- * - Guards against guest bootstrap completing after account login.
- * - When in account mode: REQUIRES a valid unexpired JWT. If JWT cannot be retrieved, or server returns 401,
- *   or identity transitions, throws AuthenticationRequiredError. NEVER silently falls back to anonymous guest cookie!
+ * - Wraps streaming response bodies with identityBoundStream to keep cancellation active.
+ * - Attaches session CSRF tokens on mutating requests (POST, PUT, DELETE).
+ * - Enforces zero-bearer-token client security in browser BFF mode using HttpOnly cookies.
  */
 export async function authenticatedApiFetch(
   input: RequestInfo | URL,
@@ -770,16 +1015,21 @@ export async function authenticatedApiFetch(
 
   if (isAccountUser) {
     let jwt: string | null = null;
-    try {
-      jwt = await neonAuth.getValidJwt();
-    } catch (err) {
-      console.error('[authenticatedApiFetch] Managed account JWT retrieval failed:', err);
-      throw new AuthenticationRequiredError(
-        'Failed to obtain valid session credentials for managed account. Re-authentication required.'
-      );
+    const isDirectNeonSession = Boolean(initiatingSession?.token && initiatingSession.token !== 'bff_session');
+    const hasExplicitJwt = Boolean(initiatingSession?.jwt);
+
+    if (isDirectNeonSession || hasExplicitJwt || typeof window === 'undefined') {
+      try {
+        jwt = await neonAuth.getValidJwt();
+      } catch (err) {
+        console.error('[authenticatedApiFetch] Managed account JWT retrieval failed:', err);
+        throw new AuthenticationRequiredError(
+          'Failed to obtain valid session credentials for managed account. Re-authentication required.'
+        );
+      }
     }
 
-    // Pre-dispatch revalidation: verify that authentication state, epoch, and user ID did NOT change during JWT retrieval
+    // Pre-dispatch revalidation: verify that authentication state, epoch, and user ID did NOT change
     if (
       neonAuth.getAuthEpoch() !== initiatingEpoch ||
       !neonAuth.isAuthenticated() ||
@@ -791,14 +1041,29 @@ export async function authenticatedApiFetch(
       );
     }
 
-    if (!jwt) {
+    // When direct session token or explicit JWT is present, require resolved JWT to be non-null
+    if ((isDirectNeonSession || hasExplicitJwt) && !jwt) {
       throw new AuthenticationRequiredError(
         'Account session expired or token is invalid. Please sign in again.'
       );
     }
 
     const headers = new Headers(init.headers || {});
-    headers.set('Authorization', `Bearer ${jwt}`);
+    if (jwt) {
+      headers.set('Authorization', `Bearer ${jwt}`);
+    }
+
+    // Attach CSRF protection headers on state-changing requests
+    const method = (init.method || 'GET').toUpperCase();
+    if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+      const csrf = neonAuth.getCsrfToken();
+      if (csrf && !headers.has('X-CSRF-Token')) {
+        headers.set('X-CSRF-Token', csrf);
+      }
+      if (!headers.has('X-Aira-Csrf-Protection')) {
+        headers.set('X-Aira-Csrf-Protection', '1');
+      }
+    }
 
     // Manage in-flight abort controller bound to initiating identity
     const internalAbortController = new AbortController();
@@ -827,7 +1092,7 @@ export async function authenticatedApiFetch(
       res = await fetch(input, {
         ...init,
         headers,
-        credentials: init.credentials || 'same-origin',
+        credentials: init.credentials || 'include',
         signal: effectiveSignal
       });
     } catch (err: any) {
@@ -939,14 +1204,12 @@ export async function authenticatedApiFetch(
   }
 
   // Legitimate Guest User path
-  // If user signed in while we entered guest branch, re-check immediately
   if (neonAuth.isAuthenticated()) {
     return authenticatedApiFetch(input, init, options);
   }
 
   await ensureGuestSession();
 
-  // Guard against user signing in during guest session bootstrap
   if (neonAuth.isAuthenticated()) {
     return authenticatedApiFetch(input, init, options);
   }
@@ -955,11 +1218,10 @@ export async function authenticatedApiFetch(
   let res = await fetch(input, {
     ...init,
     headers,
-    credentials: init.credentials || 'same-origin',
+    credentials: init.credentials || 'include',
     signal: options?.signal || init.signal
   });
 
-  // Check again after response: if user signed in while guest fetch was in-flight, discard response
   if (neonAuth.isAuthenticated()) {
     throw new AuthenticationRequiredError(
       'Account authentication established while guest operation was in-flight; guest response discarded.'
@@ -967,7 +1229,6 @@ export async function authenticatedApiFetch(
   }
 
   if (res.status === 401) {
-    // Retry once for legitimate guest session renewal
     await ensureGuestSession(true);
     if (neonAuth.isAuthenticated()) {
       return authenticatedApiFetch(input, init, options);
@@ -975,7 +1236,7 @@ export async function authenticatedApiFetch(
     res = await fetch(input, {
       ...init,
       headers,
-      credentials: init.credentials || 'same-origin',
+      credentials: init.credentials || 'include',
       signal: options?.signal || init.signal
     });
     if (neonAuth.isAuthenticated()) {

@@ -508,6 +508,69 @@ async function testStreamCancellationAndChunkDiscardOnIdentitySwitch() {
   }
 }
 
+async function testClientBffModeAndLocalStorageTokenEradication() {
+  console.log('Testing: Client BFF mode authentication, CSRF attachment, and localStorage token eradication...');
+
+  const { neonAuth } = await import('../src/lib/neonAuth.js');
+  const originalFetch = globalThis.fetch;
+  localStorage.clear();
+
+  try {
+    let signInCalled = false;
+    let signOutCalled = false;
+    let csrfSentOnMutation = '';
+
+    (globalThis as any).fetch = async (url: any, init: any) => {
+      const urlStr = String(url);
+      if (urlStr.includes('/api/auth/sign-in')) {
+        signInCalled = true;
+        return new Response(JSON.stringify({
+          status: 'AUTHENTICATED',
+          user: { id: 'usr_bff_client_1', email: 'bff-client@example.com', name: 'BFF Client' },
+          csrfToken: 'crypto_csrf_token_client_xyz'
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (urlStr.includes('/api/conversations')) {
+        csrfSentOnMutation = init?.headers?.get?.('X-CSRF-Token') || init?.headers?.['X-CSRF-Token'] || '';
+        return new Response(JSON.stringify({ success: true }), { status: 200 });
+      }
+      if (urlStr.includes('/api/auth/sign-out')) {
+        signOutCalled = true;
+        return new Response(JSON.stringify({ success: true }), { status: 200 });
+      }
+      return new Response('Not found', { status: 404 });
+    };
+
+    // 1. Client signs in via BFF
+    const { user } = await neonAuth.signIn({ email: 'bff-client@example.com', password: 'Password123!' });
+    assert.equal(signInCalled, true, 'Sign in must target same-origin BFF endpoint');
+    assert.equal(user.id, 'usr_bff_client_1');
+    assert.equal(neonAuth.getCsrfToken(), 'crypto_csrf_token_client_xyz');
+
+    // 2. CRITICAL SECURITY ASSERTION: LocalStorage must NOT contain any bearer credentials or JWTs!
+    const stored = localStorage.getItem('aira_neon_auth_session_v1');
+    assert(stored, 'Safe display cache may exist');
+    assert(!stored.includes('jwt'), 'LocalStorage must NOT contain any JWT');
+    assert(!stored.includes('eyJ'), 'LocalStorage must NOT contain base64 JWT tokens');
+    assert(!stored.includes('token":"neon_sess_tok'), 'LocalStorage must NOT contain secret session tokens');
+
+    // 3. Authenticated mutating API call attaches X-CSRF-Token
+    await authenticatedApiFetch('/api/conversations', { method: 'POST', body: JSON.stringify({ title: 'New Chat' }) });
+    assert.equal(csrfSentOnMutation, 'crypto_csrf_token_client_xyz', 'Mutating API call must attach session CSRF token');
+
+    // 4. Sign out
+    await neonAuth.signOut();
+    assert.equal(signOutCalled, true, 'Sign out must target same-origin BFF endpoint');
+    assert.equal(neonAuth.isAuthenticated(), false);
+    assert.equal(neonAuth.getCsrfToken(), null);
+    assert.equal(localStorage.getItem('aira_neon_auth_session_v1'), null, 'LocalStorage must be purged on logout');
+
+    console.log('  ✓ Client BFF mode verified: same-origin auth, CSRF headers attached, zero tokens in localStorage');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
 async function main() {
   console.log('\n=== AIRA AI 2026 — IDENTITY TRANSITION & REVOCATION SUITE ===\n');
 
@@ -521,8 +584,9 @@ async function main() {
     await testSameAccountJwtRefreshDoesNotAbortLegitimateRequest();
     await testDelayed401DoesNotClearActiveAccountB();
     await testStreamCancellationAndChunkDiscardOnIdentitySwitch();
+    await testClientBffModeAndLocalStorageTokenEradication();
 
-    console.log('\nALL 9 IDENTITY TRANSITION & REVOCATION CHECKS PASSED!\n');
+    console.log('\nALL 10 IDENTITY TRANSITION & REVOCATION CHECKS PASSED!\n');
     process.exit(0);
   } catch (err) {
     console.error('\nFAILED IDENTITY TRANSITION CHECK:', err);

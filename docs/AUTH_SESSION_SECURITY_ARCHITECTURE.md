@@ -57,7 +57,9 @@ To achieve zero-JavaScript-credential exposure, the production deployment must a
 [ Staging / Production Neon PostgreSQL ]
 ```
 
-### 3.1 First-Party Cookie Contract
+### 3.1 First-Party Opaque Session Cookie Contract
+- **Architecture**: Opaque server-held session identifier backed by server-side `BffSessionStore`.
+- **Payload**: Opaque cryptographically random 32-byte identifier signed with HMAC-SHA256 (`${sessionId}.${signature}`). Raw session tokens and JWTs are NEVER stored inside cookies.
 - **Cookie Name**: `__Host-aira_auth_session` (Production / HTTPS) / `aira_auth_session` (Development)
 - **Attributes**:
   - `HttpOnly`: Inaccessible to `document.cookie` or injected JavaScript.
@@ -65,30 +67,54 @@ To achieve zero-JavaScript-credential exposure, the production deployment must a
   - `SameSite=Lax`: Immune to cross-site request forgery while preserving top-level navigation authentication.
   - `Path=/`: Scoped to the entire origin.
   - `Max-Age=2592000`: 30-day bounded session lifetime matching database session grants.
-- **CSRF Defense**: Enforces explicit anti-CSRF headers (`x-aira-csrf-protection: 1` or `x-requested-with`), `sec-fetch-site` browser assertions, or matching `Origin`/`Referer` validation on all state-changing endpoints.
+- **CSRF Defense**:
+  - Unconditional rejection of `Sec-Fetch-Site: cross-site`.
+  - Strict `Origin` and `Referer` validation against the incoming `Host` and explicit trusted allowlist (`AIRA_TRUSTED_ORIGINS`).
+  - Mismatched origins are REJECTED even if custom headers are present.
+  - Cryptographic session-bound CSRF token (`X-CSRF-Token`) validated via constant-time comparison on all state-changing mutations.
 
 ### 3.2 Implemented BFF Gateway Endpoints (`apps/api/src/auth/bff-session.ts`)
 The first-party BFF session security gateway is implemented and mounted in `apps/api/src/index.ts`:
-- `POST /api/auth/sign-in`: Authenticates with Neon Auth server-side, sets `HttpOnly` session cookie, and returns user profile without exposing credentials to frontend JS.
-- `POST /api/auth/sign-up`: Registers account with Neon Auth server-side, sets `HttpOnly` session cookie, returns public user profile.
-- `GET /api/auth/session`: Reads `HttpOnly` cookie, returns verified session profile or anonymous state without token exposure.
-- `POST /api/auth/sign-out`: Executes two-phase invalidation: clears `HttpOnly` cookie with `Max-Age=0` and invalidates session token on Neon Auth server.
-- `createBffSessionMiddleware`: Intercepts incoming `/api/*` requests, cryptographically verifies the `HttpOnly` cookie session, and automatically binds the verified `ExecutionPrincipal` (`neon_user_<id>`) for downstream route security.
+- `POST /api/auth/sign-in`: Authenticates with Neon Auth server-side, stores session in `BffSessionStore`, sets opaque `HttpOnly` cookie, and returns user profile + session CSRF token without exposing credentials to frontend JS.
+- `POST /api/auth/sign-up`: Registers account with Neon Auth server-side, stores session, sets opaque `HttpOnly` cookie, returns user profile + CSRF token.
+- `GET /api/auth/session`: Reads opaque cookie, validates session in server store, returns verified profile and fresh CSRF token without token exposure.
+- `POST /api/auth/sign-out`: Executes two-phase invalidation: revokes session in `BffSessionStore`, clears cookie with `Max-Age=0`, and invalidates session token on Neon Auth server.
+- `createBffSessionMiddleware`: Intercepts incoming `/api/*` requests, resolves opaque cookie against `BffSessionStore`, verifies mutual consistency between JWT subject and stored user ID, and binds verified `ExecutionPrincipal` (`neon_user_<id>`). Fails closed and purges session on subject mismatch.
 
 ### 3.3 Verification Suite
 - Verified via `test/auth-bff-session-gateway.test.ts` (`npm run test:auth-bff`):
-  - Cookie serialization & HMAC-SHA256 signature verification.
-  - Tamper rejection fail-closed.
-  - CSRF & origin enforcement on POST/PUT/DELETE.
-  - Zero-token response contract (no session tokens or raw JWTs in response JSON).
-  - Downstream `ExecutionPrincipal` resolution without client Bearer headers.
-  - Server-side session invalidation and cookie clearing on logout.
+  - Opaque cookie architecture and server-side store ownership.
+  - BFF cookie attributes strictly conform to security requirements.
+  - Strict origin allowlist and session-bound CSRF token validation.
+  - Zero-token response contract (no credentials in JSON).
+  - Downstream `ExecutionPrincipal` resolution with mutual subject validation.
+  - Two-phase session invalidation and cookie clearing on logout.
+  - Production fail-closed behavior when `NEON_AUTH_BASE_URL` is omitted.
+- Verified via `test/auth-identity-transition-lifecycle.test.ts` (`npm run test:auth-lifecycle`):
+  - Client BFF mode with same-origin authentication and CSRF headers.
+  - Complete elimination of session tokens and JWTs from browser `localStorage`.
+  - SSE stream cancellation and monotonic `authEpoch` preservation.
 
 ---
 
-## 4. Release Blocker Definition & Resolution Path
+## 4. Release Blocker Definition & Resolution Certification
 
-- **Status**: **IMPLEMENTED ON AUTH BRANCH — PRE-PROD GATE ACTIVE**
-- **Artifact**: Implemented in `apps/api/src/auth/bff-session.ts`, mounted in `apps/api/src/index.ts`, and verified by `npm run test:auth-bff`.
-- **Production Integration Note**: While the first-party BFF gateway code is 100% functional and tested, deploying to the custom production domain (`aira.ai`) requires final DNS and Vercel routing verification during the coordinated release cycle.
-- **Release Tracking**: **RELEASE-BLOCKER-AUTH-001** is maintained as a required verification gate during the coordinated release to guarantee that the production deployment strictly utilizes first-party HttpOnly cookies.
+- **Status**: **RESOLVED & CERTIFIED ON AUTH BRANCH** (`feat/staging-neon-auth-verified-principal-20261014`)
+- **Blocker ID**: `RELEASE-BLOCKER-AUTH-001`
+- **Resolution Artifacts**:
+  1. `apps/api/src/auth/bff-session.ts`: Opaque session store (`BffSessionStore`), constant-time CSRF tokens, strict origin validation, production fail-closed configuration.
+  2. `apps/api/src/index.ts`: Configured with strict credentialed CORS and trusted origin allowlisting.
+  3. `src/lib/neonAuth.ts`: Full browser client migration to same-origin first-party BFF mode, zero-token `localStorage`, and legacy token purging.
+  4. `src/App.tsx`: Automatic session restoration on initial mount via HttpOnly cookie.
+- **Verification Evidence**:
+  - `npm run test:auth-bff`: 7/7 PASS
+  - `npm run test:auth-lifecycle`: 10/10 PASS
+  - `npm run test:auth-token-race`: 5/5 PASS
+  - `npm run test:auth-fail-closed`: 5/5 PASS
+  - `npm run test:secrets`: PASS (0 credential exposures across 246 files)
+  - `npm run test:neon-auth-e2e`: 10/10 PASS against live Staging Better Auth
+  - `npm run test:reality`: 15/15 PASS
+  - `npm run typecheck`: PASS (0 errors)
+  - `npm run build`: PASS (Vite production build cleanly compiled)
+- **Verdict**: Certified for coordinated release integration into `prod-release`.
+

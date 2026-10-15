@@ -2,14 +2,15 @@
  * AIRA AI 2026 — First-Party Backend-for-Frontend (BFF) Session Security Gateway
  * 
  * Implements production-grade first-party session management for Neon Managed Better Auth:
- * - Issues HttpOnly, Secure, SameSite=Lax first-party session cookies (__Host-aira_auth_session / aira_auth_session).
- * - Shields browser JavaScript from raw long-lived session bearer credentials (mitigates XSS exfiltration).
- * - Enforces CSRF & Origin protection on all state-changing authentication routes.
+ * - Issues opaque 256-bit signed HttpOnly cookies (__Host-aira_auth_session / aira_auth_session).
+ * - Backed by server-side session store (BffSessionStore); zero bearer credentials in cookies.
+ * - Enforces strict Origin allowlisting and per-session cryptographic CSRF tokens on mutating routes.
  * - Bridges cookie sessions to verified ExecutionPrincipal (neon_user_<id>) across all /api/* routes.
- * - Supports seamless server-side token rotation, remote revocation, and guest-to-account linking.
+ * - Provides mutual consistency validation between JWT subject, session identity, and ExecutionPrincipal.
+ * - Supports seamless server-side token rotation, immediate server revocation, and fail-closed security.
  */
 
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Request, Response, NextFunction } from 'express';
 import { verifyNeonAuthToken, ManagedPrincipal } from './neon-auth-principal.js';
 
@@ -17,17 +18,69 @@ export const BFF_COOKIE_NAME_PROD = '__Host-aira_auth_session';
 export const BFF_COOKIE_NAME_DEV = 'aira_auth_session';
 export const BFF_SESSION_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
 
-export interface BffSessionPayload {
-  v: 1;
-  sessionToken: string;
+export interface BffServerSession {
+  id: string; // Opaque 256-bit session ID
   userId: string;
   email?: string;
   name?: string;
-  jwt: string;
+  sessionToken: string; // Better Auth session token (server-side only)
+  jwt: string; // EdDSA JWT (server-side only)
   jwtExpiresAt: number;
-  iat: number;
-  exp: number;
+  csrfToken: string; // Per-session cryptographic CSRF token
+  createdAt: number;
+  expiresAt: number;
+  lastRotatedAt: number;
 }
+
+// Retained for backward-compatible test fixtures if needed
+export type BffSessionPayload = BffServerSession;
+
+export class BffSessionStore {
+  private sessions = new Map<string, BffServerSession>();
+
+  constructor() {
+    // Periodic sweep for expired sessions every 10 minutes
+    const timer = setInterval(() => this.pruneExpired(), 10 * 60 * 1000);
+    if (timer.unref) timer.unref();
+  }
+
+  public get(sessionId: string): BffServerSession | null {
+    const session = this.sessions.get(sessionId);
+    if (!session) return null;
+    if (Date.now() >= session.expiresAt) {
+      this.sessions.delete(sessionId);
+      return null;
+    }
+    return session;
+  }
+
+  public set(session: BffServerSession): void {
+    this.sessions.set(session.id, session);
+  }
+
+  public delete(sessionId: string): boolean {
+    return this.sessions.delete(sessionId);
+  }
+
+  public clear(): void {
+    this.sessions.clear();
+  }
+
+  public pruneExpired(): void {
+    const now = Date.now();
+    for (const [id, session] of this.sessions.entries()) {
+      if (now >= session.expiresAt) {
+        this.sessions.delete(id);
+      }
+    }
+  }
+
+  public size(): number {
+    return this.sessions.size;
+  }
+}
+
+export const bffSessionStore = new BffSessionStore();
 
 function getSessionSecret(): string {
   const configured = process.env.AIRA_SESSION_SECRET?.trim();
@@ -41,22 +94,36 @@ function getSessionSecret(): string {
 }
 
 function getAuthBaseUrl(): string {
-  return process.env.NEON_AUTH_BASE_URL || 'https://ep-empty-field-b36mqqq6.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth';
+  const configured = process.env.NEON_AUTH_BASE_URL?.trim();
+  if (configured) return configured;
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('NEON_AUTH_BASE_URL is unconfigured in production environment. Refusing to fallback to staging URL.');
+  }
+
+  return 'https://ep-empty-field-b36mqqq6.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth';
 }
 
-function encodePayload(payload: BffSessionPayload): string {
-  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+export function generateSessionId(): string {
+  return randomBytes(32).toString('base64url');
 }
 
-function signPayload(encodedPayload: string): string {
+export function generateCsrfToken(): string {
+  return randomBytes(32).toString('hex');
+}
+
+export function signSessionId(sessionId: string): string {
   return createHmac('sha256', getSessionSecret())
-    .update(encodedPayload)
+    .update(sessionId)
     .digest('base64url');
 }
 
-export function serializeBffToken(payload: BffSessionPayload): string {
-  const encodedPayload = encodePayload(payload);
-  return `${encodedPayload}.${signPayload(encodedPayload)}`;
+export function serializeBffToken(sessionOrId: BffServerSession | string): string {
+  const id = typeof sessionOrId === 'string' ? sessionOrId : sessionOrId.id;
+  if (typeof sessionOrId !== 'string') {
+    bffSessionStore.set(sessionOrId);
+  }
+  return `${id}.${signSessionId(id)}`;
 }
 
 function safeEqual(left: string, right: string): boolean {
@@ -82,44 +149,39 @@ export function parseCookies(cookieHeader: string | undefined): Record<string, s
   }, {});
 }
 
-export function readBffSessionFromCookie(req: Request): BffSessionPayload | null {
-  const cookies = parseCookies(req.headers.cookie);
-  const token = cookies[BFF_COOKIE_NAME_PROD] || cookies[BFF_COOKIE_NAME_DEV];
-  if (!token) return null;
-
-  const idx = token.lastIndexOf('.');
+export function parseSignedSessionId(cookieValue: string | undefined): string | null {
+  if (!cookieValue) return null;
+  const idx = cookieValue.lastIndexOf('.');
   if (idx <= 0) return null;
 
-  const encodedPayload = token.slice(0, idx);
-  const signature = token.slice(idx + 1);
-  const expectedSig = signPayload(encodedPayload);
-  if (!safeEqual(signature, expectedSig)) return null;
+  const sessionId = cookieValue.slice(0, idx);
+  const signature = cookieValue.slice(idx + 1);
+  const expectedSig = signSessionId(sessionId);
 
-  try {
-    const payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8')) as BffSessionPayload;
-    const now = Math.floor(Date.now() / 1000);
-
-    if (
-      payload.v !== 1 ||
-      !payload.sessionToken ||
-      !payload.userId ||
-      !payload.jwt ||
-      !Number.isInteger(payload.exp) ||
-      payload.exp <= now
-    ) {
-      return null;
-    }
-
-    return payload;
-  } catch {
+  if (!safeEqual(signature, expectedSig)) {
     return null;
   }
+  return sessionId;
 }
 
-export function setBffSessionCookie(res: Response, payload: BffSessionPayload): void {
+export function readBffSessionFromCookie(req: Request): BffServerSession | null {
+  const cookies = parseCookies(req.headers.cookie);
+  const rawToken = cookies[BFF_COOKIE_NAME_PROD] || cookies[BFF_COOKIE_NAME_DEV];
+  if (!rawToken) return null;
+
+  const sessionId = parseSignedSessionId(rawToken);
+  if (!sessionId) return null;
+
+  const session = bffSessionStore.get(sessionId);
+  if (!session) return null;
+
+  return session;
+}
+
+export function setBffSessionCookie(res: Response, sessionOrId: BffServerSession | string): void {
   const isSecure = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
   const cookieName = isSecure ? BFF_COOKIE_NAME_PROD : BFF_COOKIE_NAME_DEV;
-  const token = serializeBffToken(payload);
+  const token = serializeBffToken(sessionOrId);
 
   const attributes = [
     `${cookieName}=${encodeURIComponent(token)}`,
@@ -155,42 +217,103 @@ export function clearBffSessionCookie(res: Response): void {
   res.setHeader('Set-Cookie', headers);
 }
 
+const TRUSTED_ORIGINS_DEFAULT = [
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  'http://localhost:3001',
+  'http://127.0.0.1:3001'
+];
+
+export function getTrustedOrigins(): string[] {
+  const custom = process.env.ALLOWED_ORIGINS || process.env.CORS_ORIGIN;
+  if (!custom) return TRUSTED_ORIGINS_DEFAULT;
+  const list = custom.split(',').map(s => s.trim()).filter(Boolean);
+  return [...new Set([...TRUSTED_ORIGINS_DEFAULT, ...list])];
+}
+
+export function isAllowedOrigin(originStr: string, hostHeader?: string): boolean {
+  try {
+    const parsed = new URL(originStr);
+    const originHost = parsed.host;
+    if (hostHeader && originHost === hostHeader) {
+      return true;
+    }
+    const originNormalized = `${parsed.protocol}//${parsed.host}`;
+    const allowed = getTrustedOrigins();
+    return allowed.some(a => {
+      try {
+        const p = new URL(a);
+        return `${p.protocol}//${p.host}` === originNormalized;
+      } catch {
+        return a === originNormalized;
+      }
+    });
+  } catch {
+    return false;
+  }
+}
+
 /**
  * CSRF and Origin protection validator for state-changing BFF requests.
+ * Enforces strict origin matching against allowlist and session-bound CSRF token verification.
  */
-export function verifyCsrfAndOrigin(req: Request): boolean {
+export function verifyCsrfAndOrigin(req: Request, session?: BffServerSession | null): boolean {
   // Safe read-only methods don't require CSRF checks
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
     return true;
   }
 
-  // 1. Explicit anti-CSRF header protection (standard for SPA clients)
-  if (req.headers['x-aira-csrf-protection'] === '1' || req.headers['x-requested-with'] === 'XMLHttpRequest') {
-    return true;
+  // 1. Fetch Metadata check: reject cross-site requests unconditionally on mutations
+  const secFetchSite = req.headers['sec-fetch-site'];
+  if (secFetchSite === 'cross-site') {
+    return false;
   }
 
-  // 2. Browser Sec-Fetch-Site assertion
-  const fetchSite = req.headers['sec-fetch-site'];
-  if (fetchSite === 'same-origin' || fetchSite === 'same-site') {
-    return true;
-  }
-
-  // 3. Origin or Referer domain validation
+  // 2. Strict Origin / Referer validation:
+  // If Origin or Referer is supplied, it MUST match the host or trusted allowlist.
+  // Rejection is absolute: mismatched origins fail even if custom headers are present!
   const origin = (req.headers.origin as string) || (req.headers.referer as string);
+  const host = req.headers.host;
+
   if (origin) {
-    try {
-      const parsed = new URL(origin);
-      const host = parsed.host;
-      const expectedHost = req.headers.host;
-      if (host === expectedHost || host === 'localhost:5173' || host === '127.0.0.1:5173') {
-        return true;
-      }
-    } catch {
+    if (!isAllowedOrigin(origin, host)) {
+      return false;
+    }
+  } else {
+    // If neither Origin nor Referer is present, block unless sec-fetch-site confirms same-origin
+    if (secFetchSite && secFetchSite !== 'same-origin' && secFetchSite !== 'same-site') {
       return false;
     }
   }
 
-  return false;
+  // 3. Cryptographic CSRF token verification for authenticated state-changing requests:
+  if (session?.csrfToken) {
+    const clientToken = (req.headers['x-csrf-token'] as string) || (req.headers['x-aira-csrf-token'] as string);
+    if (!clientToken) {
+      return false;
+    }
+    const clientBuf = Buffer.from(clientToken);
+    const expectedBuf = Buffer.from(session.csrfToken);
+    if (clientBuf.length !== expectedBuf.length || !timingSafeEqual(clientBuf, expectedBuf)) {
+      return false;
+    }
+    return true;
+  }
+
+  // 4. For unauthenticated login/signup routes where no session exists yet:
+  // Require custom anti-CSRF header or same-origin assertion, with valid origin
+  const hasAntiCsrfHeader =
+    req.headers['x-aira-csrf-protection'] === '1' ||
+    req.headers['x-requested-with'] === 'XMLHttpRequest' ||
+    Boolean(req.headers['x-csrf-token']);
+
+  if (!hasAntiCsrfHeader && (!secFetchSite || (secFetchSite !== 'same-origin' && secFetchSite !== 'same-site'))) {
+    return false;
+  }
+
+  return true;
 }
 
 /**
@@ -243,21 +366,22 @@ export function createBffSessionMiddleware() {
       return next();
     }
 
-    const payload = readBffSessionFromCookie(req);
-    if (!payload) {
+    const session = readBffSessionFromCookie(req);
+    if (!session) {
       return next();
     }
 
     try {
-      let jwtToVerify = payload.jwt;
+      let jwtToVerify = session.jwt;
 
       // Proactive JWT refresh if within 60 seconds of expiration
-      if (payload.jwtExpiresAt - Date.now() < 60_000) {
+      if (session.jwtExpiresAt - Date.now() < 60_000) {
         try {
-          const fresh = await fetchNeonJwtFromServer(payload.sessionToken);
-          payload.jwt = fresh.token;
-          payload.jwtExpiresAt = fresh.expiresAt;
-          setBffSessionCookie(res, payload);
+          const fresh = await fetchNeonJwtFromServer(session.sessionToken);
+          session.jwt = fresh.token;
+          session.jwtExpiresAt = fresh.expiresAt;
+          session.lastRotatedAt = Date.now();
+          bffSessionStore.set(session);
           jwtToVerify = fresh.token;
         } catch {
           // If refresh fails, try verifying existing JWT before rejecting
@@ -266,18 +390,28 @@ export function createBffSessionMiddleware() {
 
       const identity: ManagedPrincipal = await verifyNeonAuthToken(jwtToVerify);
 
+      // Mutual consistency check: verify that JWT subject matches the server-side session's userId
+      const expectedSubject = identity.userId.replace(/^neon_user_/, '');
+      if (expectedSubject !== session.userId && identity.userId !== session.userId) {
+        console.warn(`[BffSession] CRITICAL: JWT subject mismatch! JWT sub=${identity.userId}, Session userId=${session.userId}`);
+        bffSessionStore.delete(session.id);
+        clearBffSessionCookie(res);
+        return next();
+      }
+
       (req as any).managedIdentity = identity;
       (req as any).user = {
         id: identity.userId,
-        sessionId: identity.sessionId,
+        sessionId: identity.sessionId || session.id,
         roles: ['workspace_user'],
         scopes: ['chat:write', 'runs:read', 'runs:write', 'browser.read', 'files.read']
       };
-      (req as any).bffSession = payload;
+      (req as any).bffSession = session;
 
       next();
     } catch (err: any) {
       console.warn('[BffSession] Invalid or expired BFF cookie session:', err?.message || err);
+      bffSessionStore.delete(session.id);
       clearBffSessionCookie(res);
       next();
     }
@@ -319,29 +453,36 @@ export async function handleBffSignIn(req: Request, res: Response): Promise<void
   // Obtain initial EdDSA JWT
   const { token: jwt, expiresAt: jwtExpiresAt } = await fetchNeonJwtFromServer(sessionToken);
 
-  const now = Math.floor(Date.now() / 1000);
-  const payload: BffSessionPayload = {
-    v: 1,
-    sessionToken,
+  const sessionId = generateSessionId();
+  const csrfToken = generateCsrfToken();
+  const now = Date.now();
+
+  const session: BffServerSession = {
+    id: sessionId,
     userId: user.id,
     email: user.email,
     name: user.name,
+    sessionToken,
     jwt,
     jwtExpiresAt,
-    iat: now,
-    exp: now + BFF_SESSION_TTL_SECONDS
+    csrfToken,
+    createdAt: now,
+    expiresAt: now + (BFF_SESSION_TTL_SECONDS * 1000),
+    lastRotatedAt: now
   };
 
-  setBffSessionCookie(res, payload);
+  bffSessionStore.set(session);
+  setBffSessionCookie(res, sessionId);
 
-  // Return ONLY public user profile to browser JavaScript (zero session tokens exposed!)
+  // Return ONLY public user profile and csrfToken to browser JavaScript (zero session tokens exposed!)
   res.status(200).json({
     status: 'AUTHENTICATED',
     user: {
       id: user.id,
       email: user.email,
       name: user.name
-    }
+    },
+    csrfToken
   });
 }
 
@@ -383,20 +524,26 @@ export async function handleBffSignUp(req: Request, res: Response): Promise<void
 
   const { token: jwt, expiresAt: jwtExpiresAt } = await fetchNeonJwtFromServer(sessionToken);
 
-  const now = Math.floor(Date.now() / 1000);
-  const payload: BffSessionPayload = {
-    v: 1,
-    sessionToken,
+  const sessionId = generateSessionId();
+  const csrfToken = generateCsrfToken();
+  const now = Date.now();
+
+  const session: BffServerSession = {
+    id: sessionId,
     userId: user.id,
     email: user.email,
     name: user.name,
+    sessionToken,
     jwt,
     jwtExpiresAt,
-    iat: now,
-    exp: now + BFF_SESSION_TTL_SECONDS
+    csrfToken,
+    createdAt: now,
+    expiresAt: now + (BFF_SESSION_TTL_SECONDS * 1000),
+    lastRotatedAt: now
   };
 
-  setBffSessionCookie(res, payload);
+  bffSessionStore.set(session);
+  setBffSessionCookie(res, sessionId);
 
   res.status(200).json({
     status: 'AUTHENTICATED',
@@ -404,7 +551,8 @@ export async function handleBffSignUp(req: Request, res: Response): Promise<void
       id: user.id,
       email: user.email,
       name: user.name
-    }
+    },
+    csrfToken
   });
 }
 
@@ -412,10 +560,10 @@ export async function handleBffSignUp(req: Request, res: Response): Promise<void
  * BFF Endpoint: GET /api/auth/session
  */
 export function handleBffSession(req: Request, res: Response): void {
-  const payload = readBffSessionFromCookie(req);
+  const session = readBffSessionFromCookie(req);
   res.setHeader('Cache-Control', 'no-store');
 
-  if (!payload) {
+  if (!session) {
     res.status(200).json({ status: 'ANONYMOUS', user: null });
     return;
   }
@@ -423,10 +571,11 @@ export function handleBffSession(req: Request, res: Response): void {
   res.status(200).json({
     status: 'AUTHENTICATED',
     user: {
-      id: payload.userId,
-      email: payload.email,
-      name: payload.name
-    }
+      id: session.userId,
+      email: session.email,
+      name: session.name
+    },
+    csrfToken: session.csrfToken
   });
 }
 
@@ -434,21 +583,22 @@ export function handleBffSession(req: Request, res: Response): void {
  * BFF Endpoint: POST /api/auth/sign-out
  */
 export async function handleBffSignOut(req: Request, res: Response): Promise<void> {
-  if (!verifyCsrfAndOrigin(req)) {
-    res.status(403).json({ error: 'CSRF validation failed: missing origin or anti-CSRF header' });
+  const session = readBffSessionFromCookie(req);
+  if (!verifyCsrfAndOrigin(req, session)) {
+    res.status(403).json({ error: 'CSRF validation failed: missing origin or anti-CSRF token' });
     return;
   }
 
-  const payload = readBffSessionFromCookie(req);
   clearBffSessionCookie(res);
 
-  if (payload?.sessionToken) {
+  if (session) {
+    bffSessionStore.delete(session.id);
     try {
       const baseUrl = getAuthBaseUrl();
       await fetch(`${baseUrl}/sign-out`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${payload.sessionToken}`,
+          'Authorization': `Bearer ${session.sessionToken}`,
           'Content-Type': 'application/json'
         }
       });

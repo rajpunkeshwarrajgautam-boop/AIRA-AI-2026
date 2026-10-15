@@ -113,6 +113,13 @@ function App() {
     return () => desktop.removeEventListener('change', onBreakpointChange);
   }, []);
 
+  // Proactively restore first-party BFF session from HttpOnly cookie on mount
+  useEffect(() => {
+    neonAuth.restoreSession().catch((err) => {
+      console.warn('[App] First-party session restore notice:', err);
+    });
+  }, []);
+
   useEffect(() => {
     return neonAuth.onAuthStateChange(async (user) => {
       const epoch = ++authEpochRef.current;

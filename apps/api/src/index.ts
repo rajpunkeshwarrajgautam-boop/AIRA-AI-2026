@@ -55,15 +55,26 @@ import {
   handleBffSignUp,
   handleBffSignIn,
   handleBffSession,
-  handleBffSignOut
+  handleBffSignOut,
+  isAllowedOrigin
 } from './auth/bff-session.js';
 import { isTemporaryDatabaseError } from './utils/storage-errors.js';
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
 
-// Audit 28: Body size limits
-app.use(cors());
+// Audit 28: Body size limits and strict CORS with credentials
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow non-browser callers (curl, internal server requests) where origin is not set
+    if (!origin) return callback(null, true);
+    if (isAllowedOrigin(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error(`CORS blocked for origin: ${origin}`), false);
+  },
+  credentials: true
+}));
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ limit: '2mb', extended: false }));
 
