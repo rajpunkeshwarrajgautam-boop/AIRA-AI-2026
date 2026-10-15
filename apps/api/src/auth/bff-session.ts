@@ -383,6 +383,12 @@ export function verifyCsrfAndOrigin(req: Request, session?: BffServerSession | n
     return true;
   }
 
+  // Pure Bearer-token callers without cookie sessions are immune to CSRF
+  // (browsers never attach custom Authorization headers cross-origin)
+  if (!session && typeof req.headers.authorization === 'string' && req.headers.authorization.startsWith('Bearer ')) {
+    return true;
+  }
+
   // 1. Fetch Metadata check: reject cross-site requests unconditionally on mutations
   const secFetchSite = req.headers['sec-fetch-site'];
   if (secFetchSite === 'cross-site') {
