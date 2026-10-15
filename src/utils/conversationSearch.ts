@@ -1,5 +1,5 @@
 import type { Conversation } from '../types';
-import { neonAuth } from '../lib/neonAuth';
+import { neonAuth, authenticatedApiFetch } from '../lib/neonAuth';
 
 export interface ConversationSearchResult {
   conversationId: string;
@@ -22,41 +22,6 @@ export interface ConversationSearchResponse {
   results: ConversationSearchResult[];
 }
 
-let sessionPromise: Promise<void> | null = null;
-
-async function ensureSearchSession(force = false): Promise<void> {
-  const jwt = await neonAuth.getValidJwt().catch(() => null);
-  if (jwt) {
-    sessionPromise = null;
-    return;
-  }
-
-  if (force) sessionPromise = null;
-  if (sessionPromise) return sessionPromise;
-
-  sessionPromise = (async () => {
-    try {
-      const response = await fetch('/api/auth/session', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { Accept: 'application/json' },
-        signal: AbortSignal.timeout(5000)
-      });
-      if (!response.ok) {
-        console.warn(`[ensureSearchSession] Session bootstrap returned ${response.status}`);
-      }
-    } catch (err) {
-      console.warn('[ensureSearchSession] Non-blocking session bootstrap error:', err);
-    }
-  })();
-
-  try {
-    await sessionPromise;
-  } catch {
-    sessionPromise = null;
-  }
-}
-
 // Always enforce the request deadline, even when the search overlay supplies
 // its own AbortController to cancel obsolete queries.
 export function composeRequestSignal(
@@ -74,26 +39,9 @@ async function authenticatedFetch(
   init?: RequestInit,
   timeoutMs = 15000
 ): Promise<Response> {
-  await ensureSearchSession();
-  const jwt = await neonAuth.getValidJwt().catch(() => null);
-  const headers = new Headers(init?.headers || {});
-  if (jwt && !headers.has('Authorization')) {
-    headers.set('Authorization', `Bearer ${jwt}`);
-  }
-
-  const makeRequest = () => fetch(input, {
-    ...init,
-    headers,
-    credentials: 'same-origin' as RequestCredentials,
+  return authenticatedApiFetch(input, init, {
     signal: composeRequestSignal(init?.signal, timeoutMs)
   });
-
-  let response = await makeRequest();
-  if (response.status === 401 && !jwt) {
-    await ensureSearchSession(true);
-    response = await makeRequest();
-  }
-  return response;
 }
 
 export async function syncConversationToServer(conversation: Conversation): Promise<boolean> {
@@ -256,8 +204,6 @@ export async function backfillConversationsBestEffort(
  */
 export async function fetchAllConversationsFromServer(): Promise<Conversation[]> {
   try {
-    const jwt = await neonAuth.getValidJwt().catch(() => null);
-    console.log('[fetchAllConversationsFromServer] getValidJwt returned:', jwt ? 'JWT_PRESENT' : 'NO_JWT');
     const response = await authenticatedFetch('/api/conversations', {
       method: 'GET',
       headers: { Accept: 'application/json' }

@@ -91,6 +91,12 @@ jobs:
       - name: Managed account JWT signature and principal boundary regression
         run: npm run test:neon-auth-identity
 
+      - name: Managed account token refresh concurrency and race regression
+        run: npm run test:auth-token-race
+
+      - name: Authenticated fail-closed request policy regression
+        run: npm run test:auth-fail-closed
+
       - name: Preview principal spoofing guard
         run: npm run test:preview-identity
 

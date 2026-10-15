@@ -40,18 +40,33 @@ export class NeonAuthClient {
   private baseUrl: string;
   private currentSession: NeonSessionData | null = null;
   private listeners: Set<AuthStateListener> = new Set();
-  private tokenRefreshPromise: Promise<string | null> | null = null;
+  private authEpoch: number = 0;
+  private activeRefresh: {
+    promise: Promise<string | null>;
+    epoch: number;
+    userId: string;
+    token: string;
+  } | null = null;
   private syncChannel: BroadcastChannel | null = null;
 
   constructor() {
-    this.baseUrl = (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_NEON_AUTH_URL) ||
-      DEFAULT_AUTH_URL;
+    const isProd = typeof import.meta !== 'undefined' && Boolean((import.meta as any).env?.PROD);
+    const configuredUrl = typeof import.meta !== 'undefined' ? (import.meta as any).env?.VITE_NEON_AUTH_URL : undefined;
+
+    if (isProd && !configuredUrl) {
+      console.error('[NeonAuth] CRITICAL: VITE_NEON_AUTH_URL is missing in production environment. Refusing to fallback to staging URL.');
+      this.baseUrl = '';
+    } else {
+      this.baseUrl = configuredUrl || DEFAULT_AUTH_URL;
+    }
 
     this.currentSession = this.loadStoredSession();
 
     if (typeof window !== 'undefined') {
       window.addEventListener('storage', (event) => {
         if (event.key === STORAGE_KEYS.SESSION) {
+          this.authEpoch++;
+          this.activeRefresh = null;
           this.currentSession = this.loadStoredSession();
           this.notifyListeners();
         }
@@ -62,6 +77,8 @@ export class NeonAuthClient {
           this.syncChannel = new BroadcastChannel('aira_neon_auth_sync');
           this.syncChannel.onmessage = (event) => {
             if (event.data?.type === 'AUTH_SYNC') {
+              this.authEpoch++;
+              this.activeRefresh = null;
               this.currentSession = this.loadStoredSession();
               this.notifyListeners();
             }
@@ -81,6 +98,10 @@ export class NeonAuthClient {
     this.baseUrl = url;
   }
 
+  public getAuthEpoch(): number {
+    return this.authEpoch;
+  }
+
   private loadStoredSession(): NeonSessionData | null {
     if (typeof window === 'undefined') return null;
     try {
@@ -97,6 +118,8 @@ export class NeonAuthClient {
   }
 
   private saveSession(session: NeonSessionData | null): void {
+    this.authEpoch++;
+    this.activeRefresh = null;
     this.currentSession = session;
     if (typeof window === 'undefined') return;
     try {
@@ -148,6 +171,10 @@ export class NeonAuthClient {
    * Fetch an EdDSA signed JWT token for the current session via /token.
    */
   public async fetchJwtToken(sessionToken?: string, sessionCookie?: string): Promise<{ token: string; expiresAt: number }> {
+    if (!this.baseUrl) {
+      throw new Error('Neon Auth service is unconfigured in production environment (missing VITE_NEON_AUTH_URL)');
+    }
+
     const token = sessionToken || this.currentSession?.token;
     const cookie = sessionCookie || this.currentSession?.cookie;
 
@@ -204,8 +231,13 @@ export class NeonAuthClient {
   /**
    * Obtain a verified, unexpired JWT for authenticating API requests.
    * Proactively refreshes if within 60 seconds of expiration.
+   * Implements fail-closed concurrency control bound to immutable session identity and authEpoch.
    */
   public async getValidJwt(): Promise<string | null> {
+    if (!this.baseUrl) {
+      throw new Error('Neon Auth service is unconfigured in production environment (missing VITE_NEON_AUTH_URL)');
+    }
+
     if (!this.currentSession || !this.currentSession.token) {
       return null;
     }
@@ -218,36 +250,78 @@ export class NeonAuthClient {
       return this.currentSession.jwt;
     }
 
-    // Concurrency control: coalesce multiple parallel refresh requests
-    if (this.tokenRefreshPromise) {
-      return this.tokenRefreshPromise;
+    const currentEpoch = this.authEpoch;
+    const currentUserId = this.currentSession.user?.id || '';
+    const currentToken = this.currentSession.token;
+    const currentCookie = this.currentSession.cookie;
+
+    // Concurrency control: coalesce multiple parallel refresh requests ONLY if bound to the same identity & epoch
+    if (
+      this.activeRefresh &&
+      this.activeRefresh.epoch === currentEpoch &&
+      this.activeRefresh.userId === currentUserId &&
+      this.activeRefresh.token === currentToken
+    ) {
+      return this.activeRefresh.promise;
     }
 
-    this.tokenRefreshPromise = (async () => {
+    // Outdated or mismatched refresh promise detected; discard
+    if (this.activeRefresh) {
+      this.activeRefresh = null;
+    }
+
+    const refreshPromise = (async (): Promise<string | null> => {
       try {
         const { token, expiresAt: newExp } = await this.fetchJwtToken(
-          this.currentSession!.token,
-          this.currentSession!.cookie
+          currentToken,
+          currentCookie
         );
-        if (this.currentSession) {
-          this.currentSession.jwt = token;
-          this.currentSession.jwtExpiresAt = newExp;
-          this.saveSession({ ...this.currentSession });
+
+        // Fail-closed concurrency revalidation:
+        // Reject and discard token if identity, session, or auth generation switched while request was in-flight
+        if (
+          this.authEpoch !== currentEpoch ||
+          !this.currentSession ||
+          (this.currentSession.user?.id || '') !== currentUserId ||
+          this.currentSession.token !== currentToken
+        ) {
+          console.warn('[NeonAuth] In-flight JWT refresh discarded: active session or auth epoch changed during refresh');
+          return null;
         }
+
+        // Apply refreshed JWT to verified current session
+        this.currentSession.jwt = token;
+        this.currentSession.jwtExpiresAt = newExp;
+        this.saveSession({ ...this.currentSession });
         return token;
       } catch (err) {
         console.warn('Failed to refresh Neon Auth JWT:', err);
-        // Security requirement: Never return a stale, expired token on refresh failure
-        if (this.currentSession?.jwt && (this.currentSession.jwtExpiresAt || 0) > Date.now()) {
+        // Fail-closed fallback: return existing token ONLY if identity still matches and token is unexpired
+        if (
+          this.authEpoch === currentEpoch &&
+          this.currentSession &&
+          (this.currentSession.user?.id || '') === currentUserId &&
+          this.currentSession.jwt &&
+          (this.currentSession.jwtExpiresAt || 0) > Date.now()
+        ) {
           return this.currentSession.jwt;
         }
         return null;
       } finally {
-        this.tokenRefreshPromise = null;
+        if (this.activeRefresh && this.activeRefresh.epoch === currentEpoch && this.activeRefresh.token === currentToken) {
+          this.activeRefresh = null;
+        }
       }
     })();
 
-    return this.tokenRefreshPromise;
+    this.activeRefresh = {
+      promise: refreshPromise,
+      epoch: currentEpoch,
+      userId: currentUserId,
+      token: currentToken
+    };
+
+    return refreshPromise;
   }
 
   /**
@@ -523,22 +597,121 @@ export class NeonAuthClient {
 // Global singleton instance
 export const neonAuth = new NeonAuthClient();
 
-/**
- * Universal authenticated API fetch helper.
- * When logged into Neon Auth, automatically attaches Bearer JWT header.
- * When in guest mode, uses same-origin credentials for signed session cookies.
- */
-export async function authenticatedApiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
-  const headers = new Headers(init.headers || {});
-  const jwt = await neonAuth.getValidJwt().catch(() => null);
+export class AuthenticationRequiredError extends Error {
+  public readonly isAuthError = true;
+  constructor(message = 'Active account session expired or requires re-authentication') {
+    super(message);
+    this.name = 'AuthenticationRequiredError';
+    Object.setPrototypeOf(this, AuthenticationRequiredError.prototype);
+  }
+}
 
-  if (jwt && !headers.has('Authorization')) {
-    headers.set('Authorization', `Bearer ${jwt}`);
+let guestSessionPromise: Promise<void> | null = null;
+
+export async function ensureGuestSession(force = false): Promise<void> {
+  // If user is logged into Neon Auth, never bootstrap or touch a guest session!
+  if (neonAuth.isAuthenticated()) {
+    return;
   }
 
-  return fetch(input, {
+  if (force) guestSessionPromise = null;
+  if (guestSessionPromise) return guestSessionPromise;
+
+  guestSessionPromise = (async () => {
+    try {
+      const response = await fetch('/api/auth/session', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(5000)
+      });
+      if (!response.ok) {
+        console.warn(`[ensureGuestSession] Session bootstrap returned ${response.status}`);
+      }
+    } catch (err) {
+      console.warn('[ensureGuestSession] Non-blocking session bootstrap notice:', err);
+    }
+  })();
+
+  try {
+    await guestSessionPromise;
+  } catch {
+    guestSessionPromise = null;
+  }
+}
+
+/**
+ * Universal authenticated API fetch helper.
+ * Fail-closed policy:
+ * - When user is authenticated: REQUIRES a valid unexpired JWT. If JWT cannot be retrieved or server returns 401,
+ *   throws AuthenticationRequiredError. NEVER silently falls back to anonymous guest cookie session!
+ * - When in guest mode: bootstraps signed guest session cookie with same-origin credentials.
+ */
+export async function authenticatedApiFetch(
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+  options?: { signal?: AbortSignal; timeoutMs?: number }
+): Promise<Response> {
+  const isAccountUser = neonAuth.isAuthenticated();
+
+  if (isAccountUser) {
+    let jwt: string | null = null;
+    try {
+      jwt = await neonAuth.getValidJwt();
+    } catch (err) {
+      console.error('[authenticatedApiFetch] Managed account JWT retrieval failed:', err);
+      throw new AuthenticationRequiredError(
+        'Failed to obtain valid session credentials for managed account. Re-authentication required.'
+      );
+    }
+
+    if (!jwt) {
+      throw new AuthenticationRequiredError(
+        'Account session expired or token is invalid. Please sign in again.'
+      );
+    }
+
+    const headers = new Headers(init.headers || {});
+    headers.set('Authorization', `Bearer ${jwt}`);
+
+    const res = await fetch(input, {
+      ...init,
+      headers,
+      credentials: init.credentials || 'same-origin',
+      signal: options?.signal || init.signal
+    });
+
+    if (res.status === 401) {
+      console.warn('[authenticatedApiFetch] Server rejected authentication credentials (401)');
+      throw new AuthenticationRequiredError(
+        'Server rejected authentication credentials (401). Please re-authenticate.'
+      );
+    }
+
+    return res;
+  }
+
+  // Legitimate Guest User path
+  await ensureGuestSession();
+
+  const headers = new Headers(init.headers || {});
+  let res = await fetch(input, {
     ...init,
     headers,
-    credentials: init.credentials || 'same-origin'
+    credentials: init.credentials || 'same-origin',
+    signal: options?.signal || init.signal
   });
+
+  if (res.status === 401) {
+    // Retry once for legitimate guest session renewal
+    await ensureGuestSession(true);
+    res = await fetch(input, {
+      ...init,
+      headers,
+      credentials: init.credentials || 'same-origin',
+      signal: options?.signal || init.signal
+    });
+  }
+
+  return res;
 }

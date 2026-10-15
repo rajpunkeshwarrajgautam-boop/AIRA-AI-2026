@@ -61,6 +61,11 @@ async function loadJwks(jwksUrl: URL): Promise<Jwks> {
   return body;
 }
 
+export function clearJwksCacheForTesting(): void {
+  cachedKeys = null;
+  cacheExpiresAt = 0;
+}
+
 /**
  * Verify Neon Auth JWTs before converting them to AIRA's ExecutionPrincipal.
  * The JWT subject comes ONLY from the verified cryptographic payload.
@@ -75,10 +80,21 @@ export async function verifyNeonAuthToken(token: string): Promise<ManagedPrincip
     throw new Error('INVALID_NEON_AUTH_JWT_HEADER: only EdDSA algorithm is permitted');
   }
   const { issuer, jwksUrl } = authConfig();
-  const publicKeys = await loadJwks(jwksUrl);
-  const jwk = publicKeys.keys.find(k => k.kid === header.kid &&
+  let publicKeys = await loadJwks(jwksUrl);
+  let jwk = publicKeys.keys.find(k => k.kid === header.kid &&
     (k.use === undefined || k.use === 'sig') &&
     (k.alg === undefined || k.alg === 'EdDSA'));
+
+  // Live key rotation support: if key is not found in cached JWKS, refresh once from source
+  if (!jwk && cachedKeys) {
+    cachedKeys = null;
+    cacheExpiresAt = 0;
+    publicKeys = await loadJwks(jwksUrl);
+    jwk = publicKeys.keys.find(k => k.kid === header.kid &&
+      (k.use === undefined || k.use === 'sig') &&
+      (k.alg === undefined || k.alg === 'EdDSA'));
+  }
+
   if (!jwk) throw new Error('NEON_AUTH_SIGNING_KEY_NOT_FOUND');
   const key = createPublicKey({ key: jwk, format: 'jwk' });
   const data = Buffer.from(parts[0] + '.' + parts[1]);

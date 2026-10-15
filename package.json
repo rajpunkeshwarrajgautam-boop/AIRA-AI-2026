@@ -54,6 +54,8 @@
     "test:auth-security": "npx tsx test/auth-security-authorization.test.ts",
     "test:auth-playwright": "npx tsx test/auth-playwright-cross-browser.test.ts",
     "test:auth-switching": "npx tsx test/auth-account-switching-isolation.test.ts",
+    "test:auth-token-race": "npx tsx test/neon-auth-token-race.test.ts",
+    "test:auth-fail-closed": "npx tsx test/auth-fail-closed-policy.test.ts",
     "test:guest-linking": "npx tsx test/guest-linking-positive.test.ts",
     "test:secrets": "npx tsx test/tracked-secrets-hygiene.test.ts"
   },

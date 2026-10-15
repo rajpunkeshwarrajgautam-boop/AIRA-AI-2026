@@ -26,7 +26,7 @@ const ProjectsModal = React.lazy(() => import('./components/ProjectsModal').then
 const SettingsModal = React.lazy(() => import('./components/SettingsModal').then(m => ({ default: m.SettingsModal })));
 import { MemoryVaultModal } from './components/MemoryVaultModal';
 import { AuthModal } from './components/AuthModal';
-import { neonAuth } from './lib/neonAuth';
+import { neonAuth, authenticatedApiFetch } from './lib/neonAuth';
 import { LibraryView } from './components/LibraryView';
 import { AgentsView } from './components/AgentsView';
 import { AutomationsView } from './components/AutomationsView';
@@ -552,10 +552,9 @@ function App() {
     if (!pendingApproval) return;
     setIsSubmittingApproval(true);
     try {
-      const res = await fetch(`/api/runs/${pendingApproval.runId}/approve`, {
+      const res = await authenticatedApiFetch(`/api/runs/${pendingApproval.runId}/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
         body: JSON.stringify({
           requestId: pendingApproval.id,
           decision

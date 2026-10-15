@@ -18,6 +18,7 @@ import {
   Wrench
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { authenticatedApiFetch } from '../lib/neonAuth';
 
 interface AgentDefinition {
   id: string;
@@ -80,7 +81,7 @@ export const AgentsView: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/agents');
+      const res = await authenticatedApiFetch('/api/agents');
       if (!res.ok) throw new Error('Failed to fetch agents registry.');
       const data = await res.json();
       setAgents(Array.isArray(data) ? data : []);
@@ -104,7 +105,7 @@ export const AgentsView: React.FC = () => {
     setIsSubmitting(true);
     setFormError(null);
     try {
-      const res = await fetch('/api/agents', {
+      const res = await authenticatedApiFetch('/api/agents', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -138,7 +139,7 @@ export const AgentsView: React.FC = () => {
   const handleDeleteAgent = async (id: string) => {
     if (!confirm('Are you sure you want to delete this agent?')) return;
     try {
-      const res = await fetch(`/api/agents/${encodeURIComponent(id)}`, {
+      const res = await authenticatedApiFetch(`/api/agents/${encodeURIComponent(id)}`, {
         method: 'DELETE'
       });
       if (!res.ok) throw new Error('Failed to delete agent.');
@@ -159,7 +160,7 @@ export const AgentsView: React.FC = () => {
     if (!missionAgent) return;
     setIsExecutingMission(true);
     try {
-      const res = await fetch(`/api/agents/${encodeURIComponent(missionAgent.id)}/run`, {
+      const res = await authenticatedApiFetch(`/api/agents/${encodeURIComponent(missionAgent.id)}/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: missionPrompt.trim() })

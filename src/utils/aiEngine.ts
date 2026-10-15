@@ -13,62 +13,16 @@ export interface StreamCallbacks {
   onError: (error: string) => void;
 }
 
-let sessionBootstrapPromise: Promise<void> | null = null;
-
-async function ensureApiSession(forceRefresh = false): Promise<void> {
-  if (forceRefresh) sessionBootstrapPromise = null;
-  if (sessionBootstrapPromise) return sessionBootstrapPromise;
-
-  sessionBootstrapPromise = (async () => {
-    const response = await fetch('/api/auth/session', {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-      },
-      credentials: 'same-origin',
-    });
-
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '');
-      throw new Error(`Session bootstrap failed (${response.status})${detail ? `: ${detail}` : ''}`);
-    }
-  })();
-
-  try {
-    await sessionBootstrapPromise;
-  } catch (error) {
-    sessionBootstrapPromise = null;
-    throw error;
-  }
-}
+import { authenticatedApiFetch, AuthenticationRequiredError } from '../lib/neonAuth';
 
 async function postChatStream(body: unknown): Promise<Response> {
-  await ensureApiSession();
-
-  const jwt = await neonAuth.getValidJwt().catch(() => null);
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
-  if (jwt) {
-    headers['Authorization'] = `Bearer ${jwt}`;
-  }
-
-  const request = () => fetch('/api/chat/stream', {
+  return authenticatedApiFetch('/api/chat/stream', {
     method: 'POST',
-    headers,
-    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+    },
     body: JSON.stringify(body),
   });
-
-  let response = await request();
-
-  // Recover once from an expired/invalid session by issuing a fresh signed cookie if guest
-  if (response.status === 401 && !jwt) {
-    await ensureApiSession(true);
-    response = await request();
-  }
-
-  return response;
 }
 
 
@@ -242,6 +196,10 @@ export async function streamAIResponse(
         return;
       }
     } catch (backendError: any) {
-      wrappedCallbacks.onError(`Failed to connect to backend runtime: ${backendError.message}`);
+      if (backendError instanceof AuthenticationRequiredError || backendError?.isAuthError) {
+        wrappedCallbacks.onError(`Authentication required: ${backendError.message}`);
+      } else {
+        wrappedCallbacks.onError(`Failed to connect to backend runtime: ${backendError.message}`);
+      }
     }
 }

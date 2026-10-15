@@ -48,6 +48,24 @@ async function run() {
   assert.equal((await verifyNeonAuthToken(good)).userId, verified.userId);
   assert.equal(jwksFetches, 1, 'JWKS should cache between requests');
 
+  // KEY ROTATION TEST: Introduce test-key-2 while test-key-1 is cached
+  const { publicKey: pubKey2, privateKey: privKey2 } = generateKeyPairSync('ed25519');
+  const jwk2 = { ...pubKey2.export({ format: 'jwk' }), kid: 'test-key-2', alg: 'EdDSA', use: 'sig' };
+  globalThis.fetch = async () => {
+    jwksFetches++;
+    return new Response(JSON.stringify({ keys: [jwk, jwk2] }), {
+      status: 200, headers: { 'Content-Type': 'application/json' }
+    });
+  };
+  const header2 = Buffer.from(JSON.stringify({ alg: 'EdDSA', kid: 'test-key-2', typ: 'JWT' })).toString('base64url');
+  const payload2 = Buffer.from(JSON.stringify({ iss: AUTH_ORIGIN, aud: AUTH_ORIGIN, sub: 'rotated-user-999', iat: now - 30, exp: now + 600 })).toString('base64url');
+  const unsigned2 = header2 + '.' + payload2;
+  const tokenRotated = unsigned2 + '.' + sign(null, Buffer.from(unsigned2), privKey2).toString('base64url');
+
+  const verifiedRotated = await verifyNeonAuthToken(tokenRotated);
+  assert.equal(verifiedRotated.userId, 'neon_user_rotated-user-999');
+  assert.equal(jwksFetches, 2, 'JWKS must be refetched on unknown kid to support seamless key rotation');
+
   const other = jwt({ iss: AUTH_ORIGIN, aud: AUTH_ORIGIN, sub: 'separate-account-456', iat: now - 30, exp: now + 600 });
   assert.notEqual((await verifyNeonAuthToken(other)).userId, verified.userId,
     'two independent accounts must get distinct principal IDs');
