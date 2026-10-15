@@ -131,6 +131,35 @@ export class DurableDelegations {
     return asDelegation(updated[0]);
   }
 
+  /**
+   * Separate from child state: a child saying COMPLETED is not independent
+   * evidence that its assigned objective happened. Never return VERIFIED
+   * unless Runtime V2 recorded complete readback for every mission step.
+   */
+  async verification(ownerId:string,delegationId:string):Promise<{
+    status:'COMPLETED_VERIFIED'|'NOT_VERIFIED'|'NOT_TERMINAL';
+    childRunId:string; verifiedSteps:number
+  }> {
+    const record=await this.get(ownerId,delegationId);
+    if(!record)throw new Error('DELEGATION_NOT_FOUND');
+    const row=await db('runs').select('principal_id','state','context_data')
+      .where({id:record.childRunId,principal_id:ownerId}).first();
+    if(!row || row.principal_id!==ownerId)throw new Error('DELEGATION_CHILD_NOT_FOUND');
+    if(row.state!=='COMPLETED')
+      return {status:'NOT_TERMINAL',childRunId:record.childRunId,verifiedSteps:0};
+    const context=typeof row.context_data==='string'
+      ? JSON.parse(row.context_data):row.context_data;
+    const outcome=context?.__airaOutcomeVerificationV2;
+    const evidence=outcome?.evidence;
+    const verified=outcome?.status==='COMPLETED_VERIFIED' &&
+      Array.isArray(evidence)&&evidence.length>0&&evidence.every((v:any)=>
+        v && v.verified===true && typeof v.toolCallId==='string');
+    return {
+      status:verified?'COMPLETED_VERIFIED':'NOT_VERIFIED',
+      childRunId:record.childRunId,verifiedSteps:verified?evidence.length:0
+    };
+  }
+
   async cancelTree(ownerId:string,parentRunId:string):Promise<number>{
     // Database recursion is bounded independently from user supplied inputs.
     const runs=new Set<string>([parentRunId]);
