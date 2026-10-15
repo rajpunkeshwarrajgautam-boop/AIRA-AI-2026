@@ -1,5 +1,5 @@
 ---
-description: Certify every AIRA-AI-2026 release from clean branch state through CI, preview, browser smoke, security review, Reality Checker, merge, and production verification with SHA-matched evidence.
+description: Certify every AIRA-AI-2026 release from clean branch state through CI, preview, browser smoke, security review, Reality Checker, explicit owner GO LIVE authorization, merge, and production verification with SHA-matched evidence.
 ---
 
 # AIRA-AI-2026 — RELEASE CERTIFICATION
@@ -7,7 +7,7 @@ description: Certify every AIRA-AI-2026 release from clean branch state through 
 ## MISSION
 
 Certify an AIRA-AI-2026 release safely from branch inspection through preview,
-merge, production deployment, and final browser verification.
+explicit owner GO LIVE authorization, merge, production deployment, and final browser verification.
 
 This workflow is for ANY release candidate, not just chat/runtime work.
 
@@ -20,15 +20,15 @@ Never declare PASS because:
 - HTTP returns 200
 
 PASS requires evidence that the intended release behavior works on the exact
-deployed commit.
+deployed commit, and that explicit owner authorization was verified prior to production merge.
 
 ---
 
-## WORKSPACE
+## WORKSPACE & TARGET CONFIGURATION
 
 Repository:
 
-C:\Users\WORKSTATION\AIRA-AI-2026
+C:\Users\WORKSTATION\AIRA-AI-2026-RELEASE-CONTROLS (or active release worktree)
 
 GitHub:
 
@@ -36,13 +36,14 @@ rajpunkeshwarrajgautam-boop/AIRA-AI-2026
 
 Production branch:
 
-main
+prod-release (Verified default and Vercel-tracked production branch)
 
 Canonical production URL:
 
 https://aira-ai-2026.vercel.app
 
 Never certify production using an old immutable deployment URL.
+Dynamically verify repository default branch via `gh repo view --json defaultBranchRef`.
 
 ---
 
@@ -50,24 +51,26 @@ Never certify production using an old immutable deployment URL.
 
 Run:
 
+```bash
 git status
 git branch --show-current
 git rev-parse HEAD
 git log -5 --oneline
 git remote -v
+```
 
 Record:
 
 - current branch
 - current SHA
-- base branch
+- base branch (`prod-release`)
 - worktree state
 
-If current branch is main and release work is not already committed:
+If current branch is `prod-release` and release work is not already committed:
 
 STOP.
 
-Never implement release changes directly on main unless explicitly ordered.
+Never implement release changes directly on `prod-release` unless explicitly ordered.
 
 If worktree contains unknown changes:
 
@@ -111,8 +114,8 @@ Final independent reviewers should include installed equivalents of:
 
 If installed, prefer:
 
-agency-evidence-collector
-agency-reality-checker
+- `agency-evidence-collector`
+- `agency-reality-checker`
 
 The Reality Checker runs LAST before merge approval.
 
@@ -133,8 +136,6 @@ Use only skills relevant to this release, such as:
 - debugging
 - code review
 
-Do not invoke design/whimsy skills unless UI work is actually in scope.
-
 Record agents and skills actually used.
 
 ---
@@ -145,9 +146,11 @@ Determine exactly what this release changes.
 
 Run:
 
-git diff --stat main...HEAD
-git diff --name-only main...HEAD
-git log --oneline main..HEAD
+```bash
+git diff --stat origin/prod-release...HEAD
+git diff --name-only origin/prod-release...HEAD
+git log --oneline origin/prod-release..HEAD
+```
 
 Classify affected domains:
 
@@ -163,13 +166,9 @@ Classify affected domains:
 
 Create a concise release-risk matrix:
 
-FILE / AREA
-CHANGE
-RISK
-REQUIRED TEST
+FILE / AREA | CHANGE | RISK | REQUIRED TEST
 
 Do not test unrelated systems blindly.
-
 Do not omit critical tests for touched systems.
 
 ---
@@ -193,12 +192,10 @@ Verify:
 - no insecure CORS change
 - no destructive migration without review
 
-Run available credential/secret scans.
+Run available credential/secret scans (`npm run test:secrets` or tracked secret hygiene).
 
 An NVIDIA key was historically exposed in this project.
-
 Never retrieve or reuse leaked credentials from Git history.
-
 Only use currently provisioned secure environment secrets.
 
 Any credential exposure = FAIL.
@@ -211,41 +208,35 @@ Inspect package.json and repository tooling first.
 
 Run relevant existing scripts.
 
-Typical gates when present:
+Mandatory base gates:
 
+```bash
 npm ci
 npm run lint
 npm run typecheck
 npm run build
+```
+
+Also run release authorization test suites:
+
+```bash
+npm run test:release-auth:unit
+npm run test:release-auth:app
+```
 
 Also run scoped test suites relevant to the release.
-
 Possible scripts include:
 
-npm run test:identity
-npm run test:session-auth
-npm run test:startup
-npm run test:integration
-npm run test:recovery
-npm run test:runtime
-npm run test:e2e
-
-Also check for repository-specific tests covering:
-
-- model provider routing
-- isolation
-- orchestration
-- worker leases
-- skills/connectors
-- API contracts
-- migrations
+- `npm run test:identity`
+- `npm run test:session-auth`
+- `npm run test:startup`
+- `npm run test:integration`
+- `npm run test:recovery`
+- `npm run test:runtime`
+- `npm run test:e2e`
 
 Never invent scripts.
-
-If a required-looking script is absent, report:
-
-NOT PRESENT
-
+If a required-looking script is absent, report: NOT PRESENT.
 Any failing required gate = FAIL until fixed.
 
 ---
@@ -257,17 +248,15 @@ If database files or migrations changed:
 - inspect migration order
 - inspect reversibility
 - verify idempotency where applicable
-- test against non-production database
+- test against non-production database (Neon staging branch)
 - verify constraints/indexes
 - verify compatibility with existing data
 - verify user/workspace/project isolation
 
-Prefer transaction + rollback for certification when possible.
-
+Verify deploy database contract via `npm run db:verify:deploy`.
 Do not perform destructive production writes during certification.
 
 If DB is not touched, record:
-
 DATABASE IMPACT: NONE
 
 ---
@@ -316,11 +305,8 @@ Verify:
 - visible browser result
 
 No production mock fallback.
-
 Aira product aliases must not be mistaken for provider model IDs.
-
 If NVIDIA is used, verify the real remote model ID.
-
 For streaming paths verify content actually reaches the UI.
 
 ---
@@ -364,16 +350,6 @@ At minimum verify:
 
 Add release-specific journeys based on changed scope.
 
-If auth changed, include auth flow.
-
-If artifacts changed, create/open artifact.
-
-If agents changed, run an agent mission.
-
-If automations changed, test an automation path.
-
-If research changed, run research path.
-
 ---
 
 ## 11. EMPTY / SILENT FAILURE RULE
@@ -383,9 +359,7 @@ Never accept silent failure.
 For any user action, terminal outcome must be either:
 
 A. successful visible result
-
 or
-
 B. visible actionable error
 
 Never accept:
@@ -403,13 +377,13 @@ Any silent terminal state = FAIL.
 
 ## 12. CI CERTIFICATION
 
-Wait for the exact branch/PR CI.
+Wait for the exact branch/PR CI on GitHub Actions.
 
 Record:
 
 - workflow run ID
 - branch SHA
-- each required job
+- each required job (`Fast CI`, `Semantic Search CI`, `Main / PR certification`)
 - conclusion
 
 Require:
@@ -417,7 +391,6 @@ Require:
 CI SHA == branch HEAD
 
 Do not use results from an older commit.
-
 If CI is rerun after new changes, discard earlier certification evidence and
 certify the new HEAD.
 
@@ -460,19 +433,10 @@ Run:
 - network inspection if needed
 
 For chat smoke:
-
-User:
-Reply exactly with PREVIEW_RELEASE_OK
-
-Require visible:
-
-PREVIEW_RELEASE_OK
-
-If model/provider behavior is not part of the release but chat is a critical
-global path, still perform a minimal smoke.
+User: `Reply exactly with PREVIEW_RELEASE_OK`
+Require visible: `PREVIEW_RELEASE_OK`
 
 Capture evidence.
-
 Any blocker = DO NOT MERGE.
 
 ---
@@ -503,7 +467,7 @@ Evidence Collector must flag unsupported claims.
 
 ## 16. REALITY CHECKER
 
-Run Reality Checker LAST before merge.
+Run Reality Checker LAST before proposing merge.
 
 Its job is to try to prove the release is NOT ready.
 
@@ -531,55 +495,67 @@ Check:
 If Reality Checker identifies a material unresolved issue:
 
 FAIL
-DO NOT MERGE
+DO NOT PROPOSE MERGE
 
 Fix, rerun affected gates, and review again.
 
 ---
 
-## 17. PR + MERGE
+## 17. STRICT OWNER GO LIVE AUTHORIZATION & PR MERGE
 
-Before merge:
+### STRICT MERGE AND DEPLOYMENT BOUNDARY:
+- An automated agent, CI process, or review tool has **ZERO authority** to autonomously merge into `prod-release` or deploy to production.
+- Green CI is **NOT** merge authorization.
+- "Ready" status on Vercel is **NOT** merge authorization.
+- Because Vercel triggers a production deployment automatically upon any merge to `prod-release`, **merging the PR IS the live production deployment trigger**.
 
-git status
-git diff --stat main...HEAD
-git diff main...HEAD
+### Pre-Authorization Verification:
+1. Verify PR targets `prod-release`:
+   ```bash
+   gh pr view <pr_number> --json baseRefName,headRefOid,state
+   ```
+2. Inspect diff against `prod-release`:
+   ```bash
+   git diff --stat origin/prod-release...HEAD
+   ```
+3. Run authoritative release verification:
+   ```bash
+   npm run verify:release-auth -- --pr <pr_number> --sha <candidate_sha>
+   ```
 
-Require:
-
-- clean working tree
-- scoped changes
-- no secrets
-- CI PASS
-- preview PASS
-- Evidence Collector PASS
-- Reality Checker PASS
-
-Create/update PR into main.
-
-Record PR number.
-
-Merge only after all required gates are green.
+### Owner GO LIVE Decision Gate:
+1. Present all collected evidence to repository owner `rajpunkeshwarrajgautam-boop`.
+2. Document:
+   - exact PR number
+   - exact candidate commit SHA
+   - verified CI run IDs
+   - Vercel preview deployment ID
+   - database migration impacts and rollback target
+3. Request explicit human GO LIVE instruction for the exact SHA:
+   `GO LIVE <candidate_sha>`
+4. **STOP and wait for the owner's explicit decision.**
+5. Only after explicit human owner approval is dispatched and validated:
+   Owner manually merges the PR into `prod-release`, OR authorized merge step is executed under direct owner command.
 
 Record merge commit SHA.
 
 ---
 
-## 18. PRODUCTION DEPLOYMENT
+## 18. PRODUCTION DEPLOYMENT VERIFICATION
 
-Wait for Vercel production deployment.
+Wait for Vercel production deployment triggered by merge to `prod-release`.
 
 Record:
 
 - production deployment ID
 - deployment SHA
-- merged main SHA
+- merged `prod-release` SHA
 - state
 - production alias
 
 Require:
 
-production SHA == merged main SHA
+production SHA == merged `prod-release` SHA
 state == READY
 
 Use canonical production URL:
@@ -596,38 +572,27 @@ Perform real production smoke testing.
 
 At minimum:
 
-TEST 1
-Load production home.
-
+TEST 1: Load production home.
 Require successful render.
 
-TEST 2
-Start new chat.
+TEST 2: Start new chat.
 
-TEST 3
-Send:
-
-Reply exactly with PRODUCTION_RELEASE_OK
-
+TEST 3: Send:
+`Reply exactly with PRODUCTION_RELEASE_OK`
 Require visible:
+`PRODUCTION_RELEASE_OK`
 
-PRODUCTION_RELEASE_OK
-
-TEST 4
-Open the primary feature changed in this release.
-
+TEST 4: Open the primary feature changed in this release.
 Require expected behavior.
 
-TEST 5
-Check browser console/network for release-blocking errors.
+TEST 5: Check browser console/network for release-blocking errors.
 
 Add release-specific production tests as necessary.
-
-Do not perform destructive production actions unnecessarily.
+Do not perform destructive production actions.
 
 ---
 
-## 20. PRODUCTION SECURITY CHECK
+## 20. PRODUCTION SECURITY & INTEGRITY CHECK
 
 Confirm after deployment:
 
@@ -636,62 +601,42 @@ Confirm after deployment:
 - no secret exposed in client bundle
 - production provider/runtime configuration is correct
 - production alias points to intended deployment
-- deployment SHA matches main
+- deployment SHA matches `prod-release` HEAD
+- database migrations are intact and compatible
 
-Any mismatch = FAIL.
+Any mismatch = INCIDENT. Follow documented rollback procedure.
 
 ---
 
-## 21. FINAL EVIDENCE
+## 21. FINAL FACTUAL REPORT
 
 Produce factual final report:
 
-Starting SHA:
-Branch:
-Final branch SHA:
-Files changed:
-Release scope:
-
-Agents used:
-Skills used:
-
-Lint:
-Typecheck:
-Build:
-Tests:
-CI run:
-CI result:
-
-Security review:
-Database impact:
-API result:
-Runtime/provider result:
-Frontend result:
-Browser result:
-
-Preview deployment ID:
-Preview SHA:
-Preview state:
-Preview smoke:
-
-Evidence Collector:
-Reality Checker:
-
-PR:
-Merge SHA:
-
-Production deployment ID:
-Production SHA:
-Main SHA:
-Production state:
-Production alias:
-Production smoke:
-PRODUCTION_RELEASE_OK:
-
-Known limitations:
+- Starting SHA:
+- Branch:
+- Final branch SHA:
+- Candidate PR:
+- Target branch (`prod-release`):
+- Files changed:
+- Release scope:
+- Agents used:
+- Skills used:
+- Quality gates (Lint, Typecheck, Build):
+- Release auth unit tests:
+- Scoped domain tests:
+- CI run ID & results:
+- Preview deployment ID & SHA:
+- Preview smoke result:
+- Evidence Collector verdict:
+- Reality Checker verdict:
+- Explicit Owner GO LIVE Authorization evidence:
+- Merge commit SHA:
+- Production deployment ID & SHA:
+- Production smoke result:
+- Known limitations & residual risks:
 
 FINAL VERDICT:
-PASS / FAIL
+PASS / FAIL / BLOCKED
 
 ---
 
@@ -707,9 +652,10 @@ correct branch
 + preview functional smoke
 + independent evidence review
 + independent reality check
++ explicit owner GO LIVE authorization
 + production SHA match
 + production functional smoke
 
 If any required item is missing or uncertain:
 
-FINAL VERDICT = FAIL
+FINAL VERDICT = FAIL or BLOCKED

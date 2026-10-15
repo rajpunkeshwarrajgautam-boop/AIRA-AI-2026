@@ -106,6 +106,12 @@ jobs:
       - name: Preview principal spoofing guard
         run: npm run test:preview-identity
 
+      - name: Release authorization policy unit tests (deterministic boundaries)
+        run: npm run test:release-auth:unit
+
+      - name: Dedicated GitHub App publisher policy tests (no App credentials)
+        run: npm run test:release-auth:app
+
       - name: Router and policy verification
         run: npm run test:router
 
