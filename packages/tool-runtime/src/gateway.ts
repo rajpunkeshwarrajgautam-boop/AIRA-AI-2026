@@ -190,7 +190,7 @@ export class ToolGateway extends EventEmitter {
     if (context.idempotencyKey) {
       const cached = await this.repository.getToolCallByIdempotencyKey(context.idempotencyKey);
       if (cached && cached.lifecycleState === 'COMPLETED') {
-        if (cached.principalId !== principal.userId || cached.runId !== runId ||
+        if (cached.principalId !== principal.userId ||
             cached.toolName !== def.name || !isDeepStrictEqual(cached.arguments, args)) {
           return {
             toolCallId: callId, output: null, isError: true,
