@@ -35,7 +35,7 @@ GitHub:
 rajpunkeshwarrajgautam-boop/AIRA-AI-2026
 
 Production:
-main
+prod-release
 
 Working branch:
 fix/production-chat-final-certification
@@ -655,8 +655,8 @@ Any material unresolved issue means FAIL.
 Before commit:
 
 git status
-git diff --stat main...HEAD
-git diff main...HEAD
+git diff --stat origin/prod-release...HEAD
+git diff origin/prod-release...HEAD
 
 Require scoped changes and no secrets.
 
@@ -672,7 +672,7 @@ git push -u origin fix/production-chat-final-certification
 
 Create PR into:
 
-main
+prod-release
 
 Do NOT merge before preview certification.
 
@@ -719,14 +719,15 @@ Merge only if:
 - no blank response
 - Evidence Collector PASS
 - Reality Checker PASS
+- Explicit Owner GO LIVE Authorization verified
 
-Merge to main.
+Merge to prod-release only after explicit human owner decision.
 
 Wait for Vercel production.
 
 Require:
 
-production SHA == merged main SHA
+production SHA == merged prod-release SHA
 production state == READY
 
 ---

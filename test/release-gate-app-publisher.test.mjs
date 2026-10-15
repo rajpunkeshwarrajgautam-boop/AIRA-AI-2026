@@ -133,3 +133,38 @@ test('older owner approval cannot overwrite a later App-issued revocation', asyn
   }), /PRIOR_APPROVAL_REVOKED/);
   assert.equal(observed.filter(c => c.method === 'POST').length, 0);
 });
+
+test('subsequent error status or future failure timestamp prevents approval publication', async () => {
+  const errorStatusHistory = [{ context: STATUS_CONTEXT, state: 'error',
+    description: 'System error during gating check', created_at: '2026-10-14T22:01:00Z' }];
+  const observed = [];
+  const errorRequest = async (url, init) => {
+    observed.push({ url, method: init.method });
+    if (url.endsWith('/actions/runs/' + runId)) return response(run());
+    if (url.endsWith('/pulls/68')) return response(pr());
+    if (url.endsWith('/commits/' + sha + '/statuses?per_page=100')) return response(errorStatusHistory);
+    throw new Error('Unexpected status publication after error status');
+  };
+  await assert.rejects(() => publishApprovedStatus({
+    runId, now, readToken: 'READ_ONLY_TOKEN_EXAMPLE', appToken: 'APP_INSTALLATION_TOKEN', request: errorRequest
+  }), /PRIOR_APPROVAL_REVOKED/);
+  assert.equal(observed.filter(c => c.method === 'POST').length, 0);
+
+  // Future failure timestamp rejected
+  const futureFailureHistory = [{ context: STATUS_CONTEXT, state: 'failure',
+    description: 'REVOKED by owner', created_at: '2026-10-14T22:10:00Z' }];
+  const futureRequest = async (url) => {
+    if (url.endsWith('/actions/runs/' + runId)) return response(run());
+    if (url.endsWith('/pulls/68')) return response(pr());
+    if (url.endsWith('/commits/' + sha + '/statuses?per_page=100')) return response(futureFailureHistory);
+    throw new Error('Unexpected status publication with future timestamp');
+  };
+  await assert.rejects(() => publishApprovedStatus({
+    runId, now, readToken: 'READ_ONLY_TOKEN_EXAMPLE', appToken: 'APP_INSTALLATION_TOKEN', request: futureRequest
+  }), /REVOCATION_TIMESTAMP_INVALID/);
+});
+
+test('future completion timestamp updated_at is rejected', () => {
+  rejectRun('updated_at', '2026-10-14T22:10:00Z', 'COMPLETION_TIMESTAMP_INVALID');
+});
+

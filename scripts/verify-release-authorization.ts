@@ -110,7 +110,7 @@ export async function verifyLiveReleaseAuthorization(args: CliArgs): Promise<{
   // Tier B: fail closed until the dedicated GitHub App identity is configured.
   // The GitHub ruleset must also require this context from the App integration ID.
   const expectedAppIssuer = process.env.AIRA_RELEASE_GATE_APP_BOT_LOGIN;
-  if (!expectedAppIssuer || !/^[a-zA-Z0-9-]+\\[bot\\]$/.test(expectedAppIssuer) ||
+  if (!expectedAppIssuer || !/^[a-zA-Z0-9-]+\[bot\]$/.test(expectedAppIssuer) ||
       expectedAppIssuer === 'github-actions[bot]') {
     return {
       authorized: false,

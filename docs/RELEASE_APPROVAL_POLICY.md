@@ -128,6 +128,20 @@ To ensure that no automated agent, script, or speculative run can ever deploy to
   - An agent must prepare the release, run all CI checks, obtain staging verification evidence, present the final candidate SHA and diff to the user, and **STOP**.
   - Merging and production release require the user's explicit, real-time instruction in the active session.
 
+### Layer 8: Deterministic Integration Specification with Auth PR #65
+Both PR #64 (`policy/explicit-production-approval-20261014`) and PR #65 (`feat/staging-neon-auth-verified-principal-20261014`) target `prod-release` and modify `.github/workflows/ci.yml` and `package.json`.
+- **Non-Overlapping Changes**:
+  - In `ci.yml`: PR #65 adds `test:neon-auth-identity` before `Preview principal spoofing guard`; PR #64 adds `test:release-auth:unit` and `test:release-auth:app` after it.
+  - In `package.json`: PR #65 adds `test:neon-auth-*` scripts; PR #64 adds `test:release-auth*` scripts.
+- **Combined Test Guarantee**:
+  Upon integration, the combined suite in Fast CI will execute:
+  1. `test:neon-auth-identity` (Managed account JWT signature and principal boundary regression)
+  2. `test:preview-identity` (Preview principal spoofing guard)
+  3. `test:release-auth:unit` (52 deterministic release-authorization policy tests)
+  4. `test:release-auth:app` (14 deterministic GitHub App publisher tests)
+- **Integration Order**:
+  PR #64 serves as the release-control foundation and should be merged first under Phase A bootstrap. PR #65 will then rebase or merge against `prod-release` and run through the newly established release-authorization verification.
+
 ---
 
 ## Emergency and rollback procedure

@@ -91,13 +91,12 @@ export async function publishApprovedStatus({ runId, readToken, appToken, now = 
   const recent = await githubApi('commits/' + verified.candidateSha + '/statuses?per_page=100', appToken, { request });
   requireCondition(Array.isArray(recent), 'STATUS_HISTORY_INVALID');
   const latest = recent.find(s => s?.context === STATUS_CONTEXT);
-  if (latest && latest.state === 'failure' &&
-      typeof latest.description === 'string' && latest.description.startsWith('REVOKED')) {
-    const revokedAt = Date.parse(latest.created_at);
-    requireCondition(Number.isFinite(revokedAt) && revokedAt < now, 'REVOCATION_TIMESTAMP_INVALID');
+  if (latest && (latest.state === 'failure' || latest.state === 'error')) {
+    const failedAt = Date.parse(latest.created_at);
+    requireCondition(Number.isFinite(failedAt) && failedAt <= now, 'REVOCATION_TIMESTAMP_INVALID');
     const attestation = await githubApi('actions/runs/' + runId, readToken, { request });
     const attestedAt = Date.parse(attestation.created_at);
-    requireCondition(Number.isFinite(attestedAt) && attestedAt > revokedAt, 'PRIOR_APPROVAL_REVOKED');
+    requireCondition(Number.isFinite(attestedAt) && attestedAt > failedAt, 'PRIOR_APPROVAL_REVOKED');
   }
   // The only write in this program. App credential must NEVER be repository GITHUB_TOKEN.
   const status = await githubApi('statuses/' + verified.candidateSha, appToken, {
