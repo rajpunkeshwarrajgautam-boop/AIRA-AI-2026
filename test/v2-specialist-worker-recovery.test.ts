@@ -73,7 +73,7 @@ try {
     'Inspect recovery after unexpected worker death',['repo.read'],id('request_'));
   // The competing claimant is a REAL separate OS process using the same
   // PostgreSQL service, not a mock runtime or an in-memory claim.
-  const subprocess=String.raw\`
+  const subprocess=String.raw`
 const {Client}=require('pg');
 (async()=>{const c=new Client({connectionString:process.env.DATABASE_URL});
 await c.connect();const until=Date.now()+10000;
@@ -84,7 +84,7 @@ if(r.rowCount!==1)process.exit(3);
 console.log('REAL_DB_CLAIM:'+r.rows[0].fence);
 setInterval(()=>{},1000);
 })().catch(e=>{console.error(e);process.exit(2)});
-\`;
+`;
   const processChild=spawn(process.execPath,['-e',subprocess],{
     env:{...process.env,TEST_DELEGATION_ID:second.id},
     stdio:['ignore','pipe','pipe']
