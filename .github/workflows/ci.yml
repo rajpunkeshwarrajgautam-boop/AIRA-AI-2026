@@ -201,10 +201,20 @@ jobs:
           grep -q 'DOCKER_BROWSER_READY_FOR_FORCED_SIGKILL' /tmp/browser-killed.out
           browser restore | tee /tmp/browser-restored.out
           grep -q 'DOCKER_BROWSER_RESTORED_AFTER_SIGKILL' /tmp/browser-restored.out
-          docker run --rm --network none --read-only --cap-drop ALL \
+          # Run a separate genuine TCP probe in the same read-only/no-network
+          # container; capture and print the outcome before asserting so
+          # Docker/startup errors cannot masquerade as network blocking.
+          set +e
+          network_result=$(docker run --rm --network none --read-only --cap-drop ALL \
             --security-opt no-new-privileges:true \
+            --tmpfs /tmp:rw,nosuid,nodev,size=64m \
             --entrypoint node "$image" -e \
-            "const net=require('net');const c=net.connect({host:'1.1.1.1',port:80});c.setTimeout(1200);c.on('connect',()=>process.exit(11));c.on('timeout',()=>process.exit(0));c.on('error',()=>process.exit(0));"
+            "const net=require('node:net');const c=net.connect({host:'1.1.1.1',port:80});c.setTimeout(1500);c.on('connect',()=>{console.log('NETWORK_PROBE_UNEXPECTED_CONNECT');process.exit(11)});c.on('timeout',()=>{console.log('NETWORK_PROBE_DENIED_TIMEOUT');process.exit(0)});c.on('error',e=>{console.log('NETWORK_PROBE_DENIED_'+e.code);process.exit(0)});" 2>&1)
+          network_status=$?
+          set -e
+          echo "$network_result"
+          test "$network_status" -eq 0
+          grep -q 'NETWORK_PROBE_DENIED' <<< "$network_result"
           echo "PASS: real nonroot Chromium in capability-dropped, no-network Docker; persistent profile and SIGKILL recovery"
 
   semantic-search:
