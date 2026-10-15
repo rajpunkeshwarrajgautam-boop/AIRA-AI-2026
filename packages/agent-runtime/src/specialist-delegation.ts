@@ -12,8 +12,8 @@ export type Delegation = {
 
 const specialistScopes: Record<Specialist, readonly string[]> = {
   repository: ['repo.read', 'files.read'],
-  research: ['web.search', 'browser.read'],
-  verification: ['repo.read', 'files.read', 'web.search']
+  research: ['browser.read'],
+  verification: ['repo.read', 'files.read', 'browser.read']
 };
 export function specialistRegistry(scopes: readonly string[]): Array<{id:Specialist; scopes:string[]; available:boolean}> {
   return (Object.keys(specialistScopes) as Specialist[]).map(id => ({
