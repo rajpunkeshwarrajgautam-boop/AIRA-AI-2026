@@ -464,6 +464,42 @@ export class AgentRuntime extends EventEmitter {
 
     if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)) return;
 
+    // A delegated child may not treat its own context, model-selected tool,
+    // or prior approval as authorization. Reconcile with PostgreSQL on every
+    // entry/recovery and again before dispatching additional tool calls.
+    const childParent = run.context?.delegatedFrom;
+    const childSpecialist = run.context?.specialist;
+    if (childParent !== undefined || childSpecialist !== undefined) {
+      try {
+        if(typeof childParent!=='string' || !['repository','research','verification'].includes(childSpecialist) ||
+          !['AGENT_MISSION','TOOL_ACTION'].includes(run.intent)) {
+          throw new Error('DELEGATED_CHILD_POLICY_INVALID');
+        }
+        const checkpointTool=['TOOL_SELECTED','TOOL_APPROVED','TOOL_EXECUTING','TOOL_COMPLETED'].includes(
+          run.executionCheckpoint||''
+        ) ? run.toolCalls[run.toolCalls.length-1]?.name : undefined;
+        await new DurableDelegations().assertChildAuthorized(
+          run,childParent,childSpecialist,checkpointTool
+        );
+        if(checkpointTool){
+          const def=this.toolGateway.getTool(checkpointTool)?.definition||
+            this.toolRegistry.get(checkpointTool)?.definition;
+          if(!def || def.permissionLevel!=='READ' ||
+            (def.sideEffectLevel!=='READ'&&def.sideEffectLevel!=='NONE')) {
+            throw new Error('DELEGATED_TOOL_REQUIRES_UNAUTHORIZED_MUTATION');
+          }
+        }
+      } catch(err:any){
+        const message='DELEGATED_EXECUTION_BLOCKED: '+String(err?.message||err);
+        run.error=message;
+        run.content=message;
+        run.executionCheckpoint='TOOL_FAILED';
+        await this.runRepo.saveRun(run);
+        await this.transitionRunState(runId,'FAILED',message);
+        return;
+      }
+    }
+
     // No persisted model-plan tool can ever reach the approval or execution
     // gateway without passing the server HMAC, scope and exact-call gates.
     // Recheck on every restart, not only after the tool returned.
@@ -740,6 +776,20 @@ export class AgentRuntime extends EventEmitter {
 
         const selectedToolName = selected.name;
         const selectedArgs = selected.args;
+        if (typeof childParent === 'string' && childSpecialist) {
+          try {
+            await new DurableDelegations().assertChildAuthorized(
+              run,childParent,childSpecialist,selectedToolName
+            );
+          }catch(err:any){
+            const message='DELEGATED_TOOL_REJECTED: '+String(err?.message||err);
+            run.error=message;
+            run.executionCheckpoint='TOOL_FAILED';
+            await this.runRepo.saveRun(run);
+            await this.transitionRunState(runId,'FAILED',message);
+            return;
+          }
+        }
         if (!this.toolGateway.getTool(selectedToolName) && !this.toolRegistry.get(selectedToolName)) {
           const message = `TOOL_UNAVAILABLE: ${selectedToolName} is not registered in this runtime. No simulated execution was performed.`;
           run.content = message;
@@ -883,6 +933,9 @@ export class AgentRuntime extends EventEmitter {
       }
 
       run = await this.runRepo.getRun(runId) as Run; // reload after async tool execution
+      // Parent cancellation can mark a child CANCELLED during an asynchronous
+      // read. Never resurrect that cancelled run with a late tool result.
+      if(!run || ['CANCELLED','FAILED'].includes(run.state)) return;
 
       const recoveryEngine = new ToolRecoveryEngine();
       let finalToolResult = toolResult;
