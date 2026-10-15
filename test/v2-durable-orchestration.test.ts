@@ -74,6 +74,17 @@ try{
   await db('runs').where({id:child}).update({state:'COMPLETED',status:'COMPLETED'});
   const terminal=await repo.finalize(owner,d1.id,'worker-1',claimed.fence);
   assert.equal(terminal.status,'COMPLETED');
+  const unverified=await repo.verification(owner,d1.id);
+  assert.equal(unverified.status,'NOT_VERIFIED','Completed model response cannot claim independent verification');
+  await db('runs').where({id:child}).update({context_data:JSON.stringify({
+    __airaOutcomeVerificationV2:{
+      status:'COMPLETED_VERIFIED',
+      evidence:[{toolCallId:'actual-certified-read',verified:true}]
+    }
+  })});
+  assert.equal((await repo.verification(owner,d1.id)).status,'COMPLETED_VERIFIED');
+  await assert.rejects(repo.verification(other,d1.id),/DELEGATION_NOT_FOUND/);
+
   await assert.rejects(repo.claim(owner,d1.id,'worker-late'),/NOT_CLAIMABLE/);
 
   // A completed parent cannot delegate again. A child run may still become a
