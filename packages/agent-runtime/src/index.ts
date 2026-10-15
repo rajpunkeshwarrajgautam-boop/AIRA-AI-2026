@@ -715,12 +715,11 @@ export class AgentRuntime extends EventEmitter {
       const toolCall = run.toolCalls[run.toolCalls.length - 1];
       const toolDef = this.toolGateway.getTool(toolCall.name)?.definition || this.toolRegistry.get(toolCall.name)?.definition;
       
-      const isApproved = await this.approvalKernel.isToolCallApproved(
-        runId,
-        toolCall.name,
-        toolDef?.permissionLevel || 'READ',
-        run.principalId
-      );
+      const isApproved = toolCall.name === 'isolated_application_build'
+        ? await this.approvalKernel.isExactToolCallApproved(runId, toolCall, run.principalId)
+        : await this.approvalKernel.isToolCallApproved(
+            runId, toolCall.name, toolDef?.permissionLevel || 'READ', run.principalId
+          );
 
       const requiresApproval = (!isApproved) && (
         toolDef?.approvalPolicy === 'require_approval' ||
