@@ -49,6 +49,8 @@ export class PostgresApprovalRepository implements ApprovalRepository {
   async getRequest(id: string): Promise<ApprovalRequest | undefined> {
     const row = await db('approvals')
       .join('tool_calls', 'approvals.tool_call_id', 'tool_calls.id')
+      .select('approvals.*','tool_calls.tool as tool',
+        'tool_calls.arguments as arguments','tool_calls.started_at as started_at')
       .where('approvals.id', id).first();
       
     if (!row) return undefined;
@@ -77,7 +79,9 @@ export class PostgresApprovalRepository implements ApprovalRepository {
     const rows = await db('approvals')
       .join('tool_calls', 'approvals.tool_call_id', 'tool_calls.id')
       .where('approvals.run_id', runId)
-      .andWhere('approvals.status', 'PENDING');
+      .andWhere('approvals.status', 'PENDING')
+      .select('approvals.*','tool_calls.tool as tool',
+        'tool_calls.arguments as arguments','tool_calls.started_at as started_at');
       
     return rows.map((row: any) => ({
       id: row.id,
