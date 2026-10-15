@@ -10,7 +10,8 @@ import type { MissionStep } from './mission-plan.js';
  * tools whose outputs have independent observable verification.
  */
 const ToolNameSchema = z.enum([
-  'file_system_list', 'file_system_read', 'repo_git_status', 'repo_git_log'
+  'file_system_list', 'file_system_read', 'repo_git_status', 'repo_git_log',
+  'browser_session_inspect'
 ]);
 const SpecialistSchema = z.enum(['repository', 'files', 'research', 'verification']);
 const StepSchema = z.object({
@@ -117,7 +118,18 @@ export function validateModelMission(
         throw new Error('MODEL_MISSION_GIT_STATUS_INVALID');
       }
     }
-    const expectedSpecialist = step.toolName.startsWith('repo_') ? 'repository' : 'files';
+    else if (step.toolName === 'browser_session_inspect') {
+      const sessionId=step.arguments.sessionId;
+      if(typeof sessionId!=='string' ||
+        !/^bs_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(sessionId) ||
+        Object.keys(step.arguments).length!==1 ||
+        !prompt.includes(sessionId) ||
+        !/\b(browser|session|page|tab)\b/i.test(prompt)) {
+        throw new Error('MODEL_MISSION_BROWSER_SESSION_NOT_GROUNDED');
+      }
+    }
+    const expectedSpecialist = step.toolName === 'browser_session_inspect'
+      ? 'research' : step.toolName.startsWith('repo_') ? 'repository' : 'files';
     if (step.specialist !== expectedSpecialist) throw new Error('MODEL_MISSION_SPECIALIST_MISMATCH');
     prior.add(step.id);
   }
@@ -157,7 +169,8 @@ export async function compileModelMission(
 ): Promise<{plan: ModelMissionPlan; planSignature: string}> {
   if (signingKey.length < 32) throw new Error('MODEL_MISSION_SIGNING_KEY_NOT_READY');
   const visible = definitions.filter(def =>
-    ['file_system_list', 'file_system_read', 'repo_git_status', 'repo_git_log'].includes(def.name) &&
+    ['file_system_list', 'file_system_read', 'repo_git_status', 'repo_git_log',
+      'browser_session_inspect'].includes(def.name) &&
     def.permissionLevel === 'READ' && def.availability === 'READY' &&
     (def.sideEffectLevel === 'READ' || def.sideEffectLevel === 'NONE') &&
     def.permissionScopes.every(scope => scopes.includes(scope) || scopes.includes('*'))
@@ -170,10 +183,11 @@ export async function compileModelMission(
     { role: 'system', content:
       'Plan a bounded read-only task as one STRICT JSON object, no markdown. Schema: ' +
       '{"version":2,"objective":"exact user request","steps":[{"id":"step_1","purpose":"clear purpose",' +
-      '"toolName":"tool name","arguments":{},"dependsOn":[],"specialist":"files or repository"}]}. ' +
+      '"toolName":"tool name","arguments":{},"dependsOn":[],"specialist":"files or repository or research"}]}. ' +
       'For every later step dependsOn must include immediately previous step ID. ' +
       'Only use listed authorized real tools. No writes, shells, uploads, invented targets, or fake steps. ' +
       'Read files ONLY when file path is explicitly present in the user request. ' +
+      'For browser_session_inspect, use only the exact bs_UUID session ID explicitly in the request, and only for read-only observation; specialist must be research. ' +
       'If the objective cannot be achieved with the available tools return {"error":"unsupported"}.' },
     { role: 'system', content: 'Authorized tool definitions: ' + JSON.stringify(visible.map(d => ({
       name: d.name, description: d.description, parameters: d.parameters
