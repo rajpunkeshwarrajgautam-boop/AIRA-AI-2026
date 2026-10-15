@@ -88,10 +88,17 @@ export class DurableSpecialistDispatcher {
     if(pollMs<100||pollMs>30000)throw new Error('SPECIALIST_POLL_INTERVAL_INVALID');
     while(!this.stopping&&!signal?.aborted){
       const result=await this.tick();
-      if(result==='IDLE'||result==='WAITING'){
+      // An incomplete child is NOT grounds for a tight redispatch loop.
+      if(result==='IDLE'||result==='WAITING'||result==='PENDING'){
         await new Promise<void>(resolve=>{
-          const t=setTimeout(resolve,pollMs);
-          if(signal)signal.addEventListener('abort',()=>{clearTimeout(t);resolve()},{once:true});
+          const finish=()=>{
+            clearTimeout(timer);
+            signal?.removeEventListener('abort',finish);
+            resolve();
+          };
+          const timer=setTimeout(finish,pollMs);
+          if(signal?.aborted)finish();
+          else signal?.addEventListener('abort',finish,{once:true});
         });
       }
     }
