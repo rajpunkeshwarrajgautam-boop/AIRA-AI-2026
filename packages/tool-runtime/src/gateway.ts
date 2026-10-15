@@ -273,7 +273,14 @@ export class ToolGateway extends EventEmitter {
             status: 'WAITING_FOR_APPROVAL',
             reason: approvalReq.reason
           },
-          isError: false,
+          // An awaiting approval is never a successful tool execution.
+          // Especially for isolated builds, this stops workflows from
+          // mistaking a pending user decision for a completed build.
+          isError: def.name === 'isolated_application_build',
+          ...(def.name === 'isolated_application_build' ? {
+            error: 'ISOLATED_BUILD_APPROVAL_REQUIRED',
+            errorCode: ToolGatewayErrorCodes.TOOL_PERMISSION_DENIED
+          } : {}),
           durationMs: Date.now() - startTime,
           timestamp: Date.now(),
           artifacts: []
