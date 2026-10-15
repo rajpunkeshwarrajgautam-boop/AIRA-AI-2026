@@ -9,6 +9,9 @@ import { db,runMigrations,closeDb } from '../packages/db/src/index.js';
 import { DurableBrowserSessions } from '../packages/agent-runtime/src/browser-sessions.js';
 import { PersistentChromiumWorker,enforceBrowserEgress } from '../packages/agent-runtime/src/persistent-browser-worker.js';
 import { BrowserWorkerHttp,BrowserWorkerClient } from '../packages/agent-runtime/src/browser-worker-transport.js';
+import { ToolGateway } from '../packages/tool-runtime/src/gateway.js';
+import { verifyFinalMissionOutcome } from '../packages/agent-runtime/src/independent-outcome.js';
+import type { ToolCall,ToolResult } from '../packages/contracts/src/index.js';
 
 process.env.AIRA_BROWSER_WORKER_PROCESS='true';
 const root=await mkdtemp(join(tmpdir(),'aira-v2-browser-'));
@@ -88,6 +91,48 @@ try{
       origin:'http://127.0.0.1:'+socket.port,token:'not-the-real-worker-token'
     });
     await assert.rejects(invalid.observe(owner,sessionId,'inspect'),/BROWSER_WORKER_401/);
+    // Exercise the real AIRA ToolGateway path, not merely the transport
+    // client. This is the same gateway Runtime V2 dispatches through.
+    process.env.AIRA_DURABLE_BROWSER_ENABLED='true';
+    process.env.AIRA_BROWSER_WORKER_TOKEN=token;
+    process.env.AIRA_BROWSER_WORKER_URL='http://127.0.0.1:'+socket.port+'/';
+    const gateway=new ToolGateway();
+    try{
+      const call:ToolCall={
+        id:'call_v2_browser_'+randomUUID(),toolId:'tool_browser_session_inspect',
+        name:'browser_session_inspect',arguments:{sessionId},timestamp:Date.now()
+      };
+      const result:ToolResult=await gateway.execute({
+        toolName:call.name,arguments:call.arguments,callId:call.id,
+        context:{runId:run,principal:{
+          userId:owner,sessionId:'verified-ci-session',role:'user',scopes:['browser.read']
+        }}
+      });
+      assert.equal(result.isError,false, 'Actual browser worker tool call must succeed');
+      assert.equal((result.output as any).heading,'Cookie persisted');
+      const step={id:'browser',purpose:'Inspect exact requested browser session',
+        toolName:'browser_session_inspect' as const,arguments:{sessionId}};
+      const verified=await verifyFinalMissionOutcome([step],[call],[result],root,owner);
+      assert.equal(verified.status,'COMPLETED_VERIFIED',
+        'Second independent browser HTTP readback required');
+      const altered:ToolResult={
+        ...result,output:{...(result.output as Record<string,unknown>),text:'Fabricated DOM'}
+      };
+      assert.equal((await verifyFinalMissionOutcome([step],[call],[altered],root,owner)).status,
+        'FAILED_VERIFICATION','Invented browser text must fail independently');
+      const crossCall:ToolResult={...result,toolCallId:'another-user-tool-call'};
+      assert.equal((await verifyFinalMissionOutcome([step],[call],[crossCall],root,owner)).status,
+        'FAILED_VERIFICATION','Evidence correlation must reject a different call ID');
+      const wrongOwner=await gateway.execute({
+        toolName:call.name,arguments:call.arguments,
+        context:{runId:run,principal:{
+          userId:other,sessionId:'verified-ci-session',role:'user',scopes:['browser.read']
+        }}
+      });
+      assert.equal(wrongOwner.isError,true);
+    }finally{
+      await gateway.shutdown();
+    }
   }finally{
     await new Promise<void>(resolve=>control.close(()=>resolve()));
   }
