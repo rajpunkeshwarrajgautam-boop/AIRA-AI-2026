@@ -1088,7 +1088,7 @@ export class AgentRuntime extends EventEmitter {
         // Independent readback is a separate gate from successful adapter calls.
         if (progress.version === 2) {
           const outcome = await verifyFinalMissionOutcome(
-            progress.plan.steps, run.toolCalls, run.toolResults, this.workspaceRoot
+            progress.plan.steps, run.toolCalls, run.toolResults, this.workspaceRoot, run.principalId
           );
           run.context.__airaOutcomeVerificationV2 = outcome;
           await this.runRepo.saveRun(run);
