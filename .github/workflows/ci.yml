@@ -127,6 +127,12 @@ jobs:
       - name: Durable specialist SIGKILL recovery and fencing
         run: npm run test:v2-worker-recovery
 
+      - name: Specialist worker health and readiness endpoint security certification
+        run: npm run test:worker-health
+
+      - name: Specialist worker systemd hardening and environment contract audit
+        run: npm run test:systemd-hardening
+
       - name: Workflow engine verification
         run: npm run test:workflow
 

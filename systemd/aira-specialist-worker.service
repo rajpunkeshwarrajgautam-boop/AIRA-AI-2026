@@ -16,23 +16,65 @@ RestartSec=5s
 KillSignal=SIGTERM
 TimeoutStopSec=30
 
-# Security Hardening & Isolation
-NoNewPrivileges=true
+# Non-Root Identity & UMask
+UMask=0027
+
+# Filesystem Isolation & Directory Restrictions
+# /opt/aira-worker is root-owned and readable by group aira; kept strictly read-only at runtime.
+# Configuration in /etc/aira is root-owned, mode 0600, and kept read-only for the process.
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
+ReadOnlyPaths=/opt/aira-worker
+ReadOnlyPaths=/etc/aira
+ReadWritePaths=/tmp
+RuntimeDirectory=aira
+RuntimeDirectoryMode=0750
+
+# Process, Kernel & Privilege Sandboxing
+NoNewPrivileges=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
+ProtectKernelLogs=true
 ProtectControlGroups=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictRealtime=true
+RestrictSUIDSGID=true
 RestrictNamespaces=true
 LockPersonality=true
-MemoryDenyWriteExecute=true
-CapabilityBoundingSet=
 
-# Resource Constraints
+# Capabilities & System Call Filtering
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service ~@privileged @resources
+
+# Network Sandboxing
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Memory Sandboxing & JIT Compatibility
+# Security Trade-off Rationale:
+# Node.js 24 V8 engine dynamic JIT compilation and tsx/esbuild runtime require allocating
+# executable memory pages. Setting MemoryDenyWriteExecute=true causes immediate V8 JIT fatal crashes
+# (AllocatePages failure / SIGABRT) unless Node is run with --jitless (which causes 5-10x performance
+# degradation and disables WebAssembly and regex optimization).
+# MemoryDenyWriteExecute=false is the narrowest justified compatible configuration for Node.js.
+# Robust sandboxing is enforced via complete capability dropping, strict filesystem immutability,
+# and seccomp system call filtering.
+MemoryDenyWriteExecute=false
+
+# Resource Constraints (Tuned for Oracle Ampere A1: 1 OCPU, ~6GB RAM)
+# 1 OCPU on Ampere A1 (VM.Standard.A1.Flex) is 1 dedicated physical ARM Neoverse N1 core (100% capacity).
+# CPUQuota is set to 95% as a safe starting limit to guarantee >= 5% CPU head-room for sshd,
+# systemd, and host monitoring daemons, preventing unresponsive host lockouts under peak load.
+# Workload measurements on staging should be conducted before adjusting.
+CPUQuota=95%
 MemoryMax=1536M
-CPUQuota=150%
+MemoryHigh=1280M
+TasksMax=256
 LimitNOFILE=65536
 
 # Observability

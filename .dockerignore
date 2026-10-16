@@ -1,0 +1,10 @@
+node_modules
+.git
+.github
+dist
+build
+.next
+coverage
+.cache
+tmp
+*.log

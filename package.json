@@ -29,6 +29,8 @@
     "browser-worker:start": "npx tsx apps/browser-worker/src/index.ts",
     "specialist-worker:start": "tsx apps/specialist-worker/src/index.ts",
     "test:v2-worker-recovery": "npx tsx test/v2-specialist-worker-recovery.test.ts",
+    "test:worker-health": "npx tsx test/worker-health-security.test.ts",
+    "test:systemd-hardening": "npx tsx test/systemd-worker-hardening.test.ts",
     "test:workflow": "npx tsx test/workflow-engine.ts",
     "test:tools": "npx tsx test/tool-gateway-certification.ts",
     "test:browser": "npx tsx test/browser-execution-suite.ts",
