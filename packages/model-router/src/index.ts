@@ -27,6 +27,8 @@ export interface ModelCompletionResult {
   };
   model?: string;
   outboundModel?: string;
+  /** Milliseconds from the upstream fetch initiation to the first real text delta. */
+  upstreamTtftMs?: number;
 }
 
 export function isModelMatch(outboundModel?: string, upstreamResponseModel?: string): boolean {
@@ -387,6 +389,7 @@ export class OpenAIAdapter implements ModelAdapter {
 
     // Stream the upstream response rather than waiting for a full completion before
     // forwarding one giant delta. This also exposes the actual upstream model ID.
+    const upstreamStartedAt = performance.now();
     const response = await fetch(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -419,6 +422,7 @@ export class OpenAIAdapter implements ModelAdapter {
     let buffer = '';
     let output = '';
     let upstreamModel: string | undefined;
+    let upstreamTtftMs: number | undefined;
     let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
     let finished = false;
 
@@ -432,6 +436,7 @@ export class OpenAIAdapter implements ModelAdapter {
       if (typeof event.model === 'string' && event.model.trim()) upstreamModel = event.model.trim();
       const delta = event.choices?.[0]?.delta;
       if (typeof delta?.content === 'string' && delta.content.length) {
+        if (upstreamTtftMs === undefined) upstreamTtftMs = Math.round(performance.now() - upstreamStartedAt);
         output += delta.content;
         onChunk({ text: delta.content });
       }
@@ -468,7 +473,7 @@ export class OpenAIAdapter implements ModelAdapter {
     }
     if (!finished) throw new Error('Provider stream closed before its terminal event.');
     if (!output.trim()) throw new Error('Provider completed without generating visible answer text.');
-    return { text: output, usage, outboundModel, model: upstreamModel };
+    return { text: output, usage, outboundModel, model: upstreamModel, upstreamTtftMs };
   }
 }
 

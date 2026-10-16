@@ -74,6 +74,7 @@ export interface Message {
     plannedModel?: string;
     outboundModel?: string;
     upstreamResponseModel?: string;
+    upstreamTtftMs?: number;
     fallbackOccurred: boolean;
     fallbackReason?: string;
     verified: boolean;

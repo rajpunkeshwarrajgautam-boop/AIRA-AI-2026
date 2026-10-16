@@ -1153,6 +1153,10 @@ CAPABILITY & IDENTITY INVARIANTS:
 
         run.provenance.outboundModel = outboundModel;
         run.provenance.upstreamResponseModel = upstreamModel;
+        run.provenance.upstreamTtftMs = completionResult?.upstreamTtftMs;
+        if (completionResult?.upstreamTtftMs !== undefined) {
+          console.info('AIRA_INFERENCE_METRIC', JSON.stringify({ provider: run.provenance.provider, model: outboundModel, upstreamTtftMs: completionResult.upstreamTtftMs, upstreamModelVerified: Boolean(upstreamModel && isModelMatch(outboundModel, upstreamModel)) }));
+        }
         run.provenance.executedModel = upstreamModel || outboundModel;
 
         const isVerified = Boolean(upstreamModel && isModelMatch(outboundModel, upstreamModel));
