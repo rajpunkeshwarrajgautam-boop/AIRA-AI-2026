@@ -972,6 +972,17 @@ app.post('/api/knowledge/memories', async (req: Request, res: Response) => {
 // -----------------------------------------------------------------------
 
 app.post('/api/agents', async (req: Request, res: Response) => {
+  const verifiedUserId = req.principal?.userId;
+  if (!verifiedUserId) {
+    return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+  }
+
+  if (req.body?.principalId && req.body.principalId !== verifiedUserId) {
+    return res.status(400).json({
+      error: 'Forbidden: caller may not specify or forge principalId ownership'
+    });
+  }
+
   const { name, instructions, modelPolicy, tools, memoryScopes, approvalPolicy, maxSteps, timeoutPolicy } = req.body;
   if (!name || !instructions) {
     return res.status(400).json({ error: 'name and instructions are required.' });
@@ -979,6 +990,7 @@ app.post('/api/agents', async (req: Request, res: Response) => {
   const now = Date.now();
   const agent: AgentDefinition = {
     id: `agent_${crypto.randomUUID().slice(0, 8)}`,
+    principalId: verifiedUserId,
     name,
     description: req.body.description || '',
     instructions,
@@ -991,33 +1003,57 @@ app.post('/api/agents', async (req: Request, res: Response) => {
     createdAt: now,
     updatedAt: now
   } as any;
-  await agentRepo.saveAgent(agent);
+  await agentRepo.saveAgent(agent, verifiedUserId);
   res.status(201).json(agent);
 });
 
-app.get('/api/agents', async (_req: Request, res: Response) => {
-  res.json(await agentRepo.listAgents());
+app.get('/api/agents', async (req: Request, res: Response) => {
+  const verifiedUserId = req.principal?.userId;
+  if (!verifiedUserId) {
+    return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+  }
+  res.json(await agentRepo.listAgents(verifiedUserId));
 });
 
 app.get('/api/agents/:id', async (req: Request, res: Response) => {
-  const agent = await agentRepo.getAgent(req.params.id);
+  const verifiedUserId = req.principal?.userId;
+  if (!verifiedUserId) {
+    return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+  }
+  const agent = await agentRepo.getAgent(req.params.id, verifiedUserId);
   if (!agent) return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
   res.json(agent);
 });
 
 app.patch('/api/agents/:id', async (req: Request, res: Response) => {
-  const agent = await agentRepo.getAgent(req.params.id);
+  const verifiedUserId = req.principal?.userId;
+  if (!verifiedUserId) {
+    return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+  }
+
+  if (req.body?.principalId && req.body.principalId !== verifiedUserId) {
+    return res.status(400).json({
+      error: 'Forbidden: caller may not alter or forge principalId ownership'
+    });
+  }
+
+  const agent = await agentRepo.getAgent(req.params.id, verifiedUserId);
   if (!agent) return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
   const updates = req.body as Partial<AgentDefinition>;
   delete (updates as any).id;
+  delete (updates as any).principalId;
   delete (updates as any).createdAt;
   Object.assign(agent, updates, { updatedAt: Date.now() });
-  await agentRepo.saveAgent(agent);
+  await agentRepo.saveAgent(agent, verifiedUserId);
   res.json(agent);
 });
 
 app.delete('/api/agents/:id', async (req: Request, res: Response) => {
-  const deleted = await agentRepo.deleteAgent(req.params.id);
+  const verifiedUserId = req.principal?.userId;
+  if (!verifiedUserId) {
+    return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+  }
+  const deleted = await agentRepo.deleteAgent(req.params.id, verifiedUserId);
   if (!deleted) {
     return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
   }
@@ -1025,7 +1061,11 @@ app.delete('/api/agents/:id', async (req: Request, res: Response) => {
 });
 
 app.post('/api/agents/:id/run', async (req: Request, res: Response) => {
-  const agent = await agentRepo.getAgent(req.params.id);
+  const verifiedUserId = req.principal?.userId;
+  if (!verifiedUserId) {
+    return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+  }
+  const agent = await agentRepo.getAgent(req.params.id, verifiedUserId);
   if (!agent) return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
   try {
     const run = await agentRuntime.createRun({

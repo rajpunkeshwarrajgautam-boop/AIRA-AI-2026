@@ -380,9 +380,95 @@ export class OpenAIAdapter implements ModelAdapter {
     policy: ModelPolicy,
     onChunk: (delta: { text?: string; thinking?: string }) => void
   ): Promise<ModelCompletionResult> {
-    const res = await this.complete(messages, policy);
-    if (res.text) onChunk({ text: res.text });
-    return res;
+    if (!this.apiKey) throw new Error('Model provider API key is not configured.');
+    const outboundModel = policy.model.startsWith('aira-')
+      ? (this.baseUrl.includes('api.openai.com') ? resolveOpenAIModel(policy.model) : this.airaModel)
+      : policy.model;
+
+    // Stream the upstream response rather than waiting for a full completion before
+    // forwarding one giant delta. This also exposes the actual upstream model ID.
+    const response = await fetch(`${this.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream'
+      },
+      body: JSON.stringify({
+        model: outboundModel,
+        messages: messages.map(m => m.role === 'tool'
+          ? { role: 'tool', content: m.content, tool_call_id: m.toolCallId || 'call_default' }
+          : { role: m.role, content: m.content }),
+        max_tokens: policy.maxTokens,
+        temperature: policy.temperature,
+        stream: true,
+        stream_options: { include_usage: true }
+      })
+    });
+
+    if (!response.ok) {
+      // Upstream error bodies can contain submitted content and must not be
+      // reflected to clients or application logs.
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error(`${this.provider} streaming request failed (HTTP ${response.status})`);
+    }
+    if (!response.body) throw new Error('Provider returned an empty streaming response body.');
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let output = '';
+    let upstreamModel: string | undefined;
+    let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+    let finished = false;
+
+    const handleFrame = (frame: string) => {
+      const dataString = frame.split(/\r?\n/).filter(line => line.startsWith('data:'))
+        .map(line => line.slice(5).trimStart()).join('\n');
+      if (!dataString) return;
+      if (dataString === '[DONE]') { finished = true; return; }
+      const event = JSON.parse(dataString);
+      if (event.error) throw new Error('Provider reported a streaming inference error.');
+      if (typeof event.model === 'string' && event.model.trim()) upstreamModel = event.model.trim();
+      const delta = event.choices?.[0]?.delta;
+      if (typeof delta?.content === 'string' && delta.content.length) {
+        output += delta.content;
+        onChunk({ text: delta.content });
+      }
+      if (typeof delta?.reasoning_content === 'string' && delta.reasoning_content.length) {
+        onChunk({ thinking: delta.reasoning_content });
+      }
+      if (event.usage) usage = {
+        promptTokens: event.usage.prompt_tokens || 0,
+        completionTokens: event.usage.completion_tokens || 0,
+        totalTokens: event.usage.total_tokens || 0
+      };
+    };
+
+    try {
+      while (!finished) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        // Normalize line endings only after bytes are accumulated: a CRLF pair
+        // can itself be split between two network reads.
+        buffer += decoder.decode(value, { stream: true });
+        buffer = buffer.replace(/\r\n/g, '\n');
+        let separator: number;
+        while ((separator = buffer.indexOf('\n\n')) !== -1) {
+          const frame = buffer.slice(0, separator);
+          buffer = buffer.slice(separator + 2);
+          handleFrame(frame);
+          if (finished) break;
+        }
+      }
+      buffer += decoder.decode();
+      if (!finished && buffer.trim()) handleFrame(buffer);
+    } finally {
+      reader.releaseLock();
+    }
+    if (!finished) throw new Error('Provider stream closed before its terminal event.');
+    if (!output.trim()) throw new Error('Provider completed without generating visible answer text.');
+    return { text: output, usage, outboundModel, model: upstreamModel };
   }
 }
 
