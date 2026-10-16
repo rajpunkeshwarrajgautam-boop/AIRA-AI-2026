@@ -715,6 +715,8 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
 // Backward-Compatible Streaming Chat Endpoint
 // -----------------------------------------------------------------------
 app.post('/api/chat/stream', async (req: Request, res: Response) => {
+  const requestStartedAt = performance.now();
+  let firstTextSent = false;
   try {
     const { messages, history, prompt, model, extendedThinking, systemPrompt, contextSubgraph, attachments, conversationId } = req.body;
     const promptText = prompt || (Array.isArray(messages)
@@ -754,6 +756,10 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       } else if (evt.type === 'capability.unready') {
         res.write(`event: capability_unready\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'content.delta') {
+        if (!firstTextSent && typeof evt.data?.delta === 'string' && evt.data.delta.length > 0) {
+          firstTextSent = true;
+          console.info('AIRA_CHAT_TTFT', JSON.stringify({ serverFirstTextMs: Math.round(performance.now() - requestStartedAt), measurement: 'request_received_to_first_text_sse_write' }));
+        }
         res.write(`event: content_delta\ndata: ${JSON.stringify({ text: evt.data.delta })}\n\n`);
       } else if (evt.type === 'thinking.delta') {
         res.write(`event: thinking_delta\ndata: ${JSON.stringify({ thinking: evt.data.delta })}\n\n`);
