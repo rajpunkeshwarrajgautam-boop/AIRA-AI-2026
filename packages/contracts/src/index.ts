@@ -409,6 +409,7 @@ export const ModelProvenanceSchema = z.object({
   plannedModel: z.string().optional(),
   outboundModel: z.string().optional(),
   upstreamResponseModel: z.string().optional(),
+  upstreamTtftMs: z.number().nonnegative().optional(),
   fallbackOccurred: z.boolean(),
   fallbackReason: z.string().optional(),
   verified: z.boolean(),
