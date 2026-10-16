@@ -9,18 +9,27 @@ const connectionString = process.env.DATABASE_URL || 'postgres://aira:aira@local
 
 const isServerless = process.env.VERCEL === '1' || process.env.NODE_ENV === 'production';
 
+export function resolveEffectiveDatabaseUrl(url: string, isServerless: boolean): string {
+  if (isServerless && url.includes('neon.tech') && !url.includes('-pooler')) {
+    return url.replace(/@([^.]+)\./, '@$1-pooler.');
+  }
+  return url;
+}
+
+const effectiveConnectionString = resolveEffectiveDatabaseUrl(connectionString, isServerless);
+
 export const db = knex({
   client: 'pg',
   connection: {
-    connectionString,
-    ssl: connectionString.includes('neon.tech') || connectionString.includes('sslmode=require')
+    connectionString: effectiveConnectionString,
+    ssl: effectiveConnectionString.includes('neon.tech') || effectiveConnectionString.includes('sslmode=require')
       ? { rejectUnauthorized: false }
       : false,
   },
   pool: {
     min: isServerless ? 0 : 2,
-    max: isServerless ? 5 : 10,
-    acquireTimeoutMillis: 30000,
+    max: isServerless ? 2 : 10,
+    acquireTimeoutMillis: isServerless ? 5000 : 30000,
     idleTimeoutMillis: 10000,
     reapIntervalMillis: 1000,
   },
