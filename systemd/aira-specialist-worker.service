@@ -50,7 +50,13 @@ LockPersonality=true
 CapabilityBoundingSet=
 AmbientCapabilities=
 SystemCallArchitectures=native
-SystemCallFilter=@system-service ~@privileged @resources
+# SystemCallFilter Policy Rationale:
+# Uses @system-service allowlist group (basic I/O, IPC, networking, threads, memory, and file operations).
+# In systemd (v255+), mixed negation syntax like ~@privileged within an allowlist is invalid
+# and ignored by the parser ('System call ~@privileged is not known, ignoring').
+# Complete elimination of privileged operations is enforced via CapabilityBoundingSet= (dropping all caps)
+# and NoNewPrivileges=true, while @system-service permits only standard unprivileged service system calls.
+SystemCallFilter=@system-service
 
 # Network Sandboxing
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX

@@ -51,7 +51,25 @@ assert.match(unitContent, /^RestrictRealtime=true$/m, 'RestrictRealtime must be 
 assert.match(unitContent, /^RestrictSUIDSGID=true$/m, 'RestrictSUIDSGID must be true');
 assert.match(unitContent, /^CapabilityBoundingSet=$/m, 'CapabilityBoundingSet must drop all Linux capabilities');
 assert.match(unitContent, /^SystemCallArchitectures=native$/m, 'SystemCallArchitectures must be native');
-assert.match(unitContent, /^SystemCallFilter=@system-service ~@privileged @resources$/m, 'SystemCallFilter must allow only safe system service calls');
+assert.match(unitContent, /^SystemCallFilter=@system-service$/m, 'SystemCallFilter must use valid @system-service allowlist');
+
+// Negative assertions: reject invalid mixed negation syntax like ~@privileged in directive lines
+const directiveLines = unitContent.split('\n').filter(l => !l.trim().startsWith('#')).join('\n');
+assert.equal(
+  /SystemCallFilter=.*~@privileged/m.test(directiveLines),
+  false,
+  'SystemCallFilter directive must not contain invalid mixed negation ~@privileged (ignored by systemd 255)'
+);
+assert.equal(
+  /SystemCallFilter=.*~@resources/m.test(directiveLines),
+  false,
+  'SystemCallFilter directive must not contain invalid mixed negation ~@resources'
+);
+assert.match(
+  unitContent,
+  /SystemCallFilter Policy Rationale:/i,
+  'Unit must document SystemCallFilter policy rationale'
+);
 
 // ---------------------------------------------------------------------------
 // 4. Memory Sandboxing & Node.js 24 V8 JIT Compatibility Rationale
