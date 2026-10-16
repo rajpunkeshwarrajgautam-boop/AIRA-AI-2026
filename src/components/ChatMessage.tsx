@@ -53,6 +53,8 @@ export function formatProvenanceBadge(provenance: NonNullable<Message['provenanc
   let statusSuffix = '';
   if (isFailed) {
     statusSuffix = ' (Failed)';
+  } else if (provenance.executionStatus === 'PENDING') {
+    statusSuffix = ' (Verifying)';
   } else if (isFallback) {
     statusSuffix = isVerified ? ' (Fallback)' : ' (Fallback · Unconfirmed)';
   } else if (!isVerified) {
@@ -69,9 +71,10 @@ export function formatProvenanceBadge(provenance: NonNullable<Message['provenanc
       : 'bg-claude-surface2-light text-claude-muted-light dark:bg-claude-surface2-dark dark:text-claude-muted-dark'
   }`;
 
-  const verificationDesc = isVerified ? 'Confirmed' : 'Unconfirmed (verified: false)';
+  const verificationDesc = isVerified ? 'Confirmed' : provenance.executionStatus === 'PENDING' ? 'Awaiting provider response' : 'Unconfirmed (verified: false)';
   const fallbackDesc = provenance.fallbackOccurred && provenance.fallbackReason ? ` (Fallback: ${provenance.fallbackReason})` : '';
-  const title = `Provider: ${provenance.provider.toUpperCase()} | Executed Model: ${provenance.executedModel} | Verification: ${verificationDesc}${fallbackDesc}`;
+  const ttftDesc = provenance.upstreamTtftMs !== undefined ? ` | Measured upstream first text: ${provenance.upstreamTtftMs} ms` : '';
+  const title = `Provider: ${provenance.provider.toUpperCase()} | Executed Model: ${provenance.executedModel} | Verification: ${verificationDesc}${ttftDesc}${fallbackDesc}`;
 
   return {
     providerLabel,
