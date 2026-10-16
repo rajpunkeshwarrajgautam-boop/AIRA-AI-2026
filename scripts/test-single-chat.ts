@@ -1,6 +1,6 @@
 
 async function testSingle() {
-  const origin = 'https://aira-ai-2026.vercel.app';
+  const origin = process.env.TEST_ORIGIN || 'https://aira-ai-2026.vercel.app';
   console.log('1. Initializing session on production...');
   const sessionRes = await fetch(`${origin}/api/auth/session`, {
     method: 'POST',

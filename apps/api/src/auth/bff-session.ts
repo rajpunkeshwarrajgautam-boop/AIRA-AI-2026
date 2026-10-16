@@ -340,9 +340,14 @@ const TRUSTED_ORIGINS_DEFAULT = [
 
 export function getTrustedOrigins(): string[] {
   const custom = process.env.ALLOWED_ORIGINS || process.env.CORS_ORIGIN;
-  if (!custom) return TRUSTED_ORIGINS_DEFAULT;
+  const vercelUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null;
+  const vercelBranchUrl = process.env.VERCEL_BRANCH_URL ? `https://${process.env.VERCEL_BRANCH_URL}` : null;
+  const defaults = [...TRUSTED_ORIGINS_DEFAULT];
+  if (vercelUrl) defaults.push(vercelUrl);
+  if (vercelBranchUrl) defaults.push(vercelBranchUrl);
+  if (!custom) return defaults;
   const list = custom.split(',').map(s => s.trim()).filter(Boolean);
-  return [...new Set([...TRUSTED_ORIGINS_DEFAULT, ...list])];
+  return [...new Set([...defaults, ...list])];
 }
 
 export function isAllowedOrigin(originStr: string, hostHeader?: string): boolean {

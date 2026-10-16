@@ -78,17 +78,24 @@ const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
 
 // Audit 28: Body size limits and strict CORS with credentials
-app.use(cors({
-  origin: (origin, callback) => {
-    // Allow non-browser callers (curl, internal server requests) where origin is not set
-    if (!origin) return callback(null, true);
-    if (isAllowedOrigin(origin)) {
-      return callback(null, true);
-    }
-    return callback(new UntrustedOriginError(origin), false);
-  },
-  credentials: true
-}));
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const forwardedHost = req.headers['x-forwarded-host'];
+  const host = typeof forwardedHost === 'string'
+    ? forwardedHost.split(',')[0].trim()
+    : req.headers.host;
+
+  cors({
+    origin: (origin, callback) => {
+      // Allow non-browser callers (curl, internal server requests) where origin is not set
+      if (!origin) return callback(null, true);
+      if (isAllowedOrigin(origin, host)) {
+        return callback(null, true);
+      }
+      return callback(new UntrustedOriginError(origin), false);
+    },
+    credentials: true
+  })(req, res, next);
+});
 
 // Dedicated CORS origin rejection error handler
 app.use((err: any, req: Request, res: Response, next: NextFunction) => {
