@@ -520,6 +520,9 @@ function App() {
           onStatusUpdate: status => {
             setExecutionStatus(status);
           },
+          onLatencyMetrics: metrics => {
+            console.info('[AIRA Telemetry] Client observed latency metrics:', metrics);
+          },
           onComplete: () => {
             setExecutionStatus(null);
             updateConversation(id, c => ({

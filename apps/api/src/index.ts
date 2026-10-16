@@ -727,6 +727,13 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       ? messages.slice(0, -1)
       : [];
 
+    const tRequestReceived = performance.now();
+    let tFirstDelta: number | null = null;
+    let deltaCount = 0;
+    let thinkingCount = 0;
+    let executedModel = model || 'aira-auto';
+    let executedProvider = 'unknown';
+
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -746,16 +753,37 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
 
     const stream = agentRuntime.getEventStream(run.id);
 
+    const emitMetricsAndLog = () => {
+      const tCompleted = performance.now();
+      const totalMs = Math.round(tCompleted - tRequestReceived);
+      const ttftMs = tFirstDelta !== null ? Math.round(tFirstDelta - tRequestReceived) : null;
+      console.log(`event=chat_latency request_id=${req.headers['x-request-id'] || run.id} run_id=${run.id} model=${executedModel} provider=${executedProvider} ttft_ms=${ttftMs} total_ms=${totalMs} delta_count=${deltaCount} thinking_count=${thinkingCount}`);
+      res.write(`event: latency_metrics\ndata: ${JSON.stringify({
+        requestId: run.id,
+        ttftMs,
+        totalMs,
+        deltaCount,
+        thinkingCount,
+        executedModel,
+        executedProvider
+      })}\n\n`);
+    };
+
     const handler = (evt: any) => {
       if (evt.type === 'routing.decision') {
         res.write(`event: routing_decision\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'model.provenance') {
+        executedModel = evt.data?.executedModel || executedModel;
+        executedProvider = evt.data?.provider || executedProvider;
         res.write(`event: model_provenance\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'capability.unready') {
         res.write(`event: capability_unready\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'content.delta') {
+        if (tFirstDelta === null) tFirstDelta = performance.now();
+        deltaCount++;
         res.write(`event: content_delta\ndata: ${JSON.stringify({ text: evt.data.delta })}\n\n`);
       } else if (evt.type === 'thinking.delta') {
+        thinkingCount++;
         res.write(`event: thinking_delta\ndata: ${JSON.stringify({ thinking: evt.data.delta })}\n\n`);
       } else if (evt.type === 'workflow.created' || evt.type === 'workflow.started') {
         res.write(`event: workflow_started\ndata: ${JSON.stringify(evt.data)}\n\n`);
@@ -768,6 +796,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       } else if (evt.type === 'workflow.step.failed') {
         res.write(`event: workflow_step_failed\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'workflow.completed') {
+        emitMetricsAndLog();
         res.write(`event: workflow_completed\ndata: ${JSON.stringify(evt.data)}\n\n`);
         res.write(`event: done\ndata: [DONE]\n\n`);
         stream.off('event', handler);
@@ -786,6 +815,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       } else if (evt.type === 'tool.completed') {
         res.write(`event: tool_completed\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'run.failed') {
+        emitMetricsAndLog();
         const failure = evt.data?.error || 'Aira runtime failed before producing a response';
         const storageFailure = isTemporaryDatabaseError(new Error(String(failure)));
         res.write(`event: error\ndata: ${JSON.stringify({
@@ -795,12 +825,14 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         stream.off('event', handler);
         res.end();
       } else if (evt.type === 'run.cancelled') {
+        emitMetricsAndLog();
         res.write(`event: error\ndata: ${JSON.stringify({
           error: evt.data?.error || 'Aira run was cancelled',
         })}\n\n`);
         stream.off('event', handler);
         res.end();
       } else if (evt.type === 'run.completed') {
+        emitMetricsAndLog();
         res.write(`event: done\ndata: [DONE]\n\n`);
         stream.off('event', handler);
         res.end();

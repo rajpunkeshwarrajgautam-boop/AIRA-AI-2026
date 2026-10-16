@@ -197,6 +197,23 @@ export function resolveOpenAIModel(model: ModelId | string): string {
   }
 }
 
+export function resolveNvidiaModel(model: ModelId | string): string {
+  switch (model) {
+    case 'aira-fast':
+      return process.env.NVIDIA_FAST_MODEL || 'nvidia/llama-3.1-nemotron-70b-instruct';
+    case 'aira-deep':
+      return process.env.NVIDIA_DEEP_MODEL || 'nvidia/nemotron-3-super-120b-a12b';
+    case 'aira-pro':
+    case 'aira-auto':
+      return process.env.NVIDIA_DEFAULT_MODEL || 'nvidia/nemotron-3-super-120b-a12b';
+    default:
+      if (typeof model === 'string' && (model.startsWith('nvidia/') || model.startsWith('meta/') || model.startsWith('nv-'))) {
+        return model;
+      }
+      return 'nvidia/nemotron-3-super-120b-a12b';
+  }
+}
+
 export class AnthropicAdapter implements ModelAdapter {
   readonly provider = 'anthropic' as const;
   private apiKey: string;
@@ -305,7 +322,11 @@ export class OpenAIAdapter implements ModelAdapter {
     let lastError: Error | null = null;
 
     const outboundModel = policy.model.startsWith('aira-')
-      ? (this.baseUrl.includes('api.openai.com') ? resolveOpenAIModel(policy.model) : this.airaModel)
+      ? (this.baseUrl.includes('api.openai.com')
+          ? resolveOpenAIModel(policy.model)
+          : this.baseUrl.includes('integrate.api.nvidia.com')
+            ? resolveNvidiaModel(policy.model)
+            : this.airaModel)
       : policy.model;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -382,7 +403,11 @@ export class OpenAIAdapter implements ModelAdapter {
   ): Promise<ModelCompletionResult> {
     if (!this.apiKey) throw new Error('Model provider API key is not configured.');
     const outboundModel = policy.model.startsWith('aira-')
-      ? (this.baseUrl.includes('api.openai.com') ? resolveOpenAIModel(policy.model) : this.airaModel)
+      ? (this.baseUrl.includes('api.openai.com')
+          ? resolveOpenAIModel(policy.model)
+          : this.baseUrl.includes('integrate.api.nvidia.com')
+            ? resolveNvidiaModel(policy.model)
+            : this.airaModel)
       : policy.model;
 
     // Stream the upstream response rather than waiting for a full completion before
@@ -623,7 +648,7 @@ export class ModelRouter {
 
       let executedModel: string;
       if (selectedProvider === 'nvidia') {
-        executedModel = 'nvidia/nemotron-3-super-120b-a12b';
+        executedModel = resolveNvidiaModel(model);
       } else if (selectedProvider === 'anthropic') {
         if (requestedModelId === 'claude-3-5-sonnet') {
           executedModel = 'claude-3-5-sonnet';
@@ -691,15 +716,16 @@ export class ModelRouter {
       );
     }
 
-    if (model.startsWith('meta/') || model.startsWith('nvidia/')) {
+    if (model.startsWith('meta/') || model.startsWith('nvidia/') || model.startsWith('nv-')) {
       if (this.adapters.has('nvidia')) {
         const isLegacyLlama = requestedModelId === 'meta/llama-3.1-405b-instruct';
+        const targetModel = isLegacyLlama ? 'nvidia/nemotron-3-super-120b-a12b' : model;
         return {
           policy,
           adapter: this.adapters.get('nvidia')!,
           provider: 'nvidia',
-          executedModel: 'nvidia/nemotron-3-super-120b-a12b',
-          plannedModel: 'nvidia/nemotron-3-super-120b-a12b',
+          executedModel: targetModel,
+          plannedModel: targetModel,
           fallbackOccurred: isLegacyLlama,
           fallbackReason: isLegacyLlama ? 'Retired Llama 405B migrated to NVIDIA Nemotron' : undefined,
           verified: true
