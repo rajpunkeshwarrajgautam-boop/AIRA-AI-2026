@@ -786,8 +786,11 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       } else if (evt.type === 'tool.completed') {
         res.write(`event: tool_completed\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'run.failed') {
+        const failure = evt.data?.error || 'Aira runtime failed before producing a response';
+        const storageFailure = isTemporaryDatabaseError(new Error(String(failure)));
         res.write(`event: error\ndata: ${JSON.stringify({
-          error: evt.data?.error || 'Aira runtime failed before producing a response',
+          error: storageFailure ? 'Temporary database connectivity problem. Please retry your request.' : 'Aira could not complete this request.',
+          code: storageFailure ? 'DATABASE_TEMPORARILY_UNAVAILABLE' : 'RUN_FAILED',
         })}\n\n`);
         stream.off('event', handler);
         res.end();
@@ -811,10 +814,16 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
 
     await agentRuntime.startRun(run.id);
   } catch (err: any) {
+    console.error('Chat stream failed', { code: err?.code, message: err?.message });
+    const databaseUnavailable = isTemporaryDatabaseError(err);
+    const code = databaseUnavailable ? 'DATABASE_TEMPORARILY_UNAVAILABLE' : 'CHAT_STREAM_FAILED';
+    const message = databaseUnavailable
+      ? 'Temporary database connectivity problem. Please retry your request.'
+      : 'Aira could not complete this request.';
     if (!res.headersSent) {
-      res.status(500).json({ error: err.message });
+      res.status(databaseUnavailable ? 503 : 500).json({ error: message, code });
     } else {
-      res.write(`event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`);
+      res.write(`event: error\ndata: ${JSON.stringify({ error: message, code })}\n\n`);
       res.end();
     }
   }
