@@ -1066,25 +1066,70 @@ CAPABILITY & IDENTITY INVARIANTS:
       // A model emitting repeated JSON search arguments is NOT executing tools.
       let researchDraft = '';
 
+      // Stream individual deltas immediately, but persist a bounded batch instead of
+      // performing two database round-trips for every model token.
+      // This prevents streaming throughput from saturating the serverless Knex pool.
+      let pendingContent = '';
+      let pendingThinking = '';
+      let pendingDeltas = 0;
+      let lastPersistedAt = Date.now();
+      const broadcastDelta = (type: StreamingEventType, delta: string) => {
+        const event: StreamingEvent = {
+          eventId: `evt_${crypto.randomUUID().slice(0, 8)}`,
+          runId,
+          type,
+          timestamp: Date.now(),
+          data: { delta }
+        };
+        const stream = this.getEventStream(runId);
+        stream.emit('event', event);
+        this.emit('run_event', { runId, event });
+      };
+      const flushDeltas = async () => {
+        if (!pendingDeltas) return;
+        // Snapshot before durable delta events: recovery can reconstruct the output
+        // even if the serverless instance stops between these operations.
+        await this.runRepo.saveRun(run);
+        if (pendingThinking) {
+          await this.emitRunEvent(runId, 'thinking.delta', { delta: pendingThinking });
+          pendingThinking = '';
+        }
+        if (pendingContent) {
+          await this.emitRunEvent(runId, 'content.delta', { delta: pendingContent });
+          pendingContent = '';
+        }
+        pendingDeltas = 0;
+        lastPersistedAt = Date.now();
+      };
       let completionResult: ModelCompletionResult;
       try {
         completionResult = await adapter.stream(messages, run.modelPolicy, async (delta) => {
           if (delta.thinking) {
             run.thinking += delta.thinking;
-            await this.runRepo.saveRun(run);
-            await this.emitRunEvent(runId, 'thinking.delta', { delta: delta.thinking });
+            pendingThinking += delta.thinking;
+            pendingDeltas++;
+            broadcastDelta('thinking.delta', delta.thinking);
           }
           if (delta.text) {
             if (guardedSearchSynthesis) {
               researchDraft += delta.text;
             } else {
               run.content += delta.text;
-              await this.runRepo.saveRun(run);
-              await this.emitRunEvent(runId, 'content.delta', { delta: delta.text });
+              pendingContent += delta.text;
+              pendingDeltas++;
+              broadcastDelta('content.delta', delta.text);
             }
           }
+          if (pendingDeltas >= 20 || (pendingDeltas && Date.now() - lastPersistedAt >= 1000)) {
+            await flushDeltas();
+          }
         });
+        await flushDeltas();
       } catch (streamErr: any) {
+        // Best-effort checkpoint; preserve the original inference/DB exception.
+        try { await flushDeltas(); } catch (persistErr) {
+          console.error('Failed to checkpoint stream deltas', persistErr);
+        }
         await this.transitionRunState(runId, 'FAILED', streamErr.message);
         throw streamErr;
       }
