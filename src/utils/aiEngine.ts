@@ -131,7 +131,8 @@ export async function streamAIResponse(
           const lines = buffer.split('\n');
           buffer = lines.pop() || '';
 
-          for (const line of lines) {
+          for (const rawLine of lines) {
+            const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
             if (!isIdentityValid()) {
               try { await reader.cancel(); } catch {}
               return;
@@ -207,13 +208,18 @@ export async function streamAIResponse(
                   wrappedCallbacks.onComplete();
                   return;
                 }
-              } catch {
-                // Ignore partial JSON chunk errors
+              } catch (error) {
+                // A data: line is already complete here. A parse or callback failure
+                // is not a partial network chunk and must never be discarded.
+                throw new Error(`Invalid Aira stream event (${currentEvent}): ${error instanceof Error ? error.message : 'unknown event error'}`);
               }
             }
           }
         }
 
+        buffer += decoder.decode();
+        // A successful stream must carry an explicit terminal event, not merely
+        // close its transport. Otherwise interrupted responses appear complete.
         if (!isIdentityValid()) {
           console.warn('[streamAIResponse] Stream completion suppressed: auth identity changed during stream');
           return;
@@ -224,7 +230,7 @@ export async function streamAIResponse(
           return;
         }
 
-        wrappedCallbacks.onComplete();
+        wrappedCallbacks.onError('Aira runtime disconnected before the stream completion event.');
         return;
       }
     } catch (backendError: any) {
