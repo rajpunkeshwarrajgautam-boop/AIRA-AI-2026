@@ -62,6 +62,18 @@ import {
 } from './auth/bff-session.js';
 import { isTemporaryDatabaseError } from './utils/storage-errors.js';
 
+export class UntrustedOriginError extends Error {
+  readonly status = 403;
+  readonly code = 'CORS_ORIGIN_DENIED';
+  readonly origin: string;
+
+  constructor(origin: string) {
+    super('Origin not allowed');
+    this.name = 'UntrustedOriginError';
+    this.origin = origin;
+  }
+}
+
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
 
@@ -73,10 +85,28 @@ app.use(cors({
     if (isAllowedOrigin(origin)) {
       return callback(null, true);
     }
-    return callback(new Error(`CORS blocked for origin: ${origin}`), false);
+    return callback(new UntrustedOriginError(origin), false);
   },
   credentials: true
 }));
+
+// Dedicated CORS origin rejection error handler
+app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+  if (err instanceof UntrustedOriginError || err?.code === 'CORS_ORIGIN_DENIED' || err?.name === 'UntrustedOriginError') {
+    const rawOrigin = typeof err.origin === 'string' ? err.origin : (req.headers.origin as string) || 'unknown';
+    const sanitizedOrigin = rawOrigin.slice(0, 200).replace(/[\r\n\t]/g, '');
+    const sanitizedRoute = (req.originalUrl || req.url || 'unknown').slice(0, 200).replace(/[\r\n\t]/g, '');
+    
+    process.stdout.write(
+      `[SECURITY_EVENT] event=cors_origin_rejected origin=${sanitizedOrigin} route=${sanitizedRoute} status=403\n`
+    );
+    res.removeHeader('Access-Control-Allow-Origin');
+    res.removeHeader('access-control-allow-origin');
+    res.status(403).json({ error: 'Origin not allowed' });
+    return;
+  }
+  next(err);
+});
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ limit: '2mb', extended: false }));
 
@@ -1326,6 +1356,12 @@ app.post('/api/workflows/runs/:id/steps/:stepId/approve', async (req: Request, r
   }
 });
 
+if (process.env.NODE_ENV === 'test') {
+  app.get('/api/test-unhandled-server-error', () => {
+    throw new Error('Simulated unexpected server error');
+  });
+}
+
 app.use((req: Request, res: Response) => {
   process.stdout.write(`[API_404] ${req.method} ${req.url}\n`);
   res.status(404).json({ error: `Not found: ${req.method} ${req.url}` });
@@ -1334,7 +1370,19 @@ app.use((req: Request, res: Response) => {
 // -----------------------------------------------------------------------
 // Global Error Handler (Audit 27 — catches uncaught route errors)
 // -----------------------------------------------------------------------
-app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
+  if (err instanceof UntrustedOriginError || err?.code === 'CORS_ORIGIN_DENIED' || err?.name === 'UntrustedOriginError') {
+    const rawOrigin = typeof err.origin === 'string' ? err.origin : (req.headers.origin as string) || 'unknown';
+    const sanitizedOrigin = rawOrigin.slice(0, 200).replace(/[\r\n\t]/g, '');
+    const sanitizedRoute = (req.originalUrl || req.url || 'unknown').slice(0, 200).replace(/[\r\n\t]/g, '');
+    process.stdout.write(
+      `[SECURITY_EVENT] event=cors_origin_rejected origin=${sanitizedOrigin} route=${sanitizedRoute} status=403\n`
+    );
+    res.removeHeader('Access-Control-Allow-Origin');
+    res.removeHeader('access-control-allow-origin');
+    res.status(403).json({ error: 'Origin not allowed' });
+    return;
+  }
   process.stderr.write(`[API_ERROR] ${err.message}\n`);
   res.status(500).json({ error: 'Internal server error', message: err.message });
 });
