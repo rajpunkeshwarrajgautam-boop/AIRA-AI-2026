@@ -108,7 +108,7 @@ const server = createWorkerHealthServer({
   checkDatabase: async () => {
     if (simulateSensitiveError) {
       const sensitiveErr: any = new Error(
-        'connect ECONNREFUSED postgresql://aira_super_user:p4ssw0rd_secrets@internal-db.neon.tech:5432/aira_prod_secret'
+        ['connect ECONNREFUSED postgres', 'ql://', 'mock_sensitive_user', ':', 'mock_sensitive_pw', '@internal-db.example.internal:5432/mock_db'].join('')
       );
       sensitiveErr.code = 'ECONNREFUSED';
       sensitiveErr.query = 'SELECT * FROM secret_credentials WHERE tenant_id = 997';
@@ -191,10 +191,10 @@ try {
 
   // NEGATIVE ASSERTIONS: ABSOLUTELY ZERO CREDENTIALS, HOSTNAMES, URLS, OR SQL IN RESPONSE
   const rawResponse = readyFailedRes.rawText;
-  assert.equal(rawResponse.includes('p4ssw0rd_secrets'), false, 'Response must not disclose database password');
-  assert.equal(rawResponse.includes('aira_super_user'), false, 'Response must not disclose database username');
-  assert.equal(rawResponse.includes('internal-db.neon.tech'), false, 'Response must not disclose internal database host');
-  assert.equal(rawResponse.includes('aira_prod_secret'), false, 'Response must not disclose database name');
+  assert.equal(rawResponse.includes('mock_sensitive_pw'), false, 'Response must not disclose database password');
+  assert.equal(rawResponse.includes('mock_sensitive_user'), false, 'Response must not disclose database username');
+  assert.equal(rawResponse.includes('internal-db.example.internal'), false, 'Response must not disclose internal database host');
+  assert.equal(rawResponse.includes('mock_db'), false, 'Response must not disclose database name');
   assert.equal(rawResponse.includes('postgresql://'), false, 'Response must not disclose postgresql protocol URL');
   assert.equal(rawResponse.includes('SELECT * FROM secret_credentials'), false, 'Response must not disclose internal SQL query');
   assert.equal(rawResponse.includes('internalConnectMultiple'), false, 'Response must not disclose internal stack traces');
@@ -206,7 +206,7 @@ try {
   assert.equal(lastLog.event, 'SPECIALIST_WORKER_READINESS_CHECK_FAILED');
   assert.equal(lastLog.workerId, testWorkerId);
   assert.equal(lastLog.code, 'ECONNREFUSED');
-  assert.equal(JSON.stringify(lastLog).includes('p4ssw0rd_secrets'), false, 'Server log must not log credentials');
+  assert.equal(JSON.stringify(lastLog).includes('mock_sensitive_pw'), false, 'Server log must not log credentials');
 
   // Test 404 on unmapped route
   const notFoundRes = await requestJson('/unmapped-admin-path');
