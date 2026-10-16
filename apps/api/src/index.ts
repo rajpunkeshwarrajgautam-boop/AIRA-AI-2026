@@ -1,3 +1,4 @@
+import { createBuilderRoutes } from './builder-routes.js';
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
@@ -49,19 +50,69 @@ if (process.env.NODE_ENV === 'production') {
 
 import { createPrincipalMiddleware } from './middleware/principal.js';
 import { createSessionAuthMiddleware, ensureAuthenticatedSession } from './auth/session-auth.js';
+import { createNeonAuthPrincipalMiddleware } from './auth/neon-auth-principal.js';
+import {
+  createBffSessionMiddleware,
+  createCsrfProtectionMiddleware,
+  handleBffSignUp,
+  handleBffSignIn,
+  handleBffSession,
+  handleBffSignOut,
+  isAllowedOrigin
+} from './auth/bff-session.js';
 import { isTemporaryDatabaseError } from './utils/storage-errors.js';
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
 
-// Audit 28: Body size limits
-app.use(cors());
+// Audit 28: Body size limits and strict CORS with credentials
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow non-browser callers (curl, internal server requests) where origin is not set
+    if (!origin) return callback(null, true);
+    if (isAllowedOrigin(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error(`CORS blocked for origin: ${origin}`), false);
+  },
+  credentials: true
+}));
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ limit: '2mb', extended: false }));
+
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  process.stdout.write(`[API_REQ] ${req.method} ${req.url}\n`);
+  next();
+});
 
 // Resolve a trusted first-party session cookie before principal enforcement.
 // This middleware never trusts client-supplied user/session headers in production.
 app.use(createSessionAuthMiddleware());
+// Staging opt-in: verified Neon Auth bearer identity overrides browser-local
+// guest sessions only after cryptographic signature verification.
+app.use(createNeonAuthPrincipalMiddleware());
+// First-party BFF gateway: resolves secure HttpOnly cookie sessions into verified ExecutionPrincipals
+app.use(createBffSessionMiddleware());
+// Cryptographic CSRF and origin protection on mutating endpoints
+app.use(createCsrfProtectionMiddleware());
+
+// First-party BFF authentication routes
+app.post('/api/auth/sign-in', (req: Request, res: Response) => {
+  handleBffSignIn(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'BFF sign in failed' });
+  });
+});
+app.post('/api/auth/sign-up', (req: Request, res: Response) => {
+  handleBffSignUp(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'BFF sign up failed' });
+  });
+});
+app.get('/api/auth/session', handleBffSession);
+app.post('/api/auth/sign-out', (req: Request, res: Response) => {
+  handleBffSignOut(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'BFF sign out failed' });
+  });
+});
 
 // Public bootstrap endpoint used by the browser before protected API calls.
 // It issues or refreshes an opaque, signed, HttpOnly session cookie.
@@ -75,6 +126,51 @@ app.post('/api/auth/session', (req: Request, res: Response) => {
       error: 'Session initialization failed',
       message: error?.message || 'Unable to initialize an authenticated session',
     });
+  }
+});
+
+// Staging-only identity probe. Requires a valid Neon Auth JWT; signed guest
+// browser cookies do not count as a durable account identity.
+app.get('/api/auth/identity', (req: Request, res: Response) => {
+  const verified = (req as any).managedIdentity as { userId: string; sessionId: string; provider: string; email?: string; name?: string } | undefined;
+  res.setHeader('Cache-Control', 'no-store');
+  if (!verified) return res.status(401).json({ error: 'Verified managed account required' });
+  return res.status(200).json({
+    status: 'AUTHENTICATED',
+    userId: verified.userId,
+    provider: verified.provider,
+    email: verified.email,
+    name: verified.name
+  });
+});
+
+app.post('/api/auth/link-guest', async (req: Request, res: Response) => {
+  try {
+    const verified = (req as any).managedIdentity as { userId: string } | undefined;
+    if (!verified || !verified.userId) {
+      return res.status(401).json({ error: 'Verified managed account required to link data' });
+    }
+
+    // Security requirement: Must verify the existing server-signed guest session cookie.
+    // Client-provided IDs in the request body are strictly rejected to prevent cross-account theft.
+    if (req.body?.guestUserId && req.body.guestUserId !== (req as any).guestSession?.id) {
+      return res.status(400).json({ error: 'Forbidden: unverified client-provided guestUserId is rejected' });
+    }
+
+    const candidateGuest = (req as any).guestSession?.id as string | undefined;
+
+    if (!candidateGuest || candidateGuest === verified.userId) {
+      return res.status(400).json({ error: 'No verifiable active guest session found to link' });
+    }
+
+    if (!candidateGuest.startsWith('usr_') && !candidateGuest.startsWith('user_')) {
+      return res.status(400).json({ error: 'Only guest sessions may be linked to accounts' });
+    }
+
+    const result = await conversationSearchRepo.transferGuestData(candidateGuest, verified.userId);
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Guest linking failed' });
   }
 });
 
@@ -132,6 +228,7 @@ app.use('/api', createPrincipalMiddleware());
 
 // Initialize Core Subsystems
 const modelRouter = new ModelRouter();
+app.use('/api/builder', createBuilderRoutes(modelRouter));
 const toolRegistry = new ToolRegistry(process.cwd());
 const approvalKernel = new ApprovalKernel(new PostgresApprovalRepository(), new PostgresSessionGrantRepository());
 const toolCallRepo = new PostgresToolCallRepository();
@@ -230,7 +327,14 @@ app.get('/api/capabilities', (_req: Request, res: Response) => {
 // -----------------------------------------------------------------------
 app.post('/api/conversations/sync', async (req: Request, res: Response) => {
   try {
+    console.log(`[API_CONV_SYNC] principalId: ${req.principal?.userId} hasAuth: ${!!req.headers.authorization}`);
     const body = req.body || {};
+    if (body.principalId && body.principalId !== req.principal!.userId) {
+      return res.status(400).json({ error: 'Forbidden: caller may not specify or forge principalId ownership' });
+    }
+    if (body.userId && body.userId !== req.principal!.userId) {
+      return res.status(400).json({ error: 'Forbidden: caller may not specify or forge userId ownership' });
+    }
     if (!body.id || !body.title || !Number.isFinite(Number(body.createdAt)) || !Number.isFinite(Number(body.updatedAt))) {
       return res.status(400).json({ error: 'id, title, createdAt and updatedAt are required.' });
     }
@@ -277,6 +381,18 @@ app.post('/api/conversations/sync', async (req: Request, res: Response) => {
     }
     const status = String(err?.message || '').includes('ownership mismatch') ? 403 : 400;
     res.status(status).json({ error: err?.message || 'Conversation sync failed.' });
+  }
+});
+
+app.get('/api/conversations', async (req: Request, res: Response) => {
+  try {
+    console.log(`[API_CONV_GET] principalId: ${req.principal?.userId} hasAuth: ${!!req.headers.authorization}`);
+    const conversations = await conversationSearchRepo.listConversations(req.principal!.userId);
+    console.log(`[API_CONV_GET] found ${conversations.length} for ${req.principal?.userId}`);
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ conversations });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to list conversations' });
   }
 });
 
@@ -791,7 +907,13 @@ app.delete('/api/knowledge/sources/:id', async (req: Request, res: Response) => 
 });
 
 app.post('/api/knowledge/ingest', async (req: Request, res: Response) => {
-  const { title, content, mimeType, uri, projectId } = req.body;
+  const { title, content, mimeType, uri, projectId, principalId, userId } = req.body;
+  if (principalId && principalId !== req.principal?.userId) {
+    return res.status(400).json({ error: 'Forbidden: caller may not specify or forge principalId ownership' });
+  }
+  if (userId && userId !== req.principal?.userId) {
+    return res.status(400).json({ error: 'Forbidden: caller may not specify or forge userId ownership' });
+  }
   if (!title || !content) {
     return res.status(400).json({ error: 'title and content are required.' });
   }
@@ -826,7 +948,13 @@ app.post('/api/knowledge/search', async (req: Request, res: Response) => {
 });
 
 app.post('/api/knowledge/memories', async (req: Request, res: Response) => {
-  const { key, value, category, provenance } = req.body;
+  const { key, value, category, provenance, principalId, userId } = req.body;
+  if (principalId && principalId !== req.principal?.userId) {
+    return res.status(400).json({ error: 'Forbidden: caller may not specify or forge principalId ownership' });
+  }
+  if (userId && userId !== req.principal?.userId) {
+    return res.status(400).json({ error: 'Forbidden: caller may not specify or forge userId ownership' });
+  }
   if (!key || !value) {
     return res.status(400).json({ error: 'key and value are required.' });
   }
@@ -923,9 +1051,20 @@ app.get('/api/automations', async (req: Request, res: Response) => {
 
 app.post('/api/automations', async (req: Request, res: Response) => {
   try {
+    const verifiedUserId = req.principal?.userId;
+    if (!verifiedUserId) {
+      return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+    }
+
+    if (req.body?.principalId && req.body.principalId !== verifiedUserId) {
+      return res.status(400).json({
+        error: 'Forbidden: caller may not specify or forge principalId ownership'
+      });
+    }
+
     const raw = {
       ...req.body,
-      principalId: req.body.principalId || req.principal?.userId || 'usr_anonymous'
+      principalId: verifiedUserId
     };
     const parsed = AutomationDefinitionSchema.omit({ id: true }).parse(raw);
     const item = await automationEngine.createAutomation(parsed);
@@ -936,14 +1075,29 @@ app.post('/api/automations', async (req: Request, res: Response) => {
 });
 
 app.get('/api/automations/:id', async (req: Request, res: Response) => {
-  const item = await automationEngine.getAutomation(req.params.id, req.principal?.userId);
-  if (!item) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
-  res.json(item);
+  try {
+    const item = await automationEngine.getAutomation(req.params.id, req.principal?.userId);
+    if (!item) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
+    res.json(item);
+  } catch {
+    res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
+  }
 });
 
 app.patch('/api/automations/:id', async (req: Request, res: Response) => {
   try {
-    const updated = await automationEngine.patchAutomation(req.params.id, req.body, req.principal?.userId);
+    const verifiedUserId = req.principal?.userId;
+    if (!verifiedUserId) {
+      return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+    }
+
+    if (req.body?.principalId && req.body.principalId !== verifiedUserId) {
+      return res.status(400).json({
+        error: 'Forbidden: caller may not alter or forge principalId ownership'
+      });
+    }
+
+    const updated = await automationEngine.patchAutomation(req.params.id, req.body, verifiedUserId);
     res.json(updated);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -951,9 +1105,13 @@ app.patch('/api/automations/:id', async (req: Request, res: Response) => {
 });
 
 app.delete('/api/automations/:id', async (req: Request, res: Response) => {
-  const deleted = await automationEngine.deleteAutomation(req.params.id, req.principal?.userId);
-  if (!deleted) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
-  res.status(204).send();
+  try {
+    const deleted = await automationEngine.deleteAutomation(req.params.id, req.principal?.userId);
+    if (!deleted) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
+    res.status(204).send();
+  } catch {
+    res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
+  }
 });
 
 app.post('/api/automations/:id/trigger', async (req: Request, res: Response) => {
@@ -969,7 +1127,7 @@ app.get('/api/automations/:id/runs', async (req: Request, res: Response) => {
   try {
     const item = await automationEngine.getAutomation(req.params.id, req.principal?.userId);
     if (!item) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
-    const runs = await automationEngine.getAutomationRuns(req.params.id);
+    const runs = await automationEngine.getAutomationRuns(req.params.id, req.principal?.userId);
     res.json(runs);
   } catch (err: any) {
     res.status(404).json({ error: err.message });
@@ -1035,7 +1193,13 @@ app.get('/api/workflows/runs/:id', async (req: Request, res: Response) => {
 
 app.post('/api/workflows/runs', async (req: Request, res: Response) => {
   try {
-    const { prompt, definition } = req.body;
+    const { prompt, definition, principalId, userId } = req.body || {};
+    if (principalId && principalId !== req.principal?.userId) {
+      return res.status(400).json({ error: 'Forbidden: caller may not specify or forge principalId ownership' });
+    }
+    if (userId && userId !== req.principal?.userId) {
+      return res.status(400).json({ error: 'Forbidden: caller may not specify or forge userId ownership' });
+    }
     if (!prompt && !definition) {
       return res.status(400).json({ error: 'Either "prompt" or "definition" is required.' });
     }
@@ -1120,6 +1284,11 @@ app.post('/api/workflows/runs/:id/steps/:stepId/approve', async (req: Request, r
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
+});
+
+app.use((req: Request, res: Response) => {
+  process.stdout.write(`[API_404] ${req.method} ${req.url}\n`);
+  res.status(404).json({ error: `Not found: ${req.method} ${req.url}` });
 });
 
 // -----------------------------------------------------------------------

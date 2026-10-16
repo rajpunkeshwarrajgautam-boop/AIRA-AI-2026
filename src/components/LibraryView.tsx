@@ -18,6 +18,7 @@ import {
   X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { authenticatedApiFetch } from '../lib/neonAuth';
 
 interface KnowledgeSource {
   id: string;
@@ -113,8 +114,8 @@ export const LibraryView: React.FC = () => {
     setError(null);
     try {
       const [sourcesRes, graphRes] = await Promise.all([
-        fetch('/api/knowledge/sources'),
-        fetch('/api/knowledge/graph')
+        authenticatedApiFetch('/api/knowledge/sources'),
+        authenticatedApiFetch('/api/knowledge/graph')
       ]);
 
       if (!sourcesRes.ok) throw new Error('Failed to load knowledge sources.');
@@ -146,7 +147,7 @@ export const LibraryView: React.FC = () => {
     }
     setIsSearching(true);
     try {
-      const res = await fetch('/api/knowledge/search', {
+      const res = await authenticatedApiFetch('/api/knowledge/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: searchQuery.trim(), limit: 10 })
@@ -170,7 +171,7 @@ export const LibraryView: React.FC = () => {
     setIsIngesting(true);
     setIngestError(null);
     try {
-      const res = await fetch('/api/knowledge/ingest', {
+      const res = await authenticatedApiFetch('/api/knowledge/ingest', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -197,7 +198,7 @@ export const LibraryView: React.FC = () => {
   const handleDeleteSource = async (id: string) => {
     if (!confirm('Are you sure you want to delete this document from the library?')) return;
     try {
-      const res = await fetch(`/api/knowledge/sources/${encodeURIComponent(id)}`, {
+      const res = await authenticatedApiFetch(`/api/knowledge/sources/${encodeURIComponent(id)}`, {
         method: 'DELETE'
       });
       if (!res.ok) {

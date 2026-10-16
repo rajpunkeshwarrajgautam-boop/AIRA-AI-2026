@@ -424,6 +424,90 @@ export class ConversationSearchRepository {
     });
   }
 
+  async listConversations(principalId: string): Promise<DurableConversationResult[]> {
+    if (!principalId) return [];
+
+    const rows = await db('conversations')
+      .where({ principal_id: principalId })
+      .whereNull('deleted_at')
+      .orderBy('updated_at', 'desc');
+
+    if (rows.length === 0) return [];
+
+    const conversationStorageIds = rows.map(r => r.id);
+    const messages = await db('conversation_messages')
+      .where({ principal_id: principalId })
+      .whereIn('conversation_id', conversationStorageIds)
+      .orderBy('created_at', 'asc')
+      .select('conversation_id', 'client_message_id', 'role', 'content', 'created_at', 'run_id', 'metadata');
+
+    const messagesByConv = new Map<string, ConversationSyncMessage[]>();
+    for (const msg of messages) {
+      const list = messagesByConv.get(msg.conversation_id) || [];
+      list.push({
+        id: msg.client_message_id,
+        role: msg.role as ConversationMessageRole,
+        content: msg.content || '',
+        createdAt: Number(msg.created_at),
+        runId: msg.run_id || undefined,
+        metadata: msg.metadata || undefined
+      });
+      messagesByConv.set(msg.conversation_id, list);
+    }
+
+    return rows.map(conv => ({
+      id: conv.client_id,
+      title: conv.title,
+      projectId: conv.project_id || undefined,
+      isPinned: Boolean(conv.is_pinned),
+      createdAt: Number(conv.created_at),
+      updatedAt: Number(conv.updated_at),
+      messages: messagesByConv.get(conv.id) || []
+    }));
+  }
+
+  async transferGuestData(
+    guestPrincipalId: string,
+    targetPrincipalId: string
+  ): Promise<{ transferredConversations: number }> {
+    if (!guestPrincipalId || !targetPrincipalId || guestPrincipalId === targetPrincipalId) {
+      throw new Error('INVALID_TRANSFER_PRINCIPALS');
+    }
+
+    return db.transaction(async trx => {
+      const guestRows = await trx('conversations')
+        .where({ principal_id: guestPrincipalId })
+        .whereNull('deleted_at');
+
+      let transferredCount = 0;
+      for (const conv of guestRows) {
+        const existingTarget = await trx('conversations')
+          .where({ principal_id: targetPrincipalId, client_id: conv.client_id })
+          .first();
+
+        if (existingTarget) {
+          continue;
+        }
+
+        await trx('conversations')
+          .where({ id: conv.id, principal_id: guestPrincipalId })
+          .update({ principal_id: targetPrincipalId, updated_at: Date.now() });
+
+        await trx('conversation_messages')
+          .where({ conversation_id: conv.id, principal_id: guestPrincipalId })
+          .update({ principal_id: targetPrincipalId });
+
+        await trx('conversation_search_documents')
+          .where({ conversation_id: conv.id, principal_id: guestPrincipalId })
+          .update({ principal_id: targetPrincipalId });
+
+        transferredCount++;
+      }
+
+      return { transferredConversations: transferredCount };
+    });
+  }
+
   async getVectorCapability(): Promise<VectorCapability> {
     const extension = await db.raw(
       "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') AS enabled"

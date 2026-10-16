@@ -55,7 +55,7 @@ export function isModelMatch(outboundModel?: string, upstreamResponseModel?: str
 
 export interface ModelAdapter {
   provider: 'nvidia' | 'anthropic' | 'openai' | 'mock' | 'unknown';
-  complete(messages: ChatMessageInput[], policy: ModelPolicy): Promise<ModelCompletionResult>;
+  complete(messages: ChatMessageInput[], policy: ModelPolicy, signal?: AbortSignal): Promise<ModelCompletionResult>;
   stream(
     messages: ChatMessageInput[],
     policy: ModelPolicy,
@@ -66,7 +66,7 @@ export interface ModelAdapter {
 export class DeterministicMockAdapter implements ModelAdapter {
   readonly provider = 'mock' as const;
 
-  async complete(messages: ChatMessageInput[], policy: ModelPolicy): Promise<ModelCompletionResult> {
+  async complete(messages: ChatMessageInput[], policy: ModelPolicy, signal?: AbortSignal): Promise<ModelCompletionResult> {
     const lastUserMessage = [...messages].reverse().find(m => m.role === 'user')?.content || '';
     const thinking = policy.extendedThinking
       ? `Analyzing intent for request: "${lastUserMessage.slice(0, 80)}...". Resolving execution strategy via deterministic model policy ${policy.model}.`
@@ -211,7 +211,7 @@ export class AnthropicAdapter implements ModelAdapter {
     return { provider: this.provider };
   }
 
-  async complete(messages: ChatMessageInput[], policy: ModelPolicy): Promise<ModelCompletionResult> {
+  async complete(messages: ChatMessageInput[], policy: ModelPolicy, signal?: AbortSignal): Promise<ModelCompletionResult> {
     if (!this.apiKey) {
       throw new Error('Anthropic API key is not configured.');
     }
@@ -225,6 +225,7 @@ export class AnthropicAdapter implements ModelAdapter {
 
     const outboundModel = resolveAnthropicModel(policy.model);
     const response = await fetch(`${this.baseUrl}/messages`, {
+      signal,
       method: 'POST',
       headers: {
         'x-api-key': this.apiKey,
@@ -296,7 +297,7 @@ export class OpenAIAdapter implements ModelAdapter {
     return { provider: this.provider };
   }
 
-  async complete(messages: ChatMessageInput[], policy: ModelPolicy): Promise<ModelCompletionResult> {
+  async complete(messages: ChatMessageInput[], policy: ModelPolicy, signal?: AbortSignal): Promise<ModelCompletionResult> {
     if (!this.apiKey) {
       throw new Error('OpenAI API key is not configured.');
     }
@@ -308,8 +309,10 @@ export class OpenAIAdapter implements ModelAdapter {
       : policy.model;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      signal?.throwIfAborted();
       try {
         const response = await fetch(`${this.baseUrl}/chat/completions`, {
+          signal,
           method: 'POST',
           headers: {
             Authorization: `Bearer ${this.apiKey}`,
@@ -359,6 +362,7 @@ export class OpenAIAdapter implements ModelAdapter {
           model: typeof data.model === 'string' && data.model.trim().length > 0 ? data.model.trim() : undefined
         };
       } catch (err: any) {
+        signal?.throwIfAborted();
         lastError = err;
         if (attempt < maxRetries && (err.message.includes('500') || err.message.includes('429') || err.message.includes('fetch failed'))) {
           await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));

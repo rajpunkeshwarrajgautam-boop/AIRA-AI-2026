@@ -10,12 +10,26 @@ import { PostgresRunRepository } from '../packages/agent-runtime/src/repositorie
 import { PostgresAutomationRepository, PostgresAutomationRunRepository } from '../packages/automation/src/repositories.js';
 import { PostgresApprovalRepository, PostgresSessionGrantRepository } from '../packages/approvals/src/repositories.js';
 
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
+function killPort(port: number) {
+  if (process.platform === 'win32') {
+    try {
+      spawnSync('powershell', [
+        '-NoProfile',
+        '-Command',
+        `Get-NetTCPConnection -LocalPort ${port} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }`
+      ], { stdio: 'ignore' });
+    } catch {}
+  }
+}
+
 async function runTests() {
   process.stdout.write('Starting AIRA Autonomous Runtime Verification Suite...\n');
+
+  killPort(3001);
 
   process.stdout.write('Starting API Server...\n');
   const apiProcess = spawn('npx', ['tsx', 'apps/api/src/index.ts'], {
@@ -35,7 +49,7 @@ async function runTests() {
       attempts++;
     }
   } catch (err) {
-    apiProcess.kill();
+    killPort(3001);
     throw new Error('API server failed to start in verify-runtime');
   }
 
@@ -297,12 +311,12 @@ async function runTests() {
   }
 
   process.stdout.write('\nALL 8 CORE VERIFICATION TESTS PASSED SUCCESSFULLY.\n');
-  apiProcess.kill();
+  killPort(3001);
   process.exit(0);
 }
 
 runTests().catch(err => {
   process.stderr.write(`Test suite failed: ${err.message}\n${err.stack}\n`);
-  // Will need to kill apiProcess if it fails, but we don't have scope here. We can just exit.
+  killPort(3001);
   process.exit(1);
 });

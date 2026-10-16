@@ -17,6 +17,7 @@ import {
   ShieldCheck
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { authenticatedApiFetch } from '../lib/neonAuth';
 
 interface AutomationDefinition {
   id: string;
@@ -70,7 +71,7 @@ export const AutomationsView: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/automations');
+      const res = await authenticatedApiFetch('/api/automations');
       if (!res.ok) throw new Error('Failed to load automations.');
       const data = await res.json();
       setAutomations(Array.isArray(data) ? data : []);
@@ -88,7 +89,7 @@ export const AutomationsView: React.FC = () => {
   const handleToggleEnable = async (auto: AutomationDefinition) => {
     const action = auto.enabled ? 'disable' : 'enable';
     try {
-      const res = await fetch(`/api/automations/${encodeURIComponent(auto.id)}/${action}`, {
+      const res = await authenticatedApiFetch(`/api/automations/${encodeURIComponent(auto.id)}/${action}`, {
         method: 'POST'
       });
       if (!res.ok) throw new Error(`Failed to ${action} automation.`);
@@ -100,7 +101,7 @@ export const AutomationsView: React.FC = () => {
 
   const handleTriggerNow = async (id: string) => {
     try {
-      const res = await fetch(`/api/automations/${encodeURIComponent(id)}/trigger`, {
+      const res = await authenticatedApiFetch(`/api/automations/${encodeURIComponent(id)}/trigger`, {
         method: 'POST'
       });
       if (!res.ok) {
@@ -117,7 +118,7 @@ export const AutomationsView: React.FC = () => {
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to delete this automation schedule?')) return;
     try {
-      const res = await fetch(`/api/automations/${encodeURIComponent(id)}`, {
+      const res = await authenticatedApiFetch(`/api/automations/${encodeURIComponent(id)}`, {
         method: 'DELETE'
       });
       if (!res.ok) throw new Error('Failed to delete automation.');
@@ -131,7 +132,7 @@ export const AutomationsView: React.FC = () => {
     setSelectedAutomation(auto);
     setRunsLoading(true);
     try {
-      const res = await fetch(`/api/automations/${encodeURIComponent(auto.id)}/runs`);
+      const res = await authenticatedApiFetch(`/api/automations/${encodeURIComponent(auto.id)}/runs`);
       if (res.ok) {
         const data = await res.json();
         setRuns(Array.isArray(data) ? data : []);
@@ -152,7 +153,7 @@ export const AutomationsView: React.FC = () => {
     setIsSubmitting(true);
     setFormError(null);
     try {
-      const res = await fetch('/api/automations', {
+      const res = await authenticatedApiFetch('/api/automations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
