@@ -407,9 +407,10 @@ export class OpenAIAdapter implements ModelAdapter {
     });
 
     if (!response.ok) {
-      const rawError = await response.text();
-      // Avoid logging provider request bodies or credentials.
-      throw new Error(`${this.provider} streaming request failed (HTTP ${response.status}): ${rawError.slice(0, 300)}`);
+      // Upstream error bodies can contain submitted content and must not be
+      // reflected to clients or application logs.
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error(`${this.provider} streaming request failed (HTTP ${response.status})`);
     }
     if (!response.body) throw new Error('Provider returned an empty streaming response body.');
 
