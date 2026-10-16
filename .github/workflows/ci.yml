@@ -103,6 +103,9 @@ jobs:
       - name: First-party BFF session security gateway certification
         run: npm run test:auth-bff
 
+      - name: CORS untrusted origin 4xx rejection and policy regression
+        run: npm run test:cors
+
       - name: Preview principal spoofing guard
         run: npm run test:preview-identity
 

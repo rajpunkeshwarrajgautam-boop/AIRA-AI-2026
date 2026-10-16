@@ -62,6 +62,18 @@ import {
 } from './auth/bff-session.js';
 import { isTemporaryDatabaseError } from './utils/storage-errors.js';
 
+export class UntrustedOriginError extends Error {
+  readonly status = 403;
+  readonly code = 'CORS_ORIGIN_DENIED';
+  readonly origin: string;
+
+  constructor(origin: string) {
+    super('Origin not allowed');
+    this.name = 'UntrustedOriginError';
+    this.origin = origin;
+  }
+}
+
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
 
@@ -73,10 +85,28 @@ app.use(cors({
     if (isAllowedOrigin(origin)) {
       return callback(null, true);
     }
-    return callback(new Error(`CORS blocked for origin: ${origin}`), false);
+    return callback(new UntrustedOriginError(origin), false);
   },
   credentials: true
 }));
+
+// Dedicated CORS origin rejection error handler
+app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+  if (err instanceof UntrustedOriginError || err?.code === 'CORS_ORIGIN_DENIED' || err?.name === 'UntrustedOriginError') {
+    const rawOrigin = typeof err.origin === 'string' ? err.origin : (req.headers.origin as string) || 'unknown';
+    const sanitizedOrigin = rawOrigin.slice(0, 200).replace(/[\r\n\t]/g, '');
+    const sanitizedRoute = (req.originalUrl || req.url || 'unknown').slice(0, 200).replace(/[\r\n\t]/g, '');
+    
+    process.stdout.write(
+      `[SECURITY_EVENT] event=cors_origin_rejected origin=${sanitizedOrigin} route=${sanitizedRoute} status=403\n`
+    );
+    res.removeHeader('Access-Control-Allow-Origin');
+    res.removeHeader('access-control-allow-origin');
+    res.status(403).json({ error: 'Origin not allowed' });
+    return;
+  }
+  next(err);
+});
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ limit: '2mb', extended: false }));
 
@@ -972,6 +1002,17 @@ app.post('/api/knowledge/memories', async (req: Request, res: Response) => {
 // -----------------------------------------------------------------------
 
 app.post('/api/agents', async (req: Request, res: Response) => {
+  const verifiedUserId = req.principal?.userId;
+  if (!verifiedUserId) {
+    return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+  }
+
+  if (req.body?.principalId && req.body.principalId !== verifiedUserId) {
+    return res.status(400).json({
+      error: 'Forbidden: caller may not specify or forge principalId ownership'
+    });
+  }
+
   const { name, instructions, modelPolicy, tools, memoryScopes, approvalPolicy, maxSteps, timeoutPolicy } = req.body;
   if (!name || !instructions) {
     return res.status(400).json({ error: 'name and instructions are required.' });
@@ -979,6 +1020,7 @@ app.post('/api/agents', async (req: Request, res: Response) => {
   const now = Date.now();
   const agent: AgentDefinition = {
     id: `agent_${crypto.randomUUID().slice(0, 8)}`,
+    principalId: verifiedUserId,
     name,
     description: req.body.description || '',
     instructions,
@@ -991,33 +1033,57 @@ app.post('/api/agents', async (req: Request, res: Response) => {
     createdAt: now,
     updatedAt: now
   } as any;
-  await agentRepo.saveAgent(agent);
+  await agentRepo.saveAgent(agent, verifiedUserId);
   res.status(201).json(agent);
 });
 
-app.get('/api/agents', async (_req: Request, res: Response) => {
-  res.json(await agentRepo.listAgents());
+app.get('/api/agents', async (req: Request, res: Response) => {
+  const verifiedUserId = req.principal?.userId;
+  if (!verifiedUserId) {
+    return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+  }
+  res.json(await agentRepo.listAgents(verifiedUserId));
 });
 
 app.get('/api/agents/:id', async (req: Request, res: Response) => {
-  const agent = await agentRepo.getAgent(req.params.id);
+  const verifiedUserId = req.principal?.userId;
+  if (!verifiedUserId) {
+    return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+  }
+  const agent = await agentRepo.getAgent(req.params.id, verifiedUserId);
   if (!agent) return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
   res.json(agent);
 });
 
 app.patch('/api/agents/:id', async (req: Request, res: Response) => {
-  const agent = await agentRepo.getAgent(req.params.id);
+  const verifiedUserId = req.principal?.userId;
+  if (!verifiedUserId) {
+    return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+  }
+
+  if (req.body?.principalId && req.body.principalId !== verifiedUserId) {
+    return res.status(400).json({
+      error: 'Forbidden: caller may not alter or forge principalId ownership'
+    });
+  }
+
+  const agent = await agentRepo.getAgent(req.params.id, verifiedUserId);
   if (!agent) return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
   const updates = req.body as Partial<AgentDefinition>;
   delete (updates as any).id;
+  delete (updates as any).principalId;
   delete (updates as any).createdAt;
   Object.assign(agent, updates, { updatedAt: Date.now() });
-  await agentRepo.saveAgent(agent);
+  await agentRepo.saveAgent(agent, verifiedUserId);
   res.json(agent);
 });
 
 app.delete('/api/agents/:id', async (req: Request, res: Response) => {
-  const deleted = await agentRepo.deleteAgent(req.params.id);
+  const verifiedUserId = req.principal?.userId;
+  if (!verifiedUserId) {
+    return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+  }
+  const deleted = await agentRepo.deleteAgent(req.params.id, verifiedUserId);
   if (!deleted) {
     return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
   }
@@ -1025,7 +1091,11 @@ app.delete('/api/agents/:id', async (req: Request, res: Response) => {
 });
 
 app.post('/api/agents/:id/run', async (req: Request, res: Response) => {
-  const agent = await agentRepo.getAgent(req.params.id);
+  const verifiedUserId = req.principal?.userId;
+  if (!verifiedUserId) {
+    return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+  }
+  const agent = await agentRepo.getAgent(req.params.id, verifiedUserId);
   if (!agent) return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
   try {
     const run = await agentRuntime.createRun({
@@ -1286,6 +1356,12 @@ app.post('/api/workflows/runs/:id/steps/:stepId/approve', async (req: Request, r
   }
 });
 
+if (process.env.NODE_ENV === 'test') {
+  app.get('/api/test-unhandled-server-error', () => {
+    throw new Error('Simulated unexpected server error');
+  });
+}
+
 app.use((req: Request, res: Response) => {
   process.stdout.write(`[API_404] ${req.method} ${req.url}\n`);
   res.status(404).json({ error: `Not found: ${req.method} ${req.url}` });
@@ -1294,7 +1370,19 @@ app.use((req: Request, res: Response) => {
 // -----------------------------------------------------------------------
 // Global Error Handler (Audit 27 — catches uncaught route errors)
 // -----------------------------------------------------------------------
-app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
+  if (err instanceof UntrustedOriginError || err?.code === 'CORS_ORIGIN_DENIED' || err?.name === 'UntrustedOriginError') {
+    const rawOrigin = typeof err.origin === 'string' ? err.origin : (req.headers.origin as string) || 'unknown';
+    const sanitizedOrigin = rawOrigin.slice(0, 200).replace(/[\r\n\t]/g, '');
+    const sanitizedRoute = (req.originalUrl || req.url || 'unknown').slice(0, 200).replace(/[\r\n\t]/g, '');
+    process.stdout.write(
+      `[SECURITY_EVENT] event=cors_origin_rejected origin=${sanitizedOrigin} route=${sanitizedRoute} status=403\n`
+    );
+    res.removeHeader('Access-Control-Allow-Origin');
+    res.removeHeader('access-control-allow-origin');
+    res.status(403).json({ error: 'Origin not allowed' });
+    return;
+  }
   process.stderr.write(`[API_ERROR] ${err.message}\n`);
   res.status(500).json({ error: 'Internal server error', message: err.message });
 });
