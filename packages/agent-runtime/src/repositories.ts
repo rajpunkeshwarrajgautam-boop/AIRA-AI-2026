@@ -45,31 +45,32 @@ export class PostgresAgentRepository implements AgentRepository {
   async getAgent(id: string, principalId?: string): Promise<AgentDefinition | undefined> {
     const query = db('agents').where({ id });
     if (principalId) {
-      query.andWhere((qb) => {
-        qb.where({ principal_id: principalId }).orWhereNull('principal_id');
-      });
+      query.andWhere({ principal_id: principalId });
     }
     const row = await query.first();
     if (!row) return undefined;
+    // QUARANTINE POLICY: If principal_id is NULL or empty, it is quarantined and ownerless.
+    // Authenticated users cannot claim or access quarantined legacy agents without explicit admin migration.
+    if (!row.principal_id) {
+      return undefined;
+    }
+    if (principalId && row.principal_id !== principalId) {
+      return undefined;
+    }
     return this.mapToAgent(row);
   }
 
   async listAgents(principalId?: string): Promise<AgentDefinition[]> {
-    const query = db('agents').select('*');
-    if (principalId) {
-      query.where((qb) => {
-        qb.where({ principal_id: principalId }).orWhereNull('principal_id');
-      });
-    }
+    if (!principalId) return [];
+    // Strict tenant isolation: never return records where principal_id IS NULL or foreign
+    const query = db('agents').select('*').where({ principal_id: principalId });
     const rows = await query;
     return rows.map(this.mapToAgent);
   }
 
   async deleteAgent(id: string, principalId?: string): Promise<boolean> {
-    const query = db('agents').where({ id });
-    if (principalId) {
-      query.andWhere({ principal_id: principalId });
-    }
+    if (!principalId) return false;
+    const query = db('agents').where({ id, principal_id: principalId });
     const deleted = await query.delete();
     return deleted > 0;
   }
@@ -92,12 +93,12 @@ export class PostgresAgentRepository implements AgentRepository {
 }
 
 export class InMemoryAgentRepository implements AgentRepository {
-  private agents: Map<string, { agent: AgentDefinition; principalId?: string }> = new Map();
+  private agents: Map<string, { agent: AgentDefinition; principalId?: string | null }> = new Map();
 
   async saveAgent(agent: AgentDefinition, principalId?: string): Promise<void> {
-    const owner = principalId || agent.principalId;
+    const owner = principalId || agent.principalId || null;
     this.agents.set(agent.id, {
-      agent: { ...agent, principalId: owner },
+      agent: { ...agent, principalId: owner || undefined },
       principalId: owner
     });
   }
@@ -105,22 +106,27 @@ export class InMemoryAgentRepository implements AgentRepository {
   async getAgent(id: string, principalId?: string): Promise<AgentDefinition | undefined> {
     const entry = this.agents.get(id);
     if (!entry) return undefined;
-    if (principalId && entry.principalId && entry.principalId !== principalId) {
+    // Quarantine policy: NULL or empty principalId is fail-closed
+    if (!entry.principalId) {
+      return undefined;
+    }
+    if (principalId && entry.principalId !== principalId) {
       return undefined;
     }
     return { ...entry.agent };
   }
 
   async listAgents(principalId?: string): Promise<AgentDefinition[]> {
+    if (!principalId) return [];
     return Array.from(this.agents.values())
-      .filter(e => !principalId || !e.principalId || e.principalId === principalId)
+      .filter(e => e.principalId && e.principalId === principalId)
       .map(e => ({ ...e.agent }));
   }
 
   async deleteAgent(id: string, principalId?: string): Promise<boolean> {
+    if (!principalId) return false;
     const entry = this.agents.get(id);
-    if (!entry) return false;
-    if (principalId && entry.principalId && entry.principalId !== principalId) {
+    if (!entry || !entry.principalId || entry.principalId !== principalId) {
       return false;
     }
     return this.agents.delete(id);

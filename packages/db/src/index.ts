@@ -9,11 +9,23 @@ const connectionString = process.env.DATABASE_URL || 'postgres://aira:aira@local
 
 const isServerless = process.env.VERCEL === '1' || process.env.NODE_ENV === 'production';
 
-export function resolveEffectiveDatabaseUrl(url: string, isServerless: boolean): string {
-  if (isServerless && url.includes('neon.tech') && !url.includes('-pooler')) {
-    return url.replace(/@([^.]+)\./, '@$1-pooler.');
+export function resolveEffectiveDatabaseUrl(rawUrl: string, isServerless: boolean): string {
+  if (!isServerless) return rawUrl;
+  try {
+    const parsed = new URL(rawUrl);
+    const host = parsed.hostname;
+    if (host.endsWith('.neon.tech') && !host.includes('-pooler')) {
+      const parts = host.split('.');
+      if (parts.length >= 4 && parts[parts.length - 2] === 'neon' && parts[parts.length - 1] === 'tech') {
+        parts[0] = `${parts[0]}-pooler`;
+        parsed.hostname = parts.join('.');
+        return parsed.toString();
+      }
+    }
+    return rawUrl;
+  } catch {
+    return rawUrl;
   }
-  return url;
 }
 
 const effectiveConnectionString = resolveEffectiveDatabaseUrl(connectionString, isServerless);
