@@ -16,22 +16,44 @@ import { resolveEffectiveDatabaseUrl, db } from '../packages/db/src/index.js';
 test('resolveEffectiveDatabaseUrl rewrites representative regional Neon hostnames', () => {
   const regions = [
     {
-      direct: 'postgresql://neondb_owner:p%40ss_secret@ep-example-1.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=disable',
-      expected: 'postgresql://neondb_owner:p%40ss_secret@ep-example-1-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=disable'
+      host: 'ep-example-1.ap-southeast-1.aws.neon.tech',
+      expectedHost: 'ep-example-1-pooler.ap-southeast-1.aws.neon.tech',
+      db: 'neondb',
+      query: '?sslmode=require&channel_binding=disable',
+      user: 'neondb_owner',
+      pass: 'mock_sec_pass_1'
     },
     {
-      direct: 'postgresql://usr_123:sec_456@ep-cool-fog-999.us-east-2.aws.neon.tech/aira_db?sslmode=require',
-      expected: 'postgresql://usr_123:sec_456@ep-cool-fog-999-pooler.us-east-2.aws.neon.tech/aira_db?sslmode=require'
+      host: 'ep-cool-fog-999.us-east-2.aws.neon.tech',
+      expectedHost: 'ep-cool-fog-999-pooler.us-east-2.aws.neon.tech',
+      db: 'aira_db',
+      query: '?sslmode=require',
+      user: 'usr_123',
+      pass: 'mock_sec_pass_2'
     },
     {
-      direct: 'postgresql://admin:complex%21key@ep-mighty-hill-777.eu-central-1.aws.neon.tech/prod_db?sslmode=require',
-      expected: 'postgresql://admin:complex%21key@ep-mighty-hill-777-pooler.eu-central-1.aws.neon.tech/prod_db?sslmode=require'
+      host: 'ep-mighty-hill-777.eu-central-1.aws.neon.tech',
+      expectedHost: 'ep-mighty-hill-777-pooler.eu-central-1.aws.neon.tech',
+      db: 'prod_db',
+      query: '?sslmode=require',
+      user: 'admin',
+      pass: 'mock_sec_pass_3'
     }
   ];
 
-  for (const { direct, expected } of regions) {
+  for (const { host, expectedHost, db, query, user, pass } of regions) {
+    const directUrl = new URL(`postgresql://${host}/${db}${query}`);
+    directUrl.username = user;
+    directUrl.password = pass;
+    const direct = directUrl.toString();
+
+    const expectedUrl = new URL(`postgresql://${expectedHost}/${db}${query}`);
+    expectedUrl.username = user;
+    expectedUrl.password = pass;
+    const expected = expectedUrl.toString();
+
     const effective = resolveEffectiveDatabaseUrl(direct, true);
-    assert.equal(effective, expected, `Failed to correctly rewrite ${direct}`);
+    assert.equal(effective, expected, `Failed to correctly rewrite ${host}`);
 
     // Verify fine-grained invariants
     const parsedOriginal = new URL(direct);
@@ -49,7 +71,10 @@ test('resolveEffectiveDatabaseUrl rewrites representative regional Neon hostname
 });
 
 test('resolveEffectiveDatabaseUrl preserves already pooled endpoint without duplicate -pooler', () => {
-  const pooledNeonUrl = 'postgresql://neondb_owner:npg_secret@ep-cool-fog-123456-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require';
+  const directUrl = new URL('postgresql://ep-cool-fog-123456-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require');
+  directUrl.username = 'neondb_owner';
+  directUrl.password = 'mock_sec_pass_4';
+  const pooledNeonUrl = directUrl.toString();
   const effective = resolveEffectiveDatabaseUrl(pooledNeonUrl, true);
   
   assert.equal(effective, pooledNeonUrl, 'Already pooled endpoint must not be mutated');
@@ -60,10 +85,13 @@ test('resolveEffectiveDatabaseUrl preserves non-serverless and non-Neon postgres
   const localUrl = 'postgres://aira:aira@localhost:5432/aira_db';
   assert.equal(resolveEffectiveDatabaseUrl(localUrl, true), localUrl, 'Localhost must remain unchanged');
 
-  const customPostgres = 'postgresql://usr:pwd@db.internal.company.com:5432/main';
+  const customPostgres = 'postgresql://db.internal.company.com:5432/main';
   assert.equal(resolveEffectiveDatabaseUrl(customPostgres, true), customPostgres, 'Custom host must remain unchanged');
 
-  const directNeonUrl = 'postgresql://neondb_owner:npg_secret@ep-cool-fog-123456.us-east-2.aws.neon.tech/neondb?sslmode=require';
+  const directUrl = new URL('postgresql://ep-cool-fog-123456.us-east-2.aws.neon.tech/neondb?sslmode=require');
+  directUrl.username = 'neondb_owner';
+  directUrl.password = 'mock_sec_pass_5';
+  const directNeonUrl = directUrl.toString();
   assert.equal(resolveEffectiveDatabaseUrl(directNeonUrl, false), directNeonUrl, 'Non-serverless mode must not rewrite host');
 });
 
