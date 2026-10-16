@@ -448,7 +448,10 @@ export class OpenAIAdapter implements ModelAdapter {
       while (!finished) {
         const { value, done } = await reader.read();
         if (done) break;
-        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+        // Normalize line endings only after bytes are accumulated: a CRLF pair
+        // can itself be split between two network reads.
+        buffer += decoder.decode(value, { stream: true });
+        buffer = buffer.replace(/\r\n/g, '\n');
         let separator: number;
         while ((separator = buffer.indexOf('\n\n')) !== -1) {
           const frame = buffer.slice(0, separator);
