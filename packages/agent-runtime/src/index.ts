@@ -1090,12 +1090,22 @@ CAPABILITY & IDENTITY INVARIANTS:
         // Snapshot before durable delta events: recovery can reconstruct the output
         // even if the serverless instance stops between these operations.
         await this.runRepo.saveRun(run);
+        // Live deltas have already been sent to subscribers. Store aggregate
+        // replay events without broadcasting them a second time.
         if (pendingThinking) {
-          await this.emitRunEvent(runId, 'thinking.delta', { delta: pendingThinking });
+          await this.runRepo.appendRunEvent({
+            eventId: `evt_${crypto.randomUUID().slice(0, 8)}`,
+            runId, type: 'thinking.delta', timestamp: Date.now(),
+            data: { delta: pendingThinking }
+          });
           pendingThinking = '';
         }
         if (pendingContent) {
-          await this.emitRunEvent(runId, 'content.delta', { delta: pendingContent });
+          await this.runRepo.appendRunEvent({
+            eventId: `evt_${crypto.randomUUID().slice(0, 8)}`,
+            runId, type: 'content.delta', timestamp: Date.now(),
+            data: { delta: pendingContent }
+          });
           pendingContent = '';
         }
         pendingDeltas = 0;
