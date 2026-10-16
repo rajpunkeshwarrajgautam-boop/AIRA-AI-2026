@@ -2,10 +2,10 @@ import { AgentDefinition, Run, StreamingEvent } from '../../contracts/src/index.
 import { db } from '../../db/src/index.js';
 
 export interface AgentRepository {
-  saveAgent(agent: AgentDefinition): Promise<void>;
-  getAgent(id: string): Promise<AgentDefinition | undefined>;
-  listAgents(): Promise<AgentDefinition[]>;
-  deleteAgent(id: string): Promise<boolean>;
+  saveAgent(agent: AgentDefinition, principalId?: string): Promise<void>;
+  getAgent(id: string, principalId?: string): Promise<AgentDefinition | undefined>;
+  listAgents(principalId?: string): Promise<AgentDefinition[]>;
+  deleteAgent(id: string, principalId?: string): Promise<boolean>;
 }
 
 export interface RunRepository {
@@ -23,9 +23,11 @@ export interface RunRepository {
 }
 
 export class PostgresAgentRepository implements AgentRepository {
-  async saveAgent(agent: AgentDefinition): Promise<void> {
+  async saveAgent(agent: AgentDefinition, principalId?: string): Promise<void> {
+    const owner = principalId || agent.principalId || null;
     await db('agents').insert({
       id: agent.id,
+      principal_id: owner,
       name: agent.name,
       description: agent.description || '',
       instructions: agent.instructions,
@@ -40,25 +42,42 @@ export class PostgresAgentRepository implements AgentRepository {
     }).onConflict('id').merge();
   }
 
-  async getAgent(id: string): Promise<AgentDefinition | undefined> {
-    const row = await db('agents').where({ id }).first();
+  async getAgent(id: string, principalId?: string): Promise<AgentDefinition | undefined> {
+    const query = db('agents').where({ id });
+    if (principalId) {
+      query.andWhere((qb) => {
+        qb.where({ principal_id: principalId }).orWhereNull('principal_id');
+      });
+    }
+    const row = await query.first();
     if (!row) return undefined;
     return this.mapToAgent(row);
   }
 
-  async listAgents(): Promise<AgentDefinition[]> {
-    const rows = await db('agents').select('*');
+  async listAgents(principalId?: string): Promise<AgentDefinition[]> {
+    const query = db('agents').select('*');
+    if (principalId) {
+      query.where((qb) => {
+        qb.where({ principal_id: principalId }).orWhereNull('principal_id');
+      });
+    }
+    const rows = await query;
     return rows.map(this.mapToAgent);
   }
 
-  async deleteAgent(id: string): Promise<boolean> {
-    const deleted = await db('agents').where({ id }).delete();
+  async deleteAgent(id: string, principalId?: string): Promise<boolean> {
+    const query = db('agents').where({ id });
+    if (principalId) {
+      query.andWhere({ principal_id: principalId });
+    }
+    const deleted = await query.delete();
     return deleted > 0;
   }
 
   private mapToAgent(row: any): AgentDefinition {
     return {
       id: row.id,
+      principalId: row.principal_id || undefined,
       name: row.name,
       description: row.description || '',
       instructions: row.instructions,
@@ -69,6 +88,42 @@ export class PostgresAgentRepository implements AgentRepository {
       maxSteps: row.maxSteps,
       timeoutMs: typeof row.timeoutPolicy === 'string' ? JSON.parse(row.timeoutPolicy)?.maxMs : row.timeoutPolicy?.maxMs
     };
+  }
+}
+
+export class InMemoryAgentRepository implements AgentRepository {
+  private agents: Map<string, { agent: AgentDefinition; principalId?: string }> = new Map();
+
+  async saveAgent(agent: AgentDefinition, principalId?: string): Promise<void> {
+    const owner = principalId || agent.principalId;
+    this.agents.set(agent.id, {
+      agent: { ...agent, principalId: owner },
+      principalId: owner
+    });
+  }
+
+  async getAgent(id: string, principalId?: string): Promise<AgentDefinition | undefined> {
+    const entry = this.agents.get(id);
+    if (!entry) return undefined;
+    if (principalId && entry.principalId && entry.principalId !== principalId) {
+      return undefined;
+    }
+    return { ...entry.agent };
+  }
+
+  async listAgents(principalId?: string): Promise<AgentDefinition[]> {
+    return Array.from(this.agents.values())
+      .filter(e => !principalId || !e.principalId || e.principalId === principalId)
+      .map(e => ({ ...e.agent }));
+  }
+
+  async deleteAgent(id: string, principalId?: string): Promise<boolean> {
+    const entry = this.agents.get(id);
+    if (!entry) return false;
+    if (principalId && entry.principalId && entry.principalId !== principalId) {
+      return false;
+    }
+    return this.agents.delete(id);
   }
 }
 
