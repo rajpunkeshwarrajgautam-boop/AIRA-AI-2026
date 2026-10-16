@@ -157,11 +157,23 @@ export class ToolRecoveryEngine {
       };
     }
 
-    if (toolResult.error) {
+    // A structured error flag is authoritative even if an adapter omits the
+    // optional error string. Never declare success based on an error payload.
+    if (toolResult.isError || toolResult.error) {
       return {
         state: 'FAILED',
         verified: false,
-        reason: `Tool reported error: ${toolResult.error}`
+        reason: `Tool reported error: ${toolResult.error || toolResult.errorCode || 'unspecified execution failure'}`
+      };
+    }
+
+    // Missing outputs cannot establish completion. Legitimate void operations
+    // must return an explicit execution receipt instead of null/undefined.
+    if (toolResult.output === null || toolResult.output === undefined) {
+      return {
+        state: 'PARTIALLY_COMPLETED',
+        verified: false,
+        reason: 'Tool did not return completion evidence.'
       };
     }
 
