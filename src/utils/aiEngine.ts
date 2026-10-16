@@ -131,7 +131,8 @@ export async function streamAIResponse(
           const lines = buffer.split('\n');
           buffer = lines.pop() || '';
 
-          for (const line of lines) {
+          for (const rawLine of lines) {
+            const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
             if (!isIdentityValid()) {
               try { await reader.cancel(); } catch {}
               return;
