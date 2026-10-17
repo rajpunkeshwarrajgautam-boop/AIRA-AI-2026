@@ -66,6 +66,46 @@ async function runTests() {
   assert.ok(planFailover.selectionReason.includes('OPEN') || planFailover.selectionReason.includes('degraded'), 'Reason must document circuit state');
   console.log('PASS: Primary circuit trip dynamically routed traffic to allam-2-7b.');
 
+  // TEST 6: Independent Gemini Fallback Selection (Prompt Section 8)
+  console.log('\n[TEST 6] Independent Gemini Fallback Selection');
+  const trackerGemini = new ProviderHealthTracker({ cooldownMs: 200 });
+  const policyGemini = new LatencyAwareRoutingPolicy(trackerGemini);
+  const planGroqGemini = policyGemini.selectFastExecutionPlan({
+    configuredProviders: ['groq', 'gemini', 'nvidia']
+  });
+
+  assert.equal(planGroqGemini.primary.provider, 'groq');
+  assert.equal(planGroqGemini.primary.model, 'openai/gpt-oss-120b');
+  assert.equal(planGroqGemini.fallback?.provider, 'gemini', 'Fallback must be independent provider gemini');
+  assert.equal(planGroqGemini.fallback?.model, 'gemini-2.5-flash');
+  console.log('PASS: Independent provider gemini/gemini-2.5-flash selected as fallback over intra-Groq allam-2-7b.');
+
+  // TEST 7: Groq circuit trips -> Failover to Gemini
+  console.log('\n[TEST 7] Failover to Gemini when Groq circuits trip');
+  trackerGemini.recordFailure('groq', 'openai/gpt-oss-120b', new Error('RATE_LIMIT_429'), 429);
+  trackerGemini.recordFailure('groq', 'openai/gpt-oss-120b', new Error('RATE_LIMIT_429'), 429);
+  trackerGemini.recordFailure('groq', 'openai/gpt-oss-120b', new Error('RATE_LIMIT_429'), 429);
+
+  const planGeminiFailover = policyGemini.selectFastExecutionPlan({
+    configuredProviders: ['groq', 'gemini', 'nvidia']
+  });
+
+  assert.equal(planGeminiFailover.primary.provider, 'groq');
+  assert.equal(planGeminiFailover.primary.model, 'allam-2-7b');
+  assert.equal(planGeminiFailover.fallback?.provider, 'gemini');
+
+  // If all Groq models trip, Gemini becomes primary
+  trackerGemini.recordFailure('groq', 'allam-2-7b', new Error('RATE_LIMIT_429'), 429);
+  trackerGemini.recordFailure('groq', 'allam-2-7b', new Error('RATE_LIMIT_429'), 429);
+  trackerGemini.recordFailure('groq', 'allam-2-7b', new Error('RATE_LIMIT_429'), 429);
+
+  const planGeminiPrimary = policyGemini.selectFastExecutionPlan({
+    configuredProviders: ['groq', 'gemini', 'nvidia']
+  });
+  assert.equal(planGeminiPrimary.primary.provider, 'gemini');
+  assert.equal(planGeminiPrimary.primary.model, 'gemini-2.5-flash');
+  console.log('PASS: Full failover to Gemini primary when Groq account quota is exhausted.');
+
   console.log('\n=== ALL P1.6 ROUTING POLICY TESTS PASSED ===');
 }
 

@@ -7,6 +7,7 @@ import {
 import { ProviderHealthTracker } from './health-tracker.js';
 import { LatencyAwareRoutingPolicy } from './routing-policy.js';
 import { ResilientModelAdapter } from './resilient-adapter.js';
+import { GeminiAdapter } from './gemini-adapter.js';
 
 export interface ChatMessageInput {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -61,6 +62,7 @@ export type SupportedProvider =
   | 'anthropic'
   | 'openai'
   | 'groq'
+  | 'gemini'
   | 'cerebras'
   | 'together'
   | 'fireworks'
@@ -677,6 +679,17 @@ export class ModelRouter {
         )
       );
     }
+    if (process.env.GEMINI_API_KEY) {
+      const geminiKey = process.env.GEMINI_API_KEY.trim().replace(/^["']|["']$/g, '');
+      const geminiModel = (process.env.AIRA_GEMINI_MODEL || '').trim().replace(/^["']|["']$/g, '') || 'gemini-2.5-flash';
+      this.adapters.set(
+        'gemini',
+        new GeminiAdapter(
+          geminiKey,
+          geminiModel
+        )
+      );
+    }
     if (process.env.ANTHROPIC_API_KEY) {
       this.adapters.set('anthropic', new AnthropicAdapter());
     }
@@ -700,6 +713,12 @@ export class ModelRouter {
     if (provider === 'groq' && process.env.GROQ_API_KEY) {
       const groqKey = process.env.GROQ_API_KEY.trim().replace(/^["']|["']$/g, '');
       const adapter = new OpenAIAdapter(groqKey, 'https://api.groq.com/openai/v1', model, 'groq');
+      (adapter as any).modelName = model;
+      return adapter;
+    }
+    if (provider === 'gemini' && process.env.GEMINI_API_KEY) {
+      const geminiKey = process.env.GEMINI_API_KEY.trim().replace(/^["']|["']$/g, '');
+      const adapter = new GeminiAdapter(geminiKey, model);
       (adapter as any).modelName = model;
       return adapter;
     }
@@ -865,7 +884,7 @@ export class ModelRouter {
         if (plan.isDegraded) {
           throw new Error(
             `CONFIGURATION_ERROR: No production model provider is configured for Aira mode "${model}". ` +
-            'Configure GROQ_API_KEY, OPENAI_API_KEY, NVIDIA_API_KEY, or ANTHROPIC_API_KEY.'
+            'Configure GROQ_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY, NVIDIA_API_KEY, or ANTHROPIC_API_KEY.'
           );
         }
 
@@ -1149,3 +1168,4 @@ export class ModelRouter {
 export * from './health-tracker.js';
 export * from './routing-policy.js';
 export * from './resilient-adapter.js';
+export * from './gemini-adapter.js';

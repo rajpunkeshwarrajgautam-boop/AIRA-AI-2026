@@ -258,6 +258,7 @@ app.get('/api/ready/providers', async (_req: Request, res: Response) => {
   const result: Record<string, any> = {
     supportedProviders: {
       groq: { configured: Boolean(process.env.GROQ_API_KEY) },
+      gemini: { configured: Boolean(process.env.GEMINI_API_KEY) },
       nvidia: { configured: Boolean(process.env.NVIDIA_API_KEY), deepModel: 'nvidia/nemotron-3-super-120b-a12b' },
       cerebras: { configured: Boolean(process.env.CEREBRAS_API_KEY) },
       together: { configured: Boolean(process.env.TOGETHER_API_KEY) },
@@ -287,6 +288,33 @@ app.get('/api/ready/providers', async (_req: Request, res: Response) => {
     }
   } else {
     result.groq = { configured: false };
+  }
+  if (process.env.GEMINI_API_KEY) {
+    try {
+      const geminiKey = process.env.GEMINI_API_KEY.trim().replace(/^["']|["']$/g, '');
+      const resp = await fetch('https://generativelanguage.googleapis.com/v1beta/models', {
+        headers: { 'x-goog-api-key': geminiKey }
+      });
+      const data: any = await resp.json().catch(() => ({}));
+      const rawModels: any[] = Array.isArray(data.models) ? data.models : [];
+      result.gemini = {
+        status: resp.status,
+        models: rawModels.map(m => m.name.replace(/^models\//, '')),
+        details: rawModels.map(m => ({
+          name: m.name.replace(/^models\//, ''),
+          displayName: m.displayName,
+          supportedGenerationMethods: m.supportedGenerationMethods,
+          inputTokenLimit: m.inputTokenLimit,
+          outputTokenLimit: m.outputTokenLimit
+        })),
+        keyLength: geminiKey.length,
+        keyPrefix: geminiKey.slice(0, 4)
+      };
+    } catch (e: any) {
+      result.gemini = { error: e.message };
+    }
+  } else {
+    result.gemini = { configured: false };
   }
   res.json(result);
 });
@@ -390,6 +418,125 @@ app.post('/api/ready/benchmark-groq', async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/ready/benchmark-gemini', async (req: Request, res: Response) => {
+  if (!process.env.GEMINI_API_KEY) {
+    return res.status(503).json({ error: 'GEMINI_API_KEY not configured' });
+  }
+  const { model, prompt, max_tokens, temperature } = req.body || {};
+  if (!model || !prompt) {
+    return res.status(400).json({ error: 'model and prompt required' });
+  }
+
+  const geminiKey = process.env.GEMINI_API_KEY.trim().replace(/^["']|["']$/g, '');
+  const cleanModel = model.replace(/^models\//, '');
+  const t0 = performance.now();
+  let ttfb = 0;
+  let firstDelta: number | null = null;
+  let firstThinking: number | null = null;
+  let contentDeltaCount = 0;
+  let thinkingDeltaCount = 0;
+  let text = '';
+  let thinking = '';
+  let usage: any = null;
+
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:streamGenerateContent?alt=sse`;
+    const upstreamRes = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'x-goog-api-key': geminiKey,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: temperature !== undefined ? temperature : 0.7,
+          maxOutputTokens: max_tokens || 256
+        }
+      })
+    });
+
+    ttfb = performance.now() - t0;
+    if (!upstreamRes.ok) {
+      const errBody = await upstreamRes.text();
+      const sanitized = errBody.replaceAll(geminiKey, '[REDACTED]');
+      return res.status(upstreamRes.status).json({
+        success: false,
+        status: upstreamRes.status,
+        ttfbMs: Math.round(ttfb),
+        error: sanitized
+      });
+    }
+
+    const reader = upstreamRes.body?.getReader();
+    if (!reader) throw new Error('No body stream from Gemini');
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) continue;
+        const jsonStr = trimmed.slice(5).trim();
+        if (!jsonStr || jsonStr === '[DONE]') continue;
+
+        try {
+          const parsed = JSON.parse(jsonStr);
+          const candidate = parsed.candidates?.[0];
+          if (parsed.usageMetadata) {
+            usage = parsed.usageMetadata;
+          }
+          if (candidate?.content?.parts) {
+            for (const part of candidate.content.parts) {
+              if (part.thought) {
+                if (firstThinking === null) {
+                  firstThinking = performance.now() - t0;
+                }
+                thinkingDeltaCount++;
+                thinking += part.text || '';
+              } else if (part.text) {
+                if (firstDelta === null) {
+                  firstDelta = performance.now() - t0;
+                }
+                contentDeltaCount++;
+                text += part.text;
+              }
+            }
+          }
+        } catch {
+          // ignore SSE JSON boundary chunks
+        }
+      }
+    }
+
+    const total = performance.now() - t0;
+    res.json({
+      success: true,
+      status: 200,
+      model: cleanModel,
+      providerModel: cleanModel,
+      ttfbMs: Math.round(ttfb),
+      ttftMs: firstDelta !== null ? Math.round(firstDelta) : null,
+      firstThinkingMs: firstThinking !== null ? Math.round(firstThinking) : null,
+      totalDurationMs: Math.round(total),
+      contentDeltaCount,
+      thinkingDeltaCount,
+      text: text.trim(),
+      thinking: thinking ? thinking.slice(0, 200) : undefined,
+      usage
+    });
+  } catch (err: any) {
+    const sanitized = err.message ? err.message.replaceAll(geminiKey, '[REDACTED]') : 'Unknown error';
+    res.status(500).json({ success: false, error: sanitized });
   }
 });
 

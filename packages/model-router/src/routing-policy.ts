@@ -105,6 +105,38 @@ export class LatencyAwareRoutingPolicy {
       typicalTtftMs: 500,
       costTier: 'medium',
       allowed: true
+    },
+    {
+      provider: 'gemini',
+      model: 'gemini-2.5-flash',
+      qualityScore: 9.3,
+      typicalTtftMs: 380,
+      costTier: 'low',
+      allowed: true
+    },
+    {
+      provider: 'gemini',
+      model: 'gemini-2.0-flash',
+      qualityScore: 9.2,
+      typicalTtftMs: 350,
+      costTier: 'low',
+      allowed: true
+    },
+    {
+      provider: 'gemini',
+      model: 'gemini-1.5-flash',
+      qualityScore: 8.8,
+      typicalTtftMs: 400,
+      costTier: 'low',
+      allowed: true
+    },
+    {
+      provider: 'gemini',
+      model: 'gemini-2.5-flash-lite',
+      qualityScore: 8.5,
+      typicalTtftMs: 320,
+      costTier: 'low',
+      allowed: true
     }
   ];
 
@@ -122,6 +154,7 @@ export class LatencyAwareRoutingPolicy {
   public resolveFastRoute(): FastExecutionPlan {
     const configuredProviders: string[] = [];
     if (process.env.GROQ_API_KEY) configuredProviders.push('groq');
+    if (process.env.GEMINI_API_KEY) configuredProviders.push('gemini');
     if (process.env.CEREBRAS_API_KEY) configuredProviders.push('cerebras');
     if (process.env.TOGETHER_API_KEY) configuredProviders.push('together');
     if (process.env.FIREWORKS_API_KEY) configuredProviders.push('fireworks');
@@ -217,9 +250,11 @@ export class LatencyAwareRoutingPolicy {
     }
 
     const primary = availableCandidates[0];
-    const fallbackCandidate = availableCandidates.find(
-      c => c.provider !== primary.provider || c.model !== primary.model
-    ) || (eligibleCandidates.find(c => c.model !== primary.model) ?? null);
+    // Prefer independent provider for fallback resilience (Prompt Section 8)
+    const independentFallback = availableCandidates.find(c => c.provider !== primary.provider);
+    const fallbackCandidate = independentFallback
+      || availableCandidates.find(c => c.provider !== primary.provider || c.model !== primary.model)
+      || (eligibleCandidates.find(c => c.model !== primary.model) ?? null);
 
     const fallback = fallbackCandidate
       ? { provider: fallbackCandidate.provider, model: fallbackCandidate.model }
