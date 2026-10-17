@@ -169,16 +169,18 @@ export class ResilientModelAdapter implements ModelAdapter {
           if (delta.thinking) {
             onChunk({ thinking: delta.thinking });
           }
-          if (typeof delta.text === 'string' && delta.text.trim().length > 0) {
+          if (typeof delta.text === 'string' && delta.text.length > 0) {
             if (!receivedFirstContentToken) {
-              receivedFirstContentToken = true;
-              this.stickinessLocked = true;
-              if (firstTokenTimer) {
-                clearTimeout(firstTokenTimer);
-                firstTokenTimer = null;
+              if (delta.text.trim().length > 0) {
+                receivedFirstContentToken = true;
+                this.stickinessLocked = true;
+                if (firstTokenTimer) {
+                  clearTimeout(firstTokenTimer);
+                  firstTokenTimer = null;
+                }
+                const ttft = Math.round(performance.now() - t0);
+                this.healthTracker.recordSuccess(this.primaryAdapter.provider, primaryModel, ttft);
               }
-              const ttft = Math.round(performance.now() - t0);
-              this.healthTracker.recordSuccess(this.primaryAdapter.provider, primaryModel, ttft);
             }
             onChunk({ text: delta.text });
           }
@@ -240,12 +242,14 @@ export class ResilientModelAdapter implements ModelAdapter {
           policy,
           delta => {
             if (delta.thinking) onChunk({ thinking: delta.thinking });
-            if (typeof delta.text === 'string' && delta.text.trim().length > 0) {
+            if (typeof delta.text === 'string' && delta.text.length > 0) {
               if (!fbReceivedFirst) {
-                fbReceivedFirst = true;
-                this.stickinessLocked = true;
-                const fbTtft = Math.round(performance.now() - tFbStart);
-                this.healthTracker.recordSuccess(this.fallbackAdapter!.provider, fallbackModel, fbTtft);
+                if (delta.text.trim().length > 0) {
+                  fbReceivedFirst = true;
+                  this.stickinessLocked = true;
+                  const fbTtft = Math.round(performance.now() - tFbStart);
+                  this.healthTracker.recordSuccess(this.fallbackAdapter!.provider, fallbackModel, fbTtft);
+                }
               }
               onChunk({ text: delta.text });
             }
@@ -306,23 +310,25 @@ export class ResilientModelAdapter implements ModelAdapter {
               if (delta.thinking && !winner) {
                 onChunk({ thinking: delta.thinking });
               }
-              if (typeof delta.text === 'string' && delta.text.trim().length > 0) {
+              if (typeof delta.text === 'string' && delta.text.length > 0) {
                 if (!winner) {
-                  winner = 'primary';
-                  this.stickinessLocked = true;
-                  if (hedgeTimer) { clearTimeout(hedgeTimer); hedgeTimer = null; }
-                  secondaryAbort.abort('Primary delivered first token; cancelling hedged request');
-                  const ttft = Math.round(performance.now() - t0);
-                  this.healthTracker.recordSuccess(this.primaryAdapter.provider, primaryModel, ttft);
-                  emitProvenance?.({
-                    requestedProvider: this.primaryAdapter.provider,
-                    requestedModel: primaryModel,
-                    executedProvider: this.primaryAdapter.provider,
-                    executedModel: primaryModel,
-                    fallbackOccurred: false,
-                    hedgedRequestUsed: false,
-                    modelIdentityVerified: true
-                  });
+                  if (delta.text.trim().length > 0) {
+                    winner = 'primary';
+                    this.stickinessLocked = true;
+                    if (hedgeTimer) { clearTimeout(hedgeTimer); hedgeTimer = null; }
+                    secondaryAbort.abort('Primary delivered first token; cancelling hedged request');
+                    const ttft = Math.round(performance.now() - t0);
+                    this.healthTracker.recordSuccess(this.primaryAdapter.provider, primaryModel, ttft);
+                    emitProvenance?.({
+                      requestedProvider: this.primaryAdapter.provider,
+                      requestedModel: primaryModel,
+                      executedProvider: this.primaryAdapter.provider,
+                      executedModel: primaryModel,
+                      fallbackOccurred: false,
+                      hedgedRequestUsed: false,
+                      modelIdentityVerified: true
+                    });
+                  }
                 }
                 if (winner === 'primary') {
                   onChunk({ text: delta.text });
@@ -359,23 +365,25 @@ export class ResilientModelAdapter implements ModelAdapter {
               if (delta.thinking && !winner) {
                 onChunk({ thinking: delta.thinking });
               }
-              if (typeof delta.text === 'string' && delta.text.trim().length > 0) {
+              if (typeof delta.text === 'string' && delta.text.length > 0) {
                 if (!winner) {
-                  winner = 'secondary';
-                  this.stickinessLocked = true;
-                  primaryAbort.abort('Hedged secondary delivered first token; cancelling primary');
-                  const fbTtft = Math.round(performance.now() - tSecStart);
-                  this.healthTracker.recordSuccess(this.fallbackAdapter!.provider, fallbackModel, fbTtft);
-                  emitProvenance?.({
-                    requestedProvider: this.primaryAdapter.provider,
-                    requestedModel: primaryModel,
-                    executedProvider: this.fallbackAdapter!.provider,
-                    executedModel: fallbackModel,
-                    fallbackOccurred: true,
-                    fallbackReason: `Primary exceeded hedge delay (${hedgeDelayMs}ms); hedged request delivered first token`,
-                    hedgedRequestUsed: true,
-                    modelIdentityVerified: true
-                  });
+                  if (delta.text.trim().length > 0) {
+                    winner = 'secondary';
+                    this.stickinessLocked = true;
+                    primaryAbort.abort('Hedged secondary delivered first token; cancelling primary');
+                    const fbTtft = Math.round(performance.now() - tSecStart);
+                    this.healthTracker.recordSuccess(this.fallbackAdapter!.provider, fallbackModel, fbTtft);
+                    emitProvenance?.({
+                      requestedProvider: this.primaryAdapter.provider,
+                      requestedModel: primaryModel,
+                      executedProvider: this.fallbackAdapter!.provider,
+                      executedModel: fallbackModel,
+                      fallbackOccurred: true,
+                      fallbackReason: `Primary exceeded hedge delay (${hedgeDelayMs}ms); hedged request delivered first token`,
+                      hedgedRequestUsed: true,
+                      modelIdentityVerified: true
+                    });
+                  }
                 }
                 if (winner === 'secondary') {
                   onChunk({ text: delta.text });

@@ -85,9 +85,9 @@ function computeStats(requests: RequestMetric[]): BatchStats {
     count: requests.length,
     successRate: requests.length > 0 ? Math.round((successful.length / requests.length) * 1000) / 10 : 0,
     fallbackRate: requests.length > 0 ? Math.round((requests.filter(r => r.fallbackOccurred).length / requests.length) * 1000) / 10 : 0,
-    rateLimit429Rate: requests.length > 0 ? Math.round((requests.filter(r => r.status === 429).length / requests.length) * 1000) / 10 : 0,
-    serverError5xxRate: requests.length > 0 ? Math.round((requests.filter(r => r.status >= 500).length / requests.length) * 1000) / 10 : 0,
-    timeoutRate: requests.length > 0 ? Math.round((requests.filter(r => r.status === 408 || r.error?.includes('timeout')).length / requests.length) * 1000) / 10 : 0,
+    rateLimit429Rate: requests.length > 0 ? Math.round((requests.filter(r => r.status === 429 || r.error?.includes('429') || r.error?.includes('Rate limit')).length / requests.length) * 1000) / 10 : 0,
+    serverError5xxRate: requests.length > 0 ? Math.round((requests.filter(r => r.status >= 500 && !r.error?.includes('429')).length / requests.length) * 1000) / 10 : 0,
+    timeoutRate: requests.length > 0 ? Math.round((requests.filter(r => r.status === 408 || r.error?.includes('timeout') || r.error?.includes('TIMEOUT')).length / requests.length) * 1000) / 10 : 0,
     trueBrowserP50: quantile(browserTTFTs, 0.50),
     trueBrowserP75: quantile(browserTTFTs, 0.75),
     trueBrowserP90: quantile(browserTTFTs, 0.90),
@@ -139,6 +139,7 @@ async function executeSingleRun(
   let executedModel = 'unknown';
   let fallbackOccurred = false;
   let fallbackReason: string | undefined;
+  let streamError: string | undefined;
 
   try {
     const res = await fetch(`${baseUrl}/api/chat/stream`, {
@@ -218,6 +219,11 @@ async function executeSingleRun(
                 }
                 text += chunkText;
               }
+            } else if (currentEvent === 'error') {
+              streamError = data.details || data.error || JSON.stringify(data);
+            } else if (currentEvent === 'latency_metrics') {
+              if (data.executedProvider) executedProvider = data.executedProvider;
+              if (data.executedModel) executedModel = data.executedModel;
             }
           } catch {
             // ignore parse errors
@@ -240,7 +246,7 @@ async function executeSingleRun(
       prompt,
       category,
       status: 200,
-      success: text.trim().length > 0,
+      success: text.trim().length > 0 && !streamError,
       trueBrowserTTFT,
       providerTTFT,
       totalDurationMs,
@@ -249,7 +255,8 @@ async function executeSingleRun(
       fallbackOccurred,
       fallbackReason,
       qualityScore,
-      responsePreview: text.slice(0, 120).replace(/[\r\n]+/g, ' ')
+      responsePreview: text.slice(0, 120).replace(/[\r\n]+/g, ' '),
+      error: streamError
     };
   } catch (err: any) {
     return {
@@ -273,7 +280,7 @@ async function executeSingleRun(
 }
 
 async function main() {
-  const previewUrl = process.env.PREVIEW_URL || 'https://aira-ai-2026-dsx2uu4rs-rajpunkeshwarrajgautam-boops-projects.vercel.app';
+  const previewUrl = process.env.PREVIEW_URL || 'https://aira-ai-2026-6fekp4vlw-rajpunkeshwarrajgautam-boops-projects.vercel.app';
   console.log('================================================================');
   console.log('AIRA AI 2026 — P1.6 PREVIEW MULTI-BATCH VARIANCE BENCHMARK');
   console.log(`Target Preview: ${previewUrl}`);
@@ -338,11 +345,12 @@ async function main() {
         `prov=${metric.executedProvider}:${metric.executedModel} ` +
         `fallback=${metric.fallbackOccurred} ` +
         `score=${metric.qualityScore}/10 ` +
-        `preview="${metric.responsePreview.slice(0, 40)}..."`
+        `preview="${metric.responsePreview.slice(0, 40)}..."` +
+        (metric.error ? ` err="${metric.error.slice(0, 50)}"` : '')
       );
 
-      // Controlled inter-request pacing (100ms) to model real human interactive typing
-      await new Promise(r => setTimeout(r, 120));
+      // Controlled inter-request pacing (2,200ms) to respect Groq 30 RPM and on-demand TPM limits
+      await new Promise(r => setTimeout(r, 2200));
     }
 
     const stats = computeStats(batchMetrics);
@@ -358,8 +366,8 @@ async function main() {
     console.log(`Provider P95:       ${stats.providerP95} ms`);
     console.log(`Mean Quality:       ${stats.meanQualityScore} / 10`);
 
-    // Inter-batch pause of 2 seconds
-    await new Promise(r => setTimeout(r, 2000));
+    // Inter-batch pause of 8 seconds to allow Groq rate-limiting sliding window to reset
+    await new Promise(r => setTimeout(r, 8000));
   }
 
   // Combined Stats across all 60 requests
