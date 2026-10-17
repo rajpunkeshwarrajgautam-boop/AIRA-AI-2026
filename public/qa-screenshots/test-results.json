@@ -1,0 +1,44 @@
+{
+  "timestamp": "2026-10-17T05:02:39.673Z",
+  "environment": "preview",
+  "url": "https://aira-ai-2026-git-f-a6b62b-rajpunkeshwarrajgautam-boops-projects.vercel.app",
+  "results": [
+    {
+      "suite": "Desktop Progressive Streaming",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "status": "PASS",
+      "firstRenderMs": 17351,
+      "totalDurationMs": 18319,
+      "progressiveDeltasObserved": 7,
+      "screenshot": "desktop-1440x900-chat-streamed.png",
+      "notes": "Streamed 172 chars progressively. Errors: 0"
+    },
+    {
+      "suite": "Mobile 390x844 Responsive Chat",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "status": "PASS",
+      "firstRenderMs": 4707,
+      "totalDurationMs": 4776,
+      "screenshot": "mobile-390x844-completed.png",
+      "notes": "Zero horizontal overflow. Clean composer. Errors: 0"
+    },
+    {
+      "suite": "Mobile 375x667 Compact Chat",
+      "viewport": {
+        "width": 375,
+        "height": 667
+      },
+      "status": "PASS",
+      "firstRenderMs": 2321,
+      "totalDurationMs": 2457,
+      "screenshot": "mobile-375x667-chat-streamed.png",
+      "notes": "Verified 375x667 zero horizontal overflow. Fast render. Errors: 0"
+    }
+  ]
+}

@@ -110,8 +110,10 @@ async function runRemediationBenchmark() {
 
       const decoder = new TextDecoder();
       let buffer = '';
+      let currentEvent = '';
+      let streamEnded = false;
 
-      while (true) {
+      while (!streamEnded) {
         const { done, value } = await reader.read();
         if (done) break;
         const now = performance.now();
@@ -120,13 +122,19 @@ async function runRemediationBenchmark() {
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
 
-        let currentEvent = '';
         for (const line of lines) {
           if (line.startsWith('event:')) {
             currentEvent = line.slice(6).trim();
           } else if (line.startsWith('data:')) {
             const dataStr = line.slice(5).trim();
-            if (currentEvent === 'routing_decision' && routingTime === null) {
+            if (currentEvent === 'done' || dataStr === '[DONE]') {
+              streamEnded = true;
+              break;
+            } else if (currentEvent === 'error') {
+              console.error(`  Stream error event: ${dataStr}`);
+              streamEnded = true;
+              break;
+            } else if (currentEvent === 'routing_decision' && routingTime === null) {
               routingTime = now - t0;
               try { routingDecision = JSON.parse(dataStr); } catch {}
             } else if (currentEvent === 'model_provenance' && provenanceTime === null) {
