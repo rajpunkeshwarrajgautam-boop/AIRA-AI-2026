@@ -824,7 +824,8 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
 
     // 6. Flush buffer
     for (const evt of bufferedLiveEvents) {
-      if (evt.sequence !== undefined && evt.sequence > highWaterSequence) {
+      const alreadyReplayed = pastEvents.some(p => p.eventId === evt.eventId);
+      if (!alreadyReplayed && (evt.sequence === undefined || evt.sequence > highWaterSequence)) {
         writeSseEvent(evt);
         if (['run.completed', 'run.failed', 'run.cancelled'].includes(evt.type)) {
           terminalEventSeen = true;

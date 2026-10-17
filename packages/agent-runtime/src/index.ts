@@ -436,15 +436,17 @@ export class AgentRuntime extends EventEmitter {
 
     await this.emitRunEvent(runId, eventType, { state, error });
 
-    if (state === 'COMPLETED' || state === 'FAILED' || state === 'CANCELLED') {
+    if (state === 'COMPLETED' || state === 'FAILED' || state === 'CANCELLED' || state === 'WAITING_FOR_APPROVAL') {
       await this.flushPendingEvents(runId);
       await this.saveRun(run);
-      setTimeout(() => {
-        this.inFlightRuns.delete(runId);
-        this.pendingRunEvents.delete(runId);
-        this.runDbTelemetry.delete(runId);
-      }, 30000).unref?.();
-    } else if (state === 'WAITING_FOR_APPROVAL' || state === 'WAITING_FOR_TOOL') {
+      if (state === 'COMPLETED' || state === 'FAILED' || state === 'CANCELLED') {
+        setTimeout(() => {
+          this.inFlightRuns.delete(runId);
+          this.pendingRunEvents.delete(runId);
+          this.runDbTelemetry.delete(runId);
+        }, 30000).unref?.();
+      }
+    } else if (state === 'WAITING_FOR_TOOL') {
       await this.saveRun(run);
     }
   }
@@ -799,6 +801,7 @@ export class AgentRuntime extends EventEmitter {
         run.pendingApproval = req;
         await this.saveRun(run);
         await this.emitRunEvent(runId, 'approval.required', req);
+        await this.flushPendingEvents(runId);
         return; // Suspend
       } else {
         run.executionCheckpoint = 'TOOL_APPROVED';
@@ -931,6 +934,7 @@ export class AgentRuntime extends EventEmitter {
             toolName: toolCall.name,
             explanation: decision.explanation
           });
+          await this.flushPendingEvents(runId);
           return;
         } else {
           // ABORT_PERMANENT_ERROR
