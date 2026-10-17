@@ -122,8 +122,18 @@ export class AgentRuntime extends EventEmitter {
   public async getRun(runId: string): Promise<Run | undefined> {
     const cached = this.inFlightRuns.get(runId);
     if (cached) return cached;
-    return this.runRepo.getRun(runId);
+    const fromDb = await this.runRepo.getRun(runId);
+    if (fromDb && !['COMPLETED', 'FAILED', 'CANCELLED'].includes(fromDb.state)) {
+      this.inFlightRuns.set(runId, fromDb);
+    }
+    return fromDb;
   }
+
+  private async saveRun(run: Run): Promise<void> {
+    this.inFlightRuns.set(run.id, run);
+    await this.runRepo.saveRun(run);
+  }
+    
 
   public getRunDbTelemetry(runId: string) {
     return this.runDbTelemetry.get(runId);
@@ -295,7 +305,7 @@ export class AgentRuntime extends EventEmitter {
 
     // Initial critical-path write: exactly 1 durable write to establish authoritative resource
     const tStartDb = performance.now();
-    await this.runRepo.saveRun(run);
+    await this.saveRun(run);
     const dbCriticalPathMs = Math.round(performance.now() - tStartDb);
 
     this.runDbTelemetry.set(run.id, {
@@ -352,7 +362,7 @@ export class AgentRuntime extends EventEmitter {
 
   public async submitApproval(requestId: string, decision: ApprovalDecision): Promise<boolean> {
     const { approved, request } = await this.approvalKernel.decide(requestId, decision);
-    const run = await this.runRepo.getRun(request.runId);
+    const run = await this.getRun(request.runId);
     if (!run) {
       return false;
     }
@@ -379,14 +389,14 @@ export class AgentRuntime extends EventEmitter {
 
     if (decision === 'REJECT') {
       run.executionCheckpoint = 'COMPLETED';
-      await this.runRepo.saveRun(run);
+      await this.saveRun(run);
       await this.emitRunEvent(request.runId, 'approval.resolved', { requestId, decision, approved });
       await this.transitionRunState(request.runId, 'FAILED', 'User rejected required tool approval.');
       return true;
     }
 
     run.executionCheckpoint = 'TOOL_APPROVED';
-    await this.runRepo.saveRun(run);
+    await this.saveRun(run);
     await this.emitRunEvent(request.runId, 'approval.resolved', { requestId, decision, approved });
 
     await this.transitionRunState(request.runId, 'RUNNING');
@@ -428,14 +438,14 @@ export class AgentRuntime extends EventEmitter {
 
     if (state === 'COMPLETED' || state === 'FAILED' || state === 'CANCELLED') {
       await this.flushPendingEvents(runId);
-      await this.runRepo.saveRun(run);
+      await this.saveRun(run);
       setTimeout(() => {
         this.inFlightRuns.delete(runId);
         this.pendingRunEvents.delete(runId);
         this.runDbTelemetry.delete(runId);
       }, 30000).unref?.();
     } else if (state === 'WAITING_FOR_APPROVAL' || state === 'WAITING_FOR_TOOL') {
-      await this.runRepo.saveRun(run);
+      await this.saveRun(run);
     }
   }
 
@@ -450,7 +460,7 @@ export class AgentRuntime extends EventEmitter {
       const msg = `The requested capability (${run.intent}) is currently in development and not yet available for direct execution. (Target: ${run.routingDecision.executionTarget})`;
       run.content = msg;
       run.executionCheckpoint = 'COMPLETED';
-      await this.runRepo.saveRun(run);
+      await this.saveRun(run);
       await this.emitRunEvent(runId, 'capability.unready', {
         intent: run.intent,
         target: run.routingDecision.executionTarget,
@@ -469,7 +479,7 @@ export class AgentRuntime extends EventEmitter {
       const clarificationMsg = run.routingDecision.metadata.clarificationPrompt;
       run.content = clarificationMsg;
       run.executionCheckpoint = 'COMPLETED';
-      await this.runRepo.saveRun(run);
+      await this.saveRun(run);
       await this.emitRunEvent(runId, 'content.delta', { delta: clarificationMsg });
       await this.transitionRunState(runId, 'COMPLETED');
       return;
@@ -485,7 +495,7 @@ export class AgentRuntime extends EventEmitter {
         const errorMsg = 'AUTOMATION_ENGINE_NOT_AVAILABLE: AutomationEngine is not configured on this runtime.';
         run.content = errorMsg;
         run.executionCheckpoint = 'COMPLETED';
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
         await this.emitRunEvent(runId, 'content.delta', { delta: errorMsg });
         await this.transitionRunState(runId, 'FAILED', errorMsg);
         return;
@@ -524,7 +534,7 @@ export class AgentRuntime extends EventEmitter {
         const successMsg = `Successfully created durable scheduled automation "${autoDef.name}" (ID: ${autoDef.id}) with cron expression "${cronExpr}". Principal owner: ${run.principalId}. The schedule is saved in durable Postgres storage.`;
         run.content = successMsg;
         run.executionCheckpoint = 'COMPLETED';
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
         await this.emitRunEvent(runId, 'content.delta', { delta: successMsg });
         await this.transitionRunState(runId, 'COMPLETED');
         return;
@@ -532,7 +542,7 @@ export class AgentRuntime extends EventEmitter {
         const errorMsg = `Failed to create automation: ${err.message}`;
         run.content = errorMsg;
         run.executionCheckpoint = 'COMPLETED';
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
         await this.emitRunEvent(runId, 'content.delta', { delta: errorMsg });
         await this.transitionRunState(runId, 'FAILED', errorMsg);
         return;
@@ -556,19 +566,19 @@ export class AgentRuntime extends EventEmitter {
         const wfDef = await this.workflowCompiler.compile(run.prompt, principal);
         wfRun = await this.workflowEngine.createWorkflowRun(wfDef, run, principal);
         run.executionCheckpoint = 'WORKFLOW_RUNNING';
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
       }
 
       await this.workflowEngine.executeWorkflowRun(wfRun.id);
 
       const updatedWfRun = await this.workflowRepo.getWorkflowRun(wfRun.id);
       if (updatedWfRun?.state === 'COMPLETED') {
-        const freshRun = await this.runRepo.getRun(runId);
+        const freshRun = await this.getRun(runId);
         if (freshRun && freshRun.state !== 'COMPLETED') {
           await this.transitionRunState(runId, 'COMPLETED');
         }
       } else if (updatedWfRun?.state === 'FAILED') {
-        const freshRun = await this.runRepo.getRun(runId);
+        const freshRun = await this.getRun(runId);
         if (freshRun && freshRun.state !== 'FAILED') {
           await this.transitionRunState(runId, 'FAILED', updatedWfRun.error || 'Workflow execution failed.');
         }
@@ -614,7 +624,7 @@ export class AgentRuntime extends EventEmitter {
           const msg = `RESEARCH_PROVIDER_NOT_READY: Live web-search evidence is unavailable. Configure TAVILY_API_KEY or EXA_API_KEY, or check provider quota and connectivity. Aira does not invent citations.`;
           run.content = msg;
           run.executionCheckpoint = 'COMPLETED';
-          await this.runRepo.saveRun(run);
+          await this.saveRun(run);
           await this.emitRunEvent(runId, 'content.delta', { delta: msg });
           await this.transitionRunState(runId, 'COMPLETED');
           return;
@@ -640,7 +650,7 @@ export class AgentRuntime extends EventEmitter {
       }
       run.executionCheckpoint = 'KNOWLEDGE_READY';
       if (run.citations.length > 0) {
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
         for (const cite of run.citations) {
           await this.emitRunEvent(runId, 'source.added', cite);
         }
@@ -663,7 +673,7 @@ export class AgentRuntime extends EventEmitter {
           const msg = 'COMPUTER_USE_NOT_AVAILABLE: Native desktop and OS control runtime is not available in the current environment. Browser-based navigation is supported via browser tools.';
           run.content = msg;
           run.executionCheckpoint = 'COMPLETED';
-          await this.runRepo.saveRun(run);
+          await this.saveRun(run);
           await this.emitRunEvent(runId, 'content.delta', { delta: msg });
           await this.transitionRunState(runId, 'COMPLETED');
           return;
@@ -747,11 +757,11 @@ export class AgentRuntime extends EventEmitter {
         run.toolCalls.push(toolCall);
         run.stepCount++;
         run.executionCheckpoint = 'TOOL_SELECTED';
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
         await this.emitRunEvent(runId, 'tool.requested', toolCall);
       } else {
         run.executionCheckpoint = 'SYNTHESIZING';
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
       }
     }
 
@@ -776,7 +786,7 @@ export class AgentRuntime extends EventEmitter {
 
       if (requiresApproval) {
         run.executionCheckpoint = 'WAITING_FOR_APPROVAL';
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
         
         await this.transitionRunState(runId, 'WAITING_FOR_APPROVAL');
         const req = await this.approvalKernel.createRequest(
@@ -785,14 +795,14 @@ export class AgentRuntime extends EventEmitter {
           toolDef?.permissionLevel || 'DESTRUCTIVE',
           `Tool execution "${toolCall.name}" requires user confirmation due to ${run.routingDecision?.sideEffectLevel || toolDef?.permissionLevel || 'DESTRUCTIVE'} policy.`
         );
-        run = await this.runRepo.getRun(runId) as Run; // reload
+        run = (await this.getRun(runId)) as Run; // reload
         run.pendingApproval = req;
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
         await this.emitRunEvent(runId, 'approval.required', req);
         return; // Suspend
       } else {
         run.executionCheckpoint = 'TOOL_APPROVED';
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
       }
     }
 
@@ -804,7 +814,7 @@ export class AgentRuntime extends EventEmitter {
     if (run.executionCheckpoint === 'TOOL_APPROVED') {
       const toolCall = run.toolCalls[run.toolCalls.length - 1];
       run.executionCheckpoint = 'TOOL_EXECUTING';
-      await this.runRepo.saveRun(run);
+      await this.saveRun(run);
 
       await this.transitionRunState(runId, 'WAITING_FOR_TOOL');
       await this.emitRunEvent(runId, 'tool.started', { callId: toolCall.id, name: toolCall.name });
@@ -835,7 +845,7 @@ export class AgentRuntime extends EventEmitter {
         });
       }
 
-      run = await this.runRepo.getRun(runId) as Run; // reload after async tool execution
+      run = (await this.getRun(runId)) as Run; // reload after async tool execution
 
       const recoveryEngine = new ToolRecoveryEngine();
       let finalToolResult = toolResult;
@@ -916,7 +926,7 @@ export class AgentRuntime extends EventEmitter {
           run.state = 'BLOCKED';
           run.error = decision.explanation;
           run.toolResults.push(finalToolResult);
-          await this.runRepo.saveRun(run);
+          await this.saveRun(run);
           await this.emitRunEvent(runId, 'tool.approval_required', {
             toolName: toolCall.name,
             explanation: decision.explanation
@@ -935,7 +945,7 @@ export class AgentRuntime extends EventEmitter {
         run.executionCheckpoint = 'TOOL_FAILED';
         run.state = 'FAILED';
         run.error = completionCheck.reason || 'Tool execution failed verification';
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
         await this.emitRunEvent(runId, 'tool.failed', {
           toolName: toolCall.name,
           error: completionCheck.reason,
@@ -945,7 +955,7 @@ export class AgentRuntime extends EventEmitter {
         return;
       } else {
         run.executionCheckpoint = 'TOOL_COMPLETED';
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
         await this.emitRunEvent(runId, 'tool.completed', finalToolResult);
 
         await this.transitionRunState(runId, 'RUNNING');
@@ -976,7 +986,7 @@ export class AgentRuntime extends EventEmitter {
             run.toolCalls.push(nextToolCall);
             run.stepCount++;
             run.executionCheckpoint = 'TOOL_SELECTED';
-            await this.runRepo.saveRun(run);
+            await this.saveRun(run);
             await this.emitRunEvent(runId, 'tool.requested', nextToolCall);
             return this.executeRunLoop(runId);
           }
@@ -984,13 +994,13 @@ export class AgentRuntime extends EventEmitter {
 
         run = (await this.getRun(runId)) as Run;
         run.executionCheckpoint = 'SYNTHESIZING';
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
       }
     }
 
     if (run.executionCheckpoint === 'TOOL_COMPLETED' || run.executionCheckpoint === 'TOOL_FAILED') {
       run.executionCheckpoint = 'SYNTHESIZING';
-      await this.runRepo.saveRun(run);
+      await this.saveRun(run);
     }
 
     // Checkpoint 5: Synthesis
@@ -1134,7 +1144,7 @@ CAPABILITY & IDENTITY INVARIANTS:
       const liveEvidence = verifiedWebCitations([...(run.citations || []), ...executedSearchEvidence]);
       if (executedSearchEvidence.length > 0) {
         run.citations = liveEvidence;
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
       }
       const hasExecutedSearch = run.toolCalls.some(call =>
         ['web_search', 'tavily_search', 'exa_search'].includes(call.name)
@@ -1191,7 +1201,7 @@ CAPABILITY & IDENTITY INVARIANTS:
         await this.flushPendingEvents(runId);
         // 2. Snapshot before durable delta events: recovery can reconstruct the output
         // even if the serverless instance stops between these operations.
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
         // 3. Live deltas have already been sent to subscribers. Store aggregate
         // replay events without broadcasting them a second time.
         if (pendingThinking) {
@@ -1277,12 +1287,12 @@ CAPABILITY & IDENTITY INVARIANTS:
         const sanitizedAnswer = sanitizeCitationMarkers(answer, liveEvidence.length);
         const finalText = sanitizedAnswer + buildResearchSourcesAppendix(liveEvidence);
         run.content += finalText;
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
         await this.emitRunEvent(runId, 'content.delta', { delta: finalText });
       }
 
       run.executionCheckpoint = 'FINALIZING';
-      await this.runRepo.saveRun(run);
+      await this.saveRun(run);
     }
 
     // Checkpoint 6: Artifacts & Completion
@@ -1304,7 +1314,7 @@ CAPABILITY & IDENTITY INVARIANTS:
           }]
         };
         run.artifacts.push(artifact);
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
         await this.emitRunEvent(runId, 'artifact.created', artifact);
       } else if (run.intent === 'AGENT_MISSION') {
         const artId = `art_mission_${Date.now()}`;
@@ -1322,13 +1332,13 @@ CAPABILITY & IDENTITY INVARIANTS:
           }]
         };
         run.artifacts.push(artifact);
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
         await this.emitRunEvent(runId, 'artifact.created', artifact);
       }
       
       run.executionCheckpoint = 'COMPLETED';
       await this.flushPendingEvents(runId);
-      await this.runRepo.saveRun(run);
+      await this.saveRun(run);
       await this.transitionRunState(runId, 'COMPLETED');
     }
   }
@@ -1348,7 +1358,7 @@ CAPABILITY & IDENTITY INVARIANTS:
   }
 
   private async resumeRun(runId: string): Promise<void> {
-    let run = await this.runRepo.getRun(runId);
+    let run = await this.getRun(runId);
     if (!run) return;
 
     if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)) {
@@ -1372,7 +1382,7 @@ CAPABILITY & IDENTITY INVARIANTS:
         // Safe to retry
         run.executionCheckpoint = 'TOOL_APPROVED';
         run.state = 'RUNNING';
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
       }
     }
 
