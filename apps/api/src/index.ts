@@ -898,7 +898,15 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       const tCompleted = performance.now();
       const totalMs = Math.round(tCompleted - tRequestReceived);
       const ttftMs = tFirstDelta !== null ? Math.round(tFirstDelta - tRequestReceived) : null;
-      console.log(`event=chat_latency request_id=${req.headers['x-request-id'] || run.id} run_id=${run.id} model=${executedModel} provider=${executedProvider} ttft_ms=${ttftMs} total_ms=${totalMs} delta_count=${deltaCount} thinking_count=${thinkingCount}`);
+      const dbTele = agentRuntime.getRunDbTelemetry(run.id) || {
+        dbCriticalPathMs: 0,
+        dbAcquireMs: 0,
+        dbQueryCountBeforeProvider: 0,
+        dbQueryCountBeforeFirstToken: 0,
+        dbDeferredWriteCount: 0
+      };
+
+      console.log(`event=chat_latency request_id=${req.headers['x-request-id'] || run.id} run_id=${run.id} model=${executedModel} provider=${executedProvider} ttft_ms=${ttftMs} total_ms=${totalMs} delta_count=${deltaCount} thinking_count=${thinkingCount} db_critical_path_ms=${dbTele.dbCriticalPathMs} db_acquire_ms=${dbTele.dbAcquireMs} db_queries_pre_provider=${dbTele.dbQueryCountBeforeProvider} db_queries_pre_token=${dbTele.dbQueryCountBeforeFirstToken} db_deferred_writes=${dbTele.dbDeferredWriteCount}`);
       res.write(`event: latency_metrics\ndata: ${JSON.stringify({
         requestId: run.id,
         ttftMs,
@@ -906,7 +914,12 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         deltaCount,
         thinkingCount,
         executedModel,
-        executedProvider
+        executedProvider,
+        dbCriticalPathMs: dbTele.dbCriticalPathMs,
+        dbAcquireMs: dbTele.dbAcquireMs,
+        dbQueryCountBeforeProvider: dbTele.dbQueryCountBeforeProvider,
+        dbQueryCountBeforeFirstToken: dbTele.dbQueryCountBeforeFirstToken,
+        dbDeferredWriteCount: dbTele.dbDeferredWriteCount
       })}\n\n`);
     };
 
@@ -985,6 +998,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     stream.on('event', handler);
     req.on('close', () => {
       stream.off('event', handler);
+      agentRuntime.cancelRun(run.id).catch(() => {});
     });
 
     await agentRuntime.startRun(run.id);
