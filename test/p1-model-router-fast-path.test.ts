@@ -48,6 +48,34 @@ async function testModelRouterFastPath() {
     assert.equal(autoResearchPolicy.model, 'aira-deep');
     assert.equal(autoResearchPolicy.extendedThinking, true);
 
+    // 5. Direct Candidate Models Resolution
+    const candidateModels = [
+      'nvidia/llama-3.1-nemotron-70b-instruct',
+      'nv-mistralai/mistral-nemo-12b-instruct',
+      'nvidia/mistral-nemo-minitron-8b-8k-instruct',
+      'nvidia/llama-3.1-nemotron-51b-instruct',
+      'nvidia/nemotron-nano-3-30b-a3b'
+    ] as const;
+
+    for (const cand of candidateModels) {
+      const exec = router.resolveExecution(cand, 'ANSWER');
+      assert.equal(exec.provider, 'nvidia');
+      assert.equal(exec.executedModel, cand);
+      assert.equal(exec.fallbackOccurred, false);
+    }
+
+    // 6. Truthful Fallback Check when NVIDIA_FAST_MODEL is absent vs configured
+    delete process.env.NVIDIA_FAST_MODEL;
+    const fallbackExec = router.resolveExecution('aira-fast', 'ANSWER');
+    assert.equal(fallbackExec.fallbackOccurred, true);
+    assert.ok(fallbackExec.fallbackReason?.includes('120B'));
+
+    process.env.NVIDIA_FAST_MODEL = 'nvidia/llama-3.1-nemotron-70b-instruct';
+    const certifiedFastExec = router.resolveExecution('aira-fast', 'ANSWER');
+    assert.equal(certifiedFastExec.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct');
+    assert.equal(certifiedFastExec.fallbackOccurred, false);
+    delete process.env.NVIDIA_FAST_MODEL;
+
     console.log('ALL P1 MODEL ROUTER FAST PATH TESTS PASSED');
   } finally {
     process.env = originalEnv;

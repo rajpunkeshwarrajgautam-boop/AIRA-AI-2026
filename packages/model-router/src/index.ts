@@ -606,7 +606,7 @@ export class ModelRouter {
 
     if (model.startsWith('aira-')) {
       const providerPreference: Array<'openai' | 'nvidia' | 'anthropic'> = model === 'aira-fast'
-        ? ['openai', 'nvidia', 'anthropic']
+        ? (process.env.NVIDIA_FAST_MODEL ? ['nvidia', 'openai', 'anthropic'] : ['openai', 'nvidia', 'anthropic'])
         : ['anthropic', 'nvidia', 'openai'];
 
       const preferredProvider = providerPreference[0];
@@ -643,8 +643,15 @@ export class ModelRouter {
       }
 
       let executedModel: string;
+      let modelFallback = false;
+      let modelFallbackReason: string | undefined;
+
       if (selectedProvider === 'nvidia') {
         executedModel = resolveNvidiaModel(model);
+        if (model === 'aira-fast' && !process.env.NVIDIA_FAST_MODEL && executedModel === 'nvidia/nemotron-3-super-120b-a12b') {
+          modelFallback = true;
+          modelFallbackReason = 'NVIDIA_FAST_MODEL not configured; fell back to default 120B reasoning model';
+        }
       } else if (selectedProvider === 'anthropic') {
         if (requestedModelId === 'claude-3-5-sonnet') {
           executedModel = 'claude-3-5-sonnet';
@@ -663,14 +670,24 @@ export class ModelRouter {
         executedModel = model;
       }
 
+      const combinedFallback = fallbackOccurred || modelFallback;
+      let combinedReason: string | undefined;
+      if (fallbackOccurred && modelFallbackReason) {
+        combinedReason = `${fallbackReason}; ${modelFallbackReason}`;
+      } else if (fallbackOccurred) {
+        combinedReason = fallbackReason;
+      } else if (modelFallback) {
+        combinedReason = modelFallbackReason;
+      }
+
       return {
         policy,
         adapter: selectedAdapter,
         provider: selectedProvider,
         executedModel,
         plannedModel: executedModel,
-        fallbackOccurred,
-        fallbackReason,
+        fallbackOccurred: combinedFallback,
+        fallbackReason: combinedReason,
         verified: selectedProvider !== 'mock'
       };
     }

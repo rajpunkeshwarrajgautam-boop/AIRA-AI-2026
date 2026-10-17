@@ -118,6 +118,11 @@ export const ModelIdSchema = z.enum([
   'gemini-2-5-flash',
   'meta/llama-3.1-405b-instruct',
   'nvidia/nemotron-3-super-120b-a12b',
+  'nvidia/llama-3.1-nemotron-70b-instruct',
+  'nv-mistralai/mistral-nemo-12b-instruct',
+  'nvidia/mistral-nemo-minitron-8b-8k-instruct',
+  'nvidia/llama-3.1-nemotron-51b-instruct',
+  'nvidia/nemotron-nano-3-30b-a3b',
   'mock-deterministic'
 ]);
 export type ModelId = z.infer<typeof ModelIdSchema>;
