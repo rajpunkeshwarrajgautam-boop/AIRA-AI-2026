@@ -54,7 +54,8 @@ export class LatencyAwareRoutingPolicy {
       qualityScore: 8.5,
       typicalTtftMs: 133,
       costTier: 'low',
-      allowed: true // Note: subject to 1000 OTPM rate limit; circuit breaker trips if quota exhausted
+      allowed: false,
+      rejectionReason: 'REJECTED: Strict 1,000 OTPM on-demand quota causes frequent 429 rate-limit exhaustion'
     },
     {
       provider: 'groq',
