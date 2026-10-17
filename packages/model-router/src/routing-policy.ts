@@ -108,35 +108,54 @@ export class LatencyAwareRoutingPolicy {
     },
     {
       provider: 'gemini',
+      model: 'gemini-3.5-flash-lite',
+      qualityScore: 9.5,
+      typicalTtftMs: 493,
+      costTier: 'low',
+      allowed: true
+    },
+    {
+      provider: 'gemini',
+      model: 'gemini-flash-lite-latest',
+      qualityScore: 9.5,
+      typicalTtftMs: 893,
+      costTier: 'low',
+      allowed: true
+    },
+    {
+      provider: 'gemini',
+      model: 'gemini-3.5-flash',
+      qualityScore: 9.0,
+      typicalTtftMs: 1942,
+      costTier: 'low',
+      allowed: true
+    },
+    {
+      provider: 'gemini',
+      model: 'gemini-3.8-flash',
+      qualityScore: 9.0,
+      typicalTtftMs: 1500,
+      costTier: 'low',
+      allowed: false,
+      rejectionReason: 'REJECTED: 503 high demand capacity exhaustion on Google upstream'
+    },
+    {
+      provider: 'gemini',
       model: 'gemini-2.5-flash',
-      qualityScore: 9.3,
-      typicalTtftMs: 380,
+      qualityScore: 0,
+      typicalTtftMs: 0,
       costTier: 'low',
-      allowed: true
-    },
-    {
-      provider: 'gemini',
-      model: 'gemini-2.0-flash',
-      qualityScore: 9.2,
-      typicalTtftMs: 350,
-      costTier: 'low',
-      allowed: true
-    },
-    {
-      provider: 'gemini',
-      model: 'gemini-1.5-flash',
-      qualityScore: 8.8,
-      typicalTtftMs: 400,
-      costTier: 'low',
-      allowed: true
+      allowed: false,
+      rejectionReason: 'DEPRECATED: 404 retired by Google for new users'
     },
     {
       provider: 'gemini',
       model: 'gemini-2.5-flash-lite',
-      qualityScore: 8.5,
-      typicalTtftMs: 320,
+      qualityScore: 0,
+      typicalTtftMs: 0,
       costTier: 'low',
-      allowed: true
+      allowed: false,
+      rejectionReason: 'DEPRECATED: 404 retired by Google for new users'
     }
   ];
 

@@ -77,8 +77,8 @@ async function runTests() {
   assert.equal(planGroqGemini.primary.provider, 'groq');
   assert.equal(planGroqGemini.primary.model, 'openai/gpt-oss-120b');
   assert.equal(planGroqGemini.fallback?.provider, 'gemini', 'Fallback must be independent provider gemini');
-  assert.equal(planGroqGemini.fallback?.model, 'gemini-2.5-flash');
-  console.log('PASS: Independent provider gemini/gemini-2.5-flash selected as fallback over intra-Groq allam-2-7b.');
+  assert.equal(planGroqGemini.fallback?.model, 'gemini-3.5-flash-lite');
+  console.log('PASS: Independent provider gemini/gemini-3.5-flash-lite selected as fallback over intra-Groq allam-2-7b.');
 
   // TEST 7: Groq circuit trips -> Failover to Gemini
   console.log('\n[TEST 7] Failover to Gemini when Groq circuits trip');
@@ -103,7 +103,7 @@ async function runTests() {
     configuredProviders: ['groq', 'gemini', 'nvidia']
   });
   assert.equal(planGeminiPrimary.primary.provider, 'gemini');
-  assert.equal(planGeminiPrimary.primary.model, 'gemini-2.5-flash');
+  assert.equal(planGeminiPrimary.primary.model, 'gemini-3.5-flash-lite');
   console.log('PASS: Full failover to Gemini primary when Groq account quota is exhausted.');
 
   console.log('\n=== ALL P1.6 ROUTING POLICY TESTS PASSED ===');

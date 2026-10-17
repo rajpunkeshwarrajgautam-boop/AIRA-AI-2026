@@ -681,7 +681,7 @@ export class ModelRouter {
     }
     if (process.env.GEMINI_API_KEY) {
       const geminiKey = process.env.GEMINI_API_KEY.trim().replace(/^["']|["']$/g, '');
-      const geminiModel = (process.env.AIRA_GEMINI_MODEL || '').trim().replace(/^["']|["']$/g, '') || 'gemini-2.5-flash';
+      const geminiModel = (process.env.AIRA_GEMINI_MODEL || '').trim().replace(/^["']|["']$/g, '') || 'gemini-3.5-flash-lite';
       this.adapters.set(
         'gemini',
         new GeminiAdapter(
