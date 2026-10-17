@@ -37,6 +37,15 @@ import { ToolRecoveryEngine } from './behavioral/tool-recovery-engine.js';
 
 export class AgentRuntime extends EventEmitter {
   private eventStreams: Map<string, EventEmitter> = new Map();
+  private inFlightRuns: Map<string, Run> = new Map();
+  private pendingRunEvents: Map<string, StreamingEvent[]> = new Map();
+  private runDbTelemetry: Map<string, {
+    dbCriticalPathMs: number;
+    dbAcquireMs: number;
+    dbQueryCountBeforeProvider: number;
+    dbQueryCountBeforeFirstToken: number;
+    dbDeferredWriteCount: number;
+  }> = new Map();
   private router: ServerIntentRouter;
   private workflowRepo: WorkflowRepository;
   private workflowEngine: WorkflowEngine;
@@ -111,7 +120,46 @@ export class AgentRuntime extends EventEmitter {
   }
 
   public async getRun(runId: string): Promise<Run | undefined> {
-    return this.runRepo.getRun(runId);
+    const cached = this.inFlightRuns.get(runId);
+    if (cached) return cached;
+    const fromDb = await this.runRepo.getRun(runId);
+    if (fromDb && !['COMPLETED', 'FAILED', 'CANCELLED'].includes(fromDb.state)) {
+      this.inFlightRuns.set(runId, fromDb);
+    }
+    return fromDb;
+  }
+
+  private async saveRun(run: Run): Promise<void> {
+    this.inFlightRuns.set(run.id, run);
+    await this.runRepo.saveRun(run);
+  }
+    
+
+  public getRunDbTelemetry(runId: string) {
+    return this.runDbTelemetry.get(runId);
+  }
+
+  public async flushPendingEvents(runId: string): Promise<void> {
+    const events = this.pendingRunEvents.get(runId);
+    if (!events || events.length === 0) return;
+    this.pendingRunEvents.set(runId, []); // drain immediately to prevent race / duplicate inserts
+
+    const tele = this.runDbTelemetry.get(runId);
+    if (tele) {
+      tele.dbDeferredWriteCount++;
+    }
+
+    try {
+      if (typeof this.runRepo.appendRunEvents === 'function') {
+        await this.runRepo.appendRunEvents(events);
+      } else {
+        for (const evt of events) {
+          await this.runRepo.appendRunEvent(evt);
+        }
+      }
+    } catch (err) {
+      console.error(`[AgentRuntime] Failed to persist pending lifecycle events for run ${runId}:`, err);
+    }
   }
 
   public async listRuns(): Promise<Run[]> {
@@ -129,7 +177,7 @@ export class AgentRuntime extends EventEmitter {
 
   private async emitRunEvent(runId: string, type: StreamingEventType, data: any): Promise<void> {
     const stream = this.getEventStream(runId);
-    let event: StreamingEvent = {
+    const event: StreamingEvent = {
       eventId: `evt_${crypto.randomUUID().slice(0, 8)}`,
       runId,
       type,
@@ -144,11 +192,17 @@ export class AgentRuntime extends EventEmitter {
       return;
     }
 
-    // Persist structural lifecycle events to ensure durability
-    event = await this.runRepo.appendRunEvent(event);
-    
+    // Immediately deliver to stream subscribers so UI never waits on PostgreSQL
     stream.emit('event', event);
     this.emit('run_event', { runId, event });
+
+    // Enqueue structural lifecycle events for post-token / batched persistence
+    let pending = this.pendingRunEvents.get(runId);
+    if (!pending) {
+      pending = [];
+      this.pendingRunEvents.set(runId, pending);
+    }
+    pending.push(event);
   }
 
   public async createRun(request: CreateRunRequest, principal: ExecutionPrincipal): Promise<Run> {
@@ -207,6 +261,10 @@ export class AgentRuntime extends EventEmitter {
       timestamp: now
     };
 
+    const isDirectSynthesis = routingDecision.executionTarget === 'CHAT_STREAM' ||
+      routingDecision.executionTarget === 'MODEL_SYNTHESIS' ||
+      (!routingDecision.executionTarget && (routingDecision.intent === 'ANSWER' || routingDecision.intent === 'GENERAL_CHAT'));
+
     const run: Run = {
       id: runId,
       principalId: principal.userId,
@@ -219,7 +277,8 @@ export class AgentRuntime extends EventEmitter {
       intent: routingDecision.intent,
       routingDecision,
       provenance,
-      state: 'QUEUED',
+      state: isDirectSynthesis ? 'RUNNING' : 'QUEUED',
+      executionCheckpoint: isDirectSynthesis ? 'SYNTHESIZING' : undefined,
       modelPolicy: policy,
       prompt: request.prompt,
       systemPrompt: request.systemPrompt,
@@ -241,12 +300,27 @@ export class AgentRuntime extends EventEmitter {
       updatedAt: now
     };
 
-    await this.runRepo.saveRun(run);
+    // Cache authoritative state in-memory to eliminate redundant getRun reads
+    this.inFlightRuns.set(run.id, run);
+
+    // Initial critical-path write: exactly 1 durable write to establish authoritative resource
+    const tStartDb = performance.now();
+    await this.saveRun(run);
+    const dbCriticalPathMs = Math.round(performance.now() - tStartDb);
+
+    this.runDbTelemetry.set(run.id, {
+      dbCriticalPathMs,
+      dbAcquireMs: 0,
+      dbQueryCountBeforeProvider: 1,
+      dbQueryCountBeforeFirstToken: 1,
+      dbDeferredWriteCount: 0
+    });
+
     return run;
   }
 
   public async startRun(runId: string): Promise<void> {
-    const run = await this.runRepo.getRun(runId);
+    const run = await this.getRun(runId);
     if (!run) return;
     await this.emitRunEvent(runId, 'run.created', { runId, state: run.state });
     if (run.routingDecision) {
@@ -269,7 +343,7 @@ export class AgentRuntime extends EventEmitter {
   }
 
   public async cancelRun(runId: string): Promise<boolean> {
-    const run = await this.runRepo.getRun(runId);
+    const run = await this.getRun(runId);
     if (!run || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)) {
       return false;
     }
@@ -288,7 +362,7 @@ export class AgentRuntime extends EventEmitter {
 
   public async submitApproval(requestId: string, decision: ApprovalDecision): Promise<boolean> {
     const { approved, request } = await this.approvalKernel.decide(requestId, decision);
-    const run = await this.runRepo.getRun(request.runId);
+    const run = await this.getRun(request.runId);
     if (!run) {
       return false;
     }
@@ -315,14 +389,14 @@ export class AgentRuntime extends EventEmitter {
 
     if (decision === 'REJECT') {
       run.executionCheckpoint = 'COMPLETED';
-      await this.runRepo.saveRun(run);
+      await this.saveRun(run);
       await this.emitRunEvent(request.runId, 'approval.resolved', { requestId, decision, approved });
       await this.transitionRunState(request.runId, 'FAILED', 'User rejected required tool approval.');
       return true;
     }
 
     run.executionCheckpoint = 'TOOL_APPROVED';
-    await this.runRepo.saveRun(run);
+    await this.saveRun(run);
     await this.emitRunEvent(request.runId, 'approval.resolved', { requestId, decision, approved });
 
     await this.transitionRunState(request.runId, 'RUNNING');
@@ -336,7 +410,7 @@ export class AgentRuntime extends EventEmitter {
   }
 
   private async transitionRunState(runId: string, state: RunState, error?: string): Promise<void> {
-    const run = await this.runRepo.getRun(runId);
+    const run = await this.getRun(runId);
     if (!run) return;
 
     run.state = state;
@@ -349,7 +423,6 @@ export class AgentRuntime extends EventEmitter {
       run.provenance.verified = false;
       run.provenance.executionStatus = 'FAILED';
     }
-    await this.runRepo.saveRun(run);
 
     if (state === 'FAILED' && run.provenance) {
       await this.emitRunEvent(runId, 'model.provenance', run.provenance);
@@ -362,10 +435,24 @@ export class AgentRuntime extends EventEmitter {
       state === 'RUNNING' ? 'run.started' : 'run.started';
 
     await this.emitRunEvent(runId, eventType, { state, error });
+
+    if (state === 'COMPLETED' || state === 'FAILED' || state === 'CANCELLED' || state === 'WAITING_FOR_APPROVAL') {
+      await this.flushPendingEvents(runId);
+      await this.saveRun(run);
+      if (state === 'COMPLETED' || state === 'FAILED' || state === 'CANCELLED') {
+        setTimeout(() => {
+          this.inFlightRuns.delete(runId);
+          this.pendingRunEvents.delete(runId);
+          this.runDbTelemetry.delete(runId);
+        }, 30000).unref?.();
+      }
+    } else if (state === 'WAITING_FOR_TOOL') {
+      await this.saveRun(run);
+    }
   }
 
   private async executeRunLoop(runId: string): Promise<void> {
-    let run = await this.runRepo.getRun(runId);
+    let run = await this.getRun(runId);
     if (!run) return;
 
     if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)) return;
@@ -375,7 +462,7 @@ export class AgentRuntime extends EventEmitter {
       const msg = `The requested capability (${run.intent}) is currently in development and not yet available for direct execution. (Target: ${run.routingDecision.executionTarget})`;
       run.content = msg;
       run.executionCheckpoint = 'COMPLETED';
-      await this.runRepo.saveRun(run);
+      await this.saveRun(run);
       await this.emitRunEvent(runId, 'capability.unready', {
         intent: run.intent,
         target: run.routingDecision.executionTarget,
@@ -394,7 +481,7 @@ export class AgentRuntime extends EventEmitter {
       const clarificationMsg = run.routingDecision.metadata.clarificationPrompt;
       run.content = clarificationMsg;
       run.executionCheckpoint = 'COMPLETED';
-      await this.runRepo.saveRun(run);
+      await this.saveRun(run);
       await this.emitRunEvent(runId, 'content.delta', { delta: clarificationMsg });
       await this.transitionRunState(runId, 'COMPLETED');
       return;
@@ -410,7 +497,7 @@ export class AgentRuntime extends EventEmitter {
         const errorMsg = 'AUTOMATION_ENGINE_NOT_AVAILABLE: AutomationEngine is not configured on this runtime.';
         run.content = errorMsg;
         run.executionCheckpoint = 'COMPLETED';
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
         await this.emitRunEvent(runId, 'content.delta', { delta: errorMsg });
         await this.transitionRunState(runId, 'FAILED', errorMsg);
         return;
@@ -449,7 +536,7 @@ export class AgentRuntime extends EventEmitter {
         const successMsg = `Successfully created durable scheduled automation "${autoDef.name}" (ID: ${autoDef.id}) with cron expression "${cronExpr}". Principal owner: ${run.principalId}. The schedule is saved in durable Postgres storage.`;
         run.content = successMsg;
         run.executionCheckpoint = 'COMPLETED';
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
         await this.emitRunEvent(runId, 'content.delta', { delta: successMsg });
         await this.transitionRunState(runId, 'COMPLETED');
         return;
@@ -457,7 +544,7 @@ export class AgentRuntime extends EventEmitter {
         const errorMsg = `Failed to create automation: ${err.message}`;
         run.content = errorMsg;
         run.executionCheckpoint = 'COMPLETED';
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
         await this.emitRunEvent(runId, 'content.delta', { delta: errorMsg });
         await this.transitionRunState(runId, 'FAILED', errorMsg);
         return;
@@ -481,19 +568,19 @@ export class AgentRuntime extends EventEmitter {
         const wfDef = await this.workflowCompiler.compile(run.prompt, principal);
         wfRun = await this.workflowEngine.createWorkflowRun(wfDef, run, principal);
         run.executionCheckpoint = 'WORKFLOW_RUNNING';
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
       }
 
       await this.workflowEngine.executeWorkflowRun(wfRun.id);
 
       const updatedWfRun = await this.workflowRepo.getWorkflowRun(wfRun.id);
       if (updatedWfRun?.state === 'COMPLETED') {
-        const freshRun = await this.runRepo.getRun(runId);
+        const freshRun = await this.getRun(runId);
         if (freshRun && freshRun.state !== 'COMPLETED') {
           await this.transitionRunState(runId, 'COMPLETED');
         }
       } else if (updatedWfRun?.state === 'FAILED') {
-        const freshRun = await this.runRepo.getRun(runId);
+        const freshRun = await this.getRun(runId);
         if (freshRun && freshRun.state !== 'FAILED') {
           await this.transitionRunState(runId, 'FAILED', updatedWfRun.error || 'Workflow execution failed.');
         }
@@ -539,7 +626,7 @@ export class AgentRuntime extends EventEmitter {
           const msg = `RESEARCH_PROVIDER_NOT_READY: Live web-search evidence is unavailable. Configure TAVILY_API_KEY or EXA_API_KEY, or check provider quota and connectivity. Aira does not invent citations.`;
           run.content = msg;
           run.executionCheckpoint = 'COMPLETED';
-          await this.runRepo.saveRun(run);
+          await this.saveRun(run);
           await this.emitRunEvent(runId, 'content.delta', { delta: msg });
           await this.transitionRunState(runId, 'COMPLETED');
           return;
@@ -565,7 +652,7 @@ export class AgentRuntime extends EventEmitter {
       }
       run.executionCheckpoint = 'KNOWLEDGE_READY';
       if (run.citations.length > 0) {
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
         for (const cite of run.citations) {
           await this.emitRunEvent(runId, 'source.added', cite);
         }
@@ -588,7 +675,7 @@ export class AgentRuntime extends EventEmitter {
           const msg = 'COMPUTER_USE_NOT_AVAILABLE: Native desktop and OS control runtime is not available in the current environment. Browser-based navigation is supported via browser tools.';
           run.content = msg;
           run.executionCheckpoint = 'COMPLETED';
-          await this.runRepo.saveRun(run);
+          await this.saveRun(run);
           await this.emitRunEvent(runId, 'content.delta', { delta: msg });
           await this.transitionRunState(runId, 'COMPLETED');
           return;
@@ -672,11 +759,11 @@ export class AgentRuntime extends EventEmitter {
         run.toolCalls.push(toolCall);
         run.stepCount++;
         run.executionCheckpoint = 'TOOL_SELECTED';
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
         await this.emitRunEvent(runId, 'tool.requested', toolCall);
       } else {
         run.executionCheckpoint = 'SYNTHESIZING';
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
       }
     }
 
@@ -701,7 +788,7 @@ export class AgentRuntime extends EventEmitter {
 
       if (requiresApproval) {
         run.executionCheckpoint = 'WAITING_FOR_APPROVAL';
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
         
         await this.transitionRunState(runId, 'WAITING_FOR_APPROVAL');
         const req = await this.approvalKernel.createRequest(
@@ -710,14 +797,15 @@ export class AgentRuntime extends EventEmitter {
           toolDef?.permissionLevel || 'DESTRUCTIVE',
           `Tool execution "${toolCall.name}" requires user confirmation due to ${run.routingDecision?.sideEffectLevel || toolDef?.permissionLevel || 'DESTRUCTIVE'} policy.`
         );
-        run = await this.runRepo.getRun(runId) as Run; // reload
+        run = (await this.getRun(runId)) as Run; // reload
         run.pendingApproval = req;
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
         await this.emitRunEvent(runId, 'approval.required', req);
+        await this.flushPendingEvents(runId);
         return; // Suspend
       } else {
         run.executionCheckpoint = 'TOOL_APPROVED';
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
       }
     }
 
@@ -729,7 +817,7 @@ export class AgentRuntime extends EventEmitter {
     if (run.executionCheckpoint === 'TOOL_APPROVED') {
       const toolCall = run.toolCalls[run.toolCalls.length - 1];
       run.executionCheckpoint = 'TOOL_EXECUTING';
-      await this.runRepo.saveRun(run);
+      await this.saveRun(run);
 
       await this.transitionRunState(runId, 'WAITING_FOR_TOOL');
       await this.emitRunEvent(runId, 'tool.started', { callId: toolCall.id, name: toolCall.name });
@@ -760,7 +848,7 @@ export class AgentRuntime extends EventEmitter {
         });
       }
 
-      run = await this.runRepo.getRun(runId) as Run; // reload after async tool execution
+      run = (await this.getRun(runId)) as Run; // reload after async tool execution
 
       const recoveryEngine = new ToolRecoveryEngine();
       let finalToolResult = toolResult;
@@ -841,11 +929,12 @@ export class AgentRuntime extends EventEmitter {
           run.state = 'BLOCKED';
           run.error = decision.explanation;
           run.toolResults.push(finalToolResult);
-          await this.runRepo.saveRun(run);
+          await this.saveRun(run);
           await this.emitRunEvent(runId, 'tool.approval_required', {
             toolName: toolCall.name,
             explanation: decision.explanation
           });
+          await this.flushPendingEvents(runId);
           return;
         } else {
           // ABORT_PERMANENT_ERROR
@@ -860,7 +949,7 @@ export class AgentRuntime extends EventEmitter {
         run.executionCheckpoint = 'TOOL_FAILED';
         run.state = 'FAILED';
         run.error = completionCheck.reason || 'Tool execution failed verification';
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
         await this.emitRunEvent(runId, 'tool.failed', {
           toolName: toolCall.name,
           error: completionCheck.reason,
@@ -870,7 +959,7 @@ export class AgentRuntime extends EventEmitter {
         return;
       } else {
         run.executionCheckpoint = 'TOOL_COMPLETED';
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
         await this.emitRunEvent(runId, 'tool.completed', finalToolResult);
 
         await this.transitionRunState(runId, 'RUNNING');
@@ -901,21 +990,21 @@ export class AgentRuntime extends EventEmitter {
             run.toolCalls.push(nextToolCall);
             run.stepCount++;
             run.executionCheckpoint = 'TOOL_SELECTED';
-            await this.runRepo.saveRun(run);
+            await this.saveRun(run);
             await this.emitRunEvent(runId, 'tool.requested', nextToolCall);
             return this.executeRunLoop(runId);
           }
         }
 
-        run = await this.runRepo.getRun(runId) as Run;
+        run = (await this.getRun(runId)) as Run;
         run.executionCheckpoint = 'SYNTHESIZING';
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
       }
     }
 
     if (run.executionCheckpoint === 'TOOL_COMPLETED' || run.executionCheckpoint === 'TOOL_FAILED') {
       run.executionCheckpoint = 'SYNTHESIZING';
-      await this.runRepo.saveRun(run);
+      await this.saveRun(run);
     }
 
     // Checkpoint 5: Synthesis
@@ -923,17 +1012,28 @@ export class AgentRuntime extends EventEmitter {
       const messages: ChatMessageInput[] = [];
 
       let durablePastHistory = '';
-      try {
-        const priorRuns = await this.runRepo.searchRunsForPrincipal(run.principalId, run.prompt, 4);
-        const otherRuns = priorRuns.filter(r => r.id !== runId && r.state === 'COMPLETED' && r.content);
-        if (otherRuns.length > 0) {
-          durablePastHistory = otherRuns.map(r => {
-            const dateStr = new Date(r.createdAt).toISOString();
-            return `[Prior Run on ${dateStr}]:\nUser: ${r.prompt}\nAira: ${r.content.slice(0, 400)}`;
-          }).join('\n\n');
+      const isFastNormalChat = run.modelPolicy.model === 'aira-fast' ||
+        run.intent === 'ANSWER' ||
+        (run.context?.history && Array.isArray(run.context.history) && run.context.history.length > 0);
+
+      const explicitlyRequestsMemorySearch = Boolean(
+        run.context?.knowledgeSearchRequested ||
+        /\b(?:remember|recall|previous conversation|earlier conversation|last time|what did I say|past session)\b/i.test(run.prompt)
+      );
+
+      if (!isFastNormalChat || explicitlyRequestsMemorySearch) {
+        try {
+          const priorRuns = await this.runRepo.searchRunsForPrincipal(run.principalId, run.prompt, 4);
+          const otherRuns = priorRuns.filter(r => r.id !== runId && r.state === 'COMPLETED' && r.content);
+          if (otherRuns.length > 0) {
+            durablePastHistory = otherRuns.map(r => {
+              const dateStr = new Date(r.createdAt).toISOString();
+              return `[Prior Run on ${dateStr}]:\nUser: ${r.prompt}\nAira: ${r.content.slice(0, 400)}`;
+            }).join('\n\n');
+          }
+        } catch (memErr) {
+          console.warn('Could not query durable prior run history for principal:', memErr);
         }
-      } catch (memErr) {
-        console.warn('Could not query durable prior run history for principal:', memErr);
       }
 
       const instructionResolver = new InstructionResolver();
@@ -1048,7 +1148,7 @@ CAPABILITY & IDENTITY INVARIANTS:
       const liveEvidence = verifiedWebCitations([...(run.citations || []), ...executedSearchEvidence]);
       if (executedSearchEvidence.length > 0) {
         run.citations = liveEvidence;
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
       }
       const hasExecutedSearch = run.toolCalls.some(call =>
         ['web_search', 'tavily_search', 'exa_search'].includes(call.name)
@@ -1099,11 +1199,14 @@ CAPABILITY & IDENTITY INVARIANTS:
         this.emit('run_event', { runId, event });
       };
       const flushDeltas = async () => {
-        if (!pendingDeltas) return;
-        // Snapshot before durable delta events: recovery can reconstruct the output
+        const hasPendingEvents = Boolean(this.pendingRunEvents.get(runId)?.length);
+        if (!pendingDeltas && !hasPendingEvents) return;
+        // 1. Flush pending lifecycle events in a single multi-row batch
+        await this.flushPendingEvents(runId);
+        // 2. Snapshot before durable delta events: recovery can reconstruct the output
         // even if the serverless instance stops between these operations.
-        await this.runRepo.saveRun(run);
-        // Live deltas have already been sent to subscribers. Store aggregate
+        await this.saveRun(run);
+        // 3. Live deltas have already been sent to subscribers. Store aggregate
         // replay events without broadcasting them a second time.
         if (pendingThinking) {
           await this.runRepo.appendRunEvent({
@@ -1150,7 +1253,10 @@ CAPABILITY & IDENTITY INVARIANTS:
         await flushDeltas();
       } catch (streamErr: any) {
         // Best-effort checkpoint; preserve the original inference/DB exception.
-        try { await flushDeltas(); } catch (persistErr) {
+        try {
+          await this.flushPendingEvents(runId);
+          await flushDeltas();
+        } catch (persistErr) {
           console.error('Failed to checkpoint stream deltas', persistErr);
         }
         await this.transitionRunState(runId, 'FAILED', streamErr.message);
@@ -1172,7 +1278,6 @@ CAPABILITY & IDENTITY INVARIANTS:
         run.provenance.verified = isVerified;
         run.provenance.executionStatus = run.provenance.fallbackOccurred ? 'FALLBACK' : 'SUCCESS';
         run.provenance.timestamp = Date.now();
-        await this.runRepo.saveRun(run);
         await this.emitRunEvent(runId, 'model.provenance', run.provenance);
       }
 
@@ -1186,12 +1291,12 @@ CAPABILITY & IDENTITY INVARIANTS:
         const sanitizedAnswer = sanitizeCitationMarkers(answer, liveEvidence.length);
         const finalText = sanitizedAnswer + buildResearchSourcesAppendix(liveEvidence);
         run.content += finalText;
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
         await this.emitRunEvent(runId, 'content.delta', { delta: finalText });
       }
 
       run.executionCheckpoint = 'FINALIZING';
-      await this.runRepo.saveRun(run);
+      await this.saveRun(run);
     }
 
     // Checkpoint 6: Artifacts & Completion
@@ -1213,7 +1318,7 @@ CAPABILITY & IDENTITY INVARIANTS:
           }]
         };
         run.artifacts.push(artifact);
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
         await this.emitRunEvent(runId, 'artifact.created', artifact);
       } else if (run.intent === 'AGENT_MISSION') {
         const artId = `art_mission_${Date.now()}`;
@@ -1231,12 +1336,13 @@ CAPABILITY & IDENTITY INVARIANTS:
           }]
         };
         run.artifacts.push(artifact);
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
         await this.emitRunEvent(runId, 'artifact.created', artifact);
       }
       
       run.executionCheckpoint = 'COMPLETED';
-      await this.runRepo.saveRun(run);
+      await this.flushPendingEvents(runId);
+      await this.saveRun(run);
       await this.transitionRunState(runId, 'COMPLETED');
     }
   }
@@ -1256,7 +1362,7 @@ CAPABILITY & IDENTITY INVARIANTS:
   }
 
   private async resumeRun(runId: string): Promise<void> {
-    let run = await this.runRepo.getRun(runId);
+    let run = await this.getRun(runId);
     if (!run) return;
 
     if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)) {
@@ -1280,7 +1386,7 @@ CAPABILITY & IDENTITY INVARIANTS:
         // Safe to retry
         run.executionCheckpoint = 'TOOL_APPROVED';
         run.state = 'RUNNING';
-        await this.runRepo.saveRun(run);
+        await this.saveRun(run);
       }
     }
 

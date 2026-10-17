@@ -16,6 +16,7 @@ export interface RunRepository {
   searchRunsForPrincipal(principalId: string, query: string, limit?: number): Promise<Run[]>;
   getInterruptedRuns(): Promise<Run[]>;
   appendRunEvent(event: StreamingEvent): Promise<StreamingEvent>;
+  appendRunEvents?(events: StreamingEvent[]): Promise<StreamingEvent[]>;
   getRunEvents(runId: string): Promise<StreamingEvent[]>;
   getRunEventsAfter(runId: string, sequence: number): Promise<StreamingEvent[]>;
   getLatestEventSequence(runId: string): Promise<number>;
@@ -269,6 +270,26 @@ export class PostgresRunRepository implements RunRepository {
     };
   }
 
+  async appendRunEvents(events: StreamingEvent[]): Promise<StreamingEvent[]> {
+    if (!events || events.length === 0) return [];
+    const inserts = events.map(event => ({
+      id: event.eventId,
+      run_id: event.runId,
+      type: event.type,
+      payload: typeof event.data === 'string' ? event.data : JSON.stringify(event.data),
+      createdAt: event.timestamp
+    }));
+    const rows = await db('run_events').insert(inserts).returning('*');
+    return rows.map((row: any) => ({
+      eventId: row.id,
+      runId: row.run_id,
+      sequence: parseInt(row.sequence, 10),
+      type: row.type as any,
+      timestamp: parseInt(row.createdAt, 10),
+      data: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload
+    }));
+  }
+
   async getRunEvents(runId: string): Promise<StreamingEvent[]> {
     const rows = await db('run_events').where({ run_id: runId }).orderBy('sequence', 'asc');
     return rows.map((row: any) => ({
@@ -396,6 +417,14 @@ export class InMemoryRunRepository implements RunRepository {
     list.push(assigned);
     this.events.set(event.runId, list);
     return assigned;
+  }
+
+  async appendRunEvents(events: StreamingEvent[]): Promise<StreamingEvent[]> {
+    const list: StreamingEvent[] = [];
+    for (const evt of events) {
+      list.push(await this.appendRunEvent(evt));
+    }
+    return list;
   }
 
   async getRunEvents(runId: string): Promise<StreamingEvent[]> {

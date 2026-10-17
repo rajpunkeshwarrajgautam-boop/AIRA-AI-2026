@@ -48,7 +48,7 @@ async function run() {
       provider: 'groq' as const,
       requestedProvider: 'groq',
       executedProvider: 'groq',
-      executedModel: 'llama-3.1-8b-instant',
+      executedModel: 'openai/gpt-oss-120b',
       fallbackOccurred: false,
       verified: true,
       executionStatus: 'SUCCESS' as const,
@@ -101,9 +101,9 @@ async function run() {
     const groqFastExec = groqRouter.resolveExecution('aira-fast', 'ANSWER');
 
     assert.equal(groqFastExec.provider, 'groq');
-    assert.equal(groqFastExec.executedModel, 'llama-3.1-8b-instant');
+    assert.equal(groqFastExec.executedModel, 'openai/gpt-oss-120b');
     assert.equal(groqFastExec.fallbackOccurred, false);
-    console.log('PASS: Groq auto-selected as default fast provider with llama-3.1-8b-instant.');
+    console.log('PASS: Groq auto-selected as default fast provider with openai/gpt-oss-120b.');
 
     // -------------------------------------------------------------
     // TEST 5: Explicit AIRA_FAST_PROVIDER configuration
@@ -130,7 +130,7 @@ async function run() {
     cleanEnv();
 
     // Mock an adapter with a hanging stream
-    const adapter = new OpenAIAdapter('test-key', 'https://api.groq.com/openai/v1', 'groq', 'llama-3.1-8b-instant');
+    const adapter = new OpenAIAdapter('test-key', 'https://api.groq.com/openai/v1', 'groq', 'openai/gpt-oss-120b');
 
     const originalFetch = globalThis.fetch;
     try {

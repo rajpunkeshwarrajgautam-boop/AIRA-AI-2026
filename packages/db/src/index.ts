@@ -39,9 +39,9 @@ export const db = knex({
       : false,
   },
   pool: {
-    min: isServerless ? 0 : 2,
-    max: isServerless ? 2 : 10,
-    acquireTimeoutMillis: isServerless ? 5000 : 30000,
+    min: 0,
+    max: isServerless ? 8 : 10,
+    acquireTimeoutMillis: 15000,
     idleTimeoutMillis: 10000,
     reapIntervalMillis: 1000,
   },
