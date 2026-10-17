@@ -42,9 +42,12 @@ export type BffSessionPayload = BffServerSession;
 export class BffSessionStore {
   private client: Knex;
   private timer: NodeJS.Timeout | null = null;
+  private memorySessions: Map<string, BffServerSession> = new Map();
+  private isMemoryOnly: boolean;
 
   constructor(customClient?: Knex) {
     this.client = customClient || db;
+    this.isMemoryOnly = !Boolean(process.env.DATABASE_URL?.trim()) && !customClient;
     // Periodic sweep for expired sessions every 10 minutes
     this.timer = setInterval(() => {
       this.pruneExpired().catch((err) => {
@@ -55,6 +58,16 @@ export class BffSessionStore {
   }
 
   public async get(sessionId: string): Promise<BffServerSession | null> {
+    if (this.isMemoryOnly) {
+      const s = this.memorySessions.get(sessionId);
+      if (!s) return null;
+      if (s.revokedAt) return null;
+      if (s.expiresAt <= Date.now()) {
+        this.memorySessions.delete(sessionId);
+        return null;
+      }
+      return { ...s };
+    }
     try {
       const row = await this.client('bff_sessions')
         .where({ id: sessionId })
@@ -79,6 +92,10 @@ export class BffSessionStore {
   }
 
   public async set(session: BffServerSession): Promise<void> {
+    if (this.isMemoryOnly) {
+      this.memorySessions.set(session.id, { ...session, revokedAt: null });
+      return;
+    }
     await this.client('bff_sessions')
       .insert({
         id: session.id,
@@ -112,6 +129,16 @@ export class BffSessionStore {
   }
 
   public async delete(sessionId: string): Promise<boolean> {
+    if (this.isMemoryOnly) {
+      const existing = this.memorySessions.get(sessionId);
+      if (existing && !existing.revokedAt) {
+        existing.revokedAt = Date.now();
+        existing.sessionToken = '';
+        existing.jwt = '';
+        return true;
+      }
+      return false;
+    }
     try {
       const now = Date.now();
       // Zero out tokens and mark revoked so credentials cannot be reconstructed
@@ -135,6 +162,10 @@ export class BffSessionStore {
   }
 
   public async clear(): Promise<void> {
+    if (this.isMemoryOnly) {
+      this.memorySessions.clear();
+      return;
+    }
     try {
       await this.client('bff_sessions').delete();
     } catch (err) {
@@ -143,6 +174,17 @@ export class BffSessionStore {
   }
 
   public async pruneExpired(): Promise<number> {
+    if (this.isMemoryOnly) {
+      const now = Date.now();
+      let pruned = 0;
+      for (const [id, s] of this.memorySessions.entries()) {
+        if (s.expiresAt <= now || s.revokedAt) {
+          this.memorySessions.delete(id);
+          pruned++;
+        }
+      }
+      return pruned;
+    }
     try {
       const now = Date.now();
       const count = await this.client('bff_sessions')
@@ -157,6 +199,16 @@ export class BffSessionStore {
   }
 
   public async size(): Promise<number> {
+    if (this.isMemoryOnly) {
+      const now = Date.now();
+      let count = 0;
+      for (const s of this.memorySessions.values()) {
+        if (!s.revokedAt && s.expiresAt > now) {
+          count++;
+        }
+      }
+      return count;
+    }
     try {
       const now = Date.now();
       const rows = await this.client('bff_sessions')
@@ -340,9 +392,14 @@ const TRUSTED_ORIGINS_DEFAULT = [
 
 export function getTrustedOrigins(): string[] {
   const custom = process.env.ALLOWED_ORIGINS || process.env.CORS_ORIGIN;
-  if (!custom) return TRUSTED_ORIGINS_DEFAULT;
+  const vercelUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null;
+  const vercelBranchUrl = process.env.VERCEL_BRANCH_URL ? `https://${process.env.VERCEL_BRANCH_URL}` : null;
+  const defaults = [...TRUSTED_ORIGINS_DEFAULT];
+  if (vercelUrl) defaults.push(vercelUrl);
+  if (vercelBranchUrl) defaults.push(vercelBranchUrl);
+  if (!custom) return defaults;
   const list = custom.split(',').map(s => s.trim()).filter(Boolean);
-  return [...new Set([...TRUSTED_ORIGINS_DEFAULT, ...list])];
+  return [...new Set([...defaults, ...list])];
 }
 
 export function isAllowedOrigin(originStr: string, hostHeader?: string): boolean {

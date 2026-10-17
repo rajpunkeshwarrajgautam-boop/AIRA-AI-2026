@@ -137,7 +137,14 @@ export class AgentRuntime extends EventEmitter {
       data
     };
     
-    // Persist event first to obtain sequence and ensure durability
+    // Fast-path: Never block streaming text/thinking deltas on synchronous database writes
+    if (type === 'content.delta' || type === 'thinking.delta') {
+      stream.emit('event', event);
+      this.emit('run_event', { runId, event });
+      return;
+    }
+
+    // Persist structural lifecycle events to ensure durability
     event = await this.runRepo.appendRunEvent(event);
     
     stream.emit('event', event);
@@ -175,7 +182,9 @@ export class AgentRuntime extends EventEmitter {
 
     const basePolicy = execution.policy;
     const requestedPolicy = request.modelPolicy;
-    const extendedThinking = requestedPolicy?.extendedThinking ?? basePolicy.extendedThinking;
+    const extendedThinking = execution.policy.model === 'aira-deep'
+      ? (requestedPolicy?.extendedThinking ?? basePolicy.extendedThinking)
+      : false;
 
     const policy: ModelPolicy = ModelPolicySchema.parse({
       ...basePolicy,
@@ -547,15 +556,19 @@ export class AgentRuntime extends EventEmitter {
           }
           run.toolResults.push(...researchResult.toolResults);
         }
-      } else {
+      } else if (run.intent === 'RESEARCH' || run.context?.knowledgeSearchRequested) {
         const scope = run.principal ? { principalId: run.principal.userId, workspaceId: run.principal.workspaceId, isSystem: false } : undefined;
         const knowledgeResults = await this.knowledgeEngine.search(run.prompt, 3, scope);
         run.citations = knowledgeResults.map(r => r.citation);
+      } else {
+        run.citations = [];
       }
       run.executionCheckpoint = 'KNOWLEDGE_READY';
-      await this.runRepo.saveRun(run);
-      for (const cite of run.citations) {
-        await this.emitRunEvent(runId, 'source.added', cite);
+      if (run.citations.length > 0) {
+        await this.runRepo.saveRun(run);
+        for (const cite of run.citations) {
+          await this.emitRunEvent(runId, 'source.added', cite);
+        }
       }
     }
 

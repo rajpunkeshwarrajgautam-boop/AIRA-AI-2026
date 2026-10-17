@@ -9,6 +9,15 @@ export interface StreamCallbacks {
   onArtifactFound?: (artifact: Artifact) => void;
   onApprovalRequired?: (approval: { id: string; runId: string; toolCall?: { name: string; arguments: any }; reason?: string }) => void;
   onStatusUpdate?: (status: string) => void;
+  onLatencyMetrics?: (metrics: {
+    requestId: string;
+    ttftMs: number | null;
+    totalMs: number;
+    deltaCount: number;
+    thinkingCount: number;
+    executedModel: string;
+    executedProvider: string;
+  }) => void;
   onComplete: () => void;
   onError: (error: string) => void;
 }
@@ -176,6 +185,8 @@ export async function streamAIResponse(
                   wrappedCallbacks.onThinkingChunk(data.thinking);
                 } else if ((currentEvent === 'content_delta' || data.text) && data.text) {
                   wrappedCallbacks.onContentChunk(data.text);
+                } else if (currentEvent === 'latency_metrics') {
+                  wrappedCallbacks.onLatencyMetrics?.(data);
                 } else if (currentEvent === 'artifact_open') {
                   artifactCode = '';
                   activeArtifact = {

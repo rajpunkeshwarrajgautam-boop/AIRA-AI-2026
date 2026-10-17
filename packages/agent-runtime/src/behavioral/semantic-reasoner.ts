@@ -164,15 +164,22 @@ Respond with valid JSON only:
     const policy = this.modelRouter.resolvePolicy('aira-fast', 'ANSWER');
     const adapter = this.modelRouter.getAdapter(policy);
 
-    const result = await adapter.complete([
+    const timeoutPromise = new Promise<null>((resolve) => {
+      setTimeout(() => resolve(null), 1500);
+    });
+
+    const completionPromise = adapter.complete([
       { role: 'system', content: 'You are a strict JSON intent classifier.' },
       { role: 'user', content: promptText }
-    ], policy);
+    ], policy).then(result => {
+      const jsonMatch = result.text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) return null;
+      return JSON.parse(jsonMatch[0]);
+    }).catch(() => null);
 
-    const jsonMatch = result.text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return null;
+    const parsed = await Promise.race([completionPromise, timeoutPromise]);
+    if (!parsed) return null;
 
-    const parsed = JSON.parse(jsonMatch[0]);
     const validIntents: IntentTaxonomy[] = ['ANSWER', 'RESEARCH', 'TOOL_ACTION', 'WORKFLOW', 'AUTOMATION_CREATE', 'AGENT_MISSION'];
     if (!validIntents.includes(parsed.primaryIntent)) return null;
 
@@ -276,14 +283,15 @@ Respond with valid JSON only:
   private isExplanationIntent(promptLower: string): boolean {
     // Queries asking for explanation, concepts, theory, steps, guides without executing
     const explanationPatterns = [
-      /^(explain|what\s+is|what\s+are|how\s+does|how\s+do|why\s+is|why\s+do|describe|define)\b/,
+      /^(explain|what\s+is|what\s+are|what\s+was|what\s+were|how\s+does|how\s+do|how\s+is|how\s+are|why\s+is|why\s+do|why\s+does|describe|define)\b/,
       /\bexplain\s+(how|why|what|the\s+difference)\b/,
       /\bhow\s+(is|are)\s+.*built\b/,
       /\bhow\s+an\s+application\s+is\s+built\b/,
       /\bwhat\s+if\s+we\s+built\b/,
       /\bcould\s+you\s+describe\s+how\s+you\s+would\s+deploy\b/,
       /\bguide\s+to\b/,
-      /\boverview\s+of\b/
+      /\boverview\s+of\b/,
+      /^(?:can\s+you\s+|could\s+you\s+|please\s+)?(tell\s+me\s+about|explain|describe|clarify|define)\b/
     ];
     return explanationPatterns.some(p => p.test(promptLower));
   }
@@ -315,8 +323,13 @@ Respond with valid JSON only:
     sideEffectLevel?: SideEffectLevel,
     advisoryIntent?: IntentTaxonomy
   ): Partial<SemanticIntentAnalysis> | null {
-    // Fast Path A: Trivial Greetings & Pleasantries (Zero Extra Model Calls)
-    if (/^(hi|hello|hey|good\s+(morning|afternoon|evening)|howdy|greetings|thanks|thank\s+you)[!.?]?$/i.test(promptLower)) {
+    // Fast Path A: Trivial Greetings, Pleasantries & Simple Chat Directives (Zero Extra Model Calls)
+    const isGreetingOrPleasantry = (
+      /^(hi|hello|hey|good\s+(morning|afternoon|evening)|howdy|greetings|thanks|thank\s+you)[!.?]?$/i.test(promptLower) ||
+      /^(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:say\s+|give\s+a\s+)?(hi|hello|hey|greetings|welcome)\b/i.test(promptLower) ||
+      /^(?:say\s+hello|say\s+hi|greet\s+me)\b/i.test(promptLower)
+    );
+    if (isGreetingOrPleasantry) {
       return {
         primaryIntent: 'ANSWER',
         secondaryIntents: [],
@@ -498,13 +511,20 @@ Respond with valid JSON only:
       } as any;
     }
 
-    // Fast Path I: Explanation vs Execution Nuance (Timeless Concepts & Explanations)
-    // If clearly explanation only, not requiring freshness, and no execution requested:
-    if (!freshnessEval.requiresFreshness && isExplanationOnly && !isExecutionRequested && (!advisoryIntent || advisoryIntent === 'ANSWER')) {
+    // Fast Path I: Explanation, Conversational Content & Timeless Factual Q&A (Zero Extra Model Calls)
+    const isConversationalContent = (
+      /^(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:write|compose|draft|generate|tell\s+me)\s+(?:an?\s+)?(?:[a-z0-9_-]+\s+)*(?:haiku|poem|story|joke|pun|riddle|limerick|analogy|quote|rhyme|one-liner)\b/i.test(promptLower) ||
+      /^(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:translate|how\s+do\s+you\s+say)\b/i.test(promptLower) ||
+      /^(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:name|list|give\s+me)\s+(?:\d+|a\s+few|some|three|two|four|five)\b/i.test(promptLower) ||
+      /^(?:what\s+is\s+)?\d+\s*[\+\-\*\/]\s*\d+\s*\??$/i.test(promptLower) ||
+      /^(?:what\s+is|what\s+are|define|explain)\s+/i.test(promptLower)
+    );
+
+    if (!freshnessEval.requiresFreshness && (isExplanationOnly || isConversationalContent) && !isExecutionRequested && (!advisoryIntent || advisoryIntent === 'ANSWER')) {
       return {
         primaryIntent: 'ANSWER',
         secondaryIntents: [],
-        confidence: 0.97,
+        confidence: 0.98,
         reasoningStrategy: 'FAST_DIRECT',
         isFreshnessRequired: false
       };

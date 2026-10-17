@@ -11,7 +11,7 @@ import { BrainV2KnowledgeEngine, PrincipalScope } from '../../../packages/knowle
 import { McpHost } from '../../../packages/mcp/src/index.js';
 import { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
 import { AutomationEngine } from '../../../packages/automation/src/index.js';
-import { PostgresAgentRepository, PostgresRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
+import { PostgresAgentRepository, PostgresRunRepository, InMemoryRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
 import { PostgresAutomationRepository, PostgresAutomationRunRepository } from '../../../packages/automation/src/repositories.js';
 import {
   ConversationSearchRepository,
@@ -78,17 +78,24 @@ const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
 
 // Audit 28: Body size limits and strict CORS with credentials
-app.use(cors({
-  origin: (origin, callback) => {
-    // Allow non-browser callers (curl, internal server requests) where origin is not set
-    if (!origin) return callback(null, true);
-    if (isAllowedOrigin(origin)) {
-      return callback(null, true);
-    }
-    return callback(new UntrustedOriginError(origin), false);
-  },
-  credentials: true
-}));
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const forwardedHost = req.headers['x-forwarded-host'];
+  const host = typeof forwardedHost === 'string'
+    ? forwardedHost.split(',')[0].trim()
+    : req.headers.host;
+
+  cors({
+    origin: (origin, callback) => {
+      // Allow non-browser callers (curl, internal server requests) where origin is not set
+      if (!origin) return callback(null, true);
+      if (isAllowedOrigin(origin, host)) {
+        return callback(null, true);
+      }
+      return callback(new UntrustedOriginError(origin), false);
+    },
+    credentials: true
+  })(req, res, next);
+});
 
 // Dedicated CORS origin rejection error handler
 app.use((err: any, req: Request, res: Response, next: NextFunction) => {
@@ -244,6 +251,133 @@ app.get('/api/ready', (_req: Request, res: Response) => {
   }
 });
 
+app.get('/api/ready/providers', async (_req: Request, res: Response) => {
+  const result: Record<string, any> = {};
+  if (process.env.GROQ_API_KEY) {
+    try {
+      const groqKey = process.env.GROQ_API_KEY.trim().replace(/^["']|["']$/g, '');
+      const resp = await fetch('https://api.groq.com/openai/v1/models', {
+        headers: { Authorization: `Bearer ${groqKey}` }
+      });
+      const data: any = await resp.json().catch(() => ({}));
+      result.groq = {
+        status: resp.status,
+        models: Array.isArray(data.data) ? data.data.map((m: any) => m.id) : [],
+        error: !resp.ok ? data : undefined,
+        keyLength: groqKey.length,
+        keyPrefix: groqKey.slice(0, 4)
+      };
+    } catch (e: any) {
+      result.groq = { error: e.message };
+    }
+  } else {
+    result.groq = { configured: false };
+  }
+  res.json(result);
+});
+
+app.post('/api/ready/benchmark-groq', async (req: Request, res: Response) => {
+  if (!process.env.GROQ_API_KEY) {
+    return res.status(503).json({ error: 'GROQ_API_KEY not configured' });
+  }
+  const { model, prompt, max_tokens, temperature } = req.body || {};
+  if (!model || !prompt) {
+    return res.status(400).json({ error: 'model and prompt required' });
+  }
+
+  const groqKey = process.env.GROQ_API_KEY.trim().replace(/^["']|["']$/g, '');
+  const t0 = performance.now();
+  let ttfb = 0;
+  let firstDelta: number | null = null;
+  let firstThinking: number | null = null;
+  let contentDeltaCount = 0;
+  let thinkingDeltaCount = 0;
+  let text = '';
+  let thinking = '';
+  let providerModel: string | undefined;
+
+  try {
+    const upstreamRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${groqKey}`,
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream'
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: max_tokens || 256,
+        temperature: temperature !== undefined ? temperature : 0.7,
+        stream: true
+      })
+    });
+
+    ttfb = performance.now() - t0;
+    if (!upstreamRes.ok) {
+      const errBody = await upstreamRes.text();
+      return res.status(upstreamRes.status).json({
+        success: false,
+        status: upstreamRes.status,
+        ttfbMs: Math.round(ttfb),
+        error: errBody
+      });
+    }
+
+    const reader = upstreamRes.body?.getReader();
+    if (!reader) throw new Error('No body stream from Groq');
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const now = performance.now();
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data:')) continue;
+        const dataStr = line.slice(5).trim();
+        if (dataStr === '[DONE]') break;
+        try {
+          const parsed = JSON.parse(dataStr);
+          if (parsed.model && !providerModel) providerModel = parsed.model;
+          const delta = parsed.choices?.[0]?.delta;
+          if (delta?.content) {
+            if (firstDelta === null) firstDelta = now - t0;
+            contentDeltaCount++;
+            text += delta.content;
+          }
+          if (delta?.reasoning_content) {
+            if (firstThinking === null) firstThinking = now - t0;
+            thinkingDeltaCount++;
+            thinking += delta.reasoning_content;
+          }
+        } catch {}
+      }
+    }
+
+    const total = performance.now() - t0;
+    res.json({
+      success: true,
+      model,
+      providerModel,
+      ttfbMs: Math.round(ttfb),
+      ttftMs: firstDelta !== null ? Math.round(firstDelta) : null,
+      firstThinkingMs: firstThinking !== null ? Math.round(firstThinking) : null,
+      totalDurationMs: Math.round(total),
+      contentDeltaCount,
+      thinkingDeltaCount,
+      text: text.trim(),
+      thinking: thinking ? thinking.slice(0, 200) : undefined
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Hard gate to block runtime traffic before recovery is complete
 app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
   if (appState !== 'HEALTHY') {
@@ -265,8 +399,9 @@ const toolCallRepo = new PostgresToolCallRepository();
 const toolGateway = new ToolGateway(toolCallRepo, approvalKernel, process.cwd());
 const knowledgeEngine = new BrainV2KnowledgeEngine();
 const mcpHost = new McpHost(toolGateway);
+const isDbConfigured = Boolean(process.env.DATABASE_URL?.trim());
 const agentRepo = new PostgresAgentRepository();
-const runRepo = new PostgresRunRepository();
+const runRepo = isDbConfigured ? new PostgresRunRepository() : new InMemoryRunRepository();
 const autoRepo = new PostgresAutomationRepository();
 const autoRunRepo = new PostgresAutomationRunRepository();
 const conversationSearchRepo = new ConversationSearchRepository();
@@ -290,7 +425,9 @@ const agentRuntime = new AgentRuntime(
 );
 const automationEngine = new AutomationEngine(agentRuntime, autoRepo, autoRunRepo);
 agentRuntime.setAutomationEngine(automationEngine);
-automationEngine.start();
+if (isDbConfigured) {
+  automationEngine.start();
+}
 
 // Recovery is deferred until the HTTP server is bound.
 
@@ -313,7 +450,9 @@ async function seedDefaultAgent() {
     } as AgentDefinition);
   }
 }
-seedDefaultAgent().catch(console.error);
+if (isDbConfigured) {
+  seedDefaultAgent().catch(console.error);
+}
 
 async function seedDefaultAutomation() {
   const existing = await autoRepo.listAutomations();
@@ -334,7 +473,9 @@ async function seedDefaultAutomation() {
     });
   }
 }
-seedDefaultAutomation().catch(console.error);
+if (isDbConfigured) {
+  seedDefaultAutomation().catch(console.error);
+}
 
 // -----------------------------------------------------------------------
 // MCP Servers (protected — requires ExecutionPrincipal)
@@ -727,6 +868,13 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       ? messages.slice(0, -1)
       : [];
 
+    const tRequestReceived = performance.now();
+    let tFirstDelta: number | null = null;
+    let deltaCount = 0;
+    let thinkingCount = 0;
+    let executedModel = model || 'aira-auto';
+    let executedProvider = 'unknown';
+
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -746,16 +894,37 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
 
     const stream = agentRuntime.getEventStream(run.id);
 
+    const emitMetricsAndLog = () => {
+      const tCompleted = performance.now();
+      const totalMs = Math.round(tCompleted - tRequestReceived);
+      const ttftMs = tFirstDelta !== null ? Math.round(tFirstDelta - tRequestReceived) : null;
+      console.log(`event=chat_latency request_id=${req.headers['x-request-id'] || run.id} run_id=${run.id} model=${executedModel} provider=${executedProvider} ttft_ms=${ttftMs} total_ms=${totalMs} delta_count=${deltaCount} thinking_count=${thinkingCount}`);
+      res.write(`event: latency_metrics\ndata: ${JSON.stringify({
+        requestId: run.id,
+        ttftMs,
+        totalMs,
+        deltaCount,
+        thinkingCount,
+        executedModel,
+        executedProvider
+      })}\n\n`);
+    };
+
     const handler = (evt: any) => {
       if (evt.type === 'routing.decision') {
         res.write(`event: routing_decision\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'model.provenance') {
+        executedModel = evt.data?.executedModel || executedModel;
+        executedProvider = evt.data?.provider || executedProvider;
         res.write(`event: model_provenance\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'capability.unready') {
         res.write(`event: capability_unready\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'content.delta') {
+        if (tFirstDelta === null) tFirstDelta = performance.now();
+        deltaCount++;
         res.write(`event: content_delta\ndata: ${JSON.stringify({ text: evt.data.delta })}\n\n`);
       } else if (evt.type === 'thinking.delta') {
+        thinkingCount++;
         res.write(`event: thinking_delta\ndata: ${JSON.stringify({ thinking: evt.data.delta })}\n\n`);
       } else if (evt.type === 'workflow.created' || evt.type === 'workflow.started') {
         res.write(`event: workflow_started\ndata: ${JSON.stringify(evt.data)}\n\n`);
@@ -768,6 +937,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       } else if (evt.type === 'workflow.step.failed') {
         res.write(`event: workflow_step_failed\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'workflow.completed') {
+        emitMetricsAndLog();
         res.write(`event: workflow_completed\ndata: ${JSON.stringify(evt.data)}\n\n`);
         res.write(`event: done\ndata: [DONE]\n\n`);
         stream.off('event', handler);
@@ -786,21 +956,26 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       } else if (evt.type === 'tool.completed') {
         res.write(`event: tool_completed\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'run.failed') {
+        emitMetricsAndLog();
         const failure = evt.data?.error || 'Aira runtime failed before producing a response';
+        console.error(`[CHAT_STREAM_RUN_FAILED] run_id=${run.id} model=${executedModel}:`, failure);
         const storageFailure = isTemporaryDatabaseError(new Error(String(failure)));
         res.write(`event: error\ndata: ${JSON.stringify({
           error: storageFailure ? 'Temporary database connectivity problem. Please retry your request.' : 'Aira could not complete this request.',
           code: storageFailure ? 'DATABASE_TEMPORARILY_UNAVAILABLE' : 'RUN_FAILED',
+          details: String(failure),
         })}\n\n`);
         stream.off('event', handler);
         res.end();
       } else if (evt.type === 'run.cancelled') {
+        emitMetricsAndLog();
         res.write(`event: error\ndata: ${JSON.stringify({
           error: evt.data?.error || 'Aira run was cancelled',
         })}\n\n`);
         stream.off('event', handler);
         res.end();
       } else if (evt.type === 'run.completed') {
+        emitMetricsAndLog();
         res.write(`event: done\ndata: [DONE]\n\n`);
         stream.off('event', handler);
         res.end();
