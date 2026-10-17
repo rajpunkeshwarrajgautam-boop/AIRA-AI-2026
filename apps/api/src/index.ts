@@ -831,6 +831,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       } else if (evt.type === 'run.failed') {
         emitMetricsAndLog();
         const failure = evt.data?.error || 'Aira runtime failed before producing a response';
+        console.error(`[CHAT_STREAM_RUN_FAILED] run_id=${run.id} model=${executedModel}:`, failure);
         const storageFailure = isTemporaryDatabaseError(new Error(String(failure)));
         res.write(`event: error\ndata: ${JSON.stringify({
           error: storageFailure ? 'Temporary database connectivity problem. Please retry your request.' : 'Aira could not complete this request.',
