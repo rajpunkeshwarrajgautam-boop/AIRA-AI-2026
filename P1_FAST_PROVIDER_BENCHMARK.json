@@ -1,84 +1,78 @@
 {
-  "timestamp": "2026-10-17T06:24:00.000Z",
+  "timestamp": "2026-10-17T07:10:00.000Z",
   "phase": "P1.3 Fast Provider Enablement & Multi-Provider Routing",
   "pr": 83,
-  "headSha": "fdb31ca4d71c664f977091a66ffe8299407324e9",
-  "verdict": "P1 FAST PROVIDER BLOCKED — HUMAN API CREDENTIAL REQUIRED",
-  "providersEvaluated": [
-    {
-      "provider": "groq",
-      "endpoint": "https://api.groq.com/openai/v1",
-      "recommendedModel": "llama-3.1-8b-instant",
-      "expectedP50LatencyMs": "<500",
-      "credentialStatus": "UNCONFIGURED_IN_PREVIEW",
-      "credentialEnvVar": "GROQ_API_KEY"
-    },
-    {
-      "provider": "cerebras",
-      "endpoint": "https://api.cerebras.ai/v1",
-      "recommendedModel": "llama3.1-8b",
-      "expectedP50LatencyMs": "<500",
-      "credentialStatus": "UNCONFIGURED_IN_PREVIEW",
-      "credentialEnvVar": "CEREBRAS_API_KEY"
-    },
-    {
-      "provider": "openai",
-      "endpoint": "https://api.openai.com/v1",
-      "recommendedModel": "gpt-4o-mini",
-      "expectedP50LatencyMs": "600-900",
-      "credentialStatus": "UNCONFIGURED_IN_PREVIEW",
-      "credentialEnvVar": "OPENAI_API_KEY"
-    },
-    {
-      "provider": "together",
-      "endpoint": "https://api.together.xyz/v1",
-      "recommendedModel": "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
-      "expectedP50LatencyMs": "700-1100",
-      "credentialStatus": "UNCONFIGURED_IN_PREVIEW",
-      "credentialEnvVar": "TOGETHER_API_KEY"
-    },
-    {
-      "provider": "fireworks",
-      "endpoint": "https://api.fireworks.ai/inference/v1",
-      "recommendedModel": "accounts/fireworks/models/llama-v3p1-8b-instruct",
-      "expectedP50LatencyMs": "600-1000",
-      "credentialStatus": "UNCONFIGURED_IN_PREVIEW",
-      "credentialEnvVar": "FIREWORKS_API_KEY"
-    },
-    {
-      "provider": "nvidia",
-      "endpoint": "https://integrate.api.nvidia.com/v1",
-      "recommendedModel": "nvidia/nemotron-3-super-120b-a12b",
-      "expectedP50LatencyMs": "2456",
-      "credentialStatus": "CONFIGURED_BUT_BLOCKED_NO_FAST_MODEL",
-      "credentialEnvVar": "NVIDIA_API_KEY",
-      "note": "Account IWp0S44IxqoKxlASDHiRhMsA1f2Cif8UgbEq19XdhYQ only entitled for 120B reasoning model; 5 smaller models return 404"
-    }
-  ],
-  "controlModelMetrics": {
-    "provider": "nvidia",
-    "model": "nvidia/nemotron-3-super-120b-a12b",
-    "p50BrowserTTFTMs": 2456,
-    "p95BrowserTTFTMs": 9121,
-    "maxBrowserTTFTMs": 16402,
-    "qualityScore": 8.5,
-    "deepModelPreserved": true,
-    "researchRoutePreserved": true,
-    "realStreamingVerified": true,
-    "fakeStreamingUsed": false
+  "headSha": "f59be8afabdbcb2d3fa6e48cfa003d162f4b277b",
+  "previewDeployment": "https://aira-ai-2026-reos3wv39-rajpunkeshwarrajgautam-boops-projects.vercel.app",
+  "verdict": "P1 FAST PROVIDER FAILED",
+  "groqAuthentication": {
+    "status": 200,
+    "keyConfigured": true,
+    "keyPrefix": "gsk_",
+    "keyLength": 56,
+    "secretExposed": false
   },
-  "requiredConfiguration": {
-    "recommendedProvider": "groq",
-    "requiredSecret": "GROQ_API_KEY",
-    "optionalVariables": {
-      "AIRA_FAST_PROVIDER": "groq",
-      "AIRA_FAST_MODEL": "llama-3.1-8b-instant"
-    },
-    "alternativeProvider": "openai",
-    "alternativeSecret": "OPENAI_API_KEY",
-    "alternativeVariables": {
-      "AIRA_FAST_PROVIDER": "openai",
-      "AIRA_FAST_MODEL": "gpt-4o-mini"
-    }
+  "configuredEnvironment": {
+    "AIRA_FAST_PROVIDER": "groq",
+    "AIRA_FAST_MODEL": "llama-3.1-8b-instant"
+  },
+  "entitledGroqModels": [
+    "canopylabs/orpheus-v1-english",
+    "meta-llama/llama-prompt-guard-2-86m",
+    "allam-2-7b",
+    "whisper-large-v3",
+    "qwen/qwen3.8-27b",
+    "meta-llama/llama-prompt-guard-2-22m",
+    "canopylabs/orpheus-arabic-saudi",
+    "openai/gpt-oss-120b",
+    "whisper-large-v3-turbo",
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-safeguard-20b"
+  ],
+  "executionResults": {
+    "targetModel": "llama-3.1-8b-instant",
+    "upstreamStatus": 404,
+    "upstreamErrorCode": "model_not_found",
+    "upstreamErrorMessage": "The model `llama-3.1-8b-instant` does not exist or you do not have access to it.",
+    "alternativeModelTested": "llama-3.3-70b-versatile",
+    "alternativeUpstreamStatus": 404,
+    "alternativeUpstreamErrorMessage": "The model `llama-3.3-70b-versatile` does not exist or you do not have access to it.",
+    "executedProvider": "groq",
+    "executedModel": "llama-3.1-8b-instant",
+    "fallbackOccurred": false,
+    "ttftMs": null,
+    "deltaCount": 0,
+    "thinkingCount": 0
+  },
+  "routePreservation": {
+    "deepModel": "nvidia/nemotron-3-super-120b-a12b",
+    "deepProvider": "nvidia",
+    "deepVerifiedOnPreview": true,
+    "deepContentDeltas": 103,
+    "deepThinkingDeltas": 45,
+    "researchRouteVerifiedOnPreview": true,
+    "researchIntent": "RESEARCH",
+    "researchTarget": "RESEARCH_SYNTHESIS"
+  },
+  "verificationChecklist": {
+    "1_api_health_healthy": "PASS",
+    "2_api_ready_ready": "PASS",
+    "3_executed_provider_groq": "ATTEMPTED_FAILED_UPSTREAM_404",
+    "4_executed_model_llama_3_1_8b_instant": "FAILED_UPSTREAM_MODEL_NOT_FOUND",
+    "5_fallback_occurred_false": "PASS",
+    "6_real_upstream_sse_streaming": "FAILED_ZERO_DELTAS_RECEIVED",
+    "7_no_fake_streaming": "PASS",
+    "8_20_prompt_benchmark": "BLOCKED_UPSTREAM_404",
+    "9_p50_ttft_le_2000ms": "FAILED_NULL",
+    "10_p95_ttft_le_3000ms": "FAILED_NULL",
+    "11_repeated_variance": "BLOCKED",
+    "12_desktop_1440x900": "BLOCKED",
+    "13_mobile_390x844": "BLOCKED",
+    "14_mobile_375x667": "BLOCKED",
+    "15_browser_render_overhead_lt_200ms": "PASS",
+    "16_deep_remains_nemotron_120b": "PASS",
+    "17_research_route_preserved": "PASS",
+    "18_quality_comparison": "BLOCKED",
+    "19_current_exact_head_ci": "PASS"
   }
 }

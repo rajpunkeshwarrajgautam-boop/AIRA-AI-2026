@@ -4,9 +4,9 @@
 **PR:** [#83 (fix/p1-inference-latency-production-ux-20261016)](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/83)  
 **Target Branch:** `prod-release`  
 **Base Commit:** `f835a4c997945d756ac0a8eca25f14ca3dfeaac8`  
-**Current PR HEAD SHA:** `fdb31ca4d71c664f977091a66ffe8299407324e9`  
+**Current PR HEAD SHA:** `f59be8afabdbcb2d3fa6e48cfa003d162f4b277b`  
 **Target Production Untouched:** YES (zero production mutation, zero merge to `prod-release`)  
-**Active Agency Specialist:** `agency-reality-checker`  
+**Active Agency Specialists:** `agency-reality-checker`, `agency-backend-architect`, `agency-sre-site-reliability-engineer`  
 **Applied Matt Pocock Skills:** `research`, `diagnosing-bugs`, `tdd`, `code-review`, `pr`
 
 ---
@@ -14,129 +14,110 @@
 ## 1. Executive Summary & Authoritative Verdict
 
 ```
-P1 FAST PROVIDER BLOCKED — HUMAN API CREDENTIAL REQUIRED
+P1 FAST PROVIDER FAILED
 ```
 
-### Key Metrics Summary
-- **Selected Fast Provider:** NONE (Credential Stop Gate: Awaiting Human API Key in Vercel Preview)
-- **Candidate Fast Providers Evaluated:** Groq (LPU), Cerebras, OpenAI (`gpt-4o-mini`), Together AI, Fireworks AI
-- **Recommended Fast Provider:** `groq` (`llama-3.1-8b-instant`) or `openai` (`gpt-4o-mini`)
-- **P50 Browser TTFT (NVIDIA Control Fallback):** 2,456 ms (Hard Gate: $\le 2,000$ ms — **UNSATISFIED on 120B fallback**)
-- **P95 Browser TTFT (NVIDIA Control Fallback):** 9,121 ms (Preferred Gate: $\le 3,000$ ms — **UNSATISFIED on 120B fallback**)
-- **Max Browser TTFT:** 16,402 ms
-- **Quality Score:** 8.5/10
-- **Deep Nemotron 120B Preserved:** YES (`aira-deep` and research synthesis strictly preserved on 120B)
-- **Research Route Preserved:** YES (`RESEARCH` and `RESEARCH_SYNTHESIS` preserved independently)
-- **Real Progressive Streaming Verified:** YES
-- **Fake Streaming Used:** NO
-- **First-Token Deadline Timer:** Implemented (3,000 ms commercial timeout prevents client hanging)
-- **Truthful Provenance:** Implemented (`fallbackOccurred: true` and descriptive reason when falling back to 120B)
+### Key Metrics & Telemetry Summary
+- **Target Fast Provider:** `groq` (Configured in Vercel Preview)
+- **Target Fast Model:** `llama-3.1-8b-instant`
+- **Preview Deployment Tested:** `https://aira-ai-2026-reos3wv39-rajpunkeshwarrajgautam-boops-projects.vercel.app`
+- **Groq Upstream HTTP Status:** `404 Not Found`
+- **Groq Upstream Error:** `The model 'llama-3.1-8b-instant' does not exist or you do not have access to it.`
+- **P50 Browser Visible TTFT:** N/A (Failed upstream before first token)
+- **P95 Browser Visible TTFT:** N/A (Failed upstream before first token)
+- **Fallback Occurred:** `false` (Truthfully preserved; no silent mask/fallback)
+- **Real Progressive Streaming:** Verified on Deep route (103 deltas); failed on Groq due to 404
+- **Fake Streaming Used:** NO (Strictly zero synthetic token delay or client simulation)
+- **Deep Nemotron 120B Preserved:** YES (`aira-deep` verified on `nvidia/nemotron-3-super-120b-a12b`, TTFT 3,223 ms, 103 content deltas, 45 thinking deltas)
+- **Research Route Preserved:** YES (`intent: "RESEARCH"`, `executionTarget: "RESEARCH_SYNTHESIS"`, `sideEffectLevel: "READ"`)
+- **Current Exact-Head CI:** Fast CI PASS, Semantic Search CI PASS
 
 ---
 
-## 2. Provider Architecture & Credential Audit (Sections 2, 4, 16)
+## 2. 19-Point Verification Checklist & Empirical Results
 
-A complete architectural inspection and live Vercel Preview environment audit (`vercel env ls preview`) was executed.
-
-### Vercel Preview Secret Audit
-| Provider | Credential Variable | Status in Vercel Preview | Usable for Fast Chat |
-| :--- | :--- | :--- | :--- |
-| **Groq** | `GROQ_API_KEY` | **NOT CONFIGURED** | Required for sub-500ms inference |
-| **OpenAI** | `OPENAI_API_KEY` | **NOT CONFIGURED** | Required for `gpt-4o-mini` |
-| **Cerebras** | `CEREBRAS_API_KEY` | **NOT CONFIGURED** | Required for Cerebras WSE inference |
-| **Together AI** | `TOGETHER_API_KEY` | **NOT CONFIGURED** | Required for Together Turbo Llama |
-| **Fireworks AI** | `FIREWORKS_API_KEY` | **NOT CONFIGURED** | Required for Fireworks Fast Inference |
-| **NVIDIA NIM** | `NVIDIA_API_KEY` | **CONFIGURED** | **BLOCKED:** Account only entitled to 120B reasoning model; 5 candidate fast models return `HTTP 404 Function Not Found` |
-
-### Credential Stop Gate (Section 16 Compliance)
-Under Section 16 & Section 30 of the Master Execution Directive:
-> "If human credentials are required: STOP at the credential gate. Tell the owner exactly which Vercel Preview variable names are needed. Never request the secret value in chat. After the human configures them, resume."
-
-**Action Required by Repository Owner (`rajpunkeshwarrajgautam-boop`):**
-To certify sub-2s TTFT for AIRA Fast, add ONE of the following API keys to Vercel Preview (Project: `aira-ai-2026`, Environments: **Preview**):
-
-#### Option A (Recommended — Ultra Low Latency <500ms TTFT):
-```bash
-vercel env add GROQ_API_KEY preview
-# Value: your Groq API key (starts with gsk_...)
-```
-Optional:
-```bash
-vercel env add AIRA_FAST_PROVIDER preview
-# Value: groq
-vercel env add AIRA_FAST_MODEL preview
-# Value: llama-3.1-8b-instant
-```
-
-#### Option B (Standard Alternative — ~600-900ms TTFT):
-```bash
-vercel env add OPENAI_API_KEY preview
-# Value: your OpenAI API key (starts with sk-proj-...)
-```
-Optional:
-```bash
-vercel env add AIRA_FAST_PROVIDER preview
-# Value: openai
-vercel env add AIRA_FAST_MODEL preview
-# Value: gpt-4o-mini
-```
-
-> **SECURITY NOTE:** Never paste API keys into chat or git. Add them directly through Vercel Dashboard or Vercel CLI.
+| # | Verification Item | Target Standard | Observed Empirical Result | Verdict |
+| :- | :--- | :--- | :--- | :--- |
+| **1** | `/api/health` | `HEALTHY` | Status `200 OK`, `status: "HEALTHY"`, `modelRouter: "ONLINE (2 provider(s): groq, nvidia)"`, `productionMockFallback: "DISABLED"` | **PASS** |
+| **2** | `/api/ready` | `READY` | Status `200 OK`, `status: "READY"`, `timestamp: 1792220620931` | **PASS** |
+| **3** | `executedProvider` | `groq` | Fast router successfully selected `groq`, but upstream inference returned HTTP 404 | **ATTEMPTED / UPSTREAM FAILED** |
+| **4** | `executedModel` | `llama-3.1-8b-instant` | Model requested, but rejected by Groq: `The model 'llama-3.1-8b-instant' does not exist or you do not have access to it.` | **FAILED** |
+| **5** | `fallbackOccurred` | `false` | Truthful error reporting enforced. When Groq failed, `fallbackOccurred: false` was retained and failure emitted; no silent fallback to Nemotron or mock | **PASS** |
+| **6** | Real Upstream SSE Streaming | Verified | 0 tokens received from Groq due to HTTP 404 stream failure | **FAILED (0 Deltas)** |
+| **7** | No Fake Streaming | Strict ban | Verified: Zero artificial token chunking, zero synthetic delays | **PASS** |
+| **8** | 20-Prompt Benchmark | Complete suite | Blocked: Groq rejected `llama-3.1-8b-instant` on 100% of prompt executions | **BLOCKED** |
+| **9** | P50 Browser TTFT $\le 2000$ ms | $\le 2,000$ ms | N/A (Upstream 404 stream error) | **FAILED** |
+| **10** | Preferred P95 $\le 3000$ ms | $\le 3,000$ ms | N/A (Upstream 404 stream error) | **FAILED** |
+| **11** | Repeated Variance Tests | 5x variance check | Blocked by upstream 404 | **BLOCKED** |
+| **12** | Desktop 1440x900 | Browser render | Verified layout; stream fails at network boundary | **BLOCKED** |
+| **13** | Mobile 390x844 | Mobile render | Verified responsive layout; stream fails at network boundary | **BLOCKED** |
+| **14** | Mobile 375x667 | Small viewport | Verified responsive layout; stream fails at network boundary | **BLOCKED** |
+| **15** | Browser Render Overhead | $<200$ ms | Measured at 51–77 ms in P1.1 / P1.2 baseline tests | **PASS** |
+| **16** | Deep Remains on NVIDIA Nemotron 120B | Strict isolation | Verified on Preview: `aira-deep` routed to `nvidia/nemotron-3-super-120b-a12b`, emitted 45 thinking deltas, 103 content deltas, TTFT 3,223 ms | **PASS** |
+| **17** | Research Route Preserved | Independent | Verified on Preview: `RESEARCH` query routed to `RESEARCH_SYNTHESIS` target with `sideEffectLevel: "READ"` | **PASS** |
+| **18** | Quality Comparison | Accurate answers | Cannot evaluate Groq output quality because 0 tokens were generated | **BLOCKED** |
+| **19** | Exact-Head CI Fully Successful | 100% green | Fast CI: PASS (1m51s), Semantic Search CI: PASS (46s), Vercel Build: PASS | **PASS** |
 
 ---
 
-## 3. Provider Abstraction & Multi-Provider Architecture (Sections 8, 9, 10, 11, 12)
+## 3. Root Cause Diagnosis & Upstream Entitlement Audit
 
-The model router and provider adapters have been updated to support multi-provider low-latency inference cleanly without duplicate code or provider leakage:
+### The Diagnostic Breakthrough
+When the Preview deployment was re-tested with `GROQ_API_KEY`, `AIRA_FAST_PROVIDER=groq`, and `AIRA_FAST_MODEL=llama-3.1-8b-instant`, every streaming request immediately triggered:
+```text
+[CHAT_STREAM_RUN_FAILED] model=llama-3.1-8b-instant: groq streaming request failed (HTTP 404): The model `llama-3.1-8b-instant` does not exist or you do not have access to it.
+```
+Testing the alternative Groq general model `llama-3.3-70b-versatile` yielded the identical response:
+```text
+[CHAT_STREAM_RUN_FAILED] model=llama-3.3-70b-versatile: groq streaming request failed (HTTP 404): The model `llama-3.3-70b-versatile` does not exist or you do not have access to it.
+```
 
-1. **Generic OpenAI-Compatible Adapter:**
-   - [`packages/model-router/src/index.ts`](file:///c:/Users/WORKSTATION/AIRA-AI-2026-P1-INFERENCE-UX/packages/model-router/src/index.ts): Upgraded `OpenAIAdapter` to handle all OpenAI-compatible SSE endpoints (Groq, Cerebras, Together, Fireworks, OpenAI, NVIDIA NIM).
-   - Real SSE streaming normalization, `data: [DONE]` terminal event handling, usage tracking, and upstream error body redaction.
-2. **First-Token Deadline Timer:**
-   - Commercial 3,000 ms deadline timer enforced on `aira-fast`.
-   - If an upstream provider hangs, stalls, or fails to emit visible text tokens within 3,000 ms, the request aborts with `FIRST_TOKEN_TIMEOUT` instead of hanging for 15+ seconds.
-   - Timer is immediately cleared upon arrival of the first visible text chunk.
-3. **Deterministic Fast Route Auto-Prioritization:**
-   - Checks `AIRA_FAST_PROVIDER` override.
-   - If unset, automatically selects the fastest configured provider:
-     `Groq` $\to$ `Cerebras` $\to$ `OpenAI` $\to$ `Together` $\to$ `Fireworks` $\to$ `NVIDIA`.
-4. **Truthful Fallback Tracking:**
-   - When only NVIDIA is configured, `aira-fast` records:
-     - `fallbackOccurred: true`
-     - `fallbackReason: 'No dedicated fast provider configured; fell back to NVIDIA Nemotron 120B reasoning model'`
-     - `executedProvider: 'nvidia'`
-     - `executedModel: 'nvidia/nemotron-3-super-120b-a12b'`
-5. **Strict Deep Reasoning Route Isolation:**
-   - `aira-deep` is restricted to high-capacity reasoning providers (`['nvidia', 'anthropic', 'openai']`).
-   - Deep mode will never accidentally route to a lightweight fast model.
+To isolate the root cause, a non-sensitive diagnostic probe was executed directly against Groq's model catalog (`GET https://api.groq.com/openai/v1/models`) using the configured `GROQ_API_KEY`:
+- **HTTP Status:** `200 OK` (Key is valid and authenticated)
+- **Key Prefix:** `gsk_`
+- **Key Length:** 56 characters
+- **Actual Models Entitled on this Key:**
+  1. `canopylabs/orpheus-v1-english`
+  2. `meta-llama/llama-prompt-guard-2-86m`
+  3. `allam-2-7b`
+  4. `whisper-large-v3`
+  5. `qwen/qwen3.8-27b`
+  6. `meta-llama/llama-prompt-guard-2-22m`
+  7. `canopylabs/orpheus-arabic-saudi`
+  8. `openai/gpt-oss-120b`
+  9. `whisper-large-v3-turbo`
+  10. `openai/gpt-oss-20b`
+  11. `openai/gpt-oss-safeguard-20b`
 
----
-
-## 4. Verification & Testing Evidence (TDD & Release Quality)
-
-All verification gates have executed and passed:
-
-1. **Unit Test Suite (`test/p1-multi-provider-fast-routing.test.ts`):**
-   - Test 1: Contracts `ModelIdSchema` and `ModelProvenanceSchema` validate new providers (`groq`, `cerebras`, `together`, `fireworks`) and models $\implies$ **PASS**
-   - Test 2: Truthful fallback on NVIDIA-only configuration $\implies$ **PASS**
-   - Test 3: Deep route preservation on Nemotron 120B $\implies$ **PASS**
-   - Test 4: Auto-prioritization of Groq when available $\implies$ **PASS**
-   - Test 5: Explicit `AIRA_FAST_PROVIDER` and `AIRA_FAST_MODEL` override $\implies$ **PASS**
-   - Test 6: First-token timeout abort on hanging stream $\implies$ **PASS**
-   - Test 7: Normal first-token stream delivery $\implies$ **PASS**
-2. **Model Routing Certification (`npm run test:model-routing`):** $\implies$ **PASS**
-3. **Intent Router & Policy Suite (`npm run test:router`):** $\implies$ **PASS**
-4. **Release Authorization Guard Security Boundary (`npm run test:release-auth:unit`):** 52/52 security tests $\implies$ **PASS**
-5. **Tracked Secrets Hygiene Audit (`npm run test:secrets`):** 306 tracked files scanned $\implies$ **PASS (Zero exposed secrets)**
-6. **TypeScript Strict Typecheck (`npm run typecheck`):** $\implies$ **PASS (Zero errors)**
-7. **Linter Check (`npm run lint`):** $\implies$ **PASS (Zero errors)**
-8. **Production Build (`npm run build`):** $\implies$ **PASS**
+### Conclusion
+The Groq account/organization associated with the provided `GROQ_API_KEY` does **not** have permissions enabled for Meta Llama models (`llama-3.1-8b-instant` or `llama-3.3-70b-versatile`). As a result, Groq Cloud denies access with HTTP 404.
 
 ---
 
-## 5. Next Steps for P1.3 Completion & Sub-2s Certification
+## 4. Required Action for Repository Owner
 
-1. **Human Action:** Owner adds `GROQ_API_KEY` or `OPENAI_API_KEY` to Vercel Preview.
-2. **Preview Benchmark Execution:** Once the key is provisioned, execute the 20-prompt empirical benchmark on Vercel Preview.
-3. **Gate Certification:** Verify P50 browser-visible TTFT $\le 2,000$ ms and P95 $\le 3,000$ ms on the live deployment.
-4. **Final PR Review:** Complete PR #83 description with empirical evidence and await explicit human GO LIVE authorization.
+To complete P1.3 certification with sub-2s TTFT, choose ONE of the two solutions:
+
+### Solution A: Enable Llama Models in Groq Console (Recommended)
+1. Log into [Groq Console](https://console.groq.com/).
+2. Navigate to **Project Settings** $\to$ **Model Access / Permissions**.
+3. Enable `llama-3.1-8b-instant` (or generate an API key from a project that has Llama 3.1 access enabled).
+4. Update `GROQ_API_KEY` in Vercel Preview if a new key was created.
+
+### Solution B: Switch to OpenAI `gpt-4o-mini` (~600-900 ms TTFT)
+1. Add `OPENAI_API_KEY` to Vercel Preview:
+   ```bash
+   vercel env add OPENAI_API_KEY preview
+   ```
+2. Update fast provider variables in Vercel Preview:
+   ```bash
+   vercel env add AIRA_FAST_PROVIDER preview # value: openai
+   vercel env add AIRA_FAST_MODEL preview    # value: gpt-4o-mini
+   ```
+
+---
+
+## 5. Security & Safety Boundaries
+- **Production Status:** Untouched (`prod-release` not modified, live canonical URL untouched).
+- **PR Status:** Unmerged (PR #83 remains open).
+- **Secrets Hygiene:** `GROQ_API_KEY` was never printed, logged, or committed.
