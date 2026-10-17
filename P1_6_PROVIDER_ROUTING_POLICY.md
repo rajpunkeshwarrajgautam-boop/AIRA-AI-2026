@@ -8,14 +8,16 @@ AIRA Fast (`aira-fast`) must never remain pinned to an upstream provider experie
 flowchart TD
     Client[Client / BFF Request: aira-fast] --> Router[ModelRouter: resolveExecution]
     Router --> Policy[LatencyAwareRoutingPolicy]
-    Policy --> CB{Primary Circuit Breaker}
-    CB -- CLOSED (Healthy) --> Primary[Primary: Groq openai/gpt-oss-120b]
-    CB -- OPEN / Saturated --> Fallback[Promoted Fallback: Groq allam-2-7b]
+    Policy --> CB1{Groq Primary Circuit}
+    CB1 -- CLOSED (Healthy) --> Primary[Primary: Groq openai/gpt-oss-120b]
+    CB1 -- OPEN / Saturated --> Fallback1[Secondary: Gemini gemini-3.5-flash-lite]
     Primary --> Deadline{First-Token Deadline <= 2500ms}
     Deadline -- Content Delivered < 2500ms --> StickinessLock[Lock Request Stickiness & Stream to User]
-    Deadline -- Timeout / Abort / 429 --> Failover[Failover to Fallback: Groq allam-2-7b]
-    Failover --> TruthfulProv[Emit Updated Truthful Provenance to Client]
-    TruthfulProv --> StreamFallback[Stream Fallback Content to User]
+    Deadline -- Timeout / Abort / 429 --> Fallback1
+    Fallback1 --> CB2{Gemini Circuit / Quota}
+    CB2 -- CLOSED (Healthy) --> StreamGemini[Stream Gemini Content to User]
+    CB2 -- OPEN / Deadline Exceeded --> Fallback2[Tertiary: Groq allam-2-7b]
+    Fallback2 --> StreamTertiary[Stream Tertiary Content to User]
 ```
 
 ---
@@ -26,12 +28,17 @@ The policy enforces an explicit quality floor (>= 7.5 / 10) and reliability thre
 
 | Provider | Model ID | Status | P50 TTFT | Reliability | Technical Quality | Role & Governance |
 | :--- | :--- | :---: | :---: | :---: | :---: | :--- |
-| **Groq** | `openai/gpt-oss-120b` | **ALLOWED** | 447 ms | 100% | 9.5 / 10 | **Primary Fast Model**: Superior coding, factual QA, and zero rate limits. |
-| **Groq** | `allam-2-7b` | **ALLOWED** | 240 ms | 100% | 7.2 / 10 | **Safe Fallback Model**: Blazing fast TTFT, zero empty responses, high availability. |
+| **Groq** | `openai/gpt-oss-120b` | **ALLOWED** | 447 ms | 100% | 9.5 / 10 | **Primary Fast Model**: Superior coding, factual QA, and high contextual precision. |
+| **Gemini** | `gemini-3.5-flash-lite` | **ALLOWED** | 493 ms | 100% | 9.8 / 10 | **Certified Secondary Fast Model**: Independent Google infrastructure quota, 440-650ms native streaming. |
+| **Groq** | `allam-2-7b` | **ALLOWED** | 240 ms | 100% | 7.2 / 10 | **Tertiary Intra-Groq Fallback**: Ultra-fast TTFT, zero empty responses, high fallback resilience. |
+| **Gemini** | `gemini-3.5-flash` | **STANDBY** | 1,942 ms | 100% | 9.7 / 10 | **Deprioritized for Fast**: Thinking tokens (~240 tokens) introduce ~1,900ms delay. |
+| **Gemini** | `gemini-3.8-flash` | **REJECTED** | N/A | 0.0% | 0.0 / 10 | **Blacklisted**: Upstream 503 high-demand capacity exhaustion. |
+| **Gemini** | `gemini-2.5-flash` | **REJECTED** | N/A | 0.0% | 0.0 / 10 | **Blacklisted**: Upstream 404 retired model. |
 | **Groq** | `qwen/qwen3.8-27b` | **REJECTED** | 133 ms | 56.3% | 8.5 / 10 | **Blacklisted**: Groq on-demand tier enforces a strict 1,000 OTPM quota, causing 429 rate limit outages. |
 | **Groq** | `openai/gpt-oss-20b` | **REJECTED** | 359 ms | 56.3% | 3.0 / 10 | **Blacklisted**: 43.7% empty responses observed on live Groq endpoint (silent failure bug). |
 | **Cerebras** | `llama3.1-8b` | **STANDBY** | 280 ms | Unconfigured | 8.0 / 10 | Configured in policy; activates automatically when `CEREBRAS_API_KEY` is provided. |
 | **NVIDIA** | `nvidia/nemotron-3-super-120b-a12b` | **EXCLUDED** | 3,100 ms | 100% | 9.8 / 10 | **Strictly Reserved for AIRA Deep**; never used as Fast fallback (Section 12). |
+
 
 ---
 
@@ -79,10 +86,10 @@ Fallback is never silent. When a fallback occurs, `ResilientModelAdapter` trigge
 {
   "requestedProvider": "groq",
   "requestedModel": "openai/gpt-oss-120b",
-  "executedProvider": "groq",
-  "executedModel": "allam-2-7b",
+  "executedProvider": "gemini",
+  "executedModel": "gemini-3.5-flash-lite",
   "fallbackOccurred": true,
-  "fallbackReason": "Primary groq:openai/gpt-oss-120b first-token deadline (2500ms) exceeded; fell back to groq:allam-2-7b",
+  "fallbackReason": "Primary groq:openai/gpt-oss-120b rate limit (429) / deadline (2500ms) exceeded; fell back to independent secondary gemini:gemini-3.5-flash-lite",
   "hedgedRequestUsed": false,
   "modelIdentityVerified": true,
   "executionStatus": "FALLBACK"

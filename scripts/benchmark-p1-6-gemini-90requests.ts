@@ -2,7 +2,7 @@ import { performance } from 'node:perf_hooks';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-const PREVIEW_URL = process.env.PREVIEW_URL || 'https://aira-ai-2026-7zak5wjti-rajpunkeshwarrajgautam-boops-projects.vercel.app';
+const PREVIEW_URL = process.env.PREVIEW_URL || 'https://aira-ai-2026-gfsapfpet-rajpunkeshwarrajgautam-boops-projects.vercel.app';
 
 interface RequestMetric {
   batch: string;
