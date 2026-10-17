@@ -21,7 +21,7 @@ async function testModelRouterFastPath() {
 
     const fastExecution = router.resolveExecution('aira-fast', 'ANSWER');
     assert.equal(fastExecution.provider, 'nvidia');
-    assert.equal(fastExecution.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct');
+    assert.equal(fastExecution.executedModel, 'nvidia/nemotron-3-super-120b-a12b');
     assert.ok(fastExecution.adapter instanceof OpenAIAdapter);
 
     // 2. Custom Fast Model via Env

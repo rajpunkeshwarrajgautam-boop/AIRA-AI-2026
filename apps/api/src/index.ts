@@ -11,7 +11,7 @@ import { BrainV2KnowledgeEngine, PrincipalScope } from '../../../packages/knowle
 import { McpHost } from '../../../packages/mcp/src/index.js';
 import { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
 import { AutomationEngine } from '../../../packages/automation/src/index.js';
-import { PostgresAgentRepository, PostgresRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
+import { PostgresAgentRepository, PostgresRunRepository, InMemoryRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
 import { PostgresAutomationRepository, PostgresAutomationRunRepository } from '../../../packages/automation/src/repositories.js';
 import {
   ConversationSearchRepository,
@@ -272,8 +272,9 @@ const toolCallRepo = new PostgresToolCallRepository();
 const toolGateway = new ToolGateway(toolCallRepo, approvalKernel, process.cwd());
 const knowledgeEngine = new BrainV2KnowledgeEngine();
 const mcpHost = new McpHost(toolGateway);
+const isDbConfigured = Boolean(process.env.DATABASE_URL?.trim());
 const agentRepo = new PostgresAgentRepository();
-const runRepo = new PostgresRunRepository();
+const runRepo = isDbConfigured ? new PostgresRunRepository() : new InMemoryRunRepository();
 const autoRepo = new PostgresAutomationRepository();
 const autoRunRepo = new PostgresAutomationRunRepository();
 const conversationSearchRepo = new ConversationSearchRepository();
@@ -297,7 +298,9 @@ const agentRuntime = new AgentRuntime(
 );
 const automationEngine = new AutomationEngine(agentRuntime, autoRepo, autoRunRepo);
 agentRuntime.setAutomationEngine(automationEngine);
-automationEngine.start();
+if (isDbConfigured) {
+  automationEngine.start();
+}
 
 // Recovery is deferred until the HTTP server is bound.
 
@@ -320,7 +323,9 @@ async function seedDefaultAgent() {
     } as AgentDefinition);
   }
 }
-seedDefaultAgent().catch(console.error);
+if (isDbConfigured) {
+  seedDefaultAgent().catch(console.error);
+}
 
 async function seedDefaultAutomation() {
   const existing = await autoRepo.listAutomations();
@@ -341,7 +346,9 @@ async function seedDefaultAutomation() {
     });
   }
 }
-seedDefaultAutomation().catch(console.error);
+if (isDbConfigured) {
+  seedDefaultAutomation().catch(console.error);
+}
 
 // -----------------------------------------------------------------------
 // MCP Servers (protected — requires ExecutionPrincipal)

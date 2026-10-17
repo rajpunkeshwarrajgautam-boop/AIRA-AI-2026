@@ -198,20 +198,16 @@ export function resolveOpenAIModel(model: ModelId | string): string {
 }
 
 export function resolveNvidiaModel(model: ModelId | string): string {
-  switch (model) {
-    case 'aira-fast':
-      return process.env.NVIDIA_FAST_MODEL || 'nvidia/llama-3.1-nemotron-70b-instruct';
-    case 'aira-deep':
-      return process.env.NVIDIA_DEEP_MODEL || 'nvidia/nemotron-3-super-120b-a12b';
-    case 'aira-pro':
-    case 'aira-auto':
-      return process.env.NVIDIA_DEFAULT_MODEL || 'nvidia/nemotron-3-super-120b-a12b';
-    default:
-      if (typeof model === 'string' && (model.startsWith('nvidia/') || model.startsWith('meta/') || model.startsWith('nv-'))) {
-        return model;
-      }
-      return 'nvidia/nemotron-3-super-120b-a12b';
+  if (process.env.NVIDIA_FAST_MODEL && model === 'aira-fast') {
+    return process.env.NVIDIA_FAST_MODEL;
   }
+  if (process.env.NVIDIA_DEEP_MODEL && model === 'aira-deep') {
+    return process.env.NVIDIA_DEEP_MODEL;
+  }
+  if (typeof model === 'string' && (model.startsWith('nvidia/') || model.startsWith('meta/') || model.startsWith('nv-'))) {
+    return model;
+  }
+  return process.env.NVIDIA_DEFAULT_MODEL || 'nvidia/nemotron-3-super-120b-a12b';
 }
 
 export class AnthropicAdapter implements ModelAdapter {
