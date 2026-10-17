@@ -110,6 +110,24 @@ export class LatencyAwareRoutingPolicy {
     return candidate.allowed;
   }
 
+  public resolveFastRoute(): FastExecutionPlan {
+    const configuredProviders: string[] = [];
+    if (process.env.GROQ_API_KEY) configuredProviders.push('groq');
+    if (process.env.CEREBRAS_API_KEY) configuredProviders.push('cerebras');
+    if (process.env.TOGETHER_API_KEY) configuredProviders.push('together');
+    if (process.env.FIREWORKS_API_KEY) configuredProviders.push('fireworks');
+    if (process.env.OPENAI_API_KEY) configuredProviders.push('openai');
+    if (process.env.NVIDIA_API_KEY) configuredProviders.push('nvidia');
+
+    return this.selectFastExecutionPlan({
+      configuredProviders,
+      preferredProvider: process.env.AIRA_FAST_PROVIDER,
+      preferredModel: process.env.AIRA_FAST_MODEL,
+      hasDedicatedNvidiaFastModel: Boolean(process.env.NVIDIA_FAST_MODEL),
+      nvidiaFastModel: process.env.NVIDIA_FAST_MODEL
+    });
+  }
+
   public selectFastExecutionPlan(options: SelectPlanOptions): FastExecutionPlan {
     const configured = options.configuredProviders.map(p => p.toLowerCase().trim());
     const eligibleCandidates: FastExecutionCandidate[] = [];
