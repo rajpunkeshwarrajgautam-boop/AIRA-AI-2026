@@ -280,7 +280,7 @@ async function executeSingleRun(
 }
 
 async function main() {
-  const previewUrl = process.env.PREVIEW_URL || 'https://aira-ai-2026-6fekp4vlw-rajpunkeshwarrajgautam-boops-projects.vercel.app';
+  const previewUrl = process.env.PREVIEW_URL || 'https://aira-ai-2026-p16df8dvh-rajpunkeshwarrajgautam-boops-projects.vercel.app';
   console.log('================================================================');
   console.log('AIRA AI 2026 — P1.6 PREVIEW MULTI-BATCH VARIANCE BENCHMARK');
   console.log(`Target Preview: ${previewUrl}`);
