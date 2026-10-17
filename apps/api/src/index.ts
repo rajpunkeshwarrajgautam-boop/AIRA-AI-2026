@@ -243,6 +243,9 @@ app.get('/api/health', (_req: Request, res: Response) => {
   });
 });
 
+// Instantiate ModelRouter early for health and diagnostics
+const modelRouter = new ModelRouter();
+
 app.get('/api/ready', (_req: Request, res: Response) => {
   if (appState === 'HEALTHY') {
     res.status(200).json({ status: 'READY', timestamp: Date.now() });
@@ -252,7 +255,19 @@ app.get('/api/ready', (_req: Request, res: Response) => {
 });
 
 app.get('/api/ready/providers', async (_req: Request, res: Response) => {
-  const result: Record<string, any> = {};
+  const result: Record<string, any> = {
+    supportedProviders: {
+      groq: { configured: Boolean(process.env.GROQ_API_KEY) },
+      nvidia: { configured: Boolean(process.env.NVIDIA_API_KEY), deepModel: 'nvidia/nemotron-3-super-120b-a12b' },
+      cerebras: { configured: Boolean(process.env.CEREBRAS_API_KEY) },
+      together: { configured: Boolean(process.env.TOGETHER_API_KEY) },
+      fireworks: { configured: Boolean(process.env.FIREWORKS_API_KEY) },
+      openai: { configured: Boolean(process.env.OPENAI_API_KEY) },
+      anthropic: { configured: Boolean(process.env.ANTHROPIC_API_KEY) }
+    },
+    fastRouting: modelRouter.routingPolicy.resolveFastRoute(),
+    circuitBreakers: modelRouter.healthTracker.getAllTelemetry()
+  };
   if (process.env.GROQ_API_KEY) {
     try {
       const groqKey = process.env.GROQ_API_KEY.trim().replace(/^["']|["']$/g, '');
@@ -391,7 +406,6 @@ app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
 app.use('/api', createPrincipalMiddleware());
 
 // Initialize Core Subsystems
-const modelRouter = new ModelRouter();
 app.use('/api/builder', createBuilderRoutes(modelRouter));
 const toolRegistry = new ToolRegistry(process.cwd());
 const approvalKernel = new ApprovalKernel(new PostgresApprovalRepository(), new PostgresSessionGrantRepository());

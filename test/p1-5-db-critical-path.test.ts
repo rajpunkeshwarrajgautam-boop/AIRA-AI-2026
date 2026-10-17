@@ -108,13 +108,24 @@ async function runTests() {
   );
   const knowledgeEngine = new BrainV2KnowledgeEngine();
 
+  const mockWorkflowRepo = {
+    saveWorkflowRun: async () => {},
+    getWorkflowRun: async () => undefined,
+    getWorkflowRunByRunId: async () => undefined,
+    updateWorkflowRun: async () => {},
+    listWorkflowRuns: async () => []
+  } as any;
+
   const runtime = new AgentRuntime(
     modelRouter,
     toolRegistry,
     approvalKernel,
     knowledgeEngine,
     repo,
-    process.cwd()
+    process.cwd(),
+    undefined,
+    undefined,
+    mockWorkflowRepo
   );
 
   const principal: ExecutionPrincipal = {
@@ -219,7 +230,10 @@ async function runTests() {
     approvalKernel,
     knowledgeEngine,
     repo,
-    process.cwd()
+    process.cwd(),
+    undefined,
+    undefined,
+    mockWorkflowRepo
   );
 
   const runFromInstanceB = await runtimeInstanceB.getRun(run.id);

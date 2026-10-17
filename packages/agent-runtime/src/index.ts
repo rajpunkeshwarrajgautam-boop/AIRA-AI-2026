@@ -1229,27 +1229,43 @@ CAPABILITY & IDENTITY INVARIANTS:
       };
       let completionResult: ModelCompletionResult;
       try {
-        completionResult = await adapter.stream(messages, run.modelPolicy, async (delta) => {
-          if (delta.thinking) {
-            run.thinking += delta.thinking;
-            pendingThinking += delta.thinking;
-            pendingDeltas++;
-            broadcastDelta('thinking.delta', delta.thinking);
-          }
-          if (delta.text) {
-            if (guardedSearchSynthesis) {
-              researchDraft += delta.text;
-            } else {
-              run.content += delta.text;
-              pendingContent += delta.text;
+        completionResult = await adapter.stream(
+          messages,
+          run.modelPolicy,
+          async (delta) => {
+            if (delta.thinking) {
+              run.thinking += delta.thinking;
+              pendingThinking += delta.thinking;
               pendingDeltas++;
-              broadcastDelta('content.delta', delta.text);
+              broadcastDelta('thinking.delta', delta.thinking);
+            }
+            if (delta.text) {
+              if (guardedSearchSynthesis) {
+                researchDraft += delta.text;
+              } else {
+                run.content += delta.text;
+                pendingContent += delta.text;
+                pendingDeltas++;
+                broadcastDelta('content.delta', delta.text);
+              }
+            }
+            if (pendingDeltas >= 20 || (pendingDeltas && Date.now() - lastPersistedAt >= 1000)) {
+              await flushDeltas();
+            }
+          },
+          {
+            onProvenance: (provUpdate: any) => {
+              if (run.provenance) {
+                if (provUpdate.executedProvider) run.provenance.provider = provUpdate.executedProvider;
+                if (provUpdate.executedModel) run.provenance.executedModel = provUpdate.executedModel;
+                if (provUpdate.fallbackOccurred !== undefined) run.provenance.fallbackOccurred = provUpdate.fallbackOccurred;
+                if (provUpdate.fallbackReason) run.provenance.fallbackReason = provUpdate.fallbackReason;
+                run.provenance.timestamp = Date.now();
+                this.emitRunEvent(runId, 'model.provenance', run.provenance).catch(console.error);
+              }
             }
           }
-          if (pendingDeltas >= 20 || (pendingDeltas && Date.now() - lastPersistedAt >= 1000)) {
-            await flushDeltas();
-          }
-        });
+        );
         await flushDeltas();
       } catch (streamErr: any) {
         // Best-effort checkpoint; preserve the original inference/DB exception.
