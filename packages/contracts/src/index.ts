@@ -123,6 +123,12 @@ export const ModelIdSchema = z.enum([
   'nvidia/mistral-nemo-minitron-8b-8k-instruct',
   'nvidia/llama-3.1-nemotron-51b-instruct',
   'nvidia/nemotron-nano-3-30b-a3b',
+  'llama-3.1-8b-instant',
+  'llama-3.3-70b-versatile',
+  'llama3.1-8b',
+  'llama3.1-70b',
+  'meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo',
+  'accounts/fireworks/models/llama-v3p1-8b-instruct',
   'mock-deterministic'
 ]);
 export type ModelId = z.infer<typeof ModelIdSchema>;
@@ -409,7 +415,9 @@ export type Artifact = z.infer<typeof ArtifactSchema>;
 export const ModelProvenanceSchema = z.object({
   requestedModel: z.string(),
   resolvedPolicyModel: z.string(),
-  provider: z.enum(['nvidia', 'anthropic', 'openai', 'mock', 'unknown']),
+  provider: z.enum(['nvidia', 'anthropic', 'openai', 'groq', 'cerebras', 'together', 'fireworks', 'mock', 'unknown']),
+  requestedProvider: z.string().optional(),
+  executedProvider: z.string().optional(),
   executedModel: z.string(),
   plannedModel: z.string().optional(),
   outboundModel: z.string().optional(),

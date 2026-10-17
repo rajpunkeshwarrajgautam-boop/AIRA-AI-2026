@@ -53,13 +53,25 @@ export function isModelMatch(outboundModel?: string, upstreamResponseModel?: str
   return false;
 }
 
+export type SupportedProvider =
+  | 'nvidia'
+  | 'anthropic'
+  | 'openai'
+  | 'groq'
+  | 'cerebras'
+  | 'together'
+  | 'fireworks'
+  | 'mock'
+  | 'unknown';
+
 export interface ModelAdapter {
-  provider: 'nvidia' | 'anthropic' | 'openai' | 'mock' | 'unknown';
+  provider: SupportedProvider;
   complete(messages: ChatMessageInput[], policy: ModelPolicy, signal?: AbortSignal): Promise<ModelCompletionResult>;
   stream(
     messages: ChatMessageInput[],
     policy: ModelPolicy,
-    onChunk: (delta: { text?: string; thinking?: string }) => void
+    onChunk: (delta: { text?: string; thinking?: string }) => void,
+    options?: { firstTokenTimeoutMs?: number; signal?: AbortSignal }
   ): Promise<ModelCompletionResult>;
 }
 
@@ -138,9 +150,10 @@ export class DeterministicMockAdapter implements ModelAdapter {
   async stream(
     messages: ChatMessageInput[],
     policy: ModelPolicy,
-    onChunk: (delta: { text?: string; thinking?: string }) => void
+    onChunk: (delta: { text?: string; thinking?: string }) => void,
+    options?: { firstTokenTimeoutMs?: number; signal?: AbortSignal }
   ): Promise<ModelCompletionResult> {
-    const result = await this.complete(messages, policy);
+    const result = await this.complete(messages, policy, options?.signal);
     if (result.thinking) {
       onChunk({ thinking: result.thinking });
     }
@@ -279,10 +292,11 @@ export class AnthropicAdapter implements ModelAdapter {
   async stream(
     messages: ChatMessageInput[],
     policy: ModelPolicy,
-    onChunk: (delta: { text?: string; thinking?: string }) => void
+    onChunk: (delta: { text?: string; thinking?: string }) => void,
+    options?: { firstTokenTimeoutMs?: number; signal?: AbortSignal }
   ): Promise<ModelCompletionResult> {
     // Falls back to complete then emits chunks if SSE stream not directly hooked
-    const res = await this.complete(messages, policy);
+    const res = await this.complete(messages, policy, options?.signal);
     if (res.thinking) onChunk({ thinking: res.thinking });
     if (res.text) onChunk({ text: res.text });
     return res;
@@ -290,20 +304,43 @@ export class AnthropicAdapter implements ModelAdapter {
 }
 
 export class OpenAIAdapter implements ModelAdapter {
-  readonly provider: 'openai' | 'nvidia';
+  readonly provider: SupportedProvider;
   private apiKey: string;
   private baseUrl: string;
-  private airaModel: ModelId;
+  private airaModel: ModelId | string;
 
   constructor(
     apiKey?: string,
     baseUrl = 'https://api.openai.com/v1',
-    airaModel: ModelId = 'gpt-4o'
+    airaModel: ModelId | string = 'gpt-4o',
+    provider?: SupportedProvider
   ) {
-    this.apiKey = apiKey || process.env.OPENAI_API_KEY || '';
     this.baseUrl = baseUrl;
     this.airaModel = airaModel;
-    this.provider = baseUrl.includes('integrate.api.nvidia.com') ? 'nvidia' : 'openai';
+    if (provider) {
+      this.provider = provider;
+    } else if (baseUrl.includes('integrate.api.nvidia.com')) {
+      this.provider = 'nvidia';
+    } else if (baseUrl.includes('api.groq.com')) {
+      this.provider = 'groq';
+    } else if (baseUrl.includes('api.cerebras.ai')) {
+      this.provider = 'cerebras';
+    } else if (baseUrl.includes('api.together.xyz')) {
+      this.provider = 'together';
+    } else if (baseUrl.includes('api.fireworks.ai')) {
+      this.provider = 'fireworks';
+    } else {
+      this.provider = 'openai';
+    }
+
+    this.apiKey = apiKey || (
+      this.provider === 'groq' ? process.env.GROQ_API_KEY :
+      this.provider === 'cerebras' ? process.env.CEREBRAS_API_KEY :
+      this.provider === 'together' ? process.env.TOGETHER_API_KEY :
+      this.provider === 'fireworks' ? process.env.FIREWORKS_API_KEY :
+      this.provider === 'nvidia' ? process.env.NVIDIA_API_KEY :
+      process.env.OPENAI_API_KEY
+    ) || '';
   }
 
   toJSON() {
@@ -361,7 +398,7 @@ export class OpenAIAdapter implements ModelAdapter {
               'Select a supported model in Aira.'
             );
           }
-          const provider = this.baseUrl.includes('integrate.api.nvidia.com') ? 'NVIDIA NIM' : 'OpenAI';
+          const provider = this.provider === 'nvidia' ? 'NVIDIA NIM' : this.provider.toUpperCase();
           throw new Error(`${provider} API error (${response.status}): ${errText}`);
         }
 
@@ -395,9 +432,10 @@ export class OpenAIAdapter implements ModelAdapter {
   async stream(
     messages: ChatMessageInput[],
     policy: ModelPolicy,
-    onChunk: (delta: { text?: string; thinking?: string }) => void
+    onChunk: (delta: { text?: string; thinking?: string }) => void,
+    options?: { firstTokenTimeoutMs?: number; signal?: AbortSignal }
   ): Promise<ModelCompletionResult> {
-    if (!this.apiKey) throw new Error('Model provider API key is not configured.');
+    if (!this.apiKey) throw new Error(`${this.provider.toUpperCase()} API key is not configured.`);
     const outboundModel = policy.model.startsWith('aira-')
       ? (this.baseUrl.includes('api.openai.com')
           ? resolveOpenAIModel(policy.model)
@@ -406,97 +444,146 @@ export class OpenAIAdapter implements ModelAdapter {
             : this.airaModel)
       : policy.model;
 
-    // Stream the upstream response rather than waiting for a full completion before
-    // forwarding one giant delta. This also exposes the actual upstream model ID.
-    const response = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-        Accept: 'text/event-stream'
-      },
-      body: JSON.stringify({
-        model: outboundModel,
-        messages: messages.map(m => m.role === 'tool'
-          ? { role: 'tool', content: m.content, tool_call_id: m.toolCallId || 'call_default' }
-          : { role: m.role, content: m.content }),
-        max_tokens: policy.maxTokens,
-        temperature: policy.temperature,
-        stream: true,
-        stream_options: { include_usage: true }
-      })
-    });
-
-    if (!response.ok) {
-      // Upstream error bodies can contain submitted content and must not be
-      // reflected to clients or application logs.
-      await response.body?.cancel().catch(() => undefined);
-      throw new Error(`${this.provider} streaming request failed (HTTP ${response.status})`);
+    // First-token deadline timer (commercially reasonable deadline: e.g. 3000ms for fast normal chat)
+    const firstTokenTimeoutMs = options?.firstTokenTimeoutMs ?? (policy.model === 'aira-fast' ? 3000 : 0);
+    const abortController = new AbortController();
+    if (options?.signal) {
+      options.signal.addEventListener('abort', () => abortController.abort(options.signal?.reason), { once: true });
     }
-    if (!response.body) throw new Error('Provider returned an empty streaming response body.');
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let output = '';
-    let upstreamModel: string | undefined;
-    let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
-    let finished = false;
+    let firstTokenTimer: NodeJS.Timeout | null = null;
+    let receivedFirstToken = false;
 
-    const handleFrame = (frame: string) => {
-      const dataString = frame.split(/\r?\n/).filter(line => line.startsWith('data:'))
-        .map(line => line.slice(5).trimStart()).join('\n');
-      if (!dataString) return;
-      if (dataString === '[DONE]') { finished = true; return; }
-      const event = JSON.parse(dataString);
-      if (event.error) throw new Error('Provider reported a streaming inference error.');
-      if (typeof event.model === 'string' && event.model.trim()) upstreamModel = event.model.trim();
-      const delta = event.choices?.[0]?.delta;
-      if (typeof delta?.content === 'string' && delta.content.length) {
-        output += delta.content;
-        onChunk({ text: delta.content });
-      }
-      if (typeof delta?.reasoning_content === 'string' && delta.reasoning_content.length) {
-        onChunk({ thinking: delta.reasoning_content });
-      }
-      if (event.usage) usage = {
-        promptTokens: event.usage.prompt_tokens || 0,
-        completionTokens: event.usage.completion_tokens || 0,
-        totalTokens: event.usage.total_tokens || 0
-      };
-    };
+    if (firstTokenTimeoutMs > 0) {
+      firstTokenTimer = setTimeout(() => {
+        if (!receivedFirstToken) {
+          abortController.abort(
+            new Error(`FIRST_TOKEN_TIMEOUT: Fast route first-token deadline (${firstTokenTimeoutMs}ms) exceeded for provider ${this.provider}`)
+          );
+        }
+      }, firstTokenTimeoutMs);
+    }
 
     try {
-      while (!finished) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        // Normalize line endings only after bytes are accumulated: a CRLF pair
-        // can itself be split between two network reads.
-        buffer += decoder.decode(value, { stream: true });
-        buffer = buffer.replace(/\r\n/g, '\n');
-        let separator: number;
-        while ((separator = buffer.indexOf('\n\n')) !== -1) {
-          const frame = buffer.slice(0, separator);
-          buffer = buffer.slice(separator + 2);
-          handleFrame(frame);
-          if (finished) break;
-        }
+      // Stream the upstream response rather than waiting for a full completion before
+      // forwarding one giant delta. This also exposes the actual upstream model ID.
+      const response = await fetch(`${this.baseUrl}/chat/completions`, {
+        signal: abortController.signal,
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream'
+        },
+        body: JSON.stringify({
+          model: outboundModel,
+          messages: messages.map(m => m.role === 'tool'
+            ? { role: 'tool', content: m.content, tool_call_id: m.toolCallId || 'call_default' }
+            : { role: m.role, content: m.content }),
+          max_tokens: policy.maxTokens,
+          temperature: policy.temperature,
+          stream: true,
+          stream_options: { include_usage: true }
+        })
+      });
+
+      if (!response.ok) {
+        // Upstream error bodies can contain submitted content and must not be
+        // reflected to clients or application logs.
+        await response.body?.cancel().catch(() => undefined);
+        throw new Error(`${this.provider} streaming request failed (HTTP ${response.status})`);
       }
-      buffer += decoder.decode();
-      if (!finished && buffer.trim()) handleFrame(buffer);
+      if (!response.body) throw new Error('Provider returned an empty streaming response body.');
+
+      const reader = response.body.getReader();
+      const onAbort = () => {
+        reader.cancel(abortController.signal.reason).catch(() => undefined);
+      };
+      if (abortController.signal.aborted) {
+        onAbort();
+      } else {
+        abortController.signal.addEventListener('abort', onAbort, { once: true });
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let output = '';
+      let upstreamModel: string | undefined;
+      let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+      let finished = false;
+
+      const handleFrame = (frame: string) => {
+        const dataString = frame.split(/\r?\n/).filter(line => line.startsWith('data:'))
+          .map(line => line.slice(5).trimStart()).join('\n');
+        if (!dataString) return;
+        if (dataString === '[DONE]') { finished = true; return; }
+        const event = JSON.parse(dataString);
+        if (event.error) throw new Error('Provider reported a streaming inference error.');
+        if (typeof event.model === 'string' && event.model.trim()) upstreamModel = event.model.trim();
+        const delta = event.choices?.[0]?.delta;
+        if (typeof delta?.content === 'string' && delta.content.length) {
+          if (!receivedFirstToken) {
+            receivedFirstToken = true;
+            if (firstTokenTimer) {
+              clearTimeout(firstTokenTimer);
+              firstTokenTimer = null;
+            }
+          }
+          output += delta.content;
+          onChunk({ text: delta.content });
+        }
+        if (typeof delta?.reasoning_content === 'string' && delta.reasoning_content.length) {
+          onChunk({ thinking: delta.reasoning_content });
+        }
+        if (event.usage) usage = {
+          promptTokens: event.usage.prompt_tokens || 0,
+          completionTokens: event.usage.completion_tokens || 0,
+          totalTokens: event.usage.total_tokens || 0
+        };
+      };
+
+      try {
+        while (!finished) {
+          abortController.signal.throwIfAborted();
+          const { value, done } = await reader.read();
+          if (done) break;
+          // Normalize line endings only after bytes are accumulated: a CRLF pair
+          // can itself be split between two network reads.
+          buffer += decoder.decode(value, { stream: true });
+          buffer = buffer.replace(/\r\n/g, '\n');
+          let separator: number;
+          while ((separator = buffer.indexOf('\n\n')) !== -1) {
+            const frame = buffer.slice(0, separator);
+            buffer = buffer.slice(separator + 2);
+            handleFrame(frame);
+            if (finished) break;
+          }
+        }
+        abortController.signal.throwIfAborted();
+        buffer += decoder.decode();
+        if (!finished && buffer.trim()) handleFrame(buffer);
+      } finally {
+        abortController.signal.removeEventListener('abort', onAbort);
+        reader.releaseLock();
+      }
+      if (!finished) throw new Error('Provider stream closed before its terminal event.');
+      if (!output.trim()) throw new Error('Provider completed without generating visible answer text.');
+      return { text: output, usage, outboundModel, model: upstreamModel };
     } finally {
-      reader.releaseLock();
+      if (firstTokenTimer) {
+        clearTimeout(firstTokenTimer);
+        firstTokenTimer = null;
+      }
     }
-    if (!finished) throw new Error('Provider stream closed before its terminal event.');
-    if (!output.trim()) throw new Error('Provider completed without generating visible answer text.');
-    return { text: output, usage, outboundModel, model: upstreamModel };
   }
 }
 
 export interface ResolvedExecution {
   policy: ModelPolicy;
   adapter: ModelAdapter;
-  provider: 'nvidia' | 'anthropic' | 'openai' | 'mock' | 'unknown';
+  provider: SupportedProvider;
+  requestedProvider?: string;
+  executedProvider?: string;
   executedModel: string;
   plannedModel: string;
   fallbackOccurred: boolean;
@@ -514,6 +601,50 @@ export class ModelRouter {
     if (process.env.NODE_ENV !== 'production' || process.env.AIRA_ALLOW_MOCK === 'true') {
       this.adapters.set('mock', new DeterministicMockAdapter());
     }
+    if (process.env.GROQ_API_KEY) {
+      this.adapters.set(
+        'groq',
+        new OpenAIAdapter(
+          process.env.GROQ_API_KEY,
+          'https://api.groq.com/openai/v1',
+          process.env.AIRA_FAST_MODEL || 'llama-3.1-8b-instant',
+          'groq'
+        )
+      );
+    }
+    if (process.env.CEREBRAS_API_KEY) {
+      this.adapters.set(
+        'cerebras',
+        new OpenAIAdapter(
+          process.env.CEREBRAS_API_KEY,
+          'https://api.cerebras.ai/v1',
+          process.env.AIRA_FAST_MODEL || 'llama3.1-8b',
+          'cerebras'
+        )
+      );
+    }
+    if (process.env.TOGETHER_API_KEY) {
+      this.adapters.set(
+        'together',
+        new OpenAIAdapter(
+          process.env.TOGETHER_API_KEY,
+          'https://api.together.xyz/v1',
+          process.env.AIRA_FAST_MODEL || 'meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo',
+          'together'
+        )
+      );
+    }
+    if (process.env.FIREWORKS_API_KEY) {
+      this.adapters.set(
+        'fireworks',
+        new OpenAIAdapter(
+          process.env.FIREWORKS_API_KEY,
+          'https://api.fireworks.ai/inference/v1',
+          process.env.AIRA_FAST_MODEL || 'accounts/fireworks/models/llama-v3p1-8b-instruct',
+          'fireworks'
+        )
+      );
+    }
     if (process.env.ANTHROPIC_API_KEY) {
       this.adapters.set('anthropic', new AnthropicAdapter());
     }
@@ -526,7 +657,8 @@ export class ModelRouter {
         new OpenAIAdapter(
           process.env.NVIDIA_API_KEY,
           'https://integrate.api.nvidia.com/v1',
-          'nvidia/nemotron-3-super-120b-a12b'
+          'nvidia/nemotron-3-super-120b-a12b',
+          'nvidia'
         )
       );
     }
@@ -597,6 +729,8 @@ export class ModelRouter {
         policy,
         adapter: mock,
         provider: 'mock',
+        requestedProvider: 'mock',
+        executedProvider: 'mock',
         executedModel: 'mock-deterministic',
         plannedModel: 'mock-deterministic',
         fallbackOccurred: false,
@@ -605,12 +739,37 @@ export class ModelRouter {
     }
 
     if (model.startsWith('aira-')) {
-      const providerPreference: Array<'openai' | 'nvidia' | 'anthropic'> = model === 'aira-fast'
-        ? (process.env.NVIDIA_FAST_MODEL ? ['nvidia', 'openai', 'anthropic'] : ['openai', 'nvidia', 'anthropic'])
-        : ['anthropic', 'nvidia', 'openai'];
+      let providerPreference: Array<SupportedProvider>;
+
+      if (model === 'aira-fast') {
+        const configuredFastProvider = (process.env.AIRA_FAST_PROVIDER || '').toLowerCase().trim() as SupportedProvider;
+        const validFastProviders: SupportedProvider[] = ['groq', 'cerebras', 'openai', 'together', 'fireworks', 'nvidia'];
+
+        if (configuredFastProvider && validFastProviders.includes(configuredFastProvider)) {
+          providerPreference = [
+            configuredFastProvider,
+            'groq',
+            'cerebras',
+            'openai',
+            'together',
+            'fireworks',
+            'nvidia',
+            'anthropic'
+          ];
+        } else if (process.env.NVIDIA_FAST_MODEL) {
+          providerPreference = ['nvidia', 'groq', 'cerebras', 'openai', 'together', 'fireworks', 'anthropic'];
+        } else {
+          providerPreference = ['groq', 'cerebras', 'openai', 'together', 'fireworks', 'nvidia', 'anthropic'];
+        }
+      } else if (model === 'aira-deep') {
+        // Deep reasoning MUST remain on high-capacity reasoning models (Nemotron 120B or Claude Opus/Sonnet)
+        providerPreference = ['nvidia', 'anthropic', 'openai'];
+      } else {
+        providerPreference = ['anthropic', 'nvidia', 'openai'];
+      }
 
       const preferredProvider = providerPreference[0];
-      let selectedProvider: 'openai' | 'nvidia' | 'anthropic' | 'mock' | null = null;
+      let selectedProvider: SupportedProvider | null = null;
       let selectedAdapter: ModelAdapter | null = null;
 
       for (const prov of providerPreference) {
@@ -630,42 +789,50 @@ export class ModelRouter {
       if (!selectedAdapter || !selectedProvider) {
         throw new Error(
           `CONFIGURATION_ERROR: No production model provider is configured for Aira mode "${model}". ` +
-          'Configure NVIDIA_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY.'
+          'Configure GROQ_API_KEY, OPENAI_API_KEY, NVIDIA_API_KEY, or ANTHROPIC_API_KEY.'
         );
       }
 
       const fallbackOccurred = selectedProvider !== preferredProvider;
       let fallbackReason: string | undefined;
       if (fallbackOccurred) {
-        const preferredName = preferredProvider === 'anthropic' ? 'Anthropic' : preferredProvider === 'nvidia' ? 'NVIDIA' : 'OpenAI';
-        const selectedName = selectedProvider === 'nvidia' ? 'NVIDIA NIM' : selectedProvider === 'anthropic' ? 'Anthropic' : selectedProvider === 'openai' ? 'OpenAI' : 'Mock';
-        fallbackReason = `Preferred provider (${preferredName}) not configured; routed to ${selectedName}`;
+        const formatName = (p: string) => {
+          if (p === 'nvidia') return 'NVIDIA NIM';
+          if (p === 'groq') return 'Groq';
+          if (p === 'cerebras') return 'Cerebras';
+          if (p === 'together') return 'Together AI';
+          if (p === 'fireworks') return 'Fireworks AI';
+          if (p === 'anthropic') return 'Anthropic';
+          if (p === 'openai') return 'OpenAI';
+          return p;
+        };
+        fallbackReason = `Preferred provider (${formatName(preferredProvider)}) not configured; routed to ${formatName(selectedProvider)}`;
       }
 
       let executedModel: string;
       let modelFallback = false;
       let modelFallbackReason: string | undefined;
 
-      if (selectedProvider === 'nvidia') {
+      if (selectedProvider === 'groq') {
+        executedModel = process.env.AIRA_FAST_MODEL || 'llama-3.1-8b-instant';
+      } else if (selectedProvider === 'cerebras') {
+        executedModel = process.env.AIRA_FAST_MODEL || 'llama3.1-8b';
+      } else if (selectedProvider === 'together') {
+        executedModel = process.env.AIRA_FAST_MODEL || 'meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo';
+      } else if (selectedProvider === 'fireworks') {
+        executedModel = process.env.AIRA_FAST_MODEL || 'accounts/fireworks/models/llama-v3p1-8b-instruct';
+      } else if (selectedProvider === 'openai') {
+        executedModel = model === 'aira-fast'
+          ? (process.env.AIRA_FAST_MODEL || 'gpt-4o-mini')
+          : 'gpt-4o';
+      } else if (selectedProvider === 'nvidia') {
         executedModel = resolveNvidiaModel(model);
         if (model === 'aira-fast' && !process.env.NVIDIA_FAST_MODEL && executedModel === 'nvidia/nemotron-3-super-120b-a12b') {
           modelFallback = true;
-          modelFallbackReason = 'NVIDIA_FAST_MODEL not configured; fell back to default 120B reasoning model';
+          modelFallbackReason = 'No dedicated fast provider configured; fell back to NVIDIA Nemotron 120B reasoning model';
         }
       } else if (selectedProvider === 'anthropic') {
-        if (requestedModelId === 'claude-3-5-sonnet') {
-          executedModel = 'claude-3-5-sonnet';
-        } else if (requestedModelId === 'claude-3-5-haiku') {
-          executedModel = 'claude-3-5-haiku';
-        } else if (requestedModelId === 'claude-3-opus') {
-          executedModel = 'claude-3-opus';
-        } else if (requestedModelId === 'claude-3-7-sonnet') {
-          executedModel = 'claude-3-7-sonnet';
-        } else {
-          executedModel = resolveAnthropicModel(model);
-        }
-      } else if (selectedProvider === 'openai') {
-        executedModel = model === 'aira-fast' ? 'gpt-4o-mini' : 'gpt-4o';
+        executedModel = resolveAnthropicModel(model);
       } else {
         executedModel = model;
       }
@@ -684,6 +851,8 @@ export class ModelRouter {
         policy,
         adapter: selectedAdapter,
         provider: selectedProvider,
+        requestedProvider: preferredProvider,
+        executedProvider: selectedProvider,
         executedModel,
         plannedModel: executedModel,
         fallbackOccurred: combinedFallback,
@@ -699,6 +868,8 @@ export class ModelRouter {
           policy,
           adapter: this.adapters.get('anthropic')!,
           provider: 'anthropic',
+          requestedProvider: 'anthropic',
+          executedProvider: 'anthropic',
           executedModel: planned,
           plannedModel: planned,
           fallbackOccurred: false,
@@ -717,6 +888,8 @@ export class ModelRouter {
           policy,
           adapter: this.adapters.get('openai')!,
           provider: 'openai',
+          requestedProvider: 'openai',
+          executedProvider: 'openai',
           executedModel: model,
           plannedModel: model,
           fallbackOccurred: false,
@@ -729,6 +902,54 @@ export class ModelRouter {
       );
     }
 
+    if (model.startsWith('llama-3.1-') || model.startsWith('llama-3.3-')) {
+      if (this.adapters.has('groq')) {
+        return {
+          policy,
+          adapter: this.adapters.get('groq')!,
+          provider: 'groq',
+          requestedProvider: 'groq',
+          executedProvider: 'groq',
+          executedModel: model,
+          plannedModel: model,
+          fallbackOccurred: false,
+          verified: true
+        };
+      }
+    }
+
+    if (model.startsWith('llama3.1-')) {
+      if (this.adapters.has('cerebras')) {
+        return {
+          policy,
+          adapter: this.adapters.get('cerebras')!,
+          provider: 'cerebras',
+          requestedProvider: 'cerebras',
+          executedProvider: 'cerebras',
+          executedModel: model,
+          plannedModel: model,
+          fallbackOccurred: false,
+          verified: true
+        };
+      }
+    }
+
+    if (model.startsWith('accounts/fireworks')) {
+      if (this.adapters.has('fireworks')) {
+        return {
+          policy,
+          adapter: this.adapters.get('fireworks')!,
+          provider: 'fireworks',
+          requestedProvider: 'fireworks',
+          executedProvider: 'fireworks',
+          executedModel: model,
+          plannedModel: model,
+          fallbackOccurred: false,
+          verified: true
+        };
+      }
+    }
+
     if (model.startsWith('meta/') || model.startsWith('nvidia/') || model.startsWith('nv-')) {
       if (this.adapters.has('nvidia')) {
         const isLegacyLlama = requestedModelId === 'meta/llama-3.1-405b-instruct';
@@ -737,6 +958,8 @@ export class ModelRouter {
           policy,
           adapter: this.adapters.get('nvidia')!,
           provider: 'nvidia',
+          requestedProvider: 'nvidia',
+          executedProvider: 'nvidia',
           executedModel: targetModel,
           plannedModel: targetModel,
           fallbackOccurred: isLegacyLlama,

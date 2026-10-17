@@ -1,0 +1,84 @@
+{
+  "timestamp": "2026-10-17T06:24:00.000Z",
+  "phase": "P1.3 Fast Provider Enablement & Multi-Provider Routing",
+  "pr": 83,
+  "headSha": "31907b032bd94999d9d0e80641323ed466f093d0",
+  "verdict": "P1 FAST PROVIDER BLOCKED — HUMAN API CREDENTIAL REQUIRED",
+  "providersEvaluated": [
+    {
+      "provider": "groq",
+      "endpoint": "https://api.groq.com/openai/v1",
+      "recommendedModel": "llama-3.1-8b-instant",
+      "expectedP50LatencyMs": "<500",
+      "credentialStatus": "UNCONFIGURED_IN_PREVIEW",
+      "credentialEnvVar": "GROQ_API_KEY"
+    },
+    {
+      "provider": "cerebras",
+      "endpoint": "https://api.cerebras.ai/v1",
+      "recommendedModel": "llama3.1-8b",
+      "expectedP50LatencyMs": "<500",
+      "credentialStatus": "UNCONFIGURED_IN_PREVIEW",
+      "credentialEnvVar": "CEREBRAS_API_KEY"
+    },
+    {
+      "provider": "openai",
+      "endpoint": "https://api.openai.com/v1",
+      "recommendedModel": "gpt-4o-mini",
+      "expectedP50LatencyMs": "600-900",
+      "credentialStatus": "UNCONFIGURED_IN_PREVIEW",
+      "credentialEnvVar": "OPENAI_API_KEY"
+    },
+    {
+      "provider": "together",
+      "endpoint": "https://api.together.xyz/v1",
+      "recommendedModel": "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+      "expectedP50LatencyMs": "700-1100",
+      "credentialStatus": "UNCONFIGURED_IN_PREVIEW",
+      "credentialEnvVar": "TOGETHER_API_KEY"
+    },
+    {
+      "provider": "fireworks",
+      "endpoint": "https://api.fireworks.ai/inference/v1",
+      "recommendedModel": "accounts/fireworks/models/llama-v3p1-8b-instruct",
+      "expectedP50LatencyMs": "600-1000",
+      "credentialStatus": "UNCONFIGURED_IN_PREVIEW",
+      "credentialEnvVar": "FIREWORKS_API_KEY"
+    },
+    {
+      "provider": "nvidia",
+      "endpoint": "https://integrate.api.nvidia.com/v1",
+      "recommendedModel": "nvidia/nemotron-3-super-120b-a12b",
+      "expectedP50LatencyMs": "2456",
+      "credentialStatus": "CONFIGURED_BUT_BLOCKED_NO_FAST_MODEL",
+      "credentialEnvVar": "NVIDIA_API_KEY",
+      "note": "Account IWp0S44IxqoKxlASDHiRhMsA1f2Cif8UgbEq19XdhYQ only entitled for 120B reasoning model; 5 smaller models return 404"
+    }
+  ],
+  "controlModelMetrics": {
+    "provider": "nvidia",
+    "model": "nvidia/nemotron-3-super-120b-a12b",
+    "p50BrowserTTFTMs": 2456,
+    "p95BrowserTTFTMs": 9121,
+    "maxBrowserTTFTMs": 16402,
+    "qualityScore": 8.5,
+    "deepModelPreserved": true,
+    "researchRoutePreserved": true,
+    "realStreamingVerified": true,
+    "fakeStreamingUsed": false
+  },
+  "requiredConfiguration": {
+    "recommendedProvider": "groq",
+    "requiredSecret": "GROQ_API_KEY",
+    "optionalVariables": {
+      "AIRA_FAST_PROVIDER": "groq",
+      "AIRA_FAST_MODEL": "llama-3.1-8b-instant"
+    },
+    "alternativeProvider": "openai",
+    "alternativeSecret": "OPENAI_API_KEY",
+    "alternativeVariables": {
+      "AIRA_FAST_PROVIDER": "openai",
+      "AIRA_FAST_MODEL": "gpt-4o-mini"
+    }
+  }
+}
