@@ -452,6 +452,20 @@ Respond with valid JSON only:
       };
     }
 
+    const isDirectCodingOrMath = (
+      /^(write|generate|create|provide|implement|show|give\s+me|compute|calculate)\s+(a\s+|an\s+)?(python|typescript|javascript|code|function|regex|query|sql|script|sum|formula|example|sample|table|comparison|clean|generic|robust)\b/i.test(promptLower) ||
+      /\b(using\s+(kadane|algorithm|formula|b-tree|index))\b/i.test(promptLower)
+    ) && !/\b(execute|run\s+command|system\s+shell|tool\s+call)\b/i.test(promptLower);
+    if (isDirectCodingOrMath) {
+      return {
+        primaryIntent: 'ANSWER',
+        secondaryIntents: [],
+        confidence: 0.96,
+        reasoningStrategy: 'FAST_DIRECT',
+        isFreshnessRequired: false
+      };
+    }
+
     const isMarkdownFormatting = /\bformat\s+(it|the\s+output|this)\s+as\s+(a\s+)?(markdown\s+)?table\b/i.test(promptLower);
     if (isMarkdownFormatting) {
       return {

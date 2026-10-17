@@ -253,7 +253,7 @@ export class ServerIntentRouter {
       /\b(open\s+the\s+website|open\s+the\s+(aira\s+)?github\s+repository|latest\s+commit|git\s+status|git\s+diff|git\s+log)\b/.test(text) ||
       /\b(git\s+branch|(current\s+)?git\s+branch|(recent|latest)\s+commits?|summarize\s+(recent\s+)?commits?)\b/i.test(text) ||
       /\b(populate\s+form|fill\s+(in\s+)?(the\s+)?form|submit\s+this\s+form|submit\s+form|click\s+(the\s+)?button)\b/.test(text) ||
-      /\b(calculate\s+|calc\s+|read\s+(file\s+)?[a-zA-Z0-9_\-./\\]+|search\s+the\s+web\s+for|run\s+(shell\s+)?command|download\s+file|capture\s+screenshot)\b/.test(text) ||
+      /\b(read\s+file\s+[a-zA-Z0-9_\-./\\]+|search\s+the\s+web\s+for|run\s+(shell\s+)?command|download\s+file|capture\s+screenshot)\b/.test(text) ||
       (advisoryIntent === 'TOOL_ACTION')
     );
     if (isTool) {
@@ -285,13 +285,17 @@ export class ServerIntentRouter {
       };
     }
 
-    // Rule G: Unambiguous Question / Answer / Explanation (Timeless concepts only)
-    const isQuestion = !freshness.requiresFreshness && /^(explain|what\s+is|what\s+are|how\s+does|why\s+is|define|summarize|tell\s+me|who\s+was)\b/.test(text);
-    if (isQuestion) {
+    // Rule G: Unambiguous Question / Answer / Explanation / Coding & Math Synthesis (Timeless concepts only)
+    const isQuestionOrCoding = !freshness.requiresFreshness && (
+      /^(explain|what\s+is|what\s+are|how\s+does|why\s+is|define|summarize|tell\s+me|who\s+was)\b/i.test(text) ||
+      /^(write|generate|create|provide|implement|show|give\s+me|compute|calculate)\s+(a\s+|an\s+)?(python|typescript|javascript|code|function|regex|query|sql|script|sum|formula|example|sample|table|comparison|clean|generic|robust)\b/i.test(text) ||
+      /\b(using\s+(kadane|algorithm|formula|b-tree|index))\b/i.test(text)
+    );
+    if (isQuestionOrCoding) {
       return {
         intent: 'ANSWER',
         confidence: 0.95,
-        reason: 'Identified standard informational inquiry.',
+        reason: 'Identified standard informational inquiry or direct coding/math synthesis request.',
         sideEffectLevel: 'NONE',
         approvalRequired: false
       };

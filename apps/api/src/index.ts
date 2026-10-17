@@ -4,7 +4,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
 import { ModelRouter } from '../../../packages/model-router/src/index.js';
-import { ToolRegistry, ToolGateway, PostgresToolCallRepository } from '../../../packages/tool-runtime/src/index.js';
+import { ToolRegistry, ToolGateway, PostgresToolCallRepository, InMemoryToolCallRepository } from '../../../packages/tool-runtime/src/index.js';
 import { ApprovalKernel } from '../../../packages/approvals/src/index.js';
 import { PostgresApprovalRepository, PostgresSessionGrantRepository } from '../../../packages/approvals/src/repositories.js';
 import { BrainV2KnowledgeEngine, PrincipalScope } from '../../../packages/knowledge/src/index.js';
@@ -554,13 +554,13 @@ app.use('/api', createPrincipalMiddleware());
 
 // Initialize Core Subsystems
 app.use('/api/builder', createBuilderRoutes(modelRouter));
+const isDbConfigured = Boolean(process.env.DATABASE_URL?.trim());
 const toolRegistry = new ToolRegistry(process.cwd());
 const approvalKernel = new ApprovalKernel(new PostgresApprovalRepository(), new PostgresSessionGrantRepository());
-const toolCallRepo = new PostgresToolCallRepository();
+const toolCallRepo = isDbConfigured ? new PostgresToolCallRepository() : new InMemoryToolCallRepository();
 const toolGateway = new ToolGateway(toolCallRepo, approvalKernel, process.cwd());
 const knowledgeEngine = new BrainV2KnowledgeEngine();
 const mcpHost = new McpHost(toolGateway);
-const isDbConfigured = Boolean(process.env.DATABASE_URL?.trim());
 const agentRepo = new PostgresAgentRepository();
 const runRepo = isDbConfigured ? new PostgresRunRepository() : new InMemoryRunRepository();
 const autoRepo = new PostgresAutomationRepository();
