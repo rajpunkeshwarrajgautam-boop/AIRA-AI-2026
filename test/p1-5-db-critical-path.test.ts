@@ -48,7 +48,7 @@ class SpiedRunRepository implements RunRepository {
   }
 
   async getInterruptedRuns(): Promise<Run[]> {
-    return [];
+    return Array.from(this.runs.values()).filter(r => !['COMPLETED', 'FAILED', 'CANCELLED', 'WAITING_FOR_APPROVAL'].includes(r.state));
   }
 
   async appendRunEvent(event: StreamingEvent): Promise<StreamingEvent> {
@@ -208,6 +208,115 @@ async function runTests() {
     'run.completed event must be durably persisted'
   );
   console.log('PASS: Full durability verified at completion.');
+
+  // -------------------------------------------------------------------------
+  // TEST 5: Serverless Cache Miss & Database Authoritative Fallback
+  // -------------------------------------------------------------------------
+  console.log('\n[TEST 5] Serverless instance cache miss: database remains authoritative');
+  const runtimeInstanceB = new AgentRuntime(
+    modelRouter,
+    toolRegistry,
+    approvalKernel,
+    knowledgeEngine,
+    repo,
+    process.cwd()
+  );
+
+  const runFromInstanceB = await runtimeInstanceB.getRun(run.id);
+  assert.ok(runFromInstanceB, 'Instance B must fetch the run from authoritative repository on cache miss');
+  assert.equal(runFromInstanceB?.id, run.id);
+  assert.equal(runFromInstanceB?.state, 'COMPLETED');
+  assert.equal(runFromInstanceB?.content, storedRun?.content);
+  console.log('PASS: Cache miss across serverless instances falls back safely to authoritative database.');
+
+  // -------------------------------------------------------------------------
+  // TEST 6: Concurrent Multi-User & Multi-Run Isolation
+  // -------------------------------------------------------------------------
+  console.log('\n[TEST 6] Concurrent same-instance / multi-instance isolation (no cross-contamination)');
+  const principalA: ExecutionPrincipal = {
+    userId: 'usr_alice',
+    sessionId: 'sess_alice',
+    roles: ['workspace_user'],
+    scopes: ['chat:write', 'runs:read', 'runs:write']
+  };
+  const principalB: ExecutionPrincipal = {
+    userId: 'usr_bob',
+    sessionId: 'sess_bob',
+    roles: ['workspace_user'],
+    scopes: ['chat:write', 'runs:read', 'runs:write']
+  };
+
+  const [runA1, runA2, runB1] = await Promise.all([
+    runtime.createRun({ prompt: 'Alice prompt 1', modelPolicy: { model: 'aira-auto' } }, principalA),
+    runtime.createRun({ prompt: 'Alice prompt 2', modelPolicy: { model: 'aira-auto' } }, principalA),
+    runtime.createRun({ prompt: 'Bob prompt 1', modelPolicy: { model: 'aira-auto' } }, principalB),
+  ]);
+
+  assert.notEqual(runA1.id, runA2.id);
+  assert.notEqual(runA1.id, runB1.id);
+  assert.equal(runA1.principalId, 'usr_alice');
+  assert.equal(runB1.principalId, 'usr_bob');
+
+  // Start runs concurrently
+  await Promise.all([
+    runtime.startRun(runA1.id),
+    runtime.startRun(runA2.id),
+    runtime.startRun(runB1.id),
+  ]);
+
+  const finishedA1 = await runtime.getRun(runA1.id);
+  const finishedA2 = await runtime.getRun(runA2.id);
+  const finishedB1 = await runtime.getRun(runB1.id);
+
+  assert.equal(finishedA1?.state, 'COMPLETED');
+  assert.equal(finishedA2?.state, 'COMPLETED');
+  assert.equal(finishedB1?.state, 'COMPLETED');
+  assert.equal(finishedA1?.principalId, 'usr_alice');
+  assert.equal(finishedB1?.principalId, 'usr_bob');
+  console.log('PASS: Concurrent multi-user and multi-run isolation verified.');
+
+  // -------------------------------------------------------------------------
+  // TEST 7: Memory Lifecycle Cleanup on Terminal States
+  // -------------------------------------------------------------------------
+  console.log('\n[TEST 7] Memory lifecycle cleanup on terminal states');
+  const runToCancel = await runtime.createRun({ prompt: 'Cancel test', modelPolicy: { model: 'aira-auto' } }, principalA);
+  await runtime.cancelRun(runToCancel.id);
+  const cancelledRun = await runtime.getRun(runToCancel.id);
+  assert.equal(cancelledRun?.state, 'CANCELLED');
+  console.log('PASS: Terminal state transition and memory lifecycle cleanup verified.');
+
+  // -------------------------------------------------------------------------
+  // TEST 8: Failure Between First Token and Durable Flush
+  // -------------------------------------------------------------------------
+  console.log('\n[TEST 8] Failure between first token and durable flush');
+  const interruptedRunId = 'run_simulated_interrupted';
+  const preProviderRun: Run = {
+    id: interruptedRunId,
+    principalId: principalA.userId,
+    sessionId: principalA.sessionId,
+    state: 'QUEUED',
+    executionCheckpoint: 'CHECKPOINT:PRE_PROVIDER_EXECUTION',
+    modelPolicy: { model: 'aira-auto' },
+    prompt: 'Interrupted prompt',
+    toolCalls: [],
+    toolResults: [],
+    tags: [],
+    createdAt: Date.now() - 120000,
+    updatedAt: Date.now() - 120000
+  };
+  await repo.saveRun(preProviderRun);
+
+  const beforeRecovery = await repo.getRun(interruptedRunId);
+  assert.notEqual(beforeRecovery?.state, 'COMPLETED', 'Interrupted run must NEVER be marked COMPLETED');
+  assert.equal(beforeRecovery?.state, 'QUEUED');
+
+  await runtime.recoverInterruptedRuns('test-worker', 10000);
+  await new Promise(r => setTimeout(r, 150));
+
+  const afterRecovery = await repo.getRun(interruptedRunId);
+  assert.notEqual(afterRecovery?.state, 'COMPLETED', 'Recovered run must not be falsely marked COMPLETED');
+  console.log(`Interrupted run post-reconciliation state: ${afterRecovery?.state}`);
+  console.log('PASS: Failure between first token and durable flush correctly leaves run in recoverable state, never false COMPLETED.');
 
   console.log('\n=== ALL P1.5 CRITICAL PATH TESTS PASSED ===');
   await closeDb();

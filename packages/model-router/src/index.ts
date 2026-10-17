@@ -612,7 +612,7 @@ export class ModelRouter {
     }
     if (process.env.GROQ_API_KEY) {
       const groqKey = process.env.GROQ_API_KEY.trim().replace(/^["']|["']$/g, '');
-      const groqModel = (process.env.AIRA_FAST_MODEL || '').trim().replace(/^["']|["']$/g, '') || 'llama-3.1-8b-instant';
+      const groqModel = (process.env.AIRA_FAST_MODEL || '').trim().replace(/^["']|["']$/g, '') || 'openai/gpt-oss-120b';
       this.adapters.set(
         'groq',
         new OpenAIAdapter(
@@ -825,7 +825,7 @@ export class ModelRouter {
 
       if (selectedProvider === 'groq') {
         const raw = (process.env.AIRA_FAST_MODEL || '').trim().replace(/^["']|["']$/g, '');
-        executedModel = raw || 'llama-3.1-8b-instant';
+        executedModel = raw || 'openai/gpt-oss-120b';
       } else if (selectedProvider === 'cerebras') {
         executedModel = process.env.AIRA_FAST_MODEL || 'llama3.1-8b';
       } else if (selectedProvider === 'together') {
