@@ -963,6 +963,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         res.write(`event: error\ndata: ${JSON.stringify({
           error: storageFailure ? 'Temporary database connectivity problem. Please retry your request.' : 'Aira could not complete this request.',
           code: storageFailure ? 'DATABASE_TEMPORARILY_UNAVAILABLE' : 'RUN_FAILED',
+          details: String(failure),
         })}\n\n`);
         stream.off('event', handler);
         res.end();

@@ -32,7 +32,11 @@ async function run() {
       'llama3.1-70b',
       'meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo',
       'accounts/fireworks/models/llama-v3p1-8b-instruct',
-      'nvidia/nemotron-3-super-120b-a12b'
+      'nvidia/nemotron-3-super-120b-a12b',
+      'openai/gpt-oss-120b',
+      'openai/gpt-oss-20b',
+      'qwen/qwen3.8-27b',
+      'allam-2-7b'
     ];
     for (const m of validModels) {
       assert.doesNotThrow(() => ModelIdSchema.parse(m), `Model ID ${m} should be valid`);
