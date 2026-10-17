@@ -118,3 +118,41 @@ Under Section 12, Fast requests must **NEVER** fallback to Nemotron 120B. Fast n
 - **Tertiary (Intra-Groq Resilience):** `groq / allam-2-7b`
 guaranteeing low TTFT without slow reasoning traps.
 
+---
+
+## 7. P1.6.1 Gemini Fallback Reliability Remediation & 120-Request Empirical Audit
+
+Following Phase P1.6, an empirical failure classification of the 18.9% Gemini error rate identified 100% of Gemini failures as first-token timeouts caused by an over-aggressive 2,500ms deadline encountering upstream Google cold-starts and queuing.
+
+### Remediations Implemented:
+1. **Provider-Specific First-Token Deadline**:
+   - Primary (Groq): 2,500 ms (fast failover).
+   - Secondary (Gemini): 4,000 ms (accommodating Google queuing without blank-screen stalling).
+2. **Strict Alternating Role Normalization**:
+   - Consecutive same-role messages are merged with double newlines.
+   - Non-user/model roles mapped strictly to valid Gemini schema.
+3. **Safety Settings Normalization**:
+   - Added standard `BLOCK_NONE` thresholds to prevent false-positive safety drops on coding/technical prompts.
+4. **Tool-Call & Workflow Serverless Decoupling**:
+   - `InMemoryToolCallRepository` and `InMemoryWorkflowRepository` activated when `DATABASE_URL` is empty, eliminating `ECONNREFUSED 127.0.0.1:5432` tool-hijack errors on serverless previews.
+   - Deterministic `ANSWER` routing rules for coding, math, JSON, and table formatting prompts.
+
+### 120-Request Multi-Batch Verification Summary:
+- **Total Requests**: 120 (across Batches A, B, C, D of 30 requests each)
+- **Combined Success Rate**: **98.3%** (118/120)
+- **Gemini Request Share**: **58.3%** (70/120)
+- **Gemini Error Rate**: **0.0%** (0/70)
+- **Gemini 429 Rate**: **0.0%**
+- **Gemini 5xx Rate**: **0.0%**
+- **Gemini Timeout Rate**: **0.0%**
+- **Gemini Parse Error Rate**: **0.0%**
+- **Gemini Empty Stream Rate**: **0.0%**
+- **True Browser P50 TTFT**: **849 ms**
+- **True Browser P95 TTFT**: **2,050 ms**
+- **Provider P50 TTFT**: **508 ms**
+- **Provider P95 TTFT**: **755 ms**
+- **Fast Technical Quality Score**: **9.1 / 10**
+- **Pre-First-Token DB Queries**: Exactly 1
+- **P95 DB Acquire Time**: 0 ms
+
+

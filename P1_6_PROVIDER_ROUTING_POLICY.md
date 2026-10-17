@@ -63,13 +63,14 @@ Each provider and model pair is monitored via a rolling sliding-window telemetry
 
 ## 4. First-Token Deadline & Request Stickiness (Sections 8 & 15)
 
-### Truthful First-Token Deadline:
-- For `aira-fast`, the deadline is strictly set to **2,500 ms**.
-- **Crucial Rule:** Thinking tokens, lifecycle SSE events (`routing_decision`, `model_provenance`), and keepalives **DO NOT** count as content.
-- If no real text content delta is emitted before the deadline:
-  1. The primary request is aborted cleanly via `AbortController`.
+### Truthful Provider-Specific First-Token Deadlines:
+- **Primary Fast Deadline (Groq `openai/gpt-oss-120b`):** Strictly set to **2,500 ms** to trigger immediate failover upon upstream queue stalls or rate limits.
+- **Secondary Fast Deadline (Gemini `gemini-3.5-flash-lite`):** Set to **4,000 ms** to accommodate upstream Google token serialization and network queuing without false-positive aborts.
+- **Crucial Invariant:** Thinking tokens, lifecycle SSE events (`routing_decision`, `model_provenance`), and keepalives **DO NOT** count as content.
+- If no real text content delta is emitted before the respective provider deadline:
+  1. The in-flight provider stream is aborted cleanly via `AbortController`.
   2. The failure is recorded in `ProviderHealthTracker`.
-  3. The request transitions to the verified fallback provider/model.
+  3. The request transitions to the verified fallback provider/model (Primary Groq -> Secondary Gemini -> Bounded Tertiary Groq `allam-2-7b` for non-account-level errors).
 
 ### Request Stickiness:
 - Fallback and hedging are permitted **ONLY before visible content begins**.

@@ -453,8 +453,10 @@ Respond with valid JSON only:
     }
 
     const isDirectCodingOrMath = (
-      /^(write|generate|create|provide|implement|show|give\s+me|compute|calculate)\s+(a\s+|an\s+)?(python|typescript|javascript|code|function|regex|query|sql|script|sum|formula|example|sample|table|comparison|clean|generic|robust)\b/i.test(promptLower) ||
-      /\b(using\s+(kadane|algorithm|formula|b-tree|index))\b/i.test(promptLower)
+      /^(write|generate|create|provide|implement|show|give\s+me|compute|calculate|return|list)\s+(a\s+|an\s+|the\s+|\d+\s+)?(python|typescript|javascript|code|function|regex|query|sql|script|sum|formula|example|sample|table|comparison|clean|generic|robust|valid|json|http|status)\b/i.test(promptLower) ||
+      /\b(using\s+(kadane|algorithm|formula|b-tree|index))\b/i.test(promptLower) ||
+      /^(compute|calculate)\s+(the\s+)?sum\b/i.test(promptLower) ||
+      /^return\s+a\s+valid\s+json\b/i.test(promptLower)
     ) && !/\b(execute|run\s+command|system\s+shell|tool\s+call)\b/i.test(promptLower);
     if (isDirectCodingOrMath) {
       return {

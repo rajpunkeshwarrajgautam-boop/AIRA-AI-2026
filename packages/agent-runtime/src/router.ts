@@ -288,8 +288,10 @@ export class ServerIntentRouter {
     // Rule G: Unambiguous Question / Answer / Explanation / Coding & Math Synthesis (Timeless concepts only)
     const isQuestionOrCoding = !freshness.requiresFreshness && (
       /^(explain|what\s+is|what\s+are|how\s+does|why\s+is|define|summarize|tell\s+me|who\s+was)\b/i.test(text) ||
-      /^(write|generate|create|provide|implement|show|give\s+me|compute|calculate)\s+(a\s+|an\s+)?(python|typescript|javascript|code|function|regex|query|sql|script|sum|formula|example|sample|table|comparison|clean|generic|robust)\b/i.test(text) ||
-      /\b(using\s+(kadane|algorithm|formula|b-tree|index))\b/i.test(text)
+      /^(write|generate|create|provide|implement|show|give\s+me|compute|calculate|return|list)\s+(a\s+|an\s+|the\s+|\d+\s+)?(python|typescript|javascript|code|function|regex|query|sql|script|sum|formula|example|sample|table|comparison|clean|generic|robust|valid|json|http|status)\b/i.test(text) ||
+      /\b(using\s+(kadane|algorithm|formula|b-tree|index))\b/i.test(text) ||
+      /^(compute|calculate)\s+(the\s+)?sum\b/i.test(text) ||
+      /^return\s+a\s+valid\s+json\b/i.test(text)
     );
     if (isQuestionOrCoding) {
       return {

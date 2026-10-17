@@ -17,7 +17,7 @@ import {
   ModelProvenance
 } from '../../contracts/src/index.js';
 import { ModelRouter, ChatMessageInput, isModelMatch } from '../../model-router/src/index.js';
-import { ToolRegistry, ToolGateway, PostgresToolCallRepository } from '../../tool-runtime/src/index.js';
+import { ToolRegistry, ToolGateway, PostgresToolCallRepository, InMemoryToolCallRepository } from '../../tool-runtime/src/index.js';
 import { configuredSearchProviders } from '../../tool-runtime/src/search-providers.js';
 import { ApprovalKernel } from '../../approvals/src/index.js';
 import { BrainV2KnowledgeEngine } from '../../knowledge/src/index.js';
@@ -27,7 +27,7 @@ import { CapabilityRegistry } from './registry.js';
 import { ServerIntentRouter } from './router.js';
 import { ResearchService } from './research.js';
 import { buildResearchEvidenceContext, buildResearchSourcesAppendix, isResearchToolCallDump, renderGroundedResearchFallback, sanitizeCitationMarkers, verifiedWebCitations, verifiedSearchCitationsFromToolResults } from './research-evidence.js';
-import { WorkflowRepository, PostgresWorkflowRepository } from './workflow-repositories.js';
+import { WorkflowRepository, PostgresWorkflowRepository, InMemoryWorkflowRepository } from './workflow-repositories.js';
 import { WorkflowEngine } from './workflow-engine.js';
 import { WorkflowCompiler } from './workflow-compiler.js';
 import { buildDurableHistorySystemMessage } from './memory-policy.js';
@@ -69,9 +69,10 @@ export class AgentRuntime extends EventEmitter {
     toolGateway?: ToolGateway
   ) {
     super();
-    this.toolGateway = toolGateway || new ToolGateway(new PostgresToolCallRepository(), this.approvalKernel, this.workspaceRoot);
+    const isDbConfigured = Boolean(process.env.DATABASE_URL?.trim());
+    this.toolGateway = toolGateway || new ToolGateway(isDbConfigured ? new PostgresToolCallRepository() : new InMemoryToolCallRepository(), this.approvalKernel, this.workspaceRoot);
     this.router = router || new ServerIntentRouter(this.capabilityRegistry, this.modelRouter);
-    this.workflowRepo = workflowRepo || new PostgresWorkflowRepository();
+    this.workflowRepo = workflowRepo || (isDbConfigured ? new PostgresWorkflowRepository() : new InMemoryWorkflowRepository());
     this.workflowCompiler = workflowCompiler || new WorkflowCompiler(this.modelRouter);
     this.researchService = new ResearchService(this.toolRegistry, this.knowledgeEngine);
     this.workflowEngine = workflowEngine || new WorkflowEngine(
