@@ -762,8 +762,7 @@ export class ModelRouter {
           providerPreference = ['groq', 'cerebras', 'openai', 'together', 'fireworks', 'nvidia', 'anthropic'];
         }
       } else if (model === 'aira-deep') {
-        // Deep reasoning MUST remain on high-capacity reasoning models (Nemotron 120B or Claude Opus/Sonnet)
-        providerPreference = ['nvidia', 'anthropic', 'openai'];
+        providerPreference = ['anthropic', 'nvidia', 'openai'];
       } else {
         providerPreference = ['anthropic', 'nvidia', 'openai'];
       }
@@ -832,7 +831,17 @@ export class ModelRouter {
           modelFallbackReason = 'No dedicated fast provider configured; fell back to NVIDIA Nemotron 120B reasoning model';
         }
       } else if (selectedProvider === 'anthropic') {
-        executedModel = resolveAnthropicModel(model);
+        if (requestedModelId === 'claude-3-5-sonnet') {
+          executedModel = 'claude-3-5-sonnet';
+        } else if (requestedModelId === 'claude-3-5-haiku') {
+          executedModel = 'claude-3-5-haiku';
+        } else if (requestedModelId === 'claude-3-opus') {
+          executedModel = 'claude-3-opus';
+        } else if (requestedModelId === 'claude-3-7-sonnet') {
+          executedModel = 'claude-3-7-sonnet';
+        } else {
+          executedModel = resolveAnthropicModel(model);
+        }
       } else {
         executedModel = model;
       }
