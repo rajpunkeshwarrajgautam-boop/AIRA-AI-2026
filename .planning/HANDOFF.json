@@ -1,0 +1,175 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-10-17T18:54:00Z",
+  "phase": "P1.6.1",
+  "phase_name": "gemini-fallback-reliability-remediation",
+  "phase_dir": ".planning",
+  "plan": 1,
+  "task": 21,
+  "total_tasks": 21,
+  "status": "paused",
+  "completed_tasks": [
+    {
+      "id": 1,
+      "name": "Classify every Gemini failure into empirical failure taxonomy",
+      "status": "done",
+      "commit": "8064972"
+    },
+    {
+      "id": 2,
+      "name": "Live Gemini model catalog and availability audit",
+      "status": "done",
+      "commit": "8064972"
+    },
+    {
+      "id": 3,
+      "name": "Empirical benchmarking of low-latency Gemini candidates",
+      "status": "done",
+      "commit": "8064972"
+    },
+    {
+      "id": 4,
+      "name": "Request shape & payload compatibility normalization (roles, safety settings)",
+      "status": "done",
+      "commit": "b4737d2"
+    },
+    {
+      "id": 5,
+      "name": "Stream parser audit (chunk framing, candidates, parts, usageMetadata, safety)",
+      "status": "done",
+      "commit": "b4737d2"
+    },
+    {
+      "id": 6,
+      "name": "Safety block classification and BLOCK_NONE policy handling",
+      "status": "done",
+      "commit": "b4737d2"
+    },
+    {
+      "id": 7,
+      "name": "Provider-specific first-token deadline tuning (Groq 2500ms, Gemini 4000ms)",
+      "status": "done",
+      "commit": "b4737d2"
+    },
+    {
+      "id": 8,
+      "name": "Fallback cascade & bounded tertiary fallback logic",
+      "status": "done",
+      "commit": "b4737d2"
+    },
+    {
+      "id": 9,
+      "name": "Independent quota separation (no same-quota Groq model for account limits)",
+      "status": "done",
+      "commit": "b4737d2"
+    },
+    {
+      "id": 10,
+      "name": "Circuit breaker isolation between Groq and Gemini",
+      "status": "done",
+      "commit": "b4737d2"
+    },
+    {
+      "id": 11,
+      "name": "Half-open recovery & probe testing",
+      "status": "done",
+      "commit": "b4737d2"
+    },
+    {
+      "id": 12,
+      "name": "Cancellation race audit and stream stickiness locking",
+      "status": "done",
+      "commit": "b4737d2"
+    },
+    {
+      "id": 13,
+      "name": "Truthful provenance preservation over SSE",
+      "status": "done",
+      "commit": "b4737d2"
+    },
+    {
+      "id": 14,
+      "name": "Provider health telemetry recording",
+      "status": "done",
+      "commit": "b4737d2"
+    },
+    {
+      "id": 15,
+      "name": "Database invariant maintenance (pre-first-token DB queries = 1, acquire P95 = 0ms)",
+      "status": "done",
+      "commit": "39558e1"
+    },
+    {
+      "id": 16,
+      "name": "Security non-regression (GEMINI_API_KEY server-side only, secret scrubbing)",
+      "status": "done",
+      "commit": "39558e1"
+    },
+    {
+      "id": 17,
+      "name": "Fresh 120-request multi-batch empirical certification across Batches A, B, C, D",
+      "status": "done",
+      "commit": "af13482"
+    },
+    {
+      "id": 18,
+      "name": "Serverless decoupling (InMemoryWorkflowRepository & InMemoryToolCallRepository)",
+      "status": "done",
+      "commit": "af13482"
+    },
+    {
+      "id": 19,
+      "name": "Rule G & isDirectCodingOrMath regex hardening for coding, math, JSON, and table prompts",
+      "status": "done",
+      "commit": "af13482"
+    },
+    {
+      "id": 20,
+      "name": "CI verification on PR #85 HEAD",
+      "status": "done",
+      "commit": "af13482"
+    },
+    {
+      "id": 21,
+      "name": "Artifact updates (P1_6_PROVIDER_BASELINE.md, P1_6_PROVIDER_ROUTING_POLICY.md, P1_6_PROVIDER_RESILIENCE_REPORT.md, P1_6_1_RELIABILITY_BENCHMARK.json)",
+      "status": "done",
+      "commit": "af13482"
+    }
+  ],
+  "remaining_tasks": [],
+  "blockers": [
+    {
+      "description": "Google AI Studio Free Tier (15 RPM) rate limit causes upstream queuing under continuous burst load. Full 100% burst certification requires upgrading to Pay-As-You-Go tier with billing attached.",
+      "type": "external",
+      "workaround": "Bounded fallback to groq:allam-2-7b and pacing requests across 10-15s intervals between bursts."
+    }
+  ],
+  "async_jobs": [],
+  "human_actions_pending": [
+    {
+      "action": "Awaiting human review and explicit GO LIVE approval for production deployment from rajpunkeshwarrajgautam-boop. DO NOT merge PR #85 autonomously.",
+      "context": "Strict release governance rules under AGENTS.md prohibit autonomous merge to prod-release or production deployment without explicit instruction.",
+      "blocking": true
+    }
+  ],
+  "decisions": [
+    {
+      "decision": "Set Gemini first-token deadline to 4000ms while keeping Groq deadline at 2500ms.",
+      "rationale": "Empirical data showed 100% of previous Gemini failures were caused by the 2500ms deadline cutting off healthy streams delayed by Google cold starts.",
+      "phase": "P1.6.1"
+    },
+    {
+      "decision": "Use InMemoryWorkflowRepository and InMemoryToolCallRepository when DATABASE_URL is not configured.",
+      "rationale": "Prevents ECONNREFUSED 127.0.0.1:5432 crashes when tool or workflow intents are evaluated on serverless preview runtimes.",
+      "phase": "P1.6.1"
+    },
+    {
+      "decision": "Pin gemini-3.5-flash-lite as secondary Fast model over gemini-3.5-flash.",
+      "rationale": "gemini-3.5-flash produces mandatory thinking tokens adding ~1940ms delay; gemini-3.5-flash-lite yields 440-650ms direct streaming TTFT with 9.8/10 technical quality.",
+      "phase": "P1.6.1"
+    }
+  ],
+  "uncommitted_files": [],
+  "next_action": "Check GitHub PR #85 status, await human GO LIVE instructions, or run additional verification if requested.",
+  "context_notes": "All P1.6.1 remediations have been implemented, tested locally, committed, and pushed to PR #85. 120-request multi-batch benchmark shows Gemini Error Rate at 0.0%, True Browser P50 TTFT at 849ms, P95 at 2050ms, Quality at 9.1/10. Production baseline on prod-release remains 100% untouched."
+}
