@@ -828,8 +828,9 @@ export class ModelRouter {
           enableHedging
         });
 
-        // 1. If only NVIDIA is available and no dedicated fast model is set, preserve backward-compatible truthful fallback report
-        if (plan.isDegraded && this.adapters.has('nvidia')) {
+        // 1. If only NVIDIA is available and no dedicated fast provider is configured in environment
+        const hasFastProvider = configuredProviders.some(p => p !== 'nvidia' && p !== 'mock');
+        if (!hasFastProvider && this.adapters.has('nvidia')) {
           const executedModel = resolveNvidiaModel(model);
           return {
             policy,

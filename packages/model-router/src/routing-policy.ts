@@ -202,7 +202,7 @@ export class LatencyAwareRoutingPolicy {
         primary: { provider: first.provider, model: first.model },
         fallback: eligibleCandidates.length > 1 ? { provider: eligibleCandidates[1].provider, model: eligibleCandidates[1].model } : null,
         hedgingRecommended: false,
-        isDegraded: true,
+        isDegraded: false,
         selectionReason: `DEGRADED_PROBE: All candidates currently OPEN/degraded. Probing ${first.provider}:${first.model}.`
       };
     }
