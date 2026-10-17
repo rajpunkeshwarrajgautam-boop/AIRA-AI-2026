@@ -120,7 +120,8 @@ export class LatencyAwareRoutingPolicy {
       qualityScore: 9.5,
       typicalTtftMs: 893,
       costTier: 'low',
-      allowed: true
+      allowed: false,
+      rejectionReason: 'REJECTED: Floating alias exhibits queue tail latency spikes under burst; pinned gemini-3.5-flash-lite preferred'
     },
     {
       provider: 'gemini',
@@ -128,7 +129,8 @@ export class LatencyAwareRoutingPolicy {
       qualityScore: 9.0,
       typicalTtftMs: 1942,
       costTier: 'low',
-      allowed: true
+      allowed: false,
+      rejectionReason: 'REJECTED: Reasoning token latency (~1940ms) violates Fast low-latency requirements'
     },
     {
       provider: 'gemini',

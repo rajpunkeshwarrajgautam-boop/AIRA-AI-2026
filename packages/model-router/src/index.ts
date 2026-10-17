@@ -893,12 +893,19 @@ export class ModelRouter {
           ? this.createModelSpecificAdapter(plan.fallback.provider as SupportedProvider, plan.fallback.model)
           : null;
 
+        // Bounded tertiary adapter for non-account-level Groq failures (Section 8 & 9)
+        const tertiaryAdapter = (plan.fallback?.provider === 'gemini' && process.env.GROQ_API_KEY && plan.primary.provider === 'groq')
+          ? this.createModelSpecificAdapter('groq', 'allam-2-7b')
+          : null;
+
         const resilientAdapter = new ResilientModelAdapter(
           primaryAdapter,
           fallbackAdapter,
           this.healthTracker,
           {
             firstTokenTimeoutMs: 2500,
+            fallbackFirstTokenTimeoutMs: 4000,
+            tertiaryAdapter,
             enableHedging,
             hedgeDelayMs: process.env.AIRA_HEDGE_DELAY_MS ? parseInt(process.env.AIRA_HEDGE_DELAY_MS, 10) : 1200
           }

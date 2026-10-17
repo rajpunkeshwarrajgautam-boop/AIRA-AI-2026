@@ -26,6 +26,10 @@ export interface GeminiRequestPayload {
     maxOutputTokens?: number;
     topP?: number;
   };
+  safetySettings?: Array<{
+    category: string;
+    threshold: string;
+  }>;
 }
 
 export interface GeminiParsedChunk {
@@ -37,6 +41,7 @@ export interface GeminiParsedChunk {
     totalTokens: number;
   };
   finishReason?: string;
+  isSafetyBlock?: boolean;
 }
 
 export class GeminiAdapter implements ModelAdapter {
@@ -47,7 +52,7 @@ export class GeminiAdapter implements ModelAdapter {
 
   constructor(
     apiKey: string,
-    modelName: string = 'gemini-2.5-flash',
+    modelName: string = 'gemini-3.5-flash-lite',
     baseUrl: string = 'https://generativelanguage.googleapis.com/v1beta'
   ) {
     this.apiKey = apiKey.trim().replace(/^["']|["']$/g, '');
@@ -69,32 +74,61 @@ export class GeminiAdapter implements ModelAdapter {
     messages: ChatMessageInput[],
     policy: { model?: string; temperature?: number; maxTokens?: number }
   ): GeminiRequestPayload {
-    const contents: GeminiContent[] = [];
+    const rawContents: GeminiContent[] = [];
     const systemParts: { text: string }[] = [];
 
     for (const msg of messages) {
+      const contentText = (msg.content || '').trim() || ' ';
       if (msg.role === 'system') {
-        systemParts.push({ text: msg.content });
+        systemParts.push({ text: contentText });
       } else if (msg.role === 'assistant') {
-        contents.push({
+        rawContents.push({
           role: 'model',
-          parts: [{ text: msg.content }]
+          parts: [{ text: contentText }]
         });
       } else {
-        // user or tool or default
-        contents.push({
+        // user, tool, or default
+        rawContents.push({
           role: 'user',
-          parts: [{ text: msg.content }]
+          parts: [{ text: contentText }]
         });
       }
     }
 
+    // Merge consecutive identical roles to adhere to Gemini strict alternating turn requirements
+    const mergedContents: GeminiContent[] = [];
+    for (const item of rawContents) {
+      const last = mergedContents[mergedContents.length - 1];
+      if (last && last.role === item.role) {
+        last.parts.push(...item.parts);
+      } else {
+        mergedContents.push({
+          role: item.role,
+          parts: [...item.parts]
+        });
+      }
+    }
+
+    // Ensure contents is not empty
+    if (mergedContents.length === 0) {
+      mergedContents.push({
+        role: 'user',
+        parts: [{ text: 'Hello' }]
+      });
+    }
+
     const payload: GeminiRequestPayload = {
-      contents,
+      contents: mergedContents,
       generationConfig: {
         temperature: policy.temperature ?? 0.7,
         maxOutputTokens: policy.maxTokens ?? 2048
-      }
+      },
+      safetySettings: [
+        { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+        { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+        { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+        { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' }
+      ]
     };
 
     if (systemParts.length > 0) {
@@ -142,11 +176,17 @@ export class GeminiAdapter implements ModelAdapter {
         };
       }
 
+      const isSafetyBlock = candidate?.finishReason === 'SAFETY' || data.promptFeedback?.blockReason === 'SAFETY';
+      if (isSafetyBlock && !textDelta) {
+        textDelta = 'I cannot fulfill this request as it triggered safety content guidelines.';
+      }
+
       return {
         text: textDelta || undefined,
         thinking: thinkingDelta || undefined,
         usage,
-        finishReason: candidate?.finishReason
+        finishReason: candidate?.finishReason,
+        isSafetyBlock
       };
     } catch {
       return null;
@@ -245,8 +285,8 @@ export class GeminiAdapter implements ModelAdapter {
 
     options?.signal?.throwIfAborted();
 
-    // First-token timeout tracking
-    const firstTokenTimeoutMs = options?.firstTokenTimeoutMs ?? 2500;
+    // First-token timeout tracking (evidence-based default for Gemini fallback: 4000ms)
+    const firstTokenTimeoutMs = options?.firstTokenTimeoutMs ?? 4000;
     let firstTokenDelivered = false;
     let timeoutTimer: NodeJS.Timeout | null = null;
     const timeoutController = new AbortController();

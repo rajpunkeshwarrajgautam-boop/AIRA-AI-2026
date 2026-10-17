@@ -9,8 +9,10 @@ import { ProviderHealthTracker } from './health-tracker.js';
 
 export interface ResilientConfig {
   firstTokenTimeoutMs?: number;
+  fallbackFirstTokenTimeoutMs?: number;
   enableHedging?: boolean;
   hedgeDelayMs?: number;
+  tertiaryAdapter?: (ModelAdapter & { modelName?: string; outboundModel?: string }) | null;
   onProvenance?: (provenance: {
     requestedProvider: string;
     requestedModel: string;
@@ -27,6 +29,7 @@ export class ResilientModelAdapter implements ModelAdapter {
   readonly provider: SupportedProvider;
   private primaryAdapter: ModelAdapter & { modelName?: string; outboundModel?: string };
   private fallbackAdapter: (ModelAdapter & { modelName?: string; outboundModel?: string }) | null;
+  private tertiaryAdapter: (ModelAdapter & { modelName?: string; outboundModel?: string }) | null;
   private healthTracker: ProviderHealthTracker;
   private config: ResilientConfig;
   private stickinessLocked = false;
@@ -39,6 +42,7 @@ export class ResilientModelAdapter implements ModelAdapter {
   ) {
     this.primaryAdapter = primary;
     this.fallbackAdapter = fallback;
+    this.tertiaryAdapter = config?.tertiaryAdapter || null;
     this.healthTracker = healthTracker;
     this.config = config || {};
     this.provider = primary.provider;
@@ -237,27 +241,107 @@ export class ResilientModelAdapter implements ModelAdapter {
         const tFbStart = performance.now();
         let fbReceivedFirst = false;
 
-        const fbRes = await this.fallbackAdapter.stream(
-          messages,
-          policy,
-          delta => {
-            if (delta.thinking) onChunk({ thinking: delta.thinking });
-            if (typeof delta.text === 'string' && delta.text.length > 0) {
-              if (!fbReceivedFirst) {
-                if (delta.text.trim().length > 0) {
-                  fbReceivedFirst = true;
-                  this.stickinessLocked = true;
-                  const fbTtft = Math.round(performance.now() - tFbStart);
-                  this.healthTracker.recordSuccess(this.fallbackAdapter!.provider, fallbackModel, fbTtft);
-                }
-              }
-              onChunk({ text: delta.text });
-            }
-          },
-          { signal: fallbackAbort.signal }
-        );
+        const fbTimeoutMs = this.fallbackAdapter.provider === 'gemini'
+          ? (this.config.fallbackFirstTokenTimeoutMs ?? 4000)
+          : firstTokenTimeoutMs;
 
-        return fbRes;
+        try {
+          const fbRes = await this.fallbackAdapter.stream(
+            messages,
+            policy,
+            delta => {
+              if (delta.thinking) onChunk({ thinking: delta.thinking });
+              if (typeof delta.text === 'string' && delta.text.length > 0) {
+                if (!fbReceivedFirst) {
+                  if (delta.text.trim().length > 0) {
+                    fbReceivedFirst = true;
+                    this.stickinessLocked = true;
+                    const fbTtft = Math.round(performance.now() - tFbStart);
+                    this.healthTracker.recordSuccess(this.fallbackAdapter!.provider, fallbackModel, fbTtft);
+                  }
+                }
+                onChunk({ text: delta.text });
+              }
+            },
+            { signal: fallbackAbort.signal, firstTokenTimeoutMs: fbTimeoutMs }
+          );
+
+          return fbRes;
+        } catch (fallbackErr: any) {
+          this.healthTracker.recordFailure(this.fallbackAdapter.provider, fallbackModel, fallbackErr);
+
+          if (this.stickinessLocked || fbReceivedFirst) {
+            throw fallbackErr;
+          }
+
+          const isAborted = outerSignal?.aborted;
+          if (isAborted) {
+            throw outerSignal.reason || fallbackErr;
+          }
+
+          // Section 9: Do NOT fall back to same-quota Groq model if Groq failed due to account-level rate limits
+          const isGroqAccountLimit =
+            primaryErr.status === 429 ||
+            primaryErr.message?.includes('429') ||
+            primaryErr.message?.includes('rate_limit') ||
+            primaryErr.message?.includes('quota') ||
+            primaryErr.message?.includes('TPD') ||
+            primaryErr.message?.includes('TPM');
+
+          const tertiaryModel = this.tertiaryAdapter ? this.getModelName(this.tertiaryAdapter, policy) : null;
+          const isTertiaryAvailable = this.tertiaryAdapter && tertiaryModel
+            ? this.healthTracker.isAvailable(this.tertiaryAdapter.provider, tertiaryModel)
+            : false;
+
+          if (this.tertiaryAdapter && tertiaryModel && !isGroqAccountLimit && isTertiaryAvailable) {
+            const tertiaryReason = `Primary ${this.primaryAdapter.provider}:${primaryModel} failed (${primaryErr.message}), fallback ${this.fallbackAdapter.provider}:${fallbackModel} failed (${fallbackErr.message}); fell back to tertiary ${this.tertiaryAdapter.provider}:${tertiaryModel}`;
+
+            emitProvenance?.({
+              requestedProvider: this.primaryAdapter.provider,
+              requestedModel: primaryModel,
+              executedProvider: this.tertiaryAdapter.provider,
+              executedModel: tertiaryModel,
+              fallbackOccurred: true,
+              fallbackReason: tertiaryReason,
+              hedgedRequestUsed: false,
+              modelIdentityVerified: true
+            });
+
+            const tertiaryAbort = new AbortController();
+            if (outerSignal) {
+              outerSignal.addEventListener('abort', () => tertiaryAbort.abort(outerSignal.reason), { once: true });
+            }
+
+            const tTertiaryStart = performance.now();
+            let tertiaryReceivedFirst = false;
+
+            const tertRes = await this.tertiaryAdapter.stream(
+              messages,
+              policy,
+              delta => {
+                if (delta.thinking) onChunk({ thinking: delta.thinking });
+                if (typeof delta.text === 'string' && delta.text.length > 0) {
+                  if (!tertiaryReceivedFirst) {
+                    if (delta.text.trim().length > 0) {
+                      tertiaryReceivedFirst = true;
+                      this.stickinessLocked = true;
+                      const ttft = Math.round(performance.now() - tTertiaryStart);
+                      this.healthTracker.recordSuccess(this.tertiaryAdapter!.provider, tertiaryModel, ttft);
+                    }
+                  }
+                  onChunk({ text: delta.text });
+                }
+              },
+              { signal: tertiaryAbort.signal, firstTokenTimeoutMs }
+            );
+
+            return tertRes;
+          }
+
+          throw new Error(
+            `FAST_FALLBACK_CASCADE_EXHAUSTED: Primary ${this.primaryAdapter.provider}:${primaryModel} (${primaryErr.message}) and fallback ${this.fallbackAdapter.provider}:${fallbackModel} (${fallbackErr.message}) both failed.`
+          );
+        }
       }
 
       throw primaryErr;
