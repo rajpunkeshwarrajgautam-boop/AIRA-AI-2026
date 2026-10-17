@@ -315,8 +315,8 @@ export class OpenAIAdapter implements ModelAdapter {
     airaModel: ModelId | string = 'gpt-4o',
     provider?: SupportedProvider
   ) {
-    this.baseUrl = baseUrl;
-    this.airaModel = airaModel;
+    this.baseUrl = (baseUrl || 'https://api.openai.com/v1').trim().replace(/\/+$/, '');
+    this.airaModel = (typeof airaModel === 'string' ? airaModel : '').trim().replace(/^["']|["']$/g, '') || airaModel;
     if (provider) {
       this.provider = provider;
     } else if (baseUrl.includes('integrate.api.nvidia.com')) {
@@ -333,7 +333,7 @@ export class OpenAIAdapter implements ModelAdapter {
       this.provider = 'openai';
     }
 
-    this.apiKey = apiKey || (
+    const rawKey = apiKey || (
       this.provider === 'groq' ? process.env.GROQ_API_KEY :
       this.provider === 'cerebras' ? process.env.CEREBRAS_API_KEY :
       this.provider === 'together' ? process.env.TOGETHER_API_KEY :
@@ -341,6 +341,7 @@ export class OpenAIAdapter implements ModelAdapter {
       this.provider === 'nvidia' ? process.env.NVIDIA_API_KEY :
       process.env.OPENAI_API_KEY
     ) || '';
+    this.apiKey = rawKey.trim().replace(/^["']|["']$/g, '');
   }
 
   toJSON() {
@@ -488,10 +489,18 @@ export class OpenAIAdapter implements ModelAdapter {
       });
 
       if (!response.ok) {
-        // Upstream error bodies can contain submitted content and must not be
-        // reflected to clients or application logs.
+        let errSnippet = '';
+        try {
+          const errData = await response.json();
+          errSnippet = errData?.error?.message || errData?.message || JSON.stringify(errData);
+        } catch {
+          try {
+            errSnippet = (await response.text()).slice(0, 200);
+          } catch {}
+        }
         await response.body?.cancel().catch(() => undefined);
-        throw new Error(`${this.provider} streaming request failed (HTTP ${response.status})`);
+        const detail = errSnippet ? `: ${errSnippet}` : '';
+        throw new Error(`${this.provider} streaming request failed (HTTP ${response.status})${detail}`);
       }
       if (!response.body) throw new Error('Provider returned an empty streaming response body.');
 
@@ -602,12 +611,14 @@ export class ModelRouter {
       this.adapters.set('mock', new DeterministicMockAdapter());
     }
     if (process.env.GROQ_API_KEY) {
+      const groqKey = process.env.GROQ_API_KEY.trim().replace(/^["']|["']$/g, '');
+      const groqModel = (process.env.AIRA_FAST_MODEL || '').trim().replace(/^["']|["']$/g, '') || 'llama-3.1-8b-instant';
       this.adapters.set(
         'groq',
         new OpenAIAdapter(
-          process.env.GROQ_API_KEY,
+          groqKey,
           'https://api.groq.com/openai/v1',
-          process.env.AIRA_FAST_MODEL || 'llama-3.1-8b-instant',
+          groqModel,
           'groq'
         )
       );
@@ -813,7 +824,8 @@ export class ModelRouter {
       let modelFallbackReason: string | undefined;
 
       if (selectedProvider === 'groq') {
-        executedModel = process.env.AIRA_FAST_MODEL || 'llama-3.1-8b-instant';
+        const raw = (process.env.AIRA_FAST_MODEL || '').trim().replace(/^["']|["']$/g, '');
+        executedModel = raw || 'llama-3.1-8b-instant';
       } else if (selectedProvider === 'cerebras') {
         executedModel = process.env.AIRA_FAST_MODEL || 'llama3.1-8b';
       } else if (selectedProvider === 'together') {
