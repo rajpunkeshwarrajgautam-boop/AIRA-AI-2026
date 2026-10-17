@@ -142,3 +142,53 @@ export class PostgresToolCallRepository implements ToolCallRepository {
     };
   }
 }
+
+export class InMemoryToolCallRepository implements ToolCallRepository {
+  private toolCalls: Map<string, DurableToolCall> = new Map();
+
+  async saveToolCall(call: DurableToolCall): Promise<void> {
+    this.toolCalls.set(call.id, { ...call });
+  }
+
+  async getToolCall(id: string): Promise<DurableToolCall | undefined> {
+    const c = this.toolCalls.get(id);
+    return c ? { ...c } : undefined;
+  }
+
+  async getToolCallByIdempotencyKey(key: string): Promise<DurableToolCall | undefined> {
+    for (const c of this.toolCalls.values()) {
+      if (c.idempotencyKey === key && c.lifecycleState === 'COMPLETED') {
+        return { ...c };
+      }
+    }
+    return undefined;
+  }
+
+  async listToolCallsForRun(runId: string): Promise<DurableToolCall[]> {
+    return Array.from(this.toolCalls.values()).filter(c => c.runId === runId);
+  }
+
+  async listToolCallsForPrincipal(principalId: string, limit = 50): Promise<DurableToolCall[]> {
+    return Array.from(this.toolCalls.values())
+      .filter(c => c.principalId === principalId)
+      .slice(0, limit);
+  }
+
+  async updateToolCallStatus(
+    id: string,
+    status: ToolLifecycleState,
+    output?: any,
+    error?: string,
+    errorCode?: string,
+    durationMs?: number
+  ): Promise<void> {
+    const existing = this.toolCalls.get(id);
+    if (!existing) return;
+    existing.lifecycleState = status;
+    existing.completedAt = Date.now();
+    if (output !== undefined) existing.output = output;
+    if (error !== undefined) existing.error = error;
+    if (errorCode !== undefined) existing.errorCode = errorCode;
+    if (durationMs !== undefined) existing.durationMs = durationMs;
+  }
+}

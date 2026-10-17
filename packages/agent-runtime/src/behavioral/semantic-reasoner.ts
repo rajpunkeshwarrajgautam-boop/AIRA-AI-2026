@@ -452,6 +452,22 @@ Respond with valid JSON only:
       };
     }
 
+    const isDirectCodingOrMath = (
+      /^(write|generate|create|provide|implement|show|give\s+me|compute|calculate|return|list)\s+(a\s+|an\s+|the\s+|\d+\s+)?(python|typescript|javascript|code|function|regex|query|sql|script|sum|formula|example|sample|table|comparison|clean|generic|robust|valid|json|http|status)\b/i.test(promptLower) ||
+      /\b(using\s+(kadane|algorithm|formula|b-tree|index))\b/i.test(promptLower) ||
+      /^(compute|calculate)\s+(the\s+)?sum\b/i.test(promptLower) ||
+      /^return\s+a\s+valid\s+json\b/i.test(promptLower)
+    ) && !/\b(execute|run\s+command|system\s+shell|tool\s+call)\b/i.test(promptLower);
+    if (isDirectCodingOrMath) {
+      return {
+        primaryIntent: 'ANSWER',
+        secondaryIntents: [],
+        confidence: 0.96,
+        reasoningStrategy: 'FAST_DIRECT',
+        isFreshnessRequired: false
+      };
+    }
+
     const isMarkdownFormatting = /\bformat\s+(it|the\s+output|this)\s+as\s+(a\s+)?(markdown\s+)?table\b/i.test(promptLower);
     if (isMarkdownFormatting) {
       return {
@@ -463,14 +479,14 @@ Respond with valid JSON only:
       };
     }
 
-    const isTool = (
+    const isTool = !isExplanationOnly && (
       /\b(simulate|execute|test|verify|run)\s+.*(tool|timeout|error|http\s+[0-9]{3}|failure|outage|idempotency|mutation|econnreset|fallback)\b/i.test(promptLower) ||
       /\b(tool\s+execution|tool\s+call|required\s+tool|payment\s+mutation|system\s+shell\s+command)\b/i.test(promptLower) ||
       /\b(modify\s+production\s+configuration|etc\/hosts)\b/i.test(promptLower) ||
       /\b(open\s+(a|the|this)?\s*(website|web\s+page|url|page|site)|browse\s+(to\s+)?(a|the)?\s*(website|url|site)|navigate\s+to|open\s+https?:\/\/|extract\s+the\s+table|tell\s+me\s+the\s+(page\s+)?heading|take\s+(a\s+)?screenshot)\b/i.test(promptLower) ||
       /\b(populate\s+form|fill\s+(in\s+)?form|submit\s+this\s+form|submit\s+form|click\s+button)\b/i.test(promptLower) ||
       /\b(calculate|calc)\s+[0-9+\-*/().^ ]+/i.test(promptLower) ||
-      /\b(read\s+(file\s+)?[a-zA-Z0-9_\-./\\]+|list\s+directory|git\s+status|git\s+log|latest\s+commit|package\.json|branch\s+status|(current\s+)?git\s+branch|(recent|latest)\s+commits?|summarize\s+(recent\s+)?commits?)\b/i.test(promptLower) ||
+      /\b(read\s+file\s+[a-zA-Z0-9_\-./\\]+|list\s+directory|git\s+status|git\s+log|latest\s+commit|package\.json|branch\s+status|(current\s+)?git\s+branch|(recent|latest)\s+commits?|summarize\s+(recent\s+)?commits?)\b/i.test(promptLower) ||
       /\b(inspect|read|cat)\s+(file\s+)?[a-zA-Z0-9_\-./\\]+\.[a-zA-Z0-9]+\b/i.test(promptLower) ||
       /\b(deploy\s+this\s+now|deploy\s+.*(container|cluster|service|production|staging))\b/i.test(promptLower) ||
       (advisoryIntent === 'TOOL_ACTION')

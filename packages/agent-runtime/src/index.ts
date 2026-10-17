@@ -17,7 +17,7 @@ import {
   ModelProvenance
 } from '../../contracts/src/index.js';
 import { ModelRouter, ChatMessageInput, isModelMatch } from '../../model-router/src/index.js';
-import { ToolRegistry, ToolGateway, PostgresToolCallRepository } from '../../tool-runtime/src/index.js';
+import { ToolRegistry, ToolGateway, PostgresToolCallRepository, InMemoryToolCallRepository } from '../../tool-runtime/src/index.js';
 import { configuredSearchProviders } from '../../tool-runtime/src/search-providers.js';
 import { ApprovalKernel } from '../../approvals/src/index.js';
 import { BrainV2KnowledgeEngine } from '../../knowledge/src/index.js';
@@ -27,7 +27,7 @@ import { CapabilityRegistry } from './registry.js';
 import { ServerIntentRouter } from './router.js';
 import { ResearchService } from './research.js';
 import { buildResearchEvidenceContext, buildResearchSourcesAppendix, isResearchToolCallDump, renderGroundedResearchFallback, sanitizeCitationMarkers, verifiedWebCitations, verifiedSearchCitationsFromToolResults } from './research-evidence.js';
-import { WorkflowRepository, PostgresWorkflowRepository } from './workflow-repositories.js';
+import { WorkflowRepository, PostgresWorkflowRepository, InMemoryWorkflowRepository } from './workflow-repositories.js';
 import { WorkflowEngine } from './workflow-engine.js';
 import { WorkflowCompiler } from './workflow-compiler.js';
 import { buildDurableHistorySystemMessage } from './memory-policy.js';
@@ -69,9 +69,10 @@ export class AgentRuntime extends EventEmitter {
     toolGateway?: ToolGateway
   ) {
     super();
-    this.toolGateway = toolGateway || new ToolGateway(new PostgresToolCallRepository(), this.approvalKernel, this.workspaceRoot);
+    const isDbConfigured = Boolean(process.env.DATABASE_URL?.trim());
+    this.toolGateway = toolGateway || new ToolGateway(isDbConfigured ? new PostgresToolCallRepository() : new InMemoryToolCallRepository(), this.approvalKernel, this.workspaceRoot);
     this.router = router || new ServerIntentRouter(this.capabilityRegistry, this.modelRouter);
-    this.workflowRepo = workflowRepo || new PostgresWorkflowRepository();
+    this.workflowRepo = workflowRepo || (isDbConfigured ? new PostgresWorkflowRepository() : new InMemoryWorkflowRepository());
     this.workflowCompiler = workflowCompiler || new WorkflowCompiler(this.modelRouter);
     this.researchService = new ResearchService(this.toolRegistry, this.knowledgeEngine);
     this.workflowEngine = workflowEngine || new WorkflowEngine(
@@ -1229,27 +1230,43 @@ CAPABILITY & IDENTITY INVARIANTS:
       };
       let completionResult: ModelCompletionResult;
       try {
-        completionResult = await adapter.stream(messages, run.modelPolicy, async (delta) => {
-          if (delta.thinking) {
-            run.thinking += delta.thinking;
-            pendingThinking += delta.thinking;
-            pendingDeltas++;
-            broadcastDelta('thinking.delta', delta.thinking);
-          }
-          if (delta.text) {
-            if (guardedSearchSynthesis) {
-              researchDraft += delta.text;
-            } else {
-              run.content += delta.text;
-              pendingContent += delta.text;
+        completionResult = await adapter.stream(
+          messages,
+          run.modelPolicy,
+          async (delta) => {
+            if (delta.thinking) {
+              run.thinking += delta.thinking;
+              pendingThinking += delta.thinking;
               pendingDeltas++;
-              broadcastDelta('content.delta', delta.text);
+              broadcastDelta('thinking.delta', delta.thinking);
+            }
+            if (delta.text) {
+              if (guardedSearchSynthesis) {
+                researchDraft += delta.text;
+              } else {
+                run.content += delta.text;
+                pendingContent += delta.text;
+                pendingDeltas++;
+                broadcastDelta('content.delta', delta.text);
+              }
+            }
+            if (pendingDeltas >= 20 || (pendingDeltas && Date.now() - lastPersistedAt >= 1000)) {
+              await flushDeltas();
+            }
+          },
+          {
+            onProvenance: (provUpdate: any) => {
+              if (run.provenance) {
+                if (provUpdate.executedProvider) run.provenance.provider = provUpdate.executedProvider;
+                if (provUpdate.executedModel) run.provenance.executedModel = provUpdate.executedModel;
+                if (provUpdate.fallbackOccurred !== undefined) run.provenance.fallbackOccurred = provUpdate.fallbackOccurred;
+                if (provUpdate.fallbackReason) run.provenance.fallbackReason = provUpdate.fallbackReason;
+                run.provenance.timestamp = Date.now();
+                this.emitRunEvent(runId, 'model.provenance', run.provenance).catch(console.error);
+              }
             }
           }
-          if (pendingDeltas >= 20 || (pendingDeltas && Date.now() - lastPersistedAt >= 1000)) {
-            await flushDeltas();
-          }
-        });
+        );
         await flushDeltas();
       } catch (streamErr: any) {
         // Best-effort checkpoint; preserve the original inference/DB exception.
