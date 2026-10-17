@@ -97,6 +97,14 @@ export class LatencyAwareRoutingPolicy {
       typicalTtftMs: 450,
       costTier: 'medium',
       allowed: true
+    },
+    {
+      provider: 'anthropic',
+      model: 'claude-3-5-haiku-20241022',
+      qualityScore: 9.2,
+      typicalTtftMs: 500,
+      costTier: 'medium',
+      allowed: true
     }
   ];
 
@@ -118,6 +126,7 @@ export class LatencyAwareRoutingPolicy {
     if (process.env.TOGETHER_API_KEY) configuredProviders.push('together');
     if (process.env.FIREWORKS_API_KEY) configuredProviders.push('fireworks');
     if (process.env.OPENAI_API_KEY) configuredProviders.push('openai');
+    if (process.env.ANTHROPIC_API_KEY) configuredProviders.push('anthropic');
     if (process.env.NVIDIA_API_KEY) configuredProviders.push('nvidia');
 
     return this.selectFastExecutionPlan({
