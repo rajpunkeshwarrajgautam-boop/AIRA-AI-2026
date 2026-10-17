@@ -923,7 +923,13 @@ export class ModelRouter {
       );
     }
 
-    if (model.startsWith('llama-3.1-') || model.startsWith('llama-3.3-')) {
+    if (
+      model.startsWith('llama-3.1-') ||
+      model.startsWith('llama-3.3-') ||
+      model.startsWith('openai/gpt-oss-') ||
+      model.startsWith('qwen/') ||
+      model.startsWith('allam-')
+    ) {
       if (this.adapters.has('groq')) {
         return {
           policy,

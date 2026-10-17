@@ -276,6 +276,108 @@ app.get('/api/ready/providers', async (_req: Request, res: Response) => {
   res.json(result);
 });
 
+app.post('/api/ready/benchmark-groq', async (req: Request, res: Response) => {
+  if (!process.env.GROQ_API_KEY) {
+    return res.status(503).json({ error: 'GROQ_API_KEY not configured' });
+  }
+  const { model, prompt, max_tokens, temperature } = req.body || {};
+  if (!model || !prompt) {
+    return res.status(400).json({ error: 'model and prompt required' });
+  }
+
+  const groqKey = process.env.GROQ_API_KEY.trim().replace(/^["']|["']$/g, '');
+  const t0 = performance.now();
+  let ttfb = 0;
+  let firstDelta: number | null = null;
+  let firstThinking: number | null = null;
+  let contentDeltaCount = 0;
+  let thinkingDeltaCount = 0;
+  let text = '';
+  let thinking = '';
+  let providerModel: string | undefined;
+
+  try {
+    const upstreamRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${groqKey}`,
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream'
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: max_tokens || 256,
+        temperature: temperature !== undefined ? temperature : 0.7,
+        stream: true
+      })
+    });
+
+    ttfb = performance.now() - t0;
+    if (!upstreamRes.ok) {
+      const errBody = await upstreamRes.text();
+      return res.status(upstreamRes.status).json({
+        success: false,
+        status: upstreamRes.status,
+        ttfbMs: Math.round(ttfb),
+        error: errBody
+      });
+    }
+
+    const reader = upstreamRes.body?.getReader();
+    if (!reader) throw new Error('No body stream from Groq');
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const now = performance.now();
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data:')) continue;
+        const dataStr = line.slice(5).trim();
+        if (dataStr === '[DONE]') break;
+        try {
+          const parsed = JSON.parse(dataStr);
+          if (parsed.model && !providerModel) providerModel = parsed.model;
+          const delta = parsed.choices?.[0]?.delta;
+          if (delta?.content) {
+            if (firstDelta === null) firstDelta = now - t0;
+            contentDeltaCount++;
+            text += delta.content;
+          }
+          if (delta?.reasoning_content) {
+            if (firstThinking === null) firstThinking = now - t0;
+            thinkingDeltaCount++;
+            thinking += delta.reasoning_content;
+          }
+        } catch {}
+      }
+    }
+
+    const total = performance.now() - t0;
+    res.json({
+      success: true,
+      model,
+      providerModel,
+      ttfbMs: Math.round(ttfb),
+      ttftMs: firstDelta !== null ? Math.round(firstDelta) : null,
+      firstThinkingMs: firstThinking !== null ? Math.round(firstThinking) : null,
+      totalDurationMs: Math.round(total),
+      contentDeltaCount,
+      thinkingDeltaCount,
+      text: text.trim(),
+      thinking: thinking ? thinking.slice(0, 200) : undefined
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Hard gate to block runtime traffic before recovery is complete
 app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
   if (appState !== 'HEALTHY') {
