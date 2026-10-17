@@ -251,6 +251,31 @@ app.get('/api/ready', (_req: Request, res: Response) => {
   }
 });
 
+app.get('/api/ready/providers', async (_req: Request, res: Response) => {
+  const result: Record<string, any> = {};
+  if (process.env.GROQ_API_KEY) {
+    try {
+      const groqKey = process.env.GROQ_API_KEY.trim().replace(/^["']|["']$/g, '');
+      const resp = await fetch('https://api.groq.com/openai/v1/models', {
+        headers: { Authorization: `Bearer ${groqKey}` }
+      });
+      const data: any = await resp.json().catch(() => ({}));
+      result.groq = {
+        status: resp.status,
+        models: Array.isArray(data.data) ? data.data.map((m: any) => m.id) : [],
+        error: !resp.ok ? data : undefined,
+        keyLength: groqKey.length,
+        keyPrefix: groqKey.slice(0, 4)
+      };
+    } catch (e: any) {
+      result.groq = { error: e.message };
+    }
+  } else {
+    result.groq = { configured: false };
+  }
+  res.json(result);
+});
+
 // Hard gate to block runtime traffic before recovery is complete
 app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
   if (appState !== 'HEALTHY') {
