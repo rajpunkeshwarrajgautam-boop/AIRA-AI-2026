@@ -99,6 +99,10 @@ export class PrivateBetaCapacityGuard {
     return { ...this.config };
   }
 
+  public isEnabled(): boolean {
+    return this.config.enabled;
+  }
+
   public updateConfig(patch: Partial<PrivateBetaCapacityConfig>): void {
     this.config = { ...this.config, ...patch };
   }

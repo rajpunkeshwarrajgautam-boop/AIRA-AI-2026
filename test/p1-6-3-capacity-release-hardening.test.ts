@@ -238,6 +238,12 @@ async function runTests() {
   // ============================================================================
   console.log('\n[TEST 6] Public Provider Readiness Sanitization (/api/ready/providers)');
 
+  const liveGuard = new PrivateBetaCapacityGuard();
+  assert.equal(typeof liveGuard.isEnabled, 'function', 'PrivateBetaCapacityGuard.isEnabled must be a function');
+  assert.equal(liveGuard.isEnabled(), true, 'Default guard must be enabled');
+  const disabledGuard = new PrivateBetaCapacityGuard({ enabled: false });
+  assert.equal(disabledGuard.isEnabled(), false, 'Explicitly disabled guard must report false');
+
   // Simulate sanitized ready/providers response
   const sanitizedReadyProviders = {
     supportedProviders: {
@@ -246,7 +252,7 @@ async function runTests() {
       nvidia: { configured: true, deepModel: 'nvidia/nemotron-3-super-120b-a12b' }
     },
     capacity: {
-      guardEnabled: true,
+      guardEnabled: liveGuard.isEnabled(),
       isDegraded: false
     }
   };
