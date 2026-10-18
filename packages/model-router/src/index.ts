@@ -8,6 +8,9 @@ import { ProviderHealthTracker } from './health-tracker.js';
 import { LatencyAwareRoutingPolicy } from './routing-policy.js';
 import { ResilientModelAdapter } from './resilient-adapter.js';
 import { GeminiAdapter } from './gemini-adapter.js';
+import { PrivateBetaCapacityGuard } from './capacity/index.js';
+
+export * from './capacity/index.js';
 
 export interface ChatMessageInput {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -622,10 +625,12 @@ export class ModelRouter {
   private adapters: Map<string, ModelAdapter> = new Map();
   public readonly healthTracker: ProviderHealthTracker;
   public readonly routingPolicy: LatencyAwareRoutingPolicy;
+  public readonly capacityGuard: PrivateBetaCapacityGuard;
 
-  constructor(healthTracker?: ProviderHealthTracker) {
+  constructor(healthTracker?: ProviderHealthTracker, capacityGuard?: PrivateBetaCapacityGuard) {
     this.healthTracker = healthTracker || new ProviderHealthTracker();
     this.routingPolicy = new LatencyAwareRoutingPolicy(this.healthTracker);
+    this.capacityGuard = capacityGuard || new PrivateBetaCapacityGuard(undefined, undefined, this.healthTracker);
 
     // DeterministicMockAdapter is ONLY registered in test/dev environments.
     // Production code must never reach this adapter through the normal router.

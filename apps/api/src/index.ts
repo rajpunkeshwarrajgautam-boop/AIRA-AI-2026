@@ -3,7 +3,14 @@ import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
-import { ModelRouter } from '../../../packages/model-router/src/index.js';
+import {
+  ModelRouter,
+  ProviderHealthTracker,
+  PrivateBetaCapacityGuard,
+  InMemoryCapacityStore,
+  DistributedPostgresCapacityStore
+} from '../../../packages/model-router/src/index.js';
+import { db } from '../../../packages/db/src/index.js';
 import { ToolRegistry, ToolGateway, PostgresToolCallRepository, InMemoryToolCallRepository } from '../../../packages/tool-runtime/src/index.js';
 import { ApprovalKernel } from '../../../packages/approvals/src/index.js';
 import { PostgresApprovalRepository, PostgresSessionGrantRepository } from '../../../packages/approvals/src/repositories.js';
@@ -243,8 +250,14 @@ app.get('/api/health', (_req: Request, res: Response) => {
   });
 });
 
-// Instantiate ModelRouter early for health and diagnostics
-const modelRouter = new ModelRouter();
+// Instantiate ModelRouter early for health, circuit breakers, and private beta capacity
+const isDbConfiguredEarly = Boolean(process.env.DATABASE_URL?.trim());
+const capacityStore = isDbConfiguredEarly
+  ? new DistributedPostgresCapacityStore(db)
+  : new InMemoryCapacityStore();
+const healthTracker = new ProviderHealthTracker();
+const capacityGuard = new PrivateBetaCapacityGuard(undefined, capacityStore, healthTracker);
+const modelRouter = new ModelRouter(healthTracker, capacityGuard);
 
 app.get('/api/ready', (_req: Request, res: Response) => {
   if (appState === 'HEALTHY') {
@@ -252,6 +265,12 @@ app.get('/api/ready', (_req: Request, res: Response) => {
   } else {
     res.status(503).json({ status: appState, timestamp: Date.now() });
   }
+});
+
+app.get('/api/capacity/status', async (_req: Request, res: Response) => {
+  const diagnostics = await modelRouter.capacityGuard.getDiagnostics();
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(200).json(diagnostics);
 });
 
 app.get('/api/ready/providers', async (_req: Request, res: Response) => {
@@ -267,7 +286,8 @@ app.get('/api/ready/providers', async (_req: Request, res: Response) => {
       anthropic: { configured: Boolean(process.env.ANTHROPIC_API_KEY) }
     },
     fastRouting: modelRouter.routingPolicy.resolveFastRoute(),
-    circuitBreakers: modelRouter.healthTracker.getAllTelemetry()
+    circuitBreakers: modelRouter.healthTracker.getAllTelemetry(),
+    capacity: await modelRouter.capacityGuard.getDiagnostics()
   };
   if (process.env.GROQ_API_KEY) {
     try {
@@ -1018,6 +1038,7 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
 // Backward-Compatible Streaming Chat Endpoint
 // -----------------------------------------------------------------------
 app.post('/api/chat/stream', async (req: Request, res: Response) => {
+  let admission: any = undefined;
   try {
     const { messages, history, prompt, model, extendedThinking, systemPrompt, contextSubgraph, attachments, conversationId } = req.body;
     const promptText = prompt || (Array.isArray(messages)
@@ -1037,17 +1058,78 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     let executedModel = model || 'aira-auto';
     let executedProvider = 'unknown';
 
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.flushHeaders?.();
+    const principalId = req.principal?.userId || (req as any).guestSession?.id || 'anonymous';
+    const capacityConfig = modelRouter.capacityGuard.getConfig();
+    const isFastTarget = modelRouter.capacityGuard.isFastTarget(model);
+
+    // Section 20: Bounded context history for Fast mode
+    let effectiveHistory = contextHistory;
+    if (isFastTarget && Array.isArray(contextHistory) && contextHistory.length > capacityConfig.maxContextTurns) {
+      effectiveHistory = contextHistory.slice(-capacityConfig.maxContextTurns);
+    }
+
+    const clientAbort = new AbortController();
+    req.on('close', () => {
+      clientAbort.abort(new Error('CLIENT_CLOSED'));
+    });
+
+    let headersFlushed = false;
+    admission = await modelRouter.capacityGuard.admit(
+      {
+        principalId,
+        model,
+        promptText,
+        contextHistory: effectiveHistory,
+        abortSignal: clientAbort.signal
+      },
+      (queueProgress) => {
+        if (!headersFlushed) {
+          res.setHeader('Content-Type', 'text/event-stream');
+          res.setHeader('Cache-Control', 'no-cache');
+          res.setHeader('Connection', 'keep-alive');
+          res.flushHeaders?.();
+          headersFlushed = true;
+        }
+        res.write(`event: queue_status\ndata: ${JSON.stringify(queueProgress)}\n\n`);
+      }
+    );
+
+    if (admission.decision === 'REJECT_CAPACITY') {
+      const retryAfter = admission.retryAfterSeconds || 8;
+      const userMessage = admission.userMessage || 'Private beta capacity is temporarily full. Please retry shortly.';
+      const code = admission.rejectionCode || 'AIRA_PRIVATE_BETA_CAPACITY';
+
+      if (!headersFlushed) {
+        res.setHeader('Retry-After', String(retryAfter));
+        return res.status(429).json({
+          error: userMessage,
+          code,
+          retryAfterSeconds: retryAfter
+        });
+      } else {
+        res.write(`event: error\ndata: ${JSON.stringify({
+          error: userMessage,
+          code,
+          retryAfterSeconds: retryAfter
+        })}\n\n`);
+        return res.end();
+      }
+    }
+
+    if (!headersFlushed) {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders?.();
+      headersFlushed = true;
+    }
 
     const run = await agentRuntime.createRun({
       prompt: promptText,
       conversationId: conversationId || undefined,
       attachments: Array.isArray(attachments) ? attachments : undefined,
       systemPrompt: (systemPrompt || '') + (contextSubgraph ? `\n\n${contextSubgraph}` : ''),
-      context: { history: contextHistory },
+      context: { history: effectiveHistory },
       modelPolicy: {
         model: model || 'aira-auto',
         extendedThinking: Boolean(extendedThinking),
@@ -1068,7 +1150,12 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         dbDeferredWriteCount: 0
       };
 
-      console.log(`event=chat_latency request_id=${req.headers['x-request-id'] || run.id} run_id=${run.id} model=${executedModel} provider=${executedProvider} ttft_ms=${ttftMs} total_ms=${totalMs} delta_count=${deltaCount} thinking_count=${thinkingCount} db_critical_path_ms=${dbTele.dbCriticalPathMs} db_acquire_ms=${dbTele.dbAcquireMs} db_queries_pre_provider=${dbTele.dbQueryCountBeforeProvider} db_queries_pre_token=${dbTele.dbQueryCountBeforeFirstToken} db_deferred_writes=${dbTele.dbDeferredWriteCount}`);
+      admission.permit?.release().catch(() => {});
+      const capacityMetrics = modelRouter.capacityGuard ? {
+        queueDepth: modelRouter.capacityGuard.getQueueDepth()
+      } : {};
+
+      console.log(`event=chat_latency request_id=${req.headers['x-request-id'] || run.id} run_id=${run.id} model=${executedModel} provider=${executedProvider} ttft_ms=${ttftMs} total_ms=${totalMs} delta_count=${deltaCount} thinking_count=${thinkingCount} db_critical_path_ms=${dbTele.dbCriticalPathMs} db_acquire_ms=${dbTele.dbAcquireMs} db_queries_pre_provider=${dbTele.dbQueryCountBeforeProvider} db_queries_pre_token=${dbTele.dbQueryCountBeforeFirstToken} db_deferred_writes=${dbTele.dbDeferredWriteCount} capacity_queue_depth=${capacityMetrics.queueDepth ?? 0}`);
       res.write(`event: latency_metrics\ndata: ${JSON.stringify({
         requestId: run.id,
         ttftMs,
@@ -1081,7 +1168,8 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         dbAcquireMs: dbTele.dbAcquireMs,
         dbQueryCountBeforeProvider: dbTele.dbQueryCountBeforeProvider,
         dbQueryCountBeforeFirstToken: dbTele.dbQueryCountBeforeFirstToken,
-        dbDeferredWriteCount: dbTele.dbDeferredWriteCount
+        dbDeferredWriteCount: dbTele.dbDeferredWriteCount,
+        capacity: capacityMetrics
       })}\n\n`);
     };
 
@@ -1159,12 +1247,16 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
 
     stream.on('event', handler);
     req.on('close', () => {
+      admission.permit?.release().catch(() => {});
       stream.off('event', handler);
       agentRuntime.cancelRun(run.id).catch(() => {});
     });
 
     await agentRuntime.startRun(run.id);
   } catch (err: any) {
+    if (admission?.permit) {
+      admission.permit.release().catch(() => {});
+    }
     console.error('Chat stream failed', { code: err?.code, message: err?.message });
     const databaseUnavailable = isTemporaryDatabaseError(err);
     const code = databaseUnavailable ? 'DATABASE_TEMPORARILY_UNAVAILABLE' : 'CHAT_STREAM_FAILED';
