@@ -1,175 +1,172 @@
 {
   "version": "1.0",
-  "timestamp": "2026-10-17T18:54:00Z",
-  "phase": "P1.6.1",
-  "phase_name": "gemini-fallback-reliability-remediation",
+  "timestamp": "2026-10-18T08:27:05.691Z",
+  "phase": "P1.6.3",
+  "phase_name": "private-beta-capacity-guard-release-hardening",
   "phase_dir": ".planning",
   "plan": 1,
-  "task": 21,
-  "total_tasks": 21,
+  "task": 17,
+  "total_tasks": 17,
   "status": "paused",
   "completed_tasks": [
     {
       "id": 1,
-      "name": "Classify every Gemini failure into empirical failure taxonomy",
+      "name": "Remove runtime DDL (CREATE TABLE / CREATE INDEX) from request path in DistributedPostgresCapacityStore",
       "status": "done",
-      "commit": "8064972"
+      "commit": "27b1942"
     },
     {
       "id": 2,
-      "name": "Live Gemini model catalog and availability audit",
+      "name": "Create explicit Knex database migration 019_capacity_guard_schema.ts with capacity_permits and capacity_rate_log",
       "status": "done",
-      "commit": "8064972"
+      "commit": "27b1942"
     },
     {
       "id": 3,
-      "name": "Empirical benchmarking of low-latency Gemini candidates",
+      "name": "Implement read-only verifySchema() / isAvailable() check in DistributedPostgresCapacityStore",
       "status": "done",
-      "commit": "8064972"
+      "commit": "27b1942"
     },
     {
       "id": 4,
-      "name": "Request shape & payload compatibility normalization (roles, safety settings)",
+      "name": "Implement fail-closed admission control with sanitized AIRA_PRIVATE_BETA_CAPACITY when database tables missing",
       "status": "done",
-      "commit": "b4737d2"
+      "commit": "27b1942"
     },
     {
       "id": 5,
-      "name": "Stream parser audit (chunk framing, candidates, parts, usageMetadata, safety)",
+      "name": "Protect internal capacity diagnostics GET /api/capacity/status with admin/operator authentication gate (401/403)",
       "status": "done",
-      "commit": "b4737d2"
+      "commit": "27b1942"
     },
     {
       "id": 6,
-      "name": "Safety block classification and BLOCK_NONE policy handling",
+      "name": "Sanitize public provider readiness GET /api/ready/providers by removing keyLength and keyPrefix",
       "status": "done",
-      "commit": "b4737d2"
+      "commit": "27b1942"
     },
     {
       "id": 7,
-      "name": "Provider-specific first-token deadline tuning (Groq 2500ms, Gemini 4000ms)",
+      "name": "Provide safe migration rollback down() dropping only capacity guard tables",
       "status": "done",
-      "commit": "b4737d2"
+      "commit": "27b1942"
     },
     {
       "id": 8,
-      "name": "Fallback cascade & bounded tertiary fallback logic",
+      "name": "Update packages/db/src/scripts/verify-deploy.ts deployment verification gate to enforce capacity tables",
       "status": "done",
-      "commit": "b4737d2"
+      "commit": "27b1942"
     },
     {
       "id": 9,
-      "name": "Independent quota separation (no same-quota Groq model for account limits)",
+      "name": "Classify multi-instance evidence as SIMULATED for in-process testing vs shared PostgreSQL for true distributed enforcement",
       "status": "done",
-      "commit": "b4737d2"
+      "commit": "27b1942"
     },
     {
       "id": 10,
-      "name": "Circuit breaker isolation between Groq and Gemini",
+      "name": "Preserve certified capacity limits (Global Concurrency: 2, Per-User: 1, Global RPM: 14, Per-User RPM: 5, Queue Depth: 5, Wait: 6000ms)",
       "status": "done",
-      "commit": "b4737d2"
+      "commit": "27b1942"
     },
     {
       "id": 11,
-      "name": "Half-open recovery & probe testing",
+      "name": "Preserve P1.5 database critical path invariants (1 pre-first-token DB query, 0ms acquire P95)",
       "status": "done",
-      "commit": "b4737d2"
+      "commit": "27b1942"
     },
     {
       "id": 12,
-      "name": "Cancellation race audit and stream stickiness locking",
+      "name": "Implement dedicated release hardening test suite test/p1-6-3-capacity-release-hardening.test.ts (14/14 tests pass)",
       "status": "done",
-      "commit": "b4737d2"
+      "commit": "27b1942"
     },
     {
       "id": 13,
-      "name": "Truthful provenance preservation over SSE",
+      "name": "Update P1_6_2_PRIVATE_BETA_CAPACITY_POLICY.md and P1_6_2_PRIVATE_BETA_CAPACITY_REPORT.md",
       "status": "done",
-      "commit": "b4737d2"
+      "commit": "27b1942"
     },
     {
       "id": 14,
-      "name": "Provider health telemetry recording",
+      "name": "Author P1_6_3_CAPACITY_RELEASE_HARDENING_REPORT.md with proposed 9-step production release sequence (A-I)",
       "status": "done",
-      "commit": "b4737d2"
+      "commit": "27b1942"
     },
     {
       "id": 15,
-      "name": "Database invariant maintenance (pre-first-token DB queries = 1, acquire P95 = 0ms)",
+      "name": "Push release hardening commit 27b1942 to PR #85 branch fix/p1-6-fast-provider-resilience-20261017",
       "status": "done",
-      "commit": "39558e1"
+      "commit": "27b1942"
     },
     {
       "id": 16,
-      "name": "Security non-regression (GEMINI_API_KEY server-side only, secret scrubbing)",
+      "name": "Verify exact-HEAD GitHub Actions CI on PR #85 (Fast CI, Semantic Search CI, Main / PR certification, Vercel)",
       "status": "done",
-      "commit": "39558e1"
+      "commit": "27b1942"
     },
     {
       "id": 17,
-      "name": "Fresh 120-request multi-batch empirical certification across Batches A, B, C, D",
+      "name": "Verify zero production mutation (production baseline 1ba53bca4ff3c9a86e508a537541f19a16612053 untouched)",
       "status": "done",
-      "commit": "af13482"
-    },
+      "commit": "27b1942"
+    }
+  ],
+  "remaining_tasks": [
     {
       "id": 18,
-      "name": "Serverless decoupling (InMemoryWorkflowRepository & InMemoryToolCallRepository)",
-      "status": "done",
-      "commit": "af13482"
+      "name": "Obtain explicit human GO LIVE instruction from repository owner rajpunkeshwarrajgautam-boop",
+      "status": "not_started"
     },
     {
       "id": 19,
-      "name": "Rule G & isDirectCodingOrMath regex hardening for coding, math, JSON, and table prompts",
-      "status": "done",
-      "commit": "af13482"
-    },
-    {
-      "id": 20,
-      "name": "CI verification on PR #85 HEAD",
-      "status": "done",
-      "commit": "af13482"
-    },
-    {
-      "id": 21,
-      "name": "Artifact updates (P1_6_PROVIDER_BASELINE.md, P1_6_PROVIDER_ROUTING_POLICY.md, P1_6_PROVIDER_RESILIENCE_REPORT.md, P1_6_1_RELIABILITY_BENCHMARK.json)",
-      "status": "done",
-      "commit": "af13482"
+      "name": "Execute authorized production release sequence (Neon checkpoint, apply migration 019, merge PR #85, Vercel deploy, smoke test)",
+      "status": "not_started"
     }
   ],
-  "remaining_tasks": [],
   "blockers": [
     {
-      "description": "Google AI Studio Free Tier (15 RPM) rate limit causes upstream queuing under continuous burst load. Full 100% burst certification requires upgrading to Pay-As-You-Go tier with billing attached.",
-      "type": "external",
-      "workaround": "Bounded fallback to groq:allam-2-7b and pacing requests across 10-15s intervals between bursts."
+      "description": "Production release authority gate: AGENTS.md mandates explicit human GO LIVE instruction from rajpunkeshwarrajgautam-boop before production Neon migration or merging PR #85 into prod-release",
+      "type": "human_action",
+      "workaround": "Await human GO LIVE instruction; maintain release candidate in PR #85 with passing exact-HEAD CI"
     }
   ],
   "async_jobs": [],
   "human_actions_pending": [
     {
-      "action": "Awaiting human review and explicit GO LIVE approval for production deployment from rajpunkeshwarrajgautam-boop. DO NOT merge PR #85 autonomously.",
-      "context": "Strict release governance rules under AGENTS.md prohibit autonomous merge to prod-release or production deployment without explicit instruction.",
+      "action": "Review P1_6_3_CAPACITY_RELEASE_HARDENING_REPORT.md and provide explicit GO LIVE authorization for PR #85 commit 27b19427c8d061fde67f398aae1ad863f426e1fe",
+      "context": "Autonomous deployment to prod-release is strictly denied by AGENTS.md and production protection ruleset",
       "blocking": true
     }
   ],
   "decisions": [
     {
-      "decision": "Set Gemini first-token deadline to 4000ms while keeping Groq deadline at 2500ms.",
-      "rationale": "Empirical data showed 100% of previous Gemini failures were caused by the 2500ms deadline cutting off healthy streams delayed by Google cold starts.",
-      "phase": "P1.6.1"
+      "decision": "Remove runtime DDL (CREATE TABLE / CREATE INDEX) entirely from request path",
+      "rationale": "Runtime DDL introduces table locks, cold start latency, and failure modes in serverless lambda execution",
+      "phase": "P1.6.3"
     },
     {
-      "decision": "Use InMemoryWorkflowRepository and InMemoryToolCallRepository when DATABASE_URL is not configured.",
-      "rationale": "Prevents ECONNREFUSED 127.0.0.1:5432 crashes when tool or workflow intents are evaluated on serverless preview runtimes.",
-      "phase": "P1.6.1"
+      "decision": "Implement pre-provisioned Knex migration 019_capacity_guard_schema.ts with clean down() rollback",
+      "rationale": "Standardizes database schema lifecycle in sync with knex_migrations table and deployment verification gate",
+      "phase": "P1.6.3"
     },
     {
-      "decision": "Pin gemini-3.5-flash-lite as secondary Fast model over gemini-3.5-flash.",
-      "rationale": "gemini-3.5-flash produces mandatory thinking tokens adding ~1940ms delay; gemini-3.5-flash-lite yields 440-650ms direct streaming TTFT with 9.8/10 technical quality.",
-      "phase": "P1.6.1"
+      "decision": "Implement fail-closed conservative admission with sanitized AIRA_PRIVATE_BETA_CAPACITY",
+      "rationale": "If DB tables are missing, failing closed prevents upstream free-tier provider exhaustion while concealing schema internals",
+      "phase": "P1.6.3"
+    },
+    {
+      "decision": "Protect /api/capacity/status with admin/operator authentication gate",
+      "rationale": "Prevents unauthorized exposure of internal concurrency metrics, queue depth, and provider circuit states",
+      "phase": "P1.6.3"
+    },
+    {
+      "decision": "Classify multi-instance evidence truthfully as SIMULATED for in-process testing vs shared PostgreSQL for true distributed enforcement",
+      "rationale": "Serverless lambdas do not share memory heaps; distributed multi-instance requires shared PostgreSQL backing",
+      "phase": "P1.6.3"
     }
   ],
   "uncommitted_files": [],
-  "next_action": "Check GitHub PR #85 status, await human GO LIVE instructions, or run additional verification if requested.",
-  "context_notes": "All P1.6.1 remediations have been implemented, tested locally, committed, and pushed to PR #85. 120-request multi-batch benchmark shows Gemini Error Rate at 0.0%, True Browser P50 TTFT at 849ms, P95 at 2050ms, Quality at 9.1/10. Production baseline on prod-release remains 100% untouched."
+  "next_action": "Await human GO LIVE authorization from rajpunkeshwarrajgautam-boop, then execute production release sequence (Steps A-I) documented in P1_6_3_CAPACITY_RELEASE_HARDENING_REPORT.md",
+  "context_notes": "All P1.6.3 release hardening objectives are 100% complete. Exact-HEAD CI is all green on PR #85 (commit 27b1942). Production baseline 1ba53bc remains untouched. System is in certified release candidate state awaiting human authorization."
 }
