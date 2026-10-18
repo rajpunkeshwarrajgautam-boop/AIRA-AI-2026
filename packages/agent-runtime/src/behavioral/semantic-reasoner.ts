@@ -90,7 +90,13 @@ export class SemanticReasoner {
     }
 
     // 7. Tier 2: Context-Aware Semantic Model Classification
-    if (this.modelRouter && this.modelRouter.listProviders().length > 0 && rawPrompt.length > 10) {
+    const shouldSkipModelClassification = (
+      input.advisoryIntent === 'ANSWER' &&
+      !freshnessEval.requiresFreshness &&
+      !isExecutionRequested &&
+      !isMultiPart
+    );
+    if (!shouldSkipModelClassification && this.modelRouter && this.modelRouter.listProviders().length > 0 && rawPrompt.length > 10) {
       try {
         const modelAnalysis = await this.classifyWithModel(
           rawPrompt,
@@ -327,7 +333,8 @@ Respond with valid JSON only:
     const isGreetingOrPleasantry = (
       /^(hi|hello|hey|good\s+(morning|afternoon|evening)|howdy|greetings|thanks|thank\s+you)[!.?]?$/i.test(promptLower) ||
       /^(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:say\s+|give\s+a\s+)?(hi|hello|hey|greetings|welcome)\b/i.test(promptLower) ||
-      /^(?:say\s+hello|say\s+hi|greet\s+me)\b/i.test(promptLower)
+      /^(?:say\s+hello|say\s+hi|greet\s+me)\b/i.test(promptLower) ||
+      /^(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:reply|respond|answer|say|output|echo|repeat)\b/i.test(promptLower)
     );
     if (isGreetingOrPleasantry) {
       return {

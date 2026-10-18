@@ -1074,6 +1074,8 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       : [];
 
     const tRequestReceived = performance.now();
+    let tCapacityAdmitted: number | null = null;
+    let tRunCreated: number | null = null;
     let tFirstDelta: number | null = null;
     let deltaCount = 0;
     let thinkingCount = 0;
@@ -1115,6 +1117,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         res.write(`event: queue_status\ndata: ${JSON.stringify(queueProgress)}\n\n`);
       }
     );
+    tCapacityAdmitted = performance.now();
 
     if (admission.decision === 'REJECT_CAPACITY') {
       const retryAfter = admission.retryAfterSeconds || 8;
@@ -1157,13 +1160,29 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         extendedThinking: Boolean(extendedThinking),
       }
     }, req.principal!);
+    tRunCreated = performance.now();
 
     const stream = agentRuntime.getEventStream(run.id);
 
-    const emitMetricsAndLog = () => {
+    let permitReleased = false;
+    const releasePermitIfHeld = async () => {
+      if (admission?.permit && !permitReleased) {
+        permitReleased = true;
+        try {
+          await admission.permit.release();
+        } catch (releaseErr) {
+          console.warn('[CHAT_STREAM] Error releasing capacity permit:', releaseErr);
+        }
+      }
+    };
+
+    const finalizeAndEmitMetrics = async () => {
       const tCompleted = performance.now();
       const totalMs = Math.round(tCompleted - tRequestReceived);
       const ttftMs = tFirstDelta !== null ? Math.round(tFirstDelta - tRequestReceived) : null;
+      const capacityAdmissionMs = tCapacityAdmitted !== null ? Math.round(tCapacityAdmitted - tRequestReceived) : null;
+      const runCreationMs = (tRunCreated !== null && tCapacityAdmitted !== null) ? Math.round(tRunCreated - tCapacityAdmitted) : null;
+
       const dbTele = agentRuntime.getRunDbTelemetry(run.id) || {
         dbCriticalPathMs: 0,
         dbAcquireMs: 0,
@@ -1172,16 +1191,18 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         dbDeferredWriteCount: 0
       };
 
-      admission.permit?.release().catch(() => {});
+      await releasePermitIfHeld();
       const capacityMetrics = modelRouter.capacityGuard ? {
         queueDepth: modelRouter.capacityGuard.getQueueDepth()
       } : {};
 
-      console.log(`event=chat_latency request_id=${req.headers['x-request-id'] || run.id} run_id=${run.id} model=${executedModel} provider=${executedProvider} ttft_ms=${ttftMs} total_ms=${totalMs} delta_count=${deltaCount} thinking_count=${thinkingCount} db_critical_path_ms=${dbTele.dbCriticalPathMs} db_acquire_ms=${dbTele.dbAcquireMs} db_queries_pre_provider=${dbTele.dbQueryCountBeforeProvider} db_queries_pre_token=${dbTele.dbQueryCountBeforeFirstToken} db_deferred_writes=${dbTele.dbDeferredWriteCount} capacity_queue_depth=${capacityMetrics.queueDepth ?? 0}`);
+      console.log(`event=chat_latency request_id=${req.headers['x-request-id'] || run.id} run_id=${run.id} model=${executedModel} provider=${executedProvider} ttft_ms=${ttftMs} total_ms=${totalMs} capacity_admission_ms=${capacityAdmissionMs} run_creation_ms=${runCreationMs} delta_count=${deltaCount} thinking_count=${thinkingCount} db_critical_path_ms=${dbTele.dbCriticalPathMs} db_acquire_ms=${dbTele.dbAcquireMs} db_queries_pre_provider=${dbTele.dbQueryCountBeforeProvider} db_queries_pre_token=${dbTele.dbQueryCountBeforeFirstToken} db_deferred_writes=${dbTele.dbDeferredWriteCount} capacity_queue_depth=${capacityMetrics.queueDepth ?? 0}`);
       res.write(`event: latency_metrics\ndata: ${JSON.stringify({
         requestId: run.id,
         ttftMs,
         totalMs,
+        capacityAdmissionMs,
+        runCreationMs,
         deltaCount,
         thinkingCount,
         executedModel,
@@ -1195,7 +1216,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       })}\n\n`);
     };
 
-    const handler = (evt: any) => {
+    const handler = async (evt: any) => {
       if (evt.type === 'routing.decision') {
         res.write(`event: routing_decision\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'model.provenance') {
@@ -1222,7 +1243,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       } else if (evt.type === 'workflow.step.failed') {
         res.write(`event: workflow_step_failed\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'workflow.completed') {
-        emitMetricsAndLog();
+        await finalizeAndEmitMetrics();
         res.write(`event: workflow_completed\ndata: ${JSON.stringify(evt.data)}\n\n`);
         res.write(`event: done\ndata: [DONE]\n\n`);
         stream.off('event', handler);
@@ -1232,6 +1253,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         res.write(`event: artifact_delta\ndata: ${JSON.stringify({ chunk: evt.data.content })}\n\n`);
         res.write(`event: artifact_close\ndata: ${JSON.stringify({ id: evt.data.id })}\n\n`);
       } else if (evt.type === 'approval.required') {
+        await releasePermitIfHeld();
         res.write(`event: approval_required\ndata: ${JSON.stringify(evt.data)}\n\n`);
         res.write(`event: done\ndata: [DONE]\n\n`);
         stream.off('event', handler);
@@ -1241,7 +1263,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       } else if (evt.type === 'tool.completed') {
         res.write(`event: tool_completed\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'run.failed') {
-        emitMetricsAndLog();
+        await finalizeAndEmitMetrics();
         const failure = evt.data?.error || 'Aira runtime failed before producing a response';
         console.error(`[CHAT_STREAM_RUN_FAILED] run_id=${run.id} model=${executedModel}:`, failure);
         const storageFailure = isTemporaryDatabaseError(new Error(String(failure)));
@@ -1253,14 +1275,14 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         stream.off('event', handler);
         res.end();
       } else if (evt.type === 'run.cancelled') {
-        emitMetricsAndLog();
+        await finalizeAndEmitMetrics();
         res.write(`event: error\ndata: ${JSON.stringify({
           error: evt.data?.error || 'Aira run was cancelled',
         })}\n\n`);
         stream.off('event', handler);
         res.end();
       } else if (evt.type === 'run.completed') {
-        emitMetricsAndLog();
+        await finalizeAndEmitMetrics();
         res.write(`event: done\ndata: [DONE]\n\n`);
         stream.off('event', handler);
         res.end();
@@ -1268,8 +1290,8 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     };
 
     stream.on('event', handler);
-    req.on('close', () => {
-      admission.permit?.release().catch(() => {});
+    req.on('close', async () => {
+      await releasePermitIfHeld();
       stream.off('event', handler);
       agentRuntime.cancelRun(run.id).catch(() => {});
     });
@@ -1277,7 +1299,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     await agentRuntime.startRun(run.id);
   } catch (err: any) {
     if (admission?.permit) {
-      admission.permit.release().catch(() => {});
+      await admission.permit.release().catch(() => {});
     }
     console.error('Chat stream failed', { code: err?.code, message: err?.message });
     const databaseUnavailable = isTemporaryDatabaseError(err);

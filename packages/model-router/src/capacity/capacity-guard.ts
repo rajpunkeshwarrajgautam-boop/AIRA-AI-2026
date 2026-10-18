@@ -198,9 +198,9 @@ export class PrivateBetaCapacityGuard {
       }
     }
 
-    // 5. Per-User Concurrency Check (Section 5)
-    const userActive = await this.store.getActiveConcurrency('user', principalId);
-    if (userActive >= this.config.perUserMaxConcurrent) {
+    // 5. Per-User Concurrency Atomic Check & Permit Reservation (Section 5)
+    const userPermitAcquisition = await this.store.acquirePermit('user', principalId, this.config.perUserMaxConcurrent, 30);
+    if (!userPermitAcquisition.acquired) {
       this.metrics.rejected++;
       const retryAfter = this.calculateJitteredRetryAfter(this.config.retryAfterSeconds);
       return {
@@ -211,10 +211,12 @@ export class PrivateBetaCapacityGuard {
         userMessage: 'You have an active request in progress. Please wait for it to complete.'
       };
     }
+    const userPermitId = userPermitAcquisition.permitId;
 
     // 6. Per-User Rate Limit Check (Sliding Window Log)
     const userRpmCheck = await this.store.recordAndCheckRpm('user', principalId, this.config.perUserRpm, 60000);
     if (!userRpmCheck.allowed) {
+      if (userPermitId) await this.store.releasePermit(userPermitId);
       this.metrics.rejected++;
       const retryAfter = Math.max(1, Math.ceil(userRpmCheck.resetMs / 1000));
       return {
@@ -229,6 +231,7 @@ export class PrivateBetaCapacityGuard {
     // 7. Global Rate Limit Check (Sliding Window Log)
     const globalRpmCheck = await this.store.recordAndCheckRpm('global', 'system', effectiveGlobalRpm, 60000);
     if (!globalRpmCheck.allowed) {
+      if (userPermitId) await this.store.releasePermit(userPermitId);
       this.metrics.rejected++;
       const retryAfter = Math.max(1, Math.ceil(globalRpmCheck.resetMs / 1000));
       return {
@@ -241,23 +244,19 @@ export class PrivateBetaCapacityGuard {
     }
 
     // 8. Global Concurrency Check & Immediate Permit Acquisition
-    const globalPermitAcquisition = await this.store.acquirePermit('global', principalId, effectiveGlobalMaxConcurrent, 45);
+    const globalPermitAcquisition = await this.store.acquirePermit('global', principalId, effectiveGlobalMaxConcurrent, 30);
     if (globalPermitAcquisition.acquired && globalPermitAcquisition.permitId) {
-      // Also register per-user permit for concurrent tracking
-      const userPermitAcquisition = await this.store.acquirePermit('user', principalId, this.config.perUserMaxConcurrent, 45);
       const permitId = globalPermitAcquisition.permitId;
-      const userPermitId = userPermitAcquisition.permitId;
-
       this.metrics.admitted++;
 
       let released = false;
       const releaseHandle = async () => {
         if (released) return;
         released = true;
-        await this.store.releasePermit(permitId);
-        if (userPermitId) {
-          await this.store.releasePermit(userPermitId);
-        }
+        await Promise.all([
+          this.store.releasePermit(permitId),
+          userPermitId ? this.store.releasePermit(userPermitId) : Promise.resolve()
+        ]);
         // Drain next queued request upon permit release
         this.processNextQueued();
       };
@@ -272,6 +271,11 @@ export class PrivateBetaCapacityGuard {
           release: releaseHandle
         }
       };
+    }
+
+    // Release per-user permit before queueing to prevent blocking other user requests
+    if (userPermitId) {
+      await this.store.releasePermit(userPermitId);
     }
 
     // 9. Concurrency is saturated -> Evaluate Queue (Section 10)
