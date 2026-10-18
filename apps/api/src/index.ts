@@ -3,8 +3,15 @@ import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
-import { ModelRouter } from '../../../packages/model-router/src/index.js';
-import { ToolRegistry, ToolGateway, PostgresToolCallRepository } from '../../../packages/tool-runtime/src/index.js';
+import {
+  ModelRouter,
+  ProviderHealthTracker,
+  PrivateBetaCapacityGuard,
+  InMemoryCapacityStore,
+  DistributedPostgresCapacityStore
+} from '../../../packages/model-router/src/index.js';
+import { db } from '../../../packages/db/src/index.js';
+import { ToolRegistry, ToolGateway, PostgresToolCallRepository, InMemoryToolCallRepository } from '../../../packages/tool-runtime/src/index.js';
 import { ApprovalKernel } from '../../../packages/approvals/src/index.js';
 import { PostgresApprovalRepository, PostgresSessionGrantRepository } from '../../../packages/approvals/src/repositories.js';
 import { BrainV2KnowledgeEngine, PrincipalScope } from '../../../packages/knowledge/src/index.js';
@@ -243,6 +250,15 @@ app.get('/api/health', (_req: Request, res: Response) => {
   });
 });
 
+// Instantiate ModelRouter early for health, circuit breakers, and private beta capacity
+const isDbConfiguredEarly = Boolean(process.env.DATABASE_URL?.trim());
+const capacityStore = isDbConfiguredEarly
+  ? new DistributedPostgresCapacityStore(db)
+  : new InMemoryCapacityStore();
+const healthTracker = new ProviderHealthTracker();
+const capacityGuard = new PrivateBetaCapacityGuard(undefined, capacityStore, healthTracker);
+const modelRouter = new ModelRouter(healthTracker, capacityGuard);
+
 app.get('/api/ready', (_req: Request, res: Response) => {
   if (appState === 'HEALTHY') {
     res.status(200).json({ status: 'READY', timestamp: Date.now() });
@@ -252,7 +268,25 @@ app.get('/api/ready', (_req: Request, res: Response) => {
 });
 
 app.get('/api/ready/providers', async (_req: Request, res: Response) => {
-  const result: Record<string, any> = {};
+  const fastRoute = modelRouter.routingPolicy.resolveFastRoute();
+  const result: Record<string, any> = {
+    supportedProviders: {
+      groq: { configured: Boolean(process.env.GROQ_API_KEY) },
+      gemini: { configured: Boolean(process.env.GEMINI_API_KEY) },
+      nvidia: { configured: Boolean(process.env.NVIDIA_API_KEY), deepModel: 'nvidia/nemotron-3-super-120b-a12b' },
+      cerebras: { configured: Boolean(process.env.CEREBRAS_API_KEY) },
+      together: { configured: Boolean(process.env.TOGETHER_API_KEY) },
+      fireworks: { configured: Boolean(process.env.FIREWORKS_API_KEY) },
+      openai: { configured: Boolean(process.env.OPENAI_API_KEY) },
+      anthropic: { configured: Boolean(process.env.ANTHROPIC_API_KEY) }
+    },
+    fastRouting: fastRoute,
+    circuitBreakers: modelRouter.healthTracker.getAllTelemetry(),
+    capacity: {
+      guardEnabled: modelRouter.capacityGuard.isEnabled(),
+      isDegraded: fastRoute.isDegraded
+    }
+  };
   if (process.env.GROQ_API_KEY) {
     try {
       const groqKey = process.env.GROQ_API_KEY.trim().replace(/^["']|["']$/g, '');
@@ -263,15 +297,38 @@ app.get('/api/ready/providers', async (_req: Request, res: Response) => {
       result.groq = {
         status: resp.status,
         models: Array.isArray(data.data) ? data.data.map((m: any) => m.id) : [],
-        error: !resp.ok ? data : undefined,
-        keyLength: groqKey.length,
-        keyPrefix: groqKey.slice(0, 4)
+        error: !resp.ok ? data : undefined
       };
     } catch (e: any) {
       result.groq = { error: e.message };
     }
   } else {
     result.groq = { configured: false };
+  }
+  if (process.env.GEMINI_API_KEY) {
+    try {
+      const geminiKey = process.env.GEMINI_API_KEY.trim().replace(/^["']|["']$/g, '');
+      const resp = await fetch('https://generativelanguage.googleapis.com/v1beta/models', {
+        headers: { 'x-goog-api-key': geminiKey }
+      });
+      const data: any = await resp.json().catch(() => ({}));
+      const rawModels: any[] = Array.isArray(data.models) ? data.models : [];
+      result.gemini = {
+        status: resp.status,
+        models: rawModels.map(m => m.name.replace(/^models\//, '')),
+        details: rawModels.map(m => ({
+          name: m.name.replace(/^models\//, ''),
+          displayName: m.displayName,
+          supportedGenerationMethods: m.supportedGenerationMethods,
+          inputTokenLimit: m.inputTokenLimit,
+          outputTokenLimit: m.outputTokenLimit
+        }))
+      };
+    } catch (e: any) {
+      result.gemini = { error: e.message };
+    }
+  } else {
+    result.gemini = { configured: false };
   }
   res.json(result);
 });
@@ -378,6 +435,125 @@ app.post('/api/ready/benchmark-groq', async (req: Request, res: Response) => {
   }
 });
 
+app.post('/api/ready/benchmark-gemini', async (req: Request, res: Response) => {
+  if (!process.env.GEMINI_API_KEY) {
+    return res.status(503).json({ error: 'GEMINI_API_KEY not configured' });
+  }
+  const { model, prompt, max_tokens, temperature } = req.body || {};
+  if (!model || !prompt) {
+    return res.status(400).json({ error: 'model and prompt required' });
+  }
+
+  const geminiKey = process.env.GEMINI_API_KEY.trim().replace(/^["']|["']$/g, '');
+  const cleanModel = model.replace(/^models\//, '');
+  const t0 = performance.now();
+  let ttfb = 0;
+  let firstDelta: number | null = null;
+  let firstThinking: number | null = null;
+  let contentDeltaCount = 0;
+  let thinkingDeltaCount = 0;
+  let text = '';
+  let thinking = '';
+  let usage: any = null;
+
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:streamGenerateContent?alt=sse`;
+    const upstreamRes = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'x-goog-api-key': geminiKey,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: temperature !== undefined ? temperature : 0.7,
+          maxOutputTokens: max_tokens || 256
+        }
+      })
+    });
+
+    ttfb = performance.now() - t0;
+    if (!upstreamRes.ok) {
+      const errBody = await upstreamRes.text();
+      const sanitized = errBody.replaceAll(geminiKey, '[REDACTED]');
+      return res.status(upstreamRes.status).json({
+        success: false,
+        status: upstreamRes.status,
+        ttfbMs: Math.round(ttfb),
+        error: sanitized
+      });
+    }
+
+    const reader = upstreamRes.body?.getReader();
+    if (!reader) throw new Error('No body stream from Gemini');
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) continue;
+        const jsonStr = trimmed.slice(5).trim();
+        if (!jsonStr || jsonStr === '[DONE]') continue;
+
+        try {
+          const parsed = JSON.parse(jsonStr);
+          const candidate = parsed.candidates?.[0];
+          if (parsed.usageMetadata) {
+            usage = parsed.usageMetadata;
+          }
+          if (candidate?.content?.parts) {
+            for (const part of candidate.content.parts) {
+              if (part.thought) {
+                if (firstThinking === null) {
+                  firstThinking = performance.now() - t0;
+                }
+                thinkingDeltaCount++;
+                thinking += part.text || '';
+              } else if (part.text) {
+                if (firstDelta === null) {
+                  firstDelta = performance.now() - t0;
+                }
+                contentDeltaCount++;
+                text += part.text;
+              }
+            }
+          }
+        } catch {
+          // ignore SSE JSON boundary chunks
+        }
+      }
+    }
+
+    const total = performance.now() - t0;
+    res.json({
+      success: true,
+      status: 200,
+      model: cleanModel,
+      providerModel: cleanModel,
+      ttfbMs: Math.round(ttfb),
+      ttftMs: firstDelta !== null ? Math.round(firstDelta) : null,
+      firstThinkingMs: firstThinking !== null ? Math.round(firstThinking) : null,
+      totalDurationMs: Math.round(total),
+      contentDeltaCount,
+      thinkingDeltaCount,
+      text: text.trim(),
+      thinking: thinking ? thinking.slice(0, 200) : undefined,
+      usage
+    });
+  } catch (err: any) {
+    const sanitized = err.message ? err.message.replaceAll(geminiKey, '[REDACTED]') : 'Unknown error';
+    res.status(500).json({ success: false, error: sanitized });
+  }
+});
+
 // Hard gate to block runtime traffic before recovery is complete
 app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
   if (appState !== 'HEALTHY') {
@@ -390,16 +566,43 @@ app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
 // Routes registered above (health, ready) are public infrastructure probes.
 app.use('/api', createPrincipalMiddleware());
 
+// Protected internal capacity diagnostics endpoint (Admin/Operator only)
+app.get('/api/capacity/status', async (req: Request, res: Response) => {
+  const principal = req.principal;
+  if (!principal) {
+    return res.status(401).json({ error: 'Unauthorized', message: 'Authentication required' });
+  }
+
+  const roles = principal.roles || [];
+  const scopes = principal.scopes || [];
+  const isAuthorized =
+    roles.includes('admin') ||
+    roles.includes('operator') ||
+    scopes.includes('admin') ||
+    scopes.includes('operator') ||
+    principal.userId === 'admin';
+
+  if (!isAuthorized) {
+    return res.status(403).json({
+      error: 'Forbidden',
+      message: 'Admin or operator authorization required for internal capacity diagnostics'
+    });
+  }
+
+  const diagnostics = await modelRouter.capacityGuard.getDiagnostics();
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(200).json(diagnostics);
+});
+
 // Initialize Core Subsystems
-const modelRouter = new ModelRouter();
 app.use('/api/builder', createBuilderRoutes(modelRouter));
+const isDbConfigured = Boolean(process.env.DATABASE_URL?.trim());
 const toolRegistry = new ToolRegistry(process.cwd());
 const approvalKernel = new ApprovalKernel(new PostgresApprovalRepository(), new PostgresSessionGrantRepository());
-const toolCallRepo = new PostgresToolCallRepository();
+const toolCallRepo = isDbConfigured ? new PostgresToolCallRepository() : new InMemoryToolCallRepository();
 const toolGateway = new ToolGateway(toolCallRepo, approvalKernel, process.cwd());
 const knowledgeEngine = new BrainV2KnowledgeEngine();
 const mcpHost = new McpHost(toolGateway);
-const isDbConfigured = Boolean(process.env.DATABASE_URL?.trim());
 const agentRepo = new PostgresAgentRepository();
 const runRepo = isDbConfigured ? new PostgresRunRepository() : new InMemoryRunRepository();
 const autoRepo = new PostgresAutomationRepository();
@@ -857,6 +1060,7 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
 // Backward-Compatible Streaming Chat Endpoint
 // -----------------------------------------------------------------------
 app.post('/api/chat/stream', async (req: Request, res: Response) => {
+  let admission: any = undefined;
   try {
     const { messages, history, prompt, model, extendedThinking, systemPrompt, contextSubgraph, attachments, conversationId } = req.body;
     const promptText = prompt || (Array.isArray(messages)
@@ -876,17 +1080,78 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     let executedModel = model || 'aira-auto';
     let executedProvider = 'unknown';
 
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.flushHeaders?.();
+    const principalId = req.principal?.userId || (req as any).guestSession?.id || 'anonymous';
+    const capacityConfig = modelRouter.capacityGuard.getConfig();
+    const isFastTarget = modelRouter.capacityGuard.isFastTarget(model);
+
+    // Section 20: Bounded context history for Fast mode
+    let effectiveHistory = contextHistory;
+    if (isFastTarget && Array.isArray(contextHistory) && contextHistory.length > capacityConfig.maxContextTurns) {
+      effectiveHistory = contextHistory.slice(-capacityConfig.maxContextTurns);
+    }
+
+    const clientAbort = new AbortController();
+    req.on('close', () => {
+      clientAbort.abort(new Error('CLIENT_CLOSED'));
+    });
+
+    let headersFlushed = false;
+    admission = await modelRouter.capacityGuard.admit(
+      {
+        principalId,
+        model,
+        promptText,
+        contextHistory: effectiveHistory,
+        abortSignal: clientAbort.signal
+      },
+      (queueProgress) => {
+        if (!headersFlushed) {
+          res.setHeader('Content-Type', 'text/event-stream');
+          res.setHeader('Cache-Control', 'no-cache');
+          res.setHeader('Connection', 'keep-alive');
+          res.flushHeaders?.();
+          headersFlushed = true;
+        }
+        res.write(`event: queue_status\ndata: ${JSON.stringify(queueProgress)}\n\n`);
+      }
+    );
+
+    if (admission.decision === 'REJECT_CAPACITY') {
+      const retryAfter = admission.retryAfterSeconds || 8;
+      const userMessage = admission.userMessage || 'Private beta capacity is temporarily full. Please retry shortly.';
+      const code = admission.rejectionCode || 'AIRA_PRIVATE_BETA_CAPACITY';
+
+      if (!headersFlushed) {
+        res.setHeader('Retry-After', String(retryAfter));
+        return res.status(429).json({
+          error: userMessage,
+          code,
+          retryAfterSeconds: retryAfter
+        });
+      } else {
+        res.write(`event: error\ndata: ${JSON.stringify({
+          error: userMessage,
+          code,
+          retryAfterSeconds: retryAfter
+        })}\n\n`);
+        return res.end();
+      }
+    }
+
+    if (!headersFlushed) {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders?.();
+      headersFlushed = true;
+    }
 
     const run = await agentRuntime.createRun({
       prompt: promptText,
       conversationId: conversationId || undefined,
       attachments: Array.isArray(attachments) ? attachments : undefined,
       systemPrompt: (systemPrompt || '') + (contextSubgraph ? `\n\n${contextSubgraph}` : ''),
-      context: { history: contextHistory },
+      context: { history: effectiveHistory },
       modelPolicy: {
         model: model || 'aira-auto',
         extendedThinking: Boolean(extendedThinking),
@@ -907,7 +1172,12 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         dbDeferredWriteCount: 0
       };
 
-      console.log(`event=chat_latency request_id=${req.headers['x-request-id'] || run.id} run_id=${run.id} model=${executedModel} provider=${executedProvider} ttft_ms=${ttftMs} total_ms=${totalMs} delta_count=${deltaCount} thinking_count=${thinkingCount} db_critical_path_ms=${dbTele.dbCriticalPathMs} db_acquire_ms=${dbTele.dbAcquireMs} db_queries_pre_provider=${dbTele.dbQueryCountBeforeProvider} db_queries_pre_token=${dbTele.dbQueryCountBeforeFirstToken} db_deferred_writes=${dbTele.dbDeferredWriteCount}`);
+      admission.permit?.release().catch(() => {});
+      const capacityMetrics = modelRouter.capacityGuard ? {
+        queueDepth: modelRouter.capacityGuard.getQueueDepth()
+      } : {};
+
+      console.log(`event=chat_latency request_id=${req.headers['x-request-id'] || run.id} run_id=${run.id} model=${executedModel} provider=${executedProvider} ttft_ms=${ttftMs} total_ms=${totalMs} delta_count=${deltaCount} thinking_count=${thinkingCount} db_critical_path_ms=${dbTele.dbCriticalPathMs} db_acquire_ms=${dbTele.dbAcquireMs} db_queries_pre_provider=${dbTele.dbQueryCountBeforeProvider} db_queries_pre_token=${dbTele.dbQueryCountBeforeFirstToken} db_deferred_writes=${dbTele.dbDeferredWriteCount} capacity_queue_depth=${capacityMetrics.queueDepth ?? 0}`);
       res.write(`event: latency_metrics\ndata: ${JSON.stringify({
         requestId: run.id,
         ttftMs,
@@ -920,7 +1190,8 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         dbAcquireMs: dbTele.dbAcquireMs,
         dbQueryCountBeforeProvider: dbTele.dbQueryCountBeforeProvider,
         dbQueryCountBeforeFirstToken: dbTele.dbQueryCountBeforeFirstToken,
-        dbDeferredWriteCount: dbTele.dbDeferredWriteCount
+        dbDeferredWriteCount: dbTele.dbDeferredWriteCount,
+        capacity: capacityMetrics
       })}\n\n`);
     };
 
@@ -998,12 +1269,16 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
 
     stream.on('event', handler);
     req.on('close', () => {
+      admission.permit?.release().catch(() => {});
       stream.off('event', handler);
       agentRuntime.cancelRun(run.id).catch(() => {});
     });
 
     await agentRuntime.startRun(run.id);
   } catch (err: any) {
+    if (admission?.permit) {
+      admission.permit.release().catch(() => {});
+    }
     console.error('Chat stream failed', { code: err?.code, message: err?.message });
     const databaseUnavailable = isTemporaryDatabaseError(err);
     const code = databaseUnavailable ? 'DATABASE_TEMPORARILY_UNAVAILABLE' : 'CHAT_STREAM_FAILED';

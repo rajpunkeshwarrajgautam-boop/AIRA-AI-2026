@@ -1,0 +1,65 @@
+{
+  "auditTimestamp": "2026-10-17T17:55:00.000Z",
+  "datasetSource": "P1_6_PROVIDER_BENCHMARK.json",
+  "environment": "Vercel Preview",
+  "totalDatasetRequests": 90,
+  "totalGeminiRequests": 46,
+  "geminiRequestShare": 51.1,
+  "totalFailures": 21,
+  "geminiFailures": 17,
+  "geminiErrorRate": 18.9,
+  "nonGeminiFailures": 4,
+  "classificationBreakdown": {
+    "firstTokenTimeout": {
+      "count": 17,
+      "percentageOfGeminiFailures": 100.0,
+      "percentageOfTotalRequests": 18.9,
+      "byModel": {
+        "gemini-3.5-flash-lite": 7,
+        "gemini-flash-lite-latest": 7,
+        "gemini-3.5-flash": 3
+      },
+      "byBatch": {
+        "batchA": 0,
+        "batchB": 2,
+        "batchC": 15
+      },
+      "rootCause": "Requests exceeded the 2500ms first-token deadline. Contributing factors: (1) 2500ms deadline was tuned for primary Groq without accounting for Gemini fallback latency variance; (2) gemini-3.5-flash reasoning token latency (~1940ms) easily pushed TTFT over 2500ms under slight load; (3) burst requests in Batch C saturated the standard 15 RPM queue window at Google, causing upstream queuing delays between 2831ms and 5292ms."
+    },
+    "http400": { "count": 0, "percentage": 0.0 },
+    "http401": { "count": 0, "percentage": 0.0 },
+    "http403": { "count": 0, "percentage": 0.0 },
+    "http404": { "count": 0, "percentage": 0.0 },
+    "http408": { "count": 0, "percentage": 0.0 },
+    "http429": { "count": 0, "percentage": 0.0 },
+    "http5xx": { "count": 0, "percentage": 0.0 },
+    "networkReset": { "count": 0, "percentage": 0.0 },
+    "dnsTls": { "count": 0, "percentage": 0.0 },
+    "emptyStream": { "count": 0, "percentage": 0.0 },
+    "malformedSSE": { "count": 0, "percentage": 0.0 },
+    "parserFailure": { "count": 0, "percentage": 0.0 },
+    "unsupportedRequestParameter": { "count": 0, "percentage": 0.0 },
+    "unsupportedRoleMessageStructure": { "count": 0, "percentage": 0.0 },
+    "safetyBlock": { "count": 0, "percentage": 0.0 },
+    "contentPolicyBlock": { "count": 0, "percentage": 0.0 },
+    "quotaExhaustion": { "count": 0, "percentage": 0.0, "note": "Manifested as upstream queuing exceeding first-token deadline rather than explicit 429 body" },
+    "modelAvailability": { "count": 0, "percentage": 0.0 },
+    "cancellationRace": { "count": 0, "percentage": 0.0 },
+    "adapterNormalizationFailure": { "count": 0, "percentage": 0.0 },
+    "unknown": { "count": 0, "percentage": 0.0 }
+  },
+  "nonGeminiClassification": {
+    "semanticRouterToolActionFalseMatch": {
+      "count": 4,
+      "percentageOfTotalRequests": 4.4,
+      "prompts": [
+        "Explain the difference between horizontal read replicas and database sharding. (Batch A #20)",
+        "Implement a debounce function in JavaScript with immediate execution support. (Batch B #8)",
+        "Explain the difference between horizontal read replicas and database sharding. (Batch B #20)",
+        "Explain the difference between horizontal read replicas and database sharding. (Batch C #20)"
+      ],
+      "error": "connect ECONNREFUSED 127.0.0.1:5432",
+      "rootCause": "Regex in semantic-reasoner.ts matched 'read replicas' as a file-reading command ('read <filename>'), misclassifying architectural explanation prompt as TOOL_ACTION. Tool dispatch attempted unconfigured local Postgres connection."
+    }
+  }
+}

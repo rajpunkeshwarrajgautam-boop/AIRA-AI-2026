@@ -1,0 +1,172 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-10-18T08:27:05.691Z",
+  "phase": "P1.6.3",
+  "phase_name": "private-beta-capacity-guard-release-hardening",
+  "phase_dir": ".planning",
+  "plan": 1,
+  "task": 17,
+  "total_tasks": 17,
+  "status": "paused",
+  "completed_tasks": [
+    {
+      "id": 1,
+      "name": "Remove runtime DDL (CREATE TABLE / CREATE INDEX) from request path in DistributedPostgresCapacityStore",
+      "status": "done",
+      "commit": "27b1942"
+    },
+    {
+      "id": 2,
+      "name": "Create explicit Knex database migration 019_capacity_guard_schema.ts with capacity_permits and capacity_rate_log",
+      "status": "done",
+      "commit": "27b1942"
+    },
+    {
+      "id": 3,
+      "name": "Implement read-only verifySchema() / isAvailable() check in DistributedPostgresCapacityStore",
+      "status": "done",
+      "commit": "27b1942"
+    },
+    {
+      "id": 4,
+      "name": "Implement fail-closed admission control with sanitized AIRA_PRIVATE_BETA_CAPACITY when database tables missing",
+      "status": "done",
+      "commit": "27b1942"
+    },
+    {
+      "id": 5,
+      "name": "Protect internal capacity diagnostics GET /api/capacity/status with admin/operator authentication gate (401/403)",
+      "status": "done",
+      "commit": "27b1942"
+    },
+    {
+      "id": 6,
+      "name": "Sanitize public provider readiness GET /api/ready/providers by removing keyLength and keyPrefix",
+      "status": "done",
+      "commit": "27b1942"
+    },
+    {
+      "id": 7,
+      "name": "Provide safe migration rollback down() dropping only capacity guard tables",
+      "status": "done",
+      "commit": "27b1942"
+    },
+    {
+      "id": 8,
+      "name": "Update packages/db/src/scripts/verify-deploy.ts deployment verification gate to enforce capacity tables",
+      "status": "done",
+      "commit": "27b1942"
+    },
+    {
+      "id": 9,
+      "name": "Classify multi-instance evidence as SIMULATED for in-process testing vs shared PostgreSQL for true distributed enforcement",
+      "status": "done",
+      "commit": "27b1942"
+    },
+    {
+      "id": 10,
+      "name": "Preserve certified capacity limits (Global Concurrency: 2, Per-User: 1, Global RPM: 14, Per-User RPM: 5, Queue Depth: 5, Wait: 6000ms)",
+      "status": "done",
+      "commit": "27b1942"
+    },
+    {
+      "id": 11,
+      "name": "Preserve P1.5 database critical path invariants (1 pre-first-token DB query, 0ms acquire P95)",
+      "status": "done",
+      "commit": "27b1942"
+    },
+    {
+      "id": 12,
+      "name": "Implement dedicated release hardening test suite test/p1-6-3-capacity-release-hardening.test.ts (14/14 tests pass)",
+      "status": "done",
+      "commit": "27b1942"
+    },
+    {
+      "id": 13,
+      "name": "Update P1_6_2_PRIVATE_BETA_CAPACITY_POLICY.md and P1_6_2_PRIVATE_BETA_CAPACITY_REPORT.md",
+      "status": "done",
+      "commit": "27b1942"
+    },
+    {
+      "id": 14,
+      "name": "Author P1_6_3_CAPACITY_RELEASE_HARDENING_REPORT.md with proposed 9-step production release sequence (A-I)",
+      "status": "done",
+      "commit": "27b1942"
+    },
+    {
+      "id": 15,
+      "name": "Push release hardening commit 27b1942 to PR #85 branch fix/p1-6-fast-provider-resilience-20261017",
+      "status": "done",
+      "commit": "27b1942"
+    },
+    {
+      "id": 16,
+      "name": "Verify exact-HEAD GitHub Actions CI on PR #85 (Fast CI, Semantic Search CI, Main / PR certification, Vercel)",
+      "status": "done",
+      "commit": "27b1942"
+    },
+    {
+      "id": 17,
+      "name": "Verify zero production mutation (production baseline 1ba53bca4ff3c9a86e508a537541f19a16612053 untouched)",
+      "status": "done",
+      "commit": "27b1942"
+    }
+  ],
+  "remaining_tasks": [
+    {
+      "id": 18,
+      "name": "Obtain explicit human GO LIVE instruction from repository owner rajpunkeshwarrajgautam-boop",
+      "status": "not_started"
+    },
+    {
+      "id": 19,
+      "name": "Execute authorized production release sequence (Neon checkpoint, apply migration 019, merge PR #85, Vercel deploy, smoke test)",
+      "status": "not_started"
+    }
+  ],
+  "blockers": [
+    {
+      "description": "Production release authority gate: AGENTS.md mandates explicit human GO LIVE instruction from rajpunkeshwarrajgautam-boop before production Neon migration or merging PR #85 into prod-release",
+      "type": "human_action",
+      "workaround": "Await human GO LIVE instruction; maintain release candidate in PR #85 with passing exact-HEAD CI"
+    }
+  ],
+  "async_jobs": [],
+  "human_actions_pending": [
+    {
+      "action": "Review P1_6_3_CAPACITY_RELEASE_HARDENING_REPORT.md and provide explicit GO LIVE authorization for PR #85 commit 27b19427c8d061fde67f398aae1ad863f426e1fe",
+      "context": "Autonomous deployment to prod-release is strictly denied by AGENTS.md and production protection ruleset",
+      "blocking": true
+    }
+  ],
+  "decisions": [
+    {
+      "decision": "Remove runtime DDL (CREATE TABLE / CREATE INDEX) entirely from request path",
+      "rationale": "Runtime DDL introduces table locks, cold start latency, and failure modes in serverless lambda execution",
+      "phase": "P1.6.3"
+    },
+    {
+      "decision": "Implement pre-provisioned Knex migration 019_capacity_guard_schema.ts with clean down() rollback",
+      "rationale": "Standardizes database schema lifecycle in sync with knex_migrations table and deployment verification gate",
+      "phase": "P1.6.3"
+    },
+    {
+      "decision": "Implement fail-closed conservative admission with sanitized AIRA_PRIVATE_BETA_CAPACITY",
+      "rationale": "If DB tables are missing, failing closed prevents upstream free-tier provider exhaustion while concealing schema internals",
+      "phase": "P1.6.3"
+    },
+    {
+      "decision": "Protect /api/capacity/status with admin/operator authentication gate",
+      "rationale": "Prevents unauthorized exposure of internal concurrency metrics, queue depth, and provider circuit states",
+      "phase": "P1.6.3"
+    },
+    {
+      "decision": "Classify multi-instance evidence truthfully as SIMULATED for in-process testing vs shared PostgreSQL for true distributed enforcement",
+      "rationale": "Serverless lambdas do not share memory heaps; distributed multi-instance requires shared PostgreSQL backing",
+      "phase": "P1.6.3"
+    }
+  ],
+  "uncommitted_files": [],
+  "next_action": "Await human GO LIVE authorization from rajpunkeshwarrajgautam-boop, then execute production release sequence (Steps A-I) documented in P1_6_3_CAPACITY_RELEASE_HARDENING_REPORT.md",
+  "context_notes": "All P1.6.3 release hardening objectives are 100% complete. Exact-HEAD CI is all green on PR #85 (commit 27b1942). Production baseline 1ba53bc remains untouched. System is in certified release candidate state awaiting human authorization."
+}

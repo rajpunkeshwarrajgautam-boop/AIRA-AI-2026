@@ -4,6 +4,13 @@ import {
   ModelPolicySchema,
   IntentTaxonomy
 } from '../../contracts/src/index.js';
+import { ProviderHealthTracker } from './health-tracker.js';
+import { LatencyAwareRoutingPolicy } from './routing-policy.js';
+import { ResilientModelAdapter } from './resilient-adapter.js';
+import { GeminiAdapter } from './gemini-adapter.js';
+import { PrivateBetaCapacityGuard } from './capacity/index.js';
+
+export * from './capacity/index.js';
 
 export interface ChatMessageInput {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -58,6 +65,7 @@ export type SupportedProvider =
   | 'anthropic'
   | 'openai'
   | 'groq'
+  | 'gemini'
   | 'cerebras'
   | 'together'
   | 'fireworks'
@@ -71,7 +79,20 @@ export interface ModelAdapter {
     messages: ChatMessageInput[],
     policy: ModelPolicy,
     onChunk: (delta: { text?: string; thinking?: string }) => void,
-    options?: { firstTokenTimeoutMs?: number; signal?: AbortSignal }
+    options?: {
+      firstTokenTimeoutMs?: number;
+      signal?: AbortSignal;
+      onProvenance?: (provenance: {
+        requestedProvider: string;
+        requestedModel: string;
+        executedProvider: string;
+        executedModel: string;
+        fallbackOccurred: boolean;
+        fallbackReason?: string;
+        hedgedRequestUsed?: boolean;
+        modelIdentityVerified?: boolean;
+      }) => void;
+    }
   ): Promise<ModelCompletionResult>;
 }
 
@@ -602,8 +623,15 @@ export interface ResolvedExecution {
 
 export class ModelRouter {
   private adapters: Map<string, ModelAdapter> = new Map();
+  public readonly healthTracker: ProviderHealthTracker;
+  public readonly routingPolicy: LatencyAwareRoutingPolicy;
+  public readonly capacityGuard: PrivateBetaCapacityGuard;
 
-  constructor() {
+  constructor(healthTracker?: ProviderHealthTracker, capacityGuard?: PrivateBetaCapacityGuard) {
+    this.healthTracker = healthTracker || new ProviderHealthTracker();
+    this.routingPolicy = new LatencyAwareRoutingPolicy(this.healthTracker);
+    this.capacityGuard = capacityGuard || new PrivateBetaCapacityGuard(undefined, undefined, this.healthTracker);
+
     // DeterministicMockAdapter is ONLY registered in test/dev environments.
     // Production code must never reach this adapter through the normal router.
     // It is accessible only when model is explicitly 'mock-deterministic'.
@@ -656,6 +684,17 @@ export class ModelRouter {
         )
       );
     }
+    if (process.env.GEMINI_API_KEY) {
+      const geminiKey = process.env.GEMINI_API_KEY.trim().replace(/^["']|["']$/g, '');
+      const geminiModel = (process.env.AIRA_GEMINI_MODEL || '').trim().replace(/^["']|["']$/g, '') || 'gemini-3.5-flash-lite';
+      this.adapters.set(
+        'gemini',
+        new GeminiAdapter(
+          geminiKey,
+          geminiModel
+        )
+      );
+    }
     if (process.env.ANTHROPIC_API_KEY) {
       this.adapters.set('anthropic', new AnthropicAdapter());
     }
@@ -673,6 +712,52 @@ export class ModelRouter {
         )
       );
     }
+  }
+
+  public createModelSpecificAdapter(provider: SupportedProvider, model: string): ModelAdapter & { modelName?: string } {
+    if (provider === 'groq' && process.env.GROQ_API_KEY) {
+      const groqKey = process.env.GROQ_API_KEY.trim().replace(/^["']|["']$/g, '');
+      const adapter = new OpenAIAdapter(groqKey, 'https://api.groq.com/openai/v1', model, 'groq');
+      (adapter as any).modelName = model;
+      return adapter;
+    }
+    if (provider === 'gemini' && process.env.GEMINI_API_KEY) {
+      const geminiKey = process.env.GEMINI_API_KEY.trim().replace(/^["']|["']$/g, '');
+      const adapter = new GeminiAdapter(geminiKey, model);
+      (adapter as any).modelName = model;
+      return adapter;
+    }
+    if (provider === 'cerebras' && process.env.CEREBRAS_API_KEY) {
+      const adapter = new OpenAIAdapter(process.env.CEREBRAS_API_KEY, 'https://api.cerebras.ai/v1', model, 'cerebras');
+      (adapter as any).modelName = model;
+      return adapter;
+    }
+    if (provider === 'together' && process.env.TOGETHER_API_KEY) {
+      const adapter = new OpenAIAdapter(process.env.TOGETHER_API_KEY, 'https://api.together.xyz/v1', model, 'together');
+      (adapter as any).modelName = model;
+      return adapter;
+    }
+    if (provider === 'fireworks' && process.env.FIREWORKS_API_KEY) {
+      const adapter = new OpenAIAdapter(process.env.FIREWORKS_API_KEY, 'https://api.fireworks.ai/inference/v1', model, 'fireworks');
+      (adapter as any).modelName = model;
+      return adapter;
+    }
+    if (provider === 'openai' && process.env.OPENAI_API_KEY) {
+      const adapter = new OpenAIAdapter(process.env.OPENAI_API_KEY, 'https://api.openai.com/v1', model, 'openai');
+      (adapter as any).modelName = model;
+      return adapter;
+    }
+    if (provider === 'nvidia' && process.env.NVIDIA_API_KEY) {
+      const adapter = new OpenAIAdapter(process.env.NVIDIA_API_KEY, 'https://integrate.api.nvidia.com/v1', model, 'nvidia');
+      (adapter as any).modelName = model;
+      return adapter;
+    }
+    const existing = this.adapters.get(provider);
+    if (existing) {
+      (existing as any).modelName = model;
+      return existing;
+    }
+    throw new Error(`Provider ${provider} is not configured.`);
   }
 
   public resolvePolicy(modelId: ModelId, intent?: IntentTaxonomy): ModelPolicy {
@@ -750,29 +835,105 @@ export class ModelRouter {
     }
 
     if (model.startsWith('aira-')) {
-      let providerPreference: Array<SupportedProvider>;
-
       if (model === 'aira-fast') {
-        const configuredFastProvider = (process.env.AIRA_FAST_PROVIDER || '').toLowerCase().trim() as SupportedProvider;
-        const validFastProviders: SupportedProvider[] = ['groq', 'cerebras', 'openai', 'together', 'fireworks', 'nvidia'];
+        const configuredProviders = this.listProviders();
+        const configuredFastProvider = (process.env.AIRA_FAST_PROVIDER || '').toLowerCase().trim();
+        const configuredFastModel = (process.env.AIRA_FAST_MODEL || '').trim();
+        const hasDedicatedNvidiaFastModel = Boolean(process.env.NVIDIA_FAST_MODEL?.trim());
+        const nvidiaFastModel = process.env.NVIDIA_FAST_MODEL?.trim();
+        const enableHedging = process.env.AIRA_ENABLE_HEDGING === 'true';
 
-        if (configuredFastProvider && validFastProviders.includes(configuredFastProvider)) {
-          providerPreference = [
-            configuredFastProvider,
-            'groq',
-            'cerebras',
-            'openai',
-            'together',
-            'fireworks',
-            'nvidia',
-            'anthropic'
-          ];
-        } else if (process.env.NVIDIA_FAST_MODEL) {
-          providerPreference = ['nvidia', 'groq', 'cerebras', 'openai', 'together', 'fireworks', 'anthropic'];
-        } else {
-          providerPreference = ['groq', 'cerebras', 'openai', 'together', 'fireworks', 'nvidia', 'anthropic'];
+        const plan = this.routingPolicy.selectFastExecutionPlan({
+          configuredProviders,
+          preferredProvider: configuredFastProvider,
+          preferredModel: configuredFastModel,
+          hasDedicatedNvidiaFastModel,
+          nvidiaFastModel,
+          enableHedging
+        });
+
+        // 1. If only NVIDIA is available and no dedicated fast provider is configured in environment
+        const hasFastProvider = configuredProviders.some(p => p !== 'nvidia' && p !== 'mock');
+        if (!hasFastProvider && this.adapters.has('nvidia')) {
+          const executedModel = resolveNvidiaModel(model);
+          return {
+            policy,
+            adapter: this.adapters.get('nvidia')!,
+            provider: 'nvidia',
+            requestedProvider: 'groq',
+            executedProvider: 'nvidia',
+            executedModel,
+            plannedModel: executedModel,
+            fallbackOccurred: true,
+            fallbackReason: 'No dedicated fast provider configured; fell back to NVIDIA Nemotron 120B reasoning model',
+            verified: true
+          };
         }
-      } else if (model === 'aira-deep') {
+
+        // 2. If test mock adapter is available
+        if (plan.isDegraded && this.adapters.has('mock')) {
+          return {
+            policy,
+            adapter: this.adapters.get('mock')!,
+            provider: 'mock',
+            requestedProvider: 'mock',
+            executedProvider: 'mock',
+            executedModel: 'mock-deterministic',
+            plannedModel: 'mock-deterministic',
+            fallbackOccurred: false,
+            verified: true
+          };
+        }
+
+        // 3. If no provider is available
+        if (plan.isDegraded) {
+          throw new Error(
+            `CONFIGURATION_ERROR: No production model provider is configured for Aira mode "${model}". ` +
+            'Configure GROQ_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY, NVIDIA_API_KEY, or ANTHROPIC_API_KEY.'
+          );
+        }
+
+        const primaryAdapter = this.createModelSpecificAdapter(plan.primary.provider as SupportedProvider, plan.primary.model);
+        const fallbackAdapter = plan.fallback
+          ? this.createModelSpecificAdapter(plan.fallback.provider as SupportedProvider, plan.fallback.model)
+          : null;
+
+        // Bounded tertiary adapter for non-account-level Groq failures (Section 8 & 9)
+        const tertiaryAdapter = (plan.fallback?.provider === 'gemini' && process.env.GROQ_API_KEY && plan.primary.provider === 'groq')
+          ? this.createModelSpecificAdapter('groq', 'allam-2-7b')
+          : null;
+
+        const resilientAdapter = new ResilientModelAdapter(
+          primaryAdapter,
+          fallbackAdapter,
+          this.healthTracker,
+          {
+            firstTokenTimeoutMs: 2500,
+            fallbackFirstTokenTimeoutMs: 4000,
+            tertiaryAdapter,
+            enableHedging,
+            hedgeDelayMs: process.env.AIRA_HEDGE_DELAY_MS ? parseInt(process.env.AIRA_HEDGE_DELAY_MS, 10) : 1200
+          }
+        );
+
+        const isFallback = Boolean(plan.selectionReason.includes('FAILOVER'));
+
+        return {
+          policy,
+          adapter: resilientAdapter,
+          provider: plan.primary.provider as SupportedProvider,
+          requestedProvider: configuredFastProvider || 'groq',
+          executedProvider: plan.primary.provider,
+          executedModel: plan.primary.model,
+          plannedModel: plan.primary.model,
+          fallbackOccurred: isFallback,
+          fallbackReason: isFallback ? plan.selectionReason : undefined,
+          verified: plan.primary.provider !== 'mock'
+        };
+      }
+
+      let providerPreference: Array<SupportedProvider>;
+      if (model === 'aira-deep') {
         providerPreference = ['anthropic', 'nvidia', 'openai'];
       } else {
         providerPreference = ['anthropic', 'nvidia', 'openai'];
@@ -1015,3 +1176,8 @@ export class ModelRouter {
     return Array.from(this.adapters.keys()).filter(k => k !== 'mock');
   }
 }
+
+export * from './health-tracker.js';
+export * from './routing-policy.js';
+export * from './resilient-adapter.js';
+export * from './gemini-adapter.js';
