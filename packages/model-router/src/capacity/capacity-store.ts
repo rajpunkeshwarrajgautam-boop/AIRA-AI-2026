@@ -10,6 +10,8 @@ export interface CapacityPermit {
 }
 
 export interface CapacityStore {
+  isAvailable?(): Promise<boolean>;
+
   acquirePermit(
     scope: 'global' | 'user',
     principalId: string,
@@ -36,6 +38,10 @@ export interface CapacityStore {
 export class InMemoryCapacityStore implements CapacityStore {
   private permits: Map<string, CapacityPermit> = new Map();
   private rpmLogs: Map<string, number[]> = new Map();
+
+  public async isAvailable(): Promise<boolean> {
+    return true;
+  }
 
   private prunePermits(now = Date.now()): void {
     for (const [id, permit] of this.permits.entries()) {
@@ -138,46 +144,42 @@ export class InMemoryCapacityStore implements CapacityStore {
 
 export class DistributedPostgresCapacityStore implements CapacityStore {
   private client: Knex;
-  private schemaInitialized = false;
-  private initPromise: Promise<void> | null = null;
+  private schemaVerified = false;
+  private verifyPromise: Promise<boolean> | null = null;
 
   constructor(client: Knex) {
     this.client = client;
   }
 
-  private async ensureSchema(): Promise<void> {
-    if (this.schemaInitialized) return;
-    if (this.initPromise) return this.initPromise;
+  public async isAvailable(): Promise<boolean> {
+    return this.verifySchema();
+  }
 
-    this.initPromise = (async () => {
+  public async verifySchema(): Promise<boolean> {
+    if (this.schemaVerified) return true;
+    if (this.verifyPromise) return this.verifyPromise;
+
+    this.verifyPromise = (async () => {
       try {
-        await this.client.raw(`
-          CREATE TABLE IF NOT EXISTS capacity_permits (
-            id VARCHAR(64) PRIMARY KEY,
-            scope VARCHAR(32) NOT NULL,
-            principal_id VARCHAR(128) NOT NULL,
-            created_at BIGINT NOT NULL,
-            expires_at BIGINT NOT NULL
-          );
-          CREATE INDEX IF NOT EXISTS idx_capacity_permits_scope_exp ON capacity_permits (scope, principal_id, expires_at);
-
-          CREATE TABLE IF NOT EXISTS capacity_rate_log (
-            id VARCHAR(64) PRIMARY KEY,
-            scope VARCHAR(32) NOT NULL,
-            principal_id VARCHAR(128) NOT NULL,
-            timestamp BIGINT NOT NULL
-          );
-          CREATE INDEX IF NOT EXISTS idx_capacity_rate_scope_ts ON capacity_rate_log (scope, principal_id, timestamp);
-        `);
-        this.schemaInitialized = true;
+        const hasPermits = await this.client.schema.hasTable('capacity_permits');
+        const hasRateLog = await this.client.schema.hasTable('capacity_rate_log');
+        if (hasPermits && hasRateLog) {
+          this.schemaVerified = true;
+          return true;
+        }
+        console.error('[DistributedPostgresCapacityStore] Schema verification failed: capacity_permits or capacity_rate_log missing. Execute migration 019_capacity_guard_schema.');
+        this.schemaVerified = false;
+        return false;
       } catch (err) {
-        console.warn('[DistributedPostgresCapacityStore] Schema initialization notice:', err);
+        console.error('[DistributedPostgresCapacityStore] Error verifying schema readiness:', err);
+        this.schemaVerified = false;
+        return false;
       } finally {
-        this.initPromise = null;
+        this.verifyPromise = null;
       }
     })();
 
-    return this.initPromise;
+    return this.verifyPromise;
   }
 
   public async acquirePermit(
@@ -187,7 +189,10 @@ export class DistributedPostgresCapacityStore implements CapacityStore {
     ttlSeconds = 30
   ): Promise<{ acquired: boolean; currentActive: number; permitId?: string }> {
     try {
-      await this.ensureSchema();
+      const ready = await this.verifySchema();
+      if (!ready) {
+        return { acquired: false, currentActive: maxConcurrent };
+      }
       const now = Date.now();
       const expiresAt = now + ttlSeconds * 1000;
       const permitId = `pmt_${crypto.randomUUID().slice(0, 12)}`;
@@ -255,7 +260,10 @@ export class DistributedPostgresCapacityStore implements CapacityStore {
     windowMs = 60000
   ): Promise<{ allowed: boolean; currentRpm: number; resetMs: number }> {
     try {
-      await this.ensureSchema();
+      const ready = await this.verifySchema();
+      if (!ready) {
+        return { allowed: false, currentRpm: limitRpm, resetMs: 8000 };
+      }
       const now = Date.now();
       const windowStart = now - windowMs;
       const logId = `log_${crypto.randomUUID().slice(0, 12)}`;
@@ -311,7 +319,8 @@ export class DistributedPostgresCapacityStore implements CapacityStore {
 
   public async getActiveConcurrency(scope: 'global' | 'user', principalId?: string): Promise<number> {
     try {
-      await this.ensureSchema();
+      const ready = await this.verifySchema();
+      if (!ready) return 0;
       const now = Date.now();
       let query = this.client('capacity_permits')
         .where('expires_at', '>', now)
@@ -329,7 +338,8 @@ export class DistributedPostgresCapacityStore implements CapacityStore {
 
   public async getCurrentRpm(scope: 'global' | 'user', principalId?: string, windowMs = 60000): Promise<number> {
     try {
-      await this.ensureSchema();
+      const ready = await this.verifySchema();
+      if (!ready) return 0;
       const windowStart = Date.now() - windowMs;
       let query = this.client('capacity_rate_log')
         .where('timestamp', '>', windowStart)
@@ -347,6 +357,8 @@ export class DistributedPostgresCapacityStore implements CapacityStore {
 
   public async reset(): Promise<void> {
     try {
+      const ready = await this.verifySchema();
+      if (!ready) return;
       await this.client('capacity_permits').delete();
       await this.client('capacity_rate_log').delete();
     } catch {

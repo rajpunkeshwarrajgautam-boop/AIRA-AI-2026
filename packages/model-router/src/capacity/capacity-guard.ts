@@ -135,6 +135,21 @@ export class PrivateBetaCapacityGuard {
       return { decision: 'ADMIT_NOW' };
     }
 
+    // 2.5 Fail-Closed Capacity Store Readiness Check (Sections 3 & 4)
+    if (typeof this.store.isAvailable === 'function') {
+      const available = await this.store.isAvailable();
+      if (!available) {
+        this.metrics.rejected++;
+        return {
+          decision: 'REJECT_CAPACITY',
+          rejectionCode: 'AIRA_PRIVATE_BETA_CAPACITY',
+          reason: 'CAPACITY_STORE_UNAVAILABLE',
+          retryAfterSeconds: this.calculateJitteredRetryAfter(this.config.retryAfterSeconds),
+          userMessage: 'Private beta capacity is temporarily unavailable. Please retry in a few moments.'
+        };
+      }
+    }
+
     const principalId = options.principalId || 'anonymous';
     const promptText = options.promptText || '';
 

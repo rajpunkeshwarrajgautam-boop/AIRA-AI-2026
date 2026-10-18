@@ -65,6 +65,8 @@ Deterministic test suite `test/p1-6-2-multi-instance.test.ts` verified:
 - **Cold-Start Persistence**: Sliding-window rate logs persist across instance lifecycles.
 - **Race Condition Safety**: Under concurrent burst admission (10 simultaneous threads), exactly 2 permits were granted, 0 over-admission races.
 
+> **MULTI-INSTANCE EVIDENCE CLASSIFICATION**: **SIMULATED** (in-process integration test with shared store). In a serverless environment (e.g. Vercel Preview lambdas without shared PostgreSQL), `InMemoryCapacityStore` runs as a process-local guard. Authoritative distributed multi-instance enforcement across isolated serverless instances requires PostgreSQL/Neon via `DistributedPostgresCapacityStore` with migration `019_capacity_guard_schema.ts` applied.
+
 ---
 
 ## 5. Security & Authentication Audit

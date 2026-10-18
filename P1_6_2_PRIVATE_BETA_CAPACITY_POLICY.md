@@ -62,8 +62,10 @@ Rather than simplistic fixed-window counters that permit double-rate boundary sp
   $$\Delta t_{\text{reset}} = 60000 - (t - t_{\text{oldest}})$$
   Emits a truthful, jittered `Retry-After` header: $\lceil \Delta t_{\text{reset}} / 1000 \rceil + \text{jitter}(1..3)$.
 
-### 4.2 Distributed Concurrency Leases & Safe Permit Release
+### 4.2 Distributed Concurrency Leases, Migration 019 & Fail-Closed Readiness
 Concurrency is tracked across serverless instances using an atomic lease table (`capacity_permits`) with an automatic 45-second TTL:
+- Pre-provisioned via Knex migration `019_capacity_guard_schema.ts` (zero runtime DDL).
+- Runtime verification executes read-only `verifySchema()` / `isAvailable()`. If tables are missing, the guard fails CLOSED conservatively with `AIRA_PRIVATE_BETA_CAPACITY`.
 - Atomic lease acquisition via `INSERT INTO capacity_permits ... WHERE (SELECT COUNT(*) < MaxConcurrent)`.
 - Guarantees zero permit leaks upon client aborts, stream completions, server crashes, or unhandled exceptions via idempotent `release()` callbacks registered on HTTP `req.on('close')`.
 

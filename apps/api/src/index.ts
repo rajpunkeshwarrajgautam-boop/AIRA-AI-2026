@@ -267,13 +267,8 @@ app.get('/api/ready', (_req: Request, res: Response) => {
   }
 });
 
-app.get('/api/capacity/status', async (_req: Request, res: Response) => {
-  const diagnostics = await modelRouter.capacityGuard.getDiagnostics();
-  res.setHeader('Cache-Control', 'no-store');
-  res.status(200).json(diagnostics);
-});
-
 app.get('/api/ready/providers', async (_req: Request, res: Response) => {
+  const fastRoute = modelRouter.routingPolicy.resolveFastRoute();
   const result: Record<string, any> = {
     supportedProviders: {
       groq: { configured: Boolean(process.env.GROQ_API_KEY) },
@@ -285,9 +280,12 @@ app.get('/api/ready/providers', async (_req: Request, res: Response) => {
       openai: { configured: Boolean(process.env.OPENAI_API_KEY) },
       anthropic: { configured: Boolean(process.env.ANTHROPIC_API_KEY) }
     },
-    fastRouting: modelRouter.routingPolicy.resolveFastRoute(),
+    fastRouting: fastRoute,
     circuitBreakers: modelRouter.healthTracker.getAllTelemetry(),
-    capacity: await modelRouter.capacityGuard.getDiagnostics()
+    capacity: {
+      guardEnabled: modelRouter.capacityGuard.isEnabled(),
+      isDegraded: fastRoute.isDegraded
+    }
   };
   if (process.env.GROQ_API_KEY) {
     try {
@@ -299,9 +297,7 @@ app.get('/api/ready/providers', async (_req: Request, res: Response) => {
       result.groq = {
         status: resp.status,
         models: Array.isArray(data.data) ? data.data.map((m: any) => m.id) : [],
-        error: !resp.ok ? data : undefined,
-        keyLength: groqKey.length,
-        keyPrefix: groqKey.slice(0, 4)
+        error: !resp.ok ? data : undefined
       };
     } catch (e: any) {
       result.groq = { error: e.message };
@@ -326,9 +322,7 @@ app.get('/api/ready/providers', async (_req: Request, res: Response) => {
           supportedGenerationMethods: m.supportedGenerationMethods,
           inputTokenLimit: m.inputTokenLimit,
           outputTokenLimit: m.outputTokenLimit
-        })),
-        keyLength: geminiKey.length,
-        keyPrefix: geminiKey.slice(0, 4)
+        }))
       };
     } catch (e: any) {
       result.gemini = { error: e.message };
@@ -571,6 +565,34 @@ app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
 // Enforce ExecutionPrincipal on all /api routes BELOW this point.
 // Routes registered above (health, ready) are public infrastructure probes.
 app.use('/api', createPrincipalMiddleware());
+
+// Protected internal capacity diagnostics endpoint (Admin/Operator only)
+app.get('/api/capacity/status', async (req: Request, res: Response) => {
+  const principal = req.principal;
+  if (!principal) {
+    return res.status(401).json({ error: 'Unauthorized', message: 'Authentication required' });
+  }
+
+  const roles = principal.roles || [];
+  const scopes = principal.scopes || [];
+  const isAuthorized =
+    roles.includes('admin') ||
+    roles.includes('operator') ||
+    scopes.includes('admin') ||
+    scopes.includes('operator') ||
+    principal.userId === 'admin';
+
+  if (!isAuthorized) {
+    return res.status(403).json({
+      error: 'Forbidden',
+      message: 'Admin or operator authorization required for internal capacity diagnostics'
+    });
+  }
+
+  const diagnostics = await modelRouter.capacityGuard.getDiagnostics();
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(200).json(diagnostics);
+});
 
 // Initialize Core Subsystems
 app.use('/api/builder', createBuilderRoutes(modelRouter));
