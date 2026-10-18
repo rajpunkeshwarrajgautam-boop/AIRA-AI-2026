@@ -11,21 +11,21 @@ async function runTests() {
   // TEST 1: Default healthy selection
   console.log('\n[TEST 1] Default healthy selection');
   const plan1 = policy.selectFastExecutionPlan({
-    configuredProviders: ['groq', 'nvidia']
+    configuredProviders: ['groq', 'gemini', 'nvidia']
   });
 
   assert.equal(plan1.primary.provider, 'groq');
   assert.equal(plan1.primary.model, 'openai/gpt-oss-120b');
-  assert.equal(plan1.fallback?.provider, 'groq');
-  assert.equal(plan1.fallback?.model, 'allam-2-7b');
+  assert.equal(plan1.fallback?.provider, 'gemini');
+  assert.equal(plan1.fallback?.model, 'gemini-3.5-flash-lite');
   assert.ok(plan1.selectionReason.includes('healthy'), 'Reason should cite healthy primary');
-  console.log('PASS: Primary openai/gpt-oss-120b selected with allam-2-7b fallback.');
+  console.log('PASS: Primary openai/gpt-oss-120b selected with gemini-3.5-flash-lite fallback.');
 
-  // TEST 2: Rejection of defective models (empty responses)
-  console.log('\n[TEST 2] Rejection of defective models (empty responses)');
-  // Even if gpt-oss-20b is registered in catalog, policy must reject it as fast candidate
+  // TEST 2: Rejection of defective models (empty responses) and tertiary-only allam
+  console.log('\n[TEST 2] Rejection of defective models (empty responses) and tertiary-only allam');
   assert.equal(policy.isModelAllowed('openai/gpt-oss-20b'), false, 'gpt-oss-20b must be rejected due to empty responses');
-  console.log('PASS: Defective model openai/gpt-oss-20b rejected by policy.');
+  assert.equal(policy.isModelAllowed('allam-2-7b'), false, 'allam-2-7b must be rejected as primary/secondary candidate (TERTIARY_ONLY)');
+  console.log('PASS: Defective models and tertiary-only candidates properly rejected by policy.');
 
   // TEST 3: Strict exclusion of NVIDIA Nemotron 120B from Fast fallback
   console.log('\n[TEST 3] Strict exclusion of NVIDIA Nemotron 120B from Fast fallback');
@@ -51,20 +51,20 @@ async function runTests() {
   assert.equal(planNvidiaFast.primary.model, 'meta/llama-3.1-70b-instruct');
   console.log('PASS: NVIDIA permitted for Fast route when dedicated instruction model is configured.');
 
-  // TEST 5: Automatic failover when primary circuit is OPEN
-  console.log('\n[TEST 5] Automatic failover when primary circuit is OPEN');
+  // TEST 5: Automatic failover to Gemini when primary Groq circuit is OPEN
+  console.log('\n[TEST 5] Automatic failover to Gemini when primary Groq circuit is OPEN');
   // Trip primary circuit breaker
   tracker.recordFailure('groq', 'openai/gpt-oss-120b', new Error('FIRST_TOKEN_TIMEOUT'), 504);
   tracker.recordFailure('groq', 'openai/gpt-oss-120b', new Error('FIRST_TOKEN_TIMEOUT'), 504);
 
   const planFailover = policy.selectFastExecutionPlan({
-    configuredProviders: ['groq', 'nvidia']
+    configuredProviders: ['groq', 'gemini', 'nvidia']
   });
 
-  assert.equal(planFailover.primary.provider, 'groq');
-  assert.equal(planFailover.primary.model, 'allam-2-7b', 'Should promote allam-2-7b to primary while 120b is OPEN');
-  assert.ok(planFailover.selectionReason.includes('OPEN') || planFailover.selectionReason.includes('degraded'), 'Reason must document circuit state');
-  console.log('PASS: Primary circuit trip dynamically routed traffic to allam-2-7b.');
+  assert.equal(planFailover.primary.provider, 'gemini', 'Should promote gemini to primary while 120b is OPEN');
+  assert.equal(planFailover.primary.model, 'gemini-3.5-flash-lite');
+  assert.ok(planFailover.selectionReason.includes('OPEN') || planFailover.selectionReason.includes('FAILOVER'), 'Reason must document circuit state');
+  console.log('PASS: Primary circuit trip dynamically promoted Gemini to primary (allam-2-7b never promoted).');
 
   // TEST 6: Independent Gemini Fallback Selection (Prompt Section 8)
   console.log('\n[TEST 6] Independent Gemini Fallback Selection');
@@ -78,9 +78,9 @@ async function runTests() {
   assert.equal(planGroqGemini.primary.model, 'openai/gpt-oss-120b');
   assert.equal(planGroqGemini.fallback?.provider, 'gemini', 'Fallback must be independent provider gemini');
   assert.equal(planGroqGemini.fallback?.model, 'gemini-3.5-flash-lite');
-  console.log('PASS: Independent provider gemini/gemini-3.5-flash-lite selected as fallback over intra-Groq allam-2-7b.');
+  console.log('PASS: Independent provider gemini/gemini-3.5-flash-lite selected as fallback.');
 
-  // TEST 7: Groq circuit trips -> Failover to Gemini
+  // TEST 7: Groq circuit trips -> Failover to Gemini Primary
   console.log('\n[TEST 7] Failover to Gemini when Groq circuits trip');
   trackerGemini.recordFailure('groq', 'openai/gpt-oss-120b', new Error('RATE_LIMIT_429'), 429);
   trackerGemini.recordFailure('groq', 'openai/gpt-oss-120b', new Error('RATE_LIMIT_429'), 429);
@@ -90,21 +90,10 @@ async function runTests() {
     configuredProviders: ['groq', 'gemini', 'nvidia']
   });
 
-  assert.equal(planGeminiFailover.primary.provider, 'groq');
-  assert.equal(planGeminiFailover.primary.model, 'allam-2-7b');
-  assert.equal(planGeminiFailover.fallback?.provider, 'gemini');
-
-  // If all Groq models trip, Gemini becomes primary
-  trackerGemini.recordFailure('groq', 'allam-2-7b', new Error('RATE_LIMIT_429'), 429);
-  trackerGemini.recordFailure('groq', 'allam-2-7b', new Error('RATE_LIMIT_429'), 429);
-  trackerGemini.recordFailure('groq', 'allam-2-7b', new Error('RATE_LIMIT_429'), 429);
-
-  const planGeminiPrimary = policyGemini.selectFastExecutionPlan({
-    configuredProviders: ['groq', 'gemini', 'nvidia']
-  });
-  assert.equal(planGeminiPrimary.primary.provider, 'gemini');
-  assert.equal(planGeminiPrimary.primary.model, 'gemini-3.5-flash-lite');
-  console.log('PASS: Full failover to Gemini primary when Groq account quota is exhausted.');
+  assert.equal(planGeminiFailover.primary.provider, 'gemini', 'Gemini must become primary when Groq trips');
+  assert.equal(planGeminiFailover.primary.model, 'gemini-3.5-flash-lite');
+  assert.notEqual(planGeminiFailover.primary.model, 'allam-2-7b', 'allam-2-7b must NEVER be promoted to primary');
+  console.log('PASS: Full failover to Gemini primary when Groq circuit is tripped.');
 
   console.log('\n=== ALL P1.6 ROUTING POLICY TESTS PASSED ===');
 }
