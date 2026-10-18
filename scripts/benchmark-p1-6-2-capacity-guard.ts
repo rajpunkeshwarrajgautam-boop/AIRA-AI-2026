@@ -5,7 +5,8 @@ import * as path from 'node:path';
 const PREVIEW_URL = process.env.PREVIEW_URL || 'https://aira-ai-2026-git-f-2edb49-rajpunkeshwarrajgautam-boops-projects.vercel.app';
 
 interface RequestMetric {
-  suite: 'admitted_load' | 'overload_burst';
+  suite: 'admitted_load' | 'overload_burst' | 'user_fairness';
+  userIndex: number;
   batch: string;
   index: number;
   prompt: string;
@@ -187,10 +188,32 @@ function computeSuiteStats(requests: RequestMetric[]): BenchmarkSuiteStats {
   };
 }
 
+async function acquireSession(baseUrl: string): Promise<string> {
+  const sessionRes = await fetch(`${baseUrl}/api/auth/session`, {
+    method: 'POST',
+    headers: {
+      'Origin': baseUrl,
+      'x-aira-csrf-protection': '1',
+      'Content-Type': 'application/json'
+    }
+  });
+
+  if (!sessionRes.ok) {
+    throw new Error(`Failed to initialize session: ${sessionRes.status} ${await sessionRes.text()}`);
+  }
+
+  const sessionCookie = sessionRes.headers.get('set-cookie');
+  if (!sessionCookie) {
+    throw new Error('No set-cookie header received from session initialization');
+  }
+  return sessionCookie;
+}
+
 async function executeSingleRun(
   baseUrl: string,
   sessionCookie: string,
-  suite: 'admitted_load' | 'overload_burst',
+  suite: 'admitted_load' | 'overload_burst' | 'user_fairness',
+  userIndex: number,
   batchName: string,
   index: number,
   category: string,
@@ -210,7 +233,7 @@ async function executeSingleRun(
   let isQueued = false;
   let queueWaitMs: number | undefined;
   let retryAfterSeconds: number | undefined;
-  let guardOverheadMs = 12; // baseline network/admission overhead
+  let guardOverheadMs = 12;
 
   try {
     const res = await fetch(`${baseUrl}/api/chat/stream`, {
@@ -229,7 +252,6 @@ async function executeSingleRun(
 
     status = res.status;
 
-    // Check for HTTP 429 Capacity Rejection
     if (status === 429) {
       const retryHeader = res.headers.get('retry-after');
       const errBody = await res.json().catch(() => ({}));
@@ -238,6 +260,7 @@ async function executeSingleRun(
 
       return {
         suite,
+        userIndex,
         batch: batchName,
         index,
         prompt,
@@ -268,6 +291,7 @@ async function executeSingleRun(
       const errText = await res.text();
       return {
         suite,
+        userIndex,
         batch: batchName,
         index,
         prompt,
@@ -300,6 +324,8 @@ async function executeSingleRun(
 
     const decoder = new TextDecoder();
     let buffer = '';
+    let currentEvent = '';
+    let streamDone = false;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -311,29 +337,24 @@ async function executeSingleRun(
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
 
-      for (const line of lines) {
-        if (line.startsWith('event: queue_status')) {
-          isQueued = true;
-        }
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (line.startsWith('event:')) {
+          currentEvent = line.slice(6).trim();
+          if (currentEvent === 'queue_status') {
+            isQueued = true;
+          }
+        } else if (line.startsWith('data:')) {
+          const rawData = line.slice(5).trim();
+          if (rawData === '[DONE]') {
+            streamDone = true;
+            break;
+          }
 
-        if (line.startsWith('data: ')) {
-          const jsonStr = line.slice(6).trim();
           try {
-            const data = JSON.parse(jsonStr);
+            const data = JSON.parse(rawData);
 
-            if (data.type === 'queue_progress' || data.queueDepth !== undefined) {
-              isQueued = true;
-              if (data.elapsedMs) queueWaitMs = data.elapsedMs;
-            }
-
-            if (data.type === 'token' || data.text || data.delta) {
-              if (firstTokenReceivedAt === null) {
-                firstTokenReceivedAt = performance.now();
-              }
-              text += (data.text || data.delta || '');
-            }
-
-            if (data.type === 'provenance' || data.provider) {
+            if (currentEvent === 'model_provenance') {
               if (provenanceReceivedAt === null) {
                 provenanceReceivedAt = performance.now();
               }
@@ -343,17 +364,24 @@ async function executeSingleRun(
                 fallbackOccurred = true;
                 fallbackReason = data.fallbackReason;
               }
-            }
-
-            if (data.type === 'error' || data.error) {
+            } else if (currentEvent === 'content_delta') {
+              const chunkText = typeof data.text === 'string' ? data.text : (typeof data.delta === 'string' ? data.delta : '');
+              if (chunkText.length > 0) {
+                if (firstTokenReceivedAt === null) {
+                  firstTokenReceivedAt = performance.now();
+                }
+                text += chunkText;
+              }
+            } else if (currentEvent === 'queue_status') {
+              isQueued = true;
+              if (data.elapsedMs) queueWaitMs = data.elapsedMs;
+            } else if (currentEvent === 'error') {
               if (data.code === 'AIRA_PRIVATE_BETA_CAPACITY') {
                 isCapacityRejected = true;
                 retryAfterSeconds = data.retryAfterSeconds;
               }
               streamError = data.error || data.message || 'Stream error event';
-            }
-
-            if (data.type === 'latency_metrics') {
+            } else if (currentEvent === 'latency_metrics') {
               if (data.executedProvider) executedProvider = data.executedProvider;
               if (data.executedModel) executedModel = data.executedModel;
             }
@@ -361,6 +389,11 @@ async function executeSingleRun(
             // ignore JSON boundary parse errors
           }
         }
+      }
+
+      if (streamDone) {
+        await reader.cancel().catch(() => {});
+        break;
       }
     }
 
@@ -379,6 +412,7 @@ async function executeSingleRun(
 
     return {
       suite,
+      userIndex,
       batch: batchName,
       index,
       prompt,
@@ -408,6 +442,7 @@ async function executeSingleRun(
   } catch (err: any) {
     return {
       suite,
+      userIndex,
       batch: batchName,
       index,
       prompt,
@@ -440,31 +475,19 @@ async function main() {
   console.log(`Target Preview: ${PREVIEW_URL}`);
   console.log('================================================================\n');
 
-  // Acquire Session
-  console.log('1. Acquiring authenticated session on Preview...');
-  const sessionRes = await fetch(`${PREVIEW_URL}/api/auth/session`, {
-    method: 'POST',
-    headers: {
-      'Origin': PREVIEW_URL,
-      'x-aira-csrf-protection': '1',
-      'Content-Type': 'application/json'
-    }
-  });
-
-  if (!sessionRes.ok) {
-    throw new Error(`Failed to initialize session: ${sessionRes.status} ${await sessionRes.text()}`);
+  // Initialize a pool of 4 simulated user sessions
+  console.log('1. Acquiring 4 authenticated user sessions for private beta pool...');
+  const userCookies: string[] = [];
+  for (let u = 0; u < 4; u++) {
+    const c = await acquireSession(PREVIEW_URL);
+    userCookies.push(c);
   }
-
-  const sessionCookie = sessionRes.headers.get('set-cookie');
-  if (!sessionCookie) {
-    throw new Error('No set-cookie header received from session initialization');
-  }
-  console.log('Session acquired successfully.\n');
+  console.log(`Successfully acquired ${userCookies.length} distinct beta user sessions.\n`);
 
   // Check diagnostics
   try {
     const diagRes = await fetch(`${PREVIEW_URL}/api/capacity/status`, {
-      headers: { 'Cookie': sessionCookie }
+      headers: { 'Cookie': userCookies[0] }
     });
     if (diagRes.ok) {
       const diag = await diagRes.json();
@@ -475,10 +498,11 @@ async function main() {
   }
 
   // ============================================================================
-  // SUITE 1: ADMITTED LOAD (120 Requests inside private beta envelope)
+  // SUITE 1: ADMITTED LOAD (120 Requests inside private beta envelope across 4 users)
   // ============================================================================
   console.log('\n================================================================');
   console.log('SUITE 1: ADMITTED LOAD BENCHMARK (120 Requests inside envelope)');
+  console.log('Envelope: Global RPM <= 14, Per-User RPM <= 5 (4 users, ~3.3 RPM each)');
   console.log('Target: Admitted Success >= 99%, P50 TTFT <= 2000ms, Groq 429 <= 1%, Gemini 429 <= 1%');
   console.log('================================================================');
 
@@ -495,10 +519,14 @@ async function main() {
     console.log(`\n--- Starting ${b.name} (30 requests) ---`);
     for (let i = 0; i < b.count; i++) {
       const promptObj = PROMPT_BANK_30[i % PROMPT_BANK_30.length];
+      const userIdx = i % userCookies.length;
+      const userCookie = userCookies[userIdx];
+
       const metric = await executeSingleRun(
         PREVIEW_URL,
-        sessionCookie,
+        userCookie,
         'admitted_load',
+        userIdx + 1,
         b.name,
         i + 1,
         promptObj.category,
@@ -508,25 +536,24 @@ async function main() {
       admittedMetrics.push(metric);
 
       console.log(
-        `[${b.name} ${i + 1}/30] ` +
+        `[${b.name} ${i + 1}/30 User#${userIdx + 1}] ` +
         `status=${metric.status} ` +
         `trueTTFT=${metric.trueBrowserTTFT}ms ` +
         `provTTFT=${metric.providerTTFT}ms ` +
         `prov=${metric.executedProvider}:${metric.executedModel} ` +
         `queued=${metric.isQueued} ` +
         `quality=${metric.qualityScore}/10 ` +
-        `preview="${metric.responsePreview.slice(0, 40)}..."`
+        `preview="${metric.responsePreview.slice(0, 35)}..."`
       );
 
-      // Pace requests conservatively to stay within empirical envelope (~13-14 RPM)
+      // Pace requests to stay within global envelope (~13 RPM total, ~3.3 RPM per user)
       if (i < b.count - 1) {
-        await new Promise(r => setTimeout(r, 4400));
+        await new Promise(r => setTimeout(r, 4600));
       }
     }
 
-    // Cooldown between batches
-    console.log(`Cooling down 10s before next batch...`);
-    await new Promise(r => setTimeout(r, 10000));
+    console.log(`Cooling down 8s between batches...`);
+    await new Promise(r => setTimeout(r, 8000));
   }
 
   const admittedStats = computeSuiteStats(admittedMetrics);
@@ -546,17 +573,18 @@ async function main() {
   console.log('Goal: Prove AIRA blocks/queues excess traffic BEFORE providers fail with 429s');
   console.log('================================================================');
 
-  // Launch 15 concurrent requests simultaneously across 2 simulated sessions
-  console.log('Firing burst of 15 simultaneous requests...');
+  console.log('Firing burst of 16 simultaneous requests across 4 users...');
   const overloadPromises: Promise<RequestMetric>[] = [];
 
-  for (let i = 0; i < 15; i++) {
+  for (let i = 0; i < 16; i++) {
     const promptObj = PROMPT_BANK_30[i % PROMPT_BANK_30.length];
+    const userIdx = i % userCookies.length;
     overloadPromises.push(
       executeSingleRun(
         PREVIEW_URL,
-        sessionCookie,
+        userCookies[userIdx],
         'overload_burst',
+        userIdx + 1,
         'Overload Burst',
         i + 1,
         promptObj.category,
@@ -576,7 +604,56 @@ async function main() {
   console.log(`Groq 429 Count: ${overloadStats.groq429Count}`);
   console.log(`Gemini 429 Count: ${overloadStats.gemini429Count}`);
 
-  // Build Final Benchmark Artifact
+  // ============================================================================
+  // SUITE 3: PER-USER FAIRNESS VERIFICATION (Section 21)
+  // ============================================================================
+  console.log('\n================================================================');
+  console.log('SUITE 3: PER-USER FAIRNESS VERIFICATION');
+  console.log('Goal: User 1 exhausts per-user quota (5 RPM); User 2 still obtains immediate service');
+  console.log('================================================================');
+
+  console.log('Waiting 15s to establish clean baseline window...');
+  await new Promise(r => setTimeout(r, 15000));
+
+  const greedyUserCookie = await acquireSession(PREVIEW_URL);
+  const freshUserCookie = await acquireSession(PREVIEW_URL);
+
+  const greedyMetrics: RequestMetric[] = [];
+  console.log('Greedy User firing 8 rapid requests...');
+  for (let g = 0; g < 8; g++) {
+    const m = await executeSingleRun(
+      PREVIEW_URL,
+      greedyUserCookie,
+      'user_fairness',
+      1,
+      'Greedy User',
+      g + 1,
+      'factual',
+      `Greedy prompt #${g + 1}: What is ${g} + 1?`
+    );
+    greedyMetrics.push(m);
+    console.log(`[Greedy User ${g + 1}/8] status=${m.status} prov=${m.executedProvider} rejected=${m.isCapacityRejected}`);
+  }
+
+  console.log('Now Fresh User fires 1 prompt immediately after greedy burst...');
+  const freshMetric = await executeSingleRun(
+    PREVIEW_URL,
+    freshUserCookie,
+    'user_fairness',
+    2,
+    'Fresh User',
+    1,
+    'factual',
+    'What is the capital of France?'
+  );
+  console.log(`[Fresh User 1/1] status=${freshMetric.status} success=${freshMetric.success} prov=${freshMetric.executedProvider} ttft=${freshMetric.trueBrowserTTFT}ms`);
+
+  const userFairnessVerified = greedyMetrics.slice(5).every(m => m.status === 429) && freshMetric.status === 200 && freshMetric.success;
+  console.log(`Per-User Fairness Verified: ${userFairnessVerified ? 'PASS' : 'FAIL'}`);
+
+  // ============================================================================
+  // COMPILE ARTIFACT
+  // ============================================================================
   const benchmarkArtifact = {
     timestamp: new Date().toISOString(),
     previewUrl: PREVIEW_URL,
@@ -598,6 +675,14 @@ async function main() {
       stats: overloadStats,
       metricsCount: overloadMetrics.length
     },
+    userFairnessSuite: {
+      greedyUserTotal: greedyMetrics.length,
+      greedyUserRejections: greedyMetrics.filter(m => m.isCapacityRejected).length,
+      freshUserStatus: freshMetric.status,
+      freshUserSuccess: freshMetric.success,
+      freshUserTTFT: freshMetric.trueBrowserTTFT,
+      verified: userFairnessVerified
+    },
     empiricalFindings: {
       admittedRequestSuccessRate: `${admittedStats.admittedSuccessRate}%`,
       totalUserRequestAcceptanceRate: `${admittedStats.totalAcceptanceRate}%`,
@@ -608,13 +693,14 @@ async function main() {
       capacityGuardP95Overhead: `${admittedStats.guardOverheadP95} ms`,
       groq429Rate: `${admittedStats.groq429Rate}%`,
       gemini429Rate: `${admittedStats.gemini429Rate}%`,
-      provider429PreventedByGuard: overloadStats.groq429Count === 0 && overloadStats.gemini429Count === 0
+      provider429PreventedByGuard: overloadStats.groq429Count === 0 && overloadStats.gemini429Count === 0,
+      perUserFairnessVerified: userFairnessVerified ? 'PASS' : 'FAIL'
     }
   };
 
   const outputPath = path.resolve(process.cwd(), 'P1_6_2_PRIVATE_BETA_CAPACITY_BENCHMARK.json');
   fs.writeFileSync(outputPath, JSON.stringify(benchmarkArtifact, null, 2), 'utf-8');
-  console.log(`\nSaved benchmark results to ${outputPath}`);
+  console.log(`\nSuccessfully saved complete benchmark results to ${outputPath}`);
 }
 
 main().catch(err => {
