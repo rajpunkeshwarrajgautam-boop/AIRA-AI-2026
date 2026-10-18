@@ -1183,6 +1183,10 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       const capacityAdmissionMs = tCapacityAdmitted !== null ? Math.round(tCapacityAdmitted - tRequestReceived) : null;
       const runCreationMs = (tRunCreated !== null && tCapacityAdmitted !== null) ? Math.round(tRunCreated - tCapacityAdmitted) : null;
 
+      const capacityDbRoundTrips = admission?.telemetry?.dbRoundTrips ?? (admission?.permit ? 1 : 0);
+      const capacityTransactionMs = admission?.telemetry?.transactionMs ?? capacityAdmissionMs;
+      const capacityLockWaitMs = admission?.telemetry?.lockWaitMs ?? 0;
+
       const dbTele = agentRuntime.getRunDbTelemetry(run.id) || {
         dbCriticalPathMs: 0,
         dbAcquireMs: 0,
@@ -1196,12 +1200,15 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         queueDepth: modelRouter.capacityGuard.getQueueDepth()
       } : {};
 
-      console.log(`event=chat_latency request_id=${req.headers['x-request-id'] || run.id} run_id=${run.id} model=${executedModel} provider=${executedProvider} ttft_ms=${ttftMs} total_ms=${totalMs} capacity_admission_ms=${capacityAdmissionMs} run_creation_ms=${runCreationMs} delta_count=${deltaCount} thinking_count=${thinkingCount} db_critical_path_ms=${dbTele.dbCriticalPathMs} db_acquire_ms=${dbTele.dbAcquireMs} db_queries_pre_provider=${dbTele.dbQueryCountBeforeProvider} db_queries_pre_token=${dbTele.dbQueryCountBeforeFirstToken} db_deferred_writes=${dbTele.dbDeferredWriteCount} capacity_queue_depth=${capacityMetrics.queueDepth ?? 0}`);
+      console.log(`event=chat_latency request_id=${req.headers['x-request-id'] || run.id} run_id=${run.id} model=${executedModel} provider=${executedProvider} ttft_ms=${ttftMs} total_ms=${totalMs} capacity_admission_ms=${capacityAdmissionMs} capacity_db_roundtrips=${capacityDbRoundTrips} capacity_trx_ms=${capacityTransactionMs} capacity_lock_wait_ms=${capacityLockWaitMs} run_creation_ms=${runCreationMs} delta_count=${deltaCount} thinking_count=${thinkingCount} db_critical_path_ms=${dbTele.dbCriticalPathMs} db_acquire_ms=${dbTele.dbAcquireMs} db_queries_pre_provider=${dbTele.dbQueryCountBeforeProvider} db_queries_pre_token=${dbTele.dbQueryCountBeforeFirstToken} db_deferred_writes=${dbTele.dbDeferredWriteCount} capacity_queue_depth=${capacityMetrics.queueDepth ?? 0}`);
       res.write(`event: latency_metrics\ndata: ${JSON.stringify({
         requestId: run.id,
         ttftMs,
         totalMs,
         capacityAdmissionMs,
+        capacityDbRoundTrips,
+        capacityTransactionMs,
+        capacityLockWaitMs,
         runCreationMs,
         deltaCount,
         thinkingCount,
