@@ -22,6 +22,11 @@ export interface AdmissionResult {
   reason?: string;
   rejectionCode?: 'AIRA_PRIVATE_BETA_CAPACITY' | 'PROMPT_TOO_LARGE' | 'CIRCUITS_OPEN' | 'USER_RATE_LIMIT';
   userMessage?: string;
+  telemetry?: {
+    dbRoundTrips?: number;
+    transactionMs?: number;
+    lockWaitMs?: number;
+  };
 }
 
 export interface AdmitOptions {
@@ -198,84 +203,180 @@ export class PrivateBetaCapacityGuard {
       }
     }
 
-    // 5. Per-User Concurrency Atomic Check & Permit Reservation (Section 5)
-    const userPermitAcquisition = await this.store.acquirePermit('user', principalId, this.config.perUserMaxConcurrent, 30);
-    if (!userPermitAcquisition.acquired) {
-      this.metrics.rejected++;
-      const retryAfter = this.calculateJitteredRetryAfter(this.config.retryAfterSeconds);
-      return {
-        decision: 'REJECT_CAPACITY',
-        rejectionCode: 'AIRA_PRIVATE_BETA_CAPACITY',
-        reason: 'USER_CONCURRENCY_EXCEEDED',
-        retryAfterSeconds: retryAfter,
-        userMessage: 'You have an active request in progress. Please wait for it to complete.'
-      };
-    }
-    const userPermitId = userPermitAcquisition.permitId;
+    // 5. Consolidated Atomic Admission Evaluation (P1.6.5)
+    // If the capacity store supports atomicAdmit, evaluate concurrency and rate limits
+    // in one atomic PostgreSQL transaction / round-trip with deterministic 64-bit advisory locking.
+    if (typeof this.store.atomicAdmit === 'function') {
+      const atomicRes = await this.store.atomicAdmit({
+        principalId,
+        userMaxConcurrent: this.config.perUserMaxConcurrent,
+        userRpmLimit: this.config.perUserRpm,
+        globalMaxConcurrent: effectiveGlobalMaxConcurrent,
+        globalRpmLimit: effectiveGlobalRpm,
+        userWindowMs: 60000,
+        globalWindowMs: 60000,
+        permitTtlSeconds: 30
+      });
 
-    // 6. Per-User Rate Limit Check (Sliding Window Log)
-    const userRpmCheck = await this.store.recordAndCheckRpm('user', principalId, this.config.perUserRpm, 60000);
-    if (!userRpmCheck.allowed) {
-      if (userPermitId) await this.store.releasePermit(userPermitId);
-      this.metrics.rejected++;
-      const retryAfter = Math.max(1, Math.ceil(userRpmCheck.resetMs / 1000));
-      return {
-        decision: 'REJECT_CAPACITY',
-        rejectionCode: 'USER_RATE_LIMIT',
-        reason: 'USER_RPM_EXCEEDED',
-        retryAfterSeconds: retryAfter,
-        userMessage: 'Private beta per-user request limit reached. Please retry in a moment.'
-      };
-    }
+      if (atomicRes.decision === 'ADMIT' && atomicRes.globalPermitId) {
+        this.metrics.admitted++;
+        const permitId = atomicRes.globalPermitId;
+        const userPermitId = atomicRes.userPermitId;
 
-    // 7. Global Rate Limit Check (Sliding Window Log)
-    const globalRpmCheck = await this.store.recordAndCheckRpm('global', 'system', effectiveGlobalRpm, 60000);
-    if (!globalRpmCheck.allowed) {
-      if (userPermitId) await this.store.releasePermit(userPermitId);
-      this.metrics.rejected++;
-      const retryAfter = Math.max(1, Math.ceil(globalRpmCheck.resetMs / 1000));
-      return {
-        decision: 'REJECT_CAPACITY',
-        rejectionCode: 'AIRA_PRIVATE_BETA_CAPACITY',
-        reason: 'GLOBAL_RPM_EXCEEDED',
-        retryAfterSeconds: retryAfter,
-        userMessage: 'AIRA Private Beta is at capacity. Please retry shortly.'
-      };
-    }
+        let released = false;
+        const releaseHandle = async () => {
+          if (released) return;
+          released = true;
+          if (typeof this.store.releasePermits === 'function') {
+            await this.store.releasePermits([permitId, userPermitId].filter(Boolean) as string[]);
+          } else {
+            await Promise.all([
+              this.store.releasePermit(permitId),
+              userPermitId ? this.store.releasePermit(userPermitId) : Promise.resolve()
+            ]);
+          }
+          this.processNextQueued();
+        };
 
-    // 8. Global Concurrency Check & Immediate Permit Acquisition
-    const globalPermitAcquisition = await this.store.acquirePermit('global', principalId, effectiveGlobalMaxConcurrent, 30);
-    if (globalPermitAcquisition.acquired && globalPermitAcquisition.permitId) {
-      const permitId = globalPermitAcquisition.permitId;
-      this.metrics.admitted++;
+        return {
+          decision: 'ADMIT_NOW',
+          permit: {
+            permitId,
+            scope: 'global',
+            principalId,
+            acquiredAt: Date.now(),
+            release: releaseHandle
+          },
+          telemetry: atomicRes.telemetry
+        };
+      }
 
-      let released = false;
-      const releaseHandle = async () => {
-        if (released) return;
-        released = true;
-        await Promise.all([
-          this.store.releasePermit(permitId),
-          userPermitId ? this.store.releasePermit(userPermitId) : Promise.resolve()
-        ]);
-        // Drain next queued request upon permit release
-        this.processNextQueued();
-      };
+      if (atomicRes.decision === 'USER_CONCURRENCY_EXCEEDED') {
+        this.metrics.rejected++;
+        const retryAfter = this.calculateJitteredRetryAfter(this.config.retryAfterSeconds);
+        return {
+          decision: 'REJECT_CAPACITY',
+          rejectionCode: 'AIRA_PRIVATE_BETA_CAPACITY',
+          reason: 'USER_CONCURRENCY_EXCEEDED',
+          retryAfterSeconds: retryAfter,
+          userMessage: 'You have an active request in progress. Please wait for it to complete.',
+          telemetry: atomicRes.telemetry
+        };
+      }
 
-      return {
-        decision: 'ADMIT_NOW',
-        permit: {
-          permitId,
-          scope: 'global',
-          principalId,
-          acquiredAt: Date.now(),
-          release: releaseHandle
-        }
-      };
-    }
+      if (atomicRes.decision === 'USER_RPM_EXCEEDED') {
+        this.metrics.rejected++;
+        const retryAfter = Math.max(1, Math.ceil((atomicRes.resetMs?.userRpm || 8000) / 1000));
+        return {
+          decision: 'REJECT_CAPACITY',
+          rejectionCode: 'USER_RATE_LIMIT',
+          reason: 'USER_RPM_EXCEEDED',
+          retryAfterSeconds: retryAfter,
+          userMessage: 'Private beta per-user request limit reached. Please retry in a moment.',
+          telemetry: atomicRes.telemetry
+        };
+      }
 
-    // Release per-user permit before queueing to prevent blocking other user requests
-    if (userPermitId) {
-      await this.store.releasePermit(userPermitId);
+      if (atomicRes.decision === 'GLOBAL_RPM_EXCEEDED') {
+        this.metrics.rejected++;
+        const retryAfter = Math.max(1, Math.ceil((atomicRes.resetMs?.globalRpm || 8000) / 1000));
+        return {
+          decision: 'REJECT_CAPACITY',
+          rejectionCode: 'AIRA_PRIVATE_BETA_CAPACITY',
+          reason: 'GLOBAL_RPM_EXCEEDED',
+          retryAfterSeconds: retryAfter,
+          userMessage: 'AIRA Private Beta is at capacity. Please retry shortly.',
+          telemetry: atomicRes.telemetry
+        };
+      }
+
+      if (atomicRes.decision === 'STORE_UNAVAILABLE') {
+        this.metrics.rejected++;
+        return {
+          decision: 'REJECT_CAPACITY',
+          rejectionCode: 'AIRA_PRIVATE_BETA_CAPACITY',
+          reason: 'CAPACITY_STORE_UNAVAILABLE',
+          retryAfterSeconds: this.calculateJitteredRetryAfter(this.config.retryAfterSeconds),
+          userMessage: 'Private beta capacity is temporarily unavailable. Please retry in a few moments.'
+        };
+      }
+
+      // GLOBAL_CONCURRENCY_EXCEEDED falls through to queue evaluation
+    } else {
+      // Legacy sequential store fallback
+      const userPermitAcquisition = await this.store.acquirePermit('user', principalId, this.config.perUserMaxConcurrent, 30);
+      if (!userPermitAcquisition.acquired) {
+        this.metrics.rejected++;
+        const retryAfter = this.calculateJitteredRetryAfter(this.config.retryAfterSeconds);
+        return {
+          decision: 'REJECT_CAPACITY',
+          rejectionCode: 'AIRA_PRIVATE_BETA_CAPACITY',
+          reason: 'USER_CONCURRENCY_EXCEEDED',
+          retryAfterSeconds: retryAfter,
+          userMessage: 'You have an active request in progress. Please wait for it to complete.'
+        };
+      }
+      const userPermitId = userPermitAcquisition.permitId;
+
+      const userRpmCheck = await this.store.recordAndCheckRpm('user', principalId, this.config.perUserRpm, 60000);
+      if (!userRpmCheck.allowed) {
+        if (userPermitId) await this.store.releasePermit(userPermitId);
+        this.metrics.rejected++;
+        const retryAfter = Math.max(1, Math.ceil(userRpmCheck.resetMs / 1000));
+        return {
+          decision: 'REJECT_CAPACITY',
+          rejectionCode: 'USER_RATE_LIMIT',
+          reason: 'USER_RPM_EXCEEDED',
+          retryAfterSeconds: retryAfter,
+          userMessage: 'Private beta per-user request limit reached. Please retry in a moment.'
+        };
+      }
+
+      const globalRpmCheck = await this.store.recordAndCheckRpm('global', 'system', effectiveGlobalRpm, 60000);
+      if (!globalRpmCheck.allowed) {
+        if (userPermitId) await this.store.releasePermit(userPermitId);
+        this.metrics.rejected++;
+        const retryAfter = Math.max(1, Math.ceil(globalRpmCheck.resetMs / 1000));
+        return {
+          decision: 'REJECT_CAPACITY',
+          rejectionCode: 'AIRA_PRIVATE_BETA_CAPACITY',
+          reason: 'GLOBAL_RPM_EXCEEDED',
+          retryAfterSeconds: retryAfter,
+          userMessage: 'AIRA Private Beta is at capacity. Please retry shortly.'
+        };
+      }
+
+      const globalPermitAcquisition = await this.store.acquirePermit('global', principalId, effectiveGlobalMaxConcurrent, 30);
+      if (globalPermitAcquisition.acquired && globalPermitAcquisition.permitId) {
+        const permitId = globalPermitAcquisition.permitId;
+        this.metrics.admitted++;
+
+        let released = false;
+        const releaseHandle = async () => {
+          if (released) return;
+          released = true;
+          await Promise.all([
+            this.store.releasePermit(permitId),
+            userPermitId ? this.store.releasePermit(userPermitId) : Promise.resolve()
+          ]);
+          this.processNextQueued();
+        };
+
+        return {
+          decision: 'ADMIT_NOW',
+          permit: {
+            permitId,
+            scope: 'global',
+            principalId,
+            acquiredAt: Date.now(),
+            release: releaseHandle
+          }
+        };
+      }
+
+      if (userPermitId) {
+        await this.store.releasePermit(userPermitId);
+      }
     }
 
     // 9. Concurrency is saturated -> Evaluate Queue (Section 10)
@@ -363,6 +464,9 @@ export class PrivateBetaCapacityGuard {
     }
   }
 
+  // NOTE (P1.6.5): GLOBAL FIFO QUEUE: NOT GUARANTEED across independent Vercel serverless instances.
+  // Each serverless instance maintains its own local bounded queue, and all instances coordinate
+  // synchronously via PostgreSQL advisory locks and distributed capacity tables.
   public async processNextQueued(): Promise<void> {
     if (this.queue.length === 0) return;
 
@@ -378,6 +482,59 @@ export class PrivateBetaCapacityGuard {
 
     const candidate = this.queue[0];
     if (!candidate) return;
+
+    if (typeof this.store.atomicAdmit === 'function') {
+      const atomicRes = await this.store.atomicAdmit({
+        principalId: candidate.principalId,
+        userMaxConcurrent: this.config.perUserMaxConcurrent,
+        userRpmLimit: this.config.perUserRpm,
+        globalMaxConcurrent: effectiveGlobalMaxConcurrent,
+        globalRpmLimit: this.config.globalRpm,
+        userWindowMs: 60000,
+        globalWindowMs: 60000,
+        permitTtlSeconds: 45
+      });
+
+      if (atomicRes.decision !== 'ADMIT' || !atomicRes.globalPermitId) {
+        return; // Still no capacity
+      }
+
+      // Capacity acquired for queued item -> dequeue and resolve
+      this.queue.shift();
+      clearTimeout(candidate.timer);
+
+      const permitId = atomicRes.globalPermitId;
+      const userPermitId = atomicRes.userPermitId;
+      this.metrics.admitted++;
+
+      let released = false;
+      const releaseHandle = async () => {
+        if (released) return;
+        released = true;
+        if (typeof this.store.releasePermits === 'function') {
+          await this.store.releasePermits([permitId, userPermitId].filter(Boolean) as string[]);
+        } else {
+          await Promise.all([
+            this.store.releasePermit(permitId),
+            userPermitId ? this.store.releasePermit(userPermitId) : Promise.resolve()
+          ]);
+        }
+        this.processNextQueued();
+      };
+
+      candidate.resolve({
+        decision: 'ADMIT_NOW',
+        permit: {
+          permitId,
+          scope: 'global',
+          principalId: candidate.principalId,
+          acquiredAt: Date.now(),
+          release: releaseHandle
+        },
+        telemetry: atomicRes.telemetry
+      });
+      return;
+    }
 
     const globalPermit = await this.store.acquirePermit('global', candidate.principalId, effectiveGlobalMaxConcurrent, 45);
     if (!globalPermit.acquired || !globalPermit.permitId) {
