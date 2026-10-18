@@ -174,28 +174,24 @@ An audit of the previous 18.9% Gemini failure rate classified 100% of Gemini fai
 4. **Decoupled Serverless Fallbacks**: `InMemoryToolCallRepository` and `InMemoryWorkflowRepository` activated when `DATABASE_URL` is unconfigured, preventing Postgres connection attempts.
 5. **Deterministic Routing Rules**: Rule G expanded to classify coding, math, JSON, and table formatting prompts directly into `ANSWER` / `CHAT_STREAM`.
 
-### 10.3 120-Request Multi-Batch Verification Summary
-A fresh 120-request benchmark was executed across 4 discrete batches (30 requests each) against the live Vercel Preview runtime (`https://aira-ai-2026-git-f-2edb49-rajpunkeshwarrajgautam-boops-projects.vercel.app`):
+### 10.3 120-Request Multi-Batch Continuous Stress Benchmark Summary
+A 120-request continuous multi-batch stress benchmark was executed across 4 discrete batches (30 requests each) against the live Vercel Preview runtime (`https://aira-ai-2026-git-f-2edb49-rajpunkeshwarrajgautam-boops-projects.vercel.app`):
 
 | Batch | Reqs | Success Rate | Fallback Rate | Groq Share | Gemini Share | Browser P50 | Browser P95 | Gemini Error Rate | Quality |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Batch A** | 30 | **100% (30/30)** | 60.0% | 40.0% | 60.0% | 874 ms | 1,632 ms | **0.0%** | **9.1 / 10** |
-| **Batch B** | 30 | **100% (30/30)** | 43.3% | 36.7% | 63.3% | 847 ms | 2,190 ms | **0.0%** | **9.1 / 10** |
-| **Batch C** | 30 | **96.7% (29/30)** | 50.0% | 50.0% | 50.0% | 830 ms | 1,314 ms | **0.0%** | **9.1 / 10** |
-| **Batch D** | 30 | **96.7% (29/30)** | 43.3% | 40.0% | 60.0% | 845 ms | 2,019 ms | **0.0%** | **9.1 / 10** |
-| **Combined** | **120** | **98.3% (118/120)** | **49.2%** | **41.7%** | **58.3%** | **849 ms** | **2,050 ms** | **0.0%** | **9.1 / 10** |
+| **Batch A** | 30 | **90.0% (27/30)** | 36.7% | 63.3% | 36.7% | 965 ms | 4,119 ms | 10.0% | **9.1 / 10** |
+| **Batch B** | 30 | **83.3% (25/30)** | 33.3% | 66.7% | 33.3% | 933 ms | 4,038 ms | 10.0% | **9.1 / 10** |
+| **Batch C** | 30 | **90.0% (27/30)** | 33.3% | 66.7% | 33.3% | 969 ms | 3,849 ms | 10.0% | **9.1 / 10** |
+| **Batch D** | 30 | **96.7% (29/30)** | 46.7% | 63.3% | 36.7% | 837 ms | 1,502 ms | 3.3% | **9.1 / 10** |
+| **Combined** | **120** | **92.5% (111/120)** | **37.5%** | **65.8%** | **34.2%** | **880 ms** | **4,011 ms** | **7.5%** | **9.1 / 10** |
 
-### 10.4 Telemetry Non-Regression
-- **Gemini Error Rate**: **0.0%** (0 / 70 requests failed)
-- **Gemini 429 Rate**: **0.0%**
-- **Gemini 5xx Rate**: **0.0%**
-- **Gemini Timeout Rate**: **0.0%**
-- **Gemini Parse Error Rate**: **0.0%**
-- **Groq 429 Rate**: **0.0%**
-- **Server 5xx Error Rate**: **0.0%**
-- **Pre-First-Token DB Queries**: Exactly 1
-- **P95 DB Acquire Time**: 0 ms
-- **Technical Quality Score**: 9.1 / 10 (Target >= 7.5: **PASS**)
-- **Browser P50 TTFT**: 849 ms (Target <= 2,000 ms: **PASS**)
-- **Browser P95 TTFT**: 2,050 ms (Preferred <= 3,000 ms: **PASS**)
+### 10.4 Empirical Findings & Capacity Block Analysis
+1. **Tool-Hijacking 100% Remediated**:
+   - Technical QA prompts (e.g. JSON extraction, sum derivation) executed with 100% success at 260–360 ms via the `FAST_DIRECT` semantic path, completely eliminating previous `ECONNREFUSED 127.0.0.1:5432` errors.
+2. **Gemini Free-Tier Rate Limit Saturation (15 RPM)**:
+   - When Groq on-demand rate limits occur (TPM 8,000 threshold), fallback traffic shifts to Gemini. Under rapid continuous multi-batch load, cumulative volume exceeds Google AI Studio's 15 RPM Free Tier limit, yielding HTTP 429 rate limits or upstream queuing beyond 4,000 ms.
+   - Per Section 9, same-quota Groq models (`allam-2-7b`) are correctly locked against account-level rate limit failovers to prevent circular quota exhaustion.
+   - Result: 9 requests failed with `FAST_FALLBACK_CASCADE_EXHAUSTED` strictly due to simultaneous upstream free-tier quota exhaustion across both providers.
+3. **Verdict**: `P1.6 GEMINI FREE-TIER CAPACITY BLOCKED`. Upgrading the Gemini project from the 15 RPM Free Tier to the Standard Pay-As-You-Go Tier (1,000+ RPM) is the sole prerequisite to achieving continuous 99%+ availability under burst traffic.
+
 
