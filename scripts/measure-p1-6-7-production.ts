@@ -190,9 +190,11 @@ const PROMPTS = [
 ];
 
 async function main() {
-  const origin = process.env.TEST_ORIGIN || 'https://aira-ai-2026.vercel.app';
+  const origin = process.argv[2] || process.env.TEST_ORIGIN || 'https://aira-ai-2026.vercel.app';
+  const outFileName = process.argv[3] || process.env.OUTPUT_FILE || 'P1_6_7_PRODUCTION_REPRODUCTION_RESULTS.json';
   console.log(`=== PRODUCTION TTFT & TIMELINE REPRODUCTION ===`);
   console.log(`Target: ${origin}`);
+  console.log(`Output: ${outFileName}`);
   console.log(`Timestamp: ${new Date().toISOString()}\n`);
 
   const guestResults: LatencyBreakdown[] = [];
@@ -324,7 +326,7 @@ async function main() {
   console.log(`Executed Models               | ${guestStats.executedModels.join(', ')}`);
 
   // Write full raw data to JSON artifact
-  const outPath = path.resolve(process.cwd(), 'P1_6_7_PRODUCTION_REPRODUCTION_RESULTS.json');
+  const outPath = path.resolve(process.cwd(), outFileName);
   fs.writeFileSync(outPath, JSON.stringify({
     timestamp: new Date().toISOString(),
     origin,
