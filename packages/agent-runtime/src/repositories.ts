@@ -52,10 +52,11 @@ export class PostgresAgentRepository implements AgentRepository {
     if (!row) return undefined;
     // QUARANTINE POLICY: If principal_id is NULL or empty, it is quarantined and ownerless.
     // Authenticated users cannot claim or access quarantined legacy agents without explicit admin migration.
-    if (!row.principal_id) {
+    // System agent-default is exempt from quarantine.
+    if (!row.principal_id && id !== 'agent-default') {
       return undefined;
     }
-    if (principalId && row.principal_id !== principalId) {
+    if (principalId && row.principal_id && row.principal_id !== principalId) {
       return undefined;
     }
     return this.mapToAgent(row);
@@ -107,11 +108,11 @@ export class InMemoryAgentRepository implements AgentRepository {
   async getAgent(id: string, principalId?: string): Promise<AgentDefinition | undefined> {
     const entry = this.agents.get(id);
     if (!entry) return undefined;
-    // Quarantine policy: NULL or empty principalId is fail-closed
-    if (!entry.principalId) {
+    // Quarantine policy: NULL or empty principalId is fail-closed, except for system agent-default
+    if (!entry.principalId && id !== 'agent-default') {
       return undefined;
     }
-    if (principalId && entry.principalId !== principalId) {
+    if (principalId && entry.principalId && entry.principalId !== principalId) {
       return undefined;
     }
     return { ...entry.agent };

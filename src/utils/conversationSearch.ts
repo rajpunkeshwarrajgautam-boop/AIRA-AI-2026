@@ -44,57 +44,73 @@ async function authenticatedFetch(
   });
 }
 
+const inFlightSyncs = new Map<string, Promise<boolean>>();
+
 export async function syncConversationToServer(conversation: Conversation): Promise<boolean> {
-  const payload = JSON.stringify({
-    id: conversation.id,
-    title: conversation.title,
-    projectId: conversation.projectId,
-    isPinned: Boolean(conversation.isPinned),
-    createdAt: conversation.createdAt,
-    updatedAt: conversation.updatedAt,
-    messages: conversation.messages
-      .filter(message => !message.isStreaming)
-      .map(message => ({
+  const existing = inFlightSyncs.get(conversation.id);
+  if (existing) {
+    console.log(`[ConversationSync] conversationSyncDeduped=true conversationId=${conversation.id}`);
+    return existing;
+  }
+
+  const syncPromise = (async () => {
+    const stableMessages = conversation.messages.filter(message => !message.isStreaming);
+    const payload = JSON.stringify({
+      id: conversation.id,
+      title: conversation.title,
+      projectId: conversation.projectId,
+      isPinned: Boolean(conversation.isPinned),
+      createdAt: conversation.createdAt,
+      updatedAt: conversation.updatedAt,
+      messages: stableMessages.map(message => ({
         id: message.id,
         role: message.role,
         content: message.content,
         createdAt: message.timestamp
       }))
-  });
+    });
 
-  // Sync is idempotent per principal/conversation/message ID on the server.
-  // A bounded second attempt covers transient Neon wakeups without retrying
-  // authorization or client-validation failures.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    let delayMs = 1200;
     try {
-      const response = await authenticatedFetch('/api/conversations/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: payload
-      }, 20000);
-      if (response.ok) return true;
-      if (response.status !== 503 && response.status !== 429) return false;
+      // Sync is idempotent per principal/conversation/message ID on the server.
+      // A bounded second attempt covers transient Neon wakeups without retrying
+      // authorization or client-validation failures.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        let delayMs = 1200;
+        try {
+          const response = await authenticatedFetch('/api/conversations/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: payload
+          }, 20000);
+          if (response.ok) return true;
+          if (response.status !== 503 && response.status !== 429) return false;
 
-      const retryAfter = Number(response.headers.get('Retry-After'));
-      if (Number.isFinite(retryAfter) && retryAfter > 0) {
-        delayMs = Math.min(Math.max(retryAfter * 1000, 500), 3000);
+          const retryAfter = Number(response.headers.get('Retry-After'));
+          if (Number.isFinite(retryAfter) && retryAfter > 0) {
+            delayMs = Math.min(Math.max(retryAfter * 1000, 500), 3000);
+          }
+        } catch (error) {
+          // The request uses its own deadline; there is no external cancellation
+          // for this additive background sync. Retry only network/timeout failures.
+          const retryable = error instanceof TypeError ||
+            (error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name));
+          if (!retryable) return false;
+        }
+
+        if (attempt === 0) {
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
       }
-    } catch (error) {
-      // The request uses its own deadline; there is no external cancellation
-      // for this additive background sync. Retry only network/timeout failures.
-      const retryable = error instanceof TypeError ||
-        (error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name));
-      if (!retryable) return false;
-    }
 
-    if (attempt === 0) {
-      await new Promise(resolve => setTimeout(resolve, delayMs));
+      // Existing local conversation history remains usable if persistence is down.
+      return false;
+    } finally {
+      inFlightSyncs.delete(conversation.id);
     }
-  }
+  })();
 
-  // Existing local conversation history remains usable if persistence is down.
-  return false;
+  inFlightSyncs.set(conversation.id, syncPromise);
+  return syncPromise;
 }
 
 export async function fetchConversationFromServer(
@@ -188,13 +204,16 @@ export async function backfillConversationsBestEffort(
   conversations: Conversation[],
   limit = 100
 ): Promise<void> {
-  const recent = [...conversations]
+  const populated = conversations.filter(c => c.messages.some(m => !m.isStreaming));
+  if (populated.length === 0) return;
+
+  const recent = [...populated]
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, limit);
 
   // Keep pressure low on serverless/DB connections.
-  for (let i = 0; i < recent.length; i += 4) {
-    const batch = recent.slice(i, i + 4);
+  for (let i = 0; i < recent.length; i += 2) {
+    const batch = recent.slice(i, i + 2);
     await Promise.allSettled(batch.map(syncConversationToServer));
   }
 }

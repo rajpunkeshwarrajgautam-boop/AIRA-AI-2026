@@ -46,6 +46,7 @@ export class AgentRuntime extends EventEmitter {
     dbQueryCountBeforeFirstToken: number;
     dbDeferredWriteCount: number;
   }> = new Map();
+  private activeAbortControllers: Map<string, AbortController> = new Map();
   private router: ServerIntentRouter;
   private workflowRepo: WorkflowRepository;
   private workflowEngine: WorkflowEngine;
@@ -347,6 +348,11 @@ export class AgentRuntime extends EventEmitter {
     const run = await this.getRun(runId);
     if (!run || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)) {
       return false;
+    }
+    const abortCtrl = this.activeAbortControllers.get(runId);
+    if (abortCtrl) {
+      abortCtrl.abort();
+      this.activeAbortControllers.delete(runId);
     }
     const wfRun = await this.workflowRepo.getWorkflowRunByRunId(runId);
     if (wfRun && ['CREATED', 'QUEUED', 'RUNNING', 'WAITING_FOR_APPROVAL'].includes(wfRun.state)) {
@@ -1187,6 +1193,11 @@ CAPABILITY & IDENTITY INVARIANTS:
       let pendingThinking = '';
       let pendingDeltas = 0;
       let lastPersistedAt = Date.now();
+      let isFlushing = false;
+
+      const abortController = new AbortController();
+      this.activeAbortControllers.set(runId, abortController);
+
       const broadcastDelta = (type: StreamingEventType, delta: string) => {
         const event: StreamingEvent = {
           eventId: `evt_${crypto.randomUUID().slice(0, 8)}`,
@@ -1199,41 +1210,54 @@ CAPABILITY & IDENTITY INVARIANTS:
         stream.emit('event', event);
         this.emit('run_event', { runId, event });
       };
-      const flushDeltas = async () => {
+
+      const flushDeltas = async (isFinal = false): Promise<void> => {
+        if (isFlushing && !isFinal) return;
         const hasPendingEvents = Boolean(this.pendingRunEvents.get(runId)?.length);
-        if (!pendingDeltas && !hasPendingEvents) return;
-        // 1. Flush pending lifecycle events in a single multi-row batch
-        await this.flushPendingEvents(runId);
-        // 2. Snapshot before durable delta events: recovery can reconstruct the output
-        // even if the serverless instance stops between these operations.
-        await this.saveRun(run);
-        // 3. Live deltas have already been sent to subscribers. Store aggregate
-        // replay events without broadcasting them a second time.
-        if (pendingThinking) {
-          await this.runRepo.appendRunEvent({
-            eventId: `evt_${crypto.randomUUID().slice(0, 8)}`,
-            runId, type: 'thinking.delta', timestamp: Date.now(),
-            data: { delta: pendingThinking }
-          });
-          pendingThinking = '';
+        if (!pendingDeltas && !hasPendingEvents && !isFinal) return;
+        isFlushing = true;
+        try {
+          const checkRun = await this.getRun(runId);
+          if (checkRun?.state === 'CANCELLED' && !isFinal) return;
+          // 1. Flush pending lifecycle events in a single multi-row batch
+          await this.flushPendingEvents(runId);
+          // 2. Snapshot before durable delta events: recovery can reconstruct the output
+          // even if the serverless instance stops between these operations.
+          await this.saveRun(run);
+          // 3. Live deltas have already been sent to subscribers. Store aggregate
+          // replay events without broadcasting them a second time.
+          if (pendingThinking) {
+            const th = pendingThinking;
+            pendingThinking = '';
+            await this.runRepo.appendRunEvent({
+              eventId: `evt_${crypto.randomUUID().slice(0, 8)}`,
+              runId, type: 'thinking.delta', timestamp: Date.now(),
+              data: { delta: th }
+            });
+          }
+          if (pendingContent) {
+            const ct = pendingContent;
+            pendingContent = '';
+            await this.runRepo.appendRunEvent({
+              eventId: `evt_${crypto.randomUUID().slice(0, 8)}`,
+              runId, type: 'content.delta', timestamp: Date.now(),
+              data: { delta: ct }
+            });
+          }
+          pendingDeltas = 0;
+          lastPersistedAt = Date.now();
+        } finally {
+          isFlushing = false;
         }
-        if (pendingContent) {
-          await this.runRepo.appendRunEvent({
-            eventId: `evt_${crypto.randomUUID().slice(0, 8)}`,
-            runId, type: 'content.delta', timestamp: Date.now(),
-            data: { delta: pendingContent }
-          });
-          pendingContent = '';
-        }
-        pendingDeltas = 0;
-        lastPersistedAt = Date.now();
       };
+
       let completionResult: ModelCompletionResult;
       try {
         completionResult = await adapter.stream(
           messages,
           run.modelPolicy,
           async (delta) => {
+            if (abortController.signal.aborted) return;
             if (delta.thinking) {
               run.thinking += delta.thinking;
               pendingThinking += delta.thinking;
@@ -1250,11 +1274,12 @@ CAPABILITY & IDENTITY INVARIANTS:
                 broadcastDelta('content.delta', delta.text);
               }
             }
-            if (pendingDeltas >= 20 || (pendingDeltas && Date.now() - lastPersistedAt >= 1000)) {
-              await flushDeltas();
+            if (!isFlushing && pendingDeltas >= 100 && (Date.now() - lastPersistedAt >= 3000)) {
+              void flushDeltas();
             }
           },
           {
+            signal: abortController.signal,
             onProvenance: (provUpdate: any) => {
               if (run.provenance) {
                 if (provUpdate.executedProvider) run.provenance.provider = provUpdate.executedProvider;
@@ -1267,17 +1292,43 @@ CAPABILITY & IDENTITY INVARIANTS:
             }
           }
         );
-        await flushDeltas();
+        await flushDeltas(true);
       } catch (streamErr: any) {
+        const isAborted = abortController.signal.aborted ||
+          streamErr?.message === 'ABORTED' ||
+          streamErr?.name === 'AbortError' ||
+          streamErr?.code === 'ABORT_ERR';
+
+        if (isAborted) {
+          try {
+            await this.flushPendingEvents(runId);
+            await flushDeltas(true);
+          } catch (persistErr) {
+            console.error('Failed to checkpoint stream deltas on cancel', persistErr);
+          }
+          const currentRun = await this.getRun(runId);
+          if (currentRun?.state !== 'CANCELLED') {
+            await this.transitionRunState(runId, 'CANCELLED', 'Run was cancelled.');
+          }
+          return;
+        }
+
         // Best-effort checkpoint; preserve the original inference/DB exception.
         try {
           await this.flushPendingEvents(runId);
-          await flushDeltas();
+          await flushDeltas(true);
         } catch (persistErr) {
           console.error('Failed to checkpoint stream deltas', persistErr);
         }
         await this.transitionRunState(runId, 'FAILED', streamErr.message);
         throw streamErr;
+      } finally {
+        this.activeAbortControllers.delete(runId);
+      }
+
+      const checkCancelled = await this.getRun(runId);
+      if (checkCancelled?.state === 'CANCELLED' || abortController.signal.aborted) {
+        return;
       }
 
       // Reconcile outbound & upstream models and confirm execution provenance
@@ -1318,6 +1369,9 @@ CAPABILITY & IDENTITY INVARIANTS:
 
     // Checkpoint 6: Artifacts & Completion
     if (run.executionCheckpoint === 'FINALIZING') {
+      const checkCancelled = await this.getRun(runId);
+      if (checkCancelled?.state === 'CANCELLED') return;
+
       run.content = sanitizeCitationMarkers(run.content, run.citations?.length || 5);
       if (run.content.includes('```')) {
         const artId = `art_${Date.now()}`;
@@ -1335,7 +1389,6 @@ CAPABILITY & IDENTITY INVARIANTS:
           }]
         };
         run.artifacts.push(artifact);
-        await this.saveRun(run);
         await this.emitRunEvent(runId, 'artifact.created', artifact);
       } else if (run.intent === 'AGENT_MISSION') {
         const artId = `art_mission_${Date.now()}`;
@@ -1353,13 +1406,10 @@ CAPABILITY & IDENTITY INVARIANTS:
           }]
         };
         run.artifacts.push(artifact);
-        await this.saveRun(run);
         await this.emitRunEvent(runId, 'artifact.created', artifact);
       }
       
       run.executionCheckpoint = 'COMPLETED';
-      await this.flushPendingEvents(runId);
-      await this.saveRun(run);
       await this.transitionRunState(runId, 'COMPLETED');
     }
   }

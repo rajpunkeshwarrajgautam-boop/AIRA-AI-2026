@@ -634,8 +634,11 @@ if (isDbConfigured) {
 
 // Recovery is deferred until the HTTP server is bound.
 
-// Seed default agent if not exists
+// Seed default agent if not exists (process singleton)
+let hasSeededAgent = false;
 async function seedDefaultAgent() {
+  if (hasSeededAgent) return;
+  hasSeededAgent = true;
   const existing = await agentRepo.getAgent('agent-default');
   if (!existing) {
     await agentRepo.saveAgent({
@@ -653,11 +656,11 @@ async function seedDefaultAgent() {
     } as AgentDefinition);
   }
 }
-if (isDbConfigured) {
-  seedDefaultAgent().catch(console.error);
-}
 
+let hasSeededAutomation = false;
 async function seedDefaultAutomation() {
+  if (hasSeededAutomation) return;
+  hasSeededAutomation = true;
   const existing = await autoRepo.listAutomations();
   if (existing.length === 0) {
     await autoRepo.saveAutomation({
@@ -676,8 +679,25 @@ async function seedDefaultAutomation() {
     });
   }
 }
+
+async function seedDefaultsIdempotent() {
+  if (hasSeededAgent && hasSeededAutomation) {
+    console.log('[Bootstrap] guestBootstrapSkipped=true');
+    return;
+  }
+  const t0 = performance.now();
+  try {
+    await seedDefaultAgent();
+    await seedDefaultAutomation();
+    const guestBootstrapMs = Math.round(performance.now() - t0);
+    console.log(`[Bootstrap] guestBootstrapExecuted=true guestBootstrapMs=${guestBootstrapMs}`);
+  } catch (err) {
+    console.warn('[Bootstrap] Non-fatal default seed notice:', err);
+  }
+}
+
 if (isDbConfigured) {
-  seedDefaultAutomation().catch(console.error);
+  void seedDefaultsIdempotent();
 }
 
 // -----------------------------------------------------------------------

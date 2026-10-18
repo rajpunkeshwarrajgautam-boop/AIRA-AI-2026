@@ -196,7 +196,10 @@ function App() {
           `${conversation.updatedAt}:${stableMessages}:${conversation.title}:${Boolean(conversation.isPinned)}`
         );
       }
-      void backfillConversationsBestEffort(conversations);
+      const populated = conversations.filter(c => c.messages.some(m => !m.isStreaming));
+      if (populated.length > 0) {
+        void backfillConversationsBestEffort(populated);
+      }
       return;
     }
 
@@ -206,6 +209,7 @@ function App() {
       if (conversation.messages.some(message => message.isStreaming)) continue;
 
       const stableMessages = conversation.messages.length;
+      if (stableMessages === 0) continue;
       const version = `${conversation.updatedAt}:${stableMessages}:${conversation.title}:${Boolean(conversation.isPinned)}`;
       if (conversationSyncVersionsRef.current.get(conversation.id) === version) continue;
 
