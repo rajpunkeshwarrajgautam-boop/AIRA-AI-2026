@@ -197,7 +197,44 @@ export class DistributedPostgresCapacityStore implements CapacityStore {
       const expiresAt = now + ttlSeconds * 1000;
       const permitId = `pmt_${crypto.randomUUID().slice(0, 12)}`;
 
-      // Atomic acquire with single round-trip: prune expired and insert only if count < maxConcurrent
+      if (typeof this.client.transaction === 'function') {
+        return await this.client.transaction(async (trx) => {
+          const lockKey = `permit_${scope}_${scope === 'global' ? 'global' : principalId}`;
+          try {
+            await trx.raw(`SELECT pg_advisory_xact_lock(hashtext(?))`, [lockKey]);
+          } catch {
+            // Non-postgres fallback
+          }
+
+          await trx('capacity_permits').where('expires_at', '<=', now).delete();
+
+          let countQuery = trx('capacity_permits')
+            .where('scope', scope)
+            .where('expires_at', '>', now);
+          if (scope === 'user') {
+            countQuery = countQuery.where('principal_id', principalId);
+          }
+          const countRes = await countQuery.count();
+          const row = Array.isArray(countRes) ? countRes[0] : countRes;
+          const activeCount = Number((row && (row.count ?? row['count(*)'])) || 0);
+
+          if (activeCount >= maxConcurrent) {
+            return { acquired: false, currentActive: activeCount };
+          }
+
+          await trx('capacity_permits').insert({
+            id: permitId,
+            scope,
+            principal_id: principalId,
+            created_at: now,
+            expires_at: expiresAt
+          });
+
+          return { acquired: true, currentActive: activeCount + 1, permitId };
+        });
+      }
+
+      // Fallback for non-transactional mock environments
       const result = await this.client.raw(`
         WITH cleanup AS (
           DELETE FROM capacity_permits WHERE expires_at <= ?
@@ -267,6 +304,45 @@ export class DistributedPostgresCapacityStore implements CapacityStore {
       const now = Date.now();
       const windowStart = now - windowMs;
       const logId = `log_${crypto.randomUUID().slice(0, 12)}`;
+
+      if (typeof this.client.transaction === 'function') {
+        return await this.client.transaction(async (trx) => {
+          const lockKey = `rpm_${scope}_${scope === 'global' ? 'global' : principalId}`;
+          try {
+            await trx.raw(`SELECT pg_advisory_xact_lock(hashtext(?))`, [lockKey]);
+          } catch {
+            // Non-postgres fallback
+          }
+
+          await trx('capacity_rate_log').where('timestamp', '<=', windowStart).delete();
+
+          let countQuery = trx('capacity_rate_log')
+            .where('scope', scope)
+            .where('timestamp', '>', windowStart);
+          if (scope === 'user') {
+            countQuery = countQuery.where('principal_id', principalId);
+          }
+          const countRes = await countQuery
+            .select(trx.raw ? trx.raw('COUNT(id) as count, MIN(timestamp) as oldest_ts') : 'id');
+          const row = Array.isArray(countRes) ? countRes[0] : countRes;
+          const priorCount = Number(row?.count || (Array.isArray(countRes) ? countRes.length : 0));
+          const oldestTs = row?.oldest_ts ? Number(row.oldest_ts) : now;
+
+          if (priorCount >= limitRpm) {
+            const resetMs = Math.max(0, (oldestTs + windowMs) - now);
+            return { allowed: false, currentRpm: priorCount, resetMs };
+          }
+
+          await trx('capacity_rate_log').insert({
+            id: logId,
+            scope,
+            principal_id: principalId,
+            timestamp: now
+          });
+
+          return { allowed: true, currentRpm: priorCount + 1, resetMs: 0 };
+        });
+      }
 
       const result = await this.client.raw(`
         WITH cleanup AS (
