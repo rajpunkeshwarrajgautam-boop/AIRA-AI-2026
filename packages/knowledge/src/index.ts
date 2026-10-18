@@ -17,6 +17,7 @@ export { PrincipalScopeSchema };
 
 export class BrainV2KnowledgeEngine {
   private repo: KnowledgeRepository;
+  private static hasSeededSystemKnowledge = false;
 
   constructor(repo?: KnowledgeRepository) {
     this.repo = repo || new PostgresKnowledgeRepository();
@@ -274,6 +275,8 @@ export class BrainV2KnowledgeEngine {
   }
 
   private async seedDefaultKnowledge(): Promise<void> {
+    if (BrainV2KnowledgeEngine.hasSeededSystemKnowledge) return;
+    BrainV2KnowledgeEngine.hasSeededSystemKnowledge = true;
     const systemScope: PrincipalScope = { isSystem: true, principalId: 'system' };
     const sources = await this.repo.listSources(systemScope);
     if (sources.length === 0) {
