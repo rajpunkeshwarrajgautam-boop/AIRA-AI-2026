@@ -532,19 +532,19 @@ export class DistributedPostgresCapacityStore implements CapacityStore {
 
       const atomicCteSql = `
         WITH prune_permits AS (
-          DELETE FROM capacity_permits WHERE expires_at <= ?
+          DELETE FROM capacity_permits WHERE expires_at <= ?::bigint
         ),
         prune_rpm AS (
-          DELETE FROM capacity_rate_log WHERE timestamp <= ?
+          DELETE FROM capacity_rate_log WHERE timestamp <= ?::bigint
         ),
         counts AS (
           SELECT
-            (SELECT COUNT(*)::int FROM capacity_permits WHERE scope = 'user' AND principal_id = ? AND expires_at > ?) as user_concurrent,
-            (SELECT COUNT(*)::int FROM capacity_permits WHERE scope = 'global' AND expires_at > ?) as global_concurrent,
-            (SELECT COUNT(*)::int FROM capacity_rate_log WHERE scope = 'user' AND principal_id = ? AND timestamp > ?) as user_rpm,
-            (SELECT MIN(timestamp) FROM capacity_rate_log WHERE scope = 'user' AND principal_id = ? AND timestamp > ?) as user_oldest_ts,
-            (SELECT COUNT(*)::int FROM capacity_rate_log WHERE scope = 'global' AND timestamp > ?) as global_rpm,
-            (SELECT MIN(timestamp) FROM capacity_rate_log WHERE scope = 'global' AND timestamp > ?) as global_oldest_ts
+            (SELECT COUNT(*)::int FROM capacity_permits WHERE scope = 'user' AND principal_id = ? AND expires_at > ?::bigint) as user_concurrent,
+            (SELECT COUNT(*)::int FROM capacity_permits WHERE scope = 'global' AND expires_at > ?::bigint) as global_concurrent,
+            (SELECT COUNT(*)::int FROM capacity_rate_log WHERE scope = 'user' AND principal_id = ? AND timestamp > ?::bigint) as user_rpm,
+            (SELECT MIN(timestamp) FROM capacity_rate_log WHERE scope = 'user' AND principal_id = ? AND timestamp > ?::bigint) as user_oldest_ts,
+            (SELECT COUNT(*)::int FROM capacity_rate_log WHERE scope = 'global' AND timestamp > ?::bigint) as global_rpm,
+            (SELECT MIN(timestamp) FROM capacity_rate_log WHERE scope = 'global' AND timestamp > ?::bigint) as global_oldest_ts
         ),
         decision AS (
           SELECT
@@ -555,10 +555,10 @@ export class DistributedPostgresCapacityStore implements CapacityStore {
             global_rpm,
             global_oldest_ts,
             CASE
-              WHEN user_concurrent >= ? THEN 'USER_CONCURRENCY_EXCEEDED'
-              WHEN user_rpm >= ? THEN 'USER_RPM_EXCEEDED'
-              WHEN global_rpm >= ? THEN 'GLOBAL_RPM_EXCEEDED'
-              WHEN global_concurrent >= ? THEN 'GLOBAL_CONCURRENCY_EXCEEDED'
+              WHEN user_concurrent >= ?::int THEN 'USER_CONCURRENCY_EXCEEDED'
+              WHEN user_rpm >= ?::int THEN 'USER_RPM_EXCEEDED'
+              WHEN global_rpm >= ?::int THEN 'GLOBAL_RPM_EXCEEDED'
+              WHEN global_concurrent >= ?::int THEN 'GLOBAL_CONCURRENCY_EXCEEDED'
               ELSE 'ADMIT'
             END as status
           FROM counts
@@ -568,8 +568,8 @@ export class DistributedPostgresCapacityStore implements CapacityStore {
           SELECT p.id, p.scope, p.principal_id, p.created_at, p.expires_at
           FROM (
             VALUES
-              (?, 'user', ?, ?, ?),
-              (?, 'global', ?, ?, ?)
+              (?::text, 'user', ?::text, ?::bigint, ?::bigint),
+              (?::text, 'global', ?::text, ?::bigint, ?::bigint)
           ) AS p(id, scope, principal_id, created_at, expires_at)
           WHERE (SELECT status FROM decision) = 'ADMIT'
           RETURNING id
@@ -579,8 +579,8 @@ export class DistributedPostgresCapacityStore implements CapacityStore {
           SELECT r.id, r.scope, r.principal_id, r.timestamp
           FROM (
             VALUES
-              (?, 'user', ?, ?),
-              (?, 'global', 'system', ?)
+              (?::text, 'user', ?::text, ?::bigint),
+              (?::text, 'global', 'system', ?::bigint)
           ) AS r(id, scope, principal_id, timestamp)
           WHERE (SELECT status FROM decision) = 'ADMIT'
           RETURNING id
