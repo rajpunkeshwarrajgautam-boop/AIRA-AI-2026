@@ -60,14 +60,14 @@ async function run() {
   const g=await guest();
   for(const [i,model] of ['claude-3-7-sonnet','claude-3-5-haiku','aira-auto','aira-fast','openai/gpt-oss-120b'].entries())await chat(g,model,`guest-${i}`);
   const quota=await request(g,'/api/chat/stream',{model:'aira-fast',prompt:'Reply OK'});assert.equal(quota.status,429);assert.equal((await quota.json()).code,'USER_RATE_LIMIT');observations.push({gate:'real per-user quota',passed:true});
-  for(const model of ['unknown-model','__proto__','allam-2-7b',null,{}]) { const invalid=await request(g,'/api/chat/stream',{model,prompt:'Reply OK'});assert.equal(invalid.status,400);assert.equal((await invalid.json()).code,'UNSUPPORTED_MODEL_IDENTIFIER'); }
+  for(const model of ['unknown-model','__proto__','allam-2-7b','gemini-2-5-flash',null,{}]) { const invalid=await request(g,'/api/chat/stream',{model,prompt:'Reply OK'});assert.equal(invalid.status,400);assert.equal((await invalid.json()).code,'UNSUPPORTED_MODEL_IDENTIFIER'); }
   const a=await account('A'),b=await account('B');
   for(const [i,model] of ['claude-3-7-sonnet','claude-3-5-haiku','aira-auto','aira-fast'].entries())await chat(a,model,`auth-${i}`);
   const direct=await request(b,'/api/runs',{prompt:'Reply with exactly OK.',modelPolicy:{model:'claude-3-5-haiku'}});assert.equal(direct.status,201);const created=await direct.json();
   assert.equal((await request(a,`/api/runs/${created.id}`)).status,404,'Cross-user run isolation');
   let terminal;for(let i=0;i<20;i++){const r=await (await request(b,`/api/runs/${created.id}`)).json();if(['COMPLETED','FAILED','CANCELLED'].includes(r.state)){terminal=r;break;}await new Promise(r=>setTimeout(r,500));}
   assert.equal(terminal?.state,'COMPLETED','Direct API run completes');assert.ok(terminal.content?.trim());observations.push({gate:'direct run and cross-user isolation',runId:created.id,passed:true});
-  await chat(b,'gemini-2-5-flash','direct-gemini');
+  await chat(b,'gemini-3.5-flash-lite','direct-gemini');
   const concurrent=await guest();const controller=new AbortController();
   let responses=[];
   try {

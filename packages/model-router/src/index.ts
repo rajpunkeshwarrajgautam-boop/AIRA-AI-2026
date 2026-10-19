@@ -1059,8 +1059,8 @@ export class ModelRouter {
       );
     }
 
-    if (model === 'gemini-2-5-pro' || model === 'gemini-2-5-flash') {
-      const executedModel = model === 'gemini-2-5-pro' ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
+    if (model === 'gemini-2-5-pro' || model === 'gemini-3.5-flash-lite') {
+      const executedModel = model === 'gemini-2-5-pro' ? 'gemini-2.5-pro' : 'gemini-3.5-flash-lite';
       if (!this.adapters.has('gemini')) throw new Error('CONFIGURATION_ERROR: Gemini provider is not configured.');
       return {
         policy,

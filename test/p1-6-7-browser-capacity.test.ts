@@ -20,7 +20,7 @@ test('legacy aliases and canonical IDs share one allowlist; malformed IDs fail b
     assert.ok(admission.permit, `${id} must reserve capacity`);
     await admission.permit.release();
   }
-  for (const bad of ['', 'AIRa-fast', ' aira-fast', 'constructor', '__proto__', 'unknown-model', 'allam-2-7b', null, {}, [], 42]) {
+  for (const bad of ['', 'AIRa-fast', ' aira-fast', 'constructor', '__proto__', 'unknown-model', 'allam-2-7b', 'gemini-2-5-flash', null, {}, [], 42]) {
     assert.throws(() => normalizeModelIdentifier(bad), /Unsupported model/);
     await assert.rejects(guard.admit({ principalId: 'bad', model: bad as any }), /Unsupported model/);
   }
@@ -154,7 +154,7 @@ test('direct Gemini allowlisted IDs select their exact provider model behind adm
   try {
     const guard = new PrivateBetaCapacityGuard({}, new InMemoryCapacityStore());
     const router = new ModelRouter(undefined, guard);
-    for (const [id, providerModel] of [['gemini-2-5-flash','gemini-2.5-flash'],['gemini-2-5-pro','gemini-2.5-pro']] as const) {
+    for (const [id, providerModel] of [['gemini-3.5-flash-lite','gemini-3.5-flash-lite'],['gemini-2-5-pro','gemini-2.5-pro']] as const) {
       const execution = router.resolveExecution(id);
       assert.equal(execution.executedProvider, 'gemini');
       assert.equal(execution.executedModel, providerModel);
