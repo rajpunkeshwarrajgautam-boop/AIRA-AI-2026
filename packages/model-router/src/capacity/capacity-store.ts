@@ -604,7 +604,6 @@ export class DistributedPostgresCapacityStore implements CapacityStore {
       if (typeof this.client.transaction === 'function') {
         const trxRes = await this.client.transaction(async (trx) => {
           const tLockStart = performance.now();
-          try {
             await trx.raw(`
               SELECT 
                 pg_advisory_xact_lock(?::bigint),
@@ -612,9 +611,6 @@ export class DistributedPostgresCapacityStore implements CapacityStore {
                 pg_advisory_xact_lock(?::bigint),
                 pg_advisory_xact_lock(?::bigint)
             `, [lockGlobalRpm, lockGlobalPermit, lockUserRpm, lockUserPermit]);
-          } catch {
-            // Non-postgres fallback
-          }
           lockWaitMs = Math.round(performance.now() - tLockStart);
 
           const res = await trx.raw(atomicCteSql, bindings);

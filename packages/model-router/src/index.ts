@@ -2,6 +2,7 @@ import {
   ModelId,
   ModelPolicy,
   ModelPolicySchema,
+  normalizeModelIdentifier,
   IntentTaxonomy
 } from '../../contracts/src/index.js';
 import { ProviderHealthTracker } from './health-tracker.js';
@@ -9,6 +10,8 @@ import { LatencyAwareRoutingPolicy } from './routing-policy.js';
 import { ResilientModelAdapter } from './resilient-adapter.js';
 import { GeminiAdapter } from './gemini-adapter.js';
 import { PrivateBetaCapacityGuard } from './capacity/index.js';
+import { protectInferenceAdapter } from './inference-capacity.js';
+export * from './inference-capacity.js';
 
 export * from './capacity/index.js';
 
@@ -761,20 +764,7 @@ export class ModelRouter {
   }
 
   public resolvePolicy(modelId: ModelId, intent?: IntentTaxonomy): ModelPolicy {
-    // Frontend v1 exposed Aira modes using legacy Claude IDs. Treat those IDs as
-    // product-level aliases so persisted browser settings keep working while
-    // routing remains provider-agnostic.
-    const legacyAiraAliases: Partial<Record<ModelId, ModelId>> = {
-      'claude-3-7-sonnet': 'aira-auto',
-      'claude-3-5-sonnet': 'aira-pro',
-      'claude-3-5-haiku': 'aira-fast',
-      'claude-3-opus': 'aira-deep',
-      // The hosted Llama 3.1 405B endpoint is not a current NVIDIA catalog option.
-      // Old browser state and direct API callers must use the supported replacement.
-      'meta/llama-3.1-405b-instruct': 'nvidia/nemotron-3-super-120b-a12b'
-    };
-
-    let resolvedModel: ModelId = legacyAiraAliases[modelId] || modelId;
+    let resolvedModel = normalizeModelIdentifier(modelId);
 
     if (resolvedModel === 'aira-auto') {
       switch (intent) {
@@ -809,6 +799,11 @@ export class ModelRouter {
   }
 
   public resolveExecution(requestedModelId: ModelId, intent?: IntentTaxonomy): ResolvedExecution {
+    const execution = this.resolveUnprotectedExecution(requestedModelId, intent);
+    return { ...execution, adapter: protectInferenceAdapter(execution.adapter, this.capacityGuard) };
+  }
+
+  private resolveUnprotectedExecution(requestedModelId: ModelId, intent?: IntentTaxonomy): ResolvedExecution {
     const policy = this.resolvePolicy(requestedModelId, intent);
     const model = policy.model;
 
@@ -1062,6 +1057,17 @@ export class ModelRouter {
         `CONFIGURATION_ERROR: No Anthropic API key configured for model "${model}". ` +
         'Set ANTHROPIC_API_KEY in environment.'
       );
+    }
+
+    if (model === 'gemini-2-5-pro' || model === 'gemini-3.5-flash-lite') {
+      const executedModel = model === 'gemini-2-5-pro' ? 'gemini-2.5-pro' : 'gemini-3.5-flash-lite';
+      if (!this.adapters.has('gemini')) throw new Error('CONFIGURATION_ERROR: Gemini provider is not configured.');
+      return {
+        policy,
+        adapter: this.createModelSpecificAdapter('gemini', executedModel),
+        provider: 'gemini', requestedProvider: 'gemini', executedProvider: 'gemini',
+        executedModel, plannedModel: executedModel, fallbackOccurred: false, verified: true
+      };
     }
 
     if (model.startsWith('gpt')) {

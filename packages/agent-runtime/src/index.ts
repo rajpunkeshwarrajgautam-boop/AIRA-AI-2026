@@ -8,6 +8,7 @@ import {
   CreateRunRequest,
   ModelPolicy,
   ModelPolicySchema,
+  normalizeModelIdentifier,
   ToolCall,
   ToolResult,
   Citation,
@@ -16,7 +17,7 @@ import {
   ExecutionPrincipal,
   ModelProvenance
 } from '../../contracts/src/index.js';
-import { ModelRouter, ChatMessageInput, isModelMatch } from '../../model-router/src/index.js';
+import { ModelRouter, ChatMessageInput, isModelMatch, withInferencePrincipal } from '../../model-router/src/index.js';
 import { ToolRegistry, ToolGateway, PostgresToolCallRepository, InMemoryToolCallRepository } from '../../tool-runtime/src/index.js';
 import { configuredSearchProviders } from '../../tool-runtime/src/search-providers.js';
 import { ApprovalKernel } from '../../approvals/src/index.js';
@@ -208,6 +209,13 @@ export class AgentRuntime extends EventEmitter {
   }
 
   public async createRun(request: CreateRunRequest, principal: ExecutionPrincipal): Promise<Run> {
+    const model = normalizeModelIdentifier(request.modelPolicy?.model);
+    return withInferencePrincipal(principal.userId, () => this.createNormalizedRun({
+      ...request, modelPolicy: { ...request.modelPolicy, model }
+    }, principal));
+  }
+
+  private async createNormalizedRun(request: CreateRunRequest, principal: ExecutionPrincipal): Promise<Run> {
     if (request.prompt.length > 1_000_000) {
       const error = new Error('PROMPT_TOO_LARGE');
       (error as Error & { code: string }).code = 'PROMPT_TOO_LARGE';
@@ -329,7 +337,7 @@ export class AgentRuntime extends EventEmitter {
       await this.emitRunEvent(runId, 'routing.decision', run.routingDecision);
     }
     try {
-      await this.executeRunLoop(runId);
+      await withInferencePrincipal(run.principalId, () => this.executeRunLoop(runId));
     } catch (err: any) {
       await this.transitionRunState(runId, 'FAILED', err.message);
     }
@@ -459,6 +467,12 @@ export class AgentRuntime extends EventEmitter {
   }
 
   private async executeRunLoop(runId: string): Promise<void> {
+    const ownedRun = await this.getRun(runId);
+    if (!ownedRun) return;
+    return withInferencePrincipal(ownedRun.principalId, () => this.executeOwnedRunLoop(runId));
+  }
+
+  private async executeOwnedRunLoop(runId: string): Promise<void> {
     let run = await this.getRun(runId);
     if (!run) return;
 
@@ -578,7 +592,7 @@ export class AgentRuntime extends EventEmitter {
         await this.saveRun(run);
       }
 
-      await this.workflowEngine.executeWorkflowRun(wfRun.id);
+      await withInferencePrincipal(run.principalId, () => this.workflowEngine.executeWorkflowRun(wfRun.id));
 
       const updatedWfRun = await this.workflowRepo.getWorkflowRun(wfRun.id);
       if (updatedWfRun?.state === 'COMPLETED') {
@@ -1460,7 +1474,7 @@ CAPABILITY & IDENTITY INVARIANTS:
     if (run.executionCheckpoint === 'WORKFLOW_RUNNING') {
       const wfRun = await this.workflowRepo.getWorkflowRunByRunId(runId);
       if (wfRun && ['RUNNING', 'CREATED', 'QUEUED'].includes(wfRun.state)) {
-        await this.workflowEngine.executeWorkflowRun(wfRun.id);
+        await withInferencePrincipal(run.principalId, () => this.workflowEngine.executeWorkflowRun(wfRun.id));
         return;
       }
     }

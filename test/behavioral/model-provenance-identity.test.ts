@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { ModelRouter, DeterministicMockAdapter, AnthropicAdapter, isModelMatch } from '../../packages/model-router/src/index.js';
+import { ModelRouter, DeterministicMockAdapter, AnthropicAdapter, isModelMatch, withInferencePrincipal } from '../../packages/model-router/src/index.js';
 import { ModelProvenanceSchema, type ModelProvenance } from '../../packages/contracts/src/index.js';
 import { AgentRuntime } from '../../packages/agent-runtime/src/index.js';
 import { InMemoryRunRepository } from '../../packages/agent-runtime/src/repositories.js';
@@ -423,7 +423,7 @@ describe('MISSION: Model Provenance, Runtime Identity & Capability Accuracy', ()
             `Predicted executedModel for ${mode} (${intent}) must be ${expectedPredicted}`
           );
 
-          const result = await execution.adapter.complete([{ role: 'user', content: 'hello' }], execution.policy);
+          const result = await withInferencePrincipal('provenance-routing-test', () => execution.adapter.complete([{ role: 'user', content: 'hello' }], execution.policy));
           assert.equal(interceptedRequests.length, 1, `Must have sent 1 request for ${mode} (${intent})`);
           assert.equal(
             interceptedRequests[0].body.model,

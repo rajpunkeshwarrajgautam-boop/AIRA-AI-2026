@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { ModelRouter, OpenAIAdapter } from '../packages/model-router/src/index.js';
+import { ModelRouter, OpenAIAdapter, withInferencePrincipal } from '../packages/model-router/src/index.js';
 import { AVAILABLE_MODELS } from '../src/utils/constants.js';
 import { normalizeStoredModelId } from '../src/utils/storage.js';
 
@@ -56,9 +56,9 @@ async function run() {
           choices: [{ message: { content: 'working answer' } }]
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }) as typeof fetch;
-      const result = await router.getAdapter(migratedPolicy).complete([
+      const result = await withInferencePrincipal('routing-test', () => router.getAdapter(migratedPolicy).complete([
         { role: 'user', content: 'How does an induction motor start?' }
-      ], migratedPolicy);
+      ], migratedPolicy));
       assert.equal(result.text, 'working answer');
       assert.equal(requests.length, 1);
       assert.equal(requests[0].url, 'https://integrate.api.nvidia.com/v1/chat/completions');
@@ -67,9 +67,9 @@ async function run() {
       globalThis.fetch = (async () =>
         new Response('404 page not found', { status: 404 })) as typeof fetch;
       await assert.rejects(
-        () => router.getAdapter(directNvidia).complete([
+        () => withInferencePrincipal('routing-test', () => router.getAdapter(directNvidia).complete([
           { role: 'user', content: 'Test unavailable provider model' }
-        ], directNvidia),
+        ], directNvidia)),
         /NVIDIA NIM returned 404/,
         'unavailable NVIDIA models must produce an actionable provider-specific error'
       );

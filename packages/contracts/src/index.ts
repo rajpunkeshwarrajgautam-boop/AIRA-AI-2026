@@ -116,6 +116,7 @@ export const ModelIdSchema = z.enum([
   'gpt-4o-mini',
   'gemini-2-5-pro',
   'gemini-2-5-flash',
+  'gemini-3.5-flash-lite',
   'meta/llama-3.1-405b-instruct',
   'nvidia/nemotron-3-super-120b-a12b',
   'nvidia/llama-3.1-nemotron-70b-instruct',
@@ -136,6 +137,26 @@ export const ModelIdSchema = z.enum([
   'mock-deterministic'
 ]);
 export type ModelId = z.infer<typeof ModelIdSchema>;
+
+export class UnsupportedModelIdentifierError extends Error {
+  readonly code = 'UNSUPPORTED_MODEL_IDENTIFIER';
+  constructor() { super('Unsupported model identifier.'); }
+}
+
+/** One allowlist for browser aliases, API admission and provider routing. */
+export function normalizeModelIdentifier(value: unknown = 'aira-auto'): ModelId {
+  const parsed = ModelIdSchema.safeParse(value);
+  if (!parsed.success || (parsed.data === 'allam-2-7b' || parsed.data === 'gemini-2-5-flash')) throw new UnsupportedModelIdentifierError();
+  switch (parsed.data) {
+    case 'claude-3-7-sonnet': return 'aira-auto';
+    case 'claude-3-5-sonnet': return 'aira-pro';
+    case 'claude-3-5-haiku': return 'aira-fast';
+    case 'claude-3-opus': return 'aira-deep';
+    case 'meta/llama-3.1-405b-instruct': return 'nvidia/nemotron-3-super-120b-a12b';
+    default: return parsed.data;
+  }
+}
+
 
 export const ModelPolicySchema = z.object({
   model: ModelIdSchema,

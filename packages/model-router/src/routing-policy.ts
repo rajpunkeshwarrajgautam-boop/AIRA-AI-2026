@@ -41,12 +41,21 @@ export class LatencyAwareRoutingPolicy {
       allowed: true
     },
     {
+      provider: 'gemini',
+      model: 'gemini-3.5-flash-lite',
+      qualityScore: 9.5,
+      typicalTtftMs: 493,
+      costTier: 'low',
+      allowed: true
+    },
+    {
       provider: 'groq',
       model: 'allam-2-7b',
       qualityScore: 7.2,
       typicalTtftMs: 240,
       costTier: 'low',
-      allowed: true
+      allowed: false,
+      rejectionReason: 'TERTIARY_ONLY: allam-2-7b is strictly reserved as bounded tertiary fallback for qualifying non-quota errors and must not be selected as primary or secondary candidate'
     },
     {
       provider: 'groq',
@@ -106,14 +115,7 @@ export class LatencyAwareRoutingPolicy {
       costTier: 'medium',
       allowed: true
     },
-    {
-      provider: 'gemini',
-      model: 'gemini-3.5-flash-lite',
-      qualityScore: 9.5,
-      typicalTtftMs: 493,
-      costTier: 'low',
-      allowed: true
-    },
+
     {
       provider: 'gemini',
       model: 'gemini-flash-lite-latest',
