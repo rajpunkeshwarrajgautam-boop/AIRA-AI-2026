@@ -736,6 +736,54 @@ export class NeonAuthClient {
   }
 
   /**
+   * Initiate third-party social OAuth sign-in flow (Google, GitHub) via Neon Auth.
+   */
+  public async signInWithSocial(params: {
+    provider: 'google' | 'github' | string;
+    callbackURL?: string;
+    autoRedirect?: boolean;
+  }): Promise<{ url: string; redirect: boolean }> {
+    if (!this.baseUrl) {
+      throw new Error('Neon Auth service is unconfigured in production environment (missing VITE_NEON_AUTH_URL)');
+    }
+
+    const origin = (typeof window !== 'undefined' && window.location?.origin) || 'http://localhost:5173';
+    const callbackURL = params.callbackURL || origin;
+
+    const response = await fetch(`${this.baseUrl}/sign-in/social`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Origin': origin,
+      },
+      body: JSON.stringify({
+        provider: params.provider,
+        callbackURL,
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ message: 'Social sign-in request failed' }));
+      throw new Error(err.message || err.error || `Social sign-in failed (${response.status})`);
+    }
+
+    const data = await response.json();
+    if (!data || !data.url) {
+      throw new Error('Malformed response from social sign-in provider endpoint');
+    }
+
+    const autoRedirect = params.autoRedirect !== false;
+    if (autoRedirect && typeof window !== 'undefined' && window.location) {
+      window.location.href = data.url;
+    }
+
+    return {
+      url: data.url,
+      redirect: data.redirect ?? true,
+    };
+  }
+
+  /**
    * Sign out the active session locally and remotely on the BFF or direct provider.
    */
   public async signOut(): Promise<{ remoteSuccess: boolean; error?: string }> {

@@ -56,9 +56,46 @@ export class VisionService {
     );
 
     try {
-      // Execute multimodal inference via Gemini or configured provider
+      // Execute multimodal inference via NVIDIA NIM or Gemini or configured provider
       let analysisResult = '';
-      if (process.env.GEMINI_API_KEY) {
+      let usedProvider = 'synthesizer';
+
+      if (process.env.NVIDIA_API_KEY) {
+        const nvidiaKey = process.env.NVIDIA_API_KEY.trim();
+        const url = 'https://integrate.api.nvidia.com/v1/chat/completions';
+        const userContent: any[] = [{ type: 'text', text: params.prompt }];
+        if (params.imageBase64) {
+          userContent.push({
+            type: 'image_url',
+            image_url: { url: params.imageBase64 }
+          });
+        }
+
+        try {
+          const resp = await fetch(url, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${nvidiaKey}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              model: 'meta/llama-3.2-11b-vision-instruct',
+              messages: [{ role: 'user', content: userContent }],
+              max_tokens: 1024
+            })
+          });
+
+          if (resp.ok) {
+            const data = await resp.json();
+            analysisResult = data.choices?.[0]?.message?.content || '';
+            usedProvider = 'nvidia-llama-3.2-vision';
+          }
+        } catch (err) {
+          console.warn('[VisionService] NVIDIA vision inference warning:', err);
+        }
+      }
+
+      if (!analysisResult && process.env.GEMINI_API_KEY) {
         const geminiKey = process.env.GEMINI_API_KEY.trim();
         const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`;
         
@@ -85,6 +122,7 @@ export class VisionService {
         if (resp.ok) {
           const data = await resp.json();
           analysisResult = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+          usedProvider = 'gemini';
         }
       }
 
@@ -100,7 +138,7 @@ export class VisionService {
       await commercialBillingService.recordUsageEvent({
         principalId,
         taskType: 'vision_understand',
-        provider: 'gemini',
+        provider: usedProvider,
         chargedCredits: tariff,
         imagesCount: 1,
         estimatedDirectCostUsd: 0.002
