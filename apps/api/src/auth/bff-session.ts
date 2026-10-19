@@ -268,7 +268,7 @@ function getAuthBaseUrl(): string {
     throw new Error('NEON_AUTH_BASE_URL is unconfigured in production environment. Refusing to fallback to staging URL.');
   }
 
-  return 'https://ep-empty-field-b36mqqq6.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth';
+  return 'https://ep-ancient-sound-b3drtnp5.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth';
 }
 
 export function generateSessionId(): string {

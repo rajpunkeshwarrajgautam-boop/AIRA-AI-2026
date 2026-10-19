@@ -1,9 +1,10 @@
+import 'dotenv/config';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { NeonAuthClient } from '../src/lib/neonAuth.js';
 
-const STAGING_AUTH_BASE = 'https://ep-empty-field-b36mqqq6.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth';
-const STAGING_JWKS_URL = 'https://ep-empty-field-b36mqqq6.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth/.well-known/jwks.json';
+const STAGING_AUTH_BASE = process.env.NEON_AUTH_BASE_URL || 'https://ep-ancient-sound-b3drtnp5.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth';
+const STAGING_JWKS_URL = process.env.NEON_AUTH_JWKS_URL || 'https://ep-ancient-sound-b3drtnp5.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth/.well-known/jwks.json';
 const TEST_PORT = 3097;
 const TEST_API_URL = `http://127.0.0.1:${TEST_PORT}`;
 
@@ -107,7 +108,11 @@ async function main() {
     console.log('[2/10] Creating genuine signed guest session...');
     const sessionRes = await fetch(`${TEST_API_URL}/api/auth/session`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
+      headers: {
+        'Content-Type': 'application/json',
+        'Origin': TEST_API_URL,
+        'x-aira-csrf-protection': '1'
+      }
     });
     assert.equal(sessionRes.status, 200, 'Session bootstrap must succeed');
     const cookieHeader = sessionRes.headers.get('set-cookie');
@@ -123,7 +128,9 @@ async function main() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Cookie': guestCookie
+        'Cookie': guestCookie,
+        'Origin': TEST_API_URL,
+        'x-aira-csrf-protection': '1'
       },
       body: JSON.stringify({
         id: guestChatId,
@@ -176,7 +183,9 @@ async function main() {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${jwt1}`,
-        'Cookie': guestCookie
+        'Cookie': guestCookie,
+        'Origin': TEST_API_URL,
+        'x-aira-csrf-protection': '1'
       },
       body: JSON.stringify({})
     });
@@ -264,7 +273,9 @@ async function main() {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${jwt1}`,
-        'Cookie': guestCookie
+        'Cookie': guestCookie,
+        'Origin': TEST_API_URL,
+        'x-aira-csrf-protection': '1'
       },
       body: JSON.stringify({})
     });
@@ -274,7 +285,12 @@ async function main() {
     // Missing JWT must fail closed
     const unauthLinkRes = await fetch(`${TEST_API_URL}/api/auth/link-guest`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Cookie': guestCookie },
+      headers: {
+        'Content-Type': 'application/json',
+        'Cookie': guestCookie,
+        'Origin': TEST_API_URL,
+        'x-aira-csrf-protection': '1'
+      },
       body: JSON.stringify({})
     });
     assert.equal(unauthLinkRes.status, 401, 'Unauthenticated link request must return HTTP 401');
@@ -282,7 +298,12 @@ async function main() {
     // Missing guest cookie must fail closed
     const noCookieLinkRes = await fetch(`${TEST_API_URL}/api/auth/link-guest`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${jwt1}` },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${jwt1}`,
+        'Origin': TEST_API_URL,
+        'x-aira-csrf-protection': '1'
+      },
       body: JSON.stringify({})
     });
     assert.equal(noCookieLinkRes.status, 400, 'Missing guest cookie link request must return HTTP 400');

@@ -1,4 +1,4 @@
-import { Knex } from 'knex';
+import type { Knex } from 'knex';
 
 /**
  * AIRA AI 2026 — Migration 020: Commercial Billing, Plans, Entitlements and Credit Ledger

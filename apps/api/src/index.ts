@@ -3,12 +3,12 @@ import { createBillingRoutes } from './billing-routes.js';
 import { createVisionRoutes } from './vision-routes.js';
 import { createAccountRoutes } from './account-routes.js';
 import { commercialBillingService } from './billing/commercial-billing-service.js';
-import { paymentGatewayService } from './billing/payment-gateway-service.js';
+import { paymentGatewayService, TOPUP_PACKS } from './billing/payment-gateway-service.js';
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
-import { normalizeModelIdentifier, UnsupportedModelIdentifierError } from '../../../packages/contracts/src/index.js';
+import { normalizeModelIdentifier, UnsupportedModelIdentifierError, COMMERCIAL_PLANS } from '../../../packages/contracts/src/index.js';
 import {
   ModelRouter,
   withInferencePrincipal,
@@ -390,8 +390,16 @@ app.post('/api/billing/webhook/cashfree', async (req: Request, res: Response) =>
   }
 });
 
+// Public commercial plan definitions and pricing catalog (accessible to guests and landing pages)
+app.get('/api/billing/plans', (_req: Request, res: Response) => {
+  res.json({
+    plans: Object.values(COMMERCIAL_PLANS),
+    topupPacks: Object.values(TOPUP_PACKS)
+  });
+});
+
 // Enforce ExecutionPrincipal on all /api routes BELOW this point.
-// Routes registered above (health, ready, webhooks) are public infrastructure probes or signature verified.
+// Routes registered above (health, ready, webhooks, plans) are public infrastructure probes, catalogs, or signature verified.
 app.use('/api', createPrincipalMiddleware());
 app.use('/api', (req, _res, next) => withInferencePrincipal(req.principal!.userId, next));
 
@@ -688,9 +696,6 @@ app.get('/api/capacity/status', async (req: Request, res: Response) => {
 });
 
 // Initialize Core Subsystems
-app.use('/api/builder', createBuilderRoutes(modelRouter));
-app.use('/api/billing', createBillingRoutes());
-app.use('/api/vision', createVisionRoutes());
 app.use('/api/user', createAccountRoutes());
 const isDbConfigured = Boolean(process.env.DATABASE_URL?.trim());
 const toolRegistry = new ToolRegistry(process.cwd());

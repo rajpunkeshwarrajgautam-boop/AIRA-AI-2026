@@ -38,8 +38,13 @@ const STORAGE_KEYS = {
   SESSION: 'aira_neon_auth_session_v1'
 };
 
-// Staging Neon Auth service URL as configured on branch br-soft-pine-b3gw5nyr
-const DEFAULT_AUTH_URL = 'https://ep-empty-field-b36mqqq6.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth';
+// Staging Neon Auth service URL as configured on branch pr92-commercial-platform-isolated
+const nodeProcess = (globalThis as any)?.process;
+const DEFAULT_AUTH_URL = nodeProcess?.env?.NEON_AUTH_BASE_URL
+  ? nodeProcess.env.NEON_AUTH_BASE_URL
+  : (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_NEON_AUTH_URL
+    ? (import.meta as any).env.VITE_NEON_AUTH_URL
+    : 'https://ep-ancient-sound-b3drtnp5.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth');
 
 export class NeonAuthClient {
   private baseUrl: string;

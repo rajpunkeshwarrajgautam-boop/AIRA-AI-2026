@@ -1,10 +1,11 @@
+import 'dotenv/config';
 import assert from 'node:assert/strict';
 import { verifyNeonAuthToken, createNeonAuthPrincipalMiddleware } from '../apps/api/src/auth/neon-auth-principal.js';
 import { NeonAuthClient } from '../src/lib/neonAuth.js';
 
-// Real Staging Neon Auth service configured on project mute-frost-50372225, branch br-soft-pine-b3gw5nyr
-const STAGING_AUTH_BASE = 'https://ep-empty-field-b36mqqq6.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth';
-const STAGING_JWKS_URL = 'https://ep-empty-field-b36mqqq6.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth/.well-known/jwks.json';
+// Real Staging Neon Auth service configured on project mute-frost-50372225, branch pr92-commercial-platform-isolated
+const STAGING_AUTH_BASE = process.env.NEON_AUTH_BASE_URL || 'https://ep-ancient-sound-b3drtnp5.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth';
+const STAGING_JWKS_URL = process.env.NEON_AUTH_JWKS_URL || 'https://ep-ancient-sound-b3drtnp5.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth/.well-known/jwks.json';
 
 process.env.NEON_AUTH_BASE_URL = STAGING_AUTH_BASE;
 process.env.NEON_AUTH_JWKS_URL = STAGING_JWKS_URL;
