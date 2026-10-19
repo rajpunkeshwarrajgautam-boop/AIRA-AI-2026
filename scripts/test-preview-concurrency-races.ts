@@ -4,7 +4,14 @@ import { performance } from 'perf_hooks';
 import knex from 'knex';
 
 const PREVIEW_URL = process.env.PREVIEW_URL || 'https://aira-ai-2026-lah24sv05-rajpunkeshwarrajgautam-boops-projects.vercel.app';
-const NEON_CS = 'postgresql://neondb_owner:npg_iYU0dXlB9rms@ep-steep-tooth-b3y7kgx9.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require';
+const NEON_CS = process.env.DATABASE_URL || (function() {
+  try {
+    const { execSync } = require('child_process');
+    return execSync('npx neonctl connection-string pr90-p1-6-7-preview-isolated --project-id mute-frost-50372225', { encoding: 'utf8' }).trim();
+  } catch {
+    return 'postgresql://localhost:5432/neondb';
+  }
+})();
 
 const db = knex({
   client: 'pg',
