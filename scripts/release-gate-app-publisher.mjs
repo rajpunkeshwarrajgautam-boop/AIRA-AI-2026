@@ -33,11 +33,20 @@ function validTimestamp(value, now, maxAgeMs) {
   return Number.isFinite(time) && time <= now && now - time <= maxAgeMs;
 }
 
+export function isTrustedWorkflowName(name, displayTitle) {
+  if (typeof name !== 'string') return false;
+  if (name === APPROVAL_WORKFLOW) return true;
+  if (TITLE_PATTERN.test(name)) {
+    return !displayTitle || name === displayTitle;
+  }
+  return false;
+}
+
 /** Pure, side-effect-free policy evaluation; used by real publisher and tests. */
 export function validateCompletedApproval(run, pr, { now = Date.now(), expectedRunId } = {}) {
   requireCondition(run && typeof run === 'object', 'MISSING_ATTESTATION_RUN');
   requireCondition(Number.isSafeInteger(run.id) && run.id > 0 && (!expectedRunId || run.id === expectedRunId), 'RUN_ID_MISMATCH');
-  requireCondition(run.name === APPROVAL_WORKFLOW, 'WORKFLOW_NAME_MISMATCH');
+  requireCondition(isTrustedWorkflowName(run.name, run.display_title), 'WORKFLOW_NAME_MISMATCH');
   requireCondition(run.path?.split('@')[0] === APPROVAL_WORKFLOW_PATH, 'WORKFLOW_PATH_MISMATCH');
   requireCondition(run.event === 'workflow_dispatch', 'WORKFLOW_EVENT_MISMATCH');
   requireCondition(run.status === 'completed' && run.conclusion === 'success', 'ATTESTATION_NOT_COMPLETED_SUCCESS');
@@ -77,7 +86,7 @@ export async function verifyApprovalFromGitHub({ runId, readToken, now = Date.no
   const run = await githubApi('actions/runs/' + runId, readToken, { request });
   requireCondition(run.id === runId, 'RUN_ID_MISMATCH');
   // Reject forged/contradictory dispatch evidence before selecting a PR.
-  requireCondition(run.name === APPROVAL_WORKFLOW && run.path?.split('@')[0] === APPROVAL_WORKFLOW_PATH, 'WORKFLOW_IDENTITY_MISMATCH');
+  requireCondition(isTrustedWorkflowName(run.name, run.display_title) && run.path?.split('@')[0] === APPROVAL_WORKFLOW_PATH, 'WORKFLOW_IDENTITY_MISMATCH');
   const { prNumber } = parseApprovalTitle(run.display_title);
   const pr = await githubApi('pulls/' + prNumber, readToken, { request });
   return validateCompletedApproval(run, pr, { now, expectedRunId: runId });

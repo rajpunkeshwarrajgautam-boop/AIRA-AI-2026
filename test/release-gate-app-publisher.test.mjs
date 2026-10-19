@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   RELEASE_REPO, APPROVAL_WORKFLOW, APPROVAL_WORKFLOW_PATH, STATUS_CONTEXT,
-  parseApprovalTitle, validateCompletedApproval, verifyApprovalFromGitHub, publishApprovedStatus
+  parseApprovalTitle, validateCompletedApproval, verifyApprovalFromGitHub, publishApprovedStatus,
+  isTrustedWorkflowName
 } from '../scripts/release-gate-app-publisher.mjs';
 
 const sha = 'bbf02ea572f4f710bec185890b8b86c45da15057';
@@ -58,9 +59,33 @@ test('workflow must have completed successfully before any status may publish', 
 });
 test('other workflows, source branch and trigger event fail closed', () => {
   rejectRun('name', 'CI', 'WORKFLOW_NAME_MISMATCH');
+  rejectRun('name', 'Release Authorization: PR #99 [invalid] [GO LIVE invalid]', 'WORKFLOW_NAME_MISMATCH');
   rejectRun('path', '.github/workflows/other.yml', 'WORKFLOW_PATH_MISMATCH');
   rejectRun('head_branch', 'feature/untrusted', 'UNTRUSTED_EXECUTION_BRANCH');
   rejectRun('event', 'pull_request', 'WORKFLOW_EVENT_MISMATCH');
+});
+test('evaluated run-name matching TITLE_PATTERN is accepted as trusted identity', () => {
+  // Real GitHub Actions evaluated run-name matches display_title
+  const dynamicRun = run({ name: title, display_title: title });
+  assert.deepEqual(validateCompletedApproval(dynamicRun, pr(), { now, expectedRunId: runId }),
+    { prNumber: 68, candidateSha: sha, approvalRunId: runId });
+
+  // Contradictory run.name vs display_title must fail closed
+  const contradictingRun = run({
+    name: `Release Authorization: PR #68 [${sha}] [GO LIVE ${sha}]`,
+    display_title: `Release Authorization: PR #69 [${sha}] [GO LIVE ${sha}]`
+  });
+  assert.throws(() => validateCompletedApproval(contradictingRun, pr(), { now, expectedRunId: runId }),
+    { message: 'WORKFLOW_NAME_MISMATCH' });
+});
+test('isTrustedWorkflowName validates static name and evaluated run-name patterns', () => {
+  assert.equal(isTrustedWorkflowName(APPROVAL_WORKFLOW), true);
+  assert.equal(isTrustedWorkflowName(title, title), true);
+  assert.equal(isTrustedWorkflowName(title, undefined), true);
+  assert.equal(isTrustedWorkflowName(title, 'Contradictory Title'), false);
+  assert.equal(isTrustedWorkflowName('CI'), false);
+  assert.equal(isTrustedWorkflowName(''), false);
+  assert.equal(isTrustedWorkflowName(null), false);
 });
 test('only owner actor and owner re-run trigger actor can authorize', () => {
   rejectRun('actor', { login: 'intruder' }, 'UNAUTHORIZED_ACTOR');
