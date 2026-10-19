@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizeModelIdentifier, ModelPolicySchema } from '../packages/contracts/src/index.js';
-import { PrivateBetaCapacityGuard, InMemoryCapacityStore, protectInferenceAdapter, withInferencePrincipal, withInferenceReservation, type ModelAdapter } from '../packages/model-router/src/index.js';
+import { ModelRouter, PrivateBetaCapacityGuard, InMemoryCapacityStore, protectInferenceAdapter, withInferencePrincipal, withInferenceReservation, type ModelAdapter } from '../packages/model-router/src/index.js';
 
 const policy = (model: any) => ModelPolicySchema.parse({ model });
 const result = { text: 'real provider replaced only for deterministic boundary regression', usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
@@ -145,4 +145,24 @@ test('chat cancellation signal reaches inference inside an already acquired rese
     assert.equal(called, false);
   } finally { await admission.permit!.release(); }
   assert.equal(await store.getActiveConcurrency('global'), 0);
+});
+
+
+test('direct Gemini allowlisted IDs select their exact provider model behind admission', () => {
+  const previous = process.env.GEMINI_API_KEY;
+  process.env.GEMINI_API_KEY = 'deterministic-routing-only-key';
+  try {
+    const guard = new PrivateBetaCapacityGuard({}, new InMemoryCapacityStore());
+    const router = new ModelRouter(undefined, guard);
+    for (const [id, providerModel] of [['gemini-2-5-flash','gemini-2.5-flash'],['gemini-2-5-pro','gemini-2.5-pro']] as const) {
+      const execution = router.resolveExecution(id);
+      assert.equal(execution.executedProvider, 'gemini');
+      assert.equal(execution.executedModel, providerModel);
+      assert.equal((execution.adapter as any).modelName, providerModel);
+      assert.equal(guard.isFastTarget(execution.policy.model), true);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = previous;
+  }
 });

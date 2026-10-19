@@ -1059,6 +1059,17 @@ export class ModelRouter {
       );
     }
 
+    if (model === 'gemini-2-5-pro' || model === 'gemini-2-5-flash') {
+      const executedModel = model === 'gemini-2-5-pro' ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
+      if (!this.adapters.has('gemini')) throw new Error('CONFIGURATION_ERROR: Gemini provider is not configured.');
+      return {
+        policy,
+        adapter: this.createModelSpecificAdapter('gemini', executedModel),
+        provider: 'gemini', requestedProvider: 'gemini', executedProvider: 'gemini',
+        executedModel, plannedModel: executedModel, fallbackOccurred: false, verified: true
+      };
+    }
+
     if (model.startsWith('gpt')) {
       if (this.adapters.has('openai')) {
         return {

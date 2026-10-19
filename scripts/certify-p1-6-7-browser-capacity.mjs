@@ -67,10 +67,17 @@ async function run() {
   assert.equal((await request(a,`/api/runs/${created.id}`)).status,404,'Cross-user run isolation');
   let terminal;for(let i=0;i<20;i++){const r=await (await request(b,`/api/runs/${created.id}`)).json();if(['COMPLETED','FAILED','CANCELLED'].includes(r.state)){terminal=r;break;}await new Promise(r=>setTimeout(r,500));}
   assert.equal(terminal?.state,'COMPLETED','Direct API run completes');assert.ok(terminal.content?.trim());observations.push({gate:'direct run and cross-user isolation',runId:created.id,passed:true});
+  await chat(b,'gemini-2-5-flash','direct-gemini');
   const concurrent=await guest();const controller=new AbortController();
-  const held=await request(concurrent,'/api/chat/stream',{model:'claude-3-5-haiku',prompt:'Count from 1 to 200, writing each number on its own line.'},controller.signal);assert.equal(held.status,200);
-  const rejected=await request(concurrent,'/api/chat/stream',{model:'aira-fast',prompt:'Reply OK'});assert.equal(rejected.status,429,'Concurrent same-principal request must be denied');
-  controller.abort();await held.body.cancel().catch(()=>{});observations.push({gate:'concurrent reservation and cancellation',passed:true});
+  let responses=[];
+  try {
+    // Start together: waiting for the first response can let a fast provider
+    // finish before the second request reaches admission.
+    responses=await Promise.all([0,1].map(() => request(concurrent,'/api/chat/stream',{model:'claude-3-5-haiku',prompt:'Count from 1 to 2000, writing each number on its own line. Do not abbreviate.'},controller.signal)));
+    assert.deepEqual(responses.map(r=>r.status).sort(),[200,429],'Overlapping same-principal requests must reserve only once');
+    const rejected=responses.find(r=>r.status===429); assert.equal((await rejected.json()).code,'AIRA_PRIVATE_BETA_CAPACITY');
+    observations.push({gate:'concurrent reservation and cancellation',passed:true});
+  } finally { controller.abort(); await Promise.all(responses.map(r=>r.body?.cancel().catch(()=>{}))); }
   console.log('LIVE_HTTP_CERTIFICATION_PASS: PostgreSQL table evidence must be checked separately.');
 }
 try { await run(); } finally { writeFileSync(process.argv[3]||'/tmp/aira-p167-live-results.json',JSON.stringify({target:origin,recordedAt:new Date().toISOString(),observations},null,2)); }
