@@ -3,8 +3,11 @@ import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
+import { normalizeModelIdentifier, UnsupportedModelIdentifierError } from '../../../packages/contracts/src/index.js';
 import {
   ModelRouter,
+  withInferencePrincipal,
+  withInferenceReservation,
   ProviderHealthTracker,
   PrivateBetaCapacityGuard,
   InMemoryCapacityStore,
@@ -254,7 +257,9 @@ app.get('/api/health', (_req: Request, res: Response) => {
 const isDbConfiguredEarly = Boolean(process.env.DATABASE_URL?.trim());
 const capacityStore = isDbConfiguredEarly
   ? new DistributedPostgresCapacityStore(db)
-  : new InMemoryCapacityStore();
+  : (process.env.VERCEL || process.env.NODE_ENV === 'production')
+    ? new DistributedPostgresCapacityStore(db)
+    : new InMemoryCapacityStore();
 const healthTracker = new ProviderHealthTracker();
 const capacityGuard = new PrivateBetaCapacityGuard(undefined, capacityStore, healthTracker);
 const modelRouter = new ModelRouter(healthTracker, capacityGuard);
@@ -333,7 +338,53 @@ app.get('/api/ready/providers', async (_req: Request, res: Response) => {
   res.json(result);
 });
 
-app.post('/api/ready/benchmark-groq', async (req: Request, res: Response) => {
+// Hard gate to block runtime traffic before recovery is complete
+app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
+  if (appState !== 'HEALTHY') {
+    return res.status(503).json({ error: 'Service Unavailable: Runtime is ' + appState });
+  }
+  next();
+});
+
+// Enforce ExecutionPrincipal on all /api routes BELOW this point.
+// Routes registered above (health, ready) are public infrastructure probes.
+app.use('/api', createPrincipalMiddleware());
+app.use('/api', (req, _res, next) => withInferencePrincipal(req.principal!.userId, next));
+
+// Inference diagnostics are operator actions, not public readiness probes.
+const benchmarkSignal = Symbol('benchmarkSignal');
+async function admitBenchmark(req: Request, res: Response, next: NextFunction) {
+  const principal = req.principal!;
+  if (!(principal.roles || []).some(role => role === 'admin' || role === 'operator') && principal.role !== 'admin') {
+    res.status(403).json({ code: 'OPERATOR_REQUIRED', error: 'Operator authorization required.' });
+    return;
+  }
+  const expected = req.path.endsWith('benchmark-groq') ? 'openai/gpt-oss-120b' : 'gemini-3.5-flash-lite';
+  if (req.body?.model !== expected || typeof req.body?.prompt !== 'string') {
+    res.status(400).json({ code: 'UNSUPPORTED_MODEL_IDENTIFIER', error: 'Unsupported benchmark model or prompt.' });
+    return;
+  }
+  const controller = new AbortController();
+  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(60000)]);
+  (req as any)[benchmarkSignal] = signal;
+  res.once('close', () => { if (!res.writableEnded) controller.abort(); });
+  try {
+    const admission = await modelRouter.capacityGuard.admit({ principalId: principal.userId, model: 'aira-fast', promptText: req.body.prompt, abortSignal: signal });
+    if (admission.decision !== 'ADMIT_NOW') {
+      res.setHeader('Retry-After', String(admission.retryAfterSeconds || 8));
+      res.status(429).json({ code: admission.rejectionCode, error: admission.userMessage });
+      return;
+    }
+    const release = () => { void admission.permit?.release().catch(() => {}); };
+    res.once('finish', release);
+    res.once('close', release);
+    withInferenceReservation(modelRouter.capacityGuard, admission, next);
+  } catch {
+    res.status(503).json({ code: 'AIRA_PRIVATE_BETA_CAPACITY', error: 'Inference capacity unavailable.' });
+  }
+}
+
+app.post('/api/ready/benchmark-groq', admitBenchmark, async (req: Request, res: Response) => {
   if (!process.env.GROQ_API_KEY) {
     return res.status(503).json({ error: 'GROQ_API_KEY not configured' });
   }
@@ -356,6 +407,7 @@ app.post('/api/ready/benchmark-groq', async (req: Request, res: Response) => {
   try {
     const upstreamRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
+      signal: (req as any)[benchmarkSignal],
       headers: {
         Authorization: `Bearer ${groqKey}`,
         'Content-Type': 'application/json',
@@ -435,7 +487,7 @@ app.post('/api/ready/benchmark-groq', async (req: Request, res: Response) => {
   }
 });
 
-app.post('/api/ready/benchmark-gemini', async (req: Request, res: Response) => {
+app.post('/api/ready/benchmark-gemini', admitBenchmark, async (req: Request, res: Response) => {
   if (!process.env.GEMINI_API_KEY) {
     return res.status(503).json({ error: 'GEMINI_API_KEY not configured' });
   }
@@ -460,6 +512,7 @@ app.post('/api/ready/benchmark-gemini', async (req: Request, res: Response) => {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:streamGenerateContent?alt=sse`;
     const upstreamRes = await fetch(url, {
       method: 'POST',
+      signal: (req as any)[benchmarkSignal],
       headers: {
         'x-goog-api-key': geminiKey,
         'Content-Type': 'application/json'
@@ -554,18 +607,6 @@ app.post('/api/ready/benchmark-gemini', async (req: Request, res: Response) => {
   }
 });
 
-// Hard gate to block runtime traffic before recovery is complete
-app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
-  if (appState !== 'HEALTHY') {
-    return res.status(503).json({ error: 'Service Unavailable: Runtime is ' + appState });
-  }
-  next();
-});
-
-// Enforce ExecutionPrincipal on all /api routes BELOW this point.
-// Routes registered above (health, ready) are public infrastructure probes.
-app.use('/api', createPrincipalMiddleware());
-
 // Protected internal capacity diagnostics endpoint (Admin/Operator only)
 app.get('/api/capacity/status', async (req: Request, res: Response) => {
   const principal = req.principal;
@@ -601,7 +642,7 @@ const toolRegistry = new ToolRegistry(process.cwd());
 const approvalKernel = new ApprovalKernel(new PostgresApprovalRepository(), new PostgresSessionGrantRepository());
 const toolCallRepo = isDbConfigured ? new PostgresToolCallRepository() : new InMemoryToolCallRepository();
 const toolGateway = new ToolGateway(toolCallRepo, approvalKernel, process.cwd());
-const knowledgeEngine = new BrainV2KnowledgeEngine();
+const knowledgeEngine = new BrainV2KnowledgeEngine(undefined, { seedDefaults: !process.env.VERCEL });
 const mcpHost = new McpHost(toolGateway);
 const agentRepo = new PostgresAgentRepository();
 const runRepo = isDbConfigured ? new PostgresRunRepository() : new InMemoryRunRepository();
@@ -696,7 +737,7 @@ async function seedDefaultsIdempotent() {
   }
 }
 
-if (isDbConfigured) {
+if (isDbConfigured && !process.env.VERCEL) {
   void seedDefaultsIdempotent();
 }
 
@@ -1082,7 +1123,8 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
 app.post('/api/chat/stream', async (req: Request, res: Response) => {
   let admission: any = undefined;
   try {
-    const { messages, history, prompt, model, extendedThinking, systemPrompt, contextSubgraph, attachments, conversationId } = req.body;
+    const { messages, history, prompt, model: rawModel, extendedThinking, systemPrompt, contextSubgraph, attachments, conversationId } = req.body;
+    const model = normalizeModelIdentifier(rawModel);
     const promptText = prompt || (Array.isArray(messages)
       ? [...messages].reverse().find((m: any) => m.role === 'user')?.content || ''
       : '');
@@ -1113,8 +1155,8 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     }
 
     const clientAbort = new AbortController();
-    req.on('close', () => {
-      clientAbort.abort(new Error('CLIENT_CLOSED'));
+    res.on('close', () => {
+      if (!res.writableEnded) clientAbort.abort(new Error('CLIENT_CLOSED'));
     });
 
     let headersFlushed = false;
@@ -1169,7 +1211,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       headersFlushed = true;
     }
 
-    const run = await agentRuntime.createRun({
+    const run = await withInferenceReservation(modelRouter.capacityGuard, admission, () => agentRuntime.createRun({
       prompt: promptText,
       conversationId: conversationId || undefined,
       attachments: Array.isArray(attachments) ? attachments : undefined,
@@ -1179,7 +1221,12 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         model: model || 'aira-auto',
         extendedThinking: Boolean(extendedThinking),
       }
-    }, req.principal!);
+    }, req.principal!), clientAbort.signal);
+    if (clientAbort.signal.aborted) {
+      await admission.permit?.release();
+      await agentRuntime.cancelRun(run.id);
+      return res.end();
+    }
     tRunCreated = performance.now();
 
     const stream = agentRuntime.getEventStream(run.id);
@@ -1317,16 +1364,21 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     };
 
     stream.on('event', handler);
-    req.on('close', async () => {
+    res.on('close', async () => {
+      if (res.writableEnded) return;
       await releasePermitIfHeld();
       stream.off('event', handler);
       agentRuntime.cancelRun(run.id).catch(() => {});
     });
 
-    await agentRuntime.startRun(run.id);
+    await withInferenceReservation(modelRouter.capacityGuard, admission, () => agentRuntime.startRun(run.id), clientAbort.signal);
   } catch (err: any) {
     if (admission?.permit) {
       await admission.permit.release().catch(() => {});
+    }
+    if (err instanceof UnsupportedModelIdentifierError && !res.headersSent) {
+      res.status(400).json({ error: err.message, code: err.code });
+      return;
     }
     console.error('Chat stream failed', { code: err?.code, message: err?.message });
     const databaseUnavailable = isTemporaryDatabaseError(err);

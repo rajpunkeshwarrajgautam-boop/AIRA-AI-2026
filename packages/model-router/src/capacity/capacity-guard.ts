@@ -1,3 +1,4 @@
+import { normalizeModelIdentifier } from '../../../contracts/src/index.js';
 import crypto from 'node:crypto';
 import { PrivateBetaCapacityConfig, resolveCapacityConfig } from './capacity-config.js';
 import { CapacityStore, InMemoryCapacityStore } from './capacity-store.js';
@@ -10,6 +11,7 @@ export interface AdmissionPermit {
   scope: 'global' | 'user';
   principalId: string;
   acquiredAt: number;
+  isActive?: () => boolean;
   release: () => Promise<void>;
 }
 
@@ -60,6 +62,7 @@ export class PrivateBetaCapacityGuard {
   private store: CapacityStore;
   private healthTracker?: ProviderHealthTracker;
   private queue: QueuedItem[] = [];
+  private processingQueue = false;
   private queuePollTimer: NodeJS.Timeout | null = null;
 
   // Observability counters
@@ -113,10 +116,12 @@ export class PrivateBetaCapacityGuard {
   }
 
   public isFastTarget(model?: string, intent?: string): boolean {
-    const cleanModel = (model || 'aira-auto').toLowerCase().trim();
-    if (cleanModel === 'aira-deep') return false;
-    if (intent === 'RESEARCH' || intent === 'AGENT_MISSION' || intent === 'WORKFLOW') return false;
-    return cleanModel === 'aira-fast' || cleanModel === 'aira-auto';
+    const canonical = normalizeModelIdentifier(model);
+    // Explicit paid/deep modes retain their separate budgets. Provider-specific
+    // IDs share the bounded admission bucket; choosing an ID cannot bypass it.
+    if (canonical === 'aira-deep' || canonical === 'aira-pro' || canonical === 'mock-deterministic') return false;
+    if (canonical === 'aira-auto' && ['RESEARCH', 'AGENT_MISSION', 'WORKFLOW', 'TOOL_ACTION'].includes(intent || '')) return false;
+    return true;
   }
 
   public estimateTokens(text: string): number {
@@ -134,6 +139,8 @@ export class PrivateBetaCapacityGuard {
     options: AdmitOptions,
     onQueued?: (progress: QueueProgressEvent) => void
   ): Promise<AdmissionResult> {
+    options = { ...options, model: normalizeModelIdentifier(options.model) };
+    options.abortSignal?.throwIfAborted();
     // 1. Feature Flag / Kill Switch: If disabled, admit immediately
     if (!this.config.enabled) {
       return { decision: 'ADMIT_NOW' };
@@ -215,14 +222,19 @@ export class PrivateBetaCapacityGuard {
         globalRpmLimit: effectiveGlobalRpm,
         userWindowMs: 60000,
         globalWindowMs: 60000,
-        permitTtlSeconds: 30
+        permitTtlSeconds: 120
       });
 
       if (atomicRes.decision === 'ADMIT' && atomicRes.globalPermitId) {
+        if (options.abortSignal?.aborted) {
+          await this.releaseReservation(atomicRes.globalPermitId, atomicRes.userPermitId);
+          options.abortSignal.throwIfAborted();
+        }
         this.metrics.admitted++;
         const permitId = atomicRes.globalPermitId;
         const userPermitId = atomicRes.userPermitId;
 
+        const leaseExpiresAt = Date.now() + 120000;
         let released = false;
         const releaseHandle = async () => {
           if (released) return;
@@ -245,6 +257,7 @@ export class PrivateBetaCapacityGuard {
             scope: 'global',
             principalId,
             acquiredAt: Date.now(),
+            isActive: () => !released && Date.now() < leaseExpiresAt,
             release: releaseHandle
           },
           telemetry: atomicRes.telemetry
@@ -304,7 +317,7 @@ export class PrivateBetaCapacityGuard {
       // GLOBAL_CONCURRENCY_EXCEEDED falls through to queue evaluation
     } else {
       // Legacy sequential store fallback
-      const userPermitAcquisition = await this.store.acquirePermit('user', principalId, this.config.perUserMaxConcurrent, 30);
+      const userPermitAcquisition = await this.store.acquirePermit('user', principalId, this.config.perUserMaxConcurrent, 120);
       if (!userPermitAcquisition.acquired) {
         this.metrics.rejected++;
         const retryAfter = this.calculateJitteredRetryAfter(this.config.retryAfterSeconds);
@@ -346,11 +359,12 @@ export class PrivateBetaCapacityGuard {
         };
       }
 
-      const globalPermitAcquisition = await this.store.acquirePermit('global', principalId, effectiveGlobalMaxConcurrent, 30);
+      const globalPermitAcquisition = await this.store.acquirePermit('global', principalId, effectiveGlobalMaxConcurrent, 120);
       if (globalPermitAcquisition.acquired && globalPermitAcquisition.permitId) {
         const permitId = globalPermitAcquisition.permitId;
         this.metrics.admitted++;
 
+        const leaseExpiresAt = Date.now() + 120000;
         let released = false;
         const releaseHandle = async () => {
           if (released) return;
@@ -369,6 +383,7 @@ export class PrivateBetaCapacityGuard {
             scope: 'global',
             principalId,
             acquiredAt: Date.now(),
+            isActive: () => !released && Date.now() < leaseExpiresAt,
             release: releaseHandle
           }
         };
@@ -378,6 +393,8 @@ export class PrivateBetaCapacityGuard {
         await this.store.releasePermit(userPermitId);
       }
     }
+
+    options.abortSignal?.throwIfAborted();
 
     // 9. Concurrency is saturated -> Evaluate Queue (Section 10)
     if (this.queue.length >= this.config.queueMaxDepth) {
@@ -406,6 +423,7 @@ export class PrivateBetaCapacityGuard {
       });
     }
 
+    options.abortSignal?.throwIfAborted();
     return new Promise<AdmissionResult>((resolve, reject) => {
       const queueId = `q_${crypto.randomUUID().slice(0, 8)}`;
       const enqueuedAt = Date.now();
@@ -468,13 +486,19 @@ export class PrivateBetaCapacityGuard {
   // Each serverless instance maintains its own local bounded queue, and all instances coordinate
   // synchronously via PostgreSQL advisory locks and distributed capacity tables.
   public async processNextQueued(): Promise<void> {
+    if (this.processingQueue) return;
+    this.processingQueue = true;
+    try {
     if (this.queue.length === 0) return;
 
     // Evaluate circuit breaker constraints for dequeue
     let effectiveGlobalMaxConcurrent = this.config.globalMaxConcurrent;
+    let effectiveGlobalRpm = this.config.globalRpm;
     if (this.healthTracker) {
       const groqState = this.healthTracker.getCircuitState('groq', 'openai/gpt-oss-120b');
       const geminiState = this.healthTracker.getCircuitState('gemini', 'gemini-3.5-flash-lite');
+      if (groqState === 'OPEN' && geminiState === 'OPEN') return;
+      if (groqState === 'OPEN') effectiveGlobalRpm = Math.min(10, effectiveGlobalRpm);
       if (groqState === 'OPEN' || geminiState === 'OPEN') {
         effectiveGlobalMaxConcurrent = 1;
       }
@@ -489,16 +513,20 @@ export class PrivateBetaCapacityGuard {
         userMaxConcurrent: this.config.perUserMaxConcurrent,
         userRpmLimit: this.config.perUserRpm,
         globalMaxConcurrent: effectiveGlobalMaxConcurrent,
-        globalRpmLimit: this.config.globalRpm,
+        globalRpmLimit: effectiveGlobalRpm,
         userWindowMs: 60000,
         globalWindowMs: 60000,
-        permitTtlSeconds: 45
+        permitTtlSeconds: 120
       });
 
       if (atomicRes.decision !== 'ADMIT' || !atomicRes.globalPermitId) {
         return; // Still no capacity
       }
 
+      if (this.queue[0] !== candidate || candidate.options.abortSignal?.aborted) {
+        await this.releaseReservation(atomicRes.globalPermitId, atomicRes.userPermitId);
+        return;
+      }
       // Capacity acquired for queued item -> dequeue and resolve
       this.queue.shift();
       clearTimeout(candidate.timer);
@@ -507,7 +535,8 @@ export class PrivateBetaCapacityGuard {
       const userPermitId = atomicRes.userPermitId;
       this.metrics.admitted++;
 
-      let released = false;
+      const leaseExpiresAt = Date.now() + 120000;
+        let released = false;
       const releaseHandle = async () => {
         if (released) return;
         released = true;
@@ -529,6 +558,7 @@ export class PrivateBetaCapacityGuard {
           scope: 'global',
           principalId: candidate.principalId,
           acquiredAt: Date.now(),
+            isActive: () => !released && Date.now() < leaseExpiresAt,
           release: releaseHandle
         },
         telemetry: atomicRes.telemetry
@@ -536,42 +566,17 @@ export class PrivateBetaCapacityGuard {
       return;
     }
 
-    const globalPermit = await this.store.acquirePermit('global', candidate.principalId, effectiveGlobalMaxConcurrent, 45);
-    if (!globalPermit.acquired || !globalPermit.permitId) {
-      return; // Still no capacity
+    this.removeFromQueue(candidate.id);
+    candidate.resolve({ decision: 'REJECT_CAPACITY', rejectionCode: 'AIRA_PRIVATE_BETA_CAPACITY', reason: 'ATOMIC_STORE_REQUIRED', retryAfterSeconds: 8 });
+    } finally {
+      this.processingQueue = false;
     }
+  }
 
-    // Capacity acquired for queued item -> dequeue and resolve
-    this.queue.shift();
-    clearTimeout(candidate.timer);
-
-    const userPermit = await this.store.acquirePermit('user', candidate.principalId, this.config.perUserMaxConcurrent, 45);
-    const permitId = globalPermit.permitId;
-    const userPermitId = userPermit.permitId;
-
-    this.metrics.admitted++;
-
-    let released = false;
-    const releaseHandle = async () => {
-      if (released) return;
-      released = true;
-      await this.store.releasePermit(permitId);
-      if (userPermitId) {
-        await this.store.releasePermit(userPermitId);
-      }
-      this.processNextQueued();
-    };
-
-    candidate.resolve({
-      decision: 'ADMIT_NOW',
-      permit: {
-        permitId,
-        scope: 'global',
-        principalId: candidate.principalId,
-        acquiredAt: Date.now(),
-        release: releaseHandle
-      }
-    });
+  private async releaseReservation(globalId: string, userId?: string): Promise<void> {
+    const ids = [globalId, userId].filter(Boolean) as string[];
+    if (this.store.releasePermits) await this.store.releasePermits(ids);
+    else await Promise.all(ids.map(id => this.store.releasePermit(id)));
   }
 
   public getQueueDepth(): number {

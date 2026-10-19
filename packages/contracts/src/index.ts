@@ -137,6 +137,26 @@ export const ModelIdSchema = z.enum([
 ]);
 export type ModelId = z.infer<typeof ModelIdSchema>;
 
+export class UnsupportedModelIdentifierError extends Error {
+  readonly code = 'UNSUPPORTED_MODEL_IDENTIFIER';
+  constructor() { super('Unsupported model identifier.'); }
+}
+
+/** One allowlist for browser aliases, API admission and provider routing. */
+export function normalizeModelIdentifier(value: unknown = 'aira-auto'): ModelId {
+  const parsed = ModelIdSchema.safeParse(value);
+  if (!parsed.success || parsed.data === 'allam-2-7b') throw new UnsupportedModelIdentifierError();
+  switch (parsed.data) {
+    case 'claude-3-7-sonnet': return 'aira-auto';
+    case 'claude-3-5-sonnet': return 'aira-pro';
+    case 'claude-3-5-haiku': return 'aira-fast';
+    case 'claude-3-opus': return 'aira-deep';
+    case 'meta/llama-3.1-405b-instruct': return 'nvidia/nemotron-3-super-120b-a12b';
+    default: return parsed.data;
+  }
+}
+
+
 export const ModelPolicySchema = z.object({
   model: ModelIdSchema,
   maxTokens: z.number().int().positive().default(4096),

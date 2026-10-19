@@ -19,10 +19,10 @@ export class BrainV2KnowledgeEngine {
   private repo: KnowledgeRepository;
   private static hasSeededSystemKnowledge = false;
 
-  constructor(repo?: KnowledgeRepository) {
+  constructor(repo?: KnowledgeRepository, options: { seedDefaults?: boolean } = {}) {
     this.repo = repo || new PostgresKnowledgeRepository();
     // Default seed is now handled asynchronously or by migration, but we can fire and forget if empty
-    this.seedDefaultKnowledge().catch(console.error);
+    if (options.seedDefaults !== false) this.seedDefaultKnowledge().catch(console.error);
   }
 
   public getRepository(): KnowledgeRepository {
