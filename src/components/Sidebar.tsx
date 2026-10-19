@@ -15,6 +15,9 @@ import {
   Workflow,
   MessageSquareText,
   ShieldCheck,
+  Sparkles,
+  Wand2,
+  CreditCard,
 } from 'lucide-react';
 import { motion, AnimatePresence, Variants } from 'framer-motion';
 import type { Conversation, Project, AppSettings, WorkspaceMode } from '../types';
@@ -44,6 +47,9 @@ interface SidebarProps {
   onUpdateSettings: (settings: Partial<AppSettings>) => void;
   workspaceMode: WorkspaceMode;
   onSelectWorkspace: (mode: WorkspaceMode) => void;
+  onOpenVisionStudio?: () => void;
+  onOpenPricing?: () => void;
+  onOpenBilling?: () => void;
 }
 
 const listVariants: Variants = {
@@ -121,6 +127,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onUpdateSettings,
   workspaceMode,
   onSelectWorkspace,
+  onOpenVisionStudio,
+  onOpenPricing,
+  onOpenBilling,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [neonUser, setNeonUser] = useState<NeonUser | null>(() => neonAuth.getCurrentUser());
@@ -313,6 +322,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div className="px-4 pt-3 pb-2 space-y-1">
             {navItem('chat', 'Chat', <MessageSquareText className="w-4 h-4" />)}
             {navItem('research', 'Research', <Telescope className="w-4 h-4" />, 'beta')}
+            {onOpenVisionStudio && (
+              <button
+                onClick={onOpenVisionStudio}
+                className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-[13px] font-semibold text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark border border-transparent transition-all"
+              >
+                <span className="flex items-center gap-3">
+                  <Wand2 className="w-4 h-4 text-purple-400" />
+                  <span>Vision Studio</span>
+                </span>
+                <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300">
+                  Multimodal
+                </span>
+              </button>
+            )}
             {navItem('library', 'Library', <Library className="w-4 h-4" />)}
             <button onClick={onOpenProjects} className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-[13px] font-semibold transition-all duration-300 ${activeProjectId ? 'bg-claude-surface-light dark:bg-claude-surface-dark text-claude-text-light dark:text-white shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] border border-claude-border-light dark:border-claude-border-dark' : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark border border-transparent'}`}>
               <span className="flex items-center gap-3"><FolderGit2 className="w-4 h-4" /><span>Projects</span></span>
@@ -320,6 +343,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
             {navItem('agents', 'Agents', <Bot className="w-4 h-4" />)}
             {navItem('automations', 'Automations', <Workflow className="w-4 h-4" />)}
+            {onOpenPricing && (
+              <button
+                onClick={onOpenPricing}
+                className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-[13px] font-semibold text-[#cc785c] hover:bg-[#cc785c]/10 border border-[#cc785c]/20 transition-all mt-1"
+              >
+                <span className="flex items-center gap-3">
+                  <Sparkles className="w-4 h-4 text-[#cc785c]" />
+                  <span>Plans & Pricing</span>
+                </span>
+                <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-[#cc785c]/20 text-[#cc785c]">
+                  Upgrade
+                </span>
+              </button>
+            )}
           </div>
 
           <div className="px-4 pt-4 pb-2">
@@ -401,8 +438,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="flex items-center gap-1.5">
                 <button
                   type="button"
-                  aria-label={neonUser ? "View account details" : "Sign in or register persistent account"}
-                  onClick={onOpenAuth}
+                  aria-label={neonUser ? "View account and billing details" : "Sign in or register persistent account"}
+                  onClick={neonUser && onOpenBilling ? onOpenBilling : onOpenAuth}
                   className="flex min-w-0 items-center space-x-2.5 p-2 rounded-xl hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark border border-claude-border-light/60 dark:border-claude-border-dark/60 transition-all flex-1 text-left active:scale-[0.98]"
                 >
                   <div className="w-7 h-7 rounded-[8px] bg-gradient-to-br from-claude-terracotta to-[#eb6e4b] text-white font-semibold text-xs flex items-center justify-center flex-shrink-0 shadow-sm">
@@ -416,7 +453,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       {neonUser ? (
                         <>
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                          <span>Neon Staging Sync</span>
+                          <span>Account & Billing</span>
                         </>
                       ) : (
                         <span>Sign in · Persistent sync</span>

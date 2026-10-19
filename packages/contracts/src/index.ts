@@ -914,4 +914,5 @@ export const ErrorEnvelopeSchema = z.object({
 export type ErrorEnvelope = z.infer<typeof ErrorEnvelopeSchema>;
 
 export * from './behavioral.js';
+export * from './commercial.js';
 

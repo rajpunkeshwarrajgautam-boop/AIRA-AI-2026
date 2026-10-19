@@ -26,6 +26,9 @@ const ProjectsModal = React.lazy(() => import('./components/ProjectsModal').then
 const SettingsModal = React.lazy(() => import('./components/SettingsModal').then(m => ({ default: m.SettingsModal })));
 import { MemoryVaultModal } from './components/MemoryVaultModal';
 import { AuthModal } from './components/AuthModal';
+import { PricingModal } from './components/PricingModal';
+import { VisionStudioModal } from './components/VisionStudioModal';
+import { AccountBillingModal } from './components/AccountBillingModal';
 import { neonAuth, authenticatedApiFetch } from './lib/neonAuth';
 import { LibraryView } from './components/LibraryView';
 import { BuilderWorkspace } from './components/BuilderWorkspace';
@@ -71,6 +74,9 @@ function App() {
   const [isProjectsOpen, setIsProjectsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
+  const [isPricingOpen, setIsPricingOpen] = useState(false);
+  const [isVisionOpen, setIsVisionOpen] = useState(false);
+  const [isAccountBillingOpen, setIsAccountBillingOpen] = useState(false);
   const [isMemoryVaultOpen, setIsMemoryVaultOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isConversationSearchOpen, setIsConversationSearchOpen] = useState(false);
@@ -622,6 +628,9 @@ function App() {
         onUpdateSettings={updateSettings}
         workspaceMode={workspaceMode}
         onSelectWorkspace={setWorkspaceMode}
+        onOpenVisionStudio={() => setIsVisionOpen(true)}
+        onOpenPricing={() => setIsPricingOpen(true)}
+        onOpenBilling={() => setIsAccountBillingOpen(true)}
       />
 
       <CommandPalette
@@ -828,6 +837,25 @@ function App() {
               email: user.email || s.email,
             }));
             setToastMessage(`Welcome, ${user.name}! Sync active.`);
+          }}
+        />
+
+        <PricingModal
+          isOpen={isPricingOpen}
+          onClose={() => setIsPricingOpen(false)}
+        />
+
+        <VisionStudioModal
+          isOpen={isVisionOpen}
+          onClose={() => setIsVisionOpen(false)}
+        />
+
+        <AccountBillingModal
+          isOpen={isAccountBillingOpen}
+          onClose={() => setIsAccountBillingOpen(false)}
+          onOpenPricing={() => {
+            setIsAccountBillingOpen(false);
+            setIsPricingOpen(true);
           }}
         />
       </React.Suspense>

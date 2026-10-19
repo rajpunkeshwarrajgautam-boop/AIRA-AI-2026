@@ -1,4 +1,9 @@
 import { createBuilderRoutes } from './builder-routes.js';
+import { createBillingRoutes } from './billing-routes.js';
+import { createVisionRoutes } from './vision-routes.js';
+import { createAccountRoutes } from './account-routes.js';
+import { commercialBillingService } from './billing/commercial-billing-service.js';
+import { paymentGatewayService } from './billing/payment-gateway-service.js';
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
@@ -124,7 +129,12 @@ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
   }
   next(err);
 });
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({
+  limit: '2mb',
+  verify: (req: any, _res: any, buf: Buffer) => {
+    req.rawBody = buf.toString('utf8');
+  }
+}));
 app.use(express.urlencoded({ limit: '2mb', extended: false }));
 
 app.use((req: Request, _res: Response, next: NextFunction) => {
@@ -346,10 +356,52 @@ app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
+// -----------------------------------------------------------------------
+// PUBLIC WEBHOOKS — Gateway raw-body cryptographic HMAC endpoints
+// -----------------------------------------------------------------------
+app.post('/api/billing/webhook/razorpay', async (req: Request, res: Response) => {
+  const signature = req.headers['x-razorpay-signature'] as string;
+  const rawBody = typeof (req as any).rawBody === 'string'
+    ? (req as any).rawBody
+    : JSON.stringify(req.body);
+
+  try {
+    const result = await paymentGatewayService.processRazorpayWebhook(rawBody, signature);
+    res.status(200).json({ status: 'ok', ...result });
+  } catch (err: any) {
+    console.error('[RazorpayWebhookError]', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/billing/webhook/cashfree', async (req: Request, res: Response) => {
+  const signature = req.headers['x-webhook-signature'] as string;
+  const timestamp = req.headers['x-webhook-timestamp'] as string;
+  const rawBody = typeof (req as any).rawBody === 'string'
+    ? (req as any).rawBody
+    : JSON.stringify(req.body);
+
+  try {
+    const result = await paymentGatewayService.processCashfreeWebhook(rawBody, signature, timestamp);
+    res.status(200).json({ status: 'ok', ...result });
+  } catch (err: any) {
+    console.error('[CashfreeWebhookError]', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // Enforce ExecutionPrincipal on all /api routes BELOW this point.
-// Routes registered above (health, ready) are public infrastructure probes.
+// Routes registered above (health, ready, webhooks) are public infrastructure probes or signature verified.
 app.use('/api', createPrincipalMiddleware());
 app.use('/api', (req, _res, next) => withInferencePrincipal(req.principal!.userId, next));
+
+// -----------------------------------------------------------------------
+// COMMERCIAL PLATFORM ROUTERS
+// -----------------------------------------------------------------------
+app.use('/api/billing', createBillingRoutes());
+app.use('/api/vision', createVisionRoutes());
+app.use('/api/account', createAccountRoutes());
+app.use('/api/builder', createBuilderRoutes(modelRouter));
 
 // Inference diagnostics are operator actions, not public readiness probes.
 const benchmarkSignal = Symbol('benchmarkSignal');
@@ -637,6 +689,9 @@ app.get('/api/capacity/status', async (req: Request, res: Response) => {
 
 // Initialize Core Subsystems
 app.use('/api/builder', createBuilderRoutes(modelRouter));
+app.use('/api/billing', createBillingRoutes());
+app.use('/api/vision', createVisionRoutes());
+app.use('/api/user', createAccountRoutes());
 const isDbConfigured = Boolean(process.env.DATABASE_URL?.trim());
 const toolRegistry = new ToolRegistry(process.cwd());
 const approvalKernel = new ApprovalKernel(new PostgresApprovalRepository(), new PostgresSessionGrantRepository());
@@ -1152,6 +1207,24 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     let effectiveHistory = contextHistory;
     if (isFastTarget && Array.isArray(contextHistory) && contextHistory.length > capacityConfig.maxContextTurns) {
       effectiveHistory = contextHistory.slice(-capacityConfig.maxContextTurns);
+    }
+
+    // Commercial Entitlement Gate: Consume 1 standard chat unit and record reasoning boost if active
+    try {
+      if (principalId && !principalId.startsWith('test-') && principalId !== 'anonymous') {
+        await commercialBillingService.consumeStandardChat(principalId, 1);
+        if (extendedThinking || model === 'aira-auto') {
+          await commercialBillingService.tryConsumeReasoningBoost(principalId).catch(() => false);
+        }
+      }
+    } catch (quotaErr: any) {
+      if (quotaErr.message?.includes('DAILY_STANDARD_LIMIT_EXCEEDED') || quotaErr.message?.includes('MONTHLY_STANDARD_LIMIT_EXCEEDED')) {
+        return res.status(429).json({
+          error: quotaErr.message,
+          code: 'USER_RATE_LIMIT',
+          retryAfterSeconds: 3600
+        });
+      }
     }
 
     const clientAbort = new AbortController();
