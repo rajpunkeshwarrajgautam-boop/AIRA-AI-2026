@@ -640,4 +640,27 @@ test('Google OAuth Login Loop Remediation & BFF Session Bridge Suite', async (t)
       globalThis.fetch = prevFetch;
     }
   });
+  await t.test('GitHub client uses the first-party BFF endpoint with CSRF protection', async () => {
+    const client = new NeonAuthClient();
+    client.enableBffMode(true);
+    const previous = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = async (input, init) => {
+      calls++;
+      assert.ok(String(input).endsWith('/api/auth/oauth/github/start'));
+      assert.equal(init?.credentials, 'include');
+      assert.equal(new Headers(init?.headers).get('x-aira-csrf-protection'), '1');
+      assert.equal(JSON.parse(init?.body as string).provider, 'github');
+      return new Response(JSON.stringify({ url: 'https://github.com/login/oauth/authorize', redirect: true }));
+    };
+    try {
+      const result = await client.signInWithSocial({ provider: 'github', autoRedirect: false });
+      assert.ok(result.url.startsWith('https://github.com/'));
+      await assert.rejects(client.signInWithSocial({ provider: 'untrusted' }), /Unsupported OAuth provider/);
+      assert.equal(calls, 1, 'Unsupported providers must not dispatch to Neon');
+    } finally {
+      globalThis.fetch = previous;
+    }
+  });
+
 });

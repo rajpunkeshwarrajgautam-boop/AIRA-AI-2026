@@ -1002,23 +1002,36 @@ function sanitizeUpstreamCookie(cookieStr: string, isProduction: boolean): strin
 }
 
 /**
- * BFF Endpoint: POST /api/auth/oauth/google/start (and GET /api/auth/oauth/google/start)
+ * BFF endpoints: /api/auth/oauth/{google|github}/start
  * 
- * Initiates Google OAuth with Neon Auth from the backend:
+ * Initiates allowlisted Google or GitHub OAuth with Neon Auth from the backend:
  * - Generates an opaque random 192-bit flowId.
  * - Sets a signed HttpOnly first-party state cookie (__Host-aira_oauth_flow / aira_oauth_flow).
  * - Issues upstream /sign-in/social request to Neon Auth with the first-party callback URL:
- *   ${origin}/api/auth/oauth/google/callback?flowId=${flowId}
+ *   ${origin}/api/auth/oauth/${provider}/callback?flowId=${flowId}
  * - Forwards upstream __Secure-neon-auth.session_challenge cookies to the client browser.
- * - Returns the Google authorization URL or 302-redirects directly.
+ * - Returns the provider authorization URL or 302-redirects directly.
  */
+type BffOAuthProvider = 'google' | 'github';
+
 export async function handleBffOAuthGoogleStart(req: Request, res: Response): Promise<void> {
+  return handleBffOAuthStart(req, res, 'google');
+}
+
+export async function handleBffOAuthGithubStart(req: Request, res: Response): Promise<void> {
+  return handleBffOAuthStart(req, res, 'github');
+}
+
+async function handleBffOAuthStart(req: Request, res: Response, provider: BffOAuthProvider): Promise<void> {
+  res.setHeader('Cache-Control', 'no-store');
   if (req.method === 'POST' && !verifyCsrfAndOrigin(req)) {
     res.status(403).json({ error: 'CSRF validation failed: missing origin or anti-CSRF header' });
     return;
   }
 
-  const flowId = randomBytes(24).toString('base64url');
+  // Bind GitHub state to its callback while retaining in-flight Google compatibility.
+  const nonce = randomBytes(24).toString('base64url');
+  const flowId = provider === 'github' ? `github.${nonce}` : nonce;
   const now = Date.now();
   setBffOAuthFlowCookie(res, flowId, now);
 
@@ -1041,7 +1054,7 @@ export async function handleBffOAuthGoogleStart(req: Request, res: Response): Pr
     }
   }
 
-  const callbackURL = `${clientOrigin}/api/auth/oauth/google/callback?flowId=${encodeURIComponent(flowId)}`;
+  const callbackURL = `${clientOrigin}/api/auth/oauth/${provider}/callback?flowId=${encodeURIComponent(flowId)}`;
 
   const upstreamRes = await fetch(`${baseUrl}/sign-in/social`, {
     method: 'POST',
@@ -1050,15 +1063,15 @@ export async function handleBffOAuthGoogleStart(req: Request, res: Response): Pr
       'Origin': clientOrigin
     },
     body: JSON.stringify({
-      provider: 'google',
+      provider,
       callbackURL
     })
   });
 
   if (!upstreamRes.ok) {
-    const errText = await upstreamRes.text().catch(() => '');
-    console.error('[handleBffOAuthGoogleStart] Neon Auth social sign-in init failed:', upstreamRes.status, errText);
-    res.status(upstreamRes.status).json({ error: 'Failed to initiate Google OAuth with auth service' });
+    console.error('[handleBffOAuthStart] Neon Auth social sign-in init failed:', provider, upstreamRes.status);
+    clearBffOAuthFlowCookie(res);
+    res.status(upstreamRes.status).json({ error: `Failed to initiate ${provider} OAuth with auth service` });
     return;
   }
 
@@ -1091,9 +1104,9 @@ export async function handleBffOAuthGoogleStart(req: Request, res: Response): Pr
 }
 
 /**
- * BFF Endpoint: GET /api/auth/oauth/google/callback
+ * BFF endpoints: GET /api/auth/oauth/{google|github}/callback
  * 
- * First-party callback destination for Google OAuth:
+ * First-party callback destination for Google and GitHub OAuth:
  * - Validates cryptographic flow state from the __Host-aira_oauth_flow cookie against flowId.
  * - Anti-replay: clears the flow cookie immediately upon receipt.
  * - Handles OAuth provider errors with safe redirect to /?auth_error=...
@@ -1104,6 +1117,15 @@ export async function handleBffOAuthGoogleStart(req: Request, res: Response): Pr
  * - Redirects to /?auth_success=1 for instantaneous frontend hydration and guest migration.
  */
 export async function handleBffOAuthGoogleCallback(req: Request, res: Response): Promise<void> {
+  return handleBffOAuthCallback(req, res, 'google');
+}
+
+export async function handleBffOAuthGithubCallback(req: Request, res: Response): Promise<void> {
+  return handleBffOAuthCallback(req, res, 'github');
+}
+
+async function handleBffOAuthCallback(req: Request, res: Response, provider: BffOAuthProvider): Promise<void> {
+  res.setHeader('Cache-Control', 'no-store');
   const queryFlowId = req.query.flowId as string | undefined;
   const verifier = req.query.neon_auth_session_verifier as string | undefined;
   const errorParam = req.query.error as string | undefined;
@@ -1119,7 +1141,7 @@ export async function handleBffOAuthGoogleCallback(req: Request, res: Response):
 
   // Handle OAuth provider error (e.g. user cancelled login)
   if (errorParam) {
-    console.warn('[handleBffOAuthGoogleCallback] OAuth provider returned error:', errorParam);
+    console.warn('[handleBffOAuthCallback] OAuth provider returned error:', errorParam);
     clearBffOAuthFlowCookie(res);
     res.redirect(302, `${clientOrigin}/?auth_error=${encodeURIComponent(errorParam)}`);
     return;
@@ -1127,8 +1149,9 @@ export async function handleBffOAuthGoogleCallback(req: Request, res: Response):
 
   // Validate state cookie and query flowId
   const flowCookie = parseBffOAuthFlowCookie(req);
-  if (!flowCookie || !queryFlowId || flowCookie.flowId !== queryFlowId) {
-    console.warn('[handleBffOAuthGoogleCallback] CSRF/State validation failed: missing or mismatched flow cookie');
+  if (!flowCookie || typeof queryFlowId !== 'string' || flowCookie.flowId !== queryFlowId ||
+      (provider === 'github' ? !queryFlowId.startsWith('github.') : queryFlowId.startsWith('github.'))) {
+    console.warn('[handleBffOAuthCallback] CSRF/State validation failed: missing or mismatched flow cookie');
     clearBffOAuthFlowCookie(res);
     res.redirect(302, `${clientOrigin}/?auth_error=state_mismatch`);
     return;
@@ -1186,14 +1209,14 @@ export async function handleBffOAuthGoogleCallback(req: Request, res: Response):
         } catch {
           // keep sanitized category
         }
-        console.error('[handleBffOAuthGoogleCallback] Neon Auth session exchange failed:', upstreamRes.status, errCode);
+        console.error('[handleBffOAuthCallback] Neon Auth session exchange failed:', upstreamRes.status, errCode);
         res.redirect(302, `${clientOrigin}/?auth_error=exchange_failed`);
         return;
       }
 
       const sessionData = await upstreamRes.json();
       if (!sessionData?.session?.token || !sessionData?.user?.id) {
-        console.error('[handleBffOAuthGoogleCallback] Neon Auth returned empty session or user');
+        console.error('[handleBffOAuthCallback] Neon Auth returned empty session or user');
         res.redirect(302, `${clientOrigin}/?auth_error=session_not_found`);
         return;
       }
@@ -1235,7 +1258,7 @@ export async function handleBffOAuthGoogleCallback(req: Request, res: Response):
     const principal = await verifyNeonAuthToken(jwt);
     const expectedSubject = principal.userId.replace(/^neon_user_/, '');
     if (expectedSubject !== resolvedUser.id && principal.userId !== resolvedUser.id) {
-      console.error('[handleBffOAuthGoogleCallback] Cryptographic principal mismatch:', principal.userId, 'vs', resolvedUser.id);
+      console.error('[handleBffOAuthCallback] Cryptographic principal mismatch:', principal.userId, 'vs', resolvedUser.id);
       res.redirect(302, `${clientOrigin}/?auth_error=principal_mismatch`);
       return;
     }
@@ -1267,7 +1290,7 @@ export async function handleBffOAuthGoogleCallback(req: Request, res: Response):
     // Redirect to root with auth_success marker for instant guest chat migration & UX feedback
     res.redirect(302, `${clientOrigin}/?auth_success=1`);
   } catch (err: any) {
-    console.error('[handleBffOAuthGoogleCallback] Error completing OAuth handoff:', err?.message || err);
+    console.error('[handleBffOAuthCallback] Error completing OAuth handoff:', err?.message || err);
     res.redirect(302, `${clientOrigin}/?auth_error=exchange_failed`);
   }
 }

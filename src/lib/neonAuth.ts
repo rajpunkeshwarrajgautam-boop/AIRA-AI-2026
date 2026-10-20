@@ -849,9 +849,12 @@ export class NeonAuthClient {
     callbackURL?: string;
     autoRedirect?: boolean;
   }): Promise<{ url: string; redirect: boolean }> {
-    if (this.isBffMode() && params.provider === 'google') {
+    if (this.isBffMode()) {
+      if (params.provider !== 'google' && params.provider !== 'github') {
+        throw new Error('Unsupported OAuth provider');
+      }
       const origin = (typeof window !== 'undefined' && window.location?.origin) || 'http://localhost:5173';
-      const response = await fetch(`${this.getApiBase()}/api/auth/oauth/google/start`, {
+      const response = await fetch(`${this.getApiBase()}/api/auth/oauth/${params.provider}/start`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -865,13 +868,13 @@ export class NeonAuthClient {
       });
 
       if (!response.ok) {
-        const err = await response.json().catch(() => ({ message: 'Google OAuth initialization failed' }));
-        throw new Error(err.message || err.error || `Google OAuth initialization failed (${response.status})`);
+        const err = await response.json().catch(() => ({ message: 'Social OAuth initialization failed' }));
+        throw new Error(err.message || err.error || `Social OAuth initialization failed (${response.status})`);
       }
 
       const data = await response.json();
       if (!data || !data.url) {
-        throw new Error('Malformed response from Google OAuth start endpoint');
+        throw new Error('Malformed response from social OAuth start endpoint');
       }
 
       const autoRedirect = params.autoRedirect !== false;

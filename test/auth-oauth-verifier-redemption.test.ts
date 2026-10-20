@@ -14,6 +14,8 @@ import test from 'node:test';
 import {
   handleBffOAuthGoogleStart,
   handleBffOAuthGoogleCallback,
+  handleBffOAuthGithubStart,
+  handleBffOAuthGithubCallback,
   setBffOAuthFlowCookie,
   readBffSessionFromCookie,
   BFF_COOKIE_NAME_DEV,
@@ -47,7 +49,11 @@ function makeMockEdDsaJwt(sub: string, email: string, name: string, expSeconds =
   return `${header}.${payload}.${signature}`;
 }
 
-test('Neon Auth OAuth Verifier Contract & Handoff Suite', async (t) => {
+for (const provider of ['google', 'github'] as const) {
+const start = provider === 'google' ? handleBffOAuthGoogleStart : handleBffOAuthGithubStart;
+const callback = provider === 'google' ? handleBffOAuthGoogleCallback : handleBffOAuthGithubCallback;
+const prefix = provider === 'github' ? 'github.' : '';
+test(`${provider}: Neon Auth OAuth Verifier Contract & Handoff Suite`, async (t) => {
   const originalFetch = globalThis.fetch;
   process.env.NEON_AUTH_BASE_URL = TEST_ISSUER;
   process.env.NEON_AUTH_JWKS_URL = `${TEST_ISSUER}/.well-known/jwks.json`;
@@ -91,6 +97,11 @@ test('Neon Auth OAuth Verifier Contract & Handoff Suite', async (t) => {
 
     // 2. /sign-in/social
     if (urlStr.includes('/sign-in/social')) {
+      const payload = JSON.parse(init?.body as string);
+      assert.equal(payload.provider, provider);
+      const landing = new URL(payload.callbackURL);
+      assert.equal(landing.pathname, `/api/auth/oauth/${provider}/callback`);
+      assert.equal(landing.searchParams.get('flowId')?.startsWith('github.'), provider === 'github');
       const headers = new Headers();
       headers.append('set-cookie', mockChallengeCookie);
       headers.append('set-cookie', mockLegacyChallengeCookie);
@@ -211,7 +222,7 @@ test('Neon Auth OAuth Verifier Contract & Handoff Suite', async (t) => {
       }
     } as any;
 
-    await handleBffOAuthGoogleStart(mockReq, mockRes);
+    await start(mockReq, mockRes);
 
     assert.ok(responseBody?.url?.includes('accounts.google.com'));
     // Flow cookie must be set
@@ -224,7 +235,7 @@ test('Neon Auth OAuth Verifier Contract & Handoff Suite', async (t) => {
   });
 
   await t.test('2. handleBffOAuthGoogleCallback redeems neon_auth_session_verifier and establishes authenticated BFF session', async () => {
-    const flowId = 'test_flow_verifier_valid';
+    const flowId = `${prefix}test_flow_verifier_valid`;
     const now = Date.now();
     let setCookieHeaders: string[] = [];
 
@@ -274,7 +285,7 @@ test('Neon Auth OAuth Verifier Contract & Handoff Suite', async (t) => {
     upstreamGetSessionCalled = false;
     upstreamTokenCalled = false;
 
-    await handleBffOAuthGoogleCallback(mockReq, mockRes);
+    await callback(mockReq, mockRes);
 
     assert.equal(upstreamGetSessionCalled, true, 'Must call Neon Auth /get-session with verifier');
     assert.ok(upstreamGetSessionHeaders['Cookie']?.includes('mock_challenge_abc_123'), 'Must forward challenge cookie to Neon Auth');
@@ -302,7 +313,7 @@ test('Neon Auth OAuth Verifier Contract & Handoff Suite', async (t) => {
   });
 
   await t.test('3. handleBffOAuthGoogleCallback redirects to exchange_failed when Neon Auth rejects verifier/challenge', async () => {
-    const flowId = 'test_flow_invalid_challenge';
+    const flowId = `${prefix}test_flow_invalid_challenge`;
     const now = Date.now();
     let setCookieHeaders: string[] = [];
 
@@ -340,9 +351,27 @@ test('Neon Auth OAuth Verifier Contract & Handoff Suite', async (t) => {
       }
     } as any;
 
-    await handleBffOAuthGoogleCallback(mockReq, mockRes);
+    await callback(mockReq, mockRes);
 
     assert.equal(redirectCode, 302);
     assert.ok(redirectUrl.includes('/?auth_error=exchange_failed'), 'Must safely redirect to /?auth_error=exchange_failed');
   });
+  await t.test('rejects a state cookie issued for the other OAuth provider before redemption', async () => {
+    const flowId = provider === 'github' ? 'google_nonce' : 'github.other_nonce';
+    let cookies: string[] = [];
+    let redirect = '';
+    const res = {
+      getHeader: () => cookies,
+      setHeader: (_name: string, value: string | string[]) => { cookies = Array.isArray(value) ? value : [value]; },
+      redirect: (_status: number, url: string) => { redirect = url; }
+    } as any;
+    setBffOAuthFlowCookie(res, flowId, Date.now());
+    upstreamGetSessionCalled = false;
+    await callback({ query: { flowId, neon_auth_session_verifier: validVerifier },
+      headers: { host: 'localhost:3001', cookie: cookies[0].split(';')[0] } } as any, res);
+    assert.ok(redirect.endsWith('auth_error=state_mismatch'));
+    assert.equal(upstreamGetSessionCalled, false);
+  });
+
 });
+}

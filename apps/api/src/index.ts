@@ -74,6 +74,8 @@ import {
   handleBffOAuthExchange,
   handleBffOAuthGoogleStart,
   handleBffOAuthGoogleCallback,
+  handleBffOAuthGithubStart,
+  handleBffOAuthGithubCallback,
   handleBffSession,
   handleBffSignOut,
   isAllowedOrigin
@@ -185,6 +187,22 @@ app.get('/api/auth/oauth/google/start', (req: Request, res: Response) => {
 app.get('/api/auth/oauth/google/callback', (req: Request, res: Response) => {
   handleBffOAuthGoogleCallback(req, res).catch((err) => {
     res.status(500).json({ error: err.message || 'OAuth callback failed' });
+  });
+});
+// GitHub uses the same verified BFF exchange with provider-bound flow state.
+app.post('/api/auth/oauth/github/start', (req: Request, res: Response) => {
+  handleBffOAuthGithubStart(req, res).catch(() => {
+    res.status(502).json({ error: 'GitHub OAuth start failed' });
+  });
+});
+app.get('/api/auth/oauth/github/start', (req: Request, res: Response) => {
+  handleBffOAuthGithubStart(req, res).catch(() => {
+    res.status(502).json({ error: 'GitHub OAuth start failed' });
+  });
+});
+app.get('/api/auth/oauth/github/callback', (req: Request, res: Response) => {
+  handleBffOAuthGithubCallback(req, res).catch(() => {
+    res.status(502).json({ error: 'GitHub OAuth callback failed' });
   });
 });
 app.get('/api/auth/session', handleBffSession);
