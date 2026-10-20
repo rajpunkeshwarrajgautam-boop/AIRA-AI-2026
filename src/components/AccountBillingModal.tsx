@@ -474,7 +474,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
               <div className="p-4 rounded-xl bg-stone-900/60 border border-white/10 space-y-3">
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="text-xs font-semibold text-white">Neon Auth Principal ID</div>
+                    <div className="text-xs font-semibold text-white">Direct OAuth Principal ID</div>
                     <div className="text-xs text-stone-400 font-mono mt-0.5">{user?.id || 'guest-session'}</div>
                   </div>
                   <span className="text-[11px] px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 font-medium">
@@ -487,6 +487,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
                     <div className="text-xs font-semibold text-white">Authenticated Email</div>
                     <div className="text-xs text-stone-400">{user?.email || 'Unregistered'}</div>
                   </div>
+                  <span className="text-[10px] text-stone-400 font-mono">Google & GitHub OAuth</span>
                 </div>
               </div>
 

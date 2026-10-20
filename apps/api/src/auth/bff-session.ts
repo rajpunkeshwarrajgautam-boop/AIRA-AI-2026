@@ -15,6 +15,7 @@ import type { Request, Response, NextFunction } from 'express';
 import type { Knex } from 'knex';
 import { db } from '../../../../packages/db/src/index.js';
 import { verifyNeonAuthToken, ManagedPrincipal } from './neon-auth-principal.js';
+import { directOAuthService, verifyFirstPartyJwt, signFirstPartyJwt, OAuthUserProfile } from './direct-oauth.js';
 
 export const BFF_COOKIE_NAME_PROD = '__Host-aira_auth_session';
 export const BFF_COOKIE_NAME_DEV = 'aira_auth_session';
@@ -655,23 +656,44 @@ export function createBffSessionMiddleware() {
     }
 
     try {
-      let jwtToVerify = session.jwt;
+      let identity: ManagedPrincipal;
+      let isFirstParty = false;
 
-      // Proactive JWT refresh if within 60 seconds of expiration
-      if (session.jwtExpiresAt - Date.now() < 60_000) {
+      if (session.jwt) {
         try {
-          const fresh = await fetchNeonJwtFromServer(session.sessionToken, session.upstreamCookie);
-          session.jwt = fresh.token;
-          session.jwtExpiresAt = fresh.expiresAt;
-          session.lastRotatedAt = Date.now();
-          await bffSessionStore.set(session);
-          jwtToVerify = fresh.token;
+          const fp = verifyFirstPartyJwt(session.jwt);
+          identity = {
+            userId: fp.userId,
+            sessionId: session.id,
+            provider: 'direct_oauth' as any,
+            email: fp.email || session.email,
+            name: fp.name || session.name
+          };
+          isFirstParty = true;
         } catch {
-          // If refresh fails, try verifying existing JWT before rejecting
+          // Fall through to Neon Auth JWT check
         }
       }
 
-      const identity: ManagedPrincipal = await verifyNeonAuthToken(jwtToVerify);
+      if (!isFirstParty) {
+        let jwtToVerify = session.jwt;
+
+        // Proactive JWT refresh if within 60 seconds of expiration (only if upstream session token exists)
+        if (session.sessionToken && session.jwtExpiresAt - Date.now() < 60_000) {
+          try {
+            const fresh = await fetchNeonJwtFromServer(session.sessionToken, session.upstreamCookie);
+            session.jwt = fresh.token;
+            session.jwtExpiresAt = fresh.expiresAt;
+            session.lastRotatedAt = Date.now();
+            await bffSessionStore.set(session);
+            jwtToVerify = fresh.token;
+          } catch {
+            // If refresh fails, try verifying existing JWT before rejecting
+          }
+        }
+
+        identity = await verifyNeonAuthToken(jwtToVerify);
+      }
 
       // Mutual consistency check: verify that JWT subject matches the server-side session's userId
       const expectedSubject = identity.userId.replace(/^neon_user_/, '');
@@ -1015,27 +1037,30 @@ function sanitizeUpstreamCookie(cookieStr: string, isProduction: boolean): strin
 type BffOAuthProvider = 'google' | 'github';
 
 export async function handleBffOAuthGoogleStart(req: Request, res: Response): Promise<void> {
-  return handleBffOAuthStart(req, res, 'google');
+  return handleBffOAuthStart(req, res, 'google', 'signin');
 }
 
 export async function handleBffOAuthGithubStart(req: Request, res: Response): Promise<void> {
-  return handleBffOAuthStart(req, res, 'github');
+  return handleBffOAuthStart(req, res, 'github', 'signin');
 }
 
-async function handleBffOAuthStart(req: Request, res: Response, provider: BffOAuthProvider): Promise<void> {
+export async function handleBffOAuthLinkStart(req: Request, res: Response, provider: BffOAuthProvider): Promise<void> {
+  return handleBffOAuthStart(req, res, provider, 'link');
+}
+
+async function handleBffOAuthStart(
+  req: Request,
+  res: Response,
+  provider: BffOAuthProvider,
+  action: 'signin' | 'link' = 'signin'
+): Promise<void> {
   res.setHeader('Cache-Control', 'no-store');
   if (req.method === 'POST' && !verifyCsrfAndOrigin(req)) {
     res.status(403).json({ error: 'CSRF validation failed: missing origin or anti-CSRF header' });
     return;
   }
 
-  // Bind GitHub state to its callback while retaining in-flight Google compatibility.
-  const nonce = randomBytes(24).toString('base64url');
-  const flowId = provider === 'github' ? `github.${nonce}` : nonce;
-  const now = Date.now();
-  setBffOAuthFlowCookie(res, flowId, now);
-
-  const baseUrl = getAuthBaseUrl();
+  const isProd = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
   let clientOrigin = (req.headers.origin as string) || (req.headers.referer as string);
   if (clientOrigin) {
     try {
@@ -1047,75 +1072,41 @@ async function handleBffOAuthStart(req: Request, res: Response, provider: BffOAu
   }
   if (!clientOrigin || !isAllowedOrigin(clientOrigin, req.headers.host)) {
     if (req.headers.host) {
-      const proto = (req.headers['x-forwarded-proto'] as string) || (process.env.NODE_ENV === 'production' || process.env.VERCEL ? 'https' : 'http');
+      const proto = (req.headers['x-forwarded-proto'] as string) || (isProd ? 'https' : 'http');
       clientOrigin = `${proto}://${req.headers.host}`;
     } else {
       clientOrigin = getTrustedOrigins()[0] || 'http://localhost:5173';
     }
   }
 
-  const callbackURL = `${clientOrigin}/api/auth/oauth/${provider}/callback?flowId=${encodeURIComponent(flowId)}`;
-
-  const upstreamRes = await fetch(`${baseUrl}/sign-in/social`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Origin': clientOrigin
-    },
-    body: JSON.stringify({
-      provider,
-      callbackURL
-    })
-  });
-
-  if (!upstreamRes.ok) {
-    console.error('[handleBffOAuthStart] Neon Auth social sign-in init failed:', provider, upstreamRes.status);
-    clearBffOAuthFlowCookie(res);
-    res.status(upstreamRes.status).json({ error: `Failed to initiate ${provider} OAuth with auth service` });
-    return;
-  }
-
-  // Forward upstream Set-Cookie challenge headers (__Secure-neon-auth.session_challenge, etc.) to the browser
-  const isProd = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
-  const upstreamCookies = (upstreamRes.headers as any).getSetCookie ? (upstreamRes.headers as any).getSetCookie() : [];
-  for (const cookieStr of upstreamCookies) {
-    if (typeof (res as any).append === 'function') {
-      (res as any).append('Set-Cookie', sanitizeUpstreamCookie(cookieStr, isProd));
-    } else {
-      const existing = res.getHeader('Set-Cookie');
-      const cookieArray = Array.isArray(existing) ? existing : existing ? [existing as string] : [];
-      cookieArray.push(sanitizeUpstreamCookie(cookieStr, isProd));
-      res.setHeader('Set-Cookie', cookieArray);
+  let targetUserId: string | undefined = undefined;
+  if (action === 'link') {
+    const session = await readBffSessionFromCookie(req);
+    if (!session?.userId) {
+      res.status(401).json({ error: 'Authentication required to link an account' });
+      return;
     }
+    targetUserId = session.userId;
   }
 
-  const data = await upstreamRes.json();
-  if (!data?.url) {
-    res.status(502).json({ error: 'Auth provider did not return redirect URL' });
+  let redirectUrl = '';
+  if (provider === 'google') {
+    redirectUrl = directOAuthService.createGoogleAuthUrl(clientOrigin, res, isProd, action, targetUserId);
+  } else if (provider === 'github') {
+    redirectUrl = directOAuthService.createGithubAuthUrl(clientOrigin, res, isProd, action, targetUserId);
+  } else {
+    res.status(400).json({ error: `Unsupported provider: ${provider}` });
     return;
   }
 
   if (req.method === 'GET') {
-    res.redirect(302, data.url);
+    res.redirect(302, redirectUrl);
     return;
   }
 
-  res.status(200).json({ url: data.url, redirect: true });
+  res.status(200).json({ url: redirectUrl, redirect: true });
 }
 
-/**
- * BFF endpoints: GET /api/auth/oauth/{google|github}/callback
- * 
- * First-party callback destination for Google and GitHub OAuth:
- * - Validates cryptographic flow state from the __Host-aira_oauth_flow cookie against flowId.
- * - Anti-replay: clears the flow cookie immediately upon receipt.
- * - Handles OAuth provider errors with safe redirect to /?auth_error=...
- * - Cryptographically redeems neon_auth_session_verifier through Neon Auth's /get-session
- *   primary authority endpoint with forwarded browser session_challenge cookies.
- * - Obtains and cryptographically verifies the EdDSA JWT from Neon Auth.
- * - Mints a persistent first-party signed HttpOnly BFF session cookie (__Host-aira_auth_session).
- * - Redirects to /?auth_success=1 for instantaneous frontend hydration and guest migration.
- */
 export async function handleBffOAuthGoogleCallback(req: Request, res: Response): Promise<void> {
   return handleBffOAuthCallback(req, res, 'google');
 }
@@ -1126,13 +1117,15 @@ export async function handleBffOAuthGithubCallback(req: Request, res: Response):
 
 async function handleBffOAuthCallback(req: Request, res: Response, provider: BffOAuthProvider): Promise<void> {
   res.setHeader('Cache-Control', 'no-store');
-  const queryFlowId = req.query.flowId as string | undefined;
-  const verifier = req.query.neon_auth_session_verifier as string | undefined;
-  const errorParam = req.query.error as string | undefined;
+  const code = req.query.code as string | undefined;
+  const stateQuery = req.query.state as string | undefined;
+  const queryFlowId = (req.query.flowId as string | undefined) || stateQuery;
+  const errorParam = (req.query.error as string | undefined) || (req.query.error_description as string | undefined);
 
+  const isProd = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
   let clientOrigin = '';
   if (req.headers.host) {
-    const proto = (req.headers['x-forwarded-proto'] as string) || (process.env.NODE_ENV === 'production' || process.env.VERCEL ? 'https' : 'http');
+    const proto = (req.headers['x-forwarded-proto'] as string) || (isProd ? 'https' : 'http');
     clientOrigin = `${proto}://${req.headers.host}`;
   }
   if (!clientOrigin || !isAllowedOrigin(clientOrigin, req.headers.host)) {
@@ -1141,233 +1134,82 @@ async function handleBffOAuthCallback(req: Request, res: Response, provider: Bff
 
   // Handle OAuth provider error (e.g. user cancelled login)
   if (errorParam) {
-    console.warn('[handleBffOAuthCallback] OAuth provider returned error:', errorParam);
+    console.warn(`[handleBffOAuthCallback] OAuth provider (${provider}) returned error:`, errorParam);
+    directOAuthService.clearFlowCookie(res, isProd);
     clearBffOAuthFlowCookie(res);
     res.redirect(302, `${clientOrigin}/?auth_error=${encodeURIComponent(errorParam)}`);
     return;
   }
 
-  // Validate state cookie and query flowId
-  const flowCookie = parseBffOAuthFlowCookie(req);
-  if (!flowCookie || typeof queryFlowId !== 'string' || flowCookie.flowId !== queryFlowId ||
-      (provider === 'github' ? !queryFlowId.startsWith('github.') : queryFlowId.startsWith('github.'))) {
-    console.warn('[handleBffOAuthCallback] CSRF/State validation failed: missing or mismatched flow cookie');
-    clearBffOAuthFlowCookie(res);
+  // Check test mock session / profile fixtures
+  const testMockProfile = (req as any).testMockOAuthProfile as OAuthUserProfile | undefined;
+  const testMockSession = (req as any).testMockOAuthSession;
+
+  // Validate state cookie unless test mock is explicitly provided
+  const flowState = directOAuthService.parseAndClearFlowState(req, res);
+  clearBffOAuthFlowCookie(res);
+
+  if (!flowState && !testMockProfile && !testMockSession) {
+    console.warn('[handleBffOAuthCallback] CSRF/State validation failed: missing or expired flow state cookie');
     res.redirect(302, `${clientOrigin}/?auth_error=state_mismatch`);
     return;
   }
 
-  // Clear the flow cookie immediately (anti-replay)
-  clearBffOAuthFlowCookie(res);
-
-  const isProd = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
-  const baseUrl = getAuthBaseUrl();
+  if (flowState && queryFlowId && flowState.flowId !== queryFlowId) {
+    console.warn('[handleBffOAuthCallback] Flow ID mismatch:', flowState.flowId, 'vs', queryFlowId);
+    res.redirect(302, `${clientOrigin}/?auth_error=state_mismatch`);
+    return;
+  }
 
   try {
-    let resolvedUser: {
-      id: string;
-      email?: string;
-      name?: string;
-      image?: string;
-    } | null = null;
-    let resolvedSessionToken = '';
-    let upstreamSessionCookie = '';
-
-    // Test mock session fixture support for isolated unit testing
-    const testMock = (req as any).testMockOAuthSession;
-    if (testMock) {
-      resolvedUser = {
-        id: testMock.userId,
-        email: testMock.email,
-        name: testMock.name,
-        image: testMock.image
+    let profile: OAuthUserProfile;
+    if (testMockProfile) {
+      profile = testMockProfile;
+    } else if (testMockSession) {
+      profile = {
+        provider,
+        providerAccountId: testMockSession.userId,
+        email: testMockSession.email,
+        emailVerified: true,
+        name: testMockSession.name,
+        image: testMockSession.image
       };
-      resolvedSessionToken = testMock.token;
-      upstreamSessionCookie = `__Secure-neon-auth.session_token=${testMock.token}; neon-auth.session_token=${testMock.token}`;
     } else {
-      // Primary Authority: Redeem neon_auth_session_verifier via Neon Auth /get-session
-      const getSessionUrl = new URL(`${baseUrl}/get-session`);
-      if (verifier) {
-        getSessionUrl.searchParams.set('neon_auth_session_verifier', verifier);
-      }
-
-      const upstreamRes = await fetch(getSessionUrl.toString(), {
-        method: 'GET',
-        headers: {
-          'Cookie': req.headers.cookie || '',
-          'Origin': clientOrigin,
-          'x-neon-auth-middleware': 'true'
-        }
-      });
-
-      if (!upstreamRes.ok) {
-        const errText = await upstreamRes.text().catch(() => '');
-        let errCode = 'upstream_error';
-        try {
-          const parsed = JSON.parse(errText);
-          errCode = parsed.code || parsed.error || errCode;
-        } catch {
-          // keep sanitized category
-        }
-        console.error('[handleBffOAuthCallback] Neon Auth session exchange failed:', upstreamRes.status, errCode);
-        res.redirect(302, `${clientOrigin}/?auth_error=exchange_failed`);
+      if (!code) {
+        console.error('[handleBffOAuthCallback] Missing OAuth authorization code');
+        res.redirect(302, `${clientOrigin}/?auth_error=missing_code`);
         return;
       }
-
-      // Extract set-cookie headers from upstream get-session response immediately
-      const upstreamSetCookies = (upstreamRes.headers as any).getSetCookie ? (upstreamRes.headers as any).getSetCookie() : [];
-      for (const cookieStr of upstreamSetCookies) {
-        if (typeof (res as any).append === 'function') {
-          (res as any).append('Set-Cookie', sanitizeUpstreamCookie(cookieStr, isProd));
-        } else {
-          const existing = res.getHeader('Set-Cookie');
-          const cookieArray = Array.isArray(existing) ? existing : existing ? [existing as string] : [];
-          cookieArray.push(sanitizeUpstreamCookie(cookieStr, isProd));
-          res.setHeader('Set-Cookie', cookieArray);
-        }
-      }
-
-      // In Better Auth / Neon Auth, verifier redemption may return newly minted
-      // session cookies (__Secure-neon-auth.session_token=<token>.<sig>) while the body is empty/null.
-      let sessionTokenFromCookie = '';
-      let sessionCookiePair = '';
-      for (const cookieStr of upstreamSetCookies) {
-        const firstPart = cookieStr.split(';')[0].trim();
-        if (firstPart.includes('session_token=')) {
-          sessionCookiePair = firstPart;
-          const eqIdx = firstPart.indexOf('=');
-          const val = firstPart.slice(eqIdx + 1);
-          sessionTokenFromCookie = decodeURIComponent(val).split('.')[0];
-          break;
-        }
-      }
-
-      let sessionData: any = null;
-      try {
-        sessionData = await upstreamRes.json();
-      } catch {
-        sessionData = null;
-      }
-
-      if (sessionData?.session?.token) {
-        resolvedSessionToken = sessionData.session.token;
-      } else if (sessionTokenFromCookie) {
-        resolvedSessionToken = sessionTokenFromCookie;
-      }
-
-      if (sessionData?.user?.id) {
-        resolvedUser = {
-          id: sessionData.user.id,
-          email: sessionData.user.email || undefined,
-          name: sessionData.user.name || undefined,
-          image: sessionData.user.image || undefined
-        };
-      }
-
-      // Build cookie header for subsequent upstream calls
-      const returnedCookies = upstreamSetCookies.map((c: string) => c.split(';')[0]).join('; ');
-      upstreamSessionCookie = [
-        returnedCookies,
-        req.headers.cookie,
-        sessionCookiePair,
-        resolvedSessionToken ? `__Secure-neon-auth.session_token=${resolvedSessionToken}` : '',
-        resolvedSessionToken ? `neon-auth.session_token=${resolvedSessionToken}` : ''
-      ].filter(Boolean).join('; ');
-
-      // If user profile was not in body, resolve via /get-session with newly minted session cookies
-      if (!resolvedUser && upstreamSessionCookie) {
-        try {
-          const userRes = await fetch(`${baseUrl}/get-session`, {
-            method: 'GET',
-            headers: {
-              'Cookie': upstreamSessionCookie,
-              'Origin': clientOrigin,
-              'x-neon-auth-middleware': 'true'
-            }
-          });
-          if (userRes.ok) {
-            const userData = await userRes.json().catch(() => null);
-            if (userData?.user?.id) {
-              resolvedUser = {
-                id: userData.user.id,
-                email: userData.user.email || undefined,
-                name: userData.user.name || undefined,
-                image: userData.user.image || undefined
-              };
-              if (!resolvedSessionToken && userData?.session?.token) {
-                resolvedSessionToken = userData.session.token;
-              }
-            }
-          }
-        } catch (fetchUserErr) {
-          console.warn('[handleBffOAuthCallback] /get-session user fetch attempt notice:', fetchUserErr);
-        }
-      }
-
-      // Authoritative database fallback if user still unresolved but session token is cryptographically verified
-      if (!resolvedUser && resolvedSessionToken && process.env.DATABASE_URL?.trim()) {
-        try {
-          const dbRow = await db('neon_auth.session as s')
-            .join('neon_auth.user as u', 's.userId', 'u.id')
-            .where('s.token', resolvedSessionToken)
-            .where('s.expiresAt', '>', new Date())
-            .select(
-              's.token',
-              'u.id as user_id',
-              'u.email',
-              'u.name',
-              'u.image'
-            )
-            .first();
-
-          if (dbRow) {
-            resolvedUser = {
-              id: dbRow.user_id,
-              email: dbRow.email || undefined,
-              name: dbRow.name || undefined,
-              image: dbRow.image || undefined
-            };
-          }
-        } catch (dbErr) {
-          console.error('[handleBffOAuthCallback] DB session lookup fallback error:', dbErr);
-        }
-      }
-
-      if (!resolvedUser?.id || !resolvedSessionToken) {
-        console.error('[handleBffOAuthCallback] Neon Auth returned empty session or user');
-        res.redirect(302, `${clientOrigin}/?auth_error=session_not_found`);
-        return;
+      if (provider === 'google') {
+        profile = await directOAuthService.exchangeGoogleCode(clientOrigin, code, flowState?.codeVerifier || '');
+      } else {
+        profile = await directOAuthService.exchangeGithubCode(clientOrigin, code);
       }
     }
 
-    // Cryptographically verify upstream token and retrieve EdDSA JWT from Neon Auth
-    const { token: jwt, expiresAt: jwtExpiresAt } = await fetchNeonJwtFromServer(
-      resolvedSessionToken,
-      upstreamSessionCookie,
-      clientOrigin
-    );
-
-    // Verify JWT cryptographic signature against Neon Auth JWKS
-    const principal = await verifyNeonAuthToken(jwt);
-    const expectedSubject = principal.userId.replace(/^neon_user_/, '');
-    if (expectedSubject !== resolvedUser.id && principal.userId !== resolvedUser.id) {
-      console.error('[handleBffOAuthCallback] Cryptographic principal mismatch:', principal.userId, 'vs', resolvedUser.id);
-      res.redirect(302, `${clientOrigin}/?auth_error=principal_mismatch`);
+    // Account Linking flow
+    if (flowState?.action === 'link' && flowState.targetUserId) {
+      await directOAuthService.linkProviderToExistingUser(flowState.targetUserId, profile);
+      res.redirect(302, `${clientOrigin}/?auth_success=linked`);
       return;
     }
 
-    // Create durable first-party BFF session in PostgreSQL bff_sessions
+    // Resolve or create internal user and link OAuth account
+    const { user, isNewUser } = await directOAuthService.resolveOrCreateUser(profile);
+
+    // Mint durable first-party BFF session
     const sessionId = generateSessionId();
     const csrfToken = generateCsrfToken();
+    const sessionToken = generateSessionId();
     const now = Date.now();
+    const { token: jwt, expiresAt: jwtExpiresAt } = signFirstPartyJwt(user.id, sessionId, user.email, user.name);
 
     const session: BffServerSession = {
       id: sessionId,
-      userId: resolvedUser.id,
-      email: resolvedUser.email,
-      name: resolvedUser.name,
-      sessionToken: resolvedSessionToken,
-      upstreamCookie: upstreamSessionCookie,
+      userId: user.id,
+      email: user.email,
+      name: user.name,
+      sessionToken,
       jwt,
       jwtExpiresAt,
       csrfToken,
@@ -1375,17 +1217,114 @@ async function handleBffOAuthCallback(req: Request, res: Response, provider: Bff
       expiresAt: now + (BFF_SESSION_TTL_SECONDS * 1000),
       lastRotatedAt: now
     };
-    (session as any).image = resolvedUser.image;
+    (session as any).image = user.image;
 
     await bffSessionStore.set(session);
     setBffSessionCookie(res, sessionId);
 
-    // Redirect to root with auth_success marker for instant guest chat migration & UX feedback
-    res.redirect(302, `${clientOrigin}/?auth_success=1`);
+    const successParam = isNewUser ? 'signup_complete' : '1';
+    res.redirect(302, `${clientOrigin}/?auth_success=${successParam}`);
   } catch (err: any) {
-    console.error('[handleBffOAuthCallback] Error completing OAuth handoff:', err?.message || err);
+    console.error('[handleBffOAuthCallback] OAuth exchange error:', err?.message || err);
     res.redirect(302, `${clientOrigin}/?auth_error=exchange_failed`);
   }
+}
+
+/**
+ * BFF Endpoint: GET /api/auth/providers
+ * Returns all linked OAuth providers for the currently authenticated user.
+ */
+export async function handleBffGetProviders(req: Request, res: Response): Promise<void> {
+  const session = await readBffSessionFromCookie(req);
+  res.setHeader('Cache-Control', 'no-store');
+
+  if (!session?.userId) {
+    res.status(401).json({ error: 'Authentication required' });
+    return;
+  }
+
+  try {
+    const providers = await directOAuthService.getLinkedProviders(session.userId);
+    res.status(200).json({ providers });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to fetch linked providers' });
+  }
+}
+
+/**
+ * BFF Endpoint: POST /api/auth/providers/:provider/unlink
+ * Unlinks an OAuth provider from the user's account with lockout prevention.
+ */
+export async function handleBffUnlinkProvider(req: Request, res: Response): Promise<void> {
+  const session = await readBffSessionFromCookie(req);
+  res.setHeader('Cache-Control', 'no-store');
+
+  if (!session?.userId) {
+    res.status(401).json({ error: 'Authentication required' });
+    return;
+  }
+
+  if (!verifyCsrfAndOrigin(req, session)) {
+    res.status(403).json({ error: 'CSRF validation failed' });
+    return;
+  }
+
+  const provider = req.params.provider as 'google' | 'github';
+  if (!['google', 'github'].includes(provider)) {
+    res.status(400).json({ error: 'Invalid provider' });
+    return;
+  }
+
+  try {
+    await directOAuthService.unlinkProviderFromUser(session.userId, provider);
+    res.status(200).json({ success: true, unlinked: provider });
+  } catch (err: any) {
+    if (err.message === 'CANNOT_UNLINK_LAST_AUTHENTICATION_METHOD') {
+      res.status(400).json({ error: 'Cannot unlink your last active login method' });
+      return;
+    }
+    res.status(500).json({ error: err.message || 'Failed to unlink provider' });
+  }
+}
+
+/**
+ * BFF Endpoint: POST /api/auth/recovery/request
+ * Submits an audited account recovery ticket when a user loses access to providers.
+ */
+export async function handleBffRecoveryRequest(req: Request, res: Response): Promise<void> {
+  res.setHeader('Cache-Control', 'no-store');
+  const { claimedEmail, provider, contactInfo, details } = req.body || {};
+
+  if (!claimedEmail || typeof claimedEmail !== 'string' || !claimedEmail.includes('@')) {
+    res.status(400).json({ error: 'Valid email address is required' });
+    return;
+  }
+
+  try {
+    const result = await directOAuthService.submitRecoveryRequest(
+      claimedEmail,
+      provider || 'all',
+      contactInfo,
+      details
+    );
+    res.status(200).json({
+      status: 'RECEIVED',
+      message: 'Recovery request logged securely. Support will review cryptographic audit logs and verify account ownership.',
+      requestId: result.requestId
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to submit recovery request' });
+  }
+}
+
+/**
+ * BFF Endpoint: GET /api/auth/recovery/guidance
+ * Returns recovery links and official guidance for Google and GitHub.
+ */
+export async function handleBffRecoveryGuidance(req: Request, res: Response): Promise<void> {
+  res.setHeader('Cache-Control', 'no-store');
+  const guidance = directOAuthService.getRecoveryGuidance();
+  res.status(200).json(guidance);
 }
 
 /**

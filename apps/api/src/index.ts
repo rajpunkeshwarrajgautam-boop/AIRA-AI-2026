@@ -76,6 +76,11 @@ import {
   handleBffOAuthGoogleCallback,
   handleBffOAuthGithubStart,
   handleBffOAuthGithubCallback,
+  handleBffOAuthLinkStart,
+  handleBffGetProviders,
+  handleBffUnlinkProvider,
+  handleBffRecoveryRequest,
+  handleBffRecoveryGuidance,
   handleBffSession,
   handleBffSignOut,
   isAllowedOrigin
@@ -203,6 +208,39 @@ app.get('/api/auth/oauth/github/start', (req: Request, res: Response) => {
 app.get('/api/auth/oauth/github/callback', (req: Request, res: Response) => {
   handleBffOAuthGithubCallback(req, res).catch(() => {
     res.status(502).json({ error: 'GitHub OAuth callback failed' });
+  });
+});
+// Account Linking endpoints (authenticated user initiates linking of secondary provider)
+app.get('/api/auth/oauth/google/link', (req: Request, res: Response) => {
+  handleBffOAuthLinkStart(req, res, 'google').catch((err) => {
+    res.status(500).json({ error: err.message || 'OAuth linking start failed' });
+  });
+});
+app.get('/api/auth/oauth/github/link', (req: Request, res: Response) => {
+  handleBffOAuthLinkStart(req, res, 'github').catch((err) => {
+    res.status(500).json({ error: err.message || 'OAuth linking start failed' });
+  });
+});
+// Linked providers listing & unlinking
+app.get('/api/auth/providers', (req: Request, res: Response) => {
+  handleBffGetProviders(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'Failed to get providers' });
+  });
+});
+app.post('/api/auth/providers/:provider/unlink', (req: Request, res: Response) => {
+  handleBffUnlinkProvider(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'Failed to unlink provider' });
+  });
+});
+// Account recovery guidance & audited support requests
+app.get('/api/auth/recovery/guidance', (req: Request, res: Response) => {
+  handleBffRecoveryGuidance(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'Failed to get recovery guidance' });
+  });
+});
+app.post('/api/auth/recovery/request', (req: Request, res: Response) => {
+  handleBffRecoveryRequest(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'Failed to submit recovery request' });
   });
 });
 app.get('/api/auth/session', handleBffSession);
