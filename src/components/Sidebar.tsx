@@ -442,8 +442,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   onClick={neonUser && onOpenBilling ? onOpenBilling : onOpenAuth}
                   className="flex min-w-0 items-center space-x-2.5 p-2 rounded-xl hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark border border-claude-border-light/60 dark:border-claude-border-dark/60 transition-all flex-1 text-left active:scale-[0.98]"
                 >
-                  <div className="w-7 h-7 rounded-[8px] bg-gradient-to-br from-claude-terracotta to-[#eb6e4b] text-white font-semibold text-xs flex items-center justify-center flex-shrink-0 shadow-sm">
-                    {neonUser ? (neonUser.name ? neonUser.name.slice(0, 2).toUpperCase() : 'AI') : <ShieldCheck className="w-3.5 h-3.5" />}
+                  <div className="w-7 h-7 rounded-[8px] bg-gradient-to-br from-claude-terracotta to-[#eb6e4b] text-white font-semibold text-xs flex items-center justify-center flex-shrink-0 shadow-sm overflow-hidden">
+                    {neonUser?.image ? (
+                      <img src={neonUser.image} alt={neonUser.name || 'User'} className="w-full h-full object-cover" />
+                    ) : neonUser ? (
+                      neonUser.name ? neonUser.name.slice(0, 2).toUpperCase() : 'AI'
+                    ) : (
+                      <ShieldCheck className="w-3.5 h-3.5" />
+                    )}
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="text-[12px] font-bold text-claude-text-light dark:text-white tracking-tight truncate">

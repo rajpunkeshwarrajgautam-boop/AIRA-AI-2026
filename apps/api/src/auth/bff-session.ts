@@ -804,6 +804,105 @@ export async function handleBffSignUp(req: Request, res: Response): Promise<void
 }
 
 /**
+ * BFF Endpoint: POST /api/auth/oauth-exchange
+ * 
+ * Bridges an upstream Neon Auth OAuth session (e.g. from Google OAuth) into a first-party
+ * signed HttpOnly BFF session cookie (__Host-aira_auth_session / aira_auth_session).
+ * 
+ * Cryptographically verifies the upstream session token with Neon Auth before issuing the BFF cookie.
+ */
+export async function handleBffOAuthExchange(req: Request, res: Response): Promise<void> {
+  if (!verifyCsrfAndOrigin(req)) {
+    res.status(403).json({ error: 'CSRF validation failed: missing origin or anti-CSRF header' });
+    return;
+  }
+
+  const { sessionToken } = req.body || {};
+  if (!sessionToken || typeof sessionToken !== 'string') {
+    res.status(400).json({ error: 'Valid sessionToken is required for OAuth exchange' });
+    return;
+  }
+
+  const baseUrl = getAuthBaseUrl();
+  const clientOrigin = (req.headers.origin as string) || (req.headers.referer as string) || 'http://localhost:5173';
+
+  // 1. Verify session token with Neon Auth /get-session
+  const upstreamCookie = `__Secure-neon-auth.session_token=${sessionToken}; neon-auth.session_token=${sessionToken}`;
+  const verifyRes = await fetch(`${baseUrl}/get-session`, {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${sessionToken}`,
+      'Cookie': upstreamCookie,
+      'Origin': clientOrigin
+    }
+  });
+
+  if (!verifyRes.ok) {
+    res.status(401).json({ error: 'Upstream Neon Auth session is invalid or expired' });
+    return;
+  }
+
+  const verifyData = await verifyRes.json();
+  if (!verifyData || !verifyData.user || !verifyData.session) {
+    res.status(401).json({ error: 'No active session found for supplied token' });
+    return;
+  }
+
+  const user = verifyData.user;
+  const verifiedSessionToken = verifyData.session.token || sessionToken;
+
+  // 2. Obtain EdDSA signed JWT from Neon Auth to guarantee cryptographic provenance
+  const { token: jwt, expiresAt: jwtExpiresAt } = await fetchNeonJwtFromServer(
+    verifiedSessionToken,
+    upstreamCookie,
+    clientOrigin
+  );
+
+  // 3. Cryptographically verify the EdDSA JWT against JWKS
+  const principal = await verifyNeonAuthToken(jwt);
+  const expectedSubject = principal.userId.replace(/^neon_user_/, '');
+  if (expectedSubject !== user.id && principal.userId !== user.id) {
+    res.status(401).json({ error: 'Cryptographic principal mismatch during OAuth exchange' });
+    return;
+  }
+
+  // 4. Create first-party BFF session in database and set secure first-party HttpOnly cookie
+  const sessionId = generateSessionId();
+  const csrfToken = generateCsrfToken();
+  const now = Date.now();
+
+  const session: BffServerSession = {
+    id: sessionId,
+    userId: user.id,
+    email: user.email,
+    name: user.name,
+    sessionToken: verifiedSessionToken,
+    upstreamCookie,
+    jwt,
+    jwtExpiresAt,
+    csrfToken,
+    createdAt: now,
+    expiresAt: now + (BFF_SESSION_TTL_SECONDS * 1000),
+    lastRotatedAt: now
+  };
+
+  await bffSessionStore.set(session);
+  setBffSessionCookie(res, sessionId);
+
+  // 5. Respond with public user profile and csrfToken
+  res.status(200).json({
+    status: 'AUTHENTICATED',
+    user: {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      image: user.image || null
+    },
+    csrfToken
+  });
+}
+
+/**
  * BFF Endpoint: GET /api/auth/session
  */
 export async function handleBffSession(req: Request, res: Response): Promise<void> {
@@ -820,7 +919,8 @@ export async function handleBffSession(req: Request, res: Response): Promise<voi
     user: {
       id: session.userId,
       email: session.email,
-      name: session.name
+      name: session.name,
+      image: (session as any).image || null
     },
     csrfToken: session.csrfToken
   });

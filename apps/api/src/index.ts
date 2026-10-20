@@ -71,6 +71,7 @@ import {
   createCsrfProtectionMiddleware,
   handleBffSignUp,
   handleBffSignIn,
+  handleBffOAuthExchange,
   handleBffSession,
   handleBffSignOut,
   isAllowedOrigin
@@ -162,6 +163,11 @@ app.post('/api/auth/sign-in', (req: Request, res: Response) => {
 app.post('/api/auth/sign-up', (req: Request, res: Response) => {
   handleBffSignUp(req, res).catch((err) => {
     res.status(500).json({ error: err.message || 'BFF sign up failed' });
+  });
+});
+app.post('/api/auth/oauth-exchange', (req: Request, res: Response) => {
+  handleBffOAuthExchange(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'BFF OAuth exchange failed' });
   });
 });
 app.get('/api/auth/session', handleBffSession);

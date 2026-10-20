@@ -103,7 +103,8 @@ export async function verifyNeonAuthToken(token: string): Promise<ManagedPrincip
   if (!valid) throw new Error('INVALID_NEON_AUTH_JWT_SIGNATURE');
 
   const now = Math.floor(Date.now() / 1000);
-  if (payload.iss !== issuer ||
+  const validIss = payload.iss === issuer || payload.iss === issuer + '/neondb/auth';
+  if (!validIss ||
       typeof payload.sub !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(payload.sub) ||
       !Number.isInteger(payload.exp) || payload.exp! <= now ||
       !Number.isInteger(payload.iat) || payload.iat! > now + 60 ||
