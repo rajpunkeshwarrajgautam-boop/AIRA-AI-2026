@@ -72,6 +72,8 @@ import {
   handleBffSignUp,
   handleBffSignIn,
   handleBffOAuthExchange,
+  handleBffOAuthGoogleStart,
+  handleBffOAuthGoogleCallback,
   handleBffSession,
   handleBffSignOut,
   isAllowedOrigin
@@ -168,6 +170,21 @@ app.post('/api/auth/sign-up', (req: Request, res: Response) => {
 app.post('/api/auth/oauth-exchange', (req: Request, res: Response) => {
   handleBffOAuthExchange(req, res).catch((err) => {
     res.status(500).json({ error: err.message || 'BFF OAuth exchange failed' });
+  });
+});
+app.post('/api/auth/oauth/google/start', (req: Request, res: Response) => {
+  handleBffOAuthGoogleStart(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'OAuth start failed' });
+  });
+});
+app.get('/api/auth/oauth/google/start', (req: Request, res: Response) => {
+  handleBffOAuthGoogleStart(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'OAuth start failed' });
+  });
+});
+app.get('/api/auth/oauth/google/callback', (req: Request, res: Response) => {
+  handleBffOAuthGoogleCallback(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'OAuth callback failed' });
   });
 });
 app.get('/api/auth/session', handleBffSession);

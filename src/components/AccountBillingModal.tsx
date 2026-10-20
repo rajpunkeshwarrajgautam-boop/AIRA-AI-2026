@@ -148,8 +148,14 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
         {/* Header */}
         <div className="p-5 md:p-6 border-b border-white/10 flex items-center justify-between shrink-0 bg-stone-900/50">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[#cc785c] to-[#eb6e4b] flex items-center justify-center text-white font-bold text-sm shadow-md">
-              {user ? (user.name ? user.name.slice(0, 2).toUpperCase() : 'AI') : 'G'}
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[#cc785c] to-[#eb6e4b] flex items-center justify-center text-white font-bold text-sm shadow-md overflow-hidden">
+              {user?.image ? (
+                <img src={user.image} alt={user.name || 'User'} className="w-full h-full object-cover" />
+              ) : user ? (
+                user.name ? user.name.slice(0, 2).toUpperCase() : 'AI'
+              ) : (
+                'G'
+              )}
             </div>
             <div>
               <h2 className="text-xl font-medium tracking-tight text-white flex items-center gap-2">

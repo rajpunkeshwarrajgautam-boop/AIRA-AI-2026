@@ -342,6 +342,21 @@ export async function readBffSessionFromCookie(req: Request): Promise<BffServerS
   return session;
 }
 
+export const BFF_FLOW_COOKIE_NAME_PROD = '__Host-aira_oauth_flow';
+export const BFF_FLOW_COOKIE_NAME_DEV = 'aira_oauth_flow';
+
+function appendSetCookieHeader(res: Response, cookieHeaders: string | string[]): void {
+  const toAdd = Array.isArray(cookieHeaders) ? cookieHeaders : [cookieHeaders];
+  const existing = typeof res?.getHeader === 'function' ? res.getHeader('Set-Cookie') : undefined;
+  if (Array.isArray(existing)) {
+    res.setHeader('Set-Cookie', [...existing, ...toAdd]);
+  } else if (typeof existing === 'string') {
+    res.setHeader('Set-Cookie', [existing, ...toAdd]);
+  } else {
+    res.setHeader('Set-Cookie', toAdd.length === 1 ? toAdd[0] : toAdd);
+  }
+}
+
 export function setBffSessionCookie(res: Response, sessionOrId: BffServerSession | string): void {
   const isSecure = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
   const cookieName = isSecure ? BFF_COOKIE_NAME_PROD : BFF_COOKIE_NAME_DEV;
@@ -359,7 +374,7 @@ export function setBffSessionCookie(res: Response, sessionOrId: BffServerSession
     attributes.push('Secure');
   }
 
-  res.setHeader('Set-Cookie', attributes.join('; '));
+  appendSetCookieHeader(res, attributes.join('; '));
 }
 
 export function clearBffSessionCookie(res: Response): void {
@@ -378,7 +393,78 @@ export function clearBffSessionCookie(res: Response): void {
     return attributes.join('; ');
   });
 
-  res.setHeader('Set-Cookie', headers);
+  appendSetCookieHeader(res, headers);
+}
+
+export function setBffOAuthFlowCookie(res: Response, flowId: string, timestamp: number): void {
+  const isSecure = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
+  const cookieName = isSecure ? BFF_FLOW_COOKIE_NAME_PROD : BFF_FLOW_COOKIE_NAME_DEV;
+  const payload = `${flowId}:${timestamp}`;
+  const signature = signSessionId(payload);
+  const cookieVal = `${payload}.${signature}`;
+
+  const attributes = [
+    `${cookieName}=${encodeURIComponent(cookieVal)}`,
+    'Path=/',
+    'Max-Age=900',
+    'HttpOnly',
+    'SameSite=Lax'
+  ];
+  if (isSecure) {
+    attributes.push('Secure');
+  }
+
+  appendSetCookieHeader(res, attributes.join('; '));
+}
+
+export function parseBffOAuthFlowCookie(req: Request): { flowId: string; timestamp: number } | null {
+  const cookies = parseCookies(req.headers.cookie);
+  const rawToken = cookies[BFF_FLOW_COOKIE_NAME_PROD] || cookies[BFF_FLOW_COOKIE_NAME_DEV];
+  if (!rawToken) return null;
+
+  const idx = rawToken.lastIndexOf('.');
+  if (idx <= 0) return null;
+
+  const payload = rawToken.slice(0, idx);
+  const signature = rawToken.slice(idx + 1);
+  const expectedSig = signSessionId(payload);
+
+  if (!safeEqual(signature, expectedSig)) {
+    return null;
+  }
+
+  const parts = payload.split(':');
+  if (parts.length !== 2) return null;
+
+  const flowId = parts[0];
+  const timestamp = Number(parts[1]);
+  if (!flowId || !Number.isFinite(timestamp)) return null;
+
+  const now = Date.now();
+  if (now - timestamp > 15 * 60 * 1000 || timestamp > now + 60_000) {
+    return null;
+  }
+
+  return { flowId, timestamp };
+}
+
+export function clearBffOAuthFlowCookie(res: Response): void {
+  const isSecure = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
+  const cookieNames = [BFF_FLOW_COOKIE_NAME_PROD, BFF_FLOW_COOKIE_NAME_DEV];
+
+  const headers = cookieNames.map((name) => {
+    const attributes = [
+      `${name}=`,
+      'Path=/',
+      'Max-Age=0',
+      'HttpOnly',
+      'SameSite=Lax'
+    ];
+    if (isSecure) attributes.push('Secure');
+    return attributes.join('; ');
+  });
+
+  appendSetCookieHeader(res, headers);
 }
 
 const TRUSTED_ORIGINS_DEFAULT = [
@@ -900,6 +986,220 @@ export async function handleBffOAuthExchange(req: Request, res: Response): Promi
     },
     csrfToken
   });
+}
+
+/**
+ * BFF Endpoint: POST /api/auth/oauth/google/start (and GET /api/auth/oauth/google/start)
+ * 
+ * Initiates Google OAuth with Neon Auth from the backend:
+ * - Generates an opaque random 192-bit flowId.
+ * - Sets a signed HttpOnly first-party state cookie (__Host-aira_oauth_flow / aira_oauth_flow).
+ * - Issues upstream /sign-in/social request to Neon Auth with the first-party callback URL:
+ *   ${origin}/api/auth/oauth/google/callback?flowId=${flowId}
+ * - Returns the Google authorization URL or 302-redirects directly.
+ */
+export async function handleBffOAuthGoogleStart(req: Request, res: Response): Promise<void> {
+  if (req.method === 'POST' && !verifyCsrfAndOrigin(req)) {
+    res.status(403).json({ error: 'CSRF validation failed: missing origin or anti-CSRF header' });
+    return;
+  }
+
+  const flowId = randomBytes(24).toString('base64url');
+  const now = Date.now();
+  setBffOAuthFlowCookie(res, flowId, now);
+
+  const baseUrl = getAuthBaseUrl();
+  let clientOrigin = (req.headers.origin as string) || (req.headers.referer as string);
+  if (clientOrigin) {
+    try {
+      const u = new URL(clientOrigin);
+      clientOrigin = `${u.protocol}//${u.host}`;
+    } catch {
+      clientOrigin = '';
+    }
+  }
+  if (!clientOrigin || !isAllowedOrigin(clientOrigin, req.headers.host)) {
+    if (req.headers.host) {
+      const proto = (req.headers['x-forwarded-proto'] as string) || (process.env.NODE_ENV === 'production' || process.env.VERCEL ? 'https' : 'http');
+      clientOrigin = `${proto}://${req.headers.host}`;
+    } else {
+      clientOrigin = getTrustedOrigins()[0] || 'http://localhost:5173';
+    }
+  }
+
+  const callbackURL = `${clientOrigin}/api/auth/oauth/google/callback?flowId=${encodeURIComponent(flowId)}`;
+
+  const upstreamRes = await fetch(`${baseUrl}/sign-in/social`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Origin': clientOrigin
+    },
+    body: JSON.stringify({
+      provider: 'google',
+      callbackURL
+    })
+  });
+
+  if (!upstreamRes.ok) {
+    const errText = await upstreamRes.text().catch(() => '');
+    console.error('[handleBffOAuthGoogleStart] Neon Auth social sign-in init failed:', upstreamRes.status, errText);
+    res.status(upstreamRes.status).json({ error: 'Failed to initiate Google OAuth with auth service' });
+    return;
+  }
+
+  const data = await upstreamRes.json();
+  if (!data?.url) {
+    res.status(502).json({ error: 'Auth provider did not return redirect URL' });
+    return;
+  }
+
+  if (req.method === 'GET') {
+    res.redirect(302, data.url);
+    return;
+  }
+
+  res.status(200).json({ url: data.url, redirect: true });
+}
+
+/**
+ * BFF Endpoint: GET /api/auth/oauth/google/callback
+ * 
+ * First-party callback destination for Google OAuth:
+ * - Validates cryptographic flow state from the __Host-aira_oauth_flow cookie against flowId.
+ * - Anti-replay: clears the flow cookie immediately upon receipt.
+ * - Handles OAuth provider errors with safe redirect to /?auth_error=...
+ * - Queries the newly established Google OAuth session from neon_auth tables.
+ * - Obtains and cryptographically verifies the EdDSA JWT from Neon Auth.
+ * - Mints a persistent first-party signed HttpOnly BFF session cookie (__Host-aira_auth_session).
+ * - Redirects to /?auth_success=1 for instantaneous frontend hydration and guest migration.
+ */
+export async function handleBffOAuthGoogleCallback(req: Request, res: Response): Promise<void> {
+  const queryFlowId = req.query.flowId as string | undefined;
+  const errorParam = req.query.error as string | undefined;
+
+  let clientOrigin = '';
+  if (req.headers.host) {
+    const proto = (req.headers['x-forwarded-proto'] as string) || (process.env.NODE_ENV === 'production' || process.env.VERCEL ? 'https' : 'http');
+    clientOrigin = `${proto}://${req.headers.host}`;
+  }
+  if (!clientOrigin || !isAllowedOrigin(clientOrigin, req.headers.host)) {
+    clientOrigin = getTrustedOrigins()[0] || 'http://localhost:5173';
+  }
+
+  // Handle OAuth provider error (e.g. user cancelled login)
+  if (errorParam) {
+    console.warn('[handleBffOAuthGoogleCallback] OAuth provider returned error:', errorParam);
+    clearBffOAuthFlowCookie(res);
+    res.redirect(302, `${clientOrigin}/?auth_error=${encodeURIComponent(errorParam)}`);
+    return;
+  }
+
+  // Validate state cookie and query flowId
+  const flowCookie = parseBffOAuthFlowCookie(req);
+  if (!flowCookie || !queryFlowId || flowCookie.flowId !== queryFlowId) {
+    console.warn('[handleBffOAuthGoogleCallback] CSRF/State validation failed: missing or mismatched flow cookie');
+    clearBffOAuthFlowCookie(res);
+    res.redirect(302, `${clientOrigin}/?auth_error=state_mismatch`);
+    return;
+  }
+
+  // Clear the flow cookie immediately (anti-replay)
+  clearBffOAuthFlowCookie(res);
+
+  // Look up the newly established Google OAuth session in neon_auth tables
+  try {
+    const isMemoryOnly = !Boolean(process.env.DATABASE_URL?.trim());
+    let sessionRow: {
+      token: string;
+      userId: string;
+      createdAt: Date | number;
+      expiresAt: Date | number;
+      email?: string;
+      name?: string;
+      image?: string;
+    } | null = (req as any).testMockOAuthSession || null;
+
+    if (!sessionRow && !isMemoryOnly) {
+      // 5-second grace window prior to flow initiation
+      const threshold = new Date(flowCookie.timestamp - 5000);
+      const row = await db('neon_auth.session as s')
+        .join('neon_auth.user as u', 'u.id', 's.userId')
+        .join('neon_auth.account as a', function() {
+          this.on('a.userId', '=', 's.userId').andOn('a.providerId', '=', db.raw('?', ['google']));
+        })
+        .where('s.createdAt', '>=', threshold)
+        .andWhere('s.expiresAt', '>', new Date())
+        .select(
+          's.token',
+          's.userId',
+          's.createdAt',
+          's.expiresAt',
+          'u.email',
+          'u.name',
+          'u.image'
+        )
+        .orderBy('s.createdAt', 'desc')
+        .first();
+
+      if (row) {
+        sessionRow = row;
+      }
+    }
+
+    if (!sessionRow || !sessionRow.token) {
+      console.error('[handleBffOAuthGoogleCallback] No matching active Neon Auth session found after Google OAuth');
+      res.redirect(302, `${clientOrigin}/?auth_error=session_not_found`);
+      return;
+    }
+
+    // Cryptographically verify upstream token and retrieve EdDSA JWT from Neon Auth
+    const upstreamCookie = `__Secure-neon-auth.session_token=${sessionRow.token}; neon-auth.session_token=${sessionRow.token}`;
+    const { token: jwt, expiresAt: jwtExpiresAt } = await fetchNeonJwtFromServer(
+      sessionRow.token,
+      upstreamCookie,
+      clientOrigin
+    );
+
+    // Verify JWT cryptographic signature against Neon Auth JWKS
+    const principal = await verifyNeonAuthToken(jwt);
+    const expectedSubject = principal.userId.replace(/^neon_user_/, '');
+    if (expectedSubject !== sessionRow.userId && principal.userId !== sessionRow.userId) {
+      console.error('[handleBffOAuthGoogleCallback] Cryptographic principal mismatch:', principal.userId, 'vs', sessionRow.userId);
+      res.redirect(302, `${clientOrigin}/?auth_error=principal_mismatch`);
+      return;
+    }
+
+    // Create durable first-party BFF session in PostgreSQL bff_sessions
+    const sessionId = generateSessionId();
+    const csrfToken = generateCsrfToken();
+    const now = Date.now();
+
+    const session: BffServerSession = {
+      id: sessionId,
+      userId: sessionRow.userId,
+      email: sessionRow.email || undefined,
+      name: sessionRow.name || undefined,
+      sessionToken: sessionRow.token,
+      upstreamCookie,
+      jwt,
+      jwtExpiresAt,
+      csrfToken,
+      createdAt: now,
+      expiresAt: now + (BFF_SESSION_TTL_SECONDS * 1000),
+      lastRotatedAt: now
+    };
+    (session as any).image = sessionRow.image || undefined;
+
+    await bffSessionStore.set(session);
+    setBffSessionCookie(res, sessionId);
+
+    // Redirect to root with auth_success marker for instant guest chat migration & UX feedback
+    res.redirect(302, `${clientOrigin}/?auth_success=1`);
+  } catch (err: any) {
+    console.error('[handleBffOAuthGoogleCallback] Error completing OAuth handoff:', err?.message || err);
+    res.redirect(302, `${clientOrigin}/?auth_error=exchange_failed`);
+  }
 }
 
 /**

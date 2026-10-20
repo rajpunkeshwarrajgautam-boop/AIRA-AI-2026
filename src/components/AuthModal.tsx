@@ -757,8 +757,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
               <div className="space-y-4">
                 <div className="p-4 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark space-y-3">
                   <div className="flex items-center space-x-3">
-                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-claude-terracotta to-[#eb6e4b] flex items-center justify-center text-white font-bold text-sm shadow-md">
-                      {currentUser.name ? currentUser.name.slice(0, 2).toUpperCase() : 'AI'}
+                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-claude-terracotta to-[#eb6e4b] flex items-center justify-center text-white font-bold text-sm shadow-md overflow-hidden">
+                      {currentUser.image ? (
+                        <img src={currentUser.image} alt={currentUser.name || 'User'} className="w-full h-full object-cover" />
+                      ) : (
+                        currentUser.name ? currentUser.name.slice(0, 2).toUpperCase() : 'AI'
+                      )}
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-bold text-claude-text-light dark:text-white truncate">

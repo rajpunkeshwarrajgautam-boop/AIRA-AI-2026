@@ -19,13 +19,19 @@ import test from 'node:test';
 import type { Request, Response } from 'express';
 import {
   handleBffOAuthExchange,
+  handleBffOAuthGoogleStart,
+  handleBffOAuthGoogleCallback,
+  setBffOAuthFlowCookie,
+  parseBffOAuthFlowCookie,
+  clearBffOAuthFlowCookie,
   handleBffSession,
   readBffSessionFromCookie,
   bffSessionStore,
   BffServerSession,
   generateSessionId,
   generateCsrfToken,
-  BFF_COOKIE_NAME_DEV
+  BFF_COOKIE_NAME_DEV,
+  BFF_FLOW_COOKIE_NAME_DEV
 } from '../apps/api/src/auth/bff-session.js';
 import { clearJwksCacheForTesting } from '../apps/api/src/auth/neon-auth-principal.js';
 import { NeonAuthClient } from '../src/lib/neonAuth.js';
@@ -142,6 +148,21 @@ test('Google OAuth Login Loop Remediation & BFF Session Bridge Suite', async (t)
         headers: new Headers(),
         text: async () => 'Unauthorized token request',
         json: async () => ({ error: 'Unauthorized token request' })
+      };
+    }
+
+    // Mock Neon Auth /sign-in/social
+    if (urlStr.includes('/sign-in/social')) {
+      const body = JSON.stringify({
+        url: 'https://accounts.google.com/o/oauth2/v2/auth?client_id=mock_id&redirect_uri=mock_redirect',
+        redirect: true
+      });
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-length': String(body.length), 'content-type': 'application/json' }),
+        text: async () => body,
+        json: async () => JSON.parse(body)
       };
     }
 
@@ -385,6 +406,238 @@ test('Google OAuth Login Loop Remediation & BFF Session Bridge Suite', async (t)
       assert.equal(secondRestore.user.id, mockGoogleUser.id);
     } finally {
       globalThis.fetch = prevGlobalFetch;
+    }
+  });
+
+  await t.test('7. handleBffOAuthGoogleStart initiates Google OAuth and sets signed flow cookie', async () => {
+    let statusCode = 0;
+    let responseBody: any = null;
+    let setCookieHeaders: string[] = [];
+
+    const mockReq = {
+      method: 'POST',
+      headers: {
+        host: 'localhost:3001',
+        origin: 'http://localhost:5173',
+        'x-aira-csrf-protection': '1'
+      }
+    } as any;
+
+    const mockRes = {
+      status: (code: number) => {
+        statusCode = code;
+        return {
+          json: (data: any) => {
+            responseBody = data;
+          }
+        };
+      },
+      getHeader: (name: string) => {
+        if (name === 'Set-Cookie') return setCookieHeaders;
+        return undefined;
+      },
+      setHeader: (name: string, val: any) => {
+        if (name === 'Set-Cookie') {
+          setCookieHeaders = Array.isArray(val) ? val : [val];
+        }
+      }
+    } as any;
+
+    await handleBffOAuthGoogleStart(mockReq, mockRes);
+
+    assert.equal(statusCode, 200);
+    assert.ok(responseBody?.url?.includes('accounts.google.com'));
+    assert.equal(responseBody?.redirect, true);
+
+    const flowCookie = setCookieHeaders.find(h => h.includes(BFF_FLOW_COOKIE_NAME_DEV));
+    assert.ok(flowCookie, 'Must set flow cookie');
+    assert.ok(flowCookie.includes('HttpOnly'), 'Flow cookie must be HttpOnly');
+    assert.ok(flowCookie.includes('SameSite=Lax'), 'Flow cookie must be SameSite=Lax');
+  });
+
+  await t.test('8. handleBffOAuthGoogleStart rejects untrusted origin or missing anti-CSRF on POST', async () => {
+    let statusCode = 0;
+    let responseBody: any = null;
+
+    const mockReq = {
+      method: 'POST',
+      headers: {
+        host: 'localhost:3001',
+        origin: 'https://malicious-attacker.com'
+      }
+    } as any;
+
+    const mockRes = {
+      status: (code: number) => {
+        statusCode = code;
+        return {
+          json: (data: any) => {
+            responseBody = data;
+          }
+        };
+      },
+      getHeader: () => undefined,
+      setHeader: () => {}
+    } as any;
+
+    await handleBffOAuthGoogleStart(mockReq, mockRes);
+    assert.equal(statusCode, 403, 'Must reject untrusted origin with 403');
+    assert.ok(responseBody?.error?.includes('CSRF'));
+  });
+
+  await t.test('9. handleBffOAuthGoogleCallback validates flow state, mints first-party session, and redirects to /?auth_success=1', async () => {
+    const flowId = 'test_flow_id_12345';
+    const now = Date.now();
+    let setCookieHeaders: string[] = [];
+    let redirectUrl = '';
+    let redirectCode = 0;
+
+    // Set flow cookie on a mock response to generate valid signed cookie string
+    const cookieGenRes = {
+      getHeader: () => undefined,
+      setHeader: (name: string, val: any) => {
+        if (name === 'Set-Cookie') {
+          setCookieHeaders = Array.isArray(val) ? val : [val];
+        }
+      }
+    } as any;
+    setBffOAuthFlowCookie(cookieGenRes, flowId, now);
+    const flowCookieHeader = setCookieHeaders[0];
+
+    const mockReq = {
+      query: { flowId },
+      headers: {
+        host: 'localhost:3001',
+        cookie: flowCookieHeader
+      },
+      // In-memory test mock session fixture
+      testMockOAuthSession: {
+        token: mockSessionToken,
+        userId: mockGoogleUser.id,
+        createdAt: now,
+        expiresAt: now + 86400000,
+        email: mockGoogleUser.email,
+        name: mockGoogleUser.name,
+        image: mockGoogleUser.image
+      }
+    } as any;
+
+    let callbackSetCookies: string[] = [];
+    const mockRes = {
+      getHeader: (name: string) => {
+        if (name === 'Set-Cookie') return callbackSetCookies;
+        return undefined;
+      },
+      setHeader: (name: string, val: any) => {
+        if (name === 'Set-Cookie') {
+          callbackSetCookies = Array.isArray(val) ? val : [val];
+        }
+      },
+      redirect: (code: number, url: string) => {
+        redirectCode = code;
+        redirectUrl = url;
+      }
+    } as any;
+
+    await handleBffOAuthGoogleCallback(mockReq, mockRes);
+
+    assert.equal(redirectCode, 302, 'Must redirect with 302');
+    assert.ok(redirectUrl.includes('/?auth_success=1'), 'Redirect URL must contain auth_success=1');
+
+    // Verify session cookie was set
+    const sessionCookie = callbackSetCookies.find(h => h.includes(BFF_COOKIE_NAME_DEV));
+    assert.ok(sessionCookie, 'Must set first-party session cookie');
+    assert.ok(sessionCookie.includes('HttpOnly'), 'Session cookie must be HttpOnly');
+
+    // Verify flow cookie was cleared (anti-replay)
+    const clearedFlowCookie = callbackSetCookies.find(h => h.includes(BFF_FLOW_COOKIE_NAME_DEV) && h.includes('Max-Age=0'));
+    assert.ok(clearedFlowCookie, 'Flow cookie must be cleared on callback processing');
+  });
+
+  await t.test('10. handleBffOAuthGoogleCallback rejects CSRF/state mismatch or missing cookie', async () => {
+    let redirectUrl = '';
+    let redirectCode = 0;
+
+    const mockReq = {
+      query: { flowId: 'unmatched_flow_id' },
+      headers: {
+        host: 'localhost:3001'
+        // Missing cookie!
+      }
+    } as any;
+
+    const mockRes = {
+      getHeader: () => undefined,
+      setHeader: () => {},
+      redirect: (code: number, url: string) => {
+        redirectCode = code;
+        redirectUrl = url;
+      }
+    } as any;
+
+    await handleBffOAuthGoogleCallback(mockReq, mockRes);
+    assert.equal(redirectCode, 302);
+    assert.ok(redirectUrl.includes('auth_error=state_mismatch'), 'Must redirect with auth_error=state_mismatch');
+  });
+
+  await t.test('11. handleBffOAuthGoogleCallback handles OAuth provider error gracefully', async () => {
+    let redirectUrl = '';
+    let redirectCode = 0;
+
+    const mockReq = {
+      query: { error: 'access_denied' },
+      headers: {
+        host: 'localhost:3001'
+      }
+    } as any;
+
+    const mockRes = {
+      getHeader: () => undefined,
+      setHeader: () => {},
+      redirect: (code: number, url: string) => {
+        redirectCode = code;
+        redirectUrl = url;
+      }
+    } as any;
+
+    await handleBffOAuthGoogleCallback(mockReq, mockRes);
+    assert.equal(redirectCode, 302);
+    assert.ok(redirectUrl.includes('auth_error=access_denied'), 'Must redirect with auth_error=access_denied');
+  });
+
+  await t.test('12. NeonAuthClient.signInWithSocial routes through /api/auth/oauth/google/start in BFF mode', async () => {
+    const client = new NeonAuthClient();
+    client.enableBffMode(true);
+
+    let bffStartDispatched = false;
+    const prevFetch = globalThis.fetch;
+
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<any> => {
+      const urlStr = typeof input === 'string' ? input : input.toString();
+      if (urlStr.includes('/api/auth/oauth/google/start')) {
+        bffStartDispatched = true;
+        assert.equal(init?.method, 'POST');
+        const body = JSON.parse((init?.body as string) || '{}');
+        assert.equal(body.provider, 'google');
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            url: 'https://accounts.google.com/o/oauth2/v2/auth?mock=1',
+            redirect: true
+          })
+        };
+      }
+      return prevFetch(input, init);
+    };
+
+    try {
+      const res = await client.signInWithSocial({ provider: 'google', autoRedirect: false });
+      assert.equal(bffStartDispatched, true, 'Must dispatch to /api/auth/oauth/google/start in BFF mode');
+      assert.ok(res.url.includes('accounts.google.com'));
+      assert.equal(res.redirect, true);
+    } finally {
+      globalThis.fetch = prevFetch;
     }
   });
 });

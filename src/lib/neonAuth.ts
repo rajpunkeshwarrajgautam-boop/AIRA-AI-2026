@@ -490,7 +490,7 @@ export class NeonAuthClient {
       // 0. Handle OAuth error query param if user cancelled or error occurred
       if (typeof window !== 'undefined' && window.location?.search) {
         const urlParams = new URLSearchParams(window.location.search);
-        const oauthError = urlParams.get('error');
+        const oauthError = urlParams.get('error') || urlParams.get('auth_error');
         if (oauthError) {
           console.warn('[NeonAuth] OAuth return error:', oauthError);
           const cleanUrl = window.location.pathname + window.location.hash;
@@ -515,6 +515,20 @@ export class NeonAuthClient {
             csrfToken: data.csrfToken
           };
           this.saveSession(session);
+
+          // Handle post-OAuth return cleanup and guest conversation linking
+          if (typeof window !== 'undefined' && window.location?.search) {
+            const hasAuthSuccess = window.location.search.includes('auth_success');
+            const hasAuthCallback = window.location.search.includes('auth_callback');
+            if (hasAuthSuccess || hasAuthCallback) {
+              const cleanUrl = window.location.pathname + window.location.hash;
+              window.history?.replaceState({}, document.title, cleanUrl);
+              await this.linkGuestSessionToServer().catch((linkErr) => {
+                console.warn('[NeonAuth] Post-OAuth guest linking notice:', linkErr?.message || linkErr);
+              });
+            }
+          }
+
           return session;
         }
       }
@@ -835,6 +849,42 @@ export class NeonAuthClient {
     callbackURL?: string;
     autoRedirect?: boolean;
   }): Promise<{ url: string; redirect: boolean }> {
+    if (this.isBffMode() && params.provider === 'google') {
+      const origin = (typeof window !== 'undefined' && window.location?.origin) || 'http://localhost:5173';
+      const response = await fetch(`${this.getApiBase()}/api/auth/oauth/google/start`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-aira-csrf-protection': '1',
+          'Origin': origin,
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          provider: params.provider,
+        }),
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ message: 'Google OAuth initialization failed' }));
+        throw new Error(err.message || err.error || `Google OAuth initialization failed (${response.status})`);
+      }
+
+      const data = await response.json();
+      if (!data || !data.url) {
+        throw new Error('Malformed response from Google OAuth start endpoint');
+      }
+
+      const autoRedirect = params.autoRedirect !== false;
+      if (autoRedirect && typeof window !== 'undefined' && window.location) {
+        window.location.href = data.url;
+      }
+
+      return {
+        url: data.url,
+        redirect: data.redirect ?? true,
+      };
+    }
+
     if (!this.baseUrl) {
       throw new Error('Neon Auth service is unconfigured in production environment (missing VITE_NEON_AUTH_URL)');
     }
