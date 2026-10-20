@@ -165,11 +165,18 @@ async function main() {
     // -------------------------------------------------------------
     console.log('[5/7] Step 2: Switch to Account B in the same browser session...');
     await page.locator('button[aria-label*="account"]').click();
-    await page.waitForSelector('#auth-modal-title', { timeout: 10000 });
-
-    // Sign out of Account A
-    await page.getByRole('button', { name: 'Sign Out' }).click();
-    await sleep(500);
+    const isBilling = await page.getByText('Account & Billing Center').isVisible({ timeout: 3000 }).catch(() => false);
+    if (isBilling) {
+      await page.getByRole('button', { name: /Security/i }).click();
+      await page.getByRole('button', { name: /Sign Out/i }).click();
+      await sleep(1000);
+      await page.locator('button[aria-label*="account"]').click();
+      await page.waitForSelector('#auth-modal-title', { timeout: 10000 });
+    } else {
+      await page.waitForSelector('#auth-modal-title', { timeout: 10000 });
+      await page.getByRole('button', { name: 'Sign Out' }).click();
+      await sleep(500);
+    }
 
     // Immediately register Account B
     await page.getByRole('button', { name: 'Create Account' }).click();
@@ -227,10 +234,17 @@ async function main() {
     // -------------------------------------------------------------
     console.log('[6/7] Step 3: Sign out to Guest workspace...');
     await page.locator('button[aria-label*="account"]').click();
-    await page.waitForSelector('#auth-modal-title', { timeout: 10000 });
-    await page.getByRole('button', { name: 'Sign Out' }).click();
-    await page.keyboard.press('Escape');
-    await sleep(1000);
+    const isBillingGuest = await page.getByText('Account & Billing Center').isVisible({ timeout: 3000 }).catch(() => false);
+    if (isBillingGuest) {
+      await page.getByRole('button', { name: /Security/i }).click();
+      await page.getByRole('button', { name: /Sign Out/i }).click();
+      await sleep(1000);
+    } else {
+      await page.waitForSelector('#auth-modal-title', { timeout: 10000 });
+      await page.getByRole('button', { name: 'Sign Out' }).click();
+      await page.keyboard.press('Escape');
+      await sleep(1000);
+    }
 
     // Neither Account A nor Account B secret in guest DOM
     assert.equal(await page.getByText(tokenA).count(), 0, 'Guest DOM must not show Account A data');

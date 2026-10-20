@@ -63,7 +63,7 @@ test(`${provider}: Neon Auth OAuth Verifier Contract & Handoff Suite`, async (t)
     clearJwksCacheForTesting();
   });
 
-  const mockGoogleUser = {
+  let mockGoogleUser: any = {
     id: 'google_contract_user_1',
     email: 'antigravitypower490@gmail.com',
     name: 'elliot anderson',
@@ -124,7 +124,23 @@ test(`${provider}: Neon Auth OAuth Verifier Contract & Handoff Suite`, async (t)
       const verifier = u.searchParams.get('neon_auth_session_verifier');
       const cookie = upstreamGetSessionHeaders['Cookie'] || '';
 
+      // Real-world Neon Auth behavior: /get-session?neon_auth_session_verifier=...
+      // returns Set-Cookie: __Secure-neon-auth.session_token=... and body: null!
       if (verifier === validVerifier && cookie.includes('mock_challenge_abc_123')) {
+        const headers = new Headers();
+        headers.append('set-cookie', mockSignedSessionTokenCookie);
+        headers.set('content-type', 'application/json');
+        return {
+          ok: true,
+          status: 200,
+          headers,
+          text: async () => 'null',
+          json: async () => null
+        };
+      }
+
+      // Subsequent /get-session call with newly minted signed session cookie:
+      if (!verifier && cookie.includes('mock_sig_123')) {
         const body = JSON.stringify({
           user: mockGoogleUser,
           session: {
@@ -135,7 +151,6 @@ test(`${provider}: Neon Auth OAuth Verifier Contract & Handoff Suite`, async (t)
           }
         });
         const headers = new Headers();
-        headers.append('set-cookie', mockSignedSessionTokenCookie);
         headers.set('content-type', 'application/json');
         return {
           ok: true,
@@ -371,6 +386,83 @@ test(`${provider}: Neon Auth OAuth Verifier Contract & Handoff Suite`, async (t)
       headers: { host: 'localhost:3001', cookie: cookies[0].split(';')[0] } } as any, res);
     assert.ok(redirect.endsWith('auth_error=state_mismatch'));
     assert.equal(upstreamGetSessionCalled, false);
+  });
+
+  await t.test('safely handles private or unavailable email without failing session creation', async () => {
+    const flowId = `${prefix}test_flow_private_email`;
+    const now = Date.now();
+    let setCookieHeaders: string[] = [];
+
+    const cookieGenRes = {
+      getHeader: () => undefined,
+      setHeader: (name: string, val: any) => {
+        if (name === 'Set-Cookie') setCookieHeaders = Array.isArray(val) ? val : [val];
+      }
+    } as any;
+    setBffOAuthFlowCookie(cookieGenRes, flowId, now);
+    const flowCookieHeader = setCookieHeaders[0];
+
+    const incomingCookieHeader = [
+      flowCookieHeader,
+      '__Secure-neon-auth.session_challenge=mock_challenge_abc_123.mock_sig'
+    ].join('; ');
+
+    let redirectCode = 0;
+    let redirectUrl = '';
+    let callbackSetCookies: string[] = [];
+
+    const mockReq = {
+      query: {
+        flowId,
+        neon_auth_session_verifier: validVerifier
+      },
+      headers: {
+        host: 'localhost:3001',
+        cookie: incomingCookieHeader
+      }
+    } as any;
+
+    const mockRes = {
+      append: (name: string, val: string) => {
+        if (name === 'Set-Cookie') callbackSetCookies.push(val);
+      },
+      getHeader: (name: string) => (name === 'Set-Cookie' ? callbackSetCookies : undefined),
+      setHeader: (name: string, val: any) => {
+        if (name === 'Set-Cookie') callbackSetCookies = Array.isArray(val) ? val : [val];
+      },
+      redirect: (code: number, url: string) => {
+        redirectCode = code;
+        redirectUrl = url;
+      }
+    } as any;
+
+    // Override mockGoogleUser to have NO email
+    const prevUser = mockGoogleUser;
+    (mockGoogleUser as any) = {
+      id: 'usr_no_email_12345',
+      name: 'Private Email Developer',
+      email: null,
+      image: 'https://example.com/avatar.png'
+    };
+
+    try {
+      await callback(mockReq, mockRes);
+      assert.equal(redirectCode, 302);
+      assert.ok(redirectUrl.includes('/?auth_success=1'));
+
+      const bffCookie = callbackSetCookies.find(h => h.includes(BFF_COOKIE_NAME_DEV));
+      assert.ok(bffCookie);
+      const sessionCookieVal = bffCookie.split(';')[0].split('=')[1];
+      const session = await readBffSessionFromCookie({
+        headers: { cookie: `${BFF_COOKIE_NAME_DEV}=${sessionCookieVal}` }
+      } as any);
+      assert.ok(session);
+      assert.equal(session.userId, 'usr_no_email_12345');
+      assert.equal(session.email, undefined, 'Private email must resolve to undefined rather than erroring');
+      assert.equal(session.name, 'Private Email Developer');
+    } finally {
+      mockGoogleUser = prevUser;
+    }
   });
 
 });

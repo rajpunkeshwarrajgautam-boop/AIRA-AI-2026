@@ -1214,22 +1214,7 @@ async function handleBffOAuthCallback(req: Request, res: Response, provider: Bff
         return;
       }
 
-      const sessionData = await upstreamRes.json();
-      if (!sessionData?.session?.token || !sessionData?.user?.id) {
-        console.error('[handleBffOAuthCallback] Neon Auth returned empty session or user');
-        res.redirect(302, `${clientOrigin}/?auth_error=session_not_found`);
-        return;
-      }
-
-      resolvedUser = {
-        id: sessionData.user.id,
-        email: sessionData.user.email || undefined,
-        name: sessionData.user.name || undefined,
-        image: sessionData.user.image || undefined
-      };
-      resolvedSessionToken = sessionData.session.token;
-
-      // Extract set-cookie headers from upstream get-session response
+      // Extract set-cookie headers from upstream get-session response immediately
       const upstreamSetCookies = (upstreamRes.headers as any).getSetCookie ? (upstreamRes.headers as any).getSetCookie() : [];
       for (const cookieStr of upstreamSetCookies) {
         if (typeof (res as any).append === 'function') {
@@ -1242,9 +1227,117 @@ async function handleBffOAuthCallback(req: Request, res: Response, provider: Bff
         }
       }
 
-      // Build cookie header for subsequent /token call
+      // In Better Auth / Neon Auth, verifier redemption may return newly minted
+      // session cookies (__Secure-neon-auth.session_token=<token>.<sig>) while the body is empty/null.
+      let sessionTokenFromCookie = '';
+      let sessionCookiePair = '';
+      for (const cookieStr of upstreamSetCookies) {
+        const firstPart = cookieStr.split(';')[0].trim();
+        if (firstPart.includes('session_token=')) {
+          sessionCookiePair = firstPart;
+          const eqIdx = firstPart.indexOf('=');
+          const val = firstPart.slice(eqIdx + 1);
+          sessionTokenFromCookie = decodeURIComponent(val).split('.')[0];
+          break;
+        }
+      }
+
+      let sessionData: any = null;
+      try {
+        sessionData = await upstreamRes.json();
+      } catch {
+        sessionData = null;
+      }
+
+      if (sessionData?.session?.token) {
+        resolvedSessionToken = sessionData.session.token;
+      } else if (sessionTokenFromCookie) {
+        resolvedSessionToken = sessionTokenFromCookie;
+      }
+
+      if (sessionData?.user?.id) {
+        resolvedUser = {
+          id: sessionData.user.id,
+          email: sessionData.user.email || undefined,
+          name: sessionData.user.name || undefined,
+          image: sessionData.user.image || undefined
+        };
+      }
+
+      // Build cookie header for subsequent upstream calls
       const returnedCookies = upstreamSetCookies.map((c: string) => c.split(';')[0]).join('; ');
-      upstreamSessionCookie = [returnedCookies, req.headers.cookie, `__Secure-neon-auth.session_token=${resolvedSessionToken}`, `neon-auth.session_token=${resolvedSessionToken}`].filter(Boolean).join('; ');
+      upstreamSessionCookie = [
+        returnedCookies,
+        req.headers.cookie,
+        sessionCookiePair,
+        resolvedSessionToken ? `__Secure-neon-auth.session_token=${resolvedSessionToken}` : '',
+        resolvedSessionToken ? `neon-auth.session_token=${resolvedSessionToken}` : ''
+      ].filter(Boolean).join('; ');
+
+      // If user profile was not in body, resolve via /get-session with newly minted session cookies
+      if (!resolvedUser && upstreamSessionCookie) {
+        try {
+          const userRes = await fetch(`${baseUrl}/get-session`, {
+            method: 'GET',
+            headers: {
+              'Cookie': upstreamSessionCookie,
+              'Origin': clientOrigin,
+              'x-neon-auth-middleware': 'true'
+            }
+          });
+          if (userRes.ok) {
+            const userData = await userRes.json().catch(() => null);
+            if (userData?.user?.id) {
+              resolvedUser = {
+                id: userData.user.id,
+                email: userData.user.email || undefined,
+                name: userData.user.name || undefined,
+                image: userData.user.image || undefined
+              };
+              if (!resolvedSessionToken && userData?.session?.token) {
+                resolvedSessionToken = userData.session.token;
+              }
+            }
+          }
+        } catch (fetchUserErr) {
+          console.warn('[handleBffOAuthCallback] /get-session user fetch attempt notice:', fetchUserErr);
+        }
+      }
+
+      // Authoritative database fallback if user still unresolved but session token is cryptographically verified
+      if (!resolvedUser && resolvedSessionToken && process.env.DATABASE_URL?.trim()) {
+        try {
+          const dbRow = await db('neon_auth.session as s')
+            .join('neon_auth.user as u', 's.userId', 'u.id')
+            .where('s.token', resolvedSessionToken)
+            .where('s.expiresAt', '>', new Date())
+            .select(
+              's.token',
+              'u.id as user_id',
+              'u.email',
+              'u.name',
+              'u.image'
+            )
+            .first();
+
+          if (dbRow) {
+            resolvedUser = {
+              id: dbRow.user_id,
+              email: dbRow.email || undefined,
+              name: dbRow.name || undefined,
+              image: dbRow.image || undefined
+            };
+          }
+        } catch (dbErr) {
+          console.error('[handleBffOAuthCallback] DB session lookup fallback error:', dbErr);
+        }
+      }
+
+      if (!resolvedUser?.id || !resolvedSessionToken) {
+        console.error('[handleBffOAuthCallback] Neon Auth returned empty session or user');
+        res.redirect(302, `${clientOrigin}/?auth_error=session_not_found`);
+        return;
+      }
     }
 
     // Cryptographically verify upstream token and retrieve EdDSA JWT from Neon Auth

@@ -769,7 +769,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
                         {currentUser.name}
                       </div>
                       <div className="text-xs text-claude-muted-light dark:text-claude-muted-dark truncate">
-                        {currentUser.email}
+                        {currentUser.email || 'Private / Unlisted Email'}
                       </div>
                       <div className="mt-1 flex items-center space-x-2">
                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">

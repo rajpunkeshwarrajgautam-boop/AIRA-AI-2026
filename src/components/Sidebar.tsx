@@ -453,7 +453,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="text-[12px] font-bold text-claude-text-light dark:text-white tracking-tight truncate">
-                      {neonUser ? neonUser.name || neonUser.email : 'Guest Workspace'}
+                      {neonUser ? neonUser.name || neonUser.email || 'Authenticated User' : 'Guest Workspace'}
                     </div>
                     <div className="text-[10px] font-medium text-claude-muted-light dark:text-claude-muted-dark flex items-center space-x-1">
                       {neonUser ? (

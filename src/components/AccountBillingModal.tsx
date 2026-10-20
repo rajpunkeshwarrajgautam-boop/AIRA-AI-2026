@@ -162,7 +162,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
                 Account & Billing Center
               </h2>
               <p className="text-xs text-stone-400">
-                {user ? user.email : 'Guest Workspace (Ephemeral session)'} · Neon Auth Protected
+                {user ? user.email || user.name || 'Authenticated User' : 'Guest Workspace (Ephemeral session)'} · Neon Auth Protected
               </p>
             </div>
           </div>
