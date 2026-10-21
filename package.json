@@ -40,7 +40,9 @@
     "test:preview-identity": "npx tsx test/preview-identity-guard.ts",
     "test:research-evidence": "npx tsx test/research-evidence.ts",
     "test:staging:deployed": "npx tsx test/staging-deployed-acceptance.ts",
-    "test:staging:attest": "npx tsx test/staging-deployment-attestation.ts"
+    "test:staging:attest": "npx tsx test/staging-deployment-attestation.ts",
+    "test:db-isolation": "npx tsx test/database-isolation-guard.test.ts",
+    "validate:staging": "npx tsx scripts/validate-staging-pipeline.ts"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
