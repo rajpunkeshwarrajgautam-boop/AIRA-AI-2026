@@ -57,7 +57,10 @@
     "test:staging:attest": "npx tsx test/staging-deployment-attestation.ts",
     "test:db-isolation": "npx tsx test/database-isolation-guard.test.ts",
     "validate:staging": "npx tsx scripts/validate-staging-pipeline.ts",
+    "staging:cutover:plan": "npx tsx scripts/staging-cutover-orchestrator.ts --plan",
+    "staging:cutover:audit": "npx tsx scripts/staging-cutover-orchestrator.ts --rehearsal-audit",
     "verify:prod-readiness": "npx tsx scripts/verify-production-release-readiness.ts",
+
     "test:neon-auth-identity": "npx tsx test/neon-auth-identity.test.ts",
     "test:neon-auth-e2e": "npx tsx test/neon-auth-staging-e2e.test.ts",
     "test:auth-security": "npx tsx test/auth-security-authorization.test.ts",

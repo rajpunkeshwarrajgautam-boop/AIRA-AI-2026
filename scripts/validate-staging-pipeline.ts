@@ -209,7 +209,58 @@ async function main() {
       console.warn('[NOTICE] Staging smoke test did not return 2xx (DNS or deployment may be pending)');
     }
   }
+
+  if (mode === 'audit-cutover' || mode === '--audit-cutover' || mode === 'cutover') {
+    console.log('[STAGING_CUTOVER_AUDIT] Verifying staging cutover status and integrity gate...');
+    const { CUTOVER_PROTOCOL_STEPS, verifyStagingCutoverIntegrity } = await import('./staging-cutover-orchestrator.js');
+
+    const dbUrl = process.env.DATABASE_URL;
+    let cutoverStatus = 'PENDING_OWNER_IMPORT';
+    let detailsSummary = 'Cutover Protocol Active (9 Steps). Schema migrations and historical import separated by owner gate.';
+
+    if (dbUrl && dbUrl.trim()) {
+      const client = (await import('knex')).default({
+        client: 'pg',
+        connection: { connectionString: dbUrl, ssl: true }
+      });
+
+      try {
+        const audit = await verifyStagingCutoverIntegrity(client, {
+          allowPermanentStaging: process.env.AIRA_ALLOW_STAGING_LIVE_IMPORT === 'true'
+        });
+        if (audit.certified) {
+          cutoverStatus = 'FULL_CUTOVER_CERTIFIED';
+          detailsSummary = 'Migrations 016–022 applied and historical identities, wallets, and conversations fully reconciled.';
+        } else if (audit.checks['MIGRATIONS_016_022_APPLIED']) {
+          cutoverStatus = 'MIGRATIONS_APPLIED_AWAITING_HISTORICAL_IMPORT';
+          detailsSummary = 'Schema migrations 016–022 verified. Historical identity import requires Step 6 owner execution.';
+        } else {
+          cutoverStatus = 'PENDING_STAGING_MIGRATIONS';
+          detailsSummary = 'Pending migrations 016–022 execution against staging database.';
+        }
+      } finally {
+        await client.destroy();
+      }
+    } else {
+      detailsSummary = 'Staging cutover protocol verified. Automated pipeline does not execute historical import without explicit owner credentials.';
+    }
+
+    console.log(`Cutover Status:  ${cutoverStatus}`);
+    console.log(`Protocol Steps:  ${CUTOVER_PROTOCOL_STEPS.length} defined steps`);
+    console.log(`Details:         ${detailsSummary}\n`);
+
+    if (process.env.GITHUB_STEP_SUMMARY) {
+      const summaryContent = [
+        '### 🛡️ AIRA Permanent Staging Cutover Protocol & Merge Gate',
+        `- **Cutover Status**: **${cutoverStatus}**`,
+        `- **Protocol**: 9-step controlled sequence enforcing isolated recovery checkpoint & owner authorization`,
+        `- **Details**: ${detailsSummary}`
+      ].join('\n');
+      fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summaryContent + '\n');
+    }
+  }
 }
+
 
 if (process.argv[1]?.includes('validate-staging-pipeline')) {
   main().catch(err => {

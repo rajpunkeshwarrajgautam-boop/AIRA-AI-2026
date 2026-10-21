@@ -1,10 +1,21 @@
 import { execSync } from 'child_process';
 import knex, { Knex } from 'knex';
+import {
+  classifyDatabaseUrl,
+  STAGING_NEON_PROJECT_ID,
+  STAGING_NEON_BRANCH_ID,
+  STAGING_NEON_ENDPOINT_ID,
+  PRODUCTION_NEON_PROJECT_ID,
+  PRODUCTION_NEON_ENDPOINT_ID,
+  COMMERCIAL_PR92_BRANCH_ID,
+  COMMERCIAL_PR92_ENDPOINT_ID
+} from '../packages/db/src/security/database-isolation-guard.js';
 
 export interface ImportOptions {
   sourceConnectionString?: string;
   targetConnectionString?: string;
   dryRun?: boolean;
+  allowPermanentStaging?: boolean;
 }
 
 export interface ImportSummary {
@@ -34,18 +45,141 @@ function sanitizeId(id: string | null): string {
   return `${id.slice(0, 6)}...${id.slice(-4)}`;
 }
 
-export function validateTargetSafety(connectionString: string): void {
-  const lower = connectionString.toLowerCase();
-  if (lower.includes('old-sky-50952395') || lower.includes('prod-release') || lower.includes('aira-ai.in') || lower.includes('aira-ai-live')) {
-    throw new Error('[SECURITY FATAL] Direct execution against Production database is strictly prohibited.');
+/**
+ * Authoritative target database identity safety guard.
+ * Validates target connection string against Neon project, branch, and endpoint metadata.
+ */
+export function validateAuthoritativeTargetSafety(
+  connectionString: string,
+  options: { allowPermanentStaging?: boolean } = {}
+): void {
+  const classification = classifyDatabaseUrl(connectionString);
+
+  // 1. Unconditional Production Rejection
+  if (classification.isProduction) {
+    throw new Error(`[SECURITY FATAL] Direct execution against Production database (${PRODUCTION_NEON_PROJECT_ID}) is strictly prohibited.`);
   }
+
+  // 2. Reject Commercial PR #92 as target (Source must never be written to)
+  if (classification.isCommercialPr92) {
+    throw new Error(`[SECURITY FATAL] Target cannot be the Commercial PR #92 source database (${COMMERCIAL_PR92_BRANCH_ID}). Writes prohibited.`);
+  }
+
+  // 3. Live Permanent Staging requires explicit owner authorization flag
+  if (classification.isStagingPermanent) {
+    const isAuthorized = options.allowPermanentStaging || process.env.AIRA_ALLOW_STAGING_LIVE_IMPORT === 'true';
+    if (!isAuthorized) {
+      throw new Error(`[SECURITY FATAL] Target is live Permanent Staging database (${STAGING_NEON_PROJECT_ID} / ${STAGING_NEON_BRANCH_ID}). Writes require explicit owner authorization flag: AIRA_ALLOW_STAGING_LIVE_IMPORT=true.`);
+    }
+  } else if (classification.category === 'isolated_neon_preview') {
+    // Isolated preview / rehearsal branch: must be a Neon branch
+    if (!classification.host.includes('.neon.tech')) {
+      throw new Error(`[SECURITY FATAL] Target is not a verified Neon database endpoint: ${classification.sanitizedTarget}`);
+    }
+  } else if (!classification.isLocalOrCiTest) {
+    throw new Error(`[SECURITY FATAL] Target database unrecognized or untrusted: ${classification.sanitizedTarget}`);
+  }
+}
+
+/**
+ * Validates that connected database metadata matches expected staging environment.
+ * Queries Neon system settings (neon.project_id, neon.branch_id, neon.endpoint_id).
+ */
+export async function verifyConnectedTargetMetadata(
+  targetClient: Knex,
+  options: { allowPermanentStaging?: boolean } = {}
+): Promise<void> {
+  try {
+    const res = await targetClient.raw(`
+      SELECT 
+        current_database() as db_name, 
+        current_user as db_user, 
+        inet_server_addr() as server_ip,
+        current_setting('neon.project_id', true) as neon_project_id,
+        current_setting('neon.branch_id', true) as neon_branch_id,
+        current_setting('neon.endpoint_id', true) as neon_endpoint_id
+    `);
+    const row = res.rows?.[0] || {};
+    const { neon_project_id, neon_branch_id, neon_endpoint_id } = row;
+
+    if (neon_project_id === PRODUCTION_NEON_PROJECT_ID || neon_endpoint_id === PRODUCTION_NEON_ENDPOINT_ID) {
+      throw new Error(`[SECURITY FATAL] Connected target database is PRODUCTION (${PRODUCTION_NEON_PROJECT_ID})! Aborting immediately.`);
+    }
+
+    if (neon_branch_id === COMMERCIAL_PR92_BRANCH_ID || neon_endpoint_id === COMMERCIAL_PR92_ENDPOINT_ID) {
+      throw new Error(`[SECURITY FATAL] Connected target database is Commercial PR #92 branch (${COMMERCIAL_PR92_BRANCH_ID})! Writes prohibited.`);
+    }
+
+    if (neon_project_id && neon_project_id !== STAGING_NEON_PROJECT_ID) {
+      throw new Error(`[SECURITY FATAL] Connected target Neon project (${neon_project_id}) does not match authorized Staging project (${STAGING_NEON_PROJECT_ID})!`);
+    }
+
+    if (neon_branch_id === STAGING_NEON_BRANCH_ID || neon_endpoint_id === STAGING_NEON_ENDPOINT_ID) {
+      const isAuthorized = options.allowPermanentStaging || process.env.AIRA_ALLOW_STAGING_LIVE_IMPORT === 'true';
+      if (!isAuthorized) {
+        throw new Error(`[SECURITY FATAL] Connected target is live Permanent Staging main branch (${STAGING_NEON_BRANCH_ID}). Explicit owner authorization flag (AIRA_ALLOW_STAGING_LIVE_IMPORT=true) is required.`);
+      }
+    }
+  } catch (err: any) {
+    if (err.message.includes('[SECURITY FATAL]')) {
+      throw err;
+    }
+    // GUC query might not be supported on standard local postgres test containers
+  }
+}
+
+/**
+ * Validates source database connection and configures read-only session characteristics.
+ */
+export async function validateAuthoritativeSourceSafety(
+  connectionString: string,
+  sourceClient?: Knex
+): Promise<void> {
+  const classification = classifyDatabaseUrl(connectionString);
+
+  if (classification.isProduction) {
+    throw new Error(`[SECURITY FATAL] Source database cannot be Production (${PRODUCTION_NEON_PROJECT_ID})! Aborting.`);
+  }
+
+  if (classification.isStagingPermanent) {
+    throw new Error(`[SECURITY FATAL] Source database cannot be Permanent Staging (${STAGING_NEON_BRANCH_ID})!`);
+  }
+
+  if (sourceClient) {
+    try {
+      await sourceClient.raw('SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY;');
+      await sourceClient.raw('SET TRANSACTION READ ONLY;');
+      console.log('[Source Guard] Verified source database session configured strictly READ ONLY.');
+    } catch (err: any) {
+      console.warn(`[Source Guard] Notice setting READ ONLY session: ${err.message}`);
+    }
+
+    try {
+      const res = await sourceClient.raw(`SELECT current_setting('neon.project_id', true) as neon_project_id`);
+      const row = res.rows?.[0] || {};
+      if (row.neon_project_id === PRODUCTION_NEON_PROJECT_ID) {
+        throw new Error(`[SECURITY FATAL] Source database connected to Production project (${PRODUCTION_NEON_PROJECT_ID})! Aborting.`);
+      }
+    } catch (err: any) {
+      if (err.message.includes('[SECURITY FATAL]')) throw err;
+    }
+  }
+}
+
+export function validateTargetSafety(connectionString: string, options: { allowPermanentStaging?: boolean } = {}): void {
+  validateAuthoritativeTargetSafety(connectionString, options);
 }
 
 export async function importVerifiedCommercialIdentities(
   sourceClient: Knex,
   targetClient: Knex,
-  dryRun = false
+  optionsOrDryRun: boolean | ImportOptions = false
 ): Promise<ImportSummary> {
+  const options: ImportOptions = typeof optionsOrDryRun === 'boolean'
+    ? { dryRun: optionsOrDryRun }
+    : optionsOrDryRun;
+  const dryRun = Boolean(options.dryRun);
+
   const summary: ImportSummary = {
     usersImported: 0,
     oauthAccountsImported: 0,
@@ -57,21 +191,42 @@ export async function importVerifiedCommercialIdentities(
     messagesImported: 0
   };
 
-  // 1. Identify genuine users using fixture provenance
-  // Fixture provenance rules:
-  // - Exclude users where ID starts with 'usr_' or 'test_' (synthetic test fixtures)
-  // - Require corresponding entry in neon_auth.account with providerId in ('google', 'github')
-  // - Exclude users with providerId = 'credential' (local mock password test accounts)
-  const hasNeonAuthAccount = await sourceClient.schema.withSchema('neon_auth').hasTable('account');
-  if (!hasNeonAuthAccount) {
-    console.warn('[Import] Source database does not have neon_auth.account table. Aborting.');
-    return summary;
+  // 1. Authoritative Safety Guards on connected clients
+  await verifyConnectedTargetMetadata(targetClient, { allowPermanentStaging: options.allowPermanentStaging });
+
+  // 2. Ensure source database session is strictly READ ONLY
+  try {
+    await sourceClient.raw('SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY;');
+  } catch {
+    // ignore on non-postgres or test harness
   }
 
+  // 3. Fail-closed table checks on source database
+  const hasNeonAuthAccount = await sourceClient.schema.withSchema('neon_auth').hasTable('account');
+  if (!hasNeonAuthAccount) {
+    throw new Error('[RECONCILIATION_FATAL] Source database missing required neon_auth.account table. Aborting fail-closed.');
+  }
+
+  // 4. Retrieve candidate social accounts
   const socialAccounts = await sourceClient('neon_auth.account')
     .whereIn('providerId', ['google', 'github'])
     .select('id', 'userId', 'providerId', 'accountId', 'createdAt', 'updatedAt');
 
+  if (!socialAccounts || socialAccounts.length === 0) {
+    throw new Error('[RECONCILIATION_FATAL] Expected historical social OAuth accounts not found in neon_auth.account. Aborting fail-closed.');
+  }
+
+  // Verify provider account uniqueness in source
+  const providerKeySet = new Set<string>();
+  for (const oa of socialAccounts) {
+    const key = `${oa.providerId}:${oa.accountId}`;
+    if (providerKeySet.has(key)) {
+      throw new Error(`[RECONCILIATION_FATAL] Duplicate provider account in source: ${key}`);
+    }
+    providerKeySet.add(key);
+  }
+
+  // 5. Identify genuine candidate users using fixture provenance rules
   const genuineUserIds = Array.from(new Set(socialAccounts.map(a => 'neon_user_' + a.userId)));
 
   const candidateUsers = await sourceClient('users')
@@ -80,234 +235,301 @@ export async function importVerifiedCommercialIdentities(
     .whereNot('id', 'like', 'test_%')
     .select('*');
 
+  if (candidateUsers.length === 0) {
+    throw new Error('[RECONCILIATION_FATAL] Zero genuine historical candidate users found in source database. Aborting fail-closed.');
+  }
+
+  if (candidateUsers.length < 2 || socialAccounts.length < 2) {
+    throw new Error(`[RECONCILIATION_FATAL] Historical record count below expected threshold (${candidateUsers.length} users, ${socialAccounts.length} social accounts). Aborting fail-closed.`);
+  }
+
   console.log(`[Import] Identified ${candidateUsers.length} genuine historical social users from source.`);
 
   const now = Date.now();
 
-  for (const user of candidateUsers) {
-    console.log(`[Import] Processing verified user ${sanitizeId(user.id)} (${sanitizeEmail(user.email)})`);
+  const executeImportLogic = async (target: Knex | Knex.Transaction) => {
+    for (const user of candidateUsers) {
+      console.log(`[Import] Processing verified user ${sanitizeId(user.id)} (${sanitizeEmail(user.email)})`);
 
-    if (!dryRun) {
-      // 1. Insert User
-      const insertedUser = await targetClient('users')
-        .insert({
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          email_verified: user.email_verified,
-          image: user.image,
-          created_at: user.created_at || now,
-          updated_at: user.updated_at || now
-        })
-        .onConflict('id')
-        .ignore();
-      if (insertedUser.rowCount && insertedUser.rowCount > 0) {
-        summary.usersImported += insertedUser.rowCount;
-      }
-    } else {
-      summary.usersImported++;
-    }
-
-    // 2. Insert OAuth Accounts for this user
-    const userLegacyId = user.id.replace('neon_user_', '');
-    const userOAs = socialAccounts.filter(a => a.userId === userLegacyId);
-
-    for (const oa of userOAs) {
       if (!dryRun) {
-        const insOa = await targetClient('oauth_accounts')
+        // 1. Insert User (matching exact id)
+        const insertedUser = await target('users')
           .insert({
-            id: 'oa_legacy_' + oa.id,
-            user_id: user.id,
-            provider: oa.providerId,
-            provider_account_id: oa.accountId,
+            id: user.id,
+            name: user.name,
             email: user.email,
-            profile_data: JSON.stringify({
-              migratedFrom: 'commercial_pr92_verified',
-              migratedAt: now
-            }),
-            created_at: oa.createdAt ? new Date(oa.createdAt).getTime() : now,
-            updated_at: oa.updatedAt ? new Date(oa.updatedAt).getTime() : now
-          })
-          .onConflict(['provider', 'provider_account_id'])
-          .ignore();
-        if (insOa.rowCount && insOa.rowCount > 0) {
-          summary.oauthAccountsImported += insOa.rowCount;
-        }
-      } else {
-        summary.oauthAccountsImported++;
-      }
-    }
-
-    // 3. Reconcile Billing Customers
-    const sourceCustomers = await sourceClient('billing_customers')
-      .where({ principal_id: user.id })
-      .select('*');
-
-    for (const cust of sourceCustomers) {
-      if (!dryRun) {
-        const insCust = await targetClient('billing_customers')
-          .insert({
-            id: cust.id,
-            principal_id: cust.principal_id,
-            email: cust.email,
-            name: cust.name,
-            default_currency: cust.default_currency || 'INR',
-            country_code: cust.country_code || 'IN',
-            razorpay_customer_id: cust.razorpay_customer_id || null,
-            cashfree_customer_id: cust.cashfree_customer_id || null,
-            tax_info: typeof cust.tax_info === 'string' ? cust.tax_info : JSON.stringify(cust.tax_info || {}),
-            created_at: cust.created_at || now,
-            updated_at: cust.updated_at || now
+            email_verified: user.email_verified,
+            image: user.image,
+            created_at: user.created_at || now,
+            updated_at: user.updated_at || now
           })
           .onConflict('id')
           .ignore();
-        if (insCust.rowCount && insCust.rowCount > 0) {
-          summary.billingCustomersImported += insCust.rowCount;
+        if (insertedUser.rowCount && insertedUser.rowCount > 0) {
+          summary.usersImported += insertedUser.rowCount;
         }
       } else {
-        summary.billingCustomersImported++;
+        summary.usersImported++;
       }
 
-      // 4. Reconcile Credit Accounts (One wallet per customer)
-      const sourceCreditAccs = await sourceClient('credit_accounts')
-        .where({ customer_id: cust.id })
-        .select('*');
+      // 2. Insert OAuth Accounts for this user
+      const userLegacyId = user.id.replace('neon_user_', '');
+      const userOAs = socialAccounts.filter(a => a.userId === userLegacyId);
 
-      for (const ca of sourceCreditAccs) {
+      for (const oa of userOAs) {
         if (!dryRun) {
-          const insCa = await targetClient('credit_accounts')
+          const insOa = await target('oauth_accounts')
             .insert({
-              id: ca.id,
-              customer_id: ca.customer_id,
-              balance_credits: ca.balance_credits,
-              reserved_credits: ca.reserved_credits,
-              lifetime_granted_credits: ca.lifetime_granted_credits,
-              lifetime_spent_credits: ca.lifetime_spent_credits,
-              created_at: ca.created_at || now,
-              updated_at: ca.updated_at || now
+              id: 'oa_legacy_' + oa.id,
+              user_id: user.id,
+              provider: oa.providerId,
+              provider_account_id: oa.accountId,
+              email: user.email,
+              profile_data: JSON.stringify({
+                migratedFrom: 'commercial_pr92_verified',
+                migratedAt: now
+              }),
+              created_at: oa.createdAt ? new Date(oa.createdAt).getTime() : now,
+              updated_at: oa.updatedAt ? new Date(oa.updatedAt).getTime() : now
             })
-            .onConflict('id')
+            .onConflict(['provider', 'provider_account_id'])
             .ignore();
-          if (insCa.rowCount && insCa.rowCount > 0) {
-            summary.creditAccountsImported += insCa.rowCount;
+          if (insOa.rowCount && insOa.rowCount > 0) {
+            summary.oauthAccountsImported += insOa.rowCount;
           }
         } else {
-          summary.creditAccountsImported++;
+          summary.oauthAccountsImported++;
         }
+      }
 
-        // 5. Reconcile Credit Grants
-        const sourceGrants = await sourceClient('credit_grants')
-          .where({ account_id: ca.id })
-          .select('*');
+      // 3. Reconcile Billing Customers
+      const sourceCustomers = await sourceClient('billing_customers')
+        .where({ principal_id: user.id })
+        .select('*');
 
-        for (const g of sourceGrants) {
-          if (!dryRun) {
-            const insG = await targetClient('credit_grants')
+      for (const cust of sourceCustomers) {
+        let targetCustomerId = cust.id;
+        if (!dryRun) {
+          const existingCust = await target('billing_customers')
+            .where('id', cust.id)
+            .orWhere('principal_id', cust.principal_id)
+            .first();
+
+          if (!existingCust) {
+            const insCust = await target('billing_customers')
               .insert({
-                id: g.id,
-                account_id: g.account_id,
-                amount_credits: g.amount_credits,
-                remaining_credits: g.remaining_credits ?? g.amount_credits,
-                grant_type: g.grant_type,
-                expires_at: g.expires_at || null,
-                rollover_capped: g.rollover_capped || false,
-                metadata: typeof g.metadata === 'string' ? g.metadata : JSON.stringify(g.metadata || {}),
-                created_at: g.created_at || now
+                id: cust.id,
+                principal_id: cust.principal_id,
+                email: cust.email,
+                name: cust.name,
+                default_currency: cust.default_currency || 'INR',
+                country_code: cust.country_code || 'IN',
+                razorpay_customer_id: cust.razorpay_customer_id || null,
+                cashfree_customer_id: cust.cashfree_customer_id || null,
+                tax_info: typeof cust.tax_info === 'string' ? cust.tax_info : JSON.stringify(cust.tax_info || {}),
+                created_at: cust.created_at || now,
+                updated_at: cust.updated_at || now
               })
               .onConflict('id')
               .ignore();
-            if (insG.rowCount && insG.rowCount > 0) {
-              summary.creditGrantsImported += insG.rowCount;
+            if (insCust.rowCount && insCust.rowCount > 0) {
+              summary.billingCustomersImported += insCust.rowCount;
             }
           } else {
-            summary.creditGrantsImported++;
+            targetCustomerId = existingCust.id;
           }
+        } else {
+          summary.billingCustomersImported++;
         }
 
-        // 6. Reconcile Credit Transactions
-        const sourceTxs = await sourceClient('credit_transactions')
-          .where({ account_id: ca.id })
+        // 4. Reconcile Credit Accounts (One wallet per customer invariant)
+        const sourceCreditAccs = await sourceClient('credit_accounts')
+          .where({ customer_id: cust.id })
           .select('*');
 
-        for (const tx of sourceTxs) {
+        if (sourceCreditAccs.length > 1) {
+          throw new Error(`[RECONCILIATION_FATAL] Customer ${cust.id} has ${sourceCreditAccs.length} credit accounts in source. 1:1 invariant violated.`);
+        }
+
+        for (const ca of sourceCreditAccs) {
+          let targetCreditAccountId = ca.id;
           if (!dryRun) {
-            const insTx = await targetClient('credit_transactions')
-              .insert({
-                id: tx.id,
-                account_id: tx.account_id,
-                reservation_id: tx.reservation_id || null,
-                transaction_type: tx.transaction_type || tx.type || 'GRANT',
-                amount_credits: tx.amount_credits,
-                balance_before: tx.balance_before ?? 0,
-                balance_after: tx.balance_after ?? tx.amount_credits,
-                idempotency_key: tx.idempotency_key || `ctx_import_${tx.id}`,
-                description: tx.description || 'Imported historical transaction',
-                metadata: typeof tx.metadata === 'string' ? tx.metadata : JSON.stringify(tx.metadata || {}),
-                created_at: tx.created_at || now
-              })
-              .onConflict('id')
-              .ignore();
-            if (insTx.rowCount && insTx.rowCount > 0) {
-              summary.creditTransactionsImported += insTx.rowCount;
+            const existingWallet = await target('credit_accounts')
+              .where('id', ca.id)
+              .orWhere('customer_id', targetCustomerId)
+              .first();
+
+            if (!existingWallet) {
+              const insCa = await target('credit_accounts')
+                .insert({
+                  id: ca.id,
+                  customer_id: targetCustomerId,
+                  balance_credits: ca.balance_credits,
+                  reserved_credits: ca.reserved_credits,
+                  lifetime_granted_credits: ca.lifetime_granted_credits,
+                  lifetime_spent_credits: ca.lifetime_spent_credits,
+                  created_at: ca.created_at || now,
+                  updated_at: ca.updated_at || now
+                })
+                .onConflict('id')
+                .ignore();
+              if (insCa.rowCount && insCa.rowCount > 0) {
+                summary.creditAccountsImported += insCa.rowCount;
+              }
+            } else {
+              targetCreditAccountId = existingWallet.id;
             }
           } else {
-            summary.creditTransactionsImported++;
+            summary.creditAccountsImported++;
+          }
+
+
+          // 5. Reconcile Credit Grants
+          const sourceGrants = await sourceClient('credit_grants')
+            .where({ account_id: ca.id })
+            .select('*');
+
+          for (const g of sourceGrants) {
+            if (!dryRun) {
+              const insG = await target('credit_grants')
+                .insert({
+                  id: g.id,
+                  account_id: targetCreditAccountId,
+                  amount_credits: g.amount_credits,
+                  remaining_credits: g.remaining_credits ?? g.amount_credits,
+                  grant_type: g.grant_type,
+                  expires_at: g.expires_at || null,
+                  rollover_capped: g.rollover_capped || false,
+                  metadata: typeof g.metadata === 'string' ? g.metadata : JSON.stringify(g.metadata || {}),
+                  created_at: g.created_at || now
+                })
+                .onConflict('id')
+                .ignore();
+              if (insG.rowCount && insG.rowCount > 0) {
+                summary.creditGrantsImported += insG.rowCount;
+              }
+            } else {
+              summary.creditGrantsImported++;
+            }
+          }
+
+          // 6. Reconcile Credit Transactions
+          const sourceTxs = await sourceClient('credit_transactions')
+            .where({ account_id: ca.id })
+            .select('*');
+
+          for (const tx of sourceTxs) {
+            if (!dryRun) {
+              const insTx = await target('credit_transactions')
+                .insert({
+                  id: tx.id,
+                  account_id: targetCreditAccountId,
+                  reservation_id: tx.reservation_id || null,
+                  transaction_type: tx.transaction_type || tx.type || 'GRANT',
+                  amount_credits: tx.amount_credits,
+                  balance_before: tx.balance_before ?? 0,
+
+                  balance_after: tx.balance_after ?? tx.amount_credits,
+                  idempotency_key: tx.idempotency_key || `ctx_import_${tx.id}`,
+                  description: tx.description || 'Imported historical transaction',
+                  metadata: typeof tx.metadata === 'string' ? tx.metadata : JSON.stringify(tx.metadata || {}),
+                  created_at: tx.created_at || now
+                })
+                .onConflict('id')
+                .ignore();
+              if (insTx.rowCount && insTx.rowCount > 0) {
+                summary.creditTransactionsImported += insTx.rowCount;
+              }
+            } else {
+              summary.creditTransactionsImported++;
+            }
           }
         }
       }
-    }
 
-    // 7. Reconcile Genuine Historical Conversations & Messages
-    const sourceConvs = await sourceClient('conversations')
-      .where({ principal_id: user.id })
-      .select('*');
+      // 7. Reconcile Genuine Historical Conversations & Messages
+      const sourceConvs = await sourceClient('conversations')
+        .where({ principal_id: user.id })
+        .select('*');
 
-    for (const c of sourceConvs) {
-      if (!dryRun) {
-        const insConv = await targetClient('conversations')
-          .insert({
-            id: c.id,
-            principal_id: c.principal_id,
-            client_id: c.client_id,
-            title: c.title,
-            created_at: c.created_at || now,
-            updated_at: c.updated_at || now
-          })
-          .onConflict('id')
-          .ignore();
-        if (insConv.rowCount && insConv.rowCount > 0) {
-          summary.conversationsImported += insConv.rowCount;
-        }
-
-        // Import conversation_messages
-        const sourceMsgs = await sourceClient('conversation_messages')
-          .where({ conversation_id: c.id })
-          .select('*');
-
-        for (const m of sourceMsgs) {
-          const insM = await targetClient('conversation_messages')
+      for (const c of sourceConvs) {
+        if (!dryRun) {
+          const insConv = await target('conversations')
             .insert({
-              id: m.id,
-              conversation_id: m.conversation_id,
-              principal_id: m.principal_id || user.id,
-              client_message_id: m.client_message_id || m.id,
-              run_id: m.run_id || null,
-              role: m.role,
-              content: m.content || '',
-              metadata: typeof m.metadata === 'string' ? m.metadata : JSON.stringify(m.metadata || {}),
-              created_at: m.created_at || now,
-              updated_at: m.updated_at || now
+              id: c.id,
+              principal_id: c.principal_id,
+              client_id: c.client_id,
+              title: c.title,
+              created_at: c.created_at || now,
+              updated_at: c.updated_at || now
             })
             .onConflict('id')
             .ignore();
-          if (insM.rowCount && insM.rowCount > 0) {
-            summary.messagesImported += insM.rowCount;
+          if (insConv.rowCount && insConv.rowCount > 0) {
+            summary.conversationsImported += insConv.rowCount;
           }
+
+          // Import conversation_messages
+          const sourceMsgs = await sourceClient('conversation_messages')
+            .where({ conversation_id: c.id })
+            .select('*');
+
+          for (const m of sourceMsgs) {
+            const insM = await target('conversation_messages')
+              .insert({
+                id: m.id,
+                conversation_id: m.conversation_id,
+                principal_id: m.principal_id || user.id,
+                client_message_id: m.client_message_id || m.id,
+                run_id: m.run_id || null,
+                role: m.role,
+                content: m.content || '',
+                metadata: typeof m.metadata === 'string' ? m.metadata : JSON.stringify(m.metadata || {}),
+                created_at: m.created_at || now,
+                updated_at: m.updated_at || now
+              })
+              .onConflict('id')
+              .ignore();
+            if (insM.rowCount && insM.rowCount > 0) {
+              summary.messagesImported += insM.rowCount;
+            }
+          }
+        } else {
+          summary.conversationsImported++;
         }
-      } else {
-        summary.conversationsImported++;
       }
     }
+
+    // 8. In-transaction post-import reconciliation checks
+    if (!dryRun) {
+      const multiWalletCheck = await target('credit_accounts')
+        .select('customer_id')
+        .count('* as cnt')
+        .groupBy('customer_id')
+        .havingRaw('count(*) > 1');
+      if (multiWalletCheck.length > 0) {
+        throw new Error(`[RECONCILIATION_FATAL] Multi-wallet invariant violated in target for customer: ${multiWalletCheck[0].customer_id}`);
+      }
+
+      const orphanCheck = await target.raw(`
+        SELECT c.id, c.principal_id
+        FROM conversations c
+        LEFT JOIN users u ON c.principal_id = u.id
+        WHERE u.id IS NULL
+      `);
+      if (orphanCheck.rows.length > 0) {
+        throw new Error(`[RECONCILIATION_FATAL] Referential integrity broken: ${orphanCheck.rows.length} orphaned conversations detected.`);
+      }
+    }
+  };
+
+  // Execute in atomic transaction if not dryRun
+  if (!dryRun) {
+    await targetClient.transaction(async (trx) => {
+      await executeImportLogic(trx);
+    });
+  } else {
+    await executeImportLogic(targetClient);
   }
 
   return summary;
@@ -322,7 +544,10 @@ async function main() {
     process.exit(1);
   }
 
-  validateTargetSafety(targetCs);
+  const allowPermanentStaging = process.env.AIRA_ALLOW_STAGING_LIVE_IMPORT === 'true';
+
+  validateAuthoritativeTargetSafety(targetCs, { allowPermanentStaging });
+  await validateAuthoritativeSourceSafety(sourceCs);
 
   const sourceClient = knex({
     client: 'pg',
@@ -335,8 +560,11 @@ async function main() {
   });
 
   try {
+    await verifyConnectedTargetMetadata(targetClient, { allowPermanentStaging });
+    await validateAuthoritativeSourceSafety(sourceCs, sourceClient);
+
     console.log('Starting verified commercial identity import...');
-    const result = await importVerifiedCommercialIdentities(sourceClient, targetClient);
+    const result = await importVerifiedCommercialIdentities(sourceClient, targetClient, { allowPermanentStaging });
     console.log('[Import] Summary:', JSON.stringify(result, null, 2));
     console.log('[Import] Completed successfully.');
   } finally {
@@ -351,3 +579,4 @@ if (process.argv[1] && process.argv[1].includes('import-verified-commercial-iden
     process.exit(1);
   });
 }
+

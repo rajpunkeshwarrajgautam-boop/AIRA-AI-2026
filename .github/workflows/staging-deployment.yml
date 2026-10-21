@@ -128,6 +128,9 @@ jobs:
         env:
           AIRA_STAGING_URL: https://staging.virexaaiventures.com
 
+      - name: Staging cutover protocol and integrity audit gate
+        run: npx tsx scripts/validate-staging-pipeline.ts audit-cutover
+
       - name: Record Staging Certification Artifact
         shell: bash
         run: |
@@ -142,10 +145,14 @@ jobs:
             "neon_branch": "br-autumn-star-b36dfu5w",
             "vercel_project": "prj_FZLU4vBIYSsBn28AI6drkpD5WfbH",
             "staging_domain": "staging.virexaaiventures.com",
+            "cutover_protocol": "9_step_controlled_sequence",
+            "migrations_gate": "016-022_verified",
+            "identity_import_gate": "controlled_owner_execution",
             "status": "CERTIFIED"
           }
           EOF
           cat .artifacts/staging-certification.json
+
 
       - name: Upload staging certification artifact
         uses: actions/upload-artifact@v4

@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { execSync } from 'child_process';
 import knex, { Knex } from 'knex';
-import { importVerifiedCommercialIdentities } from './import-verified-commercial-identities.js';
+import {
+  importVerifiedCommercialIdentities,
+  validateAuthoritativeTargetSafety
+} from './import-verified-commercial-identities.js';
 
 function maskId(id: string | null): string {
   if (!id) return 'null';
@@ -17,23 +20,17 @@ function maskEmail(email: string | null): string {
 }
 
 export function assertRehearsalSafety(connectionString: string): void {
+  // Enforce base target safety without allowing permanent staging
+  validateAuthoritativeTargetSafety(connectionString, { allowPermanentStaging: false });
+
+
   const lower = connectionString.toLowerCase();
-  // 1. Block Production
-  if (lower.includes('old-sky-50952395') || lower.includes('prod-release') || lower.includes('aira-ai.in') || lower.includes('aira-ai-live')) {
-    throw new Error('[SECURITY FATAL] Execution against Production is strictly blocked.');
-  }
-  // 2. Block Permanent Staging main
-  if (lower.includes('br-autumn-star-b36dfu5w') || lower.includes('ep-mute-frost-50372225')) {
-    // Note: check if endpoint is main
-    if (lower.includes('br-autumn-star')) {
-      throw new Error('[SECURITY FATAL] Execution against Permanent Staging main is strictly blocked. Use an isolated rehearsal branch.');
-    }
-  }
-  // 3. Block Commercial PR #92 database
-  if (lower.includes('br-green-snow-b3dsci5u')) {
-    throw new Error('[SECURITY FATAL] Modifying the Commercial source database is strictly blocked.');
+  // Strictly prevent rehearsal from ever targeting Permanent Staging main
+  if (lower.includes('br-autumn-star-b36dfu5w') || lower.includes('ep-shiny-bird-b3xundyt')) {
+    throw new Error('[SECURITY FATAL] Execution against Permanent Staging main is strictly blocked during rehearsal. Use an isolated rehearsal branch.');
   }
 }
+
 
 export async function runIdentityContinuityAssertions(
   sourceClient: Knex,
@@ -137,8 +134,9 @@ export async function runIdentityContinuityAssertions(
 }
 
 async function main() {
-  const rehearsalBranch = process.env.REHEARSAL_BRANCH || 'rehearsal-pr96-commercial-20261021';
+  const rehearsalBranch = process.env.REHEARSAL_BRANCH || 'rehearsal-pr96-final-20261021';
   console.log(`Connecting to rehearsal branch: ${rehearsalBranch}...`);
+
 
   const sourceCs = execSync('npx neonctl connection-string pr92-commercial-platform-isolated --project-id mute-frost-50372225', { encoding: 'utf8' }).trim();
   const targetCs = execSync(`npx neonctl connection-string ${rehearsalBranch} --project-id mute-frost-50372225`, { encoding: 'utf8' }).trim();
