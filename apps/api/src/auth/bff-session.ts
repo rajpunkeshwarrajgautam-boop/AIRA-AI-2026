@@ -1319,6 +1319,12 @@ export async function handleBffRecoveryRequest(req: Request, res: Response): Pro
       ticketId: result.ticketId || result.requestId
     });
   } catch (err: any) {
+    if (err.statusCode === 429 || err.message?.startsWith('RATE_LIMITED')) {
+      const retryAfter = err.retryAfterSeconds || 900;
+      res.setHeader('Retry-After', String(retryAfter));
+      res.status(429).json({ error: err.message, retryAfterSeconds: retryAfter });
+      return;
+    }
     res.status(500).json({ error: err.message || 'Failed to submit recovery request' });
   }
 }

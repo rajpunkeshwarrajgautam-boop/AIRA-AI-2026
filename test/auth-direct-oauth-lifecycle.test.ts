@@ -547,6 +547,42 @@ test('Direct Google & GitHub OAuth Complete Lifecycle Suite', async (suite) => {
     assert.equal(row.claimed_email, 'audited.recovery.test@example.com');
   });
 
+  // ---------------------------------------------------------------------------
+  // 14. BFF Recovery Rate Limiting
+  // ---------------------------------------------------------------------------
+  await suite.test('14. Recovery requests are rate-limited to 3 requests per 15 minutes', async () => {
+    const rateLimitEmail = `ratelimit.${Date.now()}@example.com`;
+    const makeReq = () => ({
+      body: {
+        claimedEmail: rateLimitEmail,
+        provider: 'all'
+      }
+    } as any);
+
+    // Request 1: success
+    const res1 = createMockResponse();
+    await handleBffRecoveryRequest(makeReq(), res1);
+    assert.equal(res1.statusCode, 200);
+
+    // Request 2: success
+    const res2 = createMockResponse();
+    await handleBffRecoveryRequest(makeReq(), res2);
+    assert.equal(res2.statusCode, 200);
+
+    // Request 3: success
+    const res3 = createMockResponse();
+    await handleBffRecoveryRequest(makeReq(), res3);
+    assert.equal(res3.statusCode, 200);
+
+    // Request 4: rate limited (HTTP 429)
+    const res4 = createMockResponse();
+    await handleBffRecoveryRequest(makeReq(), res4);
+    assert.equal(res4.statusCode, 429);
+    assert(res4.body.error.includes('RATE_LIMITED'));
+    assert(res4.headers['retry-after']);
+  });
+
   // Teardown DB pool
   await db.destroy();
 });
+

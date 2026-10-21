@@ -644,6 +644,27 @@ export class DirectOAuthService {
 
     const cleanEmail = (claimedEmail || '').trim().toLowerCase();
 
+    // Rate Limiting: Max 3 recovery requests per 15 minutes per claimed email
+    const RECOVERY_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+    const RECOVERY_RATE_LIMIT_MAX_REQUESTS = 3;
+
+    try {
+      const recentCount = await db('account_recovery_requests')
+        .where({ claimed_email: cleanEmail })
+        .where('created_at', '>', now - RECOVERY_RATE_LIMIT_WINDOW_MS)
+        .count<{ count: string | number }[]>('id as count');
+
+      const count = Number(recentCount[0]?.count || 0);
+      if (count >= RECOVERY_RATE_LIMIT_MAX_REQUESTS) {
+        const rateLimitErr = new Error('RATE_LIMITED: Too many recovery requests submitted for this email. Please wait 15 minutes before submitting again.');
+        (rateLimitErr as any).statusCode = 429;
+        (rateLimitErr as any).retryAfterSeconds = 900;
+        throw rateLimitErr;
+      }
+    } catch (countErr: any) {
+      if (countErr.statusCode === 429) throw countErr;
+    }
+
     // Check if an account exists with this email
     const matchingUser = cleanEmail ? await db('users').where({ email: cleanEmail }).first() : null;
 

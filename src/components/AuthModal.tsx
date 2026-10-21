@@ -859,14 +859,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
                       </div>
                     </div>
 
-                    <div className="space-y-1.5 text-[11px] text-claude-muted-light dark:text-gray-300">
-                      <div className="font-semibold text-claude-text-light dark:text-white">Next Steps:</div>
-                      <ol className="list-decimal list-inside space-y-1 pl-1 text-[11px] leading-relaxed">
-                        <li>Our security and operations team will review identity ownership within 24–48 hours.</li>
-                        <li>If an alternate contact was provided, verification instructions will be transmitted there.</li>
-                        <li>If you regain access to your Google or GitHub account in the meantime, you can sign in directly above.</li>
-                      </ol>
-                    </div>
+                      <div className="space-y-1.5 text-[11px] text-claude-muted-light dark:text-gray-300">
+                        <div className="font-semibold text-claude-text-light dark:text-white">Next Steps:</div>
+                        <ol className="list-decimal list-inside space-y-1 pl-1 text-[11px] leading-relaxed">
+                          <li>Our security and operations team reviews audited identity ownership requests in order of receipt.</li>
+                          <li>If an alternate contact was provided, verification instructions will be transmitted there.</li>
+                          <li>If you regain access to your Google or GitHub account in the meantime, you can sign in directly above.</li>
+                        </ol>
+                      </div>
 
                     <div className="pt-2 flex items-center justify-between border-t border-emerald-500/20">
                       <button
