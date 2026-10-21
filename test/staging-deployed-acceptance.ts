@@ -38,8 +38,7 @@ try {
       }
       const input = page.locator('main textarea').first();
       await input.waitFor({ state: 'visible', timeout: 25000 });
-      const now = Date.now();
-      await page.evaluate(`(() => {
+      await page.evaluate(() => {
         const messages = Array.from({ length: 48 }, (_, i) => ({
           id: 'stage-scroll-' + i,
           role: i % 2 === 0 ? 'user' : 'assistant',
@@ -52,7 +51,7 @@ try {
           createdAt:Date.now(), updatedAt:Date.now(), messages };
         localStorage.setItem('aira_conversations_v1', JSON.stringify([chat]));
         localStorage.setItem('aira_active_chat_id_v1', chat.id);
-      })()`);
+      });
       await page.reload({ waitUntil: 'domcontentloaded' });
       await page.getByText('Final display math', { exact:false }).waitFor({timeout:25000});
       const region = page.locator('[data-testid="chat-scroll-region"]');
