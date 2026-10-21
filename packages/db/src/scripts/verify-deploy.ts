@@ -41,7 +41,9 @@ async function main() {
     'tool_calls',
     'conversations',
     'conversation_messages',
-    'conversation_search_documents'
+    'conversation_search_documents',
+    'capacity_permits',
+    'capacity_rate_log'
   ];
 
   const missingTables: string[] = [];

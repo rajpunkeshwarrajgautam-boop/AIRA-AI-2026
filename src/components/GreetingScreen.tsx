@@ -304,7 +304,7 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
   return (
     <div 
       ref={containerRef} 
-      className="flex-1 w-full max-w-2xl mx-auto px-4 sm:px-6 py-10 md:py-16 flex flex-col items-center justify-center select-none text-center"
+      className="flex-1 w-full min-w-0 max-w-2xl mx-auto px-3 sm:px-6 py-5 sm:py-10 md:py-16 flex flex-col items-center justify-center select-none text-center"
     >
       {/* Toast Notification */}
       {toastMessage && (
@@ -328,7 +328,7 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
 
       {/* Literary Newsreader Serif Dynamic Greeting Headline */}
       <h1 
-        className="claude-fade-up font-serif font-normal text-[2.5rem] sm:text-[3.25rem] text-claude-text-light dark:text-claude-text-dark tracking-[-0.02em] leading-[1.15] mb-2.5 max-w-3xl"
+        className="claude-fade-up font-serif font-normal text-[clamp(1.85rem,7vw,2.5rem)] sm:text-[3.25rem] text-claude-text-light dark:text-claude-text-dark tracking-[-0.02em] leading-[1.15] mb-2.5 max-w-3xl"
         style={{ textWrap: 'balance' }}
       >
         {dynamicGreetingTitle}
@@ -364,7 +364,7 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
       )}
 
       {/* Context-aware Starter Suggestion Grid (Claude 2x2 warm cards with gradient surfaces) */}
-      <div className="claude-fade-up w-full grid grid-cols-1 sm:grid-cols-2 gap-3 text-left grid-flow-dense">
+      <div className="claude-fade-up w-full min-w-0 grid grid-cols-1 sm:grid-cols-2 gap-3 text-left grid-flow-dense">
         {dynamicStarters.map((starter, idx) => (
           <button
             key={starter.id}

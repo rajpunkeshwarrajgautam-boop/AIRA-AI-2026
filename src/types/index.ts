@@ -66,6 +66,20 @@ export interface Message {
   timestamp: number;
   modelUsed?: ModelId;
   isStreaming?: boolean;
+  provenance?: {
+    requestedModel: string;
+    resolvedPolicyModel: string;
+    provider: 'nvidia' | 'anthropic' | 'openai' | 'mock' | 'unknown';
+    executedModel: string;
+    plannedModel?: string;
+    outboundModel?: string;
+    upstreamResponseModel?: string;
+    fallbackOccurred: boolean;
+    fallbackReason?: string;
+    verified: boolean;
+    executionStatus: 'PENDING' | 'SUCCESS' | 'FALLBACK' | 'FAILED' | 'UNKNOWN';
+    timestamp: number;
+  };
 }
 
 export interface Conversation {
@@ -137,6 +151,8 @@ export interface MemoryItem {
   score?: number; // Hybrid BM25 + vector score
   sourceSessionId?: string;
   isPinned?: boolean;
+  projectId?: string;
+  userId?: string;
 }
 
 export interface MemoryQuery {
@@ -144,6 +160,8 @@ export interface MemoryQuery {
   limit?: number;
   tiers?: MemoryTier[];
   minScore?: number;
+  activeProjectId?: string;
+  activeUserId?: string;
 }
 
 export interface MemoryStats {

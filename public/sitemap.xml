@@ -4,26 +4,26 @@
         xsi:schemaLocation="http://www.sitemaps.org/schemas/sitemap/0.9
         http://www.sitemaps.org/schemas/sitemap/0.9/sitemap.xsd">
   <url>
-    <loc>https://aira.ai/</loc>
-    <lastmod>2026-10-03</lastmod>
+    <loc>https://aira-ai-2026.vercel.app/</loc>
+    <lastmod>2026-10-14</lastmod>
     <changefreq>daily</changefreq>
     <priority>1.0</priority>
   </url>
   <url>
-    <loc>https://aira.ai/?mode=research</loc>
-    <lastmod>2026-10-03</lastmod>
+    <loc>https://aira-ai-2026.vercel.app/?mode=research</loc>
+    <lastmod>2026-10-14</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://aira.ai/?mode=agents</loc>
-    <lastmod>2026-10-03</lastmod>
+    <loc>https://aira-ai-2026.vercel.app/?mode=agents</loc>
+    <lastmod>2026-10-14</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://aira.ai/?mode=library</loc>
-    <lastmod>2026-10-03</lastmod>
+    <loc>https://aira-ai-2026.vercel.app/?mode=library</loc>
+    <lastmod>2026-10-14</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
   </url>

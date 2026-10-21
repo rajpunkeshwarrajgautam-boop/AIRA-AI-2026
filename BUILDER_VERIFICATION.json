@@ -1,0 +1,118 @@
+{
+  "base_commit": "863d27908c8c54a0eb2c3777851630bf468eeb7c",
+  "local_branch": "feat/isolated-builder-agent",
+  "deployment_status": "LOCAL ONLY: no push, PR merge, environment change, migration or production deployment performed",
+  "feature_status": "Owner-allowlisted beta, disabled by default; requires private E2B and existing model credentials",
+  "checks": {
+    "frontend_production_build": "PASS",
+    "builder_backend_typecheck": "PASS",
+    "builder_unit_api_security_tests": {
+      "passed": 16,
+      "failed": 0,
+      "sandbox": "Injected fake sandbox; no live E2B calls",
+      "model": "Injected fake model"
+    },
+    "browser_checks": {
+      "mode": "Mocked API browser checks, not a live E2B test",
+      "results": [
+        {
+          "width": 1440,
+          "height": 900,
+          "setupGate": "pass",
+          "consent": "pass",
+          "mockStream": "pass",
+          "sandboxedIframe": "pass",
+          "download": "pass",
+          "overflow": false,
+          "errors": []
+        },
+        {
+          "width": 768,
+          "height": 1024,
+          "setupGate": "pass",
+          "consent": "pass",
+          "mockStream": "pass",
+          "sandboxedIframe": "pass",
+          "download": "pass",
+          "overflow": false,
+          "errors": []
+        },
+        {
+          "width": 390,
+          "height": 844,
+          "setupGate": "pass",
+          "consent": "pass",
+          "mockStream": "pass",
+          "sandboxedIframe": "pass",
+          "download": "pass",
+          "overflow": false,
+          "errors": []
+        },
+        {
+          "width": 320,
+          "height": 568,
+          "setupGate": "pass",
+          "consent": "pass",
+          "mockStream": "pass",
+          "sandboxedIframe": "pass",
+          "download": "pass",
+          "overflow": false,
+          "errors": []
+        },
+        {
+          "width": 844,
+          "height": 390,
+          "setupGate": "pass",
+          "consent": "pass",
+          "mockStream": "pass",
+          "sandboxedIframe": "pass",
+          "download": "pass",
+          "overflow": false,
+          "errors": []
+        }
+      ]
+    },
+    "existing_model_routing_regression": "PASS",
+    "existing_session_auth_regression": "PASS",
+    "lint": {
+      "errors": 0,
+      "warnings": 84
+    },
+    "e2b_sdk_import": "PASS, no external API call"
+  },
+  "not_verified": [
+    "Live E2B sandbox creation/execution and provider network policy",
+    "Real paid-model website-building task quality",
+    "Hosting function timeout and production preview behavior",
+    "Production deployment and activation"
+  ],
+  "known_limits": [
+    "15-minute temporary workspaces; in-memory UI state",
+    "Bounded HTTP runs, no durable background queue",
+    "3 MiB file downloads, no permanent object storage",
+    "Owner allowlist required; no distributed quotas",
+    "Existing Tailwind-related audit chain reports 5 high-severity findings; separate dependency remediation needed"
+  ],
+  "changed_files": {
+    ".gitignore": "f63e61a4110b2b8a95f5425c4628acf5f77154306bea932f452512bd37cd3883",
+    "README.md": "0626cb608909603f15048f3d6202a8ec254feb90f5dddddc169d77749fe4880c",
+    "apps/api/src/builder-routes.ts": "10ffe58851c521867d467fd8ad572069252c04a7ebbddf3545eb7d30c69001e2",
+    "apps/api/src/index.ts": "1798ed111e0d7de3b29e7ec833a6309ca977b3b62fe9aa5322e6725a1a0241e9",
+    "docs/BUILDER_SETUP.md": "71567732964c75dc547fa31743b6fe48f47fa836d2d2cad96e0edc42d516d4d1",
+    "package-lock.json": "a2763c9f7f1f4c10938e151bc41c275a3cb5d68008a7a153bd7b077ec55cb5ff",
+    "package.json": "1f6e17c0b8aefd9ed9972a73757bb35c68e2ebed8f5fa62c552d3ddb5642f8c6",
+    "packages/builder-runtime/src/contracts.ts": "f2d4b02e2769d08e4600729ae9bd0d4a080dc4993477d6bdd8ade29d11d6edbc",
+    "packages/builder-runtime/src/index.ts": "8fd55b4a66b7e0556860b8e668fa9a6c78357602ef78e827d797e33cd5d4b5f3",
+    "packages/builder-runtime/src/sandbox.ts": "5ea0a8e6b2f7acc743ba74fc5b6f103a68b86312b2aad1b96fa7cfe60dbe13ea",
+    "packages/builder-runtime/src/security.ts": "bb2c60a330181be4ccf529791419a18e54ce1c04a81b909e38037286778e533a",
+    "packages/contracts/src/index.ts": "c350295bc35e03ed7479303ccf05e93efc2139521d242e0be54131ac5ab62020",
+    "packages/model-router/src/index.ts": "6803de19bdee3211053a9993b9cfc750534228c6c60edca1f2ecc31fa8836282",
+    "scripts/preview-builder.ts": "471878be79a816314190519aaf1b57691575b56c71d58293384b9db4f36ab428",
+    "src/App.tsx": "49a6205fc24eae12320e49971c08b785e284ff119c62fcbb4155a65e85534c8d",
+    "src/components/AgentsView.tsx": "ec2d6528c7a4c6316167b1c170004973b8f071b73f760dc8ad77ed00fb1e8ca4",
+    "src/components/BuilderWorkspace.tsx": "af5f1ce50a1fc661144d7aafbd63ee8ee8caab5a35fe6f5fe32dfe3ad44d39f4",
+    "src/utils/builderClient.ts": "41b913df3b3f2eb268b2f8ce02e871a42cb0453ff96898b9ec3394d34303f7d7",
+    "test/builder-agent.test.ts": "ec3a0f82e4c2050737b6fbb967d431e7949097c019df7a68d50532044b8b592f",
+    "test/builder-ui.ts": "cb14076183a3dd59ede5da6a3ee7627f0620a212c389e3f79647b6a800357bc9"
+  }
+}

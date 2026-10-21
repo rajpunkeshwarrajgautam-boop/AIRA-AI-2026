@@ -22,6 +22,69 @@ interface ChatMessageProps {
   onRetry?: () => void;
 }
 
+export interface ProvenanceBadgeInfo {
+  providerLabel: string;
+  modelLabel: string;
+  statusSuffix: string;
+  text: string;
+  className: string;
+  title: string;
+  isVerified: boolean;
+  executionStatus: string;
+}
+
+export function formatProvenanceBadge(provenance: NonNullable<Message['provenance']>): ProvenanceBadgeInfo {
+  const providerLabel =
+    provenance.provider === 'nvidia'
+      ? 'NVIDIA'
+      : provenance.provider === 'anthropic'
+      ? 'Anthropic'
+      : provenance.provider === 'openai'
+      ? 'OpenAI'
+      : provenance.provider === 'mock'
+      ? 'Mock'
+      : 'Aira';
+
+  const modelLabel = provenance.executedModel.split('/').pop() || provenance.executedModel;
+  const isVerified = Boolean(provenance.verified);
+  const isFallback = Boolean(provenance.fallbackOccurred || provenance.executionStatus === 'FALLBACK');
+  const isFailed = provenance.executionStatus === 'FAILED';
+
+  let statusSuffix = '';
+  if (isFailed) {
+    statusSuffix = ' (Failed)';
+  } else if (isFallback) {
+    statusSuffix = isVerified ? ' (Fallback)' : ' (Fallback · Unconfirmed)';
+  } else if (!isVerified) {
+    statusSuffix = ' (Unconfirmed)';
+  }
+
+  const text = `${providerLabel} · ${modelLabel}${statusSuffix}`;
+
+  const className = `rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider transition-colors ${
+    isFailed
+      ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/30'
+      : !isVerified
+      ? 'bg-amber-500/10 text-amber-700/90 dark:text-amber-400/90 border border-dashed border-amber-500/40 dark:border-amber-400/30'
+      : 'bg-claude-surface2-light text-claude-muted-light dark:bg-claude-surface2-dark dark:text-claude-muted-dark'
+  }`;
+
+  const verificationDesc = isVerified ? 'Confirmed' : 'Unconfirmed (verified: false)';
+  const fallbackDesc = provenance.fallbackOccurred && provenance.fallbackReason ? ` (Fallback: ${provenance.fallbackReason})` : '';
+  const title = `Provider: ${provenance.provider.toUpperCase()} | Executed Model: ${provenance.executedModel} | Verification: ${verificationDesc}${fallbackDesc}`;
+
+  return {
+    providerLabel,
+    modelLabel,
+    statusSuffix,
+    text,
+    className,
+    title,
+    isVerified,
+    executionStatus: provenance.executionStatus
+  };
+}
+
 export const ChatMessage: React.FC<ChatMessageProps> = ({
   message,
   userName,
@@ -61,7 +124,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
       initial={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 12, scale: 0.99 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={reducedMotion ? { duration: 0.08 } : { type: 'spring', stiffness: 140, damping: 22, mass: 0.78 }}
-      className={`group mx-auto w-full max-w-4xl px-4 py-5 md:px-6 ${isUser ? 'flex justify-end' : ''}`}
+      className={`group mx-auto w-full min-w-0 max-w-4xl px-3 sm:px-4 py-3 sm:py-5 md:px-6 ${isUser ? 'flex justify-end' : ''}`}
     >
       {isUser ? (
         <div className="flex max-w-[85%] flex-col items-end">
@@ -91,8 +154,8 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
           </div>
         </div>
       ) : (
-        <div className="flex w-full items-start gap-5">
-          <div className="mt-1 shrink-0">
+        <div className="flex w-full items-start gap-2 sm:gap-5">
+          <div className="mt-1 hidden shrink-0 sm:block">
             <AiraMark size="sm" />
           </div>
 
@@ -101,7 +164,20 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
               <span className="text-sm font-semibold tracking-tight text-claude-text-light dark:text-claude-text-dark">
                 Aira
               </span>
-              {message.modelUsed && (
+              {message.provenance ? (() => {
+                const badge = formatProvenanceBadge(message.provenance);
+                return (
+                  <span
+                    data-testid="model-provenance-badge"
+                    data-verified={badge.isVerified ? 'true' : 'false'}
+                    data-execution-status={badge.executionStatus}
+                    className={badge.className}
+                    title={badge.title}
+                  >
+                    {badge.text}
+                  </span>
+                );
+              })() : message.modelUsed && (
                 <span className="rounded-full bg-claude-surface2-light px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-claude-muted-light dark:bg-claude-surface2-dark dark:text-claude-muted-dark">
                   {AVAILABLE_MODELS.find(model => model.id === message.modelUsed)?.name}
                 </span>
@@ -113,7 +189,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
             <motion.div layout>
               <div
                 ref={assistantContentRef}
-                className="aira-prose break-words font-sans text-base leading-[1.7] text-claude-text-light md:text-[17px] dark:text-claude-text-dark"
+                className="aira-prose min-w-0 break-words font-sans text-base leading-[1.7] text-claude-text-light md:text-[17px] dark:text-claude-text-dark"
                 dangerouslySetInnerHTML={{ __html: renderMarkdownToHtml(message.content) }}
               />
               {message.isStreaming && (

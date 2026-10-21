@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { PanelLeft, Layers, Bookmark, Share2, Check, FolderGit2 } from 'lucide-react';
 import type { Conversation, Message, Artifact, Attachment, Project, AppSettings, WorkspaceMode } from './types';
 import {
-  loadConversations, saveConversations, loadActiveChatId, saveActiveChatId,
+  loadConversations, saveConversations, saveActiveChatId,
+  getSessionActiveChatId, setSessionActiveChatId,
   loadProjects, saveProjects, loadSettings, saveSettings, INITIAL_CONVERSATION
 } from './utils/storage';
 import { streamAIResponse } from './utils/aiEngine';
@@ -16,13 +17,22 @@ import { AiraMark } from './components/AiraMark';
 import { CommandPalette } from './components/CommandPalette';
 import { ConversationSearchOverlay } from './components/ConversationSearchOverlay';
 import { InlineToast } from './components/InlineToast';
-import { backfillConversationsBestEffort, deleteConversationFromServer, fetchConversationFromServer, syncConversationToServer } from './utils/conversationSearch';
+import { backfillConversationsBestEffort, deleteConversationFromServer, fetchAllConversationsFromServer, fetchConversationFromServer, syncConversationToServer } from './utils/conversationSearch';
+import { useAnimatedFavicon } from './utils/animatedFavicon';
 
 // Lazy-loaded heavy auxiliary surfaces to optimize FCP and TTI
 const ArtifactStudio = React.lazy(() => import('./components/ArtifactStudio').then(m => ({ default: m.ArtifactStudio })));
 const ProjectsModal = React.lazy(() => import('./components/ProjectsModal').then(m => ({ default: m.ProjectsModal })));
 const SettingsModal = React.lazy(() => import('./components/SettingsModal').then(m => ({ default: m.SettingsModal })));
 import { MemoryVaultModal } from './components/MemoryVaultModal';
+import { AuthModal } from './components/AuthModal';
+import { PricingModal } from './components/PricingModal';
+import { VisionStudioModal } from './components/VisionStudioModal';
+import { AccountBillingModal } from './components/AccountBillingModal';
+import { neonAuth, authenticatedApiFetch } from './lib/neonAuth';
+import { LibraryView } from './components/LibraryView';
+import { BuilderWorkspace } from './components/BuilderWorkspace';
+import { AutomationsView } from './components/AutomationsView';
 
 const MODE_CONTEXT: Record<WorkspaceMode, string> = {
   chat: '',
@@ -33,15 +43,40 @@ const MODE_CONTEXT: Record<WorkspaceMode, string> = {
 };
 
 function App() {
-  const [conversations, setConversations] = useState<Conversation[]>(() => loadConversations());
-  const [activeChatId, setActiveChatId] = useState(() => loadActiveChatId());
+  useAnimatedFavicon();
+  const [currentUserId, setCurrentUserId] = useState<string | null>(() => neonAuth.getCurrentUser()?.id || null);
+  const [conversations, setConversations] = useState<Conversation[]>(() => {
+    const user = neonAuth.getCurrentUser();
+    return loadConversations(user?.id);
+  });
+  // Root visits without an active tab session start on a transient welcome draft.
+  // When an active session exists (in-tab session or ?c= param), restore it on reload.
+  const [activeChatId, setActiveChatId] = useState<string>(() => {
+    const sessionChatId = getSessionActiveChatId();
+    if (sessionChatId) {
+      const user = neonAuth.getCurrentUser();
+      const stored = loadConversations(user?.id);
+      if (stored.some(c => c.id === sessionChatId)) {
+        return sessionChatId;
+      }
+    }
+    return '';
+  });
+  const [welcomeConversation] = useState<Conversation>(() => ({
+    ...INITIAL_CONVERSATION, id: `chat-${crypto.randomUUID()}`,
+    createdAt: Date.now(), updatedAt: Date.now(), messages: [],
+  }));
   const [projects, setProjects] = useState<Project[]>(() => loadProjects());
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>(() => localStorage.getItem('aira_active_project_id_v1') || undefined);
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('chat');
-  const [sidebarOpen, setSidebarOpen] = useState(() => typeof window !== 'undefined' ? window.innerWidth >= 768 : true);
+  const [sidebarOpen, setSidebarOpen] = useState(() => typeof window !== 'undefined' ? window.innerWidth >= 1280 : true);
   const [isProjectsOpen, setIsProjectsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isAuthOpen, setIsAuthOpen] = useState(false);
+  const [isPricingOpen, setIsPricingOpen] = useState(false);
+  const [isVisionOpen, setIsVisionOpen] = useState(false);
+  const [isAccountBillingOpen, setIsAccountBillingOpen] = useState(false);
   const [isMemoryVaultOpen, setIsMemoryVaultOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isConversationSearchOpen, setIsConversationSearchOpen] = useState(false);
@@ -63,17 +98,106 @@ function App() {
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const conversationSyncVersionsRef = useRef<Map<string, string>>(new Map());
   const initialConversationBackfillRef = useRef(false);
+  const authEpochRef = useRef(0);
+  const conversationsOwnerRef = useRef<string | null>(currentUserId);
 
   const activeConversation = useMemo(
-    () => conversations.find(c => c.id === activeChatId) || conversations[0],
-    [conversations, activeChatId]
+    () => conversations.find(c => c.id === activeChatId) || welcomeConversation,
+    [conversations, activeChatId, welcomeConversation]
   );
   const currentProject = useMemo(
     () => projects.find(p => p.id === activeProjectId),
     [projects, activeProjectId]
   );
 
-  useEffect(() => saveConversations(conversations), [conversations]);
+  // The sidebar is a desktop rail at xl and a temporary drawer below xl.
+  // Reconcile visibility when an orientation change crosses that boundary.
+  useEffect(() => {
+    const desktop = window.matchMedia('(min-width: 1280px)');
+    const onBreakpointChange = (event: MediaQueryListEvent) => setSidebarOpen(event.matches);
+    desktop.addEventListener('change', onBreakpointChange);
+    return () => desktop.removeEventListener('change', onBreakpointChange);
+  }, []);
+
+  // Proactively restore first-party BFF session from HttpOnly cookie on mount
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.location?.search) {
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get('auth_error')) {
+        setIsAuthOpen(true);
+      }
+    }
+    neonAuth.restoreSession().catch((err) => {
+      console.warn('[App] First-party session restore notice:', err);
+    });
+  }, []);
+
+  useEffect(() => {
+    return neonAuth.onAuthStateChange(async (user) => {
+      const epoch = ++authEpochRef.current;
+      const nextUserId = user?.id || null;
+
+      // Identity transition boundary: immediately isolate and purge prior account in-memory state
+      if (nextUserId !== currentUserId) {
+        setActiveChatId('');
+        setSessionActiveChatId(null);
+        setActiveArtifact(null);
+        setHighlightedMessageId(null);
+        conversationSyncVersionsRef.current.clear();
+      }
+
+      setCurrentUserId(nextUserId);
+
+      if (user) {
+        setSettings(s => ({
+          ...s,
+          userName: user.name || s.userName,
+          email: user.email || s.email,
+        }));
+
+        // Immediately load cached conversations belonging to this verified user
+        const cached = loadConversations(user.id);
+        conversationsOwnerRef.current = user.id;
+        setConversations(cached);
+
+        // Hydrate persistent conversations from PostgreSQL server
+        try {
+          const serverConvs = await fetchAllConversationsFromServer();
+          // Discard stale hydration response if user logged out or switched accounts while fetch was in flight
+          if (authEpochRef.current !== epoch) return;
+
+          if (serverConvs && serverConvs.length > 0) {
+            conversationsOwnerRef.current = user.id;
+            setConversations(serverConvs);
+            saveConversations(serverConvs, user.id);
+            setActiveChatId(prev => (serverConvs.some(c => c.id === prev) ? prev : ''));
+          }
+        } catch {
+          // Server fetch failed: cached local state remains active
+        }
+      } else {
+        // Account signed out: revert to isolated guest state and clear memory
+        setSettings(s => ({
+          ...s,
+          userName: 'Guest User',
+          email: '',
+        }));
+        conversationsOwnerRef.current = null;
+        const guestConvs = loadConversations();
+        setConversations(guestConvs);
+        // Preserve root welcome screen contract on fresh tab; restore only if already active
+        setActiveChatId(prev => (guestConvs.some(c => c.id === prev) ? prev : ''));
+      }
+    });
+  }, [currentUserId]);
+
+  useEffect(() => {
+    // Only persist conversations if in-memory data strictly belongs to current active user
+    if (conversationsOwnerRef.current === currentUserId) {
+      saveConversations(conversations, currentUserId || undefined);
+    }
+  }, [conversations, currentUserId]);
+
   useEffect(() => {
     if (!initialConversationBackfillRef.current) {
       initialConversationBackfillRef.current = true;
@@ -84,7 +208,10 @@ function App() {
           `${conversation.updatedAt}:${stableMessages}:${conversation.title}:${Boolean(conversation.isPinned)}`
         );
       }
-      void backfillConversationsBestEffort(conversations);
+      const populated = conversations.filter(c => c.messages.some(m => !m.isStreaming));
+      if (populated.length > 0) {
+        void backfillConversationsBestEffort(populated);
+      }
       return;
     }
 
@@ -94,6 +221,7 @@ function App() {
       if (conversation.messages.some(message => message.isStreaming)) continue;
 
       const stableMessages = conversation.messages.length;
+      if (stableMessages === 0) continue;
       const version = `${conversation.updatedAt}:${stableMessages}:${conversation.title}:${Boolean(conversation.isPinned)}`;
       if (conversationSyncVersionsRef.current.get(conversation.id) === version) continue;
 
@@ -101,8 +229,12 @@ function App() {
       void syncConversationToServer(conversation);
     }
   }, [conversations]);
+
   useEffect(() => saveProjects(projects), [projects]);
   useEffect(() => saveSettings(settings), [settings]);
+  useEffect(() => {
+    setSessionActiveChatId(activeChatId || null);
+  }, [activeChatId]);
   useEffect(() => {
     if (activeProjectId) localStorage.setItem('aira_active_project_id_v1', activeProjectId);
     else localStorage.removeItem('aira_active_project_id_v1');
@@ -110,11 +242,16 @@ function App() {
 
   useEffect(() => {
     const root = document.documentElement;
-    const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    const dark = settings.theme === 'dark' || (settings.theme === 'system' && systemDark);
-    root.classList.toggle('dark', dark);
-    if (settings.aestheticPreset && settings.aestheticPreset !== 'default') root.dataset.theme = settings.aestheticPreset;
-    else delete root.dataset.theme;
+    const systemColor = window.matchMedia('(prefers-color-scheme: dark)');
+    const applyTheme = () => {
+      const dark = settings.theme === 'dark' || (settings.theme === 'system' && systemColor.matches);
+      root.classList.toggle('dark', dark);
+      if (settings.aestheticPreset && settings.aestheticPreset !== 'default') root.dataset.theme = settings.aestheticPreset;
+      else delete root.dataset.theme;
+    };
+    applyTheme();
+    systemColor.addEventListener('change', applyTheme);
+    return () => systemColor.removeEventListener('change', applyTheme);
   }, [settings.theme, settings.aestheticPreset]);
 
   // Only scroll the conversation region; scrollIntoView can also move the
@@ -148,6 +285,7 @@ function App() {
     setConversations(prev => [next, ...prev]);
     setActiveChatId(id);
     saveActiveChatId(id);
+    setSessionActiveChatId(id);
     setActiveArtifact(null);
     setWorkspaceMode('chat');
   }, [activeProjectId]);
@@ -171,6 +309,7 @@ function App() {
   const handleSelectChat = (id: string) => {
     setActiveChatId(id);
     saveActiveChatId(id);
+    setSessionActiveChatId(id);
     setActiveArtifact(null);
   };
 
@@ -229,6 +368,7 @@ function App() {
       if (id === activeChatId) {
         setActiveChatId(next[0].id);
         saveActiveChatId(next[0].id);
+        setSessionActiveChatId(next[0].id);
       }
       return next;
     });
@@ -263,6 +403,7 @@ function App() {
     setConversations(prev => [duplicate, ...prev]);
     setActiveChatId(duplicate.id);
     saveActiveChatId(duplicate.id);
+    setSessionActiveChatId(duplicate.id);
     setActiveArtifact(null);
     setWorkspaceMode('chat');
     showToast('Conversation duplicated');
@@ -303,6 +444,14 @@ function App() {
     if (!conversation) return;
 
     const id = conversation.id;
+    if (!conversations.some(c => c.id === id)) {
+      conversation = { ...conversation, projectId: activeProjectId };
+      const draft = conversation;
+      setConversations(prev => [draft, ...prev]);
+      setActiveChatId(id);
+      saveActiveChatId(id);
+      setSessionActiveChatId(id);
+    }
     const cleanTitle = rawText.replace(/^\[[^\]]+\]\s*/, '').trim();
     const userMessage: Message = {
       id: 'user-' + Date.now(),
@@ -361,6 +510,14 @@ function App() {
             ...c,
             messages: c.messages.map(m => m.id === assistantId ? { ...m, content: m.content + chunk } : m),
           })),
+          onProvenance: provenance => updateConversation(id, c => ({
+            ...c,
+            messages: c.messages.map(m => m.id === assistantId ? {
+              ...m,
+              provenance,
+              modelUsed: (provenance.executedModel || m.modelUsed) as any
+            } : m),
+          })),
           onArtifactFound: artifact => {
             setActiveArtifact(artifact);
             updateConversation(id, c => ({
@@ -378,6 +535,9 @@ function App() {
           },
           onStatusUpdate: status => {
             setExecutionStatus(status);
+          },
+          onLatencyMetrics: metrics => {
+            console.info('[AIRA Telemetry] Client observed latency metrics:', metrics);
           },
           onComplete: () => {
             setExecutionStatus(null);
@@ -418,10 +578,9 @@ function App() {
     if (!pendingApproval) return;
     setIsSubmittingApproval(true);
     try {
-      const res = await fetch(`/api/runs/${pendingApproval.runId}/approve`, {
+      const res = await authenticatedApiFetch(`/api/runs/${pendingApproval.runId}/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
         body: JSON.stringify({
           requestId: pendingApproval.id,
           decision
@@ -452,7 +611,7 @@ function App() {
   const updateSettings = (partial: Partial<AppSettings>) => setSettings(prev => ({ ...prev, ...partial }));
 
   return (
-    <div className="h-[100dvh] w-screen flex overflow-hidden bg-claude-bg-light dark:bg-claude-bg-dark text-claude-text-light dark:text-claude-text-dark">
+    <div className="h-[100dvh] w-full min-w-0 flex overflow-hidden bg-claude-bg-light dark:bg-claude-bg-dark text-claude-text-light dark:text-claude-text-dark">
       <Sidebar
         conversations={conversations}
         activeChatId={activeChatId}
@@ -467,6 +626,7 @@ function App() {
         activeProjectId={activeProjectId}
         onOpenProjects={() => setIsProjectsOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenAuth={() => setIsAuthOpen(true)}
         onOpenSearch={handleOpenConversationSearch}
         isOpen={sidebarOpen}
         onToggleOpen={() => setSidebarOpen(v => !v)}
@@ -474,6 +634,9 @@ function App() {
         onUpdateSettings={updateSettings}
         workspaceMode={workspaceMode}
         onSelectWorkspace={setWorkspaceMode}
+        onOpenVisionStudio={() => setIsVisionOpen(true)}
+        onOpenPricing={() => setIsPricingOpen(true)}
+        onOpenBilling={() => setIsAccountBillingOpen(true)}
       />
 
       <CommandPalette
@@ -501,8 +664,8 @@ function App() {
 
       <main className="flex-1 min-w-0 min-h-0 h-[100dvh] flex flex-col overflow-hidden w-full max-w-full bg-mesh-canvas">
         <header className="h-[54px] shrink-0 px-3 md:px-5 flex items-center justify-between border-b border-claude-border-light/80 dark:border-claude-border-dark/80 gradient-fade-header relative z-50 bg-claude-bg-light/95 dark:bg-claude-bg-dark/95 backdrop-blur-md">
-          <div className="flex items-center gap-2 min-w-0">
-            {(!sidebarOpen || (typeof window !== 'undefined' && window.innerWidth < 768)) && (
+          <div className="flex flex-1 items-center gap-1 min-w-0">
+            {!sidebarOpen && (
               <>
                 <button 
                   onClick={() => setSidebarOpen(true)} 
@@ -523,23 +686,29 @@ function App() {
               extendedThinking={settings.extendedThinking}
               onToggleThinking={enabled => updateSettings({ extendedThinking: enabled })}
             />
-            {currentProject && <button onClick={() => setIsProjectsOpen(true)} className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-claude-terracotta/10 text-claude-terracotta text-xs max-w-[180px]"><FolderGit2 className="w-3 h-3" /><span className="truncate">{currentProject.name}</span></button>}
+            {currentProject && <button onClick={() => setIsProjectsOpen(true)} className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-claude-terracotta/10 text-claude-accentInk text-xs max-w-[180px]"><FolderGit2 className="w-3 h-3" /><span className="truncate">{currentProject.name}</span></button>}
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
             {activeConversation?.messages.some(m => (m.artifacts?.length || 0) > 0) && <button onClick={() => {
               if (activeArtifact) setActiveArtifact(null);
               else {
                 const artifact = activeConversation.messages.flatMap(m => m.artifacts || [])[0];
                 if (artifact) setActiveArtifact(artifact);
               }
-            }} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs ${activeArtifact ? 'bg-claude-terracotta text-white' : 'hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark'}`}><Layers className="w-3.5 h-3.5" /><span className="hidden sm:inline">Output Studio</span></button>}
-            {activeConversation && <button onClick={() => handleToggleStar(activeConversation.id)} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark active:scale-95 transition-all" title={activeConversation.isPinned ? 'Remove bookmark' : 'Bookmark conversation'}><Bookmark className={`w-4 h-4 ${activeConversation.isPinned ? 'fill-claude-terracotta text-claude-terracotta' : 'text-claude-muted-light dark:text-claude-muted-dark'}`} /></button>}
+            }} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs ${activeArtifact ? 'bg-claude-terracotta text-claude-onAccent' : 'hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark'}`}><Layers className="w-3.5 h-3.5" /><span className="hidden sm:inline">Output Studio</span></button>}
+            {activeConversation && <button onClick={() => handleToggleStar(activeConversation.id)} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark active:scale-95 transition-all" title={activeConversation.isPinned ? 'Remove bookmark' : 'Bookmark conversation'}><Bookmark className={`w-4 h-4 ${activeConversation.isPinned ? 'fill-claude-terracotta text-claude-accentInk' : 'text-claude-muted-light dark:text-claude-muted-dark'}`} /></button>}
             <button onClick={handleShare} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark">{sharedCopied ? <Check className="w-4 h-4 text-emerald-400" /> : <Share2 className="w-4 h-4 text-claude-muted-light dark:text-claude-muted-dark" />}</button>
           </div>
         </header>
 
-        <div ref={chatScrollRef} data-testid="chat-scroll-region" className="flex-1 min-h-0 overflow-x-hidden overflow-y-auto overscroll-contain flex flex-col">
-          {!activeConversation || activeConversation.messages.length === 0 ? (
+        <div ref={chatScrollRef} data-testid="chat-scroll-region" className="flex-1 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain flex flex-col">
+          {workspaceMode === 'library' ? (
+            <LibraryView />
+          ) : workspaceMode === 'agents' ? (
+            <BuilderWorkspace model={settings.activeModel} />
+          ) : workspaceMode === 'automations' ? (
+            <AutomationsView />
+          ) : (!activeConversation || activeConversation.messages.length === 0 ? (
             <GreetingScreen 
               userName={settings.userName} 
               workspaceMode={workspaceMode} 
@@ -563,11 +732,10 @@ function App() {
                 </div>
               ))}
             </div>
-          )}
-
+          ))}
         </div>
 
-          <div className="shrink-0 relative z-10 pt-4 gradient-mask-bottom">
+          {workspaceMode !== 'agents' && (<div className="shrink-0 min-w-0 relative z-10 pt-2 sm:pt-4 gradient-mask-bottom">
             {executionStatus && (
               <div className="max-w-2xl mx-auto px-4 mb-2">
                 <div className="flex items-center gap-2 text-xs text-orange-600 dark:text-orange-400 bg-orange-50/90 dark:bg-orange-950/40 border border-orange-200/60 dark:border-orange-800/50 rounded-lg px-3 py-1.5 shadow-sm backdrop-blur">
@@ -620,7 +788,7 @@ function App() {
               workspaceMode={workspaceMode}
               onWorkspaceModeChange={setWorkspaceMode}
             />
-          </div>
+          </div>)}
       </main>
 
       <React.Suspense fallback={null}>
@@ -664,6 +832,38 @@ function App() {
             onClose={() => setIsMemoryVaultOpen(false)}
           />
         )}
+
+        <AuthModal
+          isOpen={isAuthOpen}
+          onClose={() => setIsAuthOpen(false)}
+          onAuthSuccess={(user) => {
+            setSettings(s => ({
+              ...s,
+              userName: user.name || s.userName,
+              email: user.email || s.email,
+            }));
+            setToastMessage(`Welcome, ${user.name}! Sync active.`);
+          }}
+        />
+
+        <PricingModal
+          isOpen={isPricingOpen}
+          onClose={() => setIsPricingOpen(false)}
+        />
+
+        <VisionStudioModal
+          isOpen={isVisionOpen}
+          onClose={() => setIsVisionOpen(false)}
+        />
+
+        <AccountBillingModal
+          isOpen={isAccountBillingOpen}
+          onClose={() => setIsAccountBillingOpen(false)}
+          onOpenPricing={() => {
+            setIsAccountBillingOpen(false);
+            setIsPricingOpen(true);
+          }}
+        />
       </React.Suspense>
     </div>
   );

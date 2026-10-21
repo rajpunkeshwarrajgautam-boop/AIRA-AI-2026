@@ -9,18 +9,39 @@ const connectionString = process.env.DATABASE_URL || 'postgres://aira:aira@local
 
 const isServerless = process.env.VERCEL === '1' || process.env.NODE_ENV === 'production';
 
+export function resolveEffectiveDatabaseUrl(rawUrl: string, isServerless: boolean): string {
+  if (!isServerless) return rawUrl;
+  try {
+    const parsed = new URL(rawUrl);
+    const host = parsed.hostname;
+    if (host.endsWith('.neon.tech') && !host.includes('-pooler')) {
+      const parts = host.split('.');
+      if (parts.length >= 4 && parts[parts.length - 2] === 'neon' && parts[parts.length - 1] === 'tech') {
+        parts[0] = `${parts[0]}-pooler`;
+        parsed.hostname = parts.join('.');
+        return parsed.toString();
+      }
+    }
+    return rawUrl;
+  } catch {
+    return rawUrl;
+  }
+}
+
+const effectiveConnectionString = resolveEffectiveDatabaseUrl(connectionString, isServerless);
+
 export const db = knex({
   client: 'pg',
   connection: {
-    connectionString,
-    ssl: connectionString.includes('neon.tech') || connectionString.includes('sslmode=require')
+    connectionString: effectiveConnectionString,
+    ssl: effectiveConnectionString.includes('neon.tech') || effectiveConnectionString.includes('sslmode=require')
       ? { rejectUnauthorized: false }
       : false,
   },
   pool: {
-    min: isServerless ? 0 : 2,
-    max: isServerless ? 5 : 10,
-    acquireTimeoutMillis: 30000,
+    min: 0,
+    max: isServerless ? 8 : 10,
+    acquireTimeoutMillis: 15000,
     idleTimeoutMillis: 10000,
     reapIntervalMillis: 1000,
   },

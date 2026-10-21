@@ -16,6 +16,7 @@ export function normalizeStoredModelId(model: unknown): AppSettings['activeModel
 const STORAGE_KEYS = {
   CONVERSATIONS: 'aira_conversations_v1',
   ACTIVE_CHAT: 'aira_active_chat_id_v1',
+  SESSION_ACTIVE_CHAT: 'aira_active_chat_session',
   PROJECTS: 'aira_projects_v1',
   ACTIVE_PROJECT: 'aira_active_project_id_v1',
   SETTINGS: 'aira_settings_v1',
@@ -30,11 +31,18 @@ export const INITIAL_CONVERSATION: Conversation = {
   messages: [],
 };
 
-export function loadConversations(): Conversation[] {
+export function getConversationsStorageKey(userId?: string): string {
+  return userId ? `aira_conversations_user_${userId}` : STORAGE_KEYS.CONVERSATIONS;
+}
+
+export function loadConversations(userId?: string): Conversation[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.CONVERSATIONS);
+    const key = getConversationsStorageKey(userId);
+    const raw = localStorage.getItem(key);
     if (!raw) {
-      saveConversations([INITIAL_CONVERSATION]);
+      if (!userId) {
+        saveConversations([INITIAL_CONVERSATION]);
+      }
       return [INITIAL_CONVERSATION];
     }
     const parsed = JSON.parse(raw);
@@ -45,9 +53,10 @@ export function loadConversations(): Conversation[] {
   }
 }
 
-export function saveConversations(conversations: Conversation[]): void {
+export function saveConversations(conversations: Conversation[], userId?: string): void {
   try {
-    localStorage.setItem(STORAGE_KEYS.CONVERSATIONS, JSON.stringify(conversations));
+    const key = getConversationsStorageKey(userId);
+    localStorage.setItem(key, JSON.stringify(conversations));
   } catch {
     console.error('Failed to save conversations to localStorage');
   }
@@ -59,6 +68,40 @@ export function loadActiveChatId(): string {
 
 export function saveActiveChatId(id: string): void {
   localStorage.setItem(STORAGE_KEYS.ACTIVE_CHAT, id);
+}
+
+export function getSessionActiveChatId(): string | null {
+  try {
+    if (typeof window === 'undefined') return null;
+    const urlParam = new URLSearchParams(window.location.search).get('c');
+    if (urlParam) return urlParam;
+    return window.sessionStorage?.getItem(STORAGE_KEYS.SESSION_ACTIVE_CHAT) || null;
+  } catch {
+    return null;
+  }
+}
+
+export function setSessionActiveChatId(id: string | null): void {
+  try {
+    if (typeof window === 'undefined') return;
+    if (id) {
+      window.sessionStorage?.setItem(STORAGE_KEYS.SESSION_ACTIVE_CHAT, id);
+      const url = new URL(window.location.href);
+      if (url.searchParams.get('c') !== id) {
+        url.searchParams.set('c', id);
+        window.history?.replaceState(null, '', url.toString());
+      }
+    } else {
+      window.sessionStorage?.removeItem(STORAGE_KEYS.SESSION_ACTIVE_CHAT);
+      const url = new URL(window.location.href);
+      if (url.searchParams.has('c')) {
+        url.searchParams.delete('c');
+        window.history?.replaceState(null, '', url.pathname + (url.search ? url.search : ''));
+      }
+    }
+  } catch {
+    // Non-blocking
+  }
 }
 
 export function loadProjects(): Project[] {

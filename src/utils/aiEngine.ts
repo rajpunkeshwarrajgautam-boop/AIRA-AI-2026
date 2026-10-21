@@ -1,66 +1,37 @@
 import type { AppSettings, Artifact, Attachment, ModelId, ArtifactType } from '../types';
 import { agentMemory } from './agentMemoryEngine';
+import { neonAuth } from '../lib/neonAuth';
 
 export interface StreamCallbacks {
   onThinkingChunk?: (chunk: string) => void;
   onContentChunk: (chunk: string) => void;
+  onProvenance?: (provenance: any) => void;
   onArtifactFound?: (artifact: Artifact) => void;
   onApprovalRequired?: (approval: { id: string; runId: string; toolCall?: { name: string; arguments: any }; reason?: string }) => void;
   onStatusUpdate?: (status: string) => void;
+  onLatencyMetrics?: (metrics: {
+    requestId: string;
+    ttftMs: number | null;
+    totalMs: number;
+    deltaCount: number;
+    thinkingCount: number;
+    executedModel: string;
+    executedProvider: string;
+  }) => void;
   onComplete: () => void;
   onError: (error: string) => void;
 }
 
-let sessionBootstrapPromise: Promise<void> | null = null;
-
-async function ensureApiSession(forceRefresh = false): Promise<void> {
-  if (forceRefresh) sessionBootstrapPromise = null;
-  if (sessionBootstrapPromise) return sessionBootstrapPromise;
-
-  sessionBootstrapPromise = (async () => {
-    const response = await fetch('/api/auth/session', {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-      },
-      credentials: 'same-origin',
-    });
-
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '');
-      throw new Error(`Session bootstrap failed (${response.status})${detail ? `: ${detail}` : ''}`);
-    }
-  })();
-
-  try {
-    await sessionBootstrapPromise;
-  } catch (error) {
-    sessionBootstrapPromise = null;
-    throw error;
-  }
-}
+import { authenticatedApiFetch, AuthenticationRequiredError } from '../lib/neonAuth';
 
 async function postChatStream(body: unknown): Promise<Response> {
-  await ensureApiSession();
-
-  const request = () => fetch('/api/chat/stream', {
+  return authenticatedApiFetch('/api/chat/stream', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    credentials: 'same-origin',
     body: JSON.stringify(body),
   });
-
-  let response = await request();
-
-  // Recover once from an expired/invalid session by issuing a fresh signed cookie.
-  if (response.status === 401) {
-    await ensureApiSession(true);
-    response = await request();
-  }
-
-  return response;
 }
 
 
@@ -131,6 +102,16 @@ export async function streamAIResponse(
       }
 
       if (backendRes.body) {
+        const streamInitiatingEpoch = neonAuth.getAuthEpoch();
+        const streamInitiatingUserId = neonAuth.getCurrentUser()?.id || '';
+
+        const isIdentityValid = () => {
+          return (
+            neonAuth.getAuthEpoch() === streamInitiatingEpoch &&
+            (neonAuth.getCurrentUser()?.id || '') === streamInitiatingUserId
+          );
+        };
+
         const reader = backendRes.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
@@ -140,13 +121,31 @@ export async function streamAIResponse(
         let emittedArtifact = false;
 
         while (true) {
+          if (!isIdentityValid()) {
+            console.warn('[streamAIResponse] Stream processing aborted: auth identity changed during stream');
+            try { await reader.cancel(); } catch {}
+            return;
+          }
+
           const { done, value } = await reader.read();
           if (done) break;
+
+          if (!isIdentityValid()) {
+            console.warn('[streamAIResponse] Stream chunk discarded: auth identity changed during chunk arrival');
+            try { await reader.cancel(); } catch {}
+            return;
+          }
+
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split('\n');
           buffer = lines.pop() || '';
 
-          for (const line of lines) {
+          for (const rawLine of lines) {
+            const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+            if (!isIdentityValid()) {
+              try { await reader.cancel(); } catch {}
+              return;
+            }
             if (line.startsWith('event: ')) {
               currentEvent = line.slice(7).trim();
             } else if (line.startsWith('data: ')) {
@@ -160,7 +159,9 @@ export async function streamAIResponse(
               }
               try {
                 const data = JSON.parse(dataStr);
-                if (currentEvent === 'capability_unready' && data.message) {
+                if (currentEvent === 'model_provenance' || (data.requestedModel && data.executedModel)) {
+                  wrappedCallbacks.onProvenance?.(data);
+                } else if (currentEvent === 'capability_unready' && data.message) {
                   wrappedCallbacks.onContentChunk(data.message);
                 } else if (currentEvent === 'approval_required') {
                   wrappedCallbacks.onApprovalRequired?.(data);
@@ -184,6 +185,8 @@ export async function streamAIResponse(
                   wrappedCallbacks.onThinkingChunk(data.thinking);
                 } else if ((currentEvent === 'content_delta' || data.text) && data.text) {
                   wrappedCallbacks.onContentChunk(data.text);
+                } else if (currentEvent === 'latency_metrics') {
+                  wrappedCallbacks.onLatencyMetrics?.(data);
                 } else if (currentEvent === 'artifact_open') {
                   artifactCode = '';
                   activeArtifact = {
@@ -223,6 +226,11 @@ export async function streamAIResponse(
           }
         }
 
+        if (!isIdentityValid()) {
+          console.warn('[streamAIResponse] Stream completion suppressed: auth identity changed during stream');
+          return;
+        }
+
         if (!accumulatedResponse.trim() && !emittedArtifact) {
           wrappedCallbacks.onError('Aira runtime closed the stream without producing a response.');
           return;
@@ -232,6 +240,10 @@ export async function streamAIResponse(
         return;
       }
     } catch (backendError: any) {
-      wrappedCallbacks.onError(`Failed to connect to backend runtime: ${backendError.message}`);
+      if (backendError instanceof AuthenticationRequiredError || backendError?.isAuthError) {
+        wrappedCallbacks.onError(`Authentication required: ${backendError.message}`);
+      } else {
+        wrappedCallbacks.onError(`Failed to connect to backend runtime: ${backendError.message}`);
+      }
     }
 }

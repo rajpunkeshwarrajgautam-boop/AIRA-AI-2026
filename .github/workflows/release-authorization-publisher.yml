@@ -1,0 +1,58 @@
+name: Release Authorization App Publisher (No Deployment)
+
+on:
+  workflow_run:
+    workflows: ["Release Authorization Attestation (No Deployment)"]
+    types: [completed]
+    branches: [prod-release]
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+concurrency:
+  group: release-gate-app-status-writes
+  cancel-in-progress: false
+
+jobs:
+  attest-and-publish:
+    name: Publish Owner Approval via Dedicated GitHub App
+    if: >-
+      github.repository == 'rajpunkeshwarrajgautam-boop/AIRA-AI-2026' &&
+      github.ref == 'refs/heads/prod-release' &&
+      github.event.workflow_run.event == 'workflow_dispatch' &&
+      github.event.workflow_run.head_branch == 'prod-release' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.actor.login == github.repository_owner &&
+      github.event.workflow_run.triggering_actor.login == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release-gate
+    steps:
+      - name: Checkout trusted default branch only
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: prod-release
+          persist-credentials: false
+
+      - name: Verify completed owner attestation (no App credential available yet)
+        run: node scripts/release-gate-app-publisher.mjs verify
+        env:
+          GH_READ_TOKEN: ${{ github.token }}
+          APPROVAL_RUN_ID: ${{ github.event.workflow_run.id }}
+
+      - name: Mint repository-scoped dedicated GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          client-id: ${{ vars.AIRA_RELEASE_GATE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AIRA_RELEASE_GATE_APP_PRIVATE_KEY }}
+          permission-statuses: write
+
+      - name: Recheck live PR and publish App-issued approval status
+        run: node scripts/release-gate-app-publisher.mjs publish
+        env:
+          GH_READ_TOKEN: ${{ github.token }}
+          APPROVAL_RUN_ID: ${{ github.event.workflow_run.id }}
+          RELEASE_GATE_APP_TOKEN: ${{ steps.app-token.outputs.token }}

@@ -3,7 +3,7 @@ name: CI
 on:
   push:
   pull_request:
-    branches: [main, staging]
+    branches: [main, staging, prod-release]
   workflow_dispatch:
 
 permissions:
@@ -54,12 +54,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          pattern='(nvapi-[A-Za-z0-9_-]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|sk_live_[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16})'
+          pattern='(nvapi-[A-Za-z0-9_-]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|sk_live_[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|npg_[A-Za-z0-9_-]{10,})'
           if git grep -IlE "$pattern" -- . ':(exclude)package-lock.json' > /tmp/secret-files; then
             echo '::error::Potential credential material found in tracked files:'
             sed 's/^/ - /' /tmp/secret-files
             exit 1
           fi
+          npm run test:secrets
 
       - name: Lint
         run: npm run lint
@@ -90,8 +91,32 @@ jobs:
       - name: Math typesetting and sanitization regression
         run: npm run test:math-rendering
 
+      - name: Managed account JWT signature and principal boundary regression
+        run: npm run test:neon-auth-identity
+
+      - name: Managed account token refresh concurrency and race regression
+        run: npm run test:auth-token-race
+
+      - name: Authenticated fail-closed request policy regression
+        run: npm run test:auth-fail-closed
+
+      - name: Identity transition lifecycle and session revocation regression
+        run: npm run test:auth-lifecycle
+
+      - name: First-party BFF session security gateway certification
+        run: npm run test:auth-bff
+
+      - name: CORS untrusted origin 4xx rejection and policy regression
+        run: npm run test:cors
+
       - name: Preview principal spoofing guard
         run: npm run test:preview-identity
+
+      - name: Release authorization policy unit tests (deterministic boundaries)
+        run: npm run test:release-auth:unit
+
+      - name: Dedicated GitHub App publisher policy tests (no App credentials)
+        run: npm run test:release-auth:app
 
       - name: Router and policy verification
         run: npm run test:router
@@ -128,6 +153,24 @@ jobs:
 
       - name: Capability reality audit suite
         run: npm run test:reality
+
+      - name: Knowledge and memory principal isolation certification
+        run: npm run test:knowledge-isolation
+
+      - name: Production SEO and capability claims audit
+        run: npm run test:seo
+
+      - name: Behavioral intelligence regression suite
+        run: npm run test:behavioral
+
+      - name: Behavioral intelligence security suite
+        run: npm run test:behavioral:security
+
+      - name: Behavioral intelligence precedence regression
+        run: npm run test:behavioral:precedence
+
+      - name: Behavioral intelligence 120-scenario benchmark
+        run: npm run test:behavioral:benchmark
 
 
   semantic-search:
@@ -173,7 +216,7 @@ jobs:
 
   certify:
     name: Main / PR certification
-    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging'
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging' || github.ref == 'refs/heads/prod-release'
     needs: [fast, semantic-search]
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -245,8 +288,17 @@ jobs:
           cat /tmp/aira-vite.log
           exit 1
 
+      - name: Mobile chat, model menu and welcome regression
+        run: npx tsx test/mobile-chat-welcome-responsive.ts
+
       - name: E2E certification
         run: npm run test:e2e
+
+      - name: Mobile sidebar responsive acceptance
+        run: npm run test:mobile-sidebar
+
+      - name: Settings modal responsive acceptance
+        run: npm run test:mobile-settings
 
       - name: Stop Vite
         if: always()

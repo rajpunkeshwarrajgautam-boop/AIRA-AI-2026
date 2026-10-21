@@ -1,4 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Brain, Check, ChevronDown, Gauge, Sparkles, Zap } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import type { ModelId } from '../types';
@@ -27,14 +28,50 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   const [isOpen, setIsOpen] = useState(false);
   const [activeRow, setActiveRow] = useState(currentModel);
   const containerRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [menuBounds, setMenuBounds] = useState<{
+    left: number; top: number; width: number; maxHeight: number;
+  } | null>(null);
   const reducedMotion = useReducedMotion();
   const activeModelInfo = AVAILABLE_MODELS.find(model => model.id === currentModel) || AVAILABLE_MODELS[0];
   const ActiveIcon = modelGlyph(activeModelInfo.name);
 
+  useLayoutEffect(() => {
+    if (!isOpen) {
+      setMenuBounds(null);
+      return;
+    }
+    const placeMenu = () => {
+      const anchor = containerRef.current?.getBoundingClientRect();
+      if (!anchor) return;
+      const viewport = window.visualViewport;
+      const leftEdge = (viewport?.offsetLeft || 0) + 12;
+      const topEdge = (viewport?.offsetTop || 0) + 12;
+      const rightEdge = leftEdge + (viewport?.width || window.innerWidth) - 24;
+      const bottomEdge = topEdge + (viewport?.height || window.innerHeight) - 24;
+      const width = Math.min(380, rightEdge - leftEdge);
+      const top = Math.max(topEdge, Math.min(anchor.bottom + 8, bottomEdge - 100));
+      setMenuBounds({
+        left: Math.max(leftEdge, Math.min(anchor.left, rightEdge - width)),
+        top, width, maxHeight: Math.max(0, bottomEdge - top),
+      });
+    };
+    placeMenu();
+    window.addEventListener('resize', placeMenu);
+    window.visualViewport?.addEventListener('resize', placeMenu);
+    window.visualViewport?.addEventListener('scroll', placeMenu);
+    return () => {
+      window.removeEventListener('resize', placeMenu);
+      window.visualViewport?.removeEventListener('resize', placeMenu);
+      window.visualViewport?.removeEventListener('scroll', placeMenu);
+    };
+  }, [isOpen]);
+
   useEffect(() => {
     if (!isOpen) return;
     const handlePointer = (event: PointerEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) setIsOpen(false);
+      if (!containerRef.current?.contains(event.target as Node) &&
+          !menuRef.current?.contains(event.target as Node)) setIsOpen(false);
     };
     const handleKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -54,25 +91,48 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     onSelectModel(model.id);
     if (!model.supportsThinking && extendedThinking) onToggleThinking(false);
     setIsOpen(false);
+    (containerRef.current?.querySelector('button') as HTMLButtonElement | null)?.focus();
+  };
+
+  const revealOption = (option: HTMLButtonElement) => {
+    const menu = menuRef.current;
+    if (!menu) return;
+    const bounds = menu.getBoundingClientRect();
+    const row = option.getBoundingClientRect();
+    const top = bounds.top + menu.clientTop + 8;
+    const bottom = bounds.top + menu.clientTop + menu.clientHeight - 8;
+    if (row.top < top) menu.scrollTop += row.top - top;
+    else if (row.bottom > bottom) menu.scrollTop += row.bottom - bottom;
   };
 
   return (
-    <div className="relative z-50 inline-block" ref={containerRef}>
+    <div className="relative z-50 inline-block min-w-0" ref={containerRef}>
       <motion.button
         type="button"
         onClick={() => setIsOpen(open => !open)}
         whileTap={reducedMotion ? undefined : { scale: 0.98 }}
         aria-haspopup="listbox"
         aria-expanded={isOpen}
-        className="group flex items-center gap-2 rounded-xl px-2.5 py-1.5 text-left transition-colors hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark"
+        onKeyDown={event => {
+          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault();
+            setIsOpen(true);
+            requestAnimationFrame(() => {
+              const options = menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]');
+              const option = event.key === 'ArrowUp' ? options?.[options.length - 1] : options?.[0];
+              option?.focus({ preventScroll: true });
+            });
+          }
+        }}
+        className="group flex min-w-0 max-w-full items-center gap-1 sm:gap-2 rounded-xl px-1.5 sm:px-2.5 py-1.5 text-left transition-colors hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark"
       >
-        <span className="flex h-7 w-7 items-center justify-center rounded-[9px] bg-claude-terracotta/10 text-claude-terracotta">
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[9px] bg-claude-terracotta/10 text-claude-accentInk">
           <ActiveIcon className="h-3.5 w-3.5" />
         </span>
         <span className="min-w-0">
           <span className="flex items-center gap-1.5">
-            <span className="max-w-[180px] truncate text-[13px] font-semibold text-claude-text-light dark:text-white">{activeModelInfo.name}</span>
-            {extendedThinking && activeModelInfo.supportsThinking && <Brain className="h-3.5 w-3.5 text-claude-terracotta" />}
+            <span className="block max-w-[88px] min-[375px]:max-w-[116px] sm:max-w-[180px] truncate text-[12px] sm:text-[13px] font-semibold text-claude-text-light dark:text-white">{activeModelInfo.name}</span>
+            {extendedThinking && activeModelInfo.supportsThinking && <Brain className="h-3.5 w-3.5 text-claude-accentInk" />}
           </span>
           <span className="hidden text-[10px] font-medium text-claude-muted-light sm:block dark:text-claude-muted-dark">
             {activeModelInfo.badge || 'Aira'} · {activeModelInfo.contextWindow}
@@ -87,21 +147,24 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         </motion.span>
       </motion.button>
 
-      <AnimatePresence>
-        {isOpen && (
+      {createPortal(<AnimatePresence>
+        {isOpen && menuBounds && (
           <motion.div
+            ref={menuRef}
+            data-testid="model-menu"
+            style={{ ...menuBounds, backgroundColor: 'var(--bg-main)' }}
             initial={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 8, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 5, scale: 0.985 }}
             transition={reducedMotion ? { duration: 0.08 } : { type: 'spring', stiffness: 390, damping: 31 }}
-            className="absolute left-0 mt-2 w-[calc(100vw-24px)] max-w-[380px] overflow-hidden rounded-[18px] border border-claude-border-light bg-white/95 p-2 shadow-[0_20px_55px_-22px_rgba(45,40,30,0.5)] backdrop-blur-2xl dark:border-claude-border-dark dark:bg-[#1c1b18]/95 dark:shadow-[0_24px_60px_-24px_rgba(0,0,0,0.9)]"
+            className="fixed z-[100] overflow-x-hidden overflow-y-auto overscroll-contain rounded-[18px] border border-claude-border-light p-2 shadow-[0_20px_55px_-22px_rgba(45,40,30,0.5)] dark:border-claude-border-dark dark:shadow-[0_24px_60px_-24px_rgba(0,0,0,0.9)]"
           >
             <div className="flex items-center justify-between px-2.5 pb-2 pt-1.5">
               <div>
                 <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-claude-muted-light dark:text-claude-muted-dark">Aira intelligence</div>
                 <div className="mt-0.5 text-[12px] font-medium text-claude-text-light dark:text-white">Choose the engine for this task</div>
               </div>
-              <span className="rounded-lg bg-claude-terracotta/10 p-1.5 text-claude-terracotta">
+              <span className="rounded-lg bg-claude-terracotta/10 p-1.5 text-claude-accentInk">
                 <Sparkles className="h-4 w-4" />
               </span>
             </div>
@@ -117,8 +180,22 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                     type="button"
                     role="option"
                     aria-selected={selected}
+                    onKeyDown={event => {
+                      const options = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]') || []);
+                      const index = options.indexOf(event.currentTarget);
+                      const next = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1
+                        : event.key === 'ArrowDown' ? (index + 1) % options.length
+                        : event.key === 'ArrowUp' ? (index + options.length - 1) % options.length : -1;
+                      if (next >= 0) {
+                        event.preventDefault();
+                        options[next]?.focus({ preventScroll: true });
+                      }
+                    }}
                     onMouseEnter={() => setActiveRow(model.id)}
-                    onFocus={() => setActiveRow(model.id)}
+                    onFocus={event => {
+                      setActiveRow(model.id);
+                      revealOption(event.currentTarget);
+                    }}
                     onClick={() => selectModel(model)}
                     className="relative isolate flex w-full items-start gap-3 rounded-[13px] px-3 py-2.5 text-left outline-none"
                   >
@@ -135,7 +212,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                     )}
                     <span className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] ${
                       selected
-                        ? 'bg-claude-terracotta text-white'
+                        ? 'bg-claude-terracotta text-claude-onAccent'
                         : 'bg-claude-surface2-light text-claude-muted-light dark:bg-claude-surface2-dark dark:text-claude-muted-dark'
                     }`}>
                       <Icon className="h-4 w-4" />
@@ -155,7 +232,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                         {model.supportsThinking && <><span>•</span><span>Deep reasoning</span></>}
                       </span>
                     </span>
-                    {selected && <Check className="mt-1 h-4 w-4 shrink-0 text-claude-terracotta" />}
+                    {selected && <Check className="mt-1 h-4 w-4 shrink-0 text-claude-accentInk" />}
                   </button>
                 );
               })}
@@ -171,7 +248,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                 className="flex w-full items-center justify-between gap-3 rounded-[13px] px-3 py-2.5 text-left transition-colors hover:bg-claude-surface2-light disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-claude-surface2-dark"
               >
                 <span className="flex min-w-0 items-center gap-2.5">
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] bg-claude-terracotta/10 text-claude-terracotta">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] bg-claude-terracotta/10 text-claude-accentInk">
                     <Brain className="h-4 w-4" />
                   </span>
                   <span className="min-w-0">
@@ -194,7 +271,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             </div>
           </motion.div>
         )}
-      </AnimatePresence>
+      </AnimatePresence>, document.body)}
     </div>
   );
 };

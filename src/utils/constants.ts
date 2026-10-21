@@ -51,7 +51,7 @@ export const AVAILABLE_MODELS: ModelInfo[] = [
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark',
   activeModel: 'claude-3-7-sonnet',
-  extendedThinking: true,
+  extendedThinking: false,
   thinkingBudget: 8192,
   provider: 'simulated',
   anthropicApiKey: '',

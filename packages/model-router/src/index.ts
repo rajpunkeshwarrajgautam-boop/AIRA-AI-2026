@@ -2,8 +2,18 @@ import {
   ModelId,
   ModelPolicy,
   ModelPolicySchema,
+  normalizeModelIdentifier,
   IntentTaxonomy
 } from '../../contracts/src/index.js';
+import { ProviderHealthTracker } from './health-tracker.js';
+import { LatencyAwareRoutingPolicy } from './routing-policy.js';
+import { ResilientModelAdapter } from './resilient-adapter.js';
+import { GeminiAdapter } from './gemini-adapter.js';
+import { PrivateBetaCapacityGuard } from './capacity/index.js';
+import { protectInferenceAdapter } from './inference-capacity.js';
+export * from './inference-capacity.js';
+
+export * from './capacity/index.js';
 
 export interface ChatMessageInput {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -25,20 +35,74 @@ export interface ModelCompletionResult {
     completionTokens: number;
     totalTokens: number;
   };
-  model: string;
+  model?: string;
+  outboundModel?: string;
 }
 
+export function isModelMatch(outboundModel?: string, upstreamResponseModel?: string): boolean {
+  if (!outboundModel || !upstreamResponseModel) return false;
+  const cleanOutbound = outboundModel.trim().toLowerCase();
+  const cleanUpstream = upstreamResponseModel.trim().toLowerCase();
+  if (cleanOutbound === cleanUpstream) return true;
+  const stripNamespace = (m: string) => m.includes('/') ? m.split('/').pop()! : m;
+  const bareOutbound = stripNamespace(cleanOutbound);
+  const bareUpstream = stripNamespace(cleanUpstream);
+  if (bareOutbound === bareUpstream) return true;
+
+  // Handle snapshot / date suffixes only (e.g. gpt-4o vs gpt-4o-2024-08-06, claude-3-5-sonnet vs claude-3-5-sonnet-20241022)
+  const isDateSnapshotSuffix = (base: string, candidate: string) => {
+    if (!candidate.startsWith(base + '-')) return false;
+    const suffix = candidate.slice(base.length + 1);
+    return /^\d{4}(-\d{2}-\d{2})?$|^\d{8}$|^\d{4}$/.test(suffix);
+  };
+
+  if (isDateSnapshotSuffix(bareOutbound, bareUpstream) || isDateSnapshotSuffix(bareUpstream, bareOutbound)) {
+    return true;
+  }
+
+  return false;
+}
+
+export type SupportedProvider =
+  | 'nvidia'
+  | 'anthropic'
+  | 'openai'
+  | 'groq'
+  | 'gemini'
+  | 'cerebras'
+  | 'together'
+  | 'fireworks'
+  | 'mock'
+  | 'unknown';
+
 export interface ModelAdapter {
-  complete(messages: ChatMessageInput[], policy: ModelPolicy): Promise<ModelCompletionResult>;
+  provider: SupportedProvider;
+  complete(messages: ChatMessageInput[], policy: ModelPolicy, signal?: AbortSignal): Promise<ModelCompletionResult>;
   stream(
     messages: ChatMessageInput[],
     policy: ModelPolicy,
-    onChunk: (delta: { text?: string; thinking?: string }) => void
+    onChunk: (delta: { text?: string; thinking?: string }) => void,
+    options?: {
+      firstTokenTimeoutMs?: number;
+      signal?: AbortSignal;
+      onProvenance?: (provenance: {
+        requestedProvider: string;
+        requestedModel: string;
+        executedProvider: string;
+        executedModel: string;
+        fallbackOccurred: boolean;
+        fallbackReason?: string;
+        hedgedRequestUsed?: boolean;
+        modelIdentityVerified?: boolean;
+      }) => void;
+    }
   ): Promise<ModelCompletionResult>;
 }
 
 export class DeterministicMockAdapter implements ModelAdapter {
-  async complete(messages: ChatMessageInput[], policy: ModelPolicy): Promise<ModelCompletionResult> {
+  readonly provider = 'mock' as const;
+
+  async complete(messages: ChatMessageInput[], policy: ModelPolicy, signal?: AbortSignal): Promise<ModelCompletionResult> {
     const lastUserMessage = [...messages].reverse().find(m => m.role === 'user')?.content || '';
     const thinking = policy.extendedThinking
       ? `Analyzing intent for request: "${lastUserMessage.slice(0, 80)}...". Resolving execution strategy via deterministic model policy ${policy.model}.`
@@ -74,6 +138,22 @@ export class DeterministicMockAdapter implements ModelAdapter {
       text = `Search query analyzed: "${lastUserMessage}". Findings indicate relevant data across index nodes.`;
     } else if (lastUserMessage.toLowerCase().includes('help') || lastUserMessage.toLowerCase().includes('hello')) {
       text = `Hello. I am Aira AI, your autonomous operating workspace. How can I assist your objectives today?`;
+    } else if (lastUserMessage.toLowerCase().includes('how capable are you')) {
+      text = `I am AIRA AI, an autonomous intelligence workspace. This response is powered by ${policy.model}. I support web research, multi-step workflows, agent missions, and persistent memory.`;
+    } else if (lastUserMessage.toLowerCase().includes('which model') || lastUserMessage.toLowerCase().includes('which ai model')) {
+      text = `This response is powered by ${policy.model} in the AIRA AI workspace.`;
+    } else if (lastUserMessage.toLowerCase().includes('are you claude')) {
+      if (policy.model.includes('claude')) {
+        text = `Yes, this response is generated using Anthropic's Claude model (${policy.model}) within AIRA AI.`;
+      } else {
+        text = `No, I am not Claude. This response is powered by ${policy.model} within AIRA AI.`;
+      }
+    } else if (lastUserMessage.toLowerCase().includes('are you powered by nvidia')) {
+      if (policy.model.includes('nvidia') || policy.model.includes('nemotron')) {
+        text = `Yes, this response is powered by NVIDIA NIM using ${policy.model} within AIRA AI.`;
+      } else {
+        text = `No, this response is powered by ${policy.model} within AIRA AI.`;
+      }
     } else {
       text = `Execution complete. Objective: "${lastUserMessage.slice(0, 100)}". Policy: ${policy.model} (maxTokens: ${policy.maxTokens}).`;
     }
@@ -86,16 +166,18 @@ export class DeterministicMockAdapter implements ModelAdapter {
         completionTokens: Math.max(20, Math.floor(text.length / 4)),
         totalTokens: Math.max(32, Math.floor((lastUserMessage.length + text.length) / 4))
       },
-      model: policy.model
+      model: policy.model,
+      outboundModel: policy.model
     };
   }
 
   async stream(
     messages: ChatMessageInput[],
     policy: ModelPolicy,
-    onChunk: (delta: { text?: string; thinking?: string }) => void
+    onChunk: (delta: { text?: string; thinking?: string }) => void,
+    options?: { firstTokenTimeoutMs?: number; signal?: AbortSignal }
   ): Promise<ModelCompletionResult> {
-    const result = await this.complete(messages, policy);
+    const result = await this.complete(messages, policy, options?.signal);
     if (result.thinking) {
       onChunk({ thinking: result.thinking });
     }
@@ -106,7 +188,67 @@ export class DeterministicMockAdapter implements ModelAdapter {
   }
 }
 
+export function resolveAnthropicModel(model: ModelId | string): string {
+  switch (model) {
+    case 'aira-pro':
+    case 'claude-3-5-sonnet-20241022':
+      return 'claude-3-5-sonnet-20241022';
+    case 'aira-fast':
+    case 'claude-3-5-haiku-20241022':
+      return 'claude-3-5-haiku-20241022';
+    case 'aira-deep':
+    case 'claude-3-opus-20240229':
+      return 'claude-3-opus-20240229';
+    case 'aira-auto':
+    case 'claude-3-7-sonnet-20250219':
+      return 'claude-3-7-sonnet-20250219';
+    case 'claude-3-5-sonnet':
+      return 'claude-3-5-sonnet';
+    case 'claude-3-5-haiku':
+      return 'claude-3-5-haiku';
+    case 'claude-3-opus':
+      return 'claude-3-opus';
+    case 'claude-3-7-sonnet':
+      return 'claude-3-7-sonnet';
+    default:
+      if (typeof model === 'string' && model.startsWith('claude-')) {
+        return model;
+      }
+      return 'claude-3-7-sonnet-20250219';
+  }
+}
+
+export function resolveOpenAIModel(model: ModelId | string): string {
+  switch (model) {
+    case 'aira-fast':
+      return 'gpt-4o-mini';
+    case 'aira-pro':
+    case 'aira-deep':
+    case 'aira-auto':
+      return 'gpt-4o';
+    default:
+      if (typeof model === 'string' && model.startsWith('gpt-')) {
+        return model;
+      }
+      return 'gpt-4o';
+  }
+}
+
+export function resolveNvidiaModel(model: ModelId | string): string {
+  if (process.env.NVIDIA_FAST_MODEL && model === 'aira-fast') {
+    return process.env.NVIDIA_FAST_MODEL;
+  }
+  if (process.env.NVIDIA_DEEP_MODEL && model === 'aira-deep') {
+    return process.env.NVIDIA_DEEP_MODEL;
+  }
+  if (typeof model === 'string' && (model.startsWith('nvidia/') || model.startsWith('meta/') || model.startsWith('nv-'))) {
+    return model;
+  }
+  return process.env.NVIDIA_DEFAULT_MODEL || 'nvidia/nemotron-3-super-120b-a12b';
+}
+
 export class AnthropicAdapter implements ModelAdapter {
+  readonly provider = 'anthropic' as const;
   private apiKey: string;
   private baseUrl: string;
 
@@ -115,7 +257,11 @@ export class AnthropicAdapter implements ModelAdapter {
     this.baseUrl = baseUrl;
   }
 
-  async complete(messages: ChatMessageInput[], policy: ModelPolicy): Promise<ModelCompletionResult> {
+  toJSON() {
+    return { provider: this.provider };
+  }
+
+  async complete(messages: ChatMessageInput[], policy: ModelPolicy, signal?: AbortSignal): Promise<ModelCompletionResult> {
     if (!this.apiKey) {
       throw new Error('Anthropic API key is not configured.');
     }
@@ -127,7 +273,9 @@ export class AnthropicAdapter implements ModelAdapter {
         content: m.content
       }));
 
+    const outboundModel = resolveAnthropicModel(policy.model);
     const response = await fetch(`${this.baseUrl}/messages`, {
+      signal,
       method: 'POST',
       headers: {
         'x-api-key': this.apiKey,
@@ -135,7 +283,7 @@ export class AnthropicAdapter implements ModelAdapter {
         'content-type': 'application/json'
       },
       body: JSON.stringify({
-        model: policy.model === 'aira-pro' ? 'claude-3-7-sonnet-20250219' : policy.model,
+        model: outboundModel,
         max_tokens: policy.maxTokens,
         temperature: policy.temperature,
         system: systemMessage,
@@ -160,17 +308,19 @@ export class AnthropicAdapter implements ModelAdapter {
         completionTokens: data.usage?.output_tokens || 0,
         totalTokens: (data.usage?.input_tokens || 0) + (data.usage?.output_tokens || 0)
       },
-      model: data.model || policy.model
+      outboundModel,
+      model: typeof data.model === 'string' && data.model.trim().length > 0 ? data.model.trim() : undefined
     };
   }
 
   async stream(
     messages: ChatMessageInput[],
     policy: ModelPolicy,
-    onChunk: (delta: { text?: string; thinking?: string }) => void
+    onChunk: (delta: { text?: string; thinking?: string }) => void,
+    options?: { firstTokenTimeoutMs?: number; signal?: AbortSignal }
   ): Promise<ModelCompletionResult> {
     // Falls back to complete then emits chunks if SSE stream not directly hooked
-    const res = await this.complete(messages, policy);
+    const res = await this.complete(messages, policy, options?.signal);
     if (res.thinking) onChunk({ thinking: res.thinking });
     if (res.text) onChunk({ text: res.text });
     return res;
@@ -178,39 +328,77 @@ export class AnthropicAdapter implements ModelAdapter {
 }
 
 export class OpenAIAdapter implements ModelAdapter {
+  readonly provider: SupportedProvider;
   private apiKey: string;
   private baseUrl: string;
-  private airaModel: ModelId;
+  private airaModel: ModelId | string;
 
   constructor(
     apiKey?: string,
     baseUrl = 'https://api.openai.com/v1',
-    airaModel: ModelId = 'gpt-4o'
+    airaModel: ModelId | string = 'gpt-4o',
+    provider?: SupportedProvider
   ) {
-    this.apiKey = apiKey || process.env.OPENAI_API_KEY || '';
-    this.baseUrl = baseUrl;
-    this.airaModel = airaModel;
+    this.baseUrl = (baseUrl || 'https://api.openai.com/v1').trim().replace(/\/+$/, '');
+    this.airaModel = (typeof airaModel === 'string' ? airaModel : '').trim().replace(/^["']|["']$/g, '') || airaModel;
+    if (provider) {
+      this.provider = provider;
+    } else if (baseUrl.includes('integrate.api.nvidia.com')) {
+      this.provider = 'nvidia';
+    } else if (baseUrl.includes('api.groq.com')) {
+      this.provider = 'groq';
+    } else if (baseUrl.includes('api.cerebras.ai')) {
+      this.provider = 'cerebras';
+    } else if (baseUrl.includes('api.together.xyz')) {
+      this.provider = 'together';
+    } else if (baseUrl.includes('api.fireworks.ai')) {
+      this.provider = 'fireworks';
+    } else {
+      this.provider = 'openai';
+    }
+
+    const rawKey = apiKey || (
+      this.provider === 'groq' ? process.env.GROQ_API_KEY :
+      this.provider === 'cerebras' ? process.env.CEREBRAS_API_KEY :
+      this.provider === 'together' ? process.env.TOGETHER_API_KEY :
+      this.provider === 'fireworks' ? process.env.FIREWORKS_API_KEY :
+      this.provider === 'nvidia' ? process.env.NVIDIA_API_KEY :
+      process.env.OPENAI_API_KEY
+    ) || '';
+    this.apiKey = rawKey.trim().replace(/^["']|["']$/g, '');
   }
 
-  async complete(messages: ChatMessageInput[], policy: ModelPolicy): Promise<ModelCompletionResult> {
+  toJSON() {
+    return { provider: this.provider };
+  }
+
+  async complete(messages: ChatMessageInput[], policy: ModelPolicy, signal?: AbortSignal): Promise<ModelCompletionResult> {
     if (!this.apiKey) {
       throw new Error('OpenAI API key is not configured.');
     }
     const maxRetries = 2;
     let lastError: Error | null = null;
 
+    const outboundModel = policy.model.startsWith('aira-')
+      ? (this.baseUrl.includes('api.openai.com')
+          ? resolveOpenAIModel(policy.model)
+          : this.baseUrl.includes('integrate.api.nvidia.com')
+            ? resolveNvidiaModel(policy.model)
+            : this.airaModel)
+      : policy.model;
+
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      signal?.throwIfAborted();
       try {
         const response = await fetch(`${this.baseUrl}/chat/completions`, {
+          signal,
           method: 'POST',
           headers: {
             Authorization: `Bearer ${this.apiKey}`,
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
-            model: policy.model.startsWith('aira-')
-              ? (this.baseUrl.includes('api.openai.com') && policy.model === 'aira-fast' ? 'gpt-4o-mini' : this.airaModel)
-              : policy.model,
+            model: outboundModel,
             messages: messages.map(m => {
               if (m.role === 'tool') {
                 return { role: 'tool', content: m.content, tool_call_id: m.toolCallId || 'call_default' };
@@ -235,7 +423,7 @@ export class OpenAIAdapter implements ModelAdapter {
               'Select a supported model in Aira.'
             );
           }
-          const provider = this.baseUrl.includes('integrate.api.nvidia.com') ? 'NVIDIA NIM' : 'OpenAI';
+          const provider = this.provider === 'nvidia' ? 'NVIDIA NIM' : this.provider.toUpperCase();
           throw new Error(`${provider} API error (${response.status}): ${errText}`);
         }
 
@@ -249,9 +437,11 @@ export class OpenAIAdapter implements ModelAdapter {
             completionTokens: data.usage?.completion_tokens || 0,
             totalTokens: data.usage?.total_tokens || 0
           },
-          model: data.model || policy.model
+          outboundModel,
+          model: typeof data.model === 'string' && data.model.trim().length > 0 ? data.model.trim() : undefined
         };
       } catch (err: any) {
+        signal?.throwIfAborted();
         lastError = err;
         if (attempt < maxRetries && (err.message.includes('500') || err.message.includes('429') || err.message.includes('fetch failed'))) {
           await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
@@ -267,23 +457,246 @@ export class OpenAIAdapter implements ModelAdapter {
   async stream(
     messages: ChatMessageInput[],
     policy: ModelPolicy,
-    onChunk: (delta: { text?: string; thinking?: string }) => void
+    onChunk: (delta: { text?: string; thinking?: string }) => void,
+    options?: { firstTokenTimeoutMs?: number; signal?: AbortSignal }
   ): Promise<ModelCompletionResult> {
-    const res = await this.complete(messages, policy);
-    if (res.text) onChunk({ text: res.text });
-    return res;
+    if (!this.apiKey) throw new Error(`${this.provider.toUpperCase()} API key is not configured.`);
+    const outboundModel = policy.model.startsWith('aira-')
+      ? (this.baseUrl.includes('api.openai.com')
+          ? resolveOpenAIModel(policy.model)
+          : this.baseUrl.includes('integrate.api.nvidia.com')
+            ? resolveNvidiaModel(policy.model)
+            : this.airaModel)
+      : policy.model;
+
+    // First-token deadline timer (commercially reasonable deadline: e.g. 3000ms for fast normal chat)
+    const firstTokenTimeoutMs = options?.firstTokenTimeoutMs ?? (policy.model === 'aira-fast' ? 3000 : 0);
+    const abortController = new AbortController();
+    if (options?.signal) {
+      options.signal.addEventListener('abort', () => abortController.abort(options.signal?.reason), { once: true });
+    }
+
+    let firstTokenTimer: NodeJS.Timeout | null = null;
+    let receivedFirstToken = false;
+
+    if (firstTokenTimeoutMs > 0) {
+      firstTokenTimer = setTimeout(() => {
+        if (!receivedFirstToken) {
+          abortController.abort(
+            new Error(`FIRST_TOKEN_TIMEOUT: Fast route first-token deadline (${firstTokenTimeoutMs}ms) exceeded for provider ${this.provider}`)
+          );
+        }
+      }, firstTokenTimeoutMs);
+    }
+
+    try {
+      // Stream the upstream response rather than waiting for a full completion before
+      // forwarding one giant delta. This also exposes the actual upstream model ID.
+      const response = await fetch(`${this.baseUrl}/chat/completions`, {
+        signal: abortController.signal,
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream'
+        },
+        body: JSON.stringify({
+          model: outboundModel,
+          messages: messages.map(m => m.role === 'tool'
+            ? { role: 'tool', content: m.content, tool_call_id: m.toolCallId || 'call_default' }
+            : { role: m.role, content: m.content }),
+          max_tokens: policy.maxTokens,
+          temperature: policy.temperature,
+          stream: true,
+          stream_options: { include_usage: true }
+        })
+      });
+
+      if (!response.ok) {
+        let errSnippet = '';
+        try {
+          const errData = await response.json();
+          errSnippet = errData?.error?.message || errData?.message || JSON.stringify(errData);
+        } catch {
+          try {
+            errSnippet = (await response.text()).slice(0, 200);
+          } catch {}
+        }
+        await response.body?.cancel().catch(() => undefined);
+        const detail = errSnippet ? `: ${errSnippet}` : '';
+        throw new Error(`${this.provider} streaming request failed (HTTP ${response.status})${detail}`);
+      }
+      if (!response.body) throw new Error('Provider returned an empty streaming response body.');
+
+      const reader = response.body.getReader();
+      const onAbort = () => {
+        reader.cancel(abortController.signal.reason).catch(() => undefined);
+      };
+      if (abortController.signal.aborted) {
+        onAbort();
+      } else {
+        abortController.signal.addEventListener('abort', onAbort, { once: true });
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let output = '';
+      let upstreamModel: string | undefined;
+      let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+      let finished = false;
+
+      const handleFrame = (frame: string) => {
+        const dataString = frame.split(/\r?\n/).filter(line => line.startsWith('data:'))
+          .map(line => line.slice(5).trimStart()).join('\n');
+        if (!dataString) return;
+        if (dataString === '[DONE]') { finished = true; return; }
+        const event = JSON.parse(dataString);
+        if (event.error) throw new Error('Provider reported a streaming inference error.');
+        if (typeof event.model === 'string' && event.model.trim()) upstreamModel = event.model.trim();
+        const delta = event.choices?.[0]?.delta;
+        if (typeof delta?.content === 'string' && delta.content.length) {
+          if (!receivedFirstToken) {
+            receivedFirstToken = true;
+            if (firstTokenTimer) {
+              clearTimeout(firstTokenTimer);
+              firstTokenTimer = null;
+            }
+          }
+          output += delta.content;
+          onChunk({ text: delta.content });
+        }
+        if (typeof delta?.reasoning_content === 'string' && delta.reasoning_content.length) {
+          onChunk({ thinking: delta.reasoning_content });
+        }
+        if (event.usage) usage = {
+          promptTokens: event.usage.prompt_tokens || 0,
+          completionTokens: event.usage.completion_tokens || 0,
+          totalTokens: event.usage.total_tokens || 0
+        };
+      };
+
+      try {
+        while (!finished) {
+          abortController.signal.throwIfAborted();
+          const { value, done } = await reader.read();
+          if (done) break;
+          // Normalize line endings only after bytes are accumulated: a CRLF pair
+          // can itself be split between two network reads.
+          buffer += decoder.decode(value, { stream: true });
+          buffer = buffer.replace(/\r\n/g, '\n');
+          let separator: number;
+          while ((separator = buffer.indexOf('\n\n')) !== -1) {
+            const frame = buffer.slice(0, separator);
+            buffer = buffer.slice(separator + 2);
+            handleFrame(frame);
+            if (finished) break;
+          }
+        }
+        abortController.signal.throwIfAborted();
+        buffer += decoder.decode();
+        if (!finished && buffer.trim()) handleFrame(buffer);
+      } finally {
+        abortController.signal.removeEventListener('abort', onAbort);
+        reader.releaseLock();
+      }
+      if (!finished) throw new Error('Provider stream closed before its terminal event.');
+      if (!output.trim()) throw new Error('Provider completed without generating visible answer text.');
+      return { text: output, usage, outboundModel, model: upstreamModel };
+    } finally {
+      if (firstTokenTimer) {
+        clearTimeout(firstTokenTimer);
+        firstTokenTimer = null;
+      }
+    }
   }
+}
+
+export interface ResolvedExecution {
+  policy: ModelPolicy;
+  adapter: ModelAdapter;
+  provider: SupportedProvider;
+  requestedProvider?: string;
+  executedProvider?: string;
+  executedModel: string;
+  plannedModel: string;
+  fallbackOccurred: boolean;
+  fallbackReason?: string;
+  verified: boolean;
 }
 
 export class ModelRouter {
   private adapters: Map<string, ModelAdapter> = new Map();
+  public readonly healthTracker: ProviderHealthTracker;
+  public readonly routingPolicy: LatencyAwareRoutingPolicy;
+  public readonly capacityGuard: PrivateBetaCapacityGuard;
 
-  constructor() {
+  constructor(healthTracker?: ProviderHealthTracker, capacityGuard?: PrivateBetaCapacityGuard) {
+    this.healthTracker = healthTracker || new ProviderHealthTracker();
+    this.routingPolicy = new LatencyAwareRoutingPolicy(this.healthTracker);
+    this.capacityGuard = capacityGuard || new PrivateBetaCapacityGuard(undefined, undefined, this.healthTracker);
+
     // DeterministicMockAdapter is ONLY registered in test/dev environments.
     // Production code must never reach this adapter through the normal router.
     // It is accessible only when model is explicitly 'mock-deterministic'.
     if (process.env.NODE_ENV !== 'production' || process.env.AIRA_ALLOW_MOCK === 'true') {
       this.adapters.set('mock', new DeterministicMockAdapter());
+    }
+    if (process.env.GROQ_API_KEY) {
+      const groqKey = process.env.GROQ_API_KEY.trim().replace(/^["']|["']$/g, '');
+      const groqModel = (process.env.AIRA_FAST_MODEL || '').trim().replace(/^["']|["']$/g, '') || 'openai/gpt-oss-120b';
+      this.adapters.set(
+        'groq',
+        new OpenAIAdapter(
+          groqKey,
+          'https://api.groq.com/openai/v1',
+          groqModel,
+          'groq'
+        )
+      );
+    }
+    if (process.env.CEREBRAS_API_KEY) {
+      this.adapters.set(
+        'cerebras',
+        new OpenAIAdapter(
+          process.env.CEREBRAS_API_KEY,
+          'https://api.cerebras.ai/v1',
+          process.env.AIRA_FAST_MODEL || 'llama3.1-8b',
+          'cerebras'
+        )
+      );
+    }
+    if (process.env.TOGETHER_API_KEY) {
+      this.adapters.set(
+        'together',
+        new OpenAIAdapter(
+          process.env.TOGETHER_API_KEY,
+          'https://api.together.xyz/v1',
+          process.env.AIRA_FAST_MODEL || 'meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo',
+          'together'
+        )
+      );
+    }
+    if (process.env.FIREWORKS_API_KEY) {
+      this.adapters.set(
+        'fireworks',
+        new OpenAIAdapter(
+          process.env.FIREWORKS_API_KEY,
+          'https://api.fireworks.ai/inference/v1',
+          process.env.AIRA_FAST_MODEL || 'accounts/fireworks/models/llama-v3p1-8b-instruct',
+          'fireworks'
+        )
+      );
+    }
+    if (process.env.GEMINI_API_KEY) {
+      const geminiKey = process.env.GEMINI_API_KEY.trim().replace(/^["']|["']$/g, '');
+      const geminiModel = (process.env.AIRA_GEMINI_MODEL || '').trim().replace(/^["']|["']$/g, '') || 'gemini-3.5-flash-lite';
+      this.adapters.set(
+        'gemini',
+        new GeminiAdapter(
+          geminiKey,
+          geminiModel
+        )
+      );
     }
     if (process.env.ANTHROPIC_API_KEY) {
       this.adapters.set('anthropic', new AnthropicAdapter());
@@ -297,27 +710,61 @@ export class ModelRouter {
         new OpenAIAdapter(
           process.env.NVIDIA_API_KEY,
           'https://integrate.api.nvidia.com/v1',
-          'nvidia/nemotron-3-super-120b-a12b'
+          'nvidia/nemotron-3-super-120b-a12b',
+          'nvidia'
         )
       );
     }
   }
 
-  public resolvePolicy(modelId: ModelId, intent?: IntentTaxonomy): ModelPolicy {
-    // Frontend v1 exposed Aira modes using legacy Claude IDs. Treat those IDs as
-    // product-level aliases so persisted browser settings keep working while
-    // routing remains provider-agnostic.
-    const legacyAiraAliases: Partial<Record<ModelId, ModelId>> = {
-      'claude-3-7-sonnet': 'aira-auto',
-      'claude-3-5-sonnet': 'aira-pro',
-      'claude-3-5-haiku': 'aira-fast',
-      'claude-3-opus': 'aira-deep',
-      // The hosted Llama 3.1 405B endpoint is not a current NVIDIA catalog option.
-      // Old browser state and direct API callers must use the supported replacement.
-      'meta/llama-3.1-405b-instruct': 'nvidia/nemotron-3-super-120b-a12b'
-    };
+  public createModelSpecificAdapter(provider: SupportedProvider, model: string): ModelAdapter & { modelName?: string } {
+    if (provider === 'groq' && process.env.GROQ_API_KEY) {
+      const groqKey = process.env.GROQ_API_KEY.trim().replace(/^["']|["']$/g, '');
+      const adapter = new OpenAIAdapter(groqKey, 'https://api.groq.com/openai/v1', model, 'groq');
+      (adapter as any).modelName = model;
+      return adapter;
+    }
+    if (provider === 'gemini' && process.env.GEMINI_API_KEY) {
+      const geminiKey = process.env.GEMINI_API_KEY.trim().replace(/^["']|["']$/g, '');
+      const adapter = new GeminiAdapter(geminiKey, model);
+      (adapter as any).modelName = model;
+      return adapter;
+    }
+    if (provider === 'cerebras' && process.env.CEREBRAS_API_KEY) {
+      const adapter = new OpenAIAdapter(process.env.CEREBRAS_API_KEY, 'https://api.cerebras.ai/v1', model, 'cerebras');
+      (adapter as any).modelName = model;
+      return adapter;
+    }
+    if (provider === 'together' && process.env.TOGETHER_API_KEY) {
+      const adapter = new OpenAIAdapter(process.env.TOGETHER_API_KEY, 'https://api.together.xyz/v1', model, 'together');
+      (adapter as any).modelName = model;
+      return adapter;
+    }
+    if (provider === 'fireworks' && process.env.FIREWORKS_API_KEY) {
+      const adapter = new OpenAIAdapter(process.env.FIREWORKS_API_KEY, 'https://api.fireworks.ai/inference/v1', model, 'fireworks');
+      (adapter as any).modelName = model;
+      return adapter;
+    }
+    if (provider === 'openai' && process.env.OPENAI_API_KEY) {
+      const adapter = new OpenAIAdapter(process.env.OPENAI_API_KEY, 'https://api.openai.com/v1', model, 'openai');
+      (adapter as any).modelName = model;
+      return adapter;
+    }
+    if (provider === 'nvidia' && process.env.NVIDIA_API_KEY) {
+      const adapter = new OpenAIAdapter(process.env.NVIDIA_API_KEY, 'https://integrate.api.nvidia.com/v1', model, 'nvidia');
+      (adapter as any).modelName = model;
+      return adapter;
+    }
+    const existing = this.adapters.get(provider);
+    if (existing) {
+      (existing as any).modelName = model;
+      return existing;
+    }
+    throw new Error(`Provider ${provider} is not configured.`);
+  }
 
-    let resolvedModel: ModelId = legacyAiraAliases[modelId] || modelId;
+  public resolvePolicy(modelId: ModelId, intent?: IntentTaxonomy): ModelPolicy {
+    let resolvedModel = normalizeModelIdentifier(modelId);
 
     if (resolvedModel === 'aira-auto') {
       switch (intent) {
@@ -351,8 +798,14 @@ export class ModelRouter {
     });
   }
 
-  public getAdapter(policy: ModelPolicy): ModelAdapter {
-    const model = policy?.model || 'aira-auto';
+  public resolveExecution(requestedModelId: ModelId, intent?: IntentTaxonomy): ResolvedExecution {
+    const execution = this.resolveUnprotectedExecution(requestedModelId, intent);
+    return { ...execution, adapter: protectInferenceAdapter(execution.adapter, this.capacityGuard) };
+  }
+
+  private resolveUnprotectedExecution(requestedModelId: ModelId, intent?: IntentTaxonomy): ResolvedExecution {
+    const policy = this.resolvePolicy(requestedModelId, intent);
+    const model = policy.model;
 
     // Test/dev only: explicit injection via model name
     if (model === 'mock-deterministic') {
@@ -363,33 +816,242 @@ export class ModelRouter {
           'Set NODE_ENV=development or AIRA_ALLOW_MOCK=true to enable test adapters.'
         );
       }
-      return mock;
+      return {
+        policy,
+        adapter: mock,
+        provider: 'mock',
+        requestedProvider: 'mock',
+        executedProvider: 'mock',
+        executedModel: 'mock-deterministic',
+        plannedModel: 'mock-deterministic',
+        fallbackOccurred: false,
+        verified: true
+      };
     }
 
     if (model.startsWith('aira-')) {
-      const providerPreference = model === 'aira-fast'
-        ? ['openai', 'nvidia', 'anthropic']
-        : ['anthropic', 'nvidia', 'openai'];
+      if (model === 'aira-fast') {
+        const configuredProviders = this.listProviders();
+        const configuredFastProvider = (process.env.AIRA_FAST_PROVIDER || '').toLowerCase().trim();
+        const configuredFastModel = (process.env.AIRA_FAST_MODEL || '').trim();
+        const hasDedicatedNvidiaFastModel = Boolean(process.env.NVIDIA_FAST_MODEL?.trim());
+        const nvidiaFastModel = process.env.NVIDIA_FAST_MODEL?.trim();
+        const enableHedging = process.env.AIRA_ENABLE_HEDGING === 'true';
 
-      for (const provider of providerPreference) {
-        const adapter = this.adapters.get(provider);
-        if (adapter) return adapter;
+        const plan = this.routingPolicy.selectFastExecutionPlan({
+          configuredProviders,
+          preferredProvider: configuredFastProvider,
+          preferredModel: configuredFastModel,
+          hasDedicatedNvidiaFastModel,
+          nvidiaFastModel,
+          enableHedging
+        });
+
+        // 1. If only NVIDIA is available and no dedicated fast provider is configured in environment
+        const hasFastProvider = configuredProviders.some(p => p !== 'nvidia' && p !== 'mock');
+        if (!hasFastProvider && this.adapters.has('nvidia')) {
+          const executedModel = resolveNvidiaModel(model);
+          return {
+            policy,
+            adapter: this.adapters.get('nvidia')!,
+            provider: 'nvidia',
+            requestedProvider: 'groq',
+            executedProvider: 'nvidia',
+            executedModel,
+            plannedModel: executedModel,
+            fallbackOccurred: true,
+            fallbackReason: 'No dedicated fast provider configured; fell back to NVIDIA Nemotron 120B reasoning model',
+            verified: true
+          };
+        }
+
+        // 2. If test mock adapter is available
+        if (plan.isDegraded && this.adapters.has('mock')) {
+          return {
+            policy,
+            adapter: this.adapters.get('mock')!,
+            provider: 'mock',
+            requestedProvider: 'mock',
+            executedProvider: 'mock',
+            executedModel: 'mock-deterministic',
+            plannedModel: 'mock-deterministic',
+            fallbackOccurred: false,
+            verified: true
+          };
+        }
+
+        // 3. If no provider is available
+        if (plan.isDegraded) {
+          throw new Error(
+            `CONFIGURATION_ERROR: No production model provider is configured for Aira mode "${model}". ` +
+            'Configure GROQ_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY, NVIDIA_API_KEY, or ANTHROPIC_API_KEY.'
+          );
+        }
+
+        const primaryAdapter = this.createModelSpecificAdapter(plan.primary.provider as SupportedProvider, plan.primary.model);
+        const fallbackAdapter = plan.fallback
+          ? this.createModelSpecificAdapter(plan.fallback.provider as SupportedProvider, plan.fallback.model)
+          : null;
+
+        // Bounded tertiary adapter for non-account-level Groq failures (Section 8 & 9)
+        const tertiaryAdapter = (plan.fallback?.provider === 'gemini' && process.env.GROQ_API_KEY && plan.primary.provider === 'groq')
+          ? this.createModelSpecificAdapter('groq', 'allam-2-7b')
+          : null;
+
+        const resilientAdapter = new ResilientModelAdapter(
+          primaryAdapter,
+          fallbackAdapter,
+          this.healthTracker,
+          {
+            firstTokenTimeoutMs: 2500,
+            fallbackFirstTokenTimeoutMs: 4000,
+            tertiaryAdapter,
+            enableHedging,
+            hedgeDelayMs: process.env.AIRA_HEDGE_DELAY_MS ? parseInt(process.env.AIRA_HEDGE_DELAY_MS, 10) : 1200
+          }
+        );
+
+        const isFallback = Boolean(plan.selectionReason.includes('FAILOVER'));
+
+        return {
+          policy,
+          adapter: resilientAdapter,
+          provider: plan.primary.provider as SupportedProvider,
+          requestedProvider: configuredFastProvider || 'groq',
+          executedProvider: plan.primary.provider,
+          executedModel: plan.primary.model,
+          plannedModel: plan.primary.model,
+          fallbackOccurred: isFallback,
+          fallbackReason: isFallback ? plan.selectionReason : undefined,
+          verified: plan.primary.provider !== 'mock'
+        };
       }
 
-      // If in test or dev environment and no live provider is present, fallback to registered mock adapter
-      if (this.adapters.has('mock')) {
-        return this.adapters.get('mock')!;
+      let providerPreference: Array<SupportedProvider>;
+      if (model === 'aira-deep') {
+        providerPreference = ['anthropic', 'nvidia', 'openai'];
+      } else {
+        providerPreference = ['anthropic', 'nvidia', 'openai'];
       }
 
-      throw new Error(
-        `CONFIGURATION_ERROR: No production model provider is configured for Aira mode "${model}". ` +
-        'Configure NVIDIA_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY.'
-      );
+      const preferredProvider = providerPreference[0];
+      let selectedProvider: SupportedProvider | null = null;
+      let selectedAdapter: ModelAdapter | null = null;
+
+      for (const prov of providerPreference) {
+        const adapter = this.adapters.get(prov);
+        if (adapter) {
+          selectedProvider = prov;
+          selectedAdapter = adapter;
+          break;
+        }
+      }
+
+      if (!selectedAdapter && this.adapters.has('mock')) {
+        selectedProvider = 'mock';
+        selectedAdapter = this.adapters.get('mock')!;
+      }
+
+      if (!selectedAdapter || !selectedProvider) {
+        throw new Error(
+          `CONFIGURATION_ERROR: No production model provider is configured for Aira mode "${model}". ` +
+          'Configure GROQ_API_KEY, OPENAI_API_KEY, NVIDIA_API_KEY, or ANTHROPIC_API_KEY.'
+        );
+      }
+
+      const fallbackOccurred = selectedProvider !== preferredProvider;
+      let fallbackReason: string | undefined;
+      if (fallbackOccurred) {
+        const formatName = (p: string) => {
+          if (p === 'nvidia') return 'NVIDIA NIM';
+          if (p === 'groq') return 'Groq';
+          if (p === 'cerebras') return 'Cerebras';
+          if (p === 'together') return 'Together AI';
+          if (p === 'fireworks') return 'Fireworks AI';
+          if (p === 'anthropic') return 'Anthropic';
+          if (p === 'openai') return 'OpenAI';
+          return p;
+        };
+        fallbackReason = `Preferred provider (${formatName(preferredProvider)}) not configured; routed to ${formatName(selectedProvider)}`;
+      }
+
+      let executedModel: string;
+      let modelFallback = false;
+      let modelFallbackReason: string | undefined;
+
+      if (selectedProvider === 'groq') {
+        const raw = (process.env.AIRA_FAST_MODEL || '').trim().replace(/^["']|["']$/g, '');
+        executedModel = raw || 'openai/gpt-oss-120b';
+      } else if (selectedProvider === 'cerebras') {
+        executedModel = process.env.AIRA_FAST_MODEL || 'llama3.1-8b';
+      } else if (selectedProvider === 'together') {
+        executedModel = process.env.AIRA_FAST_MODEL || 'meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo';
+      } else if (selectedProvider === 'fireworks') {
+        executedModel = process.env.AIRA_FAST_MODEL || 'accounts/fireworks/models/llama-v3p1-8b-instruct';
+      } else if (selectedProvider === 'openai') {
+        executedModel = model === 'aira-fast'
+          ? (process.env.AIRA_FAST_MODEL || 'gpt-4o-mini')
+          : 'gpt-4o';
+      } else if (selectedProvider === 'nvidia') {
+        executedModel = resolveNvidiaModel(model);
+        if (model === 'aira-fast' && !process.env.NVIDIA_FAST_MODEL && executedModel === 'nvidia/nemotron-3-super-120b-a12b') {
+          modelFallback = true;
+          modelFallbackReason = 'No dedicated fast provider configured; fell back to NVIDIA Nemotron 120B reasoning model';
+        }
+      } else if (selectedProvider === 'anthropic') {
+        if (requestedModelId === 'claude-3-5-sonnet') {
+          executedModel = 'claude-3-5-sonnet';
+        } else if (requestedModelId === 'claude-3-5-haiku') {
+          executedModel = 'claude-3-5-haiku';
+        } else if (requestedModelId === 'claude-3-opus') {
+          executedModel = 'claude-3-opus';
+        } else if (requestedModelId === 'claude-3-7-sonnet') {
+          executedModel = 'claude-3-7-sonnet';
+        } else {
+          executedModel = resolveAnthropicModel(model);
+        }
+      } else {
+        executedModel = model;
+      }
+
+      const combinedFallback = fallbackOccurred || modelFallback;
+      let combinedReason: string | undefined;
+      if (fallbackOccurred && modelFallbackReason) {
+        combinedReason = `${fallbackReason}; ${modelFallbackReason}`;
+      } else if (fallbackOccurred) {
+        combinedReason = fallbackReason;
+      } else if (modelFallback) {
+        combinedReason = modelFallbackReason;
+      }
+
+      return {
+        policy,
+        adapter: selectedAdapter,
+        provider: selectedProvider,
+        requestedProvider: preferredProvider,
+        executedProvider: selectedProvider,
+        executedModel,
+        plannedModel: executedModel,
+        fallbackOccurred: combinedFallback,
+        fallbackReason: combinedReason,
+        verified: selectedProvider !== 'mock'
+      };
     }
 
     if (model.startsWith('claude')) {
       if (this.adapters.has('anthropic')) {
-        return this.adapters.get('anthropic')!;
+        const planned = requestedModelId === 'claude-3-5-sonnet' ? 'claude-3-5-sonnet' : (requestedModelId === 'claude-3-5-haiku' ? 'claude-3-5-haiku' : (requestedModelId === 'claude-3-opus' ? 'claude-3-opus' : (requestedModelId === 'claude-3-7-sonnet' ? 'claude-3-7-sonnet' : model)));
+        return {
+          policy,
+          adapter: this.adapters.get('anthropic')!,
+          provider: 'anthropic',
+          requestedProvider: 'anthropic',
+          executedProvider: 'anthropic',
+          executedModel: planned,
+          plannedModel: planned,
+          fallbackOccurred: false,
+          verified: true
+        };
       }
       throw new Error(
         `CONFIGURATION_ERROR: No Anthropic API key configured for model "${model}". ` +
@@ -397,9 +1059,30 @@ export class ModelRouter {
       );
     }
 
+    if (model === 'gemini-2-5-pro' || model === 'gemini-3.5-flash-lite') {
+      const executedModel = model === 'gemini-2-5-pro' ? 'gemini-2.5-pro' : 'gemini-3.5-flash-lite';
+      if (!this.adapters.has('gemini')) throw new Error('CONFIGURATION_ERROR: Gemini provider is not configured.');
+      return {
+        policy,
+        adapter: this.createModelSpecificAdapter('gemini', executedModel),
+        provider: 'gemini', requestedProvider: 'gemini', executedProvider: 'gemini',
+        executedModel, plannedModel: executedModel, fallbackOccurred: false, verified: true
+      };
+    }
+
     if (model.startsWith('gpt')) {
       if (this.adapters.has('openai')) {
-        return this.adapters.get('openai')!;
+        return {
+          policy,
+          adapter: this.adapters.get('openai')!,
+          provider: 'openai',
+          requestedProvider: 'openai',
+          executedProvider: 'openai',
+          executedModel: model,
+          plannedModel: model,
+          fallbackOccurred: false,
+          verified: true
+        };
       }
       throw new Error(
         `CONFIGURATION_ERROR: No OpenAI API key configured for model "${model}". ` +
@@ -407,9 +1090,76 @@ export class ModelRouter {
       );
     }
 
-    if (model.startsWith('meta/') || model.startsWith('nvidia/')) {
+    if (
+      model.startsWith('llama-3.1-') ||
+      model.startsWith('llama-3.3-') ||
+      model.startsWith('openai/gpt-oss-') ||
+      model.startsWith('qwen/') ||
+      model.startsWith('allam-')
+    ) {
+      if (this.adapters.has('groq')) {
+        return {
+          policy,
+          adapter: this.adapters.get('groq')!,
+          provider: 'groq',
+          requestedProvider: 'groq',
+          executedProvider: 'groq',
+          executedModel: model,
+          plannedModel: model,
+          fallbackOccurred: false,
+          verified: true
+        };
+      }
+    }
+
+    if (model.startsWith('llama3.1-')) {
+      if (this.adapters.has('cerebras')) {
+        return {
+          policy,
+          adapter: this.adapters.get('cerebras')!,
+          provider: 'cerebras',
+          requestedProvider: 'cerebras',
+          executedProvider: 'cerebras',
+          executedModel: model,
+          plannedModel: model,
+          fallbackOccurred: false,
+          verified: true
+        };
+      }
+    }
+
+    if (model.startsWith('accounts/fireworks')) {
+      if (this.adapters.has('fireworks')) {
+        return {
+          policy,
+          adapter: this.adapters.get('fireworks')!,
+          provider: 'fireworks',
+          requestedProvider: 'fireworks',
+          executedProvider: 'fireworks',
+          executedModel: model,
+          plannedModel: model,
+          fallbackOccurred: false,
+          verified: true
+        };
+      }
+    }
+
+    if (model.startsWith('meta/') || model.startsWith('nvidia/') || model.startsWith('nv-')) {
       if (this.adapters.has('nvidia')) {
-        return this.adapters.get('nvidia')!;
+        const isLegacyLlama = requestedModelId === 'meta/llama-3.1-405b-instruct';
+        const targetModel = isLegacyLlama ? 'nvidia/nemotron-3-super-120b-a12b' : model;
+        return {
+          policy,
+          adapter: this.adapters.get('nvidia')!,
+          provider: 'nvidia',
+          requestedProvider: 'nvidia',
+          executedProvider: 'nvidia',
+          executedModel: targetModel,
+          plannedModel: targetModel,
+          fallbackOccurred: isLegacyLlama,
+          fallbackReason: isLegacyLlama ? 'Retired Llama 405B migrated to NVIDIA Nemotron' : undefined,
+          verified: true
+        };
       }
       throw new Error(
         `CONFIGURATION_ERROR: No NVIDIA API key configured for model "${model}". ` +
@@ -423,8 +1173,17 @@ export class ModelRouter {
     );
   }
 
+  public getAdapter(policy: ModelPolicy): ModelAdapter {
+    return this.resolveExecution(policy?.model || 'aira-auto').adapter;
+  }
+
   /** Returns a list of configured provider names (for health/diagnostics). */
   public listProviders(): string[] {
     return Array.from(this.adapters.keys()).filter(k => k !== 'mock');
   }
 }
+
+export * from './health-tracker.js';
+export * from './routing-policy.js';
+export * from './resilient-adapter.js';
+export * from './gemini-adapter.js';
