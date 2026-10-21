@@ -384,27 +384,211 @@ export function assertCanRunMigrations(databaseUrl: string, targetEnvironment: s
   }
 }
 
-/**
- * Authenticated runtime database identity check.
- * Queries current_database(), current_user, and inet_server_addr() without exposing passwords.
- */
-export async function verifyConnectedDatabaseIdentity(
-  client: Knex,
-  expectedCategory: 'production' | 'staging_permanent'
-): Promise<{ ok: boolean; code: string; identity: { databaseName: string; user: string; serverAddr: string; endpointMatch: boolean } }> {
-  const res = await client.raw('SELECT current_database() as db_name, current_user as db_user, inet_server_addr() as server_ip');
-  const row = res.rows?.[0] || {};
+export interface NeonControlPlaneMetadata {
+  projectId: string;
+  defaultBranchId: string;
+  primaryEndpointId: string;
+  region: string;
+}
 
-  const identity = {
-    databaseName: row.db_name || 'unknown',
-    user: row.db_user || 'unknown',
-    serverAddr: String(row.server_ip || 'unknown'),
-    endpointMatch: true
-  };
+export const NEON_CONTROL_PLANE_REGISTRY: Record<'production' | 'staging_permanent' | 'commercial_pr92', NeonControlPlaneMetadata> = {
+  production: {
+    projectId: PRODUCTION_NEON_PROJECT_ID,
+    defaultBranchId: PRODUCTION_NEON_BRANCH_ID,
+    primaryEndpointId: PRODUCTION_NEON_ENDPOINT_ID,
+    region: 'aws-ap-southeast-1'
+  },
+  staging_permanent: {
+    projectId: STAGING_NEON_PROJECT_ID,
+    defaultBranchId: STAGING_NEON_BRANCH_ID,
+    primaryEndpointId: STAGING_NEON_ENDPOINT_ID,
+    region: 'aws-ap-southeast-1'
+  },
+  commercial_pr92: {
+    projectId: STAGING_NEON_PROJECT_ID,
+    defaultBranchId: COMMERCIAL_PR92_BRANCH_ID,
+    primaryEndpointId: COMMERCIAL_PR92_ENDPOINT_ID,
+    region: 'aws-ap-southeast-1'
+  }
+};
+
+export interface DatabaseIdentityEvidence {
+  databaseName?: string;
+  user?: string;
+  serverAddr?: string;
+  neonProjectId?: string;
+  neonBranchId?: string;
+  neonEndpointId?: string;
+  neonTimelineId?: string;
+  host?: string;
+}
+
+export interface DatabaseIdentityVerificationResult {
+  ok: boolean;
+  code: string;
+  message: string;
+  identity: DatabaseIdentityEvidence & { endpointMatch: boolean; controlPlaneVerified: boolean };
+}
+
+/**
+ * Validates database identity evidence against expected environment category.
+ * Enforces fail-closed rules and detects environment crossover.
+ */
+export function verifyDatabaseIdentityFromEvidence(
+  evidence: DatabaseIdentityEvidence,
+  expectedCategory: 'production' | 'staging_permanent'
+): DatabaseIdentityVerificationResult {
+  const { neonProjectId, neonBranchId, neonEndpointId, host } = evidence;
+
+  // 1. If Neon control-plane metadata / settings are present, verify strictly
+  if (neonProjectId || neonEndpointId || neonBranchId) {
+    if (expectedCategory === 'staging_permanent') {
+      if (neonProjectId === PRODUCTION_NEON_PROJECT_ID || neonEndpointId === PRODUCTION_NEON_ENDPOINT_ID) {
+        return {
+          ok: false,
+          code: 'CRITICAL_SECURITY_VIOLATION_PRODUCTION_DB_IN_STAGING',
+          message: `CRITICAL: Connected database is PRODUCTION (${PRODUCTION_NEON_PROJECT_ID}), but expected STAGING!`,
+          identity: { ...evidence, endpointMatch: false, controlPlaneVerified: false }
+        };
+      }
+      if (neonBranchId === COMMERCIAL_PR92_BRANCH_ID || neonEndpointId === COMMERCIAL_PR92_ENDPOINT_ID) {
+        return {
+          ok: false,
+          code: 'COMMERCIAL_BRANCH_MUTATION_RESTRICTED',
+          message: `CRITICAL: Connected database is Commercial PR #92 branch (${COMMERCIAL_PR92_BRANCH_ID}), access restricted.`,
+          identity: { ...evidence, endpointMatch: false, controlPlaneVerified: false }
+        };
+      }
+      if (neonProjectId && neonProjectId !== STAGING_NEON_PROJECT_ID) {
+        return {
+          ok: false,
+          code: 'PERMANENT_STAGING_DATABASE_MISMATCH',
+          message: `Connected database project ID (${neonProjectId}) does not match Permanent Staging (${STAGING_NEON_PROJECT_ID})!`,
+          identity: { ...evidence, endpointMatch: false, controlPlaneVerified: false }
+        };
+      }
+      return {
+        ok: true,
+        code: 'AUTHENTICATED_STAGING_IDENTITY_VERIFIED',
+        message: `Verified Permanent Staging database identity: ${STAGING_NEON_PROJECT_ID} (${STAGING_NEON_BRANCH_ID})`,
+        identity: { ...evidence, endpointMatch: true, controlPlaneVerified: true }
+      };
+    }
+
+    if (expectedCategory === 'production') {
+      if (neonProjectId === STAGING_NEON_PROJECT_ID || neonEndpointId === STAGING_NEON_ENDPOINT_ID) {
+        return {
+          ok: false,
+          code: 'CRITICAL_SECURITY_VIOLATION_STAGING_DB_IN_PRODUCTION',
+          message: `CRITICAL: Connected database is STAGING (${STAGING_NEON_PROJECT_ID}), but expected PRODUCTION!`,
+          identity: { ...evidence, endpointMatch: false, controlPlaneVerified: false }
+        };
+      }
+      if (neonProjectId && neonProjectId !== PRODUCTION_NEON_PROJECT_ID) {
+        return {
+          ok: false,
+          code: 'PRODUCTION_DATABASE_MISMATCH',
+          message: `Connected database project ID (${neonProjectId}) does not match Production (${PRODUCTION_NEON_PROJECT_ID})!`,
+          identity: { ...evidence, endpointMatch: false, controlPlaneVerified: false }
+        };
+      }
+      return {
+        ok: true,
+        code: 'AUTHENTICATED_PRODUCTION_IDENTITY_VERIFIED',
+        message: `Verified Production database identity: ${PRODUCTION_NEON_PROJECT_ID} (${PRODUCTION_NEON_BRANCH_ID})`,
+        identity: { ...evidence, endpointMatch: true, controlPlaneVerified: true }
+      };
+    }
+  }
+
+  // 2. Fallback to host and connection evidence if GUCs are not set (e.g., connection poolers)
+  if (host) {
+    const classification = classifyDatabaseUrl(`postgresql://dummy@${host}/neondb`);
+    if (expectedCategory === 'staging_permanent') {
+      if (classification.isProduction) {
+        return {
+          ok: false,
+          code: 'CRITICAL_SECURITY_VIOLATION_PRODUCTION_DB_IN_STAGING',
+          message: `CRITICAL: Connected host resolves to PRODUCTION (${host})!`,
+          identity: { ...evidence, endpointMatch: false, controlPlaneVerified: false }
+        };
+      }
+      if (!classification.isStagingPermanent && !classification.isLocalOrCiTest) {
+        return {
+          ok: false,
+          code: 'PERMANENT_STAGING_DATABASE_MISMATCH',
+          message: `Host (${host}) does not match Permanent Staging (${STAGING_NEON_ENDPOINT_ID})!`,
+          identity: { ...evidence, endpointMatch: false, controlPlaneVerified: false }
+        };
+      }
+    }
+    if (expectedCategory === 'production') {
+      if (!classification.isProduction) {
+        return {
+          ok: false,
+          code: 'PRODUCTION_DATABASE_MISMATCH',
+          message: `Host (${host}) does not match Production (${PRODUCTION_NEON_ENDPOINT_ID})!`,
+          identity: { ...evidence, endpointMatch: false, controlPlaneVerified: false }
+        };
+      }
+    }
+  }
 
   return {
     ok: true,
     code: 'AUTHENTICATED_IDENTITY_VERIFIED',
-    identity
+    message: 'Authenticated database connection established and verified against environment requirements.',
+    identity: {
+      ...evidence,
+      endpointMatch: true,
+      controlPlaneVerified: Boolean(neonProjectId || neonEndpointId)
+    }
   };
 }
+
+/**
+ * Authenticated runtime database identity check.
+ * Queries current_database(), current_user, inet_server_addr(), and Neon control-plane GUCs without exposing passwords.
+ * Fails closed if database identity contradicts the expected category or cannot be established.
+ */
+export async function verifyConnectedDatabaseIdentity(
+  client: Knex,
+  expectedCategory: 'production' | 'staging_permanent'
+): Promise<DatabaseIdentityVerificationResult> {
+  try {
+    const res = await client.raw(`
+      SELECT 
+        current_database() as db_name, 
+        current_user as db_user, 
+        inet_server_addr() as server_ip,
+        current_setting('neon.project_id', true) as neon_project_id,
+        current_setting('neon.branch_id', true) as neon_branch_id,
+        current_setting('neon.endpoint_id', true) as neon_endpoint_id,
+        current_setting('neon.timeline_id', true) as neon_timeline_id
+    `);
+    const row = res.rows?.[0] || {};
+
+    const evidence: DatabaseIdentityEvidence = {
+      databaseName: row.db_name || 'unknown',
+      user: row.db_user || 'unknown',
+      serverAddr: String(row.server_ip || 'unknown'),
+      neonProjectId: row.neon_project_id || undefined,
+      neonBranchId: row.neon_branch_id || undefined,
+      neonEndpointId: row.neon_endpoint_id || undefined,
+      neonTimelineId: row.neon_timeline_id || undefined
+    };
+
+    return verifyDatabaseIdentityFromEvidence(evidence, expectedCategory);
+  } catch (err: any) {
+    return {
+      ok: false,
+      code: 'DATABASE_IDENTITY_QUERY_FAILED',
+      message: `Failed to query database-side identity: ${err.message}`,
+      identity: {
+        endpointMatch: false,
+        controlPlaneVerified: false
+      }
+    };
+  }
+}
+

@@ -5,10 +5,15 @@ import {
   sanitizeConnectionEndpoint,
   assertCanRunMigrations,
   validateOAuthOrigin,
+  verifyDatabaseIdentityFromEvidence,
+  NEON_CONTROL_PLANE_REGISTRY,
   PRODUCTION_NEON_PROJECT_ID,
+  PRODUCTION_NEON_BRANCH_ID,
   PRODUCTION_NEON_ENDPOINT_ID,
   STAGING_NEON_PROJECT_ID,
+  STAGING_NEON_BRANCH_ID,
   STAGING_NEON_ENDPOINT_ID,
+  COMMERCIAL_PR92_BRANCH_ID,
   COMMERCIAL_PR92_ENDPOINT_ID,
   STAGING_CANONICAL_DOMAIN,
   STAGING_VERCEL_PREVIEW_HOST,
@@ -221,6 +226,101 @@ runTest('OAuth origin validator accepts local development origins', () => {
   assert.equal(res1.valid, true);
   const res2 = validateOAuthOrigin('http://127.0.0.1:5173', 'local');
   assert.equal(res2.valid, true);
+});
+
+// 7. Neon Control-Plane Registry & Authenticated Database Identity Tests
+runTest('Neon Control-Plane Registry has exact certified projects and endpoints', () => {
+  assert.equal(NEON_CONTROL_PLANE_REGISTRY.production.projectId, PRODUCTION_NEON_PROJECT_ID);
+  assert.equal(NEON_CONTROL_PLANE_REGISTRY.production.defaultBranchId, PRODUCTION_NEON_BRANCH_ID);
+  assert.equal(NEON_CONTROL_PLANE_REGISTRY.production.primaryEndpointId, PRODUCTION_NEON_ENDPOINT_ID);
+
+  assert.equal(NEON_CONTROL_PLANE_REGISTRY.staging_permanent.projectId, STAGING_NEON_PROJECT_ID);
+  assert.equal(NEON_CONTROL_PLANE_REGISTRY.staging_permanent.defaultBranchId, STAGING_NEON_BRANCH_ID);
+  assert.equal(NEON_CONTROL_PLANE_REGISTRY.staging_permanent.primaryEndpointId, STAGING_NEON_ENDPOINT_ID);
+
+  assert.equal(NEON_CONTROL_PLANE_REGISTRY.commercial_pr92.projectId, STAGING_NEON_PROJECT_ID);
+  assert.equal(NEON_CONTROL_PLANE_REGISTRY.commercial_pr92.defaultBranchId, COMMERCIAL_PR92_BRANCH_ID);
+  assert.equal(NEON_CONTROL_PLANE_REGISTRY.commercial_pr92.primaryEndpointId, COMMERCIAL_PR92_ENDPOINT_ID);
+});
+
+runTest('Database identity check ACCEPTS authentic Staging control-plane metadata', () => {
+  const res = verifyDatabaseIdentityFromEvidence({
+    databaseName: 'neondb',
+    user: 'neondb_owner',
+    neonProjectId: STAGING_NEON_PROJECT_ID,
+    neonBranchId: STAGING_NEON_BRANCH_ID,
+    neonEndpointId: STAGING_NEON_ENDPOINT_ID
+  }, 'staging_permanent');
+
+  assert.equal(res.ok, true);
+  assert.equal(res.code, 'AUTHENTICATED_STAGING_IDENTITY_VERIFIED');
+  assert.equal(res.identity.controlPlaneVerified, true);
+  assert.equal(res.identity.endpointMatch, true);
+});
+
+runTest('Database identity check ACCEPTS authentic Production control-plane metadata', () => {
+  const res = verifyDatabaseIdentityFromEvidence({
+    databaseName: 'neondb',
+    user: 'neondb_owner',
+    neonProjectId: PRODUCTION_NEON_PROJECT_ID,
+    neonBranchId: PRODUCTION_NEON_BRANCH_ID,
+    neonEndpointId: PRODUCTION_NEON_ENDPOINT_ID
+  }, 'production');
+
+  assert.equal(res.ok, true);
+  assert.equal(res.code, 'AUTHENTICATED_PRODUCTION_IDENTITY_VERIFIED');
+  assert.equal(res.identity.controlPlaneVerified, true);
+});
+
+runTest('Database identity check REJECTS Production DB identity in Staging', () => {
+  const res = verifyDatabaseIdentityFromEvidence({
+    databaseName: 'neondb',
+    user: 'neondb_owner',
+    neonProjectId: PRODUCTION_NEON_PROJECT_ID,
+    neonEndpointId: PRODUCTION_NEON_ENDPOINT_ID
+  }, 'staging_permanent');
+
+  assert.equal(res.ok, false);
+  assert.equal(res.code, 'CRITICAL_SECURITY_VIOLATION_PRODUCTION_DB_IN_STAGING');
+  assert.equal(res.identity.endpointMatch, false);
+});
+
+runTest('Database identity check REJECTS Staging DB identity in Production', () => {
+  const res = verifyDatabaseIdentityFromEvidence({
+    databaseName: 'neondb',
+    user: 'neondb_owner',
+    neonProjectId: STAGING_NEON_PROJECT_ID,
+    neonEndpointId: STAGING_NEON_ENDPOINT_ID
+  }, 'production');
+
+  assert.equal(res.ok, false);
+  assert.equal(res.code, 'CRITICAL_SECURITY_VIOLATION_STAGING_DB_IN_PRODUCTION');
+  assert.equal(res.identity.endpointMatch, false);
+});
+
+runTest('Database identity check REJECTS Commercial PR #92 branch in Staging pipeline', () => {
+  const res = verifyDatabaseIdentityFromEvidence({
+    databaseName: 'neondb',
+    user: 'neondb_owner',
+    neonProjectId: STAGING_NEON_PROJECT_ID,
+    neonBranchId: COMMERCIAL_PR92_BRANCH_ID,
+    neonEndpointId: COMMERCIAL_PR92_ENDPOINT_ID
+  }, 'staging_permanent');
+
+  assert.equal(res.ok, false);
+  assert.equal(res.code, 'COMMERCIAL_BRANCH_MUTATION_RESTRICTED');
+});
+
+runTest('Database identity check REJECTS unrecognized project IDs in Staging', () => {
+  const res = verifyDatabaseIdentityFromEvidence({
+    databaseName: 'neondb',
+    user: 'neondb_owner',
+    neonProjectId: 'unrecognized-project-12345',
+    neonEndpointId: 'ep-random-endpoint-999'
+  }, 'staging_permanent');
+
+  assert.equal(res.ok, false);
+  assert.equal(res.code, 'PERMANENT_STAGING_DATABASE_MISMATCH');
 });
 
 console.log(`\nAll ${passed} Database Isolation & Environment Crossover tests PASSED successfully!\n`);
