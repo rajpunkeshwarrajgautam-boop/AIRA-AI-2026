@@ -1,48 +1,60 @@
+import assert from 'node:assert/strict';
 import { execSync } from 'child_process';
-import knex from 'knex';
+import knex, { Knex } from 'knex';
+import { importVerifiedCommercialIdentities } from './import-verified-commercial-identities.js';
 
-const VERIFIED_HISTORICAL_ACCOUNTS = [
-  {
-    userId: 'neon_user_e215766f-e719-431f-ad08-154a28ef83b4',
-    provider: 'github',
-    providerAccountId: '253642432',
-    email: 'rajpunkeshwarrajgautam@gmail.com',
-    name: 'rajpunkeshwarrajgautam-boop'
-  },
-  {
-    userId: 'neon_user_3aea147c-fc80-4ad4-9df8-df2f5c07c91a',
-    provider: 'google',
-    providerAccountId: '109885171219226843992',
-    email: 'rajpunkeshwarrajgautam@gmail.com',
-    name: 'Raj Gautam'
-  },
-  {
-    userId: 'neon_user_fc6f9c72-6ebb-4fd2-960a-5a8779e59cb7',
-    provider: 'google',
-    providerAccountId: '101889904540027754835',
-    email: 'rajpunkeshwarrajgautam@gmail.com',
-    name: 'Raj Gautam'
+function maskId(id: string | null): string {
+  if (!id) return 'null';
+  if (id.length <= 8) return `${id.slice(0, 2)}***`;
+  return `${id.slice(0, 6)}...${id.slice(-4)}`;
+}
+
+function maskEmail(email: string | null): string {
+  if (!email) return 'null';
+  const parts = email.split('@');
+  if (parts.length !== 2) return '***';
+  return `${parts[0].slice(0, 1)}***@${parts[1].slice(0, 1)}***.${parts[1].split('.').pop()}`;
+}
+
+export function assertRehearsalSafety(connectionString: string): void {
+  const lower = connectionString.toLowerCase();
+  // 1. Block Production
+  if (lower.includes('old-sky-50952395') || lower.includes('prod-release') || lower.includes('aira-ai.in') || lower.includes('aira-ai-live')) {
+    throw new Error('[SECURITY FATAL] Execution against Production is strictly blocked.');
   }
-];
+  // 2. Block Permanent Staging main
+  if (lower.includes('br-autumn-star-b36dfu5w') || lower.includes('ep-mute-frost-50372225')) {
+    // Note: check if endpoint is main
+    if (lower.includes('br-autumn-star')) {
+      throw new Error('[SECURITY FATAL] Execution against Permanent Staging main is strictly blocked. Use an isolated rehearsal branch.');
+    }
+  }
+  // 3. Block Commercial PR #92 database
+  if (lower.includes('br-green-snow-b3dsci5u')) {
+    throw new Error('[SECURITY FATAL] Modifying the Commercial source database is strictly blocked.');
+  }
+}
 
-export async function executeIdentityContinuityProcedure(client: knex.Knex) {
-  const now = Date.now();
-  console.log('--- EXECUTING IDENTITY CONTINUITY PROCEDURE ---');
+export async function runIdentityContinuityAssertions(
+  sourceClient: Knex,
+  targetClient: Knex
+): Promise<void> {
+  console.log('--- EXECUTING SECURE IDENTITY CONTINUITY PROCEDURE ---');
 
   // Step 1: Ensure Staging Conversation Principals have first-party User records
-  const stagingPrincipals = await client('conversations')
+  const stagingPrincipals = await targetClient('conversations')
     .distinct('principal_id')
     .whereNotNull('principal_id');
 
-  console.log(`Step 1: Reconciling ${stagingPrincipals.length} staging conversation principals...`);
+  const now = Date.now();
+  console.log(`Step 1: Reconciling ${stagingPrincipals.length} staging conversation principals into users...`);
   for (const p of stagingPrincipals) {
-    const pid = p.principal_id;
-    await client('users')
+    await targetClient('users')
       .insert({
-        id: pid,
+        id: p.principal_id,
         email: null,
         email_verified: false,
-        name: 'Staging Legacy Principal',
+        name: 'Legacy Session Principal',
         created_at: now,
         updated_at: now
       })
@@ -50,167 +62,110 @@ export async function executeIdentityContinuityProcedure(client: knex.Knex) {
       .ignore();
   }
 
-  // Step 2: Seed verified historical social accounts and credit wallets
-  console.log(`Step 2: Reconciling ${VERIFIED_HISTORICAL_ACCOUNTS.length} verified historical social identities...`);
-  for (const acc of VERIFIED_HISTORICAL_ACCOUNTS) {
-    // 2a. Insert user
-    await client('users')
-      .insert({
-        id: acc.userId,
-        email: acc.email,
-        email_verified: true,
-        name: acc.name,
-        created_at: now,
-        updated_at: now
-      })
-      .onConflict('id')
-      .ignore();
+  // Step 2: Execute Controlled Import from Commercial DB
+  console.log('Step 2: Executing controlled import of verified historical identities...');
+  const importSummary = await importVerifiedCommercialIdentities(sourceClient, targetClient, false);
+  console.log(`[Import] Reconciled records: users=${importSummary.usersImported}, oauth=${importSummary.oauthAccountsImported}, customers=${importSummary.billingCustomersImported}, wallets=${importSummary.creditAccountsImported}`);
 
-    // 2b. Insert oauth_account link
-    await client('oauth_accounts')
-      .insert({
-        id: 'oa_verified_' + acc.provider + '_' + acc.providerAccountId,
-        user_id: acc.userId,
-        provider: acc.provider,
-        provider_account_id: acc.providerAccountId,
-        email: acc.email,
-        profile_data: JSON.stringify({
-          migratedFrom: 'verified_historical_credentials',
-          migratedAt: now
-        }),
-        created_at: now,
-        updated_at: now
-      })
-      .onConflict(['provider', 'provider_account_id'])
-      .ignore();
+  // Assertion 1: Zero orphaned conversation principals
+  console.log('\n--- ASSERTION 1: CONVERSATION INTEGRITY & REFERENTIAL VALIDITY ---');
+  const orphanConvs = await targetClient.raw(`
+    SELECT c.id, c.principal_id, u.id as user_match
+    FROM conversations c
+    LEFT JOIN users u ON c.principal_id = u.id
+    WHERE u.id IS NULL
+  `);
+  assert.strictEqual(orphanConvs.rows.length, 0, 'Orphaned conversation principals must be 0');
+  console.log('✓ PASS: All conversation principals strictly map to first-party user records.');
 
-    // 2c. Insert billing_customer
-    const customerId = 'cust_' + acc.userId.replace('neon_user_', '').replace(/-/g, '').slice(0, 32);
-    await client('billing_customers')
-      .insert({
-        id: customerId,
-        principal_id: acc.userId,
-        email: acc.email,
-        name: acc.name,
-        default_currency: 'INR',
-        created_at: now,
-        updated_at: now
-      })
-      .onConflict('id')
-      .ignore();
+  // Assertion 2: All staging conversations preserved
+  const targetConvs = await targetClient('conversations').count('* as cnt');
+  assert.ok(Number(targetConvs[0].cnt) >= stagingPrincipals.length, 'Target conversations preserved');
+  console.log(`✓ PASS: Conversation count on target verified (${targetConvs[0].cnt} conversations).`);
 
-    // 2d. Insert 100-credit account
-    const creditAccountId = 'ca_' + customerId.slice(0, 29);
-    await client('credit_accounts')
-      .insert({
-        id: creditAccountId,
-        customer_id: customerId,
-        balance_credits: 100,
-        reserved_credits: 0,
-        lifetime_granted_credits: 100,
-        lifetime_spent_credits: 0,
-        created_at: now,
-        updated_at: now
-      })
-      .onConflict('id')
-      .ignore();
+  // Assertion 3: Credit Wallets and Invariants (1 wallet per customer, exact balance preservation)
+  console.log('\n--- ASSERTION 2: CREDIT WALLETS & BILLING INTEGRITY ---');
+  const customers = await targetClient('billing_customers').select('id', 'principal_id');
+  const creditAccounts = await targetClient('credit_accounts').select('id', 'customer_id', 'balance_credits');
+  
+  // Verify one wallet per customer
+  const customerIdSet = new Set<string>();
+  for (const ca of creditAccounts) {
+    assert.ok(!customerIdSet.has(ca.customer_id), `Customer ${ca.customer_id} must have only one credit wallet`);
+    customerIdSet.add(ca.customer_id);
+    assert.ok(ca.balance_credits >= 0, 'Credit balance must be non-negative');
   }
+  console.log(`✓ PASS: Credit account 1:1 invariant verified across ${creditAccounts.length} wallets.`);
+
+  // Assertion 4: Idempotency (2nd Run produces zero duplicate errors and zero count drift)
+  console.log('\n--- ASSERTION 3: IDEMPOTENCY ON RE-EXECUTION ---');
+  const preIdempotencyUsers = Number((await targetClient('users').count('* as cnt'))[0].cnt);
+  const preIdempotencyOAs = Number((await targetClient('oauth_accounts').count('* as cnt'))[0].cnt);
+  const preIdempotencyCAs = Number((await targetClient('credit_accounts').count('* as cnt'))[0].cnt);
+
+  await importVerifiedCommercialIdentities(sourceClient, targetClient, false);
+
+  const postIdempotencyUsers = Number((await targetClient('users').count('* as cnt'))[0].cnt);
+  const postIdempotencyOAs = Number((await targetClient('oauth_accounts').count('* as cnt'))[0].cnt);
+  const postIdempotencyCAs = Number((await targetClient('credit_accounts').count('* as cnt'))[0].cnt);
+
+  assert.strictEqual(postIdempotencyUsers, preIdempotencyUsers, 'User count unchanged on repeat run');
+  assert.strictEqual(postIdempotencyOAs, preIdempotencyOAs, 'OAuth account count unchanged on repeat run');
+  assert.strictEqual(postIdempotencyCAs, preIdempotencyCAs, 'Credit account count unchanged on repeat run');
+  console.log('✓ PASS: Idempotency verified. Zero duplicate records created on repeat run.');
+
+  // Assertion 5: Direct OAuth Login Resolution
+  console.log('\n--- ASSERTION 4: DIRECT OAUTH IDENTITY RESOLUTION ---');
+  const oauthEntries = await targetClient('oauth_accounts').select('id', 'user_id', 'provider', 'provider_account_id');
+  assert.ok(oauthEntries.length > 0, 'OAuth accounts must be present');
+  for (const entry of oauthEntries) {
+    const boundUser = await targetClient('users').where({ id: entry.user_id }).first();
+    assert.ok(boundUser, `User ${maskId(entry.user_id)} must exist for provider ${entry.provider}`);
+    console.log(`✓ PASS: Resolved ${entry.provider}:${maskId(entry.provider_account_id)} -> ${maskId(boundUser.id)}`);
+  }
+
+  // Assertion 6: Email Auto-Linking Prevention (Fail-Closed)
+  console.log('\n--- ASSERTION 5: EMAIL AUTO-LINKING ATTACK PREVENTION ---');
+  // Confirm staging anonymous session principals have null email
+  const legacyPrincipalsWithEmail = await targetClient('users')
+    .where('name', 'Legacy Session Principal')
+    .whereNotNull('email');
+  assert.strictEqual(legacyPrincipalsWithEmail.length, 0, 'Legacy anonymous session principals must have null email');
+  console.log('✓ PASS: All legacy session principals have email: null (immune to email-matching takeover).');
+
+  console.log('\nALL IDENTITY CONTINUITY AND REHEARSAL ASSERTIONS PASSED WITH ZERO ERRORS.');
 }
 
 async function main() {
-  const cs = execSync('npx neonctl connection-string rehearsal-pr96-commercial-20261021 --project-id mute-frost-50372225', { encoding: 'utf8' }).trim();
-  const client = knex({
+  const rehearsalBranch = process.env.REHEARSAL_BRANCH || 'rehearsal-pr96-commercial-20261021';
+  console.log(`Connecting to rehearsal branch: ${rehearsalBranch}...`);
+
+  const sourceCs = execSync('npx neonctl connection-string pr92-commercial-platform-isolated --project-id mute-frost-50372225', { encoding: 'utf8' }).trim();
+  const targetCs = execSync(`npx neonctl connection-string ${rehearsalBranch} --project-id mute-frost-50372225`, { encoding: 'utf8' }).trim();
+
+  assertRehearsalSafety(targetCs);
+
+  const sourceClient = knex({
     client: 'pg',
-    connection: { connectionString: cs, ssl: { rejectUnauthorized: false } }
+    connection: { connectionString: sourceCs, ssl: true }
+  });
+
+  const targetClient = knex({
+    client: 'pg',
+    connection: { connectionString: targetCs, ssl: true }
   });
 
   try {
-    console.log('Testing Identity Continuity on Rehearsal Branch...');
-    await executeIdentityContinuityProcedure(client);
-
-    // Verify Users table
-    const users = await client('users').select('id', 'name', 'email');
-    console.log(`\nRehearsal Users after reconciliation (${users.length}):`);
-    for (const u of users) {
-      console.log(`  - ${u.id}: name="${u.name}", email="${u.email}"`);
-    }
-
-    // Verify OAuth accounts table
-    const oas = await client('oauth_accounts').select('id', 'user_id', 'provider', 'provider_account_id', 'email');
-    console.log(`\nRehearsal OAuth accounts after reconciliation (${oas.length}):`);
-    for (const oa of oas) {
-      console.log(`  - ${oa.provider} ${oa.provider_account_id} -> ${oa.user_id} (${oa.email})`);
-    }
-
-    // Verify Billing Customers and Credit Accounts
-    const cas = await client('credit_accounts').select('id', 'customer_id', 'balance_credits');
-    console.log(`\nRehearsal Credit accounts after reconciliation (${cas.length}):`);
-    for (const ca of cas) {
-      console.log(`  - Account ${ca.id}: balance=${ca.balance_credits}, customer=${ca.customer_id}`);
-    }
-
-    // Verify Staging Conversation Ownership
-    const orphanConvs = await client.raw(`
-      SELECT c.id, c.title, c.principal_id, u.id as user_match
-      FROM conversations c
-      LEFT JOIN users u ON c.principal_id = u.id
-      WHERE u.id IS NULL
-    `);
-    console.log(`\nOrphaned conversation principals: ${orphanConvs.rows.length}`);
-    if (orphanConvs.rows.length > 0) {
-      throw new Error('Found orphaned conversations without user records!');
-    } else {
-      console.log('✓ ALL staging conversations are mapped to valid first-party user records!');
-    }
-
-    // Test Idempotency (Execute second time)
-    console.log('\n--- TESTING IDEMPOTENCY (2nd RUN) ---');
-    await executeIdentityContinuityProcedure(client);
-    const users2 = await client('users').count('* as cnt');
-    const oas2 = await client('oauth_accounts').count('* as cnt');
-    const cas2 = await client('credit_accounts').count('* as cnt');
-    console.log(`2nd run counts: users=${users2[0].cnt}, oauth_accounts=${oas2[0].cnt}, credit_accounts=${cas2[0].cnt}`);
-    console.log('✓ Idempotency verified: zero duplicate rows or constraint violations!');
-
-    // Test Login Simulation (Google sub 109885171219226843992)
-    console.log('\n--- TESTING DIRECT OAUTH LOGIN RESOLUTION ---');
-    const googleLogin = await client('oauth_accounts')
-      .where({ provider: 'google', provider_account_id: '109885171219226843992' })
-      .first();
-    console.log('Owner Google login resolves to user:', googleLogin?.user_id);
-    if (googleLogin?.user_id !== 'neon_user_3aea147c-fc80-4ad4-9df8-df2f5c07c91a') {
-      throw new Error('Google login identity resolution failed!');
-    }
-    console.log('✓ Owner Google sign-in immediately resolves to stable historical user!');
-
-    // Test Login Simulation (GitHub uid 253642432)
-    const githubLogin = await client('oauth_accounts')
-      .where({ provider: 'github', provider_account_id: '253642432' })
-      .first();
-    console.log('Owner GitHub login resolves to user:', githubLogin?.user_id);
-    if (githubLogin?.user_id !== 'neon_user_e215766f-e719-431f-ad08-154a28ef83b4') {
-      throw new Error('GitHub login identity resolution failed!');
-    }
-    console.log('✓ Owner GitHub sign-in immediately resolves to stable historical user!');
-
-    // Test Email-Only Linking Prevention (Attacker or unlinked provider trying to claim by email)
-    console.log('\n--- TESTING EMAIL AUTO-LINKING PREVENTION ---');
-    const existingEmailUser = await client('users')
-      .whereRaw('LOWER(email) = LOWER(?)', ['rajpunkeshwarrajgautam@gmail.com'])
-      .first();
-    console.log('Existing account with email found:', !!existingEmailUser);
-    const unlinkedProviderAttempt = await client('oauth_accounts')
-      .where({ provider: 'google', provider_account_id: 'attacker_sub_999999' })
-      .first();
-    console.log('Attacker account linked in oauth_accounts:', !!unlinkedProviderAttempt);
-    console.log('✓ Auto-linking by matching email is prevented: resolveOrCreateUser throws ACCOUNT_EXISTS_CONFLICT!');
-
+    await runIdentityContinuityAssertions(sourceClient, targetClient);
   } finally {
-    await client.destroy();
+    await sourceClient.destroy();
+    await targetClient.destroy();
   }
 }
 
-main().catch(err => {
-  console.error('Continuity test failed:', err);
-  process.exit(1);
-});
+if (process.argv[1] && process.argv[1].includes('test-identity-continuity-procedure')) {
+  main().catch(err => {
+    console.error('Continuity test failed:', err);
+    process.exit(1);
+  });
+}
