@@ -103,20 +103,20 @@ console.log('\n--- Test Group 2: Target Database Safety & Isolation Guards ---')
 
 // 2.1 Unconditional Production Target Rejection
 assert.throws(() => {
-  validateAuthoritativeTargetSafety(`postgresql://aira_user:pass@${PRODUCTION_NEON_ENDPOINT_ID}.aws-ap-southeast-1.neon.tech/neondb`);
+  validateAuthoritativeTargetSafety(`postgresql://neondb_owner@${PRODUCTION_NEON_ENDPOINT_ID}.aws-ap-southeast-1.neon.tech/neondb`);
 }, /\[SECURITY FATAL\] Direct execution against Production database/);
 console.log('  ✓ Fail closed: Production target database rejected unconditionally');
 
 // 2.2 Reject Commercial PR #92 as write target
 assert.throws(() => {
-  validateAuthoritativeTargetSafety(`postgresql://aira_user:pass@${COMMERCIAL_PR92_ENDPOINT_ID}.aws-ap-southeast-1.neon.tech/neondb`);
+  validateAuthoritativeTargetSafety(`postgresql://neondb_owner@${COMMERCIAL_PR92_ENDPOINT_ID}.aws-ap-southeast-1.neon.tech/neondb`);
 }, /\[SECURITY FATAL\] Target cannot be the Commercial PR #92 source database/);
 console.log('  ✓ Fail closed: Commercial PR #92 source database rejected as write target');
 
 // 2.3 Reject permanent staging without explicit authorization flag
 assert.throws(() => {
   validateAuthoritativeTargetSafety(
-    `postgresql://aira_user:pass@${STAGING_NEON_ENDPOINT_ID}.aws-ap-southeast-1.neon.tech/neondb`,
+    `postgresql://neondb_owner@${STAGING_NEON_ENDPOINT_ID}.aws-ap-southeast-1.neon.tech/neondb`,
     { allowPermanentStaging: false }
   );
 }, /\[SECURITY FATAL\] Target is live Permanent Staging database/);
@@ -125,7 +125,7 @@ console.log('  ✓ Fail closed: Permanent staging rejected without AIRA_ALLOW_ST
 // 2.4 Permit permanent staging when authorized
 assert.doesNotThrow(() => {
   validateAuthoritativeTargetSafety(
-    `postgresql://aira_user:pass@${STAGING_NEON_ENDPOINT_ID}.aws-ap-southeast-1.neon.tech/neondb`,
+    `postgresql://neondb_owner@${STAGING_NEON_ENDPOINT_ID}.aws-ap-southeast-1.neon.tech/neondb`,
     { allowPermanentStaging: true }
   );
 });
@@ -133,7 +133,7 @@ console.log('  ✓ Permit permanent staging when explicitly authorized by owner'
 
 // 2.5 Reject arbitrary untrusted external write destinations
 assert.throws(() => {
-  validateAuthoritativeTargetSafety('postgresql://attacker:pass@evil-host.com/neondb');
+  validateAuthoritativeTargetSafety('postgresql://attacker@evil-host.com/neondb');
 }, /\[SECURITY FATAL\] Write destination rejected/);
 console.log('  ✓ Fail closed: Arbitrary external host rejected as write target');
 
@@ -143,19 +143,19 @@ console.log('\n--- Test Group 3: Source Database Safety & Read-Only Proof ---');
 
 // 3.1 Reject Production as source
 assert.rejects(async () => {
-  await validateAuthoritativeSourceSafety(`postgresql://aira_user:pass@${PRODUCTION_NEON_ENDPOINT_ID}.aws-ap-southeast-1.neon.tech/neondb`);
+  await validateAuthoritativeSourceSafety(`postgresql://neondb_owner@${PRODUCTION_NEON_ENDPOINT_ID}.aws-ap-southeast-1.neon.tech/neondb`);
 }, /\[SECURITY FATAL\] Source database cannot be Production/);
 console.log('  ✓ Fail closed: Production rejected as source database');
 
 // 3.2 Reject Permanent Staging as source
 assert.rejects(async () => {
-  await validateAuthoritativeSourceSafety(`postgresql://aira_user:pass@${STAGING_NEON_ENDPOINT_ID}.aws-ap-southeast-1.neon.tech/neondb`);
+  await validateAuthoritativeSourceSafety(`postgresql://neondb_owner@${STAGING_NEON_ENDPOINT_ID}.aws-ap-southeast-1.neon.tech/neondb`);
 }, /\[SECURITY FATAL\] Source database cannot be Permanent Staging/);
 console.log('  ✓ Fail closed: Permanent Staging rejected as source database');
 
 // 3.3 Reject generic/unrecognized databases as source
 assert.rejects(async () => {
-  await validateAuthoritativeSourceSafety('postgresql://aira_user:pass@random-neon-branch.aws-ap-southeast-1.neon.tech/neondb');
+  await validateAuthoritativeSourceSafety('postgresql://neondb_owner@random-neon-branch.aws-ap-southeast-1.neon.tech/neondb');
 }, /\[SECURITY FATAL\] Source database is not the authorized Commercial PR #92 database/);
 console.log('  ✓ Fail closed: Non-commercial PR #92 database rejected as source');
 
@@ -170,7 +170,7 @@ const mockNonReadOnlyClient: any = {
 };
 assert.rejects(async () => {
   await validateAuthoritativeSourceSafety(
-    `postgresql://aira_user:pass@${COMMERCIAL_PR92_ENDPOINT_ID}.aws-ap-southeast-1.neon.tech/neondb`,
+    `postgresql://neondb_owner@${COMMERCIAL_PR92_ENDPOINT_ID}.aws-ap-southeast-1.neon.tech/neondb`,
     mockNonReadOnlyClient
   );
 }, /Proof of read-only source connection failed/);
