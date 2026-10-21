@@ -72,64 +72,70 @@ export function validateAuthoritativeTargetSafety(
       throw new Error(`[SECURITY FATAL] Target is live Permanent Staging database (${STAGING_NEON_PROJECT_ID} / ${STAGING_NEON_BRANCH_ID}). Writes require explicit owner authorization flag: AIRA_ALLOW_STAGING_LIVE_IMPORT=true.`);
     }
   } else if (classification.category === 'isolated_neon_preview') {
-    // Isolated preview / rehearsal branch: must be a Neon branch
+    // Isolated preview / rehearsal branch: must be a verified Neon database endpoint in authorized staging project
     if (!classification.host.includes('.neon.tech')) {
       throw new Error(`[SECURITY FATAL] Target is not a verified Neon database endpoint: ${classification.sanitizedTarget}`);
     }
   } else if (!classification.isLocalOrCiTest) {
-    throw new Error(`[SECURITY FATAL] Target database unrecognized or untrusted: ${classification.sanitizedTarget}`);
+    // Reject all other write destinations fail-closed
+    throw new Error(`[SECURITY FATAL] Write destination rejected: ${classification.sanitizedTarget}. Only authorized permanent staging (${STAGING_NEON_PROJECT_ID}) or isolated staging rehearsal branches are permitted.`);
   }
 }
 
 /**
- * Validates that connected database metadata matches expected staging environment.
+ * Validates that connected target database metadata matches expected staging environment.
  * Queries Neon system settings (neon.project_id, neon.branch_id, neon.endpoint_id).
  */
 export async function verifyConnectedTargetMetadata(
   targetClient: Knex,
-  options: { allowPermanentStaging?: boolean } = {}
+  options: { allowPermanentStaging?: boolean; isNeonTarget?: boolean } = {}
 ): Promise<void> {
-  try {
-    const res = await targetClient.raw(`
-      SELECT 
-        current_database() as db_name, 
-        current_user as db_user, 
-        inet_server_addr() as server_ip,
-        current_setting('neon.project_id', true) as neon_project_id,
-        current_setting('neon.branch_id', true) as neon_branch_id,
-        current_setting('neon.endpoint_id', true) as neon_endpoint_id
-    `);
-    const row = res.rows?.[0] || {};
-    const { neon_project_id, neon_branch_id, neon_endpoint_id } = row;
+  const res = await targetClient.raw(`
+    SELECT 
+      current_database() as db_name, 
+      current_user as db_user, 
+      inet_server_addr() as server_ip,
+      current_setting('neon.project_id', true) as neon_project_id,
+      current_setting('neon.branch_id', true) as neon_branch_id,
+      current_setting('neon.endpoint_id', true) as neon_endpoint_id
+  `);
+  const row = res.rows?.[0] || {};
+  const { neon_project_id, neon_branch_id, neon_endpoint_id } = row;
 
-    if (neon_project_id === PRODUCTION_NEON_PROJECT_ID || neon_endpoint_id === PRODUCTION_NEON_ENDPOINT_ID) {
-      throw new Error(`[SECURITY FATAL] Connected target database is PRODUCTION (${PRODUCTION_NEON_PROJECT_ID})! Aborting immediately.`);
+  if (neon_project_id === PRODUCTION_NEON_PROJECT_ID || neon_endpoint_id === PRODUCTION_NEON_ENDPOINT_ID) {
+    throw new Error(`[SECURITY FATAL] Connected target database is PRODUCTION (${PRODUCTION_NEON_PROJECT_ID})! Aborting immediately.`);
+  }
+
+  if (neon_branch_id === COMMERCIAL_PR92_BRANCH_ID || neon_endpoint_id === COMMERCIAL_PR92_ENDPOINT_ID) {
+    throw new Error(`[SECURITY FATAL] Connected target database is Commercial PR #92 branch (${COMMERCIAL_PR92_BRANCH_ID})! Writes prohibited.`);
+  }
+
+  // If connected to Neon, require exact metadata and reject missing or mismatched identity
+  const isNeon = options.isNeonTarget ?? Boolean(neon_project_id || neon_branch_id || neon_endpoint_id);
+  if (isNeon) {
+    if (!neon_project_id || !neon_branch_id || !neon_endpoint_id) {
+      throw new Error('[SECURITY FATAL] Target database missing required Neon identity metadata (project_id, branch_id, or endpoint_id). Fail-closed.');
     }
 
-    if (neon_branch_id === COMMERCIAL_PR92_BRANCH_ID || neon_endpoint_id === COMMERCIAL_PR92_ENDPOINT_ID) {
-      throw new Error(`[SECURITY FATAL] Connected target database is Commercial PR #92 branch (${COMMERCIAL_PR92_BRANCH_ID})! Writes prohibited.`);
-    }
-
-    if (neon_project_id && neon_project_id !== STAGING_NEON_PROJECT_ID) {
+    if (neon_project_id !== STAGING_NEON_PROJECT_ID) {
       throw new Error(`[SECURITY FATAL] Connected target Neon project (${neon_project_id}) does not match authorized Staging project (${STAGING_NEON_PROJECT_ID})!`);
     }
 
     if (neon_branch_id === STAGING_NEON_BRANCH_ID || neon_endpoint_id === STAGING_NEON_ENDPOINT_ID) {
+      if (neon_branch_id !== STAGING_NEON_BRANCH_ID || neon_endpoint_id !== STAGING_NEON_ENDPOINT_ID) {
+        throw new Error(`[SECURITY FATAL] Permanent staging metadata mismatch! branch: ${neon_branch_id} (expected ${STAGING_NEON_BRANCH_ID}), endpoint: ${neon_endpoint_id} (expected ${STAGING_NEON_ENDPOINT_ID}).`);
+      }
       const isAuthorized = options.allowPermanentStaging || process.env.AIRA_ALLOW_STAGING_LIVE_IMPORT === 'true';
       if (!isAuthorized) {
         throw new Error(`[SECURITY FATAL] Connected target is live Permanent Staging main branch (${STAGING_NEON_BRANCH_ID}). Explicit owner authorization flag (AIRA_ALLOW_STAGING_LIVE_IMPORT=true) is required.`);
       }
     }
-  } catch (err: any) {
-    if (err.message.includes('[SECURITY FATAL]')) {
-      throw err;
-    }
-    // GUC query might not be supported on standard local postgres test containers
   }
 }
 
 /**
- * Validates source database connection and configures read-only session characteristics.
+ * Validates source database connection, enforces proof that connection is read-only,
+ * and checks exact Neon control-plane identity metadata.
  */
 export async function validateAuthoritativeSourceSafety(
   connectionString: string,
@@ -145,23 +151,51 @@ export async function validateAuthoritativeSourceSafety(
     throw new Error(`[SECURITY FATAL] Source database cannot be Permanent Staging (${STAGING_NEON_BRANCH_ID})!`);
   }
 
+  if (!classification.isCommercialPr92 && !classification.isLocalOrCiTest) {
+    throw new Error(`[SECURITY FATAL] Source database is not the authorized Commercial PR #92 database (${COMMERCIAL_PR92_BRANCH_ID})! Got: ${classification.sanitizedTarget}`);
+  }
+
   if (sourceClient) {
-    try {
-      await sourceClient.raw('SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY;');
-      await sourceClient.raw('SET TRANSACTION READ ONLY;');
-      console.log('[Source Guard] Verified source database session configured strictly READ ONLY.');
-    } catch (err: any) {
-      console.warn(`[Source Guard] Notice setting READ ONLY session: ${err.message}`);
+    // 1. Enforce and prove read-only transaction state
+    await sourceClient.raw('SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY;');
+    await sourceClient.raw('SET TRANSACTION READ ONLY;');
+
+    const roCheck = await sourceClient.raw('SHOW transaction_read_only;');
+    const roVal = roCheck.rows?.[0]?.transaction_read_only ?? roCheck[0]?.transaction_read_only;
+    if (roVal !== 'on') {
+      throw new Error(`[SECURITY FATAL] Proof of read-only source connection failed! SHOW transaction_read_only is '${roVal}', expected 'on'.`);
+    }
+    console.log('[Source Guard] Verified proof that source database connection is strictly READ ONLY.');
+
+    // 2. Query Neon GUC metadata on source
+    const res = await sourceClient.raw(`
+      SELECT 
+        current_setting('neon.project_id', true) as neon_project_id,
+        current_setting('neon.branch_id', true) as neon_branch_id,
+        current_setting('neon.endpoint_id', true) as neon_endpoint_id
+    `);
+    const row = res.rows?.[0] || {};
+    const { neon_project_id, neon_branch_id, neon_endpoint_id } = row;
+
+    if (neon_project_id === PRODUCTION_NEON_PROJECT_ID || neon_endpoint_id === PRODUCTION_NEON_ENDPOINT_ID) {
+      throw new Error(`[SECURITY FATAL] Source database connected to Production project (${PRODUCTION_NEON_PROJECT_ID})! Aborting.`);
     }
 
-    try {
-      const res = await sourceClient.raw(`SELECT current_setting('neon.project_id', true) as neon_project_id`);
-      const row = res.rows?.[0] || {};
-      if (row.neon_project_id === PRODUCTION_NEON_PROJECT_ID) {
-        throw new Error(`[SECURITY FATAL] Source database connected to Production project (${PRODUCTION_NEON_PROJECT_ID})! Aborting.`);
+    const isNeonSource = classification.host.includes('.neon.tech') || Boolean(neon_project_id || neon_branch_id || neon_endpoint_id);
+    if (isNeonSource) {
+      if (!neon_project_id || !neon_branch_id || !neon_endpoint_id) {
+        throw new Error('[SECURITY FATAL] Source database missing required Neon identity metadata (project_id, branch_id, or endpoint_id). Fail-closed.');
       }
-    } catch (err: any) {
-      if (err.message.includes('[SECURITY FATAL]')) throw err;
+      if (neon_project_id !== STAGING_NEON_PROJECT_ID) {
+        throw new Error(`[SECURITY FATAL] Source database project (${neon_project_id}) does not match authorized Staging project (${STAGING_NEON_PROJECT_ID})!`);
+      }
+      if (neon_branch_id !== COMMERCIAL_PR92_BRANCH_ID) {
+        throw new Error(`[SECURITY FATAL] Source database branch (${neon_branch_id}) does not match authorized Commercial PR #92 branch (${COMMERCIAL_PR92_BRANCH_ID})!`);
+      }
+      if (neon_endpoint_id !== COMMERCIAL_PR92_ENDPOINT_ID) {
+        throw new Error(`[SECURITY FATAL] Source database endpoint (${neon_endpoint_id}) does not match authorized Commercial PR #92 endpoint (${COMMERCIAL_PR92_ENDPOINT_ID})!`);
+      }
+      console.log(`[Source Guard] Verified exact Commercial PR #92 control-plane identity: ${neon_project_id}/${neon_branch_id}/${neon_endpoint_id}`);
     }
   }
 }
@@ -194,11 +228,17 @@ export async function importVerifiedCommercialIdentities(
   // 1. Authoritative Safety Guards on connected clients
   await verifyConnectedTargetMetadata(targetClient, { allowPermanentStaging: options.allowPermanentStaging });
 
-  // 2. Ensure source database session is strictly READ ONLY
+  // 2. Ensure source database session is strictly READ ONLY and prove it
   try {
     await sourceClient.raw('SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY;');
-  } catch {
-    // ignore on non-postgres or test harness
+    await sourceClient.raw('SET TRANSACTION READ ONLY;');
+    const roCheck = await sourceClient.raw('SHOW transaction_read_only;');
+    const roVal = roCheck.rows?.[0]?.transaction_read_only ?? roCheck[0]?.transaction_read_only;
+    if (roVal && roVal !== 'on') {
+      throw new Error(`[SECURITY FATAL] Commercial source connection is NOT read-only! SHOW transaction_read_only returned: '${roVal}', expected 'on'.`);
+    }
+  } catch (err: any) {
+    if (err.message.includes('[SECURITY FATAL]')) throw err;
   }
 
   // 3. Fail-closed table checks on source database

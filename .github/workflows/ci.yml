@@ -82,6 +82,9 @@ jobs:
       - name: Database isolation and environment crossover certification
         run: npm run test:db-isolation
 
+      - name: Release wizard and cutover safety gates certification
+        run: npm run test:cutover-safety
+
       - name: Runtime verification
         run: npm test
 

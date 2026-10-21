@@ -153,14 +153,47 @@ say "Confirm the exact PR #96 HEAD commit SHA and ensure all CI checks passed."
 open_url "https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/96"
 step "Verify that PR #96 is targeting branch: staging"
 step "Verify that the Fast CI and Main / PR certification check runs have succeeded"
-step "Confirm the approved commit SHA matches local git rev-parse HEAD"
 
-CURRENT_SHA=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
-say "Current local HEAD SHA: $CURRENT_SHA"
+LOCAL_SHA=$(git rev-parse HEAD 2>/dev/null || echo "")
+say "Current local HEAD commit:  ${LOCAL_SHA:-unknown}"
+
+# Fetch remote PR #96 HEAD from GitHub API or git remote
+REMOTE_SHA=""
+if command -v gh >/dev/null 2>&1; then
+  REMOTE_SHA=$(gh pr view 96 --json headRefOid -q .headRefOid 2>/dev/null || echo "")
+fi
+if [[ -z "$REMOTE_SHA" ]]; then
+  REMOTE_SHA=$(git ls-remote origin feat/commercial-staging-integration 2>/dev/null | awk '{print $1}')
+fi
+say "Current remote PR #96 HEAD:  ${REMOTE_SHA:-unknown}"
+
+ask APPROVED_SHA "Enter explicitly approved 40-character PR #96 commit SHA:"
+
+if [[ ! "$APPROVED_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+  warn "SECURITY FATAL: Approved SHA must be an exact 40-character hexadecimal string! Got: '$APPROVED_SHA'"
+  exit 1
+fi
+
+if [[ -n "$LOCAL_SHA" && "$APPROVED_SHA" != "$LOCAL_SHA" ]]; then
+  warn "SECURITY FATAL: Approved SHA ($APPROVED_SHA) does not match local git HEAD ($LOCAL_SHA)!"
+  exit 1
+fi
+
+if [[ -n "$REMOTE_SHA" && "$APPROVED_SHA" != "$REMOTE_SHA" ]]; then
+  warn "SECURITY FATAL: Approved SHA ($APPROVED_SHA) does not match remote PR #96 HEAD ($REMOTE_SHA)!"
+  exit 1
+fi
+
+if [[ -n "$LOCAL_SHA" && -n "$REMOTE_SHA" && "$LOCAL_SHA" != "$REMOTE_SHA" ]]; then
+  warn "SECURITY FATAL: Local git HEAD ($LOCAL_SHA) does not match remote PR #96 HEAD ($REMOTE_SHA)!"
+  exit 1
+fi
+
+say "✓ Exact 40-character commit SHA verified and synchronized: $APPROVED_SHA"
 
 if ! confirm "Do you authorize proceeding with the permanent staging cutover for this exact commit?"; then
   warn "Cutover aborted by owner. No changes made."
-  exit 0
+  exit 1
 fi
 
 # ── Stage 2: Create Neon Point-in-Time Recovery Checkpoint ─────────────────
@@ -168,17 +201,38 @@ stage "Create Staging Recovery Checkpoint"
 say "Create an isolated point-in-time recovery branch in Neon project mute-frost-50372225."
 say "This guarantees instant rollback capability before permanent staging schema migration."
 open_url "https://console.neon.tech/app/projects/mute-frost-50372225/branches"
-step "Click 'Create Branch'"
-step "Branch Name: staging-backup-pre-commercial-cutover"
+step "Branch Name: staging-backup-pre-commercial-cutover (or custom name/id)"
 step "Parent Branch: main (br-autumn-star-b36dfu5w)"
-pause "Press Enter after creating and verifying the recovery checkpoint branch in Neon console..."
 
-# ── Stage 3: Staging Maintenance Window ───────────────────────────────────
-stage "Staging Maintenance Window"
+ask CHECKPOINT_NAME "Enter Neon recovery checkpoint branch name or ID:"
+CHECKPOINT_NAME="${CHECKPOINT_NAME:-staging-backup-pre-commercial-cutover}"
+
+say "Running machine verification of Neon recovery checkpoint..."
+if ! npx tsx scripts/verify-neon-checkpoint.ts "$CHECKPOINT_NAME"; then
+  warn "SECURITY FATAL: Neon recovery checkpoint verification failed! Aborting cutover fail-closed."
+  exit 1
+fi
+
+note "✓ Machine-verifiable Neon recovery checkpoint confirmed active."
+pause "Press Enter to proceed to staging write isolation..."
+
+# ── Stage 3: Staging Maintenance Window & Write Isolation ──────────────────
+stage "Staging Write Isolation Gate"
 say "Prevent concurrent client writes to staging during schema migration and identity import."
 step "Announce temporary maintenance on staging.virexaaiventures.com"
-step "Ensure zero active client write traffic to mute-frost-50372225 main branch"
-pause "Press Enter once the maintenance window is active..."
+step "Verify zero active client write traffic to mute-frost-50372225 main branch"
+
+ask_secret STAGING_DB_URL "Paste permanent staging DATABASE_URL to verify write isolation:"
+
+say "Probing staging database for active client transactions and conflicting locks..."
+if ! npx tsx scripts/verify-staging-write-isolation.ts "$STAGING_DB_URL"; then
+  warn "SECURITY FATAL: Staging write isolation gate failed! Active transactions detected."
+  warn "Cutover aborted fail-closed to prevent race conditions."
+  exit 1
+fi
+
+note "✓ Effective staging write isolation machine-verified."
+pause "Press Enter to proceed to merge authorization..."
 
 # ── Stage 4: Merge PR #96 into staging ────────────────────────────────────
 stage "Merge PR #96 into staging (Vercel Build & Migrations)"
@@ -194,15 +248,20 @@ pause "Press Enter once the Vercel deployment is READY on staging..."
 stage "Execute Controlled Historical Identity Import"
 say "Run the separate, transaction-backed historical identity import script."
 say "This reconciles verified maintainer Google/GitHub social accounts, billing customers, and credit wallets."
-step "Obtain permanent staging DATABASE_URL from Neon console or Vercel env"
-ask_secret STAGING_DB_URL "Paste permanent staging DATABASE_URL (mute-frost-50372225 main):"
+if [[ -z "${STAGING_DB_URL:-}" ]]; then
+  step "Obtain permanent staging DATABASE_URL from Neon console or Vercel env"
+  ask_secret STAGING_DB_URL "Paste permanent staging DATABASE_URL (mute-frost-50372225 main):"
+fi
 
 step "Obtain verified Commercial PR #92 source DATABASE_URL (mute-frost-50372225 pr92-commercial-platform-isolated):"
 ask_secret SOURCE_DB_URL "Paste Commercial PR #92 source DATABASE_URL:"
 
 say "Running import in atomic transaction with authoritative Neon identity guards..."
-AIRA_ALLOW_STAGING_LIVE_IMPORT=true SOURCE_DB_URL="$SOURCE_DB_URL" TARGET_DB_URL="$STAGING_DB_URL" \
-  npx tsx scripts/import-verified-commercial-identities.ts "$STAGING_DB_URL"
+if ! AIRA_ALLOW_STAGING_LIVE_IMPORT=true SOURCE_DB_URL="$SOURCE_DB_URL" TARGET_DB_URL="$STAGING_DB_URL" \
+  npx tsx scripts/import-verified-commercial-identities.ts "$STAGING_DB_URL"; then
+  warn "SECURITY FATAL: Controlled historical identity import failed! Aborting."
+  exit 1
+fi
 
 note "Historical identity import completed cleanly."
 pause "Press Enter to proceed to integrity verification..."
@@ -211,8 +270,11 @@ pause "Press Enter to proceed to integrity verification..."
 stage "Verify Staging Cutover Integrity"
 say "Running comprehensive 11-rule data integrity and continuity verification against permanent staging..."
 
-TARGET_DB_URL="$STAGING_DB_URL" AIRA_ALLOW_STAGING_LIVE_IMPORT=true \
-  npx tsx scripts/staging-cutover-orchestrator.ts --verify-integrity "$STAGING_DB_URL"
+if ! TARGET_DB_URL="$STAGING_DB_URL" AIRA_ALLOW_STAGING_LIVE_IMPORT=true \
+  npx tsx scripts/staging-cutover-orchestrator.ts --verify-integrity "$STAGING_DB_URL"; then
+  warn "SECURITY FATAL: Staging cutover integrity verification failed! One or more of the 11 gates did not pass."
+  exit 1
+fi
 
 note "✓ All 11 cutover integrity gates certified!"
 pause "Press Enter to proceed to deployment certification..."
@@ -237,12 +299,13 @@ step "4. Send a test message and verify streaming response"
 step "5. Close maintenance window"
 
 if confirm "Did real-browser acceptance succeed completely?"; then
-  note "Cutover accepted and signed off by owner."
+  note "✓ Real-browser acceptance certified and signed off by owner."
+  finish
 else
-  warn "Owner reported acceptance defect. Follow rollback to Neon recovery checkpoint if needed."
+  warn "❌ RELEASE NOT CERTIFIED — Real-browser acceptance failed or was rejected by owner!"
+  warn "Cutover aborted. Do not declare release complete. Follow rollback to Neon recovery checkpoint if needed."
+  exit 1
 fi
-
-finish
 }
 
 run_wizard "$@"; exit
