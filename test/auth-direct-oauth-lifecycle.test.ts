@@ -433,6 +433,120 @@ test('Direct Google & GitHub OAuth Complete Lifecycle Suite', async (suite) => {
     assert.equal(storeLookup, null, 'Session must be purged from server store upon signout');
   });
 
+  // ---------------------------------------------------------------------------
+  // 11. Existing-Account OAuth Conflict Without Automatic Email Linking
+  // ---------------------------------------------------------------------------
+  await suite.test('11. Existing-account OAuth conflict without automatic email linking', async () => {
+    const existingEmail = `existing.conflict.${Date.now()}@example.com`;
+    const existingUserId = 'usr_conflict_target_' + Date.now();
+
+    // Insert an existing user (e.g. registered via password or other means)
+    await db('users').insert({
+      id: existingUserId,
+      email: existingEmail,
+      email_verified: true,
+      name: 'Existing Account Owner',
+      created_at: Date.now(),
+      updated_at: Date.now()
+    });
+
+    const untrustedOAuthProfile: OAuthUserProfile = {
+      provider: 'google',
+      providerAccountId: `untrusted_google_${Date.now()}`,
+      email: existingEmail,
+      emailVerified: true,
+      name: 'Attempted Impersonator'
+    };
+
+    // Attempting to log in with an unlinked OAuth identity having the same email MUST NOT
+    // automatically link or merge the account (account takeover prevention).
+    // It must reject with ACCOUNT_EXISTS_WITH_DIFFERENT_CREDENTIAL.
+    await assert.rejects(async () => {
+      await directOAuthService.resolveOrCreateUser(untrustedOAuthProfile);
+    }, (err: any) => {
+      return (
+        err.message.includes('ACCOUNT_EXISTS_WITH_DIFFERENT_CREDENTIAL') ||
+        err.code === 'ACCOUNT_EXISTS_CONFLICT'
+      );
+    });
+
+    // Verify no new user was created
+    const usersWithEmail = await db('users').where({ email: existingEmail });
+    assert.equal(usersWithEmail.length, 1, 'No duplicate user row should be created');
+    assert.equal(usersWithEmail[0].id, existingUserId, 'Existing user ID must remain intact');
+
+    // Verify no oauth_accounts record was created for the untrusted identity
+    const unlinkedOAuth = await db('oauth_accounts').where({
+      provider: 'google',
+      provider_account_id: untrustedOAuthProfile.providerAccountId
+    }).first();
+    assert.equal(unlinkedOAuth, undefined, 'Untrusted OAuth identity must NOT be automatically linked');
+
+    // Clean up test user
+    await db('users').where({ id: existingUserId }).delete();
+  });
+
+  // ---------------------------------------------------------------------------
+  // 12. Verified Legacy Google/GitHub Provider Account Mappings
+  // ---------------------------------------------------------------------------
+  await suite.test('12. Verified legacy Google and GitHub account mappings resolve to historical neon_user_* IDs', async () => {
+    // 1. GitHub 253642432 -> neon_user_e215766f-e719-431f-ad08-154a28ef83b4
+    const legacyGithub = await directOAuthService.resolveOrCreateUser({
+      provider: 'github',
+      providerAccountId: '253642432',
+      email: 'rajpunkeshwarrajgautam@gmail.com',
+      emailVerified: true
+    });
+    assert.equal(legacyGithub.isNewUser, false, 'Legacy GitHub account must not be marked as new');
+    assert.equal(legacyGithub.user.id, 'neon_user_e215766f-e719-431f-ad08-154a28ef83b4');
+
+    // 2. Google 109885171219226843992 -> neon_user_3aea147c-fc80-4ad4-9df8-df2f5c07c91a
+    const legacyGoogle1 = await directOAuthService.resolveOrCreateUser({
+      provider: 'google',
+      providerAccountId: '109885171219226843992',
+      email: 'antigravitypower490@gmail.com',
+      emailVerified: true
+    });
+    assert.equal(legacyGoogle1.isNewUser, false, 'Legacy Google account must not be marked as new');
+    assert.equal(legacyGoogle1.user.id, 'neon_user_3aea147c-fc80-4ad4-9df8-df2f5c07c91a');
+
+    // 3. Google 101889904540027754835 -> neon_user_fc6f9c72-6ebb-4fd2-960a-5a8779e59cb7
+    const legacyGoogle2 = await directOAuthService.resolveOrCreateUser({
+      provider: 'google',
+      providerAccountId: '101889904540027754835',
+      email: 'sdrafgerfsfwf@gmail.com',
+      emailVerified: true
+    });
+    assert.equal(legacyGoogle2.isNewUser, false, 'Legacy Google account must not be marked as new');
+    assert.equal(legacyGoogle2.user.id, 'neon_user_fc6f9c72-6ebb-4fd2-960a-5a8779e59cb7');
+  });
+
+  // ---------------------------------------------------------------------------
+  // 13. BFF Recovery Endpoint returns ticketId
+  // ---------------------------------------------------------------------------
+  await suite.test('13. BFF recovery endpoint returns ticketId and persists ticket', async () => {
+    const mockRecReq = {
+      body: {
+        claimedEmail: 'audited.recovery.test@example.com',
+        provider: 'all',
+        contactInfo: 'recovery.contact@example.com',
+        details: 'Hardware security token lost during travel.'
+      }
+    } as any;
+    const mockRecRes = createMockResponse();
+
+    await handleBffRecoveryRequest(mockRecReq, mockRecRes);
+    assert.equal(mockRecRes.statusCode, 200);
+    assert.equal(mockRecRes.body.status, 'RECEIVED');
+    assert(mockRecRes.body.ticketId, 'ticketId must be returned');
+    assert(mockRecRes.body.ticketId.startsWith('rec_'), 'ticketId must start with rec_');
+
+    // Verify row in database
+    const row = await db('account_recovery_requests').where({ id: mockRecRes.body.ticketId }).first();
+    assert(row, 'Recovery row must be saved in database');
+    assert.equal(row.claimed_email, 'audited.recovery.test@example.com');
+  });
+
   // Teardown DB pool
   await db.destroy();
 });

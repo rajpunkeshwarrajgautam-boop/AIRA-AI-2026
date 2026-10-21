@@ -1226,6 +1226,11 @@ async function handleBffOAuthCallback(req: Request, res: Response, provider: Bff
     res.redirect(302, `${clientOrigin}/?auth_success=${successParam}`);
   } catch (err: any) {
     console.error('[handleBffOAuthCallback] OAuth exchange error:', err?.message || err);
+    if (err?.code === 'ACCOUNT_EXISTS_CONFLICT' || err?.message?.includes('ACCOUNT_EXISTS_WITH_DIFFERENT_CREDENTIAL')) {
+      const claimedEmail = encodeURIComponent(err.claimedEmail || '');
+      res.redirect(302, `${clientOrigin}/?auth_error=account_exists_conflict${claimedEmail ? `&email=${claimedEmail}` : ''}`);
+      return;
+    }
     res.redirect(302, `${clientOrigin}/?auth_error=exchange_failed`);
   }
 }
@@ -1310,7 +1315,8 @@ export async function handleBffRecoveryRequest(req: Request, res: Response): Pro
     res.status(200).json({
       status: 'RECEIVED',
       message: 'Recovery request logged securely. Support will review cryptographic audit logs and verify account ownership.',
-      requestId: result.requestId
+      requestId: result.requestId,
+      ticketId: result.ticketId || result.requestId
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to submit recovery request' });

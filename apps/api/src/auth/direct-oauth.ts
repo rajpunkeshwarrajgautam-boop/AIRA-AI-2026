@@ -469,7 +469,25 @@ export class DirectOAuthService {
       }
     }
 
-    // 2. New User Creation: Generate stable user ID
+    // 2. Existing-account OAuth conflict detection:
+    // If an existing user account already has this email address, DO NOT automatically link accounts
+    // based solely on email (prevents account takeover when OAuth identity claims an existing user).
+    // Nor should we attempt an insert that violates users_email_unique.
+    if (profile.email) {
+      const existingUserWithEmail = await db('users')
+        .whereRaw('LOWER(email) = LOWER(?)', [profile.email.trim()])
+        .first();
+
+      if (existingUserWithEmail) {
+        const conflictErr = new Error(`ACCOUNT_EXISTS_WITH_DIFFERENT_CREDENTIAL: An account with email ${profile.email} already exists.`);
+        (conflictErr as any).code = 'ACCOUNT_EXISTS_CONFLICT';
+        (conflictErr as any).claimedEmail = profile.email;
+        (conflictErr as any).provider = profile.provider;
+        throw conflictErr;
+      }
+    }
+
+    // 3. New User Creation: Generate stable user ID
     const newUserId = 'usr_' + crypto.randomUUID();
     const newAccountId = 'oa_' + crypto.randomUUID();
 

@@ -121,6 +121,12 @@ function App() {
 
   // Proactively restore first-party BFF session from HttpOnly cookie on mount
   useEffect(() => {
+    if (typeof window !== 'undefined' && window.location?.search) {
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get('auth_error')) {
+        setIsAuthOpen(true);
+      }
+    }
     neonAuth.restoreSession().catch((err) => {
       console.warn('[App] First-party session restore notice:', err);
     });
