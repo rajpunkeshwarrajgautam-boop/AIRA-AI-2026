@@ -42,6 +42,8 @@
     "test:staging:deployed": "npx tsx test/staging-deployed-acceptance.ts",
     "test:staging:attest": "npx tsx test/staging-deployment-attestation.ts",
     "test:db-isolation": "npx tsx test/database-isolation-guard.test.ts",
+    "test:secrets": "npx tsx test/tracked-secrets-hygiene.test.ts",
+    "test:release-auth:unit": "npx tsx test/release-authorization-guard.test.ts",
     "validate:staging": "npx tsx scripts/validate-staging-pipeline.ts"
   },
   "dependencies": {
