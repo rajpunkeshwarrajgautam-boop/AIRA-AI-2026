@@ -76,7 +76,10 @@
     "test:lightning-provider": "tsx --test test/lightning-provider.test.ts",
     "typecheck:builder": "tsc --ignoreConfig --noEmit --target ES2023 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck packages/builder-runtime/src/index.ts apps/api/src/builder-routes.ts",
     "test:builder:ui": "tsx test/builder-ui.ts",
-    "test:cors": "tsx --test test/cors-origin-rejection.test.ts"
+    "test:cors": "tsx --test test/cors-origin-rejection.test.ts",
+    "test:db-isolation": "npx tsx test/database-isolation-guard.test.ts",
+    "validate:staging": "npx tsx scripts/validate-staging-pipeline.ts",
+    "verify:prod-readiness": "npx tsx scripts/verify-production-release-readiness.ts"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",

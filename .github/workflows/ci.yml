@@ -2,8 +2,9 @@ name: CI
 
 on:
   push:
+    branches: [main, prod-release, staging, 'infra/**', 'feat/**', 'fix/**', 'cert/**']
   pull_request:
-    branches: [main, prod-release]
+    branches: [main, prod-release, staging]
   workflow_dispatch:
 
 permissions:
@@ -78,6 +79,9 @@ jobs:
         env:
           AIRA_SEMANTIC_SEARCH: 'false'
         run: npm run db:verify:deploy
+
+      - name: Database isolation and environment crossover certification
+        run: npm run test:db-isolation
 
       - name: Runtime verification
         run: npm test
@@ -213,7 +217,7 @@ jobs:
 
   certify:
     name: Main / PR certification
-    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/prod-release'
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/prod-release' || github.ref == 'refs/heads/staging'
     needs: [fast, semantic-search]
     runs-on: ubuntu-latest
     timeout-minutes: 40

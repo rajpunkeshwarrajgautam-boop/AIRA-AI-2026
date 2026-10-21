@@ -1,0 +1,94 @@
+name: Protected Production Release Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Release PR number targeting prod-release"
+        required: true
+        type: string
+      candidate_sha:
+        description: "Exact immutable 40-character commit SHA"
+        required: true
+        type: string
+      mode:
+        description: "Execution mode (dry_run: verify gates only; enforce: fail-closed gate check)"
+        required: true
+        default: "dry_run"
+        type: choice
+        options:
+          - dry_run
+          - enforce
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+
+concurrency:
+  group: production-release-gate
+  cancel-in-progress: false
+
+jobs:
+  production-gate-certification:
+    name: Production Release Gate & Readiness Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout trusted prod-release branch
+        uses: actions/checkout@v4
+        with:
+          ref: prod-release
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify release authorization rules engine
+        run: npm run test:release-auth:unit
+
+      - name: Verify database isolation and crossover rules
+        run: npm run test:db-isolation
+
+      - name: Evaluate Production Release Gate Prerequisites
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          npx tsx scripts/verify-production-release-readiness.ts \
+            --pr "${{ inputs.pr_number }}" \
+            --sha "${{ inputs.candidate_sha }}" \
+            --mode "${{ inputs.mode }}"
+
+      - name: Record Production Gate Audit Artifact
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p .artifacts
+          cat <<EOF > .artifacts/production-release-readiness.json
+          {
+            "pipeline": "protected-production-gate",
+            "pr_number": "${{ inputs.pr_number }}",
+            "candidate_sha": "${{ inputs.candidate_sha }}",
+            "mode": "${{ inputs.mode }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "production_neon_project": "old-sky-50952395",
+            "production_neon_branch": "br-shiny-moon-b3vy9xj7",
+            "production_vercel_project": "prj_FZLU4vBIYSsBn28AI6drkpD5WfbH",
+            "production_url": "https://aira-ai-2026.vercel.app/"
+          }
+          EOF
+
+      - name: Upload production gate artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aira-production-release-readiness
+          path: .artifacts/production-release-readiness.json
+          if-no-files-found: ignore
