@@ -1,0 +1,156 @@
+name: Permanent Staging Pipeline
+
+on:
+  push:
+    branches: [staging]
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: "Exact full 40-character commit SHA to certify on staging"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  deployments: write
+
+concurrency:
+  group: staging-pipeline-execution
+  cancel-in-progress: false
+
+jobs:
+  validate-staging:
+    name: Staging Validation & Isolation Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: aira
+          POSTGRES_PASSWORD: aira
+          POSTGRES_DB: aira_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U aira -d aira_db"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.candidate_sha || github.sha }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Tracked secrets hygiene check
+        run: npm run test:secrets
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Database isolation & crossover certification
+        run: npm run test:db-isolation
+
+      - name: Staging preflight validation
+        run: npx tsx scripts/validate-staging-pipeline.ts preflight
+
+      - name: Build frontend & assets
+        run: npm run build
+
+      - name: Run database migrations against test container
+        run: npm run db:migrate
+        env:
+          DATABASE_URL: postgres://aira:aira@127.0.0.1:5432/aira_db
+
+      - name: Verify deploy database contract
+        run: npm run db:verify:deploy
+        env:
+          DATABASE_URL: postgres://aira:aira@127.0.0.1:5432/aira_db
+          AIRA_SEMANTIC_SEARCH: 'false'
+
+      - name: Runtime verification
+        run: npm test
+        env:
+          DATABASE_URL: postgres://aira:aira@127.0.0.1:5432/aira_db
+
+      - name: Security and authorization regressions
+        run: |
+          npm run test:cors
+          npm run test:preview-identity
+          npm run test:release-auth:unit
+
+  deploy-staging:
+    name: Permanent Staging Deployment & Certification
+    needs: [validate-staging]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: staging
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.candidate_sha || github.sha }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify exact commit SHA
+        shell: bash
+        run: |
+          EXPECTED="${{ inputs.candidate_sha || github.sha }}"
+          CURRENT="$(git rev-parse HEAD)"
+          echo "Verified Staging Release Commit: $CURRENT"
+          if [ "$CURRENT" != "$EXPECTED" ]; then
+            echo "::error::Commit SHA mismatch! Expected $EXPECTED but got $CURRENT"
+            exit 1
+          fi
+
+      - name: Staging health & API smoke verification
+        run: npx tsx scripts/validate-staging-pipeline.ts smoke
+        env:
+          AIRA_STAGING_URL: https://staging.virexaaiventures.com
+
+      - name: Record Staging Certification Artifact
+        shell: bash
+        run: |
+          mkdir -p .artifacts
+          cat <<EOF > .artifacts/staging-certification.json
+          {
+            "pipeline": "permanent-staging",
+            "environment": "staging",
+            "commit_sha": "${{ inputs.candidate_sha || github.sha }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "neon_project": "mute-frost-50372225",
+            "neon_branch": "br-autumn-star-b36dfu5w",
+            "vercel_project": "prj_FZLU4vBIYSsBn28AI6drkpD5WfbH",
+            "staging_domain": "staging.virexaaiventures.com",
+            "status": "CERTIFIED"
+          }
+          EOF
+          cat .artifacts/staging-certification.json
+
+      - name: Upload staging certification artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aira-staging-certification
+          path: .artifacts/staging-certification.json
+          if-no-files-found: error
