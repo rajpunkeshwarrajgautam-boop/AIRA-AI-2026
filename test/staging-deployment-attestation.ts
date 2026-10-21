@@ -11,6 +11,7 @@ assert.match(expected, /^[a-f0-9]{40}$/, 'Expected exact staging SHA');
 
 type Deployment = {
   id?: string;
+  uid?: string;
   url?: string;
   projectId?: string;
   target?: string | null;
@@ -41,14 +42,15 @@ for (let attempt = 0; attempt < 20; attempt++) {
     (!d.projectId || d.projectId === projectId) &&
     d.target !== 'production'
   );
-  matched = sameCommit.find(d => (d.readyState ?? d.state) === 'READY' && d.id && d.url);
+  matched = sameCommit.find(d => (d.readyState ?? d.state) === 'READY' && (d.id || d.uid) && d.url);
   if (matched) break;
   if (sameCommit.some(d => ['ERROR','CANCELED'].includes(d.readyState ?? d.state ?? ''))) {
     throw new Error('The matching Vercel Preview failed to build: staging release blocked');
   }
   await new Promise(resolve => setTimeout(resolve, 12000));
 }
-assert.ok(matched?.id && matched?.url, 'No READY Vercel Preview exists for exact staging SHA');
+const deploymentId = matched?.id || matched?.uid;
+assert.ok(deploymentId && matched?.url, 'No READY Vercel Preview exists for exact staging SHA');
 const immutable = 'https://' + matched.url + '/';
 const parsed = new URL(immutable);
 assert.equal(parsed.protocol,'https:');
@@ -56,7 +58,7 @@ assert.ok(/^aira-ai-2026-[a-z0-9]+-/.test(parsed.hostname) && parsed.hostname.en
   'Rejected non-immutable or non-project Vercel URL');
 assert.notEqual(parsed.hostname,'aira-ai-2026.vercel.app');
 
-const inspectUrl = new URL('https://api.vercel.com/v13/deployments/' + encodeURIComponent(matched.id));
+const inspectUrl = new URL('https://api.vercel.com/v13/deployments/' + encodeURIComponent(deploymentId));
 inspectUrl.searchParams.set('teamId', teamId);
 const detail = await requestVercel<Deployment>(inspectUrl);
 assert.equal(detail.projectId, projectId,'Wrong Vercel project');
@@ -69,4 +71,4 @@ assert.equal(detail.url, matched.url,'Preview URL mismatch');
 if (process.env.GITHUB_ENV) {
   appendFileSync(process.env.GITHUB_ENV, 'STAGING_BASE_URL=' + immutable + '\n');
 }
-console.log('PASS: immutable Vercel Preview ' + matched.id + ' attested at staging SHA ' + expected);
+console.log('PASS: immutable Vercel Preview ' + deploymentId + ' attested at staging SHA ' + expected);
