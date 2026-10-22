@@ -996,7 +996,8 @@ export async function verifyStagingWriteRestriction(
     const probeIdPrivileged = `priv_probe_${Date.now()}`;
     try {
       await client.transaction(async (trx) => {
-        await trx.raw(`SET LOCAL default_transaction_read_only = off;`);
+        await trx.raw(`SET TRANSACTION READ WRITE;`);
+        await trx.raw(`SET LOCAL default_transaction_read_only = off;`).catch(() => {});
         await trx.raw(`SELECT set_config('aira.privileged_token', :token, true);`, { token: options.bypassToken });
         await trx.raw(`INSERT INTO ${STAGING_PROBE_TABLE} (id) VALUES (:id);`, { id: probeIdPrivileged });
         await trx.raw(`DELETE FROM ${STAGING_PROBE_TABLE} WHERE id = :id;`, { id: probeIdPrivileged });
