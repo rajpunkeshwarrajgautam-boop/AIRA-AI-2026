@@ -5,6 +5,11 @@ import {
   FileText,
   RotateCw,
   ClipboardPaste,
+  Wrench,
+  Calendar,
+  Play,
+  CheckCircle2,
+  ExternalLink,
 } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import type { Message, Artifact } from '../types';
@@ -21,6 +26,8 @@ interface ChatMessageProps {
   userName: string;
   onOpenArtifact: (artifact: Artifact) => void;
   onRetry?: () => void;
+  onSwitchToAgentAndReview?: (prompt: string) => void;
+  onConfirmAutomation?: (proposal: any) => void;
 }
 
 export interface ProvenanceBadgeInfo {
@@ -91,6 +98,8 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
   userName,
   onOpenArtifact,
   onRetry,
+  onSwitchToAgentAndReview,
+  onConfirmAutomation,
 }) => {
   const [copied, setCopied] = useState(false);
   const [richCopyStatus, setRichCopyStatus] = useState<'rich' | 'fallback' | 'failed' | null>(null);
@@ -223,6 +232,77 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                   />
                 ))}
               </motion.div>
+            )}
+
+            {message.builderHandoff && (
+              <div className="mt-3 p-3.5 rounded-xl border border-aira-blue/30 bg-aira-blue/5 dark:bg-aira-blue/10 flex flex-col gap-2.5">
+                <div className="flex items-center gap-2 text-xs font-semibold text-aira-blue dark:text-blue-400">
+                  <Wrench className="w-4 h-4" />
+                  <span>Scaffold Application with Sandboxed Builder</span>
+                </div>
+                <p className="text-[11px] text-claude-muted-light dark:text-slate-300">
+                  To create files, execute commands in an isolated sandbox, and generate live previews, switch to Agent Mode to review the task and grant permissions.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => onSwitchToAgentAndReview?.(message.builderHandoff!.prompt)}
+                  className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-aira-blue hover:bg-aira-blue/90 text-white font-medium text-xs transition-colors shadow-sm self-start"
+                >
+                  <Play className="w-3.5 h-3.5" />
+                  <span>Switch to Agent & Review Task</span>
+                </button>
+              </div>
+            )}
+
+            {message.automationProposal && (
+              <div className="mt-3 p-3.5 rounded-xl border border-aira-gold/40 bg-aira-gold/5 dark:bg-aira-gold/10 flex flex-col gap-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-amber-700 dark:text-amber-400">
+                    <Calendar className="w-4 h-4" />
+                    <span>Pending Scheduled Automation</span>
+                  </div>
+                  <span className="text-[10px] font-mono text-aira-gold bg-aira-gold/10 px-1.5 py-0.5 rounded">Confirmation Required</span>
+                </div>
+                <p className="text-[11px] text-claude-muted-light dark:text-slate-300">
+                  <strong>Task:</strong> {message.automationProposal.name} · <strong>Cadence:</strong> {message.automationProposal.cronExpression}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => onConfirmAutomation?.(message.automationProposal)}
+                  className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-aira-gold hover:bg-amber-600 text-white font-medium text-xs transition-colors shadow-sm self-start"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Confirm and Schedule Automation</span>
+                </button>
+              </div>
+            )}
+
+            {message.citations && message.citations.length > 0 && (
+              <div className="mt-3 p-3 rounded-xl border border-claude-border-light dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] space-y-2">
+                <div className="text-[11px] font-semibold text-claude-muted-light dark:text-slate-400">
+                  Verified Primary Sources ({message.citations.length}):
+                </div>
+                <div className="space-y-1.5">
+                  {message.citations.map((cite, idx) => (
+                    <div key={idx} className="text-[11px] flex items-start gap-1.5">
+                      <span className="font-mono text-aira-blue text-[10px]">[{idx + 1}]</span>
+                      <div className="min-w-0">
+                        {cite.uri ? (
+                          <a href={cite.uri} target="_blank" rel="noopener noreferrer" className="text-aira-blue hover:underline font-medium inline-flex items-center gap-1">
+                            <span>{cite.sourceTitle || cite.uri}</span>
+                            <ExternalLink className="w-2.5 h-2.5" />
+                          </a>
+                        ) : (
+                          <span className="font-medium text-claude-text-light dark:text-white">{cite.sourceTitle}</span>
+                        )}
+                        {cite.snippet && (
+                          <p className="text-[10px] text-claude-muted-light dark:text-slate-400 line-clamp-2 mt-0.5">{cite.snippet}</p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
 
             {!message.isStreaming && (

@@ -1266,7 +1266,7 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
 app.post('/api/chat/stream', async (req: Request, res: Response) => {
   let admission: any = undefined;
   try {
-    const { messages, history, prompt, model: rawModel, extendedThinking, systemPrompt, contextSubgraph, attachments, conversationId } = req.body;
+    const { messages, history, prompt, model: rawModel, extendedThinking, systemPrompt, contextSubgraph, attachments, conversationId, intent } = req.body;
     const model = normalizeModelIdentifier(rawModel);
     const promptText = prompt || (Array.isArray(messages)
       ? [...messages].reverse().find((m: any) => m.role === 'user')?.content || ''
@@ -1378,6 +1378,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       attachments: Array.isArray(attachments) ? attachments : undefined,
       systemPrompt: (systemPrompt || '') + (contextSubgraph ? `\n\n${contextSubgraph}` : ''),
       context: { history: effectiveHistory },
+      intent: (typeof intent === 'string' && intent.trim()) ? intent.trim() as any : undefined,
       modelPolicy: {
         model: model || 'aira-auto',
         extendedThinking: Boolean(extendedThinking),
@@ -1389,6 +1390,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       return res.end();
     }
     tRunCreated = performance.now();
+    res.write(`event: run_started\ndata: ${JSON.stringify({ runId: run.id })}\n\n`);
 
     const stream = agentRuntime.getEventStream(run.id);
 
@@ -1497,6 +1499,8 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         res.write(`event: tool_started\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'tool.completed') {
         res.write(`event: tool_completed\ndata: ${JSON.stringify(evt.data)}\n\n`);
+      } else if (evt.type === 'source.added') {
+        res.write(`event: source_added\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'run.failed') {
         await finalizeAndEmitMetrics();
         const failure = evt.data?.error || 'Aira runtime failed before producing a response';

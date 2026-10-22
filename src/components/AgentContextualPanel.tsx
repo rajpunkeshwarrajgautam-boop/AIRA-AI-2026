@@ -55,6 +55,9 @@ interface AgentContextualPanelProps {
   onActivePromptConsumed?: () => void;
   onToolStepUpdate?: (step: ToolStep) => void;
   onPreviewAvailable?: (url: string) => void;
+  onExecutionCancelled?: () => void;
+  onBusyChange?: (busy: boolean) => void;
+  cancelSignal?: number;
 }
 
 type AgentPanelTab = 'preview' | 'files' | 'activity' | 'timeline' | 'saved';
@@ -66,7 +69,10 @@ export const AgentContextualPanel: React.FC<AgentContextualPanelProps> = ({
   activePrompt,
   onActivePromptConsumed,
   onToolStepUpdate,
-  onPreviewAvailable
+  onPreviewAvailable,
+  onExecutionCancelled,
+  onBusyChange,
+  cancelSignal
 }) => {
   const [activeTab, setActiveTab] = useState<AgentPanelTab>('preview');
   const [isExpanded, setIsExpanded] = useState(false);
@@ -74,9 +80,9 @@ export const AgentContextualPanel: React.FC<AgentContextualPanelProps> = ({
   const [statusError, setStatusError] = useState('');
   
   const [prompt, setPrompt] = useState('');
-  const [allowExecution, setAllowExecution] = useState(true);
-  const [allowInternet, setAllowInternet] = useState(true);
-  const [allowPreview, setAllowPreview] = useState(true);
+  const [allowExecution, setAllowExecution] = useState(false);
+  const [allowInternet, setAllowInternet] = useState(false);
+  const [allowPreview, setAllowPreview] = useState(false);
   const [hasWorkspace, setHasWorkspace] = useState(false);
   
   const [busy, setBusy] = useState(false);
@@ -114,10 +120,21 @@ export const AgentContextualPanel: React.FC<AgentContextualPanelProps> = ({
     };
   }, []);
 
+  useEffect(() => {
+    if (cancelSignal && busy) {
+      void handleStop();
+    }
+  }, [cancelSignal, busy]);
+
+  useEffect(() => {
+    onBusyChange?.(busy);
+  }, [busy, onBusyChange]);
+
   // When active prompt passed from chat
   useEffect(() => {
     if (activePrompt && activePrompt.trim() && !busy) {
       setPrompt(activePrompt);
+      setActiveTab('timeline');
       if (onActivePromptConsumed) onActivePromptConsumed();
     }
   }, [activePrompt, busy, onActivePromptConsumed]);
@@ -218,6 +235,9 @@ export const AgentContextualPanel: React.FC<AgentContextualPanelProps> = ({
     setHasWorkspace(false);
     setFiles([]);
     setPreview('');
+    setBusy(false);
+    setActivity('Cancelled');
+    setSteps(s => s.map(t => t.state === 'running' ? { ...t, state: 'error' } : t));
     if (token) {
       try {
         await cancelBuilder(token);
@@ -225,6 +245,7 @@ export const AgentContextualPanel: React.FC<AgentContextualPanelProps> = ({
         setError(err.message);
       }
     }
+    onExecutionCancelled?.();
   };
 
   const handleReset = async () => {
@@ -502,28 +523,88 @@ export const AgentContextualPanel: React.FC<AgentContextualPanelProps> = ({
               </div>
 
               <div className="p-3.5 rounded-xl border border-claude-border-light dark:border-white/10 bg-white/40 dark:bg-white/[0.02] space-y-2">
-                <span className="font-semibold text-claude-text-light dark:text-white">Sandbox Permissions</span>
-                <div className="space-y-2 text-[11px] text-claude-muted-light dark:text-slate-400">
-                  <label className="flex items-start gap-2">
-                    <input type="checkbox" checked={allowExecution} onChange={e => setAllowExecution(e.target.checked)} className="mt-0.5" />
-                    <span>Authorize file creation and isolated command execution.</span>
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-claude-text-light dark:text-white">Task Specification</span>
+                  <span className="text-[10px] text-claude-muted-light dark:text-slate-400">Review before execution</span>
+                </div>
+                <textarea
+                  value={prompt}
+                  onChange={e => setPrompt(e.target.value)}
+                  disabled={busy}
+                  placeholder="Describe the application to build and test..."
+                  rows={3}
+                  className="w-full p-2.5 rounded-lg border border-claude-border-light dark:border-white/10 bg-white/80 dark:bg-black/30 text-xs text-claude-text-light dark:text-white resize-none focus:outline-none focus:ring-1 focus:ring-aira-blue"
+                />
+              </div>
+
+              <div className="p-3.5 rounded-xl border border-claude-border-light dark:border-white/10 bg-white/40 dark:bg-white/[0.02] space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-claude-text-light dark:text-white">Sandbox Permissions & Quotas</span>
+                  <span className="text-[10px] font-mono text-aira-gold bg-aira-gold/10 px-1.5 py-0.5 rounded">Gate Enforced</span>
+                </div>
+
+                <div className="p-2.5 rounded-lg bg-black/5 dark:bg-black/20 text-[11px] text-claude-muted-light dark:text-slate-300 space-y-1">
+                  <div className="font-medium text-claude-text-light dark:text-white">Operation: Isolated Container Execution</div>
+                  <div>Usage Quota: 1 Standard Agent Run · 10 Compute Minutes max</div>
+                  <div>Cleanup: Ephemeral container destroyed automatically on completion.</div>
+                </div>
+
+                <div className="space-y-2.5 text-[11px] text-claude-muted-light dark:text-slate-400">
+                  <label className="flex items-start gap-2.5 cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      checked={allowExecution} 
+                      onChange={e => setAllowExecution(e.target.checked)} 
+                      disabled={busy}
+                      className="mt-0.5 rounded border-claude-border-light text-aira-blue focus:ring-aira-blue" 
+                    />
+                    <div>
+                      <span className="font-medium text-claude-text-light dark:text-slate-200">Authorize Container Execution (Mandatory)</span>
+                      <p className="text-[10px] text-claude-muted-light dark:text-slate-400">Allow agent to scaffold files and execute commands inside the isolated sandbox.</p>
+                    </div>
                   </label>
-                  <label className="flex items-start gap-2">
-                    <input type="checkbox" checked={allowInternet} onChange={e => setAllowInternet(e.target.checked)} className="mt-0.5" />
-                    <span>Allow outbound internet access for packages.</span>
+                  
+                  <label className="flex items-start gap-2.5 cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      checked={allowInternet} 
+                      onChange={e => setAllowInternet(e.target.checked)} 
+                      disabled={busy}
+                      className="mt-0.5 rounded border-claude-border-light text-aira-blue focus:ring-aira-blue" 
+                    />
+                    <div>
+                      <span className="font-medium text-claude-text-light dark:text-slate-200">Allow Outbound Internet Access</span>
+                      <p className="text-[10px] text-claude-muted-light dark:text-slate-400">Permit downloading package dependencies (npm, pip) during build.</p>
+                    </div>
                   </label>
-                  <label className="flex items-start gap-2">
-                    <input type="checkbox" checked={allowPreview} onChange={e => setAllowPreview(e.target.checked)} className="mt-0.5" />
-                    <span>Allow public sandbox preview URL.</span>
+                  
+                  <label className="flex items-start gap-2.5 cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      checked={allowPreview} 
+                      onChange={e => setAllowPreview(e.target.checked)} 
+                      disabled={busy}
+                      className="mt-0.5 rounded border-claude-border-light text-aira-blue focus:ring-aira-blue" 
+                    />
+                    <div>
+                      <span className="font-medium text-claude-text-light dark:text-slate-200">Enable Live Web Preview</span>
+                      <p className="text-[10px] text-claude-muted-light dark:text-slate-400">Expose the running application port via an isolated preview tunnel.</p>
+                    </div>
                   </label>
                 </div>
+
+                {!allowExecution && (
+                  <div className="p-2.5 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300 text-[11px]">
+                    [Notice] Explicit execution authorization is required before running container commands. Check the authorization box above to proceed.
+                  </div>
+                )}
               </div>
 
               <div className="flex items-center gap-2">
                 {busy ? (
                   <button
                     onClick={handleStop}
-                    className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl border border-rose-500/30 text-rose-500 hover:bg-rose-500/10 font-medium"
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl border border-rose-500/30 text-rose-500 hover:bg-rose-500/10 font-medium transition-colors"
                   >
                     <Square size={13} />
                     <span>Stop Execution</span>
@@ -531,11 +612,11 @@ export const AgentContextualPanel: React.FC<AgentContextualPanelProps> = ({
                 ) : (
                   <button
                     onClick={() => handleRun()}
-                    disabled={!prompt.trim() || !status?.ready}
-                    className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-aira-blue text-white hover:bg-aira-blue/90 disabled:opacity-40 font-medium"
+                    disabled={!prompt.trim() || !status?.ready || !allowExecution}
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-aira-blue text-white hover:bg-aira-blue/90 disabled:opacity-40 font-medium transition-colors"
                   >
                     <Play size={13} />
-                    <span>Execute in Sandbox</span>
+                    <span>Authorize & Run Sandbox</span>
                   </button>
                 )}
                 <button

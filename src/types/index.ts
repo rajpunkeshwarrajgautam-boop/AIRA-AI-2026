@@ -68,6 +68,9 @@ export interface Message {
   timestamp: number;
   modelUsed?: ModelId;
   isStreaming?: boolean;
+  builderHandoff?: { prompt: string; conversationId: string };
+  automationProposal?: { name: string; objective: string; trigger: 'TIME_SCHEDULE' | 'EVENT' | 'WEBHOOK'; cronExpression: string };
+  citations?: Array<{ sourceTitle?: string; uri?: string; snippet?: string }>;
   provenance?: {
     requestedModel: string;
     resolvedPolicyModel: string;

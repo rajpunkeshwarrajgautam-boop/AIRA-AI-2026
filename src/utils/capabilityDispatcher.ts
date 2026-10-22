@@ -22,6 +22,25 @@ export interface VisionGenerationResult {
   creditsCharged?: number;
   error?: string;
   quotaExceeded?: boolean;
+  authRequired?: boolean;
+}
+
+export interface CreateAutomationParams {
+  name: string;
+  trigger?: 'TIME_SCHEDULE' | 'EVENT' | 'WEBHOOK';
+  cronExpression?: string;
+  agentId?: string;
+  objective: string;
+}
+
+export interface CreateAutomationResult {
+  success: boolean;
+  automationId?: string;
+  name?: string;
+  trigger?: string;
+  cronExpression?: string;
+  nextRun?: number;
+  error?: string;
 }
 
 /**
@@ -48,7 +67,7 @@ export function detectCapabilityIntent(prompt: string, workspaceMode: WorkspaceM
   }
 
   // 2. Fullstack App / Software Builder Intent
-  const builderRegex = /\b(?:build|scaffold|code|create|develop)\s+(?:a|an)\s+(?:crm|dashboard|web\s*app|website|fullstack\s*app|react\s*app|saas\s*platform)\b/i;
+  const builderRegex = /\b(?:build|scaffold|code|create|develop)\s+(?:a|an)\s+(?:[\w-]+\s+)*(?:crm|dashboard|web\s*app|website|fullstack\s*app|react\s*app|saas\s*platform|portfolio|app)\b/i;
   if (builderRegex.test(trimmed)) {
     return {
       capability: 'BUILDER_APP',
@@ -59,7 +78,7 @@ export function detectCapabilityIntent(prompt: string, workspaceMode: WorkspaceM
   }
 
   // 3. Automation Intent
-  const autoRegex = /\b(?:create|schedule|set\s*up)\s+(?:an?\s+)?automation\b|\brun\s+every\s+(?:monday|day|hour|week|morning)\b/i;
+  const autoRegex = /\b(?:create|schedule|set\s*up|automate)\s+(?:an?\s+)?(?:automation|scheduled\s+task|workflow|cron)\b|\b(?:automate\s+a|run\s+every|schedule\s+every)\b/i;
   if (autoRegex.test(trimmed)) {
     return {
       capability: 'AUTOMATION',
@@ -104,6 +123,14 @@ export async function executeVisionGeneration(
       })
     });
 
+    if (res.status === 401) {
+      return {
+        success: false,
+        authRequired: true,
+        error: 'Authentication required: Please sign in to generate images.'
+      };
+    }
+
     if (res.status === 402) {
       const data = await res.json().catch(() => ({}));
       return {
@@ -124,11 +151,14 @@ export async function executeVisionGeneration(
     const data = await res.json();
     const generatedImage = data.images?.[0];
     if (generatedImage?.url) {
+      const confirmedCredits = typeof data.totalCredits === 'number'
+        ? data.totalCredits
+        : (typeof data.creditsCharged === 'number' ? data.creditsCharged : undefined);
       return {
         success: true,
         imageUrl: generatedImage.url,
         altText: prompt,
-        creditsCharged: data.creditsCharged || 0
+        creditsCharged: confirmedCredits
       };
     }
 
@@ -140,6 +170,57 @@ export async function executeVisionGeneration(
     return {
       success: false,
       error: err.message || 'Vision network request error.'
+    };
+  }
+}
+
+/**
+ * Persist an automation through the actual backend (/api/automations) with verified identifier.
+ */
+export async function createBackendAutomation(params: CreateAutomationParams): Promise<CreateAutomationResult> {
+  try {
+    const res = await authenticatedApiFetch('/api/automations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: params.name,
+        trigger: params.trigger || 'TIME_SCHEDULE',
+        cronExpression: params.cronExpression || '0 9 * * *',
+        agentId: params.agentId || 'agent_assistant_v1',
+        objective: params.objective,
+        approvalPolicy: 'autonomous',
+        enabled: true
+      })
+    });
+
+    if (res.status === 401) {
+      return {
+        success: false,
+        error: 'Authentication required to schedule automations. Please sign in.'
+      };
+    }
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      return {
+        success: false,
+        error: data.error || `Failed to create automation (HTTP ${res.status})`
+      };
+    }
+
+    const item = await res.json();
+    return {
+      success: true,
+      automationId: item.id,
+      name: item.name,
+      trigger: item.trigger,
+      cronExpression: item.cronExpression,
+      nextRun: item.nextRun
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err.message || 'Automation service request failed.'
     };
   }
 }

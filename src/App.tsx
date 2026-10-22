@@ -19,7 +19,7 @@ import { ConversationSearchOverlay } from './components/ConversationSearchOverla
 import { InlineToast } from './components/InlineToast';
 import { backfillConversationsBestEffort, deleteConversationFromServer, fetchAllConversationsFromServer, fetchConversationFromServer, syncConversationToServer } from './utils/conversationSearch';
 import { useAnimatedFavicon } from './utils/animatedFavicon';
-import { detectCapabilityIntent, executeVisionGeneration } from './utils/capabilityDispatcher';
+import { detectCapabilityIntent, executeVisionGeneration, createBackendAutomation } from './utils/capabilityDispatcher';
 import { AgentContextualPanel } from './components/AgentContextualPanel';
 
 // Lazy-loaded heavy auxiliary surfaces to optimize FCP and TTI
@@ -65,9 +65,31 @@ function App() {
   const [projects, setProjects] = useState<Project[]>(() => loadProjects());
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>(() => localStorage.getItem('aira_active_project_id_v1') || undefined);
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
-  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('chat');
+  const [workspaceMode, setWorkspaceModeState] = useState<WorkspaceMode>(() => {
+    const user = neonAuth.getCurrentUser();
+    const key = `aira_workspace_mode_${user?.id || 'guest'}`;
+    const stored = typeof window !== 'undefined' ? localStorage.getItem(key) : null;
+    return (stored === 'agent' || stored === 'chat') ? stored : 'chat';
+  });
+
+  const setWorkspaceMode = useCallback((mode: WorkspaceMode) => {
+    setWorkspaceModeState(mode);
+    const user = neonAuth.getCurrentUser();
+    const key = `aira_workspace_mode_${user?.id || 'guest'}`;
+    try {
+      localStorage.setItem(key, mode);
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+
   const [isAgentPanelOpen, setIsAgentPanelOpen] = useState(false);
   const [activeAgentPrompt, setActiveAgentPrompt] = useState<string | undefined>(undefined);
+  const activeAbortControllerRef = useRef<AbortController | null>(null);
+  const activeRunIdRef = useRef<string | null>(null);
+  const activeAssistantMsgIdRef = useRef<string | null>(null);
+  const [cancelBuilderSignal, setCancelBuilderSignal] = useState(0);
+  const [isBuilderBusy, setIsBuilderBusy] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window !== 'undefined' ? window.innerWidth >= 1280 : true);
   const [isProjectsOpen, setIsProjectsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -137,6 +159,26 @@ function App() {
 
       // Identity transition boundary: immediately isolate and purge prior account in-memory state
       if (nextUserId !== currentUserId) {
+        if (activeAbortControllerRef.current) {
+          activeAbortControllerRef.current.abort();
+          activeAbortControllerRef.current = null;
+        }
+        activeRunIdRef.current = null;
+        activeAssistantMsgIdRef.current = null;
+        setIsLoading(false);
+        setExecutionStatus(null);
+        setActiveAgentPrompt(undefined);
+        setIsAgentPanelOpen(false);
+
+        // Restore user-scoped workspace mode
+        try {
+          const modeKey = `aira_workspace_mode_${nextUserId || 'guest'}`;
+          const storedMode = localStorage.getItem(modeKey);
+          setWorkspaceModeState((storedMode === 'agent' || storedMode === 'chat') ? storedMode : 'chat');
+        } catch {
+          // ignore storage errors
+        }
+
         setActiveChatId('');
         setSessionActiveChatId(null);
         setActiveArtifact(null);
@@ -436,6 +478,97 @@ function App() {
     if (shared) showToast('Conversation shared');
   };
 
+  const handleCancelExecution = useCallback(async () => {
+    // 1. Abort active streaming fetch
+    if (activeAbortControllerRef.current) {
+      activeAbortControllerRef.current.abort();
+      activeAbortControllerRef.current = null;
+    }
+
+    // 2. Stop active sandboxed builder execution in AgentContextualPanel
+    setCancelBuilderSignal(prev => prev + 1);
+
+    // 3. Notify backend run cancellation if active run ID exists
+    const runId = activeRunIdRef.current;
+    if (runId) {
+      activeRunIdRef.current = null;
+      try {
+        await authenticatedApiFetch(`/api/runs/${runId}/cancel`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        });
+      } catch (err) {
+        console.warn('[App] Backend run cancellation notice:', err);
+      }
+    }
+
+    // 4. Mark active assistant message as cancelled
+    const assistantId = activeAssistantMsgIdRef.current;
+    if (assistantId && activeChatId) {
+      updateConversation(activeChatId, c => ({
+        ...c,
+        updatedAt: Date.now(),
+        messages: c.messages.map(m => m.id === assistantId ? {
+          ...m,
+          content: m.content ? `${m.content}\n\n*[Execution cancelled by user]*` : '*[Execution cancelled by user]*',
+          isStreaming: false,
+          thinking: m.thinking ? { ...m.thinking, isStreaming: false } : undefined,
+        } : m),
+      }));
+      activeAssistantMsgIdRef.current = null;
+    }
+
+    setIsLoading(false);
+    setExecutionStatus(null);
+    showToast('Execution cancelled');
+  }, [activeChatId, showToast]);
+
+  const handleSwitchToAgentAndReview = useCallback((prompt: string) => {
+    setWorkspaceMode('agent');
+    setActiveAgentPrompt(prompt);
+    setIsAgentPanelOpen(true);
+    showToast('Switched to Agent Mode. Review task and sandbox permissions in the panel.');
+  }, [setWorkspaceMode, showToast]);
+
+  const handleConfirmAutomation = useCallback(async (proposal: { name: string; objective: string; trigger: any; cronExpression: string }) => {
+    if (!activeChatId) return;
+    setIsLoading(true);
+    setExecutionStatus('Persisting automation to backend engine…');
+    try {
+      const result = await createBackendAutomation({
+        name: proposal.name,
+        objective: proposal.objective,
+        trigger: proposal.trigger,
+        cronExpression: proposal.cronExpression,
+      });
+      setIsLoading(false);
+      setExecutionStatus(null);
+
+      if (result.success && result.automationId) {
+        const confirmMsgId = 'assistant-' + Date.now();
+        const confirmationMessage: Message = {
+          id: confirmMsgId,
+          role: 'assistant',
+          content: `[Automation Confirmed & Activated]\n\n**Automation ID:** \`${result.automationId}\`\n**Name:** ${proposal.name}\n**Trigger:** ${proposal.trigger} (\`${proposal.cronExpression}\`)\n**Status:** ACTIVE\n\nYour automation has been persisted to the server-authoritative engine and scheduled for autonomous execution.`,
+          timestamp: Date.now(),
+          isStreaming: false,
+        };
+        updateConversation(activeChatId, c => ({
+          ...c,
+          updatedAt: Date.now(),
+          messages: [...c.messages, confirmationMessage],
+        }));
+        showToast('Automation activated successfully');
+      } else {
+        showToast(result.error || 'Automation persistence failed');
+      }
+    } catch (err: any) {
+      setIsLoading(false);
+      setExecutionStatus(null);
+      showToast(`Automation error: ${err.message || 'Failed to create automation'}`);
+    }
+  }, [activeChatId, showToast]);
+
   const handleSendMessage = async (rawText: string, attachments: Attachment[]) => {
     if (isLoading) return;
     let conversation = activeConversation;
@@ -480,6 +613,11 @@ function App() {
     }));
     setIsLoading(true);
 
+    const controller = new AbortController();
+    activeAbortControllerRef.current = controller;
+    activeAssistantMsgIdRef.current = assistantId;
+    activeRunIdRef.current = null;
+
     const intent = detectCapabilityIntent(rawText, workspaceMode);
 
     // 1. VISION ENGINE CAPABILITY DISPATCH
@@ -489,13 +627,33 @@ function App() {
         const visionRes = await executeVisionGeneration(intent.cleanPrompt, intent.parameters);
         setExecutionStatus(null);
         setIsLoading(false);
-        if (visionRes.success && visionRes.imageUrl) {
+        activeAbortControllerRef.current = null;
+        activeAssistantMsgIdRef.current = null;
+
+        if (visionRes.authRequired) {
+          setIsAuthOpen(true);
           updateConversation(id, c => ({
             ...c,
             updatedAt: Date.now(),
             messages: c.messages.map(m => m.id === assistantId ? {
               ...m,
-              content: `Here is the generated image for "${intent.cleanPrompt}":\n\n![${intent.cleanPrompt}](${visionRes.imageUrl})\n\n*Generated by AIRA Vision Engine (${visionRes.creditsCharged || 12} credits billed)*`,
+              content: '[Authentication Required]: Please sign in to generate images with AIRA Vision Engine.',
+              isStreaming: false,
+            } : m),
+          }));
+          return;
+        }
+
+        if (visionRes.success && visionRes.imageUrl) {
+          const billingText = typeof visionRes.creditsCharged === 'number'
+            ? `*Generated by AIRA Vision Engine (${visionRes.creditsCharged} credits billed)*`
+            : '*Generated by AIRA Vision Engine*';
+          updateConversation(id, c => ({
+            ...c,
+            updatedAt: Date.now(),
+            messages: c.messages.map(m => m.id === assistantId ? {
+              ...m,
+              content: `Here is the generated image for "${intent.cleanPrompt}":\n\n![${intent.cleanPrompt}](${visionRes.imageUrl})\n\n${billingText}`,
               isStreaming: false,
             } : m),
           }));
@@ -523,6 +681,8 @@ function App() {
       } catch (err: any) {
         setExecutionStatus(null);
         setIsLoading(false);
+        activeAbortControllerRef.current = null;
+        activeAssistantMsgIdRef.current = null;
         updateConversation(id, c => ({
           ...c,
           updatedAt: Date.now(),
@@ -536,16 +696,22 @@ function App() {
       return;
     }
 
-    // 2. BUILDER APP IN CHAT MODE (Propose switching to Agent Mode)
+    // 2. BUILDER APP IN CHAT MODE (Propose switching to Agent Mode with actionable handoff)
     if (intent.capability === 'BUILDER_APP' && workspaceMode === 'chat') {
       setIsLoading(false);
+      activeAbortControllerRef.current = null;
+      activeAssistantMsgIdRef.current = null;
       updateConversation(id, c => ({
         ...c,
         updatedAt: Date.now(),
         messages: c.messages.map(m => m.id === assistantId ? {
           ...m,
-          content: `I recognized your request to scaffold and build an application: **"${intent.cleanPrompt}"**.\n\nTo create files, execute commands in an isolated sandbox, run tests, and generate live previews, this task requires **Agent Mode**.\n\nSwitch to **Agent Mode** using the toggle in the composer to launch the sandboxed builder while preserving this entire conversation.`,
+          content: `I recognized your request to scaffold and build an application: **"${intent.cleanPrompt}"**.\n\nTo create files, inspect the codebase, execute commands in an isolated sandbox, run tests, and generate live previews, this task requires **Agent Mode** with explicit sandbox permissions.`,
           isStreaming: false,
+          builderHandoff: {
+            prompt: intent.cleanPrompt,
+            conversationId: id,
+          },
         } : m),
       }));
       return;
@@ -554,7 +720,31 @@ function App() {
     // 3. BUILDER APP IN AGENT MODE (Launch builder and open contextual panel)
     if (intent.capability === 'BUILDER_APP' && workspaceMode === 'agent') {
       setIsAgentPanelOpen(true);
-      setActiveAgentPrompt(rawText);
+      setActiveAgentPrompt(intent.cleanPrompt || rawText);
+    }
+
+    // 4. AUTOMATION ENGINE CAPABILITY DISPATCH (Requires explicit user confirmation)
+    if (intent.capability === 'AUTOMATION') {
+      setIsLoading(false);
+      activeAbortControllerRef.current = null;
+      activeAssistantMsgIdRef.current = null;
+      const proposalName = intent.cleanPrompt.slice(0, 48) || 'AIRA Automation';
+      updateConversation(id, c => ({
+        ...c,
+        updatedAt: Date.now(),
+        messages: c.messages.map(m => m.id === assistantId ? {
+          ...m,
+          content: `I prepared an automation workflow for your request: **"${intent.cleanPrompt}"**.\n\nUnder AIRA execution safety standards, automated workflows cannot be scheduled implicitly. Review the proposal below and click **Confirm and Schedule Automation** to register and activate it in the backend engine.`,
+          isStreaming: false,
+          automationProposal: {
+            name: proposalName,
+            objective: intent.cleanPrompt,
+            trigger: 'TIME_SCHEDULE',
+            cronExpression: '0 9 * * *',
+          },
+        } : m),
+      }));
+      return;
     }
 
     let projectContext = '';
@@ -566,8 +756,6 @@ function App() {
     let modeContext = MODE_CONTEXT[workspaceMode];
     if (intent.capability === 'RESEARCH') {
       modeContext += '\nPerform deep research synthesis. Decompose the inquiry into core sub-questions, extract evidence, cite primary sources, and clearly distinguish verified facts from inferences.';
-    } else if (intent.capability === 'AUTOMATION') {
-      modeContext += '\nDesign an automation specification. Clarify triggers, schedule cadence, action parameters, and failure handling. Require explicit user confirmation before persisting any scheduled workflow.';
     }
     const systemContext = [settings.customInstructions, modeContext, projectContext].filter(Boolean).join('\n\n');
 
@@ -629,7 +817,36 @@ function App() {
           onLatencyMetrics: metrics => {
             console.info('[AIRA Telemetry] Client observed latency metrics:', metrics);
           },
+          onRunStarted: runId => {
+            activeRunIdRef.current = runId;
+          },
+          onSourceAdded: source => {
+            updateConversation(id, c => ({
+              ...c,
+              messages: c.messages.map(m => m.id === assistantId ? {
+                ...m,
+                citations: [...(m.citations || []), {
+                  sourceTitle: source.title,
+                  uri: source.url,
+                  snippet: source.snippet,
+                }],
+              } : m),
+            }));
+          },
+          onCancelled: () => {
+            updateConversation(id, c => ({
+              ...c,
+              messages: c.messages.map(m => m.id === assistantId ? {
+                ...m,
+                content: m.content ? `${m.content}\n\n*[Execution cancelled by user]*` : '*[Execution cancelled by user]*',
+                isStreaming: false,
+              } : m),
+            }));
+          },
           onComplete: () => {
+            activeAbortControllerRef.current = null;
+            activeAssistantMsgIdRef.current = null;
+            activeRunIdRef.current = null;
             setExecutionStatus(null);
             updateConversation(id, c => ({
               ...c,
@@ -643,6 +860,9 @@ function App() {
             setIsLoading(false);
           },
           onError: error => {
+            activeAbortControllerRef.current = null;
+            activeAssistantMsgIdRef.current = null;
+            activeRunIdRef.current = null;
             setExecutionStatus(null);
             updateConversation(id, c => ({
               ...c,
@@ -652,11 +872,19 @@ function App() {
           },
         },
         projectContext || undefined,
-        id
+        id,
+        intent.capability === 'RESEARCH' ? 'RESEARCH' : undefined,
+        controller.signal
       );
-    } catch {
+    } catch (err: any) {
+      activeAbortControllerRef.current = null;
+      activeAssistantMsgIdRef.current = null;
+      activeRunIdRef.current = null;
       setExecutionStatus(null);
       setIsLoading(false);
+      if (err?.name === 'AbortError') {
+        return;
+      }
       updateConversation(id, c => ({
         ...c,
         messages: c.messages.map(m => m.id === assistantId ? { ...m, content: 'Aira could not complete this request.', isStreaming: false } : m),
@@ -823,9 +1051,9 @@ function App() {
               >
                 {isAgentPanelOpen ? 'Hide Panel' : 'Workspace Panel'}
               </button>
-              {isLoading && (
+              {(isLoading || isBuilderBusy) && (
                 <button
-                  onClick={() => setIsLoading(false)}
+                  onClick={handleCancelExecution}
                   className="px-2 py-1 rounded-md text-[11px] font-medium text-rose-500 hover:bg-rose-500/10 transition-colors"
                 >
                   Cancel
@@ -856,7 +1084,13 @@ function App() {
                     ? 'rounded-xl ring-2 ring-aira-blue/35 bg-aira-blue/[0.035] transition-all duration-500'
                     : 'transition-all duration-500'}
                 >
-                  <ChatMessage message={message} userName={settings.userName} onOpenArtifact={setActiveArtifact} />
+                  <ChatMessage
+                    message={message}
+                    userName={settings.userName}
+                    onOpenArtifact={setActiveArtifact}
+                    onSwitchToAgentAndReview={handleSwitchToAgentAndReview}
+                    onConfirmAutomation={handleConfirmAutomation}
+                  />
                 </div>
               ))}
             </div>
@@ -929,6 +1163,9 @@ function App() {
             model={settings.activeModel}
             activePrompt={activeAgentPrompt}
             onActivePromptConsumed={() => setActiveAgentPrompt(undefined)}
+            cancelSignal={cancelBuilderSignal}
+            onExecutionCancelled={handleCancelExecution}
+            onBusyChange={setIsBuilderBusy}
           />
         )}
 
