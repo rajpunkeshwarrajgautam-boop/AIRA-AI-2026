@@ -33,15 +33,9 @@ export const MUTATING_GET_PATHS = [
 ];
 
 let globalMaintenanceActive = process.env.STAGING_MAINTENANCE_MODE === 'true';
-let globalBypassTokenHash = process.env.STAGING_MAINTENANCE_TOKEN_HASH || '';
 
-export function setStagingMaintenanceState(active: boolean, bypassToken?: string): void {
+export function setStagingMaintenanceState(active: boolean): void {
   globalMaintenanceActive = active;
-  if (bypassToken) {
-    globalBypassTokenHash = crypto.createHash('sha256').update(bypassToken.trim()).digest('hex');
-  } else if (!active) {
-    globalBypassTokenHash = '';
-  }
 }
 
 export function isStagingMaintenanceActive(): boolean {
@@ -50,6 +44,11 @@ export function isStagingMaintenanceActive(): boolean {
 
 /**
  * Creates Express middleware that intercepts requests when staging maintenance is enabled.
+ * 
+ * Strict Security Policy:
+ * Inbound HTTP requests can NEVER bypass maintenance via HTTP headers.
+ * All privileged maintenance operations (migrations, historical identity import)
+ * must be executed strictly out-of-band via direct database connections.
  */
 export function createStagingMaintenanceMiddleware(config: MaintenanceConfig = {}) {
   return (req: Request, res: Response, next: NextFunction): void => {
@@ -72,21 +71,7 @@ export function createStagingMaintenanceMiddleware(config: MaintenanceConfig = {
       return next();
     }
 
-    // 2. Check for Privileged Bypass Token
-    const providedToken = req.headers['x-aira-maintenance-token'] as string | undefined;
-    const targetHash = config.bypassTokenHash || globalBypassTokenHash || (
-      config.bypassToken ? crypto.createHash('sha256').update(config.bypassToken.trim()).digest('hex') : ''
-    );
-
-    if (providedToken && targetHash) {
-      const providedHash = crypto.createHash('sha256').update(providedToken.trim()).digest('hex');
-      if (crypto.timingSafeEqual(Buffer.from(providedHash), Buffer.from(targetHash))) {
-        res.setHeader('X-Aira-Maintenance-Bypass', 'authorized');
-        return next();
-      }
-    }
-
-    // 3. Inspect if method or route is a mutating path
+    // 2. Inspect if method or route is a mutating path
     const isMutatingMethod = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
     const isMutatingGet = method === 'GET' && MUTATING_GET_PATHS.some(prefix => path.startsWith(prefix));
 

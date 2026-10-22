@@ -126,8 +126,8 @@ export async function verifyStagingWriteIsolation(
   };
 
   let privilegedMigrationPath: GateCheckStatus = {
-    status: 'PASS',
-    details: 'Privileged migration connection verified operational.'
+    status: 'FAIL',
+    details: 'Privileged migration path not yet tested.'
   };
 
   try {
@@ -143,6 +143,10 @@ export async function verifyStagingWriteIsolation(
           status: 'FAIL',
           details: 'Runtime write restriction not active: database is accepting unprivileged writes.'
         };
+        privilegedMigrationPath = {
+          status: 'FAIL',
+          details: 'Maintenance barrier is not active; privileged path cannot be verified.'
+        };
       } else {
         maintenanceBarrierActive = {
           status: 'PASS',
@@ -150,7 +154,7 @@ export async function verifyStagingWriteIsolation(
         };
 
         const writeCheck = await verifyStagingWriteRestriction(client, { bypassToken: options.bypassToken });
-        if (!writeCheck.writesBlocked) {
+        if (!writeCheck.writesBlocked || !writeCheck.truncateBlocked) {
           runtimeWriteRestriction = {
             status: 'FAIL',
             details: writeCheck.details
@@ -162,10 +166,15 @@ export async function verifyStagingWriteIsolation(
           };
         }
 
-        if (!writeCheck.privilegedPathOperational) {
+        if (!options.bypassToken) {
           privilegedMigrationPath = {
             status: 'FAIL',
-            details: 'Privileged migration path failed write probe check.'
+            details: 'No privileged bypass token was provided. Missing credentials result in FAIL (zero false-positives).'
+          };
+        } else if (!writeCheck.privilegedPathOperational) {
+          privilegedMigrationPath = {
+            status: 'FAIL',
+            details: 'Privileged migration path failed write probe check despite token provided.'
           };
         } else {
           privilegedMigrationPath = {

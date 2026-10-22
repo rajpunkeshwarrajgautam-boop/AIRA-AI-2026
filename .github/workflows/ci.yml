@@ -85,6 +85,9 @@ jobs:
       - name: Release wizard and cutover safety gates certification
         run: npm run test:cutover-safety
 
+      - name: Staging maintenance barrier certification
+        run: npm run test:maintenance-barrier
+
       - name: Runtime verification
         run: npm test
 

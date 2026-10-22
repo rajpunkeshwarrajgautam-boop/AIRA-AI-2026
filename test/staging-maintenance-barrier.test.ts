@@ -226,7 +226,30 @@ async function runAll() {
         };
       }
 
+      if (memoryDbState.sentinelActive && (s.includes(`INSERT INTO ${STAGING_PROBE_TABLE}`) || s.includes(`TRUNCATE TABLE ${STAGING_PROBE_TABLE}`))) {
+        const err: any = new Error('[STAGING_MAINTENANCE_BLOCKED] Operation denied: Permanent Staging database is in maintenance mode. Write path is locked.');
+        err.code = '55P03';
+        throw err;
+      }
+
       return { rows: [] };
+    },
+    transaction: async (cb: any) => {
+      let elevated = false;
+      return cb({
+        raw: async (txSql: string) => {
+          if (txSql.includes('SET LOCAL aira.privileged_token')) {
+            elevated = true;
+            return { rows: [] };
+          }
+          if (txSql.includes(`INSERT INTO ${STAGING_PROBE_TABLE}`) && !elevated) {
+            const err: any = new Error('[STAGING_MAINTENANCE_BLOCKED]');
+            err.code = '55P03';
+            throw err;
+          }
+          return { rows: [] };
+        }
+      });
     }
   });
 
@@ -327,6 +350,67 @@ async function runAll() {
     assert.match(res.details, /writesBlocked=false/);
   });
 
+  await test('Zero false-positive certification: verifyStagingWriteRestriction returns privilegedPathOperational=false when no token provided', async () => {
+    const mockClientNoToken: any = {
+      raw: async (sql: string) => {
+        if (sql.includes(STAGING_MAINTENANCE_TABLE)) {
+          return { rows: [{ is_active: true, bypass_token_hash: 'hash' }] };
+        }
+        if (sql.includes('default_transaction_read_only')) {
+          return { rows: [{ default_ro: 'on' }] };
+        }
+        if (sql.includes(`INSERT INTO ${STAGING_PROBE_TABLE}`) || sql.includes(`TRUNCATE TABLE ${STAGING_PROBE_TABLE}`)) {
+          const err: any = new Error('[STAGING_MAINTENANCE_BLOCKED]');
+          err.code = '55P03';
+          throw err;
+        }
+        return { rows: [] };
+      }
+    };
+
+    const res = await verifyStagingWriteRestriction(mockClientNoToken);
+    assert.equal(res.writesBlocked, true);
+    assert.equal(res.truncateBlocked, true);
+    assert.equal(res.privilegedPathOperational, false); // Must be FALSE when no token provided
+  });
+
+  await test('auditConnectedRolePrivileges detects table-owner vs least-privilege runtime role', async () => {
+    const mockOwnerClient: any = {
+      raw: async (sql: string) => {
+        if (sql.includes('current_user as current_role')) {
+          return { rows: [{ current_role: 'neondb_owner', session_role: 'neondb_owner', db_name: 'neondb' }] };
+        }
+        if (sql.includes('FROM pg_tables')) {
+          return { rows: [{ tableowner: 'neondb_owner', count: 23 }] };
+        }
+        return { rows: [] };
+      }
+    };
+
+    const { auditConnectedRolePrivileges } = await import('../packages/db/src/security/staging-role-separation.js');
+    const ownerAudit = await auditConnectedRolePrivileges(mockOwnerClient);
+    assert.equal(ownerAudit.isTableOwner, true);
+    assert.equal(ownerAudit.canDisableTriggers, true);
+    assert.equal(ownerAudit.isRuntimeRoleSeparated, false);
+
+    const mockRuntimeClient: any = {
+      raw: async (sql: string) => {
+        if (sql.includes('current_user as current_role')) {
+          return { rows: [{ current_role: 'aira_staging_runtime', session_role: 'aira_staging_runtime', db_name: 'neondb' }] };
+        }
+        if (sql.includes('FROM pg_tables')) {
+          return { rows: [{ tableowner: 'neondb_owner', count: 23 }] };
+        }
+        return { rows: [] };
+      }
+    };
+
+    const runtimeAudit = await auditConnectedRolePrivileges(mockRuntimeClient);
+    assert.equal(runtimeAudit.isTableOwner, false);
+    assert.equal(runtimeAudit.canDisableTriggers, false);
+    assert.equal(runtimeAudit.isRuntimeRoleSeparated, true);
+  });
+
   // ── GROUP 4: 5-Gate Write Isolation Evaluation ─────────────────────────────
   console.log('\n--- Test Group 4: 5-Gate Write Isolation Evaluation ---');
 
@@ -348,7 +432,7 @@ async function runAll() {
         if (sql.includes('default_transaction_read_only')) {
           return { rows: [{ db_name: 'neondb', default_ro: 'on' }] };
         }
-        if (sql.includes(`INSERT INTO ${STAGING_PROBE_TABLE}`)) {
+        if (sql.includes(`INSERT INTO ${STAGING_PROBE_TABLE}`) || sql.includes(`TRUNCATE TABLE ${STAGING_PROBE_TABLE}`)) {
           const err: any = new Error('[STAGING_MAINTENANCE_BLOCKED] Write path locked');
           err.code = '55P03';
           throw err;
@@ -557,26 +641,16 @@ async function runAll() {
     assert.equal(res.getStatusCode(), 503);
   });
 
-  await test('Privileged request with X-Aira-Maintenance-Token bypasses barrier to next()', () => {
+  await test('Security check: Request with X-Aira-Maintenance-Token is STILL denied with HTTP 503 (no HTTP bypass allowed)', () => {
     let nextCalled = false;
     const req = createMockHttpReq('POST', '/api/chat/stream', {
       'x-aira-maintenance-token': bypassSecret
     });
     const res = createMockHttpRes();
     middleware(req, res, () => { nextCalled = true; });
-    assert.equal(nextCalled, true);
-    assert.equal(res.getHeaders()['x-aira-maintenance-bypass'], 'authorized');
-  });
-
-  await test('Request with incorrect X-Aira-Maintenance-Token is denied with HTTP 503', () => {
-    let nextCalled = false;
-    const req = createMockHttpReq('POST', '/api/chat/stream', {
-      'x-aira-maintenance-token': 'wrong-attacker-token'
-    });
-    const res = createMockHttpRes();
-    middleware(req, res, () => { nextCalled = true; });
     assert.equal(nextCalled, false);
     assert.equal(res.getStatusCode(), 503);
+    assert.equal(res.getBody().code, 'STAGING_MAINTENANCE_ACTIVE');
   });
 
   await test('Disabled middleware permits all mutating requests through', () => {

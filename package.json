@@ -58,6 +58,7 @@
     "test:db-isolation": "npx tsx test/database-isolation-guard.test.ts",
     "test:cutover-safety": "npx tsx test/staging-cutover-safety-gates.test.ts",
     "test:maintenance-barrier": "npx tsx test/staging-maintenance-barrier.test.ts",
+    "test:maintenance-barrier:integration": "npx tsx test/staging-maintenance-barrier-integration.test.ts",
     "validate:staging": "npx tsx scripts/validate-staging-pipeline.ts",
     "staging:cutover:plan": "npx tsx scripts/staging-cutover-orchestrator.ts --plan",
     "staging:cutover:audit": "npx tsx scripts/staging-cutover-orchestrator.ts --rehearsal-audit",

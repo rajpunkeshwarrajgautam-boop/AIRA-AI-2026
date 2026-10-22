@@ -348,13 +348,16 @@ const mockCleanIsolationClient: any = {
         }]
       };
     }
-    if (sql.includes('INSERT INTO _aira_maintenance_write_probe')) {
+    if (sql.includes('INSERT INTO _aira_maintenance_write_probe') || sql.includes('TRUNCATE TABLE _aira_maintenance_write_probe')) {
       throw new Error('[STAGING_MAINTENANCE_BLOCKED] Operation denied: Permanent Staging database is in maintenance mode.');
     }
     return { rows: [] };
-  }
+  },
+  transaction: async (cb: any) => cb({
+    raw: async () => ({ rows: [] })
+  })
 };
-const resCleanIsolation = await verifyStagingWriteIsolation(mockCleanIsolationClient);
+const resCleanIsolation = await verifyStagingWriteIsolation(mockCleanIsolationClient, { bypassToken: 'verified-cutover-token' });
 assert.equal(resCleanIsolation.isolated, true);
 assert.equal(resCleanIsolation.stagingDatabaseIdentity.status, 'PASS');
 assert.equal(resCleanIsolation.maintenanceBarrierActive.status, 'PASS');
