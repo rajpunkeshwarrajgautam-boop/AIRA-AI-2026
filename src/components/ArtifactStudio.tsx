@@ -35,6 +35,11 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
   const [consoleLogs, setConsoleLogs] = useState<Array<{ type: string; message: string }>>([]);
   const [refreshKey, setRefreshKey] = useState(0);
 
+  const [securityNotice, setSecurityNotice] = useState<string | null>(null);
+  const activeNonceRef = useRef<string>(
+    typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `nonce_${Math.random().toString(36).slice(2)}_${Date.now()}`
+  );
+
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   const [prevArtifactKey, setPrevArtifactKey] = useState<string | null>(null);
@@ -43,6 +48,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
   if (artifact && artifactKey !== prevArtifactKey) {
     setPrevArtifactKey(artifactKey);
     setSelectedVersion(artifact.version);
+    activeNonceRef.current = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `nonce_${Math.random().toString(36).slice(2)}_${Date.now()}`;
     if (
       artifact.type === 'text/html' ||
       artifact.type === 'image/svg+xml' ||
@@ -57,14 +63,28 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
     setConsoleLogs([]);
   }
 
-  // Cross-frame console log receiver
+  // Cross-frame console log receiver with strict verification (CRITICAL FIX B)
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
-      if (event.data && event.data.type === 'CONSOLE_LOG') {
-        const level = event.data.level || 'info';
-        const message = String(event.data.message || '');
-        setConsoleLogs(prev => [...prev.slice(-99), { type: level, message }]);
+      // 1. Verify message source matches active iframe window
+      if (iframeRef.current && event.source !== iframeRef.current.contentWindow) {
+        return;
       }
+      // 2. Validate payload structure
+      if (!event.data || typeof event.data !== 'object') return;
+      if (event.data.type !== 'CONSOLE_LOG') return;
+
+      // 3. Validate per-session secret nonce to prevent spoofed/injected cross-frame messages
+      if (!event.data.nonce || event.data.nonce !== activeNonceRef.current) {
+        return;
+      }
+
+      // 4. Schema validation
+      const allowedLevels = ['info', 'warn', 'error', 'log'];
+      const level = allowedLevels.includes(event.data.level) ? event.data.level : 'info';
+      const rawMessage = typeof event.data.message === 'string' ? event.data.message : String(event.data.message || '');
+      const message = rawMessage.slice(0, 4000);
+      setConsoleLogs(prev => [...prev.slice(-99), { type: level, message }]);
     };
 
     window.addEventListener('message', handleMessage);
@@ -101,17 +121,24 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
     URL.revokeObjectURL(url);
   };
 
+  // CRITICAL FIX A: Never open untrusted executable generated HTML as an unrestricted same-origin Blob document
   const handleOpenInNewTab = () => {
-    const isDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
-    const fullHtml = generateArtifactSandboxHtml(artifact, currentContent, isDark);
-    const blob = new Blob([fullHtml], { type: 'text/html' });
+    const isExecutable = artifact.type === 'text/html' || artifact.type === 'application/vnd.ant.react';
+    if (isExecutable) {
+      setSecurityNotice('New-tab execution of dynamic code is disabled for origin isolation. Use safe download to run locally, or view safely in this sandboxed preview.');
+      setTimeout(() => setSecurityNotice(null), 6000);
+      return;
+    }
+    // Safe text view for non-executable types
+    const blob = new Blob([currentContent], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
-    window.open(url, '_blank');
+    window.open(url, '_blank', 'noopener,noreferrer');
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
   };
 
   const getIframeSrcDoc = () => {
     const isDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
-    return generateArtifactSandboxHtml(artifact, currentContent, isDark);
+    return generateArtifactSandboxHtml(artifact, currentContent, isDark, activeNonceRef.current);
   };
 
   const lineCount = currentContent.split('\n').length;
@@ -240,6 +267,13 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
               </div>
             </div>
           </div>
+
+          {securityNotice && (
+            <div className="px-4 py-2 bg-amber-500/10 border-b border-amber-500/20 text-amber-700 dark:text-amber-300 text-xs flex items-center justify-between">
+              <span className="font-medium">{securityNotice}</span>
+              <button onClick={() => setSecurityNotice(null)} className="ml-2 text-amber-500 hover:text-amber-700 font-bold text-sm">×</button>
+            </div>
+          )}
 
           {/* Main Studio Body */}
           <div className="flex-1 relative overflow-hidden bg-claude-surface-light dark:bg-[#141413] flex flex-col">

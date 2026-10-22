@@ -115,17 +115,9 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
 
   // Contextual Greeting Title
   const dynamicGreetingTitle = useMemo(() => {
-    // If specific workspace mode is active, reflect it
-    if (workspaceMode === 'research') return 'Research & Investigation';
-    if (workspaceMode === 'builder') return 'Sandbox App Builder';
-    if (workspaceMode === 'agents') return 'Autonomous Missions';
-    if (workspaceMode === 'vision') return 'Multimodal Vision Studio';
-    if (workspaceMode === 'automations') return 'Workflow Engineering';
-    if (workspaceMode === 'library') return 'Workspace Knowledge';
+    if (workspaceMode === 'agent') return 'Autonomous Agent Mission';
 
-    // Standard chat mode with dynamic persona
     const cleanedName = userName && userName.trim() !== 'Explorer' ? userName.trim() : '';
-
     if (cleanedName) {
       return `${timeContext.baseGreeting}, ${cleanedName}.`;
     }
@@ -137,23 +129,8 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
     if (activeProject) {
       return `Working within "${activeProject.name}" with ${activeProject.docs.length} linked document${activeProject.docs.length === 1 ? '' : 's'}.`;
     }
-    if (workspaceMode === 'research') {
-      return 'Cross-examine sources, gather structured citations, and synthesize technical briefs.';
-    }
-    if (workspaceMode === 'builder') {
-      return 'Scaffold, preview, and test live frontend components and full-stack services.';
-    }
-    if (workspaceMode === 'agents') {
-      return 'Delegate multi-step goals with automated checkpoints and verifiable deliverables.';
-    }
-    if (workspaceMode === 'vision') {
-      return 'Analyze UI mocks, generate conceptual visuals, and inspect design hierarchy.';
-    }
-    if (workspaceMode === 'automations') {
-      return 'Construct repeatable trigger-action routines with self-healing failure guards.';
-    }
-    if (workspaceMode === 'library') {
-      return 'Query your connected project knowledge graphs, files, and repositories.';
+    if (workspaceMode === 'agent') {
+      return 'Delegate multi-step goals, scaffold complete web applications, or design automated workflows with verifiable deliverables.';
     }
     if (extendedThinking) {
       return 'Deep reasoning enabled. Complex analysis, architecture, and multi-step synthesis ready.';
@@ -250,92 +227,63 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
       ];
     }
 
-    if (workspaceMode === 'builder') {
+    if (workspaceMode === 'agent') {
       return [
         {
-          id: 'builder-dash',
-          title: 'Scaffold interactive React app',
-          prompt: 'Scaffold a complete modern React application with responsive Tailwind layout, state management, and real-time interactive widgets.',
-          icon: <Code2 className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
+          id: 'agent-build',
+          title: 'Build CRM web app with tests',
+          prompt: 'Build a production-ready CRM website with React frontend, TypeScript API service, input validation, and comprehensive automated tests.',
+          icon: <Code2 className="w-4 h-4 text-aira-blue dark:text-blue-400" strokeWidth={1.5} />,
         },
         {
-          id: 'builder-api',
-          title: 'Implement robust API service',
-          prompt: 'Build a production-ready TypeScript backend handler with Zod input validation, error boundaries, and comprehensive unit tests.',
-          icon: <Layers className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
+          id: 'agent-research',
+          title: 'Deep competitive research mission',
+          prompt: 'Research the current multi-model AI workspace landscape, cross-examine technical benchmarks, and synthesize an executive brief with citations.',
+          icon: <Compass className="w-4 h-4 text-aira-blue dark:text-blue-400" strokeWidth={1.5} />,
         },
         {
-          id: 'builder-diagram',
-          title: 'Architect system component model',
-          prompt: 'Design an end-to-end component hierarchy and state flow diagram using Mermaid syntax for an enterprise SaaS platform.',
-          icon: <Brain className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
+          id: 'agent-automation',
+          title: 'Design scheduled automation',
+          prompt: 'Create an automation for every Monday at 9 AM that queries database metrics, summarizes active alerts, and compiles an operational report.',
+          icon: <Zap className="w-4 h-4 text-aira-blue dark:text-blue-400" strokeWidth={1.5} />,
         },
         {
-          id: 'builder-audit',
-          title: 'Refactor and eliminate bottlenecks',
-          prompt: 'Audit this code block for memory leaks, unnecessary re-renders, and missing error boundary fallbacks.',
-          icon: <Zap className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
+          id: 'agent-audit',
+          title: 'System architecture & risk audit',
+          prompt: 'Audit this system architecture for race conditions, credential isolation boundaries, and failover recovery strategies.',
+          icon: <Brain className="w-4 h-4 text-aira-blue dark:text-blue-400" strokeWidth={1.5} />,
         },
       ];
     }
 
-    if (workspaceMode === 'vision') {
-      return [
-        {
-          id: 'vision-ui-critique',
-          title: 'Critique user interface design',
-          prompt: 'Analyze this UI screenshot for visual balance, typography scale, spacing consistency, and accessibility color contrast.',
-          icon: <Compass className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
-        },
-        {
-          id: 'vision-flowchart',
-          title: 'Extract diagram into code',
-          prompt: 'Inspect this architecture diagram image and convert the entities, connectors, and boundaries into clean Mermaid code.',
-          icon: <Layers className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
-        },
-        {
-          id: 'vision-concept',
-          title: 'Generate UI aesthetic concept',
-          prompt: 'Design a clean editorial dark-mode aesthetic for a next-generation developer telemetry and observability dashboard.',
-          icon: <Code2 className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
-        },
-        {
-          id: 'vision-svg',
-          title: 'Create mathematical vector artwork',
-          prompt: 'Generate an SVG geometric icon based on interlocking topological loops with subtle gradients and crisp hairlines.',
-          icon: <Zap className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
-        },
-      ];
-    }
-
-    // Default high-caliber Claude starters
+    // Default high-caliber conversational starters
     return [
       {
         id: 'default-research',
         title: 'Research a complex topic',
         prompt: 'Research the current landscape for multi-model AI workspaces and compile a structured, sourced competitive brief with key product gaps.',
-        icon: <Compass className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
+        icon: <Compass className="w-4 h-4 text-aira-blue dark:text-blue-400" strokeWidth={1.5} />,
+      },
+      {
+        id: 'default-vision',
+        title: 'Generate conceptual visual',
+        prompt: 'Generate an image of a futuristic, sustainable city with layered aerial transit, vertical forests, and clean neoclassical architecture at dusk.',
+        icon: <Zap className="w-4 h-4 text-aira-blue dark:text-blue-400" strokeWidth={1.5} />,
       },
       {
         id: 'default-code',
         title: 'Build an interactive web artifact',
         prompt: 'Design and build a polished interactive dashboard artifact for an AI operations workspace with realtime telemetry and responsive charts.',
-        icon: <Code2 className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
-      },
-      {
-        id: 'default-analyze',
-        title: 'Analyze documents or data',
-        prompt: 'Analyze attached project materials, extract the critical findings, and organize them into an executive decision memo.',
-        icon: <FileText className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
+        icon: <Code2 className="w-4 h-4 text-aira-blue dark:text-blue-400" strokeWidth={1.5} />,
       },
       {
         id: 'default-agent',
         title: 'Plan an autonomous workflow',
         prompt: 'Break this objective into an autonomous agent mission with clear steps, tools, checkpoints, and a verifiable deliverable.',
-        icon: <Bot className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
+        icon: <Bot className="w-4 h-4 text-aira-blue dark:text-blue-400" strokeWidth={1.5} />,
       },
     ];
-  }, [activeProject, recentHistory.domain]);
+  }, [activeProject, recentHistory.domain, workspaceMode]);
 
   const triggerCelebration = useCallback(() => {
     confetti({

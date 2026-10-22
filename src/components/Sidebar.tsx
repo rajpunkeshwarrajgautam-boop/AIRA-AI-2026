@@ -9,16 +9,8 @@ import {
   Sun,
   Moon,
   Laptop,
-  Telescope,
-  Library,
-  Bot,
-  Workflow,
   MessageSquareText,
   ShieldCheck,
-  Sparkles,
-  Wand2,
-  Cpu,
-  CreditCard,
 } from 'lucide-react';
 import { motion, AnimatePresence, Variants } from 'framer-motion';
 import type { Conversation, Project, AppSettings, WorkspaceMode } from '../types';
@@ -126,10 +118,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onToggleOpen,
   settings,
   onUpdateSettings,
-  workspaceMode,
+  workspaceMode: _workspaceMode,
   onSelectWorkspace,
-  onOpenVisionStudio,
-  onOpenPricing,
+  onOpenVisionStudio: _onOpenVisionStudio,
+  onOpenPricing: _onOpenPricing,
   onOpenBilling,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -211,19 +203,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       onToggleOpen();
     }
   };
-
-  const navItem = (mode: WorkspaceMode, label: string, icon: React.ReactNode, badge?: string) => (
-    <button
-      onClick={() => {
-        onSelectWorkspace(mode);
-        if (typeof window !== 'undefined' && window.innerWidth < 1280) onToggleOpen();
-      }}
-      className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-[13px] font-semibold transition-all duration-300 ${workspaceMode === mode ? 'bg-claude-surface-light dark:bg-claude-surface-dark text-claude-text-light dark:text-white shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] border border-claude-border-light dark:border-claude-border-dark' : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark border border-transparent'}`}
-    >
-      <span className="flex items-center gap-3">{icon}<span>{label}</span></span>
-      {badge && <span className="text-[9px] uppercase tracking-wider font-bold px-2 py-0.5 rounded-md bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark">{badge}</span>}
-    </button>
-  );
 
   const renderChatItem = (c: Conversation) => (
     <motion.div
@@ -320,49 +299,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
           {/* Navigation, search and all conversation groups share one genuine touch-scroll surface. */}
           <div data-testid="sidebar-scroll-region" className="aira-sidebar-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain touch-pan-y">
-          <div className="px-4 pt-3 pb-2 space-y-1">
-            {navItem('chat', 'Chat', <MessageSquareText className="w-4 h-4" />)}
-            {navItem('research', 'Research', <Telescope className="w-4 h-4" />, 'beta')}
-            {navItem('builder', 'Builder', <Cpu className="w-4 h-4 text-amber-500" />, 'Sandbox')}
-            {navItem('agents', 'Agents', <Bot className="w-4 h-4" />)}
-            {onOpenVisionStudio && (
-              <button
-                onClick={() => {
-                  onSelectWorkspace('vision');
-                  onOpenVisionStudio();
-                  if (typeof window !== 'undefined' && window.innerWidth < 1280) onToggleOpen();
-                }}
-                className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-[13px] font-semibold transition-all duration-300 ${workspaceMode === 'vision' ? 'bg-claude-surface-light dark:bg-claude-surface-dark text-claude-text-light dark:text-white shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] border border-claude-border-light dark:border-claude-border-dark' : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark border border-transparent'}`}
-              >
-                <span className="flex items-center gap-3">
-                  <Wand2 className="w-4 h-4 text-purple-400" />
-                  <span>Vision Studio</span>
-                </span>
-                <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300">
-                  Multimodal
-                </span>
-              </button>
-            )}
-            {navItem('automations', 'Automations', <Workflow className="w-4 h-4" />)}
-            {navItem('library', 'Library', <Library className="w-4 h-4" />)}
-            <button onClick={onOpenProjects} className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-[13px] font-semibold transition-all duration-300 ${activeProjectId ? 'bg-claude-surface-light dark:bg-claude-surface-dark text-claude-text-light dark:text-white shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] border border-claude-border-light dark:border-claude-border-dark' : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark border border-transparent'}`}>
-              <span className="flex items-center gap-3"><FolderGit2 className="w-4 h-4" /><span>Projects</span></span>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark">{projects.length}</span>
+          <div className="px-3.5 pt-2 pb-1 space-y-1">
+            <button
+              onClick={onOpenProjects}
+              className={`w-full flex items-center justify-between px-3.5 py-2 rounded-xl text-[13px] font-semibold transition-all duration-300 ${activeProjectId ? 'bg-claude-surface-light dark:bg-claude-surface-dark text-claude-text-light dark:text-white shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] border border-claude-border-light dark:border-claude-border-dark' : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark border border-transparent'}`}
+            >
+              <span className="flex items-center gap-2.5">
+                <FolderGit2 className="w-4 h-4 text-aira-blue dark:text-blue-400" />
+                <span>Projects</span>
+              </span>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark">
+                {projects.length}
+              </span>
             </button>
-            {onOpenPricing && (
-              <button
-                onClick={onOpenPricing}
-                className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-[13px] font-semibold text-[#cc785c] hover:bg-[#cc785c]/10 border border-[#cc785c]/20 transition-all mt-1"
-              >
-                <span className="flex items-center gap-3">
-                  <Sparkles className="w-4 h-4 text-[#cc785c]" />
-                  <span>Plans & Pricing</span>
-                </span>
-                <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-[#cc785c]/20 text-[#cc785c]">
-                  Upgrade
-                </span>
-              </button>
-            )}
           </div>
 
           <div className="px-4 pt-4 pb-2">

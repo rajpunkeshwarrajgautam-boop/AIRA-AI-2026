@@ -3,8 +3,10 @@ import type { Artifact } from '../types';
 export function generateArtifactSandboxHtml(
   artifact: Artifact,
   content: string,
-  isDark = false
+  isDark = false,
+  nonce = ''
 ): string {
+  const safeNonceJson = JSON.stringify(nonce);
   const logBridgeScript = `
     <script>
       (function() {
@@ -21,7 +23,7 @@ export function generateArtifactSandboxHtml(
               }
               return String(arg);
             }).join(' ');
-            window.parent.postMessage({ type: 'CONSOLE_LOG', level: level, message: message }, '*');
+            window.parent.postMessage({ type: 'CONSOLE_LOG', level: level, message: message, nonce: ${safeNonceJson} }, '*');
           } catch(e) {}
         }
 
