@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useMemo } from 'react';
 import {
   Check,
   Copy,
@@ -14,6 +14,7 @@ import { renderMarkdownToHtml } from '../utils/markdown';
 import { copyMessageAsRichText } from '../utils/richClipboard';
 import { ThinkingBlock } from './ThinkingBlock';
 import { ArtifactCard } from './ArtifactCard';
+import { extractArtifactsFromText } from '../utils/artifactParser';
 
 interface ChatMessageProps {
   message: Message;
@@ -118,6 +119,16 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
     window.setTimeout(() => setRichCopyStatus(null), 2600);
   };
 
+  const renderedArtifacts = useMemo(() => {
+    if (message.artifacts && message.artifacts.length > 0) {
+      return message.artifacts;
+    }
+    if (message.content && (message.content.includes('<antArtifact') || message.content.includes('<airaArtifact'))) {
+      return extractArtifactsFromText(message.content).artifacts;
+    }
+    return [];
+  }, [message.artifacts, message.content]);
+
   return (
     <motion.div
       layout
@@ -202,9 +213,9 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
               )}
             </motion.div>
 
-            {message.artifacts && message.artifacts.length > 0 && (
+            {renderedArtifacts.length > 0 && (
               <motion.div layout className="pt-3">
-                {message.artifacts.map(artifact => (
+                {renderedArtifacts.map(artifact => (
                   <ArtifactCard
                     key={artifact.id}
                     artifact={artifact}

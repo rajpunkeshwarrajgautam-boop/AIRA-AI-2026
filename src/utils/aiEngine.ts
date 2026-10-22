@@ -36,6 +36,8 @@ async function postChatStream(body: unknown): Promise<Response> {
 
 
 
+import { createStreamingArtifactDetector } from './artifactParser';
+
 export async function streamAIResponse(
   prompt: string,
   history: Array<{ role: 'user' | 'assistant'; content: string }>,
@@ -58,13 +60,30 @@ export async function streamAIResponse(
   }
 
   let accumulatedResponse = '';
+  const detector = createStreamingArtifactDetector(artifact => {
+    callbacks.onArtifactFound?.(artifact);
+  });
+
   const wrappedCallbacks: StreamCallbacks = {
     ...callbacks,
     onContentChunk: (chunk: string) => {
       accumulatedResponse += chunk;
-      callbacks.onContentChunk(chunk);
+      const { textToEmit, artifactUpdate } = detector.processChunk(chunk);
+      if (artifactUpdate && callbacks.onArtifactFound) {
+        callbacks.onArtifactFound(artifactUpdate);
+      }
+      if (textToEmit) {
+        callbacks.onContentChunk(textToEmit);
+      }
     },
     onComplete: () => {
+      const { remainingText, finalArtifact } = detector.flush();
+      if (finalArtifact && callbacks.onArtifactFound) {
+        callbacks.onArtifactFound(finalArtifact);
+      }
+      if (remainingText) {
+        callbacks.onContentChunk(remainingText);
+      }
       if (settings.autoConsolidateMemory !== false && accumulatedResponse.trim()) {
         try {
           agentMemory.consolidateFromTurn(prompt, accumulatedResponse);

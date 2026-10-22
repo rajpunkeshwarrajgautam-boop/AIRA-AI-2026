@@ -522,7 +522,17 @@ function App() {
             setActiveArtifact(artifact);
             updateConversation(id, c => ({
               ...c,
-              messages: c.messages.map(m => m.id === assistantId ? { ...m, artifacts: [...(m.artifacts || []), artifact] } : m),
+              messages: c.messages.map(m => {
+                if (m.id !== assistantId) return m;
+                const existing = m.artifacts || [];
+                const idx = existing.findIndex(a => a.id === artifact.id);
+                if (idx >= 0) {
+                  const updated = [...existing];
+                  updated[idx] = artifact;
+                  return { ...m, artifacts: updated };
+                }
+                return { ...m, artifacts: [...existing, artifact] };
+              }),
             }));
           },
           onApprovalRequired: approval => {
