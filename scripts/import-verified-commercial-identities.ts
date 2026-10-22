@@ -157,7 +157,8 @@ export async function validateAuthoritativeSourceSafety(
   }
 
   if (sourceClient) {
-    // 1. Enforce and prove read-only transaction state
+    // 1. Enforce and prove read-only transaction state across pool and session
+    await sourceClient.raw('SET default_transaction_read_only = on;');
     await sourceClient.raw('SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY;');
     await sourceClient.raw('SET TRANSACTION READ ONLY;');
 
@@ -199,6 +200,46 @@ export async function validateAuthoritativeSourceSafety(
       console.log(`[Source Guard] Verified exact Commercial PR #92 control-plane identity: ${neon_project_id}/${neon_branch_id}/${neon_endpoint_id}`);
     }
   }
+}
+
+/**
+ * Creates an authoritative read-only Knex client for the Commercial PR #92 source database.
+ * Enforces pool-level connection hook (pool.afterCreate) ensuring that EVERY physical pooled
+ * connection is automatically configured with:
+ * - default_transaction_read_only = on
+ * - SESSION CHARACTERISTICS AS TRANSACTION READ ONLY
+ */
+export function createReadOnlySourceClient(connectionString: string): Knex {
+  const classification = classifyDatabaseUrl(connectionString);
+
+  if (classification.isProduction) {
+    throw new Error(`[SECURITY FATAL] Source database cannot be Production (${PRODUCTION_NEON_PROJECT_ID})! Aborting.`);
+  }
+
+  if (classification.isStagingPermanent) {
+    throw new Error(`[SECURITY FATAL] Source database cannot be Permanent Staging (${STAGING_NEON_BRANCH_ID})!`);
+  }
+
+  if (!classification.isCommercialPr92 && !classification.isLocalOrCiTest) {
+    throw new Error(`[SECURITY FATAL] Source database is not the authorized Commercial PR #92 database (${COMMERCIAL_PR92_BRANCH_ID})! Got: ${classification.sanitizedTarget}`);
+  }
+
+  return knex({
+    client: 'pg',
+    connection: { connectionString, ssl: true },
+    pool: {
+      min: 1,
+      max: 2,
+      afterCreate: (conn: any, done: (err: any, conn: any) => void) => {
+        conn.query(
+          'SET default_transaction_read_only = on; SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY;',
+          (err: any) => {
+            done(err, conn);
+          }
+        );
+      }
+    }
+  });
 }
 
 export function validateTargetSafety(connectionString: string, options: { allowPermanentStaging?: boolean } = {}): void {
@@ -595,10 +636,7 @@ async function main() {
   validateAuthoritativeTargetSafety(targetCs, { allowPermanentStaging });
   await validateAuthoritativeSourceSafety(sourceCs);
 
-  const sourceClient = knex({
-    client: 'pg',
-    connection: { connectionString: sourceCs, ssl: true }
-  });
+  const sourceClient = createReadOnlySourceClient(sourceCs);
 
   const targetClient = knex({
     client: 'pg',

@@ -45,6 +45,75 @@ export interface CutoverStepDefinition {
   rollbackAction: string;
 }
 
+export interface FailureRecoveryPhase {
+  phase: 'BEFORE_MIGRATION' | 'DURING_MIGRATION' | 'AFTER_MIGRATION_BEFORE_MERGE' | 'AFTER_MERGE' | 'AFTER_HISTORICAL_IMPORT';
+  stageRange: string;
+  condition: string;
+  maintenanceDeactivationPermitted: boolean;
+  checkpointRestorationRequired: boolean;
+  codeRevertRequired: boolean;
+  recoveryProcedure: string;
+}
+
+/**
+ * Authoritative 5-Phase Cutover Failure Recovery Matrix.
+ * Guarantees that failures occurring after schema migrations 016–022 have begun
+ * CANNOT be resolved by merely deactivating the maintenance barrier.
+ */
+export const CUTOVER_FAILURE_RECOVERY_MATRIX: FailureRecoveryPhase[] = [
+  {
+    phase: 'BEFORE_MIGRATION',
+    stageRange: 'Stages 1–3 (Preflight, Checkpoint, Barrier Activation, Write Isolation Probe)',
+    condition: 'Failure occurs before schema migrations 016–022 are initiated. Staging database schema is intact at migration 015.',
+    maintenanceDeactivationPermitted: true,
+    checkpointRestorationRequired: false,
+    codeRevertRequired: false,
+    recoveryProcedure: 'Safe to deactivate maintenance barrier immediately (npx tsx scripts/staging-maintenance-control.ts --deactivate). Database schema has not been modified.'
+  },
+  {
+    phase: 'DURING_MIGRATION',
+    stageRange: 'Stage 4 (Applying Migrations 016–022)',
+    condition: 'Failure occurs mid-migration. Migrations 016–022 are partially applied, leaving schema in an inconsistent intermediate state.',
+    maintenanceDeactivationPermitted: false,
+    checkpointRestorationRequired: true,
+    codeRevertRequired: false,
+    recoveryProcedure: 'DO NOT DEACTIVATE MAINTENANCE BARRIER. Keep barrier active fail-closed. Restore permanent staging database (br-autumn-star-b36dfu5w) from the Step 3 Neon recovery checkpoint (staging-backup-pre-commercial-cutover) via Neon Console/CLI point-in-time restore. Verify restored database is at clean schema 015 before any barrier deactivation.'
+  },
+  {
+    phase: 'AFTER_MIGRATION_BEFORE_MERGE',
+    stageRange: 'Stage 4 (Migrations 016–022 complete, but PR #96 NOT yet merged into staging)',
+    condition: 'Migrations 016–022 succeeded, but Vercel preview build failed, or operator aborts before merging PR #96 into staging. Database is at schema 022 while staging branch code is at 015.',
+    maintenanceDeactivationPermitted: false,
+    checkpointRestorationRequired: true,
+    codeRevertRequired: false,
+    recoveryProcedure: 'DO NOT DEACTIVATE MAINTENANCE BARRIER. Merely deactivating maintenance would expose older staging code (schema 015) to incompatible schema 022 tables. Mandatory restoration of permanent staging database from Step 3 Neon recovery checkpoint (staging-backup-pre-commercial-cutover). Deactivate maintenance only after clean checkpoint restoration is verified.'
+  },
+  {
+    phase: 'AFTER_MERGE',
+    stageRange: 'Stage 4 post-merge through Stage 8 (Vercel staging deployment built/live, but app health check or smoke test fails)',
+    condition: 'PR #96 was merged into staging and Vercel deployed, but runtime error, health check failure, or regression detected before certification.',
+    maintenanceDeactivationPermitted: false,
+    checkpointRestorationRequired: true,
+    codeRevertRequired: true,
+    recoveryProcedure: '1. Revert merge commit on staging branch: git revert -m 1 <merge_sha> && git push origin staging.\n2. Vercel automatically deploys reverted commit or promote previous stable staging deployment.\n3. Keep maintenance barrier active.\n4. Restore permanent staging database from Step 3 Neon recovery checkpoint (staging-backup-pre-commercial-cutover).\n5. Deactivate maintenance barrier ONLY after both code revert and database restore are confirmed complete.'
+  },
+  {
+    phase: 'AFTER_HISTORICAL_IMPORT',
+    stageRange: 'Stage 5–6 (Historical identity import completed, but integrity audit fails or data corruption detected)',
+    condition: 'Stage 5 import executed and committed, but Stage 6 integrity check, wallet invariant, or browser acceptance reveals corruption or data drift.',
+    maintenanceDeactivationPermitted: false,
+    checkpointRestorationRequired: true,
+    codeRevertRequired: true,
+    recoveryProcedure: '1. Revert staging branch if PR #96 was merged.\n2. DO NOT deactivate maintenance barrier.\n3. Restore permanent staging database from Step 3 Neon recovery checkpoint (staging-backup-pre-commercial-cutover) to erase all imported data safely.\n4. Re-verify restored database integrity (assert 0 corrupted accounts, clean baseline).\n5. Deactivate maintenance barrier only after clean restoration is verified.'
+  }
+];
+
+export function getFailureRecoveryPhase(phase: FailureRecoveryPhase['phase']): FailureRecoveryPhase {
+  const match = CUTOVER_FAILURE_RECOVERY_MATRIX.find(p => p.phase === phase);
+  if (!match) throw new Error(`Unknown failure recovery phase: ${phase}`);
+  return match;
+}
+
 export const CUTOVER_PROTOCOL_STEPS: CutoverStepDefinition[] = [
   {
     step: 1,
@@ -88,7 +157,7 @@ export const CUTOVER_PROTOCOL_STEPS: CutoverStepDefinition[] = [
     prerequisites: ['Step 3 complete'],
     verificationGate: 'verifyStagingWriteIsolation confirms all 5 gates PASS: STAGING_DATABASE_IDENTITY, MAINTENANCE_BARRIER_ACTIVE, RUNTIME_WRITE_RESTRICTION, IN_FLIGHT_WRITES_DRAINED, PRIVILEGED_MIGRATION_PATH.',
     safeguard: 'Prevents race conditions, background writers, or older Vercel deployments from mutating database during cutover.',
-    rollbackAction: 'Deactivate maintenance barrier via scripts/staging-maintenance-control.ts --deactivate.'
+    rollbackAction: 'Before migrations begin: Deactivate maintenance barrier via scripts/staging-maintenance-control.ts --deactivate. (NOTE: If migrations have commenced, follow CUTOVER_FAILURE_RECOVERY_MATRIX; barrier deactivation alone is prohibited).'
   },
   {
     step: 5,
@@ -99,7 +168,7 @@ export const CUTOVER_PROTOCOL_STEPS: CutoverStepDefinition[] = [
     prerequisites: ['Step 4 complete', 'Owner merge to staging authorized', 'Staging DB guard verified'],
     verificationGate: 'knex_migrations table has exactly 22 applied migrations; db:verify:deploy exits with code 0.',
     safeguard: 'runMigrations skips Knex lock acquisition under maintenance mode when all migrations are already applied; fails closed if unapplied migrations remain without token; staging-db-guard.ts verifies target.',
-    rollbackAction: 'Revert staging branch commit or restore database to Step 3 recovery checkpoint.'
+    rollbackAction: 'DO NOT merely deactivate maintenance. If migration fails mid-run, keep barrier active and restore database from Step 3 recovery checkpoint. If aborted before merge, restore database from checkpoint. If merged, revert staging git commit and restore database.'
   },
   {
     step: 6,
@@ -110,7 +179,7 @@ export const CUTOVER_PROTOCOL_STEPS: CutoverStepDefinition[] = [
     prerequisites: ['Step 5 complete', 'Migrations 016–022 applied', 'Source DB credentials available strictly to owner session'],
     verificationGate: 'Import completes within an atomic transaction. Reconciles exactly 3 OAuth mappings, 2 billing customers, 2 credit accounts (100 credits each).',
     safeguard: 'Authoritative Neon metadata check confirms project mute-frost-50372225; source is read-only; target writes run in an atomic Knex transaction.',
-    rollbackAction: 'Transaction automatically aborts on error (zero partial data loss); restore from Step 3 checkpoint if post-import corruption occurs.'
+    rollbackAction: 'In-flight transaction aborts automatically on error. If committed import fails subsequent integrity checks, DO NOT deactivate maintenance: revert staging code if merged, and restore database from Step 3 Neon recovery checkpoint.'
   },
   {
     step: 7,
@@ -121,7 +190,7 @@ export const CUTOVER_PROTOCOL_STEPS: CutoverStepDefinition[] = [
     prerequisites: ['Step 6 complete'],
     verificationGate: 'All 11 data integrity assertions pass with zero errors (verifyStagingCutoverIntegrity returns certified=true).',
     safeguard: 'Fails closed if any wallet drift, orphan conversation, or duplicate OAuth identity is discovered.',
-    rollbackAction: 'Stop cutover immediately. Do not certify staging. Revert to Step 3 recovery branch.'
+    rollbackAction: 'Stop cutover immediately. Do not certify staging. Revert staging git merge if applied, and restore database to Step 3 recovery checkpoint before any barrier deactivation.'
   },
   {
     step: 8,
@@ -143,7 +212,7 @@ export const CUTOVER_PROTOCOL_STEPS: CutoverStepDefinition[] = [
     prerequisites: ['Steps 1 through 8 all verified and certified'],
     verificationGate: 'Real browser login succeeds with historical accounts; credit balance displays 100 credits; conversations stream; maintenance barrier cleanly deactivated.',
     safeguard: 'Zero Production mutation; Production Neon and domains remain completely isolated.',
-    rollbackAction: 'Revoke staging session; report defect; isolate affected component.'
+    rollbackAction: 'If browser acceptance fails: Keep barrier active. If defect involves schema/data, execute Step 3 Neon checkpoint restore and revert staging code. Do not deactivate maintenance on an uncertified release.'
   }
 ];
 

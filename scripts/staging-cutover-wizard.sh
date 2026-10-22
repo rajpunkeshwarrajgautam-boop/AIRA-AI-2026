@@ -139,6 +139,55 @@ finish() {
   printf '\n'
 }
 
+show_rollback_protocol() {
+  local phase="$1"
+  printf '\n%s%s🚨 CRITICAL FAILURE RECOVERY PROTOCOL [%s]%s\n' "$BOLD" "$RED" "$phase" "$RESET"
+  case "$phase" in
+    BEFORE_MIGRATION)
+      say "Condition: Failure occurred before schema migrations 016–022 were initiated."
+      say "Action: Safe to deactivate maintenance barrier immediately."
+      say "Command: npx tsx scripts/staging-maintenance-control.ts --deactivate"
+      ;;
+    DURING_MIGRATION)
+      warn "Condition: Schema migrations 016–022 failed mid-execution or were interrupted!"
+      warn "DO NOT DEACTIVATE MAINTENANCE BARRIER. Schema is in an inconsistent intermediate state."
+      say "Mandatory Action:"
+      say "  1. Keep maintenance barrier active fail-closed."
+      say "  2. Go to Neon Console (project mute-frost-50372225):"
+      say "     Restore branch 'main' (br-autumn-star-b36dfu5w) from recovery checkpoint: '${CHECKPOINT_NAME:-staging-backup-pre-commercial-cutover}'."
+      say "  3. Verify restored branch schema is at baseline (23 public tables, migration 015)."
+      say "  4. Deactivate maintenance barrier ONLY AFTER database restoration is verified."
+      ;;
+    AFTER_MIGRATION_BEFORE_MERGE)
+      warn "Condition: Migrations 016–022 were applied, but PR #96 is NOT merged into staging."
+      warn "DO NOT DEACTIVATE MAINTENANCE BARRIER. Database schema is at 022 while staging branch code is at 015."
+      say "Mandatory Action:"
+      say "  1. Restore permanent staging database from Neon recovery checkpoint: '${CHECKPOINT_NAME:-staging-backup-pre-commercial-cutover}'."
+      say "  2. Verify restored database schema is at baseline (migration 015)."
+      say "  3. Deactivate maintenance barrier ONLY AFTER database restoration is verified."
+      ;;
+    AFTER_MERGE)
+      warn "Condition: PR #96 was merged into staging, but build, health check, or certification failed."
+      say "Mandatory Action:"
+      say "  1. Revert merge commit on staging branch:"
+      say "     git revert -m 1 <merge_commit_sha> && git push origin staging"
+      say "  2. Keep maintenance barrier active fail-closed."
+      say "  3. Restore permanent staging database from Neon recovery checkpoint: '${CHECKPOINT_NAME:-staging-backup-pre-commercial-cutover}'."
+      say "  4. Deactivate maintenance barrier ONLY AFTER both code revert and DB restore are complete."
+      ;;
+    AFTER_HISTORICAL_IMPORT)
+      warn "Condition: Historical identity import completed, but integrity verification failed."
+      say "Mandatory Action:"
+      say "  1. Revert staging branch merge if merged."
+      say "  2. DO NOT deactivate maintenance barrier."
+      say "  3. Restore permanent staging database from Neon recovery checkpoint: '${CHECKPOINT_NAME:-staging-backup-pre-commercial-cutover}'."
+      say "  4. Re-verify restored database integrity to confirm clean baseline."
+      say "  5. Deactivate maintenance barrier ONLY AFTER restoration is verified."
+      ;;
+  esac
+  printf '\n'
+}
+
 # ──────────────────────────────────────────────────────────────────────────
 # STAGES: Authoritative Staging Cutover Procedure
 # ──────────────────────────────────────────────────────────────────────────
@@ -222,6 +271,14 @@ say "Activate the authoritative staging maintenance barrier on permanent staging
 say "This enforces read-only defaults and table triggers to block background writers and older deployments."
 step "Announce temporary maintenance on staging.virexaaiventures.com"
 
+step "Owner Credential Retirement & Connection Draining Runbook:"
+say "  a. Execute role separation DDL: psql \"\$STAGING_DB_URL\" -f scripts/setup-staging-role-separation.sql"
+say "     (Provisions aira_staging_runtime without CREATE privileges or DML on _aira_staging_maintenance)"
+say "  b. Update Vercel Preview (staging) DATABASE_URL to use aira_staging_runtime"
+say "  c. Terminate active backend poolers (SELECT pg_terminate_backend(pid)...)"
+say "  d. Retain rotated neondb_owner migration credential securely in operator vault"
+say "  e. Preserve Commercial PR #92 source and Production credentials untouched"
+
 ask_secret STAGING_DB_URL "Paste permanent staging DATABASE_URL to verify write isolation:"
 
 if confirm "Activate the staging-only maintenance barrier now?"; then
@@ -233,6 +290,7 @@ say "Probing staging database write isolation across all 5 mandatory release gat
 if ! STAGING_DB_URL="$STAGING_DB_URL" npx tsx scripts/verify-staging-write-isolation.ts "$STAGING_DB_URL"; then
   warn "SECURITY FATAL: Staging write isolation gate failed! All 5 release-blocking gates must PASS."
   warn "Cutover aborted fail-closed to prevent race conditions."
+  show_rollback_protocol "BEFORE_MIGRATION"
   exit 1
 fi
 
@@ -247,13 +305,27 @@ say "vercel.json buildCommand executes: scripts/staging-db-guard.ts && npm run d
 step "Execute migrations 016–022 with operator token:"
 say "  AIRA_MAINTENANCE_BYPASS_TOKEN=\"\$BYPASS_TOKEN\" DATABASE_URL=\"\$STAGING_DB_URL\" npm run db:migrate"
 if confirm "Run schema migrations 016–022 now using operator token and staging DATABASE_URL?"; then
-  AIRA_MAINTENANCE_BYPASS_TOKEN="$BYPASS_TOKEN" DATABASE_URL="$STAGING_DB_URL" npm run db:migrate
+  if ! AIRA_MAINTENANCE_BYPASS_TOKEN="$BYPASS_TOKEN" DATABASE_URL="$STAGING_DB_URL" npm run db:migrate; then
+    warn "SECURITY FATAL: Schema migrations 016–022 failed during execution!"
+    show_rollback_protocol "DURING_MIGRATION"
+    exit 1
+  fi
+else
+  warn "Schema migrations aborted by operator."
+  show_rollback_protocol "BEFORE_MIGRATION"
+  exit 1
 fi
+
 open_url "https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/96"
 step "Click 'Merge pull request' (or Rebase and merge) on PR #96"
 step "Monitor the Vercel deployment at: https://vercel.com/rajpunkeshwarrajgautam-boops-projects/aira-ai-2026"
 step "Confirm Vercel build output logs: '[db:migrate] Maintenance barrier active on staging. All 22 migrations already applied. Skipping Knex write lock acquisition.'"
 step "Confirm db:verify:deploy succeeds and Vercel build completes successfully"
+if ! confirm "Did PR #96 merge and Vercel staging deployment complete successfully?"; then
+  warn "Cutover aborted after migrations applied but before successful merge/deployment."
+  show_rollback_protocol "AFTER_MIGRATION_BEFORE_MERGE"
+  exit 1
+fi
 pause "Press Enter once the Vercel deployment is READY on staging..."
 
 # ── Stage 5: Execute Controlled Historical Identity Import ────────────────
@@ -272,6 +344,7 @@ say "Running import in atomic transaction with authoritative Neon identity guard
 if ! AIRA_ALLOW_STAGING_LIVE_IMPORT=true SOURCE_DB_URL="$SOURCE_DB_URL" TARGET_DB_URL="$STAGING_DB_URL" \
   npx tsx scripts/import-verified-commercial-identities.ts "$STAGING_DB_URL"; then
   warn "SECURITY FATAL: Controlled historical identity import failed! Aborting."
+  show_rollback_protocol "AFTER_HISTORICAL_IMPORT"
   exit 1
 fi
 
@@ -285,6 +358,7 @@ say "Running comprehensive 11-rule data integrity and continuity verification ag
 if ! TARGET_DB_URL="$STAGING_DB_URL" AIRA_ALLOW_STAGING_LIVE_IMPORT=true \
   npx tsx scripts/staging-cutover-orchestrator.ts --verify-integrity "$STAGING_DB_URL"; then
   warn "SECURITY FATAL: Staging cutover integrity verification failed! One or more of the 11 gates did not pass."
+  show_rollback_protocol "AFTER_HISTORICAL_IMPORT"
   exit 1
 fi
 
@@ -319,7 +393,8 @@ if confirm "Did real-browser acceptance succeed completely?"; then
   finish
 else
   warn "❌ RELEASE NOT CERTIFIED — Real-browser acceptance failed or was rejected by owner!"
-  warn "Cutover aborted. Do not declare release complete. Follow rollback to Neon recovery checkpoint if needed."
+  warn "Cutover aborted. Do not declare release complete. Follow rollback protocol to Neon recovery checkpoint."
+  show_rollback_protocol "AFTER_MERGE"
   exit 1
 fi
 }

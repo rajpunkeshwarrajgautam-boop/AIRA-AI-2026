@@ -25,7 +25,8 @@ import {
 import {
   validateAuthoritativeTargetSafety,
   verifyConnectedTargetMetadata,
-  validateAuthoritativeSourceSafety
+  validateAuthoritativeSourceSafety,
+  createReadOnlySourceClient
 } from '../scripts/import-verified-commercial-identities.js';
 import {
   verifyNeonCheckpointFromList,
@@ -35,7 +36,9 @@ import {
   verifyStagingWriteIsolation
 } from '../scripts/verify-staging-write-isolation.js';
 import {
-  verifyStagingCutoverIntegrity
+  verifyStagingCutoverIntegrity,
+  CUTOVER_FAILURE_RECOVERY_MATRIX,
+  getFailureRecoveryPhase
 } from '../scripts/staging-cutover-orchestrator.js';
 
 console.log('\n================================================================================');
@@ -175,6 +178,24 @@ assert.rejects(async () => {
   );
 }, /Proof of read-only source connection failed/);
 console.log('  ✓ Fail closed: Source connection rejected if SHOW transaction_read_only !== on');
+
+// 3.5 createReadOnlySourceClient rejects Production
+assert.throws(() => {
+  createReadOnlySourceClient(`postgresql://neondb_owner@${PRODUCTION_NEON_ENDPOINT_ID}.aws-ap-southeast-1.neon.tech/neondb`);
+}, /\[SECURITY FATAL\] Source database cannot be Production/);
+console.log('  ✓ Fail closed: createReadOnlySourceClient unconditionally rejects Production');
+
+// 3.6 createReadOnlySourceClient rejects Permanent Staging
+assert.throws(() => {
+  createReadOnlySourceClient(`postgresql://neondb_owner@${STAGING_NEON_ENDPOINT_ID}.aws-ap-southeast-1.neon.tech/neondb`);
+}, /\[SECURITY FATAL\] Source database cannot be Permanent Staging/);
+console.log('  ✓ Fail closed: createReadOnlySourceClient unconditionally rejects Permanent Staging');
+
+// 3.7 createReadOnlySourceClient pool-level configuration verification
+const localSourceClient = createReadOnlySourceClient('postgresql://postgres@localhost:5432/test_commercial_source');
+assert.equal(typeof (localSourceClient.client as any).config.pool.afterCreate, 'function', 'Knex pool must have afterCreate hook configured');
+await localSourceClient.destroy();
+console.log('  ✓ Knex pool-level afterCreate read-only hook verified on source client');
 
 
 // ── Test Group 4: Neon Recovery Checkpoint Verification Gate ────────────────
@@ -554,6 +575,33 @@ assert.equal(auditMissingMig.certified, false);
 assert.equal(auditMissingMig.checks['MIGRATIONS_016_022_APPLIED'], false);
 console.log('  ✓ Fail closed: Staging not certified when migrations count < 22');
 
+// 6.2 Authoritative 5-Phase Cutover Failure Recovery Matrix Verification
+assert.equal(CUTOVER_FAILURE_RECOVERY_MATRIX.length, 5, 'Matrix must define exactly 5 distinct operational recovery phases');
+
+const beforeMig = getFailureRecoveryPhase('BEFORE_MIGRATION');
+assert.equal(beforeMig.maintenanceDeactivationPermitted, true);
+assert.equal(beforeMig.checkpointRestorationRequired, false);
+
+const duringMig = getFailureRecoveryPhase('DURING_MIGRATION');
+assert.equal(duringMig.maintenanceDeactivationPermitted, false, 'Deactivating maintenance during migration failure is STRICTLY PROHIBITED');
+assert.equal(duringMig.checkpointRestorationRequired, true, 'Checkpoint restoration is MANDATORY during migration failure');
+
+const afterMigBeforeMerge = getFailureRecoveryPhase('AFTER_MIGRATION_BEFORE_MERGE');
+assert.equal(afterMigBeforeMerge.maintenanceDeactivationPermitted, false);
+assert.equal(afterMigBeforeMerge.checkpointRestorationRequired, true);
+
+const afterMerge = getFailureRecoveryPhase('AFTER_MERGE');
+assert.equal(afterMerge.maintenanceDeactivationPermitted, false);
+assert.equal(afterMerge.checkpointRestorationRequired, true);
+assert.equal(afterMerge.codeRevertRequired, true, 'Code revert on staging branch is mandatory after merge');
+
+const afterImport = getFailureRecoveryPhase('AFTER_HISTORICAL_IMPORT');
+assert.equal(afterImport.maintenanceDeactivationPermitted, false);
+assert.equal(afterImport.checkpointRestorationRequired, true);
+
+assert.throws(() => getFailureRecoveryPhase('INVALID_PHASE' as any), /Unknown failure recovery phase/);
+console.log('  ✓ Authoritative 5-phase failure recovery matrix verified: deactivation alone strictly prohibited after migrations begin');
+
 console.log('\n================================================================================');
-console.log('  ✓ ALL 26 CUTOVER SAFETY GATE FAIL-CLOSED ASSERTIONS PASSED SUCCESSFULLY!      ');
+console.log('  ✓ ALL 30 CUTOVER SAFETY GATE FAIL-CLOSED ASSERTIONS PASSED SUCCESSFULLY!      ');
 console.log('================================================================================\n');
