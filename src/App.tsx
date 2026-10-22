@@ -33,12 +33,15 @@ import { neonAuth, authenticatedApiFetch } from './lib/neonAuth';
 import { LibraryView } from './components/LibraryView';
 import { BuilderWorkspace } from './components/BuilderWorkspace';
 import { AutomationsView } from './components/AutomationsView';
+import { AgentsView } from './components/AgentsView';
 
 const MODE_CONTEXT: Record<WorkspaceMode, string> = {
   chat: '',
-  research: 'Work in research mode. Decompose the question, identify evidence needs, distinguish facts from inference, and provide a structured synthesis.',
-  library: 'Work in library mode. Prefer the supplied project knowledge and clearly distinguish retrieved context from general reasoning.',
+  research: 'Work in research mode. Decompose the question, identify evidence needs, distinguish facts from inference, and provide a structured synthesis with primary source citations.',
+  builder: 'Work in builder mode. Create production-quality, modular, bug-free applications with modern frontend and backend architectures, sandboxed execution, and comprehensive test coverage.',
   agents: 'Work in agent-mission mode. Convert the objective into an executable mission with steps, tools, checkpoints, risks, and a final deliverable.',
+  vision: 'Work in vision mode. Provide detailed visual understanding, multimodal spatial analysis, UI layout critique, and high-fidelity image design parameters.',
+  library: 'Work in library mode. Prefer the supplied project knowledge and clearly distinguish retrieved context from general reasoning.',
   automations: 'Work in automation-design mode. Identify the trigger, conditions, cadence, action, failure handling, and expected output.',
 };
 
@@ -715,6 +718,8 @@ function App() {
           {workspaceMode === 'library' ? (
             <LibraryView />
           ) : workspaceMode === 'agents' ? (
+            <AgentsView />
+          ) : workspaceMode === 'builder' ? (
             <BuilderWorkspace model={settings.activeModel} />
           ) : workspaceMode === 'automations' ? (
             <AutomationsView />
@@ -745,7 +750,7 @@ function App() {
           ))}
         </div>
 
-          {workspaceMode !== 'agents' && (<div className="shrink-0 min-w-0 relative z-10 pt-2 sm:pt-4 gradient-mask-bottom">
+          {workspaceMode !== 'agents' && workspaceMode !== 'builder' && (<div className="shrink-0 min-w-0 relative z-10 pt-2 sm:pt-4 gradient-mask-bottom">
             {executionStatus && (
               <div className="max-w-2xl mx-auto px-4 mb-2">
                 <div className="flex items-center gap-2 text-xs text-orange-600 dark:text-orange-400 bg-orange-50/90 dark:bg-orange-950/40 border border-orange-200/60 dark:border-orange-800/50 rounded-lg px-3 py-1.5 shadow-sm backdrop-blur">

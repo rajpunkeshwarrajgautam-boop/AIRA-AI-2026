@@ -1,5 +1,5 @@
 
-export type WorkspaceMode = 'chat' | 'research' | 'library' | 'agents' | 'automations';
+export type WorkspaceMode = 'chat' | 'research' | 'builder' | 'agents' | 'vision' | 'library' | 'automations';
 
 export type ModelId = 
   | 'claude-3-7-sonnet' 

@@ -12,6 +12,8 @@ import {
   SlidersHorizontal,
   Telescope,
   Workflow,
+  Cpu,
+  Wand2,
   X,
 } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
@@ -36,9 +38,11 @@ const MODE_OPTIONS: Array<{
 }> = [
   { id: 'chat', label: 'Chat', hint: 'General reasoning and creation', icon: MessageSquareText },
   { id: 'research', label: 'Research', hint: 'Investigate and synthesize evidence', icon: Telescope },
+  { id: 'builder', label: 'Builder', hint: 'Isolated sandbox app engineering', icon: Cpu },
   { id: 'agents', label: 'Agents', hint: 'Plan autonomous multi-step missions', icon: Bot },
-  { id: 'library', label: 'Library', hint: 'Work from workspace knowledge', icon: Library },
+  { id: 'vision', label: 'Vision', hint: 'Multimodal analysis and image studio', icon: Wand2 },
   { id: 'automations', label: 'Automations', hint: 'Design trigger-action workflows', icon: Workflow },
+  { id: 'library', label: 'Library', hint: 'Work from workspace knowledge', icon: Library },
 ];
 
 const STYLE_OPTIONS = [
@@ -104,7 +108,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const placeholderMap: Record<WorkspaceMode, string> = {
     chat: 'How can Aira help you today?',
     research: 'What would you like Aira to research?',
+    builder: 'Describe the component, app, or system you want to build...',
     agents: 'Describe the outcome you want an agent to deliver...',
+    vision: 'Upload an image or describe what visual concept you want to analyze or create...',
     automations: 'Describe the trigger and action to automate...',
     library: 'Ask Aira about your workspace knowledge...',
   };

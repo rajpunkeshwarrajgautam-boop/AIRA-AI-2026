@@ -117,7 +117,9 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
   const dynamicGreetingTitle = useMemo(() => {
     // If specific workspace mode is active, reflect it
     if (workspaceMode === 'research') return 'Research & Investigation';
+    if (workspaceMode === 'builder') return 'Sandbox App Builder';
     if (workspaceMode === 'agents') return 'Autonomous Missions';
+    if (workspaceMode === 'vision') return 'Multimodal Vision Studio';
     if (workspaceMode === 'automations') return 'Workflow Engineering';
     if (workspaceMode === 'library') return 'Workspace Knowledge';
 
@@ -138,8 +140,14 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
     if (workspaceMode === 'research') {
       return 'Cross-examine sources, gather structured citations, and synthesize technical briefs.';
     }
+    if (workspaceMode === 'builder') {
+      return 'Scaffold, preview, and test live frontend components and full-stack services.';
+    }
     if (workspaceMode === 'agents') {
       return 'Delegate multi-step goals with automated checkpoints and verifiable deliverables.';
+    }
+    if (workspaceMode === 'vision') {
+      return 'Analyze UI mocks, generate conceptual visuals, and inspect design hierarchy.';
     }
     if (workspaceMode === 'automations') {
       return 'Construct repeatable trigger-action routines with self-healing failure guards.';
@@ -239,6 +247,64 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
           prompt: 'Analyze current adoption trends for local agentic coding assistants and identify key enterprise security requirements.',
           icon: <Bot className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
         }
+      ];
+    }
+
+    if (workspaceMode === 'builder') {
+      return [
+        {
+          id: 'builder-dash',
+          title: 'Scaffold interactive React app',
+          prompt: 'Scaffold a complete modern React application with responsive Tailwind layout, state management, and real-time interactive widgets.',
+          icon: <Code2 className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
+        },
+        {
+          id: 'builder-api',
+          title: 'Implement robust API service',
+          prompt: 'Build a production-ready TypeScript backend handler with Zod input validation, error boundaries, and comprehensive unit tests.',
+          icon: <Layers className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
+        },
+        {
+          id: 'builder-diagram',
+          title: 'Architect system component model',
+          prompt: 'Design an end-to-end component hierarchy and state flow diagram using Mermaid syntax for an enterprise SaaS platform.',
+          icon: <Brain className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
+        },
+        {
+          id: 'builder-audit',
+          title: 'Refactor and eliminate bottlenecks',
+          prompt: 'Audit this code block for memory leaks, unnecessary re-renders, and missing error boundary fallbacks.',
+          icon: <Zap className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
+        },
+      ];
+    }
+
+    if (workspaceMode === 'vision') {
+      return [
+        {
+          id: 'vision-ui-critique',
+          title: 'Critique user interface design',
+          prompt: 'Analyze this UI screenshot for visual balance, typography scale, spacing consistency, and accessibility color contrast.',
+          icon: <Compass className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
+        },
+        {
+          id: 'vision-flowchart',
+          title: 'Extract diagram into code',
+          prompt: 'Inspect this architecture diagram image and convert the entities, connectors, and boundaries into clean Mermaid code.',
+          icon: <Layers className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
+        },
+        {
+          id: 'vision-concept',
+          title: 'Generate UI aesthetic concept',
+          prompt: 'Design a clean editorial dark-mode aesthetic for a next-generation developer telemetry and observability dashboard.',
+          icon: <Code2 className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
+        },
+        {
+          id: 'vision-svg',
+          title: 'Create mathematical vector artwork',
+          prompt: 'Generate an SVG geometric icon based on interlocking topological loops with subtle gradients and crisp hairlines.',
+          icon: <Zap className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
+        },
       ];
     }
 
