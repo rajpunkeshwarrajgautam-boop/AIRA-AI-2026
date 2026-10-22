@@ -82,13 +82,13 @@ export const CUTOVER_PROTOCOL_STEPS: CutoverStepDefinition[] = [
   {
     step: 4,
     id: '4_PREVENT_CONCURRENT_WRITES',
-    title: 'Verify Effective Staging Write Isolation',
+    title: 'Activate Staging Maintenance Barrier & Verify Write Isolation',
     executor: 'OWNER_MANUAL',
-    description: 'Announce staging maintenance window and machine-verify zero active client write transactions (pg_stat_activity) and zero conflicting table locks (pg_locks).',
+    description: 'Activate reversible database maintenance barrier on mute-frost-50372225 (read-only default, sentinel table, write triggers), drain in-flight transactions, and machine-verify all 5 write-isolation gates before merge.',
     prerequisites: ['Step 3 complete'],
-    verificationGate: 'pg_stat_activity confirms zero active write transactions and pg_locks confirms zero conflicting exclusive locks.',
-    safeguard: 'Prevents race conditions or session collisions during account reconciliation.',
-    rollbackAction: 'Clear maintenance mode flag and restore normal staging routing.'
+    verificationGate: 'verifyStagingWriteIsolation confirms all 5 gates PASS: STAGING_DATABASE_IDENTITY, MAINTENANCE_BARRIER_ACTIVE, RUNTIME_WRITE_RESTRICTION, IN_FLIGHT_WRITES_DRAINED, PRIVILEGED_MIGRATION_PATH.',
+    safeguard: 'Prevents race conditions, background writers, or older Vercel deployments from mutating database during cutover.',
+    rollbackAction: 'Deactivate maintenance barrier via scripts/staging-maintenance-control.ts --deactivate.'
   },
   {
     step: 5,
@@ -137,11 +137,11 @@ export const CUTOVER_PROTOCOL_STEPS: CutoverStepDefinition[] = [
   {
     step: 9,
     id: '9_PERMIT_REAL_BROWSER_ACCEPTANCE',
-    title: 'Permit Real-Browser Acceptance Testing',
+    title: 'Permit Real-Browser Acceptance Testing & Deactivate Maintenance Barrier',
     executor: 'OWNER_MANUAL',
-    description: 'Unlock staging application for owner real-browser acceptance: direct Google/GitHub login, conversation continuation, credit display, and chat completions.',
+    description: 'Perform owner real-browser acceptance (Google/GitHub login, credit balance, chat stream), and deactivate the staging maintenance barrier once all acceptance criteria succeed.',
     prerequisites: ['Steps 1 through 8 all verified and certified'],
-    verificationGate: 'Real browser login succeeds with historical accounts; credit balance displays 100 credits; conversations stream.',
+    verificationGate: 'Real browser login succeeds with historical accounts; credit balance displays 100 credits; conversations stream; maintenance barrier cleanly deactivated.',
     safeguard: 'Zero Production mutation; Production Neon and domains remain completely isolated.',
     rollbackAction: 'Revoke staging session; report defect; isolate affected component.'
   }

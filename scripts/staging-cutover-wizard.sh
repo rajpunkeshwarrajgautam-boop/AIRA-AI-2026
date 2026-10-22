@@ -216,22 +216,27 @@ fi
 note "✓ Machine-verifiable Neon recovery checkpoint confirmed active."
 pause "Press Enter to proceed to staging write isolation..."
 
-# ── Stage 3: Staging Maintenance Window & Write Isolation ──────────────────
-stage "Staging Write Isolation Gate"
-say "Prevent concurrent client writes to staging during schema migration and identity import."
+# ── Stage 3: Staging Maintenance Barrier & Write Isolation ──────────────────
+stage "Staging Maintenance Barrier & Write Isolation Gate"
+say "Activate the authoritative staging maintenance barrier on permanent staging."
+say "This enforces read-only defaults and table triggers to block background writers and older deployments."
 step "Announce temporary maintenance on staging.virexaaiventures.com"
-step "Verify zero active client write traffic to mute-frost-50372225 main branch"
 
 ask_secret STAGING_DB_URL "Paste permanent staging DATABASE_URL to verify write isolation:"
 
-say "Probing staging database for active client transactions and conflicting locks..."
-if ! npx tsx scripts/verify-staging-write-isolation.ts "$STAGING_DB_URL"; then
-  warn "SECURITY FATAL: Staging write isolation gate failed! Active transactions detected."
+if confirm "Activate the staging-only maintenance barrier now?"; then
+  say "Activating database maintenance barrier..."
+  STAGING_DB_URL="$STAGING_DB_URL" npx tsx scripts/staging-maintenance-control.ts --activate
+fi
+
+say "Probing staging database write isolation across all 5 mandatory release gates..."
+if ! STAGING_DB_URL="$STAGING_DB_URL" npx tsx scripts/verify-staging-write-isolation.ts "$STAGING_DB_URL"; then
+  warn "SECURITY FATAL: Staging write isolation gate failed! All 5 release-blocking gates must PASS."
   warn "Cutover aborted fail-closed to prevent race conditions."
   exit 1
 fi
 
-note "✓ Effective staging write isolation machine-verified."
+note "✓ All 5 staging write isolation gates verified PASS."
 pause "Press Enter to proceed to merge authorization..."
 
 # ── Stage 4: Merge PR #96 into staging ────────────────────────────────────
@@ -296,10 +301,14 @@ step "1. Click 'Sign In' and authenticate with verified Google or GitHub account
 step "2. Confirm credit balance displays 100 credits (1:1 wallet continuity)"
 step "3. Open previous conversation and verify historical messages are visible"
 step "4. Send a test message and verify streaming response"
-step "5. Close maintenance window"
+step "5. Deactivate maintenance barrier to restore normal staging traffic"
 
 if confirm "Did real-browser acceptance succeed completely?"; then
-  note "✓ Real-browser acceptance certified and signed off by owner."
+  say "Deactivating permanent staging maintenance barrier..."
+  if [[ -n "${STAGING_DB_URL:-}" ]]; then
+    STAGING_DB_URL="$STAGING_DB_URL" npx tsx scripts/staging-maintenance-control.ts --deactivate
+  fi
+  note "✓ Real-browser acceptance certified and maintenance barrier cleanly deactivated."
   finish
 else
   warn "❌ RELEASE NOT CERTIFIED — Real-browser acceptance failed or was rejected by owner!"

@@ -67,6 +67,9 @@ jobs:
       - name: Release wizard & cutover safety gates certification
         run: npm run test:cutover-safety
 
+      - name: Staging maintenance barrier & write isolation certification
+        run: npm run test:maintenance-barrier
+
       - name: Staging preflight validation
         run: npx tsx scripts/validate-staging-pipeline.ts preflight
 

@@ -315,15 +315,55 @@ assert.equal(resConflictingLock.conflictingLocks.length, 1);
 assert.match(resConflictingLock.details, /conflicting lock/);
 console.log('  ✓ Fail closed: Conflicting table lock fails write isolation gate');
 
-// 5.3 Clean idle staging state
-const mockCleanIsolationClient: any = {
+// 5.3 Missing maintenance barrier fails write isolation gate
+const mockMissingBarrierClient: any = {
   raw: async () => ({ rows: [] })
+};
+const resMissingBarrier = await verifyStagingWriteIsolation(mockMissingBarrierClient);
+assert.equal(resMissingBarrier.isolated, false);
+assert.equal(resMissingBarrier.maintenanceBarrierActive.status, 'FAIL');
+console.log('  ✓ Fail closed: Inactive maintenance barrier fails write isolation gate');
+
+// 5.4 Clean idle staging state with active maintenance barrier passes all 5 gates
+const mockCleanIsolationClient: any = {
+  raw: async (sql: string) => {
+    if (sql.includes('_aira_staging_maintenance')) {
+      return {
+        rows: [{
+          is_active: true,
+          activated_at: '2026-10-22T00:00:00Z',
+          activated_by: 'authorized_cutover_operator',
+          reason: 'cutover',
+          bypass_token_hash: 'hash'
+        }]
+      };
+    }
+    if (sql.includes('default_transaction_read_only')) {
+      return {
+        rows: [{
+          db_name: 'neondb',
+          default_ro: 'on',
+          project_id: STAGING_NEON_PROJECT_ID,
+          branch_id: STAGING_NEON_BRANCH_ID
+        }]
+      };
+    }
+    if (sql.includes('INSERT INTO _aira_maintenance_write_probe')) {
+      throw new Error('[STAGING_MAINTENANCE_BLOCKED] Operation denied: Permanent Staging database is in maintenance mode.');
+    }
+    return { rows: [] };
+  }
 };
 const resCleanIsolation = await verifyStagingWriteIsolation(mockCleanIsolationClient);
 assert.equal(resCleanIsolation.isolated, true);
+assert.equal(resCleanIsolation.stagingDatabaseIdentity.status, 'PASS');
+assert.equal(resCleanIsolation.maintenanceBarrierActive.status, 'PASS');
+assert.equal(resCleanIsolation.runtimeWriteRestriction.status, 'PASS');
+assert.equal(resCleanIsolation.inFlightWritesDrained.status, 'PASS');
+assert.equal(resCleanIsolation.privilegedMigrationPath.status, 'PASS');
 assert.equal(resCleanIsolation.activeWriters.length, 0);
 assert.equal(resCleanIsolation.conflictingLocks.length, 0);
-console.log('  ✓ Clean idle staging state passes write isolation gate');
+console.log('  ✓ Clean idle staging state with active maintenance barrier passes all 5 gates');
 
 
 // ── Test Group 6: Staging Cutover Integrity & 11 Assertions Gate ─────────────

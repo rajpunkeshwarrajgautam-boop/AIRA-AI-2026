@@ -52,10 +52,21 @@ export const db = knex({
   }
 });
 
-export async function runMigrations() {
+export async function runMigrations(options: { bypassToken?: string } = {}) {
+  const token = options.bypassToken || process.env.AIRA_MAINTENANCE_BYPASS_TOKEN || process.env.STAGING_MAINTENANCE_TOKEN;
+  try {
+    await db.raw('SET default_transaction_read_only = off;');
+    if (token) {
+      await db.raw('SET aira.privileged_token = :token;', { token });
+    }
+  } catch {
+    // Best-effort session elevation for migrations
+  }
   await db.migrate.latest();
 }
 
 export async function closeDb() {
   await db.destroy();
 }
+
+export * from './security/staging-maintenance-barrier.js';

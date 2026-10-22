@@ -64,6 +64,7 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 import { createPrincipalMiddleware } from './middleware/principal.js';
+import { createStagingMaintenanceMiddleware } from './middleware/staging-maintenance.js';
 import { createSessionAuthMiddleware, ensureAuthenticatedSession } from './auth/session-auth.js';
 import { createNeonAuthPrincipalMiddleware } from './auth/neon-auth-principal.js';
 import {
@@ -151,6 +152,9 @@ app.use((req: Request, _res: Response, next: NextFunction) => {
   process.stdout.write(`[API_REQ] ${req.method} ${req.url}\n`);
   next();
 });
+
+// Staging maintenance barrier: blocks mutating requests during PR #96 cutover
+app.use(createStagingMaintenanceMiddleware());
 
 // Resolve a trusted first-party session cookie before principal enforcement.
 // This middleware never trusts client-supplied user/session headers in production.
