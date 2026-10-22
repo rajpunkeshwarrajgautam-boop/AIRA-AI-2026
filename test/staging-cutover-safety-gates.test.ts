@@ -28,7 +28,8 @@ import {
   hashBypassToken,
   validateHealthCheckResponse,
   validateMaintenanceRestrictionResponse,
-  deactivateStagingMaintenance
+  deactivateStagingMaintenance,
+  verifyStagingPostMaintenanceRestoration
 } from '../packages/db/src/security/staging-maintenance-barrier.js';
 import {
   createStagingMaintenanceMiddleware
@@ -802,11 +803,41 @@ assert.match(res500.reason!, /Expected HTTP 200/);
 
 const resBadBody = validateHealthCheckResponse('200', '{"error":"internal_failure"}');
 assert.equal(resBadBody.ok, false);
-assert.match(resBadBody.reason!, /valid health status payload/);
+assert.match(resBadBody.reason!, /reported non-healthy status/);
 
-const resHealthy = validateHealthCheckResponse('200', '{"status":"HEALTHY","subsystems":{}}');
-assert.equal(resHealthy.ok, true);
-console.log('  ✓ Proved: Health check fails closed on HTTP 000, 404, redirects, and non-healthy payloads');
+const resUnhealthy = validateHealthCheckResponse('200', '{"status":"unhealthy"}');
+assert.equal(resUnhealthy.ok, false);
+assert.match(resUnhealthy.reason!, /reported non-healthy status/);
+
+const resError = validateHealthCheckResponse('200', '{"status":"error"}');
+assert.equal(resError.ok, false);
+assert.match(resError.reason!, /reported non-healthy status/);
+
+const resInvalidJson = validateHealthCheckResponse('200', 'invalid_json_payload');
+assert.equal(resInvalidJson.ok, false);
+assert.match(resInvalidJson.reason!, /not valid JSON/);
+
+const resEmptyBody = validateHealthCheckResponse('200', '');
+assert.equal(resEmptyBody.ok, false);
+assert.match(resEmptyBody.reason!, /response body was empty/);
+
+const resEmptyObj = validateHealthCheckResponse('200', '{}');
+assert.equal(resEmptyObj.ok, false);
+assert.match(resEmptyObj.reason!, /empty or not a valid JSON object/);
+
+const resUnrelated = validateHealthCheckResponse('200', '{"service":"running"}');
+assert.equal(resUnrelated.ok, false);
+assert.match(resUnrelated.reason!, /did not contain an explicit healthy status/);
+
+const resHealthyUpper = validateHealthCheckResponse('200', '{"status":"HEALTHY","subsystems":{}}');
+assert.equal(resHealthyUpper.ok, true);
+
+const resHealthyLower = validateHealthCheckResponse('200', '{"status":"healthy"}');
+assert.equal(resHealthyLower.ok, true);
+
+const resHealthyOk = validateHealthCheckResponse('200', '{"status":"ok"}');
+assert.equal(resHealthyOk.ok, true);
+console.log('  ✓ Proved: Health check fails closed on HTTP 000, 404, redirects, invalid JSON, unhealthy/error status, and empty payloads');
 
 // 9.2 Missing curl check in staging-cutover-wizard.sh
 const wizardScript = fs.readFileSync('scripts/staging-cutover-wizard.sh', 'utf8');
@@ -912,6 +943,103 @@ assert.ok(deactThrown, 'Deactivation must throw if read-only reset fails');
 assert.match(deactThrown.message, /Failed to reset database-level default_transaction_read_only/);
 console.log('  ✓ Proved: Maintenance deactivation fails closed when read-only reset, trigger removal, or write restoration fails');
 
+// 9.7 Sentinel table integrity: missing row id=1 or is_active=true fails closed
+const mockSentinelMissingRowClient: any = {
+  raw: async (sql: string) => {
+    if (sql.includes('neon.project_id')) {
+      return { rows: [{ db_name: 'neondb', neon_project_id: STAGING_NEON_PROJECT_ID, neon_branch_id: STAGING_NEON_BRANCH_ID, neon_endpoint_id: STAGING_NEON_ENDPOINT_ID }] };
+    }
+    if (sql.includes('default_transaction_read_only')) return { rows: [{ ro: 'off' }] };
+    if (sql.includes('information_schema.triggers')) return { rows: [] };
+    if (sql.includes('information_schema.tables')) return { rows: [{ exists: true }] };
+    if (sql.includes('_aira_staging_maintenance')) return { rows: [] }; // missing row id=1
+    return { rows: [] };
+  }
+};
+let missingRowErr: any = null;
+try {
+  await verifyStagingPostMaintenanceRestoration(mockSentinelMissingRowClient, { allowRehearsalBranch: true });
+} catch (err: any) {
+  missingRowErr = err;
+}
+assert.ok(missingRowErr, 'Must throw if sentinel row id=1 is missing');
+assert.match(missingRowErr.message, /exists but row id=1 is missing/);
+
+const mockSentinelStillActiveClient: any = {
+  raw: async (sql: string) => {
+    if (sql.includes('neon.project_id')) {
+      return { rows: [{ db_name: 'neondb', neon_project_id: STAGING_NEON_PROJECT_ID, neon_branch_id: STAGING_NEON_BRANCH_ID, neon_endpoint_id: STAGING_NEON_ENDPOINT_ID }] };
+    }
+    if (sql.includes('default_transaction_read_only')) return { rows: [{ ro: 'off' }] };
+    if (sql.includes('information_schema.triggers')) return { rows: [] };
+    if (sql.includes('information_schema.tables')) return { rows: [{ exists: true }] };
+    if (sql.includes('_aira_staging_maintenance')) return { rows: [{ id: 1, is_active: true }] };
+    return { rows: [] };
+  }
+};
+let stillActiveErr: any = null;
+try {
+  await verifyStagingPostMaintenanceRestoration(mockSentinelStillActiveClient, { allowRehearsalBranch: true });
+} catch (err: any) {
+  stillActiveErr = err;
+}
+assert.ok(stillActiveErr, 'Must throw if sentinel is still active');
+assert.match(stillActiveErr.message, /still indicates is_active = true/);
+console.log('  ✓ Proved: Sentinel table integrity fails closed on missing row id=1 or is_active=true');
+
+// 9.8 Runtime role restoration checks
+const mockWrongRoleRuntimeClient: any = {
+  raw: async (sql: string) => {
+    if (sql.includes('current_user')) {
+      return {
+        rows: [{
+          current_user: 'neondb_owner', // Wrong role, must be aira_staging_runtime
+          session_user: 'neondb_owner',
+          default_ro: 'off'
+        }]
+      };
+    }
+    return { rows: [] };
+  }
+};
+
+const mockRestorationOwnerClient: any = {
+  raw: async (sql: string) => {
+    if (sql.includes('neon.project_id')) {
+      return { rows: [{ db_name: 'neondb', neon_project_id: STAGING_NEON_PROJECT_ID, neon_branch_id: STAGING_NEON_BRANCH_ID, neon_endpoint_id: STAGING_NEON_ENDPOINT_ID }] };
+    }
+    if (sql.includes('default_transaction_read_only')) return { rows: [{ ro: 'off' }] };
+    if (sql.includes('information_schema.triggers')) return { rows: [] };
+    if (sql.includes('information_schema.tables')) return { rows: [{ exists: false }] };
+    return { rows: [] };
+  },
+  transaction: async (cb: any) => {
+    const trx: any = (table: string) => ({
+      where: () => ({ update: async () => {}, del: async () => {} }),
+      insert: async () => {}
+    });
+    trx.raw = async () => ({ rows: [] });
+    return cb(trx);
+  }
+};
+
+const prevEnv = process.env.AIRA_TEST_ENVIRONMENT;
+process.env.AIRA_TEST_ENVIRONMENT = 'false';
+let wrongRoleErr: any = null;
+try {
+  await verifyStagingPostMaintenanceRestoration(mockRestorationOwnerClient, {
+    runtimeClient: mockWrongRoleRuntimeClient,
+    allowRehearsalBranch: true
+  });
+} catch (err: any) {
+  wrongRoleErr = err;
+} finally {
+  process.env.AIRA_TEST_ENVIRONMENT = prevEnv;
+}
+assert.ok(wrongRoleErr, 'Must throw if runtime client is not aira_staging_runtime');
+assert.match(wrongRoleErr.message, /expected 'aira_staging_runtime'/);
+console.log('  ✓ Proved: Runtime role restoration strictly verifies session identity current_user = aira_staging_runtime');
+
 console.log('\n================================================================================');
-console.log('  ✓ ALL 51 CUTOVER SAFETY GATE FAIL-CLOSED ASSERTIONS PASSED SUCCESSFULLY!      ');
+console.log('  ✓ ALL 53 CUTOVER SAFETY GATE FAIL-CLOSED ASSERTIONS PASSED SUCCESSFULLY!      ');
 console.log('================================================================================\n');

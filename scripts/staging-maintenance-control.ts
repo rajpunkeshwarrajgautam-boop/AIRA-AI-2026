@@ -96,6 +96,9 @@ async function main() {
           client: 'pg',
           connection: { connectionString: runtimeUrl, ssl: classification.isLocalOrCiTest ? false : true }
         });
+      } else if (classification.isPermanentStaging) {
+        console.error('[SECURITY FATAL] STAGING_RUNTIME_DB_URL is required to verify write restoration on Permanent Staging! Pass via STAGING_RUNTIME_DB_URL environment variable.');
+        process.exit(1);
       }
 
       console.log(`[MAINTENANCE_CONTROL] Deactivating staging maintenance barrier...`);
@@ -132,6 +135,9 @@ async function main() {
           client: 'pg',
           connection: { connectionString: runtimeUrl, ssl: classification.isLocalOrCiTest ? false : true }
         });
+      } else if (classification.isPermanentStaging) {
+        console.error('[SECURITY FATAL] STAGING_RUNTIME_DB_URL is required to certify write restoration on Permanent Staging! Pass via STAGING_RUNTIME_DB_URL environment variable.');
+        process.exit(1);
       }
       try {
         const res = await verifyStagingPostMaintenanceRestoration(client, { runtimeClient });

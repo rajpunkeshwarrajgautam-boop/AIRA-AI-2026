@@ -328,11 +328,13 @@ say "  c. Terminate active backend poolers (SELECT pg_terminate_backend(pid)...)
 say "  d. Retain rotated neondb_owner migration credential securely in operator vault"
 say "  e. Preserve Commercial PR #92 source and Production credentials untouched"
 
-ask_secret STAGING_DB_URL "Paste permanent staging DATABASE_URL to verify write isolation:"
+ask_secret STAGING_DB_URL "Paste permanent staging DATABASE_URL (migration role neondb_owner) to verify write isolation:"
 if [[ -z "${STAGING_DB_URL:-}" ]]; then
   warn "SECURITY FATAL: Missing required permanent staging DATABASE_URL. Aborting fail-closed."
   exit 1
 fi
+
+ask_secret STAGING_RUNTIME_DB_URL "Paste permanent staging runtime DATABASE_URL (role aira_staging_runtime) [required for permanent staging]:"
 
 step "Acquire privileged operator maintenance bypass token:"
 acquire_maintenance_bypass_token
@@ -447,22 +449,51 @@ if [[ "$HEALTH_CODE" != "200" ]]; then
   exit 1
 fi
 
-if [[ ! "$HEALTH_BODY" =~ "HEALTHY" && ! "$HEALTH_BODY" =~ "status" ]]; then
-  warn "SECURITY FATAL: /api/health returned HTTP 200 but response body did not contain valid health status payload! Aborting."
+if ! HEALTH_BODY="$HEALTH_BODY" node -e '
+  try {
+    const raw = (process.env.HEALTH_BODY || "").trim();
+    if (!raw) process.exit(1);
+    const b = JSON.parse(raw);
+    if (!b || typeof b !== "object" || Array.isArray(b) || Object.keys(b).length === 0) process.exit(1);
+    if (b.status === "unhealthy" || b.status === "error" || b.status === "degraded" || b.status === "down" || b.error || b.healthy === false || b.ok === false) process.exit(1);
+    if (b.status !== "ok" && b.status !== "healthy" && b.status !== "HEALTHY" && b.healthy !== true && b.ready !== true) process.exit(1);
+  } catch {
+    process.exit(1);
+  }
+'; then
+  warn "SECURITY FATAL: /api/health returned HTTP 200 but response body is invalid JSON or reports non-healthy status! Aborting fail-closed."
   show_rollback_protocol "AFTER_HISTORICAL_IMPORT"
   exit 1
 fi
 
-# Probe GET /api/ready/benchmark (must be 200 OK)
+# Probe GET /api/ready/benchmark (must be 200 OK with valid healthy JSON)
 BENCHMARK_RAW=$(curl -s -S -w "\n%{http_code}" --max-time 15 "https://staging.virexaaiventures.com/api/ready/benchmark" 2>/dev/null || printf "\n000")
 BENCHMARK_CODE=$(printf '%s\n' "$BENCHMARK_RAW" | tail -n1)
+BENCHMARK_BODY=$(printf '%s\n' "$BENCHMARK_RAW" | sed '$d')
 say "   GET /api/ready/benchmark -> HTTP $BENCHMARK_CODE (expected 200)"
 if [[ "$BENCHMARK_CODE" != "200" ]]; then
   warn "SECURITY FATAL: Readiness probe /api/ready/benchmark failed with HTTP status: $BENCHMARK_CODE (expected 200). Aborting fail-closed."
   show_rollback_protocol "AFTER_HISTORICAL_IMPORT"
   exit 1
 fi
-note "✓ Read-only health and readiness endpoints verified: HTTP 200 with healthy payload."
+
+if ! BENCHMARK_BODY="$BENCHMARK_BODY" node -e '
+  try {
+    const raw = (process.env.BENCHMARK_BODY || "").trim();
+    if (!raw) process.exit(1);
+    const b = JSON.parse(raw);
+    if (!b || typeof b !== "object" || Array.isArray(b) || Object.keys(b).length === 0) process.exit(1);
+    if (b.status === "unhealthy" || b.status === "error" || b.status === "degraded" || b.status === "down" || b.error || b.healthy === false || b.ok === false) process.exit(1);
+    if (b.status !== "ok" && b.status !== "healthy" && b.status !== "HEALTHY" && b.healthy !== true && b.ready !== true) process.exit(1);
+  } catch {
+    process.exit(1);
+  }
+'; then
+  warn "SECURITY FATAL: /api/ready/benchmark returned HTTP 200 but response body is invalid JSON or reports non-healthy status! Aborting fail-closed."
+  show_rollback_protocol "AFTER_HISTORICAL_IMPORT"
+  exit 1
+fi
+note "✓ Read-only health and readiness endpoints verified: HTTP 200 with valid healthy JSON payload."
 
 step "3. Runtime Write Restriction Probing (Fail-Closed, Expected: HTTP 503 [STAGING_MAINTENANCE_BLOCKED]):"
 say "   Verifying mutating API endpoints are blocked during maintenance..."
@@ -530,11 +561,11 @@ if ! confirm "Authorize deactivating permanent staging maintenance barrier now?"
 fi
 
 say "Deactivating permanent staging maintenance barrier..."
-AIRA_MAINTENANCE_BYPASS_TOKEN="$BYPASS_TOKEN" STAGING_DB_URL="$STAGING_DB_URL" \
+AIRA_MAINTENANCE_BYPASS_TOKEN="$BYPASS_TOKEN" STAGING_DB_URL="$STAGING_DB_URL" STAGING_RUNTIME_DB_URL="${STAGING_RUNTIME_DB_URL:-}" \
   npx tsx scripts/staging-maintenance-control.ts --deactivate
 
 say "Empirically verifying write restoration and absence of maintenance restrictions..."
-if ! STAGING_DB_URL="$STAGING_DB_URL" npx tsx scripts/staging-maintenance-control.ts --verify-restoration; then
+if ! STAGING_DB_URL="$STAGING_DB_URL" STAGING_RUNTIME_DB_URL="${STAGING_RUNTIME_DB_URL:-}" npx tsx scripts/staging-maintenance-control.ts --verify-restoration; then
   warn "SECURITY FATAL: Staging write restoration verification failed! Database writes remain blocked. Aborting."
   show_rollback_protocol "AFTER_MERGE"
   exit 1

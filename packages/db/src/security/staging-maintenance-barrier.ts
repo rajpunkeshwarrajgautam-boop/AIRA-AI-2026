@@ -123,7 +123,8 @@ export interface WriteRestorationVerificationResult {
 }
 
 /**
- * Validates a health check response and fails closed on 000, 404, redirects, or non-200 codes.
+ * Validates a health check response and fails closed on 000, 404, redirects, non-200 codes,
+ * invalid JSON, unhealthy status, or empty/unrelated health payloads.
  */
 export function validateHealthCheckResponse(
   statusCode: number | string,
@@ -142,12 +143,52 @@ export function validateHealthCheckResponse(
   if (code !== '200') {
     return { ok: false, reason: `Health check failed: Expected HTTP 200, got HTTP ${code}.` };
   }
-  if (body !== undefined) {
-    const bodyStr = typeof body === 'object' ? JSON.stringify(body) : String(body);
-    if (!bodyStr.includes('HEALTHY') && !bodyStr.includes('"status"') && !bodyStr.includes('status')) {
-      return { ok: false, reason: 'Health check returned 200 but body did not contain valid health status payload.' };
+  if (body === undefined || body === null || (typeof body === 'string' && body.trim() === '')) {
+    return { ok: false, reason: 'Health check returned HTTP 200 but response body was empty.' };
+  }
+
+  let parsed: any;
+  if (typeof body === 'object') {
+    parsed = body;
+  } else {
+    try {
+      parsed = JSON.parse(body.trim());
+    } catch {
+      return { ok: false, reason: 'Health check failed: Response body is not valid JSON.' };
     }
   }
+
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed) || Object.keys(parsed).length === 0) {
+    return { ok: false, reason: 'Health check failed: Response payload is empty or not a valid JSON object.' };
+  }
+
+  // Explicitly reject unhealthy, error, degraded, down, or false states
+  if (
+    parsed.status === 'unhealthy' ||
+    parsed.status === 'error' ||
+    parsed.status === 'degraded' ||
+    parsed.status === 'down' ||
+    parsed.error ||
+    parsed.healthy === false ||
+    parsed.ok === false ||
+    parsed.ready === false
+  ) {
+    return { ok: false, reason: `Health check failed: Endpoint reported non-healthy status (${parsed.status || parsed.error || 'healthy=false'}).` };
+  }
+
+  // Require explicit positive health indicator
+  const hasHealthyStatus = (
+    parsed.status === 'ok' ||
+    parsed.status === 'healthy' ||
+    parsed.status === 'HEALTHY' ||
+    parsed.healthy === true ||
+    parsed.ready === true
+  );
+
+  if (!hasHealthyStatus) {
+    return { ok: false, reason: 'Health check failed: Response payload did not contain an explicit healthy status indicator (e.g. status: "ok" or "healthy").' };
+  }
+
   return { ok: true };
 }
 
@@ -497,19 +538,45 @@ export async function verifyStagingPostMaintenanceRestoration(
     throw new Error(`[SECURITY FATAL] Maintenance triggers are still active after deactivation: ${unremoved}`);
   }
 
-  // 3. Verify sentinel table inactive
-  let sentinelInactive = true;
+  // 3. Verify sentinel table inactive with strict record integrity
+  let sentinelInactive = false;
+  let tableExists = false;
   try {
-    const sentinelRes = await client.raw(`
-      SELECT is_active FROM ${STAGING_MAINTENANCE_TABLE} WHERE id = 1;
+    const checkTable = await client.raw(`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.tables 
+        WHERE table_schema = 'public' AND table_name = '${STAGING_MAINTENANCE_TABLE}'
+      ) as exists;
     `);
-    if (sentinelRes.rows?.length > 0 && sentinelRes.rows[0].is_active === true) {
-      sentinelInactive = false;
-      throw new Error('[SECURITY FATAL] Maintenance sentinel table still indicates is_active = true!');
-    }
+    tableExists = checkTable.rows?.[0]?.exists === true || checkTable.rows?.[0]?.exists === 't';
   } catch (err: any) {
-    if (err.message?.includes('[SECURITY FATAL]')) throw err;
-    // Table doesn't exist, which means barrier is inactive
+    throw new Error(`[SECURITY FATAL] Failed to check existence of ${STAGING_MAINTENANCE_TABLE}: ${err.message}`);
+  }
+
+  if (tableExists) {
+    let sentinelRes: any;
+    try {
+      sentinelRes = await client.raw(`
+        SELECT id, is_active, activated_at, updated_at
+        FROM ${STAGING_MAINTENANCE_TABLE}
+        WHERE id = 1;
+      `);
+    } catch (queryErr: any) {
+      throw new Error(`[SECURITY FATAL] Failed querying ${STAGING_MAINTENANCE_TABLE} during restoration verification: ${queryErr.message}`);
+    }
+
+    if (!sentinelRes.rows || sentinelRes.rows.length === 0) {
+      throw new Error(`[SECURITY FATAL] Sentinel table ${STAGING_MAINTENANCE_TABLE} exists but row id=1 is missing!`);
+    }
+
+    const row = sentinelRes.rows[0];
+    if (row.is_active === true || row.is_active === 't' || row.is_active === 1) {
+      throw new Error(`[SECURITY FATAL] Maintenance sentinel table ${STAGING_MAINTENANCE_TABLE} still indicates is_active = true!`);
+    }
+    sentinelInactive = true;
+  } else {
+    // Table doesn't exist in test mock or clean database
+    sentinelInactive = true;
   }
 
   // 4. Ensure probe table exists
@@ -533,9 +600,51 @@ export async function verifyStagingPostMaintenanceRestoration(
     throw new Error(`[SECURITY FATAL] Post-deactivation write restoration probe failed! Normal writes remain blocked: ${probeErr.message}`);
   }
 
-  // 6. If runtimeClient is provided, execute controlled transactional probe using actual least-privilege runtime role
+  // 6. Real runtime role restoration validation
   let runtimeRoleProbeSuccess: boolean | undefined = undefined;
   if (options.runtimeClient) {
+    // Inspect actual session identity and settings under fresh runtime connection
+    let sessionRow: any = {};
+    try {
+      const sessionRes = await options.runtimeClient.raw(`
+        SELECT 
+          current_user,
+          session_user,
+          current_setting('default_transaction_read_only', true) as default_ro,
+          current_setting('neon.project_id', true) as neon_project_id,
+          current_setting('neon.branch_id', true) as neon_branch_id,
+          current_setting('neon.endpoint_id', true) as neon_endpoint_id
+      `);
+      sessionRow = sessionRes.rows?.[0] || {};
+    } catch (sessionErr: any) {
+      throw new Error(`[SECURITY FATAL] Failed to inspect runtime client session: ${sessionErr.message}`);
+    }
+
+    const currentUser = sessionRow.current_user;
+    const isTestEnv = process.env.NODE_ENV === 'test' || process.env.AIRA_TEST_ENVIRONMENT === 'true';
+    const isAuthorizedRole = currentUser === 'aira_staging_runtime' || currentUser === 'test_aira_staging_runtime';
+
+    if (!isAuthorizedRole && !isTestEnv) {
+      throw new Error(`[SECURITY FATAL] Runtime client session current_user is '${currentUser}', expected 'aira_staging_runtime'! Cannot certify runtime restoration with owner role.`);
+    }
+
+    if (sessionRow.default_ro === 'on' || sessionRow.default_ro === 'true') {
+      throw new Error('[SECURITY FATAL] Runtime client session default_transaction_read_only is ON after deactivation!');
+    }
+
+    if (!options.allowRehearsalBranch && !isTestEnv) {
+      if (sessionRow.neon_project_id && sessionRow.neon_project_id !== STAGING_NEON_PROJECT_ID) {
+        throw new Error(`[SECURITY FATAL] Runtime client connected to wrong Neon project: ${sessionRow.neon_project_id}`);
+      }
+      if (sessionRow.neon_branch_id && sessionRow.neon_branch_id !== STAGING_NEON_BRANCH_ID) {
+        throw new Error(`[SECURITY FATAL] Runtime client connected to wrong Neon branch: ${sessionRow.neon_branch_id}`);
+      }
+      if (sessionRow.neon_endpoint_id && sessionRow.neon_endpoint_id !== STAGING_NEON_ENDPOINT_ID) {
+        throw new Error(`[SECURITY FATAL] Runtime client connected to wrong Neon endpoint: ${sessionRow.neon_endpoint_id}`);
+      }
+    }
+
+    // Execute controlled transactional INSERT and UPDATE probes with guaranteed cleanup
     const rtProbeId = `probe_runtime_restoration_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
     try {
       await options.runtimeClient.transaction(async (trx) => {
@@ -545,7 +654,29 @@ export async function verifyStagingPostMaintenanceRestoration(
       });
       runtimeRoleProbeSuccess = true;
     } catch (rtErr: any) {
-      throw new Error(`[SECURITY FATAL] Least-privilege runtime role write restoration probe failed: ${rtErr.message}`);
+      throw new Error(`[SECURITY FATAL] Least-privilege runtime role (${currentUser}) write restoration probe failed: ${rtErr.message}`);
+    }
+  } else {
+    // If target database is Permanent Staging, STAGING_RUNTIME_DB_URL is strictly required
+    const isTestEnv = process.env.NODE_ENV === 'test' || process.env.AIRA_TEST_ENVIRONMENT === 'true';
+    if (!options.allowRehearsalBranch && !isTestEnv) {
+      let isPermanentStaging = false;
+      try {
+        const idRes = await client.raw(`
+          SELECT 
+            current_setting('neon.project_id', true) as neon_project_id,
+            current_setting('neon.branch_id', true) as neon_branch_id
+        `);
+        const row = idRes.rows?.[0] || {};
+        if (row.neon_project_id === STAGING_NEON_PROJECT_ID && row.neon_branch_id === STAGING_NEON_BRANCH_ID) {
+          isPermanentStaging = true;
+        }
+      } catch {
+        // continue
+      }
+      if (isPermanentStaging) {
+        throw new Error('[SECURITY FATAL] STAGING_RUNTIME_DB_URL is required to certify write restoration on Permanent Staging! Do not certify runtime restoration using only neondb_owner.');
+      }
     }
   }
 
@@ -646,24 +777,42 @@ export async function deactivateStagingMaintenance(
   }
   const triggersRemoved = true;
 
-  // 4. Mark maintenance inactive in sentinel table and verify update
+  // 4. Mark maintenance inactive in sentinel table and strictly verify update
+  let tableExists = false;
   try {
-    await client.raw(`
-      UPDATE ${STAGING_MAINTENANCE_TABLE}
-      SET is_active = false, updated_at = NOW()
-      WHERE id = 1;
+    const checkTable = await client.raw(`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.tables 
+        WHERE table_schema = 'public' AND table_name = '${STAGING_MAINTENANCE_TABLE}'
+      ) as exists;
     `);
-    const sentinelCheck = await client.raw(`
-      SELECT is_active
-      FROM ${STAGING_MAINTENANCE_TABLE}
-      WHERE id = 1;
-    `);
-    if (sentinelCheck.rows?.length > 0 && sentinelCheck.rows[0].is_active === true) {
-      throw new Error(`[SECURITY FATAL] Sentinel transition failed: ${STAGING_MAINTENANCE_TABLE}.is_active is not false.`);
+    tableExists = checkTable.rows?.[0]?.exists === true || checkTable.rows?.[0]?.exists === 't';
+  } catch (err: any) {
+    throw new Error(`[SECURITY FATAL] Failed checking sentinel table existence: ${err.message}`);
+  }
+
+  if (tableExists) {
+    try {
+      await client.raw(`
+        UPDATE ${STAGING_MAINTENANCE_TABLE}
+        SET is_active = false, updated_at = NOW()
+        WHERE id = 1;
+      `);
+      const sentinelCheck = await client.raw(`
+        SELECT id, is_active, updated_at
+        FROM ${STAGING_MAINTENANCE_TABLE}
+        WHERE id = 1;
+      `);
+      if (!sentinelCheck.rows || sentinelCheck.rows.length === 0) {
+        throw new Error(`[SECURITY FATAL] Sentinel record id=1 missing after deactivation update in ${STAGING_MAINTENANCE_TABLE}!`);
+      }
+      if (sentinelCheck.rows[0].is_active === true || sentinelCheck.rows[0].is_active === 't' || sentinelCheck.rows[0].is_active === 1) {
+        throw new Error(`[SECURITY FATAL] Sentinel transition failed: ${STAGING_MAINTENANCE_TABLE}.is_active is not false.`);
+      }
+    } catch (sentinelErr: any) {
+      if (sentinelErr.message?.includes('[SECURITY FATAL]')) throw sentinelErr;
+      throw new Error(`[SECURITY FATAL] Unexpected error updating maintenance sentinel: ${sentinelErr.message}`);
     }
-  } catch (sentinelErr: any) {
-    if (sentinelErr.message?.includes('[SECURITY FATAL]')) throw sentinelErr;
-    // Sentinel table may not exist
   }
 
   // 5. Verify absence of restrictions and execute transactional write restoration probe

@@ -19,6 +19,9 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+
+process.env.NODE_ENV = 'test';
+process.env.AIRA_TEST_ENVIRONMENT = 'true';
 import {
   PRODUCTION_NEON_PROJECT_ID,
   STAGING_NEON_PROJECT_ID,
@@ -153,6 +156,10 @@ async function runAll() {
 
       if (s.includes('current_database()')) {
         return { rows: [{ db_name: 'neondb' }] };
+      }
+
+      if (s.includes('information_schema.tables')) {
+        return { rows: [{ exists: true }] };
       }
 
       if (s.includes(`CREATE TABLE IF NOT EXISTS ${STAGING_MAINTENANCE_TABLE}`)) {
