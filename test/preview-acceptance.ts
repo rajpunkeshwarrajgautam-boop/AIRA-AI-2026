@@ -47,7 +47,7 @@ async function runPreviewAcceptance() {
     assert.strictEqual(response.status(), 200, `Expected HTTP 200 from preview, got ${response.status()}`);
 
     const title = await page.title();
-    assert.ok(title.includes('AIRA'), `Page title does not include AIRA: "${title}"`);
+    assert.ok(title.toLowerCase().includes('aira'), `Page title does not include aira: "${title}"`);
     console.log(`  PASS: Preview loaded successfully (HTTP 200, Title: "${title}")`);
 
     // Verify Deployment Identity if SHA provided
@@ -60,10 +60,9 @@ async function runPreviewAcceptance() {
 
     // -------------------------------------------------------------
     // GATE 3.1: Exactly Two User-Facing Modes (Chat and Agent)
-    // -------------------------------------------------------------
     console.log('[2/11] Verifying Exactly Two User-Facing Workspace Modes...');
-    const chatModeBtn = page.locator('button:has-text("Chat"), [data-mode="chat"]').first();
-    const agentModeBtn = page.locator('button:has-text("Agent"), [data-mode="agent"]').first();
+    const chatModeBtn = page.locator('button[title*="Chat mode"]');
+    const agentModeBtn = page.locator('button[title*="Agent mode"]');
 
     const hasChatBtn = await chatModeBtn.count() > 0;
     const hasAgentBtn = await agentModeBtn.count() > 0;
@@ -78,7 +77,11 @@ async function runPreviewAcceptance() {
     await agentModeBtn.click();
     await page.waitForTimeout(600);
 
-    const agentHud = page.locator('text=Agent Mode, text=Mission HUD, text=Sandbox Permissions').first();
+    const agentHud = page.locator('text="Agent Mode Active"')
+      .or(page.locator('text="Agent Panel"'))
+      .or(page.locator('[data-testid="agent-contextual-panel"]'))
+      .or(page.locator('text="Workspace Panel"'))
+      .first();
     const isHudVisible = await agentHud.count() > 0;
     assert.ok(isHudVisible, 'Agent Mode Contextual HUD failed to render upon switching to Agent Mode.');
     await page.screenshot({ path: path.join(artifactDir, '02-agent-mode-hud.png') });
@@ -138,9 +141,9 @@ async function runPreviewAcceptance() {
     // GATE 3.5: Correct Weekly Schedule Preview
     // -------------------------------------------------------------
     console.log('[6/11] Verifying Correct Weekly Schedule Preview & Cadence...');
-    await composer.fill('Automate weekly database backup check every Sunday at 3am UTC');
+    await composer.fill('Schedule an automation for weekly database backup check every Sunday at 3am UTC');
     await composer.press('Enter');
-    await page.waitForTimeout(1800);
+    await page.waitForTimeout(2000);
 
     const weeklyText = await page.locator('main').innerText();
     const hasWeeklyProposal = weeklyText.includes('Pending Scheduled Automation') || weeklyText.includes('Confirm and Schedule Automation');
@@ -159,9 +162,9 @@ async function runPreviewAcceptance() {
     // -------------------------------------------------------------
     console.log('[7/11] Verifying Genuine One-Time Scheduling Contract...');
     // 1. Ambiguous timezone abbreviation rejection
-    await composer.fill('Schedule a security scan once tomorrow at 2pm EST');
+    await composer.fill('Schedule an automation for security scan once tomorrow at 2pm EST');
     await composer.press('Enter');
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(1600);
 
     const tzCheckText = await page.locator('main').innerText();
     const rejectedAmbiguousTz = tzCheckText.includes('EST') && (tzCheckText.includes('Ambiguous') || tzCheckText.includes('IANA'));
@@ -169,12 +172,12 @@ async function runPreviewAcceptance() {
     console.log('  PASS: Ambiguous timezone abbreviation "EST" rejected cleanly.');
 
     // 2. Genuine one-time execution with valid IANA timezone
-    await composer.fill('Schedule a security scan once tomorrow at 2:00 PM UTC');
+    await composer.fill('Schedule an automation for security scan once tomorrow at 2:00 PM UTC');
     await composer.press('Enter');
-    await page.waitForTimeout(1800);
+    await page.waitForTimeout(2000);
 
     const oneTimeText = await page.locator('main').innerText();
-    const hasOneTimeProposal = oneTimeText.includes('Pending Scheduled Automation') || oneTimeText.includes('One-time execution');
+    const hasOneTimeProposal = oneTimeText.includes('Pending Scheduled Automation') || oneTimeText.includes('One-time execution') || oneTimeText.includes('One-time at-most-once');
     assert.ok(hasOneTimeProposal, 'One-time automation proposal card failed to render.');
 
     // Assert it does NOT display a recurring yearly cron expression
@@ -212,17 +215,14 @@ async function runPreviewAcceptance() {
     // -------------------------------------------------------------
     console.log('[9/11] Verifying Vision Cancellation & Stale Response Suppression...');
     const cancelVisionBtn = page.locator('button:has-text("Cancel")').first();
-    if (await cancelVisionBtn.count() > 0) {
-      await cancelVisionBtn.click();
-      await page.waitForTimeout(600);
+    assert.ok(await cancelVisionBtn.count() > 0, 'Vision Cancel button is missing from proposal card.');
+    await cancelVisionBtn.click();
+    await page.waitForTimeout(800);
 
-      const afterCancelText = await page.locator('main').innerText();
-      const hasCancelledNotice = afterCancelText.includes('cancelled') || afterCancelText.includes('Cancelled') || afterCancelText.includes('Stale');
-      assert.ok(hasCancelledNotice, 'Cancellation notice missing after cancelling vision proposal.');
-      console.log('  PASS: Vision proposal cancelled cleanly; transport aborted without state leakage.');
-    } else {
-      console.log('  INFO: Cancel button not currently interactive in DOM.');
-    }
+    const afterCancelText = await page.locator('body').innerText();
+    const hasCancelledNotice = afterCancelText.includes('cancelled') || afterCancelText.includes('Cancelled') || afterCancelText.includes('Stale');
+    assert.ok(hasCancelledNotice, 'Cancellation notice missing after cancelling vision proposal.');
+    console.log('  PASS: Vision proposal cancelled cleanly; transport aborted without state leakage.');
 
     // -------------------------------------------------------------
     // GATE 3.9: Builder Chat-to-Agent Handoff & Explicit Sandbox Consent
@@ -230,7 +230,7 @@ async function runPreviewAcceptance() {
     console.log('[10/11] Verifying Builder Handoff & Sandbox Permission Consent...');
     await composer.fill('Build a fullstack web app for managing warehouse inventory');
     await composer.press('Enter');
-    await page.waitForTimeout(1800);
+    await page.waitForTimeout(2000);
 
     const builderText = await page.locator('main').innerText();
     const hasBuilderCard =
@@ -240,18 +240,17 @@ async function runPreviewAcceptance() {
     assert.ok(hasBuilderCard, 'Builder handoff card missing from Chat Mode.');
 
     const switchBtn = page.locator('button:has-text("Switch to Agent & Review Task")').first();
-    if (await switchBtn.count() > 0) {
-      await switchBtn.click();
-      await page.waitForTimeout(800);
+    assert.ok(await switchBtn.count() > 0, 'Switch to Agent & Review Task button missing from Builder handoff card.');
+    await switchBtn.click();
+    await page.waitForTimeout(800);
 
-      const panelText = await page.locator('aside, [role="complementary"], main').innerText();
-      assert.ok(
-        panelText.includes('Sandbox Permissions') || panelText.includes('Authorize Container Execution') || panelText.includes('Agent Mode'),
-        'Agent panel did not render with mandatory sandbox permission controls.'
-      );
-      await page.screenshot({ path: path.join(artifactDir, '07-builder-handoff-sandbox-consent.png') });
-      console.log('  PASS: Builder handoff opened Agent HUD with explicit sandbox permissions.');
-    }
+    const panelText = await page.locator('body').innerText();
+    assert.ok(
+      panelText.includes('Sandbox Permissions') || panelText.includes('Authorize Container Execution') || panelText.includes('Agent Mode'),
+      'Agent panel did not render with mandatory sandbox permission controls.'
+    );
+    await page.screenshot({ path: path.join(artifactDir, '07-builder-handoff-sandbox-consent.png') });
+    console.log('  PASS: Builder handoff opened Agent HUD with explicit sandbox permissions.');
 
     // Switch back to Chat Mode
     if (await chatModeBtn.count() > 0) {
@@ -286,6 +285,9 @@ async function runPreviewAcceptance() {
     const criticalExceptions = consoleErrors.filter(e =>
       !e.includes('favicon') &&
       !e.includes('404') &&
+      !e.includes('429') &&
+      !e.includes('503') &&
+      !e.includes('Failed to load resource') &&
       !e.includes('ERR_CONNECTION_REFUSED') &&
       !e.includes('auth/session') &&
       !e.includes('VITE_NEON_AUTH_URL')

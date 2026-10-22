@@ -83,7 +83,7 @@ export function detectCapabilityIntent(prompt: string, workspaceMode: WorkspaceM
   }
 
   // 3. Automation Intent
-  const autoRegex = /\b(?:create|schedule|set\s*up|automate)\s+(?:an?\s+)?(?:automation|scheduled\s+task|workflow|cron)\b|\b(?:automate\s+a|run\s+every|schedule\s+every)\b/i;
+  const autoRegex = /\b(?:create|schedule|set\s*up|automate)\s+(?:an?\s+)?(?:automation|scheduled\s+task|workflow|cron)\b|\b(?:automate\s+(?:a|an|weekly|daily|hourly)|run\s+every|schedule\s+(?:every|a|an|once))\b/i;
   if (autoRegex.test(trimmed)) {
     const schedule = resolveSchedule(trimmed);
     return {
