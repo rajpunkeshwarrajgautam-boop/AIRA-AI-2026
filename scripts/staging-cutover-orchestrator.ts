@@ -93,12 +93,12 @@ export const CUTOVER_PROTOCOL_STEPS: CutoverStepDefinition[] = [
   {
     step: 5,
     id: '5_EXECUTE_MIGRATIONS_016_022',
-    title: 'Execute Schema Migrations 016–022 Against Staging',
+    title: 'Execute Schema Migrations 016–022 & Vercel Build Verification',
     executor: 'VERCEL_AUTOMATION',
-    description: 'Upon authorized merge of PR #96 into staging, Vercel build executes scripts/staging-db-guard.ts && npm run db:migrate && npm run db:verify:deploy.',
+    description: 'Operator applies migrations 016–022 using privileged migration credential & bypass token. Upon merge to staging, Vercel staging build executes scripts/staging-db-guard.ts && npm run db:migrate (verifying zero pending migrations without needing bypass token) && npm run db:verify:deploy.',
     prerequisites: ['Step 4 complete', 'Owner merge to staging authorized', 'Staging DB guard verified'],
     verificationGate: 'knex_migrations table has exactly 22 applied migrations; db:verify:deploy exits with code 0.',
-    safeguard: 'staging-db-guard.ts rejects any non-staging database host before executing knex migrate.',
+    safeguard: 'runMigrations skips Knex lock acquisition under maintenance mode when all migrations are already applied; fails closed if unapplied migrations remain without token; staging-db-guard.ts verifies target.',
     rollbackAction: 'Revert staging branch commit or restore database to Step 3 recovery checkpoint.'
   },
   {

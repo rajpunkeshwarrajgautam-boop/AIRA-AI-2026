@@ -18,10 +18,12 @@
 
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import {
   PRODUCTION_NEON_PROJECT_ID,
   STAGING_NEON_PROJECT_ID,
-  STAGING_NEON_BRANCH_ID
+  STAGING_NEON_BRANCH_ID,
+  STAGING_NEON_ENDPOINT_ID
 } from '../packages/db/src/security/database-isolation-guard.js';
 import {
   activateStagingMaintenance,
@@ -43,6 +45,9 @@ import {
 import {
   verifyStagingWriteIsolation
 } from '../scripts/verify-staging-write-isolation.js';
+import {
+  evaluateMigrationMaintenancePlan
+} from '../packages/db/src/index.js';
 
 console.log('\n================================================================================');
 console.log('   AIRA AI 2026 — PR #96 STAGING MAINTENANCE BARRIER TEST SUITE                 ');
@@ -424,7 +429,8 @@ async function runAll() {
             rows: [{
               db_name: 'neondb',
               neon_project_id: STAGING_NEON_PROJECT_ID,
-              neon_branch_id: STAGING_NEON_BRANCH_ID
+              neon_branch_id: STAGING_NEON_BRANCH_ID,
+              neon_endpoint_id: STAGING_NEON_ENDPOINT_ID
             }]
           };
         }
@@ -662,6 +668,91 @@ async function runAll() {
     const res = createMockHttpRes();
     disabledMiddleware(req, res, () => { nextCalled = true; });
     assert.equal(nextCalled, true);
+  });
+
+  // ── GROUP 6: Migration Lock & Maintenance Barrier Interoperability (Defect 3)
+  console.log('\n--- Test Group 6: Migration Lock & Maintenance Barrier Interoperability (Defect 3) ---');
+
+  await test('evaluateMigrationMaintenancePlan: inactive barrier permits normal migration flow', async () => {
+    const mockClient: any = {
+      raw: async () => ({ rows: [] })
+    };
+    const res = await evaluateMigrationMaintenancePlan(mockClient);
+    assert.equal(res.canProceed, true);
+    assert.equal(res.shouldSkipLock, false);
+    assert.equal(res.isMaintenanceActive, false);
+  });
+
+  await test('evaluateMigrationMaintenancePlan: privileged token permits elevated migration under maintenance', async () => {
+    const mockClient: any = {
+      raw: async () => ({ rows: [{ is_active: true }] })
+    };
+    const res = await evaluateMigrationMaintenancePlan(mockClient, { bypassToken: 'valid-privileged-token' });
+    assert.equal(res.canProceed, true);
+    assert.equal(res.shouldSkipLock, false);
+    assert.equal(res.isMaintenanceActive, true);
+  });
+
+  await test('evaluateMigrationMaintenancePlan: maintenance active + zero token + all migrations applied skips Knex lock acquisition (Vercel build after merge)', async () => {
+    const realMigrationFiles = fs.readdirSync('packages/db/src/migrations').filter(f => /^\d+_.+\.ts$/.test(f));
+    const mockClient: any = {
+      raw: async (sql: string) => {
+        if (sql.includes('_aira_staging_maintenance')) {
+          return { rows: [{ is_active: true }] };
+        }
+        return { rows: [] };
+      },
+      schema: {
+        hasTable: async () => true
+      },
+      from: () => ({
+        select: async () => realMigrationFiles.map(name => ({ name }))
+      })
+    };
+    // Callable mock table selector
+    const mockKnex: any = (table: string) => mockClient.from(table);
+    mockKnex.raw = mockClient.raw;
+    mockKnex.schema = mockClient.schema;
+
+    const res = await evaluateMigrationMaintenancePlan(mockKnex, {
+      migrationsDir: 'packages/db/src/migrations'
+    });
+    assert.equal(res.canProceed, true);
+    assert.equal(res.shouldSkipLock, true);
+    assert.equal(res.isMaintenanceActive, true);
+    assert.equal(res.missingMigrations.length, 0);
+    assert.equal(res.appliedCount, 22);
+  });
+
+  await test('evaluateMigrationMaintenancePlan: maintenance active + zero token + unapplied migrations FAILS CLOSED', async () => {
+    const mockClient: any = {
+      raw: async (sql: string) => {
+        if (sql.includes('_aira_staging_maintenance')) {
+          return { rows: [{ is_active: true }] };
+        }
+        return { rows: [] };
+      },
+      schema: {
+        hasTable: async () => true
+      },
+      from: () => ({
+        select: async () => [
+          { name: '001_initial_schema.ts' }
+        ]
+      })
+    };
+    const mockKnex: any = (table: string) => mockClient.from(table);
+    mockKnex.raw = mockClient.raw;
+    mockKnex.schema = mockClient.schema;
+
+    const res = await evaluateMigrationMaintenancePlan(mockKnex, {
+      migrationsDir: 'packages/db/src/migrations'
+    });
+    assert.equal(res.canProceed, false);
+    assert.equal(res.shouldSkipLock, false);
+    assert.equal(res.isMaintenanceActive, true);
+    assert.ok(res.missingMigrations.length > 0);
+    assert.match(res.reason, /unapplied migration/);
   });
 
   console.log(`\n================================================================================`);

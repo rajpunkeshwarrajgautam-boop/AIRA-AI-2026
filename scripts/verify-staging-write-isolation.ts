@@ -64,6 +64,7 @@ export interface WriteIsolationVerificationResult {
 export interface WriteIsolationOptions {
   bypassToken?: string;
   requireMaintenanceBarrier?: boolean;
+  allowRehearsalBranch?: boolean;
 }
 
 export async function verifyStagingWriteIsolation(
@@ -73,10 +74,7 @@ export async function verifyStagingWriteIsolation(
   const requireBarrier = options.requireMaintenanceBarrier ?? true;
 
   // ── GATE 1: STAGING_DATABASE_IDENTITY ─────────────────────────────────────
-  let stagingDatabaseIdentity: GateCheckStatus = {
-    status: 'PASS',
-    details: 'Target database verified as non-production staging environment.'
-  };
+  let stagingDatabaseIdentity: GateCheckStatus;
 
   try {
     const rawRes = await client.raw(`
@@ -87,30 +85,47 @@ export async function verifyStagingWriteIsolation(
         current_setting('neon.endpoint_id', true) as neon_endpoint_id
     `);
     const row = rawRes.rows?.[0] || {};
+    const projectId = row.neon_project_id;
+    const branchId = row.neon_branch_id;
+    const endpointId = row.neon_endpoint_id;
 
-    if (row.neon_project_id === PRODUCTION_NEON_PROJECT_ID) {
+    if (projectId === PRODUCTION_NEON_PROJECT_ID) {
       throw new Error(`[SECURITY FATAL] Connected database is PRODUCTION (${PRODUCTION_NEON_PROJECT_ID})! Verification aborted.`);
     }
 
-    if (row.neon_project_id && row.neon_project_id !== STAGING_NEON_PROJECT_ID) {
+    if (!projectId || !branchId || !endpointId) {
       stagingDatabaseIdentity = {
         status: 'FAIL',
-        details: `Neon project ID mismatch: expected ${STAGING_NEON_PROJECT_ID}, got ${row.neon_project_id}`
+        details: `Missing required Neon database identity settings (project: ${projectId || 'MISSING'}, branch: ${branchId || 'MISSING'}, endpoint: ${endpointId || 'MISSING'}). Fail-closed.`
+      };
+    } else if (projectId !== STAGING_NEON_PROJECT_ID) {
+      stagingDatabaseIdentity = {
+        status: 'FAIL',
+        details: `Neon project ID mismatch: expected ${STAGING_NEON_PROJECT_ID}, got ${projectId}`
+      };
+    } else if (options.allowRehearsalBranch) {
+      stagingDatabaseIdentity = {
+        status: 'PASS',
+        details: `Verified staging rehearsal environment: project=${projectId}, branch=${branchId}, endpoint=${endpointId} (explicit rehearsal mode permitted)`
+      };
+    } else if (branchId !== STAGING_NEON_BRANCH_ID || endpointId !== STAGING_NEON_ENDPOINT_ID) {
+      stagingDatabaseIdentity = {
+        status: 'FAIL',
+        details: `Permanent staging identity mismatch: branch expected ${STAGING_NEON_BRANCH_ID} (got ${branchId}), endpoint expected ${STAGING_NEON_ENDPOINT_ID} (got ${endpointId})`
       };
     } else {
       stagingDatabaseIdentity = {
         status: 'PASS',
-        details: `Verified staging project identity: ${row.neon_project_id || STAGING_NEON_PROJECT_ID} (branch: ${row.neon_branch_id || 'verified'})`
+        details: `Verified permanent staging identity: project=${projectId}, branch=${branchId}, endpoint=${endpointId}`
       };
     }
   } catch (err: any) {
-    if (err.message.includes('[SECURITY FATAL]')) {
+    if (err.message && err.message.includes('[SECURITY FATAL]')) {
       throw err;
     }
-    // If running in local mock/test container without neon.* GUCs, check if error was fatal
     stagingDatabaseIdentity = {
-      status: 'PASS',
-      details: 'Target environment verified in isolated test mode.'
+      status: 'FAIL',
+      details: `Database query error verifying Neon identity: ${err.message || String(err)}. Fail-closed.`
     };
   }
 
@@ -334,6 +349,7 @@ async function main() {
     process.argv.includes('--token') ? process.argv[process.argv.indexOf('--token') + 1] : undefined
   );
   const requireBarrier = !process.argv.includes('--no-barrier');
+  const allowRehearsal = process.argv.includes('--allow-rehearsal');
 
   console.log(`[WRITE_ISOLATION] Probing staging write isolation against target: ${classification.sanitizedTarget}...`);
 
@@ -343,7 +359,11 @@ async function main() {
   });
 
   try {
-    const result = await verifyStagingWriteIsolation(client, { bypassToken, requireMaintenanceBarrier: requireBarrier });
+    const result = await verifyStagingWriteIsolation(client, {
+      bypassToken,
+      requireMaintenanceBarrier: requireBarrier,
+      allowRehearsalBranch: allowRehearsal
+    });
 
     console.log(`\n================================================================================`);
     console.log(`   AIRA AI 2026 — STAGING WRITE ISOLATION & BARRIER 5-GATE RESULTS              `);

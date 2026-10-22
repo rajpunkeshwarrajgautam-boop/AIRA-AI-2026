@@ -121,6 +121,16 @@ async function main() {
   await migrationClient.raw(`ALTER DATABASE "${meta.db}" SET default_transaction_read_only = off;`).catch(() => {});
   await migrationClient.raw(`DROP FUNCTION IF EXISTS ${STAGING_MAINTENANCE_FUNCTION}() CASCADE;`).catch(() => {});
   await migrationClient.raw(`DROP TABLE IF EXISTS ${STAGING_MAINTENANCE_TABLE};`).catch(() => {});
+  await migrationClient.raw(`
+    DO $$
+    BEGIN
+      EXECUTE format('REVOKE CONNECT ON DATABASE %I FROM test_legacy_preview_deploy_role', '${meta.db}');
+      DROP ROLE IF EXISTS test_legacy_preview_deploy_role;
+    EXCEPTION WHEN OTHERS THEN
+      NULL;
+    END
+    $$;
+  `).catch(() => {});
 
   // Ensure isolated integration test table exists
   await migrationClient.raw(`
@@ -323,6 +333,96 @@ async function main() {
 
       assert.ok(truncErr, 'Owner TRUNCATE without token elevation must be blocked by statement trigger');
       assert.equal(truncErr.code, '55P03', `Expected SQLSTATE 55P03, got ${truncErr.code}`);
+    });
+
+    // ── 5b. Defect 1: Legacy credential containment proof (terminate backends + NOLOGIN) ────
+    await runStep('9b. Legacy credential containment: backend termination and NOLOGIN invalidation in rehearsal', async () => {
+      const LEGACY_MOCK_ROLE = 'test_legacy_preview_deploy_role';
+      const LEGACY_MOCK_PASSWORD = `LegacySec_${Date.now()}!`;
+
+      // 1. Provision disposable legacy preview role
+      await migrationClient.raw(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${LEGACY_MOCK_ROLE}') THEN
+            CREATE ROLE ${LEGACY_MOCK_ROLE} WITH LOGIN PASSWORD '${LEGACY_MOCK_PASSWORD}' NOSUPERUSER NOCREATEDB NOCREATEROLE;
+          ELSE
+            ALTER ROLE ${LEGACY_MOCK_ROLE} WITH LOGIN PASSWORD '${LEGACY_MOCK_PASSWORD}';
+          END IF;
+        END
+        $$;
+      `);
+
+      await migrationClient.raw(`
+        DO $$
+        BEGIN
+          EXECUTE format('GRANT CONNECT ON DATABASE %I TO ${LEGACY_MOCK_ROLE}', current_database());
+        END
+        $$;
+      `);
+
+      // 2. Establish connection as legacy role (simulating older Vercel preview deployment)
+      const legacyUrl = new URL(targetUrl);
+      legacyUrl.username = LEGACY_MOCK_ROLE;
+      legacyUrl.password = LEGACY_MOCK_PASSWORD;
+
+      const legacyClient: Knex = knex({
+        client: 'pg',
+        connection: {
+          connectionString: legacyUrl.toString(),
+          ssl: isNeon ? { rejectUnauthorized: false } : false
+        },
+        pool: { min: 1, max: 1, acquireTimeoutMillis: 10000 }
+      });
+
+      const legacyWho = await legacyClient.raw('SELECT current_user;');
+      assert.equal(legacyWho.rows?.[0]?.current_user, LEGACY_MOCK_ROLE, 'Legacy preview role connected');
+      await legacyClient.destroy();
+
+      // 3. Containment Sequence: Terminate active backends
+      await migrationClient.raw(`
+        SELECT pg_terminate_backend(pid)
+        FROM pg_stat_activity
+        WHERE usename = :role AND pid <> pg_backend_pid();
+      `, { role: LEGACY_MOCK_ROLE });
+
+      // 4. Containment Sequence: Invalidate login for legacy role
+      await migrationClient.raw(`ALTER ROLE ${LEGACY_MOCK_ROLE} NOLOGIN;`);
+
+      // 5. Prove older deployment cannot connect with invalidated credential
+      let rejected = false;
+      const invalidClient: Knex = knex({
+        client: 'pg',
+        connection: {
+          connectionString: legacyUrl.toString(),
+          ssl: isNeon ? { rejectUnauthorized: false } : false
+        },
+        pool: { min: 1, max: 1, acquireTimeoutMillis: 5000 }
+      });
+
+      try {
+        await invalidClient.raw('SELECT 1;');
+      } catch (err: any) {
+        rejected = true;
+        assert.ok(
+          err.code === '28000' || String(err.message).includes('not permitted to log in') || String(err.message).includes('authentication failed'),
+          `Expected login rejection error, got code=${err.code} msg=${err.message}`
+        );
+      } finally {
+        await invalidClient.destroy().catch(() => {});
+      }
+
+      assert.equal(rejected, true, 'Legacy role with NOLOGIN must be rejected upon connection attempt');
+
+      // 6. Clean up mock legacy role
+      await migrationClient.raw(`
+        DO $$
+        BEGIN
+          EXECUTE format('REVOKE CONNECT ON DATABASE %I FROM ${LEGACY_MOCK_ROLE}', current_database());
+          DROP ROLE IF EXISTS ${LEGACY_MOCK_ROLE};
+        END
+        $$;
+      `);
     });
 
     // ── 6. Privileged session elevation with valid token ───────────────────────

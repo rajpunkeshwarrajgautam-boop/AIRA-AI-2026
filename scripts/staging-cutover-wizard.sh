@@ -239,14 +239,21 @@ fi
 note "✓ All 5 staging write isolation gates verified PASS."
 pause "Press Enter to proceed to merge authorization..."
 
-# ── Stage 4: Merge PR #96 into staging ────────────────────────────────────
-stage "Merge PR #96 into staging (Vercel Build & Migrations)"
-say "Merging PR #96 into staging triggers the automated Vercel preview deployment."
+# ── Stage 4: Apply Migrations 016–022 & Merge PR #96 into staging ─────────────
+stage "Apply Migrations 016–022 & Merge PR #96 into staging"
+say "Operator applies schema migrations 016–022 using privileged credentials and maintenance bypass token."
+say "Then, merging PR #96 into staging triggers the automated Vercel preview deployment."
 say "vercel.json buildCommand executes: scripts/staging-db-guard.ts && npm run db:migrate && npm run db:verify:deploy"
+step "Execute migrations 016–022 with operator token:"
+say "  AIRA_MAINTENANCE_BYPASS_TOKEN=\"\$BYPASS_TOKEN\" DATABASE_URL=\"\$STAGING_DB_URL\" npm run db:migrate"
+if confirm "Run schema migrations 016–022 now using operator token and staging DATABASE_URL?"; then
+  AIRA_MAINTENANCE_BYPASS_TOKEN="$BYPASS_TOKEN" DATABASE_URL="$STAGING_DB_URL" npm run db:migrate
+fi
 open_url "https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/96"
 step "Click 'Merge pull request' (or Rebase and merge) on PR #96"
 step "Monitor the Vercel deployment at: https://vercel.com/rajpunkeshwarrajgautam-boops-projects/aira-ai-2026"
-step "Confirm Vercel build output logs: 'knex migrate:latest' applied migrations 016 through 022"
+step "Confirm Vercel build output logs: '[db:migrate] Maintenance barrier active on staging. All 22 migrations already applied. Skipping Knex write lock acquisition.'"
+step "Confirm db:verify:deploy succeeds and Vercel build completes successfully"
 pause "Press Enter once the Vercel deployment is READY on staging..."
 
 # ── Stage 5: Execute Controlled Historical Identity Import ────────────────

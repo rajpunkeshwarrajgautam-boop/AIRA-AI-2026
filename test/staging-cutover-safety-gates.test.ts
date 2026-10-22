@@ -327,6 +327,16 @@ console.log('  ✓ Fail closed: Inactive maintenance barrier fails write isolati
 // 5.4 Clean idle staging state with active maintenance barrier passes all 5 gates
 const mockCleanIsolationClient: any = {
   raw: async (sql: string) => {
+    if (sql.includes('neon.project_id')) {
+      return {
+        rows: [{
+          db_name: 'neondb',
+          neon_project_id: STAGING_NEON_PROJECT_ID,
+          neon_branch_id: STAGING_NEON_BRANCH_ID,
+          neon_endpoint_id: STAGING_NEON_ENDPOINT_ID
+        }]
+      };
+    }
     if (sql.includes('_aira_staging_maintenance')) {
       return {
         rows: [{
@@ -367,6 +377,134 @@ assert.equal(resCleanIsolation.privilegedMigrationPath.status, 'PASS');
 assert.equal(resCleanIsolation.activeWriters.length, 0);
 assert.equal(resCleanIsolation.conflictingLocks.length, 0);
 console.log('  ✓ Clean idle staging state with active maintenance barrier passes all 5 gates');
+
+// 5.5 Defect 2: Missing project metadata must FAIL
+const mockMissingProjectClient: any = {
+  raw: async (sql: string) => {
+    if (sql.includes('neon.project_id')) {
+      return { rows: [{ db_name: 'neondb', neon_project_id: null, neon_branch_id: STAGING_NEON_BRANCH_ID, neon_endpoint_id: STAGING_NEON_ENDPOINT_ID }] };
+    }
+    return { rows: [] };
+  }
+};
+const resMissingProject = await verifyStagingWriteIsolation(mockMissingProjectClient);
+assert.equal(resMissingProject.isolated, false);
+assert.equal(resMissingProject.stagingDatabaseIdentity.status, 'FAIL');
+assert.match(resMissingProject.stagingDatabaseIdentity.details, /Missing required Neon database identity settings/);
+console.log('  ✓ Fail closed: Missing project metadata fails identity gate');
+
+// 5.6 Defect 2: Missing branch metadata must FAIL
+const mockMissingBranchClient: any = {
+  raw: async (sql: string) => {
+    if (sql.includes('neon.project_id')) {
+      return { rows: [{ db_name: 'neondb', neon_project_id: STAGING_NEON_PROJECT_ID, neon_branch_id: '', neon_endpoint_id: STAGING_NEON_ENDPOINT_ID }] };
+    }
+    return { rows: [] };
+  }
+};
+const resMissingBranch = await verifyStagingWriteIsolation(mockMissingBranchClient);
+assert.equal(resMissingBranch.isolated, false);
+assert.equal(resMissingBranch.stagingDatabaseIdentity.status, 'FAIL');
+assert.match(resMissingBranch.stagingDatabaseIdentity.details, /Missing required Neon database identity settings/);
+console.log('  ✓ Fail closed: Missing branch metadata fails identity gate');
+
+// 5.7 Defect 2: Missing endpoint metadata must FAIL
+const mockMissingEndpointClient: any = {
+  raw: async (sql: string) => {
+    if (sql.includes('neon.project_id')) {
+      return { rows: [{ db_name: 'neondb', neon_project_id: STAGING_NEON_PROJECT_ID, neon_branch_id: STAGING_NEON_BRANCH_ID, neon_endpoint_id: undefined }] };
+    }
+    return { rows: [] };
+  }
+};
+const resMissingEndpoint = await verifyStagingWriteIsolation(mockMissingEndpointClient);
+assert.equal(resMissingEndpoint.isolated, false);
+assert.equal(resMissingEndpoint.stagingDatabaseIdentity.status, 'FAIL');
+assert.match(resMissingEndpoint.stagingDatabaseIdentity.details, /Missing required Neon database identity settings/);
+console.log('  ✓ Fail closed: Missing endpoint metadata fails identity gate');
+
+// 5.8 Defect 2: Database query errors must FAIL
+const mockQueryErrorClient: any = {
+  raw: async (sql: string) => {
+    if (sql.includes('neon.project_id')) {
+      throw new Error('connection closed abruptly during handshake');
+    }
+    return { rows: [] };
+  }
+};
+const resQueryError = await verifyStagingWriteIsolation(mockQueryErrorClient);
+assert.equal(resQueryError.isolated, false);
+assert.equal(resQueryError.stagingDatabaseIdentity.status, 'FAIL');
+assert.match(resQueryError.stagingDatabaseIdentity.details, /Database query error verifying Neon identity/);
+console.log('  ✓ Fail closed: Database query error fails identity gate');
+
+// 5.9 Defect 2: Incorrect branch ID without rehearsal flag must FAIL
+const mockWrongBranchClient: any = {
+  raw: async (sql: string) => {
+    if (sql.includes('neon.project_id')) {
+      return { rows: [{ db_name: 'neondb', neon_project_id: STAGING_NEON_PROJECT_ID, neon_branch_id: 'br-wrong-branch-12345', neon_endpoint_id: STAGING_NEON_ENDPOINT_ID }] };
+    }
+    return { rows: [] };
+  }
+};
+const resWrongBranch = await verifyStagingWriteIsolation(mockWrongBranchClient);
+assert.equal(resWrongBranch.isolated, false);
+assert.equal(resWrongBranch.stagingDatabaseIdentity.status, 'FAIL');
+assert.match(resWrongBranch.stagingDatabaseIdentity.details, /Permanent staging identity mismatch/);
+console.log('  ✓ Fail closed: Incorrect branch ID fails permanent staging identity gate');
+
+// 5.10 Defect 2: Incorrect endpoint ID without rehearsal flag must FAIL
+const mockWrongEndpointClient: any = {
+  raw: async (sql: string) => {
+    if (sql.includes('neon.project_id')) {
+      return { rows: [{ db_name: 'neondb', neon_project_id: STAGING_NEON_PROJECT_ID, neon_branch_id: STAGING_NEON_BRANCH_ID, neon_endpoint_id: 'ep-wrong-endpoint-9999' }] };
+    }
+    return { rows: [] };
+  }
+};
+const resWrongEndpoint = await verifyStagingWriteIsolation(mockWrongEndpointClient);
+assert.equal(resWrongEndpoint.isolated, false);
+assert.equal(resWrongEndpoint.stagingDatabaseIdentity.status, 'FAIL');
+assert.match(resWrongEndpoint.stagingDatabaseIdentity.details, /Permanent staging identity mismatch/);
+console.log('  ✓ Fail closed: Incorrect endpoint ID fails permanent staging identity gate');
+
+// 5.11 Defect 2: Production database connection must throw [SECURITY FATAL]
+const mockProductionTargetClient: any = {
+  raw: async (sql: string) => {
+    if (sql.includes('neon.project_id')) {
+      return { rows: [{ db_name: 'neondb', neon_project_id: PRODUCTION_NEON_PROJECT_ID, neon_branch_id: 'br-shiny-moon-b3vy9xj7', neon_endpoint_id: 'ep-withered-art-b36ox90b' }] };
+    }
+    return { rows: [] };
+  }
+};
+let prodThrown = false;
+try {
+  await verifyStagingWriteIsolation(mockProductionTargetClient);
+} catch (err: any) {
+  prodThrown = true;
+  assert.match(err.message, /\[SECURITY FATAL\] Connected database is PRODUCTION/);
+}
+assert.equal(prodThrown, true, 'Production target must throw [SECURITY FATAL]');
+console.log('  ✓ Fail closed: Production database target throws [SECURITY FATAL]');
+
+// 5.12 Defect 2: Rehearsal branch under mute-frost-50372225 accepted ONLY when allowRehearsalBranch: true
+const mockRehearsalClient: any = {
+  raw: async (sql: string) => {
+    if (sql.includes('neon.project_id')) {
+      return { rows: [{ db_name: 'neondb', neon_project_id: STAGING_NEON_PROJECT_ID, neon_branch_id: 'br-silent-frog-b3l8eur9', neon_endpoint_id: 'ep-steep-wildflower-b3nj385g' }] };
+    }
+    return { rows: [] };
+  }
+};
+const resRehearsalWithoutFlag = await verifyStagingWriteIsolation(mockRehearsalClient);
+assert.equal(resRehearsalWithoutFlag.stagingDatabaseIdentity.status, 'FAIL');
+assert.match(resRehearsalWithoutFlag.stagingDatabaseIdentity.details, /Permanent staging identity mismatch/);
+
+const resRehearsalWithFlag = await verifyStagingWriteIsolation(mockRehearsalClient, { allowRehearsalBranch: true });
+assert.equal(resRehearsalWithFlag.stagingDatabaseIdentity.status, 'PASS');
+assert.match(resRehearsalWithFlag.stagingDatabaseIdentity.details, /Verified staging rehearsal environment/);
+console.log('  ✓ Explicit rehearsal mode permitted only when allowRehearsalBranch: true');
+
 
 
 // ── Test Group 6: Staging Cutover Integrity & 11 Assertions Gate ─────────────
@@ -417,5 +555,5 @@ assert.equal(auditMissingMig.checks['MIGRATIONS_016_022_APPLIED'], false);
 console.log('  ✓ Fail closed: Staging not certified when migrations count < 22');
 
 console.log('\n================================================================================');
-console.log('  ✓ ALL 18 CUTOVER SAFETY GATE FAIL-CLOSED ASSERTIONS PASSED SUCCESSFULLY!      ');
+console.log('  ✓ ALL 26 CUTOVER SAFETY GATE FAIL-CLOSED ASSERTIONS PASSED SUCCESSFULLY!      ');
 console.log('================================================================================\n');

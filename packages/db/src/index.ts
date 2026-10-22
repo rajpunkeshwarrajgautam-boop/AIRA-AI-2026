@@ -1,6 +1,7 @@
 import 'dotenv/config';
-import knex from 'knex';
+import knex, { Knex } from 'knex';
 import * as path from 'path';
+import * as fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -52,6 +53,114 @@ export const db = knex({
   }
 });
 
+export interface MigrationMaintenancePlanResult {
+  canProceed: boolean;
+  shouldSkipLock: boolean;
+  isMaintenanceActive: boolean;
+  missingMigrations: string[];
+  appliedCount: number;
+  expectedCount: number;
+  reason: string;
+}
+
+/**
+ * Evaluates whether migrations can execute under the staging maintenance barrier.
+ * In maintenance mode without a privileged token (such as automated Vercel staging builds),
+ * checks read-only whether all schema migrations (001–022) were already applied out-of-band.
+ * If all migrations are applied, skips Knex lock acquisition (which requires DML).
+ * If unapplied migrations remain without a token, fails closed immediately.
+ */
+export async function evaluateMigrationMaintenancePlan(
+  client: Knex,
+  options: { bypassToken?: string; migrationsDir?: string } = {}
+): Promise<MigrationMaintenancePlanResult> {
+  const token = options.bypassToken || process.env.AIRA_MAINTENANCE_BYPASS_TOKEN || process.env.STAGING_MAINTENANCE_TOKEN;
+  const dir = options.migrationsDir || path.join(__dirname, 'migrations');
+
+  let isMaintenanceActive = false;
+  try {
+    const sentinelRes = await client.raw(`
+      SELECT is_active FROM _aira_staging_maintenance WHERE id = 1;
+    `);
+    isMaintenanceActive = Boolean(sentinelRes.rows?.[0]?.is_active);
+  } catch {
+    isMaintenanceActive = false;
+  }
+
+  if (!isMaintenanceActive) {
+    return {
+      canProceed: true,
+      shouldSkipLock: false,
+      isMaintenanceActive: false,
+      missingMigrations: [],
+      appliedCount: 0,
+      expectedCount: 0,
+      reason: 'Maintenance barrier is inactive: normal Knex migration flow permitted'
+    };
+  }
+
+  if (token) {
+    return {
+      canProceed: true,
+      shouldSkipLock: false,
+      isMaintenanceActive: true,
+      missingMigrations: [],
+      appliedCount: 0,
+      expectedCount: 0,
+      reason: 'Privileged maintenance bypass token provided: elevated Knex migration permitted'
+    };
+  }
+
+  // Maintenance is active, and NO bypass token is provided (Vercel automated build after merge)
+  const expectedMigrations = fs.existsSync(dir)
+    ? fs.readdirSync(dir).filter(f => /^\d+_.+\.ts$/.test(f)).sort()
+    : [];
+
+  const hasKnexTable = await client.schema.hasTable('knex_migrations');
+  if (!hasKnexTable) {
+    return {
+      canProceed: false,
+      shouldSkipLock: false,
+      isMaintenanceActive: true,
+      missingMigrations: expectedMigrations,
+      appliedCount: 0,
+      expectedCount: expectedMigrations.length,
+      reason: 'knex_migrations table missing under maintenance mode without bypass token'
+    };
+  }
+
+  const appliedRows = await client('knex_migrations').select('name');
+  const appliedSet = new Set(appliedRows.map((r: any) => String(r.name)));
+  const missing = expectedMigrations.filter(m => !appliedSet.has(m));
+
+  if (missing.length === 0) {
+    return {
+      canProceed: true,
+      shouldSkipLock: true,
+      isMaintenanceActive: true,
+      missingMigrations: [],
+      appliedCount: appliedRows.length,
+      expectedCount: expectedMigrations.length,
+      reason: `All ${expectedMigrations.length} schema migrations (001–022) already applied: skipping Knex lock acquisition under maintenance`
+    };
+  }
+
+  return {
+    canProceed: false,
+    shouldSkipLock: false,
+    isMaintenanceActive: true,
+    missingMigrations: missing,
+    appliedCount: appliedRows.length,
+    expectedCount: expectedMigrations.length,
+    reason: `${missing.length} unapplied migration(s) remain (${missing.join(', ')}) under maintenance mode without bypass token`
+  };
+}
+
+export interface RunMigrationsOptions {
+  bypassToken?: string;
+  connectionString?: string;
+}
+
 /**
  * Executes Knex database migrations using a dedicated single connection (`pool: { min: 1, max: 1 }`).
  * 
@@ -61,16 +170,23 @@ export const db = knex({
  * 2. `SET aira.privileged_token = '<token>';`
  * 
  * Any elevation failure throws immediately and halts migration execution (fail-closed, never swallowed).
+ *
+ * Staging Maintenance Guarantee (Defect 3 resolution):
+ * In permanent staging maintenance mode, if no bypass token is provided (such as in Vercel's automated
+ * preview buildCommand following merge), migrations 001–022 are verified read-only.
+ * If already applied out-of-band by the cutover operator, Knex lock acquisition is safely skipped.
+ * If unapplied migrations remain without token, execution fails closed immediately.
  */
-export async function runMigrations(options: { bypassToken?: string } = {}) {
+export async function runMigrations(options: RunMigrationsOptions = {}) {
   const token = options.bypassToken || process.env.AIRA_MAINTENANCE_BYPASS_TOKEN || process.env.STAGING_MAINTENANCE_TOKEN;
+  const targetConnStr = options.connectionString || effectiveConnectionString;
 
   // Single connection pool guarantees all migration queries execute on the elevated backend
   const migrationDb = knex({
     client: 'pg',
     connection: {
-      connectionString: effectiveConnectionString,
-      ssl: effectiveConnectionString.includes('neon.tech') || effectiveConnectionString.includes('sslmode=require')
+      connectionString: targetConnStr,
+      ssl: targetConnStr.includes('neon.tech') || targetConnStr.includes('sslmode=require')
         ? { rejectUnauthorized: false }
         : false,
     },
@@ -100,6 +216,17 @@ export async function runMigrations(options: { bypassToken?: string } = {}) {
   });
 
   try {
+    const plan = await evaluateMigrationMaintenancePlan(migrationDb, { bypassToken: token });
+
+    if (!plan.canProceed) {
+      throw new Error(`[SECURITY FATAL] Staging database is in maintenance mode and unapplied migrations remain: ${plan.reason}. Fail-closed.`);
+    }
+
+    if (plan.shouldSkipLock) {
+      console.log(`[db:migrate] ${plan.reason}`);
+      return;
+    }
+
     await migrationDb.migrate.latest();
   } finally {
     await migrationDb.destroy();
