@@ -130,8 +130,8 @@ async function runAll() {
     triggers: new Set<string>()
   };
 
-  const createMockDbClient = () => ({
-    raw: async (sql: string, params?: any) => {
+  const createMockDbClient = () => {
+    const rawHandler = async (sql: string, params?: any) => {
       const s = sql.trim();
 
       if (s.includes('neon.project_id')) {
@@ -233,25 +233,27 @@ async function runAll() {
       }
 
       return { rows: [] };
-    },
-    transaction: async (cb: any) => {
-      let elevated = false;
-      return cb({
-        raw: async (txSql: string) => {
-          if (txSql.includes('SET LOCAL aira.privileged_token')) {
-            elevated = true;
-            return { rows: [] };
+    };
+
+    return {
+      raw: rawHandler,
+      transaction: async (cb: any) => {
+        let elevated = false;
+        return cb({
+          raw: async (txSql: string, params?: any) => {
+            if (txSql.includes('SET LOCAL aira.privileged_token')) {
+              elevated = true;
+              return { rows: [] };
+            }
+            if (txSql.includes(`INSERT INTO ${STAGING_PROBE_TABLE}`) && elevated) {
+              return { rows: [] };
+            }
+            return rawHandler(txSql, params);
           }
-          if (txSql.includes(`INSERT INTO ${STAGING_PROBE_TABLE}`) && !elevated) {
-            const err: any = new Error('[STAGING_MAINTENANCE_BLOCKED]');
-            err.code = '55P03';
-            throw err;
-          }
-          return { rows: [] };
-        }
-      });
-    }
-  });
+        });
+      }
+    };
+  };
 
   await test('Activate staging maintenance initializes sentinel and attaches triggers to tables', async () => {
     const mockClient: any = createMockDbClient();

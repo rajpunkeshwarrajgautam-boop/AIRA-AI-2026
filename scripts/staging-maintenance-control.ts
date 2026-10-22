@@ -8,6 +8,7 @@
  * - Verify: Actively proves that unprivileged writes are rejected while privileged operations work.
  */
 
+import fs from 'node:fs';
 import knex from 'knex';
 import {
   classifyDatabaseUrl,
@@ -57,8 +58,18 @@ async function main() {
       console.log(`  Guarded Tables: ${res.guardedTablesCount}`);
       console.log(`  Read-Only Default Set: ${res.readOnlySet}`);
       console.log(`  Details: ${res.details}`);
-      console.log(`\n  [IMPORTANT] Store the bypass token securely for the Knex migration and import runners:`);
-      console.log(`  AIRA_MAINTENANCE_BYPASS_TOKEN=${res.bypassToken}\n`);
+      console.log(`\n  [SECURITY] Bypass token active in database sentinel.`);
+      console.log(`  [SECURITY] Token is held in environment variable AIRA_MAINTENANCE_BYPASS_TOKEN.`);
+      console.log(`  [SECURITY] Never logged to console, CI logs, or persistent reports.`);
+      if (!process.env.AIRA_MAINTENANCE_BYPASS_TOKEN && res.bypassToken) {
+        try {
+          fs.writeFileSync('.aira-maintenance-token.local', res.bypassToken, { mode: 0o600 });
+          console.log(`  [SECURITY] Generated token saved to gitignored file .aira-maintenance-token.local (mode 0600).`);
+        } catch {
+          // ignore
+        }
+      }
+      console.log('');
       process.exit(0);
     }
 

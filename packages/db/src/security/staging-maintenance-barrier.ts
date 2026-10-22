@@ -209,113 +209,139 @@ export async function activateStagingMaintenance(
   const bypassToken = options.bypassToken || generateBypassToken();
   const tokenHash = hashBypassToken(bypassToken);
 
-  // 1. Create or initialize the maintenance sentinel table
-  await client.raw(`
-    CREATE TABLE IF NOT EXISTS ${STAGING_MAINTENANCE_TABLE} (
-      id INTEGER PRIMARY KEY DEFAULT 1,
-      is_active BOOLEAN NOT NULL DEFAULT true,
-      activated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      activated_by TEXT NOT NULL,
-      reason TEXT NOT NULL,
-      bypass_token_hash TEXT NOT NULL,
-      allowed_migration_id TEXT,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      CONSTRAINT single_row_maintenance_guard CHECK (id = 1)
-    );
-  `);
-
-  await client.raw(`
-    INSERT INTO ${STAGING_MAINTENANCE_TABLE} (id, is_active, activated_at, activated_by, reason, bypass_token_hash, updated_at)
-    VALUES (1, true, NOW(), :operator, :reason, :tokenHash, NOW())
-    ON CONFLICT (id) DO UPDATE SET
-      is_active = true,
-      activated_at = NOW(),
-      activated_by = :operator,
-      reason = :reason,
-      bypass_token_hash = :tokenHash,
-      updated_at = NOW();
-  `, { operator, reason, tokenHash });
-
-  // 2. Create the maintenance enforcement trigger function
-  // Handles row-level triggers (BEFORE INSERT OR UPDATE OR DELETE) and statement-level triggers (BEFORE TRUNCATE)
-  await client.raw(`
-    CREATE OR REPLACE FUNCTION ${STAGING_MAINTENANCE_FUNCTION}()
-    RETURNS TRIGGER AS $$
-    DECLARE
-      m_active BOOLEAN;
-      m_token_hash TEXT;
-      session_token TEXT;
-    BEGIN
-      SELECT is_active, bypass_token_hash INTO m_active, m_token_hash
-      FROM ${STAGING_MAINTENANCE_TABLE}
-      WHERE id = 1;
-
-      IF m_active IS TRUE THEN
-        session_token := current_setting('aira.privileged_token', true);
-        IF session_token IS NULL OR encode(sha256(session_token::bytea), 'hex') <> m_token_hash THEN
-          RAISE EXCEPTION '[STAGING_MAINTENANCE_BLOCKED] Operation denied: Permanent Staging database is in maintenance mode. Write path is locked.'
-            USING ERRCODE = '55P03';
-        END IF;
-      END IF;
-
-      IF TG_LEVEL = 'ROW' THEN
-        RETURN NEW;
-      ELSE
-        RETURN NULL;
-      END IF;
-    END;
-    $$ LANGUAGE plpgsql;
-  `);
-
-  // 3. Attach triggers to all existing application tables in public schema
-  const existingTablesRes = await client.raw(`
-    SELECT tablename 
-    FROM pg_tables 
-    WHERE schemaname = 'public' 
-      AND tablename NOT LIKE '_aira_%'
-      AND tablename NOT LIKE 'knex_%';
-  `);
-  const existingTables: string[] = (existingTablesRes.rows || []).map((r: any) => r.tablename);
   let guardedCount = 0;
 
-  for (const table of existingTables) {
-    // Both row trigger and truncate statement trigger
-    await client.raw(`
-      DROP TRIGGER IF EXISTS ${STAGING_MAINTENANCE_TRIGGER} ON "${table}";
-      CREATE TRIGGER ${STAGING_MAINTENANCE_TRIGGER}
-      BEFORE INSERT OR UPDATE OR DELETE ON "${table}"
-      FOR EACH ROW
-      EXECUTE FUNCTION ${STAGING_MAINTENANCE_FUNCTION}();
+  // Execute DDL, sentinel initialization, and trigger attachments atomically inside a transaction
+  try {
+    await client.transaction(async (trx) => {
+      // 1. Create or initialize the maintenance sentinel table
+      await trx.raw(`
+        CREATE TABLE IF NOT EXISTS ${STAGING_MAINTENANCE_TABLE} (
+          id INTEGER PRIMARY KEY DEFAULT 1,
+          is_active BOOLEAN NOT NULL DEFAULT true,
+          activated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          activated_by TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          bypass_token_hash TEXT NOT NULL,
+          allowed_migration_id TEXT,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          CONSTRAINT single_row_maintenance_guard CHECK (id = 1)
+        );
+      `);
 
-      DROP TRIGGER IF EXISTS ${STAGING_MAINTENANCE_TRUNC_TRIGGER} ON "${table}";
-      CREATE TRIGGER ${STAGING_MAINTENANCE_TRUNC_TRIGGER}
-      BEFORE TRUNCATE ON "${table}"
-      FOR EACH STATEMENT
-      EXECUTE FUNCTION ${STAGING_MAINTENANCE_FUNCTION}();
-    `);
-    guardedCount++;
+      await trx.raw(`
+        INSERT INTO ${STAGING_MAINTENANCE_TABLE} (id, is_active, activated_at, activated_by, reason, bypass_token_hash, updated_at)
+        VALUES (1, true, NOW(), :operator, :reason, :tokenHash, NOW())
+        ON CONFLICT (id) DO UPDATE SET
+          is_active = true,
+          activated_at = NOW(),
+          activated_by = :operator,
+          reason = :reason,
+          bypass_token_hash = :tokenHash,
+          updated_at = NOW();
+      `, { operator, reason, tokenHash });
+
+      // 2. Create the maintenance enforcement trigger function
+      // Handles row-level triggers (BEFORE INSERT OR UPDATE OR DELETE) and statement-level triggers (BEFORE TRUNCATE)
+      // Configured as SECURITY DEFINER with fixed search_path to securely query sentinel without granting runtime mutation
+      await trx.raw(`
+        CREATE OR REPLACE FUNCTION ${STAGING_MAINTENANCE_FUNCTION}()
+        RETURNS TRIGGER
+        SECURITY DEFINER
+        SET search_path = pg_catalog, public
+        AS $$
+        DECLARE
+          m_active BOOLEAN;
+          m_token_hash TEXT;
+          session_token TEXT;
+        BEGIN
+          SELECT is_active, bypass_token_hash INTO m_active, m_token_hash
+          FROM ${STAGING_MAINTENANCE_TABLE}
+          WHERE id = 1;
+
+          IF m_active IS TRUE THEN
+            session_token := current_setting('aira.privileged_token', true);
+            IF session_token IS NULL OR encode(sha256(session_token::bytea), 'hex') <> m_token_hash THEN
+              RAISE EXCEPTION '[STAGING_MAINTENANCE_BLOCKED] Operation denied: Permanent Staging database is in maintenance mode. Write path is locked.'
+                USING ERRCODE = '55P03';
+            END IF;
+          END IF;
+
+          IF TG_LEVEL = 'ROW' THEN
+            RETURN NEW;
+          ELSE
+            RETURN NULL;
+          END IF;
+        END;
+        $$ LANGUAGE plpgsql;
+
+        GRANT EXECUTE ON FUNCTION ${STAGING_MAINTENANCE_FUNCTION}() TO PUBLIC;
+      `);
+
+      // 3. Attach triggers to all existing application tables in public schema
+      const existingTablesRes = await trx.raw(`
+        SELECT tablename 
+        FROM pg_tables 
+        WHERE schemaname = 'public' 
+          AND tablename NOT LIKE '_aira_%'
+          AND tablename NOT LIKE 'knex_%';
+      `);
+      const existingTables: string[] = (existingTablesRes.rows || []).map((r: any) => r.tablename);
+
+      for (const table of existingTables) {
+        // Both row trigger and truncate statement trigger
+        await trx.raw(`
+          DROP TRIGGER IF EXISTS ${STAGING_MAINTENANCE_TRIGGER} ON "${table}";
+          CREATE TRIGGER ${STAGING_MAINTENANCE_TRIGGER}
+          BEFORE INSERT OR UPDATE OR DELETE ON "${table}"
+          FOR EACH ROW
+          EXECUTE FUNCTION ${STAGING_MAINTENANCE_FUNCTION}();
+
+          DROP TRIGGER IF EXISTS ${STAGING_MAINTENANCE_TRUNC_TRIGGER} ON "${table}";
+          CREATE TRIGGER ${STAGING_MAINTENANCE_TRUNC_TRIGGER}
+          BEFORE TRUNCATE ON "${table}"
+          FOR EACH STATEMENT
+          EXECUTE FUNCTION ${STAGING_MAINTENANCE_FUNCTION}();
+        `);
+        guardedCount++;
+      }
+
+      // 4. Create dedicated probe table for active write restriction verification
+      await trx.raw(`
+        CREATE TABLE IF NOT EXISTS ${STAGING_PROBE_TABLE} (
+          id VARCHAR(64) PRIMARY KEY,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        DROP TRIGGER IF EXISTS ${STAGING_MAINTENANCE_TRIGGER} ON ${STAGING_PROBE_TABLE};
+        CREATE TRIGGER ${STAGING_MAINTENANCE_TRIGGER}
+        BEFORE INSERT OR UPDATE OR DELETE ON ${STAGING_PROBE_TABLE}
+        FOR EACH ROW
+        EXECUTE FUNCTION ${STAGING_MAINTENANCE_FUNCTION}();
+
+        DROP TRIGGER IF EXISTS ${STAGING_MAINTENANCE_TRUNC_TRIGGER} ON ${STAGING_PROBE_TABLE};
+        CREATE TRIGGER ${STAGING_MAINTENANCE_TRUNC_TRIGGER}
+        BEFORE TRUNCATE ON ${STAGING_PROBE_TABLE}
+        FOR EACH STATEMENT
+        EXECUTE FUNCTION ${STAGING_MAINTENANCE_FUNCTION}();
+      `);
+
+      // 5. Ensure runtime role cannot modify sentinel table
+      await trx.raw(`
+        DO $$
+        BEGIN
+          IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'aira_staging_runtime') THEN
+            GRANT SELECT ON TABLE ${STAGING_MAINTENANCE_TABLE} TO aira_staging_runtime;
+            REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLE ${STAGING_MAINTENANCE_TABLE} FROM aira_staging_runtime;
+          END IF;
+        END
+        $$;
+      `);
+    });
+  } catch (err: any) {
+    throw new Error(`[SECURITY FATAL] Failed to transactionally activate staging maintenance barrier: ${err.message}. Changes rolled back.`);
   }
 
-  // 4. Create dedicated probe table for active write restriction verification
-  await client.raw(`
-    CREATE TABLE IF NOT EXISTS ${STAGING_PROBE_TABLE} (
-      id VARCHAR(64) PRIMARY KEY,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-    DROP TRIGGER IF EXISTS ${STAGING_MAINTENANCE_TRIGGER} ON ${STAGING_PROBE_TABLE};
-    CREATE TRIGGER ${STAGING_MAINTENANCE_TRIGGER}
-    BEFORE INSERT OR UPDATE OR DELETE ON ${STAGING_PROBE_TABLE}
-    FOR EACH ROW
-    EXECUTE FUNCTION ${STAGING_MAINTENANCE_FUNCTION}();
-
-    DROP TRIGGER IF EXISTS ${STAGING_MAINTENANCE_TRUNC_TRIGGER} ON ${STAGING_PROBE_TABLE};
-    CREATE TRIGGER ${STAGING_MAINTENANCE_TRUNC_TRIGGER}
-    BEFORE TRUNCATE ON ${STAGING_PROBE_TABLE}
-    FOR EACH STATEMENT
-    EXECUTE FUNCTION ${STAGING_MAINTENANCE_FUNCTION}();
-  `);
-
-  // 5. Attempt database-level read-only setting (best-effort secondary reinforcement)
+  // 6. Attempt database-level read-only setting (outside transaction block - ALTER DATABASE cannot run in transaction)
   let readOnlySet = false;
   try {
     const dbNameRes = await client.raw('SELECT current_database() as db_name;');
@@ -328,7 +354,7 @@ export async function activateStagingMaintenance(
     readOnlySet = false;
   }
 
-  // 6. Terminate idle backend sessions to clear stale connection states
+  // 7. Terminate idle backend sessions to clear stale connection states
   try {
     await client.raw(`
       SELECT pg_terminate_backend(pid) 
@@ -341,10 +367,20 @@ export async function activateStagingMaintenance(
     // Ignore if permission denied on unprivileged client
   }
 
-  // 7. Verify atomic enforcement probe
-  const probe = await verifyStagingWriteRestriction(client, { bypassToken });
-  if (!probe.writesBlocked || !probe.truncateBlocked) {
-    throw new Error(`[SECURITY FATAL] Maintenance barrier activation failed write-probe verification: writesBlocked=${probe.writesBlocked}, truncateBlocked=${probe.truncateBlocked}. Fail-closed.`);
+  // 8. Verify atomic enforcement probe (fail closed and roll back if write restriction is ineffective)
+  try {
+    const probe = await verifyStagingWriteRestriction(client, { bypassToken });
+    if (!probe.writesBlocked || !probe.truncateBlocked) {
+      throw new Error(`Probe check failed: writesBlocked=${probe.writesBlocked}, truncateBlocked=${probe.truncateBlocked}`);
+    }
+  } catch (probeErr: any) {
+    // Interruption/verification failure recovery: clean up completely rather than leaving broken state
+    await deactivateStagingMaintenance(client, {
+      operator: 'auto_rollback',
+      bypassToken,
+      allowRehearsalBranch: options.allowRehearsalBranch
+    }).catch(() => {});
+    throw new Error(`[SECURITY FATAL] Maintenance barrier activation verification failed: ${probeErr.message}. Barrier rolled back to clean state.`);
   }
 
   return {

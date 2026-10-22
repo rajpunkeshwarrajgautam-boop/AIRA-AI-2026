@@ -7,18 +7,15 @@
  * 1. Blocks all mutating HTTP methods (POST, PUT, PATCH, DELETE).
  * 2. Blocks mutating GET endpoints (OAuth start, callbacks, account link initiation).
  * 3. Exempts public health checks (/api/health, /api/ready/*) and CORS OPTIONS preflights.
- * 4. Permits authorized release orchestrators passing the verified bypass token
- *    via `X-Aira-Maintenance-Token` header.
+ * 4. Strict security: NO HTTP header bypass permitted. All privileged operations
+ *    execute strictly out-of-band via direct database connections.
  * 5. Returns clean HTTP 503 Service Unavailable with standard Retry-After headers.
  */
 
-import crypto from 'node:crypto';
 import type { Request, Response, NextFunction } from 'express';
 
 export interface MaintenanceConfig {
   enabled?: boolean;
-  bypassToken?: string;
-  bypassTokenHash?: string;
   customMessage?: string;
 }
 
