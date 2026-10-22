@@ -759,18 +759,18 @@ console.log('  ✓ Proved: Read-only endpoints (/api/health, /api/ready/benchmar
 // 8.2 Verify CUTOVER_PROTOCOL_STEPS sequence ordering
 const step7 = CUTOVER_PROTOCOL_STEPS.find(s => s.step === 7);
 assert.ok(step7, 'Step 7 must exist');
-assert.equal(step7.id, '7_MAINTENANCE_ACTIVE_VERIFICATION');
+assert.equal(step7.id, '7_VERIFY_DATA_INTEGRITY');
 assert.ok(step7.description.includes('read-only health checks'));
 assert.ok(step7.description.includes('503'));
 
 const step8 = CUTOVER_PROTOCOL_STEPS.find(s => s.step === 8);
 assert.ok(step8, 'Step 8 must exist');
-assert.equal(step8.id, '8_CONTROLLED_MAINTENANCE_DEACTIVATION');
+assert.equal(step8.id, '8_CERTIFY_DEPLOYED_APP');
 assert.ok(step8.prerequisites.includes('Step 7 complete and certified'));
 
 const step9 = CUTOVER_PROTOCOL_STEPS.find(s => s.step === 9);
 assert.ok(step9, 'Step 9 must exist');
-assert.equal(step9.id, '9_POST_DEACTIVATION_BROWSER_ACCEPTANCE');
+assert.equal(step9.id, '9_PERMIT_REAL_BROWSER_ACCEPTANCE');
 assert.ok(step9.prerequisites.includes('Step 8 complete'));
 assert.ok(step9.description.includes('writes restored'));
 assert.ok(step9.verificationGate.includes('never claim PASS from a simulated browser test'));

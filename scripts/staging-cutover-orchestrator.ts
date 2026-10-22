@@ -183,8 +183,8 @@ export const CUTOVER_PROTOCOL_STEPS: CutoverStepDefinition[] = [
   },
   {
     step: 7,
-    id: '7_MAINTENANCE_ACTIVE_VERIFICATION',
-    title: 'Maintenance-Active Verification & Write Restriction Probe',
+    id: '7_VERIFY_DATA_INTEGRITY',
+    title: 'Verify Maintenance-Active Data Integrity, Schema 022, and Write Restriction Probe',
     executor: 'ORCHESTRATOR',
     description: 'Verify deployment identity, database integrity, schema version 022, and read-only health checks. Actively prove mutating endpoints return HTTP 503 [STAGING_MAINTENANCE_BLOCKED] and database unprivileged writes are blocked with SQLSTATE 55P03.',
     prerequisites: ['Step 6 complete', 'Migrations 016–022 applied', 'Historical identity import complete'],
@@ -194,7 +194,7 @@ export const CUTOVER_PROTOCOL_STEPS: CutoverStepDefinition[] = [
   },
   {
     step: 8,
-    id: '8_CONTROLLED_MAINTENANCE_DEACTIVATION',
+    id: '8_CERTIFY_DEPLOYED_APP',
     title: 'Controlled Maintenance Deactivation & Write Restoration Gate',
     executor: 'OWNER_MANUAL',
     description: 'Deactivate maintenance barrier ONLY after all required database integrity, schema version, and deployment identity checks pass. Explicitly verify database writes are restored and retire maintenance bypass token.',
@@ -205,7 +205,7 @@ export const CUTOVER_PROTOCOL_STEPS: CutoverStepDefinition[] = [
   },
   {
     step: 9,
-    id: '9_POST_DEACTIVATION_BROWSER_ACCEPTANCE',
+    id: '9_PERMIT_REAL_BROWSER_ACCEPTANCE',
     title: 'Post-Deactivation Live Real-Browser Acceptance & Certification',
     executor: 'OWNER_MANUAL',
     description: 'Perform live owner real-browser acceptance on staging.virexaaiventures.com with writes restored: Google/GitHub OAuth login, credit wallet 100 balance continuity, and real chat streaming with persistence.',
