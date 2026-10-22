@@ -464,9 +464,17 @@ async function main() {
   }
 
   if (mode === '--verify-integrity' || mode === 'verify-integrity') {
-    const targetCs = args[1] || process.env.TARGET_DB_URL || process.env.DATABASE_URL;
+    // Reject database connection strings in command-line arguments to prevent credential exposure in process listings
+    for (const arg of args.slice(1)) {
+      if (arg.startsWith('postgres://') || arg.startsWith('postgresql://') || (arg.includes('://') && arg.includes('@'))) {
+        console.error('[SECURITY FATAL] Supplying database connection strings via command-line arguments is strictly prohibited to prevent credential exposure in process listings. Pass via TARGET_DB_URL, STAGING_DB_URL, or DATABASE_URL environment variables.');
+        process.exit(1);
+      }
+    }
+
+    const targetCs = process.env.TARGET_DB_URL || process.env.STAGING_DB_URL || process.env.DATABASE_URL;
     if (!targetCs) {
-      console.error('Error: Target database connection string required for integrity audit.');
+      console.error('Error: Target database connection string required for integrity audit (pass via TARGET_DB_URL or DATABASE_URL).');
       process.exit(1);
     }
 

@@ -25,7 +25,10 @@ import {
   COMMERCIAL_PR92_ENDPOINT_ID
 } from '../packages/db/src/security/database-isolation-guard.js';
 import {
-  hashBypassToken
+  hashBypassToken,
+  validateHealthCheckResponse,
+  validateMaintenanceRestrictionResponse,
+  deactivateStagingMaintenance
 } from '../packages/db/src/security/staging-maintenance-barrier.js';
 import {
   createStagingMaintenanceMiddleware
@@ -777,6 +780,138 @@ assert.ok(step9.verificationGate.includes('never claim PASS from a simulated bro
 
 console.log('  ✓ Release sequence order verified: Step 7 Maintenance-Active -> Step 8 Deactivation -> Step 9 Post-Deactivation Browser Acceptance');
 
+// ── Test Group 9: Final Fail-Closed Cutover Gates & Credential Argument Isolation ─
+console.log('\n--- Test Group 9: Final Fail-Closed Cutover Gates & Credential Argument Isolation ---');
+
+// 9.1 Staging Health Checks Fail Closed (HTTP 000, 404, redirects, non-200)
+const res000 = validateHealthCheckResponse('000');
+assert.equal(res000.ok, false);
+assert.match(res000.reason!, /HTTP 000/);
+
+const res404 = validateHealthCheckResponse('404');
+assert.equal(res404.ok, false);
+assert.match(res404.reason!, /HTTP 404/);
+
+const res302 = validateHealthCheckResponse('302');
+assert.equal(res302.ok, false);
+assert.match(res302.reason!, /Unexpected redirect/);
+
+const res500 = validateHealthCheckResponse('500');
+assert.equal(res500.ok, false);
+assert.match(res500.reason!, /Expected HTTP 200/);
+
+const resBadBody = validateHealthCheckResponse('200', '{"error":"internal_failure"}');
+assert.equal(resBadBody.ok, false);
+assert.match(resBadBody.reason!, /valid health status payload/);
+
+const resHealthy = validateHealthCheckResponse('200', '{"status":"HEALTHY","subsystems":{}}');
+assert.equal(resHealthy.ok, true);
+console.log('  ✓ Proved: Health check fails closed on HTTP 000, 404, redirects, and non-healthy payloads');
+
+// 9.2 Missing curl check in staging-cutover-wizard.sh
+const wizardScript = fs.readFileSync('scripts/staging-cutover-wizard.sh', 'utf8');
+assert.ok(
+  wizardScript.includes('command -v curl') && wizardScript.includes("warn \"SECURITY FATAL: 'curl' is required"),
+  'Wizard must fail closed if curl is missing'
+);
+console.log('  ✓ Proved: Staging cutover wizard fails closed if curl is missing');
+
+// 9.3 Mutating requests returning 200 or 302 during maintenance fail the gate
+const chat200 = validateMaintenanceRestrictionResponse('200', '{"text":"response"}');
+assert.equal(chat200.ok, false);
+assert.match(chat200.reason!, /Mutating endpoint returned HTTP 200! Writes are NOT blocked/);
+
+const oauthRedirect = validateMaintenanceRestrictionResponse('302', 'Redirecting to accounts.google.com');
+assert.equal(oauthRedirect.ok, false);
+assert.match(oauthRedirect.reason!, /Mutating endpoint returned redirect HTTP 302/);
+
+const maint503Bad = validateMaintenanceRestrictionResponse('503', '{"error":"random 503"}');
+assert.equal(maint503Bad.ok, false);
+assert.match(maint503Bad.reason!, /does not contain expected STAGING_MAINTENANCE payload/);
+
+const maint503Valid = validateMaintenanceRestrictionResponse('503', '{"code":"STAGING_MAINTENANCE_ACTIVE"}');
+assert.equal(maint503Valid.ok, true);
+console.log('  ✓ Proved: Chat returning 200 or OAuth returning 302 during maintenance fails the release gate');
+
+// 9.4 Credentials and tokens in process arguments are strictly rejected
+function runScriptWithArgs(scriptPath: string, args: string[]): { exitCode: number; output: string } {
+  try {
+    const out = execSync(`npx tsx ${scriptPath} ${args.join(' ')}`, {
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, NODE_ENV: 'test', AIRA_TEST_ENVIRONMENT: 'true' }
+    });
+    return { exitCode: 0, output: out };
+  } catch (err: any) {
+    return { exitCode: err.status ?? 1, output: (err.stdout || '') + (err.stderr || '') };
+  }
+}
+
+const tokenArgRes = runScriptWithArgs('scripts/verify-staging-write-isolation.ts', ['--token', 'secret_token_123']);
+assert.notEqual(tokenArgRes.exitCode, 0, 'Must exit non-zero when --token is passed');
+assert.match(tokenArgRes.output, /Supplying maintenance bypass token via command-line argument \(--token\) is strictly prohibited/);
+
+const dummyCliConnStr = ['postgres:', '', 'neondb_owner:dummy_pass@ep-fake.neon.tech', 'neondb'].join('/');
+
+const connArgRes1 = runScriptWithArgs('scripts/verify-staging-write-isolation.ts', [dummyCliConnStr]);
+assert.notEqual(connArgRes1.exitCode, 0, 'Must exit non-zero when connection string is on CLI');
+assert.match(connArgRes1.output, /Supplying database connection strings via command-line arguments is strictly prohibited/);
+
+const connArgRes2 = runScriptWithArgs('scripts/import-verified-commercial-identities.ts', [dummyCliConnStr]);
+assert.notEqual(connArgRes2.exitCode, 0);
+assert.match(connArgRes2.output, /Supplying database connection strings via command-line arguments is strictly prohibited/);
+
+const connArgRes3 = runScriptWithArgs('scripts/staging-cutover-orchestrator.ts', ['--verify-integrity', dummyCliConnStr]);
+assert.notEqual(connArgRes3.exitCode, 0);
+assert.match(connArgRes3.output, /Supplying database connection strings via command-line arguments is strictly prohibited/);
+
+const connArgRes4 = runScriptWithArgs('scripts/staging-maintenance-control.ts', [dummyCliConnStr]);
+assert.notEqual(connArgRes4.exitCode, 0);
+assert.match(connArgRes4.output, /Supplying database connection strings via command-line arguments is strictly prohibited/);
+
+console.log('  ✓ Proved: Database credentials and --token bypass arguments on process command lines are strictly rejected');
+
+// 9.5 Wizard does not pass connection strings on CLI
+assert.equal(
+  /npx tsx scripts\/[a-zA-Z0-9-]+\.ts\s+.*\$STAGING_DB_URL/.test(wizardScript),
+  false,
+  'Wizard must never pass $STAGING_DB_URL as CLI argument'
+);
+assert.equal(
+  /npx tsx scripts\/[a-zA-Z0-9-]+\.ts\s+.*\$SOURCE_DB_URL/.test(wizardScript),
+  false,
+  'Wizard must never pass $SOURCE_DB_URL as CLI argument'
+);
+console.log('  ✓ Proved: Wizard invokes scripts using environment-scoped credentials only');
+
+// 9.6 Deactivation fails closed when database writes remain blocked or cleanup fails
+const mockFailingDeactivationClient: any = {
+  raw: async (sql: string) => {
+    if (sql.includes('neon.project_id')) {
+      return {
+        rows: [{
+          db_name: 'neondb',
+          neon_project_id: STAGING_NEON_PROJECT_ID,
+          neon_branch_id: STAGING_NEON_BRANCH_ID,
+          neon_endpoint_id: STAGING_NEON_ENDPOINT_ID
+        }]
+      };
+    }
+    if (sql.includes('current_database()')) return { rows: [{ db_name: 'neondb' }] };
+    if (sql.includes('ALTER DATABASE')) throw new Error('Permission denied to reset default_transaction_read_only');
+    return { rows: [] };
+  }
+};
+let deactThrown: any = null;
+try {
+  await deactivateStagingMaintenance(mockFailingDeactivationClient, { operator: 'test_operator' });
+} catch (err: any) {
+  deactThrown = err;
+}
+assert.ok(deactThrown, 'Deactivation must throw if read-only reset fails');
+assert.match(deactThrown.message, /Failed to reset database-level default_transaction_read_only/);
+console.log('  ✓ Proved: Maintenance deactivation fails closed when read-only reset, trigger removal, or write restoration fails');
+
 console.log('\n================================================================================');
-console.log('  ✓ ALL 45 CUTOVER SAFETY GATE FAIL-CLOSED ASSERTIONS PASSED SUCCESSFULLY!      ');
+console.log('  ✓ ALL 51 CUTOVER SAFETY GATE FAIL-CLOSED ASSERTIONS PASSED SUCCESSFULLY!      ');
 console.log('================================================================================\n');

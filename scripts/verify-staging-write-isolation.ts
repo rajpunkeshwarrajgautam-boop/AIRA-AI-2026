@@ -334,9 +334,23 @@ export async function verifyStagingWriteIsolation(
 }
 
 async function main() {
-  const dbUrl = process.argv[2] || process.env.STAGING_DB_URL || process.env.DATABASE_URL;
+  // Reject maintenance bypass tokens supplied via CLI arguments
+  if (process.argv.includes('--token')) {
+    console.error('[SECURITY FATAL] Supplying maintenance bypass token via command-line argument (--token) is strictly prohibited. Pass via AIRA_MAINTENANCE_BYPASS_TOKEN environment variable or .aira-maintenance-token.local.');
+    process.exit(1);
+  }
+
+  // Reject database connection strings in command-line arguments to prevent credential exposure in process tables
+  for (const arg of process.argv.slice(2)) {
+    if (arg.startsWith('postgres://') || arg.startsWith('postgresql://') || (arg.includes('://') && arg.includes('@'))) {
+      console.error('[SECURITY FATAL] Supplying database connection strings via command-line arguments is strictly prohibited to prevent credential exposure in process listings. Pass via STAGING_DB_URL or DATABASE_URL environment variables.');
+      process.exit(1);
+    }
+  }
+
+  const dbUrl = process.env.STAGING_DB_URL || process.env.DATABASE_URL;
   if (!dbUrl) {
-    console.error('Usage: npx tsx scripts/verify-staging-write-isolation.ts <STAGING_DB_URL> [--token <BYPASS_TOKEN>] [--no-barrier]');
+    console.error('Usage: STAGING_DB_URL=<url> [AIRA_MAINTENANCE_BYPASS_TOKEN=<token>] npx tsx scripts/verify-staging-write-isolation.ts [--no-barrier] [--allow-rehearsal]');
     process.exit(1);
   }
 
@@ -347,14 +361,9 @@ async function main() {
   }
 
   const bypassToken = process.env.AIRA_MAINTENANCE_BYPASS_TOKEN || process.env.STAGING_MAINTENANCE_TOKEN || (
-    fs.existsSync('.aira-maintenance-token.local') ? fs.readFileSync('.aira-maintenance-token.local', 'utf8').trim() : (
-      process.argv.includes('--token') ? process.argv[process.argv.indexOf('--token') + 1] : undefined
-    )
+    fs.existsSync('.aira-maintenance-token.local') ? fs.readFileSync('.aira-maintenance-token.local', 'utf8').trim() : undefined
   );
 
-  if (process.argv.includes('--token')) {
-    console.warn('[SECURITY WARNING] Supplying bypass token via CLI arguments (--token) exposes credentials to process listings. Use environment variable AIRA_MAINTENANCE_BYPASS_TOKEN or .aira-maintenance-token.local instead.');
-  }
   const requireBarrier = !process.argv.includes('--no-barrier');
   const allowRehearsal = process.argv.includes('--allow-rehearsal');
 

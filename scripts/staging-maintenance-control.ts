@@ -20,16 +20,26 @@ import {
   deactivateStagingMaintenance,
   getStagingMaintenanceStatus,
   verifyStagingWriteRestriction,
+  verifyStagingPostMaintenanceRestoration,
   generateBypassToken
 } from '../packages/db/src/security/staging-maintenance-barrier.js';
 
 async function main() {
   const args = process.argv.slice(2);
+
+  // Reject database connection strings in command-line arguments to prevent credential exposure
+  for (const arg of args) {
+    if (arg.startsWith('postgres://') || arg.startsWith('postgresql://') || (arg.includes('://') && arg.includes('@'))) {
+      console.error('[SECURITY FATAL] Supplying database connection strings via command-line arguments is strictly prohibited to prevent credential exposure in process listings. Pass via STAGING_DB_URL or DATABASE_URL environment variables.');
+      process.exit(1);
+    }
+  }
+
   const action = args[0] || '--status';
   const dbUrl = process.env.STAGING_DB_URL || process.env.DATABASE_URL;
 
   if (!dbUrl) {
-    console.error('Usage: STAGING_DB_URL=<url> npx tsx scripts/staging-maintenance-control.ts [--activate|--deactivate|--status|--verify-barrier]');
+    console.error('Usage: STAGING_DB_URL=<url> npx tsx scripts/staging-maintenance-control.ts [--activate|--deactivate|--status|--verify-barrier|--verify-restoration]');
     process.exit(1);
   }
 
@@ -78,24 +88,66 @@ async function main() {
       const bypassToken = process.env.AIRA_MAINTENANCE_BYPASS_TOKEN || (
         fs.existsSync('.aira-maintenance-token.local') ? fs.readFileSync('.aira-maintenance-token.local', 'utf8').trim() : undefined
       );
-      console.log(`[MAINTENANCE_CONTROL] Deactivating staging maintenance barrier...`);
-      const res = await deactivateStagingMaintenance(client, { operator, bypassToken });
-      console.log(`✓ Staging maintenance barrier DEACTIVATED.`);
-      console.log(`  Operator: ${res.operator}`);
-      console.log(`  Deactivated At: ${res.deactivatedAt}`);
-      console.log(`  Read-Only Reset: ${res.readOnlyReset}`);
-      console.log(`  Triggers Removed: ${res.triggersRemoved}`);
-      console.log(`  Details: ${res.details}\n`);
 
-      if (fs.existsSync('.aira-maintenance-token.local')) {
-        try {
-          fs.unlinkSync('.aira-maintenance-token.local');
-          console.log(`  [SECURITY] Local maintenance bypass token file removed.`);
-        } catch {
-          // ignore
-        }
+      let runtimeClient: Knex | undefined = undefined;
+      const runtimeUrl = process.env.STAGING_RUNTIME_DB_URL || process.env.RUNTIME_DB_URL;
+      if (runtimeUrl) {
+        runtimeClient = knex({
+          client: 'pg',
+          connection: { connectionString: runtimeUrl, ssl: classification.isLocalOrCiTest ? false : true }
+        });
       }
-      process.exit(0);
+
+      console.log(`[MAINTENANCE_CONTROL] Deactivating staging maintenance barrier...`);
+      try {
+        const res = await deactivateStagingMaintenance(client, { operator, bypassToken, runtimeClient });
+        console.log(`✓ Staging maintenance barrier DEACTIVATED.`);
+        console.log(`  Operator: ${res.operator}`);
+        console.log(`  Deactivated At: ${res.deactivatedAt}`);
+        console.log(`  Read-Only Reset: ${res.readOnlyReset}`);
+        console.log(`  Triggers Removed: ${res.triggersRemoved}`);
+        console.log(`  Writes Restored: ${res.writesRestored}`);
+        console.log(`  Details: ${res.details}\n`);
+
+        if (fs.existsSync('.aira-maintenance-token.local')) {
+          try {
+            fs.unlinkSync('.aira-maintenance-token.local');
+            console.log(`  [SECURITY] Local maintenance bypass token file removed.`);
+          } catch {
+            // ignore
+          }
+        }
+        process.exit(0);
+      } finally {
+        if (runtimeClient) await runtimeClient.destroy().catch(() => {});
+      }
+    }
+
+    if (action === '--verify-restoration') {
+      console.log(`[MAINTENANCE_CONTROL] Empirically verifying write restoration and absence of maintenance restrictions...`);
+      let runtimeClient: Knex | undefined = undefined;
+      const runtimeUrl = process.env.STAGING_RUNTIME_DB_URL || process.env.RUNTIME_DB_URL;
+      if (runtimeUrl) {
+        runtimeClient = knex({
+          client: 'pg',
+          connection: { connectionString: runtimeUrl, ssl: classification.isLocalOrCiTest ? false : true }
+        });
+      }
+      try {
+        const res = await verifyStagingPostMaintenanceRestoration(client, { runtimeClient });
+        console.log(`✓ Database write restoration VERIFIED:`);
+        console.log(`  Default Read-Only Reset: ${res.defaultReadOnlyReset}`);
+        console.log(`  Triggers Removed: ${res.triggersRemoved}`);
+        console.log(`  Sentinel Inactive: ${res.sentinelInactive}`);
+        console.log(`  Transactional Probe Success: ${res.transactionalProbeSuccess}`);
+        if (res.runtimeRoleProbeSuccess !== undefined) {
+          console.log(`  Runtime Role Probe Success: ${res.runtimeRoleProbeSuccess}`);
+        }
+        console.log(`  Details: ${res.details}\n`);
+        process.exit(0);
+      } finally {
+        if (runtimeClient) await runtimeClient.destroy().catch(() => {});
+      }
     }
 
     if (action === '--verify-barrier') {

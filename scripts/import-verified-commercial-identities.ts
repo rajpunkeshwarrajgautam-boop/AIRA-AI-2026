@@ -623,11 +623,19 @@ export async function importVerifiedCommercialIdentities(
 }
 
 async function main() {
+  // Reject database connection strings in command-line arguments to prevent credential exposure in process listings
+  for (const arg of process.argv.slice(2)) {
+    if (arg.startsWith('postgres://') || arg.startsWith('postgresql://') || (arg.includes('://') && arg.includes('@'))) {
+      console.error('[SECURITY FATAL] Supplying database connection strings via command-line arguments is strictly prohibited to prevent credential exposure in process listings. Pass via TARGET_DB_URL or DATABASE_URL environment variables.');
+      process.exit(1);
+    }
+  }
+
   const sourceCs = process.env.SOURCE_DB_URL || execSync('npx neonctl connection-string pr92-commercial-platform-isolated --project-id mute-frost-50372225', { encoding: 'utf8' }).trim();
-  const targetCs = process.env.TARGET_DB_URL || process.argv[2];
+  const targetCs = process.env.TARGET_DB_URL || process.env.STAGING_DB_URL || process.env.DATABASE_URL;
 
   if (!targetCs) {
-    console.error('Usage: npx tsx scripts/import-verified-commercial-identities.ts <TARGET_DB_URL>');
+    console.error('Usage: TARGET_DB_URL=<url> [SOURCE_DB_URL=<url>] npx tsx scripts/import-verified-commercial-identities.ts');
     process.exit(1);
   }
 

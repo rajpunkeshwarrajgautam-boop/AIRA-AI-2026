@@ -108,7 +108,73 @@ export interface StagingMaintenanceDeactivationResult {
   operator: string;
   readOnlyReset: boolean;
   triggersRemoved: boolean;
+  writesRestored: boolean;
   details: string;
+}
+
+export interface WriteRestorationVerificationResult {
+  restored: boolean;
+  defaultReadOnlyReset: boolean;
+  triggersRemoved: boolean;
+  sentinelInactive: boolean;
+  transactionalProbeSuccess: boolean;
+  runtimeRoleProbeSuccess?: boolean;
+  details: string;
+}
+
+/**
+ * Validates a health check response and fails closed on 000, 404, redirects, or non-200 codes.
+ */
+export function validateHealthCheckResponse(
+  statusCode: number | string,
+  body?: string | object
+): { ok: boolean; reason?: string } {
+  const code = String(statusCode).trim();
+  if (code === '000') {
+    return { ok: false, reason: 'Health check failed: Network error, timeout, or connection refused (HTTP 000).' };
+  }
+  if (code === '404') {
+    return { ok: false, reason: 'Health check failed: Endpoint not found (HTTP 404).' };
+  }
+  if (code.startsWith('3')) {
+    return { ok: false, reason: `Health check failed: Unexpected redirect (HTTP ${code}). Health endpoints must return 200 directly without redirects.` };
+  }
+  if (code !== '200') {
+    return { ok: false, reason: `Health check failed: Expected HTTP 200, got HTTP ${code}.` };
+  }
+  if (body !== undefined) {
+    const bodyStr = typeof body === 'object' ? JSON.stringify(body) : String(body);
+    if (!bodyStr.includes('HEALTHY') && !bodyStr.includes('"status"') && !bodyStr.includes('status')) {
+      return { ok: false, reason: 'Health check returned 200 but body did not contain valid health status payload.' };
+    }
+  }
+  return { ok: true };
+}
+
+/**
+ * Validates that mutating endpoints return HTTP 503 with maintenance payload during active barrier.
+ */
+export function validateMaintenanceRestrictionResponse(
+  statusCode: number | string,
+  body?: string | object
+): { ok: boolean; reason?: string } {
+  const code = String(statusCode).trim();
+  if (code === '200') {
+    return { ok: false, reason: 'Write restriction check FAILED: Mutating endpoint returned HTTP 200! Writes are NOT blocked during maintenance.' };
+  }
+  if (code.startsWith('3')) {
+    return { ok: false, reason: `Write restriction check FAILED: Mutating endpoint returned redirect HTTP ${code}! OAuth or mutation not blocked with 503.` };
+  }
+  if (code !== '503') {
+    return { ok: false, reason: `Write restriction check FAILED: Expected HTTP 503 [STAGING_MAINTENANCE_ACTIVE], got HTTP ${code}.` };
+  }
+  if (body !== undefined) {
+    const bodyStr = typeof body === 'object' ? JSON.stringify(body) : String(body);
+    if (!bodyStr.includes('STAGING_MAINTENANCE')) {
+      return { ok: false, reason: 'Mutating endpoint returned HTTP 503, but body does not contain expected STAGING_MAINTENANCE payload.' };
+    }
+  }
+  return { ok: true };
 }
 
 export interface WriteRestrictionVerificationResult {
@@ -395,8 +461,109 @@ export async function activateStagingMaintenance(
 }
 
 /**
+ * Verifies that the database has completely returned to normal write operation:
+ * 1. default_transaction_read_only is off.
+ * 2. Zero maintenance triggers exist in information_schema.triggers.
+ * 3. Sentinel table is inactive (is_active = false).
+ * 4. Transactional INSERT and UPDATE probes succeed without token elevation.
+ * 5. If runtimeClient is provided, proves least-privilege runtime role writes succeed.
+ * 6. Safely cleans up all probe records.
+ */
+export async function verifyStagingPostMaintenanceRestoration(
+  client: Knex,
+  options: {
+    runtimeClient?: Knex;
+    allowRehearsalBranch?: boolean;
+  } = {}
+): Promise<WriteRestorationVerificationResult> {
+  await assertNonProductionTarget(client, { allowRehearsalBranch: options.allowRehearsalBranch });
+
+  // 1. Verify absence of database-level default_transaction_read_only
+  const roRes = await client.raw("SELECT current_setting('default_transaction_read_only', true) as ro;");
+  const ro = roRes.rows?.[0]?.ro;
+  if (ro === 'on' || ro === 'true') {
+    throw new Error('[SECURITY FATAL] default_transaction_read_only is still ON after deactivation!');
+  }
+
+  // 2. Verify absence of maintenance triggers across all public tables
+  const triggersRes = await client.raw(`
+    SELECT trigger_name, event_object_table
+    FROM information_schema.triggers
+    WHERE trigger_name IN ('${STAGING_MAINTENANCE_TRIGGER}', '${STAGING_MAINTENANCE_TRUNC_TRIGGER}')
+      AND trigger_schema = 'public';
+  `);
+  if ((triggersRes.rows || []).length > 0) {
+    const unremoved = triggersRes.rows.map((r: any) => `${r.trigger_name} on ${r.event_object_table}`).join(', ');
+    throw new Error(`[SECURITY FATAL] Maintenance triggers are still active after deactivation: ${unremoved}`);
+  }
+
+  // 3. Verify sentinel table inactive
+  let sentinelInactive = true;
+  try {
+    const sentinelRes = await client.raw(`
+      SELECT is_active FROM ${STAGING_MAINTENANCE_TABLE} WHERE id = 1;
+    `);
+    if (sentinelRes.rows?.length > 0 && sentinelRes.rows[0].is_active === true) {
+      sentinelInactive = false;
+      throw new Error('[SECURITY FATAL] Maintenance sentinel table still indicates is_active = true!');
+    }
+  } catch (err: any) {
+    if (err.message?.includes('[SECURITY FATAL]')) throw err;
+    // Table doesn't exist, which means barrier is inactive
+  }
+
+  // 4. Ensure probe table exists
+  await client.raw(`
+    CREATE TABLE IF NOT EXISTS ${STAGING_PROBE_TABLE} (
+      id VARCHAR(64) PRIMARY KEY,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `).catch(() => {});
+
+  // 5. Execute controlled transactional INSERT and UPDATE probe (without any privileged token)
+  const probeId = `probe_restoration_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+  try {
+    await client.transaction(async (trx) => {
+      await trx.raw("SELECT set_config('aira.privileged_token', '', true);").catch(() => {});
+      await trx(STAGING_PROBE_TABLE).insert({ id: probeId, created_at: new Date() });
+      await trx(STAGING_PROBE_TABLE).where({ id: probeId }).update({ created_at: new Date() });
+      await trx(STAGING_PROBE_TABLE).where({ id: probeId }).del();
+    });
+  } catch (probeErr: any) {
+    throw new Error(`[SECURITY FATAL] Post-deactivation write restoration probe failed! Normal writes remain blocked: ${probeErr.message}`);
+  }
+
+  // 6. If runtimeClient is provided, execute controlled transactional probe using actual least-privilege runtime role
+  let runtimeRoleProbeSuccess: boolean | undefined = undefined;
+  if (options.runtimeClient) {
+    const rtProbeId = `probe_runtime_restoration_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+    try {
+      await options.runtimeClient.transaction(async (trx) => {
+        await trx(STAGING_PROBE_TABLE).insert({ id: rtProbeId, created_at: new Date() });
+        await trx(STAGING_PROBE_TABLE).where({ id: rtProbeId }).update({ created_at: new Date() });
+        await trx(STAGING_PROBE_TABLE).where({ id: rtProbeId }).del();
+      });
+      runtimeRoleProbeSuccess = true;
+    } catch (rtErr: any) {
+      throw new Error(`[SECURITY FATAL] Least-privilege runtime role write restoration probe failed: ${rtErr.message}`);
+    }
+  }
+
+  return {
+    restored: true,
+    defaultReadOnlyReset: true,
+    triggersRemoved: true,
+    sentinelInactive,
+    transactionalProbeSuccess: true,
+    runtimeRoleProbeSuccess,
+    details: 'Post-maintenance restoration verified: read-only reset, triggers cleared, sentinel inactive, transactional write and update probes succeeded.'
+  };
+}
+
+/**
  * Deactivates the staging maintenance barrier and restores normal write traffic.
  * Guarantees reliable execution even if default_transaction_read_only was active.
+ * Fails closed if trigger removal, read-only reset, sentinel transition, or write restoration fails.
  */
 export async function deactivateStagingMaintenance(
   client: Knex,
@@ -404,6 +571,7 @@ export async function deactivateStagingMaintenance(
     operator: string;
     bypassToken?: string;
     allowRehearsalBranch?: boolean;
+    runtimeClient?: Knex;
   }
 ): Promise<StagingMaintenanceDeactivationResult> {
   await assertNonProductionTarget(client, { allowRehearsalBranch: options.allowRehearsalBranch });
@@ -420,52 +588,89 @@ export async function deactivateStagingMaintenance(
   }
 
   // 2. Reset database-level default_transaction_read_only = off
-  let readOnlyReset = false;
-  try {
-    const dbNameRes = await client.raw('SELECT current_database() as db_name;');
-    const dbName = dbNameRes.rows?.[0]?.db_name;
-    if (dbName) {
-      await client.raw(`ALTER DATABASE "${dbName}" SET default_transaction_read_only = off;`);
-      readOnlyReset = true;
-    }
-  } catch {
-    readOnlyReset = false;
+  const dbNameRes = await client.raw('SELECT current_database() as db_name;');
+  const dbName = dbNameRes.rows?.[0]?.db_name;
+  if (!dbName) {
+    throw new Error('[SECURITY FATAL] Could not resolve current database name for read-only reset.');
   }
+
+  try {
+    await client.raw(`ALTER DATABASE "${dbName}" SET default_transaction_read_only = off;`);
+  } catch (err: any) {
+    throw new Error(`[SECURITY FATAL] Failed to reset database-level default_transaction_read_only = off: ${err.message}`);
+  }
+
+  // Verify database-level read-only setting is actually off
+  const roCheck = await client.raw("SELECT current_setting('default_transaction_read_only', true) as ro;");
+  if (roCheck.rows?.[0]?.ro === 'on' || roCheck.rows?.[0]?.ro === 'true') {
+    throw new Error('[SECURITY FATAL] Database-level default_transaction_read_only reset failed: setting remains on.');
+  }
+  const readOnlyReset = true;
 
   // 3. Drop trigger function with CASCADE to remove all triggers atomically
-  let triggersRemoved = false;
   try {
     await client.raw(`DROP FUNCTION IF EXISTS ${STAGING_MAINTENANCE_FUNCTION}() CASCADE;`);
-    triggersRemoved = true;
-  } catch {
-    // Fallback: Drop triggers individually
-    try {
-      const tablesRes = await client.raw(`
-        SELECT tablename 
-        FROM pg_tables 
-        WHERE schemaname = 'public';
-      `);
-      const tables: string[] = (tablesRes.rows || []).map((r: any) => r.tablename);
-      for (const table of tables) {
-        await client.raw(`DROP TRIGGER IF EXISTS ${STAGING_MAINTENANCE_TRIGGER} ON "${table}";`).catch(() => {});
-        await client.raw(`DROP TRIGGER IF EXISTS ${STAGING_MAINTENANCE_TRUNC_TRIGGER} ON "${table}";`).catch(() => {});
-      }
-      triggersRemoved = true;
-    } catch {
-      triggersRemoved = false;
-    }
+  } catch (err: any) {
+    throw new Error(`[SECURITY FATAL] Failed to drop maintenance trigger function: ${err.message}`);
   }
 
-  // 4. Mark maintenance inactive in sentinel table
+  // Verify that ZERO maintenance triggers remain across all public tables
+  const triggerCheck = await client.raw(`
+    SELECT trigger_name, event_object_table
+    FROM information_schema.triggers
+    WHERE trigger_name IN ('${STAGING_MAINTENANCE_TRIGGER}', '${STAGING_MAINTENANCE_TRUNC_TRIGGER}')
+      AND trigger_schema = 'public';
+  `);
+  if ((triggerCheck.rows || []).length > 0) {
+    // Fallback individual drops
+    const tablesRes = await client.raw(`
+      SELECT tablename 
+      FROM pg_tables 
+      WHERE schemaname = 'public';
+    `);
+    const tables: string[] = (tablesRes.rows || []).map((r: any) => r.tablename);
+    for (const table of tables) {
+      await client.raw(`DROP TRIGGER IF EXISTS ${STAGING_MAINTENANCE_TRIGGER} ON "${table}";`).catch(() => {});
+      await client.raw(`DROP TRIGGER IF EXISTS ${STAGING_MAINTENANCE_TRUNC_TRIGGER} ON "${table}";`).catch(() => {});
+    }
+    const recheck = await client.raw(`
+      SELECT trigger_name, event_object_table
+      FROM information_schema.triggers
+      WHERE trigger_name IN ('${STAGING_MAINTENANCE_TRIGGER}', '${STAGING_MAINTENANCE_TRUNC_TRIGGER}')
+        AND trigger_schema = 'public';
+    `);
+    if ((recheck.rows || []).length > 0) {
+      const remaining = recheck.rows.map((r: any) => `${r.trigger_name} on ${r.event_object_table}`).join(', ');
+      throw new Error(`[SECURITY FATAL] Maintenance trigger removal verification failed! Remaining triggers: ${remaining}`);
+    }
+  }
+  const triggersRemoved = true;
+
+  // 4. Mark maintenance inactive in sentinel table and verify update
   try {
     await client.raw(`
       UPDATE ${STAGING_MAINTENANCE_TABLE}
       SET is_active = false, updated_at = NOW()
       WHERE id = 1;
     `);
-  } catch {
+    const sentinelCheck = await client.raw(`
+      SELECT is_active
+      FROM ${STAGING_MAINTENANCE_TABLE}
+      WHERE id = 1;
+    `);
+    if (sentinelCheck.rows?.length > 0 && sentinelCheck.rows[0].is_active === true) {
+      throw new Error(`[SECURITY FATAL] Sentinel transition failed: ${STAGING_MAINTENANCE_TABLE}.is_active is not false.`);
+    }
+  } catch (sentinelErr: any) {
+    if (sentinelErr.message?.includes('[SECURITY FATAL]')) throw sentinelErr;
     // Sentinel table may not exist
   }
+
+  // 5. Verify absence of restrictions and execute transactional write restoration probe
+  await verifyStagingPostMaintenanceRestoration(client, {
+    runtimeClient: options.runtimeClient,
+    allowRehearsalBranch: options.allowRehearsalBranch
+  });
 
   return {
     active: false,
@@ -473,7 +678,8 @@ export async function deactivateStagingMaintenance(
     operator,
     readOnlyReset,
     triggersRemoved,
-    details: 'Staging maintenance barrier deactivated: normal write operations safely restored.'
+    writesRestored: true,
+    details: 'Staging maintenance barrier deactivated: triggers removed, read-only reset, sentinel inactive, and write restoration verified.'
   };
 }
 

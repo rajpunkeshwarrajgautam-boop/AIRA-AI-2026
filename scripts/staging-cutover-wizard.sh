@@ -345,7 +345,7 @@ fi
 
 say "Probing staging database write isolation across all 5 mandatory release gates..."
 if ! AIRA_MAINTENANCE_BYPASS_TOKEN="$BYPASS_TOKEN" STAGING_DB_URL="$STAGING_DB_URL" \
-  npx tsx scripts/verify-staging-write-isolation.ts "$STAGING_DB_URL"; then
+  npx tsx scripts/verify-staging-write-isolation.ts; then
   warn "SECURITY FATAL: Staging write isolation gate failed! All 5 release-blocking gates must PASS."
   warn "Cutover aborted fail-closed to prevent race conditions."
   show_rollback_protocol "BEFORE_MIGRATION"
@@ -401,7 +401,7 @@ ask_secret SOURCE_DB_URL "Paste Commercial PR #92 source DATABASE_URL:"
 say "Running import in atomic transaction with authoritative Neon identity guards..."
 if ! AIRA_ALLOW_STAGING_LIVE_IMPORT=true AIRA_MAINTENANCE_BYPASS_TOKEN="$BYPASS_TOKEN" \
   SOURCE_DB_URL="$SOURCE_DB_URL" TARGET_DB_URL="$STAGING_DB_URL" \
-  npx tsx scripts/import-verified-commercial-identities.ts "$STAGING_DB_URL"; then
+  npx tsx scripts/import-verified-commercial-identities.ts; then
   warn "SECURITY FATAL: Controlled historical identity import failed! Aborting."
   show_rollback_protocol "AFTER_HISTORICAL_IMPORT"
   exit 1
@@ -420,33 +420,102 @@ say "   - Knex migrations: 22 applied migrations"
 say "   - 11 data integrity & continuity assertions"
 
 if ! TARGET_DB_URL="$STAGING_DB_URL" AIRA_ALLOW_STAGING_LIVE_IMPORT=true AIRA_MAINTENANCE_BYPASS_TOKEN="$BYPASS_TOKEN" \
-  npx tsx scripts/staging-cutover-orchestrator.ts --verify-integrity "$STAGING_DB_URL"; then
+  npx tsx scripts/staging-cutover-orchestrator.ts --verify-integrity; then
   warn "SECURITY FATAL: Staging cutover integrity verification failed! One or more of the 11 gates did not pass."
   show_rollback_protocol "AFTER_HISTORICAL_IMPORT"
   exit 1
 fi
 note "✓ Database integrity & schema version 022 certified under maintenance barrier."
 
-step "2. Read-Only Health Checks (Expected: HTTP 200):"
+step "2. Read-Only Health Checks (Fail-Closed, Expected: HTTP 200):"
 say "   Probing read-only endpoints on staging.virexaaiventures.com..."
-if command -v curl >/dev/null 2>&1; then
-  HEALTH_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://staging.virexaaiventures.com/api/health" || echo "000")
-  say "   GET /api/health -> HTTP $HEALTH_CODE (expected 200)"
-  if [[ "$HEALTH_CODE" != "200" && "$HEALTH_CODE" != "000" ]]; then
-    warn "Read-only health check returned non-200 code: $HEALTH_CODE"
-  fi
+if ! command -v curl >/dev/null 2>&1; then
+  warn "SECURITY FATAL: 'curl' is required to verify staging deployment health checks! Aborting fail-closed."
+  show_rollback_protocol "AFTER_HISTORICAL_IMPORT"
+  exit 1
 fi
 
-step "3. Runtime Write Restriction Probing (Expected: HTTP 503 [STAGING_MAINTENANCE_BLOCKED]):"
-say "   Verifying mutating API endpoints are blocked during maintenance..."
-if command -v curl >/dev/null 2>&1; then
-  CHAT_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "https://staging.virexaaiventures.com/api/chat/stream" || echo "000")
-  say "   POST /api/chat/stream -> HTTP $CHAT_CODE (expected 503)"
-  OAUTH_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://staging.virexaaiventures.com/api/auth/oauth/google/start" || echo "000")
-  say "   GET /api/auth/oauth/google/start -> HTTP $OAUTH_CODE (expected 503)"
+# Probe GET /api/health (must be 200 OK)
+HEALTH_RAW=$(curl -s -S -w "\n%{http_code}" --max-time 15 "https://staging.virexaaiventures.com/api/health" 2>/dev/null || printf "\n000")
+HEALTH_CODE=$(printf '%s\n' "$HEALTH_RAW" | tail -n1)
+HEALTH_BODY=$(printf '%s\n' "$HEALTH_RAW" | sed '$d')
+
+say "   GET /api/health -> HTTP $HEALTH_CODE (expected 200)"
+if [[ "$HEALTH_CODE" != "200" ]]; then
+  warn "SECURITY FATAL: Read-only health check /api/health failed with HTTP status: $HEALTH_CODE (expected 200). Aborting fail-closed."
+  show_rollback_protocol "AFTER_HISTORICAL_IMPORT"
+  exit 1
 fi
+
+if [[ ! "$HEALTH_BODY" =~ "HEALTHY" && ! "$HEALTH_BODY" =~ "status" ]]; then
+  warn "SECURITY FATAL: /api/health returned HTTP 200 but response body did not contain valid health status payload! Aborting."
+  show_rollback_protocol "AFTER_HISTORICAL_IMPORT"
+  exit 1
+fi
+
+# Probe GET /api/ready/benchmark (must be 200 OK)
+BENCHMARK_RAW=$(curl -s -S -w "\n%{http_code}" --max-time 15 "https://staging.virexaaiventures.com/api/ready/benchmark" 2>/dev/null || printf "\n000")
+BENCHMARK_CODE=$(printf '%s\n' "$BENCHMARK_RAW" | tail -n1)
+say "   GET /api/ready/benchmark -> HTTP $BENCHMARK_CODE (expected 200)"
+if [[ "$BENCHMARK_CODE" != "200" ]]; then
+  warn "SECURITY FATAL: Readiness probe /api/ready/benchmark failed with HTTP status: $BENCHMARK_CODE (expected 200). Aborting fail-closed."
+  show_rollback_protocol "AFTER_HISTORICAL_IMPORT"
+  exit 1
+fi
+note "✓ Read-only health and readiness endpoints verified: HTTP 200 with healthy payload."
+
+step "3. Runtime Write Restriction Probing (Fail-Closed, Expected: HTTP 503 [STAGING_MAINTENANCE_BLOCKED]):"
+say "   Verifying mutating API endpoints are blocked during maintenance..."
+
+# Probe POST /api/chat/stream (must return 503 and maintenance payload)
+CHAT_RAW=$(curl -s -S -w "\n%{http_code}" -X POST "https://staging.virexaaiventures.com/api/chat/stream" \
+  -H "Content-Type: application/json" -d '{"message":"cutover_write_restriction_probe"}' --max-time 15 2>/dev/null || printf "\n000")
+CHAT_CODE=$(printf '%s\n' "$CHAT_RAW" | tail -n1)
+CHAT_BODY=$(printf '%s\n' "$CHAT_RAW" | sed '$d')
+
+say "   POST /api/chat/stream -> HTTP $CHAT_CODE (expected 503)"
+if [[ "$CHAT_CODE" != "503" ]]; then
+  warn "SECURITY FATAL: POST /api/chat/stream returned HTTP $CHAT_CODE instead of expected 503! Writes are NOT blocked. Aborting fail-closed."
+  show_rollback_protocol "AFTER_HISTORICAL_IMPORT"
+  exit 1
+fi
+
+if [[ ! "$CHAT_BODY" =~ "STAGING_MAINTENANCE" ]]; then
+  warn "SECURITY FATAL: POST /api/chat/stream returned HTTP 503 but body did not contain STAGING_MAINTENANCE code! Aborting."
+  show_rollback_protocol "AFTER_HISTORICAL_IMPORT"
+  exit 1
+fi
+
+# Probe GET /api/auth/oauth/google/start (must return 503, NOT redirect 302 or 200)
+OAUTH_RAW=$(curl -s -S -w "\n%{http_code}" --max-time 15 "https://staging.virexaaiventures.com/api/auth/oauth/google/start" 2>/dev/null || printf "\n000")
+OAUTH_CODE=$(printf '%s\n' "$OAUTH_RAW" | tail -n1)
+OAUTH_BODY=$(printf '%s\n' "$OAUTH_RAW" | sed '$d')
+
+say "   GET /api/auth/oauth/google/start -> HTTP $OAUTH_CODE (expected 503)"
+if [[ "$OAUTH_CODE" != "503" ]]; then
+  warn "SECURITY FATAL: GET /api/auth/oauth/google/start returned HTTP $OAUTH_CODE instead of expected 503! Authentication writes are NOT blocked. Aborting fail-closed."
+  show_rollback_protocol "AFTER_HISTORICAL_IMPORT"
+  exit 1
+fi
+
+if [[ ! "$OAUTH_BODY" =~ "STAGING_MAINTENANCE" ]]; then
+  warn "SECURITY FATAL: GET /api/auth/oauth/google/start returned HTTP 503 but body did not contain STAGING_MAINTENANCE code! Aborting."
+  show_rollback_protocol "AFTER_HISTORICAL_IMPORT"
+  exit 1
+fi
+
+# Probe GET /api/auth/oauth/github/start (must also return 503)
+GH_OAUTH_RAW=$(curl -s -S -w "\n%{http_code}" --max-time 15 "https://staging.virexaaiventures.com/api/auth/oauth/github/start" 2>/dev/null || printf "\n000")
+GH_OAUTH_CODE=$(printf '%s\n' "$GH_OAUTH_RAW" | tail -n1)
+say "   GET /api/auth/oauth/github/start -> HTTP $GH_OAUTH_CODE (expected 503)"
+if [[ "$GH_OAUTH_CODE" != "503" ]]; then
+  warn "SECURITY FATAL: GET /api/auth/oauth/github/start returned HTTP $GH_OAUTH_CODE instead of expected 503! Aborting."
+  show_rollback_protocol "AFTER_HISTORICAL_IMPORT"
+  exit 1
+fi
+
 say "   Database trigger enforcement: unprivileged writes blocked with SQLSTATE 55P03."
-note "✓ Verified: authentication and chat writes are correctly blocked while barrier is active."
+note "✓ Verified: authentication and chat writes are strictly blocked with HTTP 503 [STAGING_MAINTENANCE_ACTIVE]."
 pause "Press Enter to proceed to controlled maintenance deactivation..."
 
 # ── Stage 7: Controlled Maintenance Deactivation & Write Restoration Gate ─
@@ -464,8 +533,12 @@ say "Deactivating permanent staging maintenance barrier..."
 AIRA_MAINTENANCE_BYPASS_TOKEN="$BYPASS_TOKEN" STAGING_DB_URL="$STAGING_DB_URL" \
   npx tsx scripts/staging-maintenance-control.ts --deactivate
 
-say "Verifying write restoration..."
-STAGING_DB_URL="$STAGING_DB_URL" npx tsx scripts/staging-maintenance-control.ts --status
+say "Empirically verifying write restoration and absence of maintenance restrictions..."
+if ! STAGING_DB_URL="$STAGING_DB_URL" npx tsx scripts/staging-maintenance-control.ts --verify-restoration; then
+  warn "SECURITY FATAL: Staging write restoration verification failed! Database writes remain blocked. Aborting."
+  show_rollback_protocol "AFTER_MERGE"
+  exit 1
+fi
 
 retire_maintenance_bypass_token
 note "✓ Maintenance barrier cleanly deactivated and database writes restored."

@@ -30,6 +30,7 @@ import {
   deactivateStagingMaintenance,
   getStagingMaintenanceStatus,
   verifyStagingWriteRestriction,
+  verifyStagingPostMaintenanceRestoration,
   hashBypassToken,
   generateBypassToken,
   assertNonProductionTarget,
@@ -197,12 +198,12 @@ async function runAll() {
         return { rows: [] };
       }
 
-      if (s.includes('DROP TRIGGER')) {
+      if (s.includes('DROP FUNCTION') || s.includes('DROP TRIGGER')) {
+        memoryDbState.triggers.clear();
         return { rows: [] };
       }
 
       if (s.includes(STAGING_MAINTENANCE_TABLE) && /SELECT.*is_active/is.test(s)) {
-        if (!memoryDbState.sentinelActive) return { rows: [] };
         return {
           rows: [{
             is_active: memoryDbState.sentinelActive,
@@ -240,24 +241,61 @@ async function runAll() {
       return { rows: [] };
     };
 
-    return {
-      raw: rawHandler,
-      transaction: async (cb: any) => {
-        let elevated = false;
-        return cb({
-          raw: async (txSql: string, params?: any) => {
-            if (txSql.includes('SET LOCAL aira.privileged_token')) {
-              elevated = true;
-              return { rows: [] };
-            }
-            if (txSql.includes(`INSERT INTO ${STAGING_PROBE_TABLE}`) && elevated) {
-              return { rows: [] };
-            }
-            return rawHandler(txSql, params);
+    const createTrx = () => {
+      let elevated = false;
+      const trxFn: any = (table: string) => ({
+        insert: async (data: any) => {
+          if (memoryDbState.sentinelActive && !elevated) {
+            const err: any = new Error('[STAGING_MAINTENANCE_BLOCKED] Operation denied: Permanent Staging database is in maintenance mode. Write path is locked.');
+            err.code = '55P03';
+            throw err;
           }
-        });
-      }
+          return [1];
+        },
+        where: (cond: any) => ({
+          update: async (data: any) => {
+            if (memoryDbState.sentinelActive && !elevated) {
+              const err: any = new Error('[STAGING_MAINTENANCE_BLOCKED]');
+              err.code = '55P03';
+              throw err;
+            }
+            return 1;
+          },
+          del: async () => 1
+        }),
+        del: async () => 1
+      });
+      trxFn.raw = async (txSql: string, params?: any) => {
+        if (txSql.includes('SET LOCAL aira.privileged_token') || txSql.includes("set_config('aira.privileged_token'")) {
+          elevated = true;
+          return { rows: [] };
+        }
+        if (txSql.includes(`INSERT INTO ${STAGING_PROBE_TABLE}`) && elevated) {
+          return { rows: [] };
+        }
+        return rawHandler(txSql, params);
+      };
+      return trxFn;
     };
+
+    const clientFn: any = (table: string) => ({
+      insert: async (data: any) => {
+        if (memoryDbState.sentinelActive) {
+          const err: any = new Error('[STAGING_MAINTENANCE_BLOCKED]');
+          err.code = '55P03';
+          throw err;
+        }
+        return [1];
+      },
+      where: (cond: any) => ({
+        update: async (data: any) => 1,
+        del: async () => 1
+      }),
+      del: async () => 1
+    });
+    clientFn.raw = rawHandler;
+    clientFn.transaction = async (cb: any) => cb(createTrx());
+    return clientFn;
   };
 
   await test('Activate staging maintenance initializes sentinel and attaches triggers to tables', async () => {
@@ -296,8 +334,98 @@ async function runAll() {
     assert.equal(res.active, false);
     assert.equal(res.readOnlyReset, true);
     assert.equal(res.triggersRemoved, true);
+    assert.equal(res.writesRestored, true);
     assert.equal(memoryDbState.sentinelActive, false);
     assert.equal(memoryDbState.defaultReadOnly, false);
+  });
+
+  await test('Deactivation fails closed if triggers fail to be removed', async () => {
+    const mockClient: any = createMockDbClient();
+    const originalRaw = mockClient.raw;
+    mockClient.raw = async (sql: string, params?: any) => {
+      if (sql.includes('FROM information_schema.triggers')) {
+        return { rows: [{ trigger_name: '_aira_staging_maintenance_trigger', event_object_table: 'conversations' }] };
+      }
+      return originalRaw(sql, params);
+    };
+
+    let thrown: any = null;
+    try {
+      await deactivateStagingMaintenance(mockClient, { operator: 'rajpunkeshwarrajgautam-boop' });
+    } catch (err: any) {
+      thrown = err;
+    }
+    assert.ok(thrown, 'Deactivation must throw if triggers remain');
+    assert.match(thrown.message, /Maintenance trigger removal verification failed/);
+  });
+
+  await test('Deactivation fails closed if database-level read-only reset fails', async () => {
+    const mockClient: any = createMockDbClient();
+    const originalRaw = mockClient.raw;
+    mockClient.raw = async (sql: string, params?: any) => {
+      if (sql.includes('ALTER DATABASE') && sql.includes('default_transaction_read_only = off')) {
+        throw new Error('Permission denied to alter database');
+      }
+      return originalRaw(sql, params);
+    };
+
+    let thrown: any = null;
+    try {
+      await deactivateStagingMaintenance(mockClient, { operator: 'rajpunkeshwarrajgautam-boop' });
+    } catch (err: any) {
+      thrown = err;
+    }
+    assert.ok(thrown, 'Deactivation must throw if read-only reset fails');
+    assert.match(thrown.message, /Failed to reset database-level default_transaction_read_only/);
+  });
+
+  await test('Deactivation fails closed if sentinel table fails to transition to inactive', async () => {
+    const mockClient: any = createMockDbClient();
+    const originalRaw = mockClient.raw;
+    mockClient.raw = async (sql: string, params?: any) => {
+      if (sql.includes(`UPDATE ${STAGING_MAINTENANCE_TABLE}`) && sql.includes('is_active = false')) {
+        return { rows: [] };
+      }
+      if (sql.includes(STAGING_MAINTENANCE_TABLE) && /SELECT.*is_active/is.test(sql)) {
+        return { rows: [{ is_active: true }] };
+      }
+      return originalRaw(sql, params);
+    };
+
+    let thrown: any = null;
+    try {
+      await deactivateStagingMaintenance(mockClient, { operator: 'rajpunkeshwarrajgautam-boop' });
+    } catch (err: any) {
+      thrown = err;
+    }
+    assert.ok(thrown, 'Deactivation must throw if sentinel fails to transition');
+    assert.match(thrown.message, /Sentinel transition failed/);
+  });
+
+  await test('Deactivation fails closed if database writes remain blocked after deactivation', async () => {
+    const mockClient: any = createMockDbClient();
+    mockClient.transaction = async (cb: any) => {
+      const errTrx: any = (table: string) => ({
+        insert: async () => {
+          const err: any = new Error('[STAGING_MAINTENANCE_BLOCKED] Write path locked');
+          err.code = '55P03';
+          throw err;
+        },
+        where: () => ({ update: async () => {}, del: async () => {} }),
+        del: async () => {}
+      });
+      errTrx.raw = mockClient.raw;
+      return cb(errTrx);
+    };
+
+    let thrown: any = null;
+    try {
+      await deactivateStagingMaintenance(mockClient, { operator: 'rajpunkeshwarrajgautam-boop' });
+    } catch (err: any) {
+      thrown = err;
+    }
+    assert.ok(thrown, 'Deactivation must throw if write probe fails');
+    assert.match(thrown.message, /Post-deactivation write restoration probe failed/);
   });
 
   // ── GROUP 3: Write Restriction Verification & Bypass Rejection ─────────────
