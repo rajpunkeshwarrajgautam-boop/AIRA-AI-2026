@@ -183,36 +183,36 @@ export const CUTOVER_PROTOCOL_STEPS: CutoverStepDefinition[] = [
   },
   {
     step: 7,
-    id: '7_VERIFY_DATA_INTEGRITY',
-    title: 'Verify OAuth Mappings, Credits, Wallets, and Referential Integrity',
+    id: '7_MAINTENANCE_ACTIVE_VERIFICATION',
+    title: 'Maintenance-Active Verification & Write Restriction Probe',
     executor: 'ORCHESTRATOR',
-    description: 'Run comprehensive post-import verification asserting 1:1 wallet invariant, non-negative credit balances, provider account uniqueness, and zero orphaned conversations.',
-    prerequisites: ['Step 6 complete'],
-    verificationGate: 'All 11 data integrity assertions pass with zero errors (verifyStagingCutoverIntegrity returns certified=true).',
-    safeguard: 'Fails closed if any wallet drift, orphan conversation, or duplicate OAuth identity is discovered.',
+    description: 'Verify deployment identity, database integrity, schema version 022, and read-only health checks. Actively prove mutating endpoints return HTTP 503 [STAGING_MAINTENANCE_BLOCKED] and database unprivileged writes are blocked with SQLSTATE 55P03.',
+    prerequisites: ['Step 6 complete', 'Migrations 016–022 applied', 'Historical identity import complete'],
+    verificationGate: 'All 11 data integrity assertions pass with zero errors (verifyStagingCutoverIntegrity returns certified=true); read-only health checks return HTTP 200; mutating endpoints return HTTP 503; unprivileged writes blocked.',
+    safeguard: 'Authentication and chat writes are intentionally blocked; no mutating user traffic permitted while barrier is active.',
     rollbackAction: 'Stop cutover immediately. Do not certify staging. Revert staging git merge if applied, and restore database to Step 3 recovery checkpoint before any barrier deactivation.'
   },
   {
     step: 8,
-    id: '8_CERTIFY_DEPLOYED_APP',
-    title: 'Certify Deployed Staging Application and Commit SHA',
-    executor: 'CI_PIPELINE',
-    description: 'Permanent staging pipeline attestation verifies deployed Vercel deployment URL matches approved commit SHA, health checks return 200, and records staging-certification.json artifact.',
-    prerequisites: ['Step 7 complete', 'Vercel staging deployment READY'],
-    verificationGate: 'HTTP smoke test against staging.virexaaiventures.com succeeds; certification artifact uploaded.',
-    safeguard: 'Certification cannot be awarded if Step 6 or Step 7 integrity checks have not passed.',
-    rollbackAction: 'Vercel instant rollback to previous stable staging deployment.'
+    id: '8_CONTROLLED_MAINTENANCE_DEACTIVATION',
+    title: 'Controlled Maintenance Deactivation & Write Restoration Gate',
+    executor: 'OWNER_MANUAL',
+    description: 'Deactivate maintenance barrier ONLY after all required database integrity, schema version, and deployment identity checks pass. Explicitly verify database writes are restored and retire maintenance bypass token.',
+    prerequisites: ['Step 7 complete and certified', 'All 11 integrity gates PASS', 'Vercel staging deployment READY'],
+    verificationGate: 'Maintenance barrier cleanly deactivated; default_transaction_read_only reset to off; write triggers dropped; write restoration probe verified.',
+    safeguard: 'Deactivation is strictly prohibited if Step 7 integrity checks have not passed.',
+    rollbackAction: 'If deactivation fails or database remains locked, investigate locks; if schema inconsistent, restore from Step 3 checkpoint.'
   },
   {
     step: 9,
-    id: '9_PERMIT_REAL_BROWSER_ACCEPTANCE',
-    title: 'Permit Real-Browser Acceptance Testing & Deactivate Maintenance Barrier',
+    id: '9_POST_DEACTIVATION_BROWSER_ACCEPTANCE',
+    title: 'Post-Deactivation Live Real-Browser Acceptance & Certification',
     executor: 'OWNER_MANUAL',
-    description: 'Perform owner real-browser acceptance (Google/GitHub login, credit balance, chat stream), and deactivate the staging maintenance barrier once all acceptance criteria succeed.',
-    prerequisites: ['Steps 1 through 8 all verified and certified'],
-    verificationGate: 'Real browser login succeeds with historical accounts; credit balance displays 100 credits; conversations stream; maintenance barrier cleanly deactivated.',
-    safeguard: 'Zero Production mutation; Production Neon and domains remain completely isolated.',
-    rollbackAction: 'If browser acceptance fails: Keep barrier active. If defect involves schema/data, execute Step 3 Neon checkpoint restore and revert staging code. Do not deactivate maintenance on an uncertified release.'
+    description: 'Perform live owner real-browser acceptance on staging.virexaaiventures.com with writes restored: Google/GitHub OAuth login, credit wallet 100 balance continuity, and real chat streaming with persistence.',
+    prerequisites: ['Step 8 complete', 'Maintenance barrier cleanly deactivated', 'Writes verified restored'],
+    verificationGate: 'Real browser login succeeds with historical accounts; credit balance displays 100 credits; real chat streams and persists; never claim PASS from a simulated browser test.',
+    safeguard: 'If browser acceptance fails: re-activate maintenance barrier immediately if safe, stop certification, and execute recovery checkpoint rollback.',
+    rollbackAction: 'If browser acceptance fails: Re-activate maintenance barrier immediately. Restore database from Step 3 Neon checkpoint and revert staging code. Do not certify release.'
   }
 ];
 

@@ -75,19 +75,33 @@ async function main() {
 
     if (action === '--deactivate') {
       const operator = process.env.AIRA_MAINTENANCE_OPERATOR || 'rajpunkeshwarrajgautam-boop';
+      const bypassToken = process.env.AIRA_MAINTENANCE_BYPASS_TOKEN || (
+        fs.existsSync('.aira-maintenance-token.local') ? fs.readFileSync('.aira-maintenance-token.local', 'utf8').trim() : undefined
+      );
       console.log(`[MAINTENANCE_CONTROL] Deactivating staging maintenance barrier...`);
-      const res = await deactivateStagingMaintenance(client, { operator });
+      const res = await deactivateStagingMaintenance(client, { operator, bypassToken });
       console.log(`✓ Staging maintenance barrier DEACTIVATED.`);
       console.log(`  Operator: ${res.operator}`);
       console.log(`  Deactivated At: ${res.deactivatedAt}`);
       console.log(`  Read-Only Reset: ${res.readOnlyReset}`);
       console.log(`  Triggers Removed: ${res.triggersRemoved}`);
       console.log(`  Details: ${res.details}\n`);
+
+      if (fs.existsSync('.aira-maintenance-token.local')) {
+        try {
+          fs.unlinkSync('.aira-maintenance-token.local');
+          console.log(`  [SECURITY] Local maintenance bypass token file removed.`);
+        } catch {
+          // ignore
+        }
+      }
       process.exit(0);
     }
 
     if (action === '--verify-barrier') {
-      const bypassToken = process.env.AIRA_MAINTENANCE_BYPASS_TOKEN;
+      const bypassToken = process.env.AIRA_MAINTENANCE_BYPASS_TOKEN || (
+        fs.existsSync('.aira-maintenance-token.local') ? fs.readFileSync('.aira-maintenance-token.local', 'utf8').trim() : undefined
+      );
       console.log(`[MAINTENANCE_CONTROL] Empirically verifying write restriction on target database...`);
       const res = await verifyStagingWriteRestriction(client, { bypassToken });
       console.log(`Result: writesBlocked=${res.writesBlocked}, privilegedPathOperational=${res.privilegedPathOperational}`);

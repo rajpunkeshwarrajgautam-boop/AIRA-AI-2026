@@ -11,6 +11,7 @@ node_modules
 dist
 dist-ssr
 *.local
+.aira-maintenance-token.local
 
 # Editor directories and files
 .vscode/*

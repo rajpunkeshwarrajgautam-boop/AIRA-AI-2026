@@ -11,6 +11,8 @@
  * 7. Failed OAuth browser acceptance abort behavior.
  */
 
+import fs from 'node:fs';
+import { execSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import {
   PRODUCTION_NEON_PROJECT_ID,
@@ -22,6 +24,12 @@ import {
   COMMERCIAL_PR92_BRANCH_ID,
   COMMERCIAL_PR92_ENDPOINT_ID
 } from '../packages/db/src/security/database-isolation-guard.js';
+import {
+  hashBypassToken
+} from '../packages/db/src/security/staging-maintenance-barrier.js';
+import {
+  createStagingMaintenanceMiddleware
+} from '../apps/api/src/middleware/staging-maintenance.js';
 import {
   validateAuthoritativeTargetSafety,
   verifyConnectedTargetMetadata,
@@ -38,6 +46,7 @@ import {
 import {
   verifyStagingCutoverIntegrity,
   CUTOVER_FAILURE_RECOVERY_MATRIX,
+  CUTOVER_PROTOCOL_STEPS,
   getFailureRecoveryPhase
 } from '../scripts/staging-cutover-orchestrator.js';
 
@@ -602,6 +611,172 @@ assert.equal(afterImport.checkpointRestorationRequired, true);
 assert.throws(() => getFailureRecoveryPhase('INVALID_PHASE' as any), /Unknown failure recovery phase/);
 console.log('  ✓ Authoritative 5-phase failure recovery matrix verified: deactivation alone strictly prohibited after migrations begin');
 
+
+// ── Test Group 7: Maintenance Bypass Token Lifecycle & Shell Variable Safety Gates (Defect 1) ─
+console.log('\n--- Test Group 7: Maintenance Bypass Token Lifecycle & Shell Variable Safety Gates (Defect 1) ---');
+
+// 7.1 Shell script syntax and unbound variable enforcement
+const wizardContent = fs.readFileSync('scripts/staging-cutover-wizard.sh', 'utf8');
+assert.ok(wizardContent.includes('set -euo pipefail'), 'scripts/staging-cutover-wizard.sh must enforce set -euo pipefail');
+
+// 7.2 Verify BYPASS_TOKEN is initialized or assigned before any expansion
+const bypassTokenDeclIndex = wizardContent.indexOf('BYPASS_TOKEN=');
+const bypassTokenFirstUse = wizardContent.indexOf('$BYPASS_TOKEN');
+assert.ok(bypassTokenDeclIndex !== -1, 'BYPASS_TOKEN must be initialized/declared in scripts/staging-cutover-wizard.sh');
+assert.ok(bypassTokenDeclIndex < bypassTokenFirstUse, 'BYPASS_TOKEN must be initialized before first $BYPASS_TOKEN reference');
+
+// 7.3 Prove that bash with set -u fails closed on unbound variables
+let unboundFailed = false;
+try {
+  const bashBin = fs.existsSync('D:\\Git\\bin\\bash.exe') ? 'D:\\Git\\bin\\bash.exe' : 'bash';
+  execSync(`"${bashBin}" -u -c 'echo "$UNBOUND_VARIABLE_XYZ"'`, { stdio: 'pipe' });
+} catch {
+  unboundFailed = true;
+}
+assert.equal(unboundFailed, true, 'Shell with set -u must fail closed on unbound variables');
+console.log('  ✓ Fail closed: Shell script enforces set -euo pipefail and fails on unbound variables');
+
+// 7.4 Token format validation gate
+function validateBypassTokenFormat(token: string): boolean {
+  return /^[0-9a-fA-F]{64}$/.test(token);
+}
+
+assert.equal(validateBypassTokenFormat(''), false, 'Empty token must be rejected');
+assert.equal(validateBypassTokenFormat('   '), false, 'Whitespace token must be rejected');
+assert.equal(validateBypassTokenFormat('not_a_valid_hex_token_1234567890'), false, 'Non-hex token must be rejected');
+assert.equal(validateBypassTokenFormat('0123456789abcdef'), false, 'Short token (16 chars) must be rejected');
+assert.equal(validateBypassTokenFormat('0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0'), false, 'Long token (65 chars) must be rejected');
+assert.equal(validateBypassTokenFormat('0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'), true, '64-character hex token must be accepted');
+console.log('  ✓ 64-character hexadecimal bypass token format validation verified');
+
+// 7.5 Missing privileged credentials in verifyStagingWriteIsolation results in FAIL
+const mockMissingPrivilegedTokenClient: any = {
+  raw: async (sql: string) => {
+    if (sql.includes('neon.project_id')) {
+      return {
+        rows: [{
+          db_name: 'neondb',
+          neon_project_id: STAGING_NEON_PROJECT_ID,
+          neon_branch_id: STAGING_NEON_BRANCH_ID,
+          neon_endpoint_id: STAGING_NEON_ENDPOINT_ID
+        }]
+      };
+    }
+    if (sql.includes('_aira_staging_maintenance')) {
+      return {
+        rows: [{
+          is_active: true,
+          activated_at: '2026-10-22T00:00:00Z',
+          activated_by: 'operator',
+          reason: 'cutover',
+          bypass_token_hash: 'hash'
+        }]
+      };
+    }
+    if (sql.includes('default_transaction_read_only')) {
+      return {
+        rows: [{
+          db_name: 'neondb',
+          default_ro: 'on',
+          project_id: STAGING_NEON_PROJECT_ID,
+          branch_id: STAGING_NEON_BRANCH_ID
+        }]
+      };
+    }
+    if (sql.includes('INSERT INTO _aira_maintenance_write_probe') || sql.includes('TRUNCATE TABLE _aira_maintenance_write_probe')) {
+      throw new Error('[STAGING_MAINTENANCE_BLOCKED] Operation denied: Permanent Staging database is in maintenance mode.');
+    }
+    return { rows: [] };
+  }
+};
+
+const isolationMissingToken = await verifyStagingWriteIsolation(mockMissingPrivilegedTokenClient, { bypassToken: undefined });
+assert.equal(isolationMissingToken.isolated, false, 'Write isolation must fail closed when bypass token is missing');
+assert.equal(isolationMissingToken.privilegedMigrationPath.status, 'FAIL', 'Gate 5 PRIVILEGED_MIGRATION_PATH must be FAIL without token');
+assert.match(isolationMissingToken.privilegedMigrationPath.details, /No privileged bypass token was provided/);
+console.log('  ✓ Fail closed: Missing privileged bypass token fails Gate 5 PRIVILEGED_MIGRATION_PATH');
+
+
+// ── Test Group 8: Release Sequence Separation & Maintenance-Active Blocked Mutating Paths (Defect 2) ─
+console.log('\n--- Test Group 8: Release Sequence Separation & Maintenance-Active Blocked Mutating Paths (Defect 2) ---');
+
+// 8.1 Prove that mutating operations are blocked under active maintenance
+const sampleBypassToken = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+const sampleBypassHash = hashBypassToken(sampleBypassToken);
+const maintenanceMiddleware = createStagingMaintenanceMiddleware({
+  enabled: true,
+  bypassToken: sampleBypassToken,
+  bypassTokenHash: sampleBypassHash
+});
+
+function simulateHttp(method: string, path: string) {
+  let nextInvoked = false;
+  let statusCode = 200;
+  let responseBody: any = null;
+  const resHeaders: Record<string, string> = {};
+
+  const req: any = { method, path, url: path, originalUrl: path, headers: {} };
+  const res: any = {
+    status: (code: number) => { statusCode = code; return res; },
+    setHeader: (name: string, value: string) => { resHeaders[name.toLowerCase()] = value; },
+    json: (body: any) => { responseBody = body; return res; }
+  };
+
+  maintenanceMiddleware(req, res, () => { nextInvoked = true; });
+  return { nextInvoked, statusCode, responseBody, resHeaders };
+}
+
+// 8.1.1 Read-only health checks pass through unconditionally
+const healthRes = simulateHttp('GET', '/api/health');
+assert.equal(healthRes.nextInvoked, true, 'GET /api/health must pass through during maintenance');
+assert.equal(healthRes.statusCode, 200);
+
+const benchmarkRes = simulateHttp('GET', '/api/ready/benchmark');
+assert.equal(benchmarkRes.nextInvoked, true, 'GET /api/ready/benchmark must pass through during maintenance');
+
+// 8.1.2 Authentication and Chat writes MUST return HTTP 503 and NOT proceed
+const chatStreamRes = simulateHttp('POST', '/api/chat/stream');
+assert.equal(chatStreamRes.nextInvoked, false, 'POST /api/chat/stream must NOT reach router during maintenance');
+assert.equal(chatStreamRes.statusCode, 503, 'POST /api/chat/stream must return HTTP 503');
+assert.equal(chatStreamRes.responseBody?.code, 'STAGING_MAINTENANCE_ACTIVE');
+assert.equal(chatStreamRes.resHeaders['retry-after'], '60');
+
+const googleOauthStartRes = simulateHttp('GET', '/api/auth/oauth/google/start');
+assert.equal(googleOauthStartRes.nextInvoked, false, 'Google OAuth start must NOT proceed during maintenance');
+assert.equal(googleOauthStartRes.statusCode, 503);
+
+const githubOauthCallbackRes = simulateHttp('GET', '/api/auth/oauth/github/callback');
+assert.equal(githubOauthCallbackRes.nextInvoked, false, 'GitHub OAuth callback must NOT proceed during maintenance');
+assert.equal(githubOauthCallbackRes.statusCode, 503);
+
+const convUpdateRes = simulateHttp('PUT', '/api/conversations/conv_123');
+assert.equal(convUpdateRes.nextInvoked, false, 'PUT /api/conversations must NOT proceed during maintenance');
+assert.equal(convUpdateRes.statusCode, 503);
+
+console.log('  ✓ Proved: Mutating operations (OAuth start/callback, chat stream, conversation writes) return HTTP 503 during maintenance');
+console.log('  ✓ Proved: Read-only endpoints (/api/health, /api/ready/benchmark) return HTTP 200 during maintenance');
+
+// 8.2 Verify CUTOVER_PROTOCOL_STEPS sequence ordering
+const step7 = CUTOVER_PROTOCOL_STEPS.find(s => s.step === 7);
+assert.ok(step7, 'Step 7 must exist');
+assert.equal(step7.id, '7_MAINTENANCE_ACTIVE_VERIFICATION');
+assert.ok(step7.description.includes('read-only health checks'));
+assert.ok(step7.description.includes('503'));
+
+const step8 = CUTOVER_PROTOCOL_STEPS.find(s => s.step === 8);
+assert.ok(step8, 'Step 8 must exist');
+assert.equal(step8.id, '8_CONTROLLED_MAINTENANCE_DEACTIVATION');
+assert.ok(step8.prerequisites.includes('Step 7 complete and certified'));
+
+const step9 = CUTOVER_PROTOCOL_STEPS.find(s => s.step === 9);
+assert.ok(step9, 'Step 9 must exist');
+assert.equal(step9.id, '9_POST_DEACTIVATION_BROWSER_ACCEPTANCE');
+assert.ok(step9.prerequisites.includes('Step 8 complete'));
+assert.ok(step9.description.includes('writes restored'));
+assert.ok(step9.verificationGate.includes('never claim PASS from a simulated browser test'));
+
+console.log('  ✓ Release sequence order verified: Step 7 Maintenance-Active -> Step 8 Deactivation -> Step 9 Post-Deactivation Browser Acceptance');
+
 console.log('\n================================================================================');
-console.log('  ✓ ALL 30 CUTOVER SAFETY GATE FAIL-CLOSED ASSERTIONS PASSED SUCCESSFULLY!      ');
+console.log('  ✓ ALL 45 CUTOVER SAFETY GATE FAIL-CLOSED ASSERTIONS PASSED SUCCESSFULLY!      ');
 console.log('================================================================================\n');

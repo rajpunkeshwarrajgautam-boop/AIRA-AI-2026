@@ -11,6 +11,7 @@
  * Fails closed on any check failure. A successful pg_stat_activity check alone NEVER establishes release readiness.
  */
 
+import fs from 'node:fs';
 import knex, { Knex } from 'knex';
 import {
   classifyDatabaseUrl,
@@ -346,8 +347,14 @@ async function main() {
   }
 
   const bypassToken = process.env.AIRA_MAINTENANCE_BYPASS_TOKEN || process.env.STAGING_MAINTENANCE_TOKEN || (
-    process.argv.includes('--token') ? process.argv[process.argv.indexOf('--token') + 1] : undefined
+    fs.existsSync('.aira-maintenance-token.local') ? fs.readFileSync('.aira-maintenance-token.local', 'utf8').trim() : (
+      process.argv.includes('--token') ? process.argv[process.argv.indexOf('--token') + 1] : undefined
+    )
   );
+
+  if (process.argv.includes('--token')) {
+    console.warn('[SECURITY WARNING] Supplying bypass token via CLI arguments (--token) exposes credentials to process listings. Use environment variable AIRA_MAINTENANCE_BYPASS_TOKEN or .aira-maintenance-token.local instead.');
+  }
   const requireBarrier = !process.argv.includes('--no-barrier');
   const allowRehearsal = process.argv.includes('--allow-rehearsal');
 

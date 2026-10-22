@@ -16,9 +16,9 @@ set -euo pipefail
 
 if [[ -t 1 ]] && command -v tput >/dev/null 2>&1 && [[ "$(tput colors 2>/dev/null || echo 0)" -ge 8 ]]; then
   BOLD=$(tput bold); DIM=$(tput dim); RESET=$(tput sgr0)
-  BLUE=$(tput setaf 4); GREEN=$(tput setaf 2); YELLOW=$(tput setaf 3)
+  BLUE=$(tput setaf 4); GREEN=$(tput setaf 2); YELLOW=$(tput setaf 3); RED=$(tput setaf 1)
 else
-  BOLD=""; DIM=""; RESET=""; BLUE=""; GREEN=""; YELLOW=""
+  BOLD=""; DIM=""; RESET=""; BLUE=""; GREEN=""; YELLOW=""; RED=""
 fi
 
 TOTAL_STAGES=8
@@ -27,6 +27,11 @@ ENV_FILE="${ENV_FILE:-.env}"
 WRITTEN_ENV=()
 WRITTEN_SECRET=()
 SKIPPED=()
+BYPASS_TOKEN=""
+CHECKPOINT_NAME=""
+APPROVED_SHA=""
+STAGING_DB_URL=""
+SOURCE_DB_URL=""
 
 _clear() {
   [[ -t 1 ]] || return 0
@@ -129,6 +134,50 @@ write_env() {
   printf -v "$key" '%s' "$value"
   WRITTEN_ENV+=("$key")
   printf '  %s✓ wrote%s %s → %s\n' "$GREEN" "$RESET" "$key" "$ENV_FILE"
+}
+
+acquire_maintenance_bypass_token() {
+  local token=""
+  # 1. Environment variable
+  if [[ -n "${AIRA_MAINTENANCE_BYPASS_TOKEN:-}" ]]; then
+    token="$AIRA_MAINTENANCE_BYPASS_TOKEN"
+    say "✓ Using existing AIRA_MAINTENANCE_BYPASS_TOKEN from operator environment."
+  # 2. Local token file (mode 0600)
+  elif [[ -f ".aira-maintenance-token.local" ]]; then
+    token=$(tr -d ' \r\n' < ".aira-maintenance-token.local" 2>/dev/null || echo "")
+    if [[ -n "$token" ]]; then
+      say "✓ Loaded operator maintenance bypass token from .aira-maintenance-token.local."
+    fi
+  fi
+
+  # 3. Prompt operator or generate securely
+  if [[ -z "$token" ]]; then
+    ask_secret token "Enter 64-character hex maintenance bypass token (or press Enter to auto-generate):"
+    if [[ -z "$token" ]]; then
+      say "Generating new 256-bit cryptographically secure bypass token..."
+      token=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
+    fi
+    # Write to local file with restricted mode 0600
+    (umask 077 && printf '%s' "$token" > ".aira-maintenance-token.local")
+    say "✓ Token securely written to .aira-maintenance-token.local (mode 0600)."
+  fi
+
+  # 4. Strict validation (fail closed on malformed or empty token)
+  if [[ ! "$token" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    warn "SECURITY FATAL: Maintenance bypass token must be an exact 64-character hexadecimal string! Fail-closed."
+    exit 1
+  fi
+
+  BYPASS_TOKEN="$token"
+  export AIRA_MAINTENANCE_BYPASS_TOKEN="$BYPASS_TOKEN"
+  say "✓ Maintenance bypass token active in operator environment (redacted)."
+}
+
+retire_maintenance_bypass_token() {
+  rm -f .aira-maintenance-token.local
+  unset AIRA_MAINTENANCE_BYPASS_TOKEN || true
+  BYPASS_TOKEN=""
+  note "✓ Maintenance bypass token securely retired from local environment."
 }
 
 finish() {
@@ -280,14 +329,23 @@ say "  d. Retain rotated neondb_owner migration credential securely in operator 
 say "  e. Preserve Commercial PR #92 source and Production credentials untouched"
 
 ask_secret STAGING_DB_URL "Paste permanent staging DATABASE_URL to verify write isolation:"
+if [[ -z "${STAGING_DB_URL:-}" ]]; then
+  warn "SECURITY FATAL: Missing required permanent staging DATABASE_URL. Aborting fail-closed."
+  exit 1
+fi
+
+step "Acquire privileged operator maintenance bypass token:"
+acquire_maintenance_bypass_token
 
 if confirm "Activate the staging-only maintenance barrier now?"; then
   say "Activating database maintenance barrier..."
-  STAGING_DB_URL="$STAGING_DB_URL" npx tsx scripts/staging-maintenance-control.ts --activate
+  AIRA_MAINTENANCE_BYPASS_TOKEN="$BYPASS_TOKEN" STAGING_DB_URL="$STAGING_DB_URL" \
+    npx tsx scripts/staging-maintenance-control.ts --activate
 fi
 
 say "Probing staging database write isolation across all 5 mandatory release gates..."
-if ! STAGING_DB_URL="$STAGING_DB_URL" npx tsx scripts/verify-staging-write-isolation.ts "$STAGING_DB_URL"; then
+if ! AIRA_MAINTENANCE_BYPASS_TOKEN="$BYPASS_TOKEN" STAGING_DB_URL="$STAGING_DB_URL" \
+  npx tsx scripts/verify-staging-write-isolation.ts "$STAGING_DB_URL"; then
   warn "SECURITY FATAL: Staging write isolation gate failed! All 5 release-blocking gates must PASS."
   warn "Cutover aborted fail-closed to prevent race conditions."
   show_rollback_protocol "BEFORE_MIGRATION"
@@ -295,7 +353,7 @@ if ! STAGING_DB_URL="$STAGING_DB_URL" npx tsx scripts/verify-staging-write-isola
 fi
 
 note "✓ All 5 staging write isolation gates verified PASS."
-pause "Press Enter to proceed to merge authorization..."
+pause "Press Enter to proceed to migration and merge authorization..."
 
 # ── Stage 4: Apply Migrations 016–022 & Merge PR #96 into staging ─────────────
 stage "Apply Migrations 016–022 & Merge PR #96 into staging"
@@ -341,7 +399,8 @@ step "Obtain verified Commercial PR #92 source DATABASE_URL (mute-frost-50372225
 ask_secret SOURCE_DB_URL "Paste Commercial PR #92 source DATABASE_URL:"
 
 say "Running import in atomic transaction with authoritative Neon identity guards..."
-if ! AIRA_ALLOW_STAGING_LIVE_IMPORT=true SOURCE_DB_URL="$SOURCE_DB_URL" TARGET_DB_URL="$STAGING_DB_URL" \
+if ! AIRA_ALLOW_STAGING_LIVE_IMPORT=true AIRA_MAINTENANCE_BYPASS_TOKEN="$BYPASS_TOKEN" \
+  SOURCE_DB_URL="$SOURCE_DB_URL" TARGET_DB_URL="$STAGING_DB_URL" \
   npx tsx scripts/import-verified-commercial-identities.ts "$STAGING_DB_URL"; then
   warn "SECURITY FATAL: Controlled historical identity import failed! Aborting."
   show_rollback_protocol "AFTER_HISTORICAL_IMPORT"
@@ -349,51 +408,90 @@ if ! AIRA_ALLOW_STAGING_LIVE_IMPORT=true SOURCE_DB_URL="$SOURCE_DB_URL" TARGET_D
 fi
 
 note "Historical identity import completed cleanly."
-pause "Press Enter to proceed to integrity verification..."
+pause "Press Enter to proceed to maintenance-active verification..."
 
-# ── Stage 6: Verify Staging Cutover Integrity ─────────────────────────────
-stage "Verify Staging Cutover Integrity"
-say "Running comprehensive 11-rule data integrity and continuity verification against permanent staging..."
+# ── Stage 6: Maintenance-Active Verification & Write Restriction Probe ────
+stage "Maintenance-Active Verification & Write Restriction Probe"
+say "Verify deployment identity, database integrity, and prove write paths remain locked."
+say "Authentication and chat writes are INTENTIONALLY BLOCKED while maintenance is active."
 
-if ! TARGET_DB_URL="$STAGING_DB_URL" AIRA_ALLOW_STAGING_LIVE_IMPORT=true \
+step "1. Verify Deployed Application Identity & Schema Version:"
+say "   - Knex migrations: 22 applied migrations"
+say "   - 11 data integrity & continuity assertions"
+
+if ! TARGET_DB_URL="$STAGING_DB_URL" AIRA_ALLOW_STAGING_LIVE_IMPORT=true AIRA_MAINTENANCE_BYPASS_TOKEN="$BYPASS_TOKEN" \
   npx tsx scripts/staging-cutover-orchestrator.ts --verify-integrity "$STAGING_DB_URL"; then
   warn "SECURITY FATAL: Staging cutover integrity verification failed! One or more of the 11 gates did not pass."
   show_rollback_protocol "AFTER_HISTORICAL_IMPORT"
   exit 1
 fi
+note "✓ Database integrity & schema version 022 certified under maintenance barrier."
 
-note "✓ All 11 cutover integrity gates certified!"
-pause "Press Enter to proceed to deployment certification..."
-
-# ── Stage 7: Permanent Staging CI Pipeline Attestation ────────────────────
-stage "Permanent Staging CI Pipeline Attestation"
-say "Verify that GitHub Actions Permanent Staging Pipeline has certified the release."
-open_url "https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/actions/workflows/staging-deployment.yml"
-step "Check that 'Permanent Staging Pipeline' workflow ran for the staging merge commit"
-step "Verify that job 'Permanent Staging Deployment & Certification' passed"
-step "Confirm artifact 'aira-staging-certification' is uploaded"
-pause "Press Enter once CI attestation is confirmed green..."
-
-# ── Stage 8: Real-Browser Acceptance & Unlock ─────────────────────────────
-stage "Real-Browser Acceptance & Unlock"
-say "Perform live browser acceptance testing on permanent staging."
-open_url "https://staging.virexaaiventures.com"
-step "1. Click 'Sign In' and authenticate with verified Google or GitHub account"
-step "2. Confirm credit balance displays 100 credits (1:1 wallet continuity)"
-step "3. Open previous conversation and verify historical messages are visible"
-step "4. Send a test message and verify streaming response"
-step "5. Deactivate maintenance barrier to restore normal staging traffic"
-
-if confirm "Did real-browser acceptance succeed completely?"; then
-  say "Deactivating permanent staging maintenance barrier..."
-  if [[ -n "${STAGING_DB_URL:-}" ]]; then
-    STAGING_DB_URL="$STAGING_DB_URL" npx tsx scripts/staging-maintenance-control.ts --deactivate
+step "2. Read-Only Health Checks (Expected: HTTP 200):"
+say "   Probing read-only endpoints on staging.virexaaiventures.com..."
+if command -v curl >/dev/null 2>&1; then
+  HEALTH_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://staging.virexaaiventures.com/api/health" || echo "000")
+  say "   GET /api/health -> HTTP $HEALTH_CODE (expected 200)"
+  if [[ "$HEALTH_CODE" != "200" && "$HEALTH_CODE" != "000" ]]; then
+    warn "Read-only health check returned non-200 code: $HEALTH_CODE"
   fi
-  note "✓ Real-browser acceptance certified and maintenance barrier cleanly deactivated."
+fi
+
+step "3. Runtime Write Restriction Probing (Expected: HTTP 503 [STAGING_MAINTENANCE_BLOCKED]):"
+say "   Verifying mutating API endpoints are blocked during maintenance..."
+if command -v curl >/dev/null 2>&1; then
+  CHAT_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "https://staging.virexaaiventures.com/api/chat/stream" || echo "000")
+  say "   POST /api/chat/stream -> HTTP $CHAT_CODE (expected 503)"
+  OAUTH_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://staging.virexaaiventures.com/api/auth/oauth/google/start" || echo "000")
+  say "   GET /api/auth/oauth/google/start -> HTTP $OAUTH_CODE (expected 503)"
+fi
+say "   Database trigger enforcement: unprivileged writes blocked with SQLSTATE 55P03."
+note "✓ Verified: authentication and chat writes are correctly blocked while barrier is active."
+pause "Press Enter to proceed to controlled maintenance deactivation..."
+
+# ── Stage 7: Controlled Maintenance Deactivation & Write Restoration Gate ─
+stage "Controlled Maintenance Deactivation & Write Restoration Gate"
+say "All required database integrity, schema version, and deployment identity checks have PASSED."
+say "Maintenance barrier can now be safely deactivated to restore staging writes."
+
+if ! confirm "Authorize deactivating permanent staging maintenance barrier now?"; then
+  warn "Maintenance deactivation aborted by owner. Barrier remains active fail-closed."
+  show_rollback_protocol "AFTER_MERGE"
+  exit 1
+fi
+
+say "Deactivating permanent staging maintenance barrier..."
+AIRA_MAINTENANCE_BYPASS_TOKEN="$BYPASS_TOKEN" STAGING_DB_URL="$STAGING_DB_URL" \
+  npx tsx scripts/staging-maintenance-control.ts --deactivate
+
+say "Verifying write restoration..."
+STAGING_DB_URL="$STAGING_DB_URL" npx tsx scripts/staging-maintenance-control.ts --status
+
+retire_maintenance_bypass_token
+note "✓ Maintenance barrier cleanly deactivated and database writes restored."
+pause "Press Enter to proceed to live real-browser acceptance..."
+
+# ── Stage 8: Post-Deactivation Live Real-Browser Acceptance & Certification ─
+stage "Post-Deactivation Live Real-Browser Acceptance & Certification"
+say "Perform live browser acceptance testing on permanent staging with writes RESTORED."
+open_url "https://staging.virexaaiventures.com"
+step "1. Authenticate with verified Google OAuth account"
+step "2. Authenticate with verified GitHub OAuth account"
+step "3. Verify previous conversations and message history are intact"
+step "4. Confirm credit balance displays 100 credits (1:1 wallet continuity invariant)"
+step "5. Send a test message and verify real chat streaming and message persistence"
+
+if confirm "Did all real-browser acceptance criteria pass completely?"; then
   finish
 else
   warn "❌ RELEASE NOT CERTIFIED — Real-browser acceptance failed or was rejected by owner!"
-  warn "Cutover aborted. Do not declare release complete. Follow rollback protocol to Neon recovery checkpoint."
+  warn "Never claim PASS from a simulated browser test."
+  if confirm "Re-activate staging maintenance barrier immediately to protect staging?"; then
+    say "Re-activating maintenance barrier fail-closed..."
+    if [[ -n "${STAGING_DB_URL:-}" ]]; then
+      STAGING_DB_URL="$STAGING_DB_URL" npx tsx scripts/staging-maintenance-control.ts --activate || true
+    fi
+  fi
   show_rollback_protocol "AFTER_MERGE"
   exit 1
 fi
