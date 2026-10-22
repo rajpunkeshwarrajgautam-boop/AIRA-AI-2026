@@ -1,6 +1,11 @@
 import { Router, Request, Response } from 'express';
 import { visionService } from './vision/vision-service.js';
-import { durableIdempotencyManager } from './utils/idempotency.js';
+import {
+  durableIdempotencyManager,
+  IdempotencyConflictError,
+  IdempotencyInProgressError,
+  IdempotencyDatabaseError
+} from './utils/idempotency.js';
 import {
   VisionGenerationParamsSchema,
   VisionUnderstandParamsSchema,
@@ -68,9 +73,11 @@ export function createVisionRoutes(): Router {
       res.json(result);
     } catch (err: any) {
       if (clientOpId) {
-        await durableIdempotencyManager.fail(principal.userId, clientOpId);
+        if (!(err instanceof IdempotencyConflictError || err instanceof IdempotencyInProgressError)) {
+          await durableIdempotencyManager.fail(principal.userId, clientOpId).catch(() => {});
+        }
       }
-      const status = err.statusCode || (err.code === 'INSUFFICIENT_CREDITS' ? 402 : (err.code === 'IDEMPOTENCY_CONFLICT' ? 409 : 500));
+      const status = err.statusCode || (err.code === 'INSUFFICIENT_CREDITS' ? 402 : (err instanceof IdempotencyConflictError || err instanceof IdempotencyInProgressError ? 409 : (err instanceof IdempotencyDatabaseError ? 503 : 500)));
       res.status(status).json({ error: err.message, code: err.code });
     }
   });

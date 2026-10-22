@@ -50,10 +50,56 @@ async function runPreviewAcceptance() {
     assert.ok(title.toLowerCase().includes('aira'), `Page title does not include aira: "${title}"`);
     console.log(`  PASS: Preview loaded successfully (HTTP 200, Title: "${title}")`);
 
-    // Verify Deployment Identity if SHA provided
+    // Verify Authoritative Deployment Identity if EXPECTED_COMMIT_SHA provided
     if (EXPECTED_COMMIT_SHA) {
-      const vercelDeployment = response.headers()['x-vercel-id'];
-      console.log(`  INFO: Vercel Deployment ID: ${vercelDeployment || 'N/A'}`);
+      console.log(`  Verifying authoritative deployed commit SHA against expected: ${EXPECTED_COMMIT_SHA}`);
+      let deployedSha: string | null = null;
+      let deploymentSource = 'none';
+
+      try {
+        const versionUrl = new URL('/api/version', PREVIEW_URL).toString();
+        const verRes = await fetch(versionUrl);
+        if (verRes.ok) {
+          const verData = await verRes.json();
+          if (verData?.commitSha && verData.commitSha !== 'unknown') {
+            deployedSha = verData.commitSha;
+            deploymentSource = '/api/version';
+          }
+        }
+      } catch (e: any) {
+        console.warn(`  Notice: /api/version probe: ${e.message}`);
+      }
+
+      if (!deployedSha && process.env.VERCEL_TOKEN) {
+        try {
+          const host = new URL(PREVIEW_URL).hostname;
+          const vRes = await fetch(`https://api.vercel.com/v13/deployments/${host}`, {
+            headers: { Authorization: `Bearer ${process.env.VERCEL_TOKEN}` }
+          });
+          if (vRes.ok) {
+            const vData = await vRes.json();
+            deployedSha = vData?.meta?.githubCommitSha || vData?.gitSource?.sha || null;
+            deploymentSource = 'Vercel API';
+          }
+        } catch (e: any) {
+          console.warn(`  Notice: Vercel API probe: ${e.message}`);
+        }
+      }
+
+      if (deployedSha) {
+        console.log(`  Authoritative deployed SHA (${deploymentSource}): ${deployedSha}`);
+        const matches = deployedSha.toLowerCase().startsWith(EXPECTED_COMMIT_SHA.toLowerCase()) ||
+                        EXPECTED_COMMIT_SHA.toLowerCase().startsWith(deployedSha.toLowerCase());
+        if (!matches) {
+          throw new Error(
+            `PREVIEW_CERTIFICATION_FAILED: Authoritative deployed commit SHA (${deployedSha}) does not match expected commit SHA (${EXPECTED_COMMIT_SHA}). Rejecting stale or mismatched preview deployment.`
+          );
+        }
+        console.log(`  PASS: Authoritative deployed commit SHA matches expected commit (${EXPECTED_COMMIT_SHA})`);
+      } else {
+        const vercelDeployment = response.headers()['x-vercel-id'];
+        console.log(`  INFO: Deployment ID from header: ${vercelDeployment || 'N/A'}`);
+      }
     }
 
     await page.screenshot({ path: path.join(artifactDir, '01-initial-chat-mode.png') });
@@ -71,21 +117,37 @@ async function runPreviewAcceptance() {
     console.log('  PASS: Exactly two modes verified (Chat and Agent Mode controls present)');
 
     // -------------------------------------------------------------
-    // GATE 3.2: Chat / Agent Workspace Switching & HUD Verification
+    // GATE 3.2: Chat / Agent Workspace Switching & Distraction-Free UI
     // -------------------------------------------------------------
-    console.log('[3/11] Verifying Seamless Chat / Agent Workspace Switching...');
+    console.log('[3/11] Verifying Seamless Chat / Agent Workspace Switching (Distraction-Free UI)...');
     await agentModeBtn.click();
     await page.waitForTimeout(600);
 
-    const agentHud = page.locator('text="Agent Mode Active"')
-      .or(page.locator('text="Agent Panel"'))
-      .or(page.locator('[data-testid="agent-contextual-panel"]'))
-      .or(page.locator('text="Workspace Panel"'))
+    // Verify Agent Panel contextual control is visible in header
+    const agentPanelBtn = page.locator('button[title*="Agent Workspace Panel"]').or(page.locator('button:has-text("Agent Panel")')).first();
+    assert.ok(await agentPanelBtn.count() > 0, 'Agent Panel contextual toggle button is missing from header in Agent Mode.');
+
+    // Verify Persistent Horizontal "Agent Mode Active" Banner is REMOVED from DOM
+    const banner = page.locator('text="Agent Mode Active"');
+    const bannerCount = await banner.count();
+    assert.strictEqual(bannerCount, 0, 'Persistent horizontal "Agent Mode Active" banner was found in DOM. Gate 5 requires complete banner removal.');
+    console.log('  PASS: Verified persistent horizontal banner is removed. Chat gains back full screen height.');
+
+    // Verify Contextual Agent Panel opens upon toggle
+    await agentPanelBtn.click();
+    await page.waitForTimeout(600);
+    const contextualPanel = page.locator('[data-testid="agent-contextual-panel"]')
+      .or(page.locator('text=Agent Workspace'))
+      .or(page.locator('text=Sandbox Permissions'))
       .first();
-    const isHudVisible = await agentHud.count() > 0;
-    assert.ok(isHudVisible, 'Agent Mode Contextual HUD failed to render upon switching to Agent Mode.');
-    await page.screenshot({ path: path.join(artifactDir, '02-agent-mode-hud.png') });
-    console.log('  PASS: Agent Mode Contextual HUD rendered successfully.');
+    const isPanelOpen = (await contextualPanel.count()) > 0;
+    assert.ok(isPanelOpen, 'Contextual Agent Workspace panel failed to render upon clicking Agent Panel.');
+    await page.screenshot({ path: path.join(artifactDir, '02-agent-contextual-panel.png') });
+    console.log('  PASS: Contextual Agent panel opens with execution controls and permissions.');
+
+    // Close panel
+    await agentPanelBtn.click();
+    await page.waitForTimeout(400);
 
     // Switch back to Chat Mode
     await chatModeBtn.click();

@@ -87,7 +87,12 @@ import {
   isAllowedOrigin
 } from './auth/bff-session.js';
 import { isTemporaryDatabaseError } from './utils/storage-errors.js';
-import { durableIdempotencyManager } from './utils/idempotency.js';
+import {
+  durableIdempotencyManager,
+  IdempotencyConflictError,
+  IdempotencyInProgressError,
+  IdempotencyDatabaseError
+} from './utils/idempotency.js';
 
 export class UntrustedOriginError extends Error {
   readonly status = 403;
@@ -252,6 +257,17 @@ app.get('/api/auth/session', handleBffSession);
 app.post('/api/auth/sign-out', (req: Request, res: Response) => {
   handleBffSignOut(req, res).catch((err) => {
     res.status(500).json({ error: err.message || 'BFF sign out failed' });
+  });
+});
+
+// Authoritative deployment identity endpoint for Preview and Release certification
+app.get('/api/version', (_req: Request, res: Response) => {
+  res.json({
+    status: 'ok',
+    version: '1.0.0',
+    commitSha: process.env.VERCEL_GIT_COMMIT_SHA || process.env.GITHUB_SHA || process.env.COMMIT_SHA || 'unknown',
+    deploymentUrl: process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'unknown',
+    environment: process.env.NODE_ENV || 'production'
   });
 });
 
@@ -1903,9 +1919,11 @@ app.post('/api/automations', async (req: Request, res: Response) => {
     res.status(201).json(item);
   } catch (err: any) {
     if (clientOpId && verifiedUserId) {
-      await durableIdempotencyManager.fail(verifiedUserId, clientOpId);
+      if (!(err instanceof IdempotencyConflictError || err instanceof IdempotencyInProgressError)) {
+        await durableIdempotencyManager.fail(verifiedUserId, clientOpId).catch(() => {});
+      }
     }
-    const status = err.statusCode || (err.code === 'IDEMPOTENCY_CONFLICT' ? 409 : 400);
+    const status = err.statusCode || (err.code === 'IDEMPOTENCY_CONFLICT' || err.code === 'IDEMPOTENCY_IN_PROGRESS' ? 409 : (err.code === 'IDEMPOTENCY_DATABASE_UNAVAILABLE' ? 503 : 400));
     res.status(status).json({ error: err.message, code: err.code });
   }
 });

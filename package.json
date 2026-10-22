@@ -26,6 +26,8 @@
     "test:router": "npx tsx test/intent-router.ts",
     "test:workflow": "npx tsx test/workflow-engine.ts",
     "test:tools": "npx tsx test/tool-gateway-certification.ts",
+    "test:aira-one-safety": "npx tsx --test test/aira-one-execution-safety.test.ts",
+    "test:aira-backend-correctness": "npx tsx --test test/aira-backend-correctness.test.ts",
     "test:browser": "npx tsx test/browser-execution-suite.ts",
     "test:reality": "npx tsx test/capability-reality-audit-suite.ts",
     "test:search": "npx tsx test/search-provider-failover.ts",

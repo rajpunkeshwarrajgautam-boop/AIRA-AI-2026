@@ -4,6 +4,23 @@ import { AgentRuntime } from '../../agent-runtime/src/index.js';
 import { AutomationRepository, AutomationRunRepository } from './repositories.js';
 import parser from 'cron-parser';
 
+function parseCronExpression(expression: string, options?: any) {
+  const p: any = parser;
+  if (typeof p.parseExpression === 'function') {
+    return p.parseExpression(expression, options);
+  }
+  if (p.CronExpressionParser && typeof p.CronExpressionParser.parse === 'function') {
+    return p.CronExpressionParser.parse(expression, options);
+  }
+  if (p.default?.parseExpression) {
+    return p.default.parseExpression(expression, options);
+  }
+  if (p.default?.CronExpressionParser?.parse) {
+    return p.default.CronExpressionParser.parse(expression, options);
+  }
+  throw new Error('cron-parser: parseExpression or CronExpressionParser.parse not found');
+}
+
 export class AutomationEngine {
   private timerHandle: NodeJS.Timeout | null = null;
 
@@ -95,7 +112,8 @@ export class AutomationEngine {
   public async triggerNow(
     id: string, 
     scheduledForOrPrincipal?: number | string, 
-    explicitPrincipalId?: string
+    explicitPrincipalId?: string,
+    existingClaim?: AutomationRun
   ): Promise<string> {
     let scheduledFor = Date.now();
     let principalId: string | undefined = explicitPrincipalId;
@@ -106,14 +124,24 @@ export class AutomationEngine {
       principalId = scheduledForOrPrincipal;
     }
 
+    if (existingClaim) {
+      scheduledFor = existingClaim.scheduledFor;
+    }
+
     const item = await this.getAutomation(id, principalId);
     if (!item) {
       throw new Error(`Automation with id "${id}" not found.`);
     }
 
-    const claim = await this.runRepo.claimRun(id, scheduledFor);
+    // Single Authoritative Transactional Claim:
+    // If an accepted claim is passed from evaluateSchedules(), reuse it directly.
+    // If triggered manually without a prior claim, claim now atomically.
+    let claim = existingClaim;
     if (!claim) {
-      throw new Error(`Automation run already claimed for ${scheduledFor}`);
+      claim = await this.runRepo.claimRun(id, scheduledFor);
+      if (!claim) {
+        throw new Error(`Automation run already claimed for ${scheduledFor}`);
+      }
     }
 
     try {
@@ -193,6 +221,13 @@ export class AutomationEngine {
     }
   }
 
+  public async recoverStaleRuns(staleThresholdMs = 15 * 60 * 1000): Promise<number> {
+    if (this.runRepo.recoverStaleRuns) {
+      return this.runRepo.recoverStaleRuns(staleThresholdMs);
+    }
+    return 0;
+  }
+
   public async runScheduledCronCycle(): Promise<{ evaluated: number; triggered: string[] }> {
     return this.evaluateSchedules();
   }
@@ -200,6 +235,11 @@ export class AutomationEngine {
   private async evaluateSchedules(): Promise<{ evaluated: number; triggered: string[] }> {
     const triggered: string[] = [];
     try {
+      // Crash recovery: mark timed-out or abandoned runs as FAILED so schedule continues
+      await this.recoverStaleRuns().catch((err: any) => {
+        console.warn(`[AutomationEngine] Crash recovery warning:`, err?.message);
+      });
+
       const dueAutomations = await this.autoRepo.getDueAutomations();
       const now = Date.now();
 
@@ -208,10 +248,11 @@ export class AutomationEngine {
         if (auto.trigger === 'ONE_TIME') {
           if (auto.targetRunAt && now >= auto.targetRunAt && (!auto.lastRun || auto.lastRun === 0)) {
             try {
+              // Authoritative transactional claim: passed directly into execution
               const claim = await this.runRepo.claimRun(auto.id, auto.targetRunAt);
               if (claim) {
                 console.log(`[AutomationEngine] Triggering one-time automation: ${auto.name}`);
-                const runId = await this.triggerNow(auto.id, auto.targetRunAt);
+                const runId = await this.triggerNow(auto.id, auto.targetRunAt, undefined, claim);
                 triggered.push(runId);
               }
             } catch (e: any) {
@@ -224,14 +265,16 @@ export class AutomationEngine {
         // Handle recurring CRON automation
         if (!auto.cronExpression) continue;
         try {
-          const interval = parser.parseExpression(auto.cronExpression);
+          // Timezone-aware schedule calculation with IANA timezone
+          const interval = parseCronExpression(auto.cronExpression, { tz: auto.timezone || 'UTC' });
           const prevRunTime = interval.prev().getTime();
 
           if (!auto.lastRun || auto.lastRun < prevRunTime) {
+            // Authoritative transactional claim: passed directly into execution
             const claim = await this.runRepo.claimRun(auto.id, prevRunTime);
             if (claim) {
               console.log(`[AutomationEngine] Triggering cron automation: ${auto.name}`);
-              const runId = await this.triggerNow(auto.id, prevRunTime);
+              const runId = await this.triggerNow(auto.id, prevRunTime, undefined, claim);
               triggered.push(runId);
             }
           }

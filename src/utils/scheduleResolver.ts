@@ -34,6 +34,89 @@ export function isValidIanaTimezone(tz: string): boolean {
   }
 }
 
+export interface WallClockDateTime {
+  year: number;
+  month: number; // 1-12
+  day: number;
+  hour: number;  // 0-23
+  minute: number; // 0-59
+  second?: number;
+}
+
+/**
+ * Gets the wall-clock calendar and time components for a given Date in a specific IANA timezone.
+ */
+export function getWallClockInTimezone(date: Date, timeZone: string): WallClockDateTime {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+    second: 'numeric',
+    hour12: false
+  });
+  const parts = formatter.formatToParts(date);
+  const partMap: Record<string, number> = {};
+  for (const p of parts) {
+    if (p.type !== 'literal') {
+      partMap[p.type] = parseInt(p.value, 10);
+    }
+  }
+  const hour = partMap.hour === 24 ? 0 : partMap.hour;
+  return {
+    year: partMap.year,
+    month: partMap.month,
+    day: partMap.day,
+    hour,
+    minute: partMap.minute,
+    second: partMap.second || 0
+  };
+}
+
+/**
+ * Converts a wall-clock date and time in an IANA timezone into an exact UTC epoch milliseconds.
+ * Explicitly handles DST spring-forward gaps (nonexistent local times) and fall-back overlaps (ambiguous local times).
+ */
+export function wallClockToUtcEpoch(
+  wallClock: WallClockDateTime,
+  timeZone: string
+): { epochMs: number; isAmbiguous: boolean; isNonexistent: boolean } {
+  const { year, month, day, hour, minute, second = 0 } = wallClock;
+  const guessUtc = Date.UTC(year, month - 1, day, hour, minute, second);
+
+  const obs1 = getWallClockInTimezone(new Date(guessUtc), timeZone);
+  const obsUtc1 = Date.UTC(obs1.year, obs1.month - 1, obs1.day, obs1.hour, obs1.minute, obs1.second);
+  const offset1 = guessUtc - obsUtc1;
+  let candidateEpoch = guessUtc + offset1;
+
+  const obs2 = getWallClockInTimezone(new Date(candidateEpoch), timeZone);
+  const obsUtc2 = Date.UTC(obs2.year, obs2.month - 1, obs2.day, obs2.hour, obs2.minute, obs2.second);
+
+  let isAmbiguous = false;
+  let isNonexistent = false;
+
+  if (obsUtc2 !== guessUtc) {
+    // Wall-clock time falls in a DST spring-forward gap (nonexistent local time)
+    isNonexistent = true;
+    const diff = guessUtc - obsUtc2;
+    candidateEpoch = candidateEpoch + diff;
+  } else {
+    // Check if wall-clock falls in a DST fall-back repeated hour (ambiguous local time)
+    const checkLater = getWallClockInTimezone(new Date(candidateEpoch + 3600_000), timeZone);
+    const checkEarlier = getWallClockInTimezone(new Date(candidateEpoch - 3600_000), timeZone);
+    const wallMatches = (obs: WallClockDateTime) => 
+      obs.year === year && obs.month === month && obs.day === day && obs.hour === hour && obs.minute === minute;
+
+    if (wallMatches(checkLater) || wallMatches(checkEarlier)) {
+      isAmbiguous = true;
+    }
+  }
+
+  return { epochMs: candidateEpoch, isAmbiguous, isNonexistent };
+}
+
 const DAYS_OF_WEEK: Record<string, number> = {
   sunday: 0,
   sun: 0,
@@ -60,7 +143,6 @@ const DAYS_OF_WEEK: Record<string, number> = {
  */
 export function resolveSchedule(prompt: string, defaultTimezone = 'UTC'): ScheduleResolution {
   const trimmed = prompt.trim();
-  const lower = trimmed.toLowerCase();
 
   // 1. Detect ambiguous timezone abbreviations
   for (const abbr of AMBIGUOUS_TIMEZONE_ABBREVIATIONS) {
@@ -144,15 +226,42 @@ export function resolveSchedule(prompt: string, defaultTimezone = 'UTC'): Schedu
       };
     }
 
-    const now = new Date();
-    let targetDate = new Date(now);
+    // Determine target calendar date in the target timezone
+    const nowWall = getWallClockInTimezone(new Date(), timezone);
+    let targetYear = nowWall.year;
+    let targetMonth = nowWall.month;
+    let targetDay = nowWall.day;
+
     if (/\btomorrow\b/i.test(trimmed)) {
-      targetDate.setDate(targetDate.getDate() + 1);
+      const nextDay = new Date(Date.UTC(targetYear, targetMonth - 1, targetDay + 1));
+      targetYear = nextDay.getUTCFullYear();
+      targetMonth = nextDay.getUTCMonth() + 1;
+      targetDay = nextDay.getUTCDate();
+    } else if (/\btoday\b/i.test(trimmed)) {
+      // Keep today's date in target timezone
+    } else {
+      const dateMatch = trimmed.match(/\bon\s+([A-Za-z]+)\s+(\d{1,2})\b/i);
+      if (dateMatch) {
+        const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+        const shortMonths = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+        const mStr = dateMatch[1].toLowerCase();
+        let mIdx = monthNames.indexOf(mStr);
+        if (mIdx === -1) mIdx = shortMonths.indexOf(mStr);
+        if (mIdx !== -1) {
+          targetMonth = mIdx + 1;
+          targetDay = parseInt(dateMatch[2], 10);
+        }
+      }
     }
-    targetDate.setHours(hour, minute, 0, 0);
+
+    // Timezone-aware conversion from wall-clock to exact UTC epoch
+    const { epochMs, isAmbiguous, isNonexistent } = wallClockToUtcEpoch(
+      { year: targetYear, month: targetMonth, day: targetDay, hour, minute },
+      timezone
+    );
 
     // Validate future timestamp
-    if (targetDate.getTime() <= Date.now()) {
+    if (epochMs <= Date.now()) {
       return {
         valid: false,
         isAmbiguous: true,
@@ -161,7 +270,19 @@ export function resolveSchedule(prompt: string, defaultTimezone = 'UTC'): Schedu
       };
     }
 
-    const dateFormatted = targetDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    const dateFormatted = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric'
+    }).format(new Date(epochMs));
+
+    let humanNote = `One-time execution on ${dateFormatted} at ${timeStr} (${timezone})`;
+    if (isNonexistent) {
+      humanNote += ` [Note: Wall-clock time falls in daylight saving transition gap; scheduled for valid post-transition time]`;
+    } else if (isAmbiguous) {
+      humanNote += ` [Note: Daylight saving repeated hour; scheduled for first occurrence]`;
+    }
 
     // GENUINE ONE-TIME CONTRACT: Do NOT generate a recurring 5-field yearly cron!
     // cronExpression is omitted/undefined. targetTimestamp stores the absolute future execution epoch.
@@ -170,8 +291,8 @@ export function resolveSchedule(prompt: string, defaultTimezone = 'UTC'): Schedu
       isAmbiguous: false,
       scheduleType: 'ONE_TIME',
       cronExpression: undefined,
-      humanSchedule: `One-time execution on ${dateFormatted} at ${timeStr} (${timezone})`,
-      targetTimestamp: targetDate.getTime(),
+      humanSchedule: humanNote,
+      targetTimestamp: epochMs,
       timezone,
       cleanObjective: trimmed
     };
@@ -263,7 +384,6 @@ export function resolveSchedule(prompt: string, defaultTimezone = 'UTC'): Schedu
 
   // If time was specified without frequency keyword (e.g. "run backup at 8pm")
   if (hour !== null) {
-    // If it mentions once or tomorrow, handled above. If standalone time, ask for frequency confirmation
     return {
       valid: false,
       isAmbiguous: true,

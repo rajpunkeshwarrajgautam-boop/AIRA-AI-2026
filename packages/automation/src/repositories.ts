@@ -17,6 +17,7 @@ export interface AutomationRunRepository {
   getRun(id: string): Promise<AutomationRun | undefined>;
   getRunsForAutomation(automationId: string): Promise<AutomationRun[]>;
   claimRun(automationId: string, scheduledFor: number): Promise<AutomationRun | undefined>;
+  recoverStaleRuns?(staleThresholdMs?: number): Promise<number>;
 }
 
 export class PostgresAutomationRunRepository implements AutomationRunRepository {
@@ -89,6 +90,30 @@ export class PostgresAutomationRunRepository implements AutomationRunRepository 
         throw err;
       }
     });
+  }
+
+  async recoverStaleRuns(staleThresholdMs: number = 15 * 60 * 1000): Promise<number> {
+    const threshold = Date.now() - staleThresholdMs;
+    const now = Date.now();
+
+    const staleRows = await db('automation_runs')
+      .whereIn('status', ['CLAIMED', 'RUNNING'])
+      .where('started_at', '<=', threshold);
+
+    if (!staleRows || staleRows.length === 0) return 0;
+
+    let recovered = 0;
+    for (const row of staleRows) {
+      await db('automation_runs')
+        .where({ id: row.id })
+        .update({
+          status: 'FAILED',
+          error: 'CRASH_RECOVERY_TIMED_OUT: Process timed out before completing terminal state.',
+          completed_at: now
+        });
+      recovered++;
+    }
+    return recovered;
   }
 
   private mapToRun(row: any): AutomationRun {

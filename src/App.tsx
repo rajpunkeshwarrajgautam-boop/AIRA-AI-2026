@@ -1161,6 +1161,15 @@ function App() {
                 <span className="hidden sm:inline">Agent Panel</span>
               </button>
             )}
+            {(isLoading || isBuilderBusy) && (
+              <button
+                onClick={handleCancelExecution}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-rose-500 hover:bg-rose-500/10 active:scale-95 transition-all"
+                title="Cancel active execution"
+              >
+                Cancel
+              </button>
+            )}
             {activeConversation?.messages.some(m => (m.artifacts?.length || 0) > 0) && <button onClick={() => {
               if (activeArtifact) setActiveArtifact(null);
               else {
@@ -1172,36 +1181,6 @@ function App() {
             <button onClick={handleShare} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-white/5">{sharedCopied ? <Check className="w-4 h-4 text-emerald-400" /> : <Share2 className="w-4 h-4 text-claude-muted-light dark:text-claude-muted-dark" />}</button>
           </div>
         </header>
-
-        {/* Agent Mode Mission HUD Banner (when in agent mode) */}
-        {workspaceMode === 'agent' && (
-          <div className="shrink-0 px-4 py-2 border-b border-aira-blue/20 bg-aira-blue/[0.04] dark:bg-aira-blue/[0.08] flex items-center justify-between gap-3 text-xs">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="flex h-2 w-2 rounded-full bg-aira-blue animate-pulse" />
-              <span className="font-semibold text-aira-blue dark:text-aira-silver">Agent Mode Active</span>
-              <span className="hidden sm:inline text-claude-muted-light dark:text-slate-400">·</span>
-              <span className="hidden sm:inline text-claude-muted-light dark:text-slate-400 truncate">
-                {executionStatus || (isLoading ? 'Executing mission plan…' : 'Unified conversation with tool execution, sandboxed preview, and deliverables')}
-              </span>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                onClick={() => setIsAgentPanelOpen(prev => !prev)}
-                className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-aira-blue/10 text-aira-blue dark:text-aira-silver hover:bg-aira-blue/20 transition-colors"
-              >
-                {isAgentPanelOpen ? 'Hide Panel' : 'Workspace Panel'}
-              </button>
-              {(isLoading || isBuilderBusy) && (
-                <button
-                  onClick={handleCancelExecution}
-                  className="px-2 py-1 rounded-md text-[11px] font-medium text-rose-500 hover:bg-rose-500/10 transition-colors"
-                >
-                  Cancel
-                </button>
-              )}
-            </div>
-          </div>
-        )}
 
         <div ref={chatScrollRef} data-testid="chat-scroll-region" className="flex-1 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain flex flex-col">
           {!activeConversation || activeConversation.messages.length === 0 ? (
