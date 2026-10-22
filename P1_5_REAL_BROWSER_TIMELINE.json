@@ -1,0 +1,579 @@
+{
+  "metadata": {
+    "generatedAt": "2026-10-17T14:34:55.923Z",
+    "latencyClockDefinition": {
+      "T0": "Browser / client request submit",
+      "T1": "API handler received request",
+      "T4": "Mandatory pre-provider saveRun START",
+      "T5": "Mandatory pre-provider saveRun END",
+      "T6": "Provider fetch initiated",
+      "T8": "First real upstream Groq content delta received",
+      "T9": "First downstream content delta written to SSE",
+      "T10": "Browser / client received first content delta",
+      "T11": "DOM visibly rendered first model text (T10 + render overhead)",
+      "T12": "Stream completion"
+    }
+  },
+  "timelines": [
+    {
+      "prompt": "Say hello in one sentence.",
+      "runId": "run_6f75c5d0-b",
+      "timestamps": {
+        "T0_submit": 480,
+        "T1_apiReceived": 764,
+        "T4_dbStart": 769,
+        "T5_dbEnd": 1000,
+        "T6_providerFetch": 1002,
+        "T8_firstUpstreamDelta": 1245,
+        "T9_writtenToSse": 1246,
+        "T10_clientReceivedDelta": 1523,
+        "T11_domVisibleRender": 1533,
+        "T12_completion": 2916
+      },
+      "intervals": {
+        "requestToApiMs": 284,
+        "dbCriticalPathMs": 231,
+        "dbAcquireMs": 0,
+        "preProviderMs": 238,
+        "providerTTFTMs": 243,
+        "relayMs": 1,
+        "networkClientMs": 276,
+        "renderMs": 10,
+        "TRUE_BROWSER_TTFT": 1052,
+        "totalDurationMs": 2436
+      }
+    },
+    {
+      "prompt": "What is HTTP in one sentence?",
+      "runId": "run_90047d88-e",
+      "timestamps": {
+        "T0_submit": 4422,
+        "T1_apiReceived": 4568,
+        "T4_dbStart": 4573,
+        "T5_dbEnd": 5015,
+        "T6_providerFetch": 5017,
+        "T8_firstUpstreamDelta": 5356,
+        "T9_writtenToSse": 5357,
+        "T10_clientReceivedDelta": 5495,
+        "T11_domVisibleRender": 5505,
+        "T12_completion": 8487
+      },
+      "intervals": {
+        "requestToApiMs": 146,
+        "dbCriticalPathMs": 442,
+        "dbAcquireMs": 0,
+        "preProviderMs": 449,
+        "providerTTFTMs": 339,
+        "relayMs": 1,
+        "networkClientMs": 138,
+        "renderMs": 10,
+        "TRUE_BROWSER_TTFT": 1083,
+        "totalDurationMs": 4064
+      }
+    },
+    {
+      "prompt": "Explain REST briefly.",
+      "runId": "run_74d2247f-6",
+      "timestamps": {
+        "T0_submit": 9994,
+        "T1_apiReceived": 10140,
+        "T4_dbStart": 10145,
+        "T5_dbEnd": 10373,
+        "T6_providerFetch": 10375,
+        "T8_firstUpstreamDelta": 10584,
+        "T9_writtenToSse": 10585,
+        "T10_clientReceivedDelta": 10724,
+        "T11_domVisibleRender": 10734,
+        "T12_completion": 25762
+      },
+      "intervals": {
+        "requestToApiMs": 146,
+        "dbCriticalPathMs": 228,
+        "dbAcquireMs": 0,
+        "preProviderMs": 235,
+        "providerTTFTMs": 209,
+        "relayMs": 1,
+        "networkClientMs": 138,
+        "renderMs": 10,
+        "TRUE_BROWSER_TTFT": 739,
+        "totalDurationMs": 15768
+      }
+    },
+    {
+      "prompt": "What is 2 + 2?",
+      "runId": "run_52c323ad-0",
+      "timestamps": {
+        "T0_submit": 27271,
+        "T1_apiReceived": 27417,
+        "T4_dbStart": 27422,
+        "T5_dbEnd": 27655,
+        "T6_providerFetch": 27657,
+        "T8_firstUpstreamDelta": 27998,
+        "T9_writtenToSse": 27999,
+        "T10_clientReceivedDelta": 28136,
+        "T11_domVisibleRender": 28146,
+        "T12_completion": 29581
+      },
+      "intervals": {
+        "requestToApiMs": 146,
+        "dbCriticalPathMs": 233,
+        "dbAcquireMs": 0,
+        "preProviderMs": 240,
+        "providerTTFTMs": 341,
+        "relayMs": 1,
+        "networkClientMs": 138,
+        "renderMs": 10,
+        "TRUE_BROWSER_TTFT": 876,
+        "totalDurationMs": 2310
+      }
+    },
+    {
+      "prompt": "Define latency.",
+      "runId": "run_c92a09e3-2",
+      "timestamps": {
+        "T0_submit": 31089,
+        "T1_apiReceived": 31352,
+        "T4_dbStart": 31357,
+        "T5_dbEnd": 31587,
+        "T6_providerFetch": 31589,
+        "T8_firstUpstreamDelta": 32017,
+        "T9_writtenToSse": 32018,
+        "T10_clientReceivedDelta": 32272,
+        "T11_domVisibleRender": 32282,
+        "T12_completion": 51235
+      },
+      "intervals": {
+        "requestToApiMs": 263,
+        "dbCriticalPathMs": 230,
+        "dbAcquireMs": 0,
+        "preProviderMs": 237,
+        "providerTTFTMs": 428,
+        "relayMs": 1,
+        "networkClientMs": 255,
+        "renderMs": 10,
+        "TRUE_BROWSER_TTFT": 1194,
+        "totalDurationMs": 20146
+      }
+    },
+    {
+      "prompt": "What is DNS in simple terms?",
+      "runId": "run_b28c5074-6",
+      "timestamps": {
+        "T0_submit": 52738,
+        "T1_apiReceived": 52887,
+        "T4_dbStart": 52892,
+        "T5_dbEnd": 53125,
+        "T6_providerFetch": 53127,
+        "T8_firstUpstreamDelta": 53610,
+        "T9_writtenToSse": 53611,
+        "T10_clientReceivedDelta": 53753,
+        "T11_domVisibleRender": 53763,
+        "T12_completion": 69475
+      },
+      "intervals": {
+        "requestToApiMs": 149,
+        "dbCriticalPathMs": 233,
+        "dbAcquireMs": 0,
+        "preProviderMs": 240,
+        "providerTTFTMs": 483,
+        "relayMs": 1,
+        "networkClientMs": 142,
+        "renderMs": 10,
+        "TRUE_BROWSER_TTFT": 1025,
+        "totalDurationMs": 16737
+      }
+    },
+    {
+      "prompt": "How does a compiler work in one sentence?",
+      "runId": "run_79e353ec-e",
+      "timestamps": {
+        "T0_submit": 70990,
+        "T1_apiReceived": 71136,
+        "T4_dbStart": 71141,
+        "T5_dbEnd": 71371,
+        "T6_providerFetch": 71373,
+        "T8_firstUpstreamDelta": 71647,
+        "T9_writtenToSse": 71648,
+        "T10_clientReceivedDelta": 71787,
+        "T11_domVisibleRender": 71797,
+        "T12_completion": 73656
+      },
+      "intervals": {
+        "requestToApiMs": 146,
+        "dbCriticalPathMs": 230,
+        "dbAcquireMs": 0,
+        "preProviderMs": 237,
+        "providerTTFTMs": 274,
+        "relayMs": 1,
+        "networkClientMs": 139,
+        "renderMs": 10,
+        "TRUE_BROWSER_TTFT": 807,
+        "totalDurationMs": 2666
+      }
+    },
+    {
+      "prompt": "Name three primary colors.",
+      "runId": "run_3dbcc764-6",
+      "timestamps": {
+        "T0_submit": 75160,
+        "T1_apiReceived": 75301,
+        "T4_dbStart": 75306,
+        "T5_dbEnd": 75526,
+        "T6_providerFetch": 75528,
+        "T8_firstUpstreamDelta": 75896,
+        "T9_writtenToSse": 75897,
+        "T10_clientReceivedDelta": 76030,
+        "T11_domVisibleRender": 76040,
+        "T12_completion": 79276
+      },
+      "intervals": {
+        "requestToApiMs": 141,
+        "dbCriticalPathMs": 220,
+        "dbAcquireMs": 0,
+        "preProviderMs": 227,
+        "providerTTFTMs": 368,
+        "relayMs": 1,
+        "networkClientMs": 133,
+        "renderMs": 10,
+        "TRUE_BROWSER_TTFT": 880,
+        "totalDurationMs": 4116
+      }
+    },
+    {
+      "prompt": "What is JSON?",
+      "runId": "run_bc0c7250-4",
+      "timestamps": {
+        "T0_submit": 80780,
+        "T1_apiReceived": 80920,
+        "T4_dbStart": 80925,
+        "T5_dbEnd": 81152,
+        "T6_providerFetch": 81154,
+        "T8_firstUpstreamDelta": 81548,
+        "T9_writtenToSse": 81549,
+        "T10_clientReceivedDelta": 81681,
+        "T11_domVisibleRender": 81691,
+        "T12_completion": 98131
+      },
+      "intervals": {
+        "requestToApiMs": 140,
+        "dbCriticalPathMs": 227,
+        "dbAcquireMs": 0,
+        "preProviderMs": 234,
+        "providerTTFTMs": 394,
+        "relayMs": 1,
+        "networkClientMs": 131,
+        "renderMs": 10,
+        "TRUE_BROWSER_TTFT": 910,
+        "totalDurationMs": 17351
+      }
+    },
+    {
+      "prompt": "Tell me a short one-line joke.",
+      "runId": "run_ecc2a528-b",
+      "timestamps": {
+        "T0_submit": 99638,
+        "T1_apiReceived": 100496,
+        "T4_dbStart": 100501,
+        "T5_dbEnd": 102279,
+        "T6_providerFetch": 102281,
+        "T8_firstUpstreamDelta": 102642,
+        "T9_writtenToSse": 102643,
+        "T10_clientReceivedDelta": 103493,
+        "T11_domVisibleRender": 103503,
+        "T12_completion": 104893
+      },
+      "intervals": {
+        "requestToApiMs": 858,
+        "dbCriticalPathMs": 1778,
+        "dbAcquireMs": 0,
+        "preProviderMs": 1785,
+        "providerTTFTMs": 361,
+        "relayMs": 1,
+        "networkClientMs": 850,
+        "renderMs": 10,
+        "TRUE_BROWSER_TTFT": 3865,
+        "totalDurationMs": 5255
+      }
+    },
+    {
+      "prompt": "Write a haiku about code.",
+      "runId": "run_fffd9d56-9",
+      "timestamps": {
+        "T0_submit": 106406,
+        "T1_apiReceived": 106558,
+        "T4_dbStart": 106563,
+        "T5_dbEnd": 106792,
+        "T6_providerFetch": 106794,
+        "T8_firstUpstreamDelta": 107485,
+        "T9_writtenToSse": 107486,
+        "T10_clientReceivedDelta": 107631,
+        "T11_domVisibleRender": 107641,
+        "T12_completion": 108790
+      },
+      "intervals": {
+        "requestToApiMs": 152,
+        "dbCriticalPathMs": 229,
+        "dbAcquireMs": 0,
+        "preProviderMs": 236,
+        "providerTTFTMs": 691,
+        "relayMs": 1,
+        "networkClientMs": 145,
+        "renderMs": 10,
+        "TRUE_BROWSER_TTFT": 1235,
+        "totalDurationMs": 2384
+      }
+    },
+    {
+      "prompt": "What is an API?",
+      "runId": "run_0c1d6f12-b",
+      "timestamps": {
+        "T0_submit": 110295,
+        "T1_apiReceived": 110438,
+        "T4_dbStart": 110443,
+        "T5_dbEnd": 110675,
+        "T6_providerFetch": 110677,
+        "T8_firstUpstreamDelta": 111111,
+        "T9_writtenToSse": 111112,
+        "T10_clientReceivedDelta": 111247,
+        "T11_domVisibleRender": 111257,
+        "T12_completion": 127509
+      },
+      "intervals": {
+        "requestToApiMs": 143,
+        "dbCriticalPathMs": 232,
+        "dbAcquireMs": 0,
+        "preProviderMs": 239,
+        "providerTTFTMs": 434,
+        "relayMs": 1,
+        "networkClientMs": 135,
+        "renderMs": 10,
+        "TRUE_BROWSER_TTFT": 962,
+        "totalDurationMs": 17215
+      }
+    },
+    {
+      "prompt": "What is the boiling point of water?",
+      "runId": "run_a339ebab-a",
+      "timestamps": {
+        "T0_submit": 129014,
+        "T1_apiReceived": 129823,
+        "T4_dbStart": 129828,
+        "T5_dbEnd": 131484,
+        "T6_providerFetch": 131486,
+        "T8_firstUpstreamDelta": 131792,
+        "T9_writtenToSse": 131793,
+        "T10_clientReceivedDelta": 132595,
+        "T11_domVisibleRender": 132605,
+        "T12_completion": 144397
+      },
+      "intervals": {
+        "requestToApiMs": 809,
+        "dbCriticalPathMs": 1656,
+        "dbAcquireMs": 0,
+        "preProviderMs": 1663,
+        "providerTTFTMs": 306,
+        "relayMs": 1,
+        "networkClientMs": 801,
+        "renderMs": 10,
+        "TRUE_BROWSER_TTFT": 3590,
+        "totalDurationMs": 15383
+      }
+    },
+    {
+      "prompt": "Explain the difference between TCP and UDP in one sentence.",
+      "runId": "run_3b04663a-a",
+      "timestamps": {
+        "T0_submit": 145904,
+        "T1_apiReceived": 146059,
+        "T4_dbStart": 146064,
+        "T5_dbEnd": 146294,
+        "T6_providerFetch": 146296,
+        "T8_firstUpstreamDelta": 146769,
+        "T9_writtenToSse": 146770,
+        "T10_clientReceivedDelta": 146916,
+        "T11_domVisibleRender": 146926,
+        "T12_completion": 148747
+      },
+      "intervals": {
+        "requestToApiMs": 155,
+        "dbCriticalPathMs": 230,
+        "dbAcquireMs": 0,
+        "preProviderMs": 237,
+        "providerTTFTMs": 473,
+        "relayMs": 1,
+        "networkClientMs": 147,
+        "renderMs": 10,
+        "TRUE_BROWSER_TTFT": 1023,
+        "totalDurationMs": 2844
+      }
+    },
+    {
+      "prompt": "What is a boolean?",
+      "runId": "run_b50ec46f-f",
+      "timestamps": {
+        "T0_submit": 150256,
+        "T1_apiReceived": 150395,
+        "T4_dbStart": 150400,
+        "T5_dbEnd": 150624,
+        "T6_providerFetch": 150626,
+        "T8_firstUpstreamDelta": 151080,
+        "T9_writtenToSse": 151081,
+        "T10_clientReceivedDelta": 151211,
+        "T11_domVisibleRender": 151221,
+        "T12_completion": 167551
+      },
+      "intervals": {
+        "requestToApiMs": 139,
+        "dbCriticalPathMs": 224,
+        "dbAcquireMs": 0,
+        "preProviderMs": 231,
+        "providerTTFTMs": 454,
+        "relayMs": 1,
+        "networkClientMs": 130,
+        "renderMs": 10,
+        "TRUE_BROWSER_TTFT": 965,
+        "totalDurationMs": 17296
+      }
+    },
+    {
+      "prompt": "What is 15 * 4?",
+      "runId": "run_9437f498-d",
+      "timestamps": {
+        "T0_submit": 169061,
+        "T1_apiReceived": 169877,
+        "T4_dbStart": 169882,
+        "T5_dbEnd": 171751,
+        "T6_providerFetch": 171753,
+        "T8_firstUpstreamDelta": 172260,
+        "T9_writtenToSse": 172261,
+        "T10_clientReceivedDelta": 173069,
+        "T11_domVisibleRender": 173079,
+        "T12_completion": 174498
+      },
+      "intervals": {
+        "requestToApiMs": 816,
+        "dbCriticalPathMs": 1869,
+        "dbAcquireMs": 0,
+        "preProviderMs": 1876,
+        "providerTTFTMs": 507,
+        "relayMs": 1,
+        "networkClientMs": 807,
+        "renderMs": 10,
+        "TRUE_BROWSER_TTFT": 4017,
+        "totalDurationMs": 5437
+      }
+    },
+    {
+      "prompt": "Give me two synonyms for quick.",
+      "runId": "run_d3d19efe-e",
+      "timestamps": {
+        "T0_submit": 176002,
+        "T1_apiReceived": 176151,
+        "T4_dbStart": 176156,
+        "T5_dbEnd": 176389,
+        "T6_providerFetch": 176391,
+        "T8_firstUpstreamDelta": 176638,
+        "T9_writtenToSse": 176639,
+        "T10_clientReceivedDelta": 176780,
+        "T11_domVisibleRender": 176790,
+        "T12_completion": 177985
+      },
+      "intervals": {
+        "requestToApiMs": 149,
+        "dbCriticalPathMs": 233,
+        "dbAcquireMs": 0,
+        "preProviderMs": 240,
+        "providerTTFTMs": 247,
+        "relayMs": 1,
+        "networkClientMs": 141,
+        "renderMs": 10,
+        "TRUE_BROWSER_TTFT": 788,
+        "totalDurationMs": 1984
+      }
+    },
+    {
+      "prompt": "What does HTML stand for?",
+      "runId": "run_9c992eca-d",
+      "timestamps": {
+        "T0_submit": 179493,
+        "T1_apiReceived": 179650,
+        "T4_dbStart": 179655,
+        "T5_dbEnd": 179885,
+        "T6_providerFetch": 179887,
+        "T8_firstUpstreamDelta": 181632,
+        "T9_writtenToSse": 181633,
+        "T10_clientReceivedDelta": 181781,
+        "T11_domVisibleRender": 181791,
+        "T12_completion": 186173
+      },
+      "intervals": {
+        "requestToApiMs": 157,
+        "dbCriticalPathMs": 230,
+        "dbAcquireMs": 0,
+        "preProviderMs": 237,
+        "providerTTFTMs": 1745,
+        "relayMs": 1,
+        "networkClientMs": 148,
+        "renderMs": 10,
+        "TRUE_BROWSER_TTFT": 2298,
+        "totalDurationMs": 6679
+      }
+    },
+    {
+      "prompt": "Explain recursion simply.",
+      "runId": "run_1989def8-4",
+      "timestamps": {
+        "T0_submit": 187677,
+        "T1_apiReceived": 187815,
+        "T4_dbStart": 187820,
+        "T5_dbEnd": 188052,
+        "T6_providerFetch": 188054,
+        "T8_firstUpstreamDelta": 188433,
+        "T9_writtenToSse": 188434,
+        "T10_clientReceivedDelta": 188564,
+        "T11_domVisibleRender": 188574,
+        "T12_completion": 204811
+      },
+      "intervals": {
+        "requestToApiMs": 138,
+        "dbCriticalPathMs": 232,
+        "dbAcquireMs": 0,
+        "preProviderMs": 239,
+        "providerTTFTMs": 379,
+        "relayMs": 1,
+        "networkClientMs": 130,
+        "renderMs": 10,
+        "TRUE_BROWSER_TTFT": 897,
+        "totalDurationMs": 17135
+      }
+    },
+    {
+      "prompt": "Tell me an interesting computer science fact.",
+      "runId": "run_8bb41afb-8",
+      "timestamps": {
+        "T0_submit": 206318,
+        "T1_apiReceived": 207144,
+        "T4_dbStart": 207149,
+        "T5_dbEnd": 208180,
+        "T6_providerFetch": 208182,
+        "T8_firstUpstreamDelta": 209418,
+        "T9_writtenToSse": 209419,
+        "T10_clientReceivedDelta": 210238,
+        "T11_domVisibleRender": 210248,
+        "T12_completion": 223629
+      },
+      "intervals": {
+        "requestToApiMs": 826,
+        "dbCriticalPathMs": 1031,
+        "dbAcquireMs": 0,
+        "preProviderMs": 1038,
+        "providerTTFTMs": 1236,
+        "relayMs": 1,
+        "networkClientMs": 818,
+        "renderMs": 10,
+        "TRUE_BROWSER_TTFT": 3929,
+        "totalDurationMs": 17311
+      }
+    }
+  ]
+}

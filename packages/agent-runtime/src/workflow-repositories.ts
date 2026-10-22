@@ -203,3 +203,86 @@ export class PostgresWorkflowRepository implements WorkflowRepository {
     };
   }
 }
+
+export class InMemoryWorkflowRepository implements WorkflowRepository {
+  private defs: Map<string, WorkflowDefinition> = new Map();
+  private runs: Map<string, WorkflowRun> = new Map();
+  private runIdIndex: Map<string, string> = new Map();
+  private steps: Map<string, WorkflowStepExecution[]> = new Map();
+
+  async saveWorkflowDefinition(def: WorkflowDefinition): Promise<void> {
+    this.defs.set(def.workflowId, { ...def });
+  }
+
+  async getWorkflowDefinition(id: string): Promise<WorkflowDefinition | undefined> {
+    const def = this.defs.get(id);
+    return def ? { ...def } : undefined;
+  }
+
+  async listWorkflowDefinitions(principalId?: string): Promise<WorkflowDefinition[]> {
+    const all = Array.from(this.defs.values());
+    if (principalId) {
+      return all.filter(d => d.principalId === principalId);
+    }
+    return all;
+  }
+
+  async saveWorkflowRun(run: WorkflowRun): Promise<void> {
+    this.runs.set(run.id, { ...run });
+    if (run.runId) {
+      this.runIdIndex.set(run.runId, run.id);
+    }
+  }
+
+  async getWorkflowRun(id: string): Promise<WorkflowRun | undefined> {
+    const run = this.runs.get(id);
+    return run ? { ...run } : undefined;
+  }
+
+  async getWorkflowRunByRunId(runId: string): Promise<WorkflowRun | undefined> {
+    const id = this.runIdIndex.get(runId);
+    if (!id) return undefined;
+    return this.getWorkflowRun(id);
+  }
+
+  async listWorkflowRuns(principalId?: string): Promise<WorkflowRun[]> {
+    const all = Array.from(this.runs.values());
+    if (principalId) {
+      return all.filter(r => r.principalId === principalId);
+    }
+    return all;
+  }
+
+  async claimWorkflowRun(workflowRunId: string, owner: string, leaseDurationMs: number): Promise<boolean> {
+    const run = this.runs.get(workflowRunId);
+    if (!run) return false;
+    run.claimOwner = owner;
+    run.claimExpiresAt = Date.now() + leaseDurationMs;
+    return true;
+  }
+
+  async saveWorkflowStep(step: WorkflowStepExecution): Promise<void> {
+    const list = this.steps.get(step.workflowRunId) || [];
+    const idx = list.findIndex(s => s.id === step.id);
+    if (idx >= 0) {
+      list[idx] = { ...step };
+    } else {
+      list.push({ ...step });
+    }
+    this.steps.set(step.workflowRunId, list);
+  }
+
+  async getWorkflowSteps(workflowRunId: string): Promise<WorkflowStepExecution[]> {
+    const list = this.steps.get(workflowRunId) || [];
+    return list.map(s => ({ ...s }));
+  }
+
+  async getStepByIdempotencyKey(key: string): Promise<WorkflowStepExecution | undefined> {
+    for (const list of this.steps.values()) {
+      const found = list.find(s => s.idempotencyKey === key && s.state === 'COMPLETED');
+      if (found) return { ...found };
+    }
+    return undefined;
+  }
+}
+

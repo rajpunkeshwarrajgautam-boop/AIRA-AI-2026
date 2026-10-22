@@ -111,15 +111,52 @@ export const ModelIdSchema = z.enum([
   'claude-3-7-sonnet',
   'claude-3-5-sonnet',
   'claude-3-5-haiku',
+  'claude-3-opus', // Legacy UI ID; model router maps it to a supported Aira policy.
   'gpt-4o',
   'gpt-4o-mini',
   'gemini-2-5-pro',
   'gemini-2-5-flash',
+  'gemini-3.5-flash-lite',
   'meta/llama-3.1-405b-instruct',
   'nvidia/nemotron-3-super-120b-a12b',
+  'nvidia/llama-3.1-nemotron-70b-instruct',
+  'nv-mistralai/mistral-nemo-12b-instruct',
+  'nvidia/mistral-nemo-minitron-8b-8k-instruct',
+  'nvidia/llama-3.1-nemotron-51b-instruct',
+  'nvidia/nemotron-nano-3-30b-a3b',
+  'llama-3.1-8b-instant',
+  'llama-3.3-70b-versatile',
+  'openai/gpt-oss-20b',
+  'openai/gpt-oss-120b',
+  'qwen/qwen3.8-27b',
+  'allam-2-7b',
+  'llama3.1-8b',
+  'llama3.1-70b',
+  'meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo',
+  'accounts/fireworks/models/llama-v3p1-8b-instruct',
   'mock-deterministic'
 ]);
 export type ModelId = z.infer<typeof ModelIdSchema>;
+
+export class UnsupportedModelIdentifierError extends Error {
+  readonly code = 'UNSUPPORTED_MODEL_IDENTIFIER';
+  constructor() { super('Unsupported model identifier.'); }
+}
+
+/** One allowlist for browser aliases, API admission and provider routing. */
+export function normalizeModelIdentifier(value: unknown = 'aira-auto'): ModelId {
+  const parsed = ModelIdSchema.safeParse(value);
+  if (!parsed.success || (parsed.data === 'allam-2-7b' || parsed.data === 'gemini-2-5-flash')) throw new UnsupportedModelIdentifierError();
+  switch (parsed.data) {
+    case 'claude-3-7-sonnet': return 'aira-auto';
+    case 'claude-3-5-sonnet': return 'aira-pro';
+    case 'claude-3-5-haiku': return 'aira-fast';
+    case 'claude-3-opus': return 'aira-deep';
+    case 'meta/llama-3.1-405b-instruct': return 'nvidia/nemotron-3-super-120b-a12b';
+    default: return parsed.data;
+  }
+}
+
 
 export const ModelPolicySchema = z.object({
   model: ModelIdSchema,
@@ -397,6 +434,28 @@ export const ArtifactSchema = z.object({
 export type Artifact = z.infer<typeof ArtifactSchema>;
 
 // ==========================================
+// 5.5 MODEL PROVENANCE & EXECUTION CONTRACT
+// ==========================================
+
+export const ModelProvenanceSchema = z.object({
+  requestedModel: z.string(),
+  resolvedPolicyModel: z.string(),
+  provider: z.enum(['nvidia', 'anthropic', 'openai', 'groq', 'cerebras', 'together', 'fireworks', 'mock', 'unknown']),
+  requestedProvider: z.string().optional(),
+  executedProvider: z.string().optional(),
+  executedModel: z.string(),
+  plannedModel: z.string().optional(),
+  outboundModel: z.string().optional(),
+  upstreamResponseModel: z.string().optional(),
+  fallbackOccurred: z.boolean(),
+  fallbackReason: z.string().optional(),
+  verified: z.boolean(),
+  executionStatus: z.enum(['PENDING', 'SUCCESS', 'FALLBACK', 'FAILED', 'UNKNOWN']),
+  timestamp: z.number()
+});
+export type ModelProvenance = z.infer<typeof ModelProvenanceSchema>;
+
+// ==========================================
 // 6. RUN CONTRACT
 // ==========================================
 
@@ -411,6 +470,7 @@ export const RunSchema = z.object({
   conversationId: z.string().nullable().optional(),
   intent: IntentTaxonomySchema.default('ANSWER'),
   routingDecision: RoutingDecisionSchema.optional(),
+  provenance: ModelProvenanceSchema.optional(),
   state: RunStateSchema.default('QUEUED'),
   modelPolicy: ModelPolicySchema,
   prompt: z.string(),
@@ -464,6 +524,7 @@ export const StreamingEventTypeSchema = z.enum([
   'run.created',
   'run.started',
   'routing.decision',
+  'model.provenance',
   'thinking.delta',
   'content.delta',
   'tool.requested',
@@ -514,8 +575,19 @@ export type StreamingEvent = z.infer<typeof StreamingEventSchema>;
 // 8. KNOWLEDGE GRAPH & BRAIN V2
 // ==========================================
 
+export const PrincipalScopeSchema = z.object({
+  principalId: z.string().optional(),
+  workspaceId: z.string().optional(),
+  isSystem: z.boolean().default(false)
+});
+export type PrincipalScope = z.infer<typeof PrincipalScopeSchema>;
+
 export const KnowledgeSourceSchema = z.object({
   id: z.string(),
+  principalId: z.string().optional(),
+  workspaceId: z.string().optional(),
+  isSystem: z.boolean().default(false),
+  visibility: z.enum(['private', 'workspace', 'system', 'quarantined']).default('private'),
   projectId: z.string().optional(),
   title: z.string(),
   uri: z.string().optional(),
@@ -530,6 +602,8 @@ export type KnowledgeSource = z.infer<typeof KnowledgeSourceSchema>;
 export const KnowledgeChunkSchema = z.object({
   id: z.string(),
   sourceId: z.string(),
+  principalId: z.string().optional(),
+  isSystem: z.boolean().default(false),
   chunkIndex: z.number().int().nonnegative(),
   text: z.string(),
   tokenCount: z.number().int().positive(),
@@ -539,6 +613,9 @@ export type KnowledgeChunk = z.infer<typeof KnowledgeChunkSchema>;
 
 export const KnowledgeEntitySchema = z.object({
   id: z.string(),
+  principalId: z.string().optional(),
+  workspaceId: z.string().optional(),
+  isSystem: z.boolean().default(false),
   name: z.string(),
   type: z.string(), // concept, service, decision, constraint, person, task
   confidence: z.number().min(0).max(1),
@@ -552,6 +629,8 @@ export type KnowledgeEntity = z.infer<typeof KnowledgeEntitySchema>;
 
 export const KnowledgeEdgeSchema = z.object({
   id: z.string(),
+  principalId: z.string().optional(),
+  isSystem: z.boolean().default(false),
   sourceEntityId: z.string(),
   targetEntityId: z.string(),
   relation: z.string(), // DEPENDS_ON, CONFLICTS_WITH, DEFINES, REFERENCES
@@ -563,6 +642,9 @@ export type KnowledgeEdge = z.infer<typeof KnowledgeEdgeSchema>;
 
 export const MemoryRecordSchema = z.object({
   id: z.string(),
+  principalId: z.string().optional(),
+  workspaceId: z.string().optional(),
+  isSystem: z.boolean().default(false),
   key: z.string(),
   value: z.string(),
   category: z.enum(['fact', 'decision', 'preference', 'pattern', 'constraint']),
@@ -580,6 +662,7 @@ export type MemoryRecord = z.infer<typeof MemoryRecordSchema>;
 
 export const AgentDefinitionSchema = z.object({
   id: z.string(),
+  principalId: z.string().optional(),
   name: z.string(),
   description: z.string(),
   instructions: z.string(),
@@ -829,3 +912,7 @@ export const ErrorEnvelopeSchema = z.object({
   timestamp: z.number()
 });
 export type ErrorEnvelope = z.infer<typeof ErrorEnvelopeSchema>;
+
+export * from './behavioral.js';
+export * from './commercial.js';
+

@@ -2,10 +2,10 @@ import { AgentDefinition, Run, StreamingEvent } from '../../contracts/src/index.
 import { db } from '../../db/src/index.js';
 
 export interface AgentRepository {
-  saveAgent(agent: AgentDefinition): Promise<void>;
-  getAgent(id: string): Promise<AgentDefinition | undefined>;
-  listAgents(): Promise<AgentDefinition[]>;
-  deleteAgent(id: string): Promise<boolean>;
+  saveAgent(agent: AgentDefinition, principalId?: string): Promise<void>;
+  getAgent(id: string, principalId?: string): Promise<AgentDefinition | undefined>;
+  listAgents(principalId?: string): Promise<AgentDefinition[]>;
+  deleteAgent(id: string, principalId?: string): Promise<boolean>;
 }
 
 export interface RunRepository {
@@ -16,6 +16,7 @@ export interface RunRepository {
   searchRunsForPrincipal(principalId: string, query: string, limit?: number): Promise<Run[]>;
   getInterruptedRuns(): Promise<Run[]>;
   appendRunEvent(event: StreamingEvent): Promise<StreamingEvent>;
+  appendRunEvents?(events: StreamingEvent[]): Promise<StreamingEvent[]>;
   getRunEvents(runId: string): Promise<StreamingEvent[]>;
   getRunEventsAfter(runId: string, sequence: number): Promise<StreamingEvent[]>;
   getLatestEventSequence(runId: string): Promise<number>;
@@ -23,9 +24,11 @@ export interface RunRepository {
 }
 
 export class PostgresAgentRepository implements AgentRepository {
-  async saveAgent(agent: AgentDefinition): Promise<void> {
+  async saveAgent(agent: AgentDefinition, principalId?: string): Promise<void> {
+    const owner = principalId || agent.principalId || null;
     await db('agents').insert({
       id: agent.id,
+      principal_id: owner,
       name: agent.name,
       description: agent.description || '',
       instructions: agent.instructions,
@@ -40,25 +43,44 @@ export class PostgresAgentRepository implements AgentRepository {
     }).onConflict('id').merge();
   }
 
-  async getAgent(id: string): Promise<AgentDefinition | undefined> {
-    const row = await db('agents').where({ id }).first();
+  async getAgent(id: string, principalId?: string): Promise<AgentDefinition | undefined> {
+    const query = db('agents').where({ id });
+    if (principalId) {
+      query.andWhere({ principal_id: principalId });
+    }
+    const row = await query.first();
     if (!row) return undefined;
+    // QUARANTINE POLICY: If principal_id is NULL or empty, it is quarantined and ownerless.
+    // Authenticated users cannot claim or access quarantined legacy agents without explicit admin migration.
+    // System agent-default is exempt from quarantine.
+    if (!row.principal_id && id !== 'agent-default') {
+      return undefined;
+    }
+    if (principalId && row.principal_id && row.principal_id !== principalId) {
+      return undefined;
+    }
     return this.mapToAgent(row);
   }
 
-  async listAgents(): Promise<AgentDefinition[]> {
-    const rows = await db('agents').select('*');
+  async listAgents(principalId?: string): Promise<AgentDefinition[]> {
+    if (!principalId) return [];
+    // Strict tenant isolation: never return records where principal_id IS NULL or foreign
+    const query = db('agents').select('*').where({ principal_id: principalId });
+    const rows = await query;
     return rows.map(this.mapToAgent);
   }
 
-  async deleteAgent(id: string): Promise<boolean> {
-    const deleted = await db('agents').where({ id }).delete();
+  async deleteAgent(id: string, principalId?: string): Promise<boolean> {
+    if (!principalId) return false;
+    const query = db('agents').where({ id, principal_id: principalId });
+    const deleted = await query.delete();
     return deleted > 0;
   }
 
   private mapToAgent(row: any): AgentDefinition {
     return {
       id: row.id,
+      principalId: row.principal_id || undefined,
       name: row.name,
       description: row.description || '',
       instructions: row.instructions,
@@ -69,6 +91,47 @@ export class PostgresAgentRepository implements AgentRepository {
       maxSteps: row.maxSteps,
       timeoutMs: typeof row.timeoutPolicy === 'string' ? JSON.parse(row.timeoutPolicy)?.maxMs : row.timeoutPolicy?.maxMs
     };
+  }
+}
+
+export class InMemoryAgentRepository implements AgentRepository {
+  private agents: Map<string, { agent: AgentDefinition; principalId?: string | null }> = new Map();
+
+  async saveAgent(agent: AgentDefinition, principalId?: string): Promise<void> {
+    const owner = principalId || agent.principalId || null;
+    this.agents.set(agent.id, {
+      agent: { ...agent, principalId: owner || undefined },
+      principalId: owner
+    });
+  }
+
+  async getAgent(id: string, principalId?: string): Promise<AgentDefinition | undefined> {
+    const entry = this.agents.get(id);
+    if (!entry) return undefined;
+    // Quarantine policy: NULL or empty principalId is fail-closed, except for system agent-default
+    if (!entry.principalId && id !== 'agent-default') {
+      return undefined;
+    }
+    if (principalId && entry.principalId && entry.principalId !== principalId) {
+      return undefined;
+    }
+    return { ...entry.agent };
+  }
+
+  async listAgents(principalId?: string): Promise<AgentDefinition[]> {
+    if (!principalId) return [];
+    return Array.from(this.agents.values())
+      .filter(e => e.principalId && e.principalId === principalId)
+      .map(e => ({ ...e.agent }));
+  }
+
+  async deleteAgent(id: string, principalId?: string): Promise<boolean> {
+    if (!principalId) return false;
+    const entry = this.agents.get(id);
+    if (!entry || !entry.principalId || entry.principalId !== principalId) {
+      return false;
+    }
+    return this.agents.delete(id);
   }
 }
 
@@ -90,6 +153,7 @@ export class PostgresRunRepository implements RunRepository {
       modelPolicy: JSON.stringify(run.modelPolicy),
       context_data: JSON.stringify({
         ...(run.context || {}),
+        provenance: run.provenance,
         principalScopes: run.principalScopes || []
       }),
       content: run.content,
@@ -207,6 +271,26 @@ export class PostgresRunRepository implements RunRepository {
     };
   }
 
+  async appendRunEvents(events: StreamingEvent[]): Promise<StreamingEvent[]> {
+    if (!events || events.length === 0) return [];
+    const inserts = events.map(event => ({
+      id: event.eventId,
+      run_id: event.runId,
+      type: event.type,
+      payload: typeof event.data === 'string' ? event.data : JSON.stringify(event.data),
+      createdAt: event.timestamp
+    }));
+    const rows = await db('run_events').insert(inserts).returning('*');
+    return rows.map((row: any) => ({
+      eventId: row.id,
+      runId: row.run_id,
+      sequence: parseInt(row.sequence, 10),
+      type: row.type as any,
+      timestamp: parseInt(row.createdAt, 10),
+      data: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload
+    }));
+  }
+
   async getRunEvents(runId: string): Promise<StreamingEvent[]> {
     const rows = await db('run_events').where({ run_id: runId }).orderBy('sequence', 'asc');
     return rows.map((row: any) => ({
@@ -251,6 +335,7 @@ export class PostgresRunRepository implements RunRepository {
     const context = parseJson(row.context_data, {});
     const routingDecision = context?.routingDecision || undefined;
     const principalScopes = context?.principalScopes || [];
+    const provenance = context?.provenance || undefined;
     return {
       id: row.id,
       principalId: row.principal_id,
@@ -262,6 +347,7 @@ export class PostgresRunRepository implements RunRepository {
       conversationId: row.conversation_id || null,
       intent: row.intent as any,
       routingDecision,
+      provenance,
       state: row.state as any,
       modelPolicy: parseJson(row.modelPolicy, {}),
       prompt: row.prompt,
@@ -286,5 +372,75 @@ export class PostgresRunRepository implements RunRepository {
       updatedAt: parseInt(row.updatedAt, 10),
       completedAt: row.completed_at ? parseInt(row.completed_at, 10) : undefined
     };
+  }
+}
+
+export class InMemoryRunRepository implements RunRepository {
+  private runs: Map<string, Run> = new Map();
+  private events: Map<string, StreamingEvent[]> = new Map();
+  private sequences: Map<string, number> = new Map();
+
+  async saveRun(run: Run): Promise<void> {
+    this.runs.set(run.id, { ...run });
+  }
+
+  async getRun(id: string): Promise<Run | undefined> {
+    const r = this.runs.get(id);
+    return r ? { ...r } : undefined;
+  }
+
+  async listRuns(): Promise<Run[]> {
+    return Array.from(this.runs.values());
+  }
+
+  async listRunsForPrincipal(principalId: string, limit = 50): Promise<Run[]> {
+    return Array.from(this.runs.values())
+      .filter(r => r.principalId === principalId)
+      .slice(0, limit);
+  }
+
+  async searchRunsForPrincipal(principalId: string, query: string, limit = 5): Promise<Run[]> {
+    const q = query.toLowerCase();
+    return Array.from(this.runs.values())
+      .filter(r => r.principalId === principalId && (r.prompt.toLowerCase().includes(q) || r.content.toLowerCase().includes(q)))
+      .slice(0, limit);
+  }
+
+  async getInterruptedRuns(): Promise<Run[]> {
+    return [];
+  }
+
+  async appendRunEvent(event: StreamingEvent): Promise<StreamingEvent> {
+    const list = this.events.get(event.runId) || [];
+    const seq = (this.sequences.get(event.runId) || 0) + 1;
+    this.sequences.set(event.runId, seq);
+    const assigned: StreamingEvent = { ...event, sequence: seq };
+    list.push(assigned);
+    this.events.set(event.runId, list);
+    return assigned;
+  }
+
+  async appendRunEvents(events: StreamingEvent[]): Promise<StreamingEvent[]> {
+    const list: StreamingEvent[] = [];
+    for (const evt of events) {
+      list.push(await this.appendRunEvent(evt));
+    }
+    return list;
+  }
+
+  async getRunEvents(runId: string): Promise<StreamingEvent[]> {
+    return this.events.get(runId) || [];
+  }
+
+  async getRunEventsAfter(runId: string, sequence: number): Promise<StreamingEvent[]> {
+    return (this.events.get(runId) || []).filter(e => (e.sequence || 0) > sequence);
+  }
+
+  async getLatestEventSequence(runId: string): Promise<number> {
+    return this.sequences.get(runId) || 0;
+  }
+
+  async claimInterruptedRun(runId: string, owner: string, ttlMs: number): Promise<boolean> {
+    return true;
   }
 }

@@ -1,3 +1,5 @@
+> **Website/file Builder beta integration:** see [docs/BUILDER_SETUP.md](docs/BUILDER_SETUP.md) for setup, permissions, limits and staging acceptance. It is disabled by default and is not a production deployment.
+
 # Aira AI — Phase 1 Frontend Transformation
 
 **Aira AI — One workspace. Every intelligence.**

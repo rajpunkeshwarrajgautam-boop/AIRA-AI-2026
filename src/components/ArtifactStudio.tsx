@@ -126,13 +126,11 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
           animate={{ x: 0, opacity: 1, boxShadow: '-20px 0 40px -15px rgba(0,0,0,0.2)' }}
           exit={{ x: '100%', opacity: 0.5, boxShadow: '0 0 0 rgba(0,0,0,0)' }}
           transition={{ type: "spring", stiffness: 250, damping: 25, mass: 0.8 }}
-          className={`fixed inset-y-0 right-0 z-50 md:relative md:inset-auto md:z-40 h-[100dvh] flex flex-col bg-claude-surface-light dark:bg-[#121214] border-l border-claude-border-light dark:border-claude-border-dark shadow-2xl md:shadow-none flex-shrink-0 ${
-            isExpanded ? 'w-full md:w-[75vw]' : 'w-full md:w-[48vw] lg:w-[44vw]'
-          }`}
+          className={`${isExpanded ? 'fixed inset-y-0 right-0 z-[60] w-full' : 'fixed inset-y-0 right-0 z-50 w-full xl:relative xl:inset-auto xl:z-40 xl:w-[44vw]'} h-[100dvh] min-w-0 flex flex-col bg-claude-surface-light dark:bg-[#121214] border-l border-claude-border-light dark:border-claude-border-dark shadow-2xl xl:shadow-none flex-shrink-0`}
         >
           {/* Top Navigation Bar with Liquid Glass */}
-          <div className="h-[60px] px-4 flex items-center justify-between border-b border-claude-border-light dark:border-claude-border-dark bg-claude-surface-light dark:bg-claude-surface-dark backdrop-blur-xl shadow-sm select-none">
-            <div className="flex items-center space-x-3 min-w-0">
+          <div className="min-h-[60px] px-3 sm:px-4 py-2 flex flex-wrap items-center justify-between gap-2 border-b border-claude-border-light dark:border-claude-border-dark bg-claude-surface-light dark:bg-claude-surface-dark backdrop-blur-xl shadow-sm select-none">
+            <div className="flex flex-1 items-center space-x-2 sm:space-x-3 min-w-0">
               <div className="w-8 h-8 rounded-xl bg-claude-terracotta/10 text-claude-terracotta flex items-center justify-center border border-claude-terracotta/20 shadow-[0_2px_10px_-4px_rgba(235,110,75,0.2)]">
                 <Layers className="w-4 h-4" />
               </div>
@@ -167,9 +165,9 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
             </div>
 
             {/* Tab & Controls */}
-            <div className="flex items-center space-x-2">
+            <div className="flex shrink-0 items-center space-x-1 sm:space-x-2">
               {/* Watermelon-style continuous tabs */}
-              <div className="relative mr-2 flex items-center rounded-xl border border-claude-border-light bg-claude-surface2-light p-1 shadow-inner dark:border-claude-border-dark dark:bg-claude-surface2-dark">
+              <div className="relative mr-0 sm:mr-2 flex items-center rounded-xl border border-claude-border-light bg-claude-surface2-light p-1 shadow-inner dark:border-claude-border-dark dark:bg-claude-surface2-dark">
                 {([
                   { id: 'preview' as const, label: 'Preview', icon: Play },
                   { id: 'code' as const, label: 'Code', icon: Code },
@@ -181,7 +179,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                       key={tab.id}
                       type="button"
                       onClick={() => setActiveTab(tab.id)}
-                      className={`relative isolate flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                      className={`relative isolate flex items-center gap-1 rounded-lg px-2 sm:px-3 py-1.5 text-xs font-semibold transition-colors ${
                         selected
                           ? 'text-claude-terracotta'
                           : 'text-claude-muted-light hover:text-claude-text-light dark:text-claude-muted-dark dark:hover:text-white'

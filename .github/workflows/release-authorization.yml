@@ -1,0 +1,69 @@
+name: Release Authorization Attestation (No Deployment)
+run-name: "Release Authorization: PR #${{ inputs.pr_number }} [${{ inputs.candidate_sha }}] [${{ inputs.approval_phrase }}]"
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Number of the release pull request"
+        required: true
+        type: string
+      candidate_sha:
+        description: "Exact full 40-character PR head SHA"
+        required: true
+        type: string
+      approval_phrase:
+        description: "Type GO LIVE followed by one space and the candidate SHA"
+        required: true
+        type: string
+
+# This workflow has zero status-write and zero App credentials.
+# Only a separate workflow_run publisher can emit App-issued success AFTER this run completes.
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: release-auth-${{ inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  attestation:
+    name: Owner Approval Validation (Read-Only)
+    runs-on: ubuntu-latest
+    if: >-
+      github.actor == github.repository_owner &&
+      github.repository == 'rajpunkeshwarrajgautam-boop/AIRA-AI-2026' &&
+      github.ref == 'refs/heads/prod-release'
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ inputs.pr_number }}
+      EXPECTED_SHA: ${{ inputs.candidate_sha }}
+      APPROVAL_PHRASE: ${{ inputs.approval_phrase }}
+    steps:
+      - name: Verify explicit owner approval and exact PR HEAD (no status publishing)
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Invalid SHA"; exit 1; }
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || { echo "::error::Invalid PR number"; exit 1; }
+          [[ "$APPROVAL_PHRASE" == "GO LIVE $EXPECTED_SHA" ]] || {
+            echo "::error::Exact owner GO LIVE phrase required"; exit 1;
+          }
+          PR_JSON=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")
+          jq -e --arg sha "$EXPECTED_SHA" --arg repo "$GITHUB_REPOSITORY" '
+            .state == "open" and .draft == false and
+            .head.sha == $sha and .head.repo.full_name == $repo and
+            .base.ref == "prod-release" and .base.repo.full_name == $repo
+          ' <<<"$PR_JSON" >/dev/null || {
+            echo "::error::Candidate PR does not match trusted owner approval"; exit 1;
+          }
+          {
+            printf '%s\n' '### AIRA Tier B — Owner Attestation Complete (READ ONLY)'
+            printf '%s\n' "- Approved by: \`$GITHUB_ACTOR\`"
+            printf '%s\n' "- PR: #$PR_NUMBER"
+            printf '%s\n' "- Candidate SHA: \`$EXPECTED_SHA\`"
+            printf '%s\n' '- Publication occurs ONLY in the separate GitHub App publisher after this workflow completes successfully.'
+            printf '%s\n' '- This attestation cannot publish statuses, merge, deploy or edit production.'
+          } >>"$GITHUB_STEP_SUMMARY"

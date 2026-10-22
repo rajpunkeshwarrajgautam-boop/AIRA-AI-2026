@@ -1,0 +1,70 @@
+{
+  "deepProvenance": {
+    "requestedModel": "aira-deep",
+    "resolvedPolicyModel": "aira-deep",
+    "provider": "nvidia",
+    "executedModel": "nvidia/nemotron-3-super-120b-a12b",
+    "plannedModel": "nvidia/nemotron-3-super-120b-a12b",
+    "fallbackOccurred": true,
+    "fallbackReason": "Preferred provider (Anthropic) not configured; routed to NVIDIA NIM",
+    "verified": true,
+    "executionStatus": "FALLBACK",
+    "timestamp": 1792216376780,
+    "outboundModel": "nvidia/nemotron-3-super-120b-a12b",
+    "upstreamResponseModel": "nvidia/nemotron-3-super-120b-a12b"
+  },
+  "deepRouting": {
+    "intent": "ANSWER",
+    "confidence": 0.65,
+    "reason": "Standard conversational response for general query.",
+    "executionTarget": "CHAT_STREAM",
+    "sideEffectLevel": "NONE",
+    "approvalRequired": false,
+    "capabilities": [
+      "cap_chat_answer"
+    ],
+    "metadata": {
+      "fallback": true
+    }
+  },
+  "researchRouting": {
+    "intent": "RESEARCH",
+    "confidence": 0.95,
+    "reason": "Semantic reasoner: CHAIN_OF_THOUGHT (explanation: false, execution: false)",
+    "executionTarget": "RESEARCH_SYNTHESIS",
+    "sideEffectLevel": "READ",
+    "approvalRequired": false,
+    "capabilities": [
+      "cap_research_synthesis"
+    ],
+    "metadata": {
+      "fastPath": true,
+      "referents": {},
+      "isMultiPart": false,
+      "subTasks": [],
+      "isFreshnessRequired": true,
+      "reasoningStrategy": "CHAIN_OF_THOUGHT",
+      "topic": "NEWS"
+    }
+  },
+  "researchProvenance": {
+    "requestedModel": "aira-auto",
+    "resolvedPolicyModel": "aira-deep",
+    "provider": "nvidia",
+    "executedModel": "nvidia/nemotron-3-super-120b-a12b",
+    "plannedModel": "nvidia/nemotron-3-super-120b-a12b",
+    "fallbackOccurred": true,
+    "fallbackReason": "Preferred provider (Anthropic) not configured; routed to NVIDIA NIM",
+    "verified": true,
+    "executionStatus": "FALLBACK",
+    "timestamp": 1792216409046,
+    "outboundModel": "nvidia/nemotron-3-super-120b-a12b",
+    "upstreamResponseModel": "nvidia/nemotron-3-super-120b-a12b"
+  },
+  "summary": {
+    "deepModelPreserved": true,
+    "deepThinkingEnabled": true,
+    "researchRouteIndependent": true,
+    "researchModel": "nvidia/nemotron-3-super-120b-a12b"
+  }
+}

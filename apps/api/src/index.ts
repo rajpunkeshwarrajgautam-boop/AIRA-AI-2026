@@ -1,16 +1,32 @@
+import { createBuilderRoutes } from './builder-routes.js';
+import { createBillingRoutes } from './billing-routes.js';
+import { createVisionRoutes } from './vision-routes.js';
+import { createAccountRoutes } from './account-routes.js';
+import { commercialBillingService } from './billing/commercial-billing-service.js';
+import { paymentGatewayService, TOPUP_PACKS } from './billing/payment-gateway-service.js';
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
-import { ModelRouter } from '../../../packages/model-router/src/index.js';
-import { ToolRegistry, ToolGateway, PostgresToolCallRepository } from '../../../packages/tool-runtime/src/index.js';
+import { normalizeModelIdentifier, UnsupportedModelIdentifierError, COMMERCIAL_PLANS } from '../../../packages/contracts/src/index.js';
+import {
+  ModelRouter,
+  withInferencePrincipal,
+  withInferenceReservation,
+  ProviderHealthTracker,
+  PrivateBetaCapacityGuard,
+  InMemoryCapacityStore,
+  DistributedPostgresCapacityStore
+} from '../../../packages/model-router/src/index.js';
+import { db } from '../../../packages/db/src/index.js';
+import { ToolRegistry, ToolGateway, PostgresToolCallRepository, InMemoryToolCallRepository } from '../../../packages/tool-runtime/src/index.js';
 import { ApprovalKernel } from '../../../packages/approvals/src/index.js';
 import { PostgresApprovalRepository, PostgresSessionGrantRepository } from '../../../packages/approvals/src/repositories.js';
-import { BrainV2KnowledgeEngine } from '../../../packages/knowledge/src/index.js';
+import { BrainV2KnowledgeEngine, PrincipalScope } from '../../../packages/knowledge/src/index.js';
 import { McpHost } from '../../../packages/mcp/src/index.js';
 import { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
 import { AutomationEngine } from '../../../packages/automation/src/index.js';
-import { PostgresAgentRepository, PostgresRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
+import { PostgresAgentRepository, PostgresRunRepository, InMemoryRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
 import { PostgresAutomationRepository, PostgresAutomationRunRepository } from '../../../packages/automation/src/repositories.js';
 import {
   ConversationSearchRepository,
@@ -48,19 +64,195 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 import { createPrincipalMiddleware } from './middleware/principal.js';
+import { createStagingMaintenanceMiddleware } from './middleware/staging-maintenance.js';
 import { createSessionAuthMiddleware, ensureAuthenticatedSession } from './auth/session-auth.js';
+import { createNeonAuthPrincipalMiddleware } from './auth/neon-auth-principal.js';
+import {
+  createBffSessionMiddleware,
+  createCsrfProtectionMiddleware,
+  handleBffSignUp,
+  handleBffSignIn,
+  handleBffOAuthExchange,
+  handleBffOAuthGoogleStart,
+  handleBffOAuthGoogleCallback,
+  handleBffOAuthGithubStart,
+  handleBffOAuthGithubCallback,
+  handleBffOAuthLinkStart,
+  handleBffGetProviders,
+  handleBffUnlinkProvider,
+  handleBffRecoveryRequest,
+  handleBffRecoveryGuidance,
+  handleBffSession,
+  handleBffSignOut,
+  isAllowedOrigin
+} from './auth/bff-session.js';
+import { isTemporaryDatabaseError } from './utils/storage-errors.js';
+
+export class UntrustedOriginError extends Error {
+  readonly status = 403;
+  readonly code = 'CORS_ORIGIN_DENIED';
+  readonly origin: string;
+
+  constructor(origin: string) {
+    super('Origin not allowed');
+    this.name = 'UntrustedOriginError';
+    this.origin = origin;
+  }
+}
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
 
-// Audit 28: Body size limits
-app.use(cors());
-app.use(express.json({ limit: '2mb' }));
+// Audit 28: Body size limits and strict CORS with credentials
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const forwardedHost = req.headers['x-forwarded-host'];
+  const host = typeof forwardedHost === 'string'
+    ? forwardedHost.split(',')[0].trim()
+    : req.headers.host;
+
+  cors({
+    origin: (origin, callback) => {
+      // Allow non-browser callers (curl, internal server requests) where origin is not set
+      if (!origin) return callback(null, true);
+      if (isAllowedOrigin(origin, host)) {
+        return callback(null, true);
+      }
+      return callback(new UntrustedOriginError(origin), false);
+    },
+    credentials: true
+  })(req, res, next);
+});
+
+// Dedicated CORS origin rejection error handler
+app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+  if (err instanceof UntrustedOriginError || err?.code === 'CORS_ORIGIN_DENIED' || err?.name === 'UntrustedOriginError') {
+    const rawOrigin = typeof err.origin === 'string' ? err.origin : (req.headers.origin as string) || 'unknown';
+    const sanitizedOrigin = rawOrigin.slice(0, 200).replace(/[\r\n\t]/g, '');
+    const sanitizedRoute = (req.originalUrl || req.url || 'unknown').slice(0, 200).replace(/[\r\n\t]/g, '');
+    
+    process.stdout.write(
+      `[SECURITY_EVENT] event=cors_origin_rejected origin=${sanitizedOrigin} route=${sanitizedRoute} status=403\n`
+    );
+    res.removeHeader('Access-Control-Allow-Origin');
+    res.removeHeader('access-control-allow-origin');
+    res.status(403).json({ error: 'Origin not allowed' });
+    return;
+  }
+  next(err);
+});
+app.use(express.json({
+  limit: '2mb',
+  verify: (req: any, _res: any, buf: Buffer) => {
+    req.rawBody = buf.toString('utf8');
+  }
+}));
 app.use(express.urlencoded({ limit: '2mb', extended: false }));
+
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  process.stdout.write(`[API_REQ] ${req.method} ${req.url}\n`);
+  next();
+});
+
+// Staging maintenance barrier: blocks mutating requests during PR #96 cutover
+app.use(createStagingMaintenanceMiddleware());
 
 // Resolve a trusted first-party session cookie before principal enforcement.
 // This middleware never trusts client-supplied user/session headers in production.
 app.use(createSessionAuthMiddleware());
+// Staging opt-in: verified Neon Auth bearer identity overrides browser-local
+// guest sessions only after cryptographic signature verification.
+app.use(createNeonAuthPrincipalMiddleware());
+// First-party BFF gateway: resolves secure HttpOnly cookie sessions into verified ExecutionPrincipals
+app.use(createBffSessionMiddleware());
+// Cryptographic CSRF and origin protection on mutating endpoints
+app.use(createCsrfProtectionMiddleware());
+
+// First-party BFF authentication routes
+app.post('/api/auth/sign-in', (req: Request, res: Response) => {
+  handleBffSignIn(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'BFF sign in failed' });
+  });
+});
+app.post('/api/auth/sign-up', (req: Request, res: Response) => {
+  handleBffSignUp(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'BFF sign up failed' });
+  });
+});
+app.post('/api/auth/oauth-exchange', (req: Request, res: Response) => {
+  handleBffOAuthExchange(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'BFF OAuth exchange failed' });
+  });
+});
+app.post('/api/auth/oauth/google/start', (req: Request, res: Response) => {
+  handleBffOAuthGoogleStart(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'OAuth start failed' });
+  });
+});
+app.get('/api/auth/oauth/google/start', (req: Request, res: Response) => {
+  handleBffOAuthGoogleStart(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'OAuth start failed' });
+  });
+});
+app.get('/api/auth/oauth/google/callback', (req: Request, res: Response) => {
+  handleBffOAuthGoogleCallback(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'OAuth callback failed' });
+  });
+});
+// GitHub uses the same verified BFF exchange with provider-bound flow state.
+app.post('/api/auth/oauth/github/start', (req: Request, res: Response) => {
+  handleBffOAuthGithubStart(req, res).catch(() => {
+    res.status(502).json({ error: 'GitHub OAuth start failed' });
+  });
+});
+app.get('/api/auth/oauth/github/start', (req: Request, res: Response) => {
+  handleBffOAuthGithubStart(req, res).catch(() => {
+    res.status(502).json({ error: 'GitHub OAuth start failed' });
+  });
+});
+app.get('/api/auth/oauth/github/callback', (req: Request, res: Response) => {
+  handleBffOAuthGithubCallback(req, res).catch(() => {
+    res.status(502).json({ error: 'GitHub OAuth callback failed' });
+  });
+});
+// Account Linking endpoints (authenticated user initiates linking of secondary provider)
+app.get('/api/auth/oauth/google/link', (req: Request, res: Response) => {
+  handleBffOAuthLinkStart(req, res, 'google').catch((err) => {
+    res.status(500).json({ error: err.message || 'OAuth linking start failed' });
+  });
+});
+app.get('/api/auth/oauth/github/link', (req: Request, res: Response) => {
+  handleBffOAuthLinkStart(req, res, 'github').catch((err) => {
+    res.status(500).json({ error: err.message || 'OAuth linking start failed' });
+  });
+});
+// Linked providers listing & unlinking
+app.get('/api/auth/providers', (req: Request, res: Response) => {
+  handleBffGetProviders(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'Failed to get providers' });
+  });
+});
+app.post('/api/auth/providers/:provider/unlink', (req: Request, res: Response) => {
+  handleBffUnlinkProvider(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'Failed to unlink provider' });
+  });
+});
+// Account recovery guidance & audited support requests
+app.get('/api/auth/recovery/guidance', (req: Request, res: Response) => {
+  handleBffRecoveryGuidance(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'Failed to get recovery guidance' });
+  });
+});
+app.post('/api/auth/recovery/request', (req: Request, res: Response) => {
+  handleBffRecoveryRequest(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'Failed to submit recovery request' });
+  });
+});
+app.get('/api/auth/session', handleBffSession);
+app.post('/api/auth/sign-out', (req: Request, res: Response) => {
+  handleBffSignOut(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'BFF sign out failed' });
+  });
+});
 
 // Public bootstrap endpoint used by the browser before protected API calls.
 // It issues or refreshes an opaque, signed, HttpOnly session cookie.
@@ -74,6 +266,51 @@ app.post('/api/auth/session', (req: Request, res: Response) => {
       error: 'Session initialization failed',
       message: error?.message || 'Unable to initialize an authenticated session',
     });
+  }
+});
+
+// Staging-only identity probe. Requires a valid Neon Auth JWT; signed guest
+// browser cookies do not count as a durable account identity.
+app.get('/api/auth/identity', (req: Request, res: Response) => {
+  const verified = (req as any).managedIdentity as { userId: string; sessionId: string; provider: string; email?: string; name?: string } | undefined;
+  res.setHeader('Cache-Control', 'no-store');
+  if (!verified) return res.status(401).json({ error: 'Verified managed account required' });
+  return res.status(200).json({
+    status: 'AUTHENTICATED',
+    userId: verified.userId,
+    provider: verified.provider,
+    email: verified.email,
+    name: verified.name
+  });
+});
+
+app.post('/api/auth/link-guest', async (req: Request, res: Response) => {
+  try {
+    const verified = (req as any).managedIdentity as { userId: string } | undefined;
+    if (!verified || !verified.userId) {
+      return res.status(401).json({ error: 'Verified managed account required to link data' });
+    }
+
+    // Security requirement: Must verify the existing server-signed guest session cookie.
+    // Client-provided IDs in the request body are strictly rejected to prevent cross-account theft.
+    if (req.body?.guestUserId && req.body.guestUserId !== (req as any).guestSession?.id) {
+      return res.status(400).json({ error: 'Forbidden: unverified client-provided guestUserId is rejected' });
+    }
+
+    const candidateGuest = (req as any).guestSession?.id as string | undefined;
+
+    if (!candidateGuest || candidateGuest === verified.userId) {
+      return res.status(400).json({ error: 'No verifiable active guest session found to link' });
+    }
+
+    if (!candidateGuest.startsWith('usr_') && !candidateGuest.startsWith('user_')) {
+      return res.status(400).json({ error: 'Only guest sessions may be linked to accounts' });
+    }
+
+    const result = await conversationSearchRepo.transferGuestData(candidateGuest, verified.userId);
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Guest linking failed' });
   }
 });
 
@@ -109,12 +346,89 @@ app.get('/api/health', (_req: Request, res: Response) => {
   });
 });
 
+// Instantiate ModelRouter early for health, circuit breakers, and private beta capacity
+const isDbConfiguredEarly = Boolean(process.env.DATABASE_URL?.trim());
+const capacityStore = isDbConfiguredEarly
+  ? new DistributedPostgresCapacityStore(db)
+  : (process.env.VERCEL || process.env.NODE_ENV === 'production')
+    ? new DistributedPostgresCapacityStore(db)
+    : new InMemoryCapacityStore();
+const healthTracker = new ProviderHealthTracker();
+const capacityGuard = new PrivateBetaCapacityGuard(undefined, capacityStore, healthTracker);
+const modelRouter = new ModelRouter(healthTracker, capacityGuard);
+
 app.get('/api/ready', (_req: Request, res: Response) => {
   if (appState === 'HEALTHY') {
     res.status(200).json({ status: 'READY', timestamp: Date.now() });
   } else {
     res.status(503).json({ status: appState, timestamp: Date.now() });
   }
+});
+
+app.get('/api/ready/providers', async (_req: Request, res: Response) => {
+  const fastRoute = modelRouter.routingPolicy.resolveFastRoute();
+  const result: Record<string, any> = {
+    supportedProviders: {
+      groq: { configured: Boolean(process.env.GROQ_API_KEY) },
+      gemini: { configured: Boolean(process.env.GEMINI_API_KEY) },
+      nvidia: { configured: Boolean(process.env.NVIDIA_API_KEY), deepModel: 'nvidia/nemotron-3-super-120b-a12b' },
+      cerebras: { configured: Boolean(process.env.CEREBRAS_API_KEY) },
+      together: { configured: Boolean(process.env.TOGETHER_API_KEY) },
+      fireworks: { configured: Boolean(process.env.FIREWORKS_API_KEY) },
+      openai: { configured: Boolean(process.env.OPENAI_API_KEY) },
+      anthropic: { configured: Boolean(process.env.ANTHROPIC_API_KEY) }
+    },
+    fastRouting: fastRoute,
+    circuitBreakers: modelRouter.healthTracker.getAllTelemetry(),
+    capacity: {
+      guardEnabled: modelRouter.capacityGuard.isEnabled(),
+      isDegraded: fastRoute.isDegraded
+    }
+  };
+  if (process.env.GROQ_API_KEY) {
+    try {
+      const groqKey = process.env.GROQ_API_KEY.trim().replace(/^["']|["']$/g, '');
+      const resp = await fetch('https://api.groq.com/openai/v1/models', {
+        headers: { Authorization: `Bearer ${groqKey}` }
+      });
+      const data: any = await resp.json().catch(() => ({}));
+      result.groq = {
+        status: resp.status,
+        models: Array.isArray(data.data) ? data.data.map((m: any) => m.id) : [],
+        error: !resp.ok ? data : undefined
+      };
+    } catch (e: any) {
+      result.groq = { error: e.message };
+    }
+  } else {
+    result.groq = { configured: false };
+  }
+  if (process.env.GEMINI_API_KEY) {
+    try {
+      const geminiKey = process.env.GEMINI_API_KEY.trim().replace(/^["']|["']$/g, '');
+      const resp = await fetch('https://generativelanguage.googleapis.com/v1beta/models', {
+        headers: { 'x-goog-api-key': geminiKey }
+      });
+      const data: any = await resp.json().catch(() => ({}));
+      const rawModels: any[] = Array.isArray(data.models) ? data.models : [];
+      result.gemini = {
+        status: resp.status,
+        models: rawModels.map(m => m.name.replace(/^models\//, '')),
+        details: rawModels.map(m => ({
+          name: m.name.replace(/^models\//, ''),
+          displayName: m.displayName,
+          supportedGenerationMethods: m.supportedGenerationMethods,
+          inputTokenLimit: m.inputTokenLimit,
+          outputTokenLimit: m.outputTokenLimit
+        }))
+      };
+    } catch (e: any) {
+      result.gemini = { error: e.message };
+    }
+  } else {
+    result.gemini = { configured: false };
+  }
+  res.json(result);
 });
 
 // Hard gate to block runtime traffic before recovery is complete
@@ -125,20 +439,356 @@ app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
+// -----------------------------------------------------------------------
+// PUBLIC WEBHOOKS — Gateway raw-body cryptographic HMAC endpoints
+// -----------------------------------------------------------------------
+app.post('/api/billing/webhook/razorpay', async (req: Request, res: Response) => {
+  const signature = req.headers['x-razorpay-signature'] as string;
+  const rawBody = typeof (req as any).rawBody === 'string'
+    ? (req as any).rawBody
+    : JSON.stringify(req.body);
+
+  try {
+    const result = await paymentGatewayService.processRazorpayWebhook(rawBody, signature);
+    res.status(200).json({ status: 'ok', ...result });
+  } catch (err: any) {
+    console.error('[RazorpayWebhookError]', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/billing/webhook/cashfree', async (req: Request, res: Response) => {
+  const signature = req.headers['x-webhook-signature'] as string;
+  const timestamp = req.headers['x-webhook-timestamp'] as string;
+  const rawBody = typeof (req as any).rawBody === 'string'
+    ? (req as any).rawBody
+    : JSON.stringify(req.body);
+
+  try {
+    const result = await paymentGatewayService.processCashfreeWebhook(rawBody, signature, timestamp);
+    res.status(200).json({ status: 'ok', ...result });
+  } catch (err: any) {
+    console.error('[CashfreeWebhookError]', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Public commercial plan definitions and pricing catalog (accessible to guests and landing pages)
+app.get('/api/billing/plans', (_req: Request, res: Response) => {
+  res.json({
+    plans: Object.values(COMMERCIAL_PLANS),
+    topupPacks: Object.values(TOPUP_PACKS)
+  });
+});
+
 // Enforce ExecutionPrincipal on all /api routes BELOW this point.
-// Routes registered above (health, ready) are public infrastructure probes.
+// Routes registered above (health, ready, webhooks, plans) are public infrastructure probes, catalogs, or signature verified.
 app.use('/api', createPrincipalMiddleware());
+app.use('/api', (req, _res, next) => withInferencePrincipal(req.principal!.userId, next));
+
+// -----------------------------------------------------------------------
+// COMMERCIAL PLATFORM ROUTERS
+// -----------------------------------------------------------------------
+app.use('/api/billing', createBillingRoutes());
+app.use('/api/vision', createVisionRoutes());
+app.use('/api/account', createAccountRoutes());
+app.use('/api/builder', createBuilderRoutes(modelRouter));
+
+// Inference diagnostics are operator actions, not public readiness probes.
+const benchmarkSignal = Symbol('benchmarkSignal');
+async function admitBenchmark(req: Request, res: Response, next: NextFunction) {
+  const principal = req.principal!;
+  if (!(principal.roles || []).some(role => role === 'admin' || role === 'operator') && principal.role !== 'admin') {
+    res.status(403).json({ code: 'OPERATOR_REQUIRED', error: 'Operator authorization required.' });
+    return;
+  }
+  const expected = req.path.endsWith('benchmark-groq') ? 'openai/gpt-oss-120b' : 'gemini-3.5-flash-lite';
+  if (req.body?.model !== expected || typeof req.body?.prompt !== 'string') {
+    res.status(400).json({ code: 'UNSUPPORTED_MODEL_IDENTIFIER', error: 'Unsupported benchmark model or prompt.' });
+    return;
+  }
+  const controller = new AbortController();
+  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(60000)]);
+  (req as any)[benchmarkSignal] = signal;
+  res.once('close', () => { if (!res.writableEnded) controller.abort(); });
+  try {
+    const admission = await modelRouter.capacityGuard.admit({ principalId: principal.userId, model: 'aira-fast', promptText: req.body.prompt, abortSignal: signal });
+    if (admission.decision !== 'ADMIT_NOW') {
+      res.setHeader('Retry-After', String(admission.retryAfterSeconds || 8));
+      res.status(429).json({ code: admission.rejectionCode, error: admission.userMessage });
+      return;
+    }
+    const release = () => { void admission.permit?.release().catch(() => {}); };
+    res.once('finish', release);
+    res.once('close', release);
+    withInferenceReservation(modelRouter.capacityGuard, admission, next);
+  } catch {
+    res.status(503).json({ code: 'AIRA_PRIVATE_BETA_CAPACITY', error: 'Inference capacity unavailable.' });
+  }
+}
+
+app.post('/api/ready/benchmark-groq', admitBenchmark, async (req: Request, res: Response) => {
+  if (!process.env.GROQ_API_KEY) {
+    return res.status(503).json({ error: 'GROQ_API_KEY not configured' });
+  }
+  const { model, prompt, max_tokens, temperature } = req.body || {};
+  if (!model || !prompt) {
+    return res.status(400).json({ error: 'model and prompt required' });
+  }
+
+  const groqKey = process.env.GROQ_API_KEY.trim().replace(/^["']|["']$/g, '');
+  const t0 = performance.now();
+  let ttfb = 0;
+  let firstDelta: number | null = null;
+  let firstThinking: number | null = null;
+  let contentDeltaCount = 0;
+  let thinkingDeltaCount = 0;
+  let text = '';
+  let thinking = '';
+  let providerModel: string | undefined;
+
+  try {
+    const upstreamRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      signal: (req as any)[benchmarkSignal],
+      headers: {
+        Authorization: `Bearer ${groqKey}`,
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream'
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: max_tokens || 256,
+        temperature: temperature !== undefined ? temperature : 0.7,
+        stream: true
+      })
+    });
+
+    ttfb = performance.now() - t0;
+    if (!upstreamRes.ok) {
+      const errBody = await upstreamRes.text();
+      return res.status(upstreamRes.status).json({
+        success: false,
+        status: upstreamRes.status,
+        ttfbMs: Math.round(ttfb),
+        error: errBody
+      });
+    }
+
+    const reader = upstreamRes.body?.getReader();
+    if (!reader) throw new Error('No body stream from Groq');
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const now = performance.now();
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data:')) continue;
+        const dataStr = line.slice(5).trim();
+        if (dataStr === '[DONE]') break;
+        try {
+          const parsed = JSON.parse(dataStr);
+          if (parsed.model && !providerModel) providerModel = parsed.model;
+          const delta = parsed.choices?.[0]?.delta;
+          if (delta?.content) {
+            if (firstDelta === null) firstDelta = now - t0;
+            contentDeltaCount++;
+            text += delta.content;
+          }
+          if (delta?.reasoning_content) {
+            if (firstThinking === null) firstThinking = now - t0;
+            thinkingDeltaCount++;
+            thinking += delta.reasoning_content;
+          }
+        } catch {}
+      }
+    }
+
+    const total = performance.now() - t0;
+    res.json({
+      success: true,
+      model,
+      providerModel,
+      ttfbMs: Math.round(ttfb),
+      ttftMs: firstDelta !== null ? Math.round(firstDelta) : null,
+      firstThinkingMs: firstThinking !== null ? Math.round(firstThinking) : null,
+      totalDurationMs: Math.round(total),
+      contentDeltaCount,
+      thinkingDeltaCount,
+      text: text.trim(),
+      thinking: thinking ? thinking.slice(0, 200) : undefined
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/ready/benchmark-gemini', admitBenchmark, async (req: Request, res: Response) => {
+  if (!process.env.GEMINI_API_KEY) {
+    return res.status(503).json({ error: 'GEMINI_API_KEY not configured' });
+  }
+  const { model, prompt, max_tokens, temperature } = req.body || {};
+  if (!model || !prompt) {
+    return res.status(400).json({ error: 'model and prompt required' });
+  }
+
+  const geminiKey = process.env.GEMINI_API_KEY.trim().replace(/^["']|["']$/g, '');
+  const cleanModel = model.replace(/^models\//, '');
+  const t0 = performance.now();
+  let ttfb = 0;
+  let firstDelta: number | null = null;
+  let firstThinking: number | null = null;
+  let contentDeltaCount = 0;
+  let thinkingDeltaCount = 0;
+  let text = '';
+  let thinking = '';
+  let usage: any = null;
+
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:streamGenerateContent?alt=sse`;
+    const upstreamRes = await fetch(url, {
+      method: 'POST',
+      signal: (req as any)[benchmarkSignal],
+      headers: {
+        'x-goog-api-key': geminiKey,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: temperature !== undefined ? temperature : 0.7,
+          maxOutputTokens: max_tokens || 256
+        }
+      })
+    });
+
+    ttfb = performance.now() - t0;
+    if (!upstreamRes.ok) {
+      const errBody = await upstreamRes.text();
+      const sanitized = errBody.replaceAll(geminiKey, '[REDACTED]');
+      return res.status(upstreamRes.status).json({
+        success: false,
+        status: upstreamRes.status,
+        ttfbMs: Math.round(ttfb),
+        error: sanitized
+      });
+    }
+
+    const reader = upstreamRes.body?.getReader();
+    if (!reader) throw new Error('No body stream from Gemini');
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) continue;
+        const jsonStr = trimmed.slice(5).trim();
+        if (!jsonStr || jsonStr === '[DONE]') continue;
+
+        try {
+          const parsed = JSON.parse(jsonStr);
+          const candidate = parsed.candidates?.[0];
+          if (parsed.usageMetadata) {
+            usage = parsed.usageMetadata;
+          }
+          if (candidate?.content?.parts) {
+            for (const part of candidate.content.parts) {
+              if (part.thought) {
+                if (firstThinking === null) {
+                  firstThinking = performance.now() - t0;
+                }
+                thinkingDeltaCount++;
+                thinking += part.text || '';
+              } else if (part.text) {
+                if (firstDelta === null) {
+                  firstDelta = performance.now() - t0;
+                }
+                contentDeltaCount++;
+                text += part.text;
+              }
+            }
+          }
+        } catch {
+          // ignore SSE JSON boundary chunks
+        }
+      }
+    }
+
+    const total = performance.now() - t0;
+    res.json({
+      success: true,
+      status: 200,
+      model: cleanModel,
+      providerModel: cleanModel,
+      ttfbMs: Math.round(ttfb),
+      ttftMs: firstDelta !== null ? Math.round(firstDelta) : null,
+      firstThinkingMs: firstThinking !== null ? Math.round(firstThinking) : null,
+      totalDurationMs: Math.round(total),
+      contentDeltaCount,
+      thinkingDeltaCount,
+      text: text.trim(),
+      thinking: thinking ? thinking.slice(0, 200) : undefined,
+      usage
+    });
+  } catch (err: any) {
+    const sanitized = err.message ? err.message.replaceAll(geminiKey, '[REDACTED]') : 'Unknown error';
+    res.status(500).json({ success: false, error: sanitized });
+  }
+});
+
+// Protected internal capacity diagnostics endpoint (Admin/Operator only)
+app.get('/api/capacity/status', async (req: Request, res: Response) => {
+  const principal = req.principal;
+  if (!principal) {
+    return res.status(401).json({ error: 'Unauthorized', message: 'Authentication required' });
+  }
+
+  const roles = principal.roles || [];
+  const scopes = principal.scopes || [];
+  const isAuthorized =
+    roles.includes('admin') ||
+    roles.includes('operator') ||
+    scopes.includes('admin') ||
+    scopes.includes('operator') ||
+    principal.userId === 'admin';
+
+  if (!isAuthorized) {
+    return res.status(403).json({
+      error: 'Forbidden',
+      message: 'Admin or operator authorization required for internal capacity diagnostics'
+    });
+  }
+
+  const diagnostics = await modelRouter.capacityGuard.getDiagnostics();
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(200).json(diagnostics);
+});
 
 // Initialize Core Subsystems
-const modelRouter = new ModelRouter();
+app.use('/api/user', createAccountRoutes());
+const isDbConfigured = Boolean(process.env.DATABASE_URL?.trim());
 const toolRegistry = new ToolRegistry(process.cwd());
 const approvalKernel = new ApprovalKernel(new PostgresApprovalRepository(), new PostgresSessionGrantRepository());
-const toolCallRepo = new PostgresToolCallRepository();
+const toolCallRepo = isDbConfigured ? new PostgresToolCallRepository() : new InMemoryToolCallRepository();
 const toolGateway = new ToolGateway(toolCallRepo, approvalKernel, process.cwd());
-const knowledgeEngine = new BrainV2KnowledgeEngine();
+const knowledgeEngine = new BrainV2KnowledgeEngine(undefined, { seedDefaults: !process.env.VERCEL });
 const mcpHost = new McpHost(toolGateway);
 const agentRepo = new PostgresAgentRepository();
-const runRepo = new PostgresRunRepository();
+const runRepo = isDbConfigured ? new PostgresRunRepository() : new InMemoryRunRepository();
 const autoRepo = new PostgresAutomationRepository();
 const autoRunRepo = new PostgresAutomationRunRepository();
 const conversationSearchRepo = new ConversationSearchRepository();
@@ -162,12 +812,17 @@ const agentRuntime = new AgentRuntime(
 );
 const automationEngine = new AutomationEngine(agentRuntime, autoRepo, autoRunRepo);
 agentRuntime.setAutomationEngine(automationEngine);
-automationEngine.start();
+if (isDbConfigured) {
+  automationEngine.start();
+}
 
 // Recovery is deferred until the HTTP server is bound.
 
-// Seed default agent if not exists
+// Seed default agent if not exists (process singleton)
+let hasSeededAgent = false;
 async function seedDefaultAgent() {
+  if (hasSeededAgent) return;
+  hasSeededAgent = true;
   const existing = await agentRepo.getAgent('agent-default');
   if (!existing) {
     await agentRepo.saveAgent({
@@ -185,9 +840,11 @@ async function seedDefaultAgent() {
     } as AgentDefinition);
   }
 }
-seedDefaultAgent().catch(console.error);
 
+let hasSeededAutomation = false;
 async function seedDefaultAutomation() {
+  if (hasSeededAutomation) return;
+  hasSeededAutomation = true;
   const existing = await autoRepo.listAutomations();
   if (existing.length === 0) {
     await autoRepo.saveAutomation({
@@ -206,7 +863,26 @@ async function seedDefaultAutomation() {
     });
   }
 }
-seedDefaultAutomation().catch(console.error);
+
+async function seedDefaultsIdempotent() {
+  if (hasSeededAgent && hasSeededAutomation) {
+    console.log('[Bootstrap] guestBootstrapSkipped=true');
+    return;
+  }
+  const t0 = performance.now();
+  try {
+    await seedDefaultAgent();
+    await seedDefaultAutomation();
+    const guestBootstrapMs = Math.round(performance.now() - t0);
+    console.log(`[Bootstrap] guestBootstrapExecuted=true guestBootstrapMs=${guestBootstrapMs}`);
+  } catch (err) {
+    console.warn('[Bootstrap] Non-fatal default seed notice:', err);
+  }
+}
+
+if (isDbConfigured && !process.env.VERCEL) {
+  void seedDefaultsIdempotent();
+}
 
 // -----------------------------------------------------------------------
 // MCP Servers (protected — requires ExecutionPrincipal)
@@ -229,7 +905,14 @@ app.get('/api/capabilities', (_req: Request, res: Response) => {
 // -----------------------------------------------------------------------
 app.post('/api/conversations/sync', async (req: Request, res: Response) => {
   try {
+    console.log(`[API_CONV_SYNC] principalId: ${req.principal?.userId} hasAuth: ${!!req.headers.authorization}`);
     const body = req.body || {};
+    if (body.principalId && body.principalId !== req.principal!.userId) {
+      return res.status(400).json({ error: 'Forbidden: caller may not specify or forge principalId ownership' });
+    }
+    if (body.userId && body.userId !== req.principal!.userId) {
+      return res.status(400).json({ error: 'Forbidden: caller may not specify or forge userId ownership' });
+    }
     if (!body.id || !body.title || !Number.isFinite(Number(body.createdAt)) || !Number.isFinite(Number(body.updatedAt))) {
       return res.status(400).json({ error: 'id, title, createdAt and updatedAt are required.' });
     }
@@ -267,8 +950,27 @@ app.post('/api/conversations/sync', async (req: Request, res: Response) => {
       indexing
     });
   } catch (err: any) {
+    if (isTemporaryDatabaseError(err)) {
+      res.setHeader('Retry-After', '2');
+      return res.status(503).json({
+        code: 'CONVERSATION_STORAGE_TEMPORARILY_UNAVAILABLE',
+        error: 'Conversation storage is temporarily unavailable. Retry shortly.'
+      });
+    }
     const status = String(err?.message || '').includes('ownership mismatch') ? 403 : 400;
     res.status(status).json({ error: err?.message || 'Conversation sync failed.' });
+  }
+});
+
+app.get('/api/conversations', async (req: Request, res: Response) => {
+  try {
+    console.log(`[API_CONV_GET] principalId: ${req.principal?.userId} hasAuth: ${!!req.headers.authorization}`);
+    const conversations = await conversationSearchRepo.listConversations(req.principal!.userId);
+    console.log(`[API_CONV_GET] found ${conversations.length} for ${req.principal?.userId}`);
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ conversations });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to list conversations' });
   }
 });
 
@@ -529,7 +1231,8 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
 
     // 6. Flush buffer
     for (const evt of bufferedLiveEvents) {
-      if (evt.sequence !== undefined && evt.sequence > highWaterSequence) {
+      const alreadyReplayed = pastEvents.some(p => p.eventId === evt.eventId);
+      if (!alreadyReplayed && (evt.sequence === undefined || evt.sequence > highWaterSequence)) {
         writeSseEvent(evt);
         if (['run.completed', 'run.failed', 'run.cancelled'].includes(evt.type)) {
           terminalEventSeen = true;
@@ -561,8 +1264,10 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
 // Backward-Compatible Streaming Chat Endpoint
 // -----------------------------------------------------------------------
 app.post('/api/chat/stream', async (req: Request, res: Response) => {
+  let admission: any = undefined;
   try {
-    const { messages, history, prompt, model, extendedThinking, systemPrompt, contextSubgraph, attachments, conversationId } = req.body;
+    const { messages, history, prompt, model: rawModel, extendedThinking, systemPrompt, contextSubgraph, attachments, conversationId } = req.body;
+    const model = normalizeModelIdentifier(rawModel);
     const promptText = prompt || (Array.isArray(messages)
       ? [...messages].reverse().find((m: any) => m.role === 'user')?.content || ''
       : '');
@@ -573,33 +1278,194 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       ? messages.slice(0, -1)
       : [];
 
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.flushHeaders?.();
+    const tRequestReceived = performance.now();
+    let tCapacityAdmitted: number | null = null;
+    let tRunCreated: number | null = null;
+    let tFirstDelta: number | null = null;
+    let deltaCount = 0;
+    let thinkingCount = 0;
+    let executedModel = model || 'aira-auto';
+    let executedProvider = 'unknown';
 
-    const run = await agentRuntime.createRun({
+    const principalId = req.principal?.userId || (req as any).guestSession?.id || 'anonymous';
+    const capacityConfig = modelRouter.capacityGuard.getConfig();
+    const isFastTarget = modelRouter.capacityGuard.isFastTarget(model);
+
+    // Section 20: Bounded context history for Fast mode
+    let effectiveHistory = contextHistory;
+    if (isFastTarget && Array.isArray(contextHistory) && contextHistory.length > capacityConfig.maxContextTurns) {
+      effectiveHistory = contextHistory.slice(-capacityConfig.maxContextTurns);
+    }
+
+    // Commercial Entitlement Gate: Consume 1 standard chat unit and record reasoning boost if active
+    try {
+      if (principalId && !principalId.startsWith('test-') && principalId !== 'anonymous') {
+        await commercialBillingService.consumeStandardChat(principalId, 1);
+        if (extendedThinking || model === 'aira-auto') {
+          await commercialBillingService.tryConsumeReasoningBoost(principalId).catch(() => false);
+        }
+      }
+    } catch (quotaErr: any) {
+      if (quotaErr.message?.includes('DAILY_STANDARD_LIMIT_EXCEEDED') || quotaErr.message?.includes('MONTHLY_STANDARD_LIMIT_EXCEEDED')) {
+        return res.status(429).json({
+          error: quotaErr.message,
+          code: 'USER_RATE_LIMIT',
+          retryAfterSeconds: 3600
+        });
+      }
+    }
+
+    const clientAbort = new AbortController();
+    res.on('close', () => {
+      if (!res.writableEnded) clientAbort.abort(new Error('CLIENT_CLOSED'));
+    });
+
+    let headersFlushed = false;
+    admission = await modelRouter.capacityGuard.admit(
+      {
+        principalId,
+        model,
+        promptText,
+        contextHistory: effectiveHistory,
+        abortSignal: clientAbort.signal
+      },
+      (queueProgress) => {
+        if (!headersFlushed) {
+          res.setHeader('Content-Type', 'text/event-stream');
+          res.setHeader('Cache-Control', 'no-cache');
+          res.setHeader('Connection', 'keep-alive');
+          res.flushHeaders?.();
+          headersFlushed = true;
+        }
+        res.write(`event: queue_status\ndata: ${JSON.stringify(queueProgress)}\n\n`);
+      }
+    );
+    tCapacityAdmitted = performance.now();
+
+    if (admission.decision === 'REJECT_CAPACITY') {
+      const retryAfter = admission.retryAfterSeconds || 8;
+      const userMessage = admission.userMessage || 'Private beta capacity is temporarily full. Please retry shortly.';
+      const code = admission.rejectionCode || 'AIRA_PRIVATE_BETA_CAPACITY';
+
+      if (!headersFlushed) {
+        res.setHeader('Retry-After', String(retryAfter));
+        return res.status(429).json({
+          error: userMessage,
+          code,
+          retryAfterSeconds: retryAfter
+        });
+      } else {
+        res.write(`event: error\ndata: ${JSON.stringify({
+          error: userMessage,
+          code,
+          retryAfterSeconds: retryAfter
+        })}\n\n`);
+        return res.end();
+      }
+    }
+
+    if (!headersFlushed) {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders?.();
+      headersFlushed = true;
+    }
+
+    const run = await withInferenceReservation(modelRouter.capacityGuard, admission, () => agentRuntime.createRun({
       prompt: promptText,
       conversationId: conversationId || undefined,
       attachments: Array.isArray(attachments) ? attachments : undefined,
       systemPrompt: (systemPrompt || '') + (contextSubgraph ? `\n\n${contextSubgraph}` : ''),
-      context: { history: contextHistory },
+      context: { history: effectiveHistory },
       modelPolicy: {
         model: model || 'aira-auto',
         extendedThinking: Boolean(extendedThinking),
       }
-    }, req.principal!);
+    }, req.principal!), clientAbort.signal);
+    if (clientAbort.signal.aborted) {
+      await admission.permit?.release();
+      await agentRuntime.cancelRun(run.id);
+      return res.end();
+    }
+    tRunCreated = performance.now();
 
     const stream = agentRuntime.getEventStream(run.id);
 
-    const handler = (evt: any) => {
+    let permitReleased = false;
+    const releasePermitIfHeld = async () => {
+      if (admission?.permit && !permitReleased) {
+        permitReleased = true;
+        try {
+          await admission.permit.release();
+        } catch (releaseErr) {
+          console.warn('[CHAT_STREAM] Error releasing capacity permit:', releaseErr);
+        }
+      }
+    };
+
+    const finalizeAndEmitMetrics = async () => {
+      const tCompleted = performance.now();
+      const totalMs = Math.round(tCompleted - tRequestReceived);
+      const ttftMs = tFirstDelta !== null ? Math.round(tFirstDelta - tRequestReceived) : null;
+      const capacityAdmissionMs = tCapacityAdmitted !== null ? Math.round(tCapacityAdmitted - tRequestReceived) : null;
+      const runCreationMs = (tRunCreated !== null && tCapacityAdmitted !== null) ? Math.round(tRunCreated - tCapacityAdmitted) : null;
+
+      const capacityDbRoundTrips = admission?.telemetry?.dbRoundTrips ?? (admission?.permit ? 1 : 0);
+      const capacityTransactionMs = admission?.telemetry?.transactionMs ?? capacityAdmissionMs;
+      const capacityLockWaitMs = admission?.telemetry?.lockWaitMs ?? 0;
+
+      const dbTele = agentRuntime.getRunDbTelemetry(run.id) || {
+        dbCriticalPathMs: 0,
+        dbAcquireMs: 0,
+        dbQueryCountBeforeProvider: 0,
+        dbQueryCountBeforeFirstToken: 0,
+        dbDeferredWriteCount: 0
+      };
+
+      await releasePermitIfHeld();
+      const capacityMetrics = modelRouter.capacityGuard ? {
+        queueDepth: modelRouter.capacityGuard.getQueueDepth()
+      } : {};
+
+      console.log(`event=chat_latency request_id=${req.headers['x-request-id'] || run.id} run_id=${run.id} model=${executedModel} provider=${executedProvider} ttft_ms=${ttftMs} total_ms=${totalMs} capacity_admission_ms=${capacityAdmissionMs} capacity_db_roundtrips=${capacityDbRoundTrips} capacity_trx_ms=${capacityTransactionMs} capacity_lock_wait_ms=${capacityLockWaitMs} run_creation_ms=${runCreationMs} delta_count=${deltaCount} thinking_count=${thinkingCount} db_critical_path_ms=${dbTele.dbCriticalPathMs} db_acquire_ms=${dbTele.dbAcquireMs} db_queries_pre_provider=${dbTele.dbQueryCountBeforeProvider} db_queries_pre_token=${dbTele.dbQueryCountBeforeFirstToken} db_deferred_writes=${dbTele.dbDeferredWriteCount} capacity_queue_depth=${capacityMetrics.queueDepth ?? 0}`);
+      res.write(`event: latency_metrics\ndata: ${JSON.stringify({
+        requestId: run.id,
+        ttftMs,
+        totalMs,
+        capacityAdmissionMs,
+        capacityDbRoundTrips,
+        capacityTransactionMs,
+        capacityLockWaitMs,
+        runCreationMs,
+        deltaCount,
+        thinkingCount,
+        executedModel,
+        executedProvider,
+        dbCriticalPathMs: dbTele.dbCriticalPathMs,
+        dbAcquireMs: dbTele.dbAcquireMs,
+        dbQueryCountBeforeProvider: dbTele.dbQueryCountBeforeProvider,
+        dbQueryCountBeforeFirstToken: dbTele.dbQueryCountBeforeFirstToken,
+        dbDeferredWriteCount: dbTele.dbDeferredWriteCount,
+        capacity: capacityMetrics
+      })}\n\n`);
+    };
+
+    const handler = async (evt: any) => {
       if (evt.type === 'routing.decision') {
         res.write(`event: routing_decision\ndata: ${JSON.stringify(evt.data)}\n\n`);
+      } else if (evt.type === 'model.provenance') {
+        executedModel = evt.data?.executedModel || executedModel;
+        executedProvider = evt.data?.provider || executedProvider;
+        res.write(`event: model_provenance\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'capability.unready') {
         res.write(`event: capability_unready\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'content.delta') {
+        if (tFirstDelta === null) tFirstDelta = performance.now();
+        deltaCount++;
         res.write(`event: content_delta\ndata: ${JSON.stringify({ text: evt.data.delta })}\n\n`);
       } else if (evt.type === 'thinking.delta') {
+        thinkingCount++;
         res.write(`event: thinking_delta\ndata: ${JSON.stringify({ thinking: evt.data.delta })}\n\n`);
       } else if (evt.type === 'workflow.created' || evt.type === 'workflow.started') {
         res.write(`event: workflow_started\ndata: ${JSON.stringify(evt.data)}\n\n`);
@@ -612,6 +1478,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       } else if (evt.type === 'workflow.step.failed') {
         res.write(`event: workflow_step_failed\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'workflow.completed') {
+        await finalizeAndEmitMetrics();
         res.write(`event: workflow_completed\ndata: ${JSON.stringify(evt.data)}\n\n`);
         res.write(`event: done\ndata: [DONE]\n\n`);
         stream.off('event', handler);
@@ -621,6 +1488,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         res.write(`event: artifact_delta\ndata: ${JSON.stringify({ chunk: evt.data.content })}\n\n`);
         res.write(`event: artifact_close\ndata: ${JSON.stringify({ id: evt.data.id })}\n\n`);
       } else if (evt.type === 'approval.required') {
+        await releasePermitIfHeld();
         res.write(`event: approval_required\ndata: ${JSON.stringify(evt.data)}\n\n`);
         res.write(`event: done\ndata: [DONE]\n\n`);
         stream.off('event', handler);
@@ -630,18 +1498,26 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       } else if (evt.type === 'tool.completed') {
         res.write(`event: tool_completed\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'run.failed') {
+        await finalizeAndEmitMetrics();
+        const failure = evt.data?.error || 'Aira runtime failed before producing a response';
+        console.error(`[CHAT_STREAM_RUN_FAILED] run_id=${run.id} model=${executedModel}:`, failure);
+        const storageFailure = isTemporaryDatabaseError(new Error(String(failure)));
         res.write(`event: error\ndata: ${JSON.stringify({
-          error: evt.data?.error || 'Aira runtime failed before producing a response',
+          error: storageFailure ? 'Temporary database connectivity problem. Please retry your request.' : 'Aira could not complete this request.',
+          code: storageFailure ? 'DATABASE_TEMPORARILY_UNAVAILABLE' : 'RUN_FAILED',
+          details: String(failure),
         })}\n\n`);
         stream.off('event', handler);
         res.end();
       } else if (evt.type === 'run.cancelled') {
+        await finalizeAndEmitMetrics();
         res.write(`event: error\ndata: ${JSON.stringify({
           error: evt.data?.error || 'Aira run was cancelled',
         })}\n\n`);
         stream.off('event', handler);
         res.end();
       } else if (evt.type === 'run.completed') {
+        await finalizeAndEmitMetrics();
         res.write(`event: done\ndata: [DONE]\n\n`);
         stream.off('event', handler);
         res.end();
@@ -649,16 +1525,32 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     };
 
     stream.on('event', handler);
-    req.on('close', () => {
+    res.on('close', async () => {
+      if (res.writableEnded) return;
+      await releasePermitIfHeld();
       stream.off('event', handler);
+      agentRuntime.cancelRun(run.id).catch(() => {});
     });
 
-    await agentRuntime.startRun(run.id);
+    await withInferenceReservation(modelRouter.capacityGuard, admission, () => agentRuntime.startRun(run.id), clientAbort.signal);
   } catch (err: any) {
+    if (admission?.permit) {
+      await admission.permit.release().catch(() => {});
+    }
+    if (err instanceof UnsupportedModelIdentifierError && !res.headersSent) {
+      res.status(400).json({ error: err.message, code: err.code });
+      return;
+    }
+    console.error('Chat stream failed', { code: err?.code, message: err?.message });
+    const databaseUnavailable = isTemporaryDatabaseError(err);
+    const code = databaseUnavailable ? 'DATABASE_TEMPORARILY_UNAVAILABLE' : 'CHAT_STREAM_FAILED';
+    const message = databaseUnavailable
+      ? 'Temporary database connectivity problem. Please retry your request.'
+      : 'Aira could not complete this request.';
     if (!res.headersSent) {
-      res.status(500).json({ error: err.message });
+      res.status(databaseUnavailable ? 503 : 500).json({ error: message, code });
     } else {
-      res.write(`event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`);
+      res.write(`event: error\ndata: ${JSON.stringify({ error: message, code })}\n\n`);
       res.end();
     }
   }
@@ -740,33 +1632,105 @@ app.post('/api/tools/calls/:id/cancel', async (req: Request, res: Response) => {
 });
 
 // -----------------------------------------------------------------------
-// Knowledge Engine (Brain v2)
+// Knowledge Engine (Brain v2) — Principal-Scoped & Isolated (P0 Security)
 // -----------------------------------------------------------------------
-app.get('/api/knowledge/sources', async (_req: Request, res: Response) => {
+app.get('/api/knowledge/sources', async (req: Request, res: Response) => {
+  const scope: PrincipalScope = {
+    principalId: req.principal?.userId,
+    workspaceId: req.principal?.workspaceId,
+    isSystem: false
+  };
   res.json({
-    sources: await knowledgeEngine.getSources(),
-    memories: await knowledgeEngine.getMemories()
+    sources: await knowledgeEngine.getSources(scope),
+    memories: await knowledgeEngine.getMemories(scope)
   });
 });
 
+app.get('/api/knowledge/sources/:id', async (req: Request, res: Response) => {
+  const scope: PrincipalScope = {
+    principalId: req.principal?.userId,
+    workspaceId: req.principal?.workspaceId,
+    isSystem: false
+  };
+  const source = await knowledgeEngine.getSource(req.params.id, scope);
+  if (!source) {
+    return res.status(404).json({ error: 'Source not found or access denied.' });
+  }
+  res.json({ source });
+});
+
+app.delete('/api/knowledge/sources/:id', async (req: Request, res: Response) => {
+  const scope: PrincipalScope = {
+    principalId: req.principal?.userId,
+    workspaceId: req.principal?.workspaceId,
+    isSystem: false
+  };
+  const deleted = await knowledgeEngine.deleteSource(req.params.id, scope);
+  if (!deleted) {
+    return res.status(404).json({ error: 'Source not found or deletion not permitted.' });
+  }
+  res.json({ success: true, id: req.params.id });
+});
+
 app.post('/api/knowledge/ingest', async (req: Request, res: Response) => {
-  const { title, content, mimeType, uri } = req.body;
+  const { title, content, mimeType, uri, projectId, principalId, userId } = req.body;
+  if (principalId && principalId !== req.principal?.userId) {
+    return res.status(400).json({ error: 'Forbidden: caller may not specify or forge principalId ownership' });
+  }
+  if (userId && userId !== req.principal?.userId) {
+    return res.status(400).json({ error: 'Forbidden: caller may not specify or forge userId ownership' });
+  }
   if (!title || !content) {
     return res.status(400).json({ error: 'title and content are required.' });
   }
-  const result = await knowledgeEngine.ingestDocument(title, content, mimeType, uri);
+  const scope: PrincipalScope = {
+    principalId: req.principal?.userId,
+    workspaceId: req.principal?.workspaceId,
+    isSystem: false
+  };
+  const result = await knowledgeEngine.ingestDocument(title, content, mimeType, uri, projectId, scope);
   res.status(201).json(result);
 });
 
-app.get('/api/knowledge/graph', async (_req: Request, res: Response) => {
-  res.json(await knowledgeEngine.getKnowledgeGraph());
+app.get('/api/knowledge/graph', async (req: Request, res: Response) => {
+  const scope: PrincipalScope = {
+    principalId: req.principal?.userId,
+    workspaceId: req.principal?.workspaceId,
+    isSystem: false
+  };
+  res.json(await knowledgeEngine.getKnowledgeGraph(scope));
 });
 
 app.post('/api/knowledge/search', async (req: Request, res: Response) => {
   const { query, limit } = req.body;
   if (!query) return res.status(400).json({ error: 'query is required.' });
-  const results = await knowledgeEngine.search(String(query), limit ? Number(limit) : 5);
+  const scope: PrincipalScope = {
+    principalId: req.principal?.userId,
+    workspaceId: req.principal?.workspaceId,
+    isSystem: false
+  };
+  const results = await knowledgeEngine.search(String(query), limit ? Number(limit) : 5, scope);
   res.json({ results });
+});
+
+app.post('/api/knowledge/memories', async (req: Request, res: Response) => {
+  const { key, value, category, provenance, principalId, userId } = req.body;
+  if (principalId && principalId !== req.principal?.userId) {
+    return res.status(400).json({ error: 'Forbidden: caller may not specify or forge principalId ownership' });
+  }
+  if (userId && userId !== req.principal?.userId) {
+    return res.status(400).json({ error: 'Forbidden: caller may not specify or forge userId ownership' });
+  }
+  if (!key || !value) {
+    return res.status(400).json({ error: 'key and value are required.' });
+  }
+  const scope: PrincipalScope = {
+    principalId: req.principal?.userId,
+    workspaceId: req.principal?.workspaceId,
+    isSystem: false
+  };
+  const memory = await knowledgeEngine.saveMemory(key, value, category || 'fact', provenance || 'user', scope);
+  res.status(201).json({ memory });
 });
 
 // -----------------------------------------------------------------------
@@ -774,6 +1738,17 @@ app.post('/api/knowledge/search', async (req: Request, res: Response) => {
 // -----------------------------------------------------------------------
 
 app.post('/api/agents', async (req: Request, res: Response) => {
+  const verifiedUserId = req.principal?.userId;
+  if (!verifiedUserId) {
+    return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+  }
+
+  if (req.body?.principalId && req.body.principalId !== verifiedUserId) {
+    return res.status(400).json({
+      error: 'Forbidden: caller may not specify or forge principalId ownership'
+    });
+  }
+
   const { name, instructions, modelPolicy, tools, memoryScopes, approvalPolicy, maxSteps, timeoutPolicy } = req.body;
   if (!name || !instructions) {
     return res.status(400).json({ error: 'name and instructions are required.' });
@@ -781,6 +1756,7 @@ app.post('/api/agents', async (req: Request, res: Response) => {
   const now = Date.now();
   const agent: AgentDefinition = {
     id: `agent_${crypto.randomUUID().slice(0, 8)}`,
+    principalId: verifiedUserId,
     name,
     description: req.body.description || '',
     instructions,
@@ -793,33 +1769,57 @@ app.post('/api/agents', async (req: Request, res: Response) => {
     createdAt: now,
     updatedAt: now
   } as any;
-  await agentRepo.saveAgent(agent);
+  await agentRepo.saveAgent(agent, verifiedUserId);
   res.status(201).json(agent);
 });
 
-app.get('/api/agents', async (_req: Request, res: Response) => {
-  res.json(await agentRepo.listAgents());
+app.get('/api/agents', async (req: Request, res: Response) => {
+  const verifiedUserId = req.principal?.userId;
+  if (!verifiedUserId) {
+    return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+  }
+  res.json(await agentRepo.listAgents(verifiedUserId));
 });
 
 app.get('/api/agents/:id', async (req: Request, res: Response) => {
-  const agent = await agentRepo.getAgent(req.params.id);
+  const verifiedUserId = req.principal?.userId;
+  if (!verifiedUserId) {
+    return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+  }
+  const agent = await agentRepo.getAgent(req.params.id, verifiedUserId);
   if (!agent) return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
   res.json(agent);
 });
 
 app.patch('/api/agents/:id', async (req: Request, res: Response) => {
-  const agent = await agentRepo.getAgent(req.params.id);
+  const verifiedUserId = req.principal?.userId;
+  if (!verifiedUserId) {
+    return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+  }
+
+  if (req.body?.principalId && req.body.principalId !== verifiedUserId) {
+    return res.status(400).json({
+      error: 'Forbidden: caller may not alter or forge principalId ownership'
+    });
+  }
+
+  const agent = await agentRepo.getAgent(req.params.id, verifiedUserId);
   if (!agent) return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
   const updates = req.body as Partial<AgentDefinition>;
   delete (updates as any).id;
+  delete (updates as any).principalId;
   delete (updates as any).createdAt;
   Object.assign(agent, updates, { updatedAt: Date.now() });
-  await agentRepo.saveAgent(agent);
+  await agentRepo.saveAgent(agent, verifiedUserId);
   res.json(agent);
 });
 
 app.delete('/api/agents/:id', async (req: Request, res: Response) => {
-  const deleted = await agentRepo.deleteAgent(req.params.id);
+  const verifiedUserId = req.principal?.userId;
+  if (!verifiedUserId) {
+    return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+  }
+  const deleted = await agentRepo.deleteAgent(req.params.id, verifiedUserId);
   if (!deleted) {
     return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
   }
@@ -827,7 +1827,11 @@ app.delete('/api/agents/:id', async (req: Request, res: Response) => {
 });
 
 app.post('/api/agents/:id/run', async (req: Request, res: Response) => {
-  const agent = await agentRepo.getAgent(req.params.id);
+  const verifiedUserId = req.principal?.userId;
+  if (!verifiedUserId) {
+    return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+  }
+  const agent = await agentRepo.getAgent(req.params.id, verifiedUserId);
   if (!agent) return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
   try {
     const run = await agentRuntime.createRun({
@@ -853,9 +1857,20 @@ app.get('/api/automations', async (req: Request, res: Response) => {
 
 app.post('/api/automations', async (req: Request, res: Response) => {
   try {
+    const verifiedUserId = req.principal?.userId;
+    if (!verifiedUserId) {
+      return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+    }
+
+    if (req.body?.principalId && req.body.principalId !== verifiedUserId) {
+      return res.status(400).json({
+        error: 'Forbidden: caller may not specify or forge principalId ownership'
+      });
+    }
+
     const raw = {
       ...req.body,
-      principalId: req.body.principalId || req.principal?.userId || 'usr_anonymous'
+      principalId: verifiedUserId
     };
     const parsed = AutomationDefinitionSchema.omit({ id: true }).parse(raw);
     const item = await automationEngine.createAutomation(parsed);
@@ -866,14 +1881,29 @@ app.post('/api/automations', async (req: Request, res: Response) => {
 });
 
 app.get('/api/automations/:id', async (req: Request, res: Response) => {
-  const item = await automationEngine.getAutomation(req.params.id, req.principal?.userId);
-  if (!item) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
-  res.json(item);
+  try {
+    const item = await automationEngine.getAutomation(req.params.id, req.principal?.userId);
+    if (!item) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
+    res.json(item);
+  } catch {
+    res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
+  }
 });
 
 app.patch('/api/automations/:id', async (req: Request, res: Response) => {
   try {
-    const updated = await automationEngine.patchAutomation(req.params.id, req.body, req.principal?.userId);
+    const verifiedUserId = req.principal?.userId;
+    if (!verifiedUserId) {
+      return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+    }
+
+    if (req.body?.principalId && req.body.principalId !== verifiedUserId) {
+      return res.status(400).json({
+        error: 'Forbidden: caller may not alter or forge principalId ownership'
+      });
+    }
+
+    const updated = await automationEngine.patchAutomation(req.params.id, req.body, verifiedUserId);
     res.json(updated);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -881,9 +1911,13 @@ app.patch('/api/automations/:id', async (req: Request, res: Response) => {
 });
 
 app.delete('/api/automations/:id', async (req: Request, res: Response) => {
-  const deleted = await automationEngine.deleteAutomation(req.params.id, req.principal?.userId);
-  if (!deleted) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
-  res.status(204).send();
+  try {
+    const deleted = await automationEngine.deleteAutomation(req.params.id, req.principal?.userId);
+    if (!deleted) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
+    res.status(204).send();
+  } catch {
+    res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
+  }
 });
 
 app.post('/api/automations/:id/trigger', async (req: Request, res: Response) => {
@@ -899,7 +1933,7 @@ app.get('/api/automations/:id/runs', async (req: Request, res: Response) => {
   try {
     const item = await automationEngine.getAutomation(req.params.id, req.principal?.userId);
     if (!item) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
-    const runs = await automationEngine.getAutomationRuns(req.params.id);
+    const runs = await automationEngine.getAutomationRuns(req.params.id, req.principal?.userId);
     res.json(runs);
   } catch (err: any) {
     res.status(404).json({ error: err.message });
@@ -965,7 +1999,13 @@ app.get('/api/workflows/runs/:id', async (req: Request, res: Response) => {
 
 app.post('/api/workflows/runs', async (req: Request, res: Response) => {
   try {
-    const { prompt, definition } = req.body;
+    const { prompt, definition, principalId, userId } = req.body || {};
+    if (principalId && principalId !== req.principal?.userId) {
+      return res.status(400).json({ error: 'Forbidden: caller may not specify or forge principalId ownership' });
+    }
+    if (userId && userId !== req.principal?.userId) {
+      return res.status(400).json({ error: 'Forbidden: caller may not specify or forge userId ownership' });
+    }
     if (!prompt && !definition) {
       return res.status(400).json({ error: 'Either "prompt" or "definition" is required.' });
     }
@@ -1052,10 +2092,33 @@ app.post('/api/workflows/runs/:id/steps/:stepId/approve', async (req: Request, r
   }
 });
 
+if (process.env.NODE_ENV === 'test') {
+  app.get('/api/test-unhandled-server-error', () => {
+    throw new Error('Simulated unexpected server error');
+  });
+}
+
+app.use((req: Request, res: Response) => {
+  process.stdout.write(`[API_404] ${req.method} ${req.url}\n`);
+  res.status(404).json({ error: `Not found: ${req.method} ${req.url}` });
+});
+
 // -----------------------------------------------------------------------
 // Global Error Handler (Audit 27 — catches uncaught route errors)
 // -----------------------------------------------------------------------
-app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
+  if (err instanceof UntrustedOriginError || err?.code === 'CORS_ORIGIN_DENIED' || err?.name === 'UntrustedOriginError') {
+    const rawOrigin = typeof err.origin === 'string' ? err.origin : (req.headers.origin as string) || 'unknown';
+    const sanitizedOrigin = rawOrigin.slice(0, 200).replace(/[\r\n\t]/g, '');
+    const sanitizedRoute = (req.originalUrl || req.url || 'unknown').slice(0, 200).replace(/[\r\n\t]/g, '');
+    process.stdout.write(
+      `[SECURITY_EVENT] event=cors_origin_rejected origin=${sanitizedOrigin} route=${sanitizedRoute} status=403\n`
+    );
+    res.removeHeader('Access-Control-Allow-Origin');
+    res.removeHeader('access-control-allow-origin');
+    res.status(403).json({ error: 'Origin not allowed' });
+    return;
+  }
   process.stderr.write(`[API_ERROR] ${err.message}\n`);
   res.status(500).json({ error: 'Internal server error', message: err.message });
 });

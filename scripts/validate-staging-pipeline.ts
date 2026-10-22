@@ -209,7 +209,95 @@ async function main() {
       console.warn('[NOTICE] Staging smoke test did not return 2xx (DNS or deployment may be pending)');
     }
   }
+
+  if (mode === 'audit-cutover' || mode === '--audit-cutover' || mode === 'cutover') {
+    console.log('[STAGING_CUTOVER_AUDIT] Verifying staging cutover status and integrity gate...');
+    const { CUTOVER_PROTOCOL_STEPS, verifyStagingCutoverIntegrity } = await import('./staging-cutover-orchestrator.js');
+
+    const dbUrl = process.env.DATABASE_URL;
+    let cutoverStatus = 'PENDING_OWNER_IMPORT';
+    let certificationStatus = 'NOT_CERTIFIED';
+    let detailsSummary = 'Cutover Protocol Active (9 Steps). Schema migrations and historical import separated by owner gate.';
+    let auditResult: any = null;
+
+    if (dbUrl && dbUrl.trim()) {
+      const client = (await import('knex')).default({
+        client: 'pg',
+        connection: { connectionString: dbUrl, ssl: true }
+      });
+
+      try {
+        auditResult = await verifyStagingCutoverIntegrity(client, {
+          allowPermanentStaging: process.env.AIRA_ALLOW_STAGING_LIVE_IMPORT === 'true'
+        });
+        if (auditResult.certified) {
+          cutoverStatus = 'FULL_CUTOVER_CERTIFIED';
+          certificationStatus = 'CERTIFIED';
+          detailsSummary = 'Migrations 016–022 applied and historical identities, wallets, and conversations fully reconciled (11/11 assertions passed).';
+        } else if (auditResult.checks['MIGRATIONS_016_022_APPLIED']) {
+          cutoverStatus = 'MIGRATIONS_APPLIED_AWAITING_HISTORICAL_IMPORT';
+          certificationStatus = 'NOT_CERTIFIED';
+          detailsSummary = 'Schema migrations 016–022 verified. Historical identity import requires Step 6 owner execution.';
+        } else {
+          cutoverStatus = 'PENDING_STAGING_MIGRATIONS';
+          certificationStatus = 'NOT_CERTIFIED';
+          detailsSummary = 'Pending migrations 016–022 execution against staging database.';
+        }
+      } finally {
+        await client.destroy();
+      }
+    } else {
+      detailsSummary = 'Staging cutover protocol verified. Automated pipeline does not execute historical import without explicit owner credentials.';
+      certificationStatus = 'NOT_CERTIFIED';
+    }
+
+    console.log(`Cutover Status:       ${cutoverStatus}`);
+    console.log(`Certification Status: ${certificationStatus}`);
+    console.log(`Protocol Steps:       ${CUTOVER_PROTOCOL_STEPS.length} defined steps`);
+    console.log(`Details:              ${detailsSummary}\n`);
+
+    // Write structured certification artifact
+    try {
+      if (!fs.existsSync('.artifacts')) {
+        fs.mkdirSync('.artifacts', { recursive: true });
+      }
+      const certArtifact = {
+        pipeline: 'permanent-staging',
+        environment: 'staging',
+        commit_sha: process.env.GITHUB_SHA || 'unknown',
+        timestamp: new Date().toISOString(),
+        neon_project: 'mute-frost-50372225',
+        neon_branch: 'br-autumn-star-b36dfu5w',
+        vercel_project: 'prj_FZLU4vBIYSsBn28AI6drkpD5WfbH',
+        staging_domain: 'staging.virexaaiventures.com',
+        cutover_protocol: '9_step_controlled_sequence',
+        cutover_status: cutoverStatus,
+        integrity_checks_passed: auditResult?.certified ? '11/11' : (auditResult ? 'FAILED' : 'AWAITING_IMPORT'),
+        status: certificationStatus
+      };
+      fs.writeFileSync('.artifacts/staging-certification.json', JSON.stringify(certArtifact, null, 2) + '\n');
+    } catch {
+      // Ignore filesystem errors in restricted environments
+    }
+
+    if (process.env.GITHUB_STEP_SUMMARY) {
+      const summaryContent = [
+        '### 🛡️ AIRA Permanent Staging Cutover Protocol & Merge Gate',
+        `- **Cutover Status**: **${cutoverStatus}**`,
+        `- **Certification Status**: **${certificationStatus}**`,
+        `- **Protocol**: 9-step controlled sequence enforcing isolated recovery checkpoint & owner authorization`,
+        `- **Details**: ${detailsSummary}`
+      ].join('\n');
+      fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summaryContent + '\n');
+    }
+
+    if (args.includes('--require-certified') && certificationStatus !== 'CERTIFIED') {
+      console.error(`[SECURITY FATAL] Cutover is not certified (${cutoverStatus}). All 11 integrity assertions must pass before certification.`);
+      process.exit(1);
+    }
+  }
 }
+
 
 if (process.argv[1]?.includes('validate-staging-pipeline')) {
   main().catch(err => {

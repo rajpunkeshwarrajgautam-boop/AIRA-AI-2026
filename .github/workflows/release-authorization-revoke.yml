@@ -1,0 +1,69 @@
+name: Revoke Release Authorization via GitHub App (No Deployment)
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        required: true
+        type: string
+        description: "Release PR number whose current HEAD approval must be revoked"
+      candidate_sha:
+        required: true
+        type: string
+        description: "Exact full current PR HEAD commit SHA"
+      revoke_phrase:
+        required: true
+        type: string
+        description: "Type REVOKE followed by one space and the candidate SHA"
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  revoke:
+    if: >-
+      github.actor == github.repository_owner &&
+      github.repository == 'rajpunkeshwarrajgautam-boop/AIRA-AI-2026' &&
+      github.ref == 'refs/heads/prod-release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: release-gate
+    concurrency:
+      group: release-gate-app-status-writes
+      cancel-in-progress: false
+    env:
+      PR_NUMBER: ${{ inputs.pr_number }}
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      REVOKE_PHRASE: ${{ inputs.revoke_phrase }}
+    steps:
+      - name: Verify owner intent, exact SHA and live release PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || exit 1
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          [[ "$REVOKE_PHRASE" == "REVOKE $CANDIDATE_SHA" ]] || exit 1
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" \
+            --jq '. | select(.head.sha == env.CANDIDATE_SHA and .base.ref == "prod-release" and .state == "open") | .number' > /tmp/verified-release-pr
+          [[ "$(cat /tmp/verified-release-pr)" == "$PR_NUMBER" ]] || exit 1
+      - name: Mint dedicated App installation token
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          client-id: ${{ vars.AIRA_RELEASE_GATE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AIRA_RELEASE_GATE_APP_PRIVATE_KEY }}
+          permission-statuses: write
+      - name: Post App-issued failure status to revoke approval
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$CANDIDATE_SHA" \
+            -f state=failure -f context=release/go-live-authorized \
+            -f description="REVOKED by owner for PR #$PR_NUMBER" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          echo "App-issued GO LIVE status revoked for PR #$PR_NUMBER"

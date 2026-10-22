@@ -135,6 +135,79 @@ async function main() {
     const sameClientLeak = await repo.search(principalA, { query: 'same-client-id' });
     assert.equal(sameClientLeak.length, 0, 'same client IDs across principals must remain isolated');
 
+
+    // A delayed retry of an older full conversation snapshot must not erase newer
+    // messages or revert conversation metadata, including under concurrent requests.
+    const stableMessages = [
+      { id: 'search_test_msg_amd_user', role: 'user' as const,
+        content: 'The AmdTools64 ghost driver keeps reappearing after reboot.', createdAt: now - 3000 },
+      { id: 'search_test_msg_amd_assistant', role: 'assistant' as const,
+        content: 'After cleanup, sc.exe query AmdTools64 reports that the service does not exist.', createdAt: now - 2000 }
+    ];
+    const newerSnapshot = {
+      id: 'search_test_conv_amd',
+      title: 'Updated AMD troubleshooting',
+      projectId: 'project_aira',
+      createdAt: now - 3000,
+      updatedAt: now + 1000,
+      messages: [...stableMessages, {
+        id: 'search_test_msg_amd_followup', role: 'user' as const,
+        content: 'Follow-up message that must survive an older sync retry.',
+        createdAt: now + 700
+      }]
+    };
+    const olderSnapshot = {
+      ...newerSnapshot,
+      title: 'Outdated AMD title',
+      updatedAt: now,
+      messages: stableMessages.slice(0, 1)
+    };
+    await Promise.all([
+      repo.syncConversation(principalA, newerSnapshot),
+      repo.syncConversation(principalA, olderSnapshot)
+    ]);
+    await repo.syncConversation(principalA, olderSnapshot); // explicit late retry
+    const afterRetries = await repo.getConversation(principalA, 'search_test_conv_amd');
+    assert.equal(afterRetries?.title, 'Updated AMD troubleshooting',
+      'Late retry must not overwrite newer title');
+    assert.equal(afterRetries?.updatedAt, now + 1000);
+    assert.equal(afterRetries?.messages.length, 3,
+      'A stale snapshot must not delete a newer message');
+    assert.equal(afterRetries?.messages[2]?.id, 'search_test_msg_amd_followup');
+    assert.equal((await repo.search(principalA, { query: 'must survive an older sync retry' }))[0]?.conversationId,
+      'search_test_conv_amd', 'Newer search evidence must survive stale retries');
+
+    // Real deployed regression: two valid snapshots can share the same
+    // millisecond updatedAt. A new message must append without allowing a stale
+    // same-version snapshot to delete or alter already committed data.
+    const equalTimeAppend = {
+      ...newerSnapshot,
+      title: 'Equal-time incoming title must not overwrite stored title',
+      messages: [...newerSnapshot.messages, {
+        id: 'search_test_msg_equal_time',
+        role: 'assistant' as const,
+        content: 'Legitimate message appended within the same millisecond.',
+        createdAt: now + 1000
+      }]
+    };
+    await repo.syncConversation(principalA, equalTimeAppend);
+    let afterEqualTime = await repo.getConversation(principalA, 'search_test_conv_amd');
+    assert.equal(afterEqualTime?.messages.length, 4,
+      'Equal-timestamp strict message superset must preserve the new message');
+    assert.equal(afterEqualTime?.title, 'Updated AMD troubleshooting',
+      'Equal-timestamp append must not overwrite already accepted metadata');
+    assert.equal(afterEqualTime?.messages.some(message => message.id === 'search_test_msg_equal_time'), true);
+
+    await repo.syncConversation(principalA, {
+      ...equalTimeAppend,
+      title: 'Stale equal-version snapshot',
+      messages: stableMessages.slice(0, 1)
+    });
+    afterEqualTime = await repo.getConversation(principalA, 'search_test_conv_amd');
+    assert.equal(afterEqualTime?.messages.length, 4,
+      'Stale equal-version replay must not delete newer messages');
+    assert.equal(afterEqualTime?.title, 'Updated AMD troubleshooting');
+
     const deleted = await repo.deleteConversation(principalA, 'search_test_conv_amd');
     assert.equal(deleted, true);
     const afterDelete = await repo.search(principalA, { query: 'AmdTools64' });

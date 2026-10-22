@@ -323,4 +323,89 @@ runTest('Database identity check REJECTS unrecognized project IDs in Staging', (
   assert.equal(res.code, 'PERMANENT_STAGING_DATABASE_MISMATCH');
 });
 
+// 8. Authoritative Import Safety & Staging Cutover Protocol Tests
+const {
+  validateAuthoritativeTargetSafety,
+  validateAuthoritativeSourceSafety
+} = await import('../scripts/import-verified-commercial-identities.js');
+const {
+  CUTOVER_PROTOCOL_STEPS
+} = await import('../scripts/staging-cutover-orchestrator.js');
+
+runTest('Authoritative Target Guard REJECTS Production database URL', () => {
+  assert.throws(
+    () => validateAuthoritativeTargetSafety(prodDirectUrl),
+    /SECURITY FATAL.*Production database/
+  );
+  assert.throws(
+    () => validateAuthoritativeTargetSafety(prodPooledUrl),
+    /SECURITY FATAL.*Production database/
+  );
+});
+
+runTest('Authoritative Target Guard REJECTS Commercial PR #92 database as write target', () => {
+  assert.throws(
+    () => validateAuthoritativeTargetSafety(commercialPr92Url),
+    /SECURITY FATAL.*Target cannot be the Commercial PR #92/
+  );
+});
+
+runTest('Authoritative Target Guard BLOCKS Permanent Staging without owner authorization flag', () => {
+  const origEnv = process.env.AIRA_ALLOW_STAGING_LIVE_IMPORT;
+  delete process.env.AIRA_ALLOW_STAGING_LIVE_IMPORT;
+  try {
+    assert.throws(
+      () => validateAuthoritativeTargetSafety(stagingDirectUrl, { allowPermanentStaging: false }),
+      /SECURITY FATAL.*Writes require explicit owner authorization flag: AIRA_ALLOW_STAGING_LIVE_IMPORT=true/
+    );
+  } finally {
+    if (origEnv !== undefined) process.env.AIRA_ALLOW_STAGING_LIVE_IMPORT = origEnv;
+  }
+});
+
+runTest('Authoritative Target Guard PERMITS Permanent Staging when owner authorization flag is active', () => {
+  assert.doesNotThrow(() => {
+    validateAuthoritativeTargetSafety(stagingDirectUrl, { allowPermanentStaging: true });
+  });
+});
+
+runTest('Authoritative Target Guard PERMITS isolated Neon rehearsal / preview branches', () => {
+  assert.doesNotThrow(() => {
+    validateAuthoritativeTargetSafety(featurePreviewUrl, { allowPermanentStaging: false });
+  });
+});
+
+runTest('Authoritative Source Guard REJECTS Production and Permanent Staging as source', async () => {
+  await assert.rejects(
+    async () => validateAuthoritativeSourceSafety(prodDirectUrl),
+    /SECURITY FATAL.*Source database cannot be Production/
+  );
+  await assert.rejects(
+    async () => validateAuthoritativeSourceSafety(stagingDirectUrl),
+    /SECURITY FATAL.*Source database cannot be Permanent Staging/
+  );
+});
+
+runTest('Staging Cutover Protocol has exactly 9 ordered steps with strict release safeguards', () => {
+  assert.equal(CUTOVER_PROTOCOL_STEPS.length, 9);
+  const expectedStepIds = [
+    '1_STAGING_RELEASE_AUTH',
+    '2_EXACT_COMMIT_VERIFICATION',
+    '3_RECOVERY_CHECKPOINT',
+    '4_PREVENT_CONCURRENT_WRITES',
+    '5_EXECUTE_MIGRATIONS_016_022',
+    '6_EXECUTE_HISTORICAL_IMPORT',
+    '7_VERIFY_DATA_INTEGRITY',
+    '8_CERTIFY_DEPLOYED_APP',
+    '9_PERMIT_REAL_BROWSER_ACCEPTANCE'
+  ];
+  for (let i = 0; i < 9; i++) {
+    assert.equal(CUTOVER_PROTOCOL_STEPS[i].step, i + 1);
+    assert.equal(CUTOVER_PROTOCOL_STEPS[i].id, expectedStepIds[i]);
+    assert.ok(CUTOVER_PROTOCOL_STEPS[i].safeguard.length > 0);
+    assert.ok(CUTOVER_PROTOCOL_STEPS[i].rollbackAction.length > 0);
+  }
+});
+
 console.log(`\nAll ${passed} Database Isolation & Environment Crossover tests PASSED successfully!\n`);
+
