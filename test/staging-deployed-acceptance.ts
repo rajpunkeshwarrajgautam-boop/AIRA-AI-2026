@@ -14,17 +14,13 @@ if (parsed.protocol !== 'https:' || !parsed.hostname.endsWith('.vercel.app') ||
     /^aira-ai-2026\.vercel\.app$/.test(parsed.hostname)) {
   throw new Error('Staging acceptance requires an immutable HTTPS Vercel Preview URL, never production.');
 }
-const channel = process.env.PLAYWRIGHT_CHANNEL || (process.platform === 'win32' ? 'msedge' : undefined);
+const channel = process.env.PLAYWRIGHT_CHANNEL || 'msedge';
 let browser;
 try {
-  browser = await chromium.launch({ headless: true, ...(channel ? { channel } : {}) });
+  browser = await chromium.launch({ headless: true, channel });
 } catch (err) {
-  if (channel) {
-    console.warn(`[WARN] Failed to launch with channel '${channel}', falling back to default chromium:`, (err as Error).message);
-    browser = await chromium.launch({ headless: true });
-  } else {
-    throw err;
-  }
+  console.warn(`[WARN] Failed to launch with channel '${channel}', falling back to default chromium:`, (err as Error).message);
+  browser = await chromium.launch({ headless: true });
 }
 try {
   for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
