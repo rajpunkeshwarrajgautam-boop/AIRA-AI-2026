@@ -3,7 +3,7 @@ import { appendFileSync } from 'node:fs';
 
 const token = process.env.VERCEL_TOKEN ?? '';
 const expected = process.env.EXPECTED_SHA ?? '';
-const teamId = process.env.VERCEL_TEAM_ID || 'team_0IZkX9o2Ab319UsAPW9oq1SL';
+const teamId = process.env.VERCEL_TEAM_ID || '';
 const projectId = 'prj_FZLU4vBIYSsBn28AI6drkpD5WfbH';
 
 assert.ok(token, 'VERCEL_TOKEN repository secret is required for Vercel attestation');
@@ -22,14 +22,27 @@ type Deployment = {
 
 async function requestVercel<T>(url: URL): Promise<T> {
   const response = await fetch(url, { headers: { Authorization: 'Bearer ' + token }, signal: AbortSignal.timeout(20000) });
-  if (!response.ok) throw new Error('Vercel deployment metadata request returned HTTP ' + response.status);
+  if (!response.ok) {
+    if (response.status === 403 && url.searchParams.has('teamId')) {
+      const fallbackUrl = new URL(url.toString());
+      fallbackUrl.searchParams.delete('teamId');
+      const fallbackRes = await fetch(fallbackUrl, { headers: { Authorization: 'Bearer ' + token }, signal: AbortSignal.timeout(20000) });
+      if (fallbackRes.ok) {
+        return fallbackRes.json() as Promise<T>;
+      }
+      const errBody = await fallbackRes.text().catch(() => '');
+      throw new Error(`Vercel deployment metadata request (with and without teamId) returned HTTP ${fallbackRes.status}: ${errBody}`);
+    }
+    const errBody = await response.text().catch(() => '');
+    throw new Error(`Vercel deployment metadata request returned HTTP ${response.status}: ${errBody}`);
+  }
   return response.json() as Promise<T>;
 }
 
 // Discover the immutable URL from the current exact Git SHA.
 // A moving Git branch alias or manually maintained URL is never accepted.
 const listUrl = new URL('https://api.vercel.com/v6/deployments');
-listUrl.searchParams.set('teamId', teamId);
+if (teamId) listUrl.searchParams.set('teamId', teamId);
 listUrl.searchParams.set('projectId', projectId);
 listUrl.searchParams.set('limit', '100');
 
@@ -38,7 +51,7 @@ for (let attempt = 0; attempt < 20; attempt++) {
   const listing = await requestVercel<{deployments?: Deployment[]}>(listUrl);
   const sameCommit = (listing.deployments ?? []).filter(d =>
     d.meta?.githubCommitSha === expected &&
-    d.meta?.githubCommitRef === 'staging' &&
+    (d.meta?.githubCommitRef === 'staging' || d.meta?.githubCommitRef === 'refs/heads/staging') &&
     (!d.projectId || d.projectId === projectId) &&
     d.target !== 'production'
   );
@@ -59,10 +72,10 @@ assert.ok(/^aira-ai-2026-[a-z0-9]+-/.test(parsed.hostname) && parsed.hostname.en
 assert.notEqual(parsed.hostname,'aira-ai-2026.vercel.app');
 
 const inspectUrl = new URL('https://api.vercel.com/v13/deployments/' + encodeURIComponent(deploymentId));
-inspectUrl.searchParams.set('teamId', teamId);
+if (teamId) inspectUrl.searchParams.set('teamId', teamId);
 const detail = await requestVercel<Deployment>(inspectUrl);
 assert.equal(detail.projectId, projectId,'Wrong Vercel project');
-assert.equal(detail.meta?.githubCommitRef,'staging','Wrong Git branch');
+assert.ok(detail.meta?.githubCommitRef === 'staging' || detail.meta?.githubCommitRef === 'refs/heads/staging','Wrong Git branch');
 assert.equal(detail.meta?.githubCommitSha, expected,'Preview is not at exact staging commit');
 assert.notEqual(detail.target,'production','Production deployment cannot satisfy the staging gate');
 assert.equal(detail.readyState ?? detail.state,'READY','Preview is not READY');
