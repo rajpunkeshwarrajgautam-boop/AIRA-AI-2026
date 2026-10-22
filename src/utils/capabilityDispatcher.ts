@@ -29,8 +29,10 @@ export interface VisionGenerationResult {
 
 export interface CreateAutomationParams {
   name: string;
-  trigger?: 'MANUAL' | 'CRON' | 'EVENT' | 'WEBHOOK';
+  trigger?: 'MANUAL' | 'CRON' | 'ONE_TIME' | 'EVENT' | 'WEBHOOK';
   cronExpression?: string;
+  targetRunAt?: number;
+  timezone?: string;
   agentId?: string;
   objective: string;
   clientOperationId?: string;
@@ -229,18 +231,27 @@ export async function createBackendAutomation(params: CreateAutomationParams): P
       headers['X-Client-Operation-Id'] = params.clientOperationId;
     }
 
+    const body: Record<string, any> = {
+      name: params.name,
+      trigger: params.trigger || 'CRON',
+      agentId: params.agentId || 'agent_assistant_v1',
+      objective: params.objective,
+      approvalPolicy: 'autonomous',
+      enabled: true
+    };
+
+    if (params.trigger === 'ONE_TIME') {
+      body.targetRunAt = params.targetRunAt;
+      body.timezone = params.timezone;
+    } else {
+      body.cronExpression = params.cronExpression || '0 9 * * *';
+      body.timezone = params.timezone;
+    }
+
     const res = await authenticatedApiFetch('/api/automations', {
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        name: params.name,
-        trigger: params.trigger || 'CRON',
-        cronExpression: params.cronExpression || '0 9 * * *',
-        agentId: params.agentId || 'agent_assistant_v1',
-        objective: params.objective,
-        approvalPolicy: 'autonomous',
-        enabled: true
-      })
+      body: JSON.stringify(body)
     });
 
     if (res.status === 401) {

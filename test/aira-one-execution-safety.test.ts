@@ -187,42 +187,93 @@ test('Mode Persistence & Cross-User Isolation: Mode scoped to user principal and
   assert.ok(appContent.includes('aira_workspace_mode_${nextUserId || \'guest\'}'));
 });
 
-test('Schedule Resolution Engine: Resolves one-time, daily, weekly, timezone and flags ambiguous', async () => {
+test('Schedule Resolution Engine: Resolves genuine one-time, daily, weekly, and enforces IANA timezones', async () => {
   const { resolveSchedule } = await import('../src/utils/scheduleResolver');
 
-  // 1. One-time schedule is NOT converted to daily
-  const oneTime = resolveSchedule('Automate sending an email tomorrow at 3pm');
+  // 1. One-time schedule is NOT converted to recurring yearly cron
+  const oneTime = resolveSchedule('Automate sending a security report tomorrow at 3pm UTC');
   assert.equal(oneTime.valid, true);
   assert.equal(oneTime.isAmbiguous, false);
   assert.equal(oneTime.scheduleType, 'ONE_TIME');
-  assert.notEqual(oneTime.cronExpression, '0 9 * * *');
+  assert.equal(oneTime.cronExpression, undefined); // Genuinely one-time, no yearly cron
+  assert.ok(oneTime.targetTimestamp && oneTime.targetTimestamp > Date.now());
   assert.ok(oneTime.humanSchedule?.toLowerCase().includes('one-time'));
   assert.ok(oneTime.humanSchedule?.includes('3:00 PM'));
+  assert.ok(oneTime.humanSchedule?.includes('UTC'));
 
-  // 2. Weekly schedule retains correct cron and timezone
-  const weekly = resolveSchedule('Automate a weekly database backup check every Sunday at 3am EST');
-  assert.equal(weekly.valid, true);
-  assert.equal(weekly.isAmbiguous, false);
-  assert.equal(weekly.scheduleType, 'WEEKLY');
-  assert.equal(weekly.cronExpression, '0 3 * * 0');
-  assert.equal(weekly.timezone, 'EST');
-  assert.ok(weekly.humanSchedule?.includes('Sunday'));
-  assert.ok(weekly.humanSchedule?.includes('3:00 AM'));
-  assert.ok(weekly.humanSchedule?.includes('EST'));
+  // 2. Ambiguous timezone abbreviations are rejected (fail closed)
+  const ambiguousTz = resolveSchedule('Automate weekly database backup every Sunday at 3am EST');
+  assert.equal(ambiguousTz.valid, false);
+  assert.equal(ambiguousTz.isAmbiguous, true);
+  assert.ok(ambiguousTz.clarificationPrompt?.includes('EST'));
+  assert.ok(ambiguousTz.clarificationPrompt?.includes('IANA timezone'));
 
-  // 3. Daily schedule
-  const daily = resolveSchedule('Run backup every day at 8:30pm');
+  // 3. Explicit valid IANA timezone is accepted
+  const weeklyIana = resolveSchedule('Automate weekly database backup every Sunday at 3am UTC');
+  assert.equal(weeklyIana.valid, true);
+  assert.equal(weeklyIana.isAmbiguous, false);
+  assert.equal(weeklyIana.scheduleType, 'WEEKLY');
+  assert.equal(weeklyIana.cronExpression, '0 3 * * 0');
+  assert.equal(weeklyIana.timezone, 'UTC');
+  assert.ok(weeklyIana.humanSchedule?.includes('Sunday'));
+  assert.ok(weeklyIana.humanSchedule?.includes('3:00 AM'));
+  assert.ok(weeklyIana.humanSchedule?.includes('UTC'));
+
+  // 4. Daily schedule with IANA timezone
+  const daily = resolveSchedule('Run backup every day at 8:30pm in UTC');
   assert.equal(daily.valid, true);
   assert.equal(daily.scheduleType, 'DAILY');
   assert.equal(daily.cronExpression, '30 20 * * *');
+  assert.equal(daily.timezone, 'UTC');
   assert.ok(daily.humanSchedule?.includes('8:30 PM'));
 
-  // 4. Ambiguous schedule requests clarification and fails closed
+  // 5. Ambiguous schedule requests clarification and fails closed
   const ambiguous = resolveSchedule('Schedule an automation for quarterly financial reports');
   assert.equal(ambiguous.valid, false);
   assert.equal(ambiguous.isAmbiguous, true);
   assert.ok(ambiguous.clarificationPrompt);
   assert.ok(ambiguous.clarificationPrompt.includes('time') || ambiguous.clarificationPrompt.includes('frequency'));
+});
+
+test('Durable Server-Side Idempotency: Returns cached replay on identical payload, rejects conflicting payload with 409', async () => {
+  const { durableIdempotencyManager, IdempotencyConflictError, IdempotencyInProgressError } = await import('../apps/api/src/utils/idempotency');
+
+  const testPrincipal = 'test_user_' + Date.now();
+  const testOpId = 'op_idem_' + Date.now();
+  const payload1 = { prompt: 'Generate diagram of microservices', quality: 'economy', numImages: 1 };
+  const payloadConflict = { prompt: 'Different prompt with same key', quality: 'premium', numImages: 2 };
+
+  // 1. Initial attempt proceeds
+  const first = await durableIdempotencyManager.beginOrGet(testPrincipal, testOpId, 'TEST_OP', payload1);
+  assert.equal(first.isReplay, false);
+
+  // 2. In-progress concurrent attempt with same key throws 409 in-progress
+  await assert.rejects(
+    async () => {
+      await durableIdempotencyManager.beginOrGet(testPrincipal, testOpId, 'TEST_OP', payload1);
+    },
+    (err: any) => err instanceof IdempotencyInProgressError && err.statusCode === 409
+  );
+
+  // 3. Complete the operation
+  const mockResult = { id: 'img_test_1', url: 'https://example.com/img.png', chargedCredits: 12 };
+  await durableIdempotencyManager.complete(testPrincipal, testOpId, 200, mockResult);
+
+  // 4. Exact replay returns original cached result without re-executing
+  const replay = await durableIdempotencyManager.beginOrGet(testPrincipal, testOpId, 'TEST_OP', payload1);
+  assert.equal(replay.isReplay, true);
+  if (replay.isReplay) {
+    assert.equal(replay.statusCode, 200);
+    assert.deepEqual(replay.responseBody, mockResult);
+  }
+
+  // 5. Conflicting payload with same operation key is rejected with HTTP 409 Conflict
+  await assert.rejects(
+    async () => {
+      await durableIdempotencyManager.beginOrGet(testPrincipal, testOpId, 'TEST_OP', payloadConflict);
+    },
+    (err: any) => err instanceof IdempotencyConflictError && err.statusCode === 409
+  );
 });
 
 test('Automation Execution Safety: Resolves schedules, prevents duplicate confirmation, and requires backend HTTP 201 before ACTIVE', () => {

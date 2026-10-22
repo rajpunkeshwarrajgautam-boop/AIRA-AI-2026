@@ -2,8 +2,9 @@ import { AutomationDefinition, AutomationRun } from '../../contracts/src/index.j
 import { db } from '../../db/src/index.js';
 
 export interface AutomationRepository {
-  saveAutomation(automation: AutomationDefinition): Promise<void>;
+  saveAutomation(automation: AutomationDefinition, clientOperationId?: string): Promise<void>;
   getAutomation(id: string): Promise<AutomationDefinition | undefined>;
+  getAutomationByClientOperationId?(principalId: string, clientOperationId: string): Promise<AutomationDefinition | undefined>;
   listAutomations(principalId?: string): Promise<AutomationDefinition[]>;
   getDueAutomations(): Promise<AutomationDefinition[]>;
   updateLastRun(id: string, lastRun: number): Promise<void>;
@@ -107,7 +108,7 @@ export class PostgresAutomationRunRepository implements AutomationRunRepository 
 }
 
 export class PostgresAutomationRepository implements AutomationRepository {
-  async saveAutomation(automation: AutomationDefinition): Promise<void> {
+  async saveAutomation(automation: AutomationDefinition, clientOperationId?: string): Promise<void> {
     await db('automations').insert({
       id: automation.id,
       name: automation.name,
@@ -120,7 +121,10 @@ export class PostgresAutomationRepository implements AutomationRepository {
         objective: automation.objective,
         approvalPolicy: automation.approvalPolicy,
         failureState: automation.failureState,
-        principalId: automation.principalId
+        principalId: automation.principalId,
+        targetRunAt: automation.targetRunAt,
+        timezone: automation.timezone,
+        clientOperationId: clientOperationId || (automation as any).clientOperationId
       }),
       last_run: automation.lastRun || 0,
       createdAt: Date.now(),
@@ -134,6 +138,18 @@ export class PostgresAutomationRepository implements AutomationRepository {
     return this.mapToAutomation(row);
   }
 
+  async getAutomationByClientOperationId(principalId: string, clientOperationId: string): Promise<AutomationDefinition | undefined> {
+    const rows = await db('automations').select('*');
+    for (const row of rows) {
+      const rawParams = row.triggerParams ?? row.triggerparams;
+      const params = typeof rawParams === 'string' ? JSON.parse(rawParams) : rawParams;
+      if (params?.principalId === principalId && params?.clientOperationId === clientOperationId) {
+        return this.mapToAutomation(row);
+      }
+    }
+    return undefined;
+  }
+
   async listAutomations(principalId?: string): Promise<AutomationDefinition[]> {
     const rows = await db('automations').select('*');
     const items = rows.map(this.mapToAutomation);
@@ -144,11 +160,16 @@ export class PostgresAutomationRepository implements AutomationRepository {
   }
 
   async getDueAutomations(): Promise<AutomationDefinition[]> {
-    // We return enabled cron automations; time evaluations will happen in memory for now.
+    // Return enabled automations (both recurring cron and un-run one-time tasks)
     const rows = await db('automations')
-      .where('enabled', true)
-      .whereNot('cron_expression', '');
-    return rows.map(this.mapToAutomation);
+      .where('enabled', true);
+    const items = rows.map(this.mapToAutomation);
+    return items.filter(auto => {
+      if (auto.trigger === 'ONE_TIME') {
+        return (!auto.lastRun || auto.lastRun === 0) && !!auto.targetRunAt;
+      }
+      return !!auto.cronExpression && auto.cronExpression.trim().length > 0;
+    });
   }
 
   async updateLastRun(id: string, lastRun: number): Promise<void> {
@@ -191,7 +212,9 @@ export class PostgresAutomationRepository implements AutomationRepository {
       name: row.name,
       enabled: row.enabled,
       agentId: row.agent_id,
-      cronExpression: row.cron_expression,
+      cronExpression: row.cron_expression || undefined,
+      targetRunAt: params?.targetRunAt ? parseInt(params.targetRunAt, 10) : undefined,
+      timezone: params?.timezone || undefined,
       lastRun: parseInt(row.last_run || 0, 10),
       trigger: params?.trigger || 'CRON',
       conditions: params?.conditions || {},

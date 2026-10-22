@@ -87,6 +87,7 @@ import {
   isAllowedOrigin
 } from './auth/bff-session.js';
 import { isTemporaryDatabaseError } from './utils/storage-errors.js';
+import { durableIdempotencyManager } from './utils/idempotency.js';
 
 export class UntrustedOriginError extends Error {
   readonly status = 403;
@@ -1860,12 +1861,14 @@ app.get('/api/automations', async (req: Request, res: Response) => {
 });
 
 app.post('/api/automations', async (req: Request, res: Response) => {
-  try {
-    const verifiedUserId = req.principal?.userId;
-    if (!verifiedUserId) {
-      return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
-    }
+  const verifiedUserId = req.principal?.userId;
+  if (!verifiedUserId) {
+    return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+  }
 
+  const clientOpId = (req.headers['x-client-operation-id'] as string) || req.body?.clientOperationId;
+
+  try {
     if (req.body?.principalId && req.body.principalId !== verifiedUserId) {
       return res.status(400).json({
         error: 'Forbidden: caller may not specify or forge principalId ownership'
@@ -1877,10 +1880,33 @@ app.post('/api/automations', async (req: Request, res: Response) => {
       principalId: verifiedUserId
     };
     const parsed = AutomationDefinitionSchema.omit({ id: true }).parse(raw);
-    const item = await automationEngine.createAutomation(parsed);
+
+    // Server-side durable principal-scoped idempotency
+    if (clientOpId) {
+      const check = await durableIdempotencyManager.beginOrGet(
+        verifiedUserId,
+        clientOpId,
+        'AUTOMATION_CREATE',
+        parsed
+      );
+      if (check.isReplay) {
+        return res.status(check.statusCode).json(check.responseBody);
+      }
+    }
+
+    const item = await automationEngine.createAutomation(parsed, clientOpId);
+
+    if (clientOpId) {
+      await durableIdempotencyManager.complete(verifiedUserId, clientOpId, 201, item);
+    }
+
     res.status(201).json(item);
   } catch (err: any) {
-    res.status(400).json({ error: err.message });
+    if (clientOpId && verifiedUserId) {
+      await durableIdempotencyManager.fail(verifiedUserId, clientOpId);
+    }
+    const status = err.statusCode || (err.code === 'IDEMPOTENCY_CONFLICT' ? 409 : 400);
+    res.status(status).json({ error: err.message, code: err.code });
   }
 });
 

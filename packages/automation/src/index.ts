@@ -26,13 +26,36 @@ export class AutomationEngine {
     return item;
   }
 
-  public async createAutomation(input: Omit<AutomationDefinition, 'id'>): Promise<AutomationDefinition> {
+  public async createAutomation(
+    input: Omit<AutomationDefinition, 'id'>, 
+    clientOperationId?: string
+  ): Promise<AutomationDefinition> {
+    // Server-side principal-scoped idempotency check
+    if (clientOperationId && input.principalId && this.autoRepo.getAutomationByClientOperationId) {
+      const existing = await this.autoRepo.getAutomationByClientOperationId(input.principalId, clientOperationId);
+      if (existing) {
+        // Verify payload compatibility
+        const isMatch = existing.name === input.name &&
+          existing.objective === input.objective &&
+          existing.trigger === input.trigger &&
+          (existing.cronExpression || '') === (input.cronExpression || '') &&
+          (existing.targetRunAt || 0) === (input.targetRunAt || 0);
+
+        if (!isMatch) {
+          const conflictErr: any = new Error(`IDEMPOTENCY_CONFLICT: Operation ID "${clientOperationId}" already exists with different payload.`);
+          conflictErr.statusCode = 409;
+          throw conflictErr;
+        }
+        return existing;
+      }
+    }
+
     const id = `auto_${crypto.randomUUID().slice(0, 8)}`;
     const automation: AutomationDefinition = {
       ...input,
       id
     };
-    await this.autoRepo.saveAutomation(automation);
+    await this.autoRepo.saveAutomation(automation, clientOperationId);
     return automation;
   }
 
@@ -126,13 +149,27 @@ export class AutomationEngine {
       await this.runRepo.saveRun(claim);
 
       item.lastRun = Date.now();
-      await this.autoRepo.updateLastRun(item.id, item.lastRun);
+      
+      // ONE_TIME LIFECYCLE: Mark one-time automation completed or disabled to ensure at-most-once execution
+      if (item.trigger === 'ONE_TIME') {
+        item.enabled = false;
+        item.failureState = finishedRun?.state === 'COMPLETED' ? 'COMPLETED' : 'FAILED';
+      }
+
+      await this.autoRepo.saveAutomation(item);
       return run.id;
     } catch (err: any) {
       claim.status = 'FAILED';
       claim.error = err.message;
       claim.completedAt = Date.now();
       await this.runRepo.saveRun(claim);
+
+      if (item.trigger === 'ONE_TIME') {
+        item.enabled = false;
+        item.failureState = 'FAILED';
+        await this.autoRepo.saveAutomation(item).catch(() => {});
+      }
+
       throw err;
     }
   }
@@ -164,8 +201,27 @@ export class AutomationEngine {
     const triggered: string[] = [];
     try {
       const dueAutomations = await this.autoRepo.getDueAutomations();
+      const now = Date.now();
 
       for (const auto of dueAutomations) {
+        // Handle genuine ONE_TIME automation
+        if (auto.trigger === 'ONE_TIME') {
+          if (auto.targetRunAt && now >= auto.targetRunAt && (!auto.lastRun || auto.lastRun === 0)) {
+            try {
+              const claim = await this.runRepo.claimRun(auto.id, auto.targetRunAt);
+              if (claim) {
+                console.log(`[AutomationEngine] Triggering one-time automation: ${auto.name}`);
+                const runId = await this.triggerNow(auto.id, auto.targetRunAt);
+                triggered.push(runId);
+              }
+            } catch (e: any) {
+              console.error(`[AutomationEngine] Failed to process one-time automation ${auto.id}:`, e.message);
+            }
+          }
+          continue;
+        }
+
+        // Handle recurring CRON automation
         if (!auto.cronExpression) continue;
         try {
           const interval = parser.parseExpression(auto.cronExpression);

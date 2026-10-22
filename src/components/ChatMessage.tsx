@@ -278,9 +278,15 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                   {message.automationProposal.timezone && (
                     <p><strong>Timezone:</strong> {message.automationProposal.timezone}</p>
                   )}
-                  <p className="text-[10px] font-mono text-claude-muted-light/80 dark:text-slate-400">
-                    <strong>Cadence:</strong> {message.automationProposal.cronExpression}
-                  </p>
+                  {message.automationProposal.cronExpression ? (
+                    <p className="text-[10px] font-mono text-claude-muted-light/80 dark:text-slate-400">
+                      <strong>Cadence:</strong> {message.automationProposal.cronExpression}
+                    </p>
+                  ) : (
+                    <p className="text-[10px] font-mono text-claude-muted-light/80 dark:text-slate-400">
+                      <strong>Execution:</strong> One-time at-most-once execution
+                    </p>
+                  )}
                 </div>
                 <button
                   type="button"

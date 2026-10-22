@@ -73,8 +73,9 @@ export interface Message {
     id?: string;
     name: string;
     objective: string;
-    trigger: 'TIME_SCHEDULE' | 'MANUAL' | 'CRON' | 'EVENT' | 'WEBHOOK';
-    cronExpression: string;
+    trigger: 'TIME_SCHEDULE' | 'MANUAL' | 'CRON' | 'ONE_TIME' | 'EVENT' | 'WEBHOOK';
+    cronExpression?: string;
+    targetRunAt?: number;
     humanSchedule?: string;
     timezone?: string;
     scheduleType?: string;

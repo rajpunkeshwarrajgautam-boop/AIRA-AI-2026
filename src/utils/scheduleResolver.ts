@@ -10,7 +10,29 @@ export interface ScheduleResolution {
   cleanObjective: string;
 }
 
-const TIMEZONES = ['UTC', 'GMT', 'EST', 'EDT', 'CST', 'CDT', 'MST', 'MDT', 'PST', 'PDT', 'IST', 'BST', 'CET', 'CEST'];
+/**
+ * Ambiguous timezone abbreviations that cannot be safely mapped to a unique UTC offset
+ * (e.g. CST can mean US Central, China Standard, or Cuba Standard; IST can mean India, Israel, or Ireland).
+ */
+const AMBIGUOUS_TIMEZONE_ABBREVIATIONS = [
+  'EST', 'EDT', 'CST', 'CDT', 'MST', 'MDT', 'PST', 'PDT', 
+  'IST', 'BST', 'CET', 'CEST', 'AEST', 'AEDT', 'JST', 'KST', 'HKT', 'SGT'
+];
+
+/**
+ * Validates whether a timezone identifier is a recognized, valid IANA timezone name.
+ */
+export function isValidIanaTimezone(tz: string): boolean {
+  if (!tz || typeof tz !== 'string') return false;
+  const upper = tz.toUpperCase();
+  if (upper === 'UTC' || upper === 'GMT') return true;
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const DAYS_OF_WEEK: Record<string, number> = {
   sunday: 0,
@@ -40,18 +62,49 @@ export function resolveSchedule(prompt: string, defaultTimezone = 'UTC'): Schedu
   const trimmed = prompt.trim();
   const lower = trimmed.toLowerCase();
 
-  // Extract explicit timezone if present
-  let detectedTz: string | undefined = undefined;
-  for (const tz of TIMEZONES) {
-    const tzRegex = new RegExp(`\\b${tz}\\b`, 'i');
-    if (tzRegex.test(trimmed)) {
-      detectedTz = tz.toUpperCase();
-      break;
+  // 1. Detect ambiguous timezone abbreviations
+  for (const abbr of AMBIGUOUS_TIMEZONE_ABBREVIATIONS) {
+    const abbrRegex = new RegExp(`\\b${abbr}\\b`, 'i');
+    if (abbrRegex.test(trimmed)) {
+      return {
+        valid: false,
+        isAmbiguous: true,
+        clarificationPrompt: `Ambiguous timezone abbreviation "${abbr.toUpperCase()}" detected. Please specify an unambiguous IANA timezone (for example: "UTC", "America/New_York", "Europe/London", or "Asia/Kolkata").`,
+        cleanObjective: trimmed
+      };
     }
   }
-  const timezone = detectedTz || defaultTimezone;
 
-  // Time parsing: e.g. "3pm", "3:00 PM", "8:30pm", "14:00", "3am"
+  // 2. Extract explicit IANA timezone if specified (e.g. "UTC", "America/New_York", "Asia/Kolkata")
+  let detectedTz: string | undefined = undefined;
+  const tzMatch = trimmed.match(/\b(?:in|timezone|tz\s*:?)\s+([A-Za-z_]+(?:\/[A-Za-z_]+)?)\b/i) ||
+                  trimmed.match(/\b(UTC|GMT|America\/[A-Za-z_]+|Europe\/[A-Za-z_]+|Asia\/[A-Za-z_]+|Australia\/[A-Za-z_]+|Pacific\/[A-Za-z_]+)\b/i);
+
+  if (tzMatch) {
+    const candidateTz = tzMatch[1];
+    if (isValidIanaTimezone(candidateTz)) {
+      detectedTz = candidateTz.toUpperCase() === 'UTC' || candidateTz.toUpperCase() === 'GMT' ? candidateTz.toUpperCase() : candidateTz;
+    } else {
+      return {
+        valid: false,
+        isAmbiguous: true,
+        clarificationPrompt: `Invalid timezone specified ("${candidateTz}"). Please provide a recognized IANA timezone (such as "UTC", "America/New_York", or "Europe/London").`,
+        cleanObjective: trimmed
+      };
+    }
+  }
+
+  const timezone = detectedTz || defaultTimezone;
+  if (!isValidIanaTimezone(timezone)) {
+    return {
+      valid: false,
+      isAmbiguous: true,
+      clarificationPrompt: `Invalid default timezone ("${timezone}"). Please provide a valid IANA timezone.`,
+      cleanObjective: trimmed
+    };
+  }
+
+  // 3. Time parsing: e.g. "3pm", "3:00 PM", "8:30pm", "14:00", "3am"
   let hour: number | null = null;
   let minute: number = 0;
   let timeStr: string | null = null;
@@ -79,14 +132,14 @@ export function resolveSchedule(prompt: string, defaultTimezone = 'UTC'): Schedu
     }
   }
 
-  // Check for One-Time schedule: e.g. "tomorrow at 3pm", "today at 5pm", "once at 10am"
+  // 4. Check for One-Time schedule: e.g. "tomorrow at 3pm", "today at 5pm", "once at 10am"
   const isOneTime = /\b(?:tomorrow|today|once|on\s+[A-Za-z]+\s+\d{1,2})\b/i.test(trimmed);
   if (isOneTime) {
     if (hour === null) {
       return {
         valid: false,
         isAmbiguous: true,
-        clarificationPrompt: 'Please specify the exact time for this one-time automation (for example: "tomorrow at 3:00 PM").',
+        clarificationPrompt: 'Please specify the exact time for this one-time automation (for example: "tomorrow at 3:00 PM UTC").',
         cleanObjective: trimmed
       };
     }
@@ -98,16 +151,25 @@ export function resolveSchedule(prompt: string, defaultTimezone = 'UTC'): Schedu
     }
     targetDate.setHours(hour, minute, 0, 0);
 
-    const dayOfMonth = targetDate.getDate();
-    const month = targetDate.getMonth() + 1; // 1-12
-    const cronExpression = `${minute} ${hour} ${dayOfMonth} ${month} *`;
+    // Validate future timestamp
+    if (targetDate.getTime() <= Date.now()) {
+      return {
+        valid: false,
+        isAmbiguous: true,
+        clarificationPrompt: 'The scheduled one-time execution time must be in the future. Please specify a future date and time.',
+        cleanObjective: trimmed
+      };
+    }
+
     const dateFormatted = targetDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
+    // GENUINE ONE-TIME CONTRACT: Do NOT generate a recurring 5-field yearly cron!
+    // cronExpression is omitted/undefined. targetTimestamp stores the absolute future execution epoch.
     return {
       valid: true,
       isAmbiguous: false,
       scheduleType: 'ONE_TIME',
-      cronExpression,
+      cronExpression: undefined,
       humanSchedule: `One-time execution on ${dateFormatted} at ${timeStr} (${timezone})`,
       targetTimestamp: targetDate.getTime(),
       timezone,

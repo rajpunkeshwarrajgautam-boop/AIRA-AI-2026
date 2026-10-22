@@ -546,12 +546,13 @@ function App() {
     name: string;
     objective: string;
     trigger: any;
-    cronExpression: string;
+    cronExpression?: string;
+    targetRunAt?: number;
     humanSchedule?: string;
     timezone?: string;
   }) => {
     if (!activeChatId) return;
-    const opKey = proposal.id || `${proposal.name}_${proposal.cronExpression}`;
+    const opKey = proposal.id || `${proposal.name}_${proposal.cronExpression || proposal.targetRunAt || 'one_time'}`;
     if (pendingAutomationIdsRef.current.has(opKey)) return;
     pendingAutomationIdsRef.current.add(opKey);
     setConfirmingAutoId(opKey);
@@ -563,6 +564,8 @@ function App() {
         objective: proposal.objective,
         trigger: proposal.trigger,
         cronExpression: proposal.cronExpression,
+        targetRunAt: proposal.targetRunAt,
+        timezone: proposal.timezone,
         clientOperationId: proposal.id,
       });
       setIsLoading(false);
@@ -572,10 +575,11 @@ function App() {
         const confirmMsgId = 'assistant-' + Date.now();
         const scheduleInfo = proposal.humanSchedule ? `\n**Schedule:** ${proposal.humanSchedule}` : '';
         const tzInfo = proposal.timezone ? `\n**Timezone:** ${proposal.timezone}` : '';
+        const triggerDetail = proposal.cronExpression ? ` (\`${proposal.cronExpression}\`)` : (proposal.targetRunAt ? ' (at-most-once)' : '');
         const confirmationMessage: Message = {
           id: confirmMsgId,
           role: 'assistant',
-          content: `[Automation Confirmed & Activated]\n\n**Automation ID:** \`${result.automationId}\`\n**Name:** ${proposal.name}${scheduleInfo}${tzInfo}\n**Trigger:** ${proposal.trigger} (\`${proposal.cronExpression}\`)\n**Status:** ACTIVE\n\nYour automation has been persisted to the server-authoritative engine and scheduled for autonomous execution.`,
+          content: `[Automation Confirmed & Activated]\n\n**Automation ID:** \`${result.automationId}\`\n**Name:** ${proposal.name}${scheduleInfo}${tzInfo}\n**Trigger:** ${proposal.trigger}${triggerDetail}\n**Status:** ACTIVE\n\nYour automation has been persisted to the server-authoritative engine and scheduled for autonomous execution.`,
           timestamp: Date.now(),
           isStreaming: false,
         };
@@ -871,8 +875,9 @@ function App() {
             id: `prop_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
             name: proposalName,
             objective: intent.cleanPrompt,
-            trigger: 'CRON',
-            cronExpression: schedule?.cronExpression || '0 9 * * *',
+            trigger: schedule?.scheduleType === 'ONE_TIME' ? 'ONE_TIME' : 'CRON',
+            cronExpression: schedule?.scheduleType === 'ONE_TIME' ? undefined : (schedule?.cronExpression || '0 9 * * *'),
+            targetRunAt: schedule?.targetTimestamp,
             humanSchedule: schedule?.humanSchedule,
             timezone: schedule?.timezone,
             scheduleType: schedule?.scheduleType,
