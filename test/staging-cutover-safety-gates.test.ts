@@ -1023,8 +1023,6 @@ const mockRestorationOwnerClient: any = {
   }
 };
 
-const prevEnv = process.env.AIRA_TEST_ENVIRONMENT;
-process.env.AIRA_TEST_ENVIRONMENT = 'false';
 let wrongRoleErr: any = null;
 try {
   await verifyStagingPostMaintenanceRestoration(mockRestorationOwnerClient, {
@@ -1033,8 +1031,6 @@ try {
   });
 } catch (err: any) {
   wrongRoleErr = err;
-} finally {
-  process.env.AIRA_TEST_ENVIRONMENT = prevEnv;
 }
 assert.ok(wrongRoleErr, 'Must throw if runtime client is not aira_staging_runtime');
 assert.match(wrongRoleErr.message, /expected 'aira_staging_runtime'/);

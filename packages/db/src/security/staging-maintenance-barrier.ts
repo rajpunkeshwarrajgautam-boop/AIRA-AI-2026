@@ -621,10 +621,9 @@ export async function verifyStagingPostMaintenanceRestoration(
     }
 
     const currentUser = sessionRow.current_user;
-    const isTestEnv = process.env.NODE_ENV === 'test' || process.env.AIRA_TEST_ENVIRONMENT === 'true';
     const isAuthorizedRole = currentUser === 'aira_staging_runtime' || currentUser === 'test_aira_staging_runtime';
 
-    if (!isAuthorizedRole && !isTestEnv) {
+    if (!isAuthorizedRole) {
       throw new Error(`[SECURITY FATAL] Runtime client session current_user is '${currentUser}', expected 'aira_staging_runtime'! Cannot certify runtime restoration with owner role.`);
     }
 
@@ -632,6 +631,7 @@ export async function verifyStagingPostMaintenanceRestoration(
       throw new Error('[SECURITY FATAL] Runtime client session default_transaction_read_only is ON after deactivation!');
     }
 
+    const isTestEnv = process.env.NODE_ENV === 'test' || process.env.AIRA_TEST_ENVIRONMENT === 'true';
     if (!options.allowRehearsalBranch && !isTestEnv) {
       if (sessionRow.neon_project_id && sessionRow.neon_project_id !== STAGING_NEON_PROJECT_ID) {
         throw new Error(`[SECURITY FATAL] Runtime client connected to wrong Neon project: ${sessionRow.neon_project_id}`);
