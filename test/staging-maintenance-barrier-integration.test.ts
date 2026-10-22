@@ -33,12 +33,36 @@ import {
 import {
   auditConnectedRolePrivileges
 } from '../packages/db/src/security/staging-role-separation.js';
+import fs from 'node:fs';
 
-// Resolve target connection string: Rehearsal Neon branch -> CI / local postgres
-const REHEARSAL_NEON_URL = 'postgresql://neondb_owner:npg_iYU0dXlB9rms@ep-steep-wildflower-b3nj385g.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require';
-const LOCAL_CI_URL = process.env.DATABASE_URL || 'postgres://aira:aira@127.0.0.1:5432/aira_db';
+// Resolve environment configuration from .env.local or .env if present
+if (!process.env.TEST_DATABASE_URL && !process.env.REHEARSAL_DATABASE_URL) {
+  for (const envFile of ['.env.local', '.env']) {
+    if (fs.existsSync(envFile)) {
+      try {
+        const content = fs.readFileSync(envFile, 'utf8');
+        const match = content.match(/^(?:TEST_DATABASE_URL|REHEARSAL_DATABASE_URL)=(.*)$/m);
+        if (match && match[1]?.trim()) {
+          process.env.TEST_DATABASE_URL = match[1].trim();
+          break;
+        }
+      } catch {
+        // Ignore file read errors
+      }
+    }
+  }
+}
 
-const targetUrl = process.env.TEST_DATABASE_URL || REHEARSAL_NEON_URL;
+const targetUrl = process.env.TEST_DATABASE_URL || process.env.REHEARSAL_DATABASE_URL || process.env.DATABASE_URL;
+if (!targetUrl) {
+  console.log('\n================================================================================');
+  console.log('   AIRA AI 2026 — REAL POSTGRESQL STAGING BARRIER INTEGRATION SUITE             ');
+  console.log('   NOTICE: Neither TEST_DATABASE_URL nor DATABASE_URL is set.                   ');
+  console.log('   Skipping live PostgreSQL integration suite (requires active database).       ');
+  console.log('================================================================================\n');
+  process.exit(0);
+}
+
 const isNeon = targetUrl.includes('neon.tech');
 
 console.log('\n================================================================================');
