@@ -10,6 +10,7 @@ import {
   Play,
   CheckCircle2,
   ExternalLink,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import type { Message, Artifact } from '../types';
@@ -28,6 +29,10 @@ interface ChatMessageProps {
   onRetry?: () => void;
   onSwitchToAgentAndReview?: (prompt: string) => void;
   onConfirmAutomation?: (proposal: any) => void;
+  onAuthorizeVision?: (proposal: any) => void;
+  onCancelVisionProposal?: (proposalId: string) => void;
+  isConfirmingAutomation?: boolean;
+  isAuthorizingVision?: boolean;
 }
 
 export interface ProvenanceBadgeInfo {
@@ -100,6 +105,10 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
   onRetry,
   onSwitchToAgentAndReview,
   onConfirmAutomation,
+  onAuthorizeVision,
+  onCancelVisionProposal,
+  isConfirmingAutomation,
+  isAuthorizingVision,
 }) => {
   const [copied, setCopied] = useState(false);
   const [richCopyStatus, setRichCopyStatus] = useState<'rich' | 'fallback' | 'failed' | null>(null);
@@ -263,17 +272,66 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                   </div>
                   <span className="text-[10px] font-mono text-aira-gold bg-aira-gold/10 px-1.5 py-0.5 rounded">Confirmation Required</span>
                 </div>
-                <p className="text-[11px] text-claude-muted-light dark:text-slate-300">
-                  <strong>Task:</strong> {message.automationProposal.name} · <strong>Cadence:</strong> {message.automationProposal.cronExpression}
-                </p>
+                <div className="text-[11px] text-claude-muted-light dark:text-slate-300 space-y-1">
+                  <p><strong>Task:</strong> {message.automationProposal.name}</p>
+                  <p><strong>Schedule:</strong> {message.automationProposal.humanSchedule || message.automationProposal.cronExpression}</p>
+                  {message.automationProposal.timezone && (
+                    <p><strong>Timezone:</strong> {message.automationProposal.timezone}</p>
+                  )}
+                  <p className="text-[10px] font-mono text-claude-muted-light/80 dark:text-slate-400">
+                    <strong>Cadence:</strong> {message.automationProposal.cronExpression}
+                  </p>
+                </div>
                 <button
                   type="button"
+                  disabled={isConfirmingAutomation}
                   onClick={() => onConfirmAutomation?.(message.automationProposal)}
-                  className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-aira-gold hover:bg-amber-600 text-white font-medium text-xs transition-colors shadow-sm self-start"
+                  className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-aira-gold hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium text-xs transition-colors shadow-sm self-start"
                 >
                   <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>Confirm and Schedule Automation</span>
+                  <span>{isConfirmingAutomation ? 'Scheduling...' : 'Confirm and Schedule Automation'}</span>
                 </button>
+              </div>
+            )}
+
+            {message.visionProposal && (
+              <div className="mt-3 p-3.5 rounded-xl border border-aira-blue/40 bg-aira-blue/5 dark:bg-aira-blue/10 flex flex-col gap-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-aira-blue">
+                    <ImageIcon className="w-4 h-4" />
+                    <span>Billable Vision Generation · Authorization Required</span>
+                  </div>
+                  <span className="text-[10px] font-mono text-aira-blue bg-aira-blue/10 px-1.5 py-0.5 rounded font-semibold">
+                    {message.visionProposal.estimatedCredits} Credits
+                  </span>
+                </div>
+                <div className="text-[11px] text-claude-muted-light dark:text-slate-300 space-y-1">
+                  <p><strong>Prompt:</strong> &ldquo;{message.visionProposal.prompt}&rdquo;</p>
+                  <p>
+                    <strong>Tariff Disclosure:</strong> {message.visionProposal.estimatedCredits} Credits will be reserved upon authorization ({message.visionProposal.options?.quality === 'premium' ? 'Premium' : 'Standard Economy'}, {message.visionProposal.options?.aspectRatio || '1:1'}).
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    disabled={isAuthorizingVision}
+                    onClick={() => onAuthorizeVision?.(message.visionProposal)}
+                    className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-aira-blue hover:bg-aira-blue/90 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium text-xs transition-colors shadow-sm"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>{isAuthorizingVision ? 'Authorizing & Generating...' : 'Authorize & Generate Image'}</span>
+                  </button>
+                  {onCancelVisionProposal && (
+                    <button
+                      type="button"
+                      disabled={isAuthorizingVision}
+                      onClick={() => onCancelVisionProposal(message.visionProposal!.id)}
+                      className="px-3 py-1.5 rounded-lg border border-claude-border-light dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/5 text-xs text-claude-muted-light dark:text-slate-400 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
               </div>
             )}
 

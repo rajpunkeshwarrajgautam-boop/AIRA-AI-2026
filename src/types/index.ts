@@ -69,7 +69,27 @@ export interface Message {
   modelUsed?: ModelId;
   isStreaming?: boolean;
   builderHandoff?: { prompt: string; conversationId: string };
-  automationProposal?: { name: string; objective: string; trigger: 'TIME_SCHEDULE' | 'EVENT' | 'WEBHOOK'; cronExpression: string };
+  automationProposal?: {
+    id?: string;
+    name: string;
+    objective: string;
+    trigger: 'TIME_SCHEDULE' | 'MANUAL' | 'CRON' | 'EVENT' | 'WEBHOOK';
+    cronExpression: string;
+    humanSchedule?: string;
+    timezone?: string;
+    scheduleType?: string;
+  };
+  visionProposal?: {
+    id: string;
+    prompt: string;
+    estimatedCredits: number;
+    options?: {
+      aspectRatio?: '1:1' | '3:4' | '16:9';
+      quality?: 'economy' | 'premium';
+      resolution?: 'standard' | 'high';
+      numImages?: number;
+    };
+  };
   citations?: Array<{ sourceTitle?: string; uri?: string; snippet?: string }>;
   provenance?: {
     requestedModel: string;

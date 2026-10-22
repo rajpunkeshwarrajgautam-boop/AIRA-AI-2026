@@ -1,5 +1,6 @@
 import type { WorkspaceMode } from '../types';
 import { authenticatedApiFetch } from '../lib/neonAuth';
+import { resolveSchedule, ScheduleResolution } from './scheduleResolver';
 
 export type DetectedCapability = 
   | 'IMAGE_GENERATION'
@@ -23,14 +24,16 @@ export interface VisionGenerationResult {
   error?: string;
   quotaExceeded?: boolean;
   authRequired?: boolean;
+  cancelled?: boolean;
 }
 
 export interface CreateAutomationParams {
   name: string;
-  trigger?: 'TIME_SCHEDULE' | 'EVENT' | 'WEBHOOK';
+  trigger?: 'MANUAL' | 'CRON' | 'EVENT' | 'WEBHOOK';
   cronExpression?: string;
   agentId?: string;
   objective: string;
+  clientOperationId?: string;
 }
 
 export interface CreateAutomationResult {
@@ -62,7 +65,7 @@ export function detectCapabilityIntent(prompt: string, workspaceMode: WorkspaceM
     return {
       capability: 'IMAGE_GENERATION',
       cleanPrompt: clean || trimmed,
-      parameters: { aspectRatio, quality: 'economy', numImages: 1 }
+      parameters: { aspectRatio, quality: 'economy', resolution: 'standard', numImages: 1 }
     };
   }
 
@@ -80,10 +83,11 @@ export function detectCapabilityIntent(prompt: string, workspaceMode: WorkspaceM
   // 3. Automation Intent
   const autoRegex = /\b(?:create|schedule|set\s*up|automate)\s+(?:an?\s+)?(?:automation|scheduled\s+task|workflow|cron)\b|\b(?:automate\s+a|run\s+every|schedule\s+every)\b/i;
   if (autoRegex.test(trimmed)) {
+    const schedule = resolveSchedule(trimmed);
     return {
       capability: 'AUTOMATION',
       cleanPrompt: trimmed,
-      parameters: { isScheduled: true }
+      parameters: { isScheduled: true, schedule }
     };
   }
 
@@ -104,22 +108,56 @@ export function detectCapabilityIntent(prompt: string, workspaceMode: WorkspaceM
 }
 
 /**
+ * Real tariff calculation based on commercial pricing contract (no fabricated charges).
+ */
+export function getVisionTariff(options?: {
+  quality?: 'economy' | 'premium';
+  resolution?: 'standard' | 'high';
+  numImages?: number;
+}): number {
+  const quality = options?.quality || 'economy';
+  const resolution = options?.resolution || 'standard';
+  const numImages = options?.numImages || 1;
+  let perImage = 12;
+  if (quality === 'economy' && resolution === 'standard') perImage = 12;
+  else if (quality === 'economy' && resolution === 'high') perImage = 24;
+  else if (quality === 'premium' && resolution === 'standard') perImage = 100;
+  else if (quality === 'premium' && resolution === 'high') perImage = 125;
+  return perImage * numImages;
+}
+
+/**
  * Invoke the actual Vision backend (/api/vision/generate) with entitlement and billing checks.
+ * Passes the caller's AbortSignal and clientOperationId for network-level cancellation and idempotency.
  */
 export async function executeVisionGeneration(
   prompt: string,
-  options?: { aspectRatio?: '1:1' | '3:4' | '16:9'; quality?: 'economy' | 'premium' }
+  options?: {
+    aspectRatio?: '1:1' | '3:4' | '16:9';
+    quality?: 'economy' | 'premium';
+    resolution?: 'standard' | 'high';
+    numImages?: number;
+    clientOperationId?: string;
+  },
+  signal?: AbortSignal
 ): Promise<VisionGenerationResult> {
   try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (options?.clientOperationId) {
+      headers['X-Client-Operation-Id'] = options.clientOperationId;
+    }
+
     const res = await authenticatedApiFetch('/api/vision/generate', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      signal,
+      headers,
       body: JSON.stringify({
         prompt,
         aspectRatio: options?.aspectRatio || '1:1',
         quality: options?.quality || 'economy',
-        resolution: 'standard',
-        numImages: 1
+        resolution: options?.resolution || 'standard',
+        numImages: options?.numImages || 1,
+        clientOperationId: options?.clientOperationId
       })
     });
 
@@ -167,6 +205,13 @@ export async function executeVisionGeneration(
       error: 'Vision backend completed without generating an image URL.'
     };
   } catch (err: any) {
+    if (signal?.aborted || err.name === 'AbortError') {
+      return {
+        success: false,
+        cancelled: true,
+        error: 'Generation cancelled at transport layer. Note: Provider execution may continue on backend if already dispatched.'
+      };
+    }
     return {
       success: false,
       error: err.message || 'Vision network request error.'
@@ -179,12 +224,17 @@ export async function executeVisionGeneration(
  */
 export async function createBackendAutomation(params: CreateAutomationParams): Promise<CreateAutomationResult> {
   try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (params.clientOperationId) {
+      headers['X-Client-Operation-Id'] = params.clientOperationId;
+    }
+
     const res = await authenticatedApiFetch('/api/automations', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         name: params.name,
-        trigger: params.trigger || 'TIME_SCHEDULE',
+        trigger: params.trigger || 'CRON',
         cronExpression: params.cronExpression || '0 9 * * *',
         agentId: params.agentId || 'agent_assistant_v1',
         objective: params.objective,

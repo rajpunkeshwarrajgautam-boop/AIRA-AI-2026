@@ -187,6 +187,104 @@ test('Mode Persistence & Cross-User Isolation: Mode scoped to user principal and
   assert.ok(appContent.includes('aira_workspace_mode_${nextUserId || \'guest\'}'));
 });
 
+test('Schedule Resolution Engine: Resolves one-time, daily, weekly, timezone and flags ambiguous', async () => {
+  const { resolveSchedule } = await import('../src/utils/scheduleResolver');
+
+  // 1. One-time schedule is NOT converted to daily
+  const oneTime = resolveSchedule('Automate sending an email tomorrow at 3pm');
+  assert.equal(oneTime.valid, true);
+  assert.equal(oneTime.isAmbiguous, false);
+  assert.equal(oneTime.scheduleType, 'ONE_TIME');
+  assert.notEqual(oneTime.cronExpression, '0 9 * * *');
+  assert.ok(oneTime.humanSchedule?.toLowerCase().includes('one-time'));
+  assert.ok(oneTime.humanSchedule?.includes('3:00 PM'));
+
+  // 2. Weekly schedule retains correct cron and timezone
+  const weekly = resolveSchedule('Automate a weekly database backup check every Sunday at 3am EST');
+  assert.equal(weekly.valid, true);
+  assert.equal(weekly.isAmbiguous, false);
+  assert.equal(weekly.scheduleType, 'WEEKLY');
+  assert.equal(weekly.cronExpression, '0 3 * * 0');
+  assert.equal(weekly.timezone, 'EST');
+  assert.ok(weekly.humanSchedule?.includes('Sunday'));
+  assert.ok(weekly.humanSchedule?.includes('3:00 AM'));
+  assert.ok(weekly.humanSchedule?.includes('EST'));
+
+  // 3. Daily schedule
+  const daily = resolveSchedule('Run backup every day at 8:30pm');
+  assert.equal(daily.valid, true);
+  assert.equal(daily.scheduleType, 'DAILY');
+  assert.equal(daily.cronExpression, '30 20 * * *');
+  assert.ok(daily.humanSchedule?.includes('8:30 PM'));
+
+  // 4. Ambiguous schedule requests clarification and fails closed
+  const ambiguous = resolveSchedule('Schedule an automation for quarterly financial reports');
+  assert.equal(ambiguous.valid, false);
+  assert.equal(ambiguous.isAmbiguous, true);
+  assert.ok(ambiguous.clarificationPrompt);
+  assert.ok(ambiguous.clarificationPrompt.includes('time') || ambiguous.clarificationPrompt.includes('frequency'));
+});
+
+test('Automation Execution Safety: Resolves schedules, prevents duplicate confirmation, and requires backend HTTP 201 before ACTIVE', () => {
+  const appPath = path.resolve(process.cwd(), 'src/App.tsx');
+  const appContent = fs.readFileSync(appPath, 'utf8');
+
+  // Verify App.tsx does not hardcode cronExpression: '0 9 * * *' for all proposals
+  assert.ok(!appContent.includes("cronExpression: '0 9 * * *',"));
+
+  // Verify App.tsx checks for ambiguous schedules and asks clarification
+  assert.ok(appContent.includes('isAmbiguous') || appContent.includes('clarificationPrompt'));
+
+  // Verify duplicate submission protection (pending state or in-flight tracking)
+  assert.ok(appContent.includes('pendingAutomationIds') || appContent.includes('confirmingAutoId'));
+
+  // Verify backend confirmation required before displaying ACTIVE
+  assert.ok(appContent.includes('result.success && result.automationId'));
+
+  // Verify ChatMessage renders human schedule and handles pending submission state
+  const chatMsgPath = path.resolve(process.cwd(), 'src/components/ChatMessage.tsx');
+  const chatMsgContent = fs.readFileSync(chatMsgPath, 'utf8');
+  assert.ok(chatMsgContent.includes('humanSchedule') || chatMsgContent.includes('message.automationProposal.humanSchedule'));
+});
+
+test('Billable Vision Authorization: Requires pre-flight authorization card and does not execute immediately', () => {
+  const appPath = path.resolve(process.cwd(), 'src/App.tsx');
+  const appContent = fs.readFileSync(appPath, 'utf8');
+
+  // Verify App.tsx does not immediately call executeVisionGeneration upon detecting IMAGE_GENERATION
+  assert.ok(!appContent.includes("if (intent.capability === 'IMAGE_GENERATION') {\n      setExecutionStatus('Invoking Vision Engine backend"));
+
+  // Verify App.tsx prepares visionProposal
+  assert.ok(appContent.includes('visionProposal: {'));
+  assert.ok(appContent.includes('handleAuthorizeVision'));
+
+  // Verify ChatMessage renders billable authorization card
+  const chatMsgPath = path.resolve(process.cwd(), 'src/components/ChatMessage.tsx');
+  const chatMsgContent = fs.readFileSync(chatMsgPath, 'utf8');
+  assert.ok(chatMsgContent.includes('visionProposal'));
+  assert.ok(chatMsgContent.includes('Authorize & Generate Image') || chatMsgContent.includes('Authorize Image Generation'));
+  assert.ok(chatMsgContent.includes('onAuthorizeVision'));
+});
+
+test('Vision Cancellation & Transport Integrity: Passes AbortSignal, prevents stale state, and isolates on account switch', () => {
+  const dispPath = path.resolve(process.cwd(), 'src/utils/capabilityDispatcher.ts');
+  const dispContent = fs.readFileSync(dispPath, 'utf8');
+
+  // Verify executeVisionGeneration accepts AbortSignal and passes to fetch
+  assert.ok(dispContent.includes('signal?: AbortSignal'));
+  assert.ok(dispContent.includes('signal,'));
+  assert.ok(dispContent.includes('clientOperationId'));
+
+  // Verify distinguishing transport cancellation
+  assert.ok(dispContent.includes('cancelled: true') || dispContent.includes('AbortError'));
+
+  // Verify App.tsx ignores stale vision responses when aborted or switched
+  const appPath = path.resolve(process.cwd(), 'src/App.tsx');
+  const appContent = fs.readFileSync(appPath, 'utf8');
+  assert.ok(appContent.includes('pendingVisionOps') || appContent.includes('isAuthorizingVision'));
+  assert.ok(appContent.includes('authEpochRef.current'));
+});
+
 test('Zero-Emoji Policy: No non-ASCII emojis in modified frontend source files', () => {
   const targetFiles = [
     'src/App.tsx',
@@ -194,6 +292,7 @@ test('Zero-Emoji Policy: No non-ASCII emojis in modified frontend source files',
     'src/components/AgentContextualPanel.tsx',
     'src/utils/aiEngine.ts',
     'src/utils/capabilityDispatcher.ts',
+    'src/utils/scheduleResolver.ts',
     'src/types/index.ts',
   ];
 

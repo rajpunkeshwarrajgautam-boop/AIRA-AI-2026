@@ -19,7 +19,7 @@ import { ConversationSearchOverlay } from './components/ConversationSearchOverla
 import { InlineToast } from './components/InlineToast';
 import { backfillConversationsBestEffort, deleteConversationFromServer, fetchAllConversationsFromServer, fetchConversationFromServer, syncConversationToServer } from './utils/conversationSearch';
 import { useAnimatedFavicon } from './utils/animatedFavicon';
-import { detectCapabilityIntent, executeVisionGeneration, createBackendAutomation } from './utils/capabilityDispatcher';
+import { detectCapabilityIntent, executeVisionGeneration, createBackendAutomation, getVisionTariff } from './utils/capabilityDispatcher';
 import { AgentContextualPanel } from './components/AgentContextualPanel';
 
 // Lazy-loaded heavy auxiliary surfaces to optimize FCP and TTI
@@ -91,6 +91,10 @@ function App() {
   const [cancelBuilderSignal, setCancelBuilderSignal] = useState(0);
   const [isBuilderBusy, setIsBuilderBusy] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window !== 'undefined' ? window.innerWidth >= 1280 : true);
+  const pendingAutomationIdsRef = useRef<Set<string>>(new Set());
+  const [confirmingAutoId, setConfirmingAutoId] = useState<string | null>(null);
+  const pendingVisionOpsRef = useRef<Set<string>>(new Set());
+  const [authorizingVisionId, setAuthorizingVisionId] = useState<string | null>(null);
   const [isProjectsOpen, setIsProjectsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
@@ -165,6 +169,10 @@ function App() {
         }
         activeRunIdRef.current = null;
         activeAssistantMsgIdRef.current = null;
+        pendingAutomationIdsRef.current.clear();
+        pendingVisionOpsRef.current.clear();
+        setConfirmingAutoId(null);
+        setAuthorizingVisionId(null);
         setIsLoading(false);
         setExecutionStatus(null);
         setActiveAgentPrompt(undefined);
@@ -510,9 +518,12 @@ function App() {
         updatedAt: Date.now(),
         messages: c.messages.map(m => m.id === assistantId ? {
           ...m,
-          content: m.content ? `${m.content}\n\n*[Execution cancelled by user]*` : '*[Execution cancelled by user]*',
+          content: m.content
+            ? `${m.content}\n\n*[Execution cancelled by user. Transport connection aborted. Note: If backend provider processing had already begun, billing is reconciled by backend ledger rules.]*`
+            : '*[Execution cancelled by user. Transport connection aborted]*',
           isStreaming: false,
           thinking: m.thinking ? { ...m.thinking, isStreaming: false } : undefined,
+          visionProposal: undefined,
         } : m),
       }));
       activeAssistantMsgIdRef.current = null;
@@ -530,8 +541,20 @@ function App() {
     showToast('Switched to Agent Mode. Review task and sandbox permissions in the panel.');
   }, [setWorkspaceMode, showToast]);
 
-  const handleConfirmAutomation = useCallback(async (proposal: { name: string; objective: string; trigger: any; cronExpression: string }) => {
+  const handleConfirmAutomation = useCallback(async (proposal: {
+    id?: string;
+    name: string;
+    objective: string;
+    trigger: any;
+    cronExpression: string;
+    humanSchedule?: string;
+    timezone?: string;
+  }) => {
     if (!activeChatId) return;
+    const opKey = proposal.id || `${proposal.name}_${proposal.cronExpression}`;
+    if (pendingAutomationIdsRef.current.has(opKey)) return;
+    pendingAutomationIdsRef.current.add(opKey);
+    setConfirmingAutoId(opKey);
     setIsLoading(true);
     setExecutionStatus('Persisting automation to backend engine…');
     try {
@@ -540,16 +563,19 @@ function App() {
         objective: proposal.objective,
         trigger: proposal.trigger,
         cronExpression: proposal.cronExpression,
+        clientOperationId: proposal.id,
       });
       setIsLoading(false);
       setExecutionStatus(null);
 
       if (result.success && result.automationId) {
         const confirmMsgId = 'assistant-' + Date.now();
+        const scheduleInfo = proposal.humanSchedule ? `\n**Schedule:** ${proposal.humanSchedule}` : '';
+        const tzInfo = proposal.timezone ? `\n**Timezone:** ${proposal.timezone}` : '';
         const confirmationMessage: Message = {
           id: confirmMsgId,
           role: 'assistant',
-          content: `[Automation Confirmed & Activated]\n\n**Automation ID:** \`${result.automationId}\`\n**Name:** ${proposal.name}\n**Trigger:** ${proposal.trigger} (\`${proposal.cronExpression}\`)\n**Status:** ACTIVE\n\nYour automation has been persisted to the server-authoritative engine and scheduled for autonomous execution.`,
+          content: `[Automation Confirmed & Activated]\n\n**Automation ID:** \`${result.automationId}\`\n**Name:** ${proposal.name}${scheduleInfo}${tzInfo}\n**Trigger:** ${proposal.trigger} (\`${proposal.cronExpression}\`)\n**Status:** ACTIVE\n\nYour automation has been persisted to the server-authoritative engine and scheduled for autonomous execution.`,
           timestamp: Date.now(),
           isStreaming: false,
         };
@@ -566,7 +592,149 @@ function App() {
       setIsLoading(false);
       setExecutionStatus(null);
       showToast(`Automation error: ${err.message || 'Failed to create automation'}`);
+    } finally {
+      pendingAutomationIdsRef.current.delete(opKey);
+      setConfirmingAutoId(null);
     }
+  }, [activeChatId, showToast]);
+
+  const handleAuthorizeVision = useCallback(async (proposal: NonNullable<Message['visionProposal']>) => {
+    if (!activeChatId) return;
+    if (pendingVisionOpsRef.current.has(proposal.id)) return;
+    pendingVisionOpsRef.current.add(proposal.id);
+    setAuthorizingVisionId(proposal.id);
+
+    const controller = new AbortController();
+    activeAbortControllerRef.current = controller;
+    const currentUserIdAtStart = currentUserId;
+    const epochAtStart = authEpochRef.current;
+
+    setIsLoading(true);
+    setExecutionStatus('Invoking Vision Engine backend…');
+
+    try {
+      const visionRes = await executeVisionGeneration(
+        proposal.prompt,
+        {
+          aspectRatio: proposal.options?.aspectRatio,
+          quality: proposal.options?.quality,
+          resolution: proposal.options?.resolution,
+          numImages: proposal.options?.numImages,
+          clientOperationId: proposal.id,
+        },
+        controller.signal
+      );
+
+      // Verify identity and transport integrity: discard stale results if user switched or operation cancelled
+      if (authEpochRef.current !== epochAtStart || controller.signal.aborted || currentUserId !== currentUserIdAtStart) {
+        setIsLoading(false);
+        setExecutionStatus(null);
+        activeAbortControllerRef.current = null;
+        updateConversation(activeChatId, c => ({
+          ...c,
+          updatedAt: Date.now(),
+          messages: c.messages.map(m => m.visionProposal?.id === proposal.id ? {
+            ...m,
+            content: `${m.content}\n\n*[Vision generation cancelled by user. Stale result suppressed.]*`,
+            visionProposal: undefined,
+          } : m),
+        }));
+        return;
+      }
+
+      setIsLoading(false);
+      setExecutionStatus(null);
+      activeAbortControllerRef.current = null;
+
+      if (visionRes.authRequired) {
+        setIsAuthOpen(true);
+        updateConversation(activeChatId, c => ({
+          ...c,
+          updatedAt: Date.now(),
+          messages: c.messages.map(m => m.visionProposal?.id === proposal.id ? {
+            ...m,
+            content: '[Authentication Required]: Please sign in to generate images with AIRA Vision Engine.',
+            visionProposal: undefined,
+          } : m),
+        }));
+        return;
+      }
+
+      if (visionRes.success && visionRes.imageUrl) {
+        const billingText = typeof visionRes.creditsCharged === 'number'
+          ? `*Generated by AIRA Vision Engine (${visionRes.creditsCharged} credits billed)*`
+          : '*Generated by AIRA Vision Engine*';
+        updateConversation(activeChatId, c => ({
+          ...c,
+          updatedAt: Date.now(),
+          messages: c.messages.map(m => m.visionProposal?.id === proposal.id ? {
+            ...m,
+            content: `Here is the generated image for "${proposal.prompt}":\n\n![${proposal.prompt}](${visionRes.imageUrl})\n\n${billingText}`,
+            visionProposal: undefined,
+          } : m),
+        }));
+      } else if (visionRes.quotaExceeded) {
+        updateConversation(activeChatId, c => ({
+          ...c,
+          updatedAt: Date.now(),
+          messages: c.messages.map(m => m.visionProposal?.id === proposal.id ? {
+            ...m,
+            content: `[Quota Exceeded] **Vision Quota Exceeded**: You need additional credits to generate images.\n\n${visionRes.error || 'Please upgrade your plan or purchase image credits in Account & Billing.'}`,
+            visionProposal: undefined,
+          } : m),
+        }));
+      } else if (visionRes.cancelled) {
+        updateConversation(activeChatId, c => ({
+          ...c,
+          updatedAt: Date.now(),
+          messages: c.messages.map(m => m.visionProposal?.id === proposal.id ? {
+            ...m,
+            content: `${m.content}\n\n*[Vision generation cancelled by user. Transport connection aborted.]*`,
+            visionProposal: undefined,
+          } : m),
+        }));
+      } else {
+        updateConversation(activeChatId, c => ({
+          ...c,
+          updatedAt: Date.now(),
+          messages: c.messages.map(m => m.visionProposal?.id === proposal.id ? {
+            ...m,
+            content: `[Notice] **Vision Notice**: ${visionRes.error || 'Failed to generate visual render.'}`,
+            visionProposal: undefined,
+          } : m),
+        }));
+      }
+    } catch (err: any) {
+      setIsLoading(false);
+      setExecutionStatus(null);
+      activeAbortControllerRef.current = null;
+      updateConversation(activeChatId, c => ({
+        ...c,
+        updatedAt: Date.now(),
+        messages: c.messages.map(m => m.visionProposal?.id === proposal.id ? {
+          ...m,
+          content: `[Error] **Vision Error**: ${err.message || 'Image generation service error.'}`,
+          visionProposal: undefined,
+        } : m),
+      }));
+    } finally {
+      pendingVisionOpsRef.current.delete(proposal.id);
+      setAuthorizingVisionId(null);
+    }
+  }, [activeChatId, currentUserId]);
+
+  const handleCancelVisionProposal = useCallback((proposalId: string) => {
+    if (!activeChatId) return;
+    updateConversation(activeChatId, c => ({
+      ...c,
+      updatedAt: Date.now(),
+      messages: c.messages.map(m => m.visionProposal?.id === proposalId ? {
+        ...m,
+        content: `${m.content}\n\n*[Vision generation cancelled by user]*`,
+        visionProposal: undefined,
+      } : m),
+    }));
+    showToast('Vision generation cancelled');
   }, [activeChatId, showToast]);
 
   const handleSendMessage = async (rawText: string, attachments: Attachment[]) => {
@@ -620,79 +788,27 @@ function App() {
 
     const intent = detectCapabilityIntent(rawText, workspaceMode);
 
-    // 1. VISION ENGINE CAPABILITY DISPATCH
+    // 1. VISION ENGINE CAPABILITY DISPATCH (Requires explicit user authorization and tariff disclosure)
     if (intent.capability === 'IMAGE_GENERATION') {
-      setExecutionStatus('Invoking Vision Engine backend…');
-      try {
-        const visionRes = await executeVisionGeneration(intent.cleanPrompt, intent.parameters);
-        setExecutionStatus(null);
-        setIsLoading(false);
-        activeAbortControllerRef.current = null;
-        activeAssistantMsgIdRef.current = null;
-
-        if (visionRes.authRequired) {
-          setIsAuthOpen(true);
-          updateConversation(id, c => ({
-            ...c,
-            updatedAt: Date.now(),
-            messages: c.messages.map(m => m.id === assistantId ? {
-              ...m,
-              content: '[Authentication Required]: Please sign in to generate images with AIRA Vision Engine.',
-              isStreaming: false,
-            } : m),
-          }));
-          return;
-        }
-
-        if (visionRes.success && visionRes.imageUrl) {
-          const billingText = typeof visionRes.creditsCharged === 'number'
-            ? `*Generated by AIRA Vision Engine (${visionRes.creditsCharged} credits billed)*`
-            : '*Generated by AIRA Vision Engine*';
-          updateConversation(id, c => ({
-            ...c,
-            updatedAt: Date.now(),
-            messages: c.messages.map(m => m.id === assistantId ? {
-              ...m,
-              content: `Here is the generated image for "${intent.cleanPrompt}":\n\n![${intent.cleanPrompt}](${visionRes.imageUrl})\n\n${billingText}`,
-              isStreaming: false,
-            } : m),
-          }));
-        } else if (visionRes.quotaExceeded) {
-          updateConversation(id, c => ({
-            ...c,
-            updatedAt: Date.now(),
-            messages: c.messages.map(m => m.id === assistantId ? {
-              ...m,
-              content: `[Quota Exceeded] **Vision Quota Exceeded**: You need additional credits to generate images.\n\n${visionRes.error || 'Please upgrade your plan or purchase image credits in Account & Billing.'}`,
-              isStreaming: false,
-            } : m),
-          }));
-        } else {
-          updateConversation(id, c => ({
-            ...c,
-            updatedAt: Date.now(),
-            messages: c.messages.map(m => m.id === assistantId ? {
-              ...m,
-              content: `[Notice] **Vision Notice**: ${visionRes.error || 'Failed to generate visual render.'}`,
-              isStreaming: false,
-            } : m),
-          }));
-        }
-      } catch (err: any) {
-        setExecutionStatus(null);
-        setIsLoading(false);
-        activeAbortControllerRef.current = null;
-        activeAssistantMsgIdRef.current = null;
-        updateConversation(id, c => ({
-          ...c,
-          updatedAt: Date.now(),
-          messages: c.messages.map(m => m.id === assistantId ? {
-            ...m,
-            content: `[Error] **Vision Error**: ${err.message || 'Image generation service error.'}`,
-            isStreaming: false,
-          } : m),
-        }));
-      }
+      setIsLoading(false);
+      activeAbortControllerRef.current = null;
+      activeAssistantMsgIdRef.current = null;
+      const tariff = getVisionTariff(intent.parameters);
+      updateConversation(id, c => ({
+        ...c,
+        updatedAt: Date.now(),
+        messages: c.messages.map(m => m.id === assistantId ? {
+          ...m,
+          content: `I prepared a visual generation request for your prompt: **"${intent.cleanPrompt}"**.\n\nImage generation is a billable operation requiring **${tariff} Credits** (${intent.parameters?.quality === 'premium' ? 'Premium' : 'Standard Economy'}, ${intent.parameters?.aspectRatio || '1:1'}). Under AIRA commercial safety controls, billable operations require explicit authorization before execution. Review the details below and authorize generation to proceed.`,
+          isStreaming: false,
+          visionProposal: {
+            id: `vis_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+            prompt: intent.cleanPrompt,
+            estimatedCredits: tariff,
+            options: intent.parameters,
+          },
+        } : m),
+      }));
       return;
     }
 
@@ -723,24 +839,43 @@ function App() {
       setActiveAgentPrompt(intent.cleanPrompt || rawText);
     }
 
-    // 4. AUTOMATION ENGINE CAPABILITY DISPATCH (Requires explicit user confirmation)
+    // 4. AUTOMATION ENGINE CAPABILITY DISPATCH (Requires explicit schedule resolution and user confirmation)
     if (intent.capability === 'AUTOMATION') {
       setIsLoading(false);
       activeAbortControllerRef.current = null;
       activeAssistantMsgIdRef.current = null;
+
+      const schedule = intent.parameters?.schedule;
+      if (schedule && schedule.isAmbiguous) {
+        updateConversation(id, c => ({
+          ...c,
+          updatedAt: Date.now(),
+          messages: c.messages.map(m => m.id === assistantId ? {
+            ...m,
+            content: `I recognized your request to automate a workflow: **"${intent.cleanPrompt}"**.\n\n${schedule.clarificationPrompt || 'Please specify the exact time and frequency for this automation (for example: "every Monday at 9:00 AM" or "tomorrow at 3:00 PM").'}`,
+            isStreaming: false,
+          } : m),
+        }));
+        return;
+      }
+
       const proposalName = intent.cleanPrompt.slice(0, 48) || 'AIRA Automation';
       updateConversation(id, c => ({
         ...c,
         updatedAt: Date.now(),
         messages: c.messages.map(m => m.id === assistantId ? {
           ...m,
-          content: `I prepared an automation workflow for your request: **"${intent.cleanPrompt}"**.\n\nUnder AIRA execution safety standards, automated workflows cannot be scheduled implicitly. Review the proposal below and click **Confirm and Schedule Automation** to register and activate it in the backend engine.`,
+          content: `I prepared an automation workflow for your request: **"${intent.cleanPrompt}"**.\n\n**Proposed Schedule:** ${schedule?.humanSchedule || 'Scheduled automation'}\n\nUnder AIRA execution safety standards, automated workflows cannot be scheduled implicitly. Review the proposal below and click **Confirm and Schedule Automation** to register and activate it in the backend engine.`,
           isStreaming: false,
           automationProposal: {
+            id: `prop_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
             name: proposalName,
             objective: intent.cleanPrompt,
-            trigger: 'TIME_SCHEDULE',
-            cronExpression: '0 9 * * *',
+            trigger: 'CRON',
+            cronExpression: schedule?.cronExpression || '0 9 * * *',
+            humanSchedule: schedule?.humanSchedule,
+            timezone: schedule?.timezone,
+            scheduleType: schedule?.scheduleType,
           },
         } : m),
       }));
@@ -1090,6 +1225,10 @@ function App() {
                     onOpenArtifact={setActiveArtifact}
                     onSwitchToAgentAndReview={handleSwitchToAgentAndReview}
                     onConfirmAutomation={handleConfirmAutomation}
+                    onAuthorizeVision={handleAuthorizeVision}
+                    onCancelVisionProposal={handleCancelVisionProposal}
+                    isConfirmingAutomation={Boolean(confirmingAutoId)}
+                    isAuthorizingVision={Boolean(authorizingVisionId)}
                   />
                 </div>
               ))}
