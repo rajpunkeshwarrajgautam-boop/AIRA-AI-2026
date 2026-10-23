@@ -1041,8 +1041,11 @@ describe('AIRA Vision Billing Integrity & Provider Verification Suite', () => {
     assert.ok(!dbUrl.includes('staging'), 'Test suite must NEVER connect to remote staging database');
     assert.ok(!dbUrl.includes('prod'), 'Test suite must NEVER connect to production database');
 
-    // Must be aira_test_db
-    const isApprovedDisposableDb = row.db_name === 'aira_test_db' || (process.env.CI === 'true' && row.db_name.endsWith('_test_db'));
+    // Gate 5 Invariant: In CI, GitHub Actions runs an ephemeral postgres service container named 'aira_db'.
+    // Outside CI (local development), tests must run exclusively against the disposable 'aira_test_db'.
+    const isApprovedDisposableDb =
+      row.db_name === 'aira_test_db' ||
+      (process.env.CI === 'true' && (row.db_name === 'aira_db' || row.db_name.endsWith('_test_db') || row.db_name.endsWith('_test')));
     assert.strictEqual(
       isApprovedDisposableDb,
       true,
