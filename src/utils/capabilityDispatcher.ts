@@ -25,6 +25,7 @@ export interface VisionGenerationResult {
   quotaExceeded?: boolean;
   authRequired?: boolean;
   cancelled?: boolean;
+  providerUnavailable?: boolean;
 }
 
 export interface CreateAutomationParams {
@@ -56,7 +57,7 @@ export function detectCapabilityIntent(prompt: string, workspaceMode: WorkspaceM
   const lower = trimmed.toLowerCase();
 
   // 1. Image Generation Intent
-  const imageGenRegex = /^(?:generate|create|render|draw|make|paint|produce)\s+(?:an?\s+)?(?:image|picture|photo|artwork|illustration|concept art|visual|render)\s+(?:of\s+)?(.+)/i;
+  const imageGenRegex = /^(?:please\s+)?(?:generate|create|render|draw|make|paint|produce)\s+(?:an?\s+)?(?:(?:16:9|3:4|1:1|landscape|portrait|widescreen|cinematic|detailed|photorealistic)\s+)*(?:image|picture|photo|artwork|illustration|concept art|visual|render)\s+(?:of\s+)?(.+)/i;
   const matchImg = trimmed.match(imageGenRegex);
   if (matchImg) {
     let clean = matchImg[1].trim();
@@ -180,10 +181,20 @@ export async function executeVisionGeneration(
       };
     }
 
+    if (res.status === 503) {
+      const data = await res.json().catch(() => ({}));
+      return {
+        success: false,
+        providerUnavailable: true,
+        error: data.error || 'Vision generation is currently unavailable. No image provider is active or configured. Zero credits were charged.'
+      };
+    }
+
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       return {
         success: false,
+        providerUnavailable: data.providerUnavailable || data.code === 'VISION_PROVIDER_NOT_READY',
         error: data.error || `Vision generation failed with HTTP ${res.status}`
       };
     }
@@ -191,6 +202,12 @@ export async function executeVisionGeneration(
     const data = await res.json();
     const generatedImage = data.images?.[0];
     if (generatedImage?.url) {
+      if (generatedImage.url.startsWith('data:image/svg+xml') || generatedImage.url.includes('<svg')) {
+        return {
+          success: false,
+          error: 'Vision backend returned an invalid placeholder format.'
+        };
+      }
       const confirmedCredits = typeof data.totalCredits === 'number'
         ? data.totalCredits
         : (typeof data.creditsCharged === 'number' ? data.creditsCharged : undefined);

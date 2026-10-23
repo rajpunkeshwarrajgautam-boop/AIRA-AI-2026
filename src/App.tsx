@@ -687,6 +687,16 @@ function App() {
             visionProposal: undefined,
           } : m),
         }));
+      } else if (visionRes.providerUnavailable) {
+        updateConversation(activeChatId, c => ({
+          ...c,
+          updatedAt: Date.now(),
+          messages: c.messages.map(m => m.visionProposal?.id === proposal.id ? {
+            ...m,
+            content: `[Vision Service Unavailable] **Vision Engine Not Ready**: ${visionRes.error || 'No active image generation provider is configured or available. Zero credits were deducted.'}`,
+            visionProposal: undefined,
+          } : m),
+        }));
       } else if (visionRes.cancelled) {
         updateConversation(activeChatId, c => ({
           ...c,

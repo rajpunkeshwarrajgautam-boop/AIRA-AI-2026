@@ -21,6 +21,7 @@ import {
   IdempotencyInProgressError,
   IdempotencyDatabaseError
 } from '../apps/api/src/utils/idempotency.js';
+import { db } from '../packages/db/src/index.js';
 import { AutomationEngine } from '../packages/automation/src/index.js';
 import type {
   AutomationDefinition,
@@ -385,8 +386,8 @@ test('Gate 1.7: Crash recovery recovers abandoned and stale runs into terminal F
 
 test('Gate 2.1: Same principal + key + payload returns original completed result', async () => {
   const manager = new DurableIdempotencyManager(30_000);
-  const principalId = 'user_p21';
-  const opId = 'op_p21';
+  const principalId = 'user_p21_' + Date.now();
+  const opId = 'op_p21_' + Date.now();
   const payload = { prompt: 'Render architecture model', quality: 'standard' };
 
   const first = await manager.beginOrGet(principalId, opId, 'VISION_GEN', payload);
@@ -405,8 +406,8 @@ test('Gate 2.1: Same principal + key + payload returns original completed result
 
 test('Gate 2.2: Same key with different payload returns 409 conflict', async () => {
   const manager = new DurableIdempotencyManager(30_000);
-  const principalId = 'user_p22';
-  const opId = 'op_p22';
+  const principalId = 'user_p22_' + Date.now();
+  const opId = 'op_p22_' + Date.now();
   const payload1 = { prompt: 'Original prompt' };
   const payloadConflict = { prompt: 'Conflicting prompt with altered parameters' };
 
@@ -423,8 +424,8 @@ test('Gate 2.2: Same key with different payload returns 409 conflict', async () 
 
 test('Gate 2.3: In-progress concurrent requests cannot duplicate execution', async () => {
   const manager = new DurableIdempotencyManager(30_000);
-  const principalId = 'user_p23';
-  const opId = 'op_p23';
+  const principalId = 'user_p23_' + Date.now();
+  const opId = 'op_p23_' + Date.now();
   const payload = { test: true };
 
   const first = await manager.beginOrGet(principalId, opId, 'OP_CONCURRENT', payload);
@@ -446,6 +447,11 @@ test('Gate 2.4: Production database failures fail closed (never silent memory do
   const originalEnv = process.env.NODE_ENV;
   process.env.NODE_ENV = 'production';
 
+  const origQuery = (db.client as any).query;
+  (db.client as any).query = async () => {
+    throw new Error('Connection terminated unexpectedly');
+  };
+
   try {
     // If PostgreSQL is not reachable, beginOrGet in production MUST throw IdempotencyDatabaseError (503)
     // rather than silently returning { isReplay: false } with in-memory storage!
@@ -456,14 +462,15 @@ test('Gate 2.4: Production database failures fail closed (never silent memory do
       (err: any) => err instanceof IdempotencyDatabaseError && err.statusCode === 503
     );
   } finally {
+    (db.client as any).query = origQuery;
     process.env.NODE_ENV = originalEnv;
   }
 });
 
 test('Gate 2.5: A conflict cannot delete another valid operation lock', async () => {
   const manager = new DurableIdempotencyManager(30_000);
-  const principalId = 'user_p25';
-  const opId = 'op_p25';
+  const principalId = 'user_p25_' + Date.now();
+  const opId = 'op_p25_' + Date.now();
   const payloadValid = { action: 'book_flight' };
   const payloadAttacker = { action: 'malicious_overwrite' };
 

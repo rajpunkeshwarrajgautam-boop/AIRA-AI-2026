@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { visionService } from './vision/vision-service.js';
+import { visionService, VisionProviderUnavailableError } from './vision/vision-service.js';
 import {
   durableIdempotencyManager,
   IdempotencyConflictError,
@@ -17,6 +17,13 @@ export function createVisionRoutes(): Router {
   const router = Router();
 
   /**
+   * Public/Protected inspection: Real Vision provider readiness status.
+   */
+  router.get('/capabilities', (_req: Request, res: Response) => {
+    res.json(visionService.getProviderStatus());
+  });
+
+  /**
    * Protected: Vision Understand (Visual Q&A, OCR, Diagram parsing).
    */
   router.post('/understand', async (req: Request, res: Response) => {
@@ -32,8 +39,15 @@ export function createVisionRoutes(): Router {
       const result = await visionService.understand(principal.userId, parsed.data);
       res.json(result);
     } catch (err: any) {
-      const status = err.code === 'INSUFFICIENT_CREDITS' ? 402 : 500;
-      res.status(status).json({ error: err.message, code: err.code });
+      const status = err.statusCode || (
+        err.code === 'INSUFFICIENT_CREDITS' ? 402 :
+        (err.code === 'VISION_PROVIDER_NOT_READY' || err instanceof VisionProviderUnavailableError ? 503 : 500)
+      );
+      res.status(status).json({
+        error: err.message,
+        code: err.code || 'VISION_ERROR',
+        providerUnavailable: err.code === 'VISION_PROVIDER_NOT_READY' || err instanceof VisionProviderUnavailableError
+      });
     }
   });
 
@@ -105,10 +119,15 @@ export function createVisionRoutes(): Router {
       }
       const status = err.statusCode || (
         err.code === 'INSUFFICIENT_CREDITS' ? 402 : 
+        (err.code === 'VISION_PROVIDER_NOT_READY' || err instanceof VisionProviderUnavailableError ? 503 :
         (err instanceof IdempotencyConflictError || err instanceof IdempotencyInProgressError || err instanceof IdempotencyUncertainOutcomeError ? 409 : 
-        (err instanceof IdempotencyDatabaseError ? 503 : 500))
+        (err instanceof IdempotencyDatabaseError ? 503 : 500)))
       );
-      res.status(status).json({ error: err.message, code: err.code });
+      res.status(status).json({
+        error: err.message,
+        code: err.code || 'VISION_ERROR',
+        providerUnavailable: err.code === 'VISION_PROVIDER_NOT_READY' || err instanceof VisionProviderUnavailableError
+      });
     }
   });
 
@@ -128,10 +147,18 @@ export function createVisionRoutes(): Router {
       const result = await visionService.edit(principal.userId, parsed.data);
       res.json(result);
     } catch (err: any) {
-      const status = err.code === 'INSUFFICIENT_CREDITS' ? 402 : 500;
-      res.status(status).json({ error: err.message, code: err.code });
+      const status = err.statusCode || (
+        err.code === 'INSUFFICIENT_CREDITS' ? 402 :
+        (err.code === 'VISION_PROVIDER_NOT_READY' || err instanceof VisionProviderUnavailableError ? 503 : 500)
+      );
+      res.status(status).json({
+        error: err.message,
+        code: err.code || 'VISION_ERROR',
+        providerUnavailable: err.code === 'VISION_PROVIDER_NOT_READY' || err instanceof VisionProviderUnavailableError
+      });
     }
   });
 
   return router;
 }
+
