@@ -3,17 +3,26 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-// Target URL and Expected SHA from environment or verified preview deployment
-const PREVIEW_URL = process.env.PREVIEW_URL || 'https://aira-ai-2026-5ryfk6quy-rajpunkeshwarrajgautam-boops-projects.vercel.app';
-const EXPECTED_COMMIT_SHA = process.env.EXPECTED_COMMIT_SHA;
+// Target URL and Expected SHA from environment — STRICTLY MANDATORY FOR RELEASE CERTIFICATION
+const PREVIEW_URL = process.env.PREVIEW_URL?.trim();
+const EXPECTED_COMMIT_SHA = process.env.EXPECTED_COMMIT_SHA?.trim();
+
+if (!PREVIEW_URL) {
+  throw new Error(
+    'RELEASE_CERTIFICATION_GATE_FAILURE: PREVIEW_URL environment variable is mandatory. Hardcoded or stale URL fallbacks are strictly prohibited.'
+  );
+}
+if (!EXPECTED_COMMIT_SHA) {
+  throw new Error(
+    'RELEASE_CERTIFICATION_GATE_FAILURE: EXPECTED_COMMIT_SHA environment variable is mandatory. Deployment certification requires authoritative cryptographic commit provenance.'
+  );
+}
 
 async function runPreviewAcceptance() {
   console.log('================================================================');
   console.log('  AIRA ONE — STRICT PLAYWRIGHT ACCEPTANCE & SAFETY AUDIT');
   console.log(`  Preview Target:  ${PREVIEW_URL}`);
-  if (EXPECTED_COMMIT_SHA) {
-    console.log(`  Expected Commit: ${EXPECTED_COMMIT_SHA}`);
-  }
+  console.log(`  Expected Commit: ${EXPECTED_COMMIT_SHA}`);
   console.log('================================================================\n');
 
   // Ensure screenshot and test artifact directory exists
@@ -39,7 +48,7 @@ async function runPreviewAcceptance() {
 
   try {
     // -------------------------------------------------------------
-    // GATE 3.0: Preview Reachability & Deployment Identity
+    // GATE 3.0: Preview Reachability & Authoritative Deployment Identity
     // -------------------------------------------------------------
     console.log('[1/11] Verifying Preview Reachability & Deployment Identity...');
     const response = await page.goto(PREVIEW_URL, { waitUntil: 'networkidle', timeout: 35000 });
@@ -50,57 +59,72 @@ async function runPreviewAcceptance() {
     assert.ok(title.toLowerCase().includes('aira'), `Page title does not include aira: "${title}"`);
     console.log(`  PASS: Preview loaded successfully (HTTP 200, Title: "${title}")`);
 
-    // Verify Authoritative Deployment Identity if EXPECTED_COMMIT_SHA provided
-    if (EXPECTED_COMMIT_SHA) {
-      console.log(`  Verifying authoritative deployed commit SHA against expected: ${EXPECTED_COMMIT_SHA}`);
-      let deployedSha: string | null = null;
-      let deploymentSource = 'none';
+    // Verify Authoritative Deployment Identity (Mandatory Gate)
+    console.log(`  Verifying authoritative deployed commit SHA against expected: ${EXPECTED_COMMIT_SHA}`);
+    let deployedSha: string | null = null;
+    let deploymentSource = 'none';
 
+    try {
+      const versionUrl = new URL('/api/version', PREVIEW_URL).toString();
+      const verRes = await fetch(versionUrl);
+      if (verRes.ok) {
+        const verData = await verRes.json();
+        if (verData?.commitSha && verData.commitSha !== 'unknown') {
+          deployedSha = verData.commitSha;
+          deploymentSource = '/api/version';
+        }
+      }
+    } catch (e: any) {
+      console.warn(`  Notice: /api/version probe: ${e.message}`);
+    }
+
+    if (!deployedSha) {
       try {
-        const versionUrl = new URL('/api/version', PREVIEW_URL).toString();
-        const verRes = await fetch(versionUrl);
+        const rootVersionUrl = new URL('/version', PREVIEW_URL).toString();
+        const verRes = await fetch(rootVersionUrl);
         if (verRes.ok) {
           const verData = await verRes.json();
           if (verData?.commitSha && verData.commitSha !== 'unknown') {
             deployedSha = verData.commitSha;
-            deploymentSource = '/api/version';
+            deploymentSource = '/version';
           }
         }
       } catch (e: any) {
-        console.warn(`  Notice: /api/version probe: ${e.message}`);
-      }
-
-      if (!deployedSha && process.env.VERCEL_TOKEN) {
-        try {
-          const host = new URL(PREVIEW_URL).hostname;
-          const vRes = await fetch(`https://api.vercel.com/v13/deployments/${host}`, {
-            headers: { Authorization: `Bearer ${process.env.VERCEL_TOKEN}` }
-          });
-          if (vRes.ok) {
-            const vData = await vRes.json();
-            deployedSha = vData?.meta?.githubCommitSha || vData?.gitSource?.sha || null;
-            deploymentSource = 'Vercel API';
-          }
-        } catch (e: any) {
-          console.warn(`  Notice: Vercel API probe: ${e.message}`);
-        }
-      }
-
-      if (deployedSha) {
-        console.log(`  Authoritative deployed SHA (${deploymentSource}): ${deployedSha}`);
-        const matches = deployedSha.toLowerCase().startsWith(EXPECTED_COMMIT_SHA.toLowerCase()) ||
-                        EXPECTED_COMMIT_SHA.toLowerCase().startsWith(deployedSha.toLowerCase());
-        if (!matches) {
-          throw new Error(
-            `PREVIEW_CERTIFICATION_FAILED: Authoritative deployed commit SHA (${deployedSha}) does not match expected commit SHA (${EXPECTED_COMMIT_SHA}). Rejecting stale or mismatched preview deployment.`
-          );
-        }
-        console.log(`  PASS: Authoritative deployed commit SHA matches expected commit (${EXPECTED_COMMIT_SHA})`);
-      } else {
-        const vercelDeployment = response.headers()['x-vercel-id'];
-        console.log(`  INFO: Deployment ID from header: ${vercelDeployment || 'N/A'}`);
+        console.warn(`  Notice: /version probe: ${e.message}`);
       }
     }
+
+    if (!deployedSha && process.env.VERCEL_TOKEN) {
+      try {
+        const host = new URL(PREVIEW_URL).hostname;
+        const vRes = await fetch(`https://api.vercel.com/v13/deployments/${host}`, {
+          headers: { Authorization: `Bearer ${process.env.VERCEL_TOKEN}` }
+        });
+        if (vRes.ok) {
+          const vData = await vRes.json();
+          deployedSha = vData?.meta?.githubCommitSha || vData?.gitSource?.sha || null;
+          deploymentSource = 'Vercel API';
+        }
+      } catch (e: any) {
+        console.warn(`  Notice: Vercel API probe: ${e.message}`);
+      }
+    }
+
+    if (!deployedSha) {
+      throw new Error(
+        `RELEASE_CERTIFICATION_GATE_FAILURE: Authoritative deployment identity is missing or unverifiable for target ${PREVIEW_URL}. Release certification requires unambiguous deployed commit proof.`
+      );
+    }
+
+    console.log(`  Authoritative deployed SHA (${deploymentSource}): ${deployedSha}`);
+    const matches = deployedSha.toLowerCase().startsWith(EXPECTED_COMMIT_SHA.toLowerCase()) ||
+                    EXPECTED_COMMIT_SHA.toLowerCase().startsWith(deployedSha.toLowerCase());
+    if (!matches) {
+      throw new Error(
+        `PREVIEW_CERTIFICATION_FAILED: Authoritative deployed commit SHA (${deployedSha}) does not match expected commit SHA (${EXPECTED_COMMIT_SHA}). Rejecting stale or mismatched preview deployment.`
+      );
+    }
+    console.log(`  PASS: Authoritative deployed commit SHA matches expected commit (${EXPECTED_COMMIT_SHA})`);
 
     await page.screenshot({ path: path.join(artifactDir, '01-initial-chat-mode.png') });
 

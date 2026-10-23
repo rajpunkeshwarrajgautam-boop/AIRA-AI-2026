@@ -33,6 +33,15 @@ export class IdempotencyInProgressError extends Error {
   }
 }
 
+export class IdempotencyUncertainOutcomeError extends Error {
+  readonly statusCode = 409;
+  readonly code = 'IDEMPOTENCY_UNCERTAIN_OUTCOME';
+  constructor(message = 'Operation outcome is uncertain: external side effect was committed. Re-execution is blocked to prevent duplicate billing or executions.') {
+    super(message);
+    this.name = 'IdempotencyUncertainOutcomeError';
+  }
+}
+
 export class IdempotencyDatabaseError extends Error {
   readonly statusCode = 503;
   readonly code = 'IDEMPOTENCY_DATABASE_UNAVAILABLE';
@@ -40,6 +49,12 @@ export class IdempotencyDatabaseError extends Error {
     super(message);
     this.name = 'IdempotencyDatabaseError';
   }
+}
+
+export interface FailOptions {
+  sideEffectCommitted?: boolean;
+  result?: any;
+  error?: string;
 }
 
 function canonicalizePayload(val: any): any {
@@ -59,10 +74,11 @@ export function computePayloadHash(payload: any): string {
   return crypto.createHash('sha256').update(canonical).digest('hex');
 }
 
-export const DEFAULT_LOCK_LEASE_MS = 60_000; // 60-second lease for crash/abandonment recovery
+export const DEFAULT_LOCK_LEASE_MS = 60_000; // 60-second default lease for crash/abandonment recovery
 
 export class DurableIdempotencyManager {
   private memoryCache = new Map<string, IdempotencyRecord>();
+  private activeInFlight = new Set<string>();
   private lockLeaseMs: number;
 
   constructor(lockLeaseMs = DEFAULT_LOCK_LEASE_MS) {
@@ -85,12 +101,19 @@ export class DurableIdempotencyManager {
     principalId: string,
     operationId: string,
     operationType: string,
-    payload: any
+    payload: any,
+    customLeaseMs?: number
   ): Promise<{ isReplay: false } | { isReplay: true; statusCode: number; responseBody: any }> {
     const key = `${principalId}:${operationId}`;
     const payloadHash = computePayloadHash(payload);
     const now = Date.now();
-    const lockedUntil = now + this.lockLeaseMs;
+    const leaseDuration = customLeaseMs ?? this.lockLeaseMs;
+    const lockedUntil = now + leaseDuration;
+
+    // Concurrency invariant: If operation is actively executing in this process, reject immediately
+    if (this.activeInFlight.has(key)) {
+      throw new IdempotencyInProgressError('Operation with this client operation ID is actively executing.');
+    }
 
     // Check fast-path memory cache first (within same process instance)
     const cached = this.memoryCache.get(key);
@@ -102,11 +125,23 @@ export class DurableIdempotencyManager {
         const parsed = cached.response_body ? JSON.parse(cached.response_body) : {};
         return { isReplay: true, statusCode: cached.response_status, responseBody: parsed };
       }
+      if (cached.status === 'FAILED') {
+        let isUncertain = false;
+        try {
+          const parsed = cached.response_body ? JSON.parse(cached.response_body) : {};
+          if (parsed.code === 'UNCERTAIN_OUTCOME' || parsed.uncertainOutcome === true) {
+            isUncertain = true;
+          }
+        } catch {}
+        if (isUncertain) {
+          throw new IdempotencyUncertainOutcomeError();
+        }
+      }
       if (cached.status === 'IN_PROGRESS') {
-        if (now <= (cached.locked_until || 0)) {
+        if (this.activeInFlight.has(key) || now <= (cached.locked_until || 0)) {
           throw new IdempotencyInProgressError();
         }
-        // Memory cache lock expired; will attempt recovery below
+        // Memory cache lock expired; will attempt recovery via DB below
       }
     }
 
@@ -124,15 +159,29 @@ export class DurableIdempotencyManager {
           return { isReplay: true, statusCode: row.response_status, responseBody: parsed };
         }
 
+        if (row.status === 'FAILED') {
+          let isUncertain = false;
+          try {
+            const parsed = row.response_body ? JSON.parse(row.response_body) : {};
+            if (parsed.code === 'UNCERTAIN_OUTCOME' || parsed.uncertainOutcome === true) {
+              isUncertain = true;
+            }
+          } catch {}
+          if (isUncertain) {
+            throw new IdempotencyUncertainOutcomeError();
+          }
+        }
+
         if (row.status === 'IN_PROGRESS') {
           const currentLock = parseInt(row.locked_until || '0', 10);
-          if (now <= currentLock) {
-            // Actively being processed by concurrent instance
+          if (this.activeInFlight.has(key) || now <= currentLock) {
+            // Actively being processed by this or a concurrent instance
             throw new IdempotencyInProgressError();
           }
 
           // Defined recovery policy for abandoned operations:
-          // The previous attempt timed out / crashed. Payload matches, so atomically renew lease.
+          // The previous attempt timed out / crashed and is not active in this process.
+          // Payload matches, so atomically renew lease.
           const renewed = await db('idempotent_operations')
             .where({ key, status: 'IN_PROGRESS', locked_until: row.locked_until })
             .update({
@@ -141,6 +190,7 @@ export class DurableIdempotencyManager {
             });
 
           if (renewed > 0) {
+            this.activeInFlight.add(key);
             this.memoryCache.set(key, {
               ...row,
               status: 'IN_PROGRESS',
@@ -172,6 +222,7 @@ export class DurableIdempotencyManager {
 
       try {
         await db('idempotent_operations').insert(record);
+        this.activeInFlight.add(key);
         this.memoryCache.set(key, record);
         return { isReplay: false };
       } catch (insertErr: any) {
@@ -193,7 +244,7 @@ export class DurableIdempotencyManager {
         throw insertErr;
       }
     } catch (err: any) {
-      if (err instanceof IdempotencyConflictError || err instanceof IdempotencyInProgressError) {
+      if (err instanceof IdempotencyConflictError || err instanceof IdempotencyInProgressError || err instanceof IdempotencyUncertainOutcomeError) {
         throw err;
       }
 
@@ -219,9 +270,71 @@ export class DurableIdempotencyManager {
         created_at: now,
         updated_at: now
       };
+      this.activeInFlight.add(key);
       this.memoryCache.set(key, memRecord);
       return { isReplay: false };
     }
+  }
+
+  /**
+   * Heartbeat: Extend the lease of an actively running operation so long-running
+   * processes (such as vision generation) never lose their lock to timeouts.
+   */
+  async extendLease(principalId: string, operationId: string, extensionMs = 120_000): Promise<boolean> {
+    const key = `${principalId}:${operationId}`;
+    const now = Date.now();
+    const lockedUntil = now + extensionMs;
+
+    const mem = this.memoryCache.get(key);
+    if (mem && mem.status === 'IN_PROGRESS') {
+      mem.locked_until = lockedUntil;
+      mem.updated_at = now;
+    }
+
+    try {
+      const updated = await db('idempotent_operations')
+        .where({ key, status: 'IN_PROGRESS' })
+        .update({
+          locked_until: lockedUntil,
+          updated_at: now
+        });
+      return updated > 0;
+    } catch (err: any) {
+      if (this.isProduction()) {
+        process.stderr.write(`[IDEMPOTENCY_HEARTBEAT_WARN] Failed to extend lease for ${key}: ${err.message}\n`);
+      }
+      return false;
+    }
+  }
+
+  /**
+   * Start periodic lease renewal in the background during long-running tasks.
+   * Returns a handle with a .stop() method.
+   */
+  startHeartbeat(
+    principalId: string,
+    operationId: string,
+    intervalMs = 15_000,
+    extensionMs = 120_000
+  ): { stop: () => void } {
+    const key = `${principalId}:${operationId}`;
+    const timer = setInterval(() => {
+      if (!this.activeInFlight.has(key)) {
+        clearInterval(timer);
+        return;
+      }
+      this.extendLease(principalId, operationId, extensionMs).catch(() => {});
+    }, intervalMs);
+
+    if (timer.unref) {
+      timer.unref();
+    }
+
+    return {
+      stop: () => {
+        clearInterval(timer);
+      }
+    };
   }
 
   /**
@@ -234,6 +347,7 @@ export class DurableIdempotencyManager {
     responseBody: any
   ): Promise<void> {
     const key = `${principalId}:${operationId}`;
+    this.activeInFlight.delete(key);
     const now = Date.now();
     const bodyStr = JSON.stringify(responseBody);
 
@@ -255,7 +369,9 @@ export class DurableIdempotencyManager {
           updated_at: now
         });
     } catch (err: any) {
+      // Invariant: side effect already succeeded. Never delete or revert record.
       if (this.isProduction()) {
+        process.stderr.write(`[IDEMPOTENCY_CRITICAL] Failed to persist completed state in DB for ${key}: ${err.message}\n`);
         throw new IdempotencyDatabaseError(`Failed to persist completed idempotency state: ${err.message}`);
       }
     }
@@ -263,17 +379,81 @@ export class DurableIdempotencyManager {
 
   /**
    * Release lease on error so legitimate retries can execute cleanly.
-   * Safety invariant: Only deletes the row if it is still 'IN_PROGRESS'.
-   * A conflict or failed downstream request can NEVER delete a completed operation's record.
+   * Safety invariant: If an external side effect (e.g. credit deduction, image generation)
+   * has already committed, the record is NEVER deleted or released. Instead, it is marked
+   * COMPLETED (if result is available) or FAILED with UNCERTAIN_OUTCOME to permanently
+   * prevent duplicate billing or re-execution.
    */
-  async fail(principalId: string, operationId: string): Promise<void> {
+  async fail(principalId: string, operationId: string, options?: FailOptions): Promise<void> {
     const key = `${principalId}:${operationId}`;
+    this.activeInFlight.delete(key);
+
+    if (options?.sideEffectCommitted) {
+      const now = Date.now();
+      // External side effect committed! Never delete or release this operation record.
+      if (options.result) {
+        const bodyStr = JSON.stringify(options.result);
+        const mem = this.memoryCache.get(key);
+        if (mem) {
+          mem.status = 'COMPLETED';
+          mem.response_status = 200;
+          mem.response_body = bodyStr;
+          mem.updated_at = now;
+        }
+        try {
+          await db('idempotent_operations')
+            .where({ key })
+            .update({
+              status: 'COMPLETED',
+              response_status: 200,
+              response_body: bodyStr,
+              updated_at: now
+            });
+          return;
+        } catch (dbErr: any) {
+          process.stderr.write(`[IDEMPOTENCY_WARN] Failed to write fallback COMPLETED: ${dbErr.message}\n`);
+        }
+      }
+
+      // Mark as UNCERTAIN_OUTCOME to permanently lock against duplicate billing/retries
+      const uncertainBody = JSON.stringify({
+        error: 'UNCERTAIN_OUTCOME: External side effect committed but outcome persistence failed. Re-execution blocked to prevent duplicate billing.',
+        code: 'UNCERTAIN_OUTCOME',
+        uncertainOutcome: true,
+        details: options.error || 'Side effect committed'
+      });
+
+      const mem = this.memoryCache.get(key);
+      if (mem) {
+        mem.status = 'FAILED';
+        mem.response_status = 500;
+        mem.response_body = uncertainBody;
+        mem.updated_at = now;
+      }
+
+      try {
+        await db('idempotent_operations')
+          .where({ key })
+          .update({
+            status: 'FAILED',
+            response_status: 500,
+            response_body: uncertainBody,
+            updated_at: now
+          });
+      } catch (dbErr: any) {
+        process.stderr.write(`[IDEMPOTENCY_CRITICAL] Failed to mark UNCERTAIN_OUTCOME in DB: ${dbErr.message}\n`);
+      }
+      return;
+    }
+
+    // Normal failure BEFORE any external side effect committed:
     const mem = this.memoryCache.get(key);
     if (mem && mem.status !== 'IN_PROGRESS') {
-      // Invariant: Never delete a COMPLETED record from memory cache
+      // Invariant: Never delete a COMPLETED record
       return;
     }
     this.memoryCache.delete(key);
+
     try {
       await db('idempotent_operations')
         .where({ key, status: 'IN_PROGRESS' })
@@ -283,6 +463,61 @@ export class DurableIdempotencyManager {
         throw new IdempotencyDatabaseError(`Failed to clear in-progress idempotency lease: ${err.message}`);
       }
     }
+  }
+
+  /**
+   * Reconcile an uncertain outcome record (e.g. following admin or billing audit).
+   */
+  async reconcile(
+    principalId: string,
+    operationId: string,
+    resolution: { status: 'COMPLETED'; statusCode: number; responseBody: any } | { status: 'FAILED'; reason: string }
+  ): Promise<void> {
+    const key = `${principalId}:${operationId}`;
+    const now = Date.now();
+    const statusCode = resolution.status === 'COMPLETED' ? resolution.statusCode : 400;
+    const bodyStr = resolution.status === 'COMPLETED' 
+      ? JSON.stringify(resolution.responseBody)
+      : JSON.stringify({ error: resolution.reason, reconciled: true });
+
+    const mem = this.memoryCache.get(key);
+    let existingHash = mem?.payload_hash;
+    let existingType = mem?.operation_type || 'RECONCILED';
+    let createdAt = mem?.created_at || now;
+
+    if (!existingHash) {
+      try {
+        const row = await db('idempotent_operations').where({ key }).first();
+        if (row) {
+          existingHash = row.payload_hash;
+          existingType = row.operation_type;
+          createdAt = row.created_at;
+        }
+      } catch {}
+    }
+
+    this.memoryCache.set(key, {
+      key,
+      principal_id: principalId,
+      operation_id: operationId,
+      operation_type: existingType,
+      payload_hash: existingHash || '',
+      status: resolution.status,
+      response_status: statusCode,
+      response_body: bodyStr,
+      locked_until: 0,
+      created_at: createdAt,
+      updated_at: now
+    });
+
+    await db('idempotent_operations')
+      .where({ key })
+      .update({
+        status: resolution.status,
+        response_status: statusCode,
+        response_body: bodyStr,
+        updated_at: now
+      });
   }
 }
 

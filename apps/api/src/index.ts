@@ -91,6 +91,7 @@ import {
   durableIdempotencyManager,
   IdempotencyConflictError,
   IdempotencyInProgressError,
+  IdempotencyUncertainOutcomeError,
   IdempotencyDatabaseError
 } from './utils/idempotency.js';
 
@@ -261,7 +262,7 @@ app.post('/api/auth/sign-out', (req: Request, res: Response) => {
 });
 
 // Authoritative deployment identity endpoint for Preview and Release certification
-app.get('/api/version', (_req: Request, res: Response) => {
+const versionHandler = (_req: Request, res: Response) => {
   res.json({
     status: 'ok',
     version: '1.0.0',
@@ -269,7 +270,9 @@ app.get('/api/version', (_req: Request, res: Response) => {
     deploymentUrl: process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'unknown',
     environment: process.env.NODE_ENV || 'production'
   });
-});
+};
+app.get('/api/version', versionHandler);
+app.get('/version', versionHandler);
 
 // Public bootstrap endpoint used by the browser before protected API calls.
 // It issues or refreshes an opaque, signed, HttpOnly session cookie.
@@ -1897,6 +1900,9 @@ app.post('/api/automations', async (req: Request, res: Response) => {
     };
     const parsed = AutomationDefinitionSchema.omit({ id: true }).parse(raw);
 
+    let sideEffectCommitted = false;
+    let automationResult: any = null;
+
     // Server-side durable principal-scoped idempotency
     if (clientOpId) {
       const check = await durableIdempotencyManager.beginOrGet(
@@ -1910,20 +1916,29 @@ app.post('/api/automations', async (req: Request, res: Response) => {
       }
     }
 
-    const item = await automationEngine.createAutomation(parsed, clientOpId);
+    automationResult = await automationEngine.createAutomation(parsed, clientOpId);
+    sideEffectCommitted = true;
 
     if (clientOpId) {
-      await durableIdempotencyManager.complete(verifiedUserId, clientOpId, 201, item);
+      await durableIdempotencyManager.complete(verifiedUserId, clientOpId, 201, automationResult);
     }
 
-    res.status(201).json(item);
+    res.status(201).json(automationResult);
   } catch (err: any) {
     if (clientOpId && verifiedUserId) {
       if (!(err instanceof IdempotencyConflictError || err instanceof IdempotencyInProgressError)) {
-        await durableIdempotencyManager.fail(verifiedUserId, clientOpId).catch(() => {});
+        await durableIdempotencyManager.fail(verifiedUserId, clientOpId, {
+          sideEffectCommitted,
+          result: automationResult,
+          error: err.message
+        }).catch(() => {});
       }
     }
-    const status = err.statusCode || (err.code === 'IDEMPOTENCY_CONFLICT' || err.code === 'IDEMPOTENCY_IN_PROGRESS' ? 409 : (err.code === 'IDEMPOTENCY_DATABASE_UNAVAILABLE' ? 503 : 400));
+    const status = err.statusCode || (
+      err.code === 'IDEMPOTENCY_CONFLICT' || err.code === 'IDEMPOTENCY_IN_PROGRESS' || err.code === 'IDEMPOTENCY_UNCERTAIN_OUTCOME'
+        ? 409
+        : (err.code === 'IDEMPOTENCY_DATABASE_UNAVAILABLE' ? 503 : 400)
+    );
     res.status(status).json({ error: err.message, code: err.code });
   }
 });

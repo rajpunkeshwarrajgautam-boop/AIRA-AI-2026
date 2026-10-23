@@ -4,6 +4,7 @@ import {
   durableIdempotencyManager,
   IdempotencyConflictError,
   IdempotencyInProgressError,
+  IdempotencyUncertainOutcomeError,
   IdempotencyDatabaseError
 } from './utils/idempotency.js';
 import {
@@ -39,6 +40,8 @@ export function createVisionRoutes(): Router {
   /**
    * Protected: Vision Generate (1 or 2 images, aspect ratios, economy/premium).
    * Enforces principal-scoped durable server-side idempotency against double-billing.
+   * Uses 180s lease + active heartbeat renewal during long-running diffusion.
+   * If generation side effect commits but persistence fails, locks against duplicate billing.
    */
   router.post('/generate', async (req: Request, res: Response) => {
     const principal = req.principal;
@@ -51,33 +54,60 @@ export function createVisionRoutes(): Router {
       return res.status(400).json({ error: 'Invalid generation parameters', details: parsed.error.issues });
     }
 
+    let heartbeat: { stop: () => void } | null = null;
+    let sideEffectCommitted = false;
+    let generationResult: any = null;
+
     try {
       if (clientOpId) {
+        // 180s initial lease for multimodal diffusion generation
         const check = await durableIdempotencyManager.beginOrGet(
           principal.userId,
           clientOpId,
           'VISION_GENERATE',
-          parsed.data
+          parsed.data,
+          180_000
         );
         if (check.isReplay) {
           return res.status(check.statusCode).json(check.responseBody);
         }
+        // Active heartbeat extends lease by 120s every 15s while request is active
+        heartbeat = durableIdempotencyManager.startHeartbeat(principal.userId, clientOpId, 15_000, 120_000);
       }
 
-      const result = await visionService.generate(principal.userId, parsed.data);
+      generationResult = await visionService.generate(principal.userId, parsed.data);
+      sideEffectCommitted = true;
+
+      if (heartbeat) {
+        heartbeat.stop();
+        heartbeat = null;
+      }
 
       if (clientOpId) {
-        await durableIdempotencyManager.complete(principal.userId, clientOpId, 200, result);
+        await durableIdempotencyManager.complete(principal.userId, clientOpId, 200, generationResult);
       }
 
-      res.json(result);
+      res.json(generationResult);
     } catch (err: any) {
+      if (heartbeat) {
+        heartbeat.stop();
+        heartbeat = null;
+      }
+
       if (clientOpId) {
         if (!(err instanceof IdempotencyConflictError || err instanceof IdempotencyInProgressError)) {
-          await durableIdempotencyManager.fail(principal.userId, clientOpId).catch(() => {});
+          await durableIdempotencyManager.fail(principal.userId, clientOpId, {
+            sideEffectCommitted,
+            result: generationResult,
+            error: err.message
+          }).catch(() => {});
         }
       }
-      const status = err.statusCode || (err.code === 'INSUFFICIENT_CREDITS' ? 402 : (err instanceof IdempotencyConflictError || err instanceof IdempotencyInProgressError ? 409 : (err instanceof IdempotencyDatabaseError ? 503 : 500)));
+      const status = err.statusCode || (
+        err.code === 'INSUFFICIENT_CREDITS' ? 402 : 
+        (err instanceof IdempotencyConflictError || err instanceof IdempotencyInProgressError || err instanceof IdempotencyUncertainOutcomeError ? 409 : 
+        (err instanceof IdempotencyDatabaseError ? 503 : 500))
+      );
       res.status(status).json({ error: err.message, code: err.code });
     }
   });
