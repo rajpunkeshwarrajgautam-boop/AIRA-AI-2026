@@ -1875,6 +1875,12 @@ app.post('/api/agents/:id/run', async (req: Request, res: Response) => {
 // -----------------------------------------------------------------------
 // Automations — Full CRUD (Audit 14 & 12 Ownership Enforced)
 // -----------------------------------------------------------------------
+app.get('/api/automations/capabilities', async (_req: Request, res: Response) => {
+  res.json({
+    scheduler: automationEngine.getSchedulerStatus()
+  });
+});
+
 app.get('/api/automations', async (req: Request, res: Response) => {
   res.json(await automationEngine.listAutomations(req.principal?.userId));
 });
@@ -1985,10 +1991,15 @@ app.delete('/api/automations/:id', async (req: Request, res: Response) => {
 
 app.post('/api/automations/:id/trigger', async (req: Request, res: Response) => {
   try {
-    const runId = await automationEngine.triggerNow(req.params.id, req.principal?.userId);
+    const verifiedUserId = req.principal?.userId;
+    if (!verifiedUserId) {
+      return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+    }
+    const runId = await automationEngine.triggerNow(req.params.id, verifiedUserId);
     res.json({ runId, status: 'TRIGGERED' });
   } catch (err: any) {
-    res.status(400).json({ error: err.message });
+    const status = err.message?.includes('ACCESS_DENIED') ? 403 : 400;
+    res.status(status).json({ error: err.message });
   }
 });
 
@@ -2005,31 +2016,71 @@ app.get('/api/automations/:id/runs', async (req: Request, res: Response) => {
 
 app.post('/api/automations/:id/enable', async (req: Request, res: Response) => {
   try {
-    const item = await automationEngine.toggleAutomation(req.params.id, true, req.principal?.userId);
+    const verifiedUserId = req.principal?.userId;
+    if (!verifiedUserId) {
+      return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+    }
+    const item = await automationEngine.toggleAutomation(req.params.id, true, verifiedUserId);
     res.json(item);
   } catch (err: any) {
-    res.status(404).json({ error: err.message });
+    const status = err.statusCode || (err.code === 'SCHEDULER_UNAVAILABLE' ? 400 : (err.message?.includes('ACCESS_DENIED') ? 403 : 404));
+    res.status(status).json({ error: err.message, code: err.code });
   }
 });
 
 app.post('/api/automations/:id/disable', async (req: Request, res: Response) => {
   try {
-    const item = await automationEngine.toggleAutomation(req.params.id, false, req.principal?.userId);
+    const verifiedUserId = req.principal?.userId;
+    if (!verifiedUserId) {
+      return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+    }
+    const item = await automationEngine.toggleAutomation(req.params.id, false, verifiedUserId);
     res.json(item);
   } catch (err: any) {
-    res.status(404).json({ error: err.message });
+    const status = err.statusCode || (err.message?.includes('ACCESS_DENIED') ? 403 : 404);
+    res.status(status).json({ error: err.message });
   }
 });
 
-// Platform / Serverless cron execution endpoint
-app.post('/api/automations/cron/execute', async (_req: Request, res: Response) => {
+// Platform / Serverless cron execution endpoint (Policy B: Authenticated & Authorized)
+const handleCronCycleExecution = async (req: Request, res: Response) => {
+  const cronSecret = process.env.CRON_SECRET;
+  if (!cronSecret) {
+    return res.status(503).json({
+      error: 'Autonomous scheduler is not configured in this environment: CRON_SECRET is missing.',
+      code: 'SCHEDULER_UNCONFIGURED'
+    });
+  }
+
+  const authHeader = req.headers['authorization'] || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+
+  if (!token) {
+    return res.status(401).json({
+      error: 'Unauthorized: missing bearer token for cron execution.',
+      code: 'UNAUTHORIZED'
+    });
+  }
+
+  const tokenBuf = Buffer.from(token);
+  const secretBuf = Buffer.from(cronSecret);
+  if (tokenBuf.length !== secretBuf.length || !crypto.timingSafeEqual(tokenBuf, secretBuf)) {
+    return res.status(401).json({
+      error: 'Unauthorized: invalid cron authorization token.',
+      code: 'UNAUTHORIZED'
+    });
+  }
+
   try {
-    await automationEngine.runScheduledCronCycle();
-    res.json({ status: 'CRON_CYCLE_EXECUTED', timestamp: Date.now() });
+    const result = await automationEngine.runScheduledCronCycle();
+    res.json({ status: 'CRON_CYCLE_EXECUTED', timestamp: Date.now(), result });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
-});
+};
+
+app.get('/api/automations/cron/execute', handleCronCycleExecution);
+app.post('/api/automations/cron/execute', handleCronCycleExecution);
 
 // -----------------------------------------------------------------------
 // Workflows — Server-Authoritative Execution Engine (Phase 18)

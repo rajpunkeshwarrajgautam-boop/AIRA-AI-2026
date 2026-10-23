@@ -684,11 +684,18 @@ export const AutomationTriggerTypeSchema = z.enum([
 ]);
 export type AutomationTriggerType = z.infer<typeof AutomationTriggerTypeSchema>;
 
+export const SchedulerCapabilitiesSchema = z.object({
+  active: z.boolean(),
+  mode: z.enum(['IN_PROCESS', 'SERVERLESS_CRON', 'UNAVAILABLE']),
+  reason: z.string().optional()
+});
+export type SchedulerCapabilities = z.infer<typeof SchedulerCapabilitiesSchema>;
+
 export const AutomationDefinitionSchema = z.object({
   id: z.string(),
   principalId: z.string().optional(),
   name: z.string(),
-  enabled: z.boolean().default(true),
+  enabled: z.boolean().default(false),
   trigger: AutomationTriggerTypeSchema,
   cronExpression: z.string().optional(),
   targetRunAt: z.number().optional(),

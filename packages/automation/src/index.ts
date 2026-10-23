@@ -1,5 +1,5 @@
 import * as crypto from 'crypto';
-import { AutomationDefinition, AutomationRun } from '../../contracts/src/index.js';
+import { AutomationDefinition, AutomationRun, SchedulerCapabilities } from '../../contracts/src/index.js';
 import { AgentRuntime } from '../../agent-runtime/src/index.js';
 import { AutomationRepository, AutomationRunRepository } from './repositories.js';
 import parser from 'cron-parser';
@@ -30,6 +30,44 @@ export class AutomationEngine {
     private runRepo: AutomationRunRepository
   ) {}
 
+  public getSchedulerStatus(): SchedulerCapabilities {
+    if (process.env.AIRA_SCHEDULER_ENABLED === 'false') {
+      return {
+        active: false,
+        mode: 'UNAVAILABLE',
+        reason: 'Autonomous scheduler explicitly disabled via AIRA_SCHEDULER_ENABLED=false.'
+      };
+    }
+    if (process.env.VERCEL) {
+      if (process.env.CRON_SECRET && process.env.AIRA_SCHEDULER_ENABLED === 'true') {
+        return {
+          active: true,
+          mode: 'SERVERLESS_CRON'
+        };
+      }
+      return {
+        active: false,
+        mode: 'UNAVAILABLE',
+        reason: 'Autonomous background scheduling is temporarily unavailable in serverless deployment.'
+      };
+    }
+    if (this.timerHandle !== null || process.env.AIRA_SCHEDULER_ENABLED === 'true') {
+      return {
+        active: true,
+        mode: 'IN_PROCESS'
+      };
+    }
+    return {
+      active: false,
+      mode: 'UNAVAILABLE',
+      reason: 'Autonomous background scheduler is not running.'
+    };
+  }
+
+  public isSchedulerActive(): boolean {
+    return this.getSchedulerStatus().active;
+  }
+
   public async listAutomations(principalId?: string): Promise<AutomationDefinition[]> {
     return this.autoRepo.listAutomations(principalId);
   }
@@ -47,6 +85,16 @@ export class AutomationEngine {
     input: Omit<AutomationDefinition, 'id'>, 
     clientOperationId?: string
   ): Promise<AutomationDefinition> {
+    const schedulerStatus = this.getSchedulerStatus();
+    let enabled = input.enabled ?? false;
+    let failureState = input.failureState;
+
+    // Policy B: When no certified scheduler exists, prevent new scheduled automations from becoming active.
+    if ((input.trigger === 'CRON' || input.trigger === 'ONE_TIME') && !schedulerStatus.active) {
+      enabled = false;
+      failureState = 'SCHEDULER_UNAVAILABLE';
+    }
+
     // Server-side principal-scoped idempotency check
     if (clientOperationId && input.principalId && this.autoRepo.getAutomationByClientOperationId) {
       const existing = await this.autoRepo.getAutomationByClientOperationId(input.principalId, clientOperationId);
@@ -70,7 +118,9 @@ export class AutomationEngine {
     const id = `auto_${crypto.randomUUID().slice(0, 8)}`;
     const automation: AutomationDefinition = {
       ...input,
-      id
+      id,
+      enabled,
+      failureState
     };
     await this.autoRepo.saveAutomation(automation, clientOperationId);
     return automation;
@@ -81,7 +131,16 @@ export class AutomationEngine {
     if (!item) {
       throw new Error(`Automation with id "${id}" not found.`);
     }
+    if (enabled && (item.trigger === 'CRON' || item.trigger === 'ONE_TIME') && !this.isSchedulerActive()) {
+      const err: any = new Error('Cannot activate scheduled automation: Autonomous scheduler is unavailable in this environment.');
+      err.code = 'SCHEDULER_UNAVAILABLE';
+      err.statusCode = 400;
+      throw err;
+    }
     item.enabled = enabled;
+    if (enabled && item.failureState === 'SCHEDULER_UNAVAILABLE') {
+      item.failureState = undefined;
+    }
     await this.autoRepo.saveAutomation(item);
     return item;
   }
@@ -244,6 +303,9 @@ export class AutomationEngine {
       const now = Date.now();
 
       for (const auto of dueAutomations) {
+        if (!auto.enabled || auto.failureState === 'SCHEDULER_UNAVAILABLE') {
+          continue;
+        }
         // Handle genuine ONE_TIME automation
         if (auto.trigger === 'ONE_TIME') {
           if (auto.targetRunAt && now >= auto.targetRunAt && (!auto.lastRun || auto.lastRun === 0)) {

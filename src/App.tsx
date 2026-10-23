@@ -573,13 +573,21 @@ function App() {
 
       if (result.success && result.automationId) {
         const confirmMsgId = 'assistant-' + Date.now();
-        const scheduleInfo = proposal.humanSchedule ? `\n**Schedule:** ${proposal.humanSchedule}` : '';
+        const scheduleInfo = proposal.humanSchedule ? `\n**Proposed Cadence:** ${proposal.humanSchedule}` : '';
         const tzInfo = proposal.timezone ? `\n**Timezone:** ${proposal.timezone}` : '';
-        const triggerDetail = proposal.cronExpression ? ` (\`${proposal.cronExpression}\`)` : (proposal.targetRunAt ? ' (at-most-once)' : '');
+        const triggerDetail = proposal.cronExpression ? ` (\`${proposal.cronExpression}\`)` : (proposal.targetRunAt ? ' (one-time)' : '');
+        
+        const isActuallyActive = result.enabled === true;
+        const statusLabel = isActuallyActive ? 'ACTIVE' : 'INACTIVE (Draft)';
+        const headerTitle = isActuallyActive ? '[Automation Confirmed & Activated]' : '[Automation Saved — Inactive Draft]';
+        const noticeBody = isActuallyActive
+          ? 'Your automation has been persisted to the server-authoritative engine and scheduled for autonomous execution.'
+          : 'Autonomous scheduling is temporarily unavailable in this environment. Your automation has been securely saved to the database as an inactive draft and will not execute autonomously until a certified scheduler is configured.';
+
         const confirmationMessage: Message = {
           id: confirmMsgId,
           role: 'assistant',
-          content: `[Automation Confirmed & Activated]\n\n**Automation ID:** \`${result.automationId}\`\n**Name:** ${proposal.name}${scheduleInfo}${tzInfo}\n**Trigger:** ${proposal.trigger}${triggerDetail}\n**Status:** ACTIVE\n\nYour automation has been persisted to the server-authoritative engine and scheduled for autonomous execution.`,
+          content: `${headerTitle}\n\n**Automation ID:** \`${result.automationId}\`\n**Name:** ${proposal.name}${scheduleInfo}${tzInfo}\n**Trigger:** ${proposal.trigger}${triggerDetail}\n**Status:** ${statusLabel}\n\n${noticeBody}`,
           timestamp: Date.now(),
           isStreaming: false,
         };
@@ -588,7 +596,7 @@ function App() {
           updatedAt: Date.now(),
           messages: [...c.messages, confirmationMessage],
         }));
-        showToast('Automation activated successfully');
+        showToast(isActuallyActive ? 'Automation activated successfully' : 'Automation saved as inactive draft');
       } else {
         showToast(result.error || 'Automation persistence failed');
       }
@@ -879,7 +887,7 @@ function App() {
         updatedAt: Date.now(),
         messages: c.messages.map(m => m.id === assistantId ? {
           ...m,
-          content: `I prepared an automation workflow for your request: **"${intent.cleanPrompt}"**.\n\n**Proposed Schedule:** ${schedule?.humanSchedule || 'Scheduled automation'}\n\nUnder AIRA execution safety standards, automated workflows cannot be scheduled implicitly. Review the proposal below and click **Confirm and Schedule Automation** to register and activate it in the backend engine.`,
+          content: `I prepared an automation workflow draft for your request: **"${intent.cleanPrompt}"**.\n\n**Proposed Schedule:** ${schedule?.humanSchedule || 'Scheduled automation'}\n\n*Note: Autonomous background scheduling is temporarily unavailable in this environment. Review the proposal below and click **Save Automation (Inactive Draft)** (Confirm and Schedule Automation action) to safely register an inactive draft.*`,
           isStreaming: false,
           automationProposal: {
             id: `prop_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
