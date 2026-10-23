@@ -31,6 +31,7 @@ export class AutomationEngine {
   ) {}
 
   public getSchedulerStatus(): SchedulerCapabilities {
+    // Explicit operator kill-switch: disable scheduler unconditionally
     if (process.env.AIRA_SCHEDULER_ENABLED === 'false') {
       return {
         active: false,
@@ -38,25 +39,58 @@ export class AutomationEngine {
         reason: 'Autonomous scheduler explicitly disabled via AIRA_SCHEDULER_ENABLED=false.'
       };
     }
+
     if (process.env.VERCEL) {
-      if (process.env.CRON_SECRET && process.env.AIRA_SCHEDULER_ENABLED === 'true') {
+      // In Vercel serverless, background setInterval is frozen (see start()).
+      // A real recurring invocation requires ALL THREE conditions to be true:
+      //   1. CRON_SECRET is configured (so the /api/automations/cron/execute endpoint
+      //      can validate inbound requests from Vercel Cron).
+      //   2. AIRA_SCHEDULER_ENABLED=true is set (operator's explicit intent).
+      //   3. AIRA_SERVERLESS_CRON_CONFIGURED=true is set (operator's explicit
+      //      attestation that vercel.json actually contains cron route entries
+      //      pointed at this endpoint — something we cannot verify at runtime).
+      //
+      // Requiring all three prevents an adversary from setting CRON_SECRET +
+      // AIRA_SCHEDULER_ENABLED alone and bypassing the inactive-draft policy.
+      // This PR does NOT configure a production cron — the flag stays unset,
+      // so the scheduler remains UNAVAILABLE and all drafts remain inactive.
+      const hasCronSecret = Boolean(process.env.CRON_SECRET);
+      const schedulerEnabled = process.env.AIRA_SCHEDULER_ENABLED === 'true';
+      const cronConfigured = process.env.AIRA_SERVERLESS_CRON_CONFIGURED === 'true';
+
+      if (hasCronSecret && schedulerEnabled && cronConfigured) {
         return {
           active: true,
           mode: 'SERVERLESS_CRON'
         };
       }
+
+      // Fail closed: report why readiness cannot be established
+      let reason = 'Autonomous background scheduling is temporarily unavailable in serverless deployment.';
+      if (!hasCronSecret) {
+        reason += ' CRON_SECRET is not configured.';
+      } else if (!schedulerEnabled) {
+        reason += ' AIRA_SCHEDULER_ENABLED is not set to true.';
+      } else if (!cronConfigured) {
+        reason += ' AIRA_SERVERLESS_CRON_CONFIGURED is not set — vercel.json cron integration has not been attested.';
+      }
+
       return {
         active: false,
         mode: 'UNAVAILABLE',
-        reason: 'Autonomous background scheduling is temporarily unavailable in serverless deployment.'
+        reason
       };
     }
+
+    // Non-Vercel (self-hosted / local): active when the in-process timer is running
+    // or the operator has explicitly set AIRA_SCHEDULER_ENABLED=true.
     if (this.timerHandle !== null || process.env.AIRA_SCHEDULER_ENABLED === 'true') {
       return {
         active: true,
         mode: 'IN_PROCESS'
       };
     }
+
     return {
       active: false,
       mode: 'UNAVAILABLE',
@@ -145,12 +179,93 @@ export class AutomationEngine {
     return item;
   }
 
-  public async patchAutomation(id: string, updates: Partial<AutomationDefinition>, principalId?: string): Promise<AutomationDefinition> {
+  /**
+   * Patch a mutable subset of an automation's fields.
+   *
+   * Immutable fields (id, principalId, trigger) are silently ignored from the
+   * caller's payload — they can NEVER be overwritten via PATCH.
+   *
+   * Activation (enabled: true) for CRON/ONE_TIME is subject to the same
+   * scheduler-readiness gate as toggleAutomation().
+   */
+  public async patchAutomation(
+    id: string,
+    updates: Partial<AutomationDefinition>,
+    principalId?: string
+  ): Promise<AutomationDefinition> {
     const item = await this.getAutomation(id, principalId);
     if (!item) {
-      throw new Error(`Automation with id "${id}" not found.`);
+      const notFound: any = new Error(`Automation with id "${id}" not found.`);
+      notFound.statusCode = 404;
+      throw notFound;
     }
-    const updated = { ...item, ...updates, id, principalId: item.principalId };
+
+    // ── Allowlist: only these fields may be updated via PATCH ──────────────────
+    const MUTABLE_FIELDS: ReadonlyArray<keyof AutomationDefinition> = [
+      'name',
+      'objective',
+      'conditions',
+      'cronExpression',
+      'targetRunAt',
+      'timezone',
+      'approvalPolicy',
+      'enabled',
+    ];
+
+    // Reject any attempt to alter immutable identity / ownership fields
+    const IMMUTABLE_FIELDS: ReadonlyArray<keyof AutomationDefinition> = [
+      'id',
+      'principalId',
+      'trigger',
+    ];
+    for (const field of IMMUTABLE_FIELDS) {
+      if (field in updates) {
+        const immutableErr: any = new Error(
+          `Forbidden: field "${field}" is immutable and cannot be changed via PATCH.`
+        );
+        immutableErr.code = 'IMMUTABLE_FIELD';
+        immutableErr.statusCode = 400;
+        throw immutableErr;
+      }
+    }
+
+    // Build the sanitised delta — only allowlisted keys
+    const sanitised: Partial<AutomationDefinition> = {};
+    for (const field of MUTABLE_FIELDS) {
+      if (field in updates) {
+        (sanitised as any)[field] = (updates as any)[field];
+      }
+    }
+
+    // Compute the effective post-update trigger and enabled state
+    const effectiveTrigger = item.trigger; // trigger is immutable
+    const effectiveEnabled = 'enabled' in sanitised ? sanitised.enabled! : item.enabled;
+
+    // Policy B gate: reject CRON/ONE_TIME activation when no scheduler is active
+    if (
+      effectiveEnabled &&
+      (effectiveTrigger === 'CRON' || effectiveTrigger === 'ONE_TIME') &&
+      !this.isSchedulerActive()
+    ) {
+      const schedulerErr: any = new Error(
+        'Cannot activate scheduled automation via PATCH: Autonomous scheduler is unavailable in this environment.'
+      );
+      schedulerErr.code = 'SCHEDULER_UNAVAILABLE';
+      schedulerErr.statusCode = 400;
+      throw schedulerErr;
+    }
+
+    // Clear failureState when an authorized activation occurs
+    if (effectiveEnabled && item.failureState === 'SCHEDULER_UNAVAILABLE') {
+      sanitised.failureState = undefined;
+    }
+
+    const updated: AutomationDefinition = {
+      ...item,
+      ...sanitised,
+      id,
+      principalId: item.principalId,
+    };
     await this.autoRepo.saveAutomation(updated);
     return updated;
   }

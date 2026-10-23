@@ -1959,6 +1959,7 @@ app.get('/api/automations/:id', async (req: Request, res: Response) => {
   }
 });
 
+
 app.patch('/api/automations/:id', async (req: Request, res: Response) => {
   try {
     const verifiedUserId = req.principal?.userId;
@@ -1966,18 +1967,25 @@ app.patch('/api/automations/:id', async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
     }
 
-    if (req.body?.principalId && req.body.principalId !== verifiedUserId) {
-      return res.status(400).json({
-        error: 'Forbidden: caller may not alter or forge principalId ownership'
-      });
+    // Defense-in-depth: reject ownership/identity field manipulation at route layer
+    const REJECTED_FIELDS = ['principalId', 'id', 'trigger'];
+    for (const field of REJECTED_FIELDS) {
+      if (field in (req.body ?? {})) {
+        return res.status(400).json({
+          error: `Forbidden: field "${field}" is immutable and cannot be changed via PATCH.`,
+          code: 'IMMUTABLE_FIELD'
+        });
+      }
     }
 
     const updated = await automationEngine.patchAutomation(req.params.id, req.body, verifiedUserId);
     res.json(updated);
   } catch (err: any) {
-    res.status(400).json({ error: err.message });
+    const status = err.statusCode ?? (err.message?.includes('not found') ? 404 : 400);
+    res.status(status).json({ error: err.message, code: err.code });
   }
 });
+
 
 app.delete('/api/automations/:id', async (req: Request, res: Response) => {
   try {

@@ -116,39 +116,53 @@ test('Policy B Gate 1: Contract defaults enabled to false', () => {
   assert.equal(parsed.enabled, false, 'AutomationDefinitionSchema must default enabled to false');
 });
 
-test('Policy B Gate 2: Determine scheduler readiness from trusted server-side configuration', () => {
+test('Policy B Gate 2: Scheduler readiness fails closed — requires CRON_SECRET + AIRA_SCHEDULER_ENABLED + AIRA_SERVERLESS_CRON_CONFIGURED (P1 fail-closed)', () => {
   const repo = new MockAutomationRepo();
   const runRepo = new MockAutomationRunRepo();
   const engine = new AutomationEngine(mockAgentRuntime, repo, runRepo);
 
-  // 1. Explicitly disabled via env
   const origSchedulerEnabled = process.env.AIRA_SCHEDULER_ENABLED;
   const origVercel = process.env.VERCEL;
   const origCronSecret = process.env.CRON_SECRET;
+  const origCronConfigured = process.env.AIRA_SERVERLESS_CRON_CONFIGURED;
 
   try {
+    // 1. Explicitly disabled via env
     process.env.AIRA_SCHEDULER_ENABLED = 'false';
+    delete process.env.VERCEL;
     const statusDisabled = engine.getSchedulerStatus();
     assert.equal(statusDisabled.active, false);
     assert.equal(statusDisabled.mode, 'UNAVAILABLE');
     assert.equal(engine.isSchedulerActive(), false);
 
-    // 2. Vercel serverless without certified cron
+    // 2. Vercel serverless — no env vars at all
     delete process.env.AIRA_SCHEDULER_ENABLED;
     process.env.VERCEL = '1';
     delete process.env.CRON_SECRET;
-    const statusVercel = engine.getSchedulerStatus();
-    assert.equal(statusVercel.active, false);
-    assert.equal(statusVercel.mode, 'UNAVAILABLE');
-    assert.ok(statusVercel.reason?.includes('serverless'));
-    assert.equal(engine.isSchedulerActive(), false);
+    delete process.env.AIRA_SERVERLESS_CRON_CONFIGURED;
+    const statusNoVars = engine.getSchedulerStatus();
+    assert.equal(statusNoVars.active, false, 'Must be inactive with no env vars');
+    assert.equal(statusNoVars.mode, 'UNAVAILABLE');
+    assert.ok(statusNoVars.reason?.includes('serverless'));
 
-    // 3. Vercel serverless with certified cron and explicit enablement
-    process.env.CRON_SECRET = 'certified-cron-secret-2026';
+    // 3. CRON_SECRET + AIRA_SCHEDULER_ENABLED only (P1 defect scenario) — must still be INACTIVE
+    process.env.CRON_SECRET = 'secret-present';
     process.env.AIRA_SCHEDULER_ENABLED = 'true';
-    const statusCertified = engine.getSchedulerStatus();
-    assert.equal(statusCertified.active, true);
-    assert.equal(statusCertified.mode, 'SERVERLESS_CRON');
+    delete process.env.AIRA_SERVERLESS_CRON_CONFIGURED;
+    const statusPartial = engine.getSchedulerStatus();
+    assert.equal(statusPartial.active, false,
+      'CRON_SECRET + AIRA_SCHEDULER_ENABLED alone must NOT activate scheduler (fail-closed)');
+    assert.equal(statusPartial.mode, 'UNAVAILABLE');
+    assert.ok(
+      statusPartial.reason?.includes('AIRA_SERVERLESS_CRON_CONFIGURED'),
+      'Reason must mention missing AIRA_SERVERLESS_CRON_CONFIGURED'
+    );
+
+    // 4. All three flags present — only then active
+    process.env.AIRA_SERVERLESS_CRON_CONFIGURED = 'true';
+    const statusAll = engine.getSchedulerStatus();
+    assert.equal(statusAll.active, true, 'All three flags present: must be active');
+    assert.equal(statusAll.mode, 'SERVERLESS_CRON');
     assert.equal(engine.isSchedulerActive(), true);
   } finally {
     if (origSchedulerEnabled !== undefined) process.env.AIRA_SCHEDULER_ENABLED = origSchedulerEnabled;
@@ -157,6 +171,8 @@ test('Policy B Gate 2: Determine scheduler readiness from trusted server-side co
     else delete process.env.VERCEL;
     if (origCronSecret !== undefined) process.env.CRON_SECRET = origCronSecret;
     else delete process.env.CRON_SECRET;
+    if (origCronConfigured !== undefined) process.env.AIRA_SERVERLESS_CRON_CONFIGURED = origCronConfigured;
+    else delete process.env.AIRA_SERVERLESS_CRON_CONFIGURED;
   }
 });
 
@@ -390,4 +406,164 @@ test('Policy B Gate 9: Preserve AIRA ONE Design Invariants (Chat & Agent modes, 
   const sidebarPath = path.resolve(process.cwd(), 'src/components/Sidebar.tsx');
   const sidebarContent = fs.readFileSync(sidebarPath, 'utf8');
   assert.ok(!sidebarContent.includes('nav-automations'), 'Sidebar must not have a dedicated Automations workspace');
+});
+
+test('Policy B Gate 10 (P0): patchAutomation blocks enabled:true for scheduled trigger when scheduler is unavailable', async () => {
+  const repo = new MockAutomationRepo();
+  const runRepo = new MockAutomationRunRepo();
+  const engine = new AutomationEngine(mockAgentRuntime, repo, runRepo);
+
+  const origVercel = process.env.VERCEL;
+  const origCronConfigured = process.env.AIRA_SERVERLESS_CRON_CONFIGURED;
+  try {
+    process.env.VERCEL = '1';
+    delete process.env.CRON_SECRET;
+    delete process.env.AIRA_SCHEDULER_ENABLED;
+    delete process.env.AIRA_SERVERLESS_CRON_CONFIGURED;
+
+    // Create a CRON draft
+    const draft = await engine.createAutomation({
+      name: 'Cron Draft',
+      trigger: 'CRON',
+      cronExpression: '0 9 * * 1',
+      agentId: 'agent_v1',
+      objective: 'Weekly job',
+      enabled: false,
+      approvalPolicy: 'autonomous',
+      conditions: {},
+      principalId: 'user_owner_456'
+    });
+    assert.equal(draft.enabled, false);
+    assert.equal(draft.failureState, 'SCHEDULER_UNAVAILABLE');
+
+    // PATCH with enabled:true must be REJECTED — scheduler is unavailable
+    await assert.rejects(
+      async () => {
+        await engine.patchAutomation(draft.id, { enabled: true }, 'user_owner_456');
+      },
+      (err: any) => {
+        assert.equal(err.code, 'SCHEDULER_UNAVAILABLE',
+          'PATCH activation bypass must be rejected with SCHEDULER_UNAVAILABLE');
+        assert.ok(err.message.includes('unavailable'));
+        return true;
+      }
+    );
+
+    // Verify draft is still disabled in storage
+    const stored = await repo.getAutomation(draft.id);
+    assert.equal(stored?.enabled, false, 'Automation must remain disabled after rejected PATCH');
+    assert.equal(stored?.failureState, 'SCHEDULER_UNAVAILABLE', 'failureState must remain SCHEDULER_UNAVAILABLE');
+
+    // Benign PATCH (rename) must succeed
+    const renamed = await engine.patchAutomation(draft.id, { name: 'Renamed Draft' }, 'user_owner_456');
+    assert.equal(renamed.name, 'Renamed Draft');
+    assert.equal(renamed.enabled, false, 'Rename PATCH must not alter enabled state');
+  } finally {
+    if (origVercel !== undefined) process.env.VERCEL = origVercel;
+    else delete process.env.VERCEL;
+    if (origCronConfigured !== undefined) process.env.AIRA_SERVERLESS_CRON_CONFIGURED = origCronConfigured;
+    else delete process.env.AIRA_SERVERLESS_CRON_CONFIGURED;
+  }
+});
+
+test('Policy B Gate 11 (P0): patchAutomation rejects immutable field mutations and cross-tenant access', async () => {
+  const repo = new MockAutomationRepo();
+  const runRepo = new MockAutomationRunRepo();
+  const engine = new AutomationEngine(mockAgentRuntime, repo, runRepo);
+
+  const alice = await engine.createAutomation({
+    name: 'Alice Manual Task',
+    trigger: 'MANUAL',
+    agentId: 'agent_v1',
+    objective: 'Alice private task',
+    enabled: true,
+    approvalPolicy: 'autonomous',
+    conditions: {},
+    principalId: 'user_alice'
+  });
+
+  // 1. Attempting to forge principalId must be rejected
+  await assert.rejects(
+    async () => {
+      await engine.patchAutomation(alice.id, { principalId: 'user_bob' } as any, 'user_alice');
+    },
+    (err: any) => {
+      assert.equal(err.code, 'IMMUTABLE_FIELD');
+      assert.ok(err.message.includes('principalId'));
+      return true;
+    }
+  );
+
+  // 2. Attempting to change trigger type must be rejected
+  await assert.rejects(
+    async () => {
+      await engine.patchAutomation(alice.id, { trigger: 'CRON' } as any, 'user_alice');
+    },
+    (err: any) => {
+      assert.equal(err.code, 'IMMUTABLE_FIELD');
+      assert.ok(err.message.includes('trigger'));
+      return true;
+    }
+  );
+
+  // 3. Attempting to change id must be rejected
+  await assert.rejects(
+    async () => {
+      await engine.patchAutomation(alice.id, { id: 'auto_fake' } as any, 'user_alice');
+    },
+    (err: any) => {
+      assert.equal(err.code, 'IMMUTABLE_FIELD');
+      return true;
+    }
+  );
+
+  // 4. Cross-tenant PATCH must be rejected by principal isolation
+  await assert.rejects(
+    async () => {
+      await engine.patchAutomation(alice.id, { name: 'Bob Hijacked' }, 'user_bob');
+    },
+    (err: any) => {
+      assert.ok(err.message.includes('ACCESS_DENIED'), 'Cross-tenant PATCH must be rejected with ACCESS_DENIED');
+      return true;
+    }
+  );
+
+  // Verify Alice's automation is unchanged
+  const stored = await repo.getAutomation(alice.id);
+  assert.equal(stored?.principalId, 'user_alice');
+  assert.equal(stored?.trigger, 'MANUAL');
+  assert.equal(stored?.name, 'Alice Manual Task');
+});
+
+test('Policy B Gate 12 (P2): ChatMessage button aria-label accurately describes inactive draft save action', () => {
+  const chatMsgPath = path.resolve(process.cwd(), 'src/components/ChatMessage.tsx');
+  const chatContent = fs.readFileSync(chatMsgPath, 'utf8');
+
+  // Must NOT contain the old misleading label
+  assert.ok(
+    !chatContent.includes('aria-label="Confirm and Schedule Automation"'),
+    'Old misleading aria-label must be removed'
+  );
+
+  // Must contain a label that accurately describes saving an inactive draft
+  assert.ok(
+    chatContent.includes('aria-label="Save as Inactive Draft'),
+    'aria-label must describe saving as an inactive draft'
+  );
+
+  // Visible button text and accessible label must both be present and consistent
+  assert.ok(
+    chatContent.includes('Save Automation (Inactive Draft)'),
+    'Visible button text must say Save Automation (Inactive Draft)'
+  );
+
+  // The label must NOT claim scheduling or activation is happening
+  const labelMatch = chatContent.match(/aria-label="Save as Inactive Draft[^"]*"/);
+  assert.ok(labelMatch, 'Must match new aria-label pattern');
+  const labelText = labelMatch![0];
+  assert.ok(
+    !labelText.toLowerCase().includes('schedule automation') &&
+    !labelText.toLowerCase().includes('confirm and schedule'),
+    'Label must not claim scheduling is happening'
+  );
 });

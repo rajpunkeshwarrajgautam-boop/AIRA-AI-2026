@@ -295,7 +295,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                 </div>
                 <button
                   type="button"
-                  aria-label="Confirm and Schedule Automation"
+                  aria-label="Save as Inactive Draft — Automation will not execute automatically until a certified scheduler is configured"
                   disabled={isConfirmingAutomation}
                   onClick={() => onConfirmAutomation?.(message.automationProposal)}
                   className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium text-xs transition-colors shadow-sm self-start"
