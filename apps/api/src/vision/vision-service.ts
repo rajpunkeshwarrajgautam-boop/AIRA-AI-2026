@@ -104,9 +104,9 @@ export class VisionService {
           model: this.customProviders.generate ? 'custom' : (process.env.OPENAI_API_KEY?.trim() ? 'dall-e-3' : 'flux')
         },
         edit: {
-          available: !!this.customProviders.edit || !!(process.env.OPENAI_API_KEY?.trim() || process.env.FAL_KEY?.trim() || process.env.FAL_API_KEY?.trim()),
-          provider: this.customProviders.edit ? 'custom' : (process.env.OPENAI_API_KEY?.trim() ? 'openai' : (process.env.FAL_KEY?.trim() || process.env.FAL_API_KEY?.trim() ? 'fal' : null)),
-          model: this.customProviders.edit ? 'custom' : 'image-edit'
+          available: !!this.customProviders.edit,
+          provider: this.customProviders.edit ? 'custom' : null,
+          model: this.customProviders.edit ? 'custom-edit' : null
         }
       };
     }
@@ -134,14 +134,17 @@ export class VisionService {
       generateModel = 'flux';
     }
 
-    let editProvider: 'openai' | 'fal' | null = null;
+    // Gate 3: Live image editing requires multipart source buffer configuration and image-to-image
+    // pipeline which is not yet deployed or verified in live runtime. Mark unavailable honestly
+    // unless an active, verified custom provider is configured.
+    let editProvider: 'openai' | 'fal' | 'custom' | null = null;
     let editModel: string | null = null;
-    if (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.trim()) {
-      editProvider = 'openai';
-      editModel = 'dall-e-2';
-    } else if ((process.env.FAL_KEY && process.env.FAL_KEY.trim()) || (process.env.FAL_API_KEY && process.env.FAL_API_KEY.trim())) {
-      editProvider = 'fal';
-      editModel = 'flux-edit';
+    let editAvailable = false;
+
+    if (this.customProviders?.edit) {
+      editProvider = 'custom';
+      editModel = 'custom-edit';
+      editAvailable = true;
     }
 
     return {
@@ -156,7 +159,7 @@ export class VisionService {
         model: generateModel
       },
       edit: {
-        available: !!editProvider,
+        available: editAvailable,
         provider: editProvider,
         model: editModel
       }
@@ -185,6 +188,7 @@ export class VisionService {
       { prompt: params.prompt.slice(0, 100) }
     );
 
+    let reservationSettled = false;
     try {
       let analysisResult = '';
       let usedProvider = readiness.understand.provider || 'unknown';
@@ -274,24 +278,42 @@ export class VisionService {
         );
       }
 
-      await commercialBillingService.settleReservation(hold.reservationId, tariff, {
-        task: 'understand',
-        resultLength: analysisResult.length
-      });
+      try {
+        await commercialBillingService.settleReservation(hold.reservationId, tariff, {
+          task: 'understand',
+          resultLength: analysisResult.length
+        });
+        reservationSettled = true;
+      } catch (settleErr: any) {
+        await commercialBillingService.releaseReservation(hold.reservationId, `Settlement failed: ${settleErr.message}`).catch(() => {});
+        throw new Error(`Billing settlement failed: ${settleErr.message}. Zero credits were debited.`);
+      }
 
-      await commercialBillingService.recordUsageEvent({
-        principalId,
-        taskType: 'vision_understand',
-        provider: usedProvider,
-        chargedCredits: tariff,
-        imagesCount: 1,
-        estimatedDirectCostUsd: 0.002
-      });
+      try {
+        await commercialBillingService.recordUsageEvent({
+          principalId,
+          taskType: 'vision_understand',
+          provider: usedProvider,
+          chargedCredits: tariff,
+          imagesCount: 1,
+          estimatedDirectCostUsd: 0.002
+        });
+      } catch (telemetryErr) {
+        console.error('[VisionService] Failed to record usage event after understand settlement:', telemetryErr);
+      }
 
       return { analysis: analysisResult, chargedCredits: tariff };
-    } catch (err) {
-      await commercialBillingService.releaseReservation(hold.reservationId, 'Vision understand failed').catch(() => {});
-      throw err;
+    } catch (err: any) {
+      if (!reservationSettled) {
+        await commercialBillingService.releaseReservation(hold.reservationId, 'Vision understand failed').catch(() => {});
+      }
+      if (err instanceof VisionProviderUnavailableError) {
+        throw err;
+      }
+      if (reservationSettled) {
+        throw new Error(`Vision understand delivery error after credit settlement: ${err.message}`);
+      }
+      throw new VisionProviderUnavailableError('understand', `Vision understand failed: ${err.message}. Zero credits were debited.`, readiness.understand.provider);
     }
   }
 
@@ -324,6 +346,7 @@ export class VisionService {
       { prompt: params.prompt.slice(0, 100), numImages }
     );
 
+    let reservationSettled = false;
     try {
       const dimensions = resolveImageDimensions(params.aspectRatio, params.resolution);
       const results: GeneratedImageResult[] = [];
@@ -409,33 +432,38 @@ export class VisionService {
           const openaiKey = process.env.OPENAI_API_KEY.trim();
           usedProvider = 'openai-dall-e-3';
 
-          const resp = await fetch('https://api.openai.com/v1/images/generations', {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${openaiKey}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              model: 'dall-e-3',
-              prompt: params.prompt,
-              n: 1,
-              size: params.aspectRatio === '16:9' ? '1792x1024' : (params.aspectRatio === '3:4' ? '1024x1792' : '1024x1024'),
-              quality: params.quality === 'premium' ? 'hd' : 'standard'
-            })
+          // DALL-E 3 only supports n: 1 per API request; dispatch numImages requests in parallel
+          const requests = Array.from({ length: numImages }).map(async () => {
+            const resp = await fetch('https://api.openai.com/v1/images/generations', {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${openaiKey}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                model: 'dall-e-3',
+                prompt: params.prompt,
+                n: 1,
+                size: params.aspectRatio === '16:9' ? '1792x1024' : (params.aspectRatio === '3:4' ? '1024x1792' : '1024x1024'),
+                quality: params.quality === 'premium' ? 'hd' : 'standard'
+              })
+            });
+
+            if (!resp.ok) {
+              const errBody = await resp.text().catch(() => '');
+              throw new Error(`OpenAI provider returned HTTP ${resp.status}: ${errBody.slice(0, 200)}`);
+            }
+
+            const data = await resp.json();
+            const images = data.data || [];
+            if (images.length === 0 || !images[0]?.url) {
+              throw new Error('OpenAI provider returned no images in payload');
+            }
+            return images[0];
           });
 
-          if (!resp.ok) {
-            const errBody = await resp.text().catch(() => '');
-            throw new Error(`OpenAI provider returned HTTP ${resp.status}: ${errBody.slice(0, 200)}`);
-          }
-
-          const data = await resp.json();
-          const images = data.data || [];
-          if (images.length === 0) {
-            throw new Error('OpenAI provider returned no images in payload');
-          }
-
-          for (const img of images) {
+          const rawImages = await Promise.all(requests);
+          for (const img of rawImages) {
             if (!img.url || img.url.startsWith('data:image/svg+xml')) {
               throw new Error('OpenAI returned invalid image URL');
             }
@@ -448,7 +476,7 @@ export class VisionService {
               height: dimensions.height,
               quality: params.quality,
               resolution: params.resolution,
-              chargedCredits: tariff / images.length,
+              chargedCredits: tariff / rawImages.length,
               provider: usedProvider,
               createdAt: now
             });
@@ -466,6 +494,7 @@ export class VisionService {
             body: JSON.stringify({
               input: {
                 prompt: params.prompt,
+                num_outputs: numImages,
                 aspect_ratio: params.aspectRatio === '16:9' ? '16:9' : (params.aspectRatio === '3:4' ? '3:4' : '1:1')
               }
             })
@@ -506,6 +535,20 @@ export class VisionService {
         throw new VisionProviderUnavailableError('generate', 'Upstream image generation provider failed to produce output. Zero credits were debited.');
       }
 
+      // Gate 2: Strict invariant — delivered images must strictly match the contracted count.
+      // If a provider delivers fewer images than requested, fail closed and release full hold.
+      if (results.length !== numImages) {
+        await commercialBillingService.releaseReservation(
+          hold.reservationId,
+          `Image count mismatch: requested ${numImages}, provider delivered ${results.length}`
+        );
+        throw new VisionProviderUnavailableError(
+          'generate',
+          `Provider output count mismatch: requested ${numImages} images but provider returned ${results.length}. Transaction aborted and zero credits were debited.`,
+          usedProvider
+        );
+      }
+
       for (const res of results) {
         if (!res.url || res.url.startsWith('data:image/svg+xml') || res.url.includes('<svg')) {
           await commercialBillingService.releaseReservation(hold.reservationId, 'Invalid image payload (placeholder rejected)');
@@ -513,27 +556,43 @@ export class VisionService {
         }
       }
 
-      await commercialBillingService.settleReservation(hold.reservationId, tariff, {
-        task: 'generate',
-        imagesCount: results.length,
-        aspectRatio: params.aspectRatio,
-        quality: params.quality
-      });
+      // Gate 4: Reliable settlement and post-settlement outcome truthfulness
+      try {
+        await commercialBillingService.settleReservation(hold.reservationId, tariff, {
+          task: 'generate',
+          imagesCount: results.length,
+          aspectRatio: params.aspectRatio,
+          quality: params.quality
+        });
+        reservationSettled = true;
+      } catch (settleErr: any) {
+        await commercialBillingService.releaseReservation(hold.reservationId, `Settlement failed: ${settleErr.message}`).catch(() => {});
+        throw new Error(`Billing settlement failed: ${settleErr.message}. Zero credits were charged.`);
+      }
 
-      await commercialBillingService.recordUsageEvent({
-        principalId,
-        taskType: 'vision_generate',
-        provider: usedProvider,
-        imagesCount: results.length,
-        chargedCredits: tariff,
-        estimatedDirectCostUsd: (tariff * 0.001) / 3
-      });
+      try {
+        await commercialBillingService.recordUsageEvent({
+          principalId,
+          taskType: 'vision_generate',
+          provider: usedProvider,
+          imagesCount: results.length,
+          chargedCredits: tariff,
+          estimatedDirectCostUsd: (tariff * 0.001) / 3
+        });
+      } catch (telemetryErr) {
+        console.error('[VisionService] Failed to record usage event after generate settlement:', telemetryErr);
+      }
 
       return { images: results, totalCredits: tariff };
     } catch (err: any) {
-      await commercialBillingService.releaseReservation(hold.reservationId, `Vision generation failed: ${err.message}`).catch(() => {});
+      if (!reservationSettled) {
+        await commercialBillingService.releaseReservation(hold.reservationId, `Vision generation failed: ${err.message}`).catch(() => {});
+      }
       if (err instanceof VisionProviderUnavailableError) {
         throw err;
+      }
+      if (reservationSettled) {
+        throw new Error(`Vision generation delivery issue after credit settlement: ${err.message}`);
       }
       throw new VisionProviderUnavailableError('generate', `Vision generation failed: ${err.message}. Zero credits were charged.`, readiness.generate.provider);
     }
@@ -549,7 +608,7 @@ export class VisionService {
     if (!readiness.edit.available) {
       throw new VisionProviderUnavailableError(
         'edit',
-        'Vision edit provider is not configured. Image editing requires an active provider key. Zero credits were charged.'
+        'Vision edit provider is not configured. Image editing requires an active, verified provider. Zero credits were charged.'
       );
     }
 
@@ -567,6 +626,7 @@ export class VisionService {
       { prompt: params.prompt.slice(0, 100), advancedMode: params.advancedMode }
     );
 
+    let reservationSettled = false;
     try {
       const dimensions = resolveImageDimensions('1:1', params.resolution);
       const now = Date.now();
@@ -604,25 +664,40 @@ export class VisionService {
         createdAt: now
       };
 
-      await commercialBillingService.settleReservation(hold.reservationId, tariff, {
-        task: 'edit',
-        advancedMode: params.advancedMode
-      });
+      try {
+        await commercialBillingService.settleReservation(hold.reservationId, tariff, {
+          task: 'edit',
+          advancedMode: params.advancedMode
+        });
+        reservationSettled = true;
+      } catch (settleErr: any) {
+        await commercialBillingService.releaseReservation(hold.reservationId, `Settlement failed: ${settleErr.message}`).catch(() => {});
+        throw new Error(`Billing settlement failed: ${settleErr.message}. Zero credits were charged.`);
+      }
 
-      await commercialBillingService.recordUsageEvent({
-        principalId,
-        taskType: 'vision_edit',
-        provider: usedProvider,
-        imagesCount: 1,
-        chargedCredits: tariff,
-        estimatedDirectCostUsd: (tariff * 0.001) / 3
-      });
+      try {
+        await commercialBillingService.recordUsageEvent({
+          principalId,
+          taskType: 'vision_edit',
+          provider: usedProvider,
+          imagesCount: 1,
+          chargedCredits: tariff,
+          estimatedDirectCostUsd: (tariff * 0.001) / 3
+        });
+      } catch (telemetryErr) {
+        console.error('[VisionService] Failed to record usage event after edit settlement:', telemetryErr);
+      }
 
       return { image: imageResult, chargedCredits: tariff };
     } catch (err: any) {
-      await commercialBillingService.releaseReservation(hold.reservationId, `Vision edit failed: ${err.message}`).catch(() => {});
+      if (!reservationSettled) {
+        await commercialBillingService.releaseReservation(hold.reservationId, `Vision edit failed: ${err.message}`).catch(() => {});
+      }
       if (err instanceof VisionProviderUnavailableError) {
         throw err;
+      }
+      if (reservationSettled) {
+        throw new Error(`Vision edit delivery issue after credit settlement: ${err.message}`);
       }
       throw new VisionProviderUnavailableError('edit', `Vision edit failed: ${err.message}. Zero credits were charged.`, readiness.edit.provider);
     }

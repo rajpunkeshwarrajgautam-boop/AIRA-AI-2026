@@ -1,3 +1,4 @@
+import './setup-disposable-db.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { db, closeDb } from '../packages/db/src/index.js';
@@ -25,7 +26,7 @@ test.describe('AIRA ONE — Real PostgreSQL Durable Idempotency & Concurrency Su
     await closeDb();
   });
 
-  test('GATE 1: Real PostgreSQL Connectivity & Server Identity', async () => {
+  test('GATE 1: Real PostgreSQL Connectivity & Server Identity (Strict Disposable DB Check)', async () => {
     console.log('\n--- Verifying Real PostgreSQL Engine Identity ---');
     const res = await db.raw(
       "SELECT version() AS version, current_database() AS db_name, current_user AS db_user, current_setting('server_version') AS server_version"
@@ -38,20 +39,47 @@ test.describe('AIRA ONE — Real PostgreSQL Durable Idempotency & Concurrency Su
 
     assert.ok(row.version.toLowerCase().includes('postgresql'), 'Database engine must be real PostgreSQL');
     assert.ok(row.db_name, 'Database name must be present');
-    assert.ok(row.db_name === 'aira_test_db' || row.db_name === 'aira_db', `Must connect to dedicated isolated test database, got: ${row.db_name}`);
+
+    // Strict Gate 5 Invariant: Operational database 'aira_db' is NEVER an approved disposable test database.
+    // Tests must connect exclusively to 'aira_test_db' (or an explicitly declared disposable test DB in CI).
+    const isApprovedDisposableDb = row.db_name === 'aira_test_db' || (process.env.CI === 'true' && row.db_name.endsWith('_test_db'));
+    assert.strictEqual(
+      isApprovedDisposableDb,
+      true,
+      `GATE 5 VIOLATION: Tests must run only against an approved disposable testing database ('aira_test_db'). Database '${row.db_name}' is not approved (aira_db is an operational database).`
+    );
   });
 
-  test('GATE 2: Migration 023 Clean Rollback (down) and Apply (up) in Isolated Database', async () => {
+  test('GATE 2: Migration 023 Clean Lifecycle with Destructive Safety Barrier', async () => {
     console.log('\n--- Verifying Migration 023 Lifecycle in Real Database ---');
-    // Test rollback
-    await migration023.down(db);
-    const existsAfterDown = await db.schema.hasTable('idempotent_operations');
-    assert.strictEqual(existsAfterDown, false, 'Migration 023 down() must drop idempotent_operations table cleanly');
+    const res = await db.raw("SELECT current_database() AS db_name");
+    const currentDb = res.rows[0]?.db_name;
 
-    // Test apply
-    await migration023.up(db);
-    const existsAfterUp = await db.schema.hasTable('idempotent_operations');
-    assert.strictEqual(existsAfterUp, true, 'Migration 023 up() must recreate idempotent_operations table cleanly');
+    // Destructive guard: down() must NEVER execute on operational or non-test databases
+    const isApprovedDisposableDb = currentDb === 'aira_test_db' || (process.env.CI === 'true' && currentDb.endsWith('_test_db'));
+    const allowDestructive = process.env.ALLOW_DESTRUCTIVE_TEST_MIGRATION === '1';
+
+    if (!isApprovedDisposableDb) {
+      throw new Error(`CRITICAL: Destructive migration down() blocked on database '${currentDb}'! Only 'aira_test_db' is permitted.`);
+    }
+
+    if (allowDestructive) {
+      // Test clean rollback
+      await migration023.down(db);
+      const existsAfterDown = await db.schema.hasTable('idempotent_operations');
+      assert.strictEqual(existsAfterDown, false, 'Migration 023 down() must drop idempotent_operations table cleanly');
+
+      // Test clean apply
+      await migration023.up(db);
+      const existsAfterUp = await db.schema.hasTable('idempotent_operations');
+      assert.strictEqual(existsAfterUp, true, 'Migration 023 up() must recreate idempotent_operations table cleanly');
+    } else {
+      console.log('  NOTICE: Destructive migration down() skipped (ALLOW_DESTRUCTIVE_TEST_MIGRATION != 1). Verifying existing schema integrity.');
+      const exists = await db.schema.hasTable('idempotent_operations');
+      if (!exists) {
+        await migration023.up(db);
+      }
+    }
 
     // Check columns
     const columns = await db('information_schema.columns')
@@ -66,7 +94,7 @@ test.describe('AIRA ONE — Real PostgreSQL Durable Idempotency & Concurrency Su
     assert.ok(colMap.has('payload_hash'), 'Missing payload_hash column');
     assert.ok(colMap.has('status'), 'Missing status column');
     assert.ok(colMap.has('locked_until'), 'Missing locked_until column');
-    console.log('  PASS: Migration 023 applies and rolls back cleanly with all required constraints.');
+    console.log('  PASS: Migration 023 schema verified with all required columns and constraints.');
   });
 
   test('GATE 3: Principal-Scoped Isolation (Two users with same operation ID do not collide)', async () => {
