@@ -4,35 +4,39 @@
 
 @layer base {
   :root {
-    --bg-main: #FAF9F5;
+    --bg-main: #F8F9FC; /* Porcelain */
     --bg-surface: #FFFFFF;
-    --bg-surface-secondary: #F5F3ED;
-    --border-color: #E8E5DE;
-    --border-subtle: rgba(45, 40, 30, 0.08);
-    --text-primary: #1F1E1D;
-    --text-muted: #6E6D69;
-    /* Accessible foregrounds on accent fills and on neutral surfaces. */
-  --accent-on: #090909;
-  --accent-ink: #B34C2C;
-  --accent-terracotta: #D97757;
-    --accent-terracotta-hover: #C86244;
+    --bg-surface-secondary: #E9EDF4; /* Silver */
+    --border-color: #DDE3ED;
+    --border-subtle: rgba(17, 28, 53, 0.08);
+    --text-primary: #111C35; /* Midnight Navy */
+    --text-muted: #5A6A85;
+    --accent-on: #FFFFFF;
+    --accent-ink: #3056CB; /* Royal Blue */
+    --accent-primary: #3056CB;
+    --accent-primary-hover: #2544A5;
+    --accent-gold: #B79C6A; /* Soft Gold */
+    --accent-terracotta: #3056CB;
+    --accent-terracotta-hover: #2544A5;
     --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
     --ease-vanguard: cubic-bezier(0.32, 0.72, 0, 1);
   }
 
   .dark {
-    --bg-main: #1F1E1D;
-    --bg-surface: #272624;
-    --bg-surface-secondary: #2C2B28;
-    --border-color: #383633;
-    --border-subtle: rgba(255, 255, 255, 0.08);
-    --text-primary: #ECEAE4;
-    --text-muted: #9E9D96;
-    /* Accessible foregrounds on accent fills and on neutral surfaces. */
-  --accent-on: #090909;
-  --accent-ink: #F2A080;
-  --accent-terracotta: #D97757;
-    --accent-terracotta-hover: #E08568;
+    --bg-main: #0B1120; /* Deepest Midnight */
+    --bg-surface: #111C35; /* Midnight Navy */
+    --bg-surface-secondary: #162444;
+    --border-color: #23355C;
+    --border-subtle: rgba(233, 237, 244, 0.08);
+    --text-primary: #F8F9FC; /* Porcelain */
+    --text-muted: #9BAECB;
+    --accent-on: #FFFFFF;
+    --accent-ink: #5B82F6;
+    --accent-primary: #3056CB;
+    --accent-primary-hover: #4871F7;
+    --accent-gold: #B79C6A;
+    --accent-terracotta: #3056CB;
+    --accent-terracotta-hover: #4871F7;
   }
 
   /* Aira is a viewport-locked workspace: only the conversation/sidebar scroll.

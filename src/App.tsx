@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { PanelLeft, Layers, Bookmark, Share2, Check, FolderGit2 } from 'lucide-react';
+import { PanelLeft, Layers, Bookmark, Share2, Check, FolderGit2, Bot, AlertTriangle } from 'lucide-react';
 import type { Conversation, Message, Artifact, Attachment, Project, AppSettings, WorkspaceMode } from './types';
 import {
   loadConversations, saveConversations, saveActiveChatId,
@@ -19,6 +19,8 @@ import { ConversationSearchOverlay } from './components/ConversationSearchOverla
 import { InlineToast } from './components/InlineToast';
 import { backfillConversationsBestEffort, deleteConversationFromServer, fetchAllConversationsFromServer, fetchConversationFromServer, syncConversationToServer } from './utils/conversationSearch';
 import { useAnimatedFavicon } from './utils/animatedFavicon';
+import { detectCapabilityIntent, executeVisionGeneration, createBackendAutomation, getVisionTariff } from './utils/capabilityDispatcher';
+import { AgentContextualPanel } from './components/AgentContextualPanel';
 
 // Lazy-loaded heavy auxiliary surfaces to optimize FCP and TTI
 const ArtifactStudio = React.lazy(() => import('./components/ArtifactStudio').then(m => ({ default: m.ArtifactStudio })));
@@ -30,16 +32,10 @@ import { PricingModal } from './components/PricingModal';
 import { VisionStudioModal } from './components/VisionStudioModal';
 import { AccountBillingModal } from './components/AccountBillingModal';
 import { neonAuth, authenticatedApiFetch } from './lib/neonAuth';
-import { LibraryView } from './components/LibraryView';
-import { BuilderWorkspace } from './components/BuilderWorkspace';
-import { AutomationsView } from './components/AutomationsView';
 
 const MODE_CONTEXT: Record<WorkspaceMode, string> = {
   chat: '',
-  research: 'Work in research mode. Decompose the question, identify evidence needs, distinguish facts from inference, and provide a structured synthesis.',
-  library: 'Work in library mode. Prefer the supplied project knowledge and clearly distinguish retrieved context from general reasoning.',
-  agents: 'Work in agent-mission mode. Convert the objective into an executable mission with steps, tools, checkpoints, risks, and a final deliverable.',
-  automations: 'Work in automation-design mode. Identify the trigger, conditions, cadence, action, failure handling, and expected output.',
+  agent: 'Work in agent-mission mode. Plan and execute multi-step objectives with tool use, verification checkpoints, file creation, sandbox execution, and deliverables.',
 };
 
 function App() {
@@ -69,8 +65,36 @@ function App() {
   const [projects, setProjects] = useState<Project[]>(() => loadProjects());
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>(() => localStorage.getItem('aira_active_project_id_v1') || undefined);
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
-  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('chat');
+  const [workspaceMode, setWorkspaceModeState] = useState<WorkspaceMode>(() => {
+    const user = neonAuth.getCurrentUser();
+    const key = `aira_workspace_mode_${user?.id || 'guest'}`;
+    const stored = typeof window !== 'undefined' ? localStorage.getItem(key) : null;
+    return (stored === 'agent' || stored === 'chat') ? stored : 'chat';
+  });
+
+  const setWorkspaceMode = useCallback((mode: WorkspaceMode) => {
+    setWorkspaceModeState(mode);
+    const user = neonAuth.getCurrentUser();
+    const key = `aira_workspace_mode_${user?.id || 'guest'}`;
+    try {
+      localStorage.setItem(key, mode);
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+
+  const [isAgentPanelOpen, setIsAgentPanelOpen] = useState(false);
+  const [activeAgentPrompt, setActiveAgentPrompt] = useState<string | undefined>(undefined);
+  const activeAbortControllerRef = useRef<AbortController | null>(null);
+  const activeRunIdRef = useRef<string | null>(null);
+  const activeAssistantMsgIdRef = useRef<string | null>(null);
+  const [cancelBuilderSignal, setCancelBuilderSignal] = useState(0);
+  const [isBuilderBusy, setIsBuilderBusy] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window !== 'undefined' ? window.innerWidth >= 1280 : true);
+  const pendingAutomationIdsRef = useRef<Set<string>>(new Set());
+  const [confirmingAutoId, setConfirmingAutoId] = useState<string | null>(null);
+  const pendingVisionOpsRef = useRef<Set<string>>(new Set());
+  const [authorizingVisionId, setAuthorizingVisionId] = useState<string | null>(null);
   const [isProjectsOpen, setIsProjectsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
@@ -139,6 +163,30 @@ function App() {
 
       // Identity transition boundary: immediately isolate and purge prior account in-memory state
       if (nextUserId !== currentUserId) {
+        if (activeAbortControllerRef.current) {
+          activeAbortControllerRef.current.abort();
+          activeAbortControllerRef.current = null;
+        }
+        activeRunIdRef.current = null;
+        activeAssistantMsgIdRef.current = null;
+        pendingAutomationIdsRef.current.clear();
+        pendingVisionOpsRef.current.clear();
+        setConfirmingAutoId(null);
+        setAuthorizingVisionId(null);
+        setIsLoading(false);
+        setExecutionStatus(null);
+        setActiveAgentPrompt(undefined);
+        setIsAgentPanelOpen(false);
+
+        // Restore user-scoped workspace mode
+        try {
+          const modeKey = `aira_workspace_mode_${nextUserId || 'guest'}`;
+          const storedMode = localStorage.getItem(modeKey);
+          setWorkspaceModeState((storedMode === 'agent' || storedMode === 'chat') ? storedMode : 'chat');
+        } catch {
+          // ignore storage errors
+        }
+
         setActiveChatId('');
         setSessionActiveChatId(null);
         setActiveArtifact(null);
@@ -438,6 +486,271 @@ function App() {
     if (shared) showToast('Conversation shared');
   };
 
+  const handleCancelExecution = useCallback(async () => {
+    // 1. Abort active streaming fetch
+    if (activeAbortControllerRef.current) {
+      activeAbortControllerRef.current.abort();
+      activeAbortControllerRef.current = null;
+    }
+
+    // 2. Stop active sandboxed builder execution in AgentContextualPanel
+    setCancelBuilderSignal(prev => prev + 1);
+
+    // 3. Notify backend run cancellation if active run ID exists
+    const runId = activeRunIdRef.current;
+    if (runId) {
+      activeRunIdRef.current = null;
+      try {
+        await authenticatedApiFetch(`/api/runs/${runId}/cancel`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        });
+      } catch (err) {
+        console.warn('[App] Backend run cancellation notice:', err);
+      }
+    }
+
+    // 4. Mark active assistant message as cancelled
+    const assistantId = activeAssistantMsgIdRef.current;
+    if (assistantId && activeChatId) {
+      updateConversation(activeChatId, c => ({
+        ...c,
+        updatedAt: Date.now(),
+        messages: c.messages.map(m => m.id === assistantId ? {
+          ...m,
+          content: m.content
+            ? `${m.content}\n\n*[Execution cancelled by user. Transport connection aborted. Note: If backend provider processing had already begun, billing is reconciled by backend ledger rules.]*`
+            : '*[Execution cancelled by user. Transport connection aborted]*',
+          isStreaming: false,
+          thinking: m.thinking ? { ...m.thinking, isStreaming: false } : undefined,
+          visionProposal: undefined,
+        } : m),
+      }));
+      activeAssistantMsgIdRef.current = null;
+    }
+
+    setIsLoading(false);
+    setExecutionStatus(null);
+    showToast('Execution cancelled');
+  }, [activeChatId, showToast]);
+
+  const handleSwitchToAgentAndReview = useCallback((prompt: string) => {
+    setWorkspaceMode('agent');
+    setActiveAgentPrompt(prompt);
+    setIsAgentPanelOpen(true);
+    showToast('Switched to Agent Mode. Review task and sandbox permissions in the panel.');
+  }, [setWorkspaceMode, showToast]);
+
+  const handleConfirmAutomation = useCallback(async (proposal: {
+    id?: string;
+    name: string;
+    objective: string;
+    trigger: any;
+    cronExpression?: string;
+    targetRunAt?: number;
+    humanSchedule?: string;
+    timezone?: string;
+  }) => {
+    if (!activeChatId) return;
+    const opKey = proposal.id || `${proposal.name}_${proposal.cronExpression || proposal.targetRunAt || 'one_time'}`;
+    if (pendingAutomationIdsRef.current.has(opKey)) return;
+    pendingAutomationIdsRef.current.add(opKey);
+    setConfirmingAutoId(opKey);
+    setIsLoading(true);
+    setExecutionStatus('Persisting automation to backend engine…');
+    try {
+      const result = await createBackendAutomation({
+        name: proposal.name,
+        objective: proposal.objective,
+        trigger: proposal.trigger,
+        cronExpression: proposal.cronExpression,
+        targetRunAt: proposal.targetRunAt,
+        timezone: proposal.timezone,
+        clientOperationId: proposal.id,
+      });
+      setIsLoading(false);
+      setExecutionStatus(null);
+
+      if (result.success && result.automationId) {
+        const confirmMsgId = 'assistant-' + Date.now();
+        const scheduleInfo = proposal.humanSchedule ? `\n**Schedule:** ${proposal.humanSchedule}` : '';
+        const tzInfo = proposal.timezone ? `\n**Timezone:** ${proposal.timezone}` : '';
+        const triggerDetail = proposal.cronExpression ? ` (\`${proposal.cronExpression}\`)` : (proposal.targetRunAt ? ' (at-most-once)' : '');
+        const confirmationMessage: Message = {
+          id: confirmMsgId,
+          role: 'assistant',
+          content: `[Automation Confirmed & Activated]\n\n**Automation ID:** \`${result.automationId}\`\n**Name:** ${proposal.name}${scheduleInfo}${tzInfo}\n**Trigger:** ${proposal.trigger}${triggerDetail}\n**Status:** ACTIVE\n\nYour automation has been persisted to the server-authoritative engine and scheduled for autonomous execution.`,
+          timestamp: Date.now(),
+          isStreaming: false,
+        };
+        updateConversation(activeChatId, c => ({
+          ...c,
+          updatedAt: Date.now(),
+          messages: [...c.messages, confirmationMessage],
+        }));
+        showToast('Automation activated successfully');
+      } else {
+        showToast(result.error || 'Automation persistence failed');
+      }
+    } catch (err: any) {
+      setIsLoading(false);
+      setExecutionStatus(null);
+      showToast(`Automation error: ${err.message || 'Failed to create automation'}`);
+    } finally {
+      pendingAutomationIdsRef.current.delete(opKey);
+      setConfirmingAutoId(null);
+    }
+  }, [activeChatId, showToast]);
+
+  const handleAuthorizeVision = useCallback(async (proposal: NonNullable<Message['visionProposal']>) => {
+    if (!activeChatId) return;
+    if (pendingVisionOpsRef.current.has(proposal.id)) return;
+    pendingVisionOpsRef.current.add(proposal.id);
+    setAuthorizingVisionId(proposal.id);
+
+    const controller = new AbortController();
+    activeAbortControllerRef.current = controller;
+    const currentUserIdAtStart = currentUserId;
+    const epochAtStart = authEpochRef.current;
+
+    setIsLoading(true);
+    setExecutionStatus('Invoking Vision Engine backend…');
+
+    try {
+      const visionRes = await executeVisionGeneration(
+        proposal.prompt,
+        {
+          aspectRatio: proposal.options?.aspectRatio,
+          quality: proposal.options?.quality,
+          resolution: proposal.options?.resolution,
+          numImages: proposal.options?.numImages,
+          clientOperationId: proposal.id,
+        },
+        controller.signal
+      );
+
+      // Verify identity and transport integrity: discard stale results if user switched or operation cancelled
+      if (authEpochRef.current !== epochAtStart || controller.signal.aborted || currentUserId !== currentUserIdAtStart) {
+        setIsLoading(false);
+        setExecutionStatus(null);
+        activeAbortControllerRef.current = null;
+        updateConversation(activeChatId, c => ({
+          ...c,
+          updatedAt: Date.now(),
+          messages: c.messages.map(m => m.visionProposal?.id === proposal.id ? {
+            ...m,
+            content: `${m.content}\n\n*[Vision generation cancelled by user. Stale result suppressed.]*`,
+            visionProposal: undefined,
+          } : m),
+        }));
+        return;
+      }
+
+      setIsLoading(false);
+      setExecutionStatus(null);
+      activeAbortControllerRef.current = null;
+
+      if (visionRes.authRequired) {
+        setIsAuthOpen(true);
+        updateConversation(activeChatId, c => ({
+          ...c,
+          updatedAt: Date.now(),
+          messages: c.messages.map(m => m.visionProposal?.id === proposal.id ? {
+            ...m,
+            content: '[Authentication Required]: Please sign in to generate images with AIRA Vision Engine.',
+            visionProposal: undefined,
+          } : m),
+        }));
+        return;
+      }
+
+      if (visionRes.success && visionRes.imageUrl) {
+        const billingText = typeof visionRes.creditsCharged === 'number'
+          ? `*Generated by AIRA Vision Engine (${visionRes.creditsCharged} credits billed)*`
+          : '*Generated by AIRA Vision Engine*';
+        updateConversation(activeChatId, c => ({
+          ...c,
+          updatedAt: Date.now(),
+          messages: c.messages.map(m => m.visionProposal?.id === proposal.id ? {
+            ...m,
+            content: `Here is the generated image for "${proposal.prompt}":\n\n![${proposal.prompt}](${visionRes.imageUrl})\n\n${billingText}`,
+            visionProposal: undefined,
+          } : m),
+        }));
+      } else if (visionRes.quotaExceeded) {
+        updateConversation(activeChatId, c => ({
+          ...c,
+          updatedAt: Date.now(),
+          messages: c.messages.map(m => m.visionProposal?.id === proposal.id ? {
+            ...m,
+            content: `[Quota Exceeded] **Vision Quota Exceeded**: You need additional credits to generate images.\n\n${visionRes.error || 'Please upgrade your plan or purchase image credits in Account & Billing.'}`,
+            visionProposal: undefined,
+          } : m),
+        }));
+      } else if (visionRes.providerUnavailable) {
+        updateConversation(activeChatId, c => ({
+          ...c,
+          updatedAt: Date.now(),
+          messages: c.messages.map(m => m.visionProposal?.id === proposal.id ? {
+            ...m,
+            content: `[Vision Service Unavailable] **Vision Engine Not Ready**: ${visionRes.error || 'No active image generation provider is configured or available. Zero credits were deducted.'}`,
+            visionProposal: undefined,
+          } : m),
+        }));
+      } else if (visionRes.cancelled) {
+        updateConversation(activeChatId, c => ({
+          ...c,
+          updatedAt: Date.now(),
+          messages: c.messages.map(m => m.visionProposal?.id === proposal.id ? {
+            ...m,
+            content: `${m.content}\n\n*[Vision generation cancelled by user. Transport connection aborted.]*`,
+            visionProposal: undefined,
+          } : m),
+        }));
+      } else {
+        updateConversation(activeChatId, c => ({
+          ...c,
+          updatedAt: Date.now(),
+          messages: c.messages.map(m => m.visionProposal?.id === proposal.id ? {
+            ...m,
+            content: `[Notice] **Vision Notice**: ${visionRes.error || 'Failed to generate visual render.'}`,
+            visionProposal: undefined,
+          } : m),
+        }));
+      }
+    } catch (err: any) {
+      setIsLoading(false);
+      setExecutionStatus(null);
+      activeAbortControllerRef.current = null;
+      updateConversation(activeChatId, c => ({
+        ...c,
+        updatedAt: Date.now(),
+        messages: c.messages.map(m => m.visionProposal?.id === proposal.id ? {
+          ...m,
+          content: `[Error] **Vision Error**: ${err.message || 'Image generation service error.'}`,
+          visionProposal: undefined,
+        } : m),
+      }));
+    } finally {
+      pendingVisionOpsRef.current.delete(proposal.id);
+      setAuthorizingVisionId(null);
+    }
+  }, [activeChatId, currentUserId]);
+
+  const handleCancelVisionProposal = useCallback((proposalId: string) => {
+    if (!activeChatId) return;
+    updateConversation(activeChatId, c => ({
+      ...c,
+      updatedAt: Date.now(),
+      messages: c.messages.map(m => m.visionProposal?.id === proposalId ? {
+        ...m,
+        content: `${m.content}\n\n*[Vision generation cancelled by user]*`,
+        visionProposal: undefined,
+      } : m),
+    }));
+    showToast('Vision generation cancelled');
+  }, [activeChatId, showToast]);
+
   const handleSendMessage = async (rawText: string, attachments: Attachment[]) => {
     if (isLoading) return;
     let conversation = activeConversation;
@@ -482,13 +795,118 @@ function App() {
     }));
     setIsLoading(true);
 
+    const controller = new AbortController();
+    activeAbortControllerRef.current = controller;
+    activeAssistantMsgIdRef.current = assistantId;
+    activeRunIdRef.current = null;
+
+    const intent = detectCapabilityIntent(rawText, workspaceMode);
+
+    // 1. VISION ENGINE CAPABILITY DISPATCH (Requires explicit user authorization and tariff disclosure)
+    if (intent.capability === 'IMAGE_GENERATION') {
+      setIsLoading(false);
+      activeAbortControllerRef.current = null;
+      activeAssistantMsgIdRef.current = null;
+      const tariff = getVisionTariff(intent.parameters);
+      updateConversation(id, c => ({
+        ...c,
+        updatedAt: Date.now(),
+        messages: c.messages.map(m => m.id === assistantId ? {
+          ...m,
+          content: `I prepared a visual generation request for your prompt: **"${intent.cleanPrompt}"**.\n\nImage generation is a billable operation requiring **${tariff} Credits** (${intent.parameters?.quality === 'premium' ? 'Premium' : 'Standard Economy'}, ${intent.parameters?.aspectRatio || '1:1'}). Under AIRA commercial safety controls, billable operations require explicit authorization before execution. Review the details below and authorize generation to proceed.`,
+          isStreaming: false,
+          visionProposal: {
+            id: `vis_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+            prompt: intent.cleanPrompt,
+            estimatedCredits: tariff,
+            options: intent.parameters,
+          },
+        } : m),
+      }));
+      return;
+    }
+
+    // 2. BUILDER APP IN CHAT MODE (Propose switching to Agent Mode with actionable handoff)
+    if (intent.capability === 'BUILDER_APP' && workspaceMode === 'chat') {
+      setIsLoading(false);
+      activeAbortControllerRef.current = null;
+      activeAssistantMsgIdRef.current = null;
+      updateConversation(id, c => ({
+        ...c,
+        updatedAt: Date.now(),
+        messages: c.messages.map(m => m.id === assistantId ? {
+          ...m,
+          content: `I recognized your request to scaffold and build an application: **"${intent.cleanPrompt}"**.\n\nTo create files, inspect the codebase, execute commands in an isolated sandbox, run tests, and generate live previews, this task requires **Agent Mode** with explicit sandbox permissions.`,
+          isStreaming: false,
+          builderHandoff: {
+            prompt: intent.cleanPrompt,
+            conversationId: id,
+          },
+        } : m),
+      }));
+      return;
+    }
+
+    // 3. BUILDER APP IN AGENT MODE (Launch builder and open contextual panel)
+    if (intent.capability === 'BUILDER_APP' && workspaceMode === 'agent') {
+      setIsAgentPanelOpen(true);
+      setActiveAgentPrompt(intent.cleanPrompt || rawText);
+    }
+
+    // 4. AUTOMATION ENGINE CAPABILITY DISPATCH (Requires explicit schedule resolution and user confirmation)
+    if (intent.capability === 'AUTOMATION') {
+      setIsLoading(false);
+      activeAbortControllerRef.current = null;
+      activeAssistantMsgIdRef.current = null;
+
+      const schedule = intent.parameters?.schedule;
+      if (schedule && schedule.isAmbiguous) {
+        updateConversation(id, c => ({
+          ...c,
+          updatedAt: Date.now(),
+          messages: c.messages.map(m => m.id === assistantId ? {
+            ...m,
+            content: `I recognized your request to automate a workflow: **"${intent.cleanPrompt}"**.\n\n${schedule.clarificationPrompt || 'Please specify the exact time and frequency for this automation (for example: "every Monday at 9:00 AM" or "tomorrow at 3:00 PM").'}`,
+            isStreaming: false,
+          } : m),
+        }));
+        return;
+      }
+
+      const proposalName = intent.cleanPrompt.slice(0, 48) || 'AIRA Automation';
+      updateConversation(id, c => ({
+        ...c,
+        updatedAt: Date.now(),
+        messages: c.messages.map(m => m.id === assistantId ? {
+          ...m,
+          content: `I prepared an automation workflow for your request: **"${intent.cleanPrompt}"**.\n\n**Proposed Schedule:** ${schedule?.humanSchedule || 'Scheduled automation'}\n\nUnder AIRA execution safety standards, automated workflows cannot be scheduled implicitly. Review the proposal below and click **Confirm and Schedule Automation** to register and activate it in the backend engine.`,
+          isStreaming: false,
+          automationProposal: {
+            id: `prop_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+            name: proposalName,
+            objective: intent.cleanPrompt,
+            trigger: schedule?.scheduleType === 'ONE_TIME' ? 'ONE_TIME' : 'CRON',
+            cronExpression: schedule?.scheduleType === 'ONE_TIME' ? undefined : (schedule?.cronExpression || '0 9 * * *'),
+            targetRunAt: schedule?.targetTimestamp,
+            humanSchedule: schedule?.humanSchedule,
+            timezone: schedule?.timezone,
+            scheduleType: schedule?.scheduleType,
+          },
+        } : m),
+      }));
+      return;
+    }
+
     let projectContext = '';
     if (currentProject?.instructions) projectContext += `Project instructions:\n${currentProject.instructions}\n\n`;
     if (currentProject?.knowledgeGraph) {
       const retrieved = retrieveRelevantSubgraph(rawText, currentProject.knowledgeGraph);
       if (retrieved) projectContext += retrieved.formattedContext;
     }
-    const modeContext = MODE_CONTEXT[workspaceMode];
+    let modeContext = MODE_CONTEXT[workspaceMode];
+    if (intent.capability === 'RESEARCH') {
+      modeContext += '\nPerform deep research synthesis. Decompose the inquiry into core sub-questions, extract evidence, cite primary sources, and clearly distinguish verified facts from inferences.';
+    }
     const systemContext = [settings.customInstructions, modeContext, projectContext].filter(Boolean).join('\n\n');
 
     try {
@@ -522,7 +940,17 @@ function App() {
             setActiveArtifact(artifact);
             updateConversation(id, c => ({
               ...c,
-              messages: c.messages.map(m => m.id === assistantId ? { ...m, artifacts: [...(m.artifacts || []), artifact] } : m),
+              messages: c.messages.map(m => {
+                if (m.id !== assistantId) return m;
+                const existing = m.artifacts || [];
+                const idx = existing.findIndex(a => a.id === artifact.id);
+                if (idx >= 0) {
+                  const updated = [...existing];
+                  updated[idx] = artifact;
+                  return { ...m, artifacts: updated };
+                }
+                return { ...m, artifacts: [...existing, artifact] };
+              }),
             }));
           },
           onApprovalRequired: approval => {
@@ -539,7 +967,36 @@ function App() {
           onLatencyMetrics: metrics => {
             console.info('[AIRA Telemetry] Client observed latency metrics:', metrics);
           },
+          onRunStarted: runId => {
+            activeRunIdRef.current = runId;
+          },
+          onSourceAdded: source => {
+            updateConversation(id, c => ({
+              ...c,
+              messages: c.messages.map(m => m.id === assistantId ? {
+                ...m,
+                citations: [...(m.citations || []), {
+                  sourceTitle: source.title,
+                  uri: source.url,
+                  snippet: source.snippet,
+                }],
+              } : m),
+            }));
+          },
+          onCancelled: () => {
+            updateConversation(id, c => ({
+              ...c,
+              messages: c.messages.map(m => m.id === assistantId ? {
+                ...m,
+                content: m.content ? `${m.content}\n\n*[Execution cancelled by user]*` : '*[Execution cancelled by user]*',
+                isStreaming: false,
+              } : m),
+            }));
+          },
           onComplete: () => {
+            activeAbortControllerRef.current = null;
+            activeAssistantMsgIdRef.current = null;
+            activeRunIdRef.current = null;
             setExecutionStatus(null);
             updateConversation(id, c => ({
               ...c,
@@ -553,6 +1010,9 @@ function App() {
             setIsLoading(false);
           },
           onError: error => {
+            activeAbortControllerRef.current = null;
+            activeAssistantMsgIdRef.current = null;
+            activeRunIdRef.current = null;
             setExecutionStatus(null);
             updateConversation(id, c => ({
               ...c,
@@ -562,11 +1022,19 @@ function App() {
           },
         },
         projectContext || undefined,
-        id
+        id,
+        intent.capability === 'RESEARCH' ? 'RESEARCH' : undefined,
+        controller.signal
       );
-    } catch {
+    } catch (err: any) {
+      activeAbortControllerRef.current = null;
+      activeAssistantMsgIdRef.current = null;
+      activeRunIdRef.current = null;
       setExecutionStatus(null);
       setIsLoading(false);
+      if (err?.name === 'AbortError') {
+        return;
+      }
       updateConversation(id, c => ({
         ...c,
         messages: c.messages.map(m => m.id === assistantId ? { ...m, content: 'Aira could not complete this request.', isStreaming: false } : m),
@@ -663,7 +1131,7 @@ function App() {
       <InlineToast message={toastMessage} />
 
       <main className="flex-1 min-w-0 min-h-0 h-[100dvh] flex flex-col overflow-hidden w-full max-w-full bg-mesh-canvas">
-        <header className="h-[54px] shrink-0 px-3 md:px-5 flex items-center justify-between border-b border-claude-border-light/80 dark:border-claude-border-dark/80 gradient-fade-header relative z-50 bg-claude-bg-light/95 dark:bg-claude-bg-dark/95 backdrop-blur-md">
+        <header className="h-[54px] shrink-0 px-3 md:px-5 flex items-center justify-between border-b border-claude-border-light/80 dark:border-white/10 gradient-fade-header relative z-30 bg-claude-bg-light/95 dark:bg-aira-navy/95 backdrop-blur-md">
           <div className="flex flex-1 items-center gap-1 min-w-0">
             {!sidebarOpen && (
               <>
@@ -686,29 +1154,46 @@ function App() {
               extendedThinking={settings.extendedThinking}
               onToggleThinking={enabled => updateSettings({ extendedThinking: enabled })}
             />
-            {currentProject && <button onClick={() => setIsProjectsOpen(true)} className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-claude-terracotta/10 text-claude-accentInk text-xs max-w-[180px]"><FolderGit2 className="w-3 h-3" /><span className="truncate">{currentProject.name}</span></button>}
+            {currentProject && <button onClick={() => setIsProjectsOpen(true)} className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-aira-blue/10 text-aira-blue text-xs max-w-[180px]"><FolderGit2 className="w-3 h-3" /><span className="truncate">{currentProject.name}</span></button>}
           </div>
           <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
+            {workspaceMode === 'agent' && (
+              <button
+                onClick={() => setIsAgentPanelOpen(prev => !prev)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+                  isAgentPanelOpen
+                    ? 'bg-aira-blue text-white'
+                    : 'bg-aira-blue/10 text-aira-blue dark:text-aira-silver hover:bg-aira-blue/20'
+                }`}
+                title="Toggle Agent Workspace Panel"
+              >
+                <Bot className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Agent Panel</span>
+              </button>
+            )}
+            {(isLoading || isBuilderBusy) && (
+              <button
+                onClick={handleCancelExecution}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-rose-500 hover:bg-rose-500/10 active:scale-95 transition-all"
+                title="Cancel active execution"
+              >
+                Cancel
+              </button>
+            )}
             {activeConversation?.messages.some(m => (m.artifacts?.length || 0) > 0) && <button onClick={() => {
               if (activeArtifact) setActiveArtifact(null);
               else {
                 const artifact = activeConversation.messages.flatMap(m => m.artifacts || [])[0];
                 if (artifact) setActiveArtifact(artifact);
               }
-            }} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs ${activeArtifact ? 'bg-claude-terracotta text-claude-onAccent' : 'hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark'}`}><Layers className="w-3.5 h-3.5" /><span className="hidden sm:inline">Output Studio</span></button>}
-            {activeConversation && <button onClick={() => handleToggleStar(activeConversation.id)} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark active:scale-95 transition-all" title={activeConversation.isPinned ? 'Remove bookmark' : 'Bookmark conversation'}><Bookmark className={`w-4 h-4 ${activeConversation.isPinned ? 'fill-claude-terracotta text-claude-accentInk' : 'text-claude-muted-light dark:text-claude-muted-dark'}`} /></button>}
-            <button onClick={handleShare} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark">{sharedCopied ? <Check className="w-4 h-4 text-emerald-400" /> : <Share2 className="w-4 h-4 text-claude-muted-light dark:text-claude-muted-dark" />}</button>
+            }} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs ${activeArtifact ? 'bg-aira-blue text-white' : 'hover:bg-claude-surface2-light dark:hover:bg-white/5'}`}><Layers className="w-3.5 h-3.5" /><span className="hidden sm:inline">Output Studio</span></button>}
+            {activeConversation && <button onClick={() => handleToggleStar(activeConversation.id)} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-white/5 active:scale-95 transition-all" title={activeConversation.isPinned ? 'Remove bookmark' : 'Bookmark conversation'}><Bookmark className={`w-4 h-4 ${activeConversation.isPinned ? 'fill-aira-blue text-aira-blue' : 'text-claude-muted-light dark:text-claude-muted-dark'}`} /></button>}
+            <button onClick={handleShare} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-white/5">{sharedCopied ? <Check className="w-4 h-4 text-emerald-400" /> : <Share2 className="w-4 h-4 text-claude-muted-light dark:text-claude-muted-dark" />}</button>
           </div>
         </header>
 
         <div ref={chatScrollRef} data-testid="chat-scroll-region" className="flex-1 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain flex flex-col">
-          {workspaceMode === 'library' ? (
-            <LibraryView />
-          ) : workspaceMode === 'agents' ? (
-            <BuilderWorkspace model={settings.activeModel} />
-          ) : workspaceMode === 'automations' ? (
-            <AutomationsView />
-          ) : (!activeConversation || activeConversation.messages.length === 0 ? (
+          {!activeConversation || activeConversation.messages.length === 0 ? (
             <GreetingScreen 
               userName={settings.userName} 
               workspaceMode={workspaceMode} 
@@ -725,74 +1210,97 @@ function App() {
                   id={`message-${message.id}`}
                   key={message.id}
                   className={highlightedMessageId === message.id
-                    ? 'rounded-xl ring-2 ring-claude-terracotta/35 bg-claude-terracotta/[0.035] transition-all duration-500'
+                    ? 'rounded-xl ring-2 ring-aira-blue/35 bg-aira-blue/[0.035] transition-all duration-500'
                     : 'transition-all duration-500'}
                 >
-                  <ChatMessage message={message} userName={settings.userName} onOpenArtifact={setActiveArtifact} />
+                  <ChatMessage
+                    message={message}
+                    userName={settings.userName}
+                    onOpenArtifact={setActiveArtifact}
+                    onSwitchToAgentAndReview={handleSwitchToAgentAndReview}
+                    onConfirmAutomation={handleConfirmAutomation}
+                    onAuthorizeVision={handleAuthorizeVision}
+                    onCancelVisionProposal={handleCancelVisionProposal}
+                    isConfirmingAutomation={Boolean(confirmingAutoId)}
+                    isAuthorizingVision={Boolean(authorizingVisionId)}
+                  />
                 </div>
               ))}
             </div>
-          ))}
+          )}
         </div>
 
-          {workspaceMode !== 'agents' && (<div className="shrink-0 min-w-0 relative z-10 pt-2 sm:pt-4 gradient-mask-bottom">
-            {executionStatus && (
-              <div className="max-w-2xl mx-auto px-4 mb-2">
-                <div className="flex items-center gap-2 text-xs text-orange-600 dark:text-orange-400 bg-orange-50/90 dark:bg-orange-950/40 border border-orange-200/60 dark:border-orange-800/50 rounded-lg px-3 py-1.5 shadow-sm backdrop-blur">
-                  <div className="w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
-                  <span className="font-medium">{executionStatus}</span>
+        {/* Persistent Composer (Visible in both Chat Mode and Agent Mode) */}
+        <div className="shrink-0 min-w-0 relative z-10 pt-2 sm:pt-4 gradient-mask-bottom">
+          {executionStatus && (
+            <div className="max-w-2xl mx-auto px-4 mb-2">
+              <div className="flex items-center gap-2 text-xs text-aira-blue dark:text-aira-silver bg-aira-blue/10 border border-aira-blue/20 rounded-lg px-3 py-1.5 shadow-sm backdrop-blur">
+                <div className="w-2 h-2 rounded-full bg-aira-blue animate-pulse" />
+                <span className="font-medium">{executionStatus}</span>
+              </div>
+            </div>
+          )}
+
+          {pendingApproval && (
+            <div className="max-w-2xl mx-auto px-4 mb-3">
+              <div className="p-4 bg-amber-500/10 dark:bg-amber-950/40 border border-amber-500/30 rounded-xl backdrop-blur-md text-sm text-claude-text-light dark:text-claude-text-dark shadow-lg">
+                <div className="flex items-start justify-between gap-3 mb-2">
+                  <div className="flex items-center gap-2 font-medium text-amber-600 dark:text-amber-400">
+                    <AlertTriangle className="w-4 h-4 text-amber-500" />
+                    <span>Tool Execution Approval Required</span>
+                  </div>
+                  <span className="text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-700 dark:text-amber-300 font-mono">
+                    {pendingApproval.toolName || 'system_action'}
+                  </span>
+                </div>
+                <p className="text-xs text-claude-muted-light dark:text-claude-muted-dark mb-3">
+                  {pendingApproval.reason || 'This tool execution produces state changes or destructive side effects that require explicit user authorization.'}
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleApprovalDecision('APPROVE')}
+                    disabled={isSubmittingApproval}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs shadow-sm transition disabled:opacity-50"
+                  >
+                    {isSubmittingApproval ? 'Submitting...' : 'Approve Execution'}
+                  </button>
+                  <button
+                    onClick={() => handleApprovalDecision('REJECT')}
+                    disabled={isSubmittingApproval}
+                    className="px-3 py-1.5 rounded-lg bg-rose-600/10 hover:bg-rose-600/20 text-rose-600 dark:text-rose-400 font-medium text-xs transition disabled:opacity-50"
+                  >
+                    Deny
+                  </button>
                 </div>
               </div>
-            )}
+            </div>
+          )}
 
-            {pendingApproval && (
-              <div className="max-w-2xl mx-auto px-4 mb-3">
-                <div className="p-4 bg-amber-500/10 dark:bg-amber-950/40 border border-amber-500/30 rounded-xl backdrop-blur-md text-sm text-claude-text-light dark:text-claude-text-dark shadow-lg">
-                  <div className="flex items-start justify-between gap-3 mb-2">
-                    <div className="flex items-center gap-2 font-medium text-amber-600 dark:text-amber-400">
-                      <span className="text-base">⚠️</span>
-                      <span>Tool Execution Approval Required</span>
-                    </div>
-                    <span className="text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-700 dark:text-amber-300 font-mono">
-                      {pendingApproval.toolName || 'system_action'}
-                    </span>
-                  </div>
-                  <p className="text-xs text-claude-muted-light dark:text-claude-muted-dark mb-3">
-                    {pendingApproval.reason || 'This tool execution produces state changes or destructive side effects that require explicit user authorization.'}
-                  </p>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => handleApprovalDecision('APPROVE')}
-                      disabled={isSubmittingApproval}
-                      className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs shadow-sm transition disabled:opacity-50"
-                    >
-                      {isSubmittingApproval ? 'Submitting...' : 'Approve Execution'}
-                    </button>
-                    <button
-                      onClick={() => handleApprovalDecision('REJECT')}
-                      disabled={isSubmittingApproval}
-                      className="px-3 py-1.5 rounded-lg bg-rose-600/10 hover:bg-rose-600/20 text-rose-600 dark:text-rose-400 font-medium text-xs transition disabled:opacity-50"
-                    >
-                      Deny
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            <ChatInput
-              onSendMessage={handleSendMessage}
-              isLoading={isLoading}
-              currentModel={settings.activeModel}
-              extendedThinking={settings.extendedThinking}
-              workspaceMode={workspaceMode}
-              onWorkspaceModeChange={setWorkspaceMode}
-            />
-          </div>)}
+          <ChatInput
+            onSendMessage={handleSendMessage}
+            isLoading={isLoading}
+            currentModel={settings.activeModel}
+            extendedThinking={settings.extendedThinking}
+            workspaceMode={workspaceMode}
+            onWorkspaceModeChange={setWorkspaceMode}
+          />
+        </div>
       </main>
 
       <React.Suspense fallback={null}>
         {activeArtifact && <ArtifactStudio artifact={activeArtifact} onClose={() => setActiveArtifact(null)} />}
+        {isAgentPanelOpen && (
+          <AgentContextualPanel
+            isOpen={isAgentPanelOpen}
+            onClose={() => setIsAgentPanelOpen(false)}
+            model={settings.activeModel}
+            activePrompt={activeAgentPrompt}
+            onActivePromptConsumed={() => setActiveAgentPrompt(undefined)}
+            cancelSignal={cancelBuilderSignal}
+            onExecutionCancelled={handleCancelExecution}
+            onBusyChange={setIsBuilderBusy}
+          />
+        )}
 
         {isProjectsOpen && (
           <ProjectsModal

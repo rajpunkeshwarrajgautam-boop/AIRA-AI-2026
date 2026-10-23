@@ -87,6 +87,13 @@ import {
   isAllowedOrigin
 } from './auth/bff-session.js';
 import { isTemporaryDatabaseError } from './utils/storage-errors.js';
+import {
+  durableIdempotencyManager,
+  IdempotencyConflictError,
+  IdempotencyInProgressError,
+  IdempotencyUncertainOutcomeError,
+  IdempotencyDatabaseError
+} from './utils/idempotency.js';
 
 export class UntrustedOriginError extends Error {
   readonly status = 403;
@@ -253,6 +260,19 @@ app.post('/api/auth/sign-out', (req: Request, res: Response) => {
     res.status(500).json({ error: err.message || 'BFF sign out failed' });
   });
 });
+
+// Authoritative deployment identity endpoint for Preview and Release certification
+const versionHandler = (_req: Request, res: Response) => {
+  res.json({
+    status: 'ok',
+    version: '1.0.0',
+    commitSha: process.env.VERCEL_GIT_COMMIT_SHA || process.env.GITHUB_SHA || process.env.COMMIT_SHA || 'unknown',
+    deploymentUrl: process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'unknown',
+    environment: process.env.NODE_ENV || 'production'
+  });
+};
+app.get('/api/version', versionHandler);
+app.get('/version', versionHandler);
 
 // Public bootstrap endpoint used by the browser before protected API calls.
 // It issues or refreshes an opaque, signed, HttpOnly session cookie.
@@ -1266,7 +1286,7 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
 app.post('/api/chat/stream', async (req: Request, res: Response) => {
   let admission: any = undefined;
   try {
-    const { messages, history, prompt, model: rawModel, extendedThinking, systemPrompt, contextSubgraph, attachments, conversationId } = req.body;
+    const { messages, history, prompt, model: rawModel, extendedThinking, systemPrompt, contextSubgraph, attachments, conversationId, intent } = req.body;
     const model = normalizeModelIdentifier(rawModel);
     const promptText = prompt || (Array.isArray(messages)
       ? [...messages].reverse().find((m: any) => m.role === 'user')?.content || ''
@@ -1378,6 +1398,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       attachments: Array.isArray(attachments) ? attachments : undefined,
       systemPrompt: (systemPrompt || '') + (contextSubgraph ? `\n\n${contextSubgraph}` : ''),
       context: { history: effectiveHistory },
+      intent: (typeof intent === 'string' && intent.trim()) ? intent.trim() as any : undefined,
       modelPolicy: {
         model: model || 'aira-auto',
         extendedThinking: Boolean(extendedThinking),
@@ -1389,6 +1410,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       return res.end();
     }
     tRunCreated = performance.now();
+    res.write(`event: run_started\ndata: ${JSON.stringify({ runId: run.id })}\n\n`);
 
     const stream = agentRuntime.getEventStream(run.id);
 
@@ -1497,6 +1519,8 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         res.write(`event: tool_started\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'tool.completed') {
         res.write(`event: tool_completed\ndata: ${JSON.stringify(evt.data)}\n\n`);
+      } else if (evt.type === 'source.added') {
+        res.write(`event: source_added\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'run.failed') {
         await finalizeAndEmitMetrics();
         const failure = evt.data?.error || 'Aira runtime failed before producing a response';
@@ -1856,12 +1880,14 @@ app.get('/api/automations', async (req: Request, res: Response) => {
 });
 
 app.post('/api/automations', async (req: Request, res: Response) => {
-  try {
-    const verifiedUserId = req.principal?.userId;
-    if (!verifiedUserId) {
-      return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
-    }
+  const verifiedUserId = req.principal?.userId;
+  if (!verifiedUserId) {
+    return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+  }
 
+  const clientOpId = (req.headers['x-client-operation-id'] as string) || req.body?.clientOperationId;
+
+  try {
     if (req.body?.principalId && req.body.principalId !== verifiedUserId) {
       return res.status(400).json({
         error: 'Forbidden: caller may not specify or forge principalId ownership'
@@ -1873,10 +1899,47 @@ app.post('/api/automations', async (req: Request, res: Response) => {
       principalId: verifiedUserId
     };
     const parsed = AutomationDefinitionSchema.omit({ id: true }).parse(raw);
-    const item = await automationEngine.createAutomation(parsed);
-    res.status(201).json(item);
+
+    let sideEffectCommitted = false;
+    let automationResult: any = null;
+
+    // Server-side durable principal-scoped idempotency
+    if (clientOpId) {
+      const check = await durableIdempotencyManager.beginOrGet(
+        verifiedUserId,
+        clientOpId,
+        'AUTOMATION_CREATE',
+        parsed
+      );
+      if (check.isReplay) {
+        return res.status(check.statusCode).json(check.responseBody);
+      }
+    }
+
+    automationResult = await automationEngine.createAutomation(parsed, clientOpId);
+    sideEffectCommitted = true;
+
+    if (clientOpId) {
+      await durableIdempotencyManager.complete(verifiedUserId, clientOpId, 201, automationResult);
+    }
+
+    res.status(201).json(automationResult);
   } catch (err: any) {
-    res.status(400).json({ error: err.message });
+    if (clientOpId && verifiedUserId) {
+      if (!(err instanceof IdempotencyConflictError || err instanceof IdempotencyInProgressError)) {
+        await durableIdempotencyManager.fail(verifiedUserId, clientOpId, {
+          sideEffectCommitted,
+          result: automationResult,
+          error: err.message
+        }).catch(() => {});
+      }
+    }
+    const status = err.statusCode || (
+      err.code === 'IDEMPOTENCY_CONFLICT' || err.code === 'IDEMPOTENCY_IN_PROGRESS' || err.code === 'IDEMPOTENCY_UNCERTAIN_OUTCOME'
+        ? 409
+        : (err.code === 'IDEMPOTENCY_DATABASE_UNAVAILABLE' ? 503 : 400)
+    );
+    res.status(status).json({ error: err.message, code: err.code });
   }
 });
 

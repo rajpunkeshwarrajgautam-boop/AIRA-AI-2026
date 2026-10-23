@@ -58,9 +58,38 @@ describe('AIRA Vision Multimodal Tariffs & Dimension Mapping', () => {
     assert.equal(calculateVisionTariff('edit', { advancedMode: true }), 250);
   });
 
-  it('4. Executes Vision Generate with credit reservation and wallet settlement for 2 images', async () => {
+  it('4. Fail-closed on missing provider, then executes Vision Generate with credit reservation and wallet settlement for 2 images when provider is configured', async () => {
     await commercialBillingService.getOrCreateCustomer(testPrincipalId);
     // User starts with 100 credits
+
+    // A. Unconfigured provider must fail closed with VISION_PROVIDER_NOT_READY without deducting credits
+    visionService.setCustomProviders(null);
+    await assert.rejects(
+      async () => {
+        await visionService.generate(testPrincipalId, {
+          prompt: 'Cinematic drone shot of modern glass architecture at dusk',
+          aspectRatio: '16:9',
+          quality: 'economy',
+          resolution: 'standard',
+          numImages: 2
+        });
+      },
+      (err: any) => err.code === 'VISION_PROVIDER_NOT_READY'
+    );
+
+    // Balance must remain exactly 100
+    const entBefore = await commercialBillingService.getEntitlements(testPrincipalId);
+    assert.equal(entBefore.creditBalance, 100);
+    assert.equal(entBefore.reservedCredits, 0);
+
+    // B. With genuine provider configured, generate 2 images
+    visionService.setCustomProviders({
+      generate: async (params, dims) => [
+        { url: 'https://images.aira-test.internal/gen_1.jpg', width: dims.width, height: dims.height },
+        { url: 'https://images.aira-test.internal/gen_2.jpg', width: dims.width, height: dims.height }
+      ]
+    });
+
     const result = await visionService.generate(testPrincipalId, {
       prompt: 'Cinematic drone shot of modern glass architecture at dusk',
       aspectRatio: '16:9',
@@ -74,6 +103,9 @@ describe('AIRA Vision Multimodal Tariffs & Dimension Mapping', () => {
     assert.equal(result.images[0].aspectRatio, '16:9');
     assert.equal(result.images[0].width, 1344);
     assert.equal(result.images[0].height, 768);
+    // Never return SVG placeholders
+    assert.ok(!result.images[0].url.includes('data:image/svg+xml'));
+    assert.ok(!result.images[1].url.includes('data:image/svg+xml'));
 
     // Wallet balance should now be 76 (100 - 24)
     const ent = await commercialBillingService.getEntitlements(testPrincipalId);
@@ -81,7 +113,34 @@ describe('AIRA Vision Multimodal Tariffs & Dimension Mapping', () => {
     assert.equal(ent.reservedCredits, 0);
   });
 
-  it('5. Executes Vision Edit with credit reservation and settlement', async () => {
+  it('5. Fail-closed on missing provider, then executes Vision Edit with credit reservation and settlement when provider is configured', async () => {
+    // A. Unconfigured provider must fail closed with VISION_PROVIDER_NOT_READY
+    visionService.setCustomProviders(null);
+    await assert.rejects(
+      async () => {
+        await visionService.edit(testPrincipalId, {
+          prompt: 'Make the sky sunset golden hour with subtle clouds',
+          quality: 'economy',
+          resolution: 'standard'
+        });
+      },
+      (err: any) => err.code === 'VISION_PROVIDER_NOT_READY'
+    );
+
+    // Balance remains 76
+    const entBefore = await commercialBillingService.getEntitlements(testPrincipalId);
+    assert.equal(entBefore.creditBalance, 76);
+    assert.equal(entBefore.reservedCredits, 0);
+
+    // B. With genuine provider configured
+    visionService.setCustomProviders({
+      edit: async (params, dims) => ({
+        url: 'https://images.aira-test.internal/edit_1.png',
+        width: dims.width,
+        height: dims.height
+      })
+    });
+
     const editResult = await visionService.edit(testPrincipalId, {
       prompt: 'Make the sky sunset golden hour with subtle clouds',
       quality: 'economy',
@@ -90,10 +149,15 @@ describe('AIRA Vision Multimodal Tariffs & Dimension Mapping', () => {
 
     assert.equal(editResult.chargedCredits, 40);
     assert.ok(editResult.image.id);
+    assert.ok(!editResult.image.url.includes('data:image/svg+xml'));
 
     // Wallet balance should now be 36 (76 - 40)
     const ent = await commercialBillingService.getEntitlements(testPrincipalId);
     assert.equal(ent.creditBalance, 36);
     assert.equal(ent.reservedCredits, 0);
+
+    // Clean up
+    visionService.setCustomProviders(null);
   });
 });
+

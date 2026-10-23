@@ -1,10 +1,16 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useMemo } from 'react';
 import {
   Check,
   Copy,
   FileText,
   RotateCw,
   ClipboardPaste,
+  Wrench,
+  Calendar,
+  Play,
+  CheckCircle2,
+  ExternalLink,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import type { Message, Artifact } from '../types';
@@ -14,12 +20,19 @@ import { renderMarkdownToHtml } from '../utils/markdown';
 import { copyMessageAsRichText } from '../utils/richClipboard';
 import { ThinkingBlock } from './ThinkingBlock';
 import { ArtifactCard } from './ArtifactCard';
+import { extractArtifactsFromText } from '../utils/artifactParser';
 
 interface ChatMessageProps {
   message: Message;
   userName: string;
   onOpenArtifact: (artifact: Artifact) => void;
   onRetry?: () => void;
+  onSwitchToAgentAndReview?: (prompt: string) => void;
+  onConfirmAutomation?: (proposal: any) => void;
+  onAuthorizeVision?: (proposal: any) => void;
+  onCancelVisionProposal?: (proposalId: string) => void;
+  isConfirmingAutomation?: boolean;
+  isAuthorizingVision?: boolean;
 }
 
 export interface ProvenanceBadgeInfo {
@@ -90,6 +103,12 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
   userName,
   onOpenArtifact,
   onRetry,
+  onSwitchToAgentAndReview,
+  onConfirmAutomation,
+  onAuthorizeVision,
+  onCancelVisionProposal,
+  isConfirmingAutomation,
+  isAuthorizingVision,
 }) => {
   const [copied, setCopied] = useState(false);
   const [richCopyStatus, setRichCopyStatus] = useState<'rich' | 'fallback' | 'failed' | null>(null);
@@ -117,6 +136,16 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
     }
     window.setTimeout(() => setRichCopyStatus(null), 2600);
   };
+
+  const renderedArtifacts = useMemo(() => {
+    if (message.artifacts && message.artifacts.length > 0) {
+      return message.artifacts;
+    }
+    if (message.content && (message.content.includes('<antArtifact') || message.content.includes('<airaArtifact'))) {
+      return extractArtifactsFromText(message.content).artifacts;
+    }
+    return [];
+  }, [message.artifacts, message.content]);
 
   return (
     <motion.div
@@ -202,9 +231,9 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
               )}
             </motion.div>
 
-            {message.artifacts && message.artifacts.length > 0 && (
+            {renderedArtifacts.length > 0 && (
               <motion.div layout className="pt-3">
-                {message.artifacts.map(artifact => (
+                {renderedArtifacts.map(artifact => (
                   <ArtifactCard
                     key={artifact.id}
                     artifact={artifact}
@@ -212,6 +241,132 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                   />
                 ))}
               </motion.div>
+            )}
+
+            {message.builderHandoff && (
+              <div className="mt-3 p-3.5 rounded-xl border border-aira-blue/30 bg-aira-blue/5 dark:bg-aira-blue/10 flex flex-col gap-2.5">
+                <div className="flex items-center gap-2 text-xs font-semibold text-aira-blue dark:text-blue-400">
+                  <Wrench className="w-4 h-4" />
+                  <span>Scaffold Application with Sandboxed Builder</span>
+                </div>
+                <p className="text-[11px] text-claude-muted-light dark:text-slate-300">
+                  To create files, execute commands in an isolated sandbox, and generate live previews, switch to Agent Mode to review the task and grant permissions.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => onSwitchToAgentAndReview?.(message.builderHandoff!.prompt)}
+                  className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-aira-blue hover:bg-aira-blue/90 text-white font-medium text-xs transition-colors shadow-sm self-start"
+                >
+                  <Play className="w-3.5 h-3.5" />
+                  <span>Switch to Agent & Review Task</span>
+                </button>
+              </div>
+            )}
+
+            {message.automationProposal && (
+              <div className="mt-3 p-3.5 rounded-xl border border-aira-gold/40 bg-aira-gold/5 dark:bg-aira-gold/10 flex flex-col gap-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-amber-700 dark:text-amber-400">
+                    <Calendar className="w-4 h-4" />
+                    <span>Pending Scheduled Automation</span>
+                  </div>
+                  <span className="text-[10px] font-mono text-aira-gold bg-aira-gold/10 px-1.5 py-0.5 rounded">Confirmation Required</span>
+                </div>
+                <div className="text-[11px] text-claude-muted-light dark:text-slate-300 space-y-1">
+                  <p><strong>Task:</strong> {message.automationProposal.name}</p>
+                  <p><strong>Schedule:</strong> {message.automationProposal.humanSchedule || message.automationProposal.cronExpression}</p>
+                  {message.automationProposal.timezone && (
+                    <p><strong>Timezone:</strong> {message.automationProposal.timezone}</p>
+                  )}
+                  {message.automationProposal.cronExpression ? (
+                    <p className="text-[10px] font-mono text-claude-muted-light/80 dark:text-slate-400">
+                      <strong>Cadence:</strong> {message.automationProposal.cronExpression}
+                    </p>
+                  ) : (
+                    <p className="text-[10px] font-mono text-claude-muted-light/80 dark:text-slate-400">
+                      <strong>Execution:</strong> One-time at-most-once execution
+                    </p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  disabled={isConfirmingAutomation}
+                  onClick={() => onConfirmAutomation?.(message.automationProposal)}
+                  className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-aira-gold hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium text-xs transition-colors shadow-sm self-start"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>{isConfirmingAutomation ? 'Scheduling...' : 'Confirm and Schedule Automation'}</span>
+                </button>
+              </div>
+            )}
+
+            {message.visionProposal && (
+              <div className="mt-3 p-3.5 rounded-xl border border-aira-blue/40 bg-aira-blue/5 dark:bg-aira-blue/10 flex flex-col gap-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-aira-blue">
+                    <ImageIcon className="w-4 h-4" />
+                    <span>Billable Vision Generation · Authorization Required</span>
+                  </div>
+                  <span className="text-[10px] font-mono text-aira-blue bg-aira-blue/10 px-1.5 py-0.5 rounded font-semibold">
+                    {message.visionProposal.estimatedCredits} Credits
+                  </span>
+                </div>
+                <div className="text-[11px] text-claude-muted-light dark:text-slate-300 space-y-1">
+                  <p><strong>Prompt:</strong> &ldquo;{message.visionProposal.prompt}&rdquo;</p>
+                  <p>
+                    <strong>Tariff Disclosure:</strong> {message.visionProposal.estimatedCredits} Credits will be reserved upon authorization ({message.visionProposal.options?.quality === 'premium' ? 'Premium' : 'Standard Economy'}, {message.visionProposal.options?.aspectRatio || '1:1'}).
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    disabled={isAuthorizingVision}
+                    onClick={() => onAuthorizeVision?.(message.visionProposal)}
+                    className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-aira-blue hover:bg-aira-blue/90 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium text-xs transition-colors shadow-sm"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>{isAuthorizingVision ? 'Authorizing & Generating...' : 'Authorize & Generate Image'}</span>
+                  </button>
+                  {onCancelVisionProposal && (
+                    <button
+                      type="button"
+                      disabled={isAuthorizingVision}
+                      onClick={() => onCancelVisionProposal(message.visionProposal!.id)}
+                      className="px-3 py-1.5 rounded-lg border border-claude-border-light dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/5 text-xs text-claude-muted-light dark:text-slate-400 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {message.citations && message.citations.length > 0 && (
+              <div className="mt-3 p-3 rounded-xl border border-claude-border-light dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] space-y-2">
+                <div className="text-[11px] font-semibold text-claude-muted-light dark:text-slate-400">
+                  Verified Primary Sources ({message.citations.length}):
+                </div>
+                <div className="space-y-1.5">
+                  {message.citations.map((cite, idx) => (
+                    <div key={idx} className="text-[11px] flex items-start gap-1.5">
+                      <span className="font-mono text-aira-blue text-[10px]">[{idx + 1}]</span>
+                      <div className="min-w-0">
+                        {cite.uri ? (
+                          <a href={cite.uri} target="_blank" rel="noopener noreferrer" className="text-aira-blue hover:underline font-medium inline-flex items-center gap-1">
+                            <span>{cite.sourceTitle || cite.uri}</span>
+                            <ExternalLink className="w-2.5 h-2.5" />
+                          </a>
+                        ) : (
+                          <span className="font-medium text-claude-text-light dark:text-white">{cite.sourceTitle}</span>
+                        )}
+                        {cite.snippet && (
+                          <p className="text-[10px] text-claude-muted-light dark:text-slate-400 line-clamp-2 mt-0.5">{cite.snippet}</p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
 
             {!message.isStreaming && (

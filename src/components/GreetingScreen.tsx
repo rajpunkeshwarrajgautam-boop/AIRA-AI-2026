@@ -115,15 +115,9 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
 
   // Contextual Greeting Title
   const dynamicGreetingTitle = useMemo(() => {
-    // If specific workspace mode is active, reflect it
-    if (workspaceMode === 'research') return 'Research & Investigation';
-    if (workspaceMode === 'agents') return 'Autonomous Missions';
-    if (workspaceMode === 'automations') return 'Workflow Engineering';
-    if (workspaceMode === 'library') return 'Workspace Knowledge';
+    if (workspaceMode === 'agent') return 'Autonomous Agent Mission';
 
-    // Standard chat mode with dynamic persona
     const cleanedName = userName && userName.trim() !== 'Explorer' ? userName.trim() : '';
-
     if (cleanedName) {
       return `${timeContext.baseGreeting}, ${cleanedName}.`;
     }
@@ -135,17 +129,8 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
     if (activeProject) {
       return `Working within "${activeProject.name}" with ${activeProject.docs.length} linked document${activeProject.docs.length === 1 ? '' : 's'}.`;
     }
-    if (workspaceMode === 'research') {
-      return 'Cross-examine sources, gather structured citations, and synthesize technical briefs.';
-    }
-    if (workspaceMode === 'agents') {
-      return 'Delegate multi-step goals with automated checkpoints and verifiable deliverables.';
-    }
-    if (workspaceMode === 'automations') {
-      return 'Construct repeatable trigger-action routines with self-healing failure guards.';
-    }
-    if (workspaceMode === 'library') {
-      return 'Query your connected project knowledge graphs, files, and repositories.';
+    if (workspaceMode === 'agent') {
+      return 'Delegate multi-step goals, scaffold complete web applications, or design automated workflows with verifiable deliverables.';
     }
     if (extendedThinking) {
       return 'Deep reasoning enabled. Complex analysis, architecture, and multi-step synthesis ready.';
@@ -242,34 +227,63 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
       ];
     }
 
-    // Default high-caliber Claude starters
+    if (workspaceMode === 'agent') {
+      return [
+        {
+          id: 'agent-build',
+          title: 'Build CRM web app with tests',
+          prompt: 'Build a production-ready CRM website with React frontend, TypeScript API service, input validation, and comprehensive automated tests.',
+          icon: <Code2 className="w-4 h-4 text-aira-blue dark:text-blue-400" strokeWidth={1.5} />,
+        },
+        {
+          id: 'agent-research',
+          title: 'Deep competitive research mission',
+          prompt: 'Research the current multi-model AI workspace landscape, cross-examine technical benchmarks, and synthesize an executive brief with citations.',
+          icon: <Compass className="w-4 h-4 text-aira-blue dark:text-blue-400" strokeWidth={1.5} />,
+        },
+        {
+          id: 'agent-automation',
+          title: 'Design scheduled automation',
+          prompt: 'Create an automation for every Monday at 9 AM that queries database metrics, summarizes active alerts, and compiles an operational report.',
+          icon: <Zap className="w-4 h-4 text-aira-blue dark:text-blue-400" strokeWidth={1.5} />,
+        },
+        {
+          id: 'agent-audit',
+          title: 'System architecture & risk audit',
+          prompt: 'Audit this system architecture for race conditions, credential isolation boundaries, and failover recovery strategies.',
+          icon: <Brain className="w-4 h-4 text-aira-blue dark:text-blue-400" strokeWidth={1.5} />,
+        },
+      ];
+    }
+
+    // Default high-caliber conversational starters
     return [
       {
         id: 'default-research',
         title: 'Research a complex topic',
         prompt: 'Research the current landscape for multi-model AI workspaces and compile a structured, sourced competitive brief with key product gaps.',
-        icon: <Compass className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
+        icon: <Compass className="w-4 h-4 text-aira-blue dark:text-blue-400" strokeWidth={1.5} />,
+      },
+      {
+        id: 'default-vision',
+        title: 'Generate conceptual visual',
+        prompt: 'Generate an image of a futuristic, sustainable city with layered aerial transit, vertical forests, and clean neoclassical architecture at dusk.',
+        icon: <Zap className="w-4 h-4 text-aira-blue dark:text-blue-400" strokeWidth={1.5} />,
       },
       {
         id: 'default-code',
         title: 'Build an interactive web artifact',
         prompt: 'Design and build a polished interactive dashboard artifact for an AI operations workspace with realtime telemetry and responsive charts.',
-        icon: <Code2 className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
-      },
-      {
-        id: 'default-analyze',
-        title: 'Analyze documents or data',
-        prompt: 'Analyze attached project materials, extract the critical findings, and organize them into an executive decision memo.',
-        icon: <FileText className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
+        icon: <Code2 className="w-4 h-4 text-aira-blue dark:text-blue-400" strokeWidth={1.5} />,
       },
       {
         id: 'default-agent',
         title: 'Plan an autonomous workflow',
         prompt: 'Break this objective into an autonomous agent mission with clear steps, tools, checkpoints, and a verifiable deliverable.',
-        icon: <Bot className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
+        icon: <Bot className="w-4 h-4 text-aira-blue dark:text-blue-400" strokeWidth={1.5} />,
       },
     ];
-  }, [activeProject, recentHistory.domain]);
+  }, [activeProject, recentHistory.domain, workspaceMode]);
 
   const triggerCelebration = useCallback(() => {
     confetti({

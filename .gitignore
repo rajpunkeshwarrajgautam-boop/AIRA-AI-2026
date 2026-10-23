@@ -27,8 +27,7 @@ dist-ssr
 .env*
 graphify-out/
 .neon
-test-results/preview-acceptance/
+test-results/
 artifacts/
-
 # Local builder browser acceptance screenshots and receipts
 test-results/builder/

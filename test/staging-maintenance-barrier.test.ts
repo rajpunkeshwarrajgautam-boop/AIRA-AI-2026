@@ -856,7 +856,7 @@ async function runAll() {
     assert.equal(res.shouldSkipLock, true);
     assert.equal(res.isMaintenanceActive, true);
     assert.equal(res.missingMigrations.length, 0);
-    assert.equal(res.appliedCount, 22);
+    assert.equal(res.appliedCount, realMigrationFiles.length);
   });
 
   await test('evaluateMigrationMaintenancePlan: maintenance active + zero token + unapplied migrations FAILS CLOSED', async () => {

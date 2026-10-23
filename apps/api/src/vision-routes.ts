@@ -1,5 +1,12 @@
 import { Router, Request, Response } from 'express';
-import { visionService } from './vision/vision-service.js';
+import { visionService, VisionProviderUnavailableError } from './vision/vision-service.js';
+import {
+  durableIdempotencyManager,
+  IdempotencyConflictError,
+  IdempotencyInProgressError,
+  IdempotencyUncertainOutcomeError,
+  IdempotencyDatabaseError
+} from './utils/idempotency.js';
 import {
   VisionGenerationParamsSchema,
   VisionUnderstandParamsSchema,
@@ -8,6 +15,13 @@ import {
 
 export function createVisionRoutes(): Router {
   const router = Router();
+
+  /**
+   * Public/Protected inspection: Real Vision provider readiness status.
+   */
+  router.get('/capabilities', (_req: Request, res: Response) => {
+    res.json(visionService.getProviderStatus());
+  });
 
   /**
    * Protected: Vision Understand (Visual Q&A, OCR, Diagram parsing).
@@ -25,29 +39,95 @@ export function createVisionRoutes(): Router {
       const result = await visionService.understand(principal.userId, parsed.data);
       res.json(result);
     } catch (err: any) {
-      const status = err.code === 'INSUFFICIENT_CREDITS' ? 402 : 500;
-      res.status(status).json({ error: err.message, code: err.code });
+      const status = err.statusCode || (
+        err.code === 'INSUFFICIENT_CREDITS' ? 402 :
+        (err.code === 'VISION_PROVIDER_NOT_READY' || err instanceof VisionProviderUnavailableError ? 503 : 500)
+      );
+      res.status(status).json({
+        error: err.message,
+        code: err.code || 'VISION_ERROR',
+        providerUnavailable: err.code === 'VISION_PROVIDER_NOT_READY' || err instanceof VisionProviderUnavailableError
+      });
     }
   });
 
   /**
    * Protected: Vision Generate (1 or 2 images, aspect ratios, economy/premium).
+   * Enforces principal-scoped durable server-side idempotency against double-billing.
+   * Uses 180s lease + active heartbeat renewal during long-running diffusion.
+   * If generation side effect commits but persistence fails, locks against duplicate billing.
    */
   router.post('/generate', async (req: Request, res: Response) => {
     const principal = req.principal;
     if (!principal) return res.status(401).json({ error: 'Unauthorized' });
+
+    const clientOpId = (req.headers['x-client-operation-id'] as string) || req.body?.clientOperationId;
 
     const parsed = VisionGenerationParamsSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Invalid generation parameters', details: parsed.error.issues });
     }
 
+    let heartbeat: { stop: () => void } | null = null;
+    let sideEffectCommitted = false;
+    let generationResult: any = null;
+
     try {
-      const result = await visionService.generate(principal.userId, parsed.data);
-      res.json(result);
+      if (clientOpId) {
+        // 180s initial lease for multimodal diffusion generation
+        const check = await durableIdempotencyManager.beginOrGet(
+          principal.userId,
+          clientOpId,
+          'VISION_GENERATE',
+          parsed.data,
+          180_000
+        );
+        if (check.isReplay) {
+          return res.status(check.statusCode).json(check.responseBody);
+        }
+        // Active heartbeat extends lease by 120s every 15s while request is active
+        heartbeat = durableIdempotencyManager.startHeartbeat(principal.userId, clientOpId, 15_000, 120_000);
+      }
+
+      generationResult = await visionService.generate(principal.userId, parsed.data);
+      sideEffectCommitted = true;
+
+      if (heartbeat) {
+        heartbeat.stop();
+        heartbeat = null;
+      }
+
+      if (clientOpId) {
+        await durableIdempotencyManager.complete(principal.userId, clientOpId, 200, generationResult);
+      }
+
+      res.json(generationResult);
     } catch (err: any) {
-      const status = err.code === 'INSUFFICIENT_CREDITS' ? 402 : 500;
-      res.status(status).json({ error: err.message, code: err.code });
+      if (heartbeat) {
+        heartbeat.stop();
+        heartbeat = null;
+      }
+
+      if (clientOpId) {
+        if (!(err instanceof IdempotencyConflictError || err instanceof IdempotencyInProgressError)) {
+          await durableIdempotencyManager.fail(principal.userId, clientOpId, {
+            sideEffectCommitted,
+            result: generationResult,
+            error: err.message
+          }).catch(() => {});
+        }
+      }
+      const status = err.statusCode || (
+        err.code === 'INSUFFICIENT_CREDITS' ? 402 : 
+        (err.code === 'VISION_PROVIDER_NOT_READY' || err instanceof VisionProviderUnavailableError ? 503 :
+        (err instanceof IdempotencyConflictError || err instanceof IdempotencyInProgressError || err instanceof IdempotencyUncertainOutcomeError ? 409 : 
+        (err instanceof IdempotencyDatabaseError ? 503 : 500)))
+      );
+      res.status(status).json({
+        error: err.message,
+        code: err.code || 'VISION_ERROR',
+        providerUnavailable: err.code === 'VISION_PROVIDER_NOT_READY' || err instanceof VisionProviderUnavailableError
+      });
     }
   });
 
@@ -67,10 +147,18 @@ export function createVisionRoutes(): Router {
       const result = await visionService.edit(principal.userId, parsed.data);
       res.json(result);
     } catch (err: any) {
-      const status = err.code === 'INSUFFICIENT_CREDITS' ? 402 : 500;
-      res.status(status).json({ error: err.message, code: err.code });
+      const status = err.statusCode || (
+        err.code === 'INSUFFICIENT_CREDITS' ? 402 :
+        (err.code === 'VISION_PROVIDER_NOT_READY' || err instanceof VisionProviderUnavailableError ? 503 : 500)
+      );
+      res.status(status).json({
+        error: err.message,
+        code: err.code || 'VISION_ERROR',
+        providerUnavailable: err.code === 'VISION_PROVIDER_NOT_READY' || err instanceof VisionProviderUnavailableError
+      });
     }
   });
 
   return router;
 }
+

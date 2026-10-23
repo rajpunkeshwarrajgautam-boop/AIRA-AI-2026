@@ -678,6 +678,7 @@ export type AgentDefinition = z.infer<typeof AgentDefinitionSchema>;
 export const AutomationTriggerTypeSchema = z.enum([
   'MANUAL',
   'CRON',
+  'ONE_TIME',
   'EVENT',
   'WEBHOOK'
 ]);
@@ -690,6 +691,8 @@ export const AutomationDefinitionSchema = z.object({
   enabled: z.boolean().default(true),
   trigger: AutomationTriggerTypeSchema,
   cronExpression: z.string().optional(),
+  targetRunAt: z.number().optional(),
+  timezone: z.string().optional(),
   conditions: z.record(z.string(), z.any()).default({}),
   agentId: z.string(),
   objective: z.string(),

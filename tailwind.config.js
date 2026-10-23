@@ -8,6 +8,13 @@ export default {
   theme: {
     extend: {
       colors: {
+        aira: {
+          navy: '#111C35',
+          blue: '#3056CB',
+          silver: '#E9EDF4',
+          porcelain: '#F8F9FC',
+          gold: '#B79C6A',
+        },
         claude: {
           bg: {
             light: 'var(--bg-main)',

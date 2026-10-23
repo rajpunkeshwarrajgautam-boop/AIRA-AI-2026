@@ -160,6 +160,9 @@ jobs:
       - name: Capability reality audit suite
         run: npm run test:reality
 
+      - name: Vision billing integrity and fail-closed provider certification
+        run: npm run test:vision-billing
+
       - name: Knowledge and memory principal isolation certification
         run: npm run test:knowledge-isolation
 
