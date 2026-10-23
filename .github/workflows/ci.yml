@@ -133,6 +133,9 @@ jobs:
       - name: Tool gateway certification
         run: npm run test:tools
 
+      - name: Automation Policy B truthful scheduling certification
+        run: npm run test:automation-policy-b
+
       - name: Browser execution suite
         run: npm run test:browser
 

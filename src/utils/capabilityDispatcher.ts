@@ -46,6 +46,9 @@ export interface CreateAutomationResult {
   trigger?: string;
   cronExpression?: string;
   nextRun?: number;
+  enabled?: boolean;
+  failureState?: string;
+  schedulerActive?: boolean;
   error?: string;
 }
 
@@ -254,7 +257,7 @@ export async function createBackendAutomation(params: CreateAutomationParams): P
       agentId: params.agentId || 'agent_assistant_v1',
       objective: params.objective,
       approvalPolicy: 'autonomous',
-      enabled: true
+      enabled: false
     };
 
     if (params.trigger === 'ONE_TIME') {
@@ -293,7 +296,10 @@ export async function createBackendAutomation(params: CreateAutomationParams): P
       name: item.name,
       trigger: item.trigger,
       cronExpression: item.cronExpression,
-      nextRun: item.nextRun
+      nextRun: item.nextRun,
+      enabled: item.enabled,
+      failureState: item.failureState,
+      schedulerActive: item.enabled === true
     };
   } catch (err: any) {
     return {

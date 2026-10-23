@@ -139,14 +139,14 @@ test('Automation Confirmation & Persistence: Requires explicit confirmation and 
   const appPath = path.resolve(process.cwd(), 'src/App.tsx');
   const appContent = fs.readFileSync(appPath, 'utf8');
   assert.ok(appContent.includes('automationProposal: {'));
-  assert.ok(appContent.includes('Confirm and Schedule Automation'));
+  assert.ok(appContent.includes('Save Automation (Inactive Draft)') || appContent.includes('Inactive Draft'), 'App.tsx must reference inactive draft save action');
   assert.ok(appContent.includes('handleConfirmAutomation'));
 
   // Verify ChatMessage.tsx renders the proposal card and confirmation button
   const chatMsgPath = path.resolve(process.cwd(), 'src/components/ChatMessage.tsx');
   const chatMsgContent = fs.readFileSync(chatMsgPath, 'utf8');
   assert.ok(chatMsgContent.includes('Pending Scheduled Automation'));
-  assert.ok(chatMsgContent.includes('Confirm and Schedule Automation'));
+  assert.ok(chatMsgContent.includes('Save as Inactive Draft'), 'ChatMessage must use accurate accessible label describing inactive draft save');
   assert.ok(chatMsgContent.includes('onConfirmAutomation?.(message.automationProposal)'));
 
   // Verify capabilityDispatcher has createBackendAutomation calling /api/automations

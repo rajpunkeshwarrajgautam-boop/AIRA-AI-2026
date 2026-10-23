@@ -268,9 +268,11 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 text-xs font-semibold text-amber-700 dark:text-amber-400">
                     <Calendar className="w-4 h-4" />
-                    <span>Pending Scheduled Automation</span>
+                    <span>Pending Scheduled Automation (Inactive Draft)</span>
                   </div>
-                  <span className="text-[10px] font-mono text-aira-gold bg-aira-gold/10 px-1.5 py-0.5 rounded">Confirmation Required</span>
+                  <span className="text-[10px] font-mono text-amber-700 dark:text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20">
+                    Scheduler Unavailable
+                  </span>
                 </div>
                 <div className="text-[11px] text-claude-muted-light dark:text-slate-300 space-y-1">
                   <p><strong>Task:</strong> {message.automationProposal.name}</p>
@@ -288,14 +290,18 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                     </p>
                   )}
                 </div>
+                <div className="text-[11px] text-amber-800/90 dark:text-amber-300/90 bg-amber-500/10 p-2 rounded border border-amber-500/20">
+                  Autonomous background scheduling is temporarily unavailable in this environment. Saving this proposal registers an inactive draft that will not execute automatically until a certified scheduler is configured.
+                </div>
                 <button
                   type="button"
+                  aria-label="Save as Inactive Draft — Automation will not execute automatically until a certified scheduler is configured"
                   disabled={isConfirmingAutomation}
                   onClick={() => onConfirmAutomation?.(message.automationProposal)}
-                  className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-aira-gold hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium text-xs transition-colors shadow-sm self-start"
+                  className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium text-xs transition-colors shadow-sm self-start"
                 >
                   <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>{isConfirmingAutomation ? 'Scheduling...' : 'Confirm and Schedule Automation'}</span>
+                  <span>{isConfirmingAutomation ? 'Saving Draft...' : 'Save Automation (Inactive Draft)'}</span>
                 </button>
               </div>
             )}
