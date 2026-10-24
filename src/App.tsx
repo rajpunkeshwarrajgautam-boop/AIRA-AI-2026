@@ -101,6 +101,28 @@ function App() {
   const [isPricingOpen, setIsPricingOpen] = useState(false);
   const [isVisionOpen, setIsVisionOpen] = useState(false);
   const [isAccountBillingOpen, setIsAccountBillingOpen] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'general' | 'reasoning' | 'memory' | 'instructions' | 'artifacts' | 'data' | 'personalization' | 'profile' | 'billing' | 'security'>('general');
+  const [billingInitialTab, setBillingInitialTab] = useState<'overview' | 'usage' | 'topup' | 'security'>('overview');
+
+  const handleOpenSettingsTab = (tab?: string) => {
+    if (tab === 'billing') {
+      setBillingInitialTab('overview');
+      setIsAccountBillingOpen(true);
+    } else if (tab === 'security') {
+      setBillingInitialTab('security');
+      setIsAccountBillingOpen(true);
+    } else if (tab === 'profile') {
+      setSettingsInitialTab('data');
+      setIsSettingsOpen(true);
+    } else if (tab === 'personalization') {
+      setSettingsInitialTab('instructions');
+      setIsSettingsOpen(true);
+    } else {
+      setSettingsInitialTab((tab as any) || 'general');
+      setIsSettingsOpen(true);
+    }
+  };
+
   const [isMemoryVaultOpen, setIsMemoryVaultOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isConversationSearchOpen, setIsConversationSearchOpen] = useState(false);
@@ -1101,7 +1123,11 @@ function App() {
         projects={projects}
         activeProjectId={activeProjectId}
         onOpenProjects={() => setIsProjectsOpen(true)}
-        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenSettings={() => {
+          setSettingsInitialTab('general');
+          setIsSettingsOpen(true);
+        }}
+        onOpenSettingsTab={handleOpenSettingsTab}
         onOpenAuth={() => setIsAuthOpen(true)}
         onOpenSearch={handleOpenConversationSearch}
         isOpen={sidebarOpen}
@@ -1112,7 +1138,10 @@ function App() {
         onSelectWorkspace={setWorkspaceMode}
         onOpenVisionStudio={() => setIsVisionOpen(true)}
         onOpenPricing={() => setIsPricingOpen(true)}
-        onOpenBilling={() => setIsAccountBillingOpen(true)}
+        onOpenBilling={() => {
+          setBillingInitialTab('overview');
+          setIsAccountBillingOpen(true);
+        }}
       />
 
       <CommandPalette
@@ -1339,6 +1368,12 @@ function App() {
               setConversations([fresh]); setActiveChatId(fresh.id); setProjects([]); setActiveProjectId(undefined); setSettings(loadSettings()); setActiveArtifact(null);
             }}
             onOpenMemoryVault={() => setIsMemoryVaultOpen(true)}
+            initialTab={settingsInitialTab}
+            onOpenBilling={(tab) => {
+              setIsSettingsOpen(false);
+              setBillingInitialTab(tab || 'overview');
+              setIsAccountBillingOpen(true);
+            }}
           />
         )}
 
@@ -1379,6 +1414,7 @@ function App() {
             setIsAccountBillingOpen(false);
             setIsPricingOpen(true);
           }}
+          initialTab={billingInitialTab}
         />
       </React.Suspense>
     </div>

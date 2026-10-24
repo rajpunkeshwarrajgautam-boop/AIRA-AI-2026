@@ -23,14 +23,22 @@ interface AccountBillingModalProps {
   isOpen: boolean;
   onClose: () => void;
   onOpenPricing: () => void;
+  initialTab?: 'overview' | 'usage' | 'topup' | 'security';
 }
 
 export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
   isOpen,
   onClose,
   onOpenPricing,
+  initialTab = 'overview',
 }) => {
-  const [activeTab, setActiveTab] = useState<'overview' | 'usage' | 'topup' | 'security'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'usage' | 'topup' | 'security'>(initialTab);
+  
+  useEffect(() => {
+    if (isOpen && initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [isOpen, initialTab]);
   const [user, setUser] = useState<NeonUser | null>(() => neonAuth.getCurrentUser());
   const [loading, setLoading] = useState(false);
   const [billingSummary, setBillingSummary] = useState<BillingSummary | null>(null);
