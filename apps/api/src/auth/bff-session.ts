@@ -474,7 +474,11 @@ const TRUSTED_ORIGINS_DEFAULT = [
   'http://localhost:3000',
   'http://127.0.0.1:3000',
   'http://localhost:3001',
-  'http://127.0.0.1:3001'
+  'http://127.0.0.1:3001',
+  'https://aira-ai-2026.vercel.app',
+  'https://staging.virexaaiventures.com',
+  'https://virexaaiventures.com',
+  'https://www.virexaaiventures.com'
 ];
 
 export function getTrustedOrigins(): string[] {
@@ -543,7 +547,10 @@ export function verifyCsrfAndOrigin(req: Request, session?: BffServerSession | n
   // If Origin or Referer is supplied, it MUST match the host or trusted allowlist.
   // Rejection is absolute: mismatched origins fail even if custom headers are present!
   const origin = (req.headers.origin as string) || (req.headers.referer as string);
-  const host = req.headers.host;
+  const forwardedHost = req.headers['x-forwarded-host'];
+  const host = typeof forwardedHost === 'string'
+    ? forwardedHost.split(',')[0].trim()
+    : req.headers.host;
 
   if (origin) {
     if (!isAllowedOrigin(origin, host)) {
@@ -553,6 +560,7 @@ export function verifyCsrfAndOrigin(req: Request, session?: BffServerSession | n
     // If neither Origin nor Referer is present, block unless sec-fetch-site explicitly confirms same-origin
     if (!secFetchSite || (secFetchSite !== 'same-origin' && secFetchSite !== 'same-site')) {
       return false;
+
     }
   }
 

@@ -1190,7 +1190,10 @@ export async function ensureGuestSession(force = false): Promise<void> {
       const response = await fetch('/api/auth/session', {
         method: 'POST',
         credentials: 'same-origin',
-        headers: { Accept: 'application/json' },
+        headers: {
+          Accept: 'application/json',
+          'X-Aira-Csrf-Protection': '1'
+        },
         signal: AbortSignal.timeout(5000)
       });
       if (!response.ok) {
@@ -1274,6 +1277,9 @@ export async function authenticatedApiFetch(
     // Attach CSRF protection headers on state-changing requests
     const method = (init.method || 'GET').toUpperCase();
     if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+      if (!neonAuth.getCsrfToken()) {
+        await neonAuth.restoreSession().catch(() => null);
+      }
       const csrf = neonAuth.getCsrfToken();
       if (csrf && !headers.has('X-CSRF-Token')) {
         headers.set('X-CSRF-Token', csrf);
@@ -1433,6 +1439,12 @@ export async function authenticatedApiFetch(
   }
 
   const headers = new Headers(init.headers || {});
+  const method = (init.method || 'GET').toUpperCase();
+  if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+    if (!headers.has('X-Aira-Csrf-Protection')) {
+      headers.set('X-Aira-Csrf-Protection', '1');
+    }
+  }
   let res = await fetch(input, {
     ...init,
     headers,
