@@ -678,18 +678,28 @@ export type AgentDefinition = z.infer<typeof AgentDefinitionSchema>;
 export const AutomationTriggerTypeSchema = z.enum([
   'MANUAL',
   'CRON',
+  'ONE_TIME',
   'EVENT',
   'WEBHOOK'
 ]);
 export type AutomationTriggerType = z.infer<typeof AutomationTriggerTypeSchema>;
 
+export const SchedulerCapabilitiesSchema = z.object({
+  active: z.boolean(),
+  mode: z.enum(['IN_PROCESS', 'SERVERLESS_CRON', 'UNAVAILABLE']),
+  reason: z.string().optional()
+});
+export type SchedulerCapabilities = z.infer<typeof SchedulerCapabilitiesSchema>;
+
 export const AutomationDefinitionSchema = z.object({
   id: z.string(),
   principalId: z.string().optional(),
   name: z.string(),
-  enabled: z.boolean().default(true),
+  enabled: z.boolean().default(false),
   trigger: AutomationTriggerTypeSchema,
   cronExpression: z.string().optional(),
+  targetRunAt: z.number().optional(),
+  timezone: z.string().optional(),
   conditions: z.record(z.string(), z.any()).default({}),
   agentId: z.string(),
   objective: z.string(),
@@ -914,4 +924,5 @@ export const ErrorEnvelopeSchema = z.object({
 export type ErrorEnvelope = z.infer<typeof ErrorEnvelopeSchema>;
 
 export * from './behavioral.js';
+export * from './commercial.js';
 

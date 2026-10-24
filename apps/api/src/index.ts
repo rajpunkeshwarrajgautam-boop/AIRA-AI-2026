@@ -1,9 +1,14 @@
 import { createBuilderRoutes } from './builder-routes.js';
+import { createBillingRoutes } from './billing-routes.js';
+import { createVisionRoutes } from './vision-routes.js';
+import { createAccountRoutes } from './account-routes.js';
+import { commercialBillingService } from './billing/commercial-billing-service.js';
+import { paymentGatewayService, TOPUP_PACKS } from './billing/payment-gateway-service.js';
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
-import { normalizeModelIdentifier, UnsupportedModelIdentifierError } from '../../../packages/contracts/src/index.js';
+import { normalizeModelIdentifier, UnsupportedModelIdentifierError, COMMERCIAL_PLANS } from '../../../packages/contracts/src/index.js';
 import {
   ModelRouter,
   withInferencePrincipal,
@@ -59,6 +64,7 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 import { createPrincipalMiddleware } from './middleware/principal.js';
+import { createStagingMaintenanceMiddleware } from './middleware/staging-maintenance.js';
 import { createSessionAuthMiddleware, ensureAuthenticatedSession } from './auth/session-auth.js';
 import { createNeonAuthPrincipalMiddleware } from './auth/neon-auth-principal.js';
 import {
@@ -66,11 +72,28 @@ import {
   createCsrfProtectionMiddleware,
   handleBffSignUp,
   handleBffSignIn,
+  handleBffOAuthExchange,
+  handleBffOAuthGoogleStart,
+  handleBffOAuthGoogleCallback,
+  handleBffOAuthGithubStart,
+  handleBffOAuthGithubCallback,
+  handleBffOAuthLinkStart,
+  handleBffGetProviders,
+  handleBffUnlinkProvider,
+  handleBffRecoveryRequest,
+  handleBffRecoveryGuidance,
   handleBffSession,
   handleBffSignOut,
   isAllowedOrigin
 } from './auth/bff-session.js';
 import { isTemporaryDatabaseError } from './utils/storage-errors.js';
+import {
+  durableIdempotencyManager,
+  IdempotencyConflictError,
+  IdempotencyInProgressError,
+  IdempotencyUncertainOutcomeError,
+  IdempotencyDatabaseError
+} from './utils/idempotency.js';
 
 export class UntrustedOriginError extends Error {
   readonly status = 403;
@@ -83,6 +106,9 @@ export class UntrustedOriginError extends Error {
     this.origin = origin;
   }
 }
+
+import { sanitizeUrlForLogging } from './utils/sanitize-url.js';
+export { sanitizeUrlForLogging };
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
@@ -112,7 +138,7 @@ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
   if (err instanceof UntrustedOriginError || err?.code === 'CORS_ORIGIN_DENIED' || err?.name === 'UntrustedOriginError') {
     const rawOrigin = typeof err.origin === 'string' ? err.origin : (req.headers.origin as string) || 'unknown';
     const sanitizedOrigin = rawOrigin.slice(0, 200).replace(/[\r\n\t]/g, '');
-    const sanitizedRoute = (req.originalUrl || req.url || 'unknown').slice(0, 200).replace(/[\r\n\t]/g, '');
+    const sanitizedRoute = sanitizeUrlForLogging(req.originalUrl || req.url || 'unknown').slice(0, 200).replace(/[\r\n\t]/g, '');
     
     process.stdout.write(
       `[SECURITY_EVENT] event=cors_origin_rejected origin=${sanitizedOrigin} route=${sanitizedRoute} status=403\n`
@@ -124,13 +150,21 @@ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
   }
   next(err);
 });
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({
+  limit: '2mb',
+  verify: (req: any, _res: any, buf: Buffer) => {
+    req.rawBody = buf.toString('utf8');
+  }
+}));
 app.use(express.urlencoded({ limit: '2mb', extended: false }));
 
 app.use((req: Request, _res: Response, next: NextFunction) => {
-  process.stdout.write(`[API_REQ] ${req.method} ${req.url}\n`);
+  process.stdout.write(`[API_REQ] ${req.method} ${sanitizeUrlForLogging(req.url)}\n`);
   next();
 });
+
+// Staging maintenance barrier: blocks mutating requests during PR #96 cutover
+app.use(createStagingMaintenanceMiddleware());
 
 // Resolve a trusted first-party session cookie before principal enforcement.
 // This middleware never trusts client-supplied user/session headers in production.
@@ -154,12 +188,94 @@ app.post('/api/auth/sign-up', (req: Request, res: Response) => {
     res.status(500).json({ error: err.message || 'BFF sign up failed' });
   });
 });
+app.post('/api/auth/oauth-exchange', (req: Request, res: Response) => {
+  handleBffOAuthExchange(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'BFF OAuth exchange failed' });
+  });
+});
+app.post('/api/auth/oauth/google/start', (req: Request, res: Response) => {
+  handleBffOAuthGoogleStart(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'OAuth start failed' });
+  });
+});
+app.get('/api/auth/oauth/google/start', (req: Request, res: Response) => {
+  handleBffOAuthGoogleStart(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'OAuth start failed' });
+  });
+});
+app.get('/api/auth/oauth/google/callback', (req: Request, res: Response) => {
+  handleBffOAuthGoogleCallback(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'OAuth callback failed' });
+  });
+});
+// GitHub uses the same verified BFF exchange with provider-bound flow state.
+app.post('/api/auth/oauth/github/start', (req: Request, res: Response) => {
+  handleBffOAuthGithubStart(req, res).catch(() => {
+    res.status(502).json({ error: 'GitHub OAuth start failed' });
+  });
+});
+app.get('/api/auth/oauth/github/start', (req: Request, res: Response) => {
+  handleBffOAuthGithubStart(req, res).catch(() => {
+    res.status(502).json({ error: 'GitHub OAuth start failed' });
+  });
+});
+app.get('/api/auth/oauth/github/callback', (req: Request, res: Response) => {
+  handleBffOAuthGithubCallback(req, res).catch(() => {
+    res.status(502).json({ error: 'GitHub OAuth callback failed' });
+  });
+});
+// Account Linking endpoints (authenticated user initiates linking of secondary provider)
+app.get('/api/auth/oauth/google/link', (req: Request, res: Response) => {
+  handleBffOAuthLinkStart(req, res, 'google').catch((err) => {
+    res.status(500).json({ error: err.message || 'OAuth linking start failed' });
+  });
+});
+app.get('/api/auth/oauth/github/link', (req: Request, res: Response) => {
+  handleBffOAuthLinkStart(req, res, 'github').catch((err) => {
+    res.status(500).json({ error: err.message || 'OAuth linking start failed' });
+  });
+});
+// Linked providers listing & unlinking
+app.get('/api/auth/providers', (req: Request, res: Response) => {
+  handleBffGetProviders(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'Failed to get providers' });
+  });
+});
+app.post('/api/auth/providers/:provider/unlink', (req: Request, res: Response) => {
+  handleBffUnlinkProvider(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'Failed to unlink provider' });
+  });
+});
+// Account recovery guidance & audited support requests
+app.get('/api/auth/recovery/guidance', (req: Request, res: Response) => {
+  handleBffRecoveryGuidance(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'Failed to get recovery guidance' });
+  });
+});
+app.post('/api/auth/recovery/request', (req: Request, res: Response) => {
+  handleBffRecoveryRequest(req, res).catch((err) => {
+    res.status(500).json({ error: err.message || 'Failed to submit recovery request' });
+  });
+});
 app.get('/api/auth/session', handleBffSession);
 app.post('/api/auth/sign-out', (req: Request, res: Response) => {
   handleBffSignOut(req, res).catch((err) => {
     res.status(500).json({ error: err.message || 'BFF sign out failed' });
   });
 });
+
+// Authoritative deployment identity endpoint for Preview and Release certification
+const versionHandler = (_req: Request, res: Response) => {
+  res.json({
+    status: 'ok',
+    version: '1.0.0',
+    commitSha: process.env.VERCEL_GIT_COMMIT_SHA || process.env.GITHUB_SHA || process.env.COMMIT_SHA || 'unknown',
+    deploymentUrl: process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'unknown',
+    environment: process.env.NODE_ENV || 'production'
+  });
+};
+app.get('/api/version', versionHandler);
+app.get('/version', versionHandler);
 
 // Public bootstrap endpoint used by the browser before protected API calls.
 // It issues or refreshes an opaque, signed, HttpOnly session cookie.
@@ -346,10 +462,60 @@ app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
+// -----------------------------------------------------------------------
+// PUBLIC WEBHOOKS — Gateway raw-body cryptographic HMAC endpoints
+// -----------------------------------------------------------------------
+app.post('/api/billing/webhook/razorpay', async (req: Request, res: Response) => {
+  const signature = req.headers['x-razorpay-signature'] as string;
+  const rawBody = typeof (req as any).rawBody === 'string'
+    ? (req as any).rawBody
+    : JSON.stringify(req.body);
+
+  try {
+    const result = await paymentGatewayService.processRazorpayWebhook(rawBody, signature);
+    res.status(200).json({ status: 'ok', ...result });
+  } catch (err: any) {
+    console.error('[RazorpayWebhookError]', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/billing/webhook/cashfree', async (req: Request, res: Response) => {
+  const signature = req.headers['x-webhook-signature'] as string;
+  const timestamp = req.headers['x-webhook-timestamp'] as string;
+  const rawBody = typeof (req as any).rawBody === 'string'
+    ? (req as any).rawBody
+    : JSON.stringify(req.body);
+
+  try {
+    const result = await paymentGatewayService.processCashfreeWebhook(rawBody, signature, timestamp);
+    res.status(200).json({ status: 'ok', ...result });
+  } catch (err: any) {
+    console.error('[CashfreeWebhookError]', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Public commercial plan definitions and pricing catalog (accessible to guests and landing pages)
+app.get('/api/billing/plans', (_req: Request, res: Response) => {
+  res.json({
+    plans: Object.values(COMMERCIAL_PLANS),
+    topupPacks: Object.values(TOPUP_PACKS)
+  });
+});
+
 // Enforce ExecutionPrincipal on all /api routes BELOW this point.
-// Routes registered above (health, ready) are public infrastructure probes.
+// Routes registered above (health, ready, webhooks, plans) are public infrastructure probes, catalogs, or signature verified.
 app.use('/api', createPrincipalMiddleware());
 app.use('/api', (req, _res, next) => withInferencePrincipal(req.principal!.userId, next));
+
+// -----------------------------------------------------------------------
+// COMMERCIAL PLATFORM ROUTERS
+// -----------------------------------------------------------------------
+app.use('/api/billing', createBillingRoutes());
+app.use('/api/vision', createVisionRoutes());
+app.use('/api/account', createAccountRoutes());
+app.use('/api/builder', createBuilderRoutes(modelRouter));
 
 // Inference diagnostics are operator actions, not public readiness probes.
 const benchmarkSignal = Symbol('benchmarkSignal');
@@ -636,7 +802,7 @@ app.get('/api/capacity/status', async (req: Request, res: Response) => {
 });
 
 // Initialize Core Subsystems
-app.use('/api/builder', createBuilderRoutes(modelRouter));
+app.use('/api/user', createAccountRoutes());
 const isDbConfigured = Boolean(process.env.DATABASE_URL?.trim());
 const toolRegistry = new ToolRegistry(process.cwd());
 const approvalKernel = new ApprovalKernel(new PostgresApprovalRepository(), new PostgresSessionGrantRepository());
@@ -1123,7 +1289,7 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
 app.post('/api/chat/stream', async (req: Request, res: Response) => {
   let admission: any = undefined;
   try {
-    const { messages, history, prompt, model: rawModel, extendedThinking, systemPrompt, contextSubgraph, attachments, conversationId } = req.body;
+    const { messages, history, prompt, model: rawModel, extendedThinking, systemPrompt, contextSubgraph, attachments, conversationId, intent } = req.body;
     const model = normalizeModelIdentifier(rawModel);
     const promptText = prompt || (Array.isArray(messages)
       ? [...messages].reverse().find((m: any) => m.role === 'user')?.content || ''
@@ -1152,6 +1318,24 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     let effectiveHistory = contextHistory;
     if (isFastTarget && Array.isArray(contextHistory) && contextHistory.length > capacityConfig.maxContextTurns) {
       effectiveHistory = contextHistory.slice(-capacityConfig.maxContextTurns);
+    }
+
+    // Commercial Entitlement Gate: Consume 1 standard chat unit and record reasoning boost if active
+    try {
+      if (principalId && !principalId.startsWith('test-') && principalId !== 'anonymous') {
+        await commercialBillingService.consumeStandardChat(principalId, 1);
+        if (extendedThinking || model === 'aira-auto') {
+          await commercialBillingService.tryConsumeReasoningBoost(principalId).catch(() => false);
+        }
+      }
+    } catch (quotaErr: any) {
+      if (quotaErr.message?.includes('DAILY_STANDARD_LIMIT_EXCEEDED') || quotaErr.message?.includes('MONTHLY_STANDARD_LIMIT_EXCEEDED')) {
+        return res.status(429).json({
+          error: quotaErr.message,
+          code: 'USER_RATE_LIMIT',
+          retryAfterSeconds: 3600
+        });
+      }
     }
 
     const clientAbort = new AbortController();
@@ -1217,6 +1401,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       attachments: Array.isArray(attachments) ? attachments : undefined,
       systemPrompt: (systemPrompt || '') + (contextSubgraph ? `\n\n${contextSubgraph}` : ''),
       context: { history: effectiveHistory },
+      intent: (typeof intent === 'string' && intent.trim()) ? intent.trim() as any : undefined,
       modelPolicy: {
         model: model || 'aira-auto',
         extendedThinking: Boolean(extendedThinking),
@@ -1228,6 +1413,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       return res.end();
     }
     tRunCreated = performance.now();
+    res.write(`event: run_started\ndata: ${JSON.stringify({ runId: run.id })}\n\n`);
 
     const stream = agentRuntime.getEventStream(run.id);
 
@@ -1336,6 +1522,8 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         res.write(`event: tool_started\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'tool.completed') {
         res.write(`event: tool_completed\ndata: ${JSON.stringify(evt.data)}\n\n`);
+      } else if (evt.type === 'source.added') {
+        res.write(`event: source_added\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'run.failed') {
         await finalizeAndEmitMetrics();
         const failure = evt.data?.error || 'Aira runtime failed before producing a response';
@@ -1690,17 +1878,25 @@ app.post('/api/agents/:id/run', async (req: Request, res: Response) => {
 // -----------------------------------------------------------------------
 // Automations — Full CRUD (Audit 14 & 12 Ownership Enforced)
 // -----------------------------------------------------------------------
+app.get('/api/automations/capabilities', async (_req: Request, res: Response) => {
+  res.json({
+    scheduler: automationEngine.getSchedulerStatus()
+  });
+});
+
 app.get('/api/automations', async (req: Request, res: Response) => {
   res.json(await automationEngine.listAutomations(req.principal?.userId));
 });
 
 app.post('/api/automations', async (req: Request, res: Response) => {
-  try {
-    const verifiedUserId = req.principal?.userId;
-    if (!verifiedUserId) {
-      return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
-    }
+  const verifiedUserId = req.principal?.userId;
+  if (!verifiedUserId) {
+    return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+  }
 
+  const clientOpId = (req.headers['x-client-operation-id'] as string) || req.body?.clientOperationId;
+
+  try {
     if (req.body?.principalId && req.body.principalId !== verifiedUserId) {
       return res.status(400).json({
         error: 'Forbidden: caller may not specify or forge principalId ownership'
@@ -1712,10 +1908,47 @@ app.post('/api/automations', async (req: Request, res: Response) => {
       principalId: verifiedUserId
     };
     const parsed = AutomationDefinitionSchema.omit({ id: true }).parse(raw);
-    const item = await automationEngine.createAutomation(parsed);
-    res.status(201).json(item);
+
+    let sideEffectCommitted = false;
+    let automationResult: any = null;
+
+    // Server-side durable principal-scoped idempotency
+    if (clientOpId) {
+      const check = await durableIdempotencyManager.beginOrGet(
+        verifiedUserId,
+        clientOpId,
+        'AUTOMATION_CREATE',
+        parsed
+      );
+      if (check.isReplay) {
+        return res.status(check.statusCode).json(check.responseBody);
+      }
+    }
+
+    automationResult = await automationEngine.createAutomation(parsed, clientOpId);
+    sideEffectCommitted = true;
+
+    if (clientOpId) {
+      await durableIdempotencyManager.complete(verifiedUserId, clientOpId, 201, automationResult);
+    }
+
+    res.status(201).json(automationResult);
   } catch (err: any) {
-    res.status(400).json({ error: err.message });
+    if (clientOpId && verifiedUserId) {
+      if (!(err instanceof IdempotencyConflictError || err instanceof IdempotencyInProgressError)) {
+        await durableIdempotencyManager.fail(verifiedUserId, clientOpId, {
+          sideEffectCommitted,
+          result: automationResult,
+          error: err.message
+        }).catch(() => {});
+      }
+    }
+    const status = err.statusCode || (
+      err.code === 'IDEMPOTENCY_CONFLICT' || err.code === 'IDEMPOTENCY_IN_PROGRESS' || err.code === 'IDEMPOTENCY_UNCERTAIN_OUTCOME'
+        ? 409
+        : (err.code === 'IDEMPOTENCY_DATABASE_UNAVAILABLE' ? 503 : 400)
+    );
+    res.status(status).json({ error: err.message, code: err.code });
   }
 });
 
@@ -1729,6 +1962,7 @@ app.get('/api/automations/:id', async (req: Request, res: Response) => {
   }
 });
 
+
 app.patch('/api/automations/:id', async (req: Request, res: Response) => {
   try {
     const verifiedUserId = req.principal?.userId;
@@ -1736,18 +1970,25 @@ app.patch('/api/automations/:id', async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
     }
 
-    if (req.body?.principalId && req.body.principalId !== verifiedUserId) {
-      return res.status(400).json({
-        error: 'Forbidden: caller may not alter or forge principalId ownership'
-      });
+    // Defense-in-depth: reject ownership/identity field manipulation at route layer
+    const REJECTED_FIELDS = ['principalId', 'id', 'trigger'];
+    for (const field of REJECTED_FIELDS) {
+      if (field in (req.body ?? {})) {
+        return res.status(400).json({
+          error: `Forbidden: field "${field}" is immutable and cannot be changed via PATCH.`,
+          code: 'IMMUTABLE_FIELD'
+        });
+      }
     }
 
     const updated = await automationEngine.patchAutomation(req.params.id, req.body, verifiedUserId);
     res.json(updated);
   } catch (err: any) {
-    res.status(400).json({ error: err.message });
+    const status = err.statusCode ?? (err.message?.includes('not found') ? 404 : 400);
+    res.status(status).json({ error: err.message, code: err.code });
   }
 });
+
 
 app.delete('/api/automations/:id', async (req: Request, res: Response) => {
   try {
@@ -1761,10 +2002,15 @@ app.delete('/api/automations/:id', async (req: Request, res: Response) => {
 
 app.post('/api/automations/:id/trigger', async (req: Request, res: Response) => {
   try {
-    const runId = await automationEngine.triggerNow(req.params.id, req.principal?.userId);
+    const verifiedUserId = req.principal?.userId;
+    if (!verifiedUserId) {
+      return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+    }
+    const runId = await automationEngine.triggerNow(req.params.id, verifiedUserId);
     res.json({ runId, status: 'TRIGGERED' });
   } catch (err: any) {
-    res.status(400).json({ error: err.message });
+    const status = err.message?.includes('ACCESS_DENIED') ? 403 : 400;
+    res.status(status).json({ error: err.message });
   }
 });
 
@@ -1781,31 +2027,71 @@ app.get('/api/automations/:id/runs', async (req: Request, res: Response) => {
 
 app.post('/api/automations/:id/enable', async (req: Request, res: Response) => {
   try {
-    const item = await automationEngine.toggleAutomation(req.params.id, true, req.principal?.userId);
+    const verifiedUserId = req.principal?.userId;
+    if (!verifiedUserId) {
+      return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+    }
+    const item = await automationEngine.toggleAutomation(req.params.id, true, verifiedUserId);
     res.json(item);
   } catch (err: any) {
-    res.status(404).json({ error: err.message });
+    const status = err.statusCode || (err.code === 'SCHEDULER_UNAVAILABLE' ? 400 : (err.message?.includes('ACCESS_DENIED') ? 403 : 404));
+    res.status(status).json({ error: err.message, code: err.code });
   }
 });
 
 app.post('/api/automations/:id/disable', async (req: Request, res: Response) => {
   try {
-    const item = await automationEngine.toggleAutomation(req.params.id, false, req.principal?.userId);
+    const verifiedUserId = req.principal?.userId;
+    if (!verifiedUserId) {
+      return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
+    }
+    const item = await automationEngine.toggleAutomation(req.params.id, false, verifiedUserId);
     res.json(item);
   } catch (err: any) {
-    res.status(404).json({ error: err.message });
+    const status = err.statusCode || (err.message?.includes('ACCESS_DENIED') ? 403 : 404);
+    res.status(status).json({ error: err.message });
   }
 });
 
-// Platform / Serverless cron execution endpoint
-app.post('/api/automations/cron/execute', async (_req: Request, res: Response) => {
+// Platform / Serverless cron execution endpoint (Policy B: Authenticated & Authorized)
+const handleCronCycleExecution = async (req: Request, res: Response) => {
+  const cronSecret = process.env.CRON_SECRET;
+  if (!cronSecret) {
+    return res.status(503).json({
+      error: 'Autonomous scheduler is not configured in this environment: CRON_SECRET is missing.',
+      code: 'SCHEDULER_UNCONFIGURED'
+    });
+  }
+
+  const authHeader = req.headers['authorization'] || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+
+  if (!token) {
+    return res.status(401).json({
+      error: 'Unauthorized: missing bearer token for cron execution.',
+      code: 'UNAUTHORIZED'
+    });
+  }
+
+  const tokenBuf = Buffer.from(token);
+  const secretBuf = Buffer.from(cronSecret);
+  if (tokenBuf.length !== secretBuf.length || !crypto.timingSafeEqual(tokenBuf, secretBuf)) {
+    return res.status(401).json({
+      error: 'Unauthorized: invalid cron authorization token.',
+      code: 'UNAUTHORIZED'
+    });
+  }
+
   try {
-    await automationEngine.runScheduledCronCycle();
-    res.json({ status: 'CRON_CYCLE_EXECUTED', timestamp: Date.now() });
+    const result = await automationEngine.runScheduledCronCycle();
+    res.json({ status: 'CRON_CYCLE_EXECUTED', timestamp: Date.now(), result });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
-});
+};
+
+app.get('/api/automations/cron/execute', handleCronCycleExecution);
+app.post('/api/automations/cron/execute', handleCronCycleExecution);
 
 // -----------------------------------------------------------------------
 // Workflows — Server-Authoritative Execution Engine (Phase 18)
@@ -1938,8 +2224,9 @@ if (process.env.NODE_ENV === 'test') {
 }
 
 app.use((req: Request, res: Response) => {
-  process.stdout.write(`[API_404] ${req.method} ${req.url}\n`);
-  res.status(404).json({ error: `Not found: ${req.method} ${req.url}` });
+  const sanitized = sanitizeUrlForLogging(req.url);
+  process.stdout.write(`[API_404] ${req.method} ${sanitized}\n`);
+  res.status(404).json({ error: `Not found: ${req.method} ${sanitized}` });
 });
 
 // -----------------------------------------------------------------------
@@ -1949,7 +2236,7 @@ app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof UntrustedOriginError || err?.code === 'CORS_ORIGIN_DENIED' || err?.name === 'UntrustedOriginError') {
     const rawOrigin = typeof err.origin === 'string' ? err.origin : (req.headers.origin as string) || 'unknown';
     const sanitizedOrigin = rawOrigin.slice(0, 200).replace(/[\r\n\t]/g, '');
-    const sanitizedRoute = (req.originalUrl || req.url || 'unknown').slice(0, 200).replace(/[\r\n\t]/g, '');
+    const sanitizedRoute = sanitizeUrlForLogging(req.originalUrl || req.url || 'unknown').slice(0, 200).replace(/[\r\n\t]/g, '');
     process.stdout.write(
       `[SECURITY_EVENT] event=cors_origin_rejected origin=${sanitizedOrigin} route=${sanitizedRoute} status=403\n`
     );

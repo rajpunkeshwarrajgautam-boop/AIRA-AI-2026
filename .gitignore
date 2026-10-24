@@ -11,6 +11,7 @@ node_modules
 dist
 dist-ssr
 *.local
+.aira-maintenance-token.local
 
 # Editor directories and files
 .vscode/*
@@ -26,8 +27,9 @@ dist-ssr
 .env*
 graphify-out/
 .neon
-test-results/preview-acceptance/
+test-results/
 artifacts/
-
 # Local builder browser acceptance screenshots and receipts
 test-results/builder/
+# Isolated acceptance browser profiles
+.edge-staging-profiles/

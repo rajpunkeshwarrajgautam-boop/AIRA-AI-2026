@@ -71,3 +71,13 @@ Because Vercel triggers a production deployment automatically upon receiving any
    - Authoritative live verification is executed via `npm run verify:release-auth -- --pr <num> --sha <sha>`, which verifies GitHub API dual evidence: authentic owner workflow run (`rajpunkeshwarrajgautam-boop`), matching commit status `release/go-live-authorized=success` from trusted issuer `github-actions[bot]`, verified provenance linkage (`target_url` points to run ID on authorized repository), temporal correlation anti-replay check (<=15m delta), and <24h freshness. Active revocation is available via `npm run revoke:release-auth`.
 5. An agent must STOP and present all verified evidence, awaiting human authorization.
 
+## Agent skills
+
+### Issue tracker
+GitHub Issues is the primary tracker for this repository. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+Standard five-role triage vocabulary mapped to AIRA development workflows. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+Single-context domain modeling with root `GLOSSARY.md` and `docs/adr/`. See `docs/agents/domain.md`.

@@ -1,5 +1,7 @@
 
-export type WorkspaceMode = 'chat' | 'research' | 'library' | 'agents' | 'automations';
+export type WorkspaceMode = 'chat' | 'agent';
+
+export type CapabilityType = 'research' | 'vision' | 'builder' | 'agents' | 'automations' | 'library' | 'general';
 
 export type ModelId = 
   | 'claude-3-7-sonnet' 
@@ -66,6 +68,30 @@ export interface Message {
   timestamp: number;
   modelUsed?: ModelId;
   isStreaming?: boolean;
+  builderHandoff?: { prompt: string; conversationId: string };
+  automationProposal?: {
+    id?: string;
+    name: string;
+    objective: string;
+    trigger: 'TIME_SCHEDULE' | 'MANUAL' | 'CRON' | 'ONE_TIME' | 'EVENT' | 'WEBHOOK';
+    cronExpression?: string;
+    targetRunAt?: number;
+    humanSchedule?: string;
+    timezone?: string;
+    scheduleType?: string;
+  };
+  visionProposal?: {
+    id: string;
+    prompt: string;
+    estimatedCredits: number;
+    options?: {
+      aspectRatio?: '1:1' | '3:4' | '16:9';
+      quality?: 'economy' | 'premium';
+      resolution?: 'standard' | 'high';
+      numImages?: number;
+    };
+  };
+  citations?: Array<{ sourceTitle?: string; uri?: string; snippet?: string }>;
   provenance?: {
     requestedModel: string;
     resolvedPolicyModel: string;

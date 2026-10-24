@@ -38,8 +38,13 @@ const STORAGE_KEYS = {
   SESSION: 'aira_neon_auth_session_v1'
 };
 
-// Staging Neon Auth service URL as configured on branch br-soft-pine-b3gw5nyr
-const DEFAULT_AUTH_URL = 'https://ep-empty-field-b36mqqq6.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth';
+// Staging Neon Auth service URL as configured on branch pr92-commercial-platform-isolated
+const nodeProcess = (globalThis as any)?.process;
+const DEFAULT_AUTH_URL = nodeProcess?.env?.NEON_AUTH_BASE_URL
+  ? nodeProcess.env.NEON_AUTH_BASE_URL
+  : (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_NEON_AUTH_URL
+    ? (import.meta as any).env.VITE_NEON_AUTH_URL
+    : 'https://ep-ancient-sound-b3drtnp5.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth');
 
 export class NeonAuthClient {
   private baseUrl: string;
@@ -478,33 +483,139 @@ export class NeonAuthClient {
   }
 
   /**
-   * Restore existing session from first-party BFF HttpOnly cookie.
+   * Restore existing session from first-party BFF HttpOnly cookie or bridge active Neon OAuth session.
    */
   public async restoreSession(): Promise<NeonSessionData | null> {
     try {
+      // 0. Handle OAuth error query param if user cancelled or error occurred
+      if (typeof window !== 'undefined' && window.location?.search) {
+        const urlParams = new URLSearchParams(window.location.search);
+        const oauthError = urlParams.get('error') || urlParams.get('auth_error');
+        if (oauthError) {
+          console.warn('[NeonAuth] OAuth return error:', oauthError);
+          const cleanUrl = window.location.pathname + window.location.hash;
+          window.history.replaceState({}, document.title, cleanUrl);
+        }
+      }
+
+      // 1. Proactively check existing first-party BFF HttpOnly cookie (__Host-aira_auth_session)
       const res = await fetch(`${this.getApiBase()}/api/auth/session`, {
         method: 'GET',
         headers: { Accept: 'application/json' },
         credentials: 'include'
       });
 
-      if (!res.ok) return null;
-      const data = await res.json();
-      if (data.status === 'AUTHENTICATED' && data.user) {
-        this.csrfToken = data.csrfToken || null;
-        const session: NeonSessionData = {
-          user: data.user,
-          token: 'bff_session',
-          csrfToken: data.csrfToken
-        };
-        this.saveSession(session);
-        return session;
-      } else {
-        if (this.currentSession && this.currentSession.token === 'bff_session') {
-          this.saveSession(null);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.status === 'AUTHENTICATED' && data.user) {
+          this.csrfToken = data.csrfToken || null;
+          const session: NeonSessionData = {
+            user: data.user,
+            token: 'bff_session',
+            csrfToken: data.csrfToken
+          };
+          this.saveSession(session);
+
+          // Handle post-OAuth return cleanup and guest conversation linking
+          if (typeof window !== 'undefined' && window.location?.search) {
+            const hasAuthSuccess = window.location.search.includes('auth_success');
+            const hasAuthCallback = window.location.search.includes('auth_callback');
+            if (hasAuthSuccess || hasAuthCallback) {
+              const cleanUrl = window.location.pathname + window.location.hash;
+              window.history?.replaceState({}, document.title, cleanUrl);
+              await this.linkGuestSessionToServer().catch((linkErr) => {
+                console.warn('[NeonAuth] Post-OAuth guest linking notice:', linkErr?.message || linkErr);
+              });
+            }
+          }
+
+          return session;
         }
-        return null;
       }
+
+      // 2. If first-party cookie was absent, check Neon Auth cross-origin endpoint (/get-session).
+      // This handles returning from Google OAuth or cross-domain authentication where Neon Auth
+      // established an upstream session cookie (__Secure-neon-auth.session_token).
+      if (this.baseUrl) {
+        try {
+          const origin = (typeof window !== 'undefined' && window.location?.origin)
+            ? window.location.origin
+            : 'http://localhost:5173';
+          const neonRes = await fetch(`${this.baseUrl}/get-session`, {
+            method: 'GET',
+            headers: {
+              Accept: 'application/json',
+              Origin: origin
+            },
+            credentials: 'include'
+          });
+
+          if (neonRes.ok) {
+            const neonData = await neonRes.json();
+            if (neonData && neonData.session?.token && neonData.user) {
+              // Exchange upstream Neon Auth session token for a first-party signed BFF cookie
+              const exchangeRes = await fetch(`${this.getApiBase()}/api/auth/oauth-exchange`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'x-aira-csrf-protection': '1'
+                },
+                credentials: 'include',
+                body: JSON.stringify({
+                  sessionToken: neonData.session.token
+                })
+              });
+
+              if (exchangeRes.ok) {
+                const exchangeData = await exchangeRes.json();
+                if (exchangeData.status === 'AUTHENTICATED' && exchangeData.user) {
+                  this.csrfToken = exchangeData.csrfToken || null;
+                  const session: NeonSessionData = {
+                    user: exchangeData.user,
+                    token: 'bff_session',
+                    csrfToken: exchangeData.csrfToken
+                  };
+                  this.saveSession(session);
+
+                  // Migrate any active guest conversations to the newly authenticated Google account
+                  await this.linkGuestSessionToServer().catch((linkErr) => {
+                    console.warn('[NeonAuth] Post-OAuth guest linking notice:', linkErr?.message || linkErr);
+                  });
+
+                  // Clean up URL if auth_callback parameter was present
+                  if (typeof window !== 'undefined') {
+                    if (window.location?.search?.includes('auth_callback')) {
+                      const cleanUrl = window.location.pathname + window.location.hash;
+                      window.history?.replaceState({}, document.title, cleanUrl);
+                    }
+                    if (window.sessionStorage) {
+                      try { sessionStorage.removeItem('aira_oauth_pending'); } catch {}
+                    }
+                  }
+
+                  return session;
+                }
+              } else {
+                // Fallback to upstream user profile if BFF exchange endpoint is temporarily offline
+                const fallbackSession: NeonSessionData = {
+                  user: neonData.user,
+                  token: neonData.session.token
+                };
+                this.saveSession(fallbackSession);
+                return fallbackSession;
+              }
+            }
+          }
+        } catch (neonErr) {
+          console.warn('[NeonAuth] Cross-origin session check notice:', neonErr);
+        }
+      }
+
+      // 3. User is truly anonymous / guest
+      if (this.currentSession && this.currentSession.token === 'bff_session') {
+        this.saveSession(null);
+      }
+      return null;
     } catch (err) {
       console.warn('[NeonAuth] Session restore network notice:', err);
       return null;
@@ -731,6 +842,99 @@ export class NeonAuthClient {
   }
 
   /**
+   * Initiate third-party social OAuth sign-in flow (Google, GitHub) via Neon Auth.
+   */
+  public async signInWithSocial(params: {
+    provider: 'google' | 'github' | string;
+    callbackURL?: string;
+    autoRedirect?: boolean;
+  }): Promise<{ url: string; redirect: boolean }> {
+    if (this.isBffMode()) {
+      if (params.provider !== 'google' && params.provider !== 'github') {
+        throw new Error('Unsupported OAuth provider');
+      }
+      const origin = (typeof window !== 'undefined' && window.location?.origin) || 'http://localhost:5173';
+      const response = await fetch(`${this.getApiBase()}/api/auth/oauth/${params.provider}/start`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-aira-csrf-protection': '1',
+          'Origin': origin,
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          provider: params.provider,
+        }),
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ message: 'Social OAuth initialization failed' }));
+        throw new Error(err.message || err.error || `Social OAuth initialization failed (${response.status})`);
+      }
+
+      const data = await response.json();
+      if (!data || !data.url) {
+        throw new Error('Malformed response from social OAuth start endpoint');
+      }
+
+      const autoRedirect = params.autoRedirect !== false;
+      if (autoRedirect && typeof window !== 'undefined' && window.location) {
+        window.location.href = data.url;
+      }
+
+      return {
+        url: data.url,
+        redirect: data.redirect ?? true,
+      };
+    }
+
+    if (!this.baseUrl) {
+      throw new Error('Neon Auth service is unconfigured in production environment (missing VITE_NEON_AUTH_URL)');
+    }
+
+    const origin = (typeof window !== 'undefined' && window.location?.origin) || 'http://localhost:5173';
+    const callbackURL = params.callbackURL || `${origin}?auth_callback=1`;
+
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+      try {
+        sessionStorage.setItem('aira_oauth_pending', params.provider || 'google');
+      } catch {}
+    }
+
+    const response = await fetch(`${this.baseUrl}/sign-in/social`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Origin': origin,
+      },
+      body: JSON.stringify({
+        provider: params.provider,
+        callbackURL,
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ message: 'Social sign-in request failed' }));
+      throw new Error(err.message || err.error || `Social sign-in failed (${response.status})`);
+    }
+
+    const data = await response.json();
+    if (!data || !data.url) {
+      throw new Error('Malformed response from social sign-in provider endpoint');
+    }
+
+    const autoRedirect = params.autoRedirect !== false;
+    if (autoRedirect && typeof window !== 'undefined' && window.location) {
+      window.location.href = data.url;
+    }
+
+    return {
+      url: data.url,
+      redirect: data.redirect ?? true,
+    };
+  }
+
+  /**
    * Sign out the active session locally and remotely on the BFF or direct provider.
    */
   public async signOut(): Promise<{ remoteSuccess: boolean; error?: string }> {
@@ -771,6 +975,21 @@ export class NeonAuthClient {
           remoteSuccess = false;
           remoteError = `Remote signout HTTP ${res.status}`;
           console.warn(`[NeonAuth] Remote signout HTTP ${res.status}`);
+        }
+
+        // Also purge remote Neon Auth session cookie cross-origin to ensure full revocation
+        if (this.baseUrl && typeof window !== 'undefined') {
+          try {
+            await fetch(`${this.baseUrl}/sign-out`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Origin': origin
+              },
+              credentials: 'include',
+              body: JSON.stringify({})
+            });
+          } catch {}
         }
       } catch (err: any) {
         remoteSuccess = false;

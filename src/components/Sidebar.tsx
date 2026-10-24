@@ -9,10 +9,6 @@ import {
   Sun,
   Moon,
   Laptop,
-  Telescope,
-  Library,
-  Bot,
-  Workflow,
   MessageSquareText,
   ShieldCheck,
 } from 'lucide-react';
@@ -44,6 +40,9 @@ interface SidebarProps {
   onUpdateSettings: (settings: Partial<AppSettings>) => void;
   workspaceMode: WorkspaceMode;
   onSelectWorkspace: (mode: WorkspaceMode) => void;
+  onOpenVisionStudio?: () => void;
+  onOpenPricing?: () => void;
+  onOpenBilling?: () => void;
 }
 
 const listVariants: Variants = {
@@ -119,8 +118,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onToggleOpen,
   settings,
   onUpdateSettings,
-  workspaceMode,
+  workspaceMode: _workspaceMode,
   onSelectWorkspace,
+  onOpenVisionStudio: _onOpenVisionStudio,
+  onOpenPricing: _onOpenPricing,
+  onOpenBilling,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [neonUser, setNeonUser] = useState<NeonUser | null>(() => neonAuth.getCurrentUser());
@@ -201,19 +203,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       onToggleOpen();
     }
   };
-
-  const navItem = (mode: WorkspaceMode, label: string, icon: React.ReactNode, badge?: string) => (
-    <button
-      onClick={() => {
-        onSelectWorkspace(mode);
-        if (typeof window !== 'undefined' && window.innerWidth < 1280) onToggleOpen();
-      }}
-      className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-[13px] font-semibold transition-all duration-300 ${workspaceMode === mode ? 'bg-claude-surface-light dark:bg-claude-surface-dark text-claude-text-light dark:text-white shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] border border-claude-border-light dark:border-claude-border-dark' : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark border border-transparent'}`}
-    >
-      <span className="flex items-center gap-3">{icon}<span>{label}</span></span>
-      {badge && <span className="text-[9px] uppercase tracking-wider font-bold px-2 py-0.5 rounded-md bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark">{badge}</span>}
-    </button>
-  );
 
   const renderChatItem = (c: Conversation) => (
     <motion.div
@@ -310,16 +299,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
           {/* Navigation, search and all conversation groups share one genuine touch-scroll surface. */}
           <div data-testid="sidebar-scroll-region" className="aira-sidebar-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain touch-pan-y">
-          <div className="px-4 pt-3 pb-2 space-y-1">
-            {navItem('chat', 'Chat', <MessageSquareText className="w-4 h-4" />)}
-            {navItem('research', 'Research', <Telescope className="w-4 h-4" />, 'beta')}
-            {navItem('library', 'Library', <Library className="w-4 h-4" />)}
-            <button onClick={onOpenProjects} className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-[13px] font-semibold transition-all duration-300 ${activeProjectId ? 'bg-claude-surface-light dark:bg-claude-surface-dark text-claude-text-light dark:text-white shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] border border-claude-border-light dark:border-claude-border-dark' : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark border border-transparent'}`}>
-              <span className="flex items-center gap-3"><FolderGit2 className="w-4 h-4" /><span>Projects</span></span>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark">{projects.length}</span>
+          <div className="px-3.5 pt-2 pb-1 space-y-1">
+            <button
+              onClick={onOpenProjects}
+              className={`w-full flex items-center justify-between px-3.5 py-2 rounded-xl text-[13px] font-semibold transition-all duration-300 ${activeProjectId ? 'bg-claude-surface-light dark:bg-claude-surface-dark text-claude-text-light dark:text-white shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] border border-claude-border-light dark:border-claude-border-dark' : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark border border-transparent'}`}
+            >
+              <span className="flex items-center gap-2.5">
+                <FolderGit2 className="w-4 h-4 text-aira-blue dark:text-blue-400" />
+                <span>Projects</span>
+              </span>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark">
+                {projects.length}
+              </span>
             </button>
-            {navItem('agents', 'Agents', <Bot className="w-4 h-4" />)}
-            {navItem('automations', 'Automations', <Workflow className="w-4 h-4" />)}
           </div>
 
           <div className="px-4 pt-4 pb-2">
@@ -401,22 +393,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="flex items-center gap-1.5">
                 <button
                   type="button"
-                  aria-label={neonUser ? "View account details" : "Sign in or register persistent account"}
-                  onClick={onOpenAuth}
+                  aria-label={neonUser ? "View account and billing details" : "Sign in or register persistent account"}
+                  onClick={neonUser && onOpenBilling ? onOpenBilling : onOpenAuth}
                   className="flex min-w-0 items-center space-x-2.5 p-2 rounded-xl hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark border border-claude-border-light/60 dark:border-claude-border-dark/60 transition-all flex-1 text-left active:scale-[0.98]"
                 >
-                  <div className="w-7 h-7 rounded-[8px] bg-gradient-to-br from-claude-terracotta to-[#eb6e4b] text-white font-semibold text-xs flex items-center justify-center flex-shrink-0 shadow-sm">
-                    {neonUser ? (neonUser.name ? neonUser.name.slice(0, 2).toUpperCase() : 'AI') : <ShieldCheck className="w-3.5 h-3.5" />}
+                  <div className="w-7 h-7 rounded-[8px] bg-gradient-to-br from-claude-terracotta to-[#eb6e4b] text-white font-semibold text-xs flex items-center justify-center flex-shrink-0 shadow-sm overflow-hidden">
+                    {neonUser?.image ? (
+                      <img src={neonUser.image} alt={neonUser.name || 'User'} className="w-full h-full object-cover" />
+                    ) : neonUser ? (
+                      neonUser.name ? neonUser.name.slice(0, 2).toUpperCase() : 'AI'
+                    ) : (
+                      <ShieldCheck className="w-3.5 h-3.5" />
+                    )}
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="text-[12px] font-bold text-claude-text-light dark:text-white tracking-tight truncate">
-                      {neonUser ? neonUser.name || neonUser.email : 'Guest Workspace'}
+                      {neonUser ? neonUser.name || neonUser.email || 'Authenticated User' : 'Guest Workspace'}
                     </div>
                     <div className="text-[10px] font-medium text-claude-muted-light dark:text-claude-muted-dark flex items-center space-x-1">
                       {neonUser ? (
                         <>
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                          <span>Neon Staging Sync</span>
+                          <span>Account & Billing</span>
                         </>
                       ) : (
                         <span>Sign in · Persistent sync</span>

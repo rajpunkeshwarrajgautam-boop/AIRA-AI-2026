@@ -1,9 +1,10 @@
+import 'dotenv/config';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { chromium, type Browser } from 'playwright';
 
-const STAGING_AUTH_BASE = 'https://ep-empty-field-b36mqqq6.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth';
-const STAGING_JWKS_URL = 'https://ep-empty-field-b36mqqq6.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth/.well-known/jwks.json';
+const STAGING_AUTH_BASE = process.env.NEON_AUTH_BASE_URL || 'https://ep-ancient-sound-b3drtnp5.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth';
+const STAGING_JWKS_URL = process.env.NEON_AUTH_JWKS_URL || 'https://ep-ancient-sound-b3drtnp5.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth/.well-known/jwks.json';
 const API_PORT = 3001;
 const VITE_PORT = 5173;
 const API_URL = `http://127.0.0.1:${API_PORT}`;
@@ -164,11 +165,18 @@ async function main() {
     // -------------------------------------------------------------
     console.log('[5/7] Step 2: Switch to Account B in the same browser session...');
     await page.locator('button[aria-label*="account"]').click();
-    await page.waitForSelector('#auth-modal-title', { timeout: 10000 });
-
-    // Sign out of Account A
-    await page.getByRole('button', { name: 'Sign Out' }).click();
-    await sleep(500);
+    const isBilling = await page.getByText('Account & Billing Center').isVisible({ timeout: 3000 }).catch(() => false);
+    if (isBilling) {
+      await page.getByRole('button', { name: /Security/i }).click();
+      await page.getByRole('button', { name: /Sign Out/i }).click();
+      await sleep(1000);
+      await page.locator('button[aria-label*="account"]').click();
+      await page.waitForSelector('#auth-modal-title', { timeout: 10000 });
+    } else {
+      await page.waitForSelector('#auth-modal-title', { timeout: 10000 });
+      await page.getByRole('button', { name: 'Sign Out' }).click();
+      await sleep(500);
+    }
 
     // Immediately register Account B
     await page.getByRole('button', { name: 'Create Account' }).click();
@@ -226,10 +234,17 @@ async function main() {
     // -------------------------------------------------------------
     console.log('[6/7] Step 3: Sign out to Guest workspace...');
     await page.locator('button[aria-label*="account"]').click();
-    await page.waitForSelector('#auth-modal-title', { timeout: 10000 });
-    await page.getByRole('button', { name: 'Sign Out' }).click();
-    await page.keyboard.press('Escape');
-    await sleep(1000);
+    const isBillingGuest = await page.getByText('Account & Billing Center').isVisible({ timeout: 3000 }).catch(() => false);
+    if (isBillingGuest) {
+      await page.getByRole('button', { name: /Security/i }).click();
+      await page.getByRole('button', { name: /Sign Out/i }).click();
+      await sleep(1000);
+    } else {
+      await page.waitForSelector('#auth-modal-title', { timeout: 10000 });
+      await page.getByRole('button', { name: 'Sign Out' }).click();
+      await page.keyboard.press('Escape');
+      await sleep(1000);
+    }
 
     // Neither Account A nor Account B secret in guest DOM
     assert.equal(await page.getByText(tokenA).count(), 0, 'Guest DOM must not show Account A data');

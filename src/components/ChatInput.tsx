@@ -5,13 +5,10 @@ import {
   Brain,
   Check,
   ChevronDown,
-  Library,
   LoaderCircle,
   MessageSquareText,
   Paperclip,
   SlidersHorizontal,
-  Telescope,
-  Workflow,
   X,
 } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
@@ -34,11 +31,8 @@ const MODE_OPTIONS: Array<{
   hint: string;
   icon: React.ComponentType<{ className?: string }>;
 }> = [
-  { id: 'chat', label: 'Chat', hint: 'General reasoning and creation', icon: MessageSquareText },
-  { id: 'research', label: 'Research', hint: 'Investigate and synthesize evidence', icon: Telescope },
-  { id: 'agents', label: 'Agents', hint: 'Plan autonomous multi-step missions', icon: Bot },
-  { id: 'library', label: 'Library', hint: 'Work from workspace knowledge', icon: Library },
-  { id: 'automations', label: 'Automations', hint: 'Design trigger-action workflows', icon: Workflow },
+  { id: 'chat', label: 'Chat', hint: 'Natural language reasoning and capability dispatch', icon: MessageSquareText },
+  { id: 'agent', label: 'Agent', hint: 'Autonomous multi-step planning and tool execution', icon: Bot },
 ];
 
 const STYLE_OPTIONS = [
@@ -102,11 +96,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   }, [showModeMenu, showStyleMenu]);
 
   const placeholderMap: Record<WorkspaceMode, string> = {
-    chat: 'How can Aira help you today?',
-    research: 'What would you like Aira to research?',
-    agents: 'Describe the outcome you want an agent to deliver...',
-    automations: 'Describe the trigger and action to automate...',
-    library: 'Ask Aira about your workspace knowledge...',
+    chat: 'Ask anything, conduct research, or request visual creations...',
+    agent: 'Describe a multi-step objective, application to build, or automated routine...',
   };
 
   const placeholder = placeholderMap[workspaceMode] || placeholderMap.chat;
@@ -241,69 +232,36 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               <Paperclip className="h-4 w-4" />
             </motion.button>
 
-            <div className="relative">
+            {/* Two-segment Chat / Agent Toggle */}
+            <div className="flex items-center p-0.5 rounded-[10px] bg-claude-surface2-light dark:bg-claude-surface2-dark/80 border border-claude-border-light dark:border-claude-border-dark select-none" role="group" aria-label="Execution Mode">
               <button
                 type="button"
-                onClick={() => {
-                  setShowModeMenu(open => !open);
-                  setShowStyleMenu(false);
-                }}
-                className={`flex items-center min-h-10 sm:min-h-0 gap-1.5 rounded-[9px] px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
-                  showModeMenu || workspaceMode !== 'chat'
-                    ? 'bg-claude-terracotta/10 text-claude-accentInk'
-                    : 'text-claude-muted-light hover:bg-claude-surface2-light dark:text-claude-muted-dark dark:hover:bg-claude-surface2-dark'
+                onClick={() => onWorkspaceModeChange('chat')}
+                aria-pressed={workspaceMode === 'chat'}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-[8px] text-[11px] font-semibold transition-all duration-200 ${
+                  workspaceMode === 'chat'
+                    ? 'bg-aira-blue text-white shadow-sm'
+                    : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white'
                 }`}
+                title="Chat mode: Conversational reasoning, research, vision, and natural queries"
               >
-                <ModeIcon className="h-3.5 w-3.5" />
-                <span>{modeInfo.label}</span>
-                <ChevronDown className="h-3 w-3" />
+                <MessageSquareText className="h-3 w-3" />
+                <span>Chat</span>
               </button>
-
-              <AnimatePresence>
-                {showModeMenu && (
-                  <motion.div
-                    initial={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 8, scale: 0.97 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 6, scale: 0.98 }}
-                    transition={reducedMotion ? { duration: 0.08 } : { type: 'spring', stiffness: 390, damping: 31 }}
-                    className="absolute bottom-10 left-0 z-50 w-[min(260px,calc(100vw-96px))] rounded-[16px] border border-claude-border-light bg-white/95 p-1.5 shadow-[0_16px_44px_-18px_rgba(45,40,30,0.45)] backdrop-blur-xl dark:border-claude-border-dark dark:bg-[#1d1c19]/95"
-                  >
-                    {MODE_OPTIONS.map(mode => {
-                      const Icon = mode.icon;
-                      const selected = mode.id === workspaceMode;
-                      return (
-                        <button
-                          key={mode.id}
-                          type="button"
-                          onClick={() => {
-                            onWorkspaceModeChange(mode.id);
-                            setShowModeMenu(false);
-                          }}
-                          className="relative isolate flex w-full items-center gap-2.5 rounded-[11px] px-2.5 py-2 text-left outline-none"
-                        >
-                          {selected && (
-                            <motion.span
-                              layoutId="composer-mode-active"
-                              className="absolute inset-0 -z-10 rounded-[11px] bg-claude-surface2-light dark:bg-claude-surface2-dark"
-                              transition={reducedMotion ? { duration: 0 } : { type: 'spring', stiffness: 430, damping: 34 }}
-                            />
-                          )}
-                          <span className={`flex h-7 w-7 items-center justify-center rounded-[9px] ${
-                            selected ? 'bg-claude-terracotta/10 text-claude-accentInk' : 'text-claude-muted-light dark:text-claude-muted-dark'
-                          }`}>
-                            <Icon className="h-3.5 w-3.5" />
-                          </span>
-                          <span className="min-w-0 flex-1">
-                            <span className="block text-[11px] font-semibold text-claude-text-light dark:text-white">{mode.label}</span>
-                            <span className="block truncate text-[9px] text-claude-muted-light dark:text-claude-muted-dark">{mode.hint}</span>
-                          </span>
-                          {selected && <Check className="h-3.5 w-3.5 text-claude-accentInk" />}
-                        </button>
-                      );
-                    })}
-                  </motion.div>
-                )}
-              </AnimatePresence>
+              <button
+                type="button"
+                onClick={() => onWorkspaceModeChange('agent')}
+                aria-pressed={workspaceMode === 'agent'}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-[8px] text-[11px] font-semibold transition-all duration-200 ${
+                  workspaceMode === 'agent'
+                    ? 'bg-aira-blue text-white shadow-sm'
+                    : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white'
+                }`}
+                title="Agent mode: Autonomous multi-step missions, builder workspace, and tool execution"
+              >
+                <Bot className="h-3 w-3" />
+                <span>Agent</span>
+              </button>
             </div>
 
             <div className="relative hidden sm:block">

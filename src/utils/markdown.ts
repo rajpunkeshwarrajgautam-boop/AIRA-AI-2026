@@ -179,7 +179,8 @@ export function sanitizeCitationMarkers(text: string, validSourceCount?: number)
 
 export function renderMarkdownToHtml(markdown: string, validSourceCount?: number): string {
   try {
-    const cleaned = sanitizeCitationMarkers(markdown, validSourceCount);
+    const stripped = markdown.replace(/<(?:antArtifact|airaArtifact)\b[^>]*>[\s\S]*?(?:<\/(?:antArtifact|airaArtifact)>|$)/gi, '').trim();
+    const cleaned = sanitizeCitationMarkers(stripped, validSourceCount);
     return sanitizeHtml(marked.parse(cleaned) as string);
   } catch (e) {
     console.error('Markdown parse error', e);
