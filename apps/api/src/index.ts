@@ -107,6 +107,9 @@ export class UntrustedOriginError extends Error {
   }
 }
 
+import { sanitizeUrlForLogging } from './utils/sanitize-url.js';
+export { sanitizeUrlForLogging };
+
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
 
@@ -135,7 +138,7 @@ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
   if (err instanceof UntrustedOriginError || err?.code === 'CORS_ORIGIN_DENIED' || err?.name === 'UntrustedOriginError') {
     const rawOrigin = typeof err.origin === 'string' ? err.origin : (req.headers.origin as string) || 'unknown';
     const sanitizedOrigin = rawOrigin.slice(0, 200).replace(/[\r\n\t]/g, '');
-    const sanitizedRoute = (req.originalUrl || req.url || 'unknown').slice(0, 200).replace(/[\r\n\t]/g, '');
+    const sanitizedRoute = sanitizeUrlForLogging(req.originalUrl || req.url || 'unknown').slice(0, 200).replace(/[\r\n\t]/g, '');
     
     process.stdout.write(
       `[SECURITY_EVENT] event=cors_origin_rejected origin=${sanitizedOrigin} route=${sanitizedRoute} status=403\n`
@@ -156,7 +159,7 @@ app.use(express.json({
 app.use(express.urlencoded({ limit: '2mb', extended: false }));
 
 app.use((req: Request, _res: Response, next: NextFunction) => {
-  process.stdout.write(`[API_REQ] ${req.method} ${req.url}\n`);
+  process.stdout.write(`[API_REQ] ${req.method} ${sanitizeUrlForLogging(req.url)}\n`);
   next();
 });
 
@@ -2221,8 +2224,9 @@ if (process.env.NODE_ENV === 'test') {
 }
 
 app.use((req: Request, res: Response) => {
-  process.stdout.write(`[API_404] ${req.method} ${req.url}\n`);
-  res.status(404).json({ error: `Not found: ${req.method} ${req.url}` });
+  const sanitized = sanitizeUrlForLogging(req.url);
+  process.stdout.write(`[API_404] ${req.method} ${sanitized}\n`);
+  res.status(404).json({ error: `Not found: ${req.method} ${sanitized}` });
 });
 
 // -----------------------------------------------------------------------
@@ -2232,7 +2236,7 @@ app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof UntrustedOriginError || err?.code === 'CORS_ORIGIN_DENIED' || err?.name === 'UntrustedOriginError') {
     const rawOrigin = typeof err.origin === 'string' ? err.origin : (req.headers.origin as string) || 'unknown';
     const sanitizedOrigin = rawOrigin.slice(0, 200).replace(/[\r\n\t]/g, '');
-    const sanitizedRoute = (req.originalUrl || req.url || 'unknown').slice(0, 200).replace(/[\r\n\t]/g, '');
+    const sanitizedRoute = sanitizeUrlForLogging(req.originalUrl || req.url || 'unknown').slice(0, 200).replace(/[\r\n\t]/g, '');
     process.stdout.write(
       `[SECURITY_EVENT] event=cors_origin_rejected origin=${sanitizedOrigin} route=${sanitizedRoute} status=403\n`
     );

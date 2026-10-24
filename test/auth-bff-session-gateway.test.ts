@@ -477,12 +477,11 @@ async function testBffSignOutRevocation() {
 
     await handleBffSignOut(mockReq, mockRes);
 
-    assert.equal(remoteSignOutCalled, true, 'Remote Neon Auth /sign-out must be invoked');
-    assert.equal(authHeaderSent, 'Bearer neon_sess_tok_to_revoke');
+    assert.equal(remoteSignOutCalled, false, 'Obsolete remote Neon Auth /sign-out must NOT be invoked (retired in PR #102)');
     assert(Array.isArray(setCookieHeader) && setCookieHeader[0].includes('Max-Age=0'), 'Cookie must be cleared');
     assert.equal(await bffSessionStore.get(sessionId), null, 'Session must be deleted from server-side store');
 
-    console.log('  ✓ BFF sign-out safely executes two-phase invalidation, store purge, and cookie clearing');
+    console.log('  ✓ BFF sign-out safely executes first-party store purge and cookie clearing without legacy remote dependency');
   } finally {
     globalThis.fetch = originalFetch;
   }
