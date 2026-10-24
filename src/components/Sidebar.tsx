@@ -412,6 +412,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
               onSignOut={async () => {
                 await neonAuth.signOut();
               }}
+              onSwitchAccount={async () => {
+                await neonAuth.signOut();
+                if (onOpenAuth) onOpenAuth();
+              }}
               onOpenHelp={onOpenHelp}
             />
 

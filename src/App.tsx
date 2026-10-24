@@ -112,8 +112,8 @@ function App() {
       setBillingInitialTab('security');
       setIsAccountBillingOpen(true);
     } else if (tab === 'profile') {
-      setBillingInitialTab('overview');
-      setIsAccountBillingOpen(true);
+      setSettingsInitialTab('data');
+      setIsSettingsOpen(true);
     } else if (tab === 'personalization') {
       setSettingsInitialTab('instructions');
       setIsSettingsOpen(true);

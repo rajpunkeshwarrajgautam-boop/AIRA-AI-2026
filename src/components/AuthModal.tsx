@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { neonAuth, NeonUser, NeonSessionData } from '../lib/neonAuth';
+import { getEnvironmentBadgeLabel } from '../lib/environment';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -407,9 +408,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
                 <div className="flex items-center space-x-1.5 mt-0.5">
                   <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
                   <span className="text-[11px] font-medium text-claude-muted-light dark:text-claude-muted-dark">
-                    {typeof window !== 'undefined' && (window.location.hostname.includes('staging') || window.location.hostname.includes('localhost') || window.location.hostname.includes('127.0.0.1'))
-                      ? 'Direct OAuth (Google & GitHub) · Staging'
-                      : 'Direct OAuth (Google & GitHub)'}
+                    {(() => {
+                      const badge = getEnvironmentBadgeLabel();
+                      return badge ? `Direct OAuth (Google & GitHub) · ${badge}` : 'Direct OAuth (Google & GitHub)';
+                    })()}
                   </span>
                 </div>
               </div>

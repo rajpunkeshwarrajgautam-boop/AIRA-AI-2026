@@ -56,7 +56,7 @@ test('AccountProfilePopup renders authenticated user state with nested switcher 
   assert.match(html, /Log out/);
   assert.match(html, /rajpunkeshwarrajgautam@gmail\.com/);
   assert.match(html, /Personal account/);
-  assert.match(html, /Add account/);
+  assert.match(html, /Switch account/);
 });
 
 test('AuthModal removes Staging label in production environment', () => {

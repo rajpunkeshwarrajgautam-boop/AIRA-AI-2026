@@ -10,10 +10,7 @@ import {
   ChevronRight,
   ChevronLeft,
   Check,
-  Plus,
-  Mail,
-  ShieldCheck,
-  ExternalLink
+  ArrowLeftRight
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { NeonUser } from '../lib/neonAuth';
@@ -25,7 +22,8 @@ export interface AccountProfilePopupProps {
   onOpenPricing: () => void;
   onOpenSettings: (tab?: string) => void;
   onOpenAuth: () => void;
-  onSignOut: () => void;
+  onSignOut: () => void | Promise<void>;
+  onSwitchAccount?: () => void | Promise<void>;
   onOpenHelp?: () => void;
   anchorRef?: React.RefObject<HTMLElement | null>;
   className?: string;
@@ -40,6 +38,7 @@ export const AccountProfilePopup: React.FC<AccountProfilePopupProps> = ({
   onOpenSettings,
   onOpenAuth,
   onSignOut,
+  onSwitchAccount,
   onOpenHelp,
   className = '',
   defaultShowSwitcher = false,
@@ -119,6 +118,17 @@ export const AccountProfilePopup: React.FC<AccountProfilePopupProps> = ({
   const userEmail = user?.email || 'guest@aira.internal';
   const planName = user ? 'Plus' : 'Free';
 
+  const handleSwitchAccountClick = () => {
+    setShowAccountSwitcher(false);
+    onClose();
+    if (onSwitchAccount) {
+      onSwitchAccount();
+    } else {
+      onSignOut();
+      onOpenAuth();
+    }
+  };
+
   const handleHelpClick = () => {
     if (onOpenHelp) {
       onOpenHelp();
@@ -159,7 +169,13 @@ export const AccountProfilePopup: React.FC<AccountProfilePopupProps> = ({
               {/* Account Header Item with Chevron to Switcher */}
               <button
                 type="button"
-                onClick={() => setShowAccountSwitcher(prev => !prev)}
+                onClick={() => {
+                  if (isMobileViewport) {
+                    setShowAccountSwitcher(prev => !prev);
+                  } else {
+                    setShowAccountSwitcher(true);
+                  }
+                }}
                 onMouseEnter={() => {
                   if (!isMobileViewport) setShowAccountSwitcher(true);
                 }}
@@ -330,17 +346,15 @@ export const AccountProfilePopup: React.FC<AccountProfilePopupProps> = ({
               {/* Divider */}
               <div className="h-[1px] bg-slate-200/80 dark:bg-slate-800/80 my-1.5" />
 
-              {/* + Add account button */}
+              {/* Switch account button (truthful single-principal session transition) */}
               <button
                 type="button"
-                onClick={() => {
-                  onClose();
-                  onOpenAuth();
-                }}
+                data-testid="switch-account-button"
+                onClick={handleSwitchAccountClick}
                 className="flex items-center space-x-2.5 px-2.5 py-2 rounded-xl text-[13px] font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100/80 dark:hover:bg-slate-800/60 transition-colors text-left"
               >
-                <Plus className="w-4 h-4 text-slate-500 dark:text-slate-400" />
-                <span>Add account</span>
+                <ArrowLeftRight className="w-4 h-4 text-slate-500 dark:text-slate-400" />
+                <span>Switch account</span>
               </button>
             </div>
           )}
@@ -382,18 +396,15 @@ export const AccountProfilePopup: React.FC<AccountProfilePopupProps> = ({
                 {/* Divider */}
                 <div className="h-[1px] bg-slate-200/80 dark:bg-slate-800/80 my-1.5 mx-1" />
 
-                {/* + Add account button */}
+                {/* Switch account button (truthful single-principal session transition) */}
                 <button
                   type="button"
-                  onClick={() => {
-                    setShowAccountSwitcher(false);
-                    onClose();
-                    onOpenAuth();
-                  }}
+                  data-testid="switch-account-button-desktop"
+                  onClick={handleSwitchAccountClick}
                   className="w-full flex items-center space-x-2.5 px-2.5 py-2 rounded-xl text-[13px] font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100/80 dark:hover:bg-slate-800/60 transition-colors text-left group"
                 >
-                  <Plus className="w-4 h-4 text-slate-500 dark:text-slate-400 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors" />
-                  <span>Add account</span>
+                  <ArrowLeftRight className="w-4 h-4 text-slate-500 dark:text-slate-400 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors" />
+                  <span>Switch account</span>
                 </button>
               </motion.div>
             )}
