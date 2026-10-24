@@ -31,3 +31,5 @@ test-results/
 artifacts/
 # Local builder browser acceptance screenshots and receipts
 test-results/builder/
+# Isolated acceptance browser profiles
+.edge-staging-profiles/

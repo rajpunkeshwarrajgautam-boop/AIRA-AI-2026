@@ -107,6 +107,46 @@ export class UntrustedOriginError extends Error {
   }
 }
 
+export function sanitizeUrlForLogging(rawUrl: string): string {
+  if (!rawUrl) return '';
+  try {
+    const url = new URL(rawUrl, 'http://localhost');
+    const sensitiveKeys = new Set([
+      'code',
+      'state',
+      'flowid',
+      'flow_id',
+      'token',
+      'session',
+      'sessiontoken',
+      'session_token',
+      'secret',
+      'key',
+      'apikey',
+      'api_key',
+      'password',
+      'verifier',
+      'code_verifier',
+      'code_challenge',
+      'claimedemail',
+      'email',
+      'authorization',
+      'auth_token',
+      'access_token',
+      'refresh_token',
+      'id_token'
+    ]);
+    for (const [key] of Array.from(url.searchParams.entries())) {
+      if (sensitiveKeys.has(key.toLowerCase())) {
+        url.searchParams.set(key, '[REDACTED]');
+      }
+    }
+    return url.pathname + (url.search ? url.search : '');
+  } catch {
+    return rawUrl.split('?')[0];
+  }
+}
+
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
 
@@ -135,7 +175,7 @@ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
   if (err instanceof UntrustedOriginError || err?.code === 'CORS_ORIGIN_DENIED' || err?.name === 'UntrustedOriginError') {
     const rawOrigin = typeof err.origin === 'string' ? err.origin : (req.headers.origin as string) || 'unknown';
     const sanitizedOrigin = rawOrigin.slice(0, 200).replace(/[\r\n\t]/g, '');
-    const sanitizedRoute = (req.originalUrl || req.url || 'unknown').slice(0, 200).replace(/[\r\n\t]/g, '');
+    const sanitizedRoute = sanitizeUrlForLogging(req.originalUrl || req.url || 'unknown').slice(0, 200).replace(/[\r\n\t]/g, '');
     
     process.stdout.write(
       `[SECURITY_EVENT] event=cors_origin_rejected origin=${sanitizedOrigin} route=${sanitizedRoute} status=403\n`
@@ -156,7 +196,7 @@ app.use(express.json({
 app.use(express.urlencoded({ limit: '2mb', extended: false }));
 
 app.use((req: Request, _res: Response, next: NextFunction) => {
-  process.stdout.write(`[API_REQ] ${req.method} ${req.url}\n`);
+  process.stdout.write(`[API_REQ] ${req.method} ${sanitizeUrlForLogging(req.url)}\n`);
   next();
 });
 
@@ -2221,8 +2261,9 @@ if (process.env.NODE_ENV === 'test') {
 }
 
 app.use((req: Request, res: Response) => {
-  process.stdout.write(`[API_404] ${req.method} ${req.url}\n`);
-  res.status(404).json({ error: `Not found: ${req.method} ${req.url}` });
+  const sanitized = sanitizeUrlForLogging(req.url);
+  process.stdout.write(`[API_404] ${req.method} ${sanitized}\n`);
+  res.status(404).json({ error: `Not found: ${req.method} ${sanitized}` });
 });
 
 // -----------------------------------------------------------------------
@@ -2232,7 +2273,7 @@ app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof UntrustedOriginError || err?.code === 'CORS_ORIGIN_DENIED' || err?.name === 'UntrustedOriginError') {
     const rawOrigin = typeof err.origin === 'string' ? err.origin : (req.headers.origin as string) || 'unknown';
     const sanitizedOrigin = rawOrigin.slice(0, 200).replace(/[\r\n\t]/g, '');
-    const sanitizedRoute = (req.originalUrl || req.url || 'unknown').slice(0, 200).replace(/[\r\n\t]/g, '');
+    const sanitizedRoute = sanitizeUrlForLogging(req.originalUrl || req.url || 'unknown').slice(0, 200).replace(/[\r\n\t]/g, '');
     process.stdout.write(
       `[SECURITY_EVENT] event=cors_origin_rejected origin=${sanitizedOrigin} route=${sanitizedRoute} status=403\n`
     );
@@ -2248,7 +2289,7 @@ app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
 // -----------------------------------------------------------------------
 // Start Server
 // -----------------------------------------------------------------------
-if (!process.env.VERCEL) {
+if (!process.env.VERCEL && process.env.NODE_ENV !== 'test') {
   const server = app.listen(PORT, '0.0.0.0', () => {
     process.stdout.write(`AIRA Runtime API Server v2026.2.0 listening on port ${PORT}\n`);
     process.stdout.write(`NODE_ENV: ${process.env.NODE_ENV || 'development'}\n`);

@@ -1225,10 +1225,9 @@ async function handleBffOAuthCallback(req: Request, res: Response, provider: Bff
     const successParam = isNewUser ? 'signup_complete' : '1';
     res.redirect(302, `${clientOrigin}/?auth_success=${successParam}`);
   } catch (err: any) {
-    console.error('[handleBffOAuthCallback] OAuth exchange error:', err?.message || err);
+    console.error('[handleBffOAuthCallback] OAuth exchange error:', err?.code || err?.message || 'unknown');
     if (err?.code === 'ACCOUNT_EXISTS_CONFLICT' || err?.message?.includes('ACCOUNT_EXISTS_WITH_DIFFERENT_CREDENTIAL')) {
-      const claimedEmail = encodeURIComponent(err.claimedEmail || '');
-      res.redirect(302, `${clientOrigin}/?auth_error=account_exists_conflict${claimedEmail ? `&email=${claimedEmail}` : ''}`);
+      res.redirect(302, `${clientOrigin}/?auth_error=account_exists_conflict`);
       return;
     }
     res.redirect(302, `${clientOrigin}/?auth_error=exchange_failed`);
@@ -1377,25 +1376,6 @@ export async function handleBffSignOut(req: Request, res: Response): Promise<voi
 
   if (session) {
     await bffSessionStore.delete(session.id);
-    try {
-      const baseUrl = getAuthBaseUrl();
-      const clientOrigin = (req.headers.origin as string) || (req.headers.referer as string) || 'http://localhost:5173';
-      const headers: Record<string, string> = {
-        'Authorization': `Bearer ${session.sessionToken}`,
-        'Content-Type': 'application/json',
-        'Origin': clientOrigin
-      };
-      if (session.upstreamCookie) {
-        headers['Cookie'] = session.upstreamCookie;
-      }
-      await fetch(`${baseUrl}/sign-out`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({})
-      });
-    } catch (err) {
-      console.warn('[BffSignOut] Remote signout notice:', err);
-    }
   }
 
   res.status(200).json({ success: true });
