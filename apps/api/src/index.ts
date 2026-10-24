@@ -107,45 +107,8 @@ export class UntrustedOriginError extends Error {
   }
 }
 
-export function sanitizeUrlForLogging(rawUrl: string): string {
-  if (!rawUrl) return '';
-  try {
-    const url = new URL(rawUrl, 'http://localhost');
-    const sensitiveKeys = new Set([
-      'code',
-      'state',
-      'flowid',
-      'flow_id',
-      'token',
-      'session',
-      'sessiontoken',
-      'session_token',
-      'secret',
-      'key',
-      'apikey',
-      'api_key',
-      'password',
-      'verifier',
-      'code_verifier',
-      'code_challenge',
-      'claimedemail',
-      'email',
-      'authorization',
-      'auth_token',
-      'access_token',
-      'refresh_token',
-      'id_token'
-    ]);
-    for (const [key] of Array.from(url.searchParams.entries())) {
-      if (sensitiveKeys.has(key.toLowerCase())) {
-        url.searchParams.set(key, '[REDACTED]');
-      }
-    }
-    return url.pathname + (url.search ? url.search : '');
-  } catch {
-    return rawUrl.split('?')[0];
-  }
-}
+import { sanitizeUrlForLogging } from './utils/sanitize-url.js';
+export { sanitizeUrlForLogging };
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
@@ -2289,7 +2252,7 @@ app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
 // -----------------------------------------------------------------------
 // Start Server
 // -----------------------------------------------------------------------
-if (!process.env.VERCEL && process.env.NODE_ENV !== 'test') {
+if (!process.env.VERCEL) {
   const server = app.listen(PORT, '0.0.0.0', () => {
     process.stdout.write(`AIRA Runtime API Server v2026.2.0 listening on port ${PORT}\n`);
     process.stdout.write(`NODE_ENV: ${process.env.NODE_ENV || 'development'}\n`);
