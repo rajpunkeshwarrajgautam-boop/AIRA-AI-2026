@@ -70,8 +70,10 @@ export class NeonAuthClient {
     const configuredUrl = typeof import.meta !== 'undefined' ? (import.meta as any).env?.VITE_NEON_AUTH_URL : undefined;
 
     if (isProd && !configuredUrl) {
-      console.error('[NeonAuth] CRITICAL: VITE_NEON_AUTH_URL is missing in production environment. Refusing to fallback to staging URL.');
       this.baseUrl = '';
+      if (!this.isBffMode()) {
+        console.error('[NeonAuth] CRITICAL: VITE_NEON_AUTH_URL is missing in production environment. Refusing to fallback to staging URL.');
+      }
     } else {
       this.baseUrl = configuredUrl || DEFAULT_AUTH_URL;
     }

@@ -42,6 +42,7 @@ export function createBillingRoutes(): Router {
     try {
       const entitlements = await commercialBillingService.getEntitlements(principal.userId);
       res.json({
+        principalId: principal.userId,
         planId: entitlements.plan,
         planName: entitlements.plan === 'pro' ? 'AIRA Pro' : entitlements.plan === 'plus' ? 'AIRA Plus' : 'AIRA Free',
         subscriptionStatus: entitlements.subscriptionStatus,

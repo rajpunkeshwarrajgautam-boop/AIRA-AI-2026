@@ -141,8 +141,8 @@ async function main() {
     if (await guestCheckbox.isChecked()) {
       await guestCheckbox.uncheck();
     }
-    await page.getByRole('button', { name: /Create Account & Sync/i }).click();
-    await page.getByText('Verified Neon Account').waitFor({ state: 'visible', timeout: 20000 });
+    await page.getByRole('button', { name: /Create Account with Email|Create Account & Sync/i }).click();
+    await page.getByText(/Verified (Neon |Direct OAuth )?Account/i).waitFor({ state: 'visible', timeout: 20000 });
     await page.keyboard.press('Escape');
     await sleep(500);
 
@@ -188,8 +188,8 @@ async function main() {
     if (await guestCheckbox.isChecked()) {
       await guestCheckbox.uncheck();
     }
-    await page.getByRole('button', { name: /Create Account & Sync/i }).click();
-    await page.getByText('Verified Neon Account').waitFor({ state: 'visible', timeout: 20000 });
+    await page.getByRole('button', { name: /Create Account with Email|Create Account & Sync/i }).click();
+    await page.getByText(/Verified (Neon |Direct OAuth )?Account/i).waitFor({ state: 'visible', timeout: 20000 });
     await page.keyboard.press('Escape');
     await sleep(1000);
 
@@ -263,7 +263,7 @@ async function main() {
     await page.locator('input[placeholder="name@example.com"]').fill(emailA);
     await page.locator('input[placeholder="••••••••"]').fill(password);
     await page.locator('button[type="submit"]').click();
-    await page.getByText('Verified Neon Account').waitFor({ state: 'visible', timeout: 20000 });
+    await page.getByText(/Verified (Neon |Direct OAuth )?Account/i).waitFor({ state: 'visible', timeout: 20000 });
     await page.keyboard.press('Escape');
     await sleep(1000);
 
