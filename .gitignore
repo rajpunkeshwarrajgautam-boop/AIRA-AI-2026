@@ -31,5 +31,9 @@ test-results/
 artifacts/
 # Local builder browser acceptance screenshots and receipts
 test-results/builder/
-# Isolated acceptance browser profiles
+# Local acceptance browser profiles
 .edge-staging-profiles/
+
+# Local design references (never commit to PR)
+ux-references/
+ux-refrences/

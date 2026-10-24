@@ -17,6 +17,7 @@ import type { Conversation, Project, AppSettings, WorkspaceMode } from '../types
 import { AiraMark } from './AiraMark';
 import { ConversationActionsDropdown } from './ConversationActionsDropdown';
 import { neonAuth, NeonUser } from '../lib/neonAuth';
+import { AccountProfilePopup } from './AccountProfilePopup';
 
 interface SidebarProps {
   conversations: Conversation[];
@@ -43,6 +44,8 @@ interface SidebarProps {
   onOpenVisionStudio?: () => void;
   onOpenPricing?: () => void;
   onOpenBilling?: () => void;
+  onOpenSettingsTab?: (tab?: string) => void;
+  onOpenHelp?: () => void;
 }
 
 const listVariants: Variants = {
@@ -121,11 +124,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
   workspaceMode: _workspaceMode,
   onSelectWorkspace,
   onOpenVisionStudio: _onOpenVisionStudio,
-  onOpenPricing: _onOpenPricing,
-  onOpenBilling,
+  onOpenPricing,
+  onOpenBilling: _onOpenBilling,
+  onOpenSettingsTab,
+  onOpenHelp,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [neonUser, setNeonUser] = useState<NeonUser | null>(() => neonAuth.getCurrentUser());
+  const [isAccountPopupOpen, setIsAccountPopupOpen] = useState(false);
   const drawerRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -388,16 +394,40 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
           </div>
 
-          <div data-testid="sidebar-footer" className="aira-sidebar-footer shrink-0 p-3 bg-claude-surface2-light dark:bg-claude-surface2-dark/50 backdrop-blur-md border-t border-claude-border-light dark:border-claude-border-dark">
+          <div data-testid="sidebar-footer" className="aira-sidebar-footer shrink-0 p-3 bg-claude-surface2-light dark:bg-claude-surface2-dark/50 backdrop-blur-md border-t border-claude-border-light dark:border-claude-border-dark relative">
+            <AccountProfilePopup
+              isOpen={isAccountPopupOpen}
+              onClose={() => setIsAccountPopupOpen(false)}
+              user={neonUser}
+              onOpenPricing={() => {
+                if (onOpenPricing) onOpenPricing();
+              }}
+              onOpenSettings={(tab) => {
+                if (onOpenSettingsTab) onOpenSettingsTab(tab);
+                else onOpenSettings();
+              }}
+              onOpenAuth={() => {
+                if (onOpenAuth) onOpenAuth();
+              }}
+              onSignOut={async () => {
+                await neonAuth.signOut();
+              }}
+              onOpenHelp={onOpenHelp}
+            />
+
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-1.5">
                 <button
                   type="button"
                   aria-label={neonUser ? "View account and billing details" : "Sign in or register persistent account"}
-                  onClick={neonUser && onOpenBilling ? onOpenBilling : onOpenAuth}
-                  className="flex min-w-0 items-center space-x-2.5 p-2 rounded-xl hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark border border-claude-border-light/60 dark:border-claude-border-dark/60 transition-all flex-1 text-left active:scale-[0.98]"
+                  onClick={() => setIsAccountPopupOpen(prev => !prev)}
+                  className={`flex min-w-0 items-center space-x-2.5 p-2 rounded-xl hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark border transition-all flex-1 text-left active:scale-[0.98] ${
+                    isAccountPopupOpen
+                      ? 'border-blue-500/60 bg-blue-50/50 dark:bg-blue-900/20 shadow-sm'
+                      : 'border-claude-border-light/60 dark:border-claude-border-dark/60'
+                  }`}
                 >
-                  <div className="w-7 h-7 rounded-[8px] bg-gradient-to-br from-claude-terracotta to-[#eb6e4b] text-white font-semibold text-xs flex items-center justify-center flex-shrink-0 shadow-sm overflow-hidden">
+                  <div className="w-7 h-7 rounded-[8px] bg-gradient-to-tr from-blue-700 via-blue-600 to-indigo-600 text-white font-semibold text-xs flex items-center justify-center flex-shrink-0 shadow-sm overflow-hidden">
                     {neonUser?.image ? (
                       <img src={neonUser.image} alt={neonUser.name || 'User'} className="w-full h-full object-cover" />
                     ) : neonUser ? (
@@ -414,7 +444,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       {neonUser ? (
                         <>
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                          <span>Account & Billing</span>
+                          <span>Account & Settings</span>
                         </>
                       ) : (
                         <span>Sign in · Persistent sync</span>

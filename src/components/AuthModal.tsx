@@ -397,7 +397,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
           {/* Header */}
           <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-claude-border-light dark:border-claude-border-dark">
             <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-claude-terracotta to-[#eb6e4b] flex items-center justify-center text-white shadow-md">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-700 via-blue-600 to-indigo-600 flex items-center justify-center text-white shadow-md shadow-blue-500/20">
                 <ShieldCheck className="w-5 h-5" />
               </div>
               <div>
@@ -407,7 +407,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
                 <div className="flex items-center space-x-1.5 mt-0.5">
                   <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
                   <span className="text-[11px] font-medium text-claude-muted-light dark:text-claude-muted-dark">
-                    Direct OAuth (Google & GitHub) · Staging
+                    {typeof window !== 'undefined' && (window.location.hostname.includes('staging') || window.location.hostname.includes('localhost') || window.location.hostname.includes('127.0.0.1'))
+                      ? 'Direct OAuth (Google & GitHub) · Staging'
+                      : 'Direct OAuth (Google & GitHub)'}
                   </span>
                 </div>
               </div>
