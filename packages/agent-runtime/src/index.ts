@@ -453,11 +453,24 @@ export class AgentRuntime extends EventEmitter {
       state === 'CANCELLED' ? 'run.cancelled' :
       state === 'RUNNING' ? 'run.started' : 'run.started';
 
-    await this.emitRunEvent(runId, eventType, { state, error });
+    const event: StreamingEvent = {
+      eventId: `evt_${crypto.randomUUID().slice(0, 8)}`,
+      runId,
+      type: eventType,
+      timestamp: Date.now(),
+      data: { state, error }
+    };
+
+    let pending = this.pendingRunEvents.get(runId);
+    if (!pending) {
+      pending = [];
+      this.pendingRunEvents.set(runId, pending);
+    }
+    pending.push(event);
 
     if (state === 'COMPLETED' || state === 'FAILED' || state === 'CANCELLED' || state === 'WAITING_FOR_APPROVAL') {
-      await this.flushPendingEvents(runId);
       await this.saveRun(run);
+      await this.flushPendingEvents(runId);
       if (state === 'COMPLETED' || state === 'FAILED' || state === 'CANCELLED') {
         setTimeout(() => {
           this.inFlightRuns.delete(runId);
@@ -468,6 +481,10 @@ export class AgentRuntime extends EventEmitter {
     } else if (state === 'WAITING_FOR_TOOL') {
       await this.saveRun(run);
     }
+
+    const stream = this.getEventStream(runId);
+    stream.emit('event', event);
+    this.emit('run_event', { runId, event });
   }
 
   private async executeRunLoop(runId: string): Promise<void> {
