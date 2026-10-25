@@ -127,10 +127,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const [activeTab, setActiveTab] = useState<SettingsTab>(() => resolveInitialTab(initialTab));
-  const [currentUser, setCurrentUser] = useState<NeonUser | null>(() => neonAuth.getCurrentUser());
+  const [currentUser, setCurrentUser] = useState<NeonUser | null>(() => neonAuth.getVerifiedBffUser());
 
   useEffect(() => {
-    return neonAuth.onAuthStateChange(user => setCurrentUser(user));
+    return neonAuth.onAuthStateChange(() => setCurrentUser(neonAuth.getVerifiedBffUser()));
   }, []);
 
   useEffect(() => {
