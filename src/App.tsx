@@ -41,9 +41,9 @@ const MODE_CONTEXT: Record<WorkspaceMode, string> = {
 
 function App() {
   useAnimatedFavicon();
-  const [currentUserId, setCurrentUserId] = useState<string | null>(() => neonAuth.getCurrentUser()?.id || null);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(() => neonAuth.getVerifiedBffUser()?.id || null);
   const [conversations, setConversations] = useState<Conversation[]>(() => {
-    const user = neonAuth.getCurrentUser();
+    const user = neonAuth.getVerifiedBffUser();
     return loadConversations(user?.id);
   });
   // Root visits without an active tab session start on a transient welcome draft.
@@ -51,7 +51,7 @@ function App() {
   const [activeChatId, setActiveChatId] = useState<string>(() => {
     const sessionChatId = getSessionActiveChatId();
     if (sessionChatId) {
-      const user = neonAuth.getCurrentUser();
+      const user = neonAuth.getVerifiedBffUser();
       const stored = loadConversations(user?.id);
       if (stored.some(c => c.id === sessionChatId)) {
         return sessionChatId;
@@ -65,9 +65,9 @@ function App() {
   }));
   const [projects, setProjects] = useState<Project[]>(() => loadProjects());
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>(() => localStorage.getItem('aira_active_project_id_v1') || undefined);
-  const [settings, setSettings] = useState<AppSettings>(() => loadSettings(neonAuth.getCurrentUser()?.id));
+  const [settings, setSettings] = useState<AppSettings>(() => loadSettings(neonAuth.getVerifiedBffUser()?.id));
   const [workspaceMode, setWorkspaceModeState] = useState<WorkspaceMode>(() => {
-    const user = neonAuth.getCurrentUser();
+    const user = neonAuth.getVerifiedBffUser();
     const key = `aira_workspace_mode_${user?.id || 'guest'}`;
     const stored = typeof window !== 'undefined' ? localStorage.getItem(key) : null;
     return (stored === 'agent' || stored === 'chat') ? stored : 'chat';
@@ -75,7 +75,7 @@ function App() {
 
   const setWorkspaceMode = useCallback((mode: WorkspaceMode) => {
     setWorkspaceModeState(mode);
-    const user = neonAuth.getCurrentUser();
+    const user = neonAuth.getVerifiedBffUser();
     const key = `aira_workspace_mode_${user?.id || 'guest'}`;
     try {
       localStorage.setItem(key, mode);
@@ -181,7 +181,8 @@ function App() {
   }, []);
 
   useEffect(() => {
-    return neonAuth.onAuthStateChange(async (user) => {
+    return neonAuth.onAuthStateChange(async () => {
+      const user = neonAuth.getVerifiedBffUser();
       const epoch = ++authEpochRef.current;
       const nextUserId = user?.id || null;
 
@@ -1382,7 +1383,7 @@ function App() {
             onImportData={data => { setConversations(data.conversations); setProjects(data.projects); if (data.conversations[0]) handleSelectChat(data.conversations[0].id); }}
             onClearAll={() => {
               const fresh = { ...INITIAL_CONVERSATION, id: 'chat-' + Date.now(), createdAt: Date.now(), updatedAt: Date.now() };
-              setConversations([fresh]); setActiveChatId(fresh.id); setProjects([]); setActiveProjectId(undefined); setSettings({ ...DEFAULT_SETTINGS, userName: neonAuth.getCurrentUser()?.name || 'Guest User', email: neonAuth.getCurrentUser()?.email || '' }); setActiveArtifact(null);
+              setConversations([fresh]); setActiveChatId(fresh.id); setProjects([]); setActiveProjectId(undefined); setSettings({ ...DEFAULT_SETTINGS, userName: neonAuth.getVerifiedBffUser()?.name || 'Guest User', email: neonAuth.getVerifiedBffUser()?.email || '' }); setActiveArtifact(null);
             }}
             onOpenMemoryVault={() => setIsMemoryVaultOpen(true)}
             initialTab={settingsInitialTab}
