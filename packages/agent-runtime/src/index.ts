@@ -730,8 +730,9 @@ export class AgentRuntime extends EventEmitter {
           selectedArgs = {};
         } else if (run.prompt.toLowerCase().includes('calc') || /calculate|\b\d+\s*[-+*/]\s*\d+/.test(run.prompt.toLowerCase())) {
           selectedToolName = 'calculator';
-          const exprMatch = run.prompt.match(/([0-9+\-*/().^ ]+)/);
-          selectedArgs = { expression: exprMatch ? exprMatch[0].trim() : '1024 * 4' };
+          const calcMatch = run.prompt.match(/(?:calculate|calc|compute)\s*:?\s*([0-9+\-*/().^]*[0-9]+[0-9+\-*/().^ ]*)/i);
+          const rawExpr = calcMatch ? calcMatch[1] : (run.prompt.match(/([0-9+\-*/().^]*[0-9]+[0-9+\-*/().^ ]*)/)?.[0] || '1024 * 4');
+          selectedArgs = { expression: rawExpr.replace(/[^0-9+\-*/().^ ]/g, '').replace(/[. ]+$/, '').trim() };
         } else if (
           run.routingDecision?.sideEffectLevel === 'DESTRUCTIVE' ||
           run.prompt.toLowerCase().includes('shell') ||

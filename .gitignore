@@ -33,3 +33,9 @@ artifacts/
 test-results/builder/
 # Isolated acceptance browser profiles
 .edge-staging-profiles/
+
+# Ruflo local state and vector storage
+.claude-flow/
+.swarm/
+ruvector.db
+

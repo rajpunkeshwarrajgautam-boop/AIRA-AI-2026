@@ -37,7 +37,7 @@ const db = knex({
   client: 'pg',
   connection: {
     connectionString,
-    ssl: connectionString.includes('neon.tech') ? { rejectUnauthorized: false } : false
+    ssl: connectionString.includes('neon.tech') ? { rejectUnauthorized: true } : false
   },
   pool: { min: 1, max: 2 }
 });

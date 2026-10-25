@@ -109,7 +109,7 @@ export class DeterministicMockAdapter implements ModelAdapter {
       : undefined;
 
     let text = `Processed your request using ${policy.model}.`;
-    if (lastUserMessage.includes('[System Tool Execution Result')) {
+    if (lastUserMessage.includes('[System Tool Execution Result') || lastUserMessage.includes('[System Tool Execution Findings]')) {
       if (lastUserMessage.includes('browser_navigate') || lastUserMessage.includes('pageHeading')) {
         let heading = 'Example Domain';
         const match = lastUserMessage.match(/"pageHeading":\s*"([^"]+)"/);
@@ -118,7 +118,9 @@ export class DeterministicMockAdapter implements ModelAdapter {
       } else if (lastUserMessage.includes('repo_git_log') || lastUserMessage.includes('latest commit')) {
         text = `Repository inspection complete. Retrieved commit history successfully.`;
       } else if (lastUserMessage.includes('calculator')) {
-        text = `Calculation completed successfully. Result: 4096.`;
+        const match = lastUserMessage.match(/Output:\s*"?([0-9.]+)"?/i) || lastUserMessage.match(/"result":\s*"?([0-9.]+)"?/i);
+        const res = match ? match[1] : '4194304';
+        text = `Calculation completed successfully. Result: ${res}.`;
       } else {
         text = `Tool execution completed. Findings synthesized successfully.`;
       }

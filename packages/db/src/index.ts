@@ -36,7 +36,7 @@ export const db = knex({
   connection: {
     connectionString: effectiveConnectionString,
     ssl: effectiveConnectionString.includes('neon.tech') || effectiveConnectionString.includes('sslmode=require')
-      ? { rejectUnauthorized: false }
+      ? { rejectUnauthorized: true }
       : false,
   },
   pool: {
@@ -187,7 +187,7 @@ export async function runMigrations(options: RunMigrationsOptions = {}) {
     connection: {
       connectionString: targetConnStr,
       ssl: targetConnStr.includes('neon.tech') || targetConnStr.includes('sslmode=require')
-        ? { rejectUnauthorized: false }
+        ? { rejectUnauthorized: true }
         : false,
     },
     pool: {
@@ -239,3 +239,4 @@ export async function closeDb() {
 
 export * from './security/staging-maintenance-barrier.js';
 export * from './security/staging-role-separation.js';
+export * from './security/database-isolation-guard.js';
