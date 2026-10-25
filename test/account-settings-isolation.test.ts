@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { DEFAULT_SETTINGS } from '../src/utils/constants.ts';
+import { neonAuth } from '../src/lib/neonAuth.ts';
 import {
   getSettingsStorageKey,
   loadSettings,
@@ -86,5 +87,28 @@ test('Corrupted settings storage returns defaults without mixing principals', ()
     assert.equal(loadSettings('user-B').customInstructions, '');
   } finally {
     (globalThis as any).localStorage = prior;
+  }
+});
+
+
+test('Cached profile is not verified until the BFF supplies a session-bound token', () => {
+  const user = { id: 'owner-A', name: 'Owner A', email: 'owner-a@example.test' };
+  const observed: Array<string | null> = [];
+  neonAuth.saveSession(null);
+  const unsubscribe = neonAuth.onAuthStateChange(() => {
+    observed.push(neonAuth.getVerifiedBffUser()?.id || null);
+  });
+  try {
+    neonAuth.saveSession({ user, token: 'bff_session' });
+    assert.equal(neonAuth.getCurrentUser()?.id, 'owner-A');
+    assert.equal(neonAuth.getVerifiedBffUser(), null, 'Cached metadata must never count as verification');
+    neonAuth.saveSession({ user, token: 'bff_session', csrfToken: 'server_verified_token' });
+    assert.equal(neonAuth.getVerifiedBffUser()?.id, 'owner-A');
+    assert.equal(observed.at(-1), 'owner-A', 'Unverified → verified renewal must notify UI');
+    neonAuth.saveSession({ user: { id: 'owner-B', name: 'Owner B', email: 'b@example.test' }, token: 'bff_session' });
+    assert.equal(neonAuth.getVerifiedBffUser(), null, 'A different account must be unverified without server proof');
+  } finally {
+    unsubscribe();
+    neonAuth.saveSession(null);
   }
 });
