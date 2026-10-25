@@ -284,3 +284,12 @@ test('Authenticated BFF session without token never falls back to guest CSRF hea
     }
   } as any, session), false);
 });
+
+test('Same authenticated principal losing CSRF proof erases previous token', () => {
+  const user = { id: 'same_principal', name: 'Same User', email: 'same@example.test' };
+  neonAuth.saveSession({ user, token: 'bff_session', csrfToken: 'prior_token' });
+  assert.equal(neonAuth.getCsrfToken(), 'prior_token');
+  neonAuth.saveSession({ user, token: 'bff_session' });
+  assert.equal(neonAuth.getCsrfToken(), null);
+  neonAuth.saveSession(null);
+});
