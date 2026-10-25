@@ -134,7 +134,7 @@ async function main() {
         label + ' light theme did not apply');
       await system.click();
       assert.equal(await system.getAttribute('aria-pressed'), 'true');
-      const savedTheme = await page.evaluate(() => JSON.parse(localStorage.getItem('aira_settings_v1') || '{}').theme);
+      const savedTheme = await page.evaluate(() => JSON.parse(localStorage.getItem('aira_settings_guest_v2') || '{}').theme);
       assert.equal(savedTheme, 'system', label + ' system theme did not persist');
 
       await settings.click();
