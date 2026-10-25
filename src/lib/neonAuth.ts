@@ -231,13 +231,16 @@ export class NeonAuthClient {
       this.currentSession.user?.id === session.user?.id &&
       this.currentSession.token === session.token;
 
+    const verificationChanged = isSameIdentity &&
+      (this.currentSession?.token === 'bff_session' && Boolean(this.currentSession.csrfToken)) !==
+      (session?.token === 'bff_session' && Boolean(session.csrfToken));
+
     if (isSameIdentity) {
-      // Same-identity renewal: update memory state in place
+      // Even a same-principal renewal may revoke session-bound CSRF proof.
       this.currentSession = session;
-      if (session?.csrfToken) {
-        this.csrfToken = session.csrfToken;
-      }
+      this.csrfToken = session?.csrfToken || null;
       this.persistSession(session);
+      if (verificationChanged) this.notifyListeners();
       return;
     }
 
@@ -245,11 +248,8 @@ export class NeonAuthClient {
     this.authEpoch++;
     this.activeRefresh = null;
     this.currentSession = session;
-    if (session?.csrfToken) {
-      this.csrfToken = session.csrfToken;
-    } else if (!session) {
-      this.csrfToken = null;
-    }
+    // A replacement principal must never inherit the previous account's CSRF token.
+    this.csrfToken = session?.csrfToken || null;
     this.abortActiveRequests('Session transitioned or invalidated');
     this.persistSession(session);
     this.notifyListeners();
@@ -1190,7 +1190,10 @@ export async function ensureGuestSession(force = false): Promise<void> {
       const response = await fetch('/api/auth/session', {
         method: 'POST',
         credentials: 'same-origin',
-        headers: { Accept: 'application/json' },
+        headers: {
+          Accept: 'application/json',
+          'X-Aira-Csrf-Protection': '1'
+        },
         signal: AbortSignal.timeout(5000)
       });
       if (!response.ok) {
@@ -1271,10 +1274,33 @@ export async function authenticatedApiFetch(
       headers.set('Authorization', `Bearer ${jwt}`);
     }
 
-    // Attach CSRF protection headers on state-changing requests
+    // Attach CSRF protection headers on state-changing requests.
     const method = (init.method || 'GET').toUpperCase();
     if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+      const requiresBffCsrf = initiatingSessionToken === 'bff_session' && !jwt;
+      if (requiresBffCsrf && !neonAuth.getCsrfToken()) {
+        await neonAuth.restoreSession();
+      }
+
+      // Session restoration is asynchronous and may replace/revoke the principal.
+      // Repeat the identity check immediately before sending a mutating request.
+      if (
+        neonAuth.getAuthEpoch() !== initiatingEpoch ||
+        !neonAuth.isAuthenticated() ||
+        neonAuth.getCurrentUser()?.id !== initiatingUserId ||
+        neonAuth.getCurrentSession()?.token !== initiatingSessionToken
+      ) {
+        throw new AuthenticationRequiredError(
+          'Authentication identity changed during CSRF token restoration; dispatch aborted.'
+        );
+      }
+
       const csrf = neonAuth.getCsrfToken();
+      if (requiresBffCsrf && !csrf) {
+        throw new AuthenticationRequiredError(
+          'Verified CSRF token is unavailable for the active account session. Please retry signing in.'
+        );
+      }
       if (csrf && !headers.has('X-CSRF-Token')) {
         headers.set('X-CSRF-Token', csrf);
       }
@@ -1433,6 +1459,12 @@ export async function authenticatedApiFetch(
   }
 
   const headers = new Headers(init.headers || {});
+  const method = (init.method || 'GET').toUpperCase();
+  if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+    if (!headers.has('X-Aira-Csrf-Protection')) {
+      headers.set('X-Aira-Csrf-Protection', '1');
+    }
+  }
   let res = await fetch(input, {
     ...init,
     headers,
