@@ -130,12 +130,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenHelp,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
-  const [neonUser, setNeonUser] = useState<NeonUser | null>(() => neonAuth.getCurrentUser());
+  const [neonUser, setNeonUser] = useState<NeonUser | null>(() => neonAuth.getVerifiedBffUser());
   const [isAccountPopupOpen, setIsAccountPopupOpen] = useState(false);
   const drawerRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    return neonAuth.onAuthStateChange((user) => setNeonUser(user));
+    return neonAuth.onAuthStateChange(() => setNeonUser(neonAuth.getVerifiedBffUser()));
   }, []);
 
   // Temporary navigation behaves as a keyboard-accessible drawer.
