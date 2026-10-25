@@ -202,8 +202,14 @@ export class GeminiAdapter implements ModelAdapter {
       throw new Error('Gemini API key is not configured.');
     }
 
-    const effectiveModel = this.modelName || policy.model;
+    let effectiveModel = (this.modelName && !this.modelName.startsWith('aira-')) ? this.modelName : policy.model;
+    if (effectiveModel.startsWith('aira-')) {
+      effectiveModel = (process.env.AIRA_GEMINI_MODEL || '').trim().replace(/^["']|["']$/g, '') || 'gemini-3.5-flash-lite';
+    }
     const cleanModel = effectiveModel.replace(/^models\//, '');
+    if (cleanModel.startsWith('aira-')) {
+      throw new Error(`INTERNAL_MODEL_ALIAS_LEAK: Refusing to dispatch internal alias "${cleanModel}" to external provider "gemini".`);
+    }
     const url = `${this.baseUrl}/models/${cleanModel}:generateContent`;
 
     const payload = this.formatRequestPayload(messages, {
@@ -273,8 +279,14 @@ export class GeminiAdapter implements ModelAdapter {
       throw new Error('Gemini API key is not configured.');
     }
 
-    const effectiveModel = this.modelName || policy.model;
+    let effectiveModel = (this.modelName && !this.modelName.startsWith('aira-')) ? this.modelName : policy.model;
+    if (effectiveModel.startsWith('aira-')) {
+      effectiveModel = (process.env.AIRA_GEMINI_MODEL || '').trim().replace(/^["']|["']$/g, '') || 'gemini-3.5-flash-lite';
+    }
     const cleanModel = effectiveModel.replace(/^models\//, '');
+    if (cleanModel.startsWith('aira-')) {
+      throw new Error(`INTERNAL_MODEL_ALIAS_LEAK: Refusing to dispatch internal alias "${cleanModel}" to external provider "gemini".`);
+    }
     const url = `${this.baseUrl}/models/${cleanModel}:streamGenerateContent?alt=sse`;
 
     const payload = this.formatRequestPayload(messages, {

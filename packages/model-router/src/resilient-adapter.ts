@@ -2,7 +2,10 @@ import {
   ModelAdapter,
   ModelCompletionResult,
   ChatMessageInput,
-  SupportedProvider
+  SupportedProvider,
+  resolveNvidiaModel,
+  resolveOpenAIModel,
+  resolveAnthropicModel
 } from './index.js';
 import { ModelPolicy } from '../../contracts/src/index.js';
 import { ProviderHealthTracker } from './health-tracker.js';
@@ -53,7 +56,23 @@ export class ResilientModelAdapter implements ModelAdapter {
   }
 
   private getModelName(adapter: ModelAdapter & { modelName?: string; outboundModel?: string }, policy: ModelPolicy): string {
-    return adapter.modelName || adapter.outboundModel || policy.model;
+    let name = adapter.modelName || adapter.outboundModel;
+    if (!name || name.startsWith('aira-')) {
+      if (adapter.provider === 'nvidia') {
+        name = resolveNvidiaModel(policy.model);
+      } else if (adapter.provider === 'openai') {
+        name = resolveOpenAIModel(policy.model);
+      } else if (adapter.provider === 'anthropic') {
+        name = resolveAnthropicModel(policy.model);
+      } else if (adapter.provider === 'groq') {
+        name = (adapter as any).modelName || process.env.AIRA_FAST_MODEL || 'openai/gpt-oss-120b';
+      } else if (adapter.provider === 'gemini') {
+        name = (adapter as any).modelName || process.env.AIRA_GEMINI_MODEL || 'gemini-3.5-flash-lite';
+      } else {
+        name = adapter.modelName || policy.model;
+      }
+    }
+    return name;
   }
 
   async complete(

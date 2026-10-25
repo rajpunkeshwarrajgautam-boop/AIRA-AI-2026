@@ -197,8 +197,10 @@ async function runEdgeAgentCertification(): Promise<void> {
     console.log(`Output Snippet: ${fullText.slice(0, 150)}...`);
 
     assert.ok(runId && runId.length > 0, 'Valid run ID must be returned');
+    assert.ok(hasToolCompleted, 'Calculator tool call event must be recorded');
+    assert.ok(!executedModel.startsWith('aira-'), `Executed model must be a real provider model, not an internal alias (got: ${executedModel})`);
     assert.ok(fullText.includes('4194304') || fullText.includes('4,194,304'), 'Output must contain calculated result 4194304');
-    console.log('PASS: Agent mission executed and returned mathematical result 4194304');
+    console.log('PASS: Agent mission executed and returned mathematical result 4194304 without internal alias leak');
 
     // STEP 7: Neon Staging Database Persistence Verification
     console.log('\n[STEP 7] Verifying Neon Staging DB Persistence...');

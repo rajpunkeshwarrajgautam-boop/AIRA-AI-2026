@@ -36,6 +36,27 @@ import { InstructionResolver } from './behavioral/instruction-resolver.js';
 import { AdaptiveSynthesizer } from './behavioral/adaptive-synthesizer.js';
 import { ToolRecoveryEngine } from './behavioral/tool-recovery-engine.js';
 
+/**
+ * Strictly detect repository intent.
+ * Generic words such as 'status', 'log', 'branch', or 'diff' on their own MUST NOT trigger repository operations.
+ * Requires explicit git/repo/codebase context or explicit git commands.
+ */
+export function isRepositoryIntent(prompt: string): boolean {
+  if (!prompt || typeof prompt !== 'string') return false;
+  const lower = prompt.toLowerCase();
+  
+  // Explicit git commands or repo phrases
+  if (/\bgit\s+(?:status|log|diff|branch|commit|show|history|blame)\b/i.test(lower)) return true;
+  if (/\b(?:repo|repository|codebase)\s+(?:status|log|diff|branch|commits?|history|state|inspect)\b/i.test(lower)) return true;
+  
+  // Must have clear repository qualifier when paired with action terms
+  const hasRepoContext = /\b(?:git|repo|repository|codebase|github)\b/i.test(lower);
+  if (!hasRepoContext) return false;
+  
+  return /\b(?:status|log|diff|branch|commits?|history|head|tracking|inspect|read)\b/i.test(lower) ||
+         /\b(?:check|inspect|show|display|get)\s+(?:the\s+)?(?:git|repo|repository|codebase)\b/i.test(lower);
+}
+
 export class AgentRuntime extends EventEmitter {
   private eventStreams: Map<string, EventEmitter> = new Map();
   private inFlightRuns: Map<string, Run> = new Map();
@@ -1006,11 +1027,11 @@ export class AgentRuntime extends EventEmitter {
         await this.emitRunEvent(runId, 'tool.completed', finalToolResult);
 
         await this.transitionRunState(runId, 'RUNNING');
-        
+
         // Bounded iterative loop for AGENT_MISSION (up to 3 steps)
-        // Strictly condition repository tool selection on explicit user intent AND principal authorization.
+        // Strictly condition repository tool selection on explicit repository intent AND principal authorization.
         // Calculator missions or non-repository missions must never request repository tools.
-        const isRepoMission = /\b(repo|git|repository|commit|branch|status|diff|log)\b/i.test(run.prompt);
+        const isRepoMission = isRepositoryIntent(run.prompt);
         const hasRepoScope = (run.principalScopes || []).includes('repo.read') || (run.principalScopes || []).includes('*');
 
         if (run.intent === 'AGENT_MISSION' && isRepoMission && hasRepoScope && run.stepCount < 3) {

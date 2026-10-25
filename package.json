@@ -60,6 +60,7 @@
     "test:live-provider-mission": "npx tsx test/live-provider-agent-acceptance.ts",
     "test:deployed-mission": "npx tsx test/staging-deployed-agent-mission.ts",
     "test:edge-agent": "npx tsx test/edge-agent-execution.ts",
+    "test:release-readiness": "npx tsx test/release-readiness-nvidia-repo-intent.test.ts",
     "test:verify-tls": "npx tsx test/verify-strict-tls.ts",
     "test:math-rendering": "npx tsx test/math-rendering.ts",
     "test:preview-identity": "npx tsx test/preview-identity-guard.ts",
