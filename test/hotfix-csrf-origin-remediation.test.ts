@@ -5,7 +5,7 @@
  * 1. Guest mutating requests in authenticatedApiFetch must attach X-Aira-Csrf-Protection: '1'.
  * 2. ensureGuestSession must attach X-Aira-Csrf-Protection: '1' on POST /api/auth/session.
  * 3. Authenticated mutating requests must guarantee session CSRF token is resolved before dispatch.
- * 4. verifyCsrfAndOrigin must inspect x-forwarded-host for reverse proxy parity.
+ * 4. verifyCsrfAndOrigin must accept listed origins through a reverse proxy, but never trust forged host headers.
  * 5. Default trusted origins must recognize canonical production and staging origins.
  */
 
@@ -102,7 +102,7 @@ test('DEFECT 2 VERIFIED: ensureGuestSession must attach X-Aira-Csrf-Protection: 
   }
 });
 
-test('DEFECT 3 VERIFIED: verifyCsrfAndOrigin must recognize x-forwarded-host when host header is internal target', () => {
+test('DEFECT 3 VERIFIED: explicit production origin passes when proxy host differs', () => {
   const req = {
     method: 'POST',
     headers: {
@@ -201,3 +201,73 @@ test('DEFECT 5 VERIFIED: Authenticated mutating request with uncached CSRF token
   }
 });
 
+
+
+test('Missing Origin and Fetch Metadata requires a custom header for guest mutations', () => {
+  const base = { method: 'POST', headers: { host: 'internal:3000' } } as any;
+  assert.equal(verifyCsrfAndOrigin(base), false);
+  assert.equal(verifyCsrfAndOrigin({
+    method: 'POST',
+    headers: { host: 'internal:3000', 'x-aira-csrf-protection': '1' }
+  } as any), true);
+  assert.equal(verifyCsrfAndOrigin({
+    method: 'POST',
+    headers: { host: 'internal:3000', 'sec-fetch-site': 'cross-site', 'x-aira-csrf-protection': '1' }
+  } as any), false);
+});
+
+test('Forged forwarded host cannot turn an untrusted Origin into an allowed origin', () => {
+  const attackerOrigin = 'https://untrusted.example';
+  assert.equal(isAllowedOrigin(attackerOrigin, 'untrusted.example'), false);
+  assert.equal(verifyCsrfAndOrigin({
+    method: 'POST',
+    headers: {
+      host: 'internal:3000',
+      'x-forwarded-host': 'untrusted.example',
+      origin: attackerOrigin,
+      'sec-fetch-site': 'same-origin',
+      'x-aira-csrf-protection': '1'
+    }
+  } as any), false);
+});
+
+test('Missing authenticated BFF CSRF token fails closed without dispatching inference', async () => {
+  neonAuth.saveSession({
+    user: { id: 'usr_auth_456', name: 'Auth User', email: 'auth@example.com' },
+    token: 'bff_session'
+  });
+  neonAuth.setCsrfToken(null);
+  const originalFetch = globalThis.fetch;
+  let inferenceCalls = 0;
+
+  (globalThis as any).fetch = async (input: any) => {
+    if (String(input).includes('/api/chat/stream')) inferenceCalls++;
+    return new Response('{}', { status: 503 });
+  };
+
+  try {
+    await assert.rejects(
+      authenticatedApiFetch('/api/chat/stream', { method: 'POST', body: '{}' }),
+      { name: 'AuthenticationRequiredError' }
+    );
+    assert.equal(inferenceCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    neonAuth.saveSession(null);
+  }
+});
+
+test('Account switch clears the previous principal CSRF token', () => {
+  neonAuth.saveSession({
+    user: { id: 'usr_one', name: 'One', email: 'one@example.com' },
+    token: 'bff_session',
+    csrfToken: 'one_csrf_secret'
+  });
+  assert.equal(neonAuth.getCsrfToken(), 'one_csrf_secret');
+  neonAuth.saveSession({
+    user: { id: 'usr_two', name: 'Two', email: 'two@example.com' },
+    token: 'bff_session'
+  });
+  assert.equal(neonAuth.getCsrfToken(), null);
+  neonAuth.saveSession(null);
+});
