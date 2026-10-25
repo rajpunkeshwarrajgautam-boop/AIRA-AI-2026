@@ -105,6 +105,10 @@ test('Cached profile is not verified until the BFF supplies a session-bound toke
     neonAuth.saveSession({ user, token: 'bff_session', csrfToken: 'server_verified_token' });
     assert.equal(neonAuth.getVerifiedBffUser()?.id, 'owner-A');
     assert.equal(observed.at(-1), 'owner-A', 'Unverified → verified renewal must notify UI');
+    neonAuth.saveSession({ user, token: 'bff_session' });
+    assert.equal(neonAuth.getVerifiedBffUser(), null, 'Renewal with missing CSRF must clear verification');
+    assert.equal(neonAuth.getCsrfToken(), null, 'Renewal must erase stale previous CSRF proof');
+    assert.equal(observed.at(-1), null, 'Verified → unverified renewal must notify UI');
     neonAuth.saveSession({ user: { id: 'owner-B', name: 'Owner B', email: 'b@example.test' }, token: 'bff_session' });
     assert.equal(neonAuth.getVerifiedBffUser(), null, 'A different account must be unverified without server proof');
   } finally {
