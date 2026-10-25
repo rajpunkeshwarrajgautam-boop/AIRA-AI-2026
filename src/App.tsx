@@ -7,6 +7,7 @@ import {
   loadProjects, saveProjects, loadSettings, saveSettings, INITIAL_CONVERSATION
 } from './utils/storage';
 import { streamAIResponse } from './utils/aiEngine';
+import { DEFAULT_SETTINGS } from './utils/constants';
 import { retrieveRelevantSubgraph } from './utils/knowledgeGraph';
 import { Sidebar } from './components/Sidebar';
 import { ChatMessage } from './components/ChatMessage';
@@ -64,7 +65,7 @@ function App() {
   }));
   const [projects, setProjects] = useState<Project[]>(() => loadProjects());
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>(() => localStorage.getItem('aira_active_project_id_v1') || undefined);
-  const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
+  const [settings, setSettings] = useState<AppSettings>(() => loadSettings(neonAuth.getCurrentUser()?.id));
   const [workspaceMode, setWorkspaceModeState] = useState<WorkspaceMode>(() => {
     const user = neonAuth.getCurrentUser();
     const key = `aira_workspace_mode_${user?.id || 'guest'}`;
@@ -146,6 +147,7 @@ function App() {
   const initialConversationBackfillRef = useRef(false);
   const authEpochRef = useRef(0);
   const conversationsOwnerRef = useRef<string | null>(currentUserId);
+  const settingsOwnerRef = useRef<string | null>(currentUserId);
 
   const activeConversation = useMemo(
     () => conversations.find(c => c.id === activeChatId) || welcomeConversation,
@@ -199,6 +201,8 @@ function App() {
         setExecutionStatus(null);
         setActiveAgentPrompt(undefined);
         setIsAgentPanelOpen(false);
+        setIsSettingsOpen(false);
+        setIsMemoryVaultOpen(false);
 
         // Restore user-scoped workspace mode
         try {
@@ -216,14 +220,23 @@ function App() {
         conversationSyncVersionsRef.current.clear();
       }
 
+      // Replace the entire settings object on identity change; never carry API keys,
+      // bios, or custom instructions from the previous principal into the next one.
+      if (nextUserId !== currentUserId) {
+        settingsOwnerRef.current = nextUserId;
+        const nextSettings = loadSettings(nextUserId);
+        setSettings({
+          ...nextSettings,
+          userName: user?.name || (user ? nextSettings.userName : 'Guest User'),
+          email: user?.email || '',
+        });
+      }
       setCurrentUserId(nextUserId);
 
       if (user) {
-        setSettings(s => ({
-          ...s,
-          userName: user.name || s.userName,
-          email: user.email || s.email,
-        }));
+        if (nextUserId === currentUserId) {
+          setSettings(s => ({ ...s, userName: user.name || s.userName, email: user.email || s.email }));
+        }
 
         // Immediately load cached conversations belonging to this verified user
         const cached = loadConversations(user.id);
@@ -247,11 +260,9 @@ function App() {
         }
       } else {
         // Account signed out: revert to isolated guest state and clear memory
-        setSettings(s => ({
-          ...s,
-          userName: 'Guest User',
-          email: '',
-        }));
+        if (nextUserId === currentUserId) {
+          setSettings(s => ({ ...s, userName: 'Guest User', email: '' }));
+        }
         conversationsOwnerRef.current = null;
         const guestConvs = loadConversations();
         setConversations(guestConvs);
@@ -301,7 +312,12 @@ function App() {
   }, [conversations]);
 
   useEffect(() => saveProjects(projects), [projects]);
-  useEffect(() => saveSettings(settings), [settings]);
+  useEffect(() => {
+    // Account transitions must not persist a prior principal's render under the next key.
+    if (settingsOwnerRef.current === currentUserId) {
+      saveSettings(settings, currentUserId);
+    }
+  }, [settings, currentUserId]);
   useEffect(() => {
     setSessionActiveChatId(activeChatId || null);
   }, [activeChatId]);
@@ -1356,6 +1372,7 @@ function App() {
 
         {isSettingsOpen && (
           <SettingsModal
+            key={currentUserId || 'guest'}
             isOpen={isSettingsOpen}
             onClose={() => setIsSettingsOpen(false)}
             settings={settings}
@@ -1365,7 +1382,7 @@ function App() {
             onImportData={data => { setConversations(data.conversations); setProjects(data.projects); if (data.conversations[0]) handleSelectChat(data.conversations[0].id); }}
             onClearAll={() => {
               const fresh = { ...INITIAL_CONVERSATION, id: 'chat-' + Date.now(), createdAt: Date.now(), updatedAt: Date.now() };
-              setConversations([fresh]); setActiveChatId(fresh.id); setProjects([]); setActiveProjectId(undefined); setSettings(loadSettings()); setActiveArtifact(null);
+              setConversations([fresh]); setActiveChatId(fresh.id); setProjects([]); setActiveProjectId(undefined); setSettings({ ...DEFAULT_SETTINGS, userName: neonAuth.getCurrentUser()?.name || 'Guest User', email: neonAuth.getCurrentUser()?.email || '' }); setActiveArtifact(null);
             }}
             onOpenMemoryVault={() => setIsMemoryVaultOpen(true)}
             initialTab={settingsInitialTab}
@@ -1388,11 +1405,7 @@ function App() {
           isOpen={isAuthOpen}
           onClose={() => setIsAuthOpen(false)}
           onAuthSuccess={(user) => {
-            setSettings(s => ({
-              ...s,
-              userName: user.name || s.userName,
-              email: user.email || s.email,
-            }));
+            // The verified auth-state listener owns identity-scoped settings hydration.
             setToastMessage(`Welcome, ${user.name}! Sync active.`);
           }}
         />
