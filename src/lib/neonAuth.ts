@@ -231,6 +231,10 @@ export class NeonAuthClient {
       this.currentSession.user?.id === session.user?.id &&
       this.currentSession.token === session.token;
 
+    const gainingVerifiedBffSession = isSameIdentity &&
+      this.currentSession?.token === 'bff_session' && !this.currentSession.csrfToken &&
+      session?.token === 'bff_session' && Boolean(session.csrfToken);
+
     if (isSameIdentity) {
       // Same-identity renewal: update memory state in place
       this.currentSession = session;
@@ -238,6 +242,9 @@ export class NeonAuthClient {
         this.csrfToken = session.csrfToken;
       }
       this.persistSession(session);
+      // Cached public user metadata is not verified: notify subscribers when a
+      // real first-party BFF session first supplies its server-issued CSRF token.
+      if (gainingVerifiedBffSession) this.notifyListeners();
       return;
     }
 
@@ -307,6 +314,12 @@ export class NeonAuthClient {
 
   public getCurrentUser(): NeonUser | null {
     return this.currentSession ? this.currentSession.user : null;
+  }
+
+  public getVerifiedBffUser(): NeonUser | null {
+    const session = this.currentSession;
+    // A localStorage profile never contains a CSRF token, so it cannot qualify.
+    return session?.token === 'bff_session' && Boolean(session.csrfToken) ? session.user : null;
   }
 
   public getCurrentSession(): NeonSessionData | null {
