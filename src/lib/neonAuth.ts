@@ -231,20 +231,18 @@ export class NeonAuthClient {
       this.currentSession.user?.id === session.user?.id &&
       this.currentSession.token === session.token;
 
-    const gainingVerifiedBffSession = isSameIdentity &&
-      this.currentSession?.token === 'bff_session' && !this.currentSession.csrfToken &&
-      session?.token === 'bff_session' && Boolean(session.csrfToken);
+    const wasVerifiedBff = this.currentSession?.token === 'bff_session' && Boolean(this.currentSession.csrfToken);
+    const isVerifiedBff = session?.token === 'bff_session' && Boolean(session.csrfToken);
+    const verificationChanged = isSameIdentity && wasVerifiedBff !== isVerifiedBff;
 
     if (isSameIdentity) {
       // Same-identity renewal: update memory state in place
       this.currentSession = session;
-      if (session?.csrfToken) {
-        this.csrfToken = session.csrfToken;
-      }
+      this.csrfToken = session?.csrfToken || null;
       this.persistSession(session);
       // Cached public user metadata is not verified: notify subscribers when a
       // real first-party BFF session first supplies its server-issued CSRF token.
-      if (gainingVerifiedBffSession) this.notifyListeners();
+      if (verificationChanged) this.notifyListeners();
       return;
     }
 
