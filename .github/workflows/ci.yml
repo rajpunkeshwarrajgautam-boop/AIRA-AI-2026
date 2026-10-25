@@ -112,6 +112,9 @@ jobs:
       - name: First-party BFF session security gateway certification
         run: npm run test:auth-bff
 
+      - name: CSRF origin and token restoration regression
+        run: npx tsx --test test/hotfix-csrf-origin-remediation.test.ts
+
       - name: CORS untrusted origin 4xx rejection and policy regression
         run: npm run test:cors
 

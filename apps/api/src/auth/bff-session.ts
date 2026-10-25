@@ -474,7 +474,9 @@ const TRUSTED_ORIGINS_DEFAULT = [
   'http://localhost:3000',
   'http://127.0.0.1:3000',
   'http://localhost:3001',
-  'http://127.0.0.1:3001'
+  'http://127.0.0.1:3001',
+  'https://aira-ai-2026.vercel.app',
+  'https://staging.virexaaiventures.com'
 ];
 
 export function getTrustedOrigins(): string[] {
@@ -489,13 +491,11 @@ export function getTrustedOrigins(): string[] {
   return [...new Set([...defaults, ...list])];
 }
 
-export function isAllowedOrigin(originStr: string, hostHeader?: string): boolean {
+export function isAllowedOrigin(originStr: string, _hostHeader?: string): boolean {
   try {
     const parsed = new URL(originStr);
-    const originHost = parsed.host;
-    if (hostHeader && originHost === hostHeader) {
-      return true;
-    }
+    // Host and X-Forwarded-Host are request metadata, not authorization authorities.
+    // Only explicit application origins (including Vercel's runtime deployment URLs) are trusted.
     const originNormalized = `${parsed.protocol}//${parsed.host}`;
     const allowed = getTrustedOrigins();
     return allowed.some(a => {
@@ -543,21 +543,25 @@ export function verifyCsrfAndOrigin(req: Request, session?: BffServerSession | n
   // If Origin or Referer is supplied, it MUST match the host or trusted allowlist.
   // Rejection is absolute: mismatched origins fail even if custom headers are present!
   const origin = (req.headers.origin as string) || (req.headers.referer as string);
-  const host = req.headers.host;
+  const hasAntiCsrfHeader =
+    req.headers['x-aira-csrf-protection'] === '1' ||
+    req.headers['x-requested-with'] === 'XMLHttpRequest' ||
+    Boolean(req.headers['x-csrf-token']);
 
   if (origin) {
-    if (!isAllowedOrigin(origin, host)) {
-      return false;
-    }
-  } else {
-    // If neither Origin nor Referer is present, block unless sec-fetch-site explicitly confirms same-origin
-    if (!secFetchSite || (secFetchSite !== 'same-origin' && secFetchSite !== 'same-site')) {
-      return false;
-    }
+    // Never let client-controlled forwarding headers widen the trusted-origin allowlist.
+    if (!isAllowedOrigin(origin)) return false;
+  } else if (secFetchSite !== 'same-origin' && secFetchSite !== 'same-site' && !hasAntiCsrfHeader) {
+    // Some legitimate browser paths omit both Origin and Fetch Metadata. A non-simple
+    // custom header is permitted only after the unconditional cross-site rejection above;
+    // browsers must pass the application's strict CORS preflight to send it.
+    return false;
   }
 
   // 3. Cryptographic CSRF token verification for authenticated state-changing requests:
-  if (session?.csrfToken) {
+  if (session) {
+    // An authenticated session never qualifies for the weaker guest-only CSRF policy.
+    if (!session.csrfToken) return false;
     const clientToken = (req.headers['x-csrf-token'] as string) || (req.headers['x-aira-csrf-token'] as string);
     if (!clientToken) {
       return false;
@@ -572,11 +576,6 @@ export function verifyCsrfAndOrigin(req: Request, session?: BffServerSession | n
 
   // 4. For unauthenticated login/signup routes where no session exists yet:
   // Require custom anti-CSRF header or same-origin assertion, with valid origin
-  const hasAntiCsrfHeader =
-    req.headers['x-aira-csrf-protection'] === '1' ||
-    req.headers['x-requested-with'] === 'XMLHttpRequest' ||
-    Boolean(req.headers['x-csrf-token']);
-
   if (!hasAntiCsrfHeader && (!secFetchSite || (secFetchSite !== 'same-origin' && secFetchSite !== 'same-site'))) {
     return false;
   }
