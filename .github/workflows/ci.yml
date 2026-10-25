@@ -312,6 +312,9 @@ jobs:
       - name: Settings modal responsive acceptance
         run: npm run test:mobile-settings
 
+      - name: Account settings principal isolation regression
+        run: npx tsx --test test/account-settings-isolation.test.ts
+
       - name: Stop Vite
         if: always()
         shell: bash
