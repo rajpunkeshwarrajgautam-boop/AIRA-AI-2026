@@ -559,7 +559,9 @@ export function verifyCsrfAndOrigin(req: Request, session?: BffServerSession | n
   }
 
   // 3. Cryptographic CSRF token verification for authenticated state-changing requests:
-  if (session?.csrfToken) {
+  if (session) {
+    // An authenticated session never qualifies for the weaker guest-only CSRF policy.
+    if (!session.csrfToken) return false;
     const clientToken = (req.headers['x-csrf-token'] as string) || (req.headers['x-aira-csrf-token'] as string);
     if (!clientToken) {
       return false;
