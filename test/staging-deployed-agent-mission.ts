@@ -17,36 +17,36 @@ function getStagingConnectionString(): string {
   return output;
 }
 
-const targetBaseUrl = process.env.STAGING_BASE_URL?.trim() || 'https://aira-ai-2026-kkhnehr1n-rajpunkeshwarrajgautam-boops-projects.vercel.app';
-console.log(`Target Preview Base URL: ${targetBaseUrl}`);
+function resolveDeploymentInfo(expectedSha: string): { targetUrl: string; deploymentId: number } {
+  const rawDeployments = execSync(
+    `gh api "repos/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/deployments?sha=${expectedSha}"`,
+    { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] }
+  );
+  const deployments = JSON.parse(rawDeployments);
+  assert.ok(Array.isArray(deployments) && deployments.length > 0, `No GitHub deployments found for commit ${expectedSha}`);
+  
+  const deploymentId = deployments[0].id;
+  const rawStatuses = execSync(
+    `gh api "repos/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/deployments/${deploymentId}/statuses"`,
+    { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] }
+  );
+  const statuses = JSON.parse(rawStatuses);
+  assert.ok(Array.isArray(statuses) && statuses.length > 0, `No deployment statuses found for deployment ${deploymentId}`);
+  
+  const latestStatus = statuses[0];
+  assert.equal(latestStatus.state, 'success', `Deployment status state must be 'success' (got: ${latestStatus.state})`);
+  const deployedUrl = (latestStatus.environment_url || latestStatus.target_url || '').replace(/\/$/, '');
+  assert.ok(deployedUrl, `Deployment ${deploymentId} has no environment_url or target_url`);
+  return { targetUrl: deployedUrl, deploymentId };
+}
 
 function verifyDeploymentCommit(expectedSha: string, targetUrl: string): void {
   console.log(`\n[STEP 1.1] Verifying Vercel preview deployment commit matches git commit (${expectedSha.slice(0, 7)})...`);
-  try {
-    const rawDeployments = execSync(
-      `gh api "repos/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/deployments?sha=${expectedSha}"`,
-      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }
-    );
-    const deployments = JSON.parse(rawDeployments);
-    assert.ok(Array.isArray(deployments) && deployments.length > 0, `No GitHub deployments found for commit ${expectedSha}`);
-    
-    const deploymentId = deployments[0].id;
-    const rawStatuses = execSync(
-      `gh api "repos/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/deployments/${deploymentId}/statuses"`,
-      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }
-    );
-    const statuses = JSON.parse(rawStatuses);
-    assert.ok(Array.isArray(statuses) && statuses.length > 0, `No deployment statuses found for deployment ${deploymentId}`);
-    
-    const latestStatus = statuses[0];
-    assert.equal(latestStatus.state, 'success', `Deployment status state must be 'success' (got: ${latestStatus.state})`);
-    console.log(`PASS: GitHub deployment ${deploymentId} confirmed with status: success for commit ${expectedSha}`);
-    if (latestStatus.target_url) {
-      console.log(`Deployment Target URL: ${latestStatus.target_url}`);
-    }
-  } catch (err: any) {
-    console.warn(`[DEPLOYMENT_VERIFICATION_NOTICE] GitHub API verification skipped or error: ${err.message}`);
-  }
+  const { targetUrl: deployedUrl, deploymentId } = resolveDeploymentInfo(expectedSha);
+  const deployedHost = new URL(deployedUrl).host;
+  const targetHost = new URL(targetUrl).host;
+  assert.equal(deployedHost, targetHost, `Deployment URL host mismatch: expected ${targetHost}, got ${deployedHost}`);
+  console.log(`PASS: GitHub deployment ${deploymentId} confirmed with status: success for commit ${expectedSha} (${deployedUrl})`);
 }
 
 async function runDeployedStagingAcceptance(): Promise<void> {
@@ -54,19 +54,19 @@ async function runDeployedStagingAcceptance(): Promise<void> {
   console.log('  AIRA AI 2026 — FINAL STAGING PREVIEW DEPLOYMENT ACCEPTANCE SUITE');
   console.log('========================================================================');
 
+  const currentSha = execSync('git rev-parse HEAD', { encoding: 'utf-8' }).trim();
+  console.log(`Current Working Tree SHA: ${currentSha}`);
+
+  const targetBaseUrl = process.env.STAGING_BASE_URL?.trim() || resolveDeploymentInfo(currentSha).targetUrl;
+  console.log(`Target Preview Base URL: ${targetBaseUrl}`);
+
   // STEP 1: Verify Staging Preview HTTP Readiness and Exact Commit
   console.log('\n[STEP 1] Testing Vercel Preview Deployment HTTP Reachability...');
   const probe = await fetch(targetBaseUrl);
   assert.equal(probe.status, 200, 'Staging deployment root must return HTTP 200');
   console.log('PASS: Vercel Preview Deployment is online and responding with HTTP 200');
 
-  let currentSha = '';
-  try {
-    currentSha = execSync('git rev-parse HEAD', { encoding: 'utf-8' }).trim();
-    verifyDeploymentCommit(currentSha, targetBaseUrl);
-  } catch (shaErr: any) {
-    console.warn(`Could not resolve local git SHA: ${shaErr.message}`);
-  }
+  verifyDeploymentCommit(currentSha, targetBaseUrl);
 
   // STEP 2: Authenticate and obtain session
   console.log('\n[STEP 2] Establishing authenticated session on Preview deployment...');

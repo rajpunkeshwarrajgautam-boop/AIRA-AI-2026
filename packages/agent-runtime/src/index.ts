@@ -453,6 +453,8 @@ export class AgentRuntime extends EventEmitter {
       state === 'CANCELLED' ? 'run.cancelled' :
       state === 'RUNNING' ? 'run.started' : 'run.started';
 
+    await this.emitRunEvent(runId, eventType, { state, error });
+
     if (state === 'COMPLETED' || state === 'FAILED' || state === 'CANCELLED' || state === 'WAITING_FOR_APPROVAL') {
       await this.flushPendingEvents(runId);
       await this.saveRun(run);
@@ -466,8 +468,6 @@ export class AgentRuntime extends EventEmitter {
     } else if (state === 'WAITING_FOR_TOOL') {
       await this.saveRun(run);
     }
-
-    await this.emitRunEvent(runId, eventType, { state, error });
   }
 
   private async executeRunLoop(runId: string): Promise<void> {
