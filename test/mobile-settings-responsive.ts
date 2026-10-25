@@ -74,7 +74,7 @@ async function main() {
         reducedMotion: 'reduce',
       });
       await context.addInitScript(() => {
-        localStorage.setItem('aira_settings_v1', JSON.stringify({
+        localStorage.setItem('aira_settings_guest_v2', JSON.stringify({
           userName: 'Mobile fixture', theme: 'dark',
         }));
         const now = Date.now();
@@ -273,7 +273,7 @@ async function main() {
         // Form persists through the actual Save action, not just a state assertion.
         await save.click();
         await dialog.waitFor({state:'hidden',timeout:7000});
-        const stored=await page.evaluate(() => JSON.parse(localStorage.getItem('aira_settings_v1')||'{}').userName);
+        const stored=await page.evaluate(() => JSON.parse(localStorage.getItem('aira_settings_guest_v2')||'{}').userName);
         assert.equal(stored, 'Responsive check ' + label, label + ' save did not persist');
         assert.equal(errors.length,0,label+' page errors: '+errors.join(' | '));
         const overflow=await page.evaluate(() => document.documentElement.scrollWidth>window.innerWidth+2);
