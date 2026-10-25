@@ -157,6 +157,9 @@ jobs:
       - name: Long-prompt persistence regression
         run: npm run test:long-prompt-persistence
 
+      - name: Run prompt schema drift repair certification
+        run: npx tsx test/run-prompt-schema-drift.ts
+
       - name: Memory context regression certification
         run: npm run test:memory-context
 
