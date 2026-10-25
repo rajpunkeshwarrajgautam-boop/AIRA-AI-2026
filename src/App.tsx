@@ -7,6 +7,7 @@ import {
   loadProjects, saveProjects, loadSettings, saveSettings, INITIAL_CONVERSATION
 } from './utils/storage';
 import { streamAIResponse } from './utils/aiEngine';
+import { DEFAULT_SETTINGS } from './utils/constants';
 import { retrieveRelevantSubgraph } from './utils/knowledgeGraph';
 import { Sidebar } from './components/Sidebar';
 import { ChatMessage } from './components/ChatMessage';
@@ -40,9 +41,9 @@ const MODE_CONTEXT: Record<WorkspaceMode, string> = {
 
 function App() {
   useAnimatedFavicon();
-  const [currentUserId, setCurrentUserId] = useState<string | null>(() => neonAuth.getCurrentUser()?.id || null);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(() => neonAuth.getVerifiedBffUser()?.id || null);
   const [conversations, setConversations] = useState<Conversation[]>(() => {
-    const user = neonAuth.getCurrentUser();
+    const user = neonAuth.getVerifiedBffUser();
     return loadConversations(user?.id);
   });
   // Root visits without an active tab session start on a transient welcome draft.
@@ -50,7 +51,7 @@ function App() {
   const [activeChatId, setActiveChatId] = useState<string>(() => {
     const sessionChatId = getSessionActiveChatId();
     if (sessionChatId) {
-      const user = neonAuth.getCurrentUser();
+      const user = neonAuth.getVerifiedBffUser();
       const stored = loadConversations(user?.id);
       if (stored.some(c => c.id === sessionChatId)) {
         return sessionChatId;
@@ -64,9 +65,9 @@ function App() {
   }));
   const [projects, setProjects] = useState<Project[]>(() => loadProjects());
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>(() => localStorage.getItem('aira_active_project_id_v1') || undefined);
-  const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
+  const [settings, setSettings] = useState<AppSettings>(() => loadSettings(neonAuth.getVerifiedBffUser()?.id));
   const [workspaceMode, setWorkspaceModeState] = useState<WorkspaceMode>(() => {
-    const user = neonAuth.getCurrentUser();
+    const user = neonAuth.getVerifiedBffUser();
     const key = `aira_workspace_mode_${user?.id || 'guest'}`;
     const stored = typeof window !== 'undefined' ? localStorage.getItem(key) : null;
     return (stored === 'agent' || stored === 'chat') ? stored : 'chat';
@@ -74,7 +75,7 @@ function App() {
 
   const setWorkspaceMode = useCallback((mode: WorkspaceMode) => {
     setWorkspaceModeState(mode);
-    const user = neonAuth.getCurrentUser();
+    const user = neonAuth.getVerifiedBffUser();
     const key = `aira_workspace_mode_${user?.id || 'guest'}`;
     try {
       localStorage.setItem(key, mode);
@@ -101,6 +102,28 @@ function App() {
   const [isPricingOpen, setIsPricingOpen] = useState(false);
   const [isVisionOpen, setIsVisionOpen] = useState(false);
   const [isAccountBillingOpen, setIsAccountBillingOpen] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'general' | 'reasoning' | 'memory' | 'instructions' | 'artifacts' | 'data' | 'personalization' | 'profile' | 'billing' | 'security'>('general');
+  const [billingInitialTab, setBillingInitialTab] = useState<'overview' | 'usage' | 'topup' | 'security'>('overview');
+
+  const handleOpenSettingsTab = (tab?: string) => {
+    if (tab === 'billing') {
+      setBillingInitialTab('overview');
+      setIsAccountBillingOpen(true);
+    } else if (tab === 'security') {
+      setBillingInitialTab('security');
+      setIsAccountBillingOpen(true);
+    } else if (tab === 'profile') {
+      setSettingsInitialTab('data');
+      setIsSettingsOpen(true);
+    } else if (tab === 'personalization') {
+      setSettingsInitialTab('instructions');
+      setIsSettingsOpen(true);
+    } else {
+      setSettingsInitialTab((tab as any) || 'general');
+      setIsSettingsOpen(true);
+    }
+  };
+
   const [isMemoryVaultOpen, setIsMemoryVaultOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isConversationSearchOpen, setIsConversationSearchOpen] = useState(false);
@@ -124,6 +147,7 @@ function App() {
   const initialConversationBackfillRef = useRef(false);
   const authEpochRef = useRef(0);
   const conversationsOwnerRef = useRef<string | null>(currentUserId);
+  const settingsOwnerRef = useRef<string | null>(currentUserId);
 
   const activeConversation = useMemo(
     () => conversations.find(c => c.id === activeChatId) || welcomeConversation,
@@ -157,7 +181,8 @@ function App() {
   }, []);
 
   useEffect(() => {
-    return neonAuth.onAuthStateChange(async (user) => {
+    return neonAuth.onAuthStateChange(async () => {
+      const user = neonAuth.getVerifiedBffUser();
       const epoch = ++authEpochRef.current;
       const nextUserId = user?.id || null;
 
@@ -177,6 +202,8 @@ function App() {
         setExecutionStatus(null);
         setActiveAgentPrompt(undefined);
         setIsAgentPanelOpen(false);
+        setIsSettingsOpen(false);
+        setIsMemoryVaultOpen(false);
 
         // Restore user-scoped workspace mode
         try {
@@ -194,14 +221,23 @@ function App() {
         conversationSyncVersionsRef.current.clear();
       }
 
+      // Replace the entire settings object on identity change; never carry API keys,
+      // bios, or custom instructions from the previous principal into the next one.
+      if (nextUserId !== currentUserId) {
+        settingsOwnerRef.current = nextUserId;
+        const nextSettings = loadSettings(nextUserId);
+        setSettings({
+          ...nextSettings,
+          userName: user?.name || (user ? nextSettings.userName : 'Guest User'),
+          email: user?.email || '',
+        });
+      }
       setCurrentUserId(nextUserId);
 
       if (user) {
-        setSettings(s => ({
-          ...s,
-          userName: user.name || s.userName,
-          email: user.email || s.email,
-        }));
+        if (nextUserId === currentUserId) {
+          setSettings(s => ({ ...s, userName: user.name || s.userName, email: user.email || s.email }));
+        }
 
         // Immediately load cached conversations belonging to this verified user
         const cached = loadConversations(user.id);
@@ -225,11 +261,9 @@ function App() {
         }
       } else {
         // Account signed out: revert to isolated guest state and clear memory
-        setSettings(s => ({
-          ...s,
-          userName: 'Guest User',
-          email: '',
-        }));
+        if (nextUserId === currentUserId) {
+          setSettings(s => ({ ...s, userName: 'Guest User', email: '' }));
+        }
         conversationsOwnerRef.current = null;
         const guestConvs = loadConversations();
         setConversations(guestConvs);
@@ -279,7 +313,12 @@ function App() {
   }, [conversations]);
 
   useEffect(() => saveProjects(projects), [projects]);
-  useEffect(() => saveSettings(settings), [settings]);
+  useEffect(() => {
+    // Account transitions must not persist a prior principal's render under the next key.
+    if (settingsOwnerRef.current === currentUserId) {
+      saveSettings(settings, currentUserId);
+    }
+  }, [settings, currentUserId]);
   useEffect(() => {
     setSessionActiveChatId(activeChatId || null);
   }, [activeChatId]);
@@ -1101,7 +1140,11 @@ function App() {
         projects={projects}
         activeProjectId={activeProjectId}
         onOpenProjects={() => setIsProjectsOpen(true)}
-        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenSettings={() => {
+          setSettingsInitialTab('general');
+          setIsSettingsOpen(true);
+        }}
+        onOpenSettingsTab={handleOpenSettingsTab}
         onOpenAuth={() => setIsAuthOpen(true)}
         onOpenSearch={handleOpenConversationSearch}
         isOpen={sidebarOpen}
@@ -1112,7 +1155,10 @@ function App() {
         onSelectWorkspace={setWorkspaceMode}
         onOpenVisionStudio={() => setIsVisionOpen(true)}
         onOpenPricing={() => setIsPricingOpen(true)}
-        onOpenBilling={() => setIsAccountBillingOpen(true)}
+        onOpenBilling={() => {
+          setBillingInitialTab('overview');
+          setIsAccountBillingOpen(true);
+        }}
       />
 
       <CommandPalette
@@ -1327,6 +1373,7 @@ function App() {
 
         {isSettingsOpen && (
           <SettingsModal
+            key={currentUserId || 'guest'}
             isOpen={isSettingsOpen}
             onClose={() => setIsSettingsOpen(false)}
             settings={settings}
@@ -1336,9 +1383,15 @@ function App() {
             onImportData={data => { setConversations(data.conversations); setProjects(data.projects); if (data.conversations[0]) handleSelectChat(data.conversations[0].id); }}
             onClearAll={() => {
               const fresh = { ...INITIAL_CONVERSATION, id: 'chat-' + Date.now(), createdAt: Date.now(), updatedAt: Date.now() };
-              setConversations([fresh]); setActiveChatId(fresh.id); setProjects([]); setActiveProjectId(undefined); setSettings(loadSettings()); setActiveArtifact(null);
+              setConversations([fresh]); setActiveChatId(fresh.id); setProjects([]); setActiveProjectId(undefined); setSettings({ ...DEFAULT_SETTINGS, userName: neonAuth.getVerifiedBffUser()?.name || 'Guest User', email: neonAuth.getVerifiedBffUser()?.email || '' }); setActiveArtifact(null);
             }}
             onOpenMemoryVault={() => setIsMemoryVaultOpen(true)}
+            initialTab={settingsInitialTab}
+            onOpenBilling={(tab) => {
+              setIsSettingsOpen(false);
+              setBillingInitialTab(tab || 'overview');
+              setIsAccountBillingOpen(true);
+            }}
           />
         )}
 
@@ -1353,11 +1406,7 @@ function App() {
           isOpen={isAuthOpen}
           onClose={() => setIsAuthOpen(false)}
           onAuthSuccess={(user) => {
-            setSettings(s => ({
-              ...s,
-              userName: user.name || s.userName,
-              email: user.email || s.email,
-            }));
+            // The verified auth-state listener owns identity-scoped settings hydration.
             setToastMessage(`Welcome, ${user.name}! Sync active.`);
           }}
         />
@@ -1379,6 +1428,7 @@ function App() {
             setIsAccountBillingOpen(false);
             setIsPricingOpen(true);
           }}
+          initialTab={billingInitialTab}
         />
       </React.Suspense>
     </div>

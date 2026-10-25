@@ -12,10 +12,13 @@ import {
   ShieldCheck,
   Palette,
   Database,
+  CreditCard,
+  Shield,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { AppSettings, Conversation, Project } from '../types';
 import { AVAILABLE_MODELS } from '../utils/constants';
+import { neonAuth, NeonUser } from '../lib/neonAuth';
 
 interface PresetTheme {
   id: NonNullable<AppSettings['aestheticPreset']>;
@@ -85,7 +88,9 @@ const PRESET_THEMES: PresetTheme[] = [
 ];
 
 
-interface SettingsModalProps {
+export type SettingsTab = 'general' | 'reasoning' | 'memory' | 'instructions' | 'artifacts' | 'data';
+
+export interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   settings: AppSettings;
@@ -95,14 +100,44 @@ interface SettingsModalProps {
   onImportData: (data: { conversations: Conversation[]; projects: Project[] }) => void;
   onClearAll: () => void;
   onOpenMemoryVault?: () => void;
+  initialTab?: SettingsTab | 'personalization' | 'profile' | 'billing' | 'security';
+  onOpenBilling?: (tab?: 'overview' | 'usage' | 'topup' | 'security') => void;
 }
 
-type SettingsTab = 'general' | 'reasoning' | 'memory' | 'instructions' | 'artifacts' | 'data';
-
 export const SettingsModal: React.FC<SettingsModalProps> = ({
-  isOpen, onClose, settings, onSaveSettings, conversations, projects, onImportData, onClearAll, onOpenMemoryVault,
+  isOpen,
+  onClose,
+  settings,
+  onSaveSettings,
+  conversations,
+  projects,
+  onImportData,
+  onClearAll,
+  onOpenMemoryVault,
+  initialTab = 'general',
+  onOpenBilling,
 }) => {
-  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+  const resolveInitialTab = (tab?: string): SettingsTab => {
+    if (tab === 'personalization') return 'instructions';
+    if (tab === 'profile' || tab === 'billing' || tab === 'security') return 'data';
+    if (['general', 'reasoning', 'memory', 'instructions', 'artifacts', 'data'].includes(tab as any)) {
+      return tab as SettingsTab;
+    }
+    return 'general';
+  };
+
+  const [activeTab, setActiveTab] = useState<SettingsTab>(() => resolveInitialTab(initialTab));
+  const [currentUser, setCurrentUser] = useState<NeonUser | null>(() => neonAuth.getVerifiedBffUser());
+
+  useEffect(() => {
+    return neonAuth.onAuthStateChange(() => setCurrentUser(neonAuth.getVerifiedBffUser()));
+  }, []);
+
+  useEffect(() => {
+    if (isOpen && initialTab) {
+      setActiveTab(resolveInitialTab(initialTab));
+    }
+  }, [isOpen, initialTab]);
   const [form, setForm] = useState<AppSettings>({ ...settings });
   const [saved, setSaved] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -198,9 +233,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     { id: 'general', label: 'General', icon: <User className="w-4 h-4" /> },
     { id: 'reasoning', label: 'Model & Reasoning', icon: <Brain className="w-4 h-4" /> },
     { id: 'memory', label: 'Agent Memory', icon: <Database className="w-4 h-4" /> },
-    { id: 'instructions', label: 'Custom Instructions', icon: <Sliders className="w-4 h-4" /> },
+    { id: 'instructions', label: 'Personalization', icon: <Sliders className="w-4 h-4" /> },
     { id: 'artifacts', label: 'Artifacts', icon: <FileCode2 className="w-4 h-4" /> },
-    { id: 'data', label: 'Account & Data', icon: <ShieldCheck className="w-4 h-4" /> },
+    { id: 'data', label: 'Profile & Data', icon: <ShieldCheck className="w-4 h-4" /> },
   ];
 
   return (
@@ -695,16 +730,87 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </motion.div>
               )}
 
-              {/* TAB 5: ACCOUNT & DATA */}
+              {/* TAB 5: PROFILE, SECURITY & DATA */}
               {activeTab === 'data' && (
                 <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
-                  <div className="p-4 rounded-2xl border border-claude-terracotta/20 bg-claude-terracotta/5 dark:bg-claude-terracotta/10 flex items-center justify-between">
-                    <div>
-                      <div className="text-xs uppercase font-bold tracking-wider text-claude-accentInk">Subscription Plan</div>
-                      <div className="text-sm font-bold text-claude-text-light dark:text-white mt-0.5">Aira Pro (Multi-Model Extended Intelligence)</div>
-                      <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">200K token context window with hybrid reasoning.</div>
+                  {/* Account Profile Card */}
+                  <div className="p-4 rounded-2xl border border-blue-200/50 dark:border-blue-900/40 bg-blue-50/40 dark:bg-blue-950/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center space-x-3">
+                      <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-700 via-blue-600 to-indigo-600 text-white font-bold text-sm flex items-center justify-center shrink-0 shadow-sm overflow-hidden">
+                        {currentUser?.image ? (
+                          <img src={currentUser.image} alt={currentUser.name || 'User'} className="w-full h-full object-cover" />
+                        ) : currentUser ? (
+                          currentUser.name ? currentUser.name.slice(0, 2).toUpperCase() : 'AI'
+                        ) : (
+                          'G'
+                        )}
+                      </div>
+                      <div>
+                        <div className="flex items-center space-x-2">
+                          <span className="text-sm font-bold text-slate-900 dark:text-white">
+                            {currentUser ? currentUser.name || currentUser.email : 'Guest Workspace'}
+                          </span>
+                          {currentUser ? (
+                            <span className="inline-flex items-center space-x-1 text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-2 py-0.5 rounded-md border border-emerald-200/50 dark:border-emerald-500/20">
+                              <ShieldCheck className="w-3 h-3" />
+                              <span>Session Verified</span>
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-semibold text-slate-400 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-md">
+                              Local Guest
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                          {currentUser?.email || 'Sign in to link Google & GitHub and sync workspace.'}
+                        </div>
+                      </div>
                     </div>
-                    <span className="text-xs font-bold px-3 py-1 rounded-full bg-claude-terracotta text-claude-onAccent">Active</span>
+
+                    <span className="text-xs font-bold px-3 py-1 rounded-full bg-blue-600 text-white self-start sm:self-center">
+                      {currentUser ? 'Plus Plan' : 'Free Tier'}
+                    </span>
+                  </div>
+
+                  {/* Billing & Security Management Buttons */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onClose();
+                        if (onOpenBilling) onOpenBilling('overview');
+                      }}
+                      className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white/50 dark:bg-slate-900/40 hover:border-blue-500/50 hover:bg-blue-50/50 dark:hover:bg-blue-900/20 transition-all text-left group flex items-start space-x-3"
+                    >
+                      <CreditCard className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[13px] font-bold text-slate-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                          Billing & Commercial Credits
+                        </div>
+                        <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                          Live ledger, reasoning boosts, usage history and top-ups.
+                        </div>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onClose();
+                        if (onOpenBilling) onOpenBilling('security');
+                      }}
+                      className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white/50 dark:bg-slate-900/40 hover:border-blue-500/50 hover:bg-blue-50/50 dark:hover:bg-blue-900/20 transition-all text-left group flex items-start space-x-3"
+                    >
+                      <Shield className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[13px] font-bold text-slate-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                          Security & Active Sessions
+                        </div>
+                        <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                          First-party BFF cryptographic audit and device control.
+                        </div>
+                      </div>
+                    </button>
                   </div>
 
                   <div className="pt-2">

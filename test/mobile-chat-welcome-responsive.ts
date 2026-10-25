@@ -22,7 +22,7 @@ async function main() {
         };
         localStorage.setItem('aira_conversations_v1', JSON.stringify([conversation]));
         localStorage.setItem('aira_active_chat_id_v1', conversation.id);
-        localStorage.setItem('aira_settings_v1', JSON.stringify({ theme: 'light', aestheticPreset: 'default' }));
+        localStorage.setItem('aira_settings_guest_v2', JSON.stringify({ theme: 'light', aestheticPreset: 'default' }));
       });
       const page = await context.newPage();
       const errors: string[] = [];

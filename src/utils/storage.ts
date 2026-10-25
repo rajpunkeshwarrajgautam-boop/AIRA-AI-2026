@@ -19,7 +19,7 @@ const STORAGE_KEYS = {
   SESSION_ACTIVE_CHAT: 'aira_active_chat_session',
   PROJECTS: 'aira_projects_v1',
   ACTIVE_PROJECT: 'aira_active_project_id_v1',
-  SETTINGS: 'aira_settings_v1',
+  GUEST_SETTINGS: 'aira_settings_guest_v2',
   PINNED_CHATS: 'aira_pinned_chats_v1',
 };
 
@@ -123,9 +123,20 @@ export function saveProjects(projects: Project[]): void {
   }
 }
 
-export function loadSettings(): AppSettings {
+/**
+ * Local preferences are isolated by verified principal. The legacy global
+ * aira_settings_v1 key is intentionally never read or migrated: its owner is
+ * unknowable, and it can contain private instructions and provider API keys.
+ */
+export function getSettingsStorageKey(userId?: string | null): string {
+  return userId
+    ? `aira_settings_user_${encodeURIComponent(userId)}_v2`
+    : STORAGE_KEYS.GUEST_SETTINGS;
+}
+
+export function loadSettings(userId?: string | null): AppSettings {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+    const raw = localStorage.getItem(getSettingsStorageKey(userId));
     if (!raw) return DEFAULT_SETTINGS;
     const saved = JSON.parse(raw);
     const merged = { ...DEFAULT_SETTINGS, ...saved };
@@ -135,9 +146,9 @@ export function loadSettings(): AppSettings {
   }
 }
 
-export function saveSettings(settings: AppSettings): void {
+export function saveSettings(settings: AppSettings, userId?: string | null): void {
   try {
-    localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
+    localStorage.setItem(getSettingsStorageKey(userId), JSON.stringify(settings));
   } catch (e) {
     console.error('Failed to save settings', e);
   }
