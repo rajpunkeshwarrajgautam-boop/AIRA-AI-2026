@@ -13,42 +13,67 @@ export async function reconcileToolCallsSchema(knex: Knex, tableName = 'tool_cal
 
   const existingColumns = await knex('information_schema.columns')
     .where({ table_schema: 'public', table_name: tableName })
-    .select('column_name');
+    .select('column_name', 'data_type');
 
-  const existingColumnSet = new Set(existingColumns.map(c => String(c.column_name)));
+  const existingColumnMap = new Map(existingColumns.map(c => [String(c.column_name), String(c.data_type)]));
+
+  const validateType = (col: string, allowed: string[]) => {
+    if (existingColumnMap.has(col)) {
+      const actual = existingColumnMap.get(col)!;
+      if (!allowed.includes(actual)) {
+        throw new Error(`Schema contract violation: public.${tableName}.${col} has incompatible data type '${actual}' (expected: ${allowed.join(', ')})`);
+      }
+    }
+  };
+
+  const stringTypes = ['character varying', 'text'];
+  const jsonTypes = ['jsonb', 'json'];
+  const intTypes = ['integer', 'smallint', 'bigint'];
+
+  validateType('principal_id', stringTypes);
+  validateType('tool_id', stringTypes);
+  validateType('workflow_run_id', stringTypes);
+  validateType('agent_mission_id', stringTypes);
+  validateType('adapter', stringTypes);
+  validateType('side_effect_level', stringTypes);
+  validateType('error_code', stringTypes);
+  validateType('permission_scopes', jsonTypes);
+  validateType('input_metadata', jsonTypes);
+  validateType('attempt_count', intTypes);
+  validateType('duration_ms', intTypes);
 
   await knex.schema.alterTable(tableName, (table) => {
-    if (!existingColumnSet.has('principal_id')) {
+    if (!existingColumnMap.has('principal_id')) {
       table.string('principal_id');
     }
-    if (!existingColumnSet.has('tool_id')) {
+    if (!existingColumnMap.has('tool_id')) {
       table.string('tool_id');
     }
-    if (!existingColumnSet.has('workflow_run_id')) {
+    if (!existingColumnMap.has('workflow_run_id')) {
       table.string('workflow_run_id');
     }
-    if (!existingColumnSet.has('agent_mission_id')) {
+    if (!existingColumnMap.has('agent_mission_id')) {
       table.string('agent_mission_id');
     }
-    if (!existingColumnSet.has('adapter')) {
+    if (!existingColumnMap.has('adapter')) {
       table.string('adapter');
     }
-    if (!existingColumnSet.has('side_effect_level')) {
+    if (!existingColumnMap.has('side_effect_level')) {
       table.string('side_effect_level');
     }
-    if (!existingColumnSet.has('permission_scopes')) {
+    if (!existingColumnMap.has('permission_scopes')) {
       table.jsonb('permission_scopes').defaultTo('[]');
     }
-    if (!existingColumnSet.has('input_metadata')) {
+    if (!existingColumnMap.has('input_metadata')) {
       table.jsonb('input_metadata').defaultTo('{}');
     }
-    if (!existingColumnSet.has('attempt_count')) {
+    if (!existingColumnMap.has('attempt_count')) {
       table.integer('attempt_count').defaultTo(1);
     }
-    if (!existingColumnSet.has('error_code')) {
+    if (!existingColumnMap.has('error_code')) {
       table.string('error_code');
     }
-    if (!existingColumnSet.has('duration_ms')) {
+    if (!existingColumnMap.has('duration_ms')) {
       table.integer('duration_ms');
     }
   });

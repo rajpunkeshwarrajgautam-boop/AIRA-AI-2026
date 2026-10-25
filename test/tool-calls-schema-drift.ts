@@ -190,6 +190,24 @@ async function main(): Promise<void> {
   assert.equal(retrievedLegacy?.principal_id, null);
   console.log('PASS: Legacy pre-existing tool call record preserved intact');
 
+  // Stage 8B: Verify failure on incompatible existing column type
+  const badTable = `tool_calls_bad_type_${tableSuffix}`;
+  await db.schema.createTable(badTable, (t) => {
+    t.string('id').primary();
+    t.boolean('duration_ms'); // Incompatible type: boolean instead of integer
+  });
+  let incompatibleCaught = false;
+  try {
+    await reconcileToolCallsSchema(db as any, badTable);
+  } catch (err: any) {
+    if (err.message.includes('incompatible data type')) {
+      incompatibleCaught = true;
+      console.log(`PASS: Incompatible existing column type caught: ${err.message}`);
+    }
+  }
+  await db.schema.dropTableIfExists(badTable);
+  assert.equal(incompatibleCaught, true, 'reconcileToolCallsSchema must throw on incompatible existing column types');
+
   // Stage 9: Cleanup
   await db.schema.dropTableIfExists(testTableName);
   console.log(`PASS: Dropped disposable test table ${testTableName}`);
