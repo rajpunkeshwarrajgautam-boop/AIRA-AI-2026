@@ -1008,7 +1008,12 @@ export class AgentRuntime extends EventEmitter {
         await this.transitionRunState(runId, 'RUNNING');
         
         // Bounded iterative loop for AGENT_MISSION (up to 3 steps)
-        if (run.intent === 'AGENT_MISSION' && run.stepCount < 3) {
+        // Strictly condition repository tool selection on explicit user intent AND principal authorization.
+        // Calculator missions or non-repository missions must never request repository tools.
+        const isRepoMission = /\b(repo|git|repository|commit|branch|status|diff|log)\b/i.test(run.prompt);
+        const hasRepoScope = (run.principalScopes || []).includes('repo.read') || (run.principalScopes || []).includes('*');
+
+        if (run.intent === 'AGENT_MISSION' && isRepoMission && hasRepoScope && run.stepCount < 3) {
           let nextToolName: string | null = null;
           let nextArgs: Record<string, unknown> = {};
 

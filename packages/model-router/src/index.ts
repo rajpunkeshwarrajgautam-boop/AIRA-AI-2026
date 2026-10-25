@@ -931,9 +931,9 @@ export class ModelRouter {
 
       let providerPreference: Array<SupportedProvider>;
       if (model === 'aira-deep') {
-        providerPreference = ['anthropic', 'nvidia', 'openai'];
+        providerPreference = ['anthropic', 'nvidia', 'openai', 'groq', 'gemini'];
       } else {
-        providerPreference = ['anthropic', 'nvidia', 'openai'];
+        providerPreference = ['anthropic', 'nvidia', 'openai', 'groq', 'gemini'];
       }
 
       const preferredProvider = providerPreference[0];
@@ -967,6 +967,7 @@ export class ModelRouter {
         const formatName = (p: string) => {
           if (p === 'nvidia') return 'NVIDIA NIM';
           if (p === 'groq') return 'Groq';
+          if (p === 'gemini') return 'Gemini';
           if (p === 'cerebras') return 'Cerebras';
           if (p === 'together') return 'Together AI';
           if (p === 'fireworks') return 'Fireworks AI';
@@ -984,6 +985,8 @@ export class ModelRouter {
       if (selectedProvider === 'groq') {
         const raw = (process.env.AIRA_FAST_MODEL || '').trim().replace(/^["']|["']$/g, '');
         executedModel = raw || 'openai/gpt-oss-120b';
+      } else if (selectedProvider === 'gemini') {
+        executedModel = (process.env.AIRA_GEMINI_MODEL || '').trim().replace(/^["']|["']$/g, '') || 'gemini-3.5-flash-lite';
       } else if (selectedProvider === 'cerebras') {
         executedModel = process.env.AIRA_FAST_MODEL || 'llama3.1-8b';
       } else if (selectedProvider === 'together') {
@@ -1026,9 +1029,26 @@ export class ModelRouter {
         combinedReason = modelFallbackReason;
       }
 
+      let effectiveAdapter = selectedAdapter;
+      if (selectedProvider === 'nvidia') {
+        const fallbackAdapter = this.adapters.has('groq')
+          ? this.createModelSpecificAdapter('groq', 'openai/gpt-oss-120b')
+          : (this.adapters.has('gemini') ? this.createModelSpecificAdapter('gemini', 'gemini-3.5-flash-lite') : null);
+        const tertiaryAdapter = (fallbackAdapter && fallbackAdapter.provider === 'groq' && this.adapters.has('gemini'))
+          ? this.createModelSpecificAdapter('gemini', 'gemini-3.5-flash-lite')
+          : null;
+        if (fallbackAdapter) {
+          effectiveAdapter = new ResilientModelAdapter(selectedAdapter, fallbackAdapter, this.healthTracker, {
+            firstTokenTimeoutMs: 3500,
+            fallbackFirstTokenTimeoutMs: 4000,
+            tertiaryAdapter
+          });
+        }
+      }
+
       return {
         policy,
-        adapter: selectedAdapter,
+        adapter: effectiveAdapter,
         provider: selectedProvider,
         requestedProvider: preferredProvider,
         executedProvider: selectedProvider,
@@ -1150,9 +1170,24 @@ export class ModelRouter {
       if (this.adapters.has('nvidia')) {
         const isLegacyLlama = requestedModelId === 'meta/llama-3.1-405b-instruct';
         const targetModel = isLegacyLlama ? 'nvidia/nemotron-3-super-120b-a12b' : model;
+        const primaryAdapter = this.createModelSpecificAdapter('nvidia', targetModel);
+        const fallbackAdapter = this.adapters.has('groq')
+          ? this.createModelSpecificAdapter('groq', 'openai/gpt-oss-120b')
+          : (this.adapters.has('gemini') ? this.createModelSpecificAdapter('gemini', 'gemini-3.5-flash-lite') : null);
+        const tertiaryAdapter = (fallbackAdapter && fallbackAdapter.provider === 'groq' && this.adapters.has('gemini'))
+          ? this.createModelSpecificAdapter('gemini', 'gemini-3.5-flash-lite')
+          : null;
+        const resilientAdapter = fallbackAdapter
+          ? new ResilientModelAdapter(primaryAdapter, fallbackAdapter, this.healthTracker, {
+              firstTokenTimeoutMs: 3500,
+              fallbackFirstTokenTimeoutMs: 4000,
+              tertiaryAdapter
+            })
+          : primaryAdapter;
+
         return {
           policy,
-          adapter: this.adapters.get('nvidia')!,
+          adapter: resilientAdapter,
           provider: 'nvidia',
           requestedProvider: 'nvidia',
           executedProvider: 'nvidia',

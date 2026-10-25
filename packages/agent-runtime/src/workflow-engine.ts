@@ -148,6 +148,7 @@ export class WorkflowEngine {
 
       // Find steps ready for execution
       const readySteps: WorkflowStepDefinition[] = [];
+      let skippedAnyInThisIteration = false;
       for (const step of definition.steps) {
         const currentState = workflowRun.stepStates[step.stepId];
         if (currentState === 'READY') {
@@ -176,6 +177,7 @@ export class WorkflowEngine {
           // Skip this step as upstream dependency failed
           workflowRun.stepStates[step.stepId] = 'SKIPPED';
           await this.updateStepState(workflowRun.id, step.stepId, 'SKIPPED', undefined, 'Skipped due to upstream dependency failure');
+          skippedAnyInThisIteration = true;
           continue;
         }
 
@@ -184,9 +186,44 @@ export class WorkflowEngine {
         }
       }
 
+      if (skippedAnyInThisIteration) {
+        // Persist the skipped step states in workflowRun
+        await this.withRunLock(workflowRunId, async () => {
+          const fresh = (await this.workflowRepo.getWorkflowRun(workflowRunId))!;
+          for (const step of definition.steps) {
+            if (workflowRun!.stepStates[step.stepId] === 'SKIPPED') {
+              fresh.stepStates[step.stepId] = 'SKIPPED';
+            }
+          }
+          fresh.updatedAt = Date.now();
+          await this.workflowRepo.saveWorkflowRun(fresh);
+          workflowRun = fresh;
+        });
+
+        // Re-check if all steps are now terminal!
+        const nowAllTerminal = definition.steps.every(step => {
+          const s = workflowRun!.stepStates[step.stepId];
+          return s === 'COMPLETED' || s === 'SKIPPED' || s === 'FAILED';
+        });
+        if (nowAllTerminal) {
+          const hasFailures = definition.steps.some(step => workflowRun!.stepStates[step.stepId] === 'FAILED');
+          if (hasFailures) {
+            await this.failWorkflow(workflowRun!, 'One or more workflow steps failed.');
+          } else {
+            await this.completeWorkflow(workflowRun!, definition);
+          }
+          break;
+        }
+      }
+
       if (readySteps.length === 0) {
-        // No steps currently ready. Check if any are running
+        // No steps currently ready. Check if any are running OR waiting for approval
         const runningCount = Object.values(workflowRun.stepStates).filter(s => s === 'RUNNING').length;
+        const waitingApprovalCount = Object.values(workflowRun.stepStates).filter(s => s === 'WAITING_FOR_APPROVAL').length;
+        if (waitingApprovalCount > 0 || workflowRun.state === 'WAITING_FOR_APPROVAL') {
+          // Workflow is paused waiting for user approval, NOT stalled!
+          break;
+        }
         if (runningCount === 0) {
           // Deadlock or unresolvable dependencies
           await this.failWorkflow(workflowRun, 'Workflow stalled: no steps can proceed.');
@@ -347,6 +384,9 @@ export class WorkflowEngine {
       } catch (err: any) {
         stepError = err.message || String(err);
         const isNonRetryable = stepError.includes('Access denied') ||
+          stepError.includes('Permission denied') ||
+          stepError.includes('TOOL_PERMISSION_DENIED') ||
+          stepError.includes('lacks required scope') ||
           stepError.includes('Cycle detected') ||
           stepError.includes('Validation failed') ||
           stepError.includes('cannot depend on itself');

@@ -201,8 +201,8 @@ async function runPreviewSuite() {
   assert(valJson.errorCode === 'TOOL_INPUT_INVALID' || valJson.error?.includes('TOOL_INPUT_INVALID') || valJson.isError, `Expected TOOL_INPUT_INVALID, got ${JSON.stringify(valJson)}`);
   console.log(`[PASS] Invalid tool input properly rejected: TOOL_INPUT_INVALID`);
 
-  // Test 8: Permission Enforcement (repo_status requires repo.read scope)
-  console.log('Testing repo_status Tool Execution on Preview...');
+  // Test 8: Permission Enforcement (repo_status requires repo.read scope which is denied to standard workspace users)
+  console.log('Testing repo_status Tool Execution on Preview (repo.read must fail closed)...');
   const repoRes = await clientA.post('/api/tools/execute', {
     toolId: 'tool_repo_status',
     input: {}
@@ -211,6 +211,17 @@ async function runPreviewSuite() {
   assert.strictEqual(repoRes.isError, true);
   assert.strictEqual(repoRes.errorCode, 'TOOL_PERMISSION_DENIED');
   console.log(`[PASS] Permission enforcement proven on Preview: TOOL_PERMISSION_DENIED`);
+
+  // Test 8a: Write Permission Enforcement (tool_fs_write requires files.write scope which is denied)
+  console.log('Testing Permission Enforcement on Preview (fs_write requires files.write)...');
+  const writeRes = await clientA.post('/api/tools/execute', {
+    toolId: 'tool_fs_write',
+    input: { filePath: 'test.txt', content: 'test' }
+  });
+  console.log(`[PASS] fs_write Response:`, writeRes);
+  assert.strictEqual(writeRes.isError, true);
+  assert.strictEqual(writeRes.errorCode, 'TOOL_PERMISSION_DENIED');
+  console.log(`[PASS] Write permission enforcement proven on Preview: TOOL_PERMISSION_DENIED`);
 
   // Test 8b: Filesystem List on Preview (files.read is allowed)
   console.log('Testing fs_list Tool Execution on Preview...');
