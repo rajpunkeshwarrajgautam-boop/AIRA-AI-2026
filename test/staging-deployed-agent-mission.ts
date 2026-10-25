@@ -262,8 +262,13 @@ async function runDeployedStagingAcceptance(): Promise<void> {
   assert.equal(tc.tool, 'calculator', `Persisted tool call must be calculator (got: ${tc.tool})`);
   assert.equal(tc.status, 'COMPLETED', `Persisted tool call status must be COMPLETED (got: ${tc.status})`);
   assert.ok(tc.duration_ms !== null && tc.duration_ms !== undefined, 'Persisted tool call duration_ms must be recorded');
-  assert.ok(tc.executed_at !== null, 'Persisted tool call executed_at timestamp must be recorded');
-  console.log(`PASS: Tool call ${tc.id} persisted with status: ${tc.status}, tool: ${tc.tool}, duration: ${tc.duration_ms}ms, executed_at: ${tc.executed_at}`);
+  assert.ok(tc.started_at !== null && tc.started_at !== undefined && String(tc.started_at).trim().length > 0, 'Persisted tool call started_at timestamp must be recorded');
+  assert.ok(tc.completed_at !== null && tc.completed_at !== undefined && String(tc.completed_at).trim().length > 0, 'Persisted tool call completed_at timestamp must be recorded');
+  const startedAtMs = Number(tc.started_at);
+  const completedAtMs = Number(tc.completed_at);
+  assert.ok(!Number.isNaN(startedAtMs) && startedAtMs > 0, `Valid started_at timestamp required (got: ${tc.started_at})`);
+  assert.ok(!Number.isNaN(completedAtMs) && completedAtMs >= startedAtMs, `Valid completed_at timestamp required (got: ${tc.completed_at})`);
+  console.log(`PASS: Tool call ${tc.id} persisted with status: ${tc.status}, tool: ${tc.tool}, duration: ${tc.duration_ms}ms, started_at: ${tc.started_at}, completed_at: ${tc.completed_at}`);
 
   await db.destroy();
 
