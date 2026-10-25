@@ -271,3 +271,16 @@ test('Account switch clears the previous principal CSRF token', () => {
   assert.equal(neonAuth.getCsrfToken(), null);
   neonAuth.saveSession(null);
 });
+
+
+test('Authenticated BFF session without token never falls back to guest CSRF header', () => {
+  const session = { userId: 'verified_user', csrfToken: '' } as any;
+  assert.equal(verifyCsrfAndOrigin({
+    method: 'POST',
+    headers: {
+      origin: 'https://aira-ai-2026.vercel.app',
+      'sec-fetch-site': 'same-origin',
+      'x-aira-csrf-protection': '1'
+    }
+  } as any, session), false);
+});
