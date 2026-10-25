@@ -88,7 +88,7 @@ async function main(): Promise<void> {
 
   // 1.2 Reject Unknown Database Connections
   console.log('1.2 Testing rejection of unknown database connections...');
-  const unknownUrl = 'postgresql://attacker:badpassword@rogue-db.malicious-cloud.org:5432/hacked';
+  const unknownUrl = 'postgresql://attacker@rogue-db.malicious-cloud.org:5432/hacked';
   const unknownValidation = validateDatabaseEnvironment(unknownUrl, 'staging');
   assert.equal(unknownValidation.valid, false, 'Unknown database URL must fail validation');
   assert.equal(unknownValidation.code, 'UNRECOGNIZED_DATABASE_TARGET');

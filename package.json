@@ -57,6 +57,8 @@
     "test:long-prompt-persistence": "npx tsx test/long-prompt-persistence.ts",
     "test:tool-calls-drift": "npx tsx test/tool-calls-schema-drift.ts",
     "test:staging-mission": "npx tsx test/staging-agent-mission-certification.ts",
+    "test:live-provider-mission": "npx tsx test/live-provider-agent-acceptance.ts",
+    "test:deployed-mission": "npx tsx test/staging-deployed-agent-mission.ts",
     "test:verify-tls": "npx tsx test/verify-strict-tls.ts",
     "test:math-rendering": "npx tsx test/math-rendering.ts",
     "test:preview-identity": "npx tsx test/preview-identity-guard.ts",
