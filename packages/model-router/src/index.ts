@@ -353,6 +353,8 @@ export class OpenAIAdapter implements ModelAdapter {
   private baseUrl: string;
   private airaModel: ModelId | string;
 
+  public modelName: string;
+
   constructor(
     apiKey?: string,
     baseUrl = 'https://api.openai.com/v1',
@@ -361,6 +363,7 @@ export class OpenAIAdapter implements ModelAdapter {
   ) {
     this.baseUrl = (baseUrl || 'https://api.openai.com/v1').trim().replace(/\/+$/, '');
     this.airaModel = (typeof airaModel === 'string' ? airaModel : '').trim().replace(/^["']|["']$/g, '') || airaModel;
+    this.modelName = String(this.airaModel);
     if (provider) {
       this.provider = provider;
     } else if (baseUrl.includes('integrate.api.nvidia.com')) {
@@ -386,10 +389,6 @@ export class OpenAIAdapter implements ModelAdapter {
       process.env.OPENAI_API_KEY
     ) || '';
     this.apiKey = rawKey.trim().replace(/^["']|["']$/g, '');
-  }
-
-  get modelName(): string {
-    return String(this.airaModel);
   }
 
   toJSON() {

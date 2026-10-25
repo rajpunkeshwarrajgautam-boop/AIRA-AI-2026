@@ -100,19 +100,23 @@ async function runEdgeAgentCertification(): Promise<void> {
       }
     });
     assert.equal(sessionRes.status(), 200, 'Session endpoint must return 200');
+    const sessionCookie = sessionRes.headers()['set-cookie'] || '';
     const sessionData = await sessionRes.json();
     assert.equal(sessionData.status, 'AUTHENTICATED', 'Session must be authenticated');
     console.log('Authenticated Principal:', JSON.stringify({ userId: sessionData.userId, sessionId: sessionData.sessionId }));
     console.log('PASS: Authenticated session established in Microsoft Edge context');
 
+    const commonHeaders: Record<string, string> = {
+      'Origin': targetBaseUrl,
+      'Content-Type': 'application/json',
+      'x-aira-csrf-protection': '1'
+    };
+    if (sessionCookie) commonHeaders['Cookie'] = sessionCookie;
+
     // STEP 4: Permission Enforcement: repo.read must fail closed for default workspace users
     console.log('\n[STEP 4] Verifying repo.read permission boundary (repo_status requires repo.read)...');
     const repoRes = await page.request.post(`${targetBaseUrl}/api/tools/execute`, {
-      headers: {
-        'Origin': targetBaseUrl,
-        'Content-Type': 'application/json',
-        'x-aira-csrf-protection': '1'
-      },
+      headers: commonHeaders,
       data: {
         toolId: 'tool_repo_status',
         input: {}
@@ -127,11 +131,7 @@ async function runEdgeAgentCertification(): Promise<void> {
     // STEP 5: Permission Boundary Guard: Verify write scope is STILL denied (defense in depth)
     console.log('\n[STEP 5] Verifying write permission boundary (files.write must still fail closed)...');
     const writeRes = await page.request.post(`${targetBaseUrl}/api/tools/execute`, {
-      headers: {
-        'Origin': targetBaseUrl,
-        'Content-Type': 'application/json',
-        'x-aira-csrf-protection': '1'
-      },
+      headers: commonHeaders,
       data: {
         toolId: 'tool_fs_write',
         input: { filePath: 'security_probe.txt', content: 'unauthorized_write' }
@@ -151,13 +151,13 @@ async function runEdgeAgentCertification(): Promise<void> {
       'Execute the calculator tool and confirm the result.'
     );
 
+    const streamHeaders: Record<string, string> = {
+      ...commonHeaders,
+      'Accept': 'text/event-stream'
+    };
+
     const streamRes = await page.request.post(`${targetBaseUrl}/api/chat/stream`, {
-      headers: {
-        'Origin': targetBaseUrl,
-        'Content-Type': 'application/json',
-        'x-aira-csrf-protection': '1',
-        'Accept': 'text/event-stream'
-      },
+      headers: streamHeaders,
       data: {
         prompt: promptText,
         model: 'aira-fast'
@@ -184,7 +184,7 @@ async function runEdgeAgentCertification(): Promise<void> {
           if (parsed.text) fullText += parsed.text;
           if (parsed.executedModel) executedModel = parsed.executedModel;
           if (parsed.provider) executedProvider = parsed.provider;
-          if (parsed.toolName === 'calculator' || parsed.toolId === 'tool_calculator') {
+          if (parsed.toolName === 'calculator' || parsed.toolId === 'tool_calculator' || parsed.id === 'calculator' || parsed.name === 'calculator') {
             hasToolCompleted = true;
           }
         } catch {}
