@@ -231,13 +231,16 @@ export class NeonAuthClient {
       this.currentSession.user?.id === session.user?.id &&
       this.currentSession.token === session.token;
 
+    const verificationChanged = isSameIdentity &&
+      (this.currentSession?.token === 'bff_session' && Boolean(this.currentSession.csrfToken)) !==
+      (session?.token === 'bff_session' && Boolean(session.csrfToken));
+
     if (isSameIdentity) {
-      // Same-identity renewal: update memory state in place
+      // Even a same-principal renewal may revoke session-bound CSRF proof.
       this.currentSession = session;
-      if (session?.csrfToken) {
-        this.csrfToken = session.csrfToken;
-      }
+      this.csrfToken = session?.csrfToken || null;
       this.persistSession(session);
+      if (verificationChanged) this.notifyListeners();
       return;
     }
 
