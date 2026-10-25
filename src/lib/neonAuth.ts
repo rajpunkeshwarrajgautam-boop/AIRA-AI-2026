@@ -245,11 +245,8 @@ export class NeonAuthClient {
     this.authEpoch++;
     this.activeRefresh = null;
     this.currentSession = session;
-    if (session?.csrfToken) {
-      this.csrfToken = session.csrfToken;
-    } else if (!session) {
-      this.csrfToken = null;
-    }
+    // A replacement principal must never inherit the previous account's CSRF token.
+    this.csrfToken = session?.csrfToken || null;
     this.abortActiveRequests('Session transitioned or invalidated');
     this.persistSession(session);
     this.notifyListeners();
@@ -1274,13 +1271,33 @@ export async function authenticatedApiFetch(
       headers.set('Authorization', `Bearer ${jwt}`);
     }
 
-    // Attach CSRF protection headers on state-changing requests
+    // Attach CSRF protection headers on state-changing requests.
     const method = (init.method || 'GET').toUpperCase();
     if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
-      if (!neonAuth.getCsrfToken()) {
-        await neonAuth.restoreSession().catch(() => null);
+      const requiresBffCsrf = initiatingSessionToken === 'bff_session' && !jwt;
+      if (requiresBffCsrf && !neonAuth.getCsrfToken()) {
+        await neonAuth.restoreSession();
       }
+
+      // Session restoration is asynchronous and may replace/revoke the principal.
+      // Repeat the identity check immediately before sending a mutating request.
+      if (
+        neonAuth.getAuthEpoch() !== initiatingEpoch ||
+        !neonAuth.isAuthenticated() ||
+        neonAuth.getCurrentUser()?.id !== initiatingUserId ||
+        neonAuth.getCurrentSession()?.token !== initiatingSessionToken
+      ) {
+        throw new AuthenticationRequiredError(
+          'Authentication identity changed during CSRF token restoration; dispatch aborted.'
+        );
+      }
+
       const csrf = neonAuth.getCsrfToken();
+      if (requiresBffCsrf && !csrf) {
+        throw new AuthenticationRequiredError(
+          'Verified CSRF token is unavailable for the active account session. Please retry signing in.'
+        );
+      }
       if (csrf && !headers.has('X-CSRF-Token')) {
         headers.set('X-CSRF-Token', csrf);
       }
