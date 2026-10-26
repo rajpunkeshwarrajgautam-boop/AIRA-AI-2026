@@ -21,9 +21,18 @@ export interface FirecrawlScrapeResult {
   quarantined: boolean;
 }
 
+export interface FirecrawlCrawlJob {
+  jobId: string;
+  url: string;
+  status: 'initiated' | 'active' | 'completed' | 'failed';
+  pages?: Array<{ url: string; title: string; markdown: string }>;
+  totalScraped?: number;
+}
+
 export interface FirecrawlCrawlResult {
   pages: Array<{ url: string; title: string; markdown: string }>;
   totalScraped: number;
+  jobId?: string;
 }
 
 export interface FirecrawlResearchReport {
@@ -33,7 +42,14 @@ export interface FirecrawlResearchReport {
   evidence: Array<{ url: string; title: string; excerpt: string }>;
   generatedAt: string;
   tenantId?: string;
+  status: 'SUCCESS' | 'EMPTY' | 'DISABLED' | 'FAILED';
 }
+
+// Prohibited internal ports that must not be probed via HTTP/HTTPS
+const PROHIBITED_PORTS = new Set([
+  21, 22, 23, 25, 53, 110, 111, 135, 137, 138, 139, 445, 1433, 1521, 2049,
+  2375, 2376, 3306, 5432, 6379, 8000, 8001, 8086, 9200, 11211, 27017, 28017
+]);
 
 export class FirecrawlResearchAdapter {
   private apiKey: string | null;
@@ -56,40 +72,134 @@ export class FirecrawlResearchAdapter {
   }
 
   /**
-   * SSRF Prevention & Safe URL Validation:
-   * Blocks access to loopback, link-local, private RFC1918 ranges, and cloud metadata services.
+   * SSRF Prevention & Multi-Layer Safe URL Validation:
+   * Blocks access to loopback, link-local, private RFC1918 ranges, cloud metadata,
+   * alternative IP representations (decimal/octal/hex), and dangerous internal ports.
+   *
+   * Note: Local validation blocks client-side dispatch of dangerous targets. Outbound requests
+   * sent to the hosted Firecrawl service are additionally subject to the provider's egress restrictions.
    */
   public isSafeUrl(urlString: string): boolean {
+    if (!urlString || typeof urlString !== 'string') {
+      return false;
+    }
+
     try {
-      const parsed = new URL(urlString);
+      const parsed = new URL(urlString.trim());
+
+      // Only allow http: and https: protocols
       if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
         return false;
       }
 
-      const host = parsed.hostname.toLowerCase();
+      // Block prohibited internal/database ports
+      if (parsed.port) {
+        const portNum = parseInt(parsed.port, 10);
+        if (PROHIBITED_PORTS.has(portNum)) {
+          return false;
+        }
+      }
 
-      // Block local/loopback
-      if (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host === '::1' || host === '[::1]') {
+      let host = parsed.hostname.toLowerCase().trim();
+
+      // Strip enclosing brackets for IPv6
+      if (host.startsWith('[') && host.endsWith(']')) {
+        host = host.slice(1, -1);
+      }
+
+      // Check common loopback & metadata names
+      if (
+        host === 'localhost' ||
+        host.endsWith('.localhost') ||
+        host === 'metadata.google.internal' ||
+        host === 'metadata' ||
+        host === 'instance-data'
+      ) {
         return false;
       }
 
-      // Block AWS/GCP/Azure link-local metadata
-      if (host === '169.254.169.254' || host === 'metadata.google.internal' || host === 'metadata') {
-        return false;
+      // Check IPv6 loopback, link-local, unique-local, and IPv4-mapped IPv6
+      if (host.includes(':')) {
+        // Pure IPv6 loopback
+        if (host === '::1' || /^0*(:0*)*:0*1$/.test(host)) {
+          return false;
+        }
+        // IPv6 link-local fe80::/10
+        if (/^fe[89ab]/i.test(host)) {
+          return false;
+        }
+        // IPv6 unique local fc00::/7 (fc00:: - fdff::)
+        if (/^f[cd]/i.test(host)) {
+          return false;
+        }
+        // IPv4-mapped IPv6 (::ffff:127.0.0.1, ::ffff:7f00:1, etc.)
+        const mappedMatch = host.match(/::ffff:(?:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})|([0-9a-f]{1,4}:[0-9a-f]{1,4}))$/i);
+        if (mappedMatch) {
+          if (mappedMatch[1]) {
+            host = mappedMatch[1]; // inspect as IPv4 below
+          } else {
+            return false; // Hex mapped IPv4 is prohibited
+          }
+        } else {
+          // General IPv6 address - if not public, reject
+          if (/^0*$/.test(host.replace(/:/g, ''))) return false; // ::0
+          return true;
+        }
       }
 
-      // Block IPv4 private address ranges (RFC 1918 & RFC 3927)
+      // Check integer or hex encoded IPv4 (e.g. 2130706433, 0x7f000001)
+      if (/^\d+$/.test(host)) {
+        const decIp = parseInt(host, 10);
+        if (decIp >= 0 && decIp <= 4294967295) {
+          const b1 = (decIp >> 24) & 255;
+          const b2 = (decIp >> 16) & 255;
+          const b3 = (decIp >> 8) & 255;
+          const b4 = decIp & 255;
+          host = `${b1}.${b2}.${b3}.${b4}`;
+        } else {
+          return false;
+        }
+      } else if (/^0x[0-9a-f]+$/i.test(host)) {
+        const hexIp = parseInt(host, 16);
+        if (hexIp >= 0 && hexIp <= 4294967295) {
+          const b1 = (hexIp >> 24) & 255;
+          const b2 = (hexIp >> 16) & 255;
+          const b3 = (hexIp >> 8) & 255;
+          const b4 = hexIp & 255;
+          host = `${b1}.${b2}.${b3}.${b4}`;
+        } else {
+          return false;
+        }
+      }
+
+      // Check dotted IPv4 address ranges
       const ipv4Match = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
       if (ipv4Match) {
         const octet1 = parseInt(ipv4Match[1], 10);
         const octet2 = parseInt(ipv4Match[2], 10);
+        const octet3 = parseInt(ipv4Match[3], 10);
+        const octet4 = parseInt(ipv4Match[4], 10);
 
-        if (octet1 === 10) return false; // 10.0.0.0/8
-        if (octet1 === 172 && octet2 >= 16 && octet2 <= 31) return false; // 172.16.0.0/12
-        if (octet1 === 192 && octet2 === 168) return false; // 192.168.0.0/16
-        if (octet1 === 127) return false; // 127.0.0.0/8
-        if (octet1 === 169 && octet2 === 254) return false; // 169.254.0.0/16
+        if ([octet1, octet2, octet3, octet4].some(o => o < 0 || o > 255)) {
+          return false;
+        }
+
+        // 0.0.0.0/8 (Current network)
         if (octet1 === 0) return false;
+        // 127.0.0.0/8 (Loopback)
+        if (octet1 === 127) return false;
+        // 10.0.0.0/8 (RFC 1918 Private)
+        if (octet1 === 10) return false;
+        // 172.16.0.0/12 (RFC 1918 Private)
+        if (octet1 === 172 && octet2 >= 16 && octet2 <= 31) return false;
+        // 192.168.0.0/16 (RFC 1918 Private)
+        if (octet1 === 192 && octet2 === 168) return false;
+        // 169.254.0.0/16 (RFC 3927 Link-local & Cloud Metadata)
+        if (octet1 === 169 && octet2 === 254) return false;
+        // 100.64.0.0/10 (RFC 6598 Carrier Grade NAT & Alibaba metadata 100.100.100.200)
+        if (octet1 === 100 && octet2 >= 64 && octet2 <= 127) return false;
+        // 255.255.255.255 (Broadcast)
+        if (octet1 === 255 && octet2 === 255 && octet3 === 255 && octet4 === 255) return false;
       }
 
       return true;
@@ -103,7 +213,7 @@ export class FirecrawlResearchAdapter {
    */
   public async search(
     query: string,
-    options?: { limit?: number; tenantId?: string }
+    options?: { limit?: number; tenantId?: string; signal?: AbortSignal }
   ): Promise<FirecrawlSearchResult[]> {
     if (!this.isEnabled()) {
       throw new Error('FIRECRAWL_DISABLED: Firecrawl research adapter is not enabled in this environment.');
@@ -114,7 +224,11 @@ export class FirecrawlResearchAdapter {
 
     const limit = Math.min(options?.limit ?? 5, 10);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timeout = setTimeout(() => controller.abort(new Error('FIRECRAWL_TIMEOUT')), this.timeoutMs);
+
+    if (options?.signal) {
+      options.signal.addEventListener('abort', () => controller.abort(options.signal?.reason), { once: true });
+    }
 
     try {
       const response = await fetch(`${this.baseUrl}/v1/search`, {
@@ -129,14 +243,33 @@ export class FirecrawlResearchAdapter {
       });
 
       if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          throw new Error(`FIRECRAWL_UNAUTHORIZED: Authentication failed (HTTP ${response.status}). Verify FIRECRAWL_API_KEY.`);
+        }
+        if (response.status === 429) {
+          throw new Error('FIRECRAWL_RATE_LIMITED: Firecrawl upstream rate limit exceeded (HTTP 429).');
+        }
+        if (response.status === 404) {
+          throw new Error('FIRECRAWL_NOT_FOUND: Firecrawl search endpoint not found (HTTP 404).');
+        }
+        if (response.status >= 500) {
+          throw new Error(`FIRECRAWL_SERVER_ERROR: Firecrawl upstream server error (HTTP ${response.status}).`);
+        }
         throw new Error(`Firecrawl search failed with HTTP ${response.status}`);
       }
 
-      const data = await response.json();
-      const results: FirecrawlSearchResult[] = [];
+      let data: any;
+      try {
+        data = await response.json();
+      } catch {
+        throw new Error('FIRECRAWL_MALFORMED_RESPONSE: Failed to parse upstream JSON response.');
+      }
 
-      for (const item of data?.data || []) {
-        if (item.url && this.isSafeUrl(item.url)) {
+      const results: FirecrawlSearchResult[] = [];
+      const items = Array.isArray(data?.data) ? data.data : [];
+
+      for (const item of items) {
+        if (item && item.url && this.isSafeUrl(item.url)) {
           results.push({
             title: item.title || item.url,
             url: item.url,
@@ -147,6 +280,11 @@ export class FirecrawlResearchAdapter {
       }
 
       return results;
+    } catch (err: any) {
+      if (err.name === 'AbortError' || controller.signal.aborted) {
+        throw new Error('FIRECRAWL_TIMEOUT_OR_CANCELLED: Firecrawl search request timed out or was cancelled.');
+      }
+      throw err;
     } finally {
       clearTimeout(timeout);
     }
@@ -157,7 +295,7 @@ export class FirecrawlResearchAdapter {
    */
   public async scrape(
     url: string,
-    options?: { tenantId?: string }
+    options?: { tenantId?: string; signal?: AbortSignal }
   ): Promise<FirecrawlScrapeResult> {
     if (!this.isEnabled()) {
       throw new Error('FIRECRAWL_DISABLED: Firecrawl research adapter is not enabled in this environment.');
@@ -168,7 +306,11 @@ export class FirecrawlResearchAdapter {
     }
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timeout = setTimeout(() => controller.abort(new Error('FIRECRAWL_TIMEOUT')), this.timeoutMs);
+
+    if (options?.signal) {
+      options.signal.addEventListener('abort', () => controller.abort(options.signal?.reason), { once: true });
+    }
 
     try {
       const response = await fetch(`${this.baseUrl}/v1/scrape`, {
@@ -183,10 +325,28 @@ export class FirecrawlResearchAdapter {
       });
 
       if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          throw new Error(`FIRECRAWL_UNAUTHORIZED: Authentication failed (HTTP ${response.status}). Verify FIRECRAWL_API_KEY.`);
+        }
+        if (response.status === 429) {
+          throw new Error('FIRECRAWL_RATE_LIMITED: Firecrawl upstream rate limit exceeded (HTTP 429).');
+        }
+        if (response.status === 404) {
+          throw new Error(`FIRECRAWL_NOT_FOUND: Target URL "${url}" or scrape endpoint not found (HTTP 404).`);
+        }
+        if (response.status >= 500) {
+          throw new Error(`FIRECRAWL_SERVER_ERROR: Firecrawl upstream server error (HTTP ${response.status}).`);
+        }
         throw new Error(`Firecrawl scrape failed with HTTP ${response.status}`);
       }
 
-      const data = await response.json();
+      let data: any;
+      try {
+        data = await response.json();
+      } catch {
+        throw new Error('FIRECRAWL_MALFORMED_RESPONSE: Failed to parse upstream scrape JSON response.');
+      }
+
       const markdown = data?.data?.markdown || '';
 
       return {
@@ -196,18 +356,25 @@ export class FirecrawlResearchAdapter {
         metadata: data?.data?.metadata || {},
         quarantined: true // Retained as untrusted external data
       };
+    } catch (err: any) {
+      if (err.name === 'AbortError' || controller.signal.aborted) {
+        throw new Error('FIRECRAWL_TIMEOUT_OR_CANCELLED: Firecrawl scrape request timed out or was cancelled.');
+      }
+      throw err;
     } finally {
       clearTimeout(timeout);
     }
   }
 
   /**
-   * Agent Mode: Bounded multi-page crawl.
+   * Agent Mode: Initiate bounded crawl job.
+   * Conforms to official Firecrawl v1 asynchronous crawl lifecycle:
+   * POST /v1/crawl returns a job identifier ({ id: string, url: string }).
    */
-  public async crawl(
+  public async initiateCrawl(
     url: string,
-    options?: { maxDepth?: number; limit?: number; tenantId?: string }
-  ): Promise<FirecrawlCrawlResult> {
+    options?: { maxDepth?: number; limit?: number; tenantId?: string; signal?: AbortSignal }
+  ): Promise<FirecrawlCrawlJob> {
     if (!this.isEnabled()) {
       throw new Error('FIRECRAWL_DISABLED: Firecrawl research adapter is not enabled in this environment.');
     }
@@ -220,7 +387,11 @@ export class FirecrawlResearchAdapter {
     const limit = Math.min(options?.limit ?? 5, 10);
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timeout = setTimeout(() => controller.abort(new Error('FIRECRAWL_TIMEOUT')), this.timeoutMs);
+
+    if (options?.signal) {
+      options.signal.addEventListener('abort', () => controller.abort(options.signal?.reason), { once: true });
+    }
 
     try {
       const response = await fetch(`${this.baseUrl}/v1/crawl`, {
@@ -235,19 +406,56 @@ export class FirecrawlResearchAdapter {
       });
 
       if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          throw new Error(`FIRECRAWL_UNAUTHORIZED: Authentication failed (HTTP ${response.status}).`);
+        }
+        if (response.status === 429) {
+          throw new Error('FIRECRAWL_RATE_LIMITED: Firecrawl crawl rate limit exceeded (HTTP 429).');
+        }
         throw new Error(`Firecrawl crawl initiation failed with HTTP ${response.status}`);
       }
 
       const data = await response.json();
-      const pages = (data?.data || []).map((p: any) => ({
-        url: p.url,
-        title: p.title || p.url,
-        markdown: (p.markdown || '').slice(0, 30000)
-      }));
+      const jobId = data?.id || data?.jobId || 'crawl_job_unknown';
 
       return {
-        pages,
-        totalScraped: pages.length
+        jobId,
+        url,
+        status: 'initiated'
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  /**
+   * Agent Mode: Bounded crawl execution.
+   */
+  public async crawl(
+    url: string,
+    options?: { maxDepth?: number; limit?: number; tenantId?: string; signal?: AbortSignal }
+  ): Promise<FirecrawlCrawlResult> {
+    if (!this.isEnabled()) {
+      throw new Error('FIRECRAWL_DISABLED: Firecrawl research adapter is not enabled in this environment.');
+    }
+
+    if (!this.isSafeUrl(url)) {
+      throw new Error(`SSRF_PROHIBITED: URL "${url}" violates internal IP/metadata boundary rules.`);
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(new Error('FIRECRAWL_TIMEOUT')), this.timeoutMs);
+
+    if (options?.signal) {
+      options.signal.addEventListener('abort', () => controller.abort(options.signal?.reason), { once: true });
+    }
+
+    try {
+      const job = await this.initiateCrawl(url, { ...options, signal: controller.signal });
+      return {
+        pages: [],
+        totalScraped: 0,
+        jobId: job.jobId
       };
     } finally {
       clearTimeout(timeout);
@@ -256,25 +464,63 @@ export class FirecrawlResearchAdapter {
 
   /**
    * Agent Mode: Multi-source research report generation.
+   * Truthful evidence synthesis: Never fabricates synthetic research evidence when disabled or empty.
    */
   public async generateResearchReport(
     query: string,
-    options?: { tenantId?: string }
+    options?: { tenantId?: string; signal?: AbortSignal }
   ): Promise<FirecrawlResearchReport> {
-    const searchResults = await this.search(query, { limit: 5, tenantId: options?.tenantId });
-    const evidence = searchResults.map(r => ({
-      url: r.url,
-      title: r.title,
-      excerpt: r.snippet.slice(0, 300)
-    }));
+    if (!this.isEnabled()) {
+      return {
+        query,
+        title: `Research Report: ${query}`,
+        executiveSummary: 'Firecrawl research adapter is disabled in this environment. No external web research was conducted.',
+        evidence: [],
+        generatedAt: new Date().toISOString(),
+        tenantId: options?.tenantId,
+        status: 'DISABLED'
+      };
+    }
 
-    return {
-      query,
-      title: `Research Report: ${query}`,
-      executiveSummary: `Synthesized analysis from ${evidence.length} authoritative web sources.`,
-      evidence,
-      generatedAt: new Date().toISOString(),
-      tenantId: options?.tenantId
-    };
+    try {
+      const searchResults = await this.search(query, { limit: 5, tenantId: options?.tenantId, signal: options?.signal });
+      const evidence = searchResults.map(r => ({
+        url: r.url,
+        title: r.title,
+        excerpt: r.snippet.slice(0, 300)
+      }));
+
+      if (evidence.length === 0) {
+        return {
+          query,
+          title: `Research Report: ${query}`,
+          executiveSummary: 'No external research evidence was returned for this query.',
+          evidence: [],
+          generatedAt: new Date().toISOString(),
+          tenantId: options?.tenantId,
+          status: 'EMPTY'
+        };
+      }
+
+      return {
+        query,
+        title: `Research Report: ${query}`,
+        executiveSummary: `Synthesized analysis from ${evidence.length} authoritative web sources.`,
+        evidence,
+        generatedAt: new Date().toISOString(),
+        tenantId: options?.tenantId,
+        status: 'SUCCESS'
+      };
+    } catch (err: any) {
+      return {
+        query,
+        title: `Research Report: ${query}`,
+        executiveSummary: `Research retrieval failed: ${err?.message || 'Unknown error'}.`,
+        evidence: [],
+        generatedAt: new Date().toISOString(),
+        tenantId: options?.tenantId,
+        status: 'FAILED'
+      };
+    }
   }
 }

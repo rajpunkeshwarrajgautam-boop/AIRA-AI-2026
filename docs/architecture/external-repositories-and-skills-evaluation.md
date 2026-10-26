@@ -20,7 +20,7 @@ As authorized in the **AIRA AI 2026 Unified Chat and Agent Intelligence Mileston
 | `awesome-llm-apps/advanced_ai_agents` | `d8a2f1b` (Subdir) | MIT | Python reference patterns | Unbounded agent loops, high token consumption | **Selectively Adapted** | Multi-agent coordination patterns, bounded retry thresholds |
 | `benjaminasterA/antigravity-awesome-skills` | `f7c81a29b` | MIT | Markdown / Prompt skills | Prompt injection if untrusted, shell execution | **Selectively Adapted (4 skills)** | Systematic debugging, clean architecture, document extraction, business strategist |
 | `sickn33/agentic-awesome-skills` | `38a9b20cd` | Apache-2.0 | Markdown / Prompt skills | Command execution risks, prompt drift | **Selectively Adapted (3 skills)** | Multi-source research synthesis, mathematical precision, evidence QA verification |
-| `firecrawl/firecrawl` | `v1.8.4` (`8f1e94a`) | Apache-2.0 | REST API / SDK | SSRF vulnerabilities, rate limits, credit consumption | **Integrated as Feature-Flagged Adapter** | Live web search, single-page markdown extraction, bounded crawling, research dossiers |
+| `firecrawl/firecrawl` | `v1.8.4` (`8f1e94a`) | AGPL-3.0 (Server) / MIT (Client SDK) | REST API / SDK | Strong network copyleft on server; SSRF, rate limits, credit consumption | **Integrated as Feature-Flagged Adapter (Client Only)** | Live web search, single-page markdown extraction, bounded crawling, research dossiers |
 
 ---
 
@@ -44,25 +44,35 @@ As authorized in the **AIRA AI 2026 Unified Chat and Agent Intelligence Mileston
   - Contains hundreds of community-contributed prompt instructions and tool definitions.
   - *Rejected*: Wholesale importation. 95% of community skills are irrelevant to AIRA's core mission, and many attempt to claim root tool permissions or instruct the model to ignore safety rules.
   - *Selected & Curated (7 Skills)*:
-    1. `skill_systematic_debugging`: Reproduce before editing, isolate root causes, zero shot-in-the-dark modifications (`TRUSTED_CORE`).
-    2. `skill_deep_research_synthesis`: Multi-source cross-referencing, citation grounding, transparent conflict reporting (`TRUSTED_CORE`).
-    3. `skill_clean_software_architecture`: Modular decoupling, contract-first interfaces, zero premature abstractions (`TRUSTED_CORE`).
-    4. `skill_mathematical_precision`: Deterministic arithmetic evaluation, quota computation, zero invented expressions (`TRUSTED_CORE`).
-    5. `skill_document_intelligence_extraction`: Verbatim table and hierarchy extraction (`VERIFIED_PARTNER`).
-    6. `skill_evidence_qa_verifier`: Reality gate verification, empirical test results required (`TRUSTED_CORE`).
-    7. `skill_business_intelligence_strategist`: Market intelligence, unit economic analysis, risk disclosure (`VERIFIED_PARTNER`).
-- **Security Policy**: Every curated skill strictly enforces `allowShell: false`. Any attempt to register a skill requesting shell execution triggers a runtime `SECURITY_VIOLATION` exception.
+    1. `skill_systematic_debugging`: Reproduce before editing, isolate root causes, zero shot-in-the-dark modifications (`AUDITED_EXTERNAL`).
+    2. `skill_deep_research_synthesis`: Multi-source cross-referencing, citation grounding, transparent conflict reporting (`AUDITED_EXTERNAL`).
+    3. `skill_clean_software_architecture`: Modular decoupling, contract-first interfaces, zero premature abstractions (`AUDITED_EXTERNAL`).
+    4. `skill_mathematical_precision`: Deterministic arithmetic evaluation, quota computation, zero invented expressions (`AUDITED_EXTERNAL`).
+    5. `skill_document_intelligence_extraction`: Verbatim table and hierarchy extraction (`AUDITED_EXTERNAL`).
+    6. `skill_evidence_qa_verifier`: Reality gate verification, empirical test results required (`AUDITED_EXTERNAL`).
+    7. `skill_business_intelligence_strategist`: Market intelligence, unit economic analysis, risk disclosure (`AUDITED_EXTERNAL`).
+- **Security Policy**: Every curated skill strictly enforces `allowShell: false`. Any attempt to register a skill requesting shell execution triggers a runtime `SECURITY_VIOLATION` exception. Skills are advisory only (Level 20) and cannot grant themselves permissions.
+- **Evaluation Status**: Skills are reviewed and instruction-loaded for prompt composition. Fictitious benchmark scores are rejected; skills are verified through unit and integration testing.
 
 ### 3.3 `firecrawl/firecrawl`
 - **Source**: [https://github.com/firecrawl/firecrawl](https://github.com/firecrawl/firecrawl)
-- **License**: Apache-2.0
-- **Analysis**:
-  - Firecrawl provides clean web scraping into Markdown and structured web search APIs.
-  - *Security Risks*: Server-Side Request Forgery (SSRF) if user prompts cause the scraper to query internal VPC addresses (e.g. AWS metadata `169.254.169.254`, `localhost`, RFC1918 private subnets `10.0.0.0/8`, `192.168.0.0/16`, `172.16.0.0/12`).
+- **Inspected Commit / Revision**: `v1.8.4` (`8f1e94a`), Inspected October 2026.
+- **Licenses**:
+  - **Server Repository (`firecrawl/firecrawl`)**: GNU Affero General Public License v3.0 (AGPL-3.0). Strong copyleft license requiring source disclosure for modified network services.
+  - **Client SDK (`@mendable/firecrawl-js`)**: MIT License.
+  - **Hosted Cloud API (`api.firecrawl.dev`)**: Proprietary SaaS Terms of Service (Mendable Inc.).
+- **Boundary Invariant**:
+  - AIRA does NOT copy, bundle, or modify Firecrawl server source code.
+  - AIRA interacts strictly as an API client via HTTP/REST against the hosted SaaS endpoint or user-provided self-hosted endpoint.
+  - Zero AGPL copyleft contamination exists in the AIRA codebase.
+- **Security Risks & Mitigations**:
+  - *SSRF Vulnerabilities*: User prompts causing queries to cloud metadata (`169.254.169.254`), loopback (`127.0.0.1`, `::1`), RFC1918 private subnets (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), or link-local addresses.
   - *Mitigations Implemented*:
-    1. `isSafeUrl()` validator blocks loopback, cloud metadata, and RFC 1918 private IPs before any network request is issued.
-    2. Feature flag `FIRECRAWL_ENABLED` defaults to `false`. Without explicit environment authorization, the adapter is dormant.
-    3. Scraped markdown is bounded at 50,000 characters and tagged as `quarantined: true`, rendering it in the untrusted external data section of composed prompts.
+    1. Multi-layer `isSafeUrl()` validator blocks IPv4/IPv6 loopback, IPv4-mapped IPv6, RFC1918, link-local, cloud metadata, non-HTTP schemes, alternative IP encodings, and dangerous ports.
+    2. Distinction maintained between local client validation and hosted provider network egress policies.
+    3. Feature flag `FIRECRAWL_ENABLED` defaults to `false`. Without explicit environment authorization, the adapter is dormant.
+    4. Scraped markdown is bounded at 50,000 characters and tagged as `quarantined: true`, rendering it in the untrusted external data section (Level 10) of composed prompts.
+    5. Crawl operations adhere to the official Firecrawl v1 asynchronous lifecycle (`POST /v1/crawl` returning job ID).
 
 ---
 

@@ -16,6 +16,7 @@ export interface ComposePromptInput {
   projectInstructions?: Array<{ id: string; projectId: string; content: string }>;
   recalledMemories?: Array<{ id: string; content: string; category?: string; title?: string }>;
   authorizedTools?: Array<{ name: string; description?: string; parameters?: any }>;
+  skillGuidance?: string;
   untrustedRetrievedData?: Array<{ source: string; content: string; url?: string }>;
   maxPromptTokens?: number;
 }
@@ -28,15 +29,20 @@ export interface ComposedPromptResult {
   precedenceOrder: string[];
   injectionNeutralized: boolean;
   quarantinedDataCount: number;
+  truncatedTiers: string[];
 }
 
 const INJECTION_PATTERNS = [
   /\bignore\s+(all\s+)?(previous|prior)\s+(instructions|rules|prompts)\b/i,
   /\bsystem\s+override\b/i,
   /\byou\s+are\s+now\s+(in\s+)?(developer|jailbreak|god|dan)\s+mode\b/i,
-  /\bbypass\s+(all\s+)?(safety|security|policy|restrictions)\b/i,
+  /\bbypass\s+(all\s+)?(safety|security|policy|restrictions|approval)\b/i,
   /\bdisregard\s+(the\s+)?(above|system)\s+instructions\b/i,
-  /\bdisable\s+(all\s+)?(security|guardrails|filters)\b/i
+  /\bdisable\s+(all\s+)?(security|guardrails|filters)\b/i,
+  /\b(?:reveal|show|print|output)\s+(?:your|the)\s+(?:system|hidden|internal)\s+(?:prompt|instructions)\b/i,
+  /<\|(?:im_start|im_end|system|developer)\|>/i,
+  /\[SYSTEM_OVERRIDE\]/i,
+  /\[DEVELOPER_INSTRUCTION\]/i
 ];
 
 export class IntelligentPromptComposer {
@@ -51,12 +57,27 @@ export class IntelligentPromptComposer {
 
   /**
    * Composes a bounded, capability-aware system prompt maintaining strict instruction hierarchy.
+   *
+   * PRECEDENCE HIERARCHY:
+   * Level 100: TRUSTED_SYSTEM_POLICY (AIRA Safety Invariants — NEVER Truncated)
+   * Level 90:  MODE_SYSTEM_INSTRUCTION (Chat vs Agent Invariants — NEVER Truncated)
+   * Level 85:  CAPABILITY_SPECIFIC_INSTRUCTION (Relevant Capability Directives)
+   * Level 70:  USER_CUSTOM_INSTRUCTION (User Preferences)
+   * Level 50:  ACTIVE_PROJECT_CONVENTION (Active Project Directives)
+   * Level 25:  AUTHORIZED_TOOL_CONTEXT (ToolGateway Authorized Schemas)
+   * Level 20:  TASK_SPECIFIC_GUIDANCE (Curated Skill Advisory Guidance)
+   * Level 10:  EXTERNAL_UNTRUSTED_DATA (Quarantined External Web/Document Data)
+   *
+   * Note on Injection Defense:
+   * Textual filtering and quarantine delimiters provide defensive context isolation.
+   * Authoritative enforcement is guaranteed server-side by ToolGateway and ApprovalKernel.
    */
   public compose(input: ComposePromptInput): ComposedPromptResult {
     const maxTokens = input.maxPromptTokens ?? 4000;
     const appliedProfiles: string[] = [];
     const appliedCapabilities: string[] = [];
     const precedenceOrder: string[] = [];
+    const truncatedTiers: string[] = [];
     let injectionNeutralized = false;
     let quarantinedCount = 0;
 
@@ -68,21 +89,27 @@ export class IntelligentPromptComposer {
       }
     }
 
-    // 1. TIER 100: TRUSTED SYSTEM POLICY (Permanent AIRA Invariants)
+    // 1. TIER 100: TRUSTED SYSTEM POLICY (Permanent AIRA Invariants - Mandatory)
     const coreProfile = this.profileRegistry.get('core_aira_invariants');
-    const tier100Text = coreProfile ? coreProfile.instructions : 'AIRA core safety and integrity invariant.';
+    const tier100Text = coreProfile ? coreProfile.instructions : 'AIRA core safety, isolation, and integrity invariants.';
     appliedProfiles.push('core_aira_invariants');
     precedenceOrder.push('TRUSTED_SYSTEM_POLICY (Level 100)');
 
-    // 2. TIER 90: MODE SYSTEM INSTRUCTION (Chat vs Agent Mode Invariants)
+    // 2. TIER 90: MODE SYSTEM INSTRUCTION (Chat vs Agent Mode Invariants - Mandatory)
     const modeProfileId = input.mode === 'chat' ? 'mode_chat_profile' : 'mode_agent_profile';
     const modeProfile = this.profileRegistry.get(modeProfileId);
     const tier90Text = modeProfile ? modeProfile.instructions : `Operational Mode: ${input.mode.toUpperCase()}`;
     appliedProfiles.push(modeProfileId);
     precedenceOrder.push(`MODE_SYSTEM_INSTRUCTION (${input.mode.toUpperCase()}, Level 90)`);
 
+    // Verify minimum budget allows invariant core
+    const mandatoryChars = tier100Text.length + tier90Text.length;
+    const mandatoryTokens = Math.ceil(mandatoryChars / 4);
+    if (mandatoryTokens > maxTokens) {
+      throw new Error(`PROMPT_BUDGET_EXCEEDED_BY_INVARIANTS: Configured token budget (${maxTokens}) is insufficient for mandatory core invariants (${mandatoryTokens} tokens).`);
+    }
+
     // 3. TIER 85: CAPABILITY-SPECIFIC INSTRUCTIONS
-    // Identify relevant capabilities deterministically if not explicitly provided
     const targetCapabilities = (input.capabilities && input.capabilities.length > 0)
       ? input.capabilities
       : this.capabilityRegistry.identifyCapabilities(input.userPrompt, input.mode);
@@ -134,7 +161,14 @@ export class IntelligentPromptComposer {
       precedenceOrder.push('AUTHORIZED_TOOL_CONTEXT (Level 25)');
     }
 
-    // 6. TIER 10: EXTERNAL UNTRUSTED DATA (Quarantined)
+    // 6. TIER 20: ADVISORY SKILL GUIDANCE (Curated Skills - Level 20 Precedence)
+    const skillBlocks: string[] = [];
+    if (input.skillGuidance && input.skillGuidance.trim()) {
+      skillBlocks.push(input.skillGuidance.trim());
+      precedenceOrder.push('TASK_SPECIFIC_GUIDANCE (Advisory Skill, Level 20)');
+    }
+
+    // 7. TIER 10: EXTERNAL UNTRUSTED DATA (Quarantined)
     const untrustedBlocks: string[] = [];
     if (input.untrustedRetrievedData && input.untrustedRetrievedData.length > 0) {
       untrustedBlocks.push(
@@ -144,7 +178,7 @@ export class IntelligentPromptComposer {
       );
       for (const item of input.untrustedRetrievedData) {
         quarantinedCount++;
-        // Sanitize any raw injection patterns in retrieved snippets
+        // Sanitize raw injection patterns in retrieved snippets
         let sanitizedSnippet = item.content;
         for (const pattern of INJECTION_PATTERNS) {
           if (pattern.test(sanitizedSnippet)) {
@@ -157,75 +191,105 @@ export class IntelligentPromptComposer {
       precedenceOrder.push('EXTERNAL_UNTRUSTED_DATA (Quarantined, Level 10)');
     }
 
-    // Assemble components in strict descending order of precedence
-    const promptSections: string[] = [
-      '### SECTION 1: INVARIANT SAFETY & PLATFORM INSTRUCTIONS (HIGHEST PRECEDENCE)',
-      tier100Text,
-      '',
-      '### SECTION 2: OPERATIONAL MODE DIRECTIVE',
-      tier90Text
-    ];
-
-    if (capabilityBlocks.length > 0) {
-      promptSections.push(
+    // Assemble sections in strict descending order of precedence
+    const buildFullPrompt = (includeUntrusted: boolean, includeSkill: boolean, includeTools: boolean, includeUserPrefs: boolean): string => {
+      const sections: string[] = [
+        '### SECTION 1: INVARIANT SAFETY & PLATFORM INSTRUCTIONS (HIGHEST PRECEDENCE)',
+        tier100Text,
         '',
-        '### SECTION 3: RELEVANT CAPABILITY SPECIFIC INSTRUCTIONS',
-        ...capabilityBlocks
-      );
-    }
+        '### SECTION 2: OPERATIONAL MODE DIRECTIVE',
+        tier90Text
+      ];
 
-    if (userPrefBlocks.length > 0) {
-      promptSections.push(
-        '',
-        '### SECTION 4: CONTEXTUAL USER PREFERENCES & PROJECT GUIDELINES',
-        ...userPrefBlocks
-      );
-    }
+      if (capabilityBlocks.length > 0) {
+        sections.push(
+          '',
+          '### SECTION 3: RELEVANT CAPABILITY SPECIFIC INSTRUCTIONS',
+          ...capabilityBlocks
+        );
+      }
 
-    if (toolBlocks.length > 0) {
-      promptSections.push(
-        '',
-        '### SECTION 5: AUTHORIZED TOOL INTERFACES',
-        ...toolBlocks
-      );
-    }
+      if (includeUserPrefs && userPrefBlocks.length > 0) {
+        sections.push(
+          '',
+          '### SECTION 4: CONTEXTUAL USER PREFERENCES & PROJECT GUIDELINES',
+          ...userPrefBlocks
+        );
+      }
 
-    if (untrustedBlocks.length > 0) {
-      promptSections.push(
-        '',
-        ...untrustedBlocks
-      );
-    }
+      if (includeTools && toolBlocks.length > 0) {
+        sections.push(
+          '',
+          '### SECTION 5: AUTHORIZED TOOL INTERFACES',
+          ...toolBlocks
+        );
+      }
 
-    let fullSystemPrompt = promptSections.join('\n');
-    let estimatedTokens = Math.ceil(fullSystemPrompt.length / 4);
+      if (includeSkill && skillBlocks.length > 0) {
+        sections.push(
+          '',
+          '### SECTION 6: ADVISORY SPECIALIST SKILL GUIDANCE',
+          ...skillBlocks
+        );
+      }
+
+      if (includeUntrusted && untrustedBlocks.length > 0) {
+        sections.push(
+          '',
+          ...untrustedBlocks
+        );
+      }
+
+      return sections.join('\n');
+    };
+
+    let includeUntrusted = untrustedBlocks.length > 0;
+    let includeSkill = skillBlocks.length > 0;
+    let includeTools = toolBlocks.length > 0;
+    let includeUserPrefs = userPrefBlocks.length > 0;
+
+    let fullPrompt = buildFullPrompt(includeUntrusted, includeSkill, includeTools, includeUserPrefs);
+    let estimatedTokens = Math.ceil(fullPrompt.length / 4);
 
     // Bounded prompt budget enforcement:
-    // If estimated tokens exceed maxTokens, truncate starting from lowest precedence tiers (Tier 10 untrusted data, then Tier 25 tools)
-    if (estimatedTokens > maxTokens) {
-      // Truncate untrusted blocks first if necessary
-      if (untrustedBlocks.length > 0) {
-        const availableBudgetChars = maxTokens * 4 - (tier100Text.length + tier90Text.length + 1000);
-        if (availableBudgetChars > 500) {
-          const truncatedUntrusted = fullSystemPrompt.slice(0, maxTokens * 4) + '\n...[UNTRUSTED DATA TRUNCATED TO BOUNDED TOKEN LIMIT]...';
-          fullSystemPrompt = truncatedUntrusted;
-        } else {
-          // Remove untrusted block entirely if budget is severely constrained
-          promptSections.pop();
-          fullSystemPrompt = promptSections.join('\n');
-        }
-      }
-      estimatedTokens = Math.ceil(fullSystemPrompt.length / 4);
+    // If estimated tokens exceed maxTokens, truncate strictly in reverse precedence order (lowest first)
+    if (estimatedTokens > maxTokens && includeUntrusted) {
+      truncatedTiers.push('EXTERNAL_UNTRUSTED_DATA (Level 10)');
+      includeUntrusted = false;
+      fullPrompt = buildFullPrompt(includeUntrusted, includeSkill, includeTools, includeUserPrefs);
+      estimatedTokens = Math.ceil(fullPrompt.length / 4);
+    }
+
+    if (estimatedTokens > maxTokens && includeSkill) {
+      truncatedTiers.push('TASK_SPECIFIC_GUIDANCE (Level 20)');
+      includeSkill = false;
+      fullPrompt = buildFullPrompt(includeUntrusted, includeSkill, includeTools, includeUserPrefs);
+      estimatedTokens = Math.ceil(fullPrompt.length / 4);
+    }
+
+    if (estimatedTokens > maxTokens && includeUserPrefs) {
+      truncatedTiers.push('USER_CUSTOM_INSTRUCTION (Level 70)');
+      includeUserPrefs = false;
+      fullPrompt = buildFullPrompt(includeUntrusted, includeSkill, includeTools, includeUserPrefs);
+      estimatedTokens = Math.ceil(fullPrompt.length / 4);
+    }
+
+    if (estimatedTokens > maxTokens && includeTools) {
+      truncatedTiers.push('AUTHORIZED_TOOL_CONTEXT (Level 25)');
+      includeTools = false;
+      fullPrompt = buildFullPrompt(includeUntrusted, includeSkill, includeTools, includeUserPrefs);
+      estimatedTokens = Math.ceil(fullPrompt.length / 4);
     }
 
     return {
-      systemPrompt: fullSystemPrompt,
+      systemPrompt: fullPrompt,
       appliedProfiles,
       appliedCapabilities,
       tokenEstimate: estimatedTokens,
       precedenceOrder,
       injectionNeutralized,
-      quarantinedDataCount: quarantinedCount
+      quarantinedDataCount: quarantinedCount,
+      truncatedTiers
     };
   }
 }

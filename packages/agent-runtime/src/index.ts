@@ -61,6 +61,38 @@ export function isRepositoryIntent(prompt: string): boolean {
          /\b(?:check|inspect|show|display|get)\s+(?:the\s+)?(?:git|repo|repository|codebase)\b/i.test(lower);
 }
 
+/**
+ * Deterministically extracts valid mathematical expressions from prompt text.
+ * Requires genuine arithmetic operator (+, -, *, /, ^) between numbers or inside formula parentheses.
+ * Rejects standalone numbers (e.g. years "2026", PR numbers), generic keywords without operators,
+ * and never invents default expressions.
+ */
+export function extractCalculatorExpression(prompt: string): string {
+  if (!prompt || typeof prompt !== 'string') return '';
+  const trimmed = prompt.trim();
+
+  // Pattern 1: Enclosed or complex formula with arithmetic operator between digits:
+  // e.g. "((16384 * 1024) / 4)" or "1024 * 4" or "40 + 2"
+  const formulaMatch = trimmed.match(/(?:\((?:[0-9+\-*/().^\s]+)\)|[0-9]+(?:\.[0-9]+)?\s*[-+*/^]\s*[0-9]+(?:\.[0-9]+)?(?:[0-9+\-*/().^\s]*))/);
+  if (formulaMatch && formulaMatch[0]) {
+    const cleaned = formulaMatch[0].replace(/[^0-9+\-*/().^ ]/g, '').replace(/[. ]+$/, '').trim();
+    if (cleaned.length > 0 && /[0-9]/.test(cleaned) && /[-+*/^]/.test(cleaned)) {
+      return cleaned;
+    }
+  }
+
+  // Pattern 2: Explicit keyword prefix with word boundary: calculate / compute / calculator / calc followed by arithmetic expression
+  const keywordMatch = trimmed.match(/\b(?:calculate|calculator|calc|compute)\b\s*:?\s*([0-9+\-*/().^]*[0-9]+[0-9+\-*/().^ ]*)/i);
+  if (keywordMatch && keywordMatch[1] && /[+\-*/^]/.test(keywordMatch[1])) {
+    const cleaned = keywordMatch[1].replace(/[^0-9+\-*/().^ ]/g, '').replace(/[. ]+$/, '').trim();
+    if (cleaned.length > 0 && /[0-9]/.test(cleaned) && /[-+*/^]/.test(cleaned)) {
+      return cleaned;
+    }
+  }
+
+  return '';
+}
+
 export class AgentRuntime extends EventEmitter {
   private eventStreams: Map<string, EventEmitter> = new Map();
   private inFlightRuns: Map<string, Run> = new Map();
@@ -802,20 +834,10 @@ export class AgentRuntime extends EventEmitter {
         } else if (run.prompt.toLowerCase().includes('git status') || run.prompt.toLowerCase().includes('repo status')) {
           selectedToolName = 'repo_git_status';
           selectedArgs = {};
-        } else if (/\b(?:calculate|calculator|calc|compute)\b|\b\d+\s*[-+*/]\s*\d+/i.test(run.prompt)) {
+        } else if (extractCalculatorExpression(run.prompt)) {
+          const calcExpr = extractCalculatorExpression(run.prompt);
           selectedToolName = 'calculator';
-          let rawExpr = '';
-          const exprWithOp = run.prompt.match(/(?:\(\s*)?[0-9]+\s*[-+*/^]\s*[0-9]+(?:[0-9+\-*/().^ ]*)/);
-          if (exprWithOp) {
-            rawExpr = exprWithOp[0];
-          } else {
-            const calcMatch = run.prompt.match(/\b(?:calculate|calculator|calc|compute)\b(?:\s+(?:the\s+)?(?:expression|result|value|quotient|sum|product|difference)?:?)?\s*:?\s*([0-9+\-*/().^]*[0-9]+[0-9+\-*/().^ ]*)/i);
-            if (calcMatch && /[+\-*/^]/.test(calcMatch[1])) {
-              rawExpr = calcMatch[1];
-            }
-          }
-          const sanitized = rawExpr.replace(/[^0-9+\-*/().^ ]/g, '').replace(/[. ]+$/, '').trim();
-          selectedArgs = { expression: sanitized };
+          selectedArgs = { expression: calcExpr };
         } else if (
           run.routingDecision?.sideEffectLevel === 'DESTRUCTIVE' ||
           run.prompt.toLowerCase().includes('shell') ||

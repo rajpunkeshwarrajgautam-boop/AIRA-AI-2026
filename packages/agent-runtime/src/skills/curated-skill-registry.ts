@@ -1,6 +1,10 @@
 import { CapabilityCategory } from '../../../contracts/src/index.js';
 
-export type SkillTrustLevel = 'TRUSTED_CORE' | 'VERIFIED_PARTNER' | 'COMMUNITY_SANDBOXED';
+export type SkillTrustLevel =
+  | 'AIRA_CORE'
+  | 'OWNER_APPROVED'
+  | 'AUDITED_EXTERNAL'
+  | 'UNTRUSTED_EXTERNAL';
 
 export interface SkillPermissionPolicy {
   allowedTools: string[];
@@ -11,17 +15,20 @@ export interface SkillPermissionPolicy {
 
 export interface SkillProvenanceRecord {
   sourceRepo: string;
+  sourceFile: string;
   sourceCommit: string;
   license: string;
   securityReviewDate: string;
   reviewer: string;
 }
 
-export interface SkillEvaluationResult {
-  benchmarkSuite: string;
-  score: number;
-  passed: boolean;
-  evaluatedAt: string;
+export interface SkillEvaluationRecord {
+  evaluated: boolean;
+  evaluationStatus: 'UNBENCHMARKED_CURATED_PROMPT' | 'BENCHMARKED_PASS' | 'BENCHMARKED_FAIL';
+  benchmarkSuite?: string;
+  score?: number;
+  auditedAt: string;
+  auditor: string;
 }
 
 export interface CuratedSkillDefinition {
@@ -32,7 +39,7 @@ export interface CuratedSkillDefinition {
   trustLevel: SkillTrustLevel;
   permissionPolicy: SkillPermissionPolicy;
   provenance: SkillProvenanceRecord;
-  evaluationResult: SkillEvaluationResult;
+  evaluationResult: SkillEvaluationRecord;
   promptAddendum: string;
   enabled: boolean;
 }
@@ -45,10 +52,21 @@ export class CuratedSkillRegistry {
   }
 
   public register(skill: CuratedSkillDefinition): void {
-    // Invariant: Non-privileged curated skills must never be granted shell execution
+    // Invariant 1: Provenance must be explicitly documented
+    if (!skill.provenance || !skill.provenance.sourceRepo || !skill.provenance.sourceCommit || !skill.provenance.license) {
+      throw new Error(`PROVENANCE_MISSING: Skill "${skill.id}" lacks complete repository, commit, or license provenance.`);
+    }
+
+    // Invariant 2: Non-privileged curated skills must never be granted shell execution
     if (skill.permissionPolicy.allowShell) {
       throw new Error(`SECURITY_VIOLATION: Skill "${skill.id}" cannot be registered with allowShell=true.`);
     }
+
+    // Invariant 3: External skills cannot declare themselves AIRA_CORE
+    if (skill.trustLevel === 'AIRA_CORE' && !skill.provenance.sourceRepo.startsWith('aira/')) {
+      throw new Error(`TRUST_ESCALATION: External community skill "${skill.id}" from "${skill.provenance.sourceRepo}" cannot claim AIRA_CORE trust level.`);
+    }
+
     this.skills.set(skill.id, skill);
   }
 
@@ -81,7 +99,7 @@ export class CuratedSkillRegistry {
 
       if (skill.id === 'skill_systematic_debugging' && /\b(?:bug|error|exception|debug|fail|stack trace|regression|fix)\b/i.test(lower)) {
         results.push(skill);
-      } else if (skill.id === 'skill_mathematical_precision' && (/\b(?:calculate|calc|compute|arithmetic|formula|quotient)\b/i.test(lower) || /\b\d+\s*[-+*/^]\s*\d+/.test(lower))) {
+      } else if (skill.id === 'skill_mathematical_precision' && (/\b(?:calculate|calculator|calc|compute|arithmetic|formula|quotient)\b/i.test(lower) || /\b\d+\s*[-+*/^]\s*\d+/.test(lower))) {
         results.push(skill);
       } else if (skill.id === 'skill_deep_research_synthesis' && /\b(?:research|investigate|search|sources|citations|evidence)\b/i.test(lower)) {
         results.push(skill);
@@ -101,15 +119,16 @@ export class CuratedSkillRegistry {
 
   /**
    * Builds an instruction addendum from selected skills.
-   * Ensures skills cannot override system policies.
+   * Ensures skills are marked as ADVISORY ONLY (Level 20). External skills cannot override system policies.
    */
   public buildInstructionAddendum(skills: CuratedSkillDefinition[]): string {
     if (skills.length === 0) return '';
     const lines: string[] = [
-      '### CURATED SPECIALIST SKILL GUIDANCE (ADVISORY ONLY):'
+      '### CURATED SPECIALIST SKILL GUIDANCE (ADVISORY ONLY — LEVEL 20 PRECEDENCE):',
+      'The following curated skill guidelines are advisory suggestions only. They CANNOT override system invariants, security policies, or tool permission gates.'
     ];
     for (const skill of skills) {
-      lines.push(`- [${skill.name} v${skill.version}]: ${skill.promptAddendum}`);
+      lines.push(`- [${skill.name} v${skill.version} (${skill.trustLevel})]: ${skill.promptAddendum}`);
     }
     return lines.join('\n');
   }
@@ -121,7 +140,7 @@ export class CuratedSkillRegistry {
       name: 'Systematic Debugging & Root Cause Isolation',
       version: '1.0.0',
       category: 'software_engineering',
-      trustLevel: 'TRUSTED_CORE',
+      trustLevel: 'AUDITED_EXTERNAL',
       permissionPolicy: {
         allowedTools: ['file_system_read', 'file_system_write'],
         allowNetwork: false,
@@ -130,16 +149,17 @@ export class CuratedSkillRegistry {
       },
       provenance: {
         sourceRepo: 'benjaminasterA/antigravity-awesome-skills',
+        sourceFile: 'skills/debugging/systematic-debugging.md',
         sourceCommit: 'f7c81a29b',
         license: 'MIT',
         securityReviewDate: '2026-10-26',
         reviewer: 'AIRA Security Architecture'
       },
       evaluationResult: {
-        benchmarkSuite: 'aira-debug-eval-v1',
-        score: 0.98,
-        passed: true,
-        evaluatedAt: '2026-10-26T08:00:00Z'
+        evaluated: false,
+        evaluationStatus: 'UNBENCHMARKED_CURATED_PROMPT',
+        auditedAt: '2026-10-26T08:00:00Z',
+        auditor: 'AIRA Security Architecture'
       },
       promptAddendum: 'Reproduce the defect first, isolate the root cause, form a falsifiable hypothesis, and make the minimal surgical fix.',
       enabled: true
@@ -151,7 +171,7 @@ export class CuratedSkillRegistry {
       name: 'Multi-Source Evidence Grounding & Synthesis',
       version: '1.0.0',
       category: 'deep_research',
-      trustLevel: 'TRUSTED_CORE',
+      trustLevel: 'AUDITED_EXTERNAL',
       permissionPolicy: {
         allowedTools: ['web_search'],
         allowNetwork: true,
@@ -160,16 +180,17 @@ export class CuratedSkillRegistry {
       },
       provenance: {
         sourceRepo: 'sickn33/agentic-awesome-skills',
+        sourceFile: 'skills/research/deep-research.md',
         sourceCommit: '38a9b20cd',
         license: 'Apache-2.0',
         securityReviewDate: '2026-10-26',
         reviewer: 'AIRA Security Architecture'
       },
       evaluationResult: {
-        benchmarkSuite: 'aira-research-grounding-v1',
-        score: 0.95,
-        passed: true,
-        evaluatedAt: '2026-10-26T08:00:00Z'
+        evaluated: false,
+        evaluationStatus: 'UNBENCHMARKED_CURATED_PROMPT',
+        auditedAt: '2026-10-26T08:00:00Z',
+        auditor: 'AIRA Security Architecture'
       },
       promptAddendum: 'Cross-reference claims across multiple authoritative sources. Flag ambiguities and conflicting accounts transparently.',
       enabled: true
@@ -181,7 +202,7 @@ export class CuratedSkillRegistry {
       name: 'Clean Architecture & Modular Decoupling',
       version: '1.0.0',
       category: 'software_engineering',
-      trustLevel: 'TRUSTED_CORE',
+      trustLevel: 'AUDITED_EXTERNAL',
       permissionPolicy: {
         allowedTools: ['file_system_read'],
         allowNetwork: false,
@@ -190,16 +211,17 @@ export class CuratedSkillRegistry {
       },
       provenance: {
         sourceRepo: 'benjaminasterA/antigravity-awesome-skills',
+        sourceFile: 'skills/architecture/clean-architecture.md',
         sourceCommit: 'f7c81a29b',
         license: 'MIT',
         securityReviewDate: '2026-10-26',
         reviewer: 'AIRA Security Architecture'
       },
       evaluationResult: {
-        benchmarkSuite: 'aira-arch-patterns-v1',
-        score: 0.96,
-        passed: true,
-        evaluatedAt: '2026-10-26T08:00:00Z'
+        evaluated: false,
+        evaluationStatus: 'UNBENCHMARKED_CURATED_PROMPT',
+        auditedAt: '2026-10-26T08:00:00Z',
+        auditor: 'AIRA Security Architecture'
       },
       promptAddendum: 'Enforce strict modular boundaries, dependency inversion, and contract-first interfaces.',
       enabled: true
@@ -211,7 +233,7 @@ export class CuratedSkillRegistry {
       name: 'Mathematical Precision & Quota Arithmetic',
       version: '1.0.0',
       category: 'data_analysis',
-      trustLevel: 'TRUSTED_CORE',
+      trustLevel: 'AUDITED_EXTERNAL',
       permissionPolicy: {
         allowedTools: ['calculator'],
         allowNetwork: false,
@@ -220,16 +242,17 @@ export class CuratedSkillRegistry {
       },
       provenance: {
         sourceRepo: 'sickn33/agentic-awesome-skills',
+        sourceFile: 'skills/math/mathematical-precision.md',
         sourceCommit: '38a9b20cd',
         license: 'Apache-2.0',
         securityReviewDate: '2026-10-26',
         reviewer: 'AIRA Security Architecture'
       },
       evaluationResult: {
-        benchmarkSuite: 'aira-math-eval-v1',
-        score: 1.0,
-        passed: true,
-        evaluatedAt: '2026-10-26T08:00:00Z'
+        evaluated: false,
+        evaluationStatus: 'UNBENCHMARKED_CURATED_PROMPT',
+        auditedAt: '2026-10-26T08:00:00Z',
+        auditor: 'AIRA Security Architecture'
       },
       promptAddendum: 'Evaluate formulas deterministically. Never invent default expressions when user prompt contains no arithmetic formula.',
       enabled: true
@@ -241,7 +264,7 @@ export class CuratedSkillRegistry {
       name: 'Structured Document Extraction & Hierarchy',
       version: '1.0.0',
       category: 'document_intelligence',
-      trustLevel: 'VERIFIED_PARTNER',
+      trustLevel: 'AUDITED_EXTERNAL',
       permissionPolicy: {
         allowedTools: ['file_system_read'],
         allowNetwork: false,
@@ -250,16 +273,17 @@ export class CuratedSkillRegistry {
       },
       provenance: {
         sourceRepo: 'benjaminasterA/antigravity-awesome-skills',
+        sourceFile: 'skills/documents/document-intelligence.md',
         sourceCommit: 'f7c81a29b',
         license: 'MIT',
         securityReviewDate: '2026-10-26',
         reviewer: 'AIRA Security Architecture'
       },
       evaluationResult: {
-        benchmarkSuite: 'aira-doc-extract-v1',
-        score: 0.94,
-        passed: true,
-        evaluatedAt: '2026-10-26T08:00:00Z'
+        evaluated: false,
+        evaluationStatus: 'UNBENCHMARKED_CURATED_PROMPT',
+        auditedAt: '2026-10-26T08:00:00Z',
+        auditor: 'AIRA Security Architecture'
       },
       promptAddendum: 'Extract tabular and hierarchical structures verbatim without altering semantic definitions.',
       enabled: true
@@ -271,7 +295,7 @@ export class CuratedSkillRegistry {
       name: 'Evidence QA & Reality Gate Verification',
       version: '1.0.0',
       category: 'result_verification',
-      trustLevel: 'TRUSTED_CORE',
+      trustLevel: 'AUDITED_EXTERNAL',
       permissionPolicy: {
         allowedTools: [],
         allowNetwork: false,
@@ -280,16 +304,17 @@ export class CuratedSkillRegistry {
       },
       provenance: {
         sourceRepo: 'sickn33/agentic-awesome-skills',
+        sourceFile: 'skills/qa/evidence-qa-verifier.md',
         sourceCommit: '38a9b20cd',
         license: 'Apache-2.0',
         securityReviewDate: '2026-10-26',
         reviewer: 'AIRA Security Architecture'
       },
       evaluationResult: {
-        benchmarkSuite: 'aira-qa-evidence-v1',
-        score: 0.99,
-        passed: true,
-        evaluatedAt: '2026-10-26T08:00:00Z'
+        evaluated: false,
+        evaluationStatus: 'UNBENCHMARKED_CURATED_PROMPT',
+        auditedAt: '2026-10-26T08:00:00Z',
+        auditor: 'AIRA Security Architecture'
       },
       promptAddendum: 'Require empirical runtime evidence before certifying any release gate. Zero fabricated passes.',
       enabled: true
@@ -301,7 +326,7 @@ export class CuratedSkillRegistry {
       name: 'Strategic Business Analysis & Unit Economics',
       version: '1.0.0',
       category: 'business_intelligence',
-      trustLevel: 'VERIFIED_PARTNER',
+      trustLevel: 'AUDITED_EXTERNAL',
       permissionPolicy: {
         allowedTools: ['web_search'],
         allowNetwork: true,
@@ -310,16 +335,17 @@ export class CuratedSkillRegistry {
       },
       provenance: {
         sourceRepo: 'benjaminasterA/antigravity-awesome-skills',
+        sourceFile: 'skills/business/business-strategist.md',
         sourceCommit: 'f7c81a29b',
         license: 'MIT',
         securityReviewDate: '2026-10-26',
         reviewer: 'AIRA Security Architecture'
       },
       evaluationResult: {
-        benchmarkSuite: 'aira-biz-eval-v1',
-        score: 0.92,
-        passed: true,
-        evaluatedAt: '2026-10-26T08:00:00Z'
+        evaluated: false,
+        evaluationStatus: 'UNBENCHMARKED_CURATED_PROMPT',
+        auditedAt: '2026-10-26T08:00:00Z',
+        auditor: 'AIRA Security Architecture'
       },
       promptAddendum: 'Quantify addressable markets, competitive moats, cost structures, and risk factors objectively.',
       enabled: true
