@@ -27,9 +27,11 @@ export interface ComposedPromptResult {
   appliedCapabilities: string[];
   tokenEstimate: number;
   precedenceOrder: string[];
-  injectionNeutralized: boolean;
+  injectionPatternDetected: boolean;
+  injectionNeutralized: boolean; // Retained for backward-compat; signifies pattern detection & isolation
   quarantinedDataCount: number;
   truncatedTiers: string[];
+  securityNote: string;
 }
 
 const INJECTION_PATTERNS = [
@@ -44,6 +46,34 @@ const INJECTION_PATTERNS = [
   /\[SYSTEM_OVERRIDE\]/i,
   /\[DEVELOPER_INSTRUCTION\]/i
 ];
+
+/**
+ * Estimates token count conservatively.
+ * - Standard English ASCII averages ~3.7-4.0 characters per token.
+ * - Non-ASCII characters (e.g. CJK, Cyrillic, emojis) typically tokenize as 1-2.5 tokens per char in BPE encoders.
+ * - Whitespace and punctuation boundaries are accounted for.
+ */
+export function estimatePromptTokens(text: string): number {
+  if (!text || text.length === 0) return 0;
+
+  let nonAscii = 0;
+  let ascii = 0;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code > 127) {
+      nonAscii++;
+    } else {
+      ascii++;
+    }
+  }
+
+  // Conservative allocation:
+  // ASCII: ceil(chars / 3.8)
+  // Non-ASCII: ceil(chars * 1.5)
+  const asciiTokens = Math.ceil(ascii / 3.8);
+  const nonAsciiTokens = Math.ceil(nonAscii * 1.5);
+  return Math.max(1, asciiTokens + nonAsciiTokens);
+}
 
 export class IntelligentPromptComposer {
   private instructionResolver: InstructionResolver;
@@ -61,16 +91,17 @@ export class IntelligentPromptComposer {
    * PRECEDENCE HIERARCHY:
    * Level 100: TRUSTED_SYSTEM_POLICY (AIRA Safety Invariants — NEVER Truncated)
    * Level 90:  MODE_SYSTEM_INSTRUCTION (Chat vs Agent Invariants — NEVER Truncated)
-   * Level 85:  CAPABILITY_SPECIFIC_INSTRUCTION (Relevant Capability Directives)
-   * Level 70:  USER_CUSTOM_INSTRUCTION (User Preferences)
-   * Level 50:  ACTIVE_PROJECT_CONVENTION (Active Project Directives)
-   * Level 25:  AUTHORIZED_TOOL_CONTEXT (ToolGateway Authorized Schemas)
-   * Level 20:  TASK_SPECIFIC_GUIDANCE (Curated Skill Advisory Guidance)
-   * Level 10:  EXTERNAL_UNTRUSTED_DATA (Quarantined External Web/Document Data)
+   * Level 85:  CAPABILITY_SPECIFIC_INSTRUCTION (Relevant Capability Directives — Truncatable under budget pressure)
+   * Level 70:  USER_CUSTOM_INSTRUCTION (User Preferences — Truncatable)
+   * Level 50:  ACTIVE_PROJECT_CONVENTION (Active Project Directives — Truncatable)
+   * Level 25:  AUTHORIZED_TOOL_CONTEXT (ToolGateway Authorized Schemas — Truncatable)
+   * Level 20:  TASK_SPECIFIC_GUIDANCE (Curated Skill Advisory Guidance — Truncatable)
+   * Level 10:  EXTERNAL_UNTRUSTED_DATA (Quarantined External Web/Document Data — Truncatable First)
    *
    * Note on Injection Defense:
-   * Textual filtering and quarantine delimiters provide defensive context isolation.
-   * Authoritative enforcement is guaranteed server-side by ToolGateway and ApprovalKernel.
+   * Textual filtering and quarantine delimiters provide defensive context isolation and pattern detection.
+   * Regex matching does NOT represent absolute prompt injection prevention.
+   * Authoritative side-effect control is strictly enforced server-side by ToolGateway and ApprovalKernel.
    */
   public compose(input: ComposePromptInput): ComposedPromptResult {
     const maxTokens = input.maxPromptTokens ?? 4000;
@@ -78,13 +109,13 @@ export class IntelligentPromptComposer {
     const appliedCapabilities: string[] = [];
     const precedenceOrder: string[] = [];
     const truncatedTiers: string[] = [];
-    let injectionNeutralized = false;
+    let injectionPatternDetected = false;
     let quarantinedCount = 0;
 
     // Check for prompt injection in user input or custom instructions
     for (const pattern of INJECTION_PATTERNS) {
       if (pattern.test(input.userPrompt) || (input.customInstructions && pattern.test(input.customInstructions))) {
-        injectionNeutralized = true;
+        injectionPatternDetected = true;
         break;
       }
     }
@@ -103,10 +134,16 @@ export class IntelligentPromptComposer {
     precedenceOrder.push(`MODE_SYSTEM_INSTRUCTION (${input.mode.toUpperCase()}, Level 90)`);
 
     // Verify minimum budget allows invariant core
-    const mandatoryChars = tier100Text.length + tier90Text.length;
-    const mandatoryTokens = Math.ceil(mandatoryChars / 4);
+    const mandatoryCorePrompt = [
+      '### SECTION 1: INVARIANT SAFETY & PLATFORM INSTRUCTIONS (HIGHEST PRECEDENCE)',
+      tier100Text,
+      '',
+      '### SECTION 2: OPERATIONAL MODE DIRECTIVE',
+      tier90Text
+    ].join('\n');
+    const mandatoryTokens = estimatePromptTokens(mandatoryCorePrompt);
     if (mandatoryTokens > maxTokens) {
-      throw new Error(`PROMPT_BUDGET_EXCEEDED_BY_INVARIANTS: Configured token budget (${maxTokens}) is insufficient for mandatory core invariants (${mandatoryTokens} tokens).`);
+      throw new Error(`PROMPT_BUDGET_EXCEEDED_BY_INVARIANTS: Configured token budget (${maxTokens}) is insufficient for mandatory core invariants (${mandatoryTokens} tokens required).`);
     }
 
     // 3. TIER 85: CAPABILITY-SPECIFIC INSTRUCTIONS
@@ -183,7 +220,7 @@ export class IntelligentPromptComposer {
         for (const pattern of INJECTION_PATTERNS) {
           if (pattern.test(sanitizedSnippet)) {
             sanitizedSnippet = sanitizedSnippet.replace(pattern, '[INJECTION_FILTERED]');
-            injectionNeutralized = true;
+            injectionPatternDetected = true;
           }
         }
         untrustedBlocks.push(`Source: ${item.source}${item.url ? ` (${item.url})` : ''}\nContent:\n${sanitizedSnippet}\n---`);
@@ -192,7 +229,13 @@ export class IntelligentPromptComposer {
     }
 
     // Assemble sections in strict descending order of precedence
-    const buildFullPrompt = (includeUntrusted: boolean, includeSkill: boolean, includeTools: boolean, includeUserPrefs: boolean): string => {
+    const buildFullPrompt = (
+      includeUntrusted: boolean,
+      includeSkill: boolean,
+      includeTools: boolean,
+      includeUserPrefs: boolean,
+      includeCapabilities: boolean
+    ): string => {
       const sections: string[] = [
         '### SECTION 1: INVARIANT SAFETY & PLATFORM INSTRUCTIONS (HIGHEST PRECEDENCE)',
         tier100Text,
@@ -201,7 +244,7 @@ export class IntelligentPromptComposer {
         tier90Text
       ];
 
-      if (capabilityBlocks.length > 0) {
+      if (includeCapabilities && capabilityBlocks.length > 0) {
         sections.push(
           '',
           '### SECTION 3: RELEVANT CAPABILITY SPECIFIC INSTRUCTIONS',
@@ -247,49 +290,71 @@ export class IntelligentPromptComposer {
     let includeSkill = skillBlocks.length > 0;
     let includeTools = toolBlocks.length > 0;
     let includeUserPrefs = userPrefBlocks.length > 0;
+    let includeCapabilities = capabilityBlocks.length > 0;
 
-    let fullPrompt = buildFullPrompt(includeUntrusted, includeSkill, includeTools, includeUserPrefs);
-    let estimatedTokens = Math.ceil(fullPrompt.length / 4);
+    let fullPrompt = buildFullPrompt(includeUntrusted, includeSkill, includeTools, includeUserPrefs, includeCapabilities);
+    let estimatedTokens = estimatePromptTokens(fullPrompt);
 
     // Bounded prompt budget enforcement:
-    // If estimated tokens exceed maxTokens, truncate strictly in reverse precedence order (lowest first)
+    // Truncate strictly in reverse precedence order (lowest priority first)
     if (estimatedTokens > maxTokens && includeUntrusted) {
       truncatedTiers.push('EXTERNAL_UNTRUSTED_DATA (Level 10)');
       includeUntrusted = false;
-      fullPrompt = buildFullPrompt(includeUntrusted, includeSkill, includeTools, includeUserPrefs);
-      estimatedTokens = Math.ceil(fullPrompt.length / 4);
+      fullPrompt = buildFullPrompt(includeUntrusted, includeSkill, includeTools, includeUserPrefs, includeCapabilities);
+      estimatedTokens = estimatePromptTokens(fullPrompt);
     }
 
     if (estimatedTokens > maxTokens && includeSkill) {
       truncatedTiers.push('TASK_SPECIFIC_GUIDANCE (Level 20)');
       includeSkill = false;
-      fullPrompt = buildFullPrompt(includeUntrusted, includeSkill, includeTools, includeUserPrefs);
-      estimatedTokens = Math.ceil(fullPrompt.length / 4);
-    }
-
-    if (estimatedTokens > maxTokens && includeUserPrefs) {
-      truncatedTiers.push('USER_CUSTOM_INSTRUCTION (Level 70)');
-      includeUserPrefs = false;
-      fullPrompt = buildFullPrompt(includeUntrusted, includeSkill, includeTools, includeUserPrefs);
-      estimatedTokens = Math.ceil(fullPrompt.length / 4);
+      fullPrompt = buildFullPrompt(includeUntrusted, includeSkill, includeTools, includeUserPrefs, includeCapabilities);
+      estimatedTokens = estimatePromptTokens(fullPrompt);
     }
 
     if (estimatedTokens > maxTokens && includeTools) {
       truncatedTiers.push('AUTHORIZED_TOOL_CONTEXT (Level 25)');
       includeTools = false;
-      fullPrompt = buildFullPrompt(includeUntrusted, includeSkill, includeTools, includeUserPrefs);
-      estimatedTokens = Math.ceil(fullPrompt.length / 4);
+      fullPrompt = buildFullPrompt(includeUntrusted, includeSkill, includeTools, includeUserPrefs, includeCapabilities);
+      estimatedTokens = estimatePromptTokens(fullPrompt);
     }
+
+    if (estimatedTokens > maxTokens && includeUserPrefs) {
+      truncatedTiers.push('USER_CUSTOM_INSTRUCTION & PROJECT_CONVENTION (Levels 70/50)');
+      includeUserPrefs = false;
+      fullPrompt = buildFullPrompt(includeUntrusted, includeSkill, includeTools, includeUserPrefs, includeCapabilities);
+      estimatedTokens = estimatePromptTokens(fullPrompt);
+    }
+
+    if (estimatedTokens > maxTokens && includeCapabilities) {
+      truncatedTiers.push('CAPABILITY_SPECIFIC_INSTRUCTION (Level 85)');
+      includeCapabilities = false;
+      fullPrompt = buildFullPrompt(includeUntrusted, includeSkill, includeTools, includeUserPrefs, includeCapabilities);
+      estimatedTokens = estimatePromptTokens(fullPrompt);
+    }
+
+    // FINAL HARD BUDGET REJECTION:
+    // Never silently return an over-budget prompt. If mandatory invariants alone or remaining content exceeds maxTokens, fail explicitly.
+    if (estimatedTokens > maxTokens) {
+      throw new Error(
+        `PROMPT_BUDGET_EXCEEDED: Composed prompt of ${estimatedTokens} tokens exceeds budget of ${maxTokens} tokens even after truncating all optional tiers (Levels 10, 20, 25, 70/50, 85). Mandatory platform and mode invariants require at least ${mandatoryTokens} tokens.`
+      );
+    }
+
+    const securityNote = injectionPatternDetected
+      ? 'Adversarial injection patterns were detected in untrusted inputs and quarantined with defensive delimiters. Authoritative side-effect control is strictly enforced server-side by ToolGateway and ApprovalKernel.'
+      : 'Standard defensive boundary active. ToolGateway and ApprovalKernel enforce execution authorization independently of prompt text.';
 
     return {
       systemPrompt: fullPrompt,
       appliedProfiles,
-      appliedCapabilities,
+      appliedCapabilities: includeCapabilities ? appliedCapabilities : [],
       tokenEstimate: estimatedTokens,
       precedenceOrder,
-      injectionNeutralized,
+      injectionPatternDetected,
+      injectionNeutralized: injectionPatternDetected,
       quarantinedDataCount: quarantinedCount,
-      truncatedTiers
+      truncatedTiers,
+      securityNote
     };
   }
 }

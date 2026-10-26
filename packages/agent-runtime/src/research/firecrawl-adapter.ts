@@ -73,11 +73,21 @@ export class FirecrawlResearchAdapter {
 
   /**
    * SSRF Prevention & Multi-Layer Safe URL Validation:
-   * Blocks access to loopback, link-local, private RFC1918 ranges, cloud metadata,
-   * alternative IP representations (decimal/octal/hex), and dangerous internal ports.
    *
-   * Note: Local validation blocks client-side dispatch of dangerous targets. Outbound requests
-   * sent to the hosted Firecrawl service are additionally subject to the provider's egress restrictions.
+   * AIRA-SIDE CHECKS (Local Pre-Dispatch Boundary):
+   * - Restricts protocols strictly to http: and https:
+   * - Blocks access to loopback (localhost, 127.0.0.0/8, ::1, ::ffff:127.0.0.1)
+   * - Blocks link-local addresses (169.254.0.0/16, fe80::/10)
+   * - Blocks private RFC 1918 ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
+   * - Blocks cloud provider metadata endpoints (169.254.169.254, 100.100.100.200, metadata.google.internal)
+   * - Rejects alternative IP representations (integer, hex, octal obfuscation)
+   * - Blocks probing of prohibited internal/database ports (22, 2375, 3306, 5432, 6379, 8000, 9200, etc.)
+   *
+   * SECURITY BOUNDARY & RESIDUAL LIMITATIONS:
+   * - Local syntactic inspection cannot synchronously detect DNS rebinding or subsequent HTTP 3xx
+   *   redirect hops without an in-flight forward proxy / DNS resolver.
+   * - When requests are delegated to Firecrawl's hosted cloud service, network egress restrictions
+   *   and redirect sandboxing are enforced by Firecrawl's hosted infrastructure.
    */
   public isSafeUrl(urlString: string): boolean {
     if (!urlString || typeof urlString !== 'string') {
@@ -461,6 +471,82 @@ export class FirecrawlResearchAdapter {
       clearTimeout(timeout);
     }
   }
+
+  /**
+   * Agent Mode: Retrieve status and pages from an ongoing or completed crawl job.
+   * Conforms to official Firecrawl v1 asynchronous crawl polling: GET /v1/crawl/{jobId}
+   */
+  public async getCrawlStatus(
+    jobId: string,
+    options?: { signal?: AbortSignal }
+  ): Promise<FirecrawlCrawlJob> {
+    if (!this.isEnabled()) {
+      throw new Error('FIRECRAWL_DISABLED: Firecrawl research adapter is not enabled in this environment.');
+    }
+
+    if (!jobId || typeof jobId !== 'string') {
+      throw new Error('INVALID_JOB_ID: A valid crawl jobId must be provided.');
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(new Error('FIRECRAWL_TIMEOUT')), this.timeoutMs);
+
+    if (options?.signal) {
+      options.signal.addEventListener('abort', () => controller.abort(options.signal?.reason), { once: true });
+    }
+
+    try {
+      const response = await fetch(`${this.baseUrl}/v1/crawl/${encodeURIComponent(jobId)}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`
+        },
+        signal: controller.signal
+      });
+
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          throw new Error(`FIRECRAWL_UNAUTHORIZED: Authentication failed (HTTP ${response.status}).`);
+        }
+        if (response.status === 404) {
+          throw new Error(`FIRECRAWL_NOT_FOUND: Crawl job "${jobId}" not found (HTTP 404).`);
+        }
+        throw new Error(`Firecrawl get crawl status failed with HTTP ${response.status}`);
+      }
+
+      const data: any = await response.json();
+      const statusRaw = data?.status;
+      const status: 'initiated' | 'active' | 'completed' | 'failed' =
+        statusRaw === 'completed' ? 'completed'
+        : statusRaw === 'scraping' || statusRaw === 'active' ? 'active'
+        : statusRaw === 'failed' ? 'failed'
+        : 'initiated';
+
+      const pages: Array<{ url: string; title: string; markdown: string }> = [];
+      if (Array.isArray(data?.data)) {
+        for (const item of data.data) {
+          if (item && item.markdown) {
+            pages.push({
+              url: item.url || '',
+              title: item.metadata?.title || item.title || item.url || '',
+              markdown: (item.markdown || '').slice(0, 50000)
+            });
+          }
+        }
+      }
+
+      return {
+        jobId,
+        url: data?.url || '',
+        status,
+        pages,
+        totalScraped: data?.total || pages.length
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
 
   /**
    * Agent Mode: Multi-source research report generation.

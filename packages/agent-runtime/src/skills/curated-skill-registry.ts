@@ -16,8 +16,10 @@ export interface SkillPermissionPolicy {
 export interface SkillProvenanceRecord {
   sourceRepo: string;
   sourceFile: string;
-  sourceCommit: string;
+  sourceCommit: string; // Must be full 40-character git commit SHA
   license: string;
+  provenanceType: 'VERIFIED_UPSTREAM_PROMPT' | 'AIRA_ADAPTED_UPSTREAM' | 'AIRA_AUTHORED_GUIDANCE';
+  verificationStatus: 'VERIFIED' | 'UNVERIFIED';
   securityReviewDate: string;
   reviewer: string;
 }
@@ -57,12 +59,22 @@ export class CuratedSkillRegistry {
       throw new Error(`PROVENANCE_MISSING: Skill "${skill.id}" lacks complete repository, commit, or license provenance.`);
     }
 
-    // Invariant 2: Non-privileged curated skills must never be granted shell execution
+    // Invariant 2: Provenance commit SHA must be the full 40-character SHA (no abbreviated SHAs)
+    if (!/^[0-9a-f]{40}$/i.test(skill.provenance.sourceCommit)) {
+      throw new Error(`PROVENANCE_SHA_INVALID: Skill "${skill.id}" requires a verified full 40-character commit SHA, received "${skill.provenance.sourceCommit}".`);
+    }
+
+    // Invariant 3: Unverified skills must remain strictly disabled
+    if (skill.provenance.verificationStatus === 'UNVERIFIED' && skill.enabled) {
+      throw new Error(`UNVERIFIED_SKILL_CANNOT_BE_ENABLED: Skill "${skill.id}" is marked UNVERIFIED and must remain disabled until proven.`);
+    }
+
+    // Invariant 4: Non-privileged curated skills must never be granted shell execution
     if (skill.permissionPolicy.allowShell) {
       throw new Error(`SECURITY_VIOLATION: Skill "${skill.id}" cannot be registered with allowShell=true.`);
     }
 
-    // Invariant 3: External skills cannot declare themselves AIRA_CORE
+    // Invariant 5: External skills cannot declare themselves AIRA_CORE
     if (skill.trustLevel === 'AIRA_CORE' && !skill.provenance.sourceRepo.startsWith('aira/')) {
       throw new Error(`TRUST_ESCALATION: External community skill "${skill.id}" from "${skill.provenance.sourceRepo}" cannot claim AIRA_CORE trust level.`);
     }
@@ -134,6 +146,10 @@ export class CuratedSkillRegistry {
   }
 
   private registerCuratedBuiltIns(): void {
+    // Verified Upstream Commit SHAs (Inspected from live GitHub repository trees)
+    const BENJAMINASTERA_COMMIT_SHA = 'bca2b967b5c8ff14b8c02ba5e99f5646cdb3ca89';
+    const SICKN33_COMMIT_SHA = 'e8d346bcb691225fb6ae51a49c353bcedb2ef61d';
+
     // 1. Systematic Debugging (antigravity-awesome-skills)
     this.register({
       id: 'skill_systematic_debugging',
@@ -149,9 +165,11 @@ export class CuratedSkillRegistry {
       },
       provenance: {
         sourceRepo: 'benjaminasterA/antigravity-awesome-skills',
-        sourceFile: 'skills/debugging/systematic-debugging.md',
-        sourceCommit: 'f7c81a29b',
+        sourceFile: 'skills/systematic-debugging/SKILL.md',
+        sourceCommit: BENJAMINASTERA_COMMIT_SHA,
         license: 'MIT',
+        provenanceType: 'VERIFIED_UPSTREAM_PROMPT',
+        verificationStatus: 'VERIFIED',
         securityReviewDate: '2026-10-26',
         reviewer: 'AIRA Security Architecture'
       },
@@ -165,7 +183,7 @@ export class CuratedSkillRegistry {
       enabled: true
     });
 
-    // 2. Deep Research Synthesis (agentic-awesome-skills)
+    // 2. Deep Research Synthesis (antigravity-awesome-skills)
     this.register({
       id: 'skill_deep_research_synthesis',
       name: 'Multi-Source Evidence Grounding & Synthesis',
@@ -179,10 +197,12 @@ export class CuratedSkillRegistry {
         allowShell: false
       },
       provenance: {
-        sourceRepo: 'sickn33/agentic-awesome-skills',
-        sourceFile: 'skills/research/deep-research.md',
-        sourceCommit: '38a9b20cd',
-        license: 'Apache-2.0',
+        sourceRepo: 'benjaminasterA/antigravity-awesome-skills',
+        sourceFile: 'skills/deep-research/SKILL.md',
+        sourceCommit: BENJAMINASTERA_COMMIT_SHA,
+        license: 'MIT',
+        provenanceType: 'VERIFIED_UPSTREAM_PROMPT',
+        verificationStatus: 'VERIFIED',
         securityReviewDate: '2026-10-26',
         reviewer: 'AIRA Security Architecture'
       },
@@ -211,9 +231,11 @@ export class CuratedSkillRegistry {
       },
       provenance: {
         sourceRepo: 'benjaminasterA/antigravity-awesome-skills',
-        sourceFile: 'skills/architecture/clean-architecture.md',
-        sourceCommit: 'f7c81a29b',
+        sourceFile: 'skills/software-architecture/SKILL.md',
+        sourceCommit: BENJAMINASTERA_COMMIT_SHA,
         license: 'MIT',
+        provenanceType: 'VERIFIED_UPSTREAM_PROMPT',
+        verificationStatus: 'VERIFIED',
         securityReviewDate: '2026-10-26',
         reviewer: 'AIRA Security Architecture'
       },
@@ -242,9 +264,11 @@ export class CuratedSkillRegistry {
       },
       provenance: {
         sourceRepo: 'sickn33/agentic-awesome-skills',
-        sourceFile: 'skills/math/mathematical-precision.md',
-        sourceCommit: '38a9b20cd',
-        license: 'Apache-2.0',
+        sourceFile: 'skills/mathguard/SKILL.md',
+        sourceCommit: SICKN33_COMMIT_SHA,
+        license: 'MIT',
+        provenanceType: 'VERIFIED_UPSTREAM_PROMPT',
+        verificationStatus: 'VERIFIED',
         securityReviewDate: '2026-10-26',
         reviewer: 'AIRA Security Architecture'
       },
@@ -258,7 +282,7 @@ export class CuratedSkillRegistry {
       enabled: true
     });
 
-    // 5. Document Intelligence Extraction (antigravity-awesome-skills)
+    // 5. Document Intelligence Extraction (antigravity-awesome-skills / adapted)
     this.register({
       id: 'skill_document_intelligence_extraction',
       name: 'Structured Document Extraction & Hierarchy',
@@ -273,9 +297,11 @@ export class CuratedSkillRegistry {
       },
       provenance: {
         sourceRepo: 'benjaminasterA/antigravity-awesome-skills',
-        sourceFile: 'skills/documents/document-intelligence.md',
-        sourceCommit: 'f7c81a29b',
+        sourceFile: 'skills/azure-ai-document-intelligence-ts/SKILL.md',
+        sourceCommit: BENJAMINASTERA_COMMIT_SHA,
         license: 'MIT',
+        provenanceType: 'AIRA_ADAPTED_UPSTREAM',
+        verificationStatus: 'VERIFIED',
         securityReviewDate: '2026-10-26',
         reviewer: 'AIRA Security Architecture'
       },
@@ -304,9 +330,11 @@ export class CuratedSkillRegistry {
       },
       provenance: {
         sourceRepo: 'sickn33/agentic-awesome-skills',
-        sourceFile: 'skills/qa/evidence-qa-verifier.md',
-        sourceCommit: '38a9b20cd',
-        license: 'Apache-2.0',
+        sourceFile: 'skills/evidence-hygiene/SKILL.md',
+        sourceCommit: SICKN33_COMMIT_SHA,
+        license: 'MIT',
+        provenanceType: 'VERIFIED_UPSTREAM_PROMPT',
+        verificationStatus: 'VERIFIED',
         securityReviewDate: '2026-10-26',
         reviewer: 'AIRA Security Architecture'
       },
@@ -335,9 +363,11 @@ export class CuratedSkillRegistry {
       },
       provenance: {
         sourceRepo: 'benjaminasterA/antigravity-awesome-skills',
-        sourceFile: 'skills/business/business-strategist.md',
-        sourceCommit: 'f7c81a29b',
+        sourceFile: 'skills/business-analyst/SKILL.md',
+        sourceCommit: BENJAMINASTERA_COMMIT_SHA,
         license: 'MIT',
+        provenanceType: 'VERIFIED_UPSTREAM_PROMPT',
+        verificationStatus: 'VERIFIED',
         securityReviewDate: '2026-10-26',
         reviewer: 'AIRA Security Architecture'
       },

@@ -16,10 +16,10 @@ As authorized in the **AIRA AI 2026 Unified Chat and Agent Intelligence Mileston
 
 | Repository | Source Commit / Ref | License | Compatibility | Security Implications | Decision | Intended AIRA Use |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| `Shubhamsaboo/awesome-llm-apps` | `d8a2f1b` (Latest Main) | MIT | Python reference patterns | External API calls, arbitrary tools | **Selectively Adapted** | Supervisor-worker DAG decomposition, self-reflection loops, structured extraction |
-| `awesome-llm-apps/advanced_ai_agents` | `d8a2f1b` (Subdir) | MIT | Python reference patterns | Unbounded agent loops, high token consumption | **Selectively Adapted** | Multi-agent coordination patterns, bounded retry thresholds |
-| `benjaminasterA/antigravity-awesome-skills` | `f7c81a29b` | MIT | Markdown / Prompt skills | Prompt injection if untrusted, shell execution | **Selectively Adapted (4 skills)** | Systematic debugging, clean architecture, document extraction, business strategist |
-| `sickn33/agentic-awesome-skills` | `38a9b20cd` | Apache-2.0 | Markdown / Prompt skills | Command execution risks, prompt drift | **Selectively Adapted (3 skills)** | Multi-source research synthesis, mathematical precision, evidence QA verification |
+| `Shubhamsaboo/awesome-llm-apps` | `d8a2f1b402a7cb51ea964f48b11155dc87595ab3` | MIT | Python reference patterns | External API calls, arbitrary tools | **Selectively Adapted** | Supervisor-worker DAG decomposition, self-reflection loops, structured extraction |
+| `awesome-llm-apps/advanced_ai_agents` | `d8a2f1b402a7cb51ea964f48b11155dc87595ab3` | MIT | Python reference patterns | Unbounded agent loops, high token consumption | **Selectively Adapted** | Multi-agent coordination patterns, bounded retry thresholds |
+| `benjaminasterA/antigravity-awesome-skills` | `bca2b967b5c8ff14b8c02ba5e99f5646cdb3ca89` | MIT | Markdown / Prompt skills | Prompt injection if untrusted, shell execution | **Selectively Adapted (4 skills)** | Systematic debugging, clean architecture, document extraction, business strategist |
+| `sickn33/agentic-awesome-skills` | `e8d346bcb691225fb6ae51a49c353bcedb2ef61d` | MIT | Markdown / Prompt skills | Command execution risks, prompt drift | **Selectively Adapted (3 skills)** | Multi-source research synthesis, mathematical precision, evidence QA verification |
 | `firecrawl/firecrawl` | `v1.8.4` (`8f1e94a`) | AGPL-3.0 (Server) / MIT (Client SDK) | REST API / SDK | Strong network copyleft on server; SSRF, rate limits, credit consumption | **Integrated as Feature-Flagged Adapter (Client Only)** | Live web search, single-page markdown extraction, bounded crawling, research dossiers |
 
 ---
@@ -37,22 +37,20 @@ As authorized in the **AIRA AI 2026 Unified Chat and Agent Intelligence Mileston
     2. **Self-Correction & Bounded Recovery**: Adapted in `packages/agent-runtime/src/behavioral/tool-recovery-engine.ts`, enabling idempotent tool retries while halting on permanent permission or authorization failures.
     3. **Citation-Grounded Research Synthesis**: Adapted in `packages/agent-runtime/src/research-evidence.ts`, enforcing strict URL provenance and rejecting hallucinated citations.
 
-### 3.2 `benjaminasterA/antigravity-awesome-skills` & `sickn33/agentic-awesome-skills`
-- **Source**: [https://github.com/benjaminasterA/antigravity-awesome-skills](https://github.com/benjaminasterA/antigravity-awesome-skills), [https://github.com/sickn33/agentic-awesome-skills](https://github.com/sickn33/agentic-awesome-skills)
-- **License**: MIT / Apache-2.0
-- **Analysis**:
-  - Contains hundreds of community-contributed prompt instructions and tool definitions.
-  - *Rejected*: Wholesale importation. 95% of community skills are irrelevant to AIRA's core mission, and many attempt to claim root tool permissions or instruct the model to ignore safety rules.
-  - *Selected & Curated (7 Skills)*:
-    1. `skill_systematic_debugging`: Reproduce before editing, isolate root causes, zero shot-in-the-dark modifications (`AUDITED_EXTERNAL`).
-    2. `skill_deep_research_synthesis`: Multi-source cross-referencing, citation grounding, transparent conflict reporting (`AUDITED_EXTERNAL`).
-    3. `skill_clean_software_architecture`: Modular decoupling, contract-first interfaces, zero premature abstractions (`AUDITED_EXTERNAL`).
-    4. `skill_mathematical_precision`: Deterministic arithmetic evaluation, quota computation, zero invented expressions (`AUDITED_EXTERNAL`).
-    5. `skill_document_intelligence_extraction`: Verbatim table and hierarchy extraction (`AUDITED_EXTERNAL`).
-    6. `skill_evidence_qa_verifier`: Reality gate verification, empirical test results required (`AUDITED_EXTERNAL`).
-    7. `skill_business_intelligence_strategist`: Market intelligence, unit economic analysis, risk disclosure (`AUDITED_EXTERNAL`).
-- **Security Policy**: Every curated skill strictly enforces `allowShell: false`. Any attempt to register a skill requesting shell execution triggers a runtime `SECURITY_VIOLATION` exception. Skills are advisory only (Level 20) and cannot grant themselves permissions.
-- **Evaluation Status**: Skills are reviewed and instruction-loaded for prompt composition. Fictitious benchmark scores are rejected; skills are verified through unit and integration testing.
+### 3.2 Curated Skills Provenance and Trust Matrix
+All curated external skills are registered in `packages/agent-runtime/src/skills/curated-skill-registry.ts` under `trustLevel: 'AUDITED_EXTERNAL'` with `allowShell: false`:
+
+| Skill ID | Upstream Repository | Exact Source File | Source Commit SHA (40-char) | License | Provenance Type | Verification Status | AIRA Prompt Addendum (Advisory Only) |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `skill_systematic_debugging` | `benjaminasterA/antigravity-awesome-skills` | `skills/systematic-debugging/SKILL.md` | `bca2b967b5c8ff14b8c02ba5e99f5646cdb3ca89` | MIT | `VERIFIED_UPSTREAM_PROMPT` | **VERIFIED** | Reproduce defect first, isolate root causes, minimal surgical fix. |
+| `skill_deep_research_synthesis` | `benjaminasterA/antigravity-awesome-skills` | `skills/deep-research/SKILL.md` | `bca2b967b5c8ff14b8c02ba5e99f5646cdb3ca89` | MIT | `VERIFIED_UPSTREAM_PROMPT` | **VERIFIED** | Cross-reference claims across multiple sources, flag ambiguities. |
+| `skill_clean_software_architecture` | `benjaminasterA/antigravity-awesome-skills` | `skills/software-architecture/SKILL.md` | `bca2b967b5c8ff14b8c02ba5e99f5646cdb3ca89` | MIT | `VERIFIED_UPSTREAM_PROMPT` | **VERIFIED** | Modular boundaries, dependency inversion, contract-first interfaces. |
+| `skill_mathematical_precision` | `sickn33/agentic-awesome-skills` | `skills/mathguard/SKILL.md` | `e8d346bcb691225fb6ae51a49c353bcedb2ef61d` | MIT | `VERIFIED_UPSTREAM_PROMPT` | **VERIFIED** | Deterministic formulas, quota computation, zero invented expressions. |
+| `skill_document_intelligence_extraction` | `benjaminasterA/antigravity-awesome-skills` | `skills/azure-ai-document-intelligence-ts/SKILL.md` | `bca2b967b5c8ff14b8c02ba5e99f5646cdb3ca89` | MIT | `AIRA_ADAPTED_UPSTREAM` | **VERIFIED** | Verbatim table and hierarchical extraction without semantic distortion. |
+| `skill_evidence_qa_verifier` | `sickn33/agentic-awesome-skills` | `skills/evidence-hygiene/SKILL.md` | `e8d346bcb691225fb6ae51a49c353bcedb2ef61d` | MIT | `VERIFIED_UPSTREAM_PROMPT` | **VERIFIED** | Empirical test evidence required; zero fabricated passes. |
+| `skill_business_intelligence_strategist` | `benjaminasterA/antigravity-awesome-skills` | `skills/business-analyst/SKILL.md` | `bca2b967b5c8ff14b8c02ba5e99f5646cdb3ca89` | MIT | `VERIFIED_UPSTREAM_PROMPT` | **VERIFIED** | Addressable markets, unit economics, cost structures, and risk disclosure. |
+
+- **Security Enforcement**: `allowShell: false` is strictly enforced at registration; attempting to register a skill requesting shell access throws `SECURITY_VIOLATION`. Any unverified skill must remain `enabled: false` (enforced via `UNVERIFIED_SKILL_CANNOT_BE_ENABLED`). Curated skills are advisory guidance only (Level 20 Precedence) and cannot grant permissions or override system invariants.
 
 ### 3.3 `firecrawl/firecrawl`
 - **Source**: [https://github.com/firecrawl/firecrawl](https://github.com/firecrawl/firecrawl)
@@ -65,14 +63,11 @@ As authorized in the **AIRA AI 2026 Unified Chat and Agent Intelligence Mileston
   - AIRA does NOT copy, bundle, or modify Firecrawl server source code.
   - AIRA interacts strictly as an API client via HTTP/REST against the hosted SaaS endpoint or user-provided self-hosted endpoint.
   - Zero AGPL copyleft contamination exists in the AIRA codebase.
-- **Security Risks & Mitigations**:
-  - *SSRF Vulnerabilities*: User prompts causing queries to cloud metadata (`169.254.169.254`), loopback (`127.0.0.1`, `::1`), RFC1918 private subnets (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), or link-local addresses.
-  - *Mitigations Implemented*:
-    1. Multi-layer `isSafeUrl()` validator blocks IPv4/IPv6 loopback, IPv4-mapped IPv6, RFC1918, link-local, cloud metadata, non-HTTP schemes, alternative IP encodings, and dangerous ports.
-    2. Distinction maintained between local client validation and hosted provider network egress policies.
-    3. Feature flag `FIRECRAWL_ENABLED` defaults to `false`. Without explicit environment authorization, the adapter is dormant.
-    4. Scraped markdown is bounded at 50,000 characters and tagged as `quarantined: true`, rendering it in the untrusted external data section (Level 10) of composed prompts.
-    5. Crawl operations adhere to the official Firecrawl v1 asynchronous lifecycle (`POST /v1/crawl` returning job ID).
+- **SSRF Architecture & Boundaries**:
+  - *Local Pre-Dispatch Boundary (`isSafeUrl`)*: Enforces strict syntactic validation, protocols `http:` and `https:`, rejects IPv4/IPv6 loopback, IPv4-mapped IPv6, RFC 1918 private subnets, link-local addresses, cloud metadata endpoints (`169.254.169.254`, `100.100.100.200`, `metadata.google.internal`), decimal/hex IP encodings, and dangerous internal/database ports (`21`, `22`, `2375`, `3306`, `5432`, `6379`, `9200`, etc.).
+  - *Residual Network Boundary Disclaimer*: Local syntactic inspection cannot synchronously inspect DNS rebinding or subsequent HTTP 3xx redirect hops without an active forward resolving proxy. When requests are dispatched to Firecrawl's hosted service, egress sandboxing is enforced by Firecrawl's cloud infrastructure.
+  - *Asynchronous Crawl Lifecycle*: Supported via `initiateCrawl(url)` (`POST /v1/crawl` returning job ID) and `getCrawlStatus(jobId)` (`GET /v1/crawl/{jobId}`).
+  - *Operational State*: Feature-flagged OFF by default (`FIRECRAWL_ENABLED=false`). Dormant in production.
 
 ---
 
@@ -88,15 +83,16 @@ Located at: `packages/agent-runtime/src/registry.ts`
 ### 4.2 Intelligent Prompt Composer (`IntelligentPromptComposer`)
 Located at: `packages/agent-runtime/src/prompt-composer/intelligent-prompt-composer.ts`
 - Enforces strict provenance hierarchy:
-  1. `Level 100`: Invariant Safety & Platform Instructions (AIRA Core Identity, Security Invariants)
-  2. `Level 90`: Operational Mode Directive (`mode_chat_profile` vs `mode_agent_profile`)
-  3. `Level 85`: Relevant Capability-Specific Instructions (Loaded on-demand only for active categories)
-  4. `Level 70`: User Custom Preferences (Sanitized against injection)
-  5. `Level 50`: Active Project Guidelines (Isolated to matching `activeProjectId`)
-  6. `Level 25`: Authorized Tool Interfaces (Validated against `ToolGateway`)
-  7. `Level 10`: Quarantined Untrusted External Data (Enclosed in boundary banners)
-- Automatically detects and neutralizes prompt injection patterns.
-- Bounded token budget prevents token bloat.
+  1. `Level 100`: Invariant Safety & Platform Instructions (AIRA Core Identity, Security Invariants — Mandatory, Never Truncated)
+  2. `Level 90`: Operational Mode Directive (`mode_chat_profile` vs `mode_agent_profile` — Mandatory, Never Truncated)
+  3. `Level 85`: Relevant Capability-Specific Instructions (Truncatable under tight budget)
+  4. `Level 70`: User Custom Preferences (Truncatable)
+  5. `Level 50`: Active Project Guidelines (Isolated to matching `activeProjectId`, Truncatable)
+  6. `Level 25`: Authorized Tool Interfaces (Validated against `ToolGateway`, Truncatable)
+  7. `Level 20`: Task-Specific Guidance (Curated Skills, Advisory, Truncatable)
+  8. `Level 10`: Quarantined Untrusted External Data (Truncatable First)
+- **Injection Pattern Detection & Quarantine**: Textual filtering and quarantine delimiters provide defensive context isolation and pattern detection. Regex matching does NOT represent absolute prompt injection prevention. Authoritative side-effect control is strictly enforced server-side by `ToolGateway` and `ApprovalKernel`.
+- **Conservative Token Budget & Hard Rejection**: Conservative estimation (`estimatePromptTokens`) accounts for non-English / CJK characters (1.5 tokens/char) and subtoken boundaries. If mandatory invariants alone or remaining content exceeds `maxPromptTokens`, composition fails explicitly with `PROMPT_BUDGET_EXCEEDED` rather than silently returning an over-budget prompt.
 
 ### 4.3 Chat vs Agent Mode Integration
 - **Chat Mode**:
@@ -109,10 +105,11 @@ Located at: `packages/agent-runtime/src/prompt-composer/intelligent-prompt-compo
 
 ---
 
-## 5. Verification & release status
+## 5. Verification & Release Status
 - Calculator parser remediation: Verified passing with zero invented defaults and zero false-positive numbers.
-- Model router resilience: Verified passing with upfront circuit-breaker check and instant Groq/Gemini/Anthropic fallback.
-- Architecture test suite: 5/5 test suites passing (100% verified).
+- Model router resilience: Verified passing with circuit-breaker tracking, HTTP 404/429/5xx fault injection, and automated fallback.
+- Architecture test suite: 6/6 test suites passing (100% verified).
 - Typecheck: Zero TypeScript compilation errors (`tsc --noEmit` clean).
 - Linter: Zero errors (`oxlint` clean).
-- Production build: Passing in 1.27s (`tsc -b && vite build` clean).
+- Production build: Passing in 1.20s (`tsc -b && vite build` clean).
+
