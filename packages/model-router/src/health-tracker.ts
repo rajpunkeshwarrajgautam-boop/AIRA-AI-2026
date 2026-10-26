@@ -173,19 +173,30 @@ export class ProviderHealthTracker {
     const record = this.getOrCreateRecord(provider, model);
     const now = Date.now();
     const errMsg = typeof error === 'string' ? error : error.message || '';
+    const errStatus = statusCode ?? (typeof error === 'object' && error !== null ? ((error as any).status || (error as any).statusCode) : undefined);
+
+    const isNotFoundOrUnavailable =
+      errStatus === 404 ||
+      errStatus === 503 ||
+      errMsg.includes('404') ||
+      errMsg.includes('503') ||
+      errMsg.toLowerCase().includes('not found') ||
+      errMsg.includes('does not exist') ||
+      errMsg.includes('inaccessible');
+
     const isTimeout =
-      statusCode === 504 ||
+      errStatus === 504 ||
       errMsg.includes('FIRST_TOKEN_TIMEOUT') ||
       errMsg.toLowerCase().includes('timeout') ||
       errMsg.includes('deadline');
 
     const isRateLimit =
-      statusCode === 429 ||
+      errStatus === 429 ||
       errMsg.toLowerCase().includes('rate_limit') ||
       errMsg.toLowerCase().includes('rate limit') ||
       errMsg.includes('429');
 
-    const isServerError = typeof statusCode === 'number' && statusCode >= 500 && statusCode < 600 && !isTimeout;
+    const isServerError = typeof errStatus === 'number' && errStatus >= 500 && errStatus < 600 && !isTimeout;
 
     record.failureCount++;
     record.lastFailureAt = now;
@@ -201,7 +212,7 @@ export class ProviderHealthTracker {
       record.consecutiveRateLimits++;
       record.rateLimitCount++;
       record.consecutiveTimeouts = 0;
-    } else if (isServerError) {
+    } else if (isServerError || errStatus === 503) {
       outcome = 'server_error';
       record.serverErrorCount++;
       record.consecutiveTimeouts = 0;
@@ -220,6 +231,7 @@ export class ProviderHealthTracker {
     // Evaluate Circuit Breaker Trip Conditions
     const shouldTrip =
       record.circuitState === 'HALF_OPEN' || // Failed probe immediately trips back
+      isNotFoundOrUnavailable || // 404/503/inaccessible immediately trips circuit breaker
       record.consecutiveTimeouts >= this.timeoutThreshold ||
       record.consecutiveRateLimits >= this.rateLimitThreshold ||
       this.evaluateErrorRateTrip(record);

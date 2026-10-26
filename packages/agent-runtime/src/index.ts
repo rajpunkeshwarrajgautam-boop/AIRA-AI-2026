@@ -35,6 +35,10 @@ import { buildDurableHistorySystemMessage } from './memory-policy.js';
 import { InstructionResolver } from './behavioral/instruction-resolver.js';
 import { AdaptiveSynthesizer } from './behavioral/adaptive-synthesizer.js';
 import { ToolRecoveryEngine } from './behavioral/tool-recovery-engine.js';
+import { IntelligentPromptComposer, PromptProfileRegistry } from './prompt-composer/index.js';
+import { CuratedSkillRegistry } from './skills/curated-skill-registry.js';
+import { FirecrawlResearchAdapter } from './research/firecrawl-adapter.js';
+import { RufloOrchestrationAdapter } from './orchestration/ruflo-adapter.js';
 
 /**
  * Strictly detect repository intent.
@@ -76,6 +80,10 @@ export class AgentRuntime extends EventEmitter {
   private toolGateway: ToolGateway;
   private researchService: ResearchService;
   private automationEngine?: any;
+  private promptComposer: IntelligentPromptComposer;
+  private curatedSkillRegistry: CuratedSkillRegistry;
+  private firecrawlAdapter: FirecrawlResearchAdapter;
+  private rufloAdapter: RufloOrchestrationAdapter;
 
   constructor(
     private modelRouter: ModelRouter,
@@ -89,7 +97,11 @@ export class AgentRuntime extends EventEmitter {
     workflowRepo?: WorkflowRepository,
     workflowEngine?: WorkflowEngine,
     workflowCompiler?: WorkflowCompiler,
-    toolGateway?: ToolGateway
+    toolGateway?: ToolGateway,
+    promptComposer?: IntelligentPromptComposer,
+    curatedSkillRegistry?: CuratedSkillRegistry,
+    firecrawlAdapter?: FirecrawlResearchAdapter,
+    rufloAdapter?: RufloOrchestrationAdapter
   ) {
     super();
     const isDbConfigured = Boolean(process.env.DATABASE_URL?.trim());
@@ -98,6 +110,10 @@ export class AgentRuntime extends EventEmitter {
     this.workflowRepo = workflowRepo || (isDbConfigured ? new PostgresWorkflowRepository() : new InMemoryWorkflowRepository());
     this.workflowCompiler = workflowCompiler || new WorkflowCompiler(this.modelRouter);
     this.researchService = new ResearchService(this.toolRegistry, this.knowledgeEngine);
+    this.curatedSkillRegistry = curatedSkillRegistry || new CuratedSkillRegistry();
+    this.promptComposer = promptComposer || new IntelligentPromptComposer(new PromptProfileRegistry(), this.capabilityRegistry);
+    this.firecrawlAdapter = firecrawlAdapter || new FirecrawlResearchAdapter();
+    this.rufloAdapter = rufloAdapter || new RufloOrchestrationAdapter();
     this.workflowEngine = workflowEngine || new WorkflowEngine(
       this.workflowRepo,
       this.runRepo,
@@ -117,6 +133,22 @@ export class AgentRuntime extends EventEmitter {
 
   public getCapabilityRegistry(): CapabilityRegistry {
     return this.capabilityRegistry;
+  }
+
+  public getPromptComposer(): IntelligentPromptComposer {
+    return this.promptComposer;
+  }
+
+  public getCuratedSkillRegistry(): CuratedSkillRegistry {
+    return this.curatedSkillRegistry;
+  }
+
+  public getFirecrawlAdapter(): FirecrawlResearchAdapter {
+    return this.firecrawlAdapter;
+  }
+
+  public getRufloAdapter(): RufloOrchestrationAdapter {
+    return this.rufloAdapter;
   }
 
   public getRouter(): ServerIntentRouter {
@@ -770,11 +802,20 @@ export class AgentRuntime extends EventEmitter {
         } else if (run.prompt.toLowerCase().includes('git status') || run.prompt.toLowerCase().includes('repo status')) {
           selectedToolName = 'repo_git_status';
           selectedArgs = {};
-        } else if (run.prompt.toLowerCase().includes('calc') || /calculate|\b\d+\s*[-+*/]\s*\d+/.test(run.prompt.toLowerCase())) {
+        } else if (/\b(?:calculate|calculator|calc|compute)\b|\b\d+\s*[-+*/]\s*\d+/i.test(run.prompt)) {
           selectedToolName = 'calculator';
-          const calcMatch = run.prompt.match(/(?:calculate|calc|compute)\s*:?\s*([0-9+\-*/().^]*[0-9]+[0-9+\-*/().^ ]*)/i);
-          const rawExpr = calcMatch ? calcMatch[1] : (run.prompt.match(/([0-9+\-*/().^]*[0-9]+[0-9+\-*/().^ ]*)/)?.[0] || '1024 * 4');
-          selectedArgs = { expression: rawExpr.replace(/[^0-9+\-*/().^ ]/g, '').replace(/[. ]+$/, '').trim() };
+          let rawExpr = '';
+          const exprWithOp = run.prompt.match(/(?:\(\s*)?[0-9]+\s*[-+*/^]\s*[0-9]+(?:[0-9+\-*/().^ ]*)/);
+          if (exprWithOp) {
+            rawExpr = exprWithOp[0];
+          } else {
+            const calcMatch = run.prompt.match(/\b(?:calculate|calculator|calc|compute)\b(?:\s+(?:the\s+)?(?:expression|result|value|quotient|sum|product|difference)?:?)?\s*:?\s*([0-9+\-*/().^]*[0-9]+[0-9+\-*/().^ ]*)/i);
+            if (calcMatch && /[+\-*/^]/.test(calcMatch[1])) {
+              rawExpr = calcMatch[1];
+            }
+          }
+          const sanitized = rawExpr.replace(/[^0-9+\-*/().^ ]/g, '').replace(/[. ]+$/, '').trim();
+          selectedArgs = { expression: sanitized };
         } else if (
           run.routingDecision?.sideEffectLevel === 'DESTRUCTIVE' ||
           run.prompt.toLowerCase().includes('shell') ||
@@ -1118,27 +1159,24 @@ export class AgentRuntime extends EventEmitter {
       const writingProfile = adaptiveSynthesizer.deriveProfile(run.prompt, resolvedInstructions);
       const systemDirective = adaptiveSynthesizer.buildSystemDirective(writingProfile);
 
-      if (run.intent === 'RESEARCH') {
-        messages.push({
-          role: 'system',
-          content: `${systemDirective}\n\nYou are operating in rigorous Research mode. Provide evidence-backed synthesis, cite available sources, decompose key claims, and distinguish established facts from inference. Do NOT manufacture citations or claims without evidence.`
-        });
-      } else if (run.intent === 'AGENT_MISSION') {
-        messages.push({
-          role: 'system',
-          content: `${systemDirective}\n\nYou are operating in Autonomous Mission mode. Deliver clear execution results, steps undertaken, verification findings, and a concise summary.`
-        });
-      } else if (resolvedInstructions.effectiveInstructions.length > 0) {
-        messages.push({
-          role: 'system',
-          content: `${systemDirective}\n\nContextual Guidelines:\n${resolvedInstructions.effectiveInstructions.join('\n')}`
-        });
-      } else {
-        messages.push({
-          role: 'system',
-          content: systemDirective
-        });
-      }
+      const isAgentMode = run.intent === 'AGENT_MISSION' || run.intent === 'WORKFLOW';
+      const promptMode = isAgentMode ? 'agent' : 'chat';
+      const authorizedToolList = isAgentMode
+        ? this.toolRegistry.list().map(t => ({ name: t.name, description: t.description }))
+        : [];
+
+      const composedPromptResult = this.promptComposer.compose({
+        mode: promptMode,
+        userPrompt: run.prompt,
+        customInstructions: run.systemPrompt,
+        activeProjectId: run.projectId || undefined,
+        authorizedTools: authorizedToolList
+      });
+
+      messages.push({
+        role: 'system',
+        content: `${systemDirective}\n\n${composedPromptResult.systemPrompt}`
+      });
 
       if (durablePastHistory) {
         messages.push({
@@ -1538,3 +1576,7 @@ export * from './workflow-repositories.js';
 export * from './registry.js';
 export * from './router.js';
 export * from './repositories.js';
+export * from './prompt-composer/index.js';
+export * from './skills/curated-skill-registry.js';
+export * from './research/firecrawl-adapter.js';
+export * from './orchestration/ruflo-adapter.js';

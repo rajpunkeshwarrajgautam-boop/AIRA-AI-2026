@@ -86,10 +86,53 @@ export const RoutingDecisionSchema = z.object({
 });
 export type RoutingDecision = z.infer<typeof RoutingDecisionSchema>;
 
+export const CapabilityCategorySchema = z.enum([
+  'general_reasoning',
+  'deep_research',
+  'software_engineering',
+  'data_analysis',
+  'document_intelligence',
+  'business_intelligence',
+  'agent_planning',
+  'tool_execution',
+  'result_verification'
+]);
+export type CapabilityCategory = z.infer<typeof CapabilityCategorySchema>;
+
+export const ExecutionModeSchema = z.enum(['chat', 'agent']);
+export type ExecutionMode = z.infer<typeof ExecutionModeSchema>;
+
+export const ResourceLimitsSchema = z.object({
+  maxTokens: z.number().int().positive().optional(),
+  timeoutMs: z.number().int().positive().optional(),
+  maxToolCalls: z.number().int().nonnegative().optional(),
+  maxSteps: z.number().int().positive().optional(),
+  maxPromptTokens: z.number().int().positive().optional()
+});
+export type ResourceLimits = z.infer<typeof ResourceLimitsSchema>;
+
+export const EvaluationRequirementsSchema = z.object({
+  minAccuracy: z.number().min(0).max(1).optional(),
+  benchmarkSuite: z.string().optional(),
+  requiresGrounding: z.boolean().default(false),
+  requiresToolVerification: z.boolean().default(false),
+  maxAllowedDrift: z.number().min(0).max(1).optional()
+});
+export type EvaluationRequirements = z.infer<typeof EvaluationRequirementsSchema>;
+
 export const CapabilityDefinitionSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
+  version: z.string().default('1.0.0'),
+  category: CapabilityCategorySchema.default('general_reasoning'),
   executionType: IntentTaxonomySchema,
+  supportedModes: z.array(ExecutionModeSchema).default(['chat', 'agent']),
+  requiredTools: z.array(z.string()).default([]),
+  requiredPermissions: z.array(z.string()).default([]),
+  promptProfileId: z.string().default('profile_general_reasoning'),
+  resourceLimits: ResourceLimitsSchema.default({}),
+  evaluationRequirements: EvaluationRequirementsSchema.default({}),
+  enabled: z.boolean().default(true),
   availability: z.enum(['GA', 'BETA', 'PREVIEW', 'COMING_SOON', 'DISABLED']),
   sideEffectClass: SideEffectLevelSchema,
   approvalPolicy: z.enum(['autonomous', 'require_approval', 'always_ask']),
@@ -98,6 +141,18 @@ export const CapabilityDefinitionSchema = z.object({
   status: z.enum(['READY', 'PARTIAL', 'DEGRADED', 'NOT_READY', 'DEPRECATED'])
 });
 export type CapabilityDefinition = z.infer<typeof CapabilityDefinitionSchema>;
+
+export const PromptProfileSchema = z.object({
+  id: z.string().min(1),
+  version: z.string().default('1.0.0'),
+  category: CapabilityCategorySchema,
+  mode: z.enum(['chat', 'agent', 'universal']).default('universal'),
+  instructions: z.string(),
+  tokenBudget: z.number().int().positive().default(1500),
+  priority: z.number().int().default(50),
+  metadata: z.record(z.string(), z.any()).default({})
+});
+export type PromptProfile = z.infer<typeof PromptProfileSchema>;
 
 // ==========================================
 // 2. MODEL ROUTING & POLICIES

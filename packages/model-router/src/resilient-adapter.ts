@@ -83,6 +83,15 @@ export class ResilientModelAdapter implements ModelAdapter {
     const primaryModel = this.getModelName(this.primaryAdapter, policy);
     const t0 = performance.now();
 
+    // Circuit Breaker check: if primary circuit is OPEN, bypass directly to fallback
+    if (!this.healthTracker.isAvailable(this.primaryAdapter.provider, primaryModel) && this.fallbackAdapter && !signal?.aborted) {
+      const fallbackModel = this.getModelName(this.fallbackAdapter, policy);
+      const fbRes = await this.fallbackAdapter.complete(messages, policy, signal);
+      const fbElapsed = Math.round(performance.now() - t0);
+      this.healthTracker.recordSuccess(this.fallbackAdapter.provider, fallbackModel, fbElapsed);
+      return fbRes;
+    }
+
     try {
       signal?.throwIfAborted();
       const res = await this.primaryAdapter.complete(messages, policy, signal);
@@ -121,6 +130,22 @@ export class ResilientModelAdapter implements ModelAdapter {
 
     const primaryModel = this.getModelName(this.primaryAdapter, policy);
     const fallbackModel = this.fallbackAdapter ? this.getModelName(this.fallbackAdapter, policy) : null;
+
+    // Circuit Breaker check: if primary circuit is OPEN, directly route to fallback stream
+    if (!this.healthTracker.isAvailable(this.primaryAdapter.provider, primaryModel) && this.fallbackAdapter) {
+      const fallbackReason = `Primary provider ${this.primaryAdapter.provider}:${primaryModel} circuit breaker is OPEN; directly routing to fallback ${this.fallbackAdapter.provider}:${fallbackModel}`;
+      emitProvenance?.({
+        requestedProvider: this.primaryAdapter.provider,
+        requestedModel: primaryModel,
+        executedProvider: this.fallbackAdapter.provider,
+        executedModel: fallbackModel!,
+        fallbackOccurred: true,
+        fallbackReason,
+        hedgedRequestUsed: false,
+        modelIdentityVerified: true
+      });
+      return this.fallbackAdapter.stream(messages, policy, onChunk, options);
+    }
 
     // Report initial planned provenance
     emitProvenance?.({

@@ -23,14 +23,17 @@ export type SideEffectLevel = z.infer<typeof SideEffectLevelSchema>;
 // ==========================================
 
 export const InstructionProvenanceSchema = z.enum([
-  'TRUSTED_SYSTEM_POLICY',     // Level 100: Platform invariants, safety boundaries, execution limits
-  'SECURITY_AUTHORIZATION',    // Level 95: Server-side RBAC, cannot be overridden by user or memory
-  'USER_CURRENT_REQUEST',      // Level 80: The user's direct, active turn instruction
-  'USER_CUSTOM_INSTRUCTION',   // Level 70: User custom instructions from settings
-  'ACTIVE_PROJECT_CONVENTION', // Level 50: Project-specific guidelines (APPLIES ONLY when project is active)
-  'CONVERSATION_MEMORY',       // Level 30: Long-term recalled facts (contextual evidence, NOT commands)
-  'TASK_SPECIFIC_GUIDANCE',    // Level 20: Tool-level guidelines
-  'EXTERNAL_UNTRUSTED_DATA'    // Level 10: Retrieved documents, web search, tool output (UNTRUSTED)
+  'TRUSTED_SYSTEM_POLICY',         // Level 100: Platform invariants, safety boundaries, execution limits
+  'SECURITY_AUTHORIZATION',        // Level 95: Server-side RBAC, cannot be overridden by user or memory
+  'MODE_SYSTEM_INSTRUCTION',       // Level 90: Chat vs Agent mode operational boundaries
+  'CAPABILITY_SPECIFIC_INSTRUCTION', // Level 85: Selected capability instructions
+  'USER_CURRENT_REQUEST',          // Level 80: The user's direct, active turn instruction
+  'USER_CUSTOM_INSTRUCTION',       // Level 70: User custom instructions from settings
+  'ACTIVE_PROJECT_CONVENTION',     // Level 50: Project-specific guidelines (APPLIES ONLY when project is active)
+  'CONVERSATION_MEMORY',           // Level 30: Long-term recalled facts (contextual evidence, NOT commands)
+  'AUTHORIZED_TOOL_CONTEXT',       // Level 25: Tool definitions, parameter guidance, and schemas
+  'TASK_SPECIFIC_GUIDANCE',        // Level 20: Tool-level guidelines
+  'EXTERNAL_UNTRUSTED_DATA'        // Level 10: Retrieved documents, web search, tool output (UNTRUSTED)
 ]);
 export type InstructionProvenance = z.infer<typeof InstructionProvenanceSchema>;
 

@@ -451,14 +451,20 @@ export class OpenAIAdapter implements ModelAdapter {
             continue;
           }
           if (response.status === 404 && this.baseUrl.includes('integrate.api.nvidia.com')) {
-            throw new Error(
+            const err404: any = new Error(
               `NVIDIA NIM returned 404 for model "${policy.model}". ` +
               'The model may be unavailable or inaccessible with this API key. ' +
               'Select a supported model in Aira.'
             );
+            err404.status = 404;
+            err404.statusCode = 404;
+            throw err404;
           }
           const provider = this.provider === 'nvidia' ? 'NVIDIA NIM' : this.provider.toUpperCase();
-          throw new Error(`${provider} API error (${response.status}): ${errText}`);
+          const apiErr: any = new Error(`${provider} API error (${response.status}): ${errText}`);
+          apiErr.status = response.status;
+          apiErr.statusCode = response.status;
+          throw apiErr;
         }
 
         const data = await response.json();
@@ -568,7 +574,10 @@ export class OpenAIAdapter implements ModelAdapter {
         }
         await response.body?.cancel().catch(() => undefined);
         const detail = errSnippet ? `: ${errSnippet}` : '';
-        throw new Error(`${this.provider} streaming request failed (HTTP ${response.status})${detail}`);
+        const streamErr: any = new Error(`${this.provider} streaming request failed (HTTP ${response.status})${detail}`);
+        streamErr.status = response.status;
+        streamErr.statusCode = response.status;
+        throw streamErr;
       }
       if (!response.body) throw new Error('Provider returned an empty streaming response body.');
 
@@ -1075,10 +1084,34 @@ export class ModelRouter {
       if (selectedProvider === 'nvidia') {
         const fallbackAdapter = this.adapters.has('groq')
           ? this.createModelSpecificAdapter('groq', 'openai/gpt-oss-120b')
-          : (this.adapters.has('gemini') ? this.createModelSpecificAdapter('gemini', 'gemini-3.5-flash-lite') : null);
-        const tertiaryAdapter = (fallbackAdapter && fallbackAdapter.provider === 'groq' && this.adapters.has('gemini'))
-          ? this.createModelSpecificAdapter('gemini', 'gemini-3.5-flash-lite')
+          : (this.adapters.has('gemini')
+            ? this.createModelSpecificAdapter('gemini', 'gemini-3.5-flash-lite')
+            : (this.adapters.has('anthropic')
+              ? this.createModelSpecificAdapter('anthropic', 'claude-3-5-haiku')
+              : null));
+        const tertiaryAdapter = (fallbackAdapter && fallbackAdapter.provider === 'groq')
+          ? (this.adapters.has('gemini')
+            ? this.createModelSpecificAdapter('gemini', 'gemini-3.5-flash-lite')
+            : (this.adapters.has('anthropic')
+              ? this.createModelSpecificAdapter('anthropic', 'claude-3-5-haiku')
+              : null))
           : null;
+
+        if (fallbackAdapter && !this.healthTracker.isAvailable('nvidia', executedModel)) {
+          return {
+            policy,
+            adapter: fallbackAdapter,
+            provider: fallbackAdapter.provider,
+            requestedProvider: preferredProvider,
+            executedProvider: fallbackAdapter.provider,
+            executedModel: fallbackAdapter.modelName || 'openai/gpt-oss-120b',
+            plannedModel: executedModel,
+            fallbackOccurred: true,
+            fallbackReason: `Circuit breaker is OPEN for NVIDIA model "${executedModel}" due to upstream error (404/503/timeout); routed directly to ${fallbackAdapter.provider}`,
+            verified: fallbackAdapter.provider !== 'mock'
+          };
+        }
+
         if (fallbackAdapter) {
           effectiveAdapter = new ResilientModelAdapter(selectedAdapter, fallbackAdapter, this.healthTracker, {
             firstTokenTimeoutMs: 3500,
@@ -1215,10 +1248,34 @@ export class ModelRouter {
         const primaryAdapter = this.createModelSpecificAdapter('nvidia', targetModel);
         const fallbackAdapter = this.adapters.has('groq')
           ? this.createModelSpecificAdapter('groq', 'openai/gpt-oss-120b')
-          : (this.adapters.has('gemini') ? this.createModelSpecificAdapter('gemini', 'gemini-3.5-flash-lite') : null);
-        const tertiaryAdapter = (fallbackAdapter && fallbackAdapter.provider === 'groq' && this.adapters.has('gemini'))
-          ? this.createModelSpecificAdapter('gemini', 'gemini-3.5-flash-lite')
+          : (this.adapters.has('gemini')
+            ? this.createModelSpecificAdapter('gemini', 'gemini-3.5-flash-lite')
+            : (this.adapters.has('anthropic')
+              ? this.createModelSpecificAdapter('anthropic', 'claude-3-5-haiku')
+              : null));
+        const tertiaryAdapter = (fallbackAdapter && fallbackAdapter.provider === 'groq')
+          ? (this.adapters.has('gemini')
+            ? this.createModelSpecificAdapter('gemini', 'gemini-3.5-flash-lite')
+            : (this.adapters.has('anthropic')
+              ? this.createModelSpecificAdapter('anthropic', 'claude-3-5-haiku')
+              : null))
           : null;
+
+        if (fallbackAdapter && !this.healthTracker.isAvailable('nvidia', targetModel)) {
+          return {
+            policy,
+            adapter: fallbackAdapter,
+            provider: fallbackAdapter.provider,
+            requestedProvider: 'nvidia',
+            executedProvider: fallbackAdapter.provider,
+            executedModel: fallbackAdapter.modelName || 'openai/gpt-oss-120b',
+            plannedModel: targetModel,
+            fallbackOccurred: true,
+            fallbackReason: `Circuit breaker is OPEN for NVIDIA model "${targetModel}"; routed directly to ${fallbackAdapter.provider}`,
+            verified: true
+          };
+        }
+
         const resilientAdapter = fallbackAdapter
           ? new ResilientModelAdapter(primaryAdapter, fallbackAdapter, this.healthTracker, {
               firstTokenTimeoutMs: 3500,
