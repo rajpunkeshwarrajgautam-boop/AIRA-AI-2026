@@ -1162,7 +1162,12 @@ export class AgentRuntime extends EventEmitter {
       const isAgentMode = run.intent === 'AGENT_MISSION' || run.intent === 'WORKFLOW';
       const promptMode = isAgentMode ? 'agent' : 'chat';
       const authorizedToolList = isAgentMode
-        ? this.toolRegistry.list().map(t => ({ name: t.name, description: t.description }))
+        ? (typeof (this.toolRegistry as any).listDefinitions === 'function'
+            ? this.toolRegistry.listDefinitions()
+            : typeof (this.toolRegistry as any).list === 'function'
+              ? (this.toolRegistry as any).list()
+              : []
+          ).map((t: any) => ({ name: t.name, description: t.description }))
         : [];
 
       const composedPromptResult = this.promptComposer.compose({
