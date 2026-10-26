@@ -35,6 +35,10 @@ import { buildDurableHistorySystemMessage } from './memory-policy.js';
 import { InstructionResolver } from './behavioral/instruction-resolver.js';
 import { AdaptiveSynthesizer } from './behavioral/adaptive-synthesizer.js';
 import { ToolRecoveryEngine } from './behavioral/tool-recovery-engine.js';
+import { IntelligentPromptComposer, PromptProfileRegistry } from './prompt-composer/index.js';
+import { CuratedSkillRegistry } from './skills/curated-skill-registry.js';
+import { FirecrawlResearchAdapter } from './research/firecrawl-adapter.js';
+import { RufloOrchestrationAdapter } from './orchestration/ruflo-adapter.js';
 
 /**
  * Strictly detect repository intent.
@@ -57,6 +61,38 @@ export function isRepositoryIntent(prompt: string): boolean {
          /\b(?:check|inspect|show|display|get)\s+(?:the\s+)?(?:git|repo|repository|codebase)\b/i.test(lower);
 }
 
+/**
+ * Deterministically extracts valid mathematical expressions from prompt text.
+ * Requires genuine arithmetic operator (+, -, *, /, ^) between numbers or inside formula parentheses.
+ * Rejects standalone numbers (e.g. years "2026", PR numbers), generic keywords without operators,
+ * and never invents default expressions.
+ */
+export function extractCalculatorExpression(prompt: string): string {
+  if (!prompt || typeof prompt !== 'string') return '';
+  const trimmed = prompt.trim();
+
+  // Pattern 1: Enclosed or complex formula with arithmetic operator between digits:
+  // e.g. "((16384 * 1024) / 4)" or "1024 * 4" or "40 + 2"
+  const formulaMatch = trimmed.match(/(?:\((?:[0-9+\-*/().^\s]+)\)|[0-9]+(?:\.[0-9]+)?\s*[-+*/^]\s*[0-9]+(?:\.[0-9]+)?(?:[0-9+\-*/().^\s]*))/);
+  if (formulaMatch && formulaMatch[0]) {
+    const cleaned = formulaMatch[0].replace(/[^0-9+\-*/().^ ]/g, '').replace(/[. ]+$/, '').trim();
+    if (cleaned.length > 0 && /[0-9]/.test(cleaned) && /[-+*/^]/.test(cleaned)) {
+      return cleaned;
+    }
+  }
+
+  // Pattern 2: Explicit keyword prefix with word boundary: calculate / compute / calculator / calc followed by arithmetic expression
+  const keywordMatch = trimmed.match(/\b(?:calculate|calculator|calc|compute)\b\s*:?\s*([0-9+\-*/().^]*[0-9]+[0-9+\-*/().^ ]*)/i);
+  if (keywordMatch && keywordMatch[1] && /[+\-*/^]/.test(keywordMatch[1])) {
+    const cleaned = keywordMatch[1].replace(/[^0-9+\-*/().^ ]/g, '').replace(/[. ]+$/, '').trim();
+    if (cleaned.length > 0 && /[0-9]/.test(cleaned) && /[-+*/^]/.test(cleaned)) {
+      return cleaned;
+    }
+  }
+
+  return '';
+}
+
 export class AgentRuntime extends EventEmitter {
   private eventStreams: Map<string, EventEmitter> = new Map();
   private inFlightRuns: Map<string, Run> = new Map();
@@ -76,6 +112,10 @@ export class AgentRuntime extends EventEmitter {
   private toolGateway: ToolGateway;
   private researchService: ResearchService;
   private automationEngine?: any;
+  private promptComposer: IntelligentPromptComposer;
+  private curatedSkillRegistry: CuratedSkillRegistry;
+  private firecrawlAdapter: FirecrawlResearchAdapter;
+  private rufloAdapter: RufloOrchestrationAdapter;
 
   constructor(
     private modelRouter: ModelRouter,
@@ -89,7 +129,11 @@ export class AgentRuntime extends EventEmitter {
     workflowRepo?: WorkflowRepository,
     workflowEngine?: WorkflowEngine,
     workflowCompiler?: WorkflowCompiler,
-    toolGateway?: ToolGateway
+    toolGateway?: ToolGateway,
+    promptComposer?: IntelligentPromptComposer,
+    curatedSkillRegistry?: CuratedSkillRegistry,
+    firecrawlAdapter?: FirecrawlResearchAdapter,
+    rufloAdapter?: RufloOrchestrationAdapter
   ) {
     super();
     const isDbConfigured = Boolean(process.env.DATABASE_URL?.trim());
@@ -98,6 +142,10 @@ export class AgentRuntime extends EventEmitter {
     this.workflowRepo = workflowRepo || (isDbConfigured ? new PostgresWorkflowRepository() : new InMemoryWorkflowRepository());
     this.workflowCompiler = workflowCompiler || new WorkflowCompiler(this.modelRouter);
     this.researchService = new ResearchService(this.toolRegistry, this.knowledgeEngine);
+    this.curatedSkillRegistry = curatedSkillRegistry || new CuratedSkillRegistry();
+    this.promptComposer = promptComposer || new IntelligentPromptComposer(new PromptProfileRegistry(), this.capabilityRegistry);
+    this.firecrawlAdapter = firecrawlAdapter || new FirecrawlResearchAdapter();
+    this.rufloAdapter = rufloAdapter || new RufloOrchestrationAdapter();
     this.workflowEngine = workflowEngine || new WorkflowEngine(
       this.workflowRepo,
       this.runRepo,
@@ -117,6 +165,22 @@ export class AgentRuntime extends EventEmitter {
 
   public getCapabilityRegistry(): CapabilityRegistry {
     return this.capabilityRegistry;
+  }
+
+  public getPromptComposer(): IntelligentPromptComposer {
+    return this.promptComposer;
+  }
+
+  public getCuratedSkillRegistry(): CuratedSkillRegistry {
+    return this.curatedSkillRegistry;
+  }
+
+  public getFirecrawlAdapter(): FirecrawlResearchAdapter {
+    return this.firecrawlAdapter;
+  }
+
+  public getRufloAdapter(): RufloOrchestrationAdapter {
+    return this.rufloAdapter;
   }
 
   public getRouter(): ServerIntentRouter {
@@ -770,11 +834,10 @@ export class AgentRuntime extends EventEmitter {
         } else if (run.prompt.toLowerCase().includes('git status') || run.prompt.toLowerCase().includes('repo status')) {
           selectedToolName = 'repo_git_status';
           selectedArgs = {};
-        } else if (run.prompt.toLowerCase().includes('calc') || /calculate|\b\d+\s*[-+*/]\s*\d+/.test(run.prompt.toLowerCase())) {
+        } else if (extractCalculatorExpression(run.prompt)) {
+          const calcExpr = extractCalculatorExpression(run.prompt);
           selectedToolName = 'calculator';
-          const calcMatch = run.prompt.match(/(?:calculate|calc|compute)\s*:?\s*([0-9+\-*/().^]*[0-9]+[0-9+\-*/().^ ]*)/i);
-          const rawExpr = calcMatch ? calcMatch[1] : (run.prompt.match(/([0-9+\-*/().^]*[0-9]+[0-9+\-*/().^ ]*)/)?.[0] || '1024 * 4');
-          selectedArgs = { expression: rawExpr.replace(/[^0-9+\-*/().^ ]/g, '').replace(/[. ]+$/, '').trim() };
+          selectedArgs = { expression: calcExpr };
         } else if (
           run.routingDecision?.sideEffectLevel === 'DESTRUCTIVE' ||
           run.prompt.toLowerCase().includes('shell') ||
@@ -1118,27 +1181,29 @@ export class AgentRuntime extends EventEmitter {
       const writingProfile = adaptiveSynthesizer.deriveProfile(run.prompt, resolvedInstructions);
       const systemDirective = adaptiveSynthesizer.buildSystemDirective(writingProfile);
 
-      if (run.intent === 'RESEARCH') {
-        messages.push({
-          role: 'system',
-          content: `${systemDirective}\n\nYou are operating in rigorous Research mode. Provide evidence-backed synthesis, cite available sources, decompose key claims, and distinguish established facts from inference. Do NOT manufacture citations or claims without evidence.`
-        });
-      } else if (run.intent === 'AGENT_MISSION') {
-        messages.push({
-          role: 'system',
-          content: `${systemDirective}\n\nYou are operating in Autonomous Mission mode. Deliver clear execution results, steps undertaken, verification findings, and a concise summary.`
-        });
-      } else if (resolvedInstructions.effectiveInstructions.length > 0) {
-        messages.push({
-          role: 'system',
-          content: `${systemDirective}\n\nContextual Guidelines:\n${resolvedInstructions.effectiveInstructions.join('\n')}`
-        });
-      } else {
-        messages.push({
-          role: 'system',
-          content: systemDirective
-        });
-      }
+      const isAgentMode = run.intent === 'AGENT_MISSION' || run.intent === 'WORKFLOW';
+      const promptMode = isAgentMode ? 'agent' : 'chat';
+      const authorizedToolList = isAgentMode
+        ? (typeof (this.toolRegistry as any).listDefinitions === 'function'
+            ? this.toolRegistry.listDefinitions()
+            : typeof (this.toolRegistry as any).list === 'function'
+              ? (this.toolRegistry as any).list()
+              : []
+          ).map((t: any) => ({ name: t.name, description: t.description }))
+        : [];
+
+      const composedPromptResult = this.promptComposer.compose({
+        mode: promptMode,
+        userPrompt: run.prompt,
+        customInstructions: run.systemPrompt,
+        activeProjectId: run.projectId || undefined,
+        authorizedTools: authorizedToolList
+      });
+
+      messages.push({
+        role: 'system',
+        content: `${systemDirective}\n\n${composedPromptResult.systemPrompt}`
+      });
 
       if (durablePastHistory) {
         messages.push({
@@ -1538,3 +1603,7 @@ export * from './workflow-repositories.js';
 export * from './registry.js';
 export * from './router.js';
 export * from './repositories.js';
+export * from './prompt-composer/index.js';
+export * from './skills/curated-skill-registry.js';
+export * from './research/firecrawl-adapter.js';
+export * from './orchestration/ruflo-adapter.js';

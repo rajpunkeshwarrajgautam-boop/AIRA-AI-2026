@@ -39,3 +39,16 @@ test-results/builder/
 .swarm/
 ruvector.db
 
+
+# Ruflo local secrets and runtime data
+.env
+.env.local
+.env.*.local
+.claude-flow/data/
+.claude-flow/logs/
+.claude-flow/sessions/
+.claude/
+.mcp.json
+CLAUDE.md
+agentdb.rvf
+agentdb.rvf.idmap.json

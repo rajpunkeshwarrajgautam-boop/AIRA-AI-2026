@@ -47,6 +47,10 @@ export class ToolRegistry {
     return Array.from(this.tools.values()).map(t => t.definition);
   }
 
+  public list(): ToolDefinition[] {
+    return this.listDefinitions();
+  }
+
   public getAuditLog() {
     return [...this.auditLog];
   }

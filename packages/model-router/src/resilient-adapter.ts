@@ -83,6 +83,15 @@ export class ResilientModelAdapter implements ModelAdapter {
     const primaryModel = this.getModelName(this.primaryAdapter, policy);
     const t0 = performance.now();
 
+    // Circuit Breaker check: if primary circuit is OPEN, bypass directly to fallback
+    if (!this.healthTracker.isAvailable(this.primaryAdapter.provider, primaryModel) && this.fallbackAdapter && !signal?.aborted) {
+      const fallbackModel = this.getModelName(this.fallbackAdapter, policy);
+      const fbRes = await this.fallbackAdapter.complete(messages, policy, signal);
+      const fbElapsed = Math.round(performance.now() - t0);
+      this.healthTracker.recordSuccess(this.fallbackAdapter.provider, fallbackModel, fbElapsed);
+      return fbRes;
+    }
+
     try {
       signal?.throwIfAborted();
       const res = await this.primaryAdapter.complete(messages, policy, signal);
@@ -114,6 +123,7 @@ export class ResilientModelAdapter implements ModelAdapter {
       onProvenance?: (provenance: any) => void;
     }
   ): Promise<ModelCompletionResult> {
+    this.stickinessLocked = false;
     const firstTokenTimeoutMs = options?.firstTokenTimeoutMs ?? this.config.firstTokenTimeoutMs ?? 2500;
     const enableHedging = this.config.enableHedging ?? false;
     const hedgeDelayMs = this.config.hedgeDelayMs ?? 1200;
@@ -185,6 +195,9 @@ export class ResilientModelAdapter implements ModelAdapter {
     }
 
     try {
+      if (!this.healthTracker.isAvailable(this.primaryAdapter.provider, primaryModel)) {
+        throw new Error(`Primary provider ${this.primaryAdapter.provider}:${primaryModel} circuit breaker is OPEN`);
+      }
       const res = await this.primaryAdapter.stream(
         messages,
         policy,
