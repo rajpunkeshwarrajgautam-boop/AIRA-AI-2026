@@ -59,7 +59,20 @@ export interface ISpecialistAgent {
   readonly requiredCapabilities: readonly CapabilityCategory[];
 
   /**
-   * Validates whether a caller context is authorized to invoke this specialist.
+   * Performs preliminary execution-context preflight validation.
+   *
+   * SECURITY BOUNDARY:
+   * This is a client/caller preflight check to fail fast on unauthenticated contexts,
+   * missing capability requirements, or exhausted budgets before execution begins.
+   *
+   * It is NOT an authoritative server-side authorization grant. Supplying
+   * authorizedCapabilities or effectiveToolScopes in SpecialistExecutionContext
+   * does NOT independently grant permissions, elevate privileges, or bypass server-side
+   * security controls.
+   *
+   * Authoritative access control, workspace isolation, tool permissions, and
+   * side-effect approvals remain strictly and exclusively enforced downstream
+   * by ToolGateway and ApprovalKernel.
    */
   canExecute(context: SpecialistExecutionContext): { authorized: boolean; reason?: string };
 
@@ -75,7 +88,15 @@ export interface ISpecialistAgent {
 
 /**
  * Standard base class for future native AIRA specialist agent implementations.
- * Enforces non-bypassable pre-execution capability verification and signal cancellation.
+ * Enforces preliminary pre-execution context validation and signal cancellation.
+ *
+ * SECURITY INVARIANT:
+ * BaseSpecialistAgent provides structural preflight validation to ensure that execution
+ * requests conform to expected principal, capability, and budget boundaries.
+ * It does NOT grant authorization:
+ * - Tool access is strictly gated downstream by ToolGateway.
+ * - Side-effect operations and human approvals are strictly governed by ApprovalKernel.
+ * - Supplying tool scopes in SpecialistExecutionContext does not authorize tool invocation.
  */
 export abstract class BaseSpecialistAgent implements ISpecialistAgent {
   abstract readonly role: SpecialistRole;
@@ -83,14 +104,22 @@ export abstract class BaseSpecialistAgent implements ISpecialistAgent {
   abstract readonly description: string;
   abstract readonly requiredCapabilities: readonly CapabilityCategory[];
 
+  /**
+   * Preliminary pre-execution context validation.
+   * Validates that principal is present, required capabilities are declared,
+   * and token budget is positive.
+   *
+   * NOTE: This is preflight validation only. Authoritative server-side authorization
+   * is performed downstream by ToolGateway and ApprovalKernel at tool-invocation time.
+   */
   public canExecute(context: SpecialistExecutionContext): { authorized: boolean; reason?: string } {
     if (!context.principal || !context.principal.userId) {
       return { authorized: false, reason: 'Unauthenticated caller: valid execution principal is required.' };
     }
 
-    // Verify all required capabilities are granted in the execution context
+    // Verify all required capabilities are declared in caller execution context
     for (const reqCap of this.requiredCapabilities) {
-      if (!context.authorizedCapabilities.includes(reqCap)) {
+      if (!context.authorizedCapabilities || !context.authorizedCapabilities.includes(reqCap)) {
         return {
           authorized: false,
           reason: `Missing required capability: "${reqCap}" is not authorized for principal "${context.principal.userId}".`
@@ -98,8 +127,8 @@ export abstract class BaseSpecialistAgent implements ISpecialistAgent {
       }
     }
 
-    if (context.remainingBudget.remainingTokens <= 0) {
-      return { authorized: false, reason: 'Budget exhausted: remaining token budget is zero.' };
+    if (!context.remainingBudget || typeof context.remainingBudget.remainingTokens !== 'number' || context.remainingBudget.remainingTokens <= 0) {
+      return { authorized: false, reason: 'Budget exhausted: remaining token budget is zero or negative.' };
     }
 
     return { authorized: true };
@@ -151,6 +180,11 @@ export abstract class BaseSpecialistAgent implements ISpecialistAgent {
 
   /**
    * Canonical result envelope helper.
+   *
+   * PROVENANCE CLASSIFICATION:
+   * The provenance field populated here represents standard runtime telemetry
+   * metadata (worker identifier and prompt profile ID) used for operational tracing.
+   * It is NOT a cryptographically signed execution receipt or worker identity attestation.
    */
   protected buildResult(
     context: SpecialistExecutionContext,

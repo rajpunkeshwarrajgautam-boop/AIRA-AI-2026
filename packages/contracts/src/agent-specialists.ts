@@ -124,10 +124,20 @@ export const SpecialistUsageSchema = z.object({
 });
 export type SpecialistUsage = z.infer<typeof SpecialistUsageSchema>;
 
+/**
+ * Structural execution telemetry metadata.
+ *
+ * NOTE ON PROVENANCE CLASSIFICATION:
+ * In Milestone 1, this structure captures standard operational telemetry metadata
+ * (worker identifier, prompt profile reference) for tracing and logging.
+ * It is NOT a cryptographically verified execution receipt or hardware worker attestation.
+ * Do not fabricate cryptographic signatures or claim tamper-proof provenance
+ * where asymmetric signing is not implemented.
+ */
 export const SpecialistProvenanceSchema = z.object({
-  workerId: z.string().min(1),
-  executionSignature: z.string().optional(),
-  promptProfileId: z.string().optional()
+  workerId: z.string().min(1).describe('Operational identifier of the worker runtime (runtime telemetry, not cryptographic attestation)'),
+  executionSignature: z.string().optional().describe('Optional correlation signature for tracking; not a cryptographic receipt in M1'),
+  promptProfileId: z.string().optional().describe('Identifier of the prompt profile used for execution context')
 });
 export type SpecialistProvenance = z.infer<typeof SpecialistProvenanceSchema>;
 
