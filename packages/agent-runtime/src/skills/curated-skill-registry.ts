@@ -200,8 +200,8 @@ export class CuratedSkillRegistry {
         sourceRepo: 'benjaminasterA/antigravity-awesome-skills',
         sourceFile: 'skills/deep-research/SKILL.md',
         sourceCommit: BENJAMINASTERA_COMMIT_SHA,
-        license: 'MIT',
-        provenanceType: 'VERIFIED_UPSTREAM_PROMPT',
+        license: 'Apache-2.0', // Upstream source sanjay3290/ai-skills is Apache-2.0
+        provenanceType: 'AIRA_ADAPTED_UPSTREAM',
         verificationStatus: 'VERIFIED',
         securityReviewDate: '2026-10-26',
         reviewer: 'AIRA Security Architecture'
@@ -249,10 +249,10 @@ export class CuratedSkillRegistry {
       enabled: true
     });
 
-    // 4. Mathematical Precision (agentic-awesome-skills)
+    // 4. Mathematical Precision (agentic-awesome-skills / morsechimwai/lemmaly MathGuard)
     this.register({
       id: 'skill_mathematical_precision',
-      name: 'Mathematical Precision & Quota Arithmetic',
+      name: 'Advanced Algorithmic Optimization & Probabilistic Mathematics (MathGuard)',
       version: '1.0.0',
       category: 'data_analysis',
       trustLevel: 'AUDITED_EXTERNAL',
@@ -263,10 +263,10 @@ export class CuratedSkillRegistry {
         allowShell: false
       },
       provenance: {
-        sourceRepo: 'sickn33/agentic-awesome-skills',
+        sourceRepo: 'sickn33/agentic-awesome-skills', // Original source: morsechimwai/lemmaly
         sourceFile: 'skills/mathguard/SKILL.md',
         sourceCommit: SICKN33_COMMIT_SHA,
-        license: 'MIT',
+        license: 'Apache-2.0', // Upstream morsechimwai/lemmaly is Apache-2.0
         provenanceType: 'VERIFIED_UPSTREAM_PROMPT',
         verificationStatus: 'VERIFIED',
         securityReviewDate: '2026-10-26',
@@ -278,7 +278,7 @@ export class CuratedSkillRegistry {
         auditedAt: '2026-10-26T08:00:00Z',
         auditor: 'AIRA Security Architecture'
       },
-      promptAddendum: 'Evaluate formulas deterministically. Never invent default expressions when user prompt contains no arithmetic formula.',
+      promptAddendum: 'For large-scale datasets and compute-intensive operations (n >= 10^6), escalate to sub-linear and probabilistic algorithms (Bloom filters, HyperLogLog, Count-Min sketch, FFT, JL projection) instead of classical O(n log n) floors. (Note: Deterministic arithmetic expression parsing is handled directly by AIRA native calculator kernel).',
       enabled: true
     });
 

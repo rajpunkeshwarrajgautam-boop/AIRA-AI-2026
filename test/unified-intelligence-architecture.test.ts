@@ -317,10 +317,21 @@ describe('AIRA AI 2026 — Unified Intelligence Architecture Suite', () => {
       assert.strictEqual(skill.provenance.sourceCommit.length, 40, `Skill "${skill.id}" must have full 40-char commit SHA`);
       assert.ok(/^[0-9a-f]{40}$/i.test(skill.provenance.sourceCommit));
       assert.strictEqual(skill.provenance.verificationStatus, 'VERIFIED');
-      assert.strictEqual(skill.provenance.license, 'MIT');
+      assert.ok(['MIT', 'Apache-2.0'].includes(skill.provenance.license), `Skill "${skill.id}" must have verified license (MIT or Apache-2.0)`);
       // 4. Honest unbenchmarked evaluation status (zero fabricated scores)
       assert.strictEqual(skill.evaluationResult.evaluationStatus, 'UNBENCHMARKED_CURATED_PROMPT');
     }
+
+    // Specific Individual License & Semantic Mapping Verifications
+    const mathSkill = registry.get('skill_mathematical_precision')!;
+    assert.strictEqual(mathSkill.provenance.license, 'Apache-2.0', 'MathGuard upstream from morsechimwai/lemmaly is Apache-2.0');
+    assert.ok(mathSkill.promptAddendum.includes('Bloom filters, HyperLogLog'), 'MathGuard addendum must reflect high-cardinality algorithmic optimization');
+
+    const researchSkill = registry.get('skill_deep_research_synthesis')!;
+    assert.strictEqual(researchSkill.provenance.license, 'Apache-2.0', 'Deep research upstream from sanjay3290/ai-skills is Apache-2.0');
+
+    const debugSkill = registry.get('skill_systematic_debugging')!;
+    assert.strictEqual(debugSkill.provenance.license, 'MIT');
 
     // 5. Reject registration of skill requesting shell
     assert.throws(() => {
