@@ -36,6 +36,27 @@ import { InstructionResolver } from './behavioral/instruction-resolver.js';
 import { AdaptiveSynthesizer } from './behavioral/adaptive-synthesizer.js';
 import { ToolRecoveryEngine } from './behavioral/tool-recovery-engine.js';
 
+/**
+ * Strictly detect repository intent.
+ * Generic words such as 'status', 'log', 'branch', or 'diff' on their own MUST NOT trigger repository operations.
+ * Requires explicit git/repo/codebase context or explicit git commands.
+ */
+export function isRepositoryIntent(prompt: string): boolean {
+  if (!prompt || typeof prompt !== 'string') return false;
+  const lower = prompt.toLowerCase();
+  
+  // Explicit git commands or repo phrases
+  if (/\bgit\s+(?:status|log|diff|branch|commit|show|history|blame)\b/i.test(lower)) return true;
+  if (/\b(?:repo|repository|codebase)\s+(?:status|log|diff|branch|commits?|history|state|inspect)\b/i.test(lower)) return true;
+  
+  // Must have clear repository qualifier when paired with action terms
+  const hasRepoContext = /\b(?:git|repo|repository|codebase|github)\b/i.test(lower);
+  if (!hasRepoContext) return false;
+  
+  return /\b(?:status|log|diff|branch|commits?|history|head|tracking|inspect|read)\b/i.test(lower) ||
+         /\b(?:check|inspect|show|display|get)\s+(?:the\s+)?(?:git|repo|repository|codebase)\b/i.test(lower);
+}
+
 export class AgentRuntime extends EventEmitter {
   private eventStreams: Map<string, EventEmitter> = new Map();
   private inFlightRuns: Map<string, Run> = new Map();
@@ -434,6 +455,10 @@ export class AgentRuntime extends EventEmitter {
     if (state === 'COMPLETED' || state === 'FAILED' || state === 'CANCELLED') {
       run.completedAt = run.updatedAt;
     }
+    if (state === 'COMPLETED') {
+      run.executionCheckpoint = 'COMPLETED';
+    }
+
     if (state === 'FAILED' && run.provenance) {
       run.provenance.verified = false;
       run.provenance.executionStatus = 'FAILED';
@@ -449,11 +474,24 @@ export class AgentRuntime extends EventEmitter {
       state === 'CANCELLED' ? 'run.cancelled' :
       state === 'RUNNING' ? 'run.started' : 'run.started';
 
-    await this.emitRunEvent(runId, eventType, { state, error });
+    const event: StreamingEvent = {
+      eventId: `evt_${crypto.randomUUID().slice(0, 8)}`,
+      runId,
+      type: eventType,
+      timestamp: Date.now(),
+      data: { state, error }
+    };
+
+    let pending = this.pendingRunEvents.get(runId);
+    if (!pending) {
+      pending = [];
+      this.pendingRunEvents.set(runId, pending);
+    }
+    pending.push(event);
 
     if (state === 'COMPLETED' || state === 'FAILED' || state === 'CANCELLED' || state === 'WAITING_FOR_APPROVAL') {
-      await this.flushPendingEvents(runId);
       await this.saveRun(run);
+      await this.flushPendingEvents(runId);
       if (state === 'COMPLETED' || state === 'FAILED' || state === 'CANCELLED') {
         setTimeout(() => {
           this.inFlightRuns.delete(runId);
@@ -464,6 +502,10 @@ export class AgentRuntime extends EventEmitter {
     } else if (state === 'WAITING_FOR_TOOL') {
       await this.saveRun(run);
     }
+
+    const stream = this.getEventStream(runId);
+    stream.emit('event', event);
+    this.emit('run_event', { runId, event });
   }
 
   private async executeRunLoop(runId: string): Promise<void> {
@@ -730,8 +772,9 @@ export class AgentRuntime extends EventEmitter {
           selectedArgs = {};
         } else if (run.prompt.toLowerCase().includes('calc') || /calculate|\b\d+\s*[-+*/]\s*\d+/.test(run.prompt.toLowerCase())) {
           selectedToolName = 'calculator';
-          const exprMatch = run.prompt.match(/([0-9+\-*/().^ ]+)/);
-          selectedArgs = { expression: exprMatch ? exprMatch[0].trim() : '1024 * 4' };
+          const calcMatch = run.prompt.match(/(?:calculate|calc|compute)\s*:?\s*([0-9+\-*/().^]*[0-9]+[0-9+\-*/().^ ]*)/i);
+          const rawExpr = calcMatch ? calcMatch[1] : (run.prompt.match(/([0-9+\-*/().^]*[0-9]+[0-9+\-*/().^ ]*)/)?.[0] || '1024 * 4');
+          selectedArgs = { expression: rawExpr.replace(/[^0-9+\-*/().^ ]/g, '').replace(/[. ]+$/, '').trim() };
         } else if (
           run.routingDecision?.sideEffectLevel === 'DESTRUCTIVE' ||
           run.prompt.toLowerCase().includes('shell') ||
@@ -984,9 +1027,14 @@ export class AgentRuntime extends EventEmitter {
         await this.emitRunEvent(runId, 'tool.completed', finalToolResult);
 
         await this.transitionRunState(runId, 'RUNNING');
-        
+
         // Bounded iterative loop for AGENT_MISSION (up to 3 steps)
-        if (run.intent === 'AGENT_MISSION' && run.stepCount < 3) {
+        // Strictly condition repository tool selection on explicit repository intent AND principal authorization.
+        // Calculator missions or non-repository missions must never request repository tools.
+        const isRepoMission = isRepositoryIntent(run.prompt);
+        const hasRepoScope = (run.principalScopes || []).includes('repo.read') || (run.principalScopes || []).includes('*');
+
+        if (run.intent === 'AGENT_MISSION' && isRepoMission && hasRepoScope && run.stepCount < 3) {
           let nextToolName: string | null = null;
           let nextArgs: Record<string, unknown> = {};
 

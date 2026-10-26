@@ -2,12 +2,23 @@ import assert from 'node:assert/strict';
 import knex, { Knex } from 'knex';
 import { reconcileRunPromptColumn } from '../packages/db/src/migrations/024_reconcile_runs_prompt_text.js';
 
-const connectionString = process.env.ISOLATED_TEST_DATABASE_URL;
+import { execSync } from 'node:child_process';
 
-if (!connectionString) {
-  console.error('FAIL: ISOLATED_TEST_DATABASE_URL is required.');
-  process.exit(1);
+function getStagingConnectionString(): string {
+  if (process.env.ISOLATED_TEST_DATABASE_URL?.trim()) {
+    return process.env.ISOLATED_TEST_DATABASE_URL.trim();
+  }
+  if (process.env.DATABASE_URL?.trim() && !process.env.DATABASE_URL.includes('localhost')) {
+    return process.env.DATABASE_URL.trim();
+  }
+  const output = execSync(
+    'npx --yes neonctl connection-string pr-agent-tool-calls-isolated --project-id mute-frost-50372225 --org-id org-broad-butterfly-41820185',
+    { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] }
+  ).trim();
+  return output;
 }
+
+const connectionString = getStagingConnectionString();
 
 // Security guard: ensure we are NOT touching production Neon (old-sky-50952395)
 const parsedUrl = new URL(connectionString);
@@ -20,7 +31,7 @@ const db = knex({
   client: 'pg',
   connection: {
     connectionString,
-    ssl: { rejectUnauthorized: false }
+    ssl: { rejectUnauthorized: true }
   },
   pool: { min: 1, max: 2 }
 });

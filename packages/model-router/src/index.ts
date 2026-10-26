@@ -109,7 +109,7 @@ export class DeterministicMockAdapter implements ModelAdapter {
       : undefined;
 
     let text = `Processed your request using ${policy.model}.`;
-    if (lastUserMessage.includes('[System Tool Execution Result')) {
+    if (lastUserMessage.includes('[System Tool Execution Result') || lastUserMessage.includes('[System Tool Execution Findings]')) {
       if (lastUserMessage.includes('browser_navigate') || lastUserMessage.includes('pageHeading')) {
         let heading = 'Example Domain';
         const match = lastUserMessage.match(/"pageHeading":\s*"([^"]+)"/);
@@ -118,7 +118,9 @@ export class DeterministicMockAdapter implements ModelAdapter {
       } else if (lastUserMessage.includes('repo_git_log') || lastUserMessage.includes('latest commit')) {
         text = `Repository inspection complete. Retrieved commit history successfully.`;
       } else if (lastUserMessage.includes('calculator')) {
-        text = `Calculation completed successfully. Result: 4096.`;
+        const match = lastUserMessage.match(/Output:\s*"?([0-9.]+)"?/i) || lastUserMessage.match(/"result":\s*"?([0-9.]+)"?/i);
+        const res = match ? match[1] : '4194304';
+        text = `Calculation completed successfully. Result: ${res}.`;
       } else {
         text = `Tool execution completed. Findings synthesized successfully.`;
       }
@@ -214,6 +216,9 @@ export function resolveAnthropicModel(model: ModelId | string): string {
       if (typeof model === 'string' && model.startsWith('claude-')) {
         return model;
       }
+      if (typeof model === 'string' && model.startsWith('aira-')) {
+        return model;
+      }
       return 'claude-3-7-sonnet-20250219';
   }
 }
@@ -230,18 +235,30 @@ export function resolveOpenAIModel(model: ModelId | string): string {
       if (typeof model === 'string' && model.startsWith('gpt-')) {
         return model;
       }
+      if (typeof model === 'string' && model.startsWith('aira-')) {
+        return model;
+      }
       return 'gpt-4o';
   }
 }
 
 export function resolveNvidiaModel(model: ModelId | string): string {
+  if (model === 'meta/llama-3.1-405b-instruct') {
+    return process.env.NVIDIA_DEFAULT_MODEL || 'nvidia/nemotron-3-super-120b-a12b';
+  }
   if (process.env.NVIDIA_FAST_MODEL && model === 'aira-fast') {
     return process.env.NVIDIA_FAST_MODEL;
   }
   if (process.env.NVIDIA_DEEP_MODEL && model === 'aira-deep') {
     return process.env.NVIDIA_DEEP_MODEL;
   }
+  if (model === 'aira-fast' || model === 'aira-deep' || model === 'aira-auto' || model === 'aira-pro') {
+    return process.env.NVIDIA_DEFAULT_MODEL || 'nvidia/nemotron-3-super-120b-a12b';
+  }
   if (typeof model === 'string' && (model.startsWith('nvidia/') || model.startsWith('meta/') || model.startsWith('nv-'))) {
+    return model;
+  }
+  if (typeof model === 'string' && model.startsWith('aira-')) {
     return model;
   }
   return process.env.NVIDIA_DEFAULT_MODEL || 'nvidia/nemotron-3-super-120b-a12b';
@@ -274,6 +291,9 @@ export class AnthropicAdapter implements ModelAdapter {
       }));
 
     const outboundModel = resolveAnthropicModel(policy.model);
+    if (outboundModel.startsWith('aira-')) {
+      throw new Error(`INTERNAL_MODEL_ALIAS_LEAK: Refusing to dispatch internal alias "${outboundModel}" to external provider anthropic.`);
+    }
     const response = await fetch(`${this.baseUrl}/messages`, {
       signal,
       method: 'POST',
@@ -333,6 +353,8 @@ export class OpenAIAdapter implements ModelAdapter {
   private baseUrl: string;
   private airaModel: ModelId | string;
 
+  public modelName: string;
+
   constructor(
     apiKey?: string,
     baseUrl = 'https://api.openai.com/v1',
@@ -341,6 +363,7 @@ export class OpenAIAdapter implements ModelAdapter {
   ) {
     this.baseUrl = (baseUrl || 'https://api.openai.com/v1').trim().replace(/\/+$/, '');
     this.airaModel = (typeof airaModel === 'string' ? airaModel : '').trim().replace(/^["']|["']$/g, '') || airaModel;
+    this.modelName = String(this.airaModel);
     if (provider) {
       this.provider = provider;
     } else if (baseUrl.includes('integrate.api.nvidia.com')) {
@@ -379,13 +402,24 @@ export class OpenAIAdapter implements ModelAdapter {
     const maxRetries = 2;
     let lastError: Error | null = null;
 
-    const outboundModel = policy.model.startsWith('aira-')
-      ? (this.baseUrl.includes('api.openai.com')
-          ? resolveOpenAIModel(policy.model)
-          : this.baseUrl.includes('integrate.api.nvidia.com')
-            ? resolveNvidiaModel(policy.model)
-            : this.airaModel)
-      : policy.model;
+    let outboundModel = policy.model;
+    if (outboundModel.startsWith('aira-')) {
+      if (this.baseUrl.includes('api.openai.com') || this.provider === 'openai') {
+        outboundModel = resolveOpenAIModel(policy.model);
+      } else if (this.baseUrl.includes('integrate.api.nvidia.com') || this.provider === 'nvidia') {
+        outboundModel = resolveNvidiaModel(policy.model);
+      } else if (this.provider === 'groq') {
+        outboundModel = (typeof this.airaModel === 'string' && !this.airaModel.startsWith('aira-'))
+          ? this.airaModel
+          : (process.env.AIRA_FAST_MODEL || 'openai/gpt-oss-120b');
+      } else if (typeof this.airaModel === 'string' && !this.airaModel.startsWith('aira-')) {
+        outboundModel = this.airaModel;
+      }
+    }
+
+    if (outboundModel.startsWith('aira-')) {
+      throw new Error(`INTERNAL_MODEL_ALIAS_LEAK: Refusing to dispatch internal alias "${outboundModel}" to external provider "${this.provider}".`);
+    }
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       signal?.throwIfAborted();
@@ -460,14 +494,24 @@ export class OpenAIAdapter implements ModelAdapter {
     onChunk: (delta: { text?: string; thinking?: string }) => void,
     options?: { firstTokenTimeoutMs?: number; signal?: AbortSignal }
   ): Promise<ModelCompletionResult> {
-    if (!this.apiKey) throw new Error(`${this.provider.toUpperCase()} API key is not configured.`);
-    const outboundModel = policy.model.startsWith('aira-')
-      ? (this.baseUrl.includes('api.openai.com')
-          ? resolveOpenAIModel(policy.model)
-          : this.baseUrl.includes('integrate.api.nvidia.com')
-            ? resolveNvidiaModel(policy.model)
-            : this.airaModel)
-      : policy.model;
+    let outboundModel = policy.model;
+    if (outboundModel.startsWith('aira-')) {
+      if (this.baseUrl.includes('api.openai.com') || this.provider === 'openai') {
+        outboundModel = resolveOpenAIModel(policy.model);
+      } else if (this.baseUrl.includes('integrate.api.nvidia.com') || this.provider === 'nvidia') {
+        outboundModel = resolveNvidiaModel(policy.model);
+      } else if (this.provider === 'groq') {
+        outboundModel = (typeof this.airaModel === 'string' && !this.airaModel.startsWith('aira-'))
+          ? this.airaModel
+          : (process.env.AIRA_FAST_MODEL || 'openai/gpt-oss-120b');
+      } else if (typeof this.airaModel === 'string' && !this.airaModel.startsWith('aira-')) {
+        outboundModel = this.airaModel;
+      }
+    }
+
+    if (outboundModel.startsWith('aira-')) {
+      throw new Error(`INTERNAL_MODEL_ALIAS_LEAK: Refusing to dispatch internal alias "${outboundModel}" to external provider "${this.provider}".`);
+    }
 
     // First-token deadline timer (commercially reasonable deadline: e.g. 3000ms for fast normal chat)
     const firstTokenTimeoutMs = options?.firstTokenTimeoutMs ?? (policy.model === 'aira-fast' ? 3000 : 0);
@@ -929,9 +973,9 @@ export class ModelRouter {
 
       let providerPreference: Array<SupportedProvider>;
       if (model === 'aira-deep') {
-        providerPreference = ['anthropic', 'nvidia', 'openai'];
+        providerPreference = ['anthropic', 'nvidia', 'openai', 'groq', 'gemini'];
       } else {
-        providerPreference = ['anthropic', 'nvidia', 'openai'];
+        providerPreference = ['anthropic', 'nvidia', 'openai', 'groq', 'gemini'];
       }
 
       const preferredProvider = providerPreference[0];
@@ -965,6 +1009,7 @@ export class ModelRouter {
         const formatName = (p: string) => {
           if (p === 'nvidia') return 'NVIDIA NIM';
           if (p === 'groq') return 'Groq';
+          if (p === 'gemini') return 'Gemini';
           if (p === 'cerebras') return 'Cerebras';
           if (p === 'together') return 'Together AI';
           if (p === 'fireworks') return 'Fireworks AI';
@@ -982,6 +1027,8 @@ export class ModelRouter {
       if (selectedProvider === 'groq') {
         const raw = (process.env.AIRA_FAST_MODEL || '').trim().replace(/^["']|["']$/g, '');
         executedModel = raw || 'openai/gpt-oss-120b';
+      } else if (selectedProvider === 'gemini') {
+        executedModel = (process.env.AIRA_GEMINI_MODEL || '').trim().replace(/^["']|["']$/g, '') || 'gemini-3.5-flash-lite';
       } else if (selectedProvider === 'cerebras') {
         executedModel = process.env.AIRA_FAST_MODEL || 'llama3.1-8b';
       } else if (selectedProvider === 'together') {
@@ -1024,9 +1071,26 @@ export class ModelRouter {
         combinedReason = modelFallbackReason;
       }
 
+      let effectiveAdapter = selectedAdapter;
+      if (selectedProvider === 'nvidia') {
+        const fallbackAdapter = this.adapters.has('groq')
+          ? this.createModelSpecificAdapter('groq', 'openai/gpt-oss-120b')
+          : (this.adapters.has('gemini') ? this.createModelSpecificAdapter('gemini', 'gemini-3.5-flash-lite') : null);
+        const tertiaryAdapter = (fallbackAdapter && fallbackAdapter.provider === 'groq' && this.adapters.has('gemini'))
+          ? this.createModelSpecificAdapter('gemini', 'gemini-3.5-flash-lite')
+          : null;
+        if (fallbackAdapter) {
+          effectiveAdapter = new ResilientModelAdapter(selectedAdapter, fallbackAdapter, this.healthTracker, {
+            firstTokenTimeoutMs: 3500,
+            fallbackFirstTokenTimeoutMs: 4000,
+            tertiaryAdapter
+          });
+        }
+      }
+
       return {
         policy,
-        adapter: selectedAdapter,
+        adapter: effectiveAdapter,
         provider: selectedProvider,
         requestedProvider: preferredProvider,
         executedProvider: selectedProvider,
@@ -1148,9 +1212,24 @@ export class ModelRouter {
       if (this.adapters.has('nvidia')) {
         const isLegacyLlama = requestedModelId === 'meta/llama-3.1-405b-instruct';
         const targetModel = isLegacyLlama ? 'nvidia/nemotron-3-super-120b-a12b' : model;
+        const primaryAdapter = this.createModelSpecificAdapter('nvidia', targetModel);
+        const fallbackAdapter = this.adapters.has('groq')
+          ? this.createModelSpecificAdapter('groq', 'openai/gpt-oss-120b')
+          : (this.adapters.has('gemini') ? this.createModelSpecificAdapter('gemini', 'gemini-3.5-flash-lite') : null);
+        const tertiaryAdapter = (fallbackAdapter && fallbackAdapter.provider === 'groq' && this.adapters.has('gemini'))
+          ? this.createModelSpecificAdapter('gemini', 'gemini-3.5-flash-lite')
+          : null;
+        const resilientAdapter = fallbackAdapter
+          ? new ResilientModelAdapter(primaryAdapter, fallbackAdapter, this.healthTracker, {
+              firstTokenTimeoutMs: 3500,
+              fallbackFirstTokenTimeoutMs: 4000,
+              tertiaryAdapter
+            })
+          : primaryAdapter;
+
         return {
           policy,
-          adapter: this.adapters.get('nvidia')!,
+          adapter: resilientAdapter,
           provider: 'nvidia',
           requestedProvider: 'nvidia',
           executedProvider: 'nvidia',

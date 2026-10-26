@@ -1,0 +1,227 @@
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { execSync } from 'node:child_process';
+import knex, { Knex } from 'knex';
+import { reconcileToolCallsSchema } from '../packages/db/src/migrations/025_reconcile_tool_calls_schema.js';
+
+function resolveTestConnectionString(): string {
+  if (process.env.ISOLATED_TEST_DATABASE_URL?.trim()) {
+    return process.env.ISOLATED_TEST_DATABASE_URL.trim();
+  }
+  if (process.env.DATABASE_URL?.trim()) {
+    return process.env.DATABASE_URL.trim();
+  }
+  try {
+    const output = execSync(
+      'npx --yes neonctl connection-string pr90-p1-6-7-preview-isolated --project-id mute-frost-50372225 --org-id org-broad-butterfly-41820185',
+      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] }
+    ).trim();
+    if (output && output.includes('neon.tech')) {
+      return output;
+    }
+  } catch {}
+
+  return 'postgres://aira:aira@localhost:5432/aira_db';
+}
+
+const connectionString = resolveTestConnectionString();
+
+// Strict security guard: Never target production Neon (old-sky-50952395)
+const parsed = new URL(connectionString);
+if (parsed.hostname.includes('old-sky-50952395')) {
+  console.error('[SECURITY FATAL] Test execution blocked: Attempted to target production Neon old-sky-50952395.');
+  process.exit(1);
+}
+
+const db = knex({
+  client: 'pg',
+  connection: {
+    connectionString,
+    ssl: connectionString.includes('neon.tech') ? { rejectUnauthorized: true } : false
+  },
+  pool: { min: 1, max: 2 }
+});
+
+async function main(): Promise<void> {
+  const tableSuffix = randomUUID().replace(/-/g, '').slice(0, 12);
+  const testTableName = `tool_calls_drift_test_${tableSuffix}`;
+
+  console.log(`[P0 CERTIFICATION] Testing tool_calls schema reconciliation on table: ${testTableName}`);
+  console.log(`[P0 CERTIFICATION] Target host: ${parsed.hostname}`);
+
+  // Stage 1: Create table matching drifted production schema (14 columns)
+  await db.schema.createTable(testTableName, (table) => {
+    table.string('id', 255).primary();
+    table.string('run_id', 255).notNullable();
+    table.string('tool', 255).notNullable();
+    table.jsonb('arguments');
+    table.string('permission', 255);
+    table.string('status', 255).notNullable();
+    table.bigInteger('started_at').notNullable();
+    table.bigInteger('completed_at');
+    table.jsonb('result');
+    table.text('error');
+    table.string('source', 255);
+    table.string('runtime', 255);
+    table.string('idempotency_key', 255);
+    table.string('approval_id', 255);
+  });
+
+  console.log('PASS: Drifted table created with 14 baseline columns');
+
+  // Stage 2: Insert pre-existing legacy record
+  const legacyRecord = {
+    id: `call_legacy_${tableSuffix}`,
+    run_id: `run_legacy_${tableSuffix}`,
+    tool: 'file_system_read',
+    arguments: JSON.stringify({ path: '/app/config.json' }),
+    permission: 'READ',
+    status: 'COMPLETED',
+    started_at: Date.now() - 5000,
+    completed_at: Date.now() - 4000,
+    result: JSON.stringify({ bytes: 128 }),
+    error: null,
+    source: 'agent',
+    runtime: 'node',
+    idempotency_key: `idemp_${tableSuffix}`,
+    approval_id: null
+  };
+
+  await db(testTableName).insert(legacyRecord);
+  console.log('PASS: Legacy pre-existing record inserted');
+
+  // Stage 3: Reproduce failure when inserting full Agent tool call payload
+  let insertFailedAsExpected = false;
+  try {
+    await db(testTableName).insert({
+      id: `call_agent_fail_${tableSuffix}`,
+      run_id: `run_agent_${tableSuffix}`,
+      workflow_run_id: `wf_${tableSuffix}`,
+      agent_mission_id: `mission_${tableSuffix}`,
+      principal_id: `usr_${tableSuffix}`,
+      tool_id: 'tool_calculator_01',
+      tool: 'calculator',
+      adapter: 'built_in',
+      side_effect_level: 'READ_ONLY',
+      permission_scopes: JSON.stringify(['compute.math']),
+      status: 'RUNNING',
+      arguments: JSON.stringify({ expression: '2+2' }),
+      started_at: Date.now()
+    });
+  } catch (err: any) {
+    insertFailedAsExpected = true;
+    console.log(`PASS: Un-reconciled insert failed as expected: ${err.message}`);
+  }
+  assert.equal(insertFailedAsExpected, true, 'Insert with agent gateway fields must fail on drifted schema');
+
+  // Stage 4: Apply reconciliation migration 025
+  console.log('Applying reconcileToolCallsSchema...');
+  await reconcileToolCallsSchema(db as any, testTableName);
+
+  // Stage 5: Apply reconciliation again to verify idempotency
+  console.log('Applying reconcileToolCallsSchema (idempotency check)...');
+  await reconcileToolCallsSchema(db as any, testTableName);
+
+  // Stage 6: Verify all columns now exist
+  const columns = await db('information_schema.columns')
+    .where({ table_schema: 'public', table_name: testTableName })
+    .select('column_name', 'data_type');
+
+  const colNames = new Set(columns.map(c => String(c.column_name)));
+  const requiredNewColumns = [
+    'principal_id',
+    'tool_id',
+    'workflow_run_id',
+    'agent_mission_id',
+    'adapter',
+    'side_effect_level',
+    'permission_scopes',
+    'input_metadata',
+    'attempt_count',
+    'error_code',
+    'duration_ms'
+  ];
+
+  for (const col of requiredNewColumns) {
+    assert.equal(colNames.has(col), true, `Column ${col} must exist after reconciliation`);
+  }
+  console.log('PASS: All 11 missing agent tool gateway columns verified in schema');
+
+  // Stage 7: Insert full Agent tool call payload
+  const agentPayload = {
+    id: `call_agent_success_${tableSuffix}`,
+    run_id: `run_agent_${tableSuffix}`,
+    workflow_run_id: `wf_${tableSuffix}`,
+    agent_mission_id: `mission_${tableSuffix}`,
+    principal_id: `usr_${tableSuffix}`,
+    tool_id: 'tool_calculator_01',
+    tool: 'calculator',
+    adapter: 'built_in',
+    side_effect_level: 'READ_ONLY',
+    permission_scopes: JSON.stringify(['compute.math']),
+    status: 'COMPLETED',
+    arguments: JSON.stringify({ expression: '42*2' }),
+    result: JSON.stringify({ answer: 84 }),
+    error: null,
+    error_code: null,
+    attempt_count: 1,
+    approval_id: null,
+    idempotency_key: `idemp_agent_${tableSuffix}`,
+    started_at: Date.now() - 1000,
+    completed_at: Date.now(),
+    duration_ms: 1000
+  };
+
+  await db(testTableName).insert(agentPayload);
+  const retrievedAgent = await db(testTableName).where({ id: agentPayload.id }).first();
+  assert.equal(retrievedAgent?.workflow_run_id, `wf_${tableSuffix}`);
+  assert.equal(retrievedAgent?.agent_mission_id, `mission_${tableSuffix}`);
+  assert.equal(retrievedAgent?.principal_id, `usr_${tableSuffix}`);
+  assert.equal(retrievedAgent?.tool_id, 'tool_calculator_01');
+  assert.equal(retrievedAgent?.adapter, 'built_in');
+  assert.equal(retrievedAgent?.side_effect_level, 'READ_ONLY');
+  assert.equal(retrievedAgent?.duration_ms, 1000);
+  console.log('PASS: Full agent tool call payload persisted and verified');
+
+  // Stage 8: Verify pre-existing legacy record remains intact
+  const retrievedLegacy = await db(testTableName).where({ id: legacyRecord.id }).first();
+  assert.equal(retrievedLegacy?.tool, 'file_system_read');
+  assert.equal(retrievedLegacy?.status, 'COMPLETED');
+  assert.equal(retrievedLegacy?.principal_id, null);
+  console.log('PASS: Legacy pre-existing tool call record preserved intact');
+
+  // Stage 8B: Verify failure on incompatible existing column type
+  const badTable = `tool_calls_bad_type_${tableSuffix}`;
+  await db.schema.createTable(badTable, (t) => {
+    t.string('id').primary();
+    t.boolean('duration_ms'); // Incompatible type: boolean instead of integer
+  });
+  let incompatibleCaught = false;
+  try {
+    await reconcileToolCallsSchema(db as any, badTable);
+  } catch (err: any) {
+    if (err.message.includes('incompatible data type')) {
+      incompatibleCaught = true;
+      console.log(`PASS: Incompatible existing column type caught: ${err.message}`);
+    }
+  }
+  await db.schema.dropTableIfExists(badTable);
+  assert.equal(incompatibleCaught, true, 'reconcileToolCallsSchema must throw on incompatible existing column types');
+
+  // Stage 9: Cleanup
+  await db.schema.dropTableIfExists(testTableName);
+  console.log(`PASS: Dropped disposable test table ${testTableName}`);
+
+  console.log('\n================================================================');
+  console.log('P0 CERTIFICATION SUCCESSFUL: Tool calls schema reconciliation verified');
+  console.log('================================================================');
+}
+
+main()
+  .catch(err => {
+    console.error('P0 CERTIFICATION FAILED:', err);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    await db.destroy();
+  });

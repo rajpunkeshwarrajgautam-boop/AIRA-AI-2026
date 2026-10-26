@@ -592,3 +592,86 @@ export async function verifyConnectedDatabaseIdentity(
   }
 }
 
+export interface StagingAuthorizationCheckOptions {
+  allowedProjectIds?: string[];
+  allowedBranchIds?: string[];
+  rejectUnknown?: boolean;
+}
+
+/**
+ * Strict staging database write guard.
+ * Verifies live database GUCs and connection parameters before allowing any staging writes/migrations.
+ * - Confirms actual Neon project is the authorized staging project (mute-frost-50372225).
+ * - Confirms branch is the authorized isolated preview branch (e.g. br-muddy-wave-b3zxhkqf / pr-agent-tool-calls-isolated).
+ * - Rejects production Neon (old-sky-50952395) fail-closed.
+ * - Rejects unrecognized or unverified database connections.
+ */
+export async function assertAuthorizedStagingDatabase(
+  client: Knex,
+  options: StagingAuthorizationCheckOptions = {}
+): Promise<DatabaseIdentityEvidence> {
+  const res = await client.raw(`
+    SELECT 
+      current_database() as db_name, 
+      current_user as db_user, 
+      inet_server_addr() as server_ip,
+      current_setting('neon.project_id', true) as neon_project_id,
+      current_setting('neon.branch_id', true) as neon_branch_id,
+      current_setting('neon.endpoint_id', true) as neon_endpoint_id,
+      current_setting('neon.timeline_id', true) as neon_timeline_id
+  `);
+  const row = res.rows?.[0] || {};
+  const projectId = String(row.neon_project_id || '').trim();
+  const branchId = String(row.neon_branch_id || '').trim();
+  const endpointId = String(row.neon_endpoint_id || '').trim();
+
+  // 1. REJECT PRODUCTION NEON IMMEDIATELY
+  if (
+    projectId === PRODUCTION_NEON_PROJECT_ID ||
+    endpointId === PRODUCTION_NEON_ENDPOINT_ID
+  ) {
+    throw new Error(
+      `[SECURITY FATAL] Aborting: Connected database is PRODUCTION Neon (${PRODUCTION_NEON_PROJECT_ID}). Staging writes strictly forbidden!`
+    );
+  }
+
+  // 2. REJECT UNKNOWN / UNRECOGNIZED PROJECTS
+  const allowedProjects = options.allowedProjectIds || [STAGING_NEON_PROJECT_ID];
+  if (!projectId || !allowedProjects.includes(projectId)) {
+    throw new Error(
+      `[SECURITY FATAL] Aborting: Connected database project '${projectId || 'UNKNOWN'}' is not recognized or authorized. Expected staging project: ${allowedProjects.join(', ')}`
+    );
+  }
+
+  // 3. REJECT UNKNOWN / UNRECOGNIZED BRANCHES
+  if (options.allowedBranchIds && options.allowedBranchIds.length > 0) {
+    if (!branchId || !options.allowedBranchIds.includes(branchId)) {
+      throw new Error(
+        `[SECURITY FATAL] Aborting: Connected database branch '${branchId || 'UNKNOWN'}' is not authorized. Expected: ${options.allowedBranchIds.join(', ')}`
+      );
+    }
+  }
+
+  // 4. REJECT PERMANENT STAGING MAIN IF ISOLATED PREVIEW IS REQUIRED
+  if (
+    branchId === STAGING_NEON_BRANCH_ID &&
+    options.allowedBranchIds &&
+    !options.allowedBranchIds.includes(STAGING_NEON_BRANCH_ID)
+  ) {
+    throw new Error(
+      `[SECURITY FATAL] Aborting: Connected to permanent staging main branch (${STAGING_NEON_BRANCH_ID}) instead of isolated test branch!`
+    );
+  }
+
+  return {
+    databaseName: row.db_name,
+    user: row.db_user,
+    serverAddr: String(row.server_ip || 'unknown'),
+    neonProjectId: projectId,
+    neonBranchId: branchId,
+    neonEndpointId: endpointId,
+    neonTimelineId: row.neon_timeline_id
+  };
+}
+
+

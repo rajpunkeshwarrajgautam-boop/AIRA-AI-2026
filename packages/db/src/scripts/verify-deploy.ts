@@ -55,6 +55,28 @@ async function main() {
     throw new Error('DEPLOY_DB_SCHEMA_INCOMPLETE: ' + missingTables.join(', '));
   }
 
+  const toolCallColumns = await db('information_schema.columns')
+    .where({ table_schema: 'public', table_name: 'tool_calls' })
+    .select('column_name');
+  const toolCallColSet = new Set(toolCallColumns.map(r => String(r.column_name)));
+  const requiredToolCallColumns = [
+    'principal_id',
+    'tool_id',
+    'workflow_run_id',
+    'agent_mission_id',
+    'adapter',
+    'side_effect_level',
+    'permission_scopes',
+    'input_metadata',
+    'attempt_count',
+    'error_code',
+    'duration_ms'
+  ];
+  const missingToolCallCols = requiredToolCallColumns.filter(c => !toolCallColSet.has(c));
+  if (missingToolCallCols.length > 0) {
+    throw new Error('DEPLOY_DB_TOOL_CALLS_DRIFT: missing columns in tool_calls: ' + missingToolCallCols.join(', '));
+  }
+
   const searchColumns = await db('information_schema.columns')
     .where({
       table_schema: 'public',

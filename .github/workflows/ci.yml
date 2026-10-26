@@ -130,6 +130,9 @@ jobs:
       - name: Router and policy verification
         run: npm run test:router
 
+      - name: Release-readiness NVIDIA fallback, repo intent, and alias leak certification
+        run: npm run test:release-readiness
+
       - name: Workflow engine verification
         run: npm run test:workflow
 
@@ -159,6 +162,9 @@ jobs:
 
       - name: Run prompt schema drift repair certification
         run: npx tsx test/run-prompt-schema-drift.ts
+
+      - name: Tool calls schema drift repair certification
+        run: npm run test:tool-calls-drift
 
       - name: Memory context regression certification
         run: npm run test:memory-context
