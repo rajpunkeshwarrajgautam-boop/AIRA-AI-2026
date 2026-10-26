@@ -1607,3 +1607,4 @@ export * from './prompt-composer/index.js';
 export * from './skills/curated-skill-registry.js';
 export * from './research/firecrawl-adapter.js';
 export * from './orchestration/ruflo-adapter.js';
+export * from './specialists/specialist-interface.js';

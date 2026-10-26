@@ -18,6 +18,19 @@ export const SideEffectLevelSchema = z.enum([
 ]);
 export type SideEffectLevel = z.infer<typeof SideEffectLevelSchema>;
 
+export const CapabilityCategorySchema = z.enum([
+  'general_reasoning',
+  'deep_research',
+  'software_engineering',
+  'data_analysis',
+  'document_intelligence',
+  'business_intelligence',
+  'agent_planning',
+  'tool_execution',
+  'result_verification'
+]);
+export type CapabilityCategory = z.infer<typeof CapabilityCategorySchema>;
+
 // ==========================================
 // 1. INSTRUCTION PROVENANCE & HIERARCHY
 // ==========================================
