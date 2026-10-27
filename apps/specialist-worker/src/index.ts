@@ -38,6 +38,15 @@ const idleBackoffMultiplier = parseFloat(process.env.IDLE_BACKOFF_MULTIPLIER || 
 const leaseDurationMs = parseInt(process.env.LEASE_DURATION_MS || '15000', 10);
 const heartbeatIntervalMs = parseInt(process.env.HEARTBEAT_INTERVAL_MS || '3000', 10);
 
+import {
+  evaluateWorkerActivationPolicy,
+  assertWorkerActivationAuthorized,
+  ActivationSecurityError,
+  WorkerActivationConfig,
+  CANONICAL_PRODUCTION_NEON_PROJECT_ID,
+  CANONICAL_PRODUCTION_NEON_ENDPOINT_ID
+} from '../../../packages/agent-runtime/src/durable/worker-activation-policy.js';
+
 console.log(`[SpecialistWorker] Bootstrapping worker ${workerId}...`);
 
 // 1. Environment-Bound Database Security Policy Preflight
@@ -49,10 +58,32 @@ if (!rawConnStr) {
 
 const classification = classifyDatabaseUrl(rawConnStr);
 
-// Unconditional Milestone 2A Policy: Production database connectivity strictly denied
-if (classification.isProduction) {
+const activationConfig: WorkerActivationConfig = {
+  airaEnv: process.env.AIRA_ENV,
+  productionWorkerEnabled: process.env.AIRA_PRODUCTION_WORKER_ENABLED,
+  expectedNeonProjectId: process.env.EXPECTED_NEON_PROJECT_ID,
+  expectedNeonEndpointId: process.env.EXPECTED_NEON_ENDPOINT_ID
+};
+
+const staticPolicyResult = evaluateWorkerActivationPolicy(activationConfig);
+if (!staticPolicyResult.authorized) {
   console.error(
-    `[SECURITY FATAL] Aborting: Worker cannot connect to production Neon database (${PRODUCTION_NEON_PROJECT_ID})! Milestone 2A strictly denies production database access.`
+    `[SECURITY FATAL] Specialist worker activation denied: ${staticPolicyResult.message} (code: ${staticPolicyResult.code})`
+  );
+  process.exit(1);
+}
+
+// Crossover check against database URL classification
+if (classification.isProduction && !staticPolicyResult.isProduction) {
+  console.error(
+    `[SECURITY FATAL] Aborting: Non-production worker cannot connect to production Neon database (${PRODUCTION_NEON_PROJECT_ID})!`
+  );
+  process.exit(1);
+}
+
+if (!classification.isProduction && staticPolicyResult.isProduction) {
+  console.error(
+    `[SECURITY FATAL] Aborting: Production worker cannot connect to non-production database (${classification.sanitizedTarget})!`
   );
   process.exit(1);
 }
@@ -60,14 +91,6 @@ if (classification.isProduction) {
 if (classification.isCommercialPr92) {
   console.error(
     `[SECURITY FATAL] Aborting: Commercial PR #92 branch (${COMMERCIAL_PR92_BRANCH_ID}) access strictly denied.`
-  );
-  process.exit(1);
-}
-
-const airaEnv = (process.env.AIRA_ENV || 'staging').toLowerCase();
-if (airaEnv === 'production') {
-  console.error(
-    '[SECURITY FATAL] Aborting: Production worker execution (AIRA_ENV=production) is not permitted during Milestone 2A. Fail closed.'
   );
   process.exit(1);
 }
@@ -139,6 +162,7 @@ const host = new SpecialistWorkerHost(repository, registry, {
 
 let isShuttingDown = false;
 let dbConnected = false;
+let isActivated = false;
 
 // 5. Health Check & HTTP Management Server
 const server = http.createServer(async (req, res) => {
@@ -149,6 +173,7 @@ const server = http.createServer(async (req, res) => {
     const payload = {
       ...health,
       db: dbConnected ? 'CONNECTED' : 'DISCONNECTED',
+      isActivated,
       isShuttingDown,
       nodeVersion: process.version,
       timestamp: Date.now()
@@ -160,12 +185,12 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url === '/ready') {
-    if (isShuttingDown || !dbConnected) {
+    if (isShuttingDown || !dbConnected || !isActivated) {
       res.writeHead(503, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ready: false, isShuttingDown, dbConnected }));
+      res.end(JSON.stringify({ ready: false, isShuttingDown, dbConnected, isActivated }));
     } else {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ready: true, workerId, status: 'READY' }));
+      res.end(JSON.stringify({ ready: true, workerId, status: 'READY', isActivated: true }));
     }
     return;
   }
@@ -204,25 +229,12 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 // 7. Start Worker Process
 async function main() {
   try {
-    // 1. Verify database connectivity & runtime identity
-    const res = await db.raw(`
-      SELECT 
-        current_database() as db_name, 
-        current_user as db_user, 
-        inet_server_addr() as server_ip,
-        current_setting('neon.project_id', true) as neon_project_id,
-        current_setting('neon.endpoint_id', true) as neon_endpoint_id
-    `);
-    const row = res.rows?.[0] || {};
-    const projectId = String(row.neon_project_id || '').trim();
-    const endpointId = String(row.neon_endpoint_id || '').trim();
-
-    if (projectId === PRODUCTION_NEON_PROJECT_ID || endpointId === PRODUCTION_NEON_ENDPOINT_ID) {
-      console.error(
-        `[SECURITY FATAL] Live database query returned PRODUCTION Neon identity (${PRODUCTION_NEON_PROJECT_ID}). Terminating immediately!`
-      );
-      process.exit(1);
-    }
+    // 1. Authoritative runtime database identity & activation policy validation
+    const runtimeActivation = await assertWorkerActivationAuthorized(activationConfig, db);
+    isActivated = true;
+    console.log(
+      `[SpecialistWorker] Worker activation policy verified: ${runtimeActivation.code} (${runtimeActivation.message})`
+    );
 
     // 2. Verify all required durable persistence tables are available (fail closed if schema missing)
     await db.raw('SELECT 1 FROM specialist_tasks LIMIT 0');
@@ -245,7 +257,9 @@ async function main() {
       `[SpecialistWorker] Worker ${workerId} is now actively polling (backoff: ${pollIntervalMs}ms-${maxPollIntervalMs}ms).`
     );
   } catch (err: any) {
-    console.error(`[SpecialistWorker] Failed to start worker (fail-closed):`, err);
+    isActivated = false;
+    dbConnected = false;
+    console.error(`[SpecialistWorker] Failed to start worker (fail-closed):`, err.message || err);
     process.exit(1);
   }
 }

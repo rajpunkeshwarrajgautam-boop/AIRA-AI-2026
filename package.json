@@ -19,6 +19,8 @@
     "test:knowledge-isolation": "npx tsx test/knowledge-isolation.test.ts",
     "test:m1-specialists": "npx tsx --test test/agent-specialists.test.ts test/specialist-interface.test.ts",
     "test:m2a": "npx tsx --test test/m2a-durable-specialist-execution.test.ts",
+    "test:m2a:activation": "npx tsx --test test/m2a-production-activation-security.test.ts",
+    "test:m2a:tls": "npx tsx --test test/m2a-strict-tls-validation.test.ts",
     "test:m2a:postgres": "npx tsx --test test/m2a-real-postgres-verification.test.ts",
     "test:m2a:staging": "npx tsx --test test/m2a-worker-staging-e2e.test.ts",
     "test:seo": "npx tsx test/seo-metadata.test.ts",
