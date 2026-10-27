@@ -143,7 +143,7 @@ test.describe('AIRA AI 2026 — Milestone 2A.1 Standalone Docker Specialist Work
     try {
       execSync(
         `docker run --rm --name aira-worker-prod-reject-test ` +
-        `-e DATABASE_URL="postgresql://aira_user:secret@ep-withered-art-b36ox90b.us-east-2.aws.neon.tech/neondb?sslmode=require" ` +
+        `-e DATABASE_URL="postgresql://aira_user@ep-withered-art-b36ox90b.us-east-2.aws.neon.tech/neondb?sslmode=require" ` +
         `aira-specialist-worker:staging`,
         { stdio: 'pipe' }
       );
@@ -162,7 +162,7 @@ test.describe('AIRA AI 2026 — Milestone 2A.1 Standalone Docker Specialist Work
     try {
       execSync(
         `docker run --rm --name aira-worker-invalid-db-test ` +
-        `-e DATABASE_URL="postgresql://invalid_usr:invalid_pwd@127.0.0.1:54321/nonexistent?sslmode=disable" ` +
+        `-e DATABASE_URL="postgresql://dummy_user@127.0.0.1:54321/nonexistent?sslmode=disable" ` +
         `aira-specialist-worker:staging`,
         { stdio: 'pipe' }
       );
