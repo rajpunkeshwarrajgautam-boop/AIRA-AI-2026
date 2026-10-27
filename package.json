@@ -20,6 +20,7 @@
     "test:m1-specialists": "npx tsx --test test/agent-specialists.test.ts test/specialist-interface.test.ts",
     "test:m2a": "npx tsx --test test/m2a-durable-specialist-execution.test.ts",
     "test:m2a:postgres": "npx tsx --test test/m2a-real-postgres-verification.test.ts",
+    "test:m2a:staging": "npx tsx --test test/m2a-worker-staging-e2e.test.ts",
     "test:seo": "npx tsx test/seo-metadata.test.ts",
     "test:model-routing": "npx tsx test/model-router-provider-routing.ts && npx tsx test/p1-multi-provider-fast-routing.test.ts && npx tsx --test test/p1-6-*.test.ts && npx tsx test/p1-6-7-ttft-routing-verification.test.ts",
     "test:fast-routing": "npx tsx test/p1-multi-provider-fast-routing.test.ts",

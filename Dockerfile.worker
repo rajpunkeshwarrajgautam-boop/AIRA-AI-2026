@@ -1,0 +1,50 @@
+# ==============================================================================
+# AIRA AI 2026 — Standalone Specialist Worker Runtime (Milestone 2A.1)
+# Production-representative minimal, hardened container image
+# ==============================================================================
+
+FROM node:22-alpine AS runner
+
+
+# 1. Install dumb-init for proper signal forwarding and curl for container health checks
+RUN apk add --no-cache dumb-init curl
+
+# 2. Establish non-root operational security principal
+RUN addgroup -S -g 10001 aira && \
+    adduser -S -u 10001 -G aira -h /app aira
+
+WORKDIR /app
+
+# 3. Environment configuration
+ENV NODE_ENV=production \
+    PORT=8080 \
+    WORKER_CONCURRENCY=2 \
+    POLL_INTERVAL_MS=500 \
+    LEASE_DURATION_MS=15000 \
+    HEARTBEAT_INTERVAL_MS=3000 \
+    NODE_OPTIONS="--max-old-space-size=512"
+
+# 4. Copy build manifests and install dependencies
+COPY --chown=aira:aira package.json package-lock.json tsconfig.json tsconfig.*.json ./
+
+# Install required dependencies cleanly
+RUN npm ci --include=dev && \
+    npm cache clean --force && \
+    chown -R aira:aira /app
+
+# 5. Copy application source code (packages + specialist-worker)
+COPY --chown=aira:aira packages/ ./packages/
+COPY --chown=aira:aira apps/specialist-worker/ ./apps/specialist-worker/
+
+# 6. Drop privileges to non-root user
+USER aira
+
+EXPOSE 8080
+
+# 7. Truthful healthcheck probe
+HEALTHCHECK --interval=10s --timeout=4s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:8080/health || exit 1
+
+# 8. Entrypoint with dumb-init for graceful SIGTERM / SIGINT propagation
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["node", "./node_modules/tsx/dist/cli.mjs", "apps/specialist-worker/src/index.ts"]

@@ -2,6 +2,7 @@ import { SpecialistWorkerRuntime } from './specialist-worker-runtime.js';
 import { TaskLeaseManager } from './task-lease-manager.js';
 import { SpecialistTaskRepository } from './specialist-task-repository.js';
 import { SpecialistRegistry } from '../specialists/specialist-registry.js';
+import { DurableTaskScheduler } from './durable-task-scheduler.js';
 import { isTerminalSpecialistState } from './task-state-machine.js';
 
 export interface WorkerHostConfig {
@@ -26,6 +27,7 @@ export class SpecialistWorkerHost {
   public readonly workerId: string;
   private runtime: SpecialistWorkerRuntime;
   private leaseManager: TaskLeaseManager;
+  private scheduler: DurableTaskScheduler;
   private pollIntervalMs: number;
   private concurrency: number;
   private isRunning = false;
@@ -51,6 +53,9 @@ export class SpecialistWorkerHost {
       workerId: this.workerId,
       leaseDurationMs: config.leaseDurationMs ?? 30000,
       heartbeatIntervalMs: config.heartbeatIntervalMs ?? 5000
+    });
+    this.scheduler = new DurableTaskScheduler(repository, {
+      maxConcurrency: this.concurrency
     });
   }
 
@@ -103,6 +108,9 @@ export class SpecialistWorkerHost {
     try {
       await this.runtime.executeTask(task);
       this.processedCount++;
+      if (task.runId) {
+        await this.scheduler.scheduleRun(task.runId);
+      }
     } catch (err) {
       console.error(`[SpecialistWorkerHost] Error executing task ${task.id}:`, err);
     } finally {

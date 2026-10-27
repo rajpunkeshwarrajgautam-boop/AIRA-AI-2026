@@ -40,7 +40,10 @@ import {
   AutomationDefinitionSchema,
   AgentDefinition,
   WorkflowDefinitionSchema,
-  validateWorkflowDag
+  validateWorkflowDag,
+  TaskDAG,
+  TaskDAGSchema,
+  validateTaskDAG
 } from '../../../packages/contracts/src/index.js';
 
 // -----------------------------------------------------------------------
@@ -1090,6 +1093,42 @@ app.get('/api/runs/:id', async (req: Request, res: Response) => {
   if (!run || run.principalId !== req.principal!.userId) {
     return res.status(404).json({ error: `Run with id "${req.params.id}" not found.` });
   }
+
+  // If this run has durable specialist tasks, reflect their latest terminal progress
+  if (['QUEUED', 'RUNNING'].includes(run.state)) {
+    try {
+      const specialistRepo = agentRuntime.getSpecialistTaskRepository();
+      const tasks = await specialistRepo.listTasksByRun(run.id);
+      if (tasks.length > 0) {
+        const allCompleted = tasks.every(t => t.state === 'COMPLETED');
+        const anyFailed = tasks.some(t => t.state === 'FAILED' || t.state === 'TIMED_OUT' || t.state === 'UNAVAILABLE');
+        const anyCancelled = tasks.some(t => t.state === 'CANCELLED');
+
+        if (allCompleted) {
+          run.state = 'COMPLETED';
+          run.status = 'COMPLETED';
+          const finalTask = tasks[tasks.length - 1];
+          if (finalTask.resultOutput) {
+            run.content = typeof finalTask.resultOutput === 'object'
+              ? JSON.stringify(finalTask.resultOutput)
+              : String(finalTask.resultOutput);
+          }
+          await runRepo.saveRun(run);
+        } else if (anyFailed) {
+          run.state = 'FAILED';
+          run.status = 'FAILED';
+          await runRepo.saveRun(run);
+        } else if (anyCancelled) {
+          run.state = 'CANCELLED';
+          run.status = 'CANCELLED';
+          await runRepo.saveRun(run);
+        }
+      }
+    } catch {
+      // Non-blocking telemetry reflection
+    }
+  }
+
   res.json(run);
 });
 
@@ -1125,6 +1164,169 @@ app.post('/api/runs/:id/approve', async (req: Request, res: Response) => {
     res.json({ status: 'DECISION_RECORDED', decision: parsedDecision });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+// -----------------------------------------------------------------------
+// Durable Specialist Missions Management (Milestone 2A.1)
+// -----------------------------------------------------------------------
+app.post('/api/missions', async (req: Request, res: Response) => {
+  try {
+    const rawDag = req.body?.dag || req.body;
+    const validation = validateTaskDAG(rawDag);
+    if (!validation.valid) {
+      return res.status(400).json({ error: `Invalid task DAG: ${validation.error}` });
+    }
+
+    const dag = rawDag as TaskDAG;
+    const runId = dag.runId;
+    const missionId = req.body?.missionId || dag.dagId || `mission_${runId}`;
+    const prompt = req.body?.prompt || `Durable specialist mission: ${dag.dagId}`;
+    const workspaceId = req.body?.workspaceId || req.principal!.workspaceId;
+
+    // Ensure parent run row exists in public.runs (foreign key constraint)
+    const existingRun = await agentRuntime.getRun(runId);
+    if (!existingRun) {
+      const now = Date.now();
+      await runRepo.saveRun({
+        id: runId,
+        principalId: req.principal!.userId,
+        sessionId: req.principal!.sessionId || `sess_${req.principal!.userId}`,
+        workspaceId,
+        prompt,
+        intent: 'TOOL_ACTION',
+        state: 'QUEUED',
+        status: 'QUEUED',
+        toolsUsed: ['calculator'],
+        toolCalls: [],
+        toolResults: [],
+        createdAt: now,
+        updatedAt: now
+      });
+    }
+
+    // Submit DAG into durable scheduler
+    const createdTasks = await agentRuntime.getDurableTaskScheduler().submitDAG(dag, req.principal!, {
+      missionId,
+      workspaceId
+    });
+
+    res.status(201).json({
+      status: 'QUEUED',
+      state: 'QUEUED',
+      missionId,
+      runId,
+      dagId: dag.dagId,
+      tasksCount: createdTasks.length,
+      createdAt: Date.now()
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || 'Failed to submit durable mission.' });
+  }
+});
+
+app.get('/api/missions/:id', async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id;
+    const specialistRepo = agentRuntime.getSpecialistTaskRepository();
+    
+    // Search by runId or missionId
+    let tasks = await specialistRepo.listTasksByRun(id);
+    let runId = id;
+    if (tasks.length === 0) {
+      tasks = await specialistRepo.listTasksByMission(id);
+      if (tasks.length > 0) {
+        runId = tasks[0].runId;
+      }
+    }
+
+    if (tasks.length === 0) {
+      return res.status(404).json({ error: `Mission or run "${id}" not found.` });
+    }
+
+    // Enforce cross-user tenant isolation
+    const firstTask = tasks[0];
+    if (firstTask.principalId !== req.principal!.userId) {
+      return res.status(404).json({ error: `Mission "${id}" not found.` });
+    }
+
+    // Determine aggregate outcome
+    const completedTasks = tasks.filter(t => t.state === 'COMPLETED');
+    const failedTasks = tasks.filter(t => t.state === 'FAILED' || t.state === 'TIMED_OUT' || t.state === 'UNAVAILABLE');
+    const cancelledTasks = tasks.filter(t => t.state === 'CANCELLED');
+    const runningTasks = tasks.filter(t => t.state === 'RUNNING' || t.state === 'CLAIMED');
+
+    let state = 'QUEUED';
+    let outcome: string | undefined = undefined;
+
+    if (cancelledTasks.length > 0) {
+      state = 'CANCELLED';
+      outcome = 'CANCELLED';
+    } else if (failedTasks.length > 0) {
+      state = 'FAILED';
+      outcome = 'FAILED';
+    } else if (completedTasks.length === tasks.length) {
+      state = 'COMPLETED';
+      outcome = 'COMPLETED';
+    } else if (runningTasks.length > 0) {
+      state = 'RUNNING';
+    }
+
+    // Extract output if completed
+    let finalOutput: any = undefined;
+    if (completedTasks.length > 0) {
+      const lastCompleted = completedTasks[completedTasks.length - 1];
+      finalOutput = lastCompleted.resultOutput;
+    }
+
+    // Sync parent run state if mission reached COMPLETED
+    if (state === 'COMPLETED') {
+      const parentRun = await agentRuntime.getRun(runId);
+      if (parentRun && parentRun.state !== 'COMPLETED') {
+        parentRun.state = 'COMPLETED';
+        parentRun.status = 'COMPLETED';
+        parentRun.content = typeof finalOutput === 'object' && finalOutput !== null
+          ? JSON.stringify(finalOutput)
+          : String(finalOutput ?? 'COMPLETED');
+        parentRun.completedAt = Date.now();
+        await runRepo.saveRun(parentRun);
+      }
+    }
+
+    res.json({
+      missionId: firstTask.missionId || id,
+      runId,
+      state,
+      status: state,
+      outcome,
+      totalTasks: tasks.length,
+      completedTasks: completedTasks.length,
+      failedTasks: failedTasks.length,
+      cancelledTasks: cancelledTasks.length,
+      output: finalOutput,
+      tasks: tasks.map(t => ({
+        id: t.id,
+        role: t.role,
+        state: t.state,
+        outcome: t.outcome,
+        fencingToken: t.fencingToken,
+        output: t.resultOutput,
+        checkpoints: t.checkpoints,
+        error: t.errorDetails
+      }))
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Internal server error retrieving mission.' });
+  }
+});
+
+app.get('/api/missions', async (req: Request, res: Response) => {
+  try {
+    const specialistRepo = agentRuntime.getSpecialistTaskRepository();
+    const tasks = await specialistRepo.listTasksByPrincipal(req.principal!.userId);
+    res.json(tasks);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 
