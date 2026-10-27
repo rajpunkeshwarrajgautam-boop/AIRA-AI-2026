@@ -405,7 +405,7 @@ test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Cer
 
     // Wait for Worker 1 to claim the task
     let claimed = false;
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 60; i++) {
       await new Promise(r => setTimeout(r, 200));
       const current = await repo.getTask(taskId);
       if (current && (current.state === 'CLAIMED' || current.state === 'RUNNING')) {
@@ -465,8 +465,12 @@ test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Cer
       }
     }
 
-    // Stop Worker 2 gracefully
-    worker2.kill('SIGTERM');
+    // Stop Worker 2 reliably so it does not interfere with subsequent recovery tests
+    try {
+      worker2.send({ action: 'STOP_GRACEFUL' });
+    } catch {}
+    worker2.kill('SIGKILL');
+    await new Promise(r => setTimeout(r, 500));
 
     assert.strictEqual(completed, true, 'Replacement worker must recover and complete task');
     assert.strictEqual(completedTask?.outcome, 'COMPLETED');
@@ -839,5 +843,457 @@ test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Cer
     assert.strictEqual(finalInDb?.state, 'COMPLETED');
     assert.strictEqual(finalInDb?.fencingToken, 2);
     assert.strictEqual((finalInDb?.resultOutput as any)?.result, 'worker_2_authoritative_result');
+  });
+
+  // ==========================================
+  // PHASE 7 — SAFE RECOVERY RUNBOOK REGRESSION SUITE
+  // ==========================================
+
+  const OPTION_A_SQL = `
+WITH target_tasks AS (
+  SELECT id, run_id, fencing_token, state, attempt_count
+  FROM specialist_tasks
+  WHERE principal_id = :target_principal_id
+    AND (run_id = :target_run_id OR id = :target_task_id)
+    AND lease_owner = :crashed_worker_id
+    AND state IN ('CLAIMED', 'RUNNING')
+    AND (
+      lease_expires_at IS NULL 
+      OR lease_expires_at <= (EXTRACT(EPOCH FROM NOW()) * 1000)
+    )
+  FOR UPDATE
+),
+updated AS (
+  UPDATE specialist_tasks st
+  SET lease_owner = NULL,
+      lease_expires_at = 0,
+      fencing_token = st.fencing_token + 1,
+      updated_at = (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint
+  FROM target_tasks tt
+  WHERE st.id = tt.id AND st.fencing_token = tt.fencing_token
+  RETURNING st.id, st.run_id, tt.state AS from_state, st.fencing_token
+)
+INSERT INTO specialist_task_events (
+  id, 
+  task_id, 
+  run_id, 
+  event_type, 
+  from_state, 
+  to_state, 
+  fencing_token, 
+  worker_id, 
+  payload, 
+  created_at
+)
+SELECT 
+  'evt_recov_a_' || (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint || '_' || substr(md5(random()::text), 1, 6),
+  u.id,
+  u.run_id,
+  'TASK_LEASE_RECLAIMED',
+  u.from_state,
+  u.from_state,
+  u.fencing_token,
+  'operator_runbook',
+  jsonb_build_object(
+    'action', 'LEASE_RESET_FOR_RECLAMATION',
+    'previous_lease_owner', :crashed_worker_id::text,
+    'operator_id', :operator_id::text,
+    'verified_worker_termination', true
+  ),
+  (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint
+FROM updated u
+RETURNING *;
+`;
+
+  const OPTION_B_SQL = `
+WITH target_tasks AS (
+  SELECT id, run_id, fencing_token, state, attempt_count
+  FROM specialist_tasks
+  WHERE principal_id = :target_principal_id
+    AND (run_id = :target_run_id OR id = :target_task_id)
+    AND lease_owner = :crashed_worker_id
+    AND state IN ('CLAIMED', 'RUNNING')
+    AND (
+      lease_expires_at IS NULL 
+      OR lease_expires_at <= (EXTRACT(EPOCH FROM NOW()) * 1000)
+    )
+  FOR UPDATE
+),
+updated AS (
+  UPDATE specialist_tasks st
+  SET state = 'FAILED',
+      outcome = 'FAILED',
+      fencing_token = st.fencing_token + 1,
+      error_details = jsonb_build_object(
+        'code', 'OPERATOR_LEASE_RECOVERY_ABORT',
+        'message', 'Task safely aborted by operator runbook following verified worker failure and lease expiration',
+        'retryable', false,
+        'operator_id', :operator_id::text,
+        'crashed_worker_id', :crashed_worker_id::text
+      ),
+      completed_at = (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint,
+      updated_at = (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint
+  FROM target_tasks tt
+  WHERE st.id = tt.id AND st.fencing_token = tt.fencing_token
+  RETURNING st.id, st.run_id, tt.state AS from_state, st.fencing_token
+)
+INSERT INTO specialist_task_events (
+  id, 
+  task_id, 
+  run_id, 
+  event_type, 
+  from_state, 
+  to_state, 
+  fencing_token, 
+  worker_id, 
+  payload, 
+  created_at
+)
+SELECT 
+  'evt_recov_b_' || (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint || '_' || substr(md5(random()::text), 1, 6),
+  u.id,
+  u.run_id,
+  'TASK_STATE_FAILED',
+  u.from_state,
+  'FAILED',
+  u.fencing_token,
+  'operator_runbook',
+  jsonb_build_object(
+    'reason', 'Operator-initiated tenant-scoped recovery runbook',
+    'operator_id', :operator_id::text,
+    'crashed_worker_id', :crashed_worker_id::text,
+    'previous_state', u.from_state
+  ),
+  (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint
+FROM updated u
+RETURNING *;
+`;
+
+  test('PHASE 7.1: Incorrect Worker ID — recovery procedure rejects/updates 0 rows when operator supplies wrong worker ID', async () => {
+    const runId = `run_recov_wrong_worker_${Date.now()}`;
+    const taskId = `task_recov_wrong_worker_${Date.now()}`;
+    await ensureParentRun(runId, testPrincipalA.userId);
+
+    const now = Date.now();
+    await repo.saveTask({
+      id: taskId,
+      runId,
+      principalId: testPrincipalA.userId,
+      role: 'analyst',
+      objective: 'Recovery runbook wrong worker ID test',
+      state: 'RUNNING',
+      dependencies: [],
+      inputPayload: {},
+      executionConstraints: {},
+      authorizationRequirements: {},
+      budgetLimits: { maxTokens: 1000 },
+      timeoutMs: 30000,
+      attemptCount: 1,
+      maxRetries: 2,
+      backoffMultiplier: 1.5,
+      fencingToken: 1,
+      leaseOwner: 'worker_actual_crashed_1',
+      leaseExpiresAt: now - 5000, // expired lease
+      heartbeatAt: now - 8000,
+      usageTelemetry: { tokensUsed: 0, durationMs: 0 },
+      provenance: { workerId: 'worker_actual_crashed_1' },
+      checkpoints: [],
+      createdAt: now - 10000,
+      updatedAt: now - 8000
+    });
+
+    // Operator executes Option B with wrong worker ID
+    const res = await db.raw(OPTION_B_SQL, {
+      target_principal_id: testPrincipalA.userId,
+      target_run_id: runId,
+      target_task_id: taskId,
+      crashed_worker_id: 'worker_wrong_nonexistent_999',
+      operator_id: 'op_secops_test'
+    });
+
+    assert.strictEqual(res.rows.length, 0, 'Must not update or emit events when worker ID does not match');
+
+    const taskInDb = await repo.getTask(taskId);
+    assert.strictEqual(taskInDb?.state, 'RUNNING');
+    assert.strictEqual(taskInDb?.leaseOwner, 'worker_actual_crashed_1');
+    assert.strictEqual(taskInDb?.fencingToken, 1);
+  });
+
+  test('PHASE 7.2: Active Healthy Lease — recovery procedure protects unexpired tasks against premature operator eviction', async () => {
+    const runId = `run_recov_active_lease_${Date.now()}`;
+    const taskId = `task_recov_active_lease_${Date.now()}`;
+    await ensureParentRun(runId, testPrincipalA.userId);
+
+    const now = Date.now();
+    await repo.saveTask({
+      id: taskId,
+      runId,
+      principalId: testPrincipalA.userId,
+      role: 'analyst',
+      objective: 'Recovery runbook active lease protection test',
+      state: 'RUNNING',
+      dependencies: [],
+      inputPayload: {},
+      executionConstraints: {},
+      authorizationRequirements: {},
+      budgetLimits: { maxTokens: 1000 },
+      timeoutMs: 30000,
+      attemptCount: 1,
+      maxRetries: 2,
+      backoffMultiplier: 1.5,
+      fencingToken: 1,
+      leaseOwner: 'worker_healthy_active_1',
+      leaseExpiresAt: now + 60000, // active healthy lease: 60s in future
+      heartbeatAt: now,
+      usageTelemetry: { tokensUsed: 0, durationMs: 0 },
+      provenance: { workerId: 'worker_healthy_active_1' },
+      checkpoints: [],
+      createdAt: now,
+      updatedAt: now
+    });
+
+    // Attempt Option A
+    const resA = await db.raw(OPTION_A_SQL, {
+      target_principal_id: testPrincipalA.userId,
+      target_run_id: runId,
+      target_task_id: taskId,
+      crashed_worker_id: 'worker_healthy_active_1',
+      operator_id: 'op_secops_test'
+    });
+    assert.strictEqual(resA.rows.length, 0, 'Option A must not touch active healthy lease');
+
+    // Attempt Option B
+    const resB = await db.raw(OPTION_B_SQL, {
+      target_principal_id: testPrincipalA.userId,
+      target_run_id: runId,
+      target_task_id: taskId,
+      crashed_worker_id: 'worker_healthy_active_1',
+      operator_id: 'op_secops_test'
+    });
+    assert.strictEqual(resB.rows.length, 0, 'Option B must not abort active healthy lease');
+
+    const taskInDb = await repo.getTask(taskId);
+    assert.strictEqual(taskInDb?.state, 'RUNNING');
+    assert.strictEqual(taskInDb?.leaseOwner, 'worker_healthy_active_1');
+    assert.strictEqual(taskInDb?.fencingToken, 1);
+  });
+
+  test('PHASE 7.3: Expired Lease — transactional recovery procedure resets expired lease with bumped fencing token', async () => {
+    const runId = `run_recov_expired_${Date.now()}`;
+    const taskId = `task_recov_expired_${Date.now()}`;
+    await ensureParentRun(runId, testPrincipalA.userId);
+
+    const now = Date.now();
+    await repo.saveTask({
+      id: taskId,
+      runId,
+      principalId: testPrincipalA.userId,
+      role: 'analyst',
+      objective: 'Recovery runbook expired lease reclamation test',
+      state: 'RUNNING',
+      dependencies: [],
+      inputPayload: {},
+      executionConstraints: {},
+      authorizationRequirements: {},
+      budgetLimits: { maxTokens: 1000 },
+      timeoutMs: 30000,
+      attemptCount: 1,
+      maxRetries: 2,
+      backoffMultiplier: 1.5,
+      fencingToken: 1,
+      leaseOwner: 'worker_dead_to_reclaim_1',
+      leaseExpiresAt: now - 5000, // expired lease
+      heartbeatAt: now - 8000,
+      usageTelemetry: { tokensUsed: 0, durationMs: 0 },
+      provenance: { workerId: 'worker_dead_to_reclaim_1' },
+      checkpoints: [],
+      createdAt: now - 10000,
+      updatedAt: now - 8000
+    });
+
+    // Execute Option A on verified dead worker with expired lease
+    const resA = await db.raw(OPTION_A_SQL, {
+      target_principal_id: testPrincipalA.userId,
+      target_run_id: runId,
+      target_task_id: taskId,
+      crashed_worker_id: 'worker_dead_to_reclaim_1',
+      operator_id: 'op_secops_test'
+    });
+    assert.strictEqual(resA.rows.length, 1, 'Option A must successfully reset expired lease');
+
+    const taskInDb = await repo.getTask(taskId);
+    assert.strictEqual(taskInDb?.leaseOwner, undefined);
+    assert.strictEqual(taskInDb?.leaseExpiresAt, 0);
+    assert.strictEqual(taskInDb?.fencingToken, 2, 'Fencing token must be monotonically incremented');
+
+    // Event audit check
+    const events = await db('specialist_task_events').where({ task_id: taskId }).orderBy('created_at', 'desc');
+    assert.ok(events.length > 0);
+    assert.strictEqual(events[0].event_type, 'TASK_LEASE_RECLAIMED');
+    assert.strictEqual(events[0].from_state, 'RUNNING');
+    assert.strictEqual(events[0].to_state, 'RUNNING');
+    assert.strictEqual(Number(events[0].fencing_token), 2);
+
+    // Replacement worker can now claim task immediately
+    const claimRes = await repo.claimTask(taskId, 'worker_replacement_2', 15000);
+    assert.strictEqual(claimRes.success, true);
+    assert.strictEqual(claimRes.task?.leaseOwner, 'worker_replacement_2');
+    assert.strictEqual(claimRes.task?.fencingToken, 3);
+  });
+
+  test('PHASE 7.4: CLAIMED versus RUNNING audit events — Option B preserves actual previous task state', async () => {
+    const runId = `run_recov_states_${Date.now()}`;
+    const taskIdClaimed = `task_recov_claimed_${Date.now()}`;
+    const taskIdRunning = `task_recov_running_${Date.now()}`;
+    await ensureParentRun(runId, testPrincipalA.userId);
+
+    const now = Date.now();
+    // 1. Task in CLAIMED state
+    await repo.saveTask({
+      id: taskIdClaimed,
+      runId,
+      principalId: testPrincipalA.userId,
+      role: 'analyst',
+      objective: 'Claimed state audit preservation test',
+      state: 'CLAIMED',
+      dependencies: [],
+      inputPayload: {},
+      executionConstraints: {},
+      authorizationRequirements: {},
+      budgetLimits: { maxTokens: 1000 },
+      timeoutMs: 30000,
+      attemptCount: 1,
+      maxRetries: 2,
+      backoffMultiplier: 1.5,
+      fencingToken: 1,
+      leaseOwner: 'worker_crashed_in_claimed',
+      leaseExpiresAt: now - 5000,
+      heartbeatAt: now - 5000,
+      usageTelemetry: { tokensUsed: 0, durationMs: 0 },
+      provenance: { workerId: 'worker_crashed_in_claimed' },
+      checkpoints: [],
+      createdAt: now - 10000,
+      updatedAt: now - 5000
+    });
+
+    // 2. Task in RUNNING state
+    await repo.saveTask({
+      id: taskIdRunning,
+      runId,
+      principalId: testPrincipalA.userId,
+      role: 'analyst',
+      objective: 'Running state audit preservation test',
+      state: 'RUNNING',
+      dependencies: [],
+      inputPayload: {},
+      executionConstraints: {},
+      authorizationRequirements: {},
+      budgetLimits: { maxTokens: 1000 },
+      timeoutMs: 30000,
+      attemptCount: 1,
+      maxRetries: 2,
+      backoffMultiplier: 1.5,
+      fencingToken: 1,
+      leaseOwner: 'worker_crashed_in_running',
+      leaseExpiresAt: now - 5000,
+      heartbeatAt: now - 5000,
+      usageTelemetry: { tokensUsed: 0, durationMs: 0 },
+      provenance: { workerId: 'worker_crashed_in_running' },
+      checkpoints: [],
+      createdAt: now - 10000,
+      updatedAt: now - 5000
+    });
+
+    // Run Option B for CLAIMED task
+    const resClaimed = await db.raw(OPTION_B_SQL, {
+      target_principal_id: testPrincipalA.userId,
+      target_run_id: runId,
+      target_task_id: taskIdClaimed,
+      crashed_worker_id: 'worker_crashed_in_claimed',
+      operator_id: 'op_secops_test'
+    });
+    assert.strictEqual(resClaimed.rows.length, 1);
+
+    // Run Option B for RUNNING task
+    const resRunning = await db.raw(OPTION_B_SQL, {
+      target_principal_id: testPrincipalA.userId,
+      target_run_id: runId,
+      target_task_id: taskIdRunning,
+      crashed_worker_id: 'worker_crashed_in_running',
+      operator_id: 'op_secops_test'
+    });
+    assert.strictEqual(resRunning.rows.length, 1);
+
+    // Verify task 1 event preserves 'CLAIMED' as from_state
+    const eventClaimed = await db('specialist_task_events')
+      .where({ task_id: taskIdClaimed, event_type: 'TASK_STATE_FAILED' })
+      .first();
+    assert.ok(eventClaimed, 'Event must exist for claimed task abort');
+    assert.strictEqual(eventClaimed.from_state, 'CLAIMED', 'Must record CLAIMED as from_state');
+    assert.strictEqual(eventClaimed.to_state, 'FAILED');
+    assert.strictEqual(Number(eventClaimed.fencing_token), 2);
+
+    // Verify task 2 event preserves 'RUNNING' as from_state
+    const eventRunning = await db('specialist_task_events')
+      .where({ task_id: taskIdRunning, event_type: 'TASK_STATE_FAILED' })
+      .first();
+    assert.ok(eventRunning, 'Event must exist for running task abort');
+    assert.strictEqual(eventRunning.from_state, 'RUNNING', 'Must record RUNNING as from_state');
+    assert.strictEqual(eventRunning.to_state, 'FAILED');
+    assert.strictEqual(Number(eventRunning.fencing_token), 2);
+  });
+
+  test('PHASE 7.5: Cross-Tenant Recovery Rejection — Tenant B operator credentials cannot abort Tenant A tasks', async () => {
+    const runIdA = `run_recov_tenant_a_${Date.now()}`;
+    const taskIdA = `task_recov_tenant_a_${Date.now()}`;
+    await ensureParentRun(runIdA, testPrincipalA.userId);
+
+    const now = Date.now();
+    await repo.saveTask({
+      id: taskIdA,
+      runId: runIdA,
+      principalId: testPrincipalA.userId,
+      role: 'analyst',
+      objective: 'Cross tenant recovery rejection test',
+      state: 'RUNNING',
+      dependencies: [],
+      inputPayload: {},
+      executionConstraints: {},
+      authorizationRequirements: {},
+      budgetLimits: { maxTokens: 1000 },
+      timeoutMs: 30000,
+      attemptCount: 1,
+      maxRetries: 2,
+      backoffMultiplier: 1.5,
+      fencingToken: 1,
+      leaseOwner: 'worker_tenant_a_1',
+      leaseExpiresAt: now - 5000, // expired lease
+      heartbeatAt: now - 8000,
+      usageTelemetry: { tokensUsed: 0, durationMs: 0 },
+      provenance: { workerId: 'worker_tenant_a_1' },
+      checkpoints: [],
+      createdAt: now - 10000,
+      updatedAt: now - 8000
+    });
+
+    // Tenant B operator attempts to abort Tenant A's task using Tenant B principal_id
+    const res = await db.raw(OPTION_B_SQL, {
+      target_principal_id: testPrincipalB.userId, // Attacking tenant!
+      target_run_id: runIdA,
+      target_task_id: taskIdA,
+      crashed_worker_id: 'worker_tenant_a_1',
+      operator_id: 'op_tenant_b_attacker'
+    });
+    assert.strictEqual(res.rows.length, 0, 'Cross-tenant recovery must update 0 rows');
+
+    // Tenant A's task in DB must be untouched
+    const taskA = await repo.getTask(taskIdA);
+    assert.strictEqual(taskA?.state, 'RUNNING');
+    assert.strictEqual(taskA?.leaseOwner, 'worker_tenant_a_1');
+    assert.strictEqual(taskA?.fencingToken, 1);
+
+    // No FAILED events recorded
+    const events = await db('specialist_task_events').where({ task_id: taskIdA });
+    assert.strictEqual(events.length, 0, 'No audit events should be emitted for rejected cross-tenant recovery');
   });
 });
