@@ -111,10 +111,7 @@ export class SpecialistWorkerHost {
   }
 
   private async findGlobalClaimableTasks(limit: number): Promise<any[]> {
-    // Note: In Postgres repository, finding runnable queued tasks can be scoped
-    // Here we find expired or queued tasks
-    const expired = await this.repository.findExpiredLeases(Date.now(), limit);
-    return expired;
+    return await this.repository.findClaimableTasks(Date.now(), limit);
   }
 
   private schedulePoll(): void {

@@ -6,7 +6,8 @@ import {
   SpecialistAuthorizationRequirements,
   SpecialistBudgetLimits,
   isTerminalSpecialistState,
-  toSpecialistTaskOutcome
+  toSpecialistTaskOutcome,
+  TERMINAL_SPECIALIST_STATES
 } from '../../../contracts/src/index.js';
 import { db } from '../../../db/src/index.js';
 import {
@@ -68,6 +69,7 @@ export interface SpecialistTaskRepository {
   updateTaskState(taskId: string, toState: SpecialistTaskState, fencingToken: number, updates?: Partial<DurableSpecialistTask>): Promise<boolean>;
   appendCheckpoint(taskId: string, fencingToken: number, checkpoint: string, data?: unknown): Promise<boolean>;
   findExpiredLeases(now: number, limit?: number): Promise<DurableSpecialistTask[]>;
+  findClaimableTasks(now: number, limit?: number): Promise<DurableSpecialistTask[]>;
   findRunnableTasks(runId: string): Promise<DurableSpecialistTask[]>;
   recordEvent(event: {
     taskId: string;
@@ -261,6 +263,18 @@ export class InMemorySpecialistTaskRepository implements SpecialistTaskRepositor
   async findExpiredLeases(now: number, limit = 10): Promise<DurableSpecialistTask[]> {
     return Array.from(this.tasks.values())
       .filter(t => !isTerminalSpecialistState(t.state) && t.leaseExpiresAt && t.leaseExpiresAt < now)
+      .slice(0, limit)
+      .map(t => JSON.parse(JSON.stringify(t)));
+  }
+
+  async findClaimableTasks(now: number, limit = 10): Promise<DurableSpecialistTask[]> {
+    return Array.from(this.tasks.values())
+      .filter(t => {
+        if (isTerminalSpecialistState(t.state)) return false;
+        if (t.state === 'QUEUED' || t.state === 'RETRY_WAIT') return true;
+        if (t.leaseExpiresAt && t.leaseExpiresAt < now) return true;
+        return false;
+      })
       .slice(0, limit)
       .map(t => JSON.parse(JSON.stringify(t)));
   }
@@ -576,6 +590,20 @@ export class PostgresSpecialistTaskRepository implements SpecialistTaskRepositor
       .whereNotIn('state', TERMINAL_SPECIALIST_STATES)
       .whereNotNull('lease_expires_at')
       .where('lease_expires_at', '<', now)
+      .limit(limit);
+
+    return rows.map(r => this.mapToTask(r));
+  }
+
+  async findClaimableTasks(now: number, limit = 10): Promise<DurableSpecialistTask[]> {
+    const rows = await db('specialist_tasks')
+      .whereIn('state', ['QUEUED', 'RETRY_WAIT'])
+      .orWhere(builder => {
+        builder.whereNotIn('state', TERMINAL_SPECIALIST_STATES)
+          .whereNotNull('lease_expires_at')
+          .where('lease_expires_at', '<', now);
+      })
+      .orderBy('created_at', 'asc')
       .limit(limit);
 
     return rows.map(r => this.mapToTask(r));
