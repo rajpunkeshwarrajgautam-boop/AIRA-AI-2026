@@ -5,3 +5,4 @@ export * from './durable-task-scheduler.js';
 export * from './specialist-worker-runtime.js';
 export * from './durable-execution-coordinator.js';
 export * from './worker-host.js';
+export * from './worker-activation-policy.js';
