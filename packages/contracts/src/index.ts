@@ -86,18 +86,8 @@ export const RoutingDecisionSchema = z.object({
 });
 export type RoutingDecision = z.infer<typeof RoutingDecisionSchema>;
 
-export const CapabilityCategorySchema = z.enum([
-  'general_reasoning',
-  'deep_research',
-  'software_engineering',
-  'data_analysis',
-  'document_intelligence',
-  'business_intelligence',
-  'agent_planning',
-  'tool_execution',
-  'result_verification'
-]);
-export type CapabilityCategory = z.infer<typeof CapabilityCategorySchema>;
+import { CapabilityCategorySchema, type CapabilityCategory } from './behavioral.js';
+export { CapabilityCategorySchema, type CapabilityCategory };
 
 export const ExecutionModeSchema = z.enum(['chat', 'agent']);
 export type ExecutionMode = z.infer<typeof ExecutionModeSchema>;
@@ -980,4 +970,5 @@ export type ErrorEnvelope = z.infer<typeof ErrorEnvelopeSchema>;
 
 export * from './behavioral.js';
 export * from './commercial.js';
+export * from './agent-specialists.js';
 
