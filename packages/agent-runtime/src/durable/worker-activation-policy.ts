@@ -6,13 +6,13 @@
  * 2. Explicit boolean activation: Requires AIRA_PRODUCTION_WORKER_ENABLED strictly equal to "true".
  * 3. Exact Neon project identity assertion: Must match EXPECTED_NEON_PROJECT_ID (old-sky-50952395).
  * 4. Exact Neon endpoint identity assertion: Must match EXPECTED_NEON_ENDPOINT_ID (ep-withered-art-b36ox90b).
- * 5. Runtime identity verification: Live database query to current_setting('neon.project_id')
- *    and current_setting('neon.endpoint_id') must match the asserted production identity.
+ * 5. Structural separation between static configuration validation (CONFIGURATION_VALID)
+ *    and authoritative runtime activation authorization (ACTIVATION_AUTHORIZED).
  * 6. Non-production crossover protection: Staging/preview workers cannot be configured with production flags,
  *    and cannot connect to production databases.
  * 7. Zero payload spoofing: Activation policy only reads environment/orchestrator context,
  *    strictly ignoring user-supplied mission or task payloads.
- * 8. Sanitized reporting: Never logs database passwords, tokens, or raw connection strings.
+ * 8. Fixed non-sensitive error reporting: Never leaks connection strings, passwords, or raw driver strings.
  */
 
 import type { Knex } from 'knex';
@@ -40,8 +40,8 @@ export interface ConnectedDatabaseIdentity {
   host?: string;
 }
 
-export interface WorkerActivationResult {
-  authorized: boolean;
+export interface WorkerStaticConfigResult {
+  valid: boolean;
   code: string;
   message: string;
   isProduction: boolean;
@@ -51,6 +51,27 @@ export interface WorkerActivationResult {
     expectedNeonProjectId?: string;
     expectedNeonEndpointId?: string;
   };
+}
+
+export interface WorkerActivationResult {
+  authorized: boolean;
+  runtimeAuthorized: boolean;
+  stage: 'STATIC_VALIDATION' | 'RUNTIME_AUTHORIZATION';
+  code:
+    | 'CONFIGURATION_VALID'
+    | 'ACTIVATION_AUTHORIZED'
+    | 'PRODUCTION_ACTIVATION_AUTHORIZED'
+    | 'NON_PROD_WORKER_AUTHORIZED'
+    | string;
+  message: string;
+  isProduction: boolean;
+  sanitizedConfig: {
+    airaEnv: string;
+    productionWorkerEnabled: boolean;
+    expectedNeonProjectId?: string;
+    expectedNeonEndpointId?: string;
+  };
+  connectedIdentity?: ConnectedDatabaseIdentity;
 }
 
 export class ActivationSecurityError extends Error {
@@ -66,13 +87,13 @@ export class ActivationSecurityError extends Error {
 }
 
 /**
- * Evaluates the static and runtime activation policy for specialist workers.
- * Fully deterministic; suitable for unit tests and container startup preflight.
+ * Validates deterministic static environment configuration for specialist workers.
+ * Verifies boolean representations, presence of required expected identifiers,
+ * and environment consistency. Never authorizes task claiming on its own.
  */
-export function evaluateWorkerActivationPolicy(
-  config: WorkerActivationConfig,
-  connectedIdentity?: ConnectedDatabaseIdentity
-): WorkerActivationResult {
+export function validateWorkerStaticConfig(
+  config: WorkerActivationConfig
+): WorkerStaticConfigResult {
   const airaEnv = (config.airaEnv || 'staging').trim().toLowerCase();
   const isProduction = airaEnv === 'production';
 
@@ -87,17 +108,16 @@ export function evaluateWorkerActivationPolicy(
       config.productionWorkerEnabled.trim().toLowerCase() === 'true' ||
       config.productionWorkerEnabled.includes('true')
     ) {
-      // e.g. "TRUE", "True", "true ", " true" - reject unsupported representation
       return {
-        authorized: false,
+        valid: false,
         code: 'UNSUPPORTED_BOOLEAN_REPRESENTATION',
         message: "AIRA_PRODUCTION_WORKER_ENABLED must be strictly lowercase 'true' without whitespace.",
         isProduction,
         sanitizedConfig: {
           airaEnv,
           productionWorkerEnabled: false,
-          expectedNeonProjectId: config.expectedNeonProjectId,
-          expectedNeonEndpointId: config.expectedNeonEndpointId
+          expectedNeonProjectId: config.expectedNeonProjectId ? String(config.expectedNeonProjectId).trim() : undefined,
+          expectedNeonEndpointId: config.expectedNeonEndpointId ? String(config.expectedNeonEndpointId).trim() : undefined
         }
       };
     }
@@ -110,17 +130,14 @@ export function evaluateWorkerActivationPolicy(
     expectedNeonEndpointId: config.expectedNeonEndpointId ? String(config.expectedNeonEndpointId).trim() : undefined
   };
 
-  // =========================================================================
-  // CASE 1: PRODUCTION ENVIRONMENT (AIRA_ENV=production)
-  // =========================================================================
+  // Case 1: Production Environment
   if (isProduction) {
-    // Check 1: Explicit production activation flag
     if (!isExplicitlyEnabled) {
       const code = config.productionWorkerEnabled === undefined || config.productionWorkerEnabled === ''
         ? 'MISSING_ACTIVATION_FLAG'
         : 'ACTIVATION_DISABLED';
       return {
-        authorized: false,
+        valid: false,
         code,
         message: 'Production execution denied: AIRA_PRODUCTION_WORKER_ENABLED must be explicitly set to true.',
         isProduction: true,
@@ -128,10 +145,9 @@ export function evaluateWorkerActivationPolicy(
       };
     }
 
-    // Check 2: Mandatory Expected Neon Project ID
     if (!sanitizedConfig.expectedNeonProjectId) {
       return {
-        authorized: false,
+        valid: false,
         code: 'MISSING_EXPECTED_PROJECT_ID',
         message: 'Production execution denied: EXPECTED_NEON_PROJECT_ID must be configured.',
         isProduction: true,
@@ -140,7 +156,7 @@ export function evaluateWorkerActivationPolicy(
     }
     if (sanitizedConfig.expectedNeonProjectId !== CANONICAL_PRODUCTION_NEON_PROJECT_ID) {
       return {
-        authorized: false,
+        valid: false,
         code: 'INCORRECT_EXPECTED_PROJECT_ID',
         message: `Production execution denied: EXPECTED_NEON_PROJECT_ID does not match canonical production Neon project (${CANONICAL_PRODUCTION_NEON_PROJECT_ID}).`,
         isProduction: true,
@@ -148,10 +164,9 @@ export function evaluateWorkerActivationPolicy(
       };
     }
 
-    // Check 3: Mandatory Expected Neon Endpoint ID
     if (!sanitizedConfig.expectedNeonEndpointId) {
       return {
-        authorized: false,
+        valid: false,
         code: 'MISSING_EXPECTED_ENDPOINT_ID',
         message: 'Production execution denied: EXPECTED_NEON_ENDPOINT_ID must be configured.',
         isProduction: true,
@@ -160,7 +175,7 @@ export function evaluateWorkerActivationPolicy(
     }
     if (sanitizedConfig.expectedNeonEndpointId !== CANONICAL_PRODUCTION_NEON_ENDPOINT_ID) {
       return {
-        authorized: false,
+        valid: false,
         code: 'INCORRECT_EXPECTED_ENDPOINT_ID',
         message: `Production execution denied: EXPECTED_NEON_ENDPOINT_ID does not match canonical production Neon endpoint (${CANONICAL_PRODUCTION_NEON_ENDPOINT_ID}).`,
         isProduction: true,
@@ -168,102 +183,23 @@ export function evaluateWorkerActivationPolicy(
       };
     }
 
-    // Check 4: Connected Database Identity Validation (if provided)
-    if (connectedIdentity) {
-      const liveProject = (connectedIdentity.neonProjectId || '').trim();
-      const liveEndpoint = (connectedIdentity.neonEndpointId || '').trim();
-
-      // Check 4a: Staging database in Production worker (Critical crossover)
-      if (
-        liveProject === CANONICAL_STAGING_NEON_PROJECT_ID ||
-        liveEndpoint === CANONICAL_STAGING_NEON_ENDPOINT_ID
-      ) {
-        return {
-          authorized: false,
-          code: 'CRITICAL_ENVIRONMENT_CROSSOVER_STAGING_IN_PROD',
-          message: `CRITICAL SECURITY VIOLATION: Production worker connected to STAGING Neon database (${CANONICAL_STAGING_NEON_PROJECT_ID})!`,
-          isProduction: true,
-          sanitizedConfig
-        };
-      }
-
-      // Check 4b: Both identifiers missing or empty
-      if (!liveProject && !liveEndpoint) {
-        return {
-          authorized: false,
-          code: 'UNVERIFIED_DATABASE_IDENTITY',
-          message: 'Production execution denied: Database identity could not be established from server telemetry.',
-          isProduction: true,
-          sanitizedConfig
-        };
-      }
-
-      // Check 4c: Missing, null, undefined, empty or whitespace-only live project ID (partial identity)
-      if (!liveProject) {
-        return {
-          authorized: false,
-          code: 'MISSING_CONNECTED_PROJECT_ID',
-          message: 'Production execution denied: Connected Neon project identity is missing or empty.',
-          isProduction: true,
-          sanitizedConfig
-        };
-      }
-
-      // Check 4d: Exact equality against canonical production project ID
-      if (liveProject !== CANONICAL_PRODUCTION_NEON_PROJECT_ID) {
-        return {
-          authorized: false,
-          code: 'DATABASE_PROJECT_MISMATCH',
-          message: `Connected Neon project ID does not match canonical production project (${CANONICAL_PRODUCTION_NEON_PROJECT_ID}).`,
-          isProduction: true,
-          sanitizedConfig
-        };
-      }
-
-      // Check 4e: Missing, null, undefined, empty or whitespace-only live endpoint ID (partial identity)
-      if (!liveEndpoint) {
-        return {
-          authorized: false,
-          code: 'MISSING_CONNECTED_ENDPOINT_ID',
-          message: 'Production execution denied: Connected Neon endpoint identity is missing or empty.',
-          isProduction: true,
-          sanitizedConfig
-        };
-      }
-
-      // Check 4f: Exact equality against canonical production endpoint ID
-      if (liveEndpoint !== CANONICAL_PRODUCTION_NEON_ENDPOINT_ID) {
-        return {
-          authorized: false,
-          code: 'DATABASE_ENDPOINT_MISMATCH',
-          message: `Connected Neon endpoint ID does not match canonical production endpoint (${CANONICAL_PRODUCTION_NEON_ENDPOINT_ID}).`,
-          isProduction: true,
-          sanitizedConfig
-        };
-      }
-    }
-
     return {
-      authorized: true,
-      code: 'PRODUCTION_ACTIVATION_AUTHORIZED',
-      message: 'Production specialist worker activation successfully authorized under verified policy.',
+      valid: true,
+      code: 'CONFIGURATION_VALID',
+      message: 'Production worker static environment configuration is valid (preflight only).',
       isProduction: true,
       sanitizedConfig
     };
   }
 
-  // =========================================================================
-  // CASE 2: NON-PRODUCTION ENVIRONMENT (Staging, Preview, Local, Test)
-  // =========================================================================
-
-  // Check 5: Staging environment with production-targeted activation configuration (Inconsistency check / TEST A13)
+  // Case 2: Non-Production Environment (Staging, Preview, Local, Test)
   if (
     isExplicitlyEnabled ||
     sanitizedConfig.expectedNeonProjectId === CANONICAL_PRODUCTION_NEON_PROJECT_ID ||
     sanitizedConfig.expectedNeonEndpointId === CANONICAL_PRODUCTION_NEON_ENDPOINT_ID
   ) {
     return {
-      authorized: false,
+      valid: false,
       code: 'INCONSISTENT_NON_PROD_ACTIVATION_CONFIG',
       message: `Non-production environment ('${airaEnv}') cannot be configured with production activation settings (AIRA_PRODUCTION_WORKER_ENABLED or production expected IDs).`,
       isProduction: false,
@@ -271,7 +207,165 @@ export function evaluateWorkerActivationPolicy(
     };
   }
 
-  // Check 6: Non-production worker connected to production database (Crossover check)
+  return {
+    valid: true,
+    code: 'CONFIGURATION_VALID',
+    message: `Specialist worker static environment configuration is valid for non-production environment: '${airaEnv}'.`,
+    isProduction: false,
+    sanitizedConfig
+  };
+}
+
+/**
+ * Evaluates the static and runtime activation policy for specialist workers.
+ * Enforces structural distinction between static preflight and runtime authorization.
+ */
+export function evaluateWorkerActivationPolicy(
+  config: WorkerActivationConfig,
+  connectedIdentity?: ConnectedDatabaseIdentity
+): WorkerActivationResult {
+  const staticResult = validateWorkerStaticConfig(config);
+  const airaEnv = staticResult.sanitizedConfig.airaEnv;
+
+  // If static configuration checks fail, reject immediately
+  if (!staticResult.valid) {
+    return {
+      authorized: false,
+      runtimeAuthorized: false,
+      stage: 'STATIC_VALIDATION',
+      code: staticResult.code,
+      message: staticResult.message,
+      isProduction: staticResult.isProduction,
+      sanitizedConfig: staticResult.sanitizedConfig
+    };
+  }
+
+  // =========================================================================
+  // CASE 1: PRODUCTION ENVIRONMENT (AIRA_ENV=production)
+  // =========================================================================
+  if (staticResult.isProduction) {
+    // If connected database identity is absent: STATIC CONFIGURATION VALIDATION ONLY
+    // Crucial invariant: CONFIGURATION_VALID does NOT authorize runtime execution.
+    if (!connectedIdentity) {
+      return {
+        authorized: true,
+        runtimeAuthorized: false,
+        stage: 'STATIC_VALIDATION',
+        code: 'CONFIGURATION_VALID',
+        message: 'Production worker static configuration is valid, but runtime database identity has not been verified. Production execution remains unauthorized.',
+        isProduction: true,
+        sanitizedConfig: staticResult.sanitizedConfig
+      };
+    }
+
+    // RUNTIME ACTIVATION AUTHORIZATION PATH: Validate actual live Neon identity
+    const liveProject = (connectedIdentity.neonProjectId || '').trim();
+    const liveEndpoint = (connectedIdentity.neonEndpointId || '').trim();
+
+    // Check 4a: Staging database in Production worker (Critical crossover)
+    if (
+      liveProject === CANONICAL_STAGING_NEON_PROJECT_ID ||
+      liveEndpoint === CANONICAL_STAGING_NEON_ENDPOINT_ID
+    ) {
+      return {
+        authorized: false,
+        runtimeAuthorized: false,
+        stage: 'RUNTIME_AUTHORIZATION',
+        code: 'CRITICAL_ENVIRONMENT_CROSSOVER_STAGING_IN_PROD',
+        message: `CRITICAL SECURITY VIOLATION: Production worker connected to STAGING Neon database (${CANONICAL_STAGING_NEON_PROJECT_ID})!`,
+        isProduction: true,
+        sanitizedConfig: staticResult.sanitizedConfig,
+        connectedIdentity
+      };
+    }
+
+    // Check 4b: Both identifiers missing or empty
+    if (!liveProject && !liveEndpoint) {
+      return {
+        authorized: false,
+        runtimeAuthorized: false,
+        stage: 'RUNTIME_AUTHORIZATION',
+        code: 'UNVERIFIED_DATABASE_IDENTITY',
+        message: 'Production execution denied: Database identity could not be established from server telemetry.',
+        isProduction: true,
+        sanitizedConfig: staticResult.sanitizedConfig,
+        connectedIdentity
+      };
+    }
+
+    // Check 4c: Missing, null, undefined, empty or whitespace-only live project ID (partial identity)
+    if (!liveProject) {
+      return {
+        authorized: false,
+        runtimeAuthorized: false,
+        stage: 'RUNTIME_AUTHORIZATION',
+        code: 'MISSING_CONNECTED_PROJECT_ID',
+        message: 'Production execution denied: Connected Neon project identity is missing or empty.',
+        isProduction: true,
+        sanitizedConfig: staticResult.sanitizedConfig,
+        connectedIdentity
+      };
+    }
+
+    // Check 4d: Exact equality against canonical production project ID
+    if (liveProject !== CANONICAL_PRODUCTION_NEON_PROJECT_ID) {
+      return {
+        authorized: false,
+        runtimeAuthorized: false,
+        stage: 'RUNTIME_AUTHORIZATION',
+        code: 'DATABASE_PROJECT_MISMATCH',
+        message: `Connected Neon project ID does not match canonical production project (${CANONICAL_PRODUCTION_NEON_PROJECT_ID}).`,
+        isProduction: true,
+        sanitizedConfig: staticResult.sanitizedConfig,
+        connectedIdentity
+      };
+    }
+
+    // Check 4e: Missing, null, undefined, empty or whitespace-only live endpoint ID (partial identity)
+    if (!liveEndpoint) {
+      return {
+        authorized: false,
+        runtimeAuthorized: false,
+        stage: 'RUNTIME_AUTHORIZATION',
+        code: 'MISSING_CONNECTED_ENDPOINT_ID',
+        message: 'Production execution denied: Connected Neon endpoint identity is missing or empty.',
+        isProduction: true,
+        sanitizedConfig: staticResult.sanitizedConfig,
+        connectedIdentity
+      };
+    }
+
+    // Check 4f: Exact equality against canonical production endpoint ID
+    if (liveEndpoint !== CANONICAL_PRODUCTION_NEON_ENDPOINT_ID) {
+      return {
+        authorized: false,
+        runtimeAuthorized: false,
+        stage: 'RUNTIME_AUTHORIZATION',
+        code: 'DATABASE_ENDPOINT_MISMATCH',
+        message: `Connected Neon endpoint ID does not match canonical production endpoint (${CANONICAL_PRODUCTION_NEON_ENDPOINT_ID}).`,
+        isProduction: true,
+        sanitizedConfig: staticResult.sanitizedConfig,
+        connectedIdentity
+      };
+    }
+
+    return {
+      authorized: true,
+      runtimeAuthorized: true,
+      stage: 'RUNTIME_AUTHORIZATION',
+      code: 'ACTIVATION_AUTHORIZED',
+      message: 'Production specialist worker activation successfully authorized under verified live Neon identity.',
+      isProduction: true,
+      sanitizedConfig: staticResult.sanitizedConfig,
+      connectedIdentity
+    };
+  }
+
+  // =========================================================================
+  // CASE 2: NON-PRODUCTION ENVIRONMENT (Staging, Preview, Local, Test)
+  // =========================================================================
+
+  // Check 5: Non-production worker connected to production database (Crossover check)
   if (connectedIdentity) {
     const liveProject = (connectedIdentity.neonProjectId || '').trim();
     const liveEndpoint = (connectedIdentity.neonEndpointId || '').trim();
@@ -285,20 +379,26 @@ export function evaluateWorkerActivationPolicy(
     ) {
       return {
         authorized: false,
+        runtimeAuthorized: false,
+        stage: 'RUNTIME_AUTHORIZATION',
         code: 'CRITICAL_SECURITY_VIOLATION_PRODUCTION_DB_IN_NON_PROD',
         message: `CRITICAL SECURITY VIOLATION: Non-production worker ('${airaEnv}') connected to PRODUCTION Neon database (${CANONICAL_PRODUCTION_NEON_PROJECT_ID})!`,
         isProduction: false,
-        sanitizedConfig
+        sanitizedConfig: staticResult.sanitizedConfig,
+        connectedIdentity
       };
     }
   }
 
   return {
     authorized: true,
+    runtimeAuthorized: true,
+    stage: connectedIdentity ? 'RUNTIME_AUTHORIZATION' : 'STATIC_VALIDATION',
     code: 'NON_PROD_WORKER_AUTHORIZED',
     message: `Specialist worker authorized for non-production environment: '${airaEnv}'.`,
     isProduction: false,
-    sanitizedConfig
+    sanitizedConfig: staticResult.sanitizedConfig,
+    connectedIdentity
   };
 }
 
@@ -313,6 +413,12 @@ export async function assertWorkerActivationAuthorized(
 ): Promise<WorkerActivationResult> {
   const airaEnv = (config.airaEnv || 'staging').trim().toLowerCase();
   const isProduction = airaEnv === 'production';
+
+  // Step 1: Preflight static configuration
+  const staticResult = validateWorkerStaticConfig(config);
+  if (!staticResult.valid) {
+    throw new ActivationSecurityError(staticResult.code, staticResult.message);
+  }
 
   let connectedIdentity: ConnectedDatabaseIdentity;
 
@@ -330,7 +436,7 @@ export async function assertWorkerActivationAuthorized(
     if (!row) {
       throw new ActivationSecurityError(
         'UNVERIFIED_DATABASE_IDENTITY',
-        'Production execution denied: Database identity query returned no rows.'
+        'Unable to verify database identity during worker startup.'
       );
     }
     connectedIdentity = {
@@ -345,10 +451,10 @@ export async function assertWorkerActivationAuthorized(
     if (err instanceof ActivationSecurityError) {
       throw err;
     }
-    const cleanMsg = (err.message || 'Unknown database error').replace(/:\/\/.*@/, '://<sanitized>@');
+    // Fixed, non-sensitive public error message (PHASE 2 requirement)
     throw new ActivationSecurityError(
       'DATABASE_UNAVAILABLE',
-      `Live database query failed during worker activation validation: ${cleanMsg}`
+      'Unable to verify database identity during worker startup.'
     );
   }
 
@@ -356,14 +462,42 @@ export async function assertWorkerActivationAuthorized(
   if (isProduction && !connectedIdentity) {
     throw new ActivationSecurityError(
       'UNVERIFIED_DATABASE_IDENTITY',
-      'Production execution denied: Database identity cannot be omitted in runtime authorization path.'
+      'Unable to verify database identity during worker startup.'
     );
   }
 
   const result = evaluateWorkerActivationPolicy(config, connectedIdentity);
-  if (!result.authorized) {
+  if (!result.authorized || !result.runtimeAuthorized) {
     throw new ActivationSecurityError(result.code, result.message);
   }
 
   return result;
+}
+
+/**
+ * Sanitizes any unknown runtime or database error into a fixed, non-sensitive structure.
+ * Guaranteed never to expose connection strings, passwords, auth headers, or raw driver strings.
+ */
+export function sanitizeActivationError(err: unknown): { code: string; message: string } {
+  if (err instanceof ActivationSecurityError) {
+    return {
+      code: err.code,
+      message: err.message
+    };
+  }
+
+  if (typeof err === 'object' && err !== null && 'code' in err && typeof (err as any).code === 'string') {
+    const code = (err as any).code;
+    if (code === 'DATABASE_UNAVAILABLE' || code === 'UNVERIFIED_DATABASE_IDENTITY') {
+      return {
+        code,
+        message: 'Unable to verify database identity during worker startup.'
+      };
+    }
+  }
+
+  return {
+    code: 'DATABASE_UNAVAILABLE',
+    message: 'Unable to verify database identity during worker startup.'
+  };
 }

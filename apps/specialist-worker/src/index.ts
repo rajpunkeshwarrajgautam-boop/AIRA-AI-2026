@@ -41,6 +41,7 @@ const heartbeatIntervalMs = parseInt(process.env.HEARTBEAT_INTERVAL_MS || '3000'
 import {
   evaluateWorkerActivationPolicy,
   assertWorkerActivationAuthorized,
+  sanitizeActivationError,
   ActivationSecurityError,
   WorkerActivationConfig,
   CANONICAL_PRODUCTION_NEON_PROJECT_ID,
@@ -259,7 +260,8 @@ async function main() {
   } catch (err: any) {
     isActivated = false;
     dbConnected = false;
-    console.error(`[SpecialistWorker] Failed to start worker (fail-closed):`, err.message || err);
+    const sanitized = sanitizeActivationError(err);
+    console.error(`[SpecialistWorker] Failed to start worker (fail-closed): [${sanitized.code}] ${sanitized.message}`);
     process.exit(1);
   }
 }

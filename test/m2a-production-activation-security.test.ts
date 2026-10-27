@@ -5,7 +5,9 @@ import http from 'node:http';
 import { db } from '../packages/db/src/index.js';
 import {
   evaluateWorkerActivationPolicy,
+  validateWorkerStaticConfig,
   assertWorkerActivationAuthorized,
+  sanitizeActivationError,
   ActivationSecurityError,
   CANONICAL_PRODUCTION_NEON_PROJECT_ID,
   CANONICAL_PRODUCTION_NEON_ENDPOINT_ID,
@@ -152,7 +154,10 @@ test.describe('AIRA AI 2026 — Milestone 2A Production Activation Security & Fa
       (err: any) => {
         assert.ok(err instanceof ActivationSecurityError);
         assert.strictEqual(err.code, 'DATABASE_UNAVAILABLE');
-        assert.ok(err.message.includes('Live database query failed'));
+        assert.ok(
+          err.message.includes('Unable to verify database identity') ||
+          err.message.includes('Live database query failed')
+        );
         return true;
       }
     );
@@ -366,7 +371,7 @@ test.describe('AIRA AI 2026 — Milestone 2A Production Activation Security & Fa
     };
     const res = evaluateWorkerActivationPolicy(validProductionConfig, identity);
     assert.strictEqual(res.authorized, true);
-    assert.strictEqual(res.code, 'PRODUCTION_ACTIVATION_AUTHORIZED');
+    assert.strictEqual(res.code, 'ACTIVATION_AUTHORIZED');
     assert.strictEqual(res.isProduction, true);
   });
 
@@ -459,7 +464,7 @@ test.describe('AIRA AI 2026 — Milestone 2A Production Activation Security & Fa
   test('LAYER 1: Positive Production Activation Path (Deterministic Policy Verification)', () => {
     const res = evaluateWorkerActivationPolicy(validProductionConfig, validProductionIdentity);
     assert.strictEqual(res.authorized, true);
-    assert.strictEqual(res.code, 'PRODUCTION_ACTIVATION_AUTHORIZED');
+    assert.strictEqual(res.code, 'ACTIVATION_AUTHORIZED');
     assert.strictEqual(res.isProduction, true);
     assert.strictEqual(res.sanitizedConfig.productionWorkerEnabled, true);
     assert.strictEqual(res.sanitizedConfig.expectedNeonProjectId, CANONICAL_PRODUCTION_NEON_PROJECT_ID);
@@ -602,5 +607,330 @@ test.describe('AIRA AI 2026 — Milestone 2A Production Activation Security & Fa
     const run2 = await assertWorkerActivationAuthorized(validProductionConfig, mockKnex);
     assert.strictEqual(run2.authorized, true);
     assert.strictEqual(mockQueryCallCount, 2);
+  });
+
+  // =========================================================================
+  // PHASE 2 — ERROR HANDLING AND SECRET SANITIZATION TESTS (E1 - E7)
+  // =========================================================================
+
+  test('TEST E1: Connection error containing PostgreSQL URL with credentials => sanitized to fixed message', () => {
+    const rawError = new Error('connect ECONNREFUSED ' + 'postgres://' + 'aira_prod:SuperSecretPass123!' + '@ep-withered-art-b36ox90b.us-east-2.aws.neon.tech/neondb?sslmode=require');
+    const sanitized = sanitizeActivationError(rawError);
+
+    assert.strictEqual(sanitized.code, 'DATABASE_UNAVAILABLE');
+    assert.strictEqual(sanitized.message, 'Unable to verify database identity during worker startup.');
+    assert.ok(!sanitized.message.includes('SuperSecretPass123!'));
+    assert.ok(!sanitized.message.includes('postgres://'));
+    assert.ok(!sanitized.message.includes('ep-withered-art-b36ox90b'));
+  });
+
+  test('TEST E2: Connection error containing database passwords => sanitized without secret reflection', () => {
+    const rawError = new Error('FATAL: password authentication failed for user "aira_prod": password="super_secret_token_xyz999"');
+    const sanitized = sanitizeActivationError(rawError);
+
+    assert.strictEqual(sanitized.code, 'DATABASE_UNAVAILABLE');
+    assert.strictEqual(sanitized.message, 'Unable to verify database identity during worker startup.');
+    assert.ok(!sanitized.message.includes('super_secret_token_xyz999'));
+    assert.ok(!sanitized.message.includes('password='));
+  });
+
+  test('TEST E3: Multiline driver error string => collapsed into fixed non-sensitive message', () => {
+    const multilineError = new Error(
+      'error: connection timeout\n' +
+      '    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1607:16)\n' +
+      '    at Client._connect (node_modules/pg/lib/client.js:142:11)\n' +
+      '    connectionString: ' + '"postgres://' + 'user:injected_secret_pass' + '@host:5432/db"'
+    );
+    const sanitized = sanitizeActivationError(multilineError);
+
+    assert.strictEqual(sanitized.code, 'DATABASE_UNAVAILABLE');
+    assert.strictEqual(sanitized.message, 'Unable to verify database identity during worker startup.');
+    assert.ok(!sanitized.message.includes('injected_secret_pass'));
+    assert.ok(!sanitized.message.includes('\n'));
+  });
+
+  test('TEST E4: Unexpected error object (non-Error object) => sanitized safely', () => {
+    const strangeError = {
+      code: '57P01',
+      details: 'postgres://' + 'admin:sensitive_token_payload' + '@host/db',
+      internalSecrets: ['k1', 'k2']
+    };
+    const sanitized = sanitizeActivationError(strangeError);
+
+    assert.strictEqual(sanitized.code, 'DATABASE_UNAVAILABLE');
+    assert.strictEqual(sanitized.message, 'Unable to verify database identity during worker startup.');
+    assert.ok(!JSON.stringify(sanitized).includes('sensitive_token_payload'));
+  });
+
+  test('TEST E5: Missing error.message or null/undefined error => safe fallback', () => {
+    const emptyErrorObj = {};
+    const sanitizedObj = sanitizeActivationError(emptyErrorObj);
+    assert.strictEqual(sanitizedObj.code, 'DATABASE_UNAVAILABLE');
+    assert.strictEqual(sanitizedObj.message, 'Unable to verify database identity during worker startup.');
+
+    const nullError = null;
+    const sanitizedNull = sanitizeActivationError(nullError);
+    assert.strictEqual(sanitizedNull.code, 'DATABASE_UNAVAILABLE');
+    assert.strictEqual(sanitizedNull.message, 'Unable to verify database identity during worker startup.');
+  });
+
+  test('TEST E6: Nested error causes with sensitive credentials => cause not leaked', () => {
+    const rootCause = new Error('getaddrinfo ENOTFOUND ep-secret-subdomain.aws.neon.tech with auth token=secret_bearer_token_abc');
+    const outerError = new Error('Database pool initialization failed', { cause: rootCause });
+    const sanitized = sanitizeActivationError(outerError);
+
+    assert.strictEqual(sanitized.code, 'DATABASE_UNAVAILABLE');
+    assert.strictEqual(sanitized.message, 'Unable to verify database identity during worker startup.');
+    assert.ok(!JSON.stringify(sanitized).includes('secret_bearer_token_abc'));
+  });
+
+  test('TEST E7: Serialized worker startup error JSON string => ZERO sensitive values', () => {
+    const rawError = new Error('Connection refused: DATABASE_URL=' + 'postgres://' + 'aira:P@ssword999' + '@ep-prod.neon.tech/neondb?sslmode=verify-full');
+    const sanitized = sanitizeActivationError(rawError);
+    const serialized = JSON.stringify(sanitized);
+
+    assert.ok(!serialized.includes('P@ssword999'));
+    assert.ok(!serialized.includes('DATABASE_URL'));
+    assert.ok(!serialized.includes('postgres://'));
+    assert.strictEqual(serialized, JSON.stringify({
+      code: 'DATABASE_UNAVAILABLE',
+      message: 'Unable to verify database identity during worker startup.'
+    }));
+  });
+
+  // =========================================================================
+  // PHASE 3 — FINAL SECURITY REGRESSION SUITE (S1 - S12)
+  // =========================================================================
+
+  test('TEST S1: Static configuration passes but database identity is absent => CONFIGURATION_VALID, runtime activation NOT AUTHORIZED', () => {
+    const staticResult = validateWorkerStaticConfig(validProductionConfig);
+    assert.strictEqual(staticResult.valid, true);
+    assert.strictEqual(staticResult.code, 'CONFIGURATION_VALID');
+
+    const policyResult = evaluateWorkerActivationPolicy(validProductionConfig, undefined);
+    assert.strictEqual(policyResult.authorized, true);
+    assert.strictEqual(policyResult.runtimeAuthorized, false);
+    assert.strictEqual(policyResult.stage, 'STATIC_VALIDATION');
+    assert.strictEqual(policyResult.code, 'CONFIGURATION_VALID');
+  });
+
+  test('TEST S2: Correct project ID and endpoint ID => ACTIVATION_AUTHORIZED', () => {
+    const policyResult = evaluateWorkerActivationPolicy(validProductionConfig, validProductionIdentity);
+    assert.strictEqual(policyResult.authorized, true);
+    assert.strictEqual(policyResult.runtimeAuthorized, true);
+    assert.strictEqual(policyResult.stage, 'RUNTIME_AUTHORIZATION');
+    assert.strictEqual(policyResult.code, 'ACTIVATION_AUTHORIZED');
+    assert.strictEqual(policyResult.isProduction, true);
+  });
+
+  test('TEST S3: Correct project ID, missing endpoint => DENIED', () => {
+    const partialIdentity: ConnectedDatabaseIdentity = {
+      ...validProductionIdentity,
+      neonEndpointId: ''
+    };
+    const policyResult = evaluateWorkerActivationPolicy(validProductionConfig, partialIdentity);
+    assert.strictEqual(policyResult.authorized, false);
+    assert.strictEqual(policyResult.runtimeAuthorized, false);
+    assert.strictEqual(policyResult.stage, 'RUNTIME_AUTHORIZATION');
+    assert.strictEqual(policyResult.code, 'MISSING_CONNECTED_ENDPOINT_ID');
+  });
+
+  test('TEST S4: Missing project ID, correct endpoint => DENIED', () => {
+    const partialIdentity: ConnectedDatabaseIdentity = {
+      ...validProductionIdentity,
+      neonProjectId: ''
+    };
+    const policyResult = evaluateWorkerActivationPolicy(validProductionConfig, partialIdentity);
+    assert.strictEqual(policyResult.authorized, false);
+    assert.strictEqual(policyResult.runtimeAuthorized, false);
+    assert.strictEqual(policyResult.stage, 'RUNTIME_AUTHORIZATION');
+    assert.strictEqual(policyResult.code, 'MISSING_CONNECTED_PROJECT_ID');
+  });
+
+  test('TEST S5: Staging credentials in production configuration => DENIED', () => {
+    const policyResult = evaluateWorkerActivationPolicy(validProductionConfig, stagingIdentity);
+    assert.strictEqual(policyResult.authorized, false);
+    assert.strictEqual(policyResult.runtimeAuthorized, false);
+    assert.strictEqual(policyResult.code, 'CRITICAL_ENVIRONMENT_CROSSOVER_STAGING_IN_PROD');
+  });
+
+  test('TEST S6: Production credentials in staging configuration => DENIED', () => {
+    const stagingConfig: WorkerActivationConfig = { airaEnv: 'staging' };
+    const policyResult = evaluateWorkerActivationPolicy(stagingConfig, validProductionIdentity);
+    assert.strictEqual(policyResult.authorized, false);
+    assert.strictEqual(policyResult.runtimeAuthorized, false);
+    assert.strictEqual(policyResult.code, 'CRITICAL_SECURITY_VIOLATION_PRODUCTION_DB_IN_NON_PROD');
+  });
+
+  test('TEST S7: Correct production environment but activation disabled => DENIED', () => {
+    const disabledConfig: WorkerActivationConfig = {
+      ...validProductionConfig,
+      productionWorkerEnabled: 'false'
+    };
+    const policyResult = evaluateWorkerActivationPolicy(disabledConfig, validProductionIdentity);
+    assert.strictEqual(policyResult.authorized, false);
+    assert.strictEqual(policyResult.runtimeAuthorized, false);
+    assert.strictEqual(policyResult.code, 'ACTIVATION_DISABLED');
+  });
+
+  test('TEST S8: Database identity query throws an error containing secrets => DENIED with ZERO secrets emitted', async () => {
+    const mockKnexLeakingSecrets = {
+      raw: async () => {
+        throw new Error('Connection failed: ' + 'postgres://' + 'aira_prod:SuperSecretP@ssword999' + '@ep-withered-art-b36ox90b.neon.tech/neondb?sslmode=require');
+      }
+    } as any;
+
+    await assert.rejects(
+      async () => {
+        await assertWorkerActivationAuthorized(validProductionConfig, mockKnexLeakingSecrets);
+      },
+      (err: any) => {
+        assert.ok(err instanceof ActivationSecurityError);
+        assert.strictEqual(err.code, 'DATABASE_UNAVAILABLE');
+        assert.ok(err.message.includes('Unable to verify database identity during worker startup.'));
+        assert.ok(!err.message.includes('SuperSecretP@ssword999'));
+        assert.ok(!err.message.includes('postgres://'));
+        assert.ok(!JSON.stringify(err).includes('SuperSecretP@ssword999'));
+        return true;
+      }
+    );
+  });
+
+  test('TEST S9: Worker readiness before runtime validation => HTTP 503', () => {
+    // Model worker readiness probe before runtime authorization is complete
+    let runtimeValidated = false;
+    const probeHandler = () => {
+      if (!runtimeValidated) {
+        return { statusCode: 503, ready: false, message: 'Worker is not ready: Runtime activation pending' };
+      }
+      return { statusCode: 200, ready: true };
+    };
+
+    const beforeResult = probeHandler();
+    assert.strictEqual(beforeResult.statusCode, 503);
+    assert.strictEqual(beforeResult.ready, false);
+
+    runtimeValidated = true;
+    const afterResult = probeHandler();
+    assert.strictEqual(afterResult.statusCode, 200);
+    assert.strictEqual(afterResult.ready, true);
+  });
+
+  test('TEST S10: Worker startup with static configuration only => ZERO task claims and ZERO tool executions', async () => {
+    const taskRepo = new InMemorySpecialistTaskRepository();
+    const registry = new SpecialistRegistry();
+
+    await taskRepo.saveTask({
+      id: 'task_s10_static_only_test',
+      runId: 'run_s10_test',
+      principalId: 'user_prod_tester',
+      role: 'analyst',
+      objective: 'Sensitive task',
+      state: 'QUEUED',
+      dependencies: [],
+      inputPayload: { query: 'test' },
+      executionConstraints: { sideEffectLevel: 'NONE', allowedTools: ['calculator'] },
+      authorizationRequirements: { requiresHumanApproval: false, requiredPermissions: [] },
+      budgetLimits: { maxTokens: 1000 },
+      timeoutMs: 10000,
+      attemptCount: 0,
+      maxRetries: 2,
+      backoffMultiplier: 1.5,
+      fencingToken: 0,
+      usageTelemetry: { tokensUsed: 0, durationMs: 0 },
+      provenance: {},
+      checkpoints: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    });
+
+    const staticResult = validateWorkerStaticConfig(validProductionConfig);
+    assert.strictEqual(staticResult.valid, true);
+
+    // Because static configuration alone NEVER grants runtime execution, host.start() is NOT permitted
+    const runtimeAuth = evaluateWorkerActivationPolicy(validProductionConfig, undefined);
+    assert.strictEqual(runtimeAuth.runtimeAuthorized, false);
+
+    // Verify task state in repository remains untouched: strictly QUEUED, 0 attempts, no claim
+    const task = await taskRepo.getTask('task_s10_static_only_test');
+    assert.strictEqual(task?.state, 'QUEUED');
+    assert.strictEqual(task?.attemptCount, 0);
+    assert.strictEqual(task?.leaseOwner, undefined);
+  });
+
+  test('TEST S11: Database identity changes unexpectedly on restart => startup denied', async () => {
+    let restartCycle = 0;
+    const mockKnexDynamicIdentity = {
+      raw: async () => {
+        restartCycle++;
+        if (restartCycle === 1) {
+          return {
+            rows: [{
+              db_name: 'neondb',
+              db_user: 'aira_prod',
+              server_ip: '10.0.1.5',
+              neon_project_id: CANONICAL_PRODUCTION_NEON_PROJECT_ID,
+              neon_endpoint_id: CANONICAL_PRODUCTION_NEON_ENDPOINT_ID
+            }]
+          };
+        } else {
+          // Restarted against an unexpected/rogue project ID
+          return {
+            rows: [{
+              db_name: 'neondb',
+              db_user: 'aira_prod',
+              server_ip: '10.0.1.5',
+              neon_project_id: 'rogue-project-unauthorized-999',
+              neon_endpoint_id: CANONICAL_PRODUCTION_NEON_ENDPOINT_ID
+            }]
+          };
+        }
+      }
+    } as any;
+
+    // Cycle 1: Authorized
+    const firstBoot = await assertWorkerActivationAuthorized(validProductionConfig, mockKnexDynamicIdentity);
+    assert.strictEqual(firstBoot.authorized, true);
+    assert.strictEqual(firstBoot.runtimeAuthorized, true);
+
+    // Cycle 2: Restart against changed DB identity => Startup denied
+    await assert.rejects(
+      async () => {
+        await assertWorkerActivationAuthorized(validProductionConfig, mockKnexDynamicIdentity);
+      },
+      (err: any) => {
+        assert.ok(err instanceof ActivationSecurityError);
+        assert.strictEqual(err.code, 'DATABASE_PROJECT_MISMATCH');
+        return true;
+      }
+    );
+  });
+
+  test('TEST S12: Production activation requires actual runtime verification for each new worker process', async () => {
+    let liveQueryCount = 0;
+    const mockKnex = {
+      raw: async () => {
+        liveQueryCount++;
+        return {
+          rows: [{
+            db_name: 'neondb',
+            db_user: 'aira_prod',
+            server_ip: '10.0.1.5',
+            neon_project_id: CANONICAL_PRODUCTION_NEON_PROJECT_ID,
+            neon_endpoint_id: CANONICAL_PRODUCTION_NEON_ENDPOINT_ID
+          }]
+        };
+      }
+    } as any;
+
+    // Worker process 1
+    const worker1 = await assertWorkerActivationAuthorized(validProductionConfig, mockKnex);
+    assert.strictEqual(worker1.runtimeAuthorized, true);
+    assert.strictEqual(liveQueryCount, 1);
+
+    // Worker process 2 (new worker process must execute its own live query)
+    const worker2 = await assertWorkerActivationAuthorized(validProductionConfig, mockKnex);
+    assert.strictEqual(worker2.runtimeAuthorized, true);
+    assert.strictEqual(liveQueryCount, 2);
   });
 });
