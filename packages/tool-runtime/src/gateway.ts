@@ -187,14 +187,31 @@ export class ToolGateway extends EventEmitter {
     if (context.idempotencyKey) {
       const cached = await this.repository.getToolCallByIdempotencyKey(context.idempotencyKey);
       if (cached && cached.lifecycleState === 'COMPLETED') {
-        return {
-          toolCallId: cached.id,
-          output: cached.output,
-          isError: false,
-          durationMs: cached.durationMs || 0,
-          timestamp: Date.now(),
-          artifacts: []
-        };
+        // Cross-principal boundary: cached receipt must never be shared across different principals
+        if (cached.principalId && principal?.userId && cached.principalId !== principal.userId) {
+          console.warn(
+            `[ToolGateway] Cross-principal idempotency collision blocked: receipt principal (${cached.principalId}) !== caller principal (${principal.userId})`
+          );
+        } else if (
+          // If the idempotency key was explicitly scoped to a specific run, reject foreign run replay
+          cached.runId &&
+          runId &&
+          cached.runId !== runId &&
+          (cached.idempotencyKey?.includes(`_${cached.runId}_`) || context.idempotencyKey?.includes(`_${runId}_`))
+        ) {
+          console.warn(
+            `[ToolGateway] Cross-run idempotency collision blocked: receipt run (${cached.runId}) !== caller run (${runId})`
+          );
+        } else {
+          return {
+            toolCallId: cached.id,
+            output: cached.output,
+            isError: false,
+            durationMs: cached.durationMs || 0,
+            timestamp: Date.now(),
+            artifacts: []
+          };
+        }
       }
     }
 

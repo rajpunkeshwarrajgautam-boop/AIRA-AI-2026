@@ -42,8 +42,13 @@ export class MathematicalSpecialistAgent extends BaseSpecialistAgent {
     }
 
     // Security invariant: Tool invocation must route authoritatively through ToolGateway
-    const idempotencyKey = context.taskId ? `idemp_${context.taskId}_calculator` : undefined;
-    const callId = context.taskId ? `call_${context.taskId}_calc` : undefined;
+    const principalId = context.principal?.userId || context.tenantId || 'anon';
+    const idempotencyKey = context.taskId
+      ? `idemp_${principalId}_${context.runId}_${context.taskId}_calculator`
+      : undefined;
+    const callId = context.taskId
+      ? `call_${context.runId}_${context.taskId}_calc`
+      : undefined;
 
     const toolResult = await this.toolGateway.execute({
       callId,

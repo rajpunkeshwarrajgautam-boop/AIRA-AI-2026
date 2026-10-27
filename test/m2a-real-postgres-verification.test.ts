@@ -18,9 +18,15 @@ import {
 import { TaskLeaseManager } from '../packages/agent-runtime/src/durable/task-lease-manager.js';
 import { DurableTaskScheduler } from '../packages/agent-runtime/src/durable/durable-task-scheduler.js';
 import { StaleFencingTokenError } from '../packages/agent-runtime/src/durable/task-state-machine.js';
-import { ToolGateway, InMemoryToolCallRepository } from '../packages/tool-runtime/src/index.js';
+import {
+  ToolGateway,
+  InMemoryToolCallRepository,
+  PostgresToolCallRepository
+} from '../packages/tool-runtime/src/index.js';
 import { ApprovalKernel } from '../packages/approvals/src/index.js';
 import { TaskDAG, ExecutionPrincipal } from '../packages/contracts/src/index.js';
+import { MathematicalSpecialistAgent } from '../packages/agent-runtime/src/specialists/mathematical-specialist.js';
+import { SpecialistExecutionContext } from '../packages/agent-runtime/src/specialists/specialist-interface.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -571,5 +577,267 @@ test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Cer
     assert.strictEqual(inDb?.state, 'TIMED_OUT');
     assert.strictEqual(inDb?.outcome, 'TIMED_OUT');
     assert.strictEqual(inDb?.errorDetails?.retryable, false);
+  });
+
+  // ==========================================
+  // PHASE 6 — IDEMPOTENCY KEY ISOLATION & STALE WORKER FENCING
+  // ==========================================
+
+  test('PHASE 6.1: Calculator ToolGateway idempotency — same operation retry returns existing result', async () => {
+    const pgToolRepo = new PostgresToolCallRepository();
+    const toolGateway = new ToolGateway(pgToolRepo, new ApprovalKernel(), process.cwd());
+    const mathAgent = new MathematicalSpecialistAgent(toolGateway);
+
+    const runId = `run_idemp_same_${Date.now()}`;
+    const taskId = `task_idemp_same_${Date.now()}`;
+    await ensureParentRun(runId, testPrincipalA.userId);
+
+    const context: SpecialistExecutionContext = {
+      runId,
+      taskId,
+      principal: testPrincipalA,
+      tenantId: testPrincipalA.userId,
+      workspaceId: 'ws_a',
+      authorizedCapabilities: ['tool_execution', 'data_analysis'],
+      effectiveToolScopes: ['calculator'],
+      executionPolicyVersion: '2026.2.0',
+      promptProfileId: 'profile_specialist_default',
+      promptProfileVersion: '1.0.0',
+      modelRoutingRequirements: {},
+      remainingBudget: { maxTokens: 4096, remainingTokens: 4096 },
+      cancellationSignal: new AbortController().signal,
+      correlationId: `corr_${taskId}`,
+      inputPayload: { expression: '((512 * 2) + 24)' }
+    };
+
+    // First execution
+    const res1 = await mathAgent.execute(context);
+    assert.strictEqual(res1.outcome, 'COMPLETED');
+    assert.strictEqual((res1.output as any)?.result, 1048);
+
+    const initialToolCalls = await db('tool_calls').where({ run_id: runId });
+    assert.strictEqual(initialToolCalls.length, 1);
+    const initialCall = initialToolCalls[0];
+
+    // Retry of the same operation (same run, same task, same tenant)
+    const res2 = await mathAgent.execute(context);
+    assert.strictEqual(res2.outcome, 'COMPLETED');
+    assert.strictEqual((res2.output as any)?.result, 1048);
+
+    // Verify tool calls count in DB remains exactly 1 (idempotency hit, no duplicate row)
+    const toolCallsAfterRetry = await db('tool_calls').where({ run_id: runId });
+    assert.strictEqual(toolCallsAfterRetry.length, 1, 'Duplicate tool execution must be intercepted by idempotency');
+    assert.strictEqual(toolCallsAfterRetry[0].id, initialCall.id);
+  });
+
+  test('PHASE 6.2: Calculator ToolGateway idempotency — different runs cannot share a receipt accidentally', async () => {
+    const pgToolRepo = new PostgresToolCallRepository();
+    const toolGateway = new ToolGateway(pgToolRepo, new ApprovalKernel(), process.cwd());
+    const mathAgent = new MathematicalSpecialistAgent(toolGateway);
+
+    const runId1 = `run_idemp_r1_${Date.now()}`;
+    const runId2 = `run_idemp_r2_${Date.now()}`;
+    // Common static template task ID across runs
+    const sharedTaskId = 'task_template_calc_step';
+    await ensureParentRun(runId1, testPrincipalA.userId);
+    await ensureParentRun(runId2, testPrincipalA.userId);
+
+    const contextRun1: SpecialistExecutionContext = {
+      runId: runId1,
+      taskId: sharedTaskId,
+      principal: testPrincipalA,
+      tenantId: testPrincipalA.userId,
+      workspaceId: 'ws_a',
+      authorizedCapabilities: ['tool_execution', 'data_analysis'],
+      effectiveToolScopes: ['calculator'],
+      executionPolicyVersion: '2026.2.0',
+      promptProfileId: 'profile_specialist_default',
+      promptProfileVersion: '1.0.0',
+      modelRoutingRequirements: {},
+      remainingBudget: { maxTokens: 4096, remainingTokens: 4096 },
+      cancellationSignal: new AbortController().signal,
+      correlationId: `corr_r1`,
+      inputPayload: { expression: '100 + 200' }
+    };
+
+    const contextRun2: SpecialistExecutionContext = {
+      ...contextRun1,
+      runId: runId2,
+      correlationId: `corr_r2`,
+      inputPayload: { expression: '300 + 400' }
+    };
+
+    const res1 = await mathAgent.execute(contextRun1);
+    assert.strictEqual(res1.outcome, 'COMPLETED');
+    assert.strictEqual((res1.output as any)?.result, 300);
+
+    const res2 = await mathAgent.execute(contextRun2);
+    assert.strictEqual(res2.outcome, 'COMPLETED');
+    assert.strictEqual((res2.output as any)?.result, 700);
+
+    // Verify distinct tool calls in DB for run 1 and run 2
+    const toolCallsR1 = await db('tool_calls').where({ run_id: runId1 });
+    const toolCallsR2 = await db('tool_calls').where({ run_id: runId2 });
+    assert.strictEqual(toolCallsR1.length, 1);
+    assert.strictEqual(toolCallsR2.length, 1);
+    assert.notStrictEqual(toolCallsR1[0].idempotency_key, toolCallsR2[0].idempotency_key, 'Keys must be isolated by runId');
+    assert.notStrictEqual(toolCallsR1[0].id, toolCallsR2[0].id);
+
+    // Additional defense-in-depth: if Run 2 directly passes Run 1\'s idempotency key to ToolGateway, ToolGateway must reject returning Run 1\'s cache
+    const crossRunDirect = await toolGateway.execute({
+      toolName: 'calculator',
+      arguments: { expression: '999 + 1' },
+      context: {
+        runId: runId2,
+        principal: testPrincipalA,
+        idempotencyKey: toolCallsR1[0].idempotency_key!
+      }
+    });
+    // It must execute freshly (result = 1000), NOT return Run 1\'s cached output (300)
+    assert.strictEqual((crossRunDirect.output as any)?.result, 1000);
+  });
+
+  test('PHASE 6.3: Calculator ToolGateway idempotency — different principals cannot share a receipt accidentally', async () => {
+    const pgToolRepo = new PostgresToolCallRepository();
+    const toolGateway = new ToolGateway(pgToolRepo, new ApprovalKernel(), process.cwd());
+    const mathAgent = new MathematicalSpecialistAgent(toolGateway);
+
+    const runIdA = `run_idemp_userA_${Date.now()}`;
+    const runIdB = `run_idemp_userB_${Date.now()}`;
+    const sharedTaskId = 'task_calc_shared_name';
+    await ensureParentRun(runIdA, testPrincipalA.userId);
+    await ensureParentRun(runIdB, testPrincipalB.userId);
+
+    const contextA: SpecialistExecutionContext = {
+      runId: runIdA,
+      taskId: sharedTaskId,
+      principal: testPrincipalA,
+      tenantId: testPrincipalA.userId,
+      workspaceId: testPrincipalA.workspaceId,
+      authorizedCapabilities: ['tool_execution', 'data_analysis'],
+      effectiveToolScopes: ['calculator'],
+      executionPolicyVersion: '2026.2.0',
+      promptProfileId: 'profile_specialist_default',
+      promptProfileVersion: '1.0.0',
+      modelRoutingRequirements: {},
+      remainingBudget: { maxTokens: 4096, remainingTokens: 4096 },
+      cancellationSignal: new AbortController().signal,
+      correlationId: `corr_a`,
+      inputPayload: { expression: '50 * 2' }
+    };
+
+    const contextB: SpecialistExecutionContext = {
+      runId: runIdB,
+      taskId: sharedTaskId,
+      principal: testPrincipalB,
+      tenantId: testPrincipalB.userId,
+      workspaceId: testPrincipalB.workspaceId,
+      authorizedCapabilities: ['tool_execution', 'data_analysis'],
+      effectiveToolScopes: ['calculator'],
+      executionPolicyVersion: '2026.2.0',
+      promptProfileId: 'profile_specialist_default',
+      promptProfileVersion: '1.0.0',
+      modelRoutingRequirements: {},
+      remainingBudget: { maxTokens: 4096, remainingTokens: 4096 },
+      cancellationSignal: new AbortController().signal,
+      correlationId: `corr_b`,
+      inputPayload: { expression: '50 * 2' }
+    };
+
+    const resA = await mathAgent.execute(contextA);
+    const resB = await mathAgent.execute(contextB);
+    assert.strictEqual((resA.output as any)?.result, 100);
+    assert.strictEqual((resB.output as any)?.result, 100);
+
+    const toolCallsA = await db('tool_calls').where({ run_id: runIdA });
+    const toolCallsB = await db('tool_calls').where({ run_id: runIdB });
+    assert.strictEqual(toolCallsA.length, 1);
+    assert.strictEqual(toolCallsB.length, 1);
+    assert.notStrictEqual(toolCallsA[0].idempotency_key, toolCallsB[0].idempotency_key, 'Keys must be isolated by principal');
+
+    // Cross-principal attack: Principal B tries to claim Principal A\'s exact idempotency key
+    const crossPrincipalDirect = await toolGateway.execute({
+      toolName: 'calculator',
+      arguments: { expression: '9999 + 1' },
+      context: {
+        runId: runIdB,
+        principal: testPrincipalB,
+        idempotencyKey: toolCallsA[0].idempotency_key!
+      }
+    });
+    // It must execute freshly (result = 10000), NOT return Principal A\'s cached output (100)
+    assert.strictEqual((crossPrincipalDirect.output as any)?.result, 10000);
+  });
+
+  test('PHASE 6.4: Stale worker fencing — stale workers cannot overwrite a newer task result in PostgreSQL', async () => {
+    const runId = `run_stale_fence_${Date.now()}`;
+    const taskId = `task_stale_fence_${Date.now()}`;
+    await ensureParentRun(runId, testPrincipalA.userId);
+
+    const now = Date.now();
+    await repo.saveTask({
+      id: taskId,
+      runId,
+      principalId: testPrincipalA.userId,
+      role: 'analyst',
+      objective: 'Fencing protection test',
+      state: 'QUEUED',
+      dependencies: [],
+      inputPayload: { expression: '1 + 1' },
+      executionConstraints: {},
+      authorizationRequirements: {},
+      budgetLimits: { maxTokens: 1000 },
+      timeoutMs: 30000,
+      attemptCount: 0,
+      maxRetries: 2,
+      backoffMultiplier: 1.5,
+      fencingToken: 0,
+      usageTelemetry: { tokensUsed: 0, durationMs: 0 },
+      provenance: { workerId: 'test' },
+      checkpoints: [],
+      createdAt: now,
+      updatedAt: now
+    });
+
+    // 1. Worker 1 claims task -> fencing token becomes 1
+    const claim1 = await repo.claimTask(taskId, 'worker_1', 1000);
+    assert.strictEqual(claim1.success, true);
+    assert.strictEqual(claim1.task?.fencingToken, 1);
+    const worker1StaleToken = claim1.task!.fencingToken;
+
+    // 2. Worker 1 lease expires
+    await db('specialist_tasks').where({ id: taskId }).update({ lease_expires_at: now - 500 });
+
+    // 3. Worker 2 reclaims task -> fencing token becomes 2
+    const claim2 = await repo.claimTask(taskId, 'worker_2', 15000);
+    assert.strictEqual(claim2.success, true);
+    assert.strictEqual(claim2.task?.fencingToken, 2);
+
+    // 4. Worker 2 successfully completes task and writes result
+    const worker2Completed = await repo.updateTaskState(taskId, 'COMPLETED', claim2.task!.fencingToken, {
+      resultOutput: { result: 'worker_2_authoritative_result' }
+    });
+    assert.strictEqual(worker2Completed, true);
+
+    // 5. Stale Worker 1 wakes up and attempts to update task state with stale fencing token (1)
+    await assert.rejects(
+      async () => {
+        await repo.updateTaskState(taskId, 'COMPLETED', worker1StaleToken, {
+          resultOutput: { result: 'worker_1_stale_spoofed_result' }
+        });
+      },
+      (err: any) => {
+        assert.ok(err instanceof StaleFencingTokenError, 'Must reject with StaleFencingTokenError');
+        assert.strictEqual(err.expectedToken, 1);
+        assert.strictEqual(err.actualToken, 2);
+        return true;
+      }
+    );
+
+    // 6. Verify in DB that Worker 2\'s result remains completely untainted
+    const finalInDb = await repo.getTask(taskId);
+    assert.strictEqual(finalInDb?.state, 'COMPLETED');
+    assert.strictEqual(finalInDb?.fencingToken, 2);
+    assert.strictEqual((finalInDb?.resultOutput as any)?.result, 'worker_2_authoritative_result');
   });
 });

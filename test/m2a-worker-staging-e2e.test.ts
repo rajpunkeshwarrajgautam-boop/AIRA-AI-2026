@@ -512,10 +512,11 @@ test.describe('AIRA AI 2026 — Milestone 2A.1 Standalone Docker Specialist Work
 
     const now = Date.now();
     // Simulate crash window B: Tool execution was persisted in tool_calls, but worker crashed before task completion
-    const idempotencyKey = `idemp_${taskId}_calculator`;
+    const idempotencyKey = `idemp_${testPrincipalA.userId}_${runId}_${taskId}_calculator`;
     await db('tool_calls').insert({
-      id: `call_${taskId}_calc`,
+      id: `call_${runId}_${taskId}_calc`,
       run_id: runId,
+      principal_id: testPrincipalA.userId,
       tool: 'calculator',
       arguments: JSON.stringify({ expression: '((16384 * 1024) / 4)' }),
       result: JSON.stringify({ result: 4194304 }),
