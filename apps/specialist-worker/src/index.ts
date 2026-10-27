@@ -2,8 +2,10 @@ import http from 'node:http';
 import { db, closeDb } from '../../../packages/db/src/index.js';
 import {
   classifyDatabaseUrl,
-  assertAuthorizedStagingDatabase,
-  STAGING_NEON_PROJECT_ID
+  PRODUCTION_NEON_PROJECT_ID,
+  PRODUCTION_NEON_ENDPOINT_ID,
+  STAGING_NEON_PROJECT_ID,
+  COMMERCIAL_PR92_BRANCH_ID
 } from '../../../packages/db/src/security/database-isolation-guard.js';
 import {
   SpecialistWorkerHost,
@@ -18,8 +20,7 @@ import {
 } from '../../../packages/agent-runtime/src/specialists/index.js';
 import {
   ToolGateway,
-  PostgresToolCallRepository,
-  InMemoryToolCallRepository
+  PostgresToolCallRepository
 } from '../../../packages/tool-runtime/src/index.js';
 import { ApprovalKernel } from '../../../packages/approvals/src/index.js';
 import {
@@ -29,34 +30,50 @@ import {
 
 const workerId = process.env.WORKER_ID || `worker_${process.env.HOSTNAME || 'docker'}_${process.pid}`;
 const port = parseInt(process.env.PORT || process.env.WORKER_PORT || '8080', 10);
+const bindHost = process.env.WORKER_BIND_HOST || '0.0.0.0';
 const concurrency = parseInt(process.env.WORKER_CONCURRENCY || '2', 10);
 const pollIntervalMs = parseInt(process.env.POLL_INTERVAL_MS || '500', 10);
+const maxPollIntervalMs = parseInt(process.env.MAX_POLL_INTERVAL_MS || '2000', 10);
+const idleBackoffMultiplier = parseFloat(process.env.IDLE_BACKOFF_MULTIPLIER || '1.5');
 const leaseDurationMs = parseInt(process.env.LEASE_DURATION_MS || '15000', 10);
 const heartbeatIntervalMs = parseInt(process.env.HEARTBEAT_INTERVAL_MS || '3000', 10);
 
 console.log(`[SpecialistWorker] Bootstrapping worker ${workerId}...`);
 
-// 1. Database Isolation & Preflight Verification
+// 1. Environment-Bound Database Security Policy Preflight
 const rawConnStr = process.env.DATABASE_URL || '';
-if (!rawConnStr || rawConnStr.includes('localhost')) {
-  console.warn('[SpecialistWorker] Warning: Running against local/default database configuration');
-} else {
-  const classification = classifyDatabaseUrl(rawConnStr);
-  if (classification.isProduction) {
-    console.error('[SECURITY FATAL] Aborting: Worker cannot connect to production Neon database!');
-    process.exit(1);
-  }
+if (!rawConnStr) {
+  console.error('[SECURITY FATAL] DATABASE_URL is not set. Specialist worker must fail closed.');
+  process.exit(1);
 }
 
-// 2. Wire ToolGateway & Repositories
-let toolCallRepo;
-try {
-  toolCallRepo = new PostgresToolCallRepository();
-} catch {
-  console.warn('[SpecialistWorker] Falling back to in-memory tool call repository');
-  toolCallRepo = new InMemoryToolCallRepository();
+const classification = classifyDatabaseUrl(rawConnStr);
+
+// Unconditional Milestone 2A Policy: Production database connectivity strictly denied
+if (classification.isProduction) {
+  console.error(
+    `[SECURITY FATAL] Aborting: Worker cannot connect to production Neon database (${PRODUCTION_NEON_PROJECT_ID})! Milestone 2A strictly denies production database access.`
+  );
+  process.exit(1);
 }
 
+if (classification.isCommercialPr92) {
+  console.error(
+    `[SECURITY FATAL] Aborting: Commercial PR #92 branch (${COMMERCIAL_PR92_BRANCH_ID}) access strictly denied.`
+  );
+  process.exit(1);
+}
+
+const airaEnv = (process.env.AIRA_ENV || 'staging').toLowerCase();
+if (airaEnv === 'production') {
+  console.error(
+    '[SECURITY FATAL] Aborting: Production worker execution (AIRA_ENV=production) is not permitted during Milestone 2A. Fail closed.'
+  );
+  process.exit(1);
+}
+
+// 2. Wire ToolGateway & Repositories (Strictly fail-closed, NO in-memory fallback)
+const toolCallRepo = new PostgresToolCallRepository();
 const approvalRepo = new PostgresApprovalRepository();
 const grantRepo = new PostgresSessionGrantRepository();
 const approvalKernel = new ApprovalKernel(approvalRepo, grantRepo);
@@ -113,6 +130,8 @@ const repository = new PostgresSpecialistTaskRepository();
 const host = new SpecialistWorkerHost(repository, registry, {
   workerId,
   pollIntervalMs,
+  maxPollIntervalMs,
+  idleBackoffMultiplier,
   leaseDurationMs,
   heartbeatIntervalMs,
   concurrency
@@ -185,21 +204,48 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 // 7. Start Worker Process
 async function main() {
   try {
-    // Verify database connectivity
-    await db.raw('SELECT 1');
-    dbConnected = true;
-    console.log(`[SpecialistWorker] Database connection verified.`);
+    // 1. Verify database connectivity & runtime identity
+    const res = await db.raw(`
+      SELECT 
+        current_database() as db_name, 
+        current_user as db_user, 
+        inet_server_addr() as server_ip,
+        current_setting('neon.project_id', true) as neon_project_id,
+        current_setting('neon.endpoint_id', true) as neon_endpoint_id
+    `);
+    const row = res.rows?.[0] || {};
+    const projectId = String(row.neon_project_id || '').trim();
+    const endpointId = String(row.neon_endpoint_id || '').trim();
 
-    // Start HTTP server
-    server.listen(port, '0.0.0.0', () => {
-      console.log(`[SpecialistWorker] Health endpoint listening on http://0.0.0.0:${port}/health`);
+    if (projectId === PRODUCTION_NEON_PROJECT_ID || endpointId === PRODUCTION_NEON_ENDPOINT_ID) {
+      console.error(
+        `[SECURITY FATAL] Live database query returned PRODUCTION Neon identity (${PRODUCTION_NEON_PROJECT_ID}). Terminating immediately!`
+      );
+      process.exit(1);
+    }
+
+    // 2. Verify all required durable persistence tables are available (fail closed if schema missing)
+    await db.raw('SELECT 1 FROM specialist_tasks LIMIT 0');
+    await db.raw('SELECT 1 FROM specialist_task_events LIMIT 0');
+    await db.raw('SELECT 1 FROM tool_calls LIMIT 0');
+    await db.raw('SELECT 1 FROM approvals LIMIT 0');
+    await db.raw('SELECT 1 FROM session_grants LIMIT 0');
+
+    dbConnected = true;
+    console.log(`[SpecialistWorker] Database connection & fail-closed persistence verified.`);
+
+    // 3. Start HTTP server
+    server.listen(port, bindHost, () => {
+      console.log(`[SpecialistWorker] Health endpoint listening on http://${bindHost}:${port}/health`);
     });
 
-    // Start Worker Polling Loop
+    // 4. Start Worker Polling Loop
     await host.start();
-    console.log(`[SpecialistWorker] Worker ${workerId} is now actively polling for specialist tasks.`);
+    console.log(
+      `[SpecialistWorker] Worker ${workerId} is now actively polling (backoff: ${pollIntervalMs}ms-${maxPollIntervalMs}ms).`
+    );
   } catch (err: any) {
-    console.error(`[SpecialistWorker] Failed to start worker:`, err);
+    console.error(`[SpecialistWorker] Failed to start worker (fail-closed):`, err);
     process.exit(1);
   }
 }

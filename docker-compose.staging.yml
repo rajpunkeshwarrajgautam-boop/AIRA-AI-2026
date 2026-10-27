@@ -14,11 +14,13 @@ services:
       - WORKER_ID=worker_docker_staging_1
       - WORKER_CONCURRENCY=2
       - POLL_INTERVAL_MS=500
+      - MAX_POLL_INTERVAL_MS=2000
+      - IDLE_BACKOFF_MULTIPLIER=1.5
       - LEASE_DURATION_MS=15000
       - HEARTBEAT_INTERVAL_MS=3000
       - PORT=8080
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     deploy:
       resources:
         limits:

@@ -8,6 +8,8 @@ import { isTerminalSpecialistState } from './task-state-machine.js';
 export interface WorkerHostConfig {
   workerId?: string;
   pollIntervalMs?: number;
+  maxPollIntervalMs?: number;
+  idleBackoffMultiplier?: number;
   concurrency?: number;
   leaseDurationMs?: number;
   heartbeatIntervalMs?: number;
@@ -21,6 +23,7 @@ export interface WorkerHostHealth {
   processedCount: number;
   reclaimedCount: number;
   concurrency: number;
+  currentPollIntervalMs?: number;
 }
 
 export class SpecialistWorkerHost {
@@ -28,7 +31,10 @@ export class SpecialistWorkerHost {
   private runtime: SpecialistWorkerRuntime;
   private leaseManager: TaskLeaseManager;
   private scheduler: DurableTaskScheduler;
-  private pollIntervalMs: number;
+  private minPollIntervalMs: number;
+  private maxPollIntervalMs: number;
+  private currentPollIntervalMs: number;
+  private idleBackoffMultiplier: number;
   private concurrency: number;
   private isRunning = false;
   private startedAt = 0;
@@ -43,7 +49,10 @@ export class SpecialistWorkerHost {
     config: WorkerHostConfig = {}
   ) {
     this.workerId = config.workerId || `host_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-    this.pollIntervalMs = config.pollIntervalMs ?? 1000;
+    this.minPollIntervalMs = Math.max(50, config.pollIntervalMs ?? 500);
+    this.maxPollIntervalMs = Math.max(this.minPollIntervalMs, config.maxPollIntervalMs ?? (this.minPollIntervalMs * 4));
+    this.idleBackoffMultiplier = Math.max(1.0, config.idleBackoffMultiplier ?? 1.5);
+    this.currentPollIntervalMs = this.minPollIntervalMs;
     this.concurrency = config.concurrency ?? 3;
     this.leaseManager = new TaskLeaseManager(repository, {
       defaultLeaseDurationMs: config.leaseDurationMs ?? 30000,
@@ -66,8 +75,9 @@ export class SpecialistWorkerHost {
     if (this.isRunning) return;
     this.isRunning = true;
     this.startedAt = Date.now();
-    console.log(`[SpecialistWorkerHost] Worker ${this.workerId} started (concurrency=${this.concurrency}, pollInterval=${this.pollIntervalMs}ms).`);
+    console.log(`[SpecialistWorkerHost] Worker ${this.workerId} started (concurrency=${this.concurrency}, pollInterval=${this.minPollIntervalMs}ms).`);
 
+    await this.tick();
     this.schedulePoll();
   }
 
@@ -78,26 +88,44 @@ export class SpecialistWorkerHost {
     if (!this.isRunning) return;
 
     try {
+      let hasWork = false;
+
       // 1. Reclaim expired leases
       const reclaimed = await this.leaseManager.reclaimExpiredLeases(Date.now());
       if (reclaimed.length > 0) {
         this.reclaimedCount += reclaimed.length;
+        hasWork = true;
         console.log(`[SpecialistWorkerHost] Reclaimed ${reclaimed.length} expired lease(s).`);
       }
 
       // 2. Determine capacity
       const capacity = this.concurrency - this.inFlightTasks.size;
-      if (capacity <= 0) return;
+      if (capacity > 0) {
+        // 3. Find unassigned QUEUED or RETRY_WAIT tasks
+        // For standalone workers, we scan expired or queued tasks across all runs
+        const claimable = await this.findGlobalClaimableTasks(capacity);
+        if (claimable.length > 0) {
+          hasWork = true;
+        }
+        for (const task of claimable) {
+          if (this.inFlightTasks.size >= this.concurrency) break;
+          if (this.inFlightTasks.has(task.id)) continue;
 
-      // 3. Find unassigned QUEUED or RETRY_WAIT tasks
-      // For standalone workers, we scan expired or queued tasks across all runs
-      const claimable = await this.findGlobalClaimableTasks(capacity);
-      for (const task of claimable) {
-        if (this.inFlightTasks.size >= this.concurrency) break;
-        if (this.inFlightTasks.has(task.id)) continue;
+          this.inFlightTasks.add(task.id);
+          this.executeTaskAsync(task);
+        }
+      }
 
-        this.inFlightTasks.add(task.id);
-        this.executeTaskAsync(task);
+      // 4. Adaptive polling rate adjustment:
+      if (hasWork || this.inFlightTasks.size > 0) {
+        // Active queue or tasks in flight: poll at fast rate
+        this.currentPollIntervalMs = this.minPollIntervalMs;
+      } else {
+        // Idle queue: back off to preserve database capacity and reduce query volume
+        this.currentPollIntervalMs = Math.min(
+          this.maxPollIntervalMs,
+          Math.round(this.currentPollIntervalMs * this.idleBackoffMultiplier)
+        );
       }
     } catch (err) {
       console.error(`[SpecialistWorkerHost] Error in worker tick:`, err);
@@ -127,7 +155,7 @@ export class SpecialistWorkerHost {
     this.pollTimer = setTimeout(async () => {
       await this.tick();
       this.schedulePoll();
-    }, this.pollIntervalMs);
+    }, this.currentPollIntervalMs);
   }
 
   /**
@@ -141,7 +169,8 @@ export class SpecialistWorkerHost {
       activeCount: this.inFlightTasks.size,
       processedCount: this.processedCount,
       reclaimedCount: this.reclaimedCount,
-      concurrency: this.concurrency
+      concurrency: this.concurrency,
+      currentPollIntervalMs: this.currentPollIntervalMs
     };
   }
 

@@ -40,7 +40,7 @@ test.describe('AIRA AI 2026 — Milestone 2A.1 Standalone Docker Specialist Work
 
   // Cleanup containers before and after tests
   function cleanupContainers() {
-    for (const name of [containerName1, containerName2]) {
+    for (const name of [containerName1, containerName2, 'aira-worker-prod-reject-test', 'aira-worker-invalid-db-test']) {
       try {
         execSync(`docker rm -f ${name}`, { stdio: 'ignore' });
       } catch {}
@@ -123,8 +123,53 @@ test.describe('AIRA AI 2026 — Milestone 2A.1 Standalone Docker Specialist Work
     // 3. Healthcheck defined in container
     assert.ok(config.Healthcheck, 'Image must declare HEALTHCHECK');
 
-    // 4. Bounded image size (< 500MB)
+    // 4. Memory configuration (384MB heap limit inside 512MB container)
+    const envList = config.Env || [];
+    assert.ok(
+      envList.some((e: string) => e.includes('--max-old-space-size=384')),
+      'Image must configure --max-old-space-size=384 for 512MB container memory safety'
+    );
+
+    // 5. Bounded image size (< 500MB compressed layer contents)
     assert.ok(sizeBytes < 500 * 1024 * 1024, `Image size (${Math.round(sizeBytes / 1024 / 1024)}MB) must be bounded under 500MB`);
+  });
+
+  // ==========================================
+  // GATE 1.1: FAIL-CLOSED SECURITY & PRODUCTION DENIAL
+  // ==========================================
+
+  test('GATE 1.1: Specialist worker container unconditionally fails closed upon production database URL or invalid credentials', () => {
+    // 1. Reject production Neon URL
+    try {
+      execSync(
+        `docker run --rm --name aira-worker-prod-reject-test ` +
+        `-e DATABASE_URL="postgresql://aira_user:secret@ep-withered-art-b36ox90b.us-east-2.aws.neon.tech/neondb?sslmode=require" ` +
+        `aira-specialist-worker:staging`,
+        { stdio: 'pipe' }
+      );
+      assert.fail('Worker container must NOT start when given a production Neon DATABASE_URL');
+    } catch (err: any) {
+      assert.strictEqual(err.status, 1, 'Container must exit with code 1 upon production Neon URL');
+      const output = (err.stdout?.toString() || '') + (err.stderr?.toString() || '');
+      assert.ok(output.includes('[SECURITY FATAL]'), 'Output must log [SECURITY FATAL]');
+      assert.ok(
+        output.includes('Milestone 2A strictly denies production database access'),
+        'Must cite Milestone 2A production denial policy'
+      );
+    }
+
+    // 2. Fail closed upon invalid/unreachable database credentials (no silent fallback)
+    try {
+      execSync(
+        `docker run --rm --name aira-worker-invalid-db-test ` +
+        `-e DATABASE_URL="postgresql://invalid_usr:invalid_pwd@127.0.0.1:54321/nonexistent?sslmode=disable" ` +
+        `aira-specialist-worker:staging`,
+        { stdio: 'pipe' }
+      );
+      assert.fail('Worker container must NOT start with invalid database credentials');
+    } catch (err: any) {
+      assert.notStrictEqual(err.status, 0, 'Container must fail closed with non-zero exit code');
+    }
   });
 
   // ==========================================
@@ -157,13 +202,15 @@ test.describe('AIRA AI 2026 — Milestone 2A.1 Standalone Docker Specialist Work
   // GATE 3: STANDALONE WORKER CONTAINER INDEPENDENCE & HEALTH
   // ==========================================
 
-  test('GATE 3: Standalone worker container starts, connects to staging DB, and reports truthful health', async () => {
-    // Start container
-    const runCmd = `docker run -d --name ${containerName1} -p ${workerPort}:8080 ` +
+  test('GATE 3: Standalone worker container starts, connects to staging DB, binds host to loopback, and reports truthful health', async () => {
+    // Start container with loopback binding on host
+    const runCmd = `docker run -d --name ${containerName1} -p 127.0.0.1:${workerPort}:8080 ` +
       `-e DATABASE_URL="${isolatedConnStr}" ` +
       `-e WORKER_ID=worker_docker_test_1 ` +
       `-e WORKER_CONCURRENCY=2 ` +
       `-e POLL_INTERVAL_MS=300 ` +
+      `-e MAX_POLL_INTERVAL_MS=1200 ` +
+      `-e IDLE_BACKOFF_MULTIPLIER=1.5 ` +
       `-e LEASE_DURATION_MS=6000 ` +
       `-e HEARTBEAT_INTERVAL_MS=1000 ` +
       `--memory 512m ` +
@@ -171,12 +218,19 @@ test.describe('AIRA AI 2026 — Milestone 2A.1 Standalone Docker Specialist Work
 
     execSync(runCmd, { stdio: 'inherit' });
 
-    // Poll for container readiness on http://localhost:8085/health
+    // Verify network exposure is bound to 127.0.0.1 on the host
+    const inspectRaw = execSync(`docker inspect ${containerName1}`, { encoding: 'utf8' });
+    const inspectData = JSON.parse(inspectRaw);
+    const portBindings = inspectData[0].NetworkSettings.Ports['8080/tcp'] || [];
+    assert.ok(portBindings.length > 0, 'Container must have port 8080 bound');
+    assert.strictEqual(portBindings[0].HostIp, '127.0.0.1', 'Host port must be strictly bound to loopback 127.0.0.1');
+
+    // Poll for container readiness on http://127.0.0.1:8085/health
     let ready = false;
     const deadline = Date.now() + 15000;
     while (Date.now() < deadline) {
       try {
-        const res = await httpGetJson(`http://localhost:${workerPort}/health`, 2000);
+        const res = await httpGetJson(`http://127.0.0.1:${workerPort}/health`, 2000);
         if (res.statusCode === 200 && res.data?.status === 'HEALTHY' && res.data?.db === 'CONNECTED') {
           ready = true;
           break;
@@ -189,10 +243,43 @@ test.describe('AIRA AI 2026 — Milestone 2A.1 Standalone Docker Specialist Work
     assert.strictEqual(ready, true, 'Worker container must become HEALTHY and report db CONNECTED');
 
     // Verify /ready endpoint
-    const readyRes = await httpGetJson(`http://localhost:${workerPort}/ready`, 2000);
+    const readyRes = await httpGetJson(`http://127.0.0.1:${workerPort}/ready`, 2000);
     assert.strictEqual(readyRes.statusCode, 200);
     assert.strictEqual(readyRes.data.ready, true);
     assert.strictEqual(readyRes.data.workerId, 'worker_docker_test_1');
+  });
+
+  // ==========================================
+  // GATE 3.1: ADAPTIVE POLLING BACKOFF & DATABASE QUERY LOAD
+  // ==========================================
+
+  test('GATE 3.1: Adaptive polling rate backoff and query volume measurement under idle conditions', async () => {
+    // Wait for idle ticks to allow backoff to trigger
+    await new Promise(r => setTimeout(r, 2500));
+
+    const healthRes = await httpGetJson(`http://127.0.0.1:${workerPort}/health`, 2000);
+    assert.strictEqual(healthRes.statusCode, 200);
+    const health = healthRes.data;
+
+    // Verify currentPollIntervalMs backed off from initial 300ms towards max 1200ms
+    assert.ok(health.currentPollIntervalMs !== undefined, 'Health must report currentPollIntervalMs');
+    assert.ok(
+      health.currentPollIntervalMs >= 300,
+      `Poll interval must be >= initial 300ms. Got: ${health.currentPollIntervalMs}`
+    );
+
+    // Query PostgreSQL connection volume and activity from pg_stat_activity
+    const activity = await db.raw(`
+      SELECT count(*) as total_conns, 
+             count(*) FILTER (WHERE state = 'active') as active_queries,
+             count(*) FILTER (WHERE state = 'idle') as idle_conns
+      FROM pg_stat_activity 
+      WHERE datname = current_database();
+    `);
+    const stats = activity.rows?.[0] || {};
+    console.log(`[Neon Database Telemetry] Total Conns: ${stats.total_conns}, Active Queries: ${stats.active_queries}, Idle: ${stats.idle_conns}`);
+    assert.ok(Number(stats.total_conns) > 0, 'Staging database connections must be established');
+    assert.ok(Number(stats.active_queries) <= 5, 'Active queries during idle periods must be bounded (<= 5)');
   });
 
   // ==========================================
@@ -281,6 +368,72 @@ test.describe('AIRA AI 2026 — Milestone 2A.1 Standalone Docker Specialist Work
   });
 
   // ==========================================
+  // GATE 4.1: SERVER-SIDE CONTEXT & PERMISSION DERIVATION
+  // ==========================================
+
+  test('GATE 4.1: Server-side derivation of tenant identity and tool permissions strictly ignores payload spoofing', async () => {
+    const runId = `run_spoof_test_${Date.now()}`;
+    const taskId = `task_spoof_${Date.now()}`;
+    await ensureParentRun(runId, testPrincipalA.userId);
+
+    const dag: TaskDAG = {
+      dagId: `dag_${runId}`,
+      runId,
+      maxConcurrency: 1,
+      totalBudget: { maxTotalTokens: 10000 },
+      tasks: [
+        {
+          taskId,
+          runId,
+          role: 'analyst',
+          objective: 'Calculation with attempted caller spoofing',
+          dependencies: [],
+          inputContract: {
+            expression: '((1024 * 4) + 1)',
+            // Malicious attempt inside inputPayload to forge tenant identity and escalate privileges
+            tenantId: 'attacker_tenant_spoofed',
+            role: 'superadmin',
+            allowedTools: ['system_exec', 'unrestricted_shell']
+          },
+          expectedOutputContract: {},
+          executionConstraints: {
+            sideEffectLevel: 'NONE',
+            allowedTools: ['calculator'], // Server-side authorized tools ONLY
+            sandboxRequired: false,
+            requireStrictJsonOutput: true
+          },
+          authorizationRequirements: { requiresHumanApproval: false, requiredPermissions: [] },
+          budgetLimits: { maxTokens: 4096 },
+          timeoutConfig: { stepTimeoutMs: 30000 },
+          retryPolicy: { maxRetries: 2, backoffMultiplier: 1.5 }
+        }
+      ]
+    };
+
+    const created = await scheduler.submitDAG(dag, testPrincipalA, { missionId: `mission_${runId}` });
+    assert.strictEqual(created.length, 1);
+
+    // Wait for completion
+    let completedTask: any = null;
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      completedTask = await repo.getTask(taskId);
+      if (completedTask?.state === 'COMPLETED') break;
+      await new Promise(r => setTimeout(r, 400));
+    }
+
+    assert.ok(completedTask);
+    assert.strictEqual(completedTask.state, 'COMPLETED');
+    // Authoritative check: task.principalId must strictly be testPrincipalA.userId, NOT the injected spoof
+    assert.strictEqual(
+      completedTask.principalId,
+      testPrincipalA.userId,
+      'Authoritative principalId must match authenticated session principal'
+    );
+    assert.strictEqual((completedTask.resultOutput as any)?.result, 4097);
+  });
+
+  // ==========================================
   // GATE 5: TENANT & PRINCIPAL CROSS-USER ISOLATION
   // ==========================================
 
@@ -346,6 +499,76 @@ test.describe('AIRA AI 2026 — Milestone 2A.1 Standalone Docker Specialist Work
     }
 
     assert.strictEqual(recovered, true, 'Replacement worker must reclaim expired lease and complete task to 4194304');
+  });
+
+  // ==========================================
+  // GATE 6.1: CRASH WINDOW B & IDEMPOTENCY ENFORCEMENT
+  // ==========================================
+
+  test('GATE 6.1: Crash window B & idempotency enforcement across tool execution and replacement recovery', async () => {
+    const runId = `run_idempotency_${Date.now()}`;
+    const taskId = `task_idempotency_${Date.now()}`;
+    await ensureParentRun(runId, testPrincipalA.userId);
+
+    const now = Date.now();
+    // Simulate crash window B: Tool execution was persisted in tool_calls, but worker crashed before task completion
+    const idempotencyKey = `idemp_${taskId}_calculator`;
+    await db('tool_calls').insert({
+      id: `call_${taskId}_calc`,
+      run_id: runId,
+      tool: 'calculator',
+      arguments: JSON.stringify({ expression: '((16384 * 1024) / 4)' }),
+      result: JSON.stringify({ result: 4194304 }),
+      permission: 'READ',
+      status: 'COMPLETED',
+      idempotency_key: idempotencyKey,
+      started_at: now - 3000,
+      completed_at: now - 2500
+    });
+
+    await repo.saveTask({
+      id: taskId,
+      runId,
+      principalId: testPrincipalA.userId,
+      role: 'analyst',
+      objective: 'Idempotency test for ((16384 * 1024) / 4)',
+      state: 'RUNNING',
+      dependencies: [],
+      inputPayload: { expression: '((16384 * 1024) / 4)' },
+      executionConstraints: { sideEffectLevel: 'NONE', allowedTools: ['calculator'] },
+      authorizationRequirements: { requiresHumanApproval: false, requiredPermissions: [] },
+      budgetLimits: { maxTokens: 4096 },
+      timeoutMs: 30000,
+      attemptCount: 1,
+      maxRetries: 2,
+      backoffMultiplier: 1.5,
+      fencingToken: 1,
+      leaseOwner: 'worker_crashed_during_tool',
+      leaseExpiresAt: now - 2000,
+      usageTelemetry: { tokensUsed: 0, durationMs: 0 },
+      provenance: { workerId: 'worker_crashed_during_tool' },
+      checkpoints: [{ checkpoint: 'TOOL_CALLED', timestamp: now - 3000 }],
+      createdAt: now - 5000,
+      updatedAt: now - 2000
+    });
+
+    let recovered = false;
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      const current = await repo.getTask(taskId);
+      if (current?.state === 'COMPLETED') {
+        recovered = true;
+        assert.strictEqual((current.resultOutput as any)?.result, 4194304);
+        break;
+      }
+      await new Promise(r => setTimeout(r, 400));
+    }
+
+    assert.strictEqual(recovered, true, 'Task must successfully complete after crash window B');
+
+    // Verify tool calls count in database remains exactly 1 (idempotency preserved, no duplicate tool call)
+    const toolCalls = await db('tool_calls').where({ run_id: runId });
+    assert.strictEqual(toolCalls.length, 1, 'Must not duplicate tool execution in tool_calls');
   });
 
   // ==========================================

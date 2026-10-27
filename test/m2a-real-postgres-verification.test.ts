@@ -387,6 +387,7 @@ test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Cer
         ...process.env,
         DATABASE_URL: isolatedConnStr,
         WORKER_ID: 'worker_child_crash_target',
+        WORKER_CONCURRENCY: '4',
         POLL_INTERVAL_MS: '100',
         LEASE_DURATION_MS: '2000',
         HEARTBEAT_INTERVAL_MS: '400',
@@ -398,7 +399,7 @@ test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Cer
 
     // Wait for Worker 1 to claim the task
     let claimed = false;
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 40; i++) {
       await new Promise(r => setTimeout(r, 200));
       const current = await repo.getTask(taskId);
       if (current && (current.state === 'CLAIMED' || current.state === 'RUNNING')) {

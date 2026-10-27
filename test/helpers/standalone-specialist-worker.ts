@@ -24,7 +24,7 @@ const host = new SpecialistWorkerHost(repository, registry, {
   pollIntervalMs,
   leaseDurationMs,
   heartbeatIntervalMs,
-  concurrency: 2
+  concurrency: Number(process.env.WORKER_CONCURRENCY || '4')
 });
 
 let started = false;

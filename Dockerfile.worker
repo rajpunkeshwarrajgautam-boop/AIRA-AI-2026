@@ -20,9 +20,11 @@ ENV NODE_ENV=production \
     PORT=8080 \
     WORKER_CONCURRENCY=2 \
     POLL_INTERVAL_MS=500 \
+    MAX_POLL_INTERVAL_MS=2000 \
+    IDLE_BACKOFF_MULTIPLIER=1.5 \
     LEASE_DURATION_MS=15000 \
     HEARTBEAT_INTERVAL_MS=3000 \
-    NODE_OPTIONS="--max-old-space-size=512"
+    NODE_OPTIONS="--max-old-space-size=384"
 
 # 4. Copy build manifests and install dependencies
 COPY --chown=aira:aira package.json package-lock.json tsconfig.json tsconfig.*.json ./
