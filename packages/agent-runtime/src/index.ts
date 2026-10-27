@@ -39,6 +39,21 @@ import { IntelligentPromptComposer, PromptProfileRegistry } from './prompt-compo
 import { CuratedSkillRegistry } from './skills/curated-skill-registry.js';
 import { FirecrawlResearchAdapter } from './research/firecrawl-adapter.js';
 import { RufloOrchestrationAdapter } from './orchestration/ruflo-adapter.js';
+import {
+  SpecialistRegistry,
+  MathematicalSpecialistAgent,
+  AnalysisSpecialistAgent,
+  VerificationSpecialistAgent
+} from './specialists/index.js';
+import {
+  SpecialistTaskRepository,
+  PostgresSpecialistTaskRepository,
+  InMemorySpecialistTaskRepository,
+  TaskLeaseManager,
+  DurableTaskScheduler,
+  SpecialistWorkerRuntime,
+  DurableExecutionCoordinator
+} from './durable/index.js';
 
 /**
  * Strictly detect repository intent.
@@ -116,6 +131,12 @@ export class AgentRuntime extends EventEmitter {
   private curatedSkillRegistry: CuratedSkillRegistry;
   private firecrawlAdapter: FirecrawlResearchAdapter;
   private rufloAdapter: RufloOrchestrationAdapter;
+  private specialistRegistry: SpecialistRegistry;
+  private specialistTaskRepo: SpecialistTaskRepository;
+  private taskLeaseManager: TaskLeaseManager;
+  private durableScheduler: DurableTaskScheduler;
+  private specialistWorkerRuntime: SpecialistWorkerRuntime;
+  private durableCoordinator: DurableExecutionCoordinator;
 
   constructor(
     private modelRouter: ModelRouter,
@@ -133,7 +154,10 @@ export class AgentRuntime extends EventEmitter {
     promptComposer?: IntelligentPromptComposer,
     curatedSkillRegistry?: CuratedSkillRegistry,
     firecrawlAdapter?: FirecrawlResearchAdapter,
-    rufloAdapter?: RufloOrchestrationAdapter
+    rufloAdapter?: RufloOrchestrationAdapter,
+    specialistRegistry?: SpecialistRegistry,
+    specialistTaskRepo?: SpecialistTaskRepository,
+    durableCoordinator?: DurableExecutionCoordinator
   ) {
     super();
     const isDbConfigured = Boolean(process.env.DATABASE_URL?.trim());
@@ -157,6 +181,16 @@ export class AgentRuntime extends EventEmitter {
       this.toolGateway,
       this.researchService
     );
+
+    this.specialistRegistry = specialistRegistry || new SpecialistRegistry();
+    this.specialistRegistry.registerSpecialist(new MathematicalSpecialistAgent(this.toolGateway), 'IMPLEMENTED_LOCALLY');
+    this.specialistRegistry.registerSpecialist(new VerificationSpecialistAgent(), 'IMPLEMENTED_LOCALLY');
+
+    this.specialistTaskRepo = specialistTaskRepo || (isDbConfigured ? new PostgresSpecialistTaskRepository() : new InMemorySpecialistTaskRepository());
+    this.taskLeaseManager = new TaskLeaseManager(this.specialistTaskRepo);
+    this.durableScheduler = new DurableTaskScheduler(this.specialistTaskRepo);
+    this.specialistWorkerRuntime = new SpecialistWorkerRuntime(this.specialistTaskRepo, this.taskLeaseManager, this.specialistRegistry);
+    this.durableCoordinator = durableCoordinator || new DurableExecutionCoordinator(this.specialistTaskRepo, this.durableScheduler, this.taskLeaseManager, this.specialistWorkerRuntime);
   }
 
   public getToolGateway(): ToolGateway {
@@ -197,6 +231,26 @@ export class AgentRuntime extends EventEmitter {
 
   public getWorkflowCompiler(): WorkflowCompiler {
     return this.workflowCompiler;
+  }
+
+  public getSpecialistRegistry(): SpecialistRegistry {
+    return this.specialistRegistry;
+  }
+
+  public getSpecialistTaskRepository(): SpecialistTaskRepository {
+    return this.specialistTaskRepo;
+  }
+
+  public getTaskLeaseManager(): TaskLeaseManager {
+    return this.taskLeaseManager;
+  }
+
+  public getDurableTaskScheduler(): DurableTaskScheduler {
+    return this.durableScheduler;
+  }
+
+  public getDurableExecutionCoordinator(): DurableExecutionCoordinator {
+    return this.durableCoordinator;
   }
 
   public setAutomationEngine(engine: any): void {
@@ -1606,5 +1660,5 @@ export * from './repositories.js';
 export * from './prompt-composer/index.js';
 export * from './skills/curated-skill-registry.js';
 export * from './research/firecrawl-adapter.js';
-export * from './orchestration/ruflo-adapter.js';
-export * from './specialists/specialist-interface.js';
+export * from './specialists/index.js';
+export * from './durable/index.js';
