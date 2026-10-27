@@ -91,7 +91,7 @@ export function evaluateWorkerActivationPolicy(
       return {
         authorized: false,
         code: 'UNSUPPORTED_BOOLEAN_REPRESENTATION',
-        message: `AIRA_PRODUCTION_WORKER_ENABLED must be strictly lowercase 'true' without whitespace. Got: '${config.productionWorkerEnabled}'`,
+        message: "AIRA_PRODUCTION_WORKER_ENABLED must be strictly lowercase 'true' without whitespace.",
         isProduction,
         sanitizedConfig: {
           airaEnv,
@@ -142,7 +142,7 @@ export function evaluateWorkerActivationPolicy(
       return {
         authorized: false,
         code: 'INCORRECT_EXPECTED_PROJECT_ID',
-        message: `Production execution denied: EXPECTED_NEON_PROJECT_ID '${sanitizedConfig.expectedNeonProjectId}' does not match canonical production Neon project (${CANONICAL_PRODUCTION_NEON_PROJECT_ID}).`,
+        message: `Production execution denied: EXPECTED_NEON_PROJECT_ID does not match canonical production Neon project (${CANONICAL_PRODUCTION_NEON_PROJECT_ID}).`,
         isProduction: true,
         sanitizedConfig
       };
@@ -162,7 +162,7 @@ export function evaluateWorkerActivationPolicy(
       return {
         authorized: false,
         code: 'INCORRECT_EXPECTED_ENDPOINT_ID',
-        message: `Production execution denied: EXPECTED_NEON_ENDPOINT_ID '${sanitizedConfig.expectedNeonEndpointId}' does not match canonical production Neon endpoint (${CANONICAL_PRODUCTION_NEON_ENDPOINT_ID}).`,
+        message: `Production execution denied: EXPECTED_NEON_ENDPOINT_ID does not match canonical production Neon endpoint (${CANONICAL_PRODUCTION_NEON_ENDPOINT_ID}).`,
         isProduction: true,
         sanitizedConfig
       };
@@ -173,18 +173,7 @@ export function evaluateWorkerActivationPolicy(
       const liveProject = (connectedIdentity.neonProjectId || '').trim();
       const liveEndpoint = (connectedIdentity.neonEndpointId || '').trim();
 
-      // Check if connected identity is completely missing GUCs
-      if (!liveProject && !liveEndpoint && !connectedIdentity.host) {
-        return {
-          authorized: false,
-          code: 'UNVERIFIED_DATABASE_IDENTITY',
-          message: 'Production execution denied: Database identity could not be established from server telemetry.',
-          isProduction: true,
-          sanitizedConfig
-        };
-      }
-
-      // Check for Staging database in Production worker (Critical crossover)
+      // Check 4a: Staging database in Production worker (Critical crossover)
       if (
         liveProject === CANONICAL_STAGING_NEON_PROJECT_ID ||
         liveEndpoint === CANONICAL_STAGING_NEON_ENDPOINT_ID
@@ -198,23 +187,56 @@ export function evaluateWorkerActivationPolicy(
         };
       }
 
-      // Project match
-      if (liveProject && liveProject !== CANONICAL_PRODUCTION_NEON_PROJECT_ID) {
+      // Check 4b: Both identifiers missing or empty
+      if (!liveProject && !liveEndpoint) {
         return {
           authorized: false,
-          code: 'DATABASE_PROJECT_MISMATCH',
-          message: `Connected Neon project ID '${liveProject}' does not match canonical production project (${CANONICAL_PRODUCTION_NEON_PROJECT_ID}).`,
+          code: 'UNVERIFIED_DATABASE_IDENTITY',
+          message: 'Production execution denied: Database identity could not be established from server telemetry.',
           isProduction: true,
           sanitizedConfig
         };
       }
 
-      // Endpoint match
-      if (liveEndpoint && liveEndpoint !== CANONICAL_PRODUCTION_NEON_ENDPOINT_ID) {
+      // Check 4c: Missing, null, undefined, empty or whitespace-only live project ID (partial identity)
+      if (!liveProject) {
+        return {
+          authorized: false,
+          code: 'MISSING_CONNECTED_PROJECT_ID',
+          message: 'Production execution denied: Connected Neon project identity is missing or empty.',
+          isProduction: true,
+          sanitizedConfig
+        };
+      }
+
+      // Check 4d: Exact equality against canonical production project ID
+      if (liveProject !== CANONICAL_PRODUCTION_NEON_PROJECT_ID) {
+        return {
+          authorized: false,
+          code: 'DATABASE_PROJECT_MISMATCH',
+          message: `Connected Neon project ID does not match canonical production project (${CANONICAL_PRODUCTION_NEON_PROJECT_ID}).`,
+          isProduction: true,
+          sanitizedConfig
+        };
+      }
+
+      // Check 4e: Missing, null, undefined, empty or whitespace-only live endpoint ID (partial identity)
+      if (!liveEndpoint) {
+        return {
+          authorized: false,
+          code: 'MISSING_CONNECTED_ENDPOINT_ID',
+          message: 'Production execution denied: Connected Neon endpoint identity is missing or empty.',
+          isProduction: true,
+          sanitizedConfig
+        };
+      }
+
+      // Check 4f: Exact equality against canonical production endpoint ID
+      if (liveEndpoint !== CANONICAL_PRODUCTION_NEON_ENDPOINT_ID) {
         return {
           authorized: false,
           code: 'DATABASE_ENDPOINT_MISMATCH',
-          message: `Connected Neon endpoint ID '${liveEndpoint}' does not match canonical production endpoint (${CANONICAL_PRODUCTION_NEON_ENDPOINT_ID}).`,
+          message: `Connected Neon endpoint ID does not match canonical production endpoint (${CANONICAL_PRODUCTION_NEON_ENDPOINT_ID}).`,
           isProduction: true,
           sanitizedConfig
         };
@@ -289,6 +311,9 @@ export async function assertWorkerActivationAuthorized(
   config: WorkerActivationConfig,
   client: Knex
 ): Promise<WorkerActivationResult> {
+  const airaEnv = (config.airaEnv || 'staging').trim().toLowerCase();
+  const isProduction = airaEnv === 'production';
+
   let connectedIdentity: ConnectedDatabaseIdentity;
 
   try {
@@ -301,7 +326,13 @@ export async function assertWorkerActivationAuthorized(
         current_setting('neon.branch_id', true) as neon_branch_id,
         current_setting('neon.endpoint_id', true) as neon_endpoint_id
     `);
-    const row = res.rows?.[0] || {};
+    const row = res.rows?.[0];
+    if (!row) {
+      throw new ActivationSecurityError(
+        'UNVERIFIED_DATABASE_IDENTITY',
+        'Production execution denied: Database identity query returned no rows.'
+      );
+    }
     connectedIdentity = {
       databaseName: row.db_name,
       user: row.db_user,
@@ -311,9 +342,21 @@ export async function assertWorkerActivationAuthorized(
       neonEndpointId: row.neon_endpoint_id ? String(row.neon_endpoint_id).trim() : undefined
     };
   } catch (err: any) {
+    if (err instanceof ActivationSecurityError) {
+      throw err;
+    }
+    const cleanMsg = (err.message || 'Unknown database error').replace(/:\/\/.*@/, '://<sanitized>@');
     throw new ActivationSecurityError(
       'DATABASE_UNAVAILABLE',
-      `Live database query failed during worker activation validation: ${err.message}`
+      `Live database query failed during worker activation validation: ${cleanMsg}`
+    );
+  }
+
+  // Runtime authorization path guard: connectedIdentity cannot be omitted in production
+  if (isProduction && !connectedIdentity) {
+    throw new ActivationSecurityError(
+      'UNVERIFIED_DATABASE_IDENTITY',
+      'Production execution denied: Database identity cannot be omitted in runtime authorization path.'
     );
   }
 

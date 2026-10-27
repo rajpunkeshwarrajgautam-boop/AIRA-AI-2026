@@ -302,6 +302,156 @@ test.describe('AIRA AI 2026 — Milestone 2A Production Activation Security & Fa
     assert.strictEqual(checkReadiness().ready, true);
   });
 
+  test('TEST A16: Correct project ID + missing endpoint => DENIED', () => {
+    const identity: ConnectedDatabaseIdentity = {
+      databaseName: 'neondb',
+      user: 'aira',
+      neonProjectId: CANONICAL_PRODUCTION_NEON_PROJECT_ID,
+      neonEndpointId: undefined
+    };
+    const res = evaluateWorkerActivationPolicy(validProductionConfig, identity);
+    assert.strictEqual(res.authorized, false);
+    assert.strictEqual(res.code, 'MISSING_CONNECTED_ENDPOINT_ID');
+    assert.ok(res.message.includes('Connected Neon endpoint identity is missing or empty'));
+  });
+
+  test('TEST A17: Missing project ID + correct endpoint => DENIED', () => {
+    const identity: ConnectedDatabaseIdentity = {
+      databaseName: 'neondb',
+      user: 'aira',
+      neonProjectId: undefined,
+      neonEndpointId: CANONICAL_PRODUCTION_NEON_ENDPOINT_ID
+    };
+    const res = evaluateWorkerActivationPolicy(validProductionConfig, identity);
+    assert.strictEqual(res.authorized, false);
+    assert.strictEqual(res.code, 'MISSING_CONNECTED_PROJECT_ID');
+    assert.ok(res.message.includes('Connected Neon project identity is missing or empty'));
+  });
+
+  test('TEST A18: Correct project ID + empty endpoint => DENIED', () => {
+    for (const emptyVal of ['', '   ', '\t', '\n']) {
+      const identity: ConnectedDatabaseIdentity = {
+        databaseName: 'neondb',
+        user: 'aira',
+        neonProjectId: CANONICAL_PRODUCTION_NEON_PROJECT_ID,
+        neonEndpointId: emptyVal
+      };
+      const res = evaluateWorkerActivationPolicy(validProductionConfig, identity);
+      assert.strictEqual(res.authorized, false, `Failed for empty endpoint: '${emptyVal}'`);
+      assert.strictEqual(res.code, 'MISSING_CONNECTED_ENDPOINT_ID');
+    }
+  });
+
+  test('TEST A19: Empty project ID + correct endpoint => DENIED', () => {
+    for (const emptyVal of ['', '   ', '\t', '\n']) {
+      const identity: ConnectedDatabaseIdentity = {
+        databaseName: 'neondb',
+        user: 'aira',
+        neonProjectId: emptyVal,
+        neonEndpointId: CANONICAL_PRODUCTION_NEON_ENDPOINT_ID
+      };
+      const res = evaluateWorkerActivationPolicy(validProductionConfig, identity);
+      assert.strictEqual(res.authorized, false, `Failed for empty project: '${emptyVal}'`);
+      assert.strictEqual(res.code, 'MISSING_CONNECTED_PROJECT_ID');
+    }
+  });
+
+  test('TEST A20: Both identifiers correct => AUTHORIZED', () => {
+    const identity: ConnectedDatabaseIdentity = {
+      databaseName: 'neondb',
+      user: 'aira',
+      serverAddr: '10.0.0.1',
+      neonProjectId: CANONICAL_PRODUCTION_NEON_PROJECT_ID,
+      neonEndpointId: CANONICAL_PRODUCTION_NEON_ENDPOINT_ID
+    };
+    const res = evaluateWorkerActivationPolicy(validProductionConfig, identity);
+    assert.strictEqual(res.authorized, true);
+    assert.strictEqual(res.code, 'PRODUCTION_ACTIVATION_AUTHORIZED');
+    assert.strictEqual(res.isProduction, true);
+  });
+
+  test('TEST A21: Both identifiers missing => DENIED', () => {
+    const identity: ConnectedDatabaseIdentity = {
+      databaseName: 'neondb',
+      user: 'aira',
+      neonProjectId: '',
+      neonEndpointId: ''
+    };
+    const res = evaluateWorkerActivationPolicy(validProductionConfig, identity);
+    assert.strictEqual(res.authorized, false);
+    assert.strictEqual(res.code, 'UNVERIFIED_DATABASE_IDENTITY');
+  });
+
+  test('TEST A22: Runtime identity query returns partial GUC data => WORKER STARTUP DENIED', async () => {
+    // Sub-case 1: Project present, endpoint missing in live GUCs
+    const mockKnexMissingEndpoint = {
+      raw: async () => ({
+        rows: [{
+          db_name: 'neondb',
+          db_user: 'aira',
+          server_ip: '10.0.0.1',
+          neon_project_id: CANONICAL_PRODUCTION_NEON_PROJECT_ID,
+          neon_endpoint_id: null
+        }]
+      })
+    } as any;
+
+    await assert.rejects(
+      async () => {
+        await assertWorkerActivationAuthorized(validProductionConfig, mockKnexMissingEndpoint);
+      },
+      (err: any) => {
+        assert.ok(err instanceof ActivationSecurityError);
+        assert.strictEqual(err.code, 'MISSING_CONNECTED_ENDPOINT_ID');
+        assert.ok(err.message.includes('Connected Neon endpoint identity is missing or empty'));
+        return true;
+      }
+    );
+
+    // Sub-case 2: Endpoint present, project missing in live GUCs
+    const mockKnexMissingProject = {
+      raw: async () => ({
+        rows: [{
+          db_name: 'neondb',
+          db_user: 'aira',
+          server_ip: '10.0.0.1',
+          neon_project_id: null,
+          neon_endpoint_id: CANONICAL_PRODUCTION_NEON_ENDPOINT_ID
+        }]
+      })
+    } as any;
+
+    await assert.rejects(
+      async () => {
+        await assertWorkerActivationAuthorized(validProductionConfig, mockKnexMissingProject);
+      },
+      (err: any) => {
+        assert.ok(err instanceof ActivationSecurityError);
+        assert.strictEqual(err.code, 'MISSING_CONNECTED_PROJECT_ID');
+        assert.ok(err.message.includes('Connected Neon project identity is missing or empty'));
+        return true;
+      }
+    );
+
+    // Sub-case 3: Database returned empty telemetry row
+    const mockKnexEmptyRows = {
+      raw: async () => ({
+        rows: []
+      })
+    } as any;
+
+    await assert.rejects(
+      async () => {
+        await assertWorkerActivationAuthorized(validProductionConfig, mockKnexEmptyRows);
+      },
+      (err: any) => {
+        assert.ok(err instanceof ActivationSecurityError);
+        assert.strictEqual(err.code, 'UNVERIFIED_DATABASE_IDENTITY');
+        return true;
+      }
+    );
+  });
+
   // =========================================================================
   // PHASE 4 — POSITIVE ACTIVATION PATH (LAYER 1)
   // =========================================================================

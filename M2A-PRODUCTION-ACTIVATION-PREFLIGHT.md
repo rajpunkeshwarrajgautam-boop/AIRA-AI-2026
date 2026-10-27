@@ -71,9 +71,9 @@ Production activation requires four mandatory conditions to be satisfied **simul
 
 ---
 
-## 4. Default-Deny & Security Test Matrix (TEST A1 – A15)
+## 4. Default-Deny & Security Test Matrix (TEST A1 – A22)
 
-All 15 default-deny security scenarios were implemented and certified in `test/m2a-production-activation-security.test.ts`:
+All 22 default-deny and identity security scenarios were implemented and certified in `test/m2a-production-activation-security.test.ts`:
 
 | Test ID | Test Scenario | Expected Outcome | Execution Result | Evidence / Details |
 | :--- | :--- | :--- | :--- | :--- |
@@ -92,6 +92,13 @@ All 15 default-deny security scenarios were implemented and certified in `test/m
 | **TEST A13**| `AIRA_ENV=staging` + production activation configuration | STARTUP DENIED | **PASS** | Rejection code: `INCONSISTENT_NON_PROD_ACTIVATION_CONFIG` |
 | **TEST A14**| Activation failure occurs | ZERO CLAIMS & ZERO TOOLS | **PASS** | Host never started; task remains strictly `QUEUED` |
 | **TEST A15**| Activation failure occurs | READINESS NOT READY | **PASS** | HTTP `/ready` returns HTTP 503 |
+| **TEST A16**| `AIRA_ENV=production` + correct project ID + missing endpoint | STARTUP DENIED | **PASS** | Partial identity rejected with `MISSING_CONNECTED_ENDPOINT_ID` |
+| **TEST A17**| `AIRA_ENV=production` + missing project ID + correct endpoint | STARTUP DENIED | **PASS** | Partial identity rejected with `MISSING_CONNECTED_PROJECT_ID` |
+| **TEST A18**| `AIRA_ENV=production` + correct project ID + empty/whitespace endpoint | STARTUP DENIED | **PASS** | Rejection code: `MISSING_CONNECTED_ENDPOINT_ID` |
+| **TEST A19**| `AIRA_ENV=production` + empty/whitespace project ID + correct endpoint | STARTUP DENIED | **PASS** | Rejection code: `MISSING_CONNECTED_PROJECT_ID` |
+| **TEST A20**| `AIRA_ENV=production` + both identifiers correct | AUTHORIZED | **PASS** | Code: `PRODUCTION_ACTIVATION_AUTHORIZED` |
+| **TEST A21**| `AIRA_ENV=production` + both identifiers empty | STARTUP DENIED | **PASS** | Rejection code: `UNVERIFIED_DATABASE_IDENTITY` |
+| **TEST A22**| Live GUC query returns partial telemetry (null project or endpoint) | STARTUP DENIED | **PASS** | Worker bootstrap fails closed with `ActivationSecurityError` |
 
 ---
 
