@@ -1,0 +1,223 @@
+name: Disposable PostgreSQL Certification
+
+on:
+  pull_request:
+    branches: [main, staging, prod-release]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: postgres-certification-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  postgres-certification:
+    name: PostgreSQL 16 isolated regression certification
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+
+      # Install with no lifecycle scripts and before creating any database credentials.
+      - name: Install dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+
+      - name: Pull reviewed immutable images
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull 'postgres:16-bookworm@sha256:878977a5fe8d75ba7eab7610e4cf7e0c8626a683d89b3f9da965b8ceba952a09'
+          docker pull 'node:24@sha256:14078204b6bb268c107ceff6d3c43f45a888105e5c2b18b14c32b3409d93a1b0'
+
+      # No GitHub, Neon, production, or staging secrets are passed to these containers.
+      # The runner container has only the Docker internal network; network isolation is
+      # verified separately from the database-identity preflight below.
+      - name: Run isolated migration and deterministic regression certification
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+
+          RUN_SUFFIX="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          OWNER_LABEL="aira-ci-run-${RUN_SUFFIX}"
+          NETWORK="aira-pg-cert-${RUN_SUFFIX}"
+          PG_CONTAINER="aira-pg-cert-db-${RUN_SUFFIX}"
+          TEST_CONTAINER="aira-pg-cert-runner-${RUN_SUFFIX}"
+          PG_ENV_FILE=''
+          TEST_ENV_FILE=''
+          PG_ENV_FILE_CREATED=false
+          TEST_ENV_FILE_CREATED=false
+          NETWORK_CREATE_ATTEMPTED=false
+          PG_CREATE_ATTEMPTED=false
+          TEST_CREATE_ATTEMPTED=false
+
+          remove_owned_container() {
+            local expected_name="$1"
+            local expected_role="$2"
+            local id metadata
+            while IFS= read -r id; do
+              [[ -n "$id" ]] || continue
+              metadata="$(docker inspect --format '{{.Name}}|{{index .Config.Labels "aira.ci.owner"}}|{{index .Config.Labels "aira.ci.role"}}' "$id" 2>/dev/null || true)"
+              if [[ "$metadata" == "/${expected_name}|${OWNER_LABEL}|${expected_role}" ]]; then
+                docker rm -fv "$id" >/dev/null 2>&1
+              fi
+            done < <(docker container ls --all --quiet \
+              --filter "label=aira.ci.owner=${OWNER_LABEL}" \
+              --filter "label=aira.ci.role=${expected_role}" 2>/dev/null || true)
+          }
+
+          cleanup() {
+            status=$?
+            trap - EXIT INT TERM HUP
+            set +e
+
+            # Attempt cleanup only for resource types this invocation attempted to create;
+            # verify both the unique owner label and expected name/role before removal.
+            if [[ "$TEST_CREATE_ATTEMPTED" == true ]]; then
+              remove_owned_container "$TEST_CONTAINER" runner
+            fi
+            if [[ "$PG_CREATE_ATTEMPTED" == true ]]; then
+              remove_owned_container "$PG_CONTAINER" postgres
+            fi
+            if [[ "$NETWORK_CREATE_ATTEMPTED" == true ]]; then
+              local network_id network_metadata
+              while IFS= read -r network_id; do
+                [[ -n "$network_id" ]] || continue
+                network_metadata="$(docker network inspect --format '{{.Name}}|{{index .Labels "aira.ci.owner"}}|{{index .Labels "aira.ci.role"}}' "$network_id" 2>/dev/null || true)"
+                if [[ "$network_metadata" == "${NETWORK}|${OWNER_LABEL}|network" ]]; then
+                  docker network rm "$network_id" >/dev/null 2>&1
+                fi
+              done < <(docker network ls --quiet \
+                --filter "label=aira.ci.owner=${OWNER_LABEL}" \
+                --filter 'label=aira.ci.role=network' 2>/dev/null || true)
+            fi
+
+            if [[ "$PG_ENV_FILE_CREATED" == true && "$PG_ENV_FILE" == "$RUNNER_TEMP"/aira-pg-cert-postgres.* && -f "$PG_ENV_FILE" && ! -L "$PG_ENV_FILE" ]]; then
+              rm -f -- "$PG_ENV_FILE"
+            fi
+            if [[ "$TEST_ENV_FILE_CREATED" == true && "$TEST_ENV_FILE" == "$RUNNER_TEMP"/aira-pg-cert-test.* && -f "$TEST_ENV_FILE" && ! -L "$TEST_ENV_FILE" ]]; then
+              rm -f -- "$TEST_ENV_FILE"
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          trap 'exit 129' HUP
+
+          # The unique database role/name and random password exist only for this run.
+          umask 077
+          PG_ENV_FILE="$(mktemp "$RUNNER_TEMP/aira-pg-cert-postgres.XXXXXX")"
+          PG_ENV_FILE_CREATED=true
+          TEST_ENV_FILE="$(mktemp "$RUNNER_TEMP/aira-pg-cert-test.XXXXXX")"
+          TEST_ENV_FILE_CREATED=true
+          PG_USER="aira_ci_${RUN_SUFFIX}"
+          PG_DATABASE="aira_ci_${RUN_SUFFIX}"
+          PG_PASSWORD="$(openssl rand -hex 32)"
+          DATABASE_URL="postgresql://${PG_USER}:${PG_PASSWORD}@postgres:5432/${PG_DATABASE}"
+
+          {
+            printf 'POSTGRES_USER=%s\n' "$PG_USER"
+            printf 'POSTGRES_PASSWORD=%s\n' "$PG_PASSWORD"
+            printf 'POSTGRES_DB=%s\n' "$PG_DATABASE"
+          } > "$PG_ENV_FILE"
+          {
+            printf 'NODE_ENV=test\n'
+            printf 'CI=true\n'
+            printf 'CI_DISPOSABLE_DATABASE=true\n'
+            printf 'CI_EXPECTED_DATABASE_USER=%s\n' "$PG_USER"
+            printf 'CI_EXPECTED_DATABASE_NAME=%s\n' "$PG_DATABASE"
+            printf 'DATABASE_URL=%s\n' "$DATABASE_URL"
+            printf 'ISOLATED_TEST_DATABASE_URL=%s\n' "$DATABASE_URL"
+          } > "$TEST_ENV_FILE"
+          unset PG_PASSWORD DATABASE_URL
+
+          NETWORK_CREATE_ATTEMPTED=true
+          docker network create --internal \
+            --label "aira.ci.owner=${OWNER_LABEL}" \
+            --label 'aira.ci.role=network' \
+            "$NETWORK" >/dev/null
+          PG_CREATE_ATTEMPTED=true
+          docker run --detach \
+            --name "$PG_CONTAINER" \
+            --label "aira.ci.owner=${OWNER_LABEL}" \
+            --label 'aira.ci.role=postgres' \
+            --network "$NETWORK" \
+            --network-alias postgres \
+            --env-file "$PG_ENV_FILE" \
+            --health-cmd "pg_isready -U ${PG_USER} -d ${PG_DATABASE}" \
+            --health-interval 2s \
+            --health-timeout 5s \
+            --health-retries 30 \
+            --shm-size 256m \
+            --tmpfs /var/lib/postgresql/data:rw,noexec,nosuid,size=1g \
+            'postgres:16-bookworm@sha256:878977a5fe8d75ba7eab7610e4cf7e0c8626a683d89b3f9da965b8ceba952a09' >/dev/null
+
+          TEST_CREATE_ATTEMPTED=true
+          docker create \
+            --name "$TEST_CONTAINER" \
+            --label "aira.ci.owner=${OWNER_LABEL}" \
+            --label 'aira.ci.role=runner' \
+            --network "$NETWORK" \
+            --workdir /workspace \
+            --mount "type=bind,src=${GITHUB_WORKSPACE},dst=/workspace" \
+            --env-file "$TEST_ENV_FILE" \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --pids-limit 512 \
+            --memory 4g \
+            'node:24@sha256:14078204b6bb268c107ceff6d3c43f45a888105e5c2b18b14c32b3409d93a1b0' \
+            sleep infinity >/dev/null
+          docker start "$TEST_CONTAINER" >/dev/null
+
+          # Wait for PostgreSQL health before checking internal network membership.
+          for attempt in {1..60}; do
+            health="$(docker inspect --format '{{.State.Health.Status}}' "$PG_CONTAINER" 2>/dev/null || true)"
+            if [[ "$health" == 'healthy' ]]; then break; fi
+            if [[ "$health" == 'unhealthy' ]]; then
+              echo '::error::Disposable PostgreSQL did not become healthy.'
+              exit 1
+            fi
+            if [[ "$attempt" == 60 ]]; then
+              echo '::error::Timed out waiting for disposable PostgreSQL.'
+              exit 1
+            fi
+            sleep 2
+          done
+
+          # Mandatory safeguard 1: prove both containers are attached exclusively to
+          # the internal network, with no other members, published ports, or DB volumes.
+          docker network inspect "$NETWORK" | jq -e \
+            --arg pg "$PG_CONTAINER" \
+            --arg test "$TEST_CONTAINER" \
+            '.[0].Internal == true and ([.[0].Containers[]?.Name] | sort == ([$pg, $test] | sort))' >/dev/null
+          docker inspect "$PG_CONTAINER" "$TEST_CONTAINER" | jq -e \
+            --arg network "$NETWORK" \
+            'all(.[]; (.NetworkSettings.Networks | keys) == [$network])' >/dev/null
+          docker inspect "$PG_CONTAINER" | jq -e \
+            '.[0].HostConfig.PortBindings == null and
+             (.[0].Mounts | all(.[]; .Type == "tmpfs")) and
+             (.[0].Mounts | any(.[]; .Destination == "/var/lib/postgresql/data" and .Type == "tmpfs"))' >/dev/null
+          echo 'Internal-network isolation verified: only the test runner and disposable PostgreSQL are attached; no database ports or persistent volumes.'
+
+          # Mandatory safeguard 2: inspect the actual connected server before any
+          # migration, then repeat after migration to detect unexpected target changes.
+          docker exec "$TEST_CONTAINER" node scripts/ci/assert-disposable-postgres.mjs
+          docker exec "$TEST_CONTAINER" npm run db:migrate
+          docker exec "$TEST_CONTAINER" node scripts/ci/assert-disposable-postgres.mjs
+
+          docker exec "$TEST_CONTAINER" npm run test:workflow
+          docker exec "$TEST_CONTAINER" npm run test:tools
+          docker exec "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/tool-gateway-approval-fail-closed.test.ts
+          docker exec "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/approval-lifecycle-stage-1-2a.test.ts

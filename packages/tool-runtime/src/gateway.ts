@@ -182,18 +182,48 @@ export class ToolGateway extends EventEmitter {
     // STEP 6: Determine Side-Effect Level
     const sideEffectLevel: SideEffectLevel = def.sideEffectLevel ||
       (def.permissionLevel === 'DESTRUCTIVE' ? 'DESTRUCTIVE' : def.permissionLevel === 'WRITE' ? 'WRITE' : 'READ');
+    const policyRequiresApproval = def.approvalPolicy === 'require_approval' || def.approvalPolicy === 'always_ask';
+    const requiresApproval = policyRequiresApproval ||
+      def.permissionLevel === 'DESTRUCTIVE' ||
+      def.permissionLevel === 'WRITE' ||
+      sideEffectLevel === 'DESTRUCTIVE' ||
+      sideEffectLevel === 'WRITE';
+    // Preserve the strongest classification represented by either axis. The
+    // ApprovalKernel maps DESTRUCTIVE to critical risk and FINANCIAL to high;
+    // WRITE must not erase a FINANCIAL permission classification.
+    const approvalPermissionLevel =
+      def.permissionLevel === 'DESTRUCTIVE' || sideEffectLevel === 'DESTRUCTIVE'
+        ? 'DESTRUCTIVE'
+        : def.permissionLevel === 'FINANCIAL'
+          ? 'FINANCIAL'
+          : def.permissionLevel === 'WRITE' || sideEffectLevel === 'WRITE' ||
+              (policyRequiresApproval && def.permissionLevel === 'READ')
+            ? 'WRITE'
+            : def.permissionLevel;
+
+    // Even an idempotent replay must not be reported as successful if the
+    // approval boundary itself is not configured for an approval-required tool.
+    if (requiresApproval && !this.approvalKernel) {
+      return this.approvalUnavailableResult(callId, runId, def.name, startTime);
+    }
 
     // STEP 7: Check Idempotency Cache for mutative actions
     if (context.idempotencyKey) {
       const cached = await this.repository.getToolCallByIdempotencyKey(context.idempotencyKey);
       if (cached && cached.lifecycleState === 'COMPLETED') {
-        // Cross-principal boundary: cached receipt must never be shared across different principals
-        if (cached.principalId && principal?.userId && cached.principalId !== principal.userId) {
-          console.warn(
-            `[ToolGateway] Cross-principal idempotency collision blocked: receipt principal (${cached.principalId}) !== caller principal (${principal.userId})`
-          );
-        } else if (
-          // If the idempotency key was explicitly scoped to a specific run, reject foreign run replay
+        const cachedPrincipalId = cached.principalId;
+        const callerPrincipalId = principal.userId;
+        if (
+          typeof cachedPrincipalId !== 'string' || cachedPrincipalId.trim().length === 0 ||
+          typeof callerPrincipalId !== 'string' || callerPrincipalId.trim().length === 0 ||
+          cachedPrincipalId !== callerPrincipalId
+        ) {
+          return this.idempotencyReplayDeniedResult(callId, runId, def.name, startTime);
+        }
+
+        // If the idempotency key was explicitly scoped to a specific run, reject
+        // replaying its cached receipt from a different run.
+        if (
           cached.runId &&
           runId &&
           cached.runId !== runId &&
@@ -216,75 +246,78 @@ export class ToolGateway extends EventEmitter {
     }
 
     // STEP 8: Evaluate Approval Kernel
-    const requiresApproval = (def.approvalPolicy === 'require_approval' || def.approvalPolicy === 'always_ask') ||
-      sideEffectLevel === 'DESTRUCTIVE' ||
-      sideEffectLevel === 'WRITE';
-
-    if (requiresApproval && this.approvalKernel) {
-      const isApproved = await this.approvalKernel.isToolCallApproved(
-        runId,
-        def.name,
-        def.permissionLevel,
-        principal.userId
-      );
-
-      if (!isApproved) {
-        // Suspend execution and create ApprovalRequest
-        const initialToolCall: ToolCall = {
-          id: callId,
-          toolId: def.id,
-          name: def.name,
-          arguments: args,
-          timestamp: startTime
-        };
-
-        const approvalReq = await this.approvalKernel.createRequest(
+    if (requiresApproval) {
+      try {
+        const isApproved = await this.approvalKernel.isToolCallApproved(
           runId,
-          initialToolCall,
-          def.permissionLevel,
-          `Action "${def.name}" requires user authorization under ${sideEffectLevel} policy.`
+          def.name,
+          approvalPermissionLevel,
+          principal.userId
         );
 
-        const durableCall: DurableToolCall = {
-          id: callId,
-          runId,
-          workflowRunId: context.workflowRunId,
-          agentMissionId: context.agentMissionId,
-          principalId: principal.userId,
-          toolId: def.id,
-          toolName: def.name,
-          adapter: def.adapter,
-          sideEffectLevel,
-          permissionScopes: def.permissionScopes,
-          lifecycleState: 'WAITING_FOR_APPROVAL',
-          arguments: args,
-          approvalId: approvalReq.id,
-          idempotencyKey: context.idempotencyKey,
-          startedAt: startTime
-        };
-        await this.repository.saveToolCall(durableCall);
+        if (!isApproved) {
+          // Suspend execution and create ApprovalRequest. Any persistence failure
+          // below must fail closed before the adapter dispatch step.
+          const initialToolCall: ToolCall = {
+            id: callId,
+            toolId: def.id,
+            name: def.name,
+            arguments: args,
+            timestamp: startTime
+          };
 
-        this.emit('tool.approval_required', {
-          callId,
-          runId,
-          requestId: approvalReq.id,
-          toolName: def.name,
-          sideEffectLevel
-        });
+          const approvalReq = await this.approvalKernel.createRequest(
+            runId,
+            initialToolCall,
+            approvalPermissionLevel,
+            `Action "${def.name}" requires user authorization under ${sideEffectLevel} policy.`
+          );
 
-        return {
-          toolCallId: callId,
-          output: {
-            approvalRequired: true,
+          const durableCall: DurableToolCall = {
+            id: callId,
+            runId,
+            workflowRunId: context.workflowRunId,
+            agentMissionId: context.agentMissionId,
+            principalId: principal.userId,
+            toolId: def.id,
+            toolName: def.name,
+            adapter: def.adapter,
+            sideEffectLevel,
+            permissionScopes: def.permissionScopes,
+            lifecycleState: 'WAITING_FOR_APPROVAL',
+            arguments: args,
+            approvalId: approvalReq.id,
+            idempotencyKey: context.idempotencyKey,
+            startedAt: startTime
+          };
+          await this.repository.saveToolCall(durableCall);
+
+          this.emit('tool.approval_required', {
+            callId,
+            runId,
             requestId: approvalReq.id,
-            status: 'WAITING_FOR_APPROVAL',
-            reason: approvalReq.reason
-          },
-          isError: false,
-          durationMs: Date.now() - startTime,
-          timestamp: Date.now(),
-          artifacts: []
-        };
+            toolName: def.name,
+            sideEffectLevel
+          });
+
+          return {
+            toolCallId: callId,
+            output: {
+              approvalRequired: true,
+              requestId: approvalReq.id,
+              status: 'WAITING_FOR_APPROVAL',
+              reason: approvalReq.reason
+            },
+            isError: false,
+            durationMs: Date.now() - startTime,
+            timestamp: Date.now(),
+            artifacts: []
+          };
+        }
+      } catch {
+        // Do not leak approval-store errors, and never continue to adapter execution
+        // when approval state cannot be established or persisted.
+        return this.approvalUnavailableResult(callId, runId, def.name, startTime);
       }
     }
 
@@ -378,6 +411,46 @@ export class ToolGateway extends EventEmitter {
       durationMs,
       timestamp: Date.now(),
       artifacts
+    };
+  }
+
+  private idempotencyReplayDeniedResult(
+    callId: string,
+    runId: string,
+    toolName: string,
+    startTime: number
+  ): ToolResult {
+    const error = 'Cached result ownership could not be verified; the replay was denied.';
+    this.emit('tool.validation_failed', { callId, runId, toolName, error });
+    return {
+      toolCallId: callId,
+      output: null,
+      error,
+      errorCode: ToolGatewayErrorCodes.TOOL_PERMISSION_DENIED,
+      isError: true,
+      durationMs: Date.now() - startTime,
+      timestamp: Date.now(),
+      artifacts: []
+    };
+  }
+
+  private approvalUnavailableResult(
+    callId: string,
+    runId: string,
+    toolName: string,
+    startTime: number
+  ): ToolResult {
+    const error = `Approval could not be verified for tool "${toolName}"; the operation was not executed.`;
+    this.emit('tool.approval_failed', { callId, runId, toolName, code: ToolGatewayErrorCodes.TOOL_APPROVAL_DENIED });
+    return {
+      toolCallId: callId,
+      output: null,
+      error,
+      errorCode: ToolGatewayErrorCodes.TOOL_APPROVAL_DENIED,
+      isError: true,
+      durationMs: Date.now() - startTime,
+      timestamp: Date.now(),
+      artifacts: []
     };
   }
 

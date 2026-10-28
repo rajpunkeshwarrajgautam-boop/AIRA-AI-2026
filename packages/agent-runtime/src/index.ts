@@ -514,32 +514,43 @@ export class AgentRuntime extends EventEmitter {
     return true;
   }
 
-  public async submitApproval(requestId: string, decision: ApprovalDecision): Promise<boolean> {
-    const { approved, request } = await this.approvalKernel.decide(requestId, decision);
-    const run = await this.getRun(request.runId);
-    if (!run) {
-      return false;
+  public async submitApproval(
+    requestId: string,
+    decision: ApprovalDecision,
+    resolverPrincipal: ExecutionPrincipal,
+    expectedRunId: string
+  ): Promise<boolean> {
+    if (!resolverPrincipal?.userId || !expectedRunId) return false;
+
+    const pendingRequest = await this.approvalKernel.getPendingRequest(requestId);
+    if (!pendingRequest || pendingRequest.runId !== expectedRunId) return false;
+
+    const run = await this.getRun(pendingRequest.runId);
+    if (!run || run.principalId !== resolverPrincipal.userId) return false;
+
+    // Workflow step approvals are resolved by WorkflowEngine so that the same
+    // decision is not first recorded here and then recorded a second time there.
+    const wfRun = await this.workflowRepo.getWorkflowRunByRunId(pendingRequest.runId);
+    if (wfRun?.state === 'WAITING_FOR_APPROVAL' && wfRun.pendingApprovalStepId) {
+      const stepId = wfRun.pendingApprovalStepId;
+      if (pendingRequest.toolCall.id !== `call_step_${stepId}`) return false;
+      return this.workflowEngine.resolveStepApproval(
+        wfRun.id,
+        stepId,
+        decision,
+        resolverPrincipal,
+        requestId
+      );
     }
+
+    if (pendingRequest.toolCall.id.startsWith('call_step_')) return false;
+
+    const { approved, request } = await this.approvalKernel.decide(
+      requestId,
+      decision,
+      resolverPrincipal.userId
+    );
     run.pendingApproval = request;
-    
-    // Check if this approval was for a workflow step
-    if (typeof request.toolCall?.toolId === 'string' && request.toolCall.toolId.startsWith('workflow_step_')) {
-      const wfRun = await this.workflowRepo.getWorkflowRunByRunId(request.runId);
-      if (wfRun && wfRun.state === 'WAITING_FOR_APPROVAL' && wfRun.pendingApprovalStepId) {
-        const principal: ExecutionPrincipal = {
-          userId: run.principalId,
-          sessionId: run.sessionId,
-          role: 'user'
-        };
-        await this.workflowEngine.resolveStepApproval(
-          wfRun.id,
-          wfRun.pendingApprovalStepId,
-          decision === 'APPROVE' ? 'APPROVED' : 'REJECTED',
-          principal
-        );
-        return true;
-      }
-    }
 
     if (decision === 'REJECT') {
       run.executionCheckpoint = 'COMPLETED';

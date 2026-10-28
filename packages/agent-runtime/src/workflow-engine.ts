@@ -4,6 +4,7 @@ import {
   WorkflowStepDefinition,
   WorkflowStepExecution,
   WorkflowStepState,
+  ApprovalDecision,
   validateWorkflowDag,
   ExecutionPrincipal,
   Run,
@@ -580,8 +581,9 @@ Current UTC time: ${now.toISOString()}`;
   public async resolveStepApproval(
     workflowRunId: string,
     stepId: string,
-    decision: 'APPROVED' | 'REJECTED',
-    principal: ExecutionPrincipal
+    decision: 'APPROVED' | 'REJECTED' | ApprovalDecision,
+    principal: ExecutionPrincipal,
+    approvalRequestId?: string
   ): Promise<boolean> {
     const workflowRun = await this.workflowRepo.getWorkflowRun(workflowRunId);
     if (!workflowRun) return false;
@@ -596,16 +598,28 @@ Current UTC time: ${now.toISOString()}`;
     }
 
     const airaRun = await this.runRepo.getRun(workflowRun.runId);
-    if (airaRun && airaRun.pendingApproval) {
-      const decType = decision === 'APPROVED' ? 'ALLOW_SESSION' : 'REJECT';
-      await this.approvalKernel.decide(
-        airaRun.pendingApproval.id,
-        decType,
-        principal.userId
-      );
+    const requestId = approvalRequestId || airaRun?.pendingApproval?.id;
+    if (!requestId || airaRun?.pendingApproval?.id !== requestId) return false;
+
+    const pendingRequest = await this.approvalKernel.getPendingRequest(requestId);
+    if (
+      !pendingRequest ||
+      pendingRequest.runId !== workflowRun.runId ||
+      pendingRequest.toolCall.id !== `call_step_${stepId}`
+    ) {
+      return false;
     }
 
-    if (decision === 'REJECTED') {
+    // Keep the legacy workflow API compatible: APPROVED has historically meant
+    // a session grant. Explicit ApprovalDecision values retain their own scope.
+    const approvalDecision: ApprovalDecision = decision === 'APPROVED'
+      ? 'ALLOW_SESSION'
+      : decision === 'REJECTED'
+        ? 'REJECT'
+        : decision;
+    await this.approvalKernel.resolveWorkflowDecision(requestId, approvalDecision, principal.userId);
+
+    if (approvalDecision === 'REJECT') {
       workflowRun.state = 'FAILED';
       workflowRun.error = `Approval rejected for step "${stepId}".`;
       workflowRun.stepStates[stepId] = 'FAILED';

@@ -1148,16 +1148,23 @@ app.post('/api/runs/:id/approve', async (req: Request, res: Response) => {
   try {
     const { requestId, decision } = req.body;
     const approval = await approvalKernel.getPendingRequest(requestId);
-    if (!approval) return res.status(404).json({ error: 'Approval request not found.' });
-    
+    if (!approval || approval.runId !== req.params.id) {
+      return res.status(404).json({ error: 'Approval request not found.' });
+    }
+
+    const resolverPrincipal = req.principal!;
     const run = await agentRuntime.getRun(approval.runId);
-    if (!run || run.principalId !== req.principal!.userId) {
+    if (!run || run.principalId !== resolverPrincipal.userId) {
       return res.status(404).json({ error: 'Approval request not found.' });
     }
 
     const parsedDecision = ApprovalDecisionSchema.parse(decision);
-    // Submit approval with current user's identity
-    const success = await agentRuntime.submitApproval(requestId, parsedDecision);
+    const success = await agentRuntime.submitApproval(
+      requestId,
+      parsedDecision,
+      resolverPrincipal,
+      req.params.id
+    );
     if (!success) {
       return res.status(400).json({ error: 'Could not apply approval decision.' });
     }

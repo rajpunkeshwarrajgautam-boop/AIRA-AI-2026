@@ -66,6 +66,40 @@ export class ApprovalKernel {
   }
 
   public async decide(requestId: string, decision: ApprovalDecision, resolvedBy: string): Promise<{ approved: boolean; request: ApprovalRequest }> {
+    const result = await this.resolveDecision(requestId, decision, resolvedBy);
+
+    if (decision === 'REJECT') {
+      return result;
+    }
+
+    if (decision === 'ALLOW_SESSION') {
+      await this.grantRepo.grantSession(result.request.runId, result.request.toolCall.name, resolvedBy);
+    } else if (decision === 'ALLOW_ALWAYS_FOR_TOOL') {
+      await this.grantRepo.grantAlways(result.request.toolCall.name, resolvedBy);
+    }
+    // ALLOW_ONCE does not create a reusable grant.
+
+    return result;
+  }
+
+  /**
+   * Resolve and persist a workflow-step decision without issuing reusable
+   * ToolGateway session or always grants. WorkflowEngine owns the step-scoped
+   * authorization through its pending-step state transition.
+   */
+  public async resolveWorkflowDecision(
+    requestId: string,
+    decision: ApprovalDecision,
+    resolvedBy: string
+  ): Promise<{ approved: boolean; request: ApprovalRequest }> {
+    return this.resolveDecision(requestId, decision, resolvedBy);
+  }
+
+  private async resolveDecision(
+    requestId: string,
+    decision: ApprovalDecision,
+    resolvedBy: string
+  ): Promise<{ approved: boolean; request: ApprovalRequest }> {
     const request = await this.repository.getRequest(requestId);
 
     if (!request) {
@@ -77,19 +111,7 @@ export class ApprovalKernel {
     request.resolvedBy = resolvedBy;
 
     await this.repository.resolveRequest(requestId, decision, resolvedBy);
-
-    if (decision === 'REJECT') {
-      return { approved: false, request };
-    }
-
-    if (decision === 'ALLOW_SESSION') {
-      await this.grantRepo.grantSession(request.runId, request.toolCall.name, resolvedBy);
-    } else if (decision === 'ALLOW_ALWAYS_FOR_TOOL') {
-      await this.grantRepo.grantAlways(request.toolCall.name, resolvedBy);
-    }
-    // ALLOW_ONCE does nothing more; the pending_approval resolves and executeRunLoop proceeds.
-
-    return { approved: true, request };
+    return { approved: decision !== 'REJECT', request };
   }
 
   public async clearSessionGrants(runId: string): Promise<void> {
