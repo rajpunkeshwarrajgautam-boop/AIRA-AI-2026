@@ -1,4 +1,6 @@
 import assert from 'assert';
+import { randomUUID } from 'node:crypto';
+import { PostgresWorkspaceAuthorityRepository, workspaceAuthority } from '../packages/agent-runtime/src/workspace-authority.js';
 import { ModelRouter } from '../packages/model-router/src/index.js';
 import { ToolRegistry } from '../packages/tool-runtime/src/index.js';
 import { ApprovalKernel } from '../packages/approvals/src/index.js';
@@ -29,13 +31,19 @@ function killPort(port: number) {
 async function runTests() {
   process.stdout.write('Starting AIRA Autonomous Runtime Verification Suite...\n');
 
+  const runtimePrincipalId = `runtime_verification_${randomUUID()}`;
+  const runtimeSessionId = `runtime_session_${randomUUID()}`;
+  const runtimeWorkspaceId = await new PostgresWorkspaceAuthorityRepository().resolveWorkspace(runtimePrincipalId);
+  // Keep the local runtime fixture aligned with the server-side identity used by the API process.
+  await workspaceAuthority.resolveWorkspace(runtimePrincipalId);
+
   killPort(3001);
 
   process.stdout.write('Starting API Server...\n');
   const apiProcess = spawn('npx', ['tsx', 'apps/api/src/index.ts'], {
     stdio: 'ignore',
     shell: true,
-    env: { ...process.env, NODE_ENV: 'test' }
+    env: { ...process.env, NODE_ENV: 'test', AIRA_PERSISTENT_WORKSPACE_AUTHORITY: 'true' }
   });
 
   try {
@@ -122,10 +130,10 @@ async function runTests() {
     const runRepo = new PostgresRunRepository();
     await runRepo.saveRun({
       id: runId,
-      principalId: 'test-user',
+      principalId: runtimePrincipalId,
       agentId: null,
-      sessionId: 'test-session',
-      workspaceId: 'workspace_runtime_verification',
+      sessionId: runtimeSessionId,
+      workspaceId: runtimeWorkspaceId,
       state: 'RUNNING',
       prompt: 'dummy',
       modelPolicy: { model: 'mock-deterministic' } as any,
@@ -140,11 +148,11 @@ async function runTests() {
       citations: []
     });
 
-    const isInitiallyApproved = await kernel.isToolCallApproved(runId, 'system_shell', 'DESTRUCTIVE', 'test-user');
+    const isInitiallyApproved = await kernel.isToolCallApproved(runId, 'system_shell', 'DESTRUCTIVE', runtimePrincipalId);
     assert.strictEqual(isInitiallyApproved, false);
 
     const request = await kernel.createRequest(
-      runId, toolCall as any, 'DESTRUCTIVE', 'Dangerous shell action', 'workspace_runtime_verification'
+      runId, toolCall as any, 'DESTRUCTIVE', 'Dangerous shell action', runtimeWorkspaceId
     );
     assert.strictEqual(request.risk, 'critical');
     const waitingRun = await runRepo.getRun(runId);
@@ -154,10 +162,10 @@ async function runTests() {
     waitingRun.pendingApproval = request;
     await runRepo.saveRun(waitingRun);
 
-    const decisionResult = await kernel.decide(request.id, 'ALLOW_SESSION', 'test-user');
+    const decisionResult = await kernel.decide(request.id, 'ALLOW_SESSION', runtimePrincipalId);
     assert.strictEqual(decisionResult.approved, true);
 
-    const isNowApproved = await kernel.isToolCallApproved(runId, 'system_shell', 'DESTRUCTIVE', 'test-user');
+    const isNowApproved = await kernel.isToolCallApproved(runId, 'system_shell', 'DESTRUCTIVE', runtimePrincipalId);
     assert.strictEqual(isNowApproved, true);
     process.stdout.write('PASS: Approval Kernel lifecycle, grants, and security isolation\n');
   }
@@ -220,8 +228,9 @@ async function runTests() {
       intent: 'TOOL_ACTION',
       modelPolicy: { model: 'mock-deterministic' } as any
     }, {
-      userId: 'test-user',
-      sessionId: 'test-session'
+      userId: runtimePrincipalId,
+      sessionId: runtimeSessionId,
+      workspaceId: runtimeWorkspaceId
     });
 
     assert.ok(run.id.startsWith('run_'));
@@ -272,8 +281,8 @@ async function runTests() {
   // Test 8: Live API Server Integration
   {
     const authHeaders = {
-      'x-test-user-id': 'test-user',
-      'x-test-session-id': 'test-session',
+      'x-test-user-id': runtimePrincipalId,
+      'x-test-session-id': runtimeSessionId,
       'Content-Type': 'application/json'
     };
 

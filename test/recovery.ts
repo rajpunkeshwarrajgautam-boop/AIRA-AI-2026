@@ -1,7 +1,9 @@
 import { spawn } from 'child_process';
 import { execFileSync } from 'node:child_process';
 import assert from 'assert';
+import { randomUUID } from 'node:crypto';
 import { db } from '../packages/db/src/index.js'; // to seed/verify DB states directly
+import { PostgresWorkspaceAuthorityRepository } from '../packages/agent-runtime/src/workspace-authority.js';
 
 function assertAuthorizedDisposableDatabase(): void {
   if (process.env.AIRA_POSTGRES_CERTIFICATION !== '1') {
@@ -17,6 +19,9 @@ function assertAuthorizedDisposableDatabase(): void {
 
 const API_PORT = 3003;
 const BASE_URL = `http://127.0.0.1:${API_PORT}`;
+const RECOVERY_PRINCIPAL_ID = `cert_recovery_${randomUUID()}`;
+const RECOVERY_SESSION_ID = `cert_recovery_session_${randomUUID()}`;
+let recoveryWorkspaceId = '';
 
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -27,7 +32,13 @@ let apiServer: any;
 async function startApiServer() {
   console.log('Starting API Server...');
   apiServer = spawn('npx', ['tsx', 'apps/api/src/index.ts'], {
-    env: { ...process.env, PORT: API_PORT.toString(), NODE_ENV: 'test', AIRA_ALLOW_MOCK: 'true' },
+    env: {
+      ...process.env,
+      PORT: API_PORT.toString(),
+      NODE_ENV: 'test',
+      AIRA_ALLOW_MOCK: 'true',
+      AIRA_PERSISTENT_WORKSPACE_AUTHORITY: 'true'
+    },
     stdio: 'inherit',
     shell: true
   });
@@ -55,8 +66,8 @@ async function createRun(prompt: string) {
   const createRes = await fetch(`${BASE_URL}/api/runs`, {
     method: 'POST',
     headers: {
-      'x-test-user-id': 'test-user',
-      'x-test-session-id': 'test-session',
+      'x-test-user-id': RECOVERY_PRINCIPAL_ID,
+      'x-test-session-id': RECOVERY_SESSION_ID,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
@@ -76,8 +87,9 @@ async function seedRun(id: string, state: string, checkpoint: string, extra: any
   await db('runs').insert({
     id,
     agent_id: null,
-    principal_id: 'test-user',
-    session_id: 'test-session',
+    principal_id: RECOVERY_PRINCIPAL_ID,
+    session_id: RECOVERY_SESSION_ID,
+    workspace_id: recoveryWorkspaceId,
     state,
     status: state,
     execution_checkpoint: checkpoint,
@@ -93,6 +105,7 @@ async function runRecoveryTests() {
   assertAuthorizedDisposableDatabase();
   console.log('=== TASK 5 RECOVERY TEST SUITE ===');
 
+  recoveryWorkspaceId = await new PostgresWorkspaceAuthorityRepository().resolveWorkspace(RECOVERY_PRINCIPAL_ID);
   await db('runs').del();
 
   // We start the API server to create some initial runs that we will kill mid-flight
@@ -118,12 +131,35 @@ async function runRecoveryTests() {
   const runApprovalId = 'run_approval_123';
   await seedRun(runApprovalId, 'WAITING_FOR_APPROVAL', 'WAITING_FOR_APPROVAL');
   
-  // Test E: TOOL_COMPLETED
+  // Model a SIGKILL boundary after durable tool completion: the run is still RUNNING,
+  // its checkpoint is TOOL_COMPLETED, and the call/result plus lifecycle receipts are persisted.
   const runCompletedToolId = 'run_tc_123';
+  const completedToolCall = {
+    id: 'call_1', toolId: 'tool_calculator', name: 'calculator',
+    arguments: { expression: '6 * 7' }, timestamp: Date.now(), status: 'COMPLETED'
+  };
+  const completedToolResult = {
+    toolCallId: completedToolCall.id,
+    output: { expression: '6 * 7', result: 42 },
+    isError: false,
+    durationMs: 3,
+    timestamp: Date.now()
+  };
   await seedRun(runCompletedToolId, 'RUNNING', 'TOOL_COMPLETED', {
-    toolCalls: JSON.stringify([{ id: 'call_1', toolId: 'tool_1', name: 'dummy', arguments: {}, timestamp: Date.now(), status: 'COMPLETED' }])
+    toolCalls: JSON.stringify([completedToolCall]),
+    toolResults: JSON.stringify([completedToolResult])
   });
-  
+  await db('run_events').insert([
+    {
+      id: `evt_${randomUUID()}`, run_id: runCompletedToolId, type: 'tool.started',
+      payload: JSON.stringify({ callId: completedToolCall.id, name: completedToolCall.name }), createdAt: completedToolCall.timestamp
+    },
+    {
+      id: `evt_${randomUUID()}`, run_id: runCompletedToolId, type: 'tool.completed',
+      payload: JSON.stringify(completedToolResult), createdAt: completedToolResult.timestamp
+    }
+  ]);
+
   // Test F: SYNTHESIZING
   const runSynthId = 'run_synth_123';
   await seedRun(runSynthId, 'RUNNING', 'SYNTHESIZING');
@@ -180,10 +216,20 @@ async function runRecoveryTests() {
   assert.strictEqual(checkApproval.state, 'WAITING_FOR_APPROVAL');
   console.log('✅ Test 7 (WAITING_FOR_APPROVAL survives): Passed');
 
-  // Test E / 11: TOOL_COMPLETED does not re-execute tool, moves to SYNTHESIZING or finishes
+  // Test E / 11: a completed tool is retained and synthesis finishes without redispatch.
   const checkTc = await db('runs').where({ id: runCompletedToolId }).first();
-  assert.ok(['SYNTHESIZING', 'FINALIZING', 'COMPLETED'].includes(checkTc.execution_checkpoint), `Expected post-TC state, got ${checkTc.execution_checkpoint}`);
-  console.log('✅ Test 11 (TOOL_COMPLETED moves forward): Passed');
+  assert.strictEqual(checkTc.state, 'COMPLETED');
+  assert.strictEqual(checkTc.execution_checkpoint, 'COMPLETED');
+  const recoveredCalls = typeof checkTc.toolCalls === 'string' ? JSON.parse(checkTc.toolCalls) : checkTc.toolCalls;
+  const recoveredResults = typeof checkTc.toolResults === 'string' ? JSON.parse(checkTc.toolResults) : checkTc.toolResults;
+  assert.deepStrictEqual(recoveredCalls, [completedToolCall]);
+  assert.deepStrictEqual(recoveredResults, [completedToolResult]);
+  const recoveredToolEvents = await db('run_events').where({ run_id: runCompletedToolId }).whereIn('type', ['tool.started', 'tool.completed']);
+  assert.strictEqual(recoveredToolEvents.filter((event: any) => event.type === 'tool.started').length, 1,
+    'Recovery must not emit a second tool.started event for a completed call.');
+  assert.strictEqual(recoveredToolEvents.filter((event: any) => event.type === 'tool.completed').length, 1,
+    'Recovery must retain exactly the pre-crash tool completion receipt.');
+  console.log('✅ Test 11 (TOOL_COMPLETED retained, run completed, and adapter not replayed): Passed');
 
   // Test F / 12: SYNTHESIZING finishes without duplication
   const checkSynth = await db('runs').where({ id: runSynthId }).first();
@@ -210,9 +256,13 @@ async function runRecoveryTests() {
   assert.ok(checkLeased.recovery_claimed_at !== null);
   
   const checkExpired = await db('runs').where({ id: runExpiredLeaseId }).first();
-  // Expired lease SHOULD be taken over by this worker ('api-worker-1')
-  assert.strictEqual(checkExpired.recovery_owner, 'api-worker-1');
-  console.log('✅ Test 6 & I (Lease expiry/takeover works): Passed');
+  // The generated recovery claim is released after processing; stale fixed-owner assertions
+  // do not describe the current fenced claim lifecycle.
+  assert.strictEqual(checkExpired.recovery_owner, null);
+  assert.strictEqual(checkExpired.recovery_claimed_at, null);
+  assert.strictEqual(checkExpired.recovery_lease_until, null);
+  assert.strictEqual(checkExpired.state, 'FAILED');
+  console.log('✅ Test 6 & I (Expired lease claimed, processed, and released): Passed');
 
   console.log('\nAll A-I Tests Passed Successfully!');
   killApiServer();

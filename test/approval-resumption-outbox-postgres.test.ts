@@ -211,6 +211,65 @@ test('isolated PostgreSQL approval and resumption outbox certification', async (
     }
   });
 
+  await suite.test('approval persistence accepts active authority and rejects missing or revoked authority', async () => {
+    const authorities = new PostgresWorkspaceAuthorityRepository();
+    const cases = [
+      { label: 'active', principalId: `cert_save_active_${randomUUID()}` },
+      { label: 'missing', principalId: `cert_save_missing_${randomUUID()}` },
+      { label: 'revoked', principalId: `cert_save_revoked_${randomUUID()}` }
+    ];
+    const runIds = cases.map(({ label }) => `cert_save_${label}_run_${randomUUID()}`);
+    const requestIds = cases.map(({ label }) => `cert_save_${label}_approval_${randomUUID()}`);
+    const callIds = cases.map(({ label }) => `cert_save_${label}_call_${randomUUID()}`);
+    const now = Date.now();
+
+    try {
+      const activeWorkspaceId = await authorities.resolveWorkspace(cases[0].principalId);
+      const missingWorkspaceId = derivePersonalWorkspaceId(cases[1].principalId);
+      const revokedWorkspaceId = await authorities.resolveWorkspace(cases[2].principalId);
+      assert.equal(await authorities.revokeWorkspace(cases[2].principalId), true);
+      const workspaceIds = [activeWorkspaceId, missingWorkspaceId, revokedWorkspaceId];
+
+      for (let index = 0; index < cases.length; index += 1) {
+        const { label, principalId } = cases[index];
+        const runId = runIds[index];
+        const workspaceId = workspaceIds[index];
+        const request: ApprovalRequest = {
+          id: requestIds[index],
+          runId,
+          toolCall: {
+            id: callIds[index], toolId: 'tool_cert_write', name: 'cert_write',
+            arguments: { case: label }, timestamp: now
+          },
+          risk: 'medium', title: `Authority ${label} approval`, reason: 'Persistence authority regression',
+          sanitizedPreview: { case: label }, requestedAt: now, workspaceId,
+          permissionLevel: 'WRITE', toolDefinitionVersion: 1, toolPolicyFingerprint: 'c'.repeat(64)
+        };
+        await db('runs').insert({
+          id: runId, principal_id: principalId, session_id: `sess_${principalId}`, workspace_id: workspaceId,
+          prompt: `approval persistence ${label} authority`, status: 'WAITING_FOR_APPROVAL',
+          state: 'WAITING_FOR_APPROVAL', createdAt: now, updatedAt: now,
+          toolsUsed: '[]', toolCalls: '[]', toolResults: '[]'
+        });
+
+        if (label === 'active') {
+          await repo.saveRequest(request);
+          assert.ok(await db('approvals').where({ id: request.id }).first());
+          assert.ok(await db('tool_calls').where({ id: request.toolCall.id }).first());
+        } else {
+          await assert.rejects(() => repo.saveRequest(request), /active workspace authority/i);
+          assert.equal(await db('approvals').where({ id: request.id }).first(), undefined);
+          assert.equal(await db('tool_calls').where({ id: request.toolCall.id }).first(), undefined);
+        }
+      }
+    } finally {
+      await db('approvals').whereIn('id', requestIds).del();
+      await db('tool_calls').whereIn('id', callIds).del();
+      await db('runs').whereIn('id', runIds).del();
+      await db('principal_workspace_authorities').whereIn('principal_id', cases.map(({ principalId }) => principalId)).del();
+    }
+  });
+
   await suite.test('PostgreSQL worker recovery requires live authority and never backfills legacy task workspaces', async () => {
     const authorities = new PostgresWorkspaceAuthorityRepository();
     const taskRepository = new PostgresSpecialistTaskRepository();

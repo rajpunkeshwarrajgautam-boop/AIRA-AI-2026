@@ -359,3 +359,15 @@ jobs:
           mark_stage 'verify disposable PostgreSQL identity after destructive integration'
           docker exec --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
             "$TEST_CONTAINER" node scripts/ci/assert-disposable-postgres.mjs
+          mark_stage 'ensure required migrations are applied before runtime verification'
+          docker exec "$TEST_CONTAINER" npm run db:migrate
+          mark_stage 'verify disposable PostgreSQL identity before runtime verification'
+          docker exec --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" node scripts/ci/assert-disposable-postgres.mjs
+          mark_stage 'run runtime verification in the existing isolated PostgreSQL test runner'
+          docker exec --env AIRA_POSTGRES_CERTIFICATION=1 --env AIRA_PERSISTENT_WORKSPACE_AUTHORITY=true \
+            --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" npm test
+          mark_stage 'verify disposable PostgreSQL identity after runtime verification'
+          docker exec --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" node scripts/ci/assert-disposable-postgres.mjs
