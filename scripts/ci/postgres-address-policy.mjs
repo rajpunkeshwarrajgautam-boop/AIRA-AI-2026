@@ -64,6 +64,112 @@ export function normalizeIpAddress(value) {
   return `ipv6:${words.map((word) => word.toString(16).padStart(4, '0')).join(':')}`;
 }
 
+function invalidDockerInspection() {
+  throw new SafePreflightError('Docker-inspected PostgreSQL endpoint identity is invalid');
+}
+
+function isObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+export function extractVerifiedPostgresAddresses({
+  networkInspection,
+  containerInspections,
+  networkName,
+  postgresContainerName,
+  runnerContainerName,
+}) {
+  if (
+    !Array.isArray(networkInspection) || networkInspection.length !== 1 ||
+    !Array.isArray(containerInspections) || containerInspections.length !== 2 ||
+    ![networkName, postgresContainerName, runnerContainerName].every(
+      (value) => typeof value === 'string' && value.length > 0,
+    ) || postgresContainerName === runnerContainerName
+  ) {
+    return invalidDockerInspection();
+  }
+
+  const [network] = networkInspection;
+  if (
+    !isObject(network) || network.Name !== networkName || network.Internal !== true ||
+    typeof network.Id !== 'string' || network.Id.length === 0 || !isObject(network.Containers)
+  ) {
+    return invalidDockerInspection();
+  }
+
+  const expectedNames = [postgresContainerName, runnerContainerName];
+  if (Object.keys(network.Containers).length !== expectedNames.length) {
+    return invalidDockerInspection();
+  }
+
+  const containersByName = new Map();
+  const ids = new Set();
+  for (const container of containerInspections) {
+    if (!isObject(container) || typeof container.Id !== 'string' || container.Id.length === 0) {
+      return invalidDockerInspection();
+    }
+    const expectedName = expectedNames.find((name) => container.Name === `/${name}`);
+    if (!expectedName || containersByName.has(expectedName) || ids.has(container.Id)) {
+      return invalidDockerInspection();
+    }
+    containersByName.set(expectedName, container);
+    ids.add(container.Id);
+  }
+
+  const expectedAddresses = [];
+  const normalizedAddresses = new Set();
+  for (const name of expectedNames) {
+    const container = containersByName.get(name);
+    const member = network.Containers[container.Id];
+    const networks = container.NetworkSettings?.Networks;
+    if (
+      !isObject(member) || member.Name !== name || typeof member.EndpointID !== 'string' ||
+      member.EndpointID.length === 0 || !isObject(networks) ||
+      Object.keys(networks).length !== 1 || !Object.hasOwn(networks, networkName)
+    ) {
+      return invalidDockerInspection();
+    }
+
+    const attachment = networks[networkName];
+    if (
+      !isObject(attachment) || attachment.NetworkID !== network.Id ||
+      attachment.EndpointID !== member.EndpointID
+    ) {
+      return invalidDockerInspection();
+    }
+
+    if (name === postgresContainerName) {
+      if (!Array.isArray(attachment.Aliases) || !attachment.Aliases.includes('postgres')) {
+        return invalidDockerInspection();
+      }
+      const rawAddresses = [attachment.IPAddress, attachment.GlobalIPv6Address];
+      if (rawAddresses.some((address) => typeof address !== 'string')) {
+        return invalidDockerInspection();
+      }
+      const assignedAddresses = rawAddresses.filter((address) => address.length > 0);
+      if (assignedAddresses.length === 0) return invalidDockerInspection();
+      for (const address of assignedAddresses) {
+        if (address.includes('/')) return invalidDockerInspection();
+        let normalized;
+        try {
+          normalized = normalizeIpAddress(address);
+        } catch {
+          return invalidDockerInspection();
+        }
+        if (!normalizedAddresses.has(normalized)) {
+          normalizedAddresses.add(normalized);
+          expectedAddresses.push(address);
+        }
+      }
+    }
+  }
+
+  if (Object.keys(network.Containers).some((id) => !ids.has(id)) || expectedAddresses.length === 0) {
+    return invalidDockerInspection();
+  }
+  return expectedAddresses;
+}
+
 function normalizeAddressSet(addresses, label) {
   if (!Array.isArray(addresses) || addresses.length === 0) {
     throw new SafePreflightError(`${label} must contain at least one address`);

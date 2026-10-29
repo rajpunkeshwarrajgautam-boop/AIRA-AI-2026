@@ -219,8 +219,7 @@ jobs:
             --arg pg "$PG_CONTAINER" \
             --arg test "$TEST_CONTAINER" \
             '.[0].Internal == true and
-             ([.[0].Containers[]?.Name] | sort == ([$pg, $test] | sort)) and
-             any(.[0].Containers[]?; .Name == $pg and ((.Aliases // []) | index("postgres") != null))' >/dev/null
+             ([.[0].Containers[]?.Name] | sort == ([$pg, $test] | sort))' >/dev/null
           mark_stage 'verify container network attachment'
           docker inspect "$PG_CONTAINER" "$TEST_CONTAINER" | jq -e \
             --arg network "$NETWORK" \
@@ -271,23 +270,34 @@ jobs:
           fi
           echo 'Internal-network isolation verified: only the test runner and disposable PostgreSQL are attached; no database ports or persistent volumes.'
 
-          # Capture endpoint addresses only after the internal network, container membership,
-          # and network-alias checks above have succeeded.
+          # Verify container identity, network aliases, and endpoint addresses using the
+          # container's NetworkSettings attachment (network inspect entries have no Aliases).
           mark_stage 'capture verified PostgreSQL container network addresses'
-          EXPECTED_POSTGRES_ADDRESSES="$(docker network inspect "$NETWORK" | jq -ce --arg pg "$PG_CONTAINER" '
-            .[0] as $network
-            | [$network.Containers[]? | select(.Name == $pg and ((.Aliases // []) | index("postgres") != null))] as $endpoints
-            | if $network.Internal != true or ($endpoints | length) != 1
-              then error("verified PostgreSQL network endpoint is missing")
-              else [$endpoints[0].IPv4Address, $endpoints[0].IPv6Address]
-                   | map(select(type == "string" and length > 0) | sub("/[0-9]+$"; ""))
-                   | unique
-              end
-          ')"
-          if [[ "$EXPECTED_POSTGRES_ADDRESSES" == '[]' ]]; then
-            echo '::error::Verified PostgreSQL container has no address on the internal network.'
-            exit 1
-          fi
+          EXPECTED_POSTGRES_ADDRESSES="$(
+            {
+              printf '{"network":'
+              docker network inspect "$NETWORK"
+              printf ',"containers":'
+              docker inspect "$PG_CONTAINER" "$TEST_CONTAINER"
+              printf '}\n'
+            } | EXPECTED_NETWORK="$NETWORK" \
+              EXPECTED_POSTGRES_CONTAINER="$PG_CONTAINER" \
+              EXPECTED_RUNNER_CONTAINER="$TEST_CONTAINER" \
+              node --input-type=module -e '
+                import { readFileSync } from "node:fs";
+                import { extractVerifiedPostgresAddresses } from "./scripts/ci/postgres-address-policy.mjs";
+
+                const inspection = JSON.parse(readFileSync(0, "utf8"));
+                const addresses = extractVerifiedPostgresAddresses({
+                  networkInspection: inspection.network,
+                  containerInspections: inspection.containers,
+                  networkName: process.env.EXPECTED_NETWORK,
+                  postgresContainerName: process.env.EXPECTED_POSTGRES_CONTAINER,
+                  runnerContainerName: process.env.EXPECTED_RUNNER_CONTAINER,
+                });
+                process.stdout.write(JSON.stringify(addresses));
+              '
+          )"
 
           # Mandatory safeguard 2: inspect the actual connected server before any
           # migration, then repeat after migration to detect unexpected target changes.
