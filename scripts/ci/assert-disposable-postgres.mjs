@@ -1,6 +1,10 @@
 import { lookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
 import { Client } from 'pg';
+import {
+  SafePreflightError,
+  assertConnectedServerAddressMatchesExpected,
+  assertDnsAddressesMatchExpected,
+} from './postgres-address-policy.mjs';
 
 function reject(reason) {
   // Keep diagnostics intentionally free of connection strings and driver error details.
@@ -10,58 +14,71 @@ function reject(reason) {
 
 async function main() {
   if (process.env.NODE_ENV !== 'test') {
-    throw new Error('NODE_ENV must be test');
+    throw new SafePreflightError('NODE_ENV must be test');
   }
   if (process.env.CI_DISPOSABLE_DATABASE !== 'true') {
-    throw new Error('explicit disposable-database marker is missing');
+    throw new SafePreflightError('explicit disposable-database marker is missing');
   }
 
   const databaseUrl = process.env.DATABASE_URL;
   const isolatedUrl = process.env.ISOLATED_TEST_DATABASE_URL;
   const expectedUser = process.env.CI_EXPECTED_DATABASE_USER;
   const expectedDatabase = process.env.CI_EXPECTED_DATABASE_NAME;
+  const expectedAddressesJson = process.env.CI_EXPECTED_POSTGRES_ADDRESSES;
 
   if (!databaseUrl || !isolatedUrl || databaseUrl !== isolatedUrl) {
-    throw new Error('an explicit matching DATABASE_URL and ISOLATED_TEST_DATABASE_URL are required');
+    throw new SafePreflightError('an explicit matching DATABASE_URL and ISOLATED_TEST_DATABASE_URL are required');
   }
   if (!expectedUser || !expectedDatabase) {
-    throw new Error('expected disposable database identity variables are required');
+    throw new SafePreflightError('expected disposable database identity variables are required');
+  }
+  if (!expectedAddressesJson) {
+    throw new SafePreflightError('Docker-inspected PostgreSQL network endpoint addresses are required');
+  }
+  let expectedPostgresAddresses;
+  try {
+    expectedPostgresAddresses = JSON.parse(expectedAddressesJson);
+  } catch {
+    throw new SafePreflightError('Docker-inspected PostgreSQL network endpoint addresses are malformed');
+  }
+  if (!Array.isArray(expectedPostgresAddresses) || expectedPostgresAddresses.length === 0) {
+    throw new SafePreflightError('Docker-inspected PostgreSQL network endpoint addresses are required');
   }
 
   let target;
   try {
     target = new URL(databaseUrl);
   } catch {
-    throw new Error('DATABASE_URL is malformed');
+    throw new SafePreflightError('DATABASE_URL is malformed');
   }
 
   if (!['postgres:', 'postgresql:'].includes(target.protocol)) {
-    throw new Error('DATABASE_URL must use the PostgreSQL protocol');
+    throw new SafePreflightError('DATABASE_URL must use the PostgreSQL protocol');
   }
   if (target.hostname.toLowerCase() !== 'postgres' || target.port !== '5432') {
-    throw new Error('DATABASE_URL must target the isolated postgres:5432 service');
+    throw new SafePreflightError('DATABASE_URL must target the isolated postgres:5432 service');
   }
   if (decodeURIComponent(target.username) !== expectedUser) {
-    throw new Error('DATABASE_URL role does not match the expected disposable role');
+    throw new SafePreflightError('DATABASE_URL role does not match the expected disposable role');
   }
   if (decodeURIComponent(target.pathname.slice(1)) !== expectedDatabase) {
-    throw new Error('DATABASE_URL database does not match the expected disposable database');
+    throw new SafePreflightError('DATABASE_URL database does not match the expected disposable database');
   }
   if (!/^aira_ci_[0-9]+-[0-9]+$/.test(expectedUser) || !/^aira_ci_[0-9]+-[0-9]+$/.test(expectedDatabase)) {
-    throw new Error('expected identity is not run-scoped disposable PostgreSQL');
+    throw new SafePreflightError('expected identity is not run-scoped disposable PostgreSQL');
   }
   const exactGeneratedUrl = new RegExp(
     `^postgresql://${expectedUser}:[a-f0-9]{64}@postgres:5432/${expectedDatabase}$`,
   );
   if (!exactGeneratedUrl.test(databaseUrl) || target.search || target.hash) {
-    throw new Error('DATABASE_URL is not the exact generated disposable PostgreSQL URL');
+    throw new SafePreflightError('DATABASE_URL is not the exact generated disposable PostgreSQL URL');
   }
 
-  const addresses = await lookup('postgres', { all: true });
-  const resolvedAddresses = new Set(addresses.map(({ address }) => address));
-  if (resolvedAddresses.size === 0 || [...resolvedAddresses].some((address) => isIP(address) === 0)) {
-    throw new Error('the internal postgres service name did not resolve to valid IP addresses');
-  }
+  const dnsAddresses = (await lookup('postgres', { all: true })).map(({ address }) => address);
+  assertDnsAddressesMatchExpected({
+    expectedAddresses: expectedPostgresAddresses,
+    dnsAddresses,
+  });
 
   const client = new Client({
     connectionString: databaseUrl,
@@ -83,23 +100,23 @@ async function main() {
 
     const identity = rows[0];
     if (!identity || identity.database_name !== expectedDatabase || identity.role_name !== expectedUser) {
-      throw new Error('connected PostgreSQL database or role identity does not match the disposable target');
+      throw new SafePreflightError('connected PostgreSQL database or role identity does not match the disposable target');
     }
     if (Math.floor(Number(identity.server_version_num) / 10000) !== 16) {
-      throw new Error('connected PostgreSQL server is not major version 16');
+      throw new SafePreflightError('connected PostgreSQL server is not major version 16');
     }
-    if (!identity.server_address || !resolvedAddresses.has(identity.server_address)) {
-      throw new Error('connected server address does not match internal postgres service DNS');
-    }
+    assertConnectedServerAddressMatchesExpected({
+      expectedAddresses: expectedPostgresAddresses,
+      dnsAddresses,
+      serverAddress: identity.server_address,
+    });
 
-    console.log(
-      `Disposable PostgreSQL identity verified: database=${identity.database_name}, role=${identity.role_name}, major=16.`,
-    );
+    console.log('Disposable PostgreSQL identity verified: expected run-scoped database, role, and PostgreSQL 16.');
   } finally {
     await client.end().catch(() => {});
   }
 }
 
 main().catch((error) => {
-  reject(error instanceof Error ? error.message : 'unexpected preflight error');
+  reject(error instanceof SafePreflightError ? error.message : 'unexpected preflight error');
 });

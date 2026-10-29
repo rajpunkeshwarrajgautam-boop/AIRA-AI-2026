@@ -218,7 +218,9 @@ jobs:
           docker network inspect "$NETWORK" | jq -e \
             --arg pg "$PG_CONTAINER" \
             --arg test "$TEST_CONTAINER" \
-            '.[0].Internal == true and ([.[0].Containers[]?.Name] | sort == ([$pg, $test] | sort))' >/dev/null
+            '.[0].Internal == true and
+             ([.[0].Containers[]?.Name] | sort == ([$pg, $test] | sort)) and
+             any(.[0].Containers[]?; .Name == $pg and ((.Aliases // []) | index("postgres") != null))' >/dev/null
           mark_stage 'verify container network attachment'
           docker inspect "$PG_CONTAINER" "$TEST_CONTAINER" | jq -e \
             --arg network "$NETWORK" \
@@ -269,14 +271,36 @@ jobs:
           fi
           echo 'Internal-network isolation verified: only the test runner and disposable PostgreSQL are attached; no database ports or persistent volumes.'
 
+          # Capture endpoint addresses only after the internal network, container membership,
+          # and network-alias checks above have succeeded.
+          mark_stage 'capture verified PostgreSQL container network addresses'
+          EXPECTED_POSTGRES_ADDRESSES="$(docker network inspect "$NETWORK" | jq -ce --arg pg "$PG_CONTAINER" '
+            .[0] as $network
+            | [$network.Containers[]? | select(.Name == $pg and ((.Aliases // []) | index("postgres") != null))] as $endpoints
+            | if $network.Internal != true or ($endpoints | length) != 1
+              then error("verified PostgreSQL network endpoint is missing")
+              else [$endpoints[0].IPv4Address, $endpoints[0].IPv6Address]
+                   | map(select(type == "string" and length > 0) | sub("/[0-9]+$"; ""))
+                   | unique
+              end
+          ')"
+          if [[ "$EXPECTED_POSTGRES_ADDRESSES" == '[]' ]]; then
+            echo '::error::Verified PostgreSQL container has no address on the internal network.'
+            exit 1
+          fi
+
           # Mandatory safeguard 2: inspect the actual connected server before any
           # migration, then repeat after migration to detect unexpected target changes.
+          mark_stage 'test PostgreSQL network-address validation policy'
+          docker exec "$TEST_CONTAINER" node --test scripts/ci/postgres-address-policy.test.mjs
           mark_stage 'verify disposable PostgreSQL identity before migration'
-          docker exec "$TEST_CONTAINER" node scripts/ci/assert-disposable-postgres.mjs
+          docker exec --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" node scripts/ci/assert-disposable-postgres.mjs
           mark_stage 'run database migrations'
           docker exec "$TEST_CONTAINER" npm run db:migrate
           mark_stage 'verify disposable PostgreSQL identity after migration'
-          docker exec "$TEST_CONTAINER" node scripts/ci/assert-disposable-postgres.mjs
+          docker exec --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" node scripts/ci/assert-disposable-postgres.mjs
 
           mark_stage 'run workflow tests'
           docker exec "$TEST_CONTAINER" npm run test:workflow
