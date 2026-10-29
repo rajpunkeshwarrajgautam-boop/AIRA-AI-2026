@@ -45,12 +45,14 @@ async function main() {
   const userA: ExecutionPrincipal = {
     userId: 'usr_cert_alice',
     sessionId: 'sess_cert_alice_01',
+    workspaceId: 'ws_cert_alice',
     roles: ['member']
   };
 
   const userB: ExecutionPrincipal = {
     userId: 'usr_cert_bob',
     sessionId: 'sess_cert_bob_01',
+    workspaceId: 'ws_cert_bob',
     roles: ['member']
   };
 
@@ -62,6 +64,7 @@ async function main() {
       id: runId,
       principalId: principal.userId,
       sessionId: principal.sessionId,
+      workspaceId: principal.workspaceId,
       intent: 'WORKFLOW',
       state: 'RUNNING',
       modelPolicy: { model: 'mock-deterministic' },

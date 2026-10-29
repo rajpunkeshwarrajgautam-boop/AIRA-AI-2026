@@ -204,6 +204,9 @@ export class ApprovalKernel {
   }
 
   public async clearSessionGrants(runId: string): Promise<void> {
+    if (!this.grantRepo || typeof this.grantRepo.clearSession !== 'function') {
+      throw new Error('ApprovalKernel requires a SessionGrantRepository to revoke session grants.');
+    }
     await this.grantRepo.clearSession(runId);
   }
 }

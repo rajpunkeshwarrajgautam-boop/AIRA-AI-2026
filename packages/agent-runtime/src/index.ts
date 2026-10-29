@@ -530,7 +530,10 @@ export class AgentRuntime extends EventEmitter {
     if (!pendingRequest || pendingRequest.runId !== expectedRunId) return false;
 
     const run = await this.getRun(pendingRequest.runId);
-    if (!run || run.principalId !== resolverPrincipal.userId) return false;
+    if (
+      !run || run.principalId !== resolverPrincipal.userId ||
+      ['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)
+    ) return false;
 
     // Workflow step approvals are resolved by WorkflowEngine so that the same
     // decision is not first recorded here and then recorded a second time there.

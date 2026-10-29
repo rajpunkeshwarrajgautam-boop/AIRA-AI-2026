@@ -30,7 +30,7 @@
     "test:p1-6-7": "npx tsx test/p1-6-7-ttft-routing-verification.test.ts",
     "test:p1-5-db": "npx tsx test/p1-5-db-critical-path.test.ts",
     "test:router": "npx tsx test/intent-router.ts",
-    "test:workflow": "npx tsx test/workflow-engine.ts",
+    "test:workflow": "npx tsx test/workflow-engine.ts && npx tsx --test test/workflow-approval-authority.test.ts",
     "test:tools": "npx tsx test/tool-gateway-certification.ts",
     "test:aira-one-safety": "npx tsx --test test/aira-one-execution-safety.test.ts",
     "test:automation-policy-b": "npx tsx --test test/automation-policy-b.test.ts",

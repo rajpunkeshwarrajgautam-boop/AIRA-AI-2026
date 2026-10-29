@@ -49,6 +49,26 @@ export class WorkflowEngine {
       throw new Error(`Invalid workflow DAG: ${dagResult.error}`);
     }
 
+    const hasApprovalBoundary = definition.steps.some((step) =>
+      step.approvalRequired || step.sideEffectLevel === 'DESTRUCTIVE'
+    );
+    if (hasApprovalBoundary) {
+      const persistedParentRun = await this.runRepo.getRun(run.id);
+      if (
+        !persistedParentRun ||
+        run.principalId !== principal.userId ||
+        persistedParentRun.principalId !== principal.userId ||
+        (definition.principalId && definition.principalId !== principal.userId) ||
+        !principal.workspaceId ||
+        !run.workspaceId ||
+        !persistedParentRun.workspaceId ||
+        run.workspaceId !== persistedParentRun.workspaceId ||
+        principal.workspaceId !== persistedParentRun.workspaceId
+      ) {
+        throw new Error('Workflow approval requires an authoritative parent-run workspace matching the workflow owner.');
+      }
+    }
+
     await this.workflowRepo.saveWorkflowDefinition(definition);
 
     const initialStepStates: Record<string, WorkflowStepState> = {};
