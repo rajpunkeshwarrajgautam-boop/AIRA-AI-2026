@@ -189,7 +189,6 @@ describe('AIRA Behavioral Intelligence — Adversarial Security Acceptance Suite
   it('Invariant 11: Real unauthorized execution attempts against ToolGateway are blocked at runtime', async () => {
     const { ToolGateway } = await import('../../packages/tool-runtime/src/gateway.js');
     const { ApprovalKernel } = await import('../../packages/approvals/src/index.js');
-    const { ToolLifecycleState, DurableToolCall, ApprovalRequest, ApprovalDecision } = await import('../../packages/contracts/src/index.js');
 
     // In-memory isolated test repository to exercise runtime gateway mechanics without external DB dependencies
     class TestToolCallRepo {
@@ -223,6 +222,16 @@ describe('AIRA Behavioral Intelligence — Adversarial Security Acceptance Suite
     const testGrantRepo = new TestGrantRepo();
     const kernel = new ApprovalKernel(testApprovalRepo as any, testGrantRepo as any, { autoApproveRead: true });
     const gateway = new ToolGateway(testToolRepo as any, kernel);
+    let protectedAdapterCalls = 0;
+    const browserClickTool = gateway.getTool('browser_click');
+    assert.ok(browserClickTool, 'Browser click tool must be registered');
+    gateway.registerTool({
+      definition: browserClickTool.definition,
+      execute: async () => {
+        protectedAdapterCalls++;
+        return { clicked: true };
+      }
+    });
 
     // Sub-test 11A: Principal lacks required write scope -> Hard permission rejection
     const readOnlyPrincipal = {
@@ -249,6 +258,7 @@ describe('AIRA Behavioral Intelligence — Adversarial Security Acceptance Suite
     const authorizedPrincipal = {
       userId: 'usr_dev_100',
       sessionId: 'sess_dev_100',
+      workspaceId: 'ws_dev_100',
       roles: ['developer'],
       scopes: ['files.read', 'files.write', 'browser.write']
     };
@@ -262,8 +272,15 @@ describe('AIRA Behavioral Intelligence — Adversarial Security Acceptance Suite
       }
     });
 
-    // Execution must NOT proceed autonomously; must be suspended awaiting approval
+    // Execution must NOT proceed autonomously; must be suspended awaiting approval.
+    assert.strictEqual(approvalSuspensionResult.isError, false, 'Valid approval infrastructure should create a pending request');
+    assert.strictEqual((approvalSuspensionResult.output as any)?.approvalRequired, true);
     assert.strictEqual((approvalSuspensionResult.output as any)?.status, 'WAITING_FOR_APPROVAL', 'Execution must suspend awaiting human approval');
     assert.ok((approvalSuspensionResult.output as any)?.requestId, 'Must generate approval request');
+    assert.strictEqual(protectedAdapterCalls, 0, 'Protected adapter must not run before approval');
+    const pendingRequest = await kernel.getPendingRequest((approvalSuspensionResult.output as any).requestId);
+    assert.strictEqual(pendingRequest?.runId, 'run_approval_suspended_1');
+    assert.strictEqual(pendingRequest?.workspaceId, 'ws_dev_100');
+    assert.strictEqual(pendingRequest?.permissionLevel, 'WRITE');
   });
 });

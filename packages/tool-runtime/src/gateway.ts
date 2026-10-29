@@ -177,7 +177,21 @@ export class ToolGateway extends EventEmitter {
       };
     }
 
-    // STEP 3: Verify ExecutionPrincipal Authenticity
+    // STEP 3: Verify run and ExecutionPrincipal identity before evaluating grants.
+    if (typeof runId !== 'string' || runId.trim().length === 0) {
+      const errorMsg = 'Invalid or missing run identity.';
+      return {
+        toolCallId: callId,
+        output: null,
+        error: errorMsg,
+        errorCode: ToolGatewayErrorCodes.TOOL_PERMISSION_DENIED,
+        isError: true,
+        durationMs: Date.now() - startTime,
+        timestamp: Date.now(),
+        artifacts: []
+      };
+    }
+
     if (!principal || !principal.userId || !principal.sessionId) {
       const errorMsg = 'Invalid or unauthenticated ExecutionPrincipal.';
       return {

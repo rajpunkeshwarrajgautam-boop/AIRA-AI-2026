@@ -156,10 +156,13 @@ async function repositoryWithCompletedCall(
 
 function inMemoryApprovalKernel(options: {
   failSaveRequest?: boolean;
-  approved?: boolean;
   requestSink?: ApprovalRequest[];
 } = {}): ApprovalKernel {
   const requests = new Map<string, ApprovalRequest>();
+  const sessionGrants = new Set<string>();
+  const alwaysGrants = new Set<string>();
+  const grantKey = (runId: string, toolName: string, principalId: string, permission: PermissionLevel) =>
+    `${runId}\u0000${toolName}\u0000${principalId}\u0000${permission}`;
   const approvalRepository = {
     async saveRequest(request: ApprovalRequest) {
       if (options.failSaveRequest) throw new Error('simulated approval persistence failure');
@@ -182,11 +185,19 @@ function inMemoryApprovalKernel(options: {
     }
   };
   const grantRepository = {
-    async grantSession() {},
-    async grantAlways() {},
-    async hasSessionGrant() { return false; },
-    async hasAlwaysGrant() { return options.approved === true; },
-    async clearSession() {}
+    async grantSession(runId: string, toolName: string, principalId: string, permission: PermissionLevel) {
+      sessionGrants.add(grantKey(runId, toolName, principalId, permission));
+    },
+    async grantAlways(toolName: string, principalId: string, permission: PermissionLevel, runId: string) {
+      alwaysGrants.add(grantKey(runId, toolName, principalId, permission));
+    },
+    async hasSessionGrant(runId: string, toolName: string, principalId: string, permission: PermissionLevel) {
+      return sessionGrants.has(grantKey(runId, toolName, principalId, permission));
+    },
+    async hasAlwaysGrant(toolName: string, principalId: string, permission: PermissionLevel, runId: string) {
+      return alwaysGrants.has(grantKey(runId, toolName, principalId, permission));
+    },
+    async clearSession() { sessionGrants.clear(); }
   };
 
   return new ApprovalKernel(approvalRepository, grantRepository);
@@ -217,6 +228,34 @@ test('approval-required execution fails closed when authenticated workspace cont
 
   assert.equal(result.isError, true);
   assert.equal(result.errorCode, 'TOOL_APPROVAL_DENIED');
+  assert.equal(result.output, null);
+  assert.equal(adapterCalls, 0);
+  assert.equal(requests.length, 0);
+});
+
+test('approval-required execution denies missing principal or run identity before approval persistence', async () => {
+  let adapterCalls = 0;
+  const requests: ApprovalRequest[] = [];
+  const gateway = createGateway(
+    () => { adapterCalls++; return { ok: true }; },
+    inMemoryApprovalKernel({ requestSink: requests })
+  );
+
+  for (const invalid of [
+    { label: 'empty principal user ID', context: { runId: 'run_gateway_approval_test', principal: { ...principal, userId: '' } } },
+    { label: 'empty principal session ID', context: { runId: 'run_gateway_approval_test', principal: { ...principal, sessionId: '' } } },
+    { label: 'blank run ID', context: { runId: '   ', principal } }
+  ]) {
+    const result = await gateway.execute({
+      toolName: 'approval_test_write',
+      arguments: {},
+      context: invalid.context
+    });
+    assert.equal(result.isError, true, invalid.label);
+    assert.equal(result.errorCode, 'TOOL_PERMISSION_DENIED', invalid.label);
+    assert.equal(result.output, null, invalid.label);
+  }
+
   assert.equal(adapterCalls, 0);
   assert.equal(requests.length, 0);
 });
@@ -507,21 +546,45 @@ test('unapproved write remains pending and rejected write never invokes adapter'
 
   const decision = await kernel.decide(pending.output!.requestId, 'REJECT', principal.userId);
   assert.equal(decision.approved, false);
-  assert.equal(adapterCalls, 0);
+
+  const retry = await gateway.execute(invocation());
+  assert.equal(retry.isError, false);
+  assert.equal(retry.output?.status, 'WAITING_FOR_APPROVAL');
+  assert.equal(adapterCalls, 0, 'Rejected authorization must never dispatch the adapter');
 });
 
-test('approved write executes exactly once', async () => {
+test('approved write executes exactly once through the persisted approval and session-grant path', async () => {
   let adapterCalls = 0;
+  const requests: ApprovalRequest[] = [];
+  const kernel = inMemoryApprovalKernel({ requestSink: requests });
   const gateway = createGateway(
     () => { adapterCalls++; return { ok: true }; },
-    inMemoryApprovalKernel({ approved: true })
+    kernel
   );
+
+  const pending = await gateway.execute(invocation());
+  assert.equal(pending.isError, false);
+  assert.equal(pending.output?.status, 'WAITING_FOR_APPROVAL');
+  assert.ok(pending.output?.requestId);
+  assert.equal(adapterCalls, 0, 'Adapter must remain undispatched while approval is pending');
+  assert.equal(requests.length, 1);
+
+  const decision = await kernel.decide(pending.output!.requestId, 'ALLOW_SESSION', principal.userId);
+  assert.equal(decision.approved, true);
+  assert.equal(decision.applied, true);
+
+  const crossRun = await gateway.execute({
+    ...invocation(),
+    context: { ...invocation().context, runId: 'run_another_principal_scope' }
+  });
+  assert.equal(crossRun.output?.status, 'WAITING_FOR_APPROVAL', 'Session grant must remain scoped to its originating run');
+  assert.equal(adapterCalls, 0, 'Grant from another run must not dispatch the adapter');
 
   const result = await gateway.execute(invocation());
 
   assert.equal(result.isError, false);
   assert.deepEqual(result.output, { ok: true });
-  assert.equal(adapterCalls, 1);
+  assert.equal(adapterCalls, 1, 'Authorized retry should dispatch exactly once');
 });
 
 test('read-only tool remains executable without ApprovalKernel', async () => {
