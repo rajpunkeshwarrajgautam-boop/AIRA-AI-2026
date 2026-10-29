@@ -7,6 +7,7 @@ import type { ApprovalRequest, ExecutionPrincipal, PermissionLevel, ToolDefiniti
 const principal: ExecutionPrincipal = {
   userId: 'user_gateway_approval_test',
   sessionId: 'session_gateway_approval_test',
+  workspaceId: 'workspace_gateway_approval_test',
   role: 'user'
 };
 
@@ -120,11 +121,11 @@ function createGateway(
   return createGatewayWithDefinition(writeDefinition(), execute, approvalKernel);
 }
 
-function invocation(toolName = 'approval_test_write') {
+function invocation(toolName = 'approval_test_write', executionPrincipal = principal) {
   return {
     toolName,
     arguments: {},
-    context: { runId: 'run_gateway_approval_test', principal }
+    context: { runId: 'run_gateway_approval_test', principal: executionPrincipal }
   };
 }
 
@@ -201,6 +202,23 @@ test('approval-required tool is denied and adapter is not called when ApprovalKe
   assert.equal(result.errorCode, 'TOOL_APPROVAL_DENIED');
   assert.match(result.error || '', /approval could not be verified/i);
   assert.equal(adapterCalls, 0);
+});
+
+test('approval-required execution fails closed when authenticated workspace context is missing', async () => {
+  let adapterCalls = 0;
+  const requests: ApprovalRequest[] = [];
+  const gateway = createGateway(
+    () => { adapterCalls++; return { ok: true }; },
+    inMemoryApprovalKernel({ requestSink: requests })
+  );
+  const { workspaceId: _workspaceId, ...principalWithoutWorkspace } = principal;
+
+  const result = await gateway.execute(invocation('approval_test_write', principalWithoutWorkspace));
+
+  assert.equal(result.isError, true);
+  assert.equal(result.errorCode, 'TOOL_APPROVAL_DENIED');
+  assert.equal(adapterCalls, 0);
+  assert.equal(requests.length, 0);
 });
 
 for (const toolCase of contradictoryToolCases) {

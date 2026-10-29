@@ -12,6 +12,7 @@ import {
   ApprovalDecision
 } from '../../contracts/src/index.js';
 import { ApprovalKernel } from '../../approvals/src/index.js';
+import type { OneTimeAuthorizationBinding } from '../../approvals/src/repositories.js';
 import { PostgresToolCallRepository, ToolCallRepository } from './repository.js';
 import { BrowserAdapter } from './adapters/browser-adapter.js';
 import { FileSystemAdapter } from './adapters/file-adapter.js';
@@ -303,10 +304,12 @@ export class ToolGateway extends EventEmitter {
 
     // STEP 8: Evaluate or consume an approval authorization.
     let onceAuthorizationClaimed = false;
+    let onceAuthorizationBinding: OneTimeAuthorizationBinding | undefined;
     if (requiresApproval) {
+      if (!principal.workspaceId) return this.approvalUnavailableResult(callId, runId, def.name, startTime);
       try {
         if (onceApprovalDecision) {
-          onceAuthorizationClaimed = await this.approvalKernel!.claimOnceAuthorization({
+          onceAuthorizationBinding = {
             requestId: context.approvalRequestId!,
             principalId: principal.userId,
             workspaceId: principal.workspaceId,
@@ -319,7 +322,8 @@ export class ToolGateway extends EventEmitter {
             toolPolicyFingerprint: approvedToolPolicyFingerprint,
             arguments: args,
             claimId: onceAuthorizationClaimId!
-          });
+          };
+          onceAuthorizationClaimed = await this.approvalKernel!.claimOnceAuthorization(onceAuthorizationBinding);
           if (!onceAuthorizationClaimed) {
             return this.approvalUnavailableResult(callId, runId, def.name, startTime);
           }
@@ -347,6 +351,7 @@ export class ToolGateway extends EventEmitter {
               initialToolCall,
               approvalPermissionLevel,
               `Action "${def.name}" requires user authorization under ${sideEffectLevel} policy.`,
+              principal.workspaceId,
               def.version,
               approvedToolPolicyFingerprint
             );
@@ -425,7 +430,7 @@ export class ToolGateway extends EventEmitter {
     // Persist dispatch intent before crossing the external side-effect boundary.
     // A crash after this point is treated as uncertain and cannot reuse ALLOW_ONCE.
     if (onceAuthorizationClaimed) {
-      const dispatched = await this.approvalKernel!.markOnceAuthorizationDispatched(context.approvalRequestId!, onceAuthorizationClaimId!);
+      const dispatched = await this.approvalKernel!.markOnceAuthorizationDispatched(onceAuthorizationBinding!);
       if (!dispatched) {
         await this.repository.updateToolCallStatus(
           callId,

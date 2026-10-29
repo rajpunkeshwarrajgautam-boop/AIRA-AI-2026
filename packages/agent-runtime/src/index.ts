@@ -547,8 +547,6 @@ export class AgentRuntime extends EventEmitter {
       );
     }
 
-    if (pendingRequest.toolCall.id.startsWith('call_step_')) return false;
-
     const { approved, request, applied } = await this.approvalKernel.decide(
       requestId,
       decision,
@@ -990,6 +988,10 @@ export class AgentRuntime extends EventEmitter {
       );
 
       if (requiresApproval) {
+        if (!run.workspaceId) {
+          await this.transitionRunState(runId, 'FAILED', 'Approval cannot be created without an authoritative workspace.');
+          return;
+        }
         run.executionCheckpoint = 'WAITING_FOR_APPROVAL';
         await this.saveRun(run);
         
@@ -999,6 +1001,7 @@ export class AgentRuntime extends EventEmitter {
           toolCall,
           toolApprovalPolicy?.permissionLevel || toolDef?.permissionLevel || 'DESTRUCTIVE',
           `Tool execution "${toolCall.name}" requires user confirmation due to ${run.routingDecision?.sideEffectLevel || toolDef?.sideEffectLevel || toolDef?.permissionLevel || 'DESTRUCTIVE'} policy.`,
+          run.workspaceId,
           toolDef?.version,
           toolApprovalPolicy?.fingerprint
         );

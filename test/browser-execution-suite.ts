@@ -31,6 +31,7 @@ async function runBrowserExecutionSuite() {
   const principalA: ExecutionPrincipal = {
     userId: 'usr_browser_alpha_' + sessionTag,
     sessionId: 'sess_browser_alpha_' + sessionTag,
+    workspaceId: 'ws_browser_alpha_' + sessionTag,
     roles: ['member'],
     scopes: ['browser.read', 'browser.write']
   };
@@ -38,9 +39,33 @@ async function runBrowserExecutionSuite() {
   const principalB: ExecutionPrincipal = {
     userId: 'usr_browser_bravo_' + sessionTag,
     sessionId: 'sess_browser_bravo_' + sessionTag,
+    workspaceId: 'ws_browser_bravo_' + sessionTag,
     roles: ['member'],
     scopes: ['browser.read', 'browser.write']
   };
+
+  async function ensureParentRun(runId: string, principal: ExecutionPrincipal): Promise<void> {
+    const now = Date.now();
+    await db('runs').insert({
+      id: runId, principal_id: principal.userId, workspace_id: principal.workspaceId,
+      session_id: principal.sessionId, prompt: 'Disposable browser approval test run',
+      status: 'RUNNING', state: 'RUNNING', createdAt: now, updatedAt: now,
+      toolsUsed: '[]', toolCalls: '[]', toolResults: '[]'
+    }).onConflict('id').ignore();
+    const persisted = await db('runs').where({ id: runId }).first();
+    if (persisted?.principal_id !== principal.userId || persisted?.workspace_id !== principal.workspaceId) {
+      throw new Error('Browser test parent run owner/workspace mismatch.');
+    }
+  }
+
+  async function persistPendingApproval(requestId: string): Promise<void> {
+    const request = await approvalKernel.getPendingRequest(requestId);
+    assert(request, 'Approval request should remain pending before decision.');
+    await db('runs').where({ id: request.runId }).update({
+      pending_approval: JSON.stringify(request), state: 'WAITING_FOR_APPROVAL',
+      status: 'WAITING_FOR_APPROVAL', execution_checkpoint: 'WAITING_FOR_APPROVAL', updatedAt: Date.now()
+    });
+  }
 
   // Start a local test HTTP server to host safe form and adversarial prompt injection pages
   let testServerPort = 3899;
@@ -93,6 +118,13 @@ async function runBrowserExecutionSuite() {
   const localBaseUrl = `http://127.0.0.1:${testServerPort}`;
 
   try {
+    const parentRuns = [
+      'run_b1_', 'run_b2_nav_', 'run_b2_type_', 'run_b2_extract_',
+      'run_b3_step1_', 'run_b3_step2_', 'run_b4_', 'run_b5_', 'run_b6_',
+      'run_b7_a_', 'run_b8_brave_unset_'
+    ].map((prefix) => ensureParentRun(prefix + sessionTag, principalA));
+    parentRuns.push(ensureParentRun('run_b7_b_' + sessionTag, principalB));
+    await Promise.all(parentRuns);
     // -------------------------------------------------------------------------
     // TEST BROWSER-1: Real Navigation to https://example.com
     // -------------------------------------------------------------------------
@@ -142,7 +174,8 @@ async function runBrowserExecutionSuite() {
     assert.strictEqual(typeRes.output?.status, 'WAITING_FOR_APPROVAL');
     assert.strictEqual(typeRes.output?.approvalRequired, true);
 
-    // Approve the typing action
+    // Persist the exact parent-run checkpoint before the transactional decision.
+    await persistPendingApproval(typeRes.output.requestId);
     await approvalKernel.decide(typeRes.output.requestId, 'ALLOW_SESSION', principalA.userId);
 
     // Re-execute with approval granted

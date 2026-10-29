@@ -315,6 +315,10 @@ export class WorkflowEngine {
       );
 
       if (!isApproved) {
+        const parentRun = await this.runRepo.getRun(runId);
+        if (!parentRun || parentRun.principalId !== workflowRun.principalId || !parentRun.workspaceId) {
+          throw new Error('Workflow approval requires an authoritative parent-run workspace matching the workflow owner.');
+        }
         await this.withRunLock(workflowRunId, async () => {
           const fresh = (await this.workflowRepo.getWorkflowRun(workflowRunId))!;
           fresh.state = 'WAITING_FOR_APPROVAL';
@@ -336,7 +340,8 @@ export class WorkflowEngine {
             timestamp: Date.now()
           },
           stepDef.sideEffectLevel,
-          `Workflow step "${stepDef.name}" requires user approval before execution.`
+          `Workflow step "${stepDef.name}" requires user approval before execution.`,
+          parentRun.workspaceId
         );
 
         // Update run pending approval
@@ -623,7 +628,7 @@ Current UTC time: ${now.toISOString()}`;
       : decision === 'REJECTED'
         ? 'REJECT'
         : decision;
-    const resolution = await this.approvalKernel.resolveWorkflowDecision(requestId, approvalDecision, principal.userId);
+    const resolution = await this.approvalKernel.resolveWorkflowDecision(requestId, approvalDecision, principal.userId, workflowRun.id, stepId);
     if (!resolution.applied) return true; // An identical retry never schedules another dispatch.
 
     // Production AgentRuntime installs this handler. PostgreSQL committed the

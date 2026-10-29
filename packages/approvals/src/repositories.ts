@@ -8,7 +8,7 @@ export interface ApprovalGrant {
   runId: string;
   tool: string;
   riskCeiling: PermissionLevel;
-  workspaceId?: string;
+  workspaceId: string;
 }
 
 export interface AtomicApprovalResolution {
@@ -25,26 +25,33 @@ export type ApprovalResumptionState =
   | 'CANCELLED_REVOKED'
   | 'RECOVERABLY_FAILED';
 
-export interface ApprovalResumptionEvent {
+interface ApprovalResumptionEventBase {
   id: string;
   approvalId: string;
   runId: string;
   principalId: string;
   workspaceId?: string;
   decision: ApprovalDecision;
-  targetType: 'RUN' | 'WORKFLOW';
-  workflowStepId?: string;
   state: ApprovalResumptionState;
   attempts: number;
   fencingToken: number;
 }
 
+export type ApprovalResumptionEvent = ApprovalResumptionEventBase & (
+  | { targetType: 'RUN'; workflowRunId?: never; workflowStepId?: never }
+  | { targetType: 'WORKFLOW'; workflowRunId: string; workflowStepId: string }
+);
+
 export type ApprovalGrantRequest = Pick<ApprovalGrant, 'scope' | 'riskCeiling'>;
+
+export type ApprovalResolutionTarget =
+  | { type: 'RUN' }
+  | { type: 'WORKFLOW'; workflowRunId: string; workflowStepId: string };
 
 export interface OneTimeAuthorizationBinding {
   requestId: string;
   principalId: string;
-  workspaceId?: string;
+  workspaceId: string;
   runId: string;
   toolCallId: string;
   toolId: string;
@@ -66,12 +73,13 @@ export interface ApprovalRepository {
     decision: ApprovalDecision,
     resolvedBy: string,
     grant?: ApprovalGrantRequest,
-    issueOnceAuthorization?: boolean
+    issueOnceAuthorization?: boolean,
+    target?: ApprovalResolutionTarget
   ): Promise<AtomicApprovalResolution>;
   claimOnceAuthorization?(binding: OneTimeAuthorizationBinding): Promise<boolean>;
-  markOnceAuthorizationDispatched?(requestId: string, claimId: string): Promise<boolean>;
+  markOnceAuthorizationDispatched?(binding: OneTimeAuthorizationBinding): Promise<boolean>;
   finishOnceAuthorization?(requestId: string, claimId: string, outcome: 'COMPLETED' | 'FAILED'): Promise<boolean>;
-  claimApprovalResumption?(owner: string, leaseMs: number): Promise<ApprovalResumptionEvent | undefined>;
+  claimApprovalResumption?(owner: string, leaseMs: number, approvalId?: string): Promise<ApprovalResumptionEvent | undefined>;
   applyApprovalResumption?(event: ApprovalResumptionEvent, owner: string): Promise<boolean>;
   completeApprovalResumption?(eventId: string, result: unknown): Promise<boolean>;
   failApprovalResumption?(event: ApprovalResumptionEvent, owner: string, error: string): Promise<boolean>;
@@ -100,7 +108,7 @@ function fingerprint(value: unknown): string {
 function stableGrantId(grant: ApprovalGrant): string {
   const scopeId = grant.scope === 'SESSION' ? grant.runId : 'all';
   const digest = createHash('sha256')
-    .update(JSON.stringify([grant.scope, grant.principalId, grant.workspaceId || null, scopeId, grant.tool]))
+    .update(JSON.stringify([grant.scope, grant.principalId, grant.workspaceId, scopeId, grant.tool]))
     .digest('hex');
   return `gr_${digest}`;
 }
@@ -121,6 +129,7 @@ function mapApprovalRow(row: any): ApprovalRequest {
     reason: row.reason || '',
     sanitizedPreview: typeof row.arguments === 'string' ? JSON.parse(row.arguments) : (row.arguments || {}),
     requestedAt: Number(row.created_at),
+    workspaceId: row.run_workspace_id || row.workspace_id || undefined,
     permissionLevel: row.permission_level || undefined,
     toolDefinitionVersion: row.tool_definition_version ? Number(row.tool_definition_version) : undefined,
     toolPolicyFingerprint: row.tool_policy_fingerprint || undefined,
@@ -134,17 +143,9 @@ export class PostgresApprovalRepository implements ApprovalRepository {
   async saveRequest(request: ApprovalRequest): Promise<void> {
     await db.transaction(async (trx) => {
       const existingRun = await trx('runs').where({ id: request.runId }).first();
-      if (!existingRun) {
-        await trx('runs').insert({
-          id: request.runId,
-          prompt: `Action Approval: ${request.toolCall.name}`,
-          status: 'RUNNING',
-          state: 'RUNNING',
-          created_at: request.requestedAt,
-          updated_at: request.requestedAt,
-          principal_id: 'usr_system',
-          session_id: 'approval_session'
-        }).onConflict('id').ignore();
+      if (!existingRun) throw new Error('Approval requires an existing authenticated parent run.');
+      if (!existingRun.workspace_id || request.workspaceId !== existingRun.workspace_id) {
+        throw new Error('Approval requires a workspace matching the authoritative parent run.');
       }
 
       await trx('tool_calls').insert({
@@ -203,8 +204,9 @@ export class PostgresApprovalRepository implements ApprovalRepository {
   async getRequest(id: string): Promise<ApprovalRequest | undefined> {
     const row = await db('approvals')
       .join('tool_calls', 'approvals.tool_call_id', 'tool_calls.id')
+      .join('runs', 'approvals.run_id', 'runs.id')
       .where('approvals.id', id)
-      .select('approvals.*', 'tool_calls.tool', 'tool_calls.tool_id', 'tool_calls.arguments', 'tool_calls.started_at')
+      .select('approvals.*', 'tool_calls.tool', 'tool_calls.tool_id', 'tool_calls.arguments', 'tool_calls.started_at', 'runs.workspace_id as run_workspace_id')
       .first();
     return row ? mapApprovalRow(row) : undefined;
   }
@@ -212,9 +214,10 @@ export class PostgresApprovalRepository implements ApprovalRepository {
   async getPendingForRun(runId: string): Promise<ApprovalRequest[]> {
     const rows = await db('approvals')
       .join('tool_calls', 'approvals.tool_call_id', 'tool_calls.id')
+      .join('runs', 'approvals.run_id', 'runs.id')
       .where('approvals.run_id', runId)
       .andWhere('approvals.status', 'PENDING')
-      .select('approvals.*', 'tool_calls.tool', 'tool_calls.tool_id', 'tool_calls.arguments', 'tool_calls.started_at');
+      .select('approvals.*', 'tool_calls.tool', 'tool_calls.tool_id', 'tool_calls.arguments', 'tool_calls.started_at', 'runs.workspace_id as run_workspace_id');
     return rows.map(mapApprovalRow);
   }
 
@@ -230,7 +233,8 @@ export class PostgresApprovalRepository implements ApprovalRepository {
     decision: ApprovalDecision,
     resolvedBy: string,
     grant?: ApprovalGrantRequest,
-    issueOnceAuthorization = false
+    issueOnceAuthorization = false,
+    target: ApprovalResolutionTarget = { type: 'RUN' }
   ): Promise<AtomicApprovalResolution> {
     return db.transaction(async (trx) => {
       const row = await trx('approvals')
@@ -253,6 +257,7 @@ export class PostgresApprovalRepository implements ApprovalRepository {
 
       if (!row) throw new Error('Approval request not found.');
       if (row.principal_id !== resolvedBy) throw new Error('Approval resolver is not the run owner.');
+      if (!row.workspace_id) throw new Error('Approval decision requires an authoritative parent-run workspace.');
       if (row.tool_call_principal_id && row.tool_call_principal_id !== resolvedBy) {
         throw new Error('Approval tool-call principal does not match the run owner.');
       }
@@ -289,7 +294,7 @@ export class PostgresApprovalRepository implements ApprovalRepository {
           principalId: resolvedBy,
           runId: grant.scope === 'SESSION' ? row.run_id : '',
           tool: row.tool,
-          workspaceId: row.workspace_id || undefined
+          workspaceId: row.workspace_id
         };
         const grantId = stableGrantId(persistedGrant);
         await trx('session_grants').insert({
@@ -304,13 +309,24 @@ export class PostgresApprovalRepository implements ApprovalRepository {
         }).onConflict('id').ignore();
       }
 
-      // Approval and resumption intent share this transaction. Only a still-pending
-      // run/workflow can receive an intent; stale or cancelled work fails closed.
-      const targetType: 'RUN' | 'WORKFLOW' = String(row.tool_call_id).startsWith('call_step_') ? 'WORKFLOW' : 'RUN';
-      const workflowStepId = targetType === 'WORKFLOW' ? String(row.tool_call_id).slice('call_step_'.length) : undefined;
-      const workflow = targetType === 'WORKFLOW'
-        ? await trx('workflow_runs').where({ run_id: row.run_id }).forUpdate().first()
-        : undefined;
+      // Workflow authority comes only from persisted workflow/run/step identity.
+      // Tool-call names and IDs are not sufficient to classify an intent.
+      const workflowRows = await trx('workflow_runs').where({ run_id: row.run_id }).forUpdate();
+      let workflow: any;
+      let workflowStepId: string | undefined;
+      if (target.type === 'WORKFLOW') {
+        if (workflowRows.length !== 1) throw new Error('Approval target does not resolve to exactly one persisted workflow run.');
+        workflow = workflowRows[0];
+        workflowStepId = target.workflowStepId;
+        if (
+          workflow.id !== target.workflowRunId || workflow.principal_id !== resolvedBy ||
+          workflow.state !== 'WAITING_FOR_APPROVAL' || workflow.pending_approval_step_id !== workflowStepId ||
+          row.tool_call_id !== `call_step_${workflowStepId}`
+        ) throw new Error('Workflow approval target does not match the authenticated pending workflow step.');
+      } else if (workflowRows.length !== 0) {
+        throw new Error('A workflow-linked run cannot be resolved through the generic run approval path.');
+      }
+      const targetType = target.type;
       const run = await trx('runs').where({ id: row.run_id }).forUpdate().first();
       const pendingApproval = typeof run?.pending_approval === 'string'
         ? JSON.parse(run.pending_approval)
@@ -331,13 +347,14 @@ export class PostgresApprovalRepository implements ApprovalRepository {
         throw new Error('Approval resumption target is stale, cancelled, or has mismatched identity.');
       }
       if (targetType === 'WORKFLOW') {
-        if (
-          !workflow || workflow.principal_id !== resolvedBy ||
-          workflow.state !== 'WAITING_FOR_APPROVAL' || workflow.pending_approval_step_id !== workflowStepId
-        ) {
-          throw new Error('Workflow approval resumption target is stale or has mismatched identity.');
+        const steps = await trx('workflow_steps')
+          .where({ workflow_run_id: workflow.id, step_id: workflowStepId })
+          .forUpdate();
+        if (steps.length !== 1 || steps[0].state !== 'WAITING_FOR_APPROVAL') {
+          throw new Error('The authoritative workflow step is missing, ambiguous, or no longer waiting for approval.');
         }
-      } else if (String(run.state || run.status) !== 'WAITING_FOR_APPROVAL') {
+      }
+      if (String(run.state || run.status) !== 'WAITING_FOR_APPROVAL') {
         throw new Error('Run is no longer waiting for this approval.');
       }
 
@@ -349,6 +366,7 @@ export class PostgresApprovalRepository implements ApprovalRepository {
         workspace_id: row.workspace_id || null,
         decision,
         target_type: targetType,
+        workflow_run_id: target.type === 'WORKFLOW' ? target.workflowRunId : null,
         workflow_step_id: workflowStepId || null,
         state: 'APPROVED_UNCLAIMED',
         attempts: 0,
@@ -365,7 +383,7 @@ export class PostgresApprovalRepository implements ApprovalRepository {
     });
   }
 
-  async claimApprovalResumption(owner: string, leaseMs: number): Promise<ApprovalResumptionEvent | undefined> {
+  async claimApprovalResumption(owner: string, leaseMs: number, approvalId?: string): Promise<ApprovalResumptionEvent | undefined> {
     return db.transaction(async (trx) => {
       const now = Date.now();
       const row = await trx('approval_resumption_outbox')
@@ -374,11 +392,22 @@ export class PostgresApprovalRepository implements ApprovalRepository {
             .whereIn('state', ['APPROVED_UNCLAIMED', 'RECOVERABLY_FAILED'])
             .andWhere((ready) => ready.whereNull('next_attempt_at').orWhere('next_attempt_at', '<=', now)))
           .orWhere((expired) => expired.where('state', 'CLAIMED_NOT_DISPATCHED').andWhere('lease_until', '<=', now)))
+        .modify((query) => { if (approvalId) query.where('approval_id', approvalId); })
         .orderBy('created_at', 'asc')
         .forUpdate()
         .skipLocked()
         .first();
       if (!row) return undefined;
+      const validRunTarget = row.target_type === 'RUN' && !row.workflow_run_id && !row.workflow_step_id;
+      const validWorkflowTarget = row.target_type === 'WORKFLOW' && Boolean(row.workflow_run_id) && Boolean(row.workflow_step_id);
+      if (!validRunTarget && !validWorkflowTarget) {
+        await trx('approval_resumption_outbox').where({ id: row.id }).update({
+          state: 'CANCELLED_REVOKED',
+          last_error: 'Resumption intent has an invalid or incomplete authoritative target.',
+          claimed_by: null, lease_until: null, updated_at: now, completed_at: now
+        });
+        return undefined;
+      }
       const fencingToken = Number(row.fencing_token || 0) + 1;
       await trx('approval_resumption_outbox').where({ id: row.id }).update({
         state: 'CLAIMED_NOT_DISPATCHED',
@@ -389,19 +418,20 @@ export class PostgresApprovalRepository implements ApprovalRepository {
         next_attempt_at: null,
         updated_at: now
       });
-      return {
+      const eventBase = {
         id: row.id,
         approvalId: row.approval_id,
         runId: row.run_id,
         principalId: row.principal_id,
         workspaceId: row.workspace_id || undefined,
-        decision: row.decision,
-        targetType: row.target_type,
-        workflowStepId: row.workflow_step_id || undefined,
-        state: 'CLAIMED_NOT_DISPATCHED',
+        decision: row.decision as ApprovalDecision,
+        state: 'CLAIMED_NOT_DISPATCHED' as const,
         attempts: Number(row.attempts || 0) + 1,
         fencingToken
       };
+      return validWorkflowTarget
+        ? { ...eventBase, targetType: 'WORKFLOW' as const, workflowRunId: row.workflow_run_id, workflowStepId: row.workflow_step_id }
+        : { ...eventBase, targetType: 'RUN' as const };
     });
   }
 
@@ -416,6 +446,7 @@ export class PostgresApprovalRepository implements ApprovalRepository {
         outbox.approval_id !== event.approvalId || outbox.run_id !== event.runId ||
         outbox.principal_id !== event.principalId || (outbox.workspace_id || undefined) !== event.workspaceId ||
         outbox.decision !== event.decision || outbox.target_type !== event.targetType ||
+        (outbox.workflow_run_id || undefined) !== event.workflowRunId ||
         (outbox.workflow_step_id || undefined) !== event.workflowStepId
       ) return false;
 
@@ -423,15 +454,20 @@ export class PostgresApprovalRepository implements ApprovalRepository {
       const toolCall = approval
         ? await trx('tool_calls').where({ id: approval.tool_call_id, run_id: event.runId }).forUpdate().first()
         : undefined;
-      const workflow = event.targetType === 'WORKFLOW'
-        ? await trx('workflow_runs').where({ run_id: event.runId }).forUpdate().first()
-        : undefined;
+      const workflowRows = await trx('workflow_runs').where({ run_id: event.runId }).forUpdate();
+      const workflow = workflowRows.length === 1 ? workflowRows[0] : undefined;
       const run = await trx('runs').where({ id: event.runId }).forUpdate().first();
       if (
         !approval || approval.status !== event.decision || approval.resolved_by !== event.principalId ||
         approval.run_id !== event.runId || !toolCall || !run ||
         run.principal_id !== event.principalId || (run.workspace_id || undefined) !== event.workspaceId ||
         (toolCall.principal_id && toolCall.principal_id !== event.principalId) ||
+        (event.targetType === 'WORKFLOW'
+          ? workflowRows.length !== 1 || workflow?.id !== event.workflowRunId ||
+            workflow.principal_id !== event.principalId || workflow.state !== 'WAITING_FOR_APPROVAL' ||
+            workflow.pending_approval_step_id !== event.workflowStepId ||
+            toolCall.id !== `call_step_${event.workflowStepId}`
+          : workflowRows.length !== 0) ||
         ['COMPLETED', 'FAILED', 'CANCELLED'].includes(String(run.state || run.status))
       ) {
         await trx('approval_resumption_outbox').where({ id: event.id }).update({
@@ -522,14 +558,17 @@ export class PostgresApprovalRepository implements ApprovalRepository {
           });
           return false;
         }
-        const step = await trx('workflow_steps').where({ workflow_run_id: workflow.id, step_id: event.workflowStepId }).forUpdate().first();
-        if (!step || step.state !== 'WAITING_FOR_APPROVAL') {
+        const steps = await trx('workflow_steps')
+          .where({ workflow_run_id: workflow.id, step_id: event.workflowStepId })
+          .forUpdate();
+        if (steps.length !== 1 || steps[0].state !== 'WAITING_FOR_APPROVAL') {
           await trx('approval_resumption_outbox').where({ id: event.id }).update({
-            state: 'CANCELLED_REVOKED', last_error: 'Workflow step is no longer waiting for this approval.',
+            state: 'CANCELLED_REVOKED', last_error: 'Workflow step is missing, ambiguous, or no longer waiting for this approval.',
             claimed_by: null, lease_until: null, updated_at: now, completed_at: now
           });
           return false;
         }
+        const step = steps[0];
         const stepStates = typeof workflow.step_states === 'string' ? JSON.parse(workflow.step_states) : workflow.step_states;
         stepStates[event.workflowStepId!] = rejected ? 'FAILED' : 'READY';
         await trx('workflow_runs').where({ id: workflow.id, state: 'WAITING_FOR_APPROVAL' }).update({
@@ -557,7 +596,7 @@ export class PostgresApprovalRepository implements ApprovalRepository {
         recovery_owner: rejected ? null : runRecoveryOwner,
         recovery_claimed_at: rejected ? null : now,
         recovery_lease_until: rejected ? null : now + 30_000,
-        updated_at: now
+        updatedAt: now
       });
 
       await trx('approval_resumption_outbox').where({ id: event.id }).update({
@@ -578,10 +617,27 @@ export class PostgresApprovalRepository implements ApprovalRepository {
   }
 
   async failApprovalResumption(event: ApprovalResumptionEvent, owner: string, error: string): Promise<boolean> {
+    if (event.state !== 'CLAIMED_NOT_DISPATCHED') return false;
     const now = Date.now();
-    const updated = await db('approval_resumption_outbox').where({
-      id: event.id, state: 'CLAIMED_NOT_DISPATCHED', claimed_by: owner, fencing_token: event.fencingToken
-    }).update({
+    const query = db('approval_resumption_outbox').where({
+      id: event.id,
+      approval_id: event.approvalId,
+      run_id: event.runId,
+      principal_id: event.principalId,
+      decision: event.decision,
+      target_type: event.targetType,
+      state: 'CLAIMED_NOT_DISPATCHED',
+      claimed_by: owner,
+      fencing_token: event.fencingToken
+    }).andWhere('lease_until', '>', now);
+    if (event.workspaceId) query.andWhere('workspace_id', event.workspaceId);
+    else query.whereNull('workspace_id');
+    if (event.targetType === 'WORKFLOW') {
+      query.andWhere({ workflow_run_id: event.workflowRunId, workflow_step_id: event.workflowStepId });
+    } else {
+      query.whereNull('workflow_run_id').whereNull('workflow_step_id');
+    }
+    const updated = await query.update({
       state: 'RECOVERABLY_FAILED', last_error: error.slice(0, 4000),
       claimed_by: null, lease_until: null, next_attempt_at: now + Math.min(60_000, 1_000 * 2 ** Math.min(event.attempts, 6)),
       updated_at: now
@@ -591,33 +647,54 @@ export class PostgresApprovalRepository implements ApprovalRepository {
 
   async claimOnceAuthorization(binding: OneTimeAuthorizationBinding): Promise<boolean> {
     return db.transaction(async (trx) => {
+      // Match applyApprovalResumption's lock order: outbox, approval/tool call,
+      // then run. A joined FOR UPDATE here could lock rows in planner order and
+      // deadlock with a worker holding the outbox while validating the approval.
+      const outbox = await trx('approval_resumption_outbox')
+        .where({ approval_id: binding.requestId }).forUpdate().first();
+      if (
+        !outbox || outbox.state !== 'DISPATCHED_UNKNOWN' || outbox.target_type !== 'RUN' ||
+        outbox.decision !== 'ALLOW_ONCE' || outbox.run_id !== binding.runId ||
+        outbox.principal_id !== binding.principalId || outbox.workspace_id !== binding.workspaceId
+      ) return false;
+
       const row = await trx('approvals')
         .join('tool_calls', 'approvals.tool_call_id', 'tool_calls.id')
-        .join('runs', 'approvals.run_id', 'runs.id')
         .where('approvals.id', binding.requestId)
         .select(
-          'approvals.*',
-          'tool_calls.tool',
-          'tool_calls.tool_id',
-          'tool_calls.arguments',
-          'runs.principal_id',
-          'runs.workspace_id as run_workspace_id',
-          'runs.state as run_state'
+          'approvals.*', 'tool_calls.tool', 'tool_calls.tool_id', 'tool_calls.arguments',
+          'tool_calls.permission', 'tool_calls.principal_id as tool_call_principal_id'
         )
-        .forUpdate()
+        .forUpdate('approvals', 'tool_calls')
         .first();
-      if (!row) return false;
+      const run = await trx('runs').where({ id: binding.runId })
+        .select('id', 'principal_id', 'workspace_id', 'state', 'status', 'pending_approval')
+        .forUpdate().first();
+      if (!row || !run) return false;
+      const pendingApproval = typeof run.pending_approval === 'string'
+        ? JSON.parse(run.pending_approval)
+        : run.pending_approval;
+      const pendingToolCall = pendingApproval?.toolCall;
+      const persistedArguments = typeof row.arguments === 'string' ? JSON.parse(row.arguments) : row.arguments;
       const now = Date.now();
       if (
-        row.status !== 'ALLOW_ONCE' ||
-        row.principal_id !== binding.principalId ||
-        row.run_state !== 'RUNNING' ||
-        (row.run_workspace_id || undefined) !== binding.workspaceId ||
+        row.status !== 'ALLOW_ONCE' || row.resolved_by !== binding.principalId ||
+        run.principal_id !== binding.principalId || run.state !== 'RUNNING' ||
+        !run.workspace_id || run.workspace_id !== binding.workspaceId ||
         row.run_id !== binding.runId || row.tool_call_id !== binding.toolCallId || row.tool_id !== binding.toolId ||
-        row.tool !== binding.toolName || row.permission_level !== binding.permissionLevel ||
+        (row.tool_call_principal_id && row.tool_call_principal_id !== binding.principalId) ||
+        row.tool !== binding.toolName || row.permission !== binding.permissionLevel ||
+        row.permission_level !== binding.permissionLevel ||
         Number(row.tool_definition_version) !== binding.toolDefinitionVersion ||
         row.tool_policy_fingerprint !== binding.toolPolicyFingerprint ||
-        row.argument_fingerprint !== fingerprint(binding.arguments)
+        row.argument_fingerprint !== fingerprint(binding.arguments) ||
+        fingerprint(persistedArguments) !== fingerprint(binding.arguments) ||
+        pendingApproval?.id !== binding.requestId || pendingApproval?.runId !== binding.runId ||
+        pendingToolCall?.id !== binding.toolCallId || pendingToolCall?.name !== binding.toolName ||
+        pendingToolCall?.toolId !== binding.toolId ||
+        fingerprint(pendingToolCall?.arguments) !== fingerprint(binding.arguments) ||
+        Number(pendingApproval?.toolDefinitionVersion) !== binding.toolDefinitionVersion ||
+        pendingApproval?.toolPolicyFingerprint !== binding.toolPolicyFingerprint
       ) return false;
 
       // A stale pre-dispatch claimant can be safely reclaimed because the
@@ -654,21 +731,62 @@ export class PostgresApprovalRepository implements ApprovalRepository {
     });
   }
 
-  async markOnceAuthorizationDispatched(requestId: string, claimId: string): Promise<boolean> {
+  async markOnceAuthorizationDispatched(binding: OneTimeAuthorizationBinding): Promise<boolean> {
     return db.transaction(async (trx) => {
-      const row = await trx('approvals')
-        .join('runs', 'approvals.run_id', 'runs.id')
-        .where('approvals.id', requestId)
-        .select('approvals.status', 'approvals.once_state', 'approvals.once_claim_id', 'approvals.once_claim_expires_at', 'runs.state as run_state')
-        .forUpdate('approvals', 'runs')
-        .first();
+      // Revalidate the entire binding at the last transactional boundary before
+      // the adapter is invoked; the claim and dispatch are separate transactions.
+      const outbox = await trx('approval_resumption_outbox')
+        .where({ approval_id: binding.requestId }).forUpdate().first();
       if (
-        !row || row.status !== 'ALLOW_ONCE' || row.once_state !== 'CLAIMED' ||
-        row.once_claim_id !== claimId || Number(row.once_claim_expires_at) <= Date.now() || row.run_state !== 'RUNNING'
+        !outbox || outbox.state !== 'DISPATCHED_UNKNOWN' || outbox.target_type !== 'RUN' ||
+        outbox.decision !== 'ALLOW_ONCE' || outbox.run_id !== binding.runId ||
+        outbox.principal_id !== binding.principalId || outbox.workspace_id !== binding.workspaceId
       ) return false;
+
+      const row = await trx('approvals')
+        .join('tool_calls', 'approvals.tool_call_id', 'tool_calls.id')
+        .where('approvals.id', binding.requestId)
+        .select(
+          'approvals.*', 'tool_calls.tool', 'tool_calls.tool_id', 'tool_calls.arguments',
+          'tool_calls.permission', 'tool_calls.principal_id as tool_call_principal_id'
+        )
+        .forUpdate('approvals', 'tool_calls')
+        .first();
+      const run = await trx('runs').where({ id: binding.runId })
+        .select('id', 'principal_id', 'workspace_id', 'state', 'status', 'pending_approval')
+        .forUpdate().first();
+      if (!row || !run) return false;
+      const now = Date.now();
+      const pendingApproval = typeof run.pending_approval === 'string'
+        ? JSON.parse(run.pending_approval)
+        : run.pending_approval;
+      const pendingToolCall = pendingApproval?.toolCall;
+      const persistedArguments = typeof row.arguments === 'string' ? JSON.parse(row.arguments) : row.arguments;
+      if (
+        row.status !== 'ALLOW_ONCE' || row.once_state !== 'CLAIMED' || row.once_claim_id !== binding.claimId ||
+        Number(row.once_claim_expires_at) <= now || run.state !== 'RUNNING' ||
+        row.resolved_by !== binding.principalId || run.principal_id !== binding.principalId ||
+        run.id !== binding.runId || !run.workspace_id || run.workspace_id !== binding.workspaceId ||
+        row.run_id !== binding.runId || row.tool_call_id !== binding.toolCallId || row.tool_id !== binding.toolId ||
+        (row.tool_call_principal_id && row.tool_call_principal_id !== binding.principalId) ||
+        row.tool !== binding.toolName || row.permission !== binding.permissionLevel ||
+        row.permission_level !== binding.permissionLevel ||
+        Number(row.tool_definition_version) !== binding.toolDefinitionVersion ||
+        row.tool_policy_fingerprint !== binding.toolPolicyFingerprint ||
+        row.argument_fingerprint !== fingerprint(binding.arguments) ||
+        fingerprint(persistedArguments) !== fingerprint(binding.arguments) ||
+        pendingApproval?.id !== binding.requestId || pendingApproval?.runId !== binding.runId ||
+        pendingToolCall?.id !== binding.toolCallId || pendingToolCall?.name !== binding.toolName ||
+        pendingToolCall?.toolId !== binding.toolId ||
+        fingerprint(pendingToolCall?.arguments) !== fingerprint(binding.arguments) ||
+        Number(pendingApproval?.toolDefinitionVersion) !== binding.toolDefinitionVersion ||
+        pendingApproval?.toolPolicyFingerprint !== binding.toolPolicyFingerprint
+      ) return false;
+
       const affected = await trx('approvals')
-        .where({ id: requestId, status: 'ALLOW_ONCE', once_state: 'CLAIMED', once_claim_id: claimId })
-        .update({ once_state: 'DISPATCHED', once_dispatched_at: Date.now(), once_claim_expires_at: null });
+        .where({ id: binding.requestId, status: 'ALLOW_ONCE', once_state: 'CLAIMED', once_claim_id: binding.claimId })
+        .andWhere('once_claim_expires_at', '>', now)
+        .update({ once_state: 'DISPATCHED', once_dispatched_at: now, once_claim_expires_at: null });
       return affected === 1;
     });
   }
@@ -687,7 +805,7 @@ export class PostgresApprovalRepository implements ApprovalRepository {
 
 export interface SessionGrantRepository {
   grantSession(runId: string, tool: string, principalId: string, riskCeiling?: PermissionLevel): Promise<void>;
-  grantAlways(tool: string, principalId: string, riskCeiling?: PermissionLevel, workspaceId?: string): Promise<void>;
+  grantAlways(tool: string, principalId: string, riskCeiling: PermissionLevel, runId: string, expectedWorkspaceId: string): Promise<void>;
   hasSessionGrant(runId: string, tool: string, principalId: string, requiredPermission?: PermissionLevel): Promise<boolean>;
   hasAlwaysGrant(tool: string, principalId: string, requiredPermission?: PermissionLevel, runId?: string): Promise<boolean>;
   clearSession(runId: string): Promise<void>;
@@ -695,27 +813,42 @@ export interface SessionGrantRepository {
 
 export class PostgresSessionGrantRepository implements SessionGrantRepository {
   async grantSession(runId: string, tool: string, principalId: string, riskCeiling: PermissionLevel = 'READ'): Promise<void> {
-    const run = await db('runs').where({ id: runId, principal_id: principalId }).select('workspace_id', 'state', 'status').first();
-    if (!run?.workspace_id || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(String(run.state || run.status))) throw new Error('Session grant requires an active run with an authoritative workspace.');
-    const grant: ApprovalGrant = { scope: 'SESSION', principalId, runId, tool, riskCeiling, workspaceId: run.workspace_id };
-    await db('session_grants').insert({
-      id: stableGrantId(grant), principal_id: principalId, session_id: runId, workspace_id: run.workspace_id,
-      tool, permission: 'SESSION', risk_ceiling: riskCeiling, granted_at: Date.now()
-    }).onConflict('id').ignore();
+    await db.transaction(async (trx) => {
+      const run = await trx('runs').where({ id: runId, principal_id: principalId })
+        .select('workspace_id', 'state', 'status').forUpdate().first();
+      if (!run?.workspace_id || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(String(run.state || run.status))) {
+        throw new Error('Session grant requires an active run with an authoritative workspace.');
+      }
+      const grant: ApprovalGrant = { scope: 'SESSION', principalId, runId, tool, riskCeiling, workspaceId: run.workspace_id };
+      await trx('session_grants').insert({
+        id: stableGrantId(grant), principal_id: principalId, session_id: runId, workspace_id: run.workspace_id,
+        tool, permission: 'SESSION', risk_ceiling: riskCeiling, granted_at: Date.now()
+      }).onConflict('id').ignore();
+    });
   }
 
   async grantAlways(
     tool: string,
     principalId: string,
-    riskCeiling: PermissionLevel = 'READ',
-    workspaceId?: string
+    riskCeiling: PermissionLevel,
+    runId: string,
+    expectedWorkspaceId: string
   ): Promise<void> {
-    if (!workspaceId) throw new Error('Always grant requires an explicit workspace boundary.');
-    const grant: ApprovalGrant = { scope: 'ALWAYS', principalId, runId: '', tool, riskCeiling, workspaceId };
-    await db('session_grants').insert({
-      id: stableGrantId(grant), principal_id: principalId, workspace_id: workspaceId, tool,
-      permission: 'ALWAYS', risk_ceiling: riskCeiling, granted_at: Date.now()
-    }).onConflict('id').ignore();
+    if (!runId || !expectedWorkspaceId) throw new Error('Always grant requires an authenticated parent run and workspace.');
+    await db.transaction(async (trx) => {
+      const run = await trx('runs').where({ id: runId, principal_id: principalId })
+        .select('workspace_id', 'state', 'status').forUpdate().first();
+      if (
+        !run?.workspace_id || run.workspace_id !== expectedWorkspaceId ||
+        ['COMPLETED', 'FAILED', 'CANCELLED'].includes(String(run.state || run.status))
+      ) throw new Error('Always grant parent run does not validate the expected workspace and owner.');
+      const workspaceId = run.workspace_id;
+      const grant: ApprovalGrant = { scope: 'ALWAYS', principalId, runId: '', tool, riskCeiling, workspaceId };
+      await trx('session_grants').insert({
+        id: stableGrantId(grant), principal_id: principalId, workspace_id: workspaceId, tool,
+        permission: 'ALWAYS', risk_ceiling: riskCeiling, granted_at: Date.now()
+      }).onConflict('id').ignore();
+    });
   }
 
   async hasSessionGrant(runId: string, tool: string, principalId: string, requiredPermission: PermissionLevel = 'READ'): Promise<boolean> {

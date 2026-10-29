@@ -386,7 +386,8 @@ async function runToolGatewayCertification() {
       'run_attack_' + sessionTag,
       { id: 'call_victim', toolId: 'tool_victim', name: 'victim_action', arguments: {}, timestamp: Date.now() },
       'DESTRUCTIVE',
-      'High risk'
+      'High risk',
+      principalA.workspaceId
     );
 
     // User B must be rejected before a decision, grant, or outbox intent is committed.

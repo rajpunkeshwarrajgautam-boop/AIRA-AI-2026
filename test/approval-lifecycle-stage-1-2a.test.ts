@@ -10,6 +10,7 @@ import type { ToolDefinition } from '../packages/contracts/src/index.js';
 const owner: ExecutionPrincipal = {
   userId: 'approval_lifecycle_owner',
   sessionId: 'approval_lifecycle_session',
+  workspaceId: 'approval_lifecycle_workspace',
   role: 'user'
 };
 const runId = 'run_approval_lifecycle_1';
@@ -81,7 +82,9 @@ async function makePendingRequest(
       arguments: {},
       timestamp: Date.now()
     },
-    options.permission || 'WRITE'
+    options.permission || 'WRITE',
+    undefined,
+    owner.workspaceId!
   );
 }
 

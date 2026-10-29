@@ -125,6 +125,7 @@ async function runTests() {
       principalId: 'test-user',
       agentId: null,
       sessionId: 'test-session',
+      workspaceId: 'workspace_runtime_verification',
       state: 'RUNNING',
       prompt: 'dummy',
       modelPolicy: { model: 'mock-deterministic' } as any,
@@ -142,8 +143,16 @@ async function runTests() {
     const isInitiallyApproved = await kernel.isToolCallApproved(runId, 'system_shell', 'DESTRUCTIVE', 'test-user');
     assert.strictEqual(isInitiallyApproved, false);
 
-    const request = await kernel.createRequest(runId, toolCall as any, 'DESTRUCTIVE', 'Dangerous shell action');
+    const request = await kernel.createRequest(
+      runId, toolCall as any, 'DESTRUCTIVE', 'Dangerous shell action', 'workspace_runtime_verification'
+    );
     assert.strictEqual(request.risk, 'critical');
+    const waitingRun = await runRepo.getRun(runId);
+    assert(waitingRun);
+    waitingRun.state = 'WAITING_FOR_APPROVAL';
+    waitingRun.executionCheckpoint = 'WAITING_FOR_APPROVAL';
+    waitingRun.pendingApproval = request;
+    await runRepo.saveRun(waitingRun);
 
     const decisionResult = await kernel.decide(request.id, 'ALLOW_SESSION', 'test-user');
     assert.strictEqual(decisionResult.approved, true);

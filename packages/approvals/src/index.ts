@@ -6,6 +6,7 @@ import {
 } from '../../contracts/src/index.js';
 import {
   ApprovalGrantRequest,
+  ApprovalResolutionTarget,
   ApprovalRepository,
   OneTimeAuthorizationBinding,
   ApprovalResumptionEvent,
@@ -53,10 +54,12 @@ export class ApprovalKernel {
     runId: string,
     toolCall: ToolCall,
     permission: PermissionLevel,
-    impactDescription?: string,
+    impactDescription: string | undefined,
+    workspaceId: string,
     toolDefinitionVersion?: number,
     toolPolicyFingerprint?: string
   ): Promise<ApprovalRequest> {
+    if (!workspaceId) throw new Error('Approval creation requires a workspace from authenticated server context.');
     const requestId = `req_${Math.random().toString(36).slice(2, 10)}`;
     const risk = permission === 'DESTRUCTIVE' ? 'critical' : permission === 'FINANCIAL' ? 'high' : permission === 'READ' ? 'low' : 'medium';
     const request: ApprovalRequest = {
@@ -68,6 +71,7 @@ export class ApprovalKernel {
       reason: impactDescription || `Action "${toolCall.name}" requires user confirmation under ${permission} policy.`,
       sanitizedPreview: toolCall.arguments || {},
       requestedAt: Date.now(),
+      workspaceId,
       permissionLevel: permission,
       toolDefinitionVersion,
       toolPolicyFingerprint
@@ -90,7 +94,7 @@ export class ApprovalKernel {
   }
 
   public async decide(requestId: string, decision: ApprovalDecision, resolvedBy: string): Promise<ApprovalResolution> {
-    return this.resolveDecision(requestId, decision, resolvedBy, true);
+    return this.resolveDecision(requestId, decision, resolvedBy, true, { type: 'RUN' });
   }
 
   /**
@@ -101,16 +105,21 @@ export class ApprovalKernel {
   public async resolveWorkflowDecision(
     requestId: string,
     decision: ApprovalDecision,
-    resolvedBy: string
+    resolvedBy: string,
+    workflowRunId: string,
+    workflowStepId: string
   ): Promise<ApprovalResolution> {
-    return this.resolveDecision(requestId, decision, resolvedBy, false);
+    return this.resolveDecision(requestId, decision, resolvedBy, false, {
+      type: 'WORKFLOW', workflowRunId, workflowStepId
+    });
   }
 
   private async resolveDecision(
     requestId: string,
     decision: ApprovalDecision,
     resolvedBy: string,
-    issueReusableGrant: boolean
+    issueReusableGrant: boolean,
+    target: ApprovalResolutionTarget
   ): Promise<ApprovalResolution> {
     const existing = await this.repository.getRequest(requestId);
     if (!existing) throw new Error(`Approval request with ID "${requestId}" not found.`);
@@ -123,13 +132,17 @@ export class ApprovalKernel {
         decision,
         resolvedBy,
         grant,
-        issueReusableGrant && decision === 'ALLOW_ONCE'
+        issueReusableGrant && decision === 'ALLOW_ONCE',
+        target
       );
       return { approved: decision !== 'REJECT', request: result.request, applied: result.applied };
     }
 
     // Compatibility path for in-memory repositories used by legacy unit tests.
     // Production PostgreSQL repositories implement the transactional CAS above.
+    if (grant?.scope === 'ALWAYS' && !existing.workspaceId) {
+      throw new Error('Always-for-tool approval requires a workspace from the authenticated parent run.');
+    }
     if (existing.decision) {
       if (existing.decision === decision && existing.resolvedBy === resolvedBy) {
         return { approved: decision !== 'REJECT', request: existing, applied: false };
@@ -144,7 +157,9 @@ export class ApprovalKernel {
     if (grant && decision === 'ALLOW_SESSION') {
       await this.grantRepo.grantSession(existing.runId, existing.toolCall.name, resolvedBy, permission);
     } else if (grant && decision === 'ALLOW_ALWAYS_FOR_TOOL') {
-      await this.grantRepo.grantAlways(existing.toolCall.name, resolvedBy, permission);
+      await this.grantRepo.grantAlways(
+        existing.toolCall.name, resolvedBy, permission, existing.runId, existing.workspaceId!
+      );
     }
     return { approved: decision !== 'REJECT', request: existing, applied: true };
   }
@@ -154,9 +169,9 @@ export class ApprovalKernel {
     return this.repository.claimOnceAuthorization(binding);
   }
 
-  public async markOnceAuthorizationDispatched(requestId: string, claimId: string): Promise<boolean> {
+  public async markOnceAuthorizationDispatched(binding: OneTimeAuthorizationBinding): Promise<boolean> {
     if (!this.repository.markOnceAuthorizationDispatched) return false;
-    return this.repository.markOnceAuthorizationDispatched(requestId, claimId);
+    return this.repository.markOnceAuthorizationDispatched(binding);
   }
 
   public async finishOnceAuthorization(
@@ -172,8 +187,8 @@ export class ApprovalKernel {
     return Boolean(this.repository.claimApprovalResumption && this.repository.applyApprovalResumption);
   }
 
-  public async claimApprovalResumption(owner: string, leaseMs: number): Promise<ApprovalResumptionEvent | undefined> {
-    return this.repository.claimApprovalResumption?.(owner, leaseMs);
+  public async claimApprovalResumption(owner: string, leaseMs: number, approvalId?: string): Promise<ApprovalResumptionEvent | undefined> {
+    return this.repository.claimApprovalResumption?.(owner, leaseMs, approvalId);
   }
 
   public async applyApprovalResumption(event: ApprovalResumptionEvent, owner: string): Promise<boolean> {

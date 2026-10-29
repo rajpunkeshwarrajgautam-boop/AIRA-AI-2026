@@ -47,7 +47,7 @@ async function requestFor(kernel: ApprovalKernel) {
     name: 'atomic_write',
     arguments: { amount: 10 },
     timestamp: 1
-  }, 'WRITE', 'review this write', 7);
+  }, 'WRITE', 'review this write', 'workspace_atomic_1', 7);
 }
 
 test('concurrent identical decisions commit once and return applied=false for the duplicate', async () => {

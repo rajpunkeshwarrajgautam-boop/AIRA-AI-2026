@@ -54,9 +54,20 @@ function makeHarness(maxAttempts = 3) {
       claimIds.set(binding.requestId, binding.claimId);
       return true;
     },
-    async markOnceAuthorizationDispatched(requestId: string, claimId: string) {
-      if (authorizationStates.get(requestId) !== 'CLAIMED' || claimIds.get(requestId) !== claimId) return false;
-      authorizationStates.set(requestId, 'DISPATCHED');
+    async markOnceAuthorizationDispatched(binding: OneTimeAuthorizationBinding) {
+      const request = requests.get(binding.requestId);
+      if (
+        !request || authorizationStates.get(binding.requestId) !== 'CLAIMED' ||
+        claimIds.get(binding.requestId) !== binding.claimId ||
+        binding.principalId !== principal.userId || binding.workspaceId !== principal.workspaceId ||
+        binding.runId !== request.runId || binding.toolCallId !== request.toolCall.id ||
+        binding.toolId !== request.toolCall.toolId || binding.toolName !== request.toolCall.name ||
+        binding.permissionLevel !== request.permissionLevel ||
+        binding.toolDefinitionVersion !== request.toolDefinitionVersion ||
+        binding.toolPolicyFingerprint !== request.toolPolicyFingerprint ||
+        JSON.stringify(binding.arguments) !== JSON.stringify(request.toolCall.arguments)
+      ) return false;
+      authorizationStates.set(binding.requestId, 'DISPATCHED');
       return true;
     },
     async finishOnceAuthorization(requestId: string, claimId: string, outcome: 'COMPLETED' | 'FAILED') {

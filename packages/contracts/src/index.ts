@@ -426,6 +426,8 @@ export const ApprovalRequestSchema = z.object({
   reason: z.string(),
   sanitizedPreview: z.record(z.string(), z.any()),
   requestedAt: z.number(),
+  /** Server-derived workspace boundary for reusable authorization. */
+  workspaceId: z.string().min(1).optional(),
   permissionLevel: PermissionLevelSchema.optional(),
   toolDefinitionVersion: z.number().int().positive().optional(),
   toolPolicyFingerprint: z.string().min(1).optional(),
