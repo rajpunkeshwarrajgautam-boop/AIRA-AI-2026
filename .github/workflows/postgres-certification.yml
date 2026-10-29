@@ -235,22 +235,36 @@ jobs:
             echo '::error::PostgreSQL isolation check failed: PortBindings must be null or an empty object, with no published ports.'
             exit 1
           fi
+          mark_stage 'reject persistent PostgreSQL mounts'
           if ! docker inspect "$PG_CONTAINER" | jq -e '
-            .[0].Mounts as $mounts
-            | if ($mounts | type) != "array" then false
-              else all($mounts[]; .Type == "tmpfs")
-              end
+            .[0] as $container
+            | ($container.HostConfig // {}) as $host
+            | (if $host.Binds == null then true
+               elif ($host.Binds | type) == "array" then ($host.Binds | length) == 0
+               else false end)
+              and (if $host.VolumesFrom == null then true
+                   elif ($host.VolumesFrom | type) == "array" then ($host.VolumesFrom | length) == 0
+                   else false end)
+              and (if $host.Mounts == null then true
+                   elif ($host.Mounts | type) == "array" then all($host.Mounts[]; .Type == "tmpfs")
+                   else false end)
+              and (if ($container.Mounts | type) == "array" then all($container.Mounts[]; .Type == "tmpfs")
+                   elif ($container.Mounts | type) == "object" then (($container.Mounts | keys) == ["/var/lib/postgresql/data"])
+                   else false end)
           ' >/dev/null; then
-            echo '::error::PostgreSQL isolation check failed: every storage mount must be tmpfs; persistent or other mount types are not allowed.'
+            echo '::error::PostgreSQL isolation check failed: persistent bind, volume, inherited, or non-tmpfs mounts are not allowed.'
             exit 1
           fi
-          if ! docker inspect "$PG_CONTAINER" | jq -e '
-            .[0].Mounts as $mounts
-            | if ($mounts | type) != "array" then false
-              else any($mounts[]; .Destination == "/var/lib/postgresql/data" and .Type == "tmpfs")
-              end
-          ' >/dev/null; then
-            echo '::error::PostgreSQL isolation check failed: /var/lib/postgresql/data must be mounted as tmpfs.'
+          mark_stage 'verify active PostgreSQL data tmpfs mount'
+          PG_DATA_FSTYPE="$(docker exec "$PG_CONTAINER" sh -c '
+            while IFS=" " read -r source mountpoint filesystem options; do
+              if [ "$mountpoint" = "/var/lib/postgresql/data" ]; then
+                printf "%s\n" "$filesystem"
+              fi
+            done < /proc/mounts
+          ')"
+          if [[ "$PG_DATA_FSTYPE" != 'tmpfs' ]]; then
+            echo '::error::PostgreSQL isolation check failed: the effective filesystem at /var/lib/postgresql/data must be tmpfs.'
             exit 1
           fi
           echo 'Internal-network isolation verified: only the test runner and disposable PostgreSQL are attached; no database ports or persistent volumes.'
