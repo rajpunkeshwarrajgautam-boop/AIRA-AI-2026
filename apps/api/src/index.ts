@@ -1074,6 +1074,14 @@ app.get('/api/search/capabilities', async (_req: Request, res: Response) => {
 // -----------------------------------------------------------------------
 // Runs Management
 // -----------------------------------------------------------------------
+function isRunOwnedByPrincipal(
+  run: { principalId: string; workspaceId?: string | null },
+  principal: { userId: string; workspaceId?: string }
+): boolean {
+  return run.principalId === principal.userId &&
+    (run.workspaceId || undefined) === (principal.workspaceId || undefined);
+}
+
 app.post('/api/runs', async (req: Request, res: Response) => {
   try {
     const parsed = CreateRunRequestSchema.parse(req.body);
@@ -1086,12 +1094,12 @@ app.post('/api/runs', async (req: Request, res: Response) => {
 
 app.get('/api/runs', async (req: Request, res: Response) => {
   const allRuns = await agentRuntime.listRuns();
-  res.json(allRuns.filter(r => r.principalId === req.principal!.userId));
+  res.json(allRuns.filter(r => isRunOwnedByPrincipal(r, req.principal!)));
 });
 
 app.get('/api/runs/:id', async (req: Request, res: Response) => {
   const run = await agentRuntime.getRun(req.params.id);
-  if (!run || run.principalId !== req.principal!.userId) {
+  if (!run || !isRunOwnedByPrincipal(run, req.principal!)) {
     return res.status(404).json({ error: `Run with id "${req.params.id}" not found.` });
   }
 
@@ -1135,7 +1143,7 @@ app.get('/api/runs/:id', async (req: Request, res: Response) => {
 
 app.post('/api/runs/:id/cancel', async (req: Request, res: Response) => {
   const run = await agentRuntime.getRun(req.params.id);
-  if (!run || run.principalId !== req.principal!.userId) {
+  if (!run || !isRunOwnedByPrincipal(run, req.principal!)) {
     return res.status(404).json({ error: 'Run not found.' });
   }
   const success = await agentRuntime.cancelRun(req.params.id);
@@ -1155,7 +1163,7 @@ app.post('/api/runs/:id/approve', async (req: Request, res: Response) => {
 
     const resolverPrincipal = req.principal!;
     const run = await agentRuntime.getRun(approval.runId);
-    if (!run || run.principalId !== resolverPrincipal.userId) {
+    if (!run || !isRunOwnedByPrincipal(run, resolverPrincipal)) {
       return res.status(404).json({ error: 'Approval request not found.' });
     }
 
@@ -1388,7 +1396,7 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
   const runId = req.params.id;
   const run = await agentRuntime.getRun(runId);
 
-  if (!run || run.principalId !== req.principal!.userId) {
+  if (!run || !isRunOwnedByPrincipal(run, req.principal!)) {
     return res.status(404).json({ error: `Run ${runId} not found.` });
   }
 

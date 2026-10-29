@@ -40,6 +40,22 @@ export class SpecialistWorkerRuntime {
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 5000;
   }
 
+  private async assertActiveTaskWorkspace(task: DurableSpecialistTask): Promise<void> {
+    const identity = await this.repository.getAuthoritativeExecutionIdentity?.(task.id);
+    if (
+      !identity || !task.principalId || !task.workspaceId ||
+      identity.taskPrincipalId !== task.principalId ||
+      identity.runPrincipalId !== task.principalId ||
+      identity.taskWorkspaceId !== task.workspaceId ||
+      identity.runWorkspaceId !== task.workspaceId ||
+      identity.workspaceAuthorityActive !== true
+    ) {
+      throw Object.assign(new Error('Durable task owner or workspace authority is missing, revoked, or mismatched.'), {
+        code: 'WORKER_AUTHORIZATION_DENIED'
+      });
+    }
+  }
+
   /**
    * Executes a single assigned task through the full durable specialist lifecycle.
    */
@@ -121,18 +137,7 @@ export class SpecialistWorkerRuntime {
       }
 
       // 4. Verify the worker's persisted owner/workspace against the authoritative parent run.
-      const identity = await this.repository.getAuthoritativeExecutionIdentity?.(claimedTask.id);
-      if (
-        !identity || !claimedTask.principalId || !claimedTask.workspaceId ||
-        identity.taskPrincipalId !== claimedTask.principalId ||
-        identity.runPrincipalId !== claimedTask.principalId ||
-        identity.taskWorkspaceId !== claimedTask.workspaceId ||
-        identity.runWorkspaceId !== claimedTask.workspaceId
-      ) {
-        throw Object.assign(new Error('Durable task owner or workspace does not match its authoritative parent run.'), {
-          code: 'WORKER_AUTHORIZATION_DENIED'
-        });
-      }
+      await this.assertActiveTaskWorkspace(claimedTask);
 
       const scopes = validateDurableToolScopes(claimedTask.role, claimedTask.executionConstraints?.allowedTools || []);
       if (!scopes.valid) {
@@ -172,13 +177,17 @@ export class SpecialistWorkerRuntime {
         inputPayload: claimedTask.inputPayload || {}
       };
 
-      // 5. Execute Specialist
+      // Revalidate at the actual recovery/dispatch boundary; the earlier identity
+      // read is not treated as an enduring authorization lease.
+      await this.assertActiveTaskWorkspace(claimedTask);
       await this.repository.appendCheckpoint(claimedTask.id, fencingToken, 'SPECIALIST_DISPATCHED', {
         role: claimedTask.role,
         specialistName: specialist.name
       });
 
       const result = await specialist.execute(executionContext);
+      // Do not persist a successful outcome if authority was revoked mid-task.
+      await this.assertActiveTaskWorkspace(claimedTask);
 
       // 6. Record Terminal Outcome
       const isSuccess = result.outcome === 'COMPLETED';

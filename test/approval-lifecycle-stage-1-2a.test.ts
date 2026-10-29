@@ -16,6 +16,16 @@ const owner: ExecutionPrincipal = {
 const runId = 'run_approval_lifecycle_1';
 const workflowId = 'workflow_approval_lifecycle_1';
 const stepId = 'step_approval_lifecycle_1';
+const approvalTestWorkspaceAuthority = {
+  async resolveWorkspace(principalId: string) {
+    if (principalId !== owner.userId) throw new Error('unknown test principal');
+    return owner.workspaceId!;
+  },
+  async isWorkspaceActive(principalId: string, workspaceId: string) {
+    return principalId === owner.userId && workspaceId === owner.workspaceId;
+  },
+  async revokeWorkspace() { return false; }
+};
 
 function createKernelHarness() {
   const requests = new Map<string, ApprovalRequest>();
@@ -98,6 +108,7 @@ function createHarness(
     id: request.runId,
     principalId: owner.userId,
     sessionId: owner.sessionId,
+    workspaceId: owner.workspaceId,
     state: 'WAITING_FOR_APPROVAL',
     pendingApproval: request,
     toolCalls: [request.toolCall],
@@ -156,6 +167,11 @@ function createHarness(
   runtime.pendingRunEvents = new Map();
   runtime.eventStreams = new Map();
   runtime.runDbTelemetry = new Map();
+  runtime.workspaceAuthority = {
+    async isWorkspaceActive(principalId: string, workspaceId: string) {
+      return principalId === owner.userId && workspaceId === owner.workspaceId;
+    }
+  };
   runtime.emitRunEvent = async () => undefined;
   runtime.transitionRunState = async () => undefined;
   runtime.executeRunLoop = async () => { runResumptions++; };
@@ -197,7 +213,7 @@ function createProtectedGateway(
   permission: 'WRITE' | 'DESTRUCTIVE',
   onExecute: () => void
 ): ToolGateway {
-  const gateway = new ToolGateway(new InMemoryToolCallRepository(), kernel);
+  const gateway = new ToolGateway(new InMemoryToolCallRepository(), kernel, process.cwd(), approvalTestWorkspaceAuthority);
   gateway.registerTool({
     definition: protectedToolDefinition(toolName, permission),
     execute: async () => {
@@ -245,6 +261,34 @@ test('submitApproval rejects a wrong principal before resolving the request', as
     { userId: 'different_principal', sessionId: 'different_session', role: 'user' },
     request.runId
   );
+
+  assert.equal(accepted, false);
+  assert.equal(decisions.length, 0);
+  assert.equal(harness.runResumptions, 0);
+});
+
+test('submitApproval rejects a foreign or missing workspace before resolving or resuming', async () => {
+  for (const workspaceId of ['approval_lifecycle_foreign_workspace', undefined]) {
+    const { kernel, decisions } = createKernelHarness();
+    const request = await makePendingRequest(kernel);
+    const harness = createHarness(kernel, request);
+    const resolver = { ...owner, workspaceId };
+
+    const accepted = await harness.runtime.submitApproval(request.id, 'ALLOW_ONCE', resolver, request.runId);
+
+    assert.equal(accepted, false, `workspace ${workspaceId ?? '<missing>'} must not resolve the request`);
+    assert.equal(decisions.length, 0);
+    assert.equal(harness.runResumptions, 0);
+  }
+});
+
+test('submitApproval rejects a revoked workspace authority before resolving or resuming', async () => {
+  const { kernel, decisions } = createKernelHarness();
+  const request = await makePendingRequest(kernel);
+  const harness = createHarness(kernel, request);
+  harness.runtime.workspaceAuthority = { async isWorkspaceActive() { return false; } };
+
+  const accepted = await harness.runtime.submitApproval(request.id, 'ALLOW_ONCE', owner, request.runId);
 
   assert.equal(accepted, false);
   assert.equal(decisions.length, 0);

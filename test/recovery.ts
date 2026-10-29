@@ -1,6 +1,19 @@
 import { spawn } from 'child_process';
+import { execFileSync } from 'node:child_process';
 import assert from 'assert';
 import { db } from '../packages/db/src/index.js'; // to seed/verify DB states directly
+
+function assertAuthorizedDisposableDatabase(): void {
+  if (process.env.AIRA_POSTGRES_CERTIFICATION !== '1') {
+    throw new Error('Recovery certification requires AIRA_POSTGRES_CERTIFICATION=1.');
+  }
+  if (process.env.CI_DISPOSABLE_DATABASE !== 'true'
+      || !process.env.DATABASE_URL
+      || process.env.DATABASE_URL !== process.env.ISOLATED_TEST_DATABASE_URL) {
+    throw new Error('Recovery certification requires the matching disposable PostgreSQL URL contract.');
+  }
+  execFileSync(process.execPath, ['scripts/ci/assert-disposable-postgres.mjs'], { stdio: 'inherit' });
+}
 
 const API_PORT = 3003;
 const BASE_URL = `http://127.0.0.1:${API_PORT}`;
@@ -77,6 +90,7 @@ async function seedRun(id: string, state: string, checkpoint: string, extra: any
 }
 
 async function runRecoveryTests() {
+  assertAuthorizedDisposableDatabase();
   console.log('=== TASK 5 RECOVERY TEST SUITE ===');
 
   await db('runs').del();

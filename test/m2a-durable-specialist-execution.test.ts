@@ -31,13 +31,14 @@ import { MathematicalSpecialistAgent } from '../packages/agent-runtime/src/speci
 import { AnalysisSpecialistAgent } from '../packages/agent-runtime/src/specialists/analysis-specialist.js';
 import { VerificationSpecialistAgent } from '../packages/agent-runtime/src/specialists/verification-specialist.js';
 import { ToolGateway, ToolRegistry, InMemoryToolCallRepository } from '../packages/tool-runtime/src/index.js';
+import { InMemoryWorkspaceAuthorityRepository, derivePersonalWorkspaceId } from '../packages/agent-runtime/src/workspace-authority.js';
 import { ApprovalKernel } from '../packages/approvals/src/index.js';
 
 test.describe('AIRA AI 2026 — Milestone 2A Native Durable Specialist Execution Runtime Suite', () => {
   const dummyPrincipal: ExecutionPrincipal = {
     userId: 'user_test_m2a_owner',
     sessionId: 'sess_test_m2a',
-    workspaceId: 'ws_test_m2a',
+    workspaceId: derivePersonalWorkspaceId('user_test_m2a_owner'),
     role: 'user'
   };
 
@@ -54,7 +55,9 @@ test.describe('AIRA AI 2026 — Milestone 2A Native Durable Specialist Execution
     const scheduler = new DurableTaskScheduler(repo, { maxConcurrency: 3 });
     const approvalKernel = new ApprovalKernel();
     const toolCallRepo = new InMemoryToolCallRepository();
-    const toolGateway = new ToolGateway(toolCallRepo, approvalKernel, process.cwd());
+    const workspaceAuthorities = new InMemoryWorkspaceAuthorityRepository();
+    void workspaceAuthorities.resolveWorkspace(dummyPrincipal.userId);
+    const toolGateway = new ToolGateway(toolCallRepo, approvalKernel, process.cwd(), workspaceAuthorities);
 
     const registry = new SpecialistRegistry();
     const mathSpecialist = new MathematicalSpecialistAgent(toolGateway);

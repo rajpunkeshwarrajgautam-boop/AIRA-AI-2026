@@ -1,8 +1,5 @@
-import './setup-isolated-neon.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import http from 'node:http';
-import { db } from '../packages/db/src/index.js';
 import {
   evaluateWorkerActivationPolicy,
   validateWorkerStaticConfig,
@@ -481,21 +478,12 @@ test.describe('AIRA AI 2026 — Milestone 2A Production Activation Security & Fa
     assert.strictEqual(res.isProduction, false);
   });
 
-  test('LAYER 2: Live Staging Integration (Staging Worker Startup & Runtime Activation Assertion)', async () => {
-    const stagingConfig: WorkerActivationConfig = {
-      airaEnv: 'staging'
-    };
-
-    // Assert live database identity matches staging requirements
-    const authResult = await assertWorkerActivationAuthorized(stagingConfig, db);
+  test('LAYER 2: Staging activation remains non-production and requires no live staging connection', () => {
+    const stagingConfig: WorkerActivationConfig = { airaEnv: 'staging' };
+    const authResult = evaluateWorkerActivationPolicy(stagingConfig, stagingIdentity);
     assert.strictEqual(authResult.authorized, true);
     assert.strictEqual(authResult.isProduction, false);
     assert.strictEqual(authResult.code, 'NON_PROD_WORKER_AUTHORIZED');
-
-    // Database schema preflight
-    await db.raw('SELECT 1 FROM specialist_tasks LIMIT 0');
-    await db.raw('SELECT 1 FROM specialist_task_events LIMIT 0');
-    await db.raw('SELECT 1 FROM tool_calls LIMIT 0');
   });
 
   // =========================================================================

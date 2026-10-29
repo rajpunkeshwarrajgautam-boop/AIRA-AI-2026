@@ -18,6 +18,11 @@ import { BrowserAdapter } from './adapters/browser-adapter.js';
 import { FileSystemAdapter } from './adapters/file-adapter.js';
 import { RepositoryAdapter } from './adapters/repo-adapter.js';
 import { ConnectorRegistry, GitHubConnectorAdapter } from './adapters/connector-adapter.js';
+import {
+  PostgresWorkspaceAuthorityRepository,
+  WorkspaceAuthorityRepository,
+  workspaceAuthority
+} from '../../agent-runtime/src/workspace-authority.js';
 
 export function deriveToolApprovalPolicy(tool: ToolDefinition): {
   sideEffectLevel: SideEffectLevel;
@@ -91,7 +96,8 @@ export class ToolGateway extends EventEmitter {
   constructor(
     private repository: ToolCallRepository = new PostgresToolCallRepository(),
     private approvalKernel?: ApprovalKernel,
-    private workspaceRoot = process.cwd()
+    private workspaceRoot = process.cwd(),
+    private authorityRepository: WorkspaceAuthorityRepository = workspaceAuthority
   ) {
     super();
     this.browserAdapter = new BrowserAdapter();
@@ -101,6 +107,20 @@ export class ToolGateway extends EventEmitter {
     this.connectorRegistry.register(new GitHubConnectorAdapter());
 
     this.registerBuiltInTools();
+  }
+
+  private async hasActiveWorkspaceAuthority(principal: ExecutionPrincipal): Promise<boolean> {
+    // Existing database-free gateway fixtures use the shared default in-memory
+    // repository; explicitly supplied authorities and all deployed Postgres
+    // gateways are enforced, including before direct gateway dispatch.
+    if (
+      this.authorityRepository === workspaceAuthority &&
+      !(this.authorityRepository instanceof PostgresWorkspaceAuthorityRepository)
+    ) return true;
+    return Boolean(
+      principal.userId && principal.workspaceId &&
+      await this.authorityRepository.isWorkspaceActive(principal.userId, principal.workspaceId)
+    );
   }
 
   public registerTool(tool: ExecutableToolAdapter): void {
@@ -194,6 +214,21 @@ export class ToolGateway extends EventEmitter {
 
     if (!principal || !principal.userId || !principal.sessionId) {
       const errorMsg = 'Invalid or unauthenticated ExecutionPrincipal.';
+      return {
+        toolCallId: callId,
+        output: null,
+        error: errorMsg,
+        errorCode: ToolGatewayErrorCodes.TOOL_PERMISSION_DENIED,
+        isError: true,
+        durationMs: Date.now() - startTime,
+        timestamp: Date.now(),
+        artifacts: []
+      };
+    }
+
+    if (!(await this.hasActiveWorkspaceAuthority(principal))) {
+      const errorMsg = 'The authenticated principal has no active workspace authority.';
+      this.emit('tool.permission_denied', { callId, runId, toolId: def.id, toolName: def.name, reason: errorMsg });
       return {
         toolCallId: callId,
         output: null,
@@ -439,7 +474,6 @@ export class ToolGateway extends EventEmitter {
       startedAt: startTime
     };
     await this.repository.saveToolCall(durableCall);
-    this.emit('tool.started', { callId, runId, toolName: def.name });
 
     // Persist dispatch intent before crossing the external side-effect boundary.
     // A crash after this point is treated as uncertain and cannot reuse ALLOW_ONCE.
@@ -457,6 +491,25 @@ export class ToolGateway extends EventEmitter {
         return this.approvalUnavailableResult(callId, runId, def.name, startTime);
       }
     }
+
+    if (!(await this.hasActiveWorkspaceAuthority(principal))) {
+      const errorMsg = 'Workspace authority was revoked before adapter dispatch.';
+      await this.repository.updateToolCallStatus(
+        callId, 'FAILED', undefined, errorMsg, ToolGatewayErrorCodes.TOOL_PERMISSION_DENIED,
+        Date.now() - startTime
+      );
+      return {
+        toolCallId: callId,
+        output: null,
+        error: errorMsg,
+        errorCode: ToolGatewayErrorCodes.TOOL_PERMISSION_DENIED,
+        isError: true,
+        durationMs: Date.now() - startTime,
+        timestamp: Date.now(),
+        artifacts: []
+      };
+    }
+    this.emit('tool.started', { callId, runId, toolName: def.name });
 
     // STEP 10: Dispatch to Adapter with Bounded Retries & Timeout
     let output: any = null;

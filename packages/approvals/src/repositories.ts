@@ -105,6 +105,20 @@ function fingerprint(value: unknown): string {
   return createHash('sha256').update(canonicalJson(value)).digest('hex');
 }
 
+async function hasActiveWorkspaceAuthority(
+  queryable: any,
+  principalId: string,
+  workspaceId: string
+): Promise<boolean> {
+  if (!principalId || !workspaceId) return false;
+  const authority = await queryable('principal_workspace_authorities')
+    .where({ principal_id: principalId, workspace_id: workspaceId, state: 'ACTIVE' })
+    .whereNull('revoked_at')
+    .forUpdate()
+    .first('principal_id');
+  return Boolean(authority);
+}
+
 function stableGrantId(grant: ApprovalGrant): string {
   const scopeId = grant.scope === 'SESSION' ? grant.runId : 'all';
   const digest = createHash('sha256')
@@ -146,6 +160,9 @@ export class PostgresApprovalRepository implements ApprovalRepository {
       if (!existingRun) throw new Error('Approval requires an existing authenticated parent run.');
       if (!existingRun.workspace_id || request.workspaceId !== existingRun.workspace_id) {
         throw new Error('Approval requires a workspace matching the authoritative parent run.');
+      }
+      if (!await hasActiveWorkspaceAuthority(trx, existingRun.principal_id, existingRun.workspace_id)) {
+        throw new Error('Approval requires active workspace authority for the authenticated run owner.');
       }
 
       await trx('tool_calls').insert({
@@ -258,6 +275,9 @@ export class PostgresApprovalRepository implements ApprovalRepository {
       if (!row) throw new Error('Approval request not found.');
       if (row.principal_id !== resolvedBy) throw new Error('Approval resolver is not the run owner.');
       if (!row.workspace_id) throw new Error('Approval decision requires an authoritative parent-run workspace.');
+      if (!await hasActiveWorkspaceAuthority(trx, row.principal_id, row.workspace_id)) {
+        throw new Error('Approval decision requires active workspace authority for the authenticated run owner.');
+      }
       if (row.tool_call_principal_id && row.tool_call_principal_id !== resolvedBy) {
         throw new Error('Approval tool-call principal does not match the run owner.');
       }
@@ -457,8 +477,10 @@ export class PostgresApprovalRepository implements ApprovalRepository {
       const workflowRows = await trx('workflow_runs').where({ run_id: event.runId }).forUpdate();
       const workflow = workflowRows.length === 1 ? workflowRows[0] : undefined;
       const run = await trx('runs').where({ id: event.runId }).forUpdate().first();
+      const activeWorkspaceAuthority = Boolean(run && await hasActiveWorkspaceAuthority(trx, event.principalId, event.workspaceId || ''));
       if (
         !approval || approval.status !== event.decision || approval.resolved_by !== event.principalId ||
+        !activeWorkspaceAuthority ||
         approval.run_id !== event.runId || !toolCall || !run ||
         run.principal_id !== event.principalId || (run.workspace_id || undefined) !== event.workspaceId ||
         (toolCall.principal_id && toolCall.principal_id !== event.principalId) ||
@@ -671,6 +693,7 @@ export class PostgresApprovalRepository implements ApprovalRepository {
         .select('id', 'principal_id', 'workspace_id', 'state', 'status', 'pending_approval')
         .forUpdate().first();
       if (!row || !run) return false;
+      const activeWorkspaceAuthority = await hasActiveWorkspaceAuthority(trx, binding.principalId, binding.workspaceId);
       const pendingApproval = typeof run.pending_approval === 'string'
         ? JSON.parse(run.pending_approval)
         : run.pending_approval;
@@ -678,6 +701,7 @@ export class PostgresApprovalRepository implements ApprovalRepository {
       const persistedArguments = typeof row.arguments === 'string' ? JSON.parse(row.arguments) : row.arguments;
       const now = Date.now();
       if (
+        !activeWorkspaceAuthority ||
         row.status !== 'ALLOW_ONCE' || row.resolved_by !== binding.principalId ||
         run.principal_id !== binding.principalId || run.state !== 'RUNNING' ||
         !run.workspace_id || run.workspace_id !== binding.workspaceId ||
@@ -756,6 +780,7 @@ export class PostgresApprovalRepository implements ApprovalRepository {
         .select('id', 'principal_id', 'workspace_id', 'state', 'status', 'pending_approval')
         .forUpdate().first();
       if (!row || !run) return false;
+      const activeWorkspaceAuthority = await hasActiveWorkspaceAuthority(trx, binding.principalId, binding.workspaceId);
       const now = Date.now();
       const pendingApproval = typeof run.pending_approval === 'string'
         ? JSON.parse(run.pending_approval)
@@ -763,6 +788,7 @@ export class PostgresApprovalRepository implements ApprovalRepository {
       const pendingToolCall = pendingApproval?.toolCall;
       const persistedArguments = typeof row.arguments === 'string' ? JSON.parse(row.arguments) : row.arguments;
       if (
+        !activeWorkspaceAuthority ||
         row.status !== 'ALLOW_ONCE' || row.once_state !== 'CLAIMED' || row.once_claim_id !== binding.claimId ||
         Number(row.once_claim_expires_at) <= now || run.state !== 'RUNNING' ||
         row.resolved_by !== binding.principalId || run.principal_id !== binding.principalId ||
@@ -819,6 +845,9 @@ export class PostgresSessionGrantRepository implements SessionGrantRepository {
       if (!run?.workspace_id || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(String(run.state || run.status))) {
         throw new Error('Session grant requires an active run with an authoritative workspace.');
       }
+      if (!await hasActiveWorkspaceAuthority(trx, principalId, run.workspace_id)) {
+        throw new Error('Session grant requires active workspace authority.');
+      }
       const grant: ApprovalGrant = { scope: 'SESSION', principalId, runId, tool, riskCeiling, workspaceId: run.workspace_id };
       await trx('session_grants').insert({
         id: stableGrantId(grant), principal_id: principalId, session_id: runId, workspace_id: run.workspace_id,
@@ -842,6 +871,9 @@ export class PostgresSessionGrantRepository implements SessionGrantRepository {
         !run?.workspace_id || run.workspace_id !== expectedWorkspaceId ||
         ['COMPLETED', 'FAILED', 'CANCELLED'].includes(String(run.state || run.status))
       ) throw new Error('Always grant parent run does not validate the expected workspace and owner.');
+      if (!await hasActiveWorkspaceAuthority(trx, principalId, run.workspace_id)) {
+        throw new Error('Always grant requires active workspace authority.');
+      }
       const workspaceId = run.workspace_id;
       const grant: ApprovalGrant = { scope: 'ALWAYS', principalId, runId: '', tool, riskCeiling, workspaceId };
       await trx('session_grants').insert({
@@ -854,6 +886,7 @@ export class PostgresSessionGrantRepository implements SessionGrantRepository {
   async hasSessionGrant(runId: string, tool: string, principalId: string, requiredPermission: PermissionLevel = 'READ'): Promise<boolean> {
     const run = await db('runs').where({ id: runId, principal_id: principalId }).select('workspace_id', 'state', 'status').first();
     if (!run?.workspace_id || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(String(run.state || run.status))) return false;
+    if (!await hasActiveWorkspaceAuthority(db, principalId, run.workspace_id)) return false;
     const rows = await db('session_grants').where({
       principal_id: principalId, session_id: runId, workspace_id: run.workspace_id, tool, permission: 'SESSION'
     }).select('risk_ceiling');
@@ -869,6 +902,7 @@ export class PostgresSessionGrantRepository implements SessionGrantRepository {
     if (!runId) return false;
     const run = await db('runs').where({ id: runId, principal_id: principalId }).select('workspace_id', 'state', 'status').first();
     if (!run?.workspace_id || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(String(run.state || run.status))) return false;
+    if (!await hasActiveWorkspaceAuthority(db, principalId, run.workspace_id)) return false;
     const rows = await db('session_grants').where({
       principal_id: principalId, workspace_id: run.workspace_id, tool, permission: 'ALWAYS'
     }).select('risk_ceiling');

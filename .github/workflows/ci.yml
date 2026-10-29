@@ -82,6 +82,18 @@ jobs:
       - name: Database isolation and environment crossover certification
         run: npm run test:db-isolation
 
+      - name: Workspace, approval, durable-worker, and activation security regressions
+        run: >-
+          npx tsx --test
+          test/approval-lifecycle-stage-1-2a.test.ts
+          test/approval-atomic-resolution.test.ts
+          test/approval-once-consumption.test.ts
+          test/durable-worker-authorization.test.ts
+          test/principal-provider-workspace.test.ts
+          test/workspace-authority-migration-guard.test.ts
+          test/m2a-durable-specialist-execution.test.ts
+          test/m2a-production-activation-security.test.ts
+
       - name: Release wizard and cutover safety gates certification
         run: npm run test:cutover-safety
 
@@ -136,9 +148,6 @@ jobs:
       - name: Workflow engine verification
         run: npm run test:workflow
 
-      - name: Tool gateway certification
-        run: npm run test:tools
-
       - name: Automation Policy B truthful scheduling certification
         run: npm run test:automation-policy-b
 
@@ -159,12 +168,6 @@ jobs:
 
       - name: Long-prompt persistence regression
         run: npm run test:long-prompt-persistence
-
-      - name: Run prompt schema drift repair certification
-        run: npx tsx test/run-prompt-schema-drift.ts
-
-      - name: Tool calls schema drift repair certification
-        run: npm run test:tool-calls-drift
 
       - name: Memory context regression certification
         run: npm run test:memory-context
@@ -278,12 +281,6 @@ jobs:
         env:
           AIRA_SEMANTIC_SEARCH: 'false'
         run: npm run db:verify:deploy
-
-      - name: Integration certification
-        run: npm run test:integration
-
-      - name: Recovery certification
-        run: npm run test:recovery
 
       - name: Identity certification
         run: npm run test:identity

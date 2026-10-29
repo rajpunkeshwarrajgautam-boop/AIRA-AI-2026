@@ -13,6 +13,17 @@ const principal: ExecutionPrincipal = {
   role: 'user'
 };
 
+const workspaceAuthority = {
+  async resolveWorkspace(principalId: string) {
+    if (principalId !== principal.userId) throw new Error('unknown test principal');
+    return principal.workspaceId!;
+  },
+  async isWorkspaceActive(principalId: string, workspaceId: string) {
+    return principalId === principal.userId && workspaceId === principal.workspaceId;
+  },
+  async revokeWorkspace() { return false; }
+};
+
 function makeHarness(maxAttempts = 3) {
   const requests = new Map<string, ApprovalRequest>();
   const authorizationStates = new Map<string, 'NONE' | 'AVAILABLE' | 'CLAIMED' | 'DISPATCHED' | 'COMPLETED' | 'FAILED'>();
@@ -81,7 +92,7 @@ function makeHarness(maxAttempts = 3) {
     async hasSessionGrant() { return false; }, async hasAlwaysGrant() { return false; }, async clearSession() {}
   };
   const kernel = new ApprovalKernel(repository, grants);
-  const gateway = new ToolGateway(new InMemoryToolCallRepository(), kernel);
+  const gateway = new ToolGateway(new InMemoryToolCallRepository(), kernel, process.cwd(), workspaceAuthority);
   const definition: ToolDefinition = {
     id: 'tool_once_write', name: 'once_write', description: 'one-shot test tool',
     parameters: { type: 'object', properties: { value: { type: 'number' } }, required: ['value'] },

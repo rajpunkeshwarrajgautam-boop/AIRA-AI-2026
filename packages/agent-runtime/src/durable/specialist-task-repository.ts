@@ -95,6 +95,7 @@ export interface AuthoritativeTaskIdentity {
   runPrincipalId: string;
   taskWorkspaceId?: string;
   runWorkspaceId?: string;
+  workspaceAuthorityActive: boolean;
 }
 
 export interface SpecialistTaskRepository {
@@ -184,7 +185,8 @@ export class InMemorySpecialistTaskRepository implements SpecialistTaskRepositor
       taskPrincipalId: task.principalId,
       runPrincipalId: task.principalId,
       taskWorkspaceId: task.workspaceId,
-      runWorkspaceId: task.workspaceId
+      runWorkspaceId: task.workspaceId,
+      workspaceAuthorityActive: Boolean(task.principalId && task.workspaceId)
     };
   }
 
@@ -456,12 +458,18 @@ export class PostgresSpecialistTaskRepository implements SpecialistTaskRepositor
   async getAuthoritativeExecutionIdentity(taskId: string): Promise<AuthoritativeTaskIdentity | undefined> {
     const row = await db('specialist_tasks')
       .join('runs', 'specialist_tasks.run_id', 'runs.id')
+      .leftJoin('principal_workspace_authorities as workspace_authority', function () {
+        this.on('workspace_authority.principal_id', '=', 'runs.principal_id')
+          .andOn('workspace_authority.workspace_id', '=', 'runs.workspace_id');
+      })
       .where('specialist_tasks.id', taskId)
       .select(
         'specialist_tasks.principal_id as task_principal_id',
         'runs.principal_id as run_principal_id',
         'specialist_tasks.workspace_id as task_workspace_id',
-        'runs.workspace_id as run_workspace_id'
+        'runs.workspace_id as run_workspace_id',
+        'workspace_authority.state as workspace_authority_state',
+        'workspace_authority.revoked_at as workspace_authority_revoked_at'
       )
       .first();
     if (!row) return undefined;
@@ -469,7 +477,8 @@ export class PostgresSpecialistTaskRepository implements SpecialistTaskRepositor
       taskPrincipalId: row.task_principal_id,
       runPrincipalId: row.run_principal_id,
       taskWorkspaceId: row.task_workspace_id || undefined,
-      runWorkspaceId: row.run_workspace_id || undefined
+      runWorkspaceId: row.run_workspace_id || undefined,
+      workspaceAuthorityActive: row.workspace_authority_state === 'ACTIVE' && row.workspace_authority_revoked_at == null
     };
   }
 

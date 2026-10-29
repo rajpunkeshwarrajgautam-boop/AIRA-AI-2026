@@ -1,8 +1,13 @@
 // Migration Path B: Simulate old DB that never got artifacts column, then run 006
 import { pathToFileURL } from 'url';
 import path from 'path';
+import { execFileSync } from 'node:child_process';
 
 async function sim() {
+  // This test independently drops/recreates public schema; fail closed before
+  // loading a database client or issuing any SQL unless the disposable target
+  // and its private network identity have been verified.
+  execFileSync(process.execPath, ['scripts/ci/assert-disposable-postgres.mjs'], { stdio: 'inherit' });
   const dbModule = await import(pathToFileURL(path.resolve('./packages/db/src/index.ts')).href as string);
   const db = (dbModule as any).db;
 

@@ -1,7 +1,6 @@
-import './setup-isolated-neon.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execSync, fork, ChildProcess } from 'node:child_process';
+import { execFileSync, fork, ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -16,7 +15,6 @@ import {
   DurableSpecialistTask
 } from '../packages/agent-runtime/src/durable/specialist-task-repository.js';
 import { TaskLeaseManager } from '../packages/agent-runtime/src/durable/task-lease-manager.js';
-import { DurableTaskScheduler } from '../packages/agent-runtime/src/durable/durable-task-scheduler.js';
 import { StaleFencingTokenError } from '../packages/agent-runtime/src/durable/task-state-machine.js';
 import {
   ToolGateway,
@@ -24,10 +22,17 @@ import {
   PostgresToolCallRepository
 } from '../packages/tool-runtime/src/index.js';
 import { ApprovalKernel } from '../packages/approvals/src/index.js';
-import { TaskDAG, ExecutionPrincipal } from '../packages/contracts/src/index.js';
+import { ExecutionPrincipal } from '../packages/contracts/src/index.js';
 import { MathematicalSpecialistAgent } from '../packages/agent-runtime/src/specialists/mathematical-specialist.js';
 import { SpecialistExecutionContext } from '../packages/agent-runtime/src/specialists/specialist-interface.js';
+import { derivePersonalWorkspaceId, PostgresWorkspaceAuthorityRepository } from '../packages/agent-runtime/src/workspace-authority.js';
 
+if (process.env.AIRA_POSTGRES_CERTIFICATION !== '1') {
+  throw new Error('Refusing M2-A PostgreSQL certification outside the authorized disposable PostgreSQL workflow.');
+}
+execFileSync(process.execPath, ['scripts/ci/assert-disposable-postgres.mjs'], { stdio: 'inherit' });
+
+const workspaceAuthorities = new PostgresWorkspaceAuthorityRepository();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const workerScriptPath = path.resolve(__dirname, 'helpers/standalone-specialist-worker.ts');
@@ -36,7 +41,6 @@ test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Cer
   let isolatedConnStr: string;
   let repo: PostgresSpecialistTaskRepository;
   let leaseManager: TaskLeaseManager;
-  let scheduler: DurableTaskScheduler;
   const childProcesses: ChildProcess[] = [];
 
   test.after(() => {
@@ -50,72 +54,60 @@ test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Cer
   const testPrincipalA: ExecutionPrincipal = {
     userId: 'user_m2a_tenant_a',
     sessionId: 'sess_m2a_tenant_a',
-    workspaceId: 'ws_m2a_tenant_a',
+    workspaceId: derivePersonalWorkspaceId('user_m2a_tenant_a'),
     role: 'user'
   };
 
   const testPrincipalB: ExecutionPrincipal = {
     userId: 'user_m2a_tenant_b',
     sessionId: 'sess_m2a_tenant_b',
-    workspaceId: 'ws_m2a_tenant_b',
+    workspaceId: derivePersonalWorkspaceId('user_m2a_tenant_b'),
     role: 'user'
   };
 
   // Helper to ensure parent run exists in public.runs table (foreign key constraint)
   async function ensureParentRun(runId: string, principalId: string): Promise<void> {
+    const workspaceId = await workspaceAuthorities.resolveWorkspace(principalId);
     const existing = await db('runs').where({ id: runId }).first();
-    if (!existing) {
-      await db('runs').insert({
-        id: runId,
-        principal_id: principalId,
-        session_id: `sess_${principalId}`,
-        prompt: `M2-A Integration Parent Run for ${runId}`,
-        status: 'RUNNING',
-        state: 'RUNNING',
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        toolsUsed: JSON.stringify(['calculator']),
-        toolCalls: JSON.stringify([]),
-        toolResults: JSON.stringify([])
-      });
+    if (existing) {
+      if (existing.principal_id !== principalId || existing.workspace_id !== workspaceId) {
+        throw new Error('M2-A certification run fixture owner/workspace mismatch.');
+      }
+      return;
     }
+    await db('runs').insert({
+      id: runId,
+      principal_id: principalId,
+      workspace_id: workspaceId,
+      session_id: `sess_${principalId}`,
+      prompt: `M2-A Integration Parent Run for ${runId}`,
+      status: 'RUNNING',
+      state: 'RUNNING',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      toolsUsed: JSON.stringify(['calculator']),
+      toolCalls: JSON.stringify([]),
+      toolResults: JSON.stringify([])
+    });
   }
 
   // ==========================================
   // PHASE 2 — ISOLATED DATABASE VERIFICATION
   // ==========================================
 
-  test('PHASE 2.1: Discover isolated Neon branch and enforce strict production separation', () => {
-    // 1. Fetch connection string via neon CLI for isolated branch on mute-frost-50372225
-    isolatedConnStr = execSync('neon connection-string br-muddy-wave-b3zxhkqf --project-id mute-frost-50372225', {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe']
-    }).trim();
+  test('PHASE 2.1: Require the preflight-verified run-scoped disposable PostgreSQL target', () => {
+    isolatedConnStr = process.env.DATABASE_URL || '';
+    assert.ok(isolatedConnStr, 'Disposable PostgreSQL URL must be present after identity preflight');
+    assert.strictEqual(isolatedConnStr, process.env.ISOLATED_TEST_DATABASE_URL);
 
-    if (!isolatedConnStr.includes('sslmode=')) {
-      isolatedConnStr += (isolatedConnStr.includes('?') ? '&' : '?') + 'sslmode=require';
-    }
-
-    assert.ok(isolatedConnStr.length > 0, 'Isolated database connection string must not be empty');
-
-    // 2. Classify database URL using database-isolation-guard
     const classification = classifyDatabaseUrl(isolatedConnStr);
-
-    // STRICT INVARIANTS:
     assert.strictEqual(classification.isProduction, false, 'Database must NOT be classified as production');
-    assert.strictEqual(classification.category, 'isolated_neon_preview', 'Must be classified as isolated_neon_preview');
-    assert.notStrictEqual(classification.projectId, 'old-sky-50952395', 'Project ID must NOT be production old-sky-50952395');
-    assert.ok(!classification.host.includes('ep-withered-art-b36ox90b'), 'Endpoint must NOT be production ep-withered-art-b36ox90b');
+    assert.strictEqual(classification.isStagingPermanent, false, 'Database must NOT be permanent staging');
+    assert.strictEqual(classification.category, 'local_or_ci_test', 'Only the disposable CI PostgreSQL target is permitted');
+    assert.doesNotThrow(() => assertCanRunMigrations(isolatedConnStr, 'test'));
 
-    // 3. Verify assertCanRunMigrations permits migration on this target
-    assert.doesNotThrow(() => {
-      assertCanRunMigrations(isolatedConnStr);
-    }, 'assertCanRunMigrations must permit migration on isolated preview branch');
-
-    process.env.DATABASE_URL = isolatedConnStr;
     repo = new PostgresSpecialistTaskRepository();
     leaseManager = new TaskLeaseManager(repo, { defaultLeaseDurationMs: 4000, heartbeatIntervalMs: 1000 });
-    scheduler = new DurableTaskScheduler(repo, { maxConcurrency: 3 });
   });
 
   test('PHASE 2.2: Apply migration 026 and verify idempotency and schema contracts', async () => {
@@ -216,6 +208,7 @@ test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Cer
       id: taskId,
       runId,
       principalId: testPrincipalA.userId,
+      workspaceId: testPrincipalA.workspaceId,
       role: 'analyst',
       objective: 'Stale fencing rejection test',
       state: 'QUEUED',
@@ -285,6 +278,7 @@ test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Cer
       id: taskIdA,
       runId: runIdA,
       principalId: testPrincipalA.userId,
+      workspaceId: testPrincipalA.workspaceId,
       role: 'analyst',
       objective: 'Tenant A task',
       state: 'QUEUED',
@@ -309,6 +303,7 @@ test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Cer
       id: taskIdB,
       runId: runIdB,
       principalId: testPrincipalB.userId,
+      workspaceId: testPrincipalB.workspaceId,
       role: 'verifier',
       objective: 'Tenant B task',
       state: 'QUEUED',
@@ -365,6 +360,7 @@ test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Cer
       id: taskId,
       runId,
       principalId: testPrincipalA.userId,
+      workspaceId: testPrincipalA.workspaceId,
       role: 'analyst',
       objective: 'Calculate ((16384 * 1024) / 4) through ToolGateway under crash conditions',
       state: 'QUEUED',
@@ -550,6 +546,7 @@ test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Cer
       id: taskId,
       runId,
       principalId: testPrincipalA.userId,
+      workspaceId: testPrincipalA.workspaceId,
       role: 'analyst',
       objective: 'Retry exhaustion test',
       state: 'RUNNING',
@@ -601,7 +598,7 @@ test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Cer
       taskId,
       principal: testPrincipalA,
       tenantId: testPrincipalA.userId,
-      workspaceId: 'ws_a',
+      workspaceId: testPrincipalA.workspaceId,
       authorizedCapabilities: ['tool_execution', 'data_analysis'],
       effectiveToolScopes: ['calculator'],
       executionPolicyVersion: '2026.2.0',
@@ -651,7 +648,7 @@ test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Cer
       taskId: sharedTaskId,
       principal: testPrincipalA,
       tenantId: testPrincipalA.userId,
-      workspaceId: 'ws_a',
+      workspaceId: testPrincipalA.workspaceId,
       authorizedCapabilities: ['tool_execution', 'data_analysis'],
       effectiveToolScopes: ['calculator'],
       executionPolicyVersion: '2026.2.0',
@@ -783,6 +780,7 @@ test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Cer
       id: taskId,
       runId,
       principalId: testPrincipalA.userId,
+      workspaceId: testPrincipalA.workspaceId,
       role: 'analyst',
       objective: 'Fencing protection test',
       state: 'QUEUED',
@@ -979,6 +977,7 @@ RETURNING *;
       id: taskId,
       runId,
       principalId: testPrincipalA.userId,
+      workspaceId: testPrincipalA.workspaceId,
       role: 'analyst',
       objective: 'Recovery runbook wrong worker ID test',
       state: 'RUNNING',
@@ -1029,6 +1028,7 @@ RETURNING *;
       id: taskId,
       runId,
       principalId: testPrincipalA.userId,
+      workspaceId: testPrincipalA.workspaceId,
       role: 'analyst',
       objective: 'Recovery runbook active lease protection test',
       state: 'RUNNING',
@@ -1088,6 +1088,7 @@ RETURNING *;
       id: taskId,
       runId,
       principalId: testPrincipalA.userId,
+      workspaceId: testPrincipalA.workspaceId,
       role: 'analyst',
       objective: 'Recovery runbook expired lease reclamation test',
       state: 'RUNNING',
@@ -1153,6 +1154,7 @@ RETURNING *;
       id: taskIdClaimed,
       runId,
       principalId: testPrincipalA.userId,
+      workspaceId: testPrincipalA.workspaceId,
       role: 'analyst',
       objective: 'Claimed state audit preservation test',
       state: 'CLAIMED',
@@ -1181,6 +1183,7 @@ RETURNING *;
       id: taskIdRunning,
       runId,
       principalId: testPrincipalA.userId,
+      workspaceId: testPrincipalA.workspaceId,
       role: 'analyst',
       objective: 'Running state audit preservation test',
       state: 'RUNNING',
@@ -1253,6 +1256,7 @@ RETURNING *;
       id: taskIdA,
       runId: runIdA,
       principalId: testPrincipalA.userId,
+      workspaceId: testPrincipalA.workspaceId,
       role: 'analyst',
       objective: 'Cross tenant recovery rejection test',
       state: 'RUNNING',

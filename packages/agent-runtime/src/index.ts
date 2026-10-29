@@ -22,6 +22,11 @@ import { ToolRegistry, ToolGateway, PostgresToolCallRepository, InMemoryToolCall
 import { configuredSearchProviders } from '../../tool-runtime/src/search-providers.js';
 import { ApprovalKernel } from '../../approvals/src/index.js';
 import { BrainV2KnowledgeEngine } from '../../knowledge/src/index.js';
+import {
+  PostgresWorkspaceAuthorityRepository,
+  WorkspaceAuthorityRepository,
+  workspaceAuthority
+} from './workspace-authority.js';
 
 import { RunRepository } from './repositories.js';
 import { CapabilityRegistry } from './registry.js';
@@ -138,6 +143,7 @@ export class AgentRuntime extends EventEmitter {
   private durableScheduler: DurableTaskScheduler;
   private specialistWorkerRuntime: SpecialistWorkerRuntime;
   private durableCoordinator: DurableExecutionCoordinator;
+  private workspaceAuthority: WorkspaceAuthorityRepository;
 
   constructor(
     private modelRouter: ModelRouter,
@@ -158,11 +164,18 @@ export class AgentRuntime extends EventEmitter {
     rufloAdapter?: RufloOrchestrationAdapter,
     specialistRegistry?: SpecialistRegistry,
     specialistTaskRepo?: SpecialistTaskRepository,
-    durableCoordinator?: DurableExecutionCoordinator
+    durableCoordinator?: DurableExecutionCoordinator,
+    workspaceAuthorityRepository?: WorkspaceAuthorityRepository
   ) {
     super();
     const isDbConfigured = Boolean(process.env.DATABASE_URL?.trim());
-    this.toolGateway = toolGateway || new ToolGateway(isDbConfigured ? new PostgresToolCallRepository() : new InMemoryToolCallRepository(), this.approvalKernel, this.workspaceRoot);
+    this.workspaceAuthority = workspaceAuthorityRepository || workspaceAuthority;
+    this.toolGateway = toolGateway || new ToolGateway(
+      isDbConfigured ? new PostgresToolCallRepository() : new InMemoryToolCallRepository(),
+      this.approvalKernel,
+      this.workspaceRoot,
+      this.workspaceAuthority
+    );
     this.router = router || new ServerIntentRouter(this.capabilityRegistry, this.modelRouter);
     this.workflowRepo = workflowRepo || (isDbConfigured ? new PostgresWorkflowRepository() : new InMemoryWorkflowRepository());
     this.workflowCompiler = workflowCompiler || new WorkflowCompiler(this.modelRouter);
@@ -351,6 +364,16 @@ export class AgentRuntime extends EventEmitter {
   }
 
   public async createRun(request: CreateRunRequest, principal: ExecutionPrincipal): Promise<Run> {
+    // Production/DB-backed runtimes revalidate the server-owned principal/workspace
+    // binding at run creation; request body workspace fields are never consulted.
+    if (this.workspaceAuthority instanceof PostgresWorkspaceAuthorityRepository) {
+      if (
+        !principal?.userId || !principal.workspaceId ||
+        !(await this.workspaceAuthority.isWorkspaceActive(principal.userId, principal.workspaceId))
+      ) {
+        throw new Error('Run creation requires active workspace authority for the authenticated principal.');
+      }
+    }
     const model = normalizeModelIdentifier(request.modelPolicy?.model);
     return withInferencePrincipal(principal.userId, () => this.createNormalizedRun({
       ...request, modelPolicy: { ...request.modelPolicy, model }
@@ -424,7 +447,9 @@ export class AgentRuntime extends EventEmitter {
       agentId: null,
       sessionId: principal.sessionId,
       workspaceId: principal.workspaceId || null,
-      projectId: request.projectId || principal.projectId || null,
+      // Project IDs have no persisted membership/ownership relation yet; do not
+      // use client request fields or unverified principal metadata to select one.
+      projectId: null,
       conversationId: request.conversationId || null,
       intent: routingDecision.intent,
       routingDecision,
@@ -532,6 +557,9 @@ export class AgentRuntime extends EventEmitter {
     const run = await this.getRun(pendingRequest.runId);
     if (
       !run || run.principalId !== resolverPrincipal.userId ||
+      !run.workspaceId || run.workspaceId !== resolverPrincipal.workspaceId ||
+      pendingRequest.workspaceId !== run.workspaceId ||
+      !(await this.workspaceAuthority.isWorkspaceActive(run.principalId, run.workspaceId)) ||
       ['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)
     ) return false;
 
@@ -658,6 +686,13 @@ export class AgentRuntime extends EventEmitter {
     if (!run) return;
 
     if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)) return;
+    if (
+      this.workspaceAuthority instanceof PostgresWorkspaceAuthorityRepository &&
+      (!run.workspaceId || !(await this.workspaceAuthority.isWorkspaceActive(run.principalId, run.workspaceId)))
+    ) {
+      await this.transitionRunState(runId, 'FAILED', 'Run execution requires active authoritative workspace authority.');
+      return;
+    }
 
     // Checkpoint 0: Capability readiness gate
     if (run.routingDecision?.executionTarget === 'CAPABILITY_NOT_READY') {
@@ -991,8 +1026,11 @@ export class AgentRuntime extends EventEmitter {
       );
 
       if (requiresApproval) {
-        if (!run.workspaceId) {
-          await this.transitionRunState(runId, 'FAILED', 'Approval cannot be created without an authoritative workspace.');
+        if (
+          !run.workspaceId ||
+          !(await this.workspaceAuthority.isWorkspaceActive(run.principalId, run.workspaceId))
+        ) {
+          await this.transitionRunState(runId, 'FAILED', 'Approval cannot be created without active authoritative workspace authority.');
           return;
         }
         run.executionCheckpoint = 'WAITING_FOR_APPROVAL';
@@ -1027,6 +1065,20 @@ export class AgentRuntime extends EventEmitter {
     // Checkpoint 4: Execute Tool
     if (run.executionCheckpoint === 'TOOL_APPROVED') {
       const toolCall = run.toolCalls[run.toolCalls.length - 1];
+      const dispatchToolDef = this.toolGateway.getTool(toolCall.name)?.definition || this.toolRegistry.get(toolCall.name)?.definition;
+      const dispatchApprovalPolicy = dispatchToolDef ? deriveToolApprovalPolicy(dispatchToolDef) : undefined;
+      const dispatchRequiresWorkspaceAuthority = Boolean(run.pendingApproval) ||
+        Boolean(dispatchApprovalPolicy?.requiresApproval) ||
+        dispatchToolDef?.permissionLevel === 'WRITE' || dispatchToolDef?.permissionLevel === 'DESTRUCTIVE' ||
+        dispatchToolDef?.sideEffectLevel === 'WRITE' || dispatchToolDef?.sideEffectLevel === 'DESTRUCTIVE' ||
+        run.routingDecision?.sideEffectLevel === 'DESTRUCTIVE';
+      if (dispatchRequiresWorkspaceAuthority && (
+        !run.workspaceId ||
+        !(await this.workspaceAuthority.isWorkspaceActive(run.principalId, run.workspaceId))
+      )) {
+        await this.transitionRunState(runId, 'FAILED', 'Protected tool execution requires active authoritative workspace authority.');
+        return;
+      }
       run.executionCheckpoint = 'TOOL_EXECUTING';
       await this.saveRun(run);
 
@@ -1044,6 +1096,7 @@ export class AgentRuntime extends EventEmitter {
             principal: {
               userId: run.principalId,
               sessionId: run.sessionId,
+              workspaceId: run.workspaceId || undefined,
               roles: ['member'],
               scopes: run.principalScopes || []
             },

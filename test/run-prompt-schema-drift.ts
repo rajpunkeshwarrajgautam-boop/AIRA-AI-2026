@@ -1,9 +1,19 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { db, runMigrations, closeDb } from '../packages/db/src/index.js';
 import { reconcileRunPromptColumn } from '../packages/db/src/migrations/024_reconcile_runs_prompt_text.js';
 
 async function main(): Promise<void> {
+  if (process.env.AIRA_POSTGRES_CERTIFICATION !== '1') {
+    throw new Error('Prompt schema drift certification requires AIRA_POSTGRES_CERTIFICATION=1.');
+  }
+  if (process.env.CI_DISPOSABLE_DATABASE !== 'true'
+      || !process.env.DATABASE_URL
+      || process.env.DATABASE_URL !== process.env.ISOLATED_TEST_DATABASE_URL) {
+    throw new Error('Prompt schema drift certification requires the matching disposable PostgreSQL URL contract.');
+  }
+  execFileSync(process.execPath, ['scripts/ci/assert-disposable-postgres.mjs'], { stdio: 'inherit' });
   await runMigrations();
   const tableName = `runs_prompt_repair_ci_${randomUUID().replace(/-/g, '').slice(0, 14)}`;
 

@@ -4,6 +4,12 @@ import { SpecialistRegistry } from '../../packages/agent-runtime/src/specialists
 import { MathematicalSpecialistAgent } from '../../packages/agent-runtime/src/specialists/mathematical-specialist.js';
 import { ToolGateway, InMemoryToolCallRepository } from '../../packages/tool-runtime/src/index.js';
 import { ApprovalKernel } from '../../packages/approvals/src/index.js';
+import { execFileSync } from 'node:child_process';
+
+if (process.env.AIRA_POSTGRES_CERTIFICATION !== '1') {
+  throw new Error('Refusing standalone worker certification outside the disposable PostgreSQL workflow.');
+}
+execFileSync(process.execPath, ['scripts/ci/assert-disposable-postgres.mjs'], { stdio: 'inherit' });
 
 const workerId = process.env.WORKER_ID || `worker_proc_${process.pid}`;
 const pollIntervalMs = Number(process.env.POLL_INTERVAL_MS || '200');

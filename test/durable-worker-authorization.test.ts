@@ -48,7 +48,17 @@ test('server durable allowlist rejects tools outside a role policy', () => {
 });
 
 test('ToolGateway enforces an explicitly empty durable allowlist before adapter execution', async () => {
-  const gateway = new ToolGateway(new InMemoryToolCallRepository());
+  const authority = {
+    async resolveWorkspace(principalId: string) {
+      if (principalId !== principal.userId) throw new Error('unknown test principal');
+      return principal.workspaceId;
+    },
+    async isWorkspaceActive(principalId: string, workspaceId: string) {
+      return principalId === principal.userId && workspaceId === principal.workspaceId;
+    },
+    async revokeWorkspace() { return false; }
+  };
+  const gateway = new ToolGateway(new InMemoryToolCallRepository(), undefined, process.cwd(), authority);
   const result = await gateway.execute({
     toolName: 'calculator',
     arguments: { expression: '2 + 2' },
@@ -69,7 +79,8 @@ test('worker refuses a task whose persisted owner differs from the parent run ow
         taskPrincipalId: task.principalId,
         runPrincipalId: 'foreign_owner',
         taskWorkspaceId: task.workspaceId,
-        runWorkspaceId: task.workspaceId
+        runWorkspaceId: task.workspaceId,
+        workspaceAuthorityActive: true
       };
     }
   }
@@ -118,6 +129,81 @@ test('worker refuses a task whose persisted owner differs from the parent run ow
     workerId: 'worker_test',
     leaseDurationMs: 5000,
     heartbeatIntervalMs: 1000
+  });
+
+  const result = await runtime.executeTask(task);
+  assert.equal(dispatched, false);
+  assert.equal(result.error?.code, 'WORKER_AUTHORIZATION_DENIED');
+  assert.equal((await repository.getTask(task.id))?.state, 'FAILED');
+});
+
+test('worker refuses durable execution after its persisted workspace authority is revoked', async () => {
+  class RevokedWorkspaceRepository extends InMemorySpecialistTaskRepository {
+    override async getAuthoritativeExecutionIdentity(taskId: string) {
+      const identity = await super.getAuthoritativeExecutionIdentity(taskId);
+      return identity ? { ...identity, workspaceAuthorityActive: false } : undefined;
+    }
+  }
+
+  const repository = new RevokedWorkspaceRepository();
+  const task: DurableSpecialistTask = {
+    id: 'task_revoked_workspace', runId: 'run_revoked_workspace', principalId: principal.userId,
+    workspaceId: principal.workspaceId, role: 'analyst', objective: 'must not dispatch after revoke',
+    state: 'QUEUED', dependencies: [], inputPayload: { expression: '1 + 1' },
+    executionConstraints: { allowedTools: ['calculator'] } as DurableSpecialistTask['executionConstraints'],
+    authorizationRequirements: {}, budgetLimits: { maxTokens: 1000 }, timeoutMs: 5000,
+    attemptCount: 0, maxRetries: 0, backoffMultiplier: 1, fencingToken: 0,
+    usageTelemetry: { tokensUsed: 0, durationMs: 0 }, provenance: { workerId: 'test' },
+    checkpoints: [], createdAt: Date.now(), updatedAt: Date.now()
+  };
+  await repository.saveTask(task);
+  let dispatched = false;
+  const registry = new SpecialistRegistry();
+  registry.registerSpecialist({
+    role: 'analyst', name: 'test analyst', description: 'revocation test', requiredCapabilities: [],
+    canExecute: () => ({ authorized: true }),
+    async execute() { dispatched = true; return {} as SpecialistExecutionResult; }
+  }, 'IMPLEMENTED_LOCALLY');
+  const runtime = new SpecialistWorkerRuntime(repository, new TaskLeaseManager(repository), registry, {
+    workerId: 'worker_revoked_test', leaseDurationMs: 5000, heartbeatIntervalMs: 1000
+  });
+
+  const result = await runtime.executeTask(task);
+  assert.equal(dispatched, false);
+  assert.equal(result.error?.code, 'WORKER_AUTHORIZATION_DENIED');
+  assert.equal((await repository.getTask(task.id))?.state, 'FAILED');
+});
+
+test('worker revalidates workspace authority immediately before specialist dispatch', async () => {
+  class RevokesBetweenChecksRepository extends InMemorySpecialistTaskRepository {
+    private checks = 0;
+    override async getAuthoritativeExecutionIdentity(taskId: string) {
+      const identity = await super.getAuthoritativeExecutionIdentity(taskId);
+      this.checks += 1;
+      return identity && this.checks === 1 ? identity : identity ? { ...identity, workspaceAuthorityActive: false } : undefined;
+    }
+  }
+  const repository = new RevokesBetweenChecksRepository();
+  const task: DurableSpecialistTask = {
+    id: 'task_workspace_revoke_race', runId: 'run_workspace_revoke_race', principalId: principal.userId,
+    workspaceId: principal.workspaceId, role: 'analyst', objective: 'must not dispatch after authority race',
+    state: 'QUEUED', dependencies: [], inputPayload: { expression: '1 + 1' },
+    executionConstraints: { allowedTools: ['calculator'] } as DurableSpecialistTask['executionConstraints'],
+    authorizationRequirements: {}, budgetLimits: { maxTokens: 1000 }, timeoutMs: 5000,
+    attemptCount: 0, maxRetries: 0, backoffMultiplier: 1, fencingToken: 0,
+    usageTelemetry: { tokensUsed: 0, durationMs: 0 }, provenance: { workerId: 'test' },
+    checkpoints: [], createdAt: Date.now(), updatedAt: Date.now()
+  };
+  await repository.saveTask(task);
+  let dispatched = false;
+  const registry = new SpecialistRegistry();
+  registry.registerSpecialist({
+    role: 'analyst', name: 'test analyst', description: 'authority race test', requiredCapabilities: [],
+    canExecute: () => ({ authorized: true }),
+    async execute() { dispatched = true; return {} as SpecialistExecutionResult; }
+  }, 'IMPLEMENTED_LOCALLY');
+  const runtime = new SpecialistWorkerRuntime(repository, new TaskLeaseManager(repository), registry, {
+    workerId: 'worker_workspace_race_test', leaseDurationMs: 5000, heartbeatIntervalMs: 1000
   });
 
   const result = await runtime.executeTask(task);

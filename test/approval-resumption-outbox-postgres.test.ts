@@ -1,15 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { db } from '../packages/db/src/index.js';
 import { PostgresRunRepository } from '../packages/agent-runtime/src/repositories.js';
 import { up as repairApprovalResumptionTargets } from '../packages/db/src/migrations/029_authoritative_approval_resumption_targets.js';
 import { PostgresApprovalRepository, PostgresSessionGrantRepository, ApprovalGrantRequest, ApprovalResolutionTarget } from '../packages/approvals/src/repositories.js';
+import { derivePersonalWorkspaceId, PostgresWorkspaceAuthorityRepository } from '../packages/agent-runtime/src/workspace-authority.js';
+import { PostgresSpecialistTaskRepository, type DurableSpecialistTask } from '../packages/agent-runtime/src/durable/specialist-task-repository.js';
+import { SpecialistWorkerRuntime } from '../packages/agent-runtime/src/durable/specialist-worker-runtime.js';
+import { TaskLeaseManager } from '../packages/agent-runtime/src/durable/task-lease-manager.js';
+import { SpecialistRegistry } from '../packages/agent-runtime/src/specialists/specialist-registry.js';
+import type { SpecialistExecutionResult } from '../packages/agent-runtime/src/specialists/specialist-interface.js';
 import type { ApprovalDecision, ApprovalRequest } from '../packages/contracts/src/index.js';
 
-// This suite is run only inside postgres-certification.yml after its disposable
-// PostgreSQL identity checks and migrations. It never discovers or provisions a DB.
-const requested = process.env.AIRA_POSTGRES_CERTIFICATION === '1';
+// This suite is mandatory only in postgres-certification.yml. Refuse an ordinary
+// invocation instead of silently passing with a skipped PostgreSQL test.
+if (process.env.AIRA_POSTGRES_CERTIFICATION !== '1') {
+  throw new Error('Refusing PostgreSQL approval certification outside the authorized disposable PostgreSQL workflow.');
+}
 function hasDisposablePostgresContract(): boolean {
   if (
     process.env.NODE_ENV !== 'test' || process.env.CI_DISPOSABLE_DATABASE !== 'true' ||
@@ -27,11 +36,10 @@ function hasDisposablePostgresContract(): boolean {
     return false;
   }
 }
-const safeDisposableTarget = hasDisposablePostgresContract();
-if (requested && !safeDisposableTarget) {
+if (!hasDisposablePostgresContract()) {
   throw new Error('Refusing approval integration tests without the isolated run-scoped PostgreSQL contract.');
 }
-const enabled = requested && safeDisposableTarget;
+execFileSync(process.execPath, ['scripts/ci/assert-disposable-postgres.mjs'], { stdio: 'inherit' });
 const repo = new PostgresApprovalRepository();
 const owner = 'cert_m2a_approval_owner';
 const workspaceId = 'cert_m2a_approval_workspace';
@@ -43,6 +51,10 @@ async function fixture(decisionSeed = randomUUID(), workflowStepId?: string, gen
   const requestId = `cert_approval_req_${decisionSeed}`;
   const callId = `cert_approval_call_${decisionSeed}`;
   const now = Date.now();
+  await db('principal_workspace_authorities').insert({
+    principal_id: owner, workspace_id: workspaceId, state: 'ACTIVE',
+    created_at: now, updated_at: now, revoked_at: null
+  }).onConflict('principal_id').ignore();
   await db('runs').insert({
     id: runId, principal_id: owner, session_id: `sess_${owner}`, workspace_id: workspaceId,
     prompt: 'disposable approval certification fixture', status: 'WAITING_FOR_APPROVAL',
@@ -94,10 +106,11 @@ async function fixture(decisionSeed = randomUUID(), workflowStepId?: string, gen
 
 async function cleanup(runId: string): Promise<void> {
   await db('approval_resumption_outbox').where({ run_id: runId }).del();
-  await db('session_grants').where({ principal_id: owner, workspace_id: workspaceId }).andWhere('session_id', runId).del();
+  await db('session_grants').where({ principal_id: owner, workspace_id: workspaceId }).del();
   const workflow = await db('workflow_runs').where({ run_id: runId }).first();
   await db('runs').where({ id: runId }).del();
   if (workflow?.workflow_id) await db('workflow_definitions').where({ id: workflow.workflow_id }).del();
+  await db('principal_workspace_authorities').where({ principal_id: owner, workspace_id: workspaceId }).del();
 }
 
 async function resolve(f: Fixture, decision: ApprovalDecision = 'ALLOW_ONCE') {
@@ -110,7 +123,170 @@ async function resolve(f: Fixture, decision: ApprovalDecision = 'ALLOW_ONCE') {
     decision === 'ALLOW_ONCE', f.target);
 }
 
-test('isolated PostgreSQL approval and resumption outbox certification', { skip: !enabled }, async (suite) => {
+test('isolated PostgreSQL approval and resumption outbox certification', async (suite) => {
+  await suite.test('workspace authority provisions atomically, isolates owners, and preserves revocation tombstones', async () => {
+    const authorities = new PostgresWorkspaceAuthorityRepository();
+    const principalId = `cert_workspace_${randomUUID()}`;
+    const racePrincipalId = `cert_workspace_race_${randomUUID()}`;
+    const tombstonePrincipalId = `cert_workspace_revoked_${randomUUID()}`;
+    try {
+      const [first, second] = await Promise.all([
+        authorities.resolveWorkspace(principalId),
+        authorities.resolveWorkspace(principalId)
+      ]);
+      assert.equal(first, derivePersonalWorkspaceId(principalId));
+      assert.equal(second, first);
+      assert.equal(await db('principal_workspace_authorities').where({ principal_id: principalId }).count('* as n').then(rows => Number(rows[0].n)), 1);
+      assert.equal(await authorities.isWorkspaceActive(principalId, first), true);
+      assert.equal(await authorities.isWorkspaceActive(`foreign_${principalId}`, first), false);
+
+      await assert.rejects(() => db('principal_workspace_authorities').insert({
+        principal_id: `cert_workspace_duplicate_${randomUUID()}`, workspace_id: first,
+        state: 'ACTIVE', created_at: Date.now(), updated_at: Date.now(), revoked_at: null
+      }));
+      await assert.rejects(() => db('principal_workspace_authorities').insert({
+        principal_id: `cert_workspace_invalid_state_${randomUUID()}`, workspace_id: `invalid_${randomUUID()}`,
+        state: 'INVALID', created_at: Date.now(), updated_at: Date.now(), revoked_at: null
+      }));
+      await assert.rejects(() => db('principal_workspace_authorities').insert({
+        principal_id: `cert_workspace_bad_active_${randomUUID()}`, workspace_id: `invalid_${randomUUID()}`,
+        state: 'ACTIVE', created_at: Date.now(), updated_at: Date.now(), revoked_at: Date.now()
+      }));
+      await assert.rejects(() => db('principal_workspace_authorities').insert({
+        principal_id: `cert_workspace_bad_revoked_${randomUUID()}`, workspace_id: `invalid_${randomUUID()}`,
+        state: 'REVOKED', created_at: Date.now(), updated_at: Date.now(), revoked_at: null
+      }));
+
+      const race = await Promise.allSettled([
+        authorities.resolveWorkspace(racePrincipalId),
+        authorities.revokeWorkspace(racePrincipalId)
+      ]);
+      assert.equal(race[1].status, 'fulfilled');
+      assert.equal(race[1].status === 'fulfilled' && race[1].value, true);
+      const raceWorkspaceId = derivePersonalWorkspaceId(racePrincipalId);
+      assert.equal(await authorities.isWorkspaceActive(racePrincipalId, raceWorkspaceId), false);
+      await assert.rejects(() => authorities.resolveWorkspace(racePrincipalId), /no active workspace authority/i);
+
+      assert.equal(await authorities.revokeWorkspace(tombstonePrincipalId), true);
+      assert.equal(await authorities.isWorkspaceActive(tombstonePrincipalId, derivePersonalWorkspaceId(tombstonePrincipalId)), false);
+      await assert.rejects(() => authorities.resolveWorkspace(tombstonePrincipalId), /no active workspace authority/i);
+    } finally {
+      await db('principal_workspace_authorities')
+        .whereIn('principal_id', [principalId, racePrincipalId, tombstonePrincipalId])
+        .del();
+    }
+  });
+
+  await suite.test('legacy run workspace values cannot create an approval without persisted authority', async () => {
+    const principalId = `cert_legacy_run_owner_${randomUUID()}`;
+    const workspaceId = `legacy_client_workspace_${randomUUID()}`;
+    const runId = `cert_legacy_run_${randomUUID()}`;
+    const requestId = `cert_legacy_approval_${randomUUID()}`;
+    const toolCallId = `cert_legacy_call_${randomUUID()}`;
+    const now = Date.now();
+    const request: ApprovalRequest = {
+      id: requestId,
+      runId,
+      toolCall: { id: toolCallId, toolId: 'tool_legacy_write', name: 'legacy_write', arguments: { value: 1 }, timestamp: now },
+      risk: 'medium', title: 'Legacy workspace approval', reason: 'must fail closed',
+      sanitizedPreview: { value: 1 }, requestedAt: now, workspaceId,
+      permissionLevel: 'WRITE', toolDefinitionVersion: 1, toolPolicyFingerprint: 'b'.repeat(64)
+    };
+    try {
+      await db('runs').insert({
+        id: runId, principal_id: principalId, session_id: `sess_${principalId}`, workspace_id: workspaceId,
+        prompt: 'legacy workspace must not gain authority', status: 'WAITING_FOR_APPROVAL',
+        state: 'WAITING_FOR_APPROVAL', createdAt: now, updatedAt: now,
+        toolsUsed: '[]', toolCalls: '[]', toolResults: '[]'
+      });
+      assert.equal(await db('principal_workspace_authorities').where({ principal_id: principalId }).first(), undefined);
+      await assert.rejects(() => repo.saveRequest(request), /active workspace authority/i);
+      assert.equal(await db('tool_calls').where({ id: toolCallId }).first(), undefined);
+      assert.equal(await db('approvals').where({ id: requestId }).first(), undefined);
+    } finally {
+      await db('approvals').where({ id: requestId }).del();
+      await db('tool_calls').where({ id: toolCallId }).del();
+      await db('runs').where({ id: runId }).del();
+      await db('principal_workspace_authorities').where({ principal_id: principalId }).del();
+    }
+  });
+
+  await suite.test('PostgreSQL worker recovery requires live authority and never backfills legacy task workspaces', async () => {
+    const authorities = new PostgresWorkspaceAuthorityRepository();
+    const taskRepository = new PostgresSpecialistTaskRepository();
+    const activePrincipalId = `cert_worker_active_${randomUUID()}`;
+    const legacyPrincipalId = `cert_worker_legacy_${randomUUID()}`;
+    const activeWorkspaceId = await authorities.resolveWorkspace(activePrincipalId);
+    const legacyWorkspaceId = `legacy_client_workspace_${randomUUID()}`;
+    const activeRunId = `cert_worker_run_${randomUUID()}`;
+    const legacyRunId = `cert_worker_run_${randomUUID()}`;
+    const activeTaskId = `cert_worker_task_${randomUUID()}`;
+    const legacyTaskId = `cert_worker_task_${randomUUID()}`;
+    const now = Date.now();
+
+    const insertRun = async (id: string, principalId: string, workspaceId: string) => db('runs').insert({
+      id, principal_id: principalId, workspace_id: workspaceId, session_id: `sess_${principalId}`,
+      prompt: 'disposable worker authority fixture', status: 'RUNNING', state: 'RUNNING',
+      createdAt: now, updatedAt: now, toolsUsed: '[]', toolCalls: '[]', toolResults: '[]'
+    });
+    const makeTask = (id: string, runId: string, principalId: string, workspaceId: string): DurableSpecialistTask => ({
+      id, runId, principalId, workspaceId, role: 'analyst', objective: 'worker authority certification',
+      state: 'QUEUED', dependencies: [], inputPayload: { expression: '1 + 1' },
+      executionConstraints: { allowedTools: ['calculator'] } as DurableSpecialistTask['executionConstraints'],
+      authorizationRequirements: {}, budgetLimits: { maxTokens: 1000 }, timeoutMs: 5000,
+      attemptCount: 0, maxRetries: 0, backoffMultiplier: 1.5, fencingToken: 0,
+      usageTelemetry: { tokensUsed: 0, durationMs: 0 }, provenance: { workerId: 'certification' },
+      checkpoints: [], createdAt: now, updatedAt: now
+    });
+
+    try {
+      await insertRun(activeRunId, activePrincipalId, activeWorkspaceId);
+      await insertRun(legacyRunId, legacyPrincipalId, legacyWorkspaceId);
+      await taskRepository.saveTask(makeTask(activeTaskId, activeRunId, activePrincipalId, activeWorkspaceId));
+      await taskRepository.saveTask(makeTask(legacyTaskId, legacyRunId, legacyPrincipalId, legacyWorkspaceId));
+
+      const activeIdentity = await taskRepository.getAuthoritativeExecutionIdentity(activeTaskId);
+      assert.equal(activeIdentity?.workspaceAuthorityActive, true);
+      assert.equal(activeIdentity?.taskPrincipalId, activePrincipalId);
+      assert.equal(activeIdentity?.runPrincipalId, activePrincipalId);
+      assert.equal(activeIdentity?.taskWorkspaceId, activeWorkspaceId);
+      assert.equal(activeIdentity?.runWorkspaceId, activeWorkspaceId);
+
+      const legacyIdentity = await taskRepository.getAuthoritativeExecutionIdentity(legacyTaskId);
+      assert.equal(legacyIdentity?.workspaceAuthorityActive, false);
+      assert.equal(await db('principal_workspace_authorities').where({ principal_id: legacyPrincipalId }).first(), undefined,
+        'A legacy task must not cause historical workspace data to be backfilled as authority.');
+
+      assert.equal(await authorities.revokeWorkspace(activePrincipalId), true);
+      assert.equal((await taskRepository.getAuthoritativeExecutionIdentity(activeTaskId))?.workspaceAuthorityActive, false);
+      await assert.rejects(() => authorities.resolveWorkspace(activePrincipalId), /no active workspace authority/i);
+      assert.equal((await taskRepository.getAuthoritativeExecutionIdentity(legacyTaskId))?.workspaceAuthorityActive, false);
+
+      let dispatched = false;
+      const specialists = new SpecialistRegistry();
+      specialists.registerSpecialist({
+        role: 'analyst', name: 'PostgreSQL revocation fixture', description: 'must not dispatch after revocation',
+        requiredCapabilities: [], canExecute: () => ({ authorized: true }),
+        async execute() { dispatched = true; return {} as SpecialistExecutionResult; }
+      }, 'IMPLEMENTED_LOCALLY');
+      const worker = new SpecialistWorkerRuntime(taskRepository, new TaskLeaseManager(taskRepository), specialists, {
+        workerId: 'postgres_revocation_certification', leaseDurationMs: 5000, heartbeatIntervalMs: 1000
+      });
+      const recovered = await worker.executeTask((await taskRepository.getTask(activeTaskId))!);
+      assert.equal(dispatched, false, 'Durable recovery must not dispatch after the persisted authority tombstone.');
+      assert.equal(recovered.error?.code, 'WORKER_AUTHORIZATION_DENIED');
+      assert.equal((await taskRepository.getTask(activeTaskId))?.state, 'FAILED');
+      const legacyRecovered = await worker.executeTask((await taskRepository.getTask(legacyTaskId))!);
+      assert.equal(dispatched, false, 'Legacy workspace identifiers must not authorize specialist dispatch.');
+      assert.equal(legacyRecovered.error?.code, 'WORKER_AUTHORIZATION_DENIED');
+      assert.equal((await taskRepository.getTask(legacyTaskId))?.state, 'FAILED');
+    } finally {
+      await db('specialist_tasks').whereIn('id', [activeTaskId, legacyTaskId]).del();
+      await db('runs').whereIn('id', [activeRunId, legacyRunId]).del();
+      await db('principal_workspace_authorities').where({ principal_id: activePrincipalId }).del();
+      await db('principal_workspace_authorities').where({ principal_id: legacyPrincipalId }).del();
+    }
+  });
 
   await suite.test('concurrent identical decisions commit once; conflicting decisions cannot both win', async () => {
     const f = await fixture();
@@ -154,6 +330,27 @@ test('isolated PostgreSQL approval and resumption outbox certification', { skip:
       assert.equal(await db('approval_resumption_outbox').where({ approval_id: f.request.id }).first(), undefined);
       assert.equal(await db('session_grants').where({ principal_id: owner, workspace_id: workspaceId, tool: 'cert_write' }).first(), undefined);
     } finally { await cleanup(f.runId); }
+  });
+
+  await suite.test('revoked workspace authority blocks approval decisions and reusable grants', async () => {
+    const f = await fixture();
+    const grants = new PostgresSessionGrantRepository();
+    const tool = `cert_revoked_${randomUUID()}`;
+    try {
+      await db('principal_workspace_authorities').where({ principal_id: owner, workspace_id: workspaceId })
+        .update({ state: 'REVOKED', revoked_at: Date.now(), updated_at: Date.now() });
+      await assert.rejects(() => resolve(f, 'ALLOW_ONCE'), /active workspace authority/i);
+      assert.equal((await db('approvals').where({ id: f.request.id }).first()).status, 'PENDING');
+      assert.equal(await db('approval_resumption_outbox').where({ approval_id: f.request.id }).first(), undefined);
+      await assert.rejects(() => grants.grantSession(f.runId, tool, owner, 'WRITE'), /active workspace authority/i);
+      await assert.rejects(() => grants.grantAlways(tool, owner, 'WRITE', f.runId, workspaceId), /active workspace authority/i);
+      assert.equal(await grants.hasSessionGrant(f.runId, tool, owner, 'WRITE'), false);
+      assert.equal(await grants.hasAlwaysGrant(tool, owner, 'WRITE', f.runId), false);
+    } finally {
+      await db('principal_workspace_authorities').where({ principal_id: owner, workspace_id: workspaceId })
+        .update({ state: 'ACTIVE', revoked_at: null, updated_at: Date.now() });
+      await cleanup(f.runId);
+    }
   });
 
   await suite.test('standalone reusable grants derive workspace from an owned parent run', async () => {
@@ -371,4 +568,4 @@ test('isolated PostgreSQL approval and resumption outbox certification', { skip:
   });
 });
 
-test.after(async () => { if (enabled) await db.destroy(); });
+test.after(async () => { await db.destroy(); });

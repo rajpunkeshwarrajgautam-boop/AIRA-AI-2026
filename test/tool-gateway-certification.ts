@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { execFileSync } from 'node:child_process';
 import assert from 'node:assert';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
@@ -19,6 +20,15 @@ import {
 import { db } from '../packages/db/src/index.js';
 
 async function runToolGatewayCertification() {
+  if (process.env.AIRA_POSTGRES_CERTIFICATION !== '1') {
+    throw new Error('Tool gateway database certification requires AIRA_POSTGRES_CERTIFICATION=1.');
+  }
+  if (process.env.CI_DISPOSABLE_DATABASE !== 'true'
+      || !process.env.DATABASE_URL
+      || process.env.DATABASE_URL !== process.env.ISOLATED_TEST_DATABASE_URL) {
+    throw new Error('Tool gateway database certification requires the matching disposable PostgreSQL URL contract.');
+  }
+  execFileSync(process.execPath, ['scripts/ci/assert-disposable-postgres.mjs'], { stdio: 'inherit' });
   console.log('================================================================');
   console.log('  AIRA TOOL GATEWAY — CORE CERTIFICATION SUITE (PHASES 29, 31, 32, 33)');
   console.log('================================================================');
@@ -51,6 +61,14 @@ async function runToolGatewayCertification() {
 
   async function ensureParentRun(runId: string, principal: ExecutionPrincipal): Promise<void> {
     const now = Date.now();
+    await db('principal_workspace_authorities').insert({
+      principal_id: principal.userId,
+      workspace_id: principal.workspaceId,
+      state: 'ACTIVE',
+      created_at: now,
+      updated_at: now,
+      revoked_at: null
+    }).onConflict('principal_id').ignore();
     await db('runs').insert({
       id: runId, principal_id: principal.userId, workspace_id: principal.workspaceId,
       session_id: principal.sessionId, prompt: 'Disposable ToolGateway certification run',

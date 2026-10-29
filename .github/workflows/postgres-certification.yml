@@ -311,11 +311,23 @@ jobs:
           mark_stage 'verify disposable PostgreSQL identity after migration'
           docker exec --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
             "$TEST_CONTAINER" node scripts/ci/assert-disposable-postgres.mjs
+          mark_stage 'run guarded tool-call schema drift certification'
+          docker exec --env AIRA_POSTGRES_CERTIFICATION=1 --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" npm run test:tool-calls-drift
+          mark_stage 'run guarded prompt schema drift certification'
+          docker exec --env AIRA_POSTGRES_CERTIFICATION=1 --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" ./node_modules/.bin/tsx test/run-prompt-schema-drift.ts
+          mark_stage 'run guarded database recovery certification'
+          docker exec --env AIRA_POSTGRES_CERTIFICATION=1 --env AIRA_PERSISTENT_WORKSPACE_AUTHORITY=true \
+            --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" npm run test:recovery
 
           mark_stage 'run workflow tests'
           docker exec "$TEST_CONTAINER" npm run test:workflow
-          mark_stage 'run tool tests'
-          docker exec "$TEST_CONTAINER" npm run test:tools
+          mark_stage 'run guarded tool tests with persistent workspace-authority enforcement'
+          docker exec --env AIRA_POSTGRES_CERTIFICATION=1 --env AIRA_PERSISTENT_WORKSPACE_AUTHORITY=true \
+            --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" npm run test:tools
           mark_stage 'run tool-gateway approval regression test'
           docker exec "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/tool-gateway-approval-fail-closed.test.ts
           mark_stage 'run Stage 1.2A approval lifecycle regression test'
@@ -326,7 +338,24 @@ jobs:
           docker exec "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/approval-once-consumption.test.ts
           mark_stage 'run durable worker authorization tests'
           docker exec "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/durable-worker-authorization.test.ts
+          mark_stage 'run M2-A production activation fail-closed readiness tests'
+          docker exec "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/m2a-production-activation-security.test.ts
           mark_stage 'run M2-A durable specialist execution tests'
           docker exec "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/m2a-durable-specialist-execution.test.ts
-          mark_stage 'run PostgreSQL approval resumption outbox certification'
-          docker exec --env AIRA_POSTGRES_CERTIFICATION=1 "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/approval-resumption-outbox-postgres.test.ts
+          mark_stage 'run M2-A real PostgreSQL worker, lease, fencing, recovery, and idempotency certification'
+          docker exec --env AIRA_POSTGRES_CERTIFICATION=1 --env AIRA_PERSISTENT_WORKSPACE_AUTHORITY=true \
+            --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/m2a-real-postgres-verification.test.ts
+          mark_stage 'reverify disposable PostgreSQL identity after M2-A worker certification'
+          docker exec --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" node scripts/ci/assert-disposable-postgres.mjs
+          mark_stage 'run PostgreSQL approval resumption outbox and workspace authority certification'
+          docker exec --env AIRA_POSTGRES_CERTIFICATION=1 --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/approval-resumption-outbox-postgres.test.ts
+          mark_stage 'run destructive authenticated API integration on disposable PostgreSQL'
+          docker exec --env AIRA_PERSISTENT_WORKSPACE_AUTHORITY=true \
+            --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" npm run test:integration
+          mark_stage 'verify disposable PostgreSQL identity after destructive integration'
+          docker exec --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" node scripts/ci/assert-disposable-postgres.mjs
