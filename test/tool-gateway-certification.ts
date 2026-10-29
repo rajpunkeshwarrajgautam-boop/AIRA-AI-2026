@@ -2,6 +2,7 @@ import 'dotenv/config';
 import assert from 'node:assert';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import {
   ToolGateway,
   PostgresToolCallRepository
@@ -22,8 +23,7 @@ async function runToolGatewayCertification() {
   console.log('  AIRA TOOL GATEWAY — CORE CERTIFICATION SUITE (PHASES 29, 31, 32, 33)');
   console.log('================================================================');
 
-  const testDir = path.resolve(process.cwd(), 'temp_tool_test_' + Date.now());
-  fs.mkdirSync(testDir, { recursive: true });
+  const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'temp_tool_test_'));
 
   const approvalRepo = new PostgresApprovalRepository();
   const grantRepo = new PostgresSessionGrantRepository();
