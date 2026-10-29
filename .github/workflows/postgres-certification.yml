@@ -224,10 +224,35 @@ jobs:
             --arg network "$NETWORK" \
             'all(.[]; (.NetworkSettings.Networks | keys) == [$network])' >/dev/null
           mark_stage 'verify database port and tmpfs isolation'
-          docker inspect "$PG_CONTAINER" | jq -e \
-            '.[0].HostConfig.PortBindings == null and
-             (.[0].Mounts | all(.[]; .Type == "tmpfs")) and
-             (.[0].Mounts | any(.[]; .Destination == "/var/lib/postgresql/data" and .Type == "tmpfs"))' >/dev/null
+          if ! docker inspect "$PG_CONTAINER" | jq -e '
+            .[0].HostConfig as $host
+            | if ($host | type) != "object" then false
+              elif ($host | has("PortBindings") | not) then false
+              elif $host.PortBindings == null then true
+              else ($host.PortBindings | type) == "object" and ($host.PortBindings | length) == 0
+              end
+          ' >/dev/null; then
+            echo '::error::PostgreSQL isolation check failed: PortBindings must be null or an empty object, with no published ports.'
+            exit 1
+          fi
+          if ! docker inspect "$PG_CONTAINER" | jq -e '
+            .[0].Mounts as $mounts
+            | if ($mounts | type) != "array" then false
+              else all($mounts[]; .Type == "tmpfs")
+              end
+          ' >/dev/null; then
+            echo '::error::PostgreSQL isolation check failed: every storage mount must be tmpfs; persistent or other mount types are not allowed.'
+            exit 1
+          fi
+          if ! docker inspect "$PG_CONTAINER" | jq -e '
+            .[0].Mounts as $mounts
+            | if ($mounts | type) != "array" then false
+              else any($mounts[]; .Destination == "/var/lib/postgresql/data" and .Type == "tmpfs")
+              end
+          ' >/dev/null; then
+            echo '::error::PostgreSQL isolation check failed: /var/lib/postgresql/data must be mounted as tmpfs.'
+            exit 1
+          fi
           echo 'Internal-network isolation verified: only the test runner and disposable PostgreSQL are attached; no database ports or persistent volumes.'
 
           # Mandatory safeguard 2: inspect the actual connected server before any
