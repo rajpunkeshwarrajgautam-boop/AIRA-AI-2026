@@ -1,4 +1,5 @@
 import assert from 'node:assert';
+import { randomUUID } from 'node:crypto';
 import {
   WorkflowDefinition,
   validateWorkflowDag,
@@ -16,6 +17,7 @@ import { ToolRegistry } from '../packages/tool-runtime/src/index.js';
 import { ModelRouter } from '../packages/model-router/src/index.js';
 import { CapabilityRegistry } from '../packages/agent-runtime/src/registry.js';
 import { ServerIntentRouter } from '../packages/agent-runtime/src/router.js';
+import { PostgresWorkspaceAuthorityRepository } from '../packages/agent-runtime/src/workspace-authority.js';
 
 async function main() {
   console.log('================================================================');
@@ -42,19 +44,29 @@ async function main() {
 
   const compiler = new WorkflowCompiler(modelRouter);
 
+  const workspaceAuthorities = new PostgresWorkspaceAuthorityRepository();
+  const userAId = `usr_cert_alice_${randomUUID()}`;
+  const userBId = `usr_cert_bob_${randomUUID()}`;
+  const [userAWorkspaceId, userBWorkspaceId] = await Promise.all([
+    workspaceAuthorities.resolveWorkspace(userAId),
+    workspaceAuthorities.resolveWorkspace(userBId)
+  ]);
+
   const userA: ExecutionPrincipal = {
-    userId: 'usr_cert_alice',
-    sessionId: 'sess_cert_alice_01',
-    workspaceId: 'ws_cert_alice',
+    userId: userAId,
+    sessionId: `sess_cert_alice_${randomUUID()}`,
+    workspaceId: userAWorkspaceId,
     roles: ['member']
   };
 
   const userB: ExecutionPrincipal = {
-    userId: 'usr_cert_bob',
-    sessionId: 'sess_cert_bob_01',
-    workspaceId: 'ws_cert_bob',
+    userId: userBId,
+    sessionId: `sess_cert_bob_${randomUUID()}`,
+    workspaceId: userBWorkspaceId,
     roles: ['member']
   };
+  assert.strictEqual(await workspaceAuthorities.isWorkspaceActive(userA.userId, userA.workspaceId!), true);
+  assert.strictEqual(await workspaceAuthorities.isWorkspaceActive(userB.userId, userB.workspaceId!), true);
 
   // Helper to create a dummy Run in runRepo
   async function createAiraRun(principal: ExecutionPrincipal, prompt: string): Promise<Run> {
@@ -500,6 +512,14 @@ async function main() {
     const wfRun1 = await engine.createWorkflowRun(rejectDef, run1, userA);
     await engine.executeWorkflowRun(wfRun1.id);
 
+    const parentRun1 = await runRepo.getRun(run1.id);
+    assert.strictEqual(parentRun1?.principalId, userA.userId);
+    assert.strictEqual(parentRun1?.workspaceId, userA.workspaceId);
+    const pendingApproval1 = await approvalKernel.getPendingForRun(run1.id);
+    assert.strictEqual(pendingApproval1.length, 1);
+    assert.strictEqual(pendingApproval1[0].runId, run1.id);
+    assert.strictEqual(pendingApproval1[0].workspaceId, userA.workspaceId);
+
     let paused1 = await workflowRepo.getWorkflowRun(wfRun1.id);
     assert.strictEqual(paused1?.state, 'WAITING_FOR_APPROVAL');
     assert.strictEqual(paused1?.pendingApprovalStepId, 'step_destructive');
@@ -510,6 +530,7 @@ async function main() {
     const rejected1 = await workflowRepo.getWorkflowRun(wfRun1.id);
     assert.strictEqual(rejected1?.state, 'FAILED');
     assert.strictEqual(rejected1?.stepStates['step_destructive'], 'FAILED');
+    assert.strictEqual(Object.hasOwn(rejected1?.stepOutputs ?? {}, 'step_destructive'), false);
     console.log('PASS: Explicit rejection cleanly transitioned workflow to FAILED');
 
     // Part E2: Approval resumes and completes workflow
