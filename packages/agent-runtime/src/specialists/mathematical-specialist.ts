@@ -58,6 +58,7 @@ export class MathematicalSpecialistAgent extends BaseSpecialistAgent {
         runId: context.runId,
         principal: context.principal,
         workspaceRoot: process.cwd(),
+        effectiveToolScopes: context.effectiveToolScopes,
         idempotencyKey
       }
     });

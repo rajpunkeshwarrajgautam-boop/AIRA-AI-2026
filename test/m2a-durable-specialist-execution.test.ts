@@ -822,6 +822,7 @@ test.describe('AIRA AI 2026 — Milestone 2A Native Durable Specialist Execution
         id: `task_unavail_${role}`,
         runId: 'run_unavail_test',
         principalId: dummyPrincipal.userId,
+        workspaceId: dummyPrincipal.workspaceId,
         role,
         objective: `Testing role ${role}`,
         state: 'QUEUED',

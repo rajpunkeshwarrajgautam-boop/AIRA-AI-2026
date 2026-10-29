@@ -227,7 +227,7 @@ test('submitApproval preserves the authenticated resolver identity for generic a
   assert.equal(accepted, true);
   assert.equal(decisions.length, 1);
   assert.deepEqual(decisions[0], { id: request.id, decision: 'ALLOW_SESSION', resolvedBy: owner.userId });
-  assert.deepEqual(grants, [{ kind: 'session', values: [request.runId, request.toolCall.name, owner.userId] }]);
+  assert.deepEqual(grants, [{ kind: 'session', values: [request.runId, request.toolCall.name, owner.userId, 'WRITE'] }]);
   assert.equal(harness.runResumptions, 1);
 });
 
@@ -406,7 +406,7 @@ test('generic ToolGateway ALLOW_SESSION still grants the matching protected tool
   assert.equal(typeof requestId, 'string');
 
   await kernel.decide(requestId as string, 'ALLOW_SESSION', owner.userId);
-  assert.deepEqual(grants, [{ kind: 'session', values: [runId, toolName, owner.userId] }]);
+  assert.deepEqual(grants, [{ kind: 'session', values: [runId, toolName, owner.userId, 'WRITE'] }]);
 
   const resumed = await executeProtectedTool(gateway, toolName);
   assert.equal(resumed.isError, false);

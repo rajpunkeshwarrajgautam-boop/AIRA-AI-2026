@@ -16,6 +16,39 @@ import {
   TerminalStateImmutabilityError
 } from './task-state-machine.js';
 
+function canonicalJson(value: unknown, parseJsonText = false): string {
+  let current = value;
+  if (parseJsonText && typeof current === 'string') {
+    try { current = JSON.parse(current); } catch { /* retain ordinary strings */ }
+  }
+  if (Array.isArray(current)) return `[${current.map((entry) => canonicalJson(entry)).join(',')}]`;
+  if (current && typeof current === 'object') {
+    const entries = Object.entries(current as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b));
+    return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`).join(',')}}`;
+  }
+  return JSON.stringify(current) ?? 'null';
+}
+
+function assertSamePersistedTaskIdentity(row: any, task: DurableSpecialistTask): void {
+  const matches =
+    row.id === task.id && row.run_id === task.runId &&
+    (row.mission_id || undefined) === task.missionId &&
+    row.principal_id === task.principalId &&
+    (row.workspace_id || undefined) === task.workspaceId &&
+    row.role === task.role && row.objective === task.objective &&
+    canonicalJson(row.dependencies, true) === canonicalJson(task.dependencies || []) &&
+    canonicalJson(row.input_payload, true) === canonicalJson(task.inputPayload || {}) &&
+    canonicalJson(row.execution_constraints, true) === canonicalJson(task.executionConstraints || {}) &&
+    canonicalJson(row.authorization_requirements, true) === canonicalJson(task.authorizationRequirements || {}) &&
+    canonicalJson(row.budget_limits, true) === canonicalJson(task.budgetLimits || {}) &&
+    Number(row.timeout_ms) === Number(task.timeoutMs) &&
+    Number(row.max_retries) === Number(task.maxRetries) &&
+    Number(row.backoff_multiplier) === Number(task.backoffMultiplier) &&
+    (row.idempotency_key || undefined) === task.idempotencyKey &&
+    Number(row.created_at) === Number(task.createdAt);
+  if (!matches) throw new Error(`Durable task ID collision or immutable identity change rejected for task "${task.id}".`);
+}
+
 export interface DurableSpecialistTask {
   id: string;
   runId: string;
@@ -57,9 +90,17 @@ export interface TaskClaimResult {
   error?: string;
 }
 
+export interface AuthoritativeTaskIdentity {
+  taskPrincipalId: string;
+  runPrincipalId: string;
+  taskWorkspaceId?: string;
+  runWorkspaceId?: string;
+}
+
 export interface SpecialistTaskRepository {
   saveTask(task: DurableSpecialistTask): Promise<void>;
   getTask(id: string): Promise<DurableSpecialistTask | undefined>;
+  getAuthoritativeExecutionIdentity?(taskId: string): Promise<AuthoritativeTaskIdentity | undefined>;
   getTaskByIdempotencyKey(principalId: string, idempotencyKey: string): Promise<DurableSpecialistTask | undefined>;
   listTasksByRun(runId: string): Promise<DurableSpecialistTask[]>;
   listTasksByMission(missionId: string): Promise<DurableSpecialistTask[]>;
@@ -104,6 +145,27 @@ export class InMemorySpecialistTaskRepository implements SpecialistTaskRepositor
 
   async saveTask(task: DurableSpecialistTask): Promise<void> {
     const existing = this.tasks.get(task.id);
+    if (existing) {
+      assertSamePersistedTaskIdentity({
+        id: existing.id,
+        run_id: existing.runId,
+        mission_id: existing.missionId || null,
+        principal_id: existing.principalId,
+        workspace_id: existing.workspaceId || null,
+        role: existing.role,
+        objective: existing.objective,
+        dependencies: existing.dependencies,
+        input_payload: existing.inputPayload,
+        execution_constraints: existing.executionConstraints,
+        authorization_requirements: existing.authorizationRequirements,
+        budget_limits: existing.budgetLimits,
+        timeout_ms: existing.timeoutMs,
+        max_retries: existing.maxRetries,
+        backoff_multiplier: existing.backoffMultiplier,
+        idempotency_key: existing.idempotencyKey || null,
+        created_at: existing.createdAt
+      }, task);
+    }
     if (existing && isTerminalSpecialistState(existing.state) && existing.state !== task.state) {
       throw new TerminalStateImmutabilityError(task.id, existing.state, task.state);
     }
@@ -113,6 +175,17 @@ export class InMemorySpecialistTaskRepository implements SpecialistTaskRepositor
   async getTask(id: string): Promise<DurableSpecialistTask | undefined> {
     const task = this.tasks.get(id);
     return task ? JSON.parse(JSON.stringify(task)) : undefined;
+  }
+
+  async getAuthoritativeExecutionIdentity(taskId: string): Promise<AuthoritativeTaskIdentity | undefined> {
+    const task = this.tasks.get(taskId);
+    if (!task) return undefined;
+    return {
+      taskPrincipalId: task.principalId,
+      runPrincipalId: task.principalId,
+      taskWorkspaceId: task.workspaceId,
+      runWorkspaceId: task.workspaceId
+    };
   }
 
   async getTaskByIdempotencyKey(principalId: string, idempotencyKey: string): Promise<DurableSpecialistTask | undefined> {
@@ -319,54 +392,85 @@ export class InMemorySpecialistTaskRepository implements SpecialistTaskRepositor
 
 export class PostgresSpecialistTaskRepository implements SpecialistTaskRepository {
   async saveTask(task: DurableSpecialistTask): Promise<void> {
-    const existing = await db('specialist_tasks').where({ id: task.id }).first();
-    if (existing && isTerminalSpecialistState(existing.state as SpecialistTaskState) && existing.state !== task.state) {
-      throw new TerminalStateImmutabilityError(task.id, existing.state as SpecialistTaskState, task.state);
-    }
+    const values = {
+      id: task.id,
+      run_id: task.runId,
+      mission_id: task.missionId || null,
+      principal_id: task.principalId,
+      workspace_id: task.workspaceId || null,
+      role: task.role,
+      objective: task.objective,
+      state: task.state,
+      outcome: task.outcome || null,
+      dependencies: JSON.stringify(task.dependencies || []),
+      input_payload: JSON.stringify(task.inputPayload || {}),
+      result_output: task.resultOutput !== undefined ? JSON.stringify(task.resultOutput) : null,
+      execution_constraints: JSON.stringify(task.executionConstraints || {}),
+      authorization_requirements: JSON.stringify(task.authorizationRequirements || {}),
+      budget_limits: JSON.stringify(task.budgetLimits || {}),
+      timeout_ms: task.timeoutMs,
+      attempt_count: task.attemptCount,
+      max_retries: task.maxRetries,
+      backoff_multiplier: task.backoffMultiplier,
+      fencing_token: task.fencingToken,
+      lease_owner: task.leaseOwner || null,
+      lease_expires_at: task.leaseExpiresAt || null,
+      heartbeat_at: task.heartbeatAt || null,
+      idempotency_key: task.idempotencyKey || null,
+      error_details: task.errorDetails ? JSON.stringify(task.errorDetails) : null,
+      usage_telemetry: JSON.stringify(task.usageTelemetry || {}),
+      provenance: JSON.stringify(task.provenance || {}),
+      checkpoints: JSON.stringify(task.checkpoints || []),
+      created_at: task.createdAt,
+      updated_at: task.updatedAt,
+      started_at: task.startedAt || null,
+      completed_at: task.completedAt || null
+    };
 
-    await db('specialist_tasks')
-      .insert({
-        id: task.id,
-        run_id: task.runId,
-        mission_id: task.missionId || null,
-        principal_id: task.principalId,
-        workspace_id: task.workspaceId || null,
-        role: task.role,
-        objective: task.objective,
-        state: task.state,
-        outcome: task.outcome || null,
-        dependencies: JSON.stringify(task.dependencies || []),
-        input_payload: JSON.stringify(task.inputPayload || {}),
-        result_output: task.resultOutput !== undefined ? JSON.stringify(task.resultOutput) : null,
-        execution_constraints: JSON.stringify(task.executionConstraints || {}),
-        authorization_requirements: JSON.stringify(task.authorizationRequirements || {}),
-        budget_limits: JSON.stringify(task.budgetLimits || {}),
-        timeout_ms: task.timeoutMs,
-        attempt_count: task.attemptCount,
-        max_retries: task.maxRetries,
-        backoff_multiplier: task.backoffMultiplier,
-        fencing_token: task.fencingToken,
-        lease_owner: task.leaseOwner || null,
-        lease_expires_at: task.leaseExpiresAt || null,
-        heartbeat_at: task.heartbeatAt || null,
-        idempotency_key: task.idempotencyKey || null,
-        error_details: task.errorDetails ? JSON.stringify(task.errorDetails) : null,
-        usage_telemetry: JSON.stringify(task.usageTelemetry || {}),
-        provenance: JSON.stringify(task.provenance || {}),
-        checkpoints: JSON.stringify(task.checkpoints || []),
-        created_at: task.createdAt,
-        updated_at: task.updatedAt,
-        started_at: task.startedAt || null,
-        completed_at: task.completedAt || null
-      })
-      .onConflict('id')
-      .merge();
+    // Task submission is insert-only. Replays with the same immutable identity
+    // are harmless; an ID collision can never rewrite ownership, constraints,
+    // payload, or state for an already persisted task.
+    await db.transaction(async (trx) => {
+      const existing = await trx('specialist_tasks').where({ id: task.id }).forUpdate().first();
+      if (existing) {
+        assertSamePersistedTaskIdentity(existing, task);
+        if (isTerminalSpecialistState(existing.state as SpecialistTaskState) && existing.state !== task.state) {
+          throw new TerminalStateImmutabilityError(task.id, existing.state as SpecialistTaskState, task.state);
+        }
+        return;
+      }
+
+      await trx('specialist_tasks').insert(values).onConflict('id').ignore();
+      const persisted = await trx('specialist_tasks').where({ id: task.id }).forUpdate().first();
+      if (!persisted) throw new Error(`Durable task "${task.id}" failed to persist.`);
+      assertSamePersistedTaskIdentity(persisted, task);
+    });
   }
 
   async getTask(id: string): Promise<DurableSpecialistTask | undefined> {
     const row = await db('specialist_tasks').where({ id }).first();
     if (!row) return undefined;
     return this.mapToTask(row);
+  }
+
+  async getAuthoritativeExecutionIdentity(taskId: string): Promise<AuthoritativeTaskIdentity | undefined> {
+    const row = await db('specialist_tasks')
+      .join('runs', 'specialist_tasks.run_id', 'runs.id')
+      .where('specialist_tasks.id', taskId)
+      .select(
+        'specialist_tasks.principal_id as task_principal_id',
+        'runs.principal_id as run_principal_id',
+        'specialist_tasks.workspace_id as task_workspace_id',
+        'runs.workspace_id as run_workspace_id'
+      )
+      .first();
+    if (!row) return undefined;
+    return {
+      taskPrincipalId: row.task_principal_id,
+      runPrincipalId: row.run_principal_id,
+      taskWorkspaceId: row.task_workspace_id || undefined,
+      runWorkspaceId: row.run_workspace_id || undefined
+    };
   }
 
   async getTaskByIdempotencyKey(principalId: string, idempotencyKey: string): Promise<DurableSpecialistTask | undefined> {

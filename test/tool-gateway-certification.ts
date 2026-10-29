@@ -36,6 +36,7 @@ async function runToolGatewayCertification() {
   const principalA: ExecutionPrincipal = {
     userId: 'usr_cert_alpha_' + sessionTag,
     sessionId: 'sess_cert_alpha_' + sessionTag,
+    workspaceId: 'ws_cert_alpha_' + sessionTag,
     roles: ['developer'],
     scopes: ['browser.read', 'browser.write', 'files.read', 'files.write', 'repo.read', 'mcp.invoke']
   };
@@ -43,10 +44,32 @@ async function runToolGatewayCertification() {
   const principalB: ExecutionPrincipal = {
     userId: 'usr_cert_bravo_' + sessionTag,
     sessionId: 'sess_cert_bravo_' + sessionTag,
+    workspaceId: 'ws_cert_bravo_' + sessionTag,
     roles: ['member'],
     scopes: ['files.read']
   };
 
+  async function ensureParentRun(runId: string, principal: ExecutionPrincipal): Promise<void> {
+    const now = Date.now();
+    await db('runs').insert({
+      id: runId, principal_id: principal.userId, workspace_id: principal.workspaceId,
+      session_id: principal.sessionId, prompt: 'Disposable ToolGateway certification run',
+      status: 'RUNNING', state: 'RUNNING', createdAt: now, updatedAt: now,
+      toolsUsed: '[]', toolCalls: '[]', toolResults: '[]'
+    }).onConflict('id').ignore();
+  }
+
+  async function persistPendingApproval(requestId: string): Promise<void> {
+    const request = await approvalKernel.getPendingRequest(requestId);
+    assert(request, 'Approval fixture must still be pending');
+    await db('runs').where({ id: request.runId }).update({
+      pending_approval: JSON.stringify(request),
+      state: 'WAITING_FOR_APPROVAL', status: 'WAITING_FOR_APPROVAL',
+      execution_checkpoint: 'WAITING_FOR_APPROVAL', updatedAt: Date.now()
+    });
+  }
+
+  let cleanupError: unknown;
   try {
     // -------------------------------------------------------------------------
     // TEST A — READ TOOL: Safe file system read
@@ -80,6 +103,7 @@ async function runToolGatewayCertification() {
     // TEST B — WRITE TOOL: File system write requiring policy/approval
     // -------------------------------------------------------------------------
     console.log('\n[TEST B] WRITE TOOL (Policy evaluated, approval enforced where configured)');
+    await ensureParentRun('run_cert_b_' + sessionTag, principalA);
     const writeRes = await gateway.execute({
       toolName: 'file_system_write',
       arguments: { filePath: 'output_test.txt', content: 'Autonomous agent result' },
@@ -100,6 +124,9 @@ async function runToolGatewayCertification() {
     assert.strictEqual(durableWrite.lifecycleState, 'WAITING_FOR_APPROVAL');
     assert.strictEqual(durableWrite.sideEffectLevel, 'WRITE');
     console.log('  -> PASS: Write intercepted, WAITING_FOR_APPROVAL persisted, requestId generated.');
+
+    // Model AgentRuntime's durable handoff before resolving the decision.
+    await persistPendingApproval(writeRes.output.requestId);
 
     // Authorize via ApprovalKernel as Principal A
     const { approved } = await approvalKernel.decide(
@@ -131,6 +158,7 @@ async function runToolGatewayCertification() {
     // TEST C — DESTRUCTIVE TOOL: File delete fails closed without approval
     // -------------------------------------------------------------------------
     console.log('\n[TEST C] DESTRUCTIVE TOOL (Mandatory approval, fail closed)');
+    await ensureParentRun('run_cert_c_' + sessionTag, principalA);
     const delRes = await gateway.execute({
       toolName: 'file_system_delete',
       arguments: { filePath: 'output_test.txt' },
@@ -143,7 +171,8 @@ async function runToolGatewayCertification() {
     assert.strictEqual(delRes.output?.status, 'WAITING_FOR_APPROVAL');
     assert.strictEqual(delRes.output?.approvalRequired, true);
 
-    // Reject via ApprovalKernel
+    // Reject via ApprovalKernel after persisting the authoritative pending approval.
+    await persistPendingApproval(delRes.output.requestId);
     await approvalKernel.decide(delRes.output.requestId, 'REJECT', principalA.userId);
 
     // Ensure the file was NOT deleted
@@ -288,6 +317,7 @@ async function runToolGatewayCertification() {
       }
     });
 
+    await ensureParentRun('run_cert_h_1_' + sessionTag, principalA);
     const firstMut = await gateway.execute({
       toolName: 'test_mutation',
       arguments: { value: 'first_call' },
@@ -299,7 +329,8 @@ async function runToolGatewayCertification() {
     });
     assert.strictEqual(firstMut.output?.status, 'WAITING_FOR_APPROVAL');
 
-    // Authorize WRITE mutation
+    // Authorize WRITE mutation after persisting the authoritative pending approval.
+    await persistPendingApproval(firstMut.output.requestId);
     await approvalKernel.decide(firstMut.output.requestId, 'ALLOW_SESSION', principalA.userId);
 
     const executedMut = await gateway.execute({
@@ -350,6 +381,7 @@ async function runToolGatewayCertification() {
     // -------------------------------------------------------------------------
     console.log('\n[TEST J] APPROVAL ATTACK DEFENSE');
     // 1. Forged approval by wrong principal
+    await ensureParentRun('run_attack_' + sessionTag, principalA);
     const pendingReq = await approvalKernel.createRequest(
       'run_attack_' + sessionTag,
       { id: 'call_victim', toolId: 'tool_victim', name: 'victim_action', arguments: {}, timestamp: Date.now() },
@@ -357,14 +389,14 @@ async function runToolGatewayCertification() {
       'High risk'
     );
 
-    // User B tries to approve User A's request
-    // Verify approval records must match the authorized principal
-    await approvalKernel.decide(
+    // User B must be rejected before a decision, grant, or outbox intent is committed.
+    await persistPendingApproval(pendingReq.id);
+    await assert.rejects(() => approvalKernel.decide(
       pendingReq.id,
       'ALLOW_SESSION',
       principalB.userId
-    );
-    // Even if recorded by B, isToolCallApproved for Principal A must fail
+    ));
+    // The rejected attempt must not authorize Principal A.
     const isApprovedForA = await approvalKernel.isToolCallApproved(
       'run_attack_' + sessionTag,
       'victim_action',
@@ -408,11 +440,19 @@ async function runToolGatewayCertification() {
     console.log('  ALL CORE TOOL GATEWAY CERTIFICATION TESTS PASSED (100% GREEN)');
     console.log('================================================================');
   } finally {
-    // Cleanup temporary files
+    // Cleanup temporary files and retain any cleanup failure for assertion after
+    // the finally block (throwing directly in finally can mask the original error).
     try {
       fs.rmSync(testDir, { recursive: true, force: true });
-    } catch {}
+      if (fs.existsSync(testDir)) cleanupError = new Error('Certification temp directory was not removed.');
+    } catch (err) {
+      cleanupError = err;
+    }
     await db.destroy();
+  }
+  if (cleanupError) {
+    console.error('FAIL: Certification temp-directory cleanup failed:', cleanupError);
+    throw cleanupError;
   }
 }
 

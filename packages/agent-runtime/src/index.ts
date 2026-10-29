@@ -18,7 +18,7 @@ import {
   ModelProvenance
 } from '../../contracts/src/index.js';
 import { ModelRouter, ChatMessageInput, isModelMatch, withInferencePrincipal } from '../../model-router/src/index.js';
-import { ToolRegistry, ToolGateway, PostgresToolCallRepository, InMemoryToolCallRepository } from '../../tool-runtime/src/index.js';
+import { ToolRegistry, ToolGateway, PostgresToolCallRepository, InMemoryToolCallRepository, deriveToolApprovalPolicy } from '../../tool-runtime/src/index.js';
 import { configuredSearchProviders } from '../../tool-runtime/src/search-providers.js';
 import { ApprovalKernel } from '../../approvals/src/index.js';
 import { BrainV2KnowledgeEngine } from '../../knowledge/src/index.js';
@@ -109,6 +109,7 @@ export function extractCalculatorExpression(prompt: string): string {
 }
 
 export class AgentRuntime extends EventEmitter {
+  private readonly recoveryOwner = `agent-runtime-${crypto.randomUUID()}`;
   private eventStreams: Map<string, EventEmitter> = new Map();
   private inFlightRuns: Map<string, Run> = new Map();
   private pendingRunEvents: Map<string, StreamingEvent[]> = new Map();
@@ -181,6 +182,8 @@ export class AgentRuntime extends EventEmitter {
       this.toolGateway,
       this.researchService
     );
+
+    this.workflowEngine.setApprovalResumptionDispatcher(() => this.dispatchApprovalResumptions(this.recoveryOwner));
 
     this.specialistRegistry = specialistRegistry || new SpecialistRegistry();
     this.specialistRegistry.registerSpecialist(new MathematicalSpecialistAgent(this.toolGateway), 'IMPLEMENTED_LOCALLY');
@@ -511,6 +514,7 @@ export class AgentRuntime extends EventEmitter {
       await this.workflowEngine.cancelWorkflow(wfRun.id, principal);
     }
     await this.transitionRunState(runId, 'CANCELLED', 'Run was cancelled programmatically.');
+    await this.approvalKernel.clearSessionGrants(runId);
     return true;
   }
 
@@ -545,11 +549,16 @@ export class AgentRuntime extends EventEmitter {
 
     if (pendingRequest.toolCall.id.startsWith('call_step_')) return false;
 
-    const { approved, request } = await this.approvalKernel.decide(
+    const { approved, request, applied } = await this.approvalKernel.decide(
       requestId,
       decision,
       resolverPrincipal.userId
     );
+    if (!applied) return true; // Duplicate delivery must not schedule another resume.
+    if (this.approvalKernel.supportsApprovalResumptionOutbox()) {
+      await this.dispatchApprovalResumptions(this.recoveryOwner);
+      return true;
+    }
     run.pendingApproval = request;
 
     if (decision === 'REJECT') {
@@ -963,15 +972,17 @@ export class AgentRuntime extends EventEmitter {
     if (run.executionCheckpoint === 'TOOL_SELECTED') {
       const toolCall = run.toolCalls[run.toolCalls.length - 1];
       const toolDef = this.toolGateway.getTool(toolCall.name)?.definition || this.toolRegistry.get(toolCall.name)?.definition;
-      
+      const toolApprovalPolicy = toolDef ? deriveToolApprovalPolicy(toolDef) : undefined;
+
       const isApproved = await this.approvalKernel.isToolCallApproved(
         runId,
         toolCall.name,
-        toolDef?.permissionLevel || 'READ',
+        toolApprovalPolicy?.permissionLevel || toolDef?.permissionLevel || 'READ',
         run.principalId
       );
 
       const requiresApproval = (!isApproved) && (
+        Boolean(toolApprovalPolicy?.requiresApproval) ||
         toolDef?.permissionLevel === 'DESTRUCTIVE' ||
         toolDef?.sideEffectLevel === 'DESTRUCTIVE' ||
         run.routingDecision?.sideEffectLevel === 'DESTRUCTIVE' ||
@@ -986,8 +997,10 @@ export class AgentRuntime extends EventEmitter {
         const req = await this.approvalKernel.createRequest(
           runId,
           toolCall,
-          toolDef?.permissionLevel || 'DESTRUCTIVE',
-          `Tool execution "${toolCall.name}" requires user confirmation due to ${run.routingDecision?.sideEffectLevel || toolDef?.permissionLevel || 'DESTRUCTIVE'} policy.`
+          toolApprovalPolicy?.permissionLevel || toolDef?.permissionLevel || 'DESTRUCTIVE',
+          `Tool execution "${toolCall.name}" requires user confirmation due to ${run.routingDecision?.sideEffectLevel || toolDef?.sideEffectLevel || toolDef?.permissionLevel || 'DESTRUCTIVE'} policy.`,
+          toolDef?.version,
+          toolApprovalPolicy?.fingerprint
         );
         run = (await this.getRun(runId)) as Run; // reload
         run.pendingApproval = req;
@@ -1028,7 +1041,9 @@ export class AgentRuntime extends EventEmitter {
               roles: ['member'],
               scopes: run.principalScopes || []
             },
-            workspaceRoot: this.workspaceRoot
+            workspaceRoot: this.workspaceRoot,
+            approvalRequestId: run.pendingApproval?.id,
+            approvalDecision: run.pendingApproval?.decision
           },
           callId: toolCall.id
         });
@@ -1041,6 +1056,10 @@ export class AgentRuntime extends EventEmitter {
       }
 
       run = (await this.getRun(runId)) as Run; // reload after async tool execution
+      if (run.pendingApproval?.decision) {
+        run.pendingApproval = undefined;
+        await this.saveRun(run);
+      }
 
       const recoveryEngine = new ToolRecoveryEngine();
       let finalToolResult = toolResult;
@@ -1606,13 +1625,109 @@ CAPABILITY & IDENTITY INVARIANTS:
     }
   }
 
+  private async withRunRecoveryLease<T>(runId: string, owner: string, work: () => Promise<T>): Promise<T> {
+    const interval = setInterval(() => {
+      void this.runRepo.renewInterruptedRunClaim?.(runId, owner, 30_000).then((renewed) => {
+        if (renewed === false) console.error(`Recovery lease lost for run ${runId}; execution will not be replayed by this worker.`);
+      }).catch((error) => console.error(`Failed to renew recovery lease for run ${runId}:`, error));
+    }, 10_000);
+    interval.unref?.();
+    try {
+      return await work();
+    } finally {
+      clearInterval(interval);
+      await this.runRepo.releaseInterruptedRunClaim?.(runId, owner);
+    }
+  }
+
+  /**
+   * Drain committed approval intents. Claims are fenced in PostgreSQL; once an
+   * intent reaches DISPATCHED_UNKNOWN it is never automatically claimed again.
+   * Interrupted RUNNING checkpoints are recovered by recoverInterruptedRuns.
+   */
+  public async dispatchApprovalResumptions(owner: string, limit = 50): Promise<number> {
+    if (!this.approvalKernel.supportsApprovalResumptionOutbox()) return 0;
+    let dispatched = 0;
+    for (let index = 0; index < limit; index += 1) {
+      const event = await this.approvalKernel.claimApprovalResumption(owner, 30_000);
+      if (!event) break;
+      let applied = false;
+      try {
+        applied = await this.approvalKernel.applyApprovalResumption(event, owner);
+        if (!applied) continue; // stale/revoked/cancelled intent is terminal and never replayed
+        dispatched += 1;
+        await this.emitRunEvent(event.runId, 'approval.resolved', {
+          requestId: event.approvalId,
+          decision: event.decision,
+          approved: event.decision !== 'REJECT',
+          outboxId: event.id
+        });
+
+        const run = await this.getRun(event.runId);
+        if (event.decision === 'REJECT') {
+          if (event.targetType === 'WORKFLOW') {
+            await this.emitRunEvent(event.runId, 'workflow.failed', {
+              runId: event.runId, error: `Approval rejected for step "${event.workflowStepId}".`
+            });
+          }
+          await this.approvalKernel.completeApprovalResumption(event.id, {
+            outcome: 'rejected', runState: run?.state || 'FAILED', resultReference: { runId: event.runId }
+          });
+          continue;
+        }
+
+        const runRecoveryOwner = `${owner}:${event.id}:${event.fencingToken}`;
+        if (event.targetType === 'WORKFLOW') {
+          const workflowRun = await this.workflowRepo.getWorkflowRunByRunId(event.runId);
+          if (!workflowRun) {
+            await this.approvalKernel.completeApprovalResumption(event.id, { outcome: 'recoverable-failure', reason: 'workflow run missing after dispatch' });
+            continue;
+          }
+          await this.withRunRecoveryLease(event.runId, runRecoveryOwner, () => withInferencePrincipal(run?.principalId, () => this.workflowEngine.executeWorkflowRun(workflowRun.id)));
+          const finalWorkflow = await this.workflowRepo.getWorkflowRun(workflowRun.id);
+          await this.approvalKernel.completeApprovalResumption(event.id, {
+            outcome: 'workflow-resumed', state: finalWorkflow?.state || 'UNKNOWN',
+            resultReference: { runId: event.runId, workflowRunId: workflowRun.id }
+          });
+        } else {
+          // Persisted TOOL_APPROVED is the restart-safe continuation point. The
+          // completion callback records results; a crash leaves DISPATCHED_UNKNOWN
+          // and startup recovery resumes from the run checkpoint, never from this row.
+          void this.withRunRecoveryLease(event.runId, runRecoveryOwner, () => this.executeRunLoop(event.runId)).then(async () => {
+            const finalRun = await this.getRun(event.runId);
+            await this.approvalKernel.completeApprovalResumption(event.id, {
+              outcome: 'run-resumed', state: finalRun?.state || 'UNKNOWN',
+              checkpoint: finalRun?.executionCheckpoint || null,
+              resultReference: { runId: event.runId }
+            });
+          }).catch(async (error: any) => {
+            console.error(`Error resuming approval run ${event.runId}:`, error);
+            const currentRun = await this.getRun(event.runId);
+            if (currentRun && ['FAILED', 'CANCELLED', 'COMPLETED'].includes(currentRun.state)) {
+              await this.approvalKernel.completeApprovalResumption(event.id, {
+                outcome: 'run-terminated', state: currentRun.state, error: String(error?.message || error).slice(0, 1000)
+              });
+            }
+          });
+        }
+      } catch (error: any) {
+        if (!applied) {
+          await this.approvalKernel.failApprovalResumption(event, owner, String(error?.message || error));
+        }
+        console.error(`Approval resumption delivery failed for ${event.id}:`, error);
+      }
+    }
+    return dispatched;
+  }
+
   public async recoverInterruptedRuns(owner: string, ttlMs: number = 60000): Promise<void> {
     const interrupted = await this.runRepo.getInterruptedRuns();
     for (const run of interrupted) {
-      const claimed = await this.runRepo.claimInterruptedRun(run.id, owner, ttlMs);
+      const claimOwner = `${owner}:${run.id}:${crypto.randomUUID()}`;
+      const claimed = await this.runRepo.claimInterruptedRun(run.id, claimOwner, ttlMs);
       if (claimed) {
         console.log(`Recovering interrupted run ${run.id}...`);
-        this.resumeRun(run.id).catch(err => {
+        void this.withRunRecoveryLease(run.id, claimOwner, () => this.resumeRun(run.id)).catch(err => {
           console.error(`Error recovering run ${run.id}:`, err);
           this.transitionRunState(run.id, 'FAILED', `Recovery failed: ${err.message}`).catch(console.error);
         });

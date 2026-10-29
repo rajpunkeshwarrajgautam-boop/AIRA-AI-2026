@@ -60,6 +60,13 @@ export class DurableTaskScheduler {
       const idempotencyKey = (contract.inputContract as any)?.idempotencyKey || contract.taskId;
       const existing = await this.repository.getTaskByIdempotencyKey(principal.userId, idempotencyKey);
       if (existing) {
+        const requestedWorkspace = options.workspaceId || principal.workspaceId;
+        if (
+          existing.id !== contract.taskId || existing.runId !== contract.runId ||
+          existing.principalId !== principal.userId || existing.workspaceId !== requestedWorkspace
+        ) {
+          throw new Error('Durable task idempotency key is already bound to a different run, owner, or workspace.');
+        }
         createdTasks.push(existing);
         continue;
       }

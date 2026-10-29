@@ -426,6 +426,9 @@ export const ApprovalRequestSchema = z.object({
   reason: z.string(),
   sanitizedPreview: z.record(z.string(), z.any()),
   requestedAt: z.number(),
+  permissionLevel: PermissionLevelSchema.optional(),
+  toolDefinitionVersion: z.number().int().positive().optional(),
+  toolPolicyFingerprint: z.string().min(1).optional(),
   resolvedAt: z.number().optional(),
   decision: ApprovalDecisionSchema.optional(),
   resolvedBy: z.string().optional()

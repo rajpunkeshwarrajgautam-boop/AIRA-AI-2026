@@ -320,3 +320,13 @@ jobs:
           docker exec "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/tool-gateway-approval-fail-closed.test.ts
           mark_stage 'run Stage 1.2A approval lifecycle regression test'
           docker exec "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/approval-lifecycle-stage-1-2a.test.ts
+          mark_stage 'run Stage 1.2B/C atomic approval resolution tests'
+          docker exec "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/approval-atomic-resolution.test.ts
+          mark_stage 'run Stage 1.2B/C one-time authorization tests'
+          docker exec "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/approval-once-consumption.test.ts
+          mark_stage 'run durable worker authorization tests'
+          docker exec "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/durable-worker-authorization.test.ts
+          mark_stage 'run M2-A durable specialist execution tests'
+          docker exec "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/m2a-durable-specialist-execution.test.ts
+          mark_stage 'run PostgreSQL approval resumption outbox certification'
+          docker exec --env AIRA_POSTGRES_CERTIFICATION=1 "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/approval-resumption-outbox-postgres.test.ts

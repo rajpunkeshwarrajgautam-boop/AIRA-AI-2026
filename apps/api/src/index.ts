@@ -25,6 +25,7 @@ import { PostgresApprovalRepository, PostgresSessionGrantRepository } from '../.
 import { BrainV2KnowledgeEngine, PrincipalScope } from '../../../packages/knowledge/src/index.js';
 import { McpHost } from '../../../packages/mcp/src/index.js';
 import { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
+import { validateDurableToolScopes } from '../../../packages/agent-runtime/src/durable/tool-authorization.js';
 import { AutomationEngine } from '../../../packages/automation/src/index.js';
 import { PostgresAgentRepository, PostgresRunRepository, InMemoryRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
 import { PostgresAutomationRepository, PostgresAutomationRunRepository } from '../../../packages/automation/src/repositories.js';
@@ -1186,34 +1187,71 @@ app.post('/api/missions', async (req: Request, res: Response) => {
     }
 
     const dag = rawDag as TaskDAG;
+    const principal = req.principal;
+    if (!principal?.userId || !principal.workspaceId) {
+      return res.status(403).json({ error: 'Authenticated principal with an assigned workspace is required for durable missions.' });
+    }
+
+    const requestedWorkspaceId = req.body?.workspaceId;
+    if (requestedWorkspaceId !== undefined && requestedWorkspaceId !== principal.workspaceId) {
+      return res.status(403).json({ error: 'Requested workspace does not match the authenticated principal workspace.' });
+    }
+    const workspaceId = principal.workspaceId;
+    for (const task of dag.tasks) {
+      const scopeValidation = validateDurableToolScopes(task.role, task.executionConstraints?.allowedTools || []);
+      if (!scopeValidation.valid) {
+        return res.status(403).json({ error: scopeValidation.error || 'Durable tool allowlist rejected.' });
+      }
+    }
+
     const runId = dag.runId;
     const missionId = req.body?.missionId || dag.dagId || `mission_${runId}`;
     const prompt = req.body?.prompt || `Durable specialist mission: ${dag.dagId}`;
-    const workspaceId = req.body?.workspaceId || req.principal!.workspaceId;
 
-    // Ensure parent run row exists in public.runs (foreign key constraint)
+    // A caller may reuse only a parent run owned by that same principal and workspace.
     const existingRun = await agentRuntime.getRun(runId);
+    if (existingRun && (
+      existingRun.principalId !== principal.userId ||
+      existingRun.workspaceId !== workspaceId
+    )) {
+      return res.status(403).json({ error: 'Run owner or workspace does not match the authenticated principal.' });
+    }
+    if (existingRun && ['COMPLETED', 'FAILED', 'CANCELLED'].includes(existingRun.state)) {
+      return res.status(409).json({ error: 'Durable missions cannot be added to a terminal parent run.' });
+    }
+
+    // Ensure parent run row exists in public.runs (foreign key constraint).
     if (!existingRun) {
       const now = Date.now();
-      await runRepo.saveRun({
+      const parentRun = {
         id: runId,
-        principalId: req.principal!.userId,
-        sessionId: req.principal!.sessionId || `sess_${req.principal!.userId}`,
+        principalId: principal.userId,
+        sessionId: principal.sessionId || `sess_${principal.userId}`,
         workspaceId,
         prompt,
-        intent: 'TOOL_ACTION',
-        state: 'QUEUED',
-        status: 'QUEUED',
+        intent: 'TOOL_ACTION' as const,
+        state: 'QUEUED' as const,
+        status: 'QUEUED' as const,
         toolsUsed: ['calculator'],
         toolCalls: [],
         toolResults: [],
         createdAt: now,
         updatedAt: now
-      });
+      };
+      if (runRepo.createRunIfAbsent) await runRepo.createRunIfAbsent(parentRun);
+      else await runRepo.saveRun(parentRun);
     }
 
-    // Submit DAG into durable scheduler
-    const createdTasks = await agentRuntime.getDurableTaskScheduler().submitDAG(dag, req.principal!, {
+    const verifiedParentRun = await agentRuntime.getRun(runId);
+    if (!verifiedParentRun || verifiedParentRun.principalId !== principal.userId || verifiedParentRun.workspaceId !== workspaceId) {
+      return res.status(403).json({ error: 'Parent run owner or workspace changed during durable mission admission.' });
+    }
+    if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(verifiedParentRun.state)) {
+      return res.status(409).json({ error: 'Durable missions cannot be added to a terminal parent run.' });
+    }
+
+    // Submit DAG into durable scheduler with server-derived owner/workspace.
+    const createdTasks = await agentRuntime.getDurableTaskScheduler().submitDAG(dag, principal, {
       missionId,
       workspaceId
     });
@@ -1251,9 +1289,11 @@ app.get('/api/missions/:id', async (req: Request, res: Response) => {
       return res.status(404).json({ error: `Mission or run "${id}" not found.` });
     }
 
-    // Enforce cross-user tenant isolation
+    // Enforce principal and workspace isolation for every task in the aggregate.
     const firstTask = tasks[0];
-    if (firstTask.principalId !== req.principal!.userId) {
+    if (!req.principal?.workspaceId || tasks.some((task) =>
+      task.principalId !== req.principal!.userId || task.workspaceId !== req.principal!.workspaceId
+    )) {
       return res.status(404).json({ error: `Mission "${id}" not found.` });
     }
 
@@ -1330,8 +1370,12 @@ app.get('/api/missions/:id', async (req: Request, res: Response) => {
 app.get('/api/missions', async (req: Request, res: Response) => {
   try {
     const specialistRepo = agentRuntime.getSpecialistTaskRepository();
-    const tasks = await specialistRepo.listTasksByPrincipal(req.principal!.userId);
-    res.json(tasks);
+    const principal = req.principal;
+    if (!principal?.userId || !principal.workspaceId) {
+      return res.status(403).json({ error: 'Authenticated principal with an assigned workspace is required.' });
+    }
+    const tasks = await specialistRepo.listTasksByPrincipal(principal.userId);
+    res.json(tasks.filter((task) => task.workspaceId === principal.workspaceId));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -2462,14 +2506,23 @@ app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
 // Start Server
 // -----------------------------------------------------------------------
 if (!process.env.VERCEL) {
+  const apiWorkerOwner = `api-worker-${process.pid}-${crypto.randomUUID()}`;
+  let approvalOutboxPoll: NodeJS.Timeout | undefined;
   const server = app.listen(PORT, '0.0.0.0', () => {
     process.stdout.write(`AIRA Runtime API Server v2026.2.0 listening on port ${PORT}\n`);
     process.stdout.write(`NODE_ENV: ${process.env.NODE_ENV || 'development'}\n`);
     process.stdout.write(`Providers: ${modelRouter.listProviders().join(', ') || 'none (dev mock active)'}\n`);
     
     appState = 'RECOVERING';
-    agentRuntime.recoverInterruptedRuns('api-worker-1').then(() => {
+    agentRuntime.dispatchApprovalResumptions(`${apiWorkerOwner}-approval-outbox`)
+      .then(() => agentRuntime.recoverInterruptedRuns(`${apiWorkerOwner}-recovery`)).then(() => {
       appState = 'HEALTHY';
+      approvalOutboxPoll = setInterval(() => {
+        void agentRuntime.dispatchApprovalResumptions(`${apiWorkerOwner}-approval-outbox`).catch((err) => {
+          console.error('Approval resumption outbox poll failed:', err);
+        });
+      }, 5000);
+      approvalOutboxPoll.unref();
       process.stdout.write('Startup recovery complete. API is HEALTHY.\n');
     }).catch(err => {
       console.error('Failed to recover interrupted runs. Failing closed:', err);
@@ -2479,6 +2532,7 @@ if (!process.env.VERCEL) {
   });
 
   process.on('SIGINT', () => {
+    if (approvalOutboxPoll) clearInterval(approvalOutboxPoll);
     automationEngine.stop();
     server.close(() => {
       process.stdout.write('AIRA API Server stopped cleanly.\n');

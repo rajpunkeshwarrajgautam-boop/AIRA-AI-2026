@@ -14,6 +14,7 @@ import {
 } from './specialist-task-repository.js';
 import { TaskLeaseManager } from './task-lease-manager.js';
 import { StaleFencingTokenError } from './task-state-machine.js';
+import { validateDurableToolScopes } from './tool-authorization.js';
 
 export interface WorkerRuntimeOptions {
   workerId?: string;
@@ -119,10 +120,32 @@ export class SpecialistWorkerRuntime {
         };
       }
 
-      // 4. Build Authoritative Execution Context
+      // 4. Verify the worker's persisted owner/workspace against the authoritative parent run.
+      const identity = await this.repository.getAuthoritativeExecutionIdentity?.(claimedTask.id);
+      if (
+        !identity || !claimedTask.principalId || !claimedTask.workspaceId ||
+        identity.taskPrincipalId !== claimedTask.principalId ||
+        identity.runPrincipalId !== claimedTask.principalId ||
+        identity.taskWorkspaceId !== claimedTask.workspaceId ||
+        identity.runWorkspaceId !== claimedTask.workspaceId
+      ) {
+        throw Object.assign(new Error('Durable task owner or workspace does not match its authoritative parent run.'), {
+          code: 'WORKER_AUTHORIZATION_DENIED'
+        });
+      }
+
+      const scopes = validateDurableToolScopes(claimedTask.role, claimedTask.executionConstraints?.allowedTools || []);
+      if (!scopes.valid) {
+        throw Object.assign(new Error(scopes.error || 'Durable task tool allowlist is invalid.'), {
+          code: 'WORKER_AUTHORIZATION_DENIED'
+        });
+      }
+
+      // A durable execution gets a task-scoped worker session, not an invented
+      // long-lived user session. Authorization is still bound to the persisted owner.
       const principal: ExecutionPrincipal = {
         userId: claimedTask.principalId,
-        sessionId: `sess_${claimedTask.principalId}`,
+        sessionId: `durable_${claimedTask.id}`,
         workspaceId: claimedTask.workspaceId,
         role: 'user'
       };
@@ -131,10 +154,10 @@ export class SpecialistWorkerRuntime {
         runId: claimedTask.runId,
         taskId: claimedTask.id,
         principal,
-        tenantId: claimedTask.principalId,
-        workspaceId: claimedTask.workspaceId || 'default-workspace',
+        tenantId: claimedTask.workspaceId,
+        workspaceId: claimedTask.workspaceId,
         authorizedCapabilities: specialist.requiredCapabilities,
-        effectiveToolScopes: claimedTask.executionConstraints.allowedTools || [],
+        effectiveToolScopes: scopes.requested,
         executionPolicyVersion: '2026.2.0',
         promptProfileId: 'profile_specialist_default',
         promptProfileVersion: '1.0.0',
@@ -185,12 +208,14 @@ export class SpecialistWorkerRuntime {
         throw err;
       }
 
-      const hasRetriesLeft = claimedTask.attemptCount < claimedTask.maxRetries && !isAbort;
+      const authorizationDenied = err?.code === 'WORKER_AUTHORIZATION_DENIED';
+      const hasRetriesLeft = claimedTask.attemptCount < claimedTask.maxRetries && !isAbort && !authorizationDenied;
       const finalState = isAbort ? 'CANCELLED' : (hasRetriesLeft ? 'RETRY_WAIT' : 'FAILED');
+      const errorCode = isAbort ? 'TASK_ABORTED' : (err?.code || 'WORKER_EXECUTION_ERROR');
 
       await this.repository.updateTaskState(claimedTask.id, finalState, fencingToken, {
         errorDetails: {
-          code: isAbort ? 'TASK_ABORTED' : (err?.code || 'WORKER_EXECUTION_ERROR'),
+          code: errorCode,
           message: err?.message || 'An unexpected worker failure occurred.',
           retryable: hasRetriesLeft
         }
@@ -204,7 +229,7 @@ export class SpecialistWorkerRuntime {
         usage: { tokensUsed: 0, durationMs: Date.now() - startedAt },
         provenance: { workerId: this.workerId },
         error: {
-          code: isAbort ? 'TASK_ABORTED' : 'WORKER_EXECUTION_ERROR',
+          code: errorCode,
           message: err?.message || 'Worker execution failed.',
           retryable: hasRetriesLeft
         },

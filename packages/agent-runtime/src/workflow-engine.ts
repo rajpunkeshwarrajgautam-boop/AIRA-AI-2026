@@ -18,6 +18,8 @@ import { ModelRouter } from '../../model-router/src/index.js';
 import { ResearchService } from './research.js';
 
 export class WorkflowEngine {
+  private approvalResumptionDispatcher?: (runId: string) => Promise<void>;
+
   constructor(
     private workflowRepo: WorkflowRepository,
     private runRepo: RunRepository,
@@ -29,6 +31,10 @@ export class WorkflowEngine {
     private toolGateway?: ToolGateway,
     private researchService?: ResearchService
   ) {}
+
+  public setApprovalResumptionDispatcher(dispatcher: (runId: string) => Promise<void>): void {
+    this.approvalResumptionDispatcher = dispatcher;
+  }
 
   /**
    * Create a new workflow run and link it to an Aira Run
@@ -617,7 +623,15 @@ Current UTC time: ${now.toISOString()}`;
       : decision === 'REJECTED'
         ? 'REJECT'
         : decision;
-    await this.approvalKernel.resolveWorkflowDecision(requestId, approvalDecision, principal.userId);
+    const resolution = await this.approvalKernel.resolveWorkflowDecision(requestId, approvalDecision, principal.userId);
+    if (!resolution.applied) return true; // An identical retry never schedules another dispatch.
+
+    // Production AgentRuntime installs this handler. PostgreSQL committed the
+    // resumption intent with the decision; never mutate workflow state first.
+    if (this.approvalResumptionDispatcher && this.approvalKernel.supportsApprovalResumptionOutbox()) {
+      await this.approvalResumptionDispatcher(workflowRun.runId);
+      return true;
+    }
 
     if (approvalDecision === 'REJECT') {
       workflowRun.state = 'FAILED';

@@ -10,6 +10,7 @@ export interface AgentRepository {
 
 export interface RunRepository {
   saveRun(run: Run): Promise<void>;
+  createRunIfAbsent?(run: Run): Promise<Run>;
   getRun(id: string): Promise<Run | undefined>;
   listRuns(): Promise<Run[]>;
   listRunsForPrincipal(principalId: string, limit?: number): Promise<Run[]>;
@@ -21,6 +22,8 @@ export interface RunRepository {
   getRunEventsAfter(runId: string, sequence: number): Promise<StreamingEvent[]>;
   getLatestEventSequence(runId: string): Promise<number>;
   claimInterruptedRun(runId: string, owner: string, ttlMs: number): Promise<boolean>;
+  renewInterruptedRunClaim?(runId: string, owner: string, ttlMs: number): Promise<boolean>;
+  releaseInterruptedRunClaim?(runId: string, owner: string): Promise<void>;
 }
 
 export class PostgresAgentRepository implements AgentRepository {
@@ -177,6 +180,57 @@ export class PostgresRunRepository implements RunRepository {
     }).onConflict('id').merge();
   }
 
+  async createRunIfAbsent(run: Run): Promise<Run> {
+    return db.transaction(async (trx) => {
+      await trx('runs').insert({
+        id: run.id,
+        principal_id: run.principalId,
+        agent_id: run.agentId || null,
+        session_id: run.sessionId,
+        workspace_id: run.workspaceId || null,
+        project_id: run.projectId || null,
+        conversation_id: run.conversationId || null,
+        prompt: run.prompt,
+        systemPrompt: run.systemPrompt,
+        intent: run.intent,
+        status: run.state,
+        state: run.state,
+        modelPolicy: JSON.stringify(run.modelPolicy || {}),
+        context_data: JSON.stringify({
+          ...(run.context || {}),
+          provenance: run.provenance,
+          principalScopes: run.principalScopes || []
+        }),
+        content: run.content,
+        thinking: run.thinking,
+        error: run.error,
+        toolsUsed: JSON.stringify(run.toolsUsed || []),
+        toolCalls: JSON.stringify(run.toolCalls || []),
+        toolResults: JSON.stringify(run.toolResults || []),
+        citations: JSON.stringify(run.citations || []),
+        artifacts: JSON.stringify(run.artifacts || []),
+        pending_approval: run.pendingApproval ? JSON.stringify(run.pendingApproval) : null,
+        stepCount: run.stepCount || 0,
+        max_steps: run.maxSteps,
+        execution_checkpoint: run.executionCheckpoint,
+        recovery_owner: run.recoveryOwner,
+        recovery_claimed_at: run.recoveryClaimedAt,
+        recovery_lease_until: run.recoveryLeaseUntil,
+        createdAt: run.createdAt,
+        updatedAt: run.updatedAt,
+        completed_at: run.completedAt
+      }).onConflict('id').ignore();
+
+      const row = await trx('runs').where({ id: run.id }).forUpdate().first();
+      if (!row) throw new Error(`Parent run "${run.id}" failed to persist.`);
+      const persisted = this.mapToRun(row);
+      if (persisted.principalId !== run.principalId || persisted.workspaceId !== run.workspaceId) {
+        throw new Error('Parent run ID is already bound to a different principal or workspace.');
+      }
+      return persisted;
+    });
+  }
+
   async getRun(id: string): Promise<Run | undefined> {
     const row = await db('runs').where({ id }).first();
     if (!row) return undefined;
@@ -249,6 +303,20 @@ export class PostgresRunRepository implements RunRepository {
       });
 
     return result > 0;
+  }
+
+  async renewInterruptedRunClaim(runId: string, owner: string, ttlMs: number): Promise<boolean> {
+    const now = Date.now();
+    const updated = await db('runs').where({ id: runId, recovery_owner: owner })
+      .andWhere('recovery_lease_until', '>', now)
+      .update({ recovery_claimed_at: now, recovery_lease_until: now + ttlMs, updatedAt: now });
+    return updated === 1;
+  }
+
+  async releaseInterruptedRunClaim(runId: string, owner: string): Promise<void> {
+    await db('runs').where({ id: runId, recovery_owner: owner }).update({
+      recovery_owner: null, recovery_claimed_at: null, recovery_lease_until: null, updatedAt: Date.now()
+    });
   }
 
   async appendRunEvent(event: StreamingEvent): Promise<StreamingEvent> {
@@ -384,6 +452,18 @@ export class InMemoryRunRepository implements RunRepository {
     this.runs.set(run.id, { ...run });
   }
 
+  async createRunIfAbsent(run: Run): Promise<Run> {
+    const existing = this.runs.get(run.id);
+    if (existing) {
+      if (existing.principalId !== run.principalId || existing.workspaceId !== run.workspaceId) {
+        throw new Error('Parent run ID is already bound to a different principal or workspace.');
+      }
+      return { ...existing };
+    }
+    await this.saveRun(run);
+    return { ...run };
+  }
+
   async getRun(id: string): Promise<Run | undefined> {
     const r = this.runs.get(id);
     return r ? { ...r } : undefined;
@@ -443,4 +523,10 @@ export class InMemoryRunRepository implements RunRepository {
   async claimInterruptedRun(runId: string, owner: string, ttlMs: number): Promise<boolean> {
     return true;
   }
+
+  async renewInterruptedRunClaim(_runId: string, _owner: string, _ttlMs: number): Promise<boolean> {
+    return true;
+  }
+
+  async releaseInterruptedRunClaim(_runId: string, _owner: string): Promise<void> {}
 }

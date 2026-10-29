@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   ToolDefinition,
   DurableToolCall,
@@ -7,7 +8,8 @@ import {
   SideEffectLevel,
   ToolGatewayErrorCodes,
   ToolLifecycleState,
-  ToolCall
+  ToolCall,
+  ApprovalDecision
 } from '../../contracts/src/index.js';
 import { ApprovalKernel } from '../../approvals/src/index.js';
 import { PostgresToolCallRepository, ToolCallRepository } from './repository.js';
@@ -16,6 +18,43 @@ import { FileSystemAdapter } from './adapters/file-adapter.js';
 import { RepositoryAdapter } from './adapters/repo-adapter.js';
 import { ConnectorRegistry, GitHubConnectorAdapter } from './adapters/connector-adapter.js';
 
+export function deriveToolApprovalPolicy(tool: ToolDefinition): {
+  sideEffectLevel: SideEffectLevel;
+  requiresApproval: boolean;
+  permissionLevel: ToolDefinition['permissionLevel'];
+  fingerprint: string;
+} {
+  const sideEffectLevel: SideEffectLevel = tool.sideEffectLevel ||
+    (tool.permissionLevel === 'DESTRUCTIVE' ? 'DESTRUCTIVE' : tool.permissionLevel === 'WRITE' ? 'WRITE' : 'READ');
+  const policyRequiresApproval = tool.approvalPolicy === 'require_approval' || tool.approvalPolicy === 'always_ask';
+  const requiresApproval = policyRequiresApproval ||
+    tool.permissionLevel === 'DESTRUCTIVE' ||
+    tool.permissionLevel === 'FINANCIAL' ||
+    tool.permissionLevel === 'WRITE' ||
+    sideEffectLevel === 'DESTRUCTIVE' ||
+    sideEffectLevel === 'WRITE';
+  const permissionLevel =
+    tool.permissionLevel === 'DESTRUCTIVE' || sideEffectLevel === 'DESTRUCTIVE'
+      ? 'DESTRUCTIVE'
+      : tool.permissionLevel === 'FINANCIAL'
+        ? 'FINANCIAL'
+        : tool.permissionLevel === 'WRITE' || sideEffectLevel === 'WRITE' ||
+            (policyRequiresApproval && tool.permissionLevel === 'READ')
+          ? 'WRITE'
+          : tool.permissionLevel;
+  const policyIdentity = [
+    tool.id,
+    tool.name,
+    tool.version,
+    permissionLevel,
+    sideEffectLevel,
+    tool.approvalPolicy || null,
+    [...(tool.permissionScopes || [])].sort()
+  ];
+  const fingerprint = createHash('sha256').update(JSON.stringify(policyIdentity)).digest('hex');
+  return { sideEffectLevel, requiresApproval, permissionLevel, fingerprint };
+}
+
 export interface GatewayExecutionContext {
   runId: string;
   workflowRunId?: string;
@@ -23,6 +62,10 @@ export interface GatewayExecutionContext {
   principal: ExecutionPrincipal;
   idempotencyKey?: string;
   workspaceRoot?: string;
+  /** Server-derived durable task allowlist; an empty list denies every tool. */
+  effectiveToolScopes?: readonly string[];
+  approvalRequestId?: string;
+  approvalDecision?: ApprovalDecision;
 }
 
 export interface ToolGatewayInvocation {
@@ -148,6 +191,27 @@ export class ToolGateway extends EventEmitter {
       };
     }
 
+    // Durable worker scopes are a server-owned narrowing policy, never a grant.
+    // If supplied, an empty or non-matching allowlist must fail closed.
+    if (
+      context.effectiveToolScopes &&
+      !context.effectiveToolScopes.includes(def.name) &&
+      !context.effectiveToolScopes.includes(def.id)
+    ) {
+      const errorMsg = `Tool "${def.name}" is outside the effective worker allowlist.`;
+      this.emit('tool.permission_denied', { callId, runId, toolId: def.id, toolName: def.name, reason: errorMsg });
+      return {
+        toolCallId: callId,
+        output: null,
+        error: errorMsg,
+        errorCode: ToolGatewayErrorCodes.TOOL_PERMISSION_DENIED,
+        isError: true,
+        durationMs: Date.now() - startTime,
+        timestamp: Date.now(),
+        artifacts: []
+      };
+    }
+
     // STEP 4: Validate Input Arguments
     const validationError = this.validateArguments(args, def);
     if (validationError) {
@@ -179,27 +243,19 @@ export class ToolGateway extends EventEmitter {
       };
     }
 
-    // STEP 6: Determine Side-Effect Level
-    const sideEffectLevel: SideEffectLevel = def.sideEffectLevel ||
-      (def.permissionLevel === 'DESTRUCTIVE' ? 'DESTRUCTIVE' : def.permissionLevel === 'WRITE' ? 'WRITE' : 'READ');
-    const policyRequiresApproval = def.approvalPolicy === 'require_approval' || def.approvalPolicy === 'always_ask';
-    const requiresApproval = policyRequiresApproval ||
-      def.permissionLevel === 'DESTRUCTIVE' ||
-      def.permissionLevel === 'WRITE' ||
-      sideEffectLevel === 'DESTRUCTIVE' ||
-      sideEffectLevel === 'WRITE';
-    // Preserve the strongest classification represented by either axis. The
-    // ApprovalKernel maps DESTRUCTIVE to critical risk and FINANCIAL to high;
-    // WRITE must not erase a FINANCIAL permission classification.
-    const approvalPermissionLevel =
-      def.permissionLevel === 'DESTRUCTIVE' || sideEffectLevel === 'DESTRUCTIVE'
-        ? 'DESTRUCTIVE'
-        : def.permissionLevel === 'FINANCIAL'
-          ? 'FINANCIAL'
-          : def.permissionLevel === 'WRITE' || sideEffectLevel === 'WRITE' ||
-              (policyRequiresApproval && def.permissionLevel === 'READ')
-            ? 'WRITE'
-            : def.permissionLevel;
+    // STEP 6: Determine side-effect, permission, and policy identity from the
+    // registered server-side definition (never from the submitted task payload).
+    const approvalPolicy = deriveToolApprovalPolicy(def);
+    const sideEffectLevel = approvalPolicy.sideEffectLevel;
+    const requiresApproval = approvalPolicy.requiresApproval;
+    const approvalPermissionLevel = approvalPolicy.permissionLevel;
+    const approvedToolPolicyFingerprint = approvalPolicy.fingerprint;
+    const onceApprovalDecision = context.approvalDecision === 'ALLOW_ONCE';
+    const onceAuthorizationClaimId = onceApprovalDecision ? randomUUID() : undefined;
+
+    if (onceApprovalDecision && (!requiresApproval || !context.approvalRequestId)) {
+      return this.approvalUnavailableResult(callId, runId, def.name, startTime);
+    }
 
     // Even an idempotent replay must not be reported as successful if the
     // approval boundary itself is not configured for an approval-required tool.
@@ -208,7 +264,7 @@ export class ToolGateway extends EventEmitter {
     }
 
     // STEP 7: Check Idempotency Cache for mutative actions
-    if (context.idempotencyKey) {
+    if (context.idempotencyKey && !onceApprovalDecision) {
       const cached = await this.repository.getToolCallByIdempotencyKey(context.idempotencyKey);
       if (cached && cached.lifecycleState === 'COMPLETED') {
         const cachedPrincipalId = cached.principalId;
@@ -245,74 +301,97 @@ export class ToolGateway extends EventEmitter {
       }
     }
 
-    // STEP 8: Evaluate Approval Kernel
+    // STEP 8: Evaluate or consume an approval authorization.
+    let onceAuthorizationClaimed = false;
     if (requiresApproval) {
       try {
-        const isApproved = await this.approvalKernel.isToolCallApproved(
-          runId,
-          def.name,
-          approvalPermissionLevel,
-          principal.userId
-        );
-
-        if (!isApproved) {
-          // Suspend execution and create ApprovalRequest. Any persistence failure
-          // below must fail closed before the adapter dispatch step.
-          const initialToolCall: ToolCall = {
-            id: callId,
-            toolId: def.id,
-            name: def.name,
-            arguments: args,
-            timestamp: startTime
-          };
-
-          const approvalReq = await this.approvalKernel.createRequest(
+        if (onceApprovalDecision) {
+          onceAuthorizationClaimed = await this.approvalKernel!.claimOnceAuthorization({
+            requestId: context.approvalRequestId!,
+            principalId: principal.userId,
+            workspaceId: principal.workspaceId,
             runId,
-            initialToolCall,
+            toolCallId: callId,
+            toolId: def.id,
+            toolName: def.name,
+            permissionLevel: approvalPermissionLevel,
+            toolDefinitionVersion: def.version,
+            toolPolicyFingerprint: approvedToolPolicyFingerprint,
+            arguments: args,
+            claimId: onceAuthorizationClaimId!
+          });
+          if (!onceAuthorizationClaimed) {
+            return this.approvalUnavailableResult(callId, runId, def.name, startTime);
+          }
+        } else {
+          const isApproved = await this.approvalKernel!.isToolCallApproved(
+            runId,
+            def.name,
             approvalPermissionLevel,
-            `Action "${def.name}" requires user authorization under ${sideEffectLevel} policy.`
+            principal.userId
           );
 
-          const durableCall: DurableToolCall = {
-            id: callId,
-            runId,
-            workflowRunId: context.workflowRunId,
-            agentMissionId: context.agentMissionId,
-            principalId: principal.userId,
-            toolId: def.id,
-            toolName: def.name,
-            adapter: def.adapter,
-            sideEffectLevel,
-            permissionScopes: def.permissionScopes,
-            lifecycleState: 'WAITING_FOR_APPROVAL',
-            arguments: args,
-            approvalId: approvalReq.id,
-            idempotencyKey: context.idempotencyKey,
-            startedAt: startTime
-          };
-          await this.repository.saveToolCall(durableCall);
+          if (!isApproved) {
+            // Suspend execution and create ApprovalRequest. Any persistence failure
+            // below must fail closed before the adapter dispatch step.
+            const initialToolCall: ToolCall = {
+              id: callId,
+              toolId: def.id,
+              name: def.name,
+              arguments: args,
+              timestamp: startTime
+            };
 
-          this.emit('tool.approval_required', {
-            callId,
-            runId,
-            requestId: approvalReq.id,
-            toolName: def.name,
-            sideEffectLevel
-          });
+            const approvalReq = await this.approvalKernel!.createRequest(
+              runId,
+              initialToolCall,
+              approvalPermissionLevel,
+              `Action "${def.name}" requires user authorization under ${sideEffectLevel} policy.`,
+              def.version,
+              approvedToolPolicyFingerprint
+            );
 
-          return {
-            toolCallId: callId,
-            output: {
-              approvalRequired: true,
+            const durableCall: DurableToolCall = {
+              id: callId,
+              runId,
+              workflowRunId: context.workflowRunId,
+              agentMissionId: context.agentMissionId,
+              principalId: principal.userId,
+              toolId: def.id,
+              toolName: def.name,
+              adapter: def.adapter,
+              sideEffectLevel,
+              permissionScopes: def.permissionScopes,
+              lifecycleState: 'WAITING_FOR_APPROVAL',
+              arguments: args,
+              approvalId: approvalReq.id,
+              idempotencyKey: context.idempotencyKey,
+              startedAt: startTime
+            };
+            await this.repository.saveToolCall(durableCall);
+
+            this.emit('tool.approval_required', {
+              callId,
+              runId,
               requestId: approvalReq.id,
-              status: 'WAITING_FOR_APPROVAL',
-              reason: approvalReq.reason
-            },
-            isError: false,
-            durationMs: Date.now() - startTime,
-            timestamp: Date.now(),
-            artifacts: []
-          };
+              toolName: def.name,
+              sideEffectLevel
+            });
+
+            return {
+              toolCallId: callId,
+              output: {
+                approvalRequired: true,
+                requestId: approvalReq.id,
+                status: 'WAITING_FOR_APPROVAL',
+                reason: approvalReq.reason
+              },
+              isError: false,
+              durationMs: Date.now() - startTime,
+              timestamp: Date.now(),
+              artifacts: []
+            };
+          }
         }
       } catch {
         // Do not leak approval-store errors, and never continue to adapter execution
@@ -335,6 +414,7 @@ export class ToolGateway extends EventEmitter {
       permissionScopes: def.permissionScopes,
       lifecycleState: 'RUNNING',
       arguments: args,
+      approvalId: context.approvalRequestId,
       attemptCount: 1,
       idempotencyKey: context.idempotencyKey,
       startedAt: startTime
@@ -342,12 +422,29 @@ export class ToolGateway extends EventEmitter {
     await this.repository.saveToolCall(durableCall);
     this.emit('tool.started', { callId, runId, toolName: def.name });
 
+    // Persist dispatch intent before crossing the external side-effect boundary.
+    // A crash after this point is treated as uncertain and cannot reuse ALLOW_ONCE.
+    if (onceAuthorizationClaimed) {
+      const dispatched = await this.approvalKernel!.markOnceAuthorizationDispatched(context.approvalRequestId!, onceAuthorizationClaimId!);
+      if (!dispatched) {
+        await this.repository.updateToolCallStatus(
+          callId,
+          'FAILED',
+          undefined,
+          'One-time authorization dispatch transition failed; adapter was not invoked.',
+          ToolGatewayErrorCodes.TOOL_APPROVAL_DENIED,
+          Date.now() - startTime
+        );
+        return this.approvalUnavailableResult(callId, runId, def.name, startTime);
+      }
+    }
+
     // STEP 10: Dispatch to Adapter with Bounded Retries & Timeout
     let output: any = null;
     let error: string | null = null;
     let errorCode: string | undefined;
     let artifacts: any[] = [];
-    const maxAttempts = def.retryPolicy?.maxAttempts || 1;
+    const maxAttempts = onceAuthorizationClaimed ? 1 : (def.retryPolicy?.maxAttempts || 1);
     let attempt = 1;
 
     while (attempt <= maxAttempts) {
@@ -388,6 +485,28 @@ export class ToolGateway extends EventEmitter {
       errorCode,
       durationMs
     );
+
+    if (onceAuthorizationClaimed) {
+      const finalized = await this.approvalKernel!.finishOnceAuthorization(
+        context.approvalRequestId!,
+        onceAuthorizationClaimId!,
+        error ? 'FAILED' : 'COMPLETED'
+      );
+      if (!finalized) {
+        const uncertain = 'Tool outcome may have completed, but the one-time authorization could not be finalized durably.';
+        this.emit('tool.approval_failed', { callId, runId, toolName: def.name, code: 'ONCE_AUTHORIZATION_FINALIZATION_FAILED' });
+        return {
+          toolCallId: callId,
+          output: null,
+          error: uncertain,
+          errorCode: ToolGatewayErrorCodes.TOOL_EXECUTION_FAILED,
+          isError: true,
+          durationMs,
+          timestamp: Date.now(),
+          artifacts: []
+        };
+      }
+    }
 
     if (error) {
       this.emit('tool.failed', { callId, runId, toolName: def.name, error, durationMs });
