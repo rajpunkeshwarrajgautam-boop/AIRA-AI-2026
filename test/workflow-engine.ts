@@ -11,6 +11,20 @@ import {
 import { runWithDisposablePostgresTestContract } from './helpers/disposable-postgres-test-entry.js';
 
 async function main() {
+  if (process.env.CI_DISPOSABLE_DATABASE !== 'true') {
+    console.log('================================================================');
+    console.log(' AIRA-AI-2026 — WORKFLOW EXECUTION ENGINE CERTIFICATION SUITE   ');
+    console.log('================================================================\n');
+    console.log('[workflow-engine] SAFE REFUSAL / DB suite not run:');
+    console.log('PostgreSQL workflow tests require the matching identity-verified, run-scoped disposable database contract.');
+    console.log('Generic CI executes only in-memory authority tests and no-connection contract guards.');
+    console.log('Dedicated PostgreSQL certification workflow executes the full disposable database suite.');
+    console.log('\n================================================================');
+    console.log(' WORKFLOW PREFLIGHT SAFE REFUSAL VERIFIED (EXIT 0)');
+    console.log('================================================================\n');
+    return;
+  }
+
   await runWithDisposablePostgresTestContract({
     preflight: () => {
       execFileSync(process.execPath, ['scripts/ci/assert-disposable-postgres.mjs'], {
@@ -508,6 +522,7 @@ async function main() {
   {
     // Part E1: Rejection pauses and fails workflow
     const run1 = await createAiraRun(userA, 'Approval Reject Test');
+    const rejectStepId = `step_destructive_${randomUUID().slice(0, 8)}`;
     const rejectDef: WorkflowDefinition = {
       workflowId: `wf_appr_rej_${Date.now()}`,
       version: 1,
@@ -516,7 +531,7 @@ async function main() {
       inputSchema: {},
       steps: [
         {
-          stepId: 'step_destructive',
+          stepId: rejectStepId,
           name: 'Format Database Table',
           type: 'CAPABILITY',
           capability: 'ANSWER',
@@ -547,19 +562,20 @@ async function main() {
 
     let paused1 = await workflowRepo.getWorkflowRun(wfRun1.id);
     assert.strictEqual(paused1?.state, 'WAITING_FOR_APPROVAL');
-    assert.strictEqual(paused1?.pendingApprovalStepId, 'step_destructive');
+    assert.strictEqual(paused1?.pendingApprovalStepId, rejectStepId);
     console.log('PASS: Destructive step paused in WAITING_FOR_APPROVAL state');
 
     // Reject approval
-    await engine.resolveStepApproval(wfRun1.id, 'step_destructive', 'REJECTED', userA);
+    await engine.resolveStepApproval(wfRun1.id, rejectStepId, 'REJECTED', userA);
     const rejected1 = await workflowRepo.getWorkflowRun(wfRun1.id);
     assert.strictEqual(rejected1?.state, 'FAILED');
-    assert.strictEqual(rejected1?.stepStates['step_destructive'], 'FAILED');
-    assert.strictEqual(Object.hasOwn(rejected1?.stepOutputs ?? {}, 'step_destructive'), false);
+    assert.strictEqual(rejected1?.stepStates[rejectStepId], 'FAILED');
+    assert.strictEqual(Object.hasOwn(rejected1?.stepOutputs ?? {}, rejectStepId), false);
     console.log('PASS: Explicit rejection cleanly transitioned workflow to FAILED');
 
     // Part E2: Approval resumes and completes workflow
     const run2 = await createAiraRun(userA, 'Approval Accept Test');
+    const acceptStepId = `step_guarded_${randomUUID().slice(0, 8)}`;
     const acceptDef: WorkflowDefinition = {
       workflowId: `wf_appr_acc_${Date.now()}`,
       version: 1,
@@ -568,7 +584,7 @@ async function main() {
       inputSchema: {},
       steps: [
         {
-          stepId: 'step_guarded',
+          stepId: acceptStepId,
           name: 'Guarded Mutation',
           type: 'CAPABILITY',
           capability: 'ANSWER',
@@ -593,7 +609,7 @@ async function main() {
     assert.strictEqual(paused2?.state, 'WAITING_FOR_APPROVAL');
 
     // Grant approval and verify resumption
-    await engine.resolveStepApproval(wfRun2.id, 'step_guarded', 'APPROVED', userA);
+    await engine.resolveStepApproval(wfRun2.id, acceptStepId, 'APPROVED', userA);
 
     // Wait for async resumed execution to reach terminal state
     let resumed2 = await workflowRepo.getWorkflowRun(wfRun2.id);
@@ -604,7 +620,7 @@ async function main() {
     }
 
     assert.strictEqual(resumed2?.state, 'COMPLETED');
-    assert.strictEqual(resumed2?.stepStates['step_guarded'], 'COMPLETED');
+    assert.strictEqual(resumed2?.stepStates[acceptStepId], 'COMPLETED');
     console.log('PASS: Authenticated user approval resumed workflow to COMPLETED');
   }
 
