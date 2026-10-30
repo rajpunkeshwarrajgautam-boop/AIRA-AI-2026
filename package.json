@@ -38,6 +38,7 @@
     "test:idempotency:postgres": "npx tsx --test test/postgres-durable-idempotency.test.ts",
     "test:vision-billing": "npx tsx --test test/vision-billing-integrity.test.ts test/commercial-vision-tariffs.test.ts",
     "test:browser": "npx tsx test/browser-execution-suite.ts",
+    "test:browser:authorization": "npx tsx --test test/browser-authorization.test.ts",
     "test:reality": "npx tsx test/capability-reality-audit-suite.ts",
     "test:search": "npx tsx test/search-provider-failover.ts",
     "test:startup": "npx tsx test/startup.ts",
@@ -134,6 +135,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@sparticuz/chromium": "153.0.0",
     "@types/canvas-confetti": "^1.9.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",

@@ -11,6 +11,15 @@ import { AutomationEngine } from '../packages/automation/src/index.js';
 import { ExecutionPrincipal } from '../packages/contracts/src/index.js';
 import { BrowserAdapter } from '../packages/tool-runtime/src/adapters/browser-adapter.js';
 import { ResearchService } from '../packages/agent-runtime/src/research.js';
+import { PostgresWorkspaceAuthorityRepository } from '../packages/agent-runtime/src/workspace-authority.js';
+
+// This CI audit is deterministic: provider/search/browser capabilities are never
+// available, even if an ambient shell happens to contain credentials.
+for (const key of [
+  'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'NVIDIA_API_KEY', 'GROQ_API_KEY', 'GEMINI_API_KEY',
+  'CEREBRAS_API_KEY', 'TOGETHER_API_KEY', 'FIREWORKS_API_KEY', 'TAVILY_API_KEY', 'EXA_API_KEY',
+  'BRAVE_SEARCH_API_KEY'
+]) delete process.env[key];
 
 async function executeAuditRun(runtime: AgentRuntime, createdRun: { id: string }, allowedStates: string[]) {
   await runtime.startRun(createdRun.id);
@@ -32,7 +41,10 @@ async function runRealityAuditSuite() {
   const runRepo = new PostgresRunRepository();
   const autoRepo = new PostgresAutomationRepository();
   const autoRunRepo = new PostgresAutomationRunRepository();
-  const toolGateway = new ToolGateway(new PostgresToolCallRepository(), approvalKernel, process.cwd());
+  const workspaceAuthorities = new PostgresWorkspaceAuthorityRepository();
+  const toolGateway = new ToolGateway(
+    new PostgresToolCallRepository(), approvalKernel, process.cwd(), workspaceAuthorities
+  );
 
   const agentRuntime = new AgentRuntime(
     modelRouter,
@@ -52,16 +64,24 @@ async function runRealityAuditSuite() {
   const automationEngine = new AutomationEngine(agentRuntime, autoRepo, autoRunRepo);
   agentRuntime.setAutomationEngine(automationEngine);
 
+  const principalAId = `usr_audit_a_${Date.now()}`;
+  const principalBId = `usr_audit_b_${Date.now()}`;
+  const [principalAWorkspaceId, principalBWorkspaceId] = await Promise.all([
+    workspaceAuthorities.resolveWorkspace(principalAId),
+    workspaceAuthorities.resolveWorkspace(principalBId)
+  ]);
   const principalA: ExecutionPrincipal = {
-    userId: 'usr_audit_a_' + Date.now(),
-    sessionId: 'sess_audit_a_' + Date.now(),
+    userId: principalAId,
+    sessionId: `sess_audit_a_${Date.now()}`,
+    workspaceId: principalAWorkspaceId,
     role: 'user',
     scopes: ['*']
   };
 
   const principalB: ExecutionPrincipal = {
-    userId: 'usr_audit_b_' + Date.now(),
-    sessionId: 'sess_audit_b_' + Date.now(),
+    userId: principalBId,
+    sessionId: `sess_audit_b_${Date.now()}`,
+    workspaceId: principalBWorkspaceId,
     role: 'user',
     scopes: ['*']
   };
@@ -259,17 +279,20 @@ async function runRealityAuditSuite() {
   // TEST 9: Scope Fail-Closed Verification
   // -------------------------------------------------------------
   console.log('\n--- TEST 9: PRINCIPAL SCOPE FAIL-CLOSED ENFORCEMENT ---');
+  const unscopedPrincipalId = `usr_unscoped_${Date.now()}`;
   const unscopedPrincipal: ExecutionPrincipal = {
-    userId: 'usr_unscoped_' + Date.now(),
-    sessionId: 'sess_unscoped_' + Date.now(),
+    userId: unscopedPrincipalId,
+    sessionId: `sess_unscoped_${Date.now()}`,
+    workspaceId: await workspaceAuthorities.resolveWorkspace(unscopedPrincipalId),
     role: 'user',
     scopes: [] // No scopes granted
   };
+  const unscopedRun = await agentRuntime.createRun({ prompt: 'Verify missing file-system write scope.' }, unscopedPrincipal);
   const scopeResult = await toolGateway.execute({
     toolName: 'file_system_write',
     arguments: { filePath: 'sandbox_test.txt', content: 'test content' },
     context: {
-      runId: 'run_scope_test',
+      runId: unscopedRun.id,
       principal: unscopedPrincipal,
       workspaceRoot: process.cwd()
     }
@@ -373,7 +396,7 @@ async function runRealityAuditSuite() {
   assert.strictEqual(executedWorkflow?.stepStates.step1, 'COMPLETED');
   assert.ok(executedWorkflow?.stepOutputs.step1, 'Research step output must be persisted');
   if (!process.env.TAVILY_API_KEY && !process.env.EXA_API_KEY) {
-    assert.strictEqual((executedWorkflow?.stepOutputs.step1 as any).status, 'RESEARCH_PROVIDER_NOT_READY');
+    assert.strictEqual((executedWorkflow!.stepOutputs.step1 as any).status, 'RESEARCH_PROVIDER_NOT_READY');
   }
   console.log('  -> PASS: Research workflow step executed and persisted.');
 

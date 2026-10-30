@@ -664,6 +664,16 @@ export class OpenAIAdapter implements ModelAdapter {
   }
 }
 
+export class ProviderUnavailableError extends Error {
+  readonly code = 'PROVIDER_UNAVAILABLE';
+  readonly status = 503;
+
+  constructor(message = 'No paid inference provider is configured in this deployment.') {
+    super(message);
+    this.name = 'ProviderUnavailableError';
+  }
+}
+
 export interface ResolvedExecution {
   policy: ModelPolicy;
   adapter: ModelAdapter;
@@ -691,7 +701,7 @@ export class ModelRouter {
     // DeterministicMockAdapter is ONLY registered in test/dev environments.
     // Production code must never reach this adapter through the normal router.
     // It is accessible only when model is explicitly 'mock-deterministic'.
-    if (process.env.NODE_ENV !== 'production' || process.env.AIRA_ALLOW_MOCK === 'true') {
+    if (process.env.NODE_ENV !== 'production') {
       this.adapters.set('mock', new DeterministicMockAdapter());
     }
     if (process.env.GROQ_API_KEY) {
@@ -866,7 +876,7 @@ export class ModelRouter {
       if (!mock) {
         throw new Error(
           'CONFIGURATION_ERROR: DeterministicMockAdapter is not available in production mode. ' +
-          'Set NODE_ENV=development or AIRA_ALLOW_MOCK=true to enable test adapters.'
+          'Test adapters are only registered outside production mode.'
         );
       }
       return {
@@ -880,6 +890,10 @@ export class ModelRouter {
         fallbackOccurred: false,
         verified: true
       };
+    }
+
+    if (this.listProviders().length === 0) {
+      throw new ProviderUnavailableError();
     }
 
     if (model.startsWith('aira-')) {
@@ -935,9 +949,8 @@ export class ModelRouter {
 
         // 3. If no provider is available
         if (plan.isDegraded) {
-          throw new Error(
-            `CONFIGURATION_ERROR: No production model provider is configured for Aira mode "${model}". ` +
-            'Configure GROQ_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY, NVIDIA_API_KEY, or ANTHROPIC_API_KEY.'
+          throw new ProviderUnavailableError(
+            `No paid inference provider is configured for Aira mode "${model}" in this deployment.`
           );
         }
 
@@ -1006,9 +1019,8 @@ export class ModelRouter {
       }
 
       if (!selectedAdapter || !selectedProvider) {
-        throw new Error(
-          `CONFIGURATION_ERROR: No production model provider is configured for Aira mode "${model}". ` +
-          'Configure GROQ_API_KEY, OPENAI_API_KEY, NVIDIA_API_KEY, or ANTHROPIC_API_KEY.'
+        throw new ProviderUnavailableError(
+          `No paid inference provider is configured for Aira mode "${model}" in this deployment.`
         );
       }
 

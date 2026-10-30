@@ -26,6 +26,7 @@ import { BrainV2KnowledgeEngine, PrincipalScope } from '../../../packages/knowle
 import { McpHost } from '../../../packages/mcp/src/index.js';
 import { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
 import { validateDurableToolScopes } from '../../../packages/agent-runtime/src/durable/tool-authorization.js';
+import { validateApiStartupConfiguration } from './startup-config.js';
 import { AutomationEngine } from '../../../packages/automation/src/index.js';
 import { PostgresAgentRepository, PostgresRunRepository, InMemoryRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
 import { PostgresAutomationRepository, PostgresAutomationRunRepository } from '../../../packages/automation/src/repositories.js';
@@ -48,23 +49,17 @@ import {
 } from '../../../packages/contracts/src/index.js';
 
 // -----------------------------------------------------------------------
-// Production startup assertions
+// Deployment-aware startup assertions. Vercel Preview also has NODE_ENV=production.
 // -----------------------------------------------------------------------
-if (process.env.NODE_ENV === 'production') {
-  const hasProvider = process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY || process.env.NVIDIA_API_KEY;
-  if (!hasProvider) {
-    process.stderr.write(
-      '[STARTUP_ASSERTION] FAIL: Production requires at least one provider key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or NVIDIA_API_KEY).\n'
-    );
-    process.exit(1);
+const startupConfiguration = validateApiStartupConfiguration(process.env);
+for (const warning of startupConfiguration.warnings) {
+  process.stderr.write(`[STARTUP_ASSERTION] WARN: ${warning}\n`);
+}
+if (startupConfiguration.errors.length > 0) {
+  for (const error of startupConfiguration.errors) {
+    process.stderr.write(`[STARTUP_ASSERTION] FAIL: ${error}\n`);
   }
-
-  if (!process.env.AIRA_SESSION_SECRET || process.env.AIRA_SESSION_SECRET.trim().length < 32) {
-    process.stderr.write(
-      '[STARTUP_ASSERTION] FAIL: Production requires AIRA_SESSION_SECRET with at least 32 characters.\n'
-    );
-    process.exit(1);
-  }
+  process.exit(1);
 }
 
 import { createPrincipalMiddleware } from './middleware/principal.js';

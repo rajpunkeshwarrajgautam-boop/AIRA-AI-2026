@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, fork, ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
 
 import {
   classifyDatabaseUrl,
@@ -22,20 +23,30 @@ import {
   PostgresToolCallRepository
 } from '../packages/tool-runtime/src/index.js';
 import { ApprovalKernel } from '../packages/approvals/src/index.js';
-import { ExecutionPrincipal } from '../packages/contracts/src/index.js';
+import { ExecutionPrincipal, ToolGatewayErrorCodes } from '../packages/contracts/src/index.js';
 import { MathematicalSpecialistAgent } from '../packages/agent-runtime/src/specialists/mathematical-specialist.js';
 import { SpecialistExecutionContext } from '../packages/agent-runtime/src/specialists/specialist-interface.js';
-import { derivePersonalWorkspaceId, PostgresWorkspaceAuthorityRepository } from '../packages/agent-runtime/src/workspace-authority.js';
+import { createPostgresExecutionFixture } from './helpers/postgres-execution-fixture.js';
 
 if (process.env.AIRA_POSTGRES_CERTIFICATION !== '1') {
   throw new Error('Refusing M2-A PostgreSQL certification outside the authorized disposable PostgreSQL workflow.');
 }
 execFileSync(process.execPath, ['scripts/ci/assert-disposable-postgres.mjs'], { stdio: 'inherit' });
 
-const workspaceAuthorities = new PostgresWorkspaceAuthorityRepository();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const workerScriptPath = path.resolve(__dirname, 'helpers/standalone-specialist-worker.ts');
+const fixtureTag = randomUUID();
+const fixtureA = await createPostgresExecutionFixture({
+  principalPrefix: 'user_m2a_tenant_a', sessionPrefix: 'sess_m2a_tenant_a', tag: fixtureTag,
+  principalId: `user_m2a_tenant_a_${fixtureTag}`, sessionId: `sess_m2a_tenant_a_${fixtureTag}`,
+  roles: ['user'], requireTaggedRunIds: false
+});
+const fixtureB = await createPostgresExecutionFixture({
+  principalPrefix: 'user_m2a_tenant_b', sessionPrefix: 'sess_m2a_tenant_b', tag: fixtureTag,
+  principalId: `user_m2a_tenant_b_${fixtureTag}`, sessionId: `sess_m2a_tenant_b_${fixtureTag}`,
+  roles: ['user'], requireTaggedRunIds: false
+});
 
 test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Certification Suite', () => {
   let isolatedConnStr: string;
@@ -43,52 +54,31 @@ test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Cer
   let leaseManager: TaskLeaseManager;
   const childProcesses: ChildProcess[] = [];
 
-  test.after(() => {
+  test.after(async () => {
     for (const child of childProcesses) {
-      try {
-        if (!child.killed) child.kill('SIGKILL');
-      } catch {}
+      if (child.exitCode === null && child.signalCode === null) {
+        await new Promise<void>((resolve) => {
+          child.once('exit', () => resolve());
+          child.kill('SIGKILL');
+        });
+      }
+    }
+    try {
+      await Promise.all([fixtureA.cleanup(), fixtureB.cleanup()]);
+    } finally {
+      await db.destroy();
     }
   });
 
-  const testPrincipalA: ExecutionPrincipal = {
-    userId: 'user_m2a_tenant_a',
-    sessionId: 'sess_m2a_tenant_a',
-    workspaceId: derivePersonalWorkspaceId('user_m2a_tenant_a'),
-    role: 'user'
-  };
+  const testPrincipalA: ExecutionPrincipal = fixtureA.principal;
+  const testPrincipalB: ExecutionPrincipal = fixtureB.principal;
 
-  const testPrincipalB: ExecutionPrincipal = {
-    userId: 'user_m2a_tenant_b',
-    sessionId: 'sess_m2a_tenant_b',
-    workspaceId: derivePersonalWorkspaceId('user_m2a_tenant_b'),
-    role: 'user'
-  };
-
-  // Helper to ensure parent run exists in public.runs table (foreign key constraint)
+  // Parent runs are created through the unique resolver-backed fixture and then
+  // checked against the exact authenticated owner/workspace/session tuple.
   async function ensureParentRun(runId: string, principalId: string): Promise<void> {
-    const workspaceId = await workspaceAuthorities.resolveWorkspace(principalId);
-    const existing = await db('runs').where({ id: runId }).first();
-    if (existing) {
-      if (existing.principal_id !== principalId || existing.workspace_id !== workspaceId) {
-        throw new Error('M2-A certification run fixture owner/workspace mismatch.');
-      }
-      return;
-    }
-    await db('runs').insert({
-      id: runId,
-      principal_id: principalId,
-      workspace_id: workspaceId,
-      session_id: `sess_${principalId}`,
-      prompt: `M2-A Integration Parent Run for ${runId}`,
-      status: 'RUNNING',
-      state: 'RUNNING',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      toolsUsed: JSON.stringify(['calculator']),
-      toolCalls: JSON.stringify([]),
-      toolResults: JSON.stringify([])
-    });
+    if (principalId === testPrincipalA.userId) await fixtureA.createParentRun(runId);
+    else if (principalId === testPrincipalB.userId) await fixtureB.createParentRun(runId);
+    else throw new Error('M2-A parent-run fixture received an unknown principal.');
   }
 
   // ==========================================
@@ -146,8 +136,8 @@ test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Cer
   // ==========================================
 
   test('PHASE 3.1: Concurrent workers race on SELECT FOR UPDATE claim — exactly one succeeds', async () => {
-    const runId = `run_pg_race_${Date.now()}`;
-    const taskId = `task_pg_race_${Date.now()}`;
+    const runId = `run_pg_race_${randomUUID()}`;
+    const taskId = `task_pg_race_${randomUUID()}`;
     await ensureParentRun(runId, testPrincipalA.userId);
 
     const now = Date.now();
@@ -199,8 +189,8 @@ test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Cer
   });
 
   test('PHASE 3.2: Stale fencing-token rejection in PostgreSQL transaction', async () => {
-    const runId = `run_pg_fencing_${Date.now()}`;
-    const taskId = `task_pg_fencing_${Date.now()}`;
+    const runId = `run_pg_fencing_${randomUUID()}`;
+    const taskId = `task_pg_fencing_${randomUUID()}`;
     await ensureParentRun(runId, testPrincipalA.userId);
 
     const now = Date.now();
@@ -265,10 +255,10 @@ test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Cer
   });
 
   test('PHASE 3.3: Lease renewal and tenant isolation in PostgreSQL', async () => {
-    const runIdA = `run_tenant_a_${Date.now()}`;
-    const taskIdA = `task_tenant_a_${Date.now()}`;
-    const runIdB = `run_tenant_b_${Date.now()}`;
-    const taskIdB = `task_tenant_b_${Date.now()}`;
+    const runIdA = `run_tenant_a_${randomUUID()}`;
+    const taskIdA = `task_tenant_a_${randomUUID()}`;
+    const runIdB = `run_tenant_b_${randomUUID()}`;
+    const taskIdB = `task_tenant_b_${randomUUID()}`;
 
     await ensureParentRun(runIdA, testPrincipalA.userId);
     await ensureParentRun(runIdB, testPrincipalB.userId);
@@ -350,8 +340,8 @@ test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Cer
   // ==========================================
 
   test('PHASE 4.1: Abrupt process termination during execution, persistence, and replacement recovery to 4194304', async () => {
-    const runId = `run_crash_recov_${Date.now()}`;
-    const taskId = `task_crash_recov_${Date.now()}`;
+    const runId = `run_crash_recov_${randomUUID()}`;
+    const taskId = `task_crash_recov_${randomUUID()}`;
     await ensureParentRun(runId, testPrincipalA.userId);
 
     const now = Date.now();
@@ -366,7 +356,8 @@ test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Cer
       state: 'QUEUED',
       dependencies: [],
       inputPayload: {
-        expression: '((16384 * 1024) / 4)'
+        expression: '((16384 * 1024) / 4)',
+        executionDelayMs: 2500
       },
       executionConstraints: { sideEffectLevel: 'NONE', allowedTools: ['calculator'] },
       authorizationRequirements: { requiresHumanApproval: false, requiredPermissions: [] },
@@ -537,8 +528,8 @@ test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Cer
   });
 
   test('PHASE 5.2: Retry exhaustion leads to TIMED_OUT with retryable: false', async () => {
-    const runId = `run_pg_exhaust_${Date.now()}`;
-    const taskId = `task_pg_exhaust_${Date.now()}`;
+    const runId = `run_pg_exhaust_${randomUUID()}`;
+    const taskId = `task_pg_exhaust_${randomUUID()}`;
     await ensureParentRun(runId, testPrincipalA.userId);
 
     const now = Date.now();
@@ -589,8 +580,8 @@ test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Cer
     const toolGateway = new ToolGateway(pgToolRepo, new ApprovalKernel(), process.cwd());
     const mathAgent = new MathematicalSpecialistAgent(toolGateway);
 
-    const runId = `run_idemp_same_${Date.now()}`;
-    const taskId = `task_idemp_same_${Date.now()}`;
+    const runId = `run_idemp_same_${randomUUID()}`;
+    const taskId = `task_idemp_same_${randomUUID()}`;
     await ensureParentRun(runId, testPrincipalA.userId);
 
     const context: SpecialistExecutionContext = {
@@ -636,10 +627,10 @@ test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Cer
     const toolGateway = new ToolGateway(pgToolRepo, new ApprovalKernel(), process.cwd());
     const mathAgent = new MathematicalSpecialistAgent(toolGateway);
 
-    const runId1 = `run_idemp_r1_${Date.now()}`;
-    const runId2 = `run_idemp_r2_${Date.now()}`;
+    const runId1 = `run_idemp_r1_${randomUUID()}`;
+    const runId2 = `run_idemp_r2_${randomUUID()}`;
     // Common static template task ID across runs
-    const sharedTaskId = 'task_template_calc_step';
+    const sharedTaskId = `task_template_calc_step_${fixtureTag}`;
     await ensureParentRun(runId1, testPrincipalA.userId);
     await ensureParentRun(runId2, testPrincipalA.userId);
 
@@ -703,9 +694,9 @@ test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Cer
     const toolGateway = new ToolGateway(pgToolRepo, new ApprovalKernel(), process.cwd());
     const mathAgent = new MathematicalSpecialistAgent(toolGateway);
 
-    const runIdA = `run_idemp_userA_${Date.now()}`;
-    const runIdB = `run_idemp_userB_${Date.now()}`;
-    const sharedTaskId = 'task_calc_shared_name';
+    const runIdA = `run_idemp_userA_${randomUUID()}`;
+    const runIdB = `run_idemp_userB_${randomUUID()}`;
+    const sharedTaskId = `task_calc_shared_name_${fixtureTag}`;
     await ensureParentRun(runIdA, testPrincipalA.userId);
     await ensureParentRun(runIdB, testPrincipalB.userId);
 
@@ -766,13 +757,15 @@ test.describe('AIRA AI 2026 — PR #115 Real PostgreSQL & Worker Reliability Cer
         idempotencyKey: toolCallsA[0].idempotency_key!
       }
     });
-    // It must execute freshly (result = 10000), NOT return Principal A\'s cached output (100)
-    assert.strictEqual((crossPrincipalDirect.output as any)?.result, 10000);
+    // Under the hardened security model, attempting to claim another principal's idempotency key
+    // is rejected fail-closed with TOOL_PERMISSION_DENIED, rather than leaking cached data.
+    assert.strictEqual(crossPrincipalDirect.isError, true);
+    assert.strictEqual(crossPrincipalDirect.errorCode, ToolGatewayErrorCodes.TOOL_PERMISSION_DENIED);
   });
 
   test('PHASE 6.4: Stale worker fencing — stale workers cannot overwrite a newer task result in PostgreSQL', async () => {
-    const runId = `run_stale_fence_${Date.now()}`;
-    const taskId = `task_stale_fence_${Date.now()}`;
+    const runId = `run_stale_fence_${randomUUID()}`;
+    const taskId = `task_stale_fence_${randomUUID()}`;
     await ensureParentRun(runId, testPrincipalA.userId);
 
     const now = Date.now();
@@ -968,8 +961,8 @@ RETURNING *;
 `;
 
   test('PHASE 7.1: Incorrect Worker ID — recovery procedure rejects/updates 0 rows when operator supplies wrong worker ID', async () => {
-    const runId = `run_recov_wrong_worker_${Date.now()}`;
-    const taskId = `task_recov_wrong_worker_${Date.now()}`;
+    const runId = `run_recov_wrong_worker_${randomUUID()}`;
+    const taskId = `task_recov_wrong_worker_${randomUUID()}`;
     await ensureParentRun(runId, testPrincipalA.userId);
 
     const now = Date.now();
@@ -1019,8 +1012,8 @@ RETURNING *;
   });
 
   test('PHASE 7.2: Active Healthy Lease — recovery procedure protects unexpired tasks against premature operator eviction', async () => {
-    const runId = `run_recov_active_lease_${Date.now()}`;
-    const taskId = `task_recov_active_lease_${Date.now()}`;
+    const runId = `run_recov_active_lease_${randomUUID()}`;
+    const taskId = `task_recov_active_lease_${randomUUID()}`;
     await ensureParentRun(runId, testPrincipalA.userId);
 
     const now = Date.now();
@@ -1079,8 +1072,8 @@ RETURNING *;
   });
 
   test('PHASE 7.3: Expired Lease — transactional recovery procedure resets expired lease with bumped fencing token', async () => {
-    const runId = `run_recov_expired_${Date.now()}`;
-    const taskId = `task_recov_expired_${Date.now()}`;
+    const runId = `run_recov_expired_${randomUUID()}`;
+    const taskId = `task_recov_expired_${randomUUID()}`;
     await ensureParentRun(runId, testPrincipalA.userId);
 
     const now = Date.now();
@@ -1143,9 +1136,9 @@ RETURNING *;
   });
 
   test('PHASE 7.4: CLAIMED versus RUNNING audit events — Option B preserves actual previous task state', async () => {
-    const runId = `run_recov_states_${Date.now()}`;
-    const taskIdClaimed = `task_recov_claimed_${Date.now()}`;
-    const taskIdRunning = `task_recov_running_${Date.now()}`;
+    const runId = `run_recov_states_${randomUUID()}`;
+    const taskIdClaimed = `task_recov_claimed_${randomUUID()}`;
+    const taskIdRunning = `task_recov_running_${randomUUID()}`;
     await ensureParentRun(runId, testPrincipalA.userId);
 
     const now = Date.now();
@@ -1247,8 +1240,8 @@ RETURNING *;
   });
 
   test('PHASE 7.5: Cross-Tenant Recovery Rejection — Tenant B operator credentials cannot abort Tenant A tasks', async () => {
-    const runIdA = `run_recov_tenant_a_${Date.now()}`;
-    const taskIdA = `task_recov_tenant_a_${Date.now()}`;
+    const runIdA = `run_recov_tenant_a_${randomUUID()}`;
+    const taskIdA = `task_recov_tenant_a_${randomUUID()}`;
     await ensureParentRun(runIdA, testPrincipalA.userId);
 
     const now = Date.now();

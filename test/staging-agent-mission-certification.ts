@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { execSync } from 'node:child_process';
-import * as path from 'node:path';
-import * as fs from 'node:fs';
+import type { ExecutionPrincipal } from '../packages/contracts/src/index.js';
 
 function getStagingConnectionString(): string {
   if (process.env.ISOLATED_TEST_DATABASE_URL?.trim()) {
@@ -40,7 +39,6 @@ const { reconcileToolCallsSchema } = await import('../packages/db/src/migrations
 const {
   assertAuthorizedStagingDatabase,
   validateDatabaseEnvironment,
-  classifyDatabaseUrl,
   PRODUCTION_NEON_PROJECT_ID,
   STAGING_NEON_PROJECT_ID
 } = await import('../packages/db/src/security/database-isolation-guard.js');
@@ -60,7 +58,7 @@ const {
   PostgresSessionGrantRepository
 } = await import('../packages/approvals/src/repositories.js');
 const { BrainV2KnowledgeEngine } = await import('../packages/knowledge/src/index.js');
-const { ExecutionPrincipal } = await import('../packages/contracts/src/index.js');
+const { PostgresWorkspaceAuthorityRepository } = await import('../packages/agent-runtime/src/workspace-authority.js');
 
 async function main(): Promise<void> {
   console.log('========================================================================');
@@ -170,9 +168,13 @@ async function main(): Promise<void> {
     process.cwd()
   );
 
+  const authenticatedUserAId = `usr_agent_operator_${missionTag}`;
+  const authenticatedUserAWorkspaceId = await new PostgresWorkspaceAuthorityRepository()
+    .resolveWorkspace(authenticatedUserAId);
   const authenticatedUserA: ExecutionPrincipal = {
-    userId: `usr_agent_operator_${missionTag}`,
+    userId: authenticatedUserAId,
     sessionId: `sess_ops_${missionTag}`,
+    workspaceId: authenticatedUserAWorkspaceId,
     roles: ['authenticated_user', 'developer', 'agent_operator'],
     scopes: ['tools:execute', 'runs:read', 'runs:write', 'mcp:invoke']
   };
@@ -273,6 +275,7 @@ async function main(): Promise<void> {
       cancelRejected = true;
     }
   }
+  assert.equal(cancelRejected, true, 'Cross-user cancellation must be rejected by the runtime.');
   console.log('PASS: Cross-user mutation strictly rejected');
 
   console.log('\n========================================================================');

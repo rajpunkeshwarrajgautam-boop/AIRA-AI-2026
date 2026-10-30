@@ -41,6 +41,11 @@ export class MathematicalSpecialistAgent extends BaseSpecialistAgent {
       });
     }
 
+    const delayMs = Number(rawPayload.executionDelayMs || rawPayload.sleepMs || 0);
+    if (delayMs > 0) {
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+
     // Security invariant: Tool invocation must route authoritatively through ToolGateway
     const principalId = context.principal?.userId || context.tenantId || 'anon';
     const idempotencyKey = context.taskId

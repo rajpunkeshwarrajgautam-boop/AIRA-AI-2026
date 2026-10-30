@@ -13,6 +13,7 @@ import { TaskLeaseManager } from '../packages/agent-runtime/src/durable/task-lea
 import { SpecialistRegistry } from '../packages/agent-runtime/src/specialists/specialist-registry.js';
 import type { SpecialistExecutionResult } from '../packages/agent-runtime/src/specialists/specialist-interface.js';
 import type { ApprovalDecision, ApprovalRequest } from '../packages/contracts/src/index.js';
+import { createPostgresExecutionFixture } from './helpers/postgres-execution-fixture.js';
 
 // This suite is mandatory only in postgres-certification.yml. Refuse an ordinary
 // invocation instead of silently passing with a skipped PostgreSQL test.
@@ -28,10 +29,16 @@ function hasDisposablePostgresContract(): boolean {
     const url = new URL(process.env.DATABASE_URL);
     const user = process.env.CI_EXPECTED_DATABASE_USER || '';
     const database = process.env.CI_EXPECTED_DATABASE_NAME || '';
-    return url.protocol === 'postgresql:' && url.hostname === 'postgres' && url.port === '5432' &&
+    const isLocal = (url.hostname === '127.0.0.1' || url.hostname === 'localhost') && url.port === '55432';
+    const isService = url.hostname === 'postgres' && url.port === '5432';
+    if (!isLocal && !isService) return false;
+    const expectedRegex = isLocal
+      ? new RegExp('^postgresql://' + user + ':[a-f0-9]{64}@(127\\.0\\.0\\.1|localhost):55432/' + database + '$')
+      : new RegExp('^postgresql://' + user + ':[a-f0-9]{64}@postgres:5432/' + database + '$');
+    return url.protocol === 'postgresql:' &&
       decodeURIComponent(url.username) === user && decodeURIComponent(url.pathname.slice(1)) === database &&
       /^aira_ci_[0-9]+-[0-9]+$/.test(user) && /^aira_ci_[0-9]+-[0-9]+$/.test(database) &&
-      new RegExp(`^postgresql://${user}:[a-f0-9]{64}@postgres:5432/${database}$`).test(process.env.DATABASE_URL);
+      expectedRegex.test(process.env.DATABASE_URL);
   } catch {
     return false;
   }
@@ -41,26 +48,34 @@ if (!hasDisposablePostgresContract()) {
 }
 execFileSync(process.execPath, ['scripts/ci/assert-disposable-postgres.mjs'], { stdio: 'inherit' });
 const repo = new PostgresApprovalRepository();
-const owner = 'cert_m2a_approval_owner';
-const workspaceId = 'cert_m2a_approval_workspace';
 
-type Fixture = { runId: string; request: ApprovalRequest; target: ApprovalResolutionTarget };
+type Fixture = {
+  runId: string;
+  request: ApprovalRequest;
+  target: ApprovalResolutionTarget;
+  owner: string;
+  workspaceId: string;
+  sessionId: string;
+  executionFixture: Awaited<ReturnType<typeof createPostgresExecutionFixture>>;
+  workflowId?: string;
+  workflowRunId?: string;
+};
 
 async function fixture(decisionSeed = randomUUID(), workflowStepId?: string, genericToolCallId?: string): Promise<Fixture> {
+  const executionFixture = await createPostgresExecutionFixture({
+    principalPrefix: 'cert_m2a_approval_owner', sessionPrefix: 'sess_cert_m2a_approval', tag: decisionSeed,
+    roles: ['member'], scopes: ['tools:execute']
+  });
+  const owner = executionFixture.principal.userId;
+  const workspaceId = executionFixture.principal.workspaceId!;
+  const sessionId = executionFixture.principal.sessionId;
   const runId = `cert_approval_run_${decisionSeed}`;
   const requestId = `cert_approval_req_${decisionSeed}`;
   const callId = `cert_approval_call_${decisionSeed}`;
   const now = Date.now();
-  await db('principal_workspace_authorities').insert({
-    principal_id: owner, workspace_id: workspaceId, state: 'ACTIVE',
-    created_at: now, updated_at: now, revoked_at: null
-  }).onConflict('principal_id').ignore();
-  await db('runs').insert({
-    id: runId, principal_id: owner, session_id: `sess_${owner}`, workspace_id: workspaceId,
+  await executionFixture.createParentRun(runId, {
     prompt: 'disposable approval certification fixture', status: 'WAITING_FOR_APPROVAL',
-    state: 'WAITING_FOR_APPROVAL', execution_checkpoint: 'WAITING_FOR_APPROVAL',
-    createdAt: now, updatedAt: now, toolsUsed: '[]', toolCalls: '[]', toolResults: '[]',
-    pending_approval: null
+    state: 'WAITING_FOR_APPROVAL', executionCheckpoint: 'WAITING_FOR_APPROVAL'
   });
   const request: ApprovalRequest = {
     id: requestId,
@@ -77,12 +92,14 @@ async function fixture(decisionSeed = randomUUID(), workflowStepId?: string, gen
   await repo.saveRequest(request);
   await db('tool_calls').where({ id: request.toolCall.id }).update({ principal_id: owner });
   await db('runs').where({ id: runId }).update({ pending_approval: JSON.stringify(request) });
+  let workflowId: string | undefined;
+  let workflowRunId: string | undefined;
   const target: ApprovalResolutionTarget = workflowStepId
     ? { type: 'WORKFLOW', workflowRunId: `cert_wf_run_${decisionSeed}`, workflowStepId }
     : { type: 'RUN' };
   if (workflowStepId) {
-    const workflowId = `cert_wf_def_${decisionSeed}`;
-    const workflowRunId = `cert_wf_run_${decisionSeed}`;
+    workflowId = `cert_wf_def_${decisionSeed}`;
+    workflowRunId = `cert_wf_run_${decisionSeed}`;
     await db('workflow_definitions').insert({
       id: workflowId, version: 1, name: 'Disposable approval workflow', principal_id: owner,
       input_schema: '{}', steps: JSON.stringify([{ stepId: workflowStepId, name: 'cert-step', type: 'TOOL', dependsOn: [] }]),
@@ -90,7 +107,7 @@ async function fixture(decisionSeed = randomUUID(), workflowStepId?: string, gen
     });
     await db('workflow_runs').insert({
       id: workflowRunId, workflow_id: workflowId, run_id: runId, principal_id: owner,
-      session_id: `sess_${owner}`, state: 'WAITING_FOR_APPROVAL',
+      session_id: sessionId, state: 'WAITING_FOR_APPROVAL',
       step_states: JSON.stringify({ [workflowStepId]: 'WAITING_FOR_APPROVAL' }),
       step_outputs: '{}', step_attempts: JSON.stringify({ [workflowStepId]: 1 }),
       pending_approval_step_id: workflowStepId, created_at: now, updated_at: now
@@ -101,16 +118,15 @@ async function fixture(decisionSeed = randomUUID(), workflowStepId?: string, gen
       side_effect_level: 'NONE', approval_required: true
     });
   }
-  return { runId, request, target };
+  return { runId, request, target, owner, workspaceId, sessionId, executionFixture, workflowId, workflowRunId };
 }
 
-async function cleanup(runId: string): Promise<void> {
-  await db('approval_resumption_outbox').where({ run_id: runId }).del();
-  await db('session_grants').where({ principal_id: owner, workspace_id: workspaceId }).del();
-  const workflow = await db('workflow_runs').where({ run_id: runId }).first();
-  await db('runs').where({ id: runId }).del();
-  if (workflow?.workflow_id) await db('workflow_definitions').where({ id: workflow.workflow_id }).del();
-  await db('principal_workspace_authorities').where({ principal_id: owner, workspace_id: workspaceId }).del();
+async function cleanup(f: Fixture): Promise<void> {
+  // The helper deletes this run’s RESTRICT-linked outbox rows before the run,
+  // which cascades its workflow run; then remove only the owned workflow definition.
+  await f.executionFixture.cleanup();
+  if (f.workflowRunId) await db('workflow_runs').where({ id: f.workflowRunId }).del();
+  if (f.workflowId) await db('workflow_definitions').where({ id: f.workflowId }).del();
 }
 
 async function resolve(f: Fixture, decision: ApprovalDecision = 'ALLOW_ONCE') {
@@ -119,7 +135,7 @@ async function resolve(f: Fixture, decision: ApprovalDecision = 'ALLOW_ONCE') {
     : decision === 'ALLOW_ALWAYS_FOR_TOOL'
       ? { scope: 'ALWAYS' as const, riskCeiling: 'WRITE' as const }
       : undefined;
-  return repo.resolvePendingRequest(f.request.id, decision, owner, grant,
+  return repo.resolvePendingRequest(f.request.id, decision, f.owner, grant,
     decision === 'ALLOW_ONCE', f.target);
 }
 
@@ -354,12 +370,12 @@ test('isolated PostgreSQL approval and resumption outbox certification', async (
         resolve(f, 'ALLOW_SESSION'), resolve(f, 'ALLOW_SESSION')
       ]);
       assert.deepEqual(same.map((result) => result.applied).sort(), [false, true]);
-      assert.equal(await db('session_grants').where({ principal_id: owner, session_id: f.runId, tool: 'cert_write' }).count('* as n').then((r) => Number(r[0].n)), 1);
+      assert.equal(await db('session_grants').where({ principal_id: f.owner, session_id: f.runId, tool: 'cert_write' }).count('* as n').then((r) => Number(r[0].n)), 1);
       const grantDelivery = await repo.claimApprovalResumption('grant-consumer', 10_000, f.request.id);
       assert.ok(grantDelivery);
       assert.equal(await repo.applyApprovalResumption(grantDelivery!, 'grant-consumer'), true);
       assert.equal((await db('approval_resumption_outbox').where({ id: grantDelivery!.id }).first()).state, 'DISPATCHED_UNKNOWN');
-    } finally { await cleanup(f.runId); }
+    } finally { await cleanup(f); }
 
     const other = await fixture();
     try {
@@ -367,7 +383,7 @@ test('isolated PostgreSQL approval and resumption outbox certification', async (
       assert.equal(results.filter((result) => result.status === 'fulfilled' && result.value.applied).length, 1);
       assert.equal(results.filter((result) => result.status === 'rejected').length, 1);
       assert.equal(await db('approval_resumption_outbox').where({ run_id: other.runId }).count('* as n').then((r) => Number(r[0].n)), 1);
-    } finally { await cleanup(other.runId); }
+    } finally { await cleanup(other); }
 
     const spoofedPrefix = await fixture(randomUUID(), undefined, `call_step_${randomUUID()}`);
     try {
@@ -375,7 +391,7 @@ test('isolated PostgreSQL approval and resumption outbox certification', async (
       const intent = await db('approval_resumption_outbox').where({ approval_id: spoofedPrefix.request.id }).first();
       assert.equal(intent.target_type, 'RUN');
       assert.equal(intent.workflow_run_id, null);
-    } finally { await cleanup(spoofedPrefix.runId); }
+    } finally { await cleanup(spoofedPrefix); }
   });
 
   await suite.test('grant validation failure rolls back decision and outbox atomically', async () => {
@@ -384,11 +400,11 @@ test('isolated PostgreSQL approval and resumption outbox certification', async (
       await assert.rejects(() => repo.resolvePendingRequest(f.request.id, 'ALLOW_ONCE', 'other-resolver'));
       assert.equal((await db('approvals').where({ id: f.request.id }).first()).status, 'PENDING');
       const invalidGrant: ApprovalGrantRequest = { scope: 'ALWAYS', riskCeiling: 'DESTRUCTIVE' };
-      await assert.rejects(() => repo.resolvePendingRequest(f.request.id, 'ALLOW_SESSION', owner, invalidGrant));
+      await assert.rejects(() => repo.resolvePendingRequest(f.request.id, 'ALLOW_SESSION', f.owner, invalidGrant));
       assert.equal((await db('approvals').where({ id: f.request.id }).first()).status, 'PENDING');
       assert.equal(await db('approval_resumption_outbox').where({ approval_id: f.request.id }).first(), undefined);
-      assert.equal(await db('session_grants').where({ principal_id: owner, workspace_id: workspaceId, tool: 'cert_write' }).first(), undefined);
-    } finally { await cleanup(f.runId); }
+      assert.equal(await db('session_grants').where({ principal_id: f.owner, workspace_id: f.workspaceId, tool: 'cert_write' }).first(), undefined);
+    } finally { await cleanup(f); }
   });
 
   await suite.test('revoked workspace authority blocks approval decisions and reusable grants', async () => {
@@ -396,19 +412,19 @@ test('isolated PostgreSQL approval and resumption outbox certification', async (
     const grants = new PostgresSessionGrantRepository();
     const tool = `cert_revoked_${randomUUID()}`;
     try {
-      await db('principal_workspace_authorities').where({ principal_id: owner, workspace_id: workspaceId })
+      await db('principal_workspace_authorities').where({ principal_id: f.owner, workspace_id: f.workspaceId })
         .update({ state: 'REVOKED', revoked_at: Date.now(), updated_at: Date.now() });
       await assert.rejects(() => resolve(f, 'ALLOW_ONCE'), /active workspace authority/i);
       assert.equal((await db('approvals').where({ id: f.request.id }).first()).status, 'PENDING');
       assert.equal(await db('approval_resumption_outbox').where({ approval_id: f.request.id }).first(), undefined);
-      await assert.rejects(() => grants.grantSession(f.runId, tool, owner, 'WRITE'), /active workspace authority/i);
-      await assert.rejects(() => grants.grantAlways(tool, owner, 'WRITE', f.runId, workspaceId), /active workspace authority/i);
-      assert.equal(await grants.hasSessionGrant(f.runId, tool, owner, 'WRITE'), false);
-      assert.equal(await grants.hasAlwaysGrant(tool, owner, 'WRITE', f.runId), false);
+      await assert.rejects(() => grants.grantSession(f.runId, tool, f.owner, 'WRITE'), /active workspace authority/i);
+      await assert.rejects(() => grants.grantAlways(tool, f.owner, 'WRITE', f.runId, f.workspaceId), /active workspace authority/i);
+      assert.equal(await grants.hasSessionGrant(f.runId, tool, f.owner, 'WRITE'), false);
+      assert.equal(await grants.hasAlwaysGrant(tool, f.owner, 'WRITE', f.runId), false);
     } finally {
-      await db('principal_workspace_authorities').where({ principal_id: owner, workspace_id: workspaceId })
+      await db('principal_workspace_authorities').where({ principal_id: f.owner, workspace_id: f.workspaceId })
         .update({ state: 'ACTIVE', revoked_at: null, updated_at: Date.now() });
-      await cleanup(f.runId);
+      await cleanup(f);
     }
   });
 
@@ -417,17 +433,17 @@ test('isolated PostgreSQL approval and resumption outbox certification', async (
     const grants = new PostgresSessionGrantRepository();
     const tool = `cert_always_${randomUUID()}`;
     try {
-      await assert.rejects(() => grants.grantAlways(tool, owner, 'WRITE', f.runId, 'forged-workspace'));
-      await assert.rejects(() => grants.grantAlways(tool, 'other-owner', 'WRITE', f.runId, workspaceId));
+      await assert.rejects(() => grants.grantAlways(tool, f.owner, 'WRITE', f.runId, 'forged-workspace'));
+      await assert.rejects(() => grants.grantAlways(tool, 'other-owner', 'WRITE', f.runId, f.workspaceId));
       assert.equal(await db('session_grants').where({ tool }).first(), undefined);
 
-      await grants.grantAlways(tool, owner, 'WRITE', f.runId, workspaceId);
-      const persisted = await db('session_grants').where({ tool, principal_id: owner, permission: 'ALWAYS' }).first();
-      assert.equal(persisted?.workspace_id, workspaceId);
+      await grants.grantAlways(tool, f.owner, 'WRITE', f.runId, f.workspaceId);
+      const persisted = await db('session_grants').where({ tool, principal_id: f.owner, permission: 'ALWAYS' }).first();
+      assert.equal(persisted?.workspace_id, f.workspaceId);
       assert.equal(persisted?.risk_ceiling, 'WRITE');
     } finally {
       await db('session_grants').where({ tool }).del();
-      await cleanup(f.runId);
+      await cleanup(f);
     }
   });
 
@@ -436,12 +452,12 @@ test('isolated PostgreSQL approval and resumption outbox certification', async (
     try {
       await resolve(f, 'ALLOW_ALWAYS_FOR_TOOL');
       const grant = await db('session_grants').where({
-        principal_id: owner, workspace_id: workspaceId, tool: 'cert_write', permission: 'ALWAYS'
+        principal_id: f.owner, workspace_id: f.workspaceId, tool: 'cert_write', permission: 'ALWAYS'
       }).first();
       assert.equal(grant?.risk_ceiling, 'WRITE');
     } finally {
-      await db('session_grants').where({ principal_id: owner, workspace_id: workspaceId, tool: 'cert_write', permission: 'ALWAYS' }).del();
-      await cleanup(f.runId);
+      await db('session_grants').where({ principal_id: f.owner, workspace_id: f.workspaceId, tool: 'cert_write', permission: 'ALWAYS' }).del();
+      await cleanup(f);
     }
   });
 
@@ -482,7 +498,7 @@ test('isolated PostgreSQL approval and resumption outbox certification', async (
       assert.equal(await repo.completeApprovalResumption(workerB!.id, { outcome: 'certified-result' }), true);
       assert.equal(await repo.completeApprovalResumption(workerB!.id, { outcome: 'duplicate' }), false);
       assert.equal((await db('approval_resumption_outbox').where({ id: workerB!.id }).first()).state, 'COMPLETED_WITH_RESULT');
-    } finally { await cleanup(f.runId); }
+    } finally { await cleanup(f); }
   });
 
   await suite.test('concurrent ALLOW_ONCE claims enforce exact owner, call, argument, version, and policy binding', async () => {
@@ -493,7 +509,7 @@ test('isolated PostgreSQL approval and resumption outbox certification', async (
       assert.ok(resumption);
       assert.equal(await repo.applyApprovalResumption(resumption!, 'once-test-dispatcher'), true);
       const base = {
-        requestId: f.request.id, principalId: owner, workspaceId, runId: f.runId,
+        requestId: f.request.id, principalId: f.owner, workspaceId: f.workspaceId, runId: f.runId,
         toolCallId: f.request.toolCall.id, toolId: f.request.toolCall.toolId,
         toolName: f.request.toolCall.name, permissionLevel: 'WRITE' as const,
         toolDefinitionVersion: 1, toolPolicyFingerprint: 'a'.repeat(64),
@@ -502,7 +518,7 @@ test('isolated PostgreSQL approval and resumption outbox certification', async (
       await db('runs').where({ id: f.runId }).update({ workspace_id: null });
       const missingWorkspaceBinding = { ...base, workspaceId: undefined, claimId: 'missing-workspace' } as any;
       assert.equal(await repo.claimOnceAuthorization!(missingWorkspaceBinding), false);
-      await db('runs').where({ id: f.runId }).update({ workspace_id: workspaceId });
+      await db('runs').where({ id: f.runId }).update({ workspace_id: f.workspaceId });
       for (const mismatch of [
         { principalId: 'other-principal' }, { workspaceId: 'other-workspace' },
         { runId: 'other-run' }, { toolCallId: 'other-call' }, { toolId: 'other-tool-id' },
@@ -519,11 +535,11 @@ test('isolated PostgreSQL approval and resumption outbox certification', async (
       const winnerBinding = { ...base, claimId: winner };
       await db('runs').where({ id: f.runId }).update({ workspace_id: 'tampered-workspace' });
       assert.equal(await repo.markOnceAuthorizationDispatched!(winnerBinding), false);
-      await db('runs').where({ id: f.runId }).update({ workspace_id: workspaceId });
+      await db('runs').where({ id: f.runId }).update({ workspace_id: f.workspaceId });
       assert.equal(await repo.markOnceAuthorizationDispatched!(winnerBinding), true);
       assert.equal(await repo.markOnceAuthorizationDispatched!(winnerBinding), false);
       assert.equal(await repo.claimOnceAuthorization!({ ...base, claimId: 'replay-after-dispatch' }), false);
-    } finally { await cleanup(f.runId); }
+    } finally { await cleanup(f); }
   });
 
   await suite.test('workflow approval atomically advances only its matching pending step', async () => {
@@ -533,11 +549,11 @@ test('isolated PostgreSQL approval and resumption outbox certification', async (
     const otherWorkflow = await fixture(randomUUID(), otherStepId);
     try {
       await assert.rejects(() => repo.resolvePendingRequest(
-        f.request.id, 'ALLOW_ONCE', owner, undefined, true,
+        f.request.id, 'ALLOW_ONCE', f.owner, undefined, true,
         { type: 'WORKFLOW', workflowRunId: otherWorkflow.target.type === 'WORKFLOW' ? otherWorkflow.target.workflowRunId : 'invalid', workflowStepId: otherStepId }
       ));
       await assert.rejects(() => repo.resolvePendingRequest(
-        f.request.id, 'ALLOW_ONCE', owner, undefined, true,
+        f.request.id, 'ALLOW_ONCE', f.owner, undefined, true,
         { type: 'WORKFLOW', workflowRunId: f.target.type === 'WORKFLOW' ? f.target.workflowRunId : 'invalid', workflowStepId: otherStepId }
       ));
       if (f.target.type !== 'WORKFLOW') throw new Error('Workflow fixture must carry a persisted workflow target.');
@@ -548,7 +564,7 @@ test('isolated PostgreSQL approval and resumption outbox certification', async (
         side_effect_level: 'NONE', approval_required: true
       });
       await assert.rejects(() => repo.resolvePendingRequest(
-        f.request.id, 'ALLOW_ONCE', owner, undefined, true, f.target
+        f.request.id, 'ALLOW_ONCE', f.owner, undefined, true, f.target
       ));
       await db('workflow_steps').where({ id: duplicateStepRowId }).del();
       assert.equal((await db('approvals').where({ id: f.request.id }).first()).status, 'PENDING');
@@ -578,8 +594,8 @@ test('isolated PostgreSQL approval and resumption outbox certification', async (
       assert.equal(run.execution_checkpoint, 'WORKFLOW_RUNNING');
       assert.equal(await repo.claimApprovalResumption('workflow-duplicate', 10_000, f.request.id), undefined);
     } finally {
-      await cleanup(f.runId);
-      await cleanup(otherWorkflow.runId);
+      await cleanup(f);
+      await cleanup(otherWorkflow);
     }
   });
 
@@ -599,7 +615,7 @@ test('isolated PostgreSQL approval and resumption outbox certification', async (
       await db('runs').where({ id: f.runId }).update({ workspace_id: 'revoked-or-mismatched-workspace' });
       assert.equal(await repo.applyApprovalResumption(retry!, 'worker-b'), false);
       assert.equal((await db('approval_resumption_outbox').where({ id: retry!.id }).first()).state, 'CANCELLED_REVOKED');
-    } finally { await cleanup(f.runId); }
+    } finally { await cleanup(f); }
   });
 
   await suite.test('cancelled targets become terminally cancelled and are never resumed', async () => {
@@ -612,18 +628,18 @@ test('isolated PostgreSQL approval and resumption outbox certification', async (
       assert.equal(await repo.applyApprovalResumption(claim!, 'worker-cancel'), false);
       assert.equal((await db('approval_resumption_outbox').where({ id: claim!.id }).first()).state, 'CANCELLED_REVOKED');
       assert.equal(await repo.claimApprovalResumption('worker-after-cancel', 10_000, f.request.id), undefined);
-    } finally { await cleanup(f.runId); }
+    } finally { await cleanup(f); }
 
     const revoked = await fixture();
     try {
       await resolve(revoked, 'ALLOW_SESSION');
-      await db('session_grants').where({ principal_id: owner, workspace_id: workspaceId, session_id: revoked.runId }).del();
+      await db('session_grants').where({ principal_id: revoked.owner, workspace_id: revoked.workspaceId, session_id: revoked.runId }).del();
       const revokedClaim = await repo.claimApprovalResumption('worker-revoked', 10_000, revoked.request.id);
       assert.ok(revokedClaim);
       assert.equal(await repo.applyApprovalResumption(revokedClaim!, 'worker-revoked'), false);
       assert.equal((await db('approval_resumption_outbox').where({ id: revokedClaim!.id }).first()).state, 'CANCELLED_REVOKED');
       assert.equal((await db('runs').where({ id: revoked.runId }).first()).state, 'WAITING_FOR_APPROVAL');
-    } finally { await cleanup(revoked.runId); }
+    } finally { await cleanup(revoked); }
   });
 });
 

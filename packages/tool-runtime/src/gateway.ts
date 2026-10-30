@@ -97,10 +97,11 @@ export class ToolGateway extends EventEmitter {
     private repository: ToolCallRepository = new PostgresToolCallRepository(),
     private approvalKernel?: ApprovalKernel,
     private workspaceRoot = process.cwd(),
-    private authorityRepository: WorkspaceAuthorityRepository = workspaceAuthority
+    private authorityRepository: WorkspaceAuthorityRepository = workspaceAuthority,
+    browserAdapter: BrowserAdapter = new BrowserAdapter()
   ) {
     super();
-    this.browserAdapter = new BrowserAdapter();
+    this.browserAdapter = browserAdapter;
     this.fileAdapter = new FileSystemAdapter(this.workspaceRoot);
     this.repoAdapter = new RepositoryAdapter(this.workspaceRoot);
     this.connectorRegistry = new ConnectorRegistry();

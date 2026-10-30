@@ -4,6 +4,7 @@ import {
   SafePreflightError,
   assertConnectedServerAddressMatchesExpected,
   assertDnsAddressesMatchExpected,
+  normalizeIpAddress,
 } from './postgres-address-policy.mjs';
 
 function reject(reason) {
@@ -55,9 +56,21 @@ async function main() {
   if (!['postgres:', 'postgresql:'].includes(target.protocol)) {
     throw new SafePreflightError('DATABASE_URL must use the PostgreSQL protocol');
   }
-  if (target.hostname.toLowerCase() !== 'postgres' || target.port !== '5432') {
-    throw new SafePreflightError('DATABASE_URL must target the isolated postgres:5432 service');
+
+  const isLocalCert =
+    process.env.AIRA_POSTGRES_CERTIFICATION === '1' &&
+    (target.hostname === '127.0.0.1' || target.hostname === 'localhost');
+
+  if (isLocalCert) {
+    if (target.port !== '55432') {
+      throw new SafePreflightError('Local disposable PostgreSQL certification must target isolated port 55432 (port 5432 is strictly prohibited)');
+    }
+  } else {
+    if (target.hostname.toLowerCase() !== 'postgres' || target.port !== '5432') {
+      throw new SafePreflightError('DATABASE_URL must target the isolated postgres:5432 service');
+    }
   }
+
   if (decodeURIComponent(target.username) !== expectedUser) {
     throw new SafePreflightError('DATABASE_URL role does not match the expected disposable role');
   }
@@ -67,14 +80,17 @@ async function main() {
   if (!/^aira_ci_[0-9]+-[0-9]+$/.test(expectedUser) || !/^aira_ci_[0-9]+-[0-9]+$/.test(expectedDatabase)) {
     throw new SafePreflightError('expected identity is not run-scoped disposable PostgreSQL');
   }
-  const exactGeneratedUrl = new RegExp(
-    `^postgresql://${expectedUser}:[a-f0-9]{64}@postgres:5432/${expectedDatabase}$`,
-  );
+
+  const exactGeneratedUrl = isLocalCert
+    ? new RegExp('^postgresql://' + expectedUser + ':[a-f0-9]{64}@(127\\.0\\.0\\.1|localhost):55432/' + expectedDatabase + '$')
+    : new RegExp('^postgresql://' + expectedUser + ':[a-f0-9]{64}@postgres:5432/' + expectedDatabase + '$');
+
   if (!exactGeneratedUrl.test(databaseUrl) || target.search || target.hash) {
     throw new SafePreflightError('DATABASE_URL is not the exact generated disposable PostgreSQL URL');
   }
 
-  const dnsAddresses = (await lookup('postgres', { all: true })).map(({ address }) => address);
+  const lookupHost = isLocalCert ? target.hostname : 'postgres';
+  const dnsAddresses = (await lookup(lookupHost, { all: true })).map(({ address }) => address);
   assertDnsAddressesMatchExpected({
     expectedAddresses: expectedPostgresAddresses,
     dnsAddresses,
@@ -105,11 +121,20 @@ async function main() {
     if (Math.floor(Number(identity.server_version_num) / 10000) !== 16) {
       throw new SafePreflightError('connected PostgreSQL server is not major version 16');
     }
-    assertConnectedServerAddressMatchesExpected({
-      expectedAddresses: expectedPostgresAddresses,
-      dnsAddresses,
-      serverAddress: identity.server_address,
-    });
+
+    if (isLocalCert) {
+      const server = normalizeIpAddress(identity.server_address);
+      const expected = new Set(expectedPostgresAddresses.map(normalizeIpAddress));
+      if (!expected.has(server) && server !== 'ipv4:127.0.0.1') {
+        throw new SafePreflightError('connected PostgreSQL server address does not match local disposable container endpoint');
+      }
+    } else {
+      assertConnectedServerAddressMatchesExpected({
+        expectedAddresses: expectedPostgresAddresses,
+        dnsAddresses,
+        serverAddress: identity.server_address,
+      });
+    }
 
     console.log('Disposable PostgreSQL identity verified: expected run-scoped database, role, and PostgreSQL 16.');
   } finally {

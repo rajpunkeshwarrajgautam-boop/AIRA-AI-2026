@@ -1,4 +1,5 @@
 import assert from 'node:assert';
+import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
   WorkflowDefinition,
@@ -7,19 +8,43 @@ import {
   Run,
   RunSchema
 } from '../packages/contracts/src/index.js';
-import { PostgresWorkflowRepository } from '../packages/agent-runtime/src/workflow-repositories.js';
-import { PostgresRunRepository } from '../packages/agent-runtime/src/repositories.js';
-import { WorkflowEngine } from '../packages/agent-runtime/src/workflow-engine.js';
-import { WorkflowCompiler } from '../packages/agent-runtime/src/workflow-compiler.js';
-import { ApprovalKernel } from '../packages/approvals/src/index.js';
-import { PostgresApprovalRepository, PostgresSessionGrantRepository } from '../packages/approvals/src/repositories.js';
-import { ToolRegistry } from '../packages/tool-runtime/src/index.js';
-import { ModelRouter } from '../packages/model-router/src/index.js';
-import { CapabilityRegistry } from '../packages/agent-runtime/src/registry.js';
-import { ServerIntentRouter } from '../packages/agent-runtime/src/router.js';
-import { PostgresWorkspaceAuthorityRepository } from '../packages/agent-runtime/src/workspace-authority.js';
+import { runWithDisposablePostgresTestContract } from './helpers/disposable-postgres-test-entry.js';
 
 async function main() {
+  await runWithDisposablePostgresTestContract({
+    preflight: () => {
+      execFileSync(process.execPath, ['scripts/ci/assert-disposable-postgres.mjs'], {
+        stdio: 'inherit'
+      });
+    },
+    run: async () => {
+      // These imports transitively construct the PostgreSQL client. Keep them
+      // behind both the pure authorization guard and connected-server preflight.
+      const [
+        { PostgresWorkflowRepository },
+        { PostgresRunRepository },
+        { WorkflowEngine },
+        { WorkflowCompiler },
+        { ApprovalKernel },
+        { PostgresApprovalRepository, PostgresSessionGrantRepository },
+        { ToolRegistry },
+        { ModelRouter },
+        { CapabilityRegistry },
+        { ServerIntentRouter },
+        { PostgresWorkspaceAuthorityRepository }
+      ] = await Promise.all([
+        import('../packages/agent-runtime/src/workflow-repositories.js'),
+        import('../packages/agent-runtime/src/repositories.js'),
+        import('../packages/agent-runtime/src/workflow-engine.js'),
+        import('../packages/agent-runtime/src/workflow-compiler.js'),
+        import('../packages/approvals/src/index.js'),
+        import('../packages/approvals/src/repositories.js'),
+        import('../packages/tool-runtime/src/index.js'),
+        import('../packages/model-router/src/index.js'),
+        import('../packages/agent-runtime/src/registry.js'),
+        import('../packages/agent-runtime/src/router.js'),
+        import('../packages/agent-runtime/src/workspace-authority.js')
+      ]);
   console.log('================================================================');
   console.log(' AIRA-AI-2026 — WORKFLOW EXECUTION ENGINE CERTIFICATION SUITE   ');
   console.log('================================================================\n');
@@ -902,6 +927,8 @@ async function main() {
   console.log(' ALL WORKFLOW ENGINE TESTS COMPLETED WITH 100% PASS RATE!        ');
   console.log('================================================================\n');
   process.exit(0);
+    }
+  });
 }
 
 main().catch(err => {

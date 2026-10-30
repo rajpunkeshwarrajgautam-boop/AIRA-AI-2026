@@ -83,10 +83,10 @@ async function testOpaqueCookieAndServerStore() {
   await bffSessionStore.set(session);
   const serialized = serializeBffToken(session);
 
-  // Assert cookie contains ONLY opaque ID and signature, ZERO JSON or credentials
-  assert(serialized.includes('.'), 'Serialized token must have signature separator');
+  // The v2 cookie exposes only version, environment, opaque ID, and signature; no bearer tokens.
+  assert(serialized.startsWith('v2.aira-bff-session.development.'), 'New cookie must carry audience and local deployment environment');
   const parts = serialized.split('.');
-  assert.equal(parts.length, 2, 'Opaque cookie must consist only of sessionId and HMAC signature');
+  assert.equal(parts.length, 5, 'Opaque v2 cookie must have version/audience/environment/id/signature segments');
   assert(!serialized.includes('{'), 'Cookie must NOT contain JSON payload');
   assert(!serialized.includes('neon_sess_tok'), 'Cookie must NOT contain sessionToken');
   assert(!serialized.includes('test.jwt'), 'Cookie must NOT contain JWT');

@@ -91,7 +91,7 @@ test('ToolGateway requires active server-owned workspace authority even for dire
     id: 'tool_authority_read_test', name: 'authority_read_test', version: 1,
     description: 'Read tool used to verify workspace authority enforcement.',
     category: 'utility', parameters: { type: 'object', properties: {} }, source: 'native',
-    permissionLevel: 'READ', sideEffectLevel: 'READ', permissionScopes: [], approvalPolicy: 'autonomous',
+    permissionLevel: 'READ', sideEffectLevel: 'READ', permissionScopes: ['files.read'], approvalPolicy: 'autonomous',
     executionRuntime: 'LOCAL', executionMode: 'sync', timeoutMs: 5000,
     retryPolicy: { maxAttempts: 1, backoffMs: 0, factor: 2, retryableErrorCodes: [] },
     idempotencyPolicy: { required: false }, availability: 'READY', adapter: 'native',
@@ -123,6 +123,60 @@ test('ToolGateway requires active server-owned workspace authority even for dire
   });
   assert.equal(allowed.isError, false);
   assert.equal(adapterCalls, 1);
+
+  const foreignOwnerId = 'foreign-gateway-owner';
+  const foreignWorkspaceId = await authority.resolveWorkspace(foreignOwnerId);
+  const crossWorkspace = await gateway.execute({
+    toolName: definition.name,
+    arguments: {},
+    context: {
+      runId: 'gateway-cross-workspace-run',
+      principal: { ...untrustedPrincipal, workspaceId: foreignWorkspaceId }
+    }
+  });
+  assert.equal(crossWorkspace.isError, true);
+  assert.equal(crossWorkspace.errorCode, 'TOOL_PERMISSION_DENIED');
+  assert.equal(adapterCalls, 1, 'A different principal\'s workspace must not reach the adapter.');
+
+  const missingPrincipal = {
+    ...untrustedPrincipal,
+    userId: 'gateway-never-provisioned',
+    workspaceId: 'client-fabricated-workspace'
+  };
+  const missingAuthority = await gateway.execute({
+    toolName: definition.name,
+    arguments: {},
+    context: { runId: 'gateway-missing-authority-run', principal: missingPrincipal }
+  });
+  assert.equal(missingAuthority.isError, true);
+  assert.equal(missingAuthority.errorCode, 'TOOL_PERMISSION_DENIED');
+  assert.equal(adapterCalls, 1, 'Missing authority must remain denied.');
+
+  const missingScopePrincipal = {
+    ...untrustedPrincipal,
+    scopes: [] as string[]
+  };
+  const missingScope = await gateway.execute({
+    toolName: definition.name,
+    arguments: {},
+    context: { runId: 'gateway-missing-scope-run', principal: missingScopePrincipal }
+  });
+  assert.equal(missingScope.isError, true);
+  assert.equal(missingScope.errorCode, 'TOOL_PERMISSION_DENIED');
+  assert.equal(adapterCalls, 1, 'A valid workspace must not compensate for a missing permission scope.');
+
+  assert.equal(await authority.revokeWorkspace(untrustedPrincipal.userId), true);
+  const revokedAuthority = await gateway.execute({
+    toolName: definition.name,
+    arguments: {},
+    context: {
+      runId: 'gateway-revoked-authority-run',
+      principal: { ...untrustedPrincipal, workspaceId: authorizedWorkspaceId }
+    }
+  });
+  assert.equal(revokedAuthority.isError, true);
+  assert.equal(revokedAuthority.errorCode, 'TOOL_PERMISSION_DENIED');
+  assert.equal(adapterCalls, 1, 'Revoked authority must not reach the adapter.');
 
   class RevokesAfterInitialCheck extends InMemoryWorkspaceAuthorityRepository {
     private checks = 0;

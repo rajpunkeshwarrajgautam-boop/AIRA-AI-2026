@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import assert from 'assert';
 import { randomUUID } from 'node:crypto';
 import { db } from '../packages/db/src/index.js'; // to seed/verify DB states directly
-import { PostgresWorkspaceAuthorityRepository } from '../packages/agent-runtime/src/workspace-authority.js';
+import { createPostgresExecutionFixture } from './helpers/postgres-execution-fixture.js';
 
 function assertAuthorizedDisposableDatabase(): void {
   if (process.env.AIRA_POSTGRES_CERTIFICATION !== '1') {
@@ -19,9 +19,10 @@ function assertAuthorizedDisposableDatabase(): void {
 
 const API_PORT = 3003;
 const BASE_URL = `http://127.0.0.1:${API_PORT}`;
-const RECOVERY_PRINCIPAL_ID = `cert_recovery_${randomUUID()}`;
-const RECOVERY_SESSION_ID = `cert_recovery_session_${randomUUID()}`;
-let recoveryWorkspaceId = '';
+const FIXTURE_TAG = randomUUID();
+const RECOVERY_PRINCIPAL_ID = `cert_recovery_${FIXTURE_TAG}`;
+const RECOVERY_SESSION_ID = `cert_recovery_session_${FIXTURE_TAG}`;
+let executionFixture: Awaited<ReturnType<typeof createPostgresExecutionFixture>> | undefined;
 
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -31,16 +32,26 @@ let apiServer: any;
 
 async function startApiServer() {
   console.log('Starting API Server...');
-  apiServer = spawn('npx', ['tsx', 'apps/api/src/index.ts'], {
-    env: {
-      ...process.env,
-      PORT: API_PORT.toString(),
-      NODE_ENV: 'test',
-      AIRA_ALLOW_MOCK: 'true',
-      AIRA_PERSISTENT_WORKSPACE_AUTHORITY: 'true'
-    },
-    stdio: 'inherit',
-    shell: true
+  const apiEnvironment: NodeJS.ProcessEnv = {
+    ...process.env,
+    PORT: API_PORT.toString(),
+    NODE_ENV: 'test',
+    AIRA_ALLOW_MOCK: 'true',
+    AIRA_PERSISTENT_WORKSPACE_AUTHORITY: 'true',
+    DOTENV_CONFIG_PATH: '/dev/null'
+  };
+  for (const key of [
+    'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'NVIDIA_API_KEY', 'GROQ_API_KEY',
+    'GEMINI_API_KEY', 'CEREBRAS_API_KEY', 'TOGETHER_API_KEY', 'FIREWORKS_API_KEY',
+    'BRAVE_SEARCH_API_KEY', 'TAVILY_API_KEY', 'EXA_API_KEY', 'FAL_KEY', 'FAL_API_KEY',
+    'REPLICATE_API_TOKEN', 'FIRECRAWL_API_KEY', 'E2B_API_KEY', 'LIGHTNING_SANDBOX_API_KEY',
+    'BROWSERBASE_API_KEY', 'BROWSERLESS_API_KEY', 'AIRA_LIVE_PROVIDER_ACCEPTANCE',
+    'AIRA_LIVE_PROVIDER', 'AIRA_LIVE_MODEL', 'AIRA_LIVE_PROVIDER_CONFIRMATION',
+    'AIRA_LIVE_PROVIDER_DATABASE_CONFIRMATION'
+  ]) delete apiEnvironment[key];
+  apiServer = spawn(process.execPath, ['node_modules/tsx/dist/cli.mjs', 'apps/api/src/index.ts'], {
+    env: apiEnvironment,
+    stdio: 'inherit'
   });
   
   // Wait until it responds to health check
@@ -48,18 +59,21 @@ async function startApiServer() {
     try {
       const res = await fetch(`${BASE_URL}/api/ready`);
       if (res.ok) return;
-    } catch (e) {}
+    } catch {}
     await sleep(500);
   }
   throw new Error('API server failed to start');
 }
 
-function killApiServer() {
-  if (apiServer) {
-    console.log('Killing API Server (SIGKILL)...');
-    apiServer.kill('SIGKILL');
-    apiServer = null;
-  }
+async function killApiServer(): Promise<void> {
+  const child = apiServer;
+  apiServer = null;
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  console.log('Killing API Server (SIGKILL)...');
+  await new Promise<void>((resolve) => {
+    child.once('exit', () => resolve());
+    child.kill('SIGKILL');
+  });
 }
 
 async function createRun(prompt: string) {
@@ -80,33 +94,34 @@ async function createRun(prompt: string) {
   if (!createRes.ok) {
     throw new Error(`Failed to create run: ${createRes.status} ${await createRes.text()}`);
   }
-  return await createRes.json();
+  const run = await createRes.json();
+  if (!executionFixture) throw new Error('Recovery execution fixture was not initialized.');
+  await executionFixture.trackParentRun(run.id);
+  return run;
 }
 
 async function seedRun(id: string, state: string, checkpoint: string, extra: any = {}) {
-  await db('runs').insert({
-    id,
+  if (!executionFixture) throw new Error('Recovery execution fixture was not initialized.');
+  await executionFixture.createParentRun(id, {
+    prompt: 'Seeded test run', state, status: state, executionCheckpoint: checkpoint
+  });
+  await db('runs').where({ id }).update({
     agent_id: null,
-    principal_id: RECOVERY_PRINCIPAL_ID,
-    session_id: RECOVERY_SESSION_ID,
-    workspace_id: recoveryWorkspaceId,
-    state,
-    status: state,
     execution_checkpoint: checkpoint,
-    prompt: 'Seeded test run',
     modelPolicy: JSON.stringify({ model: 'mock-deterministic' }),
-    createdAt: Date.now(),
     updatedAt: Date.now(),
     ...extra
   });
 }
 
 async function runRecoveryTests() {
-  assertAuthorizedDisposableDatabase();
-  console.log('=== TASK 5 RECOVERY TEST SUITE ===');
-
-  recoveryWorkspaceId = await new PostgresWorkspaceAuthorityRepository().resolveWorkspace(RECOVERY_PRINCIPAL_ID);
-  await db('runs').del();
+  try {
+    assertAuthorizedDisposableDatabase();
+    executionFixture = await createPostgresExecutionFixture({
+      principalPrefix: 'cert_recovery', sessionPrefix: 'cert_recovery_session', tag: FIXTURE_TAG,
+      principalId: RECOVERY_PRINCIPAL_ID, sessionId: RECOVERY_SESSION_ID, roles: ['member'], scopes: []
+    });
+    console.log('=== TASK 5 RECOVERY TEST SUITE ===');
 
   // We start the API server to create some initial runs that we will kill mid-flight
   await startApiServer();
@@ -122,18 +137,18 @@ async function runRecoveryTests() {
   await sleep(3000);
 
   // Kill the server abruptly
-  killApiServer();
+  await killApiServer();
   await sleep(1000);
 
   console.log('\n--- 2. Prepare Static Runs for Startup Verification ---');
   
   // Test A: WAITING_FOR_APPROVAL
-  const runApprovalId = 'run_approval_123';
+  const runApprovalId = `run_approval_${FIXTURE_TAG}`;
   await seedRun(runApprovalId, 'WAITING_FOR_APPROVAL', 'WAITING_FOR_APPROVAL');
   
   // Model a SIGKILL boundary after durable tool completion: the run is still RUNNING,
   // its checkpoint is TOOL_COMPLETED, and the call/result plus lifecycle receipts are persisted.
-  const runCompletedToolId = 'run_tc_123';
+  const runCompletedToolId = `run_tc_${FIXTURE_TAG}`;
   const completedToolCall = {
     id: 'call_1', toolId: 'tool_calculator', name: 'calculator',
     arguments: { expression: '6 * 7' }, timestamp: Date.now(), status: 'COMPLETED'
@@ -161,21 +176,21 @@ async function runRecoveryTests() {
   ]);
 
   // Test F: SYNTHESIZING
-  const runSynthId = 'run_synth_123';
+  const runSynthId = `run_synth_${FIXTURE_TAG}`;
   await seedRun(runSynthId, 'RUNNING', 'SYNTHESIZING');
 
   // Test G: FINALIZING
-  const runFinalizeId = 'run_final_123';
+  const runFinalizeId = `run_final_${FIXTURE_TAG}`;
   await seedRun(runFinalizeId, 'RUNNING', 'FINALIZING');
 
   // Test H: Terminal runs
-  const runCompletedId = 'run_done_123';
+  const runCompletedId = `run_done_${FIXTURE_TAG}`;
   await seedRun(runCompletedId, 'COMPLETED', 'COMPLETED');
-  const runFailedId = 'run_fail_123';
+  const runFailedId = `run_fail_${FIXTURE_TAG}`;
   await seedRun(runFailedId, 'FAILED', 'TOOL_EXECUTING');
 
   // Test I: Lease takeover / contention
-  const runLeasedId = 'run_leased_123';
+  const runLeasedId = `run_leased_${FIXTURE_TAG}`;
   await seedRun(runLeasedId, 'RUNNING', 'TOOL_APPROVED', {
     recovery_owner: 'other-worker',
     recovery_claimed_at: Date.now(),
@@ -183,7 +198,7 @@ async function runRecoveryTests() {
     toolCalls: JSON.stringify([{ id: 'call_1', toolId: 'tool_1', name: 'dummy', arguments: {}, timestamp: Date.now(), status: 'APPROVED' }])
   });
   
-  const runExpiredLeaseId = 'run_expired_123';
+  const runExpiredLeaseId = `run_expired_${FIXTURE_TAG}`;
   await seedRun(runExpiredLeaseId, 'RUNNING', 'TOOL_APPROVED', {
     recovery_owner: 'other-worker',
     recovery_claimed_at: Date.now(),
@@ -265,12 +280,17 @@ async function runRecoveryTests() {
   console.log('✅ Test 6 & I (Expired lease claimed, processed, and released): Passed');
 
   console.log('\nAll A-I Tests Passed Successfully!');
-  killApiServer();
-  process.exit(0);
+  } finally {
+    await killApiServer();
+    try {
+      await executionFixture?.cleanup();
+    } finally {
+      await db.destroy();
+    }
+  }
 }
 
-runRecoveryTests().catch(err => {
+runRecoveryTests().catch((err) => {
   console.error(err);
-  killApiServer();
-  process.exit(1);
+  process.exitCode = 1;
 });
