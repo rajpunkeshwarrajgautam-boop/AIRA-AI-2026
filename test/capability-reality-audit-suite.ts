@@ -64,6 +64,17 @@ async function runRealityAuditSuite() {
   const automationEngine = new AutomationEngine(agentRuntime, autoRepo, autoRunRepo);
   agentRuntime.setAutomationEngine(automationEngine);
 
+  const originalCreateRun = agentRuntime.createRun.bind(agentRuntime);
+  agentRuntime.createRun = (req, principal) => {
+    return originalCreateRun({
+      ...req,
+      modelPolicy: {
+        model: 'mock-deterministic',
+        ...req.modelPolicy
+      }
+    }, principal);
+  };
+
   const principalAId = `usr_audit_a_${Date.now()}`;
   const principalBId = `usr_audit_b_${Date.now()}`;
   const [principalAWorkspaceId, principalBWorkspaceId] = await Promise.all([
