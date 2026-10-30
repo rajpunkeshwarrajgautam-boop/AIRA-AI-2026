@@ -574,9 +574,15 @@ export function verifyCsrfAndOrigin(req: Request, session?: BffServerSession | n
     req.headers['x-requested-with'] === 'XMLHttpRequest' ||
     Boolean(req.headers['x-csrf-token']);
 
-  if (!origin) return false;
-  // Never let client-controlled forwarding headers widen the trusted-origin allowlist.
-  if (!isAllowedOrigin(origin)) return false;
+  if (origin) {
+    // Never let client-controlled forwarding headers widen the trusted-origin allowlist.
+    if (!isAllowedOrigin(origin)) return false;
+  } else if (secFetchSite !== 'same-origin' && secFetchSite !== 'same-site' && !hasAntiCsrfHeader) {
+    // Some legitimate browser paths omit both Origin and Fetch Metadata. A non-simple
+    // custom header is permitted only after the unconditional cross-site rejection above;
+    // browsers must pass the application's strict CORS preflight to send it.
+    return false;
+  }
 
   // 3. Cryptographic CSRF token verification for authenticated state-changing requests:
   if (session) {
