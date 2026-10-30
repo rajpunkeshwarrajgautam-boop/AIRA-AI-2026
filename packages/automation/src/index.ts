@@ -21,6 +21,14 @@ function parseCronExpression(expression: string, options?: any) {
   throw new Error('cron-parser: parseExpression or CronExpressionParser.parse not found');
 }
 
+export const STANDARD_AUTOMATION_SCOPES: ReadonlyArray<string> = [
+  'chat:write',
+  'runs:read',
+  'runs:write',
+  'browser.read',
+  'files.read'
+];
+
 export class AutomationEngine {
   private timerHandle: NodeJS.Timeout | null = null;
 
@@ -357,6 +365,19 @@ export class AutomationEngine {
         ? conditions.modelPolicy.temperature
         : (typeof conditions.temperature === 'number' ? conditions.temperature : 0.2);
 
+      // 3. Establish least-privilege automation principal scopes.
+      // Standard workspace automation operations require read capabilities:
+      // - chat:write, runs:read, runs:write for lifecycle telemetry
+      // - files.read for workspace sandboxed inspection
+      // - browser.read for public web research and verification
+      // Destructive, write, and wildcard ('*') permissions are strictly excluded to ensure
+      // workspace ownership alone does not grant unrestricted capabilities or privilege escalation.
+      const allowedAutomationScopes = new Set(STANDARD_AUTOMATION_SCOPES);
+      const requestedScopes = Array.isArray(conditions.scopes) ? conditions.scopes : null;
+      const effectiveScopes = requestedScopes
+        ? requestedScopes.filter((s: unknown): s is string => typeof s === 'string' && allowedAutomationScopes.has(s))
+        : Array.from(STANDARD_AUTOMATION_SCOPES);
+
       const run = await this.agentRuntime.createRun({
         intent: 'AGENT_MISSION',
         prompt: `[Automated Trigger: ${item.name}]\nObjective: ${item.objective}`,
@@ -371,7 +392,7 @@ export class AutomationEngine {
         sessionId: `automation-session-${item.id}`,
         workspaceId,
         roles: ['automation_principal'],
-        scopes: ['*']
+        scopes: effectiveScopes
       });
 
       claim.runId = run.id;
