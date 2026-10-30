@@ -266,7 +266,9 @@ async function runTests() {
       name: 'Test Recurring Job',
       enabled: true,
       trigger: 'MANUAL',
-      conditions: {},
+      conditions: {
+        modelPolicy: { model: 'mock-deterministic' }
+      },
       agentId: 'agent_test',
       objective: 'Run test validation sweep',
       approvalPolicy: 'autonomous'
@@ -308,7 +310,8 @@ async function runTests() {
       headers: authHeaders,
       body: JSON.stringify({
         name: 'Test Agent API',
-        instructions: 'Test instructions'
+        instructions: 'Test instructions',
+        modelPolicy: { model: 'mock-deterministic' }
       })
     });
     const agent = await agentRes.json();

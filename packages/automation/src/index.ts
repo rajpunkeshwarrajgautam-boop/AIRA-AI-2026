@@ -319,13 +319,20 @@ export class AutomationEngine {
     }
 
     try {
+      const conditions = (item.conditions || {}) as Record<string, any>;
+      const model = conditions.modelPolicy?.model || conditions.model || 'aira-auto';
+      const temperature = typeof conditions.modelPolicy?.temperature === 'number'
+        ? conditions.modelPolicy.temperature
+        : (typeof conditions.temperature === 'number' ? conditions.temperature : 0.2);
+
       const run = await this.agentRuntime.createRun({
         intent: 'AGENT_MISSION',
         prompt: `[Automated Trigger: ${item.name}]\nObjective: ${item.objective}`,
         systemPrompt: 'Execute scheduled automation according to strict operational criteria.',
         modelPolicy: { 
-          model: 'aira-auto',
-          temperature: 0.2
+          ...conditions.modelPolicy,
+          model,
+          temperature
         } as any
       }, {
         userId: item.principalId || 'system-automation',
