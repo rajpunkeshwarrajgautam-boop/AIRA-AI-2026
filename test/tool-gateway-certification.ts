@@ -1,7 +1,9 @@
-import 'dotenv/config';
+import { randomUUID } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import assert from 'node:assert';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import {
   ToolGateway,
   PostgresToolCallRepository
@@ -16,54 +18,89 @@ import {
   ToolGatewayErrorCodes
 } from '../packages/contracts/src/index.js';
 import { db } from '../packages/db/src/index.js';
+import { PostgresWorkspaceAuthorityRepository } from '../packages/agent-runtime/src/workspace-authority.js';
+import { createPostgresExecutionFixture } from './helpers/postgres-execution-fixture.js';
 
 async function runToolGatewayCertification() {
+  if (process.env.AIRA_POSTGRES_CERTIFICATION !== '1') {
+    throw new Error('Tool gateway database certification requires AIRA_POSTGRES_CERTIFICATION=1.');
+  }
+  if (process.env.CI_DISPOSABLE_DATABASE !== 'true'
+      || !process.env.DATABASE_URL
+      || process.env.DATABASE_URL !== process.env.ISOLATED_TEST_DATABASE_URL) {
+    throw new Error('Tool gateway database certification requires the matching disposable PostgreSQL URL contract.');
+  }
+  execFileSync(process.execPath, ['scripts/ci/assert-disposable-postgres.mjs'], { stdio: 'inherit' });
   console.log('================================================================');
   console.log('  AIRA TOOL GATEWAY — CORE CERTIFICATION SUITE (PHASES 29, 31, 32, 33)');
   console.log('================================================================');
 
-  const testDir = path.resolve(process.cwd(), 'temp_tool_test_' + Date.now());
-  fs.mkdirSync(testDir, { recursive: true });
-
-  const approvalRepo = new PostgresApprovalRepository();
-  const grantRepo = new PostgresSessionGrantRepository();
-  const approvalKernel = new ApprovalKernel(approvalRepo, grantRepo);
-  const toolCallRepo = new PostgresToolCallRepository();
-  const gateway = new ToolGateway(toolCallRepo, approvalKernel, testDir);
-
-  const sessionTag = Math.random().toString(36).slice(2, 8);
-
-  const principalA: ExecutionPrincipal = {
-    userId: 'usr_cert_alpha_' + sessionTag,
-    sessionId: 'sess_cert_alpha_' + sessionTag,
-    roles: ['developer'],
-    scopes: ['browser.read', 'browser.write', 'files.read', 'files.write', 'repo.read', 'mcp.invoke']
-  };
-
-  const principalB: ExecutionPrincipal = {
-    userId: 'usr_cert_bravo_' + sessionTag,
-    sessionId: 'sess_cert_bravo_' + sessionTag,
-    roles: ['member'],
-    scopes: ['files.read']
-  };
-
+  type ExecutionFixture = Awaited<ReturnType<typeof createPostgresExecutionFixture>>;
+  let fixtureAForCleanup: ExecutionFixture | undefined;
+  let fixtureBForCleanup: ExecutionFixture | undefined;
+  let testDirForCleanup: string | undefined;
+  let cleanupError: unknown;
   try {
+    const sessionTag = randomUUID();
+    const workspaceAuthorities = new PostgresWorkspaceAuthorityRepository();
+    const principalAFixture = fixtureAForCleanup = await createPostgresExecutionFixture({
+      principalPrefix: 'usr_cert_alpha', sessionPrefix: 'sess_cert_alpha', tag: sessionTag,
+      roles: ['developer'],
+      scopes: ['browser.read', 'browser.write', 'files.read', 'files.write', 'repo.read', 'mcp.invoke'],
+      authorityRepository: workspaceAuthorities
+    });
+    const principalBFixture = fixtureBForCleanup = await createPostgresExecutionFixture({
+      principalPrefix: 'usr_cert_bravo', sessionPrefix: 'sess_cert_bravo', tag: sessionTag,
+      roles: ['member'], scopes: ['files.read'], authorityRepository: workspaceAuthorities
+    });
+    const principalA = principalAFixture.principal;
+    const principalB = principalBFixture.principal;
+    const testDir = testDirForCleanup = fs.mkdtempSync(path.join(os.tmpdir(), 'temp_tool_test_'));
+
+    const approvalRepo = new PostgresApprovalRepository();
+    const grantRepo = new PostgresSessionGrantRepository();
+    const approvalKernel = new ApprovalKernel(approvalRepo, grantRepo);
+    const toolCallRepo = new PostgresToolCallRepository();
+    const gateway = new ToolGateway(toolCallRepo, approvalKernel, testDir, workspaceAuthorities);
+
+    async function ensureParentRun(runId: string, principal: ExecutionPrincipal): Promise<void> {
+      if (principal.userId === principalA.userId) await principalAFixture.createParentRun(runId);
+      else if (principal.userId === principalB.userId) await principalBFixture.createParentRun(runId);
+      else throw new Error('ToolGateway parent-run fixture received an unknown authenticated principal.');
+    }
+
+    async function persistPendingApproval(requestId: string): Promise<void> {
+      const request = await approvalKernel.getPendingRequest(requestId);
+      assert(request, 'Approval fixture must still be pending');
+      await db('runs').where({ id: request.runId }).update({
+        pending_approval: JSON.stringify(request),
+        state: 'WAITING_FOR_APPROVAL', status: 'WAITING_FOR_APPROVAL',
+        execution_checkpoint: 'WAITING_FOR_APPROVAL', updatedAt: Date.now()
+      });
+    }
+
     // -------------------------------------------------------------------------
     // TEST A — READ TOOL: Safe file system read
     // -------------------------------------------------------------------------
     console.log('\n[TEST A] READ TOOL (Safe read, no unnecessary approval, durable record)');
     const testFilePath = 'readme_test.txt';
     fs.writeFileSync(path.join(testDir, testFilePath), 'Hello Aira Tool Gateway!', 'utf-8');
+    const readRunId = `run_cert_a_${sessionTag}`;
+    await ensureParentRun(readRunId, principalA);
+    assert.strictEqual(gateway.getTool('file_system_read')?.definition.permissionLevel, 'READ');
+    assert.deepStrictEqual(gateway.getTool('file_system_read')?.definition.permissionScopes, ['files.read']);
 
     const readRes = await gateway.execute({
       toolName: 'file_system_read',
       arguments: { filePath: testFilePath },
       context: {
-        runId: 'run_cert_a_' + sessionTag,
+        runId: readRunId,
         principal: principalA
       }
     });
 
+    if (readRes.isError) console.error('ToolGateway READ rejected:', { errorCode: readRes.errorCode });
+    assert.strictEqual(readRes.errorCode, undefined, `Unexpected ToolGateway READ error code: ${readRes.errorCode ?? 'none'}`);
     assert.strictEqual(readRes.isError, false, 'Expected readRes.isError === false');
     assert.strictEqual(readRes.output?.content, 'Hello Aira Tool Gateway!');
     assert(readRes.toolCallId, 'Must have a toolCallId');
@@ -80,6 +117,12 @@ async function runToolGatewayCertification() {
     // TEST B — WRITE TOOL: File system write requiring policy/approval
     // -------------------------------------------------------------------------
     console.log('\n[TEST B] WRITE TOOL (Policy evaluated, approval enforced where configured)');
+    const fileWriteDefinition = gateway.getTool('file_system_write')?.definition;
+    assert.strictEqual(fileWriteDefinition?.permissionLevel, 'WRITE');
+    assert.strictEqual(fileWriteDefinition?.sideEffectLevel, 'WRITE');
+    assert.deepStrictEqual(fileWriteDefinition?.permissionScopes, ['files.write']);
+    assert.strictEqual(fileWriteDefinition?.approvalPolicy, 'require_approval');
+    await ensureParentRun('run_cert_b_' + sessionTag, principalA);
     const writeRes = await gateway.execute({
       toolName: 'file_system_write',
       arguments: { filePath: 'output_test.txt', content: 'Autonomous agent result' },
@@ -100,6 +143,9 @@ async function runToolGatewayCertification() {
     assert.strictEqual(durableWrite.lifecycleState, 'WAITING_FOR_APPROVAL');
     assert.strictEqual(durableWrite.sideEffectLevel, 'WRITE');
     console.log('  -> PASS: Write intercepted, WAITING_FOR_APPROVAL persisted, requestId generated.');
+
+    // Model AgentRuntime's durable handoff before resolving the decision.
+    await persistPendingApproval(writeRes.output.requestId);
 
     // Authorize via ApprovalKernel as Principal A
     const { approved } = await approvalKernel.decide(
@@ -131,6 +177,12 @@ async function runToolGatewayCertification() {
     // TEST C — DESTRUCTIVE TOOL: File delete fails closed without approval
     // -------------------------------------------------------------------------
     console.log('\n[TEST C] DESTRUCTIVE TOOL (Mandatory approval, fail closed)');
+    const fileDeleteDefinition = gateway.getTool('file_system_delete')?.definition;
+    assert.strictEqual(fileDeleteDefinition?.permissionLevel, 'DESTRUCTIVE');
+    assert.strictEqual(fileDeleteDefinition?.sideEffectLevel, 'DESTRUCTIVE');
+    assert.deepStrictEqual(fileDeleteDefinition?.permissionScopes, ['files.write']);
+    assert.strictEqual(fileDeleteDefinition?.approvalPolicy, 'require_approval');
+    await ensureParentRun('run_cert_c_' + sessionTag, principalA);
     const delRes = await gateway.execute({
       toolName: 'file_system_delete',
       arguments: { filePath: 'output_test.txt' },
@@ -143,7 +195,8 @@ async function runToolGatewayCertification() {
     assert.strictEqual(delRes.output?.status, 'WAITING_FOR_APPROVAL');
     assert.strictEqual(delRes.output?.approvalRequired, true);
 
-    // Reject via ApprovalKernel
+    // Reject via ApprovalKernel after persisting the authoritative pending approval.
+    await persistPendingApproval(delRes.output.requestId);
     await approvalKernel.decide(delRes.output.requestId, 'REJECT', principalA.userId);
 
     // Ensure the file was NOT deleted
@@ -154,11 +207,13 @@ async function runToolGatewayCertification() {
     // TEST D — UNKNOWN TOOL: Rejection without hallucination
     // -------------------------------------------------------------------------
     console.log('\n[TEST D] UNKNOWN TOOL (TOOL_NOT_FOUND)');
+    const unknownRunId = `run_cert_d_${sessionTag}`;
+    await ensureParentRun(unknownRunId, principalA);
     const unknownRes = await gateway.execute({
       toolName: 'quantum_crypto_crack',
       arguments: { target: 'all' },
       context: {
-        runId: 'run_cert_d_' + sessionTag,
+        runId: unknownRunId,
         principal: principalA
       }
     });
@@ -171,11 +226,13 @@ async function runToolGatewayCertification() {
     // TEST E — INVALID INPUT: Schema validation error
     // -------------------------------------------------------------------------
     console.log('\n[TEST E] INVALID INPUT (TOOL_INPUT_INVALID)');
+    const invalidRunId = `run_cert_e_${sessionTag}`;
+    await ensureParentRun(invalidRunId, principalA);
     const invalidRes = await gateway.execute({
       toolName: 'file_system_read',
       arguments: { filePath: 12345 as any }, // wrong type (expected string)
       context: {
-        runId: 'run_cert_e_' + sessionTag,
+        runId: invalidRunId,
         principal: principalA
       }
     });
@@ -188,19 +245,23 @@ async function runToolGatewayCertification() {
     // TEST F — UNAUTHORIZED TOOL: Missing required permission scopes
     // -------------------------------------------------------------------------
     console.log('\n[TEST F] UNAUTHORIZED TOOL (TOOL_PERMISSION_DENIED)');
-    // Principal B only has 'files.read', not 'files.write'
+    // Principal B has valid persisted authority and run state, but only the files.read scope.
+    const unauthorizedRunId = `run_cert_f_${sessionTag}`;
+    await ensureParentRun(unauthorizedRunId, principalB);
+    assert.deepStrictEqual(gateway.getTool('file_system_write')?.definition.permissionScopes, ['files.write']);
     const unauthRes = await gateway.execute({
       toolName: 'file_system_write',
       arguments: { filePath: 'hacked.txt', content: 'payload' },
       context: {
-        runId: 'run_cert_f_' + sessionTag,
+        runId: unauthorizedRunId,
         principal: principalB
       }
     });
 
     assert.strictEqual(unauthRes.isError, true);
     assert.strictEqual(unauthRes.errorCode, ToolGatewayErrorCodes.TOOL_PERMISSION_DENIED);
-    console.log('  -> PASS: Scope violation blocked with TOOL_PERMISSION_DENIED.');
+    assert.strictEqual(fs.existsSync(path.join(testDir, 'hacked.txt')), false, 'Scope denial must not dispatch the write adapter.');
+    console.log('  -> PASS: Scope violation blocked with TOOL_PERMISSION_DENIED before adapter dispatch.');
 
     // -------------------------------------------------------------------------
     // TEST G — RETRIES: Transient failure with bounded backoff
@@ -239,11 +300,13 @@ async function runToolGatewayCertification() {
       }
     });
 
+    const retryRunId = `run_cert_g_${sessionTag}`;
+    await ensureParentRun(retryRunId, principalA);
     const retryRes = await gateway.execute({
       toolName: 'test_flaky',
       arguments: {},
       context: {
-        runId: 'run_cert_g_' + sessionTag,
+        runId: retryRunId,
         principal: principalA
       }
     });
@@ -288,6 +351,7 @@ async function runToolGatewayCertification() {
       }
     });
 
+    await ensureParentRun('run_cert_h_1_' + sessionTag, principalA);
     const firstMut = await gateway.execute({
       toolName: 'test_mutation',
       arguments: { value: 'first_call' },
@@ -299,7 +363,8 @@ async function runToolGatewayCertification() {
     });
     assert.strictEqual(firstMut.output?.status, 'WAITING_FOR_APPROVAL');
 
-    // Authorize WRITE mutation
+    // Authorize WRITE mutation after persisting the authoritative pending approval.
+    await persistPendingApproval(firstMut.output.requestId);
     await approvalKernel.decide(firstMut.output.requestId, 'ALLOW_SESSION', principalA.userId);
 
     const executedMut = await gateway.execute({
@@ -313,12 +378,14 @@ async function runToolGatewayCertification() {
     });
     assert.strictEqual(executedMut.output?.executionCount, 1);
 
-    // Call again with same idempotency key
+    // Call again with same idempotency key from a separately persisted parent run.
+    const secondMutationRunId = `run_cert_h_2_${sessionTag}`;
+    await ensureParentRun(secondMutationRunId, principalA);
     const secondMut = await gateway.execute({
       toolName: 'test_mutation',
       arguments: { value: 'first_call' },
       context: {
-        runId: 'run_cert_h_2_' + sessionTag,
+        runId: secondMutationRunId,
         principal: principalA,
         idempotencyKey
       }
@@ -350,21 +417,23 @@ async function runToolGatewayCertification() {
     // -------------------------------------------------------------------------
     console.log('\n[TEST J] APPROVAL ATTACK DEFENSE');
     // 1. Forged approval by wrong principal
+    await ensureParentRun('run_attack_' + sessionTag, principalA);
     const pendingReq = await approvalKernel.createRequest(
       'run_attack_' + sessionTag,
       { id: 'call_victim', toolId: 'tool_victim', name: 'victim_action', arguments: {}, timestamp: Date.now() },
       'DESTRUCTIVE',
-      'High risk'
+      'High risk',
+      principalA.workspaceId
     );
 
-    // User B tries to approve User A's request
-    // Verify approval records must match the authorized principal
-    await approvalKernel.decide(
+    // User B must be rejected before a decision, grant, or outbox intent is committed.
+    await persistPendingApproval(pendingReq.id);
+    await assert.rejects(() => approvalKernel.decide(
       pendingReq.id,
       'ALLOW_SESSION',
       principalB.userId
-    );
-    // Even if recorded by B, isToolCallApproved for Principal A must fail
+    ));
+    // The rejected attempt must not authorize Principal A.
     const isApprovedForA = await approvalKernel.isToolCallApproved(
       'run_attack_' + sessionTag,
       'victim_action',
@@ -388,11 +457,13 @@ async function runToolGatewayCertification() {
 
     fs.writeFileSync(path.join(testDir, 'untrusted_page.html'), maliciousDoc, 'utf-8');
 
+    const untrustedReadRunId = `run_cert_k_${sessionTag}`;
+    await ensureParentRun(untrustedReadRunId, principalA);
     const readMalicious = await gateway.execute({
       toolName: 'file_system_read',
       arguments: { filePath: 'untrusted_page.html' },
       context: {
-        runId: 'run_cert_k_' + sessionTag,
+        runId: untrustedReadRunId,
         principal: principalA
       }
     });
@@ -408,11 +479,29 @@ async function runToolGatewayCertification() {
     console.log('  ALL CORE TOOL GATEWAY CERTIFICATION TESTS PASSED (100% GREEN)');
     console.log('================================================================');
   } finally {
-    // Cleanup temporary files
+    // Cleanup temporary files and retain any cleanup failure for assertion after
+    // the finally block (throwing directly in finally can mask the original error).
     try {
-      fs.rmSync(testDir, { recursive: true, force: true });
-    } catch {}
+      if (testDirForCleanup) {
+        fs.rmSync(testDirForCleanup, { recursive: true, force: true });
+        if (fs.existsSync(testDirForCleanup)) cleanupError = new Error('Certification temp directory was not removed.');
+      }
+    } catch (err) {
+      cleanupError = err;
+    }
+    try {
+      await Promise.all([
+        fixtureAForCleanup?.cleanup(),
+        fixtureBForCleanup?.cleanup()
+      ].filter((cleanup): cleanup is Promise<void> => cleanup !== undefined));
+    } catch (err) {
+      cleanupError ??= err;
+    }
     await db.destroy();
+  }
+  if (cleanupError) {
+    console.error('FAIL: Certification temp-directory cleanup failed:', cleanupError);
+    throw cleanupError;
   }
 }
 

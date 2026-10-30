@@ -9,12 +9,22 @@ export interface BrowserSessionInfo {
   lastActive: number;
 }
 
+export interface BrowserAdapterOptions {
+  /** Explicit local executable injection for controlled browser certification. */
+  executablePath?: string;
+}
+
 export class BrowserAdapter {
   private browser: Browser | null = null;
   private sessions: Map<string, BrowserSessionInfo> = new Map();
   private browserPromise: Promise<Browser> | null = null;
 
-  constructor() {}
+  constructor(private readonly options: BrowserAdapterOptions = {}) {}
+
+  /** Fail-fast readiness probe; unlike navigate(), this never uses HTTP fallback. */
+  async assertBrowserAvailable(): Promise<void> {
+    await this.getBrowser();
+  }
 
   /**
    * Lazily initialize headless Chromium instance using installed Chrome/Edge channel
@@ -30,6 +40,7 @@ export class BrowserAdapter {
     this.browserPromise = (async () => {
       const launchOptions = {
         headless: true,
+        ...(this.options.executablePath ? { executablePath: this.options.executablePath } : {}),
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',

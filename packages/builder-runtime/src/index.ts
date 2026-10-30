@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { ExecutionPrincipal } from '../../contracts/src/index.js';
+import { resolveDeploymentEnvironment } from '../../contracts/src/deployment-environment.js';
 import { ModelRouter, isModelMatch, type ChatMessageInput } from '../../model-router/src/index.js';
 import { BuilderActionSchema, type BuilderRequest, type BuilderEvent, type BuilderFile } from './contracts.js';
 import { MultiProviderSandboxFactory, type SandboxFactory, type BuilderSandbox } from './sandbox.js';
@@ -91,7 +92,10 @@ export class BuilderService {
       } else {
         sandbox = await this.factory.create({ allowInternet: input.allowInternet, allowPreview: input.allowPreview, timeoutMs: 900000, signal });
         ticket = {
-          version: 1,
+          version: 2,
+          issuer: 'aira-builder',
+          audience: 'aira-builder-runtime',
+          environment: resolveDeploymentEnvironment(),
           purpose: 'workspace',
           provider: sandbox.provider,
           workspaceId: sandbox.id,

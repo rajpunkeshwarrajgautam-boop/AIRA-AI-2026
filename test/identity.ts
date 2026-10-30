@@ -278,7 +278,8 @@ async function runIdentityTests() {
     
     // Import dynamically so it gets the real class
     const { DevPrincipalProvider } = await import('../apps/api/src/auth/principal-provider.js');
-    const prodProvider = new DevPrincipalProvider();
+    const { InMemoryWorkspaceAuthorityRepository } = await import('../packages/agent-runtime/src/workspace-authority.js');
+    const prodProvider = new DevPrincipalProvider(new InMemoryWorkspaceAuthorityRepository());
     
     // Preserve and override env
     const origEnv = process.env.NODE_ENV;
@@ -307,7 +308,8 @@ async function runIdentityTests() {
       
       // P (formerly D): x-workspace-id cannot become trusted workspace identity
       const pPrin = await prodProvider.resolve(makeReq({ id: 'real-user', sessionId: 'real-sess' }, { 'x-workspace-id': 'spoof-ws' }));
-      assert.strictEqual(pPrin.workspaceId, undefined, 'P: Production must ignore client workspace header');
+      assert.ok(pPrin.workspaceId, 'P: a verified identity receives a server-derived personal workspace');
+      assert.notStrictEqual(pPrin.workspaceId, 'spoof-ws', 'P: Production must ignore client workspace header');
       
       // Q (formerly E): x-project-id cannot become trusted project identity
       const qPrin = await prodProvider.resolve(makeReq({ id: 'real-user', sessionId: 'real-sess' }, { 'x-project-id': 'spoof-proj' }));

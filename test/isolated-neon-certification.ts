@@ -1,38 +1,24 @@
 import assert from 'node:assert/strict';
-import knex, { Knex } from 'knex';
+import { execFileSync } from 'node:child_process';
+import knex from 'knex';
 import { reconcileRunPromptColumn } from '../packages/db/src/migrations/024_reconcile_runs_prompt_text.js';
 
-import { execSync } from 'node:child_process';
-
-function getStagingConnectionString(): string {
-  if (process.env.ISOLATED_TEST_DATABASE_URL?.trim()) {
-    return process.env.ISOLATED_TEST_DATABASE_URL.trim();
-  }
-  if (process.env.DATABASE_URL?.trim() && !process.env.DATABASE_URL.includes('localhost')) {
-    return process.env.DATABASE_URL.trim();
-  }
-  const output = execSync(
-    'npx --yes neonctl connection-string pr-agent-tool-calls-isolated --project-id mute-frost-50372225 --org-id org-broad-butterfly-41820185',
-    { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] }
-  ).trim();
-  return output;
+if (process.env.AIRA_POSTGRES_CERTIFICATION !== '1') {
+  throw new Error('Schema drift certification requires AIRA_POSTGRES_CERTIFICATION=1.');
 }
+if (process.env.CI_DISPOSABLE_DATABASE !== 'true'
+    || !process.env.DATABASE_URL
+    || process.env.DATABASE_URL !== process.env.ISOLATED_TEST_DATABASE_URL) {
+  throw new Error('Schema drift certification requires the matching disposable PostgreSQL URL contract.');
+}
+execFileSync(process.execPath, ['scripts/ci/assert-disposable-postgres.mjs'], { stdio: 'inherit' });
 
-const connectionString = getStagingConnectionString();
-
-// Security guard: ensure we are NOT touching production Neon (old-sky-50952395)
+// No Neon CLI, staging URL, or local-default fallback is permitted.
+const connectionString = process.env.DATABASE_URL;
 const parsedUrl = new URL(connectionString);
-if (parsedUrl.hostname.includes('old-sky-50952395')) {
-  console.error('[SECURITY FATAL] Attempted to connect to production Neon old-sky-50952395. Aborting.');
-  process.exit(1);
-}
-
 const db = knex({
   client: 'pg',
-  connection: {
-    connectionString,
-    ssl: { rejectUnauthorized: true }
-  },
+  connection: { connectionString, ssl: false },
   pool: { min: 1, max: 2 }
 });
 
@@ -139,13 +125,13 @@ async function main() {
   console.log(`PASS: Dropped temporary table ${testTableName}`);
 
   console.log('\n========================================');
-  console.log('ISOLATED NEON CERTIFICATION: ALL CHECKS PASS');
+  console.log('ISOLATED POSTGRESQL CERTIFICATION: ALL CHECKS PASS');
   console.log('========================================');
 }
 
 main()
   .catch((err) => {
-    console.error('ISOLATED NEON CERTIFICATION FAILED:', err);
+    console.error('ISOLATED POSTGRESQL CERTIFICATION FAILED:', err);
     process.exit(1);
   })
   .finally(async () => {

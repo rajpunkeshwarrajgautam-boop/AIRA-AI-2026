@@ -1,9 +1,13 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import path from 'node:path';
 import type { ExecutionPrincipal } from '../../contracts/src/index.js';
+import { resolveDeploymentEnvironment } from '../../contracts/src/deployment-environment.js';
 
 export interface WorkspaceTicket {
-  version: 1;
+  version: 2;
+  issuer: 'aira-builder';
+  audience: 'aira-builder-runtime';
+  environment: import('../../contracts/src/deployment-environment.js').DeploymentEnvironment;
   purpose: 'workspace' | 'file';
   provider?: string;
   workspaceId?: string;
@@ -16,6 +20,10 @@ export interface WorkspaceTicket {
   path?: string;
   sha256?: string;
 }
+
+export type WorkspaceTicketDraft = Omit<WorkspaceTicket, 'version' | 'issuer' | 'audience' | 'environment'>;
+
+type LegacyWorkspaceTicket = Omit<WorkspaceTicket, 'version' | 'issuer' | 'audience' | 'environment'> & { version: 1 };
 
 export interface BuilderAccessStatus {
   enabled: boolean;
@@ -32,47 +40,95 @@ export interface BuilderAccessStatus {
   fallbackProvider: string;
 }
 
+const BUILDER_ISSUER = 'aira-builder' as const;
+const BUILDER_AUDIENCE = 'aira-builder-runtime' as const;
+
 export function signingSecret(): string {
-  const secret = process.env.AIRA_BUILDER_SIGNING_SECRET || process.env.AIRA_SESSION_SECRET || '';
-  if (secret.length < 32) throw new Error('Builder signing secret is not configured (minimum 32 characters).');
+  const secret = process.env.AIRA_BUILDER_SIGNING_SECRET?.trim();
+  if (!secret || secret.length < 32) {
+    throw new Error('AIRA_BUILDER_SIGNING_SECRET must be configured with at least 32 characters.');
+  }
   return secret;
 }
 
-export function signTicket(ticket: WorkspaceTicket, secret = signingSecret()): string {
+export function signTicket(ticket: WorkspaceTicketDraft, secret = signingSecret()): string {
   const wsId = ticket.workspaceId || ticket.sandboxId || '';
   const provider = ticket.provider || process.env.AIRA_SANDBOX_PROVIDER || 'lightning';
+  const environment = resolveDeploymentEnvironment();
   const normalized: WorkspaceTicket = {
     ...ticket,
+    version: 2,
+    issuer: BUILDER_ISSUER,
+    audience: BUILDER_AUDIENCE,
+    environment,
     workspaceId: wsId,
     sandboxId: wsId,
     provider
   };
   const payload = Buffer.from(JSON.stringify(normalized)).toString('base64url');
-  return `${payload}.${createHmac('sha256', secret).update('aira-builder-v1:' + payload).digest('base64url')}`;
+  const signature = createHmac('sha256', secret)
+    .update(`aira-builder-v2:${environment}:${payload}`)
+    .digest('base64url');
+  return `${payload}.${signature}`;
 }
 
 export function verifyTicket(token: string, principal: ExecutionPrincipal, purpose: WorkspaceTicket['purpose'], secret = signingSecret()): WorkspaceTicket {
-  if (token.length > 6000) throw new Error('Invalid workspace ticket.');
+  if (typeof token !== 'string' || token.length > 6000) throw new Error('Invalid workspace ticket.');
   const parts = token.split('.');
   if (parts.length !== 2) throw new Error('Invalid workspace ticket.');
-  const expected = createHmac('sha256', secret).update('aira-builder-v1:' + parts[0]).digest();
+
+  let parsed: WorkspaceTicket | LegacyWorkspaceTicket;
+  try {
+    parsed = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8')) as WorkspaceTicket | LegacyWorkspaceTicket;
+  } catch {
+    throw new Error('Invalid workspace ticket.');
+  }
+
+  const environment = resolveDeploymentEnvironment();
+  let expected: Buffer;
+  if (parsed.version === 2) {
+    if (
+      parsed.issuer !== BUILDER_ISSUER ||
+      parsed.audience !== BUILDER_AUDIENCE ||
+      parsed.environment !== environment
+    ) throw new Error('Workspace ticket environment or claims are invalid.');
+    expected = createHmac('sha256', secret).update(`aira-builder-v2:${parsed.environment}:${parts[0]}`).digest();
+  } else if (
+    parsed.version === 1 &&
+    environment === 'production' &&
+    process.env.AIRA_BUILDER_ACCEPT_LEGACY_V1 === 'true'
+  ) {
+    // Explicit Production-only grace for old tickets, still requiring the dedicated
+    // builder key. Never fall back to AIRA_SESSION_SECRET to verify them.
+    expected = createHmac('sha256', secret).update(`aira-builder-v1:${parts[0]}`).digest();
+  } else {
+    throw new Error('Workspace ticket version is not accepted.');
+  }
+
   const actual = Buffer.from(parts[1], 'base64url');
-  if (actual.length !== expected.length || !timingSafeEqual(expected, actual)) throw new Error('Invalid workspace ticket signature.');
-  const t = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8')) as WorkspaceTicket;
-  const id = t.workspaceId || t.sandboxId || '';
-  if (t.version !== 1 || t.purpose !== purpose || t.userId !== principal.userId || t.sessionId !== principal.sessionId || !/^[a-zA-Z0-9_-]{1,150}$/.test(id)) {
+  if (actual.length !== expected.length || !timingSafeEqual(expected, actual)) {
+    throw new Error('Invalid workspace ticket signature.');
+  }
+  const id = parsed.workspaceId || parsed.sandboxId || '';
+  if (parsed.purpose !== purpose || parsed.userId !== principal.userId || parsed.sessionId !== principal.sessionId || !/^[a-zA-Z0-9_-]{1,150}$/.test(id)) {
     throw new Error('Workspace access denied.');
   }
-  if (t.provider && !/^[a-zA-Z0-9_-]{1,30}$/.test(t.provider)) {
+  if (parsed.provider && !/^[a-zA-Z0-9_-]{1,30}$/.test(parsed.provider)) {
     throw new Error('Invalid workspace provider.');
   }
-  if (!Number.isFinite(t.expiresAt) || t.expiresAt <= Date.now()) throw new Error('Workspace expired. Start a new builder workspace.');
-  if (purpose === 'file' && (!t.path || !/^[a-f0-9]{64}$/.test(t.sha256 || ''))) throw new Error('Invalid file ticket.');
+  if (!Number.isFinite(parsed.expiresAt) || parsed.expiresAt <= Date.now()) throw new Error('Workspace expired. Start a new builder workspace.');
+  if (purpose === 'file' && (!parsed.path || !/^[a-f0-9]{64}$/.test(parsed.sha256 || ''))) throw new Error('Invalid file ticket.');
 
-  t.workspaceId = id;
-  t.sandboxId = id;
-  t.provider = t.provider || process.env.AIRA_SANDBOX_PROVIDER || 'lightning';
-  return t;
+  return {
+    ...parsed,
+    version: 2,
+    issuer: BUILDER_ISSUER,
+    audience: BUILDER_AUDIENCE,
+    environment,
+    workspaceId: id,
+    sandboxId: id,
+    provider: parsed.provider || process.env.AIRA_SANDBOX_PROVIDER || 'lightning'
+  };
 }
 
 export function safeRelativePath(value: string, allowRoot = false): string {
@@ -115,7 +171,7 @@ export function builderAccess(principal: ExecutionPrincipal): BuilderAccessStatu
   }
 
   const fallbackProvider = process.env.AIRA_SANDBOX_FALLBACK_PROVIDER || 'disabled';
-  const secretConfigured = (process.env.AIRA_BUILDER_SIGNING_SECRET || process.env.AIRA_SESSION_SECRET || '').length >= 32;
+  const secretConfigured = (process.env.AIRA_BUILDER_SIGNING_SECRET || '').trim().length >= 32;
   const configured = sandboxProviderConfigured && secretConfigured;
 
   let reason = 'Ready';

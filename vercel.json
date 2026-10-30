@@ -1,6 +1,11 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "vite",
+  "git": {
+    "deploymentEnabled": {
+      "integrate/pr117-certified-security-runtime-20261030": false
+    }
+  },
   "buildCommand": "if [ \"$VERCEL_GIT_COMMIT_REF\" = \"staging\" ]; then npx tsx scripts/staging-db-guard.ts && npm run db:migrate && npm run db:verify:deploy || exit 1; elif [ \"$VERCEL_ENV\" = \"production\" ]; then npm run db:verify:deploy || exit 1; fi; npm run build",
   "outputDirectory": "dist",
   "installCommand": "npm ci",

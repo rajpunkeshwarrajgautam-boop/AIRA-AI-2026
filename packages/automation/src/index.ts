@@ -1,6 +1,6 @@
 import * as crypto from 'crypto';
 import { AutomationDefinition, AutomationRun, SchedulerCapabilities } from '../../contracts/src/index.js';
-import { AgentRuntime } from '../../agent-runtime/src/index.js';
+import { AgentRuntime, WorkspaceAuthorityRepository, workspaceAuthority } from '../../agent-runtime/src/index.js';
 import { AutomationRepository, AutomationRunRepository } from './repositories.js';
 import parser from 'cron-parser';
 
@@ -21,14 +21,33 @@ function parseCronExpression(expression: string, options?: any) {
   throw new Error('cron-parser: parseExpression or CronExpressionParser.parse not found');
 }
 
+export const STANDARD_AUTOMATION_SCOPES: ReadonlyArray<string> = [
+  'chat:write',
+  'runs:read',
+  'runs:write',
+  'browser.read',
+  'files.read'
+];
+
 export class AutomationEngine {
   private timerHandle: NodeJS.Timeout | null = null;
 
   constructor(
     private agentRuntime: AgentRuntime, 
     private autoRepo: AutomationRepository,
-    private runRepo: AutomationRunRepository
+    private runRepo: AutomationRunRepository,
+    private workspaceAuthorityRepository?: WorkspaceAuthorityRepository
   ) {}
+
+  private getWorkspaceAuthority(): WorkspaceAuthorityRepository {
+    if (this.workspaceAuthorityRepository) {
+      return this.workspaceAuthorityRepository;
+    }
+    if (typeof (this.agentRuntime as any).getWorkspaceAuthority === 'function') {
+      return (this.agentRuntime as any).getWorkspaceAuthority();
+    }
+    return workspaceAuthority;
+  }
 
   public getSchedulerStatus(): SchedulerCapabilities {
     // Explicit operator kill-switch: disable scheduler unconditionally
@@ -319,17 +338,61 @@ export class AutomationEngine {
     }
 
     try {
+      // 1. Establish authenticated principal identity
+      const effectivePrincipalId = typeof item.principalId === 'string' ? item.principalId.trim() : '';
+      if (!effectivePrincipalId) {
+        throw new Error('Automation execution rejected: Missing or invalid principal identity.');
+      }
+
+      if (principalId && principalId !== effectivePrincipalId) {
+        throw new Error(`ACCESS_DENIED: Automation "${id}" belongs to another user.`);
+      }
+
+      // 2. Resolve server-side workspace authority for the verified principal.
+      // Arbitrary workspace identifiers from conditions or client payloads are strictly ignored.
+      const authorityRepo = this.getWorkspaceAuthority();
+      const workspaceId = await authorityRepo.resolveWorkspace(effectivePrincipalId);
+
+      // Verify active authority (fails closed if revoked or inactive)
+      const isActive = await authorityRepo.isWorkspaceActive(effectivePrincipalId, workspaceId);
+      if (!isActive) {
+        throw new Error('Automation execution rejected: Principal workspace authority is inactive or revoked.');
+      }
+
+      const conditions = (item.conditions || {}) as Record<string, any>;
+      const model = conditions.modelPolicy?.model || conditions.model || 'aira-auto';
+      const temperature = typeof conditions.modelPolicy?.temperature === 'number'
+        ? conditions.modelPolicy.temperature
+        : (typeof conditions.temperature === 'number' ? conditions.temperature : 0.2);
+
+      // 3. Establish least-privilege automation principal scopes.
+      // Standard workspace automation operations require read capabilities:
+      // - chat:write, runs:read, runs:write for lifecycle telemetry
+      // - files.read for workspace sandboxed inspection
+      // - browser.read for public web research and verification
+      // Destructive, write, and wildcard ('*') permissions are strictly excluded to ensure
+      // workspace ownership alone does not grant unrestricted capabilities or privilege escalation.
+      const allowedAutomationScopes = new Set(STANDARD_AUTOMATION_SCOPES);
+      const requestedScopes = Array.isArray(conditions.scopes) ? conditions.scopes : null;
+      const effectiveScopes = requestedScopes
+        ? requestedScopes.filter((s: unknown): s is string => typeof s === 'string' && allowedAutomationScopes.has(s))
+        : Array.from(STANDARD_AUTOMATION_SCOPES);
+
       const run = await this.agentRuntime.createRun({
         intent: 'AGENT_MISSION',
         prompt: `[Automated Trigger: ${item.name}]\nObjective: ${item.objective}`,
         systemPrompt: 'Execute scheduled automation according to strict operational criteria.',
         modelPolicy: { 
-          model: 'aira-auto',
-          temperature: 0.2
+          ...conditions.modelPolicy,
+          model,
+          temperature
         } as any
       }, {
-        userId: item.principalId || 'system-automation',
-        sessionId: `automation-session-${item.id}`
+        userId: effectivePrincipalId,
+        sessionId: `automation-session-${item.id}`,
+        workspaceId,
+        roles: ['automation_principal'],
+        scopes: effectiveScopes
       });
 
       claim.runId = run.id;

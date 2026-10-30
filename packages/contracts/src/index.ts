@@ -426,6 +426,11 @@ export const ApprovalRequestSchema = z.object({
   reason: z.string(),
   sanitizedPreview: z.record(z.string(), z.any()),
   requestedAt: z.number(),
+  /** Server-derived workspace boundary for reusable authorization. */
+  workspaceId: z.string().min(1).optional(),
+  permissionLevel: PermissionLevelSchema.optional(),
+  toolDefinitionVersion: z.number().int().positive().optional(),
+  toolPolicyFingerprint: z.string().min(1).optional(),
   resolvedAt: z.number().optional(),
   decision: ApprovalDecisionSchema.optional(),
   resolvedBy: z.string().optional()
@@ -971,4 +976,5 @@ export type ErrorEnvelope = z.infer<typeof ErrorEnvelopeSchema>;
 export * from './behavioral.js';
 export * from './commercial.js';
 export * from './agent-specialists.js';
+export * from './deployment-environment.js';
 

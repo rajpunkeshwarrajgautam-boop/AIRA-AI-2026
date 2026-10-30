@@ -49,7 +49,8 @@ describe('AIRA Behavioral Intelligence — End-to-End Clarification Delivery', (
   async function executePrompt(prompt: string, principal: ExecutionPrincipal, history?: Array<{ role: string; content: string }>) {
     const run = await runtime.createRun({
       prompt,
-      context: history ? { history } : undefined
+      context: history ? { history } : undefined,
+      modelPolicy: { model: 'mock-deterministic' }
     }, principal);
 
     const deltas: string[] = [];

@@ -18,10 +18,15 @@ import {
   ModelProvenance
 } from '../../contracts/src/index.js';
 import { ModelRouter, ChatMessageInput, isModelMatch, withInferencePrincipal } from '../../model-router/src/index.js';
-import { ToolRegistry, ToolGateway, PostgresToolCallRepository, InMemoryToolCallRepository } from '../../tool-runtime/src/index.js';
+import { ToolRegistry, ToolGateway, PostgresToolCallRepository, InMemoryToolCallRepository, deriveToolApprovalPolicy } from '../../tool-runtime/src/index.js';
 import { configuredSearchProviders } from '../../tool-runtime/src/search-providers.js';
 import { ApprovalKernel } from '../../approvals/src/index.js';
 import { BrainV2KnowledgeEngine } from '../../knowledge/src/index.js';
+import {
+  PostgresWorkspaceAuthorityRepository,
+  WorkspaceAuthorityRepository,
+  workspaceAuthority
+} from './workspace-authority.js';
 
 import { RunRepository } from './repositories.js';
 import { CapabilityRegistry } from './registry.js';
@@ -39,6 +44,21 @@ import { IntelligentPromptComposer, PromptProfileRegistry } from './prompt-compo
 import { CuratedSkillRegistry } from './skills/curated-skill-registry.js';
 import { FirecrawlResearchAdapter } from './research/firecrawl-adapter.js';
 import { RufloOrchestrationAdapter } from './orchestration/ruflo-adapter.js';
+import {
+  SpecialistRegistry,
+  MathematicalSpecialistAgent,
+  AnalysisSpecialistAgent,
+  VerificationSpecialistAgent
+} from './specialists/index.js';
+import {
+  SpecialistTaskRepository,
+  PostgresSpecialistTaskRepository,
+  InMemorySpecialistTaskRepository,
+  TaskLeaseManager,
+  DurableTaskScheduler,
+  SpecialistWorkerRuntime,
+  DurableExecutionCoordinator
+} from './durable/index.js';
 
 /**
  * Strictly detect repository intent.
@@ -94,6 +114,7 @@ export function extractCalculatorExpression(prompt: string): string {
 }
 
 export class AgentRuntime extends EventEmitter {
+  private readonly recoveryOwner = `agent-runtime-${crypto.randomUUID()}`;
   private eventStreams: Map<string, EventEmitter> = new Map();
   private inFlightRuns: Map<string, Run> = new Map();
   private pendingRunEvents: Map<string, StreamingEvent[]> = new Map();
@@ -116,6 +137,13 @@ export class AgentRuntime extends EventEmitter {
   private curatedSkillRegistry: CuratedSkillRegistry;
   private firecrawlAdapter: FirecrawlResearchAdapter;
   private rufloAdapter: RufloOrchestrationAdapter;
+  private specialistRegistry: SpecialistRegistry;
+  private specialistTaskRepo: SpecialistTaskRepository;
+  private taskLeaseManager: TaskLeaseManager;
+  private durableScheduler: DurableTaskScheduler;
+  private specialistWorkerRuntime: SpecialistWorkerRuntime;
+  private durableCoordinator: DurableExecutionCoordinator;
+  private workspaceAuthority: WorkspaceAuthorityRepository;
 
   constructor(
     private modelRouter: ModelRouter,
@@ -133,11 +161,21 @@ export class AgentRuntime extends EventEmitter {
     promptComposer?: IntelligentPromptComposer,
     curatedSkillRegistry?: CuratedSkillRegistry,
     firecrawlAdapter?: FirecrawlResearchAdapter,
-    rufloAdapter?: RufloOrchestrationAdapter
+    rufloAdapter?: RufloOrchestrationAdapter,
+    specialistRegistry?: SpecialistRegistry,
+    specialistTaskRepo?: SpecialistTaskRepository,
+    durableCoordinator?: DurableExecutionCoordinator,
+    workspaceAuthorityRepository?: WorkspaceAuthorityRepository
   ) {
     super();
     const isDbConfigured = Boolean(process.env.DATABASE_URL?.trim());
-    this.toolGateway = toolGateway || new ToolGateway(isDbConfigured ? new PostgresToolCallRepository() : new InMemoryToolCallRepository(), this.approvalKernel, this.workspaceRoot);
+    this.workspaceAuthority = workspaceAuthorityRepository || workspaceAuthority;
+    this.toolGateway = toolGateway || new ToolGateway(
+      isDbConfigured ? new PostgresToolCallRepository() : new InMemoryToolCallRepository(),
+      this.approvalKernel,
+      this.workspaceRoot,
+      this.workspaceAuthority
+    );
     this.router = router || new ServerIntentRouter(this.capabilityRegistry, this.modelRouter);
     this.workflowRepo = workflowRepo || (isDbConfigured ? new PostgresWorkflowRepository() : new InMemoryWorkflowRepository());
     this.workflowCompiler = workflowCompiler || new WorkflowCompiler(this.modelRouter);
@@ -157,6 +195,18 @@ export class AgentRuntime extends EventEmitter {
       this.toolGateway,
       this.researchService
     );
+
+    this.workflowEngine.setApprovalResumptionDispatcher(() => this.dispatchApprovalResumptions(this.recoveryOwner));
+
+    this.specialistRegistry = specialistRegistry || new SpecialistRegistry();
+    this.specialistRegistry.registerSpecialist(new MathematicalSpecialistAgent(this.toolGateway), 'IMPLEMENTED_LOCALLY');
+    this.specialistRegistry.registerSpecialist(new VerificationSpecialistAgent(), 'IMPLEMENTED_LOCALLY');
+
+    this.specialistTaskRepo = specialistTaskRepo || (isDbConfigured ? new PostgresSpecialistTaskRepository() : new InMemorySpecialistTaskRepository());
+    this.taskLeaseManager = new TaskLeaseManager(this.specialistTaskRepo);
+    this.durableScheduler = new DurableTaskScheduler(this.specialistTaskRepo);
+    this.specialistWorkerRuntime = new SpecialistWorkerRuntime(this.specialistTaskRepo, this.taskLeaseManager, this.specialistRegistry);
+    this.durableCoordinator = durableCoordinator || new DurableExecutionCoordinator(this.specialistTaskRepo, this.durableScheduler, this.taskLeaseManager, this.specialistWorkerRuntime);
   }
 
   public getToolGateway(): ToolGateway {
@@ -197,6 +247,26 @@ export class AgentRuntime extends EventEmitter {
 
   public getWorkflowCompiler(): WorkflowCompiler {
     return this.workflowCompiler;
+  }
+
+  public getSpecialistRegistry(): SpecialistRegistry {
+    return this.specialistRegistry;
+  }
+
+  public getSpecialistTaskRepository(): SpecialistTaskRepository {
+    return this.specialistTaskRepo;
+  }
+
+  public getTaskLeaseManager(): TaskLeaseManager {
+    return this.taskLeaseManager;
+  }
+
+  public getDurableTaskScheduler(): DurableTaskScheduler {
+    return this.durableScheduler;
+  }
+
+  public getDurableExecutionCoordinator(): DurableExecutionCoordinator {
+    return this.durableCoordinator;
   }
 
   public setAutomationEngine(engine: any): void {
@@ -293,7 +363,21 @@ export class AgentRuntime extends EventEmitter {
     pending.push(event);
   }
 
+  public getWorkspaceAuthority(): WorkspaceAuthorityRepository {
+    return this.workspaceAuthority;
+  }
+
   public async createRun(request: CreateRunRequest, principal: ExecutionPrincipal): Promise<Run> {
+    // Production/DB-backed runtimes revalidate the server-owned principal/workspace
+    // binding at run creation; request body workspace fields are never consulted.
+    if (this.workspaceAuthority instanceof PostgresWorkspaceAuthorityRepository) {
+      if (
+        !principal?.userId || !principal.workspaceId ||
+        !(await this.workspaceAuthority.isWorkspaceActive(principal.userId, principal.workspaceId))
+      ) {
+        throw new Error('Run creation requires active workspace authority for the authenticated principal.');
+      }
+    }
     const model = normalizeModelIdentifier(request.modelPolicy?.model);
     return withInferencePrincipal(principal.userId, () => this.createNormalizedRun({
       ...request, modelPolicy: { ...request.modelPolicy, model }
@@ -367,7 +451,9 @@ export class AgentRuntime extends EventEmitter {
       agentId: null,
       sessionId: principal.sessionId,
       workspaceId: principal.workspaceId || null,
-      projectId: request.projectId || principal.projectId || null,
+      // Project IDs have no persisted membership/ownership relation yet; do not
+      // use client request fields or unverified principal metadata to select one.
+      projectId: null,
       conversationId: request.conversationId || null,
       intent: routingDecision.intent,
       routingDecision,
@@ -457,35 +543,57 @@ export class AgentRuntime extends EventEmitter {
       await this.workflowEngine.cancelWorkflow(wfRun.id, principal);
     }
     await this.transitionRunState(runId, 'CANCELLED', 'Run was cancelled programmatically.');
+    await this.approvalKernel.clearSessionGrants(runId);
     return true;
   }
 
-  public async submitApproval(requestId: string, decision: ApprovalDecision): Promise<boolean> {
-    const { approved, request } = await this.approvalKernel.decide(requestId, decision);
-    const run = await this.getRun(request.runId);
-    if (!run) {
-      return false;
+  public async submitApproval(
+    requestId: string,
+    decision: ApprovalDecision,
+    resolverPrincipal: ExecutionPrincipal,
+    expectedRunId: string
+  ): Promise<boolean> {
+    if (!resolverPrincipal?.userId || !expectedRunId) return false;
+
+    const pendingRequest = await this.approvalKernel.getPendingRequest(requestId);
+    if (!pendingRequest || pendingRequest.runId !== expectedRunId) return false;
+
+    const run = await this.getRun(pendingRequest.runId);
+    if (
+      !run || run.principalId !== resolverPrincipal.userId ||
+      !run.workspaceId || run.workspaceId !== resolverPrincipal.workspaceId ||
+      pendingRequest.workspaceId !== run.workspaceId ||
+      !(await this.workspaceAuthority.isWorkspaceActive(run.principalId, run.workspaceId)) ||
+      ['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)
+    ) return false;
+
+    // Workflow step approvals are resolved by WorkflowEngine so that the same
+    // decision is not first recorded here and then recorded a second time there.
+    const wfRun = await this.workflowRepo.getWorkflowRunByRunId(pendingRequest.runId);
+    if (wfRun?.state === 'WAITING_FOR_APPROVAL' && wfRun.pendingApprovalStepId) {
+      const stepId = wfRun.pendingApprovalStepId;
+      if (pendingRequest.toolCall.id !== `call_step_${stepId}`) return false;
+      return this.workflowEngine.resolveStepApproval(
+        wfRun.id,
+        stepId,
+        decision,
+        resolverPrincipal,
+        requestId
+      );
+    }
+
+    const { approved, request, applied } = await this.approvalKernel.decide(
+      requestId,
+      decision,
+      resolverPrincipal.userId
+    );
+    if (!applied) return true; // Duplicate delivery must not schedule another resume.
+    if (this.approvalKernel.supportsApprovalResumptionOutbox()) {
+      this.inFlightRuns.delete(pendingRequest.runId);
+      await this.dispatchApprovalResumptions(this.recoveryOwner);
+      return true;
     }
     run.pendingApproval = request;
-    
-    // Check if this approval was for a workflow step
-    if (typeof request.toolCall?.toolId === 'string' && request.toolCall.toolId.startsWith('workflow_step_')) {
-      const wfRun = await this.workflowRepo.getWorkflowRunByRunId(request.runId);
-      if (wfRun && wfRun.state === 'WAITING_FOR_APPROVAL' && wfRun.pendingApprovalStepId) {
-        const principal: ExecutionPrincipal = {
-          userId: run.principalId,
-          sessionId: run.sessionId,
-          role: 'user'
-        };
-        await this.workflowEngine.resolveStepApproval(
-          wfRun.id,
-          wfRun.pendingApprovalStepId,
-          decision === 'APPROVE' ? 'APPROVED' : 'REJECTED',
-          principal
-        );
-        return true;
-      }
-    }
 
     if (decision === 'REJECT') {
       run.executionCheckpoint = 'COMPLETED';
@@ -583,6 +691,13 @@ export class AgentRuntime extends EventEmitter {
     if (!run) return;
 
     if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)) return;
+    if (
+      this.workspaceAuthority instanceof PostgresWorkspaceAuthorityRepository &&
+      (!run.workspaceId || !(await this.workspaceAuthority.isWorkspaceActive(run.principalId, run.workspaceId)))
+    ) {
+      await this.transitionRunState(runId, 'FAILED', 'Run execution requires active authoritative workspace authority.');
+      return;
+    }
 
     // Checkpoint 0: Capability readiness gate
     if (run.routingDecision?.executionTarget === 'CAPABILITY_NOT_READY') {
@@ -898,15 +1013,17 @@ export class AgentRuntime extends EventEmitter {
     if (run.executionCheckpoint === 'TOOL_SELECTED') {
       const toolCall = run.toolCalls[run.toolCalls.length - 1];
       const toolDef = this.toolGateway.getTool(toolCall.name)?.definition || this.toolRegistry.get(toolCall.name)?.definition;
-      
+      const toolApprovalPolicy = toolDef ? deriveToolApprovalPolicy(toolDef) : undefined;
+
       const isApproved = await this.approvalKernel.isToolCallApproved(
         runId,
         toolCall.name,
-        toolDef?.permissionLevel || 'READ',
+        toolApprovalPolicy?.permissionLevel || toolDef?.permissionLevel || 'READ',
         run.principalId
       );
 
       const requiresApproval = (!isApproved) && (
+        Boolean(toolApprovalPolicy?.requiresApproval) ||
         toolDef?.permissionLevel === 'DESTRUCTIVE' ||
         toolDef?.sideEffectLevel === 'DESTRUCTIVE' ||
         run.routingDecision?.sideEffectLevel === 'DESTRUCTIVE' ||
@@ -914,6 +1031,13 @@ export class AgentRuntime extends EventEmitter {
       );
 
       if (requiresApproval) {
+        if (
+          !run.workspaceId ||
+          !(await this.workspaceAuthority.isWorkspaceActive(run.principalId, run.workspaceId))
+        ) {
+          await this.transitionRunState(runId, 'FAILED', 'Approval cannot be created without active authoritative workspace authority.');
+          return;
+        }
         run.executionCheckpoint = 'WAITING_FOR_APPROVAL';
         await this.saveRun(run);
         
@@ -921,8 +1045,11 @@ export class AgentRuntime extends EventEmitter {
         const req = await this.approvalKernel.createRequest(
           runId,
           toolCall,
-          toolDef?.permissionLevel || 'DESTRUCTIVE',
-          `Tool execution "${toolCall.name}" requires user confirmation due to ${run.routingDecision?.sideEffectLevel || toolDef?.permissionLevel || 'DESTRUCTIVE'} policy.`
+          toolApprovalPolicy?.permissionLevel || toolDef?.permissionLevel || 'DESTRUCTIVE',
+          `Tool execution "${toolCall.name}" requires user confirmation due to ${run.routingDecision?.sideEffectLevel || toolDef?.sideEffectLevel || toolDef?.permissionLevel || 'DESTRUCTIVE'} policy.`,
+          run.workspaceId,
+          toolDef?.version,
+          toolApprovalPolicy?.fingerprint
         );
         run = (await this.getRun(runId)) as Run; // reload
         run.pendingApproval = req;
@@ -943,6 +1070,20 @@ export class AgentRuntime extends EventEmitter {
     // Checkpoint 4: Execute Tool
     if (run.executionCheckpoint === 'TOOL_APPROVED') {
       const toolCall = run.toolCalls[run.toolCalls.length - 1];
+      const dispatchToolDef = this.toolGateway.getTool(toolCall.name)?.definition || this.toolRegistry.get(toolCall.name)?.definition;
+      const dispatchApprovalPolicy = dispatchToolDef ? deriveToolApprovalPolicy(dispatchToolDef) : undefined;
+      const dispatchRequiresWorkspaceAuthority = Boolean(run.pendingApproval) ||
+        Boolean(dispatchApprovalPolicy?.requiresApproval) ||
+        dispatchToolDef?.permissionLevel === 'WRITE' || dispatchToolDef?.permissionLevel === 'DESTRUCTIVE' ||
+        dispatchToolDef?.sideEffectLevel === 'WRITE' || dispatchToolDef?.sideEffectLevel === 'DESTRUCTIVE' ||
+        run.routingDecision?.sideEffectLevel === 'DESTRUCTIVE';
+      if (dispatchRequiresWorkspaceAuthority && (
+        !run.workspaceId ||
+        !(await this.workspaceAuthority.isWorkspaceActive(run.principalId, run.workspaceId))
+      )) {
+        await this.transitionRunState(runId, 'FAILED', 'Protected tool execution requires active authoritative workspace authority.');
+        return;
+      }
       run.executionCheckpoint = 'TOOL_EXECUTING';
       await this.saveRun(run);
 
@@ -960,10 +1101,13 @@ export class AgentRuntime extends EventEmitter {
             principal: {
               userId: run.principalId,
               sessionId: run.sessionId,
+              workspaceId: run.workspaceId || undefined,
               roles: ['member'],
               scopes: run.principalScopes || []
             },
-            workspaceRoot: this.workspaceRoot
+            workspaceRoot: this.workspaceRoot,
+            approvalRequestId: run.pendingApproval?.id,
+            approvalDecision: run.pendingApproval?.decision
           },
           callId: toolCall.id
         });
@@ -976,6 +1120,10 @@ export class AgentRuntime extends EventEmitter {
       }
 
       run = (await this.getRun(runId)) as Run; // reload after async tool execution
+      if (run.pendingApproval?.decision) {
+        run.pendingApproval = undefined;
+        await this.saveRun(run);
+      }
 
       const recoveryEngine = new ToolRecoveryEngine();
       let finalToolResult = toolResult;
@@ -1541,13 +1689,128 @@ CAPABILITY & IDENTITY INVARIANTS:
     }
   }
 
+  private async withRunRecoveryLease<T>(runId: string, owner: string, work: () => Promise<T>): Promise<T> {
+    const interval = setInterval(() => {
+      void this.runRepo.renewInterruptedRunClaim?.(runId, owner, 30_000).then((renewed) => {
+        if (renewed === false) console.error(`Recovery lease lost for run ${runId}; execution will not be replayed by this worker.`);
+      }).catch((error) => console.error(`Failed to renew recovery lease for run ${runId}:`, error));
+    }, 10_000);
+    interval.unref?.();
+    try {
+      return await work();
+    } finally {
+      clearInterval(interval);
+      await this.runRepo.releaseInterruptedRunClaim?.(runId, owner);
+    }
+  }
+
+  /**
+   * Drain committed approval intents. Claims are fenced in PostgreSQL; once an
+   * intent reaches DISPATCHED_UNKNOWN it is never automatically claimed again.
+   * Interrupted RUNNING checkpoints are recovered by recoverInterruptedRuns.
+   */
+  public async dispatchApprovalResumptions(owner: string, limit = 50): Promise<number> {
+    if (!this.approvalKernel.supportsApprovalResumptionOutbox()) return 0;
+    let dispatched = 0;
+    for (let index = 0; index < limit; index += 1) {
+      const event = await this.approvalKernel.claimApprovalResumption(owner, 30_000);
+      if (!event) break;
+      let applied = false;
+      try {
+        applied = await this.approvalKernel.applyApprovalResumption(event, owner);
+        if (!applied) continue; // stale/revoked/cancelled intent is terminal and never replayed
+        dispatched += 1;
+        this.inFlightRuns.delete(event.runId);
+        await this.emitRunEvent(event.runId, 'approval.resolved', {
+          requestId: event.approvalId,
+          decision: event.decision,
+          approved: event.decision !== 'REJECT',
+          outboxId: event.id
+        });
+
+        const run = await this.getRun(event.runId);
+        if (event.decision === 'REJECT') {
+          if (event.targetType === 'WORKFLOW') {
+            const workflowRun = await this.workflowRepo.getWorkflowRunByRunId(event.runId);
+            if (workflowRun) {
+              workflowRun.state = 'FAILED';
+              workflowRun.error = `Approval rejected for step "${event.workflowStepId}".`;
+              if (event.workflowStepId) {
+                workflowRun.stepStates[event.workflowStepId] = 'FAILED';
+              }
+              workflowRun.pendingApprovalStepId = undefined;
+              workflowRun.updatedAt = Date.now();
+              await this.workflowRepo.saveWorkflowRun(workflowRun);
+            }
+            await this.emitRunEvent(event.runId, 'workflow.failed', {
+              runId: event.runId, error: `Approval rejected for step "${event.workflowStepId}".`
+            });
+          } else {
+            if (run) {
+              run.executionCheckpoint = 'COMPLETED';
+              await this.saveRun(run);
+            }
+            await this.transitionRunState(event.runId, 'FAILED', 'User rejected required tool approval.');
+          }
+          const finalRun = await this.getRun(event.runId);
+          await this.approvalKernel.completeApprovalResumption(event.id, {
+            outcome: 'rejected', runState: finalRun?.state || 'FAILED', resultReference: { runId: event.runId }
+          });
+          continue;
+        }
+
+        const runRecoveryOwner = `${owner}:${event.id}:${event.fencingToken}`;
+        if (event.targetType === 'WORKFLOW') {
+          const workflowRun = await this.workflowRepo.getWorkflowRunByRunId(event.runId);
+          if (!workflowRun) {
+            await this.approvalKernel.completeApprovalResumption(event.id, { outcome: 'recoverable-failure', reason: 'workflow run missing after dispatch' });
+            continue;
+          }
+          await this.withRunRecoveryLease(event.runId, runRecoveryOwner, () => withInferencePrincipal(run?.principalId, () => this.workflowEngine.executeWorkflowRun(workflowRun.id)));
+          const finalWorkflow = await this.workflowRepo.getWorkflowRun(workflowRun.id);
+          await this.approvalKernel.completeApprovalResumption(event.id, {
+            outcome: 'workflow-resumed', state: finalWorkflow?.state || 'UNKNOWN',
+            resultReference: { runId: event.runId, workflowRunId: workflowRun.id }
+          });
+        } else {
+          // Persisted TOOL_APPROVED is the restart-safe continuation point. The
+          // completion callback records results; a crash leaves DISPATCHED_UNKNOWN
+          // and startup recovery resumes from the run checkpoint, never from this row.
+          void this.withRunRecoveryLease(event.runId, runRecoveryOwner, () => this.executeRunLoop(event.runId)).then(async () => {
+            const finalRun = await this.getRun(event.runId);
+            await this.approvalKernel.completeApprovalResumption(event.id, {
+              outcome: 'run-resumed', state: finalRun?.state || 'UNKNOWN',
+              checkpoint: finalRun?.executionCheckpoint || null,
+              resultReference: { runId: event.runId }
+            });
+          }).catch(async (error: any) => {
+            console.error(`Error resuming approval run ${event.runId}:`, error);
+            const currentRun = await this.getRun(event.runId);
+            if (currentRun && ['FAILED', 'CANCELLED', 'COMPLETED'].includes(currentRun.state)) {
+              await this.approvalKernel.completeApprovalResumption(event.id, {
+                outcome: 'run-terminated', state: currentRun.state, error: String(error?.message || error).slice(0, 1000)
+              });
+            }
+          });
+        }
+      } catch (error: any) {
+        if (!applied) {
+          await this.approvalKernel.failApprovalResumption(event, owner, String(error?.message || error));
+        }
+        console.error(`Approval resumption delivery failed for ${event.id}:`, error);
+      }
+    }
+    return dispatched;
+  }
+
   public async recoverInterruptedRuns(owner: string, ttlMs: number = 60000): Promise<void> {
     const interrupted = await this.runRepo.getInterruptedRuns();
     for (const run of interrupted) {
-      const claimed = await this.runRepo.claimInterruptedRun(run.id, owner, ttlMs);
+      const claimOwner = `${owner}:${run.id}:${crypto.randomUUID()}`;
+      const claimed = await this.runRepo.claimInterruptedRun(run.id, claimOwner, ttlMs);
       if (claimed) {
         console.log(`Recovering interrupted run ${run.id}...`);
-        this.resumeRun(run.id).catch(err => {
+        void this.withRunRecoveryLease(run.id, claimOwner, () => this.resumeRun(run.id)).catch(err => {
           console.error(`Error recovering run ${run.id}:`, err);
           this.transitionRunState(run.id, 'FAILED', `Recovery failed: ${err.message}`).catch(console.error);
         });
@@ -1607,4 +1870,7 @@ export * from './prompt-composer/index.js';
 export * from './skills/curated-skill-registry.js';
 export * from './research/firecrawl-adapter.js';
 export * from './orchestration/ruflo-adapter.js';
-export * from './specialists/specialist-interface.js';
+export * from './specialists/index.js';
+export * from './durable/index.js';
+export * from './workspace-authority.js';
+

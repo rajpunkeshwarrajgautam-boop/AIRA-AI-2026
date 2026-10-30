@@ -1,51 +1,33 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { execSync } from 'node:child_process';
-import knex, { Knex } from 'knex';
+import { execFileSync } from 'node:child_process';
+import knex from 'knex';
 import { reconcileToolCallsSchema } from '../packages/db/src/migrations/025_reconcile_tool_calls_schema.js';
 
-function resolveTestConnectionString(): string {
-  if (process.env.ISOLATED_TEST_DATABASE_URL?.trim()) {
-    return process.env.ISOLATED_TEST_DATABASE_URL.trim();
-  }
-  if (process.env.DATABASE_URL?.trim()) {
-    return process.env.DATABASE_URL.trim();
-  }
-  try {
-    const output = execSync(
-      'npx --yes neonctl connection-string pr90-p1-6-7-preview-isolated --project-id mute-frost-50372225 --org-id org-broad-butterfly-41820185',
-      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] }
-    ).trim();
-    if (output && output.includes('neon.tech')) {
-      return output;
-    }
-  } catch {}
-
-  return 'postgres://aira:aira@localhost:5432/aira_db';
+if (process.env.AIRA_POSTGRES_CERTIFICATION !== '1') {
+  throw new Error('Tool-calls schema drift certification requires AIRA_POSTGRES_CERTIFICATION=1.');
 }
+if (process.env.CI_DISPOSABLE_DATABASE !== 'true'
+    || !process.env.DATABASE_URL
+    || process.env.DATABASE_URL !== process.env.ISOLATED_TEST_DATABASE_URL) {
+  throw new Error('Tool-calls schema drift certification requires the matching disposable PostgreSQL URL contract.');
+}
+execFileSync(process.execPath, ['scripts/ci/assert-disposable-postgres.mjs'], { stdio: 'inherit' });
 
-const connectionString = resolveTestConnectionString();
-
-// Strict security guard: Never target production Neon (old-sky-50952395)
+// No local default or Neon credential/connection-string fallback is permitted.
+const connectionString = process.env.DATABASE_URL;
 const parsed = new URL(connectionString);
-if (parsed.hostname.includes('old-sky-50952395')) {
-  console.error('[SECURITY FATAL] Test execution blocked: Attempted to target production Neon old-sky-50952395.');
-  process.exit(1);
-}
-
 const db = knex({
   client: 'pg',
-  connection: {
-    connectionString,
-    ssl: connectionString.includes('neon.tech') ? { rejectUnauthorized: true } : false
-  },
+  connection: { connectionString, ssl: false },
   pool: { min: 1, max: 2 }
 });
 
 async function main(): Promise<void> {
   const tableSuffix = randomUUID().replace(/-/g, '').slice(0, 12);
   const testTableName = `tool_calls_drift_test_${tableSuffix}`;
-
+  const badTable = `tool_calls_bad_type_${tableSuffix}`;
+  try {
   console.log(`[P0 CERTIFICATION] Testing tool_calls schema reconciliation on table: ${testTableName}`);
   console.log(`[P0 CERTIFICATION] Target host: ${parsed.hostname}`);
 
@@ -191,7 +173,6 @@ async function main(): Promise<void> {
   console.log('PASS: Legacy pre-existing tool call record preserved intact');
 
   // Stage 8B: Verify failure on incompatible existing column type
-  const badTable = `tool_calls_bad_type_${tableSuffix}`;
   await db.schema.createTable(badTable, (t) => {
     t.string('id').primary();
     t.boolean('duration_ms'); // Incompatible type: boolean instead of integer
@@ -215,6 +196,10 @@ async function main(): Promise<void> {
   console.log('\n================================================================');
   console.log('P0 CERTIFICATION SUCCESSFUL: Tool calls schema reconciliation verified');
   console.log('================================================================');
+  } finally {
+    await db.schema.dropTableIfExists(badTable).catch(() => {});
+    await db.schema.dropTableIfExists(testTableName).catch(() => {});
+  }
 }
 
 main()

@@ -1,9 +1,28 @@
 import { spawn } from 'child_process';
+import { execFileSync } from 'node:child_process';
 import assert from 'assert';
+import { randomUUID } from 'node:crypto';
 import { db } from '../packages/db/src/index.js'; // to seed/verify DB states directly
+import { createPostgresExecutionFixture } from './helpers/postgres-execution-fixture.js';
+
+function assertAuthorizedDisposableDatabase(): void {
+  if (process.env.AIRA_POSTGRES_CERTIFICATION !== '1') {
+    throw new Error('Recovery certification requires AIRA_POSTGRES_CERTIFICATION=1.');
+  }
+  if (process.env.CI_DISPOSABLE_DATABASE !== 'true'
+      || !process.env.DATABASE_URL
+      || process.env.DATABASE_URL !== process.env.ISOLATED_TEST_DATABASE_URL) {
+    throw new Error('Recovery certification requires the matching disposable PostgreSQL URL contract.');
+  }
+  execFileSync(process.execPath, ['scripts/ci/assert-disposable-postgres.mjs'], { stdio: 'inherit' });
+}
 
 const API_PORT = 3003;
 const BASE_URL = `http://127.0.0.1:${API_PORT}`;
+const FIXTURE_TAG = randomUUID();
+const RECOVERY_PRINCIPAL_ID = `cert_recovery_${FIXTURE_TAG}`;
+const RECOVERY_SESSION_ID = `cert_recovery_session_${FIXTURE_TAG}`;
+let executionFixture: Awaited<ReturnType<typeof createPostgresExecutionFixture>> | undefined;
 
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -13,10 +32,26 @@ let apiServer: any;
 
 async function startApiServer() {
   console.log('Starting API Server...');
-  apiServer = spawn('npx', ['tsx', 'apps/api/src/index.ts'], {
-    env: { ...process.env, PORT: API_PORT.toString(), NODE_ENV: 'test', AIRA_ALLOW_MOCK: 'true' },
-    stdio: 'inherit',
-    shell: true
+  const apiEnvironment: NodeJS.ProcessEnv = {
+    ...process.env,
+    PORT: API_PORT.toString(),
+    NODE_ENV: 'test',
+    AIRA_ALLOW_MOCK: 'true',
+    AIRA_PERSISTENT_WORKSPACE_AUTHORITY: 'true',
+    DOTENV_CONFIG_PATH: '/dev/null'
+  };
+  for (const key of [
+    'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'NVIDIA_API_KEY', 'GROQ_API_KEY',
+    'GEMINI_API_KEY', 'CEREBRAS_API_KEY', 'TOGETHER_API_KEY', 'FIREWORKS_API_KEY',
+    'BRAVE_SEARCH_API_KEY', 'TAVILY_API_KEY', 'EXA_API_KEY', 'FAL_KEY', 'FAL_API_KEY',
+    'REPLICATE_API_TOKEN', 'FIRECRAWL_API_KEY', 'E2B_API_KEY', 'LIGHTNING_SANDBOX_API_KEY',
+    'BROWSERBASE_API_KEY', 'BROWSERLESS_API_KEY', 'AIRA_LIVE_PROVIDER_ACCEPTANCE',
+    'AIRA_LIVE_PROVIDER', 'AIRA_LIVE_MODEL', 'AIRA_LIVE_PROVIDER_CONFIRMATION',
+    'AIRA_LIVE_PROVIDER_DATABASE_CONFIRMATION'
+  ]) delete apiEnvironment[key];
+  apiServer = spawn(process.execPath, ['node_modules/tsx/dist/cli.mjs', 'apps/api/src/index.ts'], {
+    env: apiEnvironment,
+    stdio: 'inherit'
   });
   
   // Wait until it responds to health check
@@ -24,26 +59,29 @@ async function startApiServer() {
     try {
       const res = await fetch(`${BASE_URL}/api/ready`);
       if (res.ok) return;
-    } catch (e) {}
+    } catch {}
     await sleep(500);
   }
   throw new Error('API server failed to start');
 }
 
-function killApiServer() {
-  if (apiServer) {
-    console.log('Killing API Server (SIGKILL)...');
-    apiServer.kill('SIGKILL');
-    apiServer = null;
-  }
+async function killApiServer(): Promise<void> {
+  const child = apiServer;
+  apiServer = null;
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  console.log('Killing API Server (SIGKILL)...');
+  await new Promise<void>((resolve) => {
+    child.once('exit', () => resolve());
+    child.kill('SIGKILL');
+  });
 }
 
 async function createRun(prompt: string) {
   const createRes = await fetch(`${BASE_URL}/api/runs`, {
     method: 'POST',
     headers: {
-      'x-test-user-id': 'test-user',
-      'x-test-session-id': 'test-session',
+      'x-test-user-id': RECOVERY_PRINCIPAL_ID,
+      'x-test-session-id': RECOVERY_SESSION_ID,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
@@ -56,30 +94,34 @@ async function createRun(prompt: string) {
   if (!createRes.ok) {
     throw new Error(`Failed to create run: ${createRes.status} ${await createRes.text()}`);
   }
-  return await createRes.json();
+  const run = await createRes.json();
+  if (!executionFixture) throw new Error('Recovery execution fixture was not initialized.');
+  await executionFixture.trackParentRun(run.id);
+  return run;
 }
 
 async function seedRun(id: string, state: string, checkpoint: string, extra: any = {}) {
-  await db('runs').insert({
-    id,
+  if (!executionFixture) throw new Error('Recovery execution fixture was not initialized.');
+  await executionFixture.createParentRun(id, {
+    prompt: 'Seeded test run', state, status: state, executionCheckpoint: checkpoint
+  });
+  await db('runs').where({ id }).update({
     agent_id: null,
-    principal_id: 'test-user',
-    session_id: 'test-session',
-    state,
-    status: state,
     execution_checkpoint: checkpoint,
-    prompt: 'Seeded test run',
     modelPolicy: JSON.stringify({ model: 'mock-deterministic' }),
-    createdAt: Date.now(),
     updatedAt: Date.now(),
     ...extra
   });
 }
 
 async function runRecoveryTests() {
-  console.log('=== TASK 5 RECOVERY TEST SUITE ===');
-
-  await db('runs').del();
+  try {
+    assertAuthorizedDisposableDatabase();
+    executionFixture = await createPostgresExecutionFixture({
+      principalPrefix: 'cert_recovery', sessionPrefix: 'cert_recovery_session', tag: FIXTURE_TAG,
+      principalId: RECOVERY_PRINCIPAL_ID, sessionId: RECOVERY_SESSION_ID, roles: ['member'], scopes: []
+    });
+    console.log('=== TASK 5 RECOVERY TEST SUITE ===');
 
   // We start the API server to create some initial runs that we will kill mid-flight
   await startApiServer();
@@ -95,37 +137,60 @@ async function runRecoveryTests() {
   await sleep(3000);
 
   // Kill the server abruptly
-  killApiServer();
+  await killApiServer();
   await sleep(1000);
 
   console.log('\n--- 2. Prepare Static Runs for Startup Verification ---');
   
   // Test A: WAITING_FOR_APPROVAL
-  const runApprovalId = 'run_approval_123';
+  const runApprovalId = `run_approval_${FIXTURE_TAG}`;
   await seedRun(runApprovalId, 'WAITING_FOR_APPROVAL', 'WAITING_FOR_APPROVAL');
   
-  // Test E: TOOL_COMPLETED
-  const runCompletedToolId = 'run_tc_123';
+  // Model a SIGKILL boundary after durable tool completion: the run is still RUNNING,
+  // its checkpoint is TOOL_COMPLETED, and the call/result plus lifecycle receipts are persisted.
+  const runCompletedToolId = `run_tc_${FIXTURE_TAG}`;
+  const completedToolCall = {
+    id: 'call_1', toolId: 'tool_calculator', name: 'calculator',
+    arguments: { expression: '6 * 7' }, timestamp: Date.now(), status: 'COMPLETED'
+  };
+  const completedToolResult = {
+    toolCallId: completedToolCall.id,
+    output: { expression: '6 * 7', result: 42 },
+    isError: false,
+    durationMs: 3,
+    timestamp: Date.now()
+  };
   await seedRun(runCompletedToolId, 'RUNNING', 'TOOL_COMPLETED', {
-    toolCalls: JSON.stringify([{ id: 'call_1', toolId: 'tool_1', name: 'dummy', arguments: {}, timestamp: Date.now(), status: 'COMPLETED' }])
+    toolCalls: JSON.stringify([completedToolCall]),
+    toolResults: JSON.stringify([completedToolResult])
   });
-  
+  await db('run_events').insert([
+    {
+      id: `evt_${randomUUID()}`, run_id: runCompletedToolId, type: 'tool.started',
+      payload: JSON.stringify({ callId: completedToolCall.id, name: completedToolCall.name }), createdAt: completedToolCall.timestamp
+    },
+    {
+      id: `evt_${randomUUID()}`, run_id: runCompletedToolId, type: 'tool.completed',
+      payload: JSON.stringify(completedToolResult), createdAt: completedToolResult.timestamp
+    }
+  ]);
+
   // Test F: SYNTHESIZING
-  const runSynthId = 'run_synth_123';
+  const runSynthId = `run_synth_${FIXTURE_TAG}`;
   await seedRun(runSynthId, 'RUNNING', 'SYNTHESIZING');
 
   // Test G: FINALIZING
-  const runFinalizeId = 'run_final_123';
+  const runFinalizeId = `run_final_${FIXTURE_TAG}`;
   await seedRun(runFinalizeId, 'RUNNING', 'FINALIZING');
 
   // Test H: Terminal runs
-  const runCompletedId = 'run_done_123';
+  const runCompletedId = `run_done_${FIXTURE_TAG}`;
   await seedRun(runCompletedId, 'COMPLETED', 'COMPLETED');
-  const runFailedId = 'run_fail_123';
+  const runFailedId = `run_fail_${FIXTURE_TAG}`;
   await seedRun(runFailedId, 'FAILED', 'TOOL_EXECUTING');
 
   // Test I: Lease takeover / contention
-  const runLeasedId = 'run_leased_123';
+  const runLeasedId = `run_leased_${FIXTURE_TAG}`;
   await seedRun(runLeasedId, 'RUNNING', 'TOOL_APPROVED', {
     recovery_owner: 'other-worker',
     recovery_claimed_at: Date.now(),
@@ -133,7 +198,7 @@ async function runRecoveryTests() {
     toolCalls: JSON.stringify([{ id: 'call_1', toolId: 'tool_1', name: 'dummy', arguments: {}, timestamp: Date.now(), status: 'APPROVED' }])
   });
   
-  const runExpiredLeaseId = 'run_expired_123';
+  const runExpiredLeaseId = `run_expired_${FIXTURE_TAG}`;
   await seedRun(runExpiredLeaseId, 'RUNNING', 'TOOL_APPROVED', {
     recovery_owner: 'other-worker',
     recovery_claimed_at: Date.now(),
@@ -166,10 +231,20 @@ async function runRecoveryTests() {
   assert.strictEqual(checkApproval.state, 'WAITING_FOR_APPROVAL');
   console.log('✅ Test 7 (WAITING_FOR_APPROVAL survives): Passed');
 
-  // Test E / 11: TOOL_COMPLETED does not re-execute tool, moves to SYNTHESIZING or finishes
+  // Test E / 11: a completed tool is retained and synthesis finishes without redispatch.
   const checkTc = await db('runs').where({ id: runCompletedToolId }).first();
-  assert.ok(['SYNTHESIZING', 'FINALIZING', 'COMPLETED'].includes(checkTc.execution_checkpoint), `Expected post-TC state, got ${checkTc.execution_checkpoint}`);
-  console.log('✅ Test 11 (TOOL_COMPLETED moves forward): Passed');
+  assert.strictEqual(checkTc.state, 'COMPLETED');
+  assert.strictEqual(checkTc.execution_checkpoint, 'COMPLETED');
+  const recoveredCalls = typeof checkTc.toolCalls === 'string' ? JSON.parse(checkTc.toolCalls) : checkTc.toolCalls;
+  const recoveredResults = typeof checkTc.toolResults === 'string' ? JSON.parse(checkTc.toolResults) : checkTc.toolResults;
+  assert.deepStrictEqual(recoveredCalls, [completedToolCall]);
+  assert.deepStrictEqual(recoveredResults, [completedToolResult]);
+  const recoveredToolEvents = await db('run_events').where({ run_id: runCompletedToolId }).whereIn('type', ['tool.started', 'tool.completed']);
+  assert.strictEqual(recoveredToolEvents.filter((event: any) => event.type === 'tool.started').length, 1,
+    'Recovery must not emit a second tool.started event for a completed call.');
+  assert.strictEqual(recoveredToolEvents.filter((event: any) => event.type === 'tool.completed').length, 1,
+    'Recovery must retain exactly the pre-crash tool completion receipt.');
+  console.log('✅ Test 11 (TOOL_COMPLETED retained, run completed, and adapter not replayed): Passed');
 
   // Test F / 12: SYNTHESIZING finishes without duplication
   const checkSynth = await db('runs').where({ id: runSynthId }).first();
@@ -196,17 +271,26 @@ async function runRecoveryTests() {
   assert.ok(checkLeased.recovery_claimed_at !== null);
   
   const checkExpired = await db('runs').where({ id: runExpiredLeaseId }).first();
-  // Expired lease SHOULD be taken over by this worker ('api-worker-1')
-  assert.strictEqual(checkExpired.recovery_owner, 'api-worker-1');
-  console.log('✅ Test 6 & I (Lease expiry/takeover works): Passed');
+  // The generated recovery claim is released after processing; stale fixed-owner assertions
+  // do not describe the current fenced claim lifecycle.
+  assert.strictEqual(checkExpired.recovery_owner, null);
+  assert.strictEqual(checkExpired.recovery_claimed_at, null);
+  assert.strictEqual(checkExpired.recovery_lease_until, null);
+  assert.strictEqual(checkExpired.state, 'FAILED');
+  console.log('✅ Test 6 & I (Expired lease claimed, processed, and released): Passed');
 
   console.log('\nAll A-I Tests Passed Successfully!');
-  killApiServer();
-  process.exit(0);
+  } finally {
+    await killApiServer();
+    try {
+      await executionFixture?.cleanup();
+    } finally {
+      await db.destroy();
+    }
+  }
 }
 
-runRecoveryTests().catch(err => {
+runRecoveryTests().catch((err) => {
   console.error(err);
-  killApiServer();
-  process.exit(1);
+  process.exitCode = 1;
 });

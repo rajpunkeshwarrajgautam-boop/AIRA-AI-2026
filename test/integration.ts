@@ -1,5 +1,7 @@
-import { spawn, exec } from 'child_process';
+import { spawn, exec, execFileSync } from 'child_process';
 import assert from 'assert';
+import { derivePersonalWorkspaceId, workspaceAuthority } from '../packages/agent-runtime/src/workspace-authority.js';
+import { db } from '../packages/db/src/index.js';
 
 const API_PORT = 3001;
 const BASE_URL = `http://127.0.0.1:${API_PORT}`;
@@ -8,10 +10,24 @@ const INT_HEADERS = {
   'Content-Type': 'application/json',
   'x-test-user-id': 'integration-test-user',
   'x-test-session-id': 'integration-test-session',
+  // Deliberate client spoof: the server derives workspace authority from the authenticated principal and ignores this header.
+  'x-workspace-id': 'integration-client-spoof-workspace',
 };
 
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function killProcessTree(proc: any) {
+  if (proc && proc.pid) {
+    try {
+      if (process.platform === 'win32') {
+        execFileSync('taskkill', ['/F', '/T', '/PID', String(proc.pid)], { stdio: 'ignore' });
+      } else {
+        proc.kill('SIGKILL');
+      }
+    } catch {}
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -77,13 +93,21 @@ async function collectSseEvents(
 // ---------------------------------------------------------------------------
 // Main integration runner
 // ---------------------------------------------------------------------------
+function assertAuthorizedDisposableDatabase(): void {
+  // This suite drops/recreates public schema. The live-server identity and
+  // Docker-network check must pass before the first destructive statement.
+  execFileSync(process.execPath, ['scripts/ci/assert-disposable-postgres.mjs'], { stdio: 'inherit' });
+}
+
 async function runIntegration() {
+  assertAuthorizedDisposableDatabase();
   // -------------------------------------------------------------------------
   // ITEM 1 (Migration): Test BOTH paths
   // Path A: Clean DB — fresh schema, 006 is a no-op (column already exists)
   // Path B: Existing DB — simulate old 003 without artifacts, 006 adds it
   // -------------------------------------------------------------------------
   console.log('--- MIGRATION PATH A: Clean DB (006 should be no-op) ---');
+  assertAuthorizedDisposableDatabase();
   await new Promise((resolve, reject) => {
     const script = `import path from 'path'; import { pathToFileURL } from 'url'; async function clean() { const dbModule = await import(pathToFileURL(path.resolve('./packages/db/src/index.ts')).href); const db = dbModule.db; await db.raw('DROP SCHEMA public CASCADE; CREATE SCHEMA public;'); await db.migrate.latest(); const exists = await db.schema.hasColumn('runs', 'artifacts'); if (!exists) { console.error('FAIL: artifacts column missing after full migration'); process.exit(1); } console.log('PASS: artifacts column present after full migration (006 was no-op)'); process.exit(0); } clean().catch((err) => { console.error(err); process.exit(1); });`;
     exec(`npx tsx -e "${script}"`, (err, stdout, stderr) => {
@@ -103,6 +127,7 @@ async function runIntegration() {
   });
 
   console.log('--- MIGRATION: Fresh DB for integration tests ---');
+  assertAuthorizedDisposableDatabase();
   await new Promise((resolve, reject) => {
     const script = `import path from 'path'; import { pathToFileURL } from 'url'; async function clean() { const dbModule = await import(pathToFileURL(path.resolve('./packages/db/src/index.ts')).href); const db = dbModule.db; await db.raw('DROP SCHEMA public CASCADE; CREATE SCHEMA public;'); await db.migrate.latest(); console.log('Clean DB migration PASS'); process.exit(0); } clean().catch((err) => { console.error(err); process.exit(1); });`;
     exec(`npx tsx -e "${script}"`, (err, stdout, stderr) => {
@@ -157,7 +182,7 @@ async function runIntegration() {
     // -----------------------------------------------------------------------
     console.log('--- TEST 3: Process Restart Recovery ---');
     console.log('Killing API server...');
-    apiServer.kill();
+    killProcessTree(apiServer);
     await sleep(1000);
 
     console.log('Restarting API server...');
@@ -197,15 +222,32 @@ async function runIntegration() {
       headers: INT_HEADERS,
       body: JSON.stringify({
         intent: 'TOOL_ACTION',
-        prompt: 'run command', // Triggers system_shell (DESTRUCTIVE), which pauses for approval
+        prompt: 'run command: printf integration-approval', // Safe read-only shell action; still requires explicit approval.
+        workspaceId: 'integration-foreign-workspace', // Untrusted body selection must not override authenticated context.
+        projectId: 'integration-foreign-project', // No project membership record exists to authorize this selection.
         systemPrompt: 'You are a test agent',
         modelPolicy: { model: 'mock-deterministic' }
       })
     });
     if (!liveRunRes.ok) throw new Error(`Failed to create live run: ${liveRunRes.status}`);
     const liveRun = await liveRunRes.json();
+    assert.strictEqual(liveRun.workspaceId, derivePersonalWorkspaceId('integration-test-user'), 'Run workspace must be server-derived from authenticated identity, not either client-supplied workspace value.');
+    assert.strictEqual(liveRun.projectId, null, 'Unverified project selection must not be persisted on the run.');
+
+    const siblingRunRes = await fetch(`${BASE_URL}/api/runs`, {
+      method: 'POST',
+      headers: INT_HEADERS,
+      body: JSON.stringify({
+        intent: 'TOOL_ACTION',
+        prompt: 'run command: printf rejected-action-must-not-run',
+        systemPrompt: 'You are a test agent',
+        modelPolicy: { model: 'mock-deterministic' }
+      })
+    });
+    if (!siblingRunRes.ok) throw new Error(`Failed to create sibling approval run: ${siblingRunRes.status}`);
+    const siblingRun = await siblingRunRes.json();
     
-    // Wait for the run to pause at WAITING_FOR_APPROVAL
+    // Wait for both runs to pause at WAITING_FOR_APPROVAL
     await sleep(2000);
     
     // Subscribe to SSE. Should replay created, requested, approval.required events
@@ -248,7 +290,53 @@ async function runIntegration() {
     console.log('Received events:', liveEvents.map(e => e.event));
     const approvalReqEvent = liveEvents.find(e => e.event === 'approval.required');
     assert.ok(approvalReqEvent, 'Should have received approval.required via replay');
-    
+    assert.ok(!liveEvents.some(e => e.event === 'tool.started'), 'Protected adapter must not start before approval.');
+
+    const liveRunBeforeDecisionRes = await fetch(`${BASE_URL}/api/runs/${liveRun.id}`, { headers: INT_HEADERS });
+    assert.ok(liveRunBeforeDecisionRes.ok, 'Owner/workspace should read the persisted pending run.');
+    const liveRunBeforeDecision = await liveRunBeforeDecisionRes.json();
+    assert.strictEqual(liveRunBeforeDecision.state, 'WAITING_FOR_APPROVAL');
+    assert.strictEqual(liveRunBeforeDecision.workspaceId, derivePersonalWorkspaceId('integration-test-user'), 'Persisted run mapping must preserve the server-authorized workspace.');
+
+    const siblingBeforeDecisionRes = await fetch(`${BASE_URL}/api/runs/${siblingRun.id}`, { headers: INT_HEADERS });
+    assert.ok(siblingBeforeDecisionRes.ok, 'Owner/workspace should read its sibling pending run.');
+    const siblingBeforeDecision = await siblingBeforeDecisionRes.json();
+    assert.strictEqual(siblingBeforeDecision.state, 'WAITING_FOR_APPROVAL');
+    assert.ok(siblingBeforeDecision.pendingApproval?.id, 'Sibling run should have its own pending approval.');
+
+    const wrongRunApprovalRes = await fetch(`${BASE_URL}/api/runs/${siblingRun.id}/approve`, {
+      method: 'POST',
+      headers: INT_HEADERS,
+      body: JSON.stringify({ requestId: approvalReqEvent.data.id, decision: 'ALLOW_ONCE' })
+    });
+    assert.strictEqual(wrongRunApprovalRes.status, 404, 'Approval request must not be applied through another run ID.');
+
+    const foreignWorkspaceHeaders = {
+      ...INT_HEADERS,
+      'x-test-user-id': 'integration-foreign-user',
+      'x-test-session-id': 'integration-foreign-session',
+      'x-workspace-id': 'integration-foreign-workspace'
+    };
+    const foreignSseRes = await fetch(`${BASE_URL}/api/runs/${liveRun.id}/events`, { headers: foreignWorkspaceHeaders });
+    assert.strictEqual(foreignSseRes.status, 404, 'Foreign workspace must not replay the run event stream.');
+    const foreignApprovalRes = await fetch(`${BASE_URL}/api/runs/${liveRun.id}/approve`, {
+      method: 'POST',
+      headers: foreignWorkspaceHeaders,
+      body: JSON.stringify({ requestId: approvalReqEvent.data.id, decision: 'ALLOW_ONCE' })
+    });
+    assert.strictEqual(foreignApprovalRes.status, 404, 'Foreign workspace must not approve the run.');
+
+    const rejectedSiblingRes = await fetch(`${BASE_URL}/api/runs/${siblingRun.id}/approve`, {
+      method: 'POST',
+      headers: INT_HEADERS,
+      body: JSON.stringify({ requestId: siblingBeforeDecision.pendingApproval.id, decision: 'REJECT' })
+    });
+    assert.ok(rejectedSiblingRes.ok, `Sibling rejection failed: ${await rejectedSiblingRes.text()}`);
+    await sleep(1500);
+    const rejectedSiblingEvents = await collectSseEvents(siblingRun.id, INT_HEADERS, 30, 3000);
+    assert.ok(rejectedSiblingEvents.some(e => e.event === 'run.failed'), 'Rejected sibling should reach a terminal failed state.');
+    assert.ok(!rejectedSiblingEvents.some(e => e.event === 'tool.started'), 'Rejected approval must never start its protected adapter.');
+
     console.log('Sending approval to trigger live continuation...');
     const resApprove = await fetch(`${BASE_URL}/api/runs/${liveRun.id}/approve`, {
       method: 'POST',
@@ -272,7 +360,60 @@ async function runIntegration() {
     
     assert.ok(liveToolStarted, 'Should receive tool.started live after replay');
     assert.ok(liveRunCompleted, 'Should receive run.completed or run.failed live after replay');
-    console.log('TEST 5a PASS: Replay -> Live continuation verified deterministically');
+    console.log('TEST 5a PASS: Replay -> Live continuation and workspace-scoped approval verified deterministically');
+
+    // A persisted revocation blocks an already-pending approval and its asynchronous continuation.
+    const revokedUserHeaders = {
+      ...INT_HEADERS,
+      'x-test-user-id': 'integration-revoked-user',
+      'x-test-session-id': 'integration-revoked-session'
+    };
+    const revokedRunRes = await fetch(`${BASE_URL}/api/runs`, {
+      method: 'POST',
+      headers: revokedUserHeaders,
+      body: JSON.stringify({
+        intent: 'TOOL_ACTION',
+        prompt: 'run command: printf revoked-authority-must-not-run',
+        workspaceId: 'integration-body-spoof-workspace',
+        systemPrompt: 'You are a test agent',
+        modelPolicy: { model: 'mock-deterministic' }
+      })
+    });
+    assert.strictEqual(revokedRunRes.status, 201);
+    const revokedRun = await revokedRunRes.json();
+    assert.strictEqual(revokedRun.workspaceId, derivePersonalWorkspaceId('integration-revoked-user'));
+    await sleep(2000);
+    const revokedPendingRunRes = await fetch(`${BASE_URL}/api/runs/${revokedRun.id}`, { headers: revokedUserHeaders });
+    assert.ok(revokedPendingRunRes.ok);
+    const revokedPendingRun = await revokedPendingRunRes.json();
+    assert.strictEqual(revokedPendingRun.state, 'WAITING_FOR_APPROVAL');
+    assert.ok(revokedPendingRun.pendingApproval?.id);
+    assert.strictEqual(await workspaceAuthority.revokeWorkspace('integration-revoked-user'), true);
+
+    const revokedNewRunRes = await fetch(`${BASE_URL}/api/runs`, {
+      method: 'POST',
+      headers: revokedUserHeaders,
+      body: JSON.stringify({
+        intent: 'TOOL_ACTION',
+        prompt: 'run command: printf revoked-new-run-must-not-execute',
+        systemPrompt: 'You are a test agent',
+        modelPolicy: { model: 'mock-deterministic' }
+      })
+    });
+    assert.strictEqual(revokedNewRunRes.status, 401, 'A revoked principal must not regain authority by starting a new run.');
+
+    const revokedDecisionRes = await fetch(`${BASE_URL}/api/runs/${revokedRun.id}/approve`, {
+      method: 'POST',
+      headers: revokedUserHeaders,
+      body: JSON.stringify({ requestId: revokedPendingRun.pendingApproval.id, decision: 'ALLOW_ONCE' })
+    });
+    assert.strictEqual(revokedDecisionRes.status, 401, 'Revoked workspace authority must block approval resolution.');
+    await sleep(1000);
+    const persistedRevokedRun = await db('runs').where({ id: revokedRun.id }).first();
+    assert.equal(persistedRevokedRun?.state, 'WAITING_FOR_APPROVAL', 'Revoked approval must not resume the run.');
+    const revokedToolStarted = await db('run_events').where({ run_id: revokedRun.id, type: 'tool.started' }).first();
+    assert.equal(revokedToolStarted, undefined, 'Revoked approval must never dispatch its protected adapter.');
+    console.log('TEST 5a.1 PASS: revoked workspace authority blocks pending approval and protected execution.');
 
     // -----------------------------------------------------------------------
     // TEST 5b: Replay/Live Race Test (Barrier/Hook)
@@ -435,16 +576,16 @@ async function runIntegration() {
     // Cleanup
     // -----------------------------------------------------------------------
     console.log('Cleaning up...');
-    apiServer2.kill();
-    mcpServer.kill();
+    killProcessTree(apiServer2);
+    killProcessTree(mcpServer);
     console.log('Integration tests PASS.');
-    apiServer.kill();
-    mcpServer.kill();
+    killProcessTree(apiServer);
+    killProcessTree(mcpServer);
     process.exit(0);
   } catch (err) {
     console.error('Integration tests FAILED:', err);
-    apiServer.kill();
-    mcpServer.kill();
+    killProcessTree(apiServer);
+    killProcessTree(mcpServer);
     process.exit(1);
   }
 }

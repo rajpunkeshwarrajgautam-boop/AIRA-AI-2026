@@ -29,7 +29,7 @@ import { ToolRegistry } from '../packages/tool-runtime/src/index.js';
 import { ApprovalKernel } from '../packages/approvals/src/index.js';
 import { BrainV2KnowledgeEngine } from '../packages/knowledge/src/index.js';
 import { InMemoryKnowledgeRepository } from '../packages/knowledge/src/repositories.js';
-import { Run, StreamingEvent, ExecutionPrincipal } from '../packages/contracts/src/index.js';
+import { ApprovalRequest, Run, StreamingEvent, ExecutionPrincipal } from '../packages/contracts/src/index.js';
 import { RunRepository, InMemoryRunRepository } from '../packages/agent-runtime/src/repositories.js';
 
 // Spied repository to observe exact flush count and writes
@@ -149,13 +149,51 @@ describe('P1.6.6 GUEST-MODE DATABASE POOL HARDENING SUITE', () => {
 
     process.env.AIRA_ALLOW_MOCK = 'true';
     (router as any).adapters.set('mock', slowStreamingAdapter);
+
+    const requests = new Map<string, ApprovalRequest>();
+    let resolutionCalls = 0;
+    let clearSessionCalls = 0;
+    const sessionGrants = new Set<string>();
+    const approvalKernel = new ApprovalKernel(
+      {
+        async saveRequest(request) { requests.set(request.id, request); },
+        async getRequest(id) { return requests.get(id); },
+        async getPendingForRun(runId) {
+          return [...requests.values()].filter((request) => request.runId === runId && !request.decision);
+        },
+        async resolveRequest(id, decision, resolvedBy) {
+          resolutionCalls++;
+          const request = requests.get(id);
+          if (request) {
+            request.decision = decision;
+            request.resolvedBy = resolvedBy;
+            request.resolvedAt = Date.now();
+          }
+        }
+      } as any,
+      {
+        async grantSession() {},
+        async grantAlways() {},
+        async hasSessionGrant(runId) { return sessionGrants.has(runId); },
+        async hasAlwaysGrant() { return false; },
+        async clearSession(runId) {
+          clearSessionCalls++;
+          sessionGrants.delete(runId);
+        }
+      } as any
+    );
     const runtime = new AgentRuntime(
       router,
       new ToolRegistry(process.cwd()),
-      new ApprovalKernel(),
+      approvalKernel,
       new BrainV2KnowledgeEngine(new InMemoryKnowledgeRepository()),
       spiedRepo
     );
+    let protectedToolDispatches = 0;
+    (runtime.getToolGateway() as any).execute = async () => {
+      protectedToolDispatches++;
+      return { isError: false, output: { executed: true } };
+    };
 
     const principal: ExecutionPrincipal = {
       userId: 'user_guest_test_cancel',
@@ -169,9 +207,29 @@ describe('P1.6.6 GUEST-MODE DATABASE POOL HARDENING SUITE', () => {
       modelPolicy: { model: 'mock-deterministic' }
     }, principal);
 
+    const pendingProtectedRequest: ApprovalRequest = {
+      id: `req_cancel_guard_${run.id}`,
+      runId: run.id,
+      toolCall: {
+        id: `call_cancel_guard_${run.id}`,
+        toolId: 'tool_protected_action',
+        name: 'protected_action',
+        arguments: { target: 'must-not-run-after-cancel' },
+        timestamp: Date.now()
+      },
+      risk: 'critical',
+      title: 'Protected action',
+      reason: 'Cancellation regression fixture',
+      sanitizedPreview: {},
+      requestedAt: Date.now(),
+      workspaceId: 'workspace_guest_cancel'
+    };
+    requests.set(pendingProtectedRequest.id, pendingProtectedRequest);
+    sessionGrants.add(run.id);
+
     const startP = runtime.startRun(run.id);
     await new Promise(r => setTimeout(r, 30));
-    await runtime.cancelRun(run.id);
+    assert.equal(await runtime.cancelRun(run.id), true);
 
     try {
       await startP;
@@ -181,7 +239,26 @@ describe('P1.6.6 GUEST-MODE DATABASE POOL HARDENING SUITE', () => {
 
     const cancelledRun = await runtime.getRun(run.id);
     assert.equal(cancelledRun?.state, 'CANCELLED', 'Cancelled run must persist CANCELLED state');
+    assert.equal(sessionGrants.has(run.id), false, 'Cancellation must revoke session-scoped grants');
+    assert.equal(clearSessionCalls, 1, 'Cancellation must perform grant revocation exactly once');
+    assert.equal(await runtime.cancelRun(run.id), false, 'Repeated cancellation is an idempotent no-op');
+    assert.equal(clearSessionCalls, 1, 'Repeated cancellation must not repeat cleanup');
+    assert.equal(
+      await runtime.submitApproval(pendingProtectedRequest.id, 'ALLOW_SESSION', principal, run.id),
+      false,
+      'A pending approval must not resume a cancelled run'
+    );
+    assert.equal(resolutionCalls, 0, 'A cancelled approval must not be committed');
+    assert.equal(protectedToolDispatches, 0, 'Protected execution must not resume after cancellation');
     assert.equal(spiedRepo.activeConnections, 0, 'Must have zero connection leaks on cancel');
+  });
+
+  it('Cancellation cleanup fails closed when SessionGrantRepository is missing', async () => {
+    const kernel = new ApprovalKernel({} as any, undefined as any);
+    await assert.rejects(
+      kernel.clearSessionGrants('run_missing_grant_repo'),
+      /ApprovalKernel requires a SessionGrantRepository to revoke session grants/
+    );
   });
 
   it('GATE 12: Provider error persists cleanly without connection leak', async () => {

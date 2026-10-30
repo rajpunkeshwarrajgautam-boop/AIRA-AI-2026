@@ -4,6 +4,7 @@ import {
   WorkflowStepDefinition,
   WorkflowStepExecution,
   WorkflowStepState,
+  ApprovalDecision,
   validateWorkflowDag,
   ExecutionPrincipal,
   Run,
@@ -17,6 +18,8 @@ import { ModelRouter } from '../../model-router/src/index.js';
 import { ResearchService } from './research.js';
 
 export class WorkflowEngine {
+  private approvalResumptionDispatcher?: (runId: string) => Promise<void>;
+
   constructor(
     private workflowRepo: WorkflowRepository,
     private runRepo: RunRepository,
@@ -29,6 +32,10 @@ export class WorkflowEngine {
     private researchService?: ResearchService
   ) {}
 
+  public setApprovalResumptionDispatcher(dispatcher: (runId: string) => Promise<void>): void {
+    this.approvalResumptionDispatcher = dispatcher;
+  }
+
   /**
    * Create a new workflow run and link it to an Aira Run
    */
@@ -40,6 +47,26 @@ export class WorkflowEngine {
     const dagResult = validateWorkflowDag(definition);
     if (!dagResult.valid) {
       throw new Error(`Invalid workflow DAG: ${dagResult.error}`);
+    }
+
+    const hasApprovalBoundary = definition.steps.some((step) =>
+      step.approvalRequired || step.sideEffectLevel === 'DESTRUCTIVE'
+    );
+    if (hasApprovalBoundary) {
+      const persistedParentRun = await this.runRepo.getRun(run.id);
+      if (
+        !persistedParentRun ||
+        run.principalId !== principal.userId ||
+        persistedParentRun.principalId !== principal.userId ||
+        (definition.principalId && definition.principalId !== principal.userId) ||
+        !principal.workspaceId ||
+        !run.workspaceId ||
+        !persistedParentRun.workspaceId ||
+        run.workspaceId !== persistedParentRun.workspaceId ||
+        principal.workspaceId !== persistedParentRun.workspaceId
+      ) {
+        throw new Error('Workflow approval requires an authoritative parent-run workspace matching the workflow owner.');
+      }
     }
 
     await this.workflowRepo.saveWorkflowDefinition(definition);
@@ -308,6 +335,10 @@ export class WorkflowEngine {
       );
 
       if (!isApproved) {
+        const parentRun = await this.runRepo.getRun(runId);
+        if (!parentRun || parentRun.principalId !== workflowRun.principalId || !parentRun.workspaceId) {
+          throw new Error('Workflow approval requires an authoritative parent-run workspace matching the workflow owner.');
+        }
         await this.withRunLock(workflowRunId, async () => {
           const fresh = (await this.workflowRepo.getWorkflowRun(workflowRunId))!;
           fresh.state = 'WAITING_FOR_APPROVAL';
@@ -329,7 +360,8 @@ export class WorkflowEngine {
             timestamp: Date.now()
           },
           stepDef.sideEffectLevel,
-          `Workflow step "${stepDef.name}" requires user approval before execution.`
+          `Workflow step "${stepDef.name}" requires user approval before execution.`,
+          parentRun.workspaceId
         );
 
         // Update run pending approval
@@ -580,8 +612,9 @@ Current UTC time: ${now.toISOString()}`;
   public async resolveStepApproval(
     workflowRunId: string,
     stepId: string,
-    decision: 'APPROVED' | 'REJECTED',
-    principal: ExecutionPrincipal
+    decision: 'APPROVED' | 'REJECTED' | ApprovalDecision,
+    principal: ExecutionPrincipal,
+    approvalRequestId?: string
   ): Promise<boolean> {
     const workflowRun = await this.workflowRepo.getWorkflowRun(workflowRunId);
     if (!workflowRun) return false;
@@ -596,16 +629,36 @@ Current UTC time: ${now.toISOString()}`;
     }
 
     const airaRun = await this.runRepo.getRun(workflowRun.runId);
-    if (airaRun && airaRun.pendingApproval) {
-      const decType = decision === 'APPROVED' ? 'ALLOW_SESSION' : 'REJECT';
-      await this.approvalKernel.decide(
-        airaRun.pendingApproval.id,
-        decType,
-        principal.userId
-      );
+    const requestId = approvalRequestId || airaRun?.pendingApproval?.id;
+    if (!requestId || airaRun?.pendingApproval?.id !== requestId) return false;
+
+    const pendingRequest = await this.approvalKernel.getPendingRequest(requestId);
+    if (
+      !pendingRequest ||
+      pendingRequest.runId !== workflowRun.runId ||
+      pendingRequest.toolCall.id !== `call_step_${stepId}`
+    ) {
+      return false;
     }
 
-    if (decision === 'REJECTED') {
+    // Keep the legacy workflow API compatible: APPROVED has historically meant
+    // a session grant. Explicit ApprovalDecision values retain their own scope.
+    const approvalDecision: ApprovalDecision = decision === 'APPROVED'
+      ? 'ALLOW_SESSION'
+      : decision === 'REJECTED'
+        ? 'REJECT'
+        : decision;
+    const resolution = await this.approvalKernel.resolveWorkflowDecision(requestId, approvalDecision, principal.userId, workflowRun.id, stepId);
+    if (!resolution.applied) return true; // An identical retry never schedules another dispatch.
+
+    // Production AgentRuntime installs this handler. PostgreSQL committed the
+    // resumption intent with the decision; never mutate workflow state first.
+    if (this.approvalResumptionDispatcher && this.approvalKernel.supportsApprovalResumptionOutbox()) {
+      await this.approvalResumptionDispatcher(workflowRun.runId);
+      return true;
+    }
+
+    if (approvalDecision === 'REJECT') {
       workflowRun.state = 'FAILED';
       workflowRun.error = `Approval rejected for step "${stepId}".`;
       workflowRun.stepStates[stepId] = 'FAILED';

@@ -16,6 +16,7 @@ import crypto from 'node:crypto';
 import type { Request, Response } from 'express';
 import { db } from '../../../../packages/db/src/index.js';
 import { commercialBillingService } from '../billing/commercial-billing-service.js';
+import { resolveDeploymentEnvironment } from '../../../../packages/contracts/src/deployment-environment.js';
 
 export interface OAuthUserProfile {
   provider: 'google' | 'github';
@@ -34,6 +35,27 @@ export interface DirectOAuthFlowState {
   timestamp: number;
   action: 'signin' | 'link';
   targetUserId?: string; // Present only if action === 'link'
+  v?: 2;
+  iss?: 'aira-direct-oauth-flow';
+  aud?: 'aira-oauth-callback';
+  env?: import('../../../../packages/contracts/src/deployment-environment.js').DeploymentEnvironment;
+  iat?: number;
+  exp?: number;
+}
+
+const DIRECT_OAUTH_FLOW_TTL_SECONDS = 600;
+const DIRECT_OAUTH_FLOW_ISSUER = 'aira-direct-oauth-flow';
+const DIRECT_OAUTH_FLOW_AUDIENCE = 'aira-oauth-callback';
+const DIRECT_OAUTH_JWT_ISSUER = 'aira-direct-oauth';
+const DIRECT_OAUTH_JWT_AUDIENCE = 'aira-bff-session';
+const DIRECT_OAUTH_JWT_TTL_SECONDS = 60 * 60 * 24 * 30;
+
+function getSessionSecret(): string {
+  const secret = process.env.AIRA_SESSION_SECRET?.trim();
+  if (!secret || secret.length < 32) {
+    throw new Error('AIRA_SESSION_SECRET must be configured with at least 32 characters.');
+  }
+  return secret;
 }
 
 export interface LinkedProviderSummary {
@@ -48,11 +70,6 @@ const FLOW_COOKIE_NAME_DEV = 'aira_oauth_state';
 const FLOW_COOKIE_TTL_SECONDS = 600; // 10 minutes
 
 export class DirectOAuthService {
-  private sessionSecret: string;
-
-  constructor() {
-    this.sessionSecret = process.env.AIRA_SESSION_SECRET || 'aira_production_secure_session_secret_2026_at_least_32_chars';
-  }
 
   // ---------------------------------------------------------------------------
   // Provider Configuration
@@ -99,41 +116,62 @@ export class DirectOAuthService {
     return this.setFlowStateCookie(res, state, isProd);
   }
 
-  public readFlowCookie(req: Request): DirectOAuthFlowState | null {
+  private flowCookieValue(req: Request): string | null {
     const cookieHeader = req.headers.cookie || '';
-    let raw = '';
-    const cookies = cookieHeader.split(';').map(c => c.trim());
-    for (const c of cookies) {
-      if (c.startsWith(`${FLOW_COOKIE_NAME_PROD}=`)) {
-        raw = c.slice(`${FLOW_COOKIE_NAME_PROD}=`.length);
-        break;
-      }
-      if (c.startsWith(`${FLOW_COOKIE_NAME_DEV}=`)) {
-        raw = c.slice(`${FLOW_COOKIE_NAME_DEV}=`.length);
-        break;
+    for (const part of cookieHeader.split(';').map(value => value.trim())) {
+      for (const name of [FLOW_COOKIE_NAME_PROD, FLOW_COOKIE_NAME_DEV]) {
+        if (part.startsWith(`${name}=`)) return part.slice(name.length + 1);
       }
     }
-    if (!raw) return null;
+    return null;
+  }
+
+  public readFlowCookie(req: Request): DirectOAuthFlowState | null {
+    const raw = this.flowCookieValue(req);
+    if (!raw || raw.length > 8192) return null;
     const parts = raw.split('.');
     if (parts.length !== 2) return null;
     try {
       const payloadBuf = Buffer.from(parts[0], 'base64url');
-      const expectedSig = crypto.createHmac('sha256', this.sessionSecret).update(payloadBuf).digest('base64url');
-      if (parts[1].length !== expectedSig.length || !crypto.timingSafeEqual(Buffer.from(parts[1]), Buffer.from(expectedSig))) {
-        return null;
-      }
-      return JSON.parse(payloadBuf.toString('utf8')) as DirectOAuthFlowState;
+      const expectedSig = crypto.createHmac('sha256', getSessionSecret()).update(payloadBuf).digest();
+      const actualSig = Buffer.from(parts[1], 'base64url');
+      if (actualSig.length !== expectedSig.length || !crypto.timingSafeEqual(actualSig, expectedSig)) return null;
+      const state = JSON.parse(payloadBuf.toString('utf8')) as DirectOAuthFlowState;
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      if (
+        state.v !== 2 || state.iss !== DIRECT_OAUTH_FLOW_ISSUER ||
+        state.aud !== DIRECT_OAUTH_FLOW_AUDIENCE ||
+        state.env !== resolveDeploymentEnvironment() ||
+        !Number.isInteger(state.iat) || !Number.isInteger(state.exp) ||
+        state.iat! > nowSeconds + 60 || state.exp! <= nowSeconds ||
+        state.exp! - state.iat! > DIRECT_OAUTH_FLOW_TTL_SECONDS ||
+        !Number.isFinite(state.timestamp) ||
+        state.timestamp > Date.now() + 60_000 ||
+        Date.now() - state.timestamp > DIRECT_OAUTH_FLOW_TTL_SECONDS * 1000 ||
+        !state.flowId || !['google', 'github'].includes(state.provider) ||
+        !['signin', 'link'].includes(state.action)
+      ) return null;
+      return state;
     } catch {
       return null;
     }
   }
 
   public setFlowStateCookie(res: Response, state: DirectOAuthFlowState, isProd: boolean): void {
-    const json = JSON.stringify(state);
-    const signature = crypto.createHmac('sha256', this.sessionSecret).update(json).digest('base64url');
-    const cookieValue = `${Buffer.from(json).toString('base64url')}.${signature}`;
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const boundState: DirectOAuthFlowState = {
+      ...state,
+      v: 2,
+      iss: DIRECT_OAUTH_FLOW_ISSUER,
+      aud: DIRECT_OAUTH_FLOW_AUDIENCE,
+      env: resolveDeploymentEnvironment(),
+      iat: nowSeconds,
+      exp: nowSeconds + DIRECT_OAUTH_FLOW_TTL_SECONDS
+    };
+    const payload = Buffer.from(JSON.stringify(boundState));
+    const signature = crypto.createHmac('sha256', getSessionSecret()).update(payload).digest('base64url');
+    const cookieValue = `${payload.toString('base64url')}.${signature}`;
     const cookieName = isProd ? FLOW_COOKIE_NAME_PROD : FLOW_COOKIE_NAME_DEV;
-
     const cookieParts = [
       `${cookieName}=${cookieValue}`,
       'Path=/',
@@ -141,9 +179,7 @@ export class DirectOAuthService {
       'SameSite=Lax',
       `Max-Age=${FLOW_COOKIE_TTL_SECONDS}`
     ];
-    if (isProd) {
-      cookieParts.push('Secure');
-    }
+    if (isProd) cookieParts.push('Secure');
 
     if (typeof (res as any).append === 'function') {
       (res as any).append('Set-Cookie', cookieParts.join('; '));
@@ -156,45 +192,9 @@ export class DirectOAuthService {
   }
 
   public parseAndClearFlowState(req: Request, res: Response): DirectOAuthFlowState | null {
-    const cookieHeader = req.headers.cookie || '';
-    let raw = '';
-    const cookies = cookieHeader.split(';').map(c => c.trim());
-    for (const c of cookies) {
-      if (c.startsWith(`${FLOW_COOKIE_NAME_PROD}=`)) {
-        raw = c.slice(`${FLOW_COOKIE_NAME_PROD}=`.length);
-        break;
-      }
-      if (c.startsWith(`${FLOW_COOKIE_NAME_DEV}=`)) {
-        raw = c.slice(`${FLOW_COOKIE_NAME_DEV}=`.length);
-        break;
-      }
-    }
-
-    // Anti-replay: Immediately clear the flow cookie
     const isProd = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
     this.clearFlowCookie(res, isProd);
-
-    if (!raw) return null;
-    const parts = raw.split('.');
-    if (parts.length !== 2) return null;
-
-    try {
-      const payloadBuf = Buffer.from(parts[0], 'base64url');
-      const expectedSig = crypto.createHmac('sha256', this.sessionSecret).update(payloadBuf).digest('base64url');
-      if (parts[1].length !== expectedSig.length || !crypto.timingSafeEqual(Buffer.from(parts[1]), Buffer.from(expectedSig))) {
-        console.warn('[DirectOAuth] Flow state signature mismatch');
-        return null;
-      }
-
-      const state = JSON.parse(payloadBuf.toString('utf8')) as DirectOAuthFlowState;
-      if (Date.now() - state.timestamp > FLOW_COOKIE_TTL_SECONDS * 1000) {
-        console.warn('[DirectOAuth] Flow state expired');
-        return null;
-      }
-      return state;
-    } catch {
-      return null;
-    }
+    return this.readFlowCookie(req);
   }
 
   public clearFlowCookie(res: Response, isProd: boolean): void {
@@ -707,11 +707,14 @@ export class DirectOAuthService {
 export const directOAuthService = new DirectOAuthService();
 
 export interface FirstPartyJwtPayload {
+  v: 2;
   sub: string;
   sid: string;
   email?: string;
   name?: string;
-  iss: string;
+  iss: typeof DIRECT_OAUTH_JWT_ISSUER;
+  aud: typeof DIRECT_OAUTH_JWT_AUDIENCE;
+  env: import('../../../../packages/contracts/src/deployment-environment.js').DeploymentEnvironment;
   iat: number;
   exp: number;
   provider: 'direct_oauth';
@@ -722,49 +725,75 @@ export function signFirstPartyJwt(
   sessionId: string,
   email?: string,
   name?: string,
-  ttlSeconds = 60 * 60 * 24 * 30
+  ttlSeconds = DIRECT_OAUTH_JWT_TTL_SECONDS
 ): { token: string; expiresAt: number } {
-  const secret = process.env.AIRA_SESSION_SECRET || 'aira_production_secure_session_secret_2026_at_least_32_chars';
   const now = Math.floor(Date.now() / 1000);
   const exp = now + ttlSeconds;
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
   const payload = Buffer.from(JSON.stringify({
+    v: 2,
     sub: userId,
     sid: sessionId,
     email: email || undefined,
     name: name || undefined,
-    iss: 'aira-direct-oauth',
+    iss: DIRECT_OAUTH_JWT_ISSUER,
+    aud: DIRECT_OAUTH_JWT_AUDIENCE,
+    env: resolveDeploymentEnvironment(),
     iat: now,
     exp,
     provider: 'direct_oauth'
   })).toString('base64url');
-  const signature = crypto.createHmac('sha256', secret).update(`${header}.${payload}`).digest('base64url');
-  return {
-    token: `${header}.${payload}.${signature}`,
-    expiresAt: exp * 1000
-  };
+  const signature = crypto.createHmac('sha256', getSessionSecret()).update(`${header}.${payload}`).digest('base64url');
+  return { token: `${header}.${payload}.${signature}`, expiresAt: exp * 1000 };
 }
 
-export function verifyFirstPartyJwt(token: string): { userId: string; sessionId: string; email?: string; name?: string } {
-  const secret = process.env.AIRA_SESSION_SECRET || 'aira_production_secure_session_secret_2026_at_least_32_chars';
+export function verifyFirstPartyJwt(
+  token: string,
+  options: { allowLegacyProductionSession?: boolean } = {}
+): { userId: string; sessionId: string; email?: string; name?: string; legacyV1?: true } {
   const parts = token.split('.');
-  if (parts.length !== 3) {
-    throw new Error('INVALID_JWT_STRUCTURE');
-  }
+  if (parts.length !== 3 || parts.some(part => !part)) throw new Error('INVALID_JWT_STRUCTURE');
   const [headerB64, payloadB64, sigB64] = parts;
-  const expectedSig = crypto.createHmac('sha256', secret).update(`${headerB64}.${payloadB64}`).digest('base64url');
-  if (sigB64.length !== expectedSig.length || !crypto.timingSafeEqual(Buffer.from(sigB64), Buffer.from(expectedSig))) {
-    throw new Error('INVALID_JWT_SIGNATURE');
+  try {
+    const header = JSON.parse(Buffer.from(headerB64, 'base64url').toString('utf8')) as Record<string, unknown>;
+    if (header.alg !== 'HS256' || header.typ !== 'JWT') throw new Error('INVALID_JWT_HEADER');
+    const expectedSig = crypto.createHmac('sha256', getSessionSecret()).update(`${headerB64}.${payloadB64}`).digest();
+    const actualSig = Buffer.from(sigB64, 'base64url');
+    if (actualSig.length !== expectedSig.length || !crypto.timingSafeEqual(actualSig, expectedSig)) {
+      throw new Error('INVALID_JWT_SIGNATURE');
+    }
+    const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8')) as Record<string, unknown>;
+    const now = Math.floor(Date.now() / 1000);
+    if (!Number.isInteger(payload.iat) || !Number.isInteger(payload.exp) || Number(payload.iat) > now + 60) {
+      throw new Error('INVALID_JWT_CLAIMS');
+    }
+    if (Number(payload.exp) <= now) throw new Error('JWT_EXPIRED');
+    if (Number(payload.exp) - Number(payload.iat) > DIRECT_OAUTH_JWT_TTL_SECONDS) throw new Error('INVALID_JWT_CLAIMS');
+    if (typeof payload.sub !== 'string' || !payload.sub || typeof payload.sid !== 'string' || !payload.sid) {
+      throw new Error('INVALID_JWT_CLAIMS');
+    }
+
+    const environment = resolveDeploymentEnvironment();
+    const v2Valid = payload.v === 2 &&
+      payload.iss === DIRECT_OAUTH_JWT_ISSUER &&
+      payload.aud === DIRECT_OAUTH_JWT_AUDIENCE &&
+      payload.env === environment &&
+      payload.provider === 'direct_oauth';
+    const legacyAllowed = options.allowLegacyProductionSession === true && environment === 'production' &&
+      payload.v === undefined &&
+      payload.iss === DIRECT_OAUTH_JWT_ISSUER &&
+      payload.provider === 'direct_oauth';
+    if (!v2Valid && !legacyAllowed) throw new Error('INVALID_JWT_CLAIMS');
+
+    return {
+      userId: payload.sub,
+      sessionId: payload.sid,
+      email: typeof payload.email === 'string' ? payload.email : undefined,
+      name: typeof payload.name === 'string' ? payload.name : undefined,
+      ...(legacyAllowed ? { legacyV1: true as const } : {})
+    };
+  } catch (error) {
+    if (error instanceof Error && /^(INVALID_JWT_|JWT_EXPIRED)/.test(error.message)) throw error;
+    throw new Error('INVALID_JWT_PAYLOAD');
   }
-  const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8')) as FirstPartyJwtPayload;
-  const now = Math.floor(Date.now() / 1000);
-  if (payload.exp && payload.exp <= now) {
-    throw new Error('JWT_EXPIRED');
-  }
-  return {
-    userId: payload.sub,
-    sessionId: payload.sid,
-    email: payload.email,
-    name: payload.name
-  };
 }

@@ -16,24 +16,17 @@
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, sign } from 'node:crypto';
 import test from 'node:test';
-import type { Request, Response } from 'express';
 import {
   handleBffOAuthExchange,
   handleBffOAuthGoogleStart,
   handleBffOAuthGoogleCallback,
   setBffOAuthFlowCookie,
-  parseBffOAuthFlowCookie,
-  clearBffOAuthFlowCookie,
   handleBffSession,
-  readBffSessionFromCookie,
-  bffSessionStore,
-  BffServerSession,
-  generateSessionId,
-  generateCsrfToken,
   BFF_COOKIE_NAME_DEV,
   BFF_FLOW_COOKIE_NAME_DEV
 } from '../apps/api/src/auth/bff-session.js';
 import { clearJwksCacheForTesting } from '../apps/api/src/auth/neon-auth-principal.js';
+import { directOAuthService } from '../apps/api/src/auth/direct-oauth.js';
 import { NeonAuthClient } from '../src/lib/neonAuth.js';
 
 // Setup mock EdDSA signing keys for testing JWT cryptographic verification
@@ -64,11 +57,21 @@ function makeMockEdDsaJwt(sub: string, email: string, name: string, expSeconds =
 
 test('Google OAuth Login Loop Remediation & BFF Session Bridge Suite', async (t) => {
   const originalFetch = globalThis.fetch;
+  const originalSessionSecret = process.env.AIRA_SESSION_SECRET;
+  const originalResolveOrCreateUser = directOAuthService.resolveOrCreateUser.bind(directOAuthService);
+  (directOAuthService as any).resolveOrCreateUser = async (profile: any) => ({
+    user: { id: `synthetic_${profile.providerAccountId}`, email: profile.email, name: profile.name, image: profile.image },
+    isNewUser: false
+  });
+  process.env.AIRA_SESSION_SECRET = 'synthetic-session-signing-key-for-oauth-tests-32';
   process.env.NEON_AUTH_BASE_URL = TEST_ISSUER;
   process.env.NEON_AUTH_JWKS_URL = `${TEST_ISSUER}/.well-known/jwks.json`;
 
   t.after(() => {
     globalThis.fetch = originalFetch;
+    (directOAuthService as any).resolveOrCreateUser = originalResolveOrCreateUser;
+    if (originalSessionSecret === undefined) delete process.env.AIRA_SESSION_SECRET;
+    else process.env.AIRA_SESSION_SECRET = originalSessionSecret;
     clearJwksCacheForTesting();
   });
 
@@ -195,7 +198,6 @@ test('Google OAuth Login Loop Remediation & BFF Session Bridge Suite', async (t)
 
   await t.test('2. handleBffOAuthExchange rejects empty or invalid sessionToken with HTTP 400', async () => {
     let statusCode = 0;
-    let responseBody: any = null;
 
     const mockReq: any = {
       method: 'POST',
@@ -208,7 +210,7 @@ test('Google OAuth Login Loop Remediation & BFF Session Bridge Suite', async (t)
     };
     const mockRes: any = {
       status(code: number) { statusCode = code; return this; },
-      json(data: any) { responseBody = data; return this; },
+      json() { return this; },
       setHeader() {}
     };
 
@@ -241,7 +243,6 @@ test('Google OAuth Login Loop Remediation & BFF Session Bridge Suite', async (t)
   });
 
   let issuedCookieHeader = '';
-  let returnedUser: any = null;
   let returnedCsrf: string = '';
 
   await t.test('4. handleBffOAuthExchange successfully bridges valid Google OAuth session into first-party BFF cookie', async () => {
@@ -284,7 +285,6 @@ test('Google OAuth Login Loop Remediation & BFF Session Bridge Suite', async (t)
     assert.ok(issuedCookieHeader.includes('HttpOnly'), 'Cookie must be HttpOnly');
     assert.ok(issuedCookieHeader.includes('SameSite=Lax'), 'Cookie must be SameSite=Lax');
 
-    returnedUser = responseBody.user;
     returnedCsrf = responseBody.csrfToken;
   });
 
@@ -449,7 +449,7 @@ test('Google OAuth Login Loop Remediation & BFF Session Bridge Suite', async (t)
     assert.ok(responseBody?.url?.includes('accounts.google.com'));
     assert.equal(responseBody?.redirect, true);
 
-    const flowCookie = setCookieHeaders.find(h => h.includes(BFF_FLOW_COOKIE_NAME_DEV));
+    const flowCookie = setCookieHeaders.find(h => h.includes('aira_oauth_state='));
     assert.ok(flowCookie, 'Must set flow cookie');
     assert.ok(flowCookie.includes('HttpOnly'), 'Flow cookie must be HttpOnly');
     assert.ok(flowCookie.includes('SameSite=Lax'), 'Flow cookie must be SameSite=Lax');

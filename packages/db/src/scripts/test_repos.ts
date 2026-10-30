@@ -1,8 +1,18 @@
+import { execFileSync } from 'node:child_process';
 import { db, runMigrations, closeDb } from '../index.js';
 import { PostgresAgentRepository, PostgresRunRepository } from '../../../agent-runtime/src/repositories.js';
 import { PostgresAutomationRepository } from '../../../automation/src/repositories.js';
 
 async function main() {
+  if (process.env.AIRA_POSTGRES_CERTIFICATION !== '1') {
+    throw new Error('Repository migration certification requires AIRA_POSTGRES_CERTIFICATION=1.');
+  }
+  if (process.env.CI_DISPOSABLE_DATABASE !== 'true'
+      || !process.env.DATABASE_URL
+      || process.env.DATABASE_URL !== process.env.ISOLATED_TEST_DATABASE_URL) {
+    throw new Error('Repository migration certification requires the matching disposable PostgreSQL URL contract.');
+  }
+  execFileSync(process.execPath, ['scripts/ci/assert-disposable-postgres.mjs'], { stdio: 'inherit' });
   console.log('Dropping tables...');
   await db.raw('DROP TABLE IF EXISTS mcp_servers CASCADE');
   await db.raw('DROP TABLE IF EXISTS run_events CASCADE');

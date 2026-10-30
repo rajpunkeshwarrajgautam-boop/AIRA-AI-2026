@@ -1,4 +1,6 @@
 import assert from 'node:assert';
+import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import {
   WorkflowDefinition,
   validateWorkflowDag,
@@ -6,18 +8,57 @@ import {
   Run,
   RunSchema
 } from '../packages/contracts/src/index.js';
-import { PostgresWorkflowRepository } from '../packages/agent-runtime/src/workflow-repositories.js';
-import { PostgresRunRepository } from '../packages/agent-runtime/src/repositories.js';
-import { WorkflowEngine } from '../packages/agent-runtime/src/workflow-engine.js';
-import { WorkflowCompiler } from '../packages/agent-runtime/src/workflow-compiler.js';
-import { ApprovalKernel } from '../packages/approvals/src/index.js';
-import { PostgresApprovalRepository, PostgresSessionGrantRepository } from '../packages/approvals/src/repositories.js';
-import { ToolRegistry } from '../packages/tool-runtime/src/index.js';
-import { ModelRouter } from '../packages/model-router/src/index.js';
-import { CapabilityRegistry } from '../packages/agent-runtime/src/registry.js';
-import { ServerIntentRouter } from '../packages/agent-runtime/src/router.js';
+import { runWithDisposablePostgresTestContract } from './helpers/disposable-postgres-test-entry.js';
 
 async function main() {
+  if (process.env.CI_DISPOSABLE_DATABASE !== 'true') {
+    console.log('================================================================');
+    console.log(' AIRA-AI-2026 — WORKFLOW EXECUTION ENGINE CERTIFICATION SUITE   ');
+    console.log('================================================================\n');
+    console.log('[workflow-engine] SAFE REFUSAL / DB suite not run:');
+    console.log('PostgreSQL workflow tests require the matching identity-verified, run-scoped disposable database contract.');
+    console.log('Generic CI executes only in-memory authority tests and no-connection contract guards.');
+    console.log('Dedicated PostgreSQL certification workflow executes the full disposable database suite.');
+    console.log('\n================================================================');
+    console.log(' WORKFLOW PREFLIGHT SAFE REFUSAL VERIFIED (EXIT 0)');
+    console.log('================================================================\n');
+    return;
+  }
+
+  await runWithDisposablePostgresTestContract({
+    preflight: () => {
+      execFileSync(process.execPath, ['scripts/ci/assert-disposable-postgres.mjs'], {
+        stdio: 'inherit'
+      });
+    },
+    run: async () => {
+      // These imports transitively construct the PostgreSQL client. Keep them
+      // behind both the pure authorization guard and connected-server preflight.
+      const [
+        { PostgresWorkflowRepository },
+        { PostgresRunRepository },
+        { WorkflowEngine },
+        { WorkflowCompiler },
+        { ApprovalKernel },
+        { PostgresApprovalRepository, PostgresSessionGrantRepository },
+        { ToolRegistry },
+        { ModelRouter },
+        { CapabilityRegistry },
+        { ServerIntentRouter },
+        { PostgresWorkspaceAuthorityRepository }
+      ] = await Promise.all([
+        import('../packages/agent-runtime/src/workflow-repositories.js'),
+        import('../packages/agent-runtime/src/repositories.js'),
+        import('../packages/agent-runtime/src/workflow-engine.js'),
+        import('../packages/agent-runtime/src/workflow-compiler.js'),
+        import('../packages/approvals/src/index.js'),
+        import('../packages/approvals/src/repositories.js'),
+        import('../packages/tool-runtime/src/index.js'),
+        import('../packages/model-router/src/index.js'),
+        import('../packages/agent-runtime/src/registry.js'),
+        import('../packages/agent-runtime/src/router.js'),
+        import('../packages/agent-runtime/src/workspace-authority.js')
+      ]);
   console.log('================================================================');
   console.log(' AIRA-AI-2026 — WORKFLOW EXECUTION ENGINE CERTIFICATION SUITE   ');
   console.log('================================================================\n');
@@ -42,17 +83,29 @@ async function main() {
 
   const compiler = new WorkflowCompiler(modelRouter);
 
+  const workspaceAuthorities = new PostgresWorkspaceAuthorityRepository();
+  const userAId = `usr_cert_alice_${randomUUID()}`;
+  const userBId = `usr_cert_bob_${randomUUID()}`;
+  const [userAWorkspaceId, userBWorkspaceId] = await Promise.all([
+    workspaceAuthorities.resolveWorkspace(userAId),
+    workspaceAuthorities.resolveWorkspace(userBId)
+  ]);
+
   const userA: ExecutionPrincipal = {
-    userId: 'usr_cert_alice',
-    sessionId: 'sess_cert_alice_01',
+    userId: userAId,
+    sessionId: `sess_cert_alice_${randomUUID()}`,
+    workspaceId: userAWorkspaceId,
     roles: ['member']
   };
 
   const userB: ExecutionPrincipal = {
-    userId: 'usr_cert_bob',
-    sessionId: 'sess_cert_bob_01',
+    userId: userBId,
+    sessionId: `sess_cert_bob_${randomUUID()}`,
+    workspaceId: userBWorkspaceId,
     roles: ['member']
   };
+  assert.strictEqual(await workspaceAuthorities.isWorkspaceActive(userA.userId, userA.workspaceId!), true);
+  assert.strictEqual(await workspaceAuthorities.isWorkspaceActive(userB.userId, userB.workspaceId!), true);
 
   // Helper to create a dummy Run in runRepo
   async function createAiraRun(principal: ExecutionPrincipal, prompt: string): Promise<Run> {
@@ -62,6 +115,7 @@ async function main() {
       id: runId,
       principalId: principal.userId,
       sessionId: principal.sessionId,
+      workspaceId: principal.workspaceId,
       intent: 'WORKFLOW',
       state: 'RUNNING',
       modelPolicy: { model: 'mock-deterministic' },
@@ -468,6 +522,7 @@ async function main() {
   {
     // Part E1: Rejection pauses and fails workflow
     const run1 = await createAiraRun(userA, 'Approval Reject Test');
+    const rejectStepId = `step_destructive_${randomUUID().slice(0, 8)}`;
     const rejectDef: WorkflowDefinition = {
       workflowId: `wf_appr_rej_${Date.now()}`,
       version: 1,
@@ -476,7 +531,7 @@ async function main() {
       inputSchema: {},
       steps: [
         {
-          stepId: 'step_destructive',
+          stepId: rejectStepId,
           name: 'Format Database Table',
           type: 'CAPABILITY',
           capability: 'ANSWER',
@@ -497,20 +552,30 @@ async function main() {
     const wfRun1 = await engine.createWorkflowRun(rejectDef, run1, userA);
     await engine.executeWorkflowRun(wfRun1.id);
 
+    const parentRun1 = await runRepo.getRun(run1.id);
+    assert.strictEqual(parentRun1?.principalId, userA.userId);
+    assert.strictEqual(parentRun1?.workspaceId, userA.workspaceId);
+    const pendingApproval1 = await approvalKernel.getPendingForRun(run1.id);
+    assert.strictEqual(pendingApproval1.length, 1);
+    assert.strictEqual(pendingApproval1[0].runId, run1.id);
+    assert.strictEqual(pendingApproval1[0].workspaceId, userA.workspaceId);
+
     let paused1 = await workflowRepo.getWorkflowRun(wfRun1.id);
     assert.strictEqual(paused1?.state, 'WAITING_FOR_APPROVAL');
-    assert.strictEqual(paused1?.pendingApprovalStepId, 'step_destructive');
+    assert.strictEqual(paused1?.pendingApprovalStepId, rejectStepId);
     console.log('PASS: Destructive step paused in WAITING_FOR_APPROVAL state');
 
     // Reject approval
-    await engine.resolveStepApproval(wfRun1.id, 'step_destructive', 'REJECTED', userA);
+    await engine.resolveStepApproval(wfRun1.id, rejectStepId, 'REJECTED', userA);
     const rejected1 = await workflowRepo.getWorkflowRun(wfRun1.id);
     assert.strictEqual(rejected1?.state, 'FAILED');
-    assert.strictEqual(rejected1?.stepStates['step_destructive'], 'FAILED');
+    assert.strictEqual(rejected1?.stepStates[rejectStepId], 'FAILED');
+    assert.strictEqual(Object.hasOwn(rejected1?.stepOutputs ?? {}, rejectStepId), false);
     console.log('PASS: Explicit rejection cleanly transitioned workflow to FAILED');
 
     // Part E2: Approval resumes and completes workflow
     const run2 = await createAiraRun(userA, 'Approval Accept Test');
+    const acceptStepId = `step_guarded_${randomUUID().slice(0, 8)}`;
     const acceptDef: WorkflowDefinition = {
       workflowId: `wf_appr_acc_${Date.now()}`,
       version: 1,
@@ -519,7 +584,7 @@ async function main() {
       inputSchema: {},
       steps: [
         {
-          stepId: 'step_guarded',
+          stepId: acceptStepId,
           name: 'Guarded Mutation',
           type: 'CAPABILITY',
           capability: 'ANSWER',
@@ -544,7 +609,7 @@ async function main() {
     assert.strictEqual(paused2?.state, 'WAITING_FOR_APPROVAL');
 
     // Grant approval and verify resumption
-    await engine.resolveStepApproval(wfRun2.id, 'step_guarded', 'APPROVED', userA);
+    await engine.resolveStepApproval(wfRun2.id, acceptStepId, 'APPROVED', userA);
 
     // Wait for async resumed execution to reach terminal state
     let resumed2 = await workflowRepo.getWorkflowRun(wfRun2.id);
@@ -555,7 +620,7 @@ async function main() {
     }
 
     assert.strictEqual(resumed2?.state, 'COMPLETED');
-    assert.strictEqual(resumed2?.stepStates['step_guarded'], 'COMPLETED');
+    assert.strictEqual(resumed2?.stepStates[acceptStepId], 'COMPLETED');
     console.log('PASS: Authenticated user approval resumed workflow to COMPLETED');
   }
 
@@ -878,6 +943,8 @@ async function main() {
   console.log(' ALL WORKFLOW ENGINE TESTS COMPLETED WITH 100% PASS RATE!        ');
   console.log('================================================================\n');
   process.exit(0);
+    }
+  });
 }
 
 main().catch(err => {

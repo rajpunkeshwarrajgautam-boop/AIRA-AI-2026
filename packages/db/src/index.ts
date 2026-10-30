@@ -66,7 +66,7 @@ export interface MigrationMaintenancePlanResult {
 /**
  * Evaluates whether migrations can execute under the staging maintenance barrier.
  * In maintenance mode without a privileged token (such as automated Vercel staging builds),
- * checks read-only whether all schema migrations (001–022) were already applied out-of-band.
+ * checks read-only whether all discovered schema migrations were already applied out-of-band.
  * If all migrations are applied, skips Knex lock acquisition (which requires DML).
  * If unapplied migrations remain without a token, fails closed immediately.
  */
@@ -141,7 +141,7 @@ export async function evaluateMigrationMaintenancePlan(
       missingMigrations: [],
       appliedCount: appliedRows.length,
       expectedCount: expectedMigrations.length,
-      reason: `All ${expectedMigrations.length} schema migrations (001–022) already applied: skipping Knex lock acquisition under maintenance`
+      reason: `All ${expectedMigrations.length} discovered schema migrations already applied: skipping Knex lock acquisition under maintenance`
     };
   }
 
@@ -173,7 +173,7 @@ export interface RunMigrationsOptions {
  *
  * Staging Maintenance Guarantee (Defect 3 resolution):
  * In permanent staging maintenance mode, if no bypass token is provided (such as in Vercel's automated
- * preview buildCommand following merge), migrations 001–022 are verified read-only.
+ * preview buildCommand following merge), all discovered migrations are verified read-only.
  * If already applied out-of-band by the cutover operator, Knex lock acquisition is safely skipped.
  * If unapplied migrations remain without token, execution fails closed immediately.
  */

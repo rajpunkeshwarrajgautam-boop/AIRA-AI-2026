@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  specialist-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    image: aira-specialist-worker:staging
+    container_name: aira-specialist-worker-staging
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - NODE_ENV=production
+      - WORKER_ID=worker_docker_staging_1
+      - WORKER_CONCURRENCY=2
+      - POLL_INTERVAL_MS=500
+      - MAX_POLL_INTERVAL_MS=2000
+      - IDLE_BACKOFF_MULTIPLIER=1.5
+      - LEASE_DURATION_MS=15000
+      - HEARTBEAT_INTERVAL_MS=3000
+      - AIRA_ENV=staging
+      - PORT=8080
+    ports:
+      - "127.0.0.1:8080:8080"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1024M
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s

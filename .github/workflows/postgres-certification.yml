@@ -1,0 +1,375 @@
+name: Disposable PostgreSQL Certification
+
+on:
+  pull_request:
+    branches: [main, staging, prod-release]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: postgres-certification-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  postgres-certification:
+    name: PostgreSQL 16 isolated regression certification
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+
+      # Install with no lifecycle scripts and before creating any database credentials.
+      - name: Install dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+
+      - name: Pull reviewed immutable images
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull 'postgres:16-bookworm@sha256:878977a5fe8d75ba7eab7610e4cf7e0c8626a683d89b3f9da965b8ceba952a09'
+          docker pull 'node:24@sha256:14078204b6bb268c107ceff6d3c43f45a888105e5c2b18b14c32b3409d93a1b0'
+
+      # No GitHub, Neon, production, or staging secrets are passed to these containers.
+      # The runner container has only the Docker internal network; network isolation is
+      # verified separately from the database-identity preflight below.
+      - name: Run isolated migration and deterministic regression certification
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+
+          RUN_SUFFIX="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          OWNER_LABEL="aira-ci-run-${RUN_SUFFIX}"
+          NETWORK="aira-pg-cert-${RUN_SUFFIX}"
+          PG_CONTAINER="aira-pg-cert-db-${RUN_SUFFIX}"
+          TEST_CONTAINER="aira-pg-cert-runner-${RUN_SUFFIX}"
+          PG_ENV_FILE=''
+          TEST_ENV_FILE=''
+          PG_ENV_FILE_CREATED=false
+          TEST_ENV_FILE_CREATED=false
+          NETWORK_CREATE_ATTEMPTED=false
+          PG_CREATE_ATTEMPTED=false
+          TEST_CREATE_ATTEMPTED=false
+          CERT_STAGE='initialize isolated certification'
+
+          mark_stage() {
+            CERT_STAGE="$1"
+            printf '::notice::[cert-stage] %s\n' "$CERT_STAGE"
+          }
+
+          remove_owned_container() {
+            local expected_name="$1"
+            local expected_role="$2"
+            local id metadata
+            while IFS= read -r id; do
+              [[ -n "$id" ]] || continue
+              metadata="$(docker inspect --format '{{.Name}}|{{index .Config.Labels "aira.ci.owner"}}|{{index .Config.Labels "aira.ci.role"}}' "$id" 2>/dev/null || true)"
+              if [[ "$metadata" == "/${expected_name}|${OWNER_LABEL}|${expected_role}" ]]; then
+                docker rm -fv "$id" >/dev/null 2>&1
+              fi
+            done < <(docker container ls --all --quiet \
+              --filter "label=aira.ci.owner=${OWNER_LABEL}" \
+              --filter "label=aira.ci.role=${expected_role}" 2>/dev/null || true)
+          }
+
+          cleanup() {
+            status=$?
+            trap - EXIT INT TERM HUP
+            set +e
+            if [[ "$status" -ne 0 ]]; then
+              printf '::error::Isolated PostgreSQL certification failed during stage: %s (exit %s).\n' \
+                "$CERT_STAGE" "$status" >&2
+            fi
+
+            # Attempt cleanup only for resource types this invocation attempted to create;
+            # verify both the unique owner label and expected name/role before removal.
+            if [[ "$TEST_CREATE_ATTEMPTED" == true ]]; then
+              remove_owned_container "$TEST_CONTAINER" runner
+            fi
+            if [[ "$PG_CREATE_ATTEMPTED" == true ]]; then
+              remove_owned_container "$PG_CONTAINER" postgres
+            fi
+            if [[ "$NETWORK_CREATE_ATTEMPTED" == true ]]; then
+              local network_id network_metadata
+              while IFS= read -r network_id; do
+                [[ -n "$network_id" ]] || continue
+                network_metadata="$(docker network inspect --format '{{.Name}}|{{index .Labels "aira.ci.owner"}}|{{index .Labels "aira.ci.role"}}' "$network_id" 2>/dev/null || true)"
+                if [[ "$network_metadata" == "${NETWORK}|${OWNER_LABEL}|network" ]]; then
+                  docker network rm "$network_id" >/dev/null 2>&1
+                fi
+              done < <(docker network ls --quiet \
+                --filter "label=aira.ci.owner=${OWNER_LABEL}" \
+                --filter 'label=aira.ci.role=network' 2>/dev/null || true)
+            fi
+
+            if [[ "$PG_ENV_FILE_CREATED" == true && "$PG_ENV_FILE" == "$RUNNER_TEMP"/aira-pg-cert-postgres.* && -f "$PG_ENV_FILE" && ! -L "$PG_ENV_FILE" ]]; then
+              rm -f -- "$PG_ENV_FILE"
+            fi
+            if [[ "$TEST_ENV_FILE_CREATED" == true && "$TEST_ENV_FILE" == "$RUNNER_TEMP"/aira-pg-cert-test.* && -f "$TEST_ENV_FILE" && ! -L "$TEST_ENV_FILE" ]]; then
+              rm -f -- "$TEST_ENV_FILE"
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          trap 'exit 129' HUP
+
+          # The unique database role/name and random password exist only for this run.
+          mark_stage 'prepare run-scoped disposable database credentials'
+          umask 077
+          PG_ENV_FILE="$(mktemp "$RUNNER_TEMP/aira-pg-cert-postgres.XXXXXX")"
+          PG_ENV_FILE_CREATED=true
+          TEST_ENV_FILE="$(mktemp "$RUNNER_TEMP/aira-pg-cert-test.XXXXXX")"
+          TEST_ENV_FILE_CREATED=true
+          PG_USER="aira_ci_${RUN_SUFFIX}"
+          PG_DATABASE="aira_ci_${RUN_SUFFIX}"
+          PG_PASSWORD="$(openssl rand -hex 32)"
+          DATABASE_URL="postgresql://${PG_USER}:${PG_PASSWORD}@postgres:5432/${PG_DATABASE}"
+
+          {
+            printf 'POSTGRES_USER=%s\n' "$PG_USER"
+            printf 'POSTGRES_PASSWORD=%s\n' "$PG_PASSWORD"
+            printf 'POSTGRES_DB=%s\n' "$PG_DATABASE"
+          } > "$PG_ENV_FILE"
+          {
+            printf 'NODE_ENV=test\n'
+            printf 'CI=true\n'
+            printf 'CI_DISPOSABLE_DATABASE=true\n'
+            printf 'CI_EXPECTED_DATABASE_USER=%s\n' "$PG_USER"
+            printf 'CI_EXPECTED_DATABASE_NAME=%s\n' "$PG_DATABASE"
+            printf 'DATABASE_URL=%s\n' "$DATABASE_URL"
+            printf 'ISOLATED_TEST_DATABASE_URL=%s\n' "$DATABASE_URL"
+          } > "$TEST_ENV_FILE"
+          unset PG_PASSWORD DATABASE_URL
+
+          mark_stage 'create internal Docker network'
+          NETWORK_CREATE_ATTEMPTED=true
+          docker network create --internal \
+            --label "aira.ci.owner=${OWNER_LABEL}" \
+            --label 'aira.ci.role=network' \
+            "$NETWORK" >/dev/null
+          mark_stage 'start disposable PostgreSQL container'
+          PG_CREATE_ATTEMPTED=true
+          docker run --detach \
+            --name "$PG_CONTAINER" \
+            --label "aira.ci.owner=${OWNER_LABEL}" \
+            --label 'aira.ci.role=postgres' \
+            --network "$NETWORK" \
+            --network-alias postgres \
+            --env-file "$PG_ENV_FILE" \
+            --health-cmd "pg_isready -U ${PG_USER} -d ${PG_DATABASE}" \
+            --health-interval 2s \
+            --health-timeout 5s \
+            --health-retries 30 \
+            --shm-size 256m \
+            --tmpfs /var/lib/postgresql/data:rw,noexec,nosuid,size=1g \
+            'postgres:16-bookworm@sha256:878977a5fe8d75ba7eab7610e4cf7e0c8626a683d89b3f9da965b8ceba952a09' >/dev/null
+
+          mark_stage 'create isolated test-runner container'
+          TEST_CREATE_ATTEMPTED=true
+          docker create \
+            --name "$TEST_CONTAINER" \
+            --label "aira.ci.owner=${OWNER_LABEL}" \
+            --label 'aira.ci.role=runner' \
+            --network "$NETWORK" \
+            --workdir /workspace \
+            --mount "type=bind,src=${GITHUB_WORKSPACE},dst=/workspace" \
+            --env-file "$TEST_ENV_FILE" \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --pids-limit 512 \
+            --memory 4g \
+            'node:24@sha256:14078204b6bb268c107ceff6d3c43f45a888105e5c2b18b14c32b3409d93a1b0' \
+            sleep infinity >/dev/null
+          mark_stage 'start isolated test-runner container'
+          docker start "$TEST_CONTAINER" >/dev/null
+
+          # Wait for PostgreSQL health before checking internal network membership.
+          mark_stage 'wait for disposable PostgreSQL health'
+          for attempt in {1..60}; do
+            health="$(docker inspect --format '{{.State.Health.Status}}' "$PG_CONTAINER" 2>/dev/null || true)"
+            if [[ "$health" == 'healthy' ]]; then break; fi
+            if [[ "$health" == 'unhealthy' ]]; then
+              echo '::error::Disposable PostgreSQL did not become healthy.'
+              exit 1
+            fi
+            if [[ "$attempt" == 60 ]]; then
+              echo '::error::Timed out waiting for disposable PostgreSQL.'
+              exit 1
+            fi
+            sleep 2
+          done
+
+          # Mandatory safeguard 1: prove both containers are attached exclusively to
+          # the internal network, with no other members, published ports, or DB volumes.
+          mark_stage 'verify internal network membership'
+          docker network inspect "$NETWORK" | jq -e \
+            --arg pg "$PG_CONTAINER" \
+            --arg test "$TEST_CONTAINER" \
+            '.[0].Internal == true and
+             ([.[0].Containers[]?.Name] | sort == ([$pg, $test] | sort))' >/dev/null
+          mark_stage 'verify container network attachment'
+          docker inspect "$PG_CONTAINER" "$TEST_CONTAINER" | jq -e \
+            --arg network "$NETWORK" \
+            'all(.[]; (.NetworkSettings.Networks | keys) == [$network])' >/dev/null
+          mark_stage 'verify database port and tmpfs isolation'
+          if ! docker inspect "$PG_CONTAINER" | jq -e '
+            .[0].HostConfig as $host
+            | if ($host | type) != "object" then false
+              elif ($host | has("PortBindings") | not) then false
+              elif $host.PortBindings == null then true
+              else ($host.PortBindings | type) == "object" and ($host.PortBindings | length) == 0
+              end
+          ' >/dev/null; then
+            echo '::error::PostgreSQL isolation check failed: PortBindings must be null or an empty object, with no published ports.'
+            exit 1
+          fi
+          mark_stage 'reject persistent PostgreSQL mounts'
+          if ! docker inspect "$PG_CONTAINER" | jq -e '
+            .[0] as $container
+            | ($container.HostConfig // {}) as $host
+            | (if $host.Binds == null then true
+               elif ($host.Binds | type) == "array" then ($host.Binds | length) == 0
+               else false end)
+              and (if $host.VolumesFrom == null then true
+                   elif ($host.VolumesFrom | type) == "array" then ($host.VolumesFrom | length) == 0
+                   else false end)
+              and (if $host.Mounts == null then true
+                   elif ($host.Mounts | type) == "array" then all($host.Mounts[]; .Type == "tmpfs")
+                   else false end)
+              and (if ($container.Mounts | type) == "array" then all($container.Mounts[]; .Type == "tmpfs")
+                   elif ($container.Mounts | type) == "object" then (($container.Mounts | keys) == ["/var/lib/postgresql/data"])
+                   else false end)
+          ' >/dev/null; then
+            echo '::error::PostgreSQL isolation check failed: persistent bind, volume, inherited, or non-tmpfs mounts are not allowed.'
+            exit 1
+          fi
+          mark_stage 'verify active PostgreSQL data tmpfs mount'
+          PG_DATA_FSTYPE="$(docker exec "$PG_CONTAINER" sh -c '
+            while IFS=" " read -r source mountpoint filesystem options; do
+              if [ "$mountpoint" = "/var/lib/postgresql/data" ]; then
+                printf "%s\n" "$filesystem"
+              fi
+            done < /proc/mounts
+          ')"
+          if [[ "$PG_DATA_FSTYPE" != 'tmpfs' ]]; then
+            echo '::error::PostgreSQL isolation check failed: the effective filesystem at /var/lib/postgresql/data must be tmpfs.'
+            exit 1
+          fi
+          echo 'Internal-network isolation verified: only the test runner and disposable PostgreSQL are attached; no database ports or persistent volumes.'
+
+          # Verify container identity, network aliases, and endpoint addresses using the
+          # container's NetworkSettings attachment (network inspect entries have no Aliases).
+          mark_stage 'capture verified PostgreSQL container network addresses'
+          EXPECTED_POSTGRES_ADDRESSES="$(
+            {
+              printf '{"network":'
+              docker network inspect "$NETWORK"
+              printf ',"containers":'
+              docker inspect "$PG_CONTAINER" "$TEST_CONTAINER"
+              printf '}\n'
+            } | EXPECTED_NETWORK="$NETWORK" \
+              EXPECTED_POSTGRES_CONTAINER="$PG_CONTAINER" \
+              EXPECTED_RUNNER_CONTAINER="$TEST_CONTAINER" \
+              node --input-type=module -e '
+                import { readFileSync } from "node:fs";
+                import { extractVerifiedPostgresAddresses } from "./scripts/ci/postgres-address-policy.mjs";
+
+                const inspection = JSON.parse(readFileSync(0, "utf8"));
+                const addresses = extractVerifiedPostgresAddresses({
+                  networkInspection: inspection.network,
+                  containerInspections: inspection.containers,
+                  networkName: process.env.EXPECTED_NETWORK,
+                  postgresContainerName: process.env.EXPECTED_POSTGRES_CONTAINER,
+                  runnerContainerName: process.env.EXPECTED_RUNNER_CONTAINER,
+                });
+                process.stdout.write(JSON.stringify(addresses));
+              '
+          )"
+
+          # Mandatory safeguard 2: inspect the actual connected server before any
+          # migration, then repeat after migration to detect unexpected target changes.
+          mark_stage 'test PostgreSQL network-address validation policy'
+          docker exec "$TEST_CONTAINER" node --test scripts/ci/postgres-address-policy.test.mjs
+          mark_stage 'verify disposable PostgreSQL identity before migration'
+          docker exec --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" node scripts/ci/assert-disposable-postgres.mjs
+          mark_stage 'run database migrations'
+          docker exec "$TEST_CONTAINER" npm run db:migrate
+          mark_stage 'verify disposable PostgreSQL identity after migration'
+          docker exec --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" node scripts/ci/assert-disposable-postgres.mjs
+          mark_stage 'run guarded tool-call schema drift certification'
+          docker exec --env AIRA_POSTGRES_CERTIFICATION=1 --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" npm run test:tool-calls-drift
+          mark_stage 'run guarded prompt schema drift certification'
+          docker exec --env AIRA_POSTGRES_CERTIFICATION=1 --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" ./node_modules/.bin/tsx test/run-prompt-schema-drift.ts
+          mark_stage 'run guarded database recovery certification'
+          docker exec --env AIRA_POSTGRES_CERTIFICATION=1 --env AIRA_PERSISTENT_WORKSPACE_AUTHORITY=true \
+            --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" npm run test:recovery
+
+          mark_stage 'run workflow tests'
+          docker exec --env AIRA_POSTGRES_CERTIFICATION=1 --env AIRA_PERSISTENT_WORKSPACE_AUTHORITY=true \
+            --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" npm run test:workflow
+          mark_stage 'run guarded tool tests with persistent workspace-authority enforcement'
+          docker exec --env AIRA_POSTGRES_CERTIFICATION=1 --env AIRA_PERSISTENT_WORKSPACE_AUTHORITY=true \
+            --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" npm run test:tools
+          mark_stage 'run tool-gateway approval regression test'
+          docker exec "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/tool-gateway-approval-fail-closed.test.ts
+          mark_stage 'run Stage 1.2A approval lifecycle regression test'
+          docker exec "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/approval-lifecycle-stage-1-2a.test.ts
+          mark_stage 'run Stage 1.2B/C atomic approval resolution tests'
+          docker exec "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/approval-atomic-resolution.test.ts
+          mark_stage 'run Stage 1.2B/C one-time authorization tests'
+          docker exec "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/approval-once-consumption.test.ts
+          mark_stage 'run durable worker authorization tests'
+          docker exec "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/durable-worker-authorization.test.ts
+          mark_stage 'run M2-A production activation fail-closed readiness tests'
+          docker exec "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/m2a-production-activation-security.test.ts
+          mark_stage 'run M2-A durable specialist execution tests'
+          docker exec "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/m2a-durable-specialist-execution.test.ts
+          mark_stage 'run M2-A real PostgreSQL worker, lease, fencing, recovery, and idempotency certification'
+          docker exec --env AIRA_POSTGRES_CERTIFICATION=1 --env AIRA_PERSISTENT_WORKSPACE_AUTHORITY=true \
+            --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/m2a-real-postgres-verification.test.ts
+          mark_stage 'reverify disposable PostgreSQL identity after M2-A worker certification'
+          docker exec --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" node scripts/ci/assert-disposable-postgres.mjs
+          mark_stage 'run PostgreSQL approval resumption outbox and workspace authority certification'
+          docker exec --env AIRA_POSTGRES_CERTIFICATION=1 --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/approval-resumption-outbox-postgres.test.ts
+          mark_stage 'run destructive authenticated API integration on disposable PostgreSQL'
+          docker exec --env AIRA_PERSISTENT_WORKSPACE_AUTHORITY=true \
+            --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" npm run test:integration
+          mark_stage 'verify disposable PostgreSQL identity after destructive integration'
+          docker exec --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" node scripts/ci/assert-disposable-postgres.mjs
+          mark_stage 'ensure required migrations are applied before runtime verification'
+          docker exec "$TEST_CONTAINER" npm run db:migrate
+          mark_stage 'verify disposable PostgreSQL identity before runtime verification'
+          docker exec --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" node scripts/ci/assert-disposable-postgres.mjs
+          mark_stage 'run runtime verification in the existing isolated PostgreSQL test runner'
+          docker exec --env AIRA_POSTGRES_CERTIFICATION=1 --env AIRA_PERSISTENT_WORKSPACE_AUTHORITY=true \
+            --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" npm test
+          mark_stage 'verify disposable PostgreSQL identity after runtime verification'
+          docker exec --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" node scripts/ci/assert-disposable-postgres.mjs

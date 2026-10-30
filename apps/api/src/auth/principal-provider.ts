@@ -1,19 +1,26 @@
 import { Request } from 'express';
 import { ExecutionPrincipal, ExecutionPrincipalSchema } from '../../../../packages/contracts/src/index.js';
+import {
+  WorkspaceAuthorityRepository,
+  workspaceAuthority
+} from '../../../../packages/agent-runtime/src/workspace-authority.js';
 
 export interface PrincipalProvider {
   resolve(req: Request): Promise<ExecutionPrincipal>;
 }
 
 export class DevPrincipalProvider implements PrincipalProvider {
+  constructor(private readonly workspaceAuthorities: WorkspaceAuthorityRepository = workspaceAuthority) {}
+
   async resolve(req: Request): Promise<ExecutionPrincipal> {
     // Verified managed identity takes absolute precedence — cryptographic proof cannot be overridden by headers.
     const managedIdentity = (req as any).managedIdentity;
     if (managedIdentity && managedIdentity.userId) {
+      const workspaceId = await this.workspaceAuthorities.resolveWorkspace(managedIdentity.userId);
       return ExecutionPrincipalSchema.parse({
         userId: managedIdentity.userId,
         sessionId: managedIdentity.sessionId,
-        workspaceId: undefined,
+        workspaceId,
         projectId: undefined,
         roles: ['workspace_user'],
         scopes: ['chat:write', 'runs:read', 'runs:write', 'browser.read', 'files.read'],
@@ -26,15 +33,14 @@ export class DevPrincipalProvider implements PrincipalProvider {
     if (isDevOrTest && !req.headers.authorization) {
       const testUserId = req.headers['x-test-user-id'] as string;
       const testSessionId = req.headers['x-test-session-id'] as string;
-      const testWorkspaceId = req.headers['x-workspace-id'] as string;
-      const testProjectId = req.headers['x-project-id'] as string;
 
       if (testUserId && testSessionId) {
+        const workspaceId = await this.workspaceAuthorities.resolveWorkspace(testUserId);
         return ExecutionPrincipalSchema.parse({
           userId: testUserId,
           sessionId: testSessionId,
-          workspaceId: testWorkspaceId || undefined,
-          projectId: testProjectId || undefined,
+          workspaceId,
+          projectId: undefined,
           roles: ['dev_user'],
           scopes: ['*'],
         });
@@ -51,11 +57,13 @@ export class DevPrincipalProvider implements PrincipalProvider {
       throw new Error("Unauthorized: No valid session identity found on request context");
     }
 
+    const workspaceId = await this.workspaceAuthorities.resolveWorkspace(user.id);
     return ExecutionPrincipalSchema.parse({
       userId: user.id,
       sessionId: user.sessionId,
-      workspaceId: user.workspaceId,
-      projectId: user.projectId,
+      workspaceId,
+      // No persisted project membership relation exists, so user/client project values are non-authoritative.
+      projectId: undefined,
       roles: user.roles || [],
       scopes: user.scopes || [],
     });

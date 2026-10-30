@@ -1,0 +1,16 @@
+.git
+.github
+.agents
+.env
+.env.*
+*.env
+node_modules
+dist
+coverage
+tmp
+test
+docs
+artifacts
+.DS_Store
+*.md
+*.log

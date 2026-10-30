@@ -25,6 +25,8 @@ import { PostgresApprovalRepository, PostgresSessionGrantRepository } from '../.
 import { BrainV2KnowledgeEngine, PrincipalScope } from '../../../packages/knowledge/src/index.js';
 import { McpHost } from '../../../packages/mcp/src/index.js';
 import { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
+import { validateDurableToolScopes } from '../../../packages/agent-runtime/src/durable/tool-authorization.js';
+import { validateApiStartupConfiguration } from './startup-config.js';
 import { AutomationEngine } from '../../../packages/automation/src/index.js';
 import { PostgresAgentRepository, PostgresRunRepository, InMemoryRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
 import { PostgresAutomationRepository, PostgresAutomationRunRepository } from '../../../packages/automation/src/repositories.js';
@@ -40,27 +42,24 @@ import {
   AutomationDefinitionSchema,
   AgentDefinition,
   WorkflowDefinitionSchema,
-  validateWorkflowDag
+  validateWorkflowDag,
+  TaskDAG,
+  TaskDAGSchema,
+  validateTaskDAG
 } from '../../../packages/contracts/src/index.js';
 
 // -----------------------------------------------------------------------
-// Production startup assertions
+// Deployment-aware startup assertions. Vercel Preview also has NODE_ENV=production.
 // -----------------------------------------------------------------------
-if (process.env.NODE_ENV === 'production') {
-  const hasProvider = process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY || process.env.NVIDIA_API_KEY;
-  if (!hasProvider) {
-    process.stderr.write(
-      '[STARTUP_ASSERTION] FAIL: Production requires at least one provider key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or NVIDIA_API_KEY).\n'
-    );
-    process.exit(1);
+const startupConfiguration = validateApiStartupConfiguration(process.env);
+for (const warning of startupConfiguration.warnings) {
+  process.stderr.write(`[STARTUP_ASSERTION] WARN: ${warning}\n`);
+}
+if (startupConfiguration.errors.length > 0) {
+  for (const error of startupConfiguration.errors) {
+    process.stderr.write(`[STARTUP_ASSERTION] FAIL: ${error}\n`);
   }
-
-  if (!process.env.AIRA_SESSION_SECRET || process.env.AIRA_SESSION_SECRET.trim().length < 32) {
-    process.stderr.write(
-      '[STARTUP_ASSERTION] FAIL: Production requires AIRA_SESSION_SECRET with at least 32 characters.\n'
-    );
-    process.exit(1);
-  }
+  process.exit(1);
 }
 
 import { createPrincipalMiddleware } from './middleware/principal.js';
@@ -1070,6 +1069,14 @@ app.get('/api/search/capabilities', async (_req: Request, res: Response) => {
 // -----------------------------------------------------------------------
 // Runs Management
 // -----------------------------------------------------------------------
+function isRunOwnedByPrincipal(
+  run: { principalId: string; workspaceId?: string | null },
+  principal: { userId: string; workspaceId?: string }
+): boolean {
+  return run.principalId === principal.userId &&
+    (run.workspaceId || undefined) === (principal.workspaceId || undefined);
+}
+
 app.post('/api/runs', async (req: Request, res: Response) => {
   try {
     const parsed = CreateRunRequestSchema.parse(req.body);
@@ -1082,20 +1089,56 @@ app.post('/api/runs', async (req: Request, res: Response) => {
 
 app.get('/api/runs', async (req: Request, res: Response) => {
   const allRuns = await agentRuntime.listRuns();
-  res.json(allRuns.filter(r => r.principalId === req.principal!.userId));
+  res.json(allRuns.filter(r => isRunOwnedByPrincipal(r, req.principal!)));
 });
 
 app.get('/api/runs/:id', async (req: Request, res: Response) => {
   const run = await agentRuntime.getRun(req.params.id);
-  if (!run || run.principalId !== req.principal!.userId) {
+  if (!run || !isRunOwnedByPrincipal(run, req.principal!)) {
     return res.status(404).json({ error: `Run with id "${req.params.id}" not found.` });
   }
+
+  // If this run has durable specialist tasks, reflect their latest terminal progress
+  if (['QUEUED', 'RUNNING'].includes(run.state)) {
+    try {
+      const specialistRepo = agentRuntime.getSpecialistTaskRepository();
+      const tasks = await specialistRepo.listTasksByRun(run.id);
+      if (tasks.length > 0) {
+        const allCompleted = tasks.every(t => t.state === 'COMPLETED');
+        const anyFailed = tasks.some(t => t.state === 'FAILED' || t.state === 'TIMED_OUT' || t.state === 'UNAVAILABLE');
+        const anyCancelled = tasks.some(t => t.state === 'CANCELLED');
+
+        if (allCompleted) {
+          run.state = 'COMPLETED';
+          run.status = 'COMPLETED';
+          const finalTask = tasks[tasks.length - 1];
+          if (finalTask.resultOutput) {
+            run.content = typeof finalTask.resultOutput === 'object'
+              ? JSON.stringify(finalTask.resultOutput)
+              : String(finalTask.resultOutput);
+          }
+          await runRepo.saveRun(run);
+        } else if (anyFailed) {
+          run.state = 'FAILED';
+          run.status = 'FAILED';
+          await runRepo.saveRun(run);
+        } else if (anyCancelled) {
+          run.state = 'CANCELLED';
+          run.status = 'CANCELLED';
+          await runRepo.saveRun(run);
+        }
+      }
+    } catch {
+      // Non-blocking telemetry reflection
+    }
+  }
+
   res.json(run);
 });
 
 app.post('/api/runs/:id/cancel', async (req: Request, res: Response) => {
   const run = await agentRuntime.getRun(req.params.id);
-  if (!run || run.principalId !== req.principal!.userId) {
+  if (!run || !isRunOwnedByPrincipal(run, req.principal!)) {
     return res.status(404).json({ error: 'Run not found.' });
   }
   const success = await agentRuntime.cancelRun(req.params.id);
@@ -1109,16 +1152,23 @@ app.post('/api/runs/:id/approve', async (req: Request, res: Response) => {
   try {
     const { requestId, decision } = req.body;
     const approval = await approvalKernel.getPendingRequest(requestId);
-    if (!approval) return res.status(404).json({ error: 'Approval request not found.' });
-    
+    if (!approval || approval.runId !== req.params.id) {
+      return res.status(404).json({ error: 'Approval request not found.' });
+    }
+
+    const resolverPrincipal = req.principal!;
     const run = await agentRuntime.getRun(approval.runId);
-    if (!run || run.principalId !== req.principal!.userId) {
+    if (!run || !isRunOwnedByPrincipal(run, resolverPrincipal)) {
       return res.status(404).json({ error: 'Approval request not found.' });
     }
 
     const parsedDecision = ApprovalDecisionSchema.parse(decision);
-    // Submit approval with current user's identity
-    const success = await agentRuntime.submitApproval(requestId, parsedDecision);
+    const success = await agentRuntime.submitApproval(
+      requestId,
+      parsedDecision,
+      resolverPrincipal,
+      req.params.id
+    );
     if (!success) {
       return res.status(400).json({ error: 'Could not apply approval decision.' });
     }
@@ -1129,13 +1179,219 @@ app.post('/api/runs/:id/approve', async (req: Request, res: Response) => {
 });
 
 // -----------------------------------------------------------------------
+// Durable Specialist Missions Management (Milestone 2A.1)
+// -----------------------------------------------------------------------
+app.post('/api/missions', async (req: Request, res: Response) => {
+  try {
+    const rawDag = req.body?.dag || req.body;
+    const validation = validateTaskDAG(rawDag);
+    if (!validation.valid) {
+      return res.status(400).json({ error: `Invalid task DAG: ${validation.error}` });
+    }
+
+    const dag = rawDag as TaskDAG;
+    const principal = req.principal;
+    if (!principal?.userId || !principal.workspaceId) {
+      return res.status(403).json({ error: 'Authenticated principal with an assigned workspace is required for durable missions.' });
+    }
+
+    const requestedWorkspaceId = req.body?.workspaceId;
+    if (requestedWorkspaceId !== undefined && requestedWorkspaceId !== principal.workspaceId) {
+      return res.status(403).json({ error: 'Requested workspace does not match the authenticated principal workspace.' });
+    }
+    const workspaceId = principal.workspaceId;
+    for (const task of dag.tasks) {
+      const scopeValidation = validateDurableToolScopes(task.role, task.executionConstraints?.allowedTools || []);
+      if (!scopeValidation.valid) {
+        return res.status(403).json({ error: scopeValidation.error || 'Durable tool allowlist rejected.' });
+      }
+    }
+
+    const runId = dag.runId;
+    const missionId = req.body?.missionId || dag.dagId || `mission_${runId}`;
+    const prompt = req.body?.prompt || `Durable specialist mission: ${dag.dagId}`;
+
+    // A caller may reuse only a parent run owned by that same principal and workspace.
+    const existingRun = await agentRuntime.getRun(runId);
+    if (existingRun && (
+      existingRun.principalId !== principal.userId ||
+      existingRun.workspaceId !== workspaceId
+    )) {
+      return res.status(403).json({ error: 'Run owner or workspace does not match the authenticated principal.' });
+    }
+    if (existingRun && ['COMPLETED', 'FAILED', 'CANCELLED'].includes(existingRun.state)) {
+      return res.status(409).json({ error: 'Durable missions cannot be added to a terminal parent run.' });
+    }
+
+    // Ensure parent run row exists in public.runs (foreign key constraint).
+    if (!existingRun) {
+      const now = Date.now();
+      const parentRun = {
+        id: runId,
+        principalId: principal.userId,
+        sessionId: principal.sessionId || `sess_${principal.userId}`,
+        workspaceId,
+        prompt,
+        intent: 'TOOL_ACTION' as const,
+        state: 'QUEUED' as const,
+        status: 'QUEUED' as const,
+        toolsUsed: ['calculator'],
+        toolCalls: [],
+        toolResults: [],
+        createdAt: now,
+        updatedAt: now
+      };
+      if (runRepo.createRunIfAbsent) await runRepo.createRunIfAbsent(parentRun);
+      else await runRepo.saveRun(parentRun);
+    }
+
+    const verifiedParentRun = await agentRuntime.getRun(runId);
+    if (!verifiedParentRun || verifiedParentRun.principalId !== principal.userId || verifiedParentRun.workspaceId !== workspaceId) {
+      return res.status(403).json({ error: 'Parent run owner or workspace changed during durable mission admission.' });
+    }
+    if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(verifiedParentRun.state)) {
+      return res.status(409).json({ error: 'Durable missions cannot be added to a terminal parent run.' });
+    }
+
+    // Submit DAG into durable scheduler with server-derived owner/workspace.
+    const createdTasks = await agentRuntime.getDurableTaskScheduler().submitDAG(dag, principal, {
+      missionId,
+      workspaceId
+    });
+
+    res.status(201).json({
+      status: 'QUEUED',
+      state: 'QUEUED',
+      missionId,
+      runId,
+      dagId: dag.dagId,
+      tasksCount: createdTasks.length,
+      createdAt: Date.now()
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || 'Failed to submit durable mission.' });
+  }
+});
+
+app.get('/api/missions/:id', async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id;
+    const specialistRepo = agentRuntime.getSpecialistTaskRepository();
+    
+    // Search by runId or missionId
+    let tasks = await specialistRepo.listTasksByRun(id);
+    let runId = id;
+    if (tasks.length === 0) {
+      tasks = await specialistRepo.listTasksByMission(id);
+      if (tasks.length > 0) {
+        runId = tasks[0].runId;
+      }
+    }
+
+    if (tasks.length === 0) {
+      return res.status(404).json({ error: `Mission or run "${id}" not found.` });
+    }
+
+    // Enforce principal and workspace isolation for every task in the aggregate.
+    const firstTask = tasks[0];
+    if (!req.principal?.workspaceId || tasks.some((task) =>
+      task.principalId !== req.principal!.userId || task.workspaceId !== req.principal!.workspaceId
+    )) {
+      return res.status(404).json({ error: `Mission "${id}" not found.` });
+    }
+
+    // Determine aggregate outcome
+    const completedTasks = tasks.filter(t => t.state === 'COMPLETED');
+    const failedTasks = tasks.filter(t => t.state === 'FAILED' || t.state === 'TIMED_OUT' || t.state === 'UNAVAILABLE');
+    const cancelledTasks = tasks.filter(t => t.state === 'CANCELLED');
+    const runningTasks = tasks.filter(t => t.state === 'RUNNING' || t.state === 'CLAIMED');
+
+    let state = 'QUEUED';
+    let outcome: string | undefined = undefined;
+
+    if (cancelledTasks.length > 0) {
+      state = 'CANCELLED';
+      outcome = 'CANCELLED';
+    } else if (failedTasks.length > 0) {
+      state = 'FAILED';
+      outcome = 'FAILED';
+    } else if (completedTasks.length === tasks.length) {
+      state = 'COMPLETED';
+      outcome = 'COMPLETED';
+    } else if (runningTasks.length > 0) {
+      state = 'RUNNING';
+    }
+
+    // Extract output if completed
+    let finalOutput: any = undefined;
+    if (completedTasks.length > 0) {
+      const lastCompleted = completedTasks[completedTasks.length - 1];
+      finalOutput = lastCompleted.resultOutput;
+    }
+
+    // Sync parent run state if mission reached COMPLETED
+    if (state === 'COMPLETED') {
+      const parentRun = await agentRuntime.getRun(runId);
+      if (parentRun && parentRun.state !== 'COMPLETED') {
+        parentRun.state = 'COMPLETED';
+        parentRun.status = 'COMPLETED';
+        parentRun.content = typeof finalOutput === 'object' && finalOutput !== null
+          ? JSON.stringify(finalOutput)
+          : String(finalOutput ?? 'COMPLETED');
+        parentRun.completedAt = Date.now();
+        await runRepo.saveRun(parentRun);
+      }
+    }
+
+    res.json({
+      missionId: firstTask.missionId || id,
+      runId,
+      state,
+      status: state,
+      outcome,
+      totalTasks: tasks.length,
+      completedTasks: completedTasks.length,
+      failedTasks: failedTasks.length,
+      cancelledTasks: cancelledTasks.length,
+      output: finalOutput,
+      tasks: tasks.map(t => ({
+        id: t.id,
+        role: t.role,
+        state: t.state,
+        outcome: t.outcome,
+        fencingToken: t.fencingToken,
+        output: t.resultOutput,
+        checkpoints: t.checkpoints,
+        error: t.errorDetails
+      }))
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Internal server error retrieving mission.' });
+  }
+});
+
+app.get('/api/missions', async (req: Request, res: Response) => {
+  try {
+    const specialistRepo = agentRuntime.getSpecialistTaskRepository();
+    const principal = req.principal;
+    if (!principal?.userId || !principal.workspaceId) {
+      return res.status(403).json({ error: 'Authenticated principal with an assigned workspace is required.' });
+    }
+    const tasks = await specialistRepo.listTasksByPrincipal(principal.userId);
+    res.json(tasks.filter((task) => task.workspaceId === principal.workspaceId));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// -----------------------------------------------------------------------
 // SSE Stream for Run
 // -----------------------------------------------------------------------
 app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
   const runId = req.params.id;
   const run = await agentRuntime.getRun(runId);
 
-  if (!run || run.principalId !== req.principal!.userId) {
+  if (!run || !isRunOwnedByPrincipal(run, req.principal!)) {
     return res.status(404).json({ error: `Run ${runId} not found.` });
   }
 
@@ -2253,14 +2509,23 @@ app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
 // Start Server
 // -----------------------------------------------------------------------
 if (!process.env.VERCEL) {
+  const apiWorkerOwner = `api-worker-${process.pid}-${crypto.randomUUID()}`;
+  let approvalOutboxPoll: NodeJS.Timeout | undefined;
   const server = app.listen(PORT, '0.0.0.0', () => {
     process.stdout.write(`AIRA Runtime API Server v2026.2.0 listening on port ${PORT}\n`);
     process.stdout.write(`NODE_ENV: ${process.env.NODE_ENV || 'development'}\n`);
     process.stdout.write(`Providers: ${modelRouter.listProviders().join(', ') || 'none (dev mock active)'}\n`);
     
     appState = 'RECOVERING';
-    agentRuntime.recoverInterruptedRuns('api-worker-1').then(() => {
+    agentRuntime.dispatchApprovalResumptions(`${apiWorkerOwner}-approval-outbox`)
+      .then(() => agentRuntime.recoverInterruptedRuns(`${apiWorkerOwner}-recovery`)).then(() => {
       appState = 'HEALTHY';
+      approvalOutboxPoll = setInterval(() => {
+        void agentRuntime.dispatchApprovalResumptions(`${apiWorkerOwner}-approval-outbox`).catch((err) => {
+          console.error('Approval resumption outbox poll failed:', err);
+        });
+      }, 5000);
+      approvalOutboxPoll.unref();
       process.stdout.write('Startup recovery complete. API is HEALTHY.\n');
     }).catch(err => {
       console.error('Failed to recover interrupted runs. Failing closed:', err);
@@ -2270,6 +2535,7 @@ if (!process.env.VERCEL) {
   });
 
   process.on('SIGINT', () => {
+    if (approvalOutboxPoll) clearInterval(approvalOutboxPoll);
     automationEngine.stop();
     server.close(() => {
       process.stdout.write('AIRA API Server stopped cleanly.\n');

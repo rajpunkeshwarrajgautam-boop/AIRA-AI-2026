@@ -47,6 +47,44 @@ export const SpecialistTaskOutcomeSchema = z.enum([
 ]);
 export type SpecialistTaskOutcome = z.infer<typeof SpecialistTaskOutcomeSchema>;
 
+/**
+ * Full lifecycle state machine states for durable specialist tasks.
+ * Includes active scheduling, leasing, approval, and terminal states.
+ */
+export const SpecialistTaskStateSchema = z.enum([
+  'QUEUED',
+  'BLOCKED',
+  'CLAIMED',
+  'RUNNING',
+  'WAITING_FOR_APPROVAL',
+  'RETRY_WAIT',
+  'COMPLETED',
+  'FAILED',
+  'CANCELLED',
+  'TIMED_OUT',
+  'UNAVAILABLE'
+]);
+export type SpecialistTaskState = z.infer<typeof SpecialistTaskStateSchema>;
+
+export const TERMINAL_SPECIALIST_STATES: readonly SpecialistTaskState[] = Object.freeze([
+  'COMPLETED',
+  'FAILED',
+  'CANCELLED',
+  'TIMED_OUT',
+  'UNAVAILABLE'
+]);
+
+export function isTerminalSpecialistState(state: SpecialistTaskState): boolean {
+  return TERMINAL_SPECIALIST_STATES.includes(state);
+}
+
+export function toSpecialistTaskOutcome(state: SpecialistTaskState): SpecialistTaskOutcome | undefined {
+  if (isTerminalSpecialistState(state)) {
+    return state as SpecialistTaskOutcome;
+  }
+  return undefined;
+}
+
 // ==========================================
 // 3. EXECUTION CONSTRAINTS & AUTHORIZATION
 // ==========================================

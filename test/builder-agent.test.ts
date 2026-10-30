@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import express from 'express';
 import { BuilderService } from '../packages/builder-runtime/src/index.js';
 import { BuilderActionSchema, BuilderRequestSchema } from '../packages/builder-runtime/src/contracts.js';
-import { signTicket,verifyTicket,safeRelativePath,builderAccess,publicBuilderError,type WorkspaceTicket } from '../packages/builder-runtime/src/security.js';
+import { signTicket,verifyTicket,safeRelativePath,builderAccess,publicBuilderError,type WorkspaceTicketDraft } from '../packages/builder-runtime/src/security.js';
 import type { BuilderSandbox,SandboxFactory } from '../packages/builder-runtime/src/sandbox.js';
 import type { ExecutionPrincipal } from '../packages/contracts/src/index.js';
 import type { ModelRouter } from '../packages/model-router/src/index.js';
@@ -13,7 +13,7 @@ import { streamBuilder } from '../src/utils/builderClient.js';
 
 const owner:ExecutionPrincipal={userId:'owner',sessionId:'session',roles:[],scopes:[]};
 function configure(){process.env.AIRA_BUILDER_ENABLED='true';process.env.AIRA_BUILDER_ALLOWED_USER_IDS='owner';process.env.LIGHTNING_SANDBOX_API_KEY='test-lightning-key';process.env.E2B_API_KEY='test-key-not-a-real-key';process.env.AIRA_BUILDER_SIGNING_SECRET='test-builder-signing-secret-minimum-32-characters';}
-function ticket(extra:Partial<WorkspaceTicket>={}):WorkspaceTicket{return {version:1,purpose:'workspace',userId:'owner',sessionId:'session',sandboxId:'sandbox_test',expiresAt:Date.now()+60000,allowInternet:false,allowPreview:false,...extra};}
+function ticket(extra:Partial<WorkspaceTicketDraft>={}):WorkspaceTicketDraft{return {purpose:'workspace',userId:'owner',sessionId:'session',sandboxId:'sandbox_test',expiresAt:Date.now()+60000,allowInternet:false,allowPreview:false,...extra};}
 class FakeSandbox implements BuilderSandbox {
  id='sandbox_test';provider='lightning';files=new Map<string,Uint8Array>();killed=false;previewed=false;
  async write(path:string,content:string){this.files.set(path,Buffer.from(content));return {path};}

@@ -1,48 +1,39 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { execSync } from 'node:child_process';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
-import dotenv from 'dotenv';
+import { execFileSync } from 'node:child_process';
+import type { ExecutionPrincipal } from '../packages/contracts/src/index.js';
 
-// 1. Load Live Provider Configuration from Preview Environment
-const previewEnvPath = path.resolve(process.cwd(), '.env.preview.local');
-if (fs.existsSync(previewEnvPath)) {
-  dotenv.config({ path: previewEnvPath });
+const authorizedProvider = process.env.AIRA_LIVE_PROVIDER?.trim().toLowerCase();
+const authorizedModel = process.env.AIRA_LIVE_MODEL?.trim();
+const providerKeyEnvironment: Record<string, string> = {
+  groq: 'GROQ_API_KEY', cerebras: 'CEREBRAS_API_KEY', together: 'TOGETHER_API_KEY',
+  fireworks: 'FIREWORKS_API_KEY', gemini: 'GEMINI_API_KEY', anthropic: 'ANTHROPIC_API_KEY',
+  openai: 'OPENAI_API_KEY', nvidia: 'NVIDIA_API_KEY'
+};
+
+if (process.env.AIRA_LIVE_PROVIDER_ACCEPTANCE !== '1' ||
+    process.env.AIRA_LIVE_PROVIDER_CONFIRMATION !== `${authorizedProvider}:${authorizedModel}:AUTHORIZE_PAID_PROVIDER_CALLS`) {
+  throw new Error('Live acceptance requires AIRA_LIVE_PROVIDER_ACCEPTANCE=1 and an exact provider/model paid-call confirmation.');
+}
+if (!authorizedProvider || !providerKeyEnvironment[authorizedProvider] || !authorizedModel ||
+    authorizedModel.startsWith('aira-') || authorizedModel.length > 200) {
+  throw new Error('Live acceptance requires one supported provider and an exact direct model ID (no automatic model route).');
+}
+if (process.env.NODE_ENV !== 'test' || process.env.CI_DISPOSABLE_DATABASE !== 'true' ||
+    !process.env.DATABASE_URL || process.env.DATABASE_URL !== process.env.ISOLATED_TEST_DATABASE_URL ||
+    !process.env.CI_EXPECTED_DATABASE_NAME ||
+    process.env.AIRA_LIVE_PROVIDER_DATABASE_CONFIRMATION !== process.env.CI_EXPECTED_DATABASE_NAME) {
+  throw new Error('Live acceptance requires an exact, deliberately confirmed run-scoped disposable PostgreSQL target.');
 }
 
-function getStagingConnectionString(): string {
-  if (process.env.ISOLATED_TEST_DATABASE_URL?.trim()) {
-    return process.env.ISOLATED_TEST_DATABASE_URL.trim();
-  }
-  if (process.env.DATABASE_URL?.trim() && !process.env.DATABASE_URL.includes('localhost')) {
-    return process.env.DATABASE_URL.trim();
-  }
-  const output = execSync(
-    'npx --yes neonctl connection-string pr-agent-tool-calls-isolated --project-id mute-frost-50372225 --org-id org-broad-butterfly-41820185',
-    { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] }
-  ).trim();
-  return output;
-}
-
-const connectionString = getStagingConnectionString();
-const parsedUrl = new URL(connectionString);
-
-if (parsedUrl.hostname.includes('old-sky-50952395')) {
-  console.error('[SECURITY FATAL] Aborting: Target is production Neon old-sky-50952395');
-  process.exit(1);
-}
-
-process.env.DATABASE_URL = connectionString;
-process.env.ISOLATED_TEST_DATABASE_URL = connectionString;
+// This read-only identity guard runs before importing the database client, runtime,
+// provider router, or any code capable of making network requests. Never hydrate
+// ambient preview/local environment files for a live-provider acceptance run.
+process.env.DOTENV_CONFIG_PATH = '/dev/null';
+execFileSync(process.execPath, ['scripts/ci/assert-disposable-postgres.mjs'], { stdio: 'inherit' });
 
 // Dynamically import db, runtime, and model router after setting environment
 const { db } = await import('../packages/db/src/index.js');
-const {
-  assertAuthorizedStagingDatabase,
-  STAGING_NEON_PROJECT_ID,
-  PRODUCTION_NEON_PROJECT_ID
-} = await import('../packages/db/src/security/database-isolation-guard.js');
 const {
   AgentRuntime,
   PostgresRunRepository
@@ -58,52 +49,47 @@ const {
   PostgresSessionGrantRepository
 } = await import('../packages/approvals/src/repositories.js');
 const { BrainV2KnowledgeEngine } = await import('../packages/knowledge/src/index.js');
-const { ExecutionPrincipal } = await import('../packages/contracts/src/index.js');
+const { PostgresWorkspaceAuthorityRepository } = await import('../packages/agent-runtime/src/workspace-authority.js');
 
 async function main(): Promise<void> {
   console.log('========================================================================');
   console.log('  AIRA AI 2026 — LIVE INFERENCE PROVIDER AGENT ACCEPTANCE CERTIFICATION');
   console.log('========================================================================');
 
-  // STEP 1: Strict Database Identity & TLS Verification
-  console.log('\n[STEP 1] Verifying isolated staging database identity...');
-  const identity = await assertAuthorizedStagingDatabase(db, {
-    allowedProjectIds: [STAGING_NEON_PROJECT_ID],
-    allowedBranchIds: ['br-muddy-wave-b3zxhkqf']
-  });
+  // STEP 1: the run-scoped disposable PostgreSQL identity was verified before imports.
+  console.log(`\n[STEP 1] Disposable PostgreSQL target verified: ${process.env.CI_EXPECTED_DATABASE_NAME}`);
 
-  assert.equal(identity.neonProjectId, STAGING_NEON_PROJECT_ID, 'Must match staging project');
-  assert.equal(identity.neonBranchId, 'br-muddy-wave-b3zxhkqf', 'Must match staging isolated branch');
-  assert.notEqual(identity.neonProjectId, PRODUCTION_NEON_PROJECT_ID, 'Must not be production Neon');
-  console.log(`PASS: Confirmed staging Neon Project: ${identity.neonProjectId}`);
-  console.log(`PASS: Confirmed staging Neon Branch: ${identity.neonBranchId}`);
-
-  const rawConn = (db.client as any).connectionSettings;
-  assert.equal(rawConn.ssl.rejectUnauthorized, true, 'Strict TLS must be active');
-  console.log('PASS: Strict TLS verification confirmed (rejectUnauthorized: true)');
-
-  // STEP 2: Live Inference Provider Verification
-  console.log('\n[STEP 2] Verifying live inference provider configuration...');
+  // STEP 2: Select exactly one provider and direct model; remove other provider
+  // credentials before router construction so fallback cannot spend against another service.
+  console.log('\n[STEP 2] Verifying the explicitly authorized provider/model...');
+  const selectedKeyEnvironment = providerKeyEnvironment[authorizedProvider!];
+  if (!process.env[selectedKeyEnvironment]?.trim()) {
+    throw new Error(`The explicitly authorized provider ${authorizedProvider} has no configured API key.`);
+  }
+  for (const keyEnvironment of Object.values(providerKeyEnvironment)) {
+    if (keyEnvironment !== selectedKeyEnvironment) delete process.env[keyEnvironment];
+  }
   const modelRouter = new ModelRouter();
   const availableProviders = modelRouter.listProviders();
-  console.log('Configured Providers in Router:', availableProviders);
-
-  const liveProviders = availableProviders.filter(p => p !== 'mock');
-  assert.ok(liveProviders.length >= 1, `At least one live inference provider must be configured. Found: ${availableProviders.join(', ')}`);
-  console.log(`PASS: Live inference providers available: ${liveProviders.join(', ')}`);
-
-  // Choose live model policy (e.g. aira-auto or aira-fast)
-  const targetModel = liveProviders.includes('nvidia') ? 'aira-auto' : 'aira-fast';
+  assert.deepEqual(availableProviders, [authorizedProvider], 'Only the explicitly authorized provider may be configured.');
+  const targetModel = authorizedModel!;
   const resolvedExecution = modelRouter.getAdapter({ model: targetModel });
-  console.log(`Resolved Provider: ${resolvedExecution.provider}`);
-  console.log(`Executed Model: ${resolvedExecution.executedModel}`);
-  assert.notEqual(resolvedExecution.provider, 'mock', 'Must NOT use mock adapter for live provider acceptance');
+  assert.equal(resolvedExecution.provider, authorizedProvider, 'Resolved provider must match the explicit paid-call authorization.');
+  console.log(`PASS: Explicit live provider/model selected: ${authorizedProvider}:${targetModel}`);
 
   // STEP 3: Setup Agent Runtime with Live Provider
   console.log('\n[STEP 3] Initializing Agent Runtime with live inference provider...');
   const runRepo = new PostgresRunRepository();
   const toolCallRepo = new PostgresToolCallRepository();
   const toolRegistry = new ToolRegistry();
+  const calculatorTool = toolRegistry.get('calculator');
+  assert.ok(calculatorTool, 'Calculator tool must be available for the acceptance mission.');
+  // Live-provider acceptance is not a web-search, browser, shell, MCP, or worker test.
+  // Restrict the runtime's built-in registry to the deterministic calculator only.
+  const registryTools = (toolRegistry as unknown as { tools: Map<string, unknown> }).tools;
+  registryTools.clear();
+  registryTools.set('calculator', calculatorTool);
+  assert.deepEqual(toolRegistry.listDefinitions().map((tool) => tool.name), ['calculator']);
   const approvalKernel = new ApprovalKernel(
     new PostgresApprovalRepository(),
     new PostgresSessionGrantRepository()
@@ -121,9 +107,13 @@ async function main(): Promise<void> {
 
   // Authenticated Execution Principal
   const missionTag = randomUUID().slice(0, 8);
+  const authenticatedUserId = `usr_live_provider_${missionTag}`;
+  const authenticatedUserWorkspaceId = await new PostgresWorkspaceAuthorityRepository()
+    .resolveWorkspace(authenticatedUserId);
   const authenticatedUser: ExecutionPrincipal = {
-    userId: `usr_live_provider_${missionTag}`,
+    userId: authenticatedUserId,
     sessionId: `sess_live_${missionTag}`,
+    workspaceId: authenticatedUserWorkspaceId,
     roles: ['member', 'developer'],
     scopes: ['tools:execute', 'runs:read', 'runs:write', 'agent:mission']
   };
@@ -184,7 +174,7 @@ async function main(): Promise<void> {
   console.log('PASS: Live model synthesized response successfully incorporating tool result (4194304)');
 
   // STEP 6: Durable Database Persistence
-  console.log('\n[STEP 6] Verifying durable database persistence in isolated staging database...');
+  console.log('\n[STEP 6] Verifying durable database persistence in the run-scoped disposable database...');
   const persistedRun = await db('runs').where({ id: run.id }).first();
   assert(persistedRun, 'Run must exist in public.runs');
   assert.equal(persistedRun.prompt, longPrompt, 'Full >255 char prompt must be preserved without truncation');
@@ -225,7 +215,7 @@ async function main(): Promise<void> {
 main()
   .catch((err) => {
     console.error('\n[LIVE PROVIDER CERTIFICATION FAILED]:', err);
-    process.exit(1);
+    process.exitCode = 1;
   })
   .finally(async () => {
     await db.destroy();
