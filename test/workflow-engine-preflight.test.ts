@@ -5,8 +5,8 @@ import { runWithDisposablePostgresTestContract } from './helpers/disposable-post
 const validEnvironment = {
   NODE_ENV: 'test',
   CI_DISPOSABLE_DATABASE: 'true',
-  DATABASE_URL: 'postgresql://aira_ci_123-456:synthetic@postgres:5432/aira_ci_123-456',
-  ISOLATED_TEST_DATABASE_URL: 'postgresql://aira_ci_123-456:synthetic@postgres:5432/aira_ci_123-456',
+  DATABASE_URL: 'postgresql://aira_ci_123-456@postgres:5432/aira_ci_123-456',
+  ISOLATED_TEST_DATABASE_URL: 'postgresql://aira_ci_123-456@postgres:5432/aira_ci_123-456',
   CI_EXPECTED_DATABASE_USER: 'aira_ci_123-456',
   CI_EXPECTED_DATABASE_NAME: 'aira_ci_123-456',
   CI_EXPECTED_POSTGRES_ADDRESSES: '["ipv4:172.30.0.2"]'
