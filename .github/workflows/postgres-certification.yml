@@ -323,7 +323,9 @@ jobs:
             "$TEST_CONTAINER" npm run test:recovery
 
           mark_stage 'run workflow tests'
-          docker exec "$TEST_CONTAINER" npm run test:workflow
+          docker exec --env AIRA_POSTGRES_CERTIFICATION=1 --env AIRA_PERSISTENT_WORKSPACE_AUTHORITY=true \
+            --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" npm run test:workflow
           mark_stage 'run guarded tool tests with persistent workspace-authority enforcement'
           docker exec --env AIRA_POSTGRES_CERTIFICATION=1 --env AIRA_PERSISTENT_WORKSPACE_AUTHORITY=true \
             --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
