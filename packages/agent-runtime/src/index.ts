@@ -363,6 +363,10 @@ export class AgentRuntime extends EventEmitter {
     pending.push(event);
   }
 
+  public getWorkspaceAuthority(): WorkspaceAuthorityRepository {
+    return this.workspaceAuthority;
+  }
+
   public async createRun(request: CreateRunRequest, principal: ExecutionPrincipal): Promise<Run> {
     // Production/DB-backed runtimes revalidate the server-owned principal/workspace
     // binding at run creation; request body workspace fields are never consulted.
@@ -1868,4 +1872,5 @@ export * from './research/firecrawl-adapter.js';
 export * from './orchestration/ruflo-adapter.js';
 export * from './specialists/index.js';
 export * from './durable/index.js';
+export * from './workspace-authority.js';
 

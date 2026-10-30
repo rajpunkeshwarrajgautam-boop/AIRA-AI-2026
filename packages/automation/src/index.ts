@@ -1,6 +1,6 @@
 import * as crypto from 'crypto';
 import { AutomationDefinition, AutomationRun, SchedulerCapabilities } from '../../contracts/src/index.js';
-import { AgentRuntime } from '../../agent-runtime/src/index.js';
+import { AgentRuntime, WorkspaceAuthorityRepository, workspaceAuthority } from '../../agent-runtime/src/index.js';
 import { AutomationRepository, AutomationRunRepository } from './repositories.js';
 import parser from 'cron-parser';
 
@@ -27,8 +27,19 @@ export class AutomationEngine {
   constructor(
     private agentRuntime: AgentRuntime, 
     private autoRepo: AutomationRepository,
-    private runRepo: AutomationRunRepository
+    private runRepo: AutomationRunRepository,
+    private workspaceAuthorityRepository?: WorkspaceAuthorityRepository
   ) {}
+
+  private getWorkspaceAuthority(): WorkspaceAuthorityRepository {
+    if (this.workspaceAuthorityRepository) {
+      return this.workspaceAuthorityRepository;
+    }
+    if (typeof (this.agentRuntime as any).getWorkspaceAuthority === 'function') {
+      return (this.agentRuntime as any).getWorkspaceAuthority();
+    }
+    return workspaceAuthority;
+  }
 
   public getSchedulerStatus(): SchedulerCapabilities {
     // Explicit operator kill-switch: disable scheduler unconditionally
@@ -319,6 +330,27 @@ export class AutomationEngine {
     }
 
     try {
+      // 1. Establish authenticated principal identity
+      const effectivePrincipalId = typeof item.principalId === 'string' ? item.principalId.trim() : '';
+      if (!effectivePrincipalId) {
+        throw new Error('Automation execution rejected: Missing or invalid principal identity.');
+      }
+
+      if (principalId && principalId !== effectivePrincipalId) {
+        throw new Error(`ACCESS_DENIED: Automation "${id}" belongs to another user.`);
+      }
+
+      // 2. Resolve server-side workspace authority for the verified principal.
+      // Arbitrary workspace identifiers from conditions or client payloads are strictly ignored.
+      const authorityRepo = this.getWorkspaceAuthority();
+      const workspaceId = await authorityRepo.resolveWorkspace(effectivePrincipalId);
+
+      // Verify active authority (fails closed if revoked or inactive)
+      const isActive = await authorityRepo.isWorkspaceActive(effectivePrincipalId, workspaceId);
+      if (!isActive) {
+        throw new Error('Automation execution rejected: Principal workspace authority is inactive or revoked.');
+      }
+
       const conditions = (item.conditions || {}) as Record<string, any>;
       const model = conditions.modelPolicy?.model || conditions.model || 'aira-auto';
       const temperature = typeof conditions.modelPolicy?.temperature === 'number'
@@ -335,8 +367,11 @@ export class AutomationEngine {
           temperature
         } as any
       }, {
-        userId: item.principalId || 'system-automation',
-        sessionId: `automation-session-${item.id}`
+        userId: effectivePrincipalId,
+        sessionId: `automation-session-${item.id}`,
+        workspaceId,
+        roles: ['automation_principal'],
+        scopes: ['*']
       });
 
       claim.runId = run.id;

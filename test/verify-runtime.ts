@@ -263,6 +263,7 @@ async function runTests() {
     const automation = new AutomationEngine(runtime, new PostgresAutomationRepository(), new PostgresAutomationRunRepository());
 
     const created = await automation.createAutomation({
+      principalId: runtimePrincipalId,
       name: 'Test Recurring Job',
       enabled: true,
       trigger: 'MANUAL',
