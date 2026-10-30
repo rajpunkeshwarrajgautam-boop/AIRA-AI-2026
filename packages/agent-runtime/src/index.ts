@@ -1725,12 +1725,30 @@ CAPABILITY & IDENTITY INVARIANTS:
         const run = await this.getRun(event.runId);
         if (event.decision === 'REJECT') {
           if (event.targetType === 'WORKFLOW') {
+            const workflowRun = await this.workflowRepo.getWorkflowRunByRunId(event.runId);
+            if (workflowRun) {
+              workflowRun.state = 'FAILED';
+              workflowRun.error = `Approval rejected for step "${event.workflowStepId}".`;
+              if (event.workflowStepId) {
+                workflowRun.stepStates[event.workflowStepId] = 'FAILED';
+              }
+              workflowRun.pendingApprovalStepId = undefined;
+              workflowRun.updatedAt = Date.now();
+              await this.workflowRepo.saveWorkflowRun(workflowRun);
+            }
             await this.emitRunEvent(event.runId, 'workflow.failed', {
               runId: event.runId, error: `Approval rejected for step "${event.workflowStepId}".`
             });
+          } else {
+            if (run) {
+              run.executionCheckpoint = 'COMPLETED';
+              await this.saveRun(run);
+            }
+            await this.transitionRunState(event.runId, 'FAILED', 'User rejected required tool approval.');
           }
+          const finalRun = await this.getRun(event.runId);
           await this.approvalKernel.completeApprovalResumption(event.id, {
-            outcome: 'rejected', runState: run?.state || 'FAILED', resultReference: { runId: event.runId }
+            outcome: 'rejected', runState: finalRun?.state || 'FAILED', resultReference: { runId: event.runId }
           });
           continue;
         }
