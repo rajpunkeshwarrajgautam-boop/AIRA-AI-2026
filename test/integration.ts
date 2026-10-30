@@ -18,6 +18,18 @@ function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function killProcessTree(proc: any) {
+  if (proc && proc.pid) {
+    try {
+      if (process.platform === 'win32') {
+        execFileSync('taskkill', ['/F', '/T', '/PID', String(proc.pid)], { stdio: 'ignore' });
+      } else {
+        proc.kill('SIGKILL');
+      }
+    } catch {}
+  }
+}
+
 // ---------------------------------------------------------------------------
 // SSE helper — reads events until `limit` events collected or stream ends
 // ---------------------------------------------------------------------------
@@ -170,7 +182,7 @@ async function runIntegration() {
     // -----------------------------------------------------------------------
     console.log('--- TEST 3: Process Restart Recovery ---');
     console.log('Killing API server...');
-    apiServer.kill();
+    killProcessTree(apiServer);
     await sleep(1000);
 
     console.log('Restarting API server...');
@@ -564,16 +576,16 @@ async function runIntegration() {
     // Cleanup
     // -----------------------------------------------------------------------
     console.log('Cleaning up...');
-    apiServer2.kill();
-    mcpServer.kill();
+    killProcessTree(apiServer2);
+    killProcessTree(mcpServer);
     console.log('Integration tests PASS.');
-    apiServer.kill();
-    mcpServer.kill();
+    killProcessTree(apiServer);
+    killProcessTree(mcpServer);
     process.exit(0);
   } catch (err) {
     console.error('Integration tests FAILED:', err);
-    apiServer.kill();
-    mcpServer.kill();
+    killProcessTree(apiServer);
+    killProcessTree(mcpServer);
     process.exit(1);
   }
 }

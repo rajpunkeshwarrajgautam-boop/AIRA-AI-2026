@@ -585,6 +585,7 @@ export class AgentRuntime extends EventEmitter {
     );
     if (!applied) return true; // Duplicate delivery must not schedule another resume.
     if (this.approvalKernel.supportsApprovalResumptionOutbox()) {
+      this.inFlightRuns.delete(pendingRequest.runId);
       await this.dispatchApprovalResumptions(this.recoveryOwner);
       return true;
     }
@@ -1715,6 +1716,7 @@ CAPABILITY & IDENTITY INVARIANTS:
         applied = await this.approvalKernel.applyApprovalResumption(event, owner);
         if (!applied) continue; // stale/revoked/cancelled intent is terminal and never replayed
         dispatched += 1;
+        this.inFlightRuns.delete(event.runId);
         await this.emitRunEvent(event.runId, 'approval.resolved', {
           requestId: event.approvalId,
           decision: event.decision,
