@@ -243,7 +243,8 @@ export function resolveOpenAIModel(model: ModelId | string): string {
 }
 
 export function resolveNvidiaModel(model: ModelId | string): string {
-  if (model === 'meta/llama-3.1-405b-instruct' || model === 'nvidia/llama-3.1-nemotron-70b-instruct') {
+  // Legacy / retired models migrate to the default active NVIDIA model
+  if (model === 'meta/llama-3.1-405b-instruct' || model === 'nvidia/nemotron-3-super-120b-a12b') {
     return process.env.NVIDIA_DEFAULT_MODEL || 'nvidia/llama-3.1-nemotron-70b-instruct';
   }
   if (process.env.NVIDIA_FAST_MODEL && model === 'aira-fast') {
@@ -255,6 +256,7 @@ export function resolveNvidiaModel(model: ModelId | string): string {
   if (model === 'aira-fast' || model === 'aira-deep' || model === 'aira-auto' || model === 'aira-pro') {
     return process.env.NVIDIA_DEFAULT_MODEL || 'nvidia/llama-3.1-nemotron-70b-instruct';
   }
+  // Explicitly selected supported NVIDIA models must be preserved and not overridden by NVIDIA_DEFAULT_MODEL
   if (typeof model === 'string' && (model.startsWith('nvidia/') || model.startsWith('meta/') || model.startsWith('nv-'))) {
     return model;
   }
@@ -411,7 +413,9 @@ export class OpenAIAdapter implements ModelAdapter {
       }
     }
 
-    // Cross-provider fallback defense: Ensure every provider receives its own compatible model identifier
+    // Cross-provider fallback defense: Ensure every provider receives a compatible model identifier from its supported family.
+    // NOTE: This performs syntactic provider-family namespace validation (prefix checking) to prevent
+    // foreign model cross-contamination during fallback; it does not verify live upstream model availability or entitlements.
     if (this.provider === 'groq') {
       const isGroqModel = outboundModel.startsWith('openai/gpt-oss-') ||
                           outboundModel.startsWith('llama-') ||

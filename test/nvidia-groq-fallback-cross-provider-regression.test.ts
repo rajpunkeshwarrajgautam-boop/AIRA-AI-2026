@@ -359,4 +359,76 @@ describe('NVIDIA -> Groq -> Gemini Cross-Provider Fallback & Model Isolation Sui
       process.env = savedEnv;
     }
   });
+
+  it('TEST 6: resolveNvidiaModel preserves explicitly selected supported models, migrates legacy models, and respects environment defaults', () => {
+    const savedEnv = { ...process.env };
+    try {
+      // 1. Explicit model selection MUST be preserved even when NVIDIA_DEFAULT_MODEL is configured
+      process.env.NVIDIA_DEFAULT_MODEL = 'nv-mistralai/mistral-nemo-12b-instruct';
+      
+      const explicitNemotron = resolveNvidiaModel('nvidia/llama-3.1-nemotron-70b-instruct');
+      assert.equal(
+        explicitNemotron,
+        'nvidia/llama-3.1-nemotron-70b-instruct',
+        'Explicitly selected supported model MUST NOT be overridden by NVIDIA_DEFAULT_MODEL'
+      );
+
+      const explicitCandidate = resolveNvidiaModel('nvidia/mistral-nemo-minitron-8b-8k-instruct');
+      assert.equal(
+        explicitCandidate,
+        'nvidia/mistral-nemo-minitron-8b-8k-instruct',
+        'Other explicit candidate NVIDIA models must be preserved without override'
+      );
+
+      // 2. Legacy model migration
+      // When NVIDIA_DEFAULT_MODEL is set, legacy retired models migrate to NVIDIA_DEFAULT_MODEL
+      assert.equal(
+        resolveNvidiaModel('meta/llama-3.1-405b-instruct'),
+        'nv-mistralai/mistral-nemo-12b-instruct',
+        'Legacy Llama 405B migrates to NVIDIA_DEFAULT_MODEL when configured'
+      );
+      assert.equal(
+        resolveNvidiaModel('nvidia/nemotron-3-super-120b-a12b'),
+        'nv-mistralai/mistral-nemo-12b-instruct',
+        'Deprecated Nemotron 120B migrates to NVIDIA_DEFAULT_MODEL when configured'
+      );
+
+      // When NVIDIA_DEFAULT_MODEL is absent, legacy retired models migrate to canonical active 70B
+      delete process.env.NVIDIA_DEFAULT_MODEL;
+      assert.equal(
+        resolveNvidiaModel('meta/llama-3.1-405b-instruct'),
+        'nvidia/llama-3.1-nemotron-70b-instruct',
+        'Legacy Llama 405B migrates to active 70B default when NVIDIA_DEFAULT_MODEL is absent'
+      );
+      assert.equal(
+        resolveNvidiaModel('nvidia/nemotron-3-super-120b-a12b'),
+        'nvidia/llama-3.1-nemotron-70b-instruct',
+        'Deprecated Nemotron 120B migrates to active 70B default when NVIDIA_DEFAULT_MODEL is absent'
+      );
+
+      // 3. Environment-default resolution for internal modes
+      delete process.env.NVIDIA_FAST_MODEL;
+      delete process.env.NVIDIA_DEEP_MODEL;
+      delete process.env.NVIDIA_DEFAULT_MODEL;
+
+      assert.equal(resolveNvidiaModel('aira-auto'), 'nvidia/llama-3.1-nemotron-70b-instruct');
+      assert.equal(resolveNvidiaModel('aira-pro'), 'nvidia/llama-3.1-nemotron-70b-instruct');
+      assert.equal(resolveNvidiaModel('aira-fast'), 'nvidia/llama-3.1-nemotron-70b-instruct');
+      assert.equal(resolveNvidiaModel('aira-deep'), 'nvidia/llama-3.1-nemotron-70b-instruct');
+
+      // Environment overrides for dedicated fast / deep modes
+      process.env.NVIDIA_FAST_MODEL = 'nvidia/llama-3.1-nemotron-51b-instruct';
+      process.env.NVIDIA_DEEP_MODEL = 'nvidia/nemotron-nano-3-30b-a3b';
+      assert.equal(resolveNvidiaModel('aira-fast'), 'nvidia/llama-3.1-nemotron-51b-instruct');
+      assert.equal(resolveNvidiaModel('aira-deep'), 'nvidia/nemotron-nano-3-30b-a3b');
+
+      // Unmapped / unrecognized string falls back to default
+      delete process.env.NVIDIA_DEFAULT_MODEL;
+      assert.equal(resolveNvidiaModel('unknown-model-xyz'), 'nvidia/llama-3.1-nemotron-70b-instruct');
+      process.env.NVIDIA_DEFAULT_MODEL = 'nvidia/custom-fleet-model';
+      assert.equal(resolveNvidiaModel('unknown-model-xyz'), 'nvidia/custom-fleet-model');
+    } finally {
+      process.env = savedEnv;
+    }
+  });
 });

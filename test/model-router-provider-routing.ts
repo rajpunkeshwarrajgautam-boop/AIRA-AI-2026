@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { ModelRouter, OpenAIAdapter, withInferencePrincipal } from '../packages/model-router/src/index.js';
+import { ModelRouter, OpenAIAdapter, resolveNvidiaModel, withInferencePrincipal } from '../packages/model-router/src/index.js';
 import { AVAILABLE_MODELS } from '../src/utils/constants.js';
 import { normalizeStoredModelId } from '../src/utils/storage.js';
 
@@ -44,6 +44,15 @@ async function run() {
     const migratedPolicy = router.resolvePolicy(retired, 'ANSWER');
     assert.equal(migratedPolicy.model, replacement,
       'legacy callers must never forward retired Llama 405B to the provider');
+
+    // Regression check: resolveNvidiaModel preserves explicitly selected model under NVIDIA_DEFAULT_MODEL override
+    process.env.NVIDIA_DEFAULT_MODEL = 'nv-mistralai/mistral-nemo-12b-instruct';
+    assert.equal(
+      resolveNvidiaModel('nvidia/llama-3.1-nemotron-70b-instruct'),
+      'nvidia/llama-3.1-nemotron-70b-instruct',
+      'Explicitly selected supported NVIDIA model must not be overridden by NVIDIA_DEFAULT_MODEL'
+    );
+    delete process.env.NVIDIA_DEFAULT_MODEL;
 
     const originalFetch = globalThis.fetch;
     try {
