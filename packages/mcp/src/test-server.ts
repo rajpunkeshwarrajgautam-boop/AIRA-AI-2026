@@ -80,16 +80,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request: any) => {
   };
 });
 
-let transport: StreamableHTTPServerTransport;
+let transport: StreamableHTTPServerTransport | undefined;
 
 app.get('/mcp', async (req, res) => {
-  transport = new StreamableHTTPServerTransport('/mcp/messages', res);
-  await server.connect(transport);
+  if (!transport) {
+    transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    await server.connect(transport);
+  }
+  await transport.handleRequest(req, res);
 });
 
 app.post('/mcp/messages', async (req, res) => {
   if (transport) {
-    await transport.handlePostMessage(req, res);
+    await transport.handleRequest(req, res);
   } else {
     res.status(500).send('No active MCP session');
   }

@@ -48,7 +48,10 @@
     "test:behavioral:security": "npx tsx --test test/behavioral/security.test.ts",
     "test:behavioral:benchmark": "npx tsx test/behavioral/freshness-benchmark-120.ts",
     "test:behavioral:precedence": "npx tsx test/behavioral/precedence-regression.ts",
-    "typecheck": "tsc --noEmit",
+    "test:pr118:regression": "npx tsx --test test/pr118-postmerge-remediation-regression.test.ts",
+    "typecheck": "tsc -b && tsc -p tsconfig.server.json --noEmit",
+    "typecheck:client": "tsc -b",
+    "typecheck:server": "tsc -p tsconfig.server.json --noEmit",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
@@ -132,7 +135,7 @@
     "react-dom": "^19.2.8",
     "tailwind-merge": "^3.7.0",
     "uuid": "^14.0.2",
-    "zod": "^4.6.5"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@sparticuz/chromium": "153.0.0",
@@ -156,6 +159,7 @@
   },
   "overrides": {
     "@grpc/grpc-js": "1.14.5",
-    "postcss-selector-parser": "7.1.6"
+    "postcss-selector-parser": "7.1.6",
+    "body-parser": "^2.4.0"
   }
 }

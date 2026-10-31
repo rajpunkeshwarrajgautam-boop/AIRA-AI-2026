@@ -94,14 +94,22 @@ export const SpecialistExecutionConstraintsSchema = z.object({
   allowedTools: z.array(z.string().min(1)).default([]),
   sandboxRequired: z.boolean().default(false),
   requireStrictJsonOutput: z.boolean().default(true)
-}).default({});
+}).default({
+  sideEffectLevel: 'NONE',
+  allowedTools: [],
+  sandboxRequired: false,
+  requireStrictJsonOutput: true
+});
 export type SpecialistExecutionConstraints = z.infer<typeof SpecialistExecutionConstraintsSchema>;
 
 export const SpecialistAuthorizationRequirementsSchema = z.object({
   requiresHumanApproval: z.boolean().default(false),
   requiredPermissions: z.array(z.string().min(1)).default([]),
   approvedBy: z.string().optional()
-}).default({});
+}).default({
+  requiresHumanApproval: false,
+  requiredPermissions: []
+});
 export type SpecialistAuthorizationRequirements = z.infer<typeof SpecialistAuthorizationRequirementsSchema>;
 
 export const SpecialistBudgetLimitsSchema = z.object({

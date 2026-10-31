@@ -125,6 +125,7 @@ export class SpecialistWorkerRuntime {
           runId: claimedTask.runId,
           role: claimedTask.role,
           outcome: 'UNAVAILABLE',
+          evidenceReferences: [],
           usage: { tokensUsed: 0, durationMs: Date.now() - startedAt },
           provenance: { workerId: this.workerId },
           error: {
@@ -152,15 +153,15 @@ export class SpecialistWorkerRuntime {
         userId: claimedTask.principalId,
         sessionId: `durable_${claimedTask.id}`,
         workspaceId: claimedTask.workspaceId,
-        role: 'user'
+        roles: ['user']
       };
 
       const executionContext: SpecialistExecutionContext = {
         runId: claimedTask.runId,
         taskId: claimedTask.id,
         principal,
-        tenantId: claimedTask.workspaceId,
-        workspaceId: claimedTask.workspaceId,
+        tenantId: claimedTask.workspaceId || claimedTask.principalId,
+        workspaceId: claimedTask.workspaceId || claimedTask.principalId,
         authorizedCapabilities: specialist.requiredCapabilities,
         effectiveToolScopes: scopes.requested,
         executionPolicyVersion: '2026.2.0',
@@ -235,6 +236,7 @@ export class SpecialistWorkerRuntime {
         runId: claimedTask.runId,
         role: claimedTask.role,
         outcome: isAbort ? 'CANCELLED' : (hasRetriesLeft ? 'FAILED' : 'FAILED'),
+        evidenceReferences: [],
         usage: { tokensUsed: 0, durationMs: Date.now() - startedAt },
         provenance: { workerId: this.workerId },
         error: {

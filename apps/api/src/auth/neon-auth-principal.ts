@@ -1,4 +1,4 @@
-import { createHash, createPublicKey, verify as verifySignature } from 'node:crypto';
+import { createHash, createPublicKey, verify as verifySignature, type JsonWebKey } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 
 type JwtHeader = { alg?: string; kid?: string; typ?: string };

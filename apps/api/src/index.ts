@@ -37,6 +37,8 @@ import {
   createEmbeddingProvider
 } from '../../../packages/retrieval/src/index.js';
 import {
+  Run,
+  ModelPolicySchema,
   CreateRunRequestSchema,
   ApprovalDecisionSchema,
   AutomationDefinitionSchema,
@@ -63,6 +65,11 @@ if (startupConfiguration.errors.length > 0) {
 }
 
 import { createPrincipalMiddleware } from './middleware/principal.js';
+function getParam(param: string | string[] | undefined): string {
+  if (Array.isArray(param)) return param[0] || '';
+  return param || '';
+}
+
 import { createStagingMaintenanceMiddleware } from './middleware/staging-maintenance.js';
 import { createSessionAuthMiddleware, ensureAuthenticatedSession } from './auth/session-auth.js';
 import { createNeonAuthPrincipalMiddleware } from './auth/neon-auth-principal.js';
@@ -472,7 +479,7 @@ app.post('/api/billing/webhook/razorpay', async (req: Request, res: Response) =>
 
   try {
     const result = await paymentGatewayService.processRazorpayWebhook(rawBody, signature);
-    res.status(200).json({ status: 'ok', ...result });
+    res.status(200).json({ ok: true, ...result });
   } catch (err: any) {
     console.error('[RazorpayWebhookError]', err.message);
     res.status(400).json({ error: err.message });
@@ -488,7 +495,7 @@ app.post('/api/billing/webhook/cashfree', async (req: Request, res: Response) =>
 
   try {
     const result = await paymentGatewayService.processCashfreeWebhook(rawBody, signature, timestamp);
-    res.status(200).json({ status: 'ok', ...result });
+    res.status(200).json({ ok: true, ...result });
   } catch (err: any) {
     console.error('[CashfreeWebhookError]', err.message);
     res.status(400).json({ error: err.message });
@@ -520,7 +527,9 @@ app.use('/api/builder', createBuilderRoutes(modelRouter));
 const benchmarkSignal = Symbol('benchmarkSignal');
 async function admitBenchmark(req: Request, res: Response, next: NextFunction) {
   const principal = req.principal!;
-  if (!(principal.roles || []).some(role => role === 'admin' || role === 'operator') && principal.role !== 'admin') {
+  const roles = principal.roles || [];
+  const isAuthorized = roles.includes('admin') || roles.includes('operator');
+  if (!isAuthorized) {
     res.status(403).json({ code: 'OPERATOR_REQUIRED', error: 'Operator authorization required.' });
     return;
   }
@@ -850,9 +859,10 @@ async function seedDefaultAgent() {
     await agentRepo.saveAgent({
       id: 'agent-default',
       name: 'Default Agent',
+      description: 'Aira default agent for verified reasoning.',
       instructions: 'You are Aira AI, an autonomous intelligence operating workspace. Maintain precise, verified reasoning.',
-      modelPolicy: { model: 'mock-deterministic' },
-      tools: [],
+      modelPolicy: ModelPolicySchema.parse({ model: 'mock-deterministic' }),
+      tools: [] as string[],
       memoryScopes: ['workspace'],
       approvalPolicy: 'autonomous',
       maxSteps: 10,
@@ -879,8 +889,6 @@ async function seedDefaultAutomation() {
       agentId: 'agent_sys_monitor',
       objective: 'Audit workspace telemetry, check MCP node freshness, and report health metrics.',
       approvalPolicy: 'autonomous',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
       lastRun: 0
     });
   }
@@ -1000,7 +1008,7 @@ app.get('/api/conversations/:id', async (req: Request, res: Response) => {
   try {
     const conversation = await conversationSearchRepo.getConversation(
       req.principal!.userId,
-      req.params.id
+      getParam(req.params.id)
     );
 
     if (!conversation) {
@@ -1016,7 +1024,7 @@ app.get('/api/conversations/:id', async (req: Request, res: Response) => {
 
 app.delete('/api/conversations/:id', async (req: Request, res: Response) => {
   try {
-    const deleted = await conversationSearchRepo.deleteConversation(req.principal!.userId, req.params.id);
+    const deleted = await conversationSearchRepo.deleteConversation(req.principal!.userId, getParam(req.params.id));
     if (!deleted) return res.status(404).json({ error: 'Conversation not found.' });
     res.status(204).send();
   } catch (err: any) {
@@ -1093,9 +1101,9 @@ app.get('/api/runs', async (req: Request, res: Response) => {
 });
 
 app.get('/api/runs/:id', async (req: Request, res: Response) => {
-  const run = await agentRuntime.getRun(req.params.id);
+  const run = await agentRuntime.getRun(getParam(req.params.id));
   if (!run || !isRunOwnedByPrincipal(run, req.principal!)) {
-    return res.status(404).json({ error: `Run with id "${req.params.id}" not found.` });
+    return res.status(404).json({ error: `Run with id "${getParam(req.params.id)}" not found.` });
   }
 
   // If this run has durable specialist tasks, reflect their latest terminal progress
@@ -1110,7 +1118,6 @@ app.get('/api/runs/:id', async (req: Request, res: Response) => {
 
         if (allCompleted) {
           run.state = 'COMPLETED';
-          run.status = 'COMPLETED';
           const finalTask = tasks[tasks.length - 1];
           if (finalTask.resultOutput) {
             run.content = typeof finalTask.resultOutput === 'object'
@@ -1120,11 +1127,9 @@ app.get('/api/runs/:id', async (req: Request, res: Response) => {
           await runRepo.saveRun(run);
         } else if (anyFailed) {
           run.state = 'FAILED';
-          run.status = 'FAILED';
           await runRepo.saveRun(run);
         } else if (anyCancelled) {
           run.state = 'CANCELLED';
-          run.status = 'CANCELLED';
           await runRepo.saveRun(run);
         }
       }
@@ -1137,22 +1142,22 @@ app.get('/api/runs/:id', async (req: Request, res: Response) => {
 });
 
 app.post('/api/runs/:id/cancel', async (req: Request, res: Response) => {
-  const run = await agentRuntime.getRun(req.params.id);
+  const run = await agentRuntime.getRun(getParam(req.params.id));
   if (!run || !isRunOwnedByPrincipal(run, req.principal!)) {
     return res.status(404).json({ error: 'Run not found.' });
   }
-  const success = await agentRuntime.cancelRun(req.params.id);
+  const success = await agentRuntime.cancelRun(getParam(req.params.id));
   if (!success) {
     return res.status(400).json({ error: 'Cannot cancel run (either not found or in terminal state).' });
   }
-  res.json({ status: 'CANCELLED', runId: req.params.id });
+  res.json({ status: 'CANCELLED', runId: getParam(req.params.id) });
 });
 
 app.post('/api/runs/:id/approve', async (req: Request, res: Response) => {
   try {
     const { requestId, decision } = req.body;
     const approval = await approvalKernel.getPendingRequest(requestId);
-    if (!approval || approval.runId !== req.params.id) {
+    if (!approval || approval.runId !== getParam(req.params.id)) {
       return res.status(404).json({ error: 'Approval request not found.' });
     }
 
@@ -1167,7 +1172,7 @@ app.post('/api/runs/:id/approve', async (req: Request, res: Response) => {
       requestId,
       parsedDecision,
       resolverPrincipal,
-      req.params.id
+      getParam(req.params.id)
     );
     if (!success) {
       return res.status(400).json({ error: 'Could not apply approval decision.' });
@@ -1226,18 +1231,26 @@ app.post('/api/missions', async (req: Request, res: Response) => {
     // Ensure parent run row exists in public.runs (foreign key constraint).
     if (!existingRun) {
       const now = Date.now();
-      const parentRun = {
+      const parentRun: Run = {
         id: runId,
         principalId: principal.userId,
+        principalScopes: principal.scopes || [],
         sessionId: principal.sessionId || `sess_${principal.userId}`,
         workspaceId,
         prompt,
-        intent: 'TOOL_ACTION' as const,
-        state: 'QUEUED' as const,
-        status: 'QUEUED' as const,
+        intent: 'TOOL_ACTION',
+        state: 'QUEUED',
+        modelPolicy: ModelPolicySchema.parse({ model: 'mock-deterministic' }),
+        context: {},
+        content: '',
+        thinking: '',
         toolsUsed: ['calculator'],
         toolCalls: [],
         toolResults: [],
+        artifacts: [],
+        citations: [],
+        stepCount: 0,
+        maxSteps: 10,
         createdAt: now,
         updatedAt: now
       };
@@ -1275,7 +1288,7 @@ app.post('/api/missions', async (req: Request, res: Response) => {
 
 app.get('/api/missions/:id', async (req: Request, res: Response) => {
   try {
-    const id = req.params.id;
+    const id = getParam(req.params.id);
     const specialistRepo = agentRuntime.getSpecialistTaskRepository();
     
     // Search by runId or missionId
@@ -1334,7 +1347,6 @@ app.get('/api/missions/:id', async (req: Request, res: Response) => {
       const parentRun = await agentRuntime.getRun(runId);
       if (parentRun && parentRun.state !== 'COMPLETED') {
         parentRun.state = 'COMPLETED';
-        parentRun.status = 'COMPLETED';
         parentRun.content = typeof finalOutput === 'object' && finalOutput !== null
           ? JSON.stringify(finalOutput)
           : String(finalOutput ?? 'COMPLETED');
@@ -1388,7 +1400,7 @@ app.get('/api/missions', async (req: Request, res: Response) => {
 // SSE Stream for Run
 // -----------------------------------------------------------------------
 app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
-  const runId = req.params.id;
+  const runId = getParam(req.params.id);
   const run = await agentRuntime.getRun(runId);
 
   if (!run || !isRunOwnedByPrincipal(run, req.principal!)) {
@@ -1892,9 +1904,9 @@ app.get('/api/tools/calls', async (req: Request, res: Response) => {
 
 app.get('/api/tools/calls/:id', async (req: Request, res: Response) => {
   try {
-    const call = await toolCallRepo.getToolCall(req.params.id);
+    const call = await toolCallRepo.getToolCall(getParam(req.params.id));
     if (!call || call.principalId !== req.principal!.userId) {
-      return res.status(404).json({ error: `Tool call with id "${req.params.id}" not found.` });
+      return res.status(404).json({ error: `Tool call with id "${getParam(req.params.id)}" not found.` });
     }
     res.json(call);
   } catch (err: any) {
@@ -1904,11 +1916,11 @@ app.get('/api/tools/calls/:id', async (req: Request, res: Response) => {
 
 app.post('/api/tools/calls/:id/cancel', async (req: Request, res: Response) => {
   try {
-    const success = await toolGateway.cancel(req.params.id, req.principal!);
+    const success = await toolGateway.cancel(getParam(req.params.id), req.principal!);
     if (!success) {
       return res.status(400).json({ error: 'Cannot cancel tool call (either not found, not owned, or already terminal).' });
     }
-    res.json({ status: 'CANCELLED', toolCallId: req.params.id });
+    res.json({ status: 'CANCELLED', toolCallId: getParam(req.params.id) });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -1935,7 +1947,7 @@ app.get('/api/knowledge/sources/:id', async (req: Request, res: Response) => {
     workspaceId: req.principal?.workspaceId,
     isSystem: false
   };
-  const source = await knowledgeEngine.getSource(req.params.id, scope);
+  const source = await knowledgeEngine.getSource(getParam(req.params.id), scope);
   if (!source) {
     return res.status(404).json({ error: 'Source not found or access denied.' });
   }
@@ -1948,11 +1960,11 @@ app.delete('/api/knowledge/sources/:id', async (req: Request, res: Response) => 
     workspaceId: req.principal?.workspaceId,
     isSystem: false
   };
-  const deleted = await knowledgeEngine.deleteSource(req.params.id, scope);
+  const deleted = await knowledgeEngine.deleteSource(getParam(req.params.id), scope);
   if (!deleted) {
     return res.status(404).json({ error: 'Source not found or deletion not permitted.' });
   }
-  res.json({ success: true, id: req.params.id });
+  res.json({ success: true, id: getParam(req.params.id) });
 });
 
 app.post('/api/knowledge/ingest', async (req: Request, res: Response) => {
@@ -2069,8 +2081,8 @@ app.get('/api/agents/:id', async (req: Request, res: Response) => {
   if (!verifiedUserId) {
     return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
   }
-  const agent = await agentRepo.getAgent(req.params.id, verifiedUserId);
-  if (!agent) return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
+  const agent = await agentRepo.getAgent(getParam(req.params.id), verifiedUserId);
+  if (!agent) return res.status(404).json({ error: `Agent "${getParam(req.params.id)}" not found.` });
   res.json(agent);
 });
 
@@ -2086,8 +2098,8 @@ app.patch('/api/agents/:id', async (req: Request, res: Response) => {
     });
   }
 
-  const agent = await agentRepo.getAgent(req.params.id, verifiedUserId);
-  if (!agent) return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
+  const agent = await agentRepo.getAgent(getParam(req.params.id), verifiedUserId);
+  if (!agent) return res.status(404).json({ error: `Agent "${getParam(req.params.id)}" not found.` });
   const updates = req.body as Partial<AgentDefinition>;
   delete (updates as any).id;
   delete (updates as any).principalId;
@@ -2102,9 +2114,9 @@ app.delete('/api/agents/:id', async (req: Request, res: Response) => {
   if (!verifiedUserId) {
     return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
   }
-  const deleted = await agentRepo.deleteAgent(req.params.id, verifiedUserId);
+  const deleted = await agentRepo.deleteAgent(getParam(req.params.id), verifiedUserId);
   if (!deleted) {
-    return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
+    return res.status(404).json({ error: `Agent "${getParam(req.params.id)}" not found.` });
   }
   res.status(204).send();
 });
@@ -2114,8 +2126,8 @@ app.post('/api/agents/:id/run', async (req: Request, res: Response) => {
   if (!verifiedUserId) {
     return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
   }
-  const agent = await agentRepo.getAgent(req.params.id, verifiedUserId);
-  if (!agent) return res.status(404).json({ error: `Agent "${req.params.id}" not found.` });
+  const agent = await agentRepo.getAgent(getParam(req.params.id), verifiedUserId);
+  if (!agent) return res.status(404).json({ error: `Agent "${getParam(req.params.id)}" not found.` });
   try {
     const run = await agentRuntime.createRun({
       prompt: req.body.prompt || agent.instructions,
@@ -2152,6 +2164,9 @@ app.post('/api/automations', async (req: Request, res: Response) => {
 
   const clientOpId = (req.headers['x-client-operation-id'] as string) || req.body?.clientOperationId;
 
+  let sideEffectCommitted = false;
+  let automationResult: Awaited<ReturnType<typeof automationEngine.createAutomation>> | null = null;
+
   try {
     if (req.body?.principalId && req.body.principalId !== verifiedUserId) {
       return res.status(400).json({
@@ -2164,9 +2179,6 @@ app.post('/api/automations', async (req: Request, res: Response) => {
       principalId: verifiedUserId
     };
     const parsed = AutomationDefinitionSchema.omit({ id: true }).parse(raw);
-
-    let sideEffectCommitted = false;
-    let automationResult: any = null;
 
     // Server-side durable principal-scoped idempotency
     if (clientOpId) {
@@ -2210,11 +2222,11 @@ app.post('/api/automations', async (req: Request, res: Response) => {
 
 app.get('/api/automations/:id', async (req: Request, res: Response) => {
   try {
-    const item = await automationEngine.getAutomation(req.params.id, req.principal?.userId);
-    if (!item) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
+    const item = await automationEngine.getAutomation(getParam(req.params.id), req.principal?.userId);
+    if (!item) return res.status(404).json({ error: `Automation "${getParam(req.params.id)}" not found.` });
     res.json(item);
   } catch {
-    res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
+    res.status(404).json({ error: `Automation "${getParam(req.params.id)}" not found.` });
   }
 });
 
@@ -2237,7 +2249,7 @@ app.patch('/api/automations/:id', async (req: Request, res: Response) => {
       }
     }
 
-    const updated = await automationEngine.patchAutomation(req.params.id, req.body, verifiedUserId);
+    const updated = await automationEngine.patchAutomation(getParam(req.params.id), req.body, verifiedUserId);
     res.json(updated);
   } catch (err: any) {
     const status = err.statusCode ?? (err.message?.includes('not found') ? 404 : 400);
@@ -2248,11 +2260,11 @@ app.patch('/api/automations/:id', async (req: Request, res: Response) => {
 
 app.delete('/api/automations/:id', async (req: Request, res: Response) => {
   try {
-    const deleted = await automationEngine.deleteAutomation(req.params.id, req.principal?.userId);
-    if (!deleted) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
+    const deleted = await automationEngine.deleteAutomation(getParam(req.params.id), req.principal?.userId);
+    if (!deleted) return res.status(404).json({ error: `Automation "${getParam(req.params.id)}" not found.` });
     res.status(204).send();
   } catch {
-    res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
+    res.status(404).json({ error: `Automation "${getParam(req.params.id)}" not found.` });
   }
 });
 
@@ -2262,7 +2274,7 @@ app.post('/api/automations/:id/trigger', async (req: Request, res: Response) => 
     if (!verifiedUserId) {
       return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
     }
-    const runId = await automationEngine.triggerNow(req.params.id, verifiedUserId);
+    const runId = await automationEngine.triggerNow(getParam(req.params.id), verifiedUserId);
     res.json({ runId, status: 'TRIGGERED' });
   } catch (err: any) {
     const status = err.message?.includes('ACCESS_DENIED') ? 403 : 400;
@@ -2272,9 +2284,9 @@ app.post('/api/automations/:id/trigger', async (req: Request, res: Response) => 
 
 app.get('/api/automations/:id/runs', async (req: Request, res: Response) => {
   try {
-    const item = await automationEngine.getAutomation(req.params.id, req.principal?.userId);
-    if (!item) return res.status(404).json({ error: `Automation "${req.params.id}" not found.` });
-    const runs = await automationEngine.getAutomationRuns(req.params.id, req.principal?.userId);
+    const item = await automationEngine.getAutomation(getParam(req.params.id), req.principal?.userId);
+    if (!item) return res.status(404).json({ error: `Automation "${getParam(req.params.id)}" not found.` });
+    const runs = await automationEngine.getAutomationRuns(getParam(req.params.id), req.principal?.userId);
     res.json(runs);
   } catch (err: any) {
     res.status(404).json({ error: err.message });
@@ -2287,7 +2299,7 @@ app.post('/api/automations/:id/enable', async (req: Request, res: Response) => {
     if (!verifiedUserId) {
       return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
     }
-    const item = await automationEngine.toggleAutomation(req.params.id, true, verifiedUserId);
+    const item = await automationEngine.toggleAutomation(getParam(req.params.id), true, verifiedUserId);
     res.json(item);
   } catch (err: any) {
     const status = err.statusCode || (err.code === 'SCHEDULER_UNAVAILABLE' ? 400 : (err.message?.includes('ACCESS_DENIED') ? 403 : 404));
@@ -2301,7 +2313,7 @@ app.post('/api/automations/:id/disable', async (req: Request, res: Response) => 
     if (!verifiedUserId) {
       return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
     }
-    const item = await automationEngine.toggleAutomation(req.params.id, false, verifiedUserId);
+    const item = await automationEngine.toggleAutomation(getParam(req.params.id), false, verifiedUserId);
     res.json(item);
   } catch (err: any) {
     const status = err.statusCode || (err.message?.includes('ACCESS_DENIED') ? 403 : 404);
@@ -2366,9 +2378,9 @@ app.get('/api/workflows/runs', async (req: Request, res: Response) => {
 app.get('/api/workflows/runs/:id', async (req: Request, res: Response) => {
   try {
     const wfRepo = agentRuntime.getWorkflowRepository();
-    const wfRun = await wfRepo.getWorkflowRun(req.params.id);
+    const wfRun = await wfRepo.getWorkflowRun(getParam(req.params.id));
     if (!wfRun || wfRun.principalId !== req.principal!.userId) {
-      return res.status(404).json({ error: `Workflow run "${req.params.id}" not found.` });
+      return res.status(404).json({ error: `Workflow run "${getParam(req.params.id)}" not found.` });
     }
     const steps = await wfRepo.getWorkflowSteps(wfRun.id);
     const definition = await wfRepo.getWorkflowDefinition(wfRun.workflowId);
@@ -2425,9 +2437,9 @@ app.post('/api/workflows/runs', async (req: Request, res: Response) => {
 app.post('/api/workflows/runs/:id/cancel', async (req: Request, res: Response) => {
   try {
     const wfRepo = agentRuntime.getWorkflowRepository();
-    const wfRun = await wfRepo.getWorkflowRun(req.params.id);
+    const wfRun = await wfRepo.getWorkflowRun(getParam(req.params.id));
     if (!wfRun || wfRun.principalId !== req.principal!.userId) {
-      return res.status(404).json({ error: `Workflow run "${req.params.id}" not found.` });
+      return res.status(404).json({ error: `Workflow run "${getParam(req.params.id)}" not found.` });
     }
 
     const wfEngine = agentRuntime.getWorkflowEngine();
@@ -2450,15 +2462,15 @@ app.post('/api/workflows/runs/:id/steps/:stepId/approve', async (req: Request, r
     }
 
     const wfRepo = agentRuntime.getWorkflowRepository();
-    const wfRun = await wfRepo.getWorkflowRun(req.params.id);
+    const wfRun = await wfRepo.getWorkflowRun(getParam(req.params.id));
     if (!wfRun || wfRun.principalId !== req.principal!.userId) {
-      return res.status(404).json({ error: `Workflow run "${req.params.id}" not found.` });
+      return res.status(404).json({ error: `Workflow run "${getParam(req.params.id)}" not found.` });
     }
 
     const wfEngine = agentRuntime.getWorkflowEngine();
     const success = await wfEngine.resolveStepApproval(
       wfRun.id,
-      req.params.stepId,
+      getParam(req.params.stepId),
       decision === 'APPROVE' ? 'APPROVED' : 'REJECTED',
       req.principal!
     );

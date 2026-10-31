@@ -88,8 +88,9 @@ export interface ApprovalRepository {
 const PERMISSION_RANK: Record<PermissionLevel, number> = {
   READ: 1,
   WRITE: 2,
-  FINANCIAL: 3,
-  DESTRUCTIVE: 4
+  EXTERNAL_COMMUNICATION: 3,
+  FINANCIAL: 4,
+  DESTRUCTIVE: 5
 };
 
 function canonicalJson(value: unknown): string {
@@ -136,7 +137,8 @@ function mapApprovalRow(row: any): ApprovalRequest {
       toolId: row.tool_id || row.tool_call_tool_id || `tool_${row.tool}`,
       name: row.tool,
       arguments: typeof row.arguments === 'string' ? JSON.parse(row.arguments) : row.arguments,
-      timestamp: Number(row.started_at)
+      timestamp: Number(row.started_at),
+      status: row.tool_call_status || 'WAITING_FOR_APPROVAL'
     },
     risk: row.risk || (row.permission_level === 'DESTRUCTIVE' ? 'critical' : row.permission_level === 'FINANCIAL' ? 'high' : 'medium'),
     title: `Authorize Action: ${row.tool}`,

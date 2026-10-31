@@ -41,7 +41,7 @@ export class PostgresAgentRepository implements AgentRepository {
       approvalPolicy: agent.approvalPolicy,
       maxSteps: agent.maxSteps,
       timeoutPolicy: JSON.stringify({ maxMs: agent.timeoutMs }),
-      createdAt: agent.createdAt || Date.now(),
+      createdAt: Date.now(),
       updatedAt: Date.now()
     }).onConflict('id').merge();
   }

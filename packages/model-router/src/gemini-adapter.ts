@@ -246,7 +246,7 @@ export class GeminiAdapter implements ModelAdapter {
     const completionTokens = data.usageMetadata?.candidatesTokenCount ?? 0;
 
     return {
-      content: text,
+      text,
       usage: {
         promptTokens,
         completionTokens,
@@ -416,7 +416,7 @@ export class GeminiAdapter implements ModelAdapter {
     }
 
     return {
-      content: accumulatedText,
+      text: accumulatedText,
       usage: finalUsage,
       model: cleanModel
     };

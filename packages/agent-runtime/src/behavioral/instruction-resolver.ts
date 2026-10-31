@@ -3,7 +3,7 @@ import {
   InstructionProvenance,
   ResolvedInstructionSet,
   InstructionProvenanceSchema
-} from '../../contracts/src/behavioral.js';
+} from '../../../contracts/src/behavioral.js';
 
 export interface ResolveInstructionsInput {
   userPrompt: string;

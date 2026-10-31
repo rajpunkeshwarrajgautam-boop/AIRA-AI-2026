@@ -2,7 +2,7 @@ import {
   AdaptiveWritingMode,
   AdaptiveWritingProfile,
   ResolvedInstructionSet
-} from '../../contracts/src/behavioral.js';
+} from '../../../contracts/src/behavioral.js';
 
 export class AdaptiveSynthesizer {
   /**
@@ -29,7 +29,9 @@ export class AdaptiveSynthesizer {
         technicalDepth: 1,
         formattingPreference: 'plain_conversational',
         allowEmojis,
-        avoidBoilerplate: true
+        avoidBoilerplate: true,
+        includeDevBoilerplate: false,
+        suggestFollowUps: false
       };
     }
 
@@ -45,7 +47,9 @@ export class AdaptiveSynthesizer {
         technicalDepth: 1,
         formattingPreference: 'markdown_narrative',
         allowEmojis,
-        avoidBoilerplate: true
+        avoidBoilerplate: true,
+        includeDevBoilerplate: false,
+        suggestFollowUps: false
       };
     }
 
@@ -61,7 +65,9 @@ export class AdaptiveSynthesizer {
         technicalDepth: 4,
         formattingPreference: 'markdown_code_and_diffs',
         allowEmojis,
-        avoidBoilerplate: true
+        avoidBoilerplate: true,
+        includeDevBoilerplate: false,
+        suggestFollowUps: false
       };
     }
 
@@ -76,7 +82,9 @@ export class AdaptiveSynthesizer {
         technicalDepth: 3,
         formattingPreference: 'markdown_tables_and_rubrics',
         allowEmojis,
-        avoidBoilerplate: true
+        avoidBoilerplate: true,
+        includeDevBoilerplate: false,
+        suggestFollowUps: false
       };
     }
 
@@ -91,7 +99,9 @@ export class AdaptiveSynthesizer {
         technicalDepth: 4,
         formattingPreference: 'markdown_narrative',
         allowEmojis,
-        avoidBoilerplate: true
+        avoidBoilerplate: true,
+        includeDevBoilerplate: false,
+        suggestFollowUps: false
       };
     }
 
@@ -106,7 +116,9 @@ export class AdaptiveSynthesizer {
         technicalDepth: 2,
         formattingPreference: 'markdown_narrative',
         allowEmojis,
-        avoidBoilerplate: true
+        avoidBoilerplate: true,
+        includeDevBoilerplate: false,
+        suggestFollowUps: false
       };
     }
 
@@ -119,7 +131,9 @@ export class AdaptiveSynthesizer {
         technicalDepth: 3,
         formattingPreference: 'markdown_narrative',
         allowEmojis,
-        avoidBoilerplate: true
+        avoidBoilerplate: true,
+        includeDevBoilerplate: false,
+        suggestFollowUps: false
       };
     }
 
@@ -131,7 +145,9 @@ export class AdaptiveSynthesizer {
       technicalDepth: 2,
       formattingPreference: 'plain_conversational',
       allowEmojis,
-      avoidBoilerplate: true
+      avoidBoilerplate: true,
+      includeDevBoilerplate: false,
+      suggestFollowUps: false
     };
   }
 

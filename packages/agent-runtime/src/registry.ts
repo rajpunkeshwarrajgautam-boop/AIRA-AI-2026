@@ -1,5 +1,7 @@
+import type { z } from 'zod';
 import {
   CapabilityDefinition,
+  CapabilityDefinitionSchema,
   IntentTaxonomy,
   ExecutionTarget,
   CapabilityCategory,
@@ -13,8 +15,9 @@ export class CapabilityRegistry {
     this.registerBuiltIns();
   }
 
-  public register(cap: CapabilityDefinition): void {
-    this.capabilities.set(cap.id, cap);
+  public register(cap: CapabilityDefinition | z.input<typeof CapabilityDefinitionSchema>): void {
+    const parsed = CapabilityDefinitionSchema.parse(cap);
+    this.capabilities.set(parsed.id, parsed);
   }
 
   public get(id: string): CapabilityDefinition | undefined {

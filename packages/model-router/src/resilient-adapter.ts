@@ -72,7 +72,7 @@ export class ResilientModelAdapter implements ModelAdapter {
         name = adapter.modelName || policy.model;
       }
     }
-    return name;
+    return name || policy.model || 'mock-deterministic';
   }
 
   async complete(

@@ -207,6 +207,7 @@ export class PostgresWorkflowRepository implements WorkflowRepository {
 export class InMemoryWorkflowRepository implements WorkflowRepository {
   private defs: Map<string, WorkflowDefinition> = new Map();
   private runs: Map<string, WorkflowRun> = new Map();
+  private runClaims: Map<string, { owner: string; expiresAt: number }> = new Map();
   private runIdIndex: Map<string, string> = new Map();
   private steps: Map<string, WorkflowStepExecution[]> = new Map();
 
@@ -256,8 +257,12 @@ export class InMemoryWorkflowRepository implements WorkflowRepository {
   async claimWorkflowRun(workflowRunId: string, owner: string, leaseDurationMs: number): Promise<boolean> {
     const run = this.runs.get(workflowRunId);
     if (!run) return false;
-    run.claimOwner = owner;
-    run.claimExpiresAt = Date.now() + leaseDurationMs;
+    const now = Date.now();
+    const existing = this.runClaims.get(workflowRunId);
+    if (existing && existing.expiresAt > now && existing.owner !== owner) {
+      return false;
+    }
+    this.runClaims.set(workflowRunId, { owner, expiresAt: now + leaseDurationMs });
     return true;
   }
 

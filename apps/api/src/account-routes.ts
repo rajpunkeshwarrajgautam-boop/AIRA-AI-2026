@@ -21,7 +21,7 @@ export function createAccountRoutes(): Router {
       res.json({
         id: principal.userId,
         email: customer.email || user?.email || '',
-        name: customer.name || user?.name || 'AIRA User',
+        name: user?.name || 'AIRA User',
         currency: customer.defaultCurrency,
         plan: entitlements.plan,
         subscriptionStatus: entitlements.subscriptionStatus,

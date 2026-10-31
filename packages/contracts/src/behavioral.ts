@@ -134,7 +134,10 @@ export const AdaptiveWritingModeSchema = z.enum([
   'TECHNICAL_EXPLANATION',
   'TECHNICAL_DEBUGGING',
   'SCIENTIFIC_DEEP_DIVE',
+  'STRUCTURED_COMPARISON',
   'COMPARATIVE_ANALYSIS',
+  'BUSINESS_COMMUNICATION',
+  'FACTUAL_DIRECT',
   'FACTUAL_CONCISE',
   'GENERAL_ASSISTANCE'
 ]);
@@ -142,11 +145,20 @@ export type AdaptiveWritingMode = z.infer<typeof AdaptiveWritingModeSchema>;
 
 export const AdaptiveWritingProfileSchema = z.object({
   mode: AdaptiveWritingModeSchema,
-  targetLength: z.enum(['concise', 'balanced', 'detailed']),
-  tone: z.enum(['friendly', 'creative', 'technical', 'objective', 'conversational']),
+  targetLength: z.union([
+    z.enum(['concise', 'balanced', 'detailed']),
+    z.enum(['concise_under_50_words', 'focused_1_to_3_paragraphs', 'structured_table_or_bullets'])
+  ]),
+  tone: z.union([
+    z.enum(['friendly', 'creative', 'technical', 'objective', 'conversational']),
+    z.enum(['warm_friendly', 'playful_creative', 'academic_rigorous', 'objective_technical', 'executive_concise'])
+  ]),
   allowEmojis: z.boolean().default(true),
+  avoidBoilerplate: z.boolean().optional(),
   includeDevBoilerplate: z.boolean().default(false), // MUST be false for ordinary queries!
-  suggestFollowUps: z.boolean().default(false)
+  suggestFollowUps: z.boolean().default(false),
+  technicalDepth: z.number().optional(),
+  formattingPreference: z.string().optional()
 });
 export type AdaptiveWritingProfile = z.infer<typeof AdaptiveWritingProfileSchema>;
 
