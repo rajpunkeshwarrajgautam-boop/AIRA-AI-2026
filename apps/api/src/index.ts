@@ -2165,7 +2165,7 @@ app.post('/api/automations', async (req: Request, res: Response) => {
   const clientOpId = (req.headers['x-client-operation-id'] as string) || req.body?.clientOperationId;
 
   let sideEffectCommitted = false;
-  let automationResult: any = null;
+  let automationResult: Awaited<ReturnType<typeof automationEngine.createAutomation>> | null = null;
 
   try {
     if (req.body?.principalId && req.body.principalId !== verifiedUserId) {

@@ -93,6 +93,9 @@ jobs:
           test/workspace-authority-migration-guard.test.ts
           test/m2a-durable-specialist-execution.test.ts
           test/m2a-production-activation-security.test.ts
+      - name: Post-merge runtime and type safety regression
+        run: npm run test:pr118:regression
+
 
       - name: Release wizard and cutover safety gates certification
         run: npm run test:cutover-safety

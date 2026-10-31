@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import type { Knex } from 'knex';
 import { db } from '../../../../packages/db/src/index.js';
 import {
   COMMERCIAL_PLANS,
@@ -19,6 +20,53 @@ export interface CreditTopupPack {
   inrPrice: number; // ₹ GST-inclusive
   usdPrice: number; // $ USD
 }
+
+export interface SubscriptionRow {
+  id: string;
+  customer_id: string;
+  plan_id: string;
+  price_id: string;
+  status: string;
+  gateway: string;
+  gateway_subscription_id?: string | null;
+  currency: string;
+  amount_minor_units: number | string;
+  current_period_start: number | string;
+  current_period_end: number | string;
+  cancel_at_period_end: boolean;
+  cancelled_at?: number | string | null;
+  metadata?: string | Record<string, unknown>;
+  created_at: number | string;
+  updated_at: number | string;
+}
+
+export interface InvoiceRecord {
+  invoiceNumber: string;
+  date: string;
+  plan: string;
+  currency: string;
+  totalAmount: number;
+  taxableBase: number;
+  gstAmount: number;
+  sacCode: string;
+  supplierName: string;
+  status: string;
+}
+
+export interface PaymentDbQueryBuilder {
+  first: () => Promise<SubscriptionRow | Record<string, unknown> | null>;
+  update: (patch: Record<string, unknown>) => Promise<unknown>;
+  delete?: () => Promise<unknown>;
+  orderBy?: (column: string, direction?: string) => Promise<SubscriptionRow[]>;
+}
+
+export type PaymentDbClient = {
+  (tableName: string): {
+    where: (query: Record<string, unknown>) => PaymentDbQueryBuilder;
+    insert: (record: Record<string, unknown>) => Promise<unknown>;
+    orderBy?: (column: string, direction?: string) => Promise<SubscriptionRow[]>;
+  };
+};
 
 export const TOPUP_PACKS: Record<string, CreditTopupPack> = {
   pack_1k: {
@@ -47,18 +95,18 @@ export const TOPUP_PACKS: Record<string, CreditTopupPack> = {
 export class PaymentGatewayService {
   private razorpaySecret: string;
   private cashfreeSecret: string;
-  private customDbClient: any = null;
+  private customDbClient: Knex | PaymentDbClient | null = null;
 
   constructor() {
     this.razorpaySecret = process.env.RAZORPAY_WEBHOOK_SECRET || 'test_webhook_secret_razorpay_2026';
     this.cashfreeSecret = process.env.CASHFREE_WEBHOOK_SECRET || 'test_webhook_secret_cashfree_2026';
   }
 
-  setDbClient(client: any) {
+  setDbClient(client: Knex | PaymentDbClient | null): void {
     this.customDbClient = client;
   }
 
-  private getDb() {
+  private getDb(): Knex | PaymentDbClient {
     return this.customDbClient || db;
   }
 
@@ -374,11 +422,11 @@ export class PaymentGatewayService {
   /**
    * Fetch invoice history for customer with GST calculation.
    */
-  async getInvoices(principalId: string): Promise<any[]> {
+  async getInvoices(principalId: string): Promise<InvoiceRecord[]> {
     const customer = await commercialBillingService.getOrCreateCustomer(principalId);
-    const subs = await this.getDb()('subscriptions').where({ customer_id: customer.id }).orderBy('created_at', 'desc');
+    const subs = await this.getDb()('subscriptions').where({ customer_id: customer.id }).orderBy!('created_at', 'desc') as SubscriptionRow[];
 
-    return (subs as any[]).map((sub: any, idx: number) => {
+    return subs.map((sub: SubscriptionRow, idx: number): InvoiceRecord => {
       const amountPaise = Number(sub.amount_minor_units);
       const isTaxInclusive = true;
       const rateFactor = 1.18;

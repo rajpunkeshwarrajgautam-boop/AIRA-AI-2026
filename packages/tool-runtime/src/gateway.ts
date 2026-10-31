@@ -126,9 +126,9 @@ export class ToolGateway extends EventEmitter {
     );
   }
 
-  public registerTool(tool: {
+  public registerTool(tool: ExecutableToolAdapter | {
     definition: ToolDefinition | z.input<typeof ToolDefinitionSchema>;
-    execute: (args: Record<string, any>, context: GatewayExecutionContext) => Promise<any>;
+    execute: ExecutableToolAdapter['execute'];
   }): void {
     const parsedDef = ToolDefinitionSchema.parse(tool.definition);
     const parsedTool: ExecutableToolAdapter = {

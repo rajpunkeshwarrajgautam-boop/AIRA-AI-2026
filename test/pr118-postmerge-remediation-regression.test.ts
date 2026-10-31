@@ -6,14 +6,14 @@ import { paymentGatewayService } from '../apps/api/src/billing/payment-gateway-s
 import { db } from '../packages/db/src/index.js';
 
 function createMockDb() {
-  const store = new Map<string, any[]>();
+  const store = new Map<string, Record<string, unknown>[]>();
   return (tableName: string) => {
     if (!store.has(tableName)) store.set(tableName, []);
     const table = store.get(tableName)!;
     return {
-      where: (query: Record<string, any>) => ({
+      where: (query: Record<string, unknown>) => ({
         first: async () => table.find(row => Object.entries(query).every(([k, v]) => row[k] === v)) || null,
-        update: async (patch: Record<string, any>) => {
+        update: async (patch: Record<string, unknown>) => {
           for (const row of table) {
             if (Object.entries(query).every(([k, v]) => row[k] === v)) {
               Object.assign(row, patch);
@@ -23,9 +23,17 @@ function createMockDb() {
         delete: async () => {
           const remaining = table.filter(row => !Object.entries(query).every(([k, v]) => row[k] === v));
           store.set(tableName, remaining);
+        },
+        orderBy: async (column: string, direction = 'asc') => {
+          return [...table].sort((a, b) => {
+            const valA = String(a[column] ?? '');
+            const valB = String(b[column] ?? '');
+            if (direction === 'desc') return valB.localeCompare(valA);
+            return valA.localeCompare(valB);
+          }) as unknown as import('../apps/api/src/billing/payment-gateway-service.js').SubscriptionRow[];
         }
       }),
-      insert: async (record: Record<string, any>) => {
+      insert: async (record: Record<string, unknown>) => {
         table.push({ ...record });
       }
     };
@@ -144,7 +152,7 @@ test('PR #118 Remediation Gate 4: Automation exception handling and side-effect 
       }
 
       recordedStatus = 'SUCCESS';
-    } catch (err: any) {
+    } catch (_err: unknown) {
       if (!sideEffectCommitted) {
         recordedStatus = 'FAILED_CLEAN';
       } else {
