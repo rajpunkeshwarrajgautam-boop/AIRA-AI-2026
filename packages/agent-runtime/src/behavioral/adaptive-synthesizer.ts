@@ -24,9 +24,12 @@ export class AdaptiveSynthesizer {
     ) {
       return {
         mode: 'CASUAL_GREETING',
-        tone: 'friendly',
-        targetLength: 'concise',
+        tone: 'warm_friendly',
+        targetLength: 'concise_under_50_words',
+        technicalDepth: 1,
+        formattingPreference: 'plain_conversational',
         allowEmojis,
+        avoidBoilerplate: true,
         includeDevBoilerplate: false,
         suggestFollowUps: false
       };
@@ -39,9 +42,12 @@ export class AdaptiveSynthesizer {
     ) {
       return {
         mode: 'CREATIVE_WRITING',
-        tone: 'creative',
-        targetLength: 'balanced',
+        tone: 'playful_creative',
+        targetLength: 'focused_1_to_3_paragraphs',
+        technicalDepth: 1,
+        formattingPreference: 'markdown_narrative',
         allowEmojis,
+        avoidBoilerplate: true,
         includeDevBoilerplate: false,
         suggestFollowUps: false
       };
@@ -54,9 +60,12 @@ export class AdaptiveSynthesizer {
     ) {
       return {
         mode: 'TECHNICAL_DEBUGGING',
-        tone: 'technical',
-        targetLength: 'balanced',
+        tone: 'objective_technical',
+        targetLength: 'focused_1_to_3_paragraphs',
+        technicalDepth: 4,
+        formattingPreference: 'markdown_code_and_diffs',
         allowEmojis,
+        avoidBoilerplate: true,
         includeDevBoilerplate: false,
         suggestFollowUps: false
       };
@@ -67,10 +76,13 @@ export class AdaptiveSynthesizer {
       /\b(compare|versus|vs\.?|difference\s+between|pros\s+and\s+cons|trade-?offs)\b/i.test(lower)
     ) {
       return {
-        mode: 'COMPARATIVE_ANALYSIS',
-        tone: 'objective',
-        targetLength: 'balanced',
+        mode: 'STRUCTURED_COMPARISON',
+        tone: 'objective_technical',
+        targetLength: 'structured_table_or_bullets',
+        technicalDepth: 3,
+        formattingPreference: 'markdown_tables_and_rubrics',
         allowEmojis,
+        avoidBoilerplate: true,
         includeDevBoilerplate: false,
         suggestFollowUps: false
       };
@@ -82,9 +94,12 @@ export class AdaptiveSynthesizer {
     ) {
       return {
         mode: 'SCIENTIFIC_DEEP_DIVE',
-        tone: 'objective',
-        targetLength: 'detailed',
+        tone: 'academic_rigorous',
+        targetLength: 'focused_1_to_3_paragraphs',
+        technicalDepth: 4,
+        formattingPreference: 'markdown_narrative',
         allowEmojis,
+        avoidBoilerplate: true,
         includeDevBoilerplate: false,
         suggestFollowUps: false
       };
@@ -95,10 +110,13 @@ export class AdaptiveSynthesizer {
       /\b(email|executive\s+summary|stakeholder|proposal|memo|briefing|status\s+update)\b/i.test(lower)
     ) {
       return {
-        mode: 'GENERAL_ASSISTANCE',
-        tone: 'conversational',
-        targetLength: 'balanced',
+        mode: 'BUSINESS_COMMUNICATION',
+        tone: 'executive_concise',
+        targetLength: 'focused_1_to_3_paragraphs',
+        technicalDepth: 2,
+        formattingPreference: 'markdown_narrative',
         allowEmojis,
+        avoidBoilerplate: true,
         includeDevBoilerplate: false,
         suggestFollowUps: false
       };
@@ -108,9 +126,12 @@ export class AdaptiveSynthesizer {
     if (resolvedInstructions?.isDevTask || /\b(explain|how\s+does|what\s+is)\b/i.test(lower)) {
       return {
         mode: 'TECHNICAL_EXPLANATION',
-        tone: 'technical',
-        targetLength: 'balanced',
+        tone: 'objective_technical',
+        targetLength: 'focused_1_to_3_paragraphs',
+        technicalDepth: 3,
+        formattingPreference: 'markdown_narrative',
         allowEmojis,
+        avoidBoilerplate: true,
         includeDevBoilerplate: false,
         suggestFollowUps: false
       };
@@ -118,10 +139,13 @@ export class AdaptiveSynthesizer {
 
     // 8. Factual Direct Default
     return {
-      mode: 'FACTUAL_CONCISE',
-      tone: 'objective',
-      targetLength: 'concise',
+      mode: 'FACTUAL_DIRECT',
+      tone: 'warm_friendly',
+      targetLength: 'focused_1_to_3_paragraphs',
+      technicalDepth: 2,
+      formattingPreference: 'plain_conversational',
       allowEmojis,
+      avoidBoilerplate: true,
       includeDevBoilerplate: false,
       suggestFollowUps: false
     };
@@ -159,7 +183,7 @@ export class AdaptiveSynthesizer {
         );
         break;
 
-      case 'COMPARATIVE_ANALYSIS':
+      case 'STRUCTURED_COMPARISON':
         directives.push(
           'Deliver a structured, objective comparative analysis evaluating key architectural tradeoffs, strengths, and weaknesses.'
         );
@@ -171,19 +195,13 @@ export class AdaptiveSynthesizer {
         );
         break;
 
-      case 'GENERAL_ASSISTANCE':
+      case 'BUSINESS_COMMUNICATION':
         directives.push(
           'Provide polished, professional communication with clear action items and concise executive framing.'
         );
         break;
 
-      case 'TECHNICAL_EXPLANATION':
-        directives.push(
-          'Provide a thorough and clear technical explanation tailored to the requested concepts.'
-        );
-        break;
-
-      case 'FACTUAL_CONCISE':
+      case 'FACTUAL_DIRECT':
       default:
         directives.push(
           'Provide a thoughtful, readable, and direct answer tailored to the user prompt.',
