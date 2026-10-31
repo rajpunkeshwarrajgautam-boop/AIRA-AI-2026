@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { OpenAIAdapter, isModelMatch } from '../../packages/model-router/src/index.js';
 
-const model = 'nvidia/nemotron-3-super-120b-a12b';
+const model = 'nvidia/llama-3.1-nemotron-70b-instruct';
 const policy = { model, maxTokens: 100, temperature: 0.2, extendedThinking: false } as any;
 const messages = [{ role: 'user' as const, content: 'Hi' }];
 const encoder = new TextEncoder();
@@ -31,7 +31,7 @@ async function withProvider(chunks: (string | Uint8Array)[], run: (adapter: Open
 describe('NVIDIA stream regression & edge-case suite', () => {
   it('streams split CRLF frames and preserves upstream model identity', async () => {
     const chunks = [
-      'data: {"model":"nvidia/nemotron-3-super-120b-a12b","choices":[{"delta":{"content":"Hel"}}]}\r',
+      'data: {"model":"nvidia/llama-3.1-nemotron-70b-instruct","choices":[{"delta":{"content":"Hel"}}]}\r',
       '\n\r\ndata: {"choices":[{"delta":{"content":"lo"}}]}\r\n\r\n',
       'data: {"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6},"choices":[]}\n\ndata: [DONE]\n\n'
     ];

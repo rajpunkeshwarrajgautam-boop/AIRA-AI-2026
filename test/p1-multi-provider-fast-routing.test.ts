@@ -68,10 +68,10 @@ async function run() {
     const fastExec = nvidiaOnlyRouter.resolveExecution('aira-fast', 'ANSWER');
 
     assert.equal(fastExec.provider, 'nvidia');
-    assert.equal(fastExec.executedModel, 'nvidia/nemotron-3-super-120b-a12b');
+    assert.equal(fastExec.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct');
     assert.equal(fastExec.fallbackOccurred, true, 'Fallback must be reported truthfully');
-    assert.ok(fastExec.fallbackReason?.includes('NVIDIA Nemotron 120B reasoning model'), 'Fallback reason must identify 120B model');
-    console.log('PASS: aira-fast truthfully reports fallback to Nemotron 120B when no fast provider is configured.');
+    assert.ok(fastExec.fallbackReason?.includes('NVIDIA Nemotron 70B reasoning model'), 'Fallback reason must identify 70B model');
+    console.log('PASS: aira-fast truthfully reports fallback to Nemotron 70B when no fast provider is configured.');
 
     // -------------------------------------------------------------
     // TEST 3: AIRA Deep route preservation
@@ -84,10 +84,10 @@ async function run() {
     const multiRouter = new ModelRouter();
     const deepExec = multiRouter.resolveExecution('aira-deep', 'ANSWER');
 
-    assert.equal(deepExec.provider, 'nvidia', 'Deep mode must use NVIDIA Nemotron 120B, not Groq');
-    assert.equal(deepExec.executedModel, 'nvidia/nemotron-3-super-120b-a12b');
+    assert.equal(deepExec.provider, 'nvidia', 'Deep mode must use NVIDIA Nemotron 70B, not Groq');
+    assert.equal(deepExec.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct');
     assert.equal(deepExec.fallbackOccurred, true, 'Falls back from Anthropic to NVIDIA when only NVIDIA is configured');
-    console.log('PASS: aira-deep strictly preserved on NVIDIA Nemotron 120B.');
+    console.log('PASS: aira-deep strictly preserved on NVIDIA Nemotron 70B.');
 
     // -------------------------------------------------------------
     // TEST 4: Auto-prioritization when Groq is available

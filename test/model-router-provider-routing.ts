@@ -28,12 +28,12 @@ async function run() {
     assert.equal(research.extendedThinking, true, 'Aira Deep should enable reasoning');
     assert.ok(router.getAdapter(research) instanceof OpenAIAdapter, 'Aira Deep must fall back to NVIDIA when it is the configured production provider');
 
-    const directNvidia = router.resolvePolicy('nvidia/nemotron-3-super-120b-a12b', 'ANSWER');
-    assert.equal(directNvidia.model, 'nvidia/nemotron-3-super-120b-a12b');
+    const directNvidia = router.resolvePolicy('nvidia/llama-3.1-nemotron-70b-instruct', 'ANSWER');
+    assert.equal(directNvidia.model, 'nvidia/llama-3.1-nemotron-70b-instruct');
     assert.ok(router.getAdapter(directNvidia) instanceof OpenAIAdapter);
 
     const retired = 'meta/llama-3.1-405b-instruct';
-    const replacement = 'nvidia/nemotron-3-super-120b-a12b';
+    const replacement = 'nvidia/llama-3.1-nemotron-70b-instruct';
     assert.equal(AVAILABLE_MODELS.some(model => model.id === retired), false,
       'retired Llama 405B must not remain selectable');
     assert.equal(normalizeStoredModelId(retired), replacement,

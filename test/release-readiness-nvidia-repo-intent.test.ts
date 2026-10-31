@@ -70,8 +70,8 @@ async function runReleaseReadinessTestSuite(): Promise<void> {
   // 2.1 Retired Llama 405B normalization
   const retiredLlama = 'meta/llama-3.1-405b-instruct';
   const normalizedModel = resolveNvidiaModel(retiredLlama);
-  assert.equal(normalizedModel, 'nvidia/nemotron-3-super-120b-a12b', 'Retired Llama 405B must normalize to Nemotron 120B');
-  console.log('PASS: Retired NVIDIA Llama 405B normalized to supported Nemotron 120B');
+  assert.equal(normalizedModel, 'nvidia/llama-3.1-nemotron-70b-instruct', 'Retired Llama 405B must normalize to Nemotron 70B');
+  console.log('PASS: Retired NVIDIA Llama 405B normalized to supported Nemotron 70B');
 
   // 2.2 ResilientModelAdapter handling of upstream HTTP 404
   const originalFetch = globalThis.fetch;
@@ -80,7 +80,7 @@ async function runReleaseReadinessTestSuite(): Promise<void> {
     const primaryNvidia = new OpenAIAdapter(
       'mock-nvidia-key',
       'https://integrate.api.nvidia.com/v1',
-      'nvidia/nemotron-3-super-120b-a12b',
+      'nvidia/llama-3.1-nemotron-70b-instruct',
       'nvidia'
     );
     const fallbackGroq = new OpenAIAdapter(
@@ -209,7 +209,7 @@ async function runReleaseReadinessTestSuite(): Promise<void> {
     }
 
     // Test 3.2: OpenAIAdapter with NVIDIA baseUrl
-    const nvidiaAdapter = new OpenAIAdapter('mock-key', 'https://integrate.api.nvidia.com/v1', 'nvidia/nemotron-3-super-120b-a12b', 'nvidia');
+    const nvidiaAdapter = new OpenAIAdapter('mock-key', 'https://integrate.api.nvidia.com/v1', 'nvidia/llama-3.1-nemotron-70b-instruct', 'nvidia');
     for (const mode of supportedAiraModes) {
       await nvidiaAdapter.stream([{ role: 'user', content: 'hello' }], { model: mode, temperature: 0.2, maxTokens: 100 }, () => {});
     }

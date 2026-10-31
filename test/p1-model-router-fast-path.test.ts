@@ -21,7 +21,7 @@ async function testModelRouterFastPath() {
 
     const fastExecution = router.resolveExecution('aira-fast', 'ANSWER');
     assert.equal(fastExecution.provider, 'nvidia');
-    assert.equal(fastExecution.executedModel, 'nvidia/nemotron-3-super-120b-a12b');
+    assert.equal(fastExecution.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct');
     assert.ok(fastExecution.adapter instanceof OpenAIAdapter);
 
     // 2. Custom Fast Model via Env
@@ -37,7 +37,7 @@ async function testModelRouterFastPath() {
 
     const deepExecution = router.resolveExecution('aira-deep', 'RESEARCH');
     assert.equal(deepExecution.provider, 'nvidia');
-    assert.equal(deepExecution.executedModel, 'nvidia/nemotron-3-super-120b-a12b');
+    assert.equal(deepExecution.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct');
 
     // 4. Auto Model Routing: Conversational intent -> Fast, Research intent -> Deep
     const autoAnswerPolicy = router.resolvePolicy('aira-auto', 'ANSWER');
@@ -68,7 +68,7 @@ async function testModelRouterFastPath() {
     delete process.env.NVIDIA_FAST_MODEL;
     const fallbackExec = router.resolveExecution('aira-fast', 'ANSWER');
     assert.equal(fallbackExec.fallbackOccurred, true);
-    assert.ok(fallbackExec.fallbackReason?.includes('120B'));
+    assert.ok(fallbackExec.fallbackReason?.includes('70B'));
 
     process.env.NVIDIA_FAST_MODEL = 'nvidia/llama-3.1-nemotron-70b-instruct';
     const certifiedFastExec = router.resolveExecution('aira-fast', 'ANSWER');

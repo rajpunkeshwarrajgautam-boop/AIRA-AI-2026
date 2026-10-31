@@ -4,8 +4,8 @@ import { AVAILABLE_MODELS, DEFAULT_SETTINGS } from './constants';
 export function normalizeStoredModelId(model: unknown): AppSettings['activeModel'] {
   // Existing users can carry the formerly hosted Llama 405B ID in localStorage.
   // Migrate that explicit selection to the currently supported NVIDIA route.
-  const migrated = model === 'meta/llama-3.1-405b-instruct'
-    ? 'nvidia/nemotron-3-super-120b-a12b'
+  const migrated = (model === 'meta/llama-3.1-405b-instruct' || model === 'nvidia/nemotron-3-super-120b-a12b')
+    ? 'nvidia/llama-3.1-nemotron-70b-instruct'
     : model;
 
   return AVAILABLE_MODELS.some(candidate => candidate.id === migrated)
