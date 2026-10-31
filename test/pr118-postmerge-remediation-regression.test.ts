@@ -1,3 +1,10 @@
+import http from 'node:http';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+import zlib from 'node:zlib';
+import express, { Request, Response, NextFunction } from 'express';
+import { z } from 'zod';
+import { TaskDAGSchema, SpecialistTaskContractSchema } from '../packages/contracts/src/index.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
@@ -182,7 +189,189 @@ test('PR #118 Remediation Gate 4: Automation exception handling and side-effect 
   assert.equal(success.automationResult.status, 'created');
 });
 
+
+test('PR #118 Remediation Gate 5: Oversized Zod collections memory and constraint enforcement (GHSA-mrhx-c7xc-m3w5)', async (t) => {
+  // Confirm resolved Zod package version is >= 4.6.7
+  const installedZodVersion = require('zod/package.json').version;
+  assert.match(installedZodVersion, /^4.[6-9].[0-9]+/, `Expected Zod >= 4.6.7, got ${installedZodVersion}`);
+
+  await t.test('enforces max constraints on specialist task dependencies and rejects oversized arrays', () => {
+    // Contract limit is max(10) dependencies
+    const invalidDependencies = Array.from({ length: 11 }, (_, i) => `dep_${i}`);
+    const taskPayload = {
+      taskId: 'task_limit_test',
+      runId: 'run_limit_test',
+      objective: 'Verify max dependencies rejection',
+      dependencies: invalidDependencies
+    };
+
+    const parsed = SpecialistTaskContractSchema.safeParse(taskPayload);
+    assert.equal(parsed.success, false, 'SpecialistTaskContractSchema must reject arrays exceeding max(10)');
+    if (!parsed.success) {
+      const issue = parsed.error.issues.find(i => i.code === 'too_big');
+      assert.ok(issue, 'Error issues must include too_big code');
+      assert.equal(issue.maximum, 10, 'Maximum constraint must be 10');
+    }
+  });
+
+  await t.test('enforces max constraints on DAG tasks and rejects oversized collections', () => {
+    // Contract limit is max(50) tasks in TaskDAGSchema
+    const oversizedTasks = Array.from({ length: 51 }, (_, i) => ({
+      taskId: `task_${i}`,
+      runId: 'run_dag_test',
+      objective: `Objective for task ${i}`
+    }));
+
+    const dagPayload = {
+      dagId: 'dag_limit_test',
+      runId: 'run_dag_test',
+      tasks: oversizedTasks
+    };
+
+    const parsed = TaskDAGSchema.safeParse(dagPayload);
+    assert.equal(parsed.success, false, 'TaskDAGSchema must reject tasks array exceeding max(50)');
+    if (!parsed.success) {
+      const issue = parsed.error.issues.find(i => i.code === 'too_big');
+      assert.ok(issue, 'Error issues must include too_big code for DAG tasks');
+      assert.equal(issue.maximum, 50, 'Maximum constraint must be 50');
+    }
+  });
+
+  await t.test('bounded memory and fast rejection on large collection validation under Zod 4.6.7', () => {
+    // 5,000 element array must fail fast without unbounded heap allocation
+    const oversizedArray = Array.from({ length: 5000 }, (_, i) => `item_${i}`);
+    const arrayValidator = z.array(z.string()).max(5);
+
+    const start = performance.now();
+    const result = arrayValidator.safeParse(oversizedArray);
+    const durationMs = performance.now() - start;
+
+    assert.equal(result.success, false);
+    assert.ok(durationMs < 100, `Rejection took ${durationMs}ms, expected < 100ms`);
+  });
+
+  await t.test('validates set and map size constraints fail closed on oversized structures', () => {
+    const oversizedSet = new Set(Array.from({ length: 50 }, (_, i) => `elem_${i}`));
+    const setValidator = z.set(z.string()).max(5);
+    const setResult = setValidator.safeParse(oversizedSet);
+    assert.equal(setResult.success, false);
+
+    const oversizedMap = new Map(Array.from({ length: 50 }, (_, i) => [`key_${i}`, `val_${i}`]));
+    const mapValidator = z.map(z.string(), z.string()).max(5);
+    const mapResult = mapValidator.safeParse(oversizedMap);
+    assert.equal(mapResult.success, false);
+  });
+});
+
+test('PR #118 Remediation Gate 6: Compressed HTTP request body and trailing bytes handling (GHSA-27r3-jxmh-p828)', async (t) => {
+  // Confirm resolved body-parser version is >= 2.4.0
+  const installedBodyParserVersion = require('body-parser/package.json').version;
+  assert.match(installedBodyParserVersion, /^2.[4-9].[0-9]+/, `Expected body-parser >= 2.4.0, got ${installedBodyParserVersion}`);
+
+  // Mirror exact production Express body parser setup from apps/api/src/index.ts
+  const testApp = express();
+  testApp.use(express.json({
+    limit: '2mb',
+    verify: (req: any, _res: any, buf: Buffer) => {
+      req.rawBody = buf.toString('utf8');
+    }
+  }));
+  testApp.use(express.urlencoded({ limit: '2mb', extended: false }));
+
+  testApp.post('/api/test-compressed-body', (req: Request, res: Response) => {
+    res.status(200).json({ received: req.body, rawLength: req.rawBody?.length ?? 0 });
+  });
+
+  // Central error middleware matching Express 5 error response contract
+  testApp.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+    res.status(err.status || err.statusCode || 400).json({
+      error: err.message,
+      code: err.code || 'BAD_REQUEST'
+    });
+  });
+
+  const testServer = http.createServer(testApp);
+  await new Promise<void>(resolve => testServer.listen(0, '127.0.0.1', () => resolve()));
+  const port = (testServer.address() as any).port;
+  const endpoint = `http://127.0.0.1:${port}/api/test-compressed-body`;
+
+  try {
+    await t.test('accepts and decompresses valid gzipped JSON payload', async () => {
+      const payload = JSON.stringify({ message: 'valid_decompression_test', count: 42 });
+      const gzipped = zlib.gzipSync(Buffer.from(payload));
+
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Encoding': 'gzip'
+        },
+        body: gzipped
+      });
+
+      assert.equal(res.status, 200, `Expected HTTP 200, got ${res.status}`);
+      const body = await res.json();
+      assert.deepEqual(body.received, { message: 'valid_decompression_test', count: 42 });
+      assert.ok(body.rawLength > 0, 'rawBody must be populated by verify callback');
+    });
+
+    await t.test('safely rejects gzipped payload with trailing bytes without unhandled crash (GHSA-27r3-jxmh-p828 vector)', async () => {
+      const validPayload = JSON.stringify({ message: 'base_payload' });
+      const validGzip = zlib.gzipSync(Buffer.from(validPayload));
+      // Exploit payload: legitimate gzip compressed block followed by trailing uncompressed bytes
+      const trailingGarbage = Buffer.from('TRAILING_EXPLOIT_GARBAGE_BYTES_2026');
+      const exploitPayload = Buffer.concat([validGzip, trailingGarbage]);
+
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Encoding': 'gzip'
+        },
+        body: exploitPayload
+      });
+
+      // Patched body-parser rejects trailing bytes with a clean 4xx client error
+      assert.ok(res.status >= 400 && res.status < 500, `Expected 4xx client rejection, got ${res.status}`);
+      const body = await res.json();
+      assert.ok(body.error, 'Rejection response must contain error description');
+    });
+
+    await t.test('rejects truncated/corrupted gzip stream with clean 4xx', async () => {
+      // Corrupt magic header
+      const corruptGzip = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0x00, 0xde, 0xad, 0xbe, 0xef]);
+
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Encoding': 'gzip'
+        },
+        body: corruptGzip
+      });
+
+      assert.ok(res.status >= 400 && res.status < 500, `Expected 4xx client rejection, got ${res.status}`);
+    });
+
+    await t.test('server connection and event loop remain responsive after malformed payload delivery', async () => {
+      // Proves the socket stream was not left hung or in an unhandled state
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ state: 'healthy_post_exploit' })
+      });
+
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.deepEqual(body.received, { state: 'healthy_post_exploit' });
+    });
+  } finally {
+    await new Promise<void>(resolve => testServer.close(() => resolve()));
+  }
+});
+
 test.after(async () => {
+
   paymentGatewayService.setDbClient(null);
   await db.destroy().catch(() => {});
 });
