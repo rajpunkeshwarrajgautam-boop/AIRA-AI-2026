@@ -197,7 +197,9 @@ export function normalizeModelIdentifier(value: unknown = 'aira-auto'): ModelId 
     case 'claude-3-5-sonnet': return 'aira-pro';
     case 'claude-3-5-haiku': return 'aira-fast';
     case 'claude-3-opus': return 'aira-deep';
-    case 'meta/llama-3.1-405b-instruct': return 'nvidia/nemotron-3-super-120b-a12b';
+    case 'meta/llama-3.1-405b-instruct':
+    case 'nvidia/nemotron-3-super-120b-a12b':
+      return 'nvidia/llama-3.1-nemotron-70b-instruct';
     default: return parsed.data;
   }
 }

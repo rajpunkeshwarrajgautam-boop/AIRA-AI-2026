@@ -46,7 +46,7 @@ describe('AIRA AI 2026 — Calculator Parsing & Model Routing Suite', () => {
   test('NVIDIA Model Routing — Canonical identifier hygiene and resilient circuit breaker', async () => {
     // 1. Canonical upstream identifier verification
     const resolved = resolveNvidiaModel('aira-pro');
-    assert.strictEqual(resolved, 'nvidia/nemotron-3-super-120b-a12b', 'aira-pro must resolve to canonical Nemotron identifier');
+    assert.strictEqual(resolved, 'nvidia/llama-3.1-nemotron-70b-instruct', 'aira-pro must resolve to canonical Nemotron identifier');
     assert.strictEqual(resolved.startsWith('aira-'), false, 'Canonical model identifier MUST NOT leak aira-* prefix');
 
     // 2. Resilient fallback handling on upstream HTTP 404
@@ -54,7 +54,7 @@ describe('AIRA AI 2026 — Calculator Parsing & Model Routing Suite', () => {
     const primaryNvidia = new OpenAIAdapter(
       'mock-nvidia-key',
       'https://integrate.api.nvidia.com/v1',
-      'nvidia/nemotron-3-super-120b-a12b',
+      'nvidia/llama-3.1-nemotron-70b-instruct',
       'nvidia'
     );
     const fallbackGroq = new OpenAIAdapter(
@@ -126,7 +126,7 @@ describe('AIRA AI 2026 — Calculator Parsing & Model Routing Suite', () => {
       assert.strictEqual(fallbackProvenanceCaptured?.executedModel, 'openai/gpt-oss-120b');
 
       // 3. Test Circuit Breaker: Subsequent request immediately bypasses NVIDIA
-      const circuitState = healthTracker.getCircuitState('nvidia', 'nvidia/nemotron-3-super-120b-a12b');
+      const circuitState = healthTracker.getCircuitState('nvidia', 'nvidia/llama-3.1-nemotron-70b-instruct');
       assert.strictEqual(circuitState, 'OPEN', 'NVIDIA circuit breaker must be OPEN after 404');
 
       let secondCallStreamOutput = '';
