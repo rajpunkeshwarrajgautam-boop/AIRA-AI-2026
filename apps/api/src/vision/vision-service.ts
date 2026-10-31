@@ -141,11 +141,6 @@ export class VisionService {
     let editModel: string | null = null;
     let editAvailable = false;
 
-    if (this.customProviders?.edit) {
-      editProvider = 'custom';
-      editModel = 'custom-edit';
-      editAvailable = true;
-    }
 
     return {
       understand: {

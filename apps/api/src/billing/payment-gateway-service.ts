@@ -47,10 +47,19 @@ export const TOPUP_PACKS: Record<string, CreditTopupPack> = {
 export class PaymentGatewayService {
   private razorpaySecret: string;
   private cashfreeSecret: string;
+  private customDbClient: any = null;
 
   constructor() {
     this.razorpaySecret = process.env.RAZORPAY_WEBHOOK_SECRET || 'test_webhook_secret_razorpay_2026';
     this.cashfreeSecret = process.env.CASHFREE_WEBHOOK_SECRET || 'test_webhook_secret_cashfree_2026';
+  }
+
+  setDbClient(client: any) {
+    this.customDbClient = client;
+  }
+
+  private getDb() {
+    return this.customDbClient || db;
   }
 
   /**
@@ -127,12 +136,12 @@ export class PaymentGatewayService {
     const now = Date.now();
 
     // Deduplication check in payment_gateway_events
-    const existing = await db('payment_gateway_events').where({ event_id: eventId }).first();
+    const existing = await this.getDb()('payment_gateway_events').where({ event_id: eventId }).first();
     if (existing) {
       return { status: 'ALREADY_PROCESSED', eventId, duplicate: true };
     }
 
-    await db('payment_gateway_events').insert({
+    await this.getDb()('payment_gateway_events').insert({
       id: `pge_${crypto.randomUUID().replace(/-/g, '')}`,
       gateway: 'razorpay',
       event_id: eventId,
@@ -145,10 +154,51 @@ export class PaymentGatewayService {
 
     try {
       await this.handleGatewayEvent('razorpay', eventType, payload);
-      await db('payment_gateway_events').where({ event_id: eventId }).update({ processed: true });
+      await this.getDb()('payment_gateway_events').where({ event_id: eventId }).update({ processed: true });
       return { status: 'PROCESSED', eventId, duplicate: false };
     } catch (err: any) {
-      await db('payment_gateway_events').where({ event_id: eventId }).update({ error: err.message });
+      await this.getDb()('payment_gateway_events').where({ event_id: eventId }).update({ error: err.message });
+      throw err;
+    }
+  }
+
+  /**
+   * Process Cashfree Webhook Event idempotently.
+   */
+  async processCashfreeWebhook(rawBody: string, signature: string, timestamp: string): Promise<{ status: string; eventId: string; duplicate?: boolean }> {
+    const verification = this.verifyCashfreeWebhook(rawBody, signature, timestamp);
+    if (!verification.valid) {
+      throw new Error(`FORBIDDEN_WEBHOOK: ${verification.error}`);
+    }
+
+    const payload = JSON.parse(rawBody);
+    const eventId = payload.event_id || payload.data?.order?.order_id || payload.data?.payment?.cf_payment_id || payload.id || `evt_cf_${crypto.randomUUID().replace(/-/g, '')}`;
+    const eventType = payload.type || payload.event || 'cashfree.webhook';
+    const now = Date.now();
+
+    // Deduplication check in payment_gateway_events
+    const existing = await this.getDb()('payment_gateway_events').where({ event_id: eventId }).first();
+    if (existing) {
+      return { status: 'ALREADY_PROCESSED', eventId, duplicate: true };
+    }
+
+    await this.getDb()('payment_gateway_events').insert({
+      id: `pge_${crypto.randomUUID().replace(/-/g, '')}`,
+      gateway: 'cashfree',
+      event_id: eventId,
+      event_type: eventType,
+      signature_valid: true,
+      processed: false,
+      payload: JSON.stringify(payload),
+      created_at: now
+    });
+
+    try {
+      await this.handleGatewayEvent('cashfree', eventType, payload);
+      await this.getDb()('payment_gateway_events').where({ event_id: eventId }).update({ processed: true });
+      return { status: 'PROCESSED', eventId, duplicate: false };
+    } catch (err: any) {
+      await this.getDb()('payment_gateway_events').where({ event_id: eventId }).update({ error: err.message });
       throw err;
     }
   }
@@ -178,13 +228,13 @@ export class PaymentGatewayService {
       const periodEnd = subEntity.current_end ? subEntity.current_end * 1000 : now + 30 * 24 * 60 * 60 * 1000;
 
       // Update or create Subscription record
-      const existingSub = await db('subscriptions').where({ customer_id: customer.id }).first();
+      const existingSub = await this.getDb()('subscriptions').where({ customer_id: customer.id }).first();
       const subId = existingSub ? existingSub.id : `sub_${crypto.randomUUID().replace(/-/g, '')}`;
 
       const price = plan.prices.find(p => p.currency === currency) || plan.prices[0];
 
       if (existingSub) {
-        await db('subscriptions').where({ id: subId }).update({
+        await this.getDb()('subscriptions').where({ id: subId }).update({
           plan_id: planTier,
           price_id: price.id,
           status: 'active',
@@ -198,7 +248,7 @@ export class PaymentGatewayService {
           updated_at: now
         });
       } else {
-        await db('subscriptions').insert({
+        await this.getDb()('subscriptions').insert({
           id: subId,
           customer_id: customer.id,
           plan_id: planTier,
@@ -228,7 +278,7 @@ export class PaymentGatewayService {
       );
 
       // Audit event
-      await db('billing_audit_events').insert({
+      await this.getDb()('billing_audit_events').insert({
         id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
         customer_id: customer.id,
         event_type: 'SUBSCRIPTION_ACTIVATED',
@@ -243,7 +293,7 @@ export class PaymentGatewayService {
       const subEntity = payload.payload?.subscription?.entity || payload.subscription || {};
       const gatewaySubId = subEntity.id;
       if (gatewaySubId) {
-        await db('subscriptions').where({ gateway_subscription_id: gatewaySubId }).update({
+        await this.getDb()('subscriptions').where({ gateway_subscription_id: gatewaySubId }).update({
           status: 'cancelled',
           cancelled_at: now,
           cancel_at_period_end: false,
@@ -302,7 +352,7 @@ export class PaymentGatewayService {
    */
   async cancelSubscription(principalId: string): Promise<{ success: boolean; message: string }> {
     const customer = await commercialBillingService.getOrCreateCustomer(principalId);
-    const sub = await db('subscriptions')
+    const sub = await this.getDb()('subscriptions')
       .where({ customer_id: customer.id, status: 'active' })
       .first();
 
@@ -310,7 +360,7 @@ export class PaymentGatewayService {
       return { success: false, message: 'No active subscription found.' };
     }
 
-    await db('subscriptions').where({ id: sub.id }).update({
+    await this.getDb()('subscriptions').where({ id: sub.id }).update({
       cancel_at_period_end: true,
       updated_at: Date.now()
     });
@@ -326,9 +376,9 @@ export class PaymentGatewayService {
    */
   async getInvoices(principalId: string): Promise<any[]> {
     const customer = await commercialBillingService.getOrCreateCustomer(principalId);
-    const subs = await db('subscriptions').where({ customer_id: customer.id }).orderBy('created_at', 'desc');
+    const subs = await this.getDb()('subscriptions').where({ customer_id: customer.id }).orderBy('created_at', 'desc');
 
-    return subs.map((sub, idx) => {
+    return (subs as any[]).map((sub: any, idx: number) => {
       const amountPaise = Number(sub.amount_minor_units);
       const isTaxInclusive = true;
       const rateFactor = 1.18;

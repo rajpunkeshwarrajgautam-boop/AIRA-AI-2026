@@ -1,8 +1,8 @@
 import {
   VerifiableCompletionState,
   ToolRecoveryDecision
-} from '../../contracts/src/behavioral.js';
-import { ToolResult } from '../../contracts/src/index.js';
+} from '../../../contracts/src/behavioral.js';
+import { ToolResult } from '../../../contracts/src/index.js';
 
 export interface ToolExecutionContext {
   toolName: string;

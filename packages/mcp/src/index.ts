@@ -1,4 +1,4 @@
-import { ToolDefinition } from '../../contracts/src/index.js';
+import { ToolDefinition, ToolDefinitionSchema } from '../../contracts/src/index.js';
 import { ToolRegistry, ToolGateway } from '../../tool-runtime/src/index.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -62,7 +62,7 @@ export class McpHost {
       const tools = toolsRes.tools || [];
       
       for (const t of tools) {
-        const serverToolDef: ToolDefinition = {
+        const serverToolDef: ToolDefinition = ToolDefinitionSchema.parse({
           id: `mcp_${config.id}_${t.name}`,
           name: t.name,
           version: 1,
@@ -79,7 +79,7 @@ export class McpHost {
           adapter: 'mcp',
           provider: config.name,
           metadata: { serverId: config.id }
-        };
+        });
 
         const execAdapter = async (args: any, _ctx: any) => {
           const start = Date.now();

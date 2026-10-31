@@ -684,7 +684,7 @@ export function createBffSessionMiddleware(sessionStore: BffSessionStore = bffSe
     }
 
     try {
-      let identity: ManagedPrincipal;
+      let identity: ManagedPrincipal | null = null;
       let isFirstParty = false;
       if (isLegacyCookie) setBffSessionCookie(res, session.id);
 
@@ -735,6 +735,10 @@ export function createBffSessionMiddleware(sessionStore: BffSessionStore = bffSe
         }
 
         identity = await verifyNeonAuthToken(jwtToVerify);
+      }
+
+      if (!identity) {
+        throw new Error('UNAUTHORIZED_SESSION: missing identity credentials');
       }
 
       // Mutual consistency check: verify that JWT subject matches the server-side session's userId

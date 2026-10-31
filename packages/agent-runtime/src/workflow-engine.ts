@@ -8,7 +8,8 @@ import {
   validateWorkflowDag,
   ExecutionPrincipal,
   Run,
-  Artifact
+  Artifact,
+  PermissionLevel
 } from '../../contracts/src/index.js';
 import { WorkflowRepository } from './workflow-repositories.js';
 import { RunRepository } from './repositories.js';
@@ -327,10 +328,15 @@ export class WorkflowEngine {
       (stepDef.sideEffectLevel === 'WRITE' && stepDef.approvalRequired));
 
     if (requiresApproval) {
+      const permLevel: PermissionLevel = stepDef.sideEffectLevel === 'DESTRUCTIVE'
+        ? 'DESTRUCTIVE'
+        : stepDef.sideEffectLevel === 'WRITE'
+          ? 'WRITE'
+          : 'READ';
       const isApproved = await this.approvalKernel.isToolCallApproved(
         runId,
         `workflow_step_${stepDef.stepId}`,
-        stepDef.sideEffectLevel,
+        permLevel,
         workflowRun.principalId
       );
 
@@ -357,9 +363,10 @@ export class WorkflowEngine {
             toolId: `workflow_step_${stepDef.stepId}`,
             name: stepDef.name,
             arguments: stepDef.input,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            status: 'WAITING_FOR_APPROVAL'
           },
-          stepDef.sideEffectLevel,
+          permLevel,
           `Workflow step "${stepDef.name}" requires user approval before execution.`,
           parentRun.workspaceId
         );
@@ -414,14 +421,15 @@ export class WorkflowEngine {
         stepError = null;
         break; // Success!
       } catch (err: any) {
-        stepError = err.message || String(err);
-        const isNonRetryable = stepError.includes('Access denied') ||
-          stepError.includes('Permission denied') ||
-          stepError.includes('TOOL_PERMISSION_DENIED') ||
-          stepError.includes('lacks required scope') ||
-          stepError.includes('Cycle detected') ||
-          stepError.includes('Validation failed') ||
-          stepError.includes('cannot depend on itself');
+        const errStr = err.message || String(err);
+        stepError = errStr;
+        const isNonRetryable = errStr.includes('Access denied') ||
+          errStr.includes('Permission denied') ||
+          errStr.includes('TOOL_PERMISSION_DENIED') ||
+          errStr.includes('lacks required scope') ||
+          errStr.includes('Cycle detected') ||
+          errStr.includes('Validation failed') ||
+          errStr.includes('cannot depend on itself');
 
         if (isNonRetryable || currentAttempt >= maxAttempts) {
           break;
@@ -516,8 +524,9 @@ export class WorkflowEngine {
           id: `tool_${Date.now()}`,
           name: toolName,
           toolId: `tool_${toolName}`,
-          arguments: args,
-          timestamp: Date.now()
+          arguments: args || {},
+          timestamp: Date.now(),
+          status: 'COMPLETED'
         },
         {
           runId: workflowRun.runId,

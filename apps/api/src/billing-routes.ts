@@ -144,7 +144,7 @@ export function createBillingRoutes(): Router {
 
     try {
       const result = await paymentGatewayService.processRazorpayWebhook(rawBody, signature);
-      res.status(200).json({ status: 'ok', ...result });
+      res.status(200).json({ ok: true, ...result });
     } catch (err: any) {
       console.error('[RazorpayWebhookError]', err.message);
       res.status(400).json({ error: err.message });

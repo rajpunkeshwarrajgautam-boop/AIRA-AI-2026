@@ -1,7 +1,9 @@
 import { EventEmitter } from 'events';
 import { createHash, randomUUID } from 'node:crypto';
+import { type z } from 'zod';
 import {
   ToolDefinition,
+  ToolDefinitionSchema,
   DurableToolCall,
   ToolResult,
   ExecutionPrincipal,
@@ -124,10 +126,18 @@ export class ToolGateway extends EventEmitter {
     );
   }
 
-  public registerTool(tool: ExecutableToolAdapter): void {
-    this.tools.set(tool.definition.name, tool);
-    if (tool.definition.id) {
-      this.tools.set(tool.definition.id, tool);
+  public registerTool(tool: {
+    definition: ToolDefinition | z.input<typeof ToolDefinitionSchema>;
+    execute: (args: Record<string, any>, context: GatewayExecutionContext) => Promise<any>;
+  }): void {
+    const parsedDef = ToolDefinitionSchema.parse(tool.definition);
+    const parsedTool: ExecutableToolAdapter = {
+      definition: parsedDef,
+      execute: tool.execute
+    };
+    this.tools.set(parsedDef.name, parsedTool);
+    if (parsedDef.id) {
+      this.tools.set(parsedDef.id, parsedTool);
     }
   }
 
@@ -368,12 +378,12 @@ export class ToolGateway extends EventEmitter {
             toolId: def.id,
             toolName: def.name,
             permissionLevel: approvalPermissionLevel,
-            toolDefinitionVersion: def.version,
+            toolDefinitionVersion: Number(def.version) || 1,
             toolPolicyFingerprint: approvedToolPolicyFingerprint,
             arguments: args,
             claimId: onceAuthorizationClaimId!
           };
-          onceAuthorizationClaimed = await this.approvalKernel!.claimOnceAuthorization(onceAuthorizationBinding);
+          onceAuthorizationClaimed = await this.approvalKernel!.claimOnceAuthorization(onceAuthorizationBinding!);
           if (!onceAuthorizationClaimed) {
             return this.approvalUnavailableResult(callId, runId, def.name, startTime);
           }
@@ -393,7 +403,8 @@ export class ToolGateway extends EventEmitter {
               toolId: def.id,
               name: def.name,
               arguments: args,
-              timestamp: startTime
+              timestamp: startTime,
+              status: 'WAITING_FOR_APPROVAL'
             };
 
             const approvalReq = await this.approvalKernel!.createRequest(
@@ -402,7 +413,7 @@ export class ToolGateway extends EventEmitter {
               approvalPermissionLevel,
               `Action "${def.name}" requires user authorization under ${sideEffectLevel} policy.`,
               principal.workspaceId,
-              def.version,
+              Number(def.version) || 1,
               approvedToolPolicyFingerprint
             );
 
@@ -419,6 +430,7 @@ export class ToolGateway extends EventEmitter {
               permissionScopes: def.permissionScopes,
               lifecycleState: 'WAITING_FOR_APPROVAL',
               arguments: args,
+              attemptCount: 1,
               approvalId: approvalReq.id,
               idempotencyKey: context.idempotencyKey,
               startedAt: startTime
@@ -526,8 +538,9 @@ export class ToolGateway extends EventEmitter {
         error = null;
         break;
       } catch (err: any) {
-        error = err.message || String(err);
-        const isTransient = this.isTransientError(error, def);
+        const errStr = err.message || String(err);
+        error = errStr;
+        const isTransient = this.isTransientError(errStr, def);
         if (!isTransient || attempt >= maxAttempts) {
           errorCode = ToolGatewayErrorCodes.TOOL_EXECUTION_FAILED;
           break;

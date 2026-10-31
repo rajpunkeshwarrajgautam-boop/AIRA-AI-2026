@@ -357,7 +357,7 @@ export function rankAndFilterWeatherCitations(citations: Citation[], queryLocati
     const text = `${citation.sourceTitle} ${citation.snippet} ${citation.uri}`.toLowerCase();
     const isSeasonal = seasonalPatterns.test(text);
 
-    if (operationalDomains.test(citation.uri) && !isSeasonal) score += 40;
+    if (operationalDomains.test(citation.uri || '') && !isSeasonal) score += 40;
     if (operationalKeywords.test(text) && !isSeasonal) score += 20;
 
     // Penalize seasonal tourism/climate guides REGARDLESS of domain (even on operational domains)
@@ -425,10 +425,10 @@ export function evaluateEvidenceSufficiency(
     // If both trackers are explicitly requested, BOTH must have numerical worldwide totals
     if (asksMojo && asksNumbers) {
       const mojoText = citations
-        .filter(c => /boxofficemojo\.com/i.test(c.uri) || /box\s*office\s*mojo/i.test(c.sourceTitle))
+        .filter(c => /boxofficemojo\.com/i.test(c.uri || '') || /box\s*office\s*mojo/i.test(c.sourceTitle))
         .map(c => `${c.sourceTitle} ${c.snippet}`).join(' ');
       const numbersText = citations
-        .filter(c => /the-numbers\.com/i.test(c.uri) || /the\s*numbers/i.test(c.sourceTitle))
+        .filter(c => /the-numbers\.com/i.test(c.uri || '') || /the\s*numbers/i.test(c.sourceTitle))
         .map(c => `${c.sourceTitle} ${c.snippet}`).join(' ');
 
       const mojoHasWorldwide = hasNumericalWorldwide(mojoText);

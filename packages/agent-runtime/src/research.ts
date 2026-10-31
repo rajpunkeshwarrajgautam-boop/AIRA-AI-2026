@@ -58,7 +58,8 @@ export class ResearchService {
           toolId: toolDef?.id || 'tool_web_search',
           name: 'web_search',
           arguments: { query: prompt },
-          timestamp
+          timestamp,
+          status: 'COMPLETED'
         };
         toolCalls.push(toolCall);
         
@@ -100,7 +101,8 @@ export class ResearchService {
                   toolId: toolDef?.id || 'tool_web_search',
                   name: 'web_search',
                   arguments: { query: targetedQuery },
-                  timestamp: timestamp2
+                  timestamp: timestamp2,
+                  status: 'COMPLETED'
                 };
                 toolCalls.push(toolCall2);
                 try {
@@ -135,8 +137,8 @@ export class ResearchService {
                     const merged: Citation[] = [];
                     for (const c of [...stage2Citations, ...citations]) {
                       try {
-                        const u = new URL(c.uri).href;
-                        if (!seenUrls.has(u)) {
+                        const u = c.uri ? new URL(c.uri).href : '';
+                        if (u && !seenUrls.has(u)) {
                           seenUrls.add(u);
                           merged.push(c);
                         }

@@ -121,7 +121,7 @@ export const CapabilityDefinitionSchema = z.object({
   requiredPermissions: z.array(z.string()).default([]),
   promptProfileId: z.string().default('profile_general_reasoning'),
   resourceLimits: ResourceLimitsSchema.default({}),
-  evaluationRequirements: EvaluationRequirementsSchema.default({}),
+  evaluationRequirements: EvaluationRequirementsSchema.default({ requiresGrounding: false, requiresToolVerification: false }),
   enabled: z.boolean().default(true),
   availability: z.enum(['GA', 'BETA', 'PREVIEW', 'COMING_SOON', 'DISABLED']),
   sideEffectClass: SideEffectLevelSchema,
@@ -490,7 +490,7 @@ export type Artifact = z.infer<typeof ArtifactSchema>;
 export const ModelProvenanceSchema = z.object({
   requestedModel: z.string(),
   resolvedPolicyModel: z.string(),
-  provider: z.enum(['nvidia', 'anthropic', 'openai', 'groq', 'cerebras', 'together', 'fireworks', 'mock', 'unknown']),
+  provider: z.enum(['nvidia', 'anthropic', 'openai', 'groq', 'gemini', 'cerebras', 'together', 'fireworks', 'mock', 'unknown']),
   requestedProvider: z.string().optional(),
   executedProvider: z.string().optional(),
   executedModel: z.string(),

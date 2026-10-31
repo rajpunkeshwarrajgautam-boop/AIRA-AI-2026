@@ -1,11 +1,11 @@
 import {
   IntentTaxonomy,
   SideEffectLevel
-} from '../../contracts/src/index.js';
+} from '../../../contracts/src/index.js';
 import {
   SemanticIntentAnalysis
-} from '../../contracts/src/behavioral.js';
-import { ModelRouter } from '../../model-router/src/index.js';
+} from '../../../contracts/src/behavioral.js';
+import { ModelRouter } from '../../../model-router/src/index.js';
 
 export interface SemanticReasonerInput {
   prompt: string;

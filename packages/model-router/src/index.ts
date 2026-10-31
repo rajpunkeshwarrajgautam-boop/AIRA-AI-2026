@@ -402,7 +402,7 @@ export class OpenAIAdapter implements ModelAdapter {
     const maxRetries = 2;
     let lastError: Error | null = null;
 
-    let outboundModel = policy.model;
+    let outboundModel: string = policy.model;
     if (outboundModel.startsWith('aira-')) {
       if (this.baseUrl.includes('api.openai.com') || this.provider === 'openai') {
         outboundModel = resolveOpenAIModel(policy.model);
@@ -500,7 +500,7 @@ export class OpenAIAdapter implements ModelAdapter {
     onChunk: (delta: { text?: string; thinking?: string }) => void,
     options?: { firstTokenTimeoutMs?: number; signal?: AbortSignal }
   ): Promise<ModelCompletionResult> {
-    let outboundModel = policy.model;
+    let outboundModel: string = policy.model;
     if (outboundModel.startsWith('aira-')) {
       if (this.baseUrl.includes('api.openai.com') || this.provider === 'openai') {
         outboundModel = resolveOpenAIModel(policy.model);
@@ -1057,12 +1057,12 @@ export class ModelRouter {
       } else if (selectedProvider === 'fireworks') {
         executedModel = process.env.AIRA_FAST_MODEL || 'accounts/fireworks/models/llama-v3p1-8b-instruct';
       } else if (selectedProvider === 'openai') {
-        executedModel = model === 'aira-fast'
+        executedModel = (model as string) === 'aira-fast'
           ? (process.env.AIRA_FAST_MODEL || 'gpt-4o-mini')
           : 'gpt-4o';
       } else if (selectedProvider === 'nvidia') {
         executedModel = resolveNvidiaModel(model);
-        if (model === 'aira-fast' && !process.env.NVIDIA_FAST_MODEL && executedModel === 'nvidia/nemotron-3-super-120b-a12b') {
+        if ((model as string) === 'aira-fast' && !process.env.NVIDIA_FAST_MODEL && executedModel === 'nvidia/nemotron-3-super-120b-a12b') {
           modelFallback = true;
           modelFallbackReason = 'No dedicated fast provider configured; fell back to NVIDIA Nemotron 120B reasoning model';
         }

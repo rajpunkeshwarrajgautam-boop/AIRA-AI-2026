@@ -17,7 +17,7 @@ import {
   ExecutionPrincipal,
   ModelProvenance
 } from '../../contracts/src/index.js';
-import { ModelRouter, ChatMessageInput, isModelMatch, withInferencePrincipal } from '../../model-router/src/index.js';
+import { ModelRouter, ChatMessageInput, isModelMatch, withInferencePrincipal, type ModelCompletionResult } from '../../model-router/src/index.js';
 import { ToolRegistry, ToolGateway, PostgresToolCallRepository, InMemoryToolCallRepository, deriveToolApprovalPolicy } from '../../tool-runtime/src/index.js';
 import { configuredSearchProviders } from '../../tool-runtime/src/search-providers.js';
 import { ApprovalKernel } from '../../approvals/src/index.js';
@@ -196,7 +196,7 @@ export class AgentRuntime extends EventEmitter {
       this.researchService
     );
 
-    this.workflowEngine.setApprovalResumptionDispatcher(() => this.dispatchApprovalResumptions(this.recoveryOwner));
+    this.workflowEngine.setApprovalResumptionDispatcher(async () => { await this.dispatchApprovalResumptions(this.recoveryOwner); });
 
     this.specialistRegistry = specialistRegistry || new SpecialistRegistry();
     this.specialistRegistry.registerSpecialist(new MathematicalSpecialistAgent(this.toolGateway), 'IMPLEMENTED_LOCALLY');
@@ -441,8 +441,7 @@ export class AgentRuntime extends EventEmitter {
     };
 
     const isDirectSynthesis = routingDecision.executionTarget === 'CHAT_STREAM' ||
-      routingDecision.executionTarget === 'MODEL_SYNTHESIS' ||
-      (!routingDecision.executionTarget && (routingDecision.intent === 'ANSWER' || routingDecision.intent === 'GENERAL_CHAT'));
+      (!routingDecision.executionTarget && routingDecision.intent === 'ANSWER');
 
     const run: Run = {
       id: runId,
@@ -538,7 +537,7 @@ export class AgentRuntime extends EventEmitter {
       const principal: ExecutionPrincipal = {
         userId: run.principalId,
         sessionId: run.sessionId,
-        role: 'user'
+        roles: ['user']
       };
       await this.workflowEngine.cancelWorkflow(wfRun.id, principal);
     }
@@ -804,7 +803,7 @@ export class AgentRuntime extends EventEmitter {
         const principal: ExecutionPrincipal = {
           userId: run.principalId,
           sessionId: run.sessionId || `sess_${run.principalId}`,
-          role: 'user',
+          roles: ['user'],
           workspaceId: run.workspaceId || undefined
         };
         const wfDef = await this.workflowCompiler.compile(run.prompt, principal);
@@ -861,7 +860,12 @@ export class AgentRuntime extends EventEmitter {
           runId,
           topic,
           location: topic === 'WEATHER' ? (detectedSubject || undefined) : undefined,
-          principal: run.principal
+          principal: {
+            userId: run.principalId,
+            sessionId: run.sessionId,
+            workspaceId: run.workspaceId || undefined,
+            roles: ['user']
+          }
         });
 
         if (researchResult.freshnessRequired && !researchResult.providerReady) {
@@ -886,7 +890,7 @@ export class AgentRuntime extends EventEmitter {
           run.toolResults.push(...researchResult.toolResults);
         }
       } else if (run.intent === 'RESEARCH' || run.context?.knowledgeSearchRequested) {
-        const scope = run.principal ? { principalId: run.principal.userId, workspaceId: run.principal.workspaceId, isSystem: false } : undefined;
+        const scope = run.principalId ? { principalId: run.principalId, workspaceId: run.workspaceId || undefined, isSystem: false } : undefined;
         const knowledgeResults = await this.knowledgeEngine.search(run.prompt, 3, scope);
         run.citations = knowledgeResults.map(r => r.citation);
       } else {
@@ -994,7 +998,8 @@ export class AgentRuntime extends EventEmitter {
           toolId: toolDef?.id || `tool_${selectedToolName}`,
           name: selectedToolName,
           arguments: selectedArgs,
-          timestamp: Date.now()
+          timestamp: Date.now(),
+          status: 'PENDING'
         };
 
         run.toolsUsed.push(selectedToolName);
@@ -1048,7 +1053,7 @@ export class AgentRuntime extends EventEmitter {
           toolApprovalPolicy?.permissionLevel || toolDef?.permissionLevel || 'DESTRUCTIVE',
           `Tool execution "${toolCall.name}" requires user confirmation due to ${run.routingDecision?.sideEffectLevel || toolDef?.sideEffectLevel || toolDef?.permissionLevel || 'DESTRUCTIVE'} policy.`,
           run.workspaceId,
-          toolDef?.version,
+          toolDef?.version ? Number(toolDef.version) : undefined,
           toolApprovalPolicy?.fingerprint
         );
         run = (await this.getRun(runId)) as Run; // reload
@@ -1130,7 +1135,7 @@ export class AgentRuntime extends EventEmitter {
       let completionCheck = recoveryEngine.verifyCompletion(toolCall.name, finalToolResult);
 
       const toolDef = this.toolGateway.getTool(toolCall.name)?.definition || this.toolRegistry.get(toolCall.name)?.definition;
-      const isIdempotent = toolDef ? (toolDef.sideEffects === 'NONE' || toolDef.sideEffects === 'READ') : false;
+      const isIdempotent = toolDef ? (toolDef.sideEffectLevel === 'NONE' || toolDef.sideEffectLevel === 'READ') : false;
       const alternativeTools: string[] = [];
       if (toolCall.name === 'web_search') alternativeTools.push('tavily_search', 'exa_search');
       else if (toolCall.name === 'browser_navigate') alternativeTools.push('browser_screenshot');
@@ -1142,7 +1147,7 @@ export class AgentRuntime extends EventEmitter {
             toolName: toolCall.name,
             arguments: toolCall.arguments,
             isIdempotent,
-            requiresApproval: toolDef?.requiresApproval || false,
+            requiresApproval: toolDef ? (toolDef.approvalPolicy === 'require_approval' || toolDef.approvalPolicy === 'always_ask' || toolDef.permissionLevel === 'DESTRUCTIVE' || toolDef.permissionLevel === 'FINANCIAL' || toolDef.permissionLevel === 'WRITE') : false,
             alternativeTools
           },
           attempt,
@@ -1201,7 +1206,7 @@ export class AgentRuntime extends EventEmitter {
           break;
         } else if (decision.action === 'ASK_APPROVAL') {
           run.executionCheckpoint = 'WAITING_FOR_APPROVAL';
-          run.state = 'BLOCKED';
+          run.state = 'WAITING_FOR_APPROVAL';
           run.error = decision.explanation;
           run.toolResults.push(finalToolResult);
           await this.saveRun(run);
@@ -1221,7 +1226,7 @@ export class AgentRuntime extends EventEmitter {
 
       if (!completionCheck.verified) {
         // Enforce zero fabricated success: failed tool must NEVER emit tool.completed or advance to TOOL_COMPLETED
-        run.executionCheckpoint = 'TOOL_FAILED';
+        run.executionCheckpoint = 'FINALIZING';
         run.state = 'FAILED';
         run.error = completionCheck.reason || 'Tool execution failed verification';
         await this.saveRun(run);
@@ -1264,7 +1269,8 @@ export class AgentRuntime extends EventEmitter {
               toolId: nextToolDef?.id || `tool_${nextToolName}`,
               name: nextToolName,
               arguments: nextArgs,
-              timestamp: Date.now()
+              timestamp: Date.now(),
+              status: 'PENDING'
             };
             run.toolsUsed.push(nextToolName);
             run.toolCalls.push(nextToolCall);
@@ -1282,7 +1288,7 @@ export class AgentRuntime extends EventEmitter {
       }
     }
 
-    if (run.executionCheckpoint === 'TOOL_COMPLETED' || run.executionCheckpoint === 'TOOL_FAILED') {
+    if (run.executionCheckpoint === 'TOOL_COMPLETED') {
       run.executionCheckpoint = 'SYNTHESIZING';
       await this.saveRun(run);
     }
@@ -1766,7 +1772,7 @@ CAPABILITY & IDENTITY INVARIANTS:
             await this.approvalKernel.completeApprovalResumption(event.id, { outcome: 'recoverable-failure', reason: 'workflow run missing after dispatch' });
             continue;
           }
-          await this.withRunRecoveryLease(event.runId, runRecoveryOwner, () => withInferencePrincipal(run?.principalId, () => this.workflowEngine.executeWorkflowRun(workflowRun.id)));
+          await this.withRunRecoveryLease(event.runId, runRecoveryOwner, () => withInferencePrincipal(workflowRun.principalId, () => this.workflowEngine.executeWorkflowRun(workflowRun.id)));
           const finalWorkflow = await this.workflowRepo.getWorkflowRun(workflowRun.id);
           await this.approvalKernel.completeApprovalResumption(event.id, {
             outcome: 'workflow-resumed', state: finalWorkflow?.state || 'UNKNOWN',

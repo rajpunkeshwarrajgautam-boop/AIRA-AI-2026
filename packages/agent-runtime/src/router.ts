@@ -205,7 +205,7 @@ export class ServerIntentRouter {
       (advisoryIntent === 'WORKFLOW')
     );
     if (isWorkflow) {
-      const isDestructive = sideEffect === 'DESTRUCTIVE';
+      const isDestructive = false;
       return {
         intent: 'WORKFLOW',
         confidence: 0.95,
@@ -221,7 +221,7 @@ export class ServerIntentRouter {
     const isAgentMission = /\b(investigate\s+.*(bug|failure|failing|deployment|build|pipeline|ci|issue|incident|repo|codebase|system)|fix\s+.*(source\s+code|code|repo|tests?|implementation)|inspect\s+the\s+repo|mission\s+plan|agent\s+mission|autonomous\s+mission|execute\s+mission)\b/.test(text) ||
       (advisoryIntent === 'AGENT_MISSION' && text.length > 10);
     if (isAgentMission) {
-      const isMutating = sideEffect === 'WRITE' || sideEffect === 'DESTRUCTIVE';
+      const isMutating = sideEffect === 'WRITE';
       return {
         intent: 'AGENT_MISSION',
         confidence: 0.92,
@@ -257,13 +257,13 @@ export class ServerIntentRouter {
       (advisoryIntent === 'TOOL_ACTION')
     );
     if (isTool) {
-      const toolSideEffect = sideEffect === 'DESTRUCTIVE' ? 'DESTRUCTIVE' : sideEffect === 'WRITE' ? 'WRITE' : 'READ';
+      const toolSideEffect = sideEffect === 'WRITE' ? 'WRITE' : 'READ';
       return {
         intent: 'TOOL_ACTION',
         confidence: 0.94,
         reason: 'Identified verified tool execution request.',
         sideEffectLevel: toolSideEffect,
-        approvalRequired: toolSideEffect === 'DESTRUCTIVE' || toolSideEffect === 'WRITE'
+        approvalRequired: toolSideEffect === 'WRITE'
       };
     }
 
