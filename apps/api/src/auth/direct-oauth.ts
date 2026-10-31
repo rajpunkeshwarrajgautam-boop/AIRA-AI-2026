@@ -633,13 +633,13 @@ export class DirectOAuthService {
     let targetContact = contactInfo;
     let targetDetails = details;
 
-    if (typeof claimedEmailOrOpts === 'object' && claimedEmailOrOpts !== null) {
+    if (typeof claimedEmailOrOpts === 'string') {
+      claimedEmail = claimedEmailOrOpts;
+    } else if (claimedEmailOrOpts && typeof claimedEmailOrOpts === 'object') {
       claimedEmail = claimedEmailOrOpts.email || '';
       targetProvider = claimedEmailOrOpts.provider || 'all';
       targetContact = claimedEmailOrOpts.contactInfo;
       targetDetails = claimedEmailOrOpts.details;
-    } else {
-      claimedEmail = claimedEmailOrOpts;
     }
 
     const cleanEmail = (claimedEmail || '').trim().toLowerCase();
