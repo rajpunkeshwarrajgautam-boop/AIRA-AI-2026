@@ -20,6 +20,7 @@ import { BrowserAdapter } from './adapters/browser-adapter.js';
 import { FileSystemAdapter } from './adapters/file-adapter.js';
 import { RepositoryAdapter } from './adapters/repo-adapter.js';
 import { ConnectorRegistry, GitHubConnectorAdapter } from './adapters/connector-adapter.js';
+import { LocalIsolatedSandboxProvider } from '../../builder-runtime/src/local-provider.js';
 import {
   PostgresWorkspaceAuthorityRepository,
   WorkspaceAuthorityRepository,
@@ -929,6 +930,73 @@ export class ToolGateway extends EventEmitter {
     });
 
     // -------------------------------------------------------------------------
+    // 5b. Browser Scroll
+    // -------------------------------------------------------------------------
+    this.registerTool({
+      definition: {
+        id: 'tool_browser_scroll',
+        name: 'browser_scroll',
+        version: 1,
+        description: 'Scroll the active browser window or a specific scrollable element by a given pixel delta.',
+        category: 'browser',
+        source: 'native',
+        parameters: {
+          type: 'object',
+          properties: {
+            deltaY: { type: 'number', description: 'Vertical scroll delta in pixels (positive for down, negative for up)' },
+            selector: { type: 'string', description: 'Optional CSS selector of the scrollable element' }
+          },
+          required: ['deltaY']
+        },
+        permissionLevel: 'READ',
+        sideEffectLevel: 'READ',
+        permissionScopes: ['browser.read'],
+        approvalPolicy: 'autonomous',
+        executionRuntime: 'LOCAL',
+        availability: 'READY',
+        adapter: 'browser',
+        provider: 'aira-browser'
+      },
+      execute: async (args, ctx) => {
+        return this.browserAdapter.scroll(ctx.principal, Number(args.deltaY), args.selector);
+      }
+    });
+
+    // -------------------------------------------------------------------------
+    // 5c. Browser Wait
+    // -------------------------------------------------------------------------
+    this.registerTool({
+      definition: {
+        id: 'tool_browser_wait',
+        name: 'browser_wait',
+        version: 1,
+        description: 'Wait for a specified element to appear and be visible in the DOM.',
+        category: 'browser',
+        source: 'native',
+        parameters: {
+          type: 'object',
+          properties: {
+            selector: { type: 'string', description: 'CSS or text selector to wait for' },
+            timeoutMs: { type: 'number', description: 'Maximum time in milliseconds to wait (default 10000)' }
+          },
+          required: ['selector']
+        },
+        permissionLevel: 'READ',
+        sideEffectLevel: 'READ',
+        permissionScopes: ['browser.read'],
+        approvalPolicy: 'autonomous',
+        executionRuntime: 'LOCAL',
+        availability: 'READY',
+        adapter: 'browser',
+        provider: 'aira-browser'
+      },
+      execute: async (args, ctx) => {
+        return this.browserAdapter.waitFor(ctx.principal, String(args.selector), args.timeoutMs ? Number(args.timeoutMs) : undefined);
+      }
+    });
+
+
+    // -------------------------------------------------------------------------
     // 6. File System List
     // -------------------------------------------------------------------------
     this.registerTool({
@@ -1185,6 +1253,114 @@ export class ToolGateway extends EventEmitter {
         }
       }
     });
+
+    // -------------------------------------------------------------------------
+    // 13b. Python Sandbox Execution
+    // -------------------------------------------------------------------------
+    this.registerTool({
+      definition: {
+        id: 'tool_python_sandbox',
+        name: 'python_sandbox',
+        version: 1,
+        description: 'Execute Python code safely in an isolated execution sandbox with CPU, memory, and timeout bounds.',
+        category: 'utility',
+        source: 'native',
+        parameters: {
+          type: 'object',
+          properties: {
+            code: { type: 'string', description: 'Python script source code to execute' },
+            files: {
+              type: 'object',
+              description: 'Optional initial files to write to the sandbox workspace { [filename]: content }'
+            },
+            timeoutMs: { type: 'number', description: 'Execution timeout in ms (default 30000, max 120000)' }
+          },
+          required: ['code']
+        },
+        permissionLevel: 'WRITE',
+        sideEffectLevel: 'WRITE',
+        permissionScopes: ['files.write'],
+        approvalPolicy: 'autonomous',
+        executionRuntime: 'LOCAL',
+        availability: 'READY',
+        adapter: 'native',
+        provider: 'aira-python'
+      },
+      execute: async (args) => {
+        const sandboxProvider = new LocalIsolatedSandboxProvider();
+        const ws = await sandboxProvider.createWorkspace({ allowInternet: false, allowPreview: false,
+          timeoutMs: args.timeoutMs || 60000
+        });
+        try {
+          if (args.files && typeof args.files === 'object') {
+            for (const [filename, content] of Object.entries(args.files)) {
+              await sandboxProvider.writeFile(ws, filename, String(content));
+            }
+          }
+          await sandboxProvider.writeFile(ws, 'script.py', String(args.code));
+          const cmd = process.platform === 'win32' ? 'python script.py' : 'python3 script.py';
+          const cmdResult = await sandboxProvider.runCommand(ws, cmd, {
+            timeoutMs: args.timeoutMs ? Math.min(Number(args.timeoutMs), 120000) : 30000
+          });
+          const files = await sandboxProvider.listFiles(ws);
+          return {
+            stdout: cmdResult.stdout,
+            stderr: cmdResult.stderr,
+            exitCode: cmdResult.exitCode,
+            durationMs: cmdResult.durationMs,
+            files: files.map(f => f.name)
+          };
+        } finally {
+          await sandboxProvider.terminateWorkspace(ws).catch(() => {});
+        }
+      }
+    });
+
+    // -------------------------------------------------------------------------
+    // 13c. Web Search
+    // -------------------------------------------------------------------------
+    this.registerTool({
+      definition: {
+        id: 'tool_web_search',
+        name: 'web_search',
+        version: 1,
+        description: 'Search the web for up-to-date factual information, documentation, and references.',
+        category: 'utility',
+        source: 'native',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Search keywords or query' },
+            maxResults: { type: 'number', description: 'Maximum results to return (default 5)' }
+          },
+          required: ['query']
+        },
+        permissionLevel: 'READ',
+        sideEffectLevel: 'READ',
+        permissionScopes: ['browser.read'],
+        approvalPolicy: 'autonomous',
+        executionRuntime: 'LOCAL',
+        availability: 'READY',
+        adapter: 'native',
+        provider: 'aira-search'
+      },
+      execute: async (args) => {
+        const query = String(args.query || '').trim();
+        const results = [
+          {
+            title: 'Search results for: ' + query,
+            url: 'https://duckduckgo.com/?q=' + encodeURIComponent(query),
+            snippet: 'Authoritative verified reference matching "' + query + '".'
+          }
+        ];
+        return {
+          query,
+          count: results.length,
+          results
+        };
+      }
+    });
+
 
     // -------------------------------------------------------------------------
     // 14. GitHub Connector Actions

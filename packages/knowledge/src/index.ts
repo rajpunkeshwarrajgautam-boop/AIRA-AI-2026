@@ -232,6 +232,14 @@ export class BrainV2KnowledgeEngine {
     return await this.repo.listMemories(scope);
   }
 
+  public async deleteMemory(id: string, scope?: PrincipalScope): Promise<boolean> {
+    return await this.repo.deleteMemory(id, scope);
+  }
+
+  public async purgeMemories(scope?: PrincipalScope): Promise<number> {
+    return await this.repo.purgeMemories(scope);
+  }
+
   public async saveMemory(
     key: string,
     value: string,

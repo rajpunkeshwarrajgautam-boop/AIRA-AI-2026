@@ -400,6 +400,107 @@ export class BrowserAdapter {
   }
 
   /**
+   * Browser Scrolling (WRITE side-effect)
+   */
+  async scroll(
+    principal: ExecutionPrincipal,
+    deltaY = 500,
+    selector?: string
+  ): Promise<{
+    scrolled: boolean;
+    deltaY: number;
+    currentUrl: string;
+  }> {
+    let session: BrowserSessionInfo;
+    try {
+      session = await this.getSession(principal);
+    } catch {
+      throw new Error('BROWSER_RUNTIME_NOT_AVAILABLE: Headless browser is not available for scrolling.');
+    }
+    const page = session.activePage;
+
+    if (selector) {
+      const loc = page.locator(selector).first();
+      await loc.scrollIntoViewIfNeeded({ timeout: 10000 });
+    } else {
+      await page.evaluate((y) => window.scrollBy({ top: y, behavior: 'instant' }), deltaY);
+    }
+
+    return {
+      scrolled: true,
+      deltaY,
+      currentUrl: page.url()
+    };
+  }
+
+  /**
+   * Browser Wait (READ side-effect)
+   */
+  async waitFor(
+    principal: ExecutionPrincipal,
+    selector?: string,
+    timeoutMs = 5000
+  ): Promise<{
+    ready: boolean;
+    selector?: string;
+    currentUrl: string;
+  }> {
+    let session: BrowserSessionInfo;
+    try {
+      session = await this.getSession(principal);
+    } catch {
+      throw new Error('BROWSER_RUNTIME_NOT_AVAILABLE: Headless browser is not available for waiting.');
+    }
+    const page = session.activePage;
+
+    if (selector) {
+      await page.waitForSelector(selector, { timeout: Math.min(timeoutMs, 30000), state: 'visible' });
+    } else {
+      await page.waitForLoadState('domcontentloaded', { timeout: Math.min(timeoutMs, 30000) });
+    }
+
+    return {
+      ready: true,
+      selector,
+      currentUrl: page.url()
+    };
+  }
+
+  /**
+   * List active browser sessions for a principal
+   */
+  listSessions(principal?: ExecutionPrincipal): Array<{ sessionKey: string; principalId: string; lastActive: number; currentUrl: string }> {
+    const list: Array<{ sessionKey: string; principalId: string; lastActive: number; currentUrl: string }> = [];
+    for (const [key, s] of this.sessions.entries()) {
+      if (!principal || s.principalId === principal.userId) {
+        let currentUrl = 'about:blank';
+        try {
+          if (!s.activePage.isClosed()) currentUrl = s.activePage.url();
+        } catch {}
+        list.push({
+          sessionKey: key,
+          principalId: s.principalId,
+          lastActive: s.lastActive,
+          currentUrl
+        });
+      }
+    }
+    return list;
+  }
+
+  /**
+   * Restart a principal's browser session with clean slate
+   */
+  async restartSession(principal: ExecutionPrincipal): Promise<{ sessionKey: string; status: string }> {
+    await this.closeSession(principal);
+    const s = await this.getSession(principal);
+    return {
+      sessionKey: s.sessionKey,
+      status: 'RESTARTED'
+    };
+  }
+
+  /**
    * Validate destination URL to prevent SSRF against cloud internal metadata or forbidden protocols
    */
   private validateUrl(rawUrl: string): void {

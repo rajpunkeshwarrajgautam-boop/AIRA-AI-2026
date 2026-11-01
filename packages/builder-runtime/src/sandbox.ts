@@ -1,6 +1,7 @@
 import { LightningSandboxProvider } from './lightning-provider.js';
 import { E2BSandboxProvider } from './e2b-provider.js';
 import { OCISandboxProvider } from './oci-provider.js';
+import { LocalIsolatedSandboxProvider } from './local-provider.js';
 import type {
   SandboxProvider,
   SandboxWorkspace,
@@ -14,6 +15,7 @@ export * from './provider-types.js';
 export { LightningSandboxProvider } from './lightning-provider.js';
 export { E2BSandboxProvider } from './e2b-provider.js';
 export { OCISandboxProvider } from './oci-provider.js';
+export { LocalIsolatedSandboxProvider } from './local-provider.js';
 
 export interface BuilderSandbox {
   id: string;
@@ -84,6 +86,7 @@ export class MultiProviderSandboxFactory implements SandboxFactory {
       this.register(new LightningSandboxProvider());
       this.register(new E2BSandboxProvider());
       this.register(new OCISandboxProvider());
+      this.register(new LocalIsolatedSandboxProvider());
     }
   }
 

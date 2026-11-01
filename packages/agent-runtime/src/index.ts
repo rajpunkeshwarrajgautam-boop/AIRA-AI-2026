@@ -48,8 +48,20 @@ import {
   SpecialistRegistry,
   MathematicalSpecialistAgent,
   AnalysisSpecialistAgent,
-  VerificationSpecialistAgent
+  VerificationSpecialistAgent,
+  PlannerSpecialistAgent,
+  ResearcherSpecialistAgent,
+  CoderSpecialistAgent,
+  DocumentSpecialistAgent,
+  BrowserSpecialistAgent,
+  AutomationSpecialistAgent,
+  SynthesizerSpecialistAgent
 } from './specialists/index.js';
+import {
+  AutonomousAgentEngine,
+  InMemoryAutonomousTaskRepository,
+  type IAutonomousTaskRepository
+} from './autonomous/index.js';
 import {
   SpecialistTaskRepository,
   PostgresSpecialistTaskRepository,
@@ -144,6 +156,7 @@ export class AgentRuntime extends EventEmitter {
   private specialistWorkerRuntime: SpecialistWorkerRuntime;
   private durableCoordinator: DurableExecutionCoordinator;
   private workspaceAuthority: WorkspaceAuthorityRepository;
+  private autonomousEngine: AutonomousAgentEngine;
 
   constructor(
     private modelRouter: ModelRouter,
@@ -199,8 +212,22 @@ export class AgentRuntime extends EventEmitter {
     this.workflowEngine.setApprovalResumptionDispatcher(async () => { await this.dispatchApprovalResumptions(this.recoveryOwner); });
 
     this.specialistRegistry = specialistRegistry || new SpecialistRegistry();
+    this.specialistRegistry.registerSpecialist(new PlannerSpecialistAgent(), 'IMPLEMENTED_LOCALLY');
+    this.specialistRegistry.registerSpecialist(new ResearcherSpecialistAgent(this.toolGateway), 'IMPLEMENTED_LOCALLY');
+    this.specialistRegistry.registerSpecialist(new CoderSpecialistAgent(this.toolGateway), 'IMPLEMENTED_LOCALLY');
     this.specialistRegistry.registerSpecialist(new MathematicalSpecialistAgent(this.toolGateway), 'IMPLEMENTED_LOCALLY');
+    this.specialistRegistry.registerSpecialist(new DocumentSpecialistAgent(), 'IMPLEMENTED_LOCALLY');
+    this.specialistRegistry.registerSpecialist(new BrowserSpecialistAgent(this.toolGateway), 'IMPLEMENTED_LOCALLY');
+    this.specialistRegistry.registerSpecialist(new AutomationSpecialistAgent(), 'IMPLEMENTED_LOCALLY');
     this.specialistRegistry.registerSpecialist(new VerificationSpecialistAgent(), 'IMPLEMENTED_LOCALLY');
+    this.specialistRegistry.registerSpecialist(new SynthesizerSpecialistAgent(), 'IMPLEMENTED_LOCALLY');
+
+    this.autonomousEngine = new AutonomousAgentEngine({
+      specialistRegistry: this.specialistRegistry,
+      toolGateway: this.toolGateway,
+      approvalKernel: this.approvalKernel,
+      modelRouter: this.modelRouter
+    });
 
     this.specialistTaskRepo = specialistTaskRepo || (isDbConfigured ? new PostgresSpecialistTaskRepository() : new InMemorySpecialistTaskRepository());
     this.taskLeaseManager = new TaskLeaseManager(this.specialistTaskRepo);
@@ -251,6 +278,10 @@ export class AgentRuntime extends EventEmitter {
 
   public getSpecialistRegistry(): SpecialistRegistry {
     return this.specialistRegistry;
+  }
+
+  public getAutonomousEngine(): AutonomousAgentEngine {
+    return this.autonomousEngine;
   }
 
   public getSpecialistTaskRepository(): SpecialistTaskRepository {
@@ -1880,3 +1911,5 @@ export * from './specialists/index.js';
 export * from './durable/index.js';
 export * from './workspace-authority.js';
 
+
+export * from './autonomous/index.js';
