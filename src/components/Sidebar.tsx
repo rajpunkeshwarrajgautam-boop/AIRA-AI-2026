@@ -277,7 +277,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         >
             <div className="shrink-0 p-4 pb-3 flex items-center justify-between">
               <div className="flex items-center space-x-2.5">
-                <AiraMark size="md" />
+                <AiraMark size="md" isAnimated={true} motionConcept="a" />
                 <div>
                   <div className="font-serif font-medium text-[19px] tracking-tight text-claude-text-light dark:text-claude-text-dark leading-none">Aira</div>
                 </div>

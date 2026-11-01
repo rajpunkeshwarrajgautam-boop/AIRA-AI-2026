@@ -1,28 +1,20 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
-  <defs>
-    <radialGradient id="airaCore" cx="35%" cy="35%" r="65%">
-      <stop offset="0%" stop-color="#FFFFFF"/>
-      <stop offset="55%" stop-color="#FFA88B"/>
-      <stop offset="100%" stop-color="#D97757"/>
-    </radialGradient>
-  </defs>
-  <circle cx="32" cy="32" r="28" stroke="#D97757" stroke-width="1.5" stroke-dasharray="4 3" stroke-opacity="0.4"/>
-  <g stroke="#D97757" stroke-width="4.2" stroke-linecap="round">
-    <path d="M 25 24 C 23 16 26 8 32 7 C 37 6 42 10 41 16 C 40 21 34 26 27 27"/>
-    <path d="M 25 24 C 23 16 26 8 32 7 C 37 6 42 10 41 16 C 40 21 34 26 27 27" transform="rotate(60 32 32)"/>
-    <path d="M 25 24 C 23 16 26 8 32 7 C 37 6 42 10 41 16 C 40 21 34 26 27 27" transform="rotate(120 32 32)"/>
-    <path d="M 25 24 C 23 16 26 8 32 7 C 37 6 42 10 41 16 C 40 21 34 26 27 27" transform="rotate(180 32 32)"/>
-    <path d="M 25 24 C 23 16 26 8 32 7 C 37 6 42 10 41 16 C 40 21 34 26 27 27" transform="rotate(240 32 32)"/>
-    <path d="M 25 24 C 23 16 26 8 32 7 C 37 6 42 10 41 16 C 40 21 34 26 27 27" transform="rotate(300 32 32)"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none">
+  <style>
+    :root {
+      color: #141312;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color: #FAF9F5;
+      }
+    }
+  </style>
+  <g class="pylon-left">
+    <path d="M 0.75 4.5 L 6.2 1.8 L 6.2 9.0 L 0.75 11.75 Z" fill="currentColor"/>
+    <path d="M 0.75 13.0 L 6.2 10.25 L 6.2 15.25 L 0.75 15.25 Z" fill="currentColor"/>
   </g>
-  <g stroke="#FFFFFF" stroke-width="1.1" stroke-linecap="round" stroke-opacity="0.85">
-    <path d="M 28 11 C 31 8 35 8 38 10.5"/>
-    <path d="M 28 11 C 31 8 35 8 38 10.5" transform="rotate(60 32 32)"/>
-    <path d="M 28 11 C 31 8 35 8 38 10.5" transform="rotate(120 32 32)"/>
-    <path d="M 28 11 C 31 8 35 8 38 10.5" transform="rotate(180 32 32)"/>
-    <path d="M 28 11 C 31 8 35 8 38 10.5" transform="rotate(240 32 32)"/>
-    <path d="M 28 11 C 31 8 35 8 38 10.5" transform="rotate(300 32 32)"/>
+  <g class="pylon-right">
+    <path d="M 9.8 3.0 L 15.25 0.5 L 15.25 8.75 L 9.8 11.0 Z" fill="currentColor"/>
+    <path d="M 9.8 12.25 L 15.25 10.0 L 15.25 13.75 L 9.8 13.75 Z" fill="currentColor"/>
   </g>
-  <circle cx="32" cy="32" r="3.6" fill="url(#airaCore)"/>
-  <circle cx="32" cy="32" r="1.6" fill="#FFFFFF"/>
 </svg>
