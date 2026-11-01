@@ -405,7 +405,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
           </div>
 
-          <div data-testid="sidebar-footer" className="aira-sidebar-footer shrink-0 p-3 bg-claude-surface2-light dark:bg-claude-surface2-dark/50 backdrop-blur-md border-t border-claude-border-light dark:border-claude-border-dark">
+          <div data-testid="sidebar-footer" className="aira-sidebar-footer relative z-20 shrink-0 p-3 bg-claude-surface2-light dark:bg-claude-surface2-dark/50 backdrop-blur-md border-t border-claude-border-light dark:border-claude-border-dark">
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-1.5">
                 <div className="relative flex-1 min-w-0">
