@@ -122,7 +122,7 @@ export const LegalViewerModal: React.FC<LegalViewerModalProps> = ({
               <strong className="text-amber-600 dark:text-amber-400 block font-semibold mb-0.5">
                 Draft Operational Policy — Ratification Status
               </strong>
-              This document reflects AIRA&apos;s active operational architecture and data governance practices. Formal external legal counsel review is currently in progress prior to public general release.
+              This document reflects AIRA&apos;s active operational architecture and data governance practices. Formal external legal counsel review and approval are pending prior to public general release; external review is not currently underway.
             </div>
           </div>
 
