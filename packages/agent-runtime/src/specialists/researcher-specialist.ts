@@ -31,7 +31,11 @@ export class ResearcherSpecialistAgent extends BaseSpecialistAgent {
       ? rawPayload.query
       : (typeof rawPayload.prompt === 'string'
         ? rawPayload.prompt
-        : (typeof rawPayload.topic === 'string' ? rawPayload.topic : ''));
+        : (typeof rawPayload.topic === 'string'
+          ? rawPayload.topic
+          : (typeof rawPayload.objective === 'string'
+            ? rawPayload.objective
+            : (typeof rawPayload.stepTitle === 'string' ? rawPayload.stepTitle : ''))));
 
     if (!query || query.trim().length === 0) {
       return this.buildResult(context, 'FAILED', undefined, startedAt, {

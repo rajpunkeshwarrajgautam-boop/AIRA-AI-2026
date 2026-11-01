@@ -18,6 +18,7 @@ export interface SandboxCreateOptions {
   runtime?: string;
   instanceType?: string;
   teamspace?: string;
+  requireContainer?: boolean;
 }
 
 export interface SandboxReconnectOptions {
@@ -30,6 +31,7 @@ export interface SandboxCommandOptions {
   timeoutMs?: number;
   signal?: AbortSignal;
   detached?: boolean;
+  requireContainer?: boolean;
 }
 
 export interface SandboxCommandResult {
@@ -39,6 +41,7 @@ export interface SandboxCommandResult {
   commandId?: string;
   durationMs?: number;
   provider: string;
+  isolationTier?: string;
 }
 
 export interface SandboxFile {

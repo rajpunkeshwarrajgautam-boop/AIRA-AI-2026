@@ -22,6 +22,7 @@ export interface AutonomousEngineOptions {
   toolGateway?: ToolGateway;
   approvalKernel?: ApprovalKernel;
   modelRouter?: ModelRouter;
+  maxExecutionCycles?: number;
 }
 
 export class AutonomousAgentEngine extends EventEmitter {
@@ -30,6 +31,7 @@ export class AutonomousAgentEngine extends EventEmitter {
   private toolGateway?: ToolGateway;
   private approvalKernel?: ApprovalKernel;
   private modelRouter?: ModelRouter;
+  private maxExecutionCycles: number;
   private activeExecutions: Map<string, AbortController> = new Map();
 
   constructor(options: AutonomousEngineOptions = {}) {
@@ -39,6 +41,7 @@ export class AutonomousAgentEngine extends EventEmitter {
     this.toolGateway = options.toolGateway;
     this.approvalKernel = options.approvalKernel;
     this.modelRouter = options.modelRouter;
+    this.maxExecutionCycles = options.maxExecutionCycles ?? 25;
   }
 
   public getRepository(): IAutonomousTaskRepository {
@@ -52,8 +55,16 @@ export class AutonomousAgentEngine extends EventEmitter {
   public async createTask(
     objective: string,
     principal: ExecutionPrincipal,
-    customPlan?: AgentObjectivePlan
+    customPlan?: AgentObjectivePlan,
+    idempotencyKey?: string
   ): Promise<AutonomousAgentTask> {
+    if (idempotencyKey && this.repository.getTaskByIdempotencyKey) {
+      const existing = await this.repository.getTaskByIdempotencyKey(principal.userId, idempotencyKey);
+      if (existing) {
+        return existing;
+      }
+    }
+
     const taskId = `autotask_${Date.now()}_${randomUUID().replace(/-/g, '').slice(0, 8)}`;
     const now = Date.now();
 
@@ -65,6 +76,9 @@ export class AutonomousAgentEngine extends EventEmitter {
       plan: customPlan,
       observations: [],
       artifacts: [],
+      workingMemory: {},
+      idempotencyKey,
+      fencingToken: 0,
       executionHistory: [
         {
           state: 'CREATED',
@@ -86,9 +100,14 @@ export class AutonomousAgentEngine extends EventEmitter {
     return this.repository.getTask(taskId);
   }
 
-  public async startTask(taskId: string): Promise<AutonomousAgentTask> {
+  public async startTask(taskId: string, workerId = 'worker_primary'): Promise<AutonomousAgentTask> {
     const task = await this.repository.getTask(taskId);
     if (!task) throw new Error(`Task "${taskId}" not found.`);
+
+    if (this.repository.claimTask) {
+      const claim = await this.repository.claimTask(taskId, workerId, 60000);
+      if (!claim.success) throw new Error(`Failed to claim task ${taskId}: ${claim.error}`);
+    }
 
     const abortController = new AbortController();
     this.activeExecutions.set(taskId, abortController);
@@ -205,10 +224,24 @@ export class AutonomousAgentEngine extends EventEmitter {
       let task = await this.repository.getTask(taskId);
       if (!task || !task.plan) return;
 
+      let cycleCount = 0;
+
       for (const step of task.plan.steps) {
+        cycleCount++;
+        if (cycleCount > this.maxExecutionCycles) {
+          await this.transitionState(taskId, 'FAILED', `Loop limit exceeded: Maximum execution cycles (${this.maxExecutionCycles}) reached.`);
+          this.emit('task.failed', { taskId, error: 'LOOP_LIMIT_EXCEEDED' });
+          return;
+        }
+
         if (signal.aborted) {
           await this.transitionState(taskId, 'CANCELLED', 'Execution cancelled by signal');
           return;
+        }
+
+        // Idempotency guarantee during crash recovery: skip already completed steps
+        if (step.status === 'COMPLETED' || step.status === 'SKIPPED') {
+          continue;
         }
 
         // Re-read task in case state changed (e.g. paused)
@@ -239,10 +272,21 @@ export class AutonomousAgentEngine extends EventEmitter {
         }
 
         await this.runStep(taskId, step, signal);
+
+        // Failure Boundary: Halt on step failure immediately
+        task = await this.repository.getTask(taskId);
+        const updatedStep = task?.plan?.steps.find(s => s.stepId === step.stepId);
+        if (updatedStep?.status === 'FAILED') {
+          await this.transitionState(taskId, 'FAILED', `Step "${step.title}" failed: ${updatedStep.resultSummary || 'Execution failed'}`);
+          this.emit('task.failed', { taskId, stepId: step.stepId, error: updatedStep.resultSummary });
+          return;
+        }
       }
 
       // STEP 4: VERIFYING
       await this.transitionState(taskId, 'VERIFYING', 'Running final verification gate');
+      task = await this.repository.getTask(taskId);
+      if (!task) return;
       const verifier = this.specialistRegistry.getSpecialist('verifier');
       let isVerified = true;
       if (verifier) {
@@ -289,20 +333,23 @@ export class AutonomousAgentEngine extends EventEmitter {
     const task = await this.repository.getTask(taskId);
     if (!task) return;
 
+    const targetStep = task.plan?.steps.find(s => s.stepId === step.stepId) || step;
+    targetStep.status = 'RUNNING';
+    targetStep.startedAt = Date.now();
     step.status = 'RUNNING';
-    step.startedAt = Date.now();
-    task.activeStepId = step.stepId;
+    step.startedAt = targetStep.startedAt;
+    task.activeStepId = targetStep.stepId;
     await this.repository.updateTask(task);
-    this.emit('task.step_started', { taskId, stepId: step.stepId, title: step.title });
+    this.emit('task.step_started', { taskId, stepId: targetStep.stepId, title: targetStep.title });
 
     let specialistResult: any = null;
-    const role = step.role;
+    const role = targetStep.role;
 
     if (role && this.specialistRegistry.hasSpecialist(role)) {
       const specialist = this.specialistRegistry.getSpecialist(role)!;
       specialistResult = await specialist.execute({
-        runId: `run_${taskId}_${step.stepId}`,
-        taskId: `step_${step.stepId}`,
+        runId: `run_${taskId}_${targetStep.stepId}`,
+        taskId: `step_${targetStep.stepId}`,
         principal: task.principal,
         tenantId: task.principal.workspaceId || 'default',
         workspaceId: task.principal.workspaceId || 'default',
@@ -317,30 +364,61 @@ export class AutonomousAgentEngine extends EventEmitter {
         correlationId: taskId,
         inputPayload: {
           objective: task.objective,
-          stepTitle: step.title,
-          stepDescription: step.description
-        }
+          stepTitle: targetStep.title,
+          stepDescription: targetStep.description,
+          priorObservations: task.observations,
+          priorResults: task.observations.reduce((acc: Record<string, any>, o) => {
+            if (o.stepId) acc[o.stepId] = o.summary;
+            if (o.sourceName) acc[o.sourceName] = o.summary;
+            return acc;
+          }, {}),
+          ...((task.workingMemory && targetStep.stepId ? (task.workingMemory[targetStep.stepId] as any) : undefined) || {})
+        },
+        workingMemory: task.workingMemory || {}
       });
     }
 
     const obs: AgentObservation = {
       observationId: `obs_${randomUUID().slice(0, 8)}`,
-      stepId: step.stepId,
+      stepId: targetStep.stepId,
       source: 'specialist',
-      sourceName: step.assignedSpecialist || step.role || 'System',
-      summary: specialistResult?.output?.summary || `Executed step "${step.title}" successfully.`,
+      sourceName: targetStep.assignedSpecialist || targetStep.role || 'System',
+      summary: specialistResult?.error?.message || specialistResult?.output?.summary || `Executed step "${targetStep.title}" successfully.`,
       timestamp: Date.now(),
       isError: specialistResult?.outcome === 'FAILED'
     };
 
     task.observations.push(obs);
-    step.status = specialistResult?.outcome === 'FAILED' ? 'FAILED' : 'COMPLETED';
-    step.completedAt = Date.now();
-    step.resultSummary = obs.summary;
+    if (!task.workingMemory) task.workingMemory = {};
+    if (specialistResult?.output) {
+      task.workingMemory[targetStep.stepId] = specialistResult.output;
+    }
+    targetStep.status = specialistResult?.outcome === 'FAILED' ? 'FAILED' : 'COMPLETED';
+    targetStep.completedAt = Date.now();
+    targetStep.resultSummary = obs.summary;
+    step.status = targetStep.status;
+    step.completedAt = targetStep.completedAt;
+    step.resultSummary = targetStep.resultSummary;
     await this.repository.updateTask(task);
 
     this.emit('task.observation', { taskId, observation: obs });
-    this.emit('task.step_completed', { taskId, stepId: step.stepId, status: step.status });
+    this.emit('task.handoff', {
+      taskId,
+      fromStep: targetStep.stepId,
+      specialistRole: role,
+      outputSummary: obs.summary
+    });
+    this.emit('task.step_completed', { taskId, stepId: targetStep.stepId, status: targetStep.status });
+  }
+
+  public async refinePlan(taskId: string, additionalSteps: AgentPlanStep[]): Promise<AutonomousAgentTask> {
+    const task = await this.repository.getTask(taskId);
+    if (!task || !task.plan) throw new Error(`Task "${taskId}" has no active plan.`);
+    task.plan.steps.push(...additionalSteps);
+    task.plan.updatedAt = Date.now();
+    await this.repository.updateTask(task);
+    this.emit('task.plan_refined', { taskId, addedSteps: additionalSteps.map(s => s.stepId) });
+    return task;
   }
 
   public async approveStep(
@@ -436,6 +514,33 @@ export class AutonomousAgentEngine extends EventEmitter {
 
     await this.transitionState(taskId, 'RESUMING', 'Task resuming from pause checkpoint');
     await this.transitionState(taskId, 'RUNNING', 'Task actively running again');
+
+    const controller = new AbortController();
+    this.activeExecutions.set(taskId, controller);
+    void this.continueExecutionFromCurrentStep(taskId, controller.signal);
+
+    return (await this.repository.getTask(taskId))!;
+  }
+
+  public async recoverTask(taskId: string, workerId = 'worker_recovery'): Promise<AutonomousAgentTask> {
+    const task = await this.repository.getTask(taskId);
+    if (!task) throw new Error(`Task "${taskId}" not found.`);
+
+    if (this.repository.claimTask) {
+      const claim = await this.repository.claimTask(taskId, workerId, 60000);
+      if (!claim.success) throw new Error(`Failed to claim task for recovery: ${claim.error}`);
+    }
+
+    if (task.state === 'WAITING_FOR_APPROVAL') {
+      return task; // Preserves approval state
+    }
+
+    if (task.state === 'PAUSED' || task.state === 'COMPLETED' || task.state === 'FAILED' || task.state === 'CANCELLED') {
+      return task;
+    }
+
+    await this.transitionState(taskId, 'RESUMING', 'Worker crash recovery initiated; resuming from persisted checkpoint');
+    await this.transitionState(taskId, 'RUNNING', 'Worker crash recovery active');
 
     const controller = new AbortController();
     this.activeExecutions.set(taskId, controller);

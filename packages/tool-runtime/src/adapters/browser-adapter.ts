@@ -1,4 +1,5 @@
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
+import fsSync from 'node:fs';
 import { ExecutionPrincipal } from '../../../contracts/src/index.js';
 
 export interface BrowserSessionInfo {
@@ -7,6 +8,16 @@ export interface BrowserSessionInfo {
   context: BrowserContext;
   activePage: Page;
   lastActive: number;
+}
+
+export interface PersistedBrowserSessionState {
+  sessionKey: string;
+  principalId: string;
+  workspaceId?: string;
+  currentUrl: string;
+  cookies: Array<any>;
+  origins: Array<{ origin: string; localStorage: Array<{ name: string; value: string }> }>;
+  exportedAt: number;
 }
 
 export interface BrowserAdapterOptions {
@@ -38,9 +49,25 @@ export class BrowserAdapter {
     }
 
     this.browserPromise = (async () => {
+      let exePath = this.options.executablePath;
+      if (!exePath && process.platform === 'win32') {
+        const candidates = [
+          'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+          'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+          'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+          'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe'
+        ];
+        for (const c of candidates) {
+          if (fsSync.existsSync(c)) {
+            exePath = c;
+            break;
+          }
+        }
+      }
+
       const launchOptions = {
         headless: true,
-        ...(this.options.executablePath ? { executablePath: this.options.executablePath } : {}),
+        ...(exePath ? { executablePath: exePath } : {}),
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
@@ -50,19 +77,18 @@ export class BrowserAdapter {
       };
 
       try {
-        // 1. Try system-installed Google Chrome
-        const b = await chromium.launch({ ...launchOptions, channel: 'chrome' });
+        const b = await chromium.launch(launchOptions);
         this.browser = b;
         return b;
-      } catch {
+      } catch (err: any) {
         try {
-          // 2. Try Microsoft Edge
+          // 2. Try Microsoft Edge channel
           const b = await chromium.launch({ ...launchOptions, channel: 'msedge' });
           this.browser = b;
           return b;
         } catch {
           // 3. Fallback to standard Playwright Chromium binary
-          const b = await chromium.launch(launchOptions);
+          const b = await chromium.launch({ ...launchOptions, channel: 'chrome' });
           this.browser = b;
           return b;
         }
@@ -498,6 +524,78 @@ export class BrowserAdapter {
       sessionKey: s.sessionKey,
       status: 'RESTARTED'
     };
+  }
+
+  /**
+   * Export permitted session state (cookies and localStorage) for durable recovery
+   * 
+   * PERSISTENCE CONTRACT:
+   * - Survives Restart: Cookies, LocalStorage items, current URL, session expiration.
+   * - Must Be Reconstructed: In-flight DOM node handles, WebSocket / active SSE streams, pending user input events.
+   */
+  async exportSessionState(principal: ExecutionPrincipal): Promise<PersistedBrowserSessionState | null> {
+    const sessionKey = `${principal.userId}:${principal.sessionId}`;
+    const session = this.sessions.get(sessionKey);
+    if (!session || session.activePage.isClosed()) {
+      return null;
+    }
+
+    try {
+      const storageState = await session.context.storageState();
+      return {
+        sessionKey,
+        principalId: principal.userId,
+        workspaceId: principal.workspaceId,
+        currentUrl: session.activePage.url(),
+        cookies: storageState.cookies,
+        origins: storageState.origins,
+        exportedAt: Date.now()
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Restore permitted session state after worker restart
+   */
+  async importSessionState(principal: ExecutionPrincipal, state: PersistedBrowserSessionState): Promise<BrowserSessionInfo> {
+    // Strict Tenant Boundary Enforcement: Principal A cannot import Principal B's session state
+    if (state.principalId !== principal.userId) {
+      throw new Error(`SECURITY_VIOLATION: Principal "${principal.userId}" cannot restore session owned by "${state.principalId}".`);
+    }
+
+    await this.closeSession(principal);
+
+    const sessionKey = `${principal.userId}:${principal.sessionId}`;
+    const browser = await this.getBrowser();
+    const context = await browser.newContext({
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 AIRA/2026',
+      viewport: { width: 1280, height: 720 },
+      ignoreHTTPSErrors: true,
+      storageState: {
+        cookies: state.cookies,
+        origins: state.origins
+      }
+    });
+
+    const activePage = await context.newPage();
+    if (state.currentUrl && state.currentUrl !== 'about:blank') {
+      try {
+        await activePage.goto(state.currentUrl, { timeout: 30000, waitUntil: 'domcontentloaded' });
+      } catch {}
+    }
+
+    const info: BrowserSessionInfo = {
+      sessionKey,
+      principalId: principal.userId,
+      context,
+      activePage,
+      lastActive: Date.now()
+    };
+
+    this.sessions.set(sessionKey, info);
+    return info;
   }
 
   /**

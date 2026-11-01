@@ -146,6 +146,16 @@ export class ToolGateway extends EventEmitter {
     return this.tools.get(nameOrId);
   }
 
+  public unregisterTool(nameOrId: string): boolean {
+    const tool = this.tools.get(nameOrId);
+    if (!tool) return false;
+    this.tools.delete(tool.definition.name);
+    if (tool.definition.id) {
+      this.tools.delete(tool.definition.id);
+    }
+    return true;
+  }
+
   public hasTool(nameOrId: string): boolean {
     return this.tools.has(nameOrId);
   }
@@ -164,6 +174,28 @@ export class ToolGateway extends EventEmitter {
 
   public getConnectorRegistry(): ConnectorRegistry {
     return this.connectorRegistry;
+  }
+
+  public async executeTool(
+    toolName: string,
+    args: Record<string, any>,
+    context: GatewayExecutionContext,
+    callId?: string
+  ): Promise<ToolResult & { untrustedExternalData?: boolean }> {
+    const res = await this.execute({
+      toolName,
+      arguments: args,
+      context,
+      callId
+    });
+    if (res.output && typeof res.output === 'object' && 'untrustedExternalData' in res.output) {
+      return {
+        ...res,
+        untrustedExternalData: (res.output as any).untrustedExternalData,
+        output: (res.output as any).output ?? res.output
+      };
+    }
+    return res;
   }
 
   /**
@@ -257,6 +289,7 @@ export class ToolGateway extends EventEmitter {
     // If supplied, an empty or non-matching allowlist must fail closed.
     if (
       context.effectiveToolScopes &&
+      !context.effectiveToolScopes.includes('*') &&
       !context.effectiveToolScopes.includes(def.name) &&
       !context.effectiveToolScopes.includes(def.id)
     ) {

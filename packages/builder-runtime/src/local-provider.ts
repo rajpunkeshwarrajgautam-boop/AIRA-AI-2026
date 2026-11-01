@@ -15,9 +15,66 @@ import type {
   SandboxPreview
 } from './provider-types.js';
 
+const PYTHON_SECURITY_GUARD = `
+# AIRA Local Subprocess Sandbox Containment Harness
+import sys, os
+
+# 1. Block Socket / Network
+import socket
+class BlockedSocket:
+    def __init__(self, *args, **kwargs):
+        raise PermissionError("AIRA_SANDBOX_POLICY_VIOLATION: Network access is blocked by AIRA Sandbox Policy.")
+    def connect(self, *args, **kwargs):
+        raise PermissionError("AIRA_SANDBOX_POLICY_VIOLATION: Network access is blocked by AIRA Sandbox Policy.")
+socket.socket = BlockedSocket
+
+# 2. Block Subprocesses & Shell Execution
+import subprocess
+def blocked_exec(*args, **kwargs):
+    raise PermissionError("AIRA_SANDBOX_POLICY_VIOLATION: Subprocess execution is blocked by AIRA Sandbox Policy.")
+subprocess.Popen = blocked_exec
+subprocess.run = blocked_exec
+subprocess.call = blocked_exec
+subprocess.check_call = blocked_exec
+subprocess.check_output = blocked_exec
+os.system = blocked_exec
+if hasattr(os, 'popen'):
+    os.popen = blocked_exec
+if hasattr(os, 'spawnl'):
+    os.spawnl = blocked_exec
+
+# 3. Block Filesystem Traversal Outside Workspace
+_real_open = open
+_workspace_dir = os.path.abspath(os.getcwd())
+
+def safe_open(file, *args, **kwargs):
+    try:
+        abs_path = os.path.abspath(str(file))
+        if not abs_path.startswith(_workspace_dir):
+            in_lib = any(abs_path.startswith(os.path.abspath(p)) for p in [sys.prefix, getattr(sys, 'base_prefix', sys.prefix)])
+            mode = args[0] if len(args) > 0 else kwargs.get('mode', 'r')
+            if ('w' in mode or 'a' in mode or '+' in mode or 'x' in mode) and not abs_path.startswith(_workspace_dir):
+                raise PermissionError(f"AIRA_SANDBOX_POLICY_VIOLATION: Write operation outside workspace is blocked: {file}")
+            if not in_lib and not abs_path.startswith(_workspace_dir):
+                raise PermissionError(f"AIRA_SANDBOX_POLICY_VIOLATION: Filesystem traversal outside workspace is blocked: {file}")
+    except PermissionError:
+        raise
+    except Exception:
+        pass
+    return _real_open(file, *args, **kwargs)
+
+import builtins
+builtins.open = safe_open
+`;
+
 export class LocalIsolatedSandboxProvider implements SandboxProvider {
   public readonly name = 'local';
-  private workspaces = new Map<string, { rootDir: string; expiresAt: number; processes: Set<number> }>();
+  private workspaces = new Map<string, {
+    rootDir: string;
+    allowInternet: boolean;
+    expiresAt: number;
+    processes: Set<number>;
+  }>();
 
   isConfigured(): boolean {
     return true;
@@ -26,7 +83,7 @@ export class LocalIsolatedSandboxProvider implements SandboxProvider {
   private resolveSafePath(workspaceId: string, relPath: string): string {
     const ws = this.workspaces.get(workspaceId);
     if (!ws) throw new Error(`Local workspace "${workspaceId}" not found or expired.`);
-    
+
     // Normalize and prevent directory traversal
     const safeRel = relPath.replace(/\\/g, '/').replace(/^\/+/, '');
     if (safeRel.includes('..') || path.isAbsolute(relPath)) {
@@ -40,13 +97,21 @@ export class LocalIsolatedSandboxProvider implements SandboxProvider {
   }
 
   async createWorkspace(options: SandboxCreateOptions): Promise<SandboxWorkspace> {
+    if (options.requireContainer) {
+      throw new Error('CONTAINER_ISOLATION_REQUIRED: OCI container isolation is required for this workload, but LocalIsolatedSandboxProvider is a restricted host provider.');
+    }
+
     const id = `local_ws_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
     const rootDir = path.join(os.tmpdir(), `aira_sandbox_${id}`);
     await fs.mkdir(rootDir, { recursive: true });
 
+    const allowInternet = options.allowInternet ?? false;
+    // Always write sitecustomize.py into workspace for automatic sandbox injection
+    await fs.writeFile(path.join(rootDir, 'sitecustomize.py'), PYTHON_SECURITY_GUARD, 'utf-8');
+
     const timeoutMs = options.timeoutMs || 900000;
     const expiresAt = Date.now() + timeoutMs;
-    this.workspaces.set(id, { rootDir, expiresAt, processes: new Set() });
+    this.workspaces.set(id, { rootDir, allowInternet, expiresAt, processes: new Set() });
 
     return {
       id,
@@ -61,10 +126,14 @@ export class LocalIsolatedSandboxProvider implements SandboxProvider {
   async reconnectWorkspace(workspaceId: string, _options?: SandboxReconnectOptions): Promise<SandboxWorkspace> {
     const ws = this.workspaces.get(workspaceId);
     if (!ws) {
-      // Re-initialize if directory exists
       const fallbackDir = path.join(os.tmpdir(), `aira_sandbox_${workspaceId}`);
       if (fsSync.existsSync(fallbackDir)) {
-        this.workspaces.set(workspaceId, { rootDir: fallbackDir, expiresAt: Date.now() + 900000, processes: new Set() });
+        this.workspaces.set(workspaceId, {
+          rootDir: fallbackDir,
+          allowInternet: false,
+          expiresAt: Date.now() + 900000,
+          processes: new Set()
+        });
         return {
           id: workspaceId,
           provider: this.name,
@@ -106,6 +175,7 @@ export class LocalIsolatedSandboxProvider implements SandboxProvider {
       const entries = await fs.readdir(target, { withFileTypes: true });
       const results: SandboxFile[] = [];
       for (const ent of entries) {
+        if (ent.name === 'sitecustomize.py') continue; // Internal harness files
         const full = path.join(target, ent.name);
         let size = 0;
         try {
@@ -125,6 +195,10 @@ export class LocalIsolatedSandboxProvider implements SandboxProvider {
   }
 
   async runCommand(workspace: SandboxWorkspace, command: string, options?: SandboxCommandOptions): Promise<SandboxCommandResult> {
+    if (options?.requireContainer) {
+      throw new Error('CONTAINER_ISOLATION_REQUIRED: OCI container isolation is required for this workload, but LocalIsolatedSandboxProvider is a restricted host provider.');
+    }
+
     const ws = this.workspaces.get(workspace.id);
     if (!ws) throw new Error(`Workspace "${workspace.id}" not found.`);
 
@@ -135,7 +209,10 @@ export class LocalIsolatedSandboxProvider implements SandboxProvider {
     // Strict Security Isolation: Strip all sensitive host credentials from subprocess environment
     const safeEnv: Record<string, string> = {
       PATH: process.env.PATH || '',
+      PATHEXT: process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD',
       SYSTEMROOT: process.env.SYSTEMROOT || '',
+      COMSPEC: process.env.COMSPEC || 'cmd.exe',
+      PYTHONPATH: ws.rootDir,
       TEMP: ws.rootDir,
       TMP: ws.rootDir,
       HOME: ws.rootDir,
@@ -197,14 +274,19 @@ export class LocalIsolatedSandboxProvider implements SandboxProvider {
         if (!isSettled) {
           isSettled = true;
           try {
-            child.kill('SIGKILL');
+            if (isWin && child.pid) {
+              spawn('taskkill', ['/pid', String(child.pid), '/T', '/F']);
+            } else {
+              child.kill('SIGKILL');
+            }
           } catch {}
           resolve({
             exitCode: 124,
             stdout,
             stderr: stderr + `\nExecution timed out after ${timeoutMs}ms.`,
             durationMs: Date.now() - start,
-            provider: this.name
+            provider: this.name,
+            isolationTier: 'LOCAL_RESTRICTED_GUARDED'
           });
         }
       }, timeoutMs);
@@ -215,14 +297,19 @@ export class LocalIsolatedSandboxProvider implements SandboxProvider {
             isSettled = true;
             clearTimeout(timer);
             try {
-              child.kill('SIGKILL');
+              if (isWin && child.pid) {
+                spawn('taskkill', ['/pid', String(child.pid), '/T', '/F']);
+              } else {
+                child.kill('SIGKILL');
+              }
             } catch {}
             resolve({
               exitCode: 130,
               stdout,
               stderr: stderr + '\nExecution cancelled by signal.',
               durationMs: Date.now() - start,
-              provider: this.name
+              provider: this.name,
+              isolationTier: 'LOCAL_RESTRICTED_GUARDED'
             });
           }
         }, { once: true });
@@ -238,7 +325,8 @@ export class LocalIsolatedSandboxProvider implements SandboxProvider {
             stdout,
             stderr,
             durationMs: Date.now() - start,
-            provider: this.name
+            provider: this.name,
+            isolationTier: 'LOCAL_RESTRICTED_GUARDED'
           });
         }
       });
@@ -253,7 +341,8 @@ export class LocalIsolatedSandboxProvider implements SandboxProvider {
             stdout,
             stderr: stderr + `\nProcess error: ${err.message}`,
             durationMs: Date.now() - start,
-            provider: this.name
+            provider: this.name,
+            isolationTier: 'LOCAL_RESTRICTED_GUARDED'
           });
         }
       });
@@ -273,7 +362,11 @@ export class LocalIsolatedSandboxProvider implements SandboxProvider {
     if (ws) {
       for (const pid of ws.processes) {
         try {
-          process.kill(pid, 'SIGKILL');
+          if (process.platform === 'win32') {
+            spawn('taskkill', ['/pid', String(pid), '/T', '/F']);
+          } else {
+            process.kill(pid, 'SIGKILL');
+          }
         } catch {}
       }
       ws.processes.clear();

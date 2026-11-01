@@ -23,7 +23,7 @@ import type { AppSettings, Conversation, Project } from '../types';
 import { AVAILABLE_MODELS } from '../utils/constants';
 import { neonAuth } from '../lib/neonAuth';
 
-interface PresetTheme {
+export interface PresetTheme {
   id: NonNullable<AppSettings['aestheticPreset']>;
   name: string;
   badge: string;
@@ -31,7 +31,7 @@ interface PresetTheme {
   swatches: [string, string, string];
 }
 
-const PRESET_THEMES: PresetTheme[] = [
+export const PRESET_THEMES: PresetTheme[] = [
   {
     id: 'linear-precision',
     name: 'Claude Editorial',

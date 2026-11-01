@@ -240,6 +240,82 @@ export class BrainV2KnowledgeEngine {
     return await this.repo.purgeMemories(scope);
   }
 
+  public async handleContradiction(
+    key: string,
+    newValue: string,
+    category: 'fact' | 'decision' | 'preference' | 'pattern' | 'constraint' = 'fact',
+    provenance = 'user_correction',
+    scope?: PrincipalScope
+  ): Promise<{ priorStaleCount: number; activeMemory: MemoryRecord }> {
+    const existing = await this.getMemories(scope);
+    const conflicts = existing.filter(m => m.key === key && !m.stale);
+    let priorStaleCount = 0;
+    for (const conflict of conflicts) {
+      conflict.stale = true;
+      conflict.confidence = 0.1;
+      conflict.updatedAt = Date.now();
+      await this.repo.saveMemory(conflict);
+      priorStaleCount++;
+    }
+    const activeMemory = await this.saveMemory(key, newValue, category, provenance, scope);
+    return { priorStaleCount, activeMemory };
+  }
+
+  public async compactMemories(scope?: PrincipalScope): Promise<{ removedCount: number }> {
+    const memories = await this.getMemories(scope);
+    let removedCount = 0;
+    for (const mem of memories) {
+      if (mem.stale && !mem.isSystem) {
+        await this.deleteMemory(mem.id, scope);
+        removedCount++;
+      }
+    }
+    return { removedCount };
+  }
+
+  public async exportUserKnowledge(scope: PrincipalScope): Promise<{
+    principalId: string;
+    exportedAt: number;
+    sources: KnowledgeSource[];
+    memories: MemoryRecord[];
+    entities: KnowledgeEntity[];
+    edges: KnowledgeEdge[];
+  }> {
+    if (!scope.principalId) {
+      throw new Error('Principal ID is required to export user knowledge.');
+    }
+    const sources = await this.getSources(scope);
+    const memories = await this.getMemories(scope);
+    const graph = await this.getKnowledgeGraph(scope);
+    return {
+      principalId: scope.principalId,
+      exportedAt: Date.now(),
+      sources: sources.filter(s => !s.isSystem && s.principalId === scope.principalId),
+      memories: memories.filter(m => !m.isSystem && m.principalId === scope.principalId),
+      entities: graph.entities.filter(e => !e.isSystem && e.principalId === scope.principalId),
+      edges: graph.edges.filter(ed => !ed.isSystem && ed.principalId === scope.principalId)
+    };
+  }
+
+  public async purgeAllUserData(scope: PrincipalScope): Promise<{
+    purgedMemories: number;
+    purgedSources: number;
+  }> {
+    if (!scope.principalId) {
+      throw new Error('Principal ID is required to purge user data.');
+    }
+    const purgedMemories = await this.purgeMemories(scope);
+    const sources = await this.getSources(scope);
+    let purgedSources = 0;
+    for (const s of sources) {
+      if (!s.isSystem && s.principalId === scope.principalId) {
+        await this.deleteSource(s.id, scope);
+        purgedSources++;
+      }
+    }
+    return { purgedMemories, purgedSources };
+  }
+
   public async saveMemory(
     key: string,
     value: string,

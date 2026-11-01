@@ -42,6 +42,7 @@ export const AUTONOMOUS_STATE_TRANSITIONS: Readonly<Record<AutonomousTaskState, 
   PLANNING: new Set<AutonomousTaskState>(['READY', 'RUNNING', 'FAILED', 'CANCELLED']),
   READY: new Set<AutonomousTaskState>(['RUNNING', 'PAUSED', 'FAILED', 'CANCELLED']),
   RUNNING: new Set<AutonomousTaskState>([
+    'RESUMING',
     'WAITING_FOR_APPROVAL',
     'PAUSED',
     'VERIFYING',
@@ -137,9 +138,15 @@ export const AutonomousAgentTaskSchema = z.object({
     content: z.string(),
     version: z.number().default(1)
   })).default([]),
+  workingMemory: z.record(z.string(), z.unknown()).optional().default({}),
   approvalRequestId: z.string().optional(),
   deliverableSummary: z.string().optional(),
   error: z.string().optional(),
+  fencingToken: z.number().int().default(0),
+  leaseOwner: z.string().optional(),
+  leaseExpiresAt: z.number().optional(),
+  heartbeatAt: z.number().optional(),
+  idempotencyKey: z.string().optional(),
   executionHistory: z.array(z.object({
     state: AutonomousTaskStateSchema,
     timestamp: z.number(),

@@ -95,85 +95,85 @@ export class McpHost {
       await this.disconnectServer(serverId);
     }
 
-    let transport: any;
+    try {
+      let transport: any;
 
-    if (config.transport === 'stdio') {
-      if (!config.command) {
-        throw new Error(`MCP stdio server ${serverId} requires a command path.`);
-      }
+      if (config.transport === 'stdio') {
+        if (!config.command) {
+          throw new Error(`MCP stdio server ${serverId} requires a command path.`);
+        }
 
-      // Security Isolation: Strip host credentials from stdio child process environment
-      const safeEnv: Record<string, string> = {
-        PATH: process.env.PATH || '',
-        SYSTEMROOT: process.env.SYSTEMROOT || '',
-        HOME: process.env.HOME || process.env.USERPROFILE || '',
-        USERPROFILE: process.env.USERPROFILE || '',
-        ...(config.env || {})
-      };
+        // Security Isolation: Strip host credentials from stdio child process environment
+        const safeEnv: Record<string, string> = {
+          PATH: process.env.PATH || '',
+          SYSTEMROOT: process.env.SYSTEMROOT || '',
+          HOME: process.env.HOME || process.env.USERPROFILE || '',
+          USERPROFILE: process.env.USERPROFILE || '',
+          ...(config.env || {})
+        };
 
-      for (const k of Object.keys(safeEnv)) {
-        const kUpper = k.toUpperCase();
-        if (
-          kUpper.includes('TOKEN') ||
-          kUpper.includes('SECRET') ||
-          kUpper.includes('KEY') ||
-          kUpper.includes('DATABASE') ||
-          kUpper.includes('NEON') ||
-          kUpper.includes('POSTGRES') ||
-          kUpper.includes('AUTH') ||
-          kUpper.includes('COOKIE') ||
-          kUpper.includes('JWT')
-        ) {
-          delete safeEnv[k];
+        for (const k of Object.keys(safeEnv)) {
+          const kUpper = k.toUpperCase();
+          if (
+            kUpper.includes('TOKEN') ||
+            kUpper.includes('SECRET') ||
+            kUpper.includes('KEY') ||
+            kUpper.includes('DATABASE') ||
+            kUpper.includes('NEON') ||
+            kUpper.includes('POSTGRES') ||
+            kUpper.includes('AUTH') ||
+            kUpper.includes('COOKIE') ||
+            kUpper.includes('JWT')
+          ) {
+            delete safeEnv[k];
+          }
+        }
+
+        transport = new StdioClientTransport({
+          command: config.command,
+          args: config.args || [],
+          env: safeEnv
+        });
+      } else {
+        if (!config.url) throw new Error(`MCP Server with id ${serverId} requires an HTTP URL.`);
+
+        // Security Gate 1: URL Validation & SSRF Prevention
+        let parsedUrl: URL;
+        try {
+          parsedUrl = new URL(config.url);
+        } catch {
+          throw new Error(`Invalid URL for MCP server ${serverId}: ${config.url}`);
+        }
+
+        if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+          throw new Error(`Invalid protocol for MCP server ${serverId}. Only http and https are allowed.`);
+        }
+
+        const isLocal = parsedUrl.hostname === 'localhost' || parsedUrl.hostname === '127.0.0.1' || parsedUrl.hostname === '::1';
+        if (process.env.NODE_ENV === 'production' && isLocal && process.env.AIRA_ALLOW_LOCAL_MCP !== 'true') {
+          throw new Error(`Security Violation: Connecting to localhost MCP endpoints is forbidden in production.`);
+        }
+
+        const headers = config.headers || {};
+        if (config.transport === 'sse') {
+          transport = new SSEClientTransport(parsedUrl, {
+            eventSourceInit: {
+              // @ts-expect-error headers may be supported by fetch-based polyfill
+              headers
+            },
+            requestInit: {
+              headers
+            }
+          });
+        } else {
+          transport = new StreamableHTTPClientTransport(parsedUrl, {
+            requestInit: {
+              headers
+            }
+          });
         }
       }
 
-      transport = new StdioClientTransport({
-        command: config.command,
-        args: config.args || [],
-        env: safeEnv
-      });
-    } else {
-      if (!config.url) throw new Error(`MCP Server with id ${serverId} requires an HTTP URL.`);
-
-      // Security Gate 1: URL Validation & SSRF Prevention
-      let parsedUrl: URL;
-      try {
-        parsedUrl = new URL(config.url);
-      } catch {
-        throw new Error(`Invalid URL for MCP server ${serverId}: ${config.url}`);
-      }
-
-      if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
-        throw new Error(`Invalid protocol for MCP server ${serverId}. Only http and https are allowed.`);
-      }
-
-      const isLocal = parsedUrl.hostname === 'localhost' || parsedUrl.hostname === '127.0.0.1' || parsedUrl.hostname === '::1';
-      if (process.env.NODE_ENV === 'production' && isLocal && process.env.AIRA_ALLOW_LOCAL_MCP !== 'true') {
-        throw new Error(`Security Violation: Connecting to localhost MCP endpoints is forbidden in production.`);
-      }
-
-      const headers = config.headers || {};
-      if (config.transport === 'sse') {
-        transport = new SSEClientTransport(parsedUrl, {
-          eventSourceInit: {
-            // @ts-expect-error headers may be supported by fetch-based polyfill
-            headers
-          },
-          requestInit: {
-            headers
-          }
-        });
-      } else {
-        transport = new StreamableHTTPClientTransport(parsedUrl, {
-          requestInit: {
-            headers
-          }
-        });
-      }
-    }
-
-    try {
       const client = new Client(
         {
           name: 'aira-mcp-host',
@@ -271,6 +271,14 @@ export class McpHost {
       await client.close();
     } catch {}
     this.clients.delete(serverId);
+
+    const tools = this.serverTools.get(serverId) || [];
+    for (const t of tools) {
+      if ('unregisterTool' in this.toolRegistryOrGateway) {
+        (this.toolRegistryOrGateway as any).unregisterTool(t.id);
+        (this.toolRegistryOrGateway as any).unregisterTool(t.name);
+      }
+    }
     this.serverTools.delete(serverId);
     return true;
   }

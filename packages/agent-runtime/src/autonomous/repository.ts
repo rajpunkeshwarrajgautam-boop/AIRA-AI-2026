@@ -4,22 +4,44 @@ import {
   AgentObservation,
   canAutonomousStateTransition
 } from '../../../contracts/src/index.js';
+import { db } from '../../../db/src/index.js';
+
+export interface AutonomousTaskClaimResult {
+  success: boolean;
+  task?: AutonomousAgentTask;
+  error?: string;
+}
 
 export interface IAutonomousTaskRepository {
   createTask(task: AutonomousAgentTask): Promise<AutonomousAgentTask>;
   getTask(taskId: string): Promise<AutonomousAgentTask | null>;
+  getTaskByIdempotencyKey?(principalId: string, idempotencyKey: string): Promise<AutonomousAgentTask | null>;
   listTasksByPrincipal(principalId: string, limit?: number): Promise<AutonomousAgentTask[]>;
   updateTask(task: AutonomousAgentTask): Promise<AutonomousAgentTask>;
-  updateState(taskId: string, newState: AutonomousTaskState, reason?: string, checkpoint?: string): Promise<AutonomousAgentTask>;
+  updateState(
+    taskId: string,
+    newState: AutonomousTaskState,
+    reason?: string,
+    checkpoint?: string,
+    expectedFencingToken?: number
+  ): Promise<AutonomousAgentTask>;
   addObservation(taskId: string, observation: AgentObservation): Promise<void>;
   addArtifact(taskId: string, artifact: AutonomousAgentTask['artifacts'][0]): Promise<void>;
+  claimTask?(taskId: string, workerId: string, leaseDurationMs: number): Promise<AutonomousTaskClaimResult>;
+  renewLease?(taskId: string, workerId: string, leaseDurationMs: number, fencingToken: number): Promise<boolean>;
+  findRecoverableTasks?(now: number, limit?: number): Promise<AutonomousAgentTask[]>;
 }
 
 export class InMemoryAutonomousTaskRepository implements IAutonomousTaskRepository {
   private tasks: Map<string, AutonomousAgentTask> = new Map();
 
   async createTask(task: AutonomousAgentTask): Promise<AutonomousAgentTask> {
-    const clone = JSON.parse(JSON.stringify(task));
+    if (task.idempotencyKey) {
+      const existing = await this.getTaskByIdempotencyKey(task.principal.userId, task.idempotencyKey);
+      if (existing) return existing;
+    }
+    const clone: AutonomousAgentTask = JSON.parse(JSON.stringify(task));
+    clone.fencingToken = clone.fencingToken ?? 0;
     this.tasks.set(task.taskId, clone);
     return clone;
   }
@@ -28,6 +50,15 @@ export class InMemoryAutonomousTaskRepository implements IAutonomousTaskReposito
     const found = this.tasks.get(taskId);
     if (!found) return null;
     return JSON.parse(JSON.stringify(found));
+  }
+
+  async getTaskByIdempotencyKey(principalId: string, idempotencyKey: string): Promise<AutonomousAgentTask | null> {
+    for (const t of this.tasks.values()) {
+      if (t.principal.userId === principalId && t.idempotencyKey === idempotencyKey) {
+        return JSON.parse(JSON.stringify(t));
+      }
+    }
+    return null;
   }
 
   async listTasksByPrincipal(principalId: string, limit = 20): Promise<AutonomousAgentTask[]> {
@@ -53,6 +84,9 @@ export class InMemoryAutonomousTaskRepository implements IAutonomousTaskReposito
     const updated: AutonomousAgentTask = {
       ...JSON.parse(JSON.stringify(task)),
       state: existing.state,
+      fencingToken: existing.fencingToken,
+      leaseOwner: existing.leaseOwner,
+      leaseExpiresAt: existing.leaseExpiresAt,
       executionHistory: existing.executionHistory,
       observations: mergedObservations,
       updatedAt: Date.now()
@@ -65,11 +99,16 @@ export class InMemoryAutonomousTaskRepository implements IAutonomousTaskReposito
     taskId: string,
     newState: AutonomousTaskState,
     reason?: string,
-    checkpoint?: string
+    checkpoint?: string,
+    expectedFencingToken?: number
   ): Promise<AutonomousAgentTask> {
     const task = this.tasks.get(taskId);
     if (!task) {
       throw new Error(`Task with id ${taskId} not found.`);
+    }
+
+    if (expectedFencingToken !== undefined && task.fencingToken !== expectedFencingToken) {
+      throw new Error(`STALE_FENCING_TOKEN: Expected ${expectedFencingToken}, but task is at ${task.fencingToken}.`);
     }
 
     if (!canAutonomousStateTransition(task.state, newState)) {
@@ -78,9 +117,15 @@ export class InMemoryAutonomousTaskRepository implements IAutonomousTaskReposito
 
     const now = Date.now();
     task.state = newState;
+    task.fencingToken = (task.fencingToken || 0) + 1;
     task.updatedAt = now;
     if (newState === 'COMPLETED' || newState === 'FAILED' || newState === 'CANCELLED' || newState === 'TIMED_OUT') {
       task.completedAt = now;
+      task.leaseOwner = undefined;
+      task.leaseExpiresAt = undefined;
+    }
+    if (newState === 'FAILED' && reason) {
+      task.error = reason;
     }
 
     task.executionHistory.push({
@@ -112,5 +157,381 @@ export class InMemoryAutonomousTaskRepository implements IAutonomousTaskReposito
     task.artifacts.push(JSON.parse(JSON.stringify(artifact)));
     task.updatedAt = Date.now();
     this.tasks.set(taskId, task);
+  }
+
+  async claimTask(taskId: string, workerId: string, leaseDurationMs: number): Promise<AutonomousTaskClaimResult> {
+    const task = this.tasks.get(taskId);
+    if (!task) return { success: false, error: 'Task not found' };
+
+    const now = Date.now();
+    if (task.leaseOwner && task.leaseExpiresAt && task.leaseExpiresAt > now && task.leaseOwner !== workerId) {
+      return { success: false, error: `Task is currently leased to ${task.leaseOwner}` };
+    }
+
+    task.leaseOwner = workerId;
+    task.leaseExpiresAt = now + leaseDurationMs;
+    task.heartbeatAt = now;
+    task.fencingToken = (task.fencingToken || 0) + 1;
+    task.updatedAt = now;
+
+    this.tasks.set(taskId, task);
+    return { success: true, task: JSON.parse(JSON.stringify(task)) };
+  }
+
+  async renewLease(taskId: string, workerId: string, leaseDurationMs: number, fencingToken: number): Promise<boolean> {
+    const task = this.tasks.get(taskId);
+    if (!task) return false;
+    if (task.leaseOwner !== workerId || task.fencingToken !== fencingToken) return false;
+
+    task.leaseExpiresAt = Date.now() + leaseDurationMs;
+    task.heartbeatAt = Date.now();
+    task.updatedAt = Date.now();
+    this.tasks.set(taskId, task);
+    return true;
+  }
+
+  async findRecoverableTasks(now: number, limit = 50): Promise<AutonomousAgentTask[]> {
+    const recoverable: AutonomousAgentTask[] = [];
+    for (const t of this.tasks.values()) {
+      if (
+        (t.state === 'RUNNING' || t.state === 'RESUMING' || t.state === 'PLANNING') &&
+        (!t.leaseOwner || !t.leaseExpiresAt || t.leaseExpiresAt < now)
+      ) {
+        recoverable.push(JSON.parse(JSON.stringify(t)));
+      }
+    }
+    return recoverable.slice(0, limit);
+  }
+}
+
+// ==========================================
+// POSTGRESQL AUTONOMOUS TASK REPOSITORY
+// ==========================================
+
+function safeJsonParse<T>(val: any, fallback: T): T {
+  if (val === null || val === undefined) return fallback;
+  if (typeof val === 'string') {
+    try {
+      return JSON.parse(val);
+    } catch {
+      return fallback;
+    }
+  }
+  return val;
+}
+
+function isDatabaseUnavailable(err: any): boolean {
+  if (!err) return false;
+  if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND') return true;
+  if (err.message && (err.message.includes('ECONNREFUSED') || err.message.includes('relation "autonomous_agent_tasks" does not exist'))) return true;
+  if (err.errors && Array.isArray(err.errors)) {
+    return err.errors.some((e: any) => e.code === 'ECONNREFUSED' || e.message?.includes('ECONNREFUSED'));
+  }
+  return false;
+}
+
+export class PostgresAutonomousTaskRepository implements IAutonomousTaskRepository {
+  private fallbackMemory = new InMemoryAutonomousTaskRepository();
+
+  private rowToTask(row: any): AutonomousAgentTask {
+    return {
+      taskId: row.task_id,
+      principal: {
+        userId: row.principal_id,
+        sessionId: row.session_id || 'default_session',
+        workspaceId: row.workspace_id || undefined,
+        scopes: ['*']
+      },
+      objective: row.objective,
+      state: row.state,
+      activeStepId: row.active_step_id || undefined,
+      approvalRequestId: row.approval_request_id || undefined,
+      plan: safeJsonParse(row.plan, undefined),
+      dag: safeJsonParse(row.dag, undefined),
+      observations: safeJsonParse(row.observations, []),
+      artifacts: safeJsonParse(row.artifacts, []),
+      workingMemory: safeJsonParse(row.working_memory, {}),
+      executionHistory: safeJsonParse(row.execution_history, []),
+      deliverableSummary: row.deliverable_summary || undefined,
+      error: row.error || undefined,
+      fencingToken: Number(row.fencing_token || 0),
+      leaseOwner: row.lease_owner || undefined,
+      leaseExpiresAt: row.lease_expires_at ? Number(row.lease_expires_at) : undefined,
+      heartbeatAt: row.heartbeat_at ? Number(row.heartbeat_at) : undefined,
+      idempotencyKey: row.idempotency_key || undefined,
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+      completedAt: row.completed_at ? Number(row.completed_at) : undefined
+    };
+  }
+
+  async createTask(task: AutonomousAgentTask): Promise<AutonomousAgentTask> {
+    try {
+      if (task.idempotencyKey) {
+        const existing = await this.getTaskByIdempotencyKey(task.principal.userId, task.idempotencyKey);
+        if (existing) return existing;
+      }
+
+      const now = Date.now();
+      const row = {
+        task_id: task.taskId,
+        principal_id: task.principal.userId,
+        workspace_id: task.principal.workspaceId || null,
+        session_id: task.principal.sessionId || null,
+        objective: task.objective,
+        state: task.state || 'CREATED',
+        active_step_id: task.activeStepId || null,
+        approval_request_id: task.approvalRequestId || null,
+        plan: task.plan ? JSON.stringify(task.plan) : null,
+        dag: task.dag ? JSON.stringify(task.dag) : null,
+        observations: JSON.stringify(task.observations || []),
+        artifacts: JSON.stringify(task.artifacts || []),
+        execution_history: JSON.stringify(task.executionHistory || []),
+        deliverable_summary: task.deliverableSummary || null,
+        error: task.error || null,
+        fencing_token: task.fencingToken || 0,
+        lease_owner: task.leaseOwner || null,
+        lease_expires_at: task.leaseExpiresAt || null,
+        heartbeat_at: task.heartbeatAt || null,
+        idempotency_key: task.idempotencyKey || null,
+        created_at: task.createdAt || now,
+        updated_at: task.updatedAt || now,
+        completed_at: task.completedAt || null
+      };
+
+      await db('autonomous_agent_tasks').insert(row);
+      return task;
+    } catch (err: any) {
+      if (isDatabaseUnavailable(err)) {
+        return this.fallbackMemory.createTask(task);
+      }
+      throw err;
+    }
+  }
+
+  async getTask(taskId: string): Promise<AutonomousAgentTask | null> {
+    try {
+      const row = await db('autonomous_agent_tasks').where({ task_id: taskId }).first();
+      if (!row) return this.fallbackMemory.getTask(taskId);
+      return this.rowToTask(row);
+    } catch {
+      return this.fallbackMemory.getTask(taskId);
+    }
+  }
+
+  async getTaskByIdempotencyKey(principalId: string, idempotencyKey: string): Promise<AutonomousAgentTask | null> {
+    try {
+      const row = await db('autonomous_agent_tasks')
+        .where({ principal_id: principalId, idempotency_key: idempotencyKey })
+        .first();
+      if (!row) return this.fallbackMemory.getTaskByIdempotencyKey(principalId, idempotencyKey);
+      return this.rowToTask(row);
+    } catch {
+      return this.fallbackMemory.getTaskByIdempotencyKey(principalId, idempotencyKey);
+    }
+  }
+
+  async listTasksByPrincipal(principalId: string, limit = 20): Promise<AutonomousAgentTask[]> {
+    try {
+      const rows = await db('autonomous_agent_tasks')
+        .where({ principal_id: principalId })
+        .orderBy('created_at', 'desc')
+        .limit(limit);
+      if (rows.length === 0) return this.fallbackMemory.listTasksByPrincipal(principalId, limit);
+      return rows.map(r => this.rowToTask(r));
+    } catch {
+      return this.fallbackMemory.listTasksByPrincipal(principalId, limit);
+    }
+  }
+
+  async updateTask(task: AutonomousAgentTask): Promise<AutonomousAgentTask> {
+    try {
+      const existing = await this.getTask(task.taskId);
+      if (!existing) {
+        throw new Error(`Task with id ${task.taskId} not found.`);
+      }
+
+      const mergedObservations = task.observations.length >= existing.observations.length
+        ? task.observations
+        : existing.observations;
+
+      const now = Date.now();
+      await db('autonomous_agent_tasks')
+        .where({ task_id: task.taskId })
+        .update({
+          active_step_id: task.activeStepId || null,
+          approval_request_id: task.approvalRequestId || null,
+          plan: task.plan ? JSON.stringify(task.plan) : null,
+          dag: task.dag ? JSON.stringify(task.dag) : null,
+          observations: JSON.stringify(mergedObservations),
+          artifacts: JSON.stringify(task.artifacts || []),
+          deliverable_summary: task.deliverableSummary || null,
+          error: task.error || null,
+          updated_at: now
+        });
+
+      task.observations = mergedObservations;
+      task.updatedAt = now;
+      return task;
+    } catch (err: any) {
+      if (isDatabaseUnavailable(err)) {
+        return this.fallbackMemory.updateTask(task);
+      }
+      throw err;
+    }
+  }
+
+  async updateState(
+    taskId: string,
+    newState: AutonomousTaskState,
+    reason?: string,
+    checkpoint?: string,
+    expectedFencingToken?: number
+  ): Promise<AutonomousAgentTask> {
+    try {
+      const current = await this.getTask(taskId);
+      if (!current) throw new Error(`Task with id ${taskId} not found.`);
+
+      if (expectedFencingToken !== undefined && current.fencingToken !== expectedFencingToken) {
+        throw new Error(`STALE_FENCING_TOKEN: Expected ${expectedFencingToken}, but task is at ${current.fencingToken}.`);
+      }
+
+      if (!canAutonomousStateTransition(current.state, newState)) {
+        throw new Error(`Illegal autonomous state transition from "${current.state}" to "${newState}".`);
+      }
+
+      const now = Date.now();
+      const newFencingToken = (current.fencingToken || 0) + 1;
+      const history = [...current.executionHistory, {
+        state: newState,
+        timestamp: now,
+        reason,
+        checkpoint
+      }];
+
+      const updateData: any = {
+        state: newState,
+        fencing_token: newFencingToken,
+        execution_history: JSON.stringify(history),
+        updated_at: now
+      };
+
+      if (newState === 'COMPLETED' || newState === 'FAILED' || newState === 'CANCELLED' || newState === 'TIMED_OUT') {
+        updateData.completed_at = now;
+        updateData.lease_owner = null;
+        updateData.lease_expires_at = null;
+      }
+      if (newState === 'FAILED' && reason) {
+        updateData.error = reason;
+      }
+
+      const updated = await db('autonomous_agent_tasks')
+        .where({ task_id: taskId })
+        .andWhere('fencing_token', current.fencingToken)
+        .update(updateData);
+
+      if (updated === 0) {
+        throw new Error(`Concurrent update or stale fencing token on task ${taskId}.`);
+      }
+
+      current.state = newState;
+      current.fencingToken = newFencingToken;
+      current.executionHistory = history;
+      current.updatedAt = now;
+      if (updateData.completed_at) {
+        current.completedAt = now;
+        current.leaseOwner = undefined;
+        current.leaseExpiresAt = undefined;
+      }
+      return current;
+    } catch (err: any) {
+      if (isDatabaseUnavailable(err)) {
+        return this.fallbackMemory.updateState(taskId, newState, reason, checkpoint, expectedFencingToken);
+      }
+      throw err;
+    }
+  }
+
+  async addObservation(taskId: string, observation: AgentObservation): Promise<void> {
+    const current = await this.getTask(taskId);
+    if (!current) throw new Error(`Task with id ${taskId} not found.`);
+    current.observations.push(observation);
+    await this.updateTask(current);
+  }
+
+  async addArtifact(taskId: string, artifact: AutonomousAgentTask['artifacts'][0]): Promise<void> {
+    const current = await this.getTask(taskId);
+    if (!current) throw new Error(`Task with id ${taskId} not found.`);
+    current.artifacts.push(artifact);
+    await this.updateTask(current);
+  }
+
+  async claimTask(taskId: string, workerId: string, leaseDurationMs: number): Promise<AutonomousTaskClaimResult> {
+    try {
+      const now = Date.now();
+      const task = await this.getTask(taskId);
+      if (!task) return { success: false, error: 'Task not found' };
+
+      const updated = await db('autonomous_agent_tasks')
+        .where({ task_id: taskId })
+        .andWhere((qb) => {
+          qb.whereNull('lease_owner')
+            .orWhere('lease_expires_at', '<', now)
+            .orWhere('lease_owner', workerId);
+        })
+        .update({
+          lease_owner: workerId,
+          lease_expires_at: now + leaseDurationMs,
+          heartbeat_at: now,
+          fencing_token: db.raw('fencing_token + 1'),
+          updated_at: now
+        });
+
+      if (updated === 0) {
+        return { success: false, error: 'Task is leased by another active worker' };
+      }
+
+      const claimed = await this.getTask(taskId);
+      return { success: true, task: claimed || undefined };
+    } catch (err: any) {
+      if (isDatabaseUnavailable(err)) {
+        return this.fallbackMemory.claimTask(taskId, workerId, leaseDurationMs);
+      }
+      return { success: false, error: err.message };
+    }
+  }
+
+  async renewLease(taskId: string, workerId: string, leaseDurationMs: number, fencingToken: number): Promise<boolean> {
+    try {
+      const now = Date.now();
+      const updated = await db('autonomous_agent_tasks')
+        .where({ task_id: taskId, lease_owner: workerId, fencing_token: fencingToken })
+        .update({
+          lease_expires_at: now + leaseDurationMs,
+          heartbeat_at: now,
+          updated_at: now
+        });
+      return updated > 0;
+    } catch (err: any) {
+      if (isDatabaseUnavailable(err)) {
+        return this.fallbackMemory.renewLease(taskId, workerId, leaseDurationMs, fencingToken);
+      }
+      return false;
+    }
+  }
+
+  async findRecoverableTasks(now: number, limit = 50): Promise<AutonomousAgentTask[]> {
+    try {
+      const rows = await db('autonomous_agent_tasks')
+        .whereIn('state', ['RUNNING', 'RESUMING', 'PLANNING'])
+        .andWhere((qb) => {
+          qb.whereNull('lease_owner')
+            .orWhere('lease_expires_at', '<', now);
+        })
+        .limit(limit);
+      return rows.map(r => this.rowToTask(r));
+    } catch {
+      return this.fallbackMemory.findRecoverableTasks(now, limit);
+    }
   }
 }
