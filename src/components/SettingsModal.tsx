@@ -7,15 +7,21 @@ import {
   Upload, 
   Brain, 
   User, 
-  FileCode2, 
   Sliders, 
   ShieldCheck,
   Palette,
+  FileCode2,
   Database,
+  CreditCard,
+  Keyboard,
+  Eye,
+  Sparkles,
+  Lock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { AppSettings, Conversation, Project } from '../types';
 import { AVAILABLE_MODELS } from '../utils/constants';
+import { neonAuth } from '../lib/neonAuth';
 
 interface PresetTheme {
   id: NonNullable<AppSettings['aestheticPreset']>;
@@ -84,6 +90,7 @@ const PRESET_THEMES: PresetTheme[] = [
   },
 ];
 
+export type SettingsTab = 'general' | 'reasoning' | 'memory' | 'instructions' | 'artifacts' | 'data';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -95,29 +102,63 @@ interface SettingsModalProps {
   onImportData: (data: { conversations: Conversation[]; projects: Project[] }) => void;
   onClearAll: () => void;
   onOpenMemoryVault?: () => void;
+  initialTab?: string;
+  onOpenBilling?: () => void;
+  onOpenPricing?: () => void;
+  onOpenShortcuts?: () => void;
 }
 
-type SettingsTab = 'general' | 'reasoning' | 'memory' | 'instructions' | 'artifacts' | 'data';
-
 export const SettingsModal: React.FC<SettingsModalProps> = ({
-  isOpen, onClose, settings, onSaveSettings, conversations, projects, onImportData, onClearAll, onOpenMemoryVault,
+  isOpen,
+  onClose,
+  settings,
+  onSaveSettings,
+  conversations,
+  projects,
+  onImportData,
+  onClearAll,
+  onOpenMemoryVault,
+  initialTab = 'general',
+  onOpenBilling,
+  onOpenPricing,
+  onOpenShortcuts,
 }) => {
-  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+  const resolveTab = (tab?: string): SettingsTab => {
+    if (tab === 'appearance' || tab === 'accessibility') return 'general';
+    if (tab === 'instructions' || tab === 'personalization') return 'instructions';
+    if (tab === 'account' || tab === 'privacy' || tab === 'shortcuts') return 'data';
+    if (tab === 'reasoning' || tab === 'memory' || tab === 'artifacts' || tab === 'data') return tab;
+    return 'general';
+  };
+
+  const [activeTab, setActiveTab] = useState<SettingsTab>(() => resolveTab(initialTab));
   const [form, setForm] = useState<AppSettings>({ ...settings });
   const [saved, setSaved] = useState(false);
+  const [currentUser, setCurrentUser] = useState(() => neonAuth.getCurrentUser());
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const closeHandler = useRef(onClose);
-  closeHandler.current = onClose;
+
+  useEffect(() => {
+    closeHandler.current = onClose;
+  }, [onClose]);
+
   const [viewport, setViewport] = useState(() => ({
-    top: 0, left: 0,
+    top: 0, 
+    left: 0,
     width: typeof window === 'undefined' ? 1024 : window.innerWidth,
     height: typeof window === 'undefined' ? 768 : window.innerHeight,
   }));
   const compactHeight = viewport.height < 430;
 
-  // Browser chrome and the mobile keyboard can change the visual viewport
-  // without resizing the layout viewport. Keep every dialog edge visible.
+  useEffect(() => {
+    if (isOpen) {
+      setForm({ ...settings });
+      setActiveTab(resolveTab(initialTab));
+      setCurrentUser(neonAuth.getCurrentUser());
+    }
+  }, [isOpen, initialTab, settings]);
+
   useEffect(() => {
     if (!isOpen) return;
     const visual = window.visualViewport;
@@ -127,12 +168,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       width: visual?.width ?? window.innerWidth,
       height: visual?.height ?? window.innerHeight,
     });
-    const previousFocus = document.activeElement as HTMLElement | null;
     measure();
     window.addEventListener('resize', measure);
     visual?.addEventListener('resize', measure);
     visual?.addEventListener('scroll', measure);
-    const focusFrame = requestAnimationFrame(() => closeButtonRef.current?.focus({ preventScroll: true }));
+    requestAnimationFrame(() => closeButtonRef.current?.focus({ preventScroll: true }));
+
     const handleKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
@@ -158,57 +199,73 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     };
     document.addEventListener('keydown', handleKey);
     return () => {
-      cancelAnimationFrame(focusFrame);
-      document.removeEventListener('keydown', handleKey);
       window.removeEventListener('resize', measure);
       visual?.removeEventListener('resize', measure);
       visual?.removeEventListener('scroll', measure);
-      previousFocus?.focus?.({ preventScroll: true });
+      document.removeEventListener('keydown', handleKey);
     };
   }, [isOpen]);
-
 
   const save = () => {
     onSaveSettings(form);
     setSaved(true);
-    setTimeout(() => { setSaved(false); onClose(); }, 500);
+    setTimeout(() => {
+      setSaved(false);
+      onClose();
+    }, 500);
   };
 
   const exportData = () => {
-    const blob = new Blob([JSON.stringify({ conversations, projects, settings: form }, null, 2)], { type: 'application/json' });
+    const data = {
+      conversations,
+      projects,
+      settings: form,
+      exportedAt: new Date().toISOString(),
+      version: '2026.1'
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `aira-workspace-${new Date().toISOString().slice(0, 10)}.json`; a.click();
+    a.href = url; 
+    a.download = `aira-workspace-${new Date().toISOString().slice(0, 10)}.json`; 
+    a.click();
     URL.revokeObjectURL(url);
   };
 
   const importData = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]; if (!file) return;
+    const file = e.target.files?.[0]; 
+    if (!file) return;
     const reader = new FileReader();
     reader.onload = ev => {
       try {
         const data = JSON.parse(String(ev.target?.result || '{}'));
-        if (Array.isArray(data.conversations)) onImportData({ conversations: data.conversations, projects: data.projects || [] });
-      } catch { alert('Invalid Aira backup file.'); }
+        if (Array.isArray(data.conversations)) {
+          onImportData({ conversations: data.conversations, projects: data.projects || [] });
+        }
+      } catch { 
+        alert('Invalid Aira backup file.'); 
+      }
     };
     reader.readAsText(file);
   };
 
   const tabs: Array<{ id: SettingsTab; label: string; icon: React.ReactNode }> = [
-    { id: 'general', label: 'General', icon: <User className="w-4 h-4" /> },
+    { id: 'general', label: 'General & Appearance', icon: <Palette className="w-4 h-4" /> },
     { id: 'reasoning', label: 'Model & Reasoning', icon: <Brain className="w-4 h-4" /> },
     { id: 'memory', label: 'Agent Memory', icon: <Database className="w-4 h-4" /> },
-    { id: 'instructions', label: 'Custom Instructions', icon: <Sliders className="w-4 h-4" /> },
-    { id: 'artifacts', label: 'Artifacts', icon: <FileCode2 className="w-4 h-4" /> },
-    { id: 'data', label: 'Account & Data', icon: <ShieldCheck className="w-4 h-4" /> },
+    { id: 'instructions', label: 'Personalization', icon: <Sliders className="w-4 h-4" /> },
+    { id: 'artifacts', label: 'Artifact Studio', icon: <FileCode2 className="w-4 h-4" /> },
+    { id: 'data', label: 'Account & Privacy', icon: <ShieldCheck className="w-4 h-4" /> },
   ];
 
   return (
     <AnimatePresence>
       {isOpen && (
-        <div data-testid="settings-viewport"
+        <div 
+          data-testid="settings-viewport"
           className="fixed z-[70] flex items-center justify-center p-2 sm:p-6 select-none"
-          style={{ top: viewport.top, left: viewport.left, width: viewport.width, height: viewport.height }}>
+          style={{ top: viewport.top, left: viewport.left, width: viewport.width, height: viewport.height }}
+        >
           <motion.div 
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -232,14 +289,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             className={`aira-settings-dialog w-full min-w-0 max-w-2xl h-full max-h-full sm:h-auto sm:max-h-[min(90dvh,900px)] rounded-2xl sm:rounded-[1.75rem] border border-claude-border-light dark:border-claude-border-dark bg-claude-surface-light dark:bg-claude-surface-dark shadow-[0_20px_60px_-15px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_60px_-15px_rgba(0,0,0,0.7)] flex flex-col relative z-10 ${compactHeight ? 'overflow-y-auto overscroll-contain' : 'overflow-hidden'}`}
           >
             {/* Header */}
-            <header data-testid="settings-header" className="shrink-0 px-3 sm:px-7 py-3 sm:py-4 border-b border-claude-border-light dark:border-claude-border-dark flex items-start justify-between gap-2 bg-claude-surface2-light dark:bg-claude-surface2-dark">
+            <header 
+              data-testid="settings-header" 
+              className="shrink-0 px-3 sm:px-7 py-3 sm:py-4 border-b border-claude-border-light dark:border-claude-border-dark flex items-start justify-between gap-2 bg-claude-surface2-light dark:bg-claude-surface2-dark"
+            >
               <div className="flex min-w-0 items-start gap-2 sm:gap-3">
                 <div className="shrink-0 p-2 rounded-xl bg-claude-terracotta/10 text-claude-accentInk">
                   <Settings className="w-5 h-5" />
                 </div>
                 <div className="min-w-0">
-                  <h2 id="aira-settings-title" className="font-bold text-base sm:text-lg tracking-tight leading-snug text-claude-text-light dark:text-white">Workspace Settings</h2>
-                  <p className="text-[11px] font-medium text-claude-muted-light dark:text-claude-muted-dark">Preferences, intelligence, and system personality</p>
+                  <h2 id="aira-settings-title" className="font-bold text-base sm:text-lg tracking-tight leading-snug text-claude-text-light dark:text-white">
+                    Workspace Settings
+                  </h2>
+                  <p className="text-[11px] font-medium text-claude-muted-light dark:text-claude-muted-dark">
+                    Preferences, intelligence, accessibility, and account management
+                  </p>
                 </div>
               </div>
               <motion.button
@@ -255,7 +319,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </motion.button>
             </header>
 
-            {/* Native mobile picker keeps all six settings sections accessible. */}
+            {/* Mobile section dropdown (strict 6 options for responsive tests) */}
             <div data-testid="settings-mobile-navigation" className="shrink-0 px-3 py-2 border-b border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/60 dark:bg-claude-surface2-dark/60 sm:hidden">
               <label htmlFor="aira-settings-section" className="block mb-1 text-[11px] font-semibold text-claude-muted-light dark:text-claude-muted-dark">Settings section</label>
               <select
@@ -268,7 +332,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 {tabs.map(tab => <option key={tab.id} value={tab.id}>{tab.label}</option>)}
               </select>
             </div>
-            {/* Full-width tab strip remains for tablet and desktop. */}
+
+            {/* Desktop Tab Strip (strict 6 tabs) */}
             <div role="tablist" aria-label="Settings categories" data-testid="settings-desktop-tabs" className="hidden sm:flex shrink-0 border-b border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/60 dark:bg-claude-surface2-dark/60 px-5 sm:px-7 overflow-x-auto gap-1 pt-2">
               {tabs.map(tab => (
                 <button
@@ -277,7 +342,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   role="tab"
                   aria-selected={activeTab === tab.id}
                   onClick={() => setActiveTab(tab.id)}
-                  id={`aira-settings-tab-${tab.id}`}
+                  id={`aira-settings-tab-${tab.id}`} data-testid={`settings-tab-${tab.id}`}
                   aria-controls="aira-settings-panel"
                   className={`shrink-0 flex items-center gap-2 px-3 py-2.5 text-xs font-semibold rounded-t-xl transition-all border-b-2 whitespace-nowrap ${
                     activeTab === tab.id
@@ -291,12 +356,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               ))}
             </div>
 
-            {/* Body Content */}
+            {/* Tab Body */}
             <div id="aira-settings-panel" data-testid="settings-content" className={`min-w-0 p-3 sm:p-7 space-y-6 bg-transparent ${compactHeight ? 'shrink-0' : 'min-h-0 flex-1 overflow-y-auto overscroll-contain'}`}>
               
-              {/* TAB 1: GENERAL */}
+              {/* TAB 1: GENERAL & APPEARANCE */}
               {activeTab === 'general' && (
-                <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
+                <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
                   <div>
                     <label htmlFor="aira-settings-name" className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark block mb-2">Display Name</label>
                     <input 
@@ -342,66 +407,116 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
                   </div>
 
+                  {/* 8 Aesthetic Presets */}
                   <div>
                     <div className="flex items-center justify-between mb-3">
                       <label className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark block">
-                        Aesthetic Preset & Interactive Features
+                        Aesthetic Preset & Visual System
                       </label>
-                      <span className="text-[10px] font-semibold text-claude-accentInk bg-claude-terracotta/10 px-2 py-0.5 rounded-full flex items-center gap-1">
-                        <Palette className="w-3 h-3" />
-                        <span>8 Curated Themes</span>
+                      <span className="text-[10px] font-semibold text-claude-accentInk bg-claude-terracotta/10 px-2 py-0.5 rounded-full">
+                        8 Curated Systems
                       </span>
                     </div>
 
-                    {/* Interactive Visual Theme Swatch Gallery Grid */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-[380px] overflow-y-auto pr-1">
-                      {PRESET_THEMES.map(theme => {
-                        const isSelected = (form.aestheticPreset || 'linear-precision') === theme.id;
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      {PRESET_THEMES.map(preset => {
+                        const isSelected = (form.aestheticPreset || 'linear-precision') === preset.id;
                         return (
-                          <div
-                            key={theme.id}
+                          <motion.button
+                            key={preset.id}
+                            type="button"
+                            whileHover={{ scale: 1.01 }}
+                            whileTap={{ scale: 0.99 }}
                             onClick={() => {
-                              setForm({ ...form, aestheticPreset: theme.id });
-                              onSaveSettings({ ...settings, ...form, aestheticPreset: theme.id });
+                              setForm({ ...form, aestheticPreset: preset.id });
+                              onSaveSettings({ ...settings, ...form, aestheticPreset: preset.id });
                             }}
-                            className={`group relative p-3 rounded-2xl border transition-all duration-300 cursor-pointer select-none ${
+                            className={`p-3 rounded-2xl border text-left transition-all relative overflow-hidden flex flex-col justify-between ${
                               isSelected
-                                ? 'border-claude-terracotta bg-claude-terracotta/5 dark:bg-claude-terracotta/10 shadow-[0_2px_12px_-2px_rgba(217,119,87,0.25)]'
-                                : 'border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/60 dark:bg-claude-surface2-dark/60 hover:border-claude-terracotta/40 hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark'
+                                ? 'border-claude-terracotta bg-claude-terracotta/5 dark:bg-claude-terracotta/10 shadow-sm ring-1 ring-claude-terracotta'
+                                : 'border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light dark:bg-claude-surface2-dark/60 hover:border-claude-terracotta/40'
                             }`}
                           >
-                            <div className="flex items-center justify-between mb-2">
-                              {/* Swatch palette preview dots */}
-                              <div className="flex items-center space-x-1.5 p-1 rounded-full bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/5">
-                                {theme.swatches.map((color, idx) => (
+                            <div className="flex items-start justify-between gap-2 mb-2">
+                              <div>
+                                <div className="text-[13px] font-bold text-claude-text-light dark:text-white flex items-center gap-1.5">
+                                  <span>{preset.name}</span>
+                                  {isSelected && <Check className="w-3.5 h-3.5 text-claude-terracotta" />}
+                                </div>
+                                <span className="text-[9px] font-extrabold uppercase tracking-wider text-claude-accentInk">
+                                  {preset.badge}
+                                </span>
+                              </div>
+                              <div className="flex items-center -space-x-1.5 shrink-0 p-1 rounded-lg bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/5">
+                                {preset.swatches.map((color, idx) => (
                                   <span
                                     key={idx}
-                                    className="w-2.5 h-2.5 rounded-full shadow-inner"
+                                    className="w-3.5 h-3.5 rounded-full border border-white/60 dark:border-black/60 shadow-xs"
                                     style={{ backgroundColor: color }}
                                   />
                                 ))}
                               </div>
-
-                              <span className="text-[9px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-md bg-claude-surface-light dark:bg-claude-surface-dark text-claude-muted-light dark:text-claude-muted-dark border border-claude-border-light dark:border-claude-border-dark">
-                                {theme.badge}
-                              </span>
                             </div>
-
-                            <div className="flex items-center justify-between">
-                              <span className="text-[13px] font-bold text-claude-text-light dark:text-white group-hover:text-claude-accentInk transition-colors">
-                                {theme.name}
-                              </span>
-                              {isSelected && (
-                                <Check className="w-4 h-4 text-claude-accentInk flex-shrink-0" />
-                              )}
-                            </div>
-
-                            <p className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-1 line-clamp-2 leading-relaxed font-sans">
-                              {theme.feature}
+                            <p className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark leading-snug">
+                              {preset.feature}
                             </p>
-                          </div>
+                          </motion.button>
                         );
                       })}
+                    </div>
+                  </div>
+
+                  {/* Accessibility Section within General */}
+                  <div className="p-4 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/40 dark:bg-claude-surface2-dark/40 space-y-4">
+                    <div className="flex items-center gap-2">
+                      <Eye className="w-4 h-4 text-claude-accentInk" />
+                      <span className="text-xs font-bold uppercase tracking-wider text-claude-text-light dark:text-white">
+                        Accessibility & Motion
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[10px] font-bold uppercase text-claude-muted-light block mb-1">Reduced Motion</label>
+                        <select
+                          aria-label="Reduced Motion" value={form.reducedMotion || 'system'}
+                          onChange={e => setForm({ ...form, reducedMotion: e.target.value as any })}
+                          className="w-full px-3 py-2 rounded-lg bg-claude-surface-light dark:bg-black/20 border border-claude-border-light dark:border-claude-border-dark text-xs font-medium"
+                        >
+                          <option value="system">Follow System</option>
+                          <option value="always">Reduce Motion</option>
+                          <option value="never">Full Animations</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] font-bold uppercase text-claude-muted-light block mb-1">Font Scale</label>
+                        <select
+                          aria-label="Font Scale" value={form.fontSize || 'base'}
+                          onChange={e => setForm({ ...form, fontSize: e.target.value as any })}
+                          className="w-full px-3 py-2 rounded-lg bg-claude-surface-light dark:bg-black/20 border border-claude-border-light dark:border-claude-border-dark text-xs font-medium"
+                        >
+                          <option value="sm">Compact (13px)</option>
+                          <option value="base">Standard (14px)</option>
+                          <option value="lg">Large (16px)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-2 border-t border-claude-border-light/60 dark:border-claude-border-dark/60">
+                      <div>
+                        <div className="text-xs font-bold text-claude-text-light dark:text-white">High Contrast Outlines</div>
+                        <div className="text-[10px] text-claude-muted-light">Enhance contrast ratios for borders and focus indicators.</div>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={form.highContrast === true}
+                          onChange={e => setForm({ ...form, highContrast: e.target.checked })}
+                          className="sr-only peer"
+                        />
+                        <div className="w-9 h-5 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-claude-terracotta"></div>
+                      </label>
                     </div>
                   </div>
                 </motion.div>
@@ -411,249 +526,75 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               {activeTab === 'reasoning' && (
                 <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
                   <div>
-                    <label className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark block mb-2">Default Intelligence Engine</label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                      {AVAILABLE_MODELS.map(model => (
-                        <div
-                          key={model.id}
-                          onClick={() => setForm({ ...form, activeModel: model.id })}
-                          className={`p-3 rounded-xl border cursor-pointer transition-all ${
-                            form.activeModel === model.id
-                              ? 'border-claude-terracotta bg-claude-terracotta/5 dark:bg-claude-terracotta/10 shadow-sm'
-                              : 'border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light dark:bg-claude-surface2-dark hover:border-claude-border-light/80'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between mb-1">
-                            <span className={`text-[13px] font-bold ${form.activeModel === model.id ? 'text-claude-accentInk' : 'text-claude-text-light dark:text-white'}`}>{model.name}</span>
-                            {model.badge && <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-claude-surface-light dark:bg-claude-surface-dark text-claude-muted-light dark:text-claude-muted-dark">{model.badge}</span>}
-                          </div>
-                          <p className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark line-clamp-2 leading-relaxed">{model.description}</p>
-                        </div>
+                    <label htmlFor="aira-settings-default-model" className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark block mb-2">Default Model</label>
+                    <select
+                      id="aira-settings-default-model"
+                      value={form.activeModel}
+                      onChange={e => setForm({ ...form, activeModel: e.target.value as any })}
+                      className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-semibold text-claude-text-light dark:text-white outline-none focus:border-claude-terracotta transition-all"
+                    >
+                      {AVAILABLE_MODELS.map(m => (
+                        <option key={m.id} value={m.id}>
+                          {m.name} ({m.badge}) - {m.description}
+                        </option>
                       ))}
-                    </div>
+                    </select>
                   </div>
 
-                  {/* Deep Reasoning exact screenshot component */}
-                  <div className="p-3.5 sm:p-4 rounded-2xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light dark:bg-claude-surface2-dark shadow-sm">
-                    <div 
-                      onClick={() => setForm({ ...form, extendedThinking: !form.extendedThinking })}
-                      className="flex items-center justify-between gap-3 cursor-pointer select-none"
-                    >
-                      <div className="flex items-center space-x-3 min-w-0">
-                        <div className="w-10 h-10 rounded-xl bg-[#EDE9FE] dark:bg-[#2E274D] flex items-center justify-center flex-shrink-0 shadow-sm">
-                          <Brain className="w-5 h-5 text-[#7C3AED] dark:text-[#A78BFA]" />
-                        </div>
-                        <div className="min-w-0">
-                          <div className="text-[13px] font-bold tracking-tight text-claude-text-light dark:text-white">Deep reasoning</div>
-                          <div className="text-[12px] text-claude-muted-light dark:text-claude-muted-dark leading-snug">Spend more compute on complex tasks.</div>
-                        </div>
+                  <div className="p-4 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/40 dark:bg-claude-surface2-dark/40 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-xs font-bold text-claude-text-light dark:text-white">Extended Thinking by Default</div>
+                        <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">Permits models to output step-by-step reasoning tokens before responding.</div>
                       </div>
-                      <button 
-                        type="button"
-                        role="switch"
-                        aria-checked={form.extendedThinking}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setForm({ ...form, extendedThinking: !form.extendedThinking });
-                        }}
-                        className={`group relative inline-flex h-[28px] w-[50px] flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-300 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00BCD4] focus-visible:ring-offset-2 dark:focus-visible:ring-offset-claude-bg-dark ${
-                          form.extendedThinking ? 'bg-[#00BCD4]' : 'bg-[#D5D2CA] dark:bg-[#4A4740]'
-                        }`}
-                        style={{ boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.15)' }}
-                      >
-                        <span className="sr-only">Toggle Deep reasoning</span>
-                        <span
-                          aria-hidden="true"
-                          className={`pointer-events-none inline-block h-[24px] w-[24px] transform rounded-full bg-white shadow-[0_2px_5px_rgba(0,0,0,0.2)] ring-0 transition-all duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)] group-active:w-[32px] ${
-                            form.extendedThinking ? 'translate-x-[22px] group-active:translate-x-[14px]' : 'translate-x-0'
-                          }`}
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={form.extendedThinking}
+                          onChange={e => setForm({ ...form, extendedThinking: e.target.checked })}
+                          className="sr-only peer"
                         />
-                      </button>
+                        <div className="w-11 h-6 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-claude-terracotta"></div>
+                      </label>
                     </div>
 
-                    {/* Extended Thinking Token Budget */}
                     {form.extendedThinking && (
-                      <motion.div 
-                        initial={{ opacity: 0, height: 0 }}
-                        animate={{ opacity: 1, height: 'auto' }}
-                        className="mt-4 pt-4 border-t border-claude-border-light dark:border-claude-border-dark"
-                      >
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark">Thinking Token Budget</span>
-                          <span className="text-[11px] font-mono font-bold px-2 py-0.5 rounded-md bg-[#EDE9FE] dark:bg-[#2E274D] text-[#7C3AED] dark:text-[#A78BFA]">
-                            {form.thinkingBudget.toLocaleString()} tokens
-                          </span>
+                      <div className="pt-2 border-t border-claude-border-light/60 dark:border-claude-border-dark/60">
+                        <div className="flex justify-between text-xs font-bold mb-1">
+                          <span className="text-claude-muted-light dark:text-claude-muted-dark">Reasoning Token Budget</span>
+                          <span className="text-claude-accentInk font-mono">{form.thinkingBudget.toLocaleString()} tokens</span>
                         </div>
-                        <input 
-                          type="range" 
-                          min="1024" 
-                          max="32768" 
-                          step="1024" 
-                          value={form.thinkingBudget} 
-                          onChange={e => setForm({ ...form, thinkingBudget: Number(e.target.value) })} 
-                          className="w-full h-1.5 bg-claude-surface-light dark:bg-claude-surface-dark rounded-lg appearance-none cursor-pointer accent-[#D97757]" 
+                        <input
+                          type="range"
+                          min={1024}
+                          max={64000}
+                          step={1024}
+                          value={form.thinkingBudget}
+                          onChange={e => setForm({ ...form, thinkingBudget: Number(e.target.value) })}
+                          className="w-full accent-claude-terracotta cursor-pointer"
                         />
-                        <div className="flex flex-wrap gap-1.5 mt-2.5">
-                          {[2048, 4096, 8192, 16384, 32768].map(tokens => (
-                            <button
-                              type="button"
-                              key={tokens}
-                              onClick={() => setForm({ ...form, thinkingBudget: tokens })}
-                              className={`text-[10px] font-mono px-2 py-1 rounded-lg border transition-colors ${
-                                form.thinkingBudget === tokens
-                                  ? 'border-[#D97757] bg-[#D97757]/10 text-[#D97757] font-bold'
-                                  : 'border-claude-border-light dark:border-claude-border-dark bg-claude-surface-light dark:bg-claude-surface-dark text-claude-muted-light dark:text-claude-muted-dark'
-                              }`}
-                            >
-                              {(tokens / 1024).toFixed(0)}k
-                            </button>
-                          ))}
-                        </div>
-                      </motion.div>
+                      </div>
                     )}
                   </div>
-                </motion.div>
-              )}
-
-              {/* TAB: AGENT MEMORY */}
-              {activeTab === 'memory' && (
-                <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
-                  {/* Enable Persistent Memory Toggle */}
-                  <div className="p-4 rounded-2xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light dark:bg-claude-surface2-dark flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-[13px] font-bold text-claude-text-light dark:text-white">Enable Persistent Memory</div>
-                      <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">Maintain cross-session context across Working, Episodic, Semantic, and Procedural tiers.</div>
-                    </div>
-                    <div 
-                      onClick={() => setForm({ ...form, persistentMemoryEnabled: !(form.persistentMemoryEnabled ?? true) })}
-                      className="w-11 h-6 rounded-full p-[2px] transition-colors duration-200 cursor-pointer flex-shrink-0 flex items-center"
-                      style={{ backgroundColor: (form.persistentMemoryEnabled ?? true) ? '#D97757' : '#D5D2CA' }}
-                    >
-                      <motion.div 
-                        layout
-                        transition={{ type: "spring", stiffness: 500, damping: 30 }}
-                        className={`w-5 h-5 rounded-full bg-white shadow-sm ${(form.persistentMemoryEnabled ?? true) ? 'ml-auto' : 'mr-auto'}`}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Auto-Consolidate Memory Toggle */}
-                  <div className="p-4 rounded-2xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light dark:bg-claude-surface2-dark flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-[13px] font-bold text-claude-text-light dark:text-white">Auto-Consolidation Worker</div>
-                      <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">Automatically extract preferences, decisions, and proven workflows from conversations.</div>
-                    </div>
-                    <div 
-                      onClick={() => setForm({ ...form, autoConsolidateMemory: !(form.autoConsolidateMemory ?? true) })}
-                      className="w-11 h-6 rounded-full p-[2px] transition-colors duration-200 cursor-pointer flex-shrink-0 flex items-center"
-                      style={{ backgroundColor: (form.autoConsolidateMemory ?? true) ? '#D97757' : '#D5D2CA' }}
-                    >
-                      <motion.div 
-                        layout
-                        transition={{ type: "spring", stiffness: 500, damping: 30 }}
-                        className={`w-5 h-5 rounded-full bg-white shadow-sm ${(form.autoConsolidateMemory ?? true) ? 'ml-auto' : 'mr-auto'}`}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Privacy Filter Toggle */}
-                  <div className="p-4 rounded-2xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light dark:bg-claude-surface2-dark flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-[13px] font-bold text-claude-text-light dark:text-white">Strict Secrets Scrubber</div>
-                      <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">Redact API keys (Anthropic, OpenAI, GitHub), tokens, and passwords prior to memory persistence.</div>
-                    </div>
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-2.5 py-1 rounded-md border border-emerald-200/50 dark:border-emerald-500/20">Enforced</span>
-                  </div>
-
-                  {/* Memory Token Budget */}
-                  <div className="p-4 rounded-2xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light dark:bg-claude-surface2-dark">
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="text-[13px] font-bold text-claude-text-light dark:text-white">Memory Context Budget</div>
-                      <span className="text-xs font-mono font-bold text-claude-accentInk">{form.memoryTokenBudget || 800} tokens</span>
-                    </div>
-                    <input
-                      type="range"
-                      min={200}
-                      max={2000}
-                      step={100}
-                      value={form.memoryTokenBudget || 800}
-                      onChange={e => setForm({ ...form, memoryTokenBudget: Number(e.target.value) })}
-                      className="w-full accent-claude-terracotta"
-                    />
-                    <div className="flex justify-between text-[10px] text-claude-muted-light dark:text-claude-muted-dark mt-1">
-                      <span>200 tokens (Minimal)</span>
-                      <span>800 tokens (Balanced)</span>
-                      <span>2000 tokens (Deep Recall)</span>
-                    </div>
-                  </div>
-
-                  {/* Vault Actions */}
-                  <div className="pt-2 flex items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onClose();
-                        if (onOpenMemoryVault) onOpenMemoryVault();
-                      }}
-                      className="flex-1 py-2.5 px-4 rounded-xl bg-claude-terracotta text-claude-onAccent font-semibold text-xs hover:bg-claude-terracotta-hover transition-colors shadow-sm"
-                    >
-                      Open Memory Vault Inspector
-                    </button>
-                    <a
-                      href="http://localhost:3113"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="py-2.5 px-4 rounded-xl border border-claude-border-light dark:border-claude-border-dark text-xs font-semibold text-claude-text-light dark:text-white hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark transition-colors inline-flex items-center gap-1.5"
-                    >
-                      <span>Web Viewer (:3113)</span>
-                    </a>
-                  </div>
-                </motion.div>
-              )}
-
-              {/* TAB 3: CUSTOM INSTRUCTIONS */}
-              {activeTab === 'instructions' && (
-                <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
-                  <div>
-                    <label className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark block mb-2">What should Aira know about you?</label>
-                    <textarea 
-                      rows={3} 
-                      value={form.userBio || ''} 
-                      onChange={e => setForm({ ...form, userBio: e.target.value })} 
-                      placeholder="e.g. Senior frontend engineer building responsive TypeScript applications, prefers direct answers and production-ready code." 
-                      className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-medium outline-none focus:border-claude-terracotta transition-all resize-none placeholder:text-claude-muted-light/50" 
-                    />
-                  </div>
 
                   <div>
-                    <label className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark block mb-2">How would you like Aira to respond?</label>
-                    <textarea 
-                      rows={4} 
-                      value={form.customInstructions} 
-                      onChange={e => setForm({ ...form, customInstructions: e.target.value })} 
-                      placeholder="e.g. Provide concise responses, highlight critical edge cases, prefer modern vanilla CSS and TypeScript, avoid unnecessary conversational filler." 
-                      className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-medium outline-none focus:border-claude-terracotta transition-all resize-none placeholder:text-claude-muted-light/50" 
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark block mb-2">Response Style Preset</label>
+                    <label className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark block mb-2">Response Style</label>
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                       {[
-                        { id: 'normal', label: 'Balanced' },
+                        { id: 'normal', label: 'Balanced & Adaptive' },
                         { id: 'concise', label: 'Concise & Direct' },
-                        { id: 'explanatory', label: 'In-Depth' },
-                        { id: 'academic', label: 'Rigorous / Cited' },
-                        { id: 'code-first', label: 'Code First' }
+                        { id: 'explanatory', label: 'Detailed & Pedagogical' },
+                        { id: 'academic', label: 'Academic & Rigorous' },
+                        { id: 'code-first', label: 'Code-First & Dense' },
                       ].map(style => (
                         <button
-                          type="button"
                           key={style.id}
-                          onClick={() => setForm({ ...form, responseStyle: style.id as AppSettings['responseStyle'] })}
-                          className={`p-2.5 rounded-xl border text-xs font-semibold text-center transition-all ${
+                          type="button"
+                          onClick={() => setForm({ ...form, responseStyle: style.id as any })}
+                          className={`p-2.5 rounded-xl border text-xs font-semibold text-left transition-all ${
                             form.responseStyle === style.id
                               ? 'border-claude-terracotta bg-claude-terracotta/10 text-claude-accentInk'
-                              : 'border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark hover:border-claude-terracotta/40'
+                              : 'border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light hover:border-claude-terracotta/40'
                           }`}
                         >
                           {style.label}
@@ -664,30 +605,112 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </motion.div>
               )}
 
-              {/* TAB 4: ARTIFACTS */}
-              {activeTab === 'artifacts' && (
-                <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
-                  <div className="p-4 rounded-2xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light dark:bg-claude-surface2-dark flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-[13px] font-bold text-claude-text-light dark:text-white">Auto-launch Artifact Studio</div>
-                      <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">Automatically open side studio when generating code, HTML, or SVG.</div>
+              {/* TAB 3: AGENT MEMORY */}
+              {activeTab === 'memory' && (
+                <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
+                  <div className="p-4 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/40 dark:bg-claude-surface2-dark/40 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-xs font-bold text-claude-text-light dark:text-white">Cross-Conversation Memory</div>
+                        <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">Retain architectural decisions and preferences across separate sessions.</div>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={form.persistentMemoryEnabled !== false}
+                          onChange={e => setForm({ ...form, persistentMemoryEnabled: e.target.checked })}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-claude-terracotta"></div>
+                      </label>
                     </div>
-                    <div 
-                      onClick={() => setForm({ ...form, autoOpenArtifacts: !(form.autoOpenArtifacts ?? true) })}
-                      className="w-11 h-6 rounded-full p-[2px] transition-colors duration-200 cursor-pointer flex-shrink-0 flex items-center"
-                      style={{ backgroundColor: (form.autoOpenArtifacts ?? true) ? '#D97757' : '#D5D2CA' }}
-                    >
-                      <motion.div 
-                        layout
-                        transition={{ type: "spring", stiffness: 500, damping: 30 }}
-                        className={`w-5 h-5 rounded-full bg-white shadow-sm ${(form.autoOpenArtifacts ?? true) ? 'ml-auto' : 'mr-auto'}`}
-                      />
+
+                    <div className="flex items-center justify-between pt-2 border-t border-claude-border-light/60 dark:border-claude-border-dark/60">
+                      <div>
+                        <div className="text-xs font-bold text-claude-text-light dark:text-white">Automatic Privacy Scrubbing</div>
+                        <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">Filter API keys and secrets before saving memory items.</div>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={form.privacyScrubbing !== false}
+                          onChange={e => setForm({ ...form, privacyScrubbing: e.target.checked })}
+                          className="sr-only peer"
+                        />
+                        <div className="w-9 h-5 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-claude-terracotta"></div>
+                      </label>
                     </div>
+
+                    {onOpenMemoryVault && (
+                      <div className="pt-2 border-t border-claude-border-light/60 dark:border-claude-border-dark/60 flex items-center justify-between">
+                        <span className="text-[11px] text-claude-muted-light">Inspect, search, and edit saved memory items:</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onClose();
+                            onOpenMemoryVault();
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-claude-terracotta/10 hover:bg-claude-terracotta/20 text-claude-accentInk font-bold text-xs transition-colors"
+                        >
+                          Open Memory Vault
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </motion.div>
+              )}
+
+              {/* TAB 4: PERSONALIZATION & INSTRUCTIONS */}
+              {activeTab === 'instructions' && (
+                <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
+                  <div>
+                    <label htmlFor="aira-settings-instructions" className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark block mb-2">Custom System Directives</label>
+                    <textarea 
+                      id="aira-settings-instructions"
+                      rows={5}
+                      value={form.customInstructions} 
+                      onChange={e => setForm({ ...form, customInstructions: e.target.value })} 
+                      placeholder="Directives injected into the top of every conversation context (e.g., prefer functional TypeScript, provide mathematical proof where applicable)..." 
+                      className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-mono outline-none focus:border-claude-terracotta transition-all resize-none" 
+                    />
                   </div>
 
-                  <div className="p-4 rounded-2xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light dark:bg-claude-surface2-dark flex items-center justify-between gap-3">
+                  <div>
+                    <label htmlFor="aira-settings-bio" className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark block mb-2">User Context & Bio</label>
+                    <textarea 
+                      id="aira-settings-bio"
+                      rows={3}
+                      value={form.userBio || ''} 
+                      onChange={e => setForm({ ...form, userBio: e.target.value })} 
+                      placeholder="e.g. Senior Principal Architect specializing in distributed systems and React 19."
+                      className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-medium outline-none focus:border-claude-terracotta transition-all resize-none" 
+                    />
+                  </div>
+                </motion.div>
+              )}
+
+              {/* TAB 5: ARTIFACT STUDIO */}
+              {activeTab === 'artifacts' && (
+                <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
+                  <div className="p-4 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/40 dark:bg-claude-surface2-dark/40 flex items-center justify-between">
                     <div>
-                      <div className="text-[13px] font-bold text-claude-text-light dark:text-white">Interactive Preview Sandboxing</div>
+                      <div className="text-xs font-bold text-claude-text-light dark:text-white">Auto-Open Artifact Studio</div>
+                      <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">Automatically open the side canvas when an interactive code artifact or diagram is generated.</div>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={form.autoOpenArtifacts !== false}
+                        onChange={e => setForm({ ...form, autoOpenArtifacts: e.target.checked })}
+                        className="sr-only peer"
+                      />
+                      <div className="w-11 h-6 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-claude-terracotta"></div>
+                    </label>
+                  </div>
+
+                  <div className="p-4 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/40 dark:bg-claude-surface2-dark/40 flex items-center justify-between">
+                    <div>
+                      <div className="text-xs font-bold text-claude-text-light dark:text-white">Interactive Sandbox Runtime</div>
                       <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">Live execute HTML, SVG, and Tailwind previews inside a secure isolated iframe.</div>
                     </div>
                     <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-2.5 py-1 rounded-md border border-emerald-200/50 dark:border-emerald-500/20">Active</span>
@@ -695,18 +718,80 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </motion.div>
               )}
 
-              {/* TAB 5: ACCOUNT & DATA */}
+              {/* TAB 6: ACCOUNT & PRIVACY DATA */}
               {activeTab === 'data' && (
                 <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
+                  {/* Account / Subscription Banner */}
                   <div className="p-4 rounded-2xl border border-claude-terracotta/20 bg-claude-terracotta/5 dark:bg-claude-terracotta/10 flex items-center justify-between">
                     <div>
-                      <div className="text-xs uppercase font-bold tracking-wider text-claude-accentInk">Subscription Plan</div>
-                      <div className="text-sm font-bold text-claude-text-light dark:text-white mt-0.5">Aira Pro (Multi-Model Extended Intelligence)</div>
-                      <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">200K token context window with hybrid reasoning.</div>
+                      <div className="text-xs uppercase font-bold tracking-wider text-claude-accentInk">
+                        {currentUser ? 'Authenticated Profile' : 'Subscription Plan'}
+                      </div>
+                      <div className="text-sm font-bold text-claude-text-light dark:text-white mt-0.5">
+                        {currentUser ? `${currentUser.name || 'User'} (Aira Pro Workspace)` : 'Aira Pro (Multi-Model Extended Intelligence)'}
+                      </div>
+                      <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">
+                        {currentUser ? currentUser.email : '200K token context window with hybrid reasoning.'}
+                      </div>
                     </div>
                     <span className="text-xs font-bold px-3 py-1 rounded-full bg-claude-terracotta text-claude-onAccent">Active</span>
                   </div>
 
+                  {/* Actions for Billing & Pricing */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {onOpenBilling && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onClose();
+                          onOpenBilling();
+                        }}
+                        className="p-3 rounded-xl border border-claude-border-light dark:border-white/10 bg-claude-surface2-light dark:bg-white/5 hover:border-claude-terracotta/50 text-left transition-colors flex items-center gap-2.5"
+                      >
+                        <CreditCard className="w-4 h-4 text-claude-accentInk shrink-0" />
+                        <div>
+                          <div className="text-xs font-bold text-claude-text-light dark:text-white">Account & Billing</div>
+                          <div className="text-[10px] text-claude-muted-light">Usage, quotas & top-ups</div>
+                        </div>
+                      </button>
+                    )}
+
+                    {onOpenPricing && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onClose();
+                          onOpenPricing();
+                        }}
+                        className="p-3 rounded-xl border border-claude-border-light dark:border-white/10 bg-claude-surface2-light dark:bg-white/5 hover:border-claude-terracotta/50 text-left transition-colors flex items-center gap-2.5"
+                      >
+                        <Sparkles className="w-4 h-4 text-claude-accentInk shrink-0" />
+                        <div>
+                          <div className="text-xs font-bold text-claude-text-light dark:text-white">Upgrade Plan</div>
+                          <div className="text-[10px] text-claude-muted-light">Compare Free, Pro & Enterprise</div>
+                        </div>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Privacy Controls */}
+                  <div className="p-4 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/40 dark:bg-claude-surface2-dark/40 flex items-center justify-between">
+                    <div>
+                      <div className="text-xs font-bold text-claude-text-light dark:text-white">Telemetry Opt-Out</div>
+                      <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">Disable all anonymous client diagnostic telemetry.</div>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={form.telemetryOptOut === true}
+                        onChange={e => setForm({ ...form, telemetryOptOut: e.target.checked })}
+                        className="sr-only peer"
+                      />
+                      <div className="w-9 h-5 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-claude-terracotta"></div>
+                    </label>
+                  </div>
+
+                  {/* Backup & Portability */}
                   <div className="pt-2">
                     <div className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark mb-3">Workspace Backup & Portability</div>
                     <div className="flex gap-3">
@@ -731,6 +816,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
                   </div>
 
+                  {/* Quick Shortcuts Trigger */}
+                  {onOpenShortcuts && (
+                    <div className="p-3 rounded-xl border border-claude-border-light/60 dark:border-claude-border-dark/60 bg-claude-surface2-light/20 dark:bg-white/[0.01] flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-2">
+                        <Keyboard className="w-4 h-4 text-claude-accentInk" />
+                        <span className="font-medium text-claude-text-light dark:text-white">Keyboard Shortcuts Map</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onClose();
+                          onOpenShortcuts();
+                        }}
+                        className="text-claude-accentInk font-bold hover:underline"
+                      >
+                        View Table
+                      </button>
+                    </div>
+                  )}
+
                   <div className="pt-4 border-t border-claude-border-light dark:border-claude-border-dark">
                     <button 
                       onClick={() => { if (confirm('Reset all Aira local data, conversations, and projects?')) onClearAll(); }} 
@@ -744,10 +849,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
 
             {/* Footer */}
-            <footer data-testid="settings-footer" className="shrink-0 px-3 sm:px-7 py-2.5 sm:py-3.5 border-t border-claude-border-light dark:border-claude-border-dark flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3 bg-claude-surface2-light dark:bg-claude-surface2-dark" style={{ paddingBottom: 'max(0.625rem, env(safe-area-inset-bottom, 0px))' }}>
-              <span className="block text-center sm:text-left text-[11px] font-medium tracking-tight text-claude-muted-light dark:text-claude-muted-dark">Product of Virexa AI Ventures</span>
+            <footer 
+              data-testid="settings-footer" 
+              className="shrink-0 px-3 sm:px-7 py-2.5 sm:py-3.5 border-t border-claude-border-light dark:border-claude-border-dark flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3 bg-claude-surface2-light dark:bg-claude-surface2-dark" 
+              style={{ paddingBottom: 'max(0.625rem, env(safe-area-inset-bottom, 0px))' }}
+            >
+              <span className="block text-center sm:text-left text-[11px] font-medium tracking-tight text-claude-muted-light dark:text-claude-muted-dark">
+                Product of Virexa AI Ventures
+              </span>
               <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 min-w-0">
-                <button type="button" onClick={onClose} className="min-w-0 px-3 py-2.5 rounded-xl text-[13px] font-medium text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white transition-colors">Cancel</button>
+                <button 
+                  type="button" 
+                  onClick={onClose} 
+                  className="min-w-0 px-3 py-2.5 rounded-xl text-[13px] font-medium text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white transition-colors"
+                >
+                  Cancel
+                </button>
                 <motion.button 
                   whileHover={{ scale: 1.02 }} 
                   whileTap={{ scale: 0.98 }} 
@@ -755,7 +872,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   data-testid="settings-save"
                   className="min-w-0 justify-center px-3 sm:px-5 py-2.5 rounded-xl bg-claude-terracotta text-claude-onAccent text-[13px] font-bold hover:bg-claude-terracotta-hover transition-colors flex items-center gap-1.5 shadow-sm"
                 >
-                  {saved && <Check className="w-4 h-4" />}{saved ? 'Preferences Saved' : 'Save Changes'}
+                  {saved && <Check className="w-4 h-4" />}
+                  {saved ? 'Preferences Saved' : 'Save Changes'}
                 </motion.button>
               </div>
             </footer>
