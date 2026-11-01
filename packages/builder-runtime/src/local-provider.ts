@@ -67,6 +67,38 @@ import builtins
 builtins.open = safe_open
 `;
 
+function parseCommandArgs(cmdStr: string): { binary: string; args: string[] } {
+  const parts: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  let quoteChar = '';
+
+  for (let i = 0; i < cmdStr.length; i++) {
+    const char = cmdStr[i];
+    if ((char === '"' || char === "'") && !inQuotes) {
+      inQuotes = true;
+      quoteChar = char;
+    } else if (char === quoteChar && inQuotes) {
+      inQuotes = false;
+      quoteChar = '';
+    } else if (char === ' ' && !inQuotes) {
+      if (current.length > 0) {
+        parts.push(current);
+        current = '';
+      }
+    } else {
+      current += char;
+    }
+  }
+  if (current.length > 0) {
+    parts.push(current);
+  }
+
+  const binary = parts[0] || '';
+  const args = parts.slice(1);
+  return { binary, args };
+}
+
 export class LocalIsolatedSandboxProvider implements SandboxProvider {
   public readonly name = 'local';
   private workspaces = new Map<string, {
@@ -241,15 +273,65 @@ export class LocalIsolatedSandboxProvider implements SandboxProvider {
       }
     }
 
+    // P0 SECURITY CONTROL: Untrusted agent-generated commands CANNOT execute arbitrary host shell binaries
+    const isExplicitlyTrusted = Boolean(
+      options?.trustedHostExecution === true &&
+      process.env.AIRA_TRUSTED_HOST_EXECUTION === 'true'
+    );
+
+    const isWin = process.platform === 'win32';
+    let executable: string;
+    let executableArgs: string[];
+    let useShell = false;
+
+    if (isExplicitlyTrusted) {
+      executable = isWin ? 'cmd.exe' : '/bin/sh';
+      executableArgs = isWin ? ['/d', '/s', '/c', command] : ['-c', command];
+      useShell = true;
+    } else {
+      // Untrusted execution: Fail-closed on shell metacharacters and chaining
+      if (/[;&|`$><]/.test(command)) {
+        throw new Error(`HOST_EXECUTION_BLOCKED: Shell operators and command chaining are prohibited for untrusted workloads: "${command}". An isolated container is required.`);
+      }
+
+      const parsed = parseCommandArgs(command);
+      const binaryName = path.basename(parsed.binary).toLowerCase().replace(/\.exe$/, '');
+
+      if (binaryName !== 'python' && binaryName !== 'python3') {
+        throw new Error(
+          `HOST_EXECUTION_BLOCKED: Arbitrary host shell execution ("${parsed.binary}") is forbidden for untrusted workloads. Only contained Python execution or isolated container sandboxes (Docker/OCI) are permitted.`
+        );
+      }
+
+      // Contained Python binary execution directly without host shell
+      executable = parsed.binary;
+      executableArgs = parsed.args;
+      useShell = false;
+
+      // Adversarial AST / content check on any referenced script file
+      for (let i = 0; i < parsed.args.length; i++) {
+        const arg = parsed.args[i];
+        if (arg.endsWith('.py')) {
+          const resolvedScript = this.resolveSafePath(workspace.id, arg);
+          try {
+            const content = await fs.readFile(resolvedScript, 'utf-8');
+            if (content.includes('..') && (content.includes('/etc/') || content.includes('Windows\\System32') || content.includes('.env'))) {
+              throw new Error(`SECURITY_VIOLATION: Filesystem traversal attempt detected in script "${arg}".`);
+            }
+          } catch (err: any) {
+            if (err.message?.includes('SECURITY_VIOLATION')) throw err;
+          }
+        }
+      }
+    }
+
     return new Promise((resolve) => {
       let isSettled = false;
-      const isWin = process.platform === 'win32';
-      const shell = isWin ? 'cmd.exe' : '/bin/sh';
-      const shellArgs = isWin ? ['/d', '/s', '/c', command] : ['-c', command];
 
-      const child = spawn(shell, shellArgs, {
+      const child = spawn(executable, executableArgs, {
         cwd,
         env: safeEnv,
+        shell: useShell,
         windowsHide: true
       });
 

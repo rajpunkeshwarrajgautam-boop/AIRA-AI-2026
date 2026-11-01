@@ -20,7 +20,7 @@ import { BrowserAdapter } from './adapters/browser-adapter.js';
 import { FileSystemAdapter } from './adapters/file-adapter.js';
 import { RepositoryAdapter } from './adapters/repo-adapter.js';
 import { ConnectorRegistry, GitHubConnectorAdapter } from './adapters/connector-adapter.js';
-import { LocalIsolatedSandboxProvider } from '../../builder-runtime/src/local-provider.js';
+import { resolveIsolatedSandboxProvider } from '../../builder-runtime/src/sandbox.js';
 import {
   PostgresWorkspaceAuthorityRepository,
   WorkspaceAuthorityRepository,
@@ -1320,7 +1320,7 @@ export class ToolGateway extends EventEmitter {
         provider: 'aira-python'
       },
       execute: async (args) => {
-        const sandboxProvider = new LocalIsolatedSandboxProvider();
+        const sandboxProvider = resolveIsolatedSandboxProvider({ requireContainer: Boolean(args.requireContainer) });
         const ws = await sandboxProvider.createWorkspace({ allowInternet: false, allowPreview: false,
           timeoutMs: args.timeoutMs || 60000
         });

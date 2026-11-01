@@ -1,4 +1,8 @@
-export const ARTIFACT_CSP_META_TAG = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://unpkg.com https://cdn.jsdelivr.net; style-src 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src https://fonts.gstatic.com data:; img-src * data: blob:; connect-src https: blob:; object-src 'none'; base-uri 'none';\">";
+export const ARTIFACT_CSP_META_TAG = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline' https://cdn.tailwindcss.com https://unpkg.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src https://fonts.gstatic.com data:; img-src 'self' data: blob: https://images.unsplash.com; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';\">";
+
+export const ARTIFACT_REACT_CSP_META_TAG = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://unpkg.com https://cdn.jsdelivr.net; style-src 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src https://fonts.gstatic.com data:; img-src 'self' data: blob: https://images.unsplash.com; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';\">";
+
+export const ARTIFACT_STRICT_STATIC_CSP_META_TAG = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline' https://cdn.tailwindcss.com https://cdn.jsdelivr.net; style-src 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src https://fonts.gstatic.com data:; img-src 'self' data: blob: https://images.unsplash.com; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';\">";
 
 import type { Artifact } from '../types';
 
@@ -99,7 +103,7 @@ export function generateArtifactSandboxHtml(
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
-  ${ARTIFACT_CSP_META_TAG}
+  ${ARTIFACT_REACT_CSP_META_TAG}
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <script src="https://cdn.tailwindcss.com"></script>
@@ -265,7 +269,7 @@ export function generateArtifactSandboxHtml(
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
-  ${ARTIFACT_CSP_META_TAG}
+  ${ARTIFACT_STRICT_STATIC_CSP_META_TAG}
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
@@ -383,7 +387,7 @@ export function generateArtifactSandboxHtml(
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
-  ${ARTIFACT_CSP_META_TAG}
+  ${ARTIFACT_STRICT_STATIC_CSP_META_TAG}
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <script src="https://cdn.tailwindcss.com"></script>

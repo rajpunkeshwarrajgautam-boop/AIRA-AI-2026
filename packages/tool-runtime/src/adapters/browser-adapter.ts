@@ -1,5 +1,6 @@
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import fsSync from 'node:fs';
+import crypto from 'node:crypto';
 import { ExecutionPrincipal } from '../../../contracts/src/index.js';
 
 export interface BrowserSessionInfo {
@@ -115,10 +116,11 @@ export class BrowserAdapter {
     }
 
     const browser = await this.getBrowser();
+    const allowInsecureCerts = Boolean(process.env.AIRA_ALLOW_INSECURE_TEST_CERTS === 'true');
     const context = await browser.newContext({
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 AIRA/2026',
       viewport: { width: 1280, height: 720 },
-      ignoreHTTPSErrors: true
+      ignoreHTTPSErrors: allowInsecureCerts
     });
 
     const activePage = await context.newPage();
@@ -565,14 +567,26 @@ export class BrowserAdapter {
       throw new Error(`SECURITY_VIOLATION: Principal "${principal.userId}" cannot restore session owned by "${state.principalId}".`);
     }
 
+    // Strict Workspace Boundary Enforcement
+    if (state.workspaceId && principal.workspaceId && state.workspaceId !== principal.workspaceId) {
+      throw new Error(`SECURITY_VIOLATION: Workspace mismatch. Principal workspace "${principal.workspaceId}" cannot restore session for "${state.workspaceId}".`);
+    }
+
+    // Strict Session Key Consistency
+    const expectedSessionKey = `${principal.userId}:${principal.sessionId}`;
+    if (state.sessionKey && state.sessionKey !== expectedSessionKey) {
+      throw new Error(`SECURITY_VIOLATION: Session key mismatch. Target session "${expectedSessionKey}" cannot import state for "${state.sessionKey}".`);
+    }
+
     await this.closeSession(principal);
 
     const sessionKey = `${principal.userId}:${principal.sessionId}`;
     const browser = await this.getBrowser();
+    const allowInsecureCerts = Boolean(process.env.AIRA_ALLOW_INSECURE_TEST_CERTS === 'true');
     const context = await browser.newContext({
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 AIRA/2026',
       viewport: { width: 1280, height: 720 },
-      ignoreHTTPSErrors: true,
+      ignoreHTTPSErrors: allowInsecureCerts,
       storageState: {
         cookies: state.cookies,
         origins: state.origins
@@ -596,6 +610,89 @@ export class BrowserAdapter {
 
     this.sessions.set(sessionKey, info);
     return info;
+  }
+
+  /**
+   * Export session state encrypted with authenticated AES-256-GCM
+   */
+  async exportEncryptedSessionState(principal: ExecutionPrincipal, secretKey: string | Buffer): Promise<string | null> {
+    const rawState = await this.exportSessionState(principal);
+    if (!rawState) return null;
+
+    const key = typeof secretKey === 'string'
+      ? crypto.createHash('sha256').update(secretKey).digest()
+      : secretKey;
+
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+    const jsonStr = JSON.stringify(rawState);
+    const encrypted = Buffer.concat([cipher.update(jsonStr, 'utf8'), cipher.final()]);
+    const tag = cipher.getAuthTag();
+
+    return JSON.stringify({
+      version: 1,
+      principalId: principal.userId,
+      workspaceId: principal.workspaceId,
+      iv: iv.toString('base64'),
+      tag: tag.toString('base64'),
+      data: encrypted.toString('base64')
+    });
+  }
+
+  /**
+   * Decrypt and restore session state using authenticated AES-256-GCM
+   */
+  async importEncryptedSessionState(
+    principal: ExecutionPrincipal,
+    encryptedEnvelopeStr: string,
+    secretKey: string | Buffer
+  ): Promise<BrowserSessionInfo> {
+    const envelope = JSON.parse(encryptedEnvelopeStr);
+    if (envelope.principalId !== principal.userId) {
+      throw new Error(`SECURITY_VIOLATION: Principal "${principal.userId}" cannot decrypt session envelope belonging to "${envelope.principalId}".`);
+    }
+
+    if (envelope.workspaceId && principal.workspaceId && envelope.workspaceId !== principal.workspaceId) {
+      throw new Error(`SECURITY_VIOLATION: Workspace mismatch. Principal workspace "${principal.workspaceId}" cannot restore session for "${envelope.workspaceId}".`);
+    }
+
+    const key = typeof secretKey === 'string'
+      ? crypto.createHash('sha256').update(secretKey).digest()
+      : secretKey;
+
+    const iv = Buffer.from(envelope.iv, 'base64');
+    const tag = Buffer.from(envelope.tag, 'base64');
+    const ciphertext = Buffer.from(envelope.data, 'base64');
+
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(tag);
+    const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+    const rawState = JSON.parse(decrypted.toString('utf8')) as PersistedBrowserSessionState;
+
+    return this.importSessionState(principal, rawState);
+  }
+
+  /**
+   * Sanitize session state for public logging or API responses, redacting raw cookies and secrets
+   */
+  sanitizeSessionStateForPublic(state: PersistedBrowserSessionState): Record<string, unknown> {
+    return {
+      sessionKey: state.sessionKey,
+      principalId: state.principalId,
+      workspaceId: state.workspaceId,
+      currentUrl: state.currentUrl,
+      cookieCount: state.cookies.length,
+      cookies: state.cookies.map(c => ({
+        name: c.name,
+        domain: c.domain,
+        path: c.path,
+        secure: c.secure,
+        httpOnly: c.httpOnly,
+        value: '[REDACTED_COOKIE]'
+      })),
+      originCount: state.origins.length,
+      exportedAt: state.exportedAt
+    };
   }
 
   /**

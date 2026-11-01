@@ -223,29 +223,32 @@ test('Mission A — Autonomous Execution Durability, Fencing Tokens, and Crash R
     assert.ok(historyStates.includes('COMPLETED'), 'Execution history must record COMPLETED checkpoint');
   });
 
-  await t.test('4. PostgresAutonomousTaskRepository Fallback & Contract Conformity', async () => {
+  await t.test('4. PostgresAutonomousTaskRepository Fails Closed on Outage', async () => {
     const pgRepo = new PostgresAutonomousTaskRepository();
-    const task = await pgRepo.createTask({
-      taskId: 'autotask_pg_compat_01',
-      principal: principalA,
-      objective: 'PostgreSQL contract validation',
-      state: 'CREATED',
-      observations: [],
-      artifacts: [],
-      executionHistory: [{ state: 'CREATED', timestamp: Date.now() }],
-      fencingToken: 0,
-      createdAt: Date.now(),
-      updatedAt: Date.now()
-    });
 
-    assert.equal(task.taskId, 'autotask_pg_compat_01');
-    const fetched = await pgRepo.getTask('autotask_pg_compat_01');
-    assert.ok(fetched);
-    assert.equal(fetched.objective, 'PostgreSQL contract validation');
-
-    // Claim lease
-    const claim = await pgRepo.claimTask('autotask_pg_compat_01', 'worker_pg_test', 30000);
-    assert.equal(claim.success, true);
-    assert.equal(claim.task?.leaseOwner, 'worker_pg_test');
+    // When DB is unreachable, durable repository MUST fail closed with AutonomousPersistenceUnavailableError
+    await assert.rejects(
+      async () => {
+        await pgRepo.createTask({
+          taskId: 'autotask_pg_compat_01',
+          principal: principalA,
+          objective: 'PostgreSQL contract validation',
+          state: 'CREATED',
+          observations: [],
+          artifacts: [],
+          executionHistory: [{ state: 'CREATED', timestamp: Date.now() }],
+          fencingToken: 0,
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        });
+      },
+      (err: any) => {
+        assert.equal(err.name, 'AutonomousPersistenceUnavailableError');
+        assert.equal(err.code, 'PERSISTENCE_UNAVAILABLE');
+        assert.match(err.message, /AUTONOMOUS_PERSISTENCE_UNAVAILABLE/);
+        return true;
+      },
+      'PostgresAutonomousTaskRepository must reject with AutonomousPersistenceUnavailableError when DB is down'
+    );
   });
 });

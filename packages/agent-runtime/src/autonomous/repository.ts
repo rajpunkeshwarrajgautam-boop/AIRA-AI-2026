@@ -222,17 +222,27 @@ function safeJsonParse<T>(val: any, fallback: T): T {
 
 function isDatabaseUnavailable(err: any): boolean {
   if (!err) return false;
+  if (err instanceof AutonomousPersistenceUnavailableError) return true;
+  if (err.name === 'AutonomousPersistenceUnavailableError' || err.code === 'PERSISTENCE_UNAVAILABLE') return true;
   if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND') return true;
-  if (err.message && (err.message.includes('ECONNREFUSED') || err.message.includes('relation "autonomous_agent_tasks" does not exist'))) return true;
+  if (err.message && (err.message.includes('ECONNREFUSED') || err.message.includes('relation "autonomous_agent_tasks" does not exist') || err.message.includes('AUTONOMOUS_PERSISTENCE_UNAVAILABLE'))) return true;
   if (err.errors && Array.isArray(err.errors)) {
     return err.errors.some((e: any) => e.code === 'ECONNREFUSED' || e.message?.includes('ECONNREFUSED'));
   }
   return false;
 }
 
-export class PostgresAutonomousTaskRepository implements IAutonomousTaskRepository {
-  private fallbackMemory = new InMemoryAutonomousTaskRepository();
+export class AutonomousPersistenceUnavailableError extends Error {
+  readonly code = 'PERSISTENCE_UNAVAILABLE';
+  constructor(operation: string, originalError?: unknown) {
+    const detail = originalError instanceof Error ? originalError.message : String(originalError || 'unknown');
+    super(`AUTONOMOUS_PERSISTENCE_UNAVAILABLE: Database storage is unreachable during "${operation}" (${detail}). Cannot execute durable autonomous task without durable persistence.`);
+    this.name = 'AutonomousPersistenceUnavailableError';
+    if (originalError) this.cause = originalError;
+  }
+}
 
+export class PostgresAutonomousTaskRepository implements IAutonomousTaskRepository {
   private rowToTask(row: any): AutonomousAgentTask {
     return {
       taskId: row.task_id,
@@ -303,7 +313,7 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
       return task;
     } catch (err: any) {
       if (isDatabaseUnavailable(err)) {
-        return this.fallbackMemory.createTask(task);
+        throw new AutonomousPersistenceUnavailableError('createTask', err);
       }
       throw err;
     }
@@ -312,10 +322,13 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
   async getTask(taskId: string): Promise<AutonomousAgentTask | null> {
     try {
       const row = await db('autonomous_agent_tasks').where({ task_id: taskId }).first();
-      if (!row) return this.fallbackMemory.getTask(taskId);
+      if (!row) return null;
       return this.rowToTask(row);
-    } catch {
-      return this.fallbackMemory.getTask(taskId);
+    } catch (err: any) {
+      if (isDatabaseUnavailable(err)) {
+        throw new AutonomousPersistenceUnavailableError('getTask', err);
+      }
+      throw err;
     }
   }
 
@@ -324,10 +337,13 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
       const row = await db('autonomous_agent_tasks')
         .where({ principal_id: principalId, idempotency_key: idempotencyKey })
         .first();
-      if (!row) return this.fallbackMemory.getTaskByIdempotencyKey(principalId, idempotencyKey);
+      if (!row) return null;
       return this.rowToTask(row);
-    } catch {
-      return this.fallbackMemory.getTaskByIdempotencyKey(principalId, idempotencyKey);
+    } catch (err: any) {
+      if (isDatabaseUnavailable(err)) {
+        throw new AutonomousPersistenceUnavailableError('getTaskByIdempotencyKey', err);
+      }
+      throw err;
     }
   }
 
@@ -337,10 +353,12 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
         .where({ principal_id: principalId })
         .orderBy('created_at', 'desc')
         .limit(limit);
-      if (rows.length === 0) return this.fallbackMemory.listTasksByPrincipal(principalId, limit);
       return rows.map(r => this.rowToTask(r));
-    } catch {
-      return this.fallbackMemory.listTasksByPrincipal(principalId, limit);
+    } catch (err: any) {
+      if (isDatabaseUnavailable(err)) {
+        throw new AutonomousPersistenceUnavailableError('listTasksByPrincipal', err);
+      }
+      throw err;
     }
   }
 
@@ -365,6 +383,7 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
           dag: task.dag ? JSON.stringify(task.dag) : null,
           observations: JSON.stringify(mergedObservations),
           artifacts: JSON.stringify(task.artifacts || []),
+          working_memory: JSON.stringify(task.workingMemory || {}),
           deliverable_summary: task.deliverableSummary || null,
           error: task.error || null,
           updated_at: now
@@ -375,7 +394,7 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
       return task;
     } catch (err: any) {
       if (isDatabaseUnavailable(err)) {
-        return this.fallbackMemory.updateTask(task);
+        throw new AutonomousPersistenceUnavailableError('updateTask', err);
       }
       throw err;
     }
@@ -446,7 +465,7 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
       return current;
     } catch (err: any) {
       if (isDatabaseUnavailable(err)) {
-        return this.fallbackMemory.updateState(taskId, newState, reason, checkpoint, expectedFencingToken);
+        throw new AutonomousPersistenceUnavailableError('updateState', err);
       }
       throw err;
     }
@@ -495,7 +514,7 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
       return { success: true, task: claimed || undefined };
     } catch (err: any) {
       if (isDatabaseUnavailable(err)) {
-        return this.fallbackMemory.claimTask(taskId, workerId, leaseDurationMs);
+        throw new AutonomousPersistenceUnavailableError('claimTask', err);
       }
       return { success: false, error: err.message };
     }
@@ -514,7 +533,7 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
       return updated > 0;
     } catch (err: any) {
       if (isDatabaseUnavailable(err)) {
-        return this.fallbackMemory.renewLease(taskId, workerId, leaseDurationMs, fencingToken);
+        throw new AutonomousPersistenceUnavailableError('renewLease', err);
       }
       return false;
     }
@@ -530,8 +549,11 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
         })
         .limit(limit);
       return rows.map(r => this.rowToTask(r));
-    } catch {
-      return this.fallbackMemory.findRecoverableTasks(now, limit);
+    } catch (err: any) {
+      if (isDatabaseUnavailable(err)) {
+        throw new AutonomousPersistenceUnavailableError('findRecoverableTasks', err);
+      }
+      throw err;
     }
   }
 }

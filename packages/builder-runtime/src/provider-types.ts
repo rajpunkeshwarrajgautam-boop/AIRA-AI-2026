@@ -32,6 +32,7 @@ export interface SandboxCommandOptions {
   signal?: AbortSignal;
   detached?: boolean;
   requireContainer?: boolean;
+  trustedHostExecution?: boolean;
 }
 
 export interface SandboxCommandResult {

@@ -183,4 +183,70 @@ for i in range(15000):
       );
     }
   });
+
+  await t.test('8. Untrusted Host Command Execution Blocked (No Host Shell Escape)', async () => {
+    const ws = await provider.createWorkspace({
+      allowInternet: false,
+      allowPreview: false,
+      timeoutMs: 15000
+    });
+
+    try {
+      // 8a. Arbitrary shell command (whoami)
+      await assert.rejects(
+        async () => {
+          await provider.runCommand(ws, 'whoami');
+        },
+        /HOST_EXECUTION_BLOCKED: Arbitrary host shell execution/,
+        'Untrusted whoami command must be rejected'
+      );
+
+      // 8b. Network tool command (curl)
+      await assert.rejects(
+        async () => {
+          await provider.runCommand(ws, 'curl http://example.com');
+        },
+        /HOST_EXECUTION_BLOCKED: Arbitrary host shell execution/,
+        'Untrusted curl command must be rejected'
+      );
+
+      // 8c. Windows powershell execution
+      await assert.rejects(
+        async () => {
+          await provider.runCommand(ws, 'powershell -Command Get-Process');
+        },
+        /HOST_EXECUTION_BLOCKED/,
+        'Untrusted powershell execution must be rejected'
+      );
+
+      // 8d. Shell operator chaining attempt (python test.py && whoami)
+      await assert.rejects(
+        async () => {
+          await provider.runCommand(ws, 'python test.py && whoami');
+        },
+        /HOST_EXECUTION_BLOCKED: Shell operators and command chaining are prohibited/,
+        'Command chaining operator (&&) must be rejected'
+      );
+
+      // 8e. Semicolon chaining attempt
+      await assert.rejects(
+        async () => {
+          await provider.runCommand(ws, 'python test.py; cat /etc/passwd');
+        },
+        /HOST_EXECUTION_BLOCKED: Shell operators and command chaining are prohibited/,
+        'Semicolon chaining operator (;) must be rejected'
+      );
+
+      // 8f. Pipe chaining attempt
+      await assert.rejects(
+        async () => {
+          await provider.runCommand(ws, 'python test.py | sh');
+        },
+        /HOST_EXECUTION_BLOCKED: Shell operators and command chaining are prohibited/,
+        'Pipe operator (|) must be rejected'
+      );
+    } finally {
+      await provider.terminateWorkspace(ws);
+    }
+  });
 });

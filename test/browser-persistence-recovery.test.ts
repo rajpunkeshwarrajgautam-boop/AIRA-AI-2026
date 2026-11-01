@@ -152,4 +152,100 @@ test('Mission C — Browser Persistence, Tenant Isolation, and Recovery Across W
       await adapter.shutdown();
     }
   });
+
+  await t.test('5. Workspace and Session Key Ownership Boundaries', async () => {
+    const adapter = new BrowserAdapter();
+
+    const stateWorkspaceMismatch: PersistedBrowserSessionState = {
+      sessionKey: `${principalA.userId}:${principalA.sessionId}`,
+      principalId: principalA.userId,
+      workspaceId: 'ws_different_confidential',
+      currentUrl: 'https://example.com',
+      cookies: [],
+      origins: [],
+      exportedAt: Date.now()
+    };
+
+    await assert.rejects(
+      async () => {
+        await adapter.importSessionState(principalA, stateWorkspaceMismatch);
+      },
+      /SECURITY_VIOLATION: Workspace mismatch/,
+      'Must reject session state with mismatched workspaceId'
+    );
+
+    const stateSessionMismatch: PersistedBrowserSessionState = {
+      sessionKey: `${principalA.userId}:session_alien_999`,
+      principalId: principalA.userId,
+      workspaceId: principalA.workspaceId,
+      currentUrl: 'https://example.com',
+      cookies: [],
+      origins: [],
+      exportedAt: Date.now()
+    };
+
+    await assert.rejects(
+      async () => {
+        await adapter.importSessionState(principalA, stateSessionMismatch);
+      },
+      /SECURITY_VIOLATION: Session key mismatch/,
+      'Must reject session state with mismatched sessionKey'
+    );
+
+    await adapter.shutdown();
+  });
+
+  await t.test('6. AES-256-GCM Session Snapshot Encryption & Redacted Cookie Masking', async () => {
+    const adapter = new BrowserAdapter();
+
+    try {
+      await adapter.navigate(principalA, 'https://example.com');
+      const secretPassphrase = 'aira_super_secure_vault_key_2026';
+
+      // 6a. Export encrypted session state
+      const encryptedBlob = await adapter.exportEncryptedSessionState(principalA, secretPassphrase);
+      assert.ok(encryptedBlob);
+      const parsedEnvelope = JSON.parse(encryptedBlob);
+      assert.equal(parsedEnvelope.version, 1);
+      assert.equal(parsedEnvelope.principalId, principalA.userId);
+      assert.ok(parsedEnvelope.iv);
+      assert.ok(parsedEnvelope.tag);
+      assert.ok(parsedEnvelope.data);
+
+      // Verify raw cookie tokens are NOT in the encrypted blob text
+      assert.ok(!encryptedBlob.includes('aira_session_secret'));
+
+      // 6b. Cross-tenant decryption rejection
+      await assert.rejects(
+        async () => {
+          await adapter.importEncryptedSessionState(principalB, encryptedBlob, secretPassphrase);
+        },
+        /SECURITY_VIOLATION: Principal "user_browser_beta" cannot decrypt/,
+        'Tenant B must not be able to decrypt Tenant A session envelope'
+      );
+
+      // 6c. Successful restoration for authorized principal
+      const restored = await adapter.importEncryptedSessionState(principalA, encryptedBlob, secretPassphrase);
+      assert.ok(restored);
+      assert.equal(restored.principalId, principalA.userId);
+
+      // 6d. Sanitization test: Public API / log representation must redact raw cookie secrets
+      const rawState: PersistedBrowserSessionState = {
+        sessionKey: `${principalA.userId}:${principalA.sessionId}`,
+        principalId: principalA.userId,
+        workspaceId: principalA.workspaceId,
+        currentUrl: 'https://example.com',
+        cookies: [{ name: 'auth_token', value: 'super_secret_cookie_token_987', domain: 'example.com', path: '/' }],
+        origins: [{ origin: 'https://example.com', localStorage: [] }],
+        exportedAt: Date.now()
+      };
+
+      const sanitized = adapter.sanitizeSessionStateForPublic(rawState);
+      const sanitizedJson = JSON.stringify(sanitized);
+      assert.ok(!sanitizedJson.includes('super_secret_cookie_token_987'), 'Raw cookie secrets must NEVER be present in sanitized session state');
+      assert.ok(sanitizedJson.includes('[REDACTED_COOKIE]'), 'Cookie values must be replaced with [REDACTED_COOKIE]');
+    } finally {
+      await adapter.shutdown();
+    }
+  });
 });

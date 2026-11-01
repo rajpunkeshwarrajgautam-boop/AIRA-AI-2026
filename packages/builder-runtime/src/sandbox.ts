@@ -19,6 +19,22 @@ export { OCISandboxProvider } from './oci-provider.js';
 export { LocalIsolatedSandboxProvider } from './local-provider.js';
 export { DockerIsolatedSandboxProvider } from './docker-provider.js';
 
+/**
+ * Authoritative resolver for untrusted code execution sandbox provider.
+ * Enforces container isolation when configured or demanded, and prevents unrestricted host execution fallbacks.
+ */
+export function resolveIsolatedSandboxProvider(options?: { requireContainer?: boolean }): SandboxProvider {
+  if (options?.requireContainer || process.env.AIRA_REQUIRE_CONTAINER_SANDBOX === 'true' || process.env.AIRA_SANDBOX_PROVIDER === 'docker') {
+    const docker = new DockerIsolatedSandboxProvider();
+    if (docker.isConfigured()) {
+      return docker;
+    }
+    throw new Error('CONTAINER_ISOLATION_UNAVAILABLE: OCI container runtime is required for untrusted execution, but no container engine is reachable. Fail closed enforced.');
+  }
+
+  return new LocalIsolatedSandboxProvider();
+}
+
 export interface BuilderSandbox {
   id: string;
   provider: string;
