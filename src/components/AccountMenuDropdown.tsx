@@ -1,4 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   User, 
   Settings, 
@@ -23,6 +24,8 @@ import type { NeonUser } from '../lib/neonAuth';
 import { neonAuth } from '../lib/neonAuth';
 import { parseBillingSummary } from '../lib/accountBillingTruth';
 import type { AppSettings } from '../types';
+
+const useIsomorphicLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
 
 interface AccountMenuDropdownProps {
   isOpen: boolean;
@@ -67,7 +70,73 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [billingPlanName, setBillingPlanName] = useState<string | null>(null);
   const [isBillingLoading, setIsBillingLoading] = useState(false);
+  const [menuPosition, setMenuPosition] = useState<{
+    left: number;
+    bottom?: number;
+    top?: number;
+    width: number;
+    maxHeight: number;
+  } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  // Position calculation relative to anchor button and viewport boundaries
+  const updatePosition = useCallback(() => {
+    const anchor = anchorRef?.current?.getBoundingClientRect();
+    if (!anchor || typeof window === 'undefined') return;
+
+    const viewport = window.visualViewport;
+    const viewportWidth = viewport?.width || window.innerWidth;
+    const viewportHeight = viewport?.height || window.innerHeight;
+    const viewportOffsetLeft = viewport?.offsetLeft || 0;
+    const viewportOffsetTop = viewport?.offsetTop || 0;
+
+    const GUTTER = 12;
+    const width = Math.min(320, viewportWidth - GUTTER * 2);
+
+    const minLeft = viewportOffsetLeft + GUTTER;
+    const maxLeft = viewportOffsetLeft + viewportWidth - width - GUTTER;
+    const left = Math.max(minLeft, Math.min(anchor.left, maxLeft));
+
+    const spaceAbove = anchor.top - viewportOffsetTop - GUTTER;
+    const spaceBelow = (viewportOffsetTop + viewportHeight) - anchor.bottom - GUTTER;
+
+    const placeAbove = spaceAbove >= 220 || spaceAbove >= spaceBelow;
+
+    if (placeAbove) {
+      const bottom = Math.max(GUTTER, window.innerHeight - anchor.top + 8);
+      const maxHeight = Math.min(540, Math.max(160, spaceAbove - 8));
+      setMenuPosition({ left, bottom, width, maxHeight });
+    } else {
+      const top = Math.max(GUTTER, anchor.bottom + 8);
+      const maxHeight = Math.min(540, Math.max(160, spaceBelow - 8));
+      setMenuPosition({ left, top, width, maxHeight });
+    }
+  }, [anchorRef]);
+
+  useIsomorphicLayoutEffect(() => {
+    if (!isOpen) {
+      setMenuPosition(null);
+      return;
+    }
+
+    updatePosition();
+
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', updatePosition);
+      window.visualViewport.addEventListener('scroll', updatePosition);
+    }
+
+    return () => {
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+      if (window.visualViewport) {
+        window.visualViewport.removeEventListener('resize', updatePosition);
+        window.visualViewport.removeEventListener('scroll', updatePosition);
+      }
+    };
+  }, [isOpen, updatePosition]);
 
   // Reset to main view whenever opened
   useEffect(() => {
@@ -114,10 +183,10 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
     };
   }, [isOpen, neonUser?.id]);
 
-  // Click outside listener
+  // Click outside listener using pointerdown
   useEffect(() => {
     if (!isOpen) return;
-    const handleClickOutside = (event: MouseEvent) => {
+    const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as Node;
       if (
         menuRef.current && 
@@ -127,26 +196,76 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
         onClose();
       }
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
   }, [isOpen, onClose, anchorRef]);
 
-  // Keyboard navigation & escape listener
+  // Keyboard navigation, ARIA arrow cycling & escape listener
   useEffect(() => {
     if (!isOpen) return;
+
+    const timer = setTimeout(() => {
+      if (menuRef.current) {
+        const firstFocusable = menuRef.current.querySelector<HTMLElement>(
+          'button:not([disabled]), [tabindex="0"]'
+        );
+        if (firstFocusable) {
+          firstFocusable.focus();
+        } else {
+          menuRef.current.focus();
+        }
+      }
+    }, 50);
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
+        e.stopPropagation();
         if (activeSubmenu === 'help') {
           setActiveSubmenu('main');
         } else {
           onClose();
+          anchorRef?.current?.focus();
         }
+        return;
+      }
+
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        if (!menuRef.current) return;
+        const items = Array.from(
+          menuRef.current.querySelectorAll<HTMLButtonElement>(
+            'button[role="menuitem"]:not([disabled])'
+          )
+        );
+        if (items.length === 0) return;
+
+        e.preventDefault();
+        const activeIdx = items.indexOf(document.activeElement as HTMLButtonElement);
+        if (e.key === 'ArrowDown') {
+          const nextIdx = activeIdx < items.length - 1 ? activeIdx + 1 : 0;
+          items[nextIdx].focus();
+        } else {
+          const prevIdx = activeIdx > 0 ? activeIdx - 1 : items.length - 1;
+          items[prevIdx].focus();
+        }
+        return;
+      }
+
+      if (e.key === 'Tab') {
+        setTimeout(() => {
+          if (menuRef.current && !menuRef.current.contains(document.activeElement)) {
+            onClose();
+          }
+        }, 0);
       }
     };
+
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, activeSubmenu, onClose]);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen, activeSubmenu, onClose, anchorRef]);
 
   const handleLogout = async () => {
     try {
@@ -175,15 +294,22 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
 
   if (!isOpen) return null;
 
-  return (
+  const menuContent = (
     <div
       ref={menuRef}
       role="menu"
+      tabIndex={-1}
       aria-orientation="vertical"
       aria-label="Account and user settings menu"
-      className="absolute bottom-full left-0 mb-2 w-72 sm:w-80 rounded-2xl bg-claude-surface-light dark:bg-[#1a1b1e] border border-claude-border-light dark:border-white/10 shadow-2xl overflow-hidden z-50 text-claude-text-light dark:text-white"
+      className="fixed rounded-2xl bg-claude-surface-light dark:bg-[#1a1b1e] border border-claude-border-light dark:border-white/10 shadow-2xl overflow-hidden z-[100] text-claude-text-light dark:text-white backdrop-blur-xl outline-none"
       style={{
-        maxHeight: 'calc(100vh - 80px)',
+        left: menuPosition?.left ?? 12,
+        bottom: menuPosition?.bottom,
+        top: menuPosition?.top,
+        width: menuPosition?.width ?? 320,
+        maxHeight: menuPosition?.maxHeight ?? 'calc(100vh - 80px)',
+        opacity: menuPosition ? 1 : 0,
+        pointerEvents: menuPosition ? 'auto' : 'none',
       }}
     >
       <AnimatePresence mode="wait">
@@ -194,7 +320,7 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: -12 }}
             transition={{ duration: 0.15 }}
-            className="flex flex-col"
+            className="flex flex-col max-h-[inherit]"
           >
             {/* Header: User Profile Details */}
             {neonUser ? (
@@ -275,7 +401,7 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
             )}
 
             {/* Menu Items List */}
-            <div className="p-2 space-y-0.5 text-xs">
+            <div className="p-2 space-y-0.5 text-xs overflow-y-auto">
               {/* Account Management */}
               {neonUser && (
                 <button
@@ -368,7 +494,7 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: 12 }}
             transition={{ duration: 0.15 }}
-            className="flex flex-col"
+            className="flex flex-col max-h-[inherit]"
           >
             {/* Submenu Header */}
             <div className="flex items-center gap-2 px-3 py-2.5 border-b border-claude-border-light dark:border-white/10 bg-claude-surface2-light/40 dark:bg-white/[0.02]">
@@ -493,4 +619,6 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
       </AnimatePresence>
     </div>
   );
+
+  return typeof document !== 'undefined' ? createPortal(menuContent, document.body) : null;
 };
