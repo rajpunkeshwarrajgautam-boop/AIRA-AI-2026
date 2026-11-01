@@ -67,6 +67,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoConsolidateMemory: true,
   privacyScrubbing: true,
   memoryTokenBudget: 800,
+  reducedMotion: 'system',
+  highContrast: false,
+  fontSize: 'base',
+  soundEffects: false,
+  streamResponse: true,
+  telemetryOptOut: false,
+  notificationsEnabled: true,
 };
 
 export const PROMPT_STARTERS = [

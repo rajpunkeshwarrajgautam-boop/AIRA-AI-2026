@@ -16,6 +16,7 @@ import { motion, AnimatePresence, Variants } from 'framer-motion';
 import type { Conversation, Project, AppSettings, WorkspaceMode } from '../types';
 import { AiraMark } from './AiraMark';
 import { ConversationActionsDropdown } from './ConversationActionsDropdown';
+import { AccountMenuDropdown } from './AccountMenuDropdown';
 import { neonAuth, NeonUser } from '../lib/neonAuth';
 
 interface SidebarProps {
@@ -31,7 +32,7 @@ interface SidebarProps {
   projects: Project[];
   activeProjectId?: string;
   onOpenProjects: () => void;
-  onOpenSettings: () => void;
+  onOpenSettings: (tab?: string) => void;
   onOpenAuth?: () => void;
   onOpenSearch: (query?: string) => void;
   isOpen: boolean;
@@ -43,6 +44,13 @@ interface SidebarProps {
   onOpenVisionStudio?: () => void;
   onOpenPricing?: () => void;
   onOpenBilling?: () => void;
+  onOpenHelpCenter?: () => void;
+  onOpenPrivacyCenter?: () => void;
+  onOpenReleaseNotes?: () => void;
+  onOpenDownloadApps?: () => void;
+  onOpenShortcuts?: () => void;
+  onOpenLegalViewer?: (doc: 'terms' | 'privacy') => void;
+  onOpenReportBug?: () => void;
 }
 
 const listVariants: Variants = {
@@ -121,9 +129,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
   workspaceMode: _workspaceMode,
   onSelectWorkspace,
   onOpenVisionStudio: _onOpenVisionStudio,
-  onOpenPricing: _onOpenPricing,
+  onOpenPricing,
   onOpenBilling,
+  onOpenHelpCenter,
+  onOpenPrivacyCenter,
+  onOpenReleaseNotes,
+  onOpenDownloadApps,
+  onOpenShortcuts,
+  onOpenLegalViewer,
+  onOpenReportBug,
 }) => {
+  const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
+  const accountButtonRef = useRef<HTMLButtonElement>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [neonUser, setNeonUser] = useState<NeonUser | null>(() => neonAuth.getCurrentUser());
   const drawerRef = useRef<HTMLElement>(null);
@@ -391,11 +408,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div data-testid="sidebar-footer" className="aira-sidebar-footer shrink-0 p-3 bg-claude-surface2-light dark:bg-claude-surface2-dark/50 backdrop-blur-md border-t border-claude-border-light dark:border-claude-border-dark">
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-1.5">
+                <div className="relative flex-1 min-w-0">
                 <button
+                  ref={accountButtonRef}
                   type="button"
-                  aria-label={neonUser ? "View account and billing details" : "Sign in or register persistent account"}
-                  onClick={neonUser && onOpenBilling ? onOpenBilling : onOpenAuth}
-                  className="flex min-w-0 items-center space-x-2.5 p-2 rounded-xl hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark border border-claude-border-light/60 dark:border-claude-border-dark/60 transition-all flex-1 text-left active:scale-[0.98]"
+                  aria-haspopup="menu"
+                  aria-expanded={isAccountMenuOpen}
+                  aria-label={neonUser ? "Open user account and help menu" : "Open workspace and help menu"}
+                  onClick={() => setIsAccountMenuOpen(prev => !prev)}
+                  className="flex w-full min-w-0 items-center space-x-2.5 p-2 rounded-xl hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark border border-claude-border-light/60 dark:border-claude-border-dark/60 transition-all text-left active:scale-[0.98]"
                 >
                   <div className="w-7 h-7 rounded-[8px] bg-gradient-to-br from-claude-terracotta to-[#eb6e4b] text-white font-semibold text-xs flex items-center justify-center flex-shrink-0 shadow-sm overflow-hidden">
                     {neonUser?.image ? (
@@ -423,10 +444,67 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   </div>
                 </button>
 
+                <AccountMenuDropdown
+                  isOpen={isAccountMenuOpen}
+                  onClose={() => setIsAccountMenuOpen(false)}
+                  neonUser={neonUser}
+                  settings={settings}
+                  anchorRef={accountButtonRef}
+                  onOpenSettings={(tab) => {
+                    onOpenSettings(tab);
+                    setIsAccountMenuOpen(false);
+                  }}
+                  onOpenBilling={() => {
+                    onOpenBilling?.();
+                    setIsAccountMenuOpen(false);
+                  }}
+                  onOpenPricing={() => {
+                    onOpenPricing?.();
+                    setIsAccountMenuOpen(false);
+                  }}
+                  onOpenAuth={() => {
+                    onOpenAuth?.();
+                    setIsAccountMenuOpen(false);
+                  }}
+                  onOpenHelpCenter={() => {
+                    onOpenHelpCenter?.();
+                    setIsAccountMenuOpen(false);
+                  }}
+                  onOpenPrivacyCenter={() => {
+                    onOpenPrivacyCenter?.();
+                    setIsAccountMenuOpen(false);
+                  }}
+                  onOpenReleaseNotes={() => {
+                    onOpenReleaseNotes?.();
+                    setIsAccountMenuOpen(false);
+                  }}
+                  onOpenDownloadApps={() => {
+                    onOpenDownloadApps?.();
+                    setIsAccountMenuOpen(false);
+                  }}
+                  onOpenShortcuts={() => {
+                    onOpenShortcuts?.();
+                    setIsAccountMenuOpen(false);
+                  }}
+                  onOpenLegalViewer={(doc) => {
+                    onOpenLegalViewer?.(doc);
+                    setIsAccountMenuOpen(false);
+                  }}
+                  onOpenReportBug={() => {
+                    onOpenReportBug?.();
+                    setIsAccountMenuOpen(false);
+                  }}
+                  onSignOutSuccess={() => {
+                    setNeonUser(null);
+                    setIsAccountMenuOpen(false);
+                  }}
+                />
+                </div>
+
                 <button
                   type="button"
                   aria-label="Open settings"
-                  onClick={onOpenSettings}
+                  onClick={() => onOpenSettings('general')}
                   className="p-2 rounded-xl hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark border border-claude-border-light/60 dark:border-claude-border-dark/60 text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light transition-all"
                   title="Settings"
                 >

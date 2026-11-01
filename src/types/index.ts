@@ -160,6 +160,14 @@ export interface AppSettings {
   autoConsolidateMemory?: boolean;
   privacyScrubbing?: boolean;
   memoryTokenBudget?: number;
+  // Accessibility & Preferences
+  reducedMotion?: 'system' | 'always' | 'never';
+  highContrast?: boolean;
+  fontSize?: 'sm' | 'base' | 'lg';
+  soundEffects?: boolean;
+  streamResponse?: boolean;
+  telemetryOptOut?: boolean;
+  notificationsEnabled?: boolean;
 }
 
 export type MemoryTier = 'working' | 'episodic' | 'semantic' | 'procedural';

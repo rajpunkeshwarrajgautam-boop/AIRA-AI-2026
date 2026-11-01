@@ -27,10 +27,18 @@ const ArtifactStudio = React.lazy(() => import('./components/ArtifactStudio').th
 const ProjectsModal = React.lazy(() => import('./components/ProjectsModal').then(m => ({ default: m.ProjectsModal })));
 const SettingsModal = React.lazy(() => import('./components/SettingsModal').then(m => ({ default: m.SettingsModal })));
 import { MemoryVaultModal } from './components/MemoryVaultModal';
+import { agentMemory } from './utils/agentMemoryEngine';
 import { AuthModal } from './components/AuthModal';
 import { PricingModal } from './components/PricingModal';
 import { VisionStudioModal } from './components/VisionStudioModal';
 import { AccountBillingModal } from './components/AccountBillingModal';
+import { HelpCenterModal } from './components/HelpCenterModal';
+import { PrivacyCenterModal } from './components/PrivacyCenterModal';
+import { ReleaseNotesModal } from './components/ReleaseNotesModal';
+import { DownloadAppsModal } from './components/DownloadAppsModal';
+import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal';
+import { LegalViewerModal } from './components/LegalViewerModal';
+import { ReportBugModal } from './components/ReportBugModal';
 import { neonAuth, authenticatedApiFetch } from './lib/neonAuth';
 
 const MODE_CONTEXT: Record<WorkspaceMode, string> = {
@@ -104,6 +112,20 @@ function App() {
   const [isMemoryVaultOpen, setIsMemoryVaultOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isConversationSearchOpen, setIsConversationSearchOpen] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<string>('general');
+  const [isHelpCenterOpen, setIsHelpCenterOpen] = useState(false);
+  const [isPrivacyCenterOpen, setIsPrivacyCenterOpen] = useState(false);
+  const [isReleaseNotesOpen, setIsReleaseNotesOpen] = useState(false);
+  const [isDownloadAppsOpen, setIsDownloadAppsOpen] = useState(false);
+  const [isKeyboardShortcutsOpen, setIsKeyboardShortcutsOpen] = useState(false);
+  const [isLegalViewerOpen, setIsLegalViewerOpen] = useState(false);
+  const [legalViewerInitialDoc, setLegalViewerInitialDoc] = useState<'terms' | 'privacy'>('terms');
+  const [isReportBugOpen, setIsReportBugOpen] = useState(false);
+
+  const handleOpenSettings = useCallback((tab = 'general') => {
+    setSettingsInitialTab(tab);
+    setIsSettingsOpen(true);
+  }, []);
   const [conversationSearchSeed, setConversationSearchSeed] = useState('');
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [activeArtifact, setActiveArtifact] = useState<Artifact | null>(null);
@@ -296,11 +318,19 @@ function App() {
       root.classList.toggle('dark', dark);
       if (settings.aestheticPreset && settings.aestheticPreset !== 'default') root.dataset.theme = settings.aestheticPreset;
       else delete root.dataset.theme;
+
+      if (settings.highContrast) root.classList.add('high-contrast');
+      else root.classList.remove('high-contrast');
+
+      if (settings.reducedMotion === 'always') root.classList.add('reduce-motion', 'force-reduced-motion', 'reduced-motion');
+      else root.classList.remove('reduce-motion', 'force-reduced-motion', 'reduced-motion');
+
+      if (settings.fontSize) root.dataset.fontSize = settings.fontSize;
     };
     applyTheme();
     systemColor.addEventListener('change', applyTheme);
     return () => systemColor.removeEventListener('change', applyTheme);
-  }, [settings.theme, settings.aestheticPreset]);
+  }, [settings.theme, settings.aestheticPreset, settings.highContrast, settings.reducedMotion, settings.fontSize]);
 
   // Only scroll the conversation region; scrollIntoView can also move the
   // document/root viewport and leave a blank page after long conversations.
@@ -340,6 +370,9 @@ function App() {
 
   useEffect(() => {
     const handle = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const isInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setIsCommandPaletteOpen(true);
@@ -348,11 +381,39 @@ function App() {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
         e.preventDefault();
         handleNewChat();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === ',') {
+        e.preventDefault();
+        handleOpenSettings('general');
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        setSidebarOpen((prev: boolean) => !prev);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+        e.preventDefault();
+        const composer = document.querySelector('textarea') as HTMLTextAreaElement | null;
+        composer?.focus();
+        return;
+      }
+      if (e.key === 'Escape' && activeAbortControllerRef.current) {
+        e.preventDefault();
+        activeAbortControllerRef.current.abort();
+        activeAbortControllerRef.current = null;
+        return;
+      }
+      if (e.key === '?' && !isInput && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        setIsKeyboardShortcutsOpen(true);
+        return;
       }
     };
     window.addEventListener('keydown', handle);
     return () => window.removeEventListener('keydown', handle);
-  }, [handleNewChat]);
+  }, [handleNewChat, handleOpenSettings]);
 
   const handleSelectChat = (id: string) => {
     setActiveChatId(id);
@@ -973,7 +1034,9 @@ function App() {
             setExecutionStatus(status);
           },
           onLatencyMetrics: metrics => {
-            console.info('[AIRA Telemetry] Client observed latency metrics:', metrics);
+            if (!settings.telemetryOptOut) {
+              console.info('[AIRA Telemetry] Client observed latency metrics:', metrics);
+            }
           },
           onRunStarted: runId => {
             activeRunIdRef.current = runId;
@@ -1101,7 +1164,7 @@ function App() {
         projects={projects}
         activeProjectId={activeProjectId}
         onOpenProjects={() => setIsProjectsOpen(true)}
-        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenSettings={handleOpenSettings}
         onOpenAuth={() => setIsAuthOpen(true)}
         onOpenSearch={handleOpenConversationSearch}
         isOpen={sidebarOpen}
@@ -1113,6 +1176,16 @@ function App() {
         onOpenVisionStudio={() => setIsVisionOpen(true)}
         onOpenPricing={() => setIsPricingOpen(true)}
         onOpenBilling={() => setIsAccountBillingOpen(true)}
+        onOpenHelpCenter={() => setIsHelpCenterOpen(true)}
+        onOpenPrivacyCenter={() => setIsPrivacyCenterOpen(true)}
+        onOpenReleaseNotes={() => setIsReleaseNotesOpen(true)}
+        onOpenDownloadApps={() => setIsDownloadAppsOpen(true)}
+        onOpenShortcuts={() => setIsKeyboardShortcutsOpen(true)}
+        onOpenLegalViewer={(doc) => {
+          setLegalViewerInitialDoc(doc);
+          setIsLegalViewerOpen(true);
+        }}
+        onOpenReportBug={() => setIsReportBugOpen(true)}
       />
 
       <CommandPalette
@@ -1333,14 +1406,71 @@ function App() {
             onSaveSettings={setSettings}
             conversations={conversations}
             projects={projects}
+            initialTab={settingsInitialTab}
             onImportData={data => { setConversations(data.conversations); setProjects(data.projects); if (data.conversations[0]) handleSelectChat(data.conversations[0].id); }}
             onClearAll={() => {
               const fresh = { ...INITIAL_CONVERSATION, id: 'chat-' + Date.now(), createdAt: Date.now(), updatedAt: Date.now() };
-              setConversations([fresh]); setActiveChatId(fresh.id); setProjects([]); setActiveProjectId(undefined); setSettings(loadSettings()); setActiveArtifact(null);
+              setConversations([fresh]); setActiveChatId(fresh.id); setProjects([]); setActiveProjectId(undefined); setSettings(loadSettings()); setActiveArtifact(null); agentMemory.purge(undefined, true);
             }}
             onOpenMemoryVault={() => setIsMemoryVaultOpen(true)}
+            onOpenBilling={() => setIsAccountBillingOpen(true)}
+            onOpenPricing={() => setIsPricingOpen(true)}
+            onOpenShortcuts={() => setIsKeyboardShortcutsOpen(true)}
           />
         )}
+
+        <HelpCenterModal
+          isOpen={isHelpCenterOpen}
+          onClose={() => setIsHelpCenterOpen(false)}
+          onOpenReportBug={() => setIsReportBugOpen(true)}
+          onOpenShortcuts={() => setIsKeyboardShortcutsOpen(true)}
+          onOpenPrivacyCenter={() => setIsPrivacyCenterOpen(true)}
+        />
+
+        <PrivacyCenterModal
+          isOpen={isPrivacyCenterOpen}
+          onClose={() => setIsPrivacyCenterOpen(false)}
+          settings={settings}
+          onUpdateSettings={updateSettings}
+          conversations={conversations}
+          projects={projects}
+          onClearAllData={() => {
+            const fresh = { ...INITIAL_CONVERSATION, id: 'chat-' + Date.now(), createdAt: Date.now(), updatedAt: Date.now() };
+            setConversations([fresh]); setActiveChatId(fresh.id); setProjects([]); setActiveProjectId(undefined); setSettings(loadSettings()); setActiveArtifact(null); agentMemory.purge(undefined, true);
+          }}
+          onOpenLegalViewer={(doc) => {
+            setLegalViewerInitialDoc(doc);
+            setIsLegalViewerOpen(true);
+          }}
+        />
+
+        <ReleaseNotesModal
+          isOpen={isReleaseNotesOpen}
+          onClose={() => setIsReleaseNotesOpen(false)}
+          onOpenHelpCenter={() => setIsHelpCenterOpen(true)}
+        />
+
+        <DownloadAppsModal
+          isOpen={isDownloadAppsOpen}
+          onClose={() => setIsDownloadAppsOpen(false)}
+        />
+
+        <KeyboardShortcutsModal
+          isOpen={isKeyboardShortcutsOpen}
+          onClose={() => setIsKeyboardShortcutsOpen(false)}
+        />
+
+        <LegalViewerModal
+          isOpen={isLegalViewerOpen}
+          onClose={() => setIsLegalViewerOpen(false)}
+          initialDocument={legalViewerInitialDoc}
+        />
+
+        <ReportBugModal
+          isOpen={isReportBugOpen}
+          onClose={() => setIsReportBugOpen(false)}
+          settings={settings}
+        />
 
         {isMemoryVaultOpen && (
           <MemoryVaultModal
