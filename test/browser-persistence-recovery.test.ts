@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import { BrowserAdapter, PersistedBrowserSessionState } from '../packages/tool-runtime/src/adapters/browser-adapter.js';
 import type { ExecutionPrincipal } from '../packages/contracts/src/index.js';
 
@@ -200,7 +201,7 @@ test('Mission C — Browser Persistence, Tenant Isolation, and Recovery Across W
 
     try {
       await adapter.navigate(principalA, 'https://example.com');
-      const secretPassphrase = 'aira_super_secure_vault_key_2026';
+      const secretPassphrase = crypto.randomBytes(32).toString('hex');
 
       // 6a. Export encrypted session state
       const encryptedBlob = await adapter.exportEncryptedSessionState(principalA, secretPassphrase);
@@ -230,19 +231,20 @@ test('Mission C — Browser Persistence, Tenant Isolation, and Recovery Across W
       assert.equal(restored.principalId, principalA.userId);
 
       // 6d. Sanitization test: Public API / log representation must redact raw cookie secrets
+      const sampleCookieSecret = `session_auth_token_${crypto.randomBytes(8).toString('hex')}`;
       const rawState: PersistedBrowserSessionState = {
         sessionKey: `${principalA.userId}:${principalA.sessionId}`,
         principalId: principalA.userId,
         workspaceId: principalA.workspaceId,
         currentUrl: 'https://example.com',
-        cookies: [{ name: 'auth_token', value: 'super_secret_cookie_token_987', domain: 'example.com', path: '/' }],
+        cookies: [{ name: 'auth_token', value: sampleCookieSecret, domain: 'example.com', path: '/' }],
         origins: [{ origin: 'https://example.com', localStorage: [] }],
         exportedAt: Date.now()
       };
 
       const sanitized = adapter.sanitizeSessionStateForPublic(rawState);
       const sanitizedJson = JSON.stringify(sanitized);
-      assert.ok(!sanitizedJson.includes('super_secret_cookie_token_987'), 'Raw cookie secrets must NEVER be present in sanitized session state');
+      assert.ok(!sanitizedJson.includes(sampleCookieSecret), 'Raw cookie secrets must NEVER be present in sanitized session state');
       assert.ok(sanitizedJson.includes('[REDACTED_COOKIE]'), 'Cookie values must be replaced with [REDACTED_COOKIE]');
     } finally {
       await adapter.shutdown();
