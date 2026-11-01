@@ -40,12 +40,12 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [reproSteps, setReproSteps] = useState('');
-  const [includeDiagnostics, setIncludeDiagnostics] = useState(true);
+  const [includeDiagnostics, setIncludeDiagnostics] = useState(() => !(settings?.telemetryOptOut));
   const [consentChecked, setConsentChecked] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
-  const [submittedTicket, setSubmittedTicket] = useState<string | null>(null);
-  const [copiedTicket, setCopiedTicket] = useState(false);
+  const [submittedDraftRef, setSubmittedDraftRef] = useState<string | null>(null);
+  const [copiedDraftRef, setCopiedDraftRef] = useState(false);
   const [copiedMarkdown, setCopiedMarkdown] = useState(false);
   const modalRef = useRef<HTMLDivElement>(null);
 
@@ -64,7 +64,7 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
 
   useEffect(() => {
     if (!isOpen) {
-      setSubmittedTicket(null);
+      setSubmittedDraftRef(null);
       setTitle('');
       setDescription('');
       setReproSteps('');
@@ -111,9 +111,10 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
       return;
     }
 
-    const ticketId = `AIRA-BUG-${Date.now().toString(36).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    // Local Draft Reference strictly indicates client-side storage, not a remote ticket
+    const draftId = `AIRA-LOCAL-DRAFT-${Date.now().toString(36).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
     const newReport: StoredBugReport = {
-      id: ticketId,
+      id: draftId,
       category,
       title: title.trim(),
       description: description.trim(),
@@ -132,22 +133,24 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
 
     setTimeout(() => {
       setIsSubmitting(false);
-      setSubmittedTicket(ticketId);
+      setSubmittedDraftRef(draftId);
     }, 400);
   };
 
-  const handleCopyTicket = () => {
-    if (!submittedTicket) return;
-    navigator.clipboard.writeText(submittedTicket);
-    setCopiedTicket(true);
-    setTimeout(() => setCopiedTicket(false), 2000);
+  const handleCopyDraftRef = () => {
+    if (!submittedDraftRef) return;
+    navigator.clipboard.writeText(submittedDraftRef);
+    setCopiedDraftRef(true);
+    setTimeout(() => setCopiedDraftRef(false), 2000);
   };
 
   const handleCopyMarkdown = () => {
-    if (!submittedTicket) return;
+    if (!submittedDraftRef) return;
     const md = [
       `### [${category.toUpperCase()}] ${title}`,
-      `**Ticket ID:** \`${submittedTicket}\``,
+      `**Local Draft Reference:** \`${submittedDraftRef}\``,
+      `**Classification:** Local Report Draft / Diagnostic Export (Client-Side Only)`,
+      `**Remote Status:** Pending manual export (No remote support ticket created)`,
       `**Date:** ${new Date().toUTCString()}`,
       '',
       '#### Description',
@@ -166,9 +169,9 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
   };
 
   const handleDownloadJSON = () => {
-    if (!submittedTicket) return;
+    if (!submittedDraftRef) return;
     const reportData = {
-      id: submittedTicket,
+      id: submittedDraftRef,
       category,
       title,
       description,
@@ -180,7 +183,7 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${submittedTicket}.json`;
+    a.download = `${submittedDraftRef}.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -231,7 +234,7 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
 
         {/* Content Body */}
         <div className="flex-1 overflow-y-auto p-6">
-          {submittedTicket ? (
+          {submittedDraftRef ? (
             /* Submission Confirmation */
             <div className="py-6 flex flex-col items-center text-center space-y-4">
               <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-500">
@@ -239,23 +242,23 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
               </div>
               <div>
                 <h3 className="text-base font-bold text-claude-text-light dark:text-white">
-                  Report Recorded in Local Diagnostic Queue
+                  Local Report Draft Recorded
                 </h3>
                 <p className="text-xs text-claude-muted-light dark:text-claude-muted-dark max-w-md mx-auto mt-1">
-                  Your defect report has been durably stored in this browser with ticket ID:
+                  Your defect draft has been durably stored in this browser with draft reference:
                 </p>
               </div>
 
-              {/* Ticket ID Box */}
+              {/* Draft Reference Box */}
               <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-claude-surface2-light dark:bg-white/5 border border-claude-border-light dark:border-white/10 font-mono text-sm font-bold text-claude-text-light dark:text-white">
-                <span>{submittedTicket}</span>
+                <span>{submittedDraftRef}</span>
                 <button
-                  onClick={handleCopyTicket}
+                  onClick={handleCopyDraftRef}
                   className="p-1 rounded-lg hover:bg-claude-surface-light dark:hover:bg-white/10 text-claude-muted-light hover:text-claude-text-light transition-colors"
-                  title="Copy ticket ID"
-                  aria-label="Copy ticket ID"
+                  title="Copy draft reference"
+                  aria-label="Copy draft reference"
                 >
-                  {copiedTicket ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
+                  {copiedDraftRef ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
                 </button>
               </div>
 
@@ -263,10 +266,10 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
               <div className="p-3.5 rounded-xl border border-amber-500/30 bg-amber-500/5 text-left max-w-lg text-[11px] text-claude-text-light/90 dark:text-white/80 space-y-1">
                 <div className="font-semibold text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
                   <Info className="w-3.5 h-3.5" />
-                  <span>Infrastructure Notice: Remote Dispatch Pending</span>
+                  <span>Classification: Local Report Draft / Diagnostic Export</span>
                 </div>
                 <p>
-                  Direct automated issue-tracker ingestion is currently in development. To ensure your defect reaches engineering immediately, copy this formatted report to paste into GitHub Issues or email support.
+                  This report is durably stored strictly within this browser&apos;s local storage. It does <strong>not</strong> reach a remote server or ticketing backend, and cannot be retrieved by administrators unless exported. To submit to engineering, copy the formatted Markdown report below and open a GitHub Issue or contact support.
                 </p>
               </div>
 
@@ -399,7 +402,9 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
                       onChange={(e) => setIncludeDiagnostics(e.target.checked)}
                       className="rounded border-claude-border-light text-aira-blue focus:ring-aira-blue"
                     />
-                    <span className="text-claude-muted-light dark:text-claude-muted-dark">Include sanitized metrics</span>
+                    <span className="text-claude-muted-light dark:text-claude-muted-dark">
+                      {settings?.telemetryOptOut ? 'Include sanitized metrics (Opt-Out active in Settings)' : 'Include sanitized metrics'}
+                    </span>
                   </label>
                 </div>
 
@@ -447,7 +452,7 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
                   ) : (
                     <>
                       <Send className="w-3.5 h-3.5" />
-                      <span>Record Bug Report</span>
+                      <span>Save Local Report Draft & Export</span>
                     </>
                   )}
                 </button>

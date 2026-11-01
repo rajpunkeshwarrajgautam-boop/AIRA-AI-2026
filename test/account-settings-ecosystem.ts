@@ -373,10 +373,10 @@ async function run() {
     await bugModal.locator('button[type="submit"]').click();
 
     // Verify confirmation and local queue notice
-    await page.locator('h3:has-text("Report Recorded in Local Diagnostic Queue")').waitFor({ state: 'visible', timeout: 5000 });
-    await page.locator('span:has-text("Infrastructure Notice: Remote Dispatch Pending")').waitFor({ state: 'visible' });
-    const ticketText = await page.locator('div:has-text("AIRA-BUG-")').last().textContent();
-    assert.ok(ticketText?.includes('AIRA-BUG-'), 'Generated ticket ID must be present');
+    await page.locator('h3:has-text("Local Report Draft Recorded")').waitFor({ state: 'visible', timeout: 5000 });
+    await page.locator('span:has-text("Classification: Local Report Draft / Diagnostic Export")').waitFor({ state: 'visible' });
+    const draftText = await page.locator('div:has-text("AIRA-LOCAL-DRAFT-")').last().textContent();
+    assert.ok(draftText?.includes('AIRA-LOCAL-DRAFT-'), 'Generated local draft reference must be present');
 
     // Verify localStorage persistence
     const savedReports = await page.evaluate(() => localStorage.getItem('aira_bug_reports_v1'));
