@@ -906,3 +906,110 @@
     margin-top: 1.25rem; margin-bottom: 0.6rem;
   }
 }
+
+
+/* ========================================================================= */
+/* AIRA BRAND IDENTITY MOTION SYSTEM — SHEARED PERSPECTIVE PORTAL            */
+/* ========================================================================= */
+
+.portal-motion-svg {
+  overflow: visible;
+  will-change: transform, opacity;
+  transform: translateZ(0);
+}
+
+.portal-motion-svg * {
+  transform-box: fill-box;
+  transform-origin: center;
+  will-change: transform, opacity;
+}
+
+/* CONCEPT A: ARCHITECTURAL ALIGNMENT */
+.anim-concept-a .pylon-left {
+  animation: align-left 0.75s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.anim-concept-a .pylon-right {
+  animation: align-right 0.75s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.anim-concept-a .facet-l1 { animation: facet-fade-slide 0.70s cubic-bezier(0.16, 1, 0.3, 1) 0ms forwards; }
+.anim-concept-a .facet-l2 { animation: facet-fade-slide 0.72s cubic-bezier(0.16, 1, 0.3, 1) 20ms forwards; }
+.anim-concept-a .facet-l3 { animation: facet-fade-slide 0.74s cubic-bezier(0.16, 1, 0.3, 1) 40ms forwards; }
+.anim-concept-a .facet-l4 { animation: facet-fade-slide 0.76s cubic-bezier(0.16, 1, 0.3, 1) 60ms forwards; }
+.anim-concept-a .facet-l5 { animation: facet-fade-slide 0.78s cubic-bezier(0.16, 1, 0.3, 1) 80ms forwards; }
+
+.anim-concept-a .facet-r1 { animation: facet-fade-slide-r 0.70s cubic-bezier(0.16, 1, 0.3, 1) 0ms forwards; }
+.anim-concept-a .facet-r2 { animation: facet-fade-slide-r 0.72s cubic-bezier(0.16, 1, 0.3, 1) 20ms forwards; }
+.anim-concept-a .facet-r3 { animation: facet-fade-slide-r 0.74s cubic-bezier(0.16, 1, 0.3, 1) 40ms forwards; }
+.anim-concept-a .facet-r4 { animation: facet-fade-slide-r 0.76s cubic-bezier(0.16, 1, 0.3, 1) 60ms forwards; }
+.anim-concept-a .facet-r5 { animation: facet-fade-slide-r 0.78s cubic-bezier(0.16, 1, 0.3, 1) 80ms forwards; }
+
+@keyframes align-left {
+  0% { transform: translate3d(-10px, 2px, 0); opacity: 0; }
+  20% { opacity: 0.6; }
+  85% { transform: translate3d(0.2px, -0.05px, 0); opacity: 1; }
+  100% { transform: translate3d(0, 0, 0); opacity: 1; }
+}
+@keyframes align-right {
+  0% { transform: translate3d(10px, -2px, 0); opacity: 0; }
+  20% { opacity: 0.6; }
+  85% { transform: translate3d(-0.2px, 0.05px, 0); opacity: 1; }
+  100% { transform: translate3d(0, 0, 0); opacity: 1; }
+}
+@keyframes facet-fade-slide {
+  0% { transform: translate3d(-6px, 1.5px, 0); opacity: 0; }
+  100% { transform: translate3d(0, 0, 0); opacity: 1; }
+}
+@keyframes facet-fade-slide-r {
+  0% { transform: translate3d(6px, -1.5px, 0); opacity: 0; }
+  100% { transform: translate3d(0, 0, 0); opacity: 1; }
+}
+
+/* CONCEPT C: SCULPTURAL ASSEMBLY */
+.anim-concept-c .facet-l4 { animation: dock-facet-l4 1.10s cubic-bezier(0.2, 0.8, 0.2, 1) 0ms forwards; }
+.anim-concept-c .facet-l5 { animation: dock-facet-l5 1.15s cubic-bezier(0.2, 0.8, 0.2, 1) 30ms forwards; }
+.anim-concept-c .facet-r5 { animation: dock-facet-r5 1.10s cubic-bezier(0.2, 0.8, 0.2, 1) 0ms forwards; }
+.anim-concept-c .facet-r4 { animation: dock-facet-r4 1.15s cubic-bezier(0.2, 0.8, 0.2, 1) 30ms forwards; }
+
+.anim-concept-c .facet-l3 { animation: dock-facet-l3 1.25s cubic-bezier(0.2, 0.8, 0.2, 1) 100ms forwards; }
+.anim-concept-c .facet-r3 { animation: dock-facet-r3 1.25s cubic-bezier(0.2, 0.8, 0.2, 1) 100ms forwards; }
+
+.anim-concept-c .facet-l1 { animation: dock-facet-l1 1.35s cubic-bezier(0.2, 0.8, 0.2, 1) 180ms forwards; }
+.anim-concept-c .facet-l2 { animation: dock-facet-l2 1.40s cubic-bezier(0.2, 0.8, 0.2, 1) 200ms forwards; }
+.anim-concept-c .facet-r1 { animation: dock-facet-r1 1.45s cubic-bezier(0.2, 0.8, 0.2, 1) 220ms forwards; }
+.anim-concept-c .facet-r2 { animation: dock-facet-r2 1.40s cubic-bezier(0.2, 0.8, 0.2, 1) 200ms forwards; }
+
+@keyframes dock-facet-l4 { 0% { transform: translate3d(-6px, 8px, 0); opacity: 0; } 100% { transform: translate3d(0, 0, 0); opacity: 1; } }
+@keyframes dock-facet-l5 { 0% { transform: translate3d(0px, 8px, 0); opacity: 0; } 100% { transform: translate3d(0, 0, 0); opacity: 1; } }
+@keyframes dock-facet-r5 { 0% { transform: translate3d(0px, 8px, 0); opacity: 0; } 100% { transform: translate3d(0, 0, 0); opacity: 1; } }
+@keyframes dock-facet-r4 { 0% { transform: translate3d(8px, 6px, 0); opacity: 0; } 100% { transform: translate3d(0, 0, 0); opacity: 1; } }
+
+@keyframes dock-facet-l3 { 0% { transform: translate3d(-6px, 0px, 0); opacity: 0; } 100% { transform: translate3d(0, 0, 0); opacity: 1; } }
+@keyframes dock-facet-r3 { 0% { transform: translate3d(6px, 0px, 0); opacity: 0; } 100% { transform: translate3d(0, 0, 0); opacity: 1; } }
+
+@keyframes dock-facet-l1 { 0% { transform: translate3d(-8px, -6px, 0); opacity: 0; } 100% { transform: translate3d(0, 0, 0); opacity: 1; } }
+@keyframes dock-facet-l2 { 0% { transform: translate3d(-8px, 0px, 0); opacity: 0; } 100% { transform: translate3d(0, 0, 0); opacity: 1; } }
+@keyframes dock-facet-r1 { 0% { transform: translate3d(8px, -6px, 0); opacity: 0; } 100% { transform: translate3d(0, 0, 0); opacity: 1; } }
+@keyframes dock-facet-r2 { 0% { transform: translate3d(8px, 0px, 0); opacity: 0; } 100% { transform: translate3d(0, 0, 0); opacity: 1; } }
+
+/* REDUCED MOTION */
+@media (prefers-reduced-motion: reduce) {
+  .portal-motion-svg,
+  .portal-motion-svg *,
+  .pylon-group,
+  .facet {
+    animation: none !important;
+    transition: none !important;
+    transform: none !important;
+    opacity: 1 !important;
+  }
+}
+
+.force-reduced-motion .portal-motion-svg,
+.force-reduced-motion .portal-motion-svg *,
+.force-reduced-motion .pylon-group,
+.force-reduced-motion .facet {
+  animation: none !important;
+  transition: none !important;
+  transform: none !important;
+  opacity: 1 !important;
+}

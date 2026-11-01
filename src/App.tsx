@@ -1152,7 +1152,7 @@ function App() {
                   <PanelLeft className="w-4 h-4" />
                 </button>
                 <div className="flex items-center gap-1.5 mr-1">
-                  <AiraMark size="sm" />
+                  <AiraMark size="sm" isAnimated={true} motionConcept="a" />
                 </div>
               </>
             )}

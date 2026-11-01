@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- UI Scale (7 consolidated facets with 2.8px optical corridor) -->
+  <g class="pylon-group pylon-left">
+    <path class="facet facet-l1" d="M 2.0 4.5 L 18.2 2.0 L 18.2 22.0 L 2.0 44.5 Z" fill="currentColor"/>
+    <path class="facet facet-l2" d="M 19.6 2.2 L 30.6 6.8 L 30.6 22.0 L 19.6 22.0 Z" fill="currentColor"/>
+    <path class="facet facet-l3" d="M 19.6 23.8 L 30.6 23.8 L 21.6 38.0 L 2.0 48.0 L 2.0 60.0 L 21.6 57.0 L 21.6 38.0 Z" fill="currentColor"/>
+  </g>
+  <g class="pylon-group pylon-right">
+    <path class="facet facet-r1" d="M 43.2 6.5 L 48.4 2.8 L 62.0 4.5 L 62.0 16.5 L 43.2 26.5 Z" fill="currentColor"/>
+    <path class="facet facet-r2" d="M 60.5 18.5 L 42.8 28.5 L 33.8 41.0 L 44.8 41.0 Z" fill="currentColor"/>
+    <path class="facet facet-r3" d="M 33.4 42.5 L 44.8 42.5 L 44.8 62.0 L 33.4 57.0 Z" fill="currentColor"/>
+    <path class="facet facet-r4" d="M 46.2 42.5 L 62.0 19.5 L 62.0 59.5 L 46.2 62.0 Z" fill="currentColor"/>
+  </g>
+</svg>
