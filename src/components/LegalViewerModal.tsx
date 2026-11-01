@@ -57,10 +57,10 @@ export const LegalViewerModal: React.FC<LegalViewerModalProps> = ({
             </div>
             <div>
               <h2 id="legal-viewer-title" className="text-base font-bold text-claude-text-light dark:text-white tracking-tight">
-                AIRA Legal & Governance
+                AIRA Operational Legal & Governance Policies
               </h2>
               <p className="text-xs text-claude-muted-light dark:text-claude-muted-dark">
-                Official terms of service, operational governance, and privacy policies
+                Terms of service, operational governance, and privacy disclosures
               </p>
             </div>
           </div>
@@ -209,7 +209,7 @@ export const LegalViewerModal: React.FC<LegalViewerModalProps> = ({
                   4. Data Portability & Erasure Rights
                 </h3>
                 <p>
-                  Under GDPR, CCPA, and global privacy standards, you have the right to download a machine-readable export of all stored data or permanently purge your account and local database at any time via the Privacy Center.
+                  AIRA provides self-service data portability and local erasure tools. You may export a complete machine-readable JSON package of your stored conversations, projects, and settings, or purge local browser storage at any time via the Privacy Center. Server-side account closure can be initiated through Account & Billing.
                 </p>
               </div>
             </div>

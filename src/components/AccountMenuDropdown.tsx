@@ -21,6 +21,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import type { NeonUser } from '../lib/neonAuth';
 import { neonAuth } from '../lib/neonAuth';
+import { parseBillingSummary } from '../lib/accountBillingTruth';
 import type { AppSettings } from '../types';
 
 interface AccountMenuDropdownProps {
@@ -64,6 +65,8 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
 }) => {
   const [activeSubmenu, setActiveSubmenu] = useState<'main' | 'help'>('main');
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [billingPlanName, setBillingPlanName] = useState<string | null>(null);
+  const [isBillingLoading, setIsBillingLoading] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Reset to main view whenever opened
@@ -72,6 +75,44 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
       setActiveSubmenu('main');
     }
   }, [isOpen]);
+
+  // Fetch verified billing tier from server-side summary endpoint
+  useEffect(() => {
+    if (!isOpen || !neonUser?.id) {
+      setBillingPlanName(null);
+      setIsBillingLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsBillingLoading(true);
+
+    fetch('/api/billing/summary', {
+      headers: { Accept: 'application/json' },
+      credentials: 'include',
+      cache: 'no-store'
+    })
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (cancelled) return;
+        const summary = parseBillingSummary(data, neonUser.id);
+        if (summary) {
+          setBillingPlanName(summary.planName || (summary.planId === 'pro' ? 'Pro Plan' : summary.planId === 'plus' ? 'Plus Plan' : 'Free Plan'));
+        } else {
+          setBillingPlanName('Standard Workspace');
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setBillingPlanName('Standard Workspace');
+      })
+      .finally(() => {
+        if (!cancelled) setIsBillingLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, neonUser?.id]);
 
   // Click outside listener
   useEffect(() => {
@@ -171,7 +212,9 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
                       <span className="text-xs font-bold truncate text-claude-text-light dark:text-white">
                         {neonUser.name || 'Authenticated User'}
                       </span>
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                      {neonUser.emailVerified && (
+                        <span title="Verified Account" className="inline-flex items-center shrink-0"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /></span>
+                      )}
                     </div>
                     <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark truncate">
                       {neonUser.email}
@@ -181,10 +224,10 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
 
                 {/* Plan Badge & Quick Upgrade Action */}
                 <div className="mt-3 flex items-center justify-between gap-2 p-2 rounded-xl bg-claude-surface-light dark:bg-white/5 border border-claude-border-light/60 dark:border-white/10">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-claude-text-light dark:text-white">
-                      Pro Workspace
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-claude-text-light dark:text-white truncate">
+                      {isBillingLoading ? 'Loading plan...' : (billingPlanName || 'Standard Workspace')}
                     </span>
                   </div>
                   <button
@@ -192,7 +235,7 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
                       onClose();
                       onOpenPricing();
                     }}
-                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-aira-blue/10 hover:bg-aira-blue/20 text-aira-blue dark:text-aira-cyan text-[11px] font-bold transition-colors"
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-aira-blue/10 hover:bg-aira-blue/20 text-aira-blue dark:text-aira-cyan text-[11px] font-bold transition-colors shrink-0"
                   >
                     <Sparkles className="w-3 h-3" />
                     <span>Manage Plan</span>
@@ -248,21 +291,21 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
                 </button>
               )}
 
-              {/* Personalization */}
+              {/* Personalization (Direct to Instructions Tab) */}
               <button
                 role="menuitem"
                 onClick={() => {
                   onClose();
-                  onOpenSettings('personalization');
+                  onOpenSettings('instructions');
                 }}
                 className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left hover:bg-claude-surface2-light dark:hover:bg-white/5 transition-colors group"
               >
                 <Sliders className="w-4 h-4 text-claude-muted-light group-hover:text-aira-blue transition-colors" />
                 <span className="flex-1 font-medium">Personalization</span>
-                <span className="text-[10px] text-claude-muted-light">Memory & Style</span>
+                <span className="text-[10px] text-claude-muted-light">Directives</span>
               </button>
 
-              {/* Settings */}
+              {/* Settings (Direct to General Tab) */}
               <button
                 role="menuitem"
                 onClick={() => {
@@ -273,29 +316,30 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
               >
                 <Settings className="w-4 h-4 text-claude-muted-light group-hover:text-aira-blue transition-colors" />
                 <span className="flex-1 font-medium">Settings</span>
+                <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-claude-surface2-light dark:bg-white/10 text-claude-muted-light">⌘,</kbd>
               </button>
 
               {/* Help & Support Submenu Trigger */}
               <button
                 role="menuitem"
                 aria-haspopup="true"
+                aria-expanded={false}
                 onClick={() => setActiveSubmenu('help')}
                 className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left hover:bg-claude-surface2-light dark:hover:bg-white/5 transition-colors group"
               >
                 <HelpCircle className="w-4 h-4 text-claude-muted-light group-hover:text-aira-blue transition-colors" />
                 <span className="flex-1 font-medium">Help & Resources</span>
-                <ChevronRight className="w-4 h-4 text-claude-muted-light group-hover:translate-x-0.5 transition-transform" />
+                <ChevronRight className="w-3.5 h-3.5 text-claude-muted-light group-hover:translate-x-0.5 transition-transform" />
               </button>
 
-              {/* Divider */}
               <div className="my-1 border-t border-claude-border-light/60 dark:border-white/10" />
 
-              {/* Logout or Auth Action */}
+              {/* Sign out or Sign in */}
               {neonUser ? (
                 <button
                   role="menuitem"
-                  disabled={isLoggingOut}
                   onClick={handleLogout}
+                  disabled={isLoggingOut}
                   className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 transition-colors font-medium"
                 >
                   <LogOut className="w-4 h-4" />

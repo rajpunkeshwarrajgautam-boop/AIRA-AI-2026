@@ -27,6 +27,7 @@ const ArtifactStudio = React.lazy(() => import('./components/ArtifactStudio').th
 const ProjectsModal = React.lazy(() => import('./components/ProjectsModal').then(m => ({ default: m.ProjectsModal })));
 const SettingsModal = React.lazy(() => import('./components/SettingsModal').then(m => ({ default: m.SettingsModal })));
 import { MemoryVaultModal } from './components/MemoryVaultModal';
+import { agentMemory } from './utils/agentMemoryEngine';
 import { AuthModal } from './components/AuthModal';
 import { PricingModal } from './components/PricingModal';
 import { VisionStudioModal } from './components/VisionStudioModal';
@@ -390,6 +391,18 @@ function App() {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 's') {
         e.preventDefault();
         setSidebarOpen((prev: boolean) => !prev);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+        e.preventDefault();
+        const composer = document.querySelector('textarea') as HTMLTextAreaElement | null;
+        composer?.focus();
+        return;
+      }
+      if (e.key === 'Escape' && activeAbortControllerRef.current) {
+        e.preventDefault();
+        activeAbortControllerRef.current.abort();
+        activeAbortControllerRef.current = null;
         return;
       }
       if (e.key === '?' && !isInput && !e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -1021,7 +1034,9 @@ function App() {
             setExecutionStatus(status);
           },
           onLatencyMetrics: metrics => {
-            console.info('[AIRA Telemetry] Client observed latency metrics:', metrics);
+            if (!settings.telemetryOptOut) {
+              console.info('[AIRA Telemetry] Client observed latency metrics:', metrics);
+            }
           },
           onRunStarted: runId => {
             activeRunIdRef.current = runId;
@@ -1395,7 +1410,7 @@ function App() {
             onImportData={data => { setConversations(data.conversations); setProjects(data.projects); if (data.conversations[0]) handleSelectChat(data.conversations[0].id); }}
             onClearAll={() => {
               const fresh = { ...INITIAL_CONVERSATION, id: 'chat-' + Date.now(), createdAt: Date.now(), updatedAt: Date.now() };
-              setConversations([fresh]); setActiveChatId(fresh.id); setProjects([]); setActiveProjectId(undefined); setSettings(loadSettings()); setActiveArtifact(null);
+              setConversations([fresh]); setActiveChatId(fresh.id); setProjects([]); setActiveProjectId(undefined); setSettings(loadSettings()); setActiveArtifact(null); agentMemory.purge(undefined, true);
             }}
             onOpenMemoryVault={() => setIsMemoryVaultOpen(true)}
             onOpenBilling={() => setIsAccountBillingOpen(true)}
@@ -1421,7 +1436,7 @@ function App() {
           projects={projects}
           onClearAllData={() => {
             const fresh = { ...INITIAL_CONVERSATION, id: 'chat-' + Date.now(), createdAt: Date.now(), updatedAt: Date.now() };
-            setConversations([fresh]); setActiveChatId(fresh.id); setProjects([]); setActiveProjectId(undefined); setSettings(loadSettings()); setActiveArtifact(null);
+            setConversations([fresh]); setActiveChatId(fresh.id); setProjects([]); setActiveProjectId(undefined); setSettings(loadSettings()); setActiveArtifact(null); agentMemory.purge(undefined, true);
           }}
           onOpenLegalViewer={(doc) => {
             setLegalViewerInitialDoc(doc);

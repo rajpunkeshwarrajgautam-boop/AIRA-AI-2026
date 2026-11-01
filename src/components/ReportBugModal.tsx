@@ -6,7 +6,9 @@ import {
   CheckCircle2, 
   Info,
   Copy,
-  Check
+  Check,
+  Download,
+  AlertCircle
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import type { AppSettings } from '../types';
@@ -16,6 +18,18 @@ interface ReportBugModalProps {
   onClose: () => void;
   settings: AppSettings;
 }
+
+interface StoredBugReport {
+  id: string;
+  category: string;
+  title: string;
+  description: string;
+  reproSteps: string;
+  diagnostics: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+const BUG_STORAGE_KEY = 'aira_bug_reports_v1';
 
 export const ReportBugModal: React.FC<ReportBugModalProps> = ({
   isOpen,
@@ -29,11 +43,13 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
   const [includeDiagnostics, setIncludeDiagnostics] = useState(true);
   const [consentChecked, setConsentChecked] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
   const [submittedTicket, setSubmittedTicket] = useState<string | null>(null);
   const [copiedTicket, setCopiedTicket] = useState(false);
+  const [copiedMarkdown, setCopiedMarkdown] = useState(false);
   const modalRef = useRef<HTMLDivElement>(null);
 
-  // Compute clean diagnostic payload (no tokens, no transcripts)
+  // Compute clean diagnostic payload (no tokens, no transcripts, sanitized geometry & environment)
   const diagnostics = useMemo(() => ({
     timestamp: new Date().toISOString(),
     userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Unknown',
@@ -52,6 +68,7 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
       setTitle('');
       setDescription('');
       setReproSteps('');
+      setDuplicateWarning(null);
     }
   }, [isOpen]);
 
@@ -69,22 +86,54 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim() || !description.trim()) return;
+    if (!title.trim() || !description.trim() || !consentChecked) return;
 
     setIsSubmitting(true);
+    setDuplicateWarning(null);
+
+    // Retrieve existing reports to check for duplicates
+    let existingReports: StoredBugReport[] = [];
+    try {
+      const raw = localStorage.getItem(BUG_STORAGE_KEY);
+      if (raw) existingReports = JSON.parse(raw);
+    } catch {
+      existingReports = [];
+    }
+
+    const isDuplicate = existingReports.some(
+      r => r.title.trim().toLowerCase() === title.trim().toLowerCase() &&
+           r.category === category
+    );
+
+    if (isDuplicate) {
+      setIsSubmitting(false);
+      setDuplicateWarning('A similar defect report has already been recorded in your local queue. Please update the title or verify existing logs.');
+      return;
+    }
+
+    const ticketId = `AIRA-BUG-${Date.now().toString(36).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const newReport: StoredBugReport = {
+      id: ticketId,
+      category,
+      title: title.trim(),
+      description: description.trim(),
+      reproSteps: reproSteps.trim(),
+      diagnostics: includeDiagnostics ? diagnostics : null,
+      createdAt: new Date().toISOString(),
+    };
+
+    try {
+      existingReports.unshift(newReport);
+      // Keep up to 50 local reports
+      localStorage.setItem(BUG_STORAGE_KEY, JSON.stringify(existingReports.slice(0, 50)));
+    } catch (err) {
+      console.warn('[BugReport] Failed to persist report locally', err);
+    }
+
     setTimeout(() => {
-      const ticketId = `AIRA-BUG-${Math.floor(100000 + Math.random() * 900000)}`;
-      // Log report locally for developer inspection
-      console.log(`[BugReport] Submitted ticket ${ticketId}`, {
-        category,
-        title,
-        description,
-        reproSteps,
-        diagnostics: includeDiagnostics ? diagnostics : 'Excluded by user'
-      });
       setIsSubmitting(false);
       setSubmittedTicket(ticketId);
-    }, 600);
+    }, 400);
   };
 
   const handleCopyTicket = () => {
@@ -92,6 +141,50 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
     navigator.clipboard.writeText(submittedTicket);
     setCopiedTicket(true);
     setTimeout(() => setCopiedTicket(false), 2000);
+  };
+
+  const handleCopyMarkdown = () => {
+    if (!submittedTicket) return;
+    const md = [
+      `### [${category.toUpperCase()}] ${title}`,
+      `**Ticket ID:** \`${submittedTicket}\``,
+      `**Date:** ${new Date().toUTCString()}`,
+      '',
+      '#### Description',
+      description,
+      '',
+      '#### Steps to Reproduce',
+      reproSteps || 'N/A',
+      '',
+      '#### System Diagnostics',
+      includeDiagnostics ? '```json\n' + JSON.stringify(diagnostics, null, 2) + '\n```' : 'Diagnostics excluded by user.'
+    ].join('\n');
+
+    navigator.clipboard.writeText(md);
+    setCopiedMarkdown(true);
+    setTimeout(() => setCopiedMarkdown(false), 2000);
+  };
+
+  const handleDownloadJSON = () => {
+    if (!submittedTicket) return;
+    const reportData = {
+      id: submittedTicket,
+      category,
+      title,
+      description,
+      reproSteps,
+      diagnostics: includeDiagnostics ? diagnostics : null,
+      createdAt: new Date().toISOString(),
+    };
+    const blob = new Blob([JSON.stringify(reportData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${submittedTicket}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   if (!isOpen) return null;
@@ -119,13 +212,14 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
             </div>
             <div>
               <h2 id="report-bug-title" className="text-base font-bold text-claude-text-light dark:text-white tracking-tight">
-                Report an Issue or Bug
+                Report a Defect or Issue
               </h2>
               <p className="text-xs text-claude-muted-light dark:text-claude-muted-dark">
-                Direct feedback channel for engineering inspection and quality remediation
+                Submit an actionable diagnostic bug report to help improve AIRA
               </p>
             </div>
           </div>
+
           <button
             onClick={onClose}
             className="p-2 rounded-xl text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white hover:bg-claude-surface2-light dark:hover:bg-white/5 transition-colors"
@@ -138,66 +232,102 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
         {/* Content Body */}
         <div className="flex-1 overflow-y-auto p-6">
           {submittedTicket ? (
-            <div className="py-8 text-center space-y-4">
-              <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-500 mx-auto">
+            /* Submission Confirmation */
+            <div className="py-6 flex flex-col items-center text-center space-y-4">
+              <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-500">
                 <CheckCircle2 className="w-6 h-6" />
               </div>
               <div>
                 <h3 className="text-base font-bold text-claude-text-light dark:text-white">
-                  Bug Report Dispatched
+                  Report Recorded in Local Diagnostic Queue
                 </h3>
-                <p className="text-xs text-claude-muted-light dark:text-claude-muted-dark mt-1 max-w-md mx-auto">
-                  Thank you for helping us maintain zero release-blocking defects. Your report and diagnostics have been logged.
+                <p className="text-xs text-claude-muted-light dark:text-claude-muted-dark max-w-md mx-auto mt-1">
+                  Your defect report has been durably stored in this browser with ticket ID:
                 </p>
               </div>
 
-              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-claude-surface2-light dark:bg-white/5 border border-claude-border-light dark:border-white/10">
-                <span className="text-xs text-claude-muted-light">Ticket ID:</span>
-                <span className="text-xs font-mono font-bold text-aira-blue dark:text-aira-cyan">
-                  {submittedTicket}
-                </span>
+              {/* Ticket ID Box */}
+              <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-claude-surface2-light dark:bg-white/5 border border-claude-border-light dark:border-white/10 font-mono text-sm font-bold text-claude-text-light dark:text-white">
+                <span>{submittedTicket}</span>
                 <button
                   onClick={handleCopyTicket}
-                  className="p-1 rounded-md hover:bg-claude-surface-light dark:hover:bg-white/10 text-claude-muted-light hover:text-claude-text-light"
-                  title="Copy Ticket ID"
+                  className="p-1 rounded-lg hover:bg-claude-surface-light dark:hover:bg-white/10 text-claude-muted-light hover:text-claude-text-light transition-colors"
+                  title="Copy ticket ID"
+                  aria-label="Copy ticket ID"
                 >
-                  {copiedTicket ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copiedTicket ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
                 </button>
               </div>
 
-              <div className="pt-4">
+              {/* Infrastructure Transparency Notice */}
+              <div className="p-3.5 rounded-xl border border-amber-500/30 bg-amber-500/5 text-left max-w-lg text-[11px] text-claude-text-light/90 dark:text-white/80 space-y-1">
+                <div className="font-semibold text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
+                  <Info className="w-3.5 h-3.5" />
+                  <span>Infrastructure Notice: Remote Dispatch Pending</span>
+                </div>
+                <p>
+                  Direct automated issue-tracker ingestion is currently in development. To ensure your defect reaches engineering immediately, copy this formatted report to paste into GitHub Issues or email support.
+                </p>
+              </div>
+
+              {/* Actions */}
+              <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
+                <button
+                  onClick={handleCopyMarkdown}
+                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-aira-blue text-white text-xs font-bold transition-all shadow-sm active:scale-98"
+                >
+                  {copiedMarkdown ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  <span>{copiedMarkdown ? 'Markdown Copied!' : 'Copy Markdown Report'}</span>
+                </button>
+
+                <button
+                  onClick={handleDownloadJSON}
+                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-claude-surface2-light dark:bg-white/10 text-claude-text-light dark:text-white text-xs font-medium hover:bg-claude-surface2-light/80 transition-colors"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Download JSON</span>
+                </button>
+
                 <button
                   onClick={onClose}
-                  className="px-6 py-2 rounded-xl bg-aira-blue hover:bg-aira-blue/90 text-white text-xs font-bold transition-colors shadow-sm"
+                  className="px-4 py-2 rounded-xl border border-claude-border-light dark:border-white/10 text-xs font-medium text-claude-text-light dark:text-white hover:bg-claude-surface2-light dark:hover:bg-white/5 transition-colors"
                 >
-                  Return to AIRA
+                  Done
                 </button>
               </div>
             </div>
           ) : (
+            /* Bug Report Form */
             <form onSubmit={handleSubmit} className="space-y-4">
+              {duplicateWarning && (
+                <div className="p-3 rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400 text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{duplicateWarning}</span>
+                </div>
+              )}
+
               {/* Category Selector */}
               <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark mb-2">
-                  Issue Category
+                <label className="block text-xs font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark mb-1.5">
+                  Category
                 </label>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-xs">
                   {[
-                    { id: 'ui', label: 'UI / Visual Defect' },
-                    { id: 'inference', label: 'Model / Inference' },
-                    { id: 'artifacts', label: 'Artifact Studio' },
-                    { id: 'billing', label: 'Account & Billing' },
-                    { id: 'performance', label: 'Performance / Lag' },
-                    { id: 'other', label: 'Other Issue' },
+                    { id: 'ui', label: 'User Interface' },
+                    { id: 'inference', label: 'AI Output' },
+                    { id: 'billing', label: 'Billing/Plan' },
+                    { id: 'artifacts', label: 'Artifacts' },
+                    { id: 'performance', label: 'Performance' },
+                    { id: 'other', label: 'Other' },
                   ].map((cat) => (
                     <button
                       key={cat.id}
                       type="button"
                       onClick={() => setCategory(cat.id as any)}
-                      className={`px-3 py-2 rounded-xl text-xs font-medium border text-left transition-all ${
+                      className={`p-2 rounded-xl border text-center font-medium transition-all ${
                         category === cat.id
-                          ? 'border-aira-blue bg-aira-blue/10 text-aira-blue dark:text-white font-bold ring-1 ring-aira-blue'
-                          : 'border-claude-border-light dark:border-white/10 bg-claude-surface2-light/40 dark:bg-white/[0.02] text-claude-muted-light dark:text-claude-muted-dark hover:border-claude-border-light/80'
+                          ? 'border-rose-500 bg-rose-500/10 text-rose-600 dark:text-rose-400 font-bold'
+                          : 'border-claude-border-light dark:border-white/10 hover:bg-claude-surface2-light dark:hover:bg-white/5 text-claude-muted-light dark:text-claude-muted-dark'
                       }`}
                     >
                       {cat.label}
@@ -206,67 +336,70 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
                 </div>
               </div>
 
-              {/* Title Input */}
+              {/* Title */}
               <div>
-                <label className="block text-xs font-semibold text-claude-text-light dark:text-white mb-1">
-                  Issue Summary <span className="text-rose-500">*</span>
+                <label htmlFor="bug-title" className="block text-xs font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark mb-1">
+                  Summary / Title <span className="text-rose-500">*</span>
                 </label>
                 <input
+                  id="bug-title"
                   type="text"
                   required
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
-                  placeholder="e.g. Artifact canvas fails to update upon switching versions"
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-claude-surface2-light dark:bg-white/5 border border-claude-border-light dark:border-white/10 text-xs text-claude-text-light dark:text-white placeholder:text-claude-muted-light focus:outline-none focus:ring-2 focus:ring-aira-blue/40"
+                  placeholder="e.g. Model response stream freezes when generating Mermaid chart"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-claude-border-light dark:border-white/10 bg-claude-surface2-light/40 dark:bg-white/[0.02] text-xs text-claude-text-light dark:text-white placeholder:text-claude-muted-light/60 focus:outline-none focus:border-rose-500 transition-colors"
                 />
               </div>
 
               {/* Description */}
               <div>
-                <label className="block text-xs font-semibold text-claude-text-light dark:text-white mb-1">
-                  Description of Defect <span className="text-rose-500">*</span>
+                <label htmlFor="bug-desc" className="block text-xs font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark mb-1">
+                  Detailed Description <span className="text-rose-500">*</span>
                 </label>
                 <textarea
+                  id="bug-desc"
                   required
                   rows={3}
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Describe what occurred, what you expected to happen, and any error message displayed..."
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-claude-surface2-light dark:bg-white/5 border border-claude-border-light dark:border-white/10 text-xs text-claude-text-light dark:text-white placeholder:text-claude-muted-light focus:outline-none focus:ring-2 focus:ring-aira-blue/40 resize-none"
+                  placeholder="What happened? What did you expect to happen instead?"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-claude-border-light dark:border-white/10 bg-claude-surface2-light/40 dark:bg-white/[0.02] text-xs text-claude-text-light dark:text-white placeholder:text-claude-muted-light/60 focus:outline-none focus:border-rose-500 transition-colors resize-none"
                 />
               </div>
 
-              {/* Reproduction Steps */}
+              {/* Steps to Reproduce */}
               <div>
-                <label className="block text-xs font-semibold text-claude-text-light dark:text-white mb-1">
+                <label htmlFor="bug-repro" className="block text-xs font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark mb-1">
                   Steps to Reproduce (Optional)
                 </label>
                 <textarea
+                  id="bug-repro"
                   rows={2}
                   value={reproSteps}
                   onChange={(e) => setReproSteps(e.target.value)}
-                  placeholder="1. Open Artifact Studio&#10;2. Click version 2 tab&#10;3. Notice canvas remains blank..."
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-claude-surface2-light dark:bg-white/5 border border-claude-border-light dark:border-white/10 text-xs text-claude-text-light dark:text-white placeholder:text-claude-muted-light focus:outline-none focus:ring-2 focus:ring-aira-blue/40 resize-none font-mono text-[11px]"
+                  placeholder="1. Open artifact studio&#10;2. Click on preview tab&#10;3. Resize window"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-claude-border-light dark:border-white/10 bg-claude-surface2-light/40 dark:bg-white/[0.02] text-xs text-claude-text-light dark:text-white placeholder:text-claude-muted-light/60 focus:outline-none focus:border-rose-500 transition-colors resize-none"
                 />
               </div>
 
-              {/* Diagnostics Toggle */}
-              <div className="p-3.5 rounded-xl border border-claude-border-light dark:border-white/10 bg-claude-surface2-light/30 dark:bg-white/[0.01]">
-                <div className="flex items-center justify-between mb-2">
+              {/* Diagnostics Section */}
+              <div className="p-3.5 rounded-xl border border-claude-border-light dark:border-white/10 bg-claude-surface2-light/40 dark:bg-white/[0.02] space-y-2">
+                <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <Info className="w-4 h-4 text-aira-blue" />
-                    <span className="text-xs font-semibold text-claude-text-light dark:text-white">
-                      Include System & Visual Diagnostics
+                    <Info className="w-4 h-4 text-claude-muted-light" />
+                    <span className="text-xs font-bold text-claude-text-light dark:text-white">
+                      System Diagnostics
                     </span>
                   </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
+                  <label className="text-xs flex items-center gap-2 cursor-pointer">
                     <input
                       type="checkbox"
                       checked={includeDiagnostics}
                       onChange={(e) => setIncludeDiagnostics(e.target.checked)}
-                      className="sr-only peer"
+                      className="rounded border-claude-border-light text-aira-blue focus:ring-aira-blue"
                     />
-                    <div className="w-9 h-5 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-aira-blue"></div>
+                    <span className="text-claude-muted-light dark:text-claude-muted-dark">Include sanitized metrics</span>
                   </label>
                 </div>
 
@@ -291,7 +424,7 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
                   className="mt-0.5 rounded border-claude-border-light text-aira-blue focus:ring-aira-blue"
                 />
                 <label htmlFor="consent-check" className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark leading-tight">
-                  I consent to submitting this defect report. No conversation contents, private keys, or personal tokens are included.
+                  I consent to recording this defect report. No conversation contents, private keys, or personal tokens are included.
                 </label>
               </div>
 
@@ -310,11 +443,11 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
                   className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-bold transition-all shadow-sm active:scale-98"
                 >
                   {isSubmitting ? (
-                    <span>Submitting...</span>
+                    <span>Recording...</span>
                   ) : (
                     <>
                       <Send className="w-3.5 h-3.5" />
-                      <span>Submit Bug Report</span>
+                      <span>Record Bug Report</span>
                     </>
                   )}
                 </button>

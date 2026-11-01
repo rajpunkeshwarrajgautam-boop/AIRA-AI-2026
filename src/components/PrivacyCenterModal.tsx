@@ -57,8 +57,25 @@ export const PrivacyCenterModal: React.FC<PrivacyCenterModalProps> = ({
         exportedAt: new Date().toISOString(),
         version: '2026.1',
         system: 'AIRA AI 2026 Privacy Export',
-        conversations,
-        projects,
+        conversations: conversations.map(c => ({
+          id: c.id,
+          title: c.title,
+          createdAt: c.createdAt,
+          updatedAt: c.updatedAt,
+          messages: c.messages.map(m => ({
+            id: m.id,
+            role: m.role,
+            content: m.content,
+            timestamp: m.timestamp,
+            modelUsed: m.modelUsed,
+          }))
+        })),
+        projects: projects.map(p => ({
+          id: p.id,
+          name: p.name,
+          description: p.description,
+          createdAt: p.createdAt,
+        })),
         settings: {
           userName: settings.userName,
           email: settings.email,
@@ -66,6 +83,9 @@ export const PrivacyCenterModal: React.FC<PrivacyCenterModalProps> = ({
           customInstructions: settings.customInstructions,
           theme: settings.theme,
           aestheticPreset: settings.aestheticPreset,
+          privacyScrubbing: settings.privacyScrubbing !== false,
+          persistentMemoryEnabled: settings.persistentMemoryEnabled !== false,
+          telemetryOptOut: settings.telemetryOptOut === true,
         }
       };
       const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: 'application/json' });
@@ -144,7 +164,7 @@ export const PrivacyCenterModal: React.FC<PrivacyCenterModalProps> = ({
                     Automatic Privacy Scrubbing
                   </h4>
                   <p className="text-xs text-claude-muted-light dark:text-claude-muted-dark mt-0.5">
-                    Filters API keys, passwords, bearer tokens, and private identifiers before consolidating agent memory.
+                    Filters API keys, passwords, bearer tokens, and private identifiers before consolidating agent memory or logging diagnostics.
                   </p>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer shrink-0">
@@ -165,7 +185,7 @@ export const PrivacyCenterModal: React.FC<PrivacyCenterModalProps> = ({
                     Cross-Conversation Memory
                   </h4>
                   <p className="text-xs text-claude-muted-light dark:text-claude-muted-dark mt-0.5">
-                    Permits the AI to recall relevant architectural decisions and user preferences from previous chats.
+                    Permits the AI to recall relevant architectural decisions and user preferences from previous chats. When disabled, no previous conversation memories are recalled.
                   </p>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer shrink-0">
@@ -186,7 +206,7 @@ export const PrivacyCenterModal: React.FC<PrivacyCenterModalProps> = ({
                     Telemetry & Diagnostic Reporting Opt-Out
                   </h4>
                   <p className="text-xs text-claude-muted-light dark:text-claude-muted-dark mt-0.5">
-                    Completely disables anonymous client error reports and diagnostic telemetry.
+                    Completely disables anonymous client error reports, performance logging, and latency observation.
                   </p>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer shrink-0">
@@ -251,6 +271,9 @@ export const PrivacyCenterModal: React.FC<PrivacyCenterModalProps> = ({
                   <p className="text-xs text-claude-muted-light dark:text-claude-muted-dark mt-1">
                     Erase all local conversation history, projects, and custom instructions from this browser.
                   </p>
+                  <p className="text-[10px] text-claude-muted-light/80 dark:text-claude-muted-dark/80 mt-1 italic">
+                    Scope: Local browser cache and IndexedDB storage. Server-side account data and active subscription records are managed via Account & Billing.
+                  </p>
                 </div>
                 <div className="mt-4 pt-2">
                   {confirmClear ? (
@@ -278,7 +301,7 @@ export const PrivacyCenterModal: React.FC<PrivacyCenterModalProps> = ({
                       className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 font-medium text-xs transition-colors"
                     >
                       <Trash2 className="w-4 h-4" />
-                      <span>Erase Local Storage</span>
+                      <span>Purge Local Storage</span>
                     </button>
                   )}
                 </div>
@@ -286,70 +309,62 @@ export const PrivacyCenterModal: React.FC<PrivacyCenterModalProps> = ({
             </div>
           </div>
 
-          {/* Architectural Disclosures */}
-          <div>
-            <div className="flex items-center gap-2 mb-3">
-              <EyeOff className="w-4 h-4 text-amber-500" />
-              <h3 className="text-xs font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark">
-                Architectural Privacy Guarantees
-              </h3>
-            </div>
+          {/* Privacy Guarantees */}
+          <div className="p-4 rounded-xl border border-claude-border-light dark:border-white/10 bg-claude-surface2-light/20 dark:bg-white/[0.01] space-y-3">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark">
+              AIRA Operational Privacy Guarantees
+            </h4>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+              <div className="flex items-start gap-2">
+                <EyeOff className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-semibold text-claude-text-light dark:text-white block">Zero Model Training</span>
+                  <span className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark">Your prompts, documents, and code are never used to train public AI models.</span>
+                </div>
+              </div>
 
-            <div className="p-4 rounded-xl border border-claude-border-light dark:border-white/10 bg-claude-surface2-light/20 dark:bg-white/[0.01] space-y-3 text-xs text-claude-text-light/90 dark:text-white/80">
-              <div className="flex items-start gap-2.5">
+              <div className="flex items-start gap-2">
                 <Server className="w-4 h-4 text-aira-blue shrink-0 mt-0.5" />
                 <div>
-                  <strong className="text-claude-text-light dark:text-white">Zero Third-Party Training:</strong> AIRA does not sell or distribute customer conversation data for public model training. Inference is routed strictly through enterprise zero-retention provider contracts.
+                  <span className="font-semibold text-claude-text-light dark:text-white block">Sandboxed BYOK</span>
+                  <span className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark">Custom API keys are stored in client memory and never persisted to central databases.</span>
                 </div>
               </div>
-              <div className="flex items-start gap-2.5">
-                <Lock className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+
+              <div className="flex items-start gap-2">
+                <FileText className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
                 <div>
-                  <strong className="text-claude-text-light dark:text-white">BYOK (Bring Your Own Key) Protection:</strong> Personal API keys entered into AIRA are stored locally in browser sandbox memory and are only transmitted directly to the respective AI provider header.
+                  <span className="font-semibold text-claude-text-light dark:text-white block">Operational Transparency</span>
+                  <span className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark">Read our complete operational data retention and governance terms.</span>
                 </div>
               </div>
-              <div className="flex items-start gap-2.5">
-                <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
-                <div>
-                  <strong className="text-claude-text-light dark:text-white">Audited Principal Isolation:</strong> Multi-tenant isolation enforces strict database row-level security and session verification across all authenticated endpoints.
-                </div>
-              </div>
+            </div>
+
+            <div className="pt-2 border-t border-claude-border-light/60 dark:border-white/10 flex items-center justify-between text-xs">
+              <span className="text-claude-muted-light dark:text-claude-muted-dark">
+                Have questions regarding operational data handling?
+              </span>
+              <button
+                onClick={() => {
+                  onClose();
+                  onOpenLegalViewer?.('privacy');
+                }}
+                className="text-aira-blue hover:underline font-semibold flex items-center gap-1"
+              >
+                <span>Read Full Privacy Policy</span>
+                <span aria-hidden="true">&rarr;</span>
+              </button>
             </div>
           </div>
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-3.5 border-t border-claude-border-light dark:border-white/10 bg-claude-surface2-light/60 dark:bg-white/[0.02] flex items-center justify-between text-xs">
-          <div className="flex items-center gap-3">
-            {onOpenLegalViewer && (
-              <>
-                <button
-                  onClick={() => {
-                    onClose();
-                    onOpenLegalViewer('privacy');
-                  }}
-                  className="text-aira-blue hover:underline font-medium flex items-center gap-1"
-                >
-                  <FileText className="w-3.5 h-3.5" />
-                  <span>Privacy Policy</span>
-                </button>
-                <button
-                  onClick={() => {
-                    onClose();
-                    onOpenLegalViewer('terms');
-                  }}
-                  className="text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light hover:underline font-medium"
-                >
-                  Terms of Service
-                </button>
-              </>
-            )}
-          </div>
+        <div className="px-6 py-3.5 border-t border-claude-border-light dark:border-white/10 bg-claude-surface2-light/60 dark:bg-white/[0.02] flex items-center justify-end text-xs">
           <button
             onClick={onClose}
             className="px-4 py-1.5 rounded-lg bg-aira-blue hover:bg-aira-blue/90 text-white font-medium transition-colors"
           >
-            Close
+            Done
           </button>
         </div>
       </motion.div>
