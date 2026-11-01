@@ -56,9 +56,14 @@ export const LegalViewerModal: React.FC<LegalViewerModalProps> = ({
               <FileText className="w-5 h-5" />
             </div>
             <div>
-              <h2 id="legal-viewer-title" className="text-base font-bold text-claude-text-light dark:text-white tracking-tight">
-                AIRA Operational Legal & Governance Policies
-              </h2>
+              <div className="flex items-center gap-2">
+                <h2 id="legal-viewer-title" className="text-base font-bold text-claude-text-light dark:text-white tracking-tight">
+                  AIRA Operational Legal & Governance Policies
+                </h2>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+                  Draft
+                </span>
+              </div>
               <p className="text-xs text-claude-muted-light dark:text-claude-muted-dark">
                 Terms of service, operational governance, and privacy disclosures
               </p>

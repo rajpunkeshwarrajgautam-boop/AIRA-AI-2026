@@ -838,10 +838,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                   <div className="pt-4 border-t border-claude-border-light dark:border-claude-border-dark">
                     <button 
-                      onClick={() => { if (confirm('Reset all Aira local data, conversations, and projects?')) onClearAll(); }} 
+                      onClick={() => { if (confirm('Reset all Aira local data, conversations, and projects from this browser? (Local device data only; does not affect server-side accounts)')) onClearAll(); }} 
                       className="text-xs font-bold text-red-500 hover:text-red-600 transition-colors block w-full text-center p-2 rounded-xl hover:bg-red-50 dark:hover:bg-red-500/10"
                     >
-                      Reset all local workspace data
+                      Reset all local workspace data (This device only)
                     </button>
                   </div>
                 </motion.div>

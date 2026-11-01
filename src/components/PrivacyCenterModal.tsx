@@ -266,13 +266,13 @@ export const PrivacyCenterModal: React.FC<PrivacyCenterModalProps> = ({
               <div className="p-4 rounded-xl border border-rose-500/20 bg-rose-500/[0.02] flex flex-col justify-between">
                 <div>
                   <h4 className="text-sm font-semibold text-rose-600 dark:text-rose-400">
-                    Purge Application Storage
+                    Purge Local Storage
                   </h4>
                   <p className="text-xs text-claude-muted-light dark:text-claude-muted-dark mt-1">
                     Erase all local conversation history, projects, and custom instructions from this browser.
                   </p>
                   <p className="text-[10px] text-claude-muted-light/80 dark:text-claude-muted-dark/80 mt-1 italic">
-                    Scope: Local browser cache and IndexedDB storage. Server-side account data and active subscription records are managed via Account & Billing.
+                    Scope: Local browser cache and IndexedDB storage only. Server-side account data and active subscription records are managed via Account & Billing.
                   </p>
                 </div>
                 <div className="mt-4 pt-2">
