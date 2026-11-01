@@ -322,8 +322,8 @@ function App() {
       if (settings.highContrast) root.classList.add('high-contrast');
       else root.classList.remove('high-contrast');
 
-      if (settings.reducedMotion === 'always') root.classList.add('reduce-motion');
-      else root.classList.remove('reduce-motion');
+      if (settings.reducedMotion === 'always') root.classList.add('reduce-motion', 'force-reduced-motion', 'reduced-motion');
+      else root.classList.remove('reduce-motion', 'force-reduced-motion', 'reduced-motion');
 
       if (settings.fontSize) root.dataset.fontSize = settings.fontSize;
     };
