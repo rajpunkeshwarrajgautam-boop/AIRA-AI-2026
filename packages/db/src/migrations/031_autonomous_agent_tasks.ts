@@ -89,6 +89,26 @@ export async function up(knex: Knex): Promise<void> {
 }
 
 export async function down(knex: Knex): Promise<void> {
+  const isTest = process.env.NODE_ENV === 'test' || 
+                 process.env.AIRA_TEST_ENVIRONMENT === 'true' || 
+                 Boolean(process.env.AIRA_POSTGRES_CERTIFICATION);
+  const allowDestructiveRollback = process.env.AIRA_ALLOW_DESTRUCTIVE_ROLLBACK === 'true';
+
+  if (!isTest && !allowDestructiveRollback) {
+    const hasTasks = await knex.schema.hasTable('autonomous_agent_tasks');
+    if (hasTasks) {
+      const taskCountResult = await knex('autonomous_agent_tasks').count('* as count').first();
+      const taskCount = Number(taskCountResult?.count || 0);
+      if (taskCount > 0) {
+        throw new Error(
+          `[MIGRATION SAFETY BARRIER] Aborting rollback of migration 031: Table "autonomous_agent_tasks" contains ${taskCount} user record(s). ` +
+          `Dropping tables in an active environment will cause catastrophic data loss. ` +
+          `Use a non-destructive forward migration instead, or set AIRA_ALLOW_DESTRUCTIVE_ROLLBACK=true to force.`
+        );
+      }
+    }
+  }
+
   await knex.schema.dropTableIfExists('durable_browser_sessions');
   await knex.schema.dropTableIfExists('autonomous_agent_tasks');
 }

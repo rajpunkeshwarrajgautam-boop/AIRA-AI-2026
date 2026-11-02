@@ -134,6 +134,48 @@ export class AutonomousAgentEngine extends EventEmitter {
     return (await this.repository.getTask(taskId))!;
   }
 
+  public async executeAutonomousTask(taskId: string, signal?: AbortSignal): Promise<AutonomousAgentTask> {
+    const task = await this.repository.getTask(taskId);
+    if (!task) throw new Error(`Task "${taskId}" not found.`);
+
+    const abortController = new AbortController();
+    if (signal) {
+      signal.addEventListener('abort', () => abortController.abort(), { once: true });
+    }
+    this.activeExecutions.set(taskId, abortController);
+
+    try {
+      // Advance to RUNNING from CREATED, PLANNING, READY, or RESUMING
+      if (task.state === 'CREATED') {
+        await this.transitionState(taskId, 'PLANNING', 'Decomposing natural language objective into structured plan');
+        const current = await this.repository.getTask(taskId);
+        if (current && (!current.plan || current.plan.steps.length === 0)) {
+          current.plan = await this.decomposeObjective(current);
+          await this.repository.updateTask(current);
+        }
+        this.emit('task.plan_ready', { taskId, plan: (await this.repository.getTask(taskId))?.plan });
+        await this.transitionState(taskId, 'READY', 'Plan compiled; ready for execution');
+        await this.transitionState(taskId, 'RUNNING', 'Beginning autonomous execution of plan steps');
+      } else if (task.state === 'PLANNING') {
+        if (!task.plan || task.plan.steps.length === 0) {
+          task.plan = await this.decomposeObjective(task);
+          await this.repository.updateTask(task);
+        }
+        await this.transitionState(taskId, 'READY', 'Plan compiled; ready for execution');
+        await this.transitionState(taskId, 'RUNNING', 'Beginning autonomous execution of plan steps');
+      } else if (task.state === 'READY') {
+        await this.transitionState(taskId, 'RUNNING', 'Beginning autonomous execution of plan steps');
+      } else if (task.state === 'RESUMING') {
+        await this.transitionState(taskId, 'RUNNING', 'Resuming autonomous execution after recovery');
+      }
+
+      await this.executeLoop(taskId, abortController.signal);
+      return (await this.repository.getTask(taskId))!;
+    } finally {
+      this.activeExecutions.delete(taskId);
+    }
+  }
+
   private async decomposeObjective(task: AutonomousAgentTask): Promise<AgentObjectivePlan> {
     const runId = `run_plan_${task.taskId}`;
     const planner = this.specialistRegistry.getSpecialist('planner');

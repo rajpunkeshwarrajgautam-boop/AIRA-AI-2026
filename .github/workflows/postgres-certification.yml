@@ -360,6 +360,9 @@ jobs:
           mark_stage 'run autonomous agent adversarial and fault-injection certification'
           docker exec --env AIRA_POSTGRES_CERTIFICATION=1 --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
             "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/autonomous-adversarial-scenarios.test.ts
+          mark_stage 'run autonomous API worker dual-queue and durable persistence integration certification'
+          docker exec --env AIRA_POSTGRES_CERTIFICATION=1 --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/autonomous-api-worker-integration.test.ts
           mark_stage 'run destructive authenticated API integration on disposable PostgreSQL'
           docker exec --env AIRA_PERSISTENT_WORKSPACE_AUTHORITY=true \
             --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \

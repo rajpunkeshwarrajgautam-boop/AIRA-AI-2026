@@ -1034,35 +1034,57 @@ app.post('/api/browser/action', async (req: Request, res: Response) => {
 // Autonomous Agent Task Lifecycle
 // -----------------------------------------------------------------------
 app.post('/api/agent/autonomous/tasks', async (req: Request, res: Response) => {
-  const { objective, plan } = req.body || {};
+  const { objective, plan, idempotencyKey } = req.body || {};
+  const effectiveIdempotencyKey = idempotencyKey || (req.headers['idempotency-key'] as string | undefined);
   if (!objective || typeof objective !== 'string') {
     return res.status(400).json({ error: 'objective is required' });
   }
   try {
     const engine = agentRuntime.getAutonomousEngine();
-    const task = await engine.createTask(objective, req.principal!, plan);
-    const started = await engine.startTask(task.taskId);
-    res.json({ task: started });
+    const task = await engine.createTask(objective, req.principal!, plan, effectiveIdempotencyKey);
+    const startImmediate = req.query.start !== 'false' && process.env.AIRA_AUTONOMOUS_QUEUE_ONLY !== 'true';
+    if (startImmediate) {
+      const started = await engine.startTask(task.taskId);
+      return res.json({ task: started });
+    }
+    res.json({ task });
   } catch (err: any) {
+    if (err?.code === 'PERSISTENCE_UNAVAILABLE' || err?.name === 'AutonomousPersistenceUnavailableError') {
+      return res.status(503).json({ error: 'PERSISTENCE_UNAVAILABLE', message: err.message });
+    }
     res.status(500).json({ error: err.message });
   }
 });
 
 app.get('/api/agent/autonomous/tasks', async (req: Request, res: Response) => {
-  const engine = agentRuntime.getAutonomousEngine();
-  const tasks = await engine.getRepository().listTasksByPrincipal(req.principal!.userId);
-  res.json({ tasks });
+  try {
+    const engine = agentRuntime.getAutonomousEngine();
+    const tasks = await engine.getRepository().listTasksByPrincipal(req.principal!.userId);
+    res.json({ tasks });
+  } catch (err: any) {
+    if (err?.code === 'PERSISTENCE_UNAVAILABLE' || err?.name === 'AutonomousPersistenceUnavailableError') {
+      return res.status(503).json({ error: 'PERSISTENCE_UNAVAILABLE', message: err.message });
+    }
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/agent/autonomous/tasks/:id', async (req: Request, res: Response) => {
   const id = getParam(req.params.id);
-  const engine = agentRuntime.getAutonomousEngine();
-  const task = await engine.getTask(id);
-  if (!task) return res.status(404).json({ error: 'Task not found' });
-  if (task.principal.userId !== req.principal!.userId && req.principal!.roles?.indexOf('admin') === -1) {
-    return res.status(403).json({ error: 'Forbidden: task belongs to another principal' });
+  try {
+    const engine = agentRuntime.getAutonomousEngine();
+    const task = await engine.getTask(id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (task.principal.userId !== req.principal!.userId && req.principal!.roles?.indexOf('admin') === -1) {
+      return res.status(403).json({ error: 'Forbidden: task belongs to another principal' });
+    }
+    res.json({ task });
+  } catch (err: any) {
+    if (err?.code === 'PERSISTENCE_UNAVAILABLE' || err?.name === 'AutonomousPersistenceUnavailableError') {
+      return res.status(503).json({ error: 'PERSISTENCE_UNAVAILABLE', message: err.message });
+    }
+    res.status(500).json({ error: err.message });
   }
-  res.json({ task });
 });
 
 app.post('/api/agent/autonomous/tasks/:id/pause', async (req: Request, res: Response) => {

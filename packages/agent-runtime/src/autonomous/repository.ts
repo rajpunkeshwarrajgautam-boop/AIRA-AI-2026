@@ -30,6 +30,7 @@ export interface IAutonomousTaskRepository {
   claimTask?(taskId: string, workerId: string, leaseDurationMs: number): Promise<AutonomousTaskClaimResult>;
   renewLease?(taskId: string, workerId: string, leaseDurationMs: number, fencingToken: number): Promise<boolean>;
   findRecoverableTasks?(now: number, limit?: number): Promise<AutonomousAgentTask[]>;
+  findClaimableTasks?(now: number, limit?: number): Promise<AutonomousAgentTask[]>;
   deleteTask?(taskId: string): Promise<void>;
 }
 
@@ -207,6 +208,18 @@ export class InMemoryAutonomousTaskRepository implements IAutonomousTaskReposito
       }
     }
     return recoverable.slice(0, limit);
+  }
+
+  async findClaimableTasks(now: number, limit = 10): Promise<AutonomousAgentTask[]> {
+    const claimable: AutonomousAgentTask[] = [];
+    for (const t of this.tasks.values()) {
+      const isClaimableState = ['CREATED', 'READY', 'RUNNING', 'RESUMING', 'PLANNING'].includes(t.state);
+      const isLeaseExpiredOrUnowned = !t.leaseOwner || !t.leaseExpiresAt || t.leaseExpiresAt < now;
+      if (isClaimableState && isLeaseExpiredOrUnowned) {
+        claimable.push(JSON.parse(JSON.stringify(t)));
+      }
+    }
+    return claimable.sort((a, b) => a.createdAt - b.createdAt).slice(0, limit);
   }
 }
 
@@ -611,6 +624,25 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
     }
   }
 
+  async findClaimableTasks(now: number, limit = 10): Promise<AutonomousAgentTask[]> {
+    try {
+      const rows = await this.knexClient('autonomous_agent_tasks')
+        .whereIn('state', ['CREATED', 'READY', 'RUNNING', 'RESUMING', 'PLANNING'])
+        .andWhere((qb: any) => {
+          qb.whereNull('lease_owner')
+            .orWhere('lease_expires_at', '<', now);
+        })
+        .orderBy('created_at', 'asc')
+        .limit(limit);
+      return rows.map((r: any) => this.rowToTask(r));
+    } catch (err: any) {
+      if (isDatabaseUnavailable(err)) {
+        throw new AutonomousPersistenceUnavailableError('findClaimableTasks', err);
+      }
+      throw err;
+    }
+  }
+
   async deleteTask(taskId: string): Promise<void> {
     try {
       await this.knexClient('autonomous_agent_tasks').where({ task_id: taskId }).delete();
@@ -620,5 +652,59 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
       }
       throw err;
     }
+  }
+}
+
+// ==========================================
+// FAIL-CLOSED AUTONOMOUS TASK REPOSITORY
+// ==========================================
+
+export class FailClosedAutonomousTaskRepository implements IAutonomousTaskRepository {
+  constructor(public readonly reason = 'Durable database persistence is unconfigured in this deployed environment.') {}
+
+  async createTask(_task: AutonomousAgentTask): Promise<AutonomousAgentTask> {
+    throw new AutonomousPersistenceUnavailableError('createTask', new Error(this.reason));
+  }
+  async getTask(_taskId: string): Promise<AutonomousAgentTask | null> {
+    throw new AutonomousPersistenceUnavailableError('getTask', new Error(this.reason));
+  }
+  async getTaskByIdempotencyKey?(_principalId: string, _idempotencyKey: string): Promise<AutonomousAgentTask | null> {
+    throw new AutonomousPersistenceUnavailableError('getTaskByIdempotencyKey', new Error(this.reason));
+  }
+  async listTasksByPrincipal(_principalId: string, _limit?: number): Promise<AutonomousAgentTask[]> {
+    throw new AutonomousPersistenceUnavailableError('listTasksByPrincipal', new Error(this.reason));
+  }
+  async updateTask(_task: AutonomousAgentTask): Promise<AutonomousAgentTask> {
+    throw new AutonomousPersistenceUnavailableError('updateTask', new Error(this.reason));
+  }
+  async updateState(
+    _taskId: string,
+    _newState: AutonomousTaskState,
+    _reason?: string,
+    _checkpoint?: string,
+    _expectedFencingToken?: number
+  ): Promise<AutonomousAgentTask> {
+    throw new AutonomousPersistenceUnavailableError('updateState', new Error(this.reason));
+  }
+  async addObservation(_taskId: string, _observation: AgentObservation): Promise<void> {
+    throw new AutonomousPersistenceUnavailableError('addObservation', new Error(this.reason));
+  }
+  async addArtifact(_taskId: string, _artifact: AutonomousAgentTask['artifacts'][0]): Promise<void> {
+    throw new AutonomousPersistenceUnavailableError('addArtifact', new Error(this.reason));
+  }
+  async claimTask?(_taskId: string, _workerId: string, _leaseDurationMs: number): Promise<AutonomousTaskClaimResult> {
+    throw new AutonomousPersistenceUnavailableError('claimTask', new Error(this.reason));
+  }
+  async renewLease?(_taskId: string, _workerId: string, _leaseDurationMs: number, _fencingToken: number): Promise<boolean> {
+    throw new AutonomousPersistenceUnavailableError('renewLease', new Error(this.reason));
+  }
+  async findRecoverableTasks?(_now: number, _limit?: number): Promise<AutonomousAgentTask[]> {
+    throw new AutonomousPersistenceUnavailableError('findRecoverableTasks', new Error(this.reason));
+  }
+  async findClaimableTasks?(_now: number, _limit?: number): Promise<AutonomousAgentTask[]> {
+    throw new AutonomousPersistenceUnavailableError('findClaimableTasks', new Error(this.reason));
+  }
+  async deleteTask?(_taskId: string): Promise<void> {
+    throw new AutonomousPersistenceUnavailableError('deleteTask', new Error(this.reason));
   }
 }

@@ -60,6 +60,9 @@ import {
 import {
   AutonomousAgentEngine,
   InMemoryAutonomousTaskRepository,
+  PostgresAutonomousTaskRepository,
+  FailClosedAutonomousTaskRepository,
+  AutonomousWorkerHost,
   type IAutonomousTaskRepository
 } from './autonomous/index.js';
 import {
@@ -156,6 +159,7 @@ export class AgentRuntime extends EventEmitter {
   private specialistWorkerRuntime: SpecialistWorkerRuntime;
   private durableCoordinator: DurableExecutionCoordinator;
   private workspaceAuthority: WorkspaceAuthorityRepository;
+  private autonomousTaskRepo: IAutonomousTaskRepository;
   private autonomousEngine: AutonomousAgentEngine;
 
   constructor(
@@ -178,7 +182,8 @@ export class AgentRuntime extends EventEmitter {
     specialistRegistry?: SpecialistRegistry,
     specialistTaskRepo?: SpecialistTaskRepository,
     durableCoordinator?: DurableExecutionCoordinator,
-    workspaceAuthorityRepository?: WorkspaceAuthorityRepository
+    workspaceAuthorityRepository?: WorkspaceAuthorityRepository,
+    autonomousTaskRepo?: IAutonomousTaskRepository
   ) {
     super();
     const isDbConfigured = Boolean(process.env.DATABASE_URL?.trim());
@@ -222,7 +227,28 @@ export class AgentRuntime extends EventEmitter {
     this.specialistRegistry.registerSpecialist(new VerificationSpecialistAgent(), 'IMPLEMENTED_LOCALLY');
     this.specialistRegistry.registerSpecialist(new SynthesizerSpecialistAgent(), 'IMPLEMENTED_LOCALLY');
 
+    const isDeployedEnv = process.env.NODE_ENV === 'production' || 
+                          process.env.VERCEL_ENV === 'production' || 
+                          process.env.VERCEL_ENV === 'staging' || 
+                          process.env.VERCEL_ENV === 'preview' ||
+                          Boolean(process.env.VERCEL);
+
+    let resolvedAutoTaskRepo: IAutonomousTaskRepository;
+    if (autonomousTaskRepo) {
+      resolvedAutoTaskRepo = autonomousTaskRepo;
+    } else if (isDbConfigured) {
+      resolvedAutoTaskRepo = new PostgresAutonomousTaskRepository();
+    } else if (isDeployedEnv) {
+      resolvedAutoTaskRepo = new FailClosedAutonomousTaskRepository(
+        'Durable database persistence is unconfigured in this deployed environment. Autonomous agent tasks require durable PostgreSQL persistence.'
+      );
+    } else {
+      resolvedAutoTaskRepo = new InMemoryAutonomousTaskRepository();
+    }
+
+    this.autonomousTaskRepo = resolvedAutoTaskRepo;
     this.autonomousEngine = new AutonomousAgentEngine({
+      repository: resolvedAutoTaskRepo,
       specialistRegistry: this.specialistRegistry,
       toolGateway: this.toolGateway,
       approvalKernel: this.approvalKernel,
@@ -282,6 +308,10 @@ export class AgentRuntime extends EventEmitter {
 
   public getAutonomousEngine(): AutonomousAgentEngine {
     return this.autonomousEngine;
+  }
+
+  public getAutonomousTaskRepository(): IAutonomousTaskRepository {
+    return this.autonomousTaskRepo;
   }
 
   public getSpecialistTaskRepository(): SpecialistTaskRepository {

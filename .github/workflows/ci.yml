@@ -109,6 +109,7 @@ jobs:
           test/brainv2-durable-memory-lifecycle.test.ts
           test/application-ui-integration.test.ts
           test/artifact-sandbox-containment.test.ts
+          test/autonomous-api-worker-integration.test.ts
       - name: Post-merge runtime and type safety regression
         run: npm run test:pr118:regression
 
