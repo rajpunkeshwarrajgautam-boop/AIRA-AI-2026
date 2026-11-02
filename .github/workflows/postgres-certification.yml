@@ -354,6 +354,9 @@ jobs:
           mark_stage 'run PostgreSQL approval resumption outbox and workspace authority certification'
           docker exec --env AIRA_POSTGRES_CERTIFICATION=1 --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
             "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/approval-resumption-outbox-postgres.test.ts
+          mark_stage 'run autonomous agent task and durable browser session PostgreSQL certification'
+          docker exec --env AIRA_POSTGRES_CERTIFICATION=1 --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/autonomous-task-postgres-certification.test.ts
           mark_stage 'run destructive authenticated API integration on disposable PostgreSQL'
           docker exec --env AIRA_PERSISTENT_WORKSPACE_AUTHORITY=true \
             --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \

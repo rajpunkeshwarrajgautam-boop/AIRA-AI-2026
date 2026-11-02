@@ -80,99 +80,153 @@ export class InMemoryBrowserSessionStorage implements IBrowserSessionStorage {
   }
 }
 
+export class BrowserPersistenceUnavailableError extends Error {
+  readonly code = 'PERSISTENCE_UNAVAILABLE';
+  constructor(operation: string, originalError?: unknown) {
+    const detail = originalError instanceof Error ? originalError.message : String(originalError || 'unknown');
+    super(`BROWSER_PERSISTENCE_UNAVAILABLE: Database storage is unreachable during "${operation}" (${detail}). Cannot execute durable browser operation without durable persistence.`);
+    this.name = 'BrowserPersistenceUnavailableError';
+    if (originalError) this.cause = originalError;
+  }
+}
+
 export class PostgresBrowserSessionStorage implements IBrowserSessionStorage {
-  private fallback = new InMemoryBrowserSessionStorage();
+  private knexClient: any;
+
+  constructor(knexOverride?: any) {
+    this.knexClient = knexOverride || db;
+  }
+
+  private isDbUnavailable(err: any): boolean {
+    if (!err) return false;
+    const msg = err.message || '';
+    const code = err.code || '';
+    return (
+      code === 'ECONNREFUSED' ||
+      code === 'ENOTFOUND' ||
+      code === 'ETIMEDOUT' ||
+      code === 'PERSISTENCE_UNAVAILABLE' ||
+      msg.includes('ECONNREFUSED') ||
+      msg.includes('connect ECONNREFUSED') ||
+      msg.includes('Connection terminated') ||
+      msg.includes('Connection pool') ||
+      msg.includes('Knex: Timeout') ||
+      msg.includes('does not exist') ||
+      (Array.isArray(err.errors) && err.errors.some((e: any) => e.code === 'ECONNREFUSED' || e.message?.includes('ECONNREFUSED')))
+    );
+  }
 
   async saveSession(session: StoredBrowserSessionEnvelope): Promise<void> {
     try {
-      const hasTable = await db.schema.hasTable('durable_browser_sessions');
-      if (hasTable) {
-        await db('durable_browser_sessions')
-          .insert({
-            session_key: session.sessionKey,
-            principal_id: session.principalId,
-            workspace_id: session.workspaceId || null,
-            session_id: session.sessionId,
-            encrypted_envelope: session.encryptedEnvelope,
-            expires_at: session.expiresAt,
-            created_at: session.createdAt,
-            updated_at: session.updatedAt
-          })
-          .onConflict('session_key')
-          .merge();
-        return;
+      const hasTable = await this.knexClient.schema.hasTable('durable_browser_sessions');
+      if (!hasTable) {
+        throw new Error('Table "durable_browser_sessions" does not exist in schema.');
       }
-    } catch {}
-    await this.fallback.saveSession(session);
+      await this.knexClient('durable_browser_sessions')
+        .insert({
+          session_key: session.sessionKey,
+          principal_id: session.principalId,
+          workspace_id: session.workspaceId || null,
+          session_id: session.sessionId,
+          encrypted_envelope: session.encryptedEnvelope,
+          expires_at: session.expiresAt,
+          created_at: session.createdAt,
+          updated_at: session.updatedAt
+        })
+        .onConflict('session_key')
+        .merge();
+    } catch (err: any) {
+      if (this.isDbUnavailable(err)) {
+        throw new BrowserPersistenceUnavailableError('saveSession', err);
+      }
+      throw err;
+    }
   }
 
   async getSession(sessionKey: string): Promise<StoredBrowserSessionEnvelope | null> {
     try {
-      const hasTable = await db.schema.hasTable('durable_browser_sessions');
-      if (hasTable) {
-        const row = await db('durable_browser_sessions').where({ session_key: sessionKey }).first();
-        if (row) {
-          return {
-            sessionKey: row.session_key,
-            principalId: row.principal_id,
-            workspaceId: row.workspace_id || undefined,
-            sessionId: row.session_id,
-            encryptedEnvelope: row.encrypted_envelope,
-            expiresAt: Number(row.expires_at),
-            createdAt: Number(row.created_at),
-            updatedAt: Number(row.updated_at)
-          };
-        }
+      const hasTable = await this.knexClient.schema.hasTable('durable_browser_sessions');
+      if (!hasTable) {
+        throw new Error('Table "durable_browser_sessions" does not exist in schema.');
       }
-    } catch {}
-    return this.fallback.getSession(sessionKey);
+      const row = await this.knexClient('durable_browser_sessions').where({ session_key: sessionKey }).first();
+      if (!row) return null;
+      return {
+        sessionKey: row.session_key,
+        principalId: row.principal_id,
+        workspaceId: row.workspace_id || undefined,
+        sessionId: row.session_id,
+        encryptedEnvelope: row.encrypted_envelope,
+        expiresAt: Number(row.expires_at),
+        createdAt: Number(row.created_at),
+        updatedAt: Number(row.updated_at)
+      };
+    } catch (err: any) {
+      if (this.isDbUnavailable(err)) {
+        throw new BrowserPersistenceUnavailableError('getSession', err);
+      }
+      throw err;
+    }
   }
 
   async deleteSession(sessionKey: string): Promise<void> {
     try {
-      const hasTable = await db.schema.hasTable('durable_browser_sessions');
-      if (hasTable) {
-        await db('durable_browser_sessions').where({ session_key: sessionKey }).delete();
+      const hasTable = await this.knexClient.schema.hasTable('durable_browser_sessions');
+      if (!hasTable) {
+        throw new Error('Table "durable_browser_sessions" does not exist in schema.');
       }
-    } catch {}
-    await this.fallback.deleteSession(sessionKey);
+      await this.knexClient('durable_browser_sessions').where({ session_key: sessionKey }).delete();
+    } catch (err: any) {
+      if (this.isDbUnavailable(err)) {
+        throw new BrowserPersistenceUnavailableError('deleteSession', err);
+      }
+      throw err;
+    }
   }
 
   async listSessions(principalId: string, workspaceId?: string): Promise<StoredBrowserSessionEnvelope[]> {
     try {
-      const hasTable = await db.schema.hasTable('durable_browser_sessions');
-      if (hasTable) {
-        let q = db('durable_browser_sessions').where({ principal_id: principalId });
-        if (workspaceId) q = q.andWhere({ workspace_id: workspaceId });
-        const rows = await q.select('*');
-        if (rows.length > 0) {
-          return rows.map((row: any) => ({
-            sessionKey: row.session_key,
-            principalId: row.principal_id,
-            workspaceId: row.workspace_id || undefined,
-            sessionId: row.session_id,
-            encryptedEnvelope: row.encrypted_envelope,
-            expiresAt: Number(row.expires_at),
-            createdAt: Number(row.created_at),
-            updatedAt: Number(row.updated_at)
-          }));
-        }
+      const hasTable = await this.knexClient.schema.hasTable('durable_browser_sessions');
+      if (!hasTable) {
+        throw new Error('Table "durable_browser_sessions" does not exist in schema.');
       }
-    } catch {}
-    return this.fallback.listSessions(principalId, workspaceId);
+      let q = this.knexClient('durable_browser_sessions').where({ principal_id: principalId });
+      if (workspaceId) q = q.andWhere({ workspace_id: workspaceId });
+      const rows = await q.select('*');
+      return rows.map((row: any) => ({
+        sessionKey: row.session_key,
+        principalId: row.principal_id,
+        workspaceId: row.workspace_id || undefined,
+        sessionId: row.session_id,
+        encryptedEnvelope: row.encrypted_envelope,
+        expiresAt: Number(row.expires_at),
+        createdAt: Number(row.created_at),
+        updatedAt: Number(row.updated_at)
+      }));
+    } catch (err: any) {
+      if (this.isDbUnavailable(err)) {
+        throw new BrowserPersistenceUnavailableError('listSessions', err);
+      }
+      throw err;
+    }
   }
 
   async purgeExpired(): Promise<number> {
     try {
-      const hasTable = await db.schema.hasTable('durable_browser_sessions');
-      if (hasTable) {
-        const deleted = await db('durable_browser_sessions')
-          .where('expires_at', '<', Date.now())
-          .delete();
-        return Number(deleted) || 0;
+      const hasTable = await this.knexClient.schema.hasTable('durable_browser_sessions');
+      if (!hasTable) {
+        throw new Error('Table "durable_browser_sessions" does not exist in schema.');
       }
-    } catch {}
-    return this.fallback.purgeExpired();
+      const deleted = await this.knexClient('durable_browser_sessions')
+        .where('expires_at', '<', Date.now())
+        .delete();
+      return Number(deleted) || 0;
+    } catch (err: any) {
+      if (this.isDbUnavailable(err)) {
+        throw new BrowserPersistenceUnavailableError('purgeExpired', err);
+      }
+      throw err;
+    }
   }
 }
 

@@ -4,7 +4,9 @@ import crypto from 'node:crypto';
 import {
   BrowserAdapter,
   PersistedBrowserSessionState,
-  InMemoryBrowserSessionStorage
+  InMemoryBrowserSessionStorage,
+  PostgresBrowserSessionStorage,
+  BrowserPersistenceUnavailableError
 } from '../packages/tool-runtime/src/adapters/browser-adapter.js';
 import type { ExecutionPrincipal } from '../packages/contracts/src/index.js';
 
@@ -23,7 +25,8 @@ test('Mission C — Browser Persistence, Tenant Isolation, and Recovery Across W
     scopes: ['browser.read', 'browser.write']
   };
 
-  let adapter1 = new BrowserAdapter();
+  const testStorage = new InMemoryBrowserSessionStorage();
+  let adapter1 = new BrowserAdapter({}, testStorage);
 
   await t.test('1. Session Creation, Navigation, and State Export', async () => {
     // Navigate to public page
@@ -99,7 +102,7 @@ test('Mission C — Browser Persistence, Tenant Isolation, and Recovery Across W
   });
 
   await t.test('3. Cross-Tenant Session Hijacking Rejection', async () => {
-    const adapter = new BrowserAdapter();
+    const adapter = new BrowserAdapter({}, testStorage);
 
     const stateA: PersistedBrowserSessionState = {
       sessionKey: `${principalA.userId}:${principalA.sessionId}`,
@@ -124,7 +127,7 @@ test('Mission C — Browser Persistence, Tenant Isolation, and Recovery Across W
   });
 
   await t.test('4. Full DOM Interactions, Scroll, Wait, and Screenshot Bounds', async () => {
-    const adapter = new BrowserAdapter();
+    const adapter = new BrowserAdapter({}, testStorage);
 
     try {
       // Navigation
@@ -159,7 +162,7 @@ test('Mission C — Browser Persistence, Tenant Isolation, and Recovery Across W
   });
 
   await t.test('5. Workspace and Session Key Ownership Boundaries', async () => {
-    const adapter = new BrowserAdapter();
+    const adapter = new BrowserAdapter({}, testStorage);
 
     const stateWorkspaceMismatch: PersistedBrowserSessionState = {
       sessionKey: `${principalA.userId}:${principalA.sessionId}`,
@@ -201,7 +204,7 @@ test('Mission C — Browser Persistence, Tenant Isolation, and Recovery Across W
   });
 
   await t.test('6. AES-256-GCM Session Snapshot Encryption & Redacted Cookie Masking', async () => {
-    const adapter = new BrowserAdapter();
+    const adapter = new BrowserAdapter({}, testStorage);
 
     try {
       await adapter.navigate(principalA, 'https://example.com');
@@ -375,5 +378,113 @@ test('Mission C — Browser Persistence, Tenant Isolation, and Recovery Across W
 
     await expiredWorker.shutdown();
     await worker2.shutdown();
+  });
+
+  await t.test('8. Fail-Closed Security on PostgresBrowserSessionStorage Outage (Zero Silent Memory Downgrading)', async () => {
+    // Construct a failing knex mock that simulates database unreachable / connection failure
+    const failingDbMock: any = {
+      schema: {
+        hasTable: async () => {
+          const err: any = new Error('connect ECONNREFUSED 127.0.0.1:5432');
+          err.code = 'ECONNREFUSED';
+          throw err;
+        }
+      }
+    };
+
+    const failingStorage = new PostgresBrowserSessionStorage(failingDbMock);
+
+    // 8a. saveSession must reject with BrowserPersistenceUnavailableError
+    await assert.rejects(
+      async () => {
+        await failingStorage.saveSession({
+          sessionKey: 'test:key',
+          principalId: 'test',
+          sessionId: 'key',
+          encryptedEnvelope: '{}',
+          expiresAt: Date.now() + 10000,
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        });
+      },
+      (err: any) => {
+        assert.ok(err instanceof BrowserPersistenceUnavailableError);
+        assert.equal(err.code, 'PERSISTENCE_UNAVAILABLE');
+        assert.ok(err.message.includes('saveSession'));
+        return true;
+      },
+      'saveSession must reject with BrowserPersistenceUnavailableError on outage'
+    );
+
+    // 8b. getSession must reject with BrowserPersistenceUnavailableError
+    await assert.rejects(
+      async () => {
+        await failingStorage.getSession('test:key');
+      },
+      (err: any) => {
+        assert.ok(err instanceof BrowserPersistenceUnavailableError);
+        assert.equal(err.code, 'PERSISTENCE_UNAVAILABLE');
+        assert.ok(err.message.includes('getSession'));
+        return true;
+      },
+      'getSession must reject with BrowserPersistenceUnavailableError on outage'
+    );
+
+    // 8c. deleteSession must reject with BrowserPersistenceUnavailableError
+    await assert.rejects(
+      async () => {
+        await failingStorage.deleteSession('test:key');
+      },
+      (err: any) => {
+        assert.ok(err instanceof BrowserPersistenceUnavailableError);
+        assert.equal(err.code, 'PERSISTENCE_UNAVAILABLE');
+        assert.ok(err.message.includes('deleteSession'));
+        return true;
+      },
+      'deleteSession must reject with BrowserPersistenceUnavailableError on outage'
+    );
+
+    // 8d. listSessions must reject with BrowserPersistenceUnavailableError
+    await assert.rejects(
+      async () => {
+        await failingStorage.listSessions('test');
+      },
+      (err: any) => {
+        assert.ok(err instanceof BrowserPersistenceUnavailableError);
+        assert.equal(err.code, 'PERSISTENCE_UNAVAILABLE');
+        assert.ok(err.message.includes('listSessions'));
+        return true;
+      },
+      'listSessions must reject with BrowserPersistenceUnavailableError on outage'
+    );
+
+    // 8e. purgeExpired must reject with BrowserPersistenceUnavailableError
+    await assert.rejects(
+      async () => {
+        await failingStorage.purgeExpired();
+      },
+      (err: any) => {
+        assert.ok(err instanceof BrowserPersistenceUnavailableError);
+        assert.equal(err.code, 'PERSISTENCE_UNAVAILABLE');
+        assert.ok(err.message.includes('purgeExpired'));
+        return true;
+      },
+      'purgeExpired must reject with BrowserPersistenceUnavailableError on outage'
+    );
+
+    // 8f. Session closure must not falsely report successful durable deletion when DB is unavailable
+    const adapterWithFailingStorage = new BrowserAdapter({}, failingStorage);
+    await assert.rejects(
+      async () => {
+        await adapterWithFailingStorage.closeSession(principalA, { deleteDurable: true });
+      },
+      (err: any) => {
+        assert.ok(err instanceof BrowserPersistenceUnavailableError);
+        assert.equal(err.code, 'PERSISTENCE_UNAVAILABLE');
+        assert.ok(err.message.includes('deleteSession'));
+        return true;
+      },
+      'closeSession({ deleteDurable: true }) must throw persistence error and not falsely report success'
+    );
   });
 });

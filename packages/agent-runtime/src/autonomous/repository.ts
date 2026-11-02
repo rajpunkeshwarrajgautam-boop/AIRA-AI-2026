@@ -30,6 +30,7 @@ export interface IAutonomousTaskRepository {
   claimTask?(taskId: string, workerId: string, leaseDurationMs: number): Promise<AutonomousTaskClaimResult>;
   renewLease?(taskId: string, workerId: string, leaseDurationMs: number, fencingToken: number): Promise<boolean>;
   findRecoverableTasks?(now: number, limit?: number): Promise<AutonomousAgentTask[]>;
+  deleteTask?(taskId: string): Promise<void>;
 }
 
 export class InMemoryAutonomousTaskRepository implements IAutonomousTaskRepository {
@@ -42,8 +43,13 @@ export class InMemoryAutonomousTaskRepository implements IAutonomousTaskReposito
     }
     const clone: AutonomousAgentTask = JSON.parse(JSON.stringify(task));
     clone.fencingToken = clone.fencingToken ?? 0;
+    clone.workingMemory = clone.workingMemory ?? {};
     this.tasks.set(task.taskId, clone);
     return clone;
+  }
+
+  async deleteTask(taskId: string): Promise<void> {
+    this.tasks.delete(taskId);
   }
 
   async getTask(taskId: string): Promise<AutonomousAgentTask | null> {
@@ -296,6 +302,7 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
         dag: task.dag ? JSON.stringify(task.dag) : null,
         observations: JSON.stringify(task.observations || []),
         artifacts: JSON.stringify(task.artifacts || []),
+        working_memory: JSON.stringify(task.workingMemory || {}),
         execution_history: JSON.stringify(task.executionHistory || []),
         deliverable_summary: task.deliverableSummary || null,
         error: task.error || null,
@@ -312,6 +319,17 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
       await db('autonomous_agent_tasks').insert(row);
       return task;
     } catch (err: any) {
+      if (
+        err.code === '23505' ||
+        err.message?.includes('unique constraint') ||
+        err.message?.includes('duplicate key') ||
+        err.message?.includes('uq_auto_tasks_idempotency')
+      ) {
+        if (task.idempotencyKey) {
+          const existing = await this.getTaskByIdempotencyKey(task.principal.userId, task.idempotencyKey);
+          if (existing) return existing;
+        }
+      }
       if (isDatabaseUnavailable(err)) {
         throw new AutonomousPersistenceUnavailableError('createTask', err);
       }
@@ -552,6 +570,17 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
     } catch (err: any) {
       if (isDatabaseUnavailable(err)) {
         throw new AutonomousPersistenceUnavailableError('findRecoverableTasks', err);
+      }
+      throw err;
+    }
+  }
+
+  async deleteTask(taskId: string): Promise<void> {
+    try {
+      await db('autonomous_agent_tasks').where({ task_id: taskId }).delete();
+    } catch (err: any) {
+      if (isDatabaseUnavailable(err)) {
+        throw new AutonomousPersistenceUnavailableError('deleteTask', err);
       }
       throw err;
     }

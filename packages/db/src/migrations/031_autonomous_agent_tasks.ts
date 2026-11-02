@@ -28,6 +28,7 @@ export async function up(knex: Knex): Promise<void> {
       table.jsonb('dag');
       table.jsonb('observations').notNullable().defaultTo('[]');
       table.jsonb('artifacts').notNullable().defaultTo('[]');
+      table.jsonb('working_memory').notNullable().defaultTo('{}');
       table.jsonb('execution_history').notNullable().defaultTo('[]');
       table.text('deliverable_summary');
       table.text('error');
@@ -43,8 +44,15 @@ export async function up(knex: Knex): Promise<void> {
       table.index(['principal_id', 'created_at'], 'idx_auto_tasks_principal_created');
       table.index(['workspace_id', 'created_at'], 'idx_auto_tasks_workspace_created');
       table.index(['state', 'lease_expires_at'], 'idx_auto_tasks_state_lease');
-      table.index(['principal_id', 'idempotency_key'], 'idx_auto_tasks_idempotency');
+      table.unique(['principal_id', 'idempotency_key'], 'uq_auto_tasks_idempotency');
     });
+  } else {
+    const hasWorkingMemory = await knex.schema.hasColumn('autonomous_agent_tasks', 'working_memory');
+    if (!hasWorkingMemory) {
+      await knex.schema.alterTable('autonomous_agent_tasks', (table) => {
+        table.jsonb('working_memory').notNullable().defaultTo('{}');
+      });
+    }
   }
 
   const hasBrowserSessionsTable = await knex.schema.hasTable('durable_browser_sessions');
