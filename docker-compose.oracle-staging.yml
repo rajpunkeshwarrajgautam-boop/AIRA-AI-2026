@@ -1,0 +1,78 @@
+# ==============================================================================
+# AIRA AI 2026 — Oracle Cloud Always Free (Arm64 Ampere A1) Staging Worker
+# Target Shape: VM.Standard.A1.Flex (2-4 OCPU, 12-24 GB RAM, Ubuntu 22.04/24.04 aarch64)
+# ==============================================================================
+
+version: '3.8'
+
+services:
+  specialist-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+      platforms:
+        - "linux/arm64"
+    image: aira-specialist-worker:oracle-arm64
+    container_name: aira-specialist-worker-oracle-staging
+    restart: unless-stopped
+    user: "10001:10001"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    environment:
+      # Database: Staging Neon PostgreSQL connection string (ep-shiny-bird-b3xundyt)
+      - DATABASE_URL=${DATABASE_URL}
+      - NODE_ENV=production
+      - AIRA_ENV=staging
+      - AIRA_PRODUCTION_WORKER_ENABLED=false
+      - EXPECTED_NEON_PROJECT_ID=mute-frost-50372225
+      - EXPECTED_NEON_ENDPOINT_ID=ep-shiny-bird-b3xundyt
+      
+      # Worker Identity & Concurrency
+      - WORKER_ID=${WORKER_ID:-worker_oracle_ampere_1}
+      - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-2}
+      - POLL_INTERVAL_MS=500
+      - MAX_POLL_INTERVAL_MS=2000
+      - IDLE_BACKOFF_MULTIPLIER=1.5
+      - LEASE_DURATION_MS=15000
+      - HEARTBEAT_INTERVAL_MS=3000
+      
+      # Networking & Ports
+      - PORT=8080
+      - WORKER_BIND_HOST=0.0.0.0
+      
+      # Node.js Heap Cap & Engine Limits (Tailored for Oracle Ampere A1)
+      - NODE_OPTIONS=--max-old-space-size=1024
+      
+      # Browser & Sandbox Settings
+      - CHROMIUM_PATH=/usr/bin/chromium-browser
+      - PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+      - AIRA_REQUIRE_CONTAINER_SANDBOX=true
+      - AIRA_ALLOW_LOCAL_SANDBOX=false
+    ports:
+      # Bound to loopback interface ONLY — never expose unauthenticated worker port to 0.0.0.0
+      - "127.0.0.1:8080:8080"
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2048M
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+    tmpfs:
+      - /tmp:exec,mode=1777,size=256M

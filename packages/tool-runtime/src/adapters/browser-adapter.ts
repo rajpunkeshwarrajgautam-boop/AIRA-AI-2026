@@ -245,6 +245,20 @@ export function resolveBrowserExecutablePath(options?: BrowserAdapterOptions): s
   if (process.env.CHROMIUM_PATH && fsSync.existsSync(process.env.CHROMIUM_PATH)) {
     return process.env.CHROMIUM_PATH;
   }
+  if (process.platform === 'linux') {
+    const linuxCandidates = [
+      '/usr/bin/chromium-browser',
+      '/usr/bin/chromium',
+      '/usr/bin/google-chrome',
+      '/usr/bin/google-chrome-stable',
+      '/snap/bin/chromium'
+    ];
+    for (const c of linuxCandidates) {
+      if (fsSync.existsSync(c)) {
+        return c;
+      }
+    }
+  }
   if (process.platform === 'win32') {
     const candidates = [
       'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',

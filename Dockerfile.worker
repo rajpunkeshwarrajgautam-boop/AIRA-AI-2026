@@ -1,13 +1,14 @@
 # ==============================================================================
 # AIRA AI 2026 — Standalone Specialist Worker Runtime (Milestone 2A.1)
 # Production-representative minimal, hardened container image
+# Dual-Architecture: linux/amd64 and linux/arm64 (Oracle Cloud Ampere A1 ready)
 # ==============================================================================
 
 FROM node:22-alpine AS runner
 
-
-# 1. Install dumb-init for proper signal forwarding and curl for container health checks
-RUN apk add --no-cache dumb-init curl
+# 1. Install dumb-init for proper signal forwarding, curl for health checks,
+# and chromium + fonts for headless browser automation (multi-arch: x86_64 & aarch64)
+RUN apk add --no-cache dumb-init curl chromium font-noto
 
 # 2. Establish non-root operational security principal
 RUN addgroup -S -g 10001 aira && \
@@ -18,6 +19,8 @@ WORKDIR /app
 # 3. Environment configuration
 ENV NODE_ENV=production \
     PORT=8080 \
+    CHROMIUM_PATH=/usr/bin/chromium-browser \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
     WORKER_CONCURRENCY=2 \
     POLL_INTERVAL_MS=500 \
     MAX_POLL_INTERVAL_MS=2000 \

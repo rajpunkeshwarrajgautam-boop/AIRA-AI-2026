@@ -52,3 +52,5 @@ ruvector.db
 CLAUDE.md
 agentdb.rvf
 agentdb.rvf.idmap.json
+
+.agents/teamwork/
