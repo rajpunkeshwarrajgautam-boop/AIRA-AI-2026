@@ -164,10 +164,15 @@ test('Mission A3 — Autonomous Task & Browser Session Real PostgreSQL Database 
         'Stale worker fencing token must be rejected'
       );
 
-      // Transition to AWAITING_APPROVAL with approvalRequestId
-      const awaitingApproval = await taskRepo.updateState(taskId, 'AWAITING_APPROVAL', 'need user confirmation', 'chk_appr', 1);
-      assert.equal(awaitingApproval.state, 'AWAITING_APPROVAL');
-      assert.equal(awaitingApproval.fencingToken, 2);
+      // Transition to RUNNING with expectedFencingToken 1 -> token becomes 2
+      const running = await taskRepo.updateState(taskId, 'RUNNING', 'starting execution', 'chk_run', 1);
+      assert.equal(running.state, 'RUNNING');
+      assert.equal(running.fencingToken, 2);
+
+      // Transition from RUNNING to WAITING_FOR_APPROVAL with expectedFencingToken 2 -> token becomes 3
+      const waitingApproval = await taskRepo.updateState(taskId, 'WAITING_FOR_APPROVAL', 'need user confirmation', 'chk_appr', 2);
+      assert.equal(waitingApproval.state, 'WAITING_FOR_APPROVAL');
+      assert.equal(waitingApproval.fencingToken, 3);
     });
 
     await t.test('5. Exercise Task Lease Management and Crash Recovery', async () => {
