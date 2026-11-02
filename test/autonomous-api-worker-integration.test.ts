@@ -290,11 +290,13 @@ test('Mission B4 — Migration 031 Rollback Safety Barrier & Non-Destructive Gua
     const origEnv = process.env.NODE_ENV;
     const origTestEnv = process.env.AIRA_TEST_ENVIRONMENT;
     const origForce = process.env.AIRA_ALLOW_DESTRUCTIVE_ROLLBACK;
+    const origPgCert = process.env.AIRA_POSTGRES_CERTIFICATION;
 
     try {
       process.env.NODE_ENV = 'production';
       delete process.env.AIRA_TEST_ENVIRONMENT;
       delete process.env.AIRA_ALLOW_DESTRUCTIVE_ROLLBACK;
+      delete process.env.AIRA_POSTGRES_CERTIFICATION;
 
       await assert.rejects(
         () => migration031Down(mockKnexWithRecords),
@@ -311,6 +313,8 @@ test('Mission B4 — Migration 031 Rollback Safety Barrier & Non-Destructive Gua
       else delete process.env.AIRA_TEST_ENVIRONMENT;
       if (origForce !== undefined) process.env.AIRA_ALLOW_DESTRUCTIVE_ROLLBACK = origForce;
       else delete process.env.AIRA_ALLOW_DESTRUCTIVE_ROLLBACK;
+      if (origPgCert !== undefined) process.env.AIRA_POSTGRES_CERTIFICATION = origPgCert;
+      else delete process.env.AIRA_POSTGRES_CERTIFICATION;
     }
   });
 

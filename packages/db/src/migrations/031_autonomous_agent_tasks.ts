@@ -89,12 +89,10 @@ export async function up(knex: Knex): Promise<void> {
 }
 
 export async function down(knex: Knex): Promise<void> {
-  const isTest = process.env.NODE_ENV === 'test' || 
-                 process.env.AIRA_TEST_ENVIRONMENT === 'true' || 
-                 Boolean(process.env.AIRA_POSTGRES_CERTIFICATION);
+  const isExplicitTest = (process.env.NODE_ENV === 'test' || process.env.AIRA_TEST_ENVIRONMENT === 'true') && process.env.NODE_ENV !== 'production';
   const allowDestructiveRollback = process.env.AIRA_ALLOW_DESTRUCTIVE_ROLLBACK === 'true';
 
-  if (!isTest && !allowDestructiveRollback) {
+  if (!isExplicitTest && !allowDestructiveRollback) {
     const hasTasks = await knex.schema.hasTable('autonomous_agent_tasks');
     if (hasTasks) {
       const taskCountResult = await knex('autonomous_agent_tasks').count('* as count').first();
