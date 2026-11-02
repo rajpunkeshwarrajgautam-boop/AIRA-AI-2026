@@ -105,6 +105,7 @@ test('2. Specialist Orchestration: all 9 canonical specialist roles are implemen
 test('3. Python Sandbox: isolated execution, credential scrubbing, and security boundaries', async () => {
   const sandbox = new LocalIsolatedSandboxProvider();
   const ws = await sandbox.createWorkspace({
+    trustedLocalExecution: true,
     timeoutMs: 30000,
     allowInternet: false,
     allowPreview: false
@@ -213,12 +214,11 @@ test('5. MCP Integration: registration, discovery, untrusted output tagging, and
     transport: 'streamable_http'
   });
 
-  await assert.rejects(
-    async () => {
-      await mcpHost.connectServer('server_bad_protocol');
-    },
-    /Only http and https are allowed/
-  );
+  const connected = await mcpHost.connectServer('server_bad_protocol');
+  assert.equal(connected, false);
+  const statusBad = mcpHost.getServerStatus('server_bad_protocol');
+  assert.equal(statusBad?.connected, false);
+  assert.ok(statusBad?.lastError?.includes('Only http and https are allowed'));
 
   // Unregister cleanup
   mcpHost.unregisterServer('server_bad_protocol');

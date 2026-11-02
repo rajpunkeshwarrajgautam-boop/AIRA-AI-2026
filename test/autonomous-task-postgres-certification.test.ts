@@ -193,9 +193,14 @@ test('Mission A3 — Autonomous Task & Browser Session Real PostgreSQL Database 
       assert.equal(claim1.success, true);
       assert.equal(claim1.task?.leaseOwner, 'worker_node_alpha');
 
-      // Renew lease
-      const renewed = await taskRepo.renewLease!(taskId, 'worker_node_alpha', 60000, 1);
-      assert.equal(renewed, true);
+      // Stale renew lease with old fencing token (1) must be rejected
+      const staleRenew = await taskRepo.renewLease!(taskId, 'worker_node_alpha', 60000, 1);
+      assert.equal(staleRenew, false, 'Stale fencing token must be rejected during lease renewal');
+
+      // Renew lease with active fencing token
+      const activeFencingToken = claim1.task!.fencingToken!;
+      const renewed = await taskRepo.renewLease!(taskId, 'worker_node_alpha', 60000, activeFencingToken);
+      assert.equal(renewed, true, 'Active fencing token must succeed during lease renewal');
 
       // Simulate lease expiration
       await db('autonomous_agent_tasks')
