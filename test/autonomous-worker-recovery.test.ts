@@ -4,7 +4,8 @@ import {
   AutonomousAgentEngine,
   InMemoryAutonomousTaskRepository,
   PostgresAutonomousTaskRepository,
-  createAutonomousSpecialistRegistry
+  createAutonomousSpecialistRegistry,
+  createOfflinePostgresClient
 } from '../packages/agent-runtime/src/index.js';
 import { ExecutionPrincipal, AutonomousTaskState } from '../packages/contracts/src/index.js';
 import { ToolGateway } from '../packages/tool-runtime/src/index.js';
@@ -224,7 +225,7 @@ test('Mission A — Autonomous Execution Durability, Fencing Tokens, and Crash R
   });
 
   await t.test('4. PostgresAutonomousTaskRepository Fails Closed on Outage', async () => {
-    const pgRepo = new PostgresAutonomousTaskRepository();
+    const pgRepo = new PostgresAutonomousTaskRepository(createOfflinePostgresClient());
 
     // When DB is unreachable, durable repository MUST fail closed with AutonomousPersistenceUnavailableError
     await assert.rejects(

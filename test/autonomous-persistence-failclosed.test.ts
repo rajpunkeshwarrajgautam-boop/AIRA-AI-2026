@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {
   PostgresAutonomousTaskRepository,
   InMemoryAutonomousTaskRepository,
-  AutonomousPersistenceUnavailableError
+  AutonomousPersistenceUnavailableError,
+  createOfflinePostgresClient
 } from '../packages/agent-runtime/src/autonomous/repository.js';
 import type { ExecutionPrincipal, AutonomousAgentTask } from '../packages/contracts/src/index.js';
 
@@ -30,7 +31,7 @@ test('Mission A2 — Durable Autonomous Task Persistence Fail-Closed Certificati
   };
 
   await t.test('1. PostgresAutonomousTaskRepository Fails Closed on Outage for All Operations', async () => {
-    const pgRepo = new PostgresAutonomousTaskRepository();
+    const pgRepo = new PostgresAutonomousTaskRepository(createOfflinePostgresClient());
 
     // 1a. createTask fails closed
     await assert.rejects(

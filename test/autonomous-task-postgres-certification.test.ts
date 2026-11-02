@@ -6,7 +6,8 @@ import { db } from '../packages/db/src/index.js';
 import {
   PostgresAutonomousTaskRepository,
   InMemoryAutonomousTaskRepository,
-  AutonomousPersistenceUnavailableError
+  AutonomousPersistenceUnavailableError,
+  createOfflinePostgresClient
 } from '../packages/agent-runtime/src/autonomous/repository.js';
 import {
   PostgresBrowserSessionStorage,
@@ -359,7 +360,7 @@ test('Mission A3 — Autonomous Task & Browser Session Real PostgreSQL Database 
     });
 
     await t.test('Contract: PostgresAutonomousTaskRepository fails closed on outage for all operations', async () => {
-      const taskRepo = new PostgresAutonomousTaskRepository();
+      const taskRepo = new PostgresAutonomousTaskRepository(createOfflinePostgresClient());
       await assert.rejects(
         async () => {
           await taskRepo.getTask('non_existent_due_to_db_outage');
@@ -369,7 +370,7 @@ test('Mission A3 — Autonomous Task & Browser Session Real PostgreSQL Database 
     });
 
     await t.test('Contract: PostgresBrowserSessionStorage fails closed on outage for all operations', async () => {
-      const browserStorage = new PostgresBrowserSessionStorage();
+      const browserStorage = new PostgresBrowserSessionStorage(createOfflinePostgresClient());
       await assert.rejects(
         async () => {
           await browserStorage.getSession('non_existent_key');

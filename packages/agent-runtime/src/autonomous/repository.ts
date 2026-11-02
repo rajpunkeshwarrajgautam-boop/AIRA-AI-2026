@@ -248,7 +248,43 @@ export class AutonomousPersistenceUnavailableError extends Error {
   }
 }
 
+export function createOfflinePostgresClient(simulatedErrorMessage = 'connect ECONNREFUSED 127.0.0.1:5432'): any {
+  const err = new Error(simulatedErrorMessage);
+  (err as any).code = 'ECONNREFUSED';
+
+  const queryBuilder = () => {
+    const q: any = {
+      insert: async () => { throw err; },
+      where: () => q,
+      andWhere: () => q,
+      whereIn: () => q,
+      first: async () => { throw err; },
+      select: async () => { throw err; },
+      update: async () => { throw err; },
+      delete: async () => { throw err; },
+      orderBy: () => q,
+      limit: async () => { throw err; },
+      raw: (expr: string) => expr,
+      then: (resolve: any, reject: any) => Promise.reject(err).then(resolve, reject),
+      catch: (reject: any) => Promise.reject(err).catch(reject)
+    };
+    return q;
+  };
+  queryBuilder.schema = {
+    hasTable: async () => { throw err; },
+    hasColumn: async () => { throw err; }
+  };
+  queryBuilder.raw = () => { throw err; };
+  return queryBuilder;
+}
+
 export class PostgresAutonomousTaskRepository implements IAutonomousTaskRepository {
+  private knexClient: any;
+
+  constructor(knexOverride?: any) {
+    this.knexClient = knexOverride || db;
+  }
+
   private rowToTask(row: any): AutonomousAgentTask {
     return {
       taskId: row.task_id,
@@ -316,7 +352,7 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
         completed_at: task.completedAt || null
       };
 
-      await db('autonomous_agent_tasks').insert(row);
+      await this.knexClient('autonomous_agent_tasks').insert(row);
       return task;
     } catch (err: any) {
       if (
@@ -339,7 +375,7 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
 
   async getTask(taskId: string): Promise<AutonomousAgentTask | null> {
     try {
-      const row = await db('autonomous_agent_tasks').where({ task_id: taskId }).first();
+      const row = await this.knexClient('autonomous_agent_tasks').where({ task_id: taskId }).first();
       if (!row) return null;
       return this.rowToTask(row);
     } catch (err: any) {
@@ -352,7 +388,7 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
 
   async getTaskByIdempotencyKey(principalId: string, idempotencyKey: string): Promise<AutonomousAgentTask | null> {
     try {
-      const row = await db('autonomous_agent_tasks')
+      const row = await this.knexClient('autonomous_agent_tasks')
         .where({ principal_id: principalId, idempotency_key: idempotencyKey })
         .first();
       if (!row) return null;
@@ -367,11 +403,11 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
 
   async listTasksByPrincipal(principalId: string, limit = 20): Promise<AutonomousAgentTask[]> {
     try {
-      const rows = await db('autonomous_agent_tasks')
+      const rows = await this.knexClient('autonomous_agent_tasks')
         .where({ principal_id: principalId })
         .orderBy('created_at', 'desc')
         .limit(limit);
-      return rows.map(r => this.rowToTask(r));
+      return rows.map((r: any) => this.rowToTask(r));
     } catch (err: any) {
       if (isDatabaseUnavailable(err)) {
         throw new AutonomousPersistenceUnavailableError('listTasksByPrincipal', err);
@@ -392,7 +428,7 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
         : existing.observations;
 
       const now = Date.now();
-      await db('autonomous_agent_tasks')
+      await this.knexClient('autonomous_agent_tasks')
         .where({ task_id: task.taskId })
         .update({
           active_step_id: task.activeStepId || null,
@@ -462,7 +498,7 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
         updateData.error = reason;
       }
 
-      const updated = await db('autonomous_agent_tasks')
+      const updated = await this.knexClient('autonomous_agent_tasks')
         .where({ task_id: taskId })
         .andWhere('fencing_token', current.fencingToken)
         .update(updateData);
@@ -509,9 +545,9 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
       const task = await this.getTask(taskId);
       if (!task) return { success: false, error: 'Task not found' };
 
-      const updated = await db('autonomous_agent_tasks')
+      const updated = await this.knexClient('autonomous_agent_tasks')
         .where({ task_id: taskId })
-        .andWhere((qb) => {
+        .andWhere((qb: any) => {
           qb.whereNull('lease_owner')
             .orWhere('lease_expires_at', '<', now)
             .orWhere('lease_owner', workerId);
@@ -520,7 +556,7 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
           lease_owner: workerId,
           lease_expires_at: now + leaseDurationMs,
           heartbeat_at: now,
-          fencing_token: db.raw('fencing_token + 1'),
+          fencing_token: this.knexClient.raw('fencing_token + 1'),
           updated_at: now
         });
 
@@ -541,7 +577,7 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
   async renewLease(taskId: string, workerId: string, leaseDurationMs: number, fencingToken: number): Promise<boolean> {
     try {
       const now = Date.now();
-      const updated = await db('autonomous_agent_tasks')
+      const updated = await this.knexClient('autonomous_agent_tasks')
         .where({ task_id: taskId, lease_owner: workerId, fencing_token: fencingToken })
         .update({
           lease_expires_at: now + leaseDurationMs,
@@ -559,14 +595,14 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
 
   async findRecoverableTasks(now: number, limit = 50): Promise<AutonomousAgentTask[]> {
     try {
-      const rows = await db('autonomous_agent_tasks')
+      const rows = await this.knexClient('autonomous_agent_tasks')
         .whereIn('state', ['RUNNING', 'RESUMING', 'PLANNING'])
-        .andWhere((qb) => {
+        .andWhere((qb: any) => {
           qb.whereNull('lease_owner')
             .orWhere('lease_expires_at', '<', now);
         })
         .limit(limit);
-      return rows.map(r => this.rowToTask(r));
+      return rows.map((r: any) => this.rowToTask(r));
     } catch (err: any) {
       if (isDatabaseUnavailable(err)) {
         throw new AutonomousPersistenceUnavailableError('findRecoverableTasks', err);
@@ -577,7 +613,7 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
 
   async deleteTask(taskId: string): Promise<void> {
     try {
-      await db('autonomous_agent_tasks').where({ task_id: taskId }).delete();
+      await this.knexClient('autonomous_agent_tasks').where({ task_id: taskId }).delete();
     } catch (err: any) {
       if (isDatabaseUnavailable(err)) {
         throw new AutonomousPersistenceUnavailableError('deleteTask', err);

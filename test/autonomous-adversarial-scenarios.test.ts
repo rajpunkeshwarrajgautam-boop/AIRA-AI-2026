@@ -5,7 +5,8 @@ import {
   AutonomousAgentEngine,
   InMemoryAutonomousTaskRepository,
   PostgresAutonomousTaskRepository,
-  AutonomousPersistenceUnavailableError
+  AutonomousPersistenceUnavailableError,
+  createOfflinePostgresClient
 } from '../packages/agent-runtime/src/autonomous/index.js';
 import {
   BrowserAdapter,
@@ -196,7 +197,8 @@ test('AIRA AI 2026 — 15 Adversarial Fault Injection & Security Scenarios', asy
   // SCENARIO 4: PostgreSQL becomes unavailable mid-execution
   // =========================================================================
   await t.test('Scenario 4: PostgreSQL unavailable mid-execution -> Fails closed with PERSISTENCE_UNAVAILABLE', async () => {
-    const taskRepo = new PostgresAutonomousTaskRepository();
+    const offlineClient = createOfflinePostgresClient();
+    const taskRepo = new PostgresAutonomousTaskRepository(offlineClient);
     await assert.rejects(
       async () => {
         await taskRepo.getTask('task_db_outage');
