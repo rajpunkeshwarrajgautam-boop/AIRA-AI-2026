@@ -5,7 +5,7 @@ This PR delivers the complete, verified Release Candidate for the **AIRA Autonom
 
 - **Target Branch**: `prod-release`
 - **PR Status**: **Strictly Draft** (No production merge or deployment without explicit human GO LIVE authorization)
-- **Quality Gates**: Client & Server Typecheck (PASS, 0 errors), Oxlint (PASS, 0 errors), Production Build (PASS, 1.85s), Tracked Secrets Scan (PASS, 0 exposed credentials across 666 tracked files)
+- **Quality Gates**: Client & Server Typecheck (PASS, 0 errors), Oxlint (PASS, 0 errors), Production Build (PASS, 1.85s), Tracked Secrets Scan (PASS, 0 exposed credentials across 669 tracked files)
 - **Certification Test Suites & Reconciled Runner Inventory (247 Tests / 100% Pass Rate)**:
   - `test/operational-staging-worker-certification.test.ts`: **15 / 15 PASS** (100%)
   - `test/operational-staging-acceptance-and-fault-injection.test.ts`: **12 / 12 PASS** (100%)
@@ -52,7 +52,7 @@ This PR delivers the complete, verified Release Candidate for the **AIRA Autonom
                                          v
     +-----------------------------------------------------------------------+
     |         ORACLE CLOUD ALWAYS FREE PERSISTENT CONTAINER WORKER          |
-    |          Shape: VM.Standard.A1.Flex (Ampere A1 Arm64, 2-4 OCPU)       |
+    |          Shape: VM.Standard.A1.Flex (Ampere A1 Arm64, 2 OCPU, 12 GB)  |
     |                      (docker-compose.oracle-staging.yml)              |
     |                                                                       |
     |  - AutonomousWorkerHost (High-level autonomous objective state engine)|
@@ -61,7 +61,7 @@ This PR delivers the complete, verified Release Candidate for the **AIRA Autonom
     |    Document, Browser, Automation, Verification, Synthesizer           |
     |  - Multi-Arch Alpine Base: linux/arm64 & linux/amd64                  |
     |  - MCP Tool Wire (stdio/SSE/HTTP) with environment sanitization       |
-    |  - Container Sandbox Isolation (Docker/OCI/E2B/Lightning fail-closed) |
+    |  - Zero-Docker-Socket Sandbox Isolation (E2B / Lightning MicroVMs)    |
     |  - Headless Chromium with durable AES-256-GCM state persistence       |
     |  - Systemd Supervisor (deploy/systemd/aira-oracle-worker.service)     |
     +-----------------------------------------------------------------------+
@@ -71,20 +71,31 @@ This PR delivers the complete, verified Release Candidate for the **AIRA Autonom
 
 ### Key Deliverables Completed in this PR
 
-#### 1. Test Count Discrepancy Reconciliation (242 vs. 247 Tests)
+#### 1. Test Count Discrepancy Reconciliation (247 / 247 Tests PASS)
 - **Root Cause**: The 34-count came from `autonomous-worker-recovery` (5) + `autonomous-api-worker-integration` (13) + `autonomous-adversarial-scenarios` (16) = 34. When including the 4th core database durability suite `test/autonomous-task-postgres-certification.test.ts` (5 tests verifying PostgreSQL fail-closed contract for tasks and browser storage), the exact sum is: 208 + 39 = **247 tests**. Both counts are reconciled and verified via `test/test-suite-inventory.test.ts`.
 
-#### 2. Oracle Cloud Always Free (Arm64 Ampere A1) Packaging
+#### 2. Oracle Cloud Always Free (Arm64 Ampere A1) Packaging & Sizing
+- **Free-Tier Sizing**: Configured for `VM.Standard.A1.Flex` with **2 OCPUs and 12 GB RAM** (current Always Free tenancy allowance).
 - **Multi-Arch Dockerfile**: Hardened `Dockerfile.worker` built on `node:22-alpine` with native `linux/arm64` and `linux/amd64` multi-arch support.
-- **Oracle Staging Compose**: `docker-compose.oracle-staging.yml` preconfigured for `VM.Standard.A1.Flex` with 2.0 OCPU limit, 2048M memory limit, 1024M Node heap limit, non-root user `10001:10001`, and log rotation.
-- **Systemd Unit**: `deploy/systemd/aira-oracle-worker.service` with auto-restart, 30s graceful stop timeout, and journald integration.
+- **Oracle Staging Compose**: `docker-compose.oracle-staging.yml` preconfigured with 1.5 OCPU limit (2.0 max), 2048M memory limit, 1024M Node heap limit, non-root user `10001:10001`, and log rotation.
+- **Systemd Unit**: `deploy/systemd/aira-oracle-worker.service` with auto-restart, 30s graceful stop timeout, journald integration, and secure permissions (`chmod 640 root:docker`).
 - **Browser Executable Resolution**: Updated `packages/tool-runtime/src/adapters/browser-adapter.ts` to probe Linux standard paths (`/usr/bin/chromium-browser`, `/usr/bin/chromium`, `/usr/bin/google-chrome`) for native Arm64 Chromium discovery.
 - **Handoff Runbook**: Documented complete step-by-step instance creation, deployment, and troubleshooting runbook in `AIRA-ORACLE-ALWAYS-FREE-DEPLOYMENT-READY.md`.
 
-#### 3. API Tenant Authorization Security Hardening
+#### 3. Python Sandbox Isolation Architecture (Zero Host Docker Socket Exposure)
+- **Security Boundary**: The host Docker socket (`/var/run/docker.sock`) is **never** mounted to the worker container.
+- **Cloud MicroVMs**: Untrusted agent code runs in ephemeral hardware-isolated Firecracker MicroVMs via E2B or Lightning AI over HTTPS.
+- **Fail-Closed Verification**: The system fails closed with `CONTAINER_ISOLATION_UNAVAILABLE` if no isolated backend is active (verified by test `F6`).
+
+#### 4. Complete Runtime Secrets & Configuration Injection
+- **Encrypted Browser Sessions**: Injected `BROWSER_SESSION_ENCRYPTION_KEY` for authenticated AES-256-GCM envelope encryption.
+- **Model & MCP Credentials**: Explicitly passed `GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GROQ_API_KEY`, `TAVILY_API_KEY`, and `GITHUB_TOKEN`.
+- **Reproducible Image Tagging**: Pinned image tag `aira-specialist-worker:${AIRA_IMAGE_TAG:-v2026.1.0-4065e1a}` and pinned commit SHA in deployment runbook.
+
+#### 5. API Tenant Authorization Security Hardening
 - Secured `POST /tasks/:id/pause`, `POST /tasks/:id/resume`, `POST /tasks/:id/cancel`, and `POST /tasks/:id/approve` in `apps/api/src/index.ts` with strict user principal ownership validation, returning HTTP 403 `FORBIDDEN` on cross-tenant tampering.
 
-#### 4. Migration 031 Non-Destructive Rollback Safety Barrier
+#### 6. Migration 031 Non-Destructive Rollback Safety Barrier
 - In `packages/db/src/migrations/031_autonomous_agent_tasks.ts`, `down()` inspects row counts and unconditionally blocks rollback if active user records exist in production environments unless `AIRA_ALLOW_DESTRUCTIVE_ROLLBACK=true` is set.
 
 ---

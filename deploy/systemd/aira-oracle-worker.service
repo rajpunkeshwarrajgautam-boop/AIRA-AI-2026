@@ -2,6 +2,7 @@
 # AIRA AI 2026 — Oracle Cloud Always Free Systemd Service Unit
 # Path: /etc/systemd/system/aira-oracle-worker.service
 # Target: Ubuntu 22.04/24.04 LTS (aarch64) on VM.Standard.A1.Flex
+# Sizing: 2 OCPUs, 12 GB RAM (Current Always Free Allowance)
 # ==============================================================================
 
 [Unit]
@@ -17,8 +18,9 @@ User=ubuntu
 Group=docker
 WorkingDirectory=/opt/aira
 
-# Environment variables from secure permissions-restricted path (chmod 600)
+# Environment variables from secure permissions-restricted path (chmod 640 root:docker)
 EnvironmentFile=/etc/aira/staging-worker.env
+Environment=AIRA_IMAGE_TAG=v2026.1.0-4065e1a
 
 # Lifecycle Commands
 ExecStartPre=-/usr/bin/docker compose -f /opt/aira/docker-compose.oracle-staging.yml down --remove-orphans
@@ -30,7 +32,7 @@ Restart=always
 RestartSec=10
 TimeoutStopSec=35
 
-# Systemd cgroup resource safeguards
+# Systemd cgroup resource safeguards (Bounded for 12 GB Host)
 CPUAccounting=true
 MemoryAccounting=true
 MemoryMax=2.5G
@@ -40,7 +42,7 @@ MemoryHigh=2.2G
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/opt/aira
+ReadWritePaths=/opt/aira /var/run/docker.sock
 PrivateTmp=true
 
 # Standardized logging to journald with tag

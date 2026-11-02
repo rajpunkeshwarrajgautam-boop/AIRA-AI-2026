@@ -1,6 +1,7 @@
 # ==============================================================================
 # AIRA AI 2026 — Oracle Cloud Always Free (Arm64 Ampere A1) Staging Worker
-# Target Shape: VM.Standard.A1.Flex (2-4 OCPU, 12-24 GB RAM, Ubuntu 22.04/24.04 aarch64)
+# Target Shape: VM.Standard.A1.Flex (2 OCPU, 12 GB RAM, Ubuntu 22.04/24.04 aarch64)
+# Current Always Free Limit: 2 OCPUs / 12 GB RAM
 # ==============================================================================
 
 version: '3.8'
@@ -12,7 +13,7 @@ services:
       dockerfile: Dockerfile.worker
       platforms:
         - "linux/arm64"
-    image: aira-specialist-worker:oracle-arm64
+    image: aira-specialist-worker:${AIRA_IMAGE_TAG:-v2026.1.0-4065e1a}
     container_name: aira-specialist-worker-oracle-staging
     restart: unless-stopped
     user: "10001:10001"
@@ -22,6 +23,9 @@ services:
       - ALL
     cap_add:
       - NET_BIND_SERVICE
+    # Environment file loaded from permissions-restricted host path (chmod 640 root:docker)
+    env_file:
+      - ${AIRA_ENV_FILE:-/etc/aira/staging-worker.env}
     environment:
       # Database: Staging Neon PostgreSQL connection string (ep-shiny-bird-b3xundyt)
       - DATABASE_URL=${DATABASE_URL}
@@ -40,31 +44,49 @@ services:
       - LEASE_DURATION_MS=15000
       - HEARTBEAT_INTERVAL_MS=3000
       
-      # Networking & Ports
+      # Networking & Ports (Bound strictly to loopback 127.0.0.1)
       - PORT=8080
       - WORKER_BIND_HOST=0.0.0.0
       
-      # Node.js Heap Cap & Engine Limits (Tailored for Oracle Ampere A1)
+      # Node.js Heap Cap & Engine Limits (Tailored for 2 OCPU / 12 GB Host)
       - NODE_OPTIONS=--max-old-space-size=1024
       
-      # Browser & Sandbox Settings
+      # Browser Session Persistence & Authenticated AES-256-GCM Encryption
       - CHROMIUM_PATH=/usr/bin/chromium-browser
       - PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+      - BROWSER_SESSION_ENCRYPTION_KEY=${BROWSER_SESSION_ENCRYPTION_KEY:-}
+      
+      # Model Provider Access Keys
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      
+      # Search & Connector MCP Credentials
+      - TAVILY_API_KEY=${TAVILY_API_KEY:-}
+      - EXA_API_KEY=${EXA_API_KEY:-}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      
+      # Sandbox Isolation Architecture (Fail-Closed, Zero Docker Socket Mounts)
+      # Execution requires external MicroVMs (E2B / Lightning) or internal sidecar
       - AIRA_REQUIRE_CONTAINER_SANDBOX=true
       - AIRA_ALLOW_LOCAL_SANDBOX=false
+      - E2B_API_KEY=${E2B_API_KEY:-}
+      - LIGHTNING_SANDBOX_API_KEY=${LIGHTNING_SANDBOX_API_KEY:-}
+      - AIRA_SANDBOX_RUNNER_URL=${AIRA_SANDBOX_RUNNER_URL:-}
     ports:
       # Bound to loopback interface ONLY — never expose unauthenticated worker port to 0.0.0.0
       - "127.0.0.1:8080:8080"
     deploy:
       resources:
         limits:
-          cpus: '2.0'
+          cpus: '1.5'
           memory: 2048M
         reservations:
           cpus: '0.5'
           memory: 512M
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:8080/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3

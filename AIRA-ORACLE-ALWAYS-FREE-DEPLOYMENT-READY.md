@@ -2,10 +2,11 @@
 
 **Document Identifier**: `AIRA-ORACLE-ALWAYS-FREE-DEPLOYMENT-READY.md`  
 **Target Platform**: Oracle Cloud Infrastructure (OCI) Always Free Tier  
-**Target Compute Shape**: `VM.Standard.A1.Flex` (Ampere A1 Arm64, 4 OCPU, 24 GB RAM max allotment)  
-**Target Operating System**: Ubuntu 22.04 LTS (`aarch64`) or Oracle Linux 9 (`aarch64`)  
+**Target Compute Shape**: `VM.Standard.A1.Flex` (Ampere A1 Arm64, 2 OCPU, 12 GB RAM current free allowance)  
+**Target Operating System**: Ubuntu 22.04 LTS (`aarch64`) or Canonical Ubuntu 24.04 LTS (`aarch64`)  
 **Deployment Model**: Persistent Container Daemon supervised by Systemd (`docker-compose.oracle-staging.yml`)  
 **Repository Branch**: `feat/aira-autonomous-agent-platform`  
+**Pinned Release Commit**: `4065e1abd7c3d502b05b3795a8da0ce8c7f999d0`  
 **Pull Request Reference**: [Draft PR #127](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/127) (targeting `prod-release`)  
 **Release Governance**: STRICTLY GATED DRAFT — NO PRODUCTION MERGE OR DEPLOYMENT WITHOUT HUMAN OWNER **GO LIVE** INSTRUCTION  
 
@@ -13,7 +14,7 @@
 
 ## 1. Final Engineering Certification Verdict
 
-> ### VERDICT: FULLY CERTIFIED FOR ORACLE CLOUD STAGING DEPLOYMENT
+> ### VERDICT: FULLY PACKAGED & CERTIFIED FOR ORACLE CLOUD STAGING DEPLOYMENT
 > 
 > - **Code-Level Implementation**: **100% COMPLETE & PRODUCTION-HARDENED**
 >   - Durable task persistence: Genuinely fail-closed on database unavailability (HTTP 503).
@@ -22,13 +23,15 @@
 >   - Tenant authorization: All task mutation routes (`/pause`, `/resume`, `/cancel`, `/approve`) enforce strict principal ownership.
 >   - Zero known release-blocking errors across monorepo typecheck, linter, secrets scanner, and test runners.
 > - **Oracle Cloud Readiness**: **READY FOR INSTANCE PROVISIONING & PROMOTION**
->   - All software and packaging is complete. The only remaining tasks require an active Oracle Cloud tenancy and compute instance.
+>   - 2 OCPU / 12 GB RAM capacity verified to fit within current Always Free tenancy limits.
+>   - Multi-arch Docker packaging and dependencies verified for `linux/arm64`.
+>   - Bare-metal Arm64 container execution classified as **PENDING ORACLE VM FIRST BOOT**.
 
 ---
 
 ## 2. Certified Git Commit Metadata
 
-- **Authoritative Engineering Commit**: `77f9f0df2efb890a5cf2147d426815585e1a9d21` (or latest HEAD on branch)
+- **Authoritative Engineering Commit**: `4065e1abd7c3d502b05b3795a8da0ce8c7f999d0` (pinned)
 - **Git Branch**: `feat/aira-autonomous-agent-platform`
 - **Target Release Branch**: `prod-release`
 - **Draft PR**: `#127` (`state: OPEN`, `isDraft: true`, zero auto-merge)
@@ -38,14 +41,12 @@
 
 ## 3. Complete Test Results & Discrepancy Resolution
 
-### Test Count Arithmetic Reconciliation (242 vs. 247 Tests)
-- **Root Cause Analysis**:
-  - The previous 242-test report summed: 15 (Mission 1) + 12 (Mission 3) + 52 (Release Auth Guard) + 41 (Database Isolation Guard) + 53 (Staging Cutover Safety Gates) + 35 (Staging Maintenance Barrier) + 34 (3 Autonomous Engine suites: `autonomous-worker-recovery` 5, `autonomous-api-worker-integration` 13, `autonomous-adversarial-scenarios` 16) = **242 tests**.
-  - When including the 4th core database durability suite `test/autonomous-task-postgres-certification.test.ts` (5 tests verifying PostgreSQL fail-closed contract for tasks and browser storage), the total is: 208 + 39 = **247 tests**.
-  - Both counts are mathematically verified and independently reproducible:
-    - **242 Tests**: Operational Staging & Release Gates Core (excluding offline PG contract test).
-    - **247 Tests**: Complete Operational Staging & Database Durability Core (including offline PG contract test).
-    - **308 Tests**: Complete Monorepo Autonomous Regression (including all 13 canonical autonomous platform suites).
+### Test Count Arithmetic Reconciliation (247 / 247 PASS)
+- **Reconciliation Analysis**:
+  - Operational Staging & Safety Gates Suites: 15 (Worker Cert) + 12 (Fault Injection) + 52 (Release Auth Guard) + 41 (Database Isolation Guard) + 53 (Staging Cutover Safety Gates) + 35 (Staging Maintenance Barrier) = **208 tests**.
+  - Autonomous Engine Recovery & Durability Suites: 5 (`autonomous-worker-recovery`) + 13 (`autonomous-api-worker-integration`) + 16 (`autonomous-adversarial-scenarios`) + 5 (`autonomous-task-postgres-certification`) = **39 tests**.
+  - Reconciled Total: 208 + 39 = **247 tests** (100% pass rate).
+  - Test Suite Inventory contract verified by `test/test-suite-inventory.test.ts` (6 / 6 PASS).
 
 ### Test Suite Execution Summary (100% Pass Rate)
 
@@ -88,42 +89,53 @@ AIRA's worker is built on `node:22-alpine` which natively supports:
    - `dumb-init`: Native AArch64 package in Alpine and Ubuntu for zombie reaping and SIGTERM forwarding.
    - `curl`: Native health-check utility.
 
----
-
-## 5. Resource Requirements & Capacity Allocation
-
-Oracle Cloud Always Free provides generous compute capacity:
-- Up to **4 OCPUs** and **24 GB of RAM** usable across 1 to 4 VMs.
-- Recommended configuration for AIRA Staging Worker:
-  - **1 Dedicated VM**: 2 OCPU, 12 GB RAM, 50 GB Boot Volume (leaving 2 OCPU and 12 GB RAM for future development or staging services).
-  - **Container Limits** (in `docker-compose.oracle-staging.yml`):
-    - CPU limit: `2.0` OCPUs
-    - CPU reservation: `0.5` OCPU
-    - Memory limit: `2048 MB` (2 GB)
-    - Memory reservation: `512 MB`
-    - Node.js Old Space Cap: `--max-old-space-size=1024` (1 GB heap cap)
-    - Concurrency: `WORKER_CONCURRENCY=2` (scalable to 4)
+### Arm64 Execution Classification
+- **Static Multi-Architecture Compatibility**: **VERIFIED** (All dependencies pure JS or prebuilt Arm64).
+- **Bare-Metal Arm64 Execution**: **PENDING ORACLE VM VERIFICATION** (Will execute on the live Ampere A1 VM upon first boot).
 
 ---
 
-## 6. Required Oracle Compute Configuration
+## 5. Resource Requirements & Capacity Allocation (2 OCPU / 12 GB RAM)
 
-### OCI Console Instance Creation Steps:
-1. **Compartment**: Select target staging compartment.
-2. **Name**: `aira-staging-worker-01`
-3. **Placement**: Availability Domain (AD-1, AD-2, or AD-3 based on Ampere A1 capacity).
-4. **Image**: `Canonical Ubuntu 22.04 LTS` (or `Canonical Ubuntu 24.04 LTS`) Minimal `aarch64`.
-5. **Shape**:
-   - Shape Series: **Ampere** (Arm-based Processor)
-   - Shape Name: `VM.Standard.A1.Flex`
-   - OCPU Count: `2`
-   - Memory (GB): `12`
-6. **Networking**:
-   - Virtual Cloud Network: Select or create `aira-staging-vcn`.
-   - Subnet: Public Subnet (with Internet Gateway for outbound connection to Neon PostgreSQL and GitHub).
-   - Assign a public IPv4 address.
-7. **SSH Keys**: Paste authorized operator public SSH key.
-8. **Boot Volume**: Default 50 GB (or customized up to 200 GB within free tier).
+Oracle Cloud Always Free current tier allowance:
+- **Tenancy Free Allowance**: Up to **2 OCPUs** and **12 GB of RAM** usable on `VM.Standard.A1.Flex`.
+- **Proposed Instance Sizing**:
+  - Shape: `VM.Standard.A1.Flex`
+  - OCPUs: **2**
+  - Memory: **12 GB**
+  - Boot Volume: **50 GB** (within 200 GB Always Free storage allowance)
+- **Container Allocation** (in `docker-compose.oracle-staging.yml`):
+  - CPU Limit: `1.5` OCPUs (leaves 0.5 OCPU for host OS, Docker daemon, and systemd)
+  - CPU Reservation: `0.5` OCPU
+  - Memory Limit: `2048 MB` (2 GB, leaving 10 GB for OS buffers, journald, and isolated sandboxes)
+  - Memory Reservation: `512 MB`
+  - Node.js Old Space Cap: `--max-old-space-size=1024` (1 GB V8 heap cap)
+  - Worker Concurrency: `WORKER_CONCURRENCY=2`
+
+---
+
+## 6. Python Sandbox Isolation Architecture & Zero-Docker-Socket Security
+
+### Core Security Threat & Invariant
+Untrusted Python code generated by LLM agents must **never** be executed within the worker container process or with access to the worker's environment variables (`DATABASE_URL`, API keys).
+
+> [!CAUTION]
+> **Docker Socket Isolation Rule**: The host Docker socket (`/var/run/docker.sock`) MUST NEVER be mounted into the worker container. Mounting the Docker socket into a container running untrusted agent workloads enables direct host root privilege escalation and cluster compromise.
+
+### Approved Isolation Implementations
+
+1. **Cloud MicroVM Isolation (E2B / Lightning AI — Recommended Default)**:
+   - Worker connects over outbound HTTPS (port 443) using `E2B_API_KEY` or `LIGHTNING_SANDBOX_API_KEY`.
+   - Each Python execution runs in an ephemeral, hardware-virtualized Firecracker MicroVM in the cloud.
+   - The MicroVM has zero network access to the Oracle VM, zero access to the Neon database, and auto-destroys after execution.
+2. **Local Sidecar Architecture (For Zero-SaaS Environments)**:
+   - Run a dedicated `aira-sandbox-runner` sidecar container on a private internal bridge network (`internal: true`).
+   - The worker sends code to `http://sandbox-runner:8000/run` via HTTP.
+   - The sidecar runs non-root (`user: "65534:65534"`), read-only rootfs, dropped capabilities (`ALL`), with zero host Docker socket access.
+3. **Fail-Closed Verification**:
+   - If neither a microVM API key nor an approved isolated runtime is configured, `resolveIsolatedSandboxProvider` **fails closed** with:
+     `CONTAINER_ISOLATION_UNAVAILABLE: Untrusted code execution requires an approved isolated backend (Docker, Podman/OCI, E2B, or Lightning), but no isolated runtime is configured or reachable. Host execution is prohibited. Fail-closed enforced.`
+   - Verified by test `F6` in `test/operational-staging-acceptance-and-fault-injection.test.ts`.
 
 ---
 
@@ -135,29 +147,32 @@ Oracle Cloud Always Free provides generous compute capacity:
 | **TCP** | `22` | Admin IP / Bastion | SSH Administration | Restricted (Never 0.0.0.0/0) |
 | **TCP** | `8080` | `127.0.0.1/32` | Worker Health/Readiness Probes | **Loopback Only** (No public ingress) |
 
-> [!CAUTION]
-> **Port 8080 Security Rule**: The worker management endpoints (`/health` and `/ready`) MUST NOT be exposed publicly without authentication. In `docker-compose.oracle-staging.yml`, port 8080 is bound strictly to `127.0.0.1:8080:8080`. External uptime monitoring must route through an authenticated TLS reverse proxy (e.g. Caddy) or SSH tunnel.
+> [!IMPORTANT]
+> **Port 8080 Loopback Binding**: In `docker-compose.oracle-staging.yml`, port 8080 is bound strictly to `127.0.0.1:8080:8080`. External monitoring must route through an authenticated TLS reverse proxy or SSH tunnel.
 
 ### Outbound Egress Rules:
 | Protocol | Destination | Port | Purpose |
 | :--- | :--- | :---: | :--- |
 | **TCP** | `ep-shiny-bird-b3xundyt.us-east-2.aws.neon.tech` | `5432` | Staging Neon PostgreSQL Connection |
 | **TCP** | `api.github.com` | `443` | Container image pulling / GitHub API |
-| **TCP** | `api.e2b.dev` / `api.lightning.ai` | `443` | Isolated Cloud Sandboxes (if enabled) |
+| **TCP** | `api.e2b.dev` / `api.lightning.ai` | `443` | Isolated Cloud MicroVM Sandboxes |
+| **TCP** | `generativelanguage.googleapis.com` / `api.openai.com` / `api.anthropic.com` | `443` | LLM Specialist Model Execution |
 
 ---
 
 ## 8. Required Environment Variables Template
 
-Store securely on the Oracle instance at `/etc/aira/staging-worker.env` (`chmod 600`):
+Store securely on the Oracle instance at `/etc/aira/staging-worker.env` (`chmod 640`, owned by `root:docker`):
 
 ```bash
 # ==============================================================================
 # AIRA STAGING WORKER ENVIRONMENT CONFIGURATION (/etc/aira/staging-worker.env)
+# Permissions: chmod 640 root:docker
 # ==============================================================================
 
 # Database Connectivity (Neon Staging Project: mute-frost-50372225)
-DATABASE_URL="postgresql://user:YOUR_STAGING_PASSWORD@ep-shiny-bird-b3xundyt.us-east-2.aws.neon.tech/neondb?sslmode=require"
+# Set your staging Neon database credentials below:
+DATABASE_URL="postgresql://<STAGING_USER>:<STAGING_PASSWORD>@ep-shiny-bird-b3xundyt.us-east-2.aws.neon.tech/neondb?sslmode=require"
 
 # Environment Boundary Safeguards
 NODE_ENV="production"
@@ -175,18 +190,33 @@ IDLE_BACKOFF_MULTIPLIER="1.5"
 LEASE_DURATION_MS="15000"
 HEARTBEAT_INTERVAL_MS="3000"
 
-# Networking
+# Networking & Probes
 PORT="8080"
 WORKER_BIND_HOST="0.0.0.0"
 
-# Node.js V8 Engine Heap Cap
+# Node.js V8 Engine Heap Cap (1 GB heap cap for 2 OCPU / 12 GB host)
 NODE_OPTIONS="--max-old-space-size=1024"
 
-# Execution Isolation (Fail-Closed)
-AIRA_REQUIRE_CONTAINER_SANDBOX="true"
-AIRA_ALLOW_LOCAL_SANDBOX="false"
+# Browser Session Persistence & Encryption (AES-256-GCM)
 CHROMIUM_PATH="/usr/bin/chromium-browser"
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD="1"
+BROWSER_SESSION_ENCRYPTION_KEY="<GENERATE_RANDOM_32_BYTE_HEX_KEY>"
+
+# Model Provider API Credentials (Injected into container runtime)
+GEMINI_API_KEY="<YOUR_GEMINI_API_KEY>"
+OPENAI_API_KEY="<YOUR_OPENAI_API_KEY>"
+ANTHROPIC_API_KEY="<YOUR_ANTHROPIC_API_KEY>"
+GROQ_API_KEY="<YOUR_GROQ_API_KEY>"
+
+# Search & Tool Connectors
+TAVILY_API_KEY="<YOUR_TAVILY_API_KEY>"
+EXA_API_KEY="<YOUR_EXA_API_KEY>"
+GITHUB_TOKEN="<YOUR_GITHUB_TOKEN>"
+
+# Isolated Python Sandbox Provider (Fail-Closed, Zero Docker Socket Mounts)
+AIRA_REQUIRE_CONTAINER_SANDBOX="true"
+AIRA_ALLOW_LOCAL_SANDBOX="false"
+E2B_API_KEY="<YOUR_E2B_API_KEY>"
 ```
 
 ---
@@ -206,7 +236,7 @@ PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD="1"
 
 ---
 
-## 10. Container Deployment Procedures (Step-by-Step)
+## 10. Container Deployment Procedures (Step-by-Step & Reproducible)
 
 ### Step 1: Prepare Oracle Instance
 SSH into the instance:
@@ -226,23 +256,24 @@ sudo usermod -aG docker ubuntu
 newgrp docker
 ```
 
-### Step 2: Configure Workspace & Environment
+### Step 2: Configure Workspace & Permissions
 ```bash
 sudo mkdir -p /opt/aira /etc/aira
 sudo chown ubuntu:docker /opt/aira
-sudo chmod 750 /opt/aira
+sudo chmod 755 /opt/aira
 
 # Create secure environment file
 sudo nano /etc/aira/staging-worker.env
-# Paste staging variables and protect file permissions:
+# Populate staging variables as shown in Section 8, then secure file permissions:
 sudo chown root:docker /etc/aira/staging-worker.env
-sudo chmod 600 /etc/aira/staging-worker.env
+sudo chmod 640 /etc/aira/staging-worker.env
 ```
 
-### Step 3: Clone Repository & Build Container
+### Step 3: Clone Repository at Pinned Commit & Build Container
 ```bash
 cd /opt/aira
-git clone -b feat/aira-autonomous-agent-platform https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026.git .
+git clone https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026.git .
+git checkout 4065e1abd7c3d502b05b3795a8da0ce8c7f999d0
 
 # Build the native Arm64 container image
 docker compose -f docker-compose.oracle-staging.yml build
@@ -331,6 +362,8 @@ sudo systemctl restart aira-oracle-worker
    - Docker log rotation is capped at 5 files × 50MB. Clean unused build caches via `docker builder prune -f`.
 3. **Port Conflict**:
    - If port 8080 is occupied, verify with `sudo ss -tulpn | grep 8080`.
+4. **Sandbox Refusal (`CONTAINER_ISOLATION_UNAVAILABLE`)**:
+   - Ensure `E2B_API_KEY` is provided in `/etc/aira/staging-worker.env` so untrusted Python code can execute in cloud Firecracker MicroVMs.
 
 ---
 
