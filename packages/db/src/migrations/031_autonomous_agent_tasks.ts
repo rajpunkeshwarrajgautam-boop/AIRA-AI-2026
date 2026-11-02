@@ -46,8 +46,26 @@ export async function up(knex: Knex): Promise<void> {
       table.index(['principal_id', 'idempotency_key'], 'idx_auto_tasks_idempotency');
     });
   }
+
+  const hasBrowserSessionsTable = await knex.schema.hasTable('durable_browser_sessions');
+  if (!hasBrowserSessionsTable) {
+    await knex.schema.createTable('durable_browser_sessions', (table) => {
+      table.string('session_key', 256).primary();
+      table.string('principal_id', 128).notNullable();
+      table.string('workspace_id', 128);
+      table.string('session_id', 128).notNullable();
+      table.text('encrypted_envelope').notNullable();
+      table.bigInteger('expires_at').notNullable();
+      table.bigInteger('created_at').notNullable();
+      table.bigInteger('updated_at').notNullable();
+
+      table.index(['principal_id', 'expires_at'], 'idx_browser_sessions_principal_expires');
+      table.index(['workspace_id', 'created_at'], 'idx_browser_sessions_workspace');
+    });
+  }
 }
 
 export async function down(knex: Knex): Promise<void> {
+  await knex.schema.dropTableIfExists('durable_browser_sessions');
   await knex.schema.dropTableIfExists('autonomous_agent_tasks');
 }

@@ -7,13 +7,47 @@ import {
 } from '../packages/builder-runtime/src/sandbox.js';
 
 test('Mission B — Python Sandbox Containment, Adversarial Hardening, and Fail-Closed Security', async (t) => {
+  const prevEnv = process.env.AIRA_TRUSTED_LOCAL_EXECUTION;
+  process.env.AIRA_TRUSTED_LOCAL_EXECUTION = 'true';
+
+  t.after(() => {
+    if (prevEnv !== undefined) {
+      process.env.AIRA_TRUSTED_LOCAL_EXECUTION = prevEnv;
+    } else {
+      delete process.env.AIRA_TRUSTED_LOCAL_EXECUTION;
+    }
+  });
+
   const provider = new LocalIsolatedSandboxProvider();
+
+  await t.test('0. Reject Untrusted Workload Without Explicit Trust Authorization', async () => {
+    const unauthProvider = new LocalIsolatedSandboxProvider();
+    const prev = process.env.AIRA_TRUSTED_LOCAL_EXECUTION;
+    delete process.env.AIRA_TRUSTED_LOCAL_EXECUTION;
+    delete process.env.AIRA_TRUSTED_HOST_EXECUTION;
+    try {
+      await assert.rejects(
+        async () => {
+          await unauthProvider.createWorkspace({
+            allowInternet: false,
+            allowPreview: false,
+            timeoutMs: 15000
+          });
+        },
+        /HOST_EXECUTION_FORBIDDEN/,
+        'Must reject untrusted workload creation without explicit authorization'
+      );
+    } finally {
+      process.env.AIRA_TRUSTED_LOCAL_EXECUTION = prev;
+    }
+  });
 
   await t.test('1. Adversarial Path Traversal Attempt Blocked at File Level', async () => {
     const ws = await provider.createWorkspace({
       allowInternet: false,
       allowPreview: false,
-      timeoutMs: 15000
+      timeoutMs: 15000,
+      trustedLocalExecution: true
     });
 
     try {
@@ -43,7 +77,8 @@ test('Mission B — Python Sandbox Containment, Adversarial Hardening, and Fail-
     const ws = await provider.createWorkspace({
       allowInternet: false,
       allowPreview: false,
-      timeoutMs: 15000
+      timeoutMs: 15000,
+      trustedLocalExecution: true
     });
 
     try {
@@ -75,7 +110,8 @@ except Exception as e:
     const ws = await provider.createWorkspace({
       allowInternet: false,
       allowPreview: false,
-      timeoutMs: 15000
+      timeoutMs: 15000,
+      trustedLocalExecution: true
     });
 
     try {
@@ -104,7 +140,8 @@ except Exception as e:
     const ws = await provider.createWorkspace({
       allowInternet: false,
       allowPreview: false,
-      timeoutMs: 15000
+      timeoutMs: 15000,
+      trustedLocalExecution: true
     });
 
     try {
@@ -131,7 +168,8 @@ while True:
     const ws = await provider.createWorkspace({
       allowInternet: false,
       allowPreview: false,
-      timeoutMs: 15000
+      timeoutMs: 15000,
+      trustedLocalExecution: true
     });
 
     try {
@@ -188,7 +226,8 @@ for i in range(15000):
     const ws = await provider.createWorkspace({
       allowInternet: false,
       allowPreview: false,
-      timeoutMs: 15000
+      timeoutMs: 15000,
+      trustedLocalExecution: true
     });
 
     try {

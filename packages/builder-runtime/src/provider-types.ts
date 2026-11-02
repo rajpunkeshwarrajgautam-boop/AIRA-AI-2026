@@ -19,6 +19,7 @@ export interface SandboxCreateOptions {
   instanceType?: string;
   teamspace?: string;
   requireContainer?: boolean;
+  trustedLocalExecution?: boolean;
 }
 
 export interface SandboxReconnectOptions {

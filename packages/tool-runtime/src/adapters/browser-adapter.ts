@@ -2,6 +2,7 @@ import { chromium, type Browser, type BrowserContext, type Page } from 'playwrig
 import fsSync from 'node:fs';
 import crypto from 'node:crypto';
 import { ExecutionPrincipal } from '../../../contracts/src/index.js';
+import { db } from '../../../db/src/index.js';
 
 export interface BrowserSessionInfo {
   sessionKey: string;
@@ -21,6 +22,160 @@ export interface PersistedBrowserSessionState {
   exportedAt: number;
 }
 
+export interface StoredBrowserSessionEnvelope {
+  sessionKey: string;
+  principalId: string;
+  workspaceId?: string;
+  sessionId: string;
+  encryptedEnvelope: string;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt: number;
+}
+
+export interface IBrowserSessionStorage {
+  saveSession(session: StoredBrowserSessionEnvelope): Promise<void>;
+  getSession(sessionKey: string): Promise<StoredBrowserSessionEnvelope | null>;
+  deleteSession(sessionKey: string): Promise<void>;
+  listSessions(principalId: string, workspaceId?: string): Promise<StoredBrowserSessionEnvelope[]>;
+  purgeExpired(): Promise<number>;
+}
+
+export class InMemoryBrowserSessionStorage implements IBrowserSessionStorage {
+  private store = new Map<string, StoredBrowserSessionEnvelope>();
+
+  async saveSession(session: StoredBrowserSessionEnvelope): Promise<void> {
+    this.store.set(session.sessionKey, { ...session });
+  }
+
+  async getSession(sessionKey: string): Promise<StoredBrowserSessionEnvelope | null> {
+    const s = this.store.get(sessionKey);
+    return s ? { ...s } : null;
+  }
+
+  async deleteSession(sessionKey: string): Promise<void> {
+    this.store.delete(sessionKey);
+  }
+
+  async listSessions(principalId: string, workspaceId?: string): Promise<StoredBrowserSessionEnvelope[]> {
+    const res: StoredBrowserSessionEnvelope[] = [];
+    for (const s of this.store.values()) {
+      if (s.principalId === principalId && (!workspaceId || s.workspaceId === workspaceId)) {
+        res.push({ ...s });
+      }
+    }
+    return res;
+  }
+
+  async purgeExpired(): Promise<number> {
+    const now = Date.now();
+    let count = 0;
+    for (const [k, s] of this.store.entries()) {
+      if (now > s.expiresAt) {
+        this.store.delete(k);
+        count++;
+      }
+    }
+    return count;
+  }
+}
+
+export class PostgresBrowserSessionStorage implements IBrowserSessionStorage {
+  private fallback = new InMemoryBrowserSessionStorage();
+
+  async saveSession(session: StoredBrowserSessionEnvelope): Promise<void> {
+    try {
+      const hasTable = await db.schema.hasTable('durable_browser_sessions');
+      if (hasTable) {
+        await db('durable_browser_sessions')
+          .insert({
+            session_key: session.sessionKey,
+            principal_id: session.principalId,
+            workspace_id: session.workspaceId || null,
+            session_id: session.sessionId,
+            encrypted_envelope: session.encryptedEnvelope,
+            expires_at: session.expiresAt,
+            created_at: session.createdAt,
+            updated_at: session.updatedAt
+          })
+          .onConflict('session_key')
+          .merge();
+        return;
+      }
+    } catch {}
+    await this.fallback.saveSession(session);
+  }
+
+  async getSession(sessionKey: string): Promise<StoredBrowserSessionEnvelope | null> {
+    try {
+      const hasTable = await db.schema.hasTable('durable_browser_sessions');
+      if (hasTable) {
+        const row = await db('durable_browser_sessions').where({ session_key: sessionKey }).first();
+        if (row) {
+          return {
+            sessionKey: row.session_key,
+            principalId: row.principal_id,
+            workspaceId: row.workspace_id || undefined,
+            sessionId: row.session_id,
+            encryptedEnvelope: row.encrypted_envelope,
+            expiresAt: Number(row.expires_at),
+            createdAt: Number(row.created_at),
+            updatedAt: Number(row.updated_at)
+          };
+        }
+      }
+    } catch {}
+    return this.fallback.getSession(sessionKey);
+  }
+
+  async deleteSession(sessionKey: string): Promise<void> {
+    try {
+      const hasTable = await db.schema.hasTable('durable_browser_sessions');
+      if (hasTable) {
+        await db('durable_browser_sessions').where({ session_key: sessionKey }).delete();
+      }
+    } catch {}
+    await this.fallback.deleteSession(sessionKey);
+  }
+
+  async listSessions(principalId: string, workspaceId?: string): Promise<StoredBrowserSessionEnvelope[]> {
+    try {
+      const hasTable = await db.schema.hasTable('durable_browser_sessions');
+      if (hasTable) {
+        let q = db('durable_browser_sessions').where({ principal_id: principalId });
+        if (workspaceId) q = q.andWhere({ workspace_id: workspaceId });
+        const rows = await q.select('*');
+        if (rows.length > 0) {
+          return rows.map((row: any) => ({
+            sessionKey: row.session_key,
+            principalId: row.principal_id,
+            workspaceId: row.workspace_id || undefined,
+            sessionId: row.session_id,
+            encryptedEnvelope: row.encrypted_envelope,
+            expiresAt: Number(row.expires_at),
+            createdAt: Number(row.created_at),
+            updatedAt: Number(row.updated_at)
+          }));
+        }
+      }
+    } catch {}
+    return this.fallback.listSessions(principalId, workspaceId);
+  }
+
+  async purgeExpired(): Promise<number> {
+    try {
+      const hasTable = await db.schema.hasTable('durable_browser_sessions');
+      if (hasTable) {
+        const deleted = await db('durable_browser_sessions')
+          .where('expires_at', '<', Date.now())
+          .delete();
+        return Number(deleted) || 0;
+      }
+    } catch {}
+    return this.fallback.purgeExpired();
+  }
+}
+
 export interface BrowserAdapterOptions {
   /** Explicit local executable injection for controlled browser certification. */
   executablePath?: string;
@@ -30,8 +185,18 @@ export class BrowserAdapter {
   private browser: Browser | null = null;
   private sessions: Map<string, BrowserSessionInfo> = new Map();
   private browserPromise: Promise<Browser> | null = null;
+  private storage: IBrowserSessionStorage;
 
-  constructor(private readonly options: BrowserAdapterOptions = {}) {}
+  constructor(
+    private readonly options: BrowserAdapterOptions = {},
+    storage?: IBrowserSessionStorage
+  ) {
+    this.storage = storage || new PostgresBrowserSessionStorage();
+  }
+
+  getStorage(): IBrowserSessionStorage {
+    return this.storage;
+  }
 
   /** Fail-fast readiness probe; unlike navigate(), this never uses HTTP fallback. */
   async assertBrowserAvailable(): Promise<void> {
@@ -559,26 +724,55 @@ export class BrowserAdapter {
   }
 
   /**
+   * Validate exact ownership matching for principal, session, and workspace
+   */
+  public validateOwnership(
+    principal: ExecutionPrincipal,
+    target: { principalId: string; workspaceId?: string; sessionKey?: string; sessionId?: string },
+    action: string = 'restore session'
+  ): void {
+    if (!principal || !principal.userId) {
+      throw new Error('SECURITY_VIOLATION: Unauthenticated principal or missing principalId.');
+    }
+
+    if (!target.principalId || target.principalId !== principal.userId) {
+      throw new Error(`SECURITY_VIOLATION: Principal "${principal.userId}" cannot ${action} owned by "${target.principalId}".`);
+    }
+
+    // Exact workspace-bound session matching:
+    // If either has a workspaceId, BOTH must have it and they must match exactly.
+    const principalWs = principal.workspaceId;
+    const targetWs = target.workspaceId;
+    if (principalWs || targetWs) {
+      if (!principalWs || !targetWs) {
+        throw new Error(`SECURITY_VIOLATION: Missing workspace attribute. Workspace-bound session requires exact matching workspaceId (caller: "${principalWs}", target: "${targetWs}").`);
+      }
+      if (principalWs !== targetWs) {
+        throw new Error(`SECURITY_VIOLATION: Workspace mismatch. Principal workspace "${principalWs}" cannot restore session for "${targetWs}".`);
+      }
+    }
+
+    // Session Key or Session ID exact matching
+    const expectedSessionKey = `${principal.userId}:${principal.sessionId}`;
+    if (target.sessionKey && target.sessionKey !== expectedSessionKey) {
+      throw new Error(`SECURITY_VIOLATION: Session key mismatch. Target session "${expectedSessionKey}" cannot import state for "${target.sessionKey}".`);
+    }
+    if (target.sessionId && target.sessionId !== principal.sessionId) {
+      throw new Error(`SECURITY_VIOLATION: Session ID mismatch. Caller sessionId "${principal.sessionId}" does not match session "${target.sessionId}".`);
+    }
+  }
+
+  /**
    * Restore permitted session state after worker restart
    */
   async importSessionState(principal: ExecutionPrincipal, state: PersistedBrowserSessionState): Promise<BrowserSessionInfo> {
-    // Strict Tenant Boundary Enforcement: Principal A cannot import Principal B's session state
-    if (state.principalId !== principal.userId) {
-      throw new Error(`SECURITY_VIOLATION: Principal "${principal.userId}" cannot restore session owned by "${state.principalId}".`);
-    }
+    this.validateOwnership(principal, {
+      principalId: state.principalId,
+      workspaceId: state.workspaceId,
+      sessionKey: state.sessionKey
+    });
 
-    // Strict Workspace Boundary Enforcement
-    if (state.workspaceId && principal.workspaceId && state.workspaceId !== principal.workspaceId) {
-      throw new Error(`SECURITY_VIOLATION: Workspace mismatch. Principal workspace "${principal.workspaceId}" cannot restore session for "${state.workspaceId}".`);
-    }
-
-    // Strict Session Key Consistency
-    const expectedSessionKey = `${principal.userId}:${principal.sessionId}`;
-    if (state.sessionKey && state.sessionKey !== expectedSessionKey) {
-      throw new Error(`SECURITY_VIOLATION: Session key mismatch. Target session "${expectedSessionKey}" cannot import state for "${state.sessionKey}".`);
-    }
-
-    await this.closeSession(principal);
+    await this.closeSession(principal, { deleteDurable: false });
 
     const sessionKey = `${principal.userId}:${principal.sessionId}`;
     const browser = await this.getBrowser();
@@ -633,6 +827,7 @@ export class BrowserAdapter {
       version: 1,
       principalId: principal.userId,
       workspaceId: principal.workspaceId,
+      sessionKey: `${principal.userId}:${principal.sessionId}`,
       iv: iv.toString('base64'),
       tag: tag.toString('base64'),
       data: encrypted.toString('base64')
@@ -647,29 +842,121 @@ export class BrowserAdapter {
     encryptedEnvelopeStr: string,
     secretKey: string | Buffer
   ): Promise<BrowserSessionInfo> {
-    const envelope = JSON.parse(encryptedEnvelopeStr);
-    if (envelope.principalId !== principal.userId) {
-      throw new Error(`SECURITY_VIOLATION: Principal "${principal.userId}" cannot decrypt session envelope belonging to "${envelope.principalId}".`);
+    let envelope: any;
+    try {
+      envelope = JSON.parse(encryptedEnvelopeStr);
+    } catch {
+      throw new Error('SECURITY_VIOLATION: Corrupted or invalid JSON session envelope.');
     }
 
-    if (envelope.workspaceId && principal.workspaceId && envelope.workspaceId !== principal.workspaceId) {
-      throw new Error(`SECURITY_VIOLATION: Workspace mismatch. Principal workspace "${principal.workspaceId}" cannot restore session for "${envelope.workspaceId}".`);
+    if (!envelope || !envelope.iv || !envelope.tag || !envelope.data) {
+      throw new Error('SECURITY_VIOLATION: Incomplete or tampered encrypted session envelope.');
     }
+
+    this.validateOwnership(principal, {
+      principalId: envelope.principalId,
+      workspaceId: envelope.workspaceId,
+      sessionKey: envelope.sessionKey
+    }, 'decrypt session envelope');
 
     const key = typeof secretKey === 'string'
       ? crypto.createHash('sha256').update(secretKey).digest()
       : secretKey;
 
-    const iv = Buffer.from(envelope.iv, 'base64');
-    const tag = Buffer.from(envelope.tag, 'base64');
-    const ciphertext = Buffer.from(envelope.data, 'base64');
+    let decrypted: Buffer;
+    try {
+      const iv = Buffer.from(envelope.iv, 'base64');
+      const tag = Buffer.from(envelope.tag, 'base64');
+      const ciphertext = Buffer.from(envelope.data, 'base64');
 
-    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
-    decipher.setAuthTag(tag);
-    const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-    const rawState = JSON.parse(decrypted.toString('utf8')) as PersistedBrowserSessionState;
+      const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+      decipher.setAuthTag(tag);
+      decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+    } catch (err: any) {
+      throw new Error(`SECURITY_VIOLATION: Decryption failed. Tampered ciphertext or wrong encryption key (${err.message}).`);
+    }
+
+    let rawState: PersistedBrowserSessionState;
+    try {
+      rawState = JSON.parse(decrypted.toString('utf8'));
+    } catch {
+      throw new Error('SECURITY_VIOLATION: Decrypted session state is not valid JSON.');
+    }
 
     return this.importSessionState(principal, rawState);
+  }
+
+  /**
+   * Persist encrypted session snapshot to durable access-controlled storage
+   */
+  async saveDurableSnapshot(
+    principal: ExecutionPrincipal,
+    secretKey: string | Buffer,
+    ttlMs: number = 3600000
+  ): Promise<StoredBrowserSessionEnvelope | null> {
+    const encryptedEnvelope = await this.exportEncryptedSessionState(principal, secretKey);
+    if (!encryptedEnvelope) return null;
+
+    const sessionKey = `${principal.userId}:${principal.sessionId}`;
+    const now = Date.now();
+    const stored: StoredBrowserSessionEnvelope = {
+      sessionKey,
+      principalId: principal.userId,
+      workspaceId: principal.workspaceId,
+      sessionId: principal.sessionId,
+      encryptedEnvelope,
+      createdAt: now,
+      updatedAt: now,
+      expiresAt: now + ttlMs
+    };
+
+    await this.storage.saveSession(stored);
+    return stored;
+  }
+
+  /**
+   * Restore encrypted session snapshot from durable access-controlled storage
+   */
+  async restoreDurableSnapshot(
+    principal: ExecutionPrincipal,
+    secretKey: string | Buffer
+  ): Promise<BrowserSessionInfo> {
+    const sessionKey = `${principal.userId}:${principal.sessionId}`;
+    const stored = await this.storage.getSession(sessionKey);
+    if (!stored) {
+      throw new Error(`SESSION_NOT_FOUND: No persisted browser session found for key "${sessionKey}".`);
+    }
+
+    // Check expiration
+    if (Date.now() > stored.expiresAt) {
+      await this.storage.deleteSession(sessionKey);
+      throw new Error(`SECURITY_VIOLATION: Persisted browser session "${sessionKey}" has expired.`);
+    }
+
+    // Exact ownership check on stored record
+    this.validateOwnership(principal, {
+      principalId: stored.principalId,
+      workspaceId: stored.workspaceId,
+      sessionId: stored.sessionId,
+      sessionKey: stored.sessionKey
+    });
+
+    return this.importEncryptedSessionState(principal, stored.encryptedEnvelope, secretKey);
+  }
+
+  /**
+   * Delete persisted session snapshot from durable storage
+   */
+  async deleteDurableSnapshot(principal: ExecutionPrincipal): Promise<void> {
+    const sessionKey = `${principal.userId}:${principal.sessionId}`;
+    await this.storage.deleteSession(sessionKey);
+  }
+
+  /**
+   * Purge all expired browser session snapshots across storage
+   */
+  async purgeExpiredSnapshots(): Promise<number> {
+    return this.storage.purgeExpired();
   }
 
   /**
@@ -722,14 +1009,17 @@ export class BrowserAdapter {
   }
 
   /**
-   * Close a principal's browser session cleanly
+   * Close a principal's browser session cleanly and delete durable snapshot
    */
-  async closeSession(principal: ExecutionPrincipal): Promise<void> {
+  async closeSession(principal: ExecutionPrincipal, options: { deleteDurable?: boolean } = {}): Promise<void> {
     const sessionKey = `${principal.userId}:${principal.sessionId}`;
     const session = this.sessions.get(sessionKey);
     if (session) {
       await session.context.close().catch(() => {});
       this.sessions.delete(sessionKey);
+    }
+    if (options.deleteDurable !== false) {
+      await this.storage.deleteSession(sessionKey);
     }
   }
 

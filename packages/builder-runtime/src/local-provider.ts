@@ -133,6 +133,14 @@ export class LocalIsolatedSandboxProvider implements SandboxProvider {
       throw new Error('CONTAINER_ISOLATION_REQUIRED: OCI container isolation is required for this workload, but LocalIsolatedSandboxProvider is a restricted host provider.');
     }
 
+    const isExplicitlyTrusted = options.trustedLocalExecution === true ||
+      process.env.AIRA_TRUSTED_LOCAL_EXECUTION === 'true' ||
+      process.env.AIRA_TRUSTED_HOST_EXECUTION === 'true';
+
+    if (!isExplicitlyTrusted) {
+      throw new Error('HOST_EXECUTION_FORBIDDEN: LocalIsolatedSandboxProvider cannot execute untrusted workloads. Untrusted workloads must use an approved isolated backend (Docker/OCI/MicroVM).');
+    }
+
     const id = `local_ws_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
     const rootDir = path.join(os.tmpdir(), `aira_sandbox_${id}`);
     await fs.mkdir(rootDir, { recursive: true });

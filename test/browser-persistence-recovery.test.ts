@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { BrowserAdapter, PersistedBrowserSessionState } from '../packages/tool-runtime/src/adapters/browser-adapter.js';
+import {
+  BrowserAdapter,
+  PersistedBrowserSessionState,
+  InMemoryBrowserSessionStorage
+} from '../packages/tool-runtime/src/adapters/browser-adapter.js';
 import type { ExecutionPrincipal } from '../packages/contracts/src/index.js';
 
 test('Mission C — Browser Persistence, Tenant Isolation, and Recovery Across Worker Termination', async (t) => {
@@ -249,5 +253,127 @@ test('Mission C — Browser Persistence, Tenant Isolation, and Recovery Across W
     } finally {
       await adapter.shutdown();
     }
+  });
+
+  await t.test('7. Durable Session Persistence, Expiration, Tamper Rejection & Clean Termination', async () => {
+    const sharedStorage = new InMemoryBrowserSessionStorage();
+    const secretKey = crypto.randomBytes(32).toString('hex');
+    const wrongKey = crypto.randomBytes(32).toString('hex');
+
+    // Worker 1: Creates session, navigates, saves durable encrypted snapshot
+    const worker1 = new BrowserAdapter({}, sharedStorage);
+    await worker1.navigate(principalA, 'https://example.com');
+    const storedSnapshot = await worker1.saveDurableSnapshot(principalA, secretKey, 60000);
+    assert.ok(storedSnapshot);
+    assert.equal(storedSnapshot.principalId, principalA.userId);
+    assert.equal(storedSnapshot.workspaceId, principalA.workspaceId);
+
+    // 7a. Worker restart simulation: Worker 1 terminates abruptly (without orderly close)
+    await worker1.shutdown();
+
+    // Worker 2 boots up sharing the same durable storage
+    const worker2 = new BrowserAdapter({}, sharedStorage);
+
+    // 7b. Tampered ciphertext rejection
+    const tampered = await sharedStorage.getSession(`${principalA.userId}:${principalA.sessionId}`);
+    assert.ok(tampered);
+    const parsedEnv = JSON.parse(tampered.encryptedEnvelope);
+    const originalData = parsedEnv.data;
+    // Alter last character of base64 data to corrupt ciphertext
+    parsedEnv.data = originalData.slice(0, -2) + (originalData.endsWith('A') ? 'B' : 'A') + '=';
+    tampered.encryptedEnvelope = JSON.stringify(parsedEnv);
+    await sharedStorage.saveSession(tampered);
+
+    await assert.rejects(
+      async () => {
+        await worker2.restoreDurableSnapshot(principalA, secretKey);
+      },
+      /SECURITY_VIOLATION: Decryption failed/,
+      'Must reject tampered ciphertext with tag verification failure'
+    );
+
+    // Restore untampered envelope
+    parsedEnv.data = originalData;
+    tampered.encryptedEnvelope = JSON.stringify(parsedEnv);
+    await sharedStorage.saveSession(tampered);
+
+    // 7c. Wrong encryption key rejection
+    await assert.rejects(
+      async () => {
+        await worker2.restoreDurableSnapshot(principalA, wrongKey);
+      },
+      /SECURITY_VIOLATION: Decryption failed/,
+      'Must reject decryption with incorrect key'
+    );
+
+    // 7d. Cross-principal rejection
+    await assert.rejects(
+      async () => {
+        await worker2.restoreDurableSnapshot(principalB, secretKey);
+      },
+      /SESSION_NOT_FOUND|SECURITY_VIOLATION: Principal mismatch/,
+      'Principal B must not be able to restore Principal A durable session'
+    );
+
+    // 7e. Cross-workspace rejection
+    const wrongWorkspacePrincipal: ExecutionPrincipal = {
+      ...principalA,
+      workspaceId: 'ws_other_rogue'
+    };
+    await assert.rejects(
+      async () => {
+        await worker2.restoreDurableSnapshot(wrongWorkspacePrincipal, secretKey);
+      },
+      /SECURITY_VIOLATION: Workspace mismatch/,
+      'Principal from different workspace must be rejected'
+    );
+
+    // 7f. Missing workspace attribute on workspace-bound session
+    const noWorkspacePrincipal: ExecutionPrincipal = {
+      ...principalA,
+      workspaceId: undefined
+    };
+    await assert.rejects(
+      async () => {
+        await worker2.restoreDurableSnapshot(noWorkspacePrincipal, secretKey);
+      },
+      /SECURITY_VIOLATION: Missing workspace attribute/,
+      'Missing workspace attribute on caller must be rejected for workspace-bound session'
+    );
+
+    // 7g. Successful durable restoration on Worker 2
+    const restoredInfo = await worker2.restoreDurableSnapshot(principalA, secretKey);
+    assert.ok(restoredInfo);
+    assert.equal(restoredInfo.principalId, principalA.userId);
+    assert.ok(restoredInfo.activePage.url().includes('example.com'));
+
+    // 7h. Clean session termination deletes durable snapshot
+    await worker2.closeSession(principalA); // closes local Playwright session AND deletes durable snapshot
+    const postTerminationRecord = await sharedStorage.getSession(`${principalA.userId}:${principalA.sessionId}`);
+    assert.equal(postTerminationRecord, null, 'Session termination must purge durable snapshot from storage');
+
+    await assert.rejects(
+      async () => {
+        await worker2.restoreDurableSnapshot(principalA, secretKey);
+      },
+      /SESSION_NOT_FOUND/,
+      'Restoring terminated session must fail with SESSION_NOT_FOUND'
+    );
+
+    // 7i. Expiration test
+    const expiredWorker = new BrowserAdapter({}, sharedStorage);
+    await expiredWorker.navigate(principalA, 'https://example.com');
+    await expiredWorker.saveDurableSnapshot(principalA, secretKey, -5000); // already expired
+
+    await assert.rejects(
+      async () => {
+        await expiredWorker.restoreDurableSnapshot(principalA, secretKey);
+      },
+      /SECURITY_VIOLATION: Persisted browser session ".*" has expired/,
+      'Expired session must be rejected and purged'
+    );
+
+    await expiredWorker.shutdown();
+    await worker2.shutdown();
   });
 });
