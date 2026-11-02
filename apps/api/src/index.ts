@@ -1075,7 +1075,9 @@ app.get('/api/agent/autonomous/tasks/:id', async (req: Request, res: Response) =
     const engine = agentRuntime.getAutonomousEngine();
     const task = await engine.getTask(id);
     if (!task) return res.status(404).json({ error: 'Task not found' });
-    if (task.principal.userId !== req.principal!.userId && req.principal!.roles?.indexOf('admin') === -1) {
+    const isOwner = task.principal.userId === req.principal?.userId;
+    const isAdmin = Array.isArray(req.principal?.roles) && req.principal.roles.includes('admin');
+    if (!isOwner && !isAdmin) {
       return res.status(403).json({ error: 'Forbidden: task belongs to another principal' });
     }
     res.json({ task });
@@ -1091,6 +1093,13 @@ app.post('/api/agent/autonomous/tasks/:id/pause', async (req: Request, res: Resp
   const id = getParam(req.params.id);
   const engine = agentRuntime.getAutonomousEngine();
   try {
+    const existing = await engine.getTask(id);
+    if (!existing) return res.status(404).json({ error: 'Task not found' });
+    const isOwner = existing.principal.userId === req.principal?.userId;
+    const isAdmin = Array.isArray(req.principal?.roles) && req.principal.roles.includes('admin');
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ error: 'Forbidden: task belongs to another principal' });
+    }
     const task = await engine.pauseTask(id);
     res.json({ task });
   } catch (err: any) {
@@ -1105,6 +1114,13 @@ app.post('/api/agent/autonomous/tasks/:id/resume', async (req: Request, res: Res
   const id = getParam(req.params.id);
   const engine = agentRuntime.getAutonomousEngine();
   try {
+    const existing = await engine.getTask(id);
+    if (!existing) return res.status(404).json({ error: 'Task not found' });
+    const isOwner = existing.principal.userId === req.principal?.userId;
+    const isAdmin = Array.isArray(req.principal?.roles) && req.principal.roles.includes('admin');
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ error: 'Forbidden: task belongs to another principal' });
+    }
     const task = await engine.resumeTask(id);
     res.json({ task });
   } catch (err: any) {
@@ -1120,6 +1136,13 @@ app.post('/api/agent/autonomous/tasks/:id/cancel', async (req: Request, res: Res
   const { reason } = req.body || {};
   const engine = agentRuntime.getAutonomousEngine();
   try {
+    const existing = await engine.getTask(id);
+    if (!existing) return res.status(404).json({ error: 'Task not found' });
+    const isOwner = existing.principal.userId === req.principal?.userId;
+    const isAdmin = Array.isArray(req.principal?.roles) && req.principal.roles.includes('admin');
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ error: 'Forbidden: task belongs to another principal' });
+    }
     const task = await engine.cancelTask(id, reason);
     res.json({ task });
   } catch (err: any) {
@@ -1138,6 +1161,13 @@ app.post('/api/agent/autonomous/tasks/:id/approve', async (req: Request, res: Re
   }
   const engine = agentRuntime.getAutonomousEngine();
   try {
+    const existing = await engine.getTask(id);
+    if (!existing) return res.status(404).json({ error: 'Task not found' });
+    const isOwner = existing.principal.userId === req.principal?.userId;
+    const isAdmin = Array.isArray(req.principal?.roles) && req.principal.roles.includes('admin');
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ error: 'Forbidden: task belongs to another principal' });
+    }
     const task = await engine.approveStep(id, approvalRequestId, approved !== false, notes);
     res.json({ task });
   } catch (err: any) {

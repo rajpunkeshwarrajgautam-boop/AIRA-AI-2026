@@ -26,6 +26,46 @@ export interface McpServerStatus {
   lastError?: string;
 }
 
+/**
+ * Strips host credentials, tokens, connection strings, and sensitive keys
+ * from environment dictionaries before passing to stdio child processes.
+ */
+export function sanitizeStdioEnv(baseEnv?: Record<string, string | undefined>): Record<string, string> {
+  const safeEnv: Record<string, string> = {
+    PATH: process.env.PATH || '',
+    SYSTEMROOT: process.env.SYSTEMROOT || '',
+    HOME: process.env.HOME || process.env.USERPROFILE || '',
+    USERPROFILE: process.env.USERPROFILE || ''
+  };
+
+  if (baseEnv) {
+    for (const [k, v] of Object.entries(baseEnv)) {
+      if (typeof v === 'string') {
+        safeEnv[k] = v;
+      }
+    }
+  }
+
+  for (const k of Object.keys(safeEnv)) {
+    const kUpper = k.toUpperCase();
+    if (
+      kUpper.includes('TOKEN') ||
+      kUpper.includes('SECRET') ||
+      kUpper.includes('KEY') ||
+      kUpper.includes('DATABASE') ||
+      kUpper.includes('NEON') ||
+      kUpper.includes('POSTGRES') ||
+      kUpper.includes('AUTH') ||
+      kUpper.includes('COOKIE') ||
+      kUpper.includes('JWT')
+    ) {
+      delete safeEnv[k];
+    }
+  }
+
+  return safeEnv;
+}
+
 export class McpHost {
   private servers: Map<string, McpServerConfig> = new Map();
   private clients: Map<string, Client> = new Map();
@@ -104,30 +144,7 @@ export class McpHost {
         }
 
         // Security Isolation: Strip host credentials from stdio child process environment
-        const safeEnv: Record<string, string> = {
-          PATH: process.env.PATH || '',
-          SYSTEMROOT: process.env.SYSTEMROOT || '',
-          HOME: process.env.HOME || process.env.USERPROFILE || '',
-          USERPROFILE: process.env.USERPROFILE || '',
-          ...(config.env || {})
-        };
-
-        for (const k of Object.keys(safeEnv)) {
-          const kUpper = k.toUpperCase();
-          if (
-            kUpper.includes('TOKEN') ||
-            kUpper.includes('SECRET') ||
-            kUpper.includes('KEY') ||
-            kUpper.includes('DATABASE') ||
-            kUpper.includes('NEON') ||
-            kUpper.includes('POSTGRES') ||
-            kUpper.includes('AUTH') ||
-            kUpper.includes('COOKIE') ||
-            kUpper.includes('JWT')
-          ) {
-            delete safeEnv[k];
-          }
-        }
+        const safeEnv = sanitizeStdioEnv(config.env);
 
         transport = new StdioClientTransport({
           command: config.command,

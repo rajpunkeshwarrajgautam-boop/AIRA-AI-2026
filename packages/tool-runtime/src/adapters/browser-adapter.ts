@@ -235,6 +235,32 @@ export interface BrowserAdapterOptions {
   executablePath?: string;
 }
 
+/**
+ * Resolves default browser executable path across platforms and environment variables.
+ */
+export function resolveBrowserExecutablePath(options?: BrowserAdapterOptions): string | undefined {
+  if (options?.executablePath) {
+    return options.executablePath;
+  }
+  if (process.env.CHROMIUM_PATH && fsSync.existsSync(process.env.CHROMIUM_PATH)) {
+    return process.env.CHROMIUM_PATH;
+  }
+  if (process.platform === 'win32') {
+    const candidates = [
+      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+      'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+      'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe'
+    ];
+    for (const c of candidates) {
+      if (fsSync.existsSync(c)) {
+        return c;
+      }
+    }
+  }
+  return undefined;
+}
+
 export class BrowserAdapter {
   private browser: Browser | null = null;
   private sessions: Map<string, BrowserSessionInfo> = new Map();
@@ -269,21 +295,7 @@ export class BrowserAdapter {
     }
 
     this.browserPromise = (async () => {
-      let exePath = this.options.executablePath;
-      if (!exePath && process.platform === 'win32') {
-        const candidates = [
-          'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-          'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-          'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-          'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe'
-        ];
-        for (const c of candidates) {
-          if (fsSync.existsSync(c)) {
-            exePath = c;
-            break;
-          }
-        }
-      }
+      const exePath = resolveBrowserExecutablePath(this.options);
 
       const launchOptions = {
         headless: true,
