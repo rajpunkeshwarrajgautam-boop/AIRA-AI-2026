@@ -1094,6 +1094,9 @@ app.post('/api/agent/autonomous/tasks/:id/pause', async (req: Request, res: Resp
     const task = await engine.pauseTask(id);
     res.json({ task });
   } catch (err: any) {
+    if (err?.code === 'PERSISTENCE_UNAVAILABLE' || err?.name === 'AutonomousPersistenceUnavailableError') {
+      return res.status(503).json({ error: 'PERSISTENCE_UNAVAILABLE', message: err.message });
+    }
     res.status(500).json({ error: err.message });
   }
 });
@@ -1105,6 +1108,9 @@ app.post('/api/agent/autonomous/tasks/:id/resume', async (req: Request, res: Res
     const task = await engine.resumeTask(id);
     res.json({ task });
   } catch (err: any) {
+    if (err?.code === 'PERSISTENCE_UNAVAILABLE' || err?.name === 'AutonomousPersistenceUnavailableError') {
+      return res.status(503).json({ error: 'PERSISTENCE_UNAVAILABLE', message: err.message });
+    }
     res.status(500).json({ error: err.message });
   }
 });
@@ -1117,6 +1123,9 @@ app.post('/api/agent/autonomous/tasks/:id/cancel', async (req: Request, res: Res
     const task = await engine.cancelTask(id, reason);
     res.json({ task });
   } catch (err: any) {
+    if (err?.code === 'PERSISTENCE_UNAVAILABLE' || err?.name === 'AutonomousPersistenceUnavailableError') {
+      return res.status(503).json({ error: 'PERSISTENCE_UNAVAILABLE', message: err.message });
+    }
     res.status(500).json({ error: err.message });
   }
 });
@@ -1132,6 +1141,9 @@ app.post('/api/agent/autonomous/tasks/:id/approve', async (req: Request, res: Re
     const task = await engine.approveStep(id, approvalRequestId, approved !== false, notes);
     res.json({ task });
   } catch (err: any) {
+    if (err?.code === 'PERSISTENCE_UNAVAILABLE' || err?.name === 'AutonomousPersistenceUnavailableError') {
+      return res.status(503).json({ error: 'PERSISTENCE_UNAVAILABLE', message: err.message });
+    }
     res.status(500).json({ error: err.message });
   }
 });
