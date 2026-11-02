@@ -53,6 +53,21 @@ export async function up(knex: Knex): Promise<void> {
         table.jsonb('working_memory').notNullable().defaultTo('{}');
       });
     }
+
+    // Ensure unique constraint uq_auto_tasks_idempotency exists on existing schema
+    const hasUniqueConstraint = await knex.raw(`
+      SELECT 1 FROM pg_constraint WHERE conname = 'uq_auto_tasks_idempotency'
+    `).then(res => res?.rows && res.rows.length > 0).catch(() => false);
+
+    if (!hasUniqueConstraint) {
+      try {
+        await knex.schema.alterTable('autonomous_agent_tasks', (table) => {
+          table.unique(['principal_id', 'idempotency_key'], 'uq_auto_tasks_idempotency');
+        });
+      } catch {
+        // Idempotent catch if constraint already applied concurrently
+      }
+    }
   }
 
   const hasBrowserSessionsTable = await knex.schema.hasTable('durable_browser_sessions');
