@@ -108,7 +108,7 @@ test('Mission B1 — Environment-Aware Repository Selection & Fail-Closed Guard'
   await t.test('3. Configured database selects PostgresAutonomousTaskRepository', async () => {
     const origDbUrl = process.env.DATABASE_URL;
     try {
-      process.env.DATABASE_URL = 'postgres://fake:fake@127.0.0.1:5432/fake_db';
+      process.env.DATABASE_URL = 'postgres://aira:aira@127.0.0.1:5432/fake_db';
 
       const runtime = new AgentRuntime(
         undefined as any,
