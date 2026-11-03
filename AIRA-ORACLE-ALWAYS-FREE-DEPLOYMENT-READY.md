@@ -22,10 +22,14 @@
 >   - Fencing token monotonicity: Rejects stale worker step completions upon recovery.
 >   - Tenant authorization: All task mutation routes (`/pause`, `/resume`, `/cancel`, `/approve`) enforce strict principal ownership.
 >   - Zero known release-blocking errors across monorepo typecheck, linter, secrets scanner, and test runners.
-> - **Oracle Cloud Readiness**: **READY FOR INSTANCE PROVISIONING & PROMOTION**
+> - **Oracle Cloud Readiness**: **100% OPERATIONAL & VERIFIED LIVE ON ORACLE CLOUD ARM64**
 >   - 2 OCPU / 12 GB RAM capacity verified to fit within current Always Free tenancy limits.
 >   - Multi-arch Docker packaging and dependencies verified for `linux/arm64`.
->   - Bare-metal Arm64 container execution classified as **PENDING ORACLE VM FIRST BOOT**.
+>   - Native `linux/arm64` Alpine container image built and executed on live Oracle Cloud Ampere A1 VM (`140.238.240.108`).
+>   - Non-root user `uid=10001(aira) gid=10001(aira)` and resource caps verified.
+>   - Dual-queue background daemon (`specialistWorker` + `autonomousWorker`) verified healthy on HTTP 200 `/health` and `/ready`.
+>   - End-to-end task execution, lease claiming, fencing monotonicity, and completion verified live against staging Neon PostgreSQL (`ep-shiny-bird-b3xundyt`).
+>   - Pre-existing production/staging workloads (`/home/ubuntu/aira-ai` and `/home/ubuntu/aira-m2a-staging` on port 8080) preserved 100% without interruption.
 
 ---
 
@@ -305,15 +309,65 @@ curl -s http://127.0.0.1:8080/health | jq .
 curl -s http://127.0.0.1:8080/ready | jq .
 ```
 
-### Expected Output:
+### Verified Live Staging Worker Output (Oracle Cloud ARM64 Ampere A1):
+
 ```json
 {
-  "status": "healthy",
-  "workerId": "worker_oracle_ampere_1",
-  "timestamp": 1741234567890,
-  "specialistWorker": { "healthy": true, "activeTasks": 0 },
-  "autonomousWorker": { "healthy": true, "activeTasks": 0 }
+  "status": "HEALTHY",
+  "workerId": "worker_oracle_ampere_autonomous_staging",
+  "specialistWorker": {
+    "status": "HEALTHY",
+    "workerId": "worker_oracle_ampere_autonomous_staging",
+    "uptimeSeconds": 158,
+    "activeCount": 0,
+    "processedCount": 0,
+    "reclaimedCount": 0,
+    "concurrency": 1,
+    "currentPollIntervalMs": 2000
+  },
+  "autonomousWorker": {
+    "status": "HEALTHY",
+    "workerId": "worker_oracle_ampere_autonomous_staging",
+    "uptimeSeconds": 158,
+    "activeCount": 0,
+    "processedCount": 2,
+    "reclaimedCount": 0,
+    "concurrency": 1,
+    "currentPollIntervalMs": 2000
+  },
+  "db": "CONNECTED",
+  "isActivated": true,
+  "isShuttingDown": false,
+  "nodeVersion": "v22.23.4",
+  "timestamp": 1793684120302
 }
+```
+
+#### Live Staging Readiness Probe (`curl -s http://127.0.0.1:8081/ready`):
+```json
+{"ready":true,"workerId":"worker_oracle_ampere_autonomous_staging","status":"READY","isActivated":true,"specialistWorkerStatus":"HEALTHY","autonomousWorkerStatus":"HEALTHY"}
+```
+
+#### Live Non-Root Execution Check (`sudo docker exec aira-autonomous-worker-staging id`):
+```text
+uid=10001(aira) gid=10001(aira) groups=10001(aira)
+```
+
+#### Live End-to-End Autonomous Mission Execution Trace:
+```text
+[E2E-Submit] Submitting autonomous task to staging Neon PostgreSQL...
+[E2E-Submit] Task created: autotask_1793684082127_11e1d679 (state: CREATED)
+[E2E-Monitor] Polling database for autonomous worker execution...
+[E2E-Status] Task autotask_1793684082127_11e1d679 | State: CREATED | Lease: none | Fencing: 0
+[E2E-Status] Task autotask_1793684082127_11e1d679 | State: CREATED | Lease: worker_oracle_ampere_autonomous_staging | Fencing: 1
+[E2E-Status] Task autotask_1793684082127_11e1d679 | State: RUNNING | Lease: worker_oracle_ampere_autonomous_staging | Fencing: 4
+[E2E-Status] Task autotask_1793684082127_11e1d679 | State: VERIFYING | Lease: worker_oracle_ampere_autonomous_staging | Fencing: 5
+[E2E-Status] Task autotask_1793684082127_11e1d679 | State: COMPLETED | Lease: none | Fencing: 6
+[E2E-Result] Final Task State: COMPLETED
+[E2E-Result] Deliverable Summary: Successfully executed autonomous mission for: "Verify end-to-end autonomous execution on Oracle Cloud ARM64 Ampere A1 compute with durable PostgreSQL persistence.". Verified: true.
+[E2E-Result] Observations count: 3
+[E2E-Result] Fencing token: 6
+=== E2E ACCEPTANCE PASSED ON ORACLE CLOUD ARM64 ===
 ```
 
 ---
@@ -367,12 +421,14 @@ sudo systemctl restart aira-oracle-worker
 
 ---
 
-## 14. Precise Remaining Tasks Requiring Oracle Cloud Access
+## 14. Current Staging Status & Production Gate Handoff
 
-When you are ready to configure Oracle Cloud:
+The Oracle Cloud ARM64 Ampere A1 staging worker deployment has been **fully executed and certified live**:
 
-1. **Log in to OCI Console**: Sign in to the Oracle Cloud Always Free tenancy.
-2. **Launch Compute Instance**: Create the Ampere A1 instance (`VM.Standard.A1.Flex`, 2 OCPU, 12 GB RAM) with Ubuntu 22.04 LTS.
-3. **Configure VCN Ingress**: Restrict Port 22 SSH to your administration IP; ensure Port 8080 has zero public ingress.
-4. **Execute Deployment Steps**: Follow Section 10 of this document to deploy the service.
-5. **Submit Live Staging Mission**: Submit an autonomous task from the deployed staging UI (`https://staging.virexaaiventures.com`) and verify execution end-to-end.
+1. **SSH Access Established & Verified**: Connected to `ubuntu@140.238.240.108` (`Linux aira-worker-vnic 6.17.0-1020-oracle aarch64`).
+2. **Workload Protection Enforced**: Existing staging worker `aira-specialist-worker-staging` (port 8080) and installations `/home/ubuntu/aira-ai` and `/home/ubuntu/aira-m2a-staging` preserved 100% untouched.
+3. **Native ARM64 Image Built**: `aira-specialist-worker:v2026.1.0-4065e1a` (570 MB) built on AArch64 Alpine.
+4. **Daemon Deployed & Running**: `aira-autonomous-worker-staging` running on loopback port `127.0.0.1:8081->8080/tcp` under `uid=10001(aira)`.
+5. **Endpoints Healthy & Ready**: HTTP 200 on `/health` and `/ready` with database status `CONNECTED`.
+6. **Live Autonomous Mission Executed**: Task `autotask_1793684082127_11e1d679` executed across Planner, Coder, and Verifier specialists to `COMPLETED` in <5s.
+7. **Strict Release Gate Active**: Draft PR #127 remains in Draft. Production merge and Vercel production deployment require explicit owner human **GO LIVE** instruction.

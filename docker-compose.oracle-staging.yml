@@ -14,7 +14,7 @@ services:
       platforms:
         - "linux/arm64"
     image: aira-specialist-worker:${AIRA_IMAGE_TAG:-v2026.1.0-4065e1a}
-    container_name: aira-specialist-worker-oracle-staging
+    container_name: ${CONTAINER_NAME:-aira-specialist-worker-oracle-staging}
     restart: unless-stopped
     user: "10001:10001"
     security_opt:
@@ -76,14 +76,14 @@ services:
       - AIRA_SANDBOX_RUNNER_URL=${AIRA_SANDBOX_RUNNER_URL:-}
     ports:
       # Bound to loopback interface ONLY — never expose unauthenticated worker port to 0.0.0.0
-      - "127.0.0.1:8080:8080"
+      - "${WORKER_PORT_BINDING:-127.0.0.1:8080:8080}"
     deploy:
       resources:
         limits:
-          cpus: '1.5'
+          cpus: '${WORKER_CPU_LIMIT:-1.5}'
           memory: 2048M
         reservations:
-          cpus: '0.5'
+          cpus: '${WORKER_CPU_RESERVATION:-0.5}'
           memory: 512M
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://127.0.0.1:8080/health || exit 1"]

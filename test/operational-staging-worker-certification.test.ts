@@ -48,7 +48,7 @@ import {
 import { TaskDAG, ExecutionPrincipal } from '../packages/contracts/src/index.js';
 
 test.describe('AIRA AI 2026 — Mission 1: Operational Deployable Worker Certification', () => {
-  const workerPort = 8092;
+  const workerPort = 8100 + (process.pid % 400);
   const workerId = `worker_m1_cert_${Date.now()}`;
   let workerProcess: ChildProcess | null = null;
   let isolatedConnStr: string;
@@ -703,7 +703,7 @@ test.describe('AIRA AI 2026 — Mission 1: Operational Deployable Worker Certifi
   test('Target 6.3: Sandbox provider resolution fails closed without container backend', () => {
     assert.throws(
       () => {
-        resolveIsolatedSandboxProvider({ requireContainer: true });
+        resolveIsolatedSandboxProvider({ requireContainer: true, disableLocalDocker: true });
       },
       /CONTAINER_ISOLATION_UNAVAILABLE/,
       'Untrusted code execution without an isolated backend must fail closed'
@@ -808,7 +808,7 @@ test.describe('AIRA AI 2026 — Mission 1: Operational Deployable Worker Certifi
 
     // 2. Verify sandbox provider fail-closed validation
     try {
-      resolveIsolatedSandboxProvider({ requireContainer: true });
+      resolveIsolatedSandboxProvider({ requireContainer: true, disableLocalDocker: true });
       assert.fail('Should fail closed when no isolated container runtime is available');
     } catch (err: any) {
       assert.ok(

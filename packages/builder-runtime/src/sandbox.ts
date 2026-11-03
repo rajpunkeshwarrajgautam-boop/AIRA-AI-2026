@@ -20,6 +20,7 @@ export { DockerIsolatedSandboxProvider } from './docker-provider.js';
 export interface ResolveIsolatedSandboxOptions {
   requireContainer?: boolean;
   trustedLocalExecution?: boolean;
+  disableLocalDocker?: boolean;
 }
 
 /**
@@ -41,9 +42,11 @@ export function resolveIsolatedSandboxProvider(options?: ResolveIsolatedSandboxO
 
   // Untrusted workload (Default for all agent/tool execution):
   // Check available approved isolated backends in security preference order:
-  const docker = new DockerIsolatedSandboxProvider();
-  if (docker.isConfigured()) {
-    return docker;
+  if (process.env.AIRA_DISABLE_LOCAL_DOCKER !== 'true' && !options?.disableLocalDocker) {
+    const docker = new DockerIsolatedSandboxProvider();
+    if (docker.isConfigured()) {
+      return docker;
+    }
   }
 
   const oci = new OCISandboxProvider();

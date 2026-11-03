@@ -671,7 +671,7 @@ class ContainerSandboxSpecialistAgent extends BaseSpecialistAgent {
     _startedAt: number
   ): Promise<SpecialistExecutionResult> {
     // Attempt isolated container execution without an authorized backend
-    const provider = resolveIsolatedSandboxProvider({ requireContainer: true });
+    const provider = resolveIsolatedSandboxProvider({ requireContainer: true, disableLocalDocker: true });
     return this.buildResult(context, 'COMPLETED', { provider: provider.name });
   }
 }
