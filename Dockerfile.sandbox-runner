@@ -6,6 +6,17 @@
 
 FROM python:3.12-alpine
 
+ARG GIT_COMMIT=c04e65b1843ddfce0b1092cbd83d93912b9fcaf2
+ARG BUILD_VERSION=v2026.1.0
+
+LABEL org.opencontainers.image.title="AIRA Isolated Sandbox Runner" \
+      org.opencontainers.image.description="Container sidecar for isolated Python execution with zero host Docker socket access" \
+      org.opencontainers.image.version="${BUILD_VERSION}" \
+      org.opencontainers.image.revision="${GIT_COMMIT}" \
+      org.opencontainers.image.vendor="AIRA AI" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.source="https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026"
+
 # Set non-interactive environment
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

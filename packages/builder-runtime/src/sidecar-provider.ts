@@ -48,6 +48,17 @@ export class SidecarSandboxProvider implements SandboxProvider {
     return url.replace(/\/+$/, '');
   }
 
+  private getAuthHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json'
+    };
+    const token = process.env.AIRA_SANDBOX_AUTH_TOKEN?.trim();
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    return headers;
+  }
+
   async createWorkspace(options: SandboxCreateOptions): Promise<SandboxWorkspace> {
     if (!this.isConfigured()) {
       throw new Error('CONTAINER_ISOLATION_UNAVAILABLE: Sidecar sandbox runner is not configured.');
@@ -66,7 +77,7 @@ export class SidecarSandboxProvider implements SandboxProvider {
       const runnerUrl = this.getRunnerUrl();
       const res = await fetch(`${runnerUrl}/workspaces`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.getAuthHeaders(),
         body: JSON.stringify({ workspaceId: id, timeoutMs: state.timeoutMs }),
         signal: AbortSignal.timeout(3000)
       });
@@ -162,7 +173,7 @@ export class SidecarSandboxProvider implements SandboxProvider {
 
       const res = await fetch(`${runnerUrl}/run`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.getAuthHeaders(),
         body: JSON.stringify({
           workspaceId: workspace.id,
           command,
@@ -226,6 +237,7 @@ export class SidecarSandboxProvider implements SandboxProvider {
       const runnerUrl = this.getRunnerUrl();
       await fetch(`${runnerUrl}/workspaces/${workspace.id}`, {
         method: 'DELETE',
+        headers: this.getAuthHeaders(),
         signal: AbortSignal.timeout(2000)
       }).catch(() => {});
     } catch {
