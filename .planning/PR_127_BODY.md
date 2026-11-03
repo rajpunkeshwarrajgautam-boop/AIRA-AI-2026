@@ -1,29 +1,35 @@
 ## AIRA AI 2026 — Autonomous Intelligence Platform Production Hardening, Operational Staging Certification & Oracle Cloud Always Free Readiness
 
 ### Executive Summary
-This PR delivers the complete, verified Release Candidate for the **AIRA Autonomous Intelligence Platform**, closing the durable background execution loop, verifying worker container durability, securing migration data barriers, certifying operational staging acceptance, and packaging the standalone background worker for deployment to **Oracle Cloud Infrastructure (OCI) Always Free Tier (Ampere A1 Arm64)**.
+This PR delivers the complete, verified Release Candidate for the **AIRA Autonomous Intelligence Platform**, closing the durable background execution loop, verifying worker container durability, securing migration data barriers, certifying operational staging acceptance, hardening the isolated Python sandbox sidecar, and packaging the standalone background worker for deployment to **Oracle Cloud Infrastructure (OCI) Always Free Tier (Ampere A1 Arm64)**.
 
 - **Target Branch**: `prod-release`
 - **PR Status**: **Strictly Draft** (No production merge or deployment without explicit human GO LIVE authorization)
-- **Authoritative Certified Commit**: `e6eb673cc1114c3a607f2f017b6a81f7f9cbd745`
-- **Deployed Staging Image**: `aira-specialist-worker:v2026.1.0-4065e1a`
-- **Immutable Image Digest**: `sha256:c42a53c4c341f83c61b5fa119a7e309dea4583dcbfd695559edb4ba1debe1473`
-- **Quality Gates**: Client & Server Typecheck (PASS, 0 errors), Oxlint (PASS, 0 errors), Production Build (PASS, 1.03s), Tracked Secrets Scan (PASS, 0 exposed credentials across 669 tracked files)
-- **Certification Test Suites & Reconciled Runner Inventory (257 Tests / 100% Pass Rate)**:
+- **Authoritative Certified Commit**: `b8cd7ad80ba0c24f8541c8026b44873dc3b36ef1`
+- **Deployed Staging Images (Oracle Cloud Infrastructure Ampere A1 ARM64)**:
+  - Worker: `aira-specialist-worker:v2026.1.0-4065e1a` (`sha256:0c046d421104975525049cf1c261e475ad67f8e811197410c59e7492c0bfa512`)
+  - Sandbox: `aira-sandbox-runner:v2026.1.0-4065e1a` (`sha256:aecfa58d7434609d09afb437fee9799e839f37eeaee55323abd22883b8e443cf`)
+- **OCI Standard Provenance Labels**: `org.opencontainers.image.revision=b8cd7ad80ba0c24f8541c8026b44873dc3b36ef1`
+- **Quality Gates**: Client & Server Typecheck (PASS, 0 errors), Oxlint (PASS, 0 errors), Production Build (PASS, 1.18s), Tracked Secrets Scan (PASS, 0 exposed credentials across 674 tracked files)
+- **Certification Test Suites & Reconciled Runner Inventory (270+ Tests / 100% Pass Rate)**:
+  - `test/sidecar-security-audit.test.ts`: **8 / 8 PASS** (Gate 1 Sandbox Security Certification)
+  - `test/migration-031-rehearsal.test.ts`: **5 / 5 PASS** (Gate 3 Migration 031 Rehearsal & Safety Barrier)
+  - `scripts/test-live-sidecar-security.ts`: **6 / 6 PASS** (Live OCI ARM64 Sidecar Security Audit)
+  - `scripts/test-oracle-staging-capabilities.ts`: **8 / 8 PASS** (Live OCI ARM64 Staging Capability Audit)
   - `test/operational-staging-worker-certification.test.ts`: **15 / 15 PASS** (100%)
   - `test/operational-staging-acceptance-and-fault-injection.test.ts`: **12 / 12 PASS** (100%)
   - `test/release-authorization-guard.test.ts`: **52 / 52 PASS** (100%)
   - `test/database-isolation-guard.test.ts`: **41 / 41 PASS** (100%)
   - `test/staging-cutover-safety-gates.test.ts`: **53 / 53 PASS** (100%)
   - `test/staging-maintenance-barrier.test.ts`: **35 / 35 PASS** (100%)
+  - `test/builder-agent.test.ts` & `test/sandbox-providers.test.ts`: **29 / 29 PASS** (100%)
+  - `test/cors-origin-rejection.test.ts`: **8 / 8 PASS** (100%)
+  - `test/auth-fail-closed-policy.test.ts`: **3 / 3 PASS** (100%)
+  - `test/auth-identity-transition-lifecycle.test.ts`: **10 / 10 PASS** (100%)
   - `test/autonomous-worker-recovery.test.ts`: **5 / 5 PASS** (100%)
   - `test/autonomous-api-worker-integration.test.ts`: **13 / 13 PASS** (100%)
   - `test/autonomous-adversarial-scenarios.test.ts`: **16 / 16 PASS** (100%)
   - `test/autonomous-task-postgres-certification.test.ts`: **5 / 5 PASS** (100%)
-  - `test/sidecar-runner-real-execution.test.ts`: **5 / 5 PASS** (100%)
-  - `test/sandbox-providers.test.ts`: **5 / 5 PASS** (100%)
-  - `test/test-suite-inventory.test.ts`: **6 / 6 PASS** (100%)
-  - `test/staging-live-runtime-probe.test.ts`: **6 / 6 PASS** (100%)
 
 ---
 
@@ -58,7 +64,7 @@ This PR delivers the complete, verified Release Candidate for the **AIRA Autonom
                                          v
     +-----------------------------------------------------------------------+
     |         ORACLE CLOUD ALWAYS FREE PERSISTENT CONTAINER WORKER          |
-    |          Host: 140.238.240.108 (Ampere A1 Arm64, 2 OCPU, 12 GB)       |
+    |          Host: 140.238.240.108 (Ampere A1 Arm64, 1 OCPU, 5.8 GiB)     |
     |          Container: aira-autonomous-worker-staging (Port 8081)        |
     |                      (docker-compose.oracle-staging.yml)              |
     |                                                                       |
@@ -69,7 +75,9 @@ This PR delivers the complete, verified Release Candidate for the **AIRA Autonom
     |  - Multi-Arch Alpine Base: linux/arm64 & linux/amd64                  |
     |  - Non-Root Execution: uid=10001(aira) gid=10001(aira)                |
     |  - MCP Tool Wire (stdio/SSE/HTTP) with environment sanitization       |
-    |  - Zero-Docker-Socket Sandbox Isolation (E2B / Lightning MicroVMs)    |
+    |  - Zero-Docker-Socket Sandbox Isolation (Sidecar / E2B / Lightning)   |
+    |  - Isolated Python Sidecar: aira-sandbox-runner-staging (Port 8000)   |
+    |    (non-root nobody, read-only rootfs, dropped caps, internal bridge) |
     |  - Headless Chromium with durable AES-256-GCM state persistence       |
     |  - Systemd Supervisor (deploy/systemd/aira-oracle-worker.service)     |
     +-----------------------------------------------------------------------+
@@ -77,45 +85,35 @@ This PR delivers the complete, verified Release Candidate for the **AIRA Autonom
 
 ---
 
-### Key Deliverables Completed in this PR
+### Three Production-Readiness Gates Certified
 
-#### 1. Test Count Discrepancy Reconciliation (247 / 247 Tests PASS)
-- **Root Cause**: The 34-count came from `autonomous-worker-recovery` (5) + `autonomous-api-worker-integration` (13) + `autonomous-adversarial-scenarios` (16) = 34. When including the 4th core database durability suite `test/autonomous-task-postgres-certification.test.ts` (5 tests verifying PostgreSQL fail-closed contract for tasks and browser storage), the exact sum is: 208 + 39 = **247 tests**. Both counts are reconciled and verified via `test/test-suite-inventory.test.ts`.
+#### Gate 1: Independent Python Sandbox Security Certification
+- **Zero Host Docker Socket Exposure**: Host Docker socket (`/var/run/docker.sock`) is strictly unmounted.
+- **Container Sidecar Runner (`apps/sandbox-runner/runner.py`)**:
+  - Non-root unprivileged execution (`nobody:nogroup`, UID/GID 65534).
+  - Read-only container rootfs with isolated tmpfs scratchpads (`size=256M`).
+  - Dropped Linux capabilities (`ALL`) and `no-new-privileges: true`.
+  - Internal Docker bridge networking (`internal: true`) strictly denying internet and cloud metadata (`169.254.169.254`) egress.
+  - Subprocess limits: `RLIMIT_NPROC: 64`, `RLIMIT_NOFILE: 256`, `RLIMIT_FSIZE: 20MB`.
+  - Path traversal and workspace escape denial: rejects null bytes, absolute paths, and multi-dot traversal variations (`....//....//etc/hosts`).
+  - Process group isolation & process-tree termination on timeout (`os.killpg(pid, SIGKILL)` on POSIX / `taskkill` on Windows).
+  - Optional Bearer token authentication (`AIRA_SANDBOX_AUTH_TOKEN`).
+- **Audit Verification**: Verified both by unit test `test/sidecar-security-audit.test.ts` (**8/8 PASS**) and live inside Oracle ARM64 staging container `aira-autonomous-worker-staging` via `scripts/test-live-sidecar-security.ts` (**6/6 PASS**).
 
-#### 2. Oracle Cloud Always Free (Arm64 Ampere A1) Live Operational Certification
-- **Hardware Sizing**: Verified live instance `140.238.240.108` running `VM.Standard.A1.Flex` with **1 OCPU and 5.8 GiB RAM** (Canonical Ubuntu 24.04 LTS aarch64, Linux 6.17.0-1020-oracle). Tenancy allows up to 4 OCPUs / 24 GB.
-- **Multi-Arch Dockerfile**: Hardened `Dockerfile.worker` built on `node:22-alpine` with native `linux/arm64` and `linux/amd64` multi-arch support.
-- **Side-by-Side Coexistence**: Existing worker container `aira-specialist-worker-staging` (port 8080) and installations `/home/ubuntu/aira-ai` and `/home/ubuntu/aira-m2a-staging` preserved 100% untouched (>526,000s uptime).
-- **Oracle Staging Compose**: `docker-compose.oracle-staging.yml` preconfigured with CPU limit (0.75 OCPU), 2048M memory limit, 1024M Node heap limit, non-root user `10001:10001`, and port binding `127.0.0.1:8081:8080`.
-- **Systemd Unit**: `deploy/systemd/aira-oracle-worker.service` with auto-restart, 30s graceful stop timeout, journald integration, and secure permissions (`chmod 640 root:docker`).
-- **Browser Executable Resolution**: Updated `packages/tool-runtime/src/adapters/browser-adapter.ts` to probe Linux standard paths (`/usr/bin/chromium-browser`, `/usr/bin/chromium`, `/usr/bin/google-chrome`) for native Arm64 Chromium discovery.
-- **Live Capability Acceptance Audit (8 / 8 Capabilities Verified)**:
-  1. *MCP Server Wire*: SSRF protection verified; 3 tools discovered, executed `echo`, tagged `untrustedExternalData: true`.
-  2. *Python Sandbox*: Zero-host-Docker-socket rule enforced; fails closed when unconfigured (`CONTAINER_ISOLATION_UNAVAILABLE`); real isolated Python sidecar execution verified live on ARM64 host via `aira-sandbox-runner-staging` (15 primes calculated, bidirectional file sync, cloud metadata & internet blocked).
-  3. *Persistent Browser Session*: Native ARM64 Chromium navigation to `https://example.com` (HTTP 200); AES-256-GCM envelope in Neon DB; tamper rejection verified.
-  4. *Multi-Specialist Delegation*: 3-step mission (Planner → Coder → Verifier) completed in <5s; fencing token advanced (0→1→4→5→6); deliverable summary produced.
-  5. *Cross-Tenant Isolation & Deduplication*: Cross-tenant tasks hidden; idempotency deduplication verified.
-  6. *Approval Gating*: Foreign resolver blocked; run owner rejection verified fail-closed; `ALLOW_SESSION` resumes authorized tool execution.
-  7. *Persistent Memory*: Stored in Neon PostgreSQL `memory_records` with scoped retrieval; cross-tenant leakage blocked; deletion verified.
-  8. *React/TSX Artifact Generation*: Generated interactive TSX dashboard artifact and compiled into sandboxed HTML preview with strict CSP, Babel standalone, React 18, and error boundary.
-- **Resource Overhead**: `sudo docker stats --no-stream` confirms CPU <0.5%, RAM ~245 MiB total across all three containers (`aira-autonomous-worker-staging` 115.5 MiB, `aira-sandbox-runner-staging` 11.9 MiB, `aira-specialist-worker-staging` 117.8 MiB). Free unallocated memory: **4.6 GiB** / 5.8 GiB available on VM.
+#### Gate 2: Exact Source, Image & Deployment Provenance Verification
+- **Exact Git Commit**: `b8cd7ad80ba0c24f8541c8026b44873dc3b36ef1` on branch `feat/aira-autonomous-agent-platform`.
+- **OCI Labels**: Both worker and sandbox runner images contain `org.opencontainers.image.revision`, `org.opencontainers.image.version`, `org.opencontainers.image.title`, and `org.opencontainers.image.source`.
+- **Images Built on Oracle ARM64**:
+  - Worker: `aira-specialist-worker:v2026.1.0-4065e1a` (`sha256:0c046d421104...`)
+  - Sandbox: `aira-sandbox-runner:v2026.1.0-4065e1a` (`sha256:aecfa58d7434...`)
+- **Container Isolation**: Multi-container stack managed via `docker-compose.oracle-staging.yml` with loopback-only binding (`127.0.0.1:8081:8080`) and internal network `sandbox-net`.
 
-#### 3. Python Sandbox Isolation Architecture (Zero Host Docker Socket Exposure)
-- **Security Boundary**: The host Docker socket (`/var/run/docker.sock`) is **never** mounted to the worker container.
-- **Cloud MicroVMs**: Untrusted agent code runs in ephemeral hardware-isolated Firecracker MicroVMs via E2B or Lightning AI over outbound HTTPS.
-- **Sidecar Container Isolation (`SidecarSandboxProvider`)**: Implemented in `packages/builder-runtime/src/sidecar-provider.ts` and registered in `resolveIsolatedSandboxProvider` and `MultiProviderSandboxFactory`. Communicates via `AIRA_SANDBOX_RUNNER_URL` over an internal bridge network, enabling isolated container execution without host Docker socket access.
-- **Fail-Closed Verification**: The system fails closed with `CONTAINER_ISOLATION_UNAVAILABLE` if no isolated backend is active (verified by test `F6`, `test/sandbox-providers.test.ts`, and live staging audit).
-
-#### 4. Complete Runtime Secrets & Configuration Injection
-- **Encrypted Browser Sessions**: Injected `BROWSER_SESSION_ENCRYPTION_KEY` for authenticated AES-256-GCM envelope encryption.
-- **Model & MCP Credentials**: Explicitly passed `GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GROQ_API_KEY`, `TAVILY_API_KEY`, and `GITHUB_TOKEN`.
-- **Reproducible Image Tagging**: Pinned image tag `aira-specialist-worker:v2026.1.0-4065e1a` and exact image digest `sha256:c42a53c4c341f83c61b5fa119a7e309dea4583dcbfd695559edb4ba1debe1473`.
-
-#### 5. API Tenant Authorization Security Hardening
-- Secured `POST /tasks/:id/pause`, `POST /tasks/:id/resume`, `POST /tasks/:id/cancel`, and `POST /tasks/:id/approve` in `apps/api/src/index.ts` with strict user principal ownership validation, returning HTTP 403 `FORBIDDEN` on cross-tenant tampering.
-
-#### 6. Migration 031 Non-Destructive Rollback Safety Barrier
-- In `packages/db/src/migrations/031_autonomous_agent_tasks.ts`, `down()` inspects row counts and unconditionally blocks rollback if active user records exist in production environments unless `AIRA_ALLOW_DESTRUCTIVE_ROLLBACK=true` is set.
+#### Gate 3: Complete Production-Release Rehearsal
+- **Migration 031 Rehearsal & Rollback Safety Barrier**: Verified via `test/migration-031-rehearsal.test.ts` (**5/5 PASS**). `down()` aborts with `[MIGRATION SAFETY BARRIER]` when active user records exist unless `AIRA_ALLOW_DESTRUCTIVE_ROLLBACK=true`.
+- **Database Identity**: Neon PostgreSQL Staging (`ep-shiny-bird-b3xundyt` on project `mute-frost-50372225`, branch `br-autumn-star`). Production DB crossover strictly blocked by `test/database-isolation-guard.test.ts` (**41/41 PASS**).
+- **Fail-Closed Policy**: Verified missing credentials refuse execution; cutover safety wizard enforces fail-closed assertions (`test/staging-cutover-safety-gates.test.ts`, **53/53 PASS**).
+- **Live Autonomous Mission Execution on Oracle ARM64**: Verified all 8 core platform capabilities live via `scripts/test-oracle-staging-capabilities.ts` (**8/8 PASS**).
+- **Preserved Workload Invariant**: Pre-existing staging container `aira-specialist-worker-staging` (port 8080) preserved untouched with >531,000s (>6.1 days) continuous uptime.
 
 ---
 
