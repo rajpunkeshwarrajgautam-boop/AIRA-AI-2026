@@ -89,10 +89,17 @@ export async function up(knex: Knex): Promise<void> {
 }
 
 export async function down(knex: Knex): Promise<void> {
-  const isExplicitTest = (process.env.NODE_ENV === 'test' || process.env.AIRA_TEST_ENVIRONMENT === 'true') && process.env.NODE_ENV !== 'production';
   const allowDestructiveRollback = process.env.AIRA_ALLOW_DESTRUCTIVE_ROLLBACK === 'true';
+  const isDisposableTestDatabase =
+    process.env.NODE_ENV === 'test' &&
+    process.env.CI_DISPOSABLE_DATABASE === 'true' &&
+    Boolean(process.env.DATABASE_URL) &&
+    process.env.DATABASE_URL === process.env.ISOLATED_TEST_DATABASE_URL;
 
-  if (!isExplicitTest && !allowDestructiveRollback) {
+  // Unless explicitly authorized via AIRA_ALLOW_DESTRUCTIVE_ROLLBACK=true,
+  // enforce strict dual-table safety barriers to prevent catastrophic data loss.
+  if (!allowDestructiveRollback) {
+    // 1. Inspect autonomous_agent_tasks records
     const hasTasks = await knex.schema.hasTable('autonomous_agent_tasks');
     if (hasTasks) {
       const taskCountResult = await knex('autonomous_agent_tasks').count('* as count').first();
@@ -104,6 +111,28 @@ export async function down(knex: Knex): Promise<void> {
           `Use a non-destructive forward migration instead, or set AIRA_ALLOW_DESTRUCTIVE_ROLLBACK=true to force.`
         );
       }
+    }
+
+    // 2. Inspect durable_browser_sessions records separately
+    const hasBrowserSessions = await knex.schema.hasTable('durable_browser_sessions');
+    if (hasBrowserSessions) {
+      const sessionCountResult = await knex('durable_browser_sessions').count('* as count').first();
+      const sessionCount = Number(sessionCountResult?.count || 0);
+      if (sessionCount > 0) {
+        throw new Error(
+          `[MIGRATION SAFETY BARRIER] Aborting rollback of migration 031: Table "durable_browser_sessions" contains ${sessionCount} user record(s). ` +
+          `Dropping tables in an active environment will cause catastrophic data loss. ` +
+          `Use a non-destructive forward migration instead, or set AIRA_ALLOW_DESTRUCTIVE_ROLLBACK=true to force.`
+        );
+      }
+    }
+
+    // 3. In non-disposable production/staging environments, block table drop even if empty without explicit authorization
+    const isProductionOrStaging = process.env.NODE_ENV === 'production' || process.env.AIRA_ENV === 'staging' || process.env.AIRA_ENV === 'production';
+    if (isProductionOrStaging && !isDisposableTestDatabase) {
+      throw new Error(
+        `[MIGRATION SAFETY BARRIER] Aborting rollback of migration 031: Destructive DDL is forbidden in ${process.env.NODE_ENV || 'production'} without AIRA_ALLOW_DESTRUCTIVE_ROLLBACK=true.`
+      );
     }
   }
 
