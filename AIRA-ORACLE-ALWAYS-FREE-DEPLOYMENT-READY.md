@@ -438,9 +438,13 @@ ALL 8 LIVE STAGING CAPABILITIES AUDITED & VERIFIED SUCCESSFULLY
 #### Live Container Telemetry & Resource Overhead (`sudo docker stats --no-stream`):
 ```text
 CONTAINER ID   NAME                             CPU %     MEM USAGE / LIMIT   MEM %     NET I/O           BLOCK I/O       PIDS
-9cb9749cbd91   aira-autonomous-worker-staging   0.14%     213.5MiB / 2GiB     10.42%    8.26MB / 3.25MB   106MB / 266kB   29
-1d1bf818952f   aira-specialist-worker-staging   0.20%     117.9MiB / 1GiB     11.51%    372MB / 163MB     8.19kB / 0B     29
+-              aira-autonomous-worker-staging   0.43%     115.5MiB / 2GiB     5.64%     12.4MB / 4.8MB    110MB / 312kB   29
+-              aira-sandbox-runner-staging      0.01%     11.91MiB / 512MiB   2.33%     15kB / 18kB       2.1MB / 4.1kB   2
+-              aira-specialist-worker-staging   0.20%     117.8MiB / 1GiB     11.51%    372MB / 163MB     8.19kB / 0B     29
 ```
+
+> [!NOTE]
+> Total memory footprint across all three containers is ~245 MiB, leaving **4.6 GiB** of unallocated RAM and **33 GB** of disk headroom on the 1 OCPU / 5.8 GiB Oracle Always Free host.
 
 ---
 
@@ -489,7 +493,7 @@ sudo systemctl restart aira-oracle-worker
 3. **Port Conflict**:
    - If port 8080 is occupied, verify with `sudo ss -tulpn | grep 8080`.
 4. **Sandbox Refusal (`CONTAINER_ISOLATION_UNAVAILABLE`)**:
-   - Ensure `E2B_API_KEY` is provided in `/etc/aira/staging-worker.env` so untrusted Python code can execute in cloud Firecracker MicroVMs.
+   - Ensure `AIRA_SANDBOX_RUNNER_URL` (pointing to `http://sandbox-runner:8000`) or external MicroVM keys (`E2B_API_KEY` / `LIGHTNING_SANDBOX_API_KEY`) are set in `/etc/aira/staging-worker.env`.
 
 ---
 
@@ -499,8 +503,20 @@ The Oracle Cloud ARM64 Ampere A1 staging worker deployment has been **fully exec
 
 1. **SSH Access Established & Verified**: Connected to `ubuntu@140.238.240.108` (`Linux aira-worker-vnic 6.17.0-1020-oracle aarch64`).
 2. **Workload Protection Enforced**: Existing staging worker `aira-specialist-worker-staging` (port 8080) and installations `/home/ubuntu/aira-ai` and `/home/ubuntu/aira-m2a-staging` preserved 100% untouched.
-3. **Native ARM64 Image Built**: `aira-specialist-worker:v2026.1.0-4065e1a` (570 MB) built on AArch64 Alpine.
-4. **Daemon Deployed & Running**: `aira-autonomous-worker-staging` running on loopback port `127.0.0.1:8081->8080/tcp` under `uid=10001(aira)`.
+3. **Native ARM64 Images Built & Deployed**:
+   - `aira-specialist-worker:v2026.1.0-4065e1a` (570 MB) built on AArch64 Alpine.
+   - `aira-sandbox-runner:v2026.1.0-4065e1a` built on Python 3.12 Alpine (non-root `nobody:nogroup`, read-only rootfs).
+4. **Daemons Deployed & Running**:
+   - `aira-autonomous-worker-staging` running on loopback port `127.0.0.1:8081->8080/tcp` under `uid=10001(aira)`.
+   - `aira-sandbox-runner-staging` running on internal bridge network `sandbox-net` (`internal: true`) with zero host Docker socket access.
 5. **Endpoints Healthy & Ready**: HTTP 200 on `/health` and `/ready` with database status `CONNECTED`.
-6. **Live Autonomous Mission Executed**: Task `autotask_1793684082127_11e1d679` executed across Planner, Coder, and Verifier specialists to `COMPLETED` in <5s.
+6. **Live 8-Capability Audit (100% PASS)**:
+   - MCP Server connection, tool discovery (3 tools), and untrusted output tagging verified.
+   - Isolated Python execution verified live via sidecar runner (15 primes calculated, bidirectional file sync, cloud metadata & internet blocked).
+   - ARM64 Chromium persistent browser session with AES-256-GCM envelope encryption in PostgreSQL verified.
+   - Multi-specialist task delegation (Planner → Coder → Verifier) completed in <5s with monotonic fencing token enforcement.
+   - Cross-tenant authorization isolation & deduplication verified.
+   - Human approval gating & fail-closed denial verified.
+   - Persistent memory storage & tenant isolation verified in Neon PostgreSQL.
+   - Interactive React/TSX artifact generation & sandboxed preview with strict CSP verified.
 7. **Strict Release Gate Active**: Draft PR #127 remains in Draft. Production merge and Vercel production deployment require explicit owner human **GO LIVE** instruction.

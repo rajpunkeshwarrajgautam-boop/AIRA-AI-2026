@@ -1,10 +1,11 @@
 # ==============================================================================
-# AIRA AI 2026 — Oracle Cloud Always Free (Arm64 Ampere A1) Staging Worker
-# Target Shape: VM.Standard.A1.Flex (2 OCPU, 12 GB RAM, Ubuntu 22.04/24.04 aarch64)
-# Current Always Free Limit: 2 OCPUs / 12 GB RAM
+# AIRA AI 2026 — Oracle Cloud Always Free (Arm64 Ampere A1) Staging Architecture
+# Target Shape: VM.Standard.A1.Flex (1 OCPU, 6 GB RAM, Ubuntu 24.04 aarch64)
+# Current Host Allocated: 1 OCPU / 5.8 GiB RAM
+# Services:
+#   1. specialist-worker: AIRA autonomous agent runtime daemon
+#   2. sandbox-runner: Isolated non-root Python runner sidecar (Zero Host Docker Socket)
 # ==============================================================================
-
-version: '3.8'
 
 services:
   specialist-worker:
@@ -23,6 +24,9 @@ services:
       - ALL
     cap_add:
       - NET_BIND_SERVICE
+    networks:
+      - default
+      - sandbox-net
     # Environment file loaded from permissions-restricted host path (chmod 640 root:docker)
     env_file:
       - ${AIRA_ENV_FILE:-/etc/aira/staging-worker.env}
@@ -48,7 +52,7 @@ services:
       - PORT=8080
       - WORKER_BIND_HOST=0.0.0.0
       
-      # Node.js Heap Cap & Engine Limits (Tailored for 2 OCPU / 12 GB Host)
+      # Node.js Heap Cap & Engine Limits (Tailored for 1 OCPU / 5.8 GiB Host)
       - NODE_OPTIONS=--max-old-space-size=1024
       
       # Browser Session Persistence & Authenticated AES-256-GCM Encryption
@@ -68,22 +72,22 @@ services:
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       
       # Sandbox Isolation Architecture (Fail-Closed, Zero Docker Socket Mounts)
-      # Execution requires external MicroVMs (E2B / Lightning) or internal sidecar
+      # Execution routes to external MicroVMs (E2B / Lightning) or internal sidecar
       - AIRA_REQUIRE_CONTAINER_SANDBOX=true
       - AIRA_ALLOW_LOCAL_SANDBOX=false
       - E2B_API_KEY=${E2B_API_KEY:-}
       - LIGHTNING_SANDBOX_API_KEY=${LIGHTNING_SANDBOX_API_KEY:-}
-      - AIRA_SANDBOX_RUNNER_URL=${AIRA_SANDBOX_RUNNER_URL:-}
+      - AIRA_SANDBOX_RUNNER_URL=${AIRA_SANDBOX_RUNNER_URL:-http://sandbox-runner:8000}
     ports:
       # Bound to loopback interface ONLY — never expose unauthenticated worker port to 0.0.0.0
       - "${WORKER_PORT_BINDING:-127.0.0.1:8080:8080}"
     deploy:
       resources:
         limits:
-          cpus: '${WORKER_CPU_LIMIT:-1.5}'
+          cpus: '${WORKER_CPU_LIMIT:-0.75}'
           memory: 2048M
         reservations:
-          cpus: '${WORKER_CPU_RESERVATION:-0.5}'
+          cpus: '${WORKER_CPU_RESERVATION:-0.25}'
           memory: 512M
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://127.0.0.1:8080/health || exit 1"]
@@ -98,3 +102,49 @@ services:
         max-file: "5"
     tmpfs:
       - /tmp:exec,mode=1777,size=256M
+
+  sandbox-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox-runner
+      platforms:
+        - "linux/arm64"
+    image: aira-sandbox-runner:${AIRA_IMAGE_TAG:-v2026.1.0-4065e1a}
+    container_name: ${SANDBOX_CONTAINER_NAME:-aira-sandbox-runner-oracle-staging}
+    restart: unless-stopped
+    user: "nobody:nogroup"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - sandbox-net
+    environment:
+      - PORT=8000
+      - WORKSPACE_BASE=/tmp/workspaces
+    deploy:
+      resources:
+        limits:
+          cpus: '${SANDBOX_CPU_LIMIT:-0.5}'
+          memory: 512M
+        reservations:
+          cpus: '${SANDBOX_CPU_RESERVATION:-0.1}'
+          memory: 64M
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')\" || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+    tmpfs:
+      - /tmp:mode=1777,size=256M
+
+networks:
+  sandbox-net:
+    internal: true

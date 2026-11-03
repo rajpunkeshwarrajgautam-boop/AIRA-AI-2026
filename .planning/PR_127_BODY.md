@@ -9,7 +9,7 @@ This PR delivers the complete, verified Release Candidate for the **AIRA Autonom
 - **Deployed Staging Image**: `aira-specialist-worker:v2026.1.0-4065e1a`
 - **Immutable Image Digest**: `sha256:c42a53c4c341f83c61b5fa119a7e309dea4583dcbfd695559edb4ba1debe1473`
 - **Quality Gates**: Client & Server Typecheck (PASS, 0 errors), Oxlint (PASS, 0 errors), Production Build (PASS, 1.03s), Tracked Secrets Scan (PASS, 0 exposed credentials across 669 tracked files)
-- **Certification Test Suites & Reconciled Runner Inventory (247 Tests / 100% Pass Rate)**:
+- **Certification Test Suites & Reconciled Runner Inventory (257 Tests / 100% Pass Rate)**:
   - `test/operational-staging-worker-certification.test.ts`: **15 / 15 PASS** (100%)
   - `test/operational-staging-acceptance-and-fault-injection.test.ts`: **12 / 12 PASS** (100%)
   - `test/release-authorization-guard.test.ts`: **52 / 52 PASS** (100%)
@@ -20,6 +20,8 @@ This PR delivers the complete, verified Release Candidate for the **AIRA Autonom
   - `test/autonomous-api-worker-integration.test.ts`: **13 / 13 PASS** (100%)
   - `test/autonomous-adversarial-scenarios.test.ts`: **16 / 16 PASS** (100%)
   - `test/autonomous-task-postgres-certification.test.ts`: **5 / 5 PASS** (100%)
+  - `test/sidecar-runner-real-execution.test.ts`: **5 / 5 PASS** (100%)
+  - `test/sandbox-providers.test.ts`: **5 / 5 PASS** (100%)
   - `test/test-suite-inventory.test.ts`: **6 / 6 PASS** (100%)
   - `test/staging-live-runtime-probe.test.ts`: **6 / 6 PASS** (100%)
 
@@ -89,14 +91,14 @@ This PR delivers the complete, verified Release Candidate for the **AIRA Autonom
 - **Browser Executable Resolution**: Updated `packages/tool-runtime/src/adapters/browser-adapter.ts` to probe Linux standard paths (`/usr/bin/chromium-browser`, `/usr/bin/chromium`, `/usr/bin/google-chrome`) for native Arm64 Chromium discovery.
 - **Live Capability Acceptance Audit (8 / 8 Capabilities Verified)**:
   1. *MCP Server Wire*: SSRF protection verified; 3 tools discovered, executed `echo`, tagged `untrustedExternalData: true`.
-  2. *Python Sandbox Policy*: Zero-host-Docker-socket rule enforced; fails closed with `CONTAINER_ISOLATION_UNAVAILABLE` without API key.
+  2. *Python Sandbox*: Zero-host-Docker-socket rule enforced; fails closed when unconfigured (`CONTAINER_ISOLATION_UNAVAILABLE`); real isolated Python sidecar execution verified live on ARM64 host via `aira-sandbox-runner-staging` (15 primes calculated, bidirectional file sync, cloud metadata & internet blocked).
   3. *Persistent Browser Session*: Native ARM64 Chromium navigation to `https://example.com` (HTTP 200); AES-256-GCM envelope in Neon DB; tamper rejection verified.
   4. *Multi-Specialist Delegation*: 3-step mission (Planner → Coder → Verifier) completed in <5s; fencing token advanced (0→1→4→5→6); deliverable summary produced.
   5. *Cross-Tenant Isolation & Deduplication*: Cross-tenant tasks hidden; idempotency deduplication verified.
   6. *Approval Gating*: Foreign resolver blocked; run owner rejection verified fail-closed; `ALLOW_SESSION` resumes authorized tool execution.
   7. *Persistent Memory*: Stored in Neon PostgreSQL `memory_records` with scoped retrieval; cross-tenant leakage blocked; deletion verified.
   8. *React/TSX Artifact Generation*: Generated interactive TSX dashboard artifact and compiled into sandboxed HTML preview with strict CSP, Babel standalone, React 18, and error boundary.
-- **Resource Overhead**: `sudo docker stats --no-stream` confirms CPU 0.04%, RAM 217.1 MiB / 2 GiB (10.60%) on `aira-autonomous-worker-staging`. Combined memory 334.9 MiB out of 5.8 GiB available on VM.
+- **Resource Overhead**: `sudo docker stats --no-stream` confirms CPU <0.5%, RAM ~245 MiB total across all three containers (`aira-autonomous-worker-staging` 115.5 MiB, `aira-sandbox-runner-staging` 11.9 MiB, `aira-specialist-worker-staging` 117.8 MiB). Free unallocated memory: **4.6 GiB** / 5.8 GiB available on VM.
 
 #### 3. Python Sandbox Isolation Architecture (Zero Host Docker Socket Exposure)
 - **Security Boundary**: The host Docker socket (`/var/run/docker.sock`) is **never** mounted to the worker container.

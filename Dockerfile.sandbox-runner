@@ -1,0 +1,33 @@
+# ==============================================================================
+# AIRA AI 2026 — Isolated Container Sidecar Sandbox Runner Dockerfile
+# Base: python:3.12-alpine (Multi-arch linux/arm64 & linux/amd64)
+# Security: Non-root (nobody:nogroup), read-only rootfs, no host docker socket
+# ==============================================================================
+
+FROM python:3.12-alpine
+
+# Set non-interactive environment
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PORT=8000 \
+    WORKSPACE_BASE=/tmp/workspaces
+
+# Create application directory and workspace scratch directory
+WORKDIR /app
+
+# Copy sidecar runner script
+COPY apps/sandbox-runner/runner.py /app/runner.py
+
+# Ensure permissions
+RUN chmod 755 /app/runner.py && \
+    mkdir -p /tmp/workspaces && \
+    chown -R nobody:nogroup /app /tmp/workspaces && \
+    chmod 1777 /tmp/workspaces
+
+# Run as unprivileged nobody user
+USER nobody:nogroup
+
+EXPOSE 8000
+
+# Execute server directly
+CMD ["python3", "/app/runner.py"]

@@ -138,17 +138,93 @@ async function runLiveStagingCapabilityAudit() {
   }
 
   // ---------------------------------------------------------------------------
-  // 2. Isolated Python Sandbox Policy (Fail-Closed)
+  // 2. Isolated Python Sandbox Policy & Real Sidecar Execution
   // ---------------------------------------------------------------------------
-  console.log('--- [Capability 2]: Isolated Python Sandbox Policy & Fail-Closed Enforcement ---');
+  console.log('--- [Capability 2]: Isolated Python Sandbox: Fail-Closed & Real Sidecar Execution ---');
+  // 2a. Verify fail-closed when no provider configured
+  const savedRunnerUrl = process.env.AIRA_SANDBOX_RUNNER_URL;
+  delete process.env.AIRA_SANDBOX_RUNNER_URL;
   try {
     resolveIsolatedSandboxProvider({ requireContainer: true, disableLocalDocker: true });
     assert.fail('Should fail closed when container sandbox is unavailable');
   } catch (err: any) {
     assert.ok(err.message.includes('CONTAINER_ISOLATION_UNAVAILABLE'), 'Must fail closed');
-    console.log('✓ Fail-closed sandbox isolation verified (CONTAINER_ISOLATION_UNAVAILABLE).');
-    console.log('  Status: BLOCKED on external microVM API credentials (E2B_API_KEY/LIGHTNING_SANDBOX_API_KEY).');
-    console.log('  Zero-Docker-Socket Rule: Host Docker socket is strictly unmounted.\n');
+    console.log('✓ Fail-closed sandbox isolation verified when unconfigured (CONTAINER_ISOLATION_UNAVAILABLE).');
+    console.log('  Zero-Docker-Socket Rule: Host Docker socket is strictly unmounted.');
+  }
+
+  // 2b. Verify real sidecar sandbox execution when configured
+  const runnerUrl = savedRunnerUrl || 'http://sandbox-runner:8000';
+  process.env.AIRA_SANDBOX_RUNNER_URL = runnerUrl;
+  console.log(`Testing real Python execution via sidecar runner: ${runnerUrl}...`);
+
+  try {
+    const sidecarProvider = resolveIsolatedSandboxProvider({ requireContainer: true, disableLocalDocker: true });
+    assert.ok(sidecarProvider, 'Must resolve SidecarSandboxProvider');
+    console.log(`✓ Resolved sandbox provider: ${sidecarProvider.name}`);
+
+    const ws = await sidecarProvider.createWorkspace({
+      allowInternet: false,
+      allowPreview: false,
+      timeoutMs: 15000
+    });
+    console.log(`✓ Created isolated workspace: ${ws.id}`);
+
+    // Write a Python script to compute primes and write results
+    const pythonCode = [
+      'import json',
+      'def is_prime(n):',
+      '    if n < 2: return False',
+      '    for i in range(2, int(n**0.5) + 1):',
+      '        if n % i == 0: return False',
+      '    return True',
+      'primes = [x for x in range(2, 50) if is_prime(x)]',
+      'output = {"primes_count": len(primes), "primes": primes}',
+      'with open("primes.json", "w") as f:',
+      '    json.dump(output, f)',
+      'print(f"CALCULATED_{len(primes)}_PRIMES")'
+    ].join('\n');
+
+    await sidecarProvider.writeFile(ws, 'compute.py', pythonCode);
+    const execResult = await sidecarProvider.runCommand(ws, 'python3 compute.py');
+    console.log(`  Exec stdout: ${execResult.stdout.trim()}`);
+    assert.strictEqual(execResult.exitCode, 0, 'Python execution must exit with 0');
+    assert.ok(execResult.stdout.includes('CALCULATED_15_PRIMES'), 'Stdout must contain expected calculation');
+
+    const fileBytes = await sidecarProvider.readFile(ws, 'primes.json');
+    const fileContent = Buffer.from(fileBytes).toString('utf8');
+    const parsed = JSON.parse(fileContent);
+    assert.strictEqual(parsed.primes_count, 15, 'Primes count must equal 15');
+    console.log('✓ Bidirectional file sync & execution verified: 15 primes written and read back.');
+
+    // Test network isolation: sandbox cannot reach Oracle metadata or internet
+    const netTestCode = [
+      'import urllib.request, socket',
+      'try:',
+      '    urllib.request.urlopen("http://169.254.169.254", timeout=1)',
+      '    print("METADATA_ACCESSIBLE")',
+      'except Exception as e:',
+      '    print("METADATA_BLOCKED")',
+      'try:',
+      '    urllib.request.urlopen("http://google.com", timeout=1)',
+      '    print("INTERNET_ACCESSIBLE")',
+      'except Exception as e:',
+      '    print("INTERNET_BLOCKED")'
+    ].join('\n');
+    await sidecarProvider.writeFile(ws, 'net_test.py', netTestCode);
+    const netResult = await sidecarProvider.runCommand(ws, 'python3 net_test.py');
+    console.log(`  Network isolation probe stdout: ${netResult.stdout.trim()}`);
+    assert.ok(netResult.stdout.includes('METADATA_BLOCKED'), 'Oracle metadata service 169.254.169.254 must be blocked');
+    assert.ok(netResult.stdout.includes('INTERNET_BLOCKED'), 'External internet must be blocked');
+    console.log('✓ Sandbox network isolation verified: Cloud metadata and internet strictly blocked.');
+
+    await sidecarProvider.terminateWorkspace(ws);
+    console.log('✓ Workspace terminated cleanly.\n');
+  } catch (err: any) {
+    console.error('Sidecar execution error:', err);
+    throw err;
+  } finally {
+    process.env.AIRA_SANDBOX_RUNNER_URL = savedRunnerUrl;
   }
 
   // ---------------------------------------------------------------------------
