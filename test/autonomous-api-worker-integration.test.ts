@@ -318,7 +318,7 @@ test('Mission B4 — Migration 031 Rollback Safety Barrier & Non-Destructive Gua
     }
   });
 
-  await t.test('2. Rollback permitted when table is empty or forced via AIRA_ALLOW_DESTRUCTIVE_ROLLBACK', async () => {
+  await t.test('2. Rollback blocked in production even when empty, permitted with override or in disposable test DB', async () => {
     let droppedBrowser = false;
     let droppedTasks = false;
 
@@ -340,13 +340,60 @@ test('Mission B4 — Migration 031 Rollback Safety Barrier & Non-Destructive Gua
     );
 
     const origEnv = process.env.NODE_ENV;
+    const origAiraEnv = process.env.AIRA_ENV;
+    const origForce = process.env.AIRA_ALLOW_DESTRUCTIVE_ROLLBACK;
+    const origCiDisposable = process.env.CI_DISPOSABLE_DATABASE;
+    const origDbUrl = process.env.DATABASE_URL;
+    const origTestUrl = process.env.ISOLATED_TEST_DATABASE_URL;
+
     try {
+      // 1. In production without override: MUST reject even if tables are empty
       process.env.NODE_ENV = 'production';
+      delete process.env.AIRA_ENV;
+      delete process.env.AIRA_ALLOW_DESTRUCTIVE_ROLLBACK;
+      delete process.env.CI_DISPOSABLE_DATABASE;
+
+      await assert.rejects(
+        () => migration031Down(mockKnexEmpty),
+        (err: any) => {
+          assert.ok(err.message.includes('[MIGRATION SAFETY BARRIER]'));
+          assert.ok(err.message.includes('Destructive DDL is forbidden in production'));
+          return true;
+        }
+      );
+      assert.equal(droppedBrowser, false);
+      assert.equal(droppedTasks, false);
+
+      // 2. In production WITH override: permitted
+      process.env.AIRA_ALLOW_DESTRUCTIVE_ROLLBACK = 'true';
+      await migration031Down(mockKnexEmpty);
+      assert.equal(droppedBrowser, true);
+      assert.equal(droppedTasks, true);
+
+      // 3. In disposable test DB: permitted without override
+      droppedBrowser = false;
+      droppedTasks = false;
+      delete process.env.AIRA_ALLOW_DESTRUCTIVE_ROLLBACK;
+      process.env.NODE_ENV = 'test';
+      process.env.CI_DISPOSABLE_DATABASE = 'true';
+      process.env.DATABASE_URL = 'postgresql://aira:aira@127.0.0.1:5432/disposable_test';
+      process.env.ISOLATED_TEST_DATABASE_URL = 'postgresql://aira:aira@127.0.0.1:5432/disposable_test';
+
       await migration031Down(mockKnexEmpty);
       assert.equal(droppedBrowser, true);
       assert.equal(droppedTasks, true);
     } finally {
       process.env.NODE_ENV = origEnv;
+      if (origAiraEnv !== undefined) process.env.AIRA_ENV = origAiraEnv;
+      else delete process.env.AIRA_ENV;
+      if (origForce !== undefined) process.env.AIRA_ALLOW_DESTRUCTIVE_ROLLBACK = origForce;
+      else delete process.env.AIRA_ALLOW_DESTRUCTIVE_ROLLBACK;
+      if (origCiDisposable !== undefined) process.env.CI_DISPOSABLE_DATABASE = origCiDisposable;
+      else delete process.env.CI_DISPOSABLE_DATABASE;
+      if (origDbUrl !== undefined) process.env.DATABASE_URL = origDbUrl;
+      else delete process.env.DATABASE_URL;
+      if (origTestUrl !== undefined) process.env.ISOLATED_TEST_DATABASE_URL = origTestUrl;
+      else delete process.env.ISOLATED_TEST_DATABASE_URL;
     }
   });
 });
