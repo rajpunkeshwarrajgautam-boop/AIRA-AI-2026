@@ -5,7 +5,7 @@ This PR delivers the complete, verified Release Candidate for the **AIRA Autonom
 
 - **Target Branch**: `prod-release`
 - **PR Status**: **Strictly Draft** (No production merge or deployment without explicit human GO LIVE authorization)
-- **Authoritative Certified Commit**: `6ccc1cc715e3d7ca88ca0202330003d428a16da0`
+- **Authoritative Certified Commit**: `5484ae8fd9f8449bb3315e47abe993c3b392201b`
 - **Deployed Staging Containers (Oracle Cloud Infrastructure Ampere A1 ARM64 — 140.238.240.108)**:
   - Worker: `aira-autonomous-worker-staging` (`aira-specialist-worker:v2026.1.0-4065e1a`, Port 8081)
   - Sandbox: `aira-sandbox-runner-staging` (`aira-sandbox-runner:v2026.1.0-4065e1a`, Port 8000)
@@ -43,7 +43,7 @@ This PR delivers the complete, verified Release Candidate for the **AIRA Autonom
 | **Task 6** | Release Authorization Verification | Executed read-only `npm run verify:release-auth -- --pr 127 --sha 9663a4dffca8452467a11e802460a0da2f8f0439`; verified fail-closed refusal (`STATUS_CHECK_MISSING` / `APP_ISSUER_NOT_CONFIGURED`) preventing unauthorized merge. | **VERIFIED** |
 | **Task 7** | Full Engineering Quality Gates | Executed `npm run typecheck` (0 errors), `npm run lint` (0 errors), `npm run build` (pass), `npm run test:secrets` (0 exposed credentials across 678 tracked files), `npm run test:migration:031` (8/8 pass), `npm run test:sidecar:security` (8/8 pass), `test/staging-deployment-config.test.ts` (7/7 pass), `npm run test:cutover-safety` (53/53 pass), `npm run test:db-isolation` (41/41 pass), `npm run test:release-auth:unit` (52/52 pass). | **VERIFIED** |
 | **Task 8** | Final Staging Capability Certification | Executed live end-to-end 8-capability mission audit inside `aira-autonomous-worker-staging` on Oracle Cloud ARM64 against Neon PostgreSQL Staging (`ep-shiny-bird-b3xundyt`); all 8 capabilities passed. | **VERIFIED** |
-| **Task 9** | Git, PR & Documentation Reconciliation | Committed and pushed release hardening changes (`6ccc1cc715e3d7ca88ca0202330003d428a16da0`); synchronized PR #127 description; generated final certification report. | **VERIFIED** |
+| **Task 9** | Git, PR & Documentation Reconciliation | Committed and pushed release hardening changes (`5484ae8fd9f8449bb3315e47abe993c3b392201b`); synchronized PR #127 description; generated final certification report. | **VERIFIED** |
 
 ---
 
