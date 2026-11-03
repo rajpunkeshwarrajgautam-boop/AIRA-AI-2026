@@ -5,7 +5,7 @@ This PR delivers the complete, verified Release Candidate for the **AIRA Autonom
 
 - **Target Branch**: `prod-release`
 - **PR Status**: **Strictly Draft** (No production merge or deployment without explicit human GO LIVE authorization)
-- **Authoritative Certified Commit**: `b8cd7ad80ba0c24f8541c8026b44873dc3b36ef1`
+- **Authoritative Certified Commit**: `1f8580ec7f129207fb811f7d6facc985480a3770`
 - **Deployed Staging Images (Oracle Cloud Infrastructure Ampere A1 ARM64)**:
   - Worker: `aira-specialist-worker:v2026.1.0-4065e1a` (`sha256:0c046d421104975525049cf1c261e475ad67f8e811197410c59e7492c0bfa512`)
   - Sandbox: `aira-sandbox-runner:v2026.1.0-4065e1a` (`sha256:aecfa58d7434609d09afb437fee9799e839f37eeaee55323abd22883b8e443cf`)
