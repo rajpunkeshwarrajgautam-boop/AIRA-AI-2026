@@ -2,11 +2,11 @@
 
 **Document Identifier**: `AIRA-ORACLE-ALWAYS-FREE-DEPLOYMENT-READY.md`  
 **Target Platform**: Oracle Cloud Infrastructure (OCI) Always Free Tier  
-**Target Compute Shape**: `VM.Standard.A1.Flex` (Ampere A1 Arm64, 2 OCPU, 12 GB RAM current free allowance)  
-**Target Operating System**: Ubuntu 22.04 LTS (`aarch64`) or Canonical Ubuntu 24.04 LTS (`aarch64`)  
+**Target Compute Shape**: `VM.Standard.A1.Flex` (Ampere A1 Arm64, 1 OCPU, 6 GB RAM live provisioned instance; tenancy up to 4 OCPU / 24 GB)  
+**Target Operating System**: Canonical Ubuntu 24.04 LTS (`aarch64`, Linux 6.17.0-1020-oracle)  
 **Deployment Model**: Persistent Container Daemon supervised by Systemd (`docker-compose.oracle-staging.yml`)  
 **Repository Branch**: `feat/aira-autonomous-agent-platform`  
-**Pinned Release Commit**: `4065e1abd7c3d502b05b3795a8da0ce8c7f999d0`  
+**Pinned Release Commit**: `e6eb673cc1114c3a607f2f017b6a81f7f9cbd745`  
 **Pull Request Reference**: [Draft PR #127](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/127) (targeting `prod-release`)  
 **Release Governance**: STRICTLY GATED DRAFT — NO PRODUCTION MERGE OR DEPLOYMENT WITHOUT HUMAN OWNER **GO LIVE** INSTRUCTION  
 
@@ -23,19 +23,19 @@
 >   - Tenant authorization: All task mutation routes (`/pause`, `/resume`, `/cancel`, `/approve`) enforce strict principal ownership.
 >   - Zero known release-blocking errors across monorepo typecheck, linter, secrets scanner, and test runners.
 > - **Oracle Cloud Readiness**: **100% OPERATIONAL & VERIFIED LIVE ON ORACLE CLOUD ARM64**
->   - 2 OCPU / 12 GB RAM capacity verified to fit within current Always Free tenancy limits.
+>   - Live VM hardware verified: 1 OCPU / 5.8 GiB RAM on Canonical Ubuntu 24.04 LTS (`aarch64`).
 >   - Multi-arch Docker packaging and dependencies verified for `linux/arm64`.
 >   - Native `linux/arm64` Alpine container image built and executed on live Oracle Cloud Ampere A1 VM (`140.238.240.108`).
 >   - Non-root user `uid=10001(aira) gid=10001(aira)` and resource caps verified.
 >   - Dual-queue background daemon (`specialistWorker` + `autonomousWorker`) verified healthy on HTTP 200 `/health` and `/ready`.
 >   - End-to-end task execution, lease claiming, fencing monotonicity, and completion verified live against staging Neon PostgreSQL (`ep-shiny-bird-b3xundyt`).
->   - Pre-existing production/staging workloads (`/home/ubuntu/aira-ai` and `/home/ubuntu/aira-m2a-staging` on port 8080) preserved 100% without interruption.
+>   - Pre-existing production/staging workloads (`/home/ubuntu/aira-ai` and `/home/ubuntu/aira-m2a-staging` on port 8080) preserved 100% without interruption (>526,000s uptime).
 
 ---
 
 ## 2. Certified Git Commit Metadata
 
-- **Authoritative Engineering Commit**: `4065e1abd7c3d502b05b3795a8da0ce8c7f999d0` (pinned)
+- **Authoritative Engineering Commit**: `e6eb673cc1114c3a607f2f017b6a81f7f9cbd745` (pinned)
 - **Git Branch**: `feat/aira-autonomous-agent-platform`
 - **Target Release Branch**: `prod-release`
 - **Draft PR**: `#127` (`state: OPEN`, `isDraft: true`, zero auto-merge)
@@ -99,22 +99,23 @@ AIRA's worker is built on `node:22-alpine` which natively supports:
 
 ---
 
-## 5. Resource Requirements & Capacity Allocation (2 OCPU / 12 GB RAM)
+## 5. Resource Requirements & Capacity Allocation (1 OCPU / 6 GB RAM Deployed)
 
-Oracle Cloud Always Free current tier allowance:
-- **Tenancy Free Allowance**: Up to **2 OCPUs** and **12 GB of RAM** usable on `VM.Standard.A1.Flex`.
-- **Proposed Instance Sizing**:
+Oracle Cloud Always Free tier hardware & sizing reconciliation:
+- **Tenancy Free Allowance**: Up to **4 OCPUs** and **24 GB of RAM** total usable across tenancy instances on `VM.Standard.A1.Flex`.
+- **Live Deployed Staging Instance Sizing** (`140.238.240.108`):
   - Shape: `VM.Standard.A1.Flex`
-  - OCPUs: **2**
-  - Memory: **12 GB**
-  - Boot Volume: **50 GB** (within 200 GB Always Free storage allowance)
+  - OCPUs: **1** (verified via `nproc: 1`)
+  - Memory: **5.8 GiB** (~6 GB RAM, verified via `free -h`)
+  - Boot Volume: **45 GB** (/dev/sda1, 26% used)
 - **Container Allocation** (in `docker-compose.oracle-staging.yml`):
-  - CPU Limit: `1.5` OCPUs (leaves 0.5 OCPU for host OS, Docker daemon, and systemd)
-  - CPU Reservation: `0.5` OCPU
-  - Memory Limit: `2048 MB` (2 GB, leaving 10 GB for OS buffers, journald, and isolated sandboxes)
+  - CPU Limit: `0.75` OCPU (leaves 0.25 OCPU headroom for host OS, Docker daemon, and systemd)
+  - CPU Reservation: `0.25` OCPU
+  - Memory Limit: `2048 MB` (2 GB, leaving ~4 GB for OS buffers, journald, and sidecar sandboxes)
   - Memory Reservation: `512 MB`
   - Node.js Old Space Cap: `--max-old-space-size=1024` (1 GB V8 heap cap)
-  - Worker Concurrency: `WORKER_CONCURRENCY=2`
+  - Worker Concurrency: `WORKER_CONCURRENCY=1` (appropriate for single-OCPU host)
+  - Measured live footprint: CPU 0.04%, Memory 217.1 MiB (10.60% of container limit)
 
 ---
 
