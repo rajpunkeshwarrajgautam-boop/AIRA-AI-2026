@@ -5,15 +5,20 @@ This PR delivers the complete, verified Release Candidate for the **AIRA Autonom
 
 - **Target Branch**: `prod-release`
 - **PR Status**: **Strictly Draft** (No production merge or deployment without explicit human GO LIVE authorization)
-- **Authoritative Certified Commit**: `5484ae8fd9f8449bb3315e47abe993c3b392201b`
+- **Authoritative Certified Commit**: `2ac3122d0eb16847f90c5a8e19a1a38e66ec3e33`
 - **Deployed Staging Containers (Oracle Cloud Infrastructure Ampere A1 ARM64 — 140.238.240.108)**:
   - Worker: `aira-autonomous-worker-staging` (`aira-specialist-worker:v2026.1.0-4065e1a`, Port 8081)
   - Sandbox: `aira-sandbox-runner-staging` (`aira-sandbox-runner:v2026.1.0-4065e1a`, Port 8000)
-- **Quality Gates**:
+- **Quality Gates & GitHub Actions CI (PR #127)**:
+  - Fast CI (Run 41669800151): **PASS** (2m22s)
+  - Main / PR certification (Run 41669800151): **PASS** (5m48s)
+  - Disposable PostgreSQL Certification (Run 41669800266): **PASS** (2m32s)
+  - Semantic Search CI (Run 41669800151): **PASS** (53s)
+  - Vercel Preview Deployment: **PASS**
   - Client & Server Typecheck: **PASS** (0 errors)
   - Oxlint: **PASS** (0 errors across 470 files)
-  - Vite Production Client Build: **PASS** (1.80s)
-  - Tracked Secrets Scan: **PASS** (0 exposed credentials across 678 tracked files)
+  - Vite Production Client Build: **PASS** (1.47s)
+  - Tracked Secrets Scan: **PASS** (0 exposed credentials across 679 tracked files)
 - **Certification Test Suites (100% Pass Rate)**:
   - `test/staging-deployment-config.test.ts`: **7 / 7 PASS** (Systemd & Compose configuration invariants)
   - `test/migration-031-rehearsal.test.ts`: **8 / 8 PASS** (Dual-table rollback safety barrier & environment check)
@@ -31,7 +36,7 @@ This PR delivers the complete, verified Release Candidate for the **AIRA Autonom
 
 ---
 
-### Nine-Item Release Hardening & Verification Matrix
+### Ten-Item Release Hardening & Verification Matrix
 
 | Task | Component | Resolution / Hardening Applied | Status |
 |:---|:---|:---|:---:|
@@ -41,9 +46,10 @@ This PR delivers the complete, verified Release Candidate for the **AIRA Autonom
 | **Task 4** | Complete Migration 031 Rollback Protection | Updated `packages/db/src/migrations/031_autonomous_agent_tasks.ts` to separately inspect and protect `durable_browser_sessions` from data loss; enforced fail-closed barrier in production/staging environments blocking `down()` even on empty tables unless `AIRA_ALLOW_DESTRUCTIVE_ROLLBACK=true` or disposable test DB. | **VERIFIED** |
 | **Task 5** | Verify Oracle Image Provenance | Verified live containers `aira-autonomous-worker-staging` and `aira-sandbox-runner-staging` on Oracle ARM64 host (`140.238.240.108`); verified Compose syntax and synced git checkout on host to exact commit `9663a4dffca8452467a11e802460a0da2f8f0439`. | **VERIFIED** |
 | **Task 6** | Release Authorization Verification | Executed read-only `npm run verify:release-auth -- --pr 127 --sha 9663a4dffca8452467a11e802460a0da2f8f0439`; verified fail-closed refusal (`STATUS_CHECK_MISSING` / `APP_ISSUER_NOT_CONFIGURED`) preventing unauthorized merge. | **VERIFIED** |
-| **Task 7** | Full Engineering Quality Gates | Executed `npm run typecheck` (0 errors), `npm run lint` (0 errors), `npm run build` (pass), `npm run test:secrets` (0 exposed credentials across 678 tracked files), `npm run test:migration:031` (8/8 pass), `npm run test:sidecar:security` (8/8 pass), `test/staging-deployment-config.test.ts` (7/7 pass), `npm run test:cutover-safety` (53/53 pass), `npm run test:db-isolation` (41/41 pass), `npm run test:release-auth:unit` (52/52 pass). | **VERIFIED** |
+| **Task 7** | Full Engineering Quality Gates | Executed `npm run typecheck` (0 errors), `npm run lint` (0 errors), `npm run build` (pass), `npm run test:secrets` (0 exposed credentials across 679 tracked files), `npm run test:migration:031` (8/8 pass), `npm run test:sidecar:security` (8/8 pass), `test/staging-deployment-config.test.ts` (7/7 pass), `npm run test:cutover-safety` (53/53 pass), `npm run test:db-isolation` (41/41 pass), `npm run test:release-auth:unit` (52/52 pass). | **VERIFIED** |
 | **Task 8** | Final Staging Capability Certification | Executed live end-to-end 8-capability mission audit inside `aira-autonomous-worker-staging` on Oracle Cloud ARM64 against Neon PostgreSQL Staging (`ep-shiny-bird-b3xundyt`); all 8 capabilities passed. | **VERIFIED** |
 | **Task 9** | Git, PR & Documentation Reconciliation | Committed and pushed release hardening changes (`5484ae8fd9f8449bb3315e47abe993c3b392201b`); synchronized PR #127 description; generated final certification report. | **VERIFIED** |
+| **Task 10** | CI Test Contract Alignment & Final Closure | Aligned Migration 031 rollback safety barrier test contract in `test/autonomous-api-worker-integration.test.ts` to test empty vs populated records and production non-destructive guard cleanly across containerized PostgreSQL 16 CI test environments; pushed commit `2ac3122d0eb16847f90c5a8e19a1a38e66ec3e33`; verified all CI workflows pass green on PR #127. | **VERIFIED** |
 
 ---
 

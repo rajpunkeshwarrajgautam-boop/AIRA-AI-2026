@@ -475,21 +475,24 @@ Bound strictly to Release Candidate Commit: `2ac3122d0eb16847f90c5a8e19a1a38e66e
    ```
 3. **Execute Independent Logical Backup (Layer 3 Offsite Backup)**:
    ```bash
-   pg_dump "postgresql://neondb_owner:[PROD_PASSWORD]@ep-withered-art-b36ox90b.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require" \
+   export PGPASSWORD="<PROD_PASSWORD>"
+   pg_dump "postgresql://neondb_owner@ep-withered-art-b36ox90b.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require" \
      -Fc --no-owner --no-privileges -f /secure/backups/aira_prod_pre_031_$(date +%Y%m%d%H%M%S).dump
    # Exports compressed logical dump via direct unpooled endpoint
    ```
 4. **Apply Forward Migrations 026–031 Out-of-Band to Production Neon**:
    *Execute from an authorized, secure administrative workstation:*
    ```powershell
-   $env:DATABASE_URL = "postgresql://neondb_owner:[PROD_PASSWORD]@ep-withered-art-b36ox90b-pooler.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require"
+   $env:DATABASE_URL = "postgresql://neondb_owner@ep-withered-art-b36ox90b-pooler.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require"
+   $env:PGPASSWORD = "<PROD_PASSWORD>"
    $env:AIRA_PERMIT_PROD_MIGRATION = "true"
    npm run db:migrate
    # Applies forward migrations 026, 027, 028, 029, 030, and 031
    ```
 5. **Verify Production Database Deploy Contract Preflight**:
    ```powershell
-   $env:DATABASE_URL = "postgresql://neondb_owner:[PROD_PASSWORD]@ep-withered-art-b36ox90b-pooler.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require"
+   $env:DATABASE_URL = "postgresql://neondb_owner@ep-withered-art-b36ox90b-pooler.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require"
+   $env:PGPASSWORD = "<PROD_PASSWORD>"
    npm run db:verify:deploy
    # Must exit code 0: all 31 migrations confirmed in knex_migrations; schema verified
    ```

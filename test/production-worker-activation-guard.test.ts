@@ -40,7 +40,7 @@ test.describe('AIRA AI 2026 — Production Worker Architecture & Activation Guar
     AIRA_PRODUCTION_WORKER_ENABLED: 'true',
     WORKER_ID: 'worker_oracle_ampere_production_01',
     WORKER_CONCURRENCY: '2',
-    DATABASE_URL: 'postgresql://prod_user:safe_pass@ep-withered-art-b36ox90b-pooler.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require',
+    DATABASE_URL: 'postgresql://prod_user@ep-withered-art-b36ox90b-pooler.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require',
     EXPECTED_NEON_PROJECT_ID: CANONICAL_PRODUCTION_NEON_PROJECT_ID,
     EXPECTED_NEON_ENDPOINT_ID: CANONICAL_PRODUCTION_NEON_ENDPOINT_ID,
     AGENT_ENCRYPTION_KEY: 'a'.repeat(64),
@@ -211,7 +211,7 @@ test.describe('AIRA AI 2026 — Production Worker Architecture & Activation Guar
   // =========================================================================
 
   test('Crossover Protection: Staging database URL in production throws ACTIVATION_SECURITY_REJECTED', () => {
-    const stagingDbUrl = `postgresql://user:pass@${CANONICAL_STAGING_NEON_ENDPOINT_ID}-pooler.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require`;
+    const stagingDbUrl = `postgresql://user@${CANONICAL_STAGING_NEON_ENDPOINT_ID}-pooler.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require`;
     
     // Test database URL classification directly
     const classification = classifyDatabaseUrl(stagingDbUrl);
@@ -386,7 +386,7 @@ test.describe('AIRA AI 2026 — Production Worker Architecture & Activation Guar
     // Missing pooler in database URL
     const noPooler = {
       ...validStageB,
-      DATABASE_URL: 'postgresql://prod_user:safe_pass@ep-withered-art-b36ox90b.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require'
+      DATABASE_URL: 'postgresql://prod_user@ep-withered-art-b36ox90b.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require'
     };
     const reportNoPooler = validateProductionEnvironmentConfig(noPooler);
     assert.strictEqual(reportNoPooler.valid, false);
