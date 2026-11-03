@@ -100,8 +100,9 @@ This PR delivers the complete, verified Release Candidate for the **AIRA Autonom
 
 #### 3. Python Sandbox Isolation Architecture (Zero Host Docker Socket Exposure)
 - **Security Boundary**: The host Docker socket (`/var/run/docker.sock`) is **never** mounted to the worker container.
-- **Cloud MicroVMs**: Untrusted agent code runs in ephemeral hardware-isolated Firecracker MicroVMs via E2B or Lightning AI over HTTPS.
-- **Fail-Closed Verification**: The system fails closed with `CONTAINER_ISOLATION_UNAVAILABLE` if no isolated backend is active (verified by test `F6` and live staging audit).
+- **Cloud MicroVMs**: Untrusted agent code runs in ephemeral hardware-isolated Firecracker MicroVMs via E2B or Lightning AI over outbound HTTPS.
+- **Sidecar Container Isolation (`SidecarSandboxProvider`)**: Implemented in `packages/builder-runtime/src/sidecar-provider.ts` and registered in `resolveIsolatedSandboxProvider` and `MultiProviderSandboxFactory`. Communicates via `AIRA_SANDBOX_RUNNER_URL` over an internal bridge network, enabling isolated container execution without host Docker socket access.
+- **Fail-Closed Verification**: The system fails closed with `CONTAINER_ISOLATION_UNAVAILABLE` if no isolated backend is active (verified by test `F6`, `test/sandbox-providers.test.ts`, and live staging audit).
 
 #### 4. Complete Runtime Secrets & Configuration Injection
 - **Encrypted Browser Sessions**: Injected `BROWSER_SESSION_ENCRYPTION_KEY` for authenticated AES-256-GCM envelope encryption.

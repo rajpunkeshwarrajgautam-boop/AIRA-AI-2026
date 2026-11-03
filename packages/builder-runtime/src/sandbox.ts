@@ -3,6 +3,7 @@ import { E2BSandboxProvider } from './e2b-provider.js';
 import { OCISandboxProvider } from './oci-provider.js';
 import { LocalIsolatedSandboxProvider } from './local-provider.js';
 import { DockerIsolatedSandboxProvider } from './docker-provider.js';
+import { SidecarSandboxProvider } from './sidecar-provider.js';
 import type {
   SandboxProvider,
   SandboxWorkspace,
@@ -16,6 +17,7 @@ export { E2BSandboxProvider } from './e2b-provider.js';
 export { OCISandboxProvider } from './oci-provider.js';
 export { LocalIsolatedSandboxProvider } from './local-provider.js';
 export { DockerIsolatedSandboxProvider } from './docker-provider.js';
+export { SidecarSandboxProvider } from './sidecar-provider.js';
 
 export interface ResolveIsolatedSandboxOptions {
   requireContainer?: boolean;
@@ -49,6 +51,11 @@ export function resolveIsolatedSandboxProvider(options?: ResolveIsolatedSandboxO
     }
   }
 
+  const sidecar = new SidecarSandboxProvider();
+  if (sidecar.isConfigured()) {
+    return sidecar;
+  }
+
   const oci = new OCISandboxProvider();
   if (oci.isConfigured()) {
     return oci;
@@ -65,7 +72,7 @@ export function resolveIsolatedSandboxProvider(options?: ResolveIsolatedSandboxO
   }
 
   // Fail closed! No approved isolated backend is reachable.
-  throw new Error('CONTAINER_ISOLATION_UNAVAILABLE: Untrusted code execution requires an approved isolated backend (Docker, Podman/OCI, E2B, or Lightning), but no isolated runtime is configured or reachable. Host execution is prohibited. Fail-closed enforced.');
+  throw new Error('CONTAINER_ISOLATION_UNAVAILABLE: Untrusted code execution requires an approved isolated backend (Docker, Sidecar, Podman/OCI, E2B, or Lightning), but no isolated runtime is configured or reachable. Host execution is prohibited. Fail-closed enforced.');
 }
 
 export interface BuilderSandbox {
@@ -138,6 +145,7 @@ export class MultiProviderSandboxFactory implements SandboxFactory {
       this.register(new E2BSandboxProvider());
       this.register(new OCISandboxProvider());
       this.register(new DockerIsolatedSandboxProvider());
+      this.register(new SidecarSandboxProvider());
       if (process.env.AIRA_TRUSTED_LOCAL_EXECUTION === 'true') {
         this.register(new LocalIsolatedSandboxProvider());
       }
