@@ -50,13 +50,17 @@ const idleBackoffMultiplier = parseFloat(process.env.IDLE_BACKOFF_MULTIPLIER || 
 const leaseDurationMs = parseInt(process.env.LEASE_DURATION_MS || '15000', 10);
 const heartbeatIntervalMs = parseInt(process.env.HEARTBEAT_INTERVAL_MS || '3000', 10);
 
+const startupTime = Date.now();
+
 import {
   evaluateWorkerActivationPolicy,
   assertWorkerActivationAuthorized,
   sanitizeActivationError,
   ActivationSecurityError,
   WorkerActivationConfig,
-  CANONICAL_PRODUCTION_NEON_PROJECT_ID
+  CANONICAL_PRODUCTION_NEON_PROJECT_ID,
+  CANONICAL_PRODUCTION_NEON_ENDPOINT_ID,
+  isOperationalStandbyConfig
 } from '../../../packages/agent-runtime/src/durable/worker-activation-policy.js';
 
 console.log(`[SpecialistWorker] Bootstrapping worker ${workerId}...`);
@@ -77,12 +81,35 @@ const activationConfig: WorkerActivationConfig = {
   expectedNeonEndpointId: process.env.EXPECTED_NEON_ENDPOINT_ID
 };
 
+const isStandby = isOperationalStandbyConfig(activationConfig);
 const staticPolicyResult = evaluateWorkerActivationPolicy(activationConfig);
+
 if (!staticPolicyResult.authorized) {
-  console.error(
-    `[SECURITY FATAL] Specialist worker activation denied: ${staticPolicyResult.message} (code: ${staticPolicyResult.code})`
-  );
-  process.exit(1);
+  if (isStandby && staticPolicyResult.code === 'ACTIVATION_DISABLED') {
+    console.log(
+      `[SpecialistWorker] Operational Standby Mode detected (AIRA_PRODUCTION_WORKER_ENABLED=false). Task queue polling is disabled.`
+    );
+  } else {
+    console.error(
+      `[SECURITY FATAL] Specialist worker activation denied: ${staticPolicyResult.message} (code: ${staticPolicyResult.code})`
+    );
+    process.exit(1);
+  }
+}
+
+// In Standby mode, verify canonical production identifiers before proceeding
+if (isStandby) {
+  const expectedProjectId = (process.env.EXPECTED_NEON_PROJECT_ID || '').trim();
+  const expectedEndpointId = (process.env.EXPECTED_NEON_ENDPOINT_ID || '').trim();
+  if (
+    expectedProjectId !== CANONICAL_PRODUCTION_NEON_PROJECT_ID ||
+    expectedEndpointId !== CANONICAL_PRODUCTION_NEON_ENDPOINT_ID
+  ) {
+    console.error(
+      `[SECURITY FATAL] Specialist worker activation denied: Standby daemon requires canonical production Neon project and endpoint identifiers.`
+    );
+    process.exit(1);
+  }
 }
 
 // Crossover check against database URL classification
@@ -206,45 +233,117 @@ const server = http.createServer(async (req, res) => {
   const url = req.url?.split('?')[0];
 
   if (url === '/health') {
+    if (isShuttingDown) {
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'SHUTTING_DOWN', workerId, isShuttingDown: true }));
+      return;
+    }
+
+    if (isStandby) {
+      const payload = {
+        status: 'standby',
+        workerEnabled: false,
+        mode: 'STANDBY',
+        stage: 'STAGE_A_STANDBY',
+        workerId,
+        uptime: Math.floor((Date.now() - startupTime) / 1000),
+        uptimeSeconds: Math.floor((Date.now() - startupTime) / 1000),
+        timestamp: Date.now(),
+        version: process.env.npm_package_version || '2026.1.0',
+        nodeVersion: process.version,
+        isActivated: false,
+        isShuttingDown: false,
+        db: dbConnected ? 'CONNECTED' : 'STANDBY_DISCONNECTED',
+        pollingEnabled: false,
+        specialistWorker: {
+          status: 'STOPPED',
+          activeCount: 0,
+          processedCount: 0,
+          reclaimedCount: 0,
+          concurrency: 0
+        },
+        autonomousWorker: {
+          status: 'STOPPED',
+          activeCount: 0,
+          processedCount: 0,
+          reclaimedCount: 0,
+          concurrency: 0
+        }
+      };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(payload, null, 2));
+      return;
+    }
+
+    // Stage B Active Mode or Staging
     const specialistHealth = specialistHost.getHealth();
     const autoHealth = autoHost.getHealth();
     const payload = {
       status: (specialistHealth.status === 'HEALTHY' && autoHealth.status === 'HEALTHY') ? 'HEALTHY' : 'DEGRADED',
       workerId,
+      workerEnabled: true,
+      mode: 'ACTIVE',
+      stage: 'STAGE_B_ACTIVE',
       specialistWorker: specialistHealth,
       autonomousWorker: autoHealth,
       db: dbConnected ? 'CONNECTED' : 'DISCONNECTED',
       isActivated,
       isShuttingDown,
       nodeVersion: process.version,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      uptimeSeconds: Math.floor((Date.now() - startupTime) / 1000)
     };
 
-    res.writeHead(isShuttingDown ? 503 : 200, { 'Content-Type': 'application/json' });
+    res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(payload, null, 2));
     return;
   }
 
   if (url === '/ready') {
-    if (isShuttingDown || !dbConnected || !isActivated) {
+    if (isShuttingDown) {
       res.writeHead(503, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ready: false, isShuttingDown, dbConnected, isActivated }));
-    } else {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        ready: true,
-        workerId,
-        status: 'READY',
-        isActivated: true,
-        specialistWorkerStatus: specialistHost.getHealth().status,
-        autonomousWorkerStatus: autoHost.getHealth().status
-      }));
+      res.end(JSON.stringify({ ready: false, reason: 'SHUTTING_DOWN', isShuttingDown: true }));
+      return;
     }
+
+    if (isStandby) {
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        ready: false,
+        reason: 'STANDBY_MODE',
+        workerId,
+        workerEnabled: false,
+        isActivated: false,
+        mode: 'STANDBY'
+      }));
+      return;
+    }
+
+    if (!dbConnected || !isActivated) {
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ready: false, reason: 'NOT_ACTIVATED', isShuttingDown, dbConnected, isActivated }));
+      return;
+    }
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      ready: true,
+      workerId,
+      status: 'READY',
+      isActivated: true,
+      specialistWorkerStatus: specialistHost.getHealth().status,
+      autonomousWorkerStatus: autoHost.getHealth().status
+    }));
     return;
   }
 
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: 'Not Found' }));
+});
+
+server.on('error', (err) => {
+  console.error(`[SpecialistWorker] Server error:`, err);
+  process.exit(1);
 });
 
 // 6. Graceful Shutdown Handlers
@@ -257,11 +356,13 @@ async function shutdown(signal: string) {
     // Stop accepting new HTTP requests
     server.close();
 
-    // Drain and stop both worker hosts
-    await Promise.all([specialistHost.stop(), autoHost.stop()]);
+    if (!isStandby) {
+      // Drain and stop both worker hosts
+      await Promise.all([specialistHost.stop(), autoHost.stop()]);
 
-    // Close database connection
-    await closeDb();
+      // Close database connection
+      await closeDb();
+    }
 
     console.log(`[SpecialistWorker] Worker ${workerId} shutdown complete.`);
     process.exit(0);
@@ -276,6 +377,22 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 
 // 7. Start Worker Process
 async function main() {
+  if (isStandby) {
+    console.log(
+      `[SpecialistWorker] Worker ${workerId} entering OPERATIONAL STANDBY mode (AIRA_PRODUCTION_WORKER_ENABLED=false).`
+    );
+    console.log(
+      `[SpecialistWorker] Task queue polling is completely DISABLED (0 polling ticks, 0 leases acquired, 0 tasks claimed).`
+    );
+
+    server.listen(port, bindHost, () => {
+      console.log(
+        `[SpecialistWorker] Standby daemon listening on http://${bindHost}:${port} (/health -> 200 standby, /ready -> 503 STANDBY_MODE)`
+      );
+    });
+    return;
+  }
+
   try {
     // 1. Authoritative runtime database identity & activation policy validation
     const runtimeActivation = await assertWorkerActivationAuthorized(activationConfig, db);

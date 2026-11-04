@@ -16,7 +16,7 @@ export { LightningSandboxProvider } from './lightning-provider.js';
 export { E2BSandboxProvider } from './e2b-provider.js';
 export { OCISandboxProvider } from './oci-provider.js';
 export { LocalIsolatedSandboxProvider } from './local-provider.js';
-export { DockerIsolatedSandboxProvider } from './docker-provider.js';
+export { DockerIsolatedSandboxProvider, type DockerSandboxProviderOptions } from './docker-provider.js';
 export { SidecarSandboxProvider } from './sidecar-provider.js';
 
 export interface ResolveIsolatedSandboxOptions {

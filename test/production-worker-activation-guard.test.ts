@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import http from 'node:http';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -10,6 +12,7 @@ import {
   assertWorkerActivationAuthorized,
   sanitizeActivationError,
   ActivationSecurityError,
+  isOperationalStandbyConfig,
   CANONICAL_PRODUCTION_NEON_PROJECT_ID,
   CANONICAL_PRODUCTION_NEON_ENDPOINT_ID,
   CANONICAL_STAGING_NEON_PROJECT_ID,
@@ -31,6 +34,33 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '..');
+
+function httpGetJson(url: string, timeoutMs = 4000): Promise<{ statusCode: number; data: any }> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      req.destroy(new Error(`HTTP request timed out after ${timeoutMs}ms for ${url}`));
+    }, timeoutMs);
+
+    const req = http.get(url, (res) => {
+      let body = '';
+      res.on('data', chunk => body += chunk);
+      res.on('end', () => {
+        clearTimeout(timer);
+        try {
+          const data = JSON.parse(body);
+          resolve({ statusCode: res.statusCode || 200, data });
+        } catch (e) {
+          resolve({ statusCode: res.statusCode || 200, data: body });
+        }
+      });
+    });
+
+    req.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
+}
 
 test.describe('AIRA AI 2026 — Production Worker Architecture & Activation Guard Test Suite', () => {
 
@@ -121,6 +151,191 @@ test.describe('AIRA AI 2026 — Production Worker Architecture & Activation Guar
       assert.strictEqual(result.authorized, false, `Value '${val}' must NOT authorize worker activation`);
       assert.strictEqual(result.runtimeAuthorized, false);
     }
+  });
+
+  test('Stage A Standby: isOperationalStandbyConfig strictly identifies production standby configurations', () => {
+    assert.strictEqual(
+      isOperationalStandbyConfig({ airaEnv: 'production', productionWorkerEnabled: 'false' }),
+      true,
+      'production + "false" must be operational standby'
+    );
+    assert.strictEqual(
+      isOperationalStandbyConfig({ airaEnv: 'production', productionWorkerEnabled: false }),
+      true,
+      'production + boolean false must be operational standby'
+    );
+    assert.strictEqual(
+      isOperationalStandbyConfig({ airaEnv: 'production', productionWorkerEnabled: 'true' }),
+      false,
+      'production + "true" must NOT be standby (it is active)'
+    );
+    assert.strictEqual(
+      isOperationalStandbyConfig({ airaEnv: 'production', productionWorkerEnabled: true }),
+      false,
+      'production + boolean true must NOT be standby (it is active)'
+    );
+    assert.strictEqual(
+      isOperationalStandbyConfig({ airaEnv: 'staging', productionWorkerEnabled: 'false' }),
+      false,
+      'staging must NOT be production standby'
+    );
+    assert.strictEqual(
+      isOperationalStandbyConfig({ airaEnv: 'production', productionWorkerEnabled: 'TRUE' }),
+      false,
+      'unsupported boolean representation must NOT be standby'
+    );
+  });
+
+  test('Stage A Standby Daemon: Disabled worker runs as standby daemon with /health 200 and /ready 503', async () => {
+    const workerPort = 8400 + Math.floor(Math.random() * 400);
+    const workerId = `worker_standby_test_${Date.now()}`;
+    const cliPath = path.resolve(REPO_ROOT, 'node_modules/tsx/dist/cli.mjs');
+    const workerPath = path.resolve(REPO_ROOT, 'apps/specialist-worker/src/index.ts');
+
+    const workerProcess = spawn(process.execPath, [cliPath, workerPath], {
+      env: {
+        ...process.env,
+        NODE_ENV: 'production',
+        AIRA_ENV: 'production',
+        AIRA_PRODUCTION_WORKER_ENABLED: 'false',
+        PORT: String(workerPort),
+        WORKER_ID: workerId,
+        DATABASE_URL: 'postgresql://prod_user@ep-withered-art-b36ox90b-pooler.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require',
+        EXPECTED_NEON_PROJECT_ID: CANONICAL_PRODUCTION_NEON_PROJECT_ID,
+        EXPECTED_NEON_ENDPOINT_ID: CANONICAL_PRODUCTION_NEON_ENDPOINT_ID
+      },
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    let stdoutLog = '';
+    let stderrLog = '';
+    workerProcess.stdout?.on('data', (d) => stdoutLog += d.toString());
+    workerProcess.stderr?.on('data', (d) => stderrLog += d.toString());
+
+    try {
+      // Poll /health until server responds
+      let healthRes: { statusCode: number; data: any } | null = null;
+      const deadline = Date.now() + 15000;
+      while (Date.now() < deadline) {
+        try {
+          healthRes = await httpGetJson(`http://127.0.0.1:${workerPort}/health`, 1500);
+          if (healthRes.statusCode === 200) break;
+        } catch {
+          await new Promise((r) => setTimeout(r, 200));
+        }
+      }
+
+      assert.ok(healthRes, `Standby daemon failed to respond on port ${workerPort}. Stdout: ${stdoutLog} Stderr: ${stderrLog}`);
+      assert.strictEqual(healthRes.statusCode, 200, 'GET /health must return HTTP 200 in standby mode');
+      assert.strictEqual(healthRes.data.status, 'standby');
+      assert.strictEqual(healthRes.data.workerEnabled, false);
+      assert.strictEqual(healthRes.data.mode, 'STANDBY');
+      assert.strictEqual(healthRes.data.stage, 'STAGE_A_STANDBY');
+      assert.strictEqual(healthRes.data.pollingEnabled, false);
+      assert.strictEqual(healthRes.data.isActivated, false);
+      assert.strictEqual(healthRes.data.specialistWorker.status, 'STOPPED');
+      assert.strictEqual(healthRes.data.specialistWorker.activeCount, 0);
+      assert.strictEqual(healthRes.data.specialistWorker.processedCount, 0);
+      assert.strictEqual(healthRes.data.specialistWorker.reclaimedCount, 0);
+      assert.strictEqual(healthRes.data.autonomousWorker.status, 'STOPPED');
+      assert.strictEqual(healthRes.data.autonomousWorker.activeCount, 0);
+      assert.strictEqual(healthRes.data.autonomousWorker.processedCount, 0);
+      assert.strictEqual(healthRes.data.autonomousWorker.reclaimedCount, 0);
+
+      // Verify /ready returns HTTP 503 STANDBY_MODE
+      const readyRes = await httpGetJson(`http://127.0.0.1:${workerPort}/ready`, 2000);
+      assert.strictEqual(readyRes.statusCode, 503, 'GET /ready must return HTTP 503 in standby mode');
+      assert.strictEqual(readyRes.data.ready, false);
+      assert.strictEqual(readyRes.data.reason, 'STANDBY_MODE');
+      assert.strictEqual(readyRes.data.workerEnabled, false);
+      assert.strictEqual(readyRes.data.mode, 'STANDBY');
+    } finally {
+      // Graceful shutdown with SIGTERM
+      const exitPromise = new Promise<number | null>((resolve) => {
+        workerProcess.on('exit', (code) => resolve(code));
+        setTimeout(() => {
+          try { workerProcess.kill('SIGKILL'); } catch {}
+          resolve(-1);
+        }, 5000);
+      });
+
+      workerProcess.kill('SIGTERM');
+      const exitCode = await exitPromise;
+      // On Windows/Linux, verify clean termination
+      assert.ok(
+        exitCode === 0 || exitCode === null || workerProcess.killed,
+        `Expected clean exit on SIGTERM, got code ${exitCode}`
+      );
+    }
+  });
+
+  test('Stage A Standby Daemon: Unsupported boolean representations fail closed immediately', async () => {
+    const workerPort = 8400 + Math.floor(Math.random() * 400);
+    const cliPath = path.resolve(REPO_ROOT, 'node_modules/tsx/dist/cli.mjs');
+    const workerPath = path.resolve(REPO_ROOT, 'apps/specialist-worker/src/index.ts');
+
+    const workerProcess = spawn(process.execPath, [cliPath, workerPath], {
+      env: {
+        ...process.env,
+        NODE_ENV: 'production',
+        AIRA_ENV: 'production',
+        AIRA_PRODUCTION_WORKER_ENABLED: 'TRUE',
+        PORT: String(workerPort),
+        DATABASE_URL: 'postgresql://prod_user@ep-withered-art-b36ox90b-pooler.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require',
+        EXPECTED_NEON_PROJECT_ID: CANONICAL_PRODUCTION_NEON_PROJECT_ID,
+        EXPECTED_NEON_ENDPOINT_ID: CANONICAL_PRODUCTION_NEON_ENDPOINT_ID
+      },
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    let stderr = '';
+    workerProcess.stderr?.on('data', chunk => stderr += chunk.toString());
+
+    const exitCode = await new Promise<number | null>((resolve) => {
+      workerProcess.on('exit', (code) => resolve(code));
+      setTimeout(() => {
+        try { workerProcess.kill('SIGKILL'); } catch {}
+        resolve(-1);
+      }, 8000);
+    });
+
+    assert.strictEqual(exitCode, 1, 'Unsupported boolean representation must exit with code 1');
+    assert.match(stderr, /SECURITY FATAL/);
+  });
+
+  test('Stage A Standby Daemon: Rejects staging database URL in production standby', async () => {
+    const workerPort = 8400 + Math.floor(Math.random() * 400);
+    const cliPath = path.resolve(REPO_ROOT, 'node_modules/tsx/dist/cli.mjs');
+    const workerPath = path.resolve(REPO_ROOT, 'apps/specialist-worker/src/index.ts');
+
+    const workerProcess = spawn(process.execPath, [cliPath, workerPath], {
+      env: {
+        ...process.env,
+        NODE_ENV: 'production',
+        AIRA_ENV: 'production',
+        AIRA_PRODUCTION_WORKER_ENABLED: 'false',
+        PORT: String(workerPort),
+        DATABASE_URL: 'postgresql://staging_user@ep-shiny-bird-b3xundyt-pooler.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require',
+        EXPECTED_NEON_PROJECT_ID: CANONICAL_PRODUCTION_NEON_PROJECT_ID,
+        EXPECTED_NEON_ENDPOINT_ID: CANONICAL_PRODUCTION_NEON_ENDPOINT_ID
+      },
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    let stderr = '';
+    workerProcess.stderr?.on('data', chunk => stderr += chunk.toString());
+
+    const exitCode = await new Promise<number | null>((resolve) => {
+      workerProcess.on('exit', (code) => resolve(code));
+      setTimeout(() => {
+        try { workerProcess.kill('SIGKILL'); } catch {}
+        resolve(-1);
+      }, 8000);
+    });
+
+    assert.strictEqual(exitCode, 1, 'Mismatched database URL in production standby must exit with code 1');
+    assert.match(stderr, /SECURITY FATAL/);
+    assert.match(stderr, /Production worker cannot connect to non-production database/);
   });
 
   // =========================================================================

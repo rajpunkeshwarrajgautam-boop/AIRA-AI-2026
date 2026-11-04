@@ -206,19 +206,81 @@ for i in range(15000):
     const dockerProvider = new DockerIsolatedSandboxProvider();
     assert.equal(dockerProvider.name, 'docker');
 
-    // If Docker daemon is unavailable, createWorkspace must reject deterministically
-    if (!dockerProvider.isConfigured()) {
+    // 7a. Verify configured isolation flags contracts (defense-in-depth security invariants)
+    const defaultFlags = dockerProvider.getIsolationFlags(false);
+    assert.ok(defaultFlags.includes('--network=none'), 'Default network isolation must be enforced (--network=none)');
+    assert.ok(defaultFlags.includes('--read-only'), 'Container rootfs must be mounted read-only');
+    assert.ok(defaultFlags.includes('--tmpfs'), 'tmpfs scratch space must be configured');
+    assert.ok(defaultFlags.includes('/tmp:rw,noexec,nosuid,size=64m'), 'tmpfs must enforce noexec, nosuid, size=64m bounds');
+    assert.ok(defaultFlags.includes('--memory=256m'), 'Memory ceiling must be strictly bounded at 256m');
+    assert.ok(defaultFlags.includes('--cpus=1.0'), 'CPU quota must be strictly capped at 1.0 OCPU');
+    assert.ok(defaultFlags.includes('--pids-limit=64'), 'PID ceiling must prevent fork bomb attacks at 64 pids');
+    assert.ok(defaultFlags.includes('--user=1000:1000'), 'Non-root execution must be enforced');
+    assert.ok(defaultFlags.includes('--security-opt=no-new-privileges:true'), 'no-new-privileges must be strictly set');
+    assert.ok(defaultFlags.includes('--cap-drop=ALL'), 'Linux capabilities must be completely dropped (--cap-drop=ALL)');
+    assert.ok(!defaultFlags.includes('--privileged'), 'Privileged mode must NEVER be enabled');
+
+    const internetFlags = dockerProvider.getIsolationFlags(true);
+    assert.ok(internetFlags.includes('--network=bridge'), 'When internet is explicitly allowed, bridge network must be configured');
+    assert.ok(internetFlags.includes('--read-only'), 'Read-only rootfs must be retained even when internet is allowed');
+    assert.ok(internetFlags.includes('--cap-drop=ALL'), 'Capabilities must remain dropped even when internet is allowed');
+
+    // 7b. Verify deterministic fail-closed rejection when Docker runtime is unconfigured/disabled via environment
+    const prevDisable = process.env.AIRA_DISABLE_LOCAL_DOCKER;
+    try {
+      process.env.AIRA_DISABLE_LOCAL_DOCKER = 'true';
+      const disabledProvider = new DockerIsolatedSandboxProvider();
+      assert.equal(disabledProvider.isConfigured(), false, 'Provider must report unconfigured when AIRA_DISABLE_LOCAL_DOCKER=true');
+
       await assert.rejects(
         async () => {
-          await dockerProvider.createWorkspace({
+          await disabledProvider.createWorkspace({
             allowInternet: false,
             allowPreview: false,
             timeoutMs: 15000
           });
         },
         /DOCKER_RUNTIME_UNAVAILABLE/,
-        'Unconfigured Docker daemon must fail closed'
+        'Unconfigured/disabled Docker daemon must fail closed with DOCKER_RUNTIME_UNAVAILABLE'
       );
+    } finally {
+      if (prevDisable !== undefined) {
+        process.env.AIRA_DISABLE_LOCAL_DOCKER = prevDisable;
+      } else {
+        delete process.env.AIRA_DISABLE_LOCAL_DOCKER;
+      }
+    }
+
+    // 7c. Verify deterministic fail-closed rejection when Docker runtime is explicitly disabled via options
+    const explicitlyDisabledProvider = new DockerIsolatedSandboxProvider({ enabled: false });
+    assert.equal(explicitlyDisabledProvider.isConfigured(), false, 'Explicitly disabled provider must return false from isConfigured');
+    await assert.rejects(
+      async () => {
+        await explicitlyDisabledProvider.createWorkspace({
+          allowInternet: false,
+          allowPreview: false,
+          timeoutMs: 15000
+        });
+      },
+      /DOCKER_RUNTIME_UNAVAILABLE/,
+      'Explicitly disabled provider must fail closed with DOCKER_RUNTIME_UNAVAILABLE'
+    );
+
+    // 7d. Verify probe memoization and cached readiness consistency
+    const initialProbe = dockerProvider.isConfigured();
+    // Subsequent calls must return identical cached result without flapping or throwing
+    assert.equal(dockerProvider.isConfigured(), initialProbe, 'Subsequent isConfigured call must return stable cached value');
+
+    // If host environment has an active Docker daemon, verify workspace lifecycle consistency
+    if (initialProbe) {
+      const ws = await dockerProvider.createWorkspace({
+        allowInternet: false,
+        allowPreview: false,
+        timeoutMs: 15000
+      });
+      assert.equal(ws.provider, 'docker');
+      assert.equal(ws.status, 'READY');
+      await dockerProvider.terminateWorkspace(ws);
     }
   });
 

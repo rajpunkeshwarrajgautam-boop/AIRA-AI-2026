@@ -29,17 +29,53 @@ import type {
  * 8. Strict tenant isolation (per-workspace isolated directories)
  * 9. Deterministic cleanup (--rm flag and workspace directory removal)
  */
+export interface DockerSandboxProviderOptions {
+  enabled?: boolean;
+  probeTimeoutMs?: number;
+}
+
 export class DockerIsolatedSandboxProvider implements SandboxProvider {
   public readonly name = 'docker';
   private workspaces = new Map<string, { rootDir: string; allowInternet: boolean; expiresAt: number; containerIds: Set<string> }>();
 
-  isConfigured(): boolean {
+  private static cachedConfigured: boolean | null = null;
+  private static lastProbeTime = 0;
+  private static readonly PROBE_CACHE_TTL_MS = 60_000; // 60s cache TTL
+
+  public static resetProbeCache(): void {
+    DockerIsolatedSandboxProvider.cachedConfigured = null;
+    DockerIsolatedSandboxProvider.lastProbeTime = 0;
+  }
+
+  constructor(private options?: DockerSandboxProviderOptions) {}
+
+  isConfigured(forceRefresh = false): boolean {
+    // 1. Explicitly disabled via constructor or environment toggle
+    if (this.options?.enabled === false || process.env.AIRA_DISABLE_LOCAL_DOCKER === 'true') {
+      return false;
+    }
+
+    // 2. Return cached probe result if within TTL
+    const now = Date.now();
+    if (
+      !forceRefresh &&
+      DockerIsolatedSandboxProvider.cachedConfigured !== null &&
+      now - DockerIsolatedSandboxProvider.lastProbeTime < DockerIsolatedSandboxProvider.PROBE_CACHE_TTL_MS
+    ) {
+      return DockerIsolatedSandboxProvider.cachedConfigured;
+    }
+
+    // 3. Probe docker CLI and active daemon with 5000ms safety margin
+    const timeout = this.options?.probeTimeoutMs ?? 5000;
     try {
-      execSync('docker --version', { stdio: 'ignore', timeout: 3000 });
-      // Probe if docker daemon is running
-      execSync('docker info', { stdio: 'ignore', timeout: 3000 });
+      execSync('docker --version', { stdio: 'ignore', timeout });
+      execSync('docker info', { stdio: 'ignore', timeout });
+      DockerIsolatedSandboxProvider.cachedConfigured = true;
+      DockerIsolatedSandboxProvider.lastProbeTime = now;
       return true;
     } catch {
+      DockerIsolatedSandboxProvider.cachedConfigured = false;
+      DockerIsolatedSandboxProvider.lastProbeTime = now;
       return false;
     }
   }
@@ -156,6 +192,25 @@ export class DockerIsolatedSandboxProvider implements SandboxProvider {
     }
   }
 
+  /**
+   * Returns authoritative Docker OCI containment arguments.
+   * Guarantees defense-in-depth security invariants:
+   * non-root UID, dropped capabilities, no-new-privileges, read-only rootfs, resource ceilings.
+   */
+  public getIsolationFlags(allowInternet = false): string[] {
+    return [
+      allowInternet ? '--network=bridge' : '--network=none',
+      '--read-only',
+      '--tmpfs', '/tmp:rw,noexec,nosuid,size=64m',
+      '--memory=256m',
+      '--cpus=1.0',
+      '--pids-limit=64',
+      '--user=1000:1000',
+      '--security-opt=no-new-privileges:true',
+      '--cap-drop=ALL'
+    ];
+  }
+
   async runCommand(workspace: SandboxWorkspace, command: string, options?: SandboxCommandOptions): Promise<SandboxCommandResult> {
     const ws = this.workspaces.get(workspace.id);
     if (!ws) throw new Error(`Workspace "${workspace.id}" not found.`);
@@ -165,20 +220,12 @@ export class DockerIsolatedSandboxProvider implements SandboxProvider {
     const containerName = `aira_cnt_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
 
     // Build Docker command with strict sandboxing flags
-    const networkFlag = ws.allowInternet ? '--network=bridge' : '--network=none';
+    const isolationFlags = this.getIsolationFlags(ws.allowInternet);
     const dockerArgs = [
       'run',
       '--rm',
       '--name', containerName,
-      networkFlag,
-      '--read-only',
-      '--tmpfs', '/tmp:rw,noexec,nosuid,size=64m',
-      '--memory=256m',
-      '--cpus=1.0',
-      '--pids-limit=64',
-      '--user=1000:1000',
-      '--security-opt=no-new-privileges:true',
-      '--cap-drop=ALL',
+      ...isolationFlags,
       '-v', `${ws.rootDir}:/workspace:rw`,
       '-w', '/workspace',
       'python:3.11-slim',
