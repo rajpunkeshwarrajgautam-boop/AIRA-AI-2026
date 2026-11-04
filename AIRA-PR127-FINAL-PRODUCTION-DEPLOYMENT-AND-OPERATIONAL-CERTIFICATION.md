@@ -8,7 +8,7 @@
 **Target Production Branch:** `prod-release`  
 **Pull Request:** [GitHub PR #127](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/127)  
 **Candidate Release Commit:** `378425aa8af16d064210518d6a618bb36210306d` (Code, Hardening, Container Isolation, CI Recovery Rehearsal)  
-**Current PR HEAD / Master Deliverable SHA:** `3f441ae27ee2a1be57da8a5ad3e08c1378b15908` (Documentation & Metrics Reconciliation)  
+**Current PR HEAD / Master Deliverable SHA:** `869f99ff3b75b5f9487112026acead9212f6def3` (NIST AEAD Backup Encryption & CI Rehearsal)  
 **Production Neon Project:** `old-sky-50952395` (`aira-ai-2026-production`), AWS Singapore (`aws-ap-southeast-1`), PostgreSQL 18.1  
 **Staging Neon Project:** `mute-frost-50372225`  
 **Existing Oracle Staging Host (Protected):** `140.238.240.108` (`ap-mumbai-1`)  
@@ -25,7 +25,7 @@ As Principal Software Engineer, CTO, Database Reliability Architect, and Product
 
 ### Strict Operational State Distinctions:
 In accordance with production reliability discipline, these operational states are strictly distinguished and never conflated:
-1. **Engineering Certified:** **PASS** (Commit `378425a` and HEAD `3f441ae` pass all 52 release authorization guard tests, 18 worker guard tests, 9/9 AES-256-GCM authenticated backup crypto tests, full TypeScript compilation, lint, secrets scan, and Next.js production build).
+1. **Engineering Certified:** **PASS** (Commit `869f99f` passes all 52 release authorization guard tests, 18 worker guard tests, 15/15 encrypted backup and restore rehearsal tests, 11/11 AES-256-GCM crypto tests, full TypeScript compilation, lint, secrets scan, and Next.js production build).
 2. **Staging Certified:** **PASS** (Oracle ARM64 staging host `140.238.240.108` is operational, verified across all autonomous execution paths, and completely protected from production mutations).
 3. **Production Deployed:** **BLOCKED / PENDING** (Halting strictly at the human release authority boundary; PR #127 remains `isDraft: true`, zero production databases have been touched, and zero billable resources provisioned).
 4. **Production Acceptance Passed:** **NOT TESTED** (The 15 live end-to-end capability tests are scheduled for execution immediately following application cutover and Stage B worker promotion).
@@ -54,7 +54,7 @@ In accordance with production reliability discipline, these operational states a
 
 ### 3.1 Provenance & Git Lineage
 - **Remote / Local Tracking:** `origin/feat/aira-autonomous-agent-platform` $\equiv$ local `feat/aira-autonomous-agent-platform`.
-- **Authoritative PR HEAD:** `3f441ae27ee2a1be57da8a5ad3e08c1378b15908`.
+- **Authoritative PR HEAD:** `869f99ff3b75b5f9487112026acead9212f6def3`.
 - **Target Branch:** `prod-release` (protected by GitHub Pro Ruleset `25079946`).
 - **PR State:** `OPEN`, `isDraft: true`, `mergeable: "MERGEABLE"`.
 - **Working Tree Integrity:** 100% clean on all tracked files.
@@ -71,7 +71,7 @@ Ruleset `25079946` enforces three mandatory CI status checks:
 Running the live release authorization engine locally:
 ```powershell
 $env:AIRA_RELEASE_GATE_APP_BOT_LOGIN="aira-release-gate[bot]"
-npm run verify:release-auth -- --pr 127 --sha 3f441ae27ee2a1be57da8a5ad3e08c1378b15908
+npm run verify:release-auth -- --pr 127 --sha 869f99ff3b75b5f9487112026acead9212f6def3
 ```
 **Output:**
 ```
@@ -216,7 +216,7 @@ The Knex migration source files in `packages/db/src/migrations/` have been audit
 
 The 15 mandatory decision points are compiled below for repository owner `rajpunkeshwarrajgautam-boop`:
 
-1. **Final Release Commit SHA:** `3f441ae27ee2a1be57da8a5ad3e08c1378b15908` (PR HEAD), derived from candidate `378425aa8af16d064210518d6a618bb36210306d`.
+1. **Final Release Commit SHA:** `869f99ff3b75b5f9487112026acead9212f6def3` (PR HEAD), incorporating NIST AEAD backup encryption and automated restore rehearsal.
 2. **GitHub Actions CI Evidence:** Run `41808162859` (Fast CI, Semantic Search CI, Main/PR certification — ALL PASS); Run `41808162833` (Disposable PostgreSQL 16 certification — PASS).
 3. **Production Database Identity:** Project `old-sky-50952395`, PostgreSQL 18.1, AWS Singapore, root branch `main` (`br-shiny-moon-b3vy9xj7`), 76.5 MB.
 4. **Migration Inventory:** Migrations 001–025 active; migrations 026–031 reconciled and ready for out-of-band application.
@@ -230,7 +230,7 @@ The 15 mandatory decision points are compiled below for repository owner `rajpun
 12. **Live Acceptance Plan:** 15 capability acceptance tests scheduled post-cutover against `https://aira-ai-2026.vercel.app/`.
 13. **Rollback & Incident Plan:** Rapid Vercel application rollback (<30s), worker standby drain (<15s), database recovery from Layer 2 branch (<15m).
 14. **Residual Risks:** Neon branch quota limit (10/10), OCI host launch capacity in `ap-mumbai-1`, advisory GitGuardian webhook status.
-15. **Release Authorization Parameters:** Exact-SHA workflow dispatch on `prod-release` targeting commit `3f441ae27ee2a1be57da8a5ad3e08c1378b15908`.
+15. **Release Authorization Parameters:** Exact-SHA workflow dispatch on `prod-release` targeting commit `869f99ff3b75b5f9487112026acead9212f6def3`.
 
 ---
 
@@ -256,7 +256,7 @@ npx neonctl branches delete --project-id old-sky-50952395 --branch-id br-still-f
 npx neonctl branches create --project-id old-sky-50952395 --name prod-recovery-pre-031 --parent main
 
 # 2. Capture Layer 3 logical backup via direct unpooled compute endpoint
-pg_dump "postgres://neondb_owner:***@ep-withered-art-b36ox90b.ap-southeast-1.aws.neon.tech/neondb?sslmode=require" -Fc -f aira_prod_pre_031.dump
+pg_dump "postgresql://neondb_owner@ep-withered-art-b36ox90b.ap-southeast-1.aws.neon.tech/neondb?sslmode=require" -Fc -f aira_prod_pre_031.dump
 
 # 3. Encrypt logical backup with AES-256-GCM using repository tool
 $env:BACKUP_PASSPHRASE="[YOUR_SECURE_PASSPHRASE]"
@@ -282,12 +282,12 @@ gh pr ready 127
 # 2. Dispatch exact-SHA release authorization workflow on prod-release:
 gh workflow run release-authorization.yml --ref prod-release \
   -f pr_number="127" \
-  -f candidate_sha="3f441ae27ee2a1be57da8a5ad3e08c1378b15908" \
-  -f approval_phrase="GO LIVE 3f441ae27ee2a1be57da8a5ad3e08c1378b15908"
+  -f candidate_sha="869f99ff3b75b5f9487112026acead9212f6def3" \
+  -f approval_phrase="GO LIVE 869f99ff3b75b5f9487112026acead9212f6def3"
 
 # 3. Verify trusted authorization status passes:
 $env:AIRA_RELEASE_GATE_APP_BOT_LOGIN="aira-release-gate[bot]"
-npm run verify:release-auth -- --pr 127 --sha 3f441ae27ee2a1be57da8a5ad3e08c1378b15908
+npm run verify:release-auth -- --pr 127 --sha 869f99ff3b75b5f9487112026acead9212f6def3
 ```
 
 ### Action P5: Merge PR #127 & Promote Worker to Stage B Active

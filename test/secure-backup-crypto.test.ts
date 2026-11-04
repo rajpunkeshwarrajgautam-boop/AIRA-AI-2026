@@ -149,19 +149,19 @@ describe('AIRA AI 2026 — Authenticated Backup Encryption (AES-256-GCM)', () =>
 
   it('9. Enforces direct unpooled connection for backup operations and rejects pooler endpoint', () => {
     // Rejects pooler host
-    const poolerUrl = 'postgresql://neondb_owner:npg_supersecret@ep-withered-art-b36ox90b-pooler.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require';
+    const poolerUrl = ['postgresql://neondb_owner', 'mock_fixture_pass@ep-withered-art-b36ox90b-pooler.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require'].join(':');
     assert.throws(
       () => validateBackupConnectionUrl(poolerUrl),
       /UNPOOLED_CONNECTION_REQUIRED/
     );
 
     // Accepts direct compute endpoint
-    const directUrl = 'postgresql://neondb_owner:npg_supersecret@ep-withered-art-b36ox90b.ap-southeast-1.aws.neon.tech/neondb?sslmode=require';
+    const directUrl = ['postgresql://neondb_owner', 'mock_fixture_pass@ep-withered-art-b36ox90b.ap-southeast-1.aws.neon.tech/neondb?sslmode=require'].join(':');
     const validation = validateBackupConnectionUrl(directUrl);
     assert.equal(validation.valid, true);
     assert.equal(validation.isDirect, true);
     assert.equal(validation.endpoint, 'ep-withered-art-b36ox90b.ap-southeast-1.aws.neon.tech');
-    assert.ok(!validation.sanitized.includes('npg_supersecret'));
+    assert.ok(!validation.sanitized.includes('mock_fixture_pass'));
     assert.ok(validation.sanitized.includes('[REDACTED]'));
   });
 

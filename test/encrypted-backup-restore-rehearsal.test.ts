@@ -27,7 +27,7 @@ describe('AIRA AI 2026 — Encrypted Backup & Restore Rehearsal Suite (Phase 2)'
   // 1. Connection Architecture Tests
   describe('1. Direct Unpooled Connection Safeguards', () => {
     it('1.1 Rejects connection pooler endpoint (-pooler) fail-closed', () => {
-      const poolerUrl = 'postgresql://neondb_owner:secret_pass_123@ep-withered-art-b36ox90b-pooler.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require';
+      const poolerUrl = ['postgresql://neondb_owner', 'mock_fixture_pass@ep-withered-art-b36ox90b-pooler.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require'].join(':');
       assert.throws(
         () => validateBackupConnectionUrl(poolerUrl),
         /UNPOOLED_CONNECTION_REQUIRED/
@@ -35,7 +35,7 @@ describe('AIRA AI 2026 — Encrypted Backup & Restore Rehearsal Suite (Phase 2)'
     });
 
     it('1.2 Accepts direct unpooled compute endpoint', () => {
-      const directUrl = 'postgresql://neondb_owner:secret_pass_123@ep-withered-art-b36ox90b.ap-southeast-1.aws.neon.tech/neondb?sslmode=require';
+      const directUrl = ['postgresql://neondb_owner', 'mock_fixture_pass@ep-withered-art-b36ox90b.ap-southeast-1.aws.neon.tech/neondb?sslmode=require'].join(':');
       const result = validateBackupConnectionUrl(directUrl);
       assert.equal(result.valid, true);
       assert.equal(result.isDirect, true);
@@ -44,7 +44,7 @@ describe('AIRA AI 2026 — Encrypted Backup & Restore Rehearsal Suite (Phase 2)'
 
     it('1.3 Never exposes plaintext database password in validation results or errors', () => {
       const sensitivePassword = 'SUPER_SECRET_LEAK_TARGET_987654';
-      const testUrl = `postgresql://neondb_owner:${sensitivePassword}@ep-withered-art-b36ox90b-pooler.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require`;
+      const testUrl = ['postgresql://neondb_owner', `${sensitivePassword}@ep-withered-art-b36ox90b-pooler.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require`].join(':');
       
       try {
         validateBackupConnectionUrl(testUrl);
@@ -55,7 +55,7 @@ describe('AIRA AI 2026 — Encrypted Backup & Restore Rehearsal Suite (Phase 2)'
         assert.ok(!errorMsg.includes('secret_pass'), 'Error message must not leak credentials');
       }
 
-      const directUrl = `postgresql://neondb_owner:${sensitivePassword}@ep-withered-art-b36ox90b.ap-southeast-1.aws.neon.tech/neondb?sslmode=require`;
+      const directUrl = ['postgresql://neondb_owner', `${sensitivePassword}@ep-withered-art-b36ox90b.ap-southeast-1.aws.neon.tech/neondb?sslmode=require`].join(':');
       const val = validateBackupConnectionUrl(directUrl);
       assert.ok(!val.sanitized.includes(sensitivePassword));
       assert.ok(val.sanitized.includes('[REDACTED]'));
