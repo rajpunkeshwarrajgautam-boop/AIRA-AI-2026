@@ -397,6 +397,7 @@ jobs:
             --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
             "$TEST_CONTAINER" npm test
           mark_stage 'verify disposable PostgreSQL identity after runtime verification'
+          docker exec "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/secure-backup-crypto.test.ts test/encrypted-backup-restore-rehearsal.test.ts
           docker exec --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
             "$TEST_CONTAINER" node scripts/ci/assert-disposable-postgres.mjs
 
