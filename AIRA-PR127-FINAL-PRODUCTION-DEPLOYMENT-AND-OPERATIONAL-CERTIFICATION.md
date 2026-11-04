@@ -61,17 +61,17 @@ In accordance with production reliability discipline, these operational states a
 
 ### 3.2 GitHub Actions CI Evidence (Ruleset 25079946)
 Ruleset `25079946` enforces three mandatory CI status checks:
-1. **Fast CI (Run `41808162859`, Job `126500315499`):** **PASS** (1m 52s).
-2. **Semantic Search CI (Run `41808162859`, Job `126500315077`):** **PASS** (41s).
-3. **Main / PR Certification (Run `41808162859`, Job `126501230648`):** **PASS** (5m 54s).
-4. **Disposable PostgreSQL 16 Isolated Certification (Run `41808162833`, Job `126500314648`):** **PASS** (2m 27s). Real containerized `pg_dump -Fc` $\rightarrow$ `pg_restore` rehearsal verifying 48/48 tables and 41/41 records restored with 100% parity.
-5. **Vercel Preview Deployment (`8AUVceEibJLwND25NhnYdD2pmYxn`):** **PASS**.
+1. **Fast CI (Run `41853818771`, Job `126656903213`):** **PASS** (2m 55s). Zero credential leaks, full TypeScript compile, lint, 52 release-auth tests, 18 worker guard tests.
+2. **Semantic Search CI (Run `41853818771`, Job `126656903926`):** **PASS** (48s).
+3. **Main / PR Certification (Run `41853818771`, Job `126658672444`):** **PASS** (5m 10s).
+4. **Disposable PostgreSQL 16 Isolated Certification (Run `41853818734`, Job `126656906992`):** **PASS** (2m 46s). Real containerized AES-256-GCM encrypted `pg_dump -Fc` $\rightarrow$ decryption $\rightarrow$ `pg_restore` rehearsal verifying 100% SHA256 parity (`123988` bytes), 48/48 tables, and empirical row parity.
+5. **Vercel Preview Deployment (`CFhvWHB3oyBPDHk3GyNQuYNr3VTU`):** **PASS**.
 
 ### 3.3 Authorization Rules Engine Fail-Closed Proof
 Running the live release authorization engine locally:
 ```powershell
 $env:AIRA_RELEASE_GATE_APP_BOT_LOGIN="aira-release-gate[bot]"
-npm run verify:release-auth -- --pr 127 --sha a3bd36d36d784331837af9d98327a6ab13e13b08
+npm run verify:release-auth -- --pr 127 --sha b4eb6aef9c520242542affb49c2b11507375fa20
 ```
 **Output:**
 ```
@@ -216,8 +216,8 @@ The Knex migration source files in `packages/db/src/migrations/` have been audit
 
 The 15 mandatory decision points are compiled below for repository owner `rajpunkeshwarrajgautam-boop`:
 
-1. **Final Release Commit SHA:** `a3bd36d36d784331837af9d98327a6ab13e13b08` (PR HEAD), incorporating NIST AEAD backup encryption and automated restore rehearsal.
-2. **GitHub Actions CI Evidence:** Run `41808162859` (Fast CI, Semantic Search CI, Main/PR certification — ALL PASS); Run `41808162833` (Disposable PostgreSQL 16 certification — PASS).
+1. **Final Release Commit SHA:** `b4eb6aef9c520242542affb49c2b11507375fa20` (PR HEAD), incorporating NIST AEAD backup encryption and automated restore rehearsal.
+2. **GitHub Actions CI Evidence:** Run `41853818771` (Fast CI, Semantic Search CI, Main/PR certification — ALL PASS); Run `41853818734` (Disposable PostgreSQL 16 certification — PASS with encrypted backup & restore rehearsal).
 3. **Production Database Identity:** Project `old-sky-50952395`, PostgreSQL 18.1, AWS Singapore, root branch `main` (`br-shiny-moon-b3vy9xj7`), 76.5 MB.
 4. **Migration Inventory:** Migrations 001–025 active; migrations 026–031 reconciled and ready for out-of-band application.
 5. **Recovery Checkpoint Evidence:** Live recovery script certified in CI with 48/48 tables and 41/41 records restored. Layer 1 (Neon PITR 6h), Layer 2 (Pre-migration branch snapshot), Layer 3 (Independent AES-256-GCM encrypted backup).
@@ -230,7 +230,7 @@ The 15 mandatory decision points are compiled below for repository owner `rajpun
 12. **Live Acceptance Plan:** 15 capability acceptance tests scheduled post-cutover against `https://aira-ai-2026.vercel.app/`.
 13. **Rollback & Incident Plan:** Rapid Vercel application rollback (<30s), worker standby drain (<15s), database recovery from Layer 2 branch (<15m).
 14. **Residual Risks:** Neon branch quota limit (10/10), OCI host launch capacity in `ap-mumbai-1`, advisory GitGuardian webhook status.
-15. **Release Authorization Parameters:** Exact-SHA workflow dispatch on `prod-release` targeting commit `a3bd36d36d784331837af9d98327a6ab13e13b08`.
+15. **Release Authorization Parameters:** Exact-SHA workflow dispatch on `prod-release` targeting commit `b4eb6aef9c520242542affb49c2b11507375fa20`.
 
 ---
 
@@ -282,12 +282,12 @@ gh pr ready 127
 # 2. Dispatch exact-SHA release authorization workflow on prod-release:
 gh workflow run release-authorization.yml --ref prod-release \
   -f pr_number="127" \
-  -f candidate_sha="a3bd36d36d784331837af9d98327a6ab13e13b08" \
-  -f approval_phrase="GO LIVE a3bd36d36d784331837af9d98327a6ab13e13b08"
+  -f candidate_sha="b4eb6aef9c520242542affb49c2b11507375fa20" \
+  -f approval_phrase="GO LIVE b4eb6aef9c520242542affb49c2b11507375fa20"
 
 # 3. Verify trusted authorization status passes:
 $env:AIRA_RELEASE_GATE_APP_BOT_LOGIN="aira-release-gate[bot]"
-npm run verify:release-auth -- --pr 127 --sha a3bd36d36d784331837af9d98327a6ab13e13b08
+npm run verify:release-auth -- --pr 127 --sha b4eb6aef9c520242542affb49c2b11507375fa20
 ```
 
 ### Action P5: Merge PR #127 & Promote Worker to Stage B Active
