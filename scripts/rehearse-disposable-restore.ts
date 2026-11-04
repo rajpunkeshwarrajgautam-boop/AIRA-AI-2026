@@ -618,7 +618,33 @@ export async function runLiveRestoreRehearsal(preflight: EnvironmentPreflight): 
 // ============================================================================
 // 7. Main Orchestrator Routine
 // ============================================================================
-export async function runDisposableRestoreRehearsal(forcedMode?: 'live' | 'offline'): Promise<RehearsalReport> {
+export interface RestoreRehearsalOptions {
+  forcedMode?: 'live' | 'offline';
+  sourceUrl?: string;
+  targetUrl?: string;
+  disposableUrl?: string;
+}
+
+export async function runDisposableRestoreRehearsal(
+  forcedModeOrOptions?: 'live' | 'offline' | RestoreRehearsalOptions
+): Promise<RehearsalReport> {
+  const options: RestoreRehearsalOptions =
+    typeof forcedModeOrOptions === 'string'
+      ? { forcedMode: forcedModeOrOptions }
+      : forcedModeOrOptions || {};
+
+  if (options.sourceUrl) {
+    process.env.SOURCE_DATABASE_URL = options.sourceUrl;
+  }
+  if (options.targetUrl) {
+    process.env.TARGET_DATABASE_URL = options.targetUrl;
+  }
+  if (options.disposableUrl) {
+    process.env.DISPOSABLE_DATABASE_URL = options.disposableUrl;
+  }
+
+  const forcedMode = options.forcedMode;
+
   console.log('================================================================================');
   console.log('   AIRA AI 2026 — PR #127 DISPOSABLE DATABASE RESTORE REHEARSAL VERIFICATION   ');
   console.log('================================================================================\n');
@@ -756,6 +782,24 @@ export async function runDisposableRestoreRehearsal(forcedMode?: 'live' | 'offli
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
   const forcedMode = args.includes('--live') ? 'live' : args.includes('--offline') ? 'offline' : undefined;
+
+  // Parse CLI parameter overrides into environment variables
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith('--source-url=')) {
+      process.env.SOURCE_DATABASE_URL = arg.slice('--source-url='.length);
+    } else if (arg === '--source-url' && i + 1 < args.length) {
+      process.env.SOURCE_DATABASE_URL = args[++i];
+    } else if (arg.startsWith('--target-url=')) {
+      process.env.TARGET_DATABASE_URL = arg.slice('--target-url='.length);
+    } else if (arg === '--target-url' && i + 1 < args.length) {
+      process.env.TARGET_DATABASE_URL = args[++i];
+    } else if (arg.startsWith('--disposable-url=')) {
+      process.env.DISPOSABLE_DATABASE_URL = arg.slice('--disposable-url='.length);
+    } else if (arg === '--disposable-url' && i + 1 < args.length) {
+      process.env.DISPOSABLE_DATABASE_URL = args[++i];
+    }
+  }
 
   runDisposableRestoreRehearsal(forcedMode)
     .then(() => {
