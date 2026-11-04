@@ -12,7 +12,7 @@ WorkingDirectory=/opt/aira
 EnvironmentFile=/etc/aira/production-worker.env
 
 ExecStart=/usr/bin/docker compose -f /opt/aira/infrastructure/production/docker-compose.prod.yml up -d
-ExecStop=/usr/bin/docker compose -f /opt/aira/infrastructure/production/docker-compose.prod.yml down
+ExecStop=/usr/bin/docker compose -f /opt/aira/infrastructure/production/docker-compose.prod.yml down --timeout 25
 
 TimeoutStopSec=35
 Restart=on-failure

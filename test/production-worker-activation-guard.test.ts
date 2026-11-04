@@ -39,7 +39,7 @@ test.describe('AIRA AI 2026 — Production Worker Architecture & Activation Guar
     AIRA_ENV: 'production',
     AIRA_PRODUCTION_WORKER_ENABLED: 'true',
     WORKER_ID: 'worker_oracle_ampere_production_01',
-    WORKER_CONCURRENCY: '2',
+    WORKER_CONCURRENCY: '1',
     DATABASE_URL: 'postgresql://prod_user@ep-withered-art-b36ox90b-pooler.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require',
     EXPECTED_NEON_PROJECT_ID: CANONICAL_PRODUCTION_NEON_PROJECT_ID,
     EXPECTED_NEON_ENDPOINT_ID: CANONICAL_PRODUCTION_NEON_ENDPOINT_ID,
@@ -291,7 +291,7 @@ test.describe('AIRA AI 2026 — Production Worker Architecture & Activation Guar
     assert.match(content, /cap_add:\r?\n\s+-\s+NET_BIND_SERVICE/, 'Specialist worker must cap_add NET_BIND_SERVICE');
 
     // 4. Specialist Worker Resource Limits
-    assert.match(content, /cpus:\s*['"]?1\.5['"]?/, 'Specialist worker cpus limit must be 1.5');
+    assert.match(content, /cpus:\s*['"]?0\.75['"]?/, 'Specialist worker cpus limit must be 0.75');
     assert.match(content, /memory:\s*2048M/, 'Specialist worker memory limit must be 2048M');
 
     // 5. Port Binding strictly to loopback 127.0.0.1:8080:8080
@@ -301,7 +301,7 @@ test.describe('AIRA AI 2026 — Production Worker Architecture & Activation Guar
     assert.match(content, /container_name:\s*\${SANDBOX_CONTAINER_NAME:-aira-sandbox-runner-prod}/, 'Sandbox container must be aira-sandbox-runner-prod');
     assert.match(content, /user:\s*["']nobody:nogroup["']/, 'Sandbox runner must execute as nobody:nogroup (UID 65534)');
     assert.match(content, /read_only:\s*true/, 'Sandbox runner root filesystem must be read_only: true');
-    assert.match(content, /tmpfs:\r?\n\s+-\s+\/tmp:mode=1777,size=512M/, 'Sandbox runner must mount tmpfs /tmp:mode=1777,size=512M');
+    assert.match(content, /tmpfs:\r?\n\s+-\s+\/tmp:mode=1777,size=256M/, 'Sandbox runner must mount tmpfs /tmp:mode=1777,size=256M');
 
     // 7. Internal Network Architecture
     assert.match(content, /sandbox-net:\r?\n\s+internal:\s*true/, 'sandbox-net must be configured with internal: true');
@@ -363,7 +363,7 @@ test.describe('AIRA AI 2026 — Production Worker Architecture & Activation Guar
     assert.strictEqual(parsed.EXPECTED_NEON_ENDPOINT_ID, CANONICAL_PRODUCTION_NEON_ENDPOINT_ID);
     assert.ok(parsed.DATABASE_URL.includes('-pooler'), 'DATABASE_URL placeholder must route to -pooler');
     assert.ok(parsed.DATABASE_URL.includes(CANONICAL_PRODUCTION_NEON_ENDPOINT_ID));
-    assert.strictEqual(parsed.WORKER_CONCURRENCY, '2');
+    assert.strictEqual(parsed.WORKER_CONCURRENCY, '1');
     assert.strictEqual(parsed.AIRA_REQUIRE_CONTAINER_SANDBOX, 'true');
     assert.strictEqual(parsed.AIRA_ALLOW_LOCAL_SANDBOX, 'false');
 

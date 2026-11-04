@@ -1,6 +1,6 @@
 # ==============================================================================
 # AIRA AI 2026 — Production Architecture (Oracle Cloud Ampere A1 ARM64)
-# Target Shape: VM.Standard.A1.Flex (2 OCPUs, 12.0 GiB RAM, Ubuntu 24.04 aarch64)
+# Target Shape: VM.Standard.A1.Flex (1 OCPU, 6.0 GiB RAM, Ubuntu 24.04 aarch64)
 # Project Name: aira-autonomous-production
 # Services:
 #   1. specialist-worker: AIRA autonomous agent runtime daemon (Port 127.0.0.1:8080)
@@ -8,7 +8,7 @@
 #
 # Production Security & Isolation Invariants:
 # - Bound strictly to loopback interface 127.0.0.1:8080 (No direct public exposure)
-# - Worker concurrency: 2 (Tailored for dedicated 2 OCPU VM with 12 GB RAM)
+# - Worker concurrency: 1 (Tailored for dedicated 1 OCPU VM with 6 GB RAM)
 # - Protected environment file (/etc/aira/production-worker.env) is authoritative
 # - Sandbox runner isolated on non-gateway internal bridge (sandbox-net: internal: true)
 # - Root filesystem read-only for sandbox runner; zero Docker socket mounted
@@ -26,6 +26,7 @@ services:
     image: aira-specialist-worker:${AIRA_IMAGE_TAG:-v2026.1.0-2ac3122}
     container_name: ${CONTAINER_NAME:-aira-autonomous-worker-prod}
     restart: unless-stopped
+    stop_grace_period: 30s
     user: "10001:10001"
     security_opt:
       - no-new-privileges:true
@@ -46,7 +47,7 @@ services:
       - EXPECTED_NEON_PROJECT_ID=old-sky-50952395
       - EXPECTED_NEON_ENDPOINT_ID=ep-withered-art-b36ox90b
       - WORKER_ID=${WORKER_ID:-worker_oracle_ampere_production_01}
-      - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-2}
+      - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-1}
       - POLL_INTERVAL_MS=500
       - MAX_POLL_INTERVAL_MS=2000
       - IDLE_BACKOFF_MULTIPLIER=1.5
@@ -54,7 +55,7 @@ services:
       - HEARTBEAT_INTERVAL_MS=3000
       - PORT=8080
       - WORKER_BIND_HOST=0.0.0.0
-      - NODE_OPTIONS=--max-old-space-size=2048
+      - NODE_OPTIONS=--max-old-space-size=1280
       - CHROMIUM_PATH=/usr/bin/chromium-browser
       - PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
       - AIRA_REQUIRE_CONTAINER_SANDBOX=true
@@ -81,10 +82,10 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1.5'
+          cpus: '0.75'
           memory: 2048M
         reservations:
-          cpus: '0.50'
+          cpus: '0.30'
           memory: 512M
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://127.0.0.1:8080/health || exit 1"]
@@ -98,7 +99,7 @@ services:
         max-size: "50m"
         max-file: "5"
     tmpfs:
-      - /tmp:exec,mode=1777,size=1024M
+      - /tmp:exec,mode=1777,size=512M
 
   sandbox-runner:
     build:
@@ -124,10 +125,10 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.50'
+          cpus: '0.25'
           memory: 1024M
         reservations:
-          cpus: '0.10'
+          cpus: '0.05'
           memory: 128M
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')\" || exit 1"]
@@ -141,7 +142,7 @@ services:
         max-size: "20m"
         max-file: "3"
     tmpfs:
-      - /tmp:mode=1777,size=512M
+      - /tmp:mode=1777,size=256M
 
 networks:
   default:
