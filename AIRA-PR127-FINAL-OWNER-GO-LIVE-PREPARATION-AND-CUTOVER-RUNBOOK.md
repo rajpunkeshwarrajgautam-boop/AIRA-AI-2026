@@ -37,8 +37,8 @@ However, in accordance with the strict release authority boundaries established 
 | Worker Standby Guard (Stage A)     | PASS (VERIFIED)       | 18/18 tests pass in test suite        |
 | Release Auth Logic (Dual Evidence) | PASS (VERIFIED)       | 68/68 unit & app tests pass           |
 | Release Auth Live CLI Preflight    | PASS (FAIL-CLOSED)    | Refused with STATUS_CHECK_MISSING     |
-| Neon Free Tier Branch Quota        | ACTION REQUIRED (OWNER) 10/10 branches full; 2 slots must be  |
-|                                    |                       | reclaimed (child then parent branch)  |
+| Neon Free Tier Branch Quota        | ACTION REQUIRED (OWNER) 10/10 branches full; 1 slot reclaimed  |
+|                                    |                       | via single leaf branch br-still-field  |
 | Production Database Migrations     | ACTION REQUIRED (OWNER) Migrations 026-031 ready out-of-band |
 | Dedicated Production Worker VM     | ACTION REQUIRED (OWNER) Option A.1 (1 OCPU / 6 GB) in OCI    |
 | Dual-Evidence GO LIVE Attestation  | ACTION REQUIRED (OWNER) Workflow dispatch on prod-release     |
@@ -163,20 +163,21 @@ Audit of `npx neonctl branches list --project-id old-sky-50952395 -o json` revea
 +------------------------------------+---------------------------------------+-----------+-----------+
 ```
 
-#### CRITICAL CHILD BRANCH DISCOVERY & REMEDIATION PROTOCOL
-Attempting to create pre-migration recovery branch `prod-recovery-pre-031` immediately fails with `HTTP 400/422 QuotaExceeded`.
+#### OPTIMAL LEAF BRANCH DISCOVERY & REMEDIATION PROTOCOL
+Attempting to create pre-migration recovery branch `prod-recovery-pre-031` fails with `HTTP 400/422 QuotaExceeded` while 10/10 branch slots are allocated.
 
-The candidate for deletion, `br-young-recipe-b366ifmv` (`pr32-hybrid-search-preview`), has been inactive for >25 days (since 2026-10-09) and has zero references in the codebase. However:
-- **Child Dependency**: Branch `br-wandering-math-b36gkyyu` (`pr33-nvidia-model-routing-preview`) has `parent_id = "br-young-recipe-b366ifmv"`.
-- **Neon Deletion Rule**: Neon API strictly forbids deleting a parent branch while an active or archived child branch exists. Executing `delete br-young-recipe-b366ifmv` alone **WILL FAIL**.
-- **Mandatory Order of Execution**: The owner must delete the child branch first, then delete the parent branch, successfully reclaiming 2 branch slots (reducing branch count from 10/10 to 8/10):
+To reclaim exactly 1 slot with zero risk of cascading dependencies, the preferred and sole deletion candidate is the standalone leaf branch:
+- **Branch ID**: `br-still-field-b3dqstjr` (`pr34-math-render-preview-20261010`)
+- **Parent**: `br-shiny-moon-b3vy9xj7` (`main`) at LSN `0/55A6B90`
+- **Children**: **ZERO children**. It is a pure terminal leaf branch.
+- **Compute Endpoint**: `ep-fancy-dream-b32cxvu9` (suspended, idle for >25 days since 2026-10-10).
+- **Disposability**: PR #34 was merged 25 days ago. Zero unmerged code, zero active consumers, zero CI/deployment references, and zero relevance to disaster recovery.
+- **Execution Command**:
   ```bash
-  # Step 1: Delete child branch (PR #33 preview)
-  npx neonctl branches delete --project-id old-sky-50952395 --branch-id br-wandering-math-b36gkyyu
-
-  # Step 2: Delete parent branch (PR #32 preview)
-  npx neonctl branches delete --project-id old-sky-50952395 --branch-id br-young-recipe-b366ifmv
+  # Delete standalone leaf branch to reduce quota from 10/10 to 9/10:
+  npx neonctl branches delete --project-id old-sky-50952395 --branch-id br-still-field-b3dqstjr
   ```
+Deleting this single leaf branch reclaims 1 slot immediately (10/10 $\rightarrow$ 9/10), freeing up the required slot for `prod-recovery-pre-031` without modifying or deleting parent/child chains (`br-young-recipe-b366ifmv` / `br-wandering-math-b36gkyyu`).
 
 ### 3.4 The 3-Layer Production Database Recovery Architecture
 To protect production data against application regressions, schema failures, and provider outages, AIRA AI 2026 implements a defense-in-depth 3-Layer Recovery Architecture:
@@ -524,17 +525,16 @@ Every step in this runbook contains all 8 required operational fields:
 - **Exact Target**: Neon Production Project `old-sky-50952395`.
 - **Verification Command**:
   ```bash
-  # Delete child branch first, then parent branch
-  npx neonctl branches delete --project-id old-sky-50952395 --branch-id br-wandering-math-b36gkyyu
-  npx neonctl branches delete --project-id old-sky-50952395 --branch-id br-young-recipe-b366ifmv
+  # Delete standalone leaf branch br-still-field-b3dqstjr
+  npx neonctl branches delete --project-id old-sky-50952395 --branch-id br-still-field-b3dqstjr
   npx neonctl branches list --project-id old-sky-50952395 -o json
   ```
 - **Expected Output**:
-  - Both deletion commands exit code `0`.
-  - `branches list` reports exactly 8 branches allocated (2 slots free).
-- **Failure Condition**: Deletion error (e.g. attempting to delete parent before child) or branch count remaining 10/10.
-- **Stop Condition**: Branch count remains 10/10 (Layer 2 branch creation will fail).
-- **Recovery Procedure**: Confirm child branch `br-wandering-math-b36gkyyu` is completely deleted before running parent deletion. Alternatively, delete standalone archived branch `br-still-field-b3dqstjr`.
+  - Deletion command exits code `0`.
+  - `branches list` reports exactly 9 branches allocated (1 slot free).
+- **Failure Condition**: Neon API deletion error or branch count remaining 10/10.
+- **Stop Condition**: Branch count remains 10/10 (Layer 2 recovery branch creation will fail).
+- **Recovery Procedure**: Check Neon API token and project ID. If deletion fails, verify branch ID `br-still-field-b3dqstjr` exists via `npx neonctl branches list`.
 
 ---
 
@@ -861,9 +861,8 @@ In accordance with `AGENTS.md`, the platform owner (`rajpunkeshwarrajgautam-boop
 +----+--------------------------------+-------------------------------------------------------------------------------------------------+
 | #  | ACTION ITEM                    | EXACT EXECUTION METHOD & COMMAND                                                                |
 +----+--------------------------------+-------------------------------------------------------------------------------------------------+
-| 1  | Reclaim Neon Branch Slots      | Execute via Neon CLI or Console (delete child first, then parent):                              |
-|    | (Reclaim 10/10 -> 8/10)        | npx neonctl branches delete --project-id old-sky-50952395 --branch-id br-wandering-math-b36gkyyu|
-|    |                                | npx neonctl branches delete --project-id old-sky-50952395 --branch-id br-young-recipe-b366ifmv  |
+| 1  | Reclaim Neon Branch Slot        | Execute via Neon CLI or Console (delete single leaf branch):                                    |
+|    | (Reclaim 10/10 -> 9/10)        | npx neonctl branches delete --project-id old-sky-50952395 --branch-id br-still-field-b3dqstjr |
 +----+--------------------------------+-------------------------------------------------------------------------------------------------+
 | 2  | Authorize Recovery Points      | Create Layer 2 snapshot branch:                                                                 |
 |    | & Forward Migrations 026-031   | npx neonctl branches create --project-id old-sky-50952395 --name prod-recovery-pre-031          |
