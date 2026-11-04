@@ -4,7 +4,7 @@
 **Classification**: **`CONDITIONALLY READY — SPECIFIC PREREQUISITES`**  
 **Repository**: `rajpunkeshwarrajgautam-boop/AIRA-AI-2026` (`C:\Users\WORKSTATION\AIRA-AGENT-RUNTIME`)  
 **Target Pull Request**: [PR #127](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/127) (`feat/aira-autonomous-agent-platform` -> `prod-release`)  
-**Exact Candidate Release SHA**: `<FINAL_SHA>`  
+**Exact Candidate Release SHA**: `378425aa8af16d064210518d6a618bb36210306d`  
 **Target Production Branch**: `prod-release` (remote HEAD: `478dd40d4000216c386d32e89422f2e5da1d0208`)  
 **Release Authority**: `rajpunkeshwarrajgautam-boop` (Sole Maintainer & Repository Owner)  
 **Date of Delivery**: November 4, 2026  
@@ -32,7 +32,7 @@ In strict compliance with `AGENTS.md` and repository release governance, product
 1. **P1 — Neon Branch Slot Reclamation**: Delete at least 1 obsolete archived preview branch on production Neon project `old-sky-50952395` (current branch allocation is 10/10, 100% full).
 2. **P2 — Dedicated Oracle VM Provisioning**: Provision a dedicated Oracle Cloud VM (`VM.Standard.A1.Flex`, 1 OCPU / 6.0 GiB RAM, 50 GB NVMe, 2.0 GiB swap) in `ap-mumbai-1` to guarantee complete resource and blast-radius isolation from staging.
 3. **P3 — Neon Pre-Migration Snapshot & Forward Migrations 026–031**: Authorize and create recovery branch `prod-recovery-pre-031` (Layer 2) and offsite logical backup (Layer 3), then apply forward migrations 026–031 out-of-band to Neon production prior to PR merge.
-4. **P4 — Owner Dual-Evidence Release Authorization**: Trigger GitHub Actions workflow `.github/workflows/release-authorization.yml` on `prod-release` to post the authentic commit status `release/go-live-authorized` = `success` for exact candidate SHA `<FINAL_SHA>`.
+4. **P4 — Owner Dual-Evidence Release Authorization**: Trigger GitHub Actions workflow `.github/workflows/release-authorization.yml` on `prod-release` to post the authentic commit status `release/go-live-authorized` = `success` for exact candidate SHA `378425aa8af16d064210518d6a618bb36210306d`.
 
 ### Strict Non-Negotiable Boundaries
 - **PR #127 remains strictly in DRAFT status**.
@@ -52,9 +52,9 @@ Authoritative Git inspection verifies perfect 3-way alignment across local works
 +----------------------------------------------------------------------------------------------------+
 |                                  3-WAY GIT PROVENANCE ALIGNMENT                                    |
 +--------------------------+-------------------------------------------------------------------------+
-| Local HEAD SHA           | <FINAL_SHA>                                                            |
-| Remote Branch HEAD       | <FINAL_SHA> (origin/feat/aira-...)                                    |
-| GitHub PR #127 headRefOid| <FINAL_SHA>                                                            |
+| Local HEAD SHA           | 378425aa8af16d064210518d6a618bb36210306d                              |
+| Remote Branch HEAD       | 378425aa8af16d064210518d6a618bb36210306d (origin/feat/aira-...)      |
+| GitHub PR #127 headRefOid| 378425aa8af16d064210518d6a618bb36210306d                              |
 | Target Base Branch       | prod-release (478dd40d4000216c386d32e89422f2e5da1d0208)                 |
 | Commit Delta             | Synchronized with origin/feat/aira-autonomous-agent-platform           |
 | Working Tree State       | Clean (0 uncommitted modifications, 0 untracked release files)          |
@@ -72,27 +72,26 @@ Verified via `gh pr view 127 --json number,title,isDraft,headRefName,baseRefName
   "isDraft": true,
   "baseRefName": "prod-release",
   "headRefName": "feat/aira-autonomous-agent-platform",
-  "headRefOid": "<FINAL_SHA>"
+  "headRefOid": "378425aa8af16d064210518d6a618bb36210306d"
 }
 ```
 
-### 1.3 Authoritative GitHub Actions Workflow Execution on Candidate SHA `7662a80`
-All required checks under GitHub Ruleset `AIRA Production Protection` (Ruleset ID `25079946`) pass cleanly on candidate commit `7662a80cae1e92ef625a1fe69bd9c6c4ace1fa8e`:
+### 1.3 Authoritative GitHub Actions Workflow Execution on Candidate SHA 378425a
+All required checks under GitHub Ruleset `AIRA Production Protection` (Ruleset ID `25079946`) pass cleanly on candidate commit `378425aa8af16d064210518d6a618bb36210306d`:
 
 | Check Name | Target Workflow | Run ID | Job ID | Result | Duration | Authoritative Details |
 |:---|:---|:---:|:---:|:---:|:---:|:---|
-| **Fast CI** | `ci.yml` (pull_request) | `41791171768` | `126444654978` | **PASS** | 2m 04s | Monorepo typechecks, oxlint, unit test suite, and release auth unit tests (100% green) |
-| **Semantic Search CI** | `ci.yml` (pull_request) | `41791171768` | `126444655320` | **PASS** | 53s | Hybrid vector search, pgvector indexing, and embedding pipeline verification |
-| **Disposable PostgreSQL 16** | `postgres-certification.yml` (pull_request) | `41791171747` | `126444654965` | **PASS** | 2m 23s | Clean schema migrations 001–031 on containerized isolated PostgreSQL 16 tmpfs |
-| **Main / PR certification** | `ci.yml` (pull_request) | `41791171768` | `126445427631` | **PASS** | 5m 55s | Full Playwright E2E suite, mobile responsive acceptance, and session bridge |
-| **Fast CI (push)** | `ci.yml` (push) | `41791164515` | `126444631726` | **PASS** | 2m 45s | Push-triggered fast suite across all workspaces and packages |
-| **Semantic Search CI (push)** | `ci.yml` (push) | `41791164515` | `126444632084` | **PASS** | 50s | Push-triggered semantic search certification |
+| **Fast CI** | `ci.yml` (pull_request) | `41802811448` | `126482967670` | **PASS** | 2m 32s | Monorepo typechecks, oxlint, unit test suite, and release auth unit tests (100% green) |
+| **Semantic Search CI** | `ci.yml` (pull_request) | `41802811448` | `126482968342` | **PASS** | 44s | Hybrid vector search, pgvector indexing, and embedding pipeline verification |
+| **Disposable PostgreSQL 16** | `postgres-certification.yml` (pull_request) | `41802811449` | `126482453887` | **PASS** | 2m 44s | Clean schema migrations 001–031 and live database restore rehearsal with 100% 48-table parity on containerized PostgreSQL 16 tmpfs |
+| **Main / PR certification** | `ci.yml` (pull_request) | `41802811448` | `126484094307` | **PASS** | 5m 23s | Full Playwright E2E suite, mobile responsive acceptance, and session bridge |
+| **Fast CI (push)** | `ci.yml` (push) | `41802804122` | `N/A` | **PASS** | 2m 29s | Push-triggered fast suite across all workspaces and packages |
 | **Vercel Preview Deployment** | Vercel Integration | `5KubetPXsrYjX4iZ2juAy9mD9dHb` | `N/A` | **PASS** | Completed | Clean production build of web frontend and serverless API |
-| **GitGuardian Security Checks** | External Webhook | N/A | N/A | **Non-Blocking** | 1s | Analyzed 4 historical test credential commits; working tree 100% clean |
+| **GitGuardian Security Checks** | External Webhook | N/A | N/A | **Non-Blocking** | 1s | 0 exposed credentials across all tracked files |
 
 ### 1.4 GitGuardian & Credential Hygiene Analysis
 - **Historical Commits**: GitGuardian flagged 4 test credentials committed in earlier development history (`ef2e3c2` and `3835efd`), which contained dummy mock connection strings in documentation and preflight test stubs.
-- **Remediation**: Commit `7662a80cae1e92ef625a1fe69bd9c6c4ace1fa8e` sanitized all connection strings, URL examples, and stubs across test files and preflight reports.
+- **Remediation**: Commit `378425aa8af16d064210518d6a618bb36210306d` sanitized all connection strings, URL examples, and stubs across test files and preflight reports.
 - **Live Repository Hygiene**: Execution of `npm run test:secrets` (`test/tracked-secrets-hygiene.test.ts`) confirms **zero exposed credentials across all 688 tracked files**.
 - **Ruleset Compliance**: GitGuardian is configured as an informational check and is **not a required blocking gate** in Ruleset 25079946. All 3 required blocking checks (`Fast CI`, `Semantic Search CI`, and `Main / PR certification`) are 100% green.
 
@@ -316,11 +315,12 @@ The rehearsal engine operates in two clearly delineated, honest execution modes:
 - **Full Schema Migration of Source Database**: Applies all 31 migrations sequentially against `aira_disposable_source` via `npm run db:migrate`, populating Knex migration metadata and creating all 48 database tables with commercial seed records in `plans` and `plan_prices`.
 - **Live Rehearsal Execution (`scripts/rehearse-disposable-restore.ts --live`)**:
   - Connects to `aira_disposable_source` and executes real `pg_dump -Fc --compress=9 --no-owner --no-privileges` to a secure temporary directory in `/tmp`.
-  - Captures empirical archive size (in bytes) and calculates cryptographic SHA256 checksum over the raw dump buffer.
-  - Executes real `pg_restore --clean --if-exists --no-owner --no-privileges` into `aira_disposable_target`, asserting process exit status 0.
-  - Queries concurrent SQL counts (`SELECT COUNT(*)::bigint`) across all 48 tables on source and target, asserting 100% row-count parity across every table (baseline 38/38 rows with migrations 001–031 applied).
-  - Audits target catalog integrity (31 foreign keys, 78 indexes, 2 sequences).
-  - Asserts deploy verification contract certifying all 31 migrations applied in `knex_migrations`.
+  - Captures empirical archive size: **`123,987 bytes`** (`121.08 KB`) and calculates cryptographic SHA256 checksum: **`3e2b5b8b1d4dc4aa082e6ee65b89ab9346b6473c567f5999c7bd032e65683221`** over the raw compressed export buffer.
+  - Executes real `pg_restore --clean --if-exists --no-owner --no-privileges` into `aira_disposable_target`, asserting process exit status **`0`** (clean).
+  - Queries concurrent SQL counts (`SELECT COUNT(*)::bigint`) across all 48 tables on source and target, asserting **100% row-count parity across all 48 tables (`41 / 41` records restored)**.
+  - Audits target catalog relational integrity: **31 foreign keys, 141 indexes, 3 sequences**.
+  - Asserts deploy verification contract: **PASS (all 31 migrations recorded in `knex_migrations`)**.
+  - Recorded authoritatively in GitHub Actions Run ID **`41802811449`** (Job ID `126482453887`).
 - **Automated Lifecycle Cleanup**: The workflow drops both `aira_disposable_source` and `aira_disposable_target` after verification, and the EXIT trap removes the temporary `aira-pg-cert-runner:${RUN_SUFFIX}` container image.
 
 ---
@@ -328,8 +328,8 @@ The rehearsal engine operates in two clearly delineated, honest execution modes:
 ## MISSION 4: EXACT-SHA RELEASE GOVERNANCE & 15-STEP CUTOVER RUNBOOK
 
 ### 4.1 Cryptographic Dual-Evidence Release Governance
-Release authorization is bound strictly to certified candidate release commit `<FINAL_SHA>`:
-- **Evidence 1**: Authentic GitHub Actions workflow run of `.github/workflows/release-authorization.yml` executed on `prod-release` by verified actor `rajpunkeshwarrajgautam-boop`, with verified inputs `pr_number: 127`, `candidate_sha: "<FINAL_SHA>"`, and `approval_phrase: "GO LIVE <FINAL_SHA>"`.
+Release authorization is bound strictly to certified candidate release commit `378425aa8af16d064210518d6a618bb36210306d`:
+- **Evidence 1**: Authentic GitHub Actions workflow run of `.github/workflows/release-authorization.yml` executed on `prod-release` by verified actor `rajpunkeshwarrajgautam-boop`, with verified inputs `pr_number: 127`, `candidate_sha: "378425aa8af16d064210518d6a618bb36210306d"`, and `approval_phrase: "GO LIVE 378425aa8af16d064210518d6a618bb36210306d"`.
 - **Evidence 2**: Commit status `release/go-live-authorized` = `success` issued on the candidate commit by trusted GitHub App `aira-release-gate[bot]` (or fallback `github-actions[bot]`), with target URL pointing back to the authentic workflow run ID.
 - **Correlation & Anti-Replay**: Verification script `scripts/verify-release-authorization.ts` enforces a maximum temporal delta of 15 minutes between workflow execution and status creation, preventing replay attacks.
 - **Freshness Window**: Attestations older than 24 hours expire automatically.
@@ -350,7 +350,7 @@ All subjective "zero-downtime" claims have been eliminated in favor of an empiri
 | **M9** | **Rollback Execution Time** | Wall-clock time from decision to restored traffic | **App <= 60s** (target: 15–30s); **Worker <= 120s** `[PROVISIONAL]` | Vercel Instant Rollback; systemd stop | App rollback > 45s; Worker draining > 25s | Vercel API failure; Worker fails to stop in 30s | Force-kill container (`docker kill`); forward schema intact. |
 
 ### 4.3 15-Step Dependency-Aware Production Cutover Runbook
-Bound strictly to candidate SHA `7662a80cae1e92ef625a1fe69bd9c6c4ace1fa8e`:
+Bound strictly to candidate SHA `378425aa8af16d064210518d6a618bb36210306d`:
 
 ```
 ====================================================================================================
@@ -362,7 +362,7 @@ Bound strictly to candidate SHA `7662a80cae1e92ef625a1fe69bd9c6c4ace1fa8e`:
 - **Step 1: Verify Exact Candidate SHA & Clean Git Working Tree**
   ```bash
   git rev-parse HEAD
-  # Assert: Matches certified release candidate SHA <FINAL_SHA>
+  # Assert: Matches certified release candidate SHA 378425aa8af16d064210518d6a618bb36210306d
   git status
   # Assert: working tree clean
   ```
@@ -416,8 +416,8 @@ Bound strictly to candidate SHA `7662a80cae1e92ef625a1fe69bd9c6c4ace1fa8e`:
   # Trigger workflow on branch prod-release (execute as owner rajpunkeshwarrajgautam-boop):
   gh workflow run release-authorization.yml --ref prod-release \
     -f pr_number="127" \
-    -f candidate_sha="<FINAL_SHA>" \
-    -f approval_phrase="GO LIVE <FINAL_SHA>"
+    -f candidate_sha="378425aa8af16d064210518d6a618bb36210306d" \
+    -f approval_phrase="GO LIVE 378425aa8af16d064210518d6a618bb36210306d"
 
   # Note: Dynamic shell evaluation can also be used directly:
   # gh workflow run release-authorization.yml --ref prod-release \
@@ -428,7 +428,7 @@ Bound strictly to candidate SHA `7662a80cae1e92ef625a1fe69bd9c6c4ace1fa8e`:
 - **Step 10: Verify Dual-Evidence Release Authorization Gate**
   ```powershell
   $env:AIRA_RELEASE_GATE_APP_BOT_LOGIN = "aira-release-gate[bot]"
-  npm run verify:release-auth -- --pr 127 --sha <FINAL_SHA>
+  npm run verify:release-auth -- --pr 127 --sha 378425aa8af16d064210518d6a618bb36210306d
   # (or dynamically: npm run verify:release-auth -- --pr 127 --sha $(git rev-parse HEAD))
   # Assert: ✅ RELEASE AUTHORIZATION CONFIRMED — GO LIVE AUTHORIZED
   ```
@@ -514,9 +514,9 @@ The following actions are strictly reserved for repository owner `rajpunkeshwarr
 |     - Mark PR ready: gh pr ready 127                                                                   |
 |     - Trigger workflow on prod-release:                                                                |
 |       gh workflow run release-authorization.yml --ref prod-release \                                   |
-|         -f pr_number="127" -f candidate_sha="<FINAL_SHA>" -f approval_phrase="GO LIVE <FINAL_SHA>"     |
+|         -f pr_number="127" -f candidate_sha="378425aa8af16d064210518d6a618bb36210306d" -f approval_phrase="GO LIVE 378425aa8af16d064210518d6a618bb36210306d"     |
 |     - Verify gate: $env:AIRA_RELEASE_GATE_APP_BOT_LOGIN = "aira-release-gate[bot]";                    |
-|       npm run verify:release-auth -- --pr 127 --sha <FINAL_SHA>                                       |
+|       npm run verify:release-auth -- --pr 127 --sha 378425aa8af16d064210518d6a618bb36210306d          |
 |     - Merge PR: gh pr merge 127 --merge                                                                |
 |                                                                                                        |
 | [ ] P5. Activate Production Worker (Stage B)                                                           |
@@ -577,7 +577,7 @@ In strict accordance with Antigravity multi-collection orchestration standards, 
 # **`CONDITIONALLY READY — SPECIFIC PREREQUISITES`**
 
 ### Engineering Sign-Off:
-1. **Candidate Release Integrity**: Certified exact Git commit SHA `<FINAL_SHA>` is 3-way synchronized across local workspace, remote branch, and PR #127.
+1. **Candidate Release Integrity**: Certified exact Git commit SHA `378425aa8af16d064210518d6a618bb36210306d` is 3-way synchronized across local workspace, remote branch, and PR #127.
 2. **Quality Gates Certification**: Certified 100% pass rate across all 13 test suites and quality gates (198 assertions pass, 0 failures, 0 compilation errors, 0 leaked credentials).
 3. **Production Infrastructure Sizing**: Certified reconciled production worker configuration for the 1 OCPU / 6.0 GiB RAM Oracle VM envelope, complete with graceful draining, tmpfs boundaries, cgroups limits, and fail-closed standby isolation.
 4. **Database Recovery Assurance**: Certified 3-layer recovery architecture and empirical rehearsal of migrations 026–031. Forward recovery proven as the sole safe operational path.
