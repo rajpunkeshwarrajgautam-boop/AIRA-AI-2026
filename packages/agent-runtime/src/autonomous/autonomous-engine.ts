@@ -140,7 +140,11 @@ export class AutonomousAgentEngine extends EventEmitter {
 
     const abortController = new AbortController();
     if (signal) {
-      signal.addEventListener('abort', () => abortController.abort(), { once: true });
+      if (signal.aborted) {
+        abortController.abort(signal.reason);
+      } else {
+        signal.addEventListener('abort', () => abortController.abort(signal.reason), { once: true });
+      }
     }
     this.activeExecutions.set(taskId, abortController);
 
