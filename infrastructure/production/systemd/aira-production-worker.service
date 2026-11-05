@@ -1,0 +1,29 @@
+[Unit]
+Description=AIRA Production Autonomous Specialist Worker (Oracle Ampere A1)
+Documentation=https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/aira
+EnvironmentFile=/etc/aira/production-worker.env
+
+ExecStart=/usr/bin/docker compose -f /opt/aira/infrastructure/production/docker-compose.prod.yml up -d
+ExecStop=/usr/bin/docker compose -f /opt/aira/infrastructure/production/docker-compose.prod.yml down --timeout 25
+
+TimeoutStopSec=35
+Restart=on-failure
+RestartSec=5s
+
+CPUAccounting=true
+MemoryAccounting=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aira-production-worker
+
+[Install]
+WantedBy=multi-user.target

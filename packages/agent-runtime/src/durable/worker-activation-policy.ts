@@ -87,6 +87,17 @@ export class ActivationSecurityError extends Error {
 }
 
 /**
+ * Assesses whether the configuration strictly matches Stage A Operational Standby mode:
+ * AIRA_ENV is 'production' and AIRA_PRODUCTION_WORKER_ENABLED is explicitly 'false' (or boolean false).
+ */
+export function isOperationalStandbyConfig(config: WorkerActivationConfig): boolean {
+  const airaEnv = (config.airaEnv || 'staging').trim().toLowerCase();
+  const isProduction = airaEnv === 'production';
+  const isFalse = config.productionWorkerEnabled === false || config.productionWorkerEnabled === 'false';
+  return isProduction && isFalse;
+}
+
+/**
  * Validates deterministic static environment configuration for specialist workers.
  * Verifies boolean representations, presence of required expected identifiers,
  * and environment consistency. Never authorizes task claiming on its own.
