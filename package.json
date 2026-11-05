@@ -46,7 +46,7 @@
     "test:browser-branding": "npx tsx test/browser-branding-favicon.ts",
     "test:behavioral": "npx tsx --test test/behavioral/*.test.ts",
     "test:behavioral:eval": "npx tsx test/behavioral/eval-runner.ts candidate all",
-    "test:behavioral:security": "npx tsx --test test/behavioral/security.test.ts",
+    "test:behavioral:security": "npx tsx --test test/behavioral/security.test.ts test/agent-memory-account-isolation.test.ts",
     "test:behavioral:benchmark": "npx tsx test/behavioral/freshness-benchmark-120.ts",
     "test:behavioral:precedence": "npx tsx test/behavioral/precedence-regression.ts",
     "test:pr118:regression": "npx tsx --test test/pr118-postmerge-remediation-regression.test.ts",
