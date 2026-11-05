@@ -101,6 +101,7 @@ jobs:
           test/autonomous-persistence-failclosed.test.ts
           test/autonomous-platform-e2e.test.ts
           test/autonomous-worker-recovery.test.ts
+          test/autonomous-heartbeat-failclosed.test.ts
           test/browser-persistence-recovery.test.ts
           test/python-sandbox-containment.test.ts
           test/sandbox-selection-reconciliation.test.ts
