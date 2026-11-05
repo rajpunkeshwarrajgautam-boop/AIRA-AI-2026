@@ -84,6 +84,9 @@ export class InMemoryAutonomousTaskRepository implements IAutonomousTaskReposito
     if (!existing) {
       throw new Error(`Task with id ${task.taskId} not found.`);
     }
+    if (task.updatedAt !== existing.updatedAt || task.fencingToken !== existing.fencingToken) {
+      throw new Error(`STALE_TASK_UPDATE: Task ${task.taskId} changed before its content update.`);
+    }
     const mergedObservations = task.observations.length >= existing.observations.length
       ? task.observations
       : existing.observations;
@@ -96,9 +99,10 @@ export class InMemoryAutonomousTaskRepository implements IAutonomousTaskReposito
       leaseExpiresAt: existing.leaseExpiresAt,
       executionHistory: existing.executionHistory,
       observations: mergedObservations,
-      updatedAt: Date.now()
+      updatedAt: Math.max(Date.now(), existing.updatedAt + 1)
     };
     this.tasks.set(task.taskId, updated);
+    task.updatedAt = updated.updatedAt;
     return updated;
   }
 
@@ -125,7 +129,7 @@ export class InMemoryAutonomousTaskRepository implements IAutonomousTaskReposito
     const now = Date.now();
     task.state = newState;
     task.fencingToken = (task.fencingToken || 0) + 1;
-    task.updatedAt = now;
+    task.updatedAt = Math.max(now, task.updatedAt + 1);
     if (newState === 'COMPLETED' || newState === 'FAILED' || newState === 'CANCELLED' || newState === 'TIMED_OUT') {
       task.completedAt = now;
       task.leaseOwner = undefined;
@@ -152,7 +156,7 @@ export class InMemoryAutonomousTaskRepository implements IAutonomousTaskReposito
       throw new Error(`Task with id ${taskId} not found.`);
     }
     task.observations.push(JSON.parse(JSON.stringify(observation)));
-    task.updatedAt = Date.now();
+    task.updatedAt = Math.max(Date.now(), task.updatedAt + 1);
     this.tasks.set(taskId, task);
   }
 
@@ -162,7 +166,7 @@ export class InMemoryAutonomousTaskRepository implements IAutonomousTaskReposito
       throw new Error(`Task with id ${taskId} not found.`);
     }
     task.artifacts.push(JSON.parse(JSON.stringify(artifact)));
-    task.updatedAt = Date.now();
+    task.updatedAt = Math.max(Date.now(), task.updatedAt + 1);
     this.tasks.set(taskId, task);
   }
 
@@ -179,7 +183,7 @@ export class InMemoryAutonomousTaskRepository implements IAutonomousTaskReposito
     task.leaseExpiresAt = now + leaseDurationMs;
     task.heartbeatAt = now;
     task.fencingToken = (task.fencingToken || 0) + 1;
-    task.updatedAt = now;
+    task.updatedAt = Math.max(now, task.updatedAt + 1);
 
     this.tasks.set(taskId, task);
     return { success: true, task: JSON.parse(JSON.stringify(task)) };
@@ -192,7 +196,6 @@ export class InMemoryAutonomousTaskRepository implements IAutonomousTaskReposito
 
     task.leaseExpiresAt = Date.now() + leaseDurationMs;
     task.heartbeatAt = Date.now();
-    task.updatedAt = Date.now();
     this.tasks.set(taskId, task);
     return true;
   }
@@ -435,14 +438,17 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
       if (!existing) {
         throw new Error(`Task with id ${task.taskId} not found.`);
       }
+      if (task.updatedAt !== existing.updatedAt || task.fencingToken !== existing.fencingToken) {
+        throw new Error(`STALE_TASK_UPDATE: Task ${task.taskId} changed before its content update.`);
+      }
 
       const mergedObservations = task.observations.length >= existing.observations.length
         ? task.observations
         : existing.observations;
 
-      const now = Date.now();
-      await this.knexClient('autonomous_agent_tasks')
-        .where({ task_id: task.taskId })
+      const now = Math.max(Date.now(), existing.updatedAt + 1);
+      const updated = await this.knexClient('autonomous_agent_tasks')
+        .where({ task_id: task.taskId, updated_at: existing.updatedAt, fencing_token: existing.fencingToken })
         .update({
           active_step_id: task.activeStepId || null,
           approval_request_id: task.approvalRequestId || null,
@@ -455,6 +461,10 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
           error: task.error || null,
           updated_at: now
         });
+
+      if (updated === 0) {
+        throw new Error(`STALE_TASK_UPDATE: Concurrent mutation rejected for task ${task.taskId}.`);
+      }
 
       task.observations = mergedObservations;
       task.updatedAt = now;
@@ -486,7 +496,7 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
         throw new Error(`Illegal autonomous state transition from "${current.state}" to "${newState}".`);
       }
 
-      const now = Date.now();
+      const now = Math.max(Date.now(), current.updatedAt + 1);
       const newFencingToken = (current.fencingToken || 0) + 1;
       const history = [...current.executionHistory, {
         state: newState,
@@ -514,6 +524,7 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
       const updated = await this.knexClient('autonomous_agent_tasks')
         .where({ task_id: taskId })
         .andWhere('fencing_token', current.fencingToken)
+        .andWhere('updated_at', current.updatedAt)
         .update(updateData);
 
       if (updated === 0) {
@@ -570,7 +581,7 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
           lease_expires_at: now + leaseDurationMs,
           heartbeat_at: now,
           fencing_token: this.knexClient.raw('fencing_token + 1'),
-          updated_at: now
+          updated_at: this.knexClient.raw('GREATEST(updated_at + 1, ?)', [now])
         });
 
       if (updated === 0) {
@@ -594,8 +605,7 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
         .where({ task_id: taskId, lease_owner: workerId, fencing_token: fencingToken })
         .update({
           lease_expires_at: now + leaseDurationMs,
-          heartbeat_at: now,
-          updated_at: now
+          heartbeat_at: now
         });
       return updated > 0;
     } catch (err: any) {

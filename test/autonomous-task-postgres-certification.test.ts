@@ -133,6 +133,32 @@ test('Mission A3 — Autonomous Task & Browser Session Real PostgreSQL Database 
       assert.equal(fetched.artifacts.length, 1);
     });
 
+    await t.test('3b. Concurrent content mutations reject stale PostgreSQL snapshots', async () => {
+      const taskId = `task_live_cas_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
+      const now = Date.now();
+      await taskRepo.createTask({
+        taskId,
+        principal: testPrincipal,
+        objective: 'Prevent stale autonomous content overwrites',
+        state: 'RUNNING',
+        observations: [],
+        artifacts: [],
+        workingMemory: {},
+        executionHistory: [],
+        fencingToken: 0,
+        createdAt: now,
+        updatedAt: now
+      });
+
+      const first = (await taskRepo.getTask(taskId))!;
+      const stale = (await taskRepo.getTask(taskId))!;
+      first.workingMemory = { result: 'committed' };
+      await taskRepo.updateTask(first);
+      stale.workingMemory = { result: 'stale overwrite' };
+      await assert.rejects(taskRepo.updateTask(stale), /STALE_TASK_UPDATE/);
+      assert.equal((await taskRepo.getTask(taskId))?.workingMemory?.result, 'committed');
+    });
+
     await t.test('4. Exercise Atomic State Transitions and Monotonic Fencing Tokens', async () => {
       const taskId = `task_live_fencing_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
       const task: AutonomousAgentTask = {
