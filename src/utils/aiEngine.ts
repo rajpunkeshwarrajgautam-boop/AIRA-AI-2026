@@ -55,11 +55,17 @@ export async function streamAIResponse(
   signal?: AbortSignal
 ): Promise<void> {
   const isThinking = (model === 'claude-3-7-sonnet' && settings.extendedThinking);
+  const initiatingMemoryOwner = neonAuth.getCurrentUser()?.id || 'guest';
 
   // 0. Persistent Long-Term Memory Injection (agentmemory)
   let enrichedContext = contextSubgraph || '';
   if (settings.persistentMemoryEnabled !== false) {
-    const memoryBlock = agentMemory.assembleMemoryContext(prompt, settings.memoryTokenBudget || 800);
+    const memoryBlock = agentMemory.assembleMemoryContext(
+      prompt,
+      settings.memoryTokenBudget || 800,
+      undefined,
+      initiatingMemoryOwner
+    );
     if (memoryBlock) {
       enrichedContext = enrichedContext ? `${enrichedContext}\n\n${memoryBlock}` : memoryBlock;
     }
@@ -90,7 +96,11 @@ export async function streamAIResponse(
       if (remainingText) {
         callbacks.onContentChunk(remainingText);
       }
-      if (settings.autoConsolidateMemory !== false && accumulatedResponse.trim()) {
+      if (
+        settings.autoConsolidateMemory !== false &&
+        accumulatedResponse.trim() &&
+        (neonAuth.getCurrentUser()?.id || 'guest') === initiatingMemoryOwner
+      ) {
         try {
           agentMemory.consolidateFromTurn(prompt, accumulatedResponse);
         } catch {
