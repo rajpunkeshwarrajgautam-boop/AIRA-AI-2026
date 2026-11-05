@@ -915,10 +915,267 @@ if (isDbConfigured && !process.env.VERCEL) {
 }
 
 // -----------------------------------------------------------------------
-// MCP Servers (protected — requires ExecutionPrincipal)
+// Comprehensive MCP Integration
 // -----------------------------------------------------------------------
 app.get('/api/mcp/servers', (_req: Request, res: Response) => {
   res.json(mcpHost.listServers());
+});
+
+app.get('/api/mcp/servers/status', (_req: Request, res: Response) => {
+  res.json(mcpHost.listAllStatuses());
+});
+
+app.post('/api/mcp/servers', (req: Request, res: Response) => {
+  const { id, name, url, transport, command, args, headers, env } = req.body || {};
+  if (!id || !name) {
+    return res.status(400).json({ error: 'id and name are required' });
+  }
+  mcpHost.registerServer({ id, name, url, transport, command, args, headers, env });
+  res.json({ success: true, server: mcpHost.getServerStatus(id) });
+});
+
+app.post('/api/mcp/servers/:id/connect', async (req: Request, res: Response) => {
+  const id = getParam(req.params.id);
+  try {
+    const success = await mcpHost.connectServer(id);
+    const status = mcpHost.getServerStatus(id);
+    res.json({ success, status });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/mcp/servers/:id/disconnect', async (req: Request, res: Response) => {
+  const id = getParam(req.params.id);
+  const success = await mcpHost.disconnectServer(id);
+  res.json({ success });
+});
+
+app.get('/api/mcp/servers/:id/tools', (req: Request, res: Response) => {
+  const id = getParam(req.params.id);
+  const tools = mcpHost.listServerTools(id);
+  res.json({ tools });
+});
+
+// -----------------------------------------------------------------------
+// Python Sandbox Execution (Isolated local workspace with credential scrubbing)
+// -----------------------------------------------------------------------
+app.post('/api/sandbox/python/execute', async (req: Request, res: Response) => {
+  const { code, files, timeoutMs } = req.body || {};
+  if (!code || typeof code !== 'string') {
+    return res.status(400).json({ error: 'code string is required' });
+  }
+  try {
+    const result = await toolGateway.execute({
+      toolName: 'python_sandbox',
+      arguments: { code, files, timeoutMs },
+      context: {
+        runId: `run_sandbox_${Date.now()}`,
+        principal: req.principal!
+      }
+    });
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// -----------------------------------------------------------------------
+// Persistent Browser Sessions & Automation
+// -----------------------------------------------------------------------
+app.get('/api/browser/sessions', (req: Request, res: Response) => {
+  const browserAdapter = toolGateway.getBrowserAdapter();
+  const sessions = browserAdapter.listSessions(req.principal!);
+  res.json({ sessions });
+});
+
+app.post('/api/browser/sessions/:id/restart', async (req: Request, res: Response) => {
+  const browserAdapter = toolGateway.getBrowserAdapter();
+  try {
+    await browserAdapter.restartSession(req.principal!);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/browser/sessions/:id/close', async (req: Request, res: Response) => {
+  const browserAdapter = toolGateway.getBrowserAdapter();
+  try {
+    await browserAdapter.closeSession(req.principal!);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/browser/action', async (req: Request, res: Response) => {
+  const { action, ...args } = req.body || {};
+  const toolName = `browser_${action}`;
+  if (!toolGateway.hasTool(toolName)) {
+    return res.status(400).json({ error: `Unknown browser action "${action}". Valid: navigate, extract, type, click, screenshot, scroll, wait` });
+  }
+  try {
+    const result = await toolGateway.execute({
+      toolName,
+      arguments: args,
+      context: {
+        runId: `run_browser_${Date.now()}`,
+        principal: req.principal!
+      }
+    });
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// -----------------------------------------------------------------------
+// Autonomous Agent Task Lifecycle
+// -----------------------------------------------------------------------
+app.post('/api/agent/autonomous/tasks', async (req: Request, res: Response) => {
+  const { objective, plan, idempotencyKey } = req.body || {};
+  const effectiveIdempotencyKey = idempotencyKey || (req.headers['idempotency-key'] as string | undefined);
+  if (!objective || typeof objective !== 'string') {
+    return res.status(400).json({ error: 'objective is required' });
+  }
+  try {
+    const engine = agentRuntime.getAutonomousEngine();
+    const task = await engine.createTask(objective, req.principal!, plan, effectiveIdempotencyKey);
+    const startImmediate = req.query.start !== 'false' && process.env.AIRA_AUTONOMOUS_QUEUE_ONLY !== 'true';
+    if (startImmediate) {
+      const started = await engine.startTask(task.taskId);
+      return res.json({ task: started });
+    }
+    res.json({ task });
+  } catch (err: any) {
+    if (err?.code === 'PERSISTENCE_UNAVAILABLE' || err?.name === 'AutonomousPersistenceUnavailableError') {
+      return res.status(503).json({ error: 'PERSISTENCE_UNAVAILABLE', message: err.message });
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/agent/autonomous/tasks', async (req: Request, res: Response) => {
+  try {
+    const engine = agentRuntime.getAutonomousEngine();
+    const tasks = await engine.getRepository().listTasksByPrincipal(req.principal!.userId);
+    res.json({ tasks });
+  } catch (err: any) {
+    if (err?.code === 'PERSISTENCE_UNAVAILABLE' || err?.name === 'AutonomousPersistenceUnavailableError') {
+      return res.status(503).json({ error: 'PERSISTENCE_UNAVAILABLE', message: err.message });
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/agent/autonomous/tasks/:id', async (req: Request, res: Response) => {
+  const id = getParam(req.params.id);
+  try {
+    const engine = agentRuntime.getAutonomousEngine();
+    const task = await engine.getTask(id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    const isOwner = task.principal.userId === req.principal?.userId;
+    const isAdmin = Array.isArray(req.principal?.roles) && req.principal.roles.includes('admin');
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ error: 'Forbidden: task belongs to another principal' });
+    }
+    res.json({ task });
+  } catch (err: any) {
+    if (err?.code === 'PERSISTENCE_UNAVAILABLE' || err?.name === 'AutonomousPersistenceUnavailableError') {
+      return res.status(503).json({ error: 'PERSISTENCE_UNAVAILABLE', message: err.message });
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/agent/autonomous/tasks/:id/pause', async (req: Request, res: Response) => {
+  const id = getParam(req.params.id);
+  const engine = agentRuntime.getAutonomousEngine();
+  try {
+    const existing = await engine.getTask(id);
+    if (!existing) return res.status(404).json({ error: 'Task not found' });
+    const isOwner = existing.principal.userId === req.principal?.userId;
+    const isAdmin = Array.isArray(req.principal?.roles) && req.principal.roles.includes('admin');
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ error: 'Forbidden: task belongs to another principal' });
+    }
+    const task = await engine.pauseTask(id);
+    res.json({ task });
+  } catch (err: any) {
+    if (err?.code === 'PERSISTENCE_UNAVAILABLE' || err?.name === 'AutonomousPersistenceUnavailableError') {
+      return res.status(503).json({ error: 'PERSISTENCE_UNAVAILABLE', message: err.message });
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/agent/autonomous/tasks/:id/resume', async (req: Request, res: Response) => {
+  const id = getParam(req.params.id);
+  const engine = agentRuntime.getAutonomousEngine();
+  try {
+    const existing = await engine.getTask(id);
+    if (!existing) return res.status(404).json({ error: 'Task not found' });
+    const isOwner = existing.principal.userId === req.principal?.userId;
+    const isAdmin = Array.isArray(req.principal?.roles) && req.principal.roles.includes('admin');
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ error: 'Forbidden: task belongs to another principal' });
+    }
+    const task = await engine.resumeTask(id);
+    res.json({ task });
+  } catch (err: any) {
+    if (err?.code === 'PERSISTENCE_UNAVAILABLE' || err?.name === 'AutonomousPersistenceUnavailableError') {
+      return res.status(503).json({ error: 'PERSISTENCE_UNAVAILABLE', message: err.message });
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/agent/autonomous/tasks/:id/cancel', async (req: Request, res: Response) => {
+  const id = getParam(req.params.id);
+  const { reason } = req.body || {};
+  const engine = agentRuntime.getAutonomousEngine();
+  try {
+    const existing = await engine.getTask(id);
+    if (!existing) return res.status(404).json({ error: 'Task not found' });
+    const isOwner = existing.principal.userId === req.principal?.userId;
+    const isAdmin = Array.isArray(req.principal?.roles) && req.principal.roles.includes('admin');
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ error: 'Forbidden: task belongs to another principal' });
+    }
+    const task = await engine.cancelTask(id, reason);
+    res.json({ task });
+  } catch (err: any) {
+    if (err?.code === 'PERSISTENCE_UNAVAILABLE' || err?.name === 'AutonomousPersistenceUnavailableError') {
+      return res.status(503).json({ error: 'PERSISTENCE_UNAVAILABLE', message: err.message });
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/agent/autonomous/tasks/:id/approve', async (req: Request, res: Response) => {
+  const id = getParam(req.params.id);
+  const { approvalRequestId, approved, notes } = req.body || {};
+  if (!approvalRequestId) {
+    return res.status(400).json({ error: 'approvalRequestId is required' });
+  }
+  const engine = agentRuntime.getAutonomousEngine();
+  try {
+    const existing = await engine.getTask(id);
+    if (!existing) return res.status(404).json({ error: 'Task not found' });
+    const isOwner = existing.principal.userId === req.principal?.userId;
+    const isAdmin = Array.isArray(req.principal?.roles) && req.principal.roles.includes('admin');
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ error: 'Forbidden: task belongs to another principal' });
+    }
+    const task = await engine.approveStep(id, approvalRequestId, approved !== false, notes);
+    res.json({ task });
+  } catch (err: any) {
+    if (err?.code === 'PERSISTENCE_UNAVAILABLE' || err?.name === 'AutonomousPersistenceUnavailableError') {
+      return res.status(503).json({ error: 'PERSISTENCE_UNAVAILABLE', message: err.message });
+    }
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // -----------------------------------------------------------------------
@@ -2026,6 +2283,69 @@ app.post('/api/knowledge/memories', async (req: Request, res: Response) => {
   };
   const memory = await knowledgeEngine.saveMemory(key, value, category || 'fact', provenance || 'user', scope);
   res.status(201).json({ memory });
+});
+
+app.delete('/api/knowledge/memories/:id', async (req: Request, res: Response) => {
+  const id = getParam(req.params.id);
+  const scope: PrincipalScope = {
+    principalId: req.principal?.userId,
+    workspaceId: req.principal?.workspaceId,
+    isSystem: false
+  };
+  const deleted = await knowledgeEngine.deleteMemory(id, scope);
+  res.json({ success: deleted });
+});
+
+app.post('/api/knowledge/memories/purge', async (req: Request, res: Response) => {
+  const scope: PrincipalScope = {
+    principalId: req.principal?.userId,
+    workspaceId: req.principal?.workspaceId,
+    isSystem: false
+  };
+  const purgedCount = await knowledgeEngine.purgeMemories(scope);
+  res.json({ success: true, purgedCount });
+});
+
+app.get('/api/knowledge/memories/export', async (req: Request, res: Response) => {
+  const scope: PrincipalScope = {
+    principalId: req.principal?.userId,
+    workspaceId: req.principal?.workspaceId,
+    isSystem: false
+  };
+  const memories = await knowledgeEngine.getMemories(scope);
+  res.setHeader('Content-Disposition', 'attachment; filename="aira-memory-export.json"');
+  res.setHeader('Content-Type', 'application/json');
+  res.send(JSON.stringify({ exportedAt: Date.now(), principalId: req.principal?.userId, memories }, null, 2));
+});
+
+app.post('/api/knowledge/memories/compact', async (req: Request, res: Response) => {
+  const { maxTokens } = req.body || {};
+  const budget = maxTokens || 4000;
+  const scope: PrincipalScope = {
+    principalId: req.principal?.userId,
+    workspaceId: req.principal?.workspaceId,
+    isSystem: false
+  };
+  const memories = await knowledgeEngine.getMemories(scope);
+  const sorted = [...memories].sort((a, b) => b.createdAt - a.createdAt);
+  let totalChars = 0;
+  const kept: typeof memories = [];
+  const pruned: string[] = [];
+  for (const m of sorted) {
+    const chars = m.key.length + m.value.length;
+    if (totalChars + chars <= budget * 4) {
+      kept.push(m);
+      totalChars += chars;
+    } else {
+      pruned.push(m.id);
+    }
+  }
+  res.json({
+    originalCount: memories.length,
+    compactedCount: kept.length,
+    prunedCount: pruned.length,
+    estimatedTokens: Math.ceil(totalChars / 4)
+  });
 });
 
 // -----------------------------------------------------------------------

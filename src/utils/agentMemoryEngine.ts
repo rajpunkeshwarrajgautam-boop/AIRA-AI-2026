@@ -1,5 +1,6 @@
 import type { MemoryItem, MemoryTier, MemoryQuery, MemoryStats } from '../types/index.js';
 import { migrateAgentMemoryVault, STORAGE_KEY } from './agentMemoryMigration.js';
+import { neonAuth } from '../lib/neonAuth.js';
 
 /**
  * Secret & Privacy Filter (agentmemory specification)
@@ -41,75 +42,10 @@ function tokenize(text: string): string[] {
     .filter(token => token.length > 1 && !STOP_WORDS.has(token));
 }
 
-/**
- * Baseline Seed Memories for AIRA AI 2026 (Cleaned of restrictive unconditional rules)
- */
-const INITIAL_SEED_MEMORIES: MemoryItem[] = [
-  {
-    id: 'seed-sem-arch-1',
-    tier: 'semantic',
-    category: 'architecture',
-    title: 'AIRA Architecture & Tech Stack',
-    content: 'AIRA AI 2026 is built on React 19, TypeScript, Vite 8, Tailwind CSS, Framer Motion, and GSAP. Typography pairs Newsreader serif with Outfit sans and JetBrains Mono.',
-    tags: ['react', 'vite', 'typography', 'tailwind', 'stack'],
-    createdAt: Date.now() - 86400000 * 5,
-    updatedAt: Date.now() - 86400000 * 5,
-    accessCount: 12,
-    isPinned: false,
-  },
-  {
-    id: 'seed-sem-pref-1',
-    tier: 'semantic',
-    category: 'preference',
-    title: 'Brand Aesthetic & Iconography Guidelines',
-    content: 'All UI elements adhere to premium agency aesthetics: rich dark/light themes, warm terracotta accents (#D97757), and the 6-fold celestial neural knot logo. Star icons are replaced with Zap, Cpu, or Bookmark.',
-    tags: ['aesthetic', 'theme', 'terracotta', 'logo', 'design'],
-    createdAt: Date.now() - 86400000 * 4,
-    updatedAt: Date.now() - 86400000 * 4,
-    accessCount: 9,
-    isPinned: false,
-  },
-  {
-    id: 'seed-proc-flow-1',
-    tier: 'procedural',
-    category: 'workflow',
-    title: 'Code Verification & Delivery Protocol',
-    content: 'Before completing development tasks, verify with `npm run lint` (oxlint) and `npm run build` (tsc -b && vite build). Ensure zero warnings and zero TypeScript errors.',
-    tags: ['lint', 'build', 'verification', 'workflow', 'quality'],
-    createdAt: Date.now() - 86400000 * 3,
-    updatedAt: Date.now() - 86400000 * 3,
-    accessCount: 18,
-    isPinned: false,
-  },
-  {
-    id: 'seed-sem-dec-1',
-    tier: 'semantic',
-    category: 'decision',
-    title: 'Hybrid Reasoning Engine Standard',
-    content: 'Aira hybrid reasoning architecture supports dynamic extended thinking budgets (1024 to 64000 tokens) with collapsible Newsreader serif thought blocks and live token telemetry.',
-    tags: ['thinking', 'reasoning', 'hybrid', 'tokens'],
-    createdAt: Date.now() - 86400000 * 2,
-    updatedAt: Date.now() - 86400000 * 2,
-    accessCount: 7,
-    isPinned: false,
-  },
-  {
-    id: 'seed-proc-flow-2',
-    tier: 'procedural',
-    category: 'workflow',
-    title: 'Agent Memory Consolidation Protocol',
-    content: 'Consolidate active conversation turns into Working Memory, extract persistent facts into Semantic Memory, record task milestones in Episodic Memory, and capture verified steps in Procedural Memory.',
-    tags: ['agentmemory', 'consolidation', 'pipeline', 'memory'],
-    createdAt: Date.now() - 86400000,
-    updatedAt: Date.now() - 86400000,
-    accessCount: 14,
-    isPinned: false,
-  },
-];
-
 class AgentMemoryEngine {
   private memories: Map<string, MemoryItem> = new Map();
   private isLoaded = false;
+  private loadedScope = '';
   private totalTokensSaved = 0;
   private cachedSnapshot: MemoryItem[] = [];
 
@@ -117,6 +53,15 @@ class AgentMemoryEngine {
 
   constructor() {
     this.loadFromStorage();
+    neonAuth.onAuthStateChange(() => this.ensureLoaded());
+  }
+
+  private getScope(): string {
+    return neonAuth.getCurrentUser()?.id || 'guest';
+  }
+
+  private storageKey(scope: string): string {
+    return scope === 'guest' ? STORAGE_KEY : `${STORAGE_KEY}:user:${scope}`;
   }
 
   public subscribe = (listener: () => void): () => void => {
@@ -148,27 +93,47 @@ class AgentMemoryEngine {
   private loadFromStorage(): void {
     if (typeof window === 'undefined') return;
 
+    const scope = this.getScope();
+    this.memories.clear();
+    this.isLoaded = false;
+    this.loadedScope = scope;
+
     try {
-      const stored = localStorage.getItem(STORAGE_KEY);
+      const stored = localStorage.getItem(this.storageKey(scope));
       if (stored) {
         const parsed = JSON.parse(stored);
         const { migratedItems, report } = migrateAgentMemoryVault(parsed);
         this.memories.clear();
-        migratedItems.forEach(item => this.memories.set(item.id, item));
+        migratedItems
+          .filter(item => scope === 'guest' ? !item.userId : item.userId === scope)
+          .forEach(item => this.memories.set(item.id, item));
+        this.isLoaded = true;
         if (report.changesMade) {
           this.saveToStorage();
         }
       } else {
-        // Initialize with default seed memories
-        INITIAL_SEED_MEMORIES.forEach(item => this.memories.set(item.id, item));
+        // Existing unscoped data is retained for explicit user export; it is never
+        // silently reassigned to whichever account signs in next.
+        // A new account starts empty. Hard-coded product assumptions are not
+        // genuine user memories and must not become retrieved personal facts.
+        if (scope !== 'guest') {
+          const legacy = localStorage.getItem(STORAGE_KEY);
+          if (legacy) {
+            const { migratedItems } = migrateAgentMemoryVault(JSON.parse(legacy));
+            migratedItems.filter(item => item.userId === scope).forEach(item => this.memories.set(item.id, item));
+          }
+        }
+        this.isLoaded = true;
         this.saveToStorage();
       }
       this.isLoaded = true;
       this.updateCache();
     } catch {
-      INITIAL_SEED_MEMORIES.forEach(item => this.memories.set(item.id, item));
+      this.memories.clear();
+      this.isLoaded = true;
       this.updateCache();
     }
+    this.notify();
   }
 
   /**
@@ -178,7 +143,7 @@ class AgentMemoryEngine {
     if (typeof window === 'undefined') return;
     try {
       const items = Array.from(this.memories.values());
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+      localStorage.setItem(this.storageKey(this.loadedScope), JSON.stringify(items));
       this.notify();
     } catch {
       // Ignore quota storage exceptions
@@ -202,6 +167,9 @@ class AgentMemoryEngine {
     } = {}
   ): MemoryItem {
     this.ensureLoaded();
+    if (options.userId && options.userId !== this.getScope()) {
+      throw new Error('Cannot create a memory belonging to another account.');
+    }
     const cleanContent = scrubSecrets(content.trim());
     if (!cleanContent) {
       throw new Error('Memory content cannot be empty.');
@@ -226,7 +194,7 @@ class AgentMemoryEngine {
       sourceSessionId: options.sourceSessionId,
       isPinned: options.isPinned || false,
       projectId: options.projectId,
-      userId: options.userId,
+      userId: this.getScope() === 'guest' ? undefined : this.getScope(),
     };
 
     this.memories.set(id, item);
@@ -241,6 +209,9 @@ class AgentMemoryEngine {
     this.ensureLoaded();
     const existing = this.memories.get(id);
     if (!existing) return null;
+    if (updates.userId !== undefined && updates.userId !== existing.userId) {
+      throw new Error('Cannot transfer a memory between accounts.');
+    }
 
     const updated: MemoryItem = {
       ...existing,
@@ -298,6 +269,8 @@ class AgentMemoryEngine {
   public recall(query: MemoryQuery): MemoryItem[] {
     this.ensureLoaded();
     const { query: queryText, limit = 5, tiers, minScore = 0.18, activeProjectId, activeUserId } = query;
+    const scope = this.getScope();
+    if (activeUserId && activeUserId !== scope) return [];
     const queryTokens = tokenize(queryText);
 
     if (queryTokens.length === 0) {
@@ -309,7 +282,7 @@ class AgentMemoryEngine {
       // Tenant & Project Isolation:
       if (item.projectId && activeProjectId && item.projectId !== activeProjectId) return false;
       if (item.projectId && !activeProjectId) return false;
-      if (item.userId && activeUserId && item.userId !== activeUserId) return false;
+      if (scope === 'guest' ? Boolean(item.userId) : item.userId !== scope) return false;
       return true;
     });
 
@@ -562,9 +535,14 @@ class AgentMemoryEngine {
       if (!Array.isArray(items)) throw new Error('Invalid format');
 
       items.forEach(item => {
+        if (item.userId && item.userId !== this.getScope()) {
+          errors++;
+          return;
+        }
         if (item.id && item.content && item.tier) {
           this.memories.set(item.id, {
             ...item,
+            userId: this.getScope() === 'guest' ? undefined : this.getScope(),
             content: scrubSecrets(item.content),
             updatedAt: Date.now(),
           });
@@ -600,7 +578,7 @@ class AgentMemoryEngine {
   }
 
   private ensureLoaded(): void {
-    if (!this.isLoaded) {
+    if (!this.isLoaded || this.loadedScope !== this.getScope()) {
       this.loadFromStorage();
     }
   }

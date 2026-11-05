@@ -1,19 +1,79 @@
 import { LightningSandboxProvider } from './lightning-provider.js';
 import { E2BSandboxProvider } from './e2b-provider.js';
 import { OCISandboxProvider } from './oci-provider.js';
+import { LocalIsolatedSandboxProvider } from './local-provider.js';
+import { DockerIsolatedSandboxProvider } from './docker-provider.js';
+import { SidecarSandboxProvider } from './sidecar-provider.js';
 import type {
   SandboxProvider,
   SandboxWorkspace,
-  SandboxCreateOptions,
   SandboxCommandResult,
-  SandboxFile,
-  SandboxPreview
+  SandboxFile
 } from './provider-types.js';
 
 export * from './provider-types.js';
 export { LightningSandboxProvider } from './lightning-provider.js';
 export { E2BSandboxProvider } from './e2b-provider.js';
 export { OCISandboxProvider } from './oci-provider.js';
+export { LocalIsolatedSandboxProvider } from './local-provider.js';
+export { DockerIsolatedSandboxProvider, type DockerSandboxProviderOptions } from './docker-provider.js';
+export { SidecarSandboxProvider } from './sidecar-provider.js';
+
+export interface ResolveIsolatedSandboxOptions {
+  requireContainer?: boolean;
+  trustedLocalExecution?: boolean;
+  disableLocalDocker?: boolean;
+}
+
+/**
+ * Authoritative resolver for untrusted code execution sandbox provider.
+ * Enforces an approved isolated backend (Docker, Podman/OCI, E2B, Lightning) by default
+ * for all untrusted agent-generated code.
+ * Fails closed if isolation is unavailable.
+ * Trusted local host development operations are strictly separated and require explicit authorization.
+ */
+export function resolveIsolatedSandboxProvider(options?: ResolveIsolatedSandboxOptions): SandboxProvider {
+  const isTrustedLocal = options?.trustedLocalExecution === true && (
+    process.env.AIRA_TRUSTED_LOCAL_EXECUTION === 'true' ||
+    process.env.AIRA_TRUSTED_HOST_EXECUTION === 'true'
+  );
+
+  if (isTrustedLocal) {
+    return new LocalIsolatedSandboxProvider();
+  }
+
+  // Untrusted workload (Default for all agent/tool execution):
+  // Check available approved isolated backends in security preference order:
+  if (process.env.AIRA_DISABLE_LOCAL_DOCKER !== 'true' && !options?.disableLocalDocker) {
+    const docker = new DockerIsolatedSandboxProvider();
+    if (docker.isConfigured()) {
+      return docker;
+    }
+  }
+
+  const sidecar = new SidecarSandboxProvider();
+  if (sidecar.isConfigured()) {
+    return sidecar;
+  }
+
+  const oci = new OCISandboxProvider();
+  if (oci.isConfigured()) {
+    return oci;
+  }
+
+  const e2b = new E2BSandboxProvider();
+  if (e2b.isConfigured()) {
+    return e2b;
+  }
+
+  const lightning = new LightningSandboxProvider();
+  if (lightning.isConfigured()) {
+    return lightning;
+  }
+
+  // Fail closed! No approved isolated backend is reachable.
+  throw new Error('CONTAINER_ISOLATION_UNAVAILABLE: Untrusted code execution requires an approved isolated backend (Docker, Sidecar, Podman/OCI, E2B, or Lightning), but no isolated runtime is configured or reachable. Host execution is prohibited. Fail-closed enforced.');
+}
 
 export interface BuilderSandbox {
   id: string;
@@ -84,6 +144,11 @@ export class MultiProviderSandboxFactory implements SandboxFactory {
       this.register(new LightningSandboxProvider());
       this.register(new E2BSandboxProvider());
       this.register(new OCISandboxProvider());
+      this.register(new DockerIsolatedSandboxProvider());
+      this.register(new SidecarSandboxProvider());
+      if (process.env.AIRA_TRUSTED_LOCAL_EXECUTION === 'true') {
+        this.register(new LocalIsolatedSandboxProvider());
+      }
     }
   }
 
@@ -115,6 +180,9 @@ export class MultiProviderSandboxFactory implements SandboxFactory {
     } catch (primaryError: any) {
       const fallbackName = this.fallbackProviderName;
       if (fallbackName && fallbackName !== primaryName) {
+        if (fallbackName === 'local' && process.env.AIRA_TRUSTED_LOCAL_EXECUTION !== 'true') {
+          throw new Error('SECURITY_VIOLATION: Fallback to unisolated local host provider is forbidden for untrusted workloads.');
+        }
         const fallback = this.getProvider(fallbackName);
         if (fallback.isConfigured()) {
           const workspace = await fallback.createWorkspace(options);

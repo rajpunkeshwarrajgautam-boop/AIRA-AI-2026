@@ -28,6 +28,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
   onClose,
 }) => {
   const [activeTab, setActiveTab] = useState<'preview' | 'code'>('preview');
+  const [viewport, setViewport] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
   const [selectedVersion, setSelectedVersion] = useState<number>(1);
   const [isCopied, setIsCopied] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -295,6 +296,37 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                         Live Execution Sandbox
                       </span>
                     </div>
+                    {/* Viewport Switcher */}
+                    <div className="flex items-center space-x-1 border border-claude-border-light dark:border-claude-border-dark rounded-md p-0.5 bg-claude-surface2-light dark:bg-claude-surface2-dark">
+                      <button
+                        onClick={() => setViewport('desktop')}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                          viewport === 'desktop' ? 'bg-claude-surface-light dark:bg-[#1F1E1D] text-claude-terracotta shadow-xs' : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light'
+                        }`}
+                        title="Desktop viewport (100%)"
+                      >
+                        Desktop
+                      </button>
+                      <button
+                        onClick={() => setViewport('tablet')}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                          viewport === 'tablet' ? 'bg-claude-surface-light dark:bg-[#1F1E1D] text-claude-terracotta shadow-xs' : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light'
+                        }`}
+                        title="Tablet viewport (768px)"
+                      >
+                        Tablet
+                      </button>
+                      <button
+                        onClick={() => setViewport('mobile')}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                          viewport === 'mobile' ? 'bg-claude-surface-light dark:bg-[#1F1E1D] text-claude-terracotta shadow-xs' : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light'
+                        }`}
+                        title="Mobile viewport (375px)"
+                      >
+                        Mobile
+                      </button>
+                    </div>
+
                     <div className="flex items-center space-x-2">
                       <button
                         onClick={() => setShowConsole(!showConsole)}
@@ -316,15 +348,30 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                     </div>
                   </div>
 
-                  {/* Sandboxed iframe */}
-                  <iframe
-                    key={refreshKey}
-                    ref={iframeRef}
-                    srcDoc={getIframeSrcDoc()}
-                    sandbox="allow-scripts allow-modals allow-forms"
-                    className="w-full flex-1 border-0 bg-transparent"
-                    title={artifact.title}
-                  />
+                  {/* Sandboxed iframe with Multi-Viewport Frame */}
+                  <div className="flex-1 w-full h-full flex items-center justify-center overflow-auto bg-stone-100/50 dark:bg-[#0e0e0d] p-1 sm:p-2">
+                    <div
+                      style={{
+                        width: viewport === 'mobile' ? '375px' : viewport === 'tablet' ? '768px' : '100%',
+                        maxWidth: '100%',
+                        height: viewport !== 'desktop' ? '92%' : '100%',
+                        borderRadius: viewport !== 'desktop' ? '12px' : '0px',
+                        boxShadow: viewport !== 'desktop' ? '0 10px 30px rgba(0,0,0,0.25)' : 'none',
+                        overflow: 'hidden',
+                        border: viewport !== 'desktop' ? '1px solid rgba(120,120,120,0.3)' : 'none'
+                      }}
+                      className="flex flex-col bg-white dark:bg-[#1F1E1D] transition-all duration-200"
+                    >
+                      <iframe
+                        key={refreshKey}
+                        ref={iframeRef}
+                        srcDoc={getIframeSrcDoc()}
+                        sandbox="allow-scripts allow-modals allow-forms"
+                        className="w-full flex-1 border-0 bg-transparent"
+                        title={artifact.title}
+                      />
+                    </div>
+                  </div>
 
                   {/* Console Drawer */}
                   <AnimatePresence>

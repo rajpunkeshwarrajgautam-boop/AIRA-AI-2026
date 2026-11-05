@@ -1,0 +1,158 @@
+# ==============================================================================
+# AIRA AI 2026 — Oracle Cloud Always Free (Arm64 Ampere A1) Staging Architecture
+# Target Shape: VM.Standard.A1.Flex (1 OCPU, 5.8 GiB RAM, Ubuntu 24.04 aarch64)
+# Project Name: aira-autonomous-staging
+# Services:
+#   1. specialist-worker: AIRA autonomous agent runtime daemon (Port 127.0.0.1:8081)
+#   2. sandbox-runner: Isolated non-root Python runner sidecar (Zero Host Docker Socket)
+#
+# Production Invariants:
+# - Default worker health port: 127.0.0.1:8081 (Never collides with port 8080 M2A worker)
+# - Default concurrency: 1 (Tailored for 1 OCPU host)
+# - Protected environment file (/etc/aira/staging-worker.env) is authoritative
+# - Zero empty-string interpolation overriding valid credentials
+# ==============================================================================
+
+name: aira-autonomous-staging
+
+services:
+  specialist-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+      platforms:
+        - "linux/arm64"
+    image: aira-specialist-worker:${AIRA_IMAGE_TAG:-v2026.1.0-4065e1a}
+    container_name: ${CONTAINER_NAME:-aira-autonomous-worker-staging}
+    restart: unless-stopped
+    user: "10001:10001"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    networks:
+      - default
+      - sandbox-net
+    # Environment file loaded from permissions-restricted host path (chmod 640 root:docker)
+    env_file:
+      - ${AIRA_ENV_FILE:-/etc/aira/staging-worker.env}
+    environment:
+      # Static Runtime Configuration
+      - NODE_ENV=production
+      - AIRA_ENV=staging
+      - AIRA_PRODUCTION_WORKER_ENABLED=false
+      - EXPECTED_NEON_PROJECT_ID=mute-frost-50372225
+      - EXPECTED_NEON_ENDPOINT_ID=ep-shiny-bird-b3xundyt
+      
+      # Worker Identity & Concurrency (Default: 1 worker for 1 OCPU host)
+      - WORKER_ID=${WORKER_ID:-worker_oracle_ampere_autonomous_staging}
+      - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-1}
+      - POLL_INTERVAL_MS=500
+      - MAX_POLL_INTERVAL_MS=2000
+      - IDLE_BACKOFF_MULTIPLIER=1.5
+      - LEASE_DURATION_MS=15000
+      - HEARTBEAT_INTERVAL_MS=3000
+      
+      # Networking & Ports (Container listens on 8080; host maps loopback 8081)
+      - PORT=8080
+      - WORKER_BIND_HOST=0.0.0.0
+      
+      # Node.js Heap Cap & Engine Limits (Tailored for 1 OCPU / 5.8 GiB Host)
+      - NODE_OPTIONS=--max-old-space-size=512
+      
+      # Headless Chromium automation
+      - CHROMIUM_PATH=/usr/bin/chromium-browser
+      - PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+      
+      # Sandbox Isolation Architecture (Fail-Closed, Zero Docker Socket Mounts)
+      - AIRA_REQUIRE_CONTAINER_SANDBOX=true
+      - AIRA_ALLOW_LOCAL_SANDBOX=false
+      - AIRA_SANDBOX_RUNNER_URL=${AIRA_SANDBOX_RUNNER_URL:-http://sandbox-runner:8000}
+      
+      # Credentials & secrets are supplied authoritatively by env_file.
+      # The pass-through entries below allow optional shell override without clobbering with empty strings:
+      - DATABASE_URL
+      - BROWSER_SESSION_ENCRYPTION_KEY
+      - GEMINI_API_KEY
+      - OPENAI_API_KEY
+      - ANTHROPIC_API_KEY
+      - GROQ_API_KEY
+      - TAVILY_API_KEY
+      - EXA_API_KEY
+      - GITHUB_TOKEN
+      - E2B_API_KEY
+      - LIGHTNING_SANDBOX_API_KEY
+      - AIRA_SANDBOX_AUTH_TOKEN
+    ports:
+      # Bound to loopback interface ONLY — default port 8081 preserves port 8080
+      - "${WORKER_PORT_BINDING:-127.0.0.1:8081:8080}"
+    deploy:
+      resources:
+        limits:
+          cpus: '${WORKER_CPU_LIMIT:-0.80}'
+          memory: 1536M
+        reservations:
+          cpus: '${WORKER_CPU_RESERVATION:-0.20}'
+          memory: 256M
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:8080/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+    tmpfs:
+      - /tmp:exec,mode=1777,size=256M
+
+  sandbox-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox-runner
+      platforms:
+        - "linux/arm64"
+    image: aira-sandbox-runner:${AIRA_IMAGE_TAG:-v2026.1.0-4065e1a}
+    container_name: ${SANDBOX_CONTAINER_NAME:-aira-sandbox-runner-staging}
+    restart: unless-stopped
+    user: "nobody:nogroup"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - sandbox-net
+    environment:
+      - PORT=8000
+      - WORKSPACE_BASE=/tmp/workspaces
+      - AIRA_SANDBOX_AUTH_TOKEN
+    deploy:
+      resources:
+        limits:
+          cpus: '${SANDBOX_CPU_LIMIT:-0.40}'
+          memory: 384M
+        reservations:
+          cpus: '${SANDBOX_CPU_RESERVATION:-0.10}'
+          memory: 64M
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')\" || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+    tmpfs:
+      - /tmp:mode=1777,size=256M
+
+networks:
+  sandbox-net:
+    internal: true

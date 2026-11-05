@@ -1,0 +1,72 @@
+# ==============================================================================
+# AIRA AI 2026 — Oracle Cloud Always Free Systemd Service Unit
+# Path: /etc/systemd/system/aira-oracle-worker.service
+# Target: Ubuntu 24.04 LTS (aarch64) on VM.Standard.A1.Flex
+# Actual Host Sizing: 1 OCPU, 5.8 GiB RAM (Dedicated Autonomous Staging VM)
+# Project Name: aira-autonomous-staging
+#
+# Operational Safety Invariants:
+# 1. Non-destructive startup: Zero cross-project teardown or --remove-orphans.
+# 2. Strict project isolation (-p aira-autonomous-staging).
+# 3. Preserves concurrent workloads (/home/ubuntu/aira-ai & port 8080 M2A worker).
+# 4. Graceful draining on SIGTERM (30s stop timeout before SIGKILL).
+# 5. Bounded cgroup resource limits protecting host stability (1 OCPU / ~6 GB RAM).
+#
+# Rollback Runbook:
+# 1. Stop service: sudo systemctl stop aira-oracle-worker
+# 2. Inspect active queue/leases in Neon DB
+# 3. Revert image tag in /etc/aira/staging-worker.env (e.g. AIRA_IMAGE_TAG=previous_sha)
+# 4. Re-validate config: sudo docker compose -p aira-autonomous-staging -f docker-compose.oracle-staging.yml config -q
+# 5. Start service: sudo systemctl start aira-oracle-worker
+# ==============================================================================
+
+[Unit]
+Description=AIRA Autonomous Specialist Worker (Oracle Cloud Always Free Ampere A1)
+Documentation=https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=docker
+WorkingDirectory=/home/ubuntu/aira-autonomous-staging
+
+# Environment variables loaded from permissions-restricted host path (chmod 640 root:docker)
+EnvironmentFile=/etc/aira/staging-worker.env
+Environment=COMPOSE_PROJECT_NAME=aira-autonomous-staging
+Environment=AIRA_IMAGE_TAG=v2026.1.0-4065e1a
+
+# Non-destructive Lifecycle Commands:
+# ExecStartPre validates compose file and environment syntax without touching running containers.
+ExecStartPre=/usr/bin/docker compose -p aira-autonomous-staging -f docker-compose.oracle-staging.yml config -q
+ExecStart=/usr/bin/docker compose -p aira-autonomous-staging -f docker-compose.oracle-staging.yml up
+ExecStop=/usr/bin/docker compose -p aira-autonomous-staging -f docker-compose.oracle-staging.yml stop -t 30
+
+# Restart Policies (Resilient against unexpected process exits)
+Restart=always
+RestartSec=10
+TimeoutStopSec=35
+
+# Systemd cgroup resource safeguards (Strictly bounded for 1 OCPU / 5.8 GiB Host)
+CPUAccounting=true
+CPUQuota=90%
+MemoryAccounting=true
+MemoryHigh=1.8G
+MemoryMax=2.2G
+
+# Security Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/aira-autonomous-staging /var/run/docker.sock
+PrivateTmp=true
+
+# Standardized logging to journald with tag
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aira-oracle-worker
+
+[Install]
+WantedBy=multi-user.target
