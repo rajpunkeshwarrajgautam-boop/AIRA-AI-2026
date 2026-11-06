@@ -19,6 +19,8 @@ jobs:
       - run: npm run build
       - run: npm run typecheck:api
       - run: npm run lint
+      - run: node --check docker/aira-computer/runner.mjs
+      - run: npm run test:bot:isolation
       - run: npx playwright install --with-deps chromium
       - run: npm run test:bot:computer
       - run: npm run test:bot:browser

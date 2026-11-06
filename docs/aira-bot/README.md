@@ -8,56 +8,66 @@ Aira Bot replaces the user-facing Agents shell with a dedicated bot workspace at
 - Store instructions, model choice, enabled tools, approval policy, explicit memory and reusable instruction-based skills in PostgreSQL.
 - Create separate durable task and run identities. Configuration is snapshotted for each run; editing a bot does not rewrite in-flight work.
 - Execute a bounded model-driven loop. The model chooses validated arguments for the bot's enabled tools rather than a keyword/example selector.
-- Pause before every tool under `always_ask`; under `risky_only`, only READ tools run without a human decision. File writes and terminal programs therefore pause for approval.
+- Pause before every tool under `always_ask`; under `risky_only`, only READ tools run without a human decision. Browser interaction, file writes and terminal programs therefore pause for approval.
 - Resume approved runs, cancel active runs, replay durable events, and download Markdown results. Background work continues when the browser leaves the page while the API worker is alive.
 - Reject missing model providers, invalid model output, tool failures and unavailable capabilities explicitly. Bot runs never use the deterministic mock adapter.
 - Authenticate with verified Firebase ID tokens, using the existing Firebase project. The local test identity is explicit, localhost-only in the browser, and rejected by the API in production.
 
 ## Computer runtime
 
-Aira Bot now includes a bounded persistent computer runtime that is separate from ordinary Chat.
+Aira Bot has a provider-based persistent computer runtime separate from ordinary Chat.
 
-Each authenticated user/bot pair receives a deterministic private workspace directory under `AIRA_COMPUTER_ROOT`. User and bot identifiers are hashed before becoming filesystem paths. Workspace file APIs reject absolute paths, traversal and symlink following. Text reads and writes are capped at 256 KiB and directory listings are bounded.
+Two providers exist:
 
-Available computer tools:
+- `local`: the Phase 2 bounded host-process Playwright/`execFile` runner for development and controlled deployments.
+- `docker`: one persistent isolated Docker computer per authenticated AIRA user. Bots belonging to that user share the persistent Chromium profile/computer lifecycle while retaining separate Bot workspace directories.
+
+See [`ISOLATED_COMPUTER.md`](./ISOLATED_COMPUTER.md) for the Phase 3 isolation, lease, takeover and deployment contract.
+
+Available computer tools depend on the selected provider:
 
 | Tool | Permission | Behavior |
 |---|---|---|
-| `browser_open` | READ | Persistent Playwright Chromium profile; public HTTP(S) navigation only; visible text, title, links and a viewport screenshot are returned/stored. |
-| `file_read` | READ | Reads UTF-8 files inside the bot workspace only. |
-| `file_write` | WRITE | Writes UTF-8 files inside the bot workspace; requires approval under `risky_only`. |
-| `terminal_exec` | DESTRUCTIVE | Uses `execFile` directly with an explicit program allowlist; no shell interpolation, pipelines or redirection. Always requires approval under `risky_only`. |
+| `browser_open` | READ | Opens public HTTP(S) destinations in the persistent browser. |
+| `browser_click` | WRITE | Docker provider: clicks a CSS-selected element; approval-gated under `risky_only`. |
+| `browser_type` | WRITE | Docker provider: fills a CSS-selected field and can optionally submit; approval-gated. |
+| `browser_scroll` | READ | Docker provider: bounded viewport scrolling. |
+| `browser_wait` | READ | Docker provider: waits for a CSS-selected element. |
+| `file_read` | READ | Reads UTF-8 files inside the Bot workspace. |
+| `file_write` | WRITE | Writes UTF-8 files inside the Bot workspace; approval-gated. |
+| `terminal_exec` | DESTRUCTIVE | Direct allowlisted program execution without a command shell; approval-gated. |
 
-The browser rejects credentials in URLs, localhost, loopback, private, link-local and reserved network destinations. Each HTTP(S) request made by the browser is checked before it is allowed to leave the browser context. The runtime keeps the browser profile on the persistent workspace disk so cookies/site state can survive browser restarts on the same host.
+Browser navigation rejects credentials in URLs, localhost, loopback, private, link-local and reserved network destinations. Bot workspace paths reject traversal and symlinks. Text reads/writes are bounded.
 
-The Computer tab lets the owner start/stop the browser, navigate public pages, inspect/edit workspace files and run allowlisted terminal programs directly. Direct write/terminal API operations require an explicit confirmation bit in addition to normal bot ownership authentication.
+### Human takeover
 
-### Computer runtime deployment
+A per-user computer lease fences control of the shared persistent computer. Only one Bot run owns the computer at a time. A user can **Take control** at a safe checkpoint; Aira Bot is paused and manual mutations require the returned takeover token. **Return control** releases the human lease and resumes paused Bot runs from the persisted checkpoint.
 
-Development and test default to computer-enabled unless `AIRA_COMPUTER_ENABLED=false`. Production defaults to disabled and requires explicit `AIRA_COMPUTER_ENABLED=true`.
+Takeover is refused while a computer tool is actively executing, preventing non-idempotent terminal/browser actions from being interrupted and accidentally replayed.
 
-The browser runtime requires the Playwright package and a compatible Chromium installation. A deployment image should run:
+Passwords, payment secrets, OTP/2FA codes, CAPTCHA completion and payment confirmation remain human-controlled by policy.
+
+### Docker computer deployment
+
+Build the isolated runner on the long-lived API/runtime host:
 
 ```bash
-npm ci
-npx playwright install --with-deps chromium
+docker build -t aira-computer:local docker/aira-computer
 ```
 
-Configure a persistent disk location:
+Configure:
 
 ```bash
-AIRA_COMPUTER_ENABLED=true
-AIRA_COMPUTER_ROOT=/persistent/aira-computers
-```
-
-Terminal execution is a separate production switch:
-
-```bash
+AIRA_COMPUTER_PROVIDER=docker
+AIRA_COMPUTER_DOCKER_IMAGE=aira-computer:local
+AIRA_COMPUTER_RUNNER_SECRET=<long-random-server-secret>
 AIRA_COMPUTER_TERMINAL_ENABLED=true
-AIRA_COMPUTER_PROGRAMS=node,npm,npx,python,python3,git
+AIRA_COMPUTER_PROGRAMS=node,npm,npx,python3,git
 ```
 
-`terminal_exec` is a bounded local runner, **not a VM/container security boundary**. It does not expose a command shell, but an allowed executable can still exercise whatever operating-system access the API service account possesses. A public multi-tenant launch therefore still requires a real per-user container/microVM provider before arbitrary code execution should be enabled.
+The Docker provider runs as a non-root user with a read-only root filesystem, dropped Linux capabilities, `no-new-privileges`, CPU/RAM/PID limits, bounded tmpfs mounts, a persistent named `/data` volume, and a loopback-only authenticated runner control port.
+
+This is a materially stronger isolation boundary than the local runner, but it is **not claimed to be equivalent to a Firecracker or other microVM boundary**. Public arbitrary untrusted multi-tenant execution still benefits from a future managed sandbox/microVM provider and network-policy enforcement outside the browser process.
 
 ## Local setup
 
@@ -71,30 +81,31 @@ For shared authentication, set the existing `VITE_FIREBASE_*` values and the sam
 
 ## Hosting
 
-The Vite build is static. Deploy the long-lived Node API separately with PostgreSQL, server-side provider configuration, persistent computer storage, and Chromium when computer mode is enabled. The existing Vite proxy is local-only. The production host must proxy `/api/*` to that API on the same origin, including the Authorization header. `/bots/*` has a SPA rewrite in `vercel.json`.
+The Vite build is static. Deploy the long-lived Node API separately with PostgreSQL and the selected computer provider. Docker mode requires Docker access on that runtime host and cannot run inside the static Vercel frontend deployment. The production host must proxy `/api/*` to the API on the same origin, including Authorization and Aira computer lease headers. `/bots/*` has a SPA rewrite in `vercel.json`.
 
-A static frontend deployment alone does not deploy the API worker, database or computer runtime. Do not run database migrations against an unreviewed production database. This branch does not deploy infrastructure or modify the live application.
+A static frontend deployment alone does not deploy the API worker, database, Docker computer containers or persistent volumes. This branch does not deploy infrastructure or modify the live application.
 
 ## Boundaries and remaining work
 
-This is an executable computer-service slice, not the complete cloud-computer platform.
-
 | Capability | Current status |
 |---|---|
-| Persistent owned bots, explicit memory, instruction-based skills | Implemented |
-| Task/run persistence, model-driven tools, human approval, activity/results | Implemented |
-| Persistent per-bot workspace files | Implemented on the runtime host |
-| Browser | Implemented with persistent headless Playwright Chromium and public-network restrictions |
-| Terminal | Implemented as approval-gated direct `execFile` allowlisted programs; no shell |
-| Strong VM/container isolation | Not implemented; required before untrusted multi-tenant arbitrary code execution |
-| General connector catalog/OAuth/MCP tools for bots | Not implemented; no shared unowned connector state is exposed |
-| Bot routines and schedules | Not implemented; existing Automations surface remains separate |
-| Multi-bot delegation and shared computer scheduling | Not implemented |
+| Persistent owned bots, memory, instruction-based skills | Implemented |
+| Task/run persistence, model-driven tools, approvals, activity/results | Implemented |
+| Local bounded computer provider | Implemented and regression-certified |
+| Docker isolated persistent computer provider | Implemented; repository contract certified, live deployment-host Docker smoke remains required |
+| Persistent shared user browser profile + separate Bot workspaces | Implemented in Docker provider |
+| Interactive browser click/type/scroll/wait | Implemented in Docker provider |
+| Human takeover / return control | Implemented with safe checkpoint fencing |
+| Per-user computer lease | Implemented in-process |
+| Live computer events | Implemented in-process with cursor replay and SSE |
+| Distributed computer lease/event store | Not implemented; required before horizontal API-worker scaling |
+| MicroVM/managed sandbox provider | Not implemented |
+| General connector catalog/OAuth/MCP tools for bots | Not implemented |
+| Bot routines and schedules | Not implemented; Automations remains separate |
+| Multi-bot delegation | Not implemented |
 | Push notifications, desktop/mobile clients | Not implemented; responsive web UI is available |
-| Autonomous learned memory | Not implemented; memory is explicitly configured by the user |
-| Multi-worker execution leases and queue | Not implemented; deploy one API worker for this slice |
 
-The loop checkpoints reuse the existing run recovery mechanism. Waiting approvals remain paused across a worker restart. Non-idempotent interrupted tools fail closed in the existing recovery path. Provider requests may be repeated after a crash before checkpoint persistence; model invocations can incur duplicate cost. Browser process state is in-memory while its profile/files are persistent. A production queue, distributed run lease, browser-session ownership lease, cancellation fencing and transactional outbox remain required before horizontal scaling.
+The loop checkpoints reuse the existing run recovery mechanism. Waiting approvals and human takeover are suspended states. Non-idempotent interrupted tools fail closed in recovery. A production horizontally scaled runtime still requires a distributed queue, durable computer leases, cancellation fencing, durable computer events and a transactional outbox.
 
 ## Verification
 
@@ -102,12 +113,14 @@ The loop checkpoints reuse the existing run recovery mechanism. Waiting approval
 npm run build
 npm run typecheck:api
 npm run lint
-npx playwright install chromium
+node --check docker/aira-computer/runner.mjs
+npm run test:bot:isolation
+npx playwright install --with-deps chromium
 npm run test:bot:computer
 npm run test:bot
 npm run test:bot:browser
 ```
 
-`test:bot:computer` verifies the real filesystem boundary, traversal/symlink rejection, terminal program allowlist, localhost/private-network browser rejection and an actual Chromium start/stop cycle. Bot tests run migrations and repositories against isolated PGlite PostgreSQL through its wire protocol. Browser tests exercise the actual local API and Vite app rather than mocked browser responses.
+`test:bot:isolation` certifies lease fencing, takeover blocking and Docker creation hardening without requiring Docker-in-Docker. `test:bot:computer` continues to verify the real local filesystem boundary, traversal/symlink rejection, terminal allowlisting, private-network browser rejection and Chromium lifecycle. Browser tests exercise the real local API and Vite UI.
 
-Live model-provider compatibility, Firebase sign-in, real Brave web search and a production container/microVM computer provider remain deployment certifications rather than claims of this repository-only slice.
+Live model providers, Firebase sign-in, Brave web search and actual deployment-host Docker image execution remain deployment certifications rather than repository-only claims.
