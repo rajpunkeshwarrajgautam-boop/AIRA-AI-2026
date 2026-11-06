@@ -3,7 +3,7 @@ name: CI
 on:
   push:
   pull_request:
-    branches: [main, prod-release]
+    branches: [main, prod-release, feat/agent-execution-truth-20261014]
   workflow_dispatch:
 
 permissions:
@@ -95,6 +95,9 @@ jobs:
 
       - name: Agent execution truth regression
         run: npm run test:agent-tool-selection
+
+      - name: Durable mission planning and verification regression
+        run: npm run test:mission-planner
 
       - name: Workflow engine verification
         run: npm run test:workflow

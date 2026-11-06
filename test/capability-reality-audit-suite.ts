@@ -233,7 +233,13 @@ async function runRealityAuditSuite() {
   }, principalA);
   await agentRuntime.startRun(runMission.id);
   const completedMission = await agentRuntime.getRun(runMission.id);
-  assert.strictEqual(completedMission?.state, 'COMPLETED');
+  assert.strictEqual(completedMission?.state, 'COMPLETED',
+    'Mission failed: ' + String(completedMission?.error || completedMission?.content?.slice(0, 120)) +
+    '; tools=' + JSON.stringify(completedMission?.toolCalls.map(call => call.name)) +
+    '; progress=' + JSON.stringify(completedMission?.context?.__airaMissionV1 && {
+      dispatched: completedMission.context.__airaMissionV1.dispatched,
+      verified: completedMission.context.__airaMissionV1.verified
+    }));
   assert.ok(completedMission?.stepCount >= 3, `Expected at least 3 steps in iterative mission, got ${completedMission?.stepCount}`);
   assert.ok(completedMission?.toolCalls.length >= 3, 'Multiple tool calls recorded');
   assert.ok(completedMission?.toolResults.length >= 3, 'Multiple tool results recorded');
@@ -254,6 +260,30 @@ async function runRealityAuditSuite() {
   assert.ok(fileToolCall, 'file_system_read called');
   assert.strictEqual((fileToolCall?.arguments as any)?.filePath, 'src/App.tsx');
   console.log('  -> PASS: file_system_read dynamically targeted src/App.tsx instead of package.json default.');
+
+  // -------------------------------------------------------------
+  // TEST 8B: Real durable multi-file mission (no synthetic outputs)
+  // -------------------------------------------------------------
+  console.log('\n--- TEST 8B: MULTI-FILE AGENT MISSION ---');
+  const multiFileRun = await agentRuntime.createRun({
+    prompt: 'Inspect package.json and README.md and compare both files as an agent mission.',
+    intent: 'AGENT_MISSION'
+  }, principalA);
+  await agentRuntime.startRun(multiFileRun.id);
+  const completedMulti = await agentRuntime.getRun(multiFileRun.id);
+  assert.ok(completedMulti, 'Multi-file run must be persisted');
+  assert.strictEqual(completedMulti.state, 'COMPLETED',
+    'Multi-file mission must only finish when both actual files are read and verified');
+  const fileCalls = completedMulti.toolCalls.filter(call => call.name === 'file_system_read');
+  assert.strictEqual(fileCalls.length, 2, 'Mission must read exactly two named files');
+  assert.deepStrictEqual(fileCalls.map(call => call.arguments.filePath),
+    ['package.json', 'README.md']);
+  assert.deepStrictEqual(completedMulti.context?.__airaMissionV1?.verified,
+    ['file_1', 'file_2'], 'Every file must have persisted completion evidence');
+  assert.ok(completedMulti.toolResults.length >= 2, 'Mission must persist real tool results');
+  console.log('  -> PASS: Both files read with matching tool evidence and durable checkpoints.');
+
+
 
   // -------------------------------------------------------------
   // TEST 9: Scope Fail-Closed Verification
