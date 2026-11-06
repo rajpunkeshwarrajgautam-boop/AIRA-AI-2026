@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { PanelLeft, Layers, Bookmark, Share2, Check, FolderGit2, Bot, AlertTriangle } from 'lucide-react';
+import { PanelLeft, Layers, Bookmark, Share2, Check, FolderGit2, Bot, AlertTriangle, MessageSquareText } from 'lucide-react';
 import type { Conversation, Message, Artifact, Attachment, Project, AppSettings, WorkspaceMode } from './types';
 import {
   loadConversations, saveConversations, saveActiveChatId,
@@ -21,6 +21,11 @@ import { backfillConversationsBestEffort, deleteConversationFromServer, fetchAll
 import { useAnimatedFavicon } from './utils/animatedFavicon';
 import { detectCapabilityIntent, executeVisionGeneration, createBackendAutomation, getVisionTariff } from './utils/capabilityDispatcher';
 import { AgentContextualPanel } from './components/AgentContextualPanel';
+import { AdaptiveStudioEmptyState } from './components/AdaptiveStudioEmptyState';
+import './styles/adaptiveStudio.css';
+
+// Keep the verified legacy UI as the default. The opt-in shell only changes presentation.
+const ADAPTIVE_STUDIO_PREVIEW = import.meta.env.VITE_ADAPTIVE_STUDIO_PREVIEW === 'true';
 
 // Lazy-loaded heavy auxiliary surfaces to optimize FCP and TTI
 const ArtifactStudio = React.lazy(() => import('./components/ArtifactStudio').then(m => ({ default: m.ArtifactStudio })));
@@ -1150,7 +1155,7 @@ function App() {
   const updateSettings = (partial: Partial<AppSettings>) => setSettings(prev => ({ ...prev, ...partial }));
 
   return (
-    <div className="h-[100dvh] w-full min-w-0 flex overflow-hidden bg-claude-bg-light dark:bg-claude-bg-dark text-claude-text-light dark:text-claude-text-dark">
+    <div className={`${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-shell ' : ''}h-[100dvh] w-full min-w-0 flex overflow-hidden bg-claude-bg-light dark:bg-claude-bg-dark text-claude-text-light dark:text-claude-text-dark`}>
       <Sidebar
         conversations={conversations}
         activeChatId={activeChatId}
@@ -1211,8 +1216,8 @@ function App() {
 
       <InlineToast message={toastMessage} />
 
-      <main className="flex-1 min-w-0 min-h-0 h-[100dvh] flex flex-col overflow-hidden w-full max-w-full bg-mesh-canvas">
-        <header className="h-[54px] shrink-0 px-3 md:px-5 flex items-center justify-between border-b border-claude-border-light/80 dark:border-white/10 gradient-fade-header relative z-30 bg-claude-bg-light/95 dark:bg-aira-navy/95 backdrop-blur-md">
+      <main className={`${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-main ' : 'bg-mesh-canvas '}flex-1 min-w-0 min-h-0 h-[100dvh] flex flex-col overflow-hidden w-full max-w-full`}>
+        <header className={`${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-header ' : ''}h-[54px] shrink-0 px-3 md:px-5 flex items-center justify-between border-b border-claude-border-light/80 dark:border-white/10 gradient-fade-header relative z-30 bg-claude-bg-light/95 dark:bg-aira-navy/95 backdrop-blur-md`}>
           <div className="flex flex-1 items-center gap-1 min-w-0">
             {!sidebarOpen && (
               <>
@@ -1228,6 +1233,16 @@ function App() {
                   <AiraMark size="sm" isAnimated={true} motionConcept="a" />
                 </div>
               </>
+            )}
+            {ADAPTIVE_STUDIO_PREVIEW && (
+              <div className="aira-adaptive-mode-toggle" role="group" aria-label="Workspace mode">
+                <button type="button" aria-pressed={workspaceMode === 'chat'} onClick={() => setWorkspaceMode('chat')}>
+                  <MessageSquareText size={15} aria-hidden="true" /> Chat
+                </button>
+                <button type="button" aria-pressed={workspaceMode === 'agent'} onClick={() => setWorkspaceMode('agent')}>
+                  <Bot size={15} aria-hidden="true" /> Agent
+                </button>
+              </div>
             )}
             <ModelSelector
               currentModel={settings.activeModel}
@@ -1273,7 +1288,7 @@ function App() {
           </div>
         </header>
 
-        <div ref={chatScrollRef} data-testid="chat-scroll-region" className="flex-1 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain flex flex-col">
+        <div ref={chatScrollRef} data-testid="chat-scroll-region" className={`${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-chat-content ' : ''}flex-1 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain flex flex-col`}>
           {!activeConversation || activeConversation.messages.length === 0 ? (
             <GreetingScreen 
               userName={settings.userName} 
@@ -1312,7 +1327,7 @@ function App() {
         </div>
 
         {/* Persistent Composer (Visible in both Chat Mode and Agent Mode) */}
-        <div className="shrink-0 min-w-0 relative z-10 pt-2 sm:pt-4 gradient-mask-bottom">
+        <div className={`${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-composer ' : ''}shrink-0 min-w-0 relative z-10 pt-2 sm:pt-4 gradient-mask-bottom`}>
           {executionStatus && (
             <div className="max-w-2xl mx-auto px-4 mb-2">
               <div className="flex items-center gap-2 text-xs text-aira-blue dark:text-aira-silver bg-aira-blue/10 border border-aira-blue/20 rounded-lg px-3 py-1.5 shadow-sm backdrop-blur">
@@ -1368,8 +1383,10 @@ function App() {
         </div>
       </main>
 
+      {ADAPTIVE_STUDIO_PREVIEW && !activeArtifact && <AdaptiveStudioEmptyState />}
+
       <React.Suspense fallback={null}>
-        {activeArtifact && <ArtifactStudio artifact={activeArtifact} onClose={() => setActiveArtifact(null)} />}
+        {activeArtifact && <ArtifactStudio artifact={activeArtifact} adaptiveDock={ADAPTIVE_STUDIO_PREVIEW} onClose={() => setActiveArtifact(null)} />}
         {isAgentPanelOpen && (
           <AgentContextualPanel
             isOpen={isAgentPanelOpen}
