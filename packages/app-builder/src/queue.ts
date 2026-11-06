@@ -144,8 +144,13 @@ export class PostgresApplicationBuildQueue {
         .where('lease_expires_at', '<=', trx.fn.now())
         .orderBy('lease_expires_at').limit(limit).forUpdate().skipLocked();
       for (const row of rows) {
+        // Prevent unlimited replay of an interrupted job. The old worker may
+        // still be tearing down its container; fencing invalidates its commit.
+        const exhausted = Number(row.attempts) >= 3;
         await trx(table).where({ id: row.id }).update({
-          state: row.cancel_requested ? 'CANCELLED' : 'QUEUED',
+          state: row.cancel_requested ? 'CANCELLED' : exhausted ? 'FAILED' : 'QUEUED',
+          result: exhausted && !row.cancel_requested
+            ? JSON.stringify({ error: 'BUILD_LEASE_RETRY_LIMIT_EXCEEDED' }) : row.result,
           lease_owner: null, lease_expires_at: null, updated_at: trx.fn.now()
         });
       }
