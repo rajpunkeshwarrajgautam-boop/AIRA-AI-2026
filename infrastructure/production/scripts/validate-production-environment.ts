@@ -47,6 +47,7 @@ export interface EnvironmentValidationReport {
     isPoolerRouted?: boolean;
     workerId?: string;
     workerConcurrency?: number;
+    targetPlatform?: string;
     sandboxUrl?: string;
   };
 }
@@ -159,6 +160,7 @@ export function validateProductionEnvironmentConfig(
   const allowLocalSandbox = (env.AIRA_ALLOW_LOCAL_SANDBOX || '').trim();
   const workerConcurrency = parseInt(env.WORKER_CONCURRENCY || '2', 10);
   const workerId = (env.WORKER_ID || '').trim();
+  const targetPlatform = (env.AIRA_TARGET_PLATFORM || 'linux/arm64').trim();
 
   // 1. Environment Identity Checks
   if (airaEnv !== 'production') {
@@ -299,6 +301,9 @@ export function validateProductionEnvironmentConfig(
   if (!workerId) {
     errors.push('WORKER_ID must be specified.');
   }
+  if (targetPlatform !== 'linux/arm64' && targetPlatform !== 'linux/amd64') {
+    errors.push(`AIRA_TARGET_PLATFORM must be linux/arm64 or linux/amd64 (found: '${targetPlatform}').`);
+  }
 
   return {
     valid: errors.length === 0,
@@ -314,6 +319,7 @@ export function validateProductionEnvironmentConfig(
       isPoolerRouted,
       workerId,
       workerConcurrency,
+      targetPlatform,
       sandboxUrl
     }
   };
@@ -422,6 +428,7 @@ export async function runValidatorCLI(argv: string[] = process.argv.slice(2)): P
   console.log(`  Database Host:                 ${report.summary.databaseHost || '(placeholder/empty)'}`);
   console.log(`  PgBouncer Pooler Routing:      ${report.summary.isPoolerRouted ? 'YES (-pooler)' : 'NO'}`);
   console.log(`  Worker Concurrency:            ${report.summary.workerConcurrency}`);
+  console.log(`  Docker Target Platform:        ${report.summary.targetPlatform}`);
   console.log(`  Sandbox URL:                   ${report.summary.sandboxUrl}`);
 
   if (report.warnings.length > 0) {
