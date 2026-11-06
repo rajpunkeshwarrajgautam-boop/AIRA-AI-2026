@@ -120,6 +120,61 @@ function App() {
   const handleRenameChat = (id: string, title: string) => updateConversation(id, c => ({ ...c, title, updatedAt: Date.now() }));
   const handleToggleStar = (id: string) => updateConversation(id, c => ({ ...c, isPinned: !c.isPinned }));
 
+  const handleDuplicateChat = (id: string) => {
+    const source = conversations.find(c => c.id === id);
+    if (!source) return;
+
+    const now = Date.now();
+    const duplicate: Conversation = {
+      ...structuredClone(source),
+      id: `chat-${crypto.randomUUID()}`,
+      title: `${source.title} (copy)`,
+      isPinned: false,
+      createdAt: now,
+      updatedAt: now,
+      messages: source.messages.map(message => ({
+        ...structuredClone(message),
+        id: `${message.role}-${crypto.randomUUID()}`,
+        artifacts: message.artifacts?.map(artifact => ({ ...structuredClone(artifact), id: `artifact-${crypto.randomUUID()}` })),
+        attachments: message.attachments?.map(attachment => ({ ...structuredClone(attachment), id: `attachment-${crypto.randomUUID()}` })),
+      })),
+    };
+
+    setConversations(prev => [duplicate, ...prev]);
+    setActiveChatId(duplicate.id);
+    saveActiveChatId(duplicate.id);
+    setActiveArtifact(null);
+    setWorkspaceMode('chat');
+  };
+
+  const shareConversation = async (conversation: Conversation): Promise<boolean> => {
+    const text = conversation.messages
+      .map(m => `${m.role === 'user' ? 'You' : 'Aira'}: ${m.content}`)
+      .join('\n\n') || conversation.title;
+
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: conversation.title, text });
+        return true;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') return false;
+      }
+    }
+
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const handleShareChat = async (id: string) => {
+    const conversation = conversations.find(c => c.id === id);
+    if (!conversation) return;
+    await shareConversation(conversation);
+  };
+
   const handleSendMessage = async (rawText: string, attachments: Attachment[]) => {
     if (isLoading) return;
     let conversation = activeConversation;
@@ -224,8 +279,8 @@ function App() {
 
   const handleShare = async () => {
     if (!activeConversation) return;
-    const text = activeConversation.messages.map(m => `${m.role === 'user' ? 'You' : 'Aira'}: ${m.content}`).join('\n\n');
-    await navigator.clipboard.writeText(text || 'Aira workspace');
+    const shared = await shareConversation(activeConversation);
+    if (!shared) return;
     setSharedCopied(true);
     setTimeout(() => setSharedCopied(false), 1500);
   };
@@ -242,6 +297,8 @@ function App() {
         onDeleteChat={handleDeleteChat}
         onRenameChat={handleRenameChat}
         onToggleStar={handleToggleStar}
+        onDuplicateChat={handleDuplicateChat}
+        onShareChat={handleShareChat}
         projects={projects}
         activeProjectId={activeProjectId}
         onOpenProjects={() => setIsProjectsOpen(true)}
