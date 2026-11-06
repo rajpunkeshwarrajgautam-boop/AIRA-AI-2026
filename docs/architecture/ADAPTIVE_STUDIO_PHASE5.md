@@ -1,6 +1,6 @@
 # Adaptive Studio Phase 5 — execution checkpoint
 
-Status: **Milestone 5.1 implementation candidate**, not a Phase 5 certification or production release.
+Status: **Milestones 5.1–5.4 implementation candidates; local browser smoke gates passed.** Windows Edge certification and Phase 5 release approval remain outstanding.
 
 ## Source of truth and isolation
 
@@ -17,6 +17,26 @@ Status: **Milestone 5.1 implementation candidate**, not a Phase 5 certification 
 4. Connected coalescing to the existing tagged-artifact and SSE `artifact_open` / `artifact_delta` / `artifact_close` paths in opt-in Adaptive Studio only.
 5. Suppressed sandbox iframe execution against incomplete code in opt-in mode; the user can inspect incoming source in the Code tab, and the real nonce-validated iframe mounts after the artifact has a completed version.
 
+## Milestone 5.2 candidate — verified agent lifecycle events
+
+- `src/utils/agentTimeline.ts` maps only events emitted by the current backend SSE endpoint: `run_started`, `workflow_started`, `workflow_step_started/progress/completed/failed`, `workflow_completed`, `tool_started/completed`, and `approval_required`.
+- Public UI metadata is limited to status and sanitized tool/step labels. No raw tool arguments, outputs, speculative subagent events, or hidden chain-of-thought are collected.
+- Repeated step updates merge into a bounded 80-entry timeline. The conversation component renders an accessible collapsible section only when the preview flag is enabled.
+
+## Milestone 5.3 candidate — sandbox runtime errors and repair drafts
+
+- The existing sandbox emits `AIRA_ARTIFACT_RUNTIME_ERROR` for window exceptions and rejected promises, in addition to its console relay.
+- The receiving `ArtifactStudio` requires the active iframe `event.source` and ephemeral nonce, then independently checks payload shape and length before display. A sandbox can report an error but its report is **not trusted proof** of the cause.
+- The explicit **Repair with Aira Agent** action switches the composer into Agent mode and populates a **reviewable draft**. It never auto-sends, grants execution permission, or executes tools.
+- The executable preview remains sandboxed without `allow-same-origin`. A forged host-window error event was rejected in browser acceptance.
+
+## Milestone 5.4 candidate — versions and code diff
+
+- The same artifact identifier within the same user/conversation accrues non-destructive revisions on completed updates. Incomplete updates do not overwrite completed version records.
+- The Diff tab provides bounded, line-based comparisons; very large source files show an explicit inline comparison limit instead of allocating quadratic memory.
+- **Restore** writes a new revision whose content comes from a selected earlier snapshot. Existing revision entries remain intact. The in-memory revision cache has an entry cap and clears on principal change.
+- Legacy `ArtifactStudio` continues to render its existing Preview/Code controls when the flag is off.
+
 ## Local checks
 
 - Artifact parser/sandbox and new milestone tests: 16/16 PASS.
@@ -24,15 +44,16 @@ Status: **Milestone 5.1 implementation candidate**, not a Phase 5 certification 
 - TypeScript client and full typecheck: PASS.
 - Lint: exit 0, with existing warnings.
 - Production-style build with preview flag unset: PASS (existing large-chunk advisory).
+- Milestones 5.1–5.4 parser, timeline, runtime error, revision, and existing sandbox regression tests: 27/27 PASS.
+- Local Chromium browser smoke: desktop `1600×1000`, tablet `768×1024`, mobile `390×844`, and small mobile `320×700` PASS for responsive overflow, timeline, Diff, nonce/source-spoof rejection, error relay, reviewable repair draft, and non-destructive restore.
+- Preview-disabled local browser smoke at `1600×1000`: PASS for legacy shell, no Agent timeline, no Diff tab, and no repair action.
+- Reproduction: `node scripts/adaptive-phase5-browser-acceptance.mjs`; baseline `PHASE5_FLAG_OFF=true PHASE5_PORT=4186 node scripts/adaptive-phase5-browser-acceptance.mjs`. On Windows, the script defaults to Playwright's Microsoft Edge channel; elsewhere it uses the installed headless Chromium bundle.
 
-This branch has **not** completed Windows Microsoft Edge CDP acceptance for the new streaming runtime. A pass on these unit/build checks must not be represented as a Phase 5 PASS.
+This branch has **not** completed Windows Microsoft Edge CDP acceptance against the integrated PR branch, or live authenticated multi-agent SSE acceptance. Local deterministic browser mocks establish component behavior but do not substitute for production-equivalent runtime certification. **Do not claim Phase 5 PASS.**
 
 ## Follow-on milestones
 
-- **5.2 Agent events:** map the actual `tool_started`, `tool_completed`, and `workflow_step_*` SSE payloads into an accessible conversation timeline; never invent unverified `agent:*` events or display private chain-of-thought.
-- **5.3 Error relay:** extend the existing iframe source+nonce validation; sanitize error payloads, bound log sizes, and make repair an explicit user action.
-- **5.4 Version diff:** preserve immutable artifact versions, provide a code diff view, and avoid destructive rollback of conversation history.
-- **5.5 Certification:** run exact-SHA Edge/browser checks and security regression suites in a separate Windows worktree before calling Phase 5 complete.
+- **5.5 Certification:** run exact-SHA Edge/browser checks, authenticated real-runtime SSE integration, account isolation, cancellation regression, and security review in a separate Windows worktree before calling Phase 5 complete.
 
 ## Acceptance and release cautions
 

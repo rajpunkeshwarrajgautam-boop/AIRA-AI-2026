@@ -16,6 +16,17 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import type { Artifact } from '../types';
 import { generateArtifactSandboxHtml } from '../utils/artifactSandbox';
+import { normalizeArtifactRuntimeError, type ArtifactRuntimeError } from '../utils/artifactRuntimeError';
+import { createRollbackRevision, diffArtifactLines } from '../utils/artifactRevisions';
+
+function newSandboxNonce(): string {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    return Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
+  }
+  // No weak random fallback. An empty nonce fails every inbound message check.
+  return '';
+}
 
 interface ArtifactStudioProps {
   artifact: Artifact | null;
@@ -23,14 +34,17 @@ interface ArtifactStudioProps {
   onUpdateArtifact?: (updated: Artifact) => void;
   /** Opt-in layout alignment only; the existing sandbox and artifact actions are unchanged. */
   adaptiveDock?: boolean;
+  onRepairArtifact?: (error: ArtifactRuntimeError, title: string) => void;
 }
 
 export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
   artifact,
   onClose,
+  onUpdateArtifact,
   adaptiveDock = false,
+  onRepairArtifact,
 }) => {
-  const [activeTab, setActiveTab] = useState<'preview' | 'code'>('preview');
+  const [activeTab, setActiveTab] = useState<'preview' | 'code' | 'diff'>('preview');
   const [selectedVersion, setSelectedVersion] = useState<number>(1);
   const [isCopied, setIsCopied] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -39,9 +53,8 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
   const [refreshKey, setRefreshKey] = useState(0);
 
   const [securityNotice, setSecurityNotice] = useState<string | null>(null);
-  const activeNonceRef = useRef<string>(
-    typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `nonce_${Math.random().toString(36).slice(2)}_${Date.now()}`
-  );
+  const [runtimeError, setRuntimeError] = useState<ArtifactRuntimeError | null>(null);
+  const activeNonceRef = useRef<string>(newSandboxNonce());
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
@@ -51,7 +64,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
   if (artifact && artifactKey !== prevArtifactKey) {
     setPrevArtifactKey(artifactKey);
     setSelectedVersion(artifact.version);
-    activeNonceRef.current = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `nonce_${Math.random().toString(36).slice(2)}_${Date.now()}`;
+    activeNonceRef.current = newSandboxNonce();
     if (
       artifact.type === 'text/html' ||
       artifact.type === 'image/svg+xml' ||
@@ -64,6 +77,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
       setActiveTab('code');
     }
     setConsoleLogs([]);
+    setRuntimeError(null);
   }
 
   // Cross-frame console log receiver with strict verification (CRITICAL FIX B)
@@ -73,12 +87,21 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
       if (!iframeRef.current || event.source !== iframeRef.current.contentWindow) {
         return;
       }
+      // srcdoc without allow-same-origin has an opaque origin.
+      if (event.origin !== 'null') return;
       // 2. Validate payload structure
       if (!event.data || typeof event.data !== 'object') return;
-      if (event.data.type !== 'CONSOLE_LOG') return;
+      if (event.data.type !== 'CONSOLE_LOG' && event.data.type !== 'AIRA_ARTIFACT_RUNTIME_ERROR') return;
 
       // 3. Validate per-session secret nonce to prevent spoofed/injected cross-frame messages
       if (!event.data.nonce || event.data.nonce !== activeNonceRef.current) {
+        return;
+      }
+
+      if (event.data.type === 'AIRA_ARTIFACT_RUNTIME_ERROR') {
+        if (!adaptiveDock) return;
+        const normalized = normalizeArtifactRuntimeError(event.data.error);
+        if (normalized) setRuntimeError(normalized);
         return;
       }
 
@@ -92,12 +115,17 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
 
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, []);
+  }, [adaptiveDock]);
 
   if (!artifact) return null;
 
   const currentContent = artifact.versions?.find(v => v.version === selectedVersion)?.content || artifact.content;
   const isGenerating = adaptiveDock && !artifact.versions.some(v => v.version === artifact.version);
+  const selectedIndex = artifact.versions?.findIndex(v => v.version === selectedVersion) ?? -1;
+  const earlierVersion = selectedIndex > 0 ? artifact.versions[selectedIndex - 1] : null;
+  const diffRows = adaptiveDock && activeTab === 'diff' && earlierVersion
+    ? diffArtifactLines(earlierVersion.content, currentContent)
+    : [];
 
   const handleCopy = async () => {
     try {
@@ -178,8 +206,13 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                     <div className="flex items-center space-x-1">
                       <span className="text-[10px] text-claude-muted-light dark:text-claude-muted-dark">Version</span>
                       <select 
+                        aria-label="Artifact revision"
                         value={selectedVersion} 
-                        onChange={(e) => setSelectedVersion(Number(e.target.value))}
+                        onChange={(e) => {
+                          activeNonceRef.current = newSandboxNonce();
+                          setRuntimeError(null);
+                          setSelectedVersion(Number(e.target.value));
+                        }}
                         className="bg-transparent text-[10px] text-claude-text-light dark:text-white font-semibold underline focus:outline-none cursor-pointer"
                       >
                         {artifact.versions.map(v => (
@@ -203,6 +236,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                 {([
                   { id: 'preview' as const, label: 'Preview', icon: Play },
                   { id: 'code' as const, label: 'Code', icon: Code },
+                  ...(adaptiveDock && artifact.versions?.length > 1 ? [{ id: 'diff' as const, label: 'Diff', icon: Layers }] : []),
                 ]).map(tab => {
                   const Icon = tab.icon;
                   const selected = activeTab === tab.id;
@@ -233,6 +267,18 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
 
               {/* Action Buttons */}
               <div className="flex items-center gap-0.5">
+                {adaptiveDock && onUpdateArtifact && selectedVersion !== artifact.version && (
+                  <button
+                    type="button"
+                    disabled={isGenerating}
+                    onClick={() => {
+                      const restored = createRollbackRevision(artifact, selectedVersion);
+                      if (restored) onUpdateArtifact(restored);
+                    }}
+                    className="rounded-lg px-2 py-1 text-xs font-medium text-claude-terracotta hover:bg-claude-terracotta/10 disabled:opacity-50"
+                    title="Restore selected version as a new revision"
+                  >Restore</button>
+                )}
                 <button 
                   onClick={handleCopy} 
                   className="p-1.5 rounded-lg text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark hover:text-claude-text-light dark:hover:text-white transition-colors" 
@@ -279,6 +325,21 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
             </div>
           )}
 
+          {adaptiveDock && runtimeError && (
+            <div role="alert" data-testid="artifact-runtime-error" className="flex flex-wrap items-center justify-between gap-2 border-b border-rose-500/20 bg-rose-500/10 px-4 py-2 text-xs text-rose-700 dark:text-rose-300">
+              <span className="min-w-0 flex-1 break-words">Sandbox reported: {runtimeError.message}</span>
+              {onRepairArtifact && (
+                <button
+                  type="button"
+                  onClick={() => onRepairArtifact(runtimeError, artifact.title)}
+                  className="shrink-0 rounded-md border border-rose-500/30 px-2 py-1 font-medium hover:bg-rose-500/10"
+                >
+                  Repair with Aira Agent
+                </button>
+              )}
+            </div>
+          )}
+
           {/* Main Studio Body */}
           <div className="flex-1 relative overflow-hidden bg-claude-surface-light dark:bg-[#141413] flex flex-col">
             <AnimatePresence mode="wait">
@@ -311,7 +372,11 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                         <span>Logs {consoleLogs.length > 0 && <span className="bg-claude-terracotta/20 px-1 rounded text-[10px] ml-1">{consoleLogs.length}</span>}</span>
                       </button>
                       <button
-                        onClick={() => setRefreshKey(k => k + 1)}
+                        onClick={() => {
+                          activeNonceRef.current = newSandboxNonce();
+                          setRuntimeError(null);
+                          setRefreshKey(k => k + 1);
+                        }}
                         className="p-1 hover:text-claude-text-light dark:hover:text-white transition-colors"
                         title="Reload sandbox"
                       >
@@ -363,6 +428,25 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                       </motion.div>
                     )}
                   </AnimatePresence>
+                </motion.div>
+              ) : activeTab === 'diff' ? (
+                <motion.div key="diff" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex h-full w-full flex-col bg-[#141413] text-xs text-stone-200">
+                  <div className="border-b border-stone-800 px-4 py-2 text-stone-400">
+                    {earlierVersion ? `Changes from v${earlierVersion.version} to v${selectedVersion}` : 'No earlier revision available'}
+                  </div>
+                  <div className="flex-1 overflow-auto font-mono" data-testid="artifact-code-diff" role="region" aria-label="Artifact code diff">
+                    {diffRows === null ? (
+                      <p className="p-4 text-stone-400">The artifact is too large for inline comparison. Select Code or download both revisions.</p>
+                    ) : diffRows.length ? diffRows.map((line, index) => (
+                      <div key={index} className={`flex min-w-max whitespace-pre-wrap break-all px-4 py-0.5 ${
+                        line.kind === 'added' ? 'bg-emerald-500/15 text-emerald-300'
+                          : line.kind === 'removed' ? 'bg-rose-500/15 text-rose-300' : ''
+                      }`}>
+                        <span aria-label={line.kind} className="mr-3 w-3 shrink-0 select-none">{line.kind === 'added' ? '+' : line.kind === 'removed' ? '−' : ' '}</span>
+                        <span>{line.text || ' '}</span>
+                      </div>
+                    )) : <p className="p-4 text-stone-400">No differences from the earlier revision.</p>}
+                  </div>
                 </motion.div>
               ) : (
                 /* Code View */

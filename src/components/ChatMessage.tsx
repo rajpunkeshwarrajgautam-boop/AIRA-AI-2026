@@ -25,6 +25,7 @@ import { extractArtifactsFromText } from '../utils/artifactParser';
 interface ChatMessageProps {
   message: Message;
   userName: string;
+  showAgentTimeline?: boolean;
   onOpenArtifact: (artifact: Artifact) => void;
   onRetry?: () => void;
   onSwitchToAgentAndReview?: (prompt: string) => void;
@@ -101,6 +102,7 @@ export function formatProvenanceBadge(provenance: NonNullable<Message['provenanc
 export const ChatMessage: React.FC<ChatMessageProps> = ({
   message,
   userName,
+  showAgentTimeline = false,
   onOpenArtifact,
   onRetry,
   onSwitchToAgentAndReview,
@@ -214,6 +216,39 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
             </div>
 
             {message.thinking && <ThinkingBlock thinking={message.thinking} />}
+
+            {showAgentTimeline && Boolean(message.agentEvents?.length) && (
+              <details
+                data-testid="agent-execution-timeline"
+                className="rounded-xl border border-claude-borderMuted-light bg-claude-surface2-light/40 px-3 py-2 text-xs dark:border-claude-borderMuted-dark dark:bg-claude-surface2-dark/30"
+              >
+                <summary className="cursor-pointer font-medium text-claude-text-light dark:text-claude-text-dark">
+                  Agent activity ({message.agentEvents!.length} events)
+                  {message.agentEvents!.some(event => event.status === 'running') && message.isStreaming ? ' · Running' : ''}
+                </summary>
+                <ol className="mt-2 space-y-1.5" aria-label="Verified agent execution events">
+                  {message.agentEvents!.map(event => (
+                    <li key={event.id} className="flex flex-wrap items-center justify-between gap-2 text-claude-muted-light dark:text-claude-muted-dark">
+                      <span className="min-w-0 break-all">{event.label}</span>
+                      <span
+                        data-agent-status={event.status}
+                        className={`shrink-0 rounded-full px-2 py-0.5 font-medium ${
+                          event.status === 'completed'
+                            ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+                            : event.status === 'failed'
+                            ? 'bg-rose-500/10 text-rose-700 dark:text-rose-400'
+                            : event.status === 'waiting'
+                            ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400'
+                            : 'bg-aira-blue/10 text-aira-blue dark:text-blue-400'
+                        }`}
+                      >
+                        {event.status}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              </details>
+            )}
 
             <motion.div layout>
               <div

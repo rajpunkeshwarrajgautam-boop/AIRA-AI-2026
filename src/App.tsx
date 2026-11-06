@@ -7,6 +7,9 @@ import {
   loadProjects, saveProjects, loadSettings, saveSettings, INITIAL_CONVERSATION
 } from './utils/storage';
 import { streamAIResponse } from './utils/aiEngine';
+import { appendAgentTimelineEvent } from './utils/agentTimeline';
+import { createArtifactRepairPrompt } from './utils/artifactRuntimeError';
+import { reconcileArtifactRevision } from './utils/artifactRevisions';
 import { retrieveRelevantSubgraph } from './utils/knowledgeGraph';
 import { Sidebar } from './components/Sidebar';
 import { ChatMessage } from './components/ChatMessage';
@@ -97,6 +100,12 @@ function App() {
   }, []);
 
   const [isAgentPanelOpen, setIsAgentPanelOpen] = useState(false);
+  const [repairDraft, setRepairDraft] = useState<{ id: number; text: string } | null>(null);
+  const artifactRevisionsRef = useRef<Map<string, Artifact>>(new Map());
+  useEffect(() => {
+    // Never retain generated code from a previous principal in this session cache.
+    artifactRevisionsRef.current.clear();
+  }, [currentUserId]);
   const [activeAgentPrompt, setActiveAgentPrompt] = useState<string | undefined>(undefined);
   const activeAbortControllerRef = useRef<AbortController | null>(null);
   const activeRunIdRef = useRef<string | null>(null);
@@ -1011,7 +1020,18 @@ function App() {
             } : m),
           })),
           onArtifactFound: artifact => {
-            setActiveArtifact(artifact);
+            const key = `${currentUserId || 'guest'}:${id}:${artifact.id}`;
+            const previous = artifactRevisionsRef.current.get(key);
+            const updatedArtifact = ADAPTIVE_STUDIO_PREVIEW
+              ? reconcileArtifactRevision(previous, artifact)
+              : artifact;
+            if (ADAPTIVE_STUDIO_PREVIEW) {
+              if (artifactRevisionsRef.current.size >= 40 && !artifactRevisionsRef.current.has(key)) {
+                artifactRevisionsRef.current.delete(artifactRevisionsRef.current.keys().next().value!);
+              }
+              artifactRevisionsRef.current.set(key, updatedArtifact);
+            }
+            setActiveArtifact(updatedArtifact);
             updateConversation(id, c => ({
               ...c,
               messages: c.messages.map(m => {
@@ -1020,10 +1040,10 @@ function App() {
                 const idx = existing.findIndex(a => a.id === artifact.id);
                 if (idx >= 0) {
                   const updated = [...existing];
-                  updated[idx] = artifact;
+                  updated[idx] = updatedArtifact;
                   return { ...m, artifacts: updated };
                 }
-                return { ...m, artifacts: [...existing, artifact] };
+                return { ...m, artifacts: [...existing, updatedArtifact] };
               }),
             }));
           },
@@ -1038,6 +1058,15 @@ function App() {
           onStatusUpdate: status => {
             setExecutionStatus(status);
           },
+          onAgentEvent: ADAPTIVE_STUDIO_PREVIEW ? event => {
+            updateConversation(id, c => ({
+              ...c,
+              messages: c.messages.map(m => m.id === assistantId ? {
+                ...m,
+                agentEvents: appendAgentTimelineEvent(m.agentEvents || [], event),
+              } : m),
+            }));
+          } : undefined,
           onLatencyMetrics: metrics => {
             if (!settings.telemetryOptOut) {
               console.info('[AIRA Telemetry] Client observed latency metrics:', metrics);
@@ -1312,6 +1341,7 @@ function App() {
                 >
                   <ChatMessage
                     message={message}
+                    showAgentTimeline={ADAPTIVE_STUDIO_PREVIEW}
                     userName={settings.userName}
                     onOpenArtifact={setActiveArtifact}
                     onSwitchToAgentAndReview={handleSwitchToAgentAndReview}
@@ -1375,6 +1405,7 @@ function App() {
 
           <ChatInput
             onSendMessage={handleSendMessage}
+            repairDraft={ADAPTIVE_STUDIO_PREVIEW ? repairDraft : undefined}
             isLoading={isLoading}
             currentModel={settings.activeModel}
             extendedThinking={settings.extendedThinking}
@@ -1387,7 +1418,36 @@ function App() {
       {ADAPTIVE_STUDIO_PREVIEW && !activeArtifact && <AdaptiveStudioEmptyState />}
 
       <React.Suspense fallback={null}>
-        {activeArtifact && <ArtifactStudio artifact={activeArtifact} adaptiveDock={ADAPTIVE_STUDIO_PREVIEW} onClose={() => setActiveArtifact(null)} />}
+        {activeArtifact && (
+          <ArtifactStudio
+            artifact={activeArtifact}
+            adaptiveDock={ADAPTIVE_STUDIO_PREVIEW}
+            onClose={() => setActiveArtifact(null)}
+            onUpdateArtifact={ADAPTIVE_STUDIO_PREVIEW ? restored => {
+              const key = `${currentUserId || 'guest'}:${activeChatId}:${restored.id}`;
+              artifactRevisionsRef.current.set(key, restored);
+              setActiveArtifact(restored);
+              updateConversation(activeChatId, conversation => {
+                const messages = [...conversation.messages];
+                for (let i = messages.length - 1; i >= 0; i--) {
+                  const entry = messages[i];
+                  if (entry.artifacts?.some(item => item.id === restored.id)) {
+                    messages[i] = {
+                      ...entry,
+                      artifacts: entry.artifacts.map(item => item.id === restored.id ? restored : item),
+                    };
+                    break;
+                  }
+                }
+                return { ...conversation, messages, updatedAt: Date.now() };
+              });
+            } : undefined}
+            onRepairArtifact={ADAPTIVE_STUDIO_PREVIEW ? (error, title) => {
+              setWorkspaceMode('agent');
+              setRepairDraft({ id: Date.now(), text: createArtifactRepairPrompt(title, error) });
+            } : undefined}
+          />
+        )}
         {isAgentPanelOpen && (
           <AgentContextualPanel
             isOpen={isAgentPanelOpen}

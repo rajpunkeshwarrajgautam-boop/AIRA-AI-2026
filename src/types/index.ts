@@ -59,11 +59,21 @@ export interface ThinkingBlock {
   isStreaming?: boolean;
 }
 
+// Public execution metadata only. Never persist tool arguments, tool output, or private reasoning.
+export interface AgentTimelineEvent {
+  id: string;
+  kind: 'run' | 'workflow' | 'step' | 'tool' | 'approval';
+  label: string;
+  status: 'running' | 'completed' | 'failed' | 'waiting';
+  occurredAt: number;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   thinking?: ThinkingBlock;
+  agentEvents?: AgentTimelineEvent[];
   artifacts?: Artifact[];
   attachments?: Attachment[];
   timestamp: number;

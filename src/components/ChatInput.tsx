@@ -17,6 +17,7 @@ import { AVAILABLE_MODELS } from '../utils/constants';
 
 interface ChatInputProps {
   onSendMessage: (text: string, attachments: Attachment[]) => void;
+  repairDraft?: { id: number; text: string } | null;
   isLoading: boolean;
   onStop?: () => void;
   currentModel: ModelId;
@@ -43,6 +44,7 @@ const STYLE_OPTIONS = [
 
 export const ChatInput: React.FC<ChatInputProps> = ({
   onSendMessage,
+  repairDraft,
   isLoading,
   currentModel,
   extendedThinking,
@@ -58,6 +60,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const controlsRef = useRef<HTMLDivElement>(null);
   const reducedMotion = useReducedMotion();
+
+  useEffect(() => {
+    if (!repairDraft) return;
+    setInputText(repairDraft.text);
+    textareaRef.current?.focus();
+  }, [repairDraft]);
 
   const modeInfo = MODE_OPTIONS.find(mode => mode.id === workspaceMode) || MODE_OPTIONS[0];
   const ModeIcon = modeInfo.icon;

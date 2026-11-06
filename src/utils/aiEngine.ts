@@ -1,4 +1,5 @@
-import type { AppSettings, Artifact, Attachment, ModelId, ArtifactType } from '../types';
+import type { AppSettings, Artifact, Attachment, ModelId, ArtifactType, AgentTimelineEvent } from '../types';
+import { normalizeAgentTimelineEvent } from './agentTimeline';
 import { agentMemory } from './agentMemoryEngine';
 import { neonAuth } from '../lib/neonAuth';
 
@@ -9,6 +10,7 @@ export interface StreamCallbacks {
   onArtifactFound?: (artifact: Artifact) => void;
   onApprovalRequired?: (approval: { id: string; runId: string; toolCall?: { name: string; arguments: any }; reason?: string }) => void;
   onStatusUpdate?: (status: string) => void;
+  onAgentEvent?: (event: AgentTimelineEvent) => void;
   onRunStarted?: (runId: string) => void;
   onSourceAdded?: (source: any) => void;
   onCancelled?: () => void;
@@ -239,6 +241,10 @@ export async function streamAIResponse(
               }
               try {
                 const data = JSON.parse(dataStr);
+                if (wrappedCallbacks.onAgentEvent) {
+                  const timelineEvent = normalizeAgentTimelineEvent(currentEvent, data);
+                  if (timelineEvent) wrappedCallbacks.onAgentEvent(timelineEvent);
+                }
                 if (currentEvent === 'run_started' && data.runId) {
                   wrappedCallbacks.onRunStarted?.(data.runId);
                 } else if (currentEvent === 'source_added') {
