@@ -70,7 +70,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
       // 1. Verify message source matches active iframe window
-      if (iframeRef.current && event.source !== iframeRef.current.contentWindow) {
+      if (!iframeRef.current || event.source !== iframeRef.current.contentWindow) {
         return;
       }
       // 2. Validate payload structure
@@ -97,6 +97,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
   if (!artifact) return null;
 
   const currentContent = artifact.versions?.find(v => v.version === selectedVersion)?.content || artifact.content;
+  const isGenerating = adaptiveDock && !artifact.versions.some(v => v.version === artifact.version);
 
   const handleCopy = async () => {
     try {
@@ -295,7 +296,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                     <div className="flex items-center space-x-2">
                       <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                       <span className="font-medium tracking-tight text-claude-text-light dark:text-claude-text-dark text-[11px]">
-                        Live Execution Sandbox
+                        {isGenerating ? 'Preparing sandbox preview' : 'Live Execution Sandbox'}
                       </span>
                     </div>
                     <div className="flex items-center space-x-2">
@@ -319,15 +320,23 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                     </div>
                   </div>
 
-                  {/* Sandboxed iframe */}
-                  <iframe
-                    key={refreshKey}
-                    ref={iframeRef}
-                    srcDoc={getIframeSrcDoc()}
-                    sandbox="allow-scripts allow-modals allow-forms"
-                    className="w-full flex-1 border-0 bg-transparent"
-                    title={artifact.title}
-                  />
+                  {/* Never rebuild the live iframe against incomplete streaming source. */}
+                  {isGenerating ? (
+                    <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center text-claude-muted-light dark:text-claude-muted-dark" aria-live="polite">
+                      <span className="h-2.5 w-2.5 rounded-full bg-aira-blue animate-pulse" aria-hidden="true" />
+                      <p className="text-sm font-medium">Generating artifact...</p>
+                      <p className="max-w-xs text-xs leading-relaxed">{currentContent.length.toLocaleString()} characters received. The sandbox preview starts when generation completes; select Code to inspect the stream.</p>
+                    </div>
+                  ) : (
+                    <iframe
+                      key={refreshKey}
+                      ref={iframeRef}
+                      srcDoc={getIframeSrcDoc()}
+                      sandbox="allow-scripts allow-modals allow-forms"
+                      className="w-full flex-1 border-0 bg-transparent"
+                      title={artifact.title}
+                    />
+                  )}
 
                   {/* Console Drawer */}
                   <AnimatePresence>

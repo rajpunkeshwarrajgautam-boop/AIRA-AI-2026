@@ -96,6 +96,16 @@ export interface StreamingArtifactDetector {
   getActiveArtifact: () => Artifact | null;
 }
 
+const OPEN_ENVELOPES = ['<antArtifact', '<airaArtifact'];
+const CLOSE_ENVELOPES = ['</antArtifact>', '</airaArtifact>'];
+
+function partialEnvelopeTail(buffer: string, envelopes: string[]): number {
+  const lastBracket = buffer.lastIndexOf('<');
+  if (lastBracket < 0) return -1;
+  const tail = buffer.slice(lastBracket).toLowerCase();
+  return envelopes.some(envelope => envelope.toLowerCase().startsWith(tail)) ? lastBracket : -1;
+}
+
 export function createStreamingArtifactDetector(
   onArtifactStarted?: (artifact: Artifact) => void
 ): StreamingArtifactDetector {
@@ -116,8 +126,8 @@ export function createStreamingArtifactDetector(
 
           if (openTagIndex === -1) {
             // Check if there is a partial opening tag at the tail
-            const partialIndex = lookaheadBuffer.lastIndexOf('<');
-            if (partialIndex !== -1 && '<antArtifact'.startsWith(lookaheadBuffer.slice(partialIndex))) {
+            const partialIndex = partialEnvelopeTail(lookaheadBuffer, OPEN_ENVELOPES);
+            if (partialIndex !== -1) {
               textToEmit += lookaheadBuffer.slice(0, partialIndex);
               lookaheadBuffer = lookaheadBuffer.slice(partialIndex);
               break;
@@ -166,8 +176,8 @@ export function createStreamingArtifactDetector(
 
           if (!closeTagMatch || closeTagMatch.index === undefined) {
             // Check for partial closing tag at the end
-            const partialCloseIndex = lookaheadBuffer.lastIndexOf('<');
-            if (partialCloseIndex !== -1 && '</antArtifact>'.startsWith(lookaheadBuffer.slice(partialCloseIndex))) {
+            const partialCloseIndex = partialEnvelopeTail(lookaheadBuffer, CLOSE_ENVELOPES);
+            if (partialCloseIndex !== -1) {
               contentBuffer += lookaheadBuffer.slice(0, partialCloseIndex);
               lookaheadBuffer = lookaheadBuffer.slice(partialCloseIndex);
             } else {

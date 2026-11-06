@@ -1100,7 +1100,8 @@ function App() {
         projectContext || undefined,
         id,
         intent.capability === 'RESEARCH' ? 'RESEARCH' : undefined,
-        controller.signal
+        controller.signal,
+        ADAPTIVE_STUDIO_PREVIEW
       );
     } catch (err: any) {
       activeAbortControllerRef.current = null;
