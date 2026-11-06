@@ -21,6 +21,7 @@ export interface ModelInfo {
 export type ArtifactType = 
   | 'application/vnd.ant.code'
   | 'application/vnd.ant.react'
+  | 'application/vnd.ant.project'
   | 'image/svg+xml'
   | 'text/html'
   | 'text/markdown'

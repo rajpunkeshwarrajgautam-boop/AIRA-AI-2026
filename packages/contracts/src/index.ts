@@ -71,6 +71,7 @@ export const ExecutionTargetSchema = z.enum([
   'AGENT_PLANNER',
   'WORKFLOW_ENGINE',
   'AUTOMATION_ENGINE',
+  'APPLICATION_BUILDER',
   'CAPABILITY_NOT_READY'
 ]);
 export type ExecutionTarget = z.infer<typeof ExecutionTargetSchema>;
@@ -385,6 +386,7 @@ export const ArtifactSchema = z.object({
   type: z.enum([
     'application/vnd.ant.code',
     'application/vnd.ant.react',
+    'application/vnd.ant.project',
     'image/svg+xml',
     'text/html',
     'text/markdown',

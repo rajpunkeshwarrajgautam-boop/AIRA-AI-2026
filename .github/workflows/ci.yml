@@ -78,6 +78,9 @@ jobs:
           AIRA_SEMANTIC_SEARCH: 'false'
         run: npm run db:verify:deploy
 
+      - name: Durable application build queue certification
+        run: npm run test:app-builder-queue
+
       - name: Runtime verification
         run: npm test
 
@@ -168,10 +171,43 @@ jobs:
         run: npm run test:conversation-search-semantic
 
 
+  application-worker:
+    name: Isolated Application Worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Pull isolated Node runtime image
+        run: docker pull node:24-alpine
+
+      - name: Install Playwright Chromium for real preview interaction
+        run: npx playwright install --with-deps chromium
+
+      - name: Prefetch reviewed Three.js fixture into trusted offline cache
+        run: |
+          mkdir -p /tmp/aira-approved-npm-cache
+          npm cache add three@0.180.0 --cache /tmp/aira-approved-npm-cache --ignore-scripts --no-audit --no-fund
+
+      - name: Run real Docker application worker integration
+        env:
+          AIRA_WORKER_NPM_CACHE: /tmp/aira-approved-npm-cache
+        run: npm run test:app-builder
+
   certify:
     name: Main / PR certification
-    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
-    needs: [fast, semantic-search]
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/feat/')
+    needs: [fast, semantic-search, application-worker]
     runs-on: ubuntu-latest
     timeout-minutes: 40
     services:

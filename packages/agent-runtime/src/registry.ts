@@ -56,6 +56,9 @@ export class CapabilityRegistry {
         case 'WORKFLOW':
           target = 'WORKFLOW_ENGINE';
           break;
+        case 'APPLICATION_BUILD':
+          target = 'APPLICATION_BUILDER';
+          break;
       }
       return { target, capabilityId: readyCap.id, status: readyCap.status as 'READY' | 'PARTIAL' };
     }
