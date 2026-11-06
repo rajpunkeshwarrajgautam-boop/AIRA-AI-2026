@@ -19,10 +19,13 @@ import {
   ZoomOut,
   ChevronLeft,
   ChevronRight,
-  FolderGit2
+  FolderGit2,
+  Network
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { Artifact } from '../types';
+import type { AgentExecutionGraph } from '../types/executionGraph';
+import { AgentExecutionGraphView } from './AgentExecutionGraph';
 import { generateArtifactSandboxHtml } from '../utils/artifactSandbox';
 import { normalizeArtifactRuntimeError, type ArtifactRuntimeError } from '../utils/artifactRuntimeError';
 import { createRollbackRevision, diffArtifactLines } from '../utils/artifactRevisions';
@@ -47,6 +50,8 @@ interface ArtifactStudioProps {
   onSelectArtifact?: (artifact: Artifact) => void;
   activeProjectName?: string;
   onSaveToProject?: (artifact: Artifact) => void;
+  executionGraph?: AgentExecutionGraph | null;
+  onApproveTask?: (taskId: string, approvalId: string, decision: 'APPROVE' | 'REJECT') => void;
 }
 
 export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
@@ -59,8 +64,10 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
   onSelectArtifact,
   activeProjectName,
   onSaveToProject,
+  executionGraph,
+  onApproveTask,
 }) => {
-  const [activeTab, setActiveTab] = useState<'preview' | 'code' | 'diff'>('preview');
+  const [activeTab, setActiveTab] = useState<'preview' | 'code' | 'diff' | 'graph'>('preview');
   const [selectedVersion, setSelectedVersion] = useState<number>(1);
   const [isCopied, setIsCopied] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -297,6 +304,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                   { id: 'preview' as const, label: 'Preview', icon: Play },
                   { id: 'code' as const, label: 'Code', icon: Code },
                   ...(adaptiveDock && artifact.versions?.length > 1 ? [{ id: 'diff' as const, label: 'Diff', icon: Layers }] : []),
+                  ...(adaptiveDock && executionGraph ? [{ id: 'graph' as const, label: 'Graph', icon: Network }] : []),
                 ]).map(tab => {
                   const Icon = tab.icon;
                   const selected = activeTab === tab.id;
@@ -619,6 +627,21 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                       </div>
                     )) : <p className="p-4 text-stone-400">No differences from the earlier revision.</p>}
                   </div>
+                </motion.div>
+              ) : activeTab === 'graph' && executionGraph ? (
+                <motion.div key="graph" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex h-full w-full flex-col">
+                  <AgentExecutionGraphView
+                    graph={executionGraph}
+                    selectedArtifactId={artifact?.id}
+                    onSelectArtifact={(artId) => {
+                      const found = allArtifacts?.find(a => a.id === artId);
+                      if (found) {
+                        onSelectArtifact?.(found);
+                        setActiveTab('preview');
+                      }
+                    }}
+                    onApproveTask={onApproveTask}
+                  />
                 </motion.div>
               ) : (
                 /* Code View */

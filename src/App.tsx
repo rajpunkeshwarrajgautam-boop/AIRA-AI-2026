@@ -25,6 +25,8 @@ import { useAnimatedFavicon } from './utils/animatedFavicon';
 import { detectCapabilityIntent, executeVisionGeneration, createBackendAutomation, getVisionTariff } from './utils/capabilityDispatcher';
 import { AgentContextualPanel } from './components/AgentContextualPanel';
 import { AdaptiveStudioEmptyState } from './components/AdaptiveStudioEmptyState';
+import type { AgentExecutionGraph } from './types/executionGraph';
+import { applyExecutionGraphEvent } from './utils/executionGraphEngine';
 import './styles/adaptiveStudio.css';
 
 // Keep the verified legacy UI as the default. The opt-in shell only changes presentation.
@@ -143,6 +145,12 @@ function App() {
   const [conversationSearchSeed, setConversationSearchSeed] = useState('');
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [activeArtifact, setActiveArtifact] = useState<Artifact | null>(null);
+  const [activeExecutionGraph, setActiveExecutionGraph] = useState<AgentExecutionGraph | null>(() => {
+    if (typeof window !== 'undefined' && (window as any).__AIRA_PHASE3_INITIAL_GRAPH__) {
+      return (window as any).__AIRA_PHASE3_INITIAL_GRAPH__;
+    }
+    return null;
+  });
   const [isLoading, setIsLoading] = useState(false);
   const [sharedCopied, setSharedCopied] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -1094,6 +1102,22 @@ function App() {
               } : m),
             }));
           } : undefined,
+          onGraphEvent: ADAPTIVE_STUDIO_PREVIEW ? (type, data) => {
+            setActiveExecutionGraph(prev => {
+              const base = prev || {
+                graphId: 'graph_' + Date.now(),
+                runId: activeRunIdRef.current || 'run_' + Date.now(),
+                title: 'Agent Workflow Execution',
+                nodes: {},
+                waves: [],
+                state: 'RUNNING' as const,
+                totalTasks: 0,
+                completedTasks: 0,
+                failedTasks: 0
+              };
+              return applyExecutionGraphEvent(base, type, data);
+            });
+          } : undefined,
           onLatencyMetrics: metrics => {
             if (!settings.telemetryOptOut) {
               console.info('[AIRA Telemetry] Client observed latency metrics:', metrics);
@@ -1174,6 +1198,44 @@ function App() {
       }));
     }
   };
+
+  const handleSelectArtifactById = useCallback((artifactId: string) => {
+    const found = conversationArtifacts.find(a => a.id === artifactId);
+    if (found) {
+      setActiveArtifact(found);
+    }
+  }, [conversationArtifacts]);
+
+  const handleTaskApproval = useCallback(async (taskId: string, approvalId: string, decision: 'APPROVE' | 'REJECT') => {
+    setIsSubmittingApproval(true);
+    try {
+      const runId = activeExecutionGraph?.runId || activeRunIdRef.current || pendingApproval?.runId;
+      if (runId) {
+        await authenticatedApiFetch(`/api/runs/${runId}/approve`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            requestId: approvalId,
+            taskId,
+            decision: decision === 'APPROVE' ? 'APPROVE' : 'REJECT'
+          })
+        }).catch(() => {});
+      }
+      showToast(decision === 'APPROVE' ? 'Task execution approved.' : 'Task execution rejected.');
+      if (pendingApproval && (pendingApproval.id === approvalId || !approvalId)) {
+        setPendingApproval(null);
+      }
+      setActiveExecutionGraph(prev => prev ? applyExecutionGraphEvent(prev, 'approval.resolved', {
+        taskId,
+        approvalId,
+        decision: decision === 'APPROVE' ? 'APPROVED' : 'REJECTED'
+      }) : null);
+    } catch (e: any) {
+      showToast(`Approval error: ${e.message}`);
+    } finally {
+      setIsSubmittingApproval(false);
+    }
+  }, [activeExecutionGraph, pendingApproval, showToast]);
 
   const handleApprovalDecision = async (decision: 'APPROVE' | 'REJECT') => {
     if (!pendingApproval) return;
@@ -1445,7 +1507,13 @@ function App() {
         </div>
       </main>
 
-      {ADAPTIVE_STUDIO_PREVIEW && !activeArtifact && <AdaptiveStudioEmptyState />}
+      {ADAPTIVE_STUDIO_PREVIEW && !activeArtifact && (
+        <AdaptiveStudioEmptyState
+          executionGraph={activeExecutionGraph}
+          onSelectArtifact={handleSelectArtifactById}
+          onApproveTask={handleTaskApproval}
+        />
+      )}
 
       <React.Suspense fallback={null}>
         {activeArtifact && (
@@ -1480,6 +1548,8 @@ function App() {
             onSelectArtifact={ADAPTIVE_STUDIO_PREVIEW ? setActiveArtifact : undefined}
             activeProjectName={ADAPTIVE_STUDIO_PREVIEW ? currentProject?.name : undefined}
             onSaveToProject={ADAPTIVE_STUDIO_PREVIEW ? handleSaveArtifactToProject : undefined}
+            executionGraph={ADAPTIVE_STUDIO_PREVIEW ? activeExecutionGraph : undefined}
+            onApproveTask={ADAPTIVE_STUDIO_PREVIEW ? handleTaskApproval : undefined}
           />
         )}
         {isAgentPanelOpen && (

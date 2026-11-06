@@ -11,6 +11,7 @@ export interface StreamCallbacks {
   onApprovalRequired?: (approval: { id: string; runId: string; toolCall?: { name: string; arguments: any }; reason?: string }) => void;
   onStatusUpdate?: (status: string) => void;
   onAgentEvent?: (event: AgentTimelineEvent) => void;
+  onGraphEvent?: (type: string, data: any) => void;
   onRunStarted?: (runId: string) => void;
   onSourceAdded?: (source: any) => void;
   onCancelled?: () => void;
@@ -244,6 +245,9 @@ export async function streamAIResponse(
                 if (wrappedCallbacks.onAgentEvent) {
                   const timelineEvent = normalizeAgentTimelineEvent(currentEvent, data);
                   if (timelineEvent) wrappedCallbacks.onAgentEvent(timelineEvent);
+                }
+                if (wrappedCallbacks.onGraphEvent) {
+                  wrappedCallbacks.onGraphEvent(currentEvent, data);
                 }
                 if (currentEvent === 'run_started' && data.runId) {
                   wrappedCallbacks.onRunStarted?.(data.runId);
