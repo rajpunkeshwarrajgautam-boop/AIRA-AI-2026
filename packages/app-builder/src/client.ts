@@ -81,6 +81,20 @@ export class ApplicationBuildClient {
     if (content.byteLength > 1_500_000) throw new Error('BUILD_SOURCE_TOO_LARGE');
     return Buffer.from(content);
   }
+  async compiledArchive(jobId: string, ownerId: string): Promise<Buffer | undefined> {
+    if (!/^[0-9a-f-]{36}$/.test(jobId)) throw new Error('INVALID_BUILD_JOB_ID');
+    const res = await fetch(this.config.url + '/v1/jobs/' + jobId + '/compiled', {
+      headers: { Authorization: 'Bearer ' + this.config.token, 'x-aira-owner': ownerId },
+      signal: AbortSignal.timeout(25_000)
+    });
+    if (res.status === 404) return undefined;
+    if (!res.ok) throw new Error('BUILD_COMPILED_EXPORT_FAILED_' + res.status);
+    const declared = Number(res.headers.get('content-length') || '0');
+    if (declared > 12_000_000) throw new Error('BUILD_COMPILED_ARCHIVE_TOO_LARGE');
+    const bytes = Buffer.from(await res.arrayBuffer());
+    if (bytes.length > 12_000_000) throw new Error('BUILD_COMPILED_ARCHIVE_TOO_LARGE');
+    return bytes;
+  }
   async inspect(jobId: string, ownerId: string): Promise<BuildJob> {
     const result = await this.request('/v1/jobs/' + encodeURIComponent(jobId), ownerId);
     return result as BuildJob;

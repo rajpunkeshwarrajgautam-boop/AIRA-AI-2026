@@ -12,6 +12,9 @@ import { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
 import { ApplicationBuildClient } from '../../../packages/app-builder/src/client.js';
 import { PostgresApplicationBuildQueue } from '../../../packages/app-builder/src/queue.js';
 import { PostgresBuildArchiveStore } from '../../../packages/app-builder/src/artifact-store.js';
+import { PostgresObjectRefStore } from '../../../packages/app-builder/src/object-ref-store.js';
+import { objectStoreFromEnvironment } from '../../../packages/app-builder/src/object-store.js';
+import { PreviewGrantStore } from '../../../packages/app-builder/src/preview-grants.js';
 import { AutomationEngine } from '../../../packages/automation/src/index.js';
 import { PostgresAgentRepository, PostgresRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
 import { PostgresAutomationRepository, PostgresAutomationRunRepository } from '../../../packages/automation/src/repositories.js';
@@ -355,16 +358,79 @@ app.get('/api/app-builder/queue/:id/source', async (req: Request, res: Response)
         !principal.scopes?.includes('projects.write')) {
       return res.status(403).json({ error: 'PROJECT_READ_PERMISSION_DENIED' });
     }
-    const record = await new PostgresBuildArchiveStore().get(req.params.id, principal.userId);
-    if (!record) return res.status(404).json({ error: 'BUILD_SOURCE_NOT_FOUND' });
+    const reference = await new PostgresObjectRefStore().get(req.params.id, principal.userId, 'source');
+    let source: Buffer;
+    let sha256: string;
+    if (reference) {
+      const store = objectStoreFromEnvironment();
+      if (!store) return res.status(503).json({ error: 'OBJECT_STORE_NOT_CONFIGURED' });
+      source = await store.get(reference);
+      sha256 = reference.sha256;
+    } else {
+      const record = await new PostgresBuildArchiveStore().get(req.params.id, principal.userId);
+      if (!record) return res.status(404).json({ error: 'BUILD_SOURCE_NOT_FOUND' });
+      source = record.archive;
+      sha256 = record.sha256;
+    }
     res.setHeader('Content-Type', 'application/gzip');
     res.setHeader('Content-Disposition', 'attachment; filename="aira-project-source.tar.gz"');
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Aira-Archive-Sha256', record.sha256);
-    return res.end(record.archive);
+    res.setHeader('X-Aira-Archive-Sha256', sha256);
+    return res.end(source);
   } catch {
     return res.status(503).json({ error: 'BUILD_SOURCE_UNAVAILABLE' });
+  }
+});
+
+// Explicitly opt-in remote preview grants. The user must be authenticated,
+// and untrusted preview content must live on a separate registrable domain.
+app.post('/api/app-builder/queue/:id/preview', async (req: Request, res: Response) => {
+  if (process.env.AIRA_PREVIEW_GATEWAY_ENABLED !== 'true') {
+    return res.status(503).json({ error: 'PREVIEW_GATEWAY_DISABLED' });
+  }
+  const trustedOrigin = process.env.AIRA_PREVIEW_APP_ORIGIN;
+  if (!trustedOrigin || req.headers.origin !== trustedOrigin) {
+    return res.status(403).json({ error: 'PREVIEW_ORIGIN_DENIED' });
+  }
+  const principal = req.principal!;
+  if (!principal.scopes?.includes('*') && !principal.scopes?.includes('projects.read') &&
+      !principal.scopes?.includes('projects.write')) {
+    return res.status(403).json({ error: 'PROJECT_READ_PERMISSION_DENIED' });
+  }
+  const publicOrigin = process.env.AIRA_PREVIEW_GATEWAY_ORIGIN || '';
+  try {
+    const url = new URL(publicOrigin);
+    if (url.protocol !== 'https:' || url.pathname !== '/' || url.search || url.hash) {
+      return res.status(503).json({ error: 'PREVIEW_ORIGIN_NOT_CONFIGURED' });
+    }
+    const ticket = await new PreviewGrantStore().issue(req.params.id, principal.userId);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(201).json({
+      previewUrl: url.origin + '/p/' + ticket + '/index.html',
+      expiresInSeconds: 300
+    });
+  } catch {
+    return res.status(404).json({ error: 'PREVIEW_NOT_AVAILABLE' });
+  }
+});
+app.post('/api/app-builder/queue/:id/preview/revoke', async (req: Request, res: Response) => {
+  const trustedOrigin = process.env.AIRA_PREVIEW_APP_ORIGIN;
+  if (!trustedOrigin || req.headers.origin !== trustedOrigin) {
+    return res.status(403).json({ error: 'PREVIEW_ORIGIN_DENIED' });
+  }
+  const principal = req.principal!;
+  if (!principal.scopes?.includes('*') && !principal.scopes?.includes('projects.write')) {
+    return res.status(403).json({ error: 'PROJECT_WRITE_PERMISSION_DENIED' });
+  }
+  const queue = await new PostgresApplicationBuildQueue().get(req.params.id, principal.userId);
+  if (!queue) return res.status(404).json({ error: 'BUILD_JOB_NOT_FOUND' });
+  try {
+    const revoked = await new PreviewGrantStore().revoke(queue.id, principal.userId);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).json({ revoked });
+  } catch {
+    return res.status(503).json({ error: 'PREVIEW_REVOKE_UNAVAILABLE' });
   }
 });
 

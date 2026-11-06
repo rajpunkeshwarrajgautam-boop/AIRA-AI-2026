@@ -87,6 +87,15 @@ jobs:
       - name: Immutable application artifact archive certification
         run: npm run test:app-builder-artifacts
 
+      - name: Private object storage integration
+        run: npm run test:app-builder-objects
+
+      - name: Compiled preview and grant certification
+        run: npm run test:app-builder-preview-grants
+
+      - name: Isolated compiled preview HTTP integration
+        run: npm run test:app-builder-preview-http
+
       - name: Runtime verification
         run: npm test
 

@@ -32,6 +32,9 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
   const [showConsole, setShowConsole] = useState(false);
   const [consoleLogs, setConsoleLogs] = useState<Array<{ type: string; message: string }>>([]);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [grantedPreview, setGrantedPreview] = useState<{ key: string; url: string } | null>(null);
+  const [previewError, setPreviewError] = useState('');
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
@@ -47,6 +50,8 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
       setActiveTab('code');
     }
     setConsoleLogs([]);
+    setGrantedPreview(null);
+    setPreviewError('');
   }
 
   if (!artifact) return null;
@@ -56,13 +61,15 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
   const projectInfo = (() => {
     if (artifact.type !== 'application/vnd.ant.project') return null;
     try {
-      const value = JSON.parse(currentContent) as { previewUrl?: string; jobId?: string; queueJobId?: string; archiveSha256?: string; status?: string };
+      const value = JSON.parse(currentContent) as { previewUrl?: string; jobId?: string; queueJobId?: string; archiveSha256?: string; compiledSha256?: string; status?: string };
       if (!value.jobId || !/^[a-f0-9-]{36}$/.test(value.jobId) || value.status !== 'BUILD_PASSED') return null;
       return value;
     } catch { return null; }
   })();
   const projectPreviewUrl = (() => {
     try {
+      if (grantedPreview?.key === artifactKey) return grantedPreview.url;
+      if (projectInfo?.compiledSha256 && projectInfo?.queueJobId) return null;
       if (!projectInfo?.previewUrl) return null;
       const url = new URL(projectInfo.previewUrl);
       const allowedOrigin = import.meta.env.VITE_AIRA_PREVIEW_ORIGIN as string | undefined;
@@ -72,6 +79,31 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
     } catch { return null; }
   })();
 
+
+  const openDurablePreview = async () => {
+    if (!projectInfo?.queueJobId || !/^[a-f0-9-]{36}$/.test(projectInfo.queueJobId)) return;
+    setPreviewLoading(true);
+    setPreviewError('');
+    try {
+      const response = await fetch(
+        '/api/app-builder/queue/' + encodeURIComponent(projectInfo.queueJobId) + '/preview',
+        { method: 'POST', credentials: 'same-origin' }
+      );
+      if (!response.ok) throw new Error('Preview is not configured or the build is unavailable');
+      const data = await response.json() as { previewUrl: string };
+      const uri = new URL(data.previewUrl);
+      const allowedOrigin = import.meta.env.VITE_AIRA_PREVIEW_ORIGIN as string | undefined;
+      if (!allowedOrigin || uri.origin !== new URL(allowedOrigin).origin ||
+          uri.origin === window.location.origin || uri.protocol !== 'https:') {
+        throw new Error('Untrusted preview origin');
+      }
+      setGrantedPreview({ key: artifactKey || '', url: uri.href });
+    } catch (error) {
+      setPreviewError(error instanceof Error ? error.message : 'Preview unavailable');
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
 
   const handleCopy = async () => {
     try {
@@ -299,7 +331,14 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                   {/* Live iframe */}
                   {artifact.type === 'application/vnd.ant.project' && !projectPreviewUrl ? (
                     <div className="p-6 text-sm text-amber-500" role="status">
-                      Isolated build preview is unavailable or its configured origin is not trusted. This is not a product certification.
+                      <p>Isolated build preview requires an authorized, separately hosted gateway. This is not product certification.</p>
+                      {projectInfo?.queueJobId && projectInfo.compiledSha256 && (
+                        <button type="button" onClick={openDurablePreview} disabled={previewLoading}
+                          className="mt-3 rounded-md border px-3 py-2 text-sm">
+                          {previewLoading ? 'Authorizing preview…' : 'Open compiled project preview'}
+                        </button>
+                      )}
+                      {previewError && <p className="mt-2" role="alert">{previewError}</p>}
                     </div>
                   ) : (
                     <iframe
