@@ -7,7 +7,10 @@ export interface ArtifactRuntimeError {
 
 function safeText(raw: unknown, limit: number): string | undefined {
   if (typeof raw !== 'string') return undefined;
-  const value = raw.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, limit);
+  const value = Array.from(raw.slice(0, limit * 2), character => {
+    const code = character.charCodeAt(0);
+    return code < 32 || code === 127 ? ' ' : character;
+  }).join('').trim().slice(0, limit);
   return value || undefined;
 }
 

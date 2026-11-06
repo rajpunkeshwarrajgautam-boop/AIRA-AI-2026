@@ -51,7 +51,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   workspaceMode,
   onWorkspaceModeChange,
 }) => {
-  const [inputText, setInputText] = useState('');
+  const [inputText, setInputText] = useState(repairDraft?.text || '');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [styleMode, setStyleMode] = useState<(typeof STYLE_OPTIONS)[number]['id']>('Normal');
   const [showStyleMenu, setShowStyleMenu] = useState(false);
@@ -60,12 +60,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const controlsRef = useRef<HTMLDivElement>(null);
   const reducedMotion = useReducedMotion();
-
-  useEffect(() => {
-    if (!repairDraft) return;
-    setInputText(repairDraft.text);
-    textareaRef.current?.focus();
-  }, [repairDraft]);
 
   const modeInfo = MODE_OPTIONS.find(mode => mode.id === workspaceMode) || MODE_OPTIONS[0];
   const ModeIcon = modeInfo.icon;
@@ -218,6 +212,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         </AnimatePresence>
 
         <textarea
+          autoFocus={Boolean(repairDraft)}
           ref={textareaRef}
           value={inputText}
           onChange={event => setInputText(event.target.value)}

@@ -113,6 +113,39 @@ try {
     // Sparticuz single-process Chromium can exit on context teardown; closing
     // the whole browser below avoids a false negative on the next viewport.
   }
+  if (!baseline) {
+    // Exercise the real client SSE handler using an isolated, deterministic stream.
+    // This verifies wiring, not authenticated remote-runtime execution.
+    const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
+    await context.addInitScript(seedFixture, { v1: codeV1, v2: codeV2 });
+    const page = await context.newPage();
+    await page.route('**/api/chat/stream', async route => {
+      const lines = [
+        'event: run_started\ndata: {"runId":"fixture-run"}',
+        'event: workflow_started\ndata: {"id":"fixture-workflow"}',
+        'event: workflow_step_started\ndata: {"stepId":"step-1"}',
+        'event: tool_started\ndata: {"callId":"call-1","name":"read_file","arguments":{"secret":"DO_NOT_DISPLAY"}}',
+        'event: tool_completed\ndata: {"callId":"call-1","name":"read_file","output":"PRIVATE_TOOL_OUTPUT"}',
+        'event: workflow_step_completed\ndata: {"stepId":"step-1"}',
+        'event: workflow_completed\ndata: {}',
+        'event: content_delta\ndata: {"text":"Agent workflow finished."}',
+        'event: done\ndata: [DONE]',
+      ];
+      await route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' }, body: lines.join('\n\n') + '\n\n' });
+    });
+    await page.goto(`${base}/?c=phase5-fixture-conversation`, { waitUntil: 'domcontentloaded' });
+    await page.locator('main textarea').fill('Run fixture workflow');
+    await page.locator('main textarea').press('Enter');
+    await page.getByText('Agent workflow finished.').waitFor({ timeout: 15000 });
+    const timeline = page.locator('[data-testid="agent-execution-timeline"]').last();
+    await timeline.locator('summary').click();
+    const trace = await timeline.innerText();
+    assert.match(trace, /Tool read_file/);
+    assert.match(trace, /Step step-1/);
+    assert.match(trace, /Multi-step workflow/);
+    assert.doesNotMatch(trace, /DO_NOT_DISPLAY|PRIVATE_TOOL_OUTPUT/);
+    console.log('PASS mocked SSE through real stream handler: lifecycle visualization and data minimization');
+  }
   console.log(baseline ? 'PHASE5_DEFAULT_OFF_BROWSER_PASS' : 'PHASE5_LOCAL_BROWSER_SMOKE_PASS');
 } finally {
   await browser?.close();

@@ -46,6 +46,7 @@ Status: **Milestones 5.1–5.4 implementation candidates; local browser smoke ga
 - Production-style build with preview flag unset: PASS (existing large-chunk advisory).
 - Milestones 5.1–5.4 parser, timeline, runtime error, revision, and existing sandbox regression tests: 27/27 PASS.
 - Local Chromium browser smoke: desktop `1600×1000`, tablet `768×1024`, mobile `390×844`, and small mobile `320×700` PASS for responsive overflow, timeline, Diff, nonce/source-spoof rejection, error relay, reviewable repair draft, and non-destructive restore.
+- A deterministic mocked SSE stream, injected at `/api/chat/stream` while running the actual client stream handler, produced verified workflow/step/tool activity in the conversation UI; raw tool arguments and outputs were absent from the rendered timeline. This is not a substitute for live authenticated integration.
 - Preview-disabled local browser smoke at `1600×1000`: PASS for legacy shell, no Agent timeline, no Diff tab, and no repair action.
 - Reproduction: `node scripts/adaptive-phase5-browser-acceptance.mjs`; baseline `PHASE5_FLAG_OFF=true PHASE5_PORT=4186 node scripts/adaptive-phase5-browser-acceptance.mjs`. On Windows, the script defaults to Playwright's Microsoft Edge channel; elsewhere it uses the installed headless Chromium bundle.
 

@@ -1404,6 +1404,7 @@ function App() {
           )}
 
           <ChatInput
+            key={ADAPTIVE_STUDIO_PREVIEW ? (repairDraft?.id ?? 'normal-composer') : 'normal-composer'}
             onSendMessage={handleSendMessage}
             repairDraft={ADAPTIVE_STUDIO_PREVIEW ? repairDraft : undefined}
             isLoading={isLoading}
