@@ -521,6 +521,10 @@ test.describe('AIRA AI 2026 — Production Worker Architecture & Activation Guar
     // 7. Internal Network Architecture
     assert.match(content, /sandbox-net:\r?\n\s+internal:\s*true/, 'sandbox-net must be configured with internal: true');
     assert.match(content, /networks:\r?\n\s+default:\r?\n\s+sandbox-net:/, 'Both default and sandbox-net networks must be declared');
+
+    // Both images must run natively on the explicitly selected Linux host architecture.
+    assert.strictEqual((content.match(/platform: \$\{AIRA_TARGET_PLATFORM:-linux\/arm64\}/g) || []).length, 2);
+    assert.strictEqual((content.match(/- \$\{AIRA_TARGET_PLATFORM:-linux\/arm64\}/g) || []).length, 2);
   });
 
   // =========================================================================
@@ -579,6 +583,7 @@ test.describe('AIRA AI 2026 — Production Worker Architecture & Activation Guar
     assert.ok(parsed.DATABASE_URL.includes('-pooler'), 'DATABASE_URL placeholder must route to -pooler');
     assert.ok(parsed.DATABASE_URL.includes(CANONICAL_PRODUCTION_NEON_ENDPOINT_ID));
     assert.strictEqual(parsed.WORKER_CONCURRENCY, '1');
+    assert.strictEqual(parsed.AIRA_TARGET_PLATFORM, 'linux/arm64');
     assert.strictEqual(parsed.AIRA_REQUIRE_CONTAINER_SANDBOX, 'true');
     assert.strictEqual(parsed.AIRA_ALLOW_LOCAL_SANDBOX, 'false');
 
@@ -586,6 +591,25 @@ test.describe('AIRA AI 2026 — Production Worker Architecture & Activation Guar
     assert.strictEqual(report.stage, 'STAGE_A_STANDBY');
     assert.strictEqual(report.valid, true);
     assert.strictEqual(report.errors.length, 0);
+  });
+
+  test('Production platform selection: accepts dedicated AMD64 laptop and rejects unknown architectures', () => {
+    const laptop = validateProductionEnvironmentConfig({
+      ...validProdEnvVars,
+      AIRA_PRODUCTION_WORKER_ENABLED: 'false',
+      AIRA_TARGET_PLATFORM: 'linux/amd64',
+      WORKER_ID: 'worker_acer_nitro5_production_01'
+    }, { expectedStage: 'A' });
+    assert.strictEqual(laptop.valid, true);
+    assert.strictEqual(laptop.summary.targetPlatform, 'linux/amd64');
+    assert.strictEqual(laptop.stage, 'STAGE_A_STANDBY');
+
+    const invalid = validateProductionEnvironmentConfig({
+      ...validProdEnvVars,
+      AIRA_TARGET_PLATFORM: 'linux/s390x'
+    });
+    assert.strictEqual(invalid.valid, false);
+    assert.ok(invalid.errors.some(e => e.includes('AIRA_TARGET_PLATFORM')));
   });
 
   test('Environment Validator: Validates Stage B active environment and flags violations', () => {
