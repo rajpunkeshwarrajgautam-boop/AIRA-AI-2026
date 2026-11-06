@@ -1,0 +1,23 @@
+[Unit]
+Description=AIRA Specialist Worker Daemon (Staging)
+After=network.target
+
+[Service]
+Type=simple
+User=aira
+Group=aira
+WorkingDirectory=/opt/aira-worker
+EnvironmentFile=/etc/aira/staging-worker.env
+ExecStart=/usr/bin/docker run --rm --name aira-specialist-worker-staging \
+    --env-file /etc/aira/staging-worker.env \
+    -p 127.0.0.1:8080:8080 \
+    --cpus="0.5" \
+    --memory="1024m" \
+    aira-specialist-worker:staging
+Restart=always
+RestartSec=5s
+KillSignal=SIGTERM
+TimeoutStopSec=30s
+
+[Install]
+WantedBy=multi-user.target

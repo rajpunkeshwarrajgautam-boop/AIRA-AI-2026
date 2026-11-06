@@ -93,6 +93,25 @@ jobs:
           test/workspace-authority-migration-guard.test.ts
           test/m2a-durable-specialist-execution.test.ts
           test/m2a-production-activation-security.test.ts
+
+      - name: Autonomous intelligence platform and adversarial security certification
+        run: >-
+          npx tsx --test
+          test/autonomous-adversarial-scenarios.test.ts
+          test/autonomous-persistence-failclosed.test.ts
+          test/autonomous-platform-e2e.test.ts
+          test/autonomous-worker-recovery.test.ts
+          test/autonomous-heartbeat-failclosed.test.ts
+          test/autonomous-content-concurrency.test.ts
+          test/browser-persistence-recovery.test.ts
+          test/python-sandbox-containment.test.ts
+          test/sandbox-selection-reconciliation.test.ts
+          test/mcp-wire-integration.test.ts
+          test/specialist-orchestration-depth.test.ts
+          test/brainv2-durable-memory-lifecycle.test.ts
+          test/application-ui-integration.test.ts
+          test/artifact-sandbox-containment.test.ts
+          test/autonomous-api-worker-integration.test.ts
       - name: Post-merge runtime and type safety regression
         run: npm run test:pr118:regression
 
