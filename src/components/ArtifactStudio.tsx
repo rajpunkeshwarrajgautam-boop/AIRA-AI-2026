@@ -11,7 +11,15 @@ import {
   RotateCw, 
   Terminal, 
   Layers,
-  ExternalLink
+  ExternalLink,
+  Monitor,
+  Tablet,
+  Smartphone,
+  ZoomIn,
+  ZoomOut,
+  ChevronLeft,
+  ChevronRight,
+  FolderGit2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { Artifact } from '../types';
@@ -35,6 +43,10 @@ interface ArtifactStudioProps {
   /** Opt-in layout alignment only; the existing sandbox and artifact actions are unchanged. */
   adaptiveDock?: boolean;
   onRepairArtifact?: (error: ArtifactRuntimeError, title: string) => void;
+  allArtifacts?: Artifact[];
+  onSelectArtifact?: (artifact: Artifact) => void;
+  activeProjectName?: string;
+  onSaveToProject?: (artifact: Artifact) => void;
 }
 
 export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
@@ -43,6 +55,10 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
   onUpdateArtifact,
   adaptiveDock = false,
   onRepairArtifact,
+  allArtifacts,
+  onSelectArtifact,
+  activeProjectName,
+  onSaveToProject,
 }) => {
   const [activeTab, setActiveTab] = useState<'preview' | 'code' | 'diff'>('preview');
   const [selectedVersion, setSelectedVersion] = useState<number>(1);
@@ -51,6 +67,9 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
   const [showConsole, setShowConsole] = useState(false);
   const [consoleLogs, setConsoleLogs] = useState<Array<{ type: string; message: string }>>([]);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [devicePreset, setDevicePreset] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
+  const [zoomScale, setZoomScale] = useState<number>(1);
+  const [isSavedToProject, setIsSavedToProject] = useState(false);
 
   const [securityNotice, setSecurityNotice] = useState<string | null>(null);
   const [runtimeError, setRuntimeError] = useState<ArtifactRuntimeError | null>(null);
@@ -78,6 +97,9 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
     }
     setConsoleLogs([]);
     setRuntimeError(null);
+    setDevicePreset('desktop');
+    setZoomScale(1);
+    setIsSavedToProject(false);
   }
 
   // Cross-frame console log receiver with strict verification (CRITICAL FIX B)
@@ -173,6 +195,11 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
     return generateArtifactSandboxHtml(artifact, currentContent, isDark, activeNonceRef.current);
   };
 
+  const handleZoomIn = () => setZoomScale(z => Math.min(1.5, Math.round((z + 0.25) * 100) / 100));
+  const handleZoomOut = () => setZoomScale(z => Math.max(0.5, Math.round((z - 0.25) * 100) / 100));
+  const handleZoomReset = () => setZoomScale(1);
+  const currentArtifactIndex = (allArtifacts && artifact) ? allArtifacts.findIndex(a => a.id === artifact.id) : -1;
+
   const lineCount = currentContent.split('\n').length;
 
   return (
@@ -193,9 +220,42 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                 <Layers className="w-4 h-4" />
               </div>
               <div className="min-w-0">
-                <h2 className="text-[13px] font-semibold text-claude-text-light dark:text-claude-text-dark truncate tracking-tight">
-                  {artifact.title}
-                </h2>
+                <div className="flex items-center gap-2 min-w-0">
+                  <h2 className="text-[13px] font-semibold text-claude-text-light dark:text-claude-text-dark truncate tracking-tight">
+                    {artifact.title}
+                  </h2>
+                  {adaptiveDock && allArtifacts && allArtifacts.length > 1 && (
+                    <div className="flex items-center gap-1 rounded-md border border-claude-border-light bg-claude-surface2-light p-0.5 text-xs dark:border-claude-border-dark dark:bg-claude-surface2-dark" data-testid="artifact-carousel">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const prev = (currentArtifactIndex - 1 + allArtifacts.length) % allArtifacts.length;
+                          onSelectArtifact?.(allArtifacts[prev]);
+                        }}
+                        aria-label="Previous artifact"
+                        data-testid="artifact-prev"
+                        className="rounded p-0.5 text-claude-muted-light hover:text-claude-terracotta dark:text-claude-muted-dark"
+                      >
+                        <ChevronLeft className="h-3 w-3" />
+                      </button>
+                      <span className="px-1 font-mono text-[10px] text-claude-text-light dark:text-claude-text-dark" data-testid="artifact-carousel-indicator">
+                        {currentArtifactIndex + 1} of {allArtifacts.length}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const next = (currentArtifactIndex + 1) % allArtifacts.length;
+                          onSelectArtifact?.(allArtifacts[next]);
+                        }}
+                        aria-label="Next artifact"
+                        data-testid="artifact-next"
+                        className="rounded p-0.5 text-claude-muted-light hover:text-claude-terracotta dark:text-claude-muted-dark"
+                      >
+                        <ChevronRight className="h-3 w-3" />
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <div className="flex items-center space-x-2 mt-0.5">
                   <span className="text-[10px] uppercase font-mono tracking-wider text-claude-terracotta font-medium">
                     {artifact.language || artifact.type.split('/').pop() || 'artifact'}
@@ -267,6 +327,22 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
 
               {/* Action Buttons */}
               <div className="flex items-center gap-0.5">
+                {adaptiveDock && onSaveToProject && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSaveToProject(artifact);
+                      setIsSavedToProject(true);
+                      setTimeout(() => setIsSavedToProject(false), 2000);
+                    }}
+                    className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-aira-blue hover:bg-aira-blue/10 dark:text-blue-400"
+                    data-testid="save-to-project-btn"
+                    title={activeProjectName ? `Save to ${activeProjectName}` : 'Save to Project'}
+                  >
+                    {isSavedToProject ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <FolderGit2 className="h-3.5 w-3.5" />}
+                    <span className="hidden sm:inline">{isSavedToProject ? 'Saved' : 'Project'}</span>
+                  </button>
+                )}
                 {adaptiveDock && onUpdateArtifact && selectedVersion !== artifact.version && (
                   <button
                     type="button"
@@ -385,6 +461,87 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                     </div>
                   </div>
 
+                  {/* Adaptive Canvas Controls Bar (Phase 4) */}
+                  {adaptiveDock && (
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-claude-border-light bg-claude-surface2-light/60 px-3 py-1.5 text-xs dark:border-claude-border-dark dark:bg-[#181816]" data-testid="artifact-canvas-controls">
+                      {/* Device Presets */}
+                      <div className="flex items-center gap-1 rounded-md border border-claude-border-light bg-claude-surface-light p-0.5 dark:border-claude-border-dark dark:bg-claude-surface-dark" role="radiogroup" aria-label="Device viewport preview">
+                        <button
+                          type="button"
+                          role="radio"
+                          aria-checked={devicePreset === 'desktop'}
+                          data-testid="device-preset-desktop"
+                          onClick={() => setDevicePreset('desktop')}
+                          className={`flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${devicePreset === 'desktop' ? 'bg-aira-blue text-white' : 'text-claude-muted-light hover:text-claude-text-light dark:text-claude-muted-dark dark:hover:text-white'}`}
+                          title="Fluid desktop view"
+                        >
+                          <Monitor className="h-3 w-3" />
+                          <span className="hidden sm:inline">Desktop</span>
+                        </button>
+                        <button
+                          type="button"
+                          role="radio"
+                          aria-checked={devicePreset === 'tablet'}
+                          data-testid="device-preset-tablet"
+                          onClick={() => setDevicePreset('tablet')}
+                          className={`flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${devicePreset === 'tablet' ? 'bg-aira-blue text-white' : 'text-claude-muted-light hover:text-claude-text-light dark:text-claude-muted-dark dark:hover:text-white'}`}
+                          title="Tablet frame (768px)"
+                        >
+                          <Tablet className="h-3 w-3" />
+                          <span className="hidden sm:inline">Tablet</span>
+                        </button>
+                        <button
+                          type="button"
+                          role="radio"
+                          aria-checked={devicePreset === 'mobile'}
+                          data-testid="device-preset-mobile"
+                          onClick={() => setDevicePreset('mobile')}
+                          className={`flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${devicePreset === 'mobile' ? 'bg-aira-blue text-white' : 'text-claude-muted-light hover:text-claude-text-light dark:text-claude-muted-dark dark:hover:text-white'}`}
+                          title="Mobile frame (375px)"
+                        >
+                          <Smartphone className="h-3 w-3" />
+                          <span className="hidden sm:inline">Mobile</span>
+                        </button>
+                      </div>
+
+                      {/* Zoom Controls */}
+                      <div className="flex items-center gap-1" role="group" aria-label="Canvas zoom controls">
+                        <button
+                          type="button"
+                          onClick={handleZoomOut}
+                          disabled={zoomScale <= 0.5}
+                          data-testid="zoom-out"
+                          className="rounded p-1 text-claude-muted-light hover:bg-claude-surface2-light hover:text-claude-text-light disabled:opacity-40 dark:text-claude-muted-dark dark:hover:bg-claude-surface2-dark"
+                          title="Zoom out (min 50%)"
+                          aria-label="Zoom out"
+                        >
+                          <ZoomOut className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleZoomReset}
+                          data-testid="zoom-reset"
+                          className="min-w-[42px] px-1 font-mono text-[11px] font-medium text-claude-text-light hover:underline dark:text-claude-text-dark"
+                          title="Reset zoom to 100%"
+                          aria-label="Reset zoom"
+                        >
+                          {Math.round(zoomScale * 100)}%
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleZoomIn}
+                          disabled={zoomScale >= 1.5}
+                          data-testid="zoom-in"
+                          className="rounded p-1 text-claude-muted-light hover:bg-claude-surface2-light hover:text-claude-text-light disabled:opacity-40 dark:text-claude-muted-dark dark:hover:bg-claude-surface2-dark"
+                          title="Zoom in (max 150%)"
+                          aria-label="Zoom in"
+                        >
+                          <ZoomIn className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Never rebuild the live iframe against incomplete streaming source. */}
                   {isGenerating ? (
                     <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center text-claude-muted-light dark:text-claude-muted-dark" aria-live="polite">
@@ -393,14 +550,29 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                       <p className="max-w-xs text-xs leading-relaxed">{currentContent.length.toLocaleString()} characters received. The sandbox preview starts when generation completes; select Code to inspect the stream.</p>
                     </div>
                   ) : (
-                    <iframe
-                      key={refreshKey}
-                      ref={iframeRef}
-                      srcDoc={getIframeSrcDoc()}
-                      sandbox="allow-scripts allow-modals allow-forms"
-                      className="w-full flex-1 border-0 bg-transparent"
-                      title={artifact.title}
-                    />
+                    <div className="flex-1 w-full h-full overflow-auto bg-stone-900/30 dark:bg-black/30 flex flex-col items-center justify-start p-1 sm:p-2" data-testid="artifact-viewport-container">
+                      <div
+                        style={{
+                          width: devicePreset === 'mobile' ? '375px' : devicePreset === 'tablet' ? '768px' : '100%',
+                          maxWidth: '100%',
+                          height: '100%',
+                          transform: zoomScale !== 1 ? `scale(${zoomScale})` : undefined,
+                          transformOrigin: 'top center',
+                          transition: 'width 0.2s ease, transform 0.2s ease',
+                        }}
+                        className={`flex flex-col flex-1 h-full bg-transparent ${devicePreset !== 'desktop' ? 'border border-claude-border-dark/60 rounded-xl shadow-2xl overflow-hidden' : ''}`}
+                        data-testid="artifact-device-frame"
+                      >
+                        <iframe
+                          key={refreshKey}
+                          ref={iframeRef}
+                          srcDoc={getIframeSrcDoc()}
+                          sandbox="allow-scripts allow-modals allow-forms"
+                          className="w-full flex-1 border-0 bg-transparent"
+                          title={artifact.title}
+                        />
+                      </div>
+                    </div>
                   )}
 
                   {/* Console Drawer */}

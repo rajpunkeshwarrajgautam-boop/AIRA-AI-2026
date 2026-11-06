@@ -34,6 +34,8 @@ interface ChatMessageProps {
   onCancelVisionProposal?: (proposalId: string) => void;
   isConfirmingAutomation?: boolean;
   isAuthorizingVision?: boolean;
+  onApprovalDecision?: (decision: 'APPROVE' | 'REJECT', eventId?: string) => void;
+  isSubmittingApproval?: boolean;
 }
 
 export interface ProvenanceBadgeInfo {
@@ -111,6 +113,8 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
   onCancelVisionProposal,
   isConfirmingAutomation,
   isAuthorizingVision,
+  onApprovalDecision,
+  isSubmittingApproval = false,
 }) => {
   const [copied, setCopied] = useState(false);
   const [richCopyStatus, setRichCopyStatus] = useState<'rich' | 'fallback' | 'failed' | null>(null);
@@ -228,22 +232,62 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                 </summary>
                 <ol className="mt-2 space-y-1.5" aria-label="Verified agent execution events">
                   {message.agentEvents!.map(event => (
-                    <li key={event.id} className="flex flex-wrap items-center justify-between gap-2 text-claude-muted-light dark:text-claude-muted-dark">
-                      <span className="min-w-0 break-all">{event.label}</span>
-                      <span
-                        data-agent-status={event.status}
-                        className={`shrink-0 rounded-full px-2 py-0.5 font-medium ${
-                          event.status === 'completed'
-                            ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
-                            : event.status === 'failed'
-                            ? 'bg-rose-500/10 text-rose-700 dark:text-rose-400'
-                            : event.status === 'waiting'
-                            ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400'
-                            : 'bg-aira-blue/10 text-aira-blue dark:text-blue-400'
-                        }`}
-                      >
-                        {event.status}
-                      </span>
+                    <li key={event.id} className="flex flex-col gap-1 text-claude-muted-light dark:text-claude-muted-dark">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="min-w-0 break-all">{event.label}</span>
+                        <span
+                          data-agent-status={event.status}
+                          className={`shrink-0 rounded-full px-2 py-0.5 font-medium ${
+                            event.status === 'completed'
+                              ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+                              : event.status === 'failed'
+                              ? 'bg-rose-500/10 text-rose-700 dark:text-rose-400'
+                              : event.status === 'waiting'
+                              ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400'
+                              : 'bg-aira-blue/10 text-aira-blue dark:text-blue-400'
+                          }`}
+                        >
+                          {event.status}
+                        </span>
+                      </div>
+                      {(event.kind === 'approval' || event.status === 'waiting') && (
+                        <div
+                          className="mt-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-claude-text-light dark:text-claude-text-dark"
+                          data-testid="hitl-approval-card"
+                          role="region"
+                          aria-label="Pending tool execution approval"
+                        >
+                          <div className="flex items-center justify-between gap-2 mb-1.5">
+                            <span className="font-semibold text-amber-700 dark:text-amber-400">Action Authorization Required</span>
+                            <span className="rounded bg-amber-500/20 px-1.5 py-0.5 font-mono text-[10px] text-amber-800 dark:text-amber-300">
+                              {event.label}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mb-2">
+                            This tool request changes persistent state or executes side-effects. Explicit approval is required.
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              data-testid="hitl-approve-btn"
+                              disabled={isSubmittingApproval}
+                              onClick={() => onApprovalDecision?.('APPROVE', event.id)}
+                              className="rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-500 transition-colors disabled:opacity-50"
+                            >
+                              Approve Execution
+                            </button>
+                            <button
+                              type="button"
+                              data-testid="hitl-reject-btn"
+                              disabled={isSubmittingApproval}
+                              onClick={() => onApprovalDecision?.('REJECT', event.id)}
+                              className="rounded-md bg-zinc-200 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-300 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700 transition-colors disabled:opacity-50"
+                            >
+                              Reject
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </li>
                   ))}
                 </ol>

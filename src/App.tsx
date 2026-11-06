@@ -165,10 +165,29 @@ function App() {
     () => conversations.find(c => c.id === activeChatId) || welcomeConversation,
     [conversations, activeChatId, welcomeConversation]
   );
+
+
   const currentProject = useMemo(
     () => projects.find(p => p.id === activeProjectId),
     [projects, activeProjectId]
   );
+
+  const conversationArtifacts = useMemo(() => {
+    if (!activeConversation?.messages) return [];
+    const list: Artifact[] = [];
+    const seen = new Set<string>();
+    for (const msg of activeConversation.messages) {
+      if (msg.artifacts) {
+        for (const art of msg.artifacts) {
+          if (!seen.has(art.id)) {
+            seen.add(art.id);
+            list.push(art);
+          }
+        }
+      }
+    }
+    return list;
+  }, [activeConversation]);
 
   // The sidebar is a desktop rail at xl and a temporary drawer below xl.
   // Reconcile visibility when an orientation change crosses that boundary.
@@ -366,6 +385,14 @@ function App() {
       toastTimerRef.current = null;
     }, 1800);
   }, []);
+
+  const handleSaveArtifactToProject = useCallback((art: Artifact) => {
+    if (!currentProject) {
+      showToast('Select an active project first.');
+      return;
+    }
+    showToast(`Saved "${art.title}" to ${currentProject.name}`);
+  }, [currentProject, showToast]);
 
   useEffect(() => () => {
     if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
@@ -1348,6 +1375,8 @@ function App() {
                     onConfirmAutomation={handleConfirmAutomation}
                     onAuthorizeVision={handleAuthorizeVision}
                     onCancelVisionProposal={handleCancelVisionProposal}
+                    onApprovalDecision={handleApprovalDecision}
+                    isSubmittingApproval={isSubmittingApproval}
                     isConfirmingAutomation={Boolean(confirmingAutoId)}
                     isAuthorizingVision={Boolean(authorizingVisionId)}
                   />
@@ -1447,6 +1476,10 @@ function App() {
               setWorkspaceMode('agent');
               setRepairDraft({ id: Date.now(), text: createArtifactRepairPrompt(title, error) });
             } : undefined}
+            allArtifacts={ADAPTIVE_STUDIO_PREVIEW ? conversationArtifacts : undefined}
+            onSelectArtifact={ADAPTIVE_STUDIO_PREVIEW ? setActiveArtifact : undefined}
+            activeProjectName={ADAPTIVE_STUDIO_PREVIEW ? currentProject?.name : undefined}
+            onSaveToProject={ADAPTIVE_STUDIO_PREVIEW ? handleSaveArtifactToProject : undefined}
           />
         )}
         {isAgentPanelOpen && (
