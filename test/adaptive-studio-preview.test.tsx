@@ -8,7 +8,7 @@ import { AdaptiveStudioEmptyState } from '../src/components/AdaptiveStudioEmptyS
 test('Adaptive Studio is opt-in and legacy mode remains the default', () => {
   const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
   assert.match(appSource, /import\.meta\.env\.VITE_ADAPTIVE_STUDIO_PREVIEW === 'true'/);
-  assert.match(appSource, /ADAPTIVE_STUDIO_PREVIEW && !activeArtifact && <AdaptiveStudioEmptyState \/>/);
+  assert.match(appSource, /ADAPTIVE_STUDIO_PREVIEW && !activeArtifact && \(\s*<AdaptiveStudioEmptyState/);
   assert.match(appSource, /activeArtifact &&\s*\(?\s*<ArtifactStudio\s+artifact=\{activeArtifact\}\s+adaptiveDock=\{ADAPTIVE_STUDIO_PREVIEW\}/);
   const artifactSource = readFileSync(new URL('../src/components/ArtifactStudio.tsx', import.meta.url), 'utf8');
   assert.match(artifactSource, /adaptiveDock = false/);

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { 
   Code, 
   Play, 
@@ -20,12 +20,19 @@ import {
   ChevronLeft,
   ChevronRight,
   FolderGit2,
+  FolderTree,
   Network
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { Artifact } from '../types';
 import type { AgentExecutionGraph } from '../types/executionGraph';
+import type { MultiFileArtifactBundle } from '../types/multiFileArtifact';
 import { AgentExecutionGraphView } from './AgentExecutionGraph';
+import { WorkspaceFileExplorer } from './WorkspaceFileExplorer';
+import { generateMultiFileArtifactSandboxHtml } from '../utils/multiFileSandbox';
+import { adaptSingleFileArtifactToBundle } from '../utils/artifactBundleEngine';
+import { generateProjectZipArchive } from '../utils/artifactZipExporter';
+import { syncBundleToWorkspace } from '../utils/artifactWorkspaceSync';
 import { generateArtifactSandboxHtml } from '../utils/artifactSandbox';
 import { normalizeArtifactRuntimeError, type ArtifactRuntimeError } from '../utils/artifactRuntimeError';
 import { createRollbackRevision, diffArtifactLines } from '../utils/artifactRevisions';
@@ -51,6 +58,8 @@ interface ArtifactStudioProps {
   activeProjectName?: string;
   onSaveToProject?: (artifact: Artifact) => void;
   executionGraph?: AgentExecutionGraph | null;
+  bundle?: MultiFileArtifactBundle | null;
+  onSelectFile?: (filePath: string) => void;
   onApproveTask?: (taskId: string, approvalId: string, decision: 'APPROVE' | 'REJECT') => void;
 }
 
@@ -65,6 +74,8 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
   activeProjectName,
   onSaveToProject,
   executionGraph,
+  bundle: explicitBundle,
+  onSelectFile,
   onApproveTask,
 }) => {
   const [activeTab, setActiveTab] = useState<'preview' | 'code' | 'diff' | 'graph'>('preview');
@@ -77,6 +88,22 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
   const [devicePreset, setDevicePreset] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
   const [zoomScale, setZoomScale] = useState<number>(1);
   const [isSavedToProject, setIsSavedToProject] = useState(false);
+  const [showFileExplorer, setShowFileExplorer] = useState(false);
+  const [isSyncingWorkspace, setIsSyncingWorkspace] = useState(false);
+  const [syncSuccess, setSyncSuccess] = useState(false);
+
+  const activeBundle = useMemo<MultiFileArtifactBundle | null>(() => {
+    if (explicitBundle) return explicitBundle;
+    if (!artifact) return null;
+    if (artifact.bundle) return artifact.bundle;
+    return adaptSingleFileArtifactToBundle(artifact);
+  }, [explicitBundle, artifact]);
+
+  const defaultEntryPath = activeBundle ? (activeBundle.entryPoint || Object.keys(activeBundle.files)[0] || '') : '';
+  const [userSelectedFilePath, setUserSelectedFilePath] = useState<string | null>(null);
+  const selectedFilePath = (userSelectedFilePath && activeBundle?.files[userSelectedFilePath])
+    ? userSelectedFilePath
+    : defaultEntryPath;
 
   const [securityNotice, setSecurityNotice] = useState<string | null>(null);
   const [runtimeError, setRuntimeError] = useState<ArtifactRuntimeError | null>(null);
@@ -107,6 +134,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
     setDevicePreset('desktop');
     setZoomScale(1);
     setIsSavedToProject(false);
+    setUserSelectedFilePath(null);
   }
 
   // Cross-frame console log receiver with strict verification (CRITICAL FIX B)
@@ -197,8 +225,47 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
     setTimeout(() => URL.revokeObjectURL(url), 60000);
   };
 
+  const handleExportZip = () => {
+    if (!activeBundle || !artifact) return;
+    try {
+      const zipBytes = generateProjectZipArchive(activeBundle);
+      const blob = new Blob([zipBytes.buffer as ArrayBuffer], { type: 'application/zip' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${artifact.title.toLowerCase().replace(/[^a-z0-9]/g, '-')}-project.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err || 'Failed to export ZIP');
+      setSecurityNotice(`ZIP export error: ${msg}`);
+    }
+  };
+
+  const handleSyncWorkspace = async () => {
+    if (!activeBundle) return;
+    setIsSyncingWorkspace(true);
+    try {
+      const result = await syncBundleToWorkspace(activeBundle, activeProjectName ? `proj_${activeProjectName}` : undefined);
+      if (result.success) {
+        setSyncSuccess(true);
+        setTimeout(() => setSyncSuccess(false), 2500);
+      } else {
+        setSecurityNotice(`Workspace sync error: ${result.error || 'Failed to sync'}`);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err || 'Failed to sync workspace');
+      setSecurityNotice(`Workspace sync error: ${msg}`);
+    } finally {
+      setIsSyncingWorkspace(false);
+    }
+  };
+
   const getIframeSrcDoc = () => {
     const isDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
+    if (adaptiveDock && activeBundle && Object.keys(activeBundle.files).length > 1) {
+      return generateMultiFileArtifactSandboxHtml(activeBundle, isDark, activeNonceRef.current);
+    }
     return generateArtifactSandboxHtml(artifact, currentContent, isDark, activeNonceRef.current);
   };
 
@@ -207,7 +274,13 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
   const handleZoomReset = () => setZoomScale(1);
   const currentArtifactIndex = (allArtifacts && artifact) ? allArtifacts.findIndex(a => a.id === artifact.id) : -1;
 
-  const lineCount = currentContent.split('\n').length;
+  const selectedFile = (adaptiveDock && activeBundle && selectedFilePath)
+    ? activeBundle.files[selectedFilePath]
+    : null;
+  const displayedContent = selectedFile ? selectedFile.content : currentContent;
+  const displayedFilePath = selectedFile ? selectedFile.path : '';
+  const displayedLanguage = selectedFile ? selectedFile.kind : (artifact.language || 'text');
+  const lineCount = displayedContent.split('\n').length;
 
   return (
     <AnimatePresence>
@@ -335,6 +408,27 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
 
               {/* Action Buttons */}
               <div className="flex items-center gap-0.5">
+                {adaptiveDock && (
+                  <button
+                    type="button"
+                    onClick={() => setShowFileExplorer(!showFileExplorer)}
+                    data-testid="toggle-file-explorer"
+                    className={`flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium transition-colors ${
+                      showFileExplorer
+                        ? 'bg-claude-terracotta/20 text-claude-terracotta border border-claude-terracotta/30'
+                        : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800/40'
+                    }`}
+                    title={showFileExplorer ? 'Hide project file tree' : 'Show project file tree'}
+                  >
+                    <FolderTree className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">Files</span>
+                    {activeBundle && (
+                      <span className="font-mono text-[10px] text-stone-400">
+                        ({Object.keys(activeBundle.files).length})
+                      </span>
+                    )}
+                  </button>
+                )}
                 {adaptiveDock && onSaveToProject && (
                   <button
                     type="button"
@@ -425,8 +519,23 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
           )}
 
           {/* Main Studio Body */}
-          <div className="flex-1 relative overflow-hidden bg-claude-surface-light dark:bg-[#141413] flex flex-col">
-            <AnimatePresence mode="wait">
+          <div className="flex-1 relative overflow-hidden bg-claude-surface-light dark:bg-[#141413] flex">
+            {adaptiveDock && showFileExplorer && activeBundle && (
+              <WorkspaceFileExplorer
+                bundle={activeBundle}
+                activeFilePath={selectedFilePath}
+                onSelectFile={(path) => {
+                  setUserSelectedFilePath(path);
+                  onSelectFile?.(path);
+                }}
+                onExportZip={handleExportZip}
+                onSyncWorkspace={handleSyncWorkspace}
+                isSyncing={isSyncingWorkspace}
+                syncSuccess={syncSuccess}
+              />
+            )}
+            <div className="flex-1 relative overflow-hidden flex flex-col">
+              <AnimatePresence mode="wait">
               {activeTab === 'preview' ? (
                 <motion.div 
                   key="preview" 
@@ -654,7 +763,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                   className="w-full h-full flex flex-col bg-[#141413] text-[#D4D4D4] font-mono text-[13px] leading-[1.6]"
                 >
                   <div className="h-8 px-4 flex items-center justify-between border-b border-stone-800 text-[11px] text-stone-500 select-none">
-                    <span>{lineCount} lines • {artifact.language || 'text'}</span>
+                    <span data-testid="code-file-indicator">{displayedFilePath ? `${displayedFilePath} • ` : ''}{lineCount} lines • {displayedLanguage}</span>
                     <span>Read-only</span>
                   </div>
                   <div className="flex-1 overflow-y-auto p-4 flex">
@@ -664,12 +773,13 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                       ))}
                     </div>
                     <pre className="whitespace-pre overflow-x-auto flex-1 font-mono text-xs text-stone-200">
-                      <code>{currentContent}</code>
+                      <code>{displayedContent}</code>
                     </pre>
                   </div>
                 </motion.div>
               )}
             </AnimatePresence>
+            </div>
           </div>
         </motion.aside>
       )}

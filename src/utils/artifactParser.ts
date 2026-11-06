@@ -1,4 +1,6 @@
 import type { Artifact, ArtifactType, ArtifactVersion } from '../types';
+import type { MultiFileArtifactBundle } from '../types/multiFileArtifact';
+import { createMultiFileBundle } from './artifactBundleEngine';
 
 export interface ParsedArtifactAttributes {
   id: string;
@@ -49,6 +51,37 @@ export interface ExtractedArtifactsResult {
   artifacts: Artifact[];
 }
 
+export function extractBundleFromArtifactContent(
+  id: string,
+  title: string,
+  content: string
+): MultiFileArtifactBundle | undefined {
+  const fileTagRegex = /<(?:airaFile|file)\s+path=["']([^"']+)["'](?:\s+entry=["']?(true|false)["']?)?>([\s\S]*?)<\/(?:airaFile|file)>/gi;
+  const files: Array<{ path: string; content: string; isEntry?: boolean }> = [];
+  let match: RegExpExecArray | null;
+
+  while ((match = fileTagRegex.exec(content)) !== null) {
+    const filePath = match[1];
+    const isEntry = match[2] === 'true';
+    const fileContent = match[3];
+    files.push({ path: filePath, content: fileContent, isEntry });
+  }
+
+  if (files.length > 0) {
+    try {
+      return createMultiFileBundle({
+        id,
+        title,
+        files,
+      });
+    } catch {
+      return undefined;
+    }
+  }
+
+  return undefined;
+}
+
 export function extractArtifactsFromText(text: string): ExtractedArtifactsResult {
   if (!text) {
     return { cleanedText: '', artifacts: [] };
@@ -66,6 +99,7 @@ export function extractArtifactsFromText(text: string): ExtractedArtifactsResult
     const content = match[2] || '';
 
     const { id, title, type, language } = parseAttributesFromTag(attributesStr);
+    const bundle = extractBundleFromArtifactContent(id, title, content);
 
     const artifact: Artifact = {
       id,
@@ -81,6 +115,7 @@ export function extractArtifactsFromText(text: string): ExtractedArtifactsResult
           timestamp: Date.now(),
         },
       ],
+      bundle,
     };
 
     artifacts.push(artifact);
@@ -187,7 +222,7 @@ export function createStreamingArtifactDetector(
 
             if (activeArtifact) {
               activeArtifact.content = contentBuffer;
-              artifactUpdate = { ...activeArtifact };
+            artifactUpdate = { ...activeArtifact };
             }
             break;
           }
@@ -205,6 +240,7 @@ export function createStreamingArtifactDetector(
                 timestamp: Date.now(),
               },
             ];
+            activeArtifact.bundle = extractBundleFromArtifactContent(activeArtifact.id, activeArtifact.title, contentBuffer);
             artifactUpdate = { ...activeArtifact };
           }
 
@@ -229,6 +265,7 @@ export function createStreamingArtifactDetector(
             timestamp: Date.now(),
           },
         ];
+        activeArtifact.bundle = extractBundleFromArtifactContent(activeArtifact.id, activeArtifact.title, contentBuffer);
         finalArtifact = { ...activeArtifact };
       } else {
         remainingText = lookaheadBuffer;

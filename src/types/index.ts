@@ -1,4 +1,6 @@
 
+import type { MultiFileArtifactBundle } from './multiFileArtifact';
+
 export type WorkspaceMode = 'chat' | 'agent';
 
 export type CapabilityType = 'research' | 'vision' | 'builder' | 'agents' | 'automations' | 'library' | 'general';
@@ -43,6 +45,7 @@ export interface Artifact {
   content: string;
   version: number;
   versions: ArtifactVersion[];
+  bundle?: MultiFileArtifactBundle;
 }
 
 export interface Attachment {
