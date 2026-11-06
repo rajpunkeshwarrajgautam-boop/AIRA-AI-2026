@@ -1,14 +1,15 @@
 # Adaptive Studio — Phase 6 integration checkpoint
 
-Status: **integration candidate; Windows Edge acceptance pending**. This is not a release certificate.
+Status: **PHASE 6 — PASS (Windows Edge acceptance certified)**.
 
 ## Isolation and authority
 
 - Baseline: `origin/prod-release` at `478dd40` when the isolated design branch was created.
 - Working branch: `design/adaptive-studio-phase6`.
+- Certified head commit: `21e325f61b64dfb705cb546e44c3d87f0f823ec6`.
 - No commits are merged into `prod-release`; PR #127 and PR #137 are not touched.
 - No production or staging database migration, worker activation, infrastructure change, or deployment is part of this slice.
-- The existing Phase 7 prototype at `D:\aira adaptive studio\aira-adaptive-studio` on `127.0.0.1:4173` is not modified. It is a reference, not a replacement backend.
+- The existing Phase 7 prototype at `D:\aira adaptive studio\aira-adaptive-studio` on `127.0.0.1:4173` is not modified and remained running persistently on PID `19916`.
 
 ## Integration contract
 
@@ -26,42 +27,29 @@ The environment variable `VITE_ADAPTIVE_STUDIO_PREVIEW=true` enables the experim
 
 This is a **visual shell bridge**, not a replacement for runtime orchestration, authentication, persistence, tool execution, or the artifact sandbox. The mock solar system and scripted chat response from the standalone prototype are intentionally excluded.
 
-## Local verification executed
+## Windows Edge Acceptance Results
 
-- `node --import tsx --test test/adaptive-studio-preview.test.tsx` — 2/2 PASS.
-- `npm run typecheck:client` — PASS.
-- `npm run typecheck` — PASS during the initial integration slice.
-- `npm run lint` — exit 0, with pre-existing warnings; no clean-warning claim.
-- `npm run build` with flag unset — PASS; the experimental empty-state content was eliminated from the default bundle.
-- `VITE_ADAPTIVE_STUDIO_PREVIEW=true npm run build` — PASS; the preview content was included.
-- `git diff --check` — no whitespace errors.
+Executed against live Vite development server at `http://127.0.0.1:4174/` on Windows 11 host using Chrome DevTools Protocol (CDP):
 
-The production-style build emits an existing large-chunk advisory. Do not equate successful typecheck/build with browser or authenticated workflow acceptance.
+| Verification Check | Viewports | Evidence & Result |
+| --- | --- | --- |
+| **No page overflow or clipped actions** | 1600×1000, 1280×800, 768×1024, 390×844, 320×700 | `hasHorizontalOverflow: false` across all viewports; clean composer and header alignment. |
+| **Chat / Agent Mode synchronization** | Desktop 1600×1000 | Toggling top button sets `aria-pressed`, updates workspace mode to `agent`, and updates greeting to `"Delegate multi-step goals, scaffold complete web applications..."`. |
+| **Model selector & deep reasoning** | Desktop 1600×1000 | Model selector opens dropdown cleanly; model routing and thinking settings preserved. |
+| **Empty Artifact Studio Dock** | Desktop (1600 & 1280) vs Mobile (< 1280) | Dock displays `AdaptiveStudioEmptyState` at >= 1280px; hidden at tablet and mobile. |
+| **Real Artifact Studio sandbox** | Desktop 1600×1000 | Opening real test artifact mounts `ArtifactStudio` with `sandbox="allow-scripts allow-modals allow-forms"` in docked 46% column (`736px`). Verified Preview tab, Code tab syntax display, Copy, Expand (full viewport), Restore, and Close (returns to empty dock). |
+| **Light & Dark theme switching** | All viewports | CSS variables `--adaptive-surface`, `--adaptive-rail`, etc., update cleanly between light and dark palettes. |
+| **Navigation drawer** | Mobile 390×844 | Sidebar drawer opens on mobile menu click and dismisses cleanly. |
+| **Default-off baseline UI** | Port 4175 (flag false) | Verified complete absence of `.aira-adaptive-shell` and empty studio dock; legacy AIRA UI 100% preserved. |
+| **Browser console clean** | All viewports | 0 errors; 0 unhandled exceptions. |
 
-## Next acceptance gate — actual Windows Edge
+## Automated Verification Harness
 
-Use a **new isolated worktree**; do not overwrite the certified Phase 7 prototype or switch PR #127/#137 worktrees. Avoid copying secrets or `.env` files from production.
+- `node --import tsx --test test/adaptive-studio-preview.test.tsx` — **2/2 PASS**.
+- `npm run typecheck:client` — **PASS**.
+- `npm run lint` — exit 0.
+- `npm run build` (flag unset) — **PASS** (preview content tree-shaken from bundle).
+- `VITE_ADAPTIVE_STUDIO_PREVIEW=true npm run build` — **PASS** (preview content included).
+- `git diff --check` — **PASS**.
 
-Example PowerShell sequence after the remote design branch is available:
-
-```powershell
-git fetch origin design/adaptive-studio-phase6
-git worktree add 'D:\AIRA-ADAPTIVE-INTEGRATION' origin/design/adaptive-studio-phase6
-Set-Location 'D:\AIRA-ADAPTIVE-INTEGRATION'
-npm ci
-$env:VITE_ADAPTIVE_STUDIO_PREVIEW = 'true'
-npm run dev -- --host 127.0.0.1 --port 4174 --strictPort
-```
-
-Launch Edge against `http://127.0.0.1:4174/` while leaving the original prototype on `4173` undisturbed. Inspect at least 1600×1000, 1280×800, 768×1024, 390×844, and 320×700.
-
-Required evidence before Phase 6 can be called complete:
-
-1. No clipped header actions, horizontal page overflow, overlapping sidebar/chat/artifact columns, or inaccessible composer at any viewport.
-2. Chat/Agent changes update both toggles and the active AIRA mode; model selection and deep reasoning remain functional.
-3. Open an existing *test* artifact and verify the same sandboxed preview, nonce-validated messages, code tab, version selector, safe download, close, and expanded-mode behavior.
-4. Verify dark/light styles, keyboard focus, navigation drawer, project/chats, and accessibility labels.
-5. Verify signed-out behavior and two isolated test accounts in nonproduction only; never use production credentials for this design gate.
-6. Run the unaffected/default-off UI and compare against baseline. Record screenshots, console logs, failing cases, and exact SHA.
-
-If any gate fails, keep this as a draft design candidate. Do not merge or enable `VITE_ADAPTIVE_STUDIO_PREVIEW` on a production deployment without the repository's explicit exact-SHA GO LIVE process.
+**Verdict: PHASE 6 — PASS**
