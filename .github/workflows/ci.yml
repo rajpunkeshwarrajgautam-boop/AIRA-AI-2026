@@ -81,6 +81,9 @@ jobs:
       - name: Runtime verification
         run: npm test
 
+      - name: Cloudflare scheduled dispatcher fail-closed verification
+        run: node --test test/cloudflare-scheduler.test.mjs
+
       - name: Reminder scheduling and cron single-claim regression
         run: npm run test:automation-reminders
 
