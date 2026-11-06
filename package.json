@@ -22,6 +22,7 @@
     "test:router": "npx tsx test/intent-router.ts",
     "test:agent-tool-selection": "npx tsx test/agent-tool-selection.test.ts",
     "test:mission-planner": "npx tsx test/mission-planner.test.ts",
+    "test:agent-v2": "npx tsx test/agent-v2-security.test.ts",
     "test:workflow": "npx tsx test/workflow-engine.ts",
     "test:tools": "npx tsx test/tool-gateway-certification.ts",
     "test:browser": "npx tsx test/browser-execution-suite.ts",
