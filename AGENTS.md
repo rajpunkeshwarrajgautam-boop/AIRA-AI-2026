@@ -3,29 +3,56 @@
 This applies to automated coding agents, including Antigravity, Agency Agents,
 ChatGPT Work, CI assistants and other development agents in this repository.
 
-## Strict deployment authority
-- NEVER infer permission to merge to `prod-release`, apply production Neon
-  migrations, change live aliases, or move domains from a previous deployment.
-- "Auto-proceeded", an internal review policy, a simulated approval, CI PASS,
-  "Ready", or an unverified agent report are NOT user authorization.
-- Obtain a fresh, explicit **GO LIVE** instruction for the exact SHA and
-  target environment before every production-changing operation.
-- Pause and request approval again if the SHA, database migration, project,
-  domain or release target changes after authorization.
-- Production approvals do not cascade to a later unrelated pull request.
-- Production operations require a verified rollback target and passing,
-  exact-commit CI and staging acceptance.
-- Default to isolated branches and Neon staging for all code/database tests.
-- Do not force push, use `git reset --hard` on someone else's workspace,
-  bypass CI, weaken auth, or expose sensitive credentials.
+## Agent autonomy and scoped production authority
+Agents may complete an owner-assigned engineering task end to end within its stated
+scope, without repeatedly asking for approval for each command. This includes
+repository inspection, feature-branch edits and pushes, CI, staging and disposable
+database rehearsals, read-only production diagnostics, release documentation,
+backup integrity verification, and other non-destructive preflight work.
+Preserve staging and production isolation, secrets, and existing workloads.
+
+A task request, CI PASS, an internal review, an agent report, or "Ready" is
+**not** by itself authorization for a live production mutation.
+
+The sole release authority is repository owner `rajpunkeshwarrajgautam-boop`.
+Before the **first** production-changing action in a cutover, obtain one
+explicit, bounded owner authorization identifying:
+- The exact PR number, full 40-character candidate HEAD SHA, target branch,
+  environment, project/database identity, and deployment domain.
+- Each authorized production operation in order, including the specific
+  migration filenames, infrastructure resources, and worker activation stage.
+- The verified backup/restore evidence, rollback target and stop conditions.
+- Any spending limit, cloud account upgrade, deletion or irreversible cleanup
+  explicitly authorized; such actions are never implied by a software GO LIVE.
+- The authorization window and the responsible operator.
+
+Once owner authorization is recorded, agents may perform **only its enumerated
+operations in the approved order** without requesting redundant permission at
+each substep. Mandatory workflow attestation and trusted App-issued commit status
+must pass **before PR merge and production deployment**. Branch protections,
+preflight health checks, and stop conditions remain binding at every stage.
+Do not bypass a guard merely because a human message appears to approve release.
+A later pull request or release SHA never inherits an earlier approval.
+
+**Pause and obtain new explicit authority** if the SHA changes, the authorized
+window expires, the target environment/project/domain or migration set changes,
+the cost/scope grows, a destructive action was not authorized, the backup or
+rollback plan fails, or any release gate becomes red. Never silently expand
+authorization or substitute another infrastructure target.
+
+Do not force push, use `git reset --hard` on someone else's workspace,
+bypass CI, weaken authentication, disable release gates, or expose credentials.
 
 ## Release protocol
 1. Inspect the live production SHA, branch, project and previous deployment.
 2. Prepare a reviewable PR against `prod-release`.
 3. Obtain successful mandatory CI and independent staging/browser acceptance.
 4. Document the exact PR/head SHA, Vercel deployment, migrations and risks.
-5. Request and wait for explicit GO LIVE approval.
-6. Execute only those authorized changes, monitor post-release, report outcomes.
+5. Present one exact-SHA, bounded GO LIVE decision covering the intended cutover;
+   include any production migrations, worker activation, and deployment steps.
+6. After valid owner approval, execute only the listed operations in order.
+   Verify the live dual-evidence release gate before merging; monitor
+   post-release and report outcomes. Stop at the first failed gate.
 7. Roll back when authorized by incident policy or when the user expressly
    requests rollback. Never claim success before verification.
 
@@ -68,6 +95,19 @@ Because Vercel triggers a production deployment automatically upon receiving any
 3. Manual promotion via Vercel CLI (`vercel promote`) is strictly forbidden for agents.
 4. **Separation of unit tests from live authorization**:
    - `npm run test:release-auth:unit` runs in Fast CI to verify the authorization rules engine deterministically. Passing this test does NOT grant GO LIVE authorization.
-   - Authoritative live verification is executed via `npm run verify:release-auth -- --pr <num> --sha <sha>`, which verifies GitHub API dual evidence: authentic owner workflow run (`rajpunkeshwarrajgautam-boop`), matching commit status `release/go-live-authorized=success` from trusted issuer `github-actions[bot]`, verified provenance linkage (`target_url` points to run ID on authorized repository), temporal correlation anti-replay check (<=15m delta), and <24h freshness. Active revocation is available via `npm run revoke:release-auth`.
-5. An agent must STOP and present all verified evidence, awaiting human authorization.
+   - Authoritative live verification is executed via `npm run verify:release-auth -- --pr <num> --sha <sha>`, which verifies GitHub API dual evidence: authentic owner workflow run (`rajpunkeshwarrajgautam-boop`), matching commit status `release/go-live-authorized=success` from the dedicated GitHub App issuer specified by `AIRA_RELEASE_GATE_APP_BOT_LOGIN` (for example, `aira-release-gate[bot]`; **not** `github-actions[bot]`), verified provenance linkage (`target_url` points to run ID on authorized repository), temporal correlation anti-replay check (<=15m delta), and <24h freshness. Active revocation is available via `npm run revoke:release-auth`.
+5. An agent must STOP at the first unauthorized production mutation and present
+   verified evidence. Following valid, bounded authorization, execute the
+   approved cutover steps without redundant re-approval; stop on any material
+   deviation or failed gate.
 
+## Agent skills
+
+### Issue tracker
+GitHub Issues is the primary tracker for this repository. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+Standard five-role triage vocabulary mapped to AIRA development workflows. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+Single-context domain modeling with root `GLOSSARY.md` and `docs/adr/`. See `docs/agents/domain.md`.
