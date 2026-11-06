@@ -8,7 +8,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { once } from 'node:events';
-import { DockerProjectWorker, validateProjectPath } from '../packages/app-builder/src/worker.js';
+import { DockerProjectWorker, validateProjectPath, stableBuildJobId } from '../packages/app-builder/src/worker.js';
+import { ApplicationBuildClient } from '../packages/app-builder/src/client.js';
 
 const root = await mkdtemp(join(tmpdir(), 'aira-build-e2e-'));
 const config = {
@@ -121,6 +122,52 @@ try {
 
   const forbidden = await fetch('http://127.0.0.1:4102/p/' + success.previewTicket + '/job-state.json');
   assert.equal(forbidden.status, 404);
+
+  // Real worker submission idempotency: retries after lost HTTP responses
+  // must reuse exactly the same build, even after the worker reloads state.
+  const submissionKey = 'queue:24e6b8ab-1473-4e75-aa45-02cbe9607532:attempt:1';
+  const keyedPayload = { ...payload, idempotencyKey: submissionKey };
+  const keyed = await fetch('http://127.0.0.1:4101/v1/jobs', {
+    method: 'POST', headers: auth, body: JSON.stringify(keyedPayload)
+  });
+  assert.equal(keyed.status, 202);
+  const keyedId = (await keyed.json()).jobId as string;
+  assert.equal(keyedId, stableBuildJobId('alice', submissionKey));
+  const client = new ApplicationBuildClient({ url: 'http://127.0.0.1:4101', token: config.token });
+  assert.equal((await client.findByKey(submissionKey, 'alice'))?.id, keyedId);
+  assert.equal(await client.findByKey(submissionKey, 'bob'), undefined);
+  const keyedCompleted = await waitFor(keyedId);
+  assert.equal(keyedCompleted.state, 'BUILD_PASSED');
+
+  const replay = await fetch('http://127.0.0.1:4101/v1/jobs', {
+    method: 'POST', headers: auth, body: JSON.stringify(keyedPayload)
+  });
+  assert.equal(replay.status, 202);
+  assert.equal((await replay.json()).jobId, keyedId, 'Same key and bytes reuse completed job');
+
+  const conflict = await fetch('http://127.0.0.1:4101/v1/jobs', {
+    method: 'POST', headers: auth, body: JSON.stringify({
+      ...keyedPayload, files: keyedPayload.files.map(f =>
+        f.path === 'calc.js' ? { ...f, content: f.content + '\n//changed' } : f)
+    })
+  });
+  assert.equal(conflict.status, 400);
+  assert.equal((await conflict.json()).error, 'BUILD_IDEMPOTENCY_CONFLICT');
+  const ownerReplay = await fetch('http://127.0.0.1:4101/v1/jobs/' + keyedId,
+    { headers: { ...auth, 'x-aira-owner': 'bob' } });
+  assert.equal(ownerReplay.status, 404);
+
+  const recoveredWorker = new DockerProjectWorker(config);
+  await recoveredWorker.initialize();
+  const afterRestart = recoveredWorker.getJob(keyedId, 'alice');
+  assert.equal(afterRestart?.state, 'BUILD_PASSED');
+  assert.equal(afterRestart?.requestDigest?.length, 64);
+  assert.equal(afterRestart?.previewTicket, undefined, 'Preview bearer grants must not survive restart');
+  const afterRestartRepeat = await recoveredWorker.submit(keyedPayload);
+  assert.equal(afterRestartRepeat.id, keyedId);
+  assert.equal(afterRestartRepeat.state, 'BUILD_PASSED');
+  assert.equal(afterRestartRepeat.previewUrl, undefined, 'Do not invent a working preview on restart');
+  console.log('PASS: keyed Docker project submission survives lost response and restart without duplicate execution.');
 
   const broken = await fetch('http://127.0.0.1:4101/v1/jobs', {
     method: 'POST', headers: auth,

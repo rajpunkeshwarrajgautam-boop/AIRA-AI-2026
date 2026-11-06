@@ -5,6 +5,7 @@ import { ModelRouter } from '../../model-router/src/index.js';
 import { PostgresRunRepository } from '../../agent-runtime/src/repositories.js';
 import type { Artifact, Run, StreamingEvent } from '../../contracts/src/index.js';
 import { ApplicationBuildClient, generateApplicationDraft } from './client.js';
+import { PostgresBuildArchiveStore } from './artifact-store.js';
 import type { QueuedBuild } from './queue.js';
 import type { DispatchOutcome } from './dispatcher.js';
 
@@ -42,10 +43,25 @@ export async function executeQueuedBuild(job: QueuedBuild, signal: AbortSignal):
     const objective = previousFailure
       ? run.prompt + '\n\nRepair this previous real build failure:\n' + previousFailure.slice(-2500)
       : run.prompt;
-    await event(run.id, 'tool.started', { name: 'project_build', attempt, queueJobId: job.id });
-    const files = await generateApplicationDraft(objective, modelRouter, run.modelPolicy, approvedPackages);
-    if (signal.aborted) throw new Error('BUILD_CANCELLED');
-    const workerJobId = await client.create({ ownerId: run.principalId, ...files });
+    // A dispatcher may crash after the worker accepted a build but before
+    // the queue could persist its result. Reconcile the deterministic worker
+    // submission BEFORE making another model call or spawning another container.
+    const submissionKey = 'queue:' + job.id + ':attempt:' + attempt;
+    const existing = await client.findByKey(submissionKey, run.principalId);
+    await event(run.id, 'tool.started', {
+      name: 'project_build', attempt, queueJobId: job.id,
+      recoveredWorkerJobId: existing?.id
+    });
+    let workerJobId: string;
+    if (existing) {
+      workerJobId = existing.id;
+    } else {
+      const files = await generateApplicationDraft(objective, modelRouter, run.modelPolicy, approvedPackages);
+      if (signal.aborted) throw new Error('BUILD_CANCELLED');
+      workerJobId = await client.create({
+        ownerId: run.principalId, ...files, idempotencyKey: submissionKey
+      });
+    }
     let remoteTerminal = false;
     const cancelRemote = () => { void client.cancel(workerJobId, run.principalId).catch(() => {}); };
     signal.addEventListener('abort', cancelRemote, { once: true });
@@ -57,12 +73,22 @@ export async function executeQueuedBuild(job: QueuedBuild, signal: AbortSignal):
         const result = await client.inspect(workerJobId, run.principalId);
         if (result.state === 'BUILD_PASSED') {
           remoteTerminal = true;
+          // A source link tied solely to an ephemeral worker is not durable.
+          // Persist the verified worker export BEFORE committing queue success.
+          const archive = await client.sourceArchive(workerJobId, run.principalId);
+          const stored = await new PostgresBuildArchiveStore().save({
+            queueJobId: job.id, ownerId: run.principalId, runId: run.id,
+            workerJobId, archive
+          });
           const outcome: DispatchOutcome = {
             state: 'COMPLETED',
             result: {
               buildStatus: 'BUILD_PASSED',
               independentAcceptance: false,
               workerJobId,
+              queueJobId: job.id,
+              archiveSha256: stored.sha256,
+              sourceDurable: true,
               attempt,
               previewUrl: result.previewUrl,
               manifest: result.manifest,
@@ -113,7 +139,8 @@ async function resolveRun(job: QueuedBuild, state: 'COMPLETED' | 'FAILED' | 'CAN
       : 'APPLICATION_BUILD_FAILED: ' + String(result.error || 'unknown').slice(0, 400);
   if (passed) {
     const artifactData = JSON.stringify({
-      jobId: result.workerJobId, previewUrl: result.previewUrl,
+      jobId: result.workerJobId, queueJobId: job.id,
+      archiveSha256: result.archiveSha256, previewUrl: result.previewUrl,
       status: 'BUILD_PASSED', summary: message
     });
     const artifact: Artifact = {

@@ -84,6 +84,9 @@ jobs:
       - name: Durable application dispatcher integration
         run: npm run test:app-builder-dispatcher
 
+      - name: Immutable application artifact archive certification
+        run: npm run test:app-builder-artifacts
+
       - name: Runtime verification
         run: npm test
 

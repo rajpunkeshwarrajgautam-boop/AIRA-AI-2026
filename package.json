@@ -43,7 +43,8 @@
     "test:app-builder": "npx tsx test/app-builder-worker.ts",
     "test:app-builder-queue": "npx tsx test/app-builder-queue.ts",
     "worker:dispatcher": "npx tsx packages/app-builder/src/dispatcher-service.ts",
-    "test:app-builder-dispatcher": "npx tsx test/app-builder-dispatcher.ts"
+    "test:app-builder-dispatcher": "npx tsx test/app-builder-dispatcher.ts",
+    "test:app-builder-artifacts": "npx tsx test/app-builder-artifact-store.ts"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",

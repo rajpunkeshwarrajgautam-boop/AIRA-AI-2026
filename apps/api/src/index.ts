@@ -11,6 +11,7 @@ import { McpHost } from '../../../packages/mcp/src/index.js';
 import { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
 import { ApplicationBuildClient } from '../../../packages/app-builder/src/client.js';
 import { PostgresApplicationBuildQueue } from '../../../packages/app-builder/src/queue.js';
+import { PostgresBuildArchiveStore } from '../../../packages/app-builder/src/artifact-store.js';
 import { AutomationEngine } from '../../../packages/automation/src/index.js';
 import { PostgresAgentRepository, PostgresRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
 import { PostgresAutomationRepository, PostgresAutomationRunRepository } from '../../../packages/automation/src/repositories.js';
@@ -343,6 +344,29 @@ app.get('/api/search/capabilities', async (_req: Request, res: Response) => {
   }
 });
 
+
+// Authoritative durable archive download; survives an individual Docker
+// worker restart or permanent loss of its local files. Never trust a caller-
+// supplied owner header; use the authenticated principal exclusively.
+app.get('/api/app-builder/queue/:id/source', async (req: Request, res: Response) => {
+  try {
+    const principal = req.principal!;
+    if (!principal.scopes?.includes('*') && !principal.scopes?.includes('projects.read') &&
+        !principal.scopes?.includes('projects.write')) {
+      return res.status(403).json({ error: 'PROJECT_READ_PERMISSION_DENIED' });
+    }
+    const record = await new PostgresBuildArchiveStore().get(req.params.id, principal.userId);
+    if (!record) return res.status(404).json({ error: 'BUILD_SOURCE_NOT_FOUND' });
+    res.setHeader('Content-Type', 'application/gzip');
+    res.setHeader('Content-Disposition', 'attachment; filename="aira-project-source.tar.gz"');
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Aira-Archive-Sha256', record.sha256);
+    return res.end(record.archive);
+  } catch {
+    return res.status(503).json({ error: 'BUILD_SOURCE_UNAVAILABLE' });
+  }
+});
 
 // Durable build queue: principal-owned status and cancellation, independent
 // of the browser connection and direct worker job lifecycle.
