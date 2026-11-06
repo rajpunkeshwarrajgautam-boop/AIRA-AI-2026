@@ -50,6 +50,21 @@ export class AgentRuntime extends EventEmitter {
   private toolGateway: ToolGateway;
   private researchService: ResearchService;
   private automationEngine?: any;
+  private readonly delegatedLeases=new Map<string,{
+    id:string;owner:string;worker:string;fence:number
+  }>();
+  private async assertDelegatedLease(runId:string):Promise<void>{
+    const run=await this.runRepo.getRun(runId);
+    if(!run?.context?.delegatedFrom)return;
+    if(process.env.AIRA_SPECIALIST_WORKER_PROCESS!=='true')
+      throw new Error('DELEGATION_DEDICATED_WORKER_REQUIRED');
+    const lease=this.delegatedLeases.get(runId);
+    if(!lease||lease.owner!==run.principalId)
+      throw new Error('DELEGATED_WORKER_CLAIM_REQUIRED');
+    await new DurableDelegations().assertClaim(
+      lease.owner,lease.id,lease.worker,lease.fence
+    );
+  }
 
   constructor(
     private modelRouter: ModelRouter,
@@ -263,6 +278,10 @@ export class AgentRuntime extends EventEmitter {
   ): Promise<Delegation> {
     if (process.env.AIRA_SPECIALIST_DELEGATION_ENABLED !== 'true')
       throw new Error('SPECIALIST_DELEGATION_NOT_ENABLED');
+    // Never accept durable child tasks unless a continuously polling worker
+    // is configured. API setImmediate is not a durable scheduler.
+    if(process.env.AIRA_SPECIALIST_WORKER_ENABLED !== 'true')
+      throw new Error('SPECIALIST_WORKER_NOT_CONFIGURED');
     if (typeof objective !== 'string' || objective.length < 5 || objective.length > 16000)
       throw new Error('DELEGATION_INVALID_OBJECTIVE');
     const parent = await this.runRepo.getRun(parentRunId);
@@ -295,10 +314,8 @@ export class AgentRuntime extends EventEmitter {
     try {
       if (child.provenance?.provider === 'mock') throw new Error('DELEGATION_LIVE_MODEL_REQUIRED');
       const row = await repo.register(parent, child, specialist, objective, scopes, key);
-      // Only launch after a verified persisted delegation exists.
-      setImmediate(() => this.startDelegatedChild(row.id, principal.userId).catch(
-        err => console.error('Delegated child execution failed:', err)
-      ));
+      // Commit-and-return: dedicated worker acquires this durable row.
+      // Never execute the child inside the ephemeral HTTP request process.
       return row;
     } catch (err) {
       // Never leave an unlinked orphan child runnable after a racing request.
@@ -311,20 +328,45 @@ export class AgentRuntime extends EventEmitter {
     }
   }
 
-  public async startDelegatedChild(delegationId: string, ownerId: string): Promise<void> {
-    const repo = new DurableDelegations();
-    const record = await repo.get(ownerId, delegationId);
-    if (!record || record.status === 'CANCELLED' ||
-        record.status === 'COMPLETED' || record.status === 'FAILED') return;
-    const child = await this.runRepo.getRun(record.childRunId);
-    if (!child || child.principalId !== ownerId || child.state === 'CANCELLED')
-      throw new Error('DELEGATION_CHILD_NOT_AUTHORIZED');
-    const worker = 'delegation_' + crypto.randomUUID();
-    const claimed = await repo.claim(ownerId, delegationId, worker, 120000);
-    // Existing recovery for interrupted read-only missions is preserved.
-    // Lease expiration is not a license to replay consequential actions.
-    await this.startRun(child.id);
-    await repo.finalize(ownerId, claimed.id, worker, claimed.fence);
+  /** Only the separate worker process may execute a DB-claimed child. */
+  public async executeClaimedSpecialist(
+    delegationId:string, ownerId:string, worker:string, fence:number,recovered:boolean
+  ):Promise<'TERMINAL'|'WAITING'|'STILL_RUNNING'>{
+    if(process.env.AIRA_SPECIALIST_WORKER_PROCESS!=='true' ||
+       process.env.AIRA_SPECIALIST_WORKER_ENABLED!=='true')
+      throw new Error('DELEGATION_DEDICATED_WORKER_REQUIRED');
+    const registry=new DurableDelegations();
+    await registry.assertClaim(ownerId,delegationId,worker,fence);
+    const record=await registry.get(ownerId,delegationId);
+    if(!record)throw new Error('DELEGATION_NOT_FOUND');
+    const child=await this.runRepo.getRun(record.childRunId);
+    if(!child || child.principalId!==ownerId)
+      throw new Error('DELEGATION_CHILD_OWNER_MISMATCH');
+    await registry.assertChildAuthorized(
+      child,record.parentRunId,record.specialist
+    );
+    if(['COMPLETED','FAILED','CANCELLED'].includes(child.state))return 'TERMINAL';
+    if(child.state==='WAITING_FOR_APPROVAL' ||
+       child.executionCheckpoint==='WAITING_FOR_APPROVAL') return 'WAITING';
+    this.delegatedLeases.set(child.id,{id:delegationId,owner:ownerId,worker,fence});
+    try{
+    // Reclaimed execution always goes through the existing crash-recovery
+    // classifier, including the non-idempotent replay fence.
+    if(recovered || child.executionCheckpoint==='TOOL_EXECUTING') {
+      await this.resumeRun(child.id);
+    } else {
+      await this.startRun(child.id);
+    }
+    await registry.assertClaim(ownerId,delegationId,worker,fence);
+    const fresh=await this.runRepo.getRun(child.id);
+    if(!fresh)throw new Error('DELEGATION_CHILD_DISAPPEARED');
+    if(['COMPLETED','FAILED','CANCELLED'].includes(fresh.state))return 'TERMINAL';
+    if(fresh.state==='WAITING_FOR_APPROVAL' ||
+       fresh.executionCheckpoint==='WAITING_FOR_APPROVAL')return 'WAITING';
+    return 'STILL_RUNNING';
+    } finally {
+      this.delegatedLeases.delete(child.id);
+    }
   }
 
   public async listSpecialistDelegations(parentRunId: string, principal: ExecutionPrincipal): Promise<Delegation[]> {
@@ -344,6 +386,15 @@ export class AgentRuntime extends EventEmitter {
     try {
       await this.executeRunLoop(runId);
     } catch (err: any) {
+      const latest=await this.runRepo.getRun(runId);
+      if(latest?.context?.delegatedFrom){
+        try{await this.assertDelegatedLease(runId);}
+        catch{
+          // An expired/fenced old process cannot mark a newer worker's
+          // child FAILED after it lost execution authority.
+          return;
+        }
+      }
       await this.transitionRunState(runId, 'FAILED', err.message);
     }
   }
@@ -424,8 +475,17 @@ export class AgentRuntime extends EventEmitter {
     await this.emitRunEvent(request.runId, 'approval.resolved', { requestId, decision, approved });
 
     await this.transitionRunState(request.runId, 'RUNNING');
-    
-    // Resume execution asynchronously (do not await)
+
+    if(run.context?.delegatedFrom){
+      const resumed=await new DurableDelegations().wakeApprovedChild(
+        run.principalId,request.runId
+      );
+      if(!resumed)throw new Error('DELEGATED_APPROVAL_RECOVERY_NOT_QUEUED');
+      // Child execution is owned by the dedicated worker; never run here.
+      return true;
+    }
+
+    // Ordinary non-delegated run resumes its existing execution path.
     this.executeRunLoop(request.runId).catch(err => {
       console.error(`Error resuming run loop for ${request.runId}:`, err);
     });
@@ -472,6 +532,7 @@ export class AgentRuntime extends EventEmitter {
     // or prior approval as authorization. Reconcile with PostgreSQL on every
     // entry/recovery and again before dispatching additional tool calls.
     const childParent = run.context?.delegatedFrom;
+    if(childParent)await this.assertDelegatedLease(runId);
     const childSpecialist = run.context?.specialist;
     if (childParent !== undefined || childSpecialist !== undefined) {
       try {
@@ -903,6 +964,7 @@ export class AgentRuntime extends EventEmitter {
 
     // Checkpoint 4: Execute Tool
     if (run.executionCheckpoint === 'TOOL_APPROVED') {
+      await this.assertDelegatedLease(runId);
       const toolCall = run.toolCalls[run.toolCalls.length - 1];
       run.executionCheckpoint = 'TOOL_EXECUTING';
       await this.runRepo.saveRun(run);
@@ -913,6 +975,7 @@ export class AgentRuntime extends EventEmitter {
       let toolResult: ToolResult;
       const registeredWithGateway = this.toolGateway.getTool(toolCall.name);
       if (registeredWithGateway) {
+        await this.assertDelegatedLease(runId);
         toolResult = await this.toolGateway.execute({
           toolName: toolCall.name,
           arguments: toolCall.arguments,
@@ -1019,7 +1082,8 @@ export class AgentRuntime extends EventEmitter {
           run.executionCheckpoint = 'WAITING_FOR_APPROVAL';
           run.state = 'BLOCKED';
           run.error = decision.explanation;
-          run.toolResults.push(finalToolResult);
+          if(childParent)await this.assertDelegatedLease(runId);
+      run.toolResults.push(finalToolResult);
           await this.runRepo.saveRun(run);
           await this.emitRunEvent(runId, 'tool.approval_required', {
             toolName: toolCall.name,
@@ -1469,6 +1533,10 @@ CAPABILITY & IDENTITY INVARIANTS:
   public async recoverInterruptedRuns(owner: string, ttlMs: number = 60000): Promise<void> {
     const interrupted = await this.runRepo.getInterruptedRuns();
     for (const run of interrupted) {
+      // Delegated child runs belong exclusively to the separately leased
+      // specialist dispatcher. General API startup recovery must not steal
+      // their authority or mark them failed without a worker fence.
+      if(run.context?.delegatedFrom)continue;
       const claimed = await this.runRepo.claimInterruptedRun(run.id, owner, ttlMs);
       if (claimed) {
         console.log(`Recovering interrupted run ${run.id}...`);
@@ -1548,3 +1616,4 @@ export * from './workflow-repositories.js';
 export * from './registry.js';
 export * from './router.js';
 export * from './repositories.js';
+export * from './git-policy.js';

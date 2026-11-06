@@ -79,6 +79,24 @@ export class DurableDelegations {
     return saved;
   }
 
+  async byChild(ownerId:string, childRunId:string):Promise<Delegation|undefined>{
+    const row=await db('v2_delegations')
+      .where({owner_id:ownerId,child_run_id:childRunId}).first();
+    return row?asDelegation(row):undefined;
+  }
+
+  /** Restart a suspended child only following its previously recorded
+   * authenticated approval decision; never resume it in the API process.
+   */
+  async wakeApprovedChild(ownerId:string,childRunId:string):Promise<boolean>{
+    const now=Date.now();
+    const n=await db('v2_delegations')
+      .where({owner_id:ownerId,child_run_id:childRunId,status:'WAITING'})
+      .whereNull('worker_owner').whereNull('lease_until')
+      .update({status:'QUEUED',fence:db.raw('fence + 1'),updated_at:now});
+    return n===1;
+  }
+
   async get(ownerId:string, delegationId:string):Promise<Delegation|undefined>{
     const row=await db('v2_delegations').where({id:delegationId,owner_id:ownerId}).first();
     return row?asDelegation(row):undefined;
@@ -147,6 +165,77 @@ export class DurableDelegations {
         fence:db.raw('fence + 1'),status:'RUNNING',updated_at:now}).returning('*');
     if(rows.length!==1)throw new Error('DELEGATION_NOT_CLAIMABLE');
     return asDelegation(rows[0]);
+  }
+
+  /**
+   * Claim exactly one queued or expired RUNNING child from PostgreSQL.
+   * Row locks and SKIP LOCKED permit simultaneous worker processes.
+   * WAITING children are not redelivered until explicit approval resolution.
+   */
+  async claimNext(worker:string, ttlMs=30000):Promise<{
+    delegation:Delegation; recovered:boolean
+  }|undefined>{
+    if(!worker||worker.length>160||!Number.isInteger(ttlMs)||
+      ttlMs<5000||ttlMs>120000)throw new Error('DELEGATION_LEASE_INVALID');
+    return db.transaction(async trx=>{
+      const now=Date.now();
+      const candidate=await trx('v2_delegations')
+        .whereIn('status',['QUEUED','RUNNING'])
+        .andWhere(q=>q.whereNull('lease_until').orWhere('lease_until','<',now))
+        .orderBy('created_at','asc')
+        .forUpdate().skipLocked().first();
+      if(!candidate)return undefined;
+      const parent=await trx('runs').select('state','principal_id')
+        .where({id:candidate.parent_run_id}).first();
+      const child=await trx('runs').select('state','principal_id')
+        .where({id:candidate.child_run_id}).first();
+      if(!parent||!child||parent.principal_id!==candidate.owner_id||
+         child.principal_id!==candidate.owner_id ||
+         ['CANCELLED','FAILED'].includes(parent.state) ||
+         ['CANCELLED','FAILED','COMPLETED'].includes(child.state)){
+        const next=child?.state==='COMPLETED'?'COMPLETED':
+          child?.state==='FAILED'?'FAILED':'CANCELLED';
+        await trx('v2_delegations').where({id:candidate.id}).update({
+          status:next,lease_until:null,worker_owner:null,
+          fence:trx.raw('fence + 1'),updated_at:now
+        });
+        return undefined;
+      }
+      const rows=await trx('v2_delegations').where({id:candidate.id})
+        .update({
+          worker_owner:worker,lease_until:now+ttlMs,
+          fence:trx.raw('fence + 1'),status:'RUNNING',updated_at:now
+        }).returning('*');
+      return {delegation:asDelegation(rows[0]),recovered:candidate.status==='RUNNING'};
+    });
+  }
+
+  async renewClaim(ownerId:string,id:string,worker:string,fence:number,ttlMs=30000):Promise<void>{
+    if(!Number.isInteger(ttlMs)||ttlMs<5000||ttlMs>120000)
+      throw new Error('DELEGATION_LEASE_INVALID');
+    const now=Date.now();
+    const updated=await db('v2_delegations')
+      .where({id,owner_id:ownerId,worker_owner:worker,fence,status:'RUNNING'})
+      .where('lease_until','>',now)
+      .update({lease_until:now+ttlMs,updated_at:now});
+    if(updated!==1)throw new Error('DELEGATION_STALE_WORKER');
+  }
+
+  async assertClaim(ownerId:string,id:string,worker:string,fence:number):Promise<void>{
+    const result=await db('v2_delegations')
+      .where({id,owner_id:ownerId,worker_owner:worker,fence,status:'RUNNING'})
+      .where('lease_until','>',Date.now()).first('id');
+    if(!result)throw new Error('DELEGATION_STALE_WORKER');
+  }
+
+  async releaseClaim(ownerId:string,id:string,worker:string,fence:number,
+    status:'QUEUED'|'WAITING'|'FAILED'='QUEUED'):Promise<void>{
+    const updated=await db('v2_delegations')
+      .where({id,owner_id:ownerId,worker_owner:worker,fence,status:'RUNNING'})
+      .where('lease_until','>',Date.now())
+      .update({status,worker_owner:null,lease_until:null,
+        fence:db.raw('fence + 1'),updated_at:Date.now()});
+    if(updated!==1)throw new Error('DELEGATION_STALE_WORKER');
   }
 
   async finalize(ownerId:string,id:string,worker:string,fence:number):Promise<Delegation>{
