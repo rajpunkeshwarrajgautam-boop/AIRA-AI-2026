@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import path from 'node:path';
 import type { BrowserView, ComputerFileEntry, ComputerStatus } from './index.js';
 import type { BrowserActionResult, ComputerProvider, TerminalExecutionResult } from './provider.js';
+import { currentComputerAction } from './action-context.js';
 
 interface ExecResult { stdout: string; stderr: string; }
 type DockerExecutor = (args: string[], timeoutMs?: number) => Promise<ExecResult>;
@@ -15,6 +16,8 @@ export interface DockerComputerProviderOptions {
   runnerSecret?: string;
   execute?: DockerExecutor;
   fetcher?: RunnerFetcher;
+  // Injectable address resolution supports native-runner integration tests.
+  addressResolver?: (ownerId: string) => Promise<string>;
 }
 
 function shortHash(value: string, length = 24): string {
@@ -46,6 +49,7 @@ export class DockerComputerProvider implements ComputerProvider {
   private readonly secret: string;
   private readonly executeDocker: DockerExecutor;
   private readonly fetcher: RunnerFetcher;
+  private readonly addressResolver?: (ownerId: string) => Promise<string>;
 
   constructor(options: DockerComputerProviderOptions = {}) {
     this.image = options.image || process.env.AIRA_COMPUTER_DOCKER_IMAGE || 'aira-computer:local';
@@ -56,6 +60,7 @@ export class DockerComputerProvider implements ComputerProvider {
     if (!this.secret) throw new Error('AIRA_COMPUTER_RUNNER_SECRET is required for the Docker computer provider in production.');
     this.executeDocker = options.execute || defaultExecute;
     this.fetcher = options.fetcher || fetch;
+    this.addressResolver = options.addressResolver;
   }
 
   ownerKey(ownerId: string): string { return shortHash(ownerId); }
@@ -98,6 +103,7 @@ export class DockerComputerProvider implements ComputerProvider {
   }
 
   private async ensureContainer(ownerId: string): Promise<void> {
+    if (this.addressResolver) { await this.waitHealthy(ownerId); return; }
     const running = await this.inspectRunning(ownerId);
     if (running === undefined) await this.createContainer(ownerId);
     else if (!running) await this.executeDocker(['start', this.containerName(ownerId)], 30_000);
@@ -105,6 +111,7 @@ export class DockerComputerProvider implements ComputerProvider {
   }
 
   private async runnerAddress(ownerId: string): Promise<string> {
+    if (this.addressResolver) return this.addressResolver(ownerId);
     const result = await this.executeDocker(['port', this.containerName(ownerId), '7777/tcp'], 10_000);
     const line = result.stdout.split(/\r?\n/).map(v => v.trim()).find(Boolean);
     if (!line) throw new Error('Docker computer runner does not expose its control port.');
@@ -118,6 +125,19 @@ export class DockerComputerProvider implements ComputerProvider {
     const headers = new Headers(init.headers);
     headers.set('Authorization', `Bearer ${this.runnerToken(ownerId)}`);
     if (init.body) headers.set('Content-Type', 'application/json');
+    if (init.method && ['POST', 'PUT'].includes(init.method) && !route.startsWith('/actions/')) {
+      const action = currentComputerAction();
+      if (!action || action.lease.ownerId !== ownerId) throw new Error('COMPUTER_LEASE_LOST');
+      const identity = JSON.stringify({
+        id: action.actionId, fence: action.lease.fence, token: action.lease.token,
+        expiresAt: Math.min(action.lease.expiresAt, action.execution?.leaseUntil || action.lease.expiresAt),
+        runId: action.runId, executionOwner: action.execution?.owner, executionFence: action.execution?.fence,
+        method: init.method, route,
+        digest: createHash('sha256').update(String(init.body || '{}')).digest('hex')
+      });
+      headers.set('x-aira-action', identity);
+      headers.set('x-aira-action-signature', createHmac('sha256', this.runnerToken(ownerId)).update(identity).digest('hex'));
+    }
     const response = await this.fetcher(address + route, { ...init, headers, signal: AbortSignal.timeout(35_000) });
     const body = await response.json().catch(() => ({ error: `Runner returned HTTP ${response.status}.` })) as any;
     if (!response.ok) throw new Error(body.error || `Runner returned HTTP ${response.status}.`);
@@ -134,7 +154,7 @@ export class DockerComputerProvider implements ComputerProvider {
   }
 
   async status(ownerId: string, _botId: string): Promise<ComputerStatus> {
-    const running = await this.inspectRunning(ownerId);
+    const running = this.addressResolver ? true : await this.inspectRunning(ownerId);
     if (!running) return {
       enabled: true, state: 'STOPPED', workspaceReady: running !== undefined,
       browser: { state: 'STOPPED' }, terminal: { enabled: this.terminalEnabled, allowedPrograms: this.allowedPrograms }
@@ -157,8 +177,8 @@ export class DockerComputerProvider implements ComputerProvider {
   }
 
   async stop(ownerId: string, botId: string): Promise<ComputerStatus> {
-    const running = await this.inspectRunning(ownerId);
-    if (running) await this.request(ownerId, '/browser/stop', { method: 'POST', body: '{}' }).catch(() => undefined);
+    const running = this.addressResolver ? true : await this.inspectRunning(ownerId);
+    if (running) await this.request(ownerId, '/browser/stop', { method: 'POST', body: '{}' });
     return this.status(ownerId, botId);
   }
 
@@ -215,5 +235,12 @@ export class DockerComputerProvider implements ComputerProvider {
     if (!this.terminalEnabled) throw new Error('Computer terminal is disabled on this host.');
     await this.ensureContainer(ownerId);
     return this.request(ownerId, '/terminal', { method: 'POST', body: this.body(ownerId, botId, { program, args, timeoutMs }) });
+  }
+  async actionReceipt(ownerId: string, actionId: string) {
+    try { return await this.request<any>(ownerId, '/actions/' + actionId); }
+    catch (error) { if ((error as Error).message === 'Action receipt not found.') return undefined; throw error; }
+  }
+  async revokeAction(ownerId: string, actionId: string): Promise<void> {
+    await this.request(ownerId, '/actions/' + actionId + '/revoke', { method: 'POST', body: '{}' });
   }
 }

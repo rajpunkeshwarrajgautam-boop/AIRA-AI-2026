@@ -36,4 +36,6 @@ export interface ComputerProvider {
   readText(ownerId: string, botId: string, relativePath: string): Promise<{ path: string; content: string; sizeBytes: number }>;
   writeText(ownerId: string, botId: string, relativePath: string, content: string): Promise<{ path: string; sizeBytes: number }>;
   terminal(ownerId: string, botId: string, program: string, args?: string[], timeoutMs?: number): Promise<TerminalExecutionResult>;
+  actionReceipt?(ownerId: string, actionId: string): Promise<{ status: string; result?: unknown; error?: string } | undefined>;
+  revokeAction?(ownerId: string, actionId: string): Promise<void>;
 }

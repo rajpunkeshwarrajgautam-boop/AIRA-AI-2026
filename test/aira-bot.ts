@@ -1,14 +1,10 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import express from 'express';
-import { PGlite } from '@electric-sql/pglite';
-import { PGLiteSocketServer } from '@electric-sql/pglite-socket';
+import { createTestDatabase } from './postgres-fixture.js';
 
 process.env.NODE_ENV = 'test';
-process.env.DATABASE_URL = 'postgres://postgres:postgres@127.0.0.1:55433/postgres';
-const pg = await PGlite.create();
-const socket = new PGLiteSocketServer({ db: pg, port: 55433, host: '127.0.0.1', maxConnections: 20 });
-await socket.start();
+const cleanupDatabase = await createTestDatabase();
 const { runMigrations, closeDb } = await import('../packages/db/src/index.js');
 await runMigrations();
 const { ModelRouter } = await import('../packages/model-router/src/index.js');
@@ -128,5 +124,5 @@ try {
   console.log(`Aira Bot: ${passed} gates pass. Real provider calls and Firebase sign-in require configured credentials.`);
 } finally {
   await new Promise<void>(r => http.close(() => r()));
-  await closeDb(); await socket.stop(); await pg.close();
+  await closeDb(); await cleanupDatabase();
 }

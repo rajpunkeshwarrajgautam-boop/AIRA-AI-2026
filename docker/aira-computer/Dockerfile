@@ -9,6 +9,7 @@ RUN npm init -y >/dev/null 2>&1 \
     && chown -R pwuser:pwuser /data /opt/aira-computer
 
 COPY --chown=pwuser:pwuser runner.mjs /opt/aira-computer/runner.mjs
+COPY --chown=pwuser:pwuser action-journal.mjs /opt/aira-computer/action-journal.mjs
 
 USER pwuser
 EXPOSE 7777

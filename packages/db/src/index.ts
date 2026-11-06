@@ -9,6 +9,7 @@ const connectionString = process.env.DATABASE_URL || 'postgres://aira:aira@local
 export const db = knex({
   client: 'pg',
   connection: connectionString,
+  acquireConnectionTimeout: 10000,
   pool: { min: 2, max: 10 },
   migrations: {
     directory: path.join(__dirname, 'migrations'),

@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { createBotRouter } from './aira-bot.js';
+import { LiveRuntimeService } from '../../../packages/computer-runtime/src/live.js';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import { ModelRouter } from '../../../packages/model-router/src/index.js';
@@ -69,12 +70,10 @@ app.get('/api/health', (_req: Request, res: Response) => {
   });
 });
 
-app.get('/api/ready', (_req: Request, res: Response) => {
-  if (appState === 'HEALTHY') {
-    res.status(200).json({ status: 'READY', timestamp: Date.now() });
-  } else {
-    res.status(503).json({ status: appState, timestamp: Date.now() });
-  }
+app.get('/api/ready', async (_req: Request, res: Response) => {
+  const health = await liveRuntime.readiness();
+  res.status(appState === 'HEALTHY' && health.ready ? 200 : 503)
+    .json({ status: appState === 'HEALTHY' && health.ready ? 'READY' : 'NOT_READY', ...health, timestamp: Date.now() });
 });
 
 // Hard gate to block runtime traffic before recovery is complete
@@ -109,7 +108,9 @@ const agentRuntime = new AgentRuntime(
   runRepo,
   process.cwd()
 );
-app.use('/api/aira-bot', createBotRouter(agentRuntime, runRepo, modelRouter));
+const liveRuntime = new LiveRuntimeService(agentRuntime);
+const botRouter = createBotRouter(agentRuntime, runRepo, modelRouter, { routineLeader: () => liveRuntime.reliability.isSchedulerLeader() });
+app.use('/api/aira-bot', botRouter);
 
 const automationEngine = new AutomationEngine(agentRuntime, autoRepo, autoRunRepo);
 automationEngine.start();
@@ -665,7 +666,7 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   process.stdout.write(`Providers: ${modelRouter.listProviders().join(', ') || 'none (dev mock active)'}\n`);
   
   appState = 'RECOVERING';
-  agentRuntime.recoverInterruptedRuns('api-worker-1').then(() => {
+  liveRuntime.start().then(() => {
     appState = 'HEALTHY';
     process.stdout.write('Startup recovery complete. API is HEALTHY.\n');
   }).catch(err => {
@@ -676,6 +677,8 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 });
 
 process.on('SIGINT', () => {
+  botRouter.stop();
+  liveRuntime.stop();
   automationEngine.stop();
   server.close(() => {
     process.stdout.write('AIRA API Server stopped cleanly.\n');
@@ -684,6 +687,8 @@ process.on('SIGINT', () => {
 });
 
 process.on('SIGTERM', () => {
+  botRouter.stop();
+  liveRuntime.stop();
   automationEngine.stop();
   server.close(() => process.exit(0));
 });

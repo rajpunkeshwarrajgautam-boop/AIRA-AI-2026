@@ -4,6 +4,7 @@ import { DockerComputerProvider } from '../packages/computer-runtime/src/docker.
 import { ManagedComputerRuntime } from '../packages/computer-runtime/src/managed.js';
 import type { ComputerProvider } from '../packages/computer-runtime/src/provider.js';
 import type { Run, ToolCall } from '../packages/contracts/src/index.js';
+import { withComputerAction } from '../packages/computer-runtime/src/action-context.js';
 
 const leases = new ComputerLeaseManager(60_000);
 const first = leases.acquireBot('owner-a', 'bot-a', 'run-a');
@@ -38,19 +39,19 @@ const fakeProvider: ComputerProvider = {
 const managed = new ManagedComputerRuntime(fakeProvider, new ComputerLeaseManager());
 const run = { id: 'run-1', principalId: 'owner-x', agentId: 'bot-x' } as Run;
 const call: ToolCall = { id: 'call-1', toolId: 'tool_browser_open', name: 'browser_open', arguments: { url: 'https://example.com' }, timestamp: Date.now(), status: 'PENDING' };
-const human = managed.takeover('owner-x', 'bot-x', 'session-x');
+const human = await managed.takeover('owner-x', 'bot-x', 'session-x');
 const blocked = await managed.execute(run, call);
 assert.equal(blocked.isError, true);
 assert.equal(blocked.error, 'COMPUTER_TAKEN_OVER');
 assert.equal(opened, 0);
-managed.releaseHuman('owner-x', 'bot-x', human.lease.token);
+await managed.releaseHuman('owner-x', 'bot-x', human.lease.token);
 const executed = await managed.execute(run, call);
 assert.equal(executed.isError, false);
 assert.equal(opened, 1);
 const otherRun = { ...run, id: 'run-2', agentId: 'bot-y' } as Run;
 const busy = await managed.execute(otherRun, { ...call, id: 'call-2' });
 assert.equal(busy.error, 'COMPUTER_BUSY');
-managed.releaseRun('owner-x', 'run-1');
+await managed.releaseRun('owner-x', 'run-1');
 
 let exists = false;
 let running = false;
@@ -85,7 +86,10 @@ assert.equal(docker.volumeName(owner), docker.volumeName(owner));
 assert.notEqual(docker.botKey(owner, 'bot-a'), docker.botKey(owner, 'bot-b'));
 assert(!docker.containerName(owner).includes('sensitive'));
 assert(!docker.volumeName(owner).includes('sensitive'));
-await docker.start(owner, 'bot-a');
+await withComputerAction({
+  actionId: 'a'.repeat(64),
+  lease: { ownerId: owner, botId: 'bot-a', holderId: 'test', mode: 'BOT', token: 'test-token', fence: 1, acquiredAt: Date.now(), expiresAt: Date.now() + 60000 }
+}, () => docker.start(owner, 'bot-a'));
 assert(dockerRunArgs.includes('--read-only'));
 assert.deepEqual(dockerRunArgs.slice(dockerRunArgs.indexOf('--cap-drop'), dockerRunArgs.indexOf('--cap-drop') + 2), ['--cap-drop', 'ALL']);
 assert(dockerRunArgs.includes('no-new-privileges:true'));
