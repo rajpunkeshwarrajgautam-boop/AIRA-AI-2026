@@ -58,6 +58,39 @@ assert.throws(()=>validateModelMission('Delete package.json',
   {...raw,objective:'Delete package.json'},definitions,scopes),/WRITE_NOT_CERTIFIED/);
 assert.throws(()=>validateModelMission(objective,raw,definitions,[]),/SCOPE_DENIED/);
 
+const browserId='bs_11111111-2222-4333-8444-555555555555';
+const browserObjective='Inspect browser session '+browserId+' current page';
+const browserDef=ToolDefinitionSchema.parse({
+  id:'tool_browser_session_inspect',name:'browser_session_inspect',
+  description:'Real read-only persistent browser session observation',
+  source:'native',parameters:{},permissionLevel:'READ',
+  sideEffectLevel:'READ',executionRuntime:'CLOUD',
+  permissionScopes:['browser.read'],availability:'READY'
+});
+const browserStep={
+  id:'browser_1',purpose:'Inspect the explicitly named live browser session',
+  toolName:'browser_session_inspect',arguments:{sessionId:browserId},
+  dependsOn:[],specialist:'research'
+};
+const browserPlan=validateModelMission(browserObjective,{
+  version:2,objective:browserObjective,steps:[browserStep]
+},[browserDef],['browser.read']);
+assert.equal(browserPlan.steps[0].toolName,'browser_session_inspect');
+assert.equal(validateStoredModelMission(browserObjective,{
+  version:2,plan:browserPlan,dispatched:1,verified:[],
+  currentCallId:'call_1',
+  planSignature:signModelMission(browserObjective,browserPlan,key)
+},key,[browserDef],['browser.read']),true);
+assert.throws(()=>validateModelMission(browserObjective,{
+  version:2,objective:browserObjective,
+  steps:[{...browserStep,arguments:{sessionId:'bs_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'}}]
+},[browserDef],['browser.read']),/NOT_GROUNDED/);
+assert.throws(()=>validateModelMission(browserObjective,{
+  version:2,objective:browserObjective,steps:[{...browserStep,specialist:'files'}]
+},[browserDef],['browser.read']),/SPECIALIST_MISMATCH/);
+assert.throws(()=>validateModelMission(browserObjective,{
+  version:2,objective:browserObjective,steps:[browserStep]
+},[browserDef],[]),/SCOPE_DENIED/);
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'aira-v2-'));
 const sibling=root+'-sibling';
 fs.mkdirSync(sibling);

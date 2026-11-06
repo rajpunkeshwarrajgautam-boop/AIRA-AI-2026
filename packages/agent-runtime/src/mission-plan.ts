@@ -2,7 +2,7 @@ import type { ToolResult } from '../../contracts/src/index.js';
 import { isDeepStrictEqual } from 'node:util';
 
 export type MissionToolName = 'file_system_list' | 'file_system_read' |
-  'repo_git_status' | 'repo_git_log';
+  'repo_git_status' | 'repo_git_log' | 'browser_session_inspect';
 
 export interface MissionStep {
   id: string;
@@ -96,6 +96,16 @@ export function verifyMissionEvidence(
     return { verified: false, reason: String(result?.error || 'Missing or failed tool result') };
   }
   const output = result.output as any;
+  if (missionStep.toolName === 'browser_session_inspect') {
+    if (output && output.sessionId === missionStep.arguments.sessionId &&
+      output.operation === 'inspect' && output.workerVerified === true &&
+      typeof output.url === 'string' && /^https?:\/\//.test(output.url) &&
+      typeof output.title === 'string' && typeof output.heading === 'string' &&
+      typeof output.text === 'string') {
+      return { verified: true, reason: 'Browser observation received; independent readback is still required' };
+    }
+    return { verified: false, reason: 'Browser evidence missing or for wrong session' };
+  }
   if (missionStep.toolName === 'file_system_list') {
     if (output && Array.isArray(output.entries) && typeof output.directory === 'string') {
       return { verified: true, reason: 'Directory listing received' };

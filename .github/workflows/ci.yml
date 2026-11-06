@@ -3,7 +3,7 @@ name: CI
 on:
   push:
   pull_request:
-    branches: [main, prod-release, feat/agent-execution-truth-20261014, feat/durable-autonomous-missions-20261014, feat/aira-autonomous-agent-runtime-v2-20261014]
+    branches: [main, prod-release, feat/agent-execution-truth-20261014, feat/durable-autonomous-missions-20261014, feat/aira-autonomous-agent-runtime-v2-20261014, feat/aira-v2-isolated-build-bridge-20261015]
   workflow_dispatch:
 
 permissions:
@@ -104,6 +104,9 @@ jobs:
 
       - name: Isolated build and exact approvals
         run: npm run test:isolated-build
+
+      - name: Persistent browser and specialist delegation PostgreSQL certification
+        run: npm run test:v2-durable
 
       - name: Workflow engine verification
         run: npm run test:workflow
@@ -256,6 +259,12 @@ jobs:
 
       - name: Install Playwright Edge
         run: npx playwright install --with-deps msedge
+
+      - name: Persistent Chromium real-process acceptance
+        env:
+          AIRA_BROWSER_WORKER_PROCESS: 'true'
+          AIRA_CHROMIUM_PATH: /usr/bin/microsoft-edge
+        run: npm run test:v2-browser-live
 
       - name: Start Vite for E2E
         shell: bash

@@ -39,6 +39,7 @@ import { selectExecutableTool, selectMissionFollowUp } from './tool-selector.js'
 import { compileSupportedMission, validateDurableMission, verifyMissionEvidence, type DurableMissionProgress } from './mission-plan.js';
 import { compileModelMission, validateStoredModelMission, type AnyMissionProgress } from './model-mission.js';
 import { verifyFinalMissionOutcome } from './independent-outcome.js';
+import { DurableDelegations, delegatedScopes, delegationKey, type Specialist, type Delegation } from './specialist-delegation.js';
 
 export class AgentRuntime extends EventEmitter {
   private eventStreams: Map<string, EventEmitter> = new Map();
@@ -247,6 +248,92 @@ export class AgentRuntime extends EventEmitter {
     return run;
   }
 
+  /**
+   * Delegates a real, read-only child run with narrowed permissions and a
+   * PostgreSQL parent/child record. Cannot invoke browser writes or shells.
+   * This is server-authoritative orchestration; model planning of delegations
+   * is NOT enabled until planner policies explicitly support it.
+   */
+  public async delegateSpecialist(
+    parentRunId: string,
+    specialist: Specialist,
+    objective: string,
+    requestedScopes: string[],
+    principal: ExecutionPrincipal
+  ): Promise<Delegation> {
+    if (process.env.AIRA_SPECIALIST_DELEGATION_ENABLED !== 'true')
+      throw new Error('SPECIALIST_DELEGATION_NOT_ENABLED');
+    if (typeof objective !== 'string' || objective.length < 5 || objective.length > 16000)
+      throw new Error('DELEGATION_INVALID_OBJECTIVE');
+    const parent = await this.runRepo.getRun(parentRunId);
+    if (!parent || parent.principalId !== principal.userId ||
+        parent.sessionId !== principal.sessionId ||
+        !['QUEUED','RUNNING','WAITING_FOR_APPROVAL','WAITING_FOR_TOOL'].includes(parent.state))
+      throw new Error('DELEGATION_PARENT_NOT_AUTHORIZED');
+    const scopes = delegatedScopes(
+      parent.principalScopes.filter(s => (principal.scopes || []).includes(s)),
+      requestedScopes, specialist
+    );
+    const repo = new DurableDelegations();
+    const key = delegationKey(parent.id, specialist, objective);
+    const existing = await repo.findByKey(principal.userId, parent.id, key);
+    if (existing) {
+      if (!isDeepStrictEqual(existing.scopes, scopes))
+        throw new Error('DELEGATION_IDEMPOTENCY_SCOPE_CONFLICT');
+      return existing;
+    }
+    // Create a real AIRA run; never create an artificial specialist response.
+    const childPrincipal: ExecutionPrincipal = {
+      ...principal, scopes, workspaceId: parent.workspaceId || undefined,
+      projectId: parent.projectId || undefined
+    };
+    const child = await this.createRun({
+      prompt: objective, intent: 'AGENT_MISSION',
+      modelPolicy: { model: parent.modelPolicy.model },
+      context: { specialist, delegatedFrom: parent.id }
+    }, childPrincipal);
+    try {
+      if (child.provenance?.provider === 'mock') throw new Error('DELEGATION_LIVE_MODEL_REQUIRED');
+      const row = await repo.register(parent, child, specialist, objective, scopes, key);
+      // Only launch after a verified persisted delegation exists.
+      setImmediate(() => this.startDelegatedChild(row.id, principal.userId).catch(
+        err => console.error('Delegated child execution failed:', err)
+      ));
+      return row;
+    } catch (err) {
+      // Never leave an unlinked orphan child runnable after a racing request.
+      child.state = 'CANCELLED';
+      child.error = 'DELEGATION_REGISTRATION_ABORTED';
+      await this.runRepo.saveRun(child);
+      const winner = await repo.findByKey(principal.userId, parent.id, key);
+      if (winner && isDeepStrictEqual(winner.scopes, scopes)) return winner;
+      throw err;
+    }
+  }
+
+  public async startDelegatedChild(delegationId: string, ownerId: string): Promise<void> {
+    const repo = new DurableDelegations();
+    const record = await repo.get(ownerId, delegationId);
+    if (!record || record.status === 'CANCELLED' ||
+        record.status === 'COMPLETED' || record.status === 'FAILED') return;
+    const child = await this.runRepo.getRun(record.childRunId);
+    if (!child || child.principalId !== ownerId || child.state === 'CANCELLED')
+      throw new Error('DELEGATION_CHILD_NOT_AUTHORIZED');
+    const worker = 'delegation_' + crypto.randomUUID();
+    const claimed = await repo.claim(ownerId, delegationId, worker, 120000);
+    // Existing recovery for interrupted read-only missions is preserved.
+    // Lease expiration is not a license to replay consequential actions.
+    await this.startRun(child.id);
+    await repo.finalize(ownerId, claimed.id, worker, claimed.fence);
+  }
+
+  public async listSpecialistDelegations(parentRunId: string, principal: ExecutionPrincipal): Promise<Delegation[]> {
+    const parent = await this.runRepo.getRun(parentRunId);
+    if (!parent || parent.principalId !== principal.userId)
+      throw new Error('DELEGATION_PARENT_NOT_AUTHORIZED');
+    return new DurableDelegations().list(principal.userId, parentRunId);
+  }
+
   public async startRun(runId: string): Promise<void> {
     const run = await this.runRepo.getRun(runId);
     if (!run) return;
@@ -283,6 +370,10 @@ export class AgentRuntime extends EventEmitter {
         role: 'user'
       };
       await this.workflowEngine.cancelWorkflow(wfRun.id, principal);
+    }
+    if(process.env.AIRA_SPECIALIST_DELEGATION_ENABLED === 'true'){
+      // Bounded DB cascade before closing parent prevents orphaned descendants.
+      await new DurableDelegations().cancelTree(run.principalId,runId);
     }
     await this.transitionRunState(runId, 'CANCELLED', 'Run was cancelled programmatically.');
     return true;
@@ -376,6 +467,42 @@ export class AgentRuntime extends EventEmitter {
     if (!run) return;
 
     if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)) return;
+
+    // A delegated child may not treat its own context, model-selected tool,
+    // or prior approval as authorization. Reconcile with PostgreSQL on every
+    // entry/recovery and again before dispatching additional tool calls.
+    const childParent = run.context?.delegatedFrom;
+    const childSpecialist = run.context?.specialist;
+    if (childParent !== undefined || childSpecialist !== undefined) {
+      try {
+        if(typeof childParent!=='string' || !['repository','research','verification'].includes(childSpecialist) ||
+          !['AGENT_MISSION','TOOL_ACTION'].includes(run.intent)) {
+          throw new Error('DELEGATED_CHILD_POLICY_INVALID');
+        }
+        const checkpointTool=['TOOL_SELECTED','TOOL_APPROVED','TOOL_EXECUTING','TOOL_COMPLETED'].includes(
+          run.executionCheckpoint||''
+        ) ? run.toolCalls[run.toolCalls.length-1]?.name : undefined;
+        await new DurableDelegations().assertChildAuthorized(
+          run,childParent,childSpecialist,checkpointTool
+        );
+        if(checkpointTool){
+          const def=this.toolGateway.getTool(checkpointTool)?.definition||
+            this.toolRegistry.get(checkpointTool)?.definition;
+          if(!def || def.permissionLevel!=='READ' ||
+            (def.sideEffectLevel!=='READ'&&def.sideEffectLevel!=='NONE')) {
+            throw new Error('DELEGATED_TOOL_REQUIRES_UNAUTHORIZED_MUTATION');
+          }
+        }
+      } catch(err:any){
+        const message='DELEGATED_EXECUTION_BLOCKED: '+String(err?.message||err);
+        run.error=message;
+        run.content=message;
+        run.executionCheckpoint='TOOL_FAILED';
+        await this.runRepo.saveRun(run);
+        await this.transitionRunState(runId,'FAILED',message);
+        return;
+      }
+    }
 
     // No persisted model-plan tool can ever reach the approval or execution
     // gateway without passing the server HMAC, scope and exact-call gates.
@@ -653,6 +780,20 @@ export class AgentRuntime extends EventEmitter {
 
         const selectedToolName = selected.name;
         const selectedArgs = selected.args;
+        if (typeof childParent === 'string' && childSpecialist) {
+          try {
+            await new DurableDelegations().assertChildAuthorized(
+              run,childParent,childSpecialist,selectedToolName
+            );
+          }catch(err:any){
+            const message='DELEGATED_TOOL_REJECTED: '+String(err?.message||err);
+            run.error=message;
+            run.executionCheckpoint='TOOL_FAILED';
+            await this.runRepo.saveRun(run);
+            await this.transitionRunState(runId,'FAILED',message);
+            return;
+          }
+        }
         if (!this.toolGateway.getTool(selectedToolName) && !this.toolRegistry.get(selectedToolName)) {
           const message = `TOOL_UNAVAILABLE: ${selectedToolName} is not registered in this runtime. No simulated execution was performed.`;
           run.content = message;
@@ -796,6 +937,9 @@ export class AgentRuntime extends EventEmitter {
       }
 
       run = await this.runRepo.getRun(runId) as Run; // reload after async tool execution
+      // Parent cancellation can mark a child CANCELLED during an asynchronous
+      // read. Never resurrect that cancelled run with a late tool result.
+      if(!run || ['CANCELLED','FAILED'].includes(run.state)) return;
 
       const recoveryEngine = new ToolRecoveryEngine();
       let finalToolResult = toolResult;
@@ -1001,7 +1145,7 @@ export class AgentRuntime extends EventEmitter {
         // Independent readback is a separate gate from successful adapter calls.
         if (progress.version === 2) {
           const outcome = await verifyFinalMissionOutcome(
-            progress.plan.steps, run.toolCalls, run.toolResults, this.workspaceRoot
+            progress.plan.steps, run.toolCalls, run.toolResults, this.workspaceRoot, run.principalId
           );
           run.context.__airaOutcomeVerificationV2 = outcome;
           await this.runRepo.saveRun(run);

@@ -16,6 +16,7 @@ import { BrowserAdapter } from './adapters/browser-adapter.js';
 import { FileSystemAdapter } from './adapters/file-adapter.js';
 import { RepositoryAdapter } from './adapters/repo-adapter.js';
 import { IsolatedBuildBridge } from './adapters/isolated-build-bridge.js';
+import { BrowserWorkerClient } from '../../agent-runtime/src/browser-worker-transport.js';
 import { db } from '../../db/src/index.js';
 import { ConnectorRegistry, GitHubConnectorAdapter } from './adapters/connector-adapter.js';
 
@@ -489,6 +490,65 @@ export class ToolGateway extends EventEmitter {
   }
 
   private registerBuiltInTools(): void {
+    // Feature is off until a dedicated browser worker and verified identity
+    // are certified. This does not expose clicks, navigation or browser writes.
+    if (process.env.AIRA_DURABLE_BROWSER_ENABLED === 'true' &&
+        process.env.NODE_ENV !== 'production') {
+      const client = new BrowserWorkerClient();
+      this.registerTool({
+        definition: {
+          id: 'tool_browser_session_inspect',
+          name: 'browser_session_inspect',
+          version: 1,
+          description: 'Read the actual currently open page of an explicitly named, owner-bound persistent browser session. Does not navigate or mutate.',
+          category: 'browser',
+          source: 'native',
+          parameters: {
+            type: 'object', properties: {
+              sessionId: { type: 'string', description: 'Explicit bs_UUID session identifier already created for the authenticated user' }
+            }, required: ['sessionId']
+          },
+          permissionLevel: 'READ',
+          sideEffectLevel: 'READ',
+          permissionScopes: ['browser.read'],
+          approvalPolicy: 'autonomous',
+          idempotencyClass: 'IDEMPOTENT',
+          retryPolicy: { maxAttempts: 1, backoffMs: 500, factor: 1, retryableErrorCodes: [] },
+          executionRuntime: 'CLOUD',
+          timeoutMs: 26000,
+          availability: 'READY',
+          adapter: 'native',
+          provider: 'aira-durable-browser-worker'
+        },
+        execute: async (args, ctx) => {
+          const sessionId = args.sessionId;
+          if (typeof sessionId !== 'string' ||
+              !/^bs_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(sessionId) ||
+              Object.keys(args).length !== 1) {
+            throw new Error('BROWSER_SESSION_ID_INVALID');
+          }
+          const run = await db('runs').select('principal_id').where({ id:ctx.runId }).first();
+          if (!run || run.principal_id !== ctx.principal.userId)
+            throw new Error('BROWSER_RUN_OWNER_MISMATCH');
+          const row = await db('v2_browser_sessions')
+            .select('state').where({id:sessionId,owner_id:ctx.principal.userId}).first();
+          if (!row || row.state === 'CLOSED')
+            throw new Error('BROWSER_SESSION_NOT_AVAILABLE');
+          const observed = await client.observe(ctx.principal.userId,sessionId,'inspect') as any;
+          if (observed?.operation !== 'inspect' ||
+              observed?.sessionId !== sessionId ||
+              observed?.workerVerified !== true ||
+              typeof observed.url !== 'string' ||
+              typeof observed.title !== 'string' ||
+              typeof observed.heading !== 'string' ||
+              typeof observed.text !== 'string') {
+            throw new Error('BROWSER_WORKER_OBSERVATION_INVALID');
+          }
+          return observed;
+        }
+      });
+    }
+
     // The existing isolated Docker worker (PR #42–45) is a separate service.
     // Never expose this privileged tool unless an operator enabled the bridge
     // AND a real approval kernel is present. The gateway further requires an

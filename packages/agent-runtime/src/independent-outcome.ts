@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type { ToolCall, ToolResult } from '../../contracts/src/index.js';
 import { FileSystemAdapter } from '../../tool-runtime/src/adapters/file-adapter.js';
 import { RepositoryAdapter } from '../../tool-runtime/src/adapters/repo-adapter.js';
+import { BrowserWorkerClient } from './browser-worker-transport.js';
 import { verifyMissionEvidence, type MissionStep } from './mission-plan.js';
 
 export type OutcomeStatus = 'COMPLETED_VERIFIED' | 'FAILED_VERIFICATION';
@@ -30,7 +31,8 @@ export async function verifyFinalMissionOutcome(
   steps: readonly MissionStep[],
   calls: readonly ToolCall[],
   results: readonly ToolResult[],
-  workspaceRoot: string
+  workspaceRoot: string,
+  principalId?: string
 ): Promise<VerifiedOutcome> {
   const evidence: OutcomeEvidence[] = [];
   const files = new FileSystemAdapter(workspaceRoot);
@@ -49,7 +51,7 @@ export async function verifyFinalMissionOutcome(
     const checkedAt = Date.now();
     const correctCall = step.toolName === call.name &&
       isDeepStrictEqual(step.arguments, call.arguments) &&
-      Boolean(result && result.toolCallId);
+      Boolean(result && result.toolCallId === call.id);
     const verifiedEnvelope = correctCall && verifyMissionEvidence(step, result).verified;
     let reason = correctCall ? 'Independent readback matched' : 'Wrong tool, arguments, or missing call result';
     let verified = false;
@@ -57,6 +59,27 @@ export async function verifyFinalMissionOutcome(
       try {
         const output = result.output as any;
         switch (step.toolName) {
+          case 'browser_session_inspect': {
+            const sessionId=String(step.arguments.sessionId||'');
+            if(!principalId)throw new Error('BROWSER_VERIFICATION_PRINCIPAL_REQUIRED');
+            // A separate authenticated worker request re-observes actual DOM
+            // state; the producing agent/tool result is not trusted.
+            const direct=await new BrowserWorkerClient().observe(
+              principalId,sessionId,'inspect'
+            ) as any;
+            verified=direct?.workerVerified===true &&
+              direct.sessionId===sessionId &&
+              direct.operation==='inspect' &&
+              output?.sessionId===sessionId &&
+              output.workerVerified===true &&
+              output.operation==='inspect' &&
+              direct.url===output.url &&
+              direct.title===output.title &&
+              direct.heading===output.heading &&
+              direct.text===output.text;
+            if(!verified)reason='Independent browser DOM readback mismatched recorded observation';
+            break;
+          }
           case 'file_system_read': {
             const actual = await files.read(String(step.arguments.filePath));
             verified = output.filePath === actual.filePath &&
