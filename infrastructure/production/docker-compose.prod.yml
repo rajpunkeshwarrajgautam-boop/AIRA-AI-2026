@@ -1,6 +1,7 @@
 # ==============================================================================
-# AIRA AI 2026 — Production Architecture (Oracle Cloud Ampere A1 ARM64)
-# Target Shape: VM.Standard.A1.Flex (1 OCPU, 6.0 GiB RAM, Ubuntu 24.04 aarch64)
+# AIRA AI 2026 — Dedicated Production Worker (ARM64 or AMD64)
+# Default: Oracle Ampere ARM64. An approved x86-64 Linux host must set
+# AIRA_TARGET_PLATFORM=linux/amd64 in its protected host environment file.
 # Project Name: aira-autonomous-production
 # Services:
 #   1. specialist-worker: AIRA autonomous agent runtime daemon (Port 127.0.0.1:8080)
@@ -8,7 +9,7 @@
 #
 # Production Security & Isolation Invariants:
 # - Bound strictly to loopback interface 127.0.0.1:8080 (No direct public exposure)
-# - Worker concurrency: 1 (Tailored for dedicated 1 OCPU VM with 6 GB RAM)
+# - Worker concurrency: 1 (conservative start; increase only after host benchmarking)
 # - Protected environment file (/etc/aira/production-worker.env) is authoritative
 # - Sandbox runner isolated on non-gateway internal bridge (sandbox-net: internal: true)
 # - Root filesystem read-only for sandbox runner; zero Docker socket mounted
@@ -18,11 +19,12 @@ name: aira-autonomous-production
 
 services:
   specialist-worker:
+    platform: ${AIRA_TARGET_PLATFORM:-linux/arm64}
     build:
       context: ../..
       dockerfile: Dockerfile.worker
       platforms:
-        - "linux/arm64"
+        - ${AIRA_TARGET_PLATFORM:-linux/arm64}
     image: aira-specialist-worker:${AIRA_IMAGE_TAG:-v2026.1.0-2ac3122}
     container_name: ${CONTAINER_NAME:-aira-autonomous-worker-prod}
     restart: unless-stopped
@@ -102,11 +104,12 @@ services:
       - /tmp:exec,mode=1777,size=512M
 
   sandbox-runner:
+    platform: ${AIRA_TARGET_PLATFORM:-linux/arm64}
     build:
       context: ../..
       dockerfile: Dockerfile.sandbox-runner
       platforms:
-        - "linux/arm64"
+        - ${AIRA_TARGET_PLATFORM:-linux/arm64}
     image: aira-sandbox-runner:${AIRA_IMAGE_TAG:-v2026.1.0-2ac3122}
     container_name: ${SANDBOX_CONTAINER_NAME:-aira-sandbox-runner-prod}
     restart: unless-stopped
