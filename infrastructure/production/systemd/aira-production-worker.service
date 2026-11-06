@@ -1,5 +1,5 @@
 [Unit]
-Description=AIRA Production Autonomous Specialist Worker (Oracle Ampere A1)
+Description=AIRA Production Autonomous Specialist Worker (dedicated Linux host)
 Documentation=https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026
 After=docker.service network-online.target
 Requires=docker.service
