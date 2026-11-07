@@ -157,6 +157,7 @@ export interface Project {
   instructions: string;
   docs: ProjectDoc[];
   createdAt: number;
+  updatedAt?: number;
   knowledgeGraph?: import('../utils/knowledgeGraph').KnowledgeGraph;
 }
 

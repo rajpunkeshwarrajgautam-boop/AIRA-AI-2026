@@ -102,6 +102,8 @@ export async function idbGet<T>(storeName: StoreName, key: string): Promise<T | 
 
 /**
  * Persists a value by key to an IndexedDB store.
+ * Durability guarantee: Resolves true ONLY when the transaction is fully committed (tx.oncomplete).
+ * If the transaction aborts, errors, or fails to commit, resolves false without claiming durability.
  */
 export async function idbSet<T>(storeName: StoreName, key: string, value: T): Promise<boolean> {
   try {
@@ -114,16 +116,37 @@ export async function idbSet<T>(storeName: StoreName, key: string, value: T): Pr
         const store = tx.objectStore(storeName);
         const req = store.put(value, key);
 
+        let reqSucceeded = false;
+        let settled = false;
+
+        const fail = () => {
+          if (!settled) {
+            settled = true;
+            resolve(false);
+          }
+        };
+
         req.onsuccess = () => {
-          resolve(true);
+          reqSucceeded = true;
         };
 
         req.onerror = () => {
-          resolve(false);
+          fail();
+        };
+
+        tx.oncomplete = () => {
+          if (!settled) {
+            settled = true;
+            resolve(reqSucceeded);
+          }
+        };
+
+        tx.onerror = () => {
+          fail();
         };
 
         tx.onabort = () => {
-          resolve(false);
+          fail();
         };
       } catch {
         resolve(false);
@@ -136,6 +159,7 @@ export async function idbSet<T>(storeName: StoreName, key: string, value: T): Pr
 
 /**
  * Removes a value by key from an IndexedDB store.
+ * Durability guarantee: Resolves true ONLY when the transaction is fully committed (tx.oncomplete).
  */
 export async function idbDelete(storeName: StoreName, key: string): Promise<boolean> {
   try {
@@ -148,12 +172,37 @@ export async function idbDelete(storeName: StoreName, key: string): Promise<bool
         const store = tx.objectStore(storeName);
         const req = store.delete(key);
 
+        let reqSucceeded = false;
+        let settled = false;
+
+        const fail = () => {
+          if (!settled) {
+            settled = true;
+            resolve(false);
+          }
+        };
+
         req.onsuccess = () => {
-          resolve(true);
+          reqSucceeded = true;
         };
 
         req.onerror = () => {
-          resolve(false);
+          fail();
+        };
+
+        tx.oncomplete = () => {
+          if (!settled) {
+            settled = true;
+            resolve(reqSucceeded);
+          }
+        };
+
+        tx.onerror = () => {
+          fail();
+        };
+
+        tx.onabort = () => {
+          fail();
         };
       } catch {
         resolve(false);

@@ -51,12 +51,17 @@ const {
   saveProjects,
   exportAllStorageData,
   getStorageHealth,
+  markWorkspaceKeyVerifiedInIdb,
+  resetStorageForTesting,
 } = await import('../src/utils/storage.js');
 
 test.beforeEach(() => {
   mockStorage.clear();
   mockStorage.shouldFailOnKey = null;
   mockStorage.failCount = 0;
+  if (typeof resetStorageForTesting === 'function') {
+    resetStorageForTesting();
+  }
 });
 
 test('[Storage Normal] Saves and loads conversations normally', async () => {
@@ -145,11 +150,14 @@ test('[Storage Quota] Handles QuotaExceededError gracefully without dropping in-
   assert.ok((health.lastQuotaErrorAt ?? 0) > 0, 'Quota error timestamp recorded in health state');
 });
 
-test('[Settings Quota Recovery] saveSettings evicts legacy blobs and retries safely under quota pressure', async () => {
-  // Populate legacy bloated workspace synced keys
+test('[Settings Quota Recovery] saveSettings evicts ONLY verified blobs and retries safely under quota pressure', async () => {
+  // Populate bloated workspace synced keys
   mockStorage.setItem('aira_workspace_synced_v1_old_1', 'X'.repeat(50000));
   mockStorage.setItem('aira_workspace_synced_v1_old_2', 'Y'.repeat(50000));
   assert.equal(mockStorage.length, 2);
+
+  // Mark key 1 as verified durable in IndexedDB
+  markWorkspaceKeyVerifiedInIdb('aira_workspace_synced_v1_old_1');
 
   // Set initial settings
   const settings = loadSettings();
@@ -169,16 +177,18 @@ test('[Settings Quota Recovery] saveSettings evicts legacy blobs and retries saf
     return originalSetItem(k, v);
   };
 
-  // Save settings succeeds and purges the bloated legacy keys
+  // Save settings succeeds and safely purges the verified blob
   saveSettings(settings);
 
   // Verify settings are saved
   const reloaded = loadSettings();
   assert.equal(reloaded.userName, 'Production Tester');
 
-  // Verify bloated legacy keys were safely evicted to liberate quota
+  // Key 1 (verified) was safely evicted to liberate quota
   assert.equal(mockStorage.getItem('aira_workspace_synced_v1_old_1'), null);
-  assert.equal(mockStorage.getItem('aira_workspace_synced_v1_old_2'), null);
+
+  // Key 2 (unverified) was PRESERVED because it was not verified in IndexedDB!
+  assert.notEqual(mockStorage.getItem('aira_workspace_synced_v1_old_2'), null);
 });
 
 test('[Disaster Recovery] exportAllStorageData produces complete recoverable JSON dump', async () => {
@@ -197,7 +207,9 @@ test('[Disaster Recovery] exportAllStorageData produces complete recoverable JSO
     {
       id: 'proj-1',
       name: 'Project Alpha',
-      conversations: ['c-export-test'],
+      description: 'Test project description',
+      instructions: 'Test project instructions',
+      docs: [],
       createdAt: 1000,
       updatedAt: 1000,
     },
@@ -215,7 +227,7 @@ test('[Disaster Recovery] exportAllStorageData produces complete recoverable JSO
   assert.equal(parsed.projects.length, 1);
 });
 
-test('[Storage Safety Regression] Quota recovery NEVER evicts conversation keys from LocalStorage', async () => {
+test('[Storage Safety Regression] Quota recovery NEVER evicts unverified blobs or conversations', async () => {
   // Pre-seed an existing conversation in localStorage
   const existingConv = [
     {
@@ -228,7 +240,11 @@ test('[Storage Safety Regression] Quota recovery NEVER evicts conversation keys 
   ];
   mockStorage.setItem('aira_conversations_v1', JSON.stringify(existingConv));
   mockStorage.setItem('aira_conversations_user_usr_123', JSON.stringify(existingConv));
-  mockStorage.setItem('aira_workspace_synced_v1_ephemeral', 'temp blob');
+  mockStorage.setItem('aira_workspace_synced_v1_unverified', 'precious unsynced data');
+  mockStorage.setItem('aira_workspace_synced_v1_verified', 'safe to delete data');
+
+  // Explicitly mark only the verified key
+  markWorkspaceKeyVerifiedInIdb('aira_workspace_synced_v1_verified');
 
   // Trigger quota error on saveSettings
   const settings = loadSettings();
@@ -248,13 +264,20 @@ test('[Storage Safety Regression] Quota recovery NEVER evicts conversation keys 
 
   saveSettings(settings);
 
-  // Ephemeral workspace blob is evicted
-  assert.equal(mockStorage.getItem('aira_workspace_synced_v1_ephemeral'), null);
+  // Verified workspace blob was safely evicted
+  assert.equal(mockStorage.getItem('aira_workspace_synced_v1_verified'), null);
+
+  // CRITICAL P1 INVARIANT: Unverified workspace blob MUST NOT be deleted!
+  assert.equal(
+    mockStorage.getItem('aira_workspace_synced_v1_unverified'),
+    'precious unsynced data',
+    'Unverified workspace records must NEVER be deleted without verified IndexedDB durability'
+  );
 
   // CRITICAL CHECK: Conversation keys MUST remain untouched in localStorage!
   assert.notEqual(mockStorage.getItem('aira_conversations_v1'), null, 'aira_conversations_v1 must NEVER be evicted by quota cleanup');
   assert.notEqual(mockStorage.getItem('aira_conversations_user_usr_123'), null, 'User conversation keys must NEVER be evicted by quota cleanup');
-  
+
   const preserved = JSON.parse(mockStorage.getItem('aira_conversations_v1')!);
   assert.equal(preserved[0].id, 'c-critical-user');
 });

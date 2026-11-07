@@ -5,7 +5,7 @@ import {
   loadConversations, saveConversations, saveActiveChatId,
   getSessionActiveChatId, setSessionActiveChatId,
   loadProjects, saveProjects, loadSettings, saveSettings, INITIAL_CONVERSATION,
-  hydrateStorageFromIndexedDb
+  hydrateStorageFromIndexedDb, deleteConversationRecord, deleteProjectRecord
 } from './utils/storage';
 import { streamAIResponse } from './utils/aiEngine';
 import { appendAgentTimelineEvent } from './utils/agentTimeline';
@@ -80,12 +80,18 @@ function App() {
     return '';
   });
   useEffect(() => {
-    void hydrateStorageFromIndexedDb(currentUserId || undefined).then(loaded => {
-      if (loaded && loaded.length > 0) {
+    void hydrateStorageFromIndexedDb(currentUserId || undefined).then(({ conversations: loadedConvs, projects: loadedProjs }) => {
+      if (loadedConvs && loadedConvs.length > 0) {
         setConversations(prev => {
           if (prev.length === 1 && prev[0].id === 'welcome-to-aira' && prev[0].messages.length === 0) {
-            return loaded;
+            return loadedConvs;
           }
+          return prev;
+        });
+      }
+      if (loadedProjs && loadedProjs.length > 0) {
+        setProjects(prev => {
+          if (prev.length === 0) return loadedProjs;
           return prev;
         });
       }
@@ -554,6 +560,7 @@ useEffect(() => {
 
   const handleDeleteChat = (id: string) => {
     if (!conversations.some(conversation => conversation.id === id)) return;
+    deleteConversationRecord(id, currentUserId || undefined);
     setConversations(prev => {
       const filtered = prev.filter(c => c.id !== id);
       const next = filtered.length ? filtered : [{ ...INITIAL_CONVERSATION, id: 'chat-' + Date.now(), createdAt: Date.now(), updatedAt: Date.now() }];
@@ -567,6 +574,13 @@ useEffect(() => {
     conversationSyncVersionsRef.current.delete(id);
     void deleteConversationFromServer(id);
     showToast('Conversation deleted');
+  };
+
+  const handleDeleteProject = (id: string) => {
+    deleteProjectRecord(id);
+    setProjects(prev => prev.filter(p => p.id !== id));
+    if (activeProjectId === id) setActiveProjectId(undefined);
+    showToast('Project deleted');
   };
 
   const handleRenameChat = (id: string, title: string) => updateConversation(id, c => ({ ...c, title, updatedAt: Date.now() }));
@@ -681,8 +695,9 @@ useEffect(() => {
   const handleSwitchToAgentAndReview = useCallback((prompt: string) => {
     setWorkspaceMode('agent');
     setActiveAgentPrompt(prompt);
-    // Normal conversation is primary; workspace remains closed by default
-    showToast('Switched to Agent Mode. Task ready in conversation.');
+    setIsStudioOpen(true);
+    userDismissedStudioRef.current = false;
+    showToast('Switched to Agent Mode. Review task and sandbox authorization in workspace.');
   }, [setWorkspaceMode, showToast]);
 
   const handleConfirmAutomation = useCallback(async (proposal: {
@@ -1001,8 +1016,9 @@ useEffect(() => {
 
     // 3. BUILDER APP IN AGENT MODE (Launch builder and open contextual panel)
     if (intent.capability === 'BUILDER_APP' && workspaceMode === 'agent') {
-      // Normal conversation is primary; workspace remains closed by default
       setActiveAgentPrompt(intent.cleanPrompt || rawText);
+      setIsStudioOpen(true);
+      userDismissedStudioRef.current = false;
     }
 
     // 4. AUTOMATION ENGINE CAPABILITY DISPATCH (Requires explicit schedule resolution and user confirmation)
@@ -1607,6 +1623,15 @@ useEffect(() => {
               executionGraph={activeExecutionGraph}
               onApproveTask={handleTaskApproval}
               workspaceMode={workspaceMode}
+              activeAgentPrompt={activeAgentPrompt}
+              onActivePromptConsumed={() => setActiveAgentPrompt(undefined)}
+              model={settings.activeModel}
+              onPreviewAvailable={() => {
+                showToast('Live sandboxed preview ready in workspace.');
+              }}
+              onExecutionCancelled={() => {
+                showToast('Execution stopped.');
+              }}
             />
           )
         ) : (
@@ -1637,10 +1662,7 @@ useEffect(() => {
             activeProjectId={activeProjectId}
             onSelectProject={setActiveProjectId}
             onSaveProject={project => setProjects(prev => [project, ...prev.filter(p => p.id !== project.id)])}
-            onDeleteProject={id => {
-              setProjects(prev => prev.filter(p => p.id !== id));
-              if (activeProjectId === id) setActiveProjectId(undefined);
-            }}
+            onDeleteProject={handleDeleteProject}
           />
         )}
 
