@@ -1,15 +1,15 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { 
-  Code, 
-  Play, 
-  Copy, 
-  Check, 
-  Download, 
-  Maximize2, 
-  Minimize2, 
-  X, 
-  RotateCw, 
-  Terminal, 
+import {
+  Code,
+  Play,
+  Copy,
+  Check,
+  Download,
+  Maximize2,
+  Minimize2,
+  X,
+  RotateCw,
+  Terminal,
   Layers,
   ExternalLink,
   Monitor,
@@ -283,8 +283,8 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
   };
 
   const handleDownload = () => {
-    const ext = artifact.language === 'python' ? '.py' : 
-                artifact.type === 'image/svg+xml' ? '.svg' : 
+    const ext = artifact.language === 'python' ? '.py' :
+                artifact.type === 'image/svg+xml' ? '.svg' :
                 artifact.type === 'application/vnd.ant.mermaid' ? '.mmd' :
                 artifact.type === 'text/markdown' ? '.md' :
                 artifact.type === 'application/vnd.ant.react' || artifact.language === 'tsx' ? '.tsx' :
@@ -384,7 +384,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
   return (
     <AnimatePresence>
       {artifact && (
-        <motion.aside 
+        <motion.aside
           initial={{ x: '100%', opacity: 0.5, boxShadow: '0 0 0 rgba(0,0,0,0)' }}
           animate={{ x: 0, opacity: 1, boxShadow: '-20px 0 40px -15px rgba(0,0,0,0.2)' }}
           exit={{ x: '100%', opacity: 0.5, boxShadow: '0 0 0 rgba(0,0,0,0)' }}
@@ -444,9 +444,9 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                   {artifact.versions && artifact.versions.length > 1 ? (
                     <div className="flex items-center space-x-1">
                       <span className="text-[10px] text-claude-muted-light dark:text-claude-muted-dark">Version</span>
-                      <select 
+                      <select
                         aria-label="Artifact revision"
-                        value={selectedVersion} 
+                        value={selectedVersion}
                         onChange={(e) => {
                           activeNonceRef.current = newSandboxNonce();
                           setRuntimeError(null);
@@ -510,8 +510,8 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                           transition={prefersReducedMotion ? { duration: 0 } : { type: 'spring', stiffness: 400, damping: 30 }}
                         />
                       )}
-                      <Icon className="h-3.5 w-3.5" />
-                      <span>{tab.label}</span>
+                      <Icon className="h-3.5 w-3.5 shrink-0" />
+                      <span className="hidden sm:inline">{tab.label}</span>
                     </button>
                   );
                 })}
@@ -568,37 +568,37 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                     title="Restore selected version as a new revision"
                   >Restore</button>
                 )}
-                <button 
-                  onClick={handleCopy} 
-                  className="p-1.5 rounded-lg text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark hover:text-claude-text-light dark:hover:text-white transition-colors" 
+                <button
+                  onClick={handleCopy}
+                  className="p-1.5 rounded-lg text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark hover:text-claude-text-light dark:hover:text-white transition-colors"
                   title="Copy code"
                 >
                   {isCopied ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
                 </button>
-                <button 
-                  onClick={handleDownload} 
-                  className="p-1.5 rounded-lg text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark hover:text-claude-text-light dark:hover:text-white transition-colors" 
+                <button
+                  onClick={handleDownload}
+                  className="p-1.5 hidden sm:block rounded-lg text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark hover:text-claude-text-light dark:hover:text-white transition-colors"
                   title="Download file"
                 >
                   <Download className="w-4 h-4" />
                 </button>
-                <button 
-                  onClick={handleOpenInNewTab} 
-                  className="p-1.5 rounded-lg text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark hover:text-claude-text-light dark:hover:text-white transition-colors" 
+                <button
+                  onClick={handleOpenInNewTab}
+                  className="p-1.5 hidden sm:block rounded-lg text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark hover:text-claude-text-light dark:hover:text-white transition-colors"
                   title="Open in new tab"
                 >
                   <ExternalLink className="w-4 h-4" />
                 </button>
-                <button 
-                  onClick={() => setIsExpanded(!isExpanded)} 
-                  className="p-1.5 hidden md:block rounded-lg text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark hover:text-claude-text-light dark:hover:text-white transition-colors" 
+                <button
+                  onClick={() => setIsExpanded(!isExpanded)}
+                  className="p-1.5 hidden md:block rounded-lg text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark hover:text-claude-text-light dark:hover:text-white transition-colors"
                   title={isExpanded ? "Collapse width" : "Expand width"}
                 >
                   {isExpanded ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
                 </button>
-                <button 
-                  onClick={onClose} 
-                  className="p-1.5 ml-0.5 rounded-lg bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark hover:text-red-500 transition-colors" 
+                <button
+                  onClick={onClose}
+                  className="p-1.5 ml-0.5 rounded-lg shrink-0 bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark hover:text-red-500 transition-colors"
                   title="Close artifact"
                 >
                   <X className="w-4 h-4" />
@@ -648,12 +648,12 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
             <div className="flex-1 relative overflow-hidden flex flex-col">
               <AnimatePresence mode="wait">
               {activeTab === 'preview' ? (
-                <motion.div 
-                  key="preview" 
-                  initial={{ opacity: 0 }} 
-                  animate={{ opacity: 1 }} 
-                  exit={{ opacity: 0 }} 
-                  transition={{ duration: 0.15 }} 
+                <motion.div
+                  key="preview"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.15 }}
                   role="tabpanel"
                   id="tabpanel-preview"
                   aria-labelledby="tab-preview"
@@ -816,10 +816,10 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                   {/* Console Drawer */}
                   <AnimatePresence>
                     {showConsole && (
-                      <motion.div 
-                        initial={{ height: 0, opacity: 0 }} 
-                        animate={{ height: 160, opacity: 1 }} 
-                        exit={{ height: 0, opacity: 0 }} 
+                      <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 160, opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
                         className="bg-[#121214] text-stone-300 border-t border-claude-border-dark p-3 font-mono text-xs overflow-y-auto"
                       >
                         <div className="flex items-center justify-between pb-1.5 border-b border-stone-800 text-[10px] font-semibold tracking-wider uppercase text-stone-500 mb-2">
@@ -875,12 +875,12 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                 </motion.div>
               ) : (
                 /* Code View */
-                <motion.div 
-                  key="code" 
-                  initial={{ opacity: 0 }} 
-                  animate={{ opacity: 1 }} 
-                  exit={{ opacity: 0 }} 
-                  transition={{ duration: 0.15 }} 
+                <motion.div
+                  key="code"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.15 }}
                   role="tabpanel"
                   id="tabpanel-code"
                   aria-labelledby="tab-code"

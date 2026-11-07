@@ -37,6 +37,41 @@ function seedPhase1Fixture() {
   if (window.top !== window) return;
   const timestamp = Date.now();
 
+  function createWavDataUri(durationSec = 1.0, freq = 523.25, sampleRate = 11025) {
+    const numSamples = Math.floor(durationSec * sampleRate);
+    const dataSize = numSamples * 2;
+    const buffer = new ArrayBuffer(44 + dataSize);
+    const view = new DataView(buffer);
+    function writeString(offset, string) {
+      for (let i = 0; i < string.length; i++) view.setUint8(offset + i, string.charCodeAt(i));
+    }
+    writeString(0, 'RIFF');
+    view.setUint32(4, 36 + dataSize, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeString(36, 'data');
+    view.setUint32(40, dataSize, true);
+    for (let i = 0; i < numSamples; i++) {
+      const t = i / sampleRate;
+      const envelope = Math.exp(-2.5 * t);
+      const sample = Math.sin(2 * Math.PI * freq * t) * envelope * 0.7 * 32767;
+      view.setInt16(44 + i * 2, Math.floor(sample), true);
+    }
+    let binary = '';
+    const bytes = new Uint8Array(buffer);
+    for (let i = 0; i < bytes.byteLength; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return 'data:audio/wav;base64,' + btoa(binary);
+  }
+
   const files = {
     'index.html': {
       id: 'file_index',
@@ -105,14 +140,24 @@ function seedPhase1Fixture() {
       lastModified: timestamp - 1600,
       version: 1
     },
-    'audio/notification.mp3': {
+    'audio/notification.wav': {
       id: 'file_audio',
-      path: 'audio/notification.mp3',
-      name: 'notification.mp3',
+      path: 'audio/notification.wav',
+      name: 'notification.wav',
       kind: 'audio',
-      content: 'data:audio/mp3;base64,//uQZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhACfn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fAAAA',
-      sizeBytes: 256,
+      content: createWavDataUri(1.0, 523.25),
+      sizeBytes: 66194,
       lastModified: timestamp - 1400,
+      version: 1
+    },
+    'audio/corrupted-audio.mp3': {
+      id: 'file_corrupt_audio',
+      path: 'audio/corrupted-audio.mp3',
+      name: 'corrupted-audio.mp3',
+      kind: 'audio',
+      content: 'data:audio/mp3;base64,//uQZAAAAAAAAAAAAAAAAAAAAAAABhACfn5+fAAAA',
+      sizeBytes: 48,
+      lastModified: timestamp - 1300,
       version: 1
     },
     'src/styles.css': {
@@ -402,15 +447,42 @@ try {
       await page.screenshot({ path: path.join(artifactDir, 'phase1-edge-desktop-1600x1000-multimodal-image.png') });
       console.log('PASS 1600x1000: Multi-Modal Image preview & zoom controls certified');
 
-      // 6. Test Multi-Modal Audio Preview
-      await searchInput.fill('notification');
-      await page.locator('[data-testid="search-result-audio-notification.mp3"]').waitFor();
-      await page.locator('[data-testid="search-result-audio-notification.mp3"]').click();
+      // 6. Test Multi-Modal Audio Preview (Valid Audio Playback, Duration & Scrubber)
+      await searchInput.fill('notification.wav');
+      await page.locator('[data-testid="search-result-audio-notification.wav"]').waitFor();
+      await page.locator('[data-testid="search-result-audio-notification.wav"]').click();
       await page.locator('[data-testid="audio-preview-stage"]').waitFor();
       assert.ok(await page.locator('[data-testid="audio-play-pause-btn"]').isVisible());
 
+      // Wait for audio metadata to load and check duration
+      await page.waitForTimeout(500);
+      const durationEl = page.locator('[data-testid="audio-duration"]');
+      await durationEl.waitFor();
+      const durText = await durationEl.textContent();
+      assert.match(durText, /0:0[1-9]/, 'Valid audio must report non-zero duration');
+
+      // Test play and pause toggling
+      const playPauseBtn = page.locator('[data-testid="audio-play-pause-btn"]');
+      await playPauseBtn.click();
+      await page.waitForTimeout(200);
+      await playPauseBtn.click();
+
+      // Test scrubber seek
+      const scrubber = page.locator('[data-testid="audio-scrubber"]');
+      await scrubber.fill('0.75');
+      await scrubber.dispatchEvent('change');
+
       await page.screenshot({ path: path.join(artifactDir, 'phase1-edge-desktop-1600x1000-multimodal-audio.png') });
-      console.log('PASS 1600x1000: Multi-Modal Audio preview & player certified');
+      console.log('PASS 1600x1000: Multi-Modal Audio preview, duration, play/pause & scrubber certified');
+
+      // 6.1 Test Corrupted Audio Error State Fallback
+      await searchInput.fill('corrupted');
+      await page.locator('[data-testid="search-result-audio-corrupted-audio.mp3"]').waitFor();
+      await page.locator('[data-testid="search-result-audio-corrupted-audio.mp3"]').click();
+      const errorBox = page.locator('[data-testid="multimodal-error-box"]');
+      await errorBox.waitFor();
+      assert.match(await errorBox.textContent(), /Failed to load audio asset: corrupted-audio.mp3/);
+      console.log('PASS 1600x1000: Corrupted audio fail-safe error state certified');
 
       await searchInput.fill('');
 
@@ -424,8 +496,23 @@ try {
       await page.screenshot({ path: path.join(artifactDir, 'phase1-edge-mobile-390x844.png') });
       console.log('PASS 390x844: mobile layout certified');
     } else if (viewport.width === 320) {
+      // Test small-mobile layout: close studio to verify chat scroll & composer clearance
+      const closeBtn = page.locator('[title="Close artifact"]');
+      if (await closeBtn.isVisible()) {
+        await closeBtn.click();
+        await page.waitForTimeout(300);
+      }
+      const card = page.locator('[data-testid="artifact-card"]').first();
+      assert.ok(await card.isVisible(), 'Artifact card must be visible on 320x700');
+      await card.focus();
+      assert.ok(await card.evaluate(el => el === document.activeElement), 'Artifact card must be keyboard-focusable');
+      await card.scrollIntoViewIfNeeded();
+
+      // Reopen studio to capture small-mobile studio layout
+      await card.click();
+      await page.locator('[data-testid="artifact-studio"]').waitFor();
       await page.screenshot({ path: path.join(artifactDir, 'phase1-edge-small-mobile-320x700.png') });
-      console.log('PASS 320x700: small mobile layout certified');
+      console.log('PASS 320x700: small mobile layout & un-obscured card certified');
     }
 
     assert.equal(errors.length, 0, `Browser errors on ${viewport.width}px: ${errors.join('; ')}`);

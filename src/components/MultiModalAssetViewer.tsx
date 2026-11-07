@@ -60,6 +60,13 @@ function resolveMediaDataUrl(content: string, mimeType: string): string {
   return trimmed;
 }
 
+export function formatAudioTime(seconds: number): string {
+  if (isNaN(seconds) || !isFinite(seconds) || seconds < 0) return '0:00';
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
 export const MultiModalAssetViewer: React.FC<MultiModalAssetViewerProps> = ({
   file,
   isDark = false
@@ -80,6 +87,7 @@ export const MultiModalAssetViewer: React.FC<MultiModalAssetViewerProps> = ({
     setLoadError(null);
     setIsPlaying(false);
     setAudioProgress(0);
+    setAudioDuration(0);
     return () => {
       for (const url of activeBlobUrlsRef.current) {
         try {
@@ -358,10 +366,23 @@ export const MultiModalAssetViewer: React.FC<MultiModalAssetViewerProps> = ({
             <audio
               ref={audioRef}
               src={mediaSource}
+              preload="metadata"
               onTimeUpdate={() => {
                 if (audioRef.current) {
                   setAudioProgress(audioRef.current.currentTime);
-                  setAudioDuration(audioRef.current.duration || 0);
+                  if (audioRef.current.duration && isFinite(audioRef.current.duration)) {
+                    setAudioDuration(audioRef.current.duration);
+                  }
+                }
+              }}
+              onLoadedMetadata={() => {
+                if (audioRef.current && audioRef.current.duration && isFinite(audioRef.current.duration)) {
+                  setAudioDuration(audioRef.current.duration);
+                }
+              }}
+              onCanPlay={() => {
+                if (audioRef.current && audioRef.current.duration && isFinite(audioRef.current.duration)) {
+                  setAudioDuration(audioRef.current.duration);
                 }
               }}
               onEnded={() => setIsPlaying(false)}
@@ -372,8 +393,11 @@ export const MultiModalAssetViewer: React.FC<MultiModalAssetViewerProps> = ({
             <div className="flex flex-col gap-1.5">
               <input
                 type="range"
+                data-testid="audio-scrubber"
+                aria-label="Audio scrubber"
                 min="0"
-                max={audioDuration || 100}
+                max={audioDuration > 0 ? audioDuration : 100}
+                step="0.01"
                 value={audioProgress}
                 onChange={e => {
                   const val = Number(e.target.value);
@@ -383,8 +407,8 @@ export const MultiModalAssetViewer: React.FC<MultiModalAssetViewerProps> = ({
                 className="w-full h-1 bg-stone-700 rounded appearance-none cursor-pointer accent-purple-400"
               />
               <div className="flex justify-between text-[10px] font-mono text-stone-500">
-                <span>{Math.floor(audioProgress)}s</span>
-                <span>{Math.floor(audioDuration)}s</span>
+                <span data-testid="audio-current-time">{formatAudioTime(audioProgress)}</span>
+                <span data-testid="audio-duration">{formatAudioTime(audioDuration)}</span>
               </div>
             </div>
 

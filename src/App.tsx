@@ -1419,7 +1419,7 @@ function App() {
               onSelectChat={handleSelectChat}
             />
           ) : (
-            <div className="flex-1 pb-6 space-y-4">
+            <div className="flex-1 pb-24 sm:pb-8 space-y-4">
               {activeConversation.messages.map(message => (
                 <div
                   id={`message-${message.id}`}

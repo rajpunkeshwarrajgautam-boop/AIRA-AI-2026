@@ -5,7 +5,7 @@ import {
   inferArtifactFileKind,
   ArtifactPathSecurityError
 } from '../src/utils/artifactPathSecurity';
-import { sanitizeSvgMarkup } from '../src/components/MultiModalAssetViewer';
+import { sanitizeSvgMarkup, formatAudioTime } from '../src/components/MultiModalAssetViewer';
 import {
   createMultiFileBundle,
   adaptSingleFileArtifactToBundle
@@ -170,5 +170,30 @@ describe('Phase 1: Multi-Modal Assets & Cross-Phase Security Hardening', () => {
     assert.equal(zipBuffer[1], 0x4b);
     assert.equal(zipBuffer[2], 0x03);
     assert.equal(zipBuffer[3], 0x04);
+  });
+
+  it('formatAudioTime accurately formats durations and guards against NaN / Infinity / negative inputs', () => {
+    assert.equal(formatAudioTime(0), '0:00');
+    assert.equal(formatAudioTime(9), '0:09');
+    assert.equal(formatAudioTime(15.4), '0:15');
+    assert.equal(formatAudioTime(65), '1:05');
+    assert.equal(formatAudioTime(125), '2:05');
+    assert.equal(formatAudioTime(3600), '60:00');
+    assert.equal(formatAudioTime(NaN), '0:00');
+    assert.equal(formatAudioTime(Infinity), '0:00');
+    assert.equal(formatAudioTime(-10), '0:00');
+  });
+
+  it('validates audio file kind and prevents malformed path traversal in media files', () => {
+    assert.equal(inferArtifactFileKind('sound/chime.wav'), 'audio');
+    assert.equal(inferArtifactFileKind('sound/track.ogg'), 'audio');
+    assert.throws(
+      () => normalizeAndValidateArtifactPath('audio/../secret.wav'),
+      ArtifactPathSecurityError
+    );
+    assert.throws(
+      () => normalizeAndValidateArtifactPath('audio/aux.wav'),
+      ArtifactPathSecurityError
+    );
   });
 });
