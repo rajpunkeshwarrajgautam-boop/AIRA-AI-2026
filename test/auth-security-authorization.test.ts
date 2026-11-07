@@ -113,6 +113,7 @@ async function main() {
   });
 
   let cleanupJwt: string | null = null;
+  let cleanupPrincipalId: string | null = null;
   let cleanupAutomationId: string | null = null;
   let cleanupConversationId: string | null = null;
   let testSucceeded = false;
@@ -140,6 +141,7 @@ async function main() {
 
     const principalId1 = `neon_user_${user1.id}`;
     const principalId2 = `neon_user_${user2.id}`;
+    cleanupPrincipalId = principalId1;
     assert.notEqual(principalId1, principalId2, 'Principals must be distinct');
     console.log(`  ✓ Account 1: ${principalId1}`);
     console.log(`  ✓ Account 2: ${principalId2}`);
@@ -403,6 +405,44 @@ async function main() {
           console.error(`[FIXTURE CLEANUP FAILED] ${name}:`, error);
           process.exitCode = 1;
         }
+      }
+    }
+    // The public conversation DELETE endpoint intentionally soft-deletes to
+    // preserve normal user recovery semantics. Certification fixtures must not
+    // remain as tombstones on a shared staging branch. Remove ONLY the exact
+    // soft-deleted, principal-owned fixture after rechecking live DB identity.
+    if (cleanupConversationId && cleanupPrincipalId) {
+      const cleanupDb = knex({
+        client: 'pg',
+        connection: { connectionString: stagingDbUrl, ssl: { rejectUnauthorized: true } },
+        pool: { min: 0, max: 1 }
+      });
+      try {
+        await assertAuthorizedStagingDatabase(cleanupDb, {
+          allowedProjectIds: [STAGING_NEON_PROJECT_ID],
+          allowedBranchIds: [ISOLATED_BRANCH_ID]
+        });
+        const conversation = await cleanupDb('conversations')
+          .where({ client_id: cleanupConversationId, principal_id: cleanupPrincipalId })
+          .first('id', 'deleted_at');
+        assert.ok(conversation?.id && conversation.deleted_at != null,
+          'Disposable conversation was not soft-deleted by the authenticated API');
+        const removed = await cleanupDb('conversations')
+          .where({
+            id: conversation.id,
+            client_id: cleanupConversationId,
+            principal_id: cleanupPrincipalId
+          })
+          .whereNotNull('deleted_at')
+          .del();
+        assert.equal(removed, 1, `Disposable conversation hard-delete affected ${removed} rows`);
+        console.log('  ✓ Removed the exact soft-deleted certification conversation tombstone');
+      } catch (error) {
+        testSucceeded = false;
+        process.exitCode = 1;
+        console.error('[FIXTURE HARD CLEANUP FAILED]', error);
+      } finally {
+        await cleanupDb.destroy();
       }
     }
     serverProc.kill();
