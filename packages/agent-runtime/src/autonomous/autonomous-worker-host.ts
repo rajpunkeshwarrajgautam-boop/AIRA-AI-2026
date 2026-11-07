@@ -186,8 +186,16 @@ export class AutonomousWorkerHost extends EventEmitter {
             abortController.abort();
           }
         }
-      } catch {
-        // Heartbeat failure
+      } catch (error) {
+        // The worker cannot prove lease ownership after a failed renewal.
+        // Stop executing rather than continue with potentially expired authority.
+        clearInterval(heartbeatTimer);
+        abortController.abort(error);
+        this.emit('worker.error', {
+          workerId: this.workerId,
+          taskId,
+          error: error instanceof Error ? error.message : 'Lease heartbeat failed'
+        });
       }
     }, this.heartbeatIntervalMs);
 

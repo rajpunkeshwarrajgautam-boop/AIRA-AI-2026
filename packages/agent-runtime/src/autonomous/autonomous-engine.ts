@@ -115,12 +115,14 @@ export class AutonomousAgentEngine extends EventEmitter {
     // STEP 1: PLANNING
     await this.transitionState(taskId, 'PLANNING', 'Decomposing natural language objective into structured plan');
 
-    if (!task.plan || task.plan.steps.length === 0) {
-      task.plan = await this.decomposeObjective(task);
-      await this.repository.updateTask(task);
+    const planningTask = await this.repository.getTask(taskId);
+    if (!planningTask) throw new Error(`Task "${taskId}" disappeared while planning.`);
+    if (!planningTask.plan || planningTask.plan.steps.length === 0) {
+      planningTask.plan = await this.decomposeObjective(planningTask);
+      await this.repository.updateTask(planningTask);
     }
 
-    this.emit('task.plan_ready', { taskId, plan: task.plan });
+    this.emit('task.plan_ready', { taskId, plan: planningTask.plan });
 
     // STEP 2: READY
     await this.transitionState(taskId, 'READY', 'Plan compiled; ready for execution');
@@ -140,7 +142,11 @@ export class AutonomousAgentEngine extends EventEmitter {
 
     const abortController = new AbortController();
     if (signal) {
-      signal.addEventListener('abort', () => abortController.abort(), { once: true });
+      if (signal.aborted) {
+        abortController.abort(signal.reason);
+      } else {
+        signal.addEventListener('abort', () => abortController.abort(signal.reason), { once: true });
+      }
     }
     this.activeExecutions.set(taskId, abortController);
 

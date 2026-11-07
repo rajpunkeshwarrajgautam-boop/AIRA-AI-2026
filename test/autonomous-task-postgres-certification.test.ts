@@ -133,6 +133,51 @@ test('Mission A3 — Autonomous Task & Browser Session Real PostgreSQL Database 
       assert.equal(fetched.artifacts.length, 1);
     });
 
+    await t.test('3b. Concurrent content mutations reject stale PostgreSQL snapshots', async () => {
+      const taskId = `task_live_cas_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
+      const now = Date.now();
+      await taskRepo.createTask({
+        taskId,
+        principal: testPrincipal,
+        objective: 'Prevent stale autonomous content overwrites',
+        state: 'RUNNING',
+        observations: [],
+        artifacts: [],
+        workingMemory: {},
+        executionHistory: [],
+        fencingToken: 0,
+        createdAt: now,
+        updatedAt: now
+      });
+
+      const first = (await taskRepo.getTask(taskId))!;
+      const stale = (await taskRepo.getTask(taskId))!;
+      first.workingMemory = { result: 'committed' };
+      await taskRepo.updateTask(first);
+      stale.workingMemory = { result: 'stale overwrite' };
+      await assert.rejects(taskRepo.updateTask(stale), /STALE_TASK_UPDATE/);
+      assert.equal((await taskRepo.getTask(taskId))?.workingMemory?.result, 'committed');
+
+      // Two independent workers take the same revision, then attempt writes at once.
+      const workerA = new PostgresAutonomousTaskRepository();
+      const workerB = new PostgresAutonomousTaskRepository();
+      const snapshotA = (await workerA.getTask(taskId))!;
+      const snapshotB = (await workerB.getTask(taskId))!;
+      snapshotA.workingMemory = { result: 'worker A' };
+      snapshotB.workingMemory = { result: 'worker B' };
+      const race = await Promise.allSettled([
+        workerA.updateTask(snapshotA),
+        workerB.updateTask(snapshotB)
+      ]);
+      assert.equal(race.filter(result => result.status === 'fulfilled').length, 1,
+        'Exactly one worker may commit the shared revision');
+      const loser = race.find(result => result.status === 'rejected');
+      assert.ok(loser && loser.status === 'rejected');
+      assert.match(String(loser.reason), /STALE_TASK_UPDATE/);
+      const committed = (await taskRepo.getTask(taskId))?.workingMemory?.result;
+      assert.ok(committed === 'worker A' || committed === 'worker B');
+    });
+
     await t.test('4. Exercise Atomic State Transitions and Monotonic Fencing Tokens', async () => {
       const taskId = `task_live_fencing_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
       const task: AutonomousAgentTask = {
@@ -216,6 +261,17 @@ test('Mission A3 — Autonomous Task & Browser Session Real PostgreSQL Database 
       // findRecoverableTasks finds the abandoned task
       const recoverable = await taskRepo.findRecoverableTasks!(Date.now());
       assert.ok(recoverable.some(t => t.taskId === taskId), 'Expired lease task must be recoverable');
+
+      // A replacement worker reclaims the crashed worker's lease and fences out its writes.
+      const reclaimed = await taskRepo.claimTask!(taskId, 'worker_node_bravo', 60000);
+      assert.equal(reclaimed.success, true);
+      assert.equal(reclaimed.task?.leaseOwner, 'worker_node_bravo');
+      assert.ok(reclaimed.task!.fencingToken! > activeFencingToken);
+      assert.equal(await taskRepo.renewLease!(taskId, 'worker_node_alpha', 60000, activeFencingToken), false);
+      const crashedSnapshot = claim1.task!;
+      crashedSnapshot.workingMemory = { outdated: true };
+      await assert.rejects(taskRepo.updateTask(crashedSnapshot), /STALE_TASK_UPDATE/);
+      assert.notEqual((await taskRepo.getTask(taskId))?.workingMemory?.outdated, true);
     });
 
     await t.test('6. Exercise Task Deletion', async () => {
