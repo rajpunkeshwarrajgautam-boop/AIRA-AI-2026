@@ -66,12 +66,11 @@ export function validateWorkflowEvidence(runs, jobsById, candidateSha) {
 
 export function validateDeploymentEvidence(statuses, checks) {
   const vercel = (statuses || []).filter(status => status.context === 'Vercel').sort((a, b) => b.id - a.id)[0];
-  if (!vercel || vercel.state !== 'success' ||
-      !/^https:\/\/vercel\.com\/rajpunkeshwarrajgautam-boops-projects\/aira-ai-2026\/[\w-]+$/.test(vercel.target_url || '')) {
-    return 'VERCEL_PREVIEW_NOT_READY';
-  }
+  if (!vercel || vercel.state === 'pending') return 'VERCEL_PREVIEW_PENDING';
+  if (vercel.state !== 'success' || !/^https:\/\/vercel\.com\/rajpunkeshwarrajgautam-boops-projects\/aira-ai-2026\/[\w-]+$/.test(vercel.target_url || '')) return 'VERCEL_PREVIEW_NOT_READY';
   const security = (checks || []).filter(check => /gitguardian/i.test(check.name || '')).sort((a, b) => b.id - a.id)[0];
-  if (!security || security.status !== 'completed' || security.conclusion !== 'success') return 'GITGUARDIAN_NOT_GREEN';
+  if (!security || security.status !== 'completed') return 'GITGUARDIAN_PENDING';
+  if (security.conclusion !== 'success') return 'GITGUARDIAN_NOT_GREEN';
   return null;
 }
 
@@ -162,8 +161,14 @@ export async function verifyProductionCommit({ sha, request = fetch, attempts = 
   return false;
 }
 
-export async function releaseCandidate({ prNumber, token, request = fetch, verify = verifyProductionCommit }) {
-  const candidate = await evaluateLiveCandidate({ prNumber, token, request });
+export async function releaseCandidate({ prNumber, token, request = fetch, verify = verifyProductionCommit,
+  preflightAttempts = 13, preflightDelayMs = 15000 }) {
+  let candidate;
+  for (let attempt = 0; attempt < preflightAttempts; attempt++) {
+    candidate = await evaluateLiveCandidate({ prNumber, token, request });
+    if (!['VERCEL_PREVIEW_PENDING', 'GITGUARDIAN_PENDING'].includes(candidate.reason)) break;
+    if (attempt + 1 < preflightAttempts) await new Promise(resolve => setTimeout(resolve, preflightDelayMs));
+  }
   if (!candidate.allowed) return { ...candidate, merged: false };
   // Exact-SHA merge is the production mutation. GitHub enforces the protected-branch ruleset.
   const merged = await github(`pulls/${prNumber}/merge`, token, {
