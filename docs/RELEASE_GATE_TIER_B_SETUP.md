@@ -1,5 +1,7 @@
 # AIRA AI 2026 — Tier B Release Authorization (Dedicated GitHub App)
 
+> **Legacy optional attestation path (2026-11-07):** `AGENTS.md` and [AUTONOMOUS_RELEASE_POLICY.md](./AUTONOMOUS_RELEASE_POLICY.md) now authorize bounded code-only releases without repeated owner dispatches. The design below remains valid only for releases explicitly using the separate owner-attestation/App path; it is not a prerequisite for the new conservative autonomous operator.
+
 **Status:** CODE ONLY; no GitHub App installed, no protected Environment configured, no production Ruleset changes, no production release authorized.
 
 **Repository:** `rajpunkeshwarrajgautam-boop/AIRA-AI-2026`  
