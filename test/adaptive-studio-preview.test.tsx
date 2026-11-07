@@ -12,11 +12,8 @@ test('Adaptive Studio opens on-demand and remains closed by default on initial v
   // Default state: studio closed
   assert.match(appSource, /const \[isStudioOpen, setIsStudioOpen\] = useState\(false\);/);
 
-  // Empty state only mounts when studio is explicitly open AND no artifact is active
-  assert.match(appSource, /ADAPTIVE_STUDIO_PREVIEW && isStudioOpen && !activeArtifact && \(\s*<AdaptiveStudioEmptyState/);
-
-  // Real artifact studio only mounts when studio is open
-  assert.match(appSource, /isStudioOpen && activeArtifact &&\s*\(?\s*<ArtifactStudio\s+artifact=\{activeArtifact\}\s+adaptiveDock=\{ADAPTIVE_STUDIO_PREVIEW\}/);
+  // Unified Contextual Workspace only mounts when studio is explicitly open
+  assert.match(appSource, /isStudioOpen && \(\s*<UnifiedWorkspace/);
 
   // Launcher button present with accessibility and testid
   assert.match(appSource, /data-testid="artifact-studio-launcher"/);

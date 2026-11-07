@@ -24,7 +24,7 @@ import { InlineToast } from './components/InlineToast';
 import { backfillConversationsBestEffort, deleteConversationFromServer, fetchAllConversationsFromServer, fetchConversationFromServer, syncConversationToServer } from './utils/conversationSearch';
 import { useAnimatedFavicon } from './utils/animatedFavicon';
 import { detectCapabilityIntent, executeVisionGeneration, createBackendAutomation, getVisionTariff } from './utils/capabilityDispatcher';
-import { AgentContextualPanel } from './components/AgentContextualPanel';
+// Unified Contextual Workspace presentation architecture
 import { AdaptiveStudioEmptyState } from './components/AdaptiveStudioEmptyState';
 import type { AgentExecutionGraph } from './types/executionGraph';
 import { applyExecutionGraphEvent } from './utils/executionGraphEngine';
@@ -35,6 +35,7 @@ const ADAPTIVE_STUDIO_PREVIEW = import.meta.env.VITE_ADAPTIVE_STUDIO_PREVIEW ===
 
 // Lazy-loaded heavy auxiliary surfaces to optimize FCP and TTI
 const ArtifactStudio = React.lazy(() => import('./components/ArtifactStudio').then(m => ({ default: m.ArtifactStudio })));
+const UnifiedWorkspace = React.lazy(() => import('./components/UnifiedWorkspace').then(m => ({ default: m.UnifiedWorkspace })));
 const ProjectsModal = React.lazy(() => import('./components/ProjectsModal').then(m => ({ default: m.ProjectsModal })));
 const SettingsModal = React.lazy(() => import('./components/SettingsModal').then(m => ({ default: m.SettingsModal })));
 import { MemoryVaultModal } from './components/MemoryVaultModal';
@@ -116,7 +117,7 @@ function App() {
     }
   }, []);
 
-  const [isAgentPanelOpen, setIsAgentPanelOpen] = useState(false);
+  // Unified contextual workspace uses coordinated isStudioOpen state
   const [repairDraft, setRepairDraft] = useState<{ id: number; text: string } | null>(null);
   const artifactRevisionsRef = useRef<Map<string, Artifact>>(new Map());
   useEffect(() => {
@@ -161,12 +162,14 @@ function App() {
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [activeArtifact, setActiveArtifact] = useState<Artifact | null>(null);
   const [isStudioOpen, setIsStudioOpen] = useState(false);
+  const setIsAgentPanelOpen = setIsStudioOpen;
   const userDismissedStudioRef = useRef(false);
 
 useEffect(() => {
     if (!isStudioOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        setIsAgentPanelOpen(false);
         setIsStudioOpen(false);
         userDismissedStudioRef.current = true;
       }
@@ -270,6 +273,7 @@ useEffect(() => {
         setExecutionStatus(null);
         setActiveAgentPrompt(undefined);
         setIsAgentPanelOpen(false);
+        setIsStudioOpen(false);
 
         // Restore user-scoped workspace mode
         try {
@@ -677,8 +681,8 @@ useEffect(() => {
   const handleSwitchToAgentAndReview = useCallback((prompt: string) => {
     setWorkspaceMode('agent');
     setActiveAgentPrompt(prompt);
-    setIsAgentPanelOpen(true);
-    showToast('Switched to Agent Mode. Review task and sandbox permissions in the panel.');
+    // Normal conversation is primary; workspace remains closed by default
+    showToast('Switched to Agent Mode. Task ready in conversation.');
   }, [setWorkspaceMode, showToast]);
 
   const handleConfirmAutomation = useCallback(async (proposal: {
@@ -997,7 +1001,7 @@ useEffect(() => {
 
     // 3. BUILDER APP IN AGENT MODE (Launch builder and open contextual panel)
     if (intent.capability === 'BUILDER_APP' && workspaceMode === 'agent') {
-      setIsAgentPanelOpen(true);
+      // Normal conversation is primary; workspace remains closed by default
       setActiveAgentPrompt(intent.cleanPrompt || rawText);
     }
 
@@ -1391,9 +1395,21 @@ useEffect(() => {
           <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
             {workspaceMode === 'agent' && (
               <button
-                onClick={() => setIsAgentPanelOpen(prev => !prev)}
+                onClick={() => {
+                  if (isStudioOpen) {
+                    setIsAgentPanelOpen(false);
+        setIsStudioOpen(false);
+                    userDismissedStudioRef.current = true;
+                  } else {
+                    setIsStudioOpen(true);
+                    userDismissedStudioRef.current = false;
+                    if (!activeArtifact && conversationArtifacts.length > 0) {
+                      setActiveArtifact(conversationArtifacts[conversationArtifacts.length - 1]);
+                    }
+                  }
+                }}
                 className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
-                  isAgentPanelOpen
+                  isStudioOpen
                     ? 'bg-aira-blue text-white'
                     : 'bg-aira-blue/10 text-aira-blue dark:text-aira-silver hover:bg-aira-blue/20'
                 }`}
@@ -1412,12 +1428,13 @@ useEffect(() => {
                 Cancel
               </button>
             )}
-            {(ADAPTIVE_STUDIO_PREVIEW || activeConversation?.messages.some(m => (m.artifacts?.length || 0) > 0)) && (
+            {workspaceMode === 'chat' && (ADAPTIVE_STUDIO_PREVIEW || activeConversation?.messages.some(m => (m.artifacts?.length || 0) > 0)) && (
               <button
                 data-testid="artifact-studio-launcher"
                 onClick={() => {
                   if (isStudioOpen) {
-                    setIsStudioOpen(false);
+                    setIsAgentPanelOpen(false);
+        setIsStudioOpen(false);
                     userDismissedStudioRef.current = true;
                   } else {
                     setIsStudioOpen(true);
@@ -1549,69 +1566,67 @@ useEffect(() => {
         </div>
       </main>
 
-      {ADAPTIVE_STUDIO_PREVIEW && isStudioOpen && !activeArtifact && (
-        <AdaptiveStudioEmptyState
-          executionGraph={activeExecutionGraph}
-          onSelectArtifact={handleSelectArtifactById}
-          onApproveTask={handleTaskApproval}
-          onClose={() => {
-            setIsStudioOpen(false);
-            userDismissedStudioRef.current = true;
-          }}
-        />
-      )}
-
       <React.Suspense fallback={null}>
-        {isStudioOpen && activeArtifact && (
-          <ArtifactStudio
-            artifact={activeArtifact}
-            adaptiveDock={ADAPTIVE_STUDIO_PREVIEW}
-            onClose={() => {
-              setIsStudioOpen(false);
-              userDismissedStudioRef.current = true;
-            }}
-            onUpdateArtifact={ADAPTIVE_STUDIO_PREVIEW ? restored => {
-              const key = `${currentUserId || 'guest'}:${activeChatId}:${restored.id}`;
-              artifactRevisionsRef.current.set(key, restored);
-              setActiveArtifact(restored);
-              updateConversation(activeChatId, conversation => {
-                const messages = [...conversation.messages];
-                for (let i = messages.length - 1; i >= 0; i--) {
-                  const entry = messages[i];
-                  if (entry.artifacts?.some(item => item.id === restored.id)) {
-                    messages[i] = {
-                      ...entry,
-                      artifacts: entry.artifacts.map(item => item.id === restored.id ? restored : item),
-                    };
-                    break;
+        {ADAPTIVE_STUDIO_PREVIEW ? (
+          isStudioOpen && (
+            <UnifiedWorkspace
+              isOpen={isStudioOpen}
+              artifact={activeArtifact}
+              onClose={() => {
+                setIsAgentPanelOpen(false);
+                setIsStudioOpen(false);
+                userDismissedStudioRef.current = true;
+              }}
+              onUpdateArtifact={restored => {
+                const key = `${currentUserId || 'guest'}:${activeChatId}:${restored.id}`;
+                artifactRevisionsRef.current.set(key, restored);
+                setActiveArtifact(restored);
+                updateConversation(activeChatId, conversation => {
+                  const messages = [...conversation.messages];
+                  for (let i = messages.length - 1; i >= 0; i--) {
+                    const entry = messages[i];
+                    if (entry.artifacts?.some(item => item.id === restored.id)) {
+                      messages[i] = {
+                        ...entry,
+                        artifacts: entry.artifacts.map(item => item.id === restored.id ? restored : item),
+                      };
+                      break;
+                    }
                   }
-                }
-                return { ...conversation, messages, updatedAt: Date.now() };
-              });
-            } : undefined}
-            onRepairArtifact={ADAPTIVE_STUDIO_PREVIEW ? (error, title) => {
-              setWorkspaceMode('agent');
-              setRepairDraft({ id: Date.now(), text: createArtifactRepairPrompt(title, error) });
-            } : undefined}
-            allArtifacts={ADAPTIVE_STUDIO_PREVIEW ? conversationArtifacts : undefined}
-            onSelectArtifact={ADAPTIVE_STUDIO_PREVIEW ? setActiveArtifact : undefined}
-            activeProjectName={ADAPTIVE_STUDIO_PREVIEW ? currentProject?.name : undefined}
-            onSaveToProject={ADAPTIVE_STUDIO_PREVIEW ? handleSaveArtifactToProject : undefined}
-            executionGraph={ADAPTIVE_STUDIO_PREVIEW ? activeExecutionGraph : undefined}
-            onApproveTask={ADAPTIVE_STUDIO_PREVIEW ? handleTaskApproval : undefined}
-          />
-        )}
-        {isAgentPanelOpen && (
-          <AgentContextualPanel
-            isOpen={isAgentPanelOpen}
-            onClose={() => setIsAgentPanelOpen(false)}
-            model={settings.activeModel}
-            activePrompt={activeAgentPrompt}
-            onActivePromptConsumed={() => setActiveAgentPrompt(undefined)}
-            cancelSignal={cancelBuilderSignal}
-            onExecutionCancelled={handleCancelExecution}
-            onBusyChange={setIsBuilderBusy}
-          />
+                  return { ...conversation, messages, updatedAt: Date.now() };
+                });
+              }}
+              onRepairArtifact={(error, title) => {
+                setWorkspaceMode('agent');
+                setRepairDraft({ id: Date.now(), text: createArtifactRepairPrompt(title, error) });
+              }}
+              allArtifacts={conversationArtifacts}
+              onSelectArtifact={setActiveArtifact}
+              activeProjectName={currentProject?.name}
+              onSaveToProject={handleSaveArtifactToProject}
+              executionGraph={activeExecutionGraph}
+              onApproveTask={handleTaskApproval}
+              workspaceMode={workspaceMode}
+            />
+          )
+        ) : (
+          isStudioOpen && activeArtifact && (
+            <ArtifactStudio
+              artifact={activeArtifact}
+              adaptiveDock={false}
+              onClose={() => {
+                setIsAgentPanelOpen(false);
+                setIsStudioOpen(false);
+                userDismissedStudioRef.current = true;
+              }}
+              allArtifacts={undefined}
+              onSelectArtifact={undefined}
+              activeProjectName={undefined}
+              onSaveToProject={undefined}
+              executionGraph={undefined}
+              onApproveTask={undefined}
+            />
+          )
         )}
 
         {isProjectsOpen && (

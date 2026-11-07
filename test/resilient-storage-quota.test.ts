@@ -214,3 +214,47 @@ test('[Disaster Recovery] exportAllStorageData produces complete recoverable JSO
   assert.ok(Array.isArray(parsed.projects));
   assert.equal(parsed.projects.length, 1);
 });
+
+test('[Storage Safety Regression] Quota recovery NEVER evicts conversation keys from LocalStorage', async () => {
+  // Pre-seed an existing conversation in localStorage
+  const existingConv = [
+    {
+      id: 'c-critical-user',
+      title: 'Do Not Delete Me',
+      messages: [{ id: 'm-crit', role: 'user' as const, content: 'Priceless user discussion', timestamp: 1000 }],
+      createdAt: 1000,
+      updatedAt: 1000,
+    },
+  ];
+  mockStorage.setItem('aira_conversations_v1', JSON.stringify(existingConv));
+  mockStorage.setItem('aira_conversations_user_usr_123', JSON.stringify(existingConv));
+  mockStorage.setItem('aira_workspace_synced_v1_ephemeral', 'temp blob');
+
+  // Trigger quota error on saveSettings
+  const settings = loadSettings();
+  settings.userName = 'Quota Stress Test';
+  mockStorage.shouldFailOnKey = 'aira_settings_v1';
+  let attempts = 0;
+  const originalSetItem = mockStorage.setItem.bind(mockStorage);
+  mockStorage.setItem = (k, v) => {
+    attempts++;
+    if (k === 'aira_settings_v1' && attempts === 1) {
+      const err = new Error("QuotaExceededError: Setting the value of 'aira_settings_v1' exceeded the quota.");
+      err.name = 'QuotaExceededError';
+      throw err;
+    }
+    return originalSetItem(k, v);
+  };
+
+  saveSettings(settings);
+
+  // Ephemeral workspace blob is evicted
+  assert.equal(mockStorage.getItem('aira_workspace_synced_v1_ephemeral'), null);
+
+  // CRITICAL CHECK: Conversation keys MUST remain untouched in localStorage!
+  assert.notEqual(mockStorage.getItem('aira_conversations_v1'), null, 'aira_conversations_v1 must NEVER be evicted by quota cleanup');
+  assert.notEqual(mockStorage.getItem('aira_conversations_user_usr_123'), null, 'User conversation keys must NEVER be evicted by quota cleanup');
+  
+  const preserved = JSON.parse(mockStorage.getItem('aira_conversations_v1')!);
+  assert.equal(preserved[0].id, 'c-critical-user');
+});

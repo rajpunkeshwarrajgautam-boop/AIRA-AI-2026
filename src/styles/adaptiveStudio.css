@@ -178,7 +178,8 @@
 
 @media (min-width: 1280px) {
   .aira-adaptive-shell .aira-sidebar-shell { width: 244px; }
-  .aira-adaptive-empty-studio { display: flex; }
+  .aira-adaptive-shell.has-studio-open .aira-adaptive-empty-studio,
+  .aira-adaptive-shell.has-studio-open .aira-adaptive-real-studio { display: flex; }
   .aira-adaptive-shell .aira-adaptive-real-studio { width: 46%; flex-basis: 46%; }
   .aira-adaptive-shell.has-studio-open .aira-adaptive-main { border-right: 1px solid var(--adaptive-line); }
 }
@@ -201,7 +202,8 @@
 
 /* Responsive drawer presentation for screens under 1280px (tablets & mobile) */
 @media (max-width: 1279px) {
-  .aira-adaptive-shell.has-studio-open .aira-adaptive-empty-studio {
+  .aira-adaptive-shell.has-studio-open .aira-adaptive-empty-studio,
+  .aira-adaptive-shell.has-studio-open .aira-adaptive-real-studio {
     display: flex !important;
     position: fixed !important;
     top: 0 !important;
