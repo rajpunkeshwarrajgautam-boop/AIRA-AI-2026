@@ -159,6 +159,9 @@ jobs:
       - name: Dedicated GitHub App publisher policy tests (no App credentials)
         run: npm run test:release-auth:app
 
+      - name: Autonomous release safety, evidence and fail-closed regression
+        run: node --test test/autonomous-release.test.mjs
+
       - name: Router and policy verification
         run: npm run test:router
 
