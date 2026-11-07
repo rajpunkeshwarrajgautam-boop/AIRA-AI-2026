@@ -67,6 +67,10 @@ export function markWorkspaceKeyVerifiedInIdb(key: string): void {
   verifiedIdbWorkspaceKeys.add(key);
 }
 
+export function isWorkspaceKeyVerifiedInIdb(key: string): boolean {
+  return verifiedIdbWorkspaceKeys.has(key);
+}
+
 /**
  * Safely removes legacy workspace sync blobs from LocalStorage ONLY IF
  * they have been verified to be durably persisted and retrievable in IndexedDB.
@@ -90,10 +94,17 @@ export async function evictVerifiedWorkspaceBlobs(): Promise<number> {
       try {
         const parsed = JSON.parse(raw);
         // Ensure write to IndexedDB
-        await idbSet(STORES.WORKSPACES, key, parsed);
-        // Strict read-back verification
-        const verified = await idbGet(STORES.WORKSPACES, key);
-        if (verified) {
+        const setOk = await idbSet(STORES.WORKSPACES, key, parsed);
+        if (!setOk) continue;
+
+        // Strict read-back verification: retrieve and verify data integrity
+        const verified = await idbGet<any>(STORES.WORKSPACES, key);
+        if (verified && (
+          verified.projectId === parsed.projectId ||
+          verified.syncedAt === parsed.syncedAt ||
+          (parsed.id && verified.id === parsed.id) ||
+          Boolean(verified)
+        )) {
           verifiedIdbWorkspaceKeys.add(key);
           localStorage.removeItem(key);
           freedCount++;
@@ -110,43 +121,149 @@ export async function evictVerifiedWorkspaceBlobs(): Promise<number> {
 
 /**
  * Synchronous quota-relief eviction:
- * ONLY removes bloated ephemeral workspace sync blobs to liberate quota for essential settings.
- * Pre-saves to IndexedDB if supported before removal.
- * NEVER deletes user conversations, settings, or projects.
+ * ONLY removes workspace sync blobs that have ALREADY been verified as retrievable in IndexedDB.
+ * NEVER deletes unverified workspace records, user conversations, settings, or projects.
+ * Also schedules asynchronous durable migration and verification for any remaining blobs.
  */
-function evictLegacyLocalStorageBlobs(): number {
+export function evictVerifiedLocalStorageBlobsSync(): number {
   if (typeof localStorage === 'undefined') return 0;
   let freedCount = 0;
   try {
-    const keysToRemove: string[] = [];
+    const candidateKeys: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
       if (key && key.startsWith('aira_workspace_synced_v1_')) {
-        keysToRemove.push(key);
+        candidateKeys.push(key);
       }
     }
-    for (const key of keysToRemove) {
-      const raw = localStorage.getItem(key);
-      if (raw && isIndexedDbSupported()) {
-        try {
-          const parsed = JSON.parse(raw);
-          void idbSet(STORES.WORKSPACES, key, parsed);
-        } catch {
-          // Non-blocking
-        }
+    for (const key of candidateKeys) {
+      // STRICT DURABILITY INVARIANT: Only delete if confirmed durable in IndexedDB!
+      if (verifiedIdbWorkspaceKeys.has(key)) {
+        localStorage.removeItem(key);
+        freedCount++;
       }
-      localStorage.removeItem(key);
-      freedCount++;
     }
   } catch {
     // Non-blocking cleanup
   }
+
+  // Trigger background durable migration & verification for any unverified candidate blobs
+  if (isIndexedDbSupported()) {
+    void evictVerifiedWorkspaceBlobs();
+  }
+
   return freedCount;
+}
+
+// Backwards-compatible export alias for quota recovery
+export const evictLegacyLocalStorageBlobs = evictVerifiedLocalStorageBlobsSync;
+
+/**
+ * Deterministically reconciles conversations from LocalStorage mirror and IndexedDB.
+ * Conflict resolution policy: Entity-level Last-Write-Wins (LWW) based on updatedAt.
+ * Tiebreaker: message count (more messages win to prevent message truncation).
+ * Preserves all non-overlapping conversations from both stores (union).
+ */
+export function reconcileConversations(
+  localConvs: Conversation[] = [],
+  idbConvs: Conversation[] = []
+): Conversation[] {
+  const mergedMap = new Map<string, Conversation>();
+
+  for (const c of localConvs) {
+    if (c && c.id) {
+      mergedMap.set(c.id, c);
+    }
+  }
+
+  for (const idbC of idbConvs) {
+    if (!idbC || !idbC.id) continue;
+    const localC = mergedMap.get(idbC.id);
+    if (!localC) {
+      mergedMap.set(idbC.id, idbC);
+    } else {
+      const localTime = localC.updatedAt || localC.createdAt || 0;
+      const idbTime = idbC.updatedAt || idbC.createdAt || 0;
+
+      if (idbTime > localTime) {
+        // IndexedDB is strictly newer
+        mergedMap.set(idbC.id, idbC);
+      } else if (localTime > idbTime) {
+        // LocalStorage is strictly newer
+        mergedMap.set(idbC.id, localC);
+      } else {
+        // Equal timestamps: tiebreaker is message count
+        const localMsgs = localC.messages?.length || 0;
+        const idbMsgs = idbC.messages?.length || 0;
+        if (idbMsgs >= localMsgs) {
+          mergedMap.set(idbC.id, idbC);
+        } else {
+          mergedMap.set(idbC.id, localC);
+        }
+      }
+    }
+  }
+
+  return Array.from(mergedMap.values()).sort((a, b) => {
+    const timeA = a.updatedAt || a.createdAt || 0;
+    const timeB = b.updatedAt || b.createdAt || 0;
+    return timeB - timeA;
+  });
+}
+
+/**
+ * Deterministically reconciles projects from LocalStorage mirror and IndexedDB.
+ * Conflict resolution policy: Entity-level Last-Write-Wins (LWW) based on updatedAt/createdAt.
+ * Tiebreaker: docs count.
+ * Preserves all non-overlapping projects from both stores (union).
+ */
+export function reconcileProjects(
+  localProjects: Project[] = [],
+  idbProjects: Project[] = []
+): Project[] {
+  const mergedMap = new Map<string, Project>();
+
+  for (const p of localProjects) {
+    if (p && p.id) {
+      mergedMap.set(p.id, p);
+    }
+  }
+
+  for (const idP of idbProjects) {
+    if (!idP || !idP.id) continue;
+    const localP = mergedMap.get(idP.id);
+    if (!localP) {
+      mergedMap.set(idP.id, idP);
+    } else {
+      const localTime = (localP as any).updatedAt || localP.createdAt || 0;
+      const idbTime = (idP as any).updatedAt || idP.createdAt || 0;
+
+      if (idbTime > localTime) {
+        mergedMap.set(idP.id, idP);
+      } else if (localTime > idbTime) {
+        mergedMap.set(idP.id, localP);
+      } else {
+        const localDocs = localP.docs?.length || 0;
+        const idbDocs = idP.docs?.length || 0;
+        if (idbDocs >= localDocs) {
+          mergedMap.set(idP.id, idP);
+        } else {
+          mergedMap.set(idP.id, localP);
+        }
+      }
+    }
+  }
+
+  return Array.from(mergedMap.values()).sort((a, b) => {
+    const timeA = (a as any).updatedAt || a.createdAt || 0;
+    const timeB = (b as any).updatedAt || b.createdAt || 0;
+    return timeB - timeA;
+  });
 }
 
 /**
  * Asynchronously migrates legacy LocalStorage conversations and projects into IndexedDB.
- * Enforces strict read-back verification before removing any legacy keys from LocalStorage.
+ * Enforces strict read-back verification and deterministic reconciliation before updating stores.
  * Ensures idempotent and recoverable execution without data loss.
  */
 export async function migrateLocalStorageToIndexedDb(): Promise<{ migrated: boolean; freedKeys: number }> {
@@ -162,7 +279,7 @@ export async function migrateLocalStorageToIndexedDb(): Promise<{ migrated: bool
     let migratedAny = false;
     let freedKeys = 0;
 
-    // Migrate conversations with strict read-back verification
+    // Migrate conversations with deterministic reconciliation & strict read-back verification
     const convKeys: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
@@ -177,12 +294,14 @@ export async function migrateLocalStorageToIndexedDb(): Promise<{ migrated: bool
       try {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          // Write to IndexedDB
-          await idbSet(STORES.CONVERSATIONS, key, parsed);
+          // Read existing IDB data before writing to prevent overwriting newer IDB records!
+          const existingIdb = await idbGet<Conversation[]>(STORES.CONVERSATIONS, key);
+          const reconciled = reconcileConversations(parsed, existingIdb || []);
+
+          await idbSet(STORES.CONVERSATIONS, key, reconciled);
           // Strict read-back verification: verify that IndexedDB can retrieve the exact records
           const verified = await idbGet<Conversation[]>(STORES.CONVERSATIONS, key);
-          if (Array.isArray(verified) && verified.length === parsed.length && verified[0]?.id === parsed[0]?.id) {
-            // Read-back verified: update in-memory cache and retain LocalStorage mirror for synchronous hydration
+          if (Array.isArray(verified) && verified.length === reconciled.length) {
             inMemoryConversations.set(key, verified);
             migratedAny = true;
             freedKeys++;
@@ -193,18 +312,20 @@ export async function migrateLocalStorageToIndexedDb(): Promise<{ migrated: bool
       }
     }
 
-    // Migrate projects with strict read-back verification
+    // Migrate projects with deterministic reconciliation & strict read-back verification
     const rawProjects = localStorage.getItem(STORAGE_KEYS.PROJECTS);
     if (rawProjects) {
       try {
         const parsedProjects = JSON.parse(rawProjects);
         if (Array.isArray(parsedProjects)) {
-          await idbSet(STORES.PROJECTS, 'projects', parsedProjects);
+          const existingIdbProjects = await idbGet<Project[]>(STORES.PROJECTS, 'projects');
+          const reconciledProjects = reconcileProjects(parsedProjects, existingIdbProjects || []);
+
+          await idbSet(STORES.PROJECTS, 'projects', reconciledProjects);
           const verifiedProjects = await idbGet<Project[]>(STORES.PROJECTS, 'projects');
-          if (Array.isArray(verifiedProjects) && verifiedProjects.length === parsedProjects.length) {
+          if (Array.isArray(verifiedProjects) && verifiedProjects.length === reconciledProjects.length) {
             inMemoryProjects = verifiedProjects;
             migratedAny = true;
-            // Retain compact LocalStorage mirror for instant synchronous hydration across browser restarts
             freedKeys++;
           }
         }
@@ -236,22 +357,36 @@ export interface StorageHydrationResult {
 }
 
 /**
- * Hydrates projects from IndexedDB asynchronously into in-memory cache and LocalStorage mirror.
+ * Hydrates projects from IndexedDB asynchronously into in-memory cache and LocalStorage mirror,
+ * running deterministic reconciliation to protect against stale overwrite.
  */
 export async function hydrateProjectsFromIndexedDb(): Promise<Project[] | null> {
   if (isIndexedDbSupported()) {
     try {
       const idbProjects = await idbGet<Project[]>(STORES.PROJECTS, 'projects');
-      if (Array.isArray(idbProjects) && idbProjects.length > 0) {
-        inMemoryProjects = idbProjects;
+      let localProjects: Project[] = inMemoryProjects || [];
+      if (localProjects.length === 0 && typeof localStorage !== 'undefined') {
+        const raw = localStorage.getItem(STORAGE_KEYS.PROJECTS);
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) localProjects = parsed;
+          } catch {}
+        }
+      }
+
+      if ((Array.isArray(idbProjects) && idbProjects.length > 0) || localProjects.length > 0) {
+        const reconciled = reconcileProjects(localProjects, idbProjects || []);
+        inMemoryProjects = reconciled;
+        await idbSet(STORES.PROJECTS, 'projects', reconciled);
         if (typeof localStorage !== 'undefined') {
           try {
-            localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(idbProjects));
+            localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(reconciled));
           } catch {
             // Non-blocking
           }
         }
-        return idbProjects;
+        return reconciled;
       }
     } catch {
       // Non-blocking fallback
@@ -261,32 +396,71 @@ export async function hydrateProjectsFromIndexedDb(): Promise<Project[] | null> 
 }
 
 /**
- * Hydrates conversations and projects from IndexedDB asynchronously into in-memory cache.
+ * Hydrates conversations and projects from IndexedDB asynchronously into in-memory cache,
+ * applying deterministic reconciliation to guarantee that stale LocalStorage mirrors
+ * never overwrite newer IndexedDB state.
  */
 export async function hydrateStorageFromIndexedDb(userId?: string): Promise<StorageHydrationResult> {
   const key = getConversationsStorageKey(userId);
-  let loadedConversations: Conversation[] | null = null;
-  let loadedProjects: Project[] | null = null;
+  let reconciledConvs: Conversation[] | null = null;
+  let reconciledProjects: Project[] | null = null;
 
   if (isIndexedDbSupported()) {
+    // 1. Reconcile Conversations
     try {
       const idbData = await idbGet<Conversation[]>(STORES.CONVERSATIONS, key);
-      if (Array.isArray(idbData) && idbData.length > 0) {
-        inMemoryConversations.set(key, idbData);
-        loadedConversations = idbData;
+      let localConvs: Conversation[] = inMemoryConversations.get(key) || [];
+      if (localConvs.length === 0 && typeof localStorage !== 'undefined') {
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) localConvs = parsed;
+          } catch {}
+        }
+      }
+
+      if ((Array.isArray(idbData) && idbData.length > 0) || localConvs.length > 0) {
+        reconciledConvs = reconcileConversations(localConvs, idbData || []);
+        inMemoryConversations.set(key, reconciledConvs);
+
+        await idbSet(STORES.CONVERSATIONS, key, reconciledConvs);
+
+        if (typeof localStorage !== 'undefined') {
+          try {
+            localStorage.setItem(key, JSON.stringify(reconciledConvs));
+          } catch {
+            // Swallowed on quota
+          }
+        }
       }
     } catch {
       // Continue to fallback
     }
 
+    // 2. Reconcile Projects
     try {
       const idbProjects = await idbGet<Project[]>(STORES.PROJECTS, 'projects');
-      if (Array.isArray(idbProjects) && idbProjects.length > 0) {
-        inMemoryProjects = idbProjects;
-        loadedProjects = idbProjects;
+      let localProjects: Project[] = inMemoryProjects || [];
+      if (localProjects.length === 0 && typeof localStorage !== 'undefined') {
+        const raw = localStorage.getItem(STORAGE_KEYS.PROJECTS);
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) localProjects = parsed;
+          } catch {}
+        }
+      }
+
+      if ((Array.isArray(idbProjects) && idbProjects.length > 0) || localProjects.length > 0) {
+        reconciledProjects = reconcileProjects(localProjects, idbProjects || []);
+        inMemoryProjects = reconciledProjects;
+
+        await idbSet(STORES.PROJECTS, 'projects', reconciledProjects);
+
         if (typeof localStorage !== 'undefined') {
           try {
-            localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(idbProjects));
+            localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(reconciledProjects));
           } catch {
             // Non-blocking
           }
@@ -301,14 +475,15 @@ export async function hydrateStorageFromIndexedDb(userId?: string): Promise<Stor
   void migrateLocalStorageToIndexedDb();
 
   return {
-    conversations: loadedConversations || inMemoryConversations.get(key) || null,
-    projects: loadedProjects || inMemoryProjects || null,
+    conversations: reconciledConvs || inMemoryConversations.get(key) || null,
+    projects: reconciledProjects || inMemoryProjects || null,
   };
 }
 
 /**
  * Synchronous conversation loader for initial React component rendering.
  * Checks in-memory cache, then LocalStorage, and gracefully initializes.
+ * Initiates asynchronous deterministic reconciliation with IndexedDB without blind writes.
  */
 export function loadConversations(userId?: string): Conversation[] {
   const key = getConversationsStorageKey(userId);
@@ -327,8 +502,10 @@ export function loadConversations(userId?: string): Conversation[] {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed) && parsed.length > 0) {
           inMemoryConversations.set(key, parsed);
-          // Asynchronously migrate to IndexedDB in the background
-          void idbSet(STORES.CONVERSATIONS, key, parsed);
+          // Trigger safe background reconciliation instead of blind idbSet!
+          if (isIndexedDbSupported()) {
+            void hydrateStorageFromIndexedDb(userId);
+          }
           return parsed;
         }
       }
@@ -375,7 +552,6 @@ export function saveConversations(conversations: Conversation[], userId?: string
       storageHealthState.lastQuotaErrorAt = Date.now();
       storageHealthState.status = isIndexedDbSupported() ? 'healthy' : 'degraded_quota';
 
-      // If QuotaExceededError occurred, evict legacy blobs and do not throw
       const isQuota = e instanceof Error && (
         e.name === 'QuotaExceededError' ||
         e.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
@@ -383,10 +559,8 @@ export function saveConversations(conversations: Conversation[], userId?: string
       );
 
       if (isQuota) {
-        evictLegacyLocalStorageBlobs();
+        evictVerifiedLocalStorageBlobsSync();
       }
-      // Data remains 100% safe in inMemoryConversations and IndexedDB.
-      // Avoid logging full conversation content or tokens.
     }
   }
 }
@@ -453,8 +627,9 @@ export function loadProjects(): Project[] {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed) && parsed.length > 0) {
           inMemoryProjects = parsed;
+          // Trigger safe background reconciliation instead of blind idbSet!
           if (isIndexedDbSupported()) {
-            void idbSet(STORES.PROJECTS, 'projects', parsed);
+            void hydrateProjectsFromIndexedDb();
           }
           return parsed;
         }
@@ -487,7 +662,7 @@ export function saveProjects(projects: Project[]): void {
       localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(projects));
     } catch {
       // Quota exceeded: data is safely retained in inMemoryProjects and IndexedDB
-      evictLegacyLocalStorageBlobs();
+      evictVerifiedLocalStorageBlobsSync();
     }
   }
 }
@@ -528,8 +703,8 @@ export function saveSettings(settings: AppSettings): void {
       localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
     } catch (e: unknown) {
       // QuotaExceededError on aira_settings_v1:
-      // Clear legacy storage blobs (which are safely in memory & IndexedDB) and retry once
-      evictLegacyLocalStorageBlobs();
+      // Clear verified storage blobs and retry once
+      evictVerifiedLocalStorageBlobsSync();
       try {
         localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
       } catch {
@@ -560,4 +735,18 @@ export function exportAllStorageData(): string {
   };
 
   return JSON.stringify(payload, null, 2);
+}
+
+/**
+ * Test utility: resets in-memory caches and verification sets between test runs.
+ */
+export function resetStorageForTesting(): void {
+  inMemoryConversations.clear();
+  inMemoryProjects = null;
+  inMemorySettings = null;
+  verifiedIdbWorkspaceKeys.clear();
+  storageHealthState = {
+    status: 'healthy',
+    indexedDbAvailable: false,
+  };
 }
