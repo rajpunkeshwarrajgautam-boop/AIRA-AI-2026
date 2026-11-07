@@ -1,19 +1,20 @@
 /**
- * AIRA AI 2026 — Comprehensive Live Authenticated Builder Staging Acceptance Suite
+ * AIRA AI 2026 — Deployed Browser Boundaries + Mocked Builder Contract Suite
  * 
- * Authoritative, end-to-end verification of deployed preview boundaries, cryptographic tickets,
- * full authenticated Builder runtime execution, and durable storage recovery across genuine
- * Microsoft Edge process exits:
+ * This suite combines deployed negative-path checks, a guest-session browser UI test,
+ * an IN-PROCESS MOCKED Builder contract, and Edge disk persistence. It does NOT
+ * certify genuine OAuth-authenticated Builder execution against a deployed sandbox.
+ * For that release gate run npm run test:builder:live instead.
  * 
  * Phase 1: Live Staging/Preview Health Gate: /api/health probe on Vercel preview (mandatory gate, zero mocks)
  * Phase 2: Live Unauthenticated Boundary Enforcement: /api/builder/status rejects unauthenticated requests with HTTP 401
  * Phase 3: Cryptographic Ticket Isolation & Tamper Resistance: Cross-principal rejection and signature tampering denial
- * Phase 4: Authenticated Session Bootstrap: Real HttpOnly aira_session cookie and live builder configuration inspection
+ * Phase 4: Signed Guest Session Bootstrap: HttpOnly aira_session cookie and live builder configuration inspection
  * Phase 5: Microsoft Edge Launch with Persistent Profile & Deployed Preview Navigation:
  *          Default closed workspace, clean Agent mode toggle, and Agent Panel interaction
  * Phase 6: Live Builder Task Consent & Deployed Execution Boundary:
  *          Explicit sandbox permissions (execute, internet, preview) and fail-closed deployment gate verification
- * Phase 7: Authenticated Builder Runtime Engine Certification (Full Pipeline):
+ * Phase 7: In-Process Mocked Builder Contract (Full Pipeline):
  *          SSE event streaming, tool telemetry (write_file, run_command, start_preview, publish_file, finish),
  *          secure file download with signed ticket and CSP sandbox headers, and cryptographic cancellation
  * Phase 8: Real IndexedDB Durability, UI Project Deletion & Tombstones in Microsoft Edge:
@@ -104,7 +105,7 @@ class LiveAcceptanceTestSandbox implements BuilderSandbox {
 
 async function main() {
   console.log('\n========================================================================');
-  console.log('  AIRA AI 2026 — COMPREHENSIVE LIVE AUTHENTICATED BUILDER ACCEPTANCE');
+  console.log('  AIRA AI 2026 — DEPLOYED BOUNDARIES + MOCKED BUILDER CONTRACT');
   console.log('========================================================================\n');
 
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -205,9 +206,9 @@ async function main() {
   });
 
   // ---------------------------------------------------------------------------
-  // Phase 4: Real Authenticated Session Bootstrap on Deployed Preview
+  // Phase 4: Signed Guest Session Bootstrap on Deployed Preview
   // ---------------------------------------------------------------------------
-  console.log('\n--- Phase 4: Authenticated Session Bootstrap on Deployed Preview ---');
+  console.log('\n--- Phase 4: Guest Session Bootstrap on Deployed Preview ---');
   const sessionRes = await fetch(`${PREVIEW_VERCEL_URL}/api/auth/session`, {
     method: 'POST',
     headers: {
@@ -238,7 +239,7 @@ async function main() {
   assert.equal(deployedBuilderStatus.principalId, sessionData.userId);
   console.log(`  ✓ Authenticated as ${sessionData.userId}; live status reason: "${deployedBuilderStatus.reason}"`);
 
-  recordEvidence('Phase 4: Authenticated Session Bootstrap on Deployed Preview', {
+  recordEvidence('Phase 4: Signed Guest Session Bootstrap on Deployed Preview', {
     userId: sessionData.userId,
     sessionId: sessionData.sessionId,
     deployedStatus: deployedBuilderStatus
@@ -396,9 +397,9 @@ async function main() {
   });
 
   // ---------------------------------------------------------------------------
-  // Phase 7: Authenticated Builder Runtime Engine Certification (Full Pipeline)
+  // Phase 7: In-Process Mocked Builder Contract (Full Pipeline)
   // ---------------------------------------------------------------------------
-  console.log('\n--- Phase 7: Authenticated Builder Runtime Engine Certification ---');
+  console.log('\n--- Phase 7: In-Process Mocked Builder Contract ---');
   const prevEnabled = process.env.AIRA_BUILDER_ENABLED;
   const prevAllowed = process.env.AIRA_BUILDER_ALLOWED_USER_IDS;
   const prevLightningKey = process.env.LIGHTNING_SANDBOX_API_KEY;
@@ -571,7 +572,7 @@ async function main() {
     assert.equal(cancelData.cancelled, true, 'Cancel response must report cancelled: true');
     console.log('  ✓ Verified builder workspace cancellation with signed ticket');
 
-    recordEvidence('Phase 7: Authenticated Builder Runtime Engine Certification', {
+    recordEvidence('Phase 7: In-Process Mocked Builder Contract', {
       eventsEmitted: receivedEvents,
       fileDownloaded: true,
       downloadCsp: downloadResp.headers.get('content-security-policy'),
@@ -796,7 +797,7 @@ async function main() {
   const ledgerPath = path.join(OUTPUT_DIR, 'LIVE_BUILDER_E2E_LEDGER.json');
   fs.writeFileSync(ledgerPath, JSON.stringify(evidenceLedger, null, 2));
   console.log(`\n========================================================================`);
-  console.log(`  ALL LIVE BUILDER ACCEPTANCE PHASES PASSED (100%)`);
+  console.log(`  DEPLOYED NEGATIVE BOUNDARIES, MOCKED CONTRACT & EDGE PERSISTENCE PASSED`);
   console.log(`  Ledger: ${ledgerPath}`);
   console.log(`========================================================================\n`);
   process.exit(0);

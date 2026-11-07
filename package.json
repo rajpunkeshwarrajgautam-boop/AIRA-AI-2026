@@ -116,7 +116,8 @@
     "typecheck:builder": "tsc --ignoreConfig --noEmit --target ES2023 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck packages/builder-runtime/src/index.ts apps/api/src/builder-routes.ts",
     "test:builder:ui": "tsx test/builder-ui.ts",
     "test:builder:ui-mocked": "npx tsx test/builder-ui-mocked.test.ts",
-    "test:builder:live": "npx tsx test/live-builder-staging-acceptance.test.ts",
+    "test:builder:live": "node --import tsx test/builder-deployed-release-gate.test.ts",
+    "test:builder:browser-boundaries": "node --import tsx test/live-builder-staging-acceptance.test.ts",
     "test:cors": "tsx --test test/cors-origin-rejection.test.ts",
     "test:direct-oauth": "npx tsx --test test/auth-direct-oauth-lifecycle.test.ts"
   },
