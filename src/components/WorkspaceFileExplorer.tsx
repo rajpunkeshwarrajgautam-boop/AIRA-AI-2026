@@ -6,6 +6,8 @@ import {
   FileText,
   FileSpreadsheet,
   Image as ImageIcon,
+  Volume2,
+  Video,
   Search,
   Download,
   UploadCloud,
@@ -36,13 +38,13 @@ interface WorkspaceFileExplorerProps {
 
 function getFileIcon(fileName: string) {
   const lower = fileName.toLowerCase();
-  if (lower.endsWith('.tsx') || lower.endsWith('.jsx') || lower.endsWith('.ts') || lower.endsWith('.js')) {
+  if (lower.endsWith('.tsx') || lower.endsWith('.jsx') || lower.endsWith('.ts') || lower.endsWith('.js') || lower.endsWith('.mjs') || lower.endsWith('.cjs')) {
     return <FileCode className="w-3.5 h-3.5 text-blue-400 shrink-0" />;
   }
   if (lower.endsWith('.html') || lower.endsWith('.htm')) {
     return <FileCode className="w-3.5 h-3.5 text-amber-400 shrink-0" />;
   }
-  if (lower.endsWith('.css')) {
+  if (lower.endsWith('.css') || lower.endsWith('.scss') || lower.endsWith('.less')) {
     return <FileCode className="w-3.5 h-3.5 text-cyan-400 shrink-0" />;
   }
   if (lower.endsWith('.json')) {
@@ -51,8 +53,20 @@ function getFileIcon(fileName: string) {
   if (lower.endsWith('.md') || lower.endsWith('.txt')) {
     return <FileText className="w-3.5 h-3.5 text-stone-400 shrink-0" />;
   }
-  if (lower.endsWith('.svg') || lower.endsWith('.png') || lower.endsWith('.jpg')) {
+  if (lower.endsWith('.svg')) {
+    return <ImageIcon className="w-3.5 h-3.5 text-teal-400 shrink-0" />;
+  }
+  if (lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.webp') || lower.endsWith('.gif')) {
     return <ImageIcon className="w-3.5 h-3.5 text-emerald-400 shrink-0" />;
+  }
+  if (lower.endsWith('.mp3') || lower.endsWith('.wav') || lower.endsWith('.ogg') || lower.endsWith('.aac') || lower.endsWith('.m4a')) {
+    return <Volume2 className="w-3.5 h-3.5 text-purple-400 shrink-0" />;
+  }
+  if (lower.endsWith('.mp4') || lower.endsWith('.webm') || lower.endsWith('.ogv')) {
+    return <Video className="w-3.5 h-3.5 text-rose-400 shrink-0" />;
+  }
+  if (lower.endsWith('.pdf')) {
+    return <FileText className="w-3.5 h-3.5 text-amber-400 shrink-0" />;
   }
   return <FileText className="w-3.5 h-3.5 text-stone-400 shrink-0" />;
 }

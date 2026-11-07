@@ -16,6 +16,10 @@ export type ArtifactFileKind =
   | 'json' 
   | 'markdown' 
   | 'svg' 
+  | 'image'
+  | 'audio'
+  | 'video'
+  | 'pdf'
   | 'asset';
 
 export interface ArtifactFileRevision {

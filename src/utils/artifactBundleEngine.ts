@@ -115,6 +115,17 @@ export function adaptSingleFileArtifactToBundle(artifact: Artifact): MultiFileAr
     fileName = 'src/App.tsx';
   } else if (artifact.type === 'image/svg+xml') {
     fileName = 'graphic.svg';
+  } else if (artifact.type.startsWith('image/')) {
+    const ext = artifact.type === 'image/jpeg' ? 'jpg' : (artifact.type.split('/')[1] || 'png');
+    fileName = `image.${ext}`;
+  } else if (artifact.type.startsWith('audio/')) {
+    const ext = artifact.type === 'audio/mpeg' ? 'mp3' : (artifact.type.split('/')[1] || 'mp3');
+    fileName = `audio.${ext}`;
+  } else if (artifact.type.startsWith('video/')) {
+    const ext = artifact.type.split('/')[1] || 'mp4';
+    fileName = `video.${ext}`;
+  } else if (artifact.type === 'application/pdf') {
+    fileName = 'document.pdf';
   } else if (artifact.type === 'text/markdown') {
     fileName = 'README.md';
   }

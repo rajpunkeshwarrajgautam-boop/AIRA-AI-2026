@@ -35,6 +35,12 @@ const DANGEROUS_EXTENSIONS = new Set([
   '.kdbx'
 ]);
 
+const WINDOWS_RESERVED_NAMES = new Set([
+  'con', 'prn', 'aux', 'nul',
+  'com1', 'com2', 'com3', 'com4', 'com5', 'com6', 'com7', 'com8', 'com9',
+  'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5', 'lpt6', 'lpt7', 'lpt8', 'lpt9'
+]);
+
 /**
  * Normalizes an artifact file path and strictly rejects path traversals,
  * absolute paths, control characters, and secret-bearing filenames.
@@ -91,6 +97,12 @@ export function normalizeAndValidateArtifactPath(rawPath: string): string {
       throw new ArtifactPathSecurityError(`Access to secret or sensitive file "${seg}" is prohibited`);
     }
 
+    // Check Windows reserved device names (e.g. CON, NUL, COM1)
+    const stem = lowerSeg.split('.')[0];
+    if (WINDOWS_RESERVED_NAMES.has(stem)) {
+      throw new ArtifactPathSecurityError(`Windows reserved device name "${seg}" is prohibited`);
+    }
+
     // Check dangerous extensions
     for (const ext of DANGEROUS_EXTENSIONS) {
       if (lowerSeg.endsWith(ext)) {
@@ -125,6 +137,10 @@ export function inferArtifactFileKind(path: string): ArtifactFileKind {
   if (lower.endsWith('.json')) return 'json';
   if (lower.endsWith('.md') || lower.endsWith('.markdown')) return 'markdown';
   if (lower.endsWith('.svg')) return 'svg';
+  if (lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.webp') || lower.endsWith('.gif')) return 'image';
+  if (lower.endsWith('.mp3') || lower.endsWith('.wav') || lower.endsWith('.ogg') || lower.endsWith('.aac') || lower.endsWith('.m4a')) return 'audio';
+  if (lower.endsWith('.mp4') || lower.endsWith('.webm') || lower.endsWith('.ogv')) return 'video';
+  if (lower.endsWith('.pdf')) return 'pdf';
   return 'asset';
 }
 

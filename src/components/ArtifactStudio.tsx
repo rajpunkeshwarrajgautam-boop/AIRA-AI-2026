@@ -29,6 +29,7 @@ import type { AgentExecutionGraph } from '../types/executionGraph';
 import type { MultiFileArtifactBundle } from '../types/multiFileArtifact';
 import { AgentExecutionGraphView } from './AgentExecutionGraph';
 import { WorkspaceFileExplorer } from './WorkspaceFileExplorer';
+import { MultiModalAssetViewer } from './MultiModalAssetViewer';
 import { generateMultiFileArtifactSandboxHtml } from '../utils/multiFileSandbox';
 import { adaptSingleFileArtifactToBundle } from '../utils/artifactBundleEngine';
 import { generateProjectZipArchive } from '../utils/artifactZipExporter';
@@ -91,6 +92,11 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
   const [showFileExplorer, setShowFileExplorer] = useState(false);
   const [isSyncingWorkspace, setIsSyncingWorkspace] = useState(false);
   const [syncSuccess, setSyncSuccess] = useState(false);
+  const [screenReaderAnnouncement, setScreenReaderAnnouncement] = useState<string>('');
+
+  const prefersReducedMotion = useMemo(() => {
+    return typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  }, []);
 
   const activeBundle = useMemo<MultiFileArtifactBundle | null>(() => {
     if (explicitBundle) return explicitBundle;
@@ -113,6 +119,88 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
 
   const [prevArtifactKey, setPrevArtifactKey] = useState<string | null>(null);
   const artifactKey = artifact ? `${artifact.id}-${artifact.version}` : null;
+
+  // Universal Keyboard Navigation (Phase 1)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const isInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+
+      // Alt+1: Preview
+      if (e.altKey && e.key === '1') {
+        e.preventDefault();
+        setActiveTab('preview');
+        setScreenReaderAnnouncement('Switched to Preview tab');
+        return;
+      }
+      // Alt+2: Code
+      if (e.altKey && e.key === '2') {
+        e.preventDefault();
+        setActiveTab('code');
+        setScreenReaderAnnouncement('Switched to Code tab');
+        return;
+      }
+      // Alt+3: Diff
+      if (e.altKey && e.key === '3') {
+        if (adaptiveDock && artifact?.versions && artifact.versions.length > 1) {
+          e.preventDefault();
+          setActiveTab('diff');
+          setScreenReaderAnnouncement('Switched to Diff tab');
+        }
+        return;
+      }
+      // Alt+4: Graph
+      if (e.altKey && e.key === '4') {
+        if (adaptiveDock && executionGraph) {
+          e.preventDefault();
+          setActiveTab('graph');
+          setScreenReaderAnnouncement('Switched to Graph tab');
+        }
+        return;
+      }
+
+      // Cmd+P or Ctrl+P: quick workspace file jump
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'p' || e.key === 'P')) {
+        if (adaptiveDock && activeBundle) {
+          e.preventDefault();
+          setShowFileExplorer(true);
+          setScreenReaderAnnouncement('Opened project files search');
+          window.setTimeout(() => {
+            const input = document.querySelector<HTMLInputElement>('[data-testid="file-search-input"]');
+            if (input) {
+              input.focus();
+              input.select();
+            }
+          }, 50);
+        }
+        return;
+      }
+
+      // Escape: dismiss drawer, search, or collapse
+      if (e.key === 'Escape') {
+        if (showConsole) {
+          e.preventDefault();
+          setShowConsole(false);
+          setScreenReaderAnnouncement('Console closed');
+          return;
+        }
+        if (showFileExplorer && isInput) {
+          e.preventDefault();
+          target?.blur();
+          return;
+        }
+        if (isExpanded) {
+          e.preventDefault();
+          setIsExpanded(false);
+          setScreenReaderAnnouncement('Studio collapsed to dock');
+          return;
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [adaptiveDock, artifact, executionGraph, activeBundle, showConsole, showFileExplorer, isExpanded]);
 
   if (artifact && artifactKey !== prevArtifactKey) {
     setPrevArtifactKey(artifactKey);
@@ -274,9 +362,20 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
   const handleZoomReset = () => setZoomScale(1);
   const currentArtifactIndex = (allArtifacts && artifact) ? allArtifacts.findIndex(a => a.id === artifact.id) : -1;
 
-  const selectedFile = (adaptiveDock && activeBundle && selectedFilePath)
+  const selectedFile = (activeBundle && selectedFilePath)
     ? activeBundle.files[selectedFilePath]
     : null;
+
+  const isMultiModal = Boolean(
+    selectedFile && (
+      selectedFile.kind === 'image' ||
+      selectedFile.kind === 'svg' ||
+      selectedFile.kind === 'audio' ||
+      selectedFile.kind === 'video' ||
+      selectedFile.kind === 'pdf'
+    )
+  );
+
   const displayedContent = selectedFile ? selectedFile.content : currentContent;
   const displayedFilePath = selectedFile ? selectedFile.path : '';
   const displayedLanguage = selectedFile ? selectedFile.kind : (artifact.language || 'text');
@@ -289,7 +388,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
           initial={{ x: '100%', opacity: 0.5, boxShadow: '0 0 0 rgba(0,0,0,0)' }}
           animate={{ x: 0, opacity: 1, boxShadow: '-20px 0 40px -15px rgba(0,0,0,0.2)' }}
           exit={{ x: '100%', opacity: 0.5, boxShadow: '0 0 0 rgba(0,0,0,0)' }}
-          transition={{ type: "spring", stiffness: 250, damping: 25, mass: 0.8 }}
+          transition={prefersReducedMotion ? { duration: 0 } : { type: "spring", stiffness: 250, damping: 25, mass: 0.8 }}
           data-testid="artifact-studio"
           className={`${isExpanded ? 'fixed inset-y-0 right-0 z-[60] w-full' : 'fixed inset-y-0 right-0 z-50 w-full xl:relative xl:inset-auto xl:z-40 xl:w-[48vw]'} ${adaptiveDock && !isExpanded ? 'aira-adaptive-real-studio' : ''} h-[100dvh] min-w-0 flex flex-col bg-claude-surface-light dark:bg-[#141413] border-l border-claude-border-light dark:border-claude-border-dark shadow-2xl xl:shadow-none flex-shrink-0 transition-colors`}
         >
@@ -372,20 +471,32 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
             {/* Tab & Action Controls */}
             <div className="flex shrink-0 items-center space-x-1 sm:space-x-1.5">
               {/* Tab Selector */}
-              <div className="relative mr-1 flex items-center rounded-lg border border-claude-border-light bg-claude-surface2-light p-0.5 dark:border-claude-border-dark dark:bg-claude-surface2-dark">
+              <div
+                role="tablist"
+                aria-label="Artifact Studio views"
+                className="relative mr-1 flex items-center rounded-lg border border-claude-border-light bg-claude-surface2-light p-0.5 dark:border-claude-border-dark dark:bg-claude-surface2-dark"
+              >
                 {([
-                  { id: 'preview' as const, label: 'Preview', icon: Play },
-                  { id: 'code' as const, label: 'Code', icon: Code },
-                  ...(adaptiveDock && artifact.versions?.length > 1 ? [{ id: 'diff' as const, label: 'Diff', icon: Layers }] : []),
-                  ...(adaptiveDock && executionGraph ? [{ id: 'graph' as const, label: 'Graph', icon: Network }] : []),
+                  { id: 'preview' as const, label: 'Preview', icon: Play, shortcut: 'Alt+1' },
+                  { id: 'code' as const, label: 'Code', icon: Code, shortcut: 'Alt+2' },
+                  ...(adaptiveDock && artifact.versions?.length > 1 ? [{ id: 'diff' as const, label: 'Diff', icon: Layers, shortcut: 'Alt+3' }] : []),
+                  ...(adaptiveDock && executionGraph ? [{ id: 'graph' as const, label: 'Graph', icon: Network, shortcut: 'Alt+4' }] : []),
                 ]).map(tab => {
                   const Icon = tab.icon;
                   const selected = activeTab === tab.id;
                   return (
                     <button
                       key={tab.id}
+                      id={`tab-${tab.id}`}
+                      role="tab"
+                      aria-selected={selected}
+                      aria-controls={`tabpanel-${tab.id}`}
                       type="button"
-                      onClick={() => setActiveTab(tab.id)}
+                      onClick={() => {
+                        setActiveTab(tab.id);
+                        setScreenReaderAnnouncement(`Switched to ${tab.label} tab`);
+                      }}
+                      title={`${tab.label} (${tab.shortcut})`}
                       className={`relative isolate flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
                         selected
                           ? 'text-claude-terracotta'
@@ -396,7 +507,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                         <motion.span
                           layoutId="artifact-active-tab"
                           className="absolute inset-0 -z-10 rounded-md border border-claude-border-light bg-claude-surface-light shadow-sm dark:border-claude-border-dark dark:bg-[#272624]"
-                          transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+                          transition={prefersReducedMotion ? { duration: 0 } : { type: 'spring', stiffness: 400, damping: 30 }}
                         />
                       )}
                       <Icon className="h-3.5 w-3.5" />
@@ -543,6 +654,9 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                   animate={{ opacity: 1 }} 
                   exit={{ opacity: 0 }} 
                   transition={{ duration: 0.15 }} 
+                  role="tabpanel"
+                  id="tabpanel-preview"
+                  aria-labelledby="tab-preview"
                   className="w-full h-full relative flex flex-col"
                 >
                   {/* Sandbox Status Bar */}
@@ -550,7 +664,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                     <div className="flex items-center space-x-2">
                       <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                       <span className="font-medium tracking-tight text-claude-text-light dark:text-claude-text-dark text-[11px]">
-                        {isGenerating ? 'Preparing sandbox preview' : 'Live Execution Sandbox'}
+                        {isGenerating ? 'Preparing sandbox preview' : isMultiModal ? 'Multi-Modal Asset Sandbox' : 'Live Execution Sandbox'}
                       </span>
                     </div>
                     <div className="flex items-center space-x-2">
@@ -578,8 +692,8 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                     </div>
                   </div>
 
-                  {/* Adaptive Canvas Controls Bar (Phase 4) */}
-                  {adaptiveDock && (
+                  {/* Adaptive Canvas Controls Bar (Phase 4 - hidden for multi-modal assets) */}
+                  {adaptiveDock && !isMultiModal && (
                     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-claude-border-light bg-claude-surface2-light/60 px-3 py-1.5 text-xs dark:border-claude-border-dark dark:bg-[#181816]" data-testid="artifact-canvas-controls">
                       {/* Device Presets */}
                       <div className="flex items-center gap-1 rounded-md border border-claude-border-light bg-claude-surface-light p-0.5 dark:border-claude-border-dark dark:bg-claude-surface-dark" role="radiogroup" aria-label="Device viewport preview">
@@ -666,6 +780,13 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                       <p className="text-sm font-medium">Generating artifact...</p>
                       <p className="max-w-xs text-xs leading-relaxed">{currentContent.length.toLocaleString()} characters received. The sandbox preview starts when generation completes; select Code to inspect the stream.</p>
                     </div>
+                  ) : isMultiModal && selectedFile ? (
+                    <div className="flex-1 w-full h-full overflow-hidden flex flex-col" data-testid="multimodal-preview-container">
+                      <MultiModalAssetViewer
+                        file={selectedFile}
+                        isDark={typeof document !== 'undefined' && document.documentElement.classList.contains('dark')}
+                      />
+                    </div>
                   ) : (
                     <div className="flex-1 w-full h-full overflow-auto bg-stone-900/30 dark:bg-black/30 flex flex-col items-center justify-start p-1 sm:p-2" data-testid="artifact-viewport-container">
                       <div
@@ -719,7 +840,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                   </AnimatePresence>
                 </motion.div>
               ) : activeTab === 'diff' ? (
-                <motion.div key="diff" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex h-full w-full flex-col bg-[#141413] text-xs text-stone-200">
+                <motion.div key="diff" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} role="tabpanel" id="tabpanel-diff" aria-labelledby="tab-diff" className="flex h-full w-full flex-col bg-[#141413] text-xs text-stone-200">
                   <div className="border-b border-stone-800 px-4 py-2 text-stone-400">
                     {earlierVersion ? `Changes from v${earlierVersion.version} to v${selectedVersion}` : 'No earlier revision available'}
                   </div>
@@ -738,7 +859,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                   </div>
                 </motion.div>
               ) : activeTab === 'graph' && executionGraph ? (
-                <motion.div key="graph" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex h-full w-full flex-col">
+                <motion.div key="graph" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} role="tabpanel" id="tabpanel-graph" aria-labelledby="tab-graph" className="flex h-full w-full flex-col">
                   <AgentExecutionGraphView
                     graph={executionGraph}
                     selectedArtifactId={artifact?.id}
@@ -760,26 +881,47 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                   animate={{ opacity: 1 }} 
                   exit={{ opacity: 0 }} 
                   transition={{ duration: 0.15 }} 
+                  role="tabpanel"
+                  id="tabpanel-code"
+                  aria-labelledby="tab-code"
                   className="w-full h-full flex flex-col bg-[#141413] text-[#D4D4D4] font-mono text-[13px] leading-[1.6]"
                 >
                   <div className="h-8 px-4 flex items-center justify-between border-b border-stone-800 text-[11px] text-stone-500 select-none">
                     <span data-testid="code-file-indicator">{displayedFilePath ? `${displayedFilePath} • ` : ''}{lineCount} lines • {displayedLanguage}</span>
                     <span>Read-only</span>
                   </div>
-                  <div className="flex-1 overflow-y-auto p-4 flex">
-                    <div className="select-none text-stone-600 text-right pr-4 font-mono text-xs border-r border-stone-800/60 mr-4">
-                      {Array.from({ length: lineCount }).map((_, i) => (
-                        <div key={i}>{i + 1}</div>
-                      ))}
+                  {isMultiModal && selectedFile && selectedFile.kind !== 'svg' ? (
+                    <div className="flex-1 p-6 flex flex-col items-center justify-center text-center font-mono text-xs text-stone-400">
+                      <div className="p-5 rounded-xl bg-stone-900/80 border border-stone-800 max-w-md w-full flex flex-col gap-2.5">
+                        <div className="text-stone-200 font-semibold text-sm">{selectedFile.name}</div>
+                        <div className="text-stone-400 text-xs font-mono">{selectedFile.path} • {selectedFile.kind.toUpperCase()}</div>
+                        <div className="text-stone-500 text-[11px]">Binary multi-modal asset ({selectedFile.sizeBytes || selectedFile.content.length} bytes)</div>
+                        <div className="mt-3 p-3 bg-stone-950 rounded text-[11px] text-stone-400 break-all text-left max-h-36 overflow-auto border border-stone-800/60">
+                          {selectedFile.content.slice(0, 300)}...
+                        </div>
+                      </div>
                     </div>
-                    <pre className="whitespace-pre overflow-x-auto flex-1 font-mono text-xs text-stone-200">
-                      <code>{displayedContent}</code>
-                    </pre>
-                  </div>
+                  ) : (
+                    <div className="flex-1 overflow-y-auto p-4 flex">
+                      <div className="select-none text-stone-600 text-right pr-4 font-mono text-xs border-r border-stone-800/60 mr-4">
+                        {Array.from({ length: lineCount }).map((_, i) => (
+                          <div key={i}>{i + 1}</div>
+                        ))}
+                      </div>
+                      <pre className="whitespace-pre overflow-x-auto flex-1 font-mono text-xs text-stone-200">
+                        <code>{displayedContent}</code>
+                      </pre>
+                    </div>
+                  )}
                 </motion.div>
               )}
             </AnimatePresence>
             </div>
+          </div>
+
+          {/* Screen Reader Announcement Status */}
+          <div className="sr-only" aria-live="polite" role="status">
+            {screenReaderAnnouncement}
           </div>
         </motion.aside>
       )}

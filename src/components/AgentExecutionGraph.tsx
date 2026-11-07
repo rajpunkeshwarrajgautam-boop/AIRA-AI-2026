@@ -67,8 +67,12 @@ export const AgentExecutionGraphView: React.FC<AgentExecutionGraphProps> = ({
   const [viewMode, setViewMode] = useState<'dag' | 'timeline'>(compact ? 'timeline' : 'dag');
   const [approvingTaskIds, setApprovingTaskIds] = useState<Record<string, boolean>>({});
 
-  const nodeMap = graph.nodes;
-  const waves = graph.waves.length > 0 ? graph.waves : [Object.keys(nodeMap)];
+  const nodeMap: Record<string, GraphTaskNode> = (Array.isArray(graph.nodes)
+    ? Object.fromEntries((graph.nodes as any[]).map((n: any) => [n.id, n as GraphTaskNode]))
+    : graph.nodes) || {};
+  const waves: string[][] = (graph.waves && Array.isArray(graph.waves) && graph.waves.length > 0)
+    ? graph.waves
+    : [Object.keys(nodeMap)];
   const selectedNode = selectedNodeId ? nodeMap[selectedNodeId] : null;
 
   // Auto-select node associated with active artifact if none selected
