@@ -98,9 +98,9 @@ export const AgentExecutionGraphView: React.FC<AgentExecutionGraphProps> = ({
     let maxX = 0;
     let maxY = 0;
 
-    waves.forEach((wave, waveIdx) => {
+    (waves || []).forEach((wave, waveIdx) => {
       const x = startX + waveIdx * (columnWidth + columnGap);
-      wave.forEach((nodeId, nodeIdx) => {
+      (wave || []).forEach((nodeId, nodeIdx) => {
         const y = startY + nodeIdx * (nodeHeight + nodeGap);
         layout[nodeId] = { x, y, width: columnWidth, height: nodeHeight };
         if (x + columnWidth > maxX) maxX = x + columnWidth;
@@ -123,7 +123,7 @@ export const AgentExecutionGraphView: React.FC<AgentExecutionGraphProps> = ({
     }> = [];
 
     Object.values(nodeMap).forEach(targetNode => {
-      targetNode.dependsOn.forEach(sourceId => {
+      (targetNode.dependsOn || (targetNode as any).dependencies || []).forEach(sourceId => {
         const sourceBox = nodeLayout.layout[sourceId];
         const targetBox = nodeLayout.layout[targetNode.id];
         if (sourceBox && targetBox) {
