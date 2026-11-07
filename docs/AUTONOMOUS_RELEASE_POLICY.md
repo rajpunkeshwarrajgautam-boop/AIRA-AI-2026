@@ -28,6 +28,7 @@ The trusted operator code is checked out only from `prod-release`; **never execu
 
 1. Successful source workflows for the **current PR head SHA**, including the named `Fast CI`, `Semantic Search CI`, and `Main / PR certification` jobs and the isolated PostgreSQL workflow. The newest matching workflow run must pass; skipped or missing required jobs deny release.
 2. GitGuardian completed-success check and the Vercel success status whose target URL belongs to the configured AIRA project.
+   Pending Vercel or GitGuardian results receive bounded retries; explicit failures are terminal. This prevents a CI/preview completion race from requiring a new manual trigger.
 3. Same-repository owner-authored open PR, not draft or held, with clean/up-to-date mergeability. A fork, rename, deletion, excessive scope, changed SHA, or any executable/protected path produces NO GO.
 4. No open `[AUTO-RELEASE-FREEZE]` incident.
 5. Exact-SHA squash merge through the GitHub PR API, preserving branch/ruleset restrictions. GitHub rejects stale SHA or unsatisfied branch checks; no direct push or force flag is used.
