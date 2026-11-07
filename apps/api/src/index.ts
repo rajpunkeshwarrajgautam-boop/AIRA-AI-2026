@@ -27,6 +27,7 @@ import { McpHost } from '../../../packages/mcp/src/index.js';
 import { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
 import { validateDurableToolScopes } from '../../../packages/agent-runtime/src/durable/tool-authorization.js';
 import { validateApiStartupConfiguration } from './startup-config.js';
+import { evaluateRuntimeReadiness } from './runtime-readiness.js';
 import { AutomationEngine } from '../../../packages/automation/src/index.js';
 import { PostgresAgentRepository, PostgresRunRepository, InMemoryRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
 import { PostgresAutomationRepository, PostgresAutomationRunRepository } from '../../../packages/automation/src/repositories.js';
@@ -352,9 +353,12 @@ let appState: 'STARTING' | 'RECOVERING' | 'HEALTHY' | 'FAILED' = 'STARTING';
 
 app.get('/api/health', (_req: Request, res: Response) => {
   const providers = modelRouter.listProviders();
+  const readiness = evaluateRuntimeReadiness(appState, process.env);
   res.json({
-    status: 'HEALTHY',
+    status: readiness.ready ? 'HEALTHY' : 'DEGRADED',
     appState,
+    readiness: readiness.status,
+    ...(readiness.reason ? { readinessReason: readiness.reason } : {}),
     subsystems: {
       modelRouter: `ONLINE (${providers.length} provider(s): ${providers.join(', ') || 'none — mock-dev only'})`,
       toolRuntime: 'ONLINE',
@@ -362,7 +366,7 @@ app.get('/api/health', (_req: Request, res: Response) => {
       approvalKernel: 'ONLINE',
       mcpHost: 'ONLINE',
       knowledgeEngine: 'ONLINE',
-      agentRuntime: 'ONLINE',
+      agentRuntime: readiness.ready ? 'ONLINE' : 'NOT_READY',
       automationEngine: 'ONLINE',
       capabilityRegistry: 'ONLINE',
       intentRouter: 'ONLINE',
@@ -387,11 +391,12 @@ const capacityGuard = new PrivateBetaCapacityGuard(undefined, capacityStore, hea
 const modelRouter = new ModelRouter(healthTracker, capacityGuard);
 
 app.get('/api/ready', (_req: Request, res: Response) => {
-  if (appState === 'HEALTHY') {
-    res.status(200).json({ status: 'READY', timestamp: Date.now() });
-  } else {
-    res.status(503).json({ status: appState, timestamp: Date.now() });
-  }
+  const readiness = evaluateRuntimeReadiness(appState, process.env);
+  res.status(readiness.ready ? 200 : 503).json({
+    status: readiness.status,
+    ...(readiness.reason ? { reason: readiness.reason } : {}),
+    timestamp: Date.now()
+  });
 });
 
 app.get('/api/ready/providers', async (_req: Request, res: Response) => {
