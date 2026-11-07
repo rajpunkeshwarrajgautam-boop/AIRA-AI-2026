@@ -59,10 +59,10 @@ function fakeGithub({ pr = candidate, changedFiles = files, workflowRuns = runs,
 }
 
 test('allowlist covers only static asset, documentation and CSS paths', () => {
-  for (const path of ['README.md', 'docs/branding.md', 'public/favicon.svg', 'public/brand/logo.svg', 'src/index.css', 'src/components/Sidebar.css']) {
+  for (const path of ['README.md', 'docs/branding.md', 'public/favicon.ico', 'public/brand/logo.png', 'src/index.css', 'src/components/Sidebar.css']) {
     assert.equal(isUnattendedSafePath(path), true, path);
   }
-  for (const path of ['AGENTS.md', '.github/workflows/ci.yml', 'src/App.tsx', 'src/components/Login.tsx', 'src/utils/storage.ts', 'packages/db/src/schema.ts', 'apps/api/src/auth/bff-session.ts', 'vercel.json', 'public/script.js', 'docs/RELEASE_APPROVAL_POLICY.md', '../README.md']) {
+  for (const path of ['AGENTS.md', '.github/workflows/ci.yml', 'src/App.tsx', 'src/components/Login.tsx', 'src/utils/storage.ts', 'packages/db/src/schema.ts', 'apps/api/src/auth/bff-session.ts', 'vercel.json', 'public/script.js', 'public/favicon.svg', 'docs/RELEASE_APPROVAL_POLICY.md', '../README.md']) {
     assert.equal(isUnattendedSafePath(path), false, path);
   }
 });
