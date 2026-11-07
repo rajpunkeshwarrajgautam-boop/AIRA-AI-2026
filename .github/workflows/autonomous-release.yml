@@ -1,0 +1,44 @@
+name: Autonomous Production Release (Conservative)
+
+# Event-driven, with no idle polling. This runs the trusted prod-release copy
+# of the release operator; no PR checkout or untrusted artifact is executed.
+on:
+  workflow_run:
+    workflows: ["CI", "Disposable PostgreSQL Certification"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+  checks: read
+  statuses: read
+  issues: write
+
+concurrency:
+  group: aira-autonomous-prod-release
+  cancel-in-progress: false
+
+jobs:
+  evaluate-and-release:
+    name: Evaluate exact SHA and release only static changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 17
+    if: >-
+      github.repository == 'rajpunkeshwarrajgautam-boop/AIRA-AI-2026' &&
+      github.ref == 'refs/heads/prod-release' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    steps:
+      - name: Checkout reviewed release operator from protected branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: prod-release
+          persist-credentials: false
+
+      - name: Evaluate CI, risk, Vercel and protected-branch mergeability
+        run: node scripts/autonomous-release.mjs
+        env:
+          GH_AUTONOMOUS_RELEASE_TOKEN: ${{ github.token }}
+
