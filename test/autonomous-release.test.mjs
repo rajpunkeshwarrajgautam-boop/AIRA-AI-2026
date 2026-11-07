@@ -86,9 +86,26 @@ test('workflow attestation requires the newest exact-SHA run and every named job
 
 test('deployment proof fails closed on missing Vercel or missing security check', () => {
   assert.equal(validateDeploymentEvidence(statuses, checks), null);
-  assert.equal(validateDeploymentEvidence([{ ...statuses[0], state: 'pending' }], checks), 'VERCEL_PREVIEW_NOT_READY');
-  assert.equal(validateDeploymentEvidence(statuses, []), 'GITGUARDIAN_NOT_GREEN');
+  assert.equal(validateDeploymentEvidence([{ ...statuses[0], state: 'pending' }], checks), 'VERCEL_PREVIEW_PENDING');
+  assert.equal(validateDeploymentEvidence(statuses, []), 'GITGUARDIAN_PENDING');
+  assert.equal(validateDeploymentEvidence(statuses, [{ ...checks[0], conclusion: 'failure' }]), 'GITGUARDIAN_NOT_GREEN');
   assert.equal(validateDeploymentEvidence([{ ...statuses[0], target_url: 'https://attacker.example/' }], checks), 'VERCEL_PREVIEW_NOT_READY');
+});
+
+test('pending preview transitions to READY without new owner authorization', async () => {
+  const { request } = fakeGithub({ vercel: [{ ...statuses[0], state: 'pending' }] });
+  let statusRequests = 0;
+  const toggledRequest = async (url, options) => {
+    if (url.includes(`/commits/${sha}/status`)) {
+      statusRequests++;
+      return response({ statuses: [{ ...statuses[0], state: statusRequests === 1 ? 'pending' : 'success' }] });
+    }
+    return request(url, options);
+  };
+  const result = await releaseCandidate({ prNumber: 151, token: 'mock-github-token', request: toggledRequest,
+    preflightAttempts: 2, preflightDelayMs: 0, verify: async () => true });
+  assert.equal(statusRequests, 2);
+  assert.equal(result.merged, true);
 });
 
 test('live evaluator validates GitHub API evidence without executing the PR checkout', async () => {
