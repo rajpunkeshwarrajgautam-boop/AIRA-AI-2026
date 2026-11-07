@@ -10,7 +10,10 @@ import {
 } from '../packages/db/src/security/database-isolation-guard.js';
 
 const PREVIEW_URL = process.env.AIRA_PREVIEW_URL || 'https://aira-ai-2026-3trpr8741-rajpunkeshwarrajgautam-boops-projects.vercel.app';
-const VERCEL_BYPASS_SECRET = process.env.VERCEL_AUTOMATION_BYPASS_SECRET || 'QQUvz2kp1hnrbJeAicx0ZyH3kL18z54r';
+const VERCEL_BYPASS_SECRET = process.env.VERCEL_AUTOMATION_BYPASS_SECRET || '';
+const BYPASS_HEADERS: Record<string, string> = VERCEL_BYPASS_SECRET
+  ? { 'x-vercel-protection-bypass': VERCEL_BYPASS_SECRET }
+  : {};
 const ISOLATED_BRANCH_ID = 'br-muddy-wave-b3zxhkqf';
 
 const USER_A_EMAIL = process.env.STAGING_AUTH_TEST_USER_A_EMAIL || 'test_user_a_aira_staging@virexaaiventures.com';
@@ -43,7 +46,7 @@ async function main() {
   // 1. Verify Deployment Reachability and Agent Readiness
   console.log('--- Phase 1: Deployment & Readiness Gate ---');
   const readyRes = await fetch(`${PREVIEW_URL}/api/ready`, {
-    headers: { 'x-vercel-protection-bypass': VERCEL_BYPASS_SECRET }
+    headers: { ...BYPASS_HEADERS }
   });
   assert.equal(readyRes.status, 200, `Preview /api/ready must return HTTP 200. Got ${readyRes.status}`);
   const readyData = await readyRes.json();
@@ -55,7 +58,7 @@ async function main() {
   });
 
   const healthRes = await fetch(`${PREVIEW_URL}/api/health`, {
-    headers: { 'x-vercel-protection-bypass': VERCEL_BYPASS_SECRET }
+    headers: { ...BYPASS_HEADERS }
   });
   assert.equal(healthRes.status, 200);
   const healthData = await healthRes.json();
@@ -101,7 +104,7 @@ async function main() {
   const idResA = await fetch(`${PREVIEW_URL}/api/auth/identity`, {
     headers: {
       Authorization: `Bearer ${jwtA}`,
-      'x-vercel-protection-bypass': VERCEL_BYPASS_SECRET
+      ...BYPASS_HEADERS
     }
   });
   assert.equal(idResA.status, 200);
@@ -109,7 +112,7 @@ async function main() {
   assert.equal(idDataA.userId, principalA);
 
   const unauthRes = await fetch(`${PREVIEW_URL}/api/auth/identity`, {
-    headers: { 'x-vercel-protection-bypass': VERCEL_BYPASS_SECRET }
+    headers: { ...BYPASS_HEADERS }
   });
   assert.equal(unauthRes.status, 401, 'Unauthenticated request must return 401');
 
@@ -117,7 +120,7 @@ async function main() {
   const tamperedRes = await fetch(`${PREVIEW_URL}/api/auth/identity`, {
     headers: {
       Authorization: `Bearer ${tamperedJwt}`,
-      'x-vercel-protection-bypass': VERCEL_BYPASS_SECRET
+      ...BYPASS_HEADERS
     }
   });
   assert.equal(tamperedRes.status, 401, 'Tampered token must return 401');
@@ -133,7 +136,7 @@ async function main() {
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${jwtA}`,
-      'x-vercel-protection-bypass': VERCEL_BYPASS_SECRET
+      ...BYPASS_HEADERS
     },
     body: JSON.stringify({
       id: convId,
@@ -149,7 +152,7 @@ async function main() {
   const idorConvRes = await fetch(`${PREVIEW_URL}/api/conversations/${convId}`, {
     headers: {
       Authorization: `Bearer ${jwtB}`,
-      'x-vercel-protection-bypass': VERCEL_BYPASS_SECRET
+      ...BYPASS_HEADERS
     }
   });
   assert.equal(idorConvRes.status, 404, `User B reading User A conversation must return 404. Got ${idorConvRes.status}`);
@@ -172,7 +175,7 @@ async function main() {
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${jwtA}`,
-      'x-vercel-protection-bypass': VERCEL_BYPASS_SECRET,
+      ...BYPASS_HEADERS,
       'x-aira-csrf-protection': '1',
       Origin: PREVIEW_URL,
       Accept: 'text/event-stream'
@@ -283,7 +286,7 @@ async function main() {
   const idorRunGet = await fetch(`${PREVIEW_URL}/api/runs/${runId}`, {
     headers: {
       Authorization: `Bearer ${jwtB}`,
-      'x-vercel-protection-bypass': VERCEL_BYPASS_SECRET
+      ...BYPASS_HEADERS
     }
   });
   assert.equal(idorRunGet.status, 404, `User B reading User A run must return 404. Got ${idorRunGet.status}`);
@@ -292,7 +295,7 @@ async function main() {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${jwtB}`,
-      'x-vercel-protection-bypass': VERCEL_BYPASS_SECRET
+      ...BYPASS_HEADERS
     }
   });
   assert.ok([403, 404].includes(idorRunCancel.status), `User B cancelling User A run must return 403 or 404. Got ${idorRunCancel.status}`);
@@ -311,7 +314,7 @@ async function main() {
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${jwtA}`,
-      'x-vercel-protection-bypass': VERCEL_BYPASS_SECRET
+      ...BYPASS_HEADERS
     },
     body: JSON.stringify({
       approvalToken: 'invalid_forged_token_2026',
@@ -368,8 +371,8 @@ async function main() {
           if (reqOrigin === previewOrigin) {
             const headers = {
               ...request.headers(),
-              'x-vercel-protection-bypass': VERCEL_BYPASS_SECRET,
-              'x-vercel-set-bypass-cookie': 'true'
+              ...BYPASS_HEADERS,
+              ...(VERCEL_BYPASS_SECRET ? { 'x-vercel-set-bypass-cookie': 'true' } : {})
             };
             await route.continue({ headers });
             return;
@@ -416,7 +419,7 @@ async function main() {
     method: 'DELETE',
     headers: {
       Authorization: `Bearer ${jwtA}`,
-      'x-vercel-protection-bypass': VERCEL_BYPASS_SECRET
+      ...BYPASS_HEADERS
     }
   }).catch(() => {});
 

@@ -26,7 +26,14 @@ function assertActiveAuthority(row: any): string {
 }
 
 export class PostgresWorkspaceAuthorityRepository implements WorkspaceAuthorityRepository {
+  private assertDatabaseConfigured(): void {
+    if (!process.env.DATABASE_URL?.trim()) {
+      throw new Error('Production workspace authority requires a configured DATABASE_URL. In-memory fallback is strictly forbidden in production.');
+    }
+  }
+
   async resolveWorkspace(principalId: string): Promise<string> {
+    this.assertDatabaseConfigured();
     const derivedWorkspaceId = derivePersonalWorkspaceId(principalId);
     const existing = await db('principal_workspace_authorities').where({ principal_id: principalId }).first();
     if (existing) return assertActiveAuthority(existing);
@@ -53,6 +60,7 @@ export class PostgresWorkspaceAuthorityRepository implements WorkspaceAuthorityR
 
   async isWorkspaceActive(principalId: string, workspaceId: string): Promise<boolean> {
     if (!principalId || !workspaceId) return false;
+    this.assertDatabaseConfigured();
     const row = await db('principal_workspace_authorities')
       .where({ principal_id: principalId, workspace_id: workspaceId, state: 'ACTIVE' })
       .whereNull('revoked_at')
@@ -62,6 +70,7 @@ export class PostgresWorkspaceAuthorityRepository implements WorkspaceAuthorityR
 
   async revokeWorkspace(principalId: string): Promise<boolean> {
     if (!principalId) return false;
+    this.assertDatabaseConfigured();
     const workspaceId = derivePersonalWorkspaceId(principalId);
     const now = Date.now();
     // Use one upsert so revocation wins a first-provision race and leaves a
@@ -108,14 +117,21 @@ export class InMemoryWorkspaceAuthorityRepository implements WorkspaceAuthorityR
   }
 }
 
-const requiresPersistentWorkspaceAuthority = Boolean(
-  process.env.NODE_ENV === 'production' ||
-  process.env.VERCEL_ENV ||
-  process.env.AIRA_PERSISTENT_WORKSPACE_AUTHORITY === 'true' ||
-  (process.env.NODE_ENV !== 'test' && process.env.DATABASE_URL?.trim())
-);
+export function isPersistentWorkspaceAuthorityRequired(): boolean {
+  return Boolean(
+    process.env.NODE_ENV === 'production' ||
+    process.env.VERCEL_ENV === 'production' ||
+    process.env.AIRA_PERSISTENT_WORKSPACE_AUTHORITY === 'true' ||
+    (process.env.NODE_ENV !== 'test' && Boolean(process.env.DATABASE_URL?.trim()))
+  );
+}
+
+export function createWorkspaceAuthorityRepository(): WorkspaceAuthorityRepository {
+  if (isPersistentWorkspaceAuthorityRequired()) {
+    return new PostgresWorkspaceAuthorityRepository();
+  }
+  return new InMemoryWorkspaceAuthorityRepository();
+}
 
 /** Shared API/runtime authority resolver. Production always uses PostgreSQL and fails closed on DB errors. */
-export const workspaceAuthority: WorkspaceAuthorityRepository = requiresPersistentWorkspaceAuthority
-  ? new PostgresWorkspaceAuthorityRepository()
-  : new InMemoryWorkspaceAuthorityRepository();
+export const workspaceAuthority: WorkspaceAuthorityRepository = createWorkspaceAuthorityRepository();

@@ -577,6 +577,9 @@ export function verifyCsrfAndOrigin(req: Request, session?: BffServerSession | n
   if (origin) {
     // Never let client-controlled forwarding headers widen the trusted-origin allowlist.
     if (!isAllowedOrigin(origin)) return false;
+  } else if (session) {
+    // Authenticated state-changing browser mutations must always provide an explicit origin or referer
+    return false;
   } else if (secFetchSite !== 'same-origin' && secFetchSite !== 'same-site' && !hasAntiCsrfHeader) {
     // Some legitimate browser paths omit both Origin and Fetch Metadata. A non-simple
     // custom header is permitted only after the unconditional cross-site rejection above;
