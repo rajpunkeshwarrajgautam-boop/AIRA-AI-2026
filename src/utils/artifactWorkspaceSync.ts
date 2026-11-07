@@ -2,6 +2,7 @@ import type { MultiFileArtifactBundle, WorkspaceSyncResult } from '../types/mult
 import { neonAuth } from '../lib/neonAuth';
 import { normalizeAndValidateArtifactPath } from './artifactPathSecurity';
 import { idbGet, idbSet, STORES, isIndexedDbSupported } from './indexedDbStorage';
+import { markWorkspaceKeyVerifiedInIdb } from './storage';
 
 const WORKSPACE_STORAGE_KEY_PREFIX = 'aira_workspace_synced_v1_';
 
@@ -51,6 +52,7 @@ export async function syncBundleToWorkspace(
     // Save to high-capacity IndexedDB
     if (isIndexedDbSupported()) {
       await idbSet(STORES.WORKSPACES, key, payload);
+      markWorkspaceKeyVerifiedInIdb(key);
     }
 
     // Optional safe LocalStorage attempt (swallows QuotaExceededError without data loss)
