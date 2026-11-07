@@ -779,6 +779,45 @@ test('[Regression: UI Project Deletion & Stale Reconciliation Lifecycle] Real ap
   assert.equal(rehydrated!.some(p => p.id === 'p-ui-lifecycle-1'), false, 'Project must remain deleted across complete browser restart');
 });
 
+test('[Regression: Truthful Durability Failure Reporting] syncBundleToWorkspace returns success: false and durable: false when both IndexedDB and LocalStorage fail', async () => {
+  const bundle = createMultiFileBundle({
+    id: 'bundle-dual-fail-test',
+    title: 'Dual Failure Test',
+    entryPoint: 'index.html',
+    files: [
+      { path: 'index.html', content: '<h1>Sync Content</h1>' }
+    ]
+  });
+
+  const wsId = 'ws_dual_fail_test';
+  const expectedKey = 'aira_workspace_synced_v1_guest_ws_dual_fail_test';
+
+  // 1. Force idbSet to fail via transaction abort
+  mockIdbDb!.shouldAbortTransaction = true;
+
+  // 2. Force LocalStorage to fail (simulate quota exceeded or blocked storage)
+  const originalSetItem = mockLocal.setItem;
+  mockLocal.setItem = () => {
+    const quotaErr = new Error('QuotaExceededError');
+    quotaErr.name = 'QuotaExceededError';
+    throw quotaErr;
+  };
+
+  try {
+    const result = await syncBundleToWorkspace(bundle, wsId);
+    assert.equal(result.success, false, 'syncBundleToWorkspace MUST report success: false when durable persistence fails');
+    assert.equal(result.durable, false, 'Must report durable: false');
+    assert.equal(result.persistenceTier, 'memory-only', 'Must report persistenceTier: memory-only');
+    assert.ok(result.error?.includes('Durable storage unavailable'), 'Must truthfully report durable storage unavailable');
+
+    // Never mark as verified
+    assert.equal(isWorkspaceKeyVerifiedInIdb(expectedKey), false);
+  } finally {
+    mockLocal.setItem = originalSetItem;
+    mockIdbDb!.shouldAbortTransaction = false;
+  }
+});
+
 after(() => {
   setTimeout(() => process.exit(0), 100).unref();
 });

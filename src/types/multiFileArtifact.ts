@@ -95,4 +95,6 @@ export interface WorkspaceSyncResult {
   targetWorkspaceId: string;
   timestamp: number;
   error?: string;
+  durable: boolean;
+  persistenceTier: 'durable' | 'memory-only';
 }

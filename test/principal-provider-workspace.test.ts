@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import { DevPrincipalProvider } from '../apps/api/src/auth/principal-provider.js';
 import {
   derivePersonalWorkspaceId,
-  InMemoryWorkspaceAuthorityRepository
+  InMemoryWorkspaceAuthorityRepository,
+  PostgresWorkspaceAuthorityRepository,
+  createWorkspaceAuthorityRepository,
+  isPersistentWorkspaceAuthorityRequired
 } from '../packages/agent-runtime/src/workspace-authority.js';
 import { InMemoryToolCallRepository, ToolGateway } from '../packages/tool-runtime/src/index.js';
 import type { ExecutionPrincipal, ToolDefinition } from '../packages/contracts/src/index.js';
@@ -204,4 +207,85 @@ test('ToolGateway requires active server-owned workspace authority even for dire
   assert.equal(revokedBeforeDispatch.isError, true);
   assert.equal(revokedBeforeDispatch.errorCode, 'TOOL_PERMISSION_DENIED');
   assert.equal(revocationAdapterCalls, 0, 'A revocation between admission and dispatch must stop the adapter.');
+});
+
+
+test('Production workspace authority strictly enforces fail-closed PostgreSQL and refuses in-memory fallback', async () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousVercelEnv = process.env.VERCEL_ENV;
+  const previousDbUrl = process.env.DATABASE_URL;
+  const previousForce = process.env.AIRA_PERSISTENT_WORKSPACE_AUTHORITY;
+
+  try {
+    // 1. In production, persistent authority is MANDATORY
+    process.env.NODE_ENV = 'production';
+    delete process.env.VERCEL_ENV;
+    delete process.env.DATABASE_URL;
+    delete process.env.AIRA_PERSISTENT_WORKSPACE_AUTHORITY;
+
+    assert.equal(
+      isPersistentWorkspaceAuthorityRequired(),
+      true,
+      'isPersistentWorkspaceAuthorityRequired must be true in production even without DATABASE_URL'
+    );
+
+    const repo = createWorkspaceAuthorityRepository();
+    assert.ok(
+      repo instanceof PostgresWorkspaceAuthorityRepository,
+      'Production environment must select PostgresWorkspaceAuthorityRepository, never InMemoryWorkspaceAuthorityRepository'
+    );
+
+    // 2. Missing DATABASE_URL fails closed immediately on all operations
+    await assert.rejects(
+      () => repo.resolveWorkspace('test-principal-fail-closed'),
+      /Production workspace authority requires a configured DATABASE_URL\. In-memory fallback is strictly forbidden in production\./,
+      'resolveWorkspace must fail closed when DATABASE_URL is missing in production'
+    );
+
+    await assert.rejects(
+      () => repo.isWorkspaceActive('test-principal-fail-closed', 'ws_test_123'),
+      /Production workspace authority requires a configured DATABASE_URL\. In-memory fallback is strictly forbidden in production\./,
+      'isWorkspaceActive must fail closed when DATABASE_URL is missing in production'
+    );
+
+    await assert.rejects(
+      () => repo.revokeWorkspace('test-principal-fail-closed'),
+      /Production workspace authority requires a configured DATABASE_URL\. In-memory fallback is strictly forbidden in production\./,
+      'revokeWorkspace must fail closed when DATABASE_URL is missing in production'
+    );
+
+    // 3. In test environment without DATABASE_URL, in-memory repository is selected
+    process.env.NODE_ENV = 'test';
+    delete process.env.DATABASE_URL;
+    const testRepo = createWorkspaceAuthorityRepository();
+    assert.ok(
+      testRepo instanceof InMemoryWorkspaceAuthorityRepository,
+      'Test environment without database must use InMemoryWorkspaceAuthorityRepository'
+    );
+
+    // 4. Revocation enforcement in test repository
+    const testPrincipalId = 'test-principal-revocation';
+    const wsId = await testRepo.resolveWorkspace(testPrincipalId);
+    assert.ok(wsId);
+    assert.equal(await testRepo.isWorkspaceActive(testPrincipalId, wsId), true);
+
+    const revoked = await testRepo.revokeWorkspace(testPrincipalId);
+    assert.equal(revoked, true, 'Revocation must succeed');
+    assert.equal(await testRepo.isWorkspaceActive(testPrincipalId, wsId), false, 'Workspace must be inactive after revocation');
+
+    await assert.rejects(
+      () => testRepo.resolveWorkspace(testPrincipalId),
+      /no active workspace authority/i,
+      'resolveWorkspace must reject revoked principal'
+    );
+  } finally {
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+    if (previousVercelEnv === undefined) delete process.env.VERCEL_ENV;
+    else process.env.VERCEL_ENV = previousVercelEnv;
+    if (previousDbUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = previousDbUrl;
+    if (previousForce === undefined) delete process.env.AIRA_PERSISTENT_WORKSPACE_AUTHORITY;
+    else process.env.AIRA_PERSISTENT_WORKSPACE_AUTHORITY = previousForce;
+  }
 });

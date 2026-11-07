@@ -12,6 +12,9 @@ const inMemoryWorkspaces = new Map<string, unknown>();
  * Persists an artifact bundle into the local workspace storage with strict identity isolation.
  * Uses high-capacity IndexedDB to prevent LocalStorage quota exhaustion while maintaining
  * in-memory fallback and safe LocalStorage compatibility.
+ * 
+ * Truthfully reports durable vs memory-only status: returns success: false if both
+ * IndexedDB and LocalStorage fail to persist the bundle.
  */
 export async function syncBundleToWorkspace(
   bundle: MultiFileArtifactBundle,
@@ -49,6 +52,7 @@ export async function syncBundleToWorkspace(
     // Cache in memory for immediate access
     inMemoryWorkspaces.set(key, payload);
 
+    let idbSucceeded = false;
     // Save to high-capacity IndexedDB with strict durability and read-back verification
     if (isIndexedDbSupported()) {
       const writeSucceeded = await idbSet(STORES.WORKSPACES, key, payload);
@@ -58,21 +62,41 @@ export async function syncBundleToWorkspace(
         if (readBack && JSON.stringify(readBack) === JSON.stringify(payload)) {
           const payloadHash = computePayloadHash(JSON.stringify(payload));
           markWorkspaceKeyVerifiedInIdb(key, payloadHash);
+          idbSucceeded = true;
         }
       }
     }
 
+    let localStorageSucceeded = false;
     // Optional safe LocalStorage attempt (swallows QuotaExceededError without data loss)
     if (typeof localStorage !== 'undefined') {
       try {
         localStorage.setItem(key, JSON.stringify(payload));
+        localStorageSucceeded = true;
       } catch {
         // Quota exceeded: safely ignore because payload is already stored in IndexedDB and in-memory cache
       }
     }
 
+    const isDurable = idbSucceeded || localStorageSucceeded;
+
+    if (!isDurable) {
+      // Truthfully report failed durable persistence when both IndexedDB and LocalStorage fail
+      return {
+        success: false,
+        durable: false,
+        persistenceTier: 'memory-only',
+        syncedFilesCount: 0,
+        targetWorkspaceId: effectiveWorkspaceId,
+        timestamp,
+        error: 'Durable storage unavailable: failed to persist workspace to IndexedDB and LocalStorage. Retained in-memory only.',
+      };
+    }
+
     return {
       success: true,
+      durable: true,
+      persistenceTier: 'durable',
       syncedFilesCount: Object.keys(validatedFiles).length,
       targetWorkspaceId: effectiveWorkspaceId,
       timestamp,
@@ -81,6 +105,8 @@ export async function syncBundleToWorkspace(
     const message = err instanceof Error ? err.message : String(err || 'Unknown sync error');
     return {
       success: false,
+      durable: false,
+      persistenceTier: 'memory-only',
       syncedFilesCount: 0,
       targetWorkspaceId: effectiveWorkspaceId,
       timestamp,
