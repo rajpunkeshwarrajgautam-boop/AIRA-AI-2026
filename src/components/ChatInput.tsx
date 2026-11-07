@@ -17,6 +17,7 @@ import { AVAILABLE_MODELS } from '../utils/constants';
 
 interface ChatInputProps {
   onSendMessage: (text: string, attachments: Attachment[]) => void;
+  repairDraft?: { id: number; text: string } | null;
   isLoading: boolean;
   onStop?: () => void;
   currentModel: ModelId;
@@ -43,13 +44,14 @@ const STYLE_OPTIONS = [
 
 export const ChatInput: React.FC<ChatInputProps> = ({
   onSendMessage,
+  repairDraft,
   isLoading,
   currentModel,
   extendedThinking,
   workspaceMode,
   onWorkspaceModeChange,
 }) => {
-  const [inputText, setInputText] = useState('');
+  const [inputText, setInputText] = useState(repairDraft?.text || '');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [styleMode, setStyleMode] = useState<(typeof STYLE_OPTIONS)[number]['id']>('Normal');
   const [showStyleMenu, setShowStyleMenu] = useState(false);
@@ -210,6 +212,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         </AnimatePresence>
 
         <textarea
+          autoFocus={Boolean(repairDraft)}
           ref={textareaRef}
           value={inputText}
           onChange={event => setInputText(event.target.value)}

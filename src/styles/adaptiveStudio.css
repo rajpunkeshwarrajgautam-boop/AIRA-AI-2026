@@ -1,0 +1,200 @@
+/* Opt-in presentation layer. Never change the legacy shell when the preview flag is off. */
+.aira-adaptive-shell {
+  --adaptive-surface: #ffffff;
+  --adaptive-rail: #f6f8fc;
+  --adaptive-ink: #0e1934;
+  --adaptive-muted: #526380;
+  --adaptive-line: #dfe6f1;
+  --adaptive-pale: #eff3fb;
+  --adaptive-blue: #305ee5;
+  background: var(--adaptive-surface);
+  color: var(--adaptive-ink);
+}
+
+.dark .aira-adaptive-shell {
+  --adaptive-surface: #0b1120;
+  --adaptive-rail: #111c35;
+  --adaptive-ink: #f8f9fc;
+  --adaptive-muted: #a5b5ce;
+  --adaptive-line: #2b3b57;
+  --adaptive-pale: #192840;
+  --adaptive-blue: #678dff;
+}
+
+.aira-adaptive-shell .aira-sidebar-shell {
+  background: var(--adaptive-rail);
+  border-right-color: var(--adaptive-line);
+}
+
+.aira-adaptive-shell .aira-adaptive-main {
+  background: var(--adaptive-surface);
+  color: var(--adaptive-ink);
+}
+
+.aira-adaptive-shell .aira-adaptive-header {
+  min-height: 72px;
+  height: 72px;
+  background: var(--adaptive-surface);
+  border-bottom-color: var(--adaptive-line);
+  backdrop-filter: none;
+}
+
+.aira-adaptive-mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--adaptive-line);
+  background: var(--adaptive-pale);
+  border-radius: 12px;
+  flex: none;
+}
+
+.aira-adaptive-mode-toggle button {
+  min-width: 72px;
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 650;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--adaptive-ink);
+}
+
+.aira-adaptive-mode-toggle button[aria-pressed="true"] {
+  background: #305ee5;
+  color: #fff;
+}
+
+.aira-adaptive-mode-toggle button:focus-visible {
+  outline: 2px solid var(--adaptive-blue);
+  outline-offset: 2px;
+}
+
+.aira-adaptive-shell .aira-adaptive-chat-content {
+  background: var(--adaptive-surface);
+}
+
+.aira-adaptive-shell .aira-adaptive-composer > div {
+  max-width: 100%;
+}
+
+.aira-adaptive-empty-studio {
+  display: none;
+  flex-direction: column;
+  flex: 0 0 46%;
+  min-width: 0;
+  min-height: 0;
+  height: 100dvh;
+  border-left: 1px solid var(--adaptive-line);
+  background: var(--adaptive-surface);
+  color: var(--adaptive-ink);
+}
+
+.aira-adaptive-empty-header {
+  min-height: 82px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 24px;
+}
+
+.aira-adaptive-empty-header h2 {
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+
+.aira-adaptive-empty-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 28px;
+  height: 46px;
+  margin: 0 18px;
+  border-bottom: 1px solid var(--adaptive-line);
+  color: var(--adaptive-muted);
+  font-size: 14px;
+}
+
+.aira-adaptive-empty-tabs span {
+  display: flex;
+  align-items: center;
+  padding: 0 12px 13px;
+}
+
+.aira-adaptive-empty-tabs .aira-adaptive-empty-tab-active {
+  color: var(--adaptive-blue);
+  border-bottom: 3px solid var(--adaptive-blue);
+}
+
+.aira-adaptive-empty-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 16px;
+  padding: 32px 48px;
+}
+
+.aira-adaptive-empty-body h3 {
+  font-family: Newsreader, Georgia, serif;
+  font-size: clamp(26px, 2.1vw, 36px);
+  letter-spacing: -0.03em;
+}
+
+.aira-adaptive-empty-body p {
+  max-width: 360px;
+  color: var(--adaptive-muted);
+  line-height: 1.7;
+  font-size: 14px;
+}
+
+.aira-adaptive-empty-hint {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border-radius: 10px;
+  padding: 12px 15px;
+  background: var(--adaptive-pale);
+  color: var(--adaptive-muted);
+  font-size: 12px;
+}
+
+.aira-adaptive-empty-footer {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 19px 22px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--adaptive-muted);
+  border-top: 1px solid var(--adaptive-line);
+}
+
+@media (min-width: 1280px) {
+  .aira-adaptive-shell .aira-sidebar-shell { width: 244px; }
+  .aira-adaptive-empty-studio { display: flex; }
+  .aira-adaptive-shell .aira-adaptive-real-studio { width: 46%; flex-basis: 46%; }
+  .aira-adaptive-shell .aira-adaptive-main { border-right: 1px solid var(--adaptive-line); }
+}
+
+/* The real model/project/agent controls need room when the desktop studio is docked. */
+@media (min-width: 1280px) and (max-width: 1599px) {
+  .aira-adaptive-mode-toggle { display: none; }
+}
+
+@media (max-width: 767px) {
+  .aira-adaptive-shell .aira-adaptive-chat-content { padding-bottom: 5rem; }
+  .aira-adaptive-shell .aira-adaptive-header { min-height: 60px; height: 60px; }
+  .aira-adaptive-mode-toggle { display: none; }
+  .aira-adaptive-empty-studio { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aira-adaptive-shell .aira-adaptive-mode-toggle button { transition: none; }
+}

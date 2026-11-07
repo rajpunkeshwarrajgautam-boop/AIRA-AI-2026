@@ -33,6 +33,21 @@ export function generateArtifactSandboxHtml(
           } catch(e) {}
         }
 
+        function emitRuntimeError(message, line, column, stack) {
+          try {
+            window.parent.postMessage({
+              type: 'AIRA_ARTIFACT_RUNTIME_ERROR',
+              nonce: ${safeNonceJson},
+              error: {
+                message: String(message || 'Unknown sandbox error').slice(0, 1000),
+                line: typeof line === 'number' ? line : undefined,
+                column: typeof column === 'number' ? column : undefined,
+                stack: typeof stack === 'string' ? stack.slice(0, 2000) : undefined,
+              }
+            }, '*');
+          } catch (e) {}
+        }
+
         console.log = function(...args) { emit('info', args); originalLog.apply(console, args); };
         console.info = function(...args) { emit('info', args); originalInfo.apply(console, args); };
         console.warn = function(...args) { emit('warn', args); originalWarn.apply(console, args); };
@@ -40,6 +55,7 @@ export function generateArtifactSandboxHtml(
 
         window.onerror = function(msg, url, line, col, err) {
           emit('error', [msg + (line ? ' (Line ' + line + ')' : '')]);
+          emitRuntimeError(msg, line, col, err && err.stack);
           const errorDisplay = document.getElementById('aira-error-boundary');
           if (errorDisplay) {
             errorDisplay.style.display = 'block';
@@ -47,6 +63,12 @@ export function generateArtifactSandboxHtml(
           }
           return false;
         };
+
+        window.addEventListener('unhandledrejection', function(event) {
+          const reason = event.reason;
+          const message = reason && reason.message ? reason.message : String(reason || 'Unhandled promise rejection');
+          emitRuntimeError(message, undefined, undefined, reason && reason.stack);
+        });
       })();
     </script>
   `;

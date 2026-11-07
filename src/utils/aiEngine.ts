@@ -1,4 +1,5 @@
-import type { AppSettings, Artifact, Attachment, ModelId, ArtifactType } from '../types';
+import type { AppSettings, Artifact, Attachment, ModelId, ArtifactType, AgentTimelineEvent } from '../types';
+import { normalizeAgentTimelineEvent } from './agentTimeline';
 import { agentMemory } from './agentMemoryEngine';
 import { neonAuth } from '../lib/neonAuth';
 
@@ -9,6 +10,8 @@ export interface StreamCallbacks {
   onArtifactFound?: (artifact: Artifact) => void;
   onApprovalRequired?: (approval: { id: string; runId: string; toolCall?: { name: string; arguments: any }; reason?: string }) => void;
   onStatusUpdate?: (status: string) => void;
+  onAgentEvent?: (event: AgentTimelineEvent) => void;
+  onGraphEvent?: (type: string, data: any) => void;
   onRunStarted?: (runId: string) => void;
   onSourceAdded?: (source: any) => void;
   onCancelled?: () => void;
@@ -41,6 +44,7 @@ async function postChatStream(body: unknown, signal?: AbortSignal): Promise<Resp
 
 
 import { createStreamingArtifactDetector } from './artifactParser';
+import { createStreamingArtifactReconciler, createStreamingFenceArtifactDetector } from './streamingArtifactParser';
 
 export async function streamAIResponse(
   prompt: string,
@@ -52,7 +56,8 @@ export async function streamAIResponse(
   contextSubgraph?: string,
   conversationId?: string,
   intent?: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  reconcileArtifacts = false,
 ): Promise<void> {
   const isThinking = (model === 'claude-3-7-sonnet' && settings.extendedThinking);
 
@@ -66,30 +71,52 @@ export async function streamAIResponse(
   }
 
   let accumulatedResponse = '';
+  const reconciler = reconcileArtifacts && callbacks.onArtifactFound
+    ? createStreamingArtifactReconciler(callbacks.onArtifactFound)
+    : null;
+  const emitArtifact = (artifact: Artifact) => {
+    if (signal?.aborted) return;
+    if (reconciler) reconciler.publish(artifact);
+    else callbacks.onArtifactFound?.(artifact);
+  };
+  const abandonArtifactUpdates = () => reconciler?.cancel();
+  signal?.addEventListener('abort', abandonArtifactUpdates, { once: true });
+  const finishArtifactUpdates = () => {
+    reconciler?.flush();
+    signal?.removeEventListener('abort', abandonArtifactUpdates);
+  };
   const detector = createStreamingArtifactDetector(artifact => {
-    callbacks.onArtifactFound?.(artifact);
+    emitArtifact(artifact);
   });
+  const fenceDetector = reconcileArtifacts && callbacks.onArtifactFound
+    ? createStreamingFenceArtifactDetector()
+    : null;
 
   const wrappedCallbacks: StreamCallbacks = {
     ...callbacks,
+    onArtifactFound: callbacks.onArtifactFound ? emitArtifact : undefined,
     onContentChunk: (chunk: string) => {
       accumulatedResponse += chunk;
       const { textToEmit, artifactUpdate } = detector.processChunk(chunk);
       if (artifactUpdate && callbacks.onArtifactFound) {
-        callbacks.onArtifactFound(artifactUpdate);
+        emitArtifact(artifactUpdate);
       }
       if (textToEmit) {
+        fenceDetector?.processChunk(textToEmit).forEach(emitArtifact);
         callbacks.onContentChunk(textToEmit);
       }
     },
     onComplete: () => {
       const { remainingText, finalArtifact } = detector.flush();
       if (finalArtifact && callbacks.onArtifactFound) {
-        callbacks.onArtifactFound(finalArtifact);
+        emitArtifact(finalArtifact);
       }
       if (remainingText) {
+        fenceDetector?.processChunk(remainingText).forEach(emitArtifact);
         callbacks.onContentChunk(remainingText);
       }
+      fenceDetector?.flush().forEach(emitArtifact);
+      finishArtifactUpdates();
       if (settings.autoConsolidateMemory !== false && accumulatedResponse.trim()) {
         try {
           agentMemory.consolidateFromTurn(prompt, accumulatedResponse);
@@ -98,6 +125,16 @@ export async function streamAIResponse(
         }
       }
       callbacks.onComplete();
+    },
+    onError: error => {
+      abandonArtifactUpdates();
+      signal?.removeEventListener('abort', abandonArtifactUpdates);
+      callbacks.onError(error);
+    },
+    onCancelled: () => {
+      abandonArtifactUpdates();
+      signal?.removeEventListener('abort', abandonArtifactUpdates);
+      callbacks.onCancelled?.();
     },
   };
 
@@ -156,6 +193,7 @@ export async function streamAIResponse(
           if (!isIdentityValid()) {
             console.warn('[streamAIResponse] Stream processing aborted: auth identity changed during stream');
             try { await reader.cancel(); } catch {}
+            abandonArtifactUpdates();
             return;
           }
 
@@ -171,6 +209,7 @@ export async function streamAIResponse(
           if (!isIdentityValid()) {
             console.warn('[streamAIResponse] Stream chunk discarded: auth identity changed during chunk arrival');
             try { await reader.cancel(); } catch {}
+            abandonArtifactUpdates();
             return;
           }
 
@@ -187,6 +226,7 @@ export async function streamAIResponse(
             }
             if (!isIdentityValid()) {
               try { await reader.cancel(); } catch {}
+              abandonArtifactUpdates();
               return;
             }
             if (line.startsWith('event: ')) {
@@ -202,6 +242,13 @@ export async function streamAIResponse(
               }
               try {
                 const data = JSON.parse(dataStr);
+                if (wrappedCallbacks.onAgentEvent) {
+                  const timelineEvent = normalizeAgentTimelineEvent(currentEvent, data);
+                  if (timelineEvent) wrappedCallbacks.onAgentEvent(timelineEvent);
+                }
+                if (wrappedCallbacks.onGraphEvent) {
+                  wrappedCallbacks.onGraphEvent(currentEvent, data);
+                }
                 if (currentEvent === 'run_started' && data.runId) {
                   wrappedCallbacks.onRunStarted?.(data.runId);
                 } else if (currentEvent === 'source_added') {
@@ -248,8 +295,15 @@ export async function streamAIResponse(
                     version: data.version || 1,
                     versions: [],
                   };
+                  if (reconcileArtifacts && wrappedCallbacks.onArtifactFound) {
+                    wrappedCallbacks.onArtifactFound(activeArtifact);
+                  }
                 } else if (currentEvent === 'artifact_delta' && data.chunk) {
                   artifactCode += data.chunk;
+                  if (reconcileArtifacts && activeArtifact && wrappedCallbacks.onArtifactFound) {
+                    activeArtifact.content = artifactCode;
+                    wrappedCallbacks.onArtifactFound(activeArtifact);
+                  }
                 } else if (currentEvent === 'artifact_close' && activeArtifact) {
                   activeArtifact.content = artifactCode;
                   activeArtifact.versions = [{
@@ -278,6 +332,7 @@ export async function streamAIResponse(
 
         if (!isIdentityValid()) {
           console.warn('[streamAIResponse] Stream completion suppressed: auth identity changed during stream');
+          abandonArtifactUpdates();
           return;
         }
 

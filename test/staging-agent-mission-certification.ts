@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { execSync } from 'node:child_process';
-import type { ExecutionPrincipal } from '../packages/contracts/src/index.js';
+import { WorkflowDefinitionSchema, type ExecutionPrincipal } from '../packages/contracts/src/index.js';
+import { assertCertificationFixtureWriteOptIn } from './staging-certification-safety.js';
 
 function getStagingConnectionString(): string {
   if (process.env.ISOLATED_TEST_DATABASE_URL?.trim()) {
@@ -35,7 +36,6 @@ process.env.ISOLATED_TEST_DATABASE_URL = connectionString;
 
 // Dynamically load database and runtime modules
 const { db } = await import('../packages/db/src/index.js');
-const { reconcileToolCallsSchema } = await import('../packages/db/src/migrations/025_reconcile_tool_calls_schema.js');
 const {
   assertAuthorizedStagingDatabase,
   validateDatabaseEnvironment,
@@ -59,6 +59,53 @@ const {
 } = await import('../packages/approvals/src/repositories.js');
 const { BrainV2KnowledgeEngine } = await import('../packages/knowledge/src/index.js');
 const { PostgresWorkspaceAuthorityRepository } = await import('../packages/agent-runtime/src/workspace-authority.js');
+
+const fixture: {
+  principalId?: string;
+  runtime?: InstanceType<typeof AgentRuntime>;
+} = {};
+
+async function cleanupFixture(): Promise<void> {
+  if (!fixture.principalId) return;
+
+  // This principal is random and unique to this invocation. Never clean by
+  // shared workspace, timestamp, or a run ID lacking principal verification.
+  const principalId = fixture.principalId;
+  const runs = await db('runs').where({ principal_id: principalId }).select('id', 'state');
+  if (runs.length > 1) {
+    throw new Error('Refusing cleanup: fixture principal unexpectedly owns multiple runs');
+  }
+
+  for (const run of runs) {
+    if (!['COMPLETED', 'FAILED', 'CANCELLED'].includes(String(run.state))) {
+      if (!fixture.runtime) throw new Error('Refusing cleanup of active run without runtime');
+      await fixture.runtime.cancelRun(String(run.id));
+      const deadline = Date.now() + 10_000;
+      let state = String(run.state);
+      while (Date.now() < deadline) {
+        const latest = await db('runs').where({ id: run.id, principal_id: principalId }).first('state');
+        state = String(latest?.state ?? 'MISSING');
+        if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(state)) break;
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+      if (!['COMPLETED', 'FAILED', 'CANCELLED'].includes(state)) {
+        throw new Error(`Refusing cleanup while fixture run ${run.id} remains active (${state})`);
+      }
+    }
+  }
+
+  await db.transaction(async trx => {
+    for (const run of runs) {
+      await trx('approval_resumption_outbox').where({ run_id: run.id }).del();
+      const removed = await trx('runs').where({ id: run.id, principal_id: principalId }).del();
+      if (removed !== 1) throw new Error(`Fixture run cleanup affected ${removed} rows, expected 1`);
+    }
+    await trx('workflow_definitions').where({ principal_id: principalId }).del();
+    await trx('session_grants').where({ principal_id: principalId }).del();
+    await trx('principal_workspace_authorities').where({ principal_id: principalId }).del();
+  });
+  console.log(`PASS: Removed only disposable certification fixtures for ${principalId}`);
+}
 
 async function main(): Promise<void> {
   console.log('========================================================================');
@@ -100,11 +147,9 @@ async function main(): Promise<void> {
   console.log('PASS: Strict TLS certificate verification confirmed (rejectUnauthorized: true)');
 
   // ========================================================================
-  // SECTION 2: RECHECK MIGRATION 025 (COLUMNS, TYPES, DEFAULTS, INDEXES)
+  // SECTION 2: READ-ONLY CHECK OF MIGRATION 025 CONTRACT
   // ========================================================================
-  console.log('\n--- SECTION 2: RECHECK MIGRATION 025 RECONCILIATION ---');
-
-  await reconcileToolCallsSchema(db as any, 'tool_calls');
+  console.log('\n--- SECTION 2: READ-ONLY MIGRATION 025 CONTRACT CHECK ---');
 
   const cols = await db('information_schema.columns')
     .where({ table_schema: 'public', table_name: 'tool_calls' })
@@ -144,6 +189,8 @@ async function main(): Promise<void> {
   assert.equal(indexNames.has('idx_tool_calls_status'), true, 'Missing index idx_tool_calls_status');
   console.log('PASS: All 3 indexes verified: idx_tool_calls_principal_started, idx_tool_calls_run_started, idx_tool_calls_status');
 
+  assertCertificationFixtureWriteOptIn(process.env.AIRA_STAGING_MISSION_WRITES_ENABLED);
+
   // ========================================================================
   // SECTION 3: REAL AGENT RUNTIME ACCEPTANCE TESTING (NO MANUAL COMPLETION)
   // ========================================================================
@@ -169,6 +216,8 @@ async function main(): Promise<void> {
   );
 
   const authenticatedUserAId = `usr_agent_operator_${missionTag}`;
+  fixture.principalId = authenticatedUserAId;
+  fixture.runtime = runtime;
   const authenticatedUserAWorkspaceId = await new PostgresWorkspaceAuthorityRepository()
     .resolveWorkspace(authenticatedUserAId);
   const authenticatedUserA: ExecutionPrincipal = {
@@ -266,16 +315,34 @@ async function main(): Promise<void> {
 
   // 4.2 Cross-user run cancellation rejected
   console.log('4.2 Verifying cross-user run cancellation rejection...');
+  // cancelWorkflow accepts a workflow-run ID, not the parent AgentRuntime run ID.
+  // Create a disposable, non-executed workflow owned by A so this check actually
+  // exercises the authorization path rather than a missing-resource false positive.
+  const authorizationWorkflow = WorkflowDefinitionSchema.parse({
+    workflowId: `wf_auth_cert_${missionTag}`,
+    name: 'Disposable cross-principal cancellation authorization fixture',
+    principalId: authenticatedUserA.userId,
+    steps: [{ stepId: 'authorization_probe', name: 'Authorization probe', type: 'CAPABILITY' }]
+  });
+  const authorizationWorkflowRun = await runtime.getWorkflowEngine().createWorkflowRun(
+    authorizationWorkflow,
+    run,
+    authenticatedUserA
+  );
   let cancelRejected = false;
   try {
     const wfEngine = runtime.getWorkflowEngine();
-    await wfEngine.cancelWorkflow(run.id, unauthorizedUserB);
+    await wfEngine.cancelWorkflow(authorizationWorkflowRun.id, unauthorizedUserB);
   } catch (err: any) {
     if (err.message.includes('Unauthorized') || err.message.includes('denied') || err.message.includes('not found')) {
       cancelRejected = true;
     }
   }
   assert.equal(cancelRejected, true, 'Cross-user cancellation must be rejected by the runtime.');
+  const stillOwned = await db('workflow_runs')
+    .where({ id: authorizationWorkflowRun.id, principal_id: authenticatedUserA.userId })
+    .first('state');
+  assert.equal(stillOwned?.state, 'CREATED', 'Unauthorized cancellation must not mutate workflow state');
   console.log('PASS: Cross-user mutation strictly rejected');
 
   console.log('\n========================================================================');
@@ -289,5 +356,9 @@ main()
     process.exitCode = 1;
   })
   .finally(async () => {
-    await db.destroy();
+    try {
+      await cleanupFixture();
+    } finally {
+      await db.destroy();
+    }
   });
