@@ -2,7 +2,7 @@ import type { MultiFileArtifactBundle, WorkspaceSyncResult } from '../types/mult
 import { neonAuth } from '../lib/neonAuth';
 import { normalizeAndValidateArtifactPath } from './artifactPathSecurity';
 import { idbGet, idbSet, STORES, isIndexedDbSupported } from './indexedDbStorage';
-import { markWorkspaceKeyVerifiedInIdb } from './storage';
+import { markWorkspaceKeyVerifiedInIdb, computePayloadHash } from './storage';
 
 const WORKSPACE_STORAGE_KEY_PREFIX = 'aira_workspace_synced_v1_';
 
@@ -49,10 +49,17 @@ export async function syncBundleToWorkspace(
     // Cache in memory for immediate access
     inMemoryWorkspaces.set(key, payload);
 
-    // Save to high-capacity IndexedDB
+    // Save to high-capacity IndexedDB with strict durability and read-back verification
     if (isIndexedDbSupported()) {
-      await idbSet(STORES.WORKSPACES, key, payload);
-      markWorkspaceKeyVerifiedInIdb(key);
+      const writeSucceeded = await idbSet(STORES.WORKSPACES, key, payload);
+      if (writeSucceeded) {
+        // Verify committed data via read-back and compare exact serialized payload
+        const readBack = await idbGet<typeof payload>(STORES.WORKSPACES, key);
+        if (readBack && JSON.stringify(readBack) === JSON.stringify(payload)) {
+          const payloadHash = computePayloadHash(JSON.stringify(payload));
+          markWorkspaceKeyVerifiedInIdb(key, payloadHash);
+        }
+      }
     }
 
     // Optional safe LocalStorage attempt (swallows QuotaExceededError without data loss)

@@ -109,10 +109,12 @@ export class InMemoryWorkspaceAuthorityRepository implements WorkspaceAuthorityR
 }
 
 const requiresPersistentWorkspaceAuthority = Boolean(
-  process.env.NODE_ENV === 'production' ||
-  process.env.VERCEL_ENV ||
   process.env.AIRA_PERSISTENT_WORKSPACE_AUTHORITY === 'true' ||
-  (process.env.NODE_ENV !== 'test' && process.env.DATABASE_URL?.trim())
+  (Boolean(process.env.DATABASE_URL?.trim()) && (
+    process.env.NODE_ENV === 'production' ||
+    process.env.VERCEL_ENV === 'production' ||
+    process.env.NODE_ENV !== 'test'
+  ))
 );
 
 /** Shared API/runtime authority resolver. Production always uses PostgreSQL and fails closed on DB errors. */

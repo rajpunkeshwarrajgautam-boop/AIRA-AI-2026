@@ -100,6 +100,27 @@ export function isEntityDeleted(id: string, entityType: 'conversation' | 'projec
 }
 
 export async function hydrateTombstonesFromIndexedDb(): Promise<void> {
+  // First hydrate from LocalStorage mirror if available
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.TOMBSTONES);
+      if (raw) {
+        const localTombstones = JSON.parse(raw);
+        if (Array.isArray(localTombstones)) {
+          for (const item of localTombstones) {
+            if (item && item.id && item.entityType) {
+              const key = getTombstoneKey(item.id, item.entityType);
+              const existing = inMemoryTombstones.get(key);
+              if (!existing || item.deletedAt > existing.deletedAt) {
+                inMemoryTombstones.set(key, item);
+              }
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+
   if (!isIndexedDbSupported()) return;
   try {
     const idbTombstones = await idbGet<TombstoneRecord[]>(STORES.METADATA, 'tombstones');
@@ -160,25 +181,23 @@ export function computePayloadHash(payload: string): string {
 const verifiedIdbWorkspaceHashes = new Map<string, string>();
 
 export function markWorkspaceKeyVerifiedInIdb(key: string, payloadHash?: string): void {
-  if (payloadHash) {
+  if (payloadHash && payloadHash !== '__verified__') {
     verifiedIdbWorkspaceHashes.set(key, payloadHash);
   } else if (typeof localStorage !== 'undefined') {
     const raw = localStorage.getItem(key);
     if (raw) {
       verifiedIdbWorkspaceHashes.set(key, computePayloadHash(raw));
-    } else {
-      verifiedIdbWorkspaceHashes.set(key, '__verified__');
     }
-  } else {
-    verifiedIdbWorkspaceHashes.set(key, '__verified__');
   }
 }
 
 export function isWorkspaceKeyVerifiedInIdb(key: string, payloadHash?: string): boolean {
+  const verified = verifiedIdbWorkspaceHashes.get(key);
+  if (!verified) return false;
   if (payloadHash) {
-    return verifiedIdbWorkspaceHashes.get(key) === payloadHash;
+    return verified === payloadHash;
   }
-  return verifiedIdbWorkspaceHashes.has(key);
+  return true;
 }
 
 /**
@@ -579,7 +598,9 @@ export async function hydrateProjectsFromIndexedDb(): Promise<Project[] | null> 
         localProjects = inMemoryProjects || [];
       }
 
-      if ((Array.isArray(idbProjects) && idbProjects.length > 0) || localProjects.length > 0) {
+      const hasIdb = Array.isArray(idbProjects);
+      const hasLocal = typeof localStorage !== 'undefined' && localStorage.getItem(STORAGE_KEYS.PROJECTS) !== null;
+      if (hasIdb || hasLocal || localProjects.length > 0) {
         const reconciled = reconcileProjects(localProjects, idbProjects || []);
         inMemoryProjects = reconciled;
         await idbSet(STORES.PROJECTS, 'projects', reconciled);
@@ -630,7 +651,9 @@ export async function hydrateStorageFromIndexedDb(userId?: string): Promise<Stor
         localConvs = inMemoryConversations.get(key) || [];
       }
 
-      if ((Array.isArray(idbData) && idbData.length > 0) || localConvs.length > 0) {
+      const hasIdbConvs = Array.isArray(idbData);
+      const hasLocalConvs = typeof localStorage !== 'undefined' && localStorage.getItem(key) !== null;
+      if (hasIdbConvs || hasLocalConvs || localConvs.length > 0) {
         reconciledConvs = reconcileConversations(localConvs, idbData || []);
         inMemoryConversations.set(key, reconciledConvs);
 
@@ -665,7 +688,9 @@ export async function hydrateStorageFromIndexedDb(userId?: string): Promise<Stor
         localProjects = inMemoryProjects || [];
       }
 
-      if ((Array.isArray(idbProjects) && idbProjects.length > 0) || localProjects.length > 0) {
+      const hasIdbProjects = Array.isArray(idbProjects);
+      const hasLocalProjects = typeof localStorage !== 'undefined' && localStorage.getItem(STORAGE_KEYS.PROJECTS) !== null;
+      if (hasIdbProjects || hasLocalProjects || localProjects.length > 0) {
         reconciledProjects = reconcileProjects(localProjects, idbProjects || []);
         inMemoryProjects = reconciledProjects;
 

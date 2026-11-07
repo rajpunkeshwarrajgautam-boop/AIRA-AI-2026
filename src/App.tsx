@@ -5,7 +5,7 @@ import {
   loadConversations, saveConversations, saveActiveChatId,
   getSessionActiveChatId, setSessionActiveChatId,
   loadProjects, saveProjects, loadSettings, saveSettings, INITIAL_CONVERSATION,
-  hydrateStorageFromIndexedDb, deleteConversationRecord
+  hydrateStorageFromIndexedDb, deleteConversationRecord, deleteProjectRecord
 } from './utils/storage';
 import { streamAIResponse } from './utils/aiEngine';
 import { appendAgentTimelineEvent } from './utils/agentTimeline';
@@ -574,6 +574,13 @@ useEffect(() => {
     conversationSyncVersionsRef.current.delete(id);
     void deleteConversationFromServer(id);
     showToast('Conversation deleted');
+  };
+
+  const handleDeleteProject = (id: string) => {
+    deleteProjectRecord(id);
+    setProjects(prev => prev.filter(p => p.id !== id));
+    if (activeProjectId === id) setActiveProjectId(undefined);
+    showToast('Project deleted');
   };
 
   const handleRenameChat = (id: string, title: string) => updateConversation(id, c => ({ ...c, title, updatedAt: Date.now() }));
@@ -1655,10 +1662,7 @@ useEffect(() => {
             activeProjectId={activeProjectId}
             onSelectProject={setActiveProjectId}
             onSaveProject={project => setProjects(prev => [project, ...prev.filter(p => p.id !== project.id)])}
-            onDeleteProject={id => {
-              setProjects(prev => prev.filter(p => p.id !== id));
-              if (activeProjectId === id) setActiveProjectId(undefined);
-            }}
+            onDeleteProject={handleDeleteProject}
           />
         )}
 

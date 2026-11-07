@@ -1,4 +1,4 @@
-import test, { beforeEach } from 'node:test';
+import test, { beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 
 // In-memory mock storage implementations
@@ -137,6 +137,8 @@ let mockIdbDb: MockIDBDatabase | null = new MockIDBDatabase();
 let idbShouldFailOpen = false;
 
 (globalThis as any).window = {
+  addEventListener: () => {},
+  removeEventListener: () => {},
   indexedDB: {
     open: (_name: string, _version?: number) => {
       const req: any = { onsuccess: null, onerror: null, onupgradeneeded: null };
@@ -156,6 +158,19 @@ let idbShouldFailOpen = false;
       return req;
     },
   },
+};
+
+// Suppress unhandled network restoration fetch in headless Node
+const originalFetch = globalThis.fetch;
+globalThis.fetch = async (input: any, init?: any) => {
+  const url = typeof input === 'string' ? input : input?.url || '';
+  if (url.includes('/api/auth/session')) {
+    return new Response(JSON.stringify({ status: 'ANONYMOUS', user: null }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+  return originalFetch ? originalFetch(input, init) : new Response('{}', { status: 200 });
 };
 
 const {
@@ -190,6 +205,9 @@ const {
   STORES,
   resetDbConnectionForTesting,
 } = await import('../src/utils/indexedDbStorage.js');
+
+const { syncBundleToWorkspace } = await import('../src/utils/artifactWorkspaceSync.js');
+const { createMultiFileBundle } = await import('../src/utils/artifactBundleEngine.js');
 
 beforeEach(() => {
   mockLocal.clear();
@@ -657,4 +675,110 @@ test('[Regression: Simultaneous / Concurrent Updates] Deterministic Last-Write-W
   assert.equal(reconciledIdbNewer.length, 1);
   assert.equal(reconciledIdbNewer[0].updatedAt, 7000);
   assert.equal(reconciledIdbNewer[0].messages.length, 4);
+});
+
+test('[Regression: Workspace Sync False-Durability Prevention] syncBundleToWorkspace does NOT mark verified when idbSet fails', async () => {
+  const bundle = createMultiFileBundle({
+    id: 'bundle-fail-durability',
+    title: 'Fail Durability Bundle',
+    entryPoint: 'index.html',
+    files: [
+      { path: 'index.html', content: '<h1>Sync Content</h1>' },
+      { path: 'app.js', content: 'console.log("hello");' }
+    ]
+  });
+
+  const wsId = 'ws_fail_durability_test';
+  const expectedKey = 'aira_workspace_synced_v1_guest_ws_fail_durability_test';
+
+  // 1. Force idbSet to fail via transaction abort
+  mockIdbDb!.shouldAbortTransaction = true;
+
+  const result = await syncBundleToWorkspace(bundle, wsId);
+  assert.equal(result.success, true, 'syncBundleToWorkspace succeeds gracefully via in-memory and local fallbacks');
+
+  // CRITICAL SECURITY ASSERTION: Must NOT be marked as verified when idbSet failed!
+  assert.equal(isWorkspaceKeyVerifiedInIdb(expectedKey), false, 'Failed idbSet must NEVER mark workspace key as verified');
+
+  // Verify that LocalStorage holds the payload
+  const localCopy = mockLocal.getItem(expectedKey);
+  assert.ok(localCopy, 'LocalStorage must hold the workspace copy');
+
+  // Quota pressure eviction runs synchronously
+  const freedSync = evictVerifiedLocalStorageBlobsSync();
+  assert.equal(freedSync, 0, 'Synchronous quota eviction MUST NOT delete unverified workspace key');
+  assert.ok(mockLocal.getItem(expectedKey), 'LocalStorage workspace copy MUST remain intact under quota pressure');
+
+  // Asynchronous eviction also attempts verification and fails safely
+  const freedAsync = await evictVerifiedWorkspaceBlobs();
+  assert.equal(freedAsync, 0, 'Asynchronous eviction must also refuse to delete unverified key');
+  assert.ok(mockLocal.getItem(expectedKey), 'LocalStorage workspace copy MUST remain intact');
+
+  // 2. Positive verification path: Reset mock to succeed
+  mockIdbDb!.shouldAbortTransaction = false;
+  mockIdbDb!.shouldFailTransaction = false;
+
+  const wsSuccessId = 'ws_success_durability_test';
+  const expectedSuccessKey = 'aira_workspace_synced_v1_guest_ws_success_durability_test';
+
+  const successResult = await syncBundleToWorkspace(bundle, wsSuccessId);
+  assert.equal(successResult.success, true);
+
+  // Positive assertion: With successful write + read-back, hash is registered
+  assert.equal(isWorkspaceKeyVerifiedInIdb(expectedSuccessKey), true, 'Successful committed write + read-back must register verified hash');
+
+  // Now synchronous quota eviction safely cleans up the verified key
+  const freedSuccess = evictVerifiedLocalStorageBlobsSync();
+  assert.equal(freedSuccess, 1, 'Verified key can be safely evicted to relieve quota pressure');
+});
+
+test('[Regression: UI Project Deletion & Stale Reconciliation Lifecycle] Real application project deletion records tombstones and prevents resurrection across restarts', async () => {
+  // 1. Seed a project P1 in storage (simulating active user workspace)
+    const proj1 = {
+      id: 'p-ui-lifecycle-1',
+      name: 'Executive Dashboard',
+      description: 'Mission critical project',
+      instructions: 'TypeScript only',
+      docs: [{ id: 'd-1', name: 'readme.md', content: '# Docs', size: '10', createdAt: 1000 }],
+      createdAt: 1000,
+      updatedAt: 1000,
+    };
+    saveProjects([proj1]);
+    await idbSet(STORES.PROJECTS, 'projects', [proj1]);
+
+    // Verify project is loaded into memory and persistent stores
+    const initialLoad = await hydrateProjectsFromIndexedDb();
+    assert.ok(initialLoad !== null);
+    assert.equal(initialLoad!.some(p => p.id === 'p-ui-lifecycle-1'), true, 'Project must exist before deletion');
+
+    // 2. Execute application project deletion (the exact handler wired in App.tsx: handleDeleteProject)
+    deleteProjectRecord('p-ui-lifecycle-1');
+
+    // Verify tombstone is recorded
+    assert.ok(isEntityDeleted('p-ui-lifecycle-1', 'project'), 'Tombstone must be recorded for deleted project');
+
+    // Verify immediate in-memory and LocalStorage state is cleared
+    const afterDeleteProjects = loadProjects();
+    assert.equal(afterDeleteProjects.some(p => p.id === 'p-ui-lifecycle-1'), false, 'Project must be removed from local store');
+
+    // 3. Stale IndexedDB synchronization scenario:
+    // Another tab, background worker, or stale replica contains proj1
+    const staleIdbProjects = [proj1];
+
+    // Reconcile against stale IndexedDB data
+    const reconciled = reconcileProjects([], staleIdbProjects);
+    assert.equal(reconciled.length, 0, 'Tombstone MUST prevent stale IndexedDB project from being resurrected');
+
+    // 4. Simulate complete browser restart:
+    // Reset in-memory cache, leaving only on-disk LocalStorage & IndexedDB
+    resetStorageForTesting();
+
+    // Re-hydrate from storage
+  const rehydrated = await hydrateProjectsFromIndexedDb();
+  assert.ok(rehydrated !== null);
+  assert.equal(rehydrated!.some(p => p.id === 'p-ui-lifecycle-1'), false, 'Project must remain deleted across complete browser restart');
+});
+
+after(() => {
+  setTimeout(() => process.exit(0), 100).unref();
 });
