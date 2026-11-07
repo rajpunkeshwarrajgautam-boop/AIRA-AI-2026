@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { execSync } from 'node:child_process';
-import type { ExecutionPrincipal } from '../packages/contracts/src/index.js';
+import { WorkflowDefinitionSchema, type ExecutionPrincipal } from '../packages/contracts/src/index.js';
 import { assertCertificationFixtureWriteOptIn } from './staging-certification-safety.js';
 
 function getStagingConnectionString(): string {
@@ -315,16 +315,34 @@ async function main(): Promise<void> {
 
   // 4.2 Cross-user run cancellation rejected
   console.log('4.2 Verifying cross-user run cancellation rejection...');
+  // cancelWorkflow accepts a workflow-run ID, not the parent AgentRuntime run ID.
+  // Create a disposable, non-executed workflow owned by A so this check actually
+  // exercises the authorization path rather than a missing-resource false positive.
+  const authorizationWorkflow = WorkflowDefinitionSchema.parse({
+    workflowId: `wf_auth_cert_${missionTag}`,
+    name: 'Disposable cross-principal cancellation authorization fixture',
+    principalId: authenticatedUserA.userId,
+    steps: [{ stepId: 'authorization_probe', name: 'Authorization probe', type: 'CAPABILITY' }]
+  });
+  const authorizationWorkflowRun = await runtime.getWorkflowEngine().createWorkflowRun(
+    authorizationWorkflow,
+    run,
+    authenticatedUserA
+  );
   let cancelRejected = false;
   try {
     const wfEngine = runtime.getWorkflowEngine();
-    await wfEngine.cancelWorkflow(run.id, unauthorizedUserB);
+    await wfEngine.cancelWorkflow(authorizationWorkflowRun.id, unauthorizedUserB);
   } catch (err: any) {
     if (err.message.includes('Unauthorized') || err.message.includes('denied') || err.message.includes('not found')) {
       cancelRejected = true;
     }
   }
   assert.equal(cancelRejected, true, 'Cross-user cancellation must be rejected by the runtime.');
+  const stillOwned = await db('workflow_runs')
+    .where({ id: authorizationWorkflowRun.id, principal_id: authenticatedUserA.userId })
+    .first('state');
+  assert.equal(stillOwned?.state, 'CREATED', 'Unauthorized cancellation must not mutate workflow state');
   console.log('PASS: Cross-user mutation strictly rejected');
 
   console.log('\n========================================================================');

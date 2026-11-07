@@ -80,7 +80,10 @@ async function main() {
     throw new Error('Two distinct, pre-existing isolated Auth test accounts must be configured; this suite never signs up new users');
   }
 
-  // Spawn API server on dedicated test port with external auth enabled
+  // Import the real Express app in serverless mode, then bind it to a local
+  // test-only listener. The normal API entrypoint recovers ALL interrupted runs
+  // on startup; doing that against a reused staging branch would mutate other
+  // principals' historical runs during an unrelated auth certification.
   const env = {
     ...process.env,
     PORT: String(TEST_PORT),
@@ -89,12 +92,16 @@ async function main() {
     AIRA_EXTERNAL_AUTH_ENABLED: 'true',
     NEON_AUTH_BASE_URL: STAGING_AUTH_BASE,
     NEON_AUTH_JWKS_URL: STAGING_JWKS_URL,
-    NODE_ENV: 'test'
+    NODE_ENV: 'test',
+    VERCEL: '1'
   };
 
-  const serverProc: ChildProcess = spawn('npx', ['tsx', 'apps/api/src/index.ts'], {
+  const serverProc: ChildProcess = spawn(process.execPath, [
+    '--import', 'tsx', '--input-type=module', '-e',
+    `import app from './apps/api/src/index.ts'; const server = app.listen(${TEST_PORT}, '127.0.0.1'); process.on('SIGTERM', () => server.close(() => process.exit(0)));`
+  ], {
     env,
-    shell: true,
+    shell: false,
     stdio: 'pipe'
   });
 
@@ -183,8 +190,9 @@ async function main() {
         objective: 'Attempt privilege escalation'
       })
     });
-    assert.equal(forgedAutoRes.status, 400, 'Forged principalId must be rejected with HTTP 400');
     const forgedAutoErr = await forgedAutoRes.json();
+    assert.equal(forgedAutoRes.status, 400,
+      `Forged principalId must be rejected with HTTP 400; received ${forgedAutoRes.status}: ${JSON.stringify(forgedAutoErr)}`);
     assert.match(forgedAutoErr.error, /Forbidden: caller may not specify or forge principalId ownership/i);
     console.log('  ✓ Forged principalId on POST /api/automations rejected securely');
 
