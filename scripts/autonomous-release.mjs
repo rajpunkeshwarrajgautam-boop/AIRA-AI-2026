@@ -14,7 +14,8 @@ export const REQUIRED_WORKFLOWS = Object.freeze({
   'Disposable PostgreSQL Certification': []
 });
 const SHA = /^[a-f0-9]{40}$/;
-const ACCEPTED_STATIC_ASSET = /\.(?:svg|png|jpe?g|webp|gif|ico|woff2?)$/i;
+// SVG can contain active content. It requires engineering review, not auto-merge.
+const ACCEPTED_STATIC_ASSET = /\.(?:png|jpe?g|webp|gif|ico|woff2?)$/i;
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
