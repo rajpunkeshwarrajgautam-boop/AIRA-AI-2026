@@ -182,10 +182,9 @@ export async function migrateLocalStorageToIndexedDb(): Promise<{ migrated: bool
           // Strict read-back verification: verify that IndexedDB can retrieve the exact records
           const verified = await idbGet<Conversation[]>(STORES.CONVERSATIONS, key);
           if (Array.isArray(verified) && verified.length === parsed.length && verified[0]?.id === parsed[0]?.id) {
-            // Read-back verified: update in-memory cache and remove legacy LocalStorage entry
+            // Read-back verified: update in-memory cache and retain LocalStorage mirror for synchronous hydration
             inMemoryConversations.set(key, verified);
             migratedAny = true;
-            localStorage.removeItem(key);
             freedKeys++;
           }
         }
@@ -205,7 +204,7 @@ export async function migrateLocalStorageToIndexedDb(): Promise<{ migrated: bool
           if (Array.isArray(verifiedProjects) && verifiedProjects.length === parsedProjects.length) {
             inMemoryProjects = verifiedProjects;
             migratedAny = true;
-            // Note: Retain compact LocalStorage mirror for instant synchronous hydration across browser restarts
+            // Retain compact LocalStorage mirror for instant synchronous hydration across browser restarts
             freedKeys++;
           }
         }
@@ -214,8 +213,8 @@ export async function migrateLocalStorageToIndexedDb(): Promise<{ migrated: bool
       }
     }
 
-    // Also evict ephemeral synced workspace blobs to liberate quota
-    freedKeys += evictLegacyLocalStorageBlobs();
+    // Safely evict verified workspace blobs to liberate quota without data loss
+    await evictVerifiedWorkspaceBlobs();
 
     if (migratedAny) {
       try {
