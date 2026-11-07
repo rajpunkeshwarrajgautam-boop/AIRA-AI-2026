@@ -180,7 +180,7 @@
   .aira-adaptive-shell .aira-sidebar-shell { width: 244px; }
   .aira-adaptive-empty-studio { display: flex; }
   .aira-adaptive-shell .aira-adaptive-real-studio { width: 46%; flex-basis: 46%; }
-  .aira-adaptive-shell .aira-adaptive-main { border-right: 1px solid var(--adaptive-line); }
+  .aira-adaptive-shell.has-studio-open .aira-adaptive-main { border-right: 1px solid var(--adaptive-line); }
 }
 
 /* The real model/project/agent controls need room when the desktop studio is docked. */
@@ -192,9 +192,26 @@
   .aira-adaptive-shell .aira-adaptive-chat-content { padding-bottom: 5rem; }
   .aira-adaptive-shell .aira-adaptive-header { min-height: 60px; height: 60px; }
   .aira-adaptive-mode-toggle { display: none; }
-  .aira-adaptive-empty-studio { display: none; }
+  .aira-adaptive-shell:not(.has-studio-open) .aira-adaptive-empty-studio { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .aira-adaptive-shell .aira-adaptive-mode-toggle button { transition: none; }
+}
+
+/* Responsive drawer presentation for screens under 1280px (tablets & mobile) */
+@media (max-width: 1279px) {
+  .aira-adaptive-shell.has-studio-open .aira-adaptive-empty-studio {
+    display: flex !important;
+    position: fixed !important;
+    top: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 100% !important;
+    max-width: 540px !important;
+    height: 100dvh !important;
+    z-index: 50 !important;
+    box-shadow: -8px 0 32px rgba(0, 0, 0, 0.45) !important;
+    background: var(--adaptive-surface) !important;
+  }
 }

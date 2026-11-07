@@ -600,6 +600,8 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                   onClick={onClose}
                   className="p-1.5 ml-0.5 rounded-lg shrink-0 bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark hover:text-red-500 transition-colors"
                   title="Close artifact"
+                  aria-label="Close artifact"
+                  data-testid="artifact-studio-close"
                 >
                   <X className="w-4 h-4" />
                 </button>
