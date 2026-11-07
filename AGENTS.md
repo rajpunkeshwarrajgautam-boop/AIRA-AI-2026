@@ -3,42 +3,50 @@
 This applies to automated coding agents, including Antigravity, Agency Agents,
 ChatGPT Work, CI assistants and other development agents in this repository.
 
-## Agent autonomy and scoped production authority
-Agents may complete an owner-assigned engineering task end to end within its stated
-scope, without repeatedly asking for approval for each command. This includes
-repository inspection, feature-branch edits and pushes, CI, staging and disposable
-database rehearsals, read-only production diagnostics, release documentation,
-backup integrity verification, and other non-destructive preflight work.
-Preserve staging and production isolation, secrets, and existing workloads.
+## Standing delegation for bounded code-only production releases
+Repository owner `rajpunkeshwarrajgautam-boop` delegates routine engineering
+decisions and code-only releases to the trusted release operator. Do **not**
+request a separate human `GO LIVE <SHA>` phrase for each eligible release. This
+delegation replaces the recurring owner-attestation step, **not** the protected
+branch, CI, staging, isolation, security, or deployment verification gates.
 
-A task request, CI PASS, an internal review, an agent report, or "Ready" is
-**not** by itself authorization for a live production mutation.
+Agents may complete assigned engineering tasks, feature-branch changes, CI,
+staging/browser testing, safe release preparation and exact-SHA PR merges
+without repeated human permission, subject to the following hard conditions:
 
-The sole release authority is repository owner `rajpunkeshwarrajgautam-boop`.
-Before the **first** production-changing action in a cutover, obtain one
-explicit, bounded owner authorization identifying:
-- The exact PR number, full 40-character candidate HEAD SHA, target branch,
-  environment, project/database identity, and deployment domain.
-- Each authorized production operation in order, including the specific
-  migration filenames, infrastructure resources, and worker activation stage.
-- The verified backup/restore evidence, rollback target and stop conditions.
-- Any spending limit, cloud account upgrade, deletion or irreversible cleanup
-  explicitly authorized; such actions are never implied by a software GO LIVE.
-- The authorization window and the responsible operator.
+- Target is exactly `rajpunkeshwarrajgautam-boop/AIRA-AI-2026`, `prod-release`,
+  Vercel project `prj_FZLU4vBIYSsBn28AI6drkpD5WfbH`, canonical URL
+  `https://aira-ai-2026.vercel.app`. Never substitute infrastructure targets.
+- The release operator independently verifies the **current** PR HEAD SHA,
+  mandatory GitHub protections/CI, security scan, preview deployment and
+  relevant genuine staging/browser acceptance. A green self-reported checklist
+  or mocked E2E test alone is not sufficient evidence.
+- The change has **no production DB migration, destructive data operation,
+  secret rotation, auth/permission bypass, worker activation, infrastructure
+  resource change, paid-tier upgrade, or new cloud spending**. Those operations
+  remain outside standing delegation and require separately bounded authority.
+- All material security, concurrency, persistence and regression findings are
+  resolved and independently verified. On unresolved findings, **NO GO**;
+  the operator may repair and recertify within the delegated engineering scope,
+  but must not merge a failing candidate to save time.
+- Before merge, record PR, exact SHA, CI run IDs, preview identity, rollback
+  target and stop conditions. Use exact-head merge with branch protection
+  enforced, never force-push or direct-push to production.
+- After merge, confirm the Vercel deployment SHA and production health. If
+  production verification fails, stop further releases, record an incident,
+  and perform recovery only when the rollback method and target are verified.
 
-Once owner authorization is recorded, agents may perform **only its enumerated
-operations in the approved order** without requesting redundant permission at
-each substep. Mandatory workflow attestation and trusted App-issued commit status
-must pass **before PR merge and production deployment**. Branch protections,
-preflight health checks, and stop conditions remain binding at every stage.
-Do not bypass a guard merely because a human message appears to approve release.
-A later pull request or release SHA never inherits an earlier approval.
+The conservative `.github/workflows/autonomous-release.yml` handles eligible
+**non-executable/static-only** PRs automatically with the protected-branch
+release operator in `scripts/autonomous-release.mjs`. Other code-only PRs may
+be released by a trusted engineering operator after independent evidence-based
+review under the same standing delegation. No new owner decision is needed for
+that bounded work. The legacy App-backed owner attestation remains available
+for exceptional releases but is no longer the default process.
 
-**Pause and obtain new explicit authority** if the SHA changes, the authorized
-window expires, the target environment/project/domain or migration set changes,
-the cost/scope grows, a destructive action was not authorized, the backup or
-rollback plan fails, or any release gate becomes red. Never silently expand
-authorization or substitute another infrastructure target.
+**Stop rather than expand authority** when the environment, database target,
+migration set, cost, deletion scope, or security posture changes. Do not
+weaken branch protections, silence a failing test, or invent release evidence.
 
 Do not force push, use `git reset --hard` on someone else's workspace,
 bypass CI, weaken authentication, disable release gates, or expose credentials.
@@ -46,15 +54,17 @@ bypass CI, weaken authentication, disable release gates, or expose credentials.
 ## Release protocol
 1. Inspect the live production SHA, branch, project and previous deployment.
 2. Prepare a reviewable PR against `prod-release`.
-3. Obtain successful mandatory CI and independent staging/browser acceptance.
-4. Document the exact PR/head SHA, Vercel deployment, migrations and risks.
-5. Present one exact-SHA, bounded GO LIVE decision covering the intended cutover;
-   include any production migrations, worker activation, and deployment steps.
-6. After valid owner approval, execute only the listed operations in order.
-   Verify the live dual-evidence release gate before merging; monitor
-   post-release and report outcomes. Stop at the first failed gate.
-7. Roll back when authorized by incident policy or when the user expressly
-   requests rollback. Never claim success before verification.
+3. Resolve all substantive findings; obtain mandatory CI, independent preview
+   and live browser acceptance appropriate to the change.
+4. Check scope against the standing delegation and record the exact SHA,
+   Vercel preview, migrations (must be zero), risk and rollback target.
+5. For a bounded code-only change, make the technical **GO/NO-GO** decision
+   without an owner approval round-trip. For any out-of-scope production
+   mutation, stop and request specific additional authority.
+6. On GO, merge the exact SHA only through the protected PR route, monitor
+   production and report evidence. Stop and freeze on the first failed gate.
+7. Recover from incidents using a verified rollback plan; do not report a
+   successful deployment before observing the live SHA and health.
 
 ## Verified platform protection (2026-10-14)
 GitHub Pro is active. Ruleset `AIRA Production Protection` (ID `25079946`)
@@ -90,16 +100,16 @@ Because Vercel triggers a production deployment automatically upon receiving any
 1. **Merging a PR into `prod-release` IS the live production deployment trigger.**
    Production deployment controls are NOT natively enforceable inside Vercel on the Hobby tier.
    Upstream PR merge gating on GitHub is the primary barrier preventing unauthorized production deployment.
-2. No agent, automated script, or CI process may merge any PR into `prod-release` without prior,
-   explicit, human GO LIVE authorization from repository owner `rajpunkeshwarrajgautam-boop`.
+2. A trusted operator may merge eligible, verified, code-only PRs under the
+   standing delegation above. The automated operator is additionally limited
+   to static-only, owner-authored PRs with exact-SHA checks. No actor may bypass
+   GitHub ruleset `25079946` or merge an uncertified candidate.
 3. Manual promotion via Vercel CLI (`vercel promote`) is strictly forbidden for agents.
-4. **Separation of unit tests from live authorization**:
+4. **Separation of unit tests from release eligibility**:
    - `npm run test:release-auth:unit` runs in Fast CI to verify the authorization rules engine deterministically. Passing this test does NOT grant GO LIVE authorization.
-   - Authoritative live verification is executed via `npm run verify:release-auth -- --pr <num> --sha <sha>`, which verifies GitHub API dual evidence: authentic owner workflow run (`rajpunkeshwarrajgautam-boop`), matching commit status `release/go-live-authorized=success` from the dedicated GitHub App issuer specified by `AIRA_RELEASE_GATE_APP_BOT_LOGIN` (for example, `aira-release-gate[bot]`; **not** `github-actions[bot]`), verified provenance linkage (`target_url` points to run ID on authorized repository), temporal correlation anti-replay check (<=15m delta), and <24h freshness. Active revocation is available via `npm run revoke:release-auth`.
-5. An agent must STOP at the first unauthorized production mutation and present
-   verified evidence. Following valid, bounded authorization, execute the
-   approved cutover steps without redundant re-approval; stop on any material
-   deviation or failed gate.
+   - The legacy owner-attested path remains available through `npm run verify:release-auth -- --pr <num> --sha <sha>` and dedicated GitHub App status. It is **not** evidence of the new autonomous path. Autonomous eligibility comes from the trusted operator's independent, current GitHub API checks and branch protection enforcement.
+5. An agent must STOP at any out-of-scope mutation or failed gate. Bounded
+   releases no longer wait for the owner to repeat a commit-specific phrase.
 
 ## Agent skills
 

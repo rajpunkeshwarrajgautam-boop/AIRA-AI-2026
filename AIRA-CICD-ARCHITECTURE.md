@@ -1,5 +1,7 @@
 # AIRA AI 2026 — Dual Permanent CI/CD Pipeline Architecture
 
+> **Release policy amendment (2026-11-07):** The owner-dispatched GO LIVE sequence described later is historical for routine bounded code-only releases. Root `AGENTS.md` and `docs/AUTONOMOUS_RELEASE_POLICY.md` define the current delegated technical GO/NO-GO boundary. The legacy owner workflow remains optional for exceptional approvals.
+
 ## 1. Executive Architecture Summary
 
 AIRA AI 2026 operates a dual-track CI/CD pipeline architecture designed to eliminate recurring infrastructure setup (no need to repeatedly create Vercel projects, Neon databases, OAuth applications, or local repository worktrees for individual features).
