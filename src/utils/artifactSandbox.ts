@@ -1,3 +1,9 @@
+export const ARTIFACT_CSP_META_TAG = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline' https://cdn.tailwindcss.com https://unpkg.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src https://fonts.gstatic.com data:; img-src 'self' data: blob: https://images.unsplash.com; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';\">";
+
+export const ARTIFACT_REACT_CSP_META_TAG = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://unpkg.com https://cdn.jsdelivr.net; style-src 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src https://fonts.gstatic.com data:; img-src 'self' data: blob: https://images.unsplash.com; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';\">";
+
+export const ARTIFACT_STRICT_STATIC_CSP_META_TAG = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline' https://cdn.tailwindcss.com https://cdn.jsdelivr.net; style-src 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src https://fonts.gstatic.com data:; img-src 'self' data: blob: https://images.unsplash.com; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';\">";
+
 import type { Artifact } from '../types';
 
 export function generateArtifactSandboxHtml(
@@ -27,6 +33,21 @@ export function generateArtifactSandboxHtml(
           } catch(e) {}
         }
 
+        function emitRuntimeError(message, line, column, stack) {
+          try {
+            window.parent.postMessage({
+              type: 'AIRA_ARTIFACT_RUNTIME_ERROR',
+              nonce: ${safeNonceJson},
+              error: {
+                message: String(message || 'Unknown sandbox error').slice(0, 1000),
+                line: typeof line === 'number' ? line : undefined,
+                column: typeof column === 'number' ? column : undefined,
+                stack: typeof stack === 'string' ? stack.slice(0, 2000) : undefined,
+              }
+            }, '*');
+          } catch (e) {}
+        }
+
         console.log = function(...args) { emit('info', args); originalLog.apply(console, args); };
         console.info = function(...args) { emit('info', args); originalInfo.apply(console, args); };
         console.warn = function(...args) { emit('warn', args); originalWarn.apply(console, args); };
@@ -34,6 +55,7 @@ export function generateArtifactSandboxHtml(
 
         window.onerror = function(msg, url, line, col, err) {
           emit('error', [msg + (line ? ' (Line ' + line + ')' : '')]);
+          emitRuntimeError(msg, line, col, err && err.stack);
           const errorDisplay = document.getElementById('aira-error-boundary');
           if (errorDisplay) {
             errorDisplay.style.display = 'block';
@@ -41,6 +63,12 @@ export function generateArtifactSandboxHtml(
           }
           return false;
         };
+
+        window.addEventListener('unhandledrejection', function(event) {
+          const reason = event.reason;
+          const message = reason && reason.message ? reason.message : String(reason || 'Unhandled promise rejection');
+          emitRuntimeError(message, undefined, undefined, reason && reason.stack);
+        });
       })();
     </script>
   `;
@@ -59,6 +87,7 @@ export function generateArtifactSandboxHtml(
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
+  ${ARTIFACT_CSP_META_TAG}
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
@@ -96,6 +125,7 @@ export function generateArtifactSandboxHtml(
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
+  ${ARTIFACT_REACT_CSP_META_TAG}
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <script src="https://cdn.tailwindcss.com"></script>
@@ -261,6 +291,7 @@ export function generateArtifactSandboxHtml(
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
+  ${ARTIFACT_STRICT_STATIC_CSP_META_TAG}
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
@@ -339,6 +370,14 @@ export function generateArtifactSandboxHtml(
   if (artifact.type === 'text/html' || artifact.type.includes('html')) {
     let result = content;
 
+    if (!result.includes('Content-Security-Policy')) {
+      if (result.includes('<head>')) {
+        result = result.replace('<head>', '<head>' + ARTIFACT_CSP_META_TAG);
+      } else {
+        result = ARTIFACT_CSP_META_TAG + result;
+      }
+    }
+
     if (!result.includes('cdn.tailwindcss.com')) {
       const tailwindTag = '<script src="https://cdn.tailwindcss.com"></script>';
       if (result.includes('<head>')) {
@@ -370,6 +409,7 @@ export function generateArtifactSandboxHtml(
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
+  ${ARTIFACT_STRICT_STATIC_CSP_META_TAG}
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <script src="https://cdn.tailwindcss.com"></script>
@@ -414,6 +454,7 @@ export function generateArtifactSandboxHtml(
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
+  ${ARTIFACT_CSP_META_TAG}
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <script src="https://cdn.tailwindcss.com"></script>

@@ -76,7 +76,8 @@ test('Security Critical Fix A: Verify executable new-tab prevention and sandbox 
 
   // Verify iframe sandbox DOES NOT include allow-same-origin
   assert.match(content, /sandbox="allow-scripts allow-modals allow-forms"/);
-  assert.ok(!content.includes('allow-same-origin'));
+  // A comment may describe the forbidden permission; check actual attributes.
+  assert.doesNotMatch(content, /sandbox="[^"]*allow-same-origin/);
 });
 
 test('Security Critical Fix B: Verify postMessage cross-frame validation and per-session nonce', () => {
@@ -87,8 +88,8 @@ test('Security Critical Fix B: Verify postMessage cross-frame validation and per
   assert.ok(content.includes('event.source !== iframeRef.current.contentWindow'));
 
   // Verify per-session nonce validation
-  assert.ok(content.includes('activeNonceRef.current'));
-  assert.ok(content.includes('event.data.nonce !== activeNonceRef.current'));
+  assert.ok(content.includes('useState<string>(newSandboxNonce)'));
+  assert.ok(content.includes('event.data.nonce !== activeNonce'));
 
   // Verify sandbox HTML injection of nonce
   const artifact: Artifact = {

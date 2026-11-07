@@ -33,6 +33,11 @@ jobs:
       - name: Install dependencies without lifecycle scripts
         run: npm ci --ignore-scripts
 
+      - name: Install PostgreSQL client tools on runner host
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
       - name: Pull reviewed immutable images
         shell: bash
         run: |
@@ -119,6 +124,7 @@ jobs:
             if [[ "$TEST_ENV_FILE_CREATED" == true && "$TEST_ENV_FILE" == "$RUNNER_TEMP"/aira-pg-cert-test.* && -f "$TEST_ENV_FILE" && ! -L "$TEST_ENV_FILE" ]]; then
               rm -f -- "$TEST_ENV_FILE"
             fi
+            docker rmi -f "aira-pg-cert-runner:${RUN_SUFFIX}" >/dev/null 2>&1 || true
             exit "$status"
           }
           trap cleanup EXIT
@@ -177,6 +183,17 @@ jobs:
             --tmpfs /var/lib/postgresql/data:rw,noexec,nosuid,size=1g \
             'postgres:16-bookworm@sha256:878977a5fe8d75ba7eab7610e4cf7e0c8626a683d89b3f9da965b8ceba952a09' >/dev/null
 
+          mark_stage 'build isolated test-runner image with postgresql client'
+          printf '%s\n' \
+            'FROM postgres:16-bookworm@sha256:878977a5fe8d75ba7eab7610e4cf7e0c8626a683d89b3f9da965b8ceba952a09 AS pg_source' \
+            'FROM node:24@sha256:14078204b6bb268c107ceff6d3c43f45a888105e5c2b18b14c32b3409d93a1b0' \
+            'RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client && rm -rf /var/lib/apt/lists/*' \
+            'COPY --from=pg_source /usr/lib/postgresql/16/bin/pg_dump /usr/local/bin/pg_dump' \
+            'COPY --from=pg_source /usr/lib/postgresql/16/bin/pg_restore /usr/local/bin/pg_restore' \
+            'COPY --from=pg_source /usr/lib/postgresql/16/bin/psql /usr/local/bin/psql' \
+            'COPY --from=pg_source /usr/lib/postgresql/16/bin/createdb /usr/local/bin/createdb' \
+            | docker build -t "aira-pg-cert-runner:${RUN_SUFFIX}" -
+
           mark_stage 'create isolated test-runner container'
           TEST_CREATE_ATTEMPTED=true
           docker create \
@@ -191,7 +208,7 @@ jobs:
             --security-opt no-new-privileges:true \
             --pids-limit 512 \
             --memory 4g \
-            'node:24@sha256:14078204b6bb268c107ceff6d3c43f45a888105e5c2b18b14c32b3409d93a1b0' \
+            "aira-pg-cert-runner:${RUN_SUFFIX}" \
             sleep infinity >/dev/null
           mark_stage 'start isolated test-runner container'
           docker start "$TEST_CONTAINER" >/dev/null
@@ -354,6 +371,15 @@ jobs:
           mark_stage 'run PostgreSQL approval resumption outbox and workspace authority certification'
           docker exec --env AIRA_POSTGRES_CERTIFICATION=1 --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
             "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/approval-resumption-outbox-postgres.test.ts
+          mark_stage 'run autonomous agent task and durable browser session PostgreSQL certification'
+          docker exec --env AIRA_POSTGRES_CERTIFICATION=1 --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/autonomous-task-postgres-certification.test.ts
+          mark_stage 'run autonomous agent adversarial and fault-injection certification'
+          docker exec --env AIRA_POSTGRES_CERTIFICATION=1 --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/autonomous-adversarial-scenarios.test.ts
+          mark_stage 'run autonomous API worker dual-queue and durable persistence integration certification'
+          docker exec --env AIRA_POSTGRES_CERTIFICATION=1 --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/autonomous-api-worker-integration.test.ts
           mark_stage 'run destructive authenticated API integration on disposable PostgreSQL'
           docker exec --env AIRA_PERSISTENT_WORKSPACE_AUTHORITY=true \
             --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
@@ -371,5 +397,36 @@ jobs:
             --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
             "$TEST_CONTAINER" npm test
           mark_stage 'verify disposable PostgreSQL identity after runtime verification'
+          docker exec "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/secure-backup-crypto.test.ts test/encrypted-backup-restore-rehearsal.test.ts
           docker exec --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
             "$TEST_CONTAINER" node scripts/ci/assert-disposable-postgres.mjs
+
+          # ============================================================================
+          # Correction 2: Genuine Disposable Database Restore Rehearsal & Parity Certification (--live)
+          # ============================================================================
+          mark_stage 'create disposable rehearsal databases'
+          docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DATABASE" -c "DROP DATABASE IF EXISTS aira_disposable_source;"
+          docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DATABASE" -c "CREATE DATABASE aira_disposable_source OWNER \"$PG_USER\";"
+          docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DATABASE" -c "DROP DATABASE IF EXISTS aira_disposable_target;"
+          docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DATABASE" -c "CREATE DATABASE aira_disposable_target OWNER \"$PG_USER\";"
+
+          REHEARSAL_DB_URL_BASE="$(grep '^DATABASE_URL=' "$TEST_ENV_FILE" | cut -d= -f2- | sed 's|/[^/]*$||')"
+          DISPOSABLE_SRC_URL="${REHEARSAL_DB_URL_BASE}/aira_disposable_source"
+          DISPOSABLE_TGT_URL="${REHEARSAL_DB_URL_BASE}/aira_disposable_target"
+
+          mark_stage 'migrate aira_disposable_source across all 31 migrations'
+          docker exec --env "DATABASE_URL=$DISPOSABLE_SRC_URL" \
+            "$TEST_CONTAINER" npm run db:migrate
+
+          mark_stage 'execute live disposable restore rehearsal with 48-table parity verification'
+          docker exec \
+            --env "SOURCE_DATABASE_URL=$DISPOSABLE_SRC_URL" \
+            --env "TARGET_DATABASE_URL=$DISPOSABLE_TGT_URL" \
+            --env "DISPOSABLE_DATABASE_URL=$DISPOSABLE_TGT_URL" \
+            "$TEST_CONTAINER" npx tsx scripts/rehearse-disposable-restore.ts --live --source-url="$DISPOSABLE_SRC_URL" --target-url="$DISPOSABLE_TGT_URL"
+
+          unset REHEARSAL_DB_URL_BASE DISPOSABLE_SRC_URL DISPOSABLE_TGT_URL
+
+          mark_stage 'clean up disposable rehearsal databases'
+          docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DATABASE" -c "DROP DATABASE IF EXISTS aira_disposable_source;"
+          docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DATABASE" -c "DROP DATABASE IF EXISTS aira_disposable_target;"

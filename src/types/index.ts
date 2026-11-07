@@ -1,4 +1,6 @@
 
+import type { MultiFileArtifactBundle } from './multiFileArtifact';
+
 export type WorkspaceMode = 'chat' | 'agent';
 
 export type CapabilityType = 'research' | 'vision' | 'builder' | 'agents' | 'automations' | 'library' | 'general';
@@ -25,6 +27,16 @@ export type ArtifactType =
   | 'application/vnd.ant.code'
   | 'application/vnd.ant.react'
   | 'image/svg+xml'
+  | 'image/png'
+  | 'image/jpeg'
+  | 'image/webp'
+  | 'image/gif'
+  | 'audio/mpeg'
+  | 'audio/wav'
+  | 'audio/ogg'
+  | 'video/mp4'
+  | 'video/webm'
+  | 'application/pdf'
   | 'text/html'
   | 'text/markdown'
   | 'application/vnd.ant.mermaid';
@@ -43,6 +55,7 @@ export interface Artifact {
   content: string;
   version: number;
   versions: ArtifactVersion[];
+  bundle?: MultiFileArtifactBundle;
 }
 
 export interface Attachment {
@@ -59,11 +72,21 @@ export interface ThinkingBlock {
   isStreaming?: boolean;
 }
 
+// Public execution metadata only. Never persist tool arguments, tool output, or private reasoning.
+export interface AgentTimelineEvent {
+  id: string;
+  kind: 'run' | 'workflow' | 'step' | 'tool' | 'approval';
+  label: string;
+  status: 'running' | 'completed' | 'failed' | 'waiting';
+  occurredAt: number;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   thinking?: ThinkingBlock;
+  agentEvents?: AgentTimelineEvent[];
   artifacts?: Artifact[];
   attachments?: Attachment[];
   timestamp: number;

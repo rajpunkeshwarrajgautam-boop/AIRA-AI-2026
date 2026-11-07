@@ -16,8 +16,17 @@ export const ArtifactCard: React.FC<ArtifactCardProps> = ({ artifact, onOpen }) 
       whileTap={{ scale: 0.98 }}
       transition={{ duration: 0.15 }}
       data-testid="artifact-card"
+      role="button"
+      tabIndex={0}
+      aria-label={`Open artifact ${artifact.title} in Artifact Studio`}
       onClick={() => onOpen(artifact)}
-      className="my-3 p-3.5 sm:p-4 rounded-xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-[0_1px_3px_rgba(45,40,30,0.04)] hover:border-claude-terracotta/40 cursor-pointer transition-all duration-200 group flex items-center justify-between"
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpen(artifact);
+        }
+      }}
+      className="my-3 p-3.5 sm:p-4 rounded-xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-[0_1px_3px_rgba(45,40,30,0.04)] hover:border-claude-terracotta/40 cursor-pointer transition-all duration-200 group flex items-center justify-between focus:outline-none focus-visible:ring-2 focus-visible:ring-aira-blue focus-visible:ring-offset-2 dark:focus-visible:ring-offset-[#141413]"
     >
       <div className="flex items-center space-x-3.5 min-w-0">
         <div className="w-10 h-10 rounded-lg bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-terracotta flex items-center justify-center flex-shrink-0 group-hover:bg-claude-terracotta/10 transition-colors">

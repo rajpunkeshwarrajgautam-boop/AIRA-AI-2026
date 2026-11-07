@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { PanelLeft, Layers, Bookmark, Share2, Check, FolderGit2, Bot, AlertTriangle } from 'lucide-react';
+import { PanelLeft, Layers, Bookmark, Share2, Check, FolderGit2, Bot, AlertTriangle, MessageSquareText } from 'lucide-react';
 import type { Conversation, Message, Artifact, Attachment, Project, AppSettings, WorkspaceMode } from './types';
 import {
   loadConversations, saveConversations, saveActiveChatId,
@@ -7,6 +7,9 @@ import {
   loadProjects, saveProjects, loadSettings, saveSettings, INITIAL_CONVERSATION
 } from './utils/storage';
 import { streamAIResponse } from './utils/aiEngine';
+import { appendAgentTimelineEvent } from './utils/agentTimeline';
+import { createArtifactRepairPrompt } from './utils/artifactRuntimeError';
+import { reconcileArtifactRevision } from './utils/artifactRevisions';
 import { retrieveRelevantSubgraph } from './utils/knowledgeGraph';
 import { Sidebar } from './components/Sidebar';
 import { ChatMessage } from './components/ChatMessage';
@@ -21,6 +24,13 @@ import { backfillConversationsBestEffort, deleteConversationFromServer, fetchAll
 import { useAnimatedFavicon } from './utils/animatedFavicon';
 import { detectCapabilityIntent, executeVisionGeneration, createBackendAutomation, getVisionTariff } from './utils/capabilityDispatcher';
 import { AgentContextualPanel } from './components/AgentContextualPanel';
+import { AdaptiveStudioEmptyState } from './components/AdaptiveStudioEmptyState';
+import type { AgentExecutionGraph } from './types/executionGraph';
+import { applyExecutionGraphEvent } from './utils/executionGraphEngine';
+import './styles/adaptiveStudio.css';
+
+// Keep the verified legacy UI as the default. The opt-in shell only changes presentation.
+const ADAPTIVE_STUDIO_PREVIEW = import.meta.env.VITE_ADAPTIVE_STUDIO_PREVIEW === 'true';
 
 // Lazy-loaded heavy auxiliary surfaces to optimize FCP and TTI
 const ArtifactStudio = React.lazy(() => import('./components/ArtifactStudio').then(m => ({ default: m.ArtifactStudio })));
@@ -40,6 +50,7 @@ import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal';
 import { LegalViewerModal } from './components/LegalViewerModal';
 import { ReportBugModal } from './components/ReportBugModal';
 import { neonAuth, authenticatedApiFetch } from './lib/neonAuth';
+import { dispatchRunApproval } from './utils/approvalDispatch';
 
 const MODE_CONTEXT: Record<WorkspaceMode, string> = {
   chat: '',
@@ -92,6 +103,12 @@ function App() {
   }, []);
 
   const [isAgentPanelOpen, setIsAgentPanelOpen] = useState(false);
+  const [repairDraft, setRepairDraft] = useState<{ id: number; text: string } | null>(null);
+  const artifactRevisionsRef = useRef<Map<string, Artifact>>(new Map());
+  useEffect(() => {
+    // Never retain generated code from a previous principal in this session cache.
+    artifactRevisionsRef.current.clear();
+  }, [currentUserId]);
   const [activeAgentPrompt, setActiveAgentPrompt] = useState<string | undefined>(undefined);
   const activeAbortControllerRef = useRef<AbortController | null>(null);
   const activeRunIdRef = useRef<string | null>(null);
@@ -129,6 +146,12 @@ function App() {
   const [conversationSearchSeed, setConversationSearchSeed] = useState('');
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [activeArtifact, setActiveArtifact] = useState<Artifact | null>(null);
+  const [activeExecutionGraph, setActiveExecutionGraph] = useState<AgentExecutionGraph | null>(() => {
+    if (typeof window !== 'undefined' && (window as any).__AIRA_PHASE3_INITIAL_GRAPH__) {
+      return (window as any).__AIRA_PHASE3_INITIAL_GRAPH__;
+    }
+    return null;
+  });
   const [isLoading, setIsLoading] = useState(false);
   const [sharedCopied, setSharedCopied] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -139,6 +162,7 @@ function App() {
     reason?: string;
   } | null>(null);
   const [isSubmittingApproval, setIsSubmittingApproval] = useState(false);
+  const approvalSubmissionRef = useRef(false);
   const [executionStatus, setExecutionStatus] = useState<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
@@ -151,10 +175,29 @@ function App() {
     () => conversations.find(c => c.id === activeChatId) || welcomeConversation,
     [conversations, activeChatId, welcomeConversation]
   );
+
+
   const currentProject = useMemo(
     () => projects.find(p => p.id === activeProjectId),
     [projects, activeProjectId]
   );
+
+  const conversationArtifacts = useMemo(() => {
+    if (!activeConversation?.messages) return [];
+    const list: Artifact[] = [];
+    const seen = new Set<string>();
+    for (const msg of activeConversation.messages) {
+      if (msg.artifacts) {
+        for (const art of msg.artifacts) {
+          if (!seen.has(art.id)) {
+            seen.add(art.id);
+            list.push(art);
+          }
+        }
+      }
+    }
+    return list;
+  }, [activeConversation]);
 
   // The sidebar is a desktop rail at xl and a temporary drawer below xl.
   // Reconcile visibility when an orientation change crosses that boundary.
@@ -352,6 +395,14 @@ function App() {
       toastTimerRef.current = null;
     }, 1800);
   }, []);
+
+  const handleSaveArtifactToProject = useCallback((art: Artifact) => {
+    if (!currentProject) {
+      showToast('Select an active project first.');
+      return;
+    }
+    showToast(`Saved "${art.title}" to ${currentProject.name}`);
+  }, [currentProject, showToast]);
 
   useEffect(() => () => {
     if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
@@ -1006,7 +1057,18 @@ function App() {
             } : m),
           })),
           onArtifactFound: artifact => {
-            setActiveArtifact(artifact);
+            const key = `${currentUserId || 'guest'}:${id}:${artifact.id}`;
+            const previous = artifactRevisionsRef.current.get(key);
+            const updatedArtifact = ADAPTIVE_STUDIO_PREVIEW
+              ? reconcileArtifactRevision(previous, artifact)
+              : artifact;
+            if (ADAPTIVE_STUDIO_PREVIEW) {
+              if (artifactRevisionsRef.current.size >= 40 && !artifactRevisionsRef.current.has(key)) {
+                artifactRevisionsRef.current.delete(artifactRevisionsRef.current.keys().next().value!);
+              }
+              artifactRevisionsRef.current.set(key, updatedArtifact);
+            }
+            setActiveArtifact(updatedArtifact);
             updateConversation(id, c => ({
               ...c,
               messages: c.messages.map(m => {
@@ -1015,10 +1077,10 @@ function App() {
                 const idx = existing.findIndex(a => a.id === artifact.id);
                 if (idx >= 0) {
                   const updated = [...existing];
-                  updated[idx] = artifact;
+                  updated[idx] = updatedArtifact;
                   return { ...m, artifacts: updated };
                 }
-                return { ...m, artifacts: [...existing, artifact] };
+                return { ...m, artifacts: [...existing, updatedArtifact] };
               }),
             }));
           },
@@ -1033,6 +1095,31 @@ function App() {
           onStatusUpdate: status => {
             setExecutionStatus(status);
           },
+          onAgentEvent: ADAPTIVE_STUDIO_PREVIEW ? event => {
+            updateConversation(id, c => ({
+              ...c,
+              messages: c.messages.map(m => m.id === assistantId ? {
+                ...m,
+                agentEvents: appendAgentTimelineEvent(m.agentEvents || [], event),
+              } : m),
+            }));
+          } : undefined,
+          onGraphEvent: ADAPTIVE_STUDIO_PREVIEW ? (type, data) => {
+            setActiveExecutionGraph(prev => {
+              const base = prev || {
+                graphId: 'graph_' + Date.now(),
+                runId: activeRunIdRef.current || 'run_' + Date.now(),
+                title: 'Agent Workflow Execution',
+                nodes: {},
+                waves: [],
+                state: 'RUNNING' as const,
+                totalTasks: 0,
+                completedTasks: 0,
+                failedTasks: 0
+              };
+              return applyExecutionGraphEvent(base, type, data);
+            });
+          } : undefined,
           onLatencyMetrics: metrics => {
             if (!settings.telemetryOptOut) {
               console.info('[AIRA Telemetry] Client observed latency metrics:', metrics);
@@ -1095,7 +1182,8 @@ function App() {
         projectContext || undefined,
         id,
         intent.capability === 'RESEARCH' ? 'RESEARCH' : undefined,
-        controller.signal
+        controller.signal,
+        ADAPTIVE_STUDIO_PREVIEW
       );
     } catch (err: any) {
       activeAbortControllerRef.current = null;
@@ -1113,27 +1201,49 @@ function App() {
     }
   };
 
-  const handleApprovalDecision = async (decision: 'APPROVE' | 'REJECT') => {
-    if (!pendingApproval) return;
+  const handleSelectArtifactById = useCallback((artifactId: string) => {
+    const found = conversationArtifacts.find(a => a.id === artifactId);
+    if (found) {
+      setActiveArtifact(found);
+    }
+  }, [conversationArtifacts]);
+
+  const handleTaskApproval = useCallback(async (taskId: string, approvalId: string, decision: 'APPROVE' | 'REJECT') => {
+    if (approvalSubmissionRef.current) return;
+    approvalSubmissionRef.current = true;
     setIsSubmittingApproval(true);
     try {
-      const res = await authenticatedApiFetch(`/api/runs/${pendingApproval.runId}/approve`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          requestId: pendingApproval.id,
-          decision
-        })
-      });
-      if (!res.ok) {
-        showToast('Approval submission failed.');
-      } else {
-        showToast(decision === 'APPROVE' ? 'Action approved. Resuming execution...' : 'Action rejected.');
+      const runId = activeExecutionGraph?.runId || activeRunIdRef.current || pendingApproval?.runId;
+      await dispatchRunApproval(runId, approvalId, decision);
+      showToast(decision === 'APPROVE' ? 'Task execution approved.' : 'Task execution rejected.');
+      if (pendingApproval && (pendingApproval.id === approvalId || !approvalId)) {
         setPendingApproval(null);
       }
+      setActiveExecutionGraph(prev => prev ? applyExecutionGraphEvent(prev, 'approval.resolved', {
+        taskId,
+        approvalId,
+        decision: decision === 'APPROVE' ? 'APPROVED' : 'REJECTED'
+      }) : null);
+    } catch (e: any) {
+      showToast(`Approval error: ${e.message}`);
+    } finally {
+      approvalSubmissionRef.current = false;
+      setIsSubmittingApproval(false);
+    }
+  }, [activeExecutionGraph, pendingApproval, showToast]);
+
+  const handleApprovalDecision = async (decision: 'APPROVE' | 'REJECT') => {
+    if (!pendingApproval || approvalSubmissionRef.current) return;
+    approvalSubmissionRef.current = true;
+    setIsSubmittingApproval(true);
+    try {
+      await dispatchRunApproval(pendingApproval.runId, pendingApproval.id, decision);
+      showToast(decision === 'APPROVE' ? 'Action approved. Resuming execution...' : 'Action rejected.');
+      setPendingApproval(null);
     } catch (e: any) {
       showToast(`Error: ${e.message}`);
     } finally {
+      approvalSubmissionRef.current = false;
       setIsSubmittingApproval(false);
     }
   };
@@ -1150,7 +1260,7 @@ function App() {
   const updateSettings = (partial: Partial<AppSettings>) => setSettings(prev => ({ ...prev, ...partial }));
 
   return (
-    <div className="h-[100dvh] w-full min-w-0 flex overflow-hidden bg-claude-bg-light dark:bg-claude-bg-dark text-claude-text-light dark:text-claude-text-dark">
+    <div className={`${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-shell ' : ''}h-[100dvh] w-full min-w-0 flex overflow-hidden bg-claude-bg-light dark:bg-claude-bg-dark text-claude-text-light dark:text-claude-text-dark`}>
       <Sidebar
         conversations={conversations}
         activeChatId={activeChatId}
@@ -1211,8 +1321,8 @@ function App() {
 
       <InlineToast message={toastMessage} />
 
-      <main className="flex-1 min-w-0 min-h-0 h-[100dvh] flex flex-col overflow-hidden w-full max-w-full bg-mesh-canvas">
-        <header className="h-[54px] shrink-0 px-3 md:px-5 flex items-center justify-between border-b border-claude-border-light/80 dark:border-white/10 gradient-fade-header relative z-30 bg-claude-bg-light/95 dark:bg-aira-navy/95 backdrop-blur-md">
+      <main className={`${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-main ' : 'bg-mesh-canvas '}flex-1 min-w-0 min-h-0 h-[100dvh] flex flex-col overflow-hidden w-full max-w-full`}>
+        <header className={`${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-header ' : ''}h-[54px] shrink-0 px-3 md:px-5 flex items-center justify-between border-b border-claude-border-light/80 dark:border-white/10 gradient-fade-header relative z-30 bg-claude-bg-light/95 dark:bg-aira-navy/95 backdrop-blur-md`}>
           <div className="flex flex-1 items-center gap-1 min-w-0">
             {!sidebarOpen && (
               <>
@@ -1228,6 +1338,16 @@ function App() {
                   <AiraMark size="sm" isAnimated={true} motionConcept="a" />
                 </div>
               </>
+            )}
+            {ADAPTIVE_STUDIO_PREVIEW && (
+              <div className="aira-adaptive-mode-toggle" role="group" aria-label="Workspace mode">
+                <button type="button" aria-pressed={workspaceMode === 'chat'} onClick={() => setWorkspaceMode('chat')}>
+                  <MessageSquareText size={15} aria-hidden="true" /> Chat
+                </button>
+                <button type="button" aria-pressed={workspaceMode === 'agent'} onClick={() => setWorkspaceMode('agent')}>
+                  <Bot size={15} aria-hidden="true" /> Agent
+                </button>
+              </div>
             )}
             <ModelSelector
               currentModel={settings.activeModel}
@@ -1273,7 +1393,7 @@ function App() {
           </div>
         </header>
 
-        <div ref={chatScrollRef} data-testid="chat-scroll-region" className="flex-1 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain flex flex-col">
+        <div ref={chatScrollRef} data-testid="chat-scroll-region" className={`${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-chat-content ' : ''}flex-1 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain flex flex-col`}>
           {!activeConversation || activeConversation.messages.length === 0 ? (
             <GreetingScreen 
               userName={settings.userName} 
@@ -1285,7 +1405,7 @@ function App() {
               onSelectChat={handleSelectChat}
             />
           ) : (
-            <div className="flex-1 pb-6 space-y-4">
+            <div className="flex-1 pb-24 sm:pb-8 space-y-4">
               {activeConversation.messages.map(message => (
                 <div
                   id={`message-${message.id}`}
@@ -1296,12 +1416,15 @@ function App() {
                 >
                   <ChatMessage
                     message={message}
+                    showAgentTimeline={ADAPTIVE_STUDIO_PREVIEW}
                     userName={settings.userName}
                     onOpenArtifact={setActiveArtifact}
                     onSwitchToAgentAndReview={handleSwitchToAgentAndReview}
                     onConfirmAutomation={handleConfirmAutomation}
                     onAuthorizeVision={handleAuthorizeVision}
                     onCancelVisionProposal={handleCancelVisionProposal}
+                    onApprovalDecision={handleApprovalDecision}
+                    isSubmittingApproval={isSubmittingApproval}
                     isConfirmingAutomation={Boolean(confirmingAutoId)}
                     isAuthorizingVision={Boolean(authorizingVisionId)}
                   />
@@ -1312,7 +1435,7 @@ function App() {
         </div>
 
         {/* Persistent Composer (Visible in both Chat Mode and Agent Mode) */}
-        <div className="shrink-0 min-w-0 relative z-10 pt-2 sm:pt-4 gradient-mask-bottom">
+        <div className={`${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-composer ' : ''}shrink-0 min-w-0 relative z-10 pt-2 sm:pt-4 gradient-mask-bottom`}>
           {executionStatus && (
             <div className="max-w-2xl mx-auto px-4 mb-2">
               <div className="flex items-center gap-2 text-xs text-aira-blue dark:text-aira-silver bg-aira-blue/10 border border-aira-blue/20 rounded-lg px-3 py-1.5 shadow-sm backdrop-blur">
@@ -1358,7 +1481,9 @@ function App() {
           )}
 
           <ChatInput
+            key={ADAPTIVE_STUDIO_PREVIEW ? (repairDraft?.id ?? 'normal-composer') : 'normal-composer'}
             onSendMessage={handleSendMessage}
+            repairDraft={ADAPTIVE_STUDIO_PREVIEW ? repairDraft : undefined}
             isLoading={isLoading}
             currentModel={settings.activeModel}
             extendedThinking={settings.extendedThinking}
@@ -1368,8 +1493,51 @@ function App() {
         </div>
       </main>
 
+      {ADAPTIVE_STUDIO_PREVIEW && !activeArtifact && (
+        <AdaptiveStudioEmptyState
+          executionGraph={activeExecutionGraph}
+          onSelectArtifact={handleSelectArtifactById}
+          onApproveTask={handleTaskApproval}
+        />
+      )}
+
       <React.Suspense fallback={null}>
-        {activeArtifact && <ArtifactStudio artifact={activeArtifact} onClose={() => setActiveArtifact(null)} />}
+        {activeArtifact && (
+          <ArtifactStudio
+            artifact={activeArtifact}
+            adaptiveDock={ADAPTIVE_STUDIO_PREVIEW}
+            onClose={() => setActiveArtifact(null)}
+            onUpdateArtifact={ADAPTIVE_STUDIO_PREVIEW ? restored => {
+              const key = `${currentUserId || 'guest'}:${activeChatId}:${restored.id}`;
+              artifactRevisionsRef.current.set(key, restored);
+              setActiveArtifact(restored);
+              updateConversation(activeChatId, conversation => {
+                const messages = [...conversation.messages];
+                for (let i = messages.length - 1; i >= 0; i--) {
+                  const entry = messages[i];
+                  if (entry.artifacts?.some(item => item.id === restored.id)) {
+                    messages[i] = {
+                      ...entry,
+                      artifacts: entry.artifacts.map(item => item.id === restored.id ? restored : item),
+                    };
+                    break;
+                  }
+                }
+                return { ...conversation, messages, updatedAt: Date.now() };
+              });
+            } : undefined}
+            onRepairArtifact={ADAPTIVE_STUDIO_PREVIEW ? (error, title) => {
+              setWorkspaceMode('agent');
+              setRepairDraft({ id: Date.now(), text: createArtifactRepairPrompt(title, error) });
+            } : undefined}
+            allArtifacts={ADAPTIVE_STUDIO_PREVIEW ? conversationArtifacts : undefined}
+            onSelectArtifact={ADAPTIVE_STUDIO_PREVIEW ? setActiveArtifact : undefined}
+            activeProjectName={ADAPTIVE_STUDIO_PREVIEW ? currentProject?.name : undefined}
+            onSaveToProject={ADAPTIVE_STUDIO_PREVIEW ? handleSaveArtifactToProject : undefined}
+            executionGraph={ADAPTIVE_STUDIO_PREVIEW ? activeExecutionGraph : undefined}
+            onApproveTask={ADAPTIVE_STUDIO_PREVIEW ? handleTaskApproval : undefined}
+          />
+        )}
         {isAgentPanelOpen && (
           <AgentContextualPanel
             isOpen={isAgentPanelOpen}

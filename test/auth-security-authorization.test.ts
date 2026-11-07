@@ -1,10 +1,21 @@
 import 'dotenv/config';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
+import knex from 'knex';
 import { NeonAuthClient } from '../src/lib/neonAuth.js';
+import {
+  assertAuthorizedStagingDatabase,
+  STAGING_NEON_PROJECT_ID
+} from '../packages/db/src/security/database-isolation-guard.js';
+import {
+  assertCertificationFixtureWriteOptIn,
+  assertIsolatedAuthEndpoint
+} from './staging-certification-safety.js';
 
-const STAGING_AUTH_BASE = process.env.NEON_AUTH_BASE_URL || 'https://ep-ancient-sound-b3drtnp5.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth';
-const STAGING_JWKS_URL = process.env.NEON_AUTH_JWKS_URL || 'https://ep-ancient-sound-b3drtnp5.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth/.well-known/jwks.json';
+const STAGING_AUTH_BASE = process.env.NEON_AUTH_BASE_URL?.replace(/\/$/, '') || '';
+const STAGING_JWKS_URL = process.env.NEON_AUTH_JWKS_URL || '';
+const ISOLATED_BRANCH_ID = 'br-muddy-wave-b3zxhkqf';
 const TEST_PORT = 3098;
 const TEST_API_URL = `http://127.0.0.1:${TEST_PORT}`;
 
@@ -39,7 +50,40 @@ async function main() {
     process.exit(1);
   }
 
-  // Spawn API server on dedicated test port with external auth enabled
+  // No fallback to a different staging branch's Better Auth integration.
+  // This check precedes account registration or any other fixture writes.
+  if (!STAGING_AUTH_BASE || !STAGING_JWKS_URL) {
+    throw new Error('Branch-specific NEON_AUTH_BASE_URL and NEON_AUTH_JWKS_URL must be set explicitly');
+  }
+
+  const identityDb = knex({
+    client: 'pg',
+    connection: { connectionString: stagingDbUrl, ssl: { rejectUnauthorized: true } },
+    pool: { min: 0, max: 1 }
+  });
+  try {
+    const identity = await assertAuthorizedStagingDatabase(identityDb, {
+      allowedProjectIds: [STAGING_NEON_PROJECT_ID],
+      allowedBranchIds: [ISOLATED_BRANCH_ID]
+    });
+    assertIsolatedAuthEndpoint(STAGING_AUTH_BASE, STAGING_JWKS_URL, identity.neonEndpointId);
+  } finally {
+    await identityDb.destroy();
+  }
+  assertCertificationFixtureWriteOptIn(process.env.AIRA_AUTH_TEST_FIXTURE_WRITES_ENABLED);
+
+  const testEmail1 = process.env.STAGING_AUTH_TEST_USER_A_EMAIL;
+  const testEmail2 = process.env.STAGING_AUTH_TEST_USER_B_EMAIL;
+  const testPassword1 = process.env.STAGING_AUTH_TEST_USER_A_PASSWORD;
+  const testPassword2 = process.env.STAGING_AUTH_TEST_USER_B_PASSWORD;
+  if (!testEmail1 || !testEmail2 || !testPassword1 || !testPassword2 || testEmail1 === testEmail2) {
+    throw new Error('Two distinct, pre-existing isolated Auth test accounts must be configured; this suite never signs up new users');
+  }
+
+  // Import the real Express app in serverless mode, then bind it to a local
+  // test-only listener. The normal API entrypoint recovers ALL interrupted runs
+  // on startup; doing that against a reused staging branch would mutate other
+  // principals' historical runs during an unrelated auth certification.
   const env = {
     ...process.env,
     PORT: String(TEST_PORT),
@@ -48,12 +92,16 @@ async function main() {
     AIRA_EXTERNAL_AUTH_ENABLED: 'true',
     NEON_AUTH_BASE_URL: STAGING_AUTH_BASE,
     NEON_AUTH_JWKS_URL: STAGING_JWKS_URL,
-    NODE_ENV: 'test'
+    NODE_ENV: 'test',
+    VERCEL: '1'
   };
 
-  const serverProc: ChildProcess = spawn('npx', ['tsx', 'apps/api/src/index.ts'], {
+  const serverProc: ChildProcess = spawn(process.execPath, [
+    '--import', 'tsx', '--input-type=module', '-e',
+    `import app from './apps/api/src/index.ts'; const server = app.listen(${TEST_PORT}, '127.0.0.1'); process.on('SIGTERM', () => server.close(() => process.exit(0)));`
+  ], {
     env,
-    shell: true,
+    shell: false,
     stdio: 'pipe'
   });
 
@@ -64,41 +112,36 @@ async function main() {
     }
   });
 
+  let cleanupJwt: string | null = null;
+  let cleanupPrincipalId: string | null = null;
+  let cleanupAutomationId: string | null = null;
+  let cleanupConversationId: string | null = null;
+  let testSucceeded = false;
   try {
     console.log(`[1/12] Waiting for test API server on port ${TEST_PORT}...`);
     await waitForServer(TEST_API_URL);
     console.log('  ✓ Test API server is HEALTHY and listening on ' + TEST_API_URL);
 
-    // Register two distinct real accounts on staging Neon Auth
+    // Sign into two pre-provisioned isolated accounts. Never create durable
+    // Auth users from an unattended certification run.
     const ts = Date.now();
-    const email1 = `sec_test_user1_${ts}@example.com`;
-    const email2 = `sec_test_user2_${ts}@example.com`;
-    const password = `SecurePass!${ts}_2026`;
 
-    console.log('[2/12] Registering real Account 1 and Account 2 on Staging Neon...');
+    console.log('[2/12] Signing into two existing accounts on isolated staging Neon Auth...');
     const client1 = new NeonAuthClient();
     const client2 = new NeonAuthClient();
 
-    const { user: user1 } = await client1.signUp({
-      email: email1,
-      password,
-      name: 'Security Test Account 1',
-      preserveGuestData: false
-    });
+    const { user: user1 } = await client1.signIn({ email: testEmail1, password: testPassword1, preserveGuestData: false });
     const jwt1 = await client1.getValidJwt();
     assert.ok(jwt1, 'Account 1 must receive valid EdDSA JWT');
+    cleanupJwt = jwt1;
 
-    const { user: user2 } = await client2.signUp({
-      email: email2,
-      password,
-      name: 'Security Test Account 2',
-      preserveGuestData: false
-    });
+    const { user: user2 } = await client2.signIn({ email: testEmail2, password: testPassword2, preserveGuestData: false });
     const jwt2 = await client2.getValidJwt();
     assert.ok(jwt2, 'Account 2 must receive valid EdDSA JWT');
 
     const principalId1 = `neon_user_${user1.id}`;
     const principalId2 = `neon_user_${user2.id}`;
+    cleanupPrincipalId = principalId1;
     assert.notEqual(principalId1, principalId2, 'Principals must be distinct');
     console.log(`  ✓ Account 1: ${principalId1}`);
     console.log(`  ✓ Account 2: ${principalId2}`);
@@ -149,8 +192,9 @@ async function main() {
         objective: 'Attempt privilege escalation'
       })
     });
-    assert.equal(forgedAutoRes.status, 400, 'Forged principalId must be rejected with HTTP 400');
     const forgedAutoErr = await forgedAutoRes.json();
+    assert.equal(forgedAutoRes.status, 400,
+      `Forged principalId must be rejected with HTTP 400; received ${forgedAutoRes.status}: ${JSON.stringify(forgedAutoErr)}`);
     assert.match(forgedAutoErr.error, /Forbidden: caller may not specify or forge principalId ownership/i);
     console.log('  ✓ Forged principalId on POST /api/automations rejected securely');
 
@@ -171,6 +215,7 @@ async function main() {
     });
     assert.equal(validAutoRes.status, 201);
     const validAuto = await validAutoRes.json();
+    cleanupAutomationId = validAuto.id;
     assert.equal(validAuto.principalId, principalId1, 'Automation ownership must strictly equal caller principal');
     console.log(`  ✓ Automation created with server-verified principal: ${validAuto.id}`);
 
@@ -209,7 +254,7 @@ async function main() {
 
     // TEST 9: Conversation Sync & Cross-Account Read Isolation
     console.log('[9/12] Testing durable conversation persistence and cross-account isolation...');
-    const convId = `conv_sec_${ts}`;
+    const convId = `conv_sec_${randomUUID()}`;
 
     // Negative: Forged principalId on sync
     const forgedSyncRes = await fetch(`${TEST_API_URL}/api/conversations/sync`, {
@@ -245,6 +290,7 @@ async function main() {
       })
     });
     assert.equal(validSyncRes.status, 200, 'Legitimate sync must succeed');
+    cleanupConversationId = convId;
 
     // Cross-Account Isolation on GET /api/conversations/:id
     const idorConvGet = await fetch(`${TEST_API_URL}/api/conversations/${convId}`, {
@@ -334,10 +380,73 @@ async function main() {
     console.log('\n=============================================================');
     console.log('ALL AUTH & AUTHORIZATION NEGATIVE SECURITY CHECKS PASSED [12/12]');
     console.log('=============================================================\n');
-    serverProc.kill();
-    process.exit(0);
+    testSucceeded = true;
   } finally {
+    // The only persistent application fixtures created by this suite are a
+    // single automation and conversation, both owned by Account 1.
+    if (cleanupJwt) {
+      for (const [name, endpoint] of [
+        ['automation', cleanupAutomationId && `/api/automations/${cleanupAutomationId}`],
+        ['conversation', cleanupConversationId && `/api/conversations/${cleanupConversationId}`]
+      ] as const) {
+        if (!endpoint) continue;
+        try {
+          const response = await fetch(`${TEST_API_URL}${endpoint}`, {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${cleanupJwt}` }
+          });
+          if (!response.ok) {
+            testSucceeded = false;
+            process.exitCode = 1;
+            console.error(`[FIXTURE CLEANUP FAILED] ${name}: HTTP ${response.status}`);
+          }
+        } catch (error) {
+          testSucceeded = false;
+          console.error(`[FIXTURE CLEANUP FAILED] ${name}:`, error);
+          process.exitCode = 1;
+        }
+      }
+    }
+    // The public conversation DELETE endpoint intentionally soft-deletes to
+    // preserve normal user recovery semantics. Certification fixtures must not
+    // remain as tombstones on a shared staging branch. Remove ONLY the exact
+    // soft-deleted, principal-owned fixture after rechecking live DB identity.
+    if (cleanupConversationId && cleanupPrincipalId) {
+      const cleanupDb = knex({
+        client: 'pg',
+        connection: { connectionString: stagingDbUrl, ssl: { rejectUnauthorized: true } },
+        pool: { min: 0, max: 1 }
+      });
+      try {
+        await assertAuthorizedStagingDatabase(cleanupDb, {
+          allowedProjectIds: [STAGING_NEON_PROJECT_ID],
+          allowedBranchIds: [ISOLATED_BRANCH_ID]
+        });
+        const conversation = await cleanupDb('conversations')
+          .where({ client_id: cleanupConversationId, principal_id: cleanupPrincipalId })
+          .first('id', 'deleted_at');
+        assert.ok(conversation?.id && conversation.deleted_at != null,
+          'Disposable conversation was not soft-deleted by the authenticated API');
+        const removed = await cleanupDb('conversations')
+          .where({
+            id: conversation.id,
+            client_id: cleanupConversationId,
+            principal_id: cleanupPrincipalId
+          })
+          .whereNotNull('deleted_at')
+          .del();
+        assert.equal(removed, 1, `Disposable conversation hard-delete affected ${removed} rows`);
+        console.log('  ✓ Removed the exact soft-deleted certification conversation tombstone');
+      } catch (error) {
+        testSucceeded = false;
+        process.exitCode = 1;
+        console.error('[FIXTURE HARD CLEANUP FAILED]', error);
+      } finally {
+        await cleanupDb.destroy();
+      }
+    }
     serverProc.kill();
+    if (!testSucceeded) process.exitCode = 1;
   }
 }
 

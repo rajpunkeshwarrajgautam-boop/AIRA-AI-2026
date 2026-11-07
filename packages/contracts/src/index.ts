@@ -980,3 +980,5 @@ export * from './commercial.js';
 export * from './agent-specialists.js';
 export * from './deployment-environment.js';
 
+
+export * from './autonomous-agent.js';

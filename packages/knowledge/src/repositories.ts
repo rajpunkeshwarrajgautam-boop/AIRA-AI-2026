@@ -27,6 +27,8 @@ export interface KnowledgeRepository {
 
   saveMemory(memory: MemoryRecord): Promise<void>;
   listMemories(scope?: PrincipalScope): Promise<MemoryRecord[]>;
+  deleteMemory(id: string, scope?: PrincipalScope): Promise<boolean>;
+  purgeMemories(scope?: PrincipalScope): Promise<number>;
 }
 
 /**
@@ -289,6 +291,19 @@ export class PostgresKnowledgeRepository implements KnowledgeRepository {
       };
     });
   }
+  async deleteMemory(id: string, scope?: PrincipalScope): Promise<boolean> {
+    let q = db('memory_records').where('id', id);
+    q = this.applyScopeFilter(q, scope);
+    const count = await q.delete();
+    return count > 0;
+  }
+
+  async purgeMemories(scope?: PrincipalScope): Promise<number> {
+    if (!scope?.principalId) return 0;
+    let q = db('memory_records').where('is_system', false);
+    q = this.applyScopeFilter(q, scope);
+    return await q.delete();
+  }
 
   private mapSource(row: any): KnowledgeSource {
     const meta = typeof row.metadata === 'string' ? JSON.parse(row.metadata) : (row.metadata || {});
@@ -424,5 +439,23 @@ export class InMemoryKnowledgeRepository implements KnowledgeRepository {
     return Array.from(this.memories.values())
       .filter(m => isRecordAccessible(m, scope))
       .sort((a, b) => a.createdAt - b.createdAt);
+  }
+
+  async deleteMemory(id: string, scope?: PrincipalScope): Promise<boolean> {
+    const mem = this.memories.get(id);
+    if (!mem || !isRecordAccessible(mem, scope)) return false;
+    return this.memories.delete(id);
+  }
+
+  async purgeMemories(scope?: PrincipalScope): Promise<number> {
+    if (!scope?.principalId) return 0;
+    let count = 0;
+    for (const [id, mem] of this.memories.entries()) {
+      if (!mem.isSystem && isRecordAccessible(mem, scope)) {
+        this.memories.delete(id);
+        count++;
+      }
+    }
+    return count;
   }
 }
