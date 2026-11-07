@@ -50,6 +50,7 @@ import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal';
 import { LegalViewerModal } from './components/LegalViewerModal';
 import { ReportBugModal } from './components/ReportBugModal';
 import { neonAuth, authenticatedApiFetch } from './lib/neonAuth';
+import { dispatchRunApproval } from './utils/approvalDispatch';
 
 const MODE_CONTEXT: Record<WorkspaceMode, string> = {
   chat: '',
@@ -161,6 +162,7 @@ function App() {
     reason?: string;
   } | null>(null);
   const [isSubmittingApproval, setIsSubmittingApproval] = useState(false);
+  const approvalSubmissionRef = useRef(false);
   const [executionStatus, setExecutionStatus] = useState<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
@@ -1207,20 +1209,12 @@ function App() {
   }, [conversationArtifacts]);
 
   const handleTaskApproval = useCallback(async (taskId: string, approvalId: string, decision: 'APPROVE' | 'REJECT') => {
+    if (approvalSubmissionRef.current) return;
+    approvalSubmissionRef.current = true;
     setIsSubmittingApproval(true);
     try {
       const runId = activeExecutionGraph?.runId || activeRunIdRef.current || pendingApproval?.runId;
-      if (runId) {
-        await authenticatedApiFetch(`/api/runs/${runId}/approve`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            requestId: approvalId,
-            taskId,
-            decision: decision === 'APPROVE' ? 'APPROVE' : 'REJECT'
-          })
-        }).catch(() => {});
-      }
+      await dispatchRunApproval(runId, approvalId, decision);
       showToast(decision === 'APPROVE' ? 'Task execution approved.' : 'Task execution rejected.');
       if (pendingApproval && (pendingApproval.id === approvalId || !approvalId)) {
         setPendingApproval(null);
@@ -1233,31 +1227,23 @@ function App() {
     } catch (e: any) {
       showToast(`Approval error: ${e.message}`);
     } finally {
+      approvalSubmissionRef.current = false;
       setIsSubmittingApproval(false);
     }
   }, [activeExecutionGraph, pendingApproval, showToast]);
 
   const handleApprovalDecision = async (decision: 'APPROVE' | 'REJECT') => {
-    if (!pendingApproval) return;
+    if (!pendingApproval || approvalSubmissionRef.current) return;
+    approvalSubmissionRef.current = true;
     setIsSubmittingApproval(true);
     try {
-      const res = await authenticatedApiFetch(`/api/runs/${pendingApproval.runId}/approve`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          requestId: pendingApproval.id,
-          decision
-        })
-      });
-      if (!res.ok) {
-        showToast('Approval submission failed.');
-      } else {
-        showToast(decision === 'APPROVE' ? 'Action approved. Resuming execution...' : 'Action rejected.');
-        setPendingApproval(null);
-      }
+      await dispatchRunApproval(pendingApproval.runId, pendingApproval.id, decision);
+      showToast(decision === 'APPROVE' ? 'Action approved. Resuming execution...' : 'Action rejected.');
+      setPendingApproval(null);
     } catch (e: any) {
       showToast(`Error: ${e.message}`);
     } finally {
+      approvalSubmissionRef.current = false;
       setIsSubmittingApproval(false);
     }
   };

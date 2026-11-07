@@ -23,6 +23,27 @@ test('computeExecutionWaves computes accurate parallel waves for diamond DAG', (
   assert.deepEqual(waves[2], ['D'], 'Wave 2 should be final task [D]');
 });
 
+test('dotted durable SSE transitions preserve tool, approval and step states', () => {
+  let graph = createExecutionGraph({
+    graphId: 'graph_dotted',
+    runId: 'run_dotted',
+    title: 'Verified Contract',
+    tasks: [{ id: 'step_a', name: 'Safe tool', role: 'verifier', dependsOn: [] }],
+  });
+  graph = applyExecutionGraphEvent(graph, 'workflow.step.started', { stepId: 'step_a' }, 100);
+  graph = applyExecutionGraphEvent(graph, 'tool.started', { stepId: 'step_a', toolName: 'browser.read' }, 110);
+  assert.equal(graph.nodes.step_a.activeTool?.status, 'running');
+  graph = applyExecutionGraphEvent(graph, 'tool.completed', { stepId: 'step_a' }, 120);
+  assert.equal(graph.nodes.step_a.activeTool?.status, 'completed');
+  graph = applyExecutionGraphEvent(graph, 'tool.approval_required', { stepId: 'step_a', requestId: 'appr_a' }, 130);
+  assert.equal(graph.nodes.step_a.state, 'WAITING_FOR_APPROVAL');
+  assert.equal(graph.nodes.step_a.approvalId, 'appr_a');
+  graph = applyExecutionGraphEvent(graph, 'approval.resolved', { stepId: 'step_a', decision: 'APPROVE' }, 140);
+  assert.equal(graph.nodes.step_a.state, 'RUNNING');
+  graph = applyExecutionGraphEvent(graph, 'workflow.step.completed', { stepId: 'step_a' }, 150);
+  assert.equal(graph.nodes.step_a.state, 'COMPLETED');
+});
+
 test('createExecutionGraph initializes task states and blocks dependent tasks', () => {
   const graph = createExecutionGraph({
     graphId: 'wf_demo_01',

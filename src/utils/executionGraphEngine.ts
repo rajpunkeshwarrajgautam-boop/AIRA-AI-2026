@@ -1,8 +1,7 @@
 import type { 
   AgentExecutionGraph, 
   GraphTaskNode, 
-  SpecialistRole, 
-  SpecialistTaskState 
+  SpecialistRole
 } from '../types/executionGraph';
 
 export const CANONICAL_SPECIALIST_ROLES: readonly SpecialistRole[] = Object.freeze([
@@ -182,6 +181,7 @@ export function applyExecutionGraphEvent(
 
   switch (eventType) {
     case 'workflow.created':
+    case 'workflow.started':
     case 'workflow_started': {
       if (Array.isArray(data.steps) && data.steps.length > 0) {
         return createExecutionGraph({
@@ -227,6 +227,7 @@ export function applyExecutionGraphEvent(
       break;
     }
 
+    case 'workflow.step.progress':
     case 'workflow_step_progress': {
       if (targetStepId && nextNodes[targetStepId]) {
         const current = nextNodes[targetStepId];
@@ -241,6 +242,7 @@ export function applyExecutionGraphEvent(
       break;
     }
 
+    case 'tool.started':
     case 'tool_started': {
       const toolName = sanitizeUserFacingText(data.name ?? data.toolName, 'tool', 40);
       const callId = safeId(data.callId ?? data.toolId, '');
@@ -259,6 +261,7 @@ export function applyExecutionGraphEvent(
       break;
     }
 
+    case 'tool.completed':
     case 'tool_completed': {
       const stepId = targetStepId || Object.keys(nextNodes).find(id => nextNodes[id].state === 'RUNNING');
       if (stepId && nextNodes[stepId] && nextNodes[stepId].activeTool) {
@@ -274,6 +277,7 @@ export function applyExecutionGraphEvent(
     }
 
     case 'approval.required':
+    case 'tool.approval_required':
     case 'approval_required': {
       const stepId = targetStepId || Object.keys(nextNodes).find(id => nextNodes[id].state === 'RUNNING') || Object.keys(nextNodes)[0];
       if (stepId && nextNodes[stepId]) {
@@ -282,7 +286,9 @@ export function applyExecutionGraphEvent(
           ...nextNodes[stepId],
           state: 'WAITING_FOR_APPROVAL',
           approvalRequired: true,
-          approvalId: safeId(data.approvalId ?? data.id, `appr_${Date.now()}`),
+          // Backend requests use requestId (or id for approval.required).
+          // Never invent an actionable approval ID if an event omits one.
+          approvalId: safeId(data.requestId ?? data.approvalId ?? data.id, '') || undefined,
           approvalReason
         };
         nextState = 'WAITING_FOR_APPROVAL';
@@ -377,6 +383,7 @@ export function applyExecutionGraphEvent(
     }
 
     case 'workflow.cancelled':
+    case 'run.cancelled':
     case 'run_cancelled': {
       nextState = 'CANCELLED';
       for (const [id, node] of Object.entries(nextNodes)) {
@@ -406,11 +413,13 @@ export function applyExecutionGraphEvent(
       break;
     }
 
+    case 'run.completed':
     case 'workflow.completed': {
       nextState = 'COMPLETED';
       break;
     }
 
+    case 'run.failed':
     case 'workflow.failed': {
       nextState = 'FAILED';
       break;

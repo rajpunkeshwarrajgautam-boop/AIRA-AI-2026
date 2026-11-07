@@ -10,7 +10,6 @@ export function analyzeFileDependencies(
   existingProjectPaths: string[]
 ): FileDependencyReference[] {
   const references: FileDependencyReference[] = [];
-  const lines = content.split('\n');
 
   // 1. HTML Analysis
   if (filePath.endsWith('.html') || filePath.endsWith('.htm')) {

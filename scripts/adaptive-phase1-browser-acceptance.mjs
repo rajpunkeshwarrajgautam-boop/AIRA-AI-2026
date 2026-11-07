@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
 
@@ -7,7 +8,7 @@ const port = Number(process.env.PHASE1_PORT || 4186);
 const base = process.env.PHASE1_URL || `http://127.0.0.1:${port}`;
 const externalServer = Boolean(process.env.PHASE1_URL);
 const baseline = process.env.PHASE1_FLAG_OFF === 'true';
-const artifactDir = 'C:/Users/WORKSTATION/.gemini/antigravity/brain/4692c5e1-8fc6-437f-8dc1-b5e0ba492b84';
+const artifactDir = process.env.PHASE1_ARTIFACT_DIR || 'C:/Users/WORKSTATION/.gemini/antigravity/brain/4692c5e1-8fc6-437f-8dc1-b5e0ba492b84';
 
 async function ready(url) {
   for (let count = 0; count < 80; count++) {
@@ -22,6 +23,9 @@ async function ready(url) {
 }
 
 async function launchBrowser() {
+  if (process.env.PHASE1_BROWSER_PATH) {
+    return chromium.launch({ executablePath: process.env.PHASE1_BROWSER_PATH, headless: true, args: ['--no-sandbox'] });
+  }
   if (process.platform === 'win32' && process.env.PHASE1_BROWSER !== 'chromium') {
     return chromium.launch({ channel: 'msedge', headless: true });
   }
@@ -333,12 +337,13 @@ try {
       ['node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', String(port), '--strictPort'],
       {
         env: { ...process.env, VITE_ADAPTIVE_STUDIO_PREVIEW: baseline ? 'false' : 'true' },
-        cwd: 'D:/AIRA-PHASE1-WORKTREE',
+        cwd: process.env.PHASE1_WORKTREE || 'D:/AIRA-PHASE1-WORKTREE',
         stdio: 'ignore'
       }
     );
   }
   await ready(base);
+  mkdirSync(artifactDir, { recursive: true });
   browser = await launchBrowser();
 
   const viewports = baseline

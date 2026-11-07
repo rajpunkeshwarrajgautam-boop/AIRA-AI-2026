@@ -1,11 +1,14 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { MultiModalAssetViewer } from '../src/components/MultiModalAssetViewer';
 import {
   normalizeAndValidateArtifactPath,
   inferArtifactFileKind,
   ArtifactPathSecurityError
 } from '../src/utils/artifactPathSecurity';
-import { sanitizeSvgMarkup, formatAudioTime } from '../src/components/MultiModalAssetViewer';
+import { sanitizeSvgMarkup, formatAudioTime } from '../src/utils/multiModalAssets';
 import {
   createMultiFileBundle,
   adaptSingleFileArtifactToBundle
@@ -43,6 +46,32 @@ describe('Phase 1: Multi-Modal Assets & Cross-Phase Security Hardening', () => {
     assert.ok(!sanitized.includes('javascript:'), 'javascript URIs must be replaced with #');
     assert.ok(sanitized.includes('<circle cx="50" cy="50" r="40" fill="teal"'), 'valid SVG shapes preserved');
     assert.ok(sanitized.includes('Click me'), 'text elements preserved');
+  });
+
+  it('renders untrusted SVG only as an inert image, never executable parent DOM', () => {
+    const html = renderToStaticMarkup(createElement(MultiModalAssetViewer, {
+      file: {
+        id: 'svg_bad',
+        path: 'assets/untrusted.svg',
+        name: 'untrusted.svg',
+        content: '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><circle onload="evil()"/></svg>',
+        kind: 'svg',
+        sizeBytes: 104,
+        lastModified: 1,
+        version: 1,
+      }
+    }));
+    assert.match(html, /data-testid="svg-inert-image"/);
+    assert.match(html, /src="data:image\/svg\+xml;charset=utf-8,/);
+    // Toolbar icons are themselves trusted SVG elements; the artifact markup
+    // must remain confined to the encoded image URL.
+    assert.doesNotMatch(html, /<script\b|onload="evil\(\)"|alert\(1\)/);
+  });
+
+  it('rejects control characters even when whitespace surrounds the path', () => {
+    for (const path of ['\timages/logo.svg', 'images/logo.svg\n', 'images/\0logo.svg']) {
+      assert.throws(() => normalizeAndValidateArtifactPath(path), ArtifactPathSecurityError);
+    }
   });
 
   it('rejects Windows reserved device names in artifact paths', () => {

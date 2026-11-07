@@ -50,14 +50,18 @@ export function normalizeAndValidateArtifactPath(rawPath: string): string {
     throw new ArtifactPathSecurityError('Path must be a non-empty string');
   }
 
+  // Validate the original input: trimming first would silently accept a path
+  // with leading/trailing newlines or tabs.
+  if (Array.from(rawPath).some(char => {
+    const code = char.charCodeAt(0);
+    return code <= 31 || code === 127;
+  })) {
+    throw new ArtifactPathSecurityError('Path contains null bytes or control characters');
+  }
+
   let cleaned = rawPath.trim();
   if (!cleaned) {
     throw new ArtifactPathSecurityError('Empty path is not permitted');
-  }
-
-  // Reject null bytes and control characters
-  if (/[\0\x01-\x1f\x7f]/.test(cleaned)) {
-    throw new ArtifactPathSecurityError('Path contains null bytes or control characters');
   }
 
   // Reject Windows drive letters (e.g. C:) and UNC paths (\\)

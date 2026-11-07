@@ -15,6 +15,20 @@ test('agent timeline accepts only verified SSE lifecycle event types', () => {
   assert.equal(normalizeAgentTimelineEvent('approval_required', {})?.status, 'waiting');
 });
 
+test('durable dotted SSE events preserve the same safe timeline semantics as chat events', () => {
+  assert.deepEqual(
+    normalizeAgentTimelineEvent('workflow.step.started', { stepId: 'step-a', output: 'never display' }, 1),
+    normalizeAgentTimelineEvent('workflow_step_started', { stepId: 'step-a' }, 1),
+  );
+  assert.equal(normalizeAgentTimelineEvent('tool.started', { toolName: 'browser.read', callId: 'tc-a' })?.status, 'running');
+  assert.equal(normalizeAgentTimelineEvent('tool.completed', { toolName: 'browser.read', callId: 'tc-a' })?.status, 'completed');
+  assert.equal(normalizeAgentTimelineEvent('tool.approval_required', { args: { apiKey: 'SECRET' } })?.status, 'waiting');
+  assert.equal(normalizeAgentTimelineEvent('approval.resolved', { decision: 'APPROVE' })?.status, 'completed');
+  assert.equal(normalizeAgentTimelineEvent('run.completed', {})?.status, 'completed');
+  assert.equal(normalizeAgentTimelineEvent('workflow.step.failed', { stepId: 'step-a' })?.status, 'failed');
+  assert.equal(normalizeAgentTimelineEvent('tool.not_a_contract_event', {}) , null);
+});
+
 test('agent timeline sanitizes identifiers and never displays raw outputs or arguments', () => {
   const item = normalizeAgentTimelineEvent('tool_started', {
     name: 'web_search<script>alert(1)</script>',

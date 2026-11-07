@@ -15,14 +15,11 @@ import {
   ChevronDown,
   Layers,
   Sparkles,
-  AlertCircle,
   FileCheck
 } from 'lucide-react';
 import type {
-  ArtifactProjectFile,
   FileTreeNode,
   MultiFileArtifactBundle,
-  FileDependencyReference
 } from '../types/multiFileArtifact';
 import { buildFileTree } from '../utils/artifactBundleEngine';
 

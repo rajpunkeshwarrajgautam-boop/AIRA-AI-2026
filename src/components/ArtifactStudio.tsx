@@ -113,7 +113,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
 
   const [securityNotice, setSecurityNotice] = useState<string | null>(null);
   const [runtimeError, setRuntimeError] = useState<ArtifactRuntimeError | null>(null);
-  const activeNonceRef = useRef<string>(newSandboxNonce());
+  const [activeNonce, setActiveNonce] = useState<string>(newSandboxNonce);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
@@ -205,7 +205,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
   if (artifact && artifactKey !== prevArtifactKey) {
     setPrevArtifactKey(artifactKey);
     setSelectedVersion(artifact.version);
-    activeNonceRef.current = newSandboxNonce();
+    setActiveNonce(newSandboxNonce());
     if (
       artifact.type === 'text/html' ||
       artifact.type === 'image/svg+xml' ||
@@ -239,7 +239,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
       if (event.data.type !== 'CONSOLE_LOG' && event.data.type !== 'AIRA_ARTIFACT_RUNTIME_ERROR') return;
 
       // 3. Validate per-session secret nonce to prevent spoofed/injected cross-frame messages
-      if (!event.data.nonce || event.data.nonce !== activeNonceRef.current) {
+      if (!event.data.nonce || event.data.nonce !== activeNonce) {
         return;
       }
 
@@ -260,7 +260,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
 
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [adaptiveDock]);
+  }, [adaptiveDock, activeNonce]);
 
   if (!artifact) return null;
 
@@ -352,9 +352,9 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
   const getIframeSrcDoc = () => {
     const isDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
     if (adaptiveDock && activeBundle && Object.keys(activeBundle.files).length > 1) {
-      return generateMultiFileArtifactSandboxHtml(activeBundle, isDark, activeNonceRef.current);
+      return generateMultiFileArtifactSandboxHtml(activeBundle, isDark, activeNonce);
     }
-    return generateArtifactSandboxHtml(artifact, currentContent, isDark, activeNonceRef.current);
+    return generateArtifactSandboxHtml(artifact, currentContent, isDark, activeNonce);
   };
 
   const handleZoomIn = () => setZoomScale(z => Math.min(1.5, Math.round((z + 0.25) * 100) / 100));
@@ -448,7 +448,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                         aria-label="Artifact revision"
                         value={selectedVersion}
                         onChange={(e) => {
-                          activeNonceRef.current = newSandboxNonce();
+                          setActiveNonce(newSandboxNonce());
                           setRuntimeError(null);
                           setSelectedVersion(Number(e.target.value));
                         }}
@@ -680,7 +680,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                       </button>
                       <button
                         onClick={() => {
-                          activeNonceRef.current = newSandboxNonce();
+                          setActiveNonce(newSandboxNonce());
                           setRuntimeError(null);
                           setRefreshKey(k => k + 1);
                         }}
@@ -783,8 +783,8 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                   ) : isMultiModal && selectedFile ? (
                     <div className="flex-1 w-full h-full overflow-hidden flex flex-col" data-testid="multimodal-preview-container">
                       <MultiModalAssetViewer
+                        key={`${selectedFile.path}:${selectedFile.lastModified}`}
                         file={selectedFile}
-                        isDark={typeof document !== 'undefined' && document.documentElement.classList.contains('dark')}
                       />
                     </div>
                   ) : (

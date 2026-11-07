@@ -3,7 +3,6 @@ import {
   Workflow,
   Search,
   Code2,
-  FileCode2,
   BarChart2,
   FileText,
   Globe,
@@ -18,11 +17,9 @@ import {
   Clock,
   Layers,
   ExternalLink,
-  ChevronRight,
   ListFilter,
   Network,
   RotateCw,
-  ShieldAlert
 } from 'lucide-react';
 import type { 
   AgentExecutionGraph, 
@@ -63,27 +60,20 @@ export const AgentExecutionGraphView: React.FC<AgentExecutionGraphProps> = ({
   onApproveTask,
   compact = false
 }) => {
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [userSelectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'dag' | 'timeline'>(compact ? 'timeline' : 'dag');
   const [approvingTaskIds, setApprovingTaskIds] = useState<Record<string, boolean>>({});
 
-  const nodeMap: Record<string, GraphTaskNode> = (Array.isArray(graph.nodes)
-    ? Object.fromEntries((graph.nodes as any[]).map((n: any) => [n.id, n as GraphTaskNode]))
-    : graph.nodes) || {};
-  const waves: string[][] = (graph.waves && Array.isArray(graph.waves) && graph.waves.length > 0)
+  const nodeMap = useMemo<Record<string, GraphTaskNode>>(() => (Array.isArray(graph.nodes)
+    ? Object.fromEntries((graph.nodes as GraphTaskNode[]).map(n => [n.id, n]))
+    : graph.nodes) || {}, [graph.nodes]);
+  const waves = useMemo<string[][]>(() => (graph.waves && Array.isArray(graph.waves) && graph.waves.length > 0)
     ? graph.waves
-    : [Object.keys(nodeMap)];
+    : [Object.keys(nodeMap)], [graph.waves, nodeMap]);
+  const selectedNodeId = userSelectedNodeId || (selectedArtifactId
+    ? Object.values(nodeMap).find(n => n.associatedArtifactId === selectedArtifactId)?.id || null
+    : null);
   const selectedNode = selectedNodeId ? nodeMap[selectedNodeId] : null;
-
-  // Auto-select node associated with active artifact if none selected
-  React.useEffect(() => {
-    if (selectedArtifactId && !selectedNodeId) {
-      const matchingNode = Object.values(nodeMap).find(n => n.associatedArtifactId === selectedArtifactId);
-      if (matchingNode) {
-        setSelectedNodeId(matchingNode.id);
-      }
-    }
-  }, [selectedArtifactId, selectedNodeId, nodeMap]);
 
   const handleDecision = async (taskId: string, approvalId: string, decision: 'APPROVE' | 'REJECT') => {
     if (approvingTaskIds[taskId]) return;

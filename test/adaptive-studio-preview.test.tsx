@@ -13,7 +13,7 @@ test('Adaptive Studio is opt-in and legacy mode remains the default', () => {
   const artifactSource = readFileSync(new URL('../src/components/ArtifactStudio.tsx', import.meta.url), 'utf8');
   assert.match(artifactSource, /adaptiveDock = false/);
   assert.match(artifactSource, /adaptiveDock && !isExpanded/);
-  assert.match(artifactSource, /generateArtifactSandboxHtml\(artifact, currentContent, isDark, activeNonceRef\.current\)/);
+  assert.match(artifactSource, /generateArtifactSandboxHtml\(artifact, currentContent, isDark, activeNonce\)/);
 });
 
 test('Adaptive Studio empty state does not pretend to execute an artifact', () => {

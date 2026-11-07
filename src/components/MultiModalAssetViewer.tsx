@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import {
   Image as ImageIcon,
   Volume2,
@@ -6,36 +6,19 @@ import {
   FileText,
   ZoomIn,
   ZoomOut,
-  Maximize,
   Download,
   Play,
   Pause,
-  RotateCw,
   Eye,
   Code,
   ShieldCheck,
   AlertTriangle
 } from 'lucide-react';
-import type { ArtifactProjectFile, ArtifactFileKind } from '../types/multiFileArtifact';
+import type { ArtifactProjectFile } from '../types/multiFileArtifact';
+import { sanitizeSvgMarkup, formatAudioTime } from '../utils/multiModalAssets';
 
 interface MultiModalAssetViewerProps {
   file: ArtifactProjectFile;
-  isDark?: boolean;
-}
-
-/**
- * Sanitizes SVG source markup to prevent script execution,
- * inline event handlers, and javascript: links.
- */
-export function sanitizeSvgMarkup(rawSvg: string): string {
-  if (!rawSvg) return '';
-  return rawSvg
-    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-    .replace(/<foreignObject\b[^<]*(?:(?!<\/foreignObject>)<[^<]*)*<\/foreignObject>/gi, '')
-    .replace(/\son\w+\s*=\s*["'][^"']*["']/gi, '')
-    .replace(/\son\w+\s*=\s*[^\s>]+/gi, '')
-    .replace(/href\s*=\s*["']javascript:[^"']*["']/gi, 'href="#"')
-    .replace(/xlink:href\s*=\s*["']javascript:[^"']*["']/gi, 'xlink:href="#"');
 }
 
 /**
@@ -60,16 +43,8 @@ function resolveMediaDataUrl(content: string, mimeType: string): string {
   return trimmed;
 }
 
-export function formatAudioTime(seconds: number): string {
-  if (isNaN(seconds) || !isFinite(seconds) || seconds < 0) return '0:00';
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
-  return `${mins}:${secs.toString().padStart(2, '0')}`;
-}
-
 export const MultiModalAssetViewer: React.FC<MultiModalAssetViewerProps> = ({
   file,
-  isDark = false
 }) => {
   const [zoomLevel, setZoomLevel] = useState<number>(1);
   const [svgViewMode, setSvgViewMode] = useState<'visual' | 'code'>('visual');
@@ -80,23 +55,9 @@ export const MultiModalAssetViewer: React.FC<MultiModalAssetViewerProps> = ({
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const activeBlobUrlsRef = useRef<Set<string>>(new Set());
-
-  // Revoke any created blob URLs upon unmount or file change and reset state
-  useEffect(() => {
-    setLoadError(null);
-    setIsPlaying(false);
-    setAudioProgress(0);
-    setAudioDuration(0);
-    return () => {
-      for (const url of activeBlobUrlsRef.current) {
-        try {
-          URL.revokeObjectURL(url);
-        } catch {}
-      }
-      activeBlobUrlsRef.current.clear();
-    };
-  }, [file.path]);
+  // This viewer never creates object URLs. In particular, it must not revoke
+  // an externally owned blob URL provided by the artifact source. The parent
+  // keys this component per file to reset playback/zoom state on navigation.
 
   const mimeType = useMemo(() => {
     const ext = file.path.split('.').pop()?.toLowerCase() || '';
@@ -336,8 +297,17 @@ export const MultiModalAssetViewer: React.FC<MultiModalAssetViewerProps> = ({
                 transformOrigin: 'center center',
                 transition: 'transform 0.15s ease',
               }}
-              dangerouslySetInnerHTML={{ __html: sanitizedSvg }}
-            />
+            >
+              {/* Untrusted SVG must never become executable DOM in AIRA's origin. */}
+              <img
+                src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(sanitizedSvg)}`}
+                alt={file.name}
+                draggable={false}
+                className="max-w-full max-h-full object-contain"
+                data-testid="svg-inert-image"
+                onError={() => setLoadError(`Failed to decode SVG asset: ${file.name}`)}
+              />
+            </div>
           ) : (
             <div className="w-full h-full flex flex-col font-mono text-xs overflow-auto bg-[#111113] p-4 rounded-lg border border-stone-800">
               <pre className="whitespace-pre overflow-x-auto text-stone-300">
@@ -463,7 +433,7 @@ export const MultiModalAssetViewer: React.FC<MultiModalAssetViewerProps> = ({
       {/* Safety Notice Footer */}
       <div className="h-7 px-4 bg-[#111113] border-t border-stone-800/80 flex items-center gap-1.5 text-[10px] text-stone-500">
         <ShieldCheck className="w-3 h-3 text-emerald-400" />
-        <span>Multi-modal asset rendered in sandboxed isolation. Local session origin protected.</span>
+        <span>Vector previews use inert images; documents run in an isolated frame.</span>
       </div>
     </div>
   );
