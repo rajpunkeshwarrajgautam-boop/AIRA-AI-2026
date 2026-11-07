@@ -3,9 +3,11 @@
 **Release Authority:** rajpunkeshwarrajgautam-boop  
 **Target Branch:** `prod-release`  
 **Base Commit SHA:** `589607a6b7996ecac25ea4d3d0ebc5890c434629`  
-**Production URL:** `https://aira-ai-2026.vercel.app`  
+**Merged Production SHA:** `237d7c9236cd05395657d23d20c049e28114957e`  
+**Live Production Deployment ID:** `dpl_EZnooQycPjrifbXV4mSb2G9s3YBL`  
+**Canonical Production URL:** `https://aira-ai-2026.vercel.app`  
 **Date:** 2026-11-07  
-**Verdict:** **ALL VERIFICATION GATES PASSED (100%)**
+**Verdict:** **ALL VERIFICATION GATES PASSED (100% PRODUCTION CERTIFIED)**
 
 ---
 
@@ -93,7 +95,7 @@ TypeScript & Lint Verification:
 
 ## 4. Microsoft Edge Multi-Viewport Verification Matrix
 
-Automated verification was performed using Microsoft Edge channel 156.0.4314.58. 20 visual screenshots were captured and verified:
+Automated verification was performed using Microsoft Edge channel 156.0.4314.58. 20 visual screenshots were captured across preview and canonical production environments:
 
 | Viewport | Mode | Viewport Size | Default Closed | Launcher Toggle | Dismiss / Restore | Artifact Click Open | Storage Quota | Status |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -103,34 +105,25 @@ Automated verification was performed using Microsoft Edge channel 156.0.4314.58.
 | **Tablet Portrait** | Dark | 768x1024 | PASS | PASS | PASS | PASS | PASS | **PASS** |
 | **Mobile Portrait** | Dark | 390x844 | PASS | PASS | PASS | PASS | PASS | **PASS** |
 
-### Screenshot Evidence Directory
-Saved locally at:
-`C:\Users\WORKSTATION\.gemini\antigravity\brain\5ef6a26c-9a24-46a2-8c8b-ffeeb356edb4\screenshots\ux-persistence-hardening\`
+### Live Canonical Production Microsoft Edge Screenshots
+Captured live on `https://aira-ai-2026.vercel.app` at deployment `dpl_EZnooQycPjrifbXV4mSb2G9s3YBL`:
 
-- [`edge-desktop-1600x1000-dark-1-default-closed.png`](file:///C:/Users/WORKSTATION/.gemini/antigravity/brain/5ef6a26c-9a24-46a2-8c8b-ffeeb356edb4/screenshots/ux-persistence-hardening/edge-desktop-1600x1000-dark-1-default-closed.png)
-- [`edge-desktop-1600x1000-dark-2-launcher-opened.png`](file:///C:/Users/WORKSTATION/.gemini/antigravity/brain/5ef6a26c-9a24-46a2-8c8b-ffeeb356edb4/screenshots/ux-persistence-hardening/edge-desktop-1600x1000-dark-2-launcher-opened.png)
-- [`edge-desktop-1600x1000-dark-3-dismissed-restored.png`](file:///C:/Users/WORKSTATION/.gemini/antigravity/brain/5ef6a26c-9a24-46a2-8c8b-ffeeb356edb4/screenshots/ux-persistence-hardening/edge-desktop-1600x1000-dark-3-dismissed-restored.png)
-- [`edge-desktop-1600x1000-dark-4-artifact-preview-opened.png`](file:///C:/Users/WORKSTATION/.gemini/antigravity/brain/5ef6a26c-9a24-46a2-8c8b-ffeeb356edb4/screenshots/ux-persistence-hardening/edge-desktop-1600x1000-dark-4-artifact-preview-opened.png)
-- [`edge-desktop-1600x1000-light-1-default-closed.png`](file:///C:/Users/WORKSTATION/.gemini/antigravity/brain/5ef6a26c-9a24-46a2-8c8b-ffeeb356edb4/screenshots/ux-persistence-hardening/edge-desktop-1600x1000-light-1-default-closed.png)
-- [`edge-desktop-1600x1000-light-2-launcher-opened.png`](file:///C:/Users/WORKSTATION/.gemini/antigravity/brain/5ef6a26c-9a24-46a2-8c8b-ffeeb356edb4/screenshots/ux-persistence-hardening/edge-desktop-1600x1000-light-2-launcher-opened.png)
-- [`edge-desktop-1600x1000-light-3-dismissed-restored.png`](file:///C:/Users/WORKSTATION/.gemini/antigravity/brain/5ef6a26c-9a24-46a2-8c8b-ffeeb356edb4/screenshots/ux-persistence-hardening/edge-desktop-1600x1000-light-3-dismissed-restored.png)
-- [`edge-desktop-1600x1000-light-4-artifact-preview-opened.png`](file:///C:/Users/WORKSTATION/.gemini/antigravity/brain/5ef6a26c-9a24-46a2-8c8b-ffeeb356edb4/screenshots/ux-persistence-hardening/edge-desktop-1600x1000-light-4-artifact-preview-opened.png)
-- [`edge-tablet-768x1024-dark-1-default-closed.png`](file:///C:/Users/WORKSTATION/.gemini/antigravity/brain/5ef6a26c-9a24-46a2-8c8b-ffeeb356edb4/screenshots/ux-persistence-hardening/edge-tablet-768x1024-dark-1-default-closed.png)
-- [`edge-tablet-768x1024-dark-2-launcher-opened.png`](file:///C:/Users/WORKSTATION/.gemini/antigravity/brain/5ef6a26c-9a24-46a2-8c8b-ffeeb356edb4/screenshots/ux-persistence-hardening/edge-tablet-768x1024-dark-2-launcher-opened.png)
-- [`edge-tablet-768x1024-dark-3-dismissed-restored.png`](file:///C:/Users/WORKSTATION/.gemini/antigravity/brain/5ef6a26c-9a24-46a2-8c8b-ffeeb356edb4/screenshots/ux-persistence-hardening/edge-tablet-768x1024-dark-3-dismissed-restored.png)
-- [`edge-tablet-768x1024-dark-4-artifact-preview-opened.png`](file:///C:/Users/WORKSTATION/.gemini/antigravity/brain/5ef6a26c-9a24-46a2-8c8b-ffeeb356edb4/screenshots/ux-persistence-hardening/edge-tablet-768x1024-dark-4-artifact-preview-opened.png)
-- [`edge-mobile-390x844-dark-1-default-closed.png`](file:///C:/Users/WORKSTATION/.gemini/antigravity/brain/5ef6a26c-9a24-46a2-8c8b-ffeeb356edb4/screenshots/ux-persistence-hardening/edge-mobile-390x844-dark-1-default-closed.png)
-- [`edge-mobile-390x844-dark-2-launcher-opened.png`](file:///C:/Users/WORKSTATION/.gemini/antigravity/brain/5ef6a26c-9a24-46a2-8c8b-ffeeb356edb4/screenshots/ux-persistence-hardening/edge-mobile-390x844-dark-2-launcher-opened.png)
-- [`edge-mobile-390x844-dark-3-dismissed-restored.png`](file:///C:/Users/WORKSTATION/.gemini/antigravity/brain/5ef6a26c-9a24-46a2-8c8b-ffeeb356edb4/screenshots/ux-persistence-hardening/edge-mobile-390x844-dark-3-dismissed-restored.png)
-- [`edge-mobile-390x844-dark-4-artifact-preview-opened.png`](file:///C:/Users/WORKSTATION/.gemini/antigravity/brain/5ef6a26c-9a24-46a2-8c8b-ffeeb356edb4/screenshots/ux-persistence-hardening/edge-mobile-390x844-dark-4-artifact-preview-opened.png)
+- Default Closed State (Full Chat Width): [`canonical-edge-desktop-1-default-closed.png`](file:///C:/Users/WORKSTATION/.gemini/antigravity/brain/5ef6a26c-9a24-46a2-8c8b-ffeeb356edb4/screenshots/canonical-live-hardening/canonical-edge-desktop-1-default-closed.png)
+- Header Launcher Click (Empty Studio Mounted): [`canonical-edge-desktop-2-launcher-opened.png`](file:///C:/Users/WORKSTATION/.gemini/antigravity/brain/5ef6a26c-9a24-46a2-8c8b-ffeeb356edb4/screenshots/canonical-live-hardening/canonical-edge-desktop-2-launcher-opened.png)
+- Dismissal / Restore Full Width: [`canonical-edge-desktop-3-dismissed-restored.png`](file:///C:/Users/WORKSTATION/.gemini/antigravity/brain/5ef6a26c-9a24-46a2-8c8b-ffeeb356edb4/screenshots/canonical-live-hardening/canonical-edge-desktop-3-dismissed-restored.png)
+- Artifact Preview Card Clicked (Studio Rendered): [`canonical-edge-desktop-4-artifact-preview.png`](file:///C:/Users/WORKSTATION/.gemini/antigravity/brain/5ef6a26c-9a24-46a2-8c8b-ffeeb356edb4/screenshots/canonical-live-hardening/canonical-edge-desktop-4-artifact-preview.png)
+- Mobile 390x844 Slide-Over Drawer: [`canonical-edge-mobile-390x844-drawer.png`](file:///C:/Users/WORKSTATION/.gemini/antigravity/brain/5ef6a26c-9a24-46a2-8c8b-ffeeb356edb4/screenshots/canonical-live-hardening/canonical-edge-mobile-390x844-drawer.png)
 
 ---
 
 ## 5. Live Production Rollout & Rollback Protection
 
 - **Production Branch:** `refs/heads/prod-release`
+- **Merged PR:** [#148](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/148)
+- **Production Merge Commit:** `237d7c9236cd05395657d23d20c049e28114957e`
+- **Production Deployment ID:** `dpl_EZnooQycPjrifbXV4mSb2G9s3YBL`
 - **Canonical Live URL:** `https://aira-ai-2026.vercel.app`
-- **Rollback Target Deployment:** `dpl_ALQ8dyoR5gfwFej9BZGgu8hZwgT5` (`https://aira-ai-2026-k6siiobhw-rajpunkeshwarrajgautam-boops-projects.vercel.app`)
+- **Immediate Rollback Target:** `dpl_ALQ8dyoR5gfwFej9BZGgu8hZwgT5` (`https://aira-ai-2026-k6siiobhw-rajpunkeshwarrajgautam-boops-projects.vercel.app`)
 - **Rollback Command:**
   ```bash
   npx vercel alias set aira-ai-2026-k6siiobhw-rajpunkeshwarrajgautam-boops-projects.vercel.app aira-ai-2026.vercel.app
