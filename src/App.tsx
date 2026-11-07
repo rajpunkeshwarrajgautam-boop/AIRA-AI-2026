@@ -4,7 +4,8 @@ import type { Conversation, Message, Artifact, Attachment, Project, AppSettings,
 import {
   loadConversations, saveConversations, saveActiveChatId,
   getSessionActiveChatId, setSessionActiveChatId,
-  loadProjects, saveProjects, loadSettings, saveSettings, INITIAL_CONVERSATION
+  loadProjects, saveProjects, loadSettings, saveSettings, INITIAL_CONVERSATION,
+  hydrateStorageFromIndexedDb
 } from './utils/storage';
 import { streamAIResponse } from './utils/aiEngine';
 import { appendAgentTimelineEvent } from './utils/agentTimeline';
@@ -77,6 +78,19 @@ function App() {
     }
     return '';
   });
+  useEffect(() => {
+    void hydrateStorageFromIndexedDb(currentUserId || undefined).then(loaded => {
+      if (loaded && loaded.length > 0) {
+        setConversations(prev => {
+          if (prev.length === 1 && prev[0].id === 'welcome-to-aira' && prev[0].messages.length === 0) {
+            return loaded;
+          }
+          return prev;
+        });
+      }
+    });
+  }, [currentUserId]);
+
   const [welcomeConversation] = useState<Conversation>(() => ({
     ...INITIAL_CONVERSATION, id: `chat-${crypto.randomUUID()}`,
     createdAt: Date.now(), updatedAt: Date.now(), messages: [],
@@ -146,6 +160,20 @@ function App() {
   const [conversationSearchSeed, setConversationSearchSeed] = useState('');
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [activeArtifact, setActiveArtifact] = useState<Artifact | null>(null);
+  const [isStudioOpen, setIsStudioOpen] = useState(false);
+  const userDismissedStudioRef = useRef(false);
+
+useEffect(() => {
+    if (!isStudioOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsStudioOpen(false);
+        userDismissedStudioRef.current = true;
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isStudioOpen]);
   const [activeExecutionGraph, setActiveExecutionGraph] = useState<AgentExecutionGraph | null>(() => {
     if (typeof window !== 'undefined' && (window as any).__AIRA_PHASE3_INITIAL_GRAPH__) {
       return (window as any).__AIRA_PHASE3_INITIAL_GRAPH__;
@@ -1069,6 +1097,9 @@ function App() {
               artifactRevisionsRef.current.set(key, updatedArtifact);
             }
             setActiveArtifact(updatedArtifact);
+            if (!userDismissedStudioRef.current) {
+              setIsStudioOpen(true);
+            }
             updateConversation(id, c => ({
               ...c,
               messages: c.messages.map(m => {
@@ -1260,7 +1291,7 @@ function App() {
   const updateSettings = (partial: Partial<AppSettings>) => setSettings(prev => ({ ...prev, ...partial }));
 
   return (
-    <div className={`${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-shell ' : ''}h-[100dvh] w-full min-w-0 flex overflow-hidden bg-claude-bg-light dark:bg-claude-bg-dark text-claude-text-light dark:text-claude-text-dark`}>
+    <div className={`${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-shell ' : ''}${isStudioOpen ? 'has-studio-open ' : ''}h-[100dvh] w-full min-w-0 flex overflow-hidden bg-claude-bg-light dark:bg-claude-bg-dark text-claude-text-light dark:text-claude-text-dark`}>
       <Sidebar
         conversations={conversations}
         activeChatId={activeChatId}
@@ -1381,13 +1412,34 @@ function App() {
                 Cancel
               </button>
             )}
-            {activeConversation?.messages.some(m => (m.artifacts?.length || 0) > 0) && <button onClick={() => {
-              if (activeArtifact) setActiveArtifact(null);
-              else {
-                const artifact = activeConversation.messages.flatMap(m => m.artifacts || [])[0];
-                if (artifact) setActiveArtifact(artifact);
-              }
-            }} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs ${activeArtifact ? 'bg-aira-blue text-white' : 'hover:bg-claude-surface2-light dark:hover:bg-white/5'}`}><Layers className="w-3.5 h-3.5" /><span className="hidden sm:inline">Output Studio</span></button>}
+            {(ADAPTIVE_STUDIO_PREVIEW || activeConversation?.messages.some(m => (m.artifacts?.length || 0) > 0)) && (
+              <button
+                data-testid="artifact-studio-launcher"
+                onClick={() => {
+                  if (isStudioOpen) {
+                    setIsStudioOpen(false);
+                    userDismissedStudioRef.current = true;
+                  } else {
+                    setIsStudioOpen(true);
+                    userDismissedStudioRef.current = false;
+                    if (!activeArtifact && conversationArtifacts.length > 0) {
+                      setActiveArtifact(conversationArtifacts[conversationArtifacts.length - 1]);
+                    }
+                  }
+                }}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+                  isStudioOpen
+                    ? 'bg-aira-blue text-white shadow-sm'
+                    : 'hover:bg-claude-surface2-light dark:hover:bg-white/5 text-claude-text-light dark:text-claude-text-dark'
+                }`}
+                title={isStudioOpen ? 'Close Artifact Studio' : 'Open Artifact Studio'}
+                aria-label={isStudioOpen ? 'Close Artifact Studio' : 'Open Artifact Studio'}
+                aria-expanded={isStudioOpen}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Artifact Studio</span>
+              </button>
+            )}
             {activeConversation && <button onClick={() => handleToggleStar(activeConversation.id)} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-white/5 active:scale-95 transition-all" title={activeConversation.isPinned ? 'Remove bookmark' : 'Bookmark conversation'}><Bookmark className={`w-4 h-4 ${activeConversation.isPinned ? 'fill-aira-blue text-aira-blue' : 'text-claude-muted-light dark:text-claude-muted-dark'}`} /></button>}
             <button onClick={handleShare} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-white/5">{sharedCopied ? <Check className="w-4 h-4 text-emerald-400" /> : <Share2 className="w-4 h-4 text-claude-muted-light dark:text-claude-muted-dark" />}</button>
           </div>
@@ -1418,7 +1470,11 @@ function App() {
                     message={message}
                     showAgentTimeline={ADAPTIVE_STUDIO_PREVIEW}
                     userName={settings.userName}
-                    onOpenArtifact={setActiveArtifact}
+                    onOpenArtifact={artifact => {
+                      setActiveArtifact(artifact);
+                      setIsStudioOpen(true);
+                      userDismissedStudioRef.current = false;
+                    }}
                     onSwitchToAgentAndReview={handleSwitchToAgentAndReview}
                     onConfirmAutomation={handleConfirmAutomation}
                     onAuthorizeVision={handleAuthorizeVision}
@@ -1493,20 +1549,27 @@ function App() {
         </div>
       </main>
 
-      {ADAPTIVE_STUDIO_PREVIEW && !activeArtifact && (
+      {ADAPTIVE_STUDIO_PREVIEW && isStudioOpen && !activeArtifact && (
         <AdaptiveStudioEmptyState
           executionGraph={activeExecutionGraph}
           onSelectArtifact={handleSelectArtifactById}
           onApproveTask={handleTaskApproval}
+          onClose={() => {
+            setIsStudioOpen(false);
+            userDismissedStudioRef.current = true;
+          }}
         />
       )}
 
       <React.Suspense fallback={null}>
-        {activeArtifact && (
+        {isStudioOpen && activeArtifact && (
           <ArtifactStudio
             artifact={activeArtifact}
             adaptiveDock={ADAPTIVE_STUDIO_PREVIEW}
-            onClose={() => setActiveArtifact(null)}
+            onClose={() => {
+              setIsStudioOpen(false);
+              userDismissedStudioRef.current = true;
+            }}
             onUpdateArtifact={ADAPTIVE_STUDIO_PREVIEW ? restored => {
               const key = `${currentUserId || 'guest'}:${activeChatId}:${restored.id}`;
               artifactRevisionsRef.current.set(key, restored);
