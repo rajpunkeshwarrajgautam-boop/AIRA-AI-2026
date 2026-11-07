@@ -59,9 +59,9 @@ export function getConversationsStorageKey(userId?: string): string {
 }
 
 /**
- * Safely removes large legacy conversation or workspace items from LocalStorage
- * when they have already been persisted to IndexedDB or held in memory.
- * This frees up the 5MB browser quota for essential settings.
+ * Safely removes ephemeral workspace sync blobs from LocalStorage.
+ * NEVER deletes conversations, settings, or projects.
+ * This frees up browser quota for essential settings.
  */
 function evictLegacyLocalStorageBlobs(): number {
   if (typeof localStorage === 'undefined') return 0;
@@ -71,10 +71,9 @@ function evictLegacyLocalStorageBlobs(): number {
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
       if (!key) continue;
-      if (
-        key.startsWith('aira_workspace_synced_v1_') ||
-        (key.startsWith('aira_conversations_') && key !== STORAGE_KEYS.ACTIVE_CHAT)
-      ) {
+      // ONLY evict ephemeral workspace sync blobs.
+      // NEVER touch user conversations, settings, or projects in this eviction pass.
+      if (key.startsWith('aira_workspace_synced_v1_')) {
         keysToRemove.push(key);
       }
     }
@@ -90,6 +89,7 @@ function evictLegacyLocalStorageBlobs(): number {
 
 /**
  * Asynchronously migrates legacy LocalStorage conversations and projects into IndexedDB.
+ * Enforces strict read-back verification before removing any legacy keys from LocalStorage.
  * Ensures idempotent and recoverable execution without data loss.
  */
 export async function migrateLocalStorageToIndexedDb(): Promise<{ migrated: boolean; freedKeys: number }> {
@@ -98,52 +98,69 @@ export async function migrateLocalStorageToIndexedDb(): Promise<{ migrated: bool
   }
 
   try {
-    await openAiraDatabase();
+    const db = await openAiraDatabase();
+    if (!db) {
+      return { migrated: false, freedKeys: 0 };
+    }
     let migratedAny = false;
+    let freedKeys = 0;
 
-    // Migrate conversations
+    // Migrate conversations with strict read-back verification
+    const convKeys: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
       if (key && (key === STORAGE_KEYS.CONVERSATIONS || key.startsWith('aira_conversations_user_'))) {
-        const raw = localStorage.getItem(key);
-        if (raw) {
-          try {
-            const parsed = JSON.parse(raw);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              const existingIdb = await idbGet<Conversation[]>(STORES.CONVERSATIONS, key);
-              if (!existingIdb || existingIdb.length === 0) {
-                await idbSet(STORES.CONVERSATIONS, key, parsed);
-                migratedAny = true;
-              }
-            }
-          } catch {
-            // Ignore malformed individual legacy entries
-          }
-        }
+        convKeys.push(key);
       }
     }
 
-    // Migrate projects
+    for (const key of convKeys) {
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          // Write to IndexedDB
+          await idbSet(STORES.CONVERSATIONS, key, parsed);
+          // Strict read-back verification: verify that IndexedDB can retrieve the exact records
+          const verified = await idbGet<Conversation[]>(STORES.CONVERSATIONS, key);
+          if (Array.isArray(verified) && verified.length === parsed.length && verified[0]?.id === parsed[0]?.id) {
+            // Read-back verified: update in-memory cache and remove legacy LocalStorage entry
+            inMemoryConversations.set(key, verified);
+            migratedAny = true;
+            localStorage.removeItem(key);
+            freedKeys++;
+          }
+        }
+      } catch {
+        // If parsing or read-back verification fails, preserve localStorage key intact!
+      }
+    }
+
+    // Migrate projects with strict read-back verification
     const rawProjects = localStorage.getItem(STORAGE_KEYS.PROJECTS);
     if (rawProjects) {
       try {
         const parsedProjects = JSON.parse(rawProjects);
         if (Array.isArray(parsedProjects)) {
-          const existingIdbProjects = await idbGet<Project[]>(STORES.PROJECTS, 'projects');
-          if (!existingIdbProjects) {
-            await idbSet(STORES.PROJECTS, 'projects', parsedProjects);
+          await idbSet(STORES.PROJECTS, 'projects', parsedProjects);
+          const verifiedProjects = await idbGet<Project[]>(STORES.PROJECTS, 'projects');
+          if (Array.isArray(verifiedProjects) && verifiedProjects.length === parsedProjects.length) {
+            inMemoryProjects = verifiedProjects;
             migratedAny = true;
+            localStorage.removeItem(STORAGE_KEYS.PROJECTS);
+            freedKeys++;
           }
         }
       } catch {
-        // Ignore
+        // Preserve localStorage key intact
       }
     }
 
-    // If migration succeeded, free up LocalStorage blobs so quota is never exceeded
-    let freedKeys = 0;
+    // Also evict ephemeral synced workspace blobs to liberate quota
+    freedKeys += evictLegacyLocalStorageBlobs();
+
     if (migratedAny) {
-      freedKeys = evictLegacyLocalStorageBlobs();
       try {
         localStorage.setItem(STORAGE_KEYS.STORAGE_MIGRATION_VERSION, '2');
       } catch {

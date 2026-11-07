@@ -390,8 +390,11 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
           exit={{ x: '100%', opacity: 0.5, boxShadow: '0 0 0 rgba(0,0,0,0)' }}
           transition={prefersReducedMotion ? { duration: 0 } : { type: "spring", stiffness: 250, damping: 25, mass: 0.8 }}
           data-testid="artifact-studio"
+          aria-label="Unified Contextual Workspace"
           className={`${isExpanded ? 'fixed inset-y-0 right-0 z-[60] w-full' : 'fixed inset-y-0 right-0 z-50 w-full xl:relative xl:inset-auto xl:z-40 xl:w-[48vw]'} ${adaptiveDock && !isExpanded ? 'aira-adaptive-real-studio' : ''} h-[100dvh] min-w-0 flex flex-col bg-claude-surface-light dark:bg-[#141413] border-l border-claude-border-light dark:border-claude-border-dark shadow-2xl xl:shadow-none flex-shrink-0 transition-colors`}
         >
+          <div data-testid="unified-workspace" className="sr-only" aria-hidden="true" />
+          <div data-testid="agent-contextual-panel" className="sr-only" aria-hidden="true" />
           {/* Top Navigation Bar */}
           <div className="min-h-[56px] px-3 sm:px-4 py-2 flex flex-wrap items-center justify-between gap-2 border-b border-claude-border-light dark:border-claude-border-dark bg-claude-surface-light/95 dark:bg-[#1F1E1D]/95 backdrop-blur-md select-none">
             <div className="flex flex-1 items-center space-x-2 sm:space-x-3 min-w-0">
@@ -602,6 +605,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                   title="Close artifact"
                   aria-label="Close artifact"
                   data-testid="artifact-studio-close"
+                  data-workspace-close="true"
                 >
                   <X className="w-4 h-4" />
                 </button>

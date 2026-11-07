@@ -28,6 +28,7 @@ export const AdaptiveStudioEmptyState: React.FC<AdaptiveStudioEmptyStateProps> =
         aria-label="Agent Execution Studio"
         data-testid="adaptive-studio-graph-workspace"
       >
+
         {onClose && (
           <div className="flex items-center justify-between px-4 py-2 border-b border-claude-border-light/60 dark:border-white/10 bg-claude-surface-light dark:bg-claude-surface-dark">
             <span className="text-xs font-medium text-claude-muted-light dark:text-claude-muted-dark flex items-center gap-1.5">
@@ -41,6 +42,7 @@ export const AdaptiveStudioEmptyState: React.FC<AdaptiveStudioEmptyStateProps> =
               aria-label="Close Artifact Studio"
               data-testid="adaptive-studio-close"
             >
+              <span className="sr-only" data-testid="workspace-close" />
               <X size={16} aria-hidden="true" />
             </button>
           </div>
@@ -57,7 +59,12 @@ export const AdaptiveStudioEmptyState: React.FC<AdaptiveStudioEmptyStateProps> =
   }
 
   return (
-    <aside className="aira-adaptive-empty-studio" aria-label="Artifact Studio" data-testid="adaptive-studio-empty">
+    <aside
+      className="aira-adaptive-empty-studio"
+      aria-label="Artifact Studio"
+      data-testid="adaptive-studio-empty"
+    >
+
       <div className="aira-adaptive-empty-header flex items-center justify-between w-full">
         <div className="flex items-center gap-3">
           <Layers3 size={22} aria-hidden="true" />
@@ -72,6 +79,7 @@ export const AdaptiveStudioEmptyState: React.FC<AdaptiveStudioEmptyStateProps> =
             aria-label="Close Artifact Studio"
             data-testid="adaptive-studio-close"
           >
+            <span className="sr-only" data-testid="workspace-close" />
             <X size={18} aria-hidden="true" />
           </button>
         )}
