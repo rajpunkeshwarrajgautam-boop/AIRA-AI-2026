@@ -1,15 +1,19 @@
 /**
- * AIRA AI 2026 -- Authenticated Builder End-to-End Certification Suite
+ * AIRA AI 2026 -- In-Process Builder Contract & Integration Test Suite (Fast CI)
  * 
- * Verifies the complete builder execution lifecycle end-to-end:
+ * Verifies builder component contracts, schema validation, and lifecycle transitions
+ * using controlled in-process mock providers and test harness:
  * 1. Authenticated session & CSRF boundary enforcement (401 on missing auth, 403 on missing CSRF/origin)
  * 2. Explicit sandbox permission enforcement (400 on allowExecution: false)
- * 3. Autonomous application-building sandbox execution with real event streaming
- * 4. Generated files verification, SHA-256 integrity, and secure attachment download
- * 5. Live preview isolation with Content-Security-Policy and iframe containment
- * 6. Cryptographic workspace cancellation and sandbox lifecycle cleanup
- * 7. Storage persistence: projects, conversations, and workspace bundles survive complete browser restart
+ * 3. Autonomous application-building sandbox execution contracts with simulated event streaming
+ * 4. Generated files verification, SHA-256 integrity, and secure attachment download contracts
+ * 5. Live preview isolation contracts with Content-Security-Policy headers
+ * 6. Cryptographic workspace cancellation and sandbox lifecycle cleanup contracts
+ * 7. Storage persistence contracts: in-process rehydration verification
  * 8. Storage degraded recovery: IndexedDB failure fallback and quota pressure isolation
+ * 
+ * NOTE: For independent certification of the deployed staging/preview environment with real
+ * authentication, see test/live-builder-staging-acceptance.test.ts.
  */
 
 import test from 'node:test';

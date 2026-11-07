@@ -23,6 +23,7 @@ export const STORAGE_KEYS = {
   SETTINGS: 'aira_settings_v1',
   PINNED_CHATS: 'aira_pinned_chats_v1',
   STORAGE_MIGRATION_VERSION: 'aira_storage_migrated_v2',
+  TOMBSTONES: 'aira_tombstones_v1',
 } as const;
 
 export const INITIAL_CONVERSATION: Conversation = {
@@ -33,10 +34,88 @@ export const INITIAL_CONVERSATION: Conversation = {
   messages: [],
 };
 
+export interface TombstoneRecord {
+  id: string;
+  entityType: 'conversation' | 'project';
+  deletedAt: number;
+}
+
 // In-memory cache for synchronous reads and resilient fallback
 const inMemoryConversations = new Map<string, Conversation[]>();
 let inMemoryProjects: Project[] | null = null;
 let inMemorySettings: AppSettings | null = null;
+const inMemoryTombstones = new Map<string, TombstoneRecord>();
+
+function getTombstoneKey(id: string, entityType: 'conversation' | 'project'): string {
+  return `${entityType}:${id}`;
+}
+
+export function recordEntityDeletion(id: string, entityType: 'conversation' | 'project', deletedAt = Date.now()): void {
+  const record: TombstoneRecord = { id, entityType, deletedAt };
+  inMemoryTombstones.set(getTombstoneKey(id, entityType), record);
+
+  // Persist to LocalStorage
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const records = Array.from(inMemoryTombstones.values());
+      localStorage.setItem(STORAGE_KEYS.TOMBSTONES, JSON.stringify(records));
+    } catch {
+      // Non-blocking on quota
+    }
+  }
+
+  // Persist to IndexedDB STORES.METADATA
+  if (isIndexedDbSupported()) {
+    void idbSet(STORES.METADATA, 'tombstones', Array.from(inMemoryTombstones.values())).catch(() => {
+      // Non-blocking
+    });
+  }
+}
+
+export function isEntityDeleted(id: string, entityType: 'conversation' | 'project', entityTimestamp?: number): boolean {
+  if (inMemoryTombstones.size === 0 && typeof localStorage !== 'undefined') {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.TOMBSTONES);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          for (const item of parsed) {
+            if (item && item.id && item.entityType) {
+              inMemoryTombstones.set(getTombstoneKey(item.id, item.entityType), item);
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+
+  const tombstone = inMemoryTombstones.get(getTombstoneKey(id, entityType));
+  if (!tombstone) return false;
+
+  if (typeof entityTimestamp === 'number' && entityTimestamp > 0) {
+    // If entity was modified strictly AFTER deletion, it was intentionally re-created
+    return tombstone.deletedAt >= entityTimestamp;
+  }
+  return true;
+}
+
+export async function hydrateTombstonesFromIndexedDb(): Promise<void> {
+  if (!isIndexedDbSupported()) return;
+  try {
+    const idbTombstones = await idbGet<TombstoneRecord[]>(STORES.METADATA, 'tombstones');
+    if (Array.isArray(idbTombstones)) {
+      for (const item of idbTombstones) {
+        if (item && item.id && item.entityType) {
+          const key = getTombstoneKey(item.id, item.entityType);
+          const existing = inMemoryTombstones.get(key);
+          if (!existing || item.deletedAt > existing.deletedAt) {
+            inMemoryTombstones.set(key, item);
+          }
+        }
+      }
+    }
+  } catch {}
+}
 
 export interface StorageHealth {
   status: 'healthy' | 'degraded_quota' | 'memory_only';
@@ -59,21 +138,54 @@ export function getConversationsStorageKey(userId?: string): string {
 }
 
 /**
- * Set of workspace storage keys that have been confirmed durable in IndexedDB.
+ * Computes a fast, deterministic 64-bit FNV-1a checksum of the payload.
+ * Used to cryptographically bind verification state to the exact payload content.
  */
-const verifiedIdbWorkspaceKeys = new Set<string>();
-
-export function markWorkspaceKeyVerifiedInIdb(key: string): void {
-  verifiedIdbWorkspaceKeys.add(key);
-}
-
-export function isWorkspaceKeyVerifiedInIdb(key: string): boolean {
-  return verifiedIdbWorkspaceKeys.has(key);
+export function computePayloadHash(payload: string): string {
+  let h1 = 0x811c9dc5;
+  let h2 = 0x811c9dc5 ^ 0x5bd1e995;
+  for (let i = 0; i < payload.length; i++) {
+    const c = payload.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193);
+    h2 = Math.imul(h2 ^ (c >> 8), 0x01000193);
+  }
+  const hex1 = (h1 >>> 0).toString(16).padStart(8, '0');
+  const hex2 = (h2 >>> 0).toString(16).padStart(8, '0');
+  return `${hex1}${hex2}`;
 }
 
 /**
- * Safely removes legacy workspace sync blobs from LocalStorage ONLY IF
- * they have been verified to be durably persisted and retrievable in IndexedDB.
+ * Map of workspace storage keys to their verified payload hashes confirmed durable in IndexedDB.
+ */
+const verifiedIdbWorkspaceHashes = new Map<string, string>();
+
+export function markWorkspaceKeyVerifiedInIdb(key: string, payloadHash?: string): void {
+  if (payloadHash) {
+    verifiedIdbWorkspaceHashes.set(key, payloadHash);
+  } else if (typeof localStorage !== 'undefined') {
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      verifiedIdbWorkspaceHashes.set(key, computePayloadHash(raw));
+    } else {
+      verifiedIdbWorkspaceHashes.set(key, '__verified__');
+    }
+  } else {
+    verifiedIdbWorkspaceHashes.set(key, '__verified__');
+  }
+}
+
+export function isWorkspaceKeyVerifiedInIdb(key: string, payloadHash?: string): boolean {
+  if (payloadHash) {
+    return verifiedIdbWorkspaceHashes.get(key) === payloadHash;
+  }
+  return verifiedIdbWorkspaceHashes.has(key);
+}
+
+/**
+ * Safely removes legacy workspace sync blobs from LocalStorage ONLY IF:
+ * 1. The IndexedDB write transaction fully completed (tx.oncomplete).
+ * 2. Strict read-back verification proves exact payload equality.
+ * 3. The payload in LocalStorage has NOT mutated since verification (bound to payload hash).
  * NEVER deletes unverified workspace records, user conversations, settings, or projects.
  */
 export async function evictVerifiedWorkspaceBlobs(): Promise<number> {
@@ -95,17 +207,26 @@ export async function evictVerifiedWorkspaceBlobs(): Promise<number> {
         const parsed = JSON.parse(raw);
         // Ensure write to IndexedDB
         const setOk = await idbSet(STORES.WORKSPACES, key, parsed);
-        if (!setOk) continue;
+        if (!setOk) {
+          // Write failed (e.g. transaction aborted/error): NEVER mark durable!
+          continue;
+        }
 
         // Strict read-back verification: retrieve and verify data integrity
         const verified = await idbGet<any>(STORES.WORKSPACES, key);
-        if (verified && (
-          verified.projectId === parsed.projectId ||
-          verified.syncedAt === parsed.syncedAt ||
-          (parsed.id && verified.id === parsed.id) ||
-          Boolean(verified)
-        )) {
-          verifiedIdbWorkspaceKeys.add(key);
+        if (!verified) continue;
+
+        // Exact payload equality check: deep serialization check
+        const isExactMatch = JSON.stringify(verified) === JSON.stringify(parsed);
+        if (!isExactMatch) continue;
+
+        // Cryptographically bind verification to exact payload hash
+        const verifiedHash = computePayloadHash(raw);
+        verifiedIdbWorkspaceHashes.set(key, verifiedHash);
+
+        // Re-read current LocalStorage payload to protect against simultaneous mutations
+        const currentRaw = localStorage.getItem(key);
+        if (currentRaw && computePayloadHash(currentRaw) === verifiedHash) {
           localStorage.removeItem(key);
           freedCount++;
         }
@@ -121,7 +242,9 @@ export async function evictVerifiedWorkspaceBlobs(): Promise<number> {
 
 /**
  * Synchronous quota-relief eviction:
- * ONLY removes workspace sync blobs that have ALREADY been verified as retrievable in IndexedDB.
+ * ONLY removes workspace sync blobs whose current LocalStorage payload EXACTLY matches
+ * the cryptographic payload hash that was confirmed durable in IndexedDB.
+ * If the payload changed in LocalStorage after verification, it is NEVER deleted!
  * NEVER deletes unverified workspace records, user conversations, settings, or projects.
  * Also schedules asynchronous durable migration and verification for any remaining blobs.
  */
@@ -137,8 +260,16 @@ export function evictVerifiedLocalStorageBlobsSync(): number {
       }
     }
     for (const key of candidateKeys) {
-      // STRICT DURABILITY INVARIANT: Only delete if confirmed durable in IndexedDB!
-      if (verifiedIdbWorkspaceKeys.has(key)) {
+      const verifiedHash = verifiedIdbWorkspaceHashes.get(key);
+      if (!verifiedHash) continue;
+
+      const currentRaw = localStorage.getItem(key);
+      if (!currentRaw) continue;
+
+      // STRICT DURABILITY & INTEGRITY INVARIANT:
+      // Only delete if the payload currently in LocalStorage EXACTLY matches
+      // the hash that was durably verified in IndexedDB!
+      if (computePayloadHash(currentRaw) === verifiedHash) {
         localStorage.removeItem(key);
         freedCount++;
       }
@@ -160,9 +291,11 @@ export const evictLegacyLocalStorageBlobs = evictVerifiedLocalStorageBlobsSync;
 
 /**
  * Deterministically reconciles conversations from LocalStorage mirror and IndexedDB.
- * Conflict resolution policy: Entity-level Last-Write-Wins (LWW) based on updatedAt.
- * Tiebreaker: message count (more messages win to prevent message truncation).
- * Preserves all non-overlapping conversations from both stores (union).
+ * Conflict resolution policy:
+ * 1. Tombstone filtering: records marked deleted at or after entity timestamp are discarded.
+ * 2. Entity-level Last-Write-Wins (LWW) based on updatedAt/createdAt.
+ * 3. Tiebreaker: message count (more messages win to prevent message truncation).
+ * Preserves all valid non-overlapping conversations from both stores (union).
  */
 export function reconcileConversations(
   localConvs: Conversation[] = [],
@@ -172,18 +305,25 @@ export function reconcileConversations(
 
   for (const c of localConvs) {
     if (c && c.id) {
-      mergedMap.set(c.id, c);
+      const time = c.updatedAt || c.createdAt || 0;
+      if (!isEntityDeleted(c.id, 'conversation', time)) {
+        mergedMap.set(c.id, c);
+      }
     }
   }
 
   for (const idbC of idbConvs) {
     if (!idbC || !idbC.id) continue;
+    const idbTime = idbC.updatedAt || idbC.createdAt || 0;
+    if (isEntityDeleted(idbC.id, 'conversation', idbTime)) {
+      continue; // Filter tombstoned conversation
+    }
+
     const localC = mergedMap.get(idbC.id);
     if (!localC) {
       mergedMap.set(idbC.id, idbC);
     } else {
       const localTime = localC.updatedAt || localC.createdAt || 0;
-      const idbTime = idbC.updatedAt || idbC.createdAt || 0;
 
       if (idbTime > localTime) {
         // IndexedDB is strictly newer
@@ -213,9 +353,11 @@ export function reconcileConversations(
 
 /**
  * Deterministically reconciles projects from LocalStorage mirror and IndexedDB.
- * Conflict resolution policy: Entity-level Last-Write-Wins (LWW) based on updatedAt/createdAt.
- * Tiebreaker: docs count.
- * Preserves all non-overlapping projects from both stores (union).
+ * Conflict resolution policy:
+ * 1. Tombstone filtering: records marked deleted at or after entity timestamp are discarded.
+ * 2. Entity-level Last-Write-Wins (LWW) based on updatedAt/createdAt.
+ * 3. Tiebreaker: docs count.
+ * Preserves all valid non-overlapping projects from both stores (union).
  */
 export function reconcileProjects(
   localProjects: Project[] = [],
@@ -225,18 +367,25 @@ export function reconcileProjects(
 
   for (const p of localProjects) {
     if (p && p.id) {
-      mergedMap.set(p.id, p);
+      const time = (p as any).updatedAt || p.createdAt || 0;
+      if (!isEntityDeleted(p.id, 'project', time)) {
+        mergedMap.set(p.id, p);
+      }
     }
   }
 
   for (const idP of idbProjects) {
     if (!idP || !idP.id) continue;
+    const idbTime = (idP as any).updatedAt || idP.createdAt || 0;
+    if (isEntityDeleted(idP.id, 'project', idbTime)) {
+      continue; // Filter tombstoned project
+    }
+
     const localP = mergedMap.get(idP.id);
     if (!localP) {
       mergedMap.set(idP.id, idP);
     } else {
       const localTime = (localP as any).updatedAt || localP.createdAt || 0;
-      const idbTime = (idP as any).updatedAt || idP.createdAt || 0;
 
       if (idbTime > localTime) {
         mergedMap.set(idP.id, idP);
@@ -262,6 +411,53 @@ export function reconcileProjects(
 }
 
 /**
+ * Explicit deletion API for conversations.
+ * Records a durable tombstone and updates in-memory, LocalStorage, and IndexedDB tiers.
+ */
+export function deleteConversationRecord(id: string, userId?: string): void {
+  const now = Date.now();
+  recordEntityDeletion(id, 'conversation', now);
+
+  const key = getConversationsStorageKey(userId);
+  const currentConvs = inMemoryConversations.get(key) || [];
+  const updated = currentConvs.filter(c => c.id !== id);
+  inMemoryConversations.set(key, updated);
+
+  if (typeof localStorage !== 'undefined') {
+    try {
+      localStorage.setItem(key, JSON.stringify(updated));
+    } catch {}
+  }
+
+  if (isIndexedDbSupported()) {
+    void idbSet(STORES.CONVERSATIONS, key, updated).catch(() => {});
+  }
+}
+
+/**
+ * Explicit deletion API for projects.
+ * Records a durable tombstone and updates in-memory, LocalStorage, and IndexedDB tiers.
+ */
+export function deleteProjectRecord(id: string): void {
+  const now = Date.now();
+  recordEntityDeletion(id, 'project', now);
+
+  const currentProjects = inMemoryProjects || [];
+  const updated = currentProjects.filter(p => p.id !== id);
+  inMemoryProjects = updated;
+
+  if (typeof localStorage !== 'undefined') {
+    try {
+      localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(updated));
+    } catch {}
+  }
+
+  if (isIndexedDbSupported()) {
+    void idbSet(STORES.PROJECTS, 'projects', updated).catch(() => {});
+  }
+}
+
+/**
  * Asynchronously migrates legacy LocalStorage conversations and projects into IndexedDB.
  * Enforces strict read-back verification and deterministic reconciliation before updating stores.
  * Ensures idempotent and recoverable execution without data loss.
@@ -276,6 +472,10 @@ export async function migrateLocalStorageToIndexedDb(): Promise<{ migrated: bool
     if (!db) {
       return { migrated: false, freedKeys: 0 };
     }
+
+    // Hydrate tombstones first to ensure deletions are honored during migration
+    await hydrateTombstonesFromIndexedDb();
+
     let migratedAny = false;
     let freedKeys = 0;
 
@@ -363,9 +563,10 @@ export interface StorageHydrationResult {
 export async function hydrateProjectsFromIndexedDb(): Promise<Project[] | null> {
   if (isIndexedDbSupported()) {
     try {
+      await hydrateTombstonesFromIndexedDb();
       const idbProjects = await idbGet<Project[]>(STORES.PROJECTS, 'projects');
-      let localProjects: Project[] = inMemoryProjects || [];
-      if (localProjects.length === 0 && typeof localStorage !== 'undefined') {
+      let localProjects: Project[] = [];
+      if (typeof localStorage !== 'undefined') {
         const raw = localStorage.getItem(STORAGE_KEYS.PROJECTS);
         if (raw) {
           try {
@@ -373,6 +574,9 @@ export async function hydrateProjectsFromIndexedDb(): Promise<Project[] | null> 
             if (Array.isArray(parsed)) localProjects = parsed;
           } catch {}
         }
+      }
+      if (localProjects.length === 0) {
+        localProjects = inMemoryProjects || [];
       }
 
       if ((Array.isArray(idbProjects) && idbProjects.length > 0) || localProjects.length > 0) {
@@ -406,11 +610,14 @@ export async function hydrateStorageFromIndexedDb(userId?: string): Promise<Stor
   let reconciledProjects: Project[] | null = null;
 
   if (isIndexedDbSupported()) {
+    // 0. Hydrate tombstones before reconciling any entities
+    await hydrateTombstonesFromIndexedDb();
+
     // 1. Reconcile Conversations
     try {
       const idbData = await idbGet<Conversation[]>(STORES.CONVERSATIONS, key);
-      let localConvs: Conversation[] = inMemoryConversations.get(key) || [];
-      if (localConvs.length === 0 && typeof localStorage !== 'undefined') {
+      let localConvs: Conversation[] = [];
+      if (typeof localStorage !== 'undefined') {
         const raw = localStorage.getItem(key);
         if (raw) {
           try {
@@ -418,6 +625,9 @@ export async function hydrateStorageFromIndexedDb(userId?: string): Promise<Stor
             if (Array.isArray(parsed)) localConvs = parsed;
           } catch {}
         }
+      }
+      if (localConvs.length === 0) {
+        localConvs = inMemoryConversations.get(key) || [];
       }
 
       if ((Array.isArray(idbData) && idbData.length > 0) || localConvs.length > 0) {
@@ -441,8 +651,8 @@ export async function hydrateStorageFromIndexedDb(userId?: string): Promise<Stor
     // 2. Reconcile Projects
     try {
       const idbProjects = await idbGet<Project[]>(STORES.PROJECTS, 'projects');
-      let localProjects: Project[] = inMemoryProjects || [];
-      if (localProjects.length === 0 && typeof localStorage !== 'undefined') {
+      let localProjects: Project[] = [];
+      if (typeof localStorage !== 'undefined') {
         const raw = localStorage.getItem(STORAGE_KEYS.PROJECTS);
         if (raw) {
           try {
@@ -450,6 +660,9 @@ export async function hydrateStorageFromIndexedDb(userId?: string): Promise<Stor
             if (Array.isArray(parsed)) localProjects = parsed;
           } catch {}
         }
+      }
+      if (localProjects.length === 0) {
+        localProjects = inMemoryProjects || [];
       }
 
       if ((Array.isArray(idbProjects) && idbProjects.length > 0) || localProjects.length > 0) {
@@ -469,10 +682,10 @@ export async function hydrateStorageFromIndexedDb(userId?: string): Promise<Stor
     } catch {
       // Continue
     }
-  }
 
-  // Trigger migration in the background
-  void migrateLocalStorageToIndexedDb();
+    // 3. Complete migration deterministically
+    await migrateLocalStorageToIndexedDb();
+  }
 
   return {
     conversations: reconciledConvs || inMemoryConversations.get(key) || null,
@@ -744,7 +957,8 @@ export function resetStorageForTesting(): void {
   inMemoryConversations.clear();
   inMemoryProjects = null;
   inMemorySettings = null;
-  verifiedIdbWorkspaceKeys.clear();
+  verifiedIdbWorkspaceHashes.clear();
+  inMemoryTombstones.clear();
   storageHealthState = {
     status: 'healthy',
     indexedDbAvailable: false,

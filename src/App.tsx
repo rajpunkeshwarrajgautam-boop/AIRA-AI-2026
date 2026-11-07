@@ -5,7 +5,7 @@ import {
   loadConversations, saveConversations, saveActiveChatId,
   getSessionActiveChatId, setSessionActiveChatId,
   loadProjects, saveProjects, loadSettings, saveSettings, INITIAL_CONVERSATION,
-  hydrateStorageFromIndexedDb
+  hydrateStorageFromIndexedDb, deleteConversationRecord
 } from './utils/storage';
 import { streamAIResponse } from './utils/aiEngine';
 import { appendAgentTimelineEvent } from './utils/agentTimeline';
@@ -560,6 +560,7 @@ useEffect(() => {
 
   const handleDeleteChat = (id: string) => {
     if (!conversations.some(conversation => conversation.id === id)) return;
+    deleteConversationRecord(id, currentUserId || undefined);
     setConversations(prev => {
       const filtered = prev.filter(c => c.id !== id);
       const next = filtered.length ? filtered : [{ ...INITIAL_CONVERSATION, id: 'chat-' + Date.now(), createdAt: Date.now(), updatedAt: Date.now() }];
