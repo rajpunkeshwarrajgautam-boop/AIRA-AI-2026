@@ -147,28 +147,34 @@ export class AutonomousAgentEngine extends EventEmitter {
     this.activeExecutions.set(taskId, abortController);
     this.executionFences.set(taskId, { signal: abortController.signal, token: task.fencingToken });
 
-    // STEP 1: PLANNING
-    await this.transitionDuringExecution(taskId, abortController.signal, 'PLANNING', 'Decomposing natural language objective into structured plan');
-    task = await this.repository.getTask(taskId);
-    if (!task) throw new Error(`Task "${taskId}" not found after planning transition.`);
+    try {
+      // STEP 1: PLANNING
+      await this.transitionDuringExecution(taskId, abortController.signal, 'PLANNING', 'Decomposing natural language objective into structured plan');
+      task = await this.repository.getTask(taskId);
+      if (!task) throw new Error(`Task "${taskId}" not found after planning transition.`);
 
-    if (!task.plan || task.plan.steps.length === 0) {
-      task.plan = await this.decomposeObjective(task);
-      await this.updateDuringExecution(task, abortController.signal);
+      if (!task.plan || task.plan.steps.length === 0) {
+        task.plan = await this.decomposeObjective(task);
+        await this.updateDuringExecution(task, abortController.signal);
+      }
+
+      this.emit('task.plan_ready', { taskId, plan: task.plan });
+
+      // STEP 2: READY
+      await this.transitionDuringExecution(taskId, abortController.signal, 'READY', 'Plan compiled; ready for execution');
+
+      // STEP 3: RUNNING
+      await this.transitionDuringExecution(taskId, abortController.signal, 'RUNNING', 'Beginning autonomous execution of plan steps');
+
+      // Asynchronously execute steps in sequence; executeLoop owns cleanup after launch.
+      void this.executeLoop(taskId, abortController.signal);
+      return (await this.repository.getTask(taskId))!;
+    } catch (error) {
+      abortController.abort();
+      if (this.activeExecutions.get(taskId) === abortController) this.activeExecutions.delete(taskId);
+      if (this.executionFences.get(taskId)?.signal === abortController.signal) this.executionFences.delete(taskId);
+      throw error;
     }
-
-    this.emit('task.plan_ready', { taskId, plan: task.plan });
-
-    // STEP 2: READY
-    await this.transitionDuringExecution(taskId, abortController.signal, 'READY', 'Plan compiled; ready for execution');
-
-    // STEP 3: RUNNING
-    await this.transitionDuringExecution(taskId, abortController.signal, 'RUNNING', 'Beginning autonomous execution of plan steps');
-
-    // Asynchronously execute steps in sequence
-    void this.executeLoop(taskId, abortController.signal);
-
-    return (await this.repository.getTask(taskId))!;
   }
 
   public async executeAutonomousTask(taskId: string, signal?: AbortSignal, claimedFencingToken?: number): Promise<AutonomousAgentTask> {

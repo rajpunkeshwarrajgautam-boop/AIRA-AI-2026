@@ -35,6 +35,19 @@ test('in-memory task update rejects a snapshot from an earlier worker lease', as
   assert.equal((await repository.getTask(original.taskId))?.deliverableSummary, undefined);
 });
 
+test('failed planning transition releases the execution fence and active controller', async () => {
+  const repository = new InMemoryAutonomousTaskRepository();
+  const task = await repository.createTask(makeTask('planning_transition_failure'));
+  repository.updateState = async () => {
+    throw new Error('simulated planning write failure');
+  };
+  const engine = new AutonomousAgentEngine({ repository });
+
+  await assert.rejects(() => engine.startTask(task.taskId), /simulated planning write failure/);
+  assert.equal((engine as any).activeExecutions.has(task.taskId), false);
+  assert.equal((engine as any).executionFences.has(task.taskId), false);
+});
+
 test('PostgreSQL update does not overwrite newer lease after concurrent claim', async () => {
   const task = makeTask('postgres_stale');
   task.fencingToken = 1;
