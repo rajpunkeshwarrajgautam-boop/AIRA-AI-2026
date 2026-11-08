@@ -133,7 +133,7 @@ export const DownloadAppsModal: React.FC<DownloadAppsModalProps> = ({
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-claude-border-light dark:border-white/10 bg-claude-surface2-light/60 dark:bg-white/[0.02]">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-aira-blue/20 to-indigo-500/20 border border-aira-blue/30 flex items-center justify-center text-aira-blue">
+            <div className="w-9 h-9 rounded-lg bg-claude-terracotta/15 border border-claude-terracotta/30 flex items-center justify-center text-claude-accentInk">
               <Download className="w-5 h-5" />
             </div>
             <div>

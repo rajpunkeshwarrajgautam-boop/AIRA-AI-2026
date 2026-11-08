@@ -437,7 +437,7 @@ export const UnifiedWorkspace: React.FC<UnifiedWorkspaceProps> = ({
 
   return (
     <aside
-      className={`aira-adaptive-real-studio ${isExpanded ? 'w-[75%]' : 'w-full lg:w-[46%]'} h-[100dvh] flex flex-col border-l border-claude-border-light dark:border-white/10 bg-claude-surface-light dark:bg-[#141413] text-claude-text-light dark:text-claude-text-dark z-40 shrink-0`}
+      className={`aira-adaptive-real-studio ${isExpanded ? 'w-[75%]' : 'w-full lg:w-[46%]'} h-[100dvh] flex flex-col border-l border-claude-border-light dark:border-claude-border-dark bg-claude-bg-light dark:bg-claude-bg-dark text-claude-text-light dark:text-claude-text-dark z-40 shrink-0`}
       data-testid="unified-workspace"
       aria-label="Unified Contextual Workspace"
     >
@@ -452,7 +452,7 @@ export const UnifiedWorkspace: React.FC<UnifiedWorkspaceProps> = ({
       </div>
 
       {/* Workspace Header */}
-      <div className="h-14 border-b border-claude-border-light dark:border-white/10 px-4 flex items-center justify-between shrink-0 bg-white/70 dark:bg-black/30 backdrop-blur">
+      <div className="h-16 border-b border-claude-border-light dark:border-claude-border-dark px-5 flex items-center justify-between shrink-0 bg-claude-bg-light dark:bg-claude-bg-dark">
         <div className="flex items-center gap-2 min-w-0">
           <div className="flex items-center gap-1.5 font-semibold text-sm truncate">
             {workspaceMode === 'agent' ? (
@@ -483,7 +483,7 @@ export const UnifiedWorkspace: React.FC<UnifiedWorkspaceProps> = ({
                 setIsSavedToProject(true);
                 setTimeout(() => setIsSavedToProject(false), 2000);
               }}
-              className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-aira-blue hover:bg-aira-blue/10 dark:text-blue-400"
+              className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-claude-accentInk hover:bg-claude-terracotta/10"
               data-testid="save-to-project-btn"
               title={activeProjectName ? `Save to ${activeProjectName}` : 'Save to Project'}
             >
@@ -549,7 +549,7 @@ export const UnifiedWorkspace: React.FC<UnifiedWorkspaceProps> = ({
       </div>
 
       {/* Contextual Tab Bar */}
-      <div className="flex items-center border-b border-claude-border-light dark:border-white/10 px-3 bg-claude-surface2-light/40 dark:bg-black/20 overflow-x-auto shrink-0">
+      <div className="flex items-center border-b border-claude-border-light dark:border-claude-border-dark px-3 bg-claude-surface-light dark:bg-claude-surface-dark overflow-x-auto shrink-0">
         {availableTabs.map(tab => {
           const Icon = tab.icon;
           const active = activeTab === tab.id;
@@ -559,14 +559,14 @@ export const UnifiedWorkspace: React.FC<UnifiedWorkspaceProps> = ({
               onClick={() => setActiveTab(tab.id)}
               className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap ${
                 active
-                  ? 'border-aira-blue text-aira-blue dark:text-white font-semibold'
+                  ? 'border-claude-terracotta text-claude-accentInk font-semibold'
                   : 'border-transparent text-claude-muted-light dark:text-slate-400 hover:text-claude-text-light dark:hover:text-white'
               }`}
             >
               <Icon className="w-3.5 h-3.5" />
               <span>{tab.label}</span>
               {tab.badge && (
-                <span className="px-1.5 py-0.2 rounded text-[10px] font-mono bg-aira-blue/15 text-aira-blue dark:text-blue-300">
+                <span className="px-1.5 py-0.2 rounded text-[10px] font-mono bg-claude-terracotta/15 text-claude-accentInk">
                   {tab.badge}
                 </span>
               )}
@@ -734,7 +734,7 @@ export const UnifiedWorkspace: React.FC<UnifiedWorkspaceProps> = ({
 
         {/* TAB: CODE */}
         {activeTab === 'code' && artifact && (
-          <div className="w-full h-full flex flex-col min-h-0 bg-[#0d1117] text-slate-200 text-xs font-mono">
+          <div className="w-full h-full flex flex-col min-h-0 bg-[#181715] text-[#faf9f5] text-xs font-mono">
             <div className="h-8 px-4 flex items-center justify-between border-b border-white/10 bg-black/20 text-[11px] text-slate-400">
               <span>{artifact.title} · {artifact.language || 'text'}</span>
               <span>{currentContent.split('\n').length} lines</span>

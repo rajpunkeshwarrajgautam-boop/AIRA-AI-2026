@@ -68,24 +68,21 @@ const itemVariants: Variants = {
 
 const ThemeToggle = ({ theme, onChange }: { theme: 'light' | 'dark' | 'system', onChange: (theme: 'light' | 'dark' | 'system') => void }) => {
   const options = [
-    { id: 'light', icon: Sun, colorClass: 'from-[#eb6e4b] to-[#d97757]', shadowClass: 'shadow-[0_2px_8px_-2px_rgba(235,110,75,0.4)]' },
-    { id: 'system', icon: Laptop, colorClass: 'from-slate-500 to-slate-600', shadowClass: 'shadow-[0_2px_8px_-2px_rgba(100,116,139,0.4)]' },
-    { id: 'dark', icon: Moon, colorClass: 'from-indigo-500 to-purple-600', shadowClass: 'shadow-[0_2px_8px_-2px_rgba(99,102,241,0.4)]' },
+    { id: 'light', icon: Sun },
+    { id: 'system', icon: Laptop },
+    { id: 'dark', icon: Moon },
   ] as const;
 
   return (
-    <div className="flex items-center gap-0.5 bg-claude-surface-light dark:bg-black/30 p-1 rounded-[14px] border border-claude-border-light dark:border-claude-border-dark shadow-inner relative overflow-hidden">
-      {/* Subtle inner shadow for depth */}
-      <div className="absolute inset-0 shadow-[inset_0_1px_4px_rgba(0,0,0,0.05)] dark:shadow-[inset_0_1px_5px_rgba(0,0,0,0.3)] pointer-events-none rounded-[14px]"></div>
-      
-      {options.map(({ id, icon: Icon, colorClass, shadowClass }) => (
+    <div className="flex items-center gap-0.5 bg-claude-surface-light p-1 rounded-[10px] border border-claude-border-light dark:border-claude-border-dark relative overflow-hidden">
+      {options.map(({ id, icon: Icon }) => (
         <button
           key={id}
           type="button"
           aria-label={`Use ${id} theme`}
           aria-pressed={theme === id}
           onClick={() => onChange(id)}
-          className={`relative p-2 rounded-xl flex items-center justify-center transition-all duration-300 outline-none ${
+          className={`relative p-2 rounded-[8px] flex items-center justify-center transition-colors duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-claude-terracotta ${
             theme === id 
               ? 'text-white' 
               : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white'
@@ -95,7 +92,7 @@ const ThemeToggle = ({ theme, onChange }: { theme: 'light' | 'dark' | 'system', 
           {theme === id && (
             <motion.div
               layoutId="theme-active-pill"
-              className={`absolute inset-0 bg-gradient-to-br ${colorClass} rounded-[10px] ${shadowClass}`}
+              className="absolute inset-0 bg-[#a9583e] rounded-[8px]"
               transition={{ type: "spring", stiffness: 400, damping: 25 }}
             />
           )}
@@ -226,12 +223,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       variants={itemVariants}
       key={c.id}
       onClick={() => handleSelectChatMobile(c.id)}
-      className={`group flex items-center px-3 py-2.5 rounded-xl cursor-pointer transition-all duration-300 relative ${activeChatId === c.id ? 'text-claude-text-light dark:text-white' : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white'}`}
+      className={`group flex items-center px-3 py-2.5 rounded-lg cursor-pointer transition-colors duration-200 relative ${activeChatId === c.id ? 'text-claude-text-light dark:text-white' : 'text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark hover:text-claude-text-light dark:hover:text-white'}`}
     >
       {activeChatId === c.id && (
         <motion.div 
           layoutId="active-chat-indicator"
-          className="absolute inset-0 bg-gradient-to-r from-claude-surface-light via-claude-surface-light to-claude-surface2-light/60 dark:from-claude-surface-dark dark:via-claude-surface-dark dark:to-claude-surface2-dark/60 rounded-xl shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] border border-claude-border-light dark:border-claude-border-dark z-0"
+          className="absolute inset-0 bg-claude-surface2-light dark:bg-claude-surface2-dark rounded-lg border border-claude-border-light dark:border-claude-border-dark z-0"
           transition={{ type: "spring", stiffness: 400, damping: 30 }}
         />
       )}
@@ -290,13 +287,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
           animate={{ x: 0, opacity: 1 }}
           exit={{ x: -320, opacity: 0, pointerEvents: 'none' }}
           transition={{ type: "spring", stiffness: 320, damping: 32 }}
-          className="aira-sidebar-shell fixed inset-y-0 left-0 z-[70] xl:relative xl:z-30 w-[min(20rem,100vw)] xl:w-80 h-[100dvh] min-h-0 overflow-hidden flex flex-col bg-claude-surface2-light dark:bg-claude-surface2-dark border-r border-claude-border-light dark:border-claude-border-dark select-none flex-shrink-0 shadow-2xl xl:shadow-none"
+          className="aira-sidebar-shell fixed inset-y-0 left-0 z-[70] xl:relative xl:z-30 w-[min(19rem,100vw)] xl:w-[272px] h-[100dvh] min-h-0 overflow-hidden flex flex-col bg-claude-surface-light dark:bg-claude-surface-dark border-r border-claude-border-light dark:border-claude-border-dark select-none flex-shrink-0 shadow-2xl xl:shadow-none"
         >
-            <div className="shrink-0 p-4 pb-3 flex items-center justify-between">
+            <div className="shrink-0 p-5 pb-3 flex items-center justify-between">
               <div className="flex items-center space-x-2.5">
                 <AiraMark size="md" isAnimated={true} motionConcept="a" />
                 <div>
-                  <div className="font-serif font-medium text-[19px] tracking-tight text-claude-text-light dark:text-claude-text-dark leading-none">Aira</div>
+                  <div className="font-serif font-normal text-[24px] tracking-tight text-claude-text-light dark:text-claude-text-dark leading-none">Aira</div>
                 </div>
               </div>
               <button type="button" aria-label="Close sidebar navigation" onClick={onToggleOpen} className="p-1.5 rounded-lg text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark hover:text-claude-text-light dark:hover:text-claude-text-dark transition-colors" title="Close sidebar">
@@ -305,12 +302,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
 
             <div className="shrink-0 px-3.5 py-1.5">
-              <button onClick={handleNewChatMobile} className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-gradient-to-b from-white/95 to-white/80 dark:from-[#2A2926] dark:to-[#22211F] border border-claude-border-light dark:border-claude-border-dark text-claude-text-light dark:text-claude-text-dark text-[13px] font-medium transition-all shadow-[0_1px_3px_rgba(45,40,30,0.04)] hover:border-claude-terracotta/40 hover:shadow-[0_4px_14px_-2px_rgba(217,119,87,0.12)] active:scale-[0.98] group">
+              <button onClick={handleNewChatMobile} className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg bg-[#a9583e] hover:bg-[#94452e] text-white text-[13px] font-medium transition-colors active:scale-[0.99] group">
                 <div className="flex items-center space-x-2.5">
-                  <Plus className="w-4 h-4 text-claude-accentInk" />
+                  <Plus className="w-4 h-4 text-white" />
                   <span>Start new chat</span>
                 </div>
-                <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-claude-muted-light dark:text-claude-muted-dark">Ctrl N</kbd>
+                <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/15 border border-white/25 text-white/90">Ctrl N</kbd>
               </button>
             </div>
 
@@ -322,7 +319,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               className={`w-full flex items-center justify-between px-3.5 py-2 rounded-xl text-[13px] font-semibold transition-all duration-300 ${activeProjectId ? 'bg-claude-surface-light dark:bg-claude-surface-dark text-claude-text-light dark:text-white shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] border border-claude-border-light dark:border-claude-border-dark' : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark border border-transparent'}`}
             >
               <span className="flex items-center gap-2.5">
-                <FolderGit2 className="w-4 h-4 text-aira-blue dark:text-blue-400" />
+                <FolderGit2 className="w-4 h-4 text-claude-accentInk" />
                 <span>Projects</span>
               </span>
               <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark">
@@ -405,7 +402,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
           </div>
 
-          <div data-testid="sidebar-footer" className="aira-sidebar-footer relative z-20 shrink-0 p-3 bg-claude-surface2-light dark:bg-claude-surface2-dark/50 backdrop-blur-md border-t border-claude-border-light dark:border-claude-border-dark">
+          <div data-testid="sidebar-footer" className="aira-sidebar-footer relative z-20 shrink-0 p-3 bg-claude-surface-light dark:bg-claude-surface-dark border-t border-claude-border-light dark:border-claude-border-dark">
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-1.5">
                 <div className="relative flex-1 min-w-0">
@@ -418,7 +415,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   onClick={() => setIsAccountMenuOpen(prev => !prev)}
                   className="flex w-full min-w-0 items-center space-x-2.5 p-2 rounded-xl hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark border border-claude-border-light/60 dark:border-claude-border-dark/60 transition-all text-left active:scale-[0.98]"
                 >
-                  <div className="w-7 h-7 rounded-[8px] bg-gradient-to-br from-claude-terracotta to-[#eb6e4b] text-white font-semibold text-xs flex items-center justify-center flex-shrink-0 shadow-sm overflow-hidden">
+                  <div className="w-7 h-7 rounded-[8px] bg-[#a9583e] text-white font-semibold text-xs flex items-center justify-center flex-shrink-0 overflow-hidden">
                     {neonUser?.image ? (
                       <img src={neonUser.image} alt={neonUser.name || 'User'} className="w-full h-full object-cover" />
                     ) : neonUser ? (

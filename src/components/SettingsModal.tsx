@@ -35,9 +35,9 @@ export const PRESET_THEMES: PresetTheme[] = [
   {
     id: 'linear-precision',
     name: 'Claude Editorial',
-    badge: 'Linear Precision',
-    feature: 'Ivory parchment & terracotta kinetic starburst',
-    swatches: ['#FAF9F5', '#1F1E1D', '#D97757'],
+    badge: 'Default',
+    feature: 'Warm cream canvas, coral accents & editorial serif typography',
+    swatches: ['#FAF9F5', '#181715', '#CC785C'],
   },
   {
     id: 'warm-parchment',

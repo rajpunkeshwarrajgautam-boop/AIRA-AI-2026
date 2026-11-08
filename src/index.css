@@ -4,39 +4,46 @@
 
 @layer base {
   :root {
-    --bg-main: #F8F9FC; /* Porcelain */
-    --bg-surface: #FFFFFF;
-    --bg-surface-secondary: #E9EDF4; /* Silver */
-    --border-color: #DDE3ED;
-    --border-subtle: rgba(17, 28, 53, 0.08);
-    --text-primary: #111C35; /* Midnight Navy */
-    --text-muted: #5A6A85;
+    /* DESIGN.md: Claude-inspired editorial palette, adapted to AIRA's product UI. */
+    --bg-main: #FAF9F5;
+    --bg-surface: #F5F0E8;
+    --bg-surface-secondary: #EFE9DE;
+    --border-color: #E6DFD8;
+    --border-subtle: #EBE6DF;
+    --text-primary: #141413;
+    --text-body: #3D3D3A;
+    --text-muted: #6C6A64;
     --accent-on: #FFFFFF;
-    --accent-ink: #3056CB; /* Royal Blue */
-    --accent-primary: #3056CB;
-    --accent-primary-hover: #2544A5;
-    --accent-gold: #B79C6A; /* Soft Gold */
-    --accent-terracotta: #3056CB;
-    --accent-terracotta-hover: #2544A5;
+    --accent-ink: #A9583E;
+    --accent-primary: #CC785C;
+    --accent-primary-hover: #A9583E;
+    --accent-gold: #E8A55A;
+    --accent-terracotta: #CC785C;
+    --accent-terracotta-hover: #A9583E;
+    --surface-code: #181715;
+    --font-display: 'Copernicus', 'Tiempos Headline', 'Cormorant Garamond', 'Newsreader', Georgia, serif;
+    --font-body: 'StyreneB', 'Inter', system-ui, sans-serif;
     --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
     --ease-vanguard: cubic-bezier(0.32, 0.72, 0, 1);
   }
 
   .dark {
-    --bg-main: #0B1120; /* Deepest Midnight */
-    --bg-surface: #111C35; /* Midnight Navy */
-    --bg-surface-secondary: #162444;
-    --border-color: #23355C;
-    --border-subtle: rgba(233, 237, 244, 0.08);
-    --text-primary: #F8F9FC; /* Porcelain */
-    --text-muted: #9BAECB;
+    --bg-main: #181715;
+    --bg-surface: #252320;
+    --bg-surface-secondary: #1F1E1B;
+    --border-color: #403B35;
+    --border-subtle: #332F2B;
+    --text-primary: #FAF9F5;
+    --text-body: #DED9D1;
+    --text-muted: #A09D96;
     --accent-on: #FFFFFF;
-    --accent-ink: #5B82F6;
-    --accent-primary: #3056CB;
-    --accent-primary-hover: #4871F7;
-    --accent-gold: #B79C6A;
-    --accent-terracotta: #3056CB;
-    --accent-terracotta-hover: #4871F7;
+    --accent-ink: #E6A48D;
+    --accent-primary: #CC785C;
+    --accent-primary-hover: #A9583E;
+    --accent-gold: #E8A55A;
+    --accent-terracotta: #CC785C;
+    --accent-terracotta-hover: #A9583E;
+    --surface-code: #11100F;
   }
 
   /* Aira is a viewport-locked workspace: only the conversation/sidebar scroll.
@@ -52,6 +59,7 @@
   body {
     background-color: var(--bg-main);
     color: var(--text-primary);
+    font-family: var(--font-body);
     overflow-x: hidden;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -90,10 +98,10 @@
 
 /* Claude / Aira response typography */
 .aira-prose {
-  font-size: 1.05rem;
-  line-height: 1.8;
-  letter-spacing: -0.01em;
-  color: var(--text-primary);
+  font-size: 1rem;
+  line-height: 1.65;
+  letter-spacing: 0;
+  color: var(--text-body);
 }
 
 .aira-prose p {
@@ -105,8 +113,8 @@
 }
 
 .aira-prose h1, .aira-prose h2, .aira-prose h3, .aira-prose h4 {
-  font-family: 'Newsreader', Georgia, 'Times New Roman', serif;
-  font-weight: 500;
+  font-family: var(--font-display);
+  font-weight: 400;
   letter-spacing: -0.02em;
   color: var(--text-primary);
   margin-top: 1.8rem;
@@ -138,7 +146,7 @@
   border-left: 3px solid var(--accent-terracotta);
   padding-left: 1.25rem;
   font-style: italic;
-  font-family: 'Newsreader', Georgia, serif;
+  font-family: var(--font-display);
   margin: 1.35rem 0;
   color: var(--text-muted);
 }
@@ -157,8 +165,7 @@
   border-radius: 12px;
   overflow: hidden;
   border: 1px solid var(--border-color);
-  background-color: #1F1E1D !important;
-  box-shadow: 0 4px 16px -2px rgba(45, 40, 30, 0.08);
+  background-color: var(--surface-code) !important;
 }
 
 .aira-prose pre code {
@@ -227,22 +234,12 @@
 /* Ambient Radial Mesh Canvas */
 .bg-mesh-canvas {
   background-color: var(--bg-main);
-  background-image: 
-    radial-gradient(at 15% 15%, rgba(217, 119, 87, 0.08) 0px, transparent 48%),
-    radial-gradient(at 85% 85%, rgba(193, 83, 53, 0.06) 0px, transparent 52%),
-    radial-gradient(at 50% 25%, rgba(237, 233, 254, 0.45) 0px, transparent 65%),
-    radial-gradient(at 75% 15%, rgba(245, 227, 220, 0.4) 0px, transparent 40%);
-  background-attachment: fixed;
+  background-image: none;
 }
 
 .dark .bg-mesh-canvas {
   background-color: var(--bg-main);
-  background-image: 
-    radial-gradient(at 15% 15%, rgba(217, 119, 87, 0.12) 0px, transparent 55%),
-    radial-gradient(at 85% 85%, rgba(124, 58, 237, 0.08) 0px, transparent 60%),
-    radial-gradient(at 50% 25%, rgba(39, 38, 36, 0.9) 0px, transparent 75%),
-    radial-gradient(at 75% 15%, rgba(193, 83, 53, 0.07) 0px, transparent 45%);
-  background-attachment: fixed;
+  background-image: none;
 }
 
 /* Ambient Aura Glow for Aira Cognition Emblem */
@@ -274,34 +271,30 @@
 
 /* Luxury Multi-Stop Terracotta Gradient Button */
 .gradient-terracotta-btn {
-  background: linear-gradient(135deg, var(--accent-terracotta-hover) 0%, var(--accent-terracotta) 52%, var(--accent-terracotta-hover) 100%);
-  box-shadow: 0 2px 10px -2px color-mix(in srgb, var(--accent-terracotta) 40%, transparent);
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  background: var(--accent-terracotta-hover);
+  box-shadow: none;
+  transition: background-color 0.2s ease;
 }
 
 .gradient-terracotta-btn:hover:not(:disabled) {
-  filter: brightness(1.1);
-  box-shadow: 0 4px 16px -2px color-mix(in srgb, var(--accent-terracotta) 55%, transparent);
-  transform: translateY(-0.5px);
+  background: color-mix(in srgb, var(--accent-terracotta-hover) 85%, #141413);
 }
 
 /* Gradient Card Surfaces with Glass Sheen */
 .gradient-card-surface {
-  background: linear-gradient(180deg, var(--bg-surface) 0%, var(--bg-surface-secondary) 100%);
-  border: 1px solid var(--border-color);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 4px 12px -2px rgba(0, 0, 0, 0.03);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  box-shadow: none;
 }
 
 .gradient-card-surface:hover {
-  border-color: color-mix(in srgb, var(--accent-terracotta) 60%, transparent);
-  box-shadow: 0 4px 20px -3px color-mix(in srgb, var(--accent-terracotta) 20%, transparent), 0 2px 6px rgba(0, 0, 0, 0.04);
+  border-color: var(--accent-terracotta);
+  background: var(--bg-surface-secondary);
 }
 
 /* Frosted Glass Header Gradient */
 .gradient-fade-header {
-  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-main) 94%, transparent) 0%, color-mix(in srgb, var(--bg-main) 78%, transparent) 100%);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  background: var(--bg-main);
 }
 
 /* Bottom Input Multi-Stop Mask */
@@ -1012,4 +1005,50 @@
   transition: none !important;
   transform: none !important;
   opacity: 1 !important;
+}
+
+/* Product-shell translation of DESIGN.md: quiet, focused and keyboard-friendly. */
+.aira-editorial-app .aira-editorial-header {
+  border-bottom-color: var(--border-subtle);
+}
+
+.aira-editorial-app .aira-sidebar-shell {
+  background-color: var(--bg-surface);
+  border-right-color: var(--border-color);
+}
+
+.aira-editorial-app .aira-sidebar-footer {
+  background-color: var(--bg-surface);
+}
+
+.aira-editorial-app .aira-composer-card {
+  background-color: var(--bg-surface);
+}
+
+.aira-editorial-app .aira-editorial-greeting .aura-ambient-glow {
+  opacity: 0.4;
+  filter: blur(20px);
+}
+
+.aira-editorial-app :is(button, input, textarea, select, summary, [role="button"]):focus-visible {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 3px;
+}
+
+.aira-editorial-app ::selection {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent-terracotta) 24%, transparent);
+}
+
+@media (max-height: 700px) and (max-width: 639px) {
+  .aira-editorial-greeting {
+    justify-content: flex-start;
+  }
+}
+
+.force-reduced-motion .aira-editorial-app *,
+.force-reduced-motion .aira-editorial-app *::before,
+.force-reduced-motion .aira-editorial-app *::after {
+  animation-duration: 0.01ms !important;
+  transition-duration: 0.01ms !important;
 }

@@ -186,18 +186,18 @@ export const VisionStudioModal: React.FC<VisionStudioModalProps> = ({
         initial={{ opacity: 0, scale: 0.96 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.96 }}
-        className="relative w-full max-w-4xl rounded-3xl bg-[#161618] border border-white/10 text-white shadow-2xl overflow-hidden my-6 flex flex-col max-h-[90vh]"
+        className="relative w-full max-w-4xl rounded-2xl bg-[#181715] border border-white/10 text-white shadow-2xl overflow-hidden my-6 flex flex-col max-h-[90vh]"
       >
         {/* Header */}
         <div className="p-5 md:p-6 border-b border-white/10 flex items-center justify-between shrink-0 bg-stone-900/40">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-md">
+            <div className="w-10 h-10 rounded-lg bg-[#a9583e] flex items-center justify-center">
               <Sparkles className="w-5 h-5 text-white" />
             </div>
             <div>
               <h2 className="text-xl font-medium tracking-tight text-white flex items-center gap-2">
                 AIRA Vision Studio
-                <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full bg-[#cc785c]/20 text-[#e6a48d] border border-[#cc785c]/30">
                   Multimodal
                 </span>
               </h2>
@@ -439,7 +439,7 @@ export const VisionStudioModal: React.FC<VisionStudioModalProps> = ({
                 <button
                   onClick={handleUnderstand}
                   disabled={isLoading || !understandImage}
-                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white text-xs font-semibold shadow-lg hover:brightness-110 active:scale-95 transition-all disabled:opacity-50 flex items-center gap-2"
+                  className="px-5 py-2.5 rounded-lg bg-[#a9583e] hover:bg-[#94452e] text-white text-xs font-medium transition-colors disabled:opacity-50 flex items-center gap-2"
                 >
                   {isLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Eye className="w-3.5 h-3.5" />}
                   Analyze Image

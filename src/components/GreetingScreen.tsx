@@ -233,25 +233,25 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
           id: 'agent-build',
           title: 'Build CRM web app with tests',
           prompt: 'Build a production-ready CRM website with React frontend, TypeScript API service, input validation, and comprehensive automated tests.',
-          icon: <Code2 className="w-4 h-4 text-aira-blue dark:text-blue-400" strokeWidth={1.5} />,
+          icon: <Code2 className="w-4 h-4 text-claude-accentInk" strokeWidth={1.5} />,
         },
         {
           id: 'agent-research',
           title: 'Deep competitive research mission',
           prompt: 'Research the current multi-model AI workspace landscape, cross-examine technical benchmarks, and synthesize an executive brief with citations.',
-          icon: <Compass className="w-4 h-4 text-aira-blue dark:text-blue-400" strokeWidth={1.5} />,
+          icon: <Compass className="w-4 h-4 text-claude-accentInk" strokeWidth={1.5} />,
         },
         {
           id: 'agent-automation',
           title: 'Design scheduled automation',
           prompt: 'Create an automation for every Monday at 9 AM that queries database metrics, summarizes active alerts, and compiles an operational report.',
-          icon: <Zap className="w-4 h-4 text-aira-blue dark:text-blue-400" strokeWidth={1.5} />,
+          icon: <Zap className="w-4 h-4 text-claude-accentInk" strokeWidth={1.5} />,
         },
         {
           id: 'agent-audit',
           title: 'System architecture & risk audit',
           prompt: 'Audit this system architecture for race conditions, credential isolation boundaries, and failover recovery strategies.',
-          icon: <Brain className="w-4 h-4 text-aira-blue dark:text-blue-400" strokeWidth={1.5} />,
+          icon: <Brain className="w-4 h-4 text-claude-accentInk" strokeWidth={1.5} />,
         },
       ];
     }
@@ -262,25 +262,25 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
         id: 'default-research',
         title: 'Research a complex topic',
         prompt: 'Research the current landscape for multi-model AI workspaces and compile a structured, sourced competitive brief with key product gaps.',
-        icon: <Compass className="w-4 h-4 text-aira-blue dark:text-blue-400" strokeWidth={1.5} />,
+        icon: <Compass className="w-4 h-4 text-claude-accentInk" strokeWidth={1.5} />,
       },
       {
         id: 'default-vision',
         title: 'Generate conceptual visual',
         prompt: 'Generate an image of a futuristic, sustainable city with layered aerial transit, vertical forests, and clean neoclassical architecture at dusk.',
-        icon: <Zap className="w-4 h-4 text-aira-blue dark:text-blue-400" strokeWidth={1.5} />,
+        icon: <Zap className="w-4 h-4 text-claude-accentInk" strokeWidth={1.5} />,
       },
       {
         id: 'default-code',
         title: 'Build an interactive web artifact',
         prompt: 'Design and build a polished interactive dashboard artifact for an AI operations workspace with realtime telemetry and responsive charts.',
-        icon: <Code2 className="w-4 h-4 text-aira-blue dark:text-blue-400" strokeWidth={1.5} />,
+        icon: <Code2 className="w-4 h-4 text-claude-accentInk" strokeWidth={1.5} />,
       },
       {
         id: 'default-agent',
         title: 'Plan an autonomous workflow',
         prompt: 'Break this objective into an autonomous agent mission with clear steps, tools, checkpoints, and a verifiable deliverable.',
-        icon: <Bot className="w-4 h-4 text-aira-blue dark:text-blue-400" strokeWidth={1.5} />,
+        icon: <Bot className="w-4 h-4 text-claude-accentInk" strokeWidth={1.5} />,
       },
     ];
   }, [activeProject, recentHistory.domain, workspaceMode]);
@@ -307,6 +307,11 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
   };
 
   useGSAP(() => {
+    // Framer/CSS and the greeting entrance must respect the same motion settings.
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || document.documentElement.classList.contains('force-reduced-motion')) {
+      gsap.set('.claude-fade-up', { clearProps: 'all' });
+      return;
+    }
     const tl = gsap.timeline({ defaults: { ease: 'power2.out' } });
     tl.fromTo(
       '.claude-fade-up',
@@ -318,7 +323,7 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
   return (
     <div 
       ref={containerRef} 
-      className="flex-1 w-full min-w-0 max-w-2xl mx-auto px-3 sm:px-6 py-5 sm:py-10 md:py-16 flex flex-col items-center justify-center select-none text-center"
+      className="aira-editorial-greeting flex-1 w-full min-w-0 max-w-[760px] mx-auto px-4 sm:px-8 py-6 sm:py-10 md:py-14 flex flex-col items-center justify-center select-none text-center"
     >
       {/* Toast Notification */}
       {toastMessage && (
@@ -331,7 +336,7 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
       {/* Aira Neural Cognition Knot with Ambient Aura Glow */}
       <div 
         onClick={handleEmblemClick}
-        className="claude-fade-up relative cursor-pointer mb-5 flex items-center justify-center active:scale-95 transition-transform duration-200"
+        className="claude-fade-up relative cursor-pointer mb-7 flex items-center justify-center active:scale-95 transition-transform duration-200"
         title="Aira Intelligence"
       >
         <div className="aura-ambient-glow" />
@@ -342,7 +347,7 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
 
       {/* Literary Newsreader Serif Dynamic Greeting Headline */}
       <h1 
-        className="claude-fade-up font-serif font-normal text-[clamp(1.85rem,7vw,2.5rem)] sm:text-[3.25rem] text-claude-text-light dark:text-claude-text-dark tracking-[-0.02em] leading-[1.15] mb-2.5 max-w-3xl"
+        className="claude-fade-up font-serif font-normal text-[clamp(2.25rem,5vw,3.5rem)] text-claude-text-light dark:text-claude-text-dark tracking-[-0.035em] leading-[1.08] mb-4 max-w-3xl"
         style={{ textWrap: 'balance' }}
       >
         {dynamicGreetingTitle}
@@ -350,7 +355,7 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
 
       {/* Dynamic Situation Subtitle */}
       <p 
-        className="claude-fade-up text-sm sm:text-base text-claude-muted-light dark:text-claude-muted-dark font-sans leading-relaxed mb-6 max-w-lg"
+        className="claude-fade-up text-sm sm:text-base text-claude-muted-light dark:text-claude-muted-dark font-sans leading-[1.55] mb-8 max-w-xl"
         style={{ textWrap: 'balance' }}
       >
         {dynamicSubtitle}
@@ -361,7 +366,7 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
         <div className="claude-fade-up mb-7 w-full max-w-md">
           <button
             onClick={() => onSelectChat(recentHistory.recentChat!.id)}
-            className="w-full flex items-center justify-between p-2.5 px-3.5 rounded-xl gradient-card-surface hover:border-claude-terracotta/40 text-left transition-all duration-300 group active:scale-[0.99]"
+            className="w-full flex items-center justify-between p-3 px-4 rounded-xl gradient-card-surface text-left transition-colors duration-200 group active:scale-[0.99]"
           >
             <div className="flex items-center gap-2.5 min-w-0">
               <span className="p-1 rounded-lg bg-gradient-to-br from-claude-terracotta/20 to-claude-terracotta/5 text-claude-terracotta">
@@ -377,27 +382,27 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
         </div>
       )}
 
-      {/* Context-aware Starter Suggestion Grid (Claude 2x2 warm cards with gradient surfaces) */}
-      <div className="claude-fade-up w-full min-w-0 grid grid-cols-1 sm:grid-cols-2 gap-3 text-left grid-flow-dense">
+      {/* Context-aware starter cards; understated editorial surfaces from DESIGN.md. */}
+      <div className="claude-fade-up w-full min-w-0 grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-left grid-flow-dense">
         {dynamicStarters.map((starter, idx) => (
           <button
             key={starter.id}
             onClick={() => onSelectStarter(starter.prompt)}
-            className={`group p-4 rounded-xl gradient-card-surface specular-hover transition-all duration-300 cursor-pointer flex flex-col justify-between active:scale-[0.98] ${idx === 0 ? 'border-claude-terracotta/30 shadow-[0_2px_12px_rgba(217,119,87,0.06)]' : ''}`}
+            className={`group p-5 sm:p-6 min-h-[148px] rounded-xl gradient-card-surface transition-colors duration-200 cursor-pointer flex flex-col justify-between active:scale-[0.99] ${idx === 0 ? 'border-claude-terracotta/30' : ''}`}
           >
             <div className="flex items-center justify-between mb-2">
-              <span className="p-1.5 rounded-lg bg-claude-surface2-light/80 dark:bg-claude-surface2-dark/80 text-claude-terracotta group-hover:bg-claude-terracotta/15 transition-colors">
+              <span className="p-1.5 rounded-lg bg-claude-surface2-light/80 dark:bg-claude-surface2-dark/80 text-claude-accentInk group-hover:bg-claude-terracotta/15 transition-colors">
                 {starter.icon}
               </span>
               <ArrowUpRight className="w-3.5 h-3.5 text-claude-muted-light/40 dark:text-claude-muted-dark/40 group-hover:text-claude-terracotta group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-all" strokeWidth={1.5} />
             </div>
 
             <div>
-              <div className="text-sm font-medium text-claude-text-light dark:text-claude-text-dark mb-1 group-hover:text-claude-terracotta transition-colors font-sans">
+              <div className="text-sm sm:text-[15px] font-medium text-claude-text-light dark:text-claude-text-dark mb-1.5 group-hover:text-claude-accentInk transition-colors font-sans">
                 {starter.title}
               </div>
               <div 
-                className="text-xs text-claude-muted-light dark:text-claude-muted-dark line-clamp-2 leading-relaxed font-sans"
+                className="text-[13px] text-claude-muted-light dark:text-claude-muted-dark line-clamp-2 leading-[1.5] font-sans"
                 style={{ textWrap: 'pretty' }}
               >
                 {starter.prompt}

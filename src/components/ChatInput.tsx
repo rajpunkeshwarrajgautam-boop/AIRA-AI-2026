@@ -152,12 +152,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   };
 
   return (
-    <div className="mx-auto w-full min-w-0 max-w-3xl px-3 sm:px-4 pb-3 sm:pb-6" ref={controlsRef}>
+    <div className="aira-composer mx-auto w-full min-w-0 max-w-3xl px-3 sm:px-5 pb-3 sm:pb-5" ref={controlsRef}>
       <motion.div
         layout
-        className="overflow-visible rounded-[20px] border border-claude-border-light bg-claude-surface-light shadow-[0_8px_30px_-12px_rgba(45,40,30,0.16)] transition-colors focus-within:border-claude-terracotta/35 dark:border-claude-border-dark dark:bg-claude-surface-dark dark:shadow-[0_12px_36px_-14px_rgba(0,0,0,0.65)]"
+        className="aira-composer-card overflow-visible rounded-[16px] border border-claude-border-light bg-claude-surface-light shadow-[0_2px_10px_-6px_rgba(45,40,30,0.15)] transition-colors focus-within:border-claude-terracotta/50 dark:border-claude-border-dark dark:bg-claude-surface-dark dark:shadow-none"
       >
-        <div className="flex items-center justify-between gap-3 border-b border-claude-border-light/70 px-3 py-1.5 sm:px-3.5 sm:py-2 dark:border-claude-border-dark/70">
+        <div className="flex items-center justify-between gap-3 border-b border-claude-border-light/70 px-3 py-2 sm:px-4 dark:border-claude-border-dark/70">
           <div className="flex min-w-0 items-center gap-2">
             <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[8px] bg-claude-terracotta/10 text-claude-accentInk">
               <ModeIcon className="h-3.5 w-3.5" />
@@ -219,7 +219,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           rows={1}
-          className="max-h-[38vh] w-full resize-none bg-transparent px-3 pb-1 pt-2 sm:px-4 sm:pb-2 sm:pt-3.5 text-base leading-relaxed text-claude-text-light outline-none selection:bg-claude-terracotta/20 placeholder:text-claude-muted-light/55 dark:text-claude-text-dark dark:placeholder:text-claude-muted-dark/55"
+          className="max-h-[38vh] w-full resize-none bg-transparent px-3 pb-1 pt-3 sm:px-4 sm:pb-2 sm:pt-4 text-base leading-[1.55] text-claude-text-light outline-none selection:bg-claude-terracotta/20 placeholder:text-claude-muted-light/75 dark:text-claude-text-dark dark:placeholder:text-claude-muted-dark/75"
         />
 
         <div className="flex min-w-0 items-center justify-between gap-1.5 px-2.5 sm:px-3 pb-1.5 sm:pb-3 pt-1">
@@ -321,7 +321,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             disabled={!canSubmit}
             whileTap={canSubmit && !reducedMotion ? { scale: 0.9 } : undefined}
             title={isLoading ? 'Aira is responding' : 'Send message (Enter)'}
-            className={`flex h-10 w-10 sm:h-9 sm:w-9 shrink-0 items-center justify-center rounded-full transition-colors ${
+            className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-[9px] transition-colors ${
               canSubmit
                 ? 'gradient-terracotta-btn text-claude-onAccent shadow-sm'
                 : 'bg-claude-surface2-light text-claude-muted-light/40 dark:bg-claude-surface2-dark dark:text-claude-muted-dark/40'

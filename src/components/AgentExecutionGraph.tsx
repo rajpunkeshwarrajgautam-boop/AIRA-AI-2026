@@ -201,18 +201,18 @@ export const AgentExecutionGraphView: React.FC<AgentExecutionGraphProps> = ({
 
   return (
     <section 
-      className="flex flex-col h-full w-full bg-slate-50 dark:bg-[#0c0d12] text-slate-900 dark:text-slate-100 overflow-hidden"
+      className="flex flex-col h-full w-full bg-claude-bg-light dark:bg-claude-bg-dark text-claude-text-light dark:text-claude-text-dark overflow-hidden"
       aria-label="Multi-Agent Execution Graph"
       data-testid="agent-execution-graph"
     >
       {/* Graph Toolbar */}
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-200 dark:border-white/10 bg-white/70 dark:bg-[#12131a]/70 backdrop-blur-md">
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-claude-border-light dark:border-claude-border-dark bg-claude-surface-light dark:bg-claude-surface-dark">
         <div className="flex items-center gap-2">
-          <Workflow size={18} className="text-blue-500" />
+          <Workflow size={18} className="text-claude-accentInk" />
           <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300">
             {graph.title}
           </h3>
-          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-blue-500/10 text-blue-600 dark:text-blue-400">
+          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-claude-terracotta/10 text-claude-accentInk">
             {graph.completedTasks}/{graph.totalTasks} Tasks
           </span>
         </div>
@@ -310,14 +310,14 @@ export const AgentExecutionGraphView: React.FC<AgentExecutionGraphProps> = ({
                   }}
                   className={`rounded-xl border p-3 cursor-pointer transition-all ${
                     isSelected 
-                      ? 'border-blue-500 ring-2 ring-blue-500/20 shadow-md bg-white dark:bg-[#1a1c26]' 
+                      ? 'border-claude-terracotta ring-2 ring-claude-terracotta/20 shadow-md bg-claude-surface-light dark:bg-claude-surface-dark'
                       : 'border-slate-200 dark:border-white/10 hover:border-slate-300 dark:hover:border-white/20 bg-white/80 dark:bg-[#14151f]/80'
                   } ${isArtifactActive ? 'ring-2 ring-emerald-500/40' : ''}`}
                   data-testid={`graph-node-${node.id}`}
                 >
                   <div className="flex items-center justify-between mb-1.5">
                     <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-800 dark:text-slate-200">
-                      <RoleIcon size={14} className="text-blue-500 shrink-0" />
+                      <RoleIcon size={14} className="text-claude-accentInk shrink-0" />
                       <span className="truncate">{roleMeta.label}</span>
                     </div>
                     {renderStatusBadge(node)}
@@ -359,7 +359,7 @@ export const AgentExecutionGraphView: React.FC<AgentExecutionGraphProps> = ({
                             e.stopPropagation();
                             onSelectArtifact(node.associatedArtifactId!);
                           }}
-                          className="text-[10px] text-blue-500 hover:underline flex items-center gap-0.5"
+                          className="text-[10px] text-claude-accentInk hover:underline flex items-center gap-0.5"
                           data-testid={`node-view-artifact-${node.id}`}
                         >
                           View <ExternalLink size={10} />
@@ -431,14 +431,14 @@ export const AgentExecutionGraphView: React.FC<AgentExecutionGraphProps> = ({
                         onClick={() => setSelectedNodeId(node.id)}
                         className={`p-3 rounded-xl border transition-all ${
                           isSelected 
-                            ? 'border-blue-500 bg-white dark:bg-[#1a1c26] shadow-sm' 
+                            ? 'border-claude-terracotta bg-claude-surface-light dark:bg-claude-surface-dark shadow-sm'
                             : 'border-slate-200 dark:border-white/10 bg-white/70 dark:bg-[#14151f]/70'
                         } ${isArtifactActive ? 'ring-2 ring-emerald-500/30' : ''}`}
                         data-testid={`timeline-node-${node.id}`}
                       >
                         <div className="flex items-center justify-between mb-1.5">
                           <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-800 dark:text-slate-200">
-                            <RoleIcon size={14} className="text-blue-500 shrink-0" />
+                            <RoleIcon size={14} className="text-claude-accentInk shrink-0" />
                             <span>{roleMeta.label}</span>
                           </div>
                           {renderStatusBadge(node)}
@@ -473,7 +473,7 @@ export const AgentExecutionGraphView: React.FC<AgentExecutionGraphProps> = ({
                                   e.stopPropagation();
                                   onSelectArtifact(node.associatedArtifactId!);
                                 }}
-                                className="text-[10px] text-blue-500 hover:underline flex items-center gap-0.5"
+                                className="text-[10px] text-claude-accentInk hover:underline flex items-center gap-0.5"
                               >
                                 View <ExternalLink size={10} />
                               </button>
@@ -572,7 +572,7 @@ export const AgentExecutionGraphView: React.FC<AgentExecutionGraphProps> = ({
               <button
                 type="button"
                 onClick={() => onSelectArtifact(selectedNode.associatedArtifactId!)}
-                className="flex items-center gap-1 px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white font-medium text-[11px] transition-colors"
+                className="flex items-center gap-1 px-2.5 py-1 rounded bg-[#a9583e] hover:bg-[#94452e] text-white font-medium text-[11px] transition-colors"
                 data-testid="inspector-open-artifact-btn"
               >
                 <Layers size={12} /> Open Artifact in Studio

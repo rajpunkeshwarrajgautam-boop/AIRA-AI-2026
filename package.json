@@ -13,6 +13,7 @@
     "test:e2e": "npx tsx test/e2e-verification.ts",
     "test:mobile-sidebar": "npx tsx test/mobile-sidebar-responsive.ts",
     "test:mobile-settings": "npx tsx test/mobile-settings-responsive.ts",
+    "test:design": "node --import tsx --test test/claude-editorial-design.test.ts",
     "test:account-menu:visual": "npx tsx test/account-menu-visual-regression.test.ts",
     "test:recovery": "npx tsx test/recovery.ts",
     "test:identity": "npx tsx test/identity.ts",
