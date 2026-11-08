@@ -48,6 +48,30 @@ test('failed planning transition releases the execution fence and active control
   assert.equal((engine as any).executionFences.has(task.taskId), false);
 });
 
+test('crash recovery refuses a claim superseded before its first state transition', async () => {
+  class ReclaimedDuringRecoveryRepository extends InMemoryAutonomousTaskRepository {
+    override async claimTask(taskId: string, workerId: string, leaseDurationMs: number) {
+      if (workerId !== 'recovering-worker') return super.claimTask(taskId, workerId, leaseDurationMs);
+      const original = await super.claimTask(taskId, workerId, -1);
+      const newer = await super.claimTask(taskId, 'replacement-worker', 60_000);
+      assert.equal(newer.success, true);
+      return original;
+    }
+  }
+  const repository = new ReclaimedDuringRecoveryRepository();
+  const task = makeTask('recovery_claim_stolen');
+  task.state = 'RUNNING';
+  await repository.createTask(task);
+  const engine = new AutonomousAgentEngine({ repository });
+
+  await assert.rejects(() => engine.recoverTask(task.taskId, 'recovering-worker'), /STALE_FENCING_TOKEN/);
+  const current = await repository.getTask(task.taskId);
+  assert.equal(current?.leaseOwner, 'replacement-worker');
+  assert.equal(current?.state, 'RUNNING');
+  assert.equal((engine as any).activeExecutions.has(task.taskId), false);
+  assert.equal((engine as any).executionFences.has(task.taskId), false);
+});
+
 test('PostgreSQL update does not overwrite newer lease after concurrent claim', async () => {
   const task = makeTask('postgres_stale');
   task.fencingToken = 1;

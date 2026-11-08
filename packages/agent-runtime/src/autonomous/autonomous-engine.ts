@@ -651,12 +651,14 @@ export class AutonomousAgentEngine extends EventEmitter {
   }
 
   public async recoverTask(taskId: string, workerId = 'worker_recovery'): Promise<AutonomousAgentTask> {
-    const task = await this.repository.getTask(taskId);
+    let task = await this.repository.getTask(taskId);
     if (!task) throw new Error(`Task "${taskId}" not found.`);
 
     if (this.repository.claimTask) {
       const claim = await this.repository.claimTask(taskId, workerId, 60000);
       if (!claim.success) throw new Error(`Failed to claim task for recovery: ${claim.error}`);
+      if (!claim.task) throw new Error(`Recovery claim succeeded without task snapshot: ${taskId}`);
+      task = claim.task;
     }
 
     if (task.state === 'WAITING_FOR_APPROVAL') {
@@ -667,15 +669,20 @@ export class AutonomousAgentEngine extends EventEmitter {
       return task;
     }
 
-    await this.transitionState(taskId, 'RESUMING', 'Worker crash recovery initiated; resuming from persisted checkpoint');
-    await this.transitionState(taskId, 'RUNNING', 'Worker crash recovery active');
-
     const controller = new AbortController();
     this.activeExecutions.set(taskId, controller);
-    this.executionFences.set(taskId, { signal: controller.signal, token: (await this.repository.getTask(taskId))!.fencingToken });
-    void this.continueExecutionFromCurrentStep(taskId, controller.signal);
-
-    return (await this.repository.getTask(taskId))!;
+    this.executionFences.set(taskId, { signal: controller.signal, token: task.fencingToken });
+    try {
+      await this.transitionDuringExecution(taskId, controller.signal, 'RESUMING', 'Worker crash recovery initiated; resuming from persisted checkpoint');
+      await this.transitionDuringExecution(taskId, controller.signal, 'RUNNING', 'Worker crash recovery active');
+      void this.continueExecutionFromCurrentStep(taskId, controller.signal);
+      return (await this.repository.getTask(taskId))!;
+    } catch (error) {
+      controller.abort();
+      if (this.activeExecutions.get(taskId) === controller) this.activeExecutions.delete(taskId);
+      if (this.executionFences.get(taskId)?.signal === controller.signal) this.executionFences.delete(taskId);
+      throw error;
+    }
   }
 
   public async cancelTask(taskId: string, reason = 'Cancelled by user'): Promise<AutonomousAgentTask> {
