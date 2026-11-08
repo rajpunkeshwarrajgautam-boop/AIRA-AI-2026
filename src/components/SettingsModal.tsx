@@ -34,10 +34,10 @@ export interface PresetTheme {
 export const PRESET_THEMES: PresetTheme[] = [
   {
     id: 'linear-precision',
-    name: 'Claude Editorial',
-    badge: 'Linear Precision',
-    feature: 'Ivory parchment & terracotta kinetic starburst',
-    swatches: ['#FAF9F5', '#1F1E1D', '#D97757'],
+    name: 'Aira Atelier',
+    badge: 'Default',
+    feature: 'Warm cream canvas, coral accents & editorial serif typography',
+    swatches: ['#FAF9F5', '#181715', '#CC785C'],
   },
   {
     id: 'warm-parchment',
@@ -397,7 +397,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           }} 
                           className={`py-2.5 rounded-xl border text-[13px] font-bold capitalize transition-all ${
                             form.theme === theme 
-                              ? 'border-claude-terracotta bg-claude-terracotta text-claude-onAccent shadow-sm' 
+                              ? 'border-claude-terracotta bg-claude-terracotta-hover text-claude-onAccent shadow-sm'
                               : 'border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark hover:border-claude-terracotta/40'
                           }`}
                         >
@@ -870,7 +870,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   whileTap={{ scale: 0.98 }} 
                   onClick={save}
                   data-testid="settings-save"
-                  className="min-w-0 justify-center px-3 sm:px-5 py-2.5 rounded-xl bg-claude-terracotta text-claude-onAccent text-[13px] font-bold hover:bg-claude-terracotta-hover transition-colors flex items-center gap-1.5 shadow-sm"
+                  className="min-w-0 justify-center px-3 sm:px-5 py-2.5 rounded-xl bg-claude-terracotta-hover text-claude-onAccent text-[13px] font-bold hover:brightness-90 transition-colors flex items-center gap-1.5 shadow-sm"
                 >
                   {saved && <Check className="w-4 h-4" />}
                   {saved ? 'Preferences Saved' : 'Save Changes'}

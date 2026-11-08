@@ -71,7 +71,7 @@ export const ReleaseNotesModal: React.FC<ReleaseNotesModalProps> = ({
       summary: 'Introduction of the Claude-inspired Artifact Studio for live code and graphic execution, along with 8 architectural aesthetic presets.',
       highlights: [
         'Artifact Studio: live multi-runtime streaming sandbox for React, HTML5, SVG, Markdown, and Mermaid diagrams.',
-        'Eight bespoke aesthetic presets: Claude Editorial, Warm Parchment, Liquid Glass, Industrial Brutalist, Nordic Earth, Solaris Gold, Tokyo Cyber, and Vanguard Monolith.',
+        'Eight bespoke aesthetic presets: Aira Atelier, Warm Parchment, Liquid Glass, Industrial Brutalist, Nordic Earth, Solaris Gold, Tokyo Cyber, and Vanguard Monolith.',
         'Persistent Memory Vault with automated privacy scrubbing and semantic tagging.'
       ],
       features: [
@@ -131,7 +131,7 @@ export const ReleaseNotesModal: React.FC<ReleaseNotesModalProps> = ({
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-claude-border-light dark:border-white/10 bg-claude-surface2-light/60 dark:bg-white/[0.02]">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500/20 to-aira-blue/20 border border-indigo-500/30 flex items-center justify-center text-indigo-500 dark:text-aira-blue">
+            <div className="w-9 h-9 rounded-lg bg-claude-terracotta/15 border border-claude-terracotta/20 flex items-center justify-center text-claude-accentInk">
               <Sparkles className="w-5 h-5" />
             </div>
             <div>
@@ -175,7 +175,7 @@ export const ReleaseNotesModal: React.FC<ReleaseNotesModalProps> = ({
                   release.tag === 'Latest'
                     ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
                     : release.tag === 'Major'
-                    ? 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20'
+                    ? 'bg-claude-terracotta/10 text-claude-accentInk border border-claude-terracotta/20'
                     : 'bg-claude-surface2-light dark:bg-white/10 text-claude-muted-light'
                 }`}>
                   {release.tag}

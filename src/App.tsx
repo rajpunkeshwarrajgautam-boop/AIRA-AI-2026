@@ -412,6 +412,12 @@ useEffect(() => {
   useEffect(() => {
     const scrollRegion = chatScrollRef.current;
     if (!scrollRegion) return;
+    // Empty conversations render the greeting, not a message transcript.
+    // Scrolling those to the bottom clips the hero emblem on shorter screens.
+    if (!activeConversation?.messages.length) {
+      scrollRegion.scrollTo({ top: 0, behavior: 'instant' });
+      return;
+    }
     scrollRegion.scrollTo({ top: scrollRegion.scrollHeight, behavior: 'instant' });
   }, [activeConversation?.id, activeConversation?.messages.length]);
 
@@ -1295,7 +1301,7 @@ useEffect(() => {
   const updateSettings = (partial: Partial<AppSettings>) => setSettings(prev => ({ ...prev, ...partial }));
 
   return (
-    <div className={`${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-shell ' : ''}${isStudioOpen ? 'has-studio-open ' : ''}h-[100dvh] w-full min-w-0 flex overflow-hidden bg-claude-bg-light dark:bg-claude-bg-dark text-claude-text-light dark:text-claude-text-dark`}>
+    <div className={`aira-editorial-app ${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-shell ' : ''}${isStudioOpen ? 'has-studio-open ' : ''}h-[100dvh] w-full min-w-0 flex overflow-hidden bg-claude-bg-light dark:bg-claude-bg-dark text-claude-text-light dark:text-claude-text-dark`}>
       <Sidebar
         conversations={conversations}
         activeChatId={activeChatId}
@@ -1357,7 +1363,7 @@ useEffect(() => {
       <InlineToast message={toastMessage} />
 
       <main className={`${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-main ' : 'bg-mesh-canvas '}flex-1 min-w-0 min-h-0 h-[100dvh] flex flex-col overflow-hidden w-full max-w-full`}>
-        <header className={`${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-header ' : ''}h-[54px] shrink-0 px-3 md:px-5 flex items-center justify-between border-b border-claude-border-light/80 dark:border-white/10 gradient-fade-header relative z-30 bg-claude-bg-light/95 dark:bg-aira-navy/95 backdrop-blur-md`}>
+        <header className={`aira-editorial-header ${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-header ' : ''}h-[60px] md:h-[64px] shrink-0 px-3 md:px-6 flex items-center justify-between border-b border-claude-border-light dark:border-claude-border-dark gradient-fade-header relative z-30 bg-claude-bg-light dark:bg-claude-bg-dark`}>
           <div className="flex flex-1 items-center gap-1 min-w-0">
             {!sidebarOpen && (
               <>
@@ -1467,7 +1473,6 @@ useEffect(() => {
             <GreetingScreen 
               userName={settings.userName} 
               workspaceMode={workspaceMode} 
-              onSelectStarter={prompt => handleSendMessage(prompt, [])} 
               conversations={conversations}
               activeProject={currentProject}
               extendedThinking={settings.extendedThinking}

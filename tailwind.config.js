@@ -9,11 +9,11 @@ export default {
     extend: {
       colors: {
         aira: {
-          navy: '#111C35',
-          blue: '#3056CB',
-          silver: '#E9EDF4',
-          porcelain: '#F8F9FC',
-          gold: '#B79C6A',
+          navy: '#181715',
+          blue: '#A9583E',
+          silver: '#EFE9DE',
+          porcelain: '#FAF9F5',
+          gold: '#E8A55A',
         },
         claude: {
           bg: {
@@ -49,8 +49,8 @@ export default {
           terracotta: {
             DEFAULT: 'var(--accent-terracotta)',
             hover: 'var(--accent-terracotta-hover)',
-            light: 'rgba(124, 92, 255, 0.12)',
-            dark: 'rgba(124, 92, 255, 0.25)',
+            light: 'rgba(204, 120, 92, 0.12)',
+            dark: 'rgba(204, 120, 92, 0.25)',
           },
           amber: {
             DEFAULT: '#D97706',
@@ -60,15 +60,15 @@ export default {
         },
       },
       fontFamily: {
-        serif: ['Newsreader', 'ui-serif', 'Georgia', 'Cambria', '"Times New Roman"', 'Times', 'serif'],
-        sans: ['Outfit', 'Inter', 'system-ui', '-apple-system', 'sans-serif'],
+        serif: ['Copernicus', 'Tiempos Headline', 'Cormorant Garamond', 'Newsreader', 'Georgia', 'serif'],
+        sans: ['StyreneB', 'Inter', 'system-ui', '-apple-system', 'sans-serif'],
         mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
       },
       boxShadow: {
         'claude-input': '0 0 0 1px rgba(45, 40, 30, 0.08), 0 2px 4px rgba(45, 40, 30, 0.02), 0 12px 28px -4px rgba(45, 40, 30, 0.06)',
         'claude-input-dark': '0 0 0 1px rgba(255, 255, 255, 0.08), 0 2px 6px rgba(0, 0, 0, 0.3), 0 16px 36px -6px rgba(0, 0, 0, 0.5)',
         'claude-card': '0 0 0 1px rgba(45, 40, 30, 0.06), 0 1px 3px rgba(45, 40, 30, 0.03)',
-        'claude-card-hover': '0 0 0 1px rgba(124, 92, 255, 0.3), 0 4px 16px -2px rgba(45, 40, 30, 0.08)',
+        'claude-card-hover': '0 0 0 1px rgba(204, 120, 92, 0.25), 0 4px 16px -2px rgba(45, 40, 30, 0.08)',
         'claude-popup': '0 0 0 1px rgba(45, 40, 30, 0.08), 0 20px 50px -10px rgba(0, 0, 0, 0.16)',
         'claude-popup-dark': '0 0 0 1px rgba(255, 255, 255, 0.1), 0 20px 50px -10px rgba(0, 0, 0, 0.6)',
       },

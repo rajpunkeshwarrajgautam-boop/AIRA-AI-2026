@@ -551,7 +551,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                       setIsSavedToProject(true);
                       setTimeout(() => setIsSavedToProject(false), 2000);
                     }}
-                    className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-aira-blue hover:bg-aira-blue/10 dark:text-blue-400"
+                    className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-claude-accentInk hover:bg-claude-terracotta/10"
                     data-testid="save-to-project-btn"
                     title={activeProjectName ? `Save to ${activeProjectName}` : 'Save to Project'}
                   >

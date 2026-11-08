@@ -49,7 +49,7 @@ export const AVAILABLE_MODELS: ModelInfo[] = [
 ];
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  theme: 'dark',
+  theme: 'light',
   activeModel: 'claude-3-7-sonnet',
   extendedThinking: false,
   thinkingBudget: 8192,

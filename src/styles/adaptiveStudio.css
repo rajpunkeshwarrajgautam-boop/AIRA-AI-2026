@@ -1,24 +1,14 @@
-/* Opt-in presentation layer. Never change the legacy shell when the preview flag is off. */
+/* Opt-in contextual workspace presentation, using the same editorial tokens as AIRA. */
 .aira-adaptive-shell {
-  --adaptive-surface: #ffffff;
-  --adaptive-rail: #f6f8fc;
-  --adaptive-ink: #0e1934;
-  --adaptive-muted: #526380;
-  --adaptive-line: #dfe6f1;
-  --adaptive-pale: #eff3fb;
-  --adaptive-blue: #305ee5;
+  --adaptive-surface: var(--bg-main);
+  --adaptive-rail: var(--bg-surface-secondary);
+  --adaptive-ink: var(--text-primary);
+  --adaptive-muted: var(--text-muted);
+  --adaptive-line: var(--border-color);
+  --adaptive-pale: var(--bg-surface-secondary);
+  --adaptive-blue: var(--accent-ink);
   background: var(--adaptive-surface);
   color: var(--adaptive-ink);
-}
-
-.dark .aira-adaptive-shell {
-  --adaptive-surface: #0b1120;
-  --adaptive-rail: #111c35;
-  --adaptive-ink: #f8f9fc;
-  --adaptive-muted: #a5b5ce;
-  --adaptive-line: #2b3b57;
-  --adaptive-pale: #192840;
-  --adaptive-blue: #678dff;
 }
 
 .aira-adaptive-shell .aira-sidebar-shell {
@@ -65,7 +55,7 @@
 }
 
 .aira-adaptive-mode-toggle button[aria-pressed="true"] {
-  background: #305ee5;
+  background: var(--accent-primary-hover);
   color: #fff;
 }
 
@@ -104,7 +94,7 @@
 
 .aira-adaptive-empty-header h2 {
   font-size: 19px;
-  font-weight: 700;
+  font-weight: 500;
   letter-spacing: -0.025em;
 }
 
@@ -142,7 +132,8 @@
 }
 
 .aira-adaptive-empty-body h3 {
-  font-family: Newsreader, Georgia, serif;
+  font-family: var(--font-display);
+  font-weight: 400;
   font-size: clamp(26px, 2.1vw, 36px);
   letter-spacing: -0.03em;
 }

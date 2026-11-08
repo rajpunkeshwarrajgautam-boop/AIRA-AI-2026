@@ -244,7 +244,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                               ? 'bg-rose-500/10 text-rose-700 dark:text-rose-400'
                               : event.status === 'waiting'
                               ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400'
-                              : 'bg-aira-blue/10 text-aira-blue dark:text-blue-400'
+                              : 'bg-claude-terracotta/10 text-claude-accentInk'
                           }`}
                         >
                           {event.status}
@@ -324,7 +324,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
 
             {message.builderHandoff && (
               <div className="mt-3 p-3.5 rounded-xl border border-aira-blue/30 bg-aira-blue/5 dark:bg-aira-blue/10 flex flex-col gap-2.5">
-                <div className="flex items-center gap-2 text-xs font-semibold text-aira-blue dark:text-blue-400">
+                <div className="flex items-center gap-2 text-xs font-semibold text-claude-accentInk">
                   <Wrench className="w-4 h-4" />
                   <span>Scaffold Application with Sandboxed Builder</span>
                 </div>

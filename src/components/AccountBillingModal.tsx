@@ -187,12 +187,12 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
         initial={{ opacity: 0, scale: 0.96 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.96 }}
-        className="relative w-full max-w-4xl rounded-3xl bg-[#161618] border border-white/10 text-white shadow-2xl overflow-hidden my-6 flex flex-col max-h-[90vh]"
+        className="relative w-full max-w-4xl rounded-2xl bg-[#181715] border border-white/10 text-white shadow-2xl overflow-hidden my-6 flex flex-col max-h-[90vh]"
       >
         {/* Header */}
         <div className="p-5 md:p-6 border-b border-white/10 flex items-center justify-between shrink-0 bg-stone-900/50">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[#3056CB] to-[#4871F7] flex items-center justify-center text-white font-bold text-sm shadow-md overflow-hidden">
+            <div className="w-10 h-10 rounded-lg bg-[#a9583e] flex items-center justify-center text-white font-bold text-sm overflow-hidden">
               {sessionVerified && user?.image ? (
                 <img src={user.image} alt={user.name || 'User'} className="w-full h-full object-cover" />
               ) : sessionVerified && user ? (
@@ -235,7 +235,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
             onClick={() => setActiveTab('overview')}
             className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-all ${
               activeTab === 'overview'
-                ? 'border-[#3056CB] text-white'
+                ? 'border-[#cc785c] text-white'
                 : 'border-transparent text-stone-400 hover:text-white'
             }`}
           >
@@ -246,7 +246,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
             onClick={() => setActiveTab('usage')}
             className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-all ${
               activeTab === 'usage'
-                ? 'border-[#3056CB] text-white'
+                ? 'border-[#cc785c] text-white'
                 : 'border-transparent text-stone-400 hover:text-white'
             }`}
           >
@@ -257,7 +257,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
             onClick={() => setActiveTab('topup')}
             className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-all ${
               activeTab === 'topup'
-                ? 'border-[#3056CB] text-white'
+                ? 'border-[#cc785c] text-white'
                 : 'border-transparent text-stone-400 hover:text-white'
             }`}
           >
@@ -268,7 +268,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
             onClick={() => setActiveTab('security')}
             className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-all ${
               activeTab === 'security'
-                ? 'border-[#3056CB] text-white'
+                ? 'border-[#cc785c] text-white'
                 : 'border-transparent text-stone-400 hover:text-white'
             }`}
           >
@@ -290,7 +290,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
               {/* Active Plan Card */}
               <div className="p-6 rounded-2xl bg-gradient-to-br from-stone-900 to-stone-900/60 border border-white/10 flex flex-col md:flex-row md:items-center justify-between gap-6">
                 <div>
-                  <div className="text-xs uppercase tracking-wider font-semibold text-[#5B82F6] mb-1">
+                  <div className="text-xs uppercase tracking-wider font-semibold text-[#e6a48d] mb-1">
                     Current Active Tier
                   </div>
                   <h3 className="text-2xl font-serif text-white flex items-center gap-3">
@@ -310,7 +310,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
                       onClose();
                       onOpenPricing();
                     }}
-                    className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#3056CB] to-[#4871F7] text-white text-xs font-semibold shadow-md hover:brightness-110 active:scale-95 transition-all flex items-center justify-center gap-2"
+                    className="px-5 py-2.5 rounded-lg bg-[#a9583e] hover:bg-[#94452e] text-white text-xs font-medium transition-colors flex items-center justify-center gap-2"
                   >
                     <Sparkles className="w-3.5 h-3.5" />
                     Change or Upgrade Plan
@@ -374,7 +374,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
                   </div>
                   <div className="h-2 rounded-full bg-stone-800 overflow-hidden">
                     <div
-                      className="h-full bg-[#3056CB]"
+                      className="h-full bg-[#cc785c]"
                       style={{
                         width: `${confirmedBilling.dailyChatLimit ? Math.min(100, (confirmedBilling.dailyChatsUsed / confirmedBilling.dailyChatLimit) * 100) : 0}%`
                       }}
@@ -392,7 +392,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
                   </div>
                   <div className="h-2 rounded-full bg-stone-800 overflow-hidden">
                     <div
-                      className="h-full bg-indigo-500"
+                      className="h-full bg-[#cc785c]"
                       style={{
                         width: `${confirmedBilling.monthlyUnitLimit ? Math.min(100, (confirmedBilling.monthlyUnitsUsed / confirmedBilling.monthlyUnitLimit) * 100) : 0}%`
                       }}
@@ -436,13 +436,13 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
                 <div className="flex items-center p-1 bg-stone-900 rounded-lg border border-white/10">
                   <button
                     onClick={() => setTopUpCurrency('INR')}
-                    className={`px-2.5 py-1 rounded text-xs font-semibold ${topUpCurrency === 'INR' ? 'bg-[#3056CB] text-white' : 'text-stone-400'}`}
+                    className={`px-2.5 py-1 rounded text-xs font-semibold ${topUpCurrency === 'INR' ? 'bg-[#a9583e] text-white' : 'text-stone-400'}`}
                   >
                     ₹ INR
                   </button>
                   <button
                     onClick={() => setTopUpCurrency('USD')}
-                    className={`px-2.5 py-1 rounded text-xs font-semibold ${topUpCurrency === 'USD' ? 'bg-[#3056CB] text-white' : 'text-stone-400'}`}
+                    className={`px-2.5 py-1 rounded text-xs font-semibold ${topUpCurrency === 'USD' ? 'bg-[#a9583e] text-white' : 'text-stone-400'}`}
                   >
                     $ USD
                   </button>
@@ -468,16 +468,16 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
                     </span>
                     <button
                       onClick={() => handleTopUp(1000, 99, 1.49)}
-                      className="px-3 py-1.5 rounded-lg bg-[#3056CB] hover:bg-[#4871F7] text-white text-xs font-semibold transition"
+                      className="px-3 py-1.5 rounded-lg bg-[#a9583e] hover:bg-[#94452e] text-white text-xs font-semibold transition-colors"
                     >
                       Buy Now
                     </button>
                   </div>
                 </div>
 
-                <div className="p-5 rounded-2xl bg-gradient-to-b from-[#3056CB]/10 to-stone-900/60 border border-[#3056CB]/30 flex flex-col justify-between">
+                <div className="p-5 rounded-xl bg-gradient-to-b from-[#cc785c]/10 to-stone-900/60 border border-[#cc785c]/30 flex flex-col justify-between">
                   <div>
-                    <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded-full bg-[#3056CB]/20 text-[#5B82F6]">
+                    <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded-full bg-[#cc785c]/20 text-[#e6a48d]">
                       Most Popular
                     </span>
                     <div className="text-xs font-semibold text-stone-300 mt-2">Power Top-Up</div>
@@ -490,7 +490,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
                     </span>
                     <button
                       onClick={() => handleTopUp(5000, 399, 5.99)}
-                      className="px-3 py-1.5 rounded-lg bg-[#3056CB] hover:bg-[#4871F7] text-white text-xs font-semibold transition"
+                      className="px-3 py-1.5 rounded-lg bg-[#a9583e] hover:bg-[#94452e] text-white text-xs font-semibold transition-colors"
                     >
                       Buy Now
                     </button>
@@ -509,7 +509,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
                     </span>
                     <button
                       onClick={() => handleTopUp(15000, 999, 14.99)}
-                      className="px-3 py-1.5 rounded-lg bg-[#3056CB] hover:bg-[#4871F7] text-white text-xs font-semibold transition"
+                      className="px-3 py-1.5 rounded-lg bg-[#a9583e] hover:bg-[#94452e] text-white text-xs font-semibold transition-colors"
                     >
                       Buy Now
                     </button>
