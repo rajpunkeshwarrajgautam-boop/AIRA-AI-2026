@@ -412,6 +412,12 @@ useEffect(() => {
   useEffect(() => {
     const scrollRegion = chatScrollRef.current;
     if (!scrollRegion) return;
+    // Empty conversations render the greeting, not a message transcript.
+    // Scrolling those to the bottom clips the hero emblem on shorter screens.
+    if (!activeConversation?.messages.length) {
+      scrollRegion.scrollTo({ top: 0, behavior: 'instant' });
+      return;
+    }
     scrollRegion.scrollTo({ top: scrollRegion.scrollHeight, behavior: 'instant' });
   }, [activeConversation?.id, activeConversation?.messages.length]);
 

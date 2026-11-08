@@ -72,6 +72,7 @@ test('Visual refactor keeps AIRA identity and existing interaction contracts', (
   assert.match(composer, /onSendMessage\(finalPrompt, attachments\)/);
   assert.match(app, /onDeleteChat=\{handleDeleteChat\}/);
   assert.match(app, /onOpenSettings=\{handleOpenSettings\}/);
+  assert.match(app, /if \(!activeConversation\?\.messages\.length\) \{\s*scrollRegion\.scrollTo\(\{ top: 0/, 'Welcome screen must start at the top rather than auto-scrolling behind the header');
   assert.match(workspace, /builderPreviewUrl/);
   assert.match(workspace, /builderSteps/);
   assert.match(workspace, /onApproveTask/);
