@@ -33,6 +33,10 @@ export class AutonomousAgentEngine extends EventEmitter {
   private modelRouter?: ModelRouter;
   private maxExecutionCycles: number;
   private activeExecutions: Map<string, AbortController> = new Map();
+  // A worker must keep the fencing token from its own claim/transitions.
+  // Re-reading the newest token after a competing worker takes the lease would
+  // incorrectly grant the old worker authority over the new execution.
+  private executionFences = new Map<string, { signal: AbortSignal; token: number }>();
 
   constructor(options: AutonomousEngineOptions = {}) {
     super();
@@ -100,33 +104,66 @@ export class AutonomousAgentEngine extends EventEmitter {
     return this.repository.getTask(taskId);
   }
 
+  private assertExecutionFence(taskId: string, signal: AbortSignal, task: AutonomousAgentTask): void {
+    const fence = this.executionFences.get(taskId);
+    if (signal.aborted || !fence || fence.signal !== signal || task.fencingToken !== fence.token) {
+      throw new Error(`STALE_FENCING_TOKEN: Worker execution no longer owns task ${taskId}.`);
+    }
+  }
+
+  private async updateDuringExecution(task: AutonomousAgentTask, signal: AbortSignal): Promise<AutonomousAgentTask> {
+    this.assertExecutionFence(task.taskId, signal, task);
+    return this.repository.updateTask(task);
+  }
+
+  private async transitionDuringExecution(
+    taskId: string,
+    signal: AbortSignal,
+    newState: AutonomousTaskState,
+    reason?: string
+  ): Promise<AutonomousAgentTask> {
+    const previous = await this.repository.getTask(taskId);
+    if (!previous) throw new Error(`Task ${taskId} not found.`);
+    this.assertExecutionFence(taskId, signal, previous);
+    const updated = await this.repository.updateState(taskId, newState, reason, undefined, previous.fencingToken);
+    const fence = this.executionFences.get(taskId);
+    if (fence?.signal === signal) fence.token = updated.fencingToken;
+    this.emit('task.state_changed', { taskId, from: previous.state, to: newState, reason });
+    return updated;
+  }
+
   public async startTask(taskId: string, workerId = 'worker_primary'): Promise<AutonomousAgentTask> {
-    const task = await this.repository.getTask(taskId);
+    let task = await this.repository.getTask(taskId);
     if (!task) throw new Error(`Task "${taskId}" not found.`);
 
     if (this.repository.claimTask) {
       const claim = await this.repository.claimTask(taskId, workerId, 60000);
       if (!claim.success) throw new Error(`Failed to claim task ${taskId}: ${claim.error}`);
+      if (!claim.task) throw new Error(`Claim succeeded without a task snapshot: ${taskId}`);
+      task = claim.task;
     }
 
     const abortController = new AbortController();
     this.activeExecutions.set(taskId, abortController);
+    this.executionFences.set(taskId, { signal: abortController.signal, token: task.fencingToken });
 
     // STEP 1: PLANNING
-    await this.transitionState(taskId, 'PLANNING', 'Decomposing natural language objective into structured plan');
+    await this.transitionDuringExecution(taskId, abortController.signal, 'PLANNING', 'Decomposing natural language objective into structured plan');
+    task = await this.repository.getTask(taskId);
+    if (!task) throw new Error(`Task "${taskId}" not found after planning transition.`);
 
     if (!task.plan || task.plan.steps.length === 0) {
       task.plan = await this.decomposeObjective(task);
-      await this.repository.updateTask(task);
+      await this.updateDuringExecution(task, abortController.signal);
     }
 
     this.emit('task.plan_ready', { taskId, plan: task.plan });
 
     // STEP 2: READY
-    await this.transitionState(taskId, 'READY', 'Plan compiled; ready for execution');
+    await this.transitionDuringExecution(taskId, abortController.signal, 'READY', 'Plan compiled; ready for execution');
 
     // STEP 3: RUNNING
-    await this.transitionState(taskId, 'RUNNING', 'Beginning autonomous execution of plan steps');
+    await this.transitionDuringExecution(taskId, abortController.signal, 'RUNNING', 'Beginning autonomous execution of plan steps');
 
     // Asynchronously execute steps in sequence
     void this.executeLoop(taskId, abortController.signal);
@@ -134,45 +171,53 @@ export class AutonomousAgentEngine extends EventEmitter {
     return (await this.repository.getTask(taskId))!;
   }
 
-  public async executeAutonomousTask(taskId: string, signal?: AbortSignal): Promise<AutonomousAgentTask> {
+  public async executeAutonomousTask(taskId: string, signal?: AbortSignal, claimedFencingToken?: number): Promise<AutonomousAgentTask> {
     const task = await this.repository.getTask(taskId);
     if (!task) throw new Error(`Task "${taskId}" not found.`);
+    if (claimedFencingToken !== undefined && task.fencingToken !== claimedFencingToken) {
+      throw new Error(`STALE_FENCING_TOKEN: Claim for ${taskId} has already been superseded.`);
+    }
 
     const abortController = new AbortController();
     if (signal) {
       signal.addEventListener('abort', () => abortController.abort(), { once: true });
+      if (signal.aborted) abortController.abort();
     }
     this.activeExecutions.set(taskId, abortController);
+    this.executionFences.set(taskId, { signal: abortController.signal, token: task.fencingToken });
 
     try {
       // Advance to RUNNING from CREATED, PLANNING, READY, or RESUMING
       if (task.state === 'CREATED') {
-        await this.transitionState(taskId, 'PLANNING', 'Decomposing natural language objective into structured plan');
+        await this.transitionDuringExecution(taskId, abortController.signal, 'PLANNING', 'Decomposing natural language objective into structured plan');
         const current = await this.repository.getTask(taskId);
         if (current && (!current.plan || current.plan.steps.length === 0)) {
           current.plan = await this.decomposeObjective(current);
-          await this.repository.updateTask(current);
+          await this.updateDuringExecution(current, abortController.signal);
         }
         this.emit('task.plan_ready', { taskId, plan: (await this.repository.getTask(taskId))?.plan });
-        await this.transitionState(taskId, 'READY', 'Plan compiled; ready for execution');
-        await this.transitionState(taskId, 'RUNNING', 'Beginning autonomous execution of plan steps');
+        await this.transitionDuringExecution(taskId, abortController.signal, 'READY', 'Plan compiled; ready for execution');
+        await this.transitionDuringExecution(taskId, abortController.signal, 'RUNNING', 'Beginning autonomous execution of plan steps');
       } else if (task.state === 'PLANNING') {
         if (!task.plan || task.plan.steps.length === 0) {
-          task.plan = await this.decomposeObjective(task);
-          await this.repository.updateTask(task);
+          const current = await this.repository.getTask(taskId);
+          if (!current) throw new Error(`Task ${taskId} not found during planning.`);
+          current.plan = await this.decomposeObjective(current);
+          await this.updateDuringExecution(current, abortController.signal);
         }
-        await this.transitionState(taskId, 'READY', 'Plan compiled; ready for execution');
-        await this.transitionState(taskId, 'RUNNING', 'Beginning autonomous execution of plan steps');
+        await this.transitionDuringExecution(taskId, abortController.signal, 'READY', 'Plan compiled; ready for execution');
+        await this.transitionDuringExecution(taskId, abortController.signal, 'RUNNING', 'Beginning autonomous execution of plan steps');
       } else if (task.state === 'READY') {
-        await this.transitionState(taskId, 'RUNNING', 'Beginning autonomous execution of plan steps');
+        await this.transitionDuringExecution(taskId, abortController.signal, 'RUNNING', 'Beginning autonomous execution of plan steps');
       } else if (task.state === 'RESUMING') {
-        await this.transitionState(taskId, 'RUNNING', 'Resuming autonomous execution after recovery');
+        await this.transitionDuringExecution(taskId, abortController.signal, 'RUNNING', 'Resuming autonomous execution after recovery');
       }
 
       await this.executeLoop(taskId, abortController.signal);
       return (await this.repository.getTask(taskId))!;
     } finally {
-      this.activeExecutions.delete(taskId);
+      if (this.activeExecutions.get(taskId) === abortController) this.activeExecutions.delete(taskId);
+      if (this.executionFences.get(taskId)?.signal === abortController.signal) this.executionFences.delete(taskId);
     }
   }
 
@@ -265,21 +310,19 @@ export class AutonomousAgentEngine extends EventEmitter {
     try {
       let task = await this.repository.getTask(taskId);
       if (!task || !task.plan) return;
+      this.assertExecutionFence(taskId, signal, task);
 
       let cycleCount = 0;
 
       for (const step of task.plan.steps) {
         cycleCount++;
         if (cycleCount > this.maxExecutionCycles) {
-          await this.transitionState(taskId, 'FAILED', `Loop limit exceeded: Maximum execution cycles (${this.maxExecutionCycles}) reached.`);
+          await this.transitionDuringExecution(taskId, signal, 'FAILED', `Loop limit exceeded: Maximum execution cycles (${this.maxExecutionCycles}) reached.`);
           this.emit('task.failed', { taskId, error: 'LOOP_LIMIT_EXCEEDED' });
           return;
         }
 
-        if (signal.aborted) {
-          await this.transitionState(taskId, 'CANCELLED', 'Execution cancelled by signal');
-          return;
-        }
+        if (signal.aborted) return; // Lease loss, shutdown and user cancellation use distinct state transitions.
 
         // Idempotency guarantee during crash recovery: skip already completed steps
         if (step.status === 'COMPLETED' || step.status === 'SKIPPED') {
@@ -291,6 +334,7 @@ export class AutonomousAgentEngine extends EventEmitter {
         if (!task || task.state === 'CANCELLED' || task.state === 'PAUSED') {
           return;
         }
+        this.assertExecutionFence(taskId, signal, task);
 
         // Check if step requires approval
         if (step.sideEffectLevel === 'WRITE' || step.sideEffectLevel === 'DESTRUCTIVE') {
@@ -298,9 +342,9 @@ export class AutonomousAgentEngine extends EventEmitter {
           task.approvalRequestId = approvalId;
           task.activeStepId = step.stepId;
           step.status = 'WAITING_FOR_APPROVAL';
-          await this.repository.updateTask(task);
+          await this.updateDuringExecution(task, signal);
 
-          await this.transitionState(taskId, 'WAITING_FOR_APPROVAL', `Approval requested for step: ${step.title}`);
+          await this.transitionDuringExecution(taskId, signal, 'WAITING_FOR_APPROVAL', `Approval requested for step: ${step.title}`);
           this.emit('task.approval_requested', {
             taskId,
             stepId: step.stepId,
@@ -314,19 +358,22 @@ export class AutonomousAgentEngine extends EventEmitter {
         }
 
         await this.runStep(taskId, step, signal);
+        if (signal.aborted) return;
 
         // Failure Boundary: Halt on step failure immediately
         task = await this.repository.getTask(taskId);
         const updatedStep = task?.plan?.steps.find(s => s.stepId === step.stepId);
         if (updatedStep?.status === 'FAILED') {
-          await this.transitionState(taskId, 'FAILED', `Step "${step.title}" failed: ${updatedStep.resultSummary || 'Execution failed'}`);
+          await this.transitionDuringExecution(taskId, signal, 'FAILED', `Step "${step.title}" failed: ${updatedStep.resultSummary || 'Execution failed'}`);
           this.emit('task.failed', { taskId, stepId: step.stepId, error: updatedStep.resultSummary });
           return;
         }
       }
 
+      if (signal.aborted) return;
+
       // STEP 4: VERIFYING
-      await this.transitionState(taskId, 'VERIFYING', 'Running final verification gate');
+      await this.transitionDuringExecution(taskId, signal, 'VERIFYING', 'Running final verification gate');
       task = await this.repository.getTask(taskId);
       if (!task) return;
       const verifier = this.specialistRegistry.getSpecialist('verifier');
@@ -355,25 +402,36 @@ export class AutonomousAgentEngine extends EventEmitter {
         isVerified = verifyRes.outcome === 'COMPLETED';
       }
 
+      if (signal.aborted) return;
+
       // STEP 5: COMPLETED
       task = await this.repository.getTask(taskId);
       if (task) {
         task.deliverableSummary = `Successfully executed autonomous mission for: "${task.objective}". Verified: ${isVerified}.`;
-        await this.repository.updateTask(task);
+        await this.updateDuringExecution(task, signal);
       }
-      await this.transitionState(taskId, 'COMPLETED', 'Mission accomplished and verified');
+      await this.transitionDuringExecution(taskId, signal, 'COMPLETED', 'Mission accomplished and verified');
       this.emit('task.completed', { taskId, deliverableSummary: task?.deliverableSummary });
     } catch (err: any) {
-      await this.transitionState(taskId, 'FAILED', err.message || 'Execution error');
+      if (signal.aborted || String(err.message || '').includes('STALE_FENCING_TOKEN') ||
+          String(err.message || '').includes('Concurrent update or stale fencing token')) return;
+      try {
+        await this.transitionDuringExecution(taskId, signal, 'FAILED', err.message || 'Execution error');
+      } catch (transitionError: any) {
+        if (String(transitionError.message || '').includes('STALE_FENCING_TOKEN') || signal.aborted) return;
+        throw transitionError;
+      }
       this.emit('task.failed', { taskId, error: err.message });
     } finally {
-      this.activeExecutions.delete(taskId);
+      if (this.activeExecutions.get(taskId)?.signal === signal) this.activeExecutions.delete(taskId);
+      if (this.executionFences.get(taskId)?.signal === signal) this.executionFences.delete(taskId);
     }
   }
 
   private async runStep(taskId: string, step: AgentPlanStep, signal: AbortSignal): Promise<void> {
     const task = await this.repository.getTask(taskId);
     if (!task) return;
+    this.assertExecutionFence(taskId, signal, task);
 
     const targetStep = task.plan?.steps.find(s => s.stepId === step.stepId) || step;
     targetStep.status = 'RUNNING';
@@ -381,7 +439,7 @@ export class AutonomousAgentEngine extends EventEmitter {
     step.status = 'RUNNING';
     step.startedAt = targetStep.startedAt;
     task.activeStepId = targetStep.stepId;
-    await this.repository.updateTask(task);
+    await this.updateDuringExecution(task, signal);
     this.emit('task.step_started', { taskId, stepId: targetStep.stepId, title: targetStep.title });
 
     let specialistResult: any = null;
@@ -420,6 +478,9 @@ export class AutonomousAgentEngine extends EventEmitter {
       });
     }
 
+    // Ignore a late specialist response after lease loss or shutdown.
+    if (signal.aborted) return;
+
     const obs: AgentObservation = {
       observationId: `obs_${randomUUID().slice(0, 8)}`,
       stepId: targetStep.stepId,
@@ -441,7 +502,7 @@ export class AutonomousAgentEngine extends EventEmitter {
     step.status = targetStep.status;
     step.completedAt = targetStep.completedAt;
     step.resultSummary = targetStep.resultSummary;
-    await this.repository.updateTask(task);
+    await this.updateDuringExecution(task, signal);
 
     this.emit('task.observation', { taskId, observation: obs });
     this.emit('task.handoff', {
@@ -500,34 +561,52 @@ export class AutonomousAgentEngine extends EventEmitter {
     // Continue execution loop
     const controller = new AbortController();
     this.activeExecutions.set(taskId, controller);
+    this.executionFences.set(taskId, {
+      signal: controller.signal,
+      token: (await this.repository.getTask(taskId))!.fencingToken
+    });
     void this.continueExecutionFromCurrentStep(taskId, controller.signal);
 
     return (await this.repository.getTask(taskId))!;
   }
 
   private async continueExecutionFromCurrentStep(taskId: string, signal: AbortSignal): Promise<void> {
-    const task = await this.repository.getTask(taskId);
-    if (!task || !task.plan) return;
+    try {
+      const task = await this.repository.getTask(taskId);
+      if (!task || !task.plan) return;
+      this.assertExecutionFence(taskId, signal, task);
 
-    const remainingSteps = task.plan.steps.filter(s => s.status === 'PENDING' || s.status === 'WAITING_FOR_APPROVAL');
+      const remainingSteps = task.plan.steps.filter(s => s.status === 'PENDING' || s.status === 'WAITING_FOR_APPROVAL');
 
-    for (const step of remainingSteps) {
-      if (signal.aborted) {
-        await this.transitionState(taskId, 'CANCELLED', 'Execution cancelled by signal');
-        return;
+      for (const step of remainingSteps) {
+        if (signal.aborted) return;
+        await this.runStep(taskId, step, signal);
+        if (signal.aborted) return;
       }
-      await this.runStep(taskId, step, signal);
-    }
 
-    // VERIFYING
-    await this.transitionState(taskId, 'VERIFYING', 'Running final verification gate');
-    const taskAfter = await this.repository.getTask(taskId);
-    if (taskAfter) {
-      taskAfter.deliverableSummary = `Successfully executed autonomous mission for: "${taskAfter.objective}". Verified: true.`;
-      await this.repository.updateTask(taskAfter);
+      // VERIFYING
+      await this.transitionDuringExecution(taskId, signal, 'VERIFYING', 'Running final verification gate');
+      const taskAfter = await this.repository.getTask(taskId);
+      if (taskAfter) {
+        taskAfter.deliverableSummary = `Successfully executed autonomous mission for: "${taskAfter.objective}". Verified: true.`;
+        await this.updateDuringExecution(taskAfter, signal);
+      }
+      await this.transitionDuringExecution(taskId, signal, 'COMPLETED', 'Mission accomplished and verified');
+      this.emit('task.completed', { taskId, deliverableSummary: taskAfter?.deliverableSummary });
+    } catch (error: any) {
+      if (signal.aborted || String(error.message || '').includes('STALE_FENCING_TOKEN') ||
+          String(error.message || '').includes('Concurrent update or stale fencing token')) return;
+      try {
+        await this.transitionDuringExecution(taskId, signal, 'FAILED', error.message || 'Resumed execution failed');
+      } catch (transitionError: any) {
+        if (signal.aborted || String(transitionError.message || '').includes('STALE_FENCING_TOKEN')) return;
+        throw transitionError;
+      }
+      this.emit('task.failed', { taskId, error: error.message });
+    } finally {
+      if (this.activeExecutions.get(taskId)?.signal === signal) this.activeExecutions.delete(taskId);
+      if (this.executionFences.get(taskId)?.signal === signal) this.executionFences.delete(taskId);
     }
-    await this.transitionState(taskId, 'COMPLETED', 'Mission accomplished and verified');
-    this.emit('task.completed', { taskId, deliverableSummary: taskAfter?.deliverableSummary });
   }
 
   public async pauseTask(taskId: string): Promise<AutonomousAgentTask> {
@@ -559,6 +638,7 @@ export class AutonomousAgentEngine extends EventEmitter {
 
     const controller = new AbortController();
     this.activeExecutions.set(taskId, controller);
+    this.executionFences.set(taskId, { signal: controller.signal, token: (await this.repository.getTask(taskId))!.fencingToken });
     void this.continueExecutionFromCurrentStep(taskId, controller.signal);
 
     return (await this.repository.getTask(taskId))!;
@@ -586,6 +666,7 @@ export class AutonomousAgentEngine extends EventEmitter {
 
     const controller = new AbortController();
     this.activeExecutions.set(taskId, controller);
+    this.executionFences.set(taskId, { signal: controller.signal, token: (await this.repository.getTask(taskId))!.fencingToken });
     void this.continueExecutionFromCurrentStep(taskId, controller.signal);
 
     return (await this.repository.getTask(taskId))!;

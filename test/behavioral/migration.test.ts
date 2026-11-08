@@ -187,25 +187,25 @@ describe('AIRA Behavioral Intelligence — Memory Migration & Relevance Isolatio
   });
 
   it('enforces tenant and project isolation boundaries', () => {
-    // Save items with specific project and user tags into memory engine
+    // Caller-provided owner tags must never forge a signed-in principal.
     const testEngine = agentMemory;
-    testEngine.remember('Confidential strategic initiatives for Tenant Alpha only.', {
+    assert.throws(() => testEngine.remember('Confidential strategic initiatives for Tenant Alpha only.', {
       tier: 'semantic',
       category: 'general',
       title: 'Tenant Alpha Secret Strategy',
       tags: ['alpha', 'tenant'],
       userId: 'user-tenant-alpha',
       projectId: 'proj-alpha'
-    });
+    }), /another account/);
 
-    testEngine.remember('Public docs for Tenant Beta.', {
+    assert.throws(() => testEngine.remember('Public docs for Tenant Beta.', {
       tier: 'semantic',
       category: 'general',
       title: 'Tenant Beta Public Documentation',
       tags: ['beta', 'tenant'],
       userId: 'user-tenant-beta',
       projectId: 'proj-beta'
-    });
+    }), /another account/);
 
     // Query from tenant Beta should NEVER receive Tenant Alpha's memory
     const betaQuery = testEngine.recall({

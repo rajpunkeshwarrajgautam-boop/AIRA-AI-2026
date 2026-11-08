@@ -46,7 +46,7 @@ export class InMemoryAutonomousTaskRepository implements IAutonomousTaskReposito
     clone.fencingToken = clone.fencingToken ?? 0;
     clone.workingMemory = clone.workingMemory ?? {};
     this.tasks.set(task.taskId, clone);
-    return clone;
+    return JSON.parse(JSON.stringify(clone));
   }
 
   async deleteTask(taskId: string): Promise<void> {
@@ -84,6 +84,9 @@ export class InMemoryAutonomousTaskRepository implements IAutonomousTaskReposito
     if (!existing) {
       throw new Error(`Task with id ${task.taskId} not found.`);
     }
+    if (task.fencingToken !== existing.fencingToken) {
+      throw new Error(`STALE_FENCING_TOKEN: Expected ${task.fencingToken}, but task is at ${existing.fencingToken}.`);
+    }
     const mergedObservations = task.observations.length >= existing.observations.length
       ? task.observations
       : existing.observations;
@@ -94,12 +97,12 @@ export class InMemoryAutonomousTaskRepository implements IAutonomousTaskReposito
       fencingToken: existing.fencingToken,
       leaseOwner: existing.leaseOwner,
       leaseExpiresAt: existing.leaseExpiresAt,
-      executionHistory: existing.executionHistory,
-      observations: mergedObservations,
+      executionHistory: JSON.parse(JSON.stringify(existing.executionHistory)),
+      observations: JSON.parse(JSON.stringify(mergedObservations)),
       updatedAt: Date.now()
     };
     this.tasks.set(task.taskId, updated);
-    return updated;
+    return JSON.parse(JSON.stringify(updated));
   }
 
   async updateState(
@@ -435,14 +438,18 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
       if (!existing) {
         throw new Error(`Task with id ${task.taskId} not found.`);
       }
+      if (task.fencingToken !== existing.fencingToken) {
+        throw new Error(`STALE_FENCING_TOKEN: Expected ${task.fencingToken}, but task is at ${existing.fencingToken}.`);
+      }
 
       const mergedObservations = task.observations.length >= existing.observations.length
         ? task.observations
         : existing.observations;
 
       const now = Date.now();
-      await this.knexClient('autonomous_agent_tasks')
+      const updated = await this.knexClient('autonomous_agent_tasks')
         .where({ task_id: task.taskId })
+        .andWhere('fencing_token', task.fencingToken)
         .update({
           active_step_id: task.activeStepId || null,
           approval_request_id: task.approvalRequestId || null,
@@ -455,6 +462,9 @@ export class PostgresAutonomousTaskRepository implements IAutonomousTaskReposito
           error: task.error || null,
           updated_at: now
         });
+      if (updated === 0) {
+        throw new Error(`Concurrent update or stale fencing token on task ${task.taskId}.`);
+      }
 
       task.observations = mergedObservations;
       task.updatedAt = now;
