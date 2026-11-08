@@ -13,7 +13,9 @@ const SECRET_PATTERNS = [
   { name: 'GitHub Personal Token', regex: /gh[pousr]_[A-Za-z0-9]{20,}/ },
   { name: 'AWS Access Key', regex: /AKIA[0-9A-Z]{16}/ },
   { name: 'Neon Postgres Password', regex: /npg_[A-Za-z0-9_-]{10,}/ },
-  { name: 'Password-Bearing Postgres Connection URL', regex: /postgres(?:ql)?:\/\/[a-zA-Z0-9_.-]+:[^@\s"']+@[a-zA-Z0-9_.-]+/ }
+  { name: 'Password-Bearing Postgres Connection URL', regex: /postgres(?:ql)?:\/\/[a-zA-Z0-9_.-]+:[^@\s"']+@[a-zA-Z0-9_.-]+/ },
+  { name: 'Hardcoded Live Acceptance Bypass', regex: /VERCEL_AUTOMATION_BYPASS_SECRET\s*\|\|\s*['"`][^'"`]{12,}/ },
+  { name: 'Hardcoded Live Acceptance Password', regex: /STAGING_AUTH_TEST_USER_[AB]_PASSWORD\s*\|\|\s*['"`][^'"`]{8,}/ }
 ];
 
 const EXCLUDED_FILES = new Set([

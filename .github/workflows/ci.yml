@@ -117,6 +117,9 @@ jobs:
           npx tsx --test
           test/agent-memory-account-isolation.test.ts
           test/browser-storage-migration-fidelity.test.ts
+
+      - name: Staging live acceptance fail-closed configuration regression
+        run: npx tsx --test test/staging-live-acceptance-config.test.ts
       - name: Post-merge runtime and type safety regression
         run: npm run test:pr118:regression
 
