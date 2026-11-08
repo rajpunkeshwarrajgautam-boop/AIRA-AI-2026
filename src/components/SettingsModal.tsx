@@ -870,7 +870,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   whileTap={{ scale: 0.98 }} 
                   onClick={save}
                   data-testid="settings-save"
-                  className="min-w-0 justify-center px-3 sm:px-5 py-2.5 rounded-xl bg-claude-terracotta text-claude-onAccent text-[13px] font-bold hover:bg-claude-terracotta-hover transition-colors flex items-center gap-1.5 shadow-sm"
+                  className="min-w-0 justify-center px-3 sm:px-5 py-2.5 rounded-xl bg-claude-terracotta-hover text-claude-onAccent text-[13px] font-bold hover:brightness-90 transition-colors flex items-center gap-1.5 shadow-sm"
                 >
                   {saved && <Check className="w-4 h-4" />}
                   {saved ? 'Preferences Saved' : 'Save Changes'}
