@@ -132,6 +132,33 @@ export class AutonomousAgentEngine extends EventEmitter {
     return updated;
   }
 
+  private async requestStepApproval(taskId: string, stepId: string, signal: AbortSignal): Promise<void> {
+    const task = await this.repository.getTask(taskId);
+    if (!task?.plan) throw new Error(`Task ${taskId} has no plan to approve.`);
+    this.assertExecutionFence(taskId, signal, task);
+
+    const step = task.plan.steps.find(candidate => candidate.stepId === stepId);
+    if (!step || (step.sideEffectLevel !== 'WRITE' && step.sideEffectLevel !== 'DESTRUCTIVE')) {
+      throw new Error(`Task ${taskId} has no approval-gated step ${stepId}.`);
+    }
+
+    const approvalId = task.activeStepId === stepId && task.approvalRequestId
+      ? task.approvalRequestId
+      : `req_appr_${randomUUID().slice(0, 8)}`;
+    task.approvalRequestId = approvalId;
+    task.activeStepId = stepId;
+    step.status = 'WAITING_FOR_APPROVAL';
+    await this.updateDuringExecution(task, signal);
+    await this.transitionDuringExecution(taskId, signal, 'WAITING_FOR_APPROVAL', `Approval requested for step: ${step.title}`);
+    this.emit('task.approval_requested', {
+      taskId,
+      stepId,
+      approvalRequestId: approvalId,
+      title: step.title,
+      sideEffectLevel: step.sideEffectLevel
+    });
+  }
+
   public async startTask(taskId: string, workerId = 'worker_primary'): Promise<AutonomousAgentTask> {
     let task = await this.repository.getTask(taskId);
     if (!task) throw new Error(`Task "${taskId}" not found.`);
@@ -344,22 +371,7 @@ export class AutonomousAgentEngine extends EventEmitter {
 
         // Check if step requires approval
         if (step.sideEffectLevel === 'WRITE' || step.sideEffectLevel === 'DESTRUCTIVE') {
-          const approvalId = `req_appr_${randomUUID().slice(0, 8)}`;
-          task.approvalRequestId = approvalId;
-          task.activeStepId = step.stepId;
-          step.status = 'WAITING_FOR_APPROVAL';
-          await this.updateDuringExecution(task, signal);
-
-          await this.transitionDuringExecution(taskId, signal, 'WAITING_FOR_APPROVAL', `Approval requested for step: ${step.title}`);
-          this.emit('task.approval_requested', {
-            taskId,
-            stepId: step.stepId,
-            approvalRequestId: approvalId,
-            title: step.title,
-            sideEffectLevel: step.sideEffectLevel
-          });
-
-          // Stop here; resumption will happen when approveStep() is called
+          await this.requestStepApproval(taskId, step.stepId, signal);
           return;
         }
 
@@ -555,8 +567,9 @@ export class AutonomousAgentEngine extends EventEmitter {
     const runningTask = await this.transitionState(taskId, 'RUNNING', 'Resumed execution');
 
     // Mark current waiting step as ready to continue
-    if (runningTask.plan && runningTask.activeStepId) {
-      const activeStep = runningTask.plan.steps.find(s => s.stepId === runningTask.activeStepId);
+    const approvedStepId = runningTask.activeStepId;
+    if (runningTask.plan && approvedStepId) {
+      const activeStep = runningTask.plan.steps.find(s => s.stepId === approvedStepId);
       if (activeStep) {
         activeStep.status = 'PENDING';
       }
@@ -571,12 +584,14 @@ export class AutonomousAgentEngine extends EventEmitter {
       signal: controller.signal,
       token: (await this.repository.getTask(taskId))!.fencingToken
     });
-    void this.continueExecutionFromCurrentStep(taskId, controller.signal);
+    // The approval applies to this step only, in this execution. Recovery and
+    // unrelated resume paths must request approval again for pending writes.
+    void this.continueExecutionFromCurrentStep(taskId, controller.signal, approvedStepId);
 
     return (await this.repository.getTask(taskId))!;
   }
 
-  private async continueExecutionFromCurrentStep(taskId: string, signal: AbortSignal): Promise<void> {
+  private async continueExecutionFromCurrentStep(taskId: string, signal: AbortSignal, approvedStepId?: string): Promise<void> {
     try {
       const task = await this.repository.getTask(taskId);
       if (!task || !task.plan) return;
@@ -586,8 +601,20 @@ export class AutonomousAgentEngine extends EventEmitter {
 
       for (const step of remainingSteps) {
         if (signal.aborted) return;
+        if ((step.sideEffectLevel === 'WRITE' || step.sideEffectLevel === 'DESTRUCTIVE') &&
+            step.stepId !== approvedStepId) {
+          await this.requestStepApproval(taskId, step.stepId, signal);
+          return;
+        }
         await this.runStep(taskId, step, signal);
         if (signal.aborted) return;
+        const afterStep = await this.repository.getTask(taskId);
+        const resultStep = afterStep?.plan?.steps.find(candidate => candidate.stepId === step.stepId);
+        if (resultStep?.status === 'FAILED') {
+          await this.transitionDuringExecution(taskId, signal, 'FAILED', `Step "${step.title}" failed: ${resultStep.resultSummary || 'Execution failed'}`);
+          this.emit('task.failed', { taskId, stepId: step.stepId, error: resultStep.resultSummary });
+          return;
+        }
       }
 
       // VERIFYING
