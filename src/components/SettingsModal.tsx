@@ -397,7 +397,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           }} 
                           className={`py-2.5 rounded-xl border text-[13px] font-bold capitalize transition-all ${
                             form.theme === theme 
-                              ? 'border-claude-terracotta bg-claude-terracotta text-claude-onAccent shadow-sm' 
+                              ? 'border-claude-terracotta bg-claude-terracotta-hover text-claude-onAccent shadow-sm' 
                               : 'border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark hover:border-claude-terracotta/40'
                           }`}
                         >
