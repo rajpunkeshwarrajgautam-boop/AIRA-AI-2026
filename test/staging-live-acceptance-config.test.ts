@@ -5,7 +5,7 @@ import { resolveStagingLiveAcceptanceConfig } from './staging-live-acceptance-co
 const valid: NodeJS.ProcessEnv = {
   AIRA_PREVIEW_URL: 'https://aira-ai-2026-abc123-test-projects.vercel.app/',
   STAGING_ISOLATED_NEON_BRANCH_ID: 'br-test-disposable-123',
-  STAGING_DATABASE_URL: 'postgresql://test:placeholder@ep-disposable-123.ap-southeast-1.aws.neon.tech/aira_test',
+  STAGING_DATABASE_URL: 'postgresql://test@ep-disposable-123.ap-southeast-1.aws.neon.tech/aira_test',
   STAGING_AUTH_TEST_USER_A_EMAIL: 'a@example.invalid',
   STAGING_AUTH_TEST_USER_A_PASSWORD: 'test-a-placeholder',
   STAGING_AUTH_TEST_USER_B_EMAIL: 'b@example.invalid',
