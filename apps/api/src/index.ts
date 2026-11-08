@@ -80,6 +80,7 @@ import {
   isAllowedOrigin
 } from './auth/bff-session.js';
 import { registerBffRoutes } from './auth/register-bff-routes.js';
+import { isExplicitAutonomousApprovalDecision } from './auth/explicit-autonomous-approval.js';
 import { isTemporaryDatabaseError } from './utils/storage-errors.js';
 import {
   durableIdempotencyManager,
@@ -1067,6 +1068,9 @@ app.post('/api/agent/autonomous/tasks/:id/approve', async (req: Request, res: Re
   if (!approvalRequestId) {
     return res.status(400).json({ error: 'approvalRequestId is required' });
   }
+  if (!isExplicitAutonomousApprovalDecision(approved)) {
+    return res.status(400).json({ error: 'approved must be explicitly true or false' });
+  }
   const engine = agentRuntime.getAutonomousEngine();
   try {
     const existing = await engine.getTask(id);
@@ -1076,7 +1080,7 @@ app.post('/api/agent/autonomous/tasks/:id/approve', async (req: Request, res: Re
     if (!isOwner && !isAdmin) {
       return res.status(403).json({ error: 'Forbidden: task belongs to another principal' });
     }
-    const task = await engine.approveStep(id, approvalRequestId, approved !== false, notes);
+    const task = await engine.approveStep(id, approvalRequestId, approved, notes);
     res.json({ task });
   } catch (err: any) {
     if (err?.code === 'PERSISTENCE_UNAVAILABLE' || err?.name === 'AutonomousPersistenceUnavailableError') {

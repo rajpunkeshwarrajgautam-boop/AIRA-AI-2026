@@ -2,8 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AutonomousAgentEngine } from '../packages/agent-runtime/src/autonomous/autonomous-engine.js';
 import { InMemoryAutonomousTaskRepository } from '../packages/agent-runtime/src/autonomous/repository.js';
+import { isExplicitAutonomousApprovalDecision } from '../apps/api/src/auth/explicit-autonomous-approval.js';
 
 const principal = { userId: 'approval_test_user', sessionId: 'approval_session', scopes: ['*'] };
+
+test('autonomous approval API accepts only an explicit boolean decision', () => {
+  assert.equal(isExplicitAutonomousApprovalDecision(true), true);
+  assert.equal(isExplicitAutonomousApprovalDecision(false), true);
+  for (const malformed of [undefined, null, '', 'true', 'false', 0, 1, {}, []]) {
+    assert.equal(isExplicitAutonomousApprovalDecision(malformed), false);
+  }
+});
 
 function makePlan(levels: Array<'NONE' | 'WRITE' | 'DESTRUCTIVE'>) {
   const now = Date.now();

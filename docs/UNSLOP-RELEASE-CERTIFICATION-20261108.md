@@ -31,17 +31,22 @@ previous 18/18 report. The corrective code in
    of one step cannot authorize another step or a crash-recovered execution.
 3. Rejects a failed resumed specialist step as `FAILED` instead of allowing
    the mission to advance to `COMPLETED`.
+4. Rejects omitted, string, numeric, null or other malformed API approval
+   decisions. The autonomous approval endpoint accepts only explicit JSON
+   `true` or `false` and never defaults a missing field to approval.
 
 `test/autonomous-resume-approval-fence.test.ts` is the permanent regression
 suite. It counts real synthetic specialist invocations, confirming **zero**
 invocations before approval, plus single-step approval, recovery, pause/resume
-and failed specialist behavior. It performs no external write operations.
+and failed specialist behavior. It also verifies the API's explicit-decision
+parser. It performs no external write operations. The mandatory Fast CI
+autonomous certification now runs this suite on every relevant PR.
 
 ### Verification of the corrective branch
 
 | Gate | Observed result | Scope |
 | --- | --- | --- |
-| Autonomous API/worker/platform/adversarial/recovery/fencing + approval tests | **53/53 PASS** | Local runtime tests, including 4 new approval tests |
+| Autonomous API/worker/platform/adversarial/recovery/fencing + approval tests | **54/54 PASS** | Local runtime tests, including 5 new approval tests |
 | Memory isolation, identity transition, storage migration, browser authorization, behavioral security | **18/18 PASS** | Local deterministic browser and policy tests |
 | `npm run typecheck` | **PASS** | Client and server TypeScript |
 | `npm run build` | **PASS** | Existing oversized Vite chunk warning remains |
