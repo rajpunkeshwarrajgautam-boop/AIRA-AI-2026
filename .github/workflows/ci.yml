@@ -154,6 +154,9 @@ jobs:
       - name: First-party BFF session security gateway certification
         run: npm run test:auth-bff
 
+      - name: Extracted entrypoint contract regression
+        run: npx tsx --test test/unslop-entrypoint-contracts.test.tsx
+
       - name: CSRF origin and token restoration regression
         run: npx tsx --test test/hotfix-csrf-origin-remediation.test.ts
 

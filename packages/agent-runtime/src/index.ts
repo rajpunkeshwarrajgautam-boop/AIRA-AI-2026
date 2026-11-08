@@ -37,6 +37,8 @@ import { WorkflowRepository, PostgresWorkflowRepository, InMemoryWorkflowReposit
 import { WorkflowEngine } from './workflow-engine.js';
 import { WorkflowCompiler } from './workflow-compiler.js';
 import { buildDurableHistorySystemMessage } from './memory-policy.js';
+import { isRepositoryIntent, extractCalculatorExpression } from './intent-heuristics.js';
+export { isRepositoryIntent, extractCalculatorExpression } from './intent-heuristics.js';
 import { InstructionResolver } from './behavioral/instruction-resolver.js';
 import { AdaptiveSynthesizer } from './behavioral/adaptive-synthesizer.js';
 import { ToolRecoveryEngine } from './behavioral/tool-recovery-engine.js';
@@ -74,59 +76,6 @@ import {
   SpecialistWorkerRuntime,
   DurableExecutionCoordinator
 } from './durable/index.js';
-
-/**
- * Strictly detect repository intent.
- * Generic words such as 'status', 'log', 'branch', or 'diff' on their own MUST NOT trigger repository operations.
- * Requires explicit git/repo/codebase context or explicit git commands.
- */
-export function isRepositoryIntent(prompt: string): boolean {
-  if (!prompt || typeof prompt !== 'string') return false;
-  const lower = prompt.toLowerCase();
-  
-  // Explicit git commands or repo phrases
-  if (/\bgit\s+(?:status|log|diff|branch|commit|show|history|blame)\b/i.test(lower)) return true;
-  if (/\b(?:repo|repository|codebase)\s+(?:status|log|diff|branch|commits?|history|state|inspect)\b/i.test(lower)) return true;
-  
-  // Must have clear repository qualifier when paired with action terms
-  const hasRepoContext = /\b(?:git|repo|repository|codebase|github)\b/i.test(lower);
-  if (!hasRepoContext) return false;
-  
-  return /\b(?:status|log|diff|branch|commits?|history|head|tracking|inspect|read)\b/i.test(lower) ||
-         /\b(?:check|inspect|show|display|get)\s+(?:the\s+)?(?:git|repo|repository|codebase)\b/i.test(lower);
-}
-
-/**
- * Deterministically extracts valid mathematical expressions from prompt text.
- * Requires genuine arithmetic operator (+, -, *, /, ^) between numbers or inside formula parentheses.
- * Rejects standalone numbers (e.g. years "2026", PR numbers), generic keywords without operators,
- * and never invents default expressions.
- */
-export function extractCalculatorExpression(prompt: string): string {
-  if (!prompt || typeof prompt !== 'string') return '';
-  const trimmed = prompt.trim();
-
-  // Pattern 1: Enclosed or complex formula with arithmetic operator between digits:
-  // e.g. "((16384 * 1024) / 4)" or "1024 * 4" or "40 + 2"
-  const formulaMatch = trimmed.match(/(?:\((?:[0-9+\-*/().^\s]+)\)|[0-9]+(?:\.[0-9]+)?\s*[-+*/^]\s*[0-9]+(?:\.[0-9]+)?(?:[0-9+\-*/().^\s]*))/);
-  if (formulaMatch && formulaMatch[0]) {
-    const cleaned = formulaMatch[0].replace(/[^0-9+\-*/().^ ]/g, '').replace(/[. ]+$/, '').trim();
-    if (cleaned.length > 0 && /[0-9]/.test(cleaned) && /[-+*/^]/.test(cleaned)) {
-      return cleaned;
-    }
-  }
-
-  // Pattern 2: Explicit keyword prefix with word boundary: calculate / compute / calculator / calc followed by arithmetic expression
-  const keywordMatch = trimmed.match(/\b(?:calculate|calculator|calc|compute)\b\s*:?\s*([0-9+\-*/().^]*[0-9]+[0-9+\-*/().^ ]*)/i);
-  if (keywordMatch && keywordMatch[1] && /[+\-*/^]/.test(keywordMatch[1])) {
-    const cleaned = keywordMatch[1].replace(/[^0-9+\-*/().^ ]/g, '').replace(/[. ]+$/, '').trim();
-    if (cleaned.length > 0 && /[0-9]/.test(cleaned) && /[-+*/^]/.test(cleaned)) {
-      return cleaned;
-    }
-  }
-
-  return '';
-}
 
 export class AgentRuntime extends EventEmitter {
   private readonly recoveryOwner = `agent-runtime-${crypto.randomUUID()}`;
