@@ -51,13 +51,46 @@ test('Shared shell, greeting, sidebar, composer and contextual studio use editor
   assert.match(app, /aira-editorial-app/);
   assert.match(app, /aira-editorial-header/);
   assert.match(sidebar, /aira-sidebar-shell/);
-  assert.match(sidebar, /bg-\[#a9583e\]/);
+  assert.match(sidebar, /bg-claude-terracotta-hover/);
   assert.match(composer, /aira-composer-card/);
   assert.match(greeting, /aira-editorial-greeting/);
   assert.match(greeting, /font-serif font-normal/);
   assert.match(workspace, /data-testid="unified-workspace"/);
   assert.match(responsive, /--adaptive-surface: var\(--bg-main\)/);
   assert.doesNotMatch(responsive, /#305ee5/i, 'Adaptive workspace may not retain the obsolete blue');
+});
+
+test('Sidebar follows each aesthetic preset and Light/Dark mode', () => {
+  const sidebar = read('src/components/Sidebar.tsx');
+  const responsive = read('src/styles/adaptiveStudio.css');
+  assert.match(tokens, /\.aira-editorial-app \.aira-sidebar-shell \{\s*background-color: var\(--bg-surface-secondary\)/);
+  assert.match(tokens, /\.aira-editorial-app \.aira-sidebar-footer \{\s*background-color: var\(--bg-surface-secondary\)/);
+  assert.match(responsive, /--adaptive-rail: var\(--bg-surface-secondary\)/);
+  assert.match(sidebar, /bg-claude-terracotta-hover/);
+  assert.match(sidebar, /text-claude-onAccent/);
+  assert.doesNotMatch(sidebar, /#a9583e|#94452e/i, 'Sidebar accents must not be hardcoded to the default preset');
+  for (const preset of ['warm-parchment', 'liquid-glass', 'industrial-brutalist', 'nordic-moss', 'solar-gold', 'tokyo-neon', 'vanguard-monolith']) {
+    const selectorIndex = tokens.indexOf(`[data-theme="${preset}"]`);
+    const blockStart = tokens.indexOf('{', selectorIndex);
+    const block = selectorIndex < 0 ? '' : tokens.slice(blockStart, tokens.indexOf('}', blockStart));
+    assert.match(block || '', /--bg-surface-secondary:/, `${preset} must provide its own sidebar surface`);
+  }
+});
+
+test('Aira Atelier retains the existing preset ID and updates user-facing text', () => {
+  const settings = read('src/components/SettingsModal.tsx');
+  assert.match(settings, /id: 'linear-precision',\s*name: 'Aira Atelier'/);
+  assert.doesNotMatch(settings, /Claude Editorial/);
+  assert.match(read('src/components/HelpCenterModal.tsx'), /Choose from Aira Atelier/);
+});
+
+test('Greeting removes suggestion cards while keeping mode-specific copy and recent history', () => {
+  const greeting = read('src/components/GreetingScreen.tsx');
+  const app = read('src/App.tsx');
+  assert.doesNotMatch(greeting, /dynamicStarters|PromptCard|grid-flow-dense|onSelectStarter/);
+  assert.doesNotMatch(app, /onSelectStarter=/);
+  assert.match(greeting, /Autonomous Agent Mission/);
+  assert.match(greeting, /Continue:/);
 });
 
 test('Visual refactor keeps AIRA identity and existing interaction contracts', () => {

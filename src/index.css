@@ -1013,12 +1013,12 @@
 }
 
 .aira-editorial-app .aira-sidebar-shell {
-  background-color: var(--bg-surface);
+  background-color: var(--bg-surface-secondary);
   border-right-color: var(--border-color);
 }
 
 .aira-editorial-app .aira-sidebar-footer {
-  background-color: var(--bg-surface);
+  background-color: var(--bg-surface-secondary);
 }
 
 .aira-editorial-app .aira-composer-card {

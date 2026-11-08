@@ -34,7 +34,7 @@ export interface PresetTheme {
 export const PRESET_THEMES: PresetTheme[] = [
   {
     id: 'linear-precision',
-    name: 'Claude Editorial',
+    name: 'Aira Atelier',
     badge: 'Default',
     feature: 'Warm cream canvas, coral accents & editorial serif typography',
     swatches: ['#FAF9F5', '#181715', '#CC785C'],

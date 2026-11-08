@@ -123,7 +123,7 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
       title: 'Aesthetic Presets & Visual Systems',
       summary: 'Eight handcrafted design systems balancing typographic rhythm and architectural contrast.',
       content: [
-        'Choose from Claude Editorial (Linear Precision), Warm Parchment, Liquid Glass, Industrial Brutalist, Nordic Earth, Solaris Gold, Tokyo Cyber, or Vanguard Monolith.',
+        'Choose from Aira Atelier, Warm Parchment, Liquid Glass, Industrial Brutalist, Nordic Earth, Solaris Gold, Tokyo Cyber, or Vanguard Monolith.',
         'All presets seamlessly adapt across Light, Dark, and System appearance modes.',
         'Visual preferences persist automatically across your browser sessions.'
       ]

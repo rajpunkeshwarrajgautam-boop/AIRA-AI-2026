@@ -84,7 +84,7 @@ const ThemeToggle = ({ theme, onChange }: { theme: 'light' | 'dark' | 'system', 
           onClick={() => onChange(id)}
           className={`relative p-2 rounded-[8px] flex items-center justify-center transition-colors duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-claude-terracotta ${
             theme === id 
-              ? 'text-white' 
+              ? 'text-claude-onAccent'
               : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white'
           }`}
           title={id.charAt(0).toUpperCase() + id.slice(1)}
@@ -92,7 +92,7 @@ const ThemeToggle = ({ theme, onChange }: { theme: 'light' | 'dark' | 'system', 
           {theme === id && (
             <motion.div
               layoutId="theme-active-pill"
-              className="absolute inset-0 bg-[#a9583e] rounded-[8px]"
+              className="absolute inset-0 bg-claude-terracotta-hover rounded-[8px]"
               transition={{ type: "spring", stiffness: 400, damping: 25 }}
             />
           )}
@@ -302,12 +302,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
 
             <div className="shrink-0 px-3.5 py-1.5">
-              <button onClick={handleNewChatMobile} className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg bg-[#a9583e] hover:bg-[#94452e] text-white text-[13px] font-medium transition-colors active:scale-[0.99] group">
+              <button onClick={handleNewChatMobile} className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg bg-claude-terracotta-hover hover:bg-claude-terracotta text-claude-onAccent text-[13px] font-medium transition-colors active:scale-[0.99] group">
                 <div className="flex items-center space-x-2.5">
-                  <Plus className="w-4 h-4 text-white" />
+                  <Plus className="w-4 h-4" />
                   <span>Start new chat</span>
                 </div>
-                <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/15 border border-white/25 text-white/90">Ctrl N</kbd>
+                <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-current/20 bg-black/5">Ctrl N</kbd>
               </button>
             </div>
 
@@ -350,7 +350,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     onOpenSearch(searchQuery);
                   }
                 }}
-                className="w-full text-[13px] font-medium pl-10 pr-4 py-2.5 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark placeholder-claude-muted-light dark:placeholder-claude-muted-dark focus:outline-none focus:border-claude-terracotta/50 focus:shadow-[0_0_0_2px_rgba(235,110,75,0.1)] text-claude-text-light dark:text-white transition-all duration-300"
+                className="w-full text-[13px] font-medium pl-10 pr-4 py-2.5 rounded-xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark placeholder-claude-muted-light dark:placeholder-claude-muted-dark focus:outline-none focus:border-claude-terracotta/50 text-claude-text-light dark:text-white transition-all duration-300"
               />
             </div>
             <button
@@ -415,7 +415,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   onClick={() => setIsAccountMenuOpen(prev => !prev)}
                   className="flex w-full min-w-0 items-center space-x-2.5 p-2 rounded-xl hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark border border-claude-border-light/60 dark:border-claude-border-dark/60 transition-all text-left active:scale-[0.98]"
                 >
-                  <div className="w-7 h-7 rounded-[8px] bg-[#a9583e] text-white font-semibold text-xs flex items-center justify-center flex-shrink-0 overflow-hidden">
+                  <div className="w-7 h-7 rounded-[8px] bg-claude-terracotta-hover text-claude-onAccent font-semibold text-xs flex items-center justify-center flex-shrink-0 overflow-hidden">
                     {neonUser?.image ? (
                       <img src={neonUser.image} alt={neonUser.name || 'User'} className="w-full h-full object-cover" />
                     ) : neonUser ? (

@@ -71,7 +71,7 @@ export const ReleaseNotesModal: React.FC<ReleaseNotesModalProps> = ({
       summary: 'Introduction of the Claude-inspired Artifact Studio for live code and graphic execution, along with 8 architectural aesthetic presets.',
       highlights: [
         'Artifact Studio: live multi-runtime streaming sandbox for React, HTML5, SVG, Markdown, and Mermaid diagrams.',
-        'Eight bespoke aesthetic presets: Claude Editorial, Warm Parchment, Liquid Glass, Industrial Brutalist, Nordic Earth, Solaris Gold, Tokyo Cyber, and Vanguard Monolith.',
+        'Eight bespoke aesthetic presets: Aira Atelier, Warm Parchment, Liquid Glass, Industrial Brutalist, Nordic Earth, Solaris Gold, Tokyo Cyber, and Vanguard Monolith.',
         'Persistent Memory Vault with automated privacy scrubbing and semantic tagging.'
       ],
       features: [

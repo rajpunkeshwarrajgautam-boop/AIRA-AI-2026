@@ -1,16 +1,5 @@
 import React, { useState, useMemo, useRef, useCallback } from 'react';
-import { 
-  Compass, 
-  Code2, 
-  FileText, 
-  Bot, 
-  ArrowUpRight,
-  Zap,
-  RotateCcw,
-  FolderGit2,
-  Brain,
-  Layers
-} from 'lucide-react';
+import { ArrowUpRight, Zap, RotateCcw } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import gsap from 'gsap';
 import { useGSAP } from '@gsap/react';
@@ -22,24 +11,15 @@ gsap.registerPlugin(useGSAP);
 interface GreetingScreenProps {
   userName: string;
   workspaceMode: WorkspaceMode;
-  onSelectStarter: (prompt: string) => void;
   conversations?: Conversation[];
   activeProject?: Project;
   extendedThinking?: boolean;
   onSelectChat?: (id: string) => void;
 }
 
-interface PromptCard {
-  id: string;
-  title: string;
-  prompt: string;
-  icon: React.ReactNode;
-}
-
 export const GreetingScreen: React.FC<GreetingScreenProps> = ({
   userName,
   workspaceMode,
-  onSelectStarter,
   conversations = [],
   activeProject,
   extendedThinking = false,
@@ -93,25 +73,8 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
     return { hour, day, isWeekend, isFriday, isMonday, period, baseGreeting, situationDescription };
   }, [currentTime]);
 
-  // Chat history situation analysis
-  const recentHistory = useMemo(() => {
-    const activeChats = conversations.filter(c => c.messages && c.messages.length > 0);
-    if (!activeChats.length) return { recentChat: null, domain: 'general' as const };
-
-    const recentChat = activeChats[0]; // Most recent active conversation
-    const allRecentText = activeChats.slice(0, 3).map(c => `${c.title} ${c.messages.map(m => m.content).join(' ')}`).join(' ').toLowerCase();
-
-    let domain: 'code' | 'research' | 'writing' | 'agent' | 'general' = 'general';
-    if (allRecentText.includes('code') || allRecentText.includes('react') || allRecentText.includes('typescript') || allRecentText.includes('bug') || allRecentText.includes('component')) {
-      domain = 'code';
-    } else if (allRecentText.includes('research') || allRecentText.includes('market') || allRecentText.includes('competitor') || allRecentText.includes('analysis') || allRecentText.includes('paper')) {
-      domain = 'research';
-    } else if (allRecentText.includes('agent') || allRecentText.includes('workflow') || allRecentText.includes('pipeline') || allRecentText.includes('automation')) {
-      domain = 'agent';
-    }
-
-    return { recentChat, domain };
-  }, [conversations]);
+  // Keep conversation continuation available without rendering suggestion cards.
+  const recentChat = useMemo(() => conversations.find(c => c.messages?.length > 0), [conversations]);
 
   // Contextual Greeting Title
   const dynamicGreetingTitle = useMemo(() => {
@@ -137,153 +100,6 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
     }
     return timeContext.situationDescription;
   }, [activeProject, workspaceMode, extendedThinking, timeContext]);
-
-  // Dynamic Starter Suggestion Grid tailored to context & history
-  const dynamicStarters: PromptCard[] = useMemo(() => {
-    if (activeProject) {
-      return [
-        {
-          id: 'proj-arch',
-          title: `Analyze ${activeProject.name} Architecture`,
-          prompt: `Analyze the documents in project "${activeProject.name}" and provide a high-level system architecture and component dependency map.`,
-          icon: <FolderGit2 className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
-        },
-        {
-          id: 'proj-code',
-          title: 'Implement Core Feature',
-          prompt: `Based on project "${activeProject.name}" specifications, write the production TypeScript implementation for the primary missing capability.`,
-          icon: <Code2 className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
-        },
-        {
-          id: 'proj-review',
-          title: 'Red Team & Risk Audit',
-          prompt: `Review the design constraints and architecture of "${activeProject.name}". Identify 3 potential edge-case failures and mitigation strategies.`,
-          icon: <Brain className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
-        },
-        {
-          id: 'proj-doc',
-          title: 'Synthesize Executive Brief',
-          prompt: `Synthesize the current status of project "${activeProject.name}" into a 1-page executive decision memo with next milestone priorities.`,
-          icon: <FileText className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
-        }
-      ];
-    }
-
-    if (recentHistory.domain === 'code') {
-      return [
-        {
-          id: 'code-dash',
-          title: 'Build interactive React artifact',
-          prompt: 'Design and build a polished interactive dashboard artifact with realtime telemetry, responsive grid layout, and smooth animations.',
-          icon: <Code2 className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
-        },
-        {
-          id: 'code-audit',
-          title: 'Review codebase & optimize performance',
-          prompt: 'Review this frontend component architecture for re-render bottlenecks, accessibility WCAG compliance, and type safety improvements.',
-          icon: <Brain className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
-        },
-        {
-          id: 'code-agent',
-          title: 'Design full-stack API contract',
-          prompt: 'Draft an OpenAPI-spec compliant schema with TypeScript types, rate limiting rules, and idempotent mutation handlers.',
-          icon: <Layers className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
-        },
-        {
-          id: 'code-doc',
-          title: 'Generate interactive SVG illustration',
-          prompt: 'Generate an SVG architectural diagram representing a multi-agent orchestration pipeline with glowing bus lines and clean geometric nodes.',
-          icon: <Zap className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
-        }
-      ];
-    }
-
-    if (recentHistory.domain === 'research') {
-      return [
-        {
-          id: 'res-comp',
-          title: 'Research a competitive landscape',
-          prompt: 'Research the current landscape for multi-model AI workspaces and compile a structured, sourced competitive brief with key product gaps.',
-          icon: <Compass className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
-        },
-        {
-          id: 'res-synthesis',
-          title: 'Synthesize complex technical paper',
-          prompt: 'Break down the core trade-offs between dense vs mixture-of-experts transformer architectures and summarize empirical benchmarks.',
-          icon: <FileText className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
-        },
-        {
-          id: 'res-memo',
-          title: 'Draft executive decision memo',
-          prompt: 'Draft a concise decision memo outlining 3 architectural alternatives for scalable real-time collaboration with estimated costs and risks.',
-          icon: <FileText className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
-        },
-        {
-          id: 'res-agent',
-          title: 'Explore emerging market signals',
-          prompt: 'Analyze current adoption trends for local agentic coding assistants and identify key enterprise security requirements.',
-          icon: <Bot className="w-4 h-4 text-claude-terracotta" strokeWidth={1.5} />,
-        }
-      ];
-    }
-
-    if (workspaceMode === 'agent') {
-      return [
-        {
-          id: 'agent-build',
-          title: 'Build CRM web app with tests',
-          prompt: 'Build a production-ready CRM website with React frontend, TypeScript API service, input validation, and comprehensive automated tests.',
-          icon: <Code2 className="w-4 h-4 text-claude-accentInk" strokeWidth={1.5} />,
-        },
-        {
-          id: 'agent-research',
-          title: 'Deep competitive research mission',
-          prompt: 'Research the current multi-model AI workspace landscape, cross-examine technical benchmarks, and synthesize an executive brief with citations.',
-          icon: <Compass className="w-4 h-4 text-claude-accentInk" strokeWidth={1.5} />,
-        },
-        {
-          id: 'agent-automation',
-          title: 'Design scheduled automation',
-          prompt: 'Create an automation for every Monday at 9 AM that queries database metrics, summarizes active alerts, and compiles an operational report.',
-          icon: <Zap className="w-4 h-4 text-claude-accentInk" strokeWidth={1.5} />,
-        },
-        {
-          id: 'agent-audit',
-          title: 'System architecture & risk audit',
-          prompt: 'Audit this system architecture for race conditions, credential isolation boundaries, and failover recovery strategies.',
-          icon: <Brain className="w-4 h-4 text-claude-accentInk" strokeWidth={1.5} />,
-        },
-      ];
-    }
-
-    // Default high-caliber conversational starters
-    return [
-      {
-        id: 'default-research',
-        title: 'Research a complex topic',
-        prompt: 'Research the current landscape for multi-model AI workspaces and compile a structured, sourced competitive brief with key product gaps.',
-        icon: <Compass className="w-4 h-4 text-claude-accentInk" strokeWidth={1.5} />,
-      },
-      {
-        id: 'default-vision',
-        title: 'Generate conceptual visual',
-        prompt: 'Generate an image of a futuristic, sustainable city with layered aerial transit, vertical forests, and clean neoclassical architecture at dusk.',
-        icon: <Zap className="w-4 h-4 text-claude-accentInk" strokeWidth={1.5} />,
-      },
-      {
-        id: 'default-code',
-        title: 'Build an interactive web artifact',
-        prompt: 'Design and build a polished interactive dashboard artifact for an AI operations workspace with realtime telemetry and responsive charts.',
-        icon: <Code2 className="w-4 h-4 text-claude-accentInk" strokeWidth={1.5} />,
-      },
-      {
-        id: 'default-agent',
-        title: 'Plan an autonomous workflow',
-        prompt: 'Break this objective into an autonomous agent mission with clear steps, tools, checkpoints, and a verifiable deliverable.',
-        icon: <Bot className="w-4 h-4 text-claude-accentInk" strokeWidth={1.5} />,
-      },
-    ];
-  }, [activeProject, recentHistory.domain, workspaceMode]);
 
   const triggerCelebration = useCallback(() => {
     confetti({
@@ -361,56 +177,19 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
         {dynamicSubtitle}
       </p>
 
-      {/* History Continuation Pill (if recent chat exists) */}
-      {recentHistory.recentChat && onSelectChat && (
-        <div className="claude-fade-up mb-7 w-full max-w-md">
-          <button
-            onClick={() => onSelectChat(recentHistory.recentChat!.id)}
-            className="w-full flex items-center justify-between p-3 px-4 rounded-xl gradient-card-surface text-left transition-colors duration-200 group active:scale-[0.99]"
-          >
-            <div className="flex items-center gap-2.5 min-w-0">
-              <span className="p-1 rounded-lg bg-gradient-to-br from-claude-terracotta/20 to-claude-terracotta/5 text-claude-terracotta">
-                <RotateCcw className="w-3.5 h-3.5" />
-              </span>
-              <div className="min-w-0">
-                <span className="text-[10px] uppercase font-bold tracking-wider text-claude-muted-light dark:text-claude-muted-dark block">Pick up recent thread</span>
-                <span className="text-xs font-semibold text-claude-text-light dark:text-white truncate block">{recentHistory.recentChat.title}</span>
-              </div>
-            </div>
-            <ArrowUpRight className="w-4 h-4 text-claude-muted-light group-hover:text-claude-terracotta group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-all flex-shrink-0" />
-          </button>
-        </div>
+      {/* A single unobtrusive text link retains recent-chat access. */}
+      {recentChat && onSelectChat && (
+        <button
+          onClick={() => onSelectChat(recentChat.id)}
+          className="claude-fade-up group inline-flex max-w-full items-center gap-2 text-xs text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-accentInk transition-colors"
+        >
+          <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+          <span className="shrink-0">Continue:</span>
+          <span className="truncate font-medium">{recentChat.title}</span>
+          <ArrowUpRight className="w-3.5 h-3.5 shrink-0" />
+        </button>
       )}
 
-      {/* Context-aware starter cards; understated editorial surfaces from DESIGN.md. */}
-      <div className="claude-fade-up w-full min-w-0 grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-left grid-flow-dense">
-        {dynamicStarters.map((starter, idx) => (
-          <button
-            key={starter.id}
-            onClick={() => onSelectStarter(starter.prompt)}
-            className={`group p-5 sm:p-6 min-h-[148px] rounded-xl gradient-card-surface transition-colors duration-200 cursor-pointer flex flex-col justify-between active:scale-[0.99] ${idx === 0 ? 'border-claude-terracotta/30' : ''}`}
-          >
-            <div className="flex items-center justify-between mb-2">
-              <span className="p-1.5 rounded-lg bg-claude-surface2-light/80 dark:bg-claude-surface2-dark/80 text-claude-accentInk group-hover:bg-claude-terracotta/15 transition-colors">
-                {starter.icon}
-              </span>
-              <ArrowUpRight className="w-3.5 h-3.5 text-claude-muted-light/40 dark:text-claude-muted-dark/40 group-hover:text-claude-terracotta group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-all" strokeWidth={1.5} />
-            </div>
-
-            <div>
-              <div className="text-sm sm:text-[15px] font-medium text-claude-text-light dark:text-claude-text-dark mb-1.5 group-hover:text-claude-accentInk transition-colors font-sans">
-                {starter.title}
-              </div>
-              <div 
-                className="text-[13px] text-claude-muted-light dark:text-claude-muted-dark line-clamp-2 leading-[1.5] font-sans"
-                style={{ textWrap: 'pretty' }}
-              >
-                {starter.prompt}
-              </div>
-            </div>
-          </button>
-        ))}
-      </div>
     </div>
   );
 };

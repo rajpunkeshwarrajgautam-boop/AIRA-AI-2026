@@ -1,7 +1,7 @@
 /* Opt-in contextual workspace presentation, using the same editorial tokens as AIRA. */
 .aira-adaptive-shell {
   --adaptive-surface: var(--bg-main);
-  --adaptive-rail: var(--bg-surface);
+  --adaptive-rail: var(--bg-surface-secondary);
   --adaptive-ink: var(--text-primary);
   --adaptive-muted: var(--text-muted);
   --adaptive-line: var(--border-color);

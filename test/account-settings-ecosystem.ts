@@ -10,7 +10,7 @@ function artifactPath(filename: string): string {
 }
 
 const PRESETS = [
-  { id: 'linear-precision', name: 'Claude Editorial' },
+  { id: 'linear-precision', name: 'Aira Atelier' },
   { id: 'warm-parchment', name: 'Warm Parchment' },
   { id: 'liquid-glass', name: 'Liquid Glass' },
   { id: 'industrial-brutalist', name: 'Industrial Brutalist' },

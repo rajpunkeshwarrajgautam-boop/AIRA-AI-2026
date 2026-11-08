@@ -146,7 +146,7 @@ async function main() {
         // controls, including system color-scheme changes without a reload.
         if (width === 390) {
           const presets: Array<[string, string]> = [
-            ['Claude Editorial', 'linear-precision'],
+            ['Aira Atelier', 'linear-precision'],
             ['Warm Parchment', 'warm-parchment'],
             ['Liquid Glass', 'liquid-glass'],
             ['Industrial Brutalist', 'industrial-brutalist'],

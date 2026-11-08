@@ -1473,7 +1473,6 @@ useEffect(() => {
             <GreetingScreen 
               userName={settings.userName} 
               workspaceMode={workspaceMode} 
-              onSelectStarter={prompt => handleSendMessage(prompt, [])} 
               conversations={conversations}
               activeProject={currentProject}
               extendedThinking={settings.extendedThinking}
