@@ -34,6 +34,13 @@ dependency or that an isolated unit test proves a production rollout.
    → `AgentRuntime` (`packages/agent-runtime/src/index.ts`) → autonomous engine
    and repository → PostgreSQL task state. Worker host claims/renews leases
    through the same repository and asks the engine to execute.
+   The engine's resumed checkpoint path shares final verification with fresh
+   execution. Approval and pause/resume first-state transitions use the
+   repository's fencing-token compare-and-swap; changing the repository
+   contract may reintroduce duplicate specialist execution. A resumed
+   `RUNNING` write requires renewed approval and a failed checkpoint is
+   terminal. See `test/autonomous-resume-approval-fence.test.ts` for both
+   initial and recovery regressions.
 3. **Browser persistence:** `App.tsx` → `storage.ts` →
    `indexedDbStorage.ts`; migration reads legacy LocalStorage, writes to
    IndexedDB, verifies the saved value, then removes only that legacy key.

@@ -7,6 +7,56 @@ Date: 2026-11-08. Baseline: `prod-release` at
 is a code-only repair candidate, not an attestation that all eight
 repository-wide UNSLOP phases or production acceptance are complete.
 
+## Independent follow-up, 2026-11-09 — fail-closed autonomous recovery
+
+An additional bounded review of the 2026-11-08 candidate identified
+**execution-result and checkpoint integrity failures** that the previous live
+acceptance did not cover:
+
+1. A resumed mission marked itself `Verified: true` without running the final
+   verification specialist. A failed verifier could also result in a task
+   being recorded as `COMPLETED` in the original execution path.
+2. A specialist returning `CANCELLED`, `TIMED_OUT` or `UNAVAILABLE`, or an
+   absent specialist, was treated as a successfully completed step.
+3. Crash recovery excluded a persisted `RUNNING` step from the resume list,
+   potentially completing the mission without executing its unfinished step.
+   An uncertain in-flight write now requires new explicit approval; an
+   unfinished read may safely retry. A persisted `FAILED` step prevents
+   mission completion.
+4. Simultaneous approval or pause/resume requests could both pass an old
+   state check and race to launch duplicate work. The first state transition
+   now uses the observed fencing token as a compare-and-swap precondition.
+5. The resumed loop now enforces the same execution-cycle ceiling as the
+   ordinary loop.
+
+The **same verification helper** now handles fresh and resumed execution.
+Non-success verifier outcomes fail the mission rather than yielding a false
+completion. If no verifier is configured, execution preserves the existing
+completion semantics but explicitly reports `Verified: false`; this is **not**
+an independently verified deliverable. The regression suite now includes
+16 approval, verification, recovery, unavailable-specialist and concurrent
+request cases. No external tool side effects occur in these synthetic tests.
+
+### Local regression results for this follow-up
+
+| Gate | Observed result | Limitation |
+| --- | --- | --- |
+| Autonomous adversarial, fail-closed, E2E, recovery, fencing, approval, Python containment | **66/66 PASS** | Deterministic local execution; includes all 16 new approval/recovery tests |
+| Memory, identity-transition, migration, behavioral security and browser authorization | **28/28 PASS** | Browser authorization uses isolated local Chromium, not two live OAuth accounts |
+| TypeScript typecheck | **PASS** | Client, server and API projects |
+| Vite production build | **PASS** | Existing 681 kB JS chunk warning |
+| Oxlint | **Exit 0** | Existing warnings remain |
+| Browser encrypted-session persistence acceptance | **NOT CERTIFIED in this sandbox** | Chromium process-socket restriction also affects unmodified baseline; two persisted snapshot assertions fail |
+| Updated-commit two-OAuth-principal staging acceptance and formal independent SAST | **NOT AVAILABLE** | Browser session unavailable and security scanner preflight resource inaccessible; never infer PASS from unit tests |
+
+No production release is authorized on these results alone. CI and Vercel
+preview must be independently re-evaluated against the *newly pushed* commit.
+
+This section supersedes the older 54-case local test count below; the old
+evidence is retained solely as a historical checkpoint. The new commit must
+repeat exact-SHA CI, preview, security and genuine authenticated live gates
+before production eligibility is reassessed.
+
 ## Independent follow-up review of PR #159 (2026-11-08)
 
 The original PR candidate `e76901cab85c7890fef3e4cbae5d4801a5d089c9`
