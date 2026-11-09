@@ -58,7 +58,15 @@ async function main() {
   killPort(3001);
   killPort(5173);
 
-  const stagingDbUrl = process.env.STAGING_DATABASE_URL || process.env.DATABASE_URL;
+  let stagingDbUrl = process.env.STAGING_DATABASE_URL || process.env.DATABASE_URL;
+  if (!stagingDbUrl) {
+    try {
+      const neonRes = spawnSync('neon', ['connection-string', 'br-snowy-bonus-b32thjlz', '--project-id', 'mute-frost-50372225'], { encoding: 'utf8', shell: true });
+      if (neonRes.status === 0 && neonRes.stdout && neonRes.stdout.trim()) {
+        stagingDbUrl = neonRes.stdout.trim();
+      }
+    } catch {}
+  }
   if (!stagingDbUrl) {
     console.error('\n❌ ERROR: Staging database credentials not provided.');
     console.error('Set STAGING_DATABASE_URL or DATABASE_URL before running account switching tests.');
@@ -76,6 +84,7 @@ async function main() {
       ...process.env,
       PORT: String(API_PORT),
       DATABASE_URL: stagingDbUrl,
+      AIRA_SESSION_SECRET: process.env.AIRA_SESSION_SECRET || 'aira-test-session-secret-at-least-32-chars-long-2026',
       AIRA_EXTERNAL_AUTH_ENABLED: 'true',
       NEON_AUTH_BASE_URL: STAGING_AUTH_BASE,
       NEON_AUTH_JWKS_URL: STAGING_JWKS_URL,
@@ -84,6 +93,8 @@ async function main() {
     shell: true,
     stdio: 'pipe'
   });
+  apiProc.stdout?.on('data', d => process.stdout.write(`[API] ${d}`));
+  apiProc.stderr?.on('data', d => process.stderr.write(`[API ERR] ${d}`));
 
   console.log('[2/7] Starting Vite Frontend on port 5173...');
   const viteProc: ChildProcess = spawn('npx', ['vite', '--host', '0.0.0.0', '--port', String(VITE_PORT), '--strictPort'], {
@@ -111,6 +122,15 @@ async function main() {
 
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     const page = await context.newPage();
+    page.on('console', msg => console.log(`[PAGE LOG] ${msg.type()}: ${msg.text()}`));
+    page.on('pageerror', err => console.log(`[PAGE ERR] ${err.message}`));
+    page.on('response', async res => {
+      if (res.url().includes('/api/')) {
+        let body = '';
+        try { body = await res.text(); } catch {}
+        console.log(`[HTTP ${res.status()}] ${res.request().method()} ${res.url()} -> ${body.slice(0, 300)}`);
+      }
+    });
 
     const ts = Date.now();
     const emailA = `switch_uA_${ts}@example.com`;
@@ -118,6 +138,50 @@ async function main() {
     const password = `SwitchSecure!2026_${ts}`;
     const tokenA = `Account-A-Exclusive-Secret-${ts}`;
     const tokenB = `Account-B-Exclusive-Secret-${ts}`;
+    const projectTitleA = `Secret-Project-A-${ts}`;
+
+    async function openAuthModal() {
+      if (await page.locator('#auth-modal-title').isVisible().catch(() => false)) {
+        return;
+      }
+      const accountBtn = page.locator('button[data-testid="account-button"], button[aria-label*="Sign in"], button[aria-label*="account"]').first();
+      await accountBtn.click();
+      const dropdownSignIn = page.locator('button[data-testid="account-menu-signin"], button:has-text("Sign in or Create Account")').first();
+      if (await dropdownSignIn.isVisible({ timeout: 2500 }).catch(() => false)) {
+        await dropdownSignIn.click();
+      }
+      await page.waitForSelector('#auth-modal-title', { timeout: 10000 });
+    }
+
+    async function performLogout() {
+      const accountBtn = page.locator('button[data-testid="account-button"], button[aria-label*="account"], button[aria-label*="Sign in"]').first();
+      await accountBtn.click();
+      await sleep(400);
+
+      const menuLogout = page.locator('button[data-testid="account-menu-logout"], button[role="menuitem"]:has-text("Log out"), button[role="menuitem"]:has-text("Sign out")').first();
+      if (await menuLogout.isVisible({ timeout: 2500 }).catch(() => false)) {
+        await menuLogout.click();
+        await sleep(1000);
+        return;
+      }
+
+      const isBilling = await page.getByText('Account & Billing Center').isVisible({ timeout: 2000 }).catch(() => false);
+      if (isBilling) {
+        await page.getByRole('button', { name: /Security/i }).click();
+        await page.getByRole('button', { name: /Sign Out/i }).click();
+        await sleep(1000);
+        return;
+      }
+
+      const authTitle = await page.locator('#auth-modal-title').isVisible({ timeout: 2000 }).catch(() => false);
+      if (authTitle) {
+        const signOutBtn = page.getByRole('button', { name: /Sign Out/i });
+        if (await signOutBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+          await signOutBtn.click();
+          await sleep(500);
+        }
+      }
+    }
 
     // -------------------------------------------------------------
     // STEP 4: Initial visit and Register Account A in page
@@ -127,8 +191,7 @@ async function main() {
     await page.waitForSelector('main textarea', { timeout: 20000 });
 
     // Open Auth modal & register Account A
-    await page.locator('button[aria-label*="Sign in"], button[aria-label*="account"]').click();
-    await page.waitForSelector('#auth-modal-title', { timeout: 10000 });
+    await openAuthModal();
     await page.getByRole('button', { name: 'Create Account' }).click();
 
     await page.locator('input[placeholder="Jane Doe"]').fill(`User A ${ts}`);
@@ -145,6 +208,21 @@ async function main() {
     await page.getByText(/Verified (Neon |Direct OAuth )?Account/i).waitFor({ state: 'visible', timeout: 20000 });
     await page.keyboard.press('Escape');
     await sleep(500);
+
+    // Save project for Account A in page
+    await page.evaluate(({ projectTitleA }) => {
+      const sessionRaw = localStorage.getItem('aira_neon_auth_session_v1');
+      const userId = sessionRaw ? JSON.parse(sessionRaw)?.user?.id : null;
+      const key = userId ? `aira_projects_user_${userId}` : 'aira_projects_v1';
+      const projects = [{
+        id: `proj-a-${Date.now()}`,
+        name: projectTitleA,
+        conversations: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      }];
+      localStorage.setItem(key, JSON.stringify(projects));
+    }, { projectTitleA });
 
     // Create Account A confidential message and wait for sync
     const textarea = page.locator('main textarea');
@@ -164,19 +242,11 @@ async function main() {
     // STEP 5: Switch to Account B in the SAME browser page
     // -------------------------------------------------------------
     console.log('[5/7] Step 2: Switch to Account B in the same browser session...');
-    await page.locator('button[aria-label*="account"]').click();
-    const isBilling = await page.getByText('Account & Billing Center').isVisible({ timeout: 3000 }).catch(() => false);
-    if (isBilling) {
-      await page.getByRole('button', { name: /Security/i }).click();
-      await page.getByRole('button', { name: /Sign Out/i }).click();
-      await sleep(1000);
-      await page.locator('button[aria-label*="account"]').click();
-      await page.waitForSelector('#auth-modal-title', { timeout: 10000 });
-    } else {
-      await page.waitForSelector('#auth-modal-title', { timeout: 10000 });
-      await page.getByRole('button', { name: 'Sign Out' }).click();
-      await sleep(500);
-    }
+    await performLogout();
+    await sleep(500);
+
+    // Open Auth modal for Account B
+    await openAuthModal();
 
     // Immediately register Account B
     await page.getByRole('button', { name: 'Create Account' }).click();
@@ -216,6 +286,20 @@ async function main() {
     assert.equal(userBKey?.includes(tokenA) || false, false, 'Account B localStorage must not contain Account A data');
     console.log('  ✓ Strict isolation verified: Account B DOM and storage have ZERO Account A traces');
 
+    // CRITICAL ASSERTION: Account A's project MUST NOT exist in Account B storage or guest storage
+    const projectLeakageB = await page.evaluate(({ projectTitleA }) => {
+      const sessionRaw = localStorage.getItem('aira_neon_auth_session_v1');
+      const userId = sessionRaw ? JSON.parse(sessionRaw)?.user?.id : null;
+      if (!userId) return null;
+      const val = localStorage.getItem(`aira_projects_user_${userId}`);
+      if (val && val.includes(projectTitleA)) return val;
+      const guestVal = localStorage.getItem('aira_projects_v1');
+      if (guestVal && guestVal.includes(projectTitleA)) return guestVal;
+      return null;
+    }, { projectTitleA });
+    assert.equal(projectLeakageB, null, 'Account B must NEVER see or inherit Account A projects in localStorage');
+    console.log('  ✓ Project isolation verified: Account B storage has ZERO Account A project traces');
+
     // Create Account B confidential message
     const syncPromiseB = page.waitForResponse(
       res => res.url().includes('/api/conversations/sync') &&
@@ -233,18 +317,8 @@ async function main() {
     // STEP 6: Sign out to Guest
     // -------------------------------------------------------------
     console.log('[6/7] Step 3: Sign out to Guest workspace...');
-    await page.locator('button[aria-label*="account"]').click();
-    const isBillingGuest = await page.getByText('Account & Billing Center').isVisible({ timeout: 3000 }).catch(() => false);
-    if (isBillingGuest) {
-      await page.getByRole('button', { name: /Security/i }).click();
-      await page.getByRole('button', { name: /Sign Out/i }).click();
-      await sleep(1000);
-    } else {
-      await page.waitForSelector('#auth-modal-title', { timeout: 10000 });
-      await page.getByRole('button', { name: 'Sign Out' }).click();
-      await page.keyboard.press('Escape');
-      await sleep(1000);
-    }
+    await performLogout();
+    await sleep(500);
 
     // Neither Account A nor Account B secret in guest DOM
     assert.equal(await page.getByText(tokenA).count(), 0, 'Guest DOM must not show Account A data');
@@ -253,12 +327,20 @@ async function main() {
     await guestFooter.getByText('Guest Workspace').waitFor({ state: 'visible', timeout: 10000 });
     console.log('  ✓ Guest state verified: Clean workspace with zero account data visible');
 
+    // Guest workspace must not see Account A projects
+    const guestProjectLeakage = await page.evaluate(({ projectTitleA }) => {
+      const guestVal = localStorage.getItem('aira_projects_v1');
+      if (guestVal && guestVal.includes(projectTitleA)) return guestVal;
+      return null;
+    }, { projectTitleA });
+    assert.equal(guestProjectLeakage, null, 'Guest workspace must NEVER see Account A projects in localStorage');
+    console.log('  ✓ Guest project isolation verified: Zero Account A project traces in guest storage');
+
     // -------------------------------------------------------------
     // STEP 7: Switch back to Account A and verify hydration
     // -------------------------------------------------------------
     console.log('[7/7] Step 4: Re-authenticate into Account A and assert exact hydration...');
-    await page.locator('button[aria-label*="Sign in"]').click();
-    await page.waitForSelector('#auth-modal-title', { timeout: 10000 });
+    await openAuthModal();
 
     await page.locator('input[placeholder="name@example.com"]').fill(emailA);
     await page.locator('input[placeholder="••••••••"]').fill(password);
@@ -280,6 +362,17 @@ async function main() {
 
     assert.equal(await page.getByText(tokenB).count(), 0, 'Account A must NEVER contain Account B data');
     console.log('  ✓ Account A successfully restored from PostgreSQL with zero Account B pollution!');
+
+    // Verify Account A projects restored
+    const accountAProjects = await page.evaluate(({ projectTitleA }) => {
+      const sessionRaw = localStorage.getItem('aira_neon_auth_session_v1');
+      const userId = sessionRaw ? JSON.parse(sessionRaw)?.user?.id : null;
+      if (!userId) return false;
+      const val = localStorage.getItem(`aira_projects_user_${userId}`);
+      return val ? val.includes(projectTitleA) : false;
+    }, { projectTitleA });
+    assert.ok(accountAProjects, 'Account A projects must be intact upon re-authenticating');
+    console.log('  ✓ Account A projects intact and restored upon re-authentication');
 
     console.log('\n=============================================================');
     console.log('ALL SAME-BROWSER ACCOUNT SWITCHING CHECKS PASSED [4/4]');

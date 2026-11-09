@@ -22,6 +22,7 @@ import {
   ShieldCheck,
   Users,
   Sliders,
+  ChevronDown,
   Loader2,
   Wrench,
   CheckCircle2,
@@ -263,9 +264,18 @@ export const UnifiedWorkspace: React.FC<UnifiedWorkspaceProps> = ({
   const availableTabs = useMemo(() => {
     const tabs: Array<{ id: UnifiedWorkspaceTab; label: string; icon: any; count?: number; badge?: string }> = [];
 
-    // 1. Preview Tab: present if artifact or builder preview exists, or general preview surface
-    const hasPreview = Boolean(builderPreviewUrl || (artifact && (artifact.type === 'application/vnd.ant.code' || artifact.type === 'application/vnd.ant.react' || artifact.type === 'text/html' || artifact.type === 'image/svg+xml' || isMultiModal)));
-    if (hasPreview || (!artifact && builderFiles.length === 0 && !executionGraph)) {
+    // 1. Preview Tab: present strictly if artifact or builder preview exists
+    const hasPreview = Boolean(
+      builderPreviewUrl ||
+      (artifact && (
+        artifact.type === 'application/vnd.ant.code' ||
+        artifact.type === 'application/vnd.ant.react' ||
+        artifact.type === 'text/html' ||
+        artifact.type === 'image/svg+xml' ||
+        isMultiModal
+      ))
+    );
+    if (hasPreview) {
       tabs.push({
         id: 'preview',
         label: 'Preview',
@@ -337,12 +347,6 @@ export const UnifiedWorkspace: React.FC<UnifiedWorkspaceProps> = ({
       });
     }
 
-    // 8. Settings / Advanced Tab: always accessible
-    tabs.push({
-      id: 'advanced',
-      label: 'Diagnostics',
-      icon: Sliders,
-    });
 
     return tabs;
   }, [
@@ -360,8 +364,8 @@ export const UnifiedWorkspace: React.FC<UnifiedWorkspaceProps> = ({
 
   // Ensure active tab is valid
   useEffect(() => {
-    if (!availableTabs.some(t => t.id === activeTab)) {
-      setActiveTab(availableTabs[0]?.id || 'preview');
+    if (availableTabs.length > 0 && !availableTabs.some(t => t.id === activeTab)) {
+      setActiveTab(availableTabs[0].id);
     }
   }, [availableTabs, activeTab]);
 
@@ -549,36 +553,38 @@ export const UnifiedWorkspace: React.FC<UnifiedWorkspaceProps> = ({
       </div>
 
       {/* Contextual Tab Bar */}
-      <div className="flex items-center border-b border-claude-border-light dark:border-claude-border-dark px-3 bg-claude-surface-light dark:bg-claude-surface-dark overflow-x-auto shrink-0">
-        {availableTabs.map(tab => {
-          const Icon = tab.icon;
-          const active = activeTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap ${
-                active
-                  ? 'border-claude-terracotta text-claude-accentInk font-semibold'
-                  : 'border-transparent text-claude-muted-light dark:text-slate-400 hover:text-claude-text-light dark:hover:text-white'
-              }`}
-            >
-              <Icon className="w-3.5 h-3.5" />
-              <span>{tab.label}</span>
-              {tab.badge && (
-                <span className="px-1.5 py-0.2 rounded text-[10px] font-mono bg-claude-terracotta/15 text-claude-accentInk">
-                  {tab.badge}
-                </span>
-              )}
-              {tab.count !== undefined && tab.count > 0 && (
-                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-black/10 dark:bg-white/10 font-mono">
-                  {tab.count}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
+      {availableTabs.length > 0 && (
+        <div className="flex items-center border-b border-claude-border-light dark:border-claude-border-dark px-3 bg-claude-surface-light dark:bg-claude-surface-dark overflow-x-auto shrink-0">
+          {availableTabs.map(tab => {
+            const Icon = tab.icon;
+            const active = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap ${
+                  active
+                    ? 'border-claude-terracotta text-claude-accentInk font-semibold'
+                    : 'border-transparent text-claude-muted-light dark:text-slate-400 hover:text-claude-text-light dark:hover:text-white'
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                <span>{tab.label}</span>
+                {tab.badge && (
+                  <span className="px-1.5 py-0.2 rounded text-[10px] font-mono bg-claude-terracotta/15 text-claude-accentInk">
+                    {tab.badge}
+                  </span>
+                )}
+                {tab.count !== undefined && tab.count > 0 && (
+                  <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-black/10 dark:bg-white/10 font-mono">
+                    {tab.count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Security Notices & Runtime Errors */}
       {securityNotice && (
@@ -603,10 +609,21 @@ export const UnifiedWorkspace: React.FC<UnifiedWorkspaceProps> = ({
         </div>
       )}
 
-      {/* Tab Panes */}
+      {/* Tab Panes / Empty State */}
       <div className="flex-1 min-h-0 relative overflow-hidden flex flex-col">
-        {/* TAB: PREVIEW */}
-        {activeTab === 'preview' && (
+        {availableTabs.length === 0 ? (
+          <AdaptiveStudioEmptyState
+            executionGraph={executionGraph}
+            onSelectArtifact={onSelectArtifact ? (id) => {
+              const art = allArtifacts?.find(a => a.id === id);
+              if (art) onSelectArtifact(art);
+            } : undefined}
+            onApproveTask={onApproveTask}
+          />
+        ) : (
+          <>
+            {/* TAB: PREVIEW */}
+            {activeTab === 'preview' && (
           <div className="w-full h-full flex flex-col min-h-0 relative">
             {/* Toolbar for preview controls */}
             <div className="h-9 px-3 flex items-center justify-between border-b border-claude-border-light dark:border-white/10 bg-white/40 dark:bg-black/20 text-xs">
@@ -725,7 +742,6 @@ export const UnifiedWorkspace: React.FC<UnifiedWorkspaceProps> = ({
                 <AdaptiveStudioEmptyState
                   executionGraph={executionGraph}
                   onApproveTask={onApproveTask}
-                  onClose={onClose}
                 />
               )}
             </div>
@@ -953,7 +969,36 @@ export const UnifiedWorkspace: React.FC<UnifiedWorkspaceProps> = ({
             </div>
           </div>
         )}
+          </>
+        )}
       </div>
+
+      {/* Expandable Workspace Footer: Advanced Sandbox Diagnostics */}
+      <footer
+        className="border-t border-claude-border-light dark:border-claude-border-dark bg-claude-surface-light/60 dark:bg-claude-surface-dark/60 shrink-0"
+        data-testid="unified-workspace-footer"
+      >
+        <details className="group" data-testid="sandbox-diagnostics-details">
+          <summary className="flex items-center justify-between px-4 py-2 cursor-pointer text-xs font-medium text-claude-muted-light dark:text-slate-400 hover:text-claude-text-light dark:hover:text-white transition-colors select-none list-none [&::-webkit-details-marker]:hidden">
+            <div className="flex items-center gap-1.5">
+              <Sliders size={13} className="text-claude-muted-light dark:text-slate-400 group-open:text-claude-accentInk transition-colors" />
+              <span>Advanced: Sandbox Diagnostics</span>
+            </div>
+            <ChevronDown size={14} className="text-claude-muted-light dark:text-slate-400 transition-transform duration-200 group-open:rotate-180" />
+          </summary>
+          <div className="px-4 pb-3 pt-1 space-y-2 text-xs border-t border-claude-border-light/40 dark:border-white/5">
+            <div className="grid grid-cols-2 gap-2 text-[11px] pt-1">
+              <div><span className="text-claude-muted-light dark:text-slate-400">Provider:</span> {initialBuilderStatus?.sandboxProvider || 'Lightning'}</div>
+              <div><span className="text-claude-muted-light dark:text-slate-400">Status:</span> {initialBuilderStatus?.ready ? 'Ready' : 'Connected'}</div>
+              <div><span className="text-claude-muted-light dark:text-slate-400">Workspace TTL:</span> {initialBuilderStatus?.workspaceTtlMinutes || 15}m</div>
+              <div><span className="text-claude-muted-light dark:text-slate-400">Runtime:</span> {initialBuilderStatus?.runtime || 'node24'}</div>
+            </div>
+            <p className="text-[10px] text-claude-muted-light/80 dark:text-slate-500 pt-1">
+              All client-side code and server tasks execute within isolated containers with strict permission boundaries.
+            </p>
+          </div>
+        </details>
+      </footer>
     </aside>
   );
 };

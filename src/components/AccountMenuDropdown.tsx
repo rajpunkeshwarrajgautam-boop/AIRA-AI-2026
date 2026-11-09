@@ -387,6 +387,7 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
 
                 <div className="mt-3">
                   <button
+                    data-testid="account-menu-signin"
                     onClick={() => {
                       onClose();
                       onOpenAuth();
@@ -464,6 +465,7 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
               {neonUser ? (
                 <button
                   role="menuitem"
+                  data-testid="account-menu-logout"
                   onClick={handleLogout}
                   disabled={isLoggingOut}
                   className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 transition-colors font-medium"

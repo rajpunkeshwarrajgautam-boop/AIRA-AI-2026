@@ -5,7 +5,7 @@ import {
   loadConversations, saveConversations, saveActiveChatId,
   getSessionActiveChatId, setSessionActiveChatId,
   loadProjects, saveProjects, loadSettings, saveSettings, INITIAL_CONVERSATION,
-  hydrateStorageFromIndexedDb
+  hydrateStorageFromIndexedDb, hydrateProjectsFromIndexedDb
 } from './utils/storage';
 import { streamAIResponse } from './utils/aiEngine';
 import { appendAgentTimelineEvent } from './utils/agentTimeline';
@@ -91,13 +91,21 @@ function App() {
         });
       }
     });
+    void hydrateProjectsFromIndexedDb(currentUserId || undefined).then(loaded => {
+      if (loaded && loaded.length > 0) {
+        setProjects(prev => (prev.length === 0 ? loaded : prev));
+      }
+    });
   }, [currentUserId]);
 
   const [welcomeConversation] = useState<Conversation>(() => ({
     ...INITIAL_CONVERSATION, id: `chat-${crypto.randomUUID()}`,
     createdAt: Date.now(), updatedAt: Date.now(), messages: [],
   }));
-  const [projects, setProjects] = useState<Project[]>(() => loadProjects());
+  const [projects, setProjects] = useState<Project[]>(() => {
+    const user = neonAuth.getCurrentUser();
+    return loadProjects(user?.id);
+  });
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>(() => localStorage.getItem('aira_active_project_id_v1') || undefined);
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
   const [workspaceMode, setWorkspaceModeState] = useState<WorkspaceMode>(() => {
@@ -197,6 +205,7 @@ useEffect(() => {
   const initialConversationBackfillRef = useRef(false);
   const authEpochRef = useRef(0);
   const conversationsOwnerRef = useRef<string | null>(currentUserId);
+  const projectsOwnerRef = useRef<string | null>(currentUserId);
 
   const activeConversation = useMemo(
     () => conversations.find(c => c.id === activeChatId) || welcomeConversation,
@@ -280,6 +289,13 @@ useEffect(() => {
           // ignore storage errors
         }
 
+        setActiveProjectId(undefined);
+        try {
+          localStorage.removeItem('aira_active_project_id_v1');
+        } catch {
+          // ignore storage errors
+        }
+
         setActiveChatId('');
         setSessionActiveChatId(null);
         setActiveArtifact(null);
@@ -300,6 +316,14 @@ useEffect(() => {
         const cached = loadConversations(user.id);
         conversationsOwnerRef.current = user.id;
         setConversations(cached);
+
+        // Immediately load cached projects belonging to this verified user
+        projectsOwnerRef.current = user.id;
+        loadProjects(user.id).then(userProjects => {
+          if (authEpochRef.current !== epoch) return;
+          projectsOwnerRef.current = user.id;
+          setProjects(userProjects);
+        });
 
         // Hydrate persistent conversations from PostgreSQL server
         try {
@@ -328,6 +352,20 @@ useEffect(() => {
         setConversations(guestConvs);
         // Preserve root welcome screen contract on fresh tab; restore only if already active
         setActiveChatId(prev => (guestConvs.some(c => c.id === prev) ? prev : ''));
+
+        // Reset projects to guest state
+        projectsOwnerRef.current = null;
+        setActiveProjectId(undefined);
+        try {
+          localStorage.removeItem('aira_active_project_id_v1');
+        } catch {
+          // ignore storage errors
+        }
+        loadProjects().then(guestProjects => {
+          if (authEpochRef.current !== epoch) return;
+          projectsOwnerRef.current = null;
+          setProjects(guestProjects);
+        });
       }
     });
   }, [currentUserId]);
@@ -371,7 +409,11 @@ useEffect(() => {
     }
   }, [conversations]);
 
-  useEffect(() => saveProjects(projects), [projects]);
+  useEffect(() => {
+    if (projectsOwnerRef.current === currentUserId) {
+      saveProjects(projects, currentUserId || undefined);
+    }
+  }, [projects, currentUserId]);
   useEffect(() => saveSettings(settings), [settings]);
   useEffect(() => {
     setSessionActiveChatId(activeChatId || null);
@@ -1316,6 +1358,7 @@ useEffect(() => {
         onOpenSearch={handleOpenConversationSearch}
         isOpen={sidebarOpen}
         onToggleOpen={() => setSidebarOpen(v => !v)}
+        onClose={() => setSidebarOpen(false)}
         settings={settings}
         onUpdateSettings={updateSettings}
         workspaceMode={workspaceMode}
@@ -1610,9 +1653,19 @@ useEffect(() => {
             projects={projects}
             activeProjectId={activeProjectId}
             onSelectProject={setActiveProjectId}
-            onSaveProject={project => setProjects(prev => [project, ...prev.filter(p => p.id !== project.id)])}
+            onSaveProject={project => {
+              setProjects(prev => {
+                const next = [project, ...prev.filter(p => p.id !== project.id)];
+                saveProjects(next, currentUserId || undefined);
+                return next;
+              });
+            }}
             onDeleteProject={id => {
-              setProjects(prev => prev.filter(p => p.id !== id));
+              setProjects(prev => {
+                const next = prev.filter(p => p.id !== id);
+                saveProjects(next, currentUserId || undefined);
+                return next;
+              });
               if (activeProjectId === id) setActiveProjectId(undefined);
             }}
           />
