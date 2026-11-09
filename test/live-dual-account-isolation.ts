@@ -21,10 +21,22 @@ import type { AutonomousAgentTask } from '../packages/contracts/src/index.js';
 import { serializeBffToken } from '../apps/api/src/auth/bff-session.js';
 import { signFirstPartyJwt } from '../apps/api/src/auth/direct-oauth.js';
 
-// Authoritative preview target deployment and database branch
-const PREVIEW_URL = 'https://aira-ai-2026-mypu3qgpf-rajpunkeshwarrajgautam-boops-projects.vercel.app';
-const DEPLOYMENT_ID = 'dpl_6M1dgwUwtPu7DpPHatKAuQBV4ziW';
-const EXPECTED_COMMIT_SHA = process.env.CANDIDATE_SHA || '0dc2036976254f5a17e9af028b07db9a3cae3688';
+// This is a synthetic-session integration suite, NOT genuine provider OAuth acceptance.
+// Require an immutable preview identity so a stale deployment can never pass by default.
+function requiredReleaseEnv(name: string): string {
+  const value = process.env[name]?.trim();
+  if (!value) throw new Error(`Release evidence requires explicit ${name}; no historical default is permitted.`);
+  return value;
+}
+const PREVIEW_URL = requiredReleaseEnv('AIRA_STAGING_PREVIEW_URL');
+const DEPLOYMENT_ID = requiredReleaseEnv('AIRA_STAGING_DEPLOYMENT_ID');
+const EXPECTED_COMMIT_SHA = requiredReleaseEnv('CANDIDATE_SHA');
+if (!/^https:\/\/[^/]+\.vercel\.app\/?$/.test(PREVIEW_URL) ||
+    new URL(PREVIEW_URL).hostname === 'aira-ai-2026.vercel.app' ||
+    !/^dpl_[A-Za-z0-9]+$/.test(DEPLOYMENT_ID) ||
+    !/^[a-f0-9]{40}$/.test(EXPECTED_COMMIT_SHA)) {
+  throw new Error('Synthetic integration requires an exact SHA, preview URL and deployment ID; production URLs are forbidden.');
+}
 const ISOLATED_BRANCH_ID = 'br-snowy-bonus-b32thjlz';
 
 const OUTPUT_DIR = path.resolve(process.cwd(), 'artifacts/staging-acceptance');
@@ -38,6 +50,8 @@ interface GateEvidence {
   deploymentId: string;
   deploymentUrl: string;
   databaseTarget: string;
+  evidenceMode: 'synthetic-bff-session';
+  oauthProviderFlowObserved: false;
   testMethod: string;
   expectedResult: string;
   actualResult: string;
@@ -70,6 +84,8 @@ function recordGate(
     deploymentId: DEPLOYMENT_ID,
     deploymentUrl: PREVIEW_URL,
     databaseTarget: `neon://${STAGING_NEON_PROJECT_ID}/${ISOLATED_BRANCH_ID}`,
+    evidenceMode: 'synthetic-bff-session',
+    oauthProviderFlowObserved: false,
     testMethod,
     expectedResult,
     actualResult,
@@ -120,8 +136,8 @@ async function fetchWithRetry(url: string, options?: RequestInit, maxRetries = 3
 
 async function main() {
   console.log('\n========================================================================');
-  console.log('  AIRA AI 2026 — PR #159 AUTHORITATIVE RELEASE CERTIFICATION SUITE');
-  console.log('  12-Gate Live Dual-Account OAuth Staging Acceptance Test');
+  console.log('  AIRA AI 2026 — PR #159 SYNTHETIC BFF INTEGRATION SUITE');
+  console.log('  12-Gate Synthetic Session, Cross-Account and Browser State Integration');
   console.log(`  Candidate SHA: ${EXPECTED_COMMIT_SHA}`);
   console.log(`  Target Deployment: ${DEPLOYMENT_ID} (${PREVIEW_URL})`);
   console.log(`  Target Database: Neon ${STAGING_NEON_PROJECT_ID} / ${ISOLATED_BRANCH_ID}`);
@@ -131,10 +147,13 @@ async function main() {
   fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
   fs.mkdirSync(PROFILES_DIR, { recursive: true });
 
-  const SESSION_SECRET = process.env.AIRA_SESSION_SECRET && process.env.AIRA_SESSION_SECRET.length >= 32
-    ? process.env.AIRA_SESSION_SECRET
-    : 'aira_test_secure_session_secret_2026_at_least_32_chars';
-  process.env.AIRA_SESSION_SECRET = SESSION_SECRET;
+  if (process.env.AIRA_ALLOW_SYNTHETIC_STAGING_SESSION_MUTATION !== 'true') {
+    throw new Error('Synthetic BFF tests change staging sessions; set AIRA_ALLOW_SYNTHETIC_STAGING_SESSION_MUTATION=true to opt in explicitly.');
+  }
+  const SESSION_SECRET = requiredReleaseEnv('AIRA_SESSION_SECRET');
+  if (SESSION_SECRET.length < 32) {
+    throw new Error('AIRA_SESSION_SECRET must contain at least 32 characters.');
+  }
   process.env.VERCEL_ENV = 'preview';
   process.env.NODE_ENV = 'test';
 
@@ -241,9 +260,9 @@ async function main() {
     assert.notEqual(sessionIdentityA.sessionId, sessionIdentityB.sessionId, 'Sessions must have distinct session IDs');
 
     // -----------------------------------------------------------------------
-    // GATE 1: Authentic OAuth login and BFF session verification
+    // GATE 1: Synthetic BFF bootstrap and preexisting staging principals
     // -----------------------------------------------------------------------
-    console.log('\n--- GATE 1: Authentic OAuth login and BFF session verification ---');
+    console.log('\n--- GATE 1: Synthetic BFF bootstrap (NOT provider OAuth) ---');
     assert.ok(sessionA.expires_at > Date.now(), 'Session A must have future expiration');
     assert.ok(sessionB.expires_at > Date.now(), 'Session B must have future expiration');
     assert.equal(sessionA.revoked_at, null, 'Session A must not be revoked');
@@ -257,14 +276,16 @@ async function main() {
 
     recordGate(
       1,
-      'Authentic OAuth login and BFF session verification',
-      'Database query on staging bff_sessions and users for authentic OAuth principals; v2 BFF token serialization; preview unauthenticated rejection check.',
+      'Synthetic BFF bootstrap and staging principal isolation',
+      'Database query for existing principals; test-generated JWT and BFF session bootstrap; unauthenticated preview rejection. Does NOT execute provider OAuth redirects.',
       'Active non-revoked session records with future expiry, cryptographic token format, and 401 unauthenticated fail-closed rejection.',
-      `Verified authentic Principal A (${userA.email}, ID: ${userA.id.slice(0, 16)}...) and Principal B (${userB.email}, ID: ${userB.id.slice(0, 16)}...) with active unrevoked BFF sessions. Unauthenticated probe returned HTTP 401.`,
+      `Verified distinct staging Principal A (ID: ${userA.id.slice(0, 16)}...) and Principal B (ID: ${userB.id.slice(0, 16)}...) using synthetic session bootstrap. Unauthenticated probe returned HTTP 401. OAuth redirects were NOT tested.`,
       'HTTP 200 DB / HTTP 401 Unauthenticated API',
       {
-        principalA: { userId: userA.id, name: userA.name, email: userA.email, sessionId: sessionA.id, revokedAt: sessionA.revoked_at },
-        principalB: { userId: userB.id, name: userB.name, email: userB.email, sessionId: sessionB.id, revokedAt: sessionB.revoked_at },
+        principalA: { userId: userA.id, revokedAt: sessionA.revoked_at },
+        authenticationMode: 'synthetic-session-bootstrap',
+        principalB: { userId: userB.id, revokedAt: sessionB.revoked_at },
+        oauthLoginObserved: false,
         unauthProbeStatus: unauthIdentityRes.status
       }
     );
@@ -1364,10 +1385,10 @@ async function main() {
     );
 
     console.log('\n========================================================================');
-    console.log(`  ALL 12 CERTIFICATION GATES PASSED (12/12 - 100%)`);
+    console.log(`  ALL 12 SYNTHETIC INTEGRATION GATES PASSED (OAUTH LIVE ACCEPTANCE NOT TESTED)`);
     console.log('========================================================================\n');
 
-    const ledgerPath = path.join(OUTPUT_DIR, 'LIVE_DUAL_ACCOUNT_ISOLATION_LEDGER.json');
+    const ledgerPath = path.join(OUTPUT_DIR, 'SYNTHETIC_DUAL_ACCOUNT_INTEGRATION_LEDGER.json');
     fs.writeFileSync(ledgerPath, JSON.stringify(ledger, null, 2));
     console.log(`Authoritative evidence ledger saved to: ${ledgerPath}`);
 
