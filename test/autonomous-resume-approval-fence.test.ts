@@ -46,14 +46,18 @@ async function waitForState(engine: AutonomousAgentEngine, taskId: string, state
   assert.fail(`Expected ${state} but found ${current?.state}`);
 }
 
-async function createRunningTask(levels: Array<'NONE' | 'WRITE' | 'DESTRUCTIVE'>) {
+async function createRunningTask(
+  levels: Array<'NONE' | 'WRITE' | 'DESTRUCTIVE'>,
+  options?: { requireVerification?: boolean }
+) {
   const repository = new InMemoryAutonomousTaskRepository();
   let specialistExecutions = 0;
   let verificationExecutions = 0;
   let specialistOutcome: 'COMPLETED' | 'FAILED' | 'CANCELLED' | 'TIMED_OUT' | 'UNAVAILABLE' = 'COMPLETED';
-  let verifierOutcome: 'COMPLETED' | 'FAILED' = 'COMPLETED';
-  let verifierEnabled = false;
+  let verifierOutcome: 'COMPLETED' | 'FAILED' | 'CANCELLED' | 'TIMED_OUT' | 'UNAVAILABLE' = 'COMPLETED';
+  let verifierEnabled = true;
   let coderEnabled = true;
+  let onVerifierExecution: (() => Promise<void> | void) | undefined;
   const specialistRegistry = {
     hasSpecialist: (role: string) => (coderEnabled && role === 'coder') || (verifierEnabled && role === 'verifier'),
     getSpecialist: (role: string) => role === 'coder' && coderEnabled ? {
@@ -68,14 +72,25 @@ async function createRunningTask(levels: Array<'NONE' | 'WRITE' | 'DESTRUCTIVE'>
       requiredCapabilities: [],
       execute: async () => {
         verificationExecutions++;
+        if (onVerifierExecution) {
+          await onVerifierExecution();
+        }
         return verifierOutcome === 'COMPLETED'
           ? { outcome: verifierOutcome, output: { summary: 'Verified synthetic result' } }
-          : { outcome: verifierOutcome, error: { message: 'Synthetic verification failed' } };
+          : { outcome: verifierOutcome, error: { message: `Synthetic verification ${verifierOutcome.toLowerCase()}` } };
       }
     } : undefined
   } as any;
-  const engine = new AutonomousAgentEngine({ repository, specialistRegistry });
+  const engine = new AutonomousAgentEngine({
+    repository,
+    specialistRegistry,
+    ...(options?.requireVerification !== undefined ? { requireVerification: options.requireVerification } : {})
+  } as any);
   const task = await engine.createTask('Verify safe recovery', principal, makePlan(levels));
+  if (options?.requireVerification !== undefined) {
+    (task as any).requireVerification = options.requireVerification;
+    await repository.updateTask(task);
+  }
   await repository.updateState(task.taskId, 'PLANNING');
   await repository.updateState(task.taskId, 'READY');
   await repository.updateState(task.taskId, 'RUNNING');
@@ -87,8 +102,14 @@ async function createRunningTask(levels: Array<'NONE' | 'WRITE' | 'DESTRUCTIVE'>
     getVerificationExecutions: () => verificationExecutions,
     setSpecialistFailure: () => { specialistOutcome = 'FAILED'; },
     setSpecialistOutcome: (outcome: typeof specialistOutcome) => { specialistOutcome = outcome; },
-    enableVerifier: (outcome: typeof verifierOutcome) => { verifierEnabled = true; verifierOutcome = outcome; },
-    disableCoder: () => { coderEnabled = false; }
+    enableVerifier: (outcome: typeof verifierOutcome = 'COMPLETED') => {
+      verifierEnabled = true;
+      verifierOutcome = outcome;
+    },
+    disableVerifier: () => { verifierEnabled = false; },
+    setVerifierOutcome: (outcome: typeof verifierOutcome) => { verifierOutcome = outcome; },
+    disableCoder: () => { coderEnabled = false; },
+    setOnVerifierExecution: (fn: () => Promise<void> | void) => { onVerifierExecution = fn; }
   };
 }
 
@@ -104,7 +125,7 @@ test('crash recovery requests approval before executing a pending write', async 
 
   await engine.approveStep(taskId, pending.approvalRequestId!, true);
   const completed = await waitForState(engine, taskId, 'COMPLETED');
-  assert.equal(completed.observations.length, 1);
+  assert.equal(completed.observations.length, 2, 'Must contain step observation and verification gate observation');
   assert.equal(completed.plan?.steps[0].status, 'COMPLETED');
   assert.equal(getSpecialistExecutions(), 1);
 });
@@ -206,11 +227,77 @@ test('an unavailable specialist fails its step instead of fabricating success', 
   assert.equal(getSpecialistExecutions(), 0);
 });
 
-test('absence of a verifier is disclosed rather than claimed as verification', async () => {
-  const { engine, taskId } = await createRunningTask(['NONE']);
+test('absence of a verifier fails closed when verification is mandatory', async () => {
+  const { engine, taskId, disableVerifier } = await createRunningTask(['NONE']);
+  disableVerifier();
+  await engine.recoverTask(taskId);
+  const failed = await waitForState(engine, taskId, 'FAILED');
+  assert.equal(failed.state, 'FAILED');
+  assert.equal(failed.deliverableSummary, undefined);
+  assert.match(failed.executionHistory.at(-1)?.reason || '', /VERIFICATION_UNAVAILABLE/);
+  const errorObs = failed.observations.find(obs => obs.isError && /VERIFICATION_UNAVAILABLE/.test(obs.summary));
+  assert.ok(errorObs, 'Expected error observation with summary matching VERIFICATION_UNAVAILABLE');
+  assert.equal(errorObs.isError, true);
+  assert.match(errorObs.summary, /VERIFICATION_UNAVAILABLE/);
+});
+
+test('absence of a verifier on an explicitly optional task completes with unverified disclosure', async () => {
+  const { engine, taskId, disableVerifier } = await createRunningTask(['NONE'], { requireVerification: false });
+  disableVerifier();
   await engine.recoverTask(taskId);
   const completed = await waitForState(engine, taskId, 'COMPLETED');
+  assert.equal(completed.state, 'COMPLETED');
   assert.match(completed.deliverableSummary || '', /Verified: false/);
+});
+
+test('verification non-success outcomes (CANCELLED, TIMED_OUT, UNAVAILABLE) fail closed', async () => {
+  for (const outcome of ['CANCELLED', 'TIMED_OUT', 'UNAVAILABLE'] as const) {
+    const { engine, taskId, setVerifierOutcome, getVerificationExecutions } = await createRunningTask(['NONE']);
+    setVerifierOutcome(outcome);
+    await engine.recoverTask(taskId);
+    const failed = await waitForState(engine, taskId, 'FAILED');
+    assert.equal(failed.state, 'FAILED', `Outcome ${outcome} must fail task`);
+    assert.equal(failed.deliverableSummary, undefined, `Outcome ${outcome} must not set deliverableSummary`);
+    assert.equal(getVerificationExecutions(), 1, `Outcome ${outcome} must invoke verifier`);
+    assert.match(failed.executionHistory.at(-1)?.reason || '', /VERIFICATION_FAILED/);
+  }
+});
+
+test('cancellation during verification aborts cleanly without state corruption', async () => {
+  const { engine, taskId, setOnVerifierExecution, getVerificationExecutions } = await createRunningTask(['NONE']);
+  setOnVerifierExecution(async () => {
+    await engine.cancelTask(taskId, 'User cancelled during verification');
+  });
+  await engine.recoverTask(taskId);
+
+  for (let tries = 0; tries < 50; tries++) {
+    const current = await engine.getTask(taskId);
+    if (current?.state === 'CANCELLED') break;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+
+  const cancelled = (await engine.getTask(taskId))!;
+  assert.equal(cancelled.state, 'CANCELLED');
+  assert.equal(cancelled.deliverableSummary, undefined, 'Cancelled task must not set deliverable summary');
+  assert.equal(getVerificationExecutions(), 1, 'Verifier must have been invoked');
+});
+
+test('fencing token mismatch during verification prevents duplicate completion', async () => {
+  const { repository, engine, taskId, setOnVerifierExecution, getVerificationExecutions } = await createRunningTask(['NONE']);
+  setOnVerifierExecution(async () => {
+    const raw = (repository as any).tasks.get(taskId);
+    if (raw) raw.leaseExpiresAt = 0;
+    const claim = await repository.claimTask!(taskId, 'competing_worker', 60_000);
+    assert.equal(claim.success, true);
+  });
+  await engine.recoverTask(taskId);
+  await new Promise(resolve => setTimeout(resolve, 50));
+
+  const afterTask = (await repository.getTask(taskId))!;
+  assert.equal(afterTask.leaseOwner, 'competing_worker');
+  assert.equal(afterTask.deliverableSummary, undefined, 'Stale worker must not record deliverable summary');
+  assert.notEqual(afterTask.state, 'COMPLETED', 'Stale worker must not complete task');
+  assert.equal(getVerificationExecutions(), 1, 'Verifier was invoked before token mismatch was detected');
 });
 
 test('crash recovery reexecutes an unfinished RUNNING read step', async () => {

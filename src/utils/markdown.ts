@@ -83,8 +83,22 @@ marked.use({
 });
 
 
-const BLOCKED_TAGS = new Set(['script', 'style', 'iframe', 'object', 'embed', 'link', 'meta', 'base', 'form']);
-const URL_ATTRS = new Set(['href', 'src', 'xlink:href', 'formaction']);
+const BLOCKED_TAGS = new Set([
+  'script',
+  'style',
+  'iframe',
+  'object',
+  'embed',
+  'link',
+  'meta',
+  'base',
+  'form',
+  'set',
+  'animate',
+  'animatetransform',
+  'animatemotion'
+]);
+const URL_ATTRS = new Set(['href', 'src', 'xlink:href', 'formaction', 'poster']);
 
 function sanitizeHtml(html: string): string {
   if (typeof DOMParser === 'undefined') return escapeHtml(html);
@@ -106,6 +120,15 @@ function sanitizeHtml(html: string): string {
       if (name.startsWith('on') || name === 'srcdoc') {
         el.removeAttribute(attr.name);
         continue;
+      }
+
+      if (name === 'to' || name === 'from' || name === 'values') {
+        // eslint-disable-next-line no-control-regex
+        const norm = value.replace(/[\s\u0000-\u001f]/g, '');
+        if (norm.includes('javascript:') || norm.includes('data:') || norm.includes('vbscript:')) {
+          el.removeAttribute(attr.name);
+          continue;
+        }
       }
 
       if (URL_ATTRS.has(name)) {

@@ -23,6 +23,7 @@ export interface AutonomousEngineOptions {
   approvalKernel?: ApprovalKernel;
   modelRouter?: ModelRouter;
   maxExecutionCycles?: number;
+  requireVerification?: boolean;
 }
 
 export class AutonomousAgentEngine extends EventEmitter {
@@ -32,6 +33,7 @@ export class AutonomousAgentEngine extends EventEmitter {
   private approvalKernel?: ApprovalKernel;
   private modelRouter?: ModelRouter;
   private maxExecutionCycles: number;
+  private requireVerification: boolean;
   private activeExecutions: Map<string, AbortController> = new Map();
   // A worker must keep the fencing token from its own claim/transitions.
   // Re-reading the newest token after a competing worker takes the lease would
@@ -46,6 +48,7 @@ export class AutonomousAgentEngine extends EventEmitter {
     this.approvalKernel = options.approvalKernel;
     this.modelRouter = options.modelRouter;
     this.maxExecutionCycles = options.maxExecutionCycles ?? 25;
+    this.requireVerification = options.requireVerification ?? true;
   }
 
   public getRepository(): IAutonomousTaskRepository {
@@ -60,7 +63,8 @@ export class AutonomousAgentEngine extends EventEmitter {
     objective: string,
     principal: ExecutionPrincipal,
     customPlan?: AgentObjectivePlan,
-    idempotencyKey?: string
+    idempotencyKey?: string,
+    requireVerification?: boolean
   ): Promise<AutonomousAgentTask> {
     if (idempotencyKey && this.repository.getTaskByIdempotencyKey) {
       const existing = await this.repository.getTaskByIdempotencyKey(principal.userId, idempotencyKey);
@@ -95,6 +99,10 @@ export class AutonomousAgentEngine extends EventEmitter {
     };
 
     const task = AutonomousAgentTaskSchema.parse(rawTask);
+    const resolvedRequireVerification = requireVerification ?? (customPlan as any)?.requireVerification;
+    if (resolvedRequireVerification !== undefined) {
+      (task as any).requireVerification = resolvedRequireVerification;
+    }
     const created = await this.repository.createTask(task);
     this.emit('task.created', { taskId, objective, principal });
     return created;
@@ -408,50 +416,108 @@ export class AutonomousAgentEngine extends EventEmitter {
   }
 
   private async verifyAndCompleteTask(taskId: string, signal: AbortSignal): Promise<void> {
-    await this.transitionDuringExecution(taskId, signal, 'VERIFYING', 'Running final verification gate');
     const task = await this.repository.getTask(taskId);
-    if (!task) throw new Error(`Task ${taskId} disappeared during verification.`);
+    if (!task) throw new Error(`Task ${taskId} disappeared before verification.`);
     this.assertExecutionFence(taskId, signal, task);
 
-    const verifier = this.specialistRegistry.getSpecialist('verifier');
-    let isVerified = false;
-    if (verifier) {
-      const result = await verifier.execute({
-        runId: `run_verify_${taskId}`,
-        taskId: `verify_${taskId}`,
-        principal: task.principal,
-        tenantId: task.principal.workspaceId || 'default',
-        workspaceId: task.principal.workspaceId || 'default',
-        authorizedCapabilities: ['result_verification', 'general_reasoning'],
-        effectiveToolScopes: ['*'],
-        executionPolicyVersion: '2026.1',
-        promptProfileId: 'profile_verifier',
-        promptProfileVersion: '1.0.0',
-        modelRoutingRequirements: {},
-        remainingBudget: { maxTokens: 10000, remainingTokens: 10000 },
-        cancellationSignal: signal,
-        correlationId: taskId,
-        inputPayload: { objective: task.objective, observations: task.observations }
-      });
-      if (signal.aborted) return;
-      const current = await this.repository.getTask(taskId);
-      if (!current) throw new Error(`Task ${taskId} disappeared after verification.`);
-      this.assertExecutionFence(taskId, signal, current);
-      isVerified = result?.outcome === 'COMPLETED';
-      if (!isVerified) {
-        const reason = `VERIFICATION_FAILED: ${result?.error?.message || result?.outcome || 'No result'}`;
-        await this.transitionDuringExecution(taskId, signal, 'FAILED', reason);
-        this.emit('task.failed', { taskId, error: reason });
-        return;
-      }
+    const hasVerifierStep = Boolean(task.plan?.steps.some(s => s.role === 'verifier'));
+    const isMandatory = this.requireVerification !== false && (
+      (task as any).requireVerification !== false ||
+      hasVerifierStep
+    );
+
+    if (!isMandatory) {
+      task.deliverableSummary = `Executed autonomous mission for: "${task.objective}". Verified: false (verification skipped by policy).`;
+      await this.updateDuringExecution(task, signal);
+      await this.transitionDuringExecution(taskId, signal, 'COMPLETED', 'Execution finished; verification skipped by policy');
+      this.emit('task.completed', { taskId, deliverableSummary: task.deliverableSummary });
+      return;
     }
 
-    const completed = await this.repository.getTask(taskId);
-    if (!completed) throw new Error(`Task ${taskId} disappeared before completion.`);
-    completed.deliverableSummary = `Executed autonomous mission for: "${completed.objective}". Verified: ${isVerified}.`;
-    await this.updateDuringExecution(completed, signal);
-    await this.transitionDuringExecution(taskId, signal, 'COMPLETED', isVerified ? 'Mission accomplished and verified' : 'Execution finished; no verifier available');
-    this.emit('task.completed', { taskId, deliverableSummary: completed.deliverableSummary });
+    await this.transitionDuringExecution(taskId, signal, 'VERIFYING', 'Running final verification gate');
+    const currentTask = await this.repository.getTask(taskId);
+    if (!currentTask) throw new Error(`Task ${taskId} disappeared during verification.`);
+    this.assertExecutionFence(taskId, signal, currentTask);
+
+    const hasSpecialist = this.specialistRegistry.hasSpecialist('verifier');
+    const verifier = hasSpecialist ? this.specialistRegistry.getSpecialist('verifier') : undefined;
+
+    if (!verifier || !hasSpecialist) {
+      const errorObs: AgentObservation = {
+        observationId: `obs_${randomUUID().slice(0, 8)}`,
+        stepId: 'verification_gate',
+        source: 'specialist',
+        sourceName: 'Verification Specialist',
+        summary: 'VERIFICATION_UNAVAILABLE: Verification specialist is required but not registered in SpecialistRegistry.',
+        isError: true,
+        timestamp: Date.now()
+      };
+      currentTask.observations.push(errorObs);
+      await this.updateDuringExecution(currentTask, signal);
+      const reason = 'VERIFICATION_UNAVAILABLE: Verification specialist is unavailable or not registered.';
+      await this.transitionDuringExecution(taskId, signal, 'FAILED', reason);
+      this.emit('task.failed', { taskId, error: reason });
+      return;
+    }
+
+    if (signal.aborted) return;
+
+    const result = await verifier.execute({
+      runId: `run_verify_${taskId}`,
+      taskId: `verify_${taskId}`,
+      principal: currentTask.principal,
+      tenantId: currentTask.principal.workspaceId || 'default',
+      workspaceId: currentTask.principal.workspaceId || 'default',
+      authorizedCapabilities: ['result_verification', 'general_reasoning'],
+      effectiveToolScopes: ['*'],
+      executionPolicyVersion: '2026.1',
+      promptProfileId: 'profile_verifier',
+      promptProfileVersion: '1.0.0',
+      modelRoutingRequirements: {},
+      remainingBudget: { maxTokens: 10000, remainingTokens: 10000 },
+      cancellationSignal: signal,
+      correlationId: taskId,
+      inputPayload: { objective: currentTask.objective, observations: currentTask.observations }
+    });
+
+    if (signal.aborted) return;
+    const current = await this.repository.getTask(taskId);
+    if (!current) throw new Error(`Task ${taskId} disappeared after verification.`);
+    this.assertExecutionFence(taskId, signal, current);
+
+    const isVerified = result?.outcome === 'COMPLETED';
+    if (!isVerified) {
+      const reason = `VERIFICATION_FAILED: ${result?.error?.message || result?.outcome || 'Verification failed'}`;
+      const failureObs: AgentObservation = {
+        observationId: `obs_${randomUUID().slice(0, 8)}`,
+        stepId: 'verification_gate',
+        source: 'specialist',
+        sourceName: 'Verification Specialist',
+        summary: reason,
+        isError: true,
+        timestamp: Date.now()
+      };
+      current.observations.push(failureObs);
+      await this.updateDuringExecution(current, signal);
+      await this.transitionDuringExecution(taskId, signal, 'FAILED', reason);
+      this.emit('task.failed', { taskId, error: reason });
+      return;
+    }
+
+    const successObs: AgentObservation = {
+      observationId: `obs_${randomUUID().slice(0, 8)}`,
+      stepId: 'verification_gate',
+      source: 'specialist',
+      sourceName: 'Verification Specialist',
+      summary: result.output?.summary || 'Verification assertions passed.',
+      isError: false,
+      timestamp: Date.now()
+    };
+    current.observations.push(successObs);
+    current.deliverableSummary = `Executed autonomous mission for: "${current.objective}". Verified: true.`;
+    await this.updateDuringExecution(current, signal);
+    await this.transitionDuringExecution(taskId, signal, 'COMPLETED', 'Mission accomplished and verified');
+    this.emit('task.completed', { taskId, deliverableSummary: current.deliverableSummary });
   }
 
   private async runStep(taskId: string, step: AgentPlanStep, signal: AbortSignal): Promise<void> {

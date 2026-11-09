@@ -63,11 +63,15 @@ acceptance did not cover:
 
 The **same verification helper** now handles fresh and resumed execution.
 Non-success verifier outcomes fail the mission rather than yielding a false
-completion. If no verifier is configured, execution preserves the existing
-completion semantics but explicitly reports `Verified: false`; this is **not**
-an independently verified deliverable. The regression suite now includes
-16 approval, verification, recovery, unavailable-specialist and concurrent
-request cases. No external tool side effects occur in these synthetic tests.
+completion. If no verifier is configured and verification is mandatory
+(the default for autonomous agent missions), execution fails closed: the
+task transitions from `VERIFYING` to `FAILED` with `VERIFICATION_UNAVAILABLE`,
+an error observation is recorded, and no deliverable summary is produced.
+Only when verification is explicitly opted out by policy does a mission complete
+without verification, disclosing `Verified: false (verification skipped by policy)`.
+The regression suite now includes approval, verification, recovery,
+unavailable-specialist and concurrent request cases. No external tool side effects
+occur in these synthetic tests.
 
 ### Local regression results for this follow-up
 
