@@ -24,6 +24,20 @@ export function scrubSecrets(input: string): string {
   return sanitized;
 }
 
+/** Defend against untrusted legacy vault records as well as newly written text. */
+function sanitizeMemoryFields(item: MemoryItem): MemoryItem {
+  const content = typeof item.content === 'string' ? scrubSecrets(item.content) : '';
+  return {
+    ...item,
+    title: typeof item.title === 'string' ? scrubSecrets(item.title) : content.slice(0, 48),
+    content,
+    tags: Array.isArray(item.tags)
+      ? item.tags.filter((tag): tag is string => typeof tag === 'string').map(scrubSecrets)
+      : tokenize(content).slice(0, 5),
+    sourceSessionId: typeof item.sourceSessionId === 'string' ? scrubSecrets(item.sourceSessionId) : undefined
+  };
+}
+
 /**
  * Tokenizer & Stopwords for BM25 Search
  */
@@ -108,13 +122,15 @@ class AgentMemoryEngine {
       if (stored) {
         const parsed = JSON.parse(stored);
         const { migratedItems, report } = migrateAgentMemoryVault(parsed);
+        const sanitizedItems = migratedItems.map(sanitizeMemoryFields);
         this.memories.clear();
-        migratedItems
+        sanitizedItems
           .filter(item => scope === 'guest' ? !item.userId : item.userId === scope)
           .forEach(item => this.memories.set(item.id, item));
-        if (report.changesMade) {
+        if ((report.changesMade && scope !== 'guest') ||
+            sanitizedItems.some((item, index) => JSON.stringify(item) !== JSON.stringify(migratedItems[index]))) {
           // Retain the original legacy shared vault for explicit recovery/export.
-          if (scope !== 'guest') this.saveToStorage();
+          this.saveToStorage();
         }
       } else {
         // Migrate only records with matching provenance into the new key.
@@ -123,7 +139,7 @@ class AgentMemoryEngine {
         const legacy = localStorage.getItem(STORAGE_KEY);
         if (legacy) {
           const { migratedItems } = migrateAgentMemoryVault(JSON.parse(legacy));
-          migratedItems
+          migratedItems.map(sanitizeMemoryFields)
             .filter(item => scope === 'guest' ? !item.userId : item.userId === scope)
             .forEach(item => this.memories.set(item.id, item));
         }
@@ -181,8 +197,9 @@ class AgentMemoryEngine {
     const tier = options.tier || 'semantic';
     const category = options.category || 'general';
     const id = `mem-${tier[0]}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    const title = options.title?.trim() || cleanContent.slice(0, 48) + (cleanContent.length > 48 ? '...' : '');
-    const tags = options.tags || tokenize(cleanContent).slice(0, 5);
+    const title = options.title?.trim() ? scrubSecrets(options.title.trim())
+      : cleanContent.slice(0, 48) + (cleanContent.length > 48 ? '...' : '');
+    const tags = (options.tags || tokenize(cleanContent).slice(0, 5)).map(scrubSecrets);
 
     const item: MemoryItem = {
       id,
@@ -194,7 +211,7 @@ class AgentMemoryEngine {
       createdAt: Date.now(),
       updatedAt: Date.now(),
       accessCount: 0,
-      sourceSessionId: options.sourceSessionId,
+      sourceSessionId: options.sourceSessionId ? scrubSecrets(options.sourceSessionId) : undefined,
       isPinned: options.isPinned || false,
       projectId: options.projectId,
       userId: this.getScope() === 'guest' ? undefined : this.getScope(),
@@ -221,6 +238,10 @@ class AgentMemoryEngine {
       ...updates,
       userId: existing.userId,
       content: updates.content ? scrubSecrets(updates.content) : existing.content,
+      title: updates.title !== undefined ? scrubSecrets(updates.title) : existing.title,
+      tags: updates.tags ? updates.tags.map(scrubSecrets) : existing.tags,
+      sourceSessionId: updates.sourceSessionId === undefined ? existing.sourceSessionId
+        : updates.sourceSessionId ? scrubSecrets(updates.sourceSessionId) : updates.sourceSessionId,
       updatedAt: Date.now(),
     };
 
@@ -563,16 +584,16 @@ class AgentMemoryEngine {
             tier: item.tier,
             category: ['preference', 'architecture', 'decision', 'workflow', 'bugfix', 'general'].includes(item.category)
               ? item.category : 'general',
-            title: typeof item.title === 'string' && item.title.trim() ? item.title : cleanContent.slice(0, 48),
+            title: typeof item.title === 'string' && item.title.trim() ? scrubSecrets(item.title) : cleanContent.slice(0, 48),
             content: cleanContent,
-            tags: item.tags ?? tokenize(cleanContent).slice(0, 5),
+            tags: (item.tags ?? tokenize(cleanContent).slice(0, 5)).map(scrubSecrets),
             createdAt: typeof item.createdAt === 'number' && Number.isFinite(item.createdAt) ? item.createdAt : now,
             updatedAt: now,
             accessCount: typeof item.accessCount === 'number' && Number.isFinite(item.accessCount)
               ? item.accessCount : 0,
             isPinned: item.isPinned === true,
             projectId: item.projectId,
-            sourceSessionId: typeof item.sourceSessionId === 'string' ? item.sourceSessionId : undefined,
+            sourceSessionId: typeof item.sourceSessionId === 'string' ? scrubSecrets(item.sourceSessionId) : undefined,
             userId: scope === 'guest' ? undefined : scope,
           });
           imported++;

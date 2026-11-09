@@ -126,3 +126,55 @@ test('import rejects forged seed entries and foreign-owner batch atomically', ()
     Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: oldStorage });
   }
 });
+
+test('memory metadata never persists unredacted credential patterns', () => {
+  const oldWindow = globalThis.window;
+  const oldStorage = globalThis.localStorage;
+  const oldGetUser = neonAuth.getCurrentUser.bind(neonAuth);
+  const values = new Map<string, string>();
+  const local = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); }
+  };
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { localStorage: local } });
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: local });
+  let activeUser = 'scope-reset';
+  neonAuth.getCurrentUser = (() => ({ id: activeUser })) as typeof neonAuth.getCurrentUser;
+
+  const fakeKey = `sk-${'a'.repeat(40)}`;
+  try {
+    agentMemory.getSnapshot();
+    values.set(`${STORAGE_KEY}:user:alice`, JSON.stringify([{
+      id: 'previously-saved-unsafe-metadata', tier: 'semantic', category: 'general',
+      content: 'Earlier harmless entry', title: `legacy ${fakeKey}`, tags: [fakeKey],
+      userId: 'alice'
+    }]));
+    activeUser = 'alice';
+    const migrated = agentMemory.getAll().find(entry => entry.id === 'previously-saved-unsafe-metadata');
+    assert.ok(migrated);
+    assert.doesNotMatch(JSON.stringify(migrated), /sk-a{40}/);
+    assert.doesNotMatch(values.get(`${STORAGE_KEY}:user:alice`) || '', /sk-a{40}/);
+
+    const item = agentMemory.remember('Harmless note about service configuration', {
+      title: `title ${fakeKey}`,
+      tags: ['configuration', `tag ${fakeKey}`]
+    });
+    assert.doesNotMatch(JSON.stringify(item), /sk-a{40}/);
+    assert.doesNotMatch(values.get(`${STORAGE_KEY}:user:alice`) || '', /sk-a{40}/);
+
+    const updated = agentMemory.update(item.id, { title: `renamed ${fakeKey}`, tags: [fakeKey] });
+    assert.doesNotMatch(JSON.stringify(updated), /sk-a{40}/);
+
+    const imported = agentMemory.importVault(JSON.stringify({ memories: [{
+      id: 'credential-metadata-import', tier: 'semantic', content: 'Imported service preference',
+      title: `imported ${fakeKey}`, tags: [`imported-${fakeKey}`]
+    }] }));
+    assert.deepEqual(imported, { imported: 1, errors: 0 });
+    assert.doesNotMatch(agentMemory.exportVault(), /sk-a{40}/);
+    assert.doesNotMatch(values.get(`${STORAGE_KEY}:user:alice`) || '', /sk-a{40}/);
+  } finally {
+    neonAuth.getCurrentUser = oldGetUser;
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: oldWindow });
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: oldStorage });
+  }
+});

@@ -7,6 +7,38 @@ Date: 2026-11-08. Baseline: `prod-release` at
 is a code-only repair candidate, not an attestation that all eight
 repository-wide UNSLOP phases or production acceptance are complete.
 
+## Additional privacy hardening, 2026-11-09 — memory metadata
+
+The independently verified PR head `62b9c7e992eaec70196205dda9b173bc94a1488a`
+had successful mandatory GitHub CI (`42518820959`, `42518820824`), a Vercel
+READY preview (`dpl_BZkKyGPHPNnrS46XpcoQgd7YXy8V`) matching `/api/version`,
+and no production deployment. Those checks certify **that previous SHA only**.
+
+Continued source review uncovered a separate secret-persistence defect:
+`remember()`, `update()` and `importVault()` redacted known credential patterns
+in memory **content**, but accepted unredacted credential strings in memory
+**titles, tags and source-session metadata**. This could expose credentials
+through browser localStorage, memory exports, or retrieved memory context.
+An adversarial regression first reproduced the failure with a synthetic key;
+the repair now redacts free-text metadata on create, update, import and load,
+including previously persisted account-scoped entries. It preserves the
+original unowned legacy vault for explicit recovery and does not migrate or
+alter any server-side database.
+
+### New local checks, following this repair
+
+| Check | Observed result | Qualification |
+| --- | --- | --- |
+| Memory, identity transition, migration, UI contract, behavioral security | **29/29 PASS** | Includes adversarial metadata credential and legacy-vault regression |
+| Autonomous worker, adversarial, API integration, approval/recovery, Python containment | **115/115 PASS** | Synthetic/local runtime; no live OAuth principal |
+| TypeScript, build, lint | **PASS / PASS / exit 0** | Existing non-fatal warnings; no project-wide warning cleanup claimed |
+| Latest committed candidate GitHub CI and preview | **PENDING new SHA** | Previous green SHA is not transferable |
+| Two authenticated account browser acceptance and formal SAST | **BLOCKED** | Connected Edge sessions and scan preflight are unavailable in this runtime |
+
+**NO GO** until the latest commit is pushed, its exact-SHA CI/preview pass and
+both independent authenticated staging acceptance and formal security review
+complete. Do not count tests against the previous SHA as release approval.
+
 ## Independent follow-up, 2026-11-09 — fail-closed autonomous recovery
 
 An additional bounded review of the 2026-11-08 candidate identified
