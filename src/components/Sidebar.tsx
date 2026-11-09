@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
   Plus,
   FolderGit2,
@@ -37,6 +37,7 @@ interface SidebarProps {
   onOpenSearch: (query?: string) => void;
   isOpen: boolean;
   onToggleOpen: () => void;
+  onClose?: () => void;
   settings: AppSettings;
   onUpdateSettings: (settings: Partial<AppSettings>) => void;
   workspaceMode: WorkspaceMode;
@@ -121,6 +122,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenSearch,
   isOpen,
   onToggleOpen,
+  onClose,
   settings,
   onUpdateSettings,
   workspaceMode: _workspaceMode,
@@ -142,21 +144,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [neonUser, setNeonUser] = useState<NeonUser | null>(() => neonAuth.getCurrentUser());
   const drawerRef = useRef<HTMLElement>(null);
 
+  const prefersReducedMotion = useMemo(() => {
+    return typeof window !== 'undefined' && Boolean(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  }, []);
+
+  const handleClose = useCallback(() => {
+    if (onClose) {
+      onClose();
+    } else {
+      onToggleOpen();
+    }
+  }, [onClose, onToggleOpen]);
+
   useEffect(() => {
     return neonAuth.onAuthStateChange((user) => setNeonUser(user));
   }, []);
 
   // Temporary navigation behaves as a keyboard-accessible drawer.
   useEffect(() => {
-    if (!isOpen || window.innerWidth >= 1280) return;
+    if (!isOpen || (typeof window !== 'undefined' && window.innerWidth >= 1280)) return;
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onToggleOpen();
+      if (event.key === 'Escape') handleClose();
     };
     document.addEventListener('keydown', handleEscape);
     const closeButton = drawerRef.current?.querySelector<HTMLButtonElement>('[aria-label="Close sidebar navigation"]');
     closeButton?.focus({ preventScroll: true });
     return () => document.removeEventListener('keydown', handleEscape);
-  }, [isOpen, onToggleOpen]);
+  }, [isOpen, handleClose]);
   const [editingChatId, setEditingChatId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [starredExpanded, setStarredExpanded] = useState(true);
@@ -206,7 +220,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const handleSelectChatMobile = (id: string) => {
     onSelectChat(id);
     if (typeof window !== 'undefined' && window.innerWidth < 1280) {
-      onToggleOpen();
+      handleClose();
     }
   };
 
@@ -214,7 +228,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     onSelectWorkspace('chat');
     onNewChat();
     if (typeof window !== 'undefined' && window.innerWidth < 1280) {
-      onToggleOpen();
+      handleClose();
     }
   };
 
@@ -272,7 +286,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0, pointerEvents: 'none' }}
-          onClick={onToggleOpen}
+          transition={prefersReducedMotion ? { duration: 0 } : undefined}
+          style={{ pointerEvents: isOpen ? 'auto' : 'none' }}
+          onClick={handleClose}
           className="fixed inset-0 bg-stone-900/40 dark:bg-black/60 backdrop-blur-sm z-[60] xl:hidden"
           aria-hidden="true"
         />
@@ -286,7 +302,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           initial={{ x: -320, opacity: 0 }}
           animate={{ x: 0, opacity: 1 }}
           exit={{ x: -320, opacity: 0, pointerEvents: 'none' }}
-          transition={{ type: "spring", stiffness: 320, damping: 32 }}
+          transition={prefersReducedMotion ? { duration: 0 } : { type: "spring", stiffness: 320, damping: 32 }}
+          style={{ pointerEvents: isOpen ? 'auto' : 'none' }}
           className="aira-sidebar-shell fixed inset-y-0 left-0 z-[70] xl:relative xl:z-30 w-[min(19rem,100vw)] xl:w-[272px] h-[100dvh] min-h-0 overflow-hidden flex flex-col bg-claude-surface-light dark:bg-claude-surface-dark border-r border-claude-border-light dark:border-claude-border-dark select-none flex-shrink-0 shadow-2xl xl:shadow-none"
         >
             <div className="shrink-0 p-5 pb-3 flex items-center justify-between">
@@ -296,7 +313,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <div className="font-serif font-normal text-[24px] tracking-tight text-claude-text-light dark:text-claude-text-dark leading-none">Aira</div>
                 </div>
               </div>
-              <button type="button" aria-label="Close sidebar navigation" onClick={onToggleOpen} className="p-1.5 rounded-lg text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark hover:text-claude-text-light dark:hover:text-claude-text-dark transition-colors" title="Close sidebar">
+              <button type="button" aria-label="Close sidebar navigation" onClick={handleClose} className="p-1.5 rounded-lg text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark hover:text-claude-text-light dark:hover:text-claude-text-dark transition-colors" title="Close sidebar">
                 <PanelLeftClose className="w-4 h-4" />
               </button>
             </div>
@@ -409,9 +426,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <button
                   ref={accountButtonRef}
                   type="button"
+                  data-testid="account-button"
                   aria-haspopup="menu"
                   aria-expanded={isAccountMenuOpen}
-                  aria-label={neonUser ? "Open user account and help menu" : "Open workspace and help menu"}
+                  aria-label={neonUser ? "Open user account and help menu" : "Sign in to account and workspace menu"}
                   onClick={() => setIsAccountMenuOpen(prev => !prev)}
                   className="flex w-full min-w-0 items-center space-x-2.5 p-2 rounded-xl hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark border border-claude-border-light/60 dark:border-claude-border-dark/60 transition-all text-left active:scale-[0.98]"
                 >

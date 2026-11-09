@@ -35,7 +35,7 @@ export const INITIAL_CONVERSATION: Conversation = {
 
 // In-memory cache for synchronous reads and resilient fallback
 const inMemoryConversations = new Map<string, Conversation[]>();
-let inMemoryProjects: Project[] | null = null;
+const inMemoryProjects = new Map<string, Project[]>();
 let inMemorySettings: AppSettings | null = null;
 
 export interface StorageHealth {
@@ -56,6 +56,10 @@ export function getStorageHealth(): StorageHealth {
 
 export function getConversationsStorageKey(userId?: string): string {
   return userId ? `aira_conversations_user_${userId}` : STORAGE_KEYS.CONVERSATIONS;
+}
+
+export function getProjectsStorageKey(userId?: string): string {
+  return userId ? `aira_projects_user_${userId}` : STORAGE_KEYS.PROJECTS;
 }
 
 /** A legacy key is only removable when every persisted record matches the source. */
@@ -148,17 +152,29 @@ export async function migrateLocalStorageToIndexedDb(): Promise<{ migrated: bool
     }
 
     // Migrate projects with strict read-back verification
-    const rawProjects = localStorage.getItem(STORAGE_KEYS.PROJECTS);
-    if (rawProjects) {
+    const projectKeys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && (key === STORAGE_KEYS.PROJECTS || key.startsWith('aira_projects_user_'))) {
+        projectKeys.push(key);
+      }
+    }
+
+    for (const key of projectKeys) {
+      const rawProjects = localStorage.getItem(key);
+      if (!rawProjects) continue;
       try {
         const parsedProjects = JSON.parse(rawProjects);
         if (Array.isArray(parsedProjects)) {
-          await idbSet(STORES.PROJECTS, 'projects', parsedProjects);
-          const verifiedProjects = await idbGet<Project[]>(STORES.PROJECTS, 'projects');
+          await idbSet(STORES.PROJECTS, key, parsedProjects);
+          if (key === STORAGE_KEYS.PROJECTS) {
+            await idbSet(STORES.PROJECTS, 'projects', parsedProjects);
+          }
+          const verifiedProjects = await idbGet<Project[]>(STORES.PROJECTS, key);
           if (isVerifiedMigrationCopy(parsedProjects, verifiedProjects)) {
-            inMemoryProjects = verifiedProjects;
+            inMemoryProjects.set(key, verifiedProjects);
             migratedAny = true;
-            localStorage.removeItem(STORAGE_KEYS.PROJECTS);
+            localStorage.removeItem(key);
             freedKeys++;
           }
         }
@@ -206,6 +222,38 @@ export async function hydrateStorageFromIndexedDb(userId?: string): Promise<Conv
   void migrateLocalStorageToIndexedDb();
 
   return inMemoryConversations.get(key) || null;
+}
+
+/**
+ * Hydrates projects from IndexedDB asynchronously into in-memory cache.
+ */
+export async function hydrateProjectsFromIndexedDb(userId?: string): Promise<Project[] | null> {
+  const key = getProjectsStorageKey(userId);
+
+  if (isIndexedDbSupported()) {
+    try {
+      const idbData = await idbGet<Project[]>(STORES.PROJECTS, key);
+      if (Array.isArray(idbData) && idbData.length > 0) {
+        inMemoryProjects.set(key, idbData);
+        return idbData;
+      }
+    } catch {
+      // Continue to fallback
+    }
+    if (!userId) {
+      try {
+        const legacyData = await idbGet<Project[]>(STORES.PROJECTS, 'projects');
+        if (Array.isArray(legacyData) && legacyData.length > 0) {
+          inMemoryProjects.set(key, legacyData);
+          return legacyData;
+        }
+      } catch {
+        // Non-blocking
+      }
+    }
+  }
+
+  return inMemoryProjects.get(key) || null;
 }
 
 /**
@@ -345,17 +393,24 @@ export function setSessionActiveChatId(id: string | null): void {
   }
 }
 
-export function loadProjects(): Project[] {
-  if (inMemoryProjects) return inMemoryProjects;
+export function loadProjects(userId?: string): Project[] & PromiseLike<Project[]> {
+  const key = getProjectsStorageKey(userId);
 
+  const cached = inMemoryProjects.get(key);
+  if (cached) {
+    const p = Promise.resolve(cached);
+    (cached as any).then = p.then.bind(p);
+    return cached as Project[] & PromiseLike<Project[]>;
+  }
+
+  let projectsList: Project[] = [];
   try {
     if (typeof localStorage !== 'undefined') {
-      const raw = localStorage.getItem(STORAGE_KEYS.PROJECTS);
+      const raw = localStorage.getItem(key);
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
-          inMemoryProjects = parsed;
-          return parsed;
+          projectsList = parsed;
         }
       }
     }
@@ -363,22 +418,30 @@ export function loadProjects(): Project[] {
     // Non-blocking
   }
 
-  inMemoryProjects = [];
-  return [];
+  inMemoryProjects.set(key, projectsList);
+  const p = Promise.resolve(projectsList);
+  (projectsList as any).then = p.then.bind(p);
+  return projectsList as Project[] & PromiseLike<Project[]>;
 }
 
-export function saveProjects(projects: Project[]): void {
-  inMemoryProjects = projects;
+export function saveProjects(projects: Project[], userId?: string): void {
+  const key = getProjectsStorageKey(userId);
+  inMemoryProjects.set(key, projects);
 
   if (isIndexedDbSupported()) {
-    void idbSet(STORES.PROJECTS, 'projects', projects).catch(() => {
+    void idbSet(STORES.PROJECTS, key, projects).catch(() => {
       // Non-blocking
     });
+    if (key === STORAGE_KEYS.PROJECTS) {
+      void idbSet(STORES.PROJECTS, 'projects', projects).catch(() => {
+        // Non-blocking
+      });
+    }
   }
 
   if (typeof localStorage !== 'undefined') {
     try {
-      localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(projects));
+      localStorage.setItem(key, JSON.stringify(projects));
     } catch {
       // Quota exceeded: data is safely retained in inMemoryProjects and IndexedDB
       evictLegacyLocalStorageBlobs();
@@ -445,11 +508,20 @@ export function exportAllStorageData(): string {
     allConversations[key] = convs;
   });
 
+  const allProjects: Record<string, Project[]> = {};
+  inMemoryProjects.forEach((projs, key) => {
+    allProjects[key] = projs;
+  });
+
+  const defaultProjects = inMemoryProjects.get(STORAGE_KEYS.PROJECTS) ||
+    (inMemoryProjects.size > 0 ? Array.from(inMemoryProjects.values())[0] : []);
+
   const payload = {
     exportVersion: 2,
     timestamp: Date.now(),
     conversations: allConversations,
-    projects: inMemoryProjects || [],
+    projects: defaultProjects,
+    projectsByUser: allProjects,
     settings: inMemorySettings || DEFAULT_SETTINGS,
   };
 
