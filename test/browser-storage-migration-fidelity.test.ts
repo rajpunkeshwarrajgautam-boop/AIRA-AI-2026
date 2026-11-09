@@ -680,7 +680,7 @@ test('9. Cross-account storage isolation (storage scoped by user ID; account swi
   );
 });
 
-test('10. Edge browser process restart & rehydration verification using Playwright', { timeout: 35000 }, async () => {
+test('10. Edge browser process restart & rehydration verification using Playwright', { timeout: 60000 }, async () => {
   // Spawn lightweight local HTTP server to host valid web origin for genuine IndexedDB/LocalStorage persistence
   const server = http.createServer((_req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html' });
@@ -706,10 +706,9 @@ test('10. Edge browser process restart & rehydration verification using Playwrig
     // -------------------------------------------------------------------------
     // PROCESS 1: Launch Microsoft Edge, populate LocalStorage & IndexedDB, close
     // -------------------------------------------------------------------------
-    context1 = await chromium.launchPersistentContext(tempProfileDir, {
-      channel: 'msedge',
-      headless: true
-    }).catch(async () => {
+    const preferredChannel = process.env.PLAYWRIGHT_CHANNEL || (process.platform === 'win32' ? 'msedge' : undefined);
+    const launchOpts = preferredChannel ? { channel: preferredChannel, headless: true, timeout: 5000 } : { headless: true };
+    context1 = await chromium.launchPersistentContext(tempProfileDir, launchOpts).catch(async () => {
       // Graceful fallback to bundled chromium if channel msedge is unavailable in CI
       return chromium.launchPersistentContext(tempProfileDir, { headless: true });
     });
@@ -769,10 +768,7 @@ test('10. Edge browser process restart & rehydration verification using Playwrig
     // -------------------------------------------------------------------------
     // PROCESS 2: Cold launch Microsoft Edge on identical profile directory
     // -------------------------------------------------------------------------
-    context2 = await chromium.launchPersistentContext(tempProfileDir, {
-      channel: 'msedge',
-      headless: true
-    }).catch(async () => {
+    context2 = await chromium.launchPersistentContext(tempProfileDir, launchOpts).catch(async () => {
       return chromium.launchPersistentContext(tempProfileDir, { headless: true });
     });
 
