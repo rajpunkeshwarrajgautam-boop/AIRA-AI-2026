@@ -8,26 +8,28 @@
     "databaseTarget": "neon://mute-frost-50372225/br-snowy-bonus-b32thjlz",
     "testMethod": "Database query on staging bff_sessions and users for authentic OAuth principals; v2 BFF token serialization; preview unauthenticated rejection check.",
     "expectedResult": "Active non-revoked session records with future expiry, cryptographic token format, and 401 unauthenticated fail-closed rejection.",
-    "actualResult": "Verified authentic Principal A (rajpunkeshwarrajgautam@gmail.com, ID: neon_user_e21576...) and Principal B (kpveovfji@a.1charlottewalker.asia, ID: usr_af4d0ca7-915...) with active unrevoked BFF sessions. Unauthenticated probe returned HTTP 401.",
+    "actualResult": "Verified authentic Principal A ([REDACTED_STAGING_PRINCIPAL_A_EMAIL], ID: [REDACTED]) and Principal B ([REDACTED_STAGING_PRINCIPAL_B_EMAIL], ID: [REDACTED]) with active unrevoked BFF sessions. Unauthenticated probe returned HTTP 401.",
     "verdict": "PASS",
     "httpStatus": "HTTP 200 DB / HTTP 401 Unauthenticated API",
     "evidence": {
       "principalA": {
-        "userId": "neon_user_e215766f-e719-431f-ad08-154a28ef83b4",
-        "name": "raj gautam",
-        "email": "rajpunkeshwarrajgautam@gmail.com",
-        "sessionId": "qxK_CgR89RrajWQfPDPAyRlWwh1aeUxYkHypp_kpZZ4",
+        "userId": "[REDACTED_STAGING_PRINCIPAL_A_ID]",
+        "name": "Staging Principal A",
+        "email": "[REDACTED_STAGING_PRINCIPAL_A_EMAIL]",
+        "sessionId": "[REDACTED_STAGING_SESSION_A]",
         "revokedAt": null
       },
       "principalB": {
-        "userId": "usr_af4d0ca7-915c-4bd3-a086-03bebde5dd2c",
-        "name": "khanh khanh",
-        "email": "kpveovfji@a.1charlottewalker.asia",
-        "sessionId": "2WlmH18ksFE5n4S-9_QAwZg1pXlT56tU2vUWQado2Xk",
+        "userId": "[REDACTED_STAGING_PRINCIPAL_B_ID]",
+        "name": "Staging Principal B",
+        "email": "[REDACTED_STAGING_PRINCIPAL_B_EMAIL]",
+        "sessionId": "[REDACTED_STAGING_SESSION_B]",
         "revokedAt": null
       },
       "unauthProbeStatus": 401
-    }
+    },
+    "evidenceScope": "HISTORICAL_PRE_RELEASE_PREVIEW_ONLY",
+    "releaseAttestation": "NOT_AN_ATTESTATION_OF_PR_159_FINAL_HEAD_OR_PRODUCTION_MERGE"
   },
   {
     "gate": "Gate 2: Cross-account conversation and project isolation",
@@ -48,7 +50,9 @@
       "userB_delete_userA_status": 404,
       "userA_read_userB_status": 404,
       "userA_delete_userB_status": 404
-    }
+    },
+    "evidenceScope": "HISTORICAL_PRE_RELEASE_PREVIEW_ONLY",
+    "releaseAttestation": "NOT_AN_ATTESTATION_OF_PR_159_FINAL_HEAD_OR_PRODUCTION_MERGE"
   },
   {
     "gate": "Gate 3: Memory retrieval, import, export, and deletion",
@@ -57,7 +61,7 @@
     "deploymentId": "dpl_6M1dgwUwtPu7DpPHatKAuQBV4ziW",
     "deploymentUrl": "https://aira-ai-2026-mypu3qgpf-rajpunkeshwarrajgautam-boops-projects.vercel.app",
     "databaseTarget": "neon://mute-frost-50372225/br-snowy-bonus-b32thjlz",
-    "testMethod": "Memory engine client vault isolation test across Raj Gautam and Khanh Khanh principals, verifying memory creation, recall quarantine, foreign import rejection, and deletion.",
+    "testMethod": "Memory engine client vault isolation test across Staging Principal A and Staging Principal B principals, verifying memory creation, recall quarantine, foreign import rejection, and deletion.",
     "expectedResult": "Memories isolated by authentic user ID; cross-account recall returns 0; foreign import rejected (0 imported, 1 error); deletion succeeds cleanly.",
     "actualResult": "Vault isolation confirmed: Raj memory (mem-s-1794206776...) quarantined from Khanh; Khanh memory (mem-s-1794206776...) quarantined from Raj; both foreign import attempts rejected; clean deletion verified.",
     "verdict": "PASS",
@@ -74,7 +78,9 @@
         "errors": 1
       },
       "deletionVerified": true
-    }
+    },
+    "evidenceScope": "HISTORICAL_PRE_RELEASE_PREVIEW_ONLY",
+    "releaseAttestation": "NOT_AN_ATTESTATION_OF_PR_159_FINAL_HEAD_OR_PRODUCTION_MERGE"
   },
   {
     "gate": "Gate 4: Autonomous task ownership and status",
@@ -95,7 +101,9 @@
       "userB_cancel_taskA_status": 403,
       "userA_read_taskB_status": 403,
       "userA_cancel_taskB_status": 403
-    }
+    },
+    "evidenceScope": "HISTORICAL_PRE_RELEASE_PREVIEW_ONLY",
+    "releaseAttestation": "NOT_AN_ATTESTATION_OF_PR_159_FINAL_HEAD_OR_PRODUCTION_MERGE"
   },
   {
     "gate": "Gate 5: Agent execution and SSE streaming under both identities",
@@ -122,7 +130,9 @@
         "provider": "groq",
         "executedModel": "openai/gpt-oss-120b"
       }
-    }
+    },
+    "evidenceScope": "HISTORICAL_PRE_RELEASE_PREVIEW_ONLY",
+    "releaseAttestation": "NOT_AN_ATTESTATION_OF_PR_159_FINAL_HEAD_OR_PRODUCTION_MERGE"
   },
   {
     "gate": "Gate 6: Tool permission and approval enforcement",
@@ -140,7 +150,9 @@
       "toolsCount": 19,
       "calcResult": 4200,
       "unauthorizedErrorCode": "TOOL_NOT_FOUND"
-    }
+    },
+    "evidenceScope": "HISTORICAL_PRE_RELEASE_PREVIEW_ONLY",
+    "releaseAttestation": "NOT_AN_ATTESTATION_OF_PR_159_FINAL_HEAD_OR_PRODUCTION_MERGE"
   },
   {
     "gate": "Gate 7: Cross-account execution-run and cancellation rejection",
@@ -163,7 +175,9 @@
       "userA_read_runB_status": 404,
       "userA_cancel_runB_status": 404,
       "unauth_read_status": 401
-    }
+    },
+    "evidenceScope": "HISTORICAL_PRE_RELEASE_PREVIEW_ONLY",
+    "releaseAttestation": "NOT_AN_ATTESTATION_OF_PR_159_FINAL_HEAD_OR_PRODUCTION_MERGE"
   },
   {
     "gate": "Gate 8: Authentication switching during streaming",
@@ -181,7 +195,9 @@
       "streamA_result": 32768,
       "streamA_completed": true,
       "concurrent_accountB_status": 200
-    }
+    },
+    "evidenceScope": "HISTORICAL_PRE_RELEASE_PREVIEW_ONLY",
+    "releaseAttestation": "NOT_AN_ATTESTATION_OF_PR_159_FINAL_HEAD_OR_PRODUCTION_MERGE"
   },
   {
     "gate": "Gate 9: Session persistence across actual Edge-process restarts",
@@ -196,7 +212,7 @@
     "verdict": "PASS",
     "httpStatus": "PASS / Process Restart Verified & Hydrated",
     "evidence": {
-      "user": "raj gautam",
+      "user": "Staging Principal A",
       "restartedData": {
         "sessionValid": true,
         "convCount": 1,
@@ -204,7 +220,9 @@
         "projectCount": 1
       },
       "screenshot": "artifacts/staging-acceptance/screenshots/edge_profile_raj_restarted_hydrated.png"
-    }
+    },
+    "evidenceScope": "HISTORICAL_PRE_RELEASE_PREVIEW_ONLY",
+    "releaseAttestation": "NOT_AN_ATTESTATION_OF_PR_159_FINAL_HEAD_OR_PRODUCTION_MERGE"
   },
   {
     "gate": "Gate 10: Storage hydration and recovery",
@@ -213,13 +231,13 @@
     "deploymentId": "dpl_6M1dgwUwtPu7DpPHatKAuQBV4ziW",
     "deploymentUrl": "https://aira-ai-2026-mypu3qgpf-rajpunkeshwarrajgautam-boops-projects.vercel.app",
     "databaseTarget": "neon://mute-frost-50372225/br-snowy-bonus-b32thjlz",
-    "testMethod": "Edge Profile B (Khanh Khanh) hydration on preview deployment and cross-profile storage quarantine verification.",
+    "testMethod": "Edge Profile B (Staging Principal B) hydration on preview deployment and cross-profile storage quarantine verification.",
     "expectedResult": "Profile B hydrates own state with zero leakage of Profile A conversations, memories, or projects; no horizontal layout overflow.",
     "actualResult": "Profile storage quarantine verified: hasRajConvs=false, hasRajMemory=false, hasRajProjects=false. Layout scrollWidth (1280) <= clientWidth (1280).",
     "verdict": "PASS",
     "httpStatus": "PASS / Strict Profile Separation Verified",
     "evidence": {
-      "user": "khanh khanh",
+      "user": "Staging Principal B",
       "isolation": {
         "hasRajConvs": false,
         "hasRajMemory": false,
@@ -228,7 +246,9 @@
       "scrollWidth": 1280,
       "clientWidth": 1280,
       "screenshot": "artifacts/staging-acceptance/screenshots/edge_profile_khanh_khanh_isolated.png"
-    }
+    },
+    "evidenceScope": "HISTORICAL_PRE_RELEASE_PREVIEW_ONLY",
+    "releaseAttestation": "NOT_AN_ATTESTATION_OF_PR_159_FINAL_HEAD_OR_PRODUCTION_MERGE"
   },
   {
     "gate": "Gate 11: CSRF and request-origin protections",
@@ -247,7 +267,9 @@
       "unauthUnlinkStatus": 403,
       "tamperedJwtStatus": 401,
       "disallowedOriginStatus": 403
-    }
+    },
+    "evidenceScope": "HISTORICAL_PRE_RELEASE_PREVIEW_ONLY",
+    "releaseAttestation": "NOT_AN_ATTESTATION_OF_PR_159_FINAL_HEAD_OR_PRODUCTION_MERGE"
   },
   {
     "gate": "Gate 12: PostgreSQL worker fencing, heartbeat failure, and crash recovery",
@@ -269,6 +291,8 @@
       "worker2_update_succeeded_token": 4,
       "heartbeatErrorEmitted": true,
       "crashRecoveryPreserved": true
-    }
+    },
+    "evidenceScope": "HISTORICAL_PRE_RELEASE_PREVIEW_ONLY",
+    "releaseAttestation": "NOT_AN_ATTESTATION_OF_PR_159_FINAL_HEAD_OR_PRODUCTION_MERGE"
   }
 ]
