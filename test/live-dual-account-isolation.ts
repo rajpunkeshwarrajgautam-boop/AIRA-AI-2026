@@ -1138,7 +1138,11 @@ async function main() {
     assert.ok([401, 403].includes(unauthUnlink.status), `Unauthenticated unlink must return 401 or 403. Got ${unauthUnlink.status}`);
 
     // 3. Tampered JWT rejection
-    const forgedJwt = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0.FORGEDSIGNATURE';
+    const forgedJwt = [
+      Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url'),
+      Buffer.from(JSON.stringify({ sub: `forged-${crypto.randomUUID()}`, iat: 1, exp: 4102444800 })).toString('base64url'),
+      crypto.randomBytes(32).toString('base64url')
+    ].join('.');
     const tamperedRes = await fetchWithRetry(`${PREVIEW_URL}/api/conversations/${convIdA}`, {
       headers: { Authorization: `Bearer ${forgedJwt}` }
     });
