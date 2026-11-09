@@ -3,7 +3,11 @@
 Date: 2026-11-08. Baseline: `prod-release` at
 `bb14406a32f82eba8a2ae22736a80406bb129f44`.
 
-**Release status: NO GO pending recertification of the updated PR head.** This
+**Current release outcome (2026-11-09): DEPLOYED and operationally verified.** PR [#159](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/159) merged candidate parent `4e40e7e1c2a11b998bbb61cfca75e2086abdef27` as production merge `6acd066a8352799109d151f79b6a808cee9ccd09`. The canonical Vercel deployment is `dpl_A5aLSh6oVXiffoBFQdqdkEE6K78z`; live `/api/version` and `/api/health` confirm the merge SHA and healthy service state. These are **operational checks**, not a substitute for exact-candidate security and dual-account acceptance receipts. See [post-release evidence addendum](UNSLOP-POST-RELEASE-EVIDENCE-ADDENDUM-20261109.md) for the precise scope and remaining evidence gaps.
+
+**Historical record below (2026-11-08–09):** The earlier NO GO and unrun-gate statements describe pre-release snapshots, not the current deployment. They are retained without changing their original conclusions or reassigning old test results to a newer SHA.
+
+**Historical release status at that time: NO GO pending recertification of the updated PR head.** This
 is a code-only repair candidate, not an attestation that all eight
 repository-wide UNSLOP phases or production acceptance are complete.
 

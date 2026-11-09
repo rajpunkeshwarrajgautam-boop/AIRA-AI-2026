@@ -8,7 +8,9 @@
     "previewDeploymentId": "dpl_6M1dgwUwtPu7DpPHatKAuQBV4ziW",
     "previewUrl": "https://aira-ai-2026-mypu3qgpf-rajpunkeshwarrajgautam-boops-projects.vercel.app",
     "stagingDatabaseTarget": "postgresql://mute-frost-50372225/br-snowy-bonus-b32thjlz",
-    "leadAuditor": "teamwork_reviewer_m3 (Teamwork Reviewer & Adversarial Critic)"
+    "leadAuditor": "teamwork_reviewer_m3 (Teamwork Reviewer & Adversarial Critic)",
+    "evidenceScope": "HISTORICAL_PRE_RELEASE_PREVIEW_ONLY",
+    "provenanceNotice": "This report's findings and verdict concern only candidateCommitSha and previewDeploymentId. They do not independently certify PR #159 final parent 4e40e7e1c2a11b998bbb61cfca75e2086abdef27 or production merge 6acd066a8352799109d151f79b6a808cee9ccd09."
   },
   "scanners": [
     {
