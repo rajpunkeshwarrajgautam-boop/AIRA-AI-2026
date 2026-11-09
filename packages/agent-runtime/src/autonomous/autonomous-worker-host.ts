@@ -165,12 +165,18 @@ export class AutonomousWorkerHost extends EventEmitter {
 
     // Start heartbeat lease renewal
     let currentFencingToken = task.fencingToken || 1;
+    let heartbeatInProgress = false;
+    const abortOnLostLease = () => {
+      clearInterval(heartbeatTimer);
+      abortController.abort();
+    };
     const heartbeatTimer = setInterval(async () => {
+      if (abortController.signal.aborted || heartbeatInProgress) return;
+      heartbeatInProgress = true;
       try {
         const current = await this.repository.getTask(taskId);
         if (!current || current.leaseOwner !== this.workerId) {
-          clearInterval(heartbeatTimer);
-          abortController.abort();
+          abortOnLostLease();
           return;
         }
         currentFencingToken = current.fencingToken;
@@ -182,12 +188,20 @@ export class AutonomousWorkerHost extends EventEmitter {
             currentFencingToken
           );
           if (!renewed) {
-            clearInterval(heartbeatTimer);
-            abortController.abort();
+            abortOnLostLease();
           }
         }
       } catch {
-        // Heartbeat failure
+        // Durable execution must not continue when lease ownership cannot be verified.
+        abortOnLostLease();
+        this.emit('worker.error', {
+          workerId: this.workerId,
+          taskId,
+          error: 'Task heartbeat failed; execution aborted',
+          code: 'HEARTBEAT_FAILED'
+        });
+      } finally {
+        heartbeatInProgress = false;
       }
     }, this.heartbeatIntervalMs);
 
@@ -195,8 +209,11 @@ export class AutonomousWorkerHost extends EventEmitter {
     this.emit('task.claimed', { taskId, workerId: this.workerId, fencingToken: currentFencingToken });
 
     try {
-      const result = await this.engine.executeAutonomousTask(taskId, abortController.signal);
-      this.emit('task.completed', { taskId, state: result.state, deliverableSummary: result.deliverableSummary });
+      const result = await this.engine.executeAutonomousTask(taskId, abortController.signal, task.fencingToken);
+      if (!abortController.signal.aborted &&
+          ['COMPLETED', 'FAILED', 'CANCELLED', 'TIMED_OUT'].includes(result.state)) {
+        this.emit('task.completed', { taskId, state: result.state, deliverableSummary: result.deliverableSummary });
+      }
     } catch (err: any) {
       this.emit('task.failed', { taskId, error: err.message });
     } finally {

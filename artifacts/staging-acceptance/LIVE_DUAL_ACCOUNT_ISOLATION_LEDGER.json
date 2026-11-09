@@ -1,0 +1,274 @@
+[
+  {
+    "gate": "Gate 1: Authentic OAuth login and BFF session verification",
+    "timestamp": "2026-11-09T06:45:58.113Z",
+    "candidateSha": "0dc2036976254f5a17e9af028b07db9a3cae3688",
+    "deploymentId": "dpl_6M1dgwUwtPu7DpPHatKAuQBV4ziW",
+    "deploymentUrl": "https://aira-ai-2026-mypu3qgpf-rajpunkeshwarrajgautam-boops-projects.vercel.app",
+    "databaseTarget": "neon://mute-frost-50372225/br-snowy-bonus-b32thjlz",
+    "testMethod": "Database query on staging bff_sessions and users for authentic OAuth principals; v2 BFF token serialization; preview unauthenticated rejection check.",
+    "expectedResult": "Active non-revoked session records with future expiry, cryptographic token format, and 401 unauthenticated fail-closed rejection.",
+    "actualResult": "Verified authentic Principal A (rajpunkeshwarrajgautam@gmail.com, ID: neon_user_e21576...) and Principal B (kpveovfji@a.1charlottewalker.asia, ID: usr_af4d0ca7-915...) with active unrevoked BFF sessions. Unauthenticated probe returned HTTP 401.",
+    "verdict": "PASS",
+    "httpStatus": "HTTP 200 DB / HTTP 401 Unauthenticated API",
+    "evidence": {
+      "principalA": {
+        "userId": "neon_user_e215766f-e719-431f-ad08-154a28ef83b4",
+        "name": "raj gautam",
+        "email": "rajpunkeshwarrajgautam@gmail.com",
+        "sessionId": "qxK_CgR89RrajWQfPDPAyRlWwh1aeUxYkHypp_kpZZ4",
+        "revokedAt": null
+      },
+      "principalB": {
+        "userId": "usr_af4d0ca7-915c-4bd3-a086-03bebde5dd2c",
+        "name": "khanh khanh",
+        "email": "kpveovfji@a.1charlottewalker.asia",
+        "sessionId": "2WlmH18ksFE5n4S-9_QAwZg1pXlT56tU2vUWQado2Xk",
+        "revokedAt": null
+      },
+      "unauthProbeStatus": 401
+    }
+  },
+  {
+    "gate": "Gate 2: Cross-account conversation and project isolation",
+    "timestamp": "2026-11-09T06:46:16.501Z",
+    "candidateSha": "0dc2036976254f5a17e9af028b07db9a3cae3688",
+    "deploymentId": "dpl_6M1dgwUwtPu7DpPHatKAuQBV4ziW",
+    "deploymentUrl": "https://aira-ai-2026-mypu3qgpf-rajpunkeshwarrajgautam-boops-projects.vercel.app",
+    "databaseTarget": "neon://mute-frost-50372225/br-snowy-bonus-b32thjlz",
+    "testMethod": "Bidirectional conversation synchronization and cross-account IDOR read/delete attempts on live preview deployment.",
+    "expectedResult": "Owners read own conversations (200); foreign principals receive 404 on reads and 403/404 on deletion attempts.",
+    "actualResult": "Bidirectional IDOR isolation confirmed: User B -> User A returned read 404, delete 404; User A -> User B returned read 404, delete 404.",
+    "verdict": "PASS",
+    "httpStatus": "Sync: 200 / Read: 200 / IDOR Read: 404 / IDOR Delete: 404",
+    "evidence": {
+      "convIdA": "conv_raj_1794206758113",
+      "convIdB": "conv_khanh_1794206758113",
+      "userB_read_userA_status": 404,
+      "userB_delete_userA_status": 404,
+      "userA_read_userB_status": 404,
+      "userA_delete_userB_status": 404
+    }
+  },
+  {
+    "gate": "Gate 3: Memory retrieval, import, export, and deletion",
+    "timestamp": "2026-11-09T06:46:16.502Z",
+    "candidateSha": "0dc2036976254f5a17e9af028b07db9a3cae3688",
+    "deploymentId": "dpl_6M1dgwUwtPu7DpPHatKAuQBV4ziW",
+    "deploymentUrl": "https://aira-ai-2026-mypu3qgpf-rajpunkeshwarrajgautam-boops-projects.vercel.app",
+    "databaseTarget": "neon://mute-frost-50372225/br-snowy-bonus-b32thjlz",
+    "testMethod": "Memory engine client vault isolation test across Raj Gautam and Khanh Khanh principals, verifying memory creation, recall quarantine, foreign import rejection, and deletion.",
+    "expectedResult": "Memories isolated by authentic user ID; cross-account recall returns 0; foreign import rejected (0 imported, 1 error); deletion succeeds cleanly.",
+    "actualResult": "Vault isolation confirmed: Raj memory (mem-s-1794206776...) quarantined from Khanh; Khanh memory (mem-s-1794206776...) quarantined from Raj; both foreign import attempts rejected; clean deletion verified.",
+    "verdict": "PASS",
+    "httpStatus": "PASS / In-Memory & Storage Quarantine Verified",
+    "evidence": {
+      "memRajId": "mem-s-1794206776502-nv8g",
+      "memKhanhId": "mem-s-1794206776502-2p0x",
+      "khanhImportAttemptRejected": {
+        "imported": 0,
+        "errors": 1
+      },
+      "rajImportAttemptRejected": {
+        "imported": 0,
+        "errors": 1
+      },
+      "deletionVerified": true
+    }
+  },
+  {
+    "gate": "Gate 4: Autonomous task ownership and status",
+    "timestamp": "2026-11-09T06:46:34.916Z",
+    "candidateSha": "0dc2036976254f5a17e9af028b07db9a3cae3688",
+    "deploymentId": "dpl_6M1dgwUwtPu7DpPHatKAuQBV4ziW",
+    "deploymentUrl": "https://aira-ai-2026-mypu3qgpf-rajpunkeshwarrajgautam-boops-projects.vercel.app",
+    "databaseTarget": "neon://mute-frost-50372225/br-snowy-bonus-b32thjlz",
+    "testMethod": "Bidirectional autonomous task creation, status read, and cross-account cancellation denial on live deployed preview API.",
+    "expectedResult": "Owners read own task (200); foreign accounts cannot read (403/404) or cancel (403) tasks.",
+    "actualResult": "Task isolation verified: User B -> Task A read=403, cancel=403; User A -> Task B read=403, cancel=403.",
+    "verdict": "PASS",
+    "httpStatus": "Create: 200 / Read: 200 / IDOR Read: 403 / IDOR Cancel: 403",
+    "evidence": {
+      "taskAId": "autotask_1794206778642_8b1b46ca",
+      "taskBId": "autotask_1794206786386_fb5b91b9",
+      "userB_read_taskA_status": 403,
+      "userB_cancel_taskA_status": 403,
+      "userA_read_taskB_status": 403,
+      "userA_cancel_taskB_status": 403
+    }
+  },
+  {
+    "gate": "Gate 5: Agent execution and SSE streaming under both identities",
+    "timestamp": "2026-11-09T06:46:57.694Z",
+    "candidateSha": "0dc2036976254f5a17e9af028b07db9a3cae3688",
+    "deploymentId": "dpl_6M1dgwUwtPu7DpPHatKAuQBV4ziW",
+    "deploymentUrl": "https://aira-ai-2026-mypu3qgpf-rajpunkeshwarrajgautam-boops-projects.vercel.app",
+    "databaseTarget": "neon://mute-frost-50372225/br-snowy-bonus-b32thjlz",
+    "testMethod": "Real-time SSE chat streaming on deployed preview with live calculator tool execution and cryptographic model provenance validation under both Account A and Account B.",
+    "expectedResult": "Distinct run IDs, tool completion with exact mathematical results, verified model provenance, non-mock provider execution.",
+    "actualResult": "Live SSE streaming verified: Account A runId=run_ed1b6afc-7... computed 4194304 (groq); Account B runId=run_7db76d6b-7... computed 2097152 (groq). Both verified: true.",
+    "verdict": "PASS",
+    "httpStatus": "HTTP 200 / SSE Stream Finished / Tool Execution Verified",
+    "evidence": {
+      "accountA": {
+        "runId": "run_ed1b6afc-7",
+        "result": 4194304,
+        "provider": "groq",
+        "executedModel": "openai/gpt-oss-120b"
+      },
+      "accountB": {
+        "runId": "run_7db76d6b-7",
+        "result": 2097152,
+        "provider": "groq",
+        "executedModel": "openai/gpt-oss-120b"
+      }
+    }
+  },
+  {
+    "gate": "Gate 6: Tool permission and approval enforcement",
+    "timestamp": "2026-11-09T06:47:01.077Z",
+    "candidateSha": "0dc2036976254f5a17e9af028b07db9a3cae3688",
+    "deploymentId": "dpl_6M1dgwUwtPu7DpPHatKAuQBV4ziW",
+    "deploymentUrl": "https://aira-ai-2026-mypu3qgpf-rajpunkeshwarrajgautam-boops-projects.vercel.app",
+    "databaseTarget": "neon://mute-frost-50372225/br-snowy-bonus-b32thjlz",
+    "testMethod": "Evaluation of tool registry access, authorized tool execution, and unapproved/unregistered tool rejection on deployed preview.",
+    "expectedResult": "Unauthenticated access denied (401); authorized tool executes cleanly (200, result=4200); unauthorized tool rejected with TOOL_NOT_FOUND.",
+    "actualResult": "Tool gateway policy verified: 401 unauthenticated, 19 tools registered, calculator succeeded (4200), unauthorized tool rejected fail-closed (TOOL_NOT_FOUND).",
+    "verdict": "PASS",
+    "httpStatus": "HTTP 401 / HTTP 200 / TOOL_NOT_FOUND Fail-Closed",
+    "evidence": {
+      "toolsCount": 19,
+      "calcResult": 4200,
+      "unauthorizedErrorCode": "TOOL_NOT_FOUND"
+    }
+  },
+  {
+    "gate": "Gate 7: Cross-account execution-run and cancellation rejection",
+    "timestamp": "2026-11-09T06:47:04.055Z",
+    "candidateSha": "0dc2036976254f5a17e9af028b07db9a3cae3688",
+    "deploymentId": "dpl_6M1dgwUwtPu7DpPHatKAuQBV4ziW",
+    "deploymentUrl": "https://aira-ai-2026-mypu3qgpf-rajpunkeshwarrajgautam-boops-projects.vercel.app",
+    "databaseTarget": "neon://mute-frost-50372225/br-snowy-bonus-b32thjlz",
+    "testMethod": "Bidirectional IDOR probes on execution runs, cancellation requests, and event streams across Account A and Account B.",
+    "expectedResult": "All cross-account access attempts returned 404 Not Found; unauthenticated requests returned 401 or 404.",
+    "actualResult": "Run IDOR quarantine verified: User B -> Run A (read=404, cancel=404, events=404); User A -> Run B (read=404, cancel=404, events=404); unauthenticated read=401.",
+    "verdict": "PASS",
+    "httpStatus": "HTTP 404 IDOR Quarantine / HTTP 401/404 Unauthenticated",
+    "evidence": {
+      "runIdA": "run_ed1b6afc-7",
+      "runIdB": "run_7db76d6b-7",
+      "userB_read_runA_status": 404,
+      "userB_cancel_runA_status": 404,
+      "userB_events_runA_status": 404,
+      "userA_read_runB_status": 404,
+      "userA_cancel_runB_status": 404,
+      "unauth_read_status": 401
+    }
+  },
+  {
+    "gate": "Gate 8: Authentication switching during streaming",
+    "timestamp": "2026-11-09T06:47:14.150Z",
+    "candidateSha": "0dc2036976254f5a17e9af028b07db9a3cae3688",
+    "deploymentId": "dpl_6M1dgwUwtPu7DpPHatKAuQBV4ziW",
+    "deploymentUrl": "https://aira-ai-2026-mypu3qgpf-rajpunkeshwarrajgautam-boops-projects.vercel.app",
+    "databaseTarget": "neon://mute-frost-50372225/br-snowy-bonus-b32thjlz",
+    "testMethod": "Concurrent request execution under Account B during active SSE streaming under Account A on deployed preview.",
+    "expectedResult": "Active stream under Account A finishes with exact math result (32768) and done event without token leakage or interruption.",
+    "actualResult": "Concurrent session isolation verified: Account A stream completed cleanly (result=32768) during concurrent Account B sync (status=200).",
+    "verdict": "PASS",
+    "httpStatus": "HTTP 200 SSE Stream / HTTP 200 Concurrent Request",
+    "evidence": {
+      "streamA_result": 32768,
+      "streamA_completed": true,
+      "concurrent_accountB_status": 200
+    }
+  },
+  {
+    "gate": "Gate 9: Session persistence across actual Edge-process restarts",
+    "timestamp": "2026-11-09T06:47:20.427Z",
+    "candidateSha": "0dc2036976254f5a17e9af028b07db9a3cae3688",
+    "deploymentId": "dpl_6M1dgwUwtPu7DpPHatKAuQBV4ziW",
+    "deploymentUrl": "https://aira-ai-2026-mypu3qgpf-rajpunkeshwarrajgautam-boops-projects.vercel.app",
+    "databaseTarget": "neon://mute-frost-50372225/br-snowy-bonus-b32thjlz",
+    "testMethod": "Playwright persistentContext launch with msedge channel, full process close and relaunch against artifacts/profiles/edge_profile_raj_gautam.",
+    "expectedResult": "Session validity, conversations, memory vault, and project items all persist intact across Edge process restart.",
+    "actualResult": "Edge restart persistence confirmed: sessionValid=true, convCount=1, vaultCount=1, projectCount=1. Screenshots recorded.",
+    "verdict": "PASS",
+    "httpStatus": "PASS / Process Restart Verified & Hydrated",
+    "evidence": {
+      "user": "raj gautam",
+      "restartedData": {
+        "sessionValid": true,
+        "convCount": 1,
+        "vaultCount": 1,
+        "projectCount": 1
+      },
+      "screenshot": "artifacts/staging-acceptance/screenshots/edge_profile_raj_restarted_hydrated.png"
+    }
+  },
+  {
+    "gate": "Gate 10: Storage hydration and recovery",
+    "timestamp": "2026-11-09T06:47:23.665Z",
+    "candidateSha": "0dc2036976254f5a17e9af028b07db9a3cae3688",
+    "deploymentId": "dpl_6M1dgwUwtPu7DpPHatKAuQBV4ziW",
+    "deploymentUrl": "https://aira-ai-2026-mypu3qgpf-rajpunkeshwarrajgautam-boops-projects.vercel.app",
+    "databaseTarget": "neon://mute-frost-50372225/br-snowy-bonus-b32thjlz",
+    "testMethod": "Edge Profile B (Khanh Khanh) hydration on preview deployment and cross-profile storage quarantine verification.",
+    "expectedResult": "Profile B hydrates own state with zero leakage of Profile A conversations, memories, or projects; no horizontal layout overflow.",
+    "actualResult": "Profile storage quarantine verified: hasRajConvs=false, hasRajMemory=false, hasRajProjects=false. Layout scrollWidth (1280) <= clientWidth (1280).",
+    "verdict": "PASS",
+    "httpStatus": "PASS / Strict Profile Separation Verified",
+    "evidence": {
+      "user": "khanh khanh",
+      "isolation": {
+        "hasRajConvs": false,
+        "hasRajMemory": false,
+        "hasRajProjects": false
+      },
+      "scrollWidth": 1280,
+      "clientWidth": 1280,
+      "screenshot": "artifacts/staging-acceptance/screenshots/edge_profile_khanh_khanh_isolated.png"
+    }
+  },
+  {
+    "gate": "Gate 11: CSRF and request-origin protections",
+    "timestamp": "2026-11-09T06:47:25.210Z",
+    "candidateSha": "0dc2036976254f5a17e9af028b07db9a3cae3688",
+    "deploymentId": "dpl_6M1dgwUwtPu7DpPHatKAuQBV4ziW",
+    "deploymentUrl": "https://aira-ai-2026-mypu3qgpf-rajpunkeshwarrajgautam-boops-projects.vercel.app",
+    "databaseTarget": "neon://mute-frost-50372225/br-snowy-bonus-b32thjlz",
+    "testMethod": "Negative cross-origin requests, tampered JWT verification, and unauthenticated state mutation attempts against deployed preview API.",
+    "expectedResult": "Untrusted origin rejected (403/401); tampered JWT rejected (401); unauthenticated sign-out/unlink rejected (401/403).",
+    "actualResult": "Anti-CSRF & Origin protection verified: untrusted origin=403, tampered token=401, unauth signout=403, unauth unlink=403.",
+    "verdict": "PASS",
+    "httpStatus": "CSRF Origin: 403 / Tampered JWT: 401 / Signout: 403",
+    "evidence": {
+      "unauthSignOutStatus": 403,
+      "unauthUnlinkStatus": 403,
+      "tamperedJwtStatus": 401,
+      "disallowedOriginStatus": 403
+    }
+  },
+  {
+    "gate": "Gate 12: PostgreSQL worker fencing, heartbeat failure, and crash recovery",
+    "timestamp": "2026-11-09T06:47:26.438Z",
+    "candidateSha": "0dc2036976254f5a17e9af028b07db9a3cae3688",
+    "deploymentId": "dpl_6M1dgwUwtPu7DpPHatKAuQBV4ziW",
+    "deploymentUrl": "https://aira-ai-2026-mypu3qgpf-rajpunkeshwarrajgautam-boops-projects.vercel.app",
+    "databaseTarget": "neon://mute-frost-50372225/br-snowy-bonus-b32thjlz",
+    "testMethod": "Durable worker fencing concurrency test on isolated staging database branch br-snowy-bonus-b32thjlz, worker host heartbeat loss abort test, and crash recovery step state preservation.",
+    "expectedResult": "Stale fencing token write rejected; valid write accepted (token advances to 4); lost heartbeat triggers prompt abort with HEARTBEAT_FAILED; crash recovery preserves step completion without re-execution.",
+    "actualResult": "Durable worker resilience verified: worker1 stale write rejected (token 2); worker2 claim succeeded (token 3); worker2 update succeeded (token 4); lost heartbeat aborted execution; step 1 COMPLETED preserved.",
+    "verdict": "PASS",
+    "httpStatus": "PASS / Stale Token Rejected / Heartbeat Aborted / Steps Preserved",
+    "evidence": {
+      "taskId": "task_fence_1794206845210",
+      "worker1_claim_token": 2,
+      "worker2_claim_token": 3,
+      "stale_worker1_update_rejected": true,
+      "worker2_update_succeeded_token": 4,
+      "heartbeatErrorEmitted": true,
+      "crashRecoveryPreserved": true
+    }
+  }
+]

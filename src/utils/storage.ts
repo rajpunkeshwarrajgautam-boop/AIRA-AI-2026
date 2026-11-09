@@ -58,6 +58,16 @@ export function getConversationsStorageKey(userId?: string): string {
   return userId ? `aira_conversations_user_${userId}` : STORAGE_KEYS.CONVERSATIONS;
 }
 
+/** A legacy key is only removable when every persisted record matches the source. */
+export function isVerifiedMigrationCopy<T>(source: T, restored: unknown): restored is T {
+  try {
+    return Array.isArray(source) && Array.isArray(restored) &&
+      JSON.stringify(source) === JSON.stringify(restored);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Safely removes ephemeral workspace sync blobs from LocalStorage.
  * NEVER deletes conversations, settings, or projects.
@@ -124,7 +134,7 @@ export async function migrateLocalStorageToIndexedDb(): Promise<{ migrated: bool
           await idbSet(STORES.CONVERSATIONS, key, parsed);
           // Strict read-back verification: verify that IndexedDB can retrieve the exact records
           const verified = await idbGet<Conversation[]>(STORES.CONVERSATIONS, key);
-          if (Array.isArray(verified) && verified.length === parsed.length && verified[0]?.id === parsed[0]?.id) {
+          if (isVerifiedMigrationCopy(parsed, verified)) {
             // Read-back verified: update in-memory cache and remove legacy LocalStorage entry
             inMemoryConversations.set(key, verified);
             migratedAny = true;
@@ -145,7 +155,7 @@ export async function migrateLocalStorageToIndexedDb(): Promise<{ migrated: bool
         if (Array.isArray(parsedProjects)) {
           await idbSet(STORES.PROJECTS, 'projects', parsedProjects);
           const verifiedProjects = await idbGet<Project[]>(STORES.PROJECTS, 'projects');
-          if (Array.isArray(verifiedProjects) && verifiedProjects.length === parsedProjects.length) {
+          if (isVerifiedMigrationCopy(parsedProjects, verifiedProjects)) {
             inMemoryProjects = verifiedProjects;
             migratedAny = true;
             localStorage.removeItem(STORAGE_KEYS.PROJECTS);

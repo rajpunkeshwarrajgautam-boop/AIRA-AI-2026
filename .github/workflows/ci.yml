@@ -101,6 +101,8 @@ jobs:
           test/autonomous-persistence-failclosed.test.ts
           test/autonomous-platform-e2e.test.ts
           test/autonomous-worker-recovery.test.ts
+          test/autonomous-worker-fencing-regression.test.ts
+          test/autonomous-resume-approval-fence.test.ts
           test/browser-persistence-recovery.test.ts
           test/python-sandbox-containment.test.ts
           test/sandbox-selection-reconciliation.test.ts
@@ -110,6 +112,15 @@ jobs:
           test/application-ui-integration.test.ts
           test/artifact-sandbox-containment.test.ts
           test/autonomous-api-worker-integration.test.ts
+
+      - name: Client memory account isolation and storage migration fidelity
+        run: >-
+          npx tsx --test
+          test/agent-memory-account-isolation.test.ts
+          test/browser-storage-migration-fidelity.test.ts
+
+      - name: Staging live acceptance fail-closed configuration regression
+        run: npx tsx --test test/staging-live-acceptance-config.test.ts
       - name: Post-merge runtime and type safety regression
         run: npm run test:pr118:regression
 
@@ -143,6 +154,9 @@ jobs:
 
       - name: First-party BFF session security gateway certification
         run: npm run test:auth-bff
+
+      - name: Extracted entrypoint contract regression
+        run: npx tsx --test test/unslop-entrypoint-contracts.test.tsx
 
       - name: CSRF origin and token restoration regression
         run: npx tsx --test test/hotfix-csrf-origin-remediation.test.ts

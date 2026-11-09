@@ -60,11 +60,22 @@ export async function streamAIResponse(
   reconcileArtifacts = false,
 ): Promise<void> {
   const isThinking = (model === 'claude-3-7-sonnet' && settings.extendedThinking);
+  const initiatingMemoryOwner = neonAuth.getCurrentUser()?.id || 'guest';
+  const initiatingAuthEpoch = neonAuth.getAuthEpoch();
+  const isInitiatingIdentityValid = () => (
+    neonAuth.getAuthEpoch() === initiatingAuthEpoch &&
+    (neonAuth.getCurrentUser()?.id || 'guest') === initiatingMemoryOwner
+  );
 
   // 0. Persistent Long-Term Memory Injection (agentmemory)
   let enrichedContext = contextSubgraph || '';
   if (settings.persistentMemoryEnabled !== false) {
-    const memoryBlock = agentMemory.assembleMemoryContext(prompt, settings.memoryTokenBudget || 800);
+    const memoryBlock = agentMemory.assembleMemoryContext(
+      prompt,
+      settings.memoryTokenBudget || 800,
+      undefined,
+      initiatingMemoryOwner
+    );
     if (memoryBlock) {
       enrichedContext = enrichedContext ? `${enrichedContext}\n\n${memoryBlock}` : memoryBlock;
     }
@@ -72,10 +83,12 @@ export async function streamAIResponse(
 
   let accumulatedResponse = '';
   const reconciler = reconcileArtifacts && callbacks.onArtifactFound
-    ? createStreamingArtifactReconciler(callbacks.onArtifactFound)
+    ? createStreamingArtifactReconciler(artifact => {
+      if (isInitiatingIdentityValid() && !signal?.aborted) callbacks.onArtifactFound?.(artifact);
+    })
     : null;
   const emitArtifact = (artifact: Artifact) => {
-    if (signal?.aborted) return;
+    if (signal?.aborted || !isInitiatingIdentityValid()) return;
     if (reconciler) reconciler.publish(artifact);
     else callbacks.onArtifactFound?.(artifact);
   };
@@ -94,8 +107,18 @@ export async function streamAIResponse(
 
   const wrappedCallbacks: StreamCallbacks = {
     ...callbacks,
+    onThinkingChunk: chunk => { if (isInitiatingIdentityValid()) callbacks.onThinkingChunk?.(chunk); },
+    onProvenance: value => { if (isInitiatingIdentityValid()) callbacks.onProvenance?.(value); },
+    onApprovalRequired: value => { if (isInitiatingIdentityValid()) callbacks.onApprovalRequired?.(value); },
+    onStatusUpdate: value => { if (isInitiatingIdentityValid()) callbacks.onStatusUpdate?.(value); },
+    onAgentEvent: value => { if (isInitiatingIdentityValid()) callbacks.onAgentEvent?.(value); },
+    onGraphEvent: (event, value) => { if (isInitiatingIdentityValid()) callbacks.onGraphEvent?.(event, value); },
+    onRunStarted: value => { if (isInitiatingIdentityValid()) callbacks.onRunStarted?.(value); },
+    onSourceAdded: value => { if (isInitiatingIdentityValid()) callbacks.onSourceAdded?.(value); },
+    onLatencyMetrics: value => { if (isInitiatingIdentityValid()) callbacks.onLatencyMetrics?.(value); },
     onArtifactFound: callbacks.onArtifactFound ? emitArtifact : undefined,
     onContentChunk: (chunk: string) => {
+      if (!isInitiatingIdentityValid()) return;
       accumulatedResponse += chunk;
       const { textToEmit, artifactUpdate } = detector.processChunk(chunk);
       if (artifactUpdate && callbacks.onArtifactFound) {
@@ -103,21 +126,30 @@ export async function streamAIResponse(
       }
       if (textToEmit) {
         fenceDetector?.processChunk(textToEmit).forEach(emitArtifact);
-        callbacks.onContentChunk(textToEmit);
+        if (isInitiatingIdentityValid()) callbacks.onContentChunk(textToEmit);
       }
     },
     onComplete: () => {
+      if (!isInitiatingIdentityValid()) {
+        abandonArtifactUpdates();
+        return;
+      }
       const { remainingText, finalArtifact } = detector.flush();
       if (finalArtifact && callbacks.onArtifactFound) {
         emitArtifact(finalArtifact);
       }
       if (remainingText) {
         fenceDetector?.processChunk(remainingText).forEach(emitArtifact);
-        callbacks.onContentChunk(remainingText);
+        if (isInitiatingIdentityValid()) callbacks.onContentChunk(remainingText);
       }
       fenceDetector?.flush().forEach(emitArtifact);
       finishArtifactUpdates();
-      if (settings.autoConsolidateMemory !== false && accumulatedResponse.trim()) {
+      if (!isInitiatingIdentityValid()) return;
+      if (
+        settings.autoConsolidateMemory !== false &&
+        accumulatedResponse.trim() &&
+        isInitiatingIdentityValid()
+      ) {
         try {
           agentMemory.consolidateFromTurn(prompt, accumulatedResponse);
         } catch {
@@ -129,12 +161,12 @@ export async function streamAIResponse(
     onError: error => {
       abandonArtifactUpdates();
       signal?.removeEventListener('abort', abandonArtifactUpdates);
-      callbacks.onError(error);
+      if (isInitiatingIdentityValid()) callbacks.onError(error);
     },
     onCancelled: () => {
       abandonArtifactUpdates();
       signal?.removeEventListener('abort', abandonArtifactUpdates);
-      callbacks.onCancelled?.();
+      if (isInitiatingIdentityValid()) callbacks.onCancelled?.();
     },
   };
 
@@ -158,6 +190,12 @@ export async function streamAIResponse(
       intent: intent || undefined
     }, signal);
 
+      if (!isInitiatingIdentityValid()) {
+        try { await backendRes.body?.cancel(); } catch {}
+        abandonArtifactUpdates();
+        return;
+      }
+
       if (!backendRes.ok) {
         const errText = await backendRes.text();
         wrappedCallbacks.onError(`Backend returned ${backendRes.status}: ${errText}`);
@@ -165,15 +203,7 @@ export async function streamAIResponse(
       }
 
       if (backendRes.body) {
-        const streamInitiatingEpoch = neonAuth.getAuthEpoch();
-        const streamInitiatingUserId = neonAuth.getCurrentUser()?.id || '';
-
-        const isIdentityValid = () => {
-          return (
-            neonAuth.getAuthEpoch() === streamInitiatingEpoch &&
-            (neonAuth.getCurrentUser()?.id || '') === streamInitiatingUserId
-          );
-        };
+        const isIdentityValid = isInitiatingIdentityValid;
 
         const reader = backendRes.body.getReader();
         const decoder = new TextDecoder();

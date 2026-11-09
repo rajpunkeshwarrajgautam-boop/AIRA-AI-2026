@@ -435,6 +435,7 @@ async function testStreamCancellationAndChunkDiscardOnIdentitySwitch() {
 
   const { neonAuth } = await import('../src/lib/neonAuth.js');
   const { streamAIResponse } = await import('../src/utils/aiEngine.js');
+  const { agentMemory } = await import('../src/utils/agentMemoryEngine.js');
   const originalFetch = globalThis.fetch;
   localStorage.clear();
 
@@ -446,6 +447,7 @@ async function testStreamCancellationAndChunkDiscardOnIdentitySwitch() {
       jwtExpiresAt: Date.now() + 600_000
     };
     (neonAuth as any).saveSession(sessionA);
+    agentMemory.remember('Account A private violet notebook', { tier: 'semantic' });
 
     const chunkDeferred1 = defer<string>();
     const chunkDeferred2 = defer<string>();
@@ -461,8 +463,10 @@ async function testStreamCancellationAndChunkDiscardOnIdentitySwitch() {
       }
     });
 
-    (globalThis as any).fetch = async (url: any) => {
+    let dispatchedContext = '';
+    (globalThis as any).fetch = async (url: any, init?: RequestInit) => {
       if (String(url) === '/api/chat/stream') {
+        dispatchedContext = String(JSON.parse(String(init?.body)).contextSubgraph ?? '');
         return new Response(stream, {
           status: 200,
           headers: { 'Content-Type': 'text/event-stream' }
@@ -475,10 +479,10 @@ async function testStreamCancellationAndChunkDiscardOnIdentitySwitch() {
     let completed = false;
 
     const streamPromise = streamAIResponse(
-      'Test',
+      'violet notebook',
       [],
       'claude-3-7-sonnet',
-      { extendedThinking: false, persistentMemoryEnabled: false } as any,
+      { extendedThinking: false, persistentMemoryEnabled: true, autoConsolidateMemory: true } as any,
       undefined,
       {
         onContentChunk: (c) => chunks.push(c),
@@ -490,9 +494,14 @@ async function testStreamCancellationAndChunkDiscardOnIdentitySwitch() {
     // Allow chunk 1 to arrive
     await new Promise(r => setTimeout(r, 20));
     assert.deepEqual(chunks, ['Chunk 1 ']);
+    assert.match(dispatchedContext, /Account A private violet notebook/, 'A stream uses only initiating account memory');
 
-    // User switches accounts or logs out mid-stream
-    (neonAuth as any).saveSession(null);
+    // User switches accounts mid-stream. Neither old response nor memory may cross over.
+    (neonAuth as any).saveSession({
+      user: { id: 'usr_stream_B', email: 'stream-b@example.com', name: 'Stream User B' },
+      token: 'tok_stream_B', jwt: 'jwt_stream_B', jwtExpiresAt: Date.now() + 600_000
+    });
+    assert.equal(agentMemory.getStats().totalCount, 0, 'B does not inherit A vault data');
 
     // Release downstream chunks
     chunkDeferred1.resolve('go');
@@ -502,7 +511,71 @@ async function testStreamCancellationAndChunkDiscardOnIdentitySwitch() {
 
     assert.equal(chunks.length, 1, 'Subsequent chunks after logout must be discarded');
     assert.equal(completed, false, 'onComplete must not be invoked for an obsolete session');
+    assert.equal(agentMemory.getStats().totalCount, 0, 'obsolete A stream never consolidates into B memory');
     console.log('  ✓ Stream safely aborted and obsolete chunks discarded on identity transition');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+async function testDeferredStreamCannotAdoptNewAccountIdentity() {
+  console.log('Testing: Deferred Alice response cannot be delivered into Bob after identity change...');
+  const { neonAuth } = await import('../src/lib/neonAuth.js');
+  const { agentMemory } = await import('../src/utils/agentMemoryEngine.js');
+  const { streamAIResponse } = await import('../src/utils/aiEngine.js');
+  const originalFetch = globalThis.fetch;
+  const responseDeferred = defer<Response>();
+  const observed: string[] = [];
+  let requestContext = '';
+
+  try {
+    localStorage.clear();
+    (neonAuth as any).saveSession({
+      user: { id: 'usr_pending_A', email: 'pending-a@example.com', name: 'Pending A' },
+      token: 'pending-A', jwt: 'pending-A', jwtExpiresAt: Date.now() + 600_000
+    });
+    agentMemory.remember('Alice unshared sapphire memory', { tier: 'semantic' });
+
+    (globalThis as any).fetch = async (url: any, init?: RequestInit) => {
+      if (String(url) !== '/api/chat/stream') return new Response('Not found', { status: 404 });
+      requestContext = String(JSON.parse(String(init?.body)).contextSubgraph ?? '');
+      return responseDeferred.promise;
+    };
+
+    const inFlight = streamAIResponse(
+      'sapphire memory', [], 'claude-3-7-sonnet',
+      { persistentMemoryEnabled: true, autoConsolidateMemory: true } as any,
+      undefined,
+      {
+        onContentChunk: text => observed.push(`content:${text}`),
+        onThinkingChunk: text => observed.push(`thinking:${text}`),
+        onArtifactFound: () => observed.push('artifact'),
+        onComplete: () => observed.push('completed'),
+        onError: error => observed.push(`error:${error}`)
+      }
+    );
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.match(requestContext, /Alice unshared sapphire memory/);
+
+    (neonAuth as any).saveSession({
+      user: { id: 'usr_pending_B', email: 'pending-b@example.com', name: 'Pending B' },
+      token: 'pending-B', jwt: 'pending-B', jwtExpiresAt: Date.now() + 600_000
+    });
+    const events = [
+      `event: thinking_delta\ndata: ${JSON.stringify({ thinking: 'Alice private reasoning' })}\n\n`,
+      `event: message\ndata: ${JSON.stringify({ text: 'Alice private response' })}\n\n`,
+      'event: done\ndata: [DONE]\n\n'
+    ].join('');
+    responseDeferred.resolve(new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(events));
+        controller.close();
+      }
+    }), { status: 200, headers: { 'Content-Type': 'text/event-stream' } }));
+    await inFlight;
+
+    assert.deepEqual(observed, [], 'No Alice output or callbacks reach Bob from an obsolete deferred request');
+    assert.equal(agentMemory.getStats().totalCount, 0, 'Bob memory remains empty');
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -584,6 +657,7 @@ async function main() {
     await testSameAccountJwtRefreshDoesNotAbortLegitimateRequest();
     await testDelayed401DoesNotClearActiveAccountB();
     await testStreamCancellationAndChunkDiscardOnIdentitySwitch();
+    await testDeferredStreamCannotAdoptNewAccountIdentity();
     await testClientBffModeAndLocalStorageTokenEradication();
 
     console.log('\nALL 10 IDENTITY TRANSITION & REVOCATION CHECKS PASSED!\n');

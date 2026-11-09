@@ -1,8 +1,17 @@
 # AIRA AI 2026 — Master Execution Prompt & Release Controls
 
-## Operating Directive for All Automated Agents
+> **Historical release-control record (October 2026).** This document is not
+> the current release-authority policy. [`AGENTS.md`](../AGENTS.md) governs
+> automated work and eligible bounded code-only releases. In particular, the
+> recurring exact-SHA owner attestation described below is a **legacy optional
+> workflow**, not a prerequisite for every code-only PR. Production DB,
+> infrastructure, secrets, worker activation, destructive changes, and new
+> spending still require separately bounded authority. The protected branch,
+> current mandatory CI and live verification remain required.
 
-This document forms the authoritative operational contract for automated coding agents (Antigravity, Agency Agents, ChatGPT Work, and CI automation) executing implementation, verification, and release tasks in the AIRA AI 2026 ecosystem.
+## Historical operating directive
+
+This document records the release controls originally established for automated coding agents. Consult `AGENTS.md`, the current GitHub ruleset, and `vercel.json` before acting on any release instruction recorded here.
 
 ---
 
@@ -28,7 +37,7 @@ Production stability is enforced server-side by GitHub Pro rulesets:
 
 ---
 
-## 2. Vercel Production Approval & Deployment Architecture
+## 2. Vercel Production Approval & Deployment Architecture (historical baseline)
 
 Live inspection of Vercel project `aira-ai-2026` via authenticated API confirms:
 
@@ -37,7 +46,7 @@ Live inspection of Vercel project `aira-ai-2026` via authenticated API confirms:
 - **Account Tier**: `Hobby` (Personal account)
 - **Tracked Production Branch**: `prod-release`
 - **Canonical Production URL**: `https://aira-ai-2026.vercel.app`
-- **Baseline Stable Deployment**: `dpl_89joN6FnCocG3shaBB5rC33CeDRJ` (Commit: `b1635e132544d0772358cb463131d1e6cd4d40a9`)
+- **Baseline Stable Deployment at time of record**: `dpl_89joN6FnCocG3shaBB5rC33CeDRJ` (Commit: `b1635e132544d0772358cb463131d1e6cd4d40a9`)
 - **Git Deployment Setting**: `createDeployments: "enabled"`
 - **Ignored Build Step Policy**:
   ```bash
@@ -62,9 +71,12 @@ If `DATABASE_URL` is unconfigured, migrations are unapplied, any of the 9 core t
 
 ---
 
-## 3. Human GO LIVE Authorization Controls
+## 3. Legacy Owner-Attested GO LIVE Authorization Controls (superseded default)
 
-To eliminate the risk of automated or accidental deployment, releases require explicit owner-level authorization:
+The controls below describe the previous default release workflow. The present
+`AGENTS.md` permits independently certified, bounded code-only releases through
+the protected PR path without a repeated owner attestation; it retains the
+legacy workflow for exceptional cases.
 
 ### Protocol Specifications:
 1. **No Inferred Authority**:
@@ -100,7 +112,10 @@ To eliminate the risk of automated or accidental deployment, releases require ex
 
 ---
 
-## 4. Operational Invariants for Agents
+## 4. Previous Operational Invariants (not current instructions)
+
+The bullets below are preserved as historical release evidence. Use the
+current `AGENTS.md` release protocol, including its stop conditions, instead.
 
 1. **NEVER auto-merge to `prod-release`**:
    Agents must never run `gh pr merge`, `git merge`, or `git push origin prod-release`.

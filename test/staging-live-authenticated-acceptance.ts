@@ -8,15 +8,16 @@ import {
   assertAuthorizedStagingDatabase,
   STAGING_NEON_PROJECT_ID
 } from '../packages/db/src/security/database-isolation-guard.js';
+import { resolveStagingLiveAcceptanceConfig } from './staging-live-acceptance-config.js';
 
-const PREVIEW_URL = process.env.AIRA_PREVIEW_URL || 'https://aira-ai-2026-3trpr8741-rajpunkeshwarrajgautam-boops-projects.vercel.app';
-const VERCEL_BYPASS_SECRET = process.env.VERCEL_AUTOMATION_BYPASS_SECRET || 'QQUvz2kp1hnrbJeAicx0ZyH3kL18z54r';
-const ISOLATED_BRANCH_ID = 'br-muddy-wave-b3zxhkqf';
-
-const USER_A_EMAIL = process.env.STAGING_AUTH_TEST_USER_A_EMAIL || 'test_user_a_aira_staging@virexaaiventures.com';
-const USER_A_PASSWORD = process.env.STAGING_AUTH_TEST_USER_A_PASSWORD || 'StrongP@ssw0rd2026!StagingA';
-const USER_B_EMAIL = process.env.STAGING_AUTH_TEST_USER_B_EMAIL || 'test_user_b_aira_staging@virexaaiventures.com';
-const USER_B_PASSWORD = process.env.STAGING_AUTH_TEST_USER_B_PASSWORD || 'StrongP@ssw0rd2026!StagingB';
+const config = resolveStagingLiveAcceptanceConfig(process.env);
+const PREVIEW_URL = config.previewUrl;
+const VERCEL_BYPASS_SECRET = config.bypassSecret;
+const ISOLATED_BRANCH_ID = config.isolatedBranchId;
+const USER_A_EMAIL = config.userAEmail;
+const USER_A_PASSWORD = config.userAPassword;
+const USER_B_EMAIL = config.userBEmail;
+const USER_B_PASSWORD = config.userBPassword;
 
 const OUTPUT_DIR = path.resolve(process.cwd(), 'artifacts/staging-acceptance');
 
@@ -39,6 +40,21 @@ async function main() {
   console.log('========================================================================\n');
 
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+
+  // Verify the actual remote branch identity BEFORE any login, model call or fixture write.
+  const preflightDb = knex({
+    client: 'pg',
+    connection: { connectionString: config.stagingDatabaseUrl, ssl: { rejectUnauthorized: true } },
+    pool: { min: 1, max: 2 }
+  });
+  try {
+    await assertAuthorizedStagingDatabase(preflightDb, {
+      allowedProjectIds: [STAGING_NEON_PROJECT_ID],
+      allowedBranchIds: [ISOLATED_BRANCH_ID]
+    });
+  } finally {
+    await preflightDb.destroy();
+  }
 
   // 1. Verify Deployment Reachability and Agent Readiness
   console.log('--- Phase 1: Deployment & Readiness Gate ---');
@@ -243,40 +259,37 @@ async function main() {
 
   // 5. Database Durability & Cross-Tenant Run Isolation
   console.log('\n--- Phase 5: Database Persistence & Cross-Tenant Quarantine ---');
-  const stagingConn = process.env.STAGING_DATABASE_URL || process.env.DATABASE_URL;
-  if (stagingConn) {
-    const db = knex({
-      client: 'pg',
-      connection: { connectionString: stagingConn, ssl: { rejectUnauthorized: true } },
-      pool: { min: 1, max: 2 }
+  const db = knex({
+    client: 'pg',
+    connection: { connectionString: config.stagingDatabaseUrl, ssl: { rejectUnauthorized: true } },
+    pool: { min: 1, max: 2 }
+  });
+  try {
+    await assertAuthorizedStagingDatabase(db, {
+      allowedProjectIds: [STAGING_NEON_PROJECT_ID],
+      allowedBranchIds: [ISOLATED_BRANCH_ID]
     });
-    try {
-      await assertAuthorizedStagingDatabase(db, {
-        allowedProjectIds: [STAGING_NEON_PROJECT_ID],
-        allowedBranchIds: [ISOLATED_BRANCH_ID]
-      });
 
-      const dbRun = await db('runs').where({ id: runId }).first();
-      assert.ok(dbRun, `Run ${runId} must exist in public.runs`);
-      assert.equal(dbRun.principal_id, principalA, 'Run must be owned by User A');
-      assert.equal(dbRun.state, 'COMPLETED', `Run state must be COMPLETED. Found: ${dbRun.state}`);
+    const dbRun = await db('runs').where({ id: runId }).first();
+    assert.ok(dbRun, `Run ${runId} must exist in public.runs`);
+    assert.equal(dbRun.principal_id, principalA, 'Run must be owned by User A');
+    assert.equal(dbRun.state, 'COMPLETED', `Run state must be COMPLETED. Found: ${dbRun.state}`);
 
-      const dbTools = await db('tool_calls').where({ run_id: runId });
-      assert.ok(dbTools.length > 0, 'Tool calls must be persisted');
-      assert.equal(dbTools[0].tool, 'calculator');
-      assert.equal(dbTools[0].status, 'COMPLETED');
-      assert.ok(Number(dbTools[0].duration_ms) >= 0);
+    const dbTools = await db('tool_calls').where({ run_id: runId });
+    assert.ok(dbTools.length > 0, 'Tool calls must be persisted');
+    assert.equal(dbTools[0].tool, 'calculator');
+    assert.equal(dbTools[0].status, 'COMPLETED');
+    assert.ok(Number(dbTools[0].duration_ms) >= 0);
 
-      recordEvidence('Phase 5.1: Database records verified', {
-        runId: dbRun.id,
-        state: dbRun.state,
-        principalId: dbRun.principal_id,
-        toolCallId: dbTools[0].id,
-        durationMs: dbTools[0].duration_ms
-      });
-    } finally {
-      await db.destroy();
-    }
+    recordEvidence('Phase 5.1: Database records verified', {
+      runId: dbRun.id,
+      state: dbRun.state,
+      principalId: dbRun.principal_id,
+      toolCallId: dbTools[0].id,
+      durationMs: dbTools[0].duration_ms
+    });
+  } finally {
+    await db.destroy();
   }
 
   // User B tries to view or cancel User A run via API

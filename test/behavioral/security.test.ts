@@ -69,13 +69,13 @@ describe('AIRA Behavioral Intelligence — Adversarial Security Acceptance Suite
 
   // Invariant 4: One user\'s memory appears in another user\'s retrieval results (Cross-tenant memory leakage)
   it('Invariant 4: Zero cross-tenant memory leakage in retrieval', () => {
-    // Add memory for user Alice
-    agentMemory.remember('Alice private API token: token_alice_9999_secret', {
+    // Guest code cannot create a memory claiming another signed-in owner.
+    assert.throws(() => agentMemory.remember('Alice private API token: token_alice_9999_secret', {
       title: 'Alice Private Key',
       category: 'general',
       tier: 'semantic',
       userId: 'user-alice'
-    });
+    }), /another account/);
 
     // Bob attempts to recall Alice\'s secret
     const bobResults = agentMemory.recall({

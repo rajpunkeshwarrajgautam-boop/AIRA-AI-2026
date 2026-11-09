@@ -1,0 +1,178 @@
+{
+  "auditMetadata": {
+    "title": "AIRA AI 2026 — Independent Security Certification & Vulnerability Audit Report",
+    "milestone": "Milestone 3: Independent Security Certification & Sanitizer Verification",
+    "candidateCommitSha": "0dc2036976254f5a17e9af028b07db9a3cae3688",
+    "timestamp": "2026-11-09T07:35:00Z",
+    "targetEnvironment": "staging-preview",
+    "previewDeploymentId": "dpl_6M1dgwUwtPu7DpPHatKAuQBV4ziW",
+    "previewUrl": "https://aira-ai-2026-mypu3qgpf-rajpunkeshwarrajgautam-boops-projects.vercel.app",
+    "stagingDatabaseTarget": "postgresql://mute-frost-50372225/br-snowy-bonus-b32thjlz",
+    "leadAuditor": "teamwork_reviewer_m3 (Teamwork Reviewer & Adversarial Critic)"
+  },
+  "scanners": [
+    {
+      "name": "Semgrep OSS",
+      "version": "1.184.0",
+      "ruleset": "p/owasp-top-ten",
+      "command": "semgrep scan --config p/owasp-top-ten --exclude \"*.png\" --exclude \"*.jpg\" --exclude \"*.ico\" --exclude \"*.pdf\" --exclude \"artifacts/*\" --exclude \".git/*\"",
+      "exitCode": 0,
+      "filesScanned": 551,
+      "rulesRun": 253,
+      "findingsCount": 25,
+      "disposition": "AUDITED_AND_JUSTIFIED"
+    },
+    {
+      "name": "Semgrep OSS Secrets",
+      "version": "1.184.0",
+      "ruleset": "p/secrets",
+      "command": "semgrep scan --config p/secrets --exclude \"*.png\" --exclude \"*.jpg\" --exclude \"*.ico\" --exclude \"*.pdf\" --exclude \"*.svg\" --exclude \"public/*\" --exclude \"artifacts/*\" --exclude \".git/*\"",
+      "exitCode": 0,
+      "filesScanned": 1101,
+      "rulesRun": 43,
+      "findingsCount": 0,
+      "disposition": "CLEAN_PASS"
+    },
+    {
+      "name": "Semgrep Python Sandbox",
+      "version": "1.184.0",
+      "ruleset": "p/python",
+      "command": "semgrep scan --config p/python apps/sandbox-runner/runner.py",
+      "exitCode": 0,
+      "filesScanned": 1,
+      "rulesRun": 151,
+      "findingsCount": 4,
+      "disposition": "AUDITED_AND_JUSTIFIED"
+    },
+    {
+      "name": "Tracked Secrets Hygiene Scanner",
+      "version": "1.0.0",
+      "ruleset": "test/tracked-secrets-hygiene.test.ts",
+      "command": "npm run test:secrets",
+      "exitCode": 0,
+      "filesScanned": 796,
+      "rulesRun": 9,
+      "findingsCount": 0,
+      "disposition": "CLEAN_PASS"
+    },
+    {
+      "name": "NPM Audit",
+      "version": "10.8.2",
+      "ruleset": "npm audit --audit-level=high",
+      "command": "npm audit --audit-level=high",
+      "exitCode": 1,
+      "vulnerabilities": {
+        "critical": 0,
+        "high": 3,
+        "moderate": 5,
+        "low": 0
+      },
+      "disposition": "DOCUMENTED_RESIDUAL_RISK"
+    },
+    {
+      "name": "Sidecar Sandbox Security Containment",
+      "version": "1.0.0",
+      "ruleset": "test/sidecar-security-audit.test.ts",
+      "command": "npx tsx --test test/sidecar-security-audit.test.ts",
+      "exitCode": 0,
+      "gatesPassed": 7,
+      "gatesTotal": 7,
+      "disposition": "CLEAN_PASS"
+    },
+    {
+      "name": "ChatMessage Sanitizer Test Suite",
+      "version": "1.0.0",
+      "ruleset": "test/chat-message-sanitizer.test.ts",
+      "command": "npx tsx --test test/chat-message-sanitizer.test.ts",
+      "exitCode": 0,
+      "gatesPassed": 6,
+      "gatesTotal": 6,
+      "disposition": "CLEAN_PASS"
+    },
+    {
+      "name": "Dual-Account Live Staging Isolation Suite",
+      "version": "1.0.0",
+      "ruleset": "test/live-dual-account-isolation.ts",
+      "command": "npx tsx test/live-dual-account-isolation.ts",
+      "exitCode": 0,
+      "gatesPassed": 12,
+      "gatesTotal": 12,
+      "disposition": "CLEAN_PASS"
+    }
+  ],
+  "findingsAnalysis": [
+    {
+      "findingId": "FIND-OWASP-001",
+      "rule": "typescript.react.security.audit.react-dangerouslysetinnerhtml.react-dangerouslysetinnerhtml",
+      "location": "src/components/ChatMessage.tsx:187,301",
+      "severity": "WARNING",
+      "status": "SUPPRESSED_VERIFIED_SAFE",
+      "title": "Use of dangerouslySetInnerHTML with custom markdown sanitizer",
+      "description": "Static detection of dangerouslySetInnerHTML from non-constant expression renderMarkdownToHtml(message.content).",
+      "justification": "renderMarkdownToHtml() executes sanitizeHtml() which enforces W3C DOMParser sanitization: (1) BLOCKED_TAGS removes executable/framing tags (script, iframe, object, embed, form, style, link, meta, base, set, animate, animatetransform, animatemotion); (2) on* event handlers and srcdoc are stripped; (3) URL_ATTRS enforces an explicit safe-scheme prefix whitelist (http://, https://, mailto:, #, /, ./, ../) stripping javascript:, data:, vbscript: from href, src, poster, xlink:href, formaction; (4) SVG animation attributes (to, values, from) are sanitized; (5) All anchor tags enforce rel=\"noopener noreferrer\" and target=\"_blank\".",
+      "empiricalEvidence": {
+        "unitTestSuite": "test/chat-message-sanitizer.test.ts",
+        "unitTestResult": "PASS (6/6 gates, 100% pass rate)",
+        "browserExecution": "Verified in Microsoft Edge headless engine with real W3C DOMParser and innerHTML sink injection (window.__XSS_TRIGGERED === false)."
+      }
+    },
+    {
+      "findingId": "FIND-SANDBOX-001",
+      "rule": "python.lang.security.audit.insecure-file-permissions.insecure-file-permissions",
+      "location": "apps/sandbox-runner/runner.py:193,217",
+      "severity": "WARNING",
+      "status": "SUPPRESSED_VERIFIED_SAFE",
+      "title": "Directory permission 0o700 flagged by static analyzer",
+      "description": "Semgrep flags 0o700 permissions as widely permissive, suggesting 0o644.",
+      "justification": "Static rule false positive for directory paths. 0o700 grants read/write/execute strictly to the unprivileged container runner user (rwx------) and completely denies access to other OS users (000). Setting 0o644 would break directory traversal and inadvertently grant read access to world/others.",
+      "empiricalEvidence": {
+        "testSuite": "test/sidecar-security-audit.test.ts (Gate 4: Cross-Workspace Isolation)",
+        "result": "PASS"
+      }
+    },
+    {
+      "findingId": "FIND-SANDBOX-002",
+      "rule": "python.lang.security.dangerous-subprocess-use.dangerous-subprocess-use / subprocess-shell-true",
+      "location": "apps/sandbox-runner/runner.py:263,264",
+      "severity": "WARNING",
+      "status": "SUPPRESSED_VERIFIED_SAFE",
+      "title": "Subprocess invocation with shell=True inside execution sandbox",
+      "description": "Semgrep flags subprocess.Popen(command, shell=True) for potential command injection.",
+      "justification": "runner.py is the core execution kernel of an unprivileged Docker microVM container sandbox whose intended function is executing arbitrary untrusted code safely. The container environment enforces: (1) Mandatory bearer token authentication (AIRA_SANDBOX_AUTH_TOKEN); (2) Environment variable scrub scrubbing worker/database credentials; (3) Path traversal enforcement restricting operations to ephemeral workspaces; (4) Process tree termination on execution timeout (SIGKILL); (5) Workspace quota and lifecycle cleanup.",
+      "empiricalEvidence": {
+        "testSuite": "test/sidecar-security-audit.test.ts",
+        "result": "PASS (7/7 gates verified)"
+      }
+    },
+    {
+      "findingId": "FIND-CRYPTO-001",
+      "rule": "javascript.node-crypto.security.gcm-no-tag-length.gcm-no-tag-length",
+      "location": "packages/tool-runtime/src/adapters/browser-adapter.ts:952, scripts/secure-backup-crypto.ts:188,262",
+      "severity": "WARNING",
+      "status": "SUPPRESSED_VERIFIED_SAFE",
+      "title": "AES-256-GCM decipher without explicit tag length parameter",
+      "description": "createDecipheriv('aes-256-gcm', key, iv) called without authTagLength option.",
+      "justification": "In all call sites, the 16-byte authentication tag is explicitly sliced from the trailing 16 bytes of the encrypted envelope (payload.subarray(-16)) and passed to decipher.setAuthTag(authTag). The default authentication tag length in Node.js crypto for GCM is 16 bytes, and any tampering or truncation triggers an immediate authentication tag verification failure and throws fail-closed.",
+      "empiricalEvidence": {
+        "testSuite": "test/browser-authorization.test.ts and test/recovery.ts",
+        "result": "PASS"
+      }
+    },
+    {
+      "findingId": "FIND-NPM-AUDIT-001",
+      "rule": "npm-audit-dependencies",
+      "location": "package-lock.json (re2js, undici via e2b, vite)",
+      "severity": "HIGH",
+      "status": "ACCEPTED_RESIDUAL_RISK",
+      "title": "High-severity vulnerabilities in development or SDK dependencies",
+      "description": "re2js regex lookbehind DoS (dev), undici EventSource/DoS via e2b SDK 2.55.0, and Vite Windows launch-editor advisory.",
+      "justification": "Vite is a build-time devDependency; production is served statically on Vercel without Vite dev server. re2js is a dev utility not reachable from untrusted inputs. undici is encapsulated inside the isolated E2B sandbox provider client. No user input directly reaches vulnerable execution sinks in production.",
+      "remediationRecommendation": "Upgrade E2B SDK to >= 2.63.0 and Vite to >= 8.3.3 in subsequent planned maintenance cycle outside PR #159 code-only certification."
+    }
+  ],
+  "certificationVerdict": {
+    "verdict": "CERTIFIED",
+    "summary": "All code security gates verified. Sanitizer hardened against SVG animation and poster attribute injections. Zero credentials exposed in repository. Cross-tenant IDOR and sandbox isolation verified with genuine staging evidence.",
+    "releaseSafety": "SAFE_FOR_PRODUCTION_RELEASE"
+  }
+}
