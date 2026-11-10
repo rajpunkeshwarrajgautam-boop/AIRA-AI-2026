@@ -17,7 +17,8 @@ import {
   ChevronLeft, 
   CreditCard, 
   History, 
-  CheckCircle2
+  CheckCircle2,
+  Compass
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { NeonUser } from '../lib/neonAuth';
@@ -45,6 +46,9 @@ interface AccountMenuDropdownProps {
   onOpenLegalViewer: (doc: 'terms' | 'privacy') => void;
   onOpenReportBug: () => void;
   onSignOutSuccess?: () => void;
+  onOpenWhatsNew?: () => void;
+  onRestartOnboarding?: () => void;
+  unreadAnnouncementsCount?: number;
 }
 
 export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
@@ -65,6 +69,9 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
   onOpenLegalViewer,
   onOpenReportBug,
   onSignOutSuccess,
+  onOpenWhatsNew,
+  onRestartOnboarding,
+  unreadAnnouncementsCount,
 }) => {
   const [activeSubmenu, setActiveSubmenu] = useState<'main' | 'help'>('main');
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -357,9 +364,10 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
                     </span>
                   </div>
                   <button
+                    data-testid="account-menu-manage-plan"
                     onClick={() => {
                       onClose();
-                      onOpenPricing();
+                      onOpenSettings('plan');
                     }}
                     className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-aira-blue/10 hover:bg-aira-blue/20 text-aira-blue dark:text-aira-cyan text-[11px] font-bold transition-colors shrink-0"
                   >
@@ -385,7 +393,7 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
                   </div>
                 </div>
 
-                <div className="mt-3">
+                <div className="mt-3 flex flex-col gap-1.5">
                   <button
                     data-testid="account-menu-signin"
                     onClick={() => {
@@ -397,12 +405,38 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
                     <User className="w-3.5 h-3.5" />
                     <span>Sign in or Create Account</span>
                   </button>
+                  <button
+                    data-testid="account-menu-guest-plan"
+                    onClick={() => {
+                      onClose();
+                      onOpenSettings('plan');
+                    }}
+                    className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl border border-claude-border-light dark:border-white/10 text-claude-text-light dark:text-white font-semibold text-[11px] hover:bg-claude-surface2-light dark:hover:bg-white/5 transition-colors"
+                  >
+                    <Sparkles className="w-3 h-3 text-claude-accentInk" />
+                    <span>View Plan & Limits</span>
+                  </button>
                 </div>
               </div>
             )}
 
             {/* Menu Items List */}
             <div className="p-2 space-y-0.5 text-xs overflow-y-auto">
+              {/* My Plan & Usage */}
+              <button
+                role="menuitem"
+                data-testid="account-menu-plan-tab"
+                onClick={() => {
+                  onClose();
+                  onOpenSettings('plan');
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left hover:bg-claude-surface2-light dark:hover:bg-white/5 transition-colors group"
+              >
+                <Sparkles className="w-4 h-4 text-claude-muted-light group-hover:text-claude-accentInk transition-colors" />
+                <span className="flex-1 font-medium">My Plan & Usage</span>
+                <span className="text-[10px] text-claude-muted-light">Meters</span>
+              </button>
+
               {/* Account Management */}
               {neonUser && (
                 <button
@@ -514,6 +548,41 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
 
             {/* Submenu Items */}
             <div className="p-2 space-y-0.5 text-xs max-h-80 overflow-y-auto">
+              <button
+                role="menuitem"
+                data-testid="account-menu-whats-new"
+                onClick={() => {
+                  onClose();
+                  onOpenWhatsNew?.();
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left hover:bg-claude-surface2-light dark:hover:bg-white/5 transition-colors group"
+              >
+                <Sparkles className="w-4 h-4 text-amber-500 shrink-0" />
+                <span className="flex-1 font-medium">What's New</span>
+                {typeof unreadAnnouncementsCount === 'number' && unreadAnnouncementsCount > 0 && (
+                  <span
+                    data-testid="account-menu-whats-new-badge"
+                    className="px-1.5 py-0.2 text-[10px] font-bold rounded-full bg-aira-blue text-white"
+                  >
+                    {unreadAnnouncementsCount}
+                  </span>
+                )}
+              </button>
+
+              <button
+                role="menuitem"
+                data-testid="account-menu-restart-onboarding"
+                onClick={() => {
+                  onClose();
+                  onRestartOnboarding?.();
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left hover:bg-claude-surface2-light dark:hover:bg-white/5 transition-colors group"
+              >
+                <Compass className="w-4 h-4 text-aira-blue shrink-0" />
+                <span className="flex-1 font-medium">Interactive Tour</span>
+                <span className="text-[10px] text-claude-muted-light">Tutorial</span>
+              </button>
+
               <button
                 role="menuitem"
                 onClick={() => {

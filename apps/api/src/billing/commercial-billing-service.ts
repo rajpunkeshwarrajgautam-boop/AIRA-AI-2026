@@ -65,6 +65,8 @@ export class CommercialBillingService {
     const accountId = `cacc_${crypto.randomUUID().replace(/-/g, '')}`;
     const now = Date.now();
     const currency = countryCode.toUpperCase() === 'IN' ? 'INR' : 'USD';
+    const isGuest = principalId.startsWith('guest_');
+    const initialCredits = isGuest ? 0 : 100;
 
     await db.transaction(async (trx) => {
       await trx('billing_customers').insert({
@@ -79,43 +81,45 @@ export class CommercialBillingService {
         updated_at: now
       });
 
-      // Free tier initial grant: 100 promotional credits
+      // Free tier initial grant: 100 promotional credits (0 credits for guests)
       await trx('credit_accounts').insert({
         id: accountId,
         customer_id: customerId,
-        balance_credits: 100,
+        balance_credits: initialCredits,
         reserved_credits: 0,
-        lifetime_granted_credits: 100,
+        lifetime_granted_credits: initialCredits,
         lifetime_spent_credits: 0,
         created_at: now,
         updated_at: now
       });
 
-      const grantId = `grant_${crypto.randomUUID().replace(/-/g, '')}`;
-      await trx('credit_grants').insert({
-        id: grantId,
-        account_id: accountId,
-        amount_credits: 100,
-        remaining_credits: 100,
-        grant_type: 'subscription_monthly',
-        expires_at: now + 30 * 24 * 60 * 60 * 1000,
-        rollover_capped: true,
-        metadata: JSON.stringify({ note: 'Free tier welcome allotment' }),
-        created_at: now
-      });
+      if (!isGuest) {
+        const grantId = `grant_${crypto.randomUUID().replace(/-/g, '')}`;
+        await trx('credit_grants').insert({
+          id: grantId,
+          account_id: accountId,
+          amount_credits: 100,
+          remaining_credits: 100,
+          grant_type: 'subscription_monthly',
+          expires_at: now + 30 * 24 * 60 * 60 * 1000,
+          rollover_capped: true,
+          metadata: JSON.stringify({ note: 'Free tier welcome allotment' }),
+          created_at: now
+        });
 
-      await trx('credit_transactions').insert({
-        id: `ctx_${crypto.randomUUID().replace(/-/g, '')}`,
-        account_id: accountId,
-        transaction_type: 'GRANT',
-        amount_credits: 100,
-        balance_before: 0,
-        balance_after: 100,
-        idempotency_key: `init_grant_${customerId}`,
-        description: 'Welcome credit grant (AIRA Free)',
-        metadata: JSON.stringify({ grantId }),
-        created_at: now
-      });
+        await trx('credit_transactions').insert({
+          id: `ctx_${crypto.randomUUID().replace(/-/g, '')}`,
+          account_id: accountId,
+          transaction_type: 'GRANT',
+          amount_credits: 100,
+          balance_before: 0,
+          balance_after: 100,
+          idempotency_key: `init_grant_${customerId}`,
+          description: 'Welcome credit grant (AIRA Free)',
+          metadata: JSON.stringify({ grantId }),
+          created_at: now
+        });
+      }
     });
 
     return {
@@ -127,7 +131,7 @@ export class CommercialBillingService {
   }
 
   /**
-   * Get active subscription for a customer, defaulting to 'free'.
+   * Get active subscription for a customer, defaulting to 'free' or 'guest'.
    */
   async getActiveSubscription(customerId: string): Promise<{
     planId: PlanTier;
@@ -135,6 +139,16 @@ export class CommercialBillingService {
     currentPeriodEnd: number;
     cancelAtPeriodEnd: boolean;
   }> {
+    const customer = await db('billing_customers').where({ id: customerId }).first().catch(() => null);
+    if (customer && customer.principal_id && customer.principal_id.startsWith('guest_')) {
+      return {
+        planId: 'guest',
+        status: 'active',
+        currentPeriodEnd: Date.now() + 24 * 60 * 60 * 1000,
+        cancelAtPeriodEnd: false
+      };
+    }
+
     const activeSub = await db('subscriptions')
       .where({ customer_id: customerId })
       .whereIn('status', ['active', 'authenticated'])
@@ -162,9 +176,10 @@ export class CommercialBillingService {
    * Fetch complete authoritative EntitlementState for a principal.
    */
   async getEntitlements(principalId: string): Promise<EntitlementState> {
+    const isGuest = principalId.startsWith('guest_');
     const customer = await this.getOrCreateCustomer(principalId);
     const sub = await this.getActiveSubscription(customer.id);
-    const plan = COMMERCIAL_PLANS[sub.planId] || COMMERCIAL_PLANS.free;
+    const plan = COMMERCIAL_PLANS[sub.planId] || (isGuest ? COMMERCIAL_PLANS.guest : COMMERCIAL_PLANS.free);
 
     const account = await db('credit_accounts').where({ customer_id: customer.id }).first();
     const balanceCredits = account ? Number(account.balance_credits) : 0;
@@ -202,12 +217,41 @@ export class CommercialBillingService {
       reasoningBoostsLimit: plan.complimentaryReasoningBoosts,
       savedAgentsCount,
       savedAgentsLimit: plan.savedAgentsLimit,
-      builderAccess: plan.builderAccess,
+      builderAccess: isGuest ? 'none' : plan.builderAccess,
       canInitiateChat: dailyRemaining > 0 && monthlyRemaining > 0,
-      canUsePremiumModels: availableCredits >= 10 || reasoningRemaining > 0,
-      canUseVision: availableCredits >= 10,
-      canUseBuilder: plan.builderAccess !== 'none'
+      canUsePremiumModels: isGuest ? false : (availableCredits >= 10 || reasoningRemaining > 0),
+      canUseVision: isGuest ? false : (availableCredits >= 10),
+      canUseBuilder: isGuest ? false : (plan.builderAccess !== 'none')
     };
+  }
+
+  /**
+   * Refund or roll back standard chat units atomically (e.g. streaming cancellation before first token delta).
+   */
+  async refundStandardChat(principalId: string, computeUnits = 1): Promise<void> {
+    if (!principalId || principalId.startsWith('test-') || principalId === 'anonymous') return;
+    const customer = await this.getOrCreateCustomer(principalId);
+    const today = new Date().toISOString().slice(0, 10);
+    const now = Date.now();
+
+    await db.transaction(async (trx) => {
+      const snapshot = await trx('entitlement_snapshots')
+        .where({ customer_id: customer.id, period_date: today })
+        .forUpdate()
+        .first();
+
+      if (snapshot) {
+        const dailyUsed = Math.max(0, Number(snapshot.daily_standard_chat_count) - computeUnits);
+        const monthlyUsed = Math.max(0, Number(snapshot.monthly_standard_chat_count) - computeUnits);
+        await trx('entitlement_snapshots')
+          .where({ customer_id: customer.id, period_date: today })
+          .update({
+            daily_standard_chat_count: dailyUsed,
+            monthly_standard_chat_count: monthlyUsed,
+            updated_at: now
+          });
+      }
+    });
   }
 
   /**

@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { IAutonomousTaskRepository } from './repository.js';
 import { AutonomousAgentEngine } from './autonomous-engine.js';
-import { AutonomousAgentTask } from '../../../contracts/src/index.js';
+import { AutonomousAgentTask, PlanTier, isFeatureAllowedForTier } from '../../../contracts/src/index.js';
 
 export interface AutonomousWorkerHostConfig {
   workerId?: string;
@@ -161,6 +161,25 @@ export class AutonomousWorkerHost extends EventEmitter {
 
   private async processTask(task: AutonomousAgentTask): Promise<void> {
     const taskId = task.taskId;
+    const principal = task.principal;
+    const callerTier: PlanTier = (principal as any)?.tier || (principal?.userId?.startsWith('guest_') ? 'guest' : 'free');
+
+    // Verify caller tier has autonomous execution capability (Plus or Pro)
+    if (!isFeatureAllowedForTier('autonomous', callerTier)) {
+      this.emit('task.failed', {
+        taskId,
+        error: 'PLAN_CAPABILITY_RESTRICTED: Autonomous worker execution restricted to Plus and Pro tiers.'
+      });
+      if (this.repository.updateState) {
+        await this.repository.updateState(
+          taskId,
+          'FAILED',
+          'PLAN_CAPABILITY_RESTRICTED: Unauthorized tier for autonomous worker execution'
+        ).catch(() => {});
+      }
+      return;
+    }
+
     const abortController = new AbortController();
 
     // Start heartbeat lease renewal

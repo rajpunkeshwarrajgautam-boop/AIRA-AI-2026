@@ -10,10 +10,12 @@ import {
   Paperclip,
   SlidersHorizontal,
   X,
+  Lock,
 } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import type { Attachment, ModelId, WorkspaceMode } from '../types';
 import { AVAILABLE_MODELS } from '../utils/constants';
+import type { PlanTier } from '../types/commercial-types';
 
 interface ChatInputProps {
   onSendMessage: (text: string, attachments: Attachment[]) => void;
@@ -24,6 +26,8 @@ interface ChatInputProps {
   extendedThinking: boolean;
   workspaceMode: WorkspaceMode;
   onWorkspaceModeChange: (mode: WorkspaceMode) => void;
+  userTier?: PlanTier;
+  onTriggerUpgrade?: (trigger: string) => void;
 }
 
 const MODE_OPTIONS: Array<{
@@ -50,6 +54,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   extendedThinking,
   workspaceMode,
   onWorkspaceModeChange,
+  userTier = 'free',
+  onTriggerUpgrade,
 }) => {
   const [inputText, setInputText] = useState(repairDraft?.text || '');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -253,17 +259,41 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => onWorkspaceModeChange('agent')}
+                data-testid="chat-mode-agent-btn"
+                onClick={() => {
+                  if (userTier === 'guest') {
+                    onTriggerUpgrade?.('guest_limit');
+                    return;
+                  }
+                  if (userTier === 'free') {
+                    onTriggerUpgrade?.('pro_tools_agent');
+                    return;
+                  }
+                  onWorkspaceModeChange('agent');
+                }}
                 aria-pressed={workspaceMode === 'agent'}
                 className={`flex items-center gap-1.5 px-2.5 py-1 rounded-[8px] text-[11px] font-semibold transition-all duration-200 ${
                   workspaceMode === 'agent'
                     ? 'bg-aira-blue text-white shadow-sm'
                     : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white'
                 }`}
-                title="Agent mode: Autonomous multi-step missions, builder workspace, and tool execution"
+                title={
+                  userTier === 'guest' || userTier === 'free'
+                    ? 'Agent mode: Upgrade to Plus/Pro to activate autonomous multi-step execution'
+                    : 'Agent mode: Autonomous multi-step missions, builder workspace, and tool execution'
+                }
               >
                 <Bot className="h-3 w-3" />
                 <span>Agent</span>
+                {(userTier === 'guest' || userTier === 'free') && (
+                  <span
+                    data-testid="chat-mode-agent-locked"
+                    className="flex items-center gap-0.5 rounded px-1 py-0.2 text-[9px] font-bold uppercase tracking-wider bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                  >
+                    <Lock className="w-2 h-2" />
+                    <span>PLUS</span>
+                  </span>
+                )}
               </button>
             </div>
 

@@ -11,7 +11,9 @@ import {
   ToolGatewayErrorCodes,
   ToolLifecycleState,
   ToolCall,
-  ApprovalDecision
+  ApprovalDecision,
+  PlanTier,
+  isFeatureAllowedForTier
 } from '../../contracts/src/index.js';
 import { ApprovalKernel } from '../../approvals/src/index.js';
 import type { OneTimeAuthorizationBinding } from '../../approvals/src/repositories.js';
@@ -337,6 +339,42 @@ export class ToolGateway extends EventEmitter {
         artifacts: []
       };
     }
+
+    // STEP 5.5: Verify Plan Tier Entitlements for Restricted Tools
+    const callerTier: PlanTier = (principal as any).tier || (principal.userId?.startsWith('guest_') ? 'guest' : 'free');
+    if (def.name.startsWith('browser_') || toolName.startsWith('browser_')) {
+        if (!isFeatureAllowedForTier('browsertools', callerTier)) {
+          const errorMsg = 'PLAN_TOOL_RESTRICTED: Browser execution tools require AIRA Pro plan.';
+          this.emit('tool.permission_denied', { callId, runId, toolId: def.id, toolName: def.name, reason: errorMsg });
+          return {
+            toolCallId: callId,
+            output: null,
+            error: errorMsg,
+            errorCode: 'PLAN_TOOL_RESTRICTED',
+            isError: true,
+            durationMs: Date.now() - startTime,
+            timestamp: Date.now(),
+            artifacts: []
+          };
+        }
+      }
+
+      if (def.name === 'python_sandbox' || toolName === 'python_sandbox') {
+        if (!isFeatureAllowedForTier('pythonsandbox', callerTier)) {
+          const errorMsg = 'PLAN_TOOL_RESTRICTED: Python Sandbox execution requires AIRA Pro plan.';
+          this.emit('tool.permission_denied', { callId, runId, toolId: def.id, toolName: def.name, reason: errorMsg });
+          return {
+            toolCallId: callId,
+            output: null,
+            error: errorMsg,
+            errorCode: 'PLAN_TOOL_RESTRICTED',
+            isError: true,
+            durationMs: Date.now() - startTime,
+            timestamp: Date.now(),
+            artifacts: []
+          };
+        }
+      }
 
     // STEP 6: Determine side-effect, permission, and policy identity from the
     // registered server-side definition (never from the submitted task payload).

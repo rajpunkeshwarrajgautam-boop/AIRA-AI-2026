@@ -1,4 +1,4 @@
-import { normalizeModelIdentifier } from '../../../contracts/src/index.js';
+import { normalizeModelIdentifier, PlanTier } from '../../../contracts/src/index.js';
 import crypto from 'node:crypto';
 import { PrivateBetaCapacityConfig, resolveCapacityConfig } from './capacity-config.js';
 import { CapacityStore, InMemoryCapacityStore } from './capacity-store.js';
@@ -33,6 +33,7 @@ export interface AdmissionResult {
 
 export interface AdmitOptions {
   principalId: string;
+  tier?: PlanTier;
   model?: string;
   intent?: string;
   promptText?: string;
@@ -168,6 +169,8 @@ export class PrivateBetaCapacityGuard {
 
     const principalId = options.principalId || 'anonymous';
     const promptText = options.promptText || '';
+    const userPlanTier: PlanTier = options.tier || 'free';
+    const userMaxConcurrent = userPlanTier === 'pro' ? 2 : 1;
 
     // 3. Token-sensitive prompt cost check (Section 19)
     const promptTokens = this.estimateTokens(promptText);
@@ -216,7 +219,7 @@ export class PrivateBetaCapacityGuard {
     if (typeof this.store.atomicAdmit === 'function') {
       const atomicRes = await this.store.atomicAdmit({
         principalId,
-        userMaxConcurrent: this.config.perUserMaxConcurrent,
+        userMaxConcurrent,
         userRpmLimit: this.config.perUserRpm,
         globalMaxConcurrent: effectiveGlobalMaxConcurrent,
         globalRpmLimit: effectiveGlobalRpm,
@@ -270,9 +273,9 @@ export class PrivateBetaCapacityGuard {
         return {
           decision: 'REJECT_CAPACITY',
           rejectionCode: 'AIRA_PRIVATE_BETA_CAPACITY',
-          reason: 'USER_CONCURRENCY_EXCEEDED',
+          reason: 'CONCURRENCY_LIMIT_EXCEEDED',
           retryAfterSeconds: retryAfter,
-          userMessage: 'You have an active request in progress. Please wait for it to complete.',
+          userMessage: `Plan ${userPlanTier} allows ${userMaxConcurrent} concurrent request(s).`,
           telemetry: atomicRes.telemetry
         };
       }
@@ -317,16 +320,16 @@ export class PrivateBetaCapacityGuard {
       // GLOBAL_CONCURRENCY_EXCEEDED falls through to queue evaluation
     } else {
       // Legacy sequential store fallback
-      const userPermitAcquisition = await this.store.acquirePermit('user', principalId, this.config.perUserMaxConcurrent, 120);
+      const userPermitAcquisition = await this.store.acquirePermit('user', principalId, userMaxConcurrent, 120);
       if (!userPermitAcquisition.acquired) {
         this.metrics.rejected++;
         const retryAfter = this.calculateJitteredRetryAfter(this.config.retryAfterSeconds);
         return {
           decision: 'REJECT_CAPACITY',
           rejectionCode: 'AIRA_PRIVATE_BETA_CAPACITY',
-          reason: 'USER_CONCURRENCY_EXCEEDED',
+          reason: 'CONCURRENCY_LIMIT_EXCEEDED',
           retryAfterSeconds: retryAfter,
-          userMessage: 'You have an active request in progress. Please wait for it to complete.'
+          userMessage: `Plan ${userPlanTier} allows ${userMaxConcurrent} concurrent request(s).`
         };
       }
       const userPermitId = userPermitAcquisition.permitId;

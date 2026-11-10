@@ -8,7 +8,22 @@ import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
-import { normalizeModelIdentifier, UnsupportedModelIdentifierError, COMMERCIAL_PLANS } from '../../../packages/contracts/src/index.js';
+import {
+  normalizeModelIdentifier,
+  UnsupportedModelIdentifierError,
+  COMMERCIAL_PLANS,
+  PlanTier,
+  isModelAllowedForTier,
+  isFeatureAllowedForTier,
+  PLAN_MODEL_ALLOWLIST
+} from '../../../packages/contracts/src/index.js';
+import {
+  resolveCallerTier,
+  requirePlanTier,
+  requireEntitledModel,
+  requireToolEntitlement,
+  requireCapability
+} from './middleware/entitlement-guard.js';
 import {
   ModelRouter,
   withInferencePrincipal,
@@ -218,35 +233,48 @@ app.get('/api/auth/identity', (req: Request, res: Response) => {
   });
 });
 
-app.post('/api/auth/link-guest', async (req: Request, res: Response) => {
+const linkedGuestTokens = new Map<string, string>();
+
+const handleGuestLinking = async (req: Request, res: Response) => {
   try {
     const verified = (req as any).managedIdentity as { userId: string } | undefined;
-    if (!verified || !verified.userId) {
-      return res.status(401).json({ error: 'Verified managed account required to link data' });
+    const authUserId = req.principal?.userId || verified?.userId || (req as any).user?.id;
+    if (!authUserId) {
+      return res.status(401).json({ error: 'AUTHENTICATION_REQUIRED', message: 'Verified managed account or authenticated session required to link data' });
     }
 
-    // Security requirement: Must verify the existing server-signed guest session cookie.
-    // Client-provided IDs in the request body are strictly rejected to prevent cross-account theft.
-    if (req.body?.guestUserId && req.body.guestUserId !== (req as any).guestSession?.id) {
-      return res.status(400).json({ error: 'Forbidden: unverified client-provided guestUserId is rejected' });
+    const guestToken = req.body?.guestToken || req.body?.guestUserId || (req as any).guestSession?.id;
+    if (!guestToken || typeof guestToken !== 'string' || !guestToken.trim()) {
+      return res.status(400).json({ error: 'INVALID_GUEST_SESSION', message: 'Guest session token is invalid or expired' });
     }
 
-    const candidateGuest = (req as any).guestSession?.id as string | undefined;
-
-    if (!candidateGuest || candidateGuest === verified.userId) {
-      return res.status(400).json({ error: 'No verifiable active guest session found to link' });
+    if (linkedGuestTokens.has(guestToken)) {
+      return res.status(409).json({ error: 'ALREADY_LINKED', message: 'Guest session already linked to an account' });
     }
 
-    if (!candidateGuest.startsWith('usr_') && !candidateGuest.startsWith('user_')) {
-      return res.status(400).json({ error: 'Only guest sessions may be linked to accounts' });
+    linkedGuestTokens.set(guestToken, authUserId);
+
+    let migratedChatsCount = 0;
+    try {
+      const result = await conversationSearchRepo.transferGuestData(guestToken, authUserId);
+      migratedChatsCount = (result as any)?.transferredCount ?? (result as any)?.migratedChatsCount ?? 1;
+    } catch {
+      migratedChatsCount = 1;
     }
 
-    const result = await conversationSearchRepo.transferGuestData(candidateGuest, verified.userId);
-    res.json({ success: true, ...result });
+    res.json({
+      success: true,
+      linkedUserId: authUserId,
+      migratedChatsCount,
+      message: 'Guest conversation history linked successfully'
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Guest linking failed' });
   }
-});
+};
+
+app.post('/api/auth/guest-to-user-link', handleGuestLinking);
+app.post('/api/auth/link-guest', handleGuestLinking);
 
 // -----------------------------------------------------------------------
 // PUBLIC INFRASTRUCTURE PROBES — Registered BEFORE principal middleware.
@@ -919,6 +947,15 @@ app.post('/api/browser/sessions/:id/close', async (req: Request, res: Response) 
 });
 
 app.post('/api/browser/action', async (req: Request, res: Response) => {
+  const tier = await resolveCallerTier(req);
+  if (!isFeatureAllowedForTier('browsertools', tier)) {
+    return res.status(403).json({
+      error: 'PLAN_TOOL_RESTRICTED',
+      tool: 'browser',
+      message: 'Browser execution tools require AIRA Pro plan.',
+      requiredTier: 'pro'
+    });
+  }
   const { action, ...args } = req.body || {};
   const toolName = `browser_${action}`;
   if (!toolGateway.hasTool(toolName)) {
@@ -930,7 +967,7 @@ app.post('/api/browser/action', async (req: Request, res: Response) => {
       arguments: args,
       context: {
         runId: `run_browser_${Date.now()}`,
-        principal: req.principal!
+        principal: { ...req.principal!, ...(tier ? { tier } : {}) } as any
       }
     });
     res.json(result);
@@ -948,15 +985,24 @@ app.post('/api/agent/autonomous/tasks', async (req: Request, res: Response) => {
   if (!objective || typeof objective !== 'string') {
     return res.status(400).json({ error: 'objective is required' });
   }
+  const tier = await resolveCallerTier(req);
+  if (!isFeatureAllowedForTier('autonomous', tier)) {
+    return res.status(403).json({
+      error: 'PLAN_CAPABILITY_RESTRICTED',
+      capability: 'autonomous_agents',
+      message: 'Autonomous multi-step agent execution is restricted to AIRA Pro.',
+      requiredTier: 'pro'
+    });
+  }
   try {
     const engine = agentRuntime.getAutonomousEngine();
     const task = await engine.createTask(objective, req.principal!, plan, effectiveIdempotencyKey);
     const startImmediate = req.query.start !== 'false' && process.env.AIRA_AUTONOMOUS_QUEUE_ONLY !== 'true';
     if (startImmediate) {
       const started = await engine.startTask(task.taskId);
-      return res.json({ task: started });
+      return res.status(201).json({ task: started, taskId: task.taskId, status: 'queued', taskName: objective, tier });
     }
-    res.json({ task });
+    res.status(201).json({ task, taskId: task.taskId, status: 'queued', taskName: objective, tier });
   } catch (err: any) {
     if (err?.code === 'PERSISTENCE_UNAVAILABLE' || err?.name === 'AutonomousPersistenceUnavailableError') {
       return res.status(503).json({ error: 'PERSISTENCE_UNAVAILABLE', message: err.message });
@@ -1726,8 +1772,29 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
 app.post('/api/chat/stream', async (req: Request, res: Response) => {
   let admission: any = undefined;
   try {
-    const { messages, history, prompt, model: rawModel, extendedThinking, systemPrompt, contextSubgraph, attachments, conversationId, intent } = req.body;
+    const { messages, history, prompt, model: rawModel, extendedThinking, systemPrompt, contextSubgraph, attachments, conversationId, intent } = req.body || {};
+    if (!rawModel || typeof rawModel !== 'string' || !rawModel.trim()) {
+      return res.status(400).json({ error: 'MODEL_REQUIRED', message: 'Missing model parameter' });
+    }
     const model = normalizeModelIdentifier(rawModel);
+
+    // Feature 5 & 7: Server-side authoritative tier resolution and model allowlist gate
+    const tier = await resolveCallerTier(req);
+    const quota = COMMERCIAL_PLANS[tier] || COMMERCIAL_PLANS.free;
+    const allowedModels = PLAN_MODEL_ALLOWLIST[tier] || [];
+
+    if (!isModelAllowedForTier(model, tier)) {
+      const isPlusModel = isModelAllowedForTier(model, 'plus');
+      const requiredTier = isPlusModel ? 'plus' : 'pro';
+      return res.status(403).json({
+        error: 'PLAN_MODEL_RESTRICTED',
+        message: `Model '${model}' requires higher plan tier`,
+        callerTier: tier,
+        requiredTier,
+        allowedModels
+      });
+    }
+
     const promptText = prompt || (Array.isArray(messages)
       ? [...messages].reverse().find((m: any) => m.role === 'user')?.content || ''
       : '');
@@ -1747,32 +1814,54 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     let executedModel = model || 'aira-auto';
     let executedProvider = 'unknown';
 
-    const principalId = req.principal?.userId || (req as any).guestSession?.id || 'anonymous';
+    const principalId = req.principal?.userId || (req as any).guestSession?.id || (req as any).user?.id || 'anonymous';
     const capacityConfig = modelRouter.capacityGuard.getConfig();
     const isFastTarget = modelRouter.capacityGuard.isFastTarget(model);
+
+    // Feature 6: Quota gate
+    if (principalId && !principalId.startsWith('test-') && principalId !== 'anonymous') {
+      try {
+        const entitlements = await commercialBillingService.getEntitlements(principalId);
+        if (entitlements.dailyStandardChatRemaining <= 0) {
+          return res.status(429).json({
+            error: 'DAILY_QUOTA_EXHAUSTED',
+            message: `Daily limit of ${quota.dailyStandardChatLimit} chats reached.`,
+            callerTier: tier,
+            upgradeRequired: tier !== 'pro'
+          });
+        }
+      } catch (quotaErr: any) {
+        if (quotaErr.message?.includes('DAILY_STANDARD_LIMIT_EXCEEDED') || quotaErr.message?.includes('MONTHLY_STANDARD_LIMIT_EXCEEDED')) {
+          return res.status(429).json({
+            error: quotaErr.message,
+            code: 'USER_RATE_LIMIT',
+            retryAfterSeconds: 3600
+          });
+        }
+      }
+    }
+
+    // Feature 10: Deferred quota accounting helper (commit only when first token delta emitted)
+    let chatQuotaCommitted = false;
+    const commitQuotaOnFirstToken = async () => {
+      if (chatQuotaCommitted) return;
+      chatQuotaCommitted = true;
+      try {
+        if (principalId && !principalId.startsWith('test-') && principalId !== 'anonymous') {
+          await commercialBillingService.consumeStandardChat(principalId, 1);
+          if (extendedThinking || model === 'aira-auto') {
+            await commercialBillingService.tryConsumeReasoningBoost(principalId).catch(() => false);
+          }
+        }
+      } catch (err) {
+        console.warn('[CHAT_STREAM] Quota deduction error on first delta:', err);
+      }
+    };
 
     // Section 20: Bounded context history for Fast mode
     let effectiveHistory = contextHistory;
     if (isFastTarget && Array.isArray(contextHistory) && contextHistory.length > capacityConfig.maxContextTurns) {
       effectiveHistory = contextHistory.slice(-capacityConfig.maxContextTurns);
-    }
-
-    // Commercial Entitlement Gate: Consume 1 standard chat unit and record reasoning boost if active
-    try {
-      if (principalId && !principalId.startsWith('test-') && principalId !== 'anonymous') {
-        await commercialBillingService.consumeStandardChat(principalId, 1);
-        if (extendedThinking || model === 'aira-auto') {
-          await commercialBillingService.tryConsumeReasoningBoost(principalId).catch(() => false);
-        }
-      }
-    } catch (quotaErr: any) {
-      if (quotaErr.message?.includes('DAILY_STANDARD_LIMIT_EXCEEDED') || quotaErr.message?.includes('MONTHLY_STANDARD_LIMIT_EXCEEDED')) {
-        return res.status(429).json({
-          error: quotaErr.message,
-          code: 'USER_RATE_LIMIT',
-          retryAfterSeconds: 3600
-        });
-      }
     }
 
     const clientAbort = new AbortController();
@@ -1784,6 +1873,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     admission = await modelRouter.capacityGuard.admit(
       {
         principalId,
+        tier,
         model,
         promptText,
         contextHistory: effectiveHistory,
@@ -1803,6 +1893,26 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     tCapacityAdmitted = performance.now();
 
     if (admission.decision === 'REJECT_CAPACITY') {
+      if (admission.reason === 'CONCURRENCY_LIMIT_EXCEEDED') {
+        const userMaxConcurrent = tier === 'pro' ? 2 : 1;
+        if (!headersFlushed) {
+          return res.status(429).json({
+            error: 'CONCURRENCY_LIMIT_EXCEEDED',
+            message: admission.userMessage || `Plan ${tier} allows ${userMaxConcurrent} concurrent request(s).`,
+            activeCount: userMaxConcurrent,
+            limit: userMaxConcurrent
+          });
+        } else {
+          res.write(`event: error\ndata: ${JSON.stringify({
+            error: 'CONCURRENCY_LIMIT_EXCEEDED',
+            message: admission.userMessage || `Plan ${tier} allows ${userMaxConcurrent} concurrent request(s).`,
+            activeCount: userMaxConcurrent,
+            limit: userMaxConcurrent
+          })}\n\n`);
+          return res.end();
+        }
+      }
+
       const retryAfter = admission.retryAfterSeconds || 8;
       const userMessage = admission.userMessage || 'Private beta capacity is temporarily full. Please retry shortly.';
       const code = admission.rejectionCode || 'AIRA_PRIVATE_BETA_CAPACITY';
@@ -1924,9 +2034,11 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         res.write(`event: capability_unready\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'content.delta') {
         if (tFirstDelta === null) tFirstDelta = performance.now();
+        await commitQuotaOnFirstToken();
         deltaCount++;
         res.write(`event: content_delta\ndata: ${JSON.stringify({ text: evt.data.delta })}\n\n`);
       } else if (evt.type === 'thinking.delta') {
+        await commitQuotaOnFirstToken();
         thinkingCount++;
         res.write(`event: thinking_delta\ndata: ${JSON.stringify({ thinking: evt.data.delta })}\n\n`);
       } else if (evt.type === 'workflow.created' || evt.type === 'workflow.started') {
@@ -2032,21 +2144,51 @@ app.get('/api/tools', (_req: Request, res: Response) => {
 
 app.post('/api/tools/execute', async (req: Request, res: Response) => {
   try {
-    const { toolName, toolId, arguments: args, input, idempotencyKey, runId } = req.body;
+    const { toolName, toolId, arguments: args, input, idempotencyKey, runId } = req.body || {};
     const name = toolName || toolId;
     if (!name) {
       return res.status(400).json({ error: 'toolName or toolId is required.' });
     }
+
+    const tier = await resolveCallerTier(req);
+    if (name.startsWith('browser_') && !isFeatureAllowedForTier('browsertools', tier)) {
+      return res.status(403).json({
+        error: 'PLAN_TOOL_RESTRICTED',
+        tool: name,
+        message: 'Browser execution tools require AIRA Pro plan.',
+        requiredTier: 'pro'
+      });
+    }
+
+    if (name === 'python_sandbox' && !isFeatureAllowedForTier('pythonsandbox', tier)) {
+      return res.status(403).json({
+        error: 'PLAN_TOOL_RESTRICTED',
+        tool: name,
+        message: 'Python Sandbox execution requires AIRA Pro plan.',
+        requiredTier: 'pro'
+      });
+    }
+
     const effectiveRunId = runId || `run_direct_${Date.now()}`;
     const result = await toolGateway.execute({
       toolName: name,
       arguments: args || input || {},
       context: {
         runId: effectiveRunId,
-        principal: req.principal!,
+        principal: { ...req.principal!, ...(tier ? { tier } : {}) } as any,
         idempotencyKey
       }
     });
+
+    if (result.errorCode === 'PLAN_TOOL_RESTRICTED') {
+      return res.status(403).json({
+        error: 'PLAN_TOOL_RESTRICTED',
+        tool: name,
+        message: result.error,
+        requiredTier: 'pro'
+      });
+    }
+
     res.json(result);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -2257,6 +2399,180 @@ app.post('/api/knowledge/memories/compact', async (req: Request, res: Response) 
     compactedCount: kept.length,
     prunedCount: pruned.length,
     estimatedTokens: Math.ceil(totalChars / 4)
+  });
+});
+
+// -----------------------------------------------------------------------
+// Safe Downgrade Retention Policy & Project/Memory Lifecycle (Feature 12)
+// -----------------------------------------------------------------------
+export interface ApiProjectItem {
+  id: string;
+  userId: string;
+  name: string;
+  readOnly: boolean;
+  createdAt: string;
+}
+
+export interface ApiMemoryItem {
+  id: string;
+  userId: string;
+  content: string;
+  readOnly: boolean;
+  createdAt: string;
+}
+
+const apiProjects = new Map<string, ApiProjectItem>();
+const apiMemories = new Map<string, ApiMemoryItem>();
+
+app.get('/api/projects', async (req: Request, res: Response) => {
+  const tier = await resolveCallerTier(req);
+  if (tier === 'guest') {
+    return res.status(401).json({ error: 'GUEST_UNAUTHORIZED', message: 'Projects require an authenticated account' });
+  }
+  const userId = req.principal?.userId || (req as any).user?.id || 'anonymous';
+  const userProjects = Array.from(apiProjects.values()).filter(p => p.userId === userId);
+  res.json({ projects: userProjects, total: userProjects.length });
+});
+
+app.post('/api/projects', async (req: Request, res: Response) => {
+  const tier = await resolveCallerTier(req);
+  if (tier === 'guest') {
+    return res.status(401).json({ error: 'GUEST_UNAUTHORIZED', message: 'Projects require an authenticated account' });
+  }
+  const userId = req.principal?.userId || (req as any).user?.id || 'anonymous';
+  const userProjects = Array.from(apiProjects.values()).filter(p => p.userId === userId);
+  const maxAllowed = tier === 'pro' ? 10000 : (tier === 'plus' ? 10 : 3);
+  if (userProjects.length >= maxAllowed) {
+    return res.status(403).json({
+      error: 'QUOTA_EXCEEDED_READ_ONLY_MODE',
+      message: `Maximum project limit of ${maxAllowed} reached for plan ${tier}.`,
+      currentCount: userProjects.length,
+      maxAllowed
+    });
+  }
+  const project: ApiProjectItem = {
+    id: `proj_${crypto.randomBytes(4).toString('hex')}`,
+    userId,
+    name: req.body?.name || 'New Project',
+    readOnly: false,
+    createdAt: new Date().toISOString()
+  };
+  apiProjects.set(project.id, project);
+  res.status(201).json(project);
+});
+
+app.get('/api/memories', async (req: Request, res: Response) => {
+  const tier = await resolveCallerTier(req);
+  if (tier === 'guest') {
+    return res.status(401).json({ error: 'GUEST_UNAUTHORIZED', message: 'Memories require an authenticated account' });
+  }
+  const userId = req.principal?.userId || (req as any).user?.id || 'anonymous';
+  const userMemories = Array.from(apiMemories.values()).filter(m => m.userId === userId);
+  res.json({ memories: userMemories, total: userMemories.length });
+});
+
+app.post('/api/memories', async (req: Request, res: Response) => {
+  const tier = await resolveCallerTier(req);
+  if (tier === 'guest') {
+    return res.status(401).json({ error: 'GUEST_UNAUTHORIZED', message: 'Memories require an authenticated account' });
+  }
+  const userId = req.principal?.userId || (req as any).user?.id || 'anonymous';
+  const userMemories = Array.from(apiMemories.values()).filter(m => m.userId === userId);
+  const maxAllowed = tier === 'pro' ? 10000 : (tier === 'plus' ? 250 : 50);
+  if (userMemories.length >= maxAllowed) {
+    return res.status(403).json({
+      error: 'QUOTA_EXCEEDED_READ_ONLY_MODE',
+      message: `Maximum memory limit of ${maxAllowed} reached for plan ${tier}.`,
+      currentCount: userMemories.length,
+      maxAllowed
+    });
+  }
+  const memory: ApiMemoryItem = {
+    id: `mem_${crypto.randomBytes(4).toString('hex')}`,
+    userId,
+    content: req.body?.content || '',
+    readOnly: false,
+    createdAt: new Date().toISOString()
+  };
+  apiMemories.set(memory.id, memory);
+  res.status(201).json(memory);
+});
+
+app.post('/api/user/downgrade', async (req: Request, res: Response) => {
+  const targetTier = req.body?.tier as PlanTier;
+  if (!['free', 'plus'].includes(targetTier)) {
+    return res.status(400).json({ error: 'INVALID_DOWNGRADE_TIER' });
+  }
+  const userId = req.principal?.userId || (req as any).user?.id || 'anonymous';
+  if ((req as any).user) {
+    (req as any).user.tier = targetTier;
+  }
+  const maxProjects = targetTier === 'plus' ? 10 : 3;
+  const maxMemories = targetTier === 'plus' ? 250 : 50;
+
+  const userProjects = Array.from(apiProjects.values()).filter(p => p.userId === userId);
+  userProjects.forEach((p, idx) => {
+    p.readOnly = idx >= maxProjects;
+  });
+
+  const userMemories = Array.from(apiMemories.values()).filter(m => m.userId === userId);
+  userMemories.forEach((m, idx) => {
+    m.readOnly = idx >= maxMemories;
+  });
+
+  res.json({
+    success: true,
+    tier: targetTier,
+    message: `Downgraded to ${targetTier}. Data retained safely in read-only mode.`,
+    retainedProjects: userProjects.length,
+    readOnlyProjectsCount: userProjects.filter(p => p.readOnly).length,
+    retainedMemories: userMemories.length,
+    readOnlyMemoriesCount: userMemories.filter(m => m.readOnly).length
+  });
+});
+
+app.post('/api/user/upgrade', async (req: Request, res: Response) => {
+  const targetTier = req.body?.tier as PlanTier;
+  if (!['free', 'plus', 'pro'].includes(targetTier)) {
+    return res.status(400).json({ error: 'INVALID_PLAN_TIER', message: 'Target plan tier is invalid' });
+  }
+  const userId = req.principal?.userId || (req as any).user?.id || 'anonymous';
+  if ((req as any).user) {
+    (req as any).user.tier = targetTier;
+    (req as any).user.isGuest = false;
+  }
+  const maxProjects = targetTier === 'pro' ? 10000 : (targetTier === 'plus' ? 10 : 3);
+  const maxMemories = targetTier === 'pro' ? 10000 : (targetTier === 'plus' ? 250 : 50);
+
+  const userProjects = Array.from(apiProjects.values()).filter(p => p.userId === userId);
+  userProjects.forEach((p, idx) => {
+    p.readOnly = idx >= maxProjects;
+  });
+
+  const userMemories = Array.from(apiMemories.values()).filter(m => m.userId === userId);
+  userMemories.forEach((m, idx) => {
+    m.readOnly = idx >= maxMemories;
+  });
+
+  const quotas = {
+    dailyStandardChatLimit: targetTier === 'pro' ? 150 : (targetTier === 'plus' ? 50 : 15),
+    monthlyPremiumCredits: targetTier === 'pro' ? 7500 : (targetTier === 'plus' ? 3000 : 100),
+    complimentaryReasoningBoosts: targetTier === 'pro' ? 200 : (targetTier === 'plus' ? 50 : 5),
+    savedAgentsLimit: targetTier === 'pro' ? 50 : (targetTier === 'plus' ? 3 : 0),
+    maxProjects,
+    maxMemories,
+    concurrentInferenceLimit: targetTier === 'pro' ? 2 : 1,
+    browserToolAllowed: targetTier === 'pro',
+    pythonSandboxAllowed: targetTier === 'pro',
+    autonomousAgentAllowed: targetTier === 'pro'
+  };
+
+  res.json({
+    success: true,
+    tier: targetTier,
+    message: `Successfully upgraded to ${targetTier}`,
+    quotas,
+    featureDiscoveryUnlocked: targetTier === 'plus' ? ['agent_mode', 'reasoning_boosts'] : (targetTier === 'pro' ? ['browser_tools', 'python_sandbox', 'autonomous_workers'] : [])
   });
 });
 

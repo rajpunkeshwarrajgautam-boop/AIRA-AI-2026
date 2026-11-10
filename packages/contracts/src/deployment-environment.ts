@@ -6,8 +6,13 @@ export type DeploymentEnvironment = 'production' | 'preview' | 'staging' | 'deve
 
 export type TrustedEnvironmentConfig = Readonly<Record<string, string | undefined>>;
 
+declare const process: { env?: Record<string, string | undefined> } | undefined;
+
+const defaultEnv: TrustedEnvironmentConfig =
+  typeof process !== 'undefined' && process && process.env ? process.env : {};
+
 export function resolveDeploymentEnvironment(
-  config: TrustedEnvironmentConfig = process.env
+  config: TrustedEnvironmentConfig = defaultEnv
 ): DeploymentEnvironment {
   const vercelEnvironment = config.VERCEL_ENV?.trim().toLowerCase();
 
@@ -25,6 +30,6 @@ export function resolveDeploymentEnvironment(
   return config.NODE_ENV === 'production' ? 'production' : 'development';
 }
 
-export function isProductionDeployment(config: TrustedEnvironmentConfig = process.env): boolean {
+export function isProductionDeployment(config: TrustedEnvironmentConfig = defaultEnv): boolean {
   return resolveDeploymentEnvironment(config) === 'production';
-}
+}
