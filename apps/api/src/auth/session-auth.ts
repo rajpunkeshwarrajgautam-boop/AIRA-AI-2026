@@ -201,7 +201,7 @@ function createSessionPayload(): SessionPayloadV2 {
     iss: SESSION_ISSUER,
     aud: SESSION_AUDIENCE,
     env: resolveDeploymentEnvironment(),
-    uid: `guest_${randomUUID()}`,
+    uid: `user_${randomUUID()}`,
     sid: `session_${randomUUID()}`,
     iat: now,
     exp: now + SESSION_TOKEN_TTL_SECONDS,
