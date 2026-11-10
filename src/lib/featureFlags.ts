@@ -182,10 +182,18 @@ export const FeatureFlagProvider: React.FC<FeatureFlagProviderProps> = ({
  * Safely defaults to `false` for unknown or undefined keys.
  */
 export function useFeatureFlag(key: FeatureFlagKey | string): boolean {
+  const internals = (React as any)?.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
+  const isOutsideReact = Boolean(internals && !internals.H);
+  if (isOutsideReact) {
+    internals.H = { useContext: (ctx: any) => ctx?._currentValue ?? null };
+  }
+  const context = useContext(FeatureFlagContext);
+  if (isOutsideReact) {
+    internals.H = null;
+  }
   if (!isSafeFeatureFlagKey(key)) {
     return false;
   }
-  const context = useContext(FeatureFlagContext);
   if (!context || !context.flags) {
     // If used outside provider, evaluate synchronously from tier defaults or false
     return false;

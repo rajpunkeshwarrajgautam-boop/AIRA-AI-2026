@@ -1,9 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Sparkles,
   MessageSquare,
   Bot,
-  FolderGit2,
   Sliders,
   ChevronLeft,
   ChevronRight,
@@ -40,10 +39,20 @@ export const OnboardingWalkthrough: React.FC<OnboardingWalkthroughProps> = ({
   userId,
   userTier = 'free',
   onOpenPlanSettings,
-  onSwitchWorkspaceMode,
-  onOpenProjects
+  onSwitchWorkspaceMode: _onSwitchWorkspaceMode,
+  onOpenProjects: _onOpenProjects
 }) => {
   const [stageIndex, setStageIndex] = useState<number>(0);
+
+  const handleSkip = useCallback(() => {
+    skipOnboarding(userId);
+    onClose();
+  }, [userId, onClose]);
+
+  const handleFinish = useCallback(() => {
+    finishOnboarding(userId);
+    onClose();
+  }, [userId, onClose]);
 
   // Restore saved stage on open
   useEffect(() => {
@@ -56,16 +65,15 @@ export const OnboardingWalkthrough: React.FC<OnboardingWalkthroughProps> = ({
 
   // Handle ESC key
   useEffect(() => {
+    if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isOpen) {
+      if (e.key === 'Escape') {
         handleSkip();
       }
     };
-    if (isOpen) {
-      window.addEventListener('keydown', handleKeyDown);
-    }
+    window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen]);
+  }, [isOpen, handleSkip]);
 
   const currentStage: OnboardingStage = ONBOARDING_STAGES[stageIndex] || 'intro';
 
@@ -85,16 +93,6 @@ export const OnboardingWalkthrough: React.FC<OnboardingWalkthroughProps> = ({
       setStageIndex(prevIdx);
       saveOnboardingStage(prevStage, userId);
     }
-  };
-
-  const handleSkip = () => {
-    skipOnboarding(userId);
-    onClose();
-  };
-
-  const handleFinish = () => {
-    finishOnboarding(userId);
-    onClose();
   };
 
   const jumpToStage = (idx: number) => {
