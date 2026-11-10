@@ -353,7 +353,8 @@ Object.freeze(PLAN_CAPABILITY_MATRIX);
 const CANONICAL_MODEL_ALIASES: Record<string, string> = {
   'claude-3-7-sonnet': 'aira-auto',
   'claude-3-5-haiku': 'aira-fast',
-  'claude-3-opus': 'aira-deep'
+  'claude-3-opus': 'aira-deep',
+  'mock-deterministic': 'aira-fast'
 };
 
 export function isModelAllowedForTier(model: string, tier: PlanTier): boolean {
