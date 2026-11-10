@@ -11,7 +11,7 @@ import {
 function makeTask(taskId: string): AutonomousAgentTask {
   return {
     taskId,
-    principal: { userId: 'isolated_user', sessionId: 'test_session', scopes: ['*'] },
+    principal: { userId: 'isolated_user', sessionId: 'test_session', scopes: ['*'], tier: 'pro' as any },
     objective: 'Verify concurrent worker safety',
     state: 'CREATED',
     observations: [],

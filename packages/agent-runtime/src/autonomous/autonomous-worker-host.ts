@@ -162,7 +162,7 @@ export class AutonomousWorkerHost extends EventEmitter {
   private async processTask(task: AutonomousAgentTask): Promise<void> {
     const taskId = task.taskId;
     const principal = task.principal;
-    const callerTier: PlanTier = (principal as any)?.tier || (principal?.userId?.startsWith('guest_') ? 'guest' : 'free');
+    const callerTier: PlanTier = (principal as any)?.tier || (principal?.scopes?.includes('*') ? 'pro' : (principal?.userId?.startsWith('guest_') ? 'guest' : 'free'));
 
     // Verify caller tier has autonomous execution capability (Plus or Pro)
     if (!isFeatureAllowedForTier('autonomous', callerTier)) {
