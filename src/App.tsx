@@ -81,8 +81,9 @@ function App() {
     return '';
   });
   useEffect(() => {
+    let isCancelled = false;
     void hydrateStorageFromIndexedDb(currentUserId || undefined).then(loaded => {
-      if (loaded && loaded.length > 0) {
+      if (!isCancelled && loaded && loaded.length > 0) {
         setConversations(prev => {
           if (prev.length === 1 && prev[0].id === 'welcome-to-aira' && prev[0].messages.length === 0) {
             return loaded;
@@ -92,10 +93,15 @@ function App() {
       }
     });
     void hydrateProjectsFromIndexedDb(currentUserId || undefined).then(loaded => {
-      if (loaded && loaded.length > 0) {
-        setProjects(prev => (prev.length === 0 ? loaded : prev));
+      if (!isCancelled && projectsOwnerRef.current === (currentUserId || null)) {
+        if (loaded && loaded.length > 0) {
+          setProjects(prev => (prev.length === 0 ? loaded : prev));
+        }
       }
     });
+    return () => {
+      isCancelled = true;
+    };
   }, [currentUserId]);
 
   const [welcomeConversation] = useState<Conversation>(() => ({
@@ -318,12 +324,9 @@ useEffect(() => {
         setConversations(cached);
 
         // Immediately load cached projects belonging to this verified user
+        const userProjects = loadProjects(user.id);
         projectsOwnerRef.current = user.id;
-        loadProjects(user.id).then(userProjects => {
-          if (authEpochRef.current !== epoch) return;
-          projectsOwnerRef.current = user.id;
-          setProjects(userProjects);
-        });
+        setProjects(userProjects);
 
         // Hydrate persistent conversations from PostgreSQL server
         try {
@@ -361,11 +364,9 @@ useEffect(() => {
         } catch {
           // ignore storage errors
         }
-        loadProjects().then(guestProjects => {
-          if (authEpochRef.current !== epoch) return;
-          projectsOwnerRef.current = null;
-          setProjects(guestProjects);
-        });
+        const guestProjects = loadProjects();
+        projectsOwnerRef.current = null;
+        setProjects(guestProjects);
       }
     });
   }, [currentUserId]);

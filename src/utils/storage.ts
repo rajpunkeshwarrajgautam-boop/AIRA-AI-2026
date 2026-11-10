@@ -393,14 +393,12 @@ export function setSessionActiveChatId(id: string | null): void {
   }
 }
 
-export function loadProjects(userId?: string): Project[] & PromiseLike<Project[]> {
+export function loadProjects(userId?: string): Project[] {
   const key = getProjectsStorageKey(userId);
 
   const cached = inMemoryProjects.get(key);
   if (cached) {
-    const p = Promise.resolve(cached);
-    (cached as any).then = p.then.bind(p);
-    return cached as Project[] & PromiseLike<Project[]>;
+    return cached;
   }
 
   let projectsList: Project[] = [];
@@ -419,9 +417,7 @@ export function loadProjects(userId?: string): Project[] & PromiseLike<Project[]
   }
 
   inMemoryProjects.set(key, projectsList);
-  const p = Promise.resolve(projectsList);
-  (projectsList as any).then = p.then.bind(p);
-  return projectsList as Project[] & PromiseLike<Project[]>;
+  return projectsList;
 }
 
 export function saveProjects(projects: Project[], userId?: string): void {
