@@ -271,13 +271,16 @@ function App() {
     }
   }, [userTier, currentUserId, settings.announcementsEnabled]);
 
-  // Check onboarding on initial mount and auth changes
+  // Check first-login onboarding on initial mount and auth changes
   useEffect(() => {
+    // Only automatically pop up for authenticated accounts upon first login
+    // Guests or unauthenticated sessions can launch or restart the tutorial manually via help menu
+    if (!currentUserId || currentUserId.startsWith('guest_') || userTier === 'guest') return;
     const obState = getOnboardingState(currentUserId);
     if (!obState.completed && !obState.skipped) {
       setIsOnboardingOpen(true);
     }
-  }, [currentUserId]);
+  }, [currentUserId, userTier]);
 
   // Track tier upgrades to display feature discovery card
   useEffect(() => {
