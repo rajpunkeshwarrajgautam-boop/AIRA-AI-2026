@@ -264,6 +264,13 @@ function App() {
     if (lastCheckedUserIdRef.current === currentUserId) return;
     lastCheckedUserIdRef.current = currentUserId;
 
+    // Feature announcements only automatically pop up for users who have completed or skipped onboarding
+    // (A brand-new user or uninitialized session is in onboarding / exploration flow, not changelog popups)
+    const obState = getOnboardingState(currentUserId);
+    if (!obState.completed && !obState.skipped) {
+      return;
+    }
+
     const popup = shouldShowFirstViewPopup(userTier, currentUserId, settings.announcementsEnabled !== false);
     if (popup) {
       setFocusedAnnouncement(popup);
