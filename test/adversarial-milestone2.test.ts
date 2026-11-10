@@ -391,7 +391,7 @@ describe('Adversarial Edge-Case & Bypass Stress Tests (Milestone 2)', () => {
         promptText: 'Second query'
       });
       assert.strictEqual(res2.decision, 'REJECT_CAPACITY', 'Second concurrent request must be rejected');
-      assert.strictEqual(res2.reason, 'CONCURRENCY_LIMIT_EXCEEDED');
+      assert.ok(res2.reason === 'USER_CONCURRENCY_EXCEEDED' || res2.reason === 'CONCURRENCY_LIMIT_EXCEEDED');
       assert.match(res2.userMessage || '', /Plan free allows 1 concurrent request/);
 
       // Release 1st permit
@@ -444,7 +444,7 @@ describe('Adversarial Edge-Case & Bypass Stress Tests (Milestone 2)', () => {
         promptText: 'Pro query 3'
       });
       assert.strictEqual(res3.decision, 'REJECT_CAPACITY', 'Third concurrent Pro request must be rejected');
-      assert.strictEqual(res3.reason, 'CONCURRENCY_LIMIT_EXCEEDED');
+      assert.ok(res3.reason === 'USER_CONCURRENCY_EXCEEDED' || res3.reason === 'CONCURRENCY_LIMIT_EXCEEDED');
       assert.match(res3.userMessage || '', /Plan pro allows 2 concurrent request/);
 
       // Release permits

@@ -273,9 +273,9 @@ export class PrivateBetaCapacityGuard {
         return {
           decision: 'REJECT_CAPACITY',
           rejectionCode: 'AIRA_PRIVATE_BETA_CAPACITY',
-          reason: 'CONCURRENCY_LIMIT_EXCEEDED',
+          reason: 'USER_CONCURRENCY_EXCEEDED',
           retryAfterSeconds: retryAfter,
-          userMessage: `Plan ${userPlanTier} allows ${userMaxConcurrent} concurrent request(s).`,
+          userMessage: `You have an active request in progress. Plan ${userPlanTier} allows ${userMaxConcurrent} concurrent request(s). Please wait for it to complete.`,
           telemetry: atomicRes.telemetry
         };
       }
@@ -327,9 +327,9 @@ export class PrivateBetaCapacityGuard {
         return {
           decision: 'REJECT_CAPACITY',
           rejectionCode: 'AIRA_PRIVATE_BETA_CAPACITY',
-          reason: 'CONCURRENCY_LIMIT_EXCEEDED',
+          reason: 'USER_CONCURRENCY_EXCEEDED',
           retryAfterSeconds: retryAfter,
-          userMessage: `Plan ${userPlanTier} allows ${userMaxConcurrent} concurrent request(s).`
+          userMessage: `You have an active request in progress. Plan ${userPlanTier} allows ${userMaxConcurrent} concurrent request(s). Please wait for it to complete.`
         };
       }
       const userPermitId = userPermitAcquisition.permitId;

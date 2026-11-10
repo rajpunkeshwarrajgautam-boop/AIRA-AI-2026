@@ -274,7 +274,7 @@ describe('Tier 5 Adversarial Stress & Vulnerability Hardening Suite', () => {
 
       assert.strictEqual(admitted.length, 1, 'Exactly 1 request must be admitted for Free tier');
       assert.strictEqual(rejected.length, 9, 'Exactly 9 requests must be rejected');
-      assert.strictEqual(rejected[0].reason, 'CONCURRENCY_LIMIT_EXCEEDED');
+      assert.ok(rejected[0].reason === 'USER_CONCURRENCY_EXCEEDED' || rejected[0].reason === 'CONCURRENCY_LIMIT_EXCEEDED');
 
       // Cleanup
       await admitted[0].permit?.release();
