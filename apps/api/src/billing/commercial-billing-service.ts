@@ -139,7 +139,7 @@ export class CommercialBillingService {
     currentPeriodEnd: number;
     cancelAtPeriodEnd: boolean;
   }> {
-    const customer = await db('billing_customers').where({ id: customerId }).first().catch(() => null);
+    const customer = await db('billing_customers').where({ id: customerId }).first().catch((): null => null);
     if (customer && customer.principal_id && customer.principal_id.startsWith('guest_')) {
       return {
         planId: 'guest',
@@ -199,7 +199,7 @@ export class CommercialBillingService {
     const monthlyRemaining = Math.max(0, plan.monthlyStandardChatUnits - monthlyUsed);
     const reasoningRemaining = Math.max(0, plan.complimentaryReasoningBoosts - reasoningBoostsUsed);
 
-    const savedAgentsCountRow = await db('agents').where({ principal_id: principalId }).count('id as count').first().catch(() => ({ count: 0 }));
+    const savedAgentsCountRow = await db('agents').where({ principal_id: principalId }).count('id as count').first().catch((): { count: number | string } => ({ count: 0 }));
     const savedAgentsCount = Number(savedAgentsCountRow?.count || 0);
 
     return {
