@@ -341,7 +341,8 @@ export class ToolGateway extends EventEmitter {
     }
 
     // STEP 5.5: Verify Plan Tier Entitlements for Restricted Tools
-    const callerTier: PlanTier = (principal as any).tier || (principal.userId?.startsWith('guest_') ? 'guest' : 'free');
+    const isPrivilegedRole = principal.roles?.some((r: string) => r === 'developer' || r === 'admin' || r === 'dev_user');
+    const callerTier: PlanTier = (principal as any).tier || (isPrivilegedRole ? 'pro' : (principal.userId?.startsWith('guest_') ? 'guest' : 'free'));
     if (def.name.startsWith('browser_') || toolName.startsWith('browser_')) {
         if (!isFeatureAllowedForTier('browsertools', callerTier)) {
           const errorMsg = 'PLAN_TOOL_RESTRICTED: Browser execution tools require AIRA Pro plan.';
