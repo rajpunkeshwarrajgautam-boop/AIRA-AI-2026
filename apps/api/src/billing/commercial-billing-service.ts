@@ -220,6 +220,7 @@ export class CommercialBillingService {
     const subRow = await client('subscriptions')
       .where({ customer_id: customerId })
       .whereIn('status', ['active', 'authenticated'])
+      .where('current_period_end', '>', Date.now())
       .orderBy('current_period_end', 'desc')
       .first();
 
@@ -247,6 +248,17 @@ export class CommercialBillingService {
     return Number(sumRow?.total || 0);
   }
 
+  private async getMonthlyReasoningBoostUsage(customerId: string, today: string, client: any = db): Promise<number> {
+    const periodStartDate = await this.getBillingPeriodStartDate(customerId, client);
+    const sumRow = await client('entitlement_snapshots')
+      .where({ customer_id: customerId })
+      .where('period_date', '>=', periodStartDate)
+      .where('period_date', '<=', today)
+      .sum('monthly_reasoning_boost_count as total')
+      .first();
+    return Number(sumRow?.total || 0);
+  }
+
   /**
    * Fetch complete authoritative EntitlementState for a principal.
    */
@@ -268,7 +280,7 @@ export class CommercialBillingService {
 
     const dailyUsed = snapshot ? Number(snapshot.daily_standard_chat_count) : 0;
     const monthlyUsed = await this.getMonthlyUsageAcrossPeriod(customer.id, today, db);
-    const reasoningBoostsUsed = snapshot ? Number(snapshot.monthly_reasoning_boost_count) : 0;
+    const reasoningBoostsUsed = await this.getMonthlyReasoningBoostUsage(customer.id, today, db);
 
     const dailyRemaining = Math.max(0, plan.dailyStandardChatLimit - dailyUsed);
     const monthlyRemaining = Math.max(0, plan.monthlyStandardChatUnits - monthlyUsed);
@@ -616,12 +628,24 @@ export class CommercialBillingService {
    */
   async tryConsumeReasoningBoost(principalId: string): Promise<boolean> {
     const customer = await this.getOrCreateCustomer(principalId);
-    const sub = await this.getActiveSubscription(customer.id);
-    const plan = COMMERCIAL_PLANS[sub.planId] || COMMERCIAL_PLANS.free;
-    const today = new Date().toISOString().slice(0, 10);
-    const now = Date.now();
-
     return await db.transaction(async (trx) => {
+      // Serialize across dates and API workers; today's snapshot alone does not
+      // enforce a monthly cap and missing snapshots cannot be row-locked.
+      const lockedCustomer = await trx('billing_customers').where({ id: customer.id }).forUpdate().first();
+      if (!lockedCustomer) throw new Error('Billing customer disappeared during reasoning quota consumption.');
+      const now = Date.now();
+      const today = new Date(now).toISOString().slice(0, 10);
+      const liveSub = await trx('subscriptions')
+        .where({ customer_id: customer.id })
+        .whereIn('status', ['active', 'authenticated'])
+        .where('current_period_end', '>', now)
+        .orderBy('current_period_end', 'desc').first();
+      const paidTier: PlanTier = liveSub && (liveSub.plan_id === 'plus' || liveSub.plan_id === 'pro')
+        ? liveSub.plan_id as PlanTier : 'free';
+      const tier = principalId.startsWith('guest_') ? 'guest' : paidTier;
+      const plan = COMMERCIAL_PLANS[tier];
+      const monthlyUsed = await this.getMonthlyReasoningBoostUsage(customer.id, today, trx);
+
       let snapshot = await trx('entitlement_snapshots')
         .where({ customer_id: customer.id, period_date: today })
         .forUpdate()
@@ -642,12 +666,12 @@ export class CommercialBillingService {
         snapshot = { monthly_reasoning_boost_count: 0 };
       }
 
-      const boostsUsed = Number(snapshot.monthly_reasoning_boost_count);
-      if (boostsUsed < plan.complimentaryReasoningBoosts) {
+      const boostsUsedToday = Number(snapshot.monthly_reasoning_boost_count);
+      if (monthlyUsed < plan.complimentaryReasoningBoosts) {
         await trx('entitlement_snapshots')
           .where({ customer_id: customer.id, period_date: today })
           .update({
-            monthly_reasoning_boost_count: boostsUsed + 1,
+            monthly_reasoning_boost_count: boostsUsedToday + 1,
             updated_at: now
           });
         return true;

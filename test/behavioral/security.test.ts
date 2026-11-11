@@ -221,7 +221,11 @@ describe('AIRA Behavioral Intelligence — Adversarial Security Acceptance Suite
     const testApprovalRepo = new TestApprovalRepo();
     const testGrantRepo = new TestGrantRepo();
     const kernel = new ApprovalKernel(testApprovalRepo as any, testGrantRepo as any, { autoApproveRead: true });
-    const gateway = new ToolGateway(testToolRepo as any, kernel);
+    // In production, commercial access is resolved from the server's verified
+    // subscription state, not from the serialized principal's `tier` field.
+    // This approval-kernel fixture explicitly represents a verified Pro account.
+    const gateway = new ToolGateway(testToolRepo as any, kernel, process.cwd(), undefined, undefined,
+      async principalId => principalId === 'usr_dev_100' ? 'pro' : 'free');
     let protectedAdapterCalls = 0;
     const browserClickTool = gateway.getTool('browser_click');
     assert.ok(browserClickTool, 'Browser click tool must be registered');

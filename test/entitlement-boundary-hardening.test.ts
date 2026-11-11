@@ -86,6 +86,10 @@ test('sandbox checkout cannot fabricate a payment order, even with live-looking 
   }
 });
 
+test('sandbox billing does not fabricate paid invoice numbers from subscription rows', async () => {
+  assert.deepEqual(await paymentGatewayService.getInvoices('usr_preview'), []);
+});
+
 test('signed-webhook fulfillment cannot elevate a tier from unverified merchant notes', async () => {
   await assert.rejects(() => (paymentGatewayService as any).handleGatewayEvent('razorpay', 'subscription.activated', {
     payload: { subscription: { entity: { notes: { principal_id: 'usr', plan_tier: 'pro' } } } }

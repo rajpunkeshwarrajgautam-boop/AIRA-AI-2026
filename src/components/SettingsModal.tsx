@@ -200,44 +200,52 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   }
 
   const [usageData, setUsageData] = useState<UsageData | null>(null);
-  const [, setIsUsageLoading] = useState(false);
+  const [isUsageLoading, setIsUsageLoading] = useState(false);
+  const [usageError, setUsageError] = useState(false);
 
   const fetchUsage = useCallback(async () => {
     setIsUsageLoading(true);
+    setUsageError(false);
+    setUsageData(null);
     try {
-      const res = await fetch('/api/user/usage', { credentials: 'include' });
-      if (res.ok) {
-        const data = await res.json();
-        setUsageData(data);
-        setIsUsageLoading(false);
-        return;
+      const res = await fetch('/api/billing/entitlements', { credentials: 'include' });
+      if (!res.ok) throw new Error('Unable to verify current entitlements.');
+      const entitlements = await res.json();
+      const planId = entitlements.plan as PlanTier;
+      if (!Object.prototype.hasOwnProperty.call(COMMERCIAL_PLANS, planId) ||
+          !Number.isFinite(entitlements.dailyStandardChatRemaining) ||
+          !Number.isFinite(entitlements.dailyStandardChatLimit) ||
+          !Number.isFinite(entitlements.availableCredits) ||
+          !Number.isFinite(entitlements.reasoningBoostsRemaining)) {
+        throw new Error('Invalid entitlement response.');
       }
+      const now = new Date();
+      const tomorrowUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+      setUsageData({
+        planId,
+        planName: COMMERCIAL_PLANS[planId].name,
+        dailyChatsUsed: Math.max(0, entitlements.dailyStandardChatLimit - entitlements.dailyStandardChatRemaining),
+        dailyChatsLimit: entitlements.dailyStandardChatLimit,
+        remainingDailyChats: entitlements.dailyStandardChatRemaining,
+        monthlyCreditsRemaining: entitlements.availableCredits,
+        reasoningBoostsRemaining: entitlements.reasoningBoostsRemaining,
+        resetAt: tomorrowUtc.toISOString(),
+        paymentCollectionDisabled: true,
+        billingStatus: 'Sandbox billing — checkout is unavailable'
+      });
     } catch {
-      // fallback below
+      // Never fabricate an active plan or quota figures when the API is offline.
+      setUsageError(true);
+    } finally {
+      setIsUsageLoading(false);
     }
-    const quota = COMMERCIAL_PLANS[userTier] || COMMERCIAL_PLANS.free;
-    const now = new Date();
-    const tomorrowUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0));
-    setUsageData({
-      planId: userTier,
-      planName: userTier === 'guest' ? 'AIRA Guest' : userTier === 'free' ? 'AIRA Free' : userTier === 'plus' ? 'AIRA Plus' : 'AIRA Pro',
-      dailyChatsUsed: 0,
-      dailyChatsLimit: quota.dailyStandardChatLimit,
-      remainingDailyChats: quota.dailyStandardChatLimit,
-      monthlyCreditsRemaining: quota.monthlyPremiumCredits,
-      reasoningBoostsRemaining: quota.complimentaryReasoningBoosts,
-      resetAt: tomorrowUtc.toISOString(),
-      paymentCollectionDisabled: true,
-      billingStatus: 'No active charges — billing integration strictly isolated'
-    });
-    setIsUsageLoading(false);
-  }, [userTier]);
+  }, []);
 
   useEffect(() => {
     if (isOpen) {
       void fetchUsage();
     }
-  }, [isOpen, fetchUsage]);
+  }, [isOpen, userTier, fetchUsage]);
 
   const activePlanId: PlanTier = usageData?.planId || userTier || 'free';
   const activePlanDef = COMMERCIAL_PLANS[activePlanId] || COMMERCIAL_PLANS.free;
@@ -635,6 +643,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               {/* TAB: MY PLAN & USAGE */}
               {activeTab === 'plan' && (
                 <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+                  {!usageData && (
+                    <div role="status" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-claude-text-light dark:text-white">
+                      {isUsageLoading ? 'Verifying your plan and usage…' : usageError ? 'Plan and usage are unavailable. No subscription or quota has been verified.' : 'Loading plan information…'}
+                      {!isUsageLoading && usageError && (
+                        <button type="button" className="ml-3 font-semibold underline" onClick={() => void fetchUsage()}>Retry</button>
+                      )}
+                    </div>
+                  )}
+                  {usageData && (<>
                   {/* Active Plan Overview Card */}
                   <div className="p-4 sm:p-5 rounded-2xl border border-claude-border-light dark:border-claude-border-dark bg-gradient-to-br from-claude-terracotta/10 via-claude-surface2-light/50 dark:via-white/[0.03] to-transparent space-y-4">
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -756,7 +773,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       {/* Monthly Credits Meter */}
                       <div className="p-4 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/40 dark:bg-claude-surface2-dark/40 space-y-2">
                         <div className="flex items-center justify-between text-xs">
-                          <span className="font-bold text-claude-text-light dark:text-white">Monthly Premium Credits</span>
+                          <span className="font-bold text-claude-text-light dark:text-white">Available Premium Credits</span>
                           <span className="font-mono font-bold text-claude-accentInk">
                             {creditsRemaining.toLocaleString()}
                           </span>
@@ -933,6 +950,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       })}
                     </div>
                   </div>
+                  </>)}
                 </motion.div>
               )}
 

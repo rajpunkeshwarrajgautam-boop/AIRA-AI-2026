@@ -73,6 +73,32 @@ describe('Commercial Credit Ledger & Entitlements Engine', () => {
     assert.equal(extraBoost, false);
   });
 
+  it('3a. Prevents a second monthly reasoning allowance after a UTC day boundary', async (t) => {
+    const today = new Date().toISOString().slice(0, 10);
+    if (Number(today.slice(8)) === 1) {
+      t.skip('Previous UTC day is in a different free-tier calendar month');
+      return;
+    }
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const customer = await service.getOrCreateCustomer(testPrincipalId);
+    await db('entitlement_snapshots')
+      .where({ customer_id: customer.id, period_date: today })
+      .update({ monthly_reasoning_boost_count: 0 });
+    await db('entitlement_snapshots').insert({
+      id: `snap_prev_${Date.now()}`,
+      customer_id: customer.id,
+      period_date: yesterday,
+      daily_standard_chat_count: 0,
+      monthly_standard_chat_count: 0,
+      monthly_reasoning_boost_count: 5,
+      last_reset_at: Date.now() - 24 * 60 * 60 * 1000,
+      updated_at: Date.now()
+    });
+    const state = await service.getEntitlements(testPrincipalId);
+    assert.equal(state.reasoningBoostsRemaining, 0, 'Boost usage must aggregate across the active month');
+    assert.equal(await service.tryConsumeReasoningBoost(testPrincipalId), false, 'Daily rollover must not refresh the monthly cap');
+  });
+
   it('4. Two-phase commit reservation hold and full settlement', async () => {
     // Current available credits: 100
     const hold = await service.reserveCredits(testPrincipalId, 40, 'vision_generate', 'ref_test_1');

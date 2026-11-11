@@ -161,7 +161,9 @@ async function createBrowserSession(
     }
   });
 
-  await page.route('**/api/user/usage', async (route) => {
+  // The Settings pane consumes the authoritative /api/billing/entitlements
+  // contract, not the obsolete /api/user/usage mock endpoint.
+  await page.route('**/api/billing/entitlements', async (route) => {
     const limits = {
       guest: { chats: 5, credits: 0, boosts: 0 },
       free: { chats: 15, credits: 100, boosts: 5 },
@@ -173,16 +175,13 @@ async function createBrowserSession(
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
-        planId: userTier,
-        planName: `AIRA ${userTier.toUpperCase()}`,
-        dailyChatsUsed: 1,
-        dailyChatsLimit: limits.chats,
-        remainingDailyChats: limits.chats - 1,
-        monthlyCreditsRemaining: limits.credits,
+        plan: userTier,
+        subscriptionStatus: 'active',
+        dailyStandardChatLimit: limits.chats,
+        dailyStandardChatRemaining: limits.chats - 1,
+        availableCredits: limits.credits,
         reasoningBoostsRemaining: limits.boosts,
-        resetAt: '2026-11-11T00:00:00.000Z',
-        paymentCollectionDisabled: true,
-        billingStatus: 'No active charges — billing integration strictly isolated'
+        reasoningBoostsLimit: limits.boosts
       })
     });
   });
@@ -774,7 +773,7 @@ async function runTestSuite() {
         const dailyChatsMeter = dialog.getByText('Daily Standard Chats', { exact: true });
         await dailyChatsMeter.waitFor({ state: 'visible', timeout: 5000 });
 
-        const monthlyCreditsMeter = dialog.getByText('Monthly Premium Credits', { exact: true });
+        const monthlyCreditsMeter = dialog.getByText('Available Premium Credits', { exact: true });
         await monthlyCreditsMeter.waitFor({ state: 'visible', timeout: 5000 });
 
         const reasoningBoostsMeter = dialog.getByText('Reasoning Boosts', { exact: true });

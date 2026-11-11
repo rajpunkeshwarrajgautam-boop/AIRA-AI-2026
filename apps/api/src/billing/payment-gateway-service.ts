@@ -429,32 +429,11 @@ export class PaymentGatewayService {
   }
 
   /**
-   * Fetch invoice history for customer with GST calculation.
+   * Invoice history is unavailable until real, reconciled gateway invoice
+   * records exist. Subscription rows alone are not proof of a paid invoice.
    */
-  async getInvoices(principalId: string): Promise<InvoiceRecord[]> {
-    const customer = await commercialBillingService.getOrCreateCustomer(principalId);
-    const subs = await this.getDb()('subscriptions').where({ customer_id: customer.id }).orderBy!('created_at', 'desc') as SubscriptionRow[];
-
-    return subs.map((sub: SubscriptionRow, idx: number): InvoiceRecord => {
-      const amountPaise = Number(sub.amount_minor_units);
-      const isTaxInclusive = true;
-      const rateFactor = 1.18;
-      const taxableBasePaise = Math.round(amountPaise / rateFactor);
-      const gstPaise = amountPaise - taxableBasePaise;
-
-      return {
-        invoiceNumber: `INV-2026-${String(idx + 1).padStart(4, '0')}`,
-        date: new Date(Number(sub.current_period_start)).toISOString().slice(0, 10),
-        plan: sub.plan_id,
-        currency: sub.currency,
-        totalAmount: Number((amountPaise / 100).toFixed(2)),
-        taxableBase: Number((taxableBasePaise / 100).toFixed(2)),
-        gstAmount: Number((gstPaise / 100).toFixed(2)),
-        sacCode: '998431',
-        supplierName: 'Virexa AI Ventures Private Limited',
-        status: 'PAID'
-      };
-    });
+  async getInvoices(_principalId: string): Promise<InvoiceRecord[]> {
+    return [];
   }
 }
 
