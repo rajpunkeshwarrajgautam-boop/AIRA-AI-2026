@@ -74,9 +74,9 @@ export function getUpgradeModalConfig(trigger: UpgradeTrigger | null | undefined
 
   if (norm === 'flagship_model' || norm === 'free_to_plus_model') {
     return {
-      title: 'Unlock Claude 3.5 Sonnet & High-Fidelity Models',
-      subtitle: 'Flagship reasoning and quality models require AIRA Plus or Pro.',
-      description: 'Upgrade to AIRA Plus to run high-fidelity models, deep architectural reasoning, and vision capabilities with 50 chats per day.',
+      title: 'Unlock NVIDIA Nemotron 70B & Advanced Models',
+      subtitle: 'Flagship reasoning and instruction-following models require AIRA Plus or Pro.',
+      description: 'Upgrade to AIRA Plus to run high-fidelity models like NVIDIA Nemotron 70B, deep architectural reasoning, and extended context with 50 chats per day.',
       recommendedTier: 'plus',
       ctaText: 'Upgrade to Plus',
       features: [

@@ -29,7 +29,6 @@ const getRequiredTierForModel = (modelId: string): 'free' | 'plus' | 'pro' => {
 const modelGlyph = (name: string) => {
   if (name.includes('Fast')) return Zap;
   if (name.includes('Deep') || name.includes('Nemotron')) return Brain;
-  if (name.includes('Auto')) return Sparkles;
   return Gauge;
 };
 
@@ -181,7 +180,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                 <div className="mt-0.5 text-[12px] font-medium text-claude-text-light dark:text-white">Choose the engine for this task</div>
               </div>
               <span className="rounded-lg bg-claude-terracotta/10 p-1.5 text-claude-accentInk">
-                <Sparkles className="h-4 w-4" />
+                <Gauge className="h-4 w-4" />
               </span>
             </div>
 

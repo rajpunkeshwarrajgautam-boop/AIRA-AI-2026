@@ -1796,7 +1796,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
   let quotaSettlementPromise: Promise<void> | null = null;
   let releaseQuotaIfUnused: () => Promise<void> = async () => {};
   try {
-    const { messages, history, prompt, model: rawModel, extendedThinking, systemPrompt, contextSubgraph, attachments, conversationId, intent } = req.body || {};
+    const { messages, history, prompt, model: rawModel, extendedThinking, thinkingBudget, reasoningBudget, systemPrompt, contextSubgraph, attachments, conversationId, intent } = req.body || {};
     if (!rawModel || typeof rawModel !== 'string' || !rawModel.trim()) {
       return res.status(400).json({ error: 'MODEL_REQUIRED', message: 'Missing model parameter' });
     }
@@ -2021,6 +2021,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       modelPolicy: {
         model: model || 'aira-auto',
         extendedThinking: Boolean(extendedThinking),
+        reasoningBudget: typeof thinkingBudget === 'number' ? Math.min(Math.max(thinkingBudget, 1024), 8192) : (typeof reasoningBudget === 'number' ? reasoningBudget : undefined),
       }
     }, req.principal!), clientAbort.signal);
     if (clientAbort.signal.aborted) {

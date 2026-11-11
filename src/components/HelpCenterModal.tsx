@@ -90,20 +90,20 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
       title: 'Extended Thinking & Reasoning Budgets',
       summary: 'Configure deep thinking budgets for complex coding, architectural synthesis, and mathematical proofs.',
       content: [
-        'When using reasoning-capable models (e.g. Claude 3.7 Sonnet Thinking, DeepSeek R1), toggle Extended Thinking in the model selector.',
-        'You can calibrate the thinking budget from 1,024 up to 64,000 tokens inside Settings > General.',
+        'When using reasoning-capable modes (e.g. AIRA Deep or NVIDIA Nemotron 70B), toggle Extended Thinking in the model selector.',
+        'You can calibrate the reasoning budget from 1,024 up to 8,192 tokens inside Settings > Model & Reasoning.',
         'Reasoning blocks display real-time elapsed duration and expandable step traces.'
       ]
     },
     {
       id: 'models-provider-switching',
       category: 'models',
-      title: 'Model Providers & API Routing',
-      summary: 'Connect direct Anthropic, OpenRouter, or simulated enterprise backend endpoints.',
+      title: 'Model Providers & Operational Routing',
+      summary: 'High-speed multi-provider routing across Groq LPU, Google Gemini, and NVIDIA NIM.',
       content: [
-        'AIRA connects via secure serverless proxy endpoints or client-side BYOK (Bring Your Own Key) architecture.',
-        'Keys are stored locally in encrypted browser storage and never broadcast to third parties.',
-        'Switch models dynamically per conversation without losing context or memory.'
+        'AIRA connects via high-speed server-side inference gateways (Groq LPU, Google Gemini, and NVIDIA NIM).',
+        'AIRA Auto dynamically selects the fastest engine for low-latency queries and deep reasoning for complex analysis.',
+        'Credentials and upstream access are secured behind authenticated server-side boundaries.'
       ]
     },
     {

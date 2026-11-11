@@ -46,6 +46,48 @@ async function postChatStream(body: unknown, signal?: AbortSignal): Promise<Resp
 import { createStreamingArtifactDetector } from './artifactParser';
 import { createStreamingArtifactReconciler, createStreamingFenceArtifactDetector } from './streamingArtifactParser';
 
+export function composeSystemPrompt(settings: AppSettings, customPrompt?: string): string {
+  const parts: string[] = [];
+
+  // 1. Response Style Directive
+  const style = settings.responseStyle || 'normal';
+  switch (style) {
+    case 'concise':
+      parts.push('Response Style Directive: Provide concise, direct answers without unnecessary preamble or filler.');
+      break;
+    case 'explanatory':
+      parts.push('Response Style Directive: Provide detailed, pedagogical explanations breaking down concepts step-by-step.');
+      break;
+    case 'academic':
+      parts.push('Response Style Directive: Provide rigorous, academically grounded analysis with analytical depth and formal phrasing.');
+      break;
+    case 'code-first':
+      parts.push('Response Style Directive: Provide dense, production-grade code-first implementations with minimal conversational overhead.');
+      break;
+    case 'normal':
+    default:
+      parts.push('Response Style Directive: Adopt a balanced, clear, and adaptive tone tailored to the question.');
+      break;
+  }
+
+  // 2. User Bio / Background (if provided)
+  if (settings.userBio && settings.userBio.trim()) {
+    parts.push(`User Profile Context: ${settings.userBio.trim()}`);
+  }
+
+  // 3. User Custom Instructions (if provided)
+  if (settings.customInstructions && settings.customInstructions.trim()) {
+    parts.push(`User Custom Instructions: ${settings.customInstructions.trim()}`);
+  }
+
+  // 4. Caller-provided custom prompt (e.g. project instructions)
+  if (customPrompt && customPrompt.trim()) {
+    parts.push(customPrompt.trim());
+  }
+
+  return parts.join('\n\n');
+}
+
 export async function streamAIResponse(
   prompt: string,
   history: Array<{ role: 'user' | 'assistant'; content: string }>,
@@ -59,7 +101,15 @@ export async function streamAIResponse(
   signal?: AbortSignal,
   reconcileArtifacts = false,
 ): Promise<void> {
-  const isThinking = (model === 'claude-3-7-sonnet' && settings.extendedThinking);
+  const isThinking = Boolean(
+    settings.extendedThinking && (
+      model === 'aira-auto' ||
+      model === 'aira-deep' ||
+      model === 'claude-3-7-sonnet' ||
+      model === 'claude-3-opus' ||
+      model.includes('nemotron')
+    )
+  );
   const initiatingMemoryOwner = neonAuth.getCurrentUser()?.id || 'guest';
   const initiatingAuthEpoch = neonAuth.getAuthEpoch();
   const isInitiatingIdentityValid = () => (
@@ -172,13 +222,15 @@ export async function streamAIResponse(
 
   // 1. Try Backend SSE Streaming Server (/api/chat/stream)
   try {
+    const assembledSystemPrompt = composeSystemPrompt(settings);
     const backendRes = await postChatStream({
       prompt,
       history,
       model,
       extendedThinking: isThinking,
+      thinkingBudget: isThinking ? Math.min(Math.max(settings.thinkingBudget || 2048, 1024), 8192) : undefined,
       apiKey: settings.provider === 'anthropic' ? settings.anthropicApiKey : undefined,
-      systemPrompt: settings.customInstructions || undefined,
+      systemPrompt: assembledSystemPrompt || undefined,
       attachments: attachments?.map(a => ({
         name: a.name,
         type: a.type,

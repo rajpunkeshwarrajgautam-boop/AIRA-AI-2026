@@ -54,8 +54,8 @@ export const ReleaseNotesModal: React.FC<ReleaseNotesModalProps> = ({
       summary: 'Major platform upgrade introducing dual-mode Adaptive Workspaces (Chat vs. Agent) and deep reasoning budget controls.',
       highlights: [
         'Adaptive Workspace switcher: conversational reasoning vs. autonomous agent execution pipelines.',
-        'Extended Thinking budget sliders calibrated from 1,024 up to 64,000 reasoning tokens.',
-        'Multi-provider failover routing connecting Anthropic Claude 3.7, DeepSeek R1, and NVIDIA Nemotron.'
+        'Extended Thinking budget sliders calibrated from 1,024 up to 8,192 reasoning tokens.',
+        'Multi-provider failover routing connecting Groq LPU, Google Gemini, and NVIDIA NIM.'
       ],
       features: [
         { category: 'Inference Engine', description: 'Atomic MVCC capacity admission and sub-second time-to-first-token (TTFT) routing.' },

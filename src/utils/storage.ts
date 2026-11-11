@@ -3,11 +3,24 @@ import { AVAILABLE_MODELS, DEFAULT_SETTINGS } from './constants';
 import { idbGet, idbSet, openAiraDatabase, STORES, isIndexedDbSupported } from './indexedDbStorage';
 
 export function normalizeStoredModelId(model: unknown): AppSettings['activeModel'] {
-  // Existing users can carry the formerly hosted Llama 405B ID in localStorage.
-  // Migrate that explicit selection to the currently supported NVIDIA route.
-  const migrated = (model === 'meta/llama-3.1-405b-instruct' || model === 'nvidia/nemotron-3-super-120b-a12b')
-    ? 'nvidia/llama-3.1-nemotron-70b-instruct'
-    : model;
+  // Existing users can carry formerly hosted models or legacy Claude alias IDs in localStorage.
+  // Migrate explicit selections to the currently supported canonical routes.
+  let migrated = model;
+  if (
+    model === 'meta/llama-3.1-405b-instruct' ||
+    model === 'meta-llama/llama-3.1-405b-instruct' ||
+    model === 'nvidia/nemotron-3-super-120b-a12b'
+  ) {
+    migrated = 'nvidia/llama-3.1-nemotron-70b-instruct';
+  } else if (model === 'claude-3-7-sonnet') {
+    migrated = 'aira-auto';
+  } else if (model === 'claude-3-5-sonnet') {
+    migrated = 'aira-pro';
+  } else if (model === 'claude-3-5-haiku') {
+    migrated = 'aira-fast';
+  } else if (model === 'claude-3-opus') {
+    migrated = 'aira-deep';
+  }
 
   return AVAILABLE_MODELS.some(candidate => candidate.id === migrated)
     ? migrated as AppSettings['activeModel']

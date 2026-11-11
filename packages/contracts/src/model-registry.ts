@@ -22,90 +22,45 @@ export const VERIFIED_MODEL_REGISTRY: Record<string, ModelCapabilityDescriptor> 
   'aira-auto': {
     id: 'aira-auto',
     displayName: 'AIRA Auto',
-    provider: 'anthropic',
-    upstreamModelId: 'claude-3-7-sonnet-20250219',
+    provider: 'groq',
+    upstreamModelId: 'openai/gpt-oss-120b',
     minTier: 'free',
-    contextWindow: '200K tokens',
+    contextWindow: '128K tokens',
     supportsThinking: true,
-    description: 'Balanced default that dynamically scales reasoning depth to task complexity.',
+    description: 'Intelligent router directing tasks to Fast (Groq) or Deep Reasoning (NVIDIA Nemotron) based on intent.',
     badge: 'Router'
   },
   'aira-fast': {
     id: 'aira-fast',
     displayName: 'AIRA Fast',
-    provider: 'anthropic',
-    upstreamModelId: 'claude-3-5-haiku-20241022',
+    provider: 'groq',
+    upstreamModelId: 'openai/gpt-oss-120b',
     minTier: 'guest',
-    contextWindow: '200K tokens',
+    contextWindow: '128K tokens',
     supportsThinking: false,
-    description: 'Ultra-low latency intelligence for rapid edits, queries, and extraction.',
+    description: 'Ultra-low latency intelligence powered by Groq LPU inference with Gemini failover.',
     badge: 'Fast'
   },
   'aira-pro': {
     id: 'aira-pro',
     displayName: 'AIRA Pro',
-    provider: 'anthropic',
-    upstreamModelId: 'claude-3-5-sonnet-20241022',
+    provider: 'nvidia',
+    upstreamModelId: 'nvidia/llama-3.1-nemotron-70b-instruct',
     minTier: 'plus',
-    contextWindow: '200K tokens',
+    contextWindow: '128K tokens',
     supportsThinking: false,
-    description: 'High-fidelity model for software engineering, architecture, and multi-step reasoning.',
+    description: 'High-fidelity engineering and multi-step reasoning powered by NVIDIA Nemotron 70B.',
     badge: 'Quality'
   },
   'aira-deep': {
     id: 'aira-deep',
     displayName: 'AIRA Deep',
-    provider: 'anthropic',
-    upstreamModelId: 'claude-3-opus-20240229',
+    provider: 'nvidia',
+    upstreamModelId: 'nvidia/llama-3.1-nemotron-70b-instruct',
     minTier: 'pro',
-    contextWindow: '200K tokens',
-    supportsThinking: false,
-    description: 'Deliberate deep-research and architectural reasoning mode.',
-    badge: 'Deep'
-  },
-  'claude-3-7-sonnet': {
-    id: 'claude-3-7-sonnet',
-    displayName: 'Aira Auto (Claude 3.7 Sonnet)',
-    provider: 'anthropic',
-    upstreamModelId: 'claude-3-7-sonnet-20250219',
-    minTier: 'free',
-    contextWindow: '200K tokens',
+    contextWindow: '128K tokens',
     supportsThinking: true,
-    description: 'Balanced default that dynamically scales reasoning depth to task complexity.',
-    badge: 'Router'
-  },
-  'claude-3-5-sonnet': {
-    id: 'claude-3-5-sonnet',
-    displayName: 'Aira Pro (Claude 3.5 Sonnet)',
-    provider: 'anthropic',
-    upstreamModelId: 'claude-3-5-sonnet-20241022',
-    // Browser alias normalizes to aira-pro; the tier must match that canonical ID.
-    minTier: 'plus',
-    contextWindow: '200K tokens',
-    supportsThinking: false,
-    description: 'High-fidelity model for software engineering, architecture, and multi-step reasoning.',
-    badge: 'Quality'
-  },
-  'claude-3-5-haiku': {
-    id: 'claude-3-5-haiku',
-    displayName: 'Aira Fast (Claude 3.5 Haiku)',
-    provider: 'anthropic',
-    upstreamModelId: 'claude-3-5-haiku-20241022',
-    minTier: 'guest',
-    contextWindow: '200K tokens',
-    supportsThinking: false,
-    description: 'Ultra-low latency intelligence for rapid edits, queries, and extraction.',
-    badge: 'Fast'
-  },
-  'claude-3-opus': {
-    id: 'claude-3-opus',
-    displayName: 'Aira Deep (Claude 3 Opus)',
-    provider: 'anthropic',
-    upstreamModelId: 'claude-3-opus-20240229',
-    minTier: 'pro',
-    contextWindow: '200K tokens',
-    supportsThinking: false,
-    description: 'Deliberate deep-research and architectural reasoning mode.',
+    description: 'Deliberate deep-research and architectural reasoning mode with extended thinking on NVIDIA NIM.',
     badge: 'Deep'
   },
   'nvidia/llama-3.1-nemotron-70b-instruct': {
@@ -116,8 +71,53 @@ export const VERIFIED_MODEL_REGISTRY: Record<string, ModelCapabilityDescriptor> 
     minTier: 'plus',
     contextWindow: '128K tokens',
     supportsThinking: false,
-    description: 'Fine-tuned by NVIDIA with RLHF alignment for instruction following and coding.',
+    description: 'Fine-tuned by NVIDIA with RLHF alignment for instruction following, coding, and reasoning.',
     badge: 'NVIDIA'
+  },
+  // Backward compatibility migration aliases for historical conversation sessions
+  'claude-3-7-sonnet': {
+    id: 'claude-3-7-sonnet',
+    displayName: 'Aira Auto (Historical Alias)',
+    provider: 'groq',
+    upstreamModelId: 'openai/gpt-oss-120b',
+    minTier: 'free',
+    contextWindow: '128K tokens',
+    supportsThinking: true,
+    description: 'Historical migration alias mapping to AIRA Auto router.',
+    badge: 'Router'
+  },
+  'claude-3-5-sonnet': {
+    id: 'claude-3-5-sonnet',
+    displayName: 'Aira Pro (Historical Alias)',
+    provider: 'nvidia',
+    upstreamModelId: 'nvidia/llama-3.1-nemotron-70b-instruct',
+    minTier: 'plus',
+    contextWindow: '128K tokens',
+    supportsThinking: false,
+    description: 'Historical migration alias mapping to AIRA Pro Nemotron 70B.',
+    badge: 'Quality'
+  },
+  'claude-3-5-haiku': {
+    id: 'claude-3-5-haiku',
+    displayName: 'Aira Fast (Historical Alias)',
+    provider: 'groq',
+    upstreamModelId: 'openai/gpt-oss-120b',
+    minTier: 'guest',
+    contextWindow: '128K tokens',
+    supportsThinking: false,
+    description: 'Historical migration alias mapping to AIRA Fast Groq LPU.',
+    badge: 'Fast'
+  },
+  'claude-3-opus': {
+    id: 'claude-3-opus',
+    displayName: 'Aira Deep (Historical Alias)',
+    provider: 'nvidia',
+    upstreamModelId: 'nvidia/llama-3.1-nemotron-70b-instruct',
+    minTier: 'pro',
+    contextWindow: '128K tokens',
+    supportsThinking: true,
+    description: 'Historical migration alias mapping to AIRA Deep reasoning.',
+    badge: 'Deep'
   }
 };
 

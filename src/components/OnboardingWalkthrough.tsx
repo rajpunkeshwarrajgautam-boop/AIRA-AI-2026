@@ -211,19 +211,19 @@ export const OnboardingWalkthrough: React.FC<OnboardingWalkthroughProps> = ({
                 </p>
               </div>
               <p className="text-sm text-stone-600 dark:text-stone-300 leading-relaxed">
-                Seamlessly toggle between ultra-fast models (like Claude 3.5 Haiku and GPT-4o Mini) for everyday tasks and deep reasoning models (like Claude 3.5 Sonnet and DeepSeek R1) for mathematics, distributed architecture, and debugging.
+                Seamlessly toggle between ultra-fast inference (Groq LPU with Gemini failover) for everyday tasks and deep reasoning models (NVIDIA Nemotron 70B on NVIDIA NIM) for architectural analysis, complex coding, and structured problem-solving.
               </p>
               <ul className="space-y-2.5 pt-2">
                 <li className="flex items-start gap-2.5 text-xs text-stone-700 dark:text-stone-300">
                   <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
                   <span>
-                    <strong>Extended Thinking Budget:</strong> Configure up to 64,000 reasoning tokens in Settings for step-by-step mathematical proofs.
+                    <strong>Extended Thinking Budget:</strong> Configure up to 8,192 reasoning tokens in Settings for step-by-step architectural and coding analysis.
                   </span>
                 </li>
                 <li className="flex items-start gap-2.5 text-xs text-stone-700 dark:text-stone-300">
                   <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
                   <span>
-                    <strong>Multi-Model Routing:</strong> Switch models anytime via the model selector in the chat toolbar.
+                    <strong>Multi-Provider Routing:</strong> Switch models anytime via the model selector in the chat toolbar.
                   </span>
                 </li>
               </ul>
