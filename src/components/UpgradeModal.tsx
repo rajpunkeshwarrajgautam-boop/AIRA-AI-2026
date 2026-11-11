@@ -74,7 +74,7 @@ export function getUpgradeModalConfig(trigger: UpgradeTrigger | null | undefined
 
   if (norm === 'flagship_model' || norm === 'free_to_plus_model') {
     return {
-      title: 'Unlock Claude 3.5 Sonnet & DeepSeek R1',
+      title: 'Unlock Claude 3.5 Sonnet & High-Fidelity Models',
       subtitle: 'Flagship reasoning and quality models require AIRA Plus or Pro.',
       description: 'Upgrade to AIRA Plus to run high-fidelity models, deep architectural reasoning, and vision capabilities with 50 chats per day.',
       recommendedTier: 'plus',
@@ -204,7 +204,7 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
 
     if (onUpgrade) {
       onUpgrade(config.recommendedTier);
-      setNotice(`Sandbox upgrade to ${config.recommendedTier.toUpperCase()} requested.`);
+      setNotice('Paid checkout is in preview. Commercial checkout is isolated.');
       return;
     }
 
@@ -220,7 +220,7 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
       return;
     }
 
-    setNotice('Live payment collection is currently in sandbox/isolated mode. No real charges applied.');
+    setNotice('Paid checkout is in preview. Commercial checkout is isolated.');
   };
 
   const planDef = COMMERCIAL_PLANS[config.recommendedTier] || COMMERCIAL_PLANS.plus;
@@ -320,7 +320,7 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
             {/* Isolated Sandbox Notice */}
             <div className="p-2.5 rounded-xl bg-claude-surface2-light dark:bg-white/5 border border-claude-border-light/60 dark:border-white/5 text-[10px] text-claude-muted-light dark:text-stone-400 flex items-center gap-2">
               <Shield className="w-3.5 h-3.5 text-claude-accentInk shrink-0" />
-              <span>Live payment collection is currently in sandbox/isolated mode.</span>
+              <span>Paid checkout is currently in preview mode. Commercial activation is isolated.</span>
             </div>
           </div>
 

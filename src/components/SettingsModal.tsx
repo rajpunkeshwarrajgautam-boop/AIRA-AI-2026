@@ -881,8 +881,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                 )}
                               </div>
                               <div className="text-base font-bold font-serif text-claude-text-light dark:text-white">
-                                {tierKey === 'guest' || tierKey === 'free' ? '₹0 / $0' : tierKey === 'plus' ? '₹399 / $7.99' : '₹999 / $19.99'}
-                                <span className="text-[10px] font-sans font-normal text-claude-muted-light"> /mo</span>
+                                {tierKey === 'guest' || tierKey === 'free' ? 'Free' : 'Preview'}
+                                <span className="text-[10px] font-sans font-normal text-claude-muted-light">
+                                  {tierKey === 'guest' || tierKey === 'free' ? ' /mo' : ' (In Review)'}
+                                </span>
                               </div>
                               <div className="space-y-1.5 text-[11px] text-claude-muted-light dark:text-claude-muted-dark border-t border-claude-border-light/60 dark:border-white/5 pt-2">
                                 <div className="flex items-center gap-1.5"><Check className="w-3 h-3 text-emerald-500 shrink-0" /><span><strong>{plan.dailyStandardChatLimit}</strong> chats/day</span></div>
@@ -922,7 +924,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   }}
                                   className="w-full py-1.5 rounded-lg bg-claude-terracotta hover:bg-claude-terracotta-hover text-white text-[11px] font-bold transition-all shadow-sm"
                                 >
-                                  {tierKey === 'free' ? 'Get Started' : `Upgrade to ${plan.name.replace('AIRA ', '')}`}
+                                  {tierKey === 'free' ? 'Get Started' : 'View Plan Details (Preview)'}
                                 </button>
                               )}
                             </div>

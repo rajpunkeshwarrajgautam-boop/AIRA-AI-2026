@@ -2,7 +2,7 @@ import { createBuilderRoutes } from './builder-routes.js';
 import { createBillingRoutes } from './billing-routes.js';
 import { createVisionRoutes } from './vision-routes.js';
 import { createAccountRoutes } from './account-routes.js';
-import { commercialBillingService } from './billing/commercial-billing-service.js';
+import { commercialBillingService, StandardQuotaExceededError } from './billing/commercial-billing-service.js';
 import { paymentGatewayService, TOPUP_PACKS } from './billing/payment-gateway-service.js';
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
@@ -1771,6 +1771,9 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
 // -----------------------------------------------------------------------
 app.post('/api/chat/stream', async (req: Request, res: Response) => {
   let admission: any = undefined;
+  let firstTokenEmitted = false;
+  let quotaSettled = false;
+  let releaseQuotaIfUnused: () => Promise<void> = async () => {};
   try {
     const { messages, history, prompt, model: rawModel, extendedThinking, systemPrompt, contextSubgraph, attachments, conversationId, intent } = req.body || {};
     if (!rawModel || typeof rawModel !== 'string' || !rawModel.trim()) {
@@ -1814,47 +1817,62 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     let executedModel = model || 'aira-auto';
     let executedProvider = 'unknown';
 
-    const principalId = req.principal?.userId || (req as any).guestSession?.id || (req as any).user?.id || 'anonymous';
+    let principalId = req.principal?.userId || (req as any).guestSession?.id || (req as any).user?.id;
+    if (!principalId || principalId === 'anonymous') {
+      const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'anon';
+      principalId = `guest_${crypto.createHash('sha256').update(clientIp).digest('hex').slice(0, 16)}`;
+    }
     const capacityConfig = modelRouter.capacityGuard.getConfig();
     const isFastTarget = modelRouter.capacityGuard.isFastTarget(model);
 
-    // Feature 6: Quota gate
-    if (principalId && !principalId.startsWith('test-') && principalId !== 'anonymous') {
-      try {
-        const entitlements = await commercialBillingService.getEntitlements(principalId);
-        if (entitlements.dailyStandardChatRemaining <= 0) {
-          return res.status(429).json({
-            error: 'DAILY_QUOTA_EXHAUSTED',
-            message: `Daily limit of ${quota.dailyStandardChatLimit} chats reached.`,
-            callerTier: tier,
-            upgradeRequired: tier !== 'pro'
-          });
-        }
-      } catch (quotaErr: any) {
-        if (quotaErr.message?.includes('DAILY_STANDARD_LIMIT_EXCEEDED') || quotaErr.message?.includes('MONTHLY_STANDARD_LIMIT_EXCEEDED')) {
-          return res.status(429).json({
-            error: quotaErr.message,
-            code: 'USER_RATE_LIMIT',
-            retryAfterSeconds: 3600
-          });
-        }
+    // Feature 6: Atomic Quota Reservation Gate (pre-stream reservation)
+    let chatReservation: { reservationToken: string; remainingDaily: number; remainingMonthly: number } | null = null;
+    try {
+      chatReservation = await commercialBillingService.reserveStandardChat(principalId, tier, model);
+    } catch (quotaErr: any) {
+      if (quotaErr instanceof StandardQuotaExceededError) {
+        const errorKey = quotaErr.reason === 'daily' ? 'DAILY_QUOTA_EXHAUSTED' : 'MONTHLY_QUOTA_EXHAUSTED';
+        const message = quotaErr.reason === 'daily'
+          ? `Daily limit of ${quota.dailyStandardChatLimit} chats reached.`
+          : `Monthly limit of ${quota.monthlyStandardChatUnits} chats reached.`;
+        return res.status(429).json({
+          error: errorKey,
+          message,
+          callerTier: tier,
+          upgradeRequired: tier !== 'pro'
+        });
       }
+      console.error('[CHAT_STREAM_RESERVATION_FAILURE]', quotaErr);
+      return res.status(503).json({
+        error: 'ENTITLEMENT_SERVICE_UNAVAILABLE',
+        message: 'Unable to verify quota entitlements. Execution denied.'
+      });
     }
 
-    // Feature 10: Deferred quota accounting helper (commit only when first token delta emitted)
-    let chatQuotaCommitted = false;
-    const commitQuotaOnFirstToken = async () => {
-      if (chatQuotaCommitted) return;
-      chatQuotaCommitted = true;
-      try {
-        if (principalId && !principalId.startsWith('test-') && principalId !== 'anonymous') {
-          await commercialBillingService.consumeStandardChat(principalId, 1);
+    quotaSettled = false;
+
+    const settleQuotaOnce = async () => {
+      if (chatReservation && !quotaSettled) {
+        quotaSettled = true;
+        try {
+          await commercialBillingService.settleStandardChat(chatReservation.reservationToken);
           if (extendedThinking || model === 'aira-auto') {
             await commercialBillingService.tryConsumeReasoningBoost(principalId).catch(() => false);
           }
+        } catch (settleErr) {
+          console.warn('[CHAT_STREAM] Settlement error:', settleErr);
         }
-      } catch (err) {
-        console.warn('[CHAT_STREAM] Quota deduction error on first delta:', err);
+      }
+    };
+
+    releaseQuotaIfUnused = async () => {
+      if (chatReservation && !quotaSettled && !firstTokenEmitted) {
+        quotaSettled = true;
+        try {
+          await commercialBillingService.releaseStandardChat(chatReservation.reservationToken, 'Client disconnected pre-token');
+        } catch (releaseErr) {
+          console.warn('[CHAT_STREAM] Quota release error:', releaseErr);
+        }
       }
     };
 
@@ -1865,8 +1883,11 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     }
 
     const clientAbort = new AbortController();
-    res.on('close', () => {
+    res.on('close', async () => {
       if (!res.writableEnded) clientAbort.abort(new Error('CLIENT_CLOSED'));
+      if (!firstTokenEmitted) {
+        await releaseQuotaIfUnused();
+      }
     });
 
     let headersFlushed = false;
@@ -1893,6 +1914,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     tCapacityAdmitted = performance.now();
 
     if (admission.decision === 'REJECT_CAPACITY') {
+      await releaseQuotaIfUnused();
       if (admission.reason === 'CONCURRENCY_LIMIT_EXCEEDED') {
         const userMaxConcurrent = tier === 'pro' ? 2 : 1;
         if (!headersFlushed) {
@@ -1955,6 +1977,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       }
     }, req.principal!), clientAbort.signal);
     if (clientAbort.signal.aborted) {
+      await releaseQuotaIfUnused();
       await admission.permit?.release();
       await agentRuntime.cancelRun(run.id);
       return res.end();
@@ -2034,11 +2057,13 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         res.write(`event: capability_unready\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'content.delta') {
         if (tFirstDelta === null) tFirstDelta = performance.now();
-        await commitQuotaOnFirstToken();
+        firstTokenEmitted = true;
+        await settleQuotaOnce();
         deltaCount++;
         res.write(`event: content_delta\ndata: ${JSON.stringify({ text: evt.data.delta })}\n\n`);
       } else if (evt.type === 'thinking.delta') {
-        await commitQuotaOnFirstToken();
+        firstTokenEmitted = true;
+        await settleQuotaOnce();
         thinkingCount++;
         res.write(`event: thinking_delta\ndata: ${JSON.stringify({ thinking: evt.data.delta })}\n\n`);
       } else if (evt.type === 'workflow.created' || evt.type === 'workflow.started') {
@@ -2052,6 +2077,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       } else if (evt.type === 'workflow.step.failed') {
         res.write(`event: workflow_step_failed\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'workflow.completed') {
+        await settleQuotaOnce();
         await finalizeAndEmitMetrics();
         res.write(`event: workflow_completed\ndata: ${JSON.stringify(evt.data)}\n\n`);
         res.write(`event: done\ndata: [DONE]\n\n`);
@@ -2074,6 +2100,9 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       } else if (evt.type === 'source.added') {
         res.write(`event: source_added\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'run.failed') {
+        if (!firstTokenEmitted) {
+          await releaseQuotaIfUnused();
+        }
         await finalizeAndEmitMetrics();
         const failure = evt.data?.error || 'Aira runtime failed before producing a response';
         console.error(`[CHAT_STREAM_RUN_FAILED] run_id=${run.id} model=${executedModel}:`, failure);
@@ -2086,6 +2115,9 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         stream.off('event', handler);
         res.end();
       } else if (evt.type === 'run.cancelled') {
+        if (!firstTokenEmitted) {
+          await releaseQuotaIfUnused();
+        }
         await finalizeAndEmitMetrics();
         res.write(`event: error\ndata: ${JSON.stringify({
           error: evt.data?.error || 'Aira run was cancelled',
@@ -2093,6 +2125,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         stream.off('event', handler);
         res.end();
       } else if (evt.type === 'run.completed') {
+        await settleQuotaOnce();
         await finalizeAndEmitMetrics();
         res.write(`event: done\ndata: [DONE]\n\n`);
         stream.off('event', handler);
@@ -2102,6 +2135,9 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
 
     stream.on('event', handler);
     res.on('close', async () => {
+      if (!firstTokenEmitted) {
+        await releaseQuotaIfUnused();
+      }
       if (res.writableEnded) return;
       await releasePermitIfHeld();
       stream.off('event', handler);
@@ -2110,6 +2146,9 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
 
     await withInferenceReservation(modelRouter.capacityGuard, admission, () => agentRuntime.startRun(run.id), clientAbort.signal);
   } catch (err: any) {
+    if (!firstTokenEmitted && releaseQuotaIfUnused) {
+      await releaseQuotaIfUnused().catch(() => {});
+    }
     if (admission?.permit) {
       await admission.permit.release().catch(() => {});
     }
@@ -2409,170 +2448,518 @@ export interface ApiProjectItem {
   id: string;
   userId: string;
   name: string;
+  description?: string;
+  documents?: any[];
+  tags?: string[];
   readOnly: boolean;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface ApiMemoryItem {
   id: string;
   userId: string;
   content: string;
+  metadata?: Record<string, any>;
+  tags?: string[];
   readOnly: boolean;
   createdAt: string;
 }
 
-const apiProjects = new Map<string, ApiProjectItem>();
-const apiMemories = new Map<string, ApiMemoryItem>();
-
 app.get('/api/projects', async (req: Request, res: Response) => {
-  const tier = await resolveCallerTier(req);
-  if (tier === 'guest') {
-    return res.status(401).json({ error: 'GUEST_UNAUTHORIZED', message: 'Projects require an authenticated account' });
+  try {
+    const tier = await resolveCallerTier(req);
+    if (tier === 'guest') {
+      return res.status(401).json({ error: 'GUEST_UNAUTHORIZED', message: 'Projects require an authenticated account' });
+    }
+    const userId = req.principal?.userId || (req as any).user?.id;
+    if (!userId || userId === 'anonymous') {
+      return res.status(401).json({ error: 'UNAUTHORIZED', message: 'Authentication required' });
+    }
+
+    const plan = COMMERCIAL_PLANS[tier] || COMMERCIAL_PLANS.free;
+    const maxAllowed = (plan as any).quotas?.projects ?? plan.maxProjects;
+
+    const rows = await db('memory_records')
+      .where({ principal_id: userId, type: 'project', is_system: false })
+      .orderBy('created_at', 'asc');
+
+    const userProjects: ApiProjectItem[] = rows.map((r, idx) => {
+      const isReadOnly = maxAllowed !== -1 && idx >= maxAllowed;
+      let contextData: any = {};
+      try {
+        contextData = typeof r.context === 'string' ? JSON.parse(r.context) : (r.context || {});
+      } catch {}
+      return {
+        id: r.id,
+        userId: r.principal_id,
+        name: r.content || contextData.name || 'Untitled Project',
+        description: contextData.description || '',
+        documents: contextData.documents || [],
+        tags: contextData.tags || [],
+        readOnly: isReadOnly,
+        createdAt: new Date(Number(r.created_at)).toISOString(),
+        updatedAt: contextData.updatedAt ? new Date(Number(contextData.updatedAt)).toISOString() : new Date(Number(r.created_at)).toISOString()
+      };
+    });
+
+    res.json({ projects: userProjects, total: userProjects.length });
+  } catch (err: any) {
+    console.error('[PROJECTS_GET_ERROR]', err);
+    res.status(500).json({ error: 'INTERNAL_ERROR', message: 'Failed to retrieve projects' });
   }
-  const userId = req.principal?.userId || (req as any).user?.id || 'anonymous';
-  const userProjects = Array.from(apiProjects.values()).filter(p => p.userId === userId);
-  res.json({ projects: userProjects, total: userProjects.length });
 });
 
 app.post('/api/projects', async (req: Request, res: Response) => {
-  const tier = await resolveCallerTier(req);
-  if (tier === 'guest') {
-    return res.status(401).json({ error: 'GUEST_UNAUTHORIZED', message: 'Projects require an authenticated account' });
-  }
-  const userId = req.principal?.userId || (req as any).user?.id || 'anonymous';
-  const userProjects = Array.from(apiProjects.values()).filter(p => p.userId === userId);
-  const maxAllowed = tier === 'pro' ? 10000 : (tier === 'plus' ? 10 : 3);
-  if (userProjects.length >= maxAllowed) {
-    return res.status(403).json({
-      error: 'QUOTA_EXCEEDED_READ_ONLY_MODE',
-      message: `Maximum project limit of ${maxAllowed} reached for plan ${tier}.`,
-      currentCount: userProjects.length,
-      maxAllowed
+  try {
+    const tier = await resolveCallerTier(req);
+    if (tier === 'guest') {
+      return res.status(401).json({ error: 'GUEST_UNAUTHORIZED', message: 'Projects require an authenticated account' });
+    }
+    const userId = req.principal?.userId || (req as any).user?.id;
+    if (!userId || userId === 'anonymous') {
+      return res.status(401).json({ error: 'UNAUTHORIZED', message: 'Authentication required' });
+    }
+
+    const plan = COMMERCIAL_PLANS[tier] || COMMERCIAL_PLANS.free;
+    const maxAllowed = (plan as any).quotas?.projects ?? plan.maxProjects;
+
+    const countRow = await db('memory_records')
+      .where({ principal_id: userId, type: 'project', is_system: false })
+      .count('id as count')
+      .first();
+    const currentCount = Number(countRow?.count || 0);
+
+    if (maxAllowed !== -1 && currentCount >= maxAllowed) {
+      return res.status(403).json({
+        error: 'QUOTA_EXCEEDED_READ_ONLY_MODE',
+        code: 'PROJECT_LIMIT_REACHED',
+        message: `Maximum project limit of ${maxAllowed} reached for plan ${tier}.`,
+        currentCount,
+        maxAllowed
+      });
+    }
+
+    const id = `proj_${crypto.randomBytes(4).toString('hex')}`;
+    const name = (req.body?.name || 'New Project').trim().slice(0, 120);
+    const description = (req.body?.description || '').trim();
+    const documents = Array.isArray(req.body?.documents) ? req.body.documents : [];
+    const tags = Array.isArray(req.body?.tags) ? req.body.tags : [];
+    const now = Date.now();
+
+    const contextObj = {
+      name,
+      description,
+      documents,
+      tags,
+      createdAt: now,
+      updatedAt: now
+    };
+
+    await db('memory_records').insert({
+      id,
+      principal_id: userId,
+      workspace_id: req.principal?.workspaceId || 'default',
+      type: 'project',
+      agent_id: 'user_project',
+      content: name,
+      context: JSON.stringify(contextObj),
+      is_system: false,
+      created_at: now
     });
+
+    const project: ApiProjectItem = {
+      id,
+      userId,
+      name,
+      description,
+      documents,
+      tags,
+      readOnly: false,
+      createdAt: new Date(now).toISOString(),
+      updatedAt: new Date(now).toISOString()
+    };
+    res.status(201).json(project);
+  } catch (err: any) {
+    console.error('[PROJECTS_POST_ERROR]', err);
+    res.status(500).json({ error: 'INTERNAL_ERROR', message: 'Failed to create project' });
   }
-  const project: ApiProjectItem = {
-    id: `proj_${crypto.randomBytes(4).toString('hex')}`,
-    userId,
-    name: req.body?.name || 'New Project',
-    readOnly: false,
-    createdAt: new Date().toISOString()
-  };
-  apiProjects.set(project.id, project);
-  res.status(201).json(project);
+});
+
+app.get('/api/projects/:id', async (req: Request, res: Response) => {
+  try {
+    const tier = await resolveCallerTier(req);
+    if (tier === 'guest') {
+      return res.status(401).json({ error: 'GUEST_UNAUTHORIZED', message: 'Projects require an authenticated account' });
+    }
+    const userId = req.principal?.userId || (req as any).user?.id;
+    if (!userId || userId === 'anonymous') {
+      return res.status(401).json({ error: 'UNAUTHORIZED', message: 'Authentication required' });
+    }
+
+    const projectId = getParam(req.params.id);
+    const plan = COMMERCIAL_PLANS[tier] || COMMERCIAL_PLANS.free;
+    const maxAllowed = (plan as any).quotas?.projects ?? plan.maxProjects;
+
+    const rows = await db('memory_records')
+      .where({ principal_id: userId, type: 'project', is_system: false })
+      .orderBy('created_at', 'asc');
+
+    const index = rows.findIndex(r => r.id === projectId);
+    if (index === -1) {
+      return res.status(404).json({ error: 'NOT_FOUND', message: `Project ${projectId} not found` });
+    }
+
+    const r = rows[index];
+    const isReadOnly = maxAllowed !== -1 && index >= maxAllowed;
+    let contextData: any = {};
+    try {
+      contextData = typeof r.context === 'string' ? JSON.parse(r.context) : (r.context || {});
+    } catch {}
+
+    res.json({
+      id: r.id,
+      userId: r.principal_id,
+      name: r.content || contextData.name || 'Untitled Project',
+      description: contextData.description || '',
+      documents: contextData.documents || [],
+      tags: contextData.tags || [],
+      readOnly: isReadOnly,
+      createdAt: new Date(Number(r.created_at)).toISOString(),
+      updatedAt: contextData.updatedAt ? new Date(Number(contextData.updatedAt)).toISOString() : new Date(Number(r.created_at)).toISOString()
+    });
+  } catch (err: any) {
+    console.error('[PROJECTS_GET_BY_ID_ERROR]', err);
+    res.status(500).json({ error: 'INTERNAL_ERROR', message: 'Failed to retrieve project' });
+  }
+});
+
+app.patch('/api/projects/:id', async (req: Request, res: Response) => {
+  try {
+    const tier = await resolveCallerTier(req);
+    if (tier === 'guest') {
+      return res.status(401).json({ error: 'GUEST_UNAUTHORIZED', message: 'Projects require an authenticated account' });
+    }
+    const userId = req.principal?.userId || (req as any).user?.id;
+    if (!userId || userId === 'anonymous') {
+      return res.status(401).json({ error: 'UNAUTHORIZED', message: 'Authentication required' });
+    }
+
+    const projectId = getParam(req.params.id);
+    const plan = COMMERCIAL_PLANS[tier] || COMMERCIAL_PLANS.free;
+    const maxAllowed = (plan as any).quotas?.projects ?? plan.maxProjects;
+
+    const rows = await db('memory_records')
+      .where({ principal_id: userId, type: 'project', is_system: false })
+      .orderBy('created_at', 'asc');
+
+    const index = rows.findIndex(r => r.id === projectId);
+    if (index === -1) {
+      return res.status(404).json({ error: 'NOT_FOUND', message: `Project ${projectId} not found` });
+    }
+
+    const isReadOnly = maxAllowed !== -1 && index >= maxAllowed;
+    if (isReadOnly) {
+      return res.status(403).json({
+        error: 'ITEM_READ_ONLY',
+        message: 'Modification disallowed while exceeding plan quota.'
+      });
+    }
+
+    const r = rows[index];
+    let contextData: any = {};
+    try {
+      contextData = typeof r.context === 'string' ? JSON.parse(r.context) : (r.context || {});
+    } catch {}
+
+    const updatedName = req.body?.name !== undefined ? String(req.body.name).trim().slice(0, 120) : r.content;
+    const updatedDesc = req.body?.description !== undefined ? String(req.body.description).trim() : contextData.description;
+    const updatedDocs = Array.isArray(req.body?.documents) ? req.body.documents : contextData.documents;
+    const updatedTags = Array.isArray(req.body?.tags) ? req.body.tags : contextData.tags;
+    const now = Date.now();
+
+    const updatedContext = {
+      ...contextData,
+      name: updatedName,
+      description: updatedDesc,
+      documents: updatedDocs,
+      tags: updatedTags,
+      updatedAt: now
+    };
+
+    await db('memory_records')
+      .where({ id: projectId, principal_id: userId, type: 'project' })
+      .update({
+        content: updatedName,
+        context: JSON.stringify(updatedContext)
+      });
+
+    res.json({
+      id: projectId,
+      userId,
+      name: updatedName,
+      description: updatedDesc,
+      documents: updatedDocs,
+      tags: updatedTags,
+      readOnly: false,
+      createdAt: new Date(Number(r.created_at)).toISOString(),
+      updatedAt: new Date(now).toISOString()
+    });
+  } catch (err: any) {
+    console.error('[PROJECTS_PATCH_ERROR]', err);
+    res.status(500).json({ error: 'INTERNAL_ERROR', message: 'Failed to update project' });
+  }
+});
+
+app.delete('/api/projects/:id', async (req: Request, res: Response) => {
+  try {
+    const tier = await resolveCallerTier(req);
+    if (tier === 'guest') {
+      return res.status(401).json({ error: 'GUEST_UNAUTHORIZED', message: 'Projects require an authenticated account' });
+    }
+    const userId = req.principal?.userId || (req as any).user?.id;
+    if (!userId || userId === 'anonymous') {
+      return res.status(401).json({ error: 'UNAUTHORIZED', message: 'Authentication required' });
+    }
+
+    const projectId = getParam(req.params.id);
+    const plan = COMMERCIAL_PLANS[tier] || COMMERCIAL_PLANS.free;
+    const maxAllowed = (plan as any).quotas?.projects ?? plan.maxProjects;
+
+    const rows = await db('memory_records')
+      .where({ principal_id: userId, type: 'project', is_system: false })
+      .orderBy('created_at', 'asc');
+
+    const index = rows.findIndex(r => r.id === projectId);
+    if (index === -1) {
+      return res.status(404).json({ error: 'NOT_FOUND', message: `Project ${projectId} not found` });
+    }
+
+    const isReadOnly = maxAllowed !== -1 && index >= maxAllowed;
+    if (isReadOnly) {
+      return res.status(403).json({
+        error: 'ITEM_READ_ONLY',
+        message: 'Modification disallowed while exceeding plan quota.'
+      });
+    }
+
+    await db('memory_records')
+      .where({ id: projectId, principal_id: userId, type: 'project' })
+      .delete();
+
+    res.json({ success: true, id: projectId });
+  } catch (err: any) {
+    console.error('[PROJECTS_DELETE_ERROR]', err);
+    res.status(500).json({ error: 'INTERNAL_ERROR', message: 'Failed to delete project' });
+  }
 });
 
 app.get('/api/memories', async (req: Request, res: Response) => {
-  const tier = await resolveCallerTier(req);
-  if (tier === 'guest') {
-    return res.status(401).json({ error: 'GUEST_UNAUTHORIZED', message: 'Memories require an authenticated account' });
+  try {
+    const tier = await resolveCallerTier(req);
+    if (tier === 'guest') {
+      return res.status(401).json({ error: 'GUEST_UNAUTHORIZED', message: 'Memories require an authenticated account' });
+    }
+    const userId = req.principal?.userId || (req as any).user?.id;
+    if (!userId || userId === 'anonymous') {
+      return res.status(401).json({ error: 'UNAUTHORIZED', message: 'Authentication required' });
+    }
+
+    const plan = COMMERCIAL_PLANS[tier] || COMMERCIAL_PLANS.free;
+    const maxAllowed = (plan as any).quotas?.memoryRecords ?? plan.maxMemoryRecords;
+
+    const rows = await db('memory_records')
+      .where({ principal_id: userId, type: 'memory', is_system: false })
+      .orderBy('created_at', 'asc');
+
+    const userMemories: ApiMemoryItem[] = rows.map((r, idx) => {
+      const isReadOnly = maxAllowed !== -1 && idx >= maxAllowed;
+      let contextData: any = {};
+      try {
+        contextData = typeof r.context === 'string' ? JSON.parse(r.context) : (r.context || {});
+      } catch {}
+      return {
+        id: r.id,
+        userId: r.principal_id,
+        content: r.content,
+        metadata: contextData.metadata || {},
+        tags: contextData.tags || [],
+        readOnly: isReadOnly,
+        createdAt: new Date(Number(r.created_at)).toISOString()
+      };
+    });
+
+    res.json({ memories: userMemories, total: userMemories.length });
+  } catch (err: any) {
+    console.error('[MEMORIES_GET_ERROR]', err);
+    res.status(500).json({ error: 'INTERNAL_ERROR', message: 'Failed to retrieve memories' });
   }
-  const userId = req.principal?.userId || (req as any).user?.id || 'anonymous';
-  const userMemories = Array.from(apiMemories.values()).filter(m => m.userId === userId);
-  res.json({ memories: userMemories, total: userMemories.length });
 });
 
 app.post('/api/memories', async (req: Request, res: Response) => {
-  const tier = await resolveCallerTier(req);
-  if (tier === 'guest') {
-    return res.status(401).json({ error: 'GUEST_UNAUTHORIZED', message: 'Memories require an authenticated account' });
-  }
-  const userId = req.principal?.userId || (req as any).user?.id || 'anonymous';
-  const userMemories = Array.from(apiMemories.values()).filter(m => m.userId === userId);
-  const maxAllowed = tier === 'pro' ? 10000 : (tier === 'plus' ? 250 : 50);
-  if (userMemories.length >= maxAllowed) {
-    return res.status(403).json({
-      error: 'QUOTA_EXCEEDED_READ_ONLY_MODE',
-      message: `Maximum memory limit of ${maxAllowed} reached for plan ${tier}.`,
-      currentCount: userMemories.length,
-      maxAllowed
+  try {
+    const tier = await resolveCallerTier(req);
+    if (tier === 'guest') {
+      return res.status(401).json({ error: 'GUEST_UNAUTHORIZED', message: 'Memories require an authenticated account' });
+    }
+    const userId = req.principal?.userId || (req as any).user?.id;
+    if (!userId || userId === 'anonymous') {
+      return res.status(401).json({ error: 'UNAUTHORIZED', message: 'Authentication required' });
+    }
+
+    const plan = COMMERCIAL_PLANS[tier] || COMMERCIAL_PLANS.free;
+    const maxAllowed = (plan as any).quotas?.memoryRecords ?? plan.maxMemoryRecords;
+
+    const countRow = await db('memory_records')
+      .where({ principal_id: userId, type: 'memory', is_system: false })
+      .count('id as count')
+      .first();
+    const currentCount = Number(countRow?.count || 0);
+
+    if (maxAllowed !== -1 && currentCount >= maxAllowed) {
+      return res.status(403).json({
+        error: 'QUOTA_EXCEEDED_READ_ONLY_MODE',
+        code: 'MEMORY_LIMIT_REACHED',
+        message: `Maximum memory limit of ${maxAllowed} reached for plan ${tier}.`,
+        currentCount,
+        maxAllowed
+      });
+    }
+
+    const id = `mem_${crypto.randomBytes(4).toString('hex')}`;
+    const content = req.body?.content || '';
+    const metadata = req.body?.metadata || {};
+    const tags = Array.isArray(req.body?.tags) ? req.body.tags : [];
+    const now = Date.now();
+
+    await db('memory_records').insert({
+      id,
+      principal_id: userId,
+      workspace_id: req.principal?.workspaceId || 'default',
+      type: 'memory',
+      agent_id: 'user_memory',
+      content,
+      context: JSON.stringify({ metadata, tags }),
+      is_system: false,
+      created_at: now
     });
+
+    const memory: ApiMemoryItem = {
+      id,
+      userId,
+      content,
+      metadata,
+      tags,
+      readOnly: false,
+      createdAt: new Date(now).toISOString()
+    };
+    res.status(201).json(memory);
+  } catch (err: any) {
+    console.error('[MEMORIES_POST_ERROR]', err);
+    res.status(500).json({ error: 'INTERNAL_ERROR', message: 'Failed to create memory' });
   }
-  const memory: ApiMemoryItem = {
-    id: `mem_${crypto.randomBytes(4).toString('hex')}`,
-    userId,
-    content: req.body?.content || '',
-    readOnly: false,
-    createdAt: new Date().toISOString()
-  };
-  apiMemories.set(memory.id, memory);
-  res.status(201).json(memory);
 });
 
-app.post('/api/user/downgrade', async (req: Request, res: Response) => {
-  const targetTier = req.body?.tier as PlanTier;
-  if (!['free', 'plus'].includes(targetTier)) {
-    return res.status(400).json({ error: 'INVALID_DOWNGRADE_TIER' });
+app.get('/api/memories/:id', async (req: Request, res: Response) => {
+  try {
+    const tier = await resolveCallerTier(req);
+    if (tier === 'guest') {
+      return res.status(401).json({ error: 'GUEST_UNAUTHORIZED', message: 'Memories require an authenticated account' });
+    }
+    const userId = req.principal?.userId || (req as any).user?.id;
+    if (!userId || userId === 'anonymous') {
+      return res.status(401).json({ error: 'UNAUTHORIZED', message: 'Authentication required' });
+    }
+
+    const memoryId = getParam(req.params.id);
+    const plan = COMMERCIAL_PLANS[tier] || COMMERCIAL_PLANS.free;
+    const maxAllowed = (plan as any).quotas?.memoryRecords ?? plan.maxMemoryRecords;
+
+    const rows = await db('memory_records')
+      .where({ principal_id: userId, type: 'memory', is_system: false })
+      .orderBy('created_at', 'asc');
+
+    const index = rows.findIndex(r => r.id === memoryId);
+    if (index === -1) {
+      return res.status(404).json({ error: 'NOT_FOUND', message: `Memory ${memoryId} not found` });
+    }
+
+    const r = rows[index];
+    const isReadOnly = maxAllowed !== -1 && index >= maxAllowed;
+    let contextData: any = {};
+    try {
+      contextData = typeof r.context === 'string' ? JSON.parse(r.context) : (r.context || {});
+    } catch {}
+
+    res.json({
+      id: r.id,
+      userId: r.principal_id,
+      content: r.content,
+      metadata: contextData.metadata || {},
+      tags: contextData.tags || [],
+      readOnly: isReadOnly,
+      createdAt: new Date(Number(r.created_at)).toISOString()
+    });
+  } catch (err: any) {
+    console.error('[MEMORIES_GET_BY_ID_ERROR]', err);
+    res.status(500).json({ error: 'INTERNAL_ERROR', message: 'Failed to retrieve memory' });
   }
-  const userId = req.principal?.userId || (req as any).user?.id || 'anonymous';
-  if ((req as any).user) {
-    (req as any).user.tier = targetTier;
+});
+
+app.delete('/api/memories/:id', async (req: Request, res: Response) => {
+  try {
+    const tier = await resolveCallerTier(req);
+    if (tier === 'guest') {
+      return res.status(401).json({ error: 'GUEST_UNAUTHORIZED', message: 'Memories require an authenticated account' });
+    }
+    const userId = req.principal?.userId || (req as any).user?.id;
+    if (!userId || userId === 'anonymous') {
+      return res.status(401).json({ error: 'UNAUTHORIZED', message: 'Authentication required' });
+    }
+
+    const memoryId = getParam(req.params.id);
+    const plan = COMMERCIAL_PLANS[tier] || COMMERCIAL_PLANS.free;
+    const maxAllowed = (plan as any).quotas?.memoryRecords ?? plan.maxMemoryRecords;
+
+    const rows = await db('memory_records')
+      .where({ principal_id: userId, type: 'memory', is_system: false })
+      .orderBy('created_at', 'asc');
+
+    const index = rows.findIndex(r => r.id === memoryId);
+    if (index === -1) {
+      return res.status(404).json({ error: 'NOT_FOUND', message: `Memory ${memoryId} not found` });
+    }
+
+    const isReadOnly = maxAllowed !== -1 && index >= maxAllowed;
+    if (isReadOnly) {
+      return res.status(403).json({
+        error: 'ITEM_READ_ONLY',
+        message: 'Modification disallowed while exceeding plan quota.'
+      });
+    }
+
+    await db('memory_records')
+      .where({ id: memoryId, principal_id: userId, type: 'memory' })
+      .delete();
+
+    res.json({ success: true, id: memoryId });
+  } catch (err: any) {
+    console.error('[MEMORIES_DELETE_ERROR]', err);
+    res.status(500).json({ error: 'INTERNAL_ERROR', message: 'Failed to delete memory' });
   }
-  const maxProjects = targetTier === 'plus' ? 10 : 3;
-  const maxMemories = targetTier === 'plus' ? 250 : 50;
+});
 
-  const userProjects = Array.from(apiProjects.values()).filter(p => p.userId === userId);
-  userProjects.forEach((p, idx) => {
-    p.readOnly = idx >= maxProjects;
-  });
-
-  const userMemories = Array.from(apiMemories.values()).filter(m => m.userId === userId);
-  userMemories.forEach((m, idx) => {
-    m.readOnly = idx >= maxMemories;
-  });
-
-  res.json({
-    success: true,
-    tier: targetTier,
-    message: `Downgraded to ${targetTier}. Data retained safely in read-only mode.`,
-    retainedProjects: userProjects.length,
-    readOnlyProjectsCount: userProjects.filter(p => p.readOnly).length,
-    retainedMemories: userMemories.length,
-    readOnlyMemoriesCount: userMemories.filter(m => m.readOnly).length
+app.post('/api/user/downgrade', async (_req: Request, res: Response) => {
+  res.status(400).json({
+    error: 'BILLING_UNAVAILABLE',
+    message: 'Direct self-service plan downgrades without verified subscription lifecycle are disabled in preview deployment.'
   });
 });
 
-app.post('/api/user/upgrade', async (req: Request, res: Response) => {
-  const targetTier = req.body?.tier as PlanTier;
-  if (!['free', 'plus', 'pro'].includes(targetTier)) {
-    return res.status(400).json({ error: 'INVALID_PLAN_TIER', message: 'Target plan tier is invalid' });
-  }
-  const userId = req.principal?.userId || (req as any).user?.id || 'anonymous';
-  if ((req as any).user) {
-    (req as any).user.tier = targetTier;
-    (req as any).user.isGuest = false;
-  }
-  const maxProjects = targetTier === 'pro' ? 10000 : (targetTier === 'plus' ? 10 : 3);
-  const maxMemories = targetTier === 'pro' ? 10000 : (targetTier === 'plus' ? 250 : 50);
-
-  const userProjects = Array.from(apiProjects.values()).filter(p => p.userId === userId);
-  userProjects.forEach((p, idx) => {
-    p.readOnly = idx >= maxProjects;
-  });
-
-  const userMemories = Array.from(apiMemories.values()).filter(m => m.userId === userId);
-  userMemories.forEach((m, idx) => {
-    m.readOnly = idx >= maxMemories;
-  });
-
-  const quotas = {
-    dailyStandardChatLimit: targetTier === 'pro' ? 150 : (targetTier === 'plus' ? 50 : 15),
-    monthlyPremiumCredits: targetTier === 'pro' ? 7500 : (targetTier === 'plus' ? 3000 : 100),
-    complimentaryReasoningBoosts: targetTier === 'pro' ? 200 : (targetTier === 'plus' ? 50 : 5),
-    savedAgentsLimit: targetTier === 'pro' ? 50 : (targetTier === 'plus' ? 3 : 0),
-    maxProjects,
-    maxMemories,
-    concurrentInferenceLimit: targetTier === 'pro' ? 2 : 1,
-    browserToolAllowed: targetTier === 'pro',
-    pythonSandboxAllowed: targetTier === 'pro',
-    autonomousAgentAllowed: targetTier === 'pro'
-  };
-
-  res.json({
-    success: true,
-    tier: targetTier,
-    message: `Successfully upgraded to ${targetTier}`,
-    quotas,
-    featureDiscoveryUnlocked: targetTier === 'plus' ? ['agent_mode', 'reasoning_boosts'] : (targetTier === 'pro' ? ['browser_tools', 'python_sandbox', 'autonomous_workers'] : [])
+app.post('/api/user/upgrade', async (_req: Request, res: Response) => {
+  res.status(400).json({
+    error: 'BILLING_UNAVAILABLE',
+    message: 'Direct self-service plan upgrades without verified payment are disabled in preview deployment.'
   });
 });
 

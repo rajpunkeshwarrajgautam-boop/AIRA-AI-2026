@@ -155,28 +155,8 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
   const sessionVerified = identity.status === 'verified' && Boolean(user?.id) && identity.principalId === user?.id;
   const confirmedBilling = sessionVerified && billingPrincipalId === user?.id ? billingSummary : null;
 
-  const handleTopUp = async (credits: number, inrPrice: number, usdPrice: number) => {
-    setTopUpNotice(null);
-    try {
-      const res = await fetch('/api/billing/checkout/topup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          credits,
-          currency: topUpCurrency,
-          amountMinorUnits: topUpCurrency === 'INR' ? inrPrice * 100 : usdPrice * 100
-        })
-      });
-      const data = await res.json();
-      if (res.ok && data.checkoutUrl) {
-        setTopUpNotice(`Sandbox checkout initiated: ${credits.toLocaleString()} credits. Order ID: ${data.orderId}`);
-      } else {
-        setTopUpNotice(data.error || 'Top-up checkout prepared.');
-      }
-    } catch (err: any) {
-      setTopUpNotice(err.message || 'Error processing top-up');
-    }
+  const handleTopUp = async (_credits: number, _inrPrice: number, _usdPrice: number) => {
+    setTopUpNotice('Credit top-up checkout is in preview mode. Commercial payments are currently inactive.');
   };
 
   if (!isOpen) return null;
@@ -463,14 +443,14 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
                     <div className="text-[11px] text-stone-400">Credits</div>
                   </div>
                   <div className="mt-4 pt-4 border-t border-white/10 flex items-center justify-between">
-                    <span className="text-sm font-bold text-white">
-                      {topUpCurrency === 'INR' ? '₹99' : '$1.49'}
+                    <span className="text-sm font-bold text-stone-400">
+                      Preview Only
                     </span>
                     <button
-                      onClick={() => handleTopUp(1000, 99, 1.49)}
-                      className="px-3 py-1.5 rounded-lg bg-[#a9583e] hover:bg-[#94452e] text-white text-xs font-semibold transition-colors"
+                      disabled
+                      className="px-3 py-1.5 rounded-lg bg-stone-800 text-stone-400 text-xs font-semibold cursor-not-allowed border border-white/5"
                     >
-                      Buy Now
+                      Checkout Inactive
                     </button>
                   </div>
                 </div>
@@ -485,14 +465,14 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
                     <div className="text-[11px] text-stone-400">Credits</div>
                   </div>
                   <div className="mt-4 pt-4 border-t border-white/10 flex items-center justify-between">
-                    <span className="text-sm font-bold text-white">
-                      {topUpCurrency === 'INR' ? '₹399' : '$5.99'}
+                    <span className="text-sm font-bold text-stone-400">
+                      Preview Only
                     </span>
                     <button
-                      onClick={() => handleTopUp(5000, 399, 5.99)}
-                      className="px-3 py-1.5 rounded-lg bg-[#a9583e] hover:bg-[#94452e] text-white text-xs font-semibold transition-colors"
+                      disabled
+                      className="px-3 py-1.5 rounded-lg bg-stone-800 text-stone-400 text-xs font-semibold cursor-not-allowed border border-white/5"
                     >
-                      Buy Now
+                      Checkout Inactive
                     </button>
                   </div>
                 </div>
@@ -504,14 +484,14 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
                     <div className="text-[11px] text-stone-400">Credits</div>
                   </div>
                   <div className="mt-4 pt-4 border-t border-white/10 flex items-center justify-between">
-                    <span className="text-sm font-bold text-white">
-                      {topUpCurrency === 'INR' ? '₹999' : '$14.99'}
+                    <span className="text-sm font-bold text-stone-400">
+                      Preview Only
                     </span>
                     <button
-                      onClick={() => handleTopUp(15000, 999, 14.99)}
-                      className="px-3 py-1.5 rounded-lg bg-[#a9583e] hover:bg-[#94452e] text-white text-xs font-semibold transition-colors"
+                      disabled
+                      className="px-3 py-1.5 rounded-lg bg-stone-800 text-stone-400 text-xs font-semibold cursor-not-allowed border border-white/5"
                     >
-                      Buy Now
+                      Checkout Inactive
                     </button>
                   </div>
                 </div>

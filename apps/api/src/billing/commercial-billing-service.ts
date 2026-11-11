@@ -41,6 +41,12 @@ export class StandardQuotaExceededError extends Error {
   }
 }
 
+export interface StandardChatReservation {
+  reservationToken: string;
+  remainingDaily: number;
+  remainingMonthly: number;
+}
+
 export class CommercialBillingService {
   /**
    * Get or create a billing customer and ensure credit account exists.
@@ -173,6 +179,42 @@ export class CommercialBillingService {
   }
 
   /**
+   * Helper to resolve the billing period start date ('YYYY-MM-DD') for a customer.
+   */
+  private async getBillingPeriodStartDate(customerId: string, client: any = db): Promise<string> {
+    const subRow = await client('subscriptions')
+      .where({ customer_id: customerId })
+      .whereIn('status', ['active', 'authenticated'])
+      .orderBy('current_period_end', 'desc')
+      .first()
+      .catch((): null => null);
+
+    if (subRow && subRow.current_period_start) {
+      return new Date(Number(subRow.current_period_start)).toISOString().slice(0, 10);
+    }
+
+    // Default to start of current calendar month (e.g. '2026-11-01')
+    const now = new Date();
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString().slice(0, 10);
+  }
+
+  /**
+   * Helper to aggregate monthly standard chat usage across the customer's billing period.
+   */
+  private async getMonthlyUsageAcrossPeriod(customerId: string, today: string, client: any = db): Promise<number> {
+    const periodStartDate = await this.getBillingPeriodStartDate(customerId, client);
+    const sumRow = await client('entitlement_snapshots')
+      .where({ customer_id: customerId })
+      .where('period_date', '>=', periodStartDate)
+      .where('period_date', '<=', today)
+      .sum('daily_standard_chat_count as total')
+      .first()
+      .catch((): null => null);
+
+    return Number(sumRow?.total || 0);
+  }
+
+  /**
    * Fetch complete authoritative EntitlementState for a principal.
    */
   async getEntitlements(principalId: string): Promise<EntitlementState> {
@@ -189,10 +231,11 @@ export class CommercialBillingService {
     const today = new Date().toISOString().slice(0, 10);
     const snapshot = await db('entitlement_snapshots')
       .where({ customer_id: customer.id, period_date: today })
-      .first();
+      .first()
+      .catch((): null => null);
 
     const dailyUsed = snapshot ? Number(snapshot.daily_standard_chat_count) : 0;
-    const monthlyUsed = snapshot ? Number(snapshot.monthly_standard_chat_count) : 0;
+    const monthlyUsed = await this.getMonthlyUsageAcrossPeriod(customer.id, today, db);
     const reasoningBoostsUsed = snapshot ? Number(snapshot.monthly_reasoning_boost_count) : 0;
 
     const dailyRemaining = Math.max(0, plan.dailyStandardChatLimit - dailyUsed);
@@ -229,7 +272,7 @@ export class CommercialBillingService {
    * Refund or roll back standard chat units atomically (e.g. streaming cancellation before first token delta).
    */
   async refundStandardChat(principalId: string, computeUnits = 1): Promise<void> {
-    if (!principalId || principalId.startsWith('test-') || principalId === 'anonymous') return;
+    if (!principalId || principalId === 'anonymous') return;
     const customer = await this.getOrCreateCustomer(principalId);
     const today = new Date().toISOString().slice(0, 10);
     const now = Date.now();
@@ -268,6 +311,15 @@ export class CommercialBillingService {
     const now = Date.now();
 
     return await db.transaction(async (trx) => {
+      const periodStartDate = await this.getBillingPeriodStartDate(customer.id, trx);
+      const priorDaysRow = await trx('entitlement_snapshots')
+        .where({ customer_id: customer.id })
+        .where('period_date', '>=', periodStartDate)
+        .where('period_date', '<', today)
+        .sum('daily_standard_chat_count as total')
+        .first();
+      const priorDaysUsage = Number(priorDaysRow?.total || 0);
+
       let snapshot = await trx('entitlement_snapshots')
         .where({ customer_id: customer.id, period_date: today })
         .forUpdate()
@@ -280,16 +332,16 @@ export class CommercialBillingService {
           customer_id: customer.id,
           period_date: today,
           daily_standard_chat_count: 0,
-          monthly_standard_chat_count: 0,
+          monthly_standard_chat_count: priorDaysUsage,
           monthly_reasoning_boost_count: 0,
           last_reset_at: now,
           updated_at: now
         });
-        snapshot = { daily_standard_chat_count: 0, monthly_standard_chat_count: 0 };
+        snapshot = { daily_standard_chat_count: 0, monthly_standard_chat_count: priorDaysUsage };
       }
 
       const dailyUsed = Number(snapshot.daily_standard_chat_count);
-      const monthlyUsed = Number(snapshot.monthly_standard_chat_count);
+      const monthlyUsed = priorDaysUsage + dailyUsed;
 
       if (dailyUsed + computeUnits > plan.dailyStandardChatLimit) {
         throw new StandardQuotaExceededError('daily');
@@ -298,18 +350,193 @@ export class CommercialBillingService {
         throw new StandardQuotaExceededError('monthly');
       }
 
+      const newDaily = dailyUsed + computeUnits;
+      const newMonthly = monthlyUsed + computeUnits;
+
       await trx('entitlement_snapshots')
         .where({ customer_id: customer.id, period_date: today })
         .update({
-          daily_standard_chat_count: dailyUsed + computeUnits,
-          monthly_standard_chat_count: monthlyUsed + computeUnits,
+          daily_standard_chat_count: newDaily,
+          monthly_standard_chat_count: newMonthly,
           updated_at: now
         });
 
       return {
-        remainingDaily: plan.dailyStandardChatLimit - (dailyUsed + computeUnits),
-        remainingMonthly: plan.monthlyStandardChatUnits - (monthlyUsed + computeUnits)
+        remainingDaily: plan.dailyStandardChatLimit - newDaily,
+        remainingMonthly: plan.monthlyStandardChatUnits - newMonthly
       };
+    });
+  }
+
+  /**
+   * Atomically reserve standard chat quota units before streaming/execution.
+   */
+  async reserveStandardChat(
+    principalId: string,
+    callerTier: PlanTier,
+    modelId: string,
+    idempotencyKey?: string
+  ): Promise<StandardChatReservation> {
+    const customer = await this.getOrCreateCustomer(principalId);
+    const sub = await this.getActiveSubscription(customer.id);
+    const effectiveTier = sub.planId || callerTier || 'free';
+    const plan = COMMERCIAL_PLANS[effectiveTier] || COMMERCIAL_PLANS.free;
+    const today = new Date().toISOString().slice(0, 10);
+    const now = Date.now();
+    const reservationToken = `res_chat_${crypto.randomUUID().replace(/-/g, '')}`;
+
+    return await db.transaction(async (trx) => {
+      const periodStartDate = await this.getBillingPeriodStartDate(customer.id, trx);
+      const priorDaysRow = await trx('entitlement_snapshots')
+        .where({ customer_id: customer.id })
+        .where('period_date', '>=', periodStartDate)
+        .where('period_date', '<', today)
+        .sum('daily_standard_chat_count as total')
+        .first();
+      const priorDaysUsage = Number(priorDaysRow?.total || 0);
+
+      let snapshot = await trx('entitlement_snapshots')
+        .where({ customer_id: customer.id, period_date: today })
+        .forUpdate()
+        .first();
+
+      if (!snapshot) {
+        const id = `snap_${crypto.randomUUID().replace(/-/g, '')}`;
+        await trx('entitlement_snapshots').insert({
+          id,
+          customer_id: customer.id,
+          period_date: today,
+          daily_standard_chat_count: 0,
+          monthly_standard_chat_count: priorDaysUsage,
+          monthly_reasoning_boost_count: 0,
+          last_reset_at: now,
+          updated_at: now
+        });
+        snapshot = { daily_standard_chat_count: 0, monthly_standard_chat_count: priorDaysUsage };
+      }
+
+      const dailyUsed = Number(snapshot.daily_standard_chat_count);
+      const monthlyUsed = priorDaysUsage + dailyUsed;
+
+      if (dailyUsed + 1 > plan.dailyStandardChatLimit) {
+        throw new StandardQuotaExceededError('daily');
+      }
+      if (monthlyUsed + 1 > plan.monthlyStandardChatUnits) {
+        throw new StandardQuotaExceededError('monthly');
+      }
+
+      const newDaily = dailyUsed + 1;
+      const newMonthly = monthlyUsed + 1;
+
+      await trx('entitlement_snapshots')
+        .where({ customer_id: customer.id, period_date: today })
+        .update({
+          daily_standard_chat_count: newDaily,
+          monthly_standard_chat_count: newMonthly,
+          updated_at: now
+        });
+
+      const account = await trx('credit_accounts')
+        .where({ customer_id: customer.id })
+        .first();
+
+      if (account) {
+        await trx('credit_reservations').insert({
+          id: reservationToken,
+          account_id: account.id,
+          amount_credits: 0,
+          status: 'HELD',
+          task_type: 'standard_chat',
+          reference_id: modelId,
+          expires_at: now + 15 * 60 * 1000,
+          settled_amount_credits: 0,
+          metadata: JSON.stringify({
+            principalId,
+            tier: effectiveTier,
+            modelId,
+            idempotencyKey: idempotencyKey || null,
+            periodDate: today,
+            units: 1
+          }),
+          created_at: now,
+          updated_at: now
+        });
+      }
+
+      return {
+        reservationToken,
+        remainingDaily: plan.dailyStandardChatLimit - newDaily,
+        remainingMonthly: plan.monthlyStandardChatUnits - newMonthly
+      };
+    });
+  }
+
+  /**
+   * Settle a standard chat quota reservation upon successful inference/streaming.
+   */
+  async settleStandardChat(reservationToken: string): Promise<void> {
+    if (!reservationToken) return;
+    const now = Date.now();
+    await db('credit_reservations')
+      .where({ id: reservationToken, status: 'HELD' })
+      .update({
+        status: 'SETTLED',
+        settled_amount_credits: 0,
+        updated_at: now
+      });
+  }
+
+  /**
+   * Release a standard chat quota reservation and refund the reserved unit.
+   */
+  async releaseStandardChat(reservationToken: string, reason = 'Client aborted pre-token'): Promise<void> {
+    if (!reservationToken) return;
+    const now = Date.now();
+
+    await db.transaction(async (trx) => {
+      const reservation = await trx('credit_reservations')
+        .where({ id: reservationToken })
+        .forUpdate()
+        .first();
+
+      if (!reservation || reservation.status !== 'HELD') {
+        return; // Idempotent
+      }
+
+      await trx('credit_reservations')
+        .where({ id: reservationToken })
+        .update({
+          status: 'RELEASED',
+          metadata: JSON.stringify({
+            ...parseJsonSafe(reservation.metadata),
+            releaseReason: reason
+          }),
+          updated_at: now
+        });
+
+      const meta = parseJsonSafe(reservation.metadata);
+      const periodDate = meta.periodDate || new Date().toISOString().slice(0, 10);
+      const units = Number(meta.units) || 1;
+
+      const account = await trx('credit_accounts').where({ id: reservation.account_id }).first();
+      if (account) {
+        const snapshot = await trx('entitlement_snapshots')
+          .where({ customer_id: account.customer_id, period_date: periodDate })
+          .forUpdate()
+          .first();
+
+        if (snapshot) {
+          const dailyUsed = Math.max(0, Number(snapshot.daily_standard_chat_count) - units);
+          const monthlyUsed = Math.max(0, Number(snapshot.monthly_standard_chat_count) - units);
+          await trx('entitlement_snapshots')
+            .where({ customer_id: account.customer_id, period_date: periodDate })
+            .update({
+              daily_standard_chat_count: dailyUsed,
+              monthly_standard_chat_count: monthlyUsed,
+              updated_at: now
+            });
+        }
+      }
     });
   }
 

@@ -1,4 +1,9 @@
 import { z } from 'zod';
+import {
+  VERIFIED_MODEL_REGISTRY,
+  VERIFIED_PLAN_MODEL_ALLOWLIST,
+  type ModelCapabilityDescriptor
+} from './model-registry.js';
 
 // ==========================================
 // 1. PLANS & PRICING
@@ -354,13 +359,24 @@ const CANONICAL_MODEL_ALIASES: Record<string, string> = {
   'claude-3-7-sonnet': 'aira-auto',
   'claude-3-5-haiku': 'aira-fast',
   'claude-3-opus': 'aira-deep',
-  'mock-deterministic': 'aira-fast'
+  'mock-deterministic': 'aira-fast',
+  'meta/llama-3.1-405b-instruct': 'nvidia/llama-3.1-nemotron-70b-instruct'
 };
 
 export function isModelAllowedForTier(model: string, tier: PlanTier): boolean {
   if (!model || !tier || typeof model !== 'string' || typeof tier !== 'string') {
     return false;
   }
+  const trimmed = model.trim();
+
+  // Check single verified model capability registry allowlist first
+  if (Object.hasOwn(VERIFIED_PLAN_MODEL_ALLOWLIST, tier)) {
+    const verifiedAllowed = VERIFIED_PLAN_MODEL_ALLOWLIST[tier as PlanTier];
+    if (Array.isArray(verifiedAllowed) && verifiedAllowed.includes(trimmed)) {
+      return true;
+    }
+  }
+
   if (!Object.hasOwn(PLAN_MODEL_ALLOWLIST, tier)) {
     return false;
   }
@@ -368,26 +384,28 @@ export function isModelAllowedForTier(model: string, tier: PlanTier): boolean {
   if (!Array.isArray(allowed)) {
     return false;
   }
-  const trimmed = model.trim();
   if ((allowed as readonly string[]).includes(trimmed)) {
     return true;
   }
 
   // If model is explicitly defined in allowlists, do not cross-alias down to lower tier
-  const isExplicitlyAssignedInAllowlist = Object.values(PLAN_MODEL_ALLOWLIST).some(list =>
-    Array.isArray(list) && (list as readonly string[]).includes(trimmed)
-  );
+  const isExplicitlyAssignedInAllowlist =
+    Object.values(PLAN_MODEL_ALLOWLIST).some(list => Array.isArray(list) && (list as readonly string[]).includes(trimmed)) ||
+    Object.values(VERIFIED_PLAN_MODEL_ALLOWLIST).some(list => Array.isArray(list) && (list as readonly string[]).includes(trimmed));
+
   if (!isExplicitlyAssignedInAllowlist) {
     const alias = Object.hasOwn(CANONICAL_MODEL_ALIASES, trimmed)
       ? CANONICAL_MODEL_ALIASES[trimmed]
       : undefined;
-    if (alias && (allowed as readonly string[]).includes(alias)) {
+    if (alias && ((allowed as readonly string[]).includes(alias) || (VERIFIED_PLAN_MODEL_ALLOWLIST[tier as PlanTier] as readonly string[] | undefined)?.includes(alias))) {
       return true;
     }
   }
 
   return false;
 }
+
+export { VERIFIED_MODEL_REGISTRY, VERIFIED_PLAN_MODEL_ALLOWLIST, type ModelCapabilityDescriptor };
 
 export function isFeatureAllowedForTier(feature: string, tier: PlanTier): boolean {
   if (!feature || !tier || typeof feature !== 'string' || typeof tier !== 'string') {

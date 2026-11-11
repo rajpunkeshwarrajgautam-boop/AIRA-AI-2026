@@ -191,7 +191,15 @@ export class UnsupportedModelIdentifierError extends Error {
 /** One allowlist for browser aliases, API admission and provider routing. */
 export function normalizeModelIdentifier(value: unknown = 'aira-auto'): ModelId {
   const parsed = ModelIdSchema.safeParse(value);
-  if (!parsed.success || (parsed.data === 'allam-2-7b' || parsed.data === 'gemini-2-5-flash')) throw new UnsupportedModelIdentifierError();
+  if (
+    !parsed.success ||
+    parsed.data === 'allam-2-7b' ||
+    parsed.data === 'gemini-2-5-flash' ||
+    parsed.data === 'gemini-2-5-pro' ||
+    parsed.data === 'gemini-3.5-flash-lite'
+  ) {
+    throw new UnsupportedModelIdentifierError();
+  }
   switch (parsed.data) {
     case 'claude-3-7-sonnet': return 'aira-auto';
     case 'claude-3-5-sonnet': return 'aira-pro';
@@ -982,4 +990,5 @@ export * from './announcements.js';
 export * from './agent-specialists.js';
 export * from './deployment-environment.js';
 export * from './autonomous-agent.js';
+export * from './model-registry.js';
 

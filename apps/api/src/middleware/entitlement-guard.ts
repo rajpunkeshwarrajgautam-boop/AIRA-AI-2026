@@ -3,6 +3,7 @@ import {
   PlanTier,
   PlanTierSchema,
   PLAN_MODEL_ALLOWLIST,
+  VERIFIED_PLAN_MODEL_ALLOWLIST,
   isModelAllowedForTier,
   isFeatureAllowedForTier,
   normalizeModelIdentifier
@@ -16,15 +17,26 @@ export const TIER_RANKS: Record<PlanTier, number> = {
   pro: 3
 };
 
+export class EntitlementServiceUnavailableError extends Error {
+  readonly code = 'ENTITLEMENT_SERVICE_UNAVAILABLE';
+  readonly statusCode = 503;
+
+  constructor(message = 'Authoritative entitlement service is temporarily unavailable.', readonly cause?: unknown) {
+    super(message);
+    this.name = 'EntitlementServiceUnavailableError';
+  }
+}
+
 /**
  * Server-authoritative tier resolution.
- * Protects against header-spoofing attacks: an untrusted 'x-user-tier' header
- * must NEVER override an authenticated session, managed identity, or database subscription.
+ * Completely immune to header-spoofing attacks: an untrusted 'x-user-tier' header,
+ * client cookies, body attributes, or unverified claims must NEVER declare plan tier.
+ * Only verified cryptographic sessions and PostgreSQL database subscriptions govern entitlements.
  */
-export async function resolveCallerTier(req: Request): Promise<PlanTier> {
+export async function resolveCallerTier(req: Request, options: { failClosed?: boolean } = {}): Promise<PlanTier> {
   const user = (req as any).user;
   const principal = req.principal;
-  const principalId = principal?.userId || user?.id;
+  const principalId = principal?.userId || (req as any).session?.userId || user?.id;
 
   // 1. Explicit guest identity detection (session or principal starting with 'guest_')
   if (principalId && typeof principalId === 'string' && principalId.startsWith('guest_')) {
@@ -34,44 +46,45 @@ export async function resolveCallerTier(req: Request): Promise<PlanTier> {
     return 'guest';
   }
 
-  // 2. Direct user object tier assigned by server-side authentication
-  if (user?.tier && typeof user.tier === 'string') {
-    const parsed = PlanTierSchema.safeParse(user.tier);
-    if (parsed.success) {
-      return parsed.data;
-    }
+  // 2. Unauthenticated caller without verified identity is strictly 'guest'
+  if (!principalId || principalId === 'anonymous') {
+    return 'guest';
   }
 
-  // 3. Authenticated customer subscription query from database
-  if (principalId && typeof principalId === 'string' && !principalId.startsWith('test-') && principalId !== 'anonymous') {
-    try {
-      const customer = await commercialBillingService.getOrCreateCustomer(principalId);
-      const sub = await commercialBillingService.getActiveSubscription(customer.id);
-      if (sub?.planId) {
-        const parsed = PlanTierSchema.safeParse(sub.planId);
-        if (parsed.success) {
-          return parsed.data;
-        }
+  // 3. Authenticated customer subscription query from PostgreSQL
+  // NOTE: x-user-tier header is unconditionally stripped and ignored in all environments.
+  // Paid tiers (plus, pro) CANNOT be self-declared via user/principal properties.
+  try {
+    const customer = await commercialBillingService.getOrCreateCustomer(principalId);
+    const sub = await commercialBillingService.getActiveSubscription(customer.id);
+    if (sub?.planId && (sub.status === 'active' || sub.status === 'authenticated')) {
+      const parsed = PlanTierSchema.safeParse(sub.planId);
+      if (parsed.success && (parsed.data === 'plus' || parsed.data === 'pro')) {
+        return parsed.data;
       }
-    } catch {
-      // In-flight or degraded database fallback
     }
-  }
-
-  // 4. Header spoofing protection:
-  // x-user-tier is ONLY honored in unauthenticated dev/test environments when NO session credentials,
-  // authorization headers, or cookie tokens exist.
-  const hasAuth = Boolean(req.headers.authorization || req.headers.cookie);
-  const headerTier = req.headers['x-user-tier'];
-  if (!hasAuth && headerTier && typeof headerTier === 'string') {
-    const parsed = PlanTierSchema.safeParse(headerTier.toLowerCase().trim());
-    if (parsed.success) {
-      return parsed.data;
+    return 'free';
+  } catch (err: any) {
+    // Fail closed on database errors:
+    // If the caller explicitly claims a paid tier (plus or pro), fail closed with 503
+    if ((req as any).user?.tier === 'pro' || (req as any).user?.tier === 'plus') {
+      throw new EntitlementServiceUnavailableError(
+        'Authoritative entitlement database is temporarily unreachable for subscription verification.',
+        err
+      );
     }
-  }
 
-  // 5. Default fallback: authenticated user without subscription is 'free'; anonymous is 'guest'
-  return principalId ? 'free' : 'guest';
+    // If failClosed is explicitly requested and database is configured in environment:
+    if (options.failClosed && !(req as any).user?.tier && process.env.DATABASE_URL) {
+      throw new EntitlementServiceUnavailableError(
+        'Authoritative entitlement database is temporarily unreachable.',
+        err
+      );
+    }
+
+    // Default fallback: degrade strictly to 'free' (NEVER to paid!)
+    return 'free';
+  }
 }
 
 /**
@@ -80,7 +93,7 @@ export async function resolveCallerTier(req: Request): Promise<PlanTier> {
 export function requirePlanTier(minTier: PlanTier) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const callerTier = await resolveCallerTier(req);
+      const callerTier = await resolveCallerTier(req, { failClosed: minTier === 'plus' || minTier === 'pro' });
       if (TIER_RANKS[callerTier] < TIER_RANKS[minTier]) {
         res.status(403).json({
           error: 'PLAN_TIER_RESTRICTED',
@@ -93,6 +106,13 @@ export function requirePlanTier(minTier: PlanTier) {
       (req as any).callerTier = callerTier;
       next();
     } catch (err: any) {
+      if (err?.code === 'ENTITLEMENT_SERVICE_UNAVAILABLE' || err?.statusCode === 503) {
+        res.status(503).json({
+          error: 'ENTITLEMENT_SERVICE_UNAVAILABLE',
+          message: err.message || 'Authoritative entitlement service is temporarily unavailable.'
+        });
+        return;
+      }
       res.status(500).json({ error: 'ENTITLEMENT_RESOLUTION_FAILED', message: err.message });
     }
   };
@@ -111,12 +131,13 @@ export function requireEntitledModel(modelExtractor?: (req: Request) => string) 
       }
 
       const model = normalizeModelIdentifier(rawModel);
-      const callerTier = await resolveCallerTier(req);
+      const isRestrictedModel = !isModelAllowedForTier(model, 'guest') && !isModelAllowedForTier(model, 'free');
+      const callerTier = await resolveCallerTier(req, { failClosed: isRestrictedModel });
 
       if (!isModelAllowedForTier(model, callerTier)) {
         const isPlusModel = isModelAllowedForTier(model, 'plus');
         const requiredTier = isPlusModel ? 'plus' : 'pro';
-        const allowedModels = PLAN_MODEL_ALLOWLIST[callerTier] || [];
+        const allowedModels = VERIFIED_PLAN_MODEL_ALLOWLIST[callerTier] || PLAN_MODEL_ALLOWLIST[callerTier] || [];
 
         res.status(403).json({
           error: 'PLAN_MODEL_RESTRICTED',
@@ -132,6 +153,13 @@ export function requireEntitledModel(modelExtractor?: (req: Request) => string) 
       (req as any).normalizedModel = model;
       next();
     } catch (err: any) {
+      if (err?.code === 'ENTITLEMENT_SERVICE_UNAVAILABLE' || err?.statusCode === 503) {
+        res.status(503).json({
+          error: 'ENTITLEMENT_SERVICE_UNAVAILABLE',
+          message: err.message || 'Authoritative entitlement service is temporarily unavailable.'
+        });
+        return;
+      }
       res.status(500).json({ error: 'MODEL_ENTITLEMENT_CHECK_FAILED', message: err.message });
     }
   };
@@ -149,7 +177,8 @@ export function requireToolEntitlement(toolExtractor?: (req: Request) => string)
         return;
       }
 
-      const callerTier = await resolveCallerTier(req);
+      const isRestrictedTool = toolName.startsWith('browser_') || toolName === 'python_sandbox';
+      const callerTier = await resolveCallerTier(req, { failClosed: isRestrictedTool });
 
       if (toolName.startsWith('browser_') && !isFeatureAllowedForTier('browsertools', callerTier)) {
         res.status(403).json({
@@ -174,6 +203,13 @@ export function requireToolEntitlement(toolExtractor?: (req: Request) => string)
       (req as any).callerTier = callerTier;
       next();
     } catch (err: any) {
+      if (err?.code === 'ENTITLEMENT_SERVICE_UNAVAILABLE' || err?.statusCode === 503) {
+        res.status(503).json({
+          error: 'ENTITLEMENT_SERVICE_UNAVAILABLE',
+          message: err.message || 'Authoritative entitlement service is temporarily unavailable.'
+        });
+        return;
+      }
       res.status(500).json({ error: 'TOOL_ENTITLEMENT_CHECK_FAILED', message: err.message });
     }
   };
@@ -185,7 +221,7 @@ export function requireToolEntitlement(toolExtractor?: (req: Request) => string)
 export function requireCapability(capability: string) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const callerTier = await resolveCallerTier(req);
+      const callerTier = await resolveCallerTier(req, { failClosed: true });
       if (!isFeatureAllowedForTier(capability, callerTier)) {
         res.status(403).json({
           error: 'PLAN_CAPABILITY_RESTRICTED',
@@ -198,6 +234,13 @@ export function requireCapability(capability: string) {
       (req as any).callerTier = callerTier;
       next();
     } catch (err: any) {
+      if (err?.code === 'ENTITLEMENT_SERVICE_UNAVAILABLE' || err?.statusCode === 503) {
+        res.status(503).json({
+          error: 'ENTITLEMENT_SERVICE_UNAVAILABLE',
+          message: err.message || 'Authoritative entitlement service is temporarily unavailable.'
+        });
+        return;
+      }
       res.status(500).json({ error: 'CAPABILITY_CHECK_FAILED', message: err.message });
     }
   };

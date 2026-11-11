@@ -382,6 +382,14 @@ export class PaymentGatewayService {
       throw new Error(`Invalid plan tier for subscription checkout: ${planTier}`);
     }
 
+    if (process.env.AIRA_BILLING_EMERGENCY_DISABLE === 'true') {
+      throw new Error('BILLING_UNAVAILABLE: Commercial checkout is temporarily disabled by administrative kill-switch.');
+    }
+
+    if (process.env.NODE_ENV === 'production' && (!process.env.RAZORPAY_KEY_ID || process.env.RAZORPAY_KEY_ID.startsWith('rzp_test_'))) {
+      throw new Error('BILLING_UNAVAILABLE: Production payment gateway is currently in preview mode. Commercial checkout is isolated.');
+    }
+
     const price = plan.prices.find(p => p.currency === currency) || plan.prices[0];
     const customer = await commercialBillingService.getOrCreateCustomer(principalId);
     const mockOrderId = `order_${crypto.randomUUID().replace(/-/g, '')}`;
