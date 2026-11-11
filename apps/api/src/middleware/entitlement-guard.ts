@@ -33,7 +33,7 @@ export class EntitlementServiceUnavailableError extends Error {
  * client cookies, body attributes, or unverified claims must NEVER declare plan tier.
  * Only verified cryptographic sessions and PostgreSQL database subscriptions govern entitlements.
  */
-export async function resolveCallerTier(req: Request, options: { failClosed?: boolean } = {}): Promise<PlanTier> {
+export async function resolveCallerTier(req: Request, _options: { failClosed?: boolean } = {}): Promise<PlanTier> {
   const user = (req as any).user;
   const principal = req.principal;
   const principalId = principal?.userId || (req as any).session?.userId || user?.id;
@@ -64,26 +64,12 @@ export async function resolveCallerTier(req: Request, options: { failClosed?: bo
       }
     }
     return 'free';
-  } catch (err: any) {
-    // Fail closed on database errors:
-    // If the caller explicitly claims a paid tier (plus or pro), fail closed with 503
-    if ((req as any).user?.tier === 'pro' || (req as any).user?.tier === 'plus') {
-      throw new EntitlementServiceUnavailableError(
-        'Authoritative entitlement database is temporarily unreachable for subscription verification.',
-        err
-      );
-    }
-
-    // If failClosed is explicitly requested and database is configured in environment:
-    if (options.failClosed && !(req as any).user?.tier && process.env.DATABASE_URL) {
-      throw new EntitlementServiceUnavailableError(
-        'Authoritative entitlement database is temporarily unreachable.',
-        err
-      );
-    }
-
-    // Default fallback: degrade strictly to 'free' (NEVER to paid!)
-    return 'free';
+  } catch (err: unknown) {
+    // A verified identity whose subscription cannot be read has no verified tier.
+    // In particular, req.user.tier='free' is NOT proof of a working billing DB.
+    throw new EntitlementServiceUnavailableError(
+      'Authoritative entitlement database is temporarily unreachable.', err
+    );
   }
 }
 

@@ -4,7 +4,8 @@ import {
   COMMERCIAL_PLANS,
   PlanTier,
   EntitlementState,
-  calculateVisionTariff
+  calculateVisionTariff,
+  isModelAllowedForTier
 } from '../../../../packages/contracts/src/commercial.js';
 
 function parseJsonSafe(val: any): Record<string, any> {
@@ -41,6 +42,24 @@ export class StandardQuotaExceededError extends Error {
   }
 }
 
+export class StandardChatReplayError extends Error {
+  readonly code = 'CHAT_IDEMPOTENCY_REPLAY';
+  constructor(readonly conflictingModel: boolean) {
+    super(conflictingModel
+      ? 'This idempotency key was already used with a different model.'
+      : 'This chat request has already been admitted. It must not execute twice.');
+    this.name = 'StandardChatReplayError';
+  }
+}
+
+export class StandardChatPlanChangedError extends Error {
+  readonly code = 'PLAN_MODEL_RESTRICTED';
+  constructor(readonly currentTier: PlanTier) {
+    super('Subscription changed before chat reservation. The requested model is no longer available.');
+    this.name = 'StandardChatPlanChangedError';
+  }
+}
+
 export interface StandardChatReservation {
   reservationToken: string;
   remainingDaily: number;
@@ -74,8 +93,11 @@ export class CommercialBillingService {
     const isGuest = principalId.startsWith('guest_');
     const initialCredits = isGuest ? 0 : 100;
 
+    let created = false;
     await db.transaction(async (trx) => {
-      await trx('billing_customers').insert({
+      // Concurrent first requests for one identity must converge on one customer,
+      // account and welcome grant; a plain INSERT can race and return a 503.
+      const inserted = await trx('billing_customers').insert({
         id: customerId,
         principal_id: principalId,
         email: email || null,
@@ -85,7 +107,9 @@ export class CommercialBillingService {
         tax_info: JSON.stringify({}),
         created_at: now,
         updated_at: now
-      });
+      }).onConflict('principal_id').ignore().returning('id');
+      if (!inserted.length) return;
+      created = true;
 
       // Free tier initial grant: 100 promotional credits (0 credits for guests)
       await trx('credit_accounts').insert({
@@ -128,6 +152,17 @@ export class CommercialBillingService {
       }
     });
 
+    if (!created) {
+      const concurrent = await db('billing_customers').where({ principal_id: principalId }).first();
+      if (!concurrent) throw new Error('Concurrent billing customer creation could not be reconciled.');
+      return {
+        id: concurrent.id,
+        principalId: concurrent.principal_id,
+        email: concurrent.email,
+        defaultCurrency: concurrent.default_currency
+      };
+    }
+
     return {
       id: customerId,
       principalId,
@@ -145,7 +180,7 @@ export class CommercialBillingService {
     currentPeriodEnd: number;
     cancelAtPeriodEnd: boolean;
   }> {
-    const customer = await db('billing_customers').where({ id: customerId }).first().catch((): null => null);
+    const customer = await db('billing_customers').where({ id: customerId }).first();
     if (customer && customer.principal_id && customer.principal_id.startsWith('guest_')) {
       return {
         planId: 'guest',
@@ -186,8 +221,7 @@ export class CommercialBillingService {
       .where({ customer_id: customerId })
       .whereIn('status', ['active', 'authenticated'])
       .orderBy('current_period_end', 'desc')
-      .first()
-      .catch((): null => null);
+      .first();
 
     if (subRow && subRow.current_period_start) {
       return new Date(Number(subRow.current_period_start)).toISOString().slice(0, 10);
@@ -208,8 +242,7 @@ export class CommercialBillingService {
       .where('period_date', '>=', periodStartDate)
       .where('period_date', '<=', today)
       .sum('daily_standard_chat_count as total')
-      .first()
-      .catch((): null => null);
+      .first();
 
     return Number(sumRow?.total || 0);
   }
@@ -231,8 +264,7 @@ export class CommercialBillingService {
     const today = new Date().toISOString().slice(0, 10);
     const snapshot = await db('entitlement_snapshots')
       .where({ customer_id: customer.id, period_date: today })
-      .first()
-      .catch((): null => null);
+      .first();
 
     const dailyUsed = snapshot ? Number(snapshot.daily_standard_chat_count) : 0;
     const monthlyUsed = await this.getMonthlyUsageAcrossPeriod(customer.id, today, db);
@@ -242,7 +274,7 @@ export class CommercialBillingService {
     const monthlyRemaining = Math.max(0, plan.monthlyStandardChatUnits - monthlyUsed);
     const reasoningRemaining = Math.max(0, plan.complimentaryReasoningBoosts - reasoningBoostsUsed);
 
-    const savedAgentsCountRow = await db('agents').where({ principal_id: principalId }).count('id as count').first().catch((): { count: number | string } => ({ count: 0 }));
+    const savedAgentsCountRow = await db('agents').where({ principal_id: principalId }).count('id as count').first();
     const savedAgentsCount = Number(savedAgentsCountRow?.count || 0);
 
     return {
@@ -377,15 +409,55 @@ export class CommercialBillingService {
     modelId: string,
     idempotencyKey?: string
   ): Promise<StandardChatReservation> {
+    if (idempotencyKey && (idempotencyKey.length < 8 || idempotencyKey.length > 128 || !/^[\x21-\x7e]+$/.test(idempotencyKey))) {
+      throw new TypeError('Invalid chat idempotency key.');
+    }
     const customer = await this.getOrCreateCustomer(principalId);
-    const sub = await this.getActiveSubscription(customer.id);
-    const effectiveTier = sub.planId || callerTier || 'free';
-    const plan = COMMERCIAL_PLANS[effectiveTier] || COMMERCIAL_PLANS.free;
-    const today = new Date().toISOString().slice(0, 10);
-    const now = Date.now();
     const reservationToken = `res_chat_${crypto.randomUUID().replace(/-/g, '')}`;
 
     return await db.transaction(async (trx) => {
+      // Serialize every reservation for this customer before inspecting today's snapshot.
+      // A missing snapshot has nothing to FOR UPDATE, so locking the customer is essential.
+      const lockedCustomer = await trx('billing_customers')
+        .where({ id: customer.id }).forUpdate().first();
+      if (!lockedCustomer) throw new Error('Billing customer disappeared during quota reservation.');
+
+      const liveSub = await trx('subscriptions')
+        .where({ customer_id: customer.id })
+        .whereIn('status', ['active', 'authenticated'])
+        .orderBy('current_period_end', 'desc')
+        .forShare().first();
+      // Compute time only after locks: queued requests may cross plan expiry
+      // or midnight while waiting for another account reservation.
+      const now = Date.now();
+      const today = new Date(now).toISOString().slice(0, 10);
+      const paidTier = liveSub && Number(liveSub.current_period_end) > now &&
+        (liveSub.plan_id === 'plus' || liveSub.plan_id === 'pro')
+        ? liveSub.plan_id as PlanTier : 'free';
+      const effectiveTier: PlanTier = principalId.startsWith('guest_') ? 'guest' : paidTier;
+      const plan = COMMERCIAL_PLANS[effectiveTier];
+      // The plan may expire between the HTTP check and the DB reservation.
+      if (!isModelAllowedForTier(modelId, effectiveTier)) {
+        throw new StandardChatPlanChangedError(effectiveTier);
+      }
+
+      const account = await trx('credit_accounts')
+        .where({ customer_id: customer.id }).first();
+      if (!account) throw new Error('Billing credit account is missing; quota cannot be reserved.');
+
+      if (idempotencyKey) {
+        // The customer row lock serializes identical keys across API instances without
+        // requiring an unsafe change to an already-applied production migration.
+        const prior = await trx('credit_reservations')
+          .where({ account_id: account.id, task_type: 'standard_chat' })
+          .whereRaw("metadata->>'idempotencyKey' = ?", [idempotencyKey])
+          .first();
+        if (prior) {
+          // Includes HELD, SETTLED and RELEASED; none may trigger a second inference.
+          throw new StandardChatReplayError(prior.reference_id !== modelId);
+        }
+      }
+
       const periodStartDate = await this.getBillingPeriodStartDate(customer.id, trx);
       const priorDaysRow = await trx('entitlement_snapshots')
         .where({ customer_id: customer.id })
@@ -436,12 +508,7 @@ export class CommercialBillingService {
           updated_at: now
         });
 
-      const account = await trx('credit_accounts')
-        .where({ customer_id: customer.id })
-        .first();
-
-      if (account) {
-        await trx('credit_reservations').insert({
+      await trx('credit_reservations').insert({
           id: reservationToken,
           account_id: account.id,
           amount_credits: 0,
@@ -460,8 +527,7 @@ export class CommercialBillingService {
           }),
           created_at: now,
           updated_at: now
-        });
-      }
+      });
 
       return {
         reservationToken,
@@ -474,16 +540,20 @@ export class CommercialBillingService {
   /**
    * Settle a standard chat quota reservation upon successful inference/streaming.
    */
-  async settleStandardChat(reservationToken: string): Promise<void> {
-    if (!reservationToken) return;
+  async settleStandardChat(reservationToken: string): Promise<boolean> {
+    if (!reservationToken) return false;
     const now = Date.now();
-    await db('credit_reservations')
+    const settledRows = await db('credit_reservations')
       .where({ id: reservationToken, status: 'HELD' })
       .update({
         status: 'SETTLED',
         settled_amount_credits: 0,
         updated_at: now
       });
+    if (settledRows > 0) return true;
+    const row = await db('credit_reservations').where({ id: reservationToken }).first();
+    if (row?.status === 'SETTLED') return false; // Idempotent replay: no extra boosts.
+    throw new Error('Reservation could not be settled; it was released or does not exist.');
   }
 
   /**

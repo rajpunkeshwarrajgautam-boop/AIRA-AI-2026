@@ -41,13 +41,15 @@ describe('Adversarial Edge-Case & Bypass Stress Tests (Milestone 2)', () => {
       assert.strictEqual(tier, 'guest', 'Malicious x-user-tier must NOT elevate guest session');
     });
 
-    test('1B: Free user session with malicious x-user-tier: pro is strictly evaluated as free', async () => {
+    test('1B: Verified user with spoofed tier fails closed when subscription database is unavailable', async () => {
       const mockReq: any = {
         user: { id: 'usr_free_account', isGuest: false, tier: 'free' },
         headers: { 'x-user-tier': 'pro' }
       };
-      const tier = await resolveCallerTier(mockReq);
-      assert.strictEqual(tier, 'free', 'Malicious x-user-tier must NOT elevate free account');
+      await assert.rejects(() => resolveCallerTier(mockReq), (err: any) => {
+        assert.strictEqual(err.code, 'ENTITLEMENT_SERVICE_UNAVAILABLE');
+        return true;
+      });
     });
 
     test('1C: Principal starting with guest_ prefix is always evaluated as guest despite header', async () => {
@@ -95,9 +97,8 @@ describe('Adversarial Edge-Case & Bypass Stress Tests (Milestone 2)', () => {
       await middleware(mockReq, mockRes, mockNext);
 
       assert.strictEqual(nextCalled, false, 'Next must not be called when model is restricted');
-      assert.strictEqual(statusCalled, 403, 'Must return 403 for restricted model');
-      assert.strictEqual(jsonCalledWith.error, 'PLAN_MODEL_RESTRICTED');
-      assert.strictEqual(jsonCalledWith.callerTier, 'free');
+      assert.strictEqual(statusCalled, 503, 'Must fail closed when subscription verification is unavailable');
+      assert.strictEqual(jsonCalledWith.error, 'ENTITLEMENT_SERVICE_UNAVAILABLE');
     });
 
     test('1F: requireToolEntitlement blocks guest with x-user-tier: pro from browser execution', async () => {
@@ -159,7 +160,7 @@ describe('Adversarial Edge-Case & Bypass Stress Tests (Milestone 2)', () => {
     });
 
     test('2B: ToolGateway rejects browser_* tools for Free caller', async () => {
-      const gateway = new ToolGateway(new InMemoryToolCallRepository());
+      const gateway = new ToolGateway(new InMemoryToolCallRepository(), undefined, process.cwd(), undefined, undefined, async () => 'free');
       const principal = createPrincipal('free', 'usr_free');
 
       const result = await gateway.execute({
@@ -173,7 +174,7 @@ describe('Adversarial Edge-Case & Bypass Stress Tests (Milestone 2)', () => {
     });
 
     test('2C: ToolGateway rejects browser_* tools for Plus caller', async () => {
-      const gateway = new ToolGateway(new InMemoryToolCallRepository());
+      const gateway = new ToolGateway(new InMemoryToolCallRepository(), undefined, process.cwd(), undefined, undefined, async () => 'plus');
       const principal = createPrincipal('plus', 'usr_plus');
 
       const result = await gateway.execute({
@@ -187,7 +188,7 @@ describe('Adversarial Edge-Case & Bypass Stress Tests (Milestone 2)', () => {
     });
 
     test('2D: ToolGateway rejects python_sandbox for Free caller', async () => {
-      const gateway = new ToolGateway(new InMemoryToolCallRepository());
+      const gateway = new ToolGateway(new InMemoryToolCallRepository(), undefined, process.cwd(), undefined, undefined, async () => 'free');
       const principal = createPrincipal('free', 'usr_free');
 
       const result = await gateway.execute({
@@ -202,7 +203,7 @@ describe('Adversarial Edge-Case & Bypass Stress Tests (Milestone 2)', () => {
     });
 
     test('2E: ToolGateway rejects python_sandbox for Plus caller', async () => {
-      const gateway = new ToolGateway(new InMemoryToolCallRepository());
+      const gateway = new ToolGateway(new InMemoryToolCallRepository(), undefined, process.cwd(), undefined, undefined, async () => 'plus');
       const principal = createPrincipal('plus', 'usr_plus');
 
       const result = await gateway.execute({
@@ -247,7 +248,9 @@ describe('Adversarial Edge-Case & Bypass Stress Tests (Milestone 2)', () => {
         getTask: async () => null
       };
 
-      const host = new AutonomousWorkerHost(mockRepo, {} as any, { workerId: 'test_worker_1' });
+      const host = new AutonomousWorkerHost(mockRepo, {} as any, {
+        workerId: 'test_worker_1', resolveCurrentTier: async () => 'guest'
+      });
       host.on('task.failed', (evt: any) => {
         failedEventEmitted = true;
       });
@@ -290,7 +293,9 @@ describe('Adversarial Edge-Case & Bypass Stress Tests (Milestone 2)', () => {
         getTask: async () => null
       };
 
-      const host = new AutonomousWorkerHost(mockRepo, {} as any, { workerId: 'test_worker_2' });
+      const host = new AutonomousWorkerHost(mockRepo, {} as any, {
+        workerId: 'test_worker_2', resolveCurrentTier: async () => 'free'
+      });
       host.on('task.failed', (evt: any) => {
         failedEventEmitted = true;
       });
@@ -331,7 +336,9 @@ describe('Adversarial Edge-Case & Bypass Stress Tests (Milestone 2)', () => {
         getTask: async () => null
       };
 
-      const host = new AutonomousWorkerHost(mockRepo, {} as any, { workerId: 'test_worker_3' });
+      const host = new AutonomousWorkerHost(mockRepo, {} as any, {
+        workerId: 'test_worker_3', resolveCurrentTier: async () => 'guest'
+      });
       host.on('task.failed', () => { failedEventEmitted = true; });
 
       const guestPrefixedTask: AutonomousAgentTask = {

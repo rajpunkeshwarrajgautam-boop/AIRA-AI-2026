@@ -79,7 +79,8 @@ export const VERIFIED_MODEL_REGISTRY: Record<string, ModelCapabilityDescriptor> 
     displayName: 'Aira Pro (Claude 3.5 Sonnet)',
     provider: 'anthropic',
     upstreamModelId: 'claude-3-5-sonnet-20241022',
-    minTier: 'pro',
+    // Browser alias normalizes to aira-pro; the tier must match that canonical ID.
+    minTier: 'plus',
     contextWindow: '200K tokens',
     supportsThinking: false,
     description: 'High-fidelity model for software engineering, architecture, and multi-step reasoning.',
@@ -133,6 +134,7 @@ export const VERIFIED_PLAN_MODEL_ALLOWLIST: Record<PlanTier, readonly string[]> 
     'aira-auto',
     'claude-3-7-sonnet',
     'aira-pro',
+    'claude-3-5-sonnet',
     'nvidia/llama-3.1-nemotron-70b-instruct'
   ],
   pro: [

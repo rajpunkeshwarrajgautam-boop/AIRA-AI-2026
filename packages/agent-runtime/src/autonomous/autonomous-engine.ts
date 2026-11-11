@@ -8,6 +8,8 @@ import {
   AgentPlanStep,
   AgentObservation,
   ExecutionPrincipal,
+  PlanTier,
+  isFeatureAllowedForTier,
   canAutonomousStateTransition
 } from '../../../contracts/src/index.js';
 import { IAutonomousTaskRepository, InMemoryAutonomousTaskRepository } from './repository.js';
@@ -24,6 +26,7 @@ export interface AutonomousEngineOptions {
   modelRouter?: ModelRouter;
   maxExecutionCycles?: number;
   requireVerification?: boolean;
+  resolveCurrentTier?: (principalId: string) => Promise<PlanTier>;
 }
 
 export class AutonomousAgentEngine extends EventEmitter {
@@ -34,6 +37,7 @@ export class AutonomousAgentEngine extends EventEmitter {
   private modelRouter?: ModelRouter;
   private maxExecutionCycles: number;
   private requireVerification: boolean;
+  private resolveCurrentTier?: (principalId: string) => Promise<PlanTier>;
   private activeExecutions: Map<string, AbortController> = new Map();
   // A worker must keep the fencing token from its own claim/transitions.
   // Re-reading the newest token after a competing worker takes the lease would
@@ -49,6 +53,37 @@ export class AutonomousAgentEngine extends EventEmitter {
     this.modelRouter = options.modelRouter;
     this.maxExecutionCycles = options.maxExecutionCycles ?? 25;
     this.requireVerification = options.requireVerification ?? true;
+    this.resolveCurrentTier = options.resolveCurrentTier;
+  }
+
+  public setEntitlementResolver(resolver: (principalId: string) => Promise<PlanTier>): void {
+    this.resolveCurrentTier = resolver;
+  }
+
+  private async assertCurrentEntitlement(task: AutonomousAgentTask): Promise<void> {
+    if (!this.resolveCurrentTier) {
+      // Unit-test/in-memory engines can operate without a billing backend,
+      // but a deployed engine must never start unverified commercial execution.
+      if (process.env.NODE_ENV === 'production' || process.env.VERCEL) {
+        throw Object.assign(new Error('Autonomous entitlement resolver is not configured.'), {
+          code: 'ENTITLEMENT_SERVICE_UNAVAILABLE'
+        });
+      }
+      return;
+    }
+    let tier: PlanTier;
+    try {
+      tier = await this.resolveCurrentTier(task.principal.userId);
+    } catch (cause) {
+      throw Object.assign(new Error('Autonomous entitlement verification failed.'), {
+        code: 'ENTITLEMENT_SERVICE_UNAVAILABLE', cause
+      });
+    }
+    if (!isFeatureAllowedForTier('autonomous', tier)) {
+      throw Object.assign(new Error('PLAN_CAPABILITY_RESTRICTED: Current subscription does not permit autonomous execution.'), {
+        code: 'PLAN_CAPABILITY_RESTRICTED'
+      });
+    }
   }
 
   public getRepository(): IAutonomousTaskRepository {
@@ -170,6 +205,7 @@ export class AutonomousAgentEngine extends EventEmitter {
   public async startTask(taskId: string, workerId = 'worker_primary'): Promise<AutonomousAgentTask> {
     let task = await this.repository.getTask(taskId);
     if (!task) throw new Error(`Task "${taskId}" not found.`);
+    await this.assertCurrentEntitlement(task);
 
     if (this.repository.claimTask) {
       const claim = await this.repository.claimTask(taskId, workerId, 60000);
@@ -215,6 +251,7 @@ export class AutonomousAgentEngine extends EventEmitter {
   public async executeAutonomousTask(taskId: string, signal?: AbortSignal, claimedFencingToken?: number): Promise<AutonomousAgentTask> {
     const task = await this.repository.getTask(taskId);
     if (!task) throw new Error(`Task "${taskId}" not found.`);
+    await this.assertCurrentEntitlement(task);
     if (claimedFencingToken !== undefined && task.fencingToken !== claimedFencingToken) {
       throw new Error(`STALE_FENCING_TOKEN: Claim for ${taskId} has already been superseded.`);
     }
@@ -375,6 +412,7 @@ export class AutonomousAgentEngine extends EventEmitter {
         if (!task || task.state === 'CANCELLED' || task.state === 'PAUSED') {
           return;
         }
+        await this.assertCurrentEntitlement(task);
         this.assertExecutionFence(taskId, signal, task);
 
         // Check if step requires approval
@@ -400,6 +438,10 @@ export class AutonomousAgentEngine extends EventEmitter {
 
       await this.verifyAndCompleteTask(taskId, signal);
     } catch (err: any) {
+      if (err?.code === 'ENTITLEMENT_SERVICE_UNAVAILABLE') {
+        this.emit('task.deferred', { taskId, reason: err.code });
+        return;
+      }
       if (signal.aborted || String(err.message || '').includes('STALE_FENCING_TOKEN') ||
           String(err.message || '').includes('Concurrent update or stale fencing token')) return;
       try {
@@ -679,6 +721,7 @@ export class AutonomousAgentEngine extends EventEmitter {
     try {
       const task = await this.repository.getTask(taskId);
       if (!task || !task.plan) return;
+      await this.assertCurrentEntitlement(task);
       this.assertExecutionFence(taskId, signal, task);
 
       const failedCheckpoint = task.plan.steps.find(step => step.status === 'FAILED');
@@ -698,6 +741,7 @@ export class AutonomousAgentEngine extends EventEmitter {
       let cycleCount = 0;
       for (const step of remainingSteps) {
         if (signal.aborted) return;
+        await this.assertCurrentEntitlement(task);
         if (++cycleCount > this.maxExecutionCycles) {
           await this.transitionDuringExecution(taskId, signal, 'FAILED', `Loop limit exceeded during resume (${this.maxExecutionCycles}).`);
           this.emit('task.failed', { taskId, error: 'LOOP_LIMIT_EXCEEDED' });
@@ -721,6 +765,10 @@ export class AutonomousAgentEngine extends EventEmitter {
 
       await this.verifyAndCompleteTask(taskId, signal);
     } catch (error: any) {
+      if (error?.code === 'ENTITLEMENT_SERVICE_UNAVAILABLE') {
+        this.emit('task.deferred', { taskId, reason: error.code });
+        return;
+      }
       if (signal.aborted || String(error.message || '').includes('STALE_FENCING_TOKEN') ||
           String(error.message || '').includes('Concurrent update or stale fencing token')) return;
       try {
@@ -752,6 +800,7 @@ export class AutonomousAgentEngine extends EventEmitter {
   public async resumeTask(taskId: string): Promise<AutonomousAgentTask> {
     const task = await this.repository.getTask(taskId);
     if (!task) throw new Error(`Task "${taskId}" not found.`);
+    await this.assertCurrentEntitlement(task);
     if (task.state !== 'PAUSED') {
       throw new Error(`Cannot resume task in state "${task.state}". Must be PAUSED.`);
     }
@@ -774,6 +823,7 @@ export class AutonomousAgentEngine extends EventEmitter {
   public async recoverTask(taskId: string, workerId = 'worker_recovery'): Promise<AutonomousAgentTask> {
     let task = await this.repository.getTask(taskId);
     if (!task) throw new Error(`Task "${taskId}" not found.`);
+    await this.assertCurrentEntitlement(task);
 
     if (this.repository.claimTask) {
       const claim = await this.repository.claimTask(taskId, workerId, 60000);

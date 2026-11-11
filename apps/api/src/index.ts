@@ -2,8 +2,8 @@ import { createBuilderRoutes } from './builder-routes.js';
 import { createBillingRoutes } from './billing-routes.js';
 import { createVisionRoutes } from './vision-routes.js';
 import { createAccountRoutes } from './account-routes.js';
-import { commercialBillingService, StandardQuotaExceededError } from './billing/commercial-billing-service.js';
-import { paymentGatewayService, TOPUP_PACKS } from './billing/payment-gateway-service.js';
+import { commercialBillingService, StandardQuotaExceededError, StandardChatReplayError, StandardChatPlanChangedError } from './billing/commercial-billing-service.js';
+import { paymentGatewayService } from './billing/payment-gateway-service.js';
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
@@ -419,7 +419,7 @@ app.post('/api/billing/webhook/razorpay', async (req: Request, res: Response) =>
     res.status(200).json({ ok: true, ...result });
   } catch (err: any) {
     console.error('[RazorpayWebhookError]', err.message);
-    res.status(400).json({ error: err.message });
+    res.status(err?.message?.startsWith('BILLING_UNAVAILABLE') ? 503 : 400).json({ error: err.message });
   }
 });
 
@@ -435,15 +435,17 @@ app.post('/api/billing/webhook/cashfree', async (req: Request, res: Response) =>
     res.status(200).json({ ok: true, ...result });
   } catch (err: any) {
     console.error('[CashfreeWebhookError]', err.message);
-    res.status(400).json({ error: err.message });
+    res.status(err?.message?.startsWith('BILLING_UNAVAILABLE') ? 503 : 400).json({ error: err.message });
   }
 });
 
 // Public commercial plan definitions and pricing catalog (accessible to guests and landing pages)
 app.get('/api/billing/plans', (_req: Request, res: Response) => {
   res.json({
-    plans: Object.values(COMMERCIAL_PLANS),
-    topupPacks: Object.values(TOPUP_PACKS)
+    plans: Object.values(COMMERCIAL_PLANS).map(({ pricing, prices, ...plan }) => plan),
+    topupPacks: [],
+    billingStatus: 'sandbox',
+    checkoutAvailable: false
   });
 });
 
@@ -752,7 +754,12 @@ const isDbConfigured = Boolean(process.env.DATABASE_URL?.trim());
 const toolRegistry = new ToolRegistry(process.cwd());
 const approvalKernel = new ApprovalKernel(new PostgresApprovalRepository(), new PostgresSessionGrantRepository());
 const toolCallRepo = isDbConfigured ? new PostgresToolCallRepository() : new InMemoryToolCallRepository();
-const toolGateway = new ToolGateway(toolCallRepo, approvalKernel, process.cwd());
+const resolveCurrentCommercialTier = async (principalId: string) => {
+  const customer = await commercialBillingService.getOrCreateCustomer(principalId);
+  const subscription = await commercialBillingService.getActiveSubscription(customer.id);
+  return subscription.planId;
+};
+const toolGateway = new ToolGateway(toolCallRepo, approvalKernel, process.cwd(), undefined, undefined, resolveCurrentCommercialTier);
 const knowledgeEngine = new BrainV2KnowledgeEngine(undefined, { seedDefaults: !process.env.VERCEL });
 const mcpHost = new McpHost(toolGateway);
 const agentRepo = new PostgresAgentRepository();
@@ -778,6 +785,7 @@ const agentRuntime = new AgentRuntime(
   undefined,
   toolGateway
 );
+agentRuntime.getAutonomousEngine().setEntitlementResolver(resolveCurrentCommercialTier);
 const automationEngine = new AutomationEngine(agentRuntime, autoRepo, autoRunRepo);
 agentRuntime.setAutomationEngine(automationEngine);
 if (isDbConfigured) {
@@ -1076,9 +1084,21 @@ app.post('/api/agent/autonomous/tasks/:id/resume', async (req: Request, res: Res
     if (!isOwner && !isAdmin) {
       return res.status(403).json({ error: 'Forbidden: task belongs to another principal' });
     }
+    // Resume can restart execution after a paid plan expires; ownership alone
+    // never grants an autonomous capability (including to operators/admins).
+    const tier = await resolveCallerTier(req);
+    if (!isFeatureAllowedForTier('autonomous', tier)) {
+      return res.status(403).json({
+        error: 'PLAN_CAPABILITY_RESTRICTED', capability: 'autonomous_agents',
+        message: 'Current subscription does not allow autonomous execution.', requiredTier: 'plus'
+      });
+    }
     const task = await engine.resumeTask(id);
     res.json({ task });
   } catch (err: any) {
+    if (err?.code === 'ENTITLEMENT_SERVICE_UNAVAILABLE') {
+      return res.status(503).json({ error: 'ENTITLEMENT_SERVICE_UNAVAILABLE' });
+    }
     if (err?.code === 'PERSISTENCE_UNAVAILABLE' || err?.name === 'AutonomousPersistenceUnavailableError') {
       return res.status(503).json({ error: 'PERSISTENCE_UNAVAILABLE', message: err.message });
     }
@@ -1773,6 +1793,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
   let admission: any = undefined;
   let firstTokenEmitted = false;
   let quotaSettled = false;
+  let quotaSettlementPromise: Promise<void> | null = null;
   let releaseQuotaIfUnused: () => Promise<void> = async () => {};
   try {
     const { messages, history, prompt, model: rawModel, extendedThinking, systemPrompt, contextSubgraph, attachments, conversationId, intent } = req.body || {};
@@ -1825,11 +1846,30 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     const capacityConfig = modelRouter.capacityGuard.getConfig();
     const isFastTarget = modelRouter.capacityGuard.isFastTarget(model);
 
+    // Retried streams must use the same key; the ledger refuses to run them twice.
+    const chatIdempotencyKey = req.get('Idempotency-Key') || undefined;
+    if (chatIdempotencyKey && (chatIdempotencyKey.length < 8 || chatIdempotencyKey.length > 128 || !/^[\x21-\x7e]+$/.test(chatIdempotencyKey))) {
+      return res.status(400).json({ error: 'INVALID_IDEMPOTENCY_KEY' });
+    }
+
     // Feature 6: Atomic Quota Reservation Gate (pre-stream reservation)
     let chatReservation: { reservationToken: string; remainingDaily: number; remainingMonthly: number } | null = null;
     try {
-      chatReservation = await commercialBillingService.reserveStandardChat(principalId, tier, model);
+      chatReservation = await commercialBillingService.reserveStandardChat(principalId, tier, model, chatIdempotencyKey);
     } catch (quotaErr: any) {
+      if (quotaErr instanceof StandardChatPlanChangedError) {
+        return res.status(403).json({
+          error: 'PLAN_MODEL_RESTRICTED', message: quotaErr.message,
+          callerTier: quotaErr.currentTier
+        });
+      }
+      if (quotaErr instanceof StandardChatReplayError) {
+        return res.status(409).json({
+          error: quotaErr.code,
+          message: quotaErr.message,
+          idempotencyConflict: quotaErr.conflictingModel
+        });
+      }
       if (quotaErr instanceof StandardQuotaExceededError) {
         const errorKey = quotaErr.reason === 'daily' ? 'DAILY_QUOTA_EXHAUSTED' : 'MONTHLY_QUOTA_EXHAUSTED';
         const message = quotaErr.reason === 'daily'
@@ -1853,23 +1893,30 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
 
     const settleQuotaOnce = async () => {
       if (chatReservation && !quotaSettled) {
-        quotaSettled = true;
-        try {
-          await commercialBillingService.settleStandardChat(chatReservation.reservationToken);
-          if (extendedThinking || model === 'aira-auto') {
-            await commercialBillingService.tryConsumeReasoningBoost(principalId).catch(() => false);
-          }
-        } catch (settleErr) {
-          console.warn('[CHAT_STREAM] Settlement error:', settleErr);
+        // EventEmitter async delta listeners can overlap. Share one in-flight
+        // settlement so they cannot consume multiple complimentary boosts.
+        if (!quotaSettlementPromise) {
+          quotaSettlementPromise = (async () => {
+            const newlySettled = await commercialBillingService.settleStandardChat(chatReservation.reservationToken);
+            quotaSettled = true;
+            if (newlySettled && (extendedThinking || model === 'aira-auto')) {
+              await commercialBillingService.tryConsumeReasoningBoost(principalId).catch(() => false);
+            }
+          })().catch((settleErr) => {
+            console.warn('[CHAT_STREAM] Settlement error:', settleErr);
+          }).finally(() => {
+            quotaSettlementPromise = null;
+          });
         }
+        await quotaSettlementPromise;
       }
     };
 
     releaseQuotaIfUnused = async () => {
       if (chatReservation && !quotaSettled && !firstTokenEmitted) {
-        quotaSettled = true;
         try {
           await commercialBillingService.releaseStandardChat(chatReservation.reservationToken, 'Client disconnected pre-token');
+          quotaSettled = true;
         } catch (releaseErr) {
           console.warn('[CHAT_STREAM] Quota release error:', releaseErr);
         }
@@ -2157,8 +2204,9 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       return;
     }
     console.error('Chat stream failed', { code: err?.code, message: err?.message });
-    const databaseUnavailable = isTemporaryDatabaseError(err);
-    const code = databaseUnavailable ? 'DATABASE_TEMPORARILY_UNAVAILABLE' : 'CHAT_STREAM_FAILED';
+    const entitlementUnavailable = err?.code === 'ENTITLEMENT_SERVICE_UNAVAILABLE';
+    const databaseUnavailable = entitlementUnavailable || isTemporaryDatabaseError(err);
+    const code = entitlementUnavailable ? 'ENTITLEMENT_SERVICE_UNAVAILABLE' : databaseUnavailable ? 'DATABASE_TEMPORARILY_UNAVAILABLE' : 'CHAT_STREAM_FAILED';
     const message = databaseUnavailable
       ? 'Temporary database connectivity problem. Please retry your request.'
       : 'Aira could not complete this request.';
@@ -2524,22 +2572,6 @@ app.post('/api/projects', async (req: Request, res: Response) => {
     const plan = COMMERCIAL_PLANS[tier] || COMMERCIAL_PLANS.free;
     const maxAllowed = (plan as any).quotas?.projects ?? plan.maxProjects;
 
-    const countRow = await db('memory_records')
-      .where({ principal_id: userId, type: 'project', is_system: false })
-      .count('id as count')
-      .first();
-    const currentCount = Number(countRow?.count || 0);
-
-    if (maxAllowed !== -1 && currentCount >= maxAllowed) {
-      return res.status(403).json({
-        error: 'QUOTA_EXCEEDED_READ_ONLY_MODE',
-        code: 'PROJECT_LIMIT_REACHED',
-        message: `Maximum project limit of ${maxAllowed} reached for plan ${tier}.`,
-        currentCount,
-        maxAllowed
-      });
-    }
-
     const id = `proj_${crypto.randomBytes(4).toString('hex')}`;
     const name = (req.body?.name || 'New Project').trim().slice(0, 120);
     const description = (req.body?.description || '').trim();
@@ -2556,17 +2588,33 @@ app.post('/api/projects', async (req: Request, res: Response) => {
       updatedAt: now
     };
 
-    await db('memory_records').insert({
-      id,
-      principal_id: userId,
-      workspace_id: req.principal?.workspaceId || 'default',
-      type: 'project',
-      agent_id: 'user_project',
-      content: name,
-      context: JSON.stringify(contextObj),
-      is_system: false,
-      created_at: now
+    const currentCount = await db.transaction(async (trx) => {
+      await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [`aira-project-quota:${userId}`]);
+      const countRow = await trx('memory_records')
+        .where({ principal_id: userId, type: 'project', is_system: false })
+        .count('id as count').first();
+      const count = Number(countRow?.count || 0);
+      if (maxAllowed !== -1 && count >= maxAllowed) return count;
+      await trx('memory_records').insert({
+        id,
+        principal_id: userId,
+        workspace_id: req.principal?.workspaceId || 'default',
+        type: 'project',
+        agent_id: 'user_project',
+        content: name,
+        context: JSON.stringify(contextObj),
+        is_system: false,
+        created_at: now
+      });
+      return count;
     });
+
+    if (maxAllowed !== -1 && currentCount >= maxAllowed) {
+      return res.status(403).json({
+        error: 'QUOTA_EXCEEDED_READ_ONLY_MODE', code: 'PROJECT_LIMIT_REACHED',
+        message: `Maximum project limit of ${maxAllowed} reached for plan ${tier}.`, currentCount, maxAllowed
+      });
+    }
 
     const project: ApiProjectItem = {
       id,
@@ -2810,39 +2858,39 @@ app.post('/api/memories', async (req: Request, res: Response) => {
     const plan = COMMERCIAL_PLANS[tier] || COMMERCIAL_PLANS.free;
     const maxAllowed = (plan as any).quotas?.memoryRecords ?? plan.maxMemoryRecords;
 
-    const countRow = await db('memory_records')
-      .where({ principal_id: userId, type: 'memory', is_system: false })
-      .count('id as count')
-      .first();
-    const currentCount = Number(countRow?.count || 0);
-
-    if (maxAllowed !== -1 && currentCount >= maxAllowed) {
-      return res.status(403).json({
-        error: 'QUOTA_EXCEEDED_READ_ONLY_MODE',
-        code: 'MEMORY_LIMIT_REACHED',
-        message: `Maximum memory limit of ${maxAllowed} reached for plan ${tier}.`,
-        currentCount,
-        maxAllowed
-      });
-    }
-
     const id = `mem_${crypto.randomBytes(4).toString('hex')}`;
     const content = req.body?.content || '';
     const metadata = req.body?.metadata || {};
     const tags = Array.isArray(req.body?.tags) ? req.body.tags : [];
     const now = Date.now();
 
-    await db('memory_records').insert({
-      id,
-      principal_id: userId,
-      workspace_id: req.principal?.workspaceId || 'default',
-      type: 'memory',
-      agent_id: 'user_memory',
-      content,
-      context: JSON.stringify({ metadata, tags }),
-      is_system: false,
-      created_at: now
+    const currentCount = await db.transaction(async (trx) => {
+      await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [`aira-memory-quota:${userId}`]);
+      const countRow = await trx('memory_records')
+        .where({ principal_id: userId, type: 'memory', is_system: false })
+        .count('id as count').first();
+      const count = Number(countRow?.count || 0);
+      if (maxAllowed !== -1 && count >= maxAllowed) return count;
+      await trx('memory_records').insert({
+        id,
+        principal_id: userId,
+        workspace_id: req.principal?.workspaceId || 'default',
+        type: 'memory',
+        agent_id: 'user_memory',
+        content,
+        context: JSON.stringify({ metadata, tags }),
+        is_system: false,
+        created_at: now
+      });
+      return count;
     });
+
+    if (maxAllowed !== -1 && currentCount >= maxAllowed) {
+      return res.status(403).json({
+        error: 'QUOTA_EXCEEDED_READ_ONLY_MODE', code: 'MEMORY_LIMIT_REACHED',
+        message: `Maximum memory limit of ${maxAllowed} reached for plan ${tier}.`, currentCount, maxAllowed
+      });
+    }
 
     const memory: ApiMemoryItem = {
       id,
@@ -3446,6 +3494,13 @@ app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
     res.removeHeader('Access-Control-Allow-Origin');
     res.removeHeader('access-control-allow-origin');
     res.status(403).json({ error: 'Origin not allowed' });
+    return;
+  }
+  if (err?.code === 'ENTITLEMENT_SERVICE_UNAVAILABLE') {
+    res.status(503).json({
+      error: 'ENTITLEMENT_SERVICE_UNAVAILABLE',
+      message: 'Authoritative subscription verification is temporarily unavailable.'
+    });
     return;
   }
   process.stderr.write(`[API_ERROR] ${err.message}\n`);

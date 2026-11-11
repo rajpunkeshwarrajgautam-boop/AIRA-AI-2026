@@ -900,6 +900,7 @@ test('Milestone 3 — Section 5 Comprehensive Autonomous Stress Testing', async 
       const engine = new AutonomousAgentEngine({ repository: repo, specialistRegistry });
       const workerHost = new AutonomousWorkerHost(repo, engine, {
         workerId: 'worker_hb_test',
+        resolveCurrentTier: async () => 'pro',
         pollIntervalMs: 50,
         heartbeatIntervalMs: 20,
         leaseDurationMs: 200,

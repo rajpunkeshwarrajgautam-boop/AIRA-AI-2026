@@ -103,7 +103,8 @@ export class ToolGateway extends EventEmitter {
     private approvalKernel?: ApprovalKernel,
     private workspaceRoot = process.cwd(),
     private authorityRepository: WorkspaceAuthorityRepository = workspaceAuthority,
-    browserAdapter: BrowserAdapter = new BrowserAdapter()
+    browserAdapter: BrowserAdapter = new BrowserAdapter(),
+    private resolveCurrentTier?: (principalId: string) => Promise<PlanTier>
   ) {
     super();
     this.browserAdapter = browserAdapter;
@@ -342,7 +343,24 @@ export class ToolGateway extends EventEmitter {
 
     // STEP 5.5: Verify Plan Tier Entitlements for Restricted Tools
     // Commercial subscription tier is strictly separated from administrative/developer roles
-    const callerTier: PlanTier = (principal as any).tier || (principal.userId?.startsWith('guest_') ? 'guest' : 'free');
+    let callerTier: PlanTier = 'guest';
+    const isRestrictedExecution = def.name.startsWith('browser_') || toolName.startsWith('browser_') ||
+      def.name === 'python_sandbox' || toolName === 'python_sandbox';
+    if (isRestrictedExecution && !principal.userId?.startsWith('guest_')) {
+      try {
+        if (!principal.userId || !this.resolveCurrentTier) {
+          throw new Error('Authoritative tool entitlement resolver is unavailable.');
+        }
+        callerTier = await this.resolveCurrentTier(principal.userId);
+      } catch {
+        return {
+          toolCallId: callId, output: null,
+          error: 'ENTITLEMENT_SERVICE_UNAVAILABLE: Tool execution denied until subscription can be verified.',
+          errorCode: 'ENTITLEMENT_SERVICE_UNAVAILABLE', isError: true,
+          durationMs: Date.now() - startTime, timestamp: Date.now(), artifacts: []
+        };
+      }
+    }
     if (def.name.startsWith('browser_') || toolName.startsWith('browser_')) {
         if (!isFeatureAllowedForTier('browsertools', callerTier)) {
           const errorMsg = 'PLAN_TOOL_RESTRICTED: Browser execution tools require AIRA Pro plan.';

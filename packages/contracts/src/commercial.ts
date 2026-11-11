@@ -150,7 +150,7 @@ export const COMMERCIAL_PLANS: Record<PlanTier, PlanDefinition> = {
     planTier: 'plus',
     name: 'AIRA Plus',
     description: 'Power-user productivity with everyday value',
-    pricing: { INR: 399, USD: 7.99 },
+    // Paid pricing is pending owner approval and verified gateway integration.
     billingInterval: 'monthly',
     dailyStandardChatLimit: 50,
     monthlyStandardChatUnits: 700,
@@ -164,37 +164,14 @@ export const COMMERCIAL_PLANS: Record<PlanTier, PlanDefinition> = {
     allowAutonomous: true,
     allowBrowserTools: false,
     allowPythonSandbox: false,
-    prices: [
-      {
-        id: 'price_plus_inr',
-        planId: 'plus',
-        currency: 'INR',
-        interval: 'monthly',
-        amountMinorUnits: 39900,
-        displayAmount: 399,
-        isTaxInclusive: true,
-        taxRatePercent: 18,
-        isActive: true
-      },
-      {
-        id: 'price_plus_usd',
-        planId: 'plus',
-        currency: 'USD',
-        interval: 'monthly',
-        amountMinorUnits: 799,
-        displayAmount: 7.99,
-        isTaxInclusive: false,
-        taxRatePercent: 0,
-        isActive: true
-      }
-    ]
+    prices: []
   },
   pro: {
     id: 'pro',
     planTier: 'pro',
     name: 'AIRA Pro',
     description: 'Higher limits, deep research, vision, builder and agent workflows',
-    pricing: { INR: 999, USD: 19.99 },
+    // Paid pricing is pending owner approval and verified gateway integration.
     billingInterval: 'monthly',
     dailyStandardChatLimit: 150,
     monthlyStandardChatUnits: 2000,
@@ -208,30 +185,7 @@ export const COMMERCIAL_PLANS: Record<PlanTier, PlanDefinition> = {
     allowAutonomous: true,
     allowBrowserTools: true,
     allowPythonSandbox: true,
-    prices: [
-      {
-        id: 'price_pro_inr',
-        planId: 'pro',
-        currency: 'INR',
-        interval: 'monthly',
-        amountMinorUnits: 99900,
-        displayAmount: 999,
-        isTaxInclusive: true,
-        taxRatePercent: 18,
-        isActive: true
-      },
-      {
-        id: 'price_pro_usd',
-        planId: 'pro',
-        currency: 'USD',
-        interval: 'monthly',
-        amountMinorUnits: 1999,
-        displayAmount: 19.99,
-        isTaxInclusive: false,
-        taxRatePercent: 0,
-        isActive: true
-      }
-    ]
+    prices: []
   }
 };
 
@@ -239,34 +193,8 @@ export const COMMERCIAL_PLANS: Record<PlanTier, PlanDefinition> = {
 // 1B. MODEL ALLOWLIST & CAPABILITY MATRIX
 // ==========================================
 
-export const PLAN_MODEL_ALLOWLIST = {
-  guest: ['aira-fast', 'llama-3.1-8b-instant'],
-  free: [
-    'aira-fast',
-    'aira-auto',
-    'llama-3.1-8b-instant',
-    'llama-3.3-70b-versatile',
-    'gemini-3.5-flash-lite'
-  ],
-  plus: [
-    'aira-fast',
-    'aira-auto',
-    'aira-pro',
-    'gpt-4o-mini',
-    'gemini-2-5-flash',
-    'llama-3.3-70b-versatile'
-  ],
-  pro: [
-    'aira-fast',
-    'aira-auto',
-    'aira-pro',
-    'aira-deep',
-    'gpt-4o',
-    'claude-3-5-sonnet',
-    'gemini-2-5-pro',
-    'meta/llama-3.1-405b-instruct'
-  ]
-} as const satisfies Record<PlanTier, readonly string[]>;
+/** Compatibility export: no second, contradictory model admission catalog. */
+export const PLAN_MODEL_ALLOWLIST: Record<PlanTier, readonly string[]> = VERIFIED_PLAN_MODEL_ALLOWLIST;
 
 export interface PlanCapabilities {
   maxProjects: number;
@@ -357,52 +285,26 @@ Object.freeze(PLAN_CAPABILITY_MATRIX);
 
 const CANONICAL_MODEL_ALIASES: Record<string, string> = {
   'claude-3-7-sonnet': 'aira-auto',
+  'claude-3-5-sonnet': 'aira-pro',
   'claude-3-5-haiku': 'aira-fast',
   'claude-3-opus': 'aira-deep',
-  'mock-deterministic': 'aira-fast',
-  'meta/llama-3.1-405b-instruct': 'nvidia/llama-3.1-nemotron-70b-instruct'
+  'meta/llama-3.1-405b-instruct': 'nvidia/llama-3.1-nemotron-70b-instruct',
+  'nvidia/nemotron-3-super-120b-a12b': 'nvidia/llama-3.1-nemotron-70b-instruct'
 };
 
 export function isModelAllowedForTier(model: string, tier: PlanTier): boolean {
   if (!model || !tier || typeof model !== 'string' || typeof tier !== 'string') {
     return false;
   }
-  const trimmed = model.trim();
-
-  // Check single verified model capability registry allowlist first
-  if (Object.hasOwn(VERIFIED_PLAN_MODEL_ALLOWLIST, tier)) {
-    const verifiedAllowed = VERIFIED_PLAN_MODEL_ALLOWLIST[tier as PlanTier];
-    if (Array.isArray(verifiedAllowed) && verifiedAllowed.includes(trimmed)) {
-      return true;
-    }
-  }
-
   if (!Object.hasOwn(PLAN_MODEL_ALLOWLIST, tier)) {
     return false;
   }
   const allowed = PLAN_MODEL_ALLOWLIST[tier as PlanTier];
-  if (!Array.isArray(allowed)) {
-    return false;
-  }
-  if ((allowed as readonly string[]).includes(trimmed)) {
-    return true;
-  }
-
-  // If model is explicitly defined in allowlists, do not cross-alias down to lower tier
-  const isExplicitlyAssignedInAllowlist =
-    Object.values(PLAN_MODEL_ALLOWLIST).some(list => Array.isArray(list) && (list as readonly string[]).includes(trimmed)) ||
-    Object.values(VERIFIED_PLAN_MODEL_ALLOWLIST).some(list => Array.isArray(list) && (list as readonly string[]).includes(trimmed));
-
-  if (!isExplicitlyAssignedInAllowlist) {
-    const alias = Object.hasOwn(CANONICAL_MODEL_ALIASES, trimmed)
-      ? CANONICAL_MODEL_ALIASES[trimmed]
-      : undefined;
-    if (alias && ((allowed as readonly string[]).includes(alias) || (VERIFIED_PLAN_MODEL_ALLOWLIST[tier as PlanTier] as readonly string[] | undefined)?.includes(alias))) {
-      return true;
-    }
-  }
-
-  return false;
+  const trimmed = model.trim();
+  const canonical = Object.hasOwn(CANONICAL_MODEL_ALIASES, trimmed)
+    ? CANONICAL_MODEL_ALIASES[trimmed]
+    : trimmed;
+  return Array.isArray(allowed) && allowed.includes(canonical);
 }
 
 export { VERIFIED_MODEL_REGISTRY, VERIFIED_PLAN_MODEL_ALLOWLIST, type ModelCapabilityDescriptor };

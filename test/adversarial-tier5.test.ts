@@ -610,8 +610,14 @@ describe('Tier 5 Adversarial Stress & Vulnerability Hardening Suite', () => {
         user: { id: 'usr_free_account', tier: 'free', isGuest: false },
         headers: { 'x-user-tier': 'pro' }
       };
-      const tierFromUser = await resolveCallerTier(reqWithUser);
-      assert.strictEqual(tierFromUser, 'free');
+      // The billing database is intentionally unavailable in this isolated
+      // contract test: a forged header must not turn an outage into paid access
+      // or silently grant a verified Free tier.
+      await assert.rejects(() => resolveCallerTier(reqWithUser), (err: any) => {
+        assert.strictEqual(err.code, 'ENTITLEMENT_SERVICE_UNAVAILABLE');
+        assert.strictEqual(err.statusCode, 503);
+        return true;
+      });
 
       // 3. Guest session with spoofed header
       const reqGuest: any = {
@@ -635,7 +641,10 @@ describe('Tier 5 Adversarial Stress & Vulnerability Hardening Suite', () => {
         getTask: async () => null
       };
 
-      const host = new AutonomousWorkerHost(mockRepo, {} as any, { workerId: 'worker_idor_test' });
+      const host = new AutonomousWorkerHost(mockRepo, {} as any, {
+        workerId: 'worker_idor_test',
+        resolveCurrentTier: async () => 'free'
+      });
       host.on('task.failed', () => { failedEmitted = true; });
 
       // Attacker submits task masquerading as another user with Free tier
@@ -666,7 +675,7 @@ describe('Tier 5 Adversarial Stress & Vulnerability Hardening Suite', () => {
     });
 
     test('D3: ToolGateway fails closed when ExecutionPrincipal omits tier property', async () => {
-      const gateway = new ToolGateway(new InMemoryToolCallRepository());
+      const gateway = new ToolGateway(new InMemoryToolCallRepository(), undefined, process.cwd(), undefined, undefined, async () => 'free');
 
       // Attacker crafts principal omitting tier property
       const unadornedPrincipal: ExecutionPrincipal = {
@@ -726,7 +735,8 @@ describe('Tier 5 Adversarial Stress & Vulnerability Hardening Suite', () => {
       const host = new AutonomousWorkerHost(mockRepo, mockEngine, {
         workerId: 'worker_multi_tenant',
         concurrency: 4,
-        heartbeatIntervalMs: 5000
+        heartbeatIntervalMs: 5000,
+        resolveCurrentTier: async () => 'pro'
       });
 
       const completedDeliverables: string[] = [];
@@ -819,7 +829,8 @@ describe('Tier 5 Adversarial Stress & Vulnerability Hardening Suite', () => {
 
       const host = new AutonomousWorkerHost(mockRepo, mockEngine, {
         workerId: 'worker_original',
-        heartbeatIntervalMs: 50 // Fast heartbeat for test
+        heartbeatIntervalMs: 50, // Fast heartbeat for test
+        resolveCurrentTier: async () => 'pro'
       });
 
       const task: AutonomousAgentTask = {

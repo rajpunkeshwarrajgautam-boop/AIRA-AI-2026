@@ -99,7 +99,8 @@ test('COMMERCIAL_PLANS.plus: satisfies exact Plus tier specifications', () => {
   assert.equal(plus.id, 'plus');
   assert.equal(plus.planTier, 'plus');
   assert.equal(plus.name, 'AIRA Plus');
-  assert.deepEqual(plus.pricing, { INR: 399, USD: 7.99 });
+  assert.equal(plus.pricing, undefined, 'Unapproved Plus pricing must not be published');
+  assert.deepEqual(plus.prices, []);
   assert.equal(plus.dailyStandardChatLimit, 50);
   assert.equal(plus.monthlyStandardChatUnits, 700);
   assert.equal(plus.complimentaryReasoningBoosts, 50);
@@ -119,7 +120,8 @@ test('COMMERCIAL_PLANS.pro: satisfies exact Pro tier specifications', () => {
   assert.equal(pro.id, 'pro');
   assert.equal(pro.planTier, 'pro');
   assert.equal(pro.name, 'AIRA Pro');
-  assert.deepEqual(pro.pricing, { INR: 999, USD: 19.99 });
+  assert.equal(pro.pricing, undefined, 'Unapproved Pro pricing must not be published');
+  assert.deepEqual(pro.prices, []);
   assert.equal(pro.dailyStandardChatLimit, 150);
   assert.equal(pro.monthlyStandardChatUnits, 2000);
   assert.equal(pro.complimentaryReasoningBoosts, 200);
@@ -141,17 +143,16 @@ test('COMMERCIAL_PLANS.pro: satisfies exact Pro tier specifications', () => {
 test('PLAN_MODEL_ALLOWLIST: contains exact authoritative model lists per tier', () => {
   assert.deepEqual(
     [...PLAN_MODEL_ALLOWLIST.guest],
-    ['aira-fast', 'llama-3.1-8b-instant']
+    ['aira-fast', 'claude-3-5-haiku']
   );
 
   assert.deepEqual(
     [...PLAN_MODEL_ALLOWLIST.free],
     [
       'aira-fast',
+      'claude-3-5-haiku',
       'aira-auto',
-      'llama-3.1-8b-instant',
-      'llama-3.3-70b-versatile',
-      'gemini-3.5-flash-lite'
+      'claude-3-7-sonnet'
     ]
   );
 
@@ -159,11 +160,12 @@ test('PLAN_MODEL_ALLOWLIST: contains exact authoritative model lists per tier', 
     [...PLAN_MODEL_ALLOWLIST.plus],
     [
       'aira-fast',
+      'claude-3-5-haiku',
       'aira-auto',
+      'claude-3-7-sonnet',
       'aira-pro',
-      'gpt-4o-mini',
-      'gemini-2-5-flash',
-      'llama-3.3-70b-versatile'
+      'claude-3-5-sonnet',
+      'nvidia/llama-3.1-nemotron-70b-instruct'
     ]
   );
 
@@ -171,13 +173,14 @@ test('PLAN_MODEL_ALLOWLIST: contains exact authoritative model lists per tier', 
     [...PLAN_MODEL_ALLOWLIST.pro],
     [
       'aira-fast',
+      'claude-3-5-haiku',
       'aira-auto',
+      'claude-3-7-sonnet',
       'aira-pro',
-      'aira-deep',
-      'gpt-4o',
       'claude-3-5-sonnet',
-      'gemini-2-5-pro',
-      'meta/llama-3.1-405b-instruct'
+      'aira-deep',
+      'claude-3-opus',
+      'nvidia/llama-3.1-nemotron-70b-instruct'
     ]
   );
 });
@@ -185,7 +188,7 @@ test('PLAN_MODEL_ALLOWLIST: contains exact authoritative model lists per tier', 
 test('isModelAllowedForTier: evaluates model access correctly across tiers', () => {
   // Guest
   assert.equal(isModelAllowedForTier('aira-fast', 'guest'), true);
-  assert.equal(isModelAllowedForTier('llama-3.1-8b-instant', 'guest'), true);
+  assert.equal(isModelAllowedForTier('llama-3.1-8b-instant', 'guest'), false);
   assert.equal(isModelAllowedForTier('claude-3-5-haiku', 'guest'), true); // mapped alias to aira-fast
   assert.equal(isModelAllowedForTier('aira-auto', 'guest'), false);
   assert.equal(isModelAllowedForTier('aira-pro', 'guest'), false);
@@ -194,8 +197,8 @@ test('isModelAllowedForTier: evaluates model access correctly across tiers', () 
   // Free
   assert.equal(isModelAllowedForTier('aira-fast', 'free'), true);
   assert.equal(isModelAllowedForTier('aira-auto', 'free'), true);
-  assert.equal(isModelAllowedForTier('llama-3.3-70b-versatile', 'free'), true);
-  assert.equal(isModelAllowedForTier('gemini-3.5-flash-lite', 'free'), true);
+  assert.equal(isModelAllowedForTier('llama-3.3-70b-versatile', 'free'), false);
+  assert.equal(isModelAllowedForTier('gemini-3.5-flash-lite', 'free'), false);
   assert.equal(isModelAllowedForTier('aira-pro', 'free'), false);
   assert.equal(isModelAllowedForTier('gpt-4o', 'free'), false);
   assert.equal(isModelAllowedForTier('claude-3-5-sonnet', 'free'), false);
@@ -204,10 +207,10 @@ test('isModelAllowedForTier: evaluates model access correctly across tiers', () 
   assert.equal(isModelAllowedForTier('aira-fast', 'plus'), true);
   assert.equal(isModelAllowedForTier('aira-auto', 'plus'), true);
   assert.equal(isModelAllowedForTier('aira-pro', 'plus'), true);
-  assert.equal(isModelAllowedForTier('gpt-4o-mini', 'plus'), true);
-  assert.equal(isModelAllowedForTier('gemini-2-5-flash', 'plus'), true);
+  assert.equal(isModelAllowedForTier('gpt-4o-mini', 'plus'), false);
+  assert.equal(isModelAllowedForTier('gemini-2-5-flash', 'plus'), false);
   assert.equal(isModelAllowedForTier('gpt-4o', 'plus'), false); // Pro only
-  assert.equal(isModelAllowedForTier('claude-3-5-sonnet', 'plus'), false); // Pro only
+  assert.equal(isModelAllowedForTier('claude-3-5-sonnet', 'plus'), true); // Browser alias resolves to aira-pro
   assert.equal(isModelAllowedForTier('gemini-2-5-pro', 'plus'), false); // Pro only
   assert.equal(isModelAllowedForTier('aira-deep', 'plus'), false); // Pro only
 
@@ -216,9 +219,9 @@ test('isModelAllowedForTier: evaluates model access correctly across tiers', () 
   assert.equal(isModelAllowedForTier('aira-auto', 'pro'), true);
   assert.equal(isModelAllowedForTier('aira-pro', 'pro'), true);
   assert.equal(isModelAllowedForTier('aira-deep', 'pro'), true);
-  assert.equal(isModelAllowedForTier('gpt-4o', 'pro'), true);
+  assert.equal(isModelAllowedForTier('gpt-4o', 'pro'), false);
   assert.equal(isModelAllowedForTier('claude-3-5-sonnet', 'pro'), true);
-  assert.equal(isModelAllowedForTier('gemini-2-5-pro', 'pro'), true);
+  assert.equal(isModelAllowedForTier('gemini-2-5-pro', 'pro'), false);
   assert.equal(isModelAllowedForTier('meta/llama-3.1-405b-instruct', 'pro'), true);
 
   // Invalid / Unknown models

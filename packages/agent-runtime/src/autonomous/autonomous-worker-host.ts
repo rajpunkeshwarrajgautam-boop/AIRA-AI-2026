@@ -4,6 +4,8 @@ import { AutonomousAgentEngine } from './autonomous-engine.js';
 import { AutonomousAgentTask, PlanTier, isFeatureAllowedForTier } from '../../../contracts/src/index.js';
 
 export interface AutonomousWorkerHostConfig {
+  /** Authoritative subscription lookup; must not trust serialized task principal.tier. */
+  resolveCurrentTier?: (principalId: string) => Promise<PlanTier>;
   workerId?: string;
   pollIntervalMs?: number;
   maxPollIntervalMs?: number;
@@ -33,6 +35,7 @@ export class AutonomousWorkerHost extends EventEmitter {
   private concurrency: number;
   private leaseDurationMs: number;
   private heartbeatIntervalMs: number;
+  private resolveCurrentTier?: (principalId: string) => Promise<PlanTier>;
 
   private isRunning = false;
   private isShuttingDown = false;
@@ -56,6 +59,7 @@ export class AutonomousWorkerHost extends EventEmitter {
     this.concurrency = config.concurrency ?? 2;
     this.leaseDurationMs = config.leaseDurationMs ?? 15000;
     this.heartbeatIntervalMs = config.heartbeatIntervalMs ?? 3000;
+    this.resolveCurrentTier = config.resolveCurrentTier;
   }
 
   public async start(): Promise<void> {
@@ -162,8 +166,23 @@ export class AutonomousWorkerHost extends EventEmitter {
   private async processTask(task: AutonomousAgentTask): Promise<void> {
     const taskId = task.taskId;
     const principal = task.principal;
-    // Commercial subscription tier is strictly separated from execution scopes and wildcard permissions
-    const callerTier: PlanTier = (principal as any)?.tier || (principal?.userId?.startsWith('guest_') ? 'guest' : 'free');
+    let callerTier: PlanTier;
+    try {
+      if (!principal?.userId || !this.resolveCurrentTier) {
+        throw new Error('Authoritative autonomous entitlement resolver is not configured.');
+      }
+      callerTier = await this.resolveCurrentTier(principal.userId);
+    } catch (err: any) {
+      // Leave the lease for retry. A temporary billing outage must neither execute
+      // the task nor permanently fail a legitimately subscribed account.
+      this.emit('worker.error', {
+        workerId: this.workerId,
+        taskId,
+        code: 'ENTITLEMENT_SERVICE_UNAVAILABLE',
+        error: err?.message || 'Cannot verify subscription before autonomous execution.'
+      });
+      return;
+    }
 
     // Verify caller tier has autonomous execution capability (Plus or Pro)
     if (!isFeatureAllowedForTier('autonomous', callerTier)) {
@@ -194,6 +213,16 @@ export class AutonomousWorkerHost extends EventEmitter {
       if (abortController.signal.aborted || heartbeatInProgress) return;
       heartbeatInProgress = true;
       try {
+        // A subscription may expire while a long-running task holds its lease.
+        const currentTier = await this.resolveCurrentTier!(principal.userId);
+        if (!isFeatureAllowedForTier('autonomous', currentTier)) {
+          abortOnLostLease();
+          this.emit('worker.error', {
+            workerId: this.workerId, taskId, code: 'PLAN_CAPABILITY_REVOKED',
+            error: 'Subscription no longer permits autonomous execution.'
+          });
+          return;
+        }
         const current = await this.repository.getTask(taskId);
         if (!current || current.leaseOwner !== this.workerId) {
           abortOnLostLease();
