@@ -21,7 +21,7 @@ env:
 jobs:
   fast:
     name: Fast CI
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     services:
       postgres:
@@ -245,7 +245,7 @@ jobs:
 
   semantic-search:
     name: Semantic Search CI
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     services:
       postgres:
@@ -288,7 +288,7 @@ jobs:
     name: Main / PR certification
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging' || github.ref == 'refs/heads/prod-release'
     needs: [fast, semantic-search]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     services:
       postgres:
@@ -335,7 +335,19 @@ jobs:
         run: npm run test:startup
 
       - name: Install Playwright Edge
-        run: npx playwright install --with-deps msedge
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if npx playwright install --with-deps msedge; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Playwright Edge install failed after 3 attempts."
+              exit 1
+            fi
+            echo "Playwright Edge install attempt $attempt failed, retrying in 5s..."
+            sleep 5
+          done
 
       - name: Start Vite for E2E
         shell: bash
@@ -385,7 +397,7 @@ jobs:
     # Fail-closed staging-only gate. NEVER runs for main/production.
     if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
     needs: [fast, semantic-search, certify]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout staging SHA
@@ -408,7 +420,19 @@ jobs:
         run: npm run test:staging:attest
 
       - name: Install Playwright Edge
-        run: npx playwright install --with-deps msedge
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if npx playwright install --with-deps msedge; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Playwright Edge install failed after 3 attempts."
+              exit 1
+            fi
+            echo "Playwright Edge install attempt $attempt failed, retrying in 5s..."
+            sleep 5
+          done
 
       - name: Test deployed staging desktop and mobile
         env:

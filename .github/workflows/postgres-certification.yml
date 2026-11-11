@@ -16,7 +16,7 @@ concurrency:
 jobs:
   postgres-certification:
     name: PostgreSQL 16 isolated regression certification
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -34,9 +34,19 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Install PostgreSQL client tools on runner host
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client
+          for attempt in 1 2 3; do
+            if sudo apt-get update && sudo apt-get install -y postgresql-client; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::PostgreSQL client install failed after 3 attempts."
+              exit 1
+            fi
+            echo "apt-get attempt $attempt failed, retrying in 5s..."
+            sleep 5
+          done
 
       - name: Pull reviewed immutable images
         shell: bash

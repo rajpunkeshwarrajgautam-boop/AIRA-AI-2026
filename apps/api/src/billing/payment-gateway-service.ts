@@ -111,6 +111,14 @@ export class PaymentGatewayService {
     this.customDbClient = client;
   }
 
+  setRazorpaySecret(secret: string): void {
+    this.razorpaySecret = secret;
+  }
+
+  setCashfreeSecret(secret: string): void {
+    this.cashfreeSecret = secret;
+  }
+
   private getDb(): Knex | PaymentDbClient {
     return this.customDbClient || db;
   }
@@ -119,7 +127,7 @@ export class PaymentGatewayService {
    * Cryptographically verify Razorpay Webhook HMAC-SHA256 signature using raw body.
    */
   verifyRazorpayWebhook(rawBody: string, signature: string, secretOverride?: string): WebhookVerificationResult {
-    const secret = secretOverride || this.razorpaySecret;
+    const secret = secretOverride || this.razorpaySecret || process.env.RAZORPAY_WEBHOOK_SECRET;
     if (!secret || !signature || !rawBody) {
       return { valid: false, error: 'Missing webhook secret, signature or body payload.' };
     }
@@ -148,7 +156,7 @@ export class PaymentGatewayService {
    * Cryptographically verify Cashfree Webhook HMAC-SHA256 signature using raw body and timestamp.
    */
   verifyCashfreeWebhook(rawBody: string, signature: string, timestamp: string, secretOverride?: string): WebhookVerificationResult {
-    const secret = secretOverride || this.cashfreeSecret;
+    const secret = secretOverride || this.cashfreeSecret || process.env.CASHFREE_WEBHOOK_SECRET;
     if (!secret || !signature || !rawBody || !timestamp) {
       return { valid: false, error: 'Missing webhook secret, signature, body, or timestamp.' };
     }
@@ -396,9 +404,13 @@ export class PaymentGatewayService {
    */
   async createSubscriptionCheckout(
     _principalId: string,
-    _planTier: PlanTier,
+    planTier: PlanTier,
     _currency: CurrencyCode = 'INR'
   ): Promise<{ checkoutUrl?: string; orderId: string; keyId: string; amount: number; currency: string }> {
+    const plan = COMMERCIAL_PLANS[planTier];
+    if (!plan || planTier === 'free') {
+      throw new Error(`Invalid plan tier for subscription checkout: ${planTier}`);
+    }
     // No gateway order endpoint is wired yet. Returning a synthetic order ID
     // would misrepresent a purchase and could trigger an unsafe payment flow.
     throw new Error('BILLING_UNAVAILABLE: Live checkout has not been approved or integrated.');

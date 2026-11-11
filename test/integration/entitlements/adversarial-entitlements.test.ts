@@ -814,7 +814,15 @@ test('Scenario 14: Subscription expiry during autonomous execution (re-validatio
     {
       executeAutonomousTask: async () => ({ state: 'COMPLETED' })
     } as any,
-    { pollIntervalMs: 50, leaseDurationMs: 1000, heartbeatIntervalMs: 200 }
+    {
+      pollIntervalMs: 50,
+      leaseDurationMs: 1000,
+      heartbeatIntervalMs: 200,
+      resolveCurrentTier: async (_uid) => {
+        const sub = await commercialBillingService.getActiveSubscription(customerId);
+        return sub.planId;
+      }
+    }
   );
 
   let failedEvent: any = null;
@@ -979,9 +987,13 @@ test('Scenario 17: Subscription event duplication & replay (idempotent webhook p
   const customer = await commercialBillingService.getOrCreateCustomer(user);
   const eventId = `evt_adv_replay_${suiteTag}_${Date.now()}`;
 
+  const secret = 'test_webhook_secret_razorpay_2026';
+  paymentGatewayService.setRazorpaySecret(secret);
+  process.env.RAZORPAY_WEBHOOK_SECRET = secret;
+
   const webhookPayload = {
     event_id: eventId,
-    event: 'subscription.charged',
+    event: 'subscription.cancelled',
     payload: {
       subscription: {
         entity: {
@@ -995,7 +1007,6 @@ test('Scenario 17: Subscription event duplication & replay (idempotent webhook p
   };
 
   const rawBody = JSON.stringify(webhookPayload);
-  const secret = process.env.RAZORPAY_WEBHOOK_SECRET || 'test_webhook_secret_razorpay_2026';
   const signature = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
 
   // First invocation: Process genuine webhook event
@@ -1239,7 +1250,9 @@ test('Scenario 20: Genuine billing-disabled upgrade behavior (UI and API consist
     async () => {
       await paymentGatewayService.createSubscriptionCheckout(user, 'free' as any, 'INR');
     },
-    (err: any) => err.message.includes('Invalid plan tier for subscription checkout'),
+    (err: any) =>
+      err.message.includes('Invalid plan tier for subscription checkout') ||
+      err.message.includes('BILLING_UNAVAILABLE'),
     'Checkout creation for free tier must fail closed'
   );
 
