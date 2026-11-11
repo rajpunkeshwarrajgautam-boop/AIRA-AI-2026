@@ -96,7 +96,7 @@ async function runIdentityTests() {
     const chatRes = await fetch(`${BASE_URL}/api/chat/stream`, {
       method: 'POST',
       headers: authHeaders(USER_A.userId, USER_A.sessionId),
-      body: JSON.stringify({ prompt: 'Hello', model: 'mock-deterministic' }),
+      body: JSON.stringify({ prompt: 'Hello', model: 'aira-fast' }),
     });
     assert.ok(chatRes.status === 200, `B: chat/stream must accept authenticated request, got ${chatRes.status}`);
     try { await chatRes.body?.cancel(); } catch (_) {}

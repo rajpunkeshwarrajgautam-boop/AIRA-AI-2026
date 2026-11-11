@@ -154,11 +154,16 @@ function readSessionPayload(req: Request): VerifiedSessionPayload | null {
 }
 
 function attachUser(req: Request, payload: VerifiedSessionPayload): void {
+  const isGuest = payload.uid.startsWith('guest_') || (payload as any).isGuest === true;
   (req as any).user = {
     id: payload.uid,
     sessionId: payload.sid,
-    roles: ['workspace_user'],
-    scopes: ['chat:write', 'runs:read', 'runs:write', 'browser.read', 'files.read'],
+    isGuest,
+    tier: isGuest ? 'guest' : 'free',
+    roles: isGuest ? ['guest_user'] : ['workspace_user'],
+    scopes: isGuest
+      ? ['chat:write']
+      : ['chat:write', 'runs:read', 'runs:write', 'browser.read', 'files.read'],
   };
 }
 

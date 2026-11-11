@@ -11,7 +11,7 @@ import {
 function makeTask(taskId: string): AutonomousAgentTask {
   return {
     taskId,
-    principal: { userId: 'isolated_user', sessionId: 'test_session', scopes: ['*'] },
+    principal: { userId: 'isolated_user', sessionId: 'test_session', scopes: ['*'], tier: 'pro' as any },
     objective: 'Verify concurrent worker safety',
     state: 'CREATED',
     observations: [],
@@ -190,6 +190,7 @@ test('worker aborts execution when heartbeat storage throws', async () => {
   } as AutonomousAgentEngine;
   const worker = new AutonomousWorkerHost(repository, engine, {
     workerId: 'heartbeat_failure_worker',
+    resolveCurrentTier: async () => 'pro',
     pollIntervalMs: 50,
     heartbeatIntervalMs: 15,
     leaseDurationMs: 200,

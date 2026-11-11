@@ -58,14 +58,21 @@ export class DevPrincipalProvider implements PrincipalProvider {
     }
 
     const workspaceId = await this.workspaceAuthorities.resolveWorkspace(user.id);
-    return ExecutionPrincipalSchema.parse({
+    const isGuest = user.id.startsWith('guest_') || user.isGuest === true;
+    const principal = ExecutionPrincipalSchema.parse({
       userId: user.id,
       sessionId: user.sessionId,
       workspaceId,
       // No persisted project membership relation exists, so user/client project values are non-authoritative.
       projectId: undefined,
-      roles: user.roles || [],
-      scopes: user.scopes || [],
+      roles: user.roles || (isGuest ? ['guest_user'] : ['workspace_user']),
+      scopes: user.scopes || (isGuest ? ['chat:write'] : ['chat:write', 'runs:read', 'runs:write', 'browser.read', 'files.read']),
     });
+    if (user.tier) {
+      (principal as any).tier = user.tier;
+    } else if (isGuest) {
+      (principal as any).tier = 'guest';
+    }
+    return principal;
   }
 }

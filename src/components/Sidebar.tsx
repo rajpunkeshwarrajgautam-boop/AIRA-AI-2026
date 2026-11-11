@@ -18,6 +18,7 @@ import { AiraMark } from './AiraMark';
 import { ConversationActionsDropdown } from './ConversationActionsDropdown';
 import { AccountMenuDropdown } from './AccountMenuDropdown';
 import { neonAuth, NeonUser } from '../lib/neonAuth';
+import type { PlanTier } from '../types/commercial-types';
 
 interface SidebarProps {
   conversations: Conversation[];
@@ -52,6 +53,10 @@ interface SidebarProps {
   onOpenShortcuts?: () => void;
   onOpenLegalViewer?: (doc: 'terms' | 'privacy') => void;
   onOpenReportBug?: () => void;
+  userTier?: PlanTier;
+  onOpenWhatsNew?: () => void;
+  onRestartOnboarding?: () => void;
+  unreadAnnouncementsCount?: number;
 }
 
 const listVariants: Variants = {
@@ -137,6 +142,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenShortcuts,
   onOpenLegalViewer,
   onOpenReportBug,
+  userTier = 'free',
+  onOpenWhatsNew,
+  onRestartOnboarding,
+  unreadAnnouncementsCount,
 }) => {
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
   const accountButtonRef = useRef<HTMLButtonElement>(null);
@@ -421,6 +430,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
           <div data-testid="sidebar-footer" className="aira-sidebar-footer relative z-20 shrink-0 p-3 bg-claude-surface-light dark:bg-claude-surface-dark border-t border-claude-border-light dark:border-claude-border-dark">
             <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                data-testid="sidebar-plan-badge"
+                onClick={() => onOpenSettings('plan')}
+                className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl bg-claude-surface2-light/60 dark:bg-white/[0.04] border border-claude-border-light/60 dark:border-white/10 hover:border-claude-terracotta/40 transition-all text-left group"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className={`w-2 h-2 rounded-full shrink-0 ${
+                    userTier === 'pro' ? 'bg-purple-500' : userTier === 'plus' ? 'bg-amber-500' : userTier === 'free' ? 'bg-emerald-500' : 'bg-stone-400'
+                  }`} />
+                  <span className="text-[11px] font-bold text-claude-text-light dark:text-white truncate">
+                    {userTier === 'pro' ? 'AIRA Pro' : userTier === 'plus' ? 'AIRA Plus' : userTier === 'free' ? 'AIRA Free' : 'Guest Workspace'}
+                  </span>
+                </div>
+                <span className="text-[10px] font-bold text-claude-accentInk group-hover:underline flex items-center gap-0.5 shrink-0">
+                  <span>Usage</span>
+                  <ChevronDown className="w-3 h-3 -rotate-90" />
+                </span>
+              </button>
+
               <div className="flex items-center gap-1.5">
                 <div className="relative flex-1 min-w-0">
                 <button
@@ -513,6 +542,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     setNeonUser(null);
                     setIsAccountMenuOpen(false);
                   }}
+                  onOpenWhatsNew={() => {
+                    onOpenWhatsNew?.();
+                    setIsAccountMenuOpen(false);
+                  }}
+                  onRestartOnboarding={() => {
+                    onRestartOnboarding?.();
+                    setIsAccountMenuOpen(false);
+                  }}
+                  unreadAnnouncementsCount={unreadAnnouncementsCount}
                 />
                 </div>
 

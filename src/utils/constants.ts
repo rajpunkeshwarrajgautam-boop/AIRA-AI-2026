@@ -74,6 +74,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   streamResponse: true,
   telemetryOptOut: false,
   notificationsEnabled: true,
+  announcementsEnabled: true,
+  productUpdatesEnabled: true,
+  tipsEnabled: true,
 };
 
 export const PROMPT_STARTERS = [

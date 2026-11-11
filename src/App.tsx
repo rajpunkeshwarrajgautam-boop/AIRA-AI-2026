@@ -52,6 +52,27 @@ import { DownloadAppsModal } from './components/DownloadAppsModal';
 import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal';
 import { LegalViewerModal } from './components/LegalViewerModal';
 import { ReportBugModal } from './components/ReportBugModal';
+import { UpgradeModal } from './components/UpgradeModal';
+import { FeatureFlagProvider } from './lib/featureFlags';
+import { WhatsNewAnnouncementModal } from './components/WhatsNewAnnouncementModal';
+import { OnboardingWalkthrough } from './components/OnboardingWalkthrough';
+import { FeatureDiscoveryCard } from './components/FeatureDiscoveryCard';
+import {
+  shouldShowFirstViewPopup,
+  getUnreadAnnouncementCount
+} from './utils/announcements';
+import {
+  getOnboardingState,
+  restartOnboarding
+} from './utils/onboarding';
+import {
+  type FeatureGuidanceItem,
+  getTierTransitionGuidance,
+  dismissFeatureGuidance
+} from './utils/featureDiscovery';
+import type { Announcement } from '../packages/contracts/src/index';
+import type { PlanTier } from './types/commercial-types';
+import { parseBillingSummary } from './lib/accountBillingTruth';
 import { neonAuth, authenticatedApiFetch } from './lib/neonAuth';
 import { dispatchRunApproval } from './utils/approvalDispatch';
 
@@ -168,11 +189,139 @@ function App() {
   const [isLegalViewerOpen, setIsLegalViewerOpen] = useState(false);
   const [legalViewerInitialDoc, setLegalViewerInitialDoc] = useState<'terms' | 'privacy'>('terms');
   const [isReportBugOpen, setIsReportBugOpen] = useState(false);
+  const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
+  const [upgradeModalTrigger, setUpgradeModalTrigger] = useState<string | null>(null);
+  const [userTier, setUserTier] = useState<PlanTier>(() => neonAuth.getCurrentUser() ? 'free' : 'guest');
+
+  const handleTriggerUpgrade = useCallback((trigger: string) => {
+    setUpgradeModalTrigger(trigger);
+    setIsUpgradeModalOpen(true);
+  }, []);
 
   const handleOpenSettings = useCallback((tab = 'general') => {
     setSettingsInitialTab(tab);
     setIsSettingsOpen(true);
   }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const url = new URL(window.location.href);
+      const tabParam = url.searchParams.get('tab');
+      const isSettingsPath = url.pathname.includes('/settings');
+      if (isSettingsPath || tabParam) {
+        const validTabs = ['general', 'plan', 'billing', 'subscription', 'usage', 'reasoning', 'memory', 'instructions', 'artifacts', 'data'];
+        const targetTab = tabParam && validTabs.includes(tabParam.toLowerCase()) ? tabParam.toLowerCase() : 'general';
+        handleOpenSettings(targetTab);
+      }
+    } catch {
+      // ignore URL parsing errors
+    }
+  }, [handleOpenSettings]);
+
+  useEffect(() => {
+    const user = neonAuth.getCurrentUser();
+    if (!user) {
+      setUserTier('guest');
+      return;
+    }
+    let active = true;
+    authenticatedApiFetch('/api/billing/summary')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (!active || !data) return;
+        const parsed = parseBillingSummary(data, user.id);
+        if (parsed?.planId) {
+          setUserTier(parsed.planId);
+        }
+      })
+      .catch(() => {
+        // fallback to free
+      });
+    return () => { active = false; };
+  }, [currentUserId]);
+
+  // Milestone 4: Announcements, Onboarding & Feature Discovery
+  const [isWhatsNewOpen, setIsWhatsNewOpen] = useState(false);
+  const [focusedAnnouncement, setFocusedAnnouncement] = useState<Announcement | null>(null);
+  const [unreadAnnouncementsCount, setUnreadAnnouncementsCount] = useState<number>(() =>
+    getUnreadAnnouncementCount(userTier, currentUserId)
+  );
+
+  const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
+
+  const [activeFeatureGuidance, setActiveFeatureGuidance] = useState<FeatureGuidanceItem | null>(null);
+  const prevTierRef = useRef<PlanTier>(userTier);
+  const lastCheckedUserIdRef = useRef<string | null | undefined>(undefined);
+
+  // Synchronize unread announcements badge count whenever userTier or currentUserId changes
+  useEffect(() => {
+    setUnreadAnnouncementsCount(getUnreadAnnouncementCount(userTier, currentUserId));
+  }, [userTier, currentUserId]);
+
+  // Check first-view popup on initial mount and when user identity transitions
+  useEffect(() => {
+    if (lastCheckedUserIdRef.current === currentUserId) return;
+    lastCheckedUserIdRef.current = currentUserId;
+
+    // Feature announcements only automatically pop up for users who have completed or skipped onboarding
+    // (A brand-new user or uninitialized session is in onboarding / exploration flow, not changelog popups)
+    const obState = getOnboardingState(currentUserId);
+    if (!obState.completed && !obState.skipped) {
+      return;
+    }
+
+    const popup = shouldShowFirstViewPopup(userTier, currentUserId, settings.announcementsEnabled !== false);
+    if (popup) {
+      setFocusedAnnouncement(popup);
+      setIsWhatsNewOpen(true);
+    }
+  }, [userTier, currentUserId, settings.announcementsEnabled]);
+
+  // Check first-login onboarding on initial mount and auth changes
+  useEffect(() => {
+    // Only automatically pop up for authenticated accounts upon first login
+    // Guests or unauthenticated sessions can launch or restart the tutorial manually via help menu
+    if (!currentUserId || currentUserId.startsWith('guest_') || userTier === 'guest') return;
+    const obState = getOnboardingState(currentUserId);
+    if (!obState.completed && !obState.skipped) {
+      setIsOnboardingOpen(true);
+    }
+  }, [currentUserId, userTier]);
+
+  // Track tier upgrades to display feature discovery card
+  useEffect(() => {
+    if (prevTierRef.current !== userTier) {
+      const guidanceItems = getTierTransitionGuidance(prevTierRef.current, userTier, currentUserId);
+      if (guidanceItems.length > 0) {
+        setActiveFeatureGuidance(guidanceItems[0]);
+      }
+      prevTierRef.current = userTier;
+      setUnreadAnnouncementsCount(getUnreadAnnouncementCount(userTier, currentUserId));
+    }
+  }, [userTier, currentUserId]);
+
+  const handleRestartOnboarding = useCallback(() => {
+    restartOnboarding(currentUserId);
+    setIsOnboardingOpen(true);
+  }, [currentUserId]);
+
+  const handleDismissFeatureGuidance = useCallback(() => {
+    if (activeFeatureGuidance) {
+      dismissFeatureGuidance(activeFeatureGuidance.feature, currentUserId);
+      setActiveFeatureGuidance(null);
+    }
+  }, [activeFeatureGuidance, currentUserId]);
+
+  const handleWhatsNewAction = useCallback((route: string) => {
+    if (route === '#settings-billing' || route.includes('settings')) {
+      handleOpenSettings('plan');
+    } else if (route === '#onboarding' || route.includes('onboarding')) {
+      handleRestartOnboarding();
+    } else if (route.includes('agent')) {
+      setWorkspaceMode('agent');
+    }
+  }, [handleOpenSettings, handleRestartOnboarding]);
   const [conversationSearchSeed, setConversationSearchSeed] = useState('');
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [activeArtifact, setActiveArtifact] = useState<Artifact | null>(null);
@@ -1252,6 +1401,15 @@ useEffect(() => {
             activeAssistantMsgIdRef.current = null;
             activeRunIdRef.current = null;
             setExecutionStatus(null);
+            if (typeof error === 'string') {
+              if (error.includes('PLAN_MODEL_RESTRICTED')) {
+                handleTriggerUpgrade('flagship_model');
+              } else if (error.includes('PLAN_CAPABILITY_RESTRICTED')) {
+                handleTriggerUpgrade('pro_tools_agent');
+              } else if (error.includes('429') || error.toLowerCase().includes('quota') || error.toLowerCase().includes('limit')) {
+                handleTriggerUpgrade(userTier === 'guest' ? 'guest_limit' : 'quota_exhausted');
+              }
+            }
             updateConversation(id, c => ({
               ...c,
               messages: c.messages.map(m => m.id === assistantId ? { ...m, content: `Aira encountered an execution error: ${error}`, isStreaming: false } : m),
@@ -1340,44 +1498,52 @@ useEffect(() => {
   const updateSettings = (partial: Partial<AppSettings>) => setSettings(prev => ({ ...prev, ...partial }));
 
   return (
-    <div className={`aira-editorial-app ${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-shell ' : ''}${isStudioOpen ? 'has-studio-open ' : ''}h-[100dvh] w-full min-w-0 flex overflow-hidden bg-claude-bg-light dark:bg-claude-bg-dark text-claude-text-light dark:text-claude-text-dark`}>
-      <Sidebar
-        conversations={conversations}
-        activeChatId={activeChatId}
-        onSelectChat={handleSelectChat}
-        onNewChat={handleNewChat}
-        onDeleteChat={handleDeleteChat}
-        onRenameChat={handleRenameChat}
-        onToggleStar={handleToggleStar}
-        onDuplicateChat={handleDuplicateChat}
-        onShareChat={handleShareChat}
-        projects={projects}
-        activeProjectId={activeProjectId}
-        onOpenProjects={() => setIsProjectsOpen(true)}
-        onOpenSettings={handleOpenSettings}
-        onOpenAuth={() => setIsAuthOpen(true)}
-        onOpenSearch={handleOpenConversationSearch}
-        isOpen={sidebarOpen}
-        onToggleOpen={() => setSidebarOpen(v => !v)}
-        onClose={() => setSidebarOpen(false)}
-        settings={settings}
-        onUpdateSettings={updateSettings}
-        workspaceMode={workspaceMode}
-        onSelectWorkspace={setWorkspaceMode}
-        onOpenVisionStudio={() => setIsVisionOpen(true)}
-        onOpenPricing={() => setIsPricingOpen(true)}
-        onOpenBilling={() => setIsAccountBillingOpen(true)}
-        onOpenHelpCenter={() => setIsHelpCenterOpen(true)}
-        onOpenPrivacyCenter={() => setIsPrivacyCenterOpen(true)}
-        onOpenReleaseNotes={() => setIsReleaseNotesOpen(true)}
-        onOpenDownloadApps={() => setIsDownloadAppsOpen(true)}
-        onOpenShortcuts={() => setIsKeyboardShortcutsOpen(true)}
-        onOpenLegalViewer={(doc) => {
-          setLegalViewerInitialDoc(doc);
-          setIsLegalViewerOpen(true);
-        }}
-        onOpenReportBug={() => setIsReportBugOpen(true)}
-      />
+    <FeatureFlagProvider userTier={userTier}>
+      <div className={`aira-editorial-app ${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-shell ' : ''}${isStudioOpen ? 'has-studio-open ' : ''}h-[100dvh] w-full min-w-0 flex overflow-hidden bg-claude-bg-light dark:bg-claude-bg-dark text-claude-text-light dark:text-claude-text-dark`}>
+        <Sidebar
+          conversations={conversations}
+          activeChatId={activeChatId}
+          onSelectChat={handleSelectChat}
+          onNewChat={handleNewChat}
+          onDeleteChat={handleDeleteChat}
+          onRenameChat={handleRenameChat}
+          onToggleStar={handleToggleStar}
+          onDuplicateChat={handleDuplicateChat}
+          onShareChat={handleShareChat}
+          projects={projects}
+          activeProjectId={activeProjectId}
+          onOpenProjects={() => setIsProjectsOpen(true)}
+          onOpenSettings={handleOpenSettings}
+          onOpenAuth={() => setIsAuthOpen(true)}
+          onOpenSearch={handleOpenConversationSearch}
+          isOpen={sidebarOpen}
+          onToggleOpen={() => setSidebarOpen(v => !v)}
+          onClose={() => setSidebarOpen(false)}
+          settings={settings}
+          onUpdateSettings={updateSettings}
+          workspaceMode={workspaceMode}
+          onSelectWorkspace={setWorkspaceMode}
+          onOpenVisionStudio={() => setIsVisionOpen(true)}
+          onOpenPricing={() => setIsPricingOpen(true)}
+          onOpenBilling={() => setIsAccountBillingOpen(true)}
+          onOpenHelpCenter={() => setIsHelpCenterOpen(true)}
+          onOpenPrivacyCenter={() => setIsPrivacyCenterOpen(true)}
+          onOpenReleaseNotes={() => setIsReleaseNotesOpen(true)}
+          onOpenDownloadApps={() => setIsDownloadAppsOpen(true)}
+          onOpenShortcuts={() => setIsKeyboardShortcutsOpen(true)}
+          onOpenLegalViewer={(doc) => {
+            setLegalViewerInitialDoc(doc);
+            setIsLegalViewerOpen(true);
+          }}
+          onOpenReportBug={() => setIsReportBugOpen(true)}
+          userTier={userTier}
+          onOpenWhatsNew={() => {
+            setFocusedAnnouncement(null);
+            setIsWhatsNewOpen(true);
+          }}
+          onRestartOnboarding={handleRestartOnboarding}
+          unreadAnnouncementsCount={unreadAnnouncementsCount}
+        />
 
       <CommandPalette
         isOpen={isCommandPaletteOpen}
@@ -1435,6 +1601,8 @@ useEffect(() => {
               onSelectModel={model => updateSettings({ activeModel: model })}
               extendedThinking={settings.extendedThinking}
               onToggleThinking={enabled => updateSettings({ extendedThinking: enabled })}
+              userTier={userTier}
+              onTriggerUpgrade={handleTriggerUpgrade}
             />
             {currentProject && <button onClick={() => setIsProjectsOpen(true)} className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-aira-blue/10 text-aira-blue text-xs max-w-[180px]"><FolderGit2 className="w-3 h-3" /><span className="truncate">{currentProject.name}</span></button>}
           </div>
@@ -1571,6 +1739,20 @@ useEffect(() => {
             />
           )}
 
+          {activeFeatureGuidance && (
+            <div className="max-w-3xl mx-auto px-3 sm:px-5 mb-3">
+              <FeatureDiscoveryCard
+                guidance={activeFeatureGuidance}
+                onDismiss={handleDismissFeatureGuidance}
+                onTryFeature={(prompt, targetMode) => {
+                  if (targetMode) setWorkspaceMode(targetMode);
+                  handleSendMessage(prompt, []);
+                  handleDismissFeatureGuidance();
+                }}
+              />
+            </div>
+          )}
+
           <ChatInput
             key={ADAPTIVE_STUDIO_PREVIEW ? (repairDraft?.id ?? 'normal-composer') : 'normal-composer'}
             onSendMessage={handleSendMessage}
@@ -1580,6 +1762,8 @@ useEffect(() => {
             extendedThinking={settings.extendedThinking}
             workspaceMode={workspaceMode}
             onWorkspaceModeChange={setWorkspaceMode}
+            userTier={userTier}
+            onTriggerUpgrade={handleTriggerUpgrade}
           />
         </div>
       </main>
@@ -1690,6 +1874,10 @@ useEffect(() => {
             onOpenBilling={() => setIsAccountBillingOpen(true)}
             onOpenPricing={() => setIsPricingOpen(true)}
             onOpenShortcuts={() => setIsKeyboardShortcutsOpen(true)}
+            userTier={userTier}
+            onTriggerUpgrade={handleTriggerUpgrade}
+            onRestartOnboarding={handleRestartOnboarding}
+            onResetAnnouncements={() => setUnreadAnnouncementsCount(getUnreadAnnouncementCount(userTier, currentUserId))}
           />
         )}
 
@@ -1784,8 +1972,43 @@ useEffect(() => {
             setIsPricingOpen(true);
           }}
         />
+
+        <UpgradeModal
+          isOpen={isUpgradeModalOpen}
+          onClose={() => setIsUpgradeModalOpen(false)}
+          trigger={upgradeModalTrigger}
+          currentTier={userTier}
+          onOpenAuth={() => setIsAuthOpen(true)}
+          onOpenPlanSettings={() => handleOpenSettings('plan')}
+          onOpenPricing={() => setIsPricingOpen(true)}
+        />
+
+        <WhatsNewAnnouncementModal
+          isOpen={isWhatsNewOpen}
+          onClose={() => {
+            setIsWhatsNewOpen(false);
+            setFocusedAnnouncement(null);
+            setUnreadAnnouncementsCount(getUnreadAnnouncementCount(userTier, currentUserId));
+          }}
+          userTier={userTier}
+          userId={currentUserId}
+          isFirstViewPopup={Boolean(focusedAnnouncement)}
+          focusedAnnouncement={focusedAnnouncement}
+          onAction={handleWhatsNewAction}
+        />
+
+        <OnboardingWalkthrough
+          isOpen={isOnboardingOpen}
+          onClose={() => setIsOnboardingOpen(false)}
+          userId={currentUserId}
+          userTier={userTier}
+          onOpenPlanSettings={() => handleOpenSettings('plan')}
+          onSwitchWorkspaceMode={setWorkspaceMode}
+          onOpenProjects={() => setIsProjectsOpen(true)}
+        />
       </React.Suspense>
     </div>
+  </FeatureFlagProvider>
   );
 }
 

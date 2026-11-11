@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { commercialBillingService } from './billing/commercial-billing-service.js';
-import { paymentGatewayService, TOPUP_PACKS } from './billing/payment-gateway-service.js';
+import { paymentGatewayService } from './billing/payment-gateway-service.js';
 import { productionReadinessService } from './billing/production-readiness.js';
 import { COMMERCIAL_PLANS } from '../../../packages/contracts/src/commercial.js';
 
@@ -12,8 +12,10 @@ export function createBillingRoutes(): Router {
    */
   router.get('/plans', (_req: Request, res: Response) => {
     res.json({
-      plans: Object.values(COMMERCIAL_PLANS),
-      topupPacks: Object.values(TOPUP_PACKS)
+      plans: Object.values(COMMERCIAL_PLANS).map(({ pricing, prices, ...plan }) => plan),
+      topupPacks: [],
+      billingStatus: 'sandbox',
+      checkoutAvailable: false
     });
   });
 
@@ -96,7 +98,8 @@ export function createBillingRoutes(): Router {
       );
       res.json(checkout);
     } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Subscription checkout creation failed.' });
+      res.status(err?.message?.startsWith('BILLING_UNAVAILABLE') ? 503 : 500)
+        .json({ error: err?.message?.startsWith('BILLING_UNAVAILABLE') ? 'BILLING_UNAVAILABLE' : 'CHECKOUT_FAILED', message: err.message });
     }
   });
 
@@ -147,7 +150,7 @@ export function createBillingRoutes(): Router {
       res.status(200).json({ ok: true, ...result });
     } catch (err: any) {
       console.error('[RazorpayWebhookError]', err.message);
-      res.status(400).json({ error: err.message });
+      res.status(err?.message?.startsWith('BILLING_UNAVAILABLE') ? 503 : 400).json({ error: err.message });
     }
   });
 

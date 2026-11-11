@@ -1,10 +1,15 @@
 import { z } from 'zod';
+import {
+  VERIFIED_MODEL_REGISTRY,
+  VERIFIED_PLAN_MODEL_ALLOWLIST,
+  type ModelCapabilityDescriptor
+} from './model-registry.js';
 
 // ==========================================
 // 1. PLANS & PRICING
 // ==========================================
 
-export const PlanTierSchema = z.enum(['free', 'plus', 'pro']);
+export const PlanTierSchema = z.enum(['guest', 'free', 'plus', 'pro']);
 export type PlanTier = z.infer<typeof PlanTierSchema>;
 
 export const CurrencyCodeSchema = z.enum(['INR', 'USD']);
@@ -26,25 +31,83 @@ export type PlanPrice = z.infer<typeof PlanPriceSchema>;
 
 export const PlanDefinitionSchema = z.object({
   id: PlanTierSchema,
+  planTier: PlanTierSchema.optional(),
   name: z.string(),
   description: z.string(),
+  pricing: z.object({
+    INR: z.number().nonnegative(),
+    USD: z.number().nonnegative()
+  }).optional(),
+  billingInterval: z.string().default('monthly').optional(),
   dailyStandardChatLimit: z.number().int().positive(),
   monthlyStandardChatUnits: z.number().int().positive(),
   monthlyPremiumCredits: z.number().int().nonnegative(),
   complimentaryReasoningBoosts: z.number().int().nonnegative(),
-  savedAgentsLimit: z.number().int().nonnegative(),
+  savedAgentsLimit: z.number().int().nonnegative().default(0),
   builderAccess: z.enum(['none', 'trial', 'metered']),
   concurrentInferenceLimit: z.number().int().positive(),
-  prices: z.array(PlanPriceSchema)
+  maxProjects: z.number().int().default(0),
+  maxMemoryRecords: z.number().int().default(0),
+  allowAutonomous: z.boolean().default(false),
+  allowBrowserTools: z.boolean().default(false),
+  allowPythonSandbox: z.boolean().default(false),
+  prices: z.array(PlanPriceSchema).default([])
 });
 export type PlanDefinition = z.infer<typeof PlanDefinitionSchema>;
 
-// Baseline configurations per Master Execution Prompt
+// Baseline configurations per Master Execution Prompt & Authoritative Scope
 export const COMMERCIAL_PLANS: Record<PlanTier, PlanDefinition> = {
+  guest: {
+    id: 'guest',
+    planTier: 'guest',
+    name: 'Guest',
+    description: 'Basic AI trial session',
+    pricing: { INR: 0, USD: 0 },
+    billingInterval: 'monthly',
+    dailyStandardChatLimit: 5,
+    monthlyStandardChatUnits: 5,
+    complimentaryReasoningBoosts: 0,
+    monthlyPremiumCredits: 0,
+    savedAgentsLimit: 0,
+    builderAccess: 'none',
+    concurrentInferenceLimit: 1,
+    maxProjects: 0,
+    maxMemoryRecords: 0,
+    allowAutonomous: false,
+    allowBrowserTools: false,
+    allowPythonSandbox: false,
+    prices: [
+      {
+        id: 'price_guest_inr',
+        planId: 'guest',
+        currency: 'INR',
+        interval: 'monthly',
+        amountMinorUnits: 0,
+        displayAmount: 0,
+        isTaxInclusive: true,
+        taxRatePercent: 0,
+        isActive: true
+      },
+      {
+        id: 'price_guest_usd',
+        planId: 'guest',
+        currency: 'USD',
+        interval: 'monthly',
+        amountMinorUnits: 0,
+        displayAmount: 0,
+        isTaxInclusive: false,
+        taxRatePercent: 0,
+        isActive: true
+      }
+    ]
+  },
   free: {
     id: 'free',
+    planTier: 'free',
     name: 'AIRA Free',
     description: 'Essential intelligence for everyday exploration',
+    pricing: { INR: 0, USD: 0 },
+    billingInterval: 'monthly',
     dailyStandardChatLimit: 15,
     monthlyStandardChatUnits: 150,
     monthlyPremiumCredits: 100,
@@ -52,6 +115,11 @@ export const COMMERCIAL_PLANS: Record<PlanTier, PlanDefinition> = {
     savedAgentsLimit: 0,
     builderAccess: 'none',
     concurrentInferenceLimit: 1,
+    maxProjects: 3,
+    maxMemoryRecords: 50,
+    allowAutonomous: false,
+    allowBrowserTools: false,
+    allowPythonSandbox: false,
     prices: [
       {
         id: 'price_free_inr',
@@ -79,8 +147,11 @@ export const COMMERCIAL_PLANS: Record<PlanTier, PlanDefinition> = {
   },
   plus: {
     id: 'plus',
+    planTier: 'plus',
     name: 'AIRA Plus',
     description: 'Power-user productivity with everyday value',
+    // Paid pricing is pending owner approval and verified gateway integration.
+    billingInterval: 'monthly',
     dailyStandardChatLimit: 50,
     monthlyStandardChatUnits: 700,
     monthlyPremiumCredits: 3000,
@@ -88,35 +159,20 @@ export const COMMERCIAL_PLANS: Record<PlanTier, PlanDefinition> = {
     savedAgentsLimit: 3,
     builderAccess: 'trial',
     concurrentInferenceLimit: 1,
-    prices: [
-      {
-        id: 'price_plus_inr',
-        planId: 'plus',
-        currency: 'INR',
-        interval: 'monthly',
-        amountMinorUnits: 39900,
-        displayAmount: 399,
-        isTaxInclusive: true,
-        taxRatePercent: 18,
-        isActive: true
-      },
-      {
-        id: 'price_plus_usd',
-        planId: 'plus',
-        currency: 'USD',
-        interval: 'monthly',
-        amountMinorUnits: 799,
-        displayAmount: 7.99,
-        isTaxInclusive: false,
-        taxRatePercent: 0,
-        isActive: true
-      }
-    ]
+    maxProjects: 10,
+    maxMemoryRecords: 250,
+    allowAutonomous: true,
+    allowBrowserTools: false,
+    allowPythonSandbox: false,
+    prices: []
   },
   pro: {
     id: 'pro',
+    planTier: 'pro',
     name: 'AIRA Pro',
     description: 'Higher limits, deep research, vision, builder and agent workflows',
+    // Paid pricing is pending owner approval and verified gateway integration.
+    billingInterval: 'monthly',
     dailyStandardChatLimit: 150,
     monthlyStandardChatUnits: 2000,
     monthlyPremiumCredits: 7500,
@@ -124,32 +180,195 @@ export const COMMERCIAL_PLANS: Record<PlanTier, PlanDefinition> = {
     savedAgentsLimit: 20,
     builderAccess: 'metered',
     concurrentInferenceLimit: 2,
-    prices: [
-      {
-        id: 'price_pro_inr',
-        planId: 'pro',
-        currency: 'INR',
-        interval: 'monthly',
-        amountMinorUnits: 99900,
-        displayAmount: 999,
-        isTaxInclusive: true,
-        taxRatePercent: 18,
-        isActive: true
-      },
-      {
-        id: 'price_pro_usd',
-        planId: 'pro',
-        currency: 'USD',
-        interval: 'monthly',
-        amountMinorUnits: 1999,
-        displayAmount: 19.99,
-        isTaxInclusive: false,
-        taxRatePercent: 0,
-        isActive: true
-      }
-    ]
+    maxProjects: -1,
+    maxMemoryRecords: -1,
+    allowAutonomous: true,
+    allowBrowserTools: true,
+    allowPythonSandbox: true,
+    prices: []
   }
 };
+
+// ==========================================
+// 1B. MODEL ALLOWLIST & CAPABILITY MATRIX
+// ==========================================
+
+/** Compatibility export: no second, contradictory model admission catalog. */
+export const PLAN_MODEL_ALLOWLIST: Record<PlanTier, readonly string[]> = VERIFIED_PLAN_MODEL_ALLOWLIST;
+
+export interface PlanCapabilities {
+  maxProjects: number;
+  maxMemoryRecords: number;
+  allowAutonomous: boolean;
+  allowBrowserTools: boolean;
+  allowPythonSandbox: boolean;
+  concurrentInferenceLimit: number;
+  dailyStandardChatLimit: number;
+  monthlyStandardChatUnits: number;
+  monthlyPremiumCredits: number;
+  complimentaryReasoningBoosts: number;
+  savedAgentsLimit: number;
+  builderAccess: 'none' | 'trial' | 'metered';
+}
+
+export const PLAN_CAPABILITY_MATRIX: Record<PlanTier, PlanCapabilities> = {
+  guest: {
+    maxProjects: 0,
+    maxMemoryRecords: 0,
+    allowAutonomous: false,
+    allowBrowserTools: false,
+    allowPythonSandbox: false,
+    concurrentInferenceLimit: 1,
+    dailyStandardChatLimit: 5,
+    monthlyStandardChatUnits: 5,
+    monthlyPremiumCredits: 0,
+    complimentaryReasoningBoosts: 0,
+    savedAgentsLimit: 0,
+    builderAccess: 'none'
+  },
+  free: {
+    maxProjects: 3,
+    maxMemoryRecords: 50,
+    allowAutonomous: false,
+    allowBrowserTools: false,
+    allowPythonSandbox: false,
+    concurrentInferenceLimit: 1,
+    dailyStandardChatLimit: 15,
+    monthlyStandardChatUnits: 150,
+    monthlyPremiumCredits: 100,
+    complimentaryReasoningBoosts: 5,
+    savedAgentsLimit: 0,
+    builderAccess: 'none'
+  },
+  plus: {
+    maxProjects: 10,
+    maxMemoryRecords: 250,
+    allowAutonomous: true,
+    allowBrowserTools: false,
+    allowPythonSandbox: false,
+    concurrentInferenceLimit: 1,
+    dailyStandardChatLimit: 50,
+    monthlyStandardChatUnits: 700,
+    monthlyPremiumCredits: 3000,
+    complimentaryReasoningBoosts: 50,
+    savedAgentsLimit: 3,
+    builderAccess: 'trial'
+  },
+  pro: {
+    maxProjects: -1,
+    maxMemoryRecords: -1,
+    allowAutonomous: true,
+    allowBrowserTools: true,
+    allowPythonSandbox: true,
+    concurrentInferenceLimit: 2,
+    dailyStandardChatLimit: 150,
+    monthlyStandardChatUnits: 2000,
+    monthlyPremiumCredits: 7500,
+    complimentaryReasoningBoosts: 200,
+    savedAgentsLimit: 20,
+    builderAccess: 'metered'
+  }
+};
+
+// Deep freeze to guarantee runtime immutability and immunity against prototype pollution
+Object.freeze(PLAN_MODEL_ALLOWLIST.guest);
+Object.freeze(PLAN_MODEL_ALLOWLIST.free);
+Object.freeze(PLAN_MODEL_ALLOWLIST.plus);
+Object.freeze(PLAN_MODEL_ALLOWLIST.pro);
+Object.freeze(PLAN_MODEL_ALLOWLIST);
+
+Object.freeze(PLAN_CAPABILITY_MATRIX.guest);
+Object.freeze(PLAN_CAPABILITY_MATRIX.free);
+Object.freeze(PLAN_CAPABILITY_MATRIX.plus);
+Object.freeze(PLAN_CAPABILITY_MATRIX.pro);
+Object.freeze(PLAN_CAPABILITY_MATRIX);
+
+const CANONICAL_MODEL_ALIASES: Record<string, string> = {
+  'claude-3-7-sonnet': 'aira-auto',
+  'claude-3-5-sonnet': 'aira-pro',
+  'claude-3-5-haiku': 'aira-fast',
+  'claude-3-opus': 'aira-deep',
+  'meta/llama-3.1-405b-instruct': 'nvidia/llama-3.1-nemotron-70b-instruct',
+  'nvidia/nemotron-3-super-120b-a12b': 'nvidia/llama-3.1-nemotron-70b-instruct'
+};
+
+export function isModelAllowedForTier(model: string, tier: PlanTier): boolean {
+  if (!model || !tier || typeof model !== 'string' || typeof tier !== 'string') {
+    return false;
+  }
+  if (!Object.hasOwn(PLAN_MODEL_ALLOWLIST, tier)) {
+    return false;
+  }
+  const allowed = PLAN_MODEL_ALLOWLIST[tier as PlanTier];
+  const trimmed = model.trim();
+  const canonical = Object.hasOwn(CANONICAL_MODEL_ALIASES, trimmed)
+    ? CANONICAL_MODEL_ALIASES[trimmed]
+    : trimmed;
+  return Array.isArray(allowed) && allowed.includes(canonical);
+}
+
+export { VERIFIED_MODEL_REGISTRY, VERIFIED_PLAN_MODEL_ALLOWLIST, type ModelCapabilityDescriptor };
+
+export function isFeatureAllowedForTier(feature: string, tier: PlanTier): boolean {
+  if (!feature || !tier || typeof feature !== 'string' || typeof tier !== 'string') {
+    return false;
+  }
+  if (!Object.hasOwn(COMMERCIAL_PLANS, tier)) {
+    return false;
+  }
+  const plan = COMMERCIAL_PLANS[tier as PlanTier];
+  if (!plan) return false;
+
+  const normalized = feature.toLowerCase().trim().replace(/[-_\s]/g, '');
+
+  switch (normalized) {
+    case 'autonomous':
+    case 'allowautonomous':
+    case 'agentmodeautonomous':
+    case 'agentmode':
+      return Boolean(plan.allowAutonomous);
+
+    case 'browsertools':
+    case 'allowbrowsertools':
+    case 'probrowsertools':
+      return Boolean(plan.allowBrowserTools);
+
+    case 'pythonsandbox':
+    case 'allowpythonsandbox':
+    case 'prosandboxpython':
+    case 'python':
+      return Boolean(plan.allowPythonSandbox);
+
+    case 'projects':
+    case 'maxprojects':
+      return typeof plan.maxProjects === 'number' && plan.maxProjects !== 0;
+
+    case 'memory':
+    case 'memoryrecords':
+    case 'maxmemoryrecords':
+      return typeof plan.maxMemoryRecords === 'number' && plan.maxMemoryRecords !== 0;
+
+    case 'builder':
+    case 'builderaccess':
+      return typeof plan.builderAccess === 'string' && plan.builderAccess !== 'none';
+
+    case 'reasoning':
+    case 'reasoningboosts':
+    case 'complimentaryreasoningboosts':
+      return typeof plan.complimentaryReasoningBoosts === 'number' && plan.complimentaryReasoningBoosts > 0;
+
+    case 'credits':
+    case 'premiumcredits':
+    case 'monthlypremiumcredits':
+      return typeof plan.monthlyPremiumCredits === 'number' && plan.monthlyPremiumCredits > 0;
+
+    default:
+      if (Object.hasOwn(plan, feature) && typeof (plan as any)[feature] === 'boolean') {
+        return Boolean((plan as any)[feature]);
+      }
+      return false;
+  }
+}
 
 // ==========================================
 // 2. SUBSCRIPTION LIFECYCLE
@@ -329,7 +548,13 @@ export const EntitlementStateSchema = z.object({
   canInitiateChat: z.boolean(),
   canUsePremiumModels: z.boolean(),
   canUseVision: z.boolean(),
-  canUseBuilder: z.boolean()
+  canUseBuilder: z.boolean(),
+  maxProjects: z.number().int().optional(),
+  maxMemoryRecords: z.number().int().optional(),
+  allowAutonomous: z.boolean().optional(),
+  allowBrowserTools: z.boolean().optional(),
+  allowPythonSandbox: z.boolean().optional(),
+  concurrentInferenceLimit: z.number().int().positive().optional()
 });
 export type EntitlementState = z.infer<typeof EntitlementStateSchema>;
 

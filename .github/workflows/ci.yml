@@ -21,7 +21,7 @@ env:
 jobs:
   fast:
     name: Fast CI
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     services:
       postgres:
@@ -73,6 +73,9 @@ jobs:
 
       - name: Run database migrations
         run: npm run db:migrate
+
+      - name: Commercial quota ledger and monthly reasoning enforcement (real PostgreSQL)
+        run: npx tsx --test test/commercial-credit-ledger.test.ts
 
       - name: Verify deploy database contract (lexical fallback)
         env:
@@ -242,7 +245,7 @@ jobs:
 
   semantic-search:
     name: Semantic Search CI
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     services:
       postgres:
@@ -285,7 +288,7 @@ jobs:
     name: Main / PR certification
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging' || github.ref == 'refs/heads/prod-release'
     needs: [fast, semantic-search]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     services:
       postgres:
@@ -331,8 +334,34 @@ jobs:
       - name: Startup certification
         run: npm run test:startup
 
+      - name: Configure reliable runner DNS and APT mirrors
+        shell: bash
+        run: |
+          set -e
+          sudo resolvectl dns eth0 8.8.8.8 1.1.1.1 || true
+          sudo sed -i '1s/^/nameserver 8.8.8.8\nnameserver 1.1.1.1\n/' /etc/resolv.conf || true
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu/|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list.d/ubuntu.sources || true
+          fi
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu/|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/apt-mirrors.txt || true
+          fi
+          echo 'Acquire::Retries "5";' | sudo tee /etc/apt/apt.conf.d/80-retries
+
       - name: Install Playwright Edge
-        run: npx playwright install --with-deps msedge
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if npx playwright install --with-deps msedge; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Playwright Edge install failed after 3 attempts."
+              exit 1
+            fi
+            echo "Playwright Edge install attempt $attempt failed, retrying in 5s..."
+            sleep 5
+          done
 
       - name: Start Vite for E2E
         shell: bash
@@ -382,7 +411,7 @@ jobs:
     # Fail-closed staging-only gate. NEVER runs for main/production.
     if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
     needs: [fast, semantic-search, certify]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout staging SHA
@@ -404,8 +433,34 @@ jobs:
           EXPECTED_SHA: ${{ github.sha }}
         run: npm run test:staging:attest
 
+      - name: Configure reliable runner DNS and APT mirrors
+        shell: bash
+        run: |
+          set -e
+          sudo resolvectl dns eth0 8.8.8.8 1.1.1.1 || true
+          sudo sed -i '1s/^/nameserver 8.8.8.8\nnameserver 1.1.1.1\n/' /etc/resolv.conf || true
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu/|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list.d/ubuntu.sources || true
+          fi
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu/|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/apt-mirrors.txt || true
+          fi
+          echo 'Acquire::Retries "5";' | sudo tee /etc/apt/apt.conf.d/80-retries
+
       - name: Install Playwright Edge
-        run: npx playwright install --with-deps msedge
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if npx playwright install --with-deps msedge; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Playwright Edge install failed after 3 attempts."
+              exit 1
+            fi
+            echo "Playwright Edge install attempt $attempt failed, retrying in 5s..."
+            sleep 5
+          done
 
       - name: Test deployed staging desktop and mobile
         env:

@@ -153,12 +153,11 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-orange-500/20 text-orange-300 border border-orange-500/30">Active</span>
                 )}
               </div>
-              <div className="text-3xl font-bold font-serif mb-1">
-                {currency === 'INR' ? '₹399' : '$7.99'}
-                <span className="text-xs font-sans text-stone-400 font-normal"> / month</span>
+              <div className="text-2xl font-bold font-serif mb-1 text-stone-200">
+                Preview Mode
               </div>
               <p className="text-[11px] text-stone-400 mb-6">
-                {currency === 'INR' ? 'GST inclusive (₹338.14 + ₹60.86 GST)' : 'Billed monthly in USD'}
+                Commercial checkout coming soon · Pricing in review
               </p>
 
               <div className="space-y-3 text-xs text-stone-300">
@@ -173,11 +172,10 @@ export const PricingModal: React.FC<PricingModalProps> = ({
             </div>
 
             <button
-              onClick={() => handleSubscribe('plus')}
-              disabled={loadingPlan === 'plus' || currentPlan === 'plus'}
-              className={`mt-8 w-full py-2.5 px-4 rounded-xl text-xs font-semibold transition-all ${currentPlan === 'plus' ? 'bg-stone-800 text-stone-400 cursor-not-allowed' : 'bg-gradient-to-r from-orange-500 to-[#cc785c] hover:opacity-95 text-white shadow-lg active:scale-[0.98]'}`}
+              disabled
+              className="mt-8 w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-stone-800 text-stone-400 cursor-not-allowed border border-white/5"
             >
-              {loadingPlan === 'plus' ? 'Connecting Gateway...' : currentPlan === 'plus' ? 'Current Plan' : 'Upgrade to Plus'}
+              {currentPlan === 'plus' ? 'Active Plan' : 'Preview Only — Billing Unavailable'}
             </button>
           </div>
 
@@ -190,12 +188,11 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-stone-800 text-stone-300 border border-white/10">Active</span>
                 )}
               </div>
-              <div className="text-3xl font-bold font-serif mb-1">
-                {currency === 'INR' ? '₹999' : '$19.99'}
-                <span className="text-xs font-sans text-stone-400 font-normal"> / month</span>
+              <div className="text-2xl font-bold font-serif mb-1 text-stone-200">
+                Preview Mode
               </div>
               <p className="text-[11px] text-stone-400 mb-6">
-                {currency === 'INR' ? 'GST inclusive (₹846.61 + ₹152.39 GST)' : 'Billed monthly in USD'}
+                Commercial checkout coming soon · Pricing in review
               </p>
 
               <div className="space-y-3 text-xs text-stone-300">
@@ -211,11 +208,10 @@ export const PricingModal: React.FC<PricingModalProps> = ({
             </div>
 
             <button
-              onClick={() => handleSubscribe('pro')}
-              disabled={loadingPlan === 'pro' || currentPlan === 'pro'}
-              className={`mt-8 w-full py-2.5 px-4 rounded-xl text-xs font-semibold transition-all ${currentPlan === 'pro' ? 'bg-stone-800 text-stone-400 cursor-not-allowed' : 'bg-white text-stone-900 hover:bg-stone-200 shadow-md active:scale-[0.98]'}`}
+              disabled
+              className="mt-8 w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-stone-800 text-stone-400 cursor-not-allowed border border-white/5"
             >
-              {loadingPlan === 'pro' ? 'Connecting Gateway...' : currentPlan === 'pro' ? 'Current Plan' : 'Upgrade to Pro'}
+              {currentPlan === 'pro' ? 'Active Plan' : 'Preview Only — Billing Unavailable'}
             </button>
           </div>
         </div>

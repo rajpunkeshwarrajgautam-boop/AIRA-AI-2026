@@ -1,16 +1,30 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Brain, Check, ChevronDown, Gauge, Sparkles, Zap } from 'lucide-react';
+import { Brain, Check, ChevronDown, Gauge, Sparkles, Zap, Lock } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import type { ModelId } from '../types';
 import { AVAILABLE_MODELS } from '../utils/constants';
+import type { PlanTier } from '../types/commercial-types';
+import { isModelAllowedForTier } from '../types/commercial-types';
 
 interface ModelSelectorProps {
   currentModel: ModelId;
   onSelectModel: (model: ModelId) => void;
   extendedThinking: boolean;
   onToggleThinking: (enabled: boolean) => void;
+  userTier?: PlanTier;
+  onTriggerUpgrade?: (trigger: string) => void;
 }
+
+const getRequiredTierForModel = (modelId: string): 'free' | 'plus' | 'pro' => {
+  if (isModelAllowedForTier(modelId, 'guest') || isModelAllowedForTier(modelId, 'free')) {
+    return 'free';
+  }
+  if (isModelAllowedForTier(modelId, 'plus')) {
+    return 'plus';
+  }
+  return 'pro';
+};
 
 const modelGlyph = (name: string) => {
   if (name.includes('Fast')) return Zap;
@@ -24,6 +38,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   onSelectModel,
   extendedThinking,
   onToggleThinking,
+  userTier = 'free',
+  onTriggerUpgrade,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [activeRow, setActiveRow] = useState(currentModel);
@@ -174,11 +190,15 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                 const selected = model.id === currentModel;
                 const focused = model.id === activeRow;
                 const Icon = modelGlyph(model.name);
+                const requiredTier = getRequiredTierForModel(model.id);
+                const isAllowed = userTier === 'pro' || isModelAllowedForTier(model.id, userTier || 'free');
+
                 return (
                   <button
                     key={model.id}
                     type="button"
                     role="option"
+                    data-testid={`model-option-${model.id}`}
                     aria-selected={selected}
                     onKeyDown={event => {
                       const options = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]') || []);
@@ -196,8 +216,17 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                       setActiveRow(model.id);
                       revealOption(event.currentTarget);
                     }}
-                    onClick={() => selectModel(model)}
-                    className="relative isolate flex w-full items-start gap-3 rounded-[13px] px-3 py-2.5 text-left outline-none"
+                    onClick={() => {
+                      if (!isAllowed) {
+                        setIsOpen(false);
+                        onTriggerUpgrade?.(userTier === 'guest' ? 'guest_limit' : 'flagship_model');
+                        return;
+                      }
+                      selectModel(model);
+                    }}
+                    className={`relative isolate flex w-full items-start gap-3 rounded-[13px] px-3 py-2.5 text-left outline-none ${
+                      !isAllowed ? 'opacity-85 hover:opacity-100' : ''
+                    }`}
                   >
                     {(focused || selected) && (
                       <motion.span
@@ -213,9 +242,11 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                     <span className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] ${
                       selected
                         ? 'bg-claude-terracotta text-claude-onAccent'
+                        : !isAllowed
+                        ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
                         : 'bg-claude-surface2-light text-claude-muted-light dark:bg-claude-surface2-dark dark:text-claude-muted-dark'
                     }`}>
-                      <Icon className="h-4 w-4" />
+                      {!isAllowed ? <Lock className="h-4 w-4 text-amber-500" /> : <Icon className="h-4 w-4" />}
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center gap-2">
@@ -225,6 +256,15 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                             {model.badge}
                           </span>
                         )}
+                        {!isAllowed && (
+                          <span
+                            data-testid={`model-locked-${model.id}`}
+                            className="flex items-center gap-1 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider"
+                          >
+                            <Lock className="w-2.5 h-2.5" />
+                            <span>{requiredTier.toUpperCase()}</span>
+                          </span>
+                        )}
                       </span>
                       <span className="mt-0.5 block text-[11px] leading-relaxed text-claude-muted-light dark:text-claude-muted-dark">{model.description}</span>
                       <span className="mt-1.5 flex items-center gap-1.5 text-[9px] font-medium uppercase tracking-wider text-claude-muted-light/80 dark:text-claude-muted-dark/80">
@@ -232,7 +272,13 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                         {model.supportsThinking && <><span>•</span><span>Deep reasoning</span></>}
                       </span>
                     </span>
-                    {selected && <Check className="mt-1 h-4 w-4 shrink-0 text-claude-accentInk" />}
+                    {selected ? (
+                      <Check className="mt-1 h-4 w-4 shrink-0 text-claude-accentInk" />
+                    ) : !isAllowed ? (
+                      <span className="mt-1 text-[10px] font-semibold text-amber-600 dark:text-amber-400 shrink-0">
+                        Upgrade
+                      </span>
+                    ) : null}
                   </button>
                 );
               })}

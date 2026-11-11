@@ -18,6 +18,7 @@
     "test:recovery": "npx tsx test/recovery.ts",
     "test:identity": "npx tsx test/identity.ts",
     "test:session-auth": "npx tsx test/session-auth.ts",
+    "test:integration:entitlements": "npx tsx --test test/integration/entitlements/adversarial-entitlements.test.ts",
     "test:knowledge-isolation": "npx tsx test/knowledge-isolation.test.ts",
     "test:m1-specialists": "npx tsx --test test/agent-specialists.test.ts test/specialist-interface.test.ts",
     "test:m2a": "npx tsx --test test/m2a-durable-specialist-execution.test.ts",

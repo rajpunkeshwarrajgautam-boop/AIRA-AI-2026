@@ -11,7 +11,9 @@ import {
   ToolGatewayErrorCodes,
   ToolLifecycleState,
   ToolCall,
-  ApprovalDecision
+  ApprovalDecision,
+  PlanTier,
+  isFeatureAllowedForTier
 } from '../../contracts/src/index.js';
 import { ApprovalKernel } from '../../approvals/src/index.js';
 import type { OneTimeAuthorizationBinding } from '../../approvals/src/repositories.js';
@@ -101,7 +103,8 @@ export class ToolGateway extends EventEmitter {
     private approvalKernel?: ApprovalKernel,
     private workspaceRoot = process.cwd(),
     private authorityRepository: WorkspaceAuthorityRepository = workspaceAuthority,
-    browserAdapter: BrowserAdapter = new BrowserAdapter()
+    browserAdapter: BrowserAdapter = new BrowserAdapter(),
+    private resolveCurrentTier?: (principalId: string) => Promise<PlanTier>
   ) {
     super();
     this.browserAdapter = browserAdapter;
@@ -337,6 +340,60 @@ export class ToolGateway extends EventEmitter {
         artifacts: []
       };
     }
+
+    // STEP 5.5: Verify Plan Tier Entitlements for Restricted Tools
+    // Commercial subscription tier is strictly separated from administrative/developer roles
+    let callerTier: PlanTier = 'guest';
+    const isRestrictedExecution = def.name.startsWith('browser_') || toolName.startsWith('browser_') ||
+      def.name === 'python_sandbox' || toolName === 'python_sandbox';
+    if (isRestrictedExecution && !principal.userId?.startsWith('guest_')) {
+      try {
+        if (!principal.userId || !this.resolveCurrentTier) {
+          throw new Error('Authoritative tool entitlement resolver is unavailable.');
+        }
+        callerTier = await this.resolveCurrentTier(principal.userId);
+      } catch {
+        return {
+          toolCallId: callId, output: null,
+          error: 'ENTITLEMENT_SERVICE_UNAVAILABLE: Tool execution denied until subscription can be verified.',
+          errorCode: 'ENTITLEMENT_SERVICE_UNAVAILABLE', isError: true,
+          durationMs: Date.now() - startTime, timestamp: Date.now(), artifacts: []
+        };
+      }
+    }
+    if (def.name.startsWith('browser_') || toolName.startsWith('browser_')) {
+        if (!isFeatureAllowedForTier('browsertools', callerTier)) {
+          const errorMsg = 'PLAN_TOOL_RESTRICTED: Browser execution tools require AIRA Pro plan.';
+          this.emit('tool.permission_denied', { callId, runId, toolId: def.id, toolName: def.name, reason: errorMsg });
+          return {
+            toolCallId: callId,
+            output: null,
+            error: errorMsg,
+            errorCode: 'PLAN_TOOL_RESTRICTED',
+            isError: true,
+            durationMs: Date.now() - startTime,
+            timestamp: Date.now(),
+            artifacts: []
+          };
+        }
+      }
+
+      if (def.name === 'python_sandbox' || toolName === 'python_sandbox') {
+        if (!isFeatureAllowedForTier('pythonsandbox', callerTier)) {
+          const errorMsg = 'PLAN_TOOL_RESTRICTED: Python Sandbox execution requires AIRA Pro plan.';
+          this.emit('tool.permission_denied', { callId, runId, toolId: def.id, toolName: def.name, reason: errorMsg });
+          return {
+            toolCallId: callId,
+            output: null,
+            error: errorMsg,
+            errorCode: 'PLAN_TOOL_RESTRICTED',
+            isError: true,
+            durationMs: Date.now() - startTime,
+            timestamp: Date.now(),
+            artifacts: []
+          };
+        }
+      }
 
     // STEP 6: Determine side-effect, permission, and policy identity from the
     // registered server-side definition (never from the submitted task payload).

@@ -977,8 +977,10 @@ export type ErrorEnvelope = z.infer<typeof ErrorEnvelopeSchema>;
 
 export * from './behavioral.js';
 export * from './commercial.js';
+export * from './featureFlags.js';
+export * from './announcements.js';
 export * from './agent-specialists.js';
 export * from './deployment-environment.js';
-
-
 export * from './autonomous-agent.js';
+export * from './model-registry.js';
+

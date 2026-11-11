@@ -35,6 +35,7 @@ import {
   PostgresToolCallRepository
 } from '../../../packages/tool-runtime/src/index.js';
 import { ApprovalKernel } from '../../../packages/approvals/src/index.js';
+import { commercialBillingService } from '../../api/src/billing/commercial-billing-service.js';
 import {
   PostgresApprovalRepository,
   PostgresSessionGrantRepository
@@ -139,7 +140,13 @@ const toolCallRepo = new PostgresToolCallRepository();
 const approvalRepo = new PostgresApprovalRepository();
 const grantRepo = new PostgresSessionGrantRepository();
 const approvalKernel = new ApprovalKernel(approvalRepo, grantRepo);
-const toolGateway = new ToolGateway(toolCallRepo, approvalKernel, process.cwd());
+const resolveCurrentCommercialTier = async (principalId: string) => {
+  if (principalId.startsWith('guest_')) return 'guest' as const;
+  const customer = await commercialBillingService.getOrCreateCustomer(principalId);
+  const subscription = await commercialBillingService.getActiveSubscription(customer.id);
+  return subscription.planId;
+};
+const toolGateway = new ToolGateway(toolCallRepo, approvalKernel, process.cwd(), undefined, undefined, resolveCurrentCommercialTier);
 
 import {
   ISpecialistAgent,
@@ -212,10 +219,12 @@ const autoEngine = new AutonomousAgentEngine({
   repository: autoRepo,
   specialistRegistry: registry,
   toolGateway,
-  approvalKernel
+  approvalKernel,
+  resolveCurrentTier: resolveCurrentCommercialTier
 });
 const autoHost = new AutonomousWorkerHost(autoRepo, autoEngine, {
   workerId,
+  resolveCurrentTier: resolveCurrentCommercialTier,
   pollIntervalMs,
   maxPollIntervalMs,
   idleBackoffMultiplier,

@@ -7,7 +7,7 @@ const SIZES: Array<[number, number]> = [
   [640, 360], [844, 390], [768, 1024], [820, 1180], [1024, 768],
   [1280, 800], [1440, 900], [1920, 1080],
 ];
-const SECTION_IDS = ['general','reasoning','memory','instructions','artifacts','data'];
+const SECTION_IDS = ['general','plan','reasoning','memory','instructions','artifacts','data'];
 
 async function waitForDialog(page: Page) {
   const dialog = page.getByRole('dialog', { name: 'Workspace Settings' });
@@ -112,7 +112,7 @@ async function main() {
         if (width < 640) {
           const section = page.getByRole('combobox', { name: 'Settings section' });
           await section.waitFor({ state: 'visible' });
-          assert.equal(await section.locator('option').count(), 6);
+          assert.equal(await section.locator('option').count(), SECTION_IDS.length);
           for (const category of SECTION_IDS) {
             await section.selectOption(category);
             assert.equal(await section.inputValue(), category);
@@ -121,8 +121,8 @@ async function main() {
         } else {
           const tablist = page.getByRole('tablist', { name: 'Settings categories' });
           await tablist.waitFor({ state: 'visible' });
-          assert.equal(await tablist.getByRole('tab').count(), 6);
-          for (const category of ['reasoning','memory','instructions','artifacts','data','general']) {
+          assert.equal(await tablist.getByRole('tab').count(), SECTION_IDS.length);
+          for (const category of ['plan','reasoning','memory','instructions','artifacts','data','general']) {
             const index = SECTION_IDS.indexOf(category);
             await tablist.getByRole('tab').nth(index).click();
             assert.equal(await tablist.getByRole('tab').nth(index).getAttribute('aria-selected'), 'true');
@@ -137,7 +137,7 @@ async function main() {
           await page.getByRole('combobox', {name:'Settings section'}).selectOption('general');
         } else {
           const tabs = page.getByRole('tablist', {name:'Settings categories'});
-          await tabs.getByRole('tab').nth(5).click();
+          await tabs.getByRole('tab').nth(SECTION_IDS.indexOf('data')).click();
           await tabs.getByRole('tab').nth(0).click();
         }
         assert.equal(await name.inputValue(), 'Responsive check ' + label);

@@ -92,18 +92,31 @@ export const TOPUP_PACKS: Record<string, CreditTopupPack> = {
   }
 };
 
+function isDisabledCommercialFulfillment(eventType: string, payload: any): boolean {
+  return eventType === 'subscription.charged' || eventType === 'subscription.activated' ||
+    (eventType === 'payment.captured' && payload.payload?.payment?.entity?.notes?.type === 'credit_topup');
+}
+
 export class PaymentGatewayService {
   private razorpaySecret: string;
   private cashfreeSecret: string;
   private customDbClient: Knex | PaymentDbClient | null = null;
 
   constructor() {
-    this.razorpaySecret = process.env.RAZORPAY_WEBHOOK_SECRET || 'test_webhook_secret_razorpay_2026';
-    this.cashfreeSecret = process.env.CASHFREE_WEBHOOK_SECRET || 'test_webhook_secret_cashfree_2026';
+    this.razorpaySecret = process.env.RAZORPAY_WEBHOOK_SECRET || '';
+    this.cashfreeSecret = process.env.CASHFREE_WEBHOOK_SECRET || '';
   }
 
   setDbClient(client: Knex | PaymentDbClient | null): void {
     this.customDbClient = client;
+  }
+
+  setRazorpaySecret(secret: string): void {
+    this.razorpaySecret = secret;
+  }
+
+  setCashfreeSecret(secret: string): void {
+    this.cashfreeSecret = secret;
   }
 
   private getDb(): Knex | PaymentDbClient {
@@ -114,9 +127,9 @@ export class PaymentGatewayService {
    * Cryptographically verify Razorpay Webhook HMAC-SHA256 signature using raw body.
    */
   verifyRazorpayWebhook(rawBody: string, signature: string, secretOverride?: string): WebhookVerificationResult {
-    const secret = secretOverride || this.razorpaySecret;
-    if (!signature || !rawBody) {
-      return { valid: false, error: 'Missing signature or body payload.' };
+    const secret = secretOverride || this.razorpaySecret || process.env.RAZORPAY_WEBHOOK_SECRET;
+    if (!secret || !signature || !rawBody) {
+      return { valid: false, error: 'Missing webhook secret, signature or body payload.' };
     }
 
     try {
@@ -143,9 +156,9 @@ export class PaymentGatewayService {
    * Cryptographically verify Cashfree Webhook HMAC-SHA256 signature using raw body and timestamp.
    */
   verifyCashfreeWebhook(rawBody: string, signature: string, timestamp: string, secretOverride?: string): WebhookVerificationResult {
-    const secret = secretOverride || this.cashfreeSecret;
-    if (!signature || !rawBody || !timestamp) {
-      return { valid: false, error: 'Missing signature, body, or timestamp.' };
+    const secret = secretOverride || this.cashfreeSecret || process.env.CASHFREE_WEBHOOK_SECRET;
+    if (!secret || !signature || !rawBody || !timestamp) {
+      return { valid: false, error: 'Missing webhook secret, signature, body, or timestamp.' };
     }
 
     try {
@@ -182,6 +195,12 @@ export class PaymentGatewayService {
     const eventId = payload.event_id || payload.id || `evt_${crypto.randomUUID().replace(/-/g, '')}`;
     const eventType = payload.event;
     const now = Date.now();
+
+    // A disabled paid event must not be recorded as PROCESSED on retry.
+    // Decline it before inserting a deduplication row.
+    if (isDisabledCommercialFulfillment(eventType, payload)) {
+      throw new Error('BILLING_UNAVAILABLE: Paid fulfillment requires verified payment reconciliation.');
+    }
 
     // Deduplication check in payment_gateway_events
     const existing = await this.getDb()('payment_gateway_events').where({ event_id: eventId }).first();
@@ -224,6 +243,10 @@ export class PaymentGatewayService {
     const eventType = payload.type || payload.event || 'cashfree.webhook';
     const now = Date.now();
 
+    if (isDisabledCommercialFulfillment(eventType, payload)) {
+      throw new Error('BILLING_UNAVAILABLE: Paid fulfillment requires verified payment reconciliation.');
+    }
+
     // Deduplication check in payment_gateway_events
     const existing = await this.getDb()('payment_gateway_events').where({ event_id: eventId }).first();
     if (existing) {
@@ -256,6 +279,13 @@ export class PaymentGatewayService {
    */
   private async handleGatewayEvent(gateway: string, eventType: string, payload: any): Promise<void> {
     const now = Date.now();
+
+    // Commercial activation is intentionally disabled until a verified gateway
+    // order, approved price and paid amount/currency can be reconciled atomically.
+    // Signed merchant notes alone are not proof of a purchased subscription.
+    if (isDisabledCommercialFulfillment(eventType, payload)) {
+      throw new Error('BILLING_UNAVAILABLE: Paid fulfillment awaits approved pricing and verified payment reconciliation.');
+    }
 
     if (eventType === 'subscription.charged' || eventType === 'subscription.activated') {
       const subEntity = payload.payload?.subscription?.entity || payload.subscription || {};
@@ -373,26 +403,17 @@ export class PaymentGatewayService {
    * Create a subscription checkout session for frontend redirection.
    */
   async createSubscriptionCheckout(
-    principalId: string,
+    _principalId: string,
     planTier: PlanTier,
-    currency: CurrencyCode = 'INR'
+    _currency: CurrencyCode = 'INR'
   ): Promise<{ checkoutUrl?: string; orderId: string; keyId: string; amount: number; currency: string }> {
     const plan = COMMERCIAL_PLANS[planTier];
     if (!plan || planTier === 'free') {
       throw new Error(`Invalid plan tier for subscription checkout: ${planTier}`);
     }
-
-    const price = plan.prices.find(p => p.currency === currency) || plan.prices[0];
-    const customer = await commercialBillingService.getOrCreateCustomer(principalId);
-    const mockOrderId = `order_${crypto.randomUUID().replace(/-/g, '')}`;
-
-    return {
-      orderId: mockOrderId,
-      keyId: process.env.RAZORPAY_KEY_ID || 'rzp_test_mock_key_2026',
-      amount: price.amountMinorUnits,
-      currency: price.currency,
-      checkoutUrl: `https://checkout.razorpay.com/v1/checkout.js`
-    };
+    // No gateway order endpoint is wired yet. Returning a synthetic order ID
+    // would misrepresent a purchase and could trigger an unsafe payment flow.
+    throw new Error('BILLING_UNAVAILABLE: Live checkout has not been approved or integrated.');
   }
 
   /**
@@ -420,32 +441,11 @@ export class PaymentGatewayService {
   }
 
   /**
-   * Fetch invoice history for customer with GST calculation.
+   * Invoice history is unavailable until real, reconciled gateway invoice
+   * records exist. Subscription rows alone are not proof of a paid invoice.
    */
-  async getInvoices(principalId: string): Promise<InvoiceRecord[]> {
-    const customer = await commercialBillingService.getOrCreateCustomer(principalId);
-    const subs = await this.getDb()('subscriptions').where({ customer_id: customer.id }).orderBy!('created_at', 'desc') as SubscriptionRow[];
-
-    return subs.map((sub: SubscriptionRow, idx: number): InvoiceRecord => {
-      const amountPaise = Number(sub.amount_minor_units);
-      const isTaxInclusive = true;
-      const rateFactor = 1.18;
-      const taxableBasePaise = Math.round(amountPaise / rateFactor);
-      const gstPaise = amountPaise - taxableBasePaise;
-
-      return {
-        invoiceNumber: `INV-2026-${String(idx + 1).padStart(4, '0')}`,
-        date: new Date(Number(sub.current_period_start)).toISOString().slice(0, 10),
-        plan: sub.plan_id,
-        currency: sub.currency,
-        totalAmount: Number((amountPaise / 100).toFixed(2)),
-        taxableBase: Number((taxableBasePaise / 100).toFixed(2)),
-        gstAmount: Number((gstPaise / 100).toFixed(2)),
-        sacCode: '998431',
-        supplierName: 'Virexa AI Ventures Private Limited',
-        status: 'PAID'
-      };
-    });
+  async getInvoices(_principalId: string): Promise<InvoiceRecord[]> {
+    return [];
   }
 }
 

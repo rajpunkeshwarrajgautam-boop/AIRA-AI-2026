@@ -9,7 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { execSync } from 'node:child_process';
-import { paymentGatewayService } from '../apps/api/src/billing/payment-gateway-service.js';
+import { PaymentGatewayService } from '../apps/api/src/billing/payment-gateway-service.js';
 import { db } from '../packages/db/src/index.js';
 
 function createMockDb() {
@@ -62,8 +62,16 @@ test('PR #118 Remediation Gate 1: Server-side TypeScript zero-error compilation 
 });
 
 test('PR #118 Remediation Gate 2: Cashfree webhook HMAC verification, deduplication, and error handling', async (t) => {
-  const secret = process.env.CASHFREE_WEBHOOK_SECRET || 'test_webhook_secret_cashfree_2026';
+  // The production gateway must not fall back to a known webhook signing secret.
+  // Supply a test-only key before constructing this isolated instance.
+  const previousSecret = process.env.CASHFREE_WEBHOOK_SECRET;
+  const secret = `ci_cashfree_${crypto.randomBytes(32).toString('hex')}`;
   process.env.CASHFREE_WEBHOOK_SECRET = secret;
+  const gateway = new PaymentGatewayService();
+  t.after(() => {
+    if (previousSecret === undefined) delete process.env.CASHFREE_WEBHOOK_SECRET;
+    else process.env.CASHFREE_WEBHOOK_SECRET = previousSecret;
+  });
 
   let hasRealDb = false;
   try {
@@ -71,7 +79,7 @@ test('PR #118 Remediation Gate 2: Cashfree webhook HMAC verification, deduplicat
     hasRealDb = true;
   } catch {
     hasRealDb = false;
-    paymentGatewayService.setDbClient(createMockDb());
+    gateway.setDbClient(createMockDb());
   }
 
   await t.test('rejects webhook with invalid signature', async () => {
@@ -85,7 +93,7 @@ test('PR #118 Remediation Gate 2: Cashfree webhook HMAC verification, deduplicat
 
     await assert.rejects(
       async () => {
-        await paymentGatewayService.processCashfreeWebhook(rawBody, badSignature, timestamp);
+        await gateway.processCashfreeWebhook(rawBody, badSignature, timestamp);
       },
       /FORBIDDEN_WEBHOOK/
     );
@@ -110,12 +118,12 @@ test('PR #118 Remediation Gate 2: Cashfree webhook HMAC verification, deduplicat
     const validSignature = crypto.createHmac('sha256', secret).update(signatureData).digest('base64');
 
     // First delivery: should process
-    const firstDelivery = await paymentGatewayService.processCashfreeWebhook(rawBody, validSignature, timestamp);
+    const firstDelivery = await gateway.processCashfreeWebhook(rawBody, validSignature, timestamp);
     assert.equal(firstDelivery.status, 'PROCESSED');
     assert.equal(firstDelivery.duplicate, false);
 
     // Second delivery (replay attack / duplicate webhook): must deduplicate cleanly
-    const duplicateDelivery = await paymentGatewayService.processCashfreeWebhook(rawBody, validSignature, timestamp);
+    const duplicateDelivery = await gateway.processCashfreeWebhook(rawBody, validSignature, timestamp);
     assert.equal(duplicateDelivery.status, 'ALREADY_PROCESSED');
     assert.equal(duplicateDelivery.duplicate, true);
 
@@ -439,7 +447,5 @@ test('PR #118 Remediation Gate 7: Direct OAuth account recovery parameter normal
 });
 
 test.after(async () => {
-
-  paymentGatewayService.setDbClient(null);
   await db.destroy().catch(() => {});
 });

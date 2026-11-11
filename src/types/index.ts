@@ -191,6 +191,9 @@ export interface AppSettings {
   streamResponse?: boolean;
   telemetryOptOut?: boolean;
   notificationsEnabled?: boolean;
+  announcementsEnabled?: boolean;
+  productUpdatesEnabled?: boolean;
+  tipsEnabled?: boolean;
 }
 
 export type MemoryTier = 'working' | 'episodic' | 'semantic' | 'procedural';

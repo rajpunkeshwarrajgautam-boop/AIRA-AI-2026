@@ -16,7 +16,7 @@ concurrency:
 jobs:
   postgres-certification:
     name: PostgreSQL 16 isolated regression certification
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -29,14 +29,23 @@ jobs:
         with:
           node-version: '24'
 
+      - name: Configure reliable runner DNS and APT mirrors
+        shell: bash
+        run: |
+          set -e
+          sudo resolvectl dns eth0 8.8.8.8 1.1.1.1 || true
+          sudo sed -i '1s/^/nameserver 8.8.8.8\nnameserver 1.1.1.1\n/' /etc/resolv.conf || true
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu/|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list.d/ubuntu.sources || true
+          fi
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu/|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/apt-mirrors.txt || true
+          fi
+          echo 'Acquire::Retries "5";' | sudo tee /etc/apt/apt.conf.d/80-retries
+
       # Install with no lifecycle scripts and before creating any database credentials.
       - name: Install dependencies without lifecycle scripts
         run: npm ci --ignore-scripts
-
-      - name: Install PostgreSQL client tools on runner host
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client
 
       - name: Pull reviewed immutable images
         shell: bash

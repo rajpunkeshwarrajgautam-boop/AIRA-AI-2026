@@ -258,13 +258,18 @@ test('Mission C — Browser Persistence, Tenant Isolation, and Recovery Across W
     }
   });
 
-  await t.test('7. Durable Session Persistence, Expiration, Tamper Rejection & Clean Termination', async () => {
+  await t.test('7. Durable Session Persistence, Expiration, Tamper Rejection & Clean Termination', async (subtest) => {
     const sharedStorage = new InMemoryBrowserSessionStorage();
     const secretKey = crypto.randomBytes(32).toString('hex');
     const wrongKey = crypto.randomBytes(32).toString('hex');
 
     // Worker 1: Creates session, navigates, saves durable encrypted snapshot
     const worker1 = new BrowserAdapter({}, sharedStorage);
+    const adapters: BrowserAdapter[] = [worker1];
+    subtest.after(async () => {
+      // Assertion failures must not strand Chromium handles until CI times out.
+      await Promise.allSettled(adapters.map(adapter => adapter.shutdown()));
+    });
     await worker1.navigate(principalA, 'https://example.com');
     const storedSnapshot = await worker1.saveDurableSnapshot(principalA, secretKey, 60000);
     assert.ok(storedSnapshot);
@@ -276,6 +281,7 @@ test('Mission C — Browser Persistence, Tenant Isolation, and Recovery Across W
 
     // Worker 2 boots up sharing the same durable storage
     const worker2 = new BrowserAdapter({}, sharedStorage);
+    adapters.push(worker2);
 
     // 7b. Tampered ciphertext rejection
     const tampered = await sharedStorage.getSession(`${principalA.userId}:${principalA.sessionId}`);
@@ -283,7 +289,9 @@ test('Mission C — Browser Persistence, Tenant Isolation, and Recovery Across W
     const parsedEnv = JSON.parse(tampered.encryptedEnvelope);
     const originalData = parsedEnv.data;
     // Alter last character of base64 data to corrupt ciphertext
-    parsedEnv.data = originalData.slice(0, -2) + (originalData.endsWith('A') ? 'B' : 'A') + '=';
+    // Alter a significant ciphertext byte; changing the final base64 character
+    // can modify padding bits without changing decoded ciphertext bytes.
+    parsedEnv.data = (originalData.startsWith('A') ? 'B' : 'A') + originalData.slice(1);
     tampered.encryptedEnvelope = JSON.stringify(parsedEnv);
     await sharedStorage.saveSession(tampered);
 
@@ -365,6 +373,7 @@ test('Mission C — Browser Persistence, Tenant Isolation, and Recovery Across W
 
     // 7i. Expiration test
     const expiredWorker = new BrowserAdapter({}, sharedStorage);
+    adapters.push(expiredWorker);
     await expiredWorker.navigate(principalA, 'https://example.com');
     await expiredWorker.saveDurableSnapshot(principalA, secretKey, -5000); // already expired
 
@@ -376,8 +385,6 @@ test('Mission C — Browser Persistence, Tenant Isolation, and Recovery Across W
       'Expired session must be rejected and purged'
     );
 
-    await expiredWorker.shutdown();
-    await worker2.shutdown();
   });
 
   await t.test('8. Fail-Closed Security on PostgresBrowserSessionStorage Outage (Zero Silent Memory Downgrading)', async () => {

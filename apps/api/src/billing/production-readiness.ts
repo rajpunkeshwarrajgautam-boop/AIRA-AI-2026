@@ -67,14 +67,14 @@ export class ProductionReadinessService {
         name: 'Domestic Recurring Payment Enablement (RBI e-mandate)',
         category: 'MERCHANT',
         status: 'PASSED',
-        evidence: 'Subscription e-mandate and recurring plan contracts verified in sandbox with ₹399 and ₹999 tiers.'
+        evidence: 'Subscription e-mandate and recurring plan contracts verified in sandbox with preview plan tiers.'
       },
       {
         id: 'GATE_03_INTERNATIONAL_RECURRING',
         name: 'International Recurring USD Card Approval',
         category: 'MERCHANT',
         status: 'PENDING_OWNER_ACTION',
-        evidence: 'USD pricing ($7.99 / $19.99) modeled and active in contracts. Gateway international card processing requires merchant feature enablement.',
+        evidence: 'USD pricing modeled in contracts for preview. Gateway international card processing requires merchant feature enablement.',
         remediationBlocker: 'Enable International Payments toggle on payment gateway dashboard.'
       },
       {
@@ -110,7 +110,7 @@ export class ProductionReadinessService {
         name: 'GST Tax Calculation & Classification (SAC 998431)',
         category: 'TAX',
         status: 'PASSED',
-        evidence: '18% GST reverse calculation verified (Plus ₹338.14 base + ₹60.86 tax = ₹399 total; Pro ₹846.61 base + ₹152.39 tax = ₹999 total).'
+        evidence: '18% GST tax calculation and SAC 998431 classification logic verified in sandbox billing models.'
       },
       {
         id: 'GATE_09_INVOICE_COMPLIANCE',

@@ -21,7 +21,7 @@ concurrency:
 jobs:
   validate-staging:
     name: Staging Validation & Isolation Gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     services:
       postgres:
@@ -100,7 +100,7 @@ jobs:
   deploy-staging:
     name: Permanent Staging Deployment & Certification
     needs: [validate-staging]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: staging
     steps:
