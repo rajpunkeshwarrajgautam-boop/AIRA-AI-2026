@@ -22,6 +22,7 @@ interface HelpCenterModalProps {
   onOpenReportBug?: () => void;
   onOpenShortcuts?: () => void;
   onOpenPrivacyCenter?: () => void;
+  onOpenMotionStudio?: () => void;
 }
 
 interface HelpArticle {
@@ -40,6 +41,7 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
   onOpenReportBug,
   onOpenShortcuts,
   onOpenPrivacyCenter,
+  onOpenMotionStudio,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -83,6 +85,22 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
       ],
       actionLabel: 'View Keyboard Shortcuts',
       actionHandler: onOpenShortcuts
+    },
+    {
+      id: 'getting-started-motion-showcase',
+      category: 'getting-started',
+      title: 'Feature Showcase & Motion Studio',
+      summary: 'Explore the 30-second motion walkthrough highlighting Groq LPU inference, Nemotron 70B reasoning, and cognitive settings.',
+      content: [
+        'Watch the interactive Video Studio showcasing AIRA\'s verified capabilities.',
+        '• Scene 1: Multi-Model Cognitive Architecture & 128K Context',
+        '• Scene 2: Ultra-Fast Groq LPU with Google Gemini Failover',
+        '• Scene 3: NVIDIA Nemotron 70B Deep Reasoning Traces',
+        '• Scene 4: Account-Scoped Onboarding Tour',
+        '• Scene 5: Cognitive Settings & Enforced Privacy Safeguards'
+      ],
+      actionLabel: 'Launch Video Studio',
+      actionHandler: onOpenMotionStudio
     },
     {
       id: 'models-reasoning-budget',

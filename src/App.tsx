@@ -53,6 +53,7 @@ import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal';
 import { LegalViewerModal } from './components/LegalViewerModal';
 import { ReportBugModal } from './components/ReportBugModal';
 import { UpgradeModal } from './components/UpgradeModal';
+import { MotionStudioModal } from './components/MotionStudioModal';
 import { FeatureFlagProvider } from './lib/featureFlags';
 import { WhatsNewAnnouncementModal } from './components/WhatsNewAnnouncementModal';
 import { OnboardingWalkthrough } from './components/OnboardingWalkthrough';
@@ -190,6 +191,7 @@ function App() {
   const [legalViewerInitialDoc, setLegalViewerInitialDoc] = useState<'terms' | 'privacy'>('terms');
   const [isReportBugOpen, setIsReportBugOpen] = useState(false);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
+  const [isMotionStudioOpen, setIsMotionStudioOpen] = useState(false);
   const [upgradeModalTrigger, setUpgradeModalTrigger] = useState<string | null>(null);
   const [userTier, setUserTier] = useState<PlanTier>(() => neonAuth.getCurrentUser() ? 'free' : 'guest');
 
@@ -208,6 +210,11 @@ function App() {
     try {
       const url = new URL(window.location.href);
       const tabParam = url.searchParams.get('tab');
+      const viewParam = url.searchParams.get('view');
+      const hash = window.location.hash;
+      if (viewParam === 'video-studio' || viewParam === 'motion-studio' || hash === '#video-studio' || hash === '#motion-studio') {
+        setIsMotionStudioOpen(true);
+      }
       const isSettingsPath = url.pathname.includes('/settings');
       if (isSettingsPath || tabParam) {
         const validTabs = ['general', 'plan', 'billing', 'subscription', 'usage', 'reasoning', 'memory', 'instructions', 'artifacts', 'data'];
@@ -1542,6 +1549,7 @@ useEffect(() => {
             setIsWhatsNewOpen(true);
           }}
           onRestartOnboarding={handleRestartOnboarding}
+          onOpenMotionStudio={() => setIsMotionStudioOpen(true)}
           unreadAnnouncementsCount={unreadAnnouncementsCount}
         />
 
@@ -1887,6 +1895,7 @@ useEffect(() => {
           onOpenReportBug={() => setIsReportBugOpen(true)}
           onOpenShortcuts={() => setIsKeyboardShortcutsOpen(true)}
           onOpenPrivacyCenter={() => setIsPrivacyCenterOpen(true)}
+          onOpenMotionStudio={() => setIsMotionStudioOpen(true)}
         />
 
         <PrivacyCenterModal
@@ -2005,6 +2014,11 @@ useEffect(() => {
           onOpenPlanSettings={() => handleOpenSettings('plan')}
           onSwitchWorkspaceMode={setWorkspaceMode}
           onOpenProjects={() => setIsProjectsOpen(true)}
+        />
+
+        <MotionStudioModal
+          isOpen={isMotionStudioOpen}
+          onClose={() => setIsMotionStudioOpen(false)}
         />
       </React.Suspense>
     </div>

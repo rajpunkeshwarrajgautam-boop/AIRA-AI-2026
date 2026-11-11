@@ -1,0 +1,103 @@
+/* hallmark: v2.0.0 · theme: midnight (dealt 1/3) · shape: narrative-workflow · genre: atmospheric · seed: motion-template-video-studio */
+/* critique: cold nocturnal video instrument; midnight ground, cool white ink, mona sans expanded display, one azure signal */
+
+:root {
+  --color-studio-paper: oklch(14% 0.048 264);
+  --color-studio-paper-2: oklch(18.5% 0.052 264);
+  --color-studio-paper-3: oklch(23% 0.055 264);
+  --color-studio-ink: oklch(95% 0.016 250);
+  --color-studio-ink-2: oklch(88% 0.05 245);
+  --color-studio-muted: oklch(73% 0.04 256);
+  --color-studio-rule: oklch(29% 0.058 264);
+  --color-studio-rule-2: oklch(40% 0.06 262);
+  --color-studio-accent: oklch(80% 0.11 230);
+  --color-studio-accent-2: oklch(58% 0.1 236);
+  --color-studio-accent-ink: oklch(16% 0.05 264);
+  --color-studio-focus: oklch(84% 0.12 228);
+
+  --font-studio-display: "Mona Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-studio-body: var(--font-studio-display);
+  --tracking-studio-display: -0.015em;
+  --display-weight: 300;
+  --display-stretch: 125%;
+
+  --radius-studio-card: 0px;
+  --radius-studio-pill: 0px;
+  --rule-studio-hair: 1px;
+  --shadow-studio-card: 0 24px 48px -24px oklch(6% 0.04 264 / 0.7);
+
+  --dur-studio-short: 180ms;
+  --dur-studio-long: 420ms;
+  --ease-studio-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.studio-shell {
+  background-color: var(--color-studio-paper);
+  color: var(--color-studio-ink);
+  font-family: var(--font-studio-body);
+}
+
+.studio-head-display {
+  font-family: var(--font-studio-display);
+  font-weight: var(--display-weight);
+  letter-spacing: var(--tracking-studio-display);
+  line-height: 1.05;
+}
+
+.studio-well {
+  background-color: var(--color-studio-paper-2);
+  border: var(--rule-studio-hair) solid var(--color-studio-rule);
+}
+
+.studio-well-raised {
+  background-color: var(--color-studio-paper-3);
+  box-shadow: var(--shadow-studio-card);
+  border: var(--rule-studio-hair) solid var(--color-studio-rule-2);
+}
+
+.studio-btn {
+  border: var(--rule-studio-hair) solid var(--color-studio-rule-2);
+  background: transparent;
+  color: var(--color-studio-ink);
+  font-weight: 500;
+  padding: 8px 16px;
+  transition: background-color var(--dur-studio-short) var(--ease-studio-out), color var(--dur-studio-short) var(--ease-studio-out);
+}
+
+.studio-btn:hover {
+  background-color: var(--color-studio-paper-2);
+}
+
+.studio-btn:focus-visible {
+  outline: 2px solid var(--color-studio-focus);
+  outline-offset: 2px;
+}
+
+.studio-btn-primary {
+  background-color: var(--color-studio-accent);
+  color: var(--color-studio-accent-ink);
+  border-color: var(--color-studio-accent);
+}
+
+.studio-btn-primary:hover {
+  background-color: var(--color-studio-ink);
+  color: var(--color-studio-accent-ink);
+}
+
+.studio-meter {
+  height: 2px;
+  background-color: var(--color-studio-rule-2);
+}
+
+.studio-meter-fill {
+  height: 100%;
+  background-color: var(--color-studio-accent);
+  transition: transform var(--dur-studio-short) var(--ease-studio-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-btn,
+  .studio-meter-fill {
+    transition: none !important;
+  }
+}
