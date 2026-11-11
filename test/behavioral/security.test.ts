@@ -260,7 +260,8 @@ describe('AIRA Behavioral Intelligence — Adversarial Security Acceptance Suite
       sessionId: 'sess_dev_100',
       workspaceId: 'ws_dev_100',
       roles: ['developer'],
-      scopes: ['files.read', 'files.write', 'browser.write']
+      scopes: ['files.read', 'files.write', 'browser.write'],
+      tier: 'pro' as const
     };
 
     const approvalSuspensionResult = await gateway.execute({
