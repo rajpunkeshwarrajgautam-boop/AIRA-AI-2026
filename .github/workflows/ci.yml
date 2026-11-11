@@ -74,6 +74,9 @@ jobs:
       - name: Run database migrations
         run: npm run db:migrate
 
+      - name: Commercial quota ledger and monthly reasoning enforcement (real PostgreSQL)
+        run: npx tsx --test test/commercial-credit-ledger.test.ts
+
       - name: Verify deploy database contract (lexical fallback)
         env:
           AIRA_SEMANTIC_SEARCH: 'false'
