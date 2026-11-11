@@ -29,24 +29,23 @@ jobs:
         with:
           node-version: '24'
 
+      - name: Configure reliable runner DNS and APT mirrors
+        shell: bash
+        run: |
+          set -e
+          sudo resolvectl dns eth0 8.8.8.8 1.1.1.1 || true
+          sudo sed -i '1s/^/nameserver 8.8.8.8\nnameserver 1.1.1.1\n/' /etc/resolv.conf || true
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu/|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list.d/ubuntu.sources || true
+          fi
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu/|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/apt-mirrors.txt || true
+          fi
+          echo 'Acquire::Retries "5";' | sudo tee /etc/apt/apt.conf.d/80-retries
+
       # Install with no lifecycle scripts and before creating any database credentials.
       - name: Install dependencies without lifecycle scripts
         run: npm ci --ignore-scripts
-
-      - name: Install PostgreSQL client tools on runner host
-        shell: bash
-        run: |
-          for attempt in 1 2 3; do
-            if sudo apt-get update && sudo apt-get install -y postgresql-client; then
-              break
-            fi
-            if [ "$attempt" -eq 3 ]; then
-              echo "::error::PostgreSQL client install failed after 3 attempts."
-              exit 1
-            fi
-            echo "apt-get attempt $attempt failed, retrying in 5s..."
-            sleep 5
-          done
 
       - name: Pull reviewed immutable images
         shell: bash

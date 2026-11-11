@@ -334,6 +334,20 @@ jobs:
       - name: Startup certification
         run: npm run test:startup
 
+      - name: Configure reliable runner DNS and APT mirrors
+        shell: bash
+        run: |
+          set -e
+          sudo resolvectl dns eth0 8.8.8.8 1.1.1.1 || true
+          sudo sed -i '1s/^/nameserver 8.8.8.8\nnameserver 1.1.1.1\n/' /etc/resolv.conf || true
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu/|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list.d/ubuntu.sources || true
+          fi
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu/|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/apt-mirrors.txt || true
+          fi
+          echo 'Acquire::Retries "5";' | sudo tee /etc/apt/apt.conf.d/80-retries
+
       - name: Install Playwright Edge
         shell: bash
         run: |
@@ -418,6 +432,20 @@ jobs:
           VERCEL_TEAM_ID: ${{ vars.VERCEL_TEAM_ID }}
           EXPECTED_SHA: ${{ github.sha }}
         run: npm run test:staging:attest
+
+      - name: Configure reliable runner DNS and APT mirrors
+        shell: bash
+        run: |
+          set -e
+          sudo resolvectl dns eth0 8.8.8.8 1.1.1.1 || true
+          sudo sed -i '1s/^/nameserver 8.8.8.8\nnameserver 1.1.1.1\n/' /etc/resolv.conf || true
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu/|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list.d/ubuntu.sources || true
+          fi
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu/|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/apt-mirrors.txt || true
+          fi
+          echo 'Acquire::Retries "5";' | sudo tee /etc/apt/apt.conf.d/80-retries
 
       - name: Install Playwright Edge
         shell: bash

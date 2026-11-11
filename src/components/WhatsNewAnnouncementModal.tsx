@@ -3,7 +3,6 @@ import {
   X,
   Sparkles,
   ChevronRight,
-  ExternalLink,
   CheckCircle,
   Bell,
   Layers,
