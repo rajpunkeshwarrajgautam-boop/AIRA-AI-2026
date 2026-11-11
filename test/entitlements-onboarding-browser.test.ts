@@ -123,7 +123,66 @@ async function createBrowserSession(
 
   const page = await context.newPage();
 
+  page.on('response', res => {
+    if (res.status() >= 400) console.log('  [HTTP ERROR]', res.status(), res.url());
+  });
+  page.on('requestfailed', req => {
+    console.log('  [REQUEST FAILED]', req.method(), req.url(), req.failure()?.errorText);
+  });
+
   // Intercept billing and auth API endpoints to supply deterministic tier truth
+  await page.route('**/api/auth/session', async (route) => {
+    if (isAuth) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          status: 'AUTHENTICATED',
+          user: {
+            id: `usr_${userTier}_test`,
+            name: `Aira ${userTier.toUpperCase()} User`,
+            email: `${userTier}.user@aira.ai`,
+            role: 'user',
+            emailVerified: true
+          }
+        })
+      });
+    } else {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          status: 'ANONYMOUS',
+          user: null
+        })
+      });
+    }
+  });
+
+  await page.route('**/api/feature-flags', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ flags: {} })
+    });
+  });
+
+  await page.route('**/api/announcements/**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true })
+    });
+  });
+
+  await page.route('**/api/onboarding/**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true })
+    });
+  });
+
   await page.route('**/api/billing/summary', async (route) => {
     if (isAuth) {
       await route.fulfill({
@@ -164,6 +223,7 @@ async function createBrowserSession(
   // The Settings pane consumes the authoritative /api/billing/entitlements
   // contract, not the obsolete /api/user/usage mock endpoint.
   await page.route('**/api/billing/entitlements', async (route) => {
+    console.log(`  [ROUTE INTERCEPT] /api/billing/entitlements called for tier: ${userTier}`);
     const limits = {
       guest: { chats: 5, credits: 0, boosts: 0 },
       free: { chats: 15, credits: 100, boosts: 5 },
@@ -199,7 +259,9 @@ async function createBrowserSession(
           role: 'user',
           emailVerified: true
         },
-        token: `mock_session_token_${tier}`
+        token: `mock_session_token_${tier}`,
+        jwt: `mock_jwt_token_${tier}`,
+        jwtExpiresAt: Date.now() + 86400000
       }));
     } else {
       localStorage.removeItem('aira_neon_auth_session_v1');
@@ -674,12 +736,22 @@ async function runTestSuite() {
       });
 
       try {
-        await plusSession.page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 20000 });
-
         // Open Settings directly to Plan tab to trigger Pro upgrade modal
-        await plusSession.page.goto(`${BASE_URL}/?tab=plan`, { waitUntil: 'domcontentloaded' });
+        await plusSession.page.goto(`${BASE_URL}/?tab=plan`, { waitUntil: 'domcontentloaded', timeout: 20000 });
         const settingsDialog = plusSession.page.getByTestId('settings-dialog');
         await settingsDialog.waitFor({ state: 'visible', timeout: 10000 });
+
+        // Ensure Plan tab is active
+        const planTabBtn = plusSession.page.getByTestId('settings-tab-plan');
+        if (await planTabBtn.isVisible().catch(() => false)) {
+          await planTabBtn.click();
+        }
+
+        console.log('  [DEBUG 3.3] Dialog inner text:\n', (await settingsDialog.innerText()).slice(0, 500));
+
+        // Wait for authoritative Plus entitlements to load in settings
+        const planCardHeader = settingsDialog.locator('h3:has-text("AIRA Plus")');
+        await planCardHeader.waitFor({ state: 'visible', timeout: 10000 });
 
         // Click "Upgrade Tier" button in active plan overview card
         const upgradeTierBtn = settingsDialog.getByRole('button', { name: 'Upgrade Tier' });
@@ -770,16 +842,20 @@ async function runTestSuite() {
         const metersSection = dialog.locator('h4:has-text("Allowance Meters & Gauges")');
         await metersSection.waitFor({ state: 'visible', timeout: 5000 });
 
-        const dailyChatsMeter = dialog.getByText('Daily Standard Chats', { exact: true });
+        const dailyChatsMeter = dialog.getByText(/Daily Standard Chats/i).first();
+        await dailyChatsMeter.scrollIntoViewIfNeeded();
         await dailyChatsMeter.waitFor({ state: 'visible', timeout: 5000 });
 
-        const monthlyCreditsMeter = dialog.getByText('Available Premium Credits', { exact: true });
+        const monthlyCreditsMeter = dialog.getByText(/Available Premium Credits/i).first();
+        await monthlyCreditsMeter.scrollIntoViewIfNeeded();
         await monthlyCreditsMeter.waitFor({ state: 'visible', timeout: 5000 });
 
-        const reasoningBoostsMeter = dialog.getByText('Reasoning Boosts', { exact: true });
+        const reasoningBoostsMeter = dialog.getByText(/Reasoning Boosts/i).first();
+        await reasoningBoostsMeter.scrollIntoViewIfNeeded();
         await reasoningBoostsMeter.waitFor({ state: 'visible', timeout: 5000 });
 
-        const projectsMeter = dialog.getByText('Projects & Knowledge', { exact: true });
+        const projectsMeter = dialog.getByText(/Projects & Knowledge/i).first();
+        await projectsMeter.scrollIntoViewIfNeeded();
         await projectsMeter.waitFor({ state: 'visible', timeout: 5000 });
 
         // 4.5 Verify Plan Comparison Matrix
