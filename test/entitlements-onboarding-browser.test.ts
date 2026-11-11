@@ -596,10 +596,10 @@ async function runTestSuite() {
           'Guest upgrade CTA should offer Sign In / Sign Up Free'
         );
 
-        // Verify Sandbox Notice is displayed
-        const sandboxNotice = upgradeModal.locator('text=Live payment collection is currently in sandbox/isolated mode.');
+        // Verify Sandbox/Preview Notice is displayed
+        const sandboxNotice = upgradeModal.locator('text=Paid checkout is currently in preview mode. Commercial activation is isolated.');
         await sandboxNotice.waitFor({ state: 'visible', timeout: 5000 });
-        console.log('  ✓ Guest limit upgrade modal and sandbox notice verified');
+        console.log('  ✓ Guest limit upgrade modal and preview notice verified');
 
         // Close modal
         await guestSession.page.getByTestId('upgrade-modal-close').click();
@@ -710,8 +710,8 @@ async function runTestSuite() {
         assert.ok(proModalContent?.includes('150 Standard Chats / Day'), 'Must mention 150 chats/day');
         assert.ok(proModalContent?.includes('2 Concurrent Inference Permits'), 'Must mention 2 concurrent permits');
 
-        // Verify Sandbox billing notice
-        const sandboxNotice = upgradeModal.locator('text=Live payment collection is currently in sandbox/isolated mode.');
+        // Verify Sandbox/Preview billing notice
+        const sandboxNotice = upgradeModal.locator('text=Paid checkout is currently in preview mode. Commercial activation is isolated.');
         await sandboxNotice.waitFor({ state: 'visible', timeout: 5000 });
         console.log('  ✓ Plus-to-Pro upgrade modal and capability discovery verified');
 
