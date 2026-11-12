@@ -76,11 +76,11 @@ test('Truthful Capabilities & Model Architecture Suite', async (t) => {
     assert.equal(VERIFIED_MODEL_REGISTRY['aira-auto'].upstreamModelId, 'openai/gpt-oss-120b');
     assert.equal(VERIFIED_MODEL_REGISTRY['aira-fast'].provider, 'groq');
     assert.equal(VERIFIED_MODEL_REGISTRY['aira-fast'].upstreamModelId, 'openai/gpt-oss-120b');
-    assert.equal(VERIFIED_MODEL_REGISTRY['aira-pro'].provider, 'nvidia');
-    assert.equal(VERIFIED_MODEL_REGISTRY['aira-pro'].upstreamModelId, 'nvidia/llama-3.1-nemotron-70b-instruct');
-    assert.equal(VERIFIED_MODEL_REGISTRY['aira-deep'].provider, 'nvidia');
-    assert.equal(VERIFIED_MODEL_REGISTRY['aira-deep'].upstreamModelId, 'nvidia/llama-3.1-nemotron-70b-instruct');
-    assert.equal(VERIFIED_MODEL_REGISTRY['aira-deep'].reasoningControl, 'output_cap_only');
+    assert.equal(VERIFIED_MODEL_REGISTRY['aira-pro'].provider, 'groq');
+    assert.equal(VERIFIED_MODEL_REGISTRY['aira-pro'].upstreamModelId, 'openai/gpt-oss-120b');
+    assert.equal(VERIFIED_MODEL_REGISTRY['aira-deep'].provider, 'groq');
+    assert.equal(VERIFIED_MODEL_REGISTRY['aira-deep'].upstreamModelId, 'openai/gpt-oss-120b');
+    assert.equal(VERIFIED_MODEL_REGISTRY['aira-deep'].reasoningControl, 'effort_mapped');
 
     for (const [id, def] of Object.entries(VERIFIED_MODEL_REGISTRY)) {
       assert.notEqual(def.provider, 'anthropic', `Model ${id} must not use unconfigured provider anthropic`);
@@ -294,10 +294,10 @@ test('Truthful Capabilities & Model Architecture Suite', async (t) => {
     try {
       const router = new ModelRouter();
 
-      // Even with ANTHROPIC_API_KEY set, VERIFIED_MODEL_REGISTRY declares NVIDIA for aira-pro and aira-deep
+      // Even with ANTHROPIC_API_KEY set, VERIFIED_MODEL_REGISTRY declares Groq for aira-pro and aira-deep
       const proExec = router.resolveExecution('aira-pro', 'TOOL_ACTION', { callerTier: 'plus' });
-      assert.equal(proExec.executedProvider, 'nvidia');
-      assert.equal(proExec.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct');
+      assert.equal(proExec.executedProvider, 'groq');
+      assert.equal(proExec.executedModel, 'openai/gpt-oss-120b');
       assert.equal(proExec.fallbackOccurred, false);
 
       const deepExec = router.resolveExecution('aira-deep', 'RESEARCH', {
@@ -305,20 +305,26 @@ test('Truthful Capabilities & Model Architecture Suite', async (t) => {
         extendedThinking: true,
         reasoningBudget: 3072
       });
-      assert.equal(deepExec.executedProvider, 'nvidia');
-      assert.equal(deepExec.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct');
+      assert.equal(deepExec.executedProvider, 'groq');
+      assert.equal(deepExec.executedModel, 'openai/gpt-oss-120b');
       assert.equal(deepExec.policy.reasoningBudget, 3072);
-      assert.equal(deepExec.reasoningControl, 'output_cap_only');
+      assert.equal(deepExec.reasoningControl, 'effort_mapped');
 
-      // When NVIDIA circuit breaker is OPEN (5 failures hit errorRateThreshold window), router skips straight to healthy fallback (Groq)
+      // Explicit NVIDIA model request routes to NVIDIA without fallback if NVIDIA is configured
+      const explicitNv = router.resolveExecution('nvidia/llama-3.1-nemotron-70b-instruct', 'ANSWER', { callerTier: 'plus' });
+      assert.equal(explicitNv.executedProvider, 'nvidia');
+      assert.equal(explicitNv.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct');
+      assert.equal(explicitNv.fallbackOccurred, false);
+
+      // When Groq circuit breaker is OPEN, router skips straight to healthy fallback
       const healthRouter = new ModelRouter();
       for (let i = 0; i < 5; i++) {
-        healthRouter.healthTracker.recordFailure('nvidia', 'nvidia/llama-3.1-nemotron-70b-instruct', new Error('NVIDIA 503'), 503);
+        healthRouter.healthTracker.recordFailure('groq', 'openai/gpt-oss-120b', new Error('Groq 429'), 429);
       }
-      assert.equal(healthRouter.healthTracker.getCircuitState('nvidia', 'nvidia/llama-3.1-nemotron-70b-instruct'), 'OPEN');
+      assert.equal(healthRouter.healthTracker.getCircuitState('groq', 'openai/gpt-oss-120b'), 'OPEN');
       const deepDegraded = healthRouter.resolveExecution('aira-deep', 'RESEARCH', { callerTier: 'pro' });
-      assert.equal(deepDegraded.executedProvider, 'groq');
-      assert.equal(deepDegraded.executedModel, 'openai/gpt-oss-120b');
+      assert.equal(deepDegraded.executedProvider, 'nvidia');
+      assert.equal(deepDegraded.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct');
       assert.equal(deepDegraded.fallbackOccurred, true);
 
       // Verify exact HTTP outbound payload for NVIDIA OpenAIAdapter:
@@ -420,22 +426,27 @@ test('Truthful Capabilities & Model Architecture Suite', async (t) => {
       );
       assert.deepEqual(groqReasoningChunks, ['Groq step...']);
 
-      // When GEMINI_API_KEY + GROQ_API_KEY + NVIDIA_API_KEY are configured and NVIDIA circuit opens,
-      // aira-pro and aira-deep route to healthy Groq with Gemini 3.5 Flash-Lite tertiary failover
+      // When GEMINI_API_KEY + GROQ_API_KEY are configured:
+      // aira-pro and aira-deep route to Groq as primary (fallbackOccurred: false).
+      // When Groq circuit opens, they route to Gemini 3.5 Flash-Lite (fallbackOccurred: true).
       process.env.GEMINI_API_KEY = 'gm-test-key';
       const dualRouter = new ModelRouter();
+      const proPrimary = dualRouter.resolveExecution('aira-pro', 'ANSWER', { callerTier: 'pro' });
+      assert.equal(proPrimary.executedProvider, 'groq');
+      assert.equal(proPrimary.executedModel, 'openai/gpt-oss-120b');
+      assert.equal(proPrimary.fallbackOccurred, false);
+
       for (let i = 0; i < 5; i++) {
-        dualRouter.healthTracker.recordFailure('nvidia', 'nvidia/llama-3.1-nemotron-70b-instruct', new Error('NVIDIA 404'), 404);
+        dualRouter.healthTracker.recordFailure('groq', 'openai/gpt-oss-120b', new Error('Groq 429'), 429);
       }
       const proFallback = dualRouter.resolveExecution('aira-pro', 'ANSWER', { callerTier: 'pro' });
-      assert.equal(proFallback.executedProvider, 'groq');
-      assert.equal(proFallback.executedModel, 'openai/gpt-oss-120b');
+      assert.equal(proFallback.executedProvider, 'gemini');
+      assert.equal(proFallback.executedModel, 'gemini-3.5-flash-lite');
       assert.equal(proFallback.fallbackOccurred, true);
 
       const deepFallback = dualRouter.resolveExecution('aira-deep', 'RESEARCH', { callerTier: 'pro', extendedThinking: true, reasoningBudget: 4096 });
-      assert.equal(deepFallback.executedProvider, 'groq');
-      assert.equal(deepFallback.executedModel, 'openai/gpt-oss-120b');
-      assert.equal(deepFallback.reasoningControl, 'effort_mapped');
+      assert.equal(deepFallback.executedProvider, 'gemini');
+      assert.equal(deepFallback.executedModel, 'gemini-3.5-flash-lite');
       assert.equal(deepFallback.fallbackOccurred, true);
     } finally {
       globalThis.fetch = origFetch;

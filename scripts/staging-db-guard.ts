@@ -2,7 +2,12 @@
  * Non-production staging ONLY. Never execute migrations against a production
  * database or for a Production deployment. This file only exists on staging.
  */
-const knownStagingHost = 'ep-shiny-bird-b3xundyt-pooler.c-4.ap-southeast-1.aws.neon.tech';
+const knownStagingHosts = [
+  'ep-shiny-bird-b3xundyt-pooler.c-4.ap-southeast-1.aws.neon.tech',
+  'ep-shiny-bird-b3xundyt.c-4.ap-southeast-1.aws.neon.tech',
+  'ep-twilight-cherry-b3iz2oqv-pooler.c-4.ap-southeast-1.aws.neon.tech',
+  'ep-twilight-cherry-b3iz2oqv.c-4.ap-southeast-1.aws.neon.tech'
+];
 const env = process.env.VERCEL_ENV;
 const branch = process.env.VERCEL_GIT_COMMIT_REF;
 const connection = process.env.DATABASE_URL;
@@ -27,7 +32,7 @@ try {
 } catch {
   throw new Error('STAGING_DB_GUARD: invalid staging DATABASE_URL');
 }
-if (hostname !== knownStagingHost) {
+if (!knownStagingHosts.includes(hostname)) {
   throw new Error('STAGING_DB_GUARD: database is not the independently provisioned staging project');
 }
 console.log('STAGING_DB_GUARD: preview environment and isolated staging database verified.');

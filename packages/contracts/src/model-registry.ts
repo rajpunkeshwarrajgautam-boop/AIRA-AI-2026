@@ -49,25 +49,25 @@ export const VERIFIED_MODEL_REGISTRY: Record<string, ModelCapabilityDescriptor> 
   'aira-pro': {
     id: 'aira-pro',
     displayName: 'AIRA Pro',
-    provider: 'nvidia',
-    upstreamModelId: 'nvidia/llama-3.1-nemotron-70b-instruct',
+    provider: 'groq',
+    upstreamModelId: 'openai/gpt-oss-120b',
     minTier: 'plus',
     contextWindow: '128K tokens',
     supportsThinking: false,
-    reasoningControl: 'output_cap_only',
-    description: 'High-fidelity engineering and multi-step synthesis targeting NVIDIA Nemotron 70B with automatic Groq/Gemini 3.5 Flash-Lite 1M failover.',
+    reasoningControl: 'none',
+    description: 'High-throughput advanced synthesis and engineering powered by Groq (openai/gpt-oss-120b) with automatic Gemini 3.5 Flash-Lite 1M context failover.',
     badge: 'Quality'
   },
   'aira-deep': {
     id: 'aira-deep',
     displayName: 'AIRA Deep',
-    provider: 'nvidia',
-    upstreamModelId: 'nvidia/llama-3.1-nemotron-70b-instruct',
+    provider: 'groq',
+    upstreamModelId: 'openai/gpt-oss-120b',
     minTier: 'pro',
     contextWindow: '128K tokens',
     supportsThinking: true,
-    reasoningControl: 'output_cap_only',
-    description: 'Deep-research and architectural synthesis targeting NVIDIA Nemotron 70B (automatic Groq reasoning_effort / Gemini 3.5 Flash-Lite failover).',
+    reasoningControl: 'effort_mapped',
+    description: 'Deep architectural synthesis and multi-step reasoning powered by Groq reasoning_effort (openai/gpt-oss-120b) with Gemini 3.5 Flash-Lite 1M context failover.',
     badge: 'Deep'
   },
   'nvidia/llama-3.1-nemotron-70b-instruct': {
@@ -79,7 +79,7 @@ export const VERIFIED_MODEL_REGISTRY: Record<string, ModelCapabilityDescriptor> 
     contextWindow: '128K tokens',
     supportsThinking: false,
     reasoningControl: 'output_cap_only',
-    description: 'Fine-tuned by NVIDIA with RLHF alignment for instruction following, coding, and reasoning.',
+    description: 'Experimental NVIDIA NIM integration (subject to account-level function provisioning; automatic Groq/Gemini failover).',
     badge: 'NVIDIA'
   },
   // Backward compatibility migration aliases for historical conversation sessions

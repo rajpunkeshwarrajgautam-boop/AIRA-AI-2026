@@ -1298,7 +1298,7 @@ export class ModelRouter {
         : requestedModelId.startsWith('gemini-') ? 'gemini'
         : undefined;
       const registryProvider = explicitVendorProvider || (VERIFIED_MODEL_REGISTRY[model]?.provider as SupportedProvider | undefined);
-      const defaultOrder: Array<SupportedProvider> = ['nvidia', 'openai', 'groq', 'gemini', 'anthropic'];
+      const defaultOrder: Array<SupportedProvider> = ['groq', 'gemini', 'nvidia', 'openai', 'anthropic'];
       const providerPreference: Array<SupportedProvider> = registryProvider && defaultOrder.includes(registryProvider)
         ? [registryProvider, ...defaultOrder.filter(p => p !== registryProvider)]
         : defaultOrder;

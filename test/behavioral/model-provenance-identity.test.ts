@@ -146,26 +146,27 @@ describe('MISSION: Model Provenance, Runtime Identity & Capability Accuracy', ()
     // Scenario 5: Registry-aligned primary & fallback path when primary provider is unavailable
     it('Scenario 5: Registry primary executes directly when available and records fallback reason when unavailable', () => {
       process.env.NODE_ENV = 'production';
-      process.env.NVIDIA_API_KEY = 'nvapi-test-key-mock';
+      process.env.GROQ_API_KEY = 'gsk-test-key-mock';
       delete process.env.ANTHROPIC_API_KEY;
       delete process.env.OPENAI_API_KEY;
-      delete process.env.GROQ_API_KEY;
+      delete process.env.NVIDIA_API_KEY;
+      delete process.env.GEMINI_API_KEY;
 
-      const nvidiaPrimaryRouter = new ModelRouter();
-      // aira-deep prefers NVIDIA per VERIFIED_MODEL_REGISTRY; with NVIDIA configured, no fallback occurs
-      const directExecution = nvidiaPrimaryRouter.resolveExecution('aira-deep', 'RESEARCH');
-      assert.equal(directExecution.provider, 'nvidia');
-      assert.equal(directExecution.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct');
+      const groqPrimaryRouter = new ModelRouter();
+      // aira-deep prefers Groq per VERIFIED_MODEL_REGISTRY; with Groq configured, no fallback occurs
+      const directExecution = groqPrimaryRouter.resolveExecution('aira-deep', 'RESEARCH');
+      assert.equal(directExecution.provider, 'groq');
+      assert.equal(directExecution.executedModel, 'openai/gpt-oss-120b');
       assert.equal(directExecution.fallbackOccurred, false);
 
-      // When registry primary (NVIDIA) is unavailable and only Anthropic/Groq is configured, fallbackOccurred is true
-      delete process.env.NVIDIA_API_KEY;
-      process.env.GROQ_API_KEY = 'gsk-test-key-mock';
+      // When registry primary (Groq) is unavailable and only Gemini is configured, fallbackOccurred is true
+      delete process.env.GROQ_API_KEY;
+      process.env.GEMINI_API_KEY = 'gemini-test-key-mock';
       const fallbackRouter = new ModelRouter();
       const fallbackExecution = fallbackRouter.resolveExecution('aira-deep', 'RESEARCH');
 
-      assert.equal(fallbackExecution.provider, 'groq');
-      assert.equal(fallbackExecution.executedModel, 'openai/gpt-oss-120b');
+      assert.equal(fallbackExecution.provider, 'gemini');
+      assert.equal(fallbackExecution.executedModel, 'gemini-3.5-flash-lite');
       assert.equal(fallbackExecution.fallbackOccurred, true);
       assert.ok(fallbackExecution.fallbackReason);
     });
