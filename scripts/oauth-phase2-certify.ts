@@ -2,23 +2,148 @@
  * AIRA AI 2026 — Phase 2: Real OAuth Cross-Account Isolation, Runtime Model Matrix & Logout Certification
  *
  * Consumes the genuine Google-authenticated (Profile A) and GitHub-authenticated (Profile B)
- * persistent Microsoft Edge contexts against https://staging.virexaaiventures.com
- * on exact candidate SHA e55e8e1aab3060cc6f0074da0c65d605e3196fc0.
+ * persistent Microsoft Edge contexts against an isolated staging deployment matching the
+ * validated 40-character candidate commit SHA.
  */
 
 import { chromium, type BrowserContext, type Page } from 'playwright';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { setupProFixture, cleanupAllStagingFixtures, verifyStagingDbIntegrity } from './staging-fixture-lifecycle.js';
 
-const STAGING_URL = process.env.AIRA_STAGING_URL || 'https://staging.virexaaiventures.com';
-const EXPECTED_SHA = 'e55e8e1aab3060cc6f0074da0c65d605e3196fc0';
-const ARTIFACTS_DIR = path.resolve(process.cwd(), 'artifacts/staging-acceptance/pr164');
-if (!fs.existsSync(ARTIFACTS_DIR)) fs.mkdirSync(ARTIFACTS_DIR, { recursive: true });
+const DEFAULT_STAGING_URL = 'https://staging.virexaaiventures.com';
+const FULL_SHA_REGEX = /^[a-f0-9]{40}$/i;
+const FORBIDDEN_PROD_HOST_PATTERNS = [
+  /^aira-ai-2026\.vercel\.app$/i,
+  /^prod-release\./i,
+];
 
+const ARTIFACTS_DIR = path.resolve(process.cwd(), 'artifacts/staging-acceptance/pr164');
 const PROFILE_A_DIR = path.resolve(process.cwd(), 'artifacts/staging-acceptance/edge_oauth_profile_a');
 const PROFILE_B_DIR = path.resolve(process.cwd(), 'artifacts/staging-acceptance/edge_oauth_profile_b');
+
+export function assertValidFullSha(value: unknown, sourceLabel = 'candidate SHA'): string {
+  if (typeof value !== 'string') {
+    throw new Error(`Missing or non-string ${sourceLabel}; expected a 40-character hexadecimal Git SHA.`);
+  }
+  const trimmed = value.trim();
+  if (!FULL_SHA_REGEX.test(trimmed)) {
+    throw new Error(
+      `Invalid ${sourceLabel} "${trimmed}": must be a complete 40-character hexadecimal Git SHA.`
+    );
+  }
+  return trimmed.toLowerCase();
+}
+
+export function assertStagingTargetUrl(rawUrl: unknown): string {
+  if (typeof rawUrl !== 'string' || !rawUrl.trim()) {
+    throw new Error('Missing staging URL: AIRA_STAGING_URL must be an HTTPS staging origin.');
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl.trim());
+  } catch {
+    throw new Error(`Invalid staging URL "${rawUrl}": unable to parse as URL.`);
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error(`Unsafe staging URL "${parsed.origin}": HTTPS is required.`);
+  }
+  if (FORBIDDEN_PROD_HOST_PATTERNS.some((pattern) => pattern.test(parsed.hostname))) {
+    throw new Error(
+      `Refusing to run staging certification against production host "${parsed.hostname}".`
+    );
+  }
+  return parsed.origin;
+}
+
+function readGitHeadShaFromRepo(): string | null {
+  try {
+    const out = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    return out || null;
+  } catch {
+    return null;
+  }
+}
+
+export function resolveExpectedCandidateSha(options?: {
+  argv?: string[];
+  env?: NodeJS.ProcessEnv;
+  readGitHead?: () => string | null;
+}): { expectedSha: string; source: 'cli' | 'env' | 'git-head' } {
+  const argv = options?.argv ?? process.argv.slice(2);
+  const env = options?.env ?? process.env;
+  const readGitHead = options?.readGitHead ?? readGitHeadShaFromRepo;
+
+  let cliSha: string | undefined;
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--expected-sha') {
+      const next = argv[i + 1];
+      if (next === undefined) {
+        throw new Error('Flag --expected-sha requires a 40-character hexadecimal Git SHA argument.');
+      }
+      cliSha = next;
+      break;
+    }
+    if (arg.startsWith('--expected-sha=')) {
+      cliSha = arg.slice('--expected-sha='.length);
+      break;
+    }
+  }
+
+  if (cliSha !== undefined) {
+    return {
+      expectedSha: assertValidFullSha(cliSha, '--expected-sha'),
+      source: 'cli',
+    };
+  }
+
+  const hasAiraEnv = Object.prototype.hasOwnProperty.call(env, 'AIRA_EXPECTED_SHA');
+  const hasExpectedEnv = Object.prototype.hasOwnProperty.call(env, 'EXPECTED_SHA');
+  if (hasAiraEnv || hasExpectedEnv) {
+    const airaVal = env.AIRA_EXPECTED_SHA;
+    const expectedVal = env.EXPECTED_SHA;
+    const validatedAira = hasAiraEnv ? assertValidFullSha(airaVal, 'AIRA_EXPECTED_SHA') : undefined;
+    const validatedExpected = hasExpectedEnv ? assertValidFullSha(expectedVal, 'EXPECTED_SHA') : undefined;
+    if (validatedAira && validatedExpected && validatedAira !== validatedExpected) {
+      throw new Error(
+        `Conflicting SHA environment variables: AIRA_EXPECTED_SHA=${validatedAira} vs EXPECTED_SHA=${validatedExpected}.`
+      );
+    }
+    return {
+      expectedSha: (validatedAira ?? validatedExpected)!,
+      source: 'env',
+    };
+  }
+
+  const gitHead = readGitHead();
+  if (!gitHead) {
+    throw new Error(
+      'Missing expected candidate SHA: provide AIRA_EXPECTED_SHA (or --expected-sha) or execute inside a Git checkout with a valid HEAD commit.'
+    );
+  }
+  return {
+    expectedSha: assertValidFullSha(gitHead, 'Git HEAD release metadata'),
+    source: 'git-head',
+  };
+}
+
+export function assertDeployedShaMatches(
+  versionPayload: { commitSha?: unknown } | null | undefined,
+  expectedSha: string
+): string {
+  const normalizedExpected = assertValidFullSha(expectedSha, 'expected candidate SHA');
+  const deployedSha = assertValidFullSha(versionPayload?.commitSha, 'deployed /api/version commitSha');
+  assert.equal(
+    deployedSha,
+    normalizedExpected,
+    `Staging /api/version commitSha (${deployedSha}) does not match expected candidate SHA (${normalizedExpected})`
+  );
+  return deployedSha;
+}
 
 async function getBrowserSessionInfo(page: Page) {
   return page.evaluate(async () => {
@@ -111,15 +236,20 @@ async function parseStreamInPage(page: Page, payload: Record<string, any>, csrf:
   }, { body: payload, csrfToken: csrf });
 }
 
-async function runPhase2() {
+export async function runPhase2() {
+  const STAGING_URL = assertStagingTargetUrl(process.env.AIRA_STAGING_URL || DEFAULT_STAGING_URL);
+  const { expectedSha, source: shaSource } = resolveExpectedCandidateSha();
+  if (!fs.existsSync(ARTIFACTS_DIR)) fs.mkdirSync(ARTIFACTS_DIR, { recursive: true });
+
   console.log('========================================================================');
   console.log(' AIRA AI 2026 — PHASE 2: REAL OAUTH ISOLATION & RUNTIME MATRIX CERT');
   console.log(` Target: ${STAGING_URL}`);
+  console.log(` Expected SHA (${shaSource}): ${expectedSha}`);
   console.log('========================================================================\n');
 
   const versionData = await fetch(`${STAGING_URL}/api/version`).then((r) => r.json());
-  assert.equal(versionData.commitSha, EXPECTED_SHA, `Staging must serve exact SHA ${EXPECTED_SHA}`);
-  console.log(`[Preflight] ✓ Staging verified at exact SHA: ${versionData.commitSha}`);
+  const deployedSha = assertDeployedShaMatches(versionData, expectedSha);
+  console.log(`[Preflight] ✓ Staging verified at exact SHA: ${deployedSha}`);
 
   let contextA: BrowserContext | null = null;
   let contextB: BrowserContext | null = null;
@@ -415,7 +545,7 @@ async function runPhase2() {
     await pageA.waitForTimeout(8000);
 
     // -----------------------------------------------------------------------
-    // 3. Task 5: Bounded Runtime Model Matrix on Exact SHA e55e8e1aab3060cc6f0074da0c65d605e3196fc0
+    // 3. Task 5: Bounded Runtime Model Matrix on Exact Validated Candidate SHA
     // -----------------------------------------------------------------------
     console.log('\n[Task 5] Executing live model matrix on exact deployed SHA...');
 
@@ -487,6 +617,7 @@ async function runPhase2() {
     const deepRes = await parseStreamInPage(pageA, {
       conversationId: convIdA,
       model: 'aira-deep',
+      extendedThinking: true,
       thinkingBudget: 4096,
       messages: [{ role: 'user', content: 'Analyze why BFF cookie sessions protect OAuth tokens. Keep answer concise.' }],
     }, csrfA);
@@ -494,6 +625,8 @@ async function runPhase2() {
     assert.ok(deepRes.deltaCount > 0);
     assert.ok(['groq', 'gemini'].includes(deepRes.provenance?.provider));
     console.log(`[Model Matrix] ✓ AIRA Deep: ${deepRes.provenance?.provider}/${deepRes.provenance?.executedModel} (fallback=${deepRes.provenance?.fallbackOccurred}, ${deepRes.deltaCount} deltas, ${deepRes.thinkingCount} thinking deltas, reasoningControl=${deepRes.provenance?.reasoningControl || 'effort_mapped'})`);
+
+    await pageA.waitForTimeout(7000);
 
     // Gemini long-context failover (>28K chars triggers Groq TPM failover -> Gemini 1M context)
     const longPrompt = 'CONTEXT_BLOCK '.repeat(2600) + '\nSummarize in 5 words: FAILOVER_OK.';
@@ -550,7 +683,14 @@ async function runPhase2() {
     const finalReport = {
       timestamp: new Date().toISOString(),
       stagingUrl: STAGING_URL,
-      candidateSha: versionData.commitSha,
+      deploymentUrl: versionData.deploymentUrl ?? null,
+      expectedSha,
+      shaSource,
+      candidateSha: deployedSha,
+      browserProfiles: {
+        googleProfile: 'edge_oauth_profile_a',
+        githubProfile: 'edge_oauth_profile_b',
+      },
       googleAccountA: {
         userIdPrefix: userIdA.slice(0, 14),
         customerId: customerA,
@@ -600,7 +740,13 @@ async function runPhase2() {
   }
 }
 
-runPhase2().catch((err) => {
-  console.error('\n✗ Phase 2 Failed:', err);
-  process.exit(1);
-});
+const isMain =
+  Boolean(process.argv[1]) &&
+  path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+
+if (isMain) {
+  runPhase2().catch((err) => {
+    console.error('\n✗ Phase 2 Failed:', err);
+    process.exit(1);
+  });
+}

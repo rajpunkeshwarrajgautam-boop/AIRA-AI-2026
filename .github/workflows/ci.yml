@@ -144,7 +144,7 @@ jobs:
         run: npm run test:model-routing
 
       - name: Truthful capabilities, account isolation & reasoning certification
-        run: npx tsx --test test/truthful-capabilities-model-architecture.test.ts
+        run: npx tsx --test test/truthful-capabilities-model-architecture.test.ts test/oauth-phase2-certify-sha-guard.test.ts
 
       - name: Math typesetting and sanitization regression
         run: npm run test:math-rendering
