@@ -567,19 +567,32 @@ export async function runPhase2() {
     // -----------------------------------------------------------------------
     console.log('\n[Task 5] Executing live model matrix on exact deployed SHA...');
 
-    let fastRes = await parseStreamInPage(pageA, {
-      conversationId: convIdA,
+    const remA = infoA.entitlements?.dailyStandardChatRemaining ?? 0;
+    const remBPostBio = Math.max(0, (infoB.entitlements?.dailyStandardChatRemaining ?? 0) - 1);
+    const useAForFree = remA >= 2;
+    const freePage = useAForFree ? pageA : pageB;
+    const freeConvId = useAForFree ? convIdA : convIdB;
+    const freeCsrf = useAForFree ? csrfA : csrfB;
+    const freeLabel = useAForFree ? 'Account A' : 'Account B';
+    assert.ok(
+      useAForFree || remBPostBio >= 2,
+      `At least one Free account must have >=2 remaining daily chats for Free-tier matrix (A=${remA}, B_postBio=${remBPostBio})`
+    );
+    console.log(`[Task 5] Using ${freeLabel} for Free-tier inference checks (A remaining=${remA}, B post-bio=${remBPostBio}).`);
+
+    let fastRes = await parseStreamInPage(freePage, {
+      conversationId: freeConvId,
       model: 'aira-fast',
       messages: [{ role: 'user', content: 'Reply cleanly with FAST_OK.' }],
-    }, csrfA);
-    if (fastRes.status === 429 || fastRes.deltaCount === 0) {
+    }, freeCsrf);
+    if (fastRes.status === 429 && fastRes.errBody?.error !== 'DAILY_QUOTA_EXHAUSTED' && fastRes.deltaCount === 0) {
       console.log('[Task 5] Retrying aira-fast after brief cooldown...');
-      await pageA.waitForTimeout(8000);
-      fastRes = await parseStreamInPage(pageA, {
-        conversationId: convIdA,
+      await freePage.waitForTimeout(8000);
+      fastRes = await parseStreamInPage(freePage, {
+        conversationId: freeConvId,
         model: 'aira-fast',
         messages: [{ role: 'user', content: 'Reply cleanly with FAST_OK.' }],
-      }, csrfA);
+      }, freeCsrf);
     }
     assert.equal(fastRes.status, 200, `aira-fast failed with ${fastRes.status}: ${JSON.stringify(fastRes.errBody)}`);
     assert.equal(fastRes.sseError, null);
@@ -587,21 +600,21 @@ export async function runPhase2() {
     assert.ok(fastRes.deltaCount > 0 && fastRes.contentText.trim().length > 0, 'Fast stream must have >0 non-empty deltas');
     assert.equal(fastRes.provenance?.provider, 'groq');
     assert.equal(fastRes.provenance?.executedModel, 'openai/gpt-oss-120b');
-    console.log(`[Model Matrix] ✓ AIRA Fast: ${fastRes.provenance?.provider}/${fastRes.provenance?.executedModel} (${fastRes.deltaCount} deltas)`);
+    console.log(`[Model Matrix] ✓ AIRA Fast (${freeLabel}): ${fastRes.provenance?.provider}/${fastRes.provenance?.executedModel} (${fastRes.deltaCount} deltas)`);
 
-    await pageA.waitForTimeout(6000);
+    await freePage.waitForTimeout(6000);
 
-    const autoRes = await parseStreamInPage(pageA, {
-      conversationId: convIdA,
+    const autoRes = await parseStreamInPage(freePage, {
+      conversationId: freeConvId,
       model: 'aira-auto',
       messages: [{ role: 'user', content: 'Compute 19 + 23 cleanly in one sentence.' }],
-    }, csrfA);
+    }, freeCsrf);
     assert.equal(autoRes.status, 200);
     assert.equal(autoRes.sseError, null);
     assert.equal(autoRes.doneReceived, true);
     assert.ok(autoRes.deltaCount > 0 && autoRes.contentText.trim().length > 0);
     assert.ok(['groq', 'gemini'].includes(autoRes.provenance?.provider), `Unexpected auto provider: ${autoRes.provenance?.provider}`);
-    console.log(`[Model Matrix] ✓ AIRA Auto: ${autoRes.provenance?.provider}/${autoRes.provenance?.executedModel} (fallback=${autoRes.provenance?.fallbackOccurred}, text=${autoRes.contentText.trim().slice(0, 40)})`);
+    console.log(`[Model Matrix] ✓ AIRA Auto (${freeLabel}): ${autoRes.provenance?.provider}/${autoRes.provenance?.executedModel} (fallback=${autoRes.provenance?.fallbackOccurred}, text=${autoRes.contentText.trim().slice(0, 40)})`);
 
     // Check Free tier blocking on Account B
     const tierB = infoB.entitlements?.plan || 'free';
