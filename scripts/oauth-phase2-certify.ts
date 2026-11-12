@@ -162,93 +162,106 @@ async function getBrowserSessionInfo(page: Page) {
 }
 
 async function parseStreamInPage(page: Page, payload: Record<string, any>, csrf: string) {
-  return page.evaluate(async ({ body, csrfToken }) => {
-    const res = await fetch('/api/chat/stream', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-AIRA-CSRF-Protection': '1',
-        ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
-      },
-      credentials: 'include',
-      body: JSON.stringify(body),
-    });
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      return await page.evaluate(async ({ body, csrfToken }) => {
+        const res = await fetch('/api/chat/stream', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-AIRA-CSRF-Protection': '1',
+            ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
+          },
+          credentials: 'include',
+          body: JSON.stringify(body),
+        });
 
-    if (!res.ok) {
-      const errBody = await res.json().catch(() => ({}));
-      return {
-        status: res.status,
-        errBody,
-        sseError: null as any,
-        doneReceived: false,
-        provenance: null as any,
-        routingDecision: null as any,
-        latencyMetrics: null as any,
-        contentText: '',
-        thinkingCount: 0,
-        deltaCount: 0,
-      };
-    }
-
-    const text = await res.text();
-    const lines = text.split('\n');
-    let currentEvent = 'message';
-    let contentText = '';
-    let thinkingCount = 0;
-    let deltaCount = 0;
-    let provenance: any = null;
-    let routingDecision: any = null;
-    let latencyMetrics: any = null;
-    let sseError: any = null;
-    let doneReceived = false;
-
-    for (const rawLine of lines) {
-      const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
-      if (line.startsWith('event: ')) {
-        currentEvent = line.slice(7).trim();
-      } else if (line.startsWith('data: ')) {
-        const raw = line.slice(6).trim();
-        if (!raw) continue;
-        if (raw === '[DONE]') {
-          if (currentEvent === 'done') doneReceived = true;
-          continue;
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => ({}));
+          return {
+            status: res.status,
+            errBody,
+            sseError: null as any,
+            doneReceived: false,
+            provenance: null as any,
+            routingDecision: null as any,
+            latencyMetrics: null as any,
+            contentText: '',
+            thinkingCount: 0,
+            deltaCount: 0,
+          };
         }
-        try {
-          const parsed = JSON.parse(raw);
-          if (currentEvent === 'error' || parsed?.error) {
-            sseError = parsed;
-          } else if (currentEvent === 'done') {
-            doneReceived = true;
-          } else if (currentEvent === 'content_delta' && typeof parsed.text === 'string') {
-            contentText += parsed.text;
-            deltaCount++;
-          } else if (currentEvent === 'thinking_delta') {
-            thinkingCount++;
-          } else if (currentEvent === 'model_provenance') {
-            provenance = parsed;
-          } else if (currentEvent === 'routing_decision') {
-            routingDecision = parsed;
-          } else if (currentEvent === 'latency_metrics') {
-            latencyMetrics = parsed;
+
+        const text = await res.text();
+        const lines = text.split('\n');
+        let currentEvent = 'message';
+        let contentText = '';
+        let thinkingCount = 0;
+        let deltaCount = 0;
+        let provenance: any = null;
+        let routingDecision: any = null;
+        let latencyMetrics: any = null;
+        let sseError: any = null;
+        let doneReceived = false;
+
+        for (const rawLine of lines) {
+          const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+          if (line.startsWith('event: ')) {
+            currentEvent = line.slice(7).trim();
+          } else if (line.startsWith('data: ')) {
+            const raw = line.slice(6).trim();
+            if (!raw) continue;
+            if (raw === '[DONE]') {
+              if (currentEvent === 'done') doneReceived = true;
+              continue;
+            }
+            try {
+              const parsed = JSON.parse(raw);
+              if (currentEvent === 'error' || parsed?.error) {
+                sseError = parsed;
+              } else if (currentEvent === 'done') {
+                doneReceived = true;
+              } else if (currentEvent === 'content_delta' && typeof parsed.text === 'string') {
+                contentText += parsed.text;
+                deltaCount++;
+              } else if (currentEvent === 'thinking_delta') {
+                thinkingCount++;
+              } else if (currentEvent === 'model_provenance') {
+                provenance = parsed;
+              } else if (currentEvent === 'routing_decision') {
+                routingDecision = parsed;
+              } else if (currentEvent === 'latency_metrics') {
+                latencyMetrics = parsed;
+              }
+            } catch {
+              // ignore partial JSON
+            }
           }
-        } catch {
-          // ignore partial JSON
         }
-      }
-    }
 
-    return {
-      status: res.status,
-      sseError,
-      doneReceived,
-      provenance,
-      routingDecision,
-      latencyMetrics,
-      contentText,
-      thinkingCount,
-      deltaCount,
-    };
-  }, { body: payload, csrfToken: csrf });
+        return {
+          status: res.status,
+          sseError,
+          doneReceived,
+          provenance,
+          routingDecision,
+          latencyMetrics,
+          contentText,
+          thinkingCount,
+          deltaCount,
+        };
+      }, { body: payload, csrfToken: csrf });
+    } catch (err: any) {
+      const msg = String(err?.message || err || '');
+      if (attempt === 1 && /Failed to fetch|ERR_CONNECTION|ERR_NETWORK|ECONNRESET/i.test(msg)) {
+        console.log(`[Stream Transport Retry] Transient fetch failure before HTTP headers (${msg}); retrying in 3s...`);
+        await page.waitForTimeout(3000);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error('Unreachable parseStreamInPage exit');
 }
 
 export async function runPhase2() {
@@ -363,6 +376,16 @@ export async function runPhase2() {
     assert.ok(chatCreateA.status >= 200 && chatCreateA.status < 300, `Conv A create failed: ${chatCreateA.status}`);
 
     const projA = await pageA.evaluate(async ({ csrf }) => {
+      const existing = await fetch('/api/projects', { credentials: 'include' }).then((r) => r.json().catch(() => ({})));
+      for (const p of (existing?.projects || [])) {
+        if (typeof p?.name === 'string' && p.name.startsWith('Google Private Project A')) {
+          await fetch(`/api/projects/${p.id}`, {
+            method: 'DELETE',
+            headers: { 'X-CSRF-Token': csrf, 'X-AIRA-CSRF-Protection': '1' },
+            credentials: 'include',
+          });
+        }
+      }
       const r = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf, 'X-AIRA-CSRF-Protection': '1' },
@@ -427,6 +450,16 @@ export async function runPhase2() {
     assert.ok(chatCreateB.status >= 200 && chatCreateB.status < 300);
 
     const projB = await pageB.evaluate(async ({ csrf }) => {
+      const existing = await fetch('/api/projects', { credentials: 'include' }).then((r) => r.json().catch(() => ({})));
+      for (const p of (existing?.projects || [])) {
+        if (typeof p?.name === 'string' && p.name.startsWith('GitHub Private Project B')) {
+          await fetch(`/api/projects/${p.id}`, {
+            method: 'DELETE',
+            headers: { 'X-CSRF-Token': csrf, 'X-AIRA-CSRF-Protection': '1' },
+            credentials: 'include',
+          });
+        }
+      }
       const r = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf, 'X-AIRA-CSRF-Protection': '1' },
