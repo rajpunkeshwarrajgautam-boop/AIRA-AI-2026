@@ -67,28 +67,51 @@ function ensureBuiltDist(): string {
 }
 
 async function dismissBlockingOverlays(page: Page): Promise<void> {
-  const whatsNewClose = page.locator('[data-testid="whats-new-dismiss-btn"], [data-testid="whats-new-close-btn"]').first();
-  if (await whatsNewClose.isVisible().catch(() => false)) {
-    await whatsNewClose.click().catch(() => {});
-    await page.locator('[data-testid="whats-new-modal"]').waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
-  }
-  const skipBtn = page.locator('[data-testid="onboarding-skip-btn"]');
-  if (await skipBtn.isVisible().catch(() => false)) {
-    await skipBtn.click();
-    await page.locator('[data-testid="onboarding-walkthrough"]').waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+  for (let pass = 0; pass < 3; pass++) {
+    let dismissedAny = false;
+    const whatsNewClose = page.locator('[data-testid="whats-new-dismiss-btn"], [data-testid="whats-new-close-btn"]').first();
+    if (await whatsNewClose.isVisible().catch(() => false)) {
+      dismissedAny = true;
+      await whatsNewClose.click().catch(() => {});
+      await page.locator('[data-testid="whats-new-modal"]').waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+    }
+    const skipBtn = page.locator('[data-testid="onboarding-skip-btn"]');
+    if (await skipBtn.isVisible().catch(() => false)) {
+      dismissedAny = true;
+      await skipBtn.click().catch(() => {});
+      await page.locator('[data-testid="onboarding-walkthrough"]').waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+    }
+    if (!dismissedAny) break;
   }
 }
 
-async function signInViaAuthModal(page: Page, email: string, password: string): Promise<void> {
-  await dismissBlockingOverlays(page);
+async function openAccountMenuTarget(page: Page, targetSelector: string): Promise<void> {
   const accountBtn = page.locator('[data-testid="account-button"]');
-  const signInBtn = page.locator('[data-testid="account-menu-signin"]');
+  const target = page.locator(targetSelector);
   await accountBtn.waitFor({ state: 'visible', timeout: 8000 });
-  if (!(await signInBtn.isVisible().catch(() => false))) {
-    await accountBtn.click();
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await dismissBlockingOverlays(page);
+    if (await target.isVisible().catch(() => false)) return;
+    const expanded = await accountBtn.getAttribute('aria-expanded');
+    if (expanded !== 'true') {
+      await accountBtn.click();
+    }
+    try {
+      await target.waitFor({ state: 'visible', timeout: 3000 });
+      return;
+    } catch {
+      // Transient modal or animation may have intercepted initial click; clear overlays and retry
+      await page.keyboard.press('Escape').catch(() => {});
+      await page.waitForTimeout(150);
+    }
   }
-  await signInBtn.waitFor({ state: 'visible', timeout: 8000 });
-  await signInBtn.click();
+  await target.waitFor({ state: 'visible', timeout: 8000 });
+}
+
+async function signInViaAuthModal(page: Page, email: string, password: string): Promise<void> {
+  await openAccountMenuTarget(page, '[data-testid="account-menu-signin"]');
+  await page.locator('[data-testid="account-menu-signin"]').click();
 
   await page.locator('input[type="email"]').fill(email);
   await page.locator('input[type="password"]').first().fill(password);
@@ -102,14 +125,8 @@ async function signInViaAuthModal(page: Page, email: string, password: string): 
 }
 
 async function signOutViaAccountMenu(page: Page): Promise<void> {
-  await dismissBlockingOverlays(page);
-  const accountBtn = page.locator('[data-testid="account-button"]');
+  await openAccountMenuTarget(page, '[data-testid="account-menu-logout"]');
   const logoutBtn = page.locator('[data-testid="account-menu-logout"]');
-  await accountBtn.waitFor({ state: 'visible', timeout: 8000 });
-  if (!(await logoutBtn.isVisible().catch(() => false))) {
-    await accountBtn.click();
-  }
-  await logoutBtn.waitFor({ state: 'visible', timeout: 8000 });
   await logoutBtn.click();
   await logoutBtn.waitFor({ state: 'detached', timeout: 8000 });
   await page.locator('[data-testid="account-button"][aria-label*="Sign in"]').waitFor({ state: 'visible', timeout: 8000 });
@@ -343,7 +360,7 @@ test('Browser E2E: Account A -> B -> A Isolation, Provenance Migration, Active S
     } catch {
       browser = await chromium.launch({ headless: true });
     }
-    const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, reducedMotion: 'reduce' });
     const page = await context.newPage();
     page.on('console', (msg) => {
       if (msg.type() === 'warn' || msg.type() === 'error') {
@@ -527,10 +544,8 @@ test('Browser E2E: Account A -> B -> A Isolation, Provenance Migration, Active S
     await signInViaAuthModal(page, 'alice@example.com', 'password-alice');
 
     // Open onboarding walkthrough for Alice via sidebar Account menu -> Help & Resources -> Interactive Tour
-    await page.locator('[data-testid="account-button"]').click();
-    const helpSubmenuBtn = page.getByRole('menuitem', { name: /Help & Resources/i });
-    await helpSubmenuBtn.waitFor({ state: 'visible', timeout: 8000 });
-    await helpSubmenuBtn.click();
+    await openAccountMenuTarget(page, 'button[role="menuitem"]:has-text("Help & Resources")');
+    await page.getByRole('menuitem', { name: /Help & Resources/i }).click();
     const restartBtn = page.locator('[data-testid="account-menu-restart-onboarding"]');
     await restartBtn.waitFor({ state: 'visible', timeout: 8000 });
     await restartBtn.click();
