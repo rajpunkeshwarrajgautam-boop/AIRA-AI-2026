@@ -370,13 +370,14 @@ test('Truthful Capabilities & Model Architecture Suite', async (t) => {
       assert.equal(capturedBodies[1].body.reasoning_effort, 'high');
       assert.deepEqual(receivedThinking, ['Thinking step...']);
 
-      // Verify GeminiAdapter applies thinkingConfig ONLY on thinking-capable Gemini 2.5 non-lite models
+      // Verify GeminiAdapter applies thinkingConfig + includeThoughts ONLY on thinking-capable Gemini 2.5 non-lite models
       const geminiAdapter = new GeminiAdapter('gm-key', 'gemini-2.5-pro');
       const geminiPayloadWithThinking = geminiAdapter.formatRequestPayload(
         [{ role: 'user', content: 'Prove P=NP?' }],
         { model: 'gemini-2.5-pro', extendedThinking: true, reasoningBudget: 4096 }
       );
       assert.equal(geminiPayloadWithThinking.generationConfig.thinkingConfig?.thinkingBudget, 4096);
+      assert.equal(geminiPayloadWithThinking.generationConfig.thinkingConfig?.includeThoughts, true);
 
       const geminiFlashLite = new GeminiAdapter('gm-key', 'gemini-3.5-flash-lite');
       const geminiFlashPayload = geminiFlashLite.formatRequestPayload(
@@ -384,6 +385,58 @@ test('Truthful Capabilities & Model Architecture Suite', async (t) => {
         { model: 'gemini-3.5-flash-lite', extendedThinking: true, reasoningBudget: 4096 }
       );
       assert.equal(geminiFlashPayload.generationConfig.thinkingConfig, undefined);
+
+      // Verify GeminiAdapter.stream() returns outboundModel and thinking so fallback provenance marks verified: true
+      globalThis.fetch = (async () =>
+        new Response(
+          'data: {"candidates":[{"content":{"parts":[{"thought":true,"text":"Internal chain "}]}}]}\n' +
+          'data: {"candidates":[{"content":{"parts":[{"text":"Verified Gemini output"}]}}]}\n',
+          { status: 200, headers: { 'Content-Type': 'text/event-stream' } }
+        )) as typeof fetch;
+      const geminiThinkingChunks: string[] = [];
+      const geminiStreamRes = await geminiAdapter.stream(
+        [{ role: 'user', content: 'Explain consensus' }],
+        { model: 'aira-deep', extendedThinking: true, reasoningBudget: 4096, maxTokens: 4096, temperature: 1, timeoutMs: 30000 },
+        (chunk) => { if (chunk.thinking) geminiThinkingChunks.push(chunk.thinking); }
+      );
+      assert.equal(geminiStreamRes.outboundModel, 'gemini-2.5-pro');
+      assert.equal(geminiStreamRes.model, 'gemini-2.5-pro');
+      assert.equal(geminiStreamRes.thinking, 'Internal chain ');
+      assert.deepEqual(geminiThinkingChunks, ['Internal chain ']);
+
+      // Verify OpenAIAdapter also captures delta.reasoning (used by Groq gpt-oss-120b)
+      globalThis.fetch = (async () =>
+        new Response(
+          'data: {"model":"openai/gpt-oss-120b","choices":[{"delta":{"reasoning":"Groq step..."}}]}\n\ndata: {"model":"openai/gpt-oss-120b","choices":[{"delta":{"content":"Ok"}}]}\n\ndata: [DONE]\n\n',
+          { status: 200, headers: { 'Content-Type': 'text/event-stream' } }
+        )) as typeof fetch;
+      const groqReasoningChunks: string[] = [];
+      await withInferencePrincipal('probe-groq-reasoning', () =>
+        groqAdapter.stream(
+          [{ role: 'user', content: 'Check reasoning delta' }],
+          { ...deepExec.policy, model: 'openai/gpt-oss-120b', extendedThinking: true, reasoningBudget: 4096 },
+          (chunk) => { if (chunk.thinking) groqReasoningChunks.push(chunk.thinking); }
+        )
+      );
+      assert.deepEqual(groqReasoningChunks, ['Groq step...']);
+
+      // When GEMINI_API_KEY + NVIDIA_API_KEY are both configured and NVIDIA circuit opens,
+      // aira-pro routes to gemini-2.5-flash and aira-deep routes to gemini-2.5-pro (native_budget)
+      process.env.GEMINI_API_KEY = 'gm-test-key';
+      const dualRouter = new ModelRouter();
+      for (let i = 0; i < 5; i++) {
+        dualRouter.healthTracker.recordFailure('nvidia', 'nvidia/llama-3.1-nemotron-70b-instruct', new Error('NVIDIA 404'), 404);
+      }
+      const proFallback = dualRouter.resolveExecution('aira-pro', 'ANSWER', { callerTier: 'pro' });
+      assert.equal(proFallback.executedProvider, 'gemini');
+      assert.equal(proFallback.executedModel, 'gemini-2.5-flash');
+      assert.equal(proFallback.fallbackOccurred, true);
+
+      const deepFallback = dualRouter.resolveExecution('aira-deep', 'RESEARCH', { callerTier: 'pro', extendedThinking: true, reasoningBudget: 4096 });
+      assert.equal(deepFallback.executedProvider, 'gemini');
+      assert.equal(deepFallback.executedModel, 'gemini-2.5-pro');
+      assert.equal(deepFallback.reasoningControl, 'native_budget');
+      assert.equal(deepFallback.fallbackOccurred, true);
     } finally {
       globalThis.fetch = origFetch;
       process.env.NODE_ENV = origEnv.NODE_ENV;

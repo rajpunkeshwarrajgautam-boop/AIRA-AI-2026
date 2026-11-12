@@ -710,8 +710,12 @@ export class OpenAIAdapter implements ModelAdapter {
           output += delta.content;
           onChunk({ text: delta.content });
         }
-        if (typeof delta?.reasoning_content === 'string' && delta.reasoning_content.length) {
-          onChunk({ thinking: delta.reasoning_content });
+        const reasoningChunk =
+          typeof delta?.reasoning_content === 'string' && delta.reasoning_content.length
+            ? delta.reasoning_content
+            : (typeof delta?.reasoning === 'string' && delta.reasoning.length ? delta.reasoning : '');
+        if (reasoningChunk) {
+          onChunk({ thinking: reasoningChunk });
         }
         if (event.usage) usage = {
           promptTokens: event.usage.prompt_tokens || 0,
@@ -1038,7 +1042,15 @@ export class ModelRouter {
       return raw || 'openai/gpt-oss-120b';
     }
     if (prov === 'gemini') {
-      return (process.env.AIRA_GEMINI_MODEL || '').trim().replace(/^["']|["']$/g, '') || 'gemini-3.5-flash-lite';
+      const explicitGemini = (process.env.AIRA_GEMINI_MODEL || '').trim().replace(/^["']|["']$/g, '');
+      if (explicitGemini) return explicitGemini;
+      if (policyModel === 'aira-deep' || requestedModelId === 'aira-deep' || requestedModelId === 'claude-3-opus') {
+        return (process.env.AIRA_GEMINI_DEEP_MODEL || '').trim().replace(/^["']|["']$/g, '') || 'gemini-2.5-pro';
+      }
+      if (policyModel === 'aira-pro' || requestedModelId === 'aira-pro' || requestedModelId === 'claude-3-5-sonnet') {
+        return (process.env.AIRA_GEMINI_PRO_MODEL || '').trim().replace(/^["']|["']$/g, '') || 'gemini-2.5-flash';
+      }
+      return 'gemini-3.5-flash-lite';
     }
     if (prov === 'cerebras') {
       return process.env.AIRA_FAST_MODEL || 'llama3.1-8b';
@@ -1078,6 +1090,40 @@ export class ModelRouter {
       return 'native_budget';
     }
     return 'none';
+  }
+
+  private buildNvidiaFallbackChain(
+    policyModel: string,
+    requestedModelId: ModelId,
+    extendedThinking: boolean
+  ): {
+    fallbackAdapter: (ModelAdapter & { modelName?: string }) | null;
+    tertiaryAdapter: (ModelAdapter & { modelName?: string }) | null;
+    defaultFallbackModel: string;
+    fallbackFirstTokenTimeoutMs: number;
+  } {
+    const geminiFallbackModel = this.getPlannedModelForProvider('gemini', policyModel, requestedModelId);
+    const fallbackAdapter = this.adapters.has('gemini')
+      ? this.createModelSpecificAdapter('gemini', geminiFallbackModel)
+      : (this.adapters.has('groq')
+        ? this.createModelSpecificAdapter('groq', 'openai/gpt-oss-120b')
+        : (this.adapters.has('anthropic')
+          ? this.createModelSpecificAdapter('anthropic', 'claude-3-5-haiku')
+          : null));
+    const tertiaryAdapter = (fallbackAdapter && fallbackAdapter.provider === 'gemini')
+      ? (this.adapters.has('groq')
+        ? this.createModelSpecificAdapter('groq', 'openai/gpt-oss-120b')
+        : (this.adapters.has('anthropic')
+          ? this.createModelSpecificAdapter('anthropic', 'claude-3-5-haiku')
+          : null))
+      : null;
+
+    return {
+      fallbackAdapter,
+      tertiaryAdapter,
+      defaultFallbackModel: fallbackAdapter?.modelName || geminiFallbackModel,
+      fallbackFirstTokenTimeoutMs: extendedThinking ? 15000 : 6000
+    };
   }
 
   public resolveExecution(
@@ -1249,7 +1295,7 @@ export class ModelRouter {
         : requestedModelId.startsWith('gemini-') ? 'gemini'
         : undefined;
       const registryProvider = explicitVendorProvider || (VERIFIED_MODEL_REGISTRY[model]?.provider as SupportedProvider | undefined);
-      const defaultOrder: Array<SupportedProvider> = ['nvidia', 'openai', 'groq', 'gemini', 'anthropic'];
+      const defaultOrder: Array<SupportedProvider> = ['nvidia', 'openai', 'gemini', 'groq', 'anthropic'];
       const providerPreference: Array<SupportedProvider> = registryProvider && defaultOrder.includes(registryProvider)
         ? [registryProvider, ...defaultOrder.filter(p => p !== registryProvider)]
         : defaultOrder;
@@ -1344,30 +1390,17 @@ export class ModelRouter {
 
       let effectiveAdapter = selectedAdapter;
       if (selectedProvider === 'nvidia') {
-        const fallbackAdapter = this.adapters.has('groq')
-          ? this.createModelSpecificAdapter('groq', 'openai/gpt-oss-120b')
-          : (this.adapters.has('gemini')
-            ? this.createModelSpecificAdapter('gemini', 'gemini-3.5-flash-lite')
-            : (this.adapters.has('anthropic')
-              ? this.createModelSpecificAdapter('anthropic', 'claude-3-5-haiku')
-              : null));
-        const tertiaryAdapter = (fallbackAdapter && fallbackAdapter.provider === 'groq')
-          ? (this.adapters.has('gemini')
-            ? this.createModelSpecificAdapter('gemini', 'gemini-3.5-flash-lite')
-            : (this.adapters.has('anthropic')
-              ? this.createModelSpecificAdapter('anthropic', 'claude-3-5-haiku')
-              : null))
-          : null;
+        const { fallbackAdapter, tertiaryAdapter, defaultFallbackModel, fallbackFirstTokenTimeoutMs } =
+          this.buildNvidiaFallbackChain(model, requestedModelId, policy.extendedThinking);
 
         if (fallbackAdapter && !this.healthTracker.isAvailable('nvidia', executedModel)) {
-          const fbModel = fallbackAdapter.modelName || 'openai/gpt-oss-120b';
           return {
             policy,
             adapter: fallbackAdapter,
             provider: fallbackAdapter.provider,
             requestedProvider: preferredProvider,
             executedProvider: fallbackAdapter.provider,
-            executedModel: fbModel,
+            executedModel: defaultFallbackModel,
             plannedModel: executedModel,
             fallbackOccurred: true,
             fallbackReason: `Circuit breaker is OPEN for NVIDIA model "${executedModel}" due to upstream error (404/503/timeout); routed directly to ${fallbackAdapter.provider}`,
@@ -1375,7 +1408,7 @@ export class ModelRouter {
             callerTier: options?.callerTier,
             entitlementClamped,
             downgradedFrom,
-            reasoningControl: this.resolveReasoningControlMode(fallbackAdapter.provider, fbModel, policy),
+            reasoningControl: this.resolveReasoningControlMode(fallbackAdapter.provider, defaultFallbackModel, policy),
             requestedReasoningBudget: options?.reasoningBudget,
             appliedReasoningBudget: policy.reasoningBudget
           };
@@ -1384,7 +1417,7 @@ export class ModelRouter {
         if (fallbackAdapter) {
           effectiveAdapter = new ResilientModelAdapter(selectedAdapter, fallbackAdapter, this.healthTracker, {
             firstTokenTimeoutMs: 3500,
-            fallbackFirstTokenTimeoutMs: 4000,
+            fallbackFirstTokenTimeoutMs,
             tertiaryAdapter
           });
         }
@@ -1521,20 +1554,8 @@ export class ModelRouter {
         const isLegacyModel = requestedModelId === 'meta/llama-3.1-405b-instruct' || requestedModelId === 'nvidia/nemotron-3-super-120b-a12b';
         const targetModel = isLegacyModel ? 'nvidia/llama-3.1-nemotron-70b-instruct' : model;
         const primaryAdapter = this.createModelSpecificAdapter('nvidia', targetModel);
-        const fallbackAdapter = this.adapters.has('groq')
-          ? this.createModelSpecificAdapter('groq', 'openai/gpt-oss-120b')
-          : (this.adapters.has('gemini')
-            ? this.createModelSpecificAdapter('gemini', 'gemini-3.5-flash-lite')
-            : (this.adapters.has('anthropic')
-              ? this.createModelSpecificAdapter('anthropic', 'claude-3-5-haiku')
-              : null));
-        const tertiaryAdapter = (fallbackAdapter && fallbackAdapter.provider === 'groq')
-          ? (this.adapters.has('gemini')
-            ? this.createModelSpecificAdapter('gemini', 'gemini-3.5-flash-lite')
-            : (this.adapters.has('anthropic')
-              ? this.createModelSpecificAdapter('anthropic', 'claude-3-5-haiku')
-              : null))
-          : null;
+        const { fallbackAdapter, tertiaryAdapter, defaultFallbackModel, fallbackFirstTokenTimeoutMs } =
+          this.buildNvidiaFallbackChain(model, requestedModelId, policy.extendedThinking);
 
         if (fallbackAdapter && !this.healthTracker.isAvailable('nvidia', targetModel)) {
           return {
@@ -1543,7 +1564,7 @@ export class ModelRouter {
             provider: fallbackAdapter.provider,
             requestedProvider: 'nvidia',
             executedProvider: fallbackAdapter.provider,
-            executedModel: fallbackAdapter.modelName || 'openai/gpt-oss-120b',
+            executedModel: defaultFallbackModel,
             plannedModel: targetModel,
             fallbackOccurred: true,
             fallbackReason: `Circuit breaker is OPEN for NVIDIA model "${targetModel}"; routed directly to ${fallbackAdapter.provider}`,
@@ -1554,7 +1575,7 @@ export class ModelRouter {
         const resilientAdapter = fallbackAdapter
           ? new ResilientModelAdapter(primaryAdapter, fallbackAdapter, this.healthTracker, {
               firstTokenTimeoutMs: 3500,
-              fallbackFirstTokenTimeoutMs: 4000,
+              fallbackFirstTokenTimeoutMs,
               tertiaryAdapter
             })
           : primaryAdapter;

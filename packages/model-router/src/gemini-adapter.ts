@@ -27,6 +27,7 @@ export interface GeminiRequestPayload {
     topP?: number;
     thinkingConfig?: {
       thinkingBudget: number;
+      includeThoughts?: boolean;
     };
   };
   safetySettings?: Array<{
@@ -144,7 +145,8 @@ export class GeminiAdapter implements ModelAdapter {
       policy.reasoningBudget >= 1024
     ) {
       payload.generationConfig.thinkingConfig = {
-        thinkingBudget: Math.min(Math.max(Math.round(policy.reasoningBudget), 1024), 8192)
+        thinkingBudget: Math.min(Math.max(Math.round(policy.reasoningBudget), 1024), 8192),
+        includeThoughts: true
       };
     }
 
@@ -259,19 +261,31 @@ export class GeminiAdapter implements ModelAdapter {
 
     const data: any = await response.json();
     const candidate = data.candidates?.[0];
-    const text = candidate?.content?.parts?.[0]?.text || '';
+    let text = '';
+    let thinking = '';
+    if (Array.isArray(candidate?.content?.parts)) {
+      for (const part of candidate.content.parts) {
+        if (part?.thought) {
+          thinking += part.text || '';
+        } else if (typeof part?.text === 'string') {
+          text += part.text;
+        }
+      }
+    }
 
     const promptTokens = data.usageMetadata?.promptTokenCount ?? 0;
     const completionTokens = data.usageMetadata?.candidatesTokenCount ?? 0;
 
     return {
       text,
+      thinking: thinking || undefined,
       usage: {
         promptTokens,
         completionTokens,
         totalTokens: promptTokens + completionTokens
       },
-      model: cleanModel
+      model: cleanModel,
+      outboundModel: cleanModel
     };
   }
 
@@ -420,6 +434,10 @@ export class GeminiAdapter implements ModelAdapter {
 
       if (buffer.length > 0) {
         const parsed = this.parseSSELine(buffer);
+        if (parsed?.thinking) {
+          accumulatedThinking += parsed.thinking;
+          onChunk({ thinking: parsed.thinking });
+        }
         if (parsed?.text) {
           if (!firstTokenDelivered) {
             firstTokenDelivered = true;
@@ -438,8 +456,10 @@ export class GeminiAdapter implements ModelAdapter {
 
     return {
       text: accumulatedText,
+      thinking: accumulatedThinking || undefined,
       usage: finalUsage,
-      model: cleanModel
+      model: cleanModel,
+      outboundModel: cleanModel
     };
   }
 }

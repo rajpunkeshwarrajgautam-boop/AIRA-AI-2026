@@ -1639,8 +1639,12 @@ CAPABILITY & IDENTITY INVARIANTS:
                   run.provenance.reasoningControl = 'output_cap_only';
                 } else if (run.provenance.executedProvider === 'groq') {
                   run.provenance.reasoningControl = 'effort_mapped';
-                } else if (run.provenance.executedProvider === 'anthropic' || run.provenance.executedProvider === 'gemini') {
+                } else if (run.provenance.executedProvider === 'anthropic') {
                   run.provenance.reasoningControl = 'native_budget';
+                } else if (run.provenance.executedProvider === 'gemini') {
+                  const gModel = (run.provenance.executedModel || '').toLowerCase();
+                  const supportsGeminiThinking = (gModel.startsWith('gemini-2.5-pro') || gModel.startsWith('gemini-2.5-flash')) && !gModel.includes('lite');
+                  run.provenance.reasoningControl = supportsGeminiThinking ? 'native_budget' : 'none';
                 }
                 run.provenance.timestamp = Date.now();
                 this.emitRunEvent(runId, 'model.provenance', run.provenance).catch(console.error);
