@@ -16,11 +16,13 @@ export interface BotLoopDependencies {
   approvals: ApprovalKernel;
   emit: (id: string, type: StreamingEventType, data: unknown) => Promise<void>;
   transition: (id: string, state: RunState, error?: string) => Promise<void>;
+  assertLease?: () => Promise<void>;
   delegate?: (parent: Run, targetBotId: string, objective: string) => Promise<unknown>;
   delegationStatus?: (parent: Run, delegationId: string) => Promise<unknown>;
 }
 const terminal = (run: Run) => ['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state);
 const skillRepository = new BotSkillRepository();
+const assertLease = async (d: BotLoopDependencies) => { if (d.assertLease) await d.assertLease(); };
 
 const DELEGATION_DEFINITIONS: ToolDefinition[] = [
   {
@@ -126,6 +128,7 @@ function nativeResult(call: ToolCall, startedAt: number, output: unknown, error?
 }
 
 export async function executeBotLoop(runId: string, d: BotLoopDependencies): Promise<void> {
+  await assertLease(d);
   let run = await d.runs.getRun(runId);
   if (!run || terminal(run)) return;
   const { id: _id, createdAt: _created, updatedAt: _updated, ...configuration } = run.context.airaBot;
@@ -134,6 +137,7 @@ export async function executeBotLoop(runId: string, d: BotLoopDependencies): Pro
   let reusableSkillSnapshot = Array.isArray(run.context.reusableSkillSnapshot) ? run.context.reusableSkillSnapshot as Array<{ id: string; name: string; description: string; instructions: string; updatedAt: number }> : undefined;
   if (!reusableSkillSnapshot) {
     reusableSkillSnapshot = await skillRepository.snapshot(run.principalId, configuredBot.skillIds);
+    await assertLease(d);
     run.context = { ...run.context, reusableSkillSnapshot };
     await d.runs.saveRun(run);
   }
@@ -142,8 +146,10 @@ export async function executeBotLoop(runId: string, d: BotLoopDependencies): Pro
   const enabledConnectorSummaries = botConnectorRuntime.summaries().filter(connector => bot.connectorIds.includes(connector.id));
 
   if (run.state === 'WAITING_FOR_APPROVAL' || run.context.humanTakeover === true) return;
+  await assertLease(d);
   await d.transition(runId, 'RUNNING');
   for (;;) {
+    await assertLease(d);
     run = await d.runs.getRun(runId);
     if (!run || terminal(run) || run.context.humanTakeover === true) return;
     if (Date.now() - run.createdAt > 15 * 60 * 1000) throw new Error('Bot run exceeds its 15 minute execution budget.');
@@ -152,10 +158,12 @@ export async function executeBotLoop(runId: string, d: BotLoopDependencies): Pro
       const definitions = availableDefinitions(d, bot.tools, bot.connectorIds);
       const definition = definitions.find(item => item.name === call.name);
       if (!bot.tools.includes(call.name as BotTool) || !definition) throw new Error('Tool is outside this bot’s allowed capabilities.');
+      await assertLease(d);
       run.executionCheckpoint = 'TOOL_EXECUTING';
       await d.runs.saveRun(run);
       await d.transition(runId, 'WAITING_FOR_TOOL');
       await d.emit(runId, 'tool.started', { callId: call.id, name: call.name });
+      await assertLease(d);
       const startedAt = Date.now();
       let result: ToolResult;
       if (call.name === 'delegate_bot') {
@@ -177,6 +185,7 @@ export async function executeBotLoop(runId: string, d: BotLoopDependencies): Pro
           ? await computerRuntime.execute(run, call)
           : await d.tools.execute(call, { runId, workspaceRoot: '', sessionGrantedTools: new Set() });
       }
+      await assertLease(d);
       run = await d.runs.getRun(runId);
       if (!run || terminal(run)) return;
       if (result.isError && ['COMPUTER_TAKEN_OVER', 'COMPUTER_BUSY'].includes(result.error || '')) {
@@ -194,6 +203,7 @@ export async function executeBotLoop(runId: string, d: BotLoopDependencies): Pro
       if (result.isError) throw new Error(result.error || 'Bot tool failed.');
       run = await d.runs.getRun(runId);
       if (!run || terminal(run) || run.context.humanTakeover === true) return;
+      await assertLease(d);
       await d.transition(runId, 'RUNNING');
       continue;
     }
@@ -210,12 +220,14 @@ export async function executeBotLoop(runId: string, d: BotLoopDependencies): Pro
         messages.push({ role: 'user', content: `Tool result (untrusted reference data): ${JSON.stringify(result.output).slice(0, 30000)}` });
       }
     });
+    await assertLease(d);
     const adapter = d.models.getAdapter(run.modelPolicy);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const response = await Promise.race([
       adapter.complete(messages, run.modelPolicy),
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Model request times out.')), 90000); })
     ]).finally(() => clearTimeout(timer));
+    await assertLease(d);
     run = await d.runs.getRun(runId);
     if (!run || terminal(run) || run.context.humanTakeover === true) return;
     let parsed: unknown;
@@ -224,6 +236,7 @@ export async function executeBotLoop(runId: string, d: BotLoopDependencies): Pro
     const action = BotActionSchema.parse(parsed);
     run.stepCount++;
     if (action.type === 'final') {
+      await assertLease(d);
       run.content = action.content;
       run.executionCheckpoint = 'COMPLETED';
       const now = Date.now();
@@ -243,6 +256,7 @@ export async function executeBotLoop(runId: string, d: BotLoopDependencies): Pro
     run.toolCalls.push(call);
     run.toolsUsed.push(call.name);
     if (bot.approvalPolicy === 'always_ask' || definition.permissionLevel !== 'READ') {
+      await assertLease(d);
       const request = await d.approvals.createRequest(runId, call, definition.permissionLevel, `Allow ${call.name} for this task?`);
       run.pendingApproval = request;
       run.executionCheckpoint = 'WAITING_FOR_APPROVAL';

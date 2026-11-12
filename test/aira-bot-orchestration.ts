@@ -99,7 +99,8 @@ try {
     name: 'Scheduler execution', objective: 'Scheduled execution objective.', cronExpression: '* * * * *', timezone: 'UTC', enabled: true
   });
   const engine = new BotRoutineEngine(runtime, orchestration, bots);
-  await engine.tick(Date.now());
+  const firstTick = Date.now();
+  await engine.tick(firstTick);
   const routineRuns = await orchestration.routineRuns(owner, scheduledRoutine.id);
   assert.equal(routineRuns.length, 1);
   assert.ok(routineRuns[0].runId);
@@ -107,15 +108,16 @@ try {
   assert.equal(scheduledRun.agentId, specialist.id);
   assert.equal(scheduledRun.principalId, owner);
   assert.equal(scheduledRun.context.routineId, scheduledRoutine.id);
-  await engine.tick(Date.now());
+  await engine.tick(firstTick);
   assert.equal((await orchestration.routineRuns(owner, scheduledRoutine.id)).length, 1, 'same cron slot must not run twice');
 
-  // Reconcile completion and verify notification ownership/read state.
-  await engine.tick(Date.now() + 60_000);
+  // Reconcile completion and verify notification ownership/read state without advancing into a new cron slot.
+  await engine.tick(firstTick);
   const notes = await orchestration.notifications(owner);
   assert(notes.some(note => note.kind === 'delegation_started'));
   assert(notes.some(note => note.kind === 'delegation_completed'));
   assert(notes.some(note => note.kind === 'routine_started'));
+  assert(notes.some(note => note.kind === 'routine_completed'));
   assert.equal((await orchestration.notifications(otherOwner)).length, 0);
   assert.equal(await orchestration.markNotificationRead(owner, notes[0].id), true);
   assert.equal((await orchestration.notifications(owner, true)).some(note => note.id === notes[0].id), false);
