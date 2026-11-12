@@ -16,7 +16,7 @@ export const FeatureDiscoveryCard: React.FC<FeatureDiscoveryCardProps> = ({
   return (
     <div
       data-testid="feature-discovery-card"
-      className="relative p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-aira-blue/10 via-cyan-500/10 to-indigo-500/10 dark:from-aira-blue/20 dark:via-cyan-900/20 dark:to-indigo-900/20 border border-aira-blue/30 dark:border-cyan-500/30 shadow-lg backdrop-blur-sm transition-all duration-300 animate-in fade-in slide-in-from-top-2"
+      className="relative p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-claude-terracotta/10 to-transparent dark:from-claude-terracotta/20 dark:to-transparent border border-claude-border dark:border-claude-borderMuted shadow-sm backdrop-blur-sm transition-opacity duration-200 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-2 motion-reduce:animate-none"
     >
       {/* Dismiss Button */}
       <button
@@ -24,7 +24,7 @@ export const FeatureDiscoveryCard: React.FC<FeatureDiscoveryCardProps> = ({
         data-testid="feature-discovery-dismiss-btn"
         onClick={onDismiss}
         aria-label="Dismiss feature guidance"
-        className="absolute top-3 right-3 p-1 rounded-lg text-stone-400 hover:text-stone-700 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+        className="absolute top-3 right-3 p-1 rounded-lg text-stone-400 hover:text-stone-700 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 active:scale-95 disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta transition-colors"
       >
         <X className="w-4 h-4" />
       </button>
@@ -38,8 +38,8 @@ export const FeatureDiscoveryCard: React.FC<FeatureDiscoveryCardProps> = ({
         {/* Info & Sample Prompt */}
         <div className="flex-1 min-w-0 pr-6">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-              Unlocked with {guidance.unlockedAtTier.toUpperCase()}
+            <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+              Unlocked with {guidance.unlockedAtTier}
             </span>
             <span className="text-xs text-stone-500 dark:text-stone-400">
               {guidance.subtitle}
@@ -60,7 +60,7 @@ export const FeatureDiscoveryCard: React.FC<FeatureDiscoveryCardProps> = ({
           {/* Sample Prompt Box */}
           <div className="mt-3 p-2.5 rounded-xl bg-white/80 dark:bg-black/40 border border-stone-200/80 dark:border-white/10 flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 min-w-0">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-stone-400 dark:text-stone-500 shrink-0">
+              <span className="text-xs font-medium text-stone-500 dark:text-stone-400 shrink-0">
                 Try Prompt:
               </span>
               <p
@@ -75,7 +75,7 @@ export const FeatureDiscoveryCard: React.FC<FeatureDiscoveryCardProps> = ({
               type="button"
               data-testid="feature-discovery-try-btn"
               onClick={() => onTryFeature(guidance.samplePrompt, guidance.targetMode)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-white bg-aira-blue hover:bg-aira-blue/90 dark:bg-cyan-600 dark:hover:bg-cyan-500 shrink-0 shadow-sm transition-all"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-claude-terracotta hover:bg-claude-terracotta-hover active:scale-95 disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta shrink-0 shadow-sm transition-colors duration-150"
             >
               <span>Try Feature</span>
               <Play className="w-3 h-3 fill-current" />

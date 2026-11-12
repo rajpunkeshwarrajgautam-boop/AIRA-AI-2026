@@ -213,7 +213,7 @@ export const ConversationSearchOverlay: React.FC<ConversationSearchOverlayProps>
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={reducedMotion ? { opacity: 0 } : { opacity: 0, y: -8, scale: 0.99 }}
             transition={reducedMotion ? { duration: 0.08 } : { type: 'spring', stiffness: 360, damping: 31 }}
-            className="w-full max-w-[720px] overflow-hidden rounded-[22px] border border-claude-border-light bg-white/97 shadow-[0_32px_100px_-32px_rgba(28,25,23,0.62)] backdrop-blur-2xl dark:border-claude-border-dark dark:bg-[#1c1b18]/97 dark:shadow-[0_32px_100px_-32px_rgba(0,0,0,0.9)]"
+            className="w-full max-w-[720px] overflow-hidden rounded-[22px] border border-claude-border-light bg-white/97 shadow-2xl backdrop-blur-2xl dark:border-claude-border-dark dark:bg-stone-900/97 dark:shadow-2xl"
           >
             <div className="flex items-center gap-3 border-b border-claude-border-light px-4 dark:border-claude-border-dark">
               <Search className="h-4 w-4 shrink-0 text-claude-muted-light dark:text-claude-muted-dark" />
@@ -312,7 +312,7 @@ export const ConversationSearchOverlay: React.FC<ConversationSearchOverlayProps>
                           <span className="mt-1 line-clamp-2 text-[11px] leading-5 text-claude-muted-light dark:text-claude-muted-dark">
                             <HighlightedText text={result.snippet} query={query} />
                           </span>
-                          <span className="mt-1.5 flex items-center gap-2 text-[9px] uppercase tracking-[0.08em] text-claude-muted-light/80 dark:text-claude-muted-dark/80">
+                          <span className="mt-1.5 flex items-center gap-2 text-xs text-claude-muted-light/80 dark:text-claude-muted-dark/80">
                             <span>{result.role === 'user' ? 'You' : 'Aira'}</span>
                             <span>·</span>
                             <span>{new Date(result.messageCreatedAt).toLocaleDateString()}</span>
@@ -342,7 +342,7 @@ export const ConversationSearchOverlay: React.FC<ConversationSearchOverlayProps>
             </div>
 
             <div className="flex items-center justify-between border-t border-claude-border-light bg-claude-surface2-light/60 px-4 py-2 text-[10px] text-claude-muted-light dark:border-claude-border-dark dark:bg-claude-surface2-dark/50 dark:text-claude-muted-dark">
-              <span>↑↓ Navigate · Enter Open · Esc Close</span>
+              <div className="flex items-center gap-3"><span>↑↓ Navigate</span><span className="opacity-40">/</span><span>Enter Open</span><span className="opacity-40">/</span><span>Esc Close</span></div>
               <span>Search includes message content</span>
             </div>
           </motion.div>

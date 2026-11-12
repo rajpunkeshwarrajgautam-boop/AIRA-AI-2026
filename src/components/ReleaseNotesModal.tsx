@@ -126,7 +126,7 @@ export const ReleaseNotesModal: React.FC<ReleaseNotesModalProps> = ({
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.96, y: 8 }}
         transition={{ duration: 0.18, ease: 'easeOut' }}
-        className="w-full max-w-3xl max-h-[90vh] flex flex-col bg-claude-surface-light dark:bg-[#1a1b1e] border border-claude-border-light dark:border-white/10 rounded-2xl shadow-2xl overflow-hidden"
+        className="w-full max-w-3xl max-h-[90vh] flex flex-col bg-claude-surface-light dark:bg-stone-900 border border-claude-border-light dark:border-white/10 rounded-2xl shadow-2xl overflow-hidden"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-claude-border-light dark:border-white/10 bg-claude-surface2-light/60 dark:bg-white/[0.02]">
@@ -159,8 +159,8 @@ export const ReleaseNotesModal: React.FC<ReleaseNotesModalProps> = ({
               {/* Timeline marker */}
               <div className={`absolute -left-[9px] top-0 w-4 h-4 rounded-full border-2 ${
                 idx === 0 
-                  ? 'bg-aira-blue border-white dark:border-[#1a1b1e] ring-4 ring-aira-blue/20' 
-                  : 'bg-claude-surface2-light dark:bg-white/20 border-white dark:border-[#1a1b1e]'
+                  ? 'bg-aira-blue border-white dark:border-stone-900 ring-4 ring-aira-blue/20' 
+                  : 'bg-claude-surface2-light dark:bg-white/20 border-white dark:border-stone-900'
               }`} />
 
               {/* Version & Date */}
@@ -171,7 +171,7 @@ export const ReleaseNotesModal: React.FC<ReleaseNotesModalProps> = ({
                 <span className="text-xs text-claude-muted-light dark:text-claude-muted-dark font-medium">
                   ({release.codename})
                 </span>
-                <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${
+                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
                   release.tag === 'Latest'
                     ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
                     : release.tag === 'Major'
@@ -193,7 +193,7 @@ export const ReleaseNotesModal: React.FC<ReleaseNotesModalProps> = ({
 
               {/* Highlights Box */}
               <div className="p-3.5 rounded-xl bg-claude-surface2-light/40 dark:bg-white/[0.02] border border-claude-border-light dark:border-white/10 mb-3">
-                <h4 className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark mb-2">
+                <h4 className="text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark mb-2">
                   Key Enhancements
                 </h4>
                 <ul className="space-y-1.5 text-xs text-claude-text-light/90 dark:text-white/80">

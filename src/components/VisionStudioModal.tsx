@@ -186,18 +186,18 @@ export const VisionStudioModal: React.FC<VisionStudioModalProps> = ({
         initial={{ opacity: 0, scale: 0.96 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.96 }}
-        className="relative w-full max-w-4xl rounded-2xl bg-[#181715] border border-white/10 text-white shadow-2xl overflow-hidden my-6 flex flex-col max-h-[90vh]"
+        className="relative w-full max-w-4xl rounded-2xl bg-aira-navy border border-white/10 text-white shadow-2xl overflow-hidden my-6 flex flex-col max-h-[90vh]"
       >
         {/* Header */}
         <div className="p-5 md:p-6 border-b border-white/10 flex items-center justify-between shrink-0 bg-stone-900/40">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-[#a9583e] flex items-center justify-center">
+            <div className="w-10 h-10 rounded-lg bg-aira-blue flex items-center justify-center">
               <Sparkles className="w-5 h-5 text-white" />
             </div>
             <div>
               <h2 className="text-xl font-medium tracking-tight text-white flex items-center gap-2">
                 AIRA Vision Studio
-                <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full bg-[#cc785c]/20 text-[#e6a48d] border border-[#cc785c]/30">
+                <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-claude-terracotta/20 text-amber-200 border border-claude-terracotta/30">
                   Multimodal
                 </span>
               </h2>
@@ -223,9 +223,9 @@ export const VisionStudioModal: React.FC<VisionStudioModalProps> = ({
         <div className="flex border-b border-white/10 bg-black/20 px-6 shrink-0">
           <button
             onClick={() => setActiveTab('generate')}
-            className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-all ${
+            className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-colors duration-150 ${
               activeTab === 'generate'
-                ? 'border-[#cc785c] text-white'
+                ? 'border-claude-terracotta text-white'
                 : 'border-transparent text-stone-400 hover:text-white'
             }`}
           >
@@ -234,9 +234,9 @@ export const VisionStudioModal: React.FC<VisionStudioModalProps> = ({
           </button>
           <button
             onClick={() => setActiveTab('understand')}
-            className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-all ${
+            className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-colors duration-150 ${
               activeTab === 'understand'
-                ? 'border-[#cc785c] text-white'
+                ? 'border-claude-terracotta text-white'
                 : 'border-transparent text-stone-400 hover:text-white'
             }`}
           >
@@ -245,9 +245,9 @@ export const VisionStudioModal: React.FC<VisionStudioModalProps> = ({
           </button>
           <button
             onClick={() => setActiveTab('edit')}
-            className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-all ${
+            className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-colors duration-150 ${
               activeTab === 'edit'
-                ? 'border-[#cc785c] text-white'
+                ? 'border-claude-terracotta text-white'
                 : 'border-transparent text-stone-400 hover:text-white'
             }`}
           >
@@ -274,7 +274,7 @@ export const VisionStudioModal: React.FC<VisionStudioModalProps> = ({
                   onChange={(e) => setPrompt(e.target.value)}
                   placeholder="A cinematic aerial view of a sustainable futuristic city in the Himalayas at dusk, hyperrealistic, 8k..."
                   rows={3}
-                  className="w-full text-xs rounded-xl bg-stone-900 border border-white/10 p-3 text-white placeholder-stone-500 focus:outline-none focus:border-[#cc785c] transition-all resize-none"
+                  className="w-full text-xs rounded-xl bg-stone-900 border border-white/10 p-3 text-white placeholder-stone-500 focus:outline-none focus:border-claude-terracotta transition-colors duration-150 resize-none"
                 />
               </div>
 
@@ -345,11 +345,11 @@ export const VisionStudioModal: React.FC<VisionStudioModalProps> = ({
                 <button
                   onClick={handleGenerate}
                   disabled={isLoading || !prompt.trim()}
-                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#cc785c] to-[#eb6e4b] text-white text-xs font-semibold shadow-lg hover:brightness-110 active:scale-95 transition-all disabled:opacity-50 flex items-center gap-2"
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-claude-terracotta to-aira-blue text-white text-xs font-semibold shadow-lg hover:brightness-110 active:scale-95 transition-transform duration-150 motion-reduce:transition-none disabled:opacity-50 flex items-center gap-2"
                 >
                   {isLoading ? (
                     <>
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin motion-reduce:animate-none" />
                       Synthesizing...
                     </>
                   ) : (
@@ -378,7 +378,7 @@ export const VisionStudioModal: React.FC<VisionStudioModalProps> = ({
                             target="_blank"
                             rel="noreferrer"
                             download={`aira-vision-${idx + 1}.png`}
-                            className="p-2.5 rounded-xl bg-white/20 hover:bg-white/30 text-white backdrop-blur-sm transition-all"
+                            className="p-2.5 rounded-xl bg-white/20 hover:bg-white/30 text-white backdrop-blur-sm transition-colors duration-150"
                             title="Download Image"
                           >
                             <Download className="w-4 h-4" />
@@ -398,7 +398,7 @@ export const VisionStudioModal: React.FC<VisionStudioModalProps> = ({
                 <label className="block text-xs font-medium text-stone-300 mb-1.5">Input Image</label>
                 <div
                   onClick={() => fileInputRef.current?.click()}
-                  className="w-full h-40 border-2 border-dashed border-white/15 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:border-[#cc785c]/50 transition-colors bg-stone-900/40 relative overflow-hidden"
+                  className="w-full h-40 border-2 border-dashed border-white/15 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:border-claude-terracotta/50 transition-colors duration-150 bg-stone-900/40 relative overflow-hidden"
                 >
                   {understandImage ? (
                     <img src={understandImage} alt="Uploaded for inspection" className="h-full w-auto object-contain" />
@@ -426,7 +426,7 @@ export const VisionStudioModal: React.FC<VisionStudioModalProps> = ({
                   value={understandQuestion}
                   onChange={(e) => setUnderstandQuestion(e.target.value)}
                   placeholder="Extract data from this chart, or describe specific anomalies..."
-                  className="w-full text-xs rounded-xl bg-stone-900 border border-white/10 p-3 text-white placeholder-stone-500 focus:outline-none focus:border-[#cc785c]"
+                  className="w-full text-xs rounded-xl bg-stone-900 border border-white/10 p-3 text-white placeholder-stone-500 focus:outline-none focus:border-claude-terracotta"
                 />
               </div>
 
@@ -439,9 +439,9 @@ export const VisionStudioModal: React.FC<VisionStudioModalProps> = ({
                 <button
                   onClick={handleUnderstand}
                   disabled={isLoading || !understandImage}
-                  className="px-5 py-2.5 rounded-lg bg-[#a9583e] hover:bg-[#94452e] text-white text-xs font-medium transition-colors disabled:opacity-50 flex items-center gap-2"
+                  className="px-5 py-2.5 rounded-lg bg-aira-blue hover:opacity-90 text-white text-xs font-medium transition-opacity duration-150 disabled:opacity-50 flex items-center gap-2"
                 >
-                  {isLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Eye className="w-3.5 h-3.5" />}
+                  {isLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin motion-reduce:animate-none" /> : <Eye className="w-3.5 h-3.5" />}
                   Analyze Image
                 </button>
               </div>
@@ -464,7 +464,7 @@ export const VisionStudioModal: React.FC<VisionStudioModalProps> = ({
                 <label className="block text-xs font-medium text-stone-300 mb-1.5">Source Image</label>
                 <div
                   onClick={() => editFileInputRef.current?.click()}
-                  className="w-full h-40 border-2 border-dashed border-white/15 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:border-[#cc785c]/50 transition-colors bg-stone-900/40 relative overflow-hidden"
+                  className="w-full h-40 border-2 border-dashed border-white/15 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:border-claude-terracotta/50 transition-colors duration-150 bg-stone-900/40 relative overflow-hidden"
                 >
                   {editSourceImage ? (
                     <img src={editSourceImage} alt="Source for editing" className="h-full w-auto object-contain" />
@@ -491,7 +491,7 @@ export const VisionStudioModal: React.FC<VisionStudioModalProps> = ({
                   onChange={(e) => setEditPrompt(e.target.value)}
                   placeholder="Change the background to a sunset beach and add warm cinematic lighting..."
                   rows={2}
-                  className="w-full text-xs rounded-xl bg-stone-900 border border-white/10 p-3 text-white placeholder-stone-500 focus:outline-none focus:border-[#cc785c] resize-none"
+                  className="w-full text-xs rounded-xl bg-stone-900 border border-white/10 p-3 text-white placeholder-stone-500 focus:outline-none focus:border-claude-terracotta resize-none"
                 />
               </div>
 
@@ -529,9 +529,9 @@ export const VisionStudioModal: React.FC<VisionStudioModalProps> = ({
                 <button
                   onClick={handleEdit}
                   disabled={isLoading || !editSourceImage || !editPrompt.trim()}
-                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#cc785c] to-[#eb6e4b] text-white text-xs font-semibold shadow-lg hover:brightness-110 active:scale-95 transition-all disabled:opacity-50 flex items-center gap-2"
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-claude-terracotta to-aira-blue text-white text-xs font-semibold shadow-lg hover:brightness-110 active:scale-95 transition-transform duration-150 motion-reduce:transition-none disabled:opacity-50 flex items-center gap-2"
                 >
-                  {isLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Sliders className="w-3.5 h-3.5" />}
+                  {isLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin motion-reduce:animate-none" /> : <Sliders className="w-3.5 h-3.5" />}
                   Execute Visual Edit
                 </button>
               </div>

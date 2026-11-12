@@ -1,3 +1,10 @@
+/* Hallmark · shape: app screen · genre: modern-minimal · theme: brand · redesign: full
+ * paper: oklch(98% 0.006 85) · accent: oklch(64% 0.12 45) · display: Copernicus · body: StyreneB
+ * nav: kept · signature: kept · states: hover, focus-visible, active, disabled
+ * axes: cream/serif/terracotta · posture: restrained · contrast: pass · v2.0.0 */
+/* Hallmark · pre-emit critique: P5 H5 E5 S5 R5 V4 · weakest: V, adaptive studio contextual surfaces */
+/* Hallmark · waive 47b · real interactive terminal and editor frames · the workspace code/artifact studio is the core product */
+
 /* Opt-in contextual workspace presentation, using the same editorial tokens as AIRA. */
 .aira-adaptive-shell {
   --adaptive-surface: var(--bg-main);
@@ -32,8 +39,8 @@
 .aira-adaptive-mode-toggle {
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 3px;
+  gap: var(--space-3xs);
+  padding: var(--space-2xs);
   border: 1px solid var(--adaptive-line);
   background: var(--adaptive-pale);
   border-radius: 12px;
@@ -45,18 +52,23 @@
   display: inline-flex;
   justify-content: center;
   align-items: center;
-  gap: 6px;
-  padding: 7px 10px;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
   font-size: 12px;
   font-weight: 650;
   border-radius: 9px;
   background: transparent;
   color: var(--adaptive-ink);
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.aira-adaptive-mode-toggle button:active {
+  transform: scale(0.98);
 }
 
 .aira-adaptive-mode-toggle button[aria-pressed="true"] {
   background: var(--accent-primary-hover);
-  color: #fff;
+  color: var(--accent-on);
 }
 
 .aira-adaptive-mode-toggle button:focus-visible {
@@ -68,34 +80,43 @@
   background: var(--adaptive-surface);
 }
 
-.aira-adaptive-shell .aira-adaptive-composer > div {
-  max-width: 100%;
+.aira-adaptive-shell .aira-composer-card {
+  box-shadow: none;
+  background: var(--adaptive-surface);
+  border: 1px solid var(--adaptive-line);
+}
+
+.aira-adaptive-shell .aira-composer-card:focus-within {
+  border-color: var(--adaptive-blue);
+}
+
+.aira-adaptive-shell .aira-adaptive-studio-col {
+  background: var(--adaptive-surface);
+  border-left-color: var(--adaptive-line);
 }
 
 .aira-adaptive-empty-studio {
-  display: none;
+  display: flex;
   flex-direction: column;
-  flex: 0 0 46%;
-  min-width: 0;
-  min-height: 0;
-  height: 100dvh;
-  border-left: 1px solid var(--adaptive-line);
+  height: 100%;
   background: var(--adaptive-surface);
   color: var(--adaptive-ink);
 }
 
 .aira-adaptive-empty-header {
-  min-height: 82px;
   display: flex;
+  justify-content: space-between;
   align-items: center;
-  gap: 12px;
-  padding: 0 24px;
+  gap: var(--space-sm);
+  padding: 0 var(--space-lg);
 }
 
 .aira-adaptive-empty-header h2 {
   font-size: 19px;
   font-weight: 500;
   letter-spacing: -0.025em;
+  text-wrap: balance;
+  overflow-wrap: break-word;
 }
 
 .aira-adaptive-empty-tabs {
@@ -103,7 +124,7 @@
   align-items: stretch;
   gap: 28px;
   height: 46px;
-  margin: 0 18px;
+  margin: 0 var(--space-md);
   border-bottom: 1px solid var(--adaptive-line);
   color: var(--adaptive-muted);
   font-size: 14px;
@@ -112,7 +133,7 @@
 .aira-adaptive-empty-tabs span {
   display: flex;
   align-items: center;
-  padding: 0 12px 13px;
+  padding: 0 var(--space-sm) var(--space-sm);
 }
 
 .aira-adaptive-empty-tabs .aira-adaptive-empty-tab-active {
@@ -127,7 +148,7 @@
   align-items: center;
   justify-content: center;
   text-align: center;
-  gap: 16px;
+  gap: var(--space-md);
   padding: 32px 48px;
 }
 
@@ -136,6 +157,8 @@
   font-weight: 400;
   font-size: clamp(26px, 2.1vw, 36px);
   letter-spacing: -0.03em;
+  text-wrap: balance;
+  overflow-wrap: break-word;
 }
 
 .aira-adaptive-empty-body p {
@@ -148,9 +171,9 @@
 .aira-adaptive-empty-hint {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: var(--space-xs);
   border-radius: 10px;
-  padding: 12px 15px;
+  padding: var(--space-sm) var(--space-md);
   background: var(--adaptive-pale);
   color: var(--adaptive-muted);
   font-size: 12px;
@@ -159,8 +182,8 @@
 .aira-adaptive-empty-footer {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 19px 22px;
+  gap: var(--space-xs);
+  padding: var(--space-md) var(--space-lg);
   font-size: 12px;
   line-height: 1.4;
   color: var(--adaptive-muted);
@@ -168,30 +191,31 @@
 }
 
 @media (min-width: 1280px) {
-  .aira-adaptive-shell .aira-sidebar-shell { width: 244px; }
-  .aira-adaptive-shell.has-studio-open .aira-adaptive-empty-studio,
-  .aira-adaptive-shell.has-studio-open .aira-adaptive-real-studio { display: flex; }
-  .aira-adaptive-shell .aira-adaptive-real-studio { width: 46%; flex-basis: 46%; }
-  .aira-adaptive-shell.has-studio-open .aira-adaptive-main { border-right: 1px solid var(--adaptive-line); }
+  .aira-adaptive-empty-studio,
+  .aira-adaptive-real-studio {
+    height: 100%;
+  }
 }
 
-/* The real model/project/agent controls need room when the desktop studio is docked. */
-@media (min-width: 1280px) and (max-width: 1599px) {
-  .aira-adaptive-mode-toggle { display: none; }
+@media (max-width: 1279px) {
+  .aira-adaptive-shell .aira-adaptive-header {
+    min-height: 56px;
+    height: 56px;
+  }
 }
 
-@media (max-width: 767px) {
-  .aira-adaptive-shell .aira-adaptive-chat-content { padding-bottom: 5rem; }
-  .aira-adaptive-shell .aira-adaptive-header { min-height: 60px; height: 60px; }
-  .aira-adaptive-mode-toggle { display: none; }
-  .aira-adaptive-shell:not(.has-studio-open) .aira-adaptive-empty-studio { display: none; }
+@media (max-width: 639px) {
+  .aira-adaptive-shell .aira-adaptive-header {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .aira-adaptive-mode-toggle button {
+    min-width: 58px;
+    padding: var(--space-xs);
+    font-size: 11px;
+  }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .aira-adaptive-shell .aira-adaptive-mode-toggle button { transition: none; }
-}
-
-/* Responsive drawer presentation for screens under 1280px (tablets & mobile) */
 @media (max-width: 1279px) {
   .aira-adaptive-shell.has-studio-open .aira-adaptive-empty-studio,
   .aira-adaptive-shell.has-studio-open .aira-adaptive-real-studio {
@@ -204,7 +228,7 @@
     max-width: 540px !important;
     height: 100dvh !important;
     z-index: 50 !important;
-    box-shadow: -8px 0 32px rgba(0, 0, 0, 0.45) !important;
+    box-shadow: -8px 0 32px color-mix(in srgb, var(--color-ink) 35%, transparent) !important;
     background: var(--adaptive-surface) !important;
   }
 }

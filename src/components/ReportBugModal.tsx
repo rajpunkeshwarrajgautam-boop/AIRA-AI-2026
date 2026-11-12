@@ -205,7 +205,7 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.96, y: 8 }}
         transition={{ duration: 0.18, ease: 'easeOut' }}
-        className="w-full max-w-2xl max-h-[90vh] flex flex-col bg-claude-surface-light dark:bg-[#1a1b1e] border border-claude-border-light dark:border-white/10 rounded-2xl shadow-2xl overflow-hidden"
+        className="w-full max-w-2xl max-h-[90vh] flex flex-col bg-claude-surface-light dark:bg-stone-900 border border-claude-border-light dark:border-white/10 rounded-2xl shadow-2xl overflow-hidden"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-claude-border-light dark:border-white/10 bg-claude-surface2-light/60 dark:bg-white/[0.02]">
@@ -277,7 +277,7 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
               <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
                 <button
                   onClick={handleCopyMarkdown}
-                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-aira-blue text-white text-xs font-bold transition-all shadow-sm active:scale-98"
+                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-aira-blue text-white text-xs font-bold transition-colors duration-150 shadow-sm active:scale-98"
                 >
                   {copiedMarkdown ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                   <span>{copiedMarkdown ? 'Markdown Copied!' : 'Copy Markdown Report'}</span>
@@ -311,7 +311,7 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
 
               {/* Category Selector */}
               <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark mb-1.5">
+                <label className="block text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark mb-1.5">
                   Category
                 </label>
                 <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-xs">
@@ -327,7 +327,7 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
                       key={cat.id}
                       type="button"
                       onClick={() => setCategory(cat.id as any)}
-                      className={`p-2 rounded-xl border text-center font-medium transition-all ${
+                      className={`p-2 rounded-xl border text-center font-medium transition-colors duration-150 ${
                         category === cat.id
                           ? 'border-rose-500 bg-rose-500/10 text-rose-600 dark:text-rose-400 font-bold'
                           : 'border-claude-border-light dark:border-white/10 hover:bg-claude-surface2-light dark:hover:bg-white/5 text-claude-muted-light dark:text-claude-muted-dark'
@@ -341,7 +341,7 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
 
               {/* Title */}
               <div>
-                <label htmlFor="bug-title" className="block text-xs font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark mb-1">
+                <label htmlFor="bug-title" className="block text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark mb-1">
                   Summary / Title <span className="text-rose-500">*</span>
                 </label>
                 <input
@@ -357,7 +357,7 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
 
               {/* Description */}
               <div>
-                <label htmlFor="bug-desc" className="block text-xs font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark mb-1">
+                <label htmlFor="bug-desc" className="block text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark mb-1">
                   Detailed Description <span className="text-rose-500">*</span>
                 </label>
                 <textarea
@@ -373,7 +373,7 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
 
               {/* Steps to Reproduce */}
               <div>
-                <label htmlFor="bug-repro" className="block text-xs font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark mb-1">
+                <label htmlFor="bug-repro" className="block text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark mb-1">
                   Steps to Reproduce (Optional)
                 </label>
                 <textarea
@@ -445,7 +445,7 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
                 <button
                   type="submit"
                   disabled={isSubmitting || !title.trim() || !description.trim() || !consentChecked}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-bold transition-all shadow-sm active:scale-98"
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-bold transition-colors duration-150 shadow-sm active:scale-98"
                 >
                   {isSubmitting ? (
                     <span>Recording...</span>

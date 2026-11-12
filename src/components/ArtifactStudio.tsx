@@ -391,12 +391,12 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
           transition={prefersReducedMotion ? { duration: 0 } : { type: "spring", stiffness: 250, damping: 25, mass: 0.8 }}
           data-testid="artifact-studio"
           aria-label="Unified Contextual Workspace"
-          className={`${isExpanded ? 'fixed inset-y-0 right-0 z-[60] w-full' : 'fixed inset-y-0 right-0 z-50 w-full xl:relative xl:inset-auto xl:z-40 xl:w-[48vw]'} ${adaptiveDock && !isExpanded ? 'aira-adaptive-real-studio' : ''} h-[100dvh] min-w-0 flex flex-col bg-claude-surface-light dark:bg-[#141413] border-l border-claude-border-light dark:border-claude-border-dark shadow-2xl xl:shadow-none flex-shrink-0 transition-colors`}
+          className={`${isExpanded ? 'fixed inset-y-0 right-0 z-[60] w-full' : 'fixed inset-y-0 right-0 z-50 w-full xl:relative xl:inset-auto xl:z-40 xl:w-[48vw]'} ${adaptiveDock && !isExpanded ? 'aira-adaptive-real-studio' : ''} h-[100dvh] min-w-0 flex flex-col bg-claude-surface-light dark:bg-claude-surface-dark border-l border-claude-border-light dark:border-claude-border-dark shadow-2xl xl:shadow-none flex-shrink-0 transition-colors`}
         >
           <div data-testid="unified-workspace" className="sr-only" aria-hidden="true" />
           <div data-testid="agent-contextual-panel" className="sr-only" aria-hidden="true" />
           {/* Top Navigation Bar */}
-          <div className="min-h-[56px] px-3 sm:px-4 py-2 flex flex-wrap items-center justify-between gap-2 border-b border-claude-border-light dark:border-claude-border-dark bg-claude-surface-light/95 dark:bg-[#1F1E1D]/95 backdrop-blur-md select-none">
+          <div className="min-h-[56px] px-3 sm:px-4 py-2 flex flex-wrap items-center justify-between gap-2 border-b border-claude-border-light dark:border-claude-border-dark bg-claude-surface-light/95 dark:bg-claude-surface-dark/95 backdrop-blur-md select-none">
             <div className="flex flex-1 items-center space-x-2 sm:space-x-3 min-w-0">
               <div className="w-8 h-8 rounded-lg bg-claude-terracotta/10 text-claude-terracotta flex items-center justify-center border border-claude-terracotta/20 shrink-0">
                 <Layers className="w-4 h-4" />
@@ -439,7 +439,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                   )}
                 </div>
                 <div className="flex items-center space-x-2 mt-0.5">
-                  <span className="text-[10px] uppercase font-mono tracking-wider text-claude-terracotta font-medium">
+                  <span className="text-xs font-mono text-claude-terracotta font-medium">
                     {artifact.language || artifact.type.split('/').pop() || 'artifact'}
                   </span>
                   <span className="text-claude-muted-light dark:text-claude-muted-dark opacity-40 text-[10px]">•</span>
@@ -458,7 +458,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                         className="bg-transparent text-[10px] text-claude-text-light dark:text-white font-semibold underline focus:outline-none cursor-pointer"
                       >
                         {artifact.versions.map(v => (
-                          <option key={v.version} value={v.version} className="bg-claude-surface-light dark:bg-[#1F1E1D] text-claude-text-light dark:text-white">
+                          <option key={v.version} value={v.version} className="bg-claude-surface-light dark:bg-claude-surface-dark text-claude-text-light dark:text-white">
                             v{v.version}
                           </option>
                         ))}
@@ -509,7 +509,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                       {selected && (
                         <motion.span
                           layoutId="artifact-active-tab"
-                          className="absolute inset-0 -z-10 rounded-md border border-claude-border-light bg-claude-surface-light shadow-sm dark:border-claude-border-dark dark:bg-[#272624]"
+                          className="absolute inset-0 -z-10 rounded-md border border-claude-border-light bg-claude-surface-light shadow-sm dark:border-claude-border-dark dark:bg-claude-surface2-dark"
                           transition={prefersReducedMotion ? { duration: 0 } : { type: 'spring', stiffness: 400, damping: 30 }}
                         />
                       )}
@@ -636,7 +636,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
           )}
 
           {/* Main Studio Body */}
-          <div className="flex-1 relative overflow-hidden bg-claude-surface-light dark:bg-[#141413] flex">
+          <div className="flex-1 relative overflow-hidden bg-claude-surface-light dark:bg-claude-surface-dark flex">
             {adaptiveDock && showFileExplorer && activeBundle && (
               <WorkspaceFileExplorer
                 bundle={activeBundle}
@@ -666,7 +666,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                   className="w-full h-full relative flex flex-col"
                 >
                   {/* Sandbox Status Bar */}
-                  <div className="h-8 px-4 flex items-center justify-between bg-claude-surface-light dark:bg-[#1F1E1D] border-b border-claude-border-light dark:border-claude-border-dark text-xs text-claude-muted-light dark:text-claude-muted-dark select-none">
+                  <div className="h-8 px-4 flex items-center justify-between bg-claude-surface-light dark:bg-claude-surface-dark border-b border-claude-border-light dark:border-claude-border-dark text-xs text-claude-muted-light dark:text-claude-muted-dark select-none">
                     <div className="flex items-center space-x-2">
                       <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                       <span className="font-medium tracking-tight text-claude-text-light dark:text-claude-text-dark text-[11px]">
@@ -700,7 +700,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
 
                   {/* Adaptive Canvas Controls Bar (Phase 4 - hidden for multi-modal assets) */}
                   {adaptiveDock && !isMultiModal && (
-                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-claude-border-light bg-claude-surface2-light/60 px-3 py-1.5 text-xs dark:border-claude-border-dark dark:bg-[#181816]" data-testid="artifact-canvas-controls">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-claude-border-light bg-claude-surface2-light/60 px-3 py-1.5 text-xs dark:border-claude-border-dark dark:bg-claude-surface2-dark" data-testid="artifact-canvas-controls">
                       {/* Device Presets */}
                       <div className="flex items-center gap-1 rounded-md border border-claude-border-light bg-claude-surface-light p-0.5 dark:border-claude-border-dark dark:bg-claude-surface-dark" role="radiogroup" aria-label="Device viewport preview">
                         <button
@@ -826,9 +826,9 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                         initial={{ height: 0, opacity: 0 }}
                         animate={{ height: 160, opacity: 1 }}
                         exit={{ height: 0, opacity: 0 }}
-                        className="bg-[#121214] text-stone-300 border-t border-claude-border-dark p-3 font-mono text-xs overflow-y-auto"
+                        className="bg-stone-900 text-stone-300 border-t border-claude-border-dark p-3 font-mono text-xs overflow-y-auto"
                       >
-                        <div className="flex items-center justify-between pb-1.5 border-b border-stone-800 text-[10px] font-semibold tracking-wider uppercase text-stone-500 mb-2">
+                        <div className="flex items-center justify-between pb-1.5 border-b border-stone-800 text-xs font-medium text-stone-500 mb-2">
                           <span>Sandbox Console</span>
                           <button onClick={() => setConsoleLogs([])} className="hover:text-stone-300 transition-colors">Clear</button>
                         </div>
@@ -846,7 +846,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                   </AnimatePresence>
                 </motion.div>
               ) : activeTab === 'diff' ? (
-                <motion.div key="diff" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} role="tabpanel" id="tabpanel-diff" aria-labelledby="tab-diff" className="flex h-full w-full flex-col bg-[#141413] text-xs text-stone-200">
+                <motion.div key="diff" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} role="tabpanel" id="tabpanel-diff" aria-labelledby="tab-diff" className="flex h-full w-full flex-col bg-claude-surface-dark text-xs text-stone-200">
                   <div className="border-b border-stone-800 px-4 py-2 text-stone-400">
                     {earlierVersion ? `Changes from v${earlierVersion.version} to v${selectedVersion}` : 'No earlier revision available'}
                   </div>
@@ -890,7 +890,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                   role="tabpanel"
                   id="tabpanel-code"
                   aria-labelledby="tab-code"
-                  className="w-full h-full flex flex-col bg-[#141413] text-[#D4D4D4] font-mono text-[13px] leading-[1.6]"
+                  className="w-full h-full flex flex-col bg-claude-surface-dark text-stone-300 font-mono text-[13px] leading-[1.6]"
                 >
                   <div className="h-8 px-4 flex items-center justify-between border-b border-stone-800 text-[11px] text-stone-500 select-none">
                     <span data-testid="code-file-indicator">{displayedFilePath ? `${displayedFilePath} • ` : ''}{lineCount} lines • {displayedLanguage}</span>

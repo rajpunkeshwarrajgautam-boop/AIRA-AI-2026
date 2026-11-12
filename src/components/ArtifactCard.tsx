@@ -26,7 +26,7 @@ export const ArtifactCard: React.FC<ArtifactCardProps> = ({ artifact, onOpen }) 
           onOpen(artifact);
         }
       }}
-      className="my-3 p-3.5 sm:p-4 rounded-xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-[0_1px_3px_rgba(45,40,30,0.04)] hover:border-claude-terracotta/40 cursor-pointer transition-all duration-200 group flex items-center justify-between focus:outline-none focus-visible:ring-2 focus-visible:ring-aira-blue focus-visible:ring-offset-2 dark:focus-visible:ring-offset-[#141413]"
+      className="my-3 p-3.5 sm:p-4 rounded-xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-sm hover:border-claude-terracotta/40 cursor-pointer transition-colors duration-150 group flex items-center justify-between focus:outline-none focus-visible:ring-2 focus-visible:ring-aira-blue focus-visible:ring-offset-2 dark:focus-visible:ring-offset-stone-900"
     >
       <div className="flex items-center space-x-3.5 min-w-0">
         <div className="w-10 h-10 rounded-lg bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-terracotta flex items-center justify-center flex-shrink-0 group-hover:bg-claude-terracotta/10 transition-colors">
@@ -37,7 +37,7 @@ export const ArtifactCard: React.FC<ArtifactCardProps> = ({ artifact, onOpen }) 
             <h4 className="text-sm font-medium text-claude-text-light dark:text-claude-text-dark transition-colors truncate">
               {artifact.title}
             </h4>
-            <span className="text-[10px] font-mono uppercase px-1.5 py-0.2 rounded bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark">
+            <span className="text-xs font-mono px-1.5 py-0.2 rounded bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark">
               {artifact.language || 'app'}
             </span>
           </div>

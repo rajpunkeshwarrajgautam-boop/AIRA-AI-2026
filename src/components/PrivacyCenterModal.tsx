@@ -119,7 +119,7 @@ export const PrivacyCenterModal: React.FC<PrivacyCenterModalProps> = ({
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.96, y: 8 }}
         transition={{ duration: 0.18, ease: 'easeOut' }}
-        className="w-full max-w-3xl max-h-[90vh] flex flex-col bg-claude-surface-light dark:bg-[#1a1b1e] border border-claude-border-light dark:border-white/10 rounded-2xl shadow-2xl overflow-hidden"
+        className="w-full max-w-3xl max-h-[90vh] flex flex-col bg-claude-surface-light dark:bg-stone-900 border border-claude-border-light dark:border-white/10 rounded-2xl shadow-2xl overflow-hidden"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-claude-border-light dark:border-white/10 bg-claude-surface2-light/60 dark:bg-white/[0.02]">
@@ -151,7 +151,7 @@ export const PrivacyCenterModal: React.FC<PrivacyCenterModalProps> = ({
           <div>
             <div className="flex items-center gap-2 mb-3">
               <Lock className="w-4 h-4 text-emerald-500" />
-              <h3 className="text-xs font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark">
+              <h3 className="text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark">
                 Functional Privacy Controls
               </h3>
             </div>
@@ -167,7 +167,7 @@ export const PrivacyCenterModal: React.FC<PrivacyCenterModalProps> = ({
                     Enforced platform safeguard that filters API keys, passwords, bearer tokens, and sensitive patterns before persisting client memory or logging diagnostics.
                   </p>
                 </div>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-md border border-emerald-500/20 shrink-0">
+                <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-md border border-emerald-500/20 shrink-0">
                   Enforced Safeguard
                 </span>
               </div>
@@ -189,7 +189,7 @@ export const PrivacyCenterModal: React.FC<PrivacyCenterModalProps> = ({
                     onChange={(e) => onUpdateSettings({ persistentMemoryEnabled: e.target.checked })}
                     className="sr-only peer"
                   />
-                  <div className="w-11 h-6 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
+                  <div className="w-11 h-6 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-transform after:duration-150 peer-checked:bg-emerald-500"></div>
                 </label>
               </div>
 
@@ -210,7 +210,7 @@ export const PrivacyCenterModal: React.FC<PrivacyCenterModalProps> = ({
                     onChange={(e) => onUpdateSettings({ telemetryOptOut: e.target.checked })}
                     className="sr-only peer"
                   />
-                  <div className="w-11 h-6 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
+                  <div className="w-11 h-6 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-transform after:duration-150 peer-checked:bg-emerald-500"></div>
                 </label>
               </div>
             </div>
@@ -220,7 +220,7 @@ export const PrivacyCenterModal: React.FC<PrivacyCenterModalProps> = ({
           <div>
             <div className="flex items-center gap-2 mb-3">
               <Download className="w-4 h-4 text-aira-blue" />
-              <h3 className="text-xs font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark">
+              <h3 className="text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark">
                 Data Portability & Erasure
               </h3>
             </div>
@@ -305,7 +305,7 @@ export const PrivacyCenterModal: React.FC<PrivacyCenterModalProps> = ({
 
           {/* Privacy Guarantees */}
           <div className="p-4 rounded-xl border border-claude-border-light dark:border-white/10 bg-claude-surface2-light/20 dark:bg-white/[0.01] space-y-3">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark">
+            <h4 className="text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark">
               AIRA Operational Privacy Guarantees
             </h4>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
@@ -345,8 +345,7 @@ export const PrivacyCenterModal: React.FC<PrivacyCenterModalProps> = ({
                 }}
                 className="text-aira-blue hover:underline font-semibold flex items-center gap-1"
               >
-                <span>Read Full Privacy Policy</span>
-                <span aria-hidden="true">&rarr;</span>
+                <span>View full privacy policy</span>
               </button>
             </div>
           </div>

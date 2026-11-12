@@ -172,11 +172,11 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 5, scale: 0.985 }}
             transition={reducedMotion ? { duration: 0.08 } : { type: 'spring', stiffness: 390, damping: 31 }}
-            className="fixed z-[100] overflow-x-hidden overflow-y-auto overscroll-contain rounded-[18px] border border-claude-border-light p-2 shadow-[0_20px_55px_-22px_rgba(45,40,30,0.5)] dark:border-claude-border-dark dark:shadow-[0_24px_60px_-24px_rgba(0,0,0,0.9)]"
+            className="fixed z-[100] overflow-x-hidden overflow-y-auto overscroll-contain rounded-[18px] border border-claude-border-light p-2 shadow-2xl dark:border-claude-border-dark dark:shadow-2xl"
           >
             <div className="flex items-center justify-between px-2.5 pb-2 pt-1.5">
               <div>
-                <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-claude-muted-light dark:text-claude-muted-dark">Aira intelligence</div>
+                <div className="text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark">Aira intelligence</div>
                 <div className="mt-0.5 text-[12px] font-medium text-claude-text-light dark:text-white">Choose the engine for this task</div>
               </div>
               <span className="rounded-lg bg-claude-terracotta/10 p-1.5 text-claude-accentInk">
@@ -251,14 +251,14 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                       <span className="flex items-center gap-2">
                         <span className="truncate text-[13px] font-semibold text-claude-text-light dark:text-white">{model.name}</span>
                         {model.badge && (
-                          <span className="rounded-md bg-claude-surface2-light px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-claude-muted-light dark:bg-claude-surface2-dark dark:text-claude-muted-dark">
+                          <span className="rounded-md bg-claude-surface2-light px-1.5 py-0.5 text-xs font-medium text-claude-muted-light dark:bg-claude-surface2-dark dark:text-claude-muted-dark">
                             {model.badge}
                           </span>
                         )}
                         {!isAllowed && (
                           <span
                             data-testid={`model-locked-${model.id}`}
-                            className="flex items-center gap-1 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider"
+                            className="flex items-center gap-1 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 px-1.5 py-0.5 text-xs font-medium"
                           >
                             <Lock className="w-2.5 h-2.5" />
                             <span>{requiredTier.toUpperCase()}</span>
@@ -266,7 +266,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                         )}
                       </span>
                       <span className="mt-0.5 block text-[11px] leading-relaxed text-claude-muted-light dark:text-claude-muted-dark">{model.description}</span>
-                      <span className="mt-1.5 flex items-center gap-1.5 text-[9px] font-medium uppercase tracking-wider text-claude-muted-light/80 dark:text-claude-muted-dark/80">
+                      <span className="mt-1.5 flex items-center gap-1.5 text-xs font-medium text-claude-muted-light/80 dark:text-claude-muted-dark/80">
                         <span>{model.contextWindow}</span>
                         {model.supportsThinking && <><span>•</span><span>Deep reasoning</span></>}
                       </span>
@@ -304,7 +304,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                   </span>
                 </span>
                 <span className={`relative h-6 w-10 shrink-0 rounded-full transition-colors ${
-                  extendedThinking && activeModelInfo.supportsThinking ? 'bg-claude-terracotta' : 'bg-claude-border-light dark:bg-[#47443f]'
+                  extendedThinking && activeModelInfo.supportsThinking ? 'bg-claude-terracotta' : 'bg-claude-border-light dark:bg-stone-700'
                 }`}>
                   <motion.span
                     className="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm"

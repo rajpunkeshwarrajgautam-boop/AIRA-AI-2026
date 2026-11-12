@@ -209,7 +209,7 @@ export const AgentExecutionGraphView: React.FC<AgentExecutionGraphProps> = ({
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-claude-border-light dark:border-claude-border-dark bg-claude-surface-light dark:bg-claude-surface-dark">
         <div className="flex items-center gap-2">
           <Workflow size={18} className="text-claude-accentInk" />
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300">
+          <h3 className="text-xs font-semibold text-slate-700 dark:text-slate-300">
             {graph.title}
           </h3>
           <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-claude-terracotta/10 text-claude-accentInk">
@@ -308,10 +308,10 @@ export const AgentExecutionGraphView: React.FC<AgentExecutionGraphProps> = ({
                     width: `${pos.width}px`,
                     minHeight: `${pos.height}px`
                   }}
-                  className={`rounded-xl border p-3 cursor-pointer transition-all ${
+                  className={`rounded-xl border p-3 cursor-pointer transition-colors duration-150 ${
                     isSelected 
                       ? 'border-claude-terracotta ring-2 ring-claude-terracotta/20 shadow-md bg-claude-surface-light dark:bg-claude-surface-dark'
-                      : 'border-slate-200 dark:border-white/10 hover:border-slate-300 dark:hover:border-white/20 bg-white/80 dark:bg-[#14151f]/80'
+                      : 'border-slate-200 dark:border-white/10 hover:border-slate-300 dark:hover:border-white/20 bg-white/80 dark:bg-slate-900/80'
                   } ${isArtifactActive ? 'ring-2 ring-emerald-500/40' : ''}`}
                   data-testid={`graph-node-${node.id}`}
                 >
@@ -411,7 +411,7 @@ export const AgentExecutionGraphView: React.FC<AgentExecutionGraphProps> = ({
           <div className="p-4 space-y-4 max-w-xl mx-auto" data-testid="timeline-view-container">
             {waves.map((wave, waveIdx) => (
               <div key={`wave-${waveIdx}`} className="space-y-2">
-                <div className="flex items-center gap-2 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                <div className="flex items-center gap-2 text-xs font-semibold text-slate-500 dark:text-slate-400">
                   <span>Wave {waveIdx + 1}</span>
                   <div className="flex-1 h-px bg-slate-200 dark:bg-white/10" />
                 </div>
@@ -429,10 +429,10 @@ export const AgentExecutionGraphView: React.FC<AgentExecutionGraphProps> = ({
                       <div
                         key={node.id}
                         onClick={() => setSelectedNodeId(node.id)}
-                        className={`p-3 rounded-xl border transition-all ${
+                        className={`p-3 rounded-xl border transition-colors duration-150 ${
                           isSelected 
                             ? 'border-claude-terracotta bg-claude-surface-light dark:bg-claude-surface-dark shadow-sm'
-                            : 'border-slate-200 dark:border-white/10 bg-white/70 dark:bg-[#14151f]/70'
+                            : 'border-slate-200 dark:border-white/10 bg-white/70 dark:bg-slate-900/70'
                         } ${isArtifactActive ? 'ring-2 ring-emerald-500/30' : ''}`}
                         data-testid={`timeline-node-${node.id}`}
                       >
@@ -525,7 +525,7 @@ export const AgentExecutionGraphView: React.FC<AgentExecutionGraphProps> = ({
       {/* Selected Node Details Inspector Drawer */}
       {selectedNode && (
         <div 
-          className="border-t border-slate-200 dark:border-white/10 bg-white dark:bg-[#12131a] p-3 text-xs space-y-2 shrink-0 max-h-48 overflow-y-auto"
+          className="border-t border-slate-200 dark:border-white/10 bg-white dark:bg-slate-950 p-3 text-xs space-y-2 shrink-0 max-h-48 overflow-y-auto"
           data-testid="node-inspector-drawer"
         >
           <div className="flex items-center justify-between">
@@ -572,7 +572,7 @@ export const AgentExecutionGraphView: React.FC<AgentExecutionGraphProps> = ({
               <button
                 type="button"
                 onClick={() => onSelectArtifact(selectedNode.associatedArtifactId!)}
-                className="flex items-center gap-1 px-2.5 py-1 rounded bg-[#a9583e] hover:bg-[#94452e] text-white font-medium text-[11px] transition-colors"
+                className="flex items-center gap-1 px-2.5 py-1 rounded bg-aira-blue hover:opacity-90 text-white font-medium text-[11px] transition-colors"
                 data-testid="inspector-open-artifact-btn"
               >
                 <Layers size={12} /> Open Artifact in Studio

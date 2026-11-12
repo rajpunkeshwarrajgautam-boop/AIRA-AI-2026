@@ -161,7 +161,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     <div className="aira-composer mx-auto w-full min-w-0 max-w-3xl px-3 sm:px-5 pb-3 sm:pb-5" ref={controlsRef}>
       <motion.div
         layout
-        className="aira-composer-card overflow-visible rounded-[16px] border border-claude-border-light bg-claude-surface-light shadow-[0_2px_10px_-6px_rgba(45,40,30,0.15)] transition-colors focus-within:border-claude-terracotta/50 dark:border-claude-border-dark dark:bg-claude-surface-dark dark:shadow-none"
+        className="aira-composer-card overflow-visible rounded-[16px] border border-claude-border-light bg-claude-surface-light shadow-sm transition-colors focus-within:border-claude-terracotta/50 dark:border-claude-border-dark dark:bg-claude-surface-dark dark:shadow-none"
       >
         <div className="flex items-center justify-between gap-3 border-b border-claude-border-light/70 px-3 py-2 sm:px-4 dark:border-claude-border-dark/70">
           <div className="flex min-w-0 items-center gap-2">
@@ -247,7 +247,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 type="button"
                 onClick={() => onWorkspaceModeChange('chat')}
                 aria-pressed={workspaceMode === 'chat'}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-[8px] text-[11px] font-semibold transition-all duration-200 ${
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-[8px] text-[11px] font-semibold transition-colors duration-150 ${
                   workspaceMode === 'chat'
                     ? 'bg-aira-blue text-white shadow-sm'
                     : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white'
@@ -272,7 +272,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                   onWorkspaceModeChange('agent');
                 }}
                 aria-pressed={workspaceMode === 'agent'}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-[8px] text-[11px] font-semibold transition-all duration-200 ${
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-[8px] text-[11px] font-semibold transition-colors duration-150 ${
                   workspaceMode === 'agent'
                     ? 'bg-aira-blue text-white shadow-sm'
                     : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white'
@@ -288,7 +288,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 {(userTier === 'guest' || userTier === 'free') && (
                   <span
                     data-testid="chat-mode-agent-locked"
-                    className="flex items-center gap-0.5 rounded px-1 py-0.2 text-[9px] font-bold uppercase tracking-wider bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                    className="flex items-center gap-0.5 rounded px-1 py-0.2 text-xs font-semibold bg-amber-500/15 text-amber-600 dark:text-amber-400"
                   >
                     <Lock className="w-2 h-2" />
                     <span>PLUS</span>
@@ -317,7 +317,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                     initial={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 8, scale: 0.97 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 6, scale: 0.98 }}
-                    className="absolute bottom-10 left-0 z-50 w-[220px] rounded-[16px] border border-claude-border-light bg-white/95 p-1.5 shadow-[0_16px_44px_-18px_rgba(45,40,30,0.45)] backdrop-blur-xl dark:border-claude-border-dark dark:bg-[#1d1c19]/95"
+                    className="absolute bottom-10 left-0 z-50 w-[220px] rounded-[16px] border border-claude-border-light bg-white/95 p-1.5 shadow-2xl backdrop-blur-xl dark:border-claude-border-dark dark:bg-stone-900/95"
                   >
                     {STYLE_OPTIONS.map(style => {
                       const selected = style.id === styleMode;

@@ -56,3 +56,5 @@ agentdb.rvf.idmap.json
 .agents/teamwork/
 
 tmp/
+.hallmark/
+

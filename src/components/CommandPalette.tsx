@@ -165,7 +165,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={reducedMotion ? { opacity: 0 } : { opacity: 0, y: -8, scale: 0.985 }}
             transition={reducedMotion ? { duration: 0.08 } : { type: 'spring', stiffness: 360, damping: 30 }}
-            className="w-full max-w-[620px] overflow-hidden rounded-[20px] border border-claude-border-light bg-white/95 shadow-[0_28px_80px_-28px_rgba(28,25,23,0.55)] backdrop-blur-2xl dark:border-claude-border-dark dark:bg-[#1c1b18]/95 dark:shadow-[0_28px_90px_-28px_rgba(0,0,0,0.85)]"
+            className="w-full max-w-[620px] overflow-hidden rounded-[20px] border border-claude-border-light bg-white/95 shadow-2xl backdrop-blur-2xl dark:border-claude-border-dark dark:bg-stone-900/95 dark:shadow-2xl"
           >
             <div className="flex items-center gap-3 border-b border-claude-border-light px-4 dark:border-claude-border-dark">
               <Search className="h-4 w-4 shrink-0 text-claude-muted-light dark:text-claude-muted-dark" />

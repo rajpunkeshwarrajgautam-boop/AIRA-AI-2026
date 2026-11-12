@@ -694,7 +694,7 @@ export const UnifiedWorkspace: React.FC<UnifiedWorkspaceProps> = ({
             <div className="flex-1 min-h-0 relative flex items-center justify-center p-3 bg-black/[0.02] dark:bg-black/30 overflow-auto">
               {builderPreviewUrl && !builderExpired ? (
                 <div
-                  className={`h-full transition-all duration-200 border border-claude-border-light dark:border-white/10 rounded-xl overflow-hidden bg-white shadow-sm ${
+                  className={`h-full transition-transform duration-200 motion-reduce:transition-none border border-claude-border-light dark:border-white/10 rounded-xl overflow-hidden bg-white shadow-sm ${
                     devicePreset === 'mobile'
                       ? 'w-[375px]'
                       : devicePreset === 'tablet'
@@ -716,7 +716,7 @@ export const UnifiedWorkspace: React.FC<UnifiedWorkspaceProps> = ({
                   <MultiModalAssetViewer file={assetFile} />
                 ) : (
                   <div
-                    className={`h-full transition-all duration-200 border border-claude-border-light dark:border-white/10 rounded-xl overflow-hidden bg-white shadow-sm ${
+                    className={`h-full transition-transform duration-200 motion-reduce:transition-none border border-claude-border-light dark:border-white/10 rounded-xl overflow-hidden bg-white shadow-sm ${
                       devicePreset === 'mobile'
                         ? 'w-[375px]'
                         : devicePreset === 'tablet'
@@ -750,7 +750,7 @@ export const UnifiedWorkspace: React.FC<UnifiedWorkspaceProps> = ({
 
         {/* TAB: CODE */}
         {activeTab === 'code' && artifact && (
-          <div className="w-full h-full flex flex-col min-h-0 bg-[#181715] text-[#faf9f5] text-xs font-mono">
+          <div className="w-full h-full flex flex-col min-h-0 bg-aira-navy text-aira-porcelain text-xs font-mono">
             <div className="h-8 px-4 flex items-center justify-between border-b border-white/10 bg-black/20 text-[11px] text-slate-400">
               <span>{artifact.title} · {artifact.language || 'text'}</span>
               <span>{currentContent.split('\n').length} lines</span>

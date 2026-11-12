@@ -248,7 +248,7 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.96, y: 8 }}
         transition={{ duration: 0.18, ease: 'easeOut' }}
-        className="w-full max-w-4xl max-h-[90vh] flex flex-col bg-claude-surface-light dark:bg-[#1a1b1e] border border-claude-border-light dark:border-white/10 rounded-2xl shadow-2xl overflow-hidden"
+        className="w-full max-w-4xl max-h-[90vh] flex flex-col bg-claude-surface-light dark:bg-stone-900 border border-claude-border-light dark:border-white/10 rounded-2xl shadow-2xl overflow-hidden"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-claude-border-light dark:border-white/10 bg-claude-surface2-light/60 dark:bg-white/[0.02]">
@@ -275,7 +275,7 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
         </div>
 
         {/* Search Bar */}
-        <div className="p-4 sm:px-6 border-b border-claude-border-light dark:border-white/10 bg-claude-surface-light dark:bg-[#18191c]">
+        <div className="p-4 sm:px-6 border-b border-claude-border-light dark:border-white/10 bg-claude-surface-light dark:bg-stone-900">
           <div className="relative">
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-claude-muted-light dark:text-claude-muted-dark" />
             <input
@@ -284,7 +284,7 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search help topics, models, memory, shortcuts, or troubleshooting..."
-              className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-claude-surface2-light dark:bg-white/5 border border-claude-border-light dark:border-white/10 text-sm text-claude-text-light dark:text-white placeholder:text-claude-muted-light dark:placeholder:text-claude-muted-dark focus:outline-none focus:ring-2 focus:ring-aira-blue/40 transition-all"
+              className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-claude-surface2-light dark:bg-white/5 border border-claude-border-light dark:border-white/10 text-sm text-claude-text-light dark:text-white placeholder:text-claude-muted-light dark:placeholder:text-claude-muted-dark focus:outline-none focus:ring-2 focus:ring-aira-blue/40 transition-colors duration-150"
             />
             {searchQuery && (
               <button
@@ -335,7 +335,7 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
               return (
                 <div
                   key={article.id}
-                  className="border border-claude-border-light dark:border-white/10 rounded-xl bg-claude-surface2-light/30 dark:bg-white/[0.02] overflow-hidden transition-all"
+                  className="border border-claude-border-light dark:border-white/10 rounded-xl bg-claude-surface2-light/30 dark:bg-white/[0.02] overflow-hidden transition-colors duration-150"
                 >
                   <button
                     onClick={() => setExpandedArticleId(isExpanded ? null : article.id)}
@@ -343,7 +343,7 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
                   >
                     <div className="pr-4">
                       <div className="flex items-center gap-2 mb-1">
-                        <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-aira-blue/10 text-aira-blue dark:text-aira-cyan">
+                        <span className="text-xs font-semibold px-2 py-0.5 rounded-md bg-aira-blue/10 text-aira-blue dark:text-aira-cyan">
                           {categories.find(c => c.id === article.category)?.label || article.category}
                         </span>
                       </div>
