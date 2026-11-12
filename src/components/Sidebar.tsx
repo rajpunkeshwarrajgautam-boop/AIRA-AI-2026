@@ -541,8 +541,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     setIsAccountMenuOpen(false);
                   }}
                   onSignOutSuccess={() => {
-                    setNeonUser(null);
-                    setIsAccountMenuOpen(false);
+                    if (!neonAuth.getCurrentUser()) {
+                      setNeonUser(null);
+                    }
                   }}
                   onOpenWhatsNew={() => {
                     onOpenWhatsNew?.();

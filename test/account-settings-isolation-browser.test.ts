@@ -145,8 +145,13 @@ async function signInViaAuthModal(page: Page, email: string, password: string): 
 async function signOutViaAccountMenu(page: Page): Promise<void> {
   await openAccountMenuTarget(page, '[data-testid="account-menu-logout"]');
   const logoutBtn = page.locator('[data-testid="account-menu-logout"]');
+  const signOutResponse = page.waitForResponse(
+    (res) => res.url().includes('/api/auth/sign-out') && res.request().method() === 'POST',
+    { timeout: 8000 }
+  );
   await logoutBtn.click();
-  await logoutBtn.waitFor({ state: 'detached', timeout: 8000 });
+  await signOutResponse;
+  await page.locator('[role="menu"]').waitFor({ state: 'detached', timeout: 8000 });
   await page.locator('[data-testid="account-button"][aria-label*="Sign in"]').waitFor({ state: 'visible', timeout: 8000 });
   await dismissBlockingOverlays(page);
 }
@@ -158,7 +163,10 @@ async function openSettingsModal(page: Page): Promise<void> {
 }
 
 async function closeSettingsModal(page: Page): Promise<void> {
-  await page.locator('button[aria-label="Close settings"]').click();
+  const closeBtn = page.locator('button[aria-label="Close settings"]');
+  if (await closeBtn.isVisible().catch(() => false)) {
+    await closeBtn.click().catch(() => {});
+  }
   await page.locator('#aira-settings-title').waitFor({ state: 'detached', timeout: 8000 });
 }
 

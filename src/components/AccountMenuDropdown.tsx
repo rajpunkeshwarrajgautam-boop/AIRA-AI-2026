@@ -278,11 +278,14 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
   }, [isOpen, activeSubmenu, onClose, anchorRef]);
 
   const handleLogout = async () => {
+    const startEpoch = neonAuth.getAuthEpoch();
     try {
       setIsLoggingOut(true);
-      await neonAuth.signOut();
-      onSignOutSuccess?.();
       onClose();
+      await neonAuth.signOut();
+      if (neonAuth.getAuthEpoch() === startEpoch + 1 && !neonAuth.getCurrentUser()) {
+        onSignOutSuccess?.();
+      }
     } catch (e) {
       console.error('Logout error', e);
     } finally {
