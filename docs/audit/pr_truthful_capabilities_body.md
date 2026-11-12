@@ -1,69 +1,15 @@
-## Architectural Summary & Truthful Capabilities Alignment
+## Summary
 
-### 1. Objective & Scope
-This pull request brings AIRA AI 2026's user-facing interface, documentation, settings, and model routing into strict alignment with its genuine production capabilities. Every selectable model, setting, plan benefit, tutorial instruction, and discovery card now directly corresponds to verified runtime behavior.
+Remediates PR #164 (`fix/truthful-capabilities-model-architecture-20261112` vs `prod-release`) following independent review of commit `1bf5d8e956affab397ad67f3a98d64f2e5d0327c`:
 
-### 2. Key Changes Across Tracks
+- **Account-Scoped Personalization Isolation (`src/utils/storage.ts`, `src/App.tsx`, `src/utils/constants.ts`)**: Separated harmless device display preferences (`aira_device_preferences_v1` + sanitized `aira_settings_v1`) from per-account personalization (`aira_account_settings_user_<userId>` / `aira_account_settings_guest` + IndexedDB), cleared hardcoded default bio/email, added provenance-verified legacy migration (only matching `ownerId`/email reclaims archived personalization), aborted active requests on auth switch, keyed settings/privacy/onboarding modals per user, and guarded active chat streams with `requestEpoch` + `requestOwnerId`.
+- **Registry-Aligned Routing & Post-Routing Tier Enforcement (`packages/model-router`, `packages/agent-runtime`, `apps/api/src/index.ts`)**: Prioritized `VERIFIED_MODEL_REGISTRY` providers (`nvidia` before `anthropic` for `aira-pro`/`aira-deep` while respecting explicit vendor IDs and `OPEN` circuit fallbacks), enforced post-routing `PLAN_MODEL_ALLOWLIST` clamping in `ModelRouter`, `AgentRuntime`, and `/api/runs`, and fixed `/api/ready/providers` `deepModel` + live NVIDIA model check.
+- **Commercial Contract & Empirical Neon DB Audit (`packages/contracts`, UI copy, `docs/audit/aira_truthful_capabilities_release_report.md`)**: Aligned all quotas (`Guest` 5/5/0/0, `Free` 15/150/100/5, `Plus` 50/700/3,000/50, `Pro` 150/2,000/7,500/200, sandbox `prices: []`), removed unapproved `$20/$50`, `Enterprise`, `<250 ms`, `450 tps`, `99.95%`, and `Unlimited chats` copy, and documented read-only Neon staging query outputs.
+- **Zero-Migration Authenticated Onboarding Sync (`apps/api/src/account-routes.ts`, `src/utils/onboarding.ts`, `packages/knowledge/src/repositories.ts`)**: Removed client-spoofable `x-user-id` headers, added authenticated `GET/POST /api/user/onboarding` using `memory_records` (`type: 'onboarding_state'`, `0` DB migrations) with `401` guest fail-closed and `403 FORBIDDEN_OWNERSHIP_SPOOF`, and ensured open tutorials close when switching to a completed account.
+- **Reasoning Budget Provenance & Prompt Non-Duplication (`packages/contracts`, `packages/model-router`, `src/utils/aiEngine.ts`)**: Classified explicit `reasoningControl` modes (`output_cap_only` on NVIDIA Nemotron 70B, `effort_mapped` on Groq `openai/gpt-oss-120b`, `native_budget` on Anthropic & Gemini 2.5 non-lite), stopped charging reasoning boosts when `extendedThinking` is off, and eliminated duplicated custom-instruction injection with bounded lengths (`500` bio / `2000` instructions).
+- **Mandatory CI Gates & Browser E2E Coverage (`.github/workflows/ci.yml`, `test/truthful-capabilities-model-architecture.test.ts`, `test/account-settings-isolation-browser.test.ts`)**: Expanded regression suite to 11 subtests, added real Playwright Chromium BFF `A -> B -> A` + reload + stream-abort + onboarding E2E, and wired both into PR CI (`fast` and `certify`).
 
-#### Track 1: Historical PR #163 Audit Superseded Notice
-- Updated PR #163 description with an official `SUPERSEDED STATUS (2026-11-12)` notice confirming that the pre-merge Draft/NO GO warnings were resolved prior to deployment `562e75d40b2bed8bfc8fc03fe88dfa9f475b1213`, preserving all historical evidence intact.
+## Production Status & Remaining Limitations
 
-#### Track 2: Authenticated Onboarding & Welcome Screen Lifecycle
-- User onboarding state is strictly account-scoped (`aira_onboarding_<userId>`).
-- Returning users who completed or skipped onboarding enter directly without modal reactivation on browser refresh.
-- Account switching cleanly triggers onboarding only for accounts that have never completed it.
-- Added a dedicated "Restart Tutorial" button in the Settings General & Personalization panel.
-
-#### Track 3: Truthful Capabilities Tutorial & Walkthrough
-- Replaced all unverified provider and model claims (Claude 3.5 Haiku, Claude 3.5 Sonnet, GPT-4o Mini, DeepSeek R1, 64k token budgets) with verified production infrastructure:
-  - Ultra-low latency Groq LPU inference with Google Gemini failover
-  - NVIDIA Nemotron 70B for high-fidelity code and multi-step reasoning
-  - Real 128K token context window
-  - Calibrated 8,192 token reasoning budgets
-
-#### Track 4: Model Architecture & Selection Realignment
-- Aligned `Model Selector → Model Registry → Entitlement Guard → Router → Provider → Executed Model → Response`:
-  - `aira-auto`: Intelligent router directing tasks to Groq LPU or NVIDIA Nemotron 70B based on query complexity.
-  - `aira-fast`: Ultra-low latency Groq LPU inference.
-  - `aira-pro`: High-fidelity engineering and multi-step reasoning on NVIDIA Nemotron 70B.
-  - `aira-deep`: Deliberate deep-research and architectural reasoning mode with extended thinking tokens on NVIDIA Nemotron 70B.
-  - `nvidia/llama-3.1-nemotron-70b-instruct`: Direct NVIDIA NIM flagship 70B model.
-- Preserved backward compatibility in `packages/contracts/src/model-registry.ts` and `src/utils/storage.ts`: legacy IDs (`claude-3-7-sonnet`, `claude-3-5-sonnet`, `claude-3-5-haiku`, `claude-3-opus`, `405b`) automatically normalize to canonical models.
-
-#### Track 5: Settings Functional Integrity Audit
-- **Response Style**: Implemented `composeSystemPrompt` injecting specific directives for `normal`, `concise`, `explanatory`, `academic`, and `code-first` into the system prompt.
-- **User Bio & Personalization**: Profile bio is automatically attached to user prompts under bounded context.
-- **Custom Instructions**: User custom instructions are appended after bio context.
-- **Extended Thinking**: Calibrated slider to enforce genuine backend bounds [1,024 to 8,192 tokens].
-- **Agent Memory Count**: Replaced hardcoded `memoryCount = 0` with live reactive subscription via `useSyncExternalStore(agentMemory.subscribe, agentMemory.getSnapshot)`.
-- **Automatic Privacy Scrubbing**: Replaced cosmetic toggle with an `Enforced Safeguard` badge and shield icon.
-- **Appearance & Accessibility**: Confirmed all 8 theme presets, font scaling, contrast, and reduced motion.
-
-#### Track 6: Subscription Tier Truthfulness
-- Verified 4-tier matrix: Guest, Free, Plus, Pro with disabled sandbox checkout.
-- Fixed misleading "(Aira Pro Workspace)" label in Settings to dynamically display the user's active tier workspace (e.g. `Free Workspace`, `Plus Workspace`, `Pro Workspace`).
-
-#### Track 7: Sparkles Icon De-duplication
-- Replaced `<Sparkles>` in Model Selector header with `<Gauge>` and mapped Auto badge glyph to `Gauge`.
-- Replaced `<Sparkles>` on Settings "My Plan & Usage" tab and shortcut button with `<CreditCard>`.
-
-#### Track 8: Documentation & Discovery Card Truthfulness
-- Synchronized `HelpCenterModal.tsx`, `ReleaseNotesModal.tsx`, `LegalViewerModal.tsx`, and `featureDiscovery.ts` with truthful runtime providers and capabilities.
-
-### 3. Verification & Evidence
-- `test/truthful-capabilities-model-architecture.test.ts`: **8/8 PASS**
-- `test/model-router-provider-routing.ts`: **PASS**
-- `test/contracts-entitlements.test.ts`: **21/21 PASS**
-- `test/unified-intelligence-architecture.test.ts`: **6/6 PASS**
-- `test/adversarial-tier5.test.ts`: **30/30 PASS**
-- `test/e2e/entitlements/runner.ts`: **285/285 PASS**
-- `npm run typecheck:client` (`tsc -b`): **PASS (0 errors)**
-- `npm run typecheck:server`: **PASS (0 errors)**
-- `npx vite build`: **PASS (built in 12.8s)**
-- `npm run lint` (`oxlint`): **PASS (0 errors)**
-
-### 4. Operational Guardrails
-- Zero production database schema migrations (locked at 31 migrations).
-- Zero database mutations.
-- Zero payment gateway activations.
-- Pure code-only capability alignment.
+- **`prod-release` (`https://aira-ai-2026.vercel.app`) remains unchanged** at `562e75d40b2bed8bfc8fc03fe88dfa9f475b1213`.
+- **Current Verdict**: **NO-GO / CONDITIONAL** pending exact-SHA deployed staging chat/OAuth acceptance: `.github/workflows/ci.yml` (`staging-deployed`) skips pull requests (`if: github.event_name == 'push' && github.ref == 'refs/heads/staging'`), and Vercel Preview env vars (`DATABASE_URL`, `NEON_AUTH_*`) are not scoped to branch `fix/truthful-capabilities-model-architecture-20261112`. Local + Neon Staging (`cert-pr163-entitlements-20261111` / Staging Neon Auth) verification passed end-to-end.

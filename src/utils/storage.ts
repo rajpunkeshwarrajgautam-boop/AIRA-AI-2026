@@ -34,9 +34,74 @@ export const STORAGE_KEYS = {
   PROJECTS: 'aira_projects_v1',
   ACTIVE_PROJECT: 'aira_active_project_id_v1',
   SETTINGS: 'aira_settings_v1',
+  DEVICE_PREFERENCES: 'aira_device_preferences_v1',
+  LEGACY_SETTINGS_ARCHIVE: 'aira_legacy_settings_archive_v1',
   PINNED_CHATS: 'aira_pinned_chats_v1',
   STORAGE_MIGRATION_VERSION: 'aira_storage_migrated_v2',
 } as const;
+
+export const DEVICE_PREFERENCE_KEYS = [
+  'theme',
+  'aestheticPreset',
+  'reducedMotion',
+  'highContrast',
+  'fontSize',
+  'soundEffects',
+  'autoOpenArtifacts',
+  'streamResponse',
+  'telemetryOptOut',
+  'notificationsEnabled',
+  'announcementsEnabled',
+  'productUpdatesEnabled',
+  'tipsEnabled',
+] as const;
+
+export const ACCOUNT_SETTING_KEYS = [
+  'activeModel',
+  'extendedThinking',
+  'thinkingBudget',
+  'provider',
+  'anthropicApiKey',
+  'openRouterApiKey',
+  'customInstructions',
+  'userName',
+  'email',
+  'userBio',
+  'responseStyle',
+  'persistentMemoryEnabled',
+  'autoConsolidateMemory',
+  'privacyScrubbing',
+  'memoryTokenBudget',
+] as const;
+
+export type DevicePreferenceKey = (typeof DEVICE_PREFERENCE_KEYS)[number];
+export type AccountSettingKey = (typeof ACCOUNT_SETTING_KEYS)[number];
+export type DevicePreferences = Pick<AppSettings, DevicePreferenceKey>;
+export type AccountSettings = Pick<AppSettings, AccountSettingKey>;
+
+export type SettingsOwnerIdentity =
+  | string
+  | { userId?: string | null; email?: string | null }
+  | null
+  | undefined;
+
+interface ScopedAccountSettingsRecord {
+  version: 2;
+  ownerId: string;
+  ownerEmail?: string;
+  migratedFrom?: string;
+  migratedAt?: number;
+  updatedAt: number;
+  data: AccountSettings;
+}
+
+interface QuarantinedLegacySettingsArchive {
+  version: 1;
+  quarantinedAt: number;
+  ownerId?: string;
+  ownerEmail?: string;
+  data: Partial<AccountSettings>;
+}
 
 export const INITIAL_CONVERSATION: Conversation = {
   id: 'welcome-to-aira',
@@ -46,10 +111,11 @@ export const INITIAL_CONVERSATION: Conversation = {
   messages: [],
 };
 
-// In-memory cache for synchronous reads and resilient fallback
+// In-memory cache for synchronous reads and resilient fallback (strictly scoped by owner)
 const inMemoryConversations = new Map<string, Conversation[]>();
 const inMemoryProjects = new Map<string, Project[]>();
-let inMemorySettings: AppSettings | null = null;
+let inMemoryDevicePreferences: DevicePreferences | null = null;
+const inMemoryAccountSettings = new Map<string, ScopedAccountSettingsRecord>();
 
 export interface StorageHealth {
   status: 'healthy' | 'degraded_quota' | 'memory_only';
@@ -458,80 +524,564 @@ export function saveProjects(projects: Project[], userId?: string): void {
   }
 }
 
-export function loadSettings(): AppSettings {
-  if (inMemorySettings) return inMemorySettings;
+interface NormalizedSettingsOwner {
+  userId: string | null;
+  email: string | null;
+  scopeId: string;
+  isGuest: boolean;
+}
 
+function normalizeSettingsOwner(identity?: SettingsOwnerIdentity): NormalizedSettingsOwner {
+  if (typeof identity === 'string') {
+    const trimmed = identity.trim();
+    const isGuest = !trimmed || trimmed === 'guest' || trimmed.startsWith('guest_');
+    return {
+      userId: trimmed && trimmed !== 'guest' ? trimmed : null,
+      email: null,
+      scopeId: trimmed && trimmed !== 'guest' ? trimmed : 'guest',
+      isGuest,
+    };
+  }
+  if (identity && typeof identity === 'object') {
+    const rawId = typeof identity.userId === 'string' ? identity.userId.trim() : '';
+    const rawEmail = typeof identity.email === 'string' ? identity.email.trim().toLowerCase() : '';
+    const isGuest = !rawId || rawId === 'guest' || rawId.startsWith('guest_');
+    return {
+      userId: rawId && rawId !== 'guest' ? rawId : null,
+      email: rawEmail || null,
+      scopeId: rawId && rawId !== 'guest' ? rawId : 'guest',
+      isGuest,
+    };
+  }
+  return { userId: null, email: null, scopeId: 'guest', isGuest: true };
+}
+
+export function getAccountSettingsStorageKey(userId?: string | null): string {
+  const normalized = normalizeSettingsOwner(userId);
+  return normalized.userId
+    ? `aira_account_settings_user_${normalized.userId}`
+    : 'aira_account_settings_guest';
+}
+
+const DEFAULT_DEVICE_PREFERENCES: DevicePreferences = {
+  theme: DEFAULT_SETTINGS.theme,
+  aestheticPreset: DEFAULT_SETTINGS.aestheticPreset,
+  reducedMotion: DEFAULT_SETTINGS.reducedMotion,
+  highContrast: DEFAULT_SETTINGS.highContrast,
+  fontSize: DEFAULT_SETTINGS.fontSize,
+  soundEffects: DEFAULT_SETTINGS.soundEffects,
+  autoOpenArtifacts: DEFAULT_SETTINGS.autoOpenArtifacts,
+  streamResponse: DEFAULT_SETTINGS.streamResponse,
+  telemetryOptOut: DEFAULT_SETTINGS.telemetryOptOut,
+  notificationsEnabled: DEFAULT_SETTINGS.notificationsEnabled,
+  announcementsEnabled: DEFAULT_SETTINGS.announcementsEnabled,
+  productUpdatesEnabled: DEFAULT_SETTINGS.productUpdatesEnabled,
+  tipsEnabled: DEFAULT_SETTINGS.tipsEnabled,
+};
+
+function sanitizeAccountSettings(raw: Partial<AppSettings> | null | undefined): AccountSettings {
+  const merged = raw || {};
+  const thinkingBudget = typeof merged.thinkingBudget === 'number' && Number.isFinite(merged.thinkingBudget)
+    ? Math.min(Math.max(Math.round(merged.thinkingBudget), 1024), 8192)
+    : DEFAULT_SETTINGS.thinkingBudget;
+  return {
+    activeModel: normalizeStoredModelId(merged.activeModel),
+    extendedThinking: Boolean(merged.extendedThinking),
+    thinkingBudget,
+    provider: (merged.provider === 'anthropic' || merged.provider === 'openrouter' || merged.provider === 'simulated')
+      ? merged.provider
+      : DEFAULT_SETTINGS.provider,
+    anthropicApiKey: typeof merged.anthropicApiKey === 'string' ? merged.anthropicApiKey : '',
+    openRouterApiKey: typeof merged.openRouterApiKey === 'string' ? merged.openRouterApiKey : '',
+    customInstructions: typeof merged.customInstructions === 'string' ? merged.customInstructions : '',
+    userName: typeof merged.userName === 'string' ? merged.userName : '',
+    email: typeof merged.email === 'string' ? merged.email : '',
+    userBio: typeof merged.userBio === 'string' ? merged.userBio : '',
+    responseStyle: (
+      merged.responseStyle === 'normal' ||
+      merged.responseStyle === 'concise' ||
+      merged.responseStyle === 'explanatory' ||
+      merged.responseStyle === 'academic' ||
+      merged.responseStyle === 'code-first'
+    ) ? merged.responseStyle : DEFAULT_SETTINGS.responseStyle,
+    persistentMemoryEnabled: merged.persistentMemoryEnabled !== false,
+    autoConsolidateMemory: merged.autoConsolidateMemory !== false,
+    privacyScrubbing: true, // Always enforced
+    memoryTokenBudget: typeof merged.memoryTokenBudget === 'number' && Number.isFinite(merged.memoryTokenBudget)
+      ? Math.min(Math.max(Math.round(merged.memoryTokenBudget), 200), 4000)
+      : DEFAULT_SETTINGS.memoryTokenBudget,
+  };
+}
+
+function pickDevicePreferences(raw: Partial<AppSettings> | null | undefined): DevicePreferences {
+  const src = raw || {};
+  return {
+    theme: (src.theme === 'light' || src.theme === 'dark' || src.theme === 'system')
+      ? src.theme
+      : DEFAULT_DEVICE_PREFERENCES.theme,
+    aestheticPreset: src.aestheticPreset ?? DEFAULT_DEVICE_PREFERENCES.aestheticPreset,
+    reducedMotion: src.reducedMotion ?? DEFAULT_DEVICE_PREFERENCES.reducedMotion,
+    highContrast: src.highContrast ?? DEFAULT_DEVICE_PREFERENCES.highContrast,
+    fontSize: src.fontSize ?? DEFAULT_DEVICE_PREFERENCES.fontSize,
+    soundEffects: src.soundEffects ?? DEFAULT_DEVICE_PREFERENCES.soundEffects,
+    autoOpenArtifacts: src.autoOpenArtifacts ?? DEFAULT_DEVICE_PREFERENCES.autoOpenArtifacts,
+    streamResponse: src.streamResponse ?? DEFAULT_DEVICE_PREFERENCES.streamResponse,
+    telemetryOptOut: src.telemetryOptOut ?? DEFAULT_DEVICE_PREFERENCES.telemetryOptOut,
+    notificationsEnabled: src.notificationsEnabled ?? DEFAULT_DEVICE_PREFERENCES.notificationsEnabled,
+    announcementsEnabled: src.announcementsEnabled ?? DEFAULT_DEVICE_PREFERENCES.announcementsEnabled,
+    productUpdatesEnabled: src.productUpdatesEnabled ?? DEFAULT_DEVICE_PREFERENCES.productUpdatesEnabled,
+    tipsEnabled: src.tipsEnabled ?? DEFAULT_DEVICE_PREFERENCES.tipsEnabled,
+  };
+}
+
+function hasAnyAccountSettingKey(obj: Record<string, unknown>): boolean {
+  return ACCOUNT_SETTING_KEYS.some(key => Object.prototype.hasOwnProperty.call(obj, key));
+}
+
+function isPlaceholderEmail(email?: string | null): boolean {
+  if (!email) return true;
+  const cleaned = email.trim().toLowerCase();
+  return !cleaned || cleaned === 'user@aira.internal' || !cleaned.includes('@');
+}
+
+function writeLocalStorageWithQuotaRetry(key: string, payload: string): boolean {
+  if (typeof localStorage === 'undefined') return false;
   try {
-    if (typeof localStorage !== 'undefined') {
-      const raw = localStorage.getItem(STORAGE_KEYS.SETTINGS);
-      if (raw) {
-        const saved = JSON.parse(raw);
-        const merged = { ...DEFAULT_SETTINGS, ...saved };
-        const finalSettings = { ...merged, activeModel: normalizeStoredModelId(merged.activeModel) };
-        inMemorySettings = finalSettings;
-        return finalSettings;
+    localStorage.setItem(key, payload);
+    storageHealthState.status = 'healthy';
+    return true;
+  } catch {
+    evictLegacyLocalStorageBlobs();
+    try {
+      localStorage.setItem(key, payload);
+      storageHealthState.lastQuotaErrorAt = Date.now();
+      storageHealthState.status = 'healthy';
+      return true;
+    } catch {
+      storageHealthState.lastQuotaErrorAt = Date.now();
+      storageHealthState.status = 'degraded_quota';
+      return false;
+    }
+  }
+}
+
+let lastSettingsQuotaFallbackScope: string | null = null;
+let lastDevicePrefsQuotaFallback = false;
+
+function quarantineLegacyGlobalSettingsIfPresent(): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    const rawLegacy = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+    if (!rawLegacy) return;
+    const parsed = JSON.parse(rawLegacy);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+    if (!hasAnyAccountSettingKey(parsed as Record<string, unknown>)) return;
+
+    const devicePrefs = pickDevicePreferences(parsed);
+    if (!localStorage.getItem(STORAGE_KEYS.DEVICE_PREFERENCES)) {
+      const serializedDevice = JSON.stringify(devicePrefs);
+      if (writeLocalStorageWithQuotaRetry(STORAGE_KEYS.DEVICE_PREFERENCES, serializedDevice)) {
+        const verifiedDevice = localStorage.getItem(STORAGE_KEYS.DEVICE_PREFERENCES);
+        if (!verifiedDevice || JSON.stringify(JSON.parse(verifiedDevice)) !== serializedDevice) {
+          return;
+        }
       }
+    }
+
+    const accountFields = sanitizeAccountSettings(parsed);
+    const legacyEmail = typeof parsed.email === 'string' && !isPlaceholderEmail(parsed.email)
+      ? parsed.email.trim().toLowerCase()
+      : undefined;
+    const legacyOwnerId = typeof parsed.ownerId === 'string' && parsed.ownerId.trim()
+      ? parsed.ownerId.trim()
+      : (typeof parsed.userId === 'string' && parsed.userId.trim() ? parsed.userId.trim() : undefined);
+
+    if (!localStorage.getItem(STORAGE_KEYS.LEGACY_SETTINGS_ARCHIVE)) {
+      const archive: QuarantinedLegacySettingsArchive = {
+        version: 1,
+        quarantinedAt: Date.now(),
+        ...(legacyOwnerId ? { ownerId: legacyOwnerId } : {}),
+        ...(legacyEmail ? { ownerEmail: legacyEmail } : {}),
+        data: accountFields,
+      };
+      const serializedArchive = JSON.stringify(archive);
+      if (!writeLocalStorageWithQuotaRetry(STORAGE_KEYS.LEGACY_SETTINGS_ARCHIVE, serializedArchive)) {
+        return;
+      }
+      const readBack = localStorage.getItem(STORAGE_KEYS.LEGACY_SETTINGS_ARCHIVE);
+      if (!readBack || JSON.stringify(JSON.parse(readBack)) !== serializedArchive) {
+        return;
+      }
+    }
+
+    // Both device prefs and legacy account archive are verified; scrub account fields from global key.
+    writeLocalStorageWithQuotaRetry(STORAGE_KEYS.SETTINGS, JSON.stringify(devicePrefs));
+  } catch {
+    // Non-blocking: preserve existing data rather than discarding on corrupt JSON
+  }
+}
+
+function doesArchiveMatchOwner(archive: QuarantinedLegacySettingsArchive, owner: NormalizedSettingsOwner): boolean {
+  const archiveOwnerId = typeof archive.ownerId === 'string' ? archive.ownerId.trim() : '';
+  const archiveEmail = typeof archive.ownerEmail === 'string' && !isPlaceholderEmail(archive.ownerEmail)
+    ? archive.ownerEmail.trim().toLowerCase()
+    : '';
+
+  if (owner.isGuest) {
+    // Unowned anonymous/guest legacy fixtures may only migrate to guest when free of external identity claims.
+    return !archiveOwnerId && !archiveEmail;
+  }
+
+  if (!owner.userId) return false;
+  if (archiveOwnerId) {
+    return archiveOwnerId === owner.userId;
+  }
+  if (archiveEmail && owner.email) {
+    return archiveEmail === owner.email;
+  }
+  return false;
+}
+
+function tryClaimQuarantinedArchive(owner: NormalizedSettingsOwner): ScopedAccountSettingsRecord | null {
+  if (typeof localStorage === 'undefined') return null;
+  const scopedKey = getAccountSettingsStorageKey(owner.userId);
+  if (localStorage.getItem(scopedKey)) {
+    return null;
+  }
+  try {
+    const rawArchive = localStorage.getItem(STORAGE_KEYS.LEGACY_SETTINGS_ARCHIVE);
+    if (!rawArchive) return null;
+    const archive = JSON.parse(rawArchive) as QuarantinedLegacySettingsArchive;
+    if (!archive || typeof archive !== 'object' || !archive.data) return null;
+    if (!doesArchiveMatchOwner(archive, owner)) {
+      return null;
+    }
+
+    const migratedRecord: ScopedAccountSettingsRecord = {
+      version: 2,
+      ownerId: owner.scopeId,
+      ...(owner.email ? { ownerEmail: owner.email } : {}),
+      migratedFrom: STORAGE_KEYS.SETTINGS,
+      migratedAt: Date.now(),
+      updatedAt: Date.now(),
+      data: sanitizeAccountSettings(archive.data),
+    };
+    const serialized = JSON.stringify(migratedRecord);
+    if (!writeLocalStorageWithQuotaRetry(scopedKey, serialized)) {
+      return null;
+    }
+    const readBackRaw = localStorage.getItem(scopedKey);
+    if (!readBackRaw) return null;
+    const readBack = JSON.parse(readBackRaw) as ScopedAccountSettingsRecord;
+    if (
+      readBack.ownerId !== owner.scopeId ||
+      JSON.stringify(readBack.data) !== JSON.stringify(migratedRecord.data)
+    ) {
+      return null;
+    }
+
+    // Verified read-back: remove legacy quarantine archive once claimed by its rightful owner
+    localStorage.removeItem(STORAGE_KEYS.LEGACY_SETTINGS_ARCHIVE);
+    if (isIndexedDbSupported()) {
+      void idbSet(STORES.SETTINGS, scopedKey, migratedRecord).catch(() => {});
+    }
+    return readBack;
+  } catch {
+    return null;
+  }
+}
+
+export function loadDevicePreferences(): DevicePreferences {
+  quarantineLegacyGlobalSettingsIfPresent();
+
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const rawDevice = localStorage.getItem(STORAGE_KEYS.DEVICE_PREFERENCES);
+      if (rawDevice) {
+        const parsed = pickDevicePreferences(JSON.parse(rawDevice));
+        inMemoryDevicePreferences = parsed;
+        return { ...parsed };
+      }
+      const rawLegacy = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+      if (rawLegacy) {
+        const parsed = pickDevicePreferences(JSON.parse(rawLegacy));
+        inMemoryDevicePreferences = parsed;
+        return { ...parsed };
+      }
+    } catch {
+      // Non-blocking
+    }
+    if (lastDevicePrefsQuotaFallback && inMemoryDevicePreferences) {
+      return { ...inMemoryDevicePreferences };
+    }
+  } else if (inMemoryDevicePreferences) {
+    return { ...inMemoryDevicePreferences };
+  }
+
+  return { ...DEFAULT_DEVICE_PREFERENCES };
+}
+
+export function saveDevicePreferences(prefs: DevicePreferences): void {
+  const clean = pickDevicePreferences(prefs);
+  inMemoryDevicePreferences = clean;
+  const serialized = JSON.stringify(clean);
+
+  if (isIndexedDbSupported()) {
+    void idbSet(STORES.SETTINGS, 'device_preferences', clean).catch(() => {});
+  }
+
+  if (typeof localStorage !== 'undefined') {
+    // Only scrub legacy global key if no unquarantined account data sits inside it
+    quarantineLegacyGlobalSettingsIfPresent();
+    const okDevice = writeLocalStorageWithQuotaRetry(STORAGE_KEYS.DEVICE_PREFERENCES, serialized);
+    const okCompat = writeLocalStorageWithQuotaRetry(STORAGE_KEYS.SETTINGS, serialized);
+    lastDevicePrefsQuotaFallback = !okDevice && !okCompat;
+  }
+}
+
+export function loadSettings(identity?: SettingsOwnerIdentity): AppSettings {
+  const owner = normalizeSettingsOwner(identity);
+  const devicePrefs = loadDevicePreferences();
+  const scopedKey = getAccountSettingsStorageKey(owner.userId);
+
+  let accountData: AccountSettings | null = null;
+
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const rawScoped = localStorage.getItem(scopedKey);
+      if (rawScoped) {
+        const parsed = JSON.parse(rawScoped);
+        if (parsed && parsed.version === 2 && parsed.data) {
+          if (parsed.ownerId === owner.scopeId) {
+            accountData = sanitizeAccountSettings(parsed.data);
+            inMemoryAccountSettings.set(owner.scopeId, {
+              ...parsed,
+              data: accountData,
+            });
+          }
+        } else if (parsed && typeof parsed === 'object') {
+          accountData = sanitizeAccountSettings(parsed);
+        }
+      }
+    } catch {
+      // Non-blocking
+    }
+
+    if (!accountData) {
+      const claimed = tryClaimQuarantinedArchive(owner);
+      if (claimed) {
+        accountData = claimed.data;
+        inMemoryAccountSettings.set(owner.scopeId, claimed);
+      }
+    }
+
+    if (!accountData && lastSettingsQuotaFallbackScope === owner.scopeId) {
+      const cached = inMemoryAccountSettings.get(owner.scopeId);
+      if (cached && cached.ownerId === owner.scopeId) {
+        accountData = cached.data;
+      }
+    }
+  } else {
+    const cached = inMemoryAccountSettings.get(owner.scopeId);
+    if (cached && cached.ownerId === owner.scopeId) {
+      accountData = cached.data;
+    }
+  }
+
+  const finalAccount = accountData || sanitizeAccountSettings(DEFAULT_SETTINGS);
+  return {
+    ...devicePrefs,
+    ...finalAccount,
+    activeModel: normalizeStoredModelId(finalAccount.activeModel),
+  };
+}
+
+export function saveSettings(settings: AppSettings, identity?: SettingsOwnerIdentity): void {
+  const owner = normalizeSettingsOwner(identity);
+  const devicePrefs = pickDevicePreferences(settings);
+  const accountData = sanitizeAccountSettings(settings);
+  const scopedKey = getAccountSettingsStorageKey(owner.userId);
+
+  const record: ScopedAccountSettingsRecord = {
+    version: 2,
+    ownerId: owner.scopeId,
+    ...(owner.email ? { ownerEmail: owner.email } : {}),
+    updatedAt: Date.now(),
+    data: accountData,
+  };
+
+  saveDevicePreferences(devicePrefs);
+  inMemoryAccountSettings.set(owner.scopeId, record);
+
+  if (isIndexedDbSupported()) {
+    void idbSet(STORES.SETTINGS, scopedKey, record).catch(() => {});
+  }
+
+  if (typeof localStorage !== 'undefined') {
+    const okScoped = writeLocalStorageWithQuotaRetry(scopedKey, JSON.stringify(record));
+    lastSettingsQuotaFallbackScope = okScoped ? null : owner.scopeId;
+  }
+}
+
+export async function hydrateSettingsFromIndexedDb(identity?: SettingsOwnerIdentity): Promise<AppSettings | null> {
+  if (!isIndexedDbSupported()) return null;
+  const owner = normalizeSettingsOwner(identity);
+  const scopedKey = getAccountSettingsStorageKey(owner.userId);
+
+  let devicePrefs = loadDevicePreferences();
+  try {
+    const idbDevice = await idbGet<Partial<AppSettings>>(STORES.SETTINGS, 'device_preferences');
+    if (idbDevice && typeof idbDevice === 'object') {
+      devicePrefs = pickDevicePreferences(idbDevice);
+      inMemoryDevicePreferences = devicePrefs;
     }
   } catch {
     // Non-blocking
   }
 
-  inMemorySettings = DEFAULT_SETTINGS;
-  return DEFAULT_SETTINGS;
-}
-
-export function saveSettings(settings: AppSettings): void {
-  inMemorySettings = settings;
-
-  if (isIndexedDbSupported()) {
-    void idbSet(STORES.SETTINGS, 'settings', settings).catch(() => {
-      // Non-blocking
-    });
+  let accountData: AccountSettings | null = null;
+  try {
+    const idbScoped = await idbGet<ScopedAccountSettingsRecord>(STORES.SETTINGS, scopedKey);
+    if (idbScoped && idbScoped.version === 2 && idbScoped.ownerId === owner.scopeId && idbScoped.data) {
+      accountData = sanitizeAccountSettings(idbScoped.data);
+      inMemoryAccountSettings.set(owner.scopeId, { ...idbScoped, data: accountData });
+    }
+  } catch {
+    // Non-blocking
   }
 
-  if (typeof localStorage !== 'undefined') {
+  if (!accountData) {
     try {
-      localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
-    } catch (e: unknown) {
-      // QuotaExceededError on aira_settings_v1:
-      // Clear legacy storage blobs (which are safely in memory & IndexedDB) and retry once
-      evictLegacyLocalStorageBlobs();
-      try {
-        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
-      } catch {
-        // If still blocked, settings remain safe in inMemorySettings and IndexedDB
-        storageHealthState.lastQuotaErrorAt = Date.now();
-        storageHealthState.status = 'degraded_quota';
+      const legacyIdb = await idbGet<any>(STORES.SETTINGS, 'settings');
+      if (legacyIdb && typeof legacyIdb === 'object' && hasAnyAccountSettingKey(legacyIdb)) {
+        const archive: QuarantinedLegacySettingsArchive = {
+          version: 1,
+          quarantinedAt: Date.now(),
+          ownerId: typeof legacyIdb.ownerId === 'string' ? legacyIdb.ownerId : undefined,
+          ownerEmail: typeof legacyIdb.email === 'string' && !isPlaceholderEmail(legacyIdb.email)
+            ? legacyIdb.email.trim().toLowerCase()
+            : undefined,
+          data: sanitizeAccountSettings(legacyIdb),
+        };
+        if (doesArchiveMatchOwner(archive, owner)) {
+          accountData = sanitizeAccountSettings(archive.data);
+          const migrated: ScopedAccountSettingsRecord = {
+            version: 2,
+            ownerId: owner.scopeId,
+            ...(owner.email ? { ownerEmail: owner.email } : {}),
+            migratedFrom: 'idb:settings',
+            migratedAt: Date.now(),
+            updatedAt: Date.now(),
+            data: accountData,
+          };
+          await idbSet(STORES.SETTINGS, scopedKey, migrated);
+          const readBack = await idbGet<ScopedAccountSettingsRecord>(STORES.SETTINGS, scopedKey);
+          if (readBack && JSON.stringify(readBack.data) === JSON.stringify(migrated.data)) {
+            await idbSet(STORES.SETTINGS, 'settings', pickDevicePreferences(legacyIdb));
+          }
+        }
       }
+    } catch {
+      // Non-blocking
     }
   }
+
+  if (!accountData) return null;
+  return { ...devicePrefs, ...accountData };
+}
+
+export function clearAccountSettings(identity?: SettingsOwnerIdentity): void {
+  const owner = normalizeSettingsOwner(identity);
+  const scopedKey = getAccountSettingsStorageKey(owner.userId);
+  inMemoryAccountSettings.delete(owner.scopeId);
+  if (lastSettingsQuotaFallbackScope === owner.scopeId) {
+    lastSettingsQuotaFallbackScope = null;
+  }
+  if (typeof localStorage !== 'undefined') {
+    try {
+      localStorage.removeItem(scopedKey);
+    } catch {
+      // Non-blocking
+    }
+  }
+  if (isIndexedDbSupported()) {
+    void idbSet(STORES.SETTINGS, scopedKey, null).catch(() => {});
+  }
+}
+
+export function resetSettingsCacheForTesting(): void {
+  inMemoryDevicePreferences = null;
+  inMemoryAccountSettings.clear();
+  lastSettingsQuotaFallbackScope = null;
+  lastDevicePrefsQuotaFallback = false;
 }
 
 /**
- * Emergency disaster recovery export: creates a complete, sanitized JSON dump
- * of in-memory and persisted conversations, settings, and projects.
+ * Account-scoped export: exports strictly the specified owner's
+ * conversations, projects, and redacted settings (never leaks foreign accounts).
  */
-export function exportAllStorageData(): string {
-  const allConversations: Record<string, Conversation[]> = {};
-  inMemoryConversations.forEach((convs, key) => {
-    allConversations[key] = convs;
-  });
+export function exportAccountStorageData(identity?: SettingsOwnerIdentity): string {
+  const owner = normalizeSettingsOwner(identity);
+  const convKey = getConversationsStorageKey(owner.userId || undefined);
+  const projKey = getProjectsStorageKey(owner.userId || undefined);
 
-  const allProjects: Record<string, Project[]> = {};
-  inMemoryProjects.forEach((projs, key) => {
-    allProjects[key] = projs;
-  });
-
-  const defaultProjects = inMemoryProjects.get(STORAGE_KEYS.PROJECTS) ||
-    (inMemoryProjects.size > 0 ? Array.from(inMemoryProjects.values())[0] : []);
+  const scopedConversations = inMemoryConversations.get(convKey) || loadConversations(owner.userId || undefined);
+  const scopedProjects = inMemoryProjects.get(projKey) || loadProjects(owner.userId || undefined);
+  const scopedSettings = loadSettings(owner);
 
   const payload = {
     exportVersion: 2,
     timestamp: Date.now(),
-    conversations: allConversations,
-    projects: defaultProjects,
-    projectsByUser: allProjects,
-    settings: inMemorySettings || DEFAULT_SETTINGS,
+    ownerScope: owner.scopeId,
+    conversations: { [convKey]: scopedConversations },
+    projects: scopedProjects,
+    projectsByUser: { [projKey]: scopedProjects },
+    settings: {
+      ...scopedSettings,
+      anthropicApiKey: scopedSettings.anthropicApiKey ? '[REDACTED]' : '',
+      openRouterApiKey: scopedSettings.openRouterApiKey ? '[REDACTED]' : '',
+    },
+  };
+
+  return JSON.stringify(payload, null, 2);
+}
+
+/**
+ * Disaster recovery export. When an owner identity is provided, restricts the
+ * export strictly to that account; when omitted (explicit device-level recovery),
+ * exports partitioned conversation/project maps plus guest/device settings with
+ * API keys redacted and zero foreign user personalization keys.
+ */
+export function exportAllStorageData(identity?: SettingsOwnerIdentity): string {
+  if (identity !== undefined) {
+    return exportAccountStorageData(identity);
+  }
+
+  const guestProjKey = getProjectsStorageKey(undefined);
+  const guestProjects = inMemoryProjects.get(guestProjKey) || loadProjects(undefined);
+  const guestConvKey = getConversationsStorageKey(undefined);
+  const conversationsMap =
+    inMemoryConversations.size > 0
+      ? Object.fromEntries(inMemoryConversations.entries())
+      : { [guestConvKey]: loadConversations(undefined) };
+  const projectsByUserMap =
+    inMemoryProjects.size > 0
+      ? Object.fromEntries(inMemoryProjects.entries())
+      : { [guestProjKey]: guestProjects };
+  const guestSettings = loadSettings(null);
+
+  const payload = {
+    exportVersion: 2,
+    timestamp: Date.now(),
+    ownerScope: 'device_recovery',
+    conversations: conversationsMap,
+    projects: guestProjects,
+    projectsByUser: projectsByUserMap,
+    settings: {
+      ...guestSettings,
+      anthropicApiKey: guestSettings.anthropicApiKey ? '[REDACTED]' : '',
+      openRouterApiKey: guestSettings.openRouterApiKey ? '[REDACTED]' : '',
+    },
   };
 
   return JSON.stringify(payload, null, 2);

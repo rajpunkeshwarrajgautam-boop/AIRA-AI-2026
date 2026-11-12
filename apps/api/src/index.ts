@@ -22,10 +22,13 @@ import {
   requirePlanTier,
   requireEntitledModel,
   requireToolEntitlement,
-  requireCapability
+  requireCapability,
+  EntitlementServiceUnavailableError
 } from './middleware/entitlement-guard.js';
 import {
   ModelRouter,
+  PlanRestrictionError,
+  resolveNvidiaModel,
   withInferencePrincipal,
   withInferenceReservation,
   ProviderHealthTracker,
@@ -337,7 +340,7 @@ app.get('/api/ready/providers', async (_req: Request, res: Response) => {
     supportedProviders: {
       groq: { configured: Boolean(process.env.GROQ_API_KEY) },
       gemini: { configured: Boolean(process.env.GEMINI_API_KEY) },
-      nvidia: { configured: Boolean(process.env.NVIDIA_API_KEY), deepModel: 'nvidia/nemotron-3-super-120b-a12b' },
+      nvidia: { configured: Boolean(process.env.NVIDIA_API_KEY), deepModel: resolveNvidiaModel('aira-deep'), proModel: resolveNvidiaModel('aira-pro') },
       cerebras: { configured: Boolean(process.env.CEREBRAS_API_KEY) },
       together: { configured: Boolean(process.env.TOGETHER_API_KEY) },
       fireworks: { configured: Boolean(process.env.FIREWORKS_API_KEY) },
@@ -351,6 +354,28 @@ app.get('/api/ready/providers', async (_req: Request, res: Response) => {
       isDegraded: fastRoute.isDegraded
     }
   };
+  if (process.env.NVIDIA_API_KEY) {
+    try {
+      const nvKey = process.env.NVIDIA_API_KEY.trim().replace(/^["']|["']$/g, '');
+      const resp = await fetch('https://integrate.api.nvidia.com/v1/models', {
+        headers: { Authorization: `Bearer ${nvKey}` }
+      });
+      const data: any = await resp.json().catch(() => ({}));
+      const modelIds: string[] = Array.isArray(data.data) ? data.data.map((m: any) => m.id) : [];
+      const activeDeep = resolveNvidiaModel('aira-deep');
+      result.nvidia = {
+        status: resp.status,
+        hasActiveModel: modelIds.includes(activeDeep),
+        activeModel: activeDeep,
+        modelCount: modelIds.length,
+        error: !resp.ok ? data : undefined
+      };
+    } catch (e: any) {
+      result.nvidia = { error: e.message };
+    }
+  } else {
+    result.nvidia = { configured: false };
+  }
   if (process.env.GROQ_API_KEY) {
     try {
       const groqKey = process.env.GROQ_API_KEY.trim().replace(/^["']|["']$/g, '');
@@ -785,6 +810,9 @@ const agentRuntime = new AgentRuntime(
   undefined,
   toolGateway
 );
+agentRuntime.setEntitlementResolver(async (principalId) => (
+  principalId.startsWith('guest_') ? 'guest' : resolveCurrentCommercialTier(principalId)
+));
 agentRuntime.getAutonomousEngine().setEntitlementResolver(resolveCurrentCommercialTier);
 const automationEngine = new AutomationEngine(agentRuntime, autoRepo, autoRunRepo);
 agentRuntime.setAutomationEngine(automationEngine);
@@ -1323,9 +1351,32 @@ function isRunOwnedByPrincipal(
 app.post('/api/runs', async (req: Request, res: Response) => {
   try {
     const parsed = CreateRunRequestSchema.parse(req.body);
-    const run = await agentRuntime.createAndExecuteRun(parsed, req.principal!);
+    const tier = await resolveCallerTier(req);
+    const requestedModel = normalizeModelIdentifier(parsed.modelPolicy?.model);
+    if (requestedModel !== 'mock-deterministic' && !isModelAllowedForTier(requestedModel, tier)) {
+      const requiredTier = isModelAllowedForTier(requestedModel, 'plus') ? 'plus' : 'pro';
+      return res.status(403).json({
+        error: 'PLAN_MODEL_RESTRICTED',
+        message: `Model '${requestedModel}' requires higher plan tier`,
+        callerTier: tier,
+        requiredTier,
+        allowedModels: PLAN_MODEL_ALLOWLIST[tier] || []
+      });
+    }
+    const run = await agentRuntime.createAndExecuteRun(parsed, req.principal!, { callerTier: tier });
     res.status(201).json(run);
   } catch (err: any) {
+    if (err instanceof PlanRestrictionError) {
+      return res.status(403).json({
+        error: err.code,
+        message: err.message,
+        callerTier: err.callerTier,
+        requiredTier: err.requiredTier
+      });
+    }
+    if (err instanceof EntitlementServiceUnavailableError) {
+      return res.status(503).json({ error: err.code, message: err.message });
+    }
     res.status(400).json({ error: err.message || 'Invalid run creation payload.' });
   }
 });
@@ -1890,6 +1941,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     }
 
     quotaSettled = false;
+    let shouldConsumeReasoningBoost = false;
 
     const settleQuotaOnce = async () => {
       if (chatReservation && !quotaSettled) {
@@ -1899,7 +1951,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
           quotaSettlementPromise = (async () => {
             const newlySettled = await commercialBillingService.settleStandardChat(chatReservation.reservationToken);
             quotaSettled = true;
-            if (newlySettled && (extendedThinking || model === 'aira-auto')) {
+            if (newlySettled && shouldConsumeReasoningBoost) {
               await commercialBillingService.tryConsumeReasoningBoost(principalId).catch(() => false);
             }
           })().catch((settleErr) => {
@@ -2011,11 +2063,21 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       headersFlushed = true;
     }
 
+    const trimmedSystemPrompt = typeof systemPrompt === 'string' ? systemPrompt.trim() : '';
+    const trimmedSubgraph = typeof contextSubgraph === 'string' ? contextSubgraph.trim() : '';
+    const mergedSystemPrompt = (
+      trimmedSystemPrompt &&
+      trimmedSubgraph &&
+      trimmedSystemPrompt.includes(trimmedSubgraph)
+    )
+      ? trimmedSystemPrompt
+      : [trimmedSystemPrompt, trimmedSubgraph].filter(Boolean).join('\n\n');
+
     const run = await withInferenceReservation(modelRouter.capacityGuard, admission, () => agentRuntime.createRun({
       prompt: promptText,
       conversationId: conversationId || undefined,
       attachments: Array.isArray(attachments) ? attachments : undefined,
-      systemPrompt: (systemPrompt || '') + (contextSubgraph ? `\n\n${contextSubgraph}` : ''),
+      systemPrompt: mergedSystemPrompt,
       context: { history: effectiveHistory },
       intent: (typeof intent === 'string' && intent.trim()) ? intent.trim() as any : undefined,
       modelPolicy: {
@@ -2023,7 +2085,8 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         extendedThinking: Boolean(extendedThinking),
         reasoningBudget: typeof thinkingBudget === 'number' ? Math.min(Math.max(thinkingBudget, 1024), 8192) : (typeof reasoningBudget === 'number' ? reasoningBudget : undefined),
       }
-    }, req.principal!), clientAbort.signal);
+    }, req.principal!, { callerTier: tier }), clientAbort.signal);
+    shouldConsumeReasoningBoost = Boolean(run.modelPolicy?.extendedThinking);
     if (clientAbort.signal.aborted) {
       await releaseQuotaIfUnused();
       await admission.permit?.release();

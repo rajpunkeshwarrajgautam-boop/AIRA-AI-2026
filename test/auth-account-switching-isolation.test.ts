@@ -324,7 +324,7 @@ async function main() {
     assert.equal(await page.getByText(tokenA).count(), 0, 'Guest DOM must not show Account A data');
     assert.equal(await page.getByText(tokenB).count(), 0, 'Guest DOM must not show Account B data');
     const guestFooter = page.locator('[data-testid="sidebar-footer"]');
-    await guestFooter.getByText('Guest Workspace').waitFor({ state: 'visible', timeout: 10000 });
+    await guestFooter.getByText('Guest Workspace').first().waitFor({ state: 'visible', timeout: 10000 });
     console.log('  ✓ Guest state verified: Clean workspace with zero account data visible');
 
     // Guest workspace must not see Account A projects

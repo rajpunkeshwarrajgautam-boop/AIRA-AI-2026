@@ -173,7 +173,7 @@ export const LegalViewerModal: React.FC<LegalViewerModalProps> = ({
                   5. Quotas & Subscriptions
                 </h3>
                 <p>
-                  Access to inference models and reasoning budgets is governed by your active account tier (Free, Pro, or Enterprise). Quotas are non-transferable and subject to our fair usage and capacity admission policies.
+                  Access to inference models and reasoning budgets is governed by your active account tier (Guest, Free, Plus, or Pro). Quotas are non-transferable and subject to our fair usage and capacity admission policies.
                 </p>
               </div>
             </div>

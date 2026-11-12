@@ -46,10 +46,24 @@ async function postChatStream(body: unknown, signal?: AbortSignal): Promise<Resp
 import { createStreamingArtifactDetector } from './artifactParser';
 import { createStreamingArtifactReconciler, createStreamingFenceArtifactDetector } from './streamingArtifactParser';
 
+export const PERSONALIZATION_BOUNDS = {
+  MAX_BIO_CHARS: 500,
+  MAX_CUSTOM_INSTRUCTIONS_CHARS: 2000,
+  MAX_RUNTIME_DIRECTIVE_CHARS: 2000,
+} as const;
+
+function boundText(value: string | undefined, maxChars: number): string {
+  if (!value || typeof value !== 'string') return '';
+  const normalized = value.trim();
+  if (!normalized) return '';
+  if (normalized.length <= maxChars) return normalized;
+  return normalized.slice(0, maxChars).trimEnd() + '... [truncated]';
+}
+
 export function composeSystemPrompt(settings: AppSettings, customPrompt?: string): string {
   const parts: string[] = [];
 
-  // 1. Response Style Directive
+  // 1. Response Style Directive (Platform Formatting Preset)
   const style = settings.responseStyle || 'normal';
   switch (style) {
     case 'concise':
@@ -70,19 +84,24 @@ export function composeSystemPrompt(settings: AppSettings, customPrompt?: string
       break;
   }
 
-  // 2. User Bio / Background (if provided)
-  if (settings.userBio && settings.userBio.trim()) {
-    parts.push(`User Profile Context: ${settings.userBio.trim()}`);
+  // 2. Workspace / Caller Mode Directive (Distinct from user custom instructions; deduplicated)
+  const boundedCustomPrompt = boundText(customPrompt, PERSONALIZATION_BOUNDS.MAX_RUNTIME_DIRECTIVE_CHARS);
+
+  // 3. Account-Scoped User Profile Context (Bounded; never leaks across identities)
+  const boundedBio = boundText(settings.userBio, PERSONALIZATION_BOUNDS.MAX_BIO_CHARS);
+  if (boundedBio) {
+    parts.push(`User Profile Context: ${boundedBio}`);
   }
 
-  // 3. User Custom Instructions (if provided)
-  if (settings.customInstructions && settings.customInstructions.trim()) {
-    parts.push(`User Custom Instructions: ${settings.customInstructions.trim()}`);
+  // 4. Account-Scoped User Custom Instructions (Bounded; subject to AIRA invariant precedence)
+  const boundedInstructions = boundText(settings.customInstructions, PERSONALIZATION_BOUNDS.MAX_CUSTOM_INSTRUCTIONS_CHARS);
+  if (boundedInstructions) {
+    parts.push(`User Custom Instructions: ${boundedInstructions}`);
   }
 
-  // 4. Caller-provided custom prompt (e.g. project instructions)
-  if (customPrompt && customPrompt.trim()) {
-    parts.push(customPrompt.trim());
+  // 5. Mode / Runtime Directive (Only if non-empty and not already present)
+  if (boundedCustomPrompt && boundedCustomPrompt !== boundedInstructions) {
+    parts.push(boundedCustomPrompt);
   }
 
   return parts.join('\n\n');
@@ -100,6 +119,7 @@ export async function streamAIResponse(
   intent?: string,
   signal?: AbortSignal,
   reconcileArtifacts = false,
+  modeDirective?: string,
 ): Promise<void> {
   const isThinking = Boolean(
     settings.extendedThinking && (
@@ -222,7 +242,16 @@ export async function streamAIResponse(
 
   // 1. Try Backend SSE Streaming Server (/api/chat/stream)
   try {
-    const assembledSystemPrompt = composeSystemPrompt(settings);
+    const assembledSystemPrompt = composeSystemPrompt(settings, modeDirective);
+    // Avoid duplicating project context if it was accidentally included in customPrompt or systemPrompt
+    const trimmedContextSubgraph = enrichedContext.trim();
+    const dedupedContextSubgraph = (
+      trimmedContextSubgraph &&
+      assembledSystemPrompt &&
+      assembledSystemPrompt.includes(trimmedContextSubgraph)
+    )
+      ? ''
+      : trimmedContextSubgraph;
     const backendRes = await postChatStream({
       prompt,
       history,
@@ -237,7 +266,7 @@ export async function streamAIResponse(
         size: a.size,
         content: a.content || ''
       })),
-      contextSubgraph: enrichedContext,
+      contextSubgraph: dedupedContextSubgraph,
       conversationId,
       intent: intent || undefined
     }, signal);

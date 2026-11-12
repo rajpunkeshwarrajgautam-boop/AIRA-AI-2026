@@ -54,7 +54,7 @@ export const ReleaseNotesModal: React.FC<ReleaseNotesModalProps> = ({
       summary: 'Major platform upgrade introducing dual-mode Adaptive Workspaces (Chat vs. Agent) and deep reasoning budget controls.',
       highlights: [
         'Adaptive Workspace switcher: conversational reasoning vs. autonomous agent execution pipelines.',
-        'Extended Thinking budget sliders calibrated from 1,024 up to 8,192 reasoning tokens.',
+        'Token ceiling sliders configurable from 1,024 up to 8,192 tokens aligned to runtime policy bounds.',
         'Multi-provider failover routing connecting Groq LPU, Google Gemini, and NVIDIA NIM.'
       ],
       features: [
@@ -88,7 +88,7 @@ export const ReleaseNotesModal: React.FC<ReleaseNotesModalProps> = ({
       summary: 'Initial commercial foundation of AIRA AI 2026 with enterprise authentication and multi-tier subscription quotas.',
       highlights: [
         'NeonAuth multi-tenant authentication with OAuth, social providers, and durable session validation.',
-        'Commercial tier entitlements for Free, Pro, and Enterprise accounts with INR/USD currency support.',
+        'Commercial tier entitlements for Guest, Free, Plus, and Pro accounts with INR/USD currency support.',
         'Isolated Builder Agent environment with sandboxed execution containers.'
       ],
       features: [

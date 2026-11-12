@@ -2,7 +2,8 @@ import { z } from 'zod';
 import {
   VERIFIED_MODEL_REGISTRY,
   VERIFIED_PLAN_MODEL_ALLOWLIST,
-  type ModelCapabilityDescriptor
+  type ModelCapabilityDescriptor,
+  type ReasoningControlMode
 } from './model-registry.js';
 
 // ==========================================
@@ -307,7 +308,7 @@ export function isModelAllowedForTier(model: string, tier: PlanTier): boolean {
   return Array.isArray(allowed) && allowed.includes(canonical);
 }
 
-export { VERIFIED_MODEL_REGISTRY, VERIFIED_PLAN_MODEL_ALLOWLIST, type ModelCapabilityDescriptor };
+export { VERIFIED_MODEL_REGISTRY, VERIFIED_PLAN_MODEL_ALLOWLIST, type ModelCapabilityDescriptor, type ReasoningControlMode };
 
 export function isFeatureAllowedForTier(feature: string, tier: PlanTier): boolean {
   if (!feature || !tier || typeof feature !== 'string' || typeof tier !== 'string') {

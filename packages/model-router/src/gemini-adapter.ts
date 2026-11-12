@@ -25,6 +25,9 @@ export interface GeminiRequestPayload {
     temperature?: number;
     maxOutputTokens?: number;
     topP?: number;
+    thinkingConfig?: {
+      thinkingBudget: number;
+    };
   };
   safetySettings?: Array<{
     category: string;
@@ -72,7 +75,7 @@ export class GeminiAdapter implements ModelAdapter {
 
   public formatRequestPayload(
     messages: ChatMessageInput[],
-    policy: { model?: string; temperature?: number; maxTokens?: number }
+    policy: { model?: string; temperature?: number; maxTokens?: number; extendedThinking?: boolean; reasoningBudget?: number }
   ): GeminiRequestPayload {
     const rawContents: GeminiContent[] = [];
     const systemParts: { text: string }[] = [];
@@ -130,6 +133,20 @@ export class GeminiAdapter implements ModelAdapter {
         { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' }
       ]
     };
+
+    const targetModel = (policy.model || this.modelName || '').toLowerCase();
+    const isThinkingCapableGemini = (targetModel.startsWith('gemini-2.5-pro') || targetModel.startsWith('gemini-2.5-flash')) &&
+      !targetModel.includes('lite');
+    if (
+      policy.extendedThinking &&
+      isThinkingCapableGemini &&
+      typeof policy.reasoningBudget === 'number' &&
+      policy.reasoningBudget >= 1024
+    ) {
+      payload.generationConfig.thinkingConfig = {
+        thinkingBudget: Math.min(Math.max(Math.round(policy.reasoningBudget), 1024), 8192)
+      };
+    }
 
     if (systemParts.length > 0) {
       payload.systemInstruction = {
@@ -215,7 +232,9 @@ export class GeminiAdapter implements ModelAdapter {
     const payload = this.formatRequestPayload(messages, {
       model: cleanModel,
       temperature: policy.temperature,
-      maxTokens: policy.maxTokens
+      maxTokens: policy.maxTokens,
+      extendedThinking: policy.extendedThinking,
+      reasoningBudget: policy.reasoningBudget
     });
 
     signal?.throwIfAborted();
@@ -292,7 +311,9 @@ export class GeminiAdapter implements ModelAdapter {
     const payload = this.formatRequestPayload(messages, {
       model: cleanModel,
       temperature: policy.temperature,
-      maxTokens: policy.maxTokens
+      maxTokens: policy.maxTokens,
+      extendedThinking: policy.extendedThinking,
+      reasoningBudget: policy.reasoningBudget
     });
 
     options?.signal?.throwIfAborted();

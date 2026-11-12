@@ -456,7 +456,7 @@ const AiraTrailerTimeline = () => {
 
       {/* Scene 2: Ultra-Fast Groq LPU with Gemini Failover (5-10s) */}
       <Sequence from={150} durationInFrames={150}>
-        <SceneCard title="AIRA Fast" headline="<250ms First Token" badge="Groq LPU" />
+        <SceneCard title="AIRA Fast" headline="Groq LPU & Gemini Failover" badge="Groq LPU" />
       </Sequence>
 
       {/* Scene 3: NVIDIA Nemotron 70B Calibrated Reasoning (10-15s) */}

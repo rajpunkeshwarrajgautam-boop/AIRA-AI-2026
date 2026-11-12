@@ -143,21 +143,31 @@ describe('MISSION: Model Provenance, Runtime Identity & Capability Accuracy', ()
       assert.ok(execution.fallbackReason?.includes('NVIDIA'));
     });
 
-    // Scenario 5: Provider unavailable and fallback paths
-    it('Scenario 5: Fallback path records reason when requested provider is unavailable', () => {
+    // Scenario 5: Registry-aligned primary & fallback path when primary provider is unavailable
+    it('Scenario 5: Registry primary executes directly when available and records fallback reason when unavailable', () => {
       process.env.NODE_ENV = 'production';
       process.env.NVIDIA_API_KEY = 'nvapi-test-key-mock';
       delete process.env.ANTHROPIC_API_KEY;
       delete process.env.OPENAI_API_KEY;
+      delete process.env.GROQ_API_KEY;
 
-      const router = new ModelRouter();
-      // aira-deep prefers Anthropic, but only NVIDIA is configured
-      const execution = router.resolveExecution('aira-deep', 'RESEARCH');
+      const nvidiaPrimaryRouter = new ModelRouter();
+      // aira-deep prefers NVIDIA per VERIFIED_MODEL_REGISTRY; with NVIDIA configured, no fallback occurs
+      const directExecution = nvidiaPrimaryRouter.resolveExecution('aira-deep', 'RESEARCH');
+      assert.equal(directExecution.provider, 'nvidia');
+      assert.equal(directExecution.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct');
+      assert.equal(directExecution.fallbackOccurred, false);
 
-      assert.equal(execution.provider, 'nvidia');
-      assert.equal(execution.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct');
-      assert.equal(execution.fallbackOccurred, true);
-      assert.ok(execution.fallbackReason);
+      // When registry primary (NVIDIA) is unavailable and only Anthropic/Groq is configured, fallbackOccurred is true
+      delete process.env.NVIDIA_API_KEY;
+      process.env.GROQ_API_KEY = 'gsk-test-key-mock';
+      const fallbackRouter = new ModelRouter();
+      const fallbackExecution = fallbackRouter.resolveExecution('aira-deep', 'RESEARCH');
+
+      assert.equal(fallbackExecution.provider, 'groq');
+      assert.equal(fallbackExecution.executedModel, 'openai/gpt-oss-120b');
+      assert.equal(fallbackExecution.fallbackOccurred, true);
+      assert.ok(fallbackExecution.fallbackReason);
     });
 
     // Scenario 6: Upstream model mismatch or missing provenance handling

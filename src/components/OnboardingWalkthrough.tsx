@@ -217,7 +217,7 @@ export const OnboardingWalkthrough: React.FC<OnboardingWalkthroughProps> = ({
                 <li className="flex items-start gap-2.5 text-xs text-stone-700 dark:text-stone-300">
                   <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
                   <span>
-                    <strong>Extended Thinking Budget:</strong> Configure up to 8,192 reasoning tokens in Settings for step-by-step architectural and coding analysis.
+                    <strong>Output & Reasoning Ceiling:</strong> Configure up to 8,192 output tokens in Settings (applied via runtime generation caps or provider-native effort where supported).
                   </span>
                 </li>
                 <li className="flex items-start gap-2.5 text-xs text-stone-700 dark:text-stone-300">

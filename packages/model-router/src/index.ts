@@ -5,6 +5,12 @@ import {
   normalizeModelIdentifier,
   IntentTaxonomy
 } from '../../contracts/src/index.js';
+import {
+  type PlanTier,
+  type ReasoningControlMode,
+  isModelAllowedForTier,
+  VERIFIED_MODEL_REGISTRY
+} from '../../contracts/src/commercial.js';
 import { ProviderHealthTracker } from './health-tracker.js';
 import { LatencyAwareRoutingPolicy } from './routing-policy.js';
 import { ResilientModelAdapter } from './resilient-adapter.js';
@@ -296,6 +302,24 @@ export class AnthropicAdapter implements ModelAdapter {
     if (outboundModel.startsWith('aira-')) {
       throw new Error(`INTERNAL_MODEL_ALIAS_LEAK: Refusing to dispatch internal alias "${outboundModel}" to external provider anthropic.`);
     }
+    const bodyPayload: Record<string, any> = {
+      model: outboundModel,
+      max_tokens: policy.maxTokens,
+      temperature: policy.temperature,
+      system: systemMessage,
+      messages: conversationMessages
+    };
+    if (
+      policy.extendedThinking &&
+      typeof policy.reasoningBudget === 'number' &&
+      policy.reasoningBudget >= 1024 &&
+      (outboundModel.includes('3-7') || outboundModel.includes('claude-sonnet-4') || outboundModel.includes('claude-opus-4'))
+    ) {
+      const clampedBudget = Math.min(policy.reasoningBudget, Math.max(1024, (policy.maxTokens || 8192) - 512));
+      bodyPayload.thinking = { type: 'enabled', budget_tokens: clampedBudget };
+      bodyPayload.temperature = 1;
+    }
+
     const response = await fetch(`${this.baseUrl}/messages`, {
       signal,
       method: 'POST',
@@ -304,13 +328,7 @@ export class AnthropicAdapter implements ModelAdapter {
         'anthropic-version': '2023-06-01',
         'content-type': 'application/json'
       },
-      body: JSON.stringify({
-        model: outboundModel,
-        max_tokens: policy.maxTokens,
-        temperature: policy.temperature,
-        system: systemMessage,
-        messages: conversationMessages
-      })
+      body: JSON.stringify(bodyPayload)
     });
 
     if (!response.ok) {
@@ -471,6 +489,55 @@ export class OpenAIAdapter implements ModelAdapter {
     return outboundModel;
   }
 
+  private buildCompletionRequestBody(
+    outboundModel: string,
+    messages: ChatMessageInput[],
+    policy: ModelPolicy,
+    stream: boolean
+  ): Record<string, any> {
+    let effectiveMaxTokens = policy.maxTokens;
+    // NVIDIA Llama-3.1-Nemotron-70B is an instruct chat-completion model without a separate
+    // upstream thinking-token budget parameter; honor bounded budget via max_tokens cap cleanly.
+    if (
+      this.provider === 'nvidia' &&
+      policy.extendedThinking &&
+      typeof policy.reasoningBudget === 'number' &&
+      policy.reasoningBudget >= 1024
+    ) {
+      effectiveMaxTokens = Math.min(Math.max(policy.reasoningBudget, 1024), policy.maxTokens || 8192);
+    }
+
+    const body: Record<string, any> = {
+      model: outboundModel,
+      messages: messages.map(m => m.role === 'tool'
+        ? { role: 'tool', content: m.content, tool_call_id: m.toolCallId || 'call_default' }
+        : { role: m.role, content: m.content }),
+      max_tokens: effectiveMaxTokens,
+      temperature: policy.temperature
+    };
+
+    // Groq openai/gpt-oss-120b supports coarse reasoning_effort ('low'|'medium'|'high')
+    // when extended thinking is explicitly enabled on an entitled tier.
+    if (
+      this.provider === 'groq' &&
+      outboundModel.startsWith('openai/gpt-oss-') &&
+      policy.extendedThinking &&
+      typeof policy.reasoningBudget === 'number'
+    ) {
+      body.reasoning_effort = policy.reasoningBudget <= 2048
+        ? 'low'
+        : policy.reasoningBudget <= 5120
+        ? 'medium'
+        : 'high';
+    }
+
+    if (stream) {
+      body.stream = true;
+      body.stream_options = { include_usage: true };
+    }
+    return body;
+  }
+
   async complete(messages: ChatMessageInput[], policy: ModelPolicy, signal?: AbortSignal): Promise<ModelCompletionResult> {
     if (!this.apiKey) {
       throw new Error('OpenAI API key is not configured.');
@@ -479,6 +546,7 @@ export class OpenAIAdapter implements ModelAdapter {
     let lastError: Error | null = null;
 
     const outboundModel = this.resolveOutboundModel(policy.model);
+    const requestBody = this.buildCompletionRequestBody(outboundModel, messages, policy, false);
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       signal?.throwIfAborted();
@@ -490,17 +558,7 @@ export class OpenAIAdapter implements ModelAdapter {
             Authorization: `Bearer ${this.apiKey}`,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({
-            model: outboundModel,
-            messages: messages.map(m => {
-              if (m.role === 'tool') {
-                return { role: 'tool', content: m.content, tool_call_id: m.toolCallId || 'call_default' };
-              }
-              return { role: m.role, content: m.content };
-            }),
-            max_tokens: policy.maxTokens,
-            temperature: policy.temperature
-          })
+          body: JSON.stringify(requestBody)
         });
 
         if (!response.ok) {
@@ -584,6 +642,7 @@ export class OpenAIAdapter implements ModelAdapter {
     try {
       // Stream the upstream response rather than waiting for a full completion before
       // forwarding one giant delta. This also exposes the actual upstream model ID.
+      const requestBody = this.buildCompletionRequestBody(outboundModel, messages, policy, true);
       const response = await fetch(`${this.baseUrl}/chat/completions`, {
         signal: abortController.signal,
         method: 'POST',
@@ -592,16 +651,7 @@ export class OpenAIAdapter implements ModelAdapter {
           'Content-Type': 'application/json',
           Accept: 'text/event-stream'
         },
-        body: JSON.stringify({
-          model: outboundModel,
-          messages: messages.map(m => m.role === 'tool'
-            ? { role: 'tool', content: m.content, tool_call_id: m.toolCallId || 'call_default' }
-            : { role: m.role, content: m.content }),
-          max_tokens: policy.maxTokens,
-          temperature: policy.temperature,
-          stream: true,
-          stream_options: { include_usage: true }
-        })
+        body: JSON.stringify(requestBody)
       });
 
       if (!response.ok) {
@@ -716,6 +766,27 @@ export class ProviderUnavailableError extends Error {
   }
 }
 
+export class PlanRestrictionError extends Error {
+  readonly code = 'PLAN_MODEL_RESTRICTED';
+  readonly statusCode = 403;
+
+  constructor(
+    message: string,
+    public readonly callerTier: PlanTier,
+    public readonly requestedModel: string,
+    public readonly requiredTier?: PlanTier
+  ) {
+    super(message);
+    this.name = 'PlanRestrictionError';
+  }
+}
+
+export interface ResolveExecutionOptions {
+  callerTier?: PlanTier;
+  extendedThinking?: boolean;
+  reasoningBudget?: number;
+}
+
 export interface ResolvedExecution {
   policy: ModelPolicy;
   adapter: ModelAdapter;
@@ -727,6 +798,12 @@ export interface ResolvedExecution {
   fallbackOccurred: boolean;
   fallbackReason?: string;
   verified: boolean;
+  callerTier?: PlanTier;
+  entitlementClamped?: boolean;
+  downgradedFrom?: string;
+  reasoningControl?: ReasoningControlMode;
+  requestedReasoningBudget?: number;
+  appliedReasoningBudget?: number;
 }
 
 export class ModelRouter {
@@ -868,10 +945,22 @@ export class ModelRouter {
     throw new Error(`Provider ${provider} is not configured.`);
   }
 
-  public resolvePolicy(modelId: ModelId, intent?: IntentTaxonomy): ModelPolicy {
-    let resolvedModel = normalizeModelIdentifier(modelId);
+  private evaluatePolicyAndEntitlement(
+    modelId: ModelId,
+    intent?: IntentTaxonomy,
+    options?: ResolveExecutionOptions
+  ): {
+    policy: ModelPolicy;
+    entitlementClamped: boolean;
+    downgradedFrom?: string;
+  } {
+    const normalizedInput = normalizeModelIdentifier(modelId);
+    const callerTier = options?.callerTier;
+    let resolvedModel: ModelId = normalizedInput;
+    let entitlementClamped = false;
+    let downgradedFrom: string | undefined;
 
-    if (resolvedModel === 'aira-auto') {
+    if (normalizedInput === 'aira-auto') {
       switch (intent) {
         case 'RESEARCH':
         case 'AGENT_MISSION':
@@ -887,13 +976,43 @@ export class ModelRouter {
           resolvedModel = 'aira-fast';
           break;
       }
+
+      // Authoritative post-routing entitlement gate: AIRA Auto must never silently escalate
+      // a guest/free/plus caller into a model tier outside PLAN_MODEL_ALLOWLIST[callerTier].
+      if (callerTier && !isModelAllowedForTier(resolvedModel, callerTier)) {
+        downgradedFrom = resolvedModel;
+        entitlementClamped = true;
+        if (isModelAllowedForTier('aira-pro', callerTier)) {
+          resolvedModel = 'aira-pro';
+        } else {
+          resolvedModel = 'aira-fast';
+        }
+      }
+    } else if (callerTier && resolvedModel !== 'mock-deterministic' && !isModelAllowedForTier(resolvedModel, callerTier)) {
+      const requiredTier: PlanTier = isModelAllowedForTier(resolvedModel, 'plus') ? 'plus' : 'pro';
+      throw new PlanRestrictionError(
+        `Model '${resolvedModel}' requires '${requiredTier}' tier (caller tier: '${callerTier}').`,
+        callerTier,
+        resolvedModel,
+        requiredTier
+      );
     }
 
-    const extendedThinking = resolvedModel === 'aira-deep';
+    // Only AIRA Deep supports extended thinking in the authoritative capability registry;
+    // aira-fast and aira-pro clamp extendedThinking to false regardless of caller request.
+    const canThink = resolvedModel === 'aira-deep';
+    const extendedThinking = canThink ? (options?.extendedThinking ?? true) : false;
+    const clampedRequestedBudget = (
+      extendedThinking &&
+      typeof options?.reasoningBudget === 'number' &&
+      Number.isFinite(options.reasoningBudget)
+    )
+      ? Math.min(Math.max(Math.round(options.reasoningBudget), 1024), 8192)
+      : undefined;
+    const reasoningBudget = extendedThinking ? (clampedRequestedBudget ?? 2048) : undefined;
     const maxTokens = extendedThinking ? 8192 : 4096;
-    const reasoningBudget = extendedThinking ? 2048 : undefined;
 
-    return ModelPolicySchema.parse({
+    const policy = ModelPolicySchema.parse({
       model: resolvedModel,
       maxTokens,
       temperature: extendedThinking ? 1.0 : 0.7,
@@ -901,15 +1020,85 @@ export class ModelRouter {
       reasoningBudget,
       timeoutMs: 60000
     });
+
+    return { policy, entitlementClamped, downgradedFrom };
   }
 
-  public resolveExecution(requestedModelId: ModelId, intent?: IntentTaxonomy): ResolvedExecution {
-    const execution = this.resolveUnprotectedExecution(requestedModelId, intent);
+  public resolvePolicy(
+    modelId: ModelId,
+    intent?: IntentTaxonomy,
+    options?: ResolveExecutionOptions
+  ): ModelPolicy {
+    return this.evaluatePolicyAndEntitlement(modelId, intent, options).policy;
+  }
+
+  private getPlannedModelForProvider(prov: SupportedProvider, policyModel: string, requestedModelId: ModelId): string {
+    if (prov === 'groq') {
+      const raw = (process.env.AIRA_FAST_MODEL || '').trim().replace(/^["']|["']$/g, '');
+      return raw || 'openai/gpt-oss-120b';
+    }
+    if (prov === 'gemini') {
+      return (process.env.AIRA_GEMINI_MODEL || '').trim().replace(/^["']|["']$/g, '') || 'gemini-3.5-flash-lite';
+    }
+    if (prov === 'cerebras') {
+      return process.env.AIRA_FAST_MODEL || 'llama3.1-8b';
+    }
+    if (prov === 'together') {
+      return process.env.AIRA_FAST_MODEL || 'meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo';
+    }
+    if (prov === 'fireworks') {
+      return process.env.AIRA_FAST_MODEL || 'accounts/fireworks/models/llama-v3p1-8b-instruct';
+    }
+    if (prov === 'openai') {
+      return policyModel === 'aira-fast' ? (process.env.AIRA_FAST_MODEL || 'gpt-4o-mini') : 'gpt-4o';
+    }
+    if (prov === 'nvidia') {
+      return resolveNvidiaModel(policyModel);
+    }
+    if (prov === 'anthropic') {
+      if (
+        requestedModelId === 'claude-3-5-sonnet' ||
+        requestedModelId === 'claude-3-5-haiku' ||
+        requestedModelId === 'claude-3-opus' ||
+        requestedModelId === 'claude-3-7-sonnet'
+      ) {
+        return requestedModelId;
+      }
+      return resolveAnthropicModel(policyModel);
+    }
+    return policyModel;
+  }
+
+  private resolveReasoningControlMode(provider: SupportedProvider, executedModel: string, policy: ModelPolicy): ReasoningControlMode {
+    if (!policy.extendedThinking) return 'none';
+    if (provider === 'nvidia') return 'output_cap_only';
+    if (provider === 'groq' && executedModel.startsWith('openai/gpt-oss-')) return 'effort_mapped';
+    if (provider === 'anthropic') return 'native_budget';
+    if (provider === 'gemini' && (executedModel.startsWith('gemini-2.5-pro') || executedModel.startsWith('gemini-2.5-flash')) && !executedModel.includes('lite')) {
+      return 'native_budget';
+    }
+    return 'none';
+  }
+
+  public resolveExecution(
+    requestedModelId: ModelId,
+    intent?: IntentTaxonomy,
+    options?: ResolveExecutionOptions
+  ): ResolvedExecution {
+    const execution = this.resolveUnprotectedExecution(requestedModelId, intent, options);
     return { ...execution, adapter: protectInferenceAdapter(execution.adapter, this.capacityGuard) };
   }
 
-  private resolveUnprotectedExecution(requestedModelId: ModelId, intent?: IntentTaxonomy): ResolvedExecution {
-    const policy = this.resolvePolicy(requestedModelId, intent);
+  private resolveUnprotectedExecution(
+    requestedModelId: ModelId,
+    intent?: IntentTaxonomy,
+    options?: ResolveExecutionOptions
+  ): ResolvedExecution {
+    const { policy, entitlementClamped, downgradedFrom } = this.evaluatePolicyAndEntitlement(
+      requestedModelId,
+      intent,
+      options
+    );
     const model = policy.model;
 
     // Test/dev only: explicit injection via model name
@@ -971,7 +1160,13 @@ export class ModelRouter {
             plannedModel: executedModel,
             fallbackOccurred: !hasDedicated,
             fallbackReason: !hasDedicated ? 'No dedicated fast provider configured; fell back to NVIDIA Nemotron 70B reasoning model' : undefined,
-            verified: true
+            verified: true,
+            callerTier: options?.callerTier,
+            entitlementClamped,
+            downgradedFrom,
+            reasoningControl: this.resolveReasoningControlMode('nvidia', executedModel, policy),
+            requestedReasoningBudget: options?.reasoningBudget,
+            appliedReasoningBudget: policy.reasoningBudget
           };
         }
 
@@ -986,7 +1181,13 @@ export class ModelRouter {
             executedModel: 'mock-deterministic',
             plannedModel: 'mock-deterministic',
             fallbackOccurred: false,
-            verified: true
+            verified: true,
+            callerTier: options?.callerTier,
+            entitlementClamped,
+            downgradedFrom,
+            reasoningControl: 'none',
+            requestedReasoningBudget: options?.reasoningBudget,
+            appliedReasoningBudget: policy.reasoningBudget
           };
         }
 
@@ -1032,27 +1233,57 @@ export class ModelRouter {
           plannedModel: plan.primary.model,
           fallbackOccurred: isFallback,
           fallbackReason: isFallback ? plan.selectionReason : undefined,
-          verified: plan.primary.provider !== 'mock'
+          verified: plan.primary.provider !== 'mock',
+          callerTier: options?.callerTier,
+          entitlementClamped,
+          downgradedFrom,
+          reasoningControl: this.resolveReasoningControlMode(plan.primary.provider as SupportedProvider, plan.primary.model, policy),
+          requestedReasoningBudget: options?.reasoningBudget,
+          appliedReasoningBudget: policy.reasoningBudget
         };
       }
 
-      let providerPreference: Array<SupportedProvider>;
-      if (model === 'aira-deep') {
-        providerPreference = ['anthropic', 'nvidia', 'openai', 'groq', 'gemini'];
-      } else {
-        providerPreference = ['anthropic', 'nvidia', 'openai', 'groq', 'gemini'];
-      }
+      const explicitVendorProvider: SupportedProvider | undefined =
+        requestedModelId.startsWith('claude') ? 'anthropic'
+        : requestedModelId.startsWith('gpt-') ? 'openai'
+        : requestedModelId.startsWith('gemini-') ? 'gemini'
+        : undefined;
+      const registryProvider = explicitVendorProvider || (VERIFIED_MODEL_REGISTRY[model]?.provider as SupportedProvider | undefined);
+      const defaultOrder: Array<SupportedProvider> = ['nvidia', 'openai', 'groq', 'gemini', 'anthropic'];
+      const providerPreference: Array<SupportedProvider> = registryProvider && defaultOrder.includes(registryProvider)
+        ? [registryProvider, ...defaultOrder.filter(p => p !== registryProvider)]
+        : defaultOrder;
 
       const preferredProvider = providerPreference[0];
       let selectedProvider: SupportedProvider | null = null;
       let selectedAdapter: ModelAdapter | null = null;
+      let skippedUnavailableProviderReason: string | undefined;
 
+      // Capability & health-aware selection: prefer the registry-declared provider when configured
+      // and its circuit breaker is healthy; skip OPEN-circuit providers to healthy capability fallbacks.
       for (const prov of providerPreference) {
         const adapter = this.adapters.get(prov);
-        if (adapter) {
+        if (!adapter) continue;
+        const plannedCandidate = this.getPlannedModelForProvider(prov, model, requestedModelId);
+        if (this.healthTracker.isAvailable(prov, plannedCandidate)) {
           selectedProvider = prov;
           selectedAdapter = adapter;
           break;
+        }
+        if (prov === preferredProvider) {
+          skippedUnavailableProviderReason = `Primary provider (${prov}:${plannedCandidate}) circuit breaker is OPEN`;
+        }
+      }
+
+      if (!selectedAdapter) {
+        // All configured providers currently have OPEN circuits; probe first configured adapter
+        for (const prov of providerPreference) {
+          const adapter = this.adapters.get(prov);
+          if (adapter) {
+            selectedProvider = prov;
+            selectedAdapter = adapter;
+            break;
+          }
         }
       }
 
@@ -1081,48 +1312,24 @@ export class ModelRouter {
           if (p === 'openai') return 'OpenAI';
           return p;
         };
-        fallbackReason = `Preferred provider (${formatName(preferredProvider)}) not configured; routed to ${formatName(selectedProvider)}`;
+        fallbackReason = skippedUnavailableProviderReason
+          ? `${skippedUnavailableProviderReason}; routed to ${formatName(selectedProvider)}`
+          : `Preferred provider (${formatName(preferredProvider)}) not configured; routed to ${formatName(selectedProvider)}`;
       }
 
-      let executedModel: string;
+      let executedModel = this.getPlannedModelForProvider(selectedProvider, model, requestedModelId);
       let modelFallback = false;
       let modelFallbackReason: string | undefined;
 
-      if (selectedProvider === 'groq') {
-        const raw = (process.env.AIRA_FAST_MODEL || '').trim().replace(/^["']|["']$/g, '');
-        executedModel = raw || 'openai/gpt-oss-120b';
-      } else if (selectedProvider === 'gemini') {
-        executedModel = (process.env.AIRA_GEMINI_MODEL || '').trim().replace(/^["']|["']$/g, '') || 'gemini-3.5-flash-lite';
-      } else if (selectedProvider === 'cerebras') {
-        executedModel = process.env.AIRA_FAST_MODEL || 'llama3.1-8b';
-      } else if (selectedProvider === 'together') {
-        executedModel = process.env.AIRA_FAST_MODEL || 'meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo';
-      } else if (selectedProvider === 'fireworks') {
-        executedModel = process.env.AIRA_FAST_MODEL || 'accounts/fireworks/models/llama-v3p1-8b-instruct';
-      } else if (selectedProvider === 'openai') {
-        executedModel = (model as string) === 'aira-fast'
-          ? (process.env.AIRA_FAST_MODEL || 'gpt-4o-mini')
-          : 'gpt-4o';
-      } else if (selectedProvider === 'nvidia') {
+      if (selectedProvider === 'nvidia') {
         executedModel = resolveNvidiaModel(model);
         if ((model as string) === 'aira-fast' && !process.env.NVIDIA_FAST_MODEL && executedModel === 'nvidia/llama-3.1-nemotron-70b-instruct') {
           modelFallback = true;
           modelFallbackReason = 'No dedicated fast provider configured; fell back to NVIDIA Nemotron 70B reasoning model';
         }
-      } else if (selectedProvider === 'anthropic') {
-        if (requestedModelId === 'claude-3-5-sonnet') {
-          executedModel = 'claude-3-5-sonnet';
-        } else if (requestedModelId === 'claude-3-5-haiku') {
-          executedModel = 'claude-3-5-haiku';
-        } else if (requestedModelId === 'claude-3-opus') {
-          executedModel = 'claude-3-opus';
-        } else if (requestedModelId === 'claude-3-7-sonnet') {
-          executedModel = 'claude-3-7-sonnet';
-        } else {
-          executedModel = resolveAnthropicModel(model);
-        }
-      } else {
-        executedModel = model;
+      } else if (selectedProvider !== 'mock' && (executedModel.startsWith('aira-') || executedModel === model)) {
+        // Ensure explicit non-mock fallback adapter receives a real upstream model name
+        executedModel = this.getPlannedModelForProvider(selectedProvider, model, requestedModelId);
       }
 
       const combinedFallback = fallbackOccurred || modelFallback;
@@ -1153,17 +1360,24 @@ export class ModelRouter {
           : null;
 
         if (fallbackAdapter && !this.healthTracker.isAvailable('nvidia', executedModel)) {
+          const fbModel = fallbackAdapter.modelName || 'openai/gpt-oss-120b';
           return {
             policy,
             adapter: fallbackAdapter,
             provider: fallbackAdapter.provider,
             requestedProvider: preferredProvider,
             executedProvider: fallbackAdapter.provider,
-            executedModel: fallbackAdapter.modelName || 'openai/gpt-oss-120b',
+            executedModel: fbModel,
             plannedModel: executedModel,
             fallbackOccurred: true,
             fallbackReason: `Circuit breaker is OPEN for NVIDIA model "${executedModel}" due to upstream error (404/503/timeout); routed directly to ${fallbackAdapter.provider}`,
-            verified: fallbackAdapter.provider !== 'mock'
+            verified: fallbackAdapter.provider !== 'mock',
+            callerTier: options?.callerTier,
+            entitlementClamped,
+            downgradedFrom,
+            reasoningControl: this.resolveReasoningControlMode(fallbackAdapter.provider, fbModel, policy),
+            requestedReasoningBudget: options?.reasoningBudget,
+            appliedReasoningBudget: policy.reasoningBudget
           };
         }
 
@@ -1186,7 +1400,13 @@ export class ModelRouter {
         plannedModel: executedModel,
         fallbackOccurred: combinedFallback,
         fallbackReason: combinedReason,
-        verified: selectedProvider !== 'mock'
+        verified: selectedProvider !== 'mock',
+        callerTier: options?.callerTier,
+        entitlementClamped,
+        downgradedFrom,
+        reasoningControl: this.resolveReasoningControlMode(selectedProvider, executedModel, policy),
+        requestedReasoningBudget: options?.reasoningBudget,
+        appliedReasoningBudget: policy.reasoningBudget
       };
     }
 

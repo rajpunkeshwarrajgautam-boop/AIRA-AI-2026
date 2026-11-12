@@ -17,7 +17,8 @@ import {
   ExecutionPrincipal,
   ModelProvenance
 } from '../../contracts/src/index.js';
-import { ModelRouter, ChatMessageInput, isModelMatch, withInferencePrincipal, type ModelCompletionResult } from '../../model-router/src/index.js';
+import { ModelRouter, PlanRestrictionError, ChatMessageInput, isModelMatch, withInferencePrincipal, type ModelCompletionResult } from '../../model-router/src/index.js';
+import { isModelAllowedForTier, type PlanTier } from '../../contracts/src/commercial.js';
 import { ToolRegistry, ToolGateway, PostgresToolCallRepository, InMemoryToolCallRepository, deriveToolApprovalPolicy } from '../../tool-runtime/src/index.js';
 import { configuredSearchProviders } from '../../tool-runtime/src/search-providers.js';
 import { ApprovalKernel } from '../../approvals/src/index.js';
@@ -373,11 +374,21 @@ export class AgentRuntime extends EventEmitter {
     pending.push(event);
   }
 
+  private entitlementResolver?: (principalId: string) => Promise<PlanTier>;
+
+  public setEntitlementResolver(resolver: (principalId: string) => Promise<PlanTier>): void {
+    this.entitlementResolver = resolver;
+  }
+
   public getWorkspaceAuthority(): WorkspaceAuthorityRepository {
     return this.workspaceAuthority;
   }
 
-  public async createRun(request: CreateRunRequest, principal: ExecutionPrincipal): Promise<Run> {
+  public async createRun(
+    request: CreateRunRequest,
+    principal: ExecutionPrincipal,
+    options?: { callerTier?: PlanTier }
+  ): Promise<Run> {
     // Production/DB-backed runtimes revalidate the server-owned principal/workspace
     // binding at run creation; request body workspace fields are never consulted.
     if (this.workspaceAuthority instanceof PostgresWorkspaceAuthorityRepository) {
@@ -388,13 +399,23 @@ export class AgentRuntime extends EventEmitter {
         throw new Error('Run creation requires active workspace authority for the authenticated principal.');
       }
     }
+    let resolvedCallerTier = options?.callerTier;
+    if (!resolvedCallerTier && this.entitlementResolver && principal?.userId) {
+      resolvedCallerTier = principal.userId.startsWith('guest_')
+        ? 'guest'
+        : await this.entitlementResolver(principal.userId);
+    }
     const model = normalizeModelIdentifier(request.modelPolicy?.model);
     return withInferencePrincipal(principal.userId, () => this.createNormalizedRun({
       ...request, modelPolicy: { ...request.modelPolicy, model }
-    }, principal));
+    }, principal, resolvedCallerTier));
   }
 
-  private async createNormalizedRun(request: CreateRunRequest, principal: ExecutionPrincipal): Promise<Run> {
+  private async createNormalizedRun(
+    request: CreateRunRequest,
+    principal: ExecutionPrincipal,
+    callerTier?: PlanTier
+  ): Promise<Run> {
     if (request.prompt.length > 1_000_000) {
       const error = new Error('PROMPT_TOO_LARGE');
       (error as Error & { code: string }).code = 'PROMPT_TOO_LARGE';
@@ -418,33 +439,56 @@ export class AgentRuntime extends EventEmitter {
       conversationHistory
     });
 
+    const requestedPolicy = request.modelPolicy;
+    const requestedRawModel = requestedPolicy?.model || 'aira-auto';
     const execution = this.modelRouter.resolveExecution(
-      request.modelPolicy?.model || 'aira-auto',
-      routingDecision.intent
+      requestedRawModel,
+      routingDecision.intent,
+      {
+        callerTier,
+        extendedThinking: requestedPolicy?.extendedThinking,
+        reasoningBudget: requestedPolicy?.reasoningBudget
+      }
     );
 
     const basePolicy = execution.policy;
-    const requestedPolicy = request.modelPolicy;
-    const extendedThinking = execution.policy.model === 'aira-deep'
-      ? (requestedPolicy?.extendedThinking ?? basePolicy.extendedThinking)
-      : false;
+    // Post-routing authoritative entitlement enforcement: ensure routed policy model
+    // strictly satisfies callerTier allowlist before persisting or executing the run.
+    if (callerTier && basePolicy.model !== 'mock-deterministic' && !isModelAllowedForTier(basePolicy.model, callerTier)) {
+      throw new PlanRestrictionError(
+        `Routed model '${basePolicy.model}' exceeds entitlements for tier '${callerTier}'.`,
+        callerTier,
+        basePolicy.model
+      );
+    }
+
+    const extendedThinking = basePolicy.extendedThinking;
+    const reasoningBudget = basePolicy.reasoningBudget;
 
     const policy: ModelPolicy = ModelPolicySchema.parse({
       ...basePolicy,
       temperature: requestedPolicy?.temperature ?? basePolicy.temperature,
-      maxTokens: requestedPolicy?.maxTokens ?? (extendedThinking ? Math.max(basePolicy.maxTokens, 8192) : basePolicy.maxTokens),
+      maxTokens: requestedPolicy?.maxTokens ?? basePolicy.maxTokens,
       extendedThinking,
-      reasoningBudget: requestedPolicy?.reasoningBudget ?? (extendedThinking ? (basePolicy.reasoningBudget ?? 2048) : undefined),
+      reasoningBudget,
     });
 
     const provenance: ModelProvenance = {
-      requestedModel: request.modelPolicy?.model || 'aira-auto',
-      resolvedPolicyModel: execution.policy.model,
+      requestedModel: requestedRawModel,
+      resolvedPolicyModel: policy.model,
       provider: execution.provider,
+      requestedProvider: execution.requestedProvider,
+      executedProvider: execution.executedProvider || execution.provider,
       executedModel: execution.executedModel,
       plannedModel: execution.plannedModel || execution.executedModel,
       fallbackOccurred: execution.fallbackOccurred,
       fallbackReason: execution.fallbackReason,
+      callerTier: callerTier ?? execution.callerTier,
+      entitlementClamped: execution.entitlementClamped,
+      downgradedFrom: execution.downgradedFrom,
+      reasoningControl: execution.reasoningControl,
+      requestedReasoningBudget: requestedPolicy?.reasoningBudget,
+      appliedReasoningBudget: reasoningBudget,
       verified: false,
       executionStatus: 'PENDING',
       timestamp: now
@@ -523,8 +567,12 @@ export class AgentRuntime extends EventEmitter {
     }
   }
 
-  public async createAndExecuteRun(request: CreateRunRequest, principal: ExecutionPrincipal): Promise<Run> {
-    const run = await this.createRun(request, principal);
+  public async createAndExecuteRun(
+    request: CreateRunRequest,
+    principal: ExecutionPrincipal,
+    options?: { callerTier?: PlanTier }
+  ): Promise<Run> {
+    const run = await this.createRun(request, principal, options);
     // Asynchronously execute run loop
     setImmediate(() => {
       this.startRun(run.id).catch(console.error);
@@ -1390,8 +1438,13 @@ export class AgentRuntime extends EventEmitter {
       const executedModel = prov?.executedModel || run.modelPolicy.model;
       const executedProvider = prov?.provider || 'unknown';
       const providerLabel = executedProvider === 'nvidia' ? 'NVIDIA NIM'
+        : executedProvider === 'groq' ? 'Groq'
+        : executedProvider === 'gemini' ? 'Google Gemini'
         : executedProvider === 'anthropic' ? 'Anthropic'
         : executedProvider === 'openai' ? 'OpenAI'
+        : executedProvider === 'cerebras' ? 'Cerebras'
+        : executedProvider === 'together' ? 'Together AI'
+        : executedProvider === 'fireworks' ? 'Fireworks AI'
         : executedProvider === 'mock' ? 'Deterministic Mock'
         : 'Unknown Provider';
 
@@ -1573,10 +1626,22 @@ CAPABILITY & IDENTITY INVARIANTS:
             signal: abortController.signal,
             onProvenance: (provUpdate: any) => {
               if (run.provenance) {
-                if (provUpdate.executedProvider) run.provenance.provider = provUpdate.executedProvider;
+                if (provUpdate.executedProvider) {
+                  run.provenance.provider = provUpdate.executedProvider;
+                  run.provenance.executedProvider = provUpdate.executedProvider;
+                }
                 if (provUpdate.executedModel) run.provenance.executedModel = provUpdate.executedModel;
                 if (provUpdate.fallbackOccurred !== undefined) run.provenance.fallbackOccurred = provUpdate.fallbackOccurred;
                 if (provUpdate.fallbackReason) run.provenance.fallbackReason = provUpdate.fallbackReason;
+                if (!run.modelPolicy?.extendedThinking) {
+                  run.provenance.reasoningControl = 'none';
+                } else if (run.provenance.executedProvider === 'nvidia') {
+                  run.provenance.reasoningControl = 'output_cap_only';
+                } else if (run.provenance.executedProvider === 'groq') {
+                  run.provenance.reasoningControl = 'effort_mapped';
+                } else if (run.provenance.executedProvider === 'anthropic' || run.provenance.executedProvider === 'gemini') {
+                  run.provenance.reasoningControl = 'native_budget';
+                }
                 run.provenance.timestamp = Date.now();
                 this.emitRunEvent(runId, 'model.provenance', run.provenance).catch(console.error);
               }

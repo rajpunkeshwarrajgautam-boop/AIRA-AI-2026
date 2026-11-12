@@ -270,7 +270,9 @@ export class PostgresKnowledgeRepository implements KnowledgeRepository {
   }
 
   async listMemories(scope?: PrincipalScope): Promise<MemoryRecord[]> {
-    let q = db('memory_records').select('*');
+    let q = db('memory_records')
+      .select('*')
+      .whereNotIn('type', ['onboarding_state', 'project']);
     q = this.applyScopeFilter(q, scope);
     const rows = await q.orderBy('created_at', 'asc');
     return rows.map(row => {
@@ -292,7 +294,7 @@ export class PostgresKnowledgeRepository implements KnowledgeRepository {
     });
   }
   async deleteMemory(id: string, scope?: PrincipalScope): Promise<boolean> {
-    let q = db('memory_records').where('id', id);
+    let q = db('memory_records').where('id', id).whereNot('type', 'onboarding_state');
     q = this.applyScopeFilter(q, scope);
     const count = await q.delete();
     return count > 0;
@@ -300,7 +302,9 @@ export class PostgresKnowledgeRepository implements KnowledgeRepository {
 
   async purgeMemories(scope?: PrincipalScope): Promise<number> {
     if (!scope?.principalId) return 0;
-    let q = db('memory_records').where('is_system', false);
+    let q = db('memory_records')
+      .where('is_system', false)
+      .whereNotIn('type', ['onboarding_state', 'project']);
     q = this.applyScopeFilter(q, scope);
     return await q.delete();
   }

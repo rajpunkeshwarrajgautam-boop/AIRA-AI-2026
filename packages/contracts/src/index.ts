@@ -501,6 +501,12 @@ export const ModelProvenanceSchema = z.object({
   upstreamResponseModel: z.string().optional(),
   fallbackOccurred: z.boolean(),
   fallbackReason: z.string().optional(),
+  callerTier: z.enum(['guest', 'free', 'plus', 'pro']).optional(),
+  entitlementClamped: z.boolean().optional(),
+  downgradedFrom: z.string().optional(),
+  reasoningControl: z.enum(['none', 'output_cap_only', 'effort_mapped', 'native_budget']).optional(),
+  requestedReasoningBudget: z.number().int().nonnegative().optional(),
+  appliedReasoningBudget: z.number().int().nonnegative().optional(),
   verified: z.boolean(),
   executionStatus: z.enum(['PENDING', 'SUCCESS', 'FALLBACK', 'FAILED', 'UNKNOWN']),
   timestamp: z.number()

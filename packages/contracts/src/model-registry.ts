@@ -1,5 +1,7 @@
 import type { PlanTier } from './commercial.js';
 
+export type ReasoningControlMode = 'none' | 'output_cap_only' | 'effort_mapped' | 'native_budget';
+
 export interface ModelCapabilityDescriptor {
   id: string;                      // Canonical ID
   displayName: string;             // UI name
@@ -8,6 +10,7 @@ export interface ModelCapabilityDescriptor {
   minTier: PlanTier;
   contextWindow: string;
   supportsThinking: boolean;
+  reasoningControl?: ReasoningControlMode;
   description: string;
   badge: string;
 }
@@ -27,7 +30,8 @@ export const VERIFIED_MODEL_REGISTRY: Record<string, ModelCapabilityDescriptor> 
     minTier: 'free',
     contextWindow: '128K tokens',
     supportsThinking: true,
-    description: 'Intelligent router directing tasks to Fast (Groq) or Deep Reasoning (NVIDIA Nemotron) based on intent.',
+    reasoningControl: 'effort_mapped',
+    description: 'Tier-aware router directing tasks within your plan allowlist (Fast via Groq/Gemini; Pro/Deep via NVIDIA NIM on entitled plans).',
     badge: 'Router'
   },
   'aira-fast': {
@@ -38,6 +42,7 @@ export const VERIFIED_MODEL_REGISTRY: Record<string, ModelCapabilityDescriptor> 
     minTier: 'guest',
     contextWindow: '128K tokens',
     supportsThinking: false,
+    reasoningControl: 'none',
     description: 'Ultra-low latency intelligence powered by Groq LPU inference with Gemini failover.',
     badge: 'Fast'
   },
@@ -49,7 +54,8 @@ export const VERIFIED_MODEL_REGISTRY: Record<string, ModelCapabilityDescriptor> 
     minTier: 'plus',
     contextWindow: '128K tokens',
     supportsThinking: false,
-    description: 'High-fidelity engineering and multi-step reasoning powered by NVIDIA Nemotron 70B.',
+    reasoningControl: 'output_cap_only',
+    description: 'High-fidelity engineering and multi-step synthesis powered by NVIDIA Nemotron 70B.',
     badge: 'Quality'
   },
   'aira-deep': {
@@ -60,7 +66,8 @@ export const VERIFIED_MODEL_REGISTRY: Record<string, ModelCapabilityDescriptor> 
     minTier: 'pro',
     contextWindow: '128K tokens',
     supportsThinking: true,
-    description: 'Deliberate deep-research and architectural reasoning mode with extended thinking on NVIDIA NIM.',
+    reasoningControl: 'output_cap_only',
+    description: 'Deep-research and architectural synthesis on NVIDIA Nemotron 70B (thinking budget caps output max_tokens).',
     badge: 'Deep'
   },
   'nvidia/llama-3.1-nemotron-70b-instruct': {
@@ -71,6 +78,7 @@ export const VERIFIED_MODEL_REGISTRY: Record<string, ModelCapabilityDescriptor> 
     minTier: 'plus',
     contextWindow: '128K tokens',
     supportsThinking: false,
+    reasoningControl: 'output_cap_only',
     description: 'Fine-tuned by NVIDIA with RLHF alignment for instruction following, coding, and reasoning.',
     badge: 'NVIDIA'
   },

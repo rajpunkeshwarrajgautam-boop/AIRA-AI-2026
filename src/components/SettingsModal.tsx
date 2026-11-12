@@ -498,7 +498,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <label htmlFor="aira-settings-email" className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark block mb-2">Account Email</label>
                     <input 
                       id="aira-settings-email"
-                      value={form.email || 'user@aira.internal'} 
+                      value={form.email || ''} 
+                      placeholder="Not signed in"
                       onChange={e => setForm({ ...form, email: e.target.value })} 
                       className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-medium outline-none focus:border-claude-terracotta transition-all" 
                     />
@@ -978,8 +979,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <div className="p-4 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/40 dark:bg-claude-surface2-dark/40 space-y-3">
                     <div className="flex items-center justify-between">
                       <div>
-                        <div className="text-xs font-bold text-claude-text-light dark:text-white">Extended Thinking by Default</div>
-                        <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">Permits models to output step-by-step reasoning tokens before responding.</div>
+                        <div className="text-xs font-bold text-claude-text-light dark:text-white">Extended Thinking / Deep Output Budget</div>
+                        <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">Caps generation ceiling (1,024–8,192 tokens) on AIRA Deep. Native thinking tokens emit only when the active upstream provider supports them (NVIDIA Nemotron 70B applies output max_tokens cap).</div>
                       </div>
                       <label className="relative inline-flex items-center cursor-pointer">
                         <input
@@ -995,7 +996,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     {form.extendedThinking && (
                       <div className="pt-2 border-t border-claude-border-light/60 dark:border-claude-border-dark/60">
                         <div className="flex justify-between text-xs font-bold mb-1">
-                          <span className="text-claude-muted-light dark:text-claude-muted-dark">Reasoning Token Budget</span>
+                          <span className="text-claude-muted-light dark:text-claude-muted-dark">Output / Reasoning Token Ceiling</span>
                           <span className="text-claude-accentInk font-mono">{form.thinkingBudget.toLocaleString()} tokens</span>
                         </div>
                         <input
@@ -1009,7 +1010,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         />
                         <div className="flex justify-between text-[10px] text-claude-muted-light dark:text-claude-muted-dark mt-1">
                           <span>1,024 min</span>
-                          <span>Calibrated for NVIDIA Nemotron 70B</span>
+                          <span>Runtime cap (max_tokens / effort where supported)</span>
                           <span>8,192 max</span>
                         </div>
                       </div>
@@ -1235,7 +1236,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <Zap className="w-4 h-4 text-claude-accentInk shrink-0" />
                         <div>
                           <div className="text-xs font-bold text-claude-text-light dark:text-white">Upgrade Plan</div>
-                          <div className="text-[10px] text-claude-muted-light">Compare Free, Pro & Enterprise</div>
+                          <div className="text-[10px] text-claude-muted-light">Compare Free, Plus & Pro</div>
                         </div>
                       </button>
                     )}

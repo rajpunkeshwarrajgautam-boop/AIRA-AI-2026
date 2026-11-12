@@ -105,12 +105,12 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
     {
       id: 'models-reasoning-budget',
       category: 'models',
-      title: 'Extended Thinking & Reasoning Budgets',
-      summary: 'Configure deep thinking budgets for complex coding, architectural synthesis, and mathematical proofs.',
+      title: 'Output Ceilings & Extended Thinking',
+      summary: 'Configure output token bounds (1,024–8,192) on AIRA Deep for structured architectural synthesis and coding analysis.',
       content: [
-        'When using reasoning-capable modes (e.g. AIRA Deep or NVIDIA Nemotron 70B), toggle Extended Thinking in the model selector.',
-        'You can calibrate the reasoning budget from 1,024 up to 8,192 tokens inside Settings > Model & Reasoning.',
-        'Reasoning blocks display real-time elapsed duration and expandable step traces.'
+        'On Pro-entitled AIRA Deep runs, toggle Extended Thinking in the model selector or Settings.',
+        'Configure the token ceiling from 1,024 up to 8,192 tokens inside Settings > Model & Reasoning.',
+        'AIRA forwards native effort/budget parameters where the active upstream provider supports them and caps max_tokens on NVIDIA Nemotron 70B.'
       ]
     },
     {

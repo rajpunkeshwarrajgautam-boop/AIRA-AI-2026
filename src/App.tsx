@@ -4,8 +4,8 @@ import type { Conversation, Message, Artifact, Attachment, Project, AppSettings,
 import {
   loadConversations, saveConversations, saveActiveChatId,
   getSessionActiveChatId, setSessionActiveChatId,
-  loadProjects, saveProjects, loadSettings, saveSettings, INITIAL_CONVERSATION,
-  hydrateStorageFromIndexedDb, hydrateProjectsFromIndexedDb
+  loadProjects, saveProjects, loadSettings, saveSettings, clearAccountSettings, INITIAL_CONVERSATION,
+  hydrateStorageFromIndexedDb, hydrateProjectsFromIndexedDb, hydrateSettingsFromIndexedDb
 } from './utils/storage';
 import { streamAIResponse } from './utils/aiEngine';
 import { appendAgentTimelineEvent } from './utils/agentTimeline';
@@ -64,7 +64,8 @@ import {
 } from './utils/announcements';
 import {
   getOnboardingState,
-  restartOnboarding
+  restartOnboarding,
+  fetchOnboardingFromServer
 } from './utils/onboarding';
 import {
   type FeatureGuidanceItem,
@@ -85,6 +86,8 @@ const MODE_CONTEXT: Record<WorkspaceMode, string> = {
 function App() {
   useAnimatedFavicon();
   const [currentUserId, setCurrentUserId] = useState<string | null>(() => neonAuth.getCurrentUser()?.id || null);
+  const activeUserIdRef = useRef<string | null>(currentUserId);
+  activeUserIdRef.current = currentUserId;
   const [conversations, setConversations] = useState<Conversation[]>(() => {
     const user = neonAuth.getCurrentUser();
     return loadConversations(user?.id);
@@ -121,6 +124,19 @@ function App() {
         }
       }
     });
+    const currentUser = neonAuth.getCurrentUser();
+    const idbIdentity = (currentUser && currentUser.id === currentUserId)
+      ? { userId: currentUser.id, email: currentUser.email }
+      : (currentUserId ? { userId: currentUserId } : undefined);
+    void hydrateSettingsFromIndexedDb(idbIdentity).then(loadedSettings => {
+      if (!isCancelled && loadedSettings && settingsOwnerRef.current === (currentUserId || null)) {
+        setSettings(prev => ({
+          ...loadedSettings,
+          userName: prev.userName || loadedSettings.userName,
+          email: prev.email || loadedSettings.email,
+        }));
+      }
+    });
     return () => {
       isCancelled = true;
     };
@@ -135,7 +151,10 @@ function App() {
     return loadProjects(user?.id);
   });
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>(() => localStorage.getItem('aira_active_project_id_v1') || undefined);
-  const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
+  const [settings, setSettings] = useState<AppSettings>(() => {
+    const user = neonAuth.getCurrentUser();
+    return loadSettings(user ? { userId: user.id, email: user.email } : undefined);
+  });
   const [workspaceMode, setWorkspaceModeState] = useState<WorkspaceMode>(() => {
     const user = neonAuth.getCurrentUser();
     const key = `aira_workspace_mode_${user?.id || 'guest'}`;
@@ -287,13 +306,24 @@ function App() {
 
   // Check first-login onboarding on initial mount and auth changes
   useEffect(() => {
-    // Only automatically pop up for authenticated accounts upon first login
-    // Guests or unauthenticated sessions can launch or restart the tutorial manually via help menu
-    if (!currentUserId || currentUserId.startsWith('guest_') || userTier === 'guest') return;
-    const obState = getOnboardingState(currentUserId);
-    if (!obState.completed && !obState.skipped) {
-      setIsOnboardingOpen(true);
+    // Guests or unauthenticated sessions never auto-open or leak previous account tutorials
+    if (!currentUserId || currentUserId.startsWith('guest_') || userTier === 'guest') {
+      setIsOnboardingOpen(false);
+      return;
     }
+
+    let cancelled = false;
+    const obState = getOnboardingState(currentUserId);
+    setIsOnboardingOpen(!obState.completed && !obState.skipped);
+
+    void fetchOnboardingFromServer(currentUserId).then(remoteOb => {
+      if (cancelled || activeUserIdRef.current !== currentUserId || !remoteOb) return;
+      setIsOnboardingOpen(!remoteOb.completed && !remoteOb.skipped);
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [currentUserId, userTier]);
 
   // Track tier upgrades to display feature discovery card
@@ -368,6 +398,7 @@ useEffect(() => {
   const authEpochRef = useRef(0);
   const conversationsOwnerRef = useRef<string | null>(currentUserId);
   const projectsOwnerRef = useRef<string | null>(currentUserId);
+  const settingsOwnerRef = useRef<string | null>(currentUserId);
 
   const activeConversation = useMemo(
     () => conversations.find(c => c.id === activeChatId) || welcomeConversation,
@@ -430,6 +461,7 @@ useEffect(() => {
           activeAbortControllerRef.current.abort();
           activeAbortControllerRef.current = null;
         }
+        neonAuth.abortActiveRequests();
         activeRunIdRef.current = null;
         activeAssistantMsgIdRef.current = null;
         pendingAutomationIdsRef.current.clear();
@@ -441,6 +473,13 @@ useEffect(() => {
         setActiveAgentPrompt(undefined);
         setIsAgentPanelOpen(false);
         setIsStudioOpen(false);
+        setIsOnboardingOpen(false);
+        setIsWhatsNewOpen(false);
+        setFocusedAnnouncement(null);
+        setActiveFeatureGuidance(null);
+        setPendingApproval(null);
+        setActiveExecutionGraph(null);
+        setRepairDraft(null);
 
         // Restore user-scoped workspace mode
         try {
@@ -468,11 +507,13 @@ useEffect(() => {
       setCurrentUserId(nextUserId);
 
       if (user) {
-        setSettings(s => ({
-          ...s,
-          userName: user.name || s.userName,
-          email: user.email || s.email,
-        }));
+        const nextOwnerSettings = loadSettings({ userId: user.id, email: user.email });
+        settingsOwnerRef.current = user.id;
+        setSettings({
+          ...nextOwnerSettings,
+          userName: nextOwnerSettings.userName || user.name || '',
+          email: user.email || nextOwnerSettings.email || '',
+        });
 
         // Immediately load cached conversations belonging to this verified user
         const cached = loadConversations(user.id);
@@ -501,11 +542,13 @@ useEffect(() => {
         }
       } else {
         // Account signed out: revert to isolated guest state and clear memory
-        setSettings(s => ({
-          ...s,
-          userName: 'Guest User',
+        const guestSettings = loadSettings();
+        settingsOwnerRef.current = null;
+        setSettings({
+          ...guestSettings,
+          userName: guestSettings.userName || 'Guest User',
           email: '',
-        }));
+        });
         conversationsOwnerRef.current = null;
         const guestConvs = loadConversations();
         setConversations(guestConvs);
@@ -571,7 +614,11 @@ useEffect(() => {
       saveProjects(projects, currentUserId || undefined);
     }
   }, [projects, currentUserId]);
-  useEffect(() => saveSettings(settings), [settings]);
+  useEffect(() => {
+    if (settingsOwnerRef.current === currentUserId) {
+      saveSettings(settings, currentUserId);
+    }
+  }, [settings, currentUserId]);
   useEffect(() => {
     setSessionActiveChatId(activeChatId || null);
   }, [activeChatId]);
@@ -1260,37 +1307,52 @@ useEffect(() => {
     if (intent.capability === 'RESEARCH') {
       modeContext += '\nPerform deep research synthesis. Decompose the inquiry into core sub-questions, extract evidence, cite primary sources, and clearly distinguish verified facts from inferences.';
     }
-    const systemContext = [settings.customInstructions, modeContext, projectContext].filter(Boolean).join('\n\n');
+    const requestEpoch = authEpochRef.current;
+    const requestOwnerId = currentUserId;
+    const isSameRequestIdentity = () => (
+      authEpochRef.current === requestEpoch &&
+      activeUserIdRef.current === requestOwnerId
+    );
 
     try {
       await streamAIResponse(
         rawText,
         history,
         settings.activeModel,
-        { ...settings, customInstructions: systemContext },
+        settings,
         attachments,
         {
-          onThinkingChunk: chunk => updateConversation(id, c => ({
-            ...c,
-            messages: c.messages.map(m => m.id === assistantId ? {
-              ...m,
-              thinking: { text: (m.thinking?.text || '') + chunk, isStreaming: true },
-            } : m),
-          })),
-          onContentChunk: chunk => updateConversation(id, c => ({
-            ...c,
-            messages: c.messages.map(m => m.id === assistantId ? { ...m, content: m.content + chunk } : m),
-          })),
-          onProvenance: provenance => updateConversation(id, c => ({
-            ...c,
-            messages: c.messages.map(m => m.id === assistantId ? {
-              ...m,
-              provenance,
-              modelUsed: (provenance.executedModel || m.modelUsed) as any
-            } : m),
-          })),
+          onThinkingChunk: chunk => {
+            if (!isSameRequestIdentity()) return;
+            updateConversation(id, c => ({
+              ...c,
+              messages: c.messages.map(m => m.id === assistantId ? {
+                ...m,
+                thinking: { text: (m.thinking?.text || '') + chunk, isStreaming: true },
+              } : m),
+            }));
+          },
+          onContentChunk: chunk => {
+            if (!isSameRequestIdentity()) return;
+            updateConversation(id, c => ({
+              ...c,
+              messages: c.messages.map(m => m.id === assistantId ? { ...m, content: m.content + chunk } : m),
+            }));
+          },
+          onProvenance: provenance => {
+            if (!isSameRequestIdentity()) return;
+            updateConversation(id, c => ({
+              ...c,
+              messages: c.messages.map(m => m.id === assistantId ? {
+                ...m,
+                provenance,
+                modelUsed: (provenance.executedModel || m.modelUsed) as any
+              } : m),
+            }));
+          },
           onArtifactFound: artifact => {
-            const key = `${currentUserId || 'guest'}:${id}:${artifact.id}`;
+            if (!isSameRequestIdentity()) return;
+            const key = `${requestOwnerId || 'guest'}:${id}:${artifact.id}`;
             const previous = artifactRevisionsRef.current.get(key);
             const updatedArtifact = ADAPTIVE_STUDIO_PREVIEW
               ? reconcileArtifactRevision(previous, artifact)
@@ -1321,6 +1383,7 @@ useEffect(() => {
             }));
           },
           onApprovalRequired: approval => {
+            if (!isSameRequestIdentity()) return;
             setPendingApproval({
               id: approval.id,
               runId: approval.runId,
@@ -1329,9 +1392,11 @@ useEffect(() => {
             });
           },
           onStatusUpdate: status => {
+            if (!isSameRequestIdentity()) return;
             setExecutionStatus(status);
           },
           onAgentEvent: ADAPTIVE_STUDIO_PREVIEW ? event => {
+            if (!isSameRequestIdentity()) return;
             updateConversation(id, c => ({
               ...c,
               messages: c.messages.map(m => m.id === assistantId ? {
@@ -1341,6 +1406,7 @@ useEffect(() => {
             }));
           } : undefined,
           onGraphEvent: ADAPTIVE_STUDIO_PREVIEW ? (type, data) => {
+            if (!isSameRequestIdentity()) return;
             setActiveExecutionGraph(prev => {
               const base = prev || {
                 graphId: 'graph_' + Date.now(),
@@ -1357,14 +1423,17 @@ useEffect(() => {
             });
           } : undefined,
           onLatencyMetrics: metrics => {
+            if (!isSameRequestIdentity()) return;
             if (!settings.telemetryOptOut) {
               console.info('[AIRA Telemetry] Client observed latency metrics:', metrics);
             }
           },
           onRunStarted: runId => {
+            if (!isSameRequestIdentity()) return;
             activeRunIdRef.current = runId;
           },
           onSourceAdded: source => {
+            if (!isSameRequestIdentity()) return;
             updateConversation(id, c => ({
               ...c,
               messages: c.messages.map(m => m.id === assistantId ? {
@@ -1378,6 +1447,7 @@ useEffect(() => {
             }));
           },
           onCancelled: () => {
+            if (!isSameRequestIdentity()) return;
             updateConversation(id, c => ({
               ...c,
               messages: c.messages.map(m => m.id === assistantId ? {
@@ -1388,6 +1458,7 @@ useEffect(() => {
             }));
           },
           onComplete: () => {
+            if (!isSameRequestIdentity()) return;
             activeAbortControllerRef.current = null;
             activeAssistantMsgIdRef.current = null;
             activeRunIdRef.current = null;
@@ -1404,6 +1475,7 @@ useEffect(() => {
             setIsLoading(false);
           },
           onError: error => {
+            if (!isSameRequestIdentity()) return;
             activeAbortControllerRef.current = null;
             activeAssistantMsgIdRef.current = null;
             activeRunIdRef.current = null;
@@ -1424,13 +1496,15 @@ useEffect(() => {
             setIsLoading(false);
           },
         },
-        projectContext || undefined,
+        projectContext.trim() || undefined,
         id,
         intent.capability === 'RESEARCH' ? 'RESEARCH' : undefined,
         controller.signal,
-        ADAPTIVE_STUDIO_PREVIEW
+        ADAPTIVE_STUDIO_PREVIEW,
+        modeContext.trim() || undefined
       );
     } catch (err: any) {
+      if (!isSameRequestIdentity()) return;
       activeAbortControllerRef.current = null;
       activeAssistantMsgIdRef.current = null;
       activeRunIdRef.current = null;
@@ -1866,6 +1940,7 @@ useEffect(() => {
 
         {isSettingsOpen && (
           <SettingsModal
+            key={`settings-${currentUserId || 'guest'}`}
             isOpen={isSettingsOpen}
             onClose={() => setIsSettingsOpen(false)}
             settings={settings}
@@ -1876,7 +1951,14 @@ useEffect(() => {
             onImportData={data => { setConversations(data.conversations); setProjects(data.projects); if (data.conversations[0]) handleSelectChat(data.conversations[0].id); }}
             onClearAll={() => {
               const fresh = { ...INITIAL_CONVERSATION, id: 'chat-' + Date.now(), createdAt: Date.now(), updatedAt: Date.now() };
-              setConversations([fresh]); setActiveChatId(fresh.id); setProjects([]); setActiveProjectId(undefined); setSettings(loadSettings()); setActiveArtifact(null); agentMemory.purge(undefined, true);
+              clearAccountSettings(currentUserId);
+              setConversations([fresh]);
+              setActiveChatId(fresh.id);
+              setProjects([]);
+              setActiveProjectId(undefined);
+              setSettings(loadSettings(currentUserId));
+              setActiveArtifact(null);
+              agentMemory.purge(undefined, true);
             }}
             onOpenMemoryVault={() => setIsMemoryVaultOpen(true)}
             onOpenBilling={() => setIsAccountBillingOpen(true)}
@@ -1899,6 +1981,7 @@ useEffect(() => {
         />
 
         <PrivacyCenterModal
+          key={`privacy-${currentUserId || 'guest'}`}
           isOpen={isPrivacyCenterOpen}
           onClose={() => setIsPrivacyCenterOpen(false)}
           settings={settings}
@@ -1907,7 +1990,14 @@ useEffect(() => {
           projects={projects}
           onClearAllData={() => {
             const fresh = { ...INITIAL_CONVERSATION, id: 'chat-' + Date.now(), createdAt: Date.now(), updatedAt: Date.now() };
-            setConversations([fresh]); setActiveChatId(fresh.id); setProjects([]); setActiveProjectId(undefined); setSettings(loadSettings()); setActiveArtifact(null); agentMemory.purge(undefined, true);
+            clearAccountSettings(currentUserId);
+            setConversations([fresh]);
+            setActiveChatId(fresh.id);
+            setProjects([]);
+            setActiveProjectId(undefined);
+            setSettings(loadSettings(currentUserId));
+            setActiveArtifact(null);
+            agentMemory.purge(undefined, true);
           }}
           onOpenLegalViewer={(doc) => {
             setLegalViewerInitialDoc(doc);
@@ -1954,11 +2044,6 @@ useEffect(() => {
           isOpen={isAuthOpen}
           onClose={() => setIsAuthOpen(false)}
           onAuthSuccess={(user) => {
-            setSettings(s => ({
-              ...s,
-              userName: user.name || s.userName,
-              email: user.email || s.email,
-            }));
             setToastMessage(`Welcome, ${user.name}! Sync active.`);
           }}
         />
@@ -2007,6 +2092,7 @@ useEffect(() => {
         />
 
         <OnboardingWalkthrough
+          key={`onboarding-${currentUserId || 'guest'}`}
           isOpen={isOnboardingOpen}
           onClose={() => setIsOnboardingOpen(false)}
           userId={currentUserId}
