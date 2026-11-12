@@ -4,9 +4,9 @@
 **Pull Request**: [#164](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/164)  
 **Base Branch (Production Target — Unchanged)**: `prod-release` at `562e75d40b2bed8bfc8fc03fe88dfa9f475b1213` (`https://aira-ai-2026.vercel.app`)  
 **Reviewed Baseline Candidate**: `1bf5d8e956affab397ad67f3a98d64f2e5d0327c` (pre-remediation)  
-**Live Deployed Certified Runtime SHA**: `e55e8e1aab3060cc6f0074da0c65d605e3196fc0` (deployed to custom staging domain `https://staging.virexaaiventures.com/`, Vercel deployment `dpl_2GN83DbTwfinGFYAhUraNBVXix8a`; note: subsequent audit-report/test-script commit introduces zero runtime code changes)  
+**Certified Executable Runtime & Two-Account OAuth SHA**: `5466020bf0cb734be2a66a61b17df3e7efd6ff30` (deployed to `https://staging.virexaaiventures.com/`, Vercel deployment `dpl_G1wgKkfxjzwPT4auQR8c5Cu6wmsq`; application code identical to `e55e8e1aab3060cc6f0074da0c65d605e3196fc0`; subsequent documentation-only closure commit on PR #164 updates this report with zero code or script changes)  
 **Staging Database Target**: Neon Project `mute-frost-50372225` / Branch `br-snowy-bonus-b32thjlz` (`ep-twilight-cherry-b3iz2oqv-pooler.c-4.ap-southeast-1.aws.neon.tech`) + Neon Auth Branch `br-green-snow-b3dsci5u` (`ep-ancient-sound-b3drtnp5.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth`)  
-**Verdict**: **READY FOR PRODUCTION RELEASE REVIEW (GO)** — All account isolation, genuine Google & GitHub third-party OAuth authorization-code exchange and session establishment in isolated Edge profiles, bidirectional cross-account IDOR protection, onboarding sync, truthful model routing (Option B: Groq primary + Gemini 1M context failover), SettingsModal form state persistence, PostgreSQL workspace authority & subscription fixture lifecycle, commercial contract adherence, and CI gates are 100% verified against isolated live staging (`e55e8e1aab3060cc6f0074da0c65d605e3196fc0`) and Neon branch `br-snowy-bonus-b32thjlz`. Production `prod-release` (`562e75d40b2bed8bfc8fc03fe88dfa9f475b1213`) remains completely untouched.
+**Current Authoritative Certification Status**: **GO FOR PRODUCTION RELEASE REVIEW** — Genuine interactive Google and GitHub OAuth completion, bidirectional cross-account IDOR isolation, personalization and prompt isolation, onboarding sync, truthful NVIDIA Option B model routing (Groq primary + Gemini 1M failover, NVIDIA experimental `HTTP 404`), PostgreSQL workspace authority & subscription fixture lifecycle cleanup, commercial quota adherence, SHA-guarded runner unit tests (`7/7`), and Automated CI (`Fast CI`, `Semantic Search CI`, `Main / PR certification`, `Disposable PostgreSQL Certification`, `GitGuardian`) are verified. (`Deployed staging acceptance` in GitHub Actions is **SKIPPED BY DESIGN** on `prod-release` PRs; genuine manually assisted OAuth & deployed staging acceptance is independently **PASS**.) Production `prod-release` (`562e75d40b2bed8bfc8fc03fe88dfa9f475b1213`) remains completely untouched.
 
 ---
 
@@ -44,7 +44,7 @@
 - Target domain: `https://staging.virexaaiventures.com/`.
 - `GET /api/auth/oauth/google/start`: Generates authentic cryptographically signed state and nonce, with callback URL `https://staging.virexaaiventures.com/api/auth/oauth/google/callback`. Navigation in Microsoft Edge lands cleanly on `accounts.google.com` sign-in without redirect URI mismatch errors.
 - `GET /api/auth/oauth/github/start`: Generates authentic state and nonce, with callback URL `https://staging.virexaaiventures.com/api/auth/oauth/github/callback`. Navigation in Microsoft Edge lands cleanly on `github.com/login` sign-in.
-- *Boundary Note*: Full interactive completion of third-party login screens was not run through automated browser scripts because doing so would trigger anti-bot challenges / CAPTCHA on Google/GitHub accounts, which automated tooling is strictly forbidden to bypass. The OAuth origin authorization, redirect generation, and callback routing are verified and certified.
+- *Historical Boundary Note (`64c8614`) — **SUPERSEDED — Genuine Google and GitHub OAuth completion subsequently verified.***: Full interactive completion of third-party login screens was not run through automated browser scripts at historical commit `64c861456f58d830f612647a4c4813dd94818479` because doing so would trigger anti-bot challenges / CAPTCHA on Google/GitHub accounts, which automated tooling is strictly forbidden to bypass. The OAuth origin authorization, redirect generation, and callback routing were verified there, and full interactive Google + GitHub OAuth completion was subsequently executed and certified against `e55e8e1` and `5466020` (Sections 7–8 below).
 
 ### 2.2 Dual-Profile Microsoft Edge Isolation & Account Acceptance (`scripts/verify-staging-dual-account-isolation.ts`)
 Executed using Microsoft Edge with persistent isolated contexts (`artifacts/staging-acceptance/edge_profile_a` and `edge_profile_b`) against `https://staging.virexaaiventures.com/`:
@@ -196,11 +196,43 @@ Executed via [scripts/oauth-phase2-certify.ts](../../scripts/oauth-phase2-certif
 - **Post-Matrix Quota & Database Hygiene**: Account A settled cleanly (`dailyStandardChatRemaining: 139`, `reasoningBoostsRemaining: 200`); `cleanupAllStagingFixtures()` removed `sub_staging_fixture_1794490371128`; post-cleanup check confirmed **0 active subscriptions**, **3 plans**, **6 plan_prices**, **10 users** on `br-snowy-bonus-b32thjlz`.
 
 ### 7.5 CI & Local Regression Runs (Commit `e55e8e1aab3060cc6f0074da0c65d605e3196fc0`)
-- [`CI` Run `43209238103`](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/actions/runs/43209238103): **Fast CI (`2m46s`, SUCCESS)**, **Semantic Search CI (`44s`, SUCCESS)**, **Main / PR certification (`4m50s`, SUCCESS)** (includes `Account settings isolation & onboarding lifecycle Playwright E2E`). *(`Deployed staging acceptance` is PR-gated `SKIPPED` in GitHub Actions and executed directly live against `https://staging.virexaaiventures.com/` above.)*
-- [`Disposable PostgreSQL Certification` Run `43209238082`](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/actions/runs/43209238082): **SUCCESS (`2m43s`)**.
-- [`CI (push)` Run `43209228401`](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/actions/runs/43209228401): **SUCCESS (`3m40s`)**.
-- **GitGuardian Security Checks**: **SUCCESS**.
+- **Automated CI — PASS** ([`CI` Run `43209238103`](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/actions/runs/43209238103)): **Fast CI (`2m46s`, SUCCESS)**, **Semantic Search CI (`44s`, SUCCESS)**, **Main / PR certification (`4m50s`, SUCCESS)** (includes `Account settings isolation & onboarding lifecycle Playwright E2E`), [`Disposable PostgreSQL Certification` Run `43209238082`](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/actions/runs/43209238082) (**SUCCESS (`2m43s`)**), [`CI (push)` Run `43209228401`](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/actions/runs/43209228401) (**SUCCESS (`3m40s`)**), and **GitGuardian Security Checks** (**SUCCESS**).
+- **Deployed staging CI job (`Deployed staging acceptance`) — SKIPPED BY DESIGN**: `.github/workflows/ci.yml` restricts `staging-deployed` to `github.event_name == 'push' && github.ref == 'refs/heads/staging'` (and `test/staging-deployment-attestation.ts` enforces `githubCommitRef === 'staging'`), the GitHub `staging` environment contains zero secrets, and genuine third-party OAuth requires human interaction/consent that cannot be safely automated without storing user session credentials in CI.
+- **Genuine manually assisted OAuth & deployed staging acceptance — PASS**: Executed directly against `https://staging.virexaaiventures.com/` (Sections 7.1–7.4).
 - **Local Verification Passes**: `npm run typecheck` (PASS), `npm run lint` (0 errors), `npm run build` (PASS), `npm run test:secrets` (0 exposed credentials across 891 tracked files), `npm run test:model-routing` (PASS — 34 suites + 18 P1.6.7 tests), `npm run test:integration:entitlements` (20/20 PASS), `npm run test:behavioral:security` (11/11 PASS), `npm run test:behavioral:precedence` (10/10 PASS), `npm run test:db-isolation` (41/41 PASS), `npm run test:cutover-safety` (53/53 PASS), `npm run test:projects-storage-regression` (12/12 PASS), `npm run test:auth-fail-closed` (PASS), `npm run test:release-readiness` (PASS), `npm run test:preview-identity` (PASS).
 
-### 7.6 Final Verdict
-**PR #164 — READY FOR PRODUCTION RELEASE REVIEW (GO)** (Production `prod-release` at `562e75d40b2bed8bfc8fc03fe88dfa9f475b1213` remains completely untouched).
+---
+
+## 8. Final Closure Pass (`5466020`) — SHA-Safe OAuth Runner, Workflow Classification & Re-Certified Two-Account Acceptance
+
+### 8.1 SHA-Safe Certification Runner & Production Host Guard ([scripts/oauth-phase2-certify.ts](../../scripts/oauth-phase2-certify.ts))
+- Removed all hardcoded commit SHA literals from `scripts/oauth-phase2-certify.ts` and added validated SHA + target origin guards (`assertValidFullSha`, `resolveExpectedCandidateSha`, `assertDeployedShaMatches`, `assertStagingTargetUrl`).
+- Enforces a complete 40-character hexadecimal SHA from `--expected-sha`, `AIRA_EXPECTED_SHA` / `EXPECTED_SHA`, or verified Git `HEAD` metadata; fails immediately on missing/invalid/conflicting/mismatched SHAs or production URLs (`aira-ai-2026.vercel.app`, `prod-release.*`, non-HTTPS).
+- Covered by unit tests in [test/oauth-phase2-certify-sha-guard.test.ts](../../test/oauth-phase2-certify-sha-guard.test.ts) (`npm run test:oauth-sha-guard`, `7/7` PASS) and integrated into `Fast CI` (`npx tsx --test test/truthful-capabilities-model-architecture.test.ts test/oauth-phase2-certify-sha-guard.test.ts`).
+
+### 8.2 Exact-SHA (`5466020`) Genuine Google + GitHub OAuth & Two-Account Isolation Re-Acceptance
+Executed directly against `https://staging.virexaaiventures.com/` (Vercel deployment `dpl_G1wgKkfxjzwPT4auQR8c5Cu6wmsq`, `https://aira-ai-2026-biuydl3sp-rajpunkeshwarrajgautam-boops-projects.vercel.app`) serving exact SHA **`5466020bf0cb734be2a66a61b17df3e7efd6ff30`**:
+- **Interactive OAuth Exchanges Verified in Vercel Logs**: `GET /api/auth/oauth/google/callback` (`20:45:35.37`) and `GET /api/auth/oauth/github/callback` (`20:46:07.44`) with redacted parameters and no credential exposure.
+- **Google Account A (`edge_oauth_profile_a`)**: `AUTHENTICATED` (`neon_user_3aea...`, `customerId: cust_2a79b54106e04c9ab491e5be3aed6b97`, `linkedProviders: ["google"]`), `reloadPersisted: true`, `revokedOnLogout: true` (`ANONYMOUS` on reload).
+- **GitHub Account B (`edge_oauth_profile_b`)**: `AUTHENTICATED` (`neon_user_e215...`, `customerId: cust_dbfaef1d12024ea99ee860ee4bfc5b77`, `linkedProviders: ["github", "google"]`), `reloadPersisted: true`, `revokedOnLogout: true` (`ANONYMOUS` on reload).
+- **Bidirectional Cross-Account Isolation (`B ↔ A`)**: `GET`/`DELETE /api/conversations/:id` (`404`), `GET`/`PATCH`/`DELETE /api/projects/:id` (`404`), `GET`/`DELETE /api/memories/:id` (`404`), forged `POST /api/user/onboarding` (`403 FORBIDDEN_OWNERSHIP_SPOOF` / `403`), `personalizationIsolated: true` (zero `aira_settings_${userIdA}_v1` or `GOOGLE_ACCOUNT_A_CONFIDENTIAL_BIO` in Account B storage or prompt response), `pendingStreamAbortVerified: true`.
+- **Runtime Model & Quota Matrix (`5466020`)**:
+  - `aira-fast` (Free): `200`, `groq/openai/gpt-oss-120b` (`2` deltas, `fallbackOccurred: false`)
+  - `aira-auto` (Free): `200`, `groq/openai/gpt-oss-120b` (`10` deltas, `"19 + 23 = 42."`, `fallbackOccurred: false`)
+  - Free-tier `aira-pro` gating: `403` (`PLAN_MODEL_RESTRICTED`)
+  - `aira-pro` (Pro Fixture `sub_staging_fixture_1794496768363`, `price_pro_usd`): `200`, `groq/openai/gpt-oss-120b` (`37` deltas, `fallbackOccurred: false`)
+  - `aira-deep` (Pro + `extendedThinking: true`): `200`, `groq/openai/gpt-oss-120b` (`432` deltas, `79` thinking deltas, `reasoningControl: "effort_mapped"`)
+  - Long-context failover (>28K chars): `200`, `gemini/gemini-3.5-flash-lite` (`fallbackOccurred: true`, `deltas: 0` on that probe; streaming deltas of `2` and `180` previously verified on identical runtime code at `e55e8e1` and `64c8614`)
+  - Post-matrix Account A quota: `dailyStandardChatRemaining: 134`, `reasoningBoostsRemaining: 199`; `cleanupAllStagingFixtures()` removed `1` fixture -> post-cleanup DB verified `Plans: 3, Plan Prices: 6, Users: 10, Active Subscriptions: 0` on `br-snowy-bonus-b32thjlz`.
+- **Sanitized Evidence Ledger**: `artifacts/staging-acceptance/pr164/REAL_OAUTH_CERTIFICATION_REPORT.json`, `01_real_google_oauth_authenticated.png`, `02_real_github_oauth_authenticated.png`.
+
+### 8.3 CI Status Classification & Final Verdict (`5466020` & Subsequent Docs-Only Closure Commit)
+- **Automated CI on `5466020` — PASS**:
+  - [`CI` (PR #164) Run `43243749480`](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/actions/runs/43243749480): `Fast CI` (`SUCCESS`), `Semantic Search CI` (`SUCCESS`), `Main / PR certification` (`SUCCESS`).
+  - [`Disposable PostgreSQL Certification` Run `43243749509`](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/actions/runs/43243749509): `SUCCESS`.
+  - [`CI` (`push`) Run `43243732981`](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/actions/runs/43243732981): `Fast CI` (`SUCCESS`), `Semantic Search CI` (`SUCCESS`).
+  - `GitGuardian Security Checks`: `SUCCESS`; local `npm run test:secrets`: `PASS` (`0` exposed credentials across `894` tracked files).
+- **Deployed staging CI job (`Deployed staging acceptance`) — SKIPPED BY DESIGN** on PRs targeting `prod-release` (reasons in Section 7.5).
+- **Genuine manually assisted OAuth acceptance — PASS** (Section 8.2).
+- **Production Release Governance**: Production `prod-release` (`562e75d40b2bed8bfc8fc03fe88dfa9f475b1213`) remains untouched; release execution awaits explicit protected-branch merge and post-merge live production verification per `AGENTS.md`.
+- **Final Recommendation**: **GO FOR PRODUCTION RELEASE REVIEW**.
