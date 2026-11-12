@@ -23,6 +23,7 @@
     "memory:ui": "npx @agentmemory/agentmemory@latest ui",
     "test:bot": "node --import tsx test/aira-bot.ts",
     "test:bot:browser": "node --import tsx test/aira-bot.ts --browser",
+    "test:bot:computer": "node --import tsx test/aira-bot-computer.ts",
     "typecheck:api": "tsc -p tsconfig.api.json"
   },
   "dependencies": {
