@@ -86,7 +86,7 @@ async function run() {
 
     assert.equal(deepExec.provider, 'nvidia', 'Deep mode must use NVIDIA Nemotron 70B, not Groq');
     assert.equal(deepExec.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct');
-    assert.equal(deepExec.fallbackOccurred, true, 'Falls back from Anthropic to NVIDIA when only NVIDIA is configured');
+    assert.equal(deepExec.fallbackOccurred, false, 'Registry-aligned NVIDIA primary must execute directly without fallback when NVIDIA is configured');
     console.log('PASS: aira-deep strictly preserved on NVIDIA Nemotron 70B.');
 
     // -------------------------------------------------------------
