@@ -714,7 +714,7 @@ export class OpenAIAdapter implements ModelAdapter {
           typeof delta?.reasoning_content === 'string' && delta.reasoning_content.length
             ? delta.reasoning_content
             : (typeof delta?.reasoning === 'string' && delta.reasoning.length ? delta.reasoning : '');
-        if (reasoningChunk) {
+        if (reasoningChunk && policy.extendedThinking) {
           onChunk({ thinking: reasoningChunk });
         }
         if (event.usage) usage = {
@@ -1045,10 +1045,10 @@ export class ModelRouter {
       const explicitGemini = (process.env.AIRA_GEMINI_MODEL || '').trim().replace(/^["']|["']$/g, '');
       if (explicitGemini) return explicitGemini;
       if (policyModel === 'aira-deep' || requestedModelId === 'aira-deep' || requestedModelId === 'claude-3-opus') {
-        return (process.env.AIRA_GEMINI_DEEP_MODEL || '').trim().replace(/^["']|["']$/g, '') || 'gemini-2.5-pro';
+        return (process.env.AIRA_GEMINI_DEEP_MODEL || '').trim().replace(/^["']|["']$/g, '') || 'gemini-3.8-flash';
       }
       if (policyModel === 'aira-pro' || requestedModelId === 'aira-pro' || requestedModelId === 'claude-3-5-sonnet') {
-        return (process.env.AIRA_GEMINI_PRO_MODEL || '').trim().replace(/^["']|["']$/g, '') || 'gemini-2.5-flash';
+        return (process.env.AIRA_GEMINI_PRO_MODEL || '').trim().replace(/^["']|["']$/g, '') || 'gemini-3.8-flash';
       }
       return 'gemini-3.5-flash-lite';
     }
@@ -1086,8 +1086,11 @@ export class ModelRouter {
     if (provider === 'nvidia') return 'output_cap_only';
     if (provider === 'groq' && executedModel.startsWith('openai/gpt-oss-')) return 'effort_mapped';
     if (provider === 'anthropic') return 'native_budget';
-    if (provider === 'gemini' && (executedModel.startsWith('gemini-2.5-pro') || executedModel.startsWith('gemini-2.5-flash')) && !executedModel.includes('lite')) {
-      return 'native_budget';
+    if (provider === 'gemini') {
+      const lower = executedModel.toLowerCase();
+      if ((lower.startsWith('gemini-2.5-pro') || lower.startsWith('gemini-2.5-flash') || lower.startsWith('gemini-3')) && !lower.includes('lite')) {
+        return 'native_budget';
+      }
     }
     return 'none';
   }
@@ -1313,7 +1316,9 @@ export class ModelRouter {
         const plannedCandidate = this.getPlannedModelForProvider(prov, model, requestedModelId);
         if (this.healthTracker.isAvailable(prov, plannedCandidate)) {
           selectedProvider = prov;
-          selectedAdapter = adapter;
+          selectedAdapter = (prov === 'gemini' || prov === 'groq' || prov === 'nvidia')
+            ? this.createModelSpecificAdapter(prov, plannedCandidate)
+            : adapter;
           break;
         }
         if (prov === preferredProvider) {
@@ -1326,8 +1331,11 @@ export class ModelRouter {
         for (const prov of providerPreference) {
           const adapter = this.adapters.get(prov);
           if (adapter) {
+            const plannedCandidate = this.getPlannedModelForProvider(prov, model, requestedModelId);
             selectedProvider = prov;
-            selectedAdapter = adapter;
+            selectedAdapter = (prov === 'gemini' || prov === 'groq' || prov === 'nvidia')
+              ? this.createModelSpecificAdapter(prov, plannedCandidate)
+              : adapter;
             break;
           }
         }
@@ -1421,6 +1429,14 @@ export class ModelRouter {
             tertiaryAdapter
           });
         }
+      } else if (selectedProvider === 'gemini' && this.adapters.has('groq')) {
+        const groqFallback = this.createModelSpecificAdapter('groq', 'openai/gpt-oss-120b');
+        const flashLiteFallback = this.createModelSpecificAdapter('gemini', 'gemini-3.5-flash-lite');
+        effectiveAdapter = new ResilientModelAdapter(selectedAdapter, flashLiteFallback, this.healthTracker, {
+          firstTokenTimeoutMs: policy.extendedThinking ? 15000 : 10000,
+          fallbackFirstTokenTimeoutMs: 8000,
+          tertiaryAdapter: groqFallback
+        });
       }
 
       return {

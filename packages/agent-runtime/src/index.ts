@@ -1643,7 +1643,7 @@ CAPABILITY & IDENTITY INVARIANTS:
                   run.provenance.reasoningControl = 'native_budget';
                 } else if (run.provenance.executedProvider === 'gemini') {
                   const gModel = (run.provenance.executedModel || '').toLowerCase();
-                  const supportsGeminiThinking = (gModel.startsWith('gemini-2.5-pro') || gModel.startsWith('gemini-2.5-flash')) && !gModel.includes('lite');
+                  const supportsGeminiThinking = (gModel.startsWith('gemini-2.5-pro') || gModel.startsWith('gemini-2.5-flash') || gModel.startsWith('gemini-3')) && !gModel.includes('lite');
                   run.provenance.reasoningControl = supportsGeminiThinking ? 'native_budget' : 'none';
                 }
                 run.provenance.timestamp = Date.now();

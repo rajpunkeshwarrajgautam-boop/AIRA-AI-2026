@@ -421,7 +421,7 @@ test('Truthful Capabilities & Model Architecture Suite', async (t) => {
       assert.deepEqual(groqReasoningChunks, ['Groq step...']);
 
       // When GEMINI_API_KEY + NVIDIA_API_KEY are both configured and NVIDIA circuit opens,
-      // aira-pro routes to gemini-2.5-flash and aira-deep routes to gemini-2.5-pro (native_budget)
+      // aira-pro routes to gemini-3.8-flash and aira-deep routes to gemini-3.8-flash (native_budget)
       process.env.GEMINI_API_KEY = 'gm-test-key';
       const dualRouter = new ModelRouter();
       for (let i = 0; i < 5; i++) {
@@ -429,12 +429,12 @@ test('Truthful Capabilities & Model Architecture Suite', async (t) => {
       }
       const proFallback = dualRouter.resolveExecution('aira-pro', 'ANSWER', { callerTier: 'pro' });
       assert.equal(proFallback.executedProvider, 'gemini');
-      assert.equal(proFallback.executedModel, 'gemini-2.5-flash');
+      assert.equal(proFallback.executedModel, 'gemini-3.8-flash');
       assert.equal(proFallback.fallbackOccurred, true);
 
       const deepFallback = dualRouter.resolveExecution('aira-deep', 'RESEARCH', { callerTier: 'pro', extendedThinking: true, reasoningBudget: 4096 });
       assert.equal(deepFallback.executedProvider, 'gemini');
-      assert.equal(deepFallback.executedModel, 'gemini-2.5-pro');
+      assert.equal(deepFallback.executedModel, 'gemini-3.8-flash');
       assert.equal(deepFallback.reasoningControl, 'native_budget');
       assert.equal(deepFallback.fallbackOccurred, true);
     } finally {

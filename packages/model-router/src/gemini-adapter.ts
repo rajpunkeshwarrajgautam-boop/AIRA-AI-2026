@@ -136,8 +136,11 @@ export class GeminiAdapter implements ModelAdapter {
     };
 
     const targetModel = (policy.model || this.modelName || '').toLowerCase();
-    const isThinkingCapableGemini = (targetModel.startsWith('gemini-2.5-pro') || targetModel.startsWith('gemini-2.5-flash')) &&
-      !targetModel.includes('lite');
+    const isThinkingCapableGemini = (
+      targetModel.startsWith('gemini-2.5-pro') ||
+      targetModel.startsWith('gemini-2.5-flash') ||
+      targetModel.startsWith('gemini-3')
+    ) && !targetModel.includes('lite');
     if (
       policy.extendedThinking &&
       isThinkingCapableGemini &&
@@ -332,8 +335,9 @@ export class GeminiAdapter implements ModelAdapter {
 
     options?.signal?.throwIfAborted();
 
-    // First-token timeout tracking (evidence-based default for Gemini fallback: 4000ms)
-    const firstTokenTimeoutMs = options?.firstTokenTimeoutMs ?? 4000;
+    // First-token timeout tracking: short deadline only when ResilientModelAdapter supplies one;
+    // bare Gemini calls allow up to 25s so large-context / thinking requests are not clipped prematurely.
+    const firstTokenTimeoutMs = options?.firstTokenTimeoutMs ?? 25000;
     let firstTokenDelivered = false;
     let timeoutTimer: NodeJS.Timeout | null = null;
     const timeoutController = new AbortController();

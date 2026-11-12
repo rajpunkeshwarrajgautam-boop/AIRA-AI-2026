@@ -55,7 +55,7 @@ export const VERIFIED_MODEL_REGISTRY: Record<string, ModelCapabilityDescriptor> 
     contextWindow: '128K tokens',
     supportsThinking: false,
     reasoningControl: 'output_cap_only',
-    description: 'High-fidelity engineering and multi-step synthesis (targets NVIDIA Nemotron 70B with Gemini 2.5 Flash 1M-context automatic failover).',
+    description: 'High-fidelity engineering and multi-step synthesis (targets NVIDIA Nemotron 70B with Gemini 3.8 Flash 1M-context automatic failover).',
     badge: 'Quality'
   },
   'aira-deep': {
@@ -67,7 +67,7 @@ export const VERIFIED_MODEL_REGISTRY: Record<string, ModelCapabilityDescriptor> 
     contextWindow: '128K tokens',
     supportsThinking: true,
     reasoningControl: 'output_cap_only',
-    description: 'Deep-research and architectural synthesis (targets NVIDIA Nemotron 70B with Gemini 2.5 Pro native thinkingBudget failover when NIM is unavailable).',
+    description: 'Deep-research and architectural synthesis (targets NVIDIA Nemotron 70B with Gemini 3.8 Flash native thinkingBudget failover when NIM is unavailable).',
     badge: 'Deep'
   },
   'nvidia/llama-3.1-nemotron-70b-instruct': {
