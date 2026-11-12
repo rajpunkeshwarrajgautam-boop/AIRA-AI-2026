@@ -1434,7 +1434,7 @@ export class ModelRouter {
         const geminiFallback = this.createModelSpecificAdapter('gemini', geminiModel);
         effectiveAdapter = new ResilientModelAdapter(selectedAdapter, geminiFallback, this.healthTracker, {
           firstTokenTimeoutMs: 8000,
-          fallbackFirstTokenTimeoutMs: 12000
+          fallbackFirstTokenTimeoutMs: 25000
         });
       }
 

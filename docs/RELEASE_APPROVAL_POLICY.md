@@ -146,11 +146,26 @@ Both PR #64 (`policy/explicit-production-approval-20261014`) and PR #65 (`feat/s
 
 ---
 
-## Emergency and rollback procedure
+## Post-merge production SHA & emergency rollback procedure
 
+### Production merge-commit SHA verification rule
+When merging a certified PR into `prod-release` using GitHub's standard merge-commit strategy (`gh pr merge <pr> --match-head-commit <PR_HEAD_SHA> --merge`), GitHub generates a **new merge commit SHA** whose parents are `(prior prod-release HEAD, PR_HEAD_SHA)`. Never expect production `/api/version` to equal the pre-merge `PR_HEAD_SHA` under `--merge`. Record and verify all five release coordinates:
+1. **Certified PR Candidate SHA** (`PR_HEAD_SHA`)
+2. **Production Branch SHA Before Merge** (`BASE_PROD_SHA`)
+3. **Actual GitHub Merge Commit SHA** (`MERGE_COMMIT_SHA` on `refs/heads/prod-release`)
+4. **Vercel Production Deployment ID** (`dpl_*` built from `MERGE_COMMIT_SHA`)
+5. **Live `/api/version` `commitSha`** (must equal `MERGE_COMMIT_SHA`, with `git merge-base --is-ancestor <PR_HEAD_SHA> <MERGE_COMMIT_SHA>` returning `0`)
+
+*(If `--squash` is used instead, record `SQUASH_COMMIT_SHA` on `prod-release`, verify `/api/version === SQUASH_COMMIT_SHA`, and verify tree content equivalence `git diff --quiet <PR_HEAD_SHA> <SQUASH_COMMIT_SHA>` when no prior commits intervened.)*
+
+### Two-tier emergency recovery procedure
 If an incident or regression occurs post-release:
-1. **Instant Rollback**: Execute `vercel rollback` via Vercel CLI or Dashboard to point the production alias `https://aira-ai-2026.vercel.app` back to the previous verified stable deployment:
-   - Baseline Deployment: `dpl_89joN6FnCocG3shaBB5rC33CeDRJ` (Commit: `b1635e132544d0772358cb463131d1e6cd4d40a9`).
-2. **Reversible Fix**: Prepare a hotfix on a dedicated branch against `prod-release`.
+1. **Immediate Incident Containment (Alias-Level)**:
+   - Under `AGENTS.md` and `AUTONOMOUS_RELEASE_POLICY.md`, automated agents must **never** invoke `vercel promote`.
+   - On Vercel `Hobby`, only the authorized human/incident operator may invoke `vercel rollback <previous_healthy_deployment_id>` via Vercel CLI or Dashboard after confirming the deployment `readyState: READY` (`target: production`). That switches the live production alias temporarily while leaving `prod-release` at the broken merge commit, so permanent GitHub revert-PR cleanup remains mandatory.
+   - Example verified healthy baseline before PR #164: Deployment `dpl_B8yMLpxHH6wVoSnqsJWkXLPvkZUt` (`562e75d40b2bed8bfc8fc03fe88dfa9f475b1213`, `/api/health` → `200 HEALTHY`). (Historical pre-PR-#64 baseline: `dpl_89joN6FnCocG3shaBB5rC33CeDRJ` / `b1635e132544d0772358cb463131d1e6cd4d40a9`.)
+2. **Permanent Source-Code Rollback (Protected Revert PR)**:
+   - Never use `git push --force`, `git reset --hard`, direct push to `prod-release`, or history rewriting (blocked by GitHub Ruleset `25079946`).
+   - Branch from updated `origin/prod-release` (`MERGE_COMMIT_SHA`), run `git revert -m 1 <MERGE_COMMIT_SHA>` (parent `1` = `BASE_PROD_SHA`; preserves any other unrelated legitimate commits cleanly), open a revert PR targeting `prod-release`, pass all mandatory Ruleset `25079946` checks (`Fast CI`, `Semantic Search CI`, `Main / PR certification`), merge via protected PR (`gh pr merge <revert_pr> --match-head-commit <REVERT_HEAD> --merge`), and verify live `/api/version` + `/api/health`.
 3. **Database Safety**: Never run destructive down-migrations that drop tables or delete production data. Use forward-fix additive migrations.
 4. **Attestation**: Run through the full release certification protocol before promoting any replacement deployment.

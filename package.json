@@ -120,6 +120,7 @@
     "test:cors": "tsx --test test/cors-origin-rejection.test.ts",
     "test:direct-oauth": "npx tsx --test test/auth-direct-oauth-lifecycle.test.ts",
     "test:oauth-sha-guard": "npx tsx --test test/oauth-phase2-certify-sha-guard.test.ts",
+    "test:gemini-empty-stream": "npx tsx --test test/gemini-fallback-empty-stream-regression.test.ts",
     "test:projects-storage-regression": "npx tsx --test test/projects-storage-regression.test.ts",
     "test:storage-regression": "npx tsx --test test/projects-storage-regression.test.ts"
   },

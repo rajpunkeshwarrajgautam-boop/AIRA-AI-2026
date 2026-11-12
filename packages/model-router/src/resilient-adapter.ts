@@ -283,11 +283,28 @@ export class ResilientModelAdapter implements ModelAdapter {
         const tFbStart = performance.now();
         let fbReceivedFirst = false;
 
-        const fbTimeoutMs = this.fallbackAdapter.provider === 'gemini'
-          ? (policy.extendedThinking
-              ? Math.max(this.config.fallbackFirstTokenTimeoutMs ?? 4000, 15000)
-              : (this.config.fallbackFirstTokenTimeoutMs ?? 4000))
-          : firstTokenTimeoutMs;
+        const promptChars = messages.reduce(
+          (sum, msg) => sum + (typeof msg.content === 'string' ? msg.content.length : 0),
+          0
+        );
+        const isOversizedOrPayloadLimit =
+          primaryErr.status === 413 ||
+          /\b413\b|too large|request too large|TPM/i.test(primaryErr.message || '') ||
+          promptChars > 12000;
+
+        let fbTimeoutMs: number;
+        if (this.fallbackAdapter.provider === 'gemini') {
+          const configuredTimeout = this.config.fallbackFirstTokenTimeoutMs;
+          if (configuredTimeout !== undefined && configuredTimeout < 1000) {
+            fbTimeoutMs = configuredTimeout;
+          } else if (isOversizedOrPayloadLimit || policy.extendedThinking) {
+            fbTimeoutMs = Math.max(configuredTimeout ?? 25000, 25000);
+          } else {
+            fbTimeoutMs = configuredTimeout ?? 12000;
+          }
+        } else {
+          fbTimeoutMs = firstTokenTimeoutMs;
+        }
 
         try {
           const fbRes = await this.fallbackAdapter.stream(
@@ -310,27 +327,32 @@ export class ResilientModelAdapter implements ModelAdapter {
             { signal: fallbackAbort.signal, firstTokenTimeoutMs: fbTimeoutMs }
           );
 
+          if (!fbReceivedFirst && !(fbRes.text && fbRes.text.trim().length > 0)) {
+            const emptyErr = new Error(
+              `EMPTY_PROVIDER_RESPONSE: Fallback provider ${this.fallbackAdapter.provider}:${fallbackModel} completed without returning content.`
+            );
+            (emptyErr as any).code = 'EMPTY_PROVIDER_RESPONSE';
+            throw emptyErr;
+          }
+
           return fbRes;
         } catch (fallbackErr: any) {
+          const isAborted = outerSignal?.aborted;
+          if (isAborted) {
+            throw outerSignal.reason || fallbackErr;
+          }
+
           this.healthTracker.recordFailure(this.fallbackAdapter.provider, fallbackModel, fallbackErr);
 
           if (this.stickinessLocked || fbReceivedFirst) {
             throw fallbackErr;
           }
 
-          const isAborted = outerSignal?.aborted;
-          if (isAborted) {
-            throw outerSignal.reason || fallbackErr;
-          }
-
-          // Section 9: Do NOT fall back to same-quota Groq model if Groq failed due to account-level rate limits
+          // Section 9: Do NOT fall back to same-quota Groq model if Groq failed due to account-level rate limits or 413 TPM size limits
           const isGroqAccountLimit =
             primaryErr.status === 429 ||
-            primaryErr.message?.includes('429') ||
-            primaryErr.message?.includes('rate_limit') ||
-            primaryErr.message?.includes('quota') ||
-            primaryErr.message?.includes('TPD') ||
-            primaryErr.message?.includes('TPM');
+            primaryErr.status === 413 ||
+            /\b429\b|\b413\b|too large|request too large|rate_limit|quota|TPD|TPM/i.test(primaryErr.message || '');
 
           const tertiaryModel = this.tertiaryAdapter ? this.getModelName(this.tertiaryAdapter, policy) : null;
           const isTertiaryAvailable = this.tertiaryAdapter && tertiaryModel

@@ -2158,6 +2158,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     };
 
     let sseQueue = Promise.resolve();
+    let artifactEmitted = false;
     const processStreamEvent = async (evt: any) => {
       if (res.writableEnded) return;
       if (evt.type === 'routing.decision') {
@@ -2200,6 +2201,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         stream.off('event', handler);
         res.end();
       } else if (evt.type === 'artifact.created') {
+        artifactEmitted = true;
         res.write(`event: artifact_open\ndata: ${JSON.stringify(evt.data)}\n\n`);
         res.write(`event: artifact_delta\ndata: ${JSON.stringify({ chunk: evt.data.content })}\n\n`);
         res.write(`event: artifact_close\ndata: ${JSON.stringify({ id: evt.data.id })}\n\n`);
@@ -2244,6 +2246,20 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         stream.off('event', handler);
         res.end();
       } else if (evt.type === 'run.completed') {
+        if (deltaCount === 0 && !artifactEmitted) {
+          if (!firstTokenEmitted) {
+            await releaseQuotaIfUnused();
+          }
+          if (res.writableEnded) return;
+          await finalizeAndEmitMetrics();
+          res.write(`event: error\ndata: ${JSON.stringify({
+            error: 'Aira completed without producing a response.',
+            code: 'EMPTY_PROVIDER_RESPONSE',
+          })}\n\n`);
+          stream.off('event', handler);
+          res.end();
+          return;
+        }
         await settleQuotaOnce();
         if (res.writableEnded) return;
         await finalizeAndEmitMetrics();
@@ -2297,7 +2313,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       : 'Aira could not complete this request.';
     if (!res.headersSent) {
       res.status(databaseUnavailable ? 503 : 500).json({ error: message, code });
-    } else {
+    } else if (!res.writableEnded) {
       res.write(`event: error\ndata: ${JSON.stringify({ error: message, code })}\n\n`);
       res.end();
     }

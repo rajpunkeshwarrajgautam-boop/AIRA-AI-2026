@@ -458,6 +458,12 @@ export class GeminiAdapter implements ModelAdapter {
       if (timeoutTimer) clearTimeout(timeoutTimer);
     }
 
+    if (!accumulatedText.trim()) {
+      const emptyErr = new Error('EMPTY_PROVIDER_RESPONSE: Gemini upstream stream completed without returning content.');
+      (emptyErr as any).code = 'EMPTY_PROVIDER_RESPONSE';
+      throw emptyErr;
+    }
+
     return {
       text: accumulatedText,
       thinking: accumulatedThinking || undefined,

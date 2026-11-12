@@ -294,6 +294,14 @@ export async function streamAIResponse(
         let currentEvent = 'message';
         let emittedArtifact = false;
 
+        const finishStreamOrFailEmpty = () => {
+          if (!accumulatedResponse.trim() && !emittedArtifact) {
+            wrappedCallbacks.onError('Aira runtime closed the stream without producing a response.');
+            return;
+          }
+          wrappedCallbacks.onComplete();
+        };
+
         while (true) {
           if (signal?.aborted) {
             try { await reader.cancel(); } catch {}
@@ -346,7 +354,7 @@ export async function streamAIResponse(
               const dataStr = line.slice(6).trim();
               if (dataStr === '[DONE]') {
                 if (currentEvent === 'done') {
-                  wrappedCallbacks.onComplete();
+                  finishStreamOrFailEmpty();
                   return;
                 }
                 continue;
@@ -431,7 +439,7 @@ export async function streamAIResponse(
                   wrappedCallbacks.onError(data.error || data.message || 'Aira runtime failed before producing a response');
                   return;
                 } else if (currentEvent === 'done') {
-                  wrappedCallbacks.onComplete();
+                  finishStreamOrFailEmpty();
                   return;
                 }
               } catch {
@@ -447,12 +455,7 @@ export async function streamAIResponse(
           return;
         }
 
-        if (!accumulatedResponse.trim() && !emittedArtifact) {
-          wrappedCallbacks.onError('Aira runtime closed the stream without producing a response.');
-          return;
-        }
-
-        wrappedCallbacks.onComplete();
+        finishStreamOrFailEmpty();
         return;
       }
     } catch (backendError: any) {

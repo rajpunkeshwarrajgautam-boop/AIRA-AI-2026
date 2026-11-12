@@ -1691,6 +1691,22 @@ CAPABILITY & IDENTITY INVARIANTS:
         return;
       }
 
+      if (!guardedSearchSynthesis && !run.content.trim()) {
+        const finalText = typeof completionResult?.text === 'string' ? completionResult.text : '';
+        if (finalText.trim().length > 0) {
+          run.content = finalText;
+          await this.saveRun(run);
+          await this.emitRunEvent(runId, 'content.delta', { delta: finalText });
+        } else if ((run.artifacts?.length ?? 0) === 0) {
+          await this.transitionRunState(
+            runId,
+            'FAILED',
+            'EMPTY_PROVIDER_RESPONSE: Model stream completed without generating any visible content.'
+          );
+          return;
+        }
+      }
+
       // Reconcile outbound & upstream models and confirm execution provenance
       if (run.provenance) {
         const outboundModel = completionResult?.outboundModel || run.provenance.plannedModel || run.provenance.executedModel;
