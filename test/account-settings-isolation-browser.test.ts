@@ -106,7 +106,25 @@ async function openAccountMenuTarget(page: Page, targetSelector: string): Promis
       await page.waitForTimeout(150);
     }
   }
-  await target.waitFor({ state: 'visible', timeout: 8000 });
+  try {
+    await target.waitFor({ state: 'visible', timeout: 8000 });
+  } catch (err) {
+    const diag = await page.evaluate(() => {
+      const btn = document.querySelector('[data-testid="account-button"]');
+      const menu = document.querySelector('[role="menu"]');
+      const dialogs = Array.from(document.querySelectorAll('[role="dialog"]')).map((d) => d.getAttribute('data-testid') || d.getAttribute('aria-labelledby') || d.tagName);
+      return {
+        btnAriaLabel: btn?.getAttribute('aria-label'),
+        btnExpanded: btn?.getAttribute('aria-expanded'),
+        menuCount: document.querySelectorAll('[role="menu"]').length,
+        menuText: menu?.textContent?.slice(0, 120),
+        menuOpacity: menu ? getComputedStyle(menu).opacity : null,
+        dialogs
+      };
+    }).catch(() => null);
+    console.error('[OPEN_ACCOUNT_MENU_DIAG]', targetSelector, JSON.stringify(diag));
+    throw err;
+  }
 }
 
 async function signInViaAuthModal(page: Page, email: string, password: string): Promise<void> {
@@ -388,8 +406,11 @@ test('Browser E2E: Account A -> B -> A Isolation, Provenance Migration, Active S
           thinkingBudget: 4096,
           theme: 'light'
         }));
-        // Suppress What's New popup annoyance so layout interactions stay deterministic
-        window.localStorage.setItem('aira_dismissed_announcements', JSON.stringify(['v2.5-truthful-models']));
+        // Suppress What's New popup annoyance across scopes so onboarding & menu interactions stay deterministic
+        const dismissedIds = JSON.stringify(['ann_entitlements_v2', 'ann_onboarding_walkthrough', 'ann_model_routing_v3']);
+        window.localStorage.setItem('aira_dismissed_announcements_guest', dismissedIds);
+        window.localStorage.setItem('aira_dismissed_announcements_usr_alice_browser', dismissedIds);
+        window.localStorage.setItem('aira_dismissed_announcements_usr_bob_browser', dismissedIds);
       }
     });
 
