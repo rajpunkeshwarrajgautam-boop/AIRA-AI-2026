@@ -179,13 +179,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   }));
   const compactHeight = viewport.height < 430;
 
+  const wasOpenRef = useRef(false);
+
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && !wasOpenRef.current) {
       setForm({ ...settings });
-      setActiveTab(resolveTab(initialTab));
       setCurrentUser(neonAuth.getCurrentUser());
     }
-  }, [isOpen, initialTab, settings]);
+    wasOpenRef.current = isOpen;
+  }, [isOpen, settings]);
 
   interface UsageData {
     planId: PlanTier;

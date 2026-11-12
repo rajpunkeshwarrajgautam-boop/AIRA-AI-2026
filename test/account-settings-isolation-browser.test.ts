@@ -157,8 +157,24 @@ async function signOutViaAccountMenu(page: Page): Promise<void> {
 }
 
 async function openSettingsModal(page: Page): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await dismissBlockingOverlays(page);
+    if (!await page.locator('#aira-settings-title').isVisible().catch(() => false)) {
+      await page.locator('button[title="Settings"]').click({ force: false }).catch(() => {});
+    }
+    try {
+      await page.locator('#aira-settings-title').waitFor({ state: 'visible', timeout: 3000 });
+      await page.locator('[data-testid="settings-tab-instructions"]').waitFor({ state: 'visible', timeout: 3000 });
+      await page.waitForTimeout(250);
+      await dismissBlockingOverlays(page);
+      if (await page.locator('#aira-settings-title').isVisible().catch(() => false)) {
+        return;
+      }
+    } catch {
+      await page.waitForTimeout(150);
+    }
+  }
   await dismissBlockingOverlays(page);
-  await page.locator('button[title="Settings"]').click();
   await page.locator('#aira-settings-title').waitFor({ state: 'visible', timeout: 8000 });
 }
 
