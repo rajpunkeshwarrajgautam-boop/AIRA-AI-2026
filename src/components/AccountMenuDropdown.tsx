@@ -18,7 +18,8 @@ import {
   CreditCard, 
   History, 
   CheckCircle2,
-  Compass
+  Compass,
+  Film
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { NeonUser } from '../lib/neonAuth';
@@ -48,6 +49,7 @@ interface AccountMenuDropdownProps {
   onSignOutSuccess?: () => void;
   onOpenWhatsNew?: () => void;
   onRestartOnboarding?: () => void;
+  onOpenMotionStudio?: () => void;
   unreadAnnouncementsCount?: number;
 }
 
@@ -71,6 +73,7 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
   onSignOutSuccess,
   onOpenWhatsNew,
   onRestartOnboarding,
+  onOpenMotionStudio,
   unreadAnnouncementsCount,
 }) => {
   const [activeSubmenu, setActiveSubmenu] = useState<'main' | 'help'>('main');
@@ -275,11 +278,14 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
   }, [isOpen, activeSubmenu, onClose, anchorRef]);
 
   const handleLogout = async () => {
+    const startEpoch = neonAuth.getAuthEpoch();
     try {
       setIsLoggingOut(true);
-      await neonAuth.signOut();
-      onSignOutSuccess?.();
       onClose();
+      await neonAuth.signOut();
+      if (neonAuth.getAuthEpoch() === startEpoch + 1 && !neonAuth.getCurrentUser()) {
+        onSignOutSuccess?.();
+      }
     } catch (e) {
       console.error('Logout error', e);
     } finally {
@@ -581,6 +587,20 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
                 <Compass className="w-4 h-4 text-aira-blue shrink-0" />
                 <span className="flex-1 font-medium">Interactive Tour</span>
                 <span className="text-[10px] text-claude-muted-light">Tutorial</span>
+              </button>
+
+              <button
+                role="menuitem"
+                data-testid="account-menu-motion-studio"
+                onClick={() => {
+                  onClose();
+                  onOpenMotionStudio?.();
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left hover:bg-claude-surface2-light dark:hover:bg-white/5 transition-colors group"
+              >
+                <Film className="w-4 h-4 text-cyan-500 shrink-0" />
+                <span className="flex-1 font-medium">Motion Showcase</span>
+                <span className="text-[10px] text-claude-muted-light">Video Studio</span>
               </button>
 
               <button

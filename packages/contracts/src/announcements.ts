@@ -38,7 +38,7 @@ export const ANNOUNCEMENT_REGISTRY: readonly Announcement[] = [
     features: [
       '4-tier plan architecture with transparent daily and monthly limits',
       'Pro Python Sandbox and real-time Browser tools',
-      'Expanded model routing with Claude 3.5 Sonnet, GPT-4o, and Gemini 2.5 Pro',
+      'Operational model routing with Groq LPU, Google Gemini, and NVIDIA Nemotron 70B',
       'Zero-data-loss safe downgrades and read-only preservation'
     ],
     category: 'feature',

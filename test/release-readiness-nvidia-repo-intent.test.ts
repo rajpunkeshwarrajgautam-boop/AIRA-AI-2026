@@ -191,10 +191,14 @@ async function runReleaseReadinessTestSuite(): Promise<void> {
         `CRITICAL SECURITY VIOLATION: Internal model alias "${requestModel}" was dispatched to external API: ${urlStr}`
       );
 
-      // Return synthetic SSE response
+      // Return synthetic SSE response matching target provider wire format
+      const isGeminiUrl = urlStr.includes('generativelanguage.googleapis.com');
+      const chunkPayload = isGeminiUrl
+        ? `data: {"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}\n\n`
+        : `data: {"choices":[{"delta":{"content":"ok"}}]}\n\n`;
       const sseStream = new ReadableStream({
         start(controller) {
-          controller.enqueue(new TextEncoder().encode(`data: {"choices":[{"delta":{"content":"ok"}}]}\n\n`));
+          controller.enqueue(new TextEncoder().encode(chunkPayload));
           controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
           controller.close();
         }

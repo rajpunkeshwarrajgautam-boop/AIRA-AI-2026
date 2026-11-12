@@ -43,11 +43,20 @@ export function linkedProviderNames(payload: unknown): string[] | null {
   return [...new Set(names.map((name) => name === 'github' ? 'GitHub' : 'Google'))];
 }
 
+function normalizePrincipalSubject(id: string): string {
+  return id.replace(/^neon_user_/, '');
+}
+
 /** Reject incomplete or fabricated billing snapshots instead of filling gaps with example credits. */
 export function parseBillingSummary(payload: unknown, expectedPrincipalId: string | null): BillingSummary | null {
   if (!payload || typeof payload !== 'object') return null;
   const summary = payload as Record<string, unknown>;
-  if (!expectedPrincipalId || summary.principalId !== expectedPrincipalId) return null;
+  if (
+    !expectedPrincipalId ||
+    typeof summary.principalId !== 'string' ||
+    !normalizePrincipalSubject(summary.principalId) ||
+    normalizePrincipalSubject(summary.principalId) !== normalizePrincipalSubject(expectedPrincipalId)
+  ) return null;
   if (!['free', 'plus', 'pro'].includes(String(summary.planId))) return null;
   if (typeof summary.planName !== 'string' || !summary.planName.trim()) return null;
   if (typeof summary.subscriptionStatus !== 'string' || !summary.subscriptionStatus.trim()) return null;

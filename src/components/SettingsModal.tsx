@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { 
   Settings, 
   X, 
@@ -33,6 +33,7 @@ import { AVAILABLE_MODELS } from '../utils/constants';
 import { neonAuth } from '../lib/neonAuth';
 import { COMMERCIAL_PLANS, PlanTier } from '../types/commercial-types';
 import { resetDismissedAnnouncements } from '../utils/announcements';
+import { agentMemory } from '../utils/agentMemoryEngine';
 
 export interface PresetTheme {
   id: NonNullable<AppSettings['aestheticPreset']>;
@@ -178,13 +179,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   }));
   const compactHeight = viewport.height < 430;
 
+  const wasOpenRef = useRef(false);
+
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && !wasOpenRef.current) {
       setForm({ ...settings });
-      setActiveTab(resolveTab(initialTab));
       setCurrentUser(neonAuth.getCurrentUser());
     }
-  }, [isOpen, initialTab, settings]);
+    wasOpenRef.current = isOpen;
+  }, [isOpen, settings]);
 
   interface UsageData {
     planId: PlanTier;
@@ -252,7 +255,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const projectLimit = activePlanDef.maxProjects;
   const memoryLimit = activePlanDef.maxMemoryRecords;
   const isProjectsExceeded = projectLimit !== -1 && projects.length > projectLimit;
-  const memoryCount = 0;
+  const memorySnapshot = useSyncExternalStore(agentMemory.subscribe, agentMemory.getSnapshot, () => []);
+  const memoryCount = memorySnapshot.length;
   const isMemoryExceeded = memoryLimit !== -1 && memoryCount > memoryLimit;
 
   const dailyChatsLimit = usageData?.dailyChatsLimit ?? activePlanDef.dailyStandardChatLimit;
@@ -368,7 +372,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const tabs: Array<{ id: SettingsTab; label: string; icon: React.ReactNode }> = [
     { id: 'general', label: 'General & Appearance', icon: <Palette className="w-4 h-4" /> },
-    { id: 'plan', label: 'My Plan & Usage', icon: <Sparkles className="w-4 h-4 text-claude-accentInk" /> },
+    { id: 'plan', label: 'My Plan & Usage', icon: <CreditCard className="w-4 h-4 text-claude-accentInk" /> },
     { id: 'reasoning', label: 'Model & Reasoning', icon: <Brain className="w-4 h-4" /> },
     { id: 'memory', label: 'Agent Memory', icon: <Database className="w-4 h-4" /> },
     { id: 'instructions', label: 'Personalization', icon: <Sliders className="w-4 h-4" /> },
@@ -496,7 +500,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <label htmlFor="aira-settings-email" className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark block mb-2">Account Email</label>
                     <input 
                       id="aira-settings-email"
-                      value={form.email || 'user@aira.internal'} 
+                      value={form.email || ''} 
+                      placeholder="Not signed in"
                       onChange={e => setForm({ ...form, email: e.target.value })} 
                       className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-medium outline-none focus:border-claude-terracotta transition-all" 
                     />
@@ -976,8 +981,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <div className="p-4 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/40 dark:bg-claude-surface2-dark/40 space-y-3">
                     <div className="flex items-center justify-between">
                       <div>
-                        <div className="text-xs font-bold text-claude-text-light dark:text-white">Extended Thinking by Default</div>
-                        <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">Permits models to output step-by-step reasoning tokens before responding.</div>
+                        <div className="text-xs font-bold text-claude-text-light dark:text-white">Extended Thinking / Deep Output Budget</div>
+                        <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">Caps generation ceiling (1,024–8,192 tokens) on AIRA Deep. Native thinking tokens emit only when the active upstream provider supports them (NVIDIA Nemotron 70B applies output max_tokens cap).</div>
                       </div>
                       <label className="relative inline-flex items-center cursor-pointer">
                         <input
@@ -993,18 +998,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     {form.extendedThinking && (
                       <div className="pt-2 border-t border-claude-border-light/60 dark:border-claude-border-dark/60">
                         <div className="flex justify-between text-xs font-bold mb-1">
-                          <span className="text-claude-muted-light dark:text-claude-muted-dark">Reasoning Token Budget</span>
+                          <span className="text-claude-muted-light dark:text-claude-muted-dark">Output / Reasoning Token Ceiling</span>
                           <span className="text-claude-accentInk font-mono">{form.thinkingBudget.toLocaleString()} tokens</span>
                         </div>
                         <input
                           type="range"
                           min={1024}
-                          max={64000}
+                          max={8192}
                           step={1024}
-                          value={form.thinkingBudget}
+                          value={Math.min(form.thinkingBudget, 8192)}
                           onChange={e => setForm({ ...form, thinkingBudget: Number(e.target.value) })}
                           className="w-full accent-claude-terracotta cursor-pointer"
                         />
+                        <div className="flex justify-between text-[10px] text-claude-muted-light dark:text-claude-muted-dark mt-1">
+                          <span>1,024 min</span>
+                          <span>Runtime cap (max_tokens / effort where supported)</span>
+                          <span>8,192 max</span>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -1059,18 +1069,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                     <div className="flex items-center justify-between pt-2 border-t border-claude-border-light/60 dark:border-claude-border-dark/60">
                       <div>
-                        <div className="text-xs font-bold text-claude-text-light dark:text-white">Automatic Privacy Scrubbing</div>
-                        <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">Filter API keys and secrets before saving memory items.</div>
+                        <div className="text-xs font-bold text-claude-text-light dark:text-white flex items-center gap-1.5">
+                          <span>Automatic Privacy Scrubbing</span>
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-200/50 dark:border-emerald-500/20">
+                            Enforced Safeguard
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">
+                          API keys, tokens, and credentials are automatically redacted before persisting memories.
+                        </div>
                       </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={form.privacyScrubbing !== false}
-                          onChange={e => setForm({ ...form, privacyScrubbing: e.target.checked })}
-                          className="sr-only peer"
-                        />
-                        <div className="w-9 h-5 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-claude-terracotta"></div>
-                      </label>
+                      <div className="flex items-center gap-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                        <ShieldCheck className="w-4 h-4" />
+                        <span>Active</span>
+                      </div>
                     </div>
 
                     {onOpenMemoryVault && (
@@ -1173,10 +1185,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         {currentUser ? 'Authenticated Profile' : 'Subscription Plan'}
                       </div>
                       <div className="text-sm font-bold text-claude-text-light dark:text-white mt-0.5">
-                        {currentUser ? `${currentUser.name || 'User'} (Aira Pro Workspace)` : 'Aira Pro (Multi-Model Extended Intelligence)'}
+                        {currentUser ? `${currentUser.name || 'User'} (${activePlanDef.name} Workspace)` : `${activePlanDef.name} (Trial Workspace)`}
                       </div>
                       <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">
-                        {currentUser ? currentUser.email : '200K token context window with hybrid reasoning.'}
+                        {currentUser ? currentUser.email : '128K token context window with adaptive model routing.'}
                       </div>
                     </div>
                     <span className="text-xs font-bold px-3 py-1 rounded-full bg-claude-terracotta text-claude-onAccent">Active</span>
@@ -1190,7 +1202,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       onClick={() => setActiveTab('plan')}
                       className="p-3 rounded-xl border border-claude-border-light dark:border-white/10 bg-claude-surface2-light dark:bg-white/5 hover:border-claude-terracotta/50 text-left transition-colors flex items-center gap-2.5"
                     >
-                      <Sparkles className="w-4 h-4 text-claude-accentInk shrink-0" />
+                      <CreditCard className="w-4 h-4 text-claude-accentInk shrink-0" />
                       <div>
                         <div className="text-xs font-bold text-claude-text-light dark:text-white">My Plan & Usage</div>
                         <div className="text-[10px] text-claude-muted-light">Active tier, meters & quotas</div>
@@ -1226,7 +1238,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <Zap className="w-4 h-4 text-claude-accentInk shrink-0" />
                         <div>
                           <div className="text-xs font-bold text-claude-text-light dark:text-white">Upgrade Plan</div>
-                          <div className="text-[10px] text-claude-muted-light">Compare Free, Pro & Enterprise</div>
+                          <div className="text-[10px] text-claude-muted-light">Compare Free, Plus & Pro</div>
                         </div>
                       </button>
                     )}

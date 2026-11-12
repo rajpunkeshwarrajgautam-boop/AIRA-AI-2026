@@ -25,6 +25,10 @@ export interface GeminiRequestPayload {
     temperature?: number;
     maxOutputTokens?: number;
     topP?: number;
+    thinkingConfig?: {
+      thinkingBudget: number;
+      includeThoughts?: boolean;
+    };
   };
   safetySettings?: Array<{
     category: string;
@@ -72,7 +76,7 @@ export class GeminiAdapter implements ModelAdapter {
 
   public formatRequestPayload(
     messages: ChatMessageInput[],
-    policy: { model?: string; temperature?: number; maxTokens?: number }
+    policy: { model?: string; temperature?: number; maxTokens?: number; extendedThinking?: boolean; reasoningBudget?: number }
   ): GeminiRequestPayload {
     const rawContents: GeminiContent[] = [];
     const systemParts: { text: string }[] = [];
@@ -130,6 +134,24 @@ export class GeminiAdapter implements ModelAdapter {
         { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' }
       ]
     };
+
+    const targetModel = (policy.model || this.modelName || '').toLowerCase();
+    const isThinkingCapableGemini = (
+      targetModel.startsWith('gemini-2.5-pro') ||
+      targetModel.startsWith('gemini-2.5-flash') ||
+      targetModel.startsWith('gemini-3')
+    ) && !targetModel.includes('lite');
+    if (
+      policy.extendedThinking &&
+      isThinkingCapableGemini &&
+      typeof policy.reasoningBudget === 'number' &&
+      policy.reasoningBudget >= 1024
+    ) {
+      payload.generationConfig.thinkingConfig = {
+        thinkingBudget: Math.min(Math.max(Math.round(policy.reasoningBudget), 1024), 8192),
+        includeThoughts: true
+      };
+    }
 
     if (systemParts.length > 0) {
       payload.systemInstruction = {
@@ -215,7 +237,9 @@ export class GeminiAdapter implements ModelAdapter {
     const payload = this.formatRequestPayload(messages, {
       model: cleanModel,
       temperature: policy.temperature,
-      maxTokens: policy.maxTokens
+      maxTokens: policy.maxTokens,
+      extendedThinking: policy.extendedThinking,
+      reasoningBudget: policy.reasoningBudget
     });
 
     signal?.throwIfAborted();
@@ -240,19 +264,31 @@ export class GeminiAdapter implements ModelAdapter {
 
     const data: any = await response.json();
     const candidate = data.candidates?.[0];
-    const text = candidate?.content?.parts?.[0]?.text || '';
+    let text = '';
+    let thinking = '';
+    if (Array.isArray(candidate?.content?.parts)) {
+      for (const part of candidate.content.parts) {
+        if (part?.thought) {
+          thinking += part.text || '';
+        } else if (typeof part?.text === 'string') {
+          text += part.text;
+        }
+      }
+    }
 
     const promptTokens = data.usageMetadata?.promptTokenCount ?? 0;
     const completionTokens = data.usageMetadata?.candidatesTokenCount ?? 0;
 
     return {
       text,
+      thinking: thinking || undefined,
       usage: {
         promptTokens,
         completionTokens,
         totalTokens: promptTokens + completionTokens
       },
-      model: cleanModel
+      model: cleanModel,
+      outboundModel: cleanModel
     };
   }
 
@@ -292,13 +328,16 @@ export class GeminiAdapter implements ModelAdapter {
     const payload = this.formatRequestPayload(messages, {
       model: cleanModel,
       temperature: policy.temperature,
-      maxTokens: policy.maxTokens
+      maxTokens: policy.maxTokens,
+      extendedThinking: policy.extendedThinking,
+      reasoningBudget: policy.reasoningBudget
     });
 
     options?.signal?.throwIfAborted();
 
-    // First-token timeout tracking (evidence-based default for Gemini fallback: 4000ms)
-    const firstTokenTimeoutMs = options?.firstTokenTimeoutMs ?? 4000;
+    // First-token timeout tracking: short deadline only when ResilientModelAdapter supplies one;
+    // bare Gemini calls allow up to 25s so large-context / thinking requests are not clipped prematurely.
+    const firstTokenTimeoutMs = options?.firstTokenTimeoutMs ?? 25000;
     let firstTokenDelivered = false;
     let timeoutTimer: NodeJS.Timeout | null = null;
     const timeoutController = new AbortController();
@@ -399,6 +438,10 @@ export class GeminiAdapter implements ModelAdapter {
 
       if (buffer.length > 0) {
         const parsed = this.parseSSELine(buffer);
+        if (parsed?.thinking) {
+          accumulatedThinking += parsed.thinking;
+          onChunk({ thinking: parsed.thinking });
+        }
         if (parsed?.text) {
           if (!firstTokenDelivered) {
             firstTokenDelivered = true;
@@ -415,10 +458,18 @@ export class GeminiAdapter implements ModelAdapter {
       if (timeoutTimer) clearTimeout(timeoutTimer);
     }
 
+    if (!accumulatedText.trim()) {
+      const emptyErr = new Error('EMPTY_PROVIDER_RESPONSE: Gemini upstream stream completed without returning content.');
+      (emptyErr as any).code = 'EMPTY_PROVIDER_RESPONSE';
+      throw emptyErr;
+    }
+
     return {
       text: accumulatedText,
+      thinking: accumulatedThinking || undefined,
       usage: finalUsage,
-      model: cleanModel
+      model: cleanModel,
+      outboundModel: cleanModel
     };
   }
 }

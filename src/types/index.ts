@@ -6,6 +6,10 @@ export type WorkspaceMode = 'chat' | 'agent';
 export type CapabilityType = 'research' | 'vision' | 'builder' | 'agents' | 'automations' | 'library' | 'general';
 
 export type ModelId = 
+  | 'aira-auto'
+  | 'aira-fast'
+  | 'aira-pro'
+  | 'aira-deep'
   | 'claude-3-7-sonnet' 
   | 'claude-3-5-sonnet' 
   | 'claude-3-5-haiku' 

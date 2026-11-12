@@ -56,6 +56,7 @@ interface SidebarProps {
   userTier?: PlanTier;
   onOpenWhatsNew?: () => void;
   onRestartOnboarding?: () => void;
+  onOpenMotionStudio?: () => void;
   unreadAnnouncementsCount?: number;
 }
 
@@ -145,6 +146,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   userTier = 'free',
   onOpenWhatsNew,
   onRestartOnboarding,
+  onOpenMotionStudio,
   unreadAnnouncementsCount,
 }) => {
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
@@ -539,8 +541,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     setIsAccountMenuOpen(false);
                   }}
                   onSignOutSuccess={() => {
-                    setNeonUser(null);
-                    setIsAccountMenuOpen(false);
+                    if (!neonAuth.getCurrentUser()) {
+                      setNeonUser(null);
+                    }
                   }}
                   onOpenWhatsNew={() => {
                     onOpenWhatsNew?.();
@@ -548,6 +551,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   }}
                   onRestartOnboarding={() => {
                     onRestartOnboarding?.();
+                    setIsAccountMenuOpen(false);
+                  }}
+                  onOpenMotionStudio={() => {
+                    onOpenMotionStudio?.();
                     setIsAccountMenuOpen(false);
                   }}
                   unreadAnnouncementsCount={unreadAnnouncementsCount}

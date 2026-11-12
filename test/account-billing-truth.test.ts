@@ -36,4 +36,10 @@ test('billing rejects missing, malformed and fabricated fallback-shaped response
   assert.equal(parseBillingSummary({ ...realSummary, dailyChatsUsed: '2' }, 'owner'), null);
   assert.equal(parseBillingSummary(realSummary, 'other'), null);
   assert.deepEqual(parseBillingSummary(realSummary, 'owner'), realSummary);
+  assert.deepEqual(
+    parseBillingSummary({ ...realSummary, principalId: 'neon_user_owner' }, 'owner'),
+    { ...realSummary, principalId: 'neon_user_owner' }
+  );
+  assert.equal(parseBillingSummary({ ...realSummary, principalId: 'neon_user_other' }, 'owner'), null);
+  assert.equal(parseBillingSummary({ ...realSummary, principalId: 'neon_user_' }, 'owner'), null);
 });

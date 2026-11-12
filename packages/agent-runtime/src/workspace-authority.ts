@@ -32,14 +32,20 @@ export class PostgresWorkspaceAuthorityRepository implements WorkspaceAuthorityR
     if (existing) return assertActiveAuthority(existing);
 
     const now = Date.now();
-    await db('principal_workspace_authorities').insert({
-      principal_id: principalId,
-      workspace_id: derivedWorkspaceId,
-      state: 'ACTIVE',
-      created_at: now,
-      updated_at: now,
-      revoked_at: null
-    }).onConflict('principal_id').ignore();
+    try {
+      await db('principal_workspace_authorities').insert({
+        principal_id: principalId,
+        workspace_id: derivedWorkspaceId,
+        state: 'ACTIVE',
+        created_at: now,
+        updated_at: now,
+        revoked_at: null
+      }).onConflict('principal_id').ignore();
+    } catch (err: any) {
+      // In PostgreSQL, concurrent inserts for the same principal may violate either the
+      // primary key (principal_id) or the unique constraint on (workspace_id).
+      if (err.code !== '23505') throw err;
+    }
 
     // Re-read after insert to handle concurrent first-authentication requests. A
     // concurrent revocation or a conflicting workspace binding fails closed.
@@ -66,16 +72,32 @@ export class PostgresWorkspaceAuthorityRepository implements WorkspaceAuthorityR
     const now = Date.now();
     // Use one upsert so revocation wins a first-provision race and leaves a
     // tombstone even when this principal did not yet have an authority row.
-    const result = await db.raw(`
-      INSERT INTO principal_workspace_authorities
-        (principal_id, workspace_id, state, created_at, updated_at, revoked_at)
-      VALUES (?, ?, 'REVOKED', ?, ?, ?)
-      ON CONFLICT (principal_id) DO UPDATE SET
-        state = 'REVOKED', revoked_at = EXCLUDED.revoked_at, updated_at = EXCLUDED.updated_at
-      WHERE principal_workspace_authorities.state <> 'REVOKED'
-      RETURNING principal_id
-    `, [principalId, workspaceId, now, now, now]);
-    return (result.rows?.length || 0) === 1;
+    try {
+      const result = await db.raw(`
+        INSERT INTO principal_workspace_authorities
+          (principal_id, workspace_id, state, created_at, updated_at, revoked_at)
+        VALUES (?, ?, 'REVOKED', ?, ?, ?)
+        ON CONFLICT (principal_id) DO UPDATE SET
+          state = 'REVOKED', revoked_at = EXCLUDED.revoked_at, updated_at = EXCLUDED.updated_at
+        WHERE principal_workspace_authorities.state <> 'REVOKED'
+        RETURNING principal_id
+      `, [principalId, workspaceId, now, now, now]);
+      return (result.rows?.length || 0) === 1;
+    } catch (err: any) {
+      // Handle concurrent insert where the unique constraint on workspace_id trips first
+      if (err.code === '23505') {
+        const updateResult = await db('principal_workspace_authorities')
+          .where({ principal_id: principalId })
+          .andWhereNot({ state: 'REVOKED' })
+          .update({
+            state: 'REVOKED',
+            revoked_at: now,
+            updated_at: now
+          });
+        return updateResult > 0;
+      }
+      throw err;
+    }
   }
 }
 

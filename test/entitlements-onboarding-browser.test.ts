@@ -144,7 +144,8 @@ async function createBrowserSession(
             email: `${userTier}.user@aira.ai`,
             role: 'user',
             emailVerified: true
-          }
+          },
+          csrfToken: `mock_csrf_${userTier}`
         })
       });
     } else {
@@ -172,6 +173,41 @@ async function createBrowserSession(
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({ ok: true })
+    });
+  });
+
+  const onboardingStateRef = {
+    completed: options.onboardingState?.completed ?? false,
+    currentStage: options.onboardingState?.currentStage ?? 'intro',
+    skipped: options.onboardingState?.skipped ?? false
+  };
+
+  await page.route('**/api/user/onboarding**', async (route) => {
+    const req = route.request();
+    if (req.method() === 'POST') {
+      try {
+        const body = req.postDataJSON() || {};
+        if (body.action === 'skip') {
+          onboardingStateRef.completed = true;
+          onboardingStateRef.skipped = true;
+        } else if (body.action === 'finish') {
+          onboardingStateRef.completed = true;
+          onboardingStateRef.skipped = false;
+        } else if (body.action === 'restart' || body.action === 'reset') {
+          onboardingStateRef.completed = false;
+          onboardingStateRef.skipped = false;
+          onboardingStateRef.currentStage = 'intro';
+        } else if (body.action === 'stage' && typeof body.stage === 'string') {
+          onboardingStateRef.currentStage = body.stage;
+        }
+      } catch {
+        // Ignore parse errors in route handler
+      }
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(onboardingStateRef)
     });
   });
 
@@ -670,7 +706,7 @@ async function runTestSuite() {
       }
 
       // 3.2 Verify Free user clicking locked model opens upgrade modal
-      console.log('  [3.2] Testing Free user clicking locked model (Claude 3.5 Sonnet)...');
+      console.log('  [3.2] Testing Free user clicking locked model (AIRA Pro / NVIDIA Nemotron 70B)...');
       const freeSession = await createBrowserSession(browser, {
         userTier: 'free',
         onboardingState: { completed: true, currentStage: 'plans', skipped: false },
@@ -685,21 +721,21 @@ async function runTestSuite() {
         await modelBtn.waitFor({ state: 'visible', timeout: 10000 });
         await modelBtn.click();
 
-        // Find locked model (Claude 3.5 Sonnet has data-testid="model-locked-claude-3-5-sonnet")
-        const lockedBadge = freeSession.page.getByTestId('model-locked-claude-3-5-sonnet');
+        // Find locked flagship model (AIRA Pro has data-testid="model-locked-aira-pro")
+        const lockedBadge = freeSession.page.getByTestId('model-locked-aira-pro');
         await lockedBadge.waitFor({ state: 'visible', timeout: 5000 });
 
-        // Click the locked model option (Claude 3.5 Sonnet / Aira Pro)
-        const sonnetOption = freeSession.page.getByTestId('model-option-claude-3-5-sonnet');
-        await sonnetOption.click();
+        // Click the locked model option (AIRA Pro)
+        const proOption = freeSession.page.getByTestId('model-option-aira-pro');
+        await proOption.click();
 
-        // Verify Upgrade Modal opens with flagship model config
+        // Verify Upgrade Modal opens with truthful flagship model config
         const upgradeModal = freeSession.page.getByTestId('upgrade-modal');
         await upgradeModal.waitFor({ state: 'visible', timeout: 5000 });
 
         const title = await upgradeModal.locator('#upgrade-modal-title').textContent();
         assert.ok(
-          title?.includes('Unlock Claude 3.5 Sonnet') || title?.includes('DeepSeek R1'),
+          title?.includes('Unlock NVIDIA Nemotron 70B'),
           `Flagship model modal title expected, got: "${title}"`
         );
 

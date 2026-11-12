@@ -157,25 +157,19 @@ export const PrivacyCenterModal: React.FC<PrivacyCenterModalProps> = ({
             </div>
 
             <div className="space-y-3">
-              {/* Privacy Scrubbing */}
+              {/* Privacy Scrubbing (Always Enforced) */}
               <div className="p-4 rounded-xl border border-claude-border-light dark:border-white/10 bg-claude-surface2-light/40 dark:bg-white/[0.02] flex items-center justify-between gap-4">
                 <div>
                   <h4 className="text-sm font-semibold text-claude-text-light dark:text-white">
                     Automatic Privacy Scrubbing
                   </h4>
                   <p className="text-xs text-claude-muted-light dark:text-claude-muted-dark mt-0.5">
-                    Filters API keys, passwords, bearer tokens, and private identifiers before consolidating agent memory or logging diagnostics.
+                    Enforced platform safeguard that filters API keys, passwords, bearer tokens, and sensitive patterns before persisting client memory or logging diagnostics.
                   </p>
                 </div>
-                <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                  <input
-                    type="checkbox"
-                    checked={settings.privacyScrubbing !== false}
-                    onChange={(e) => onUpdateSettings({ privacyScrubbing: e.target.checked })}
-                    className="sr-only peer"
-                  />
-                  <div className="w-11 h-6 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
-                </label>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-md border border-emerald-500/20 shrink-0">
+                  Enforced Safeguard
+                </span>
               </div>
 
               {/* Persistent Memory */}

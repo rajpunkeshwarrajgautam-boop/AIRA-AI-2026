@@ -39,7 +39,7 @@ async function run() {
     assert.equal(normalizeStoredModelId(retired), replacement,
       'retired saved selections must migrate to an actual selectable NVIDIA model');
     assert.equal(normalizeStoredModelId(replacement), replacement);
-    assert.equal(normalizeStoredModelId('nonexistent-model'), 'claude-3-7-sonnet');
+    assert.equal(normalizeStoredModelId('nonexistent-model'), 'aira-auto');
 
     const migratedPolicy = router.resolvePolicy(retired, 'ANSWER');
     assert.equal(migratedPolicy.model, replacement,

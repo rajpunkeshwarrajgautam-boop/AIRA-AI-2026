@@ -213,6 +213,32 @@ async function main() {
     const afterDelete = await repo.search(principalA, { query: 'AmdTools64' });
     assert.equal(afterDelete.length, 0, 'deleted conversation must disappear from search');
 
+    // Regression: same principal syncing two distinct conversations that reuse identical client message IDs
+    await repo.syncConversation(principalA, {
+      id: 'search_test_conv_dup_1',
+      title: 'Duplicate Msg ID Thread 1',
+      createdAt: 5000,
+      updatedAt: 5001,
+      messages: [
+        { id: 'shared_msg_1', role: 'user', content: 'UNIQUE_DUP_THREAD_ONE', createdAt: 5001 }
+      ]
+    });
+    await repo.syncConversation(principalA, {
+      id: 'search_test_conv_dup_2',
+      title: 'Duplicate Msg ID Thread 2',
+      createdAt: 5002,
+      updatedAt: 5003,
+      messages: [
+        { id: 'shared_msg_1', role: 'user', content: 'UNIQUE_DUP_THREAD_TWO', createdAt: 5003 }
+      ]
+    });
+    const dup1 = await repo.getConversation(principalA, 'search_test_conv_dup_1');
+    const dup2 = await repo.getConversation(principalA, 'search_test_conv_dup_2');
+    assert.equal(dup1?.messages.length, 1);
+    assert.equal(dup1?.messages[0]?.content, 'UNIQUE_DUP_THREAD_ONE');
+    assert.equal(dup2?.messages.length, 1);
+    assert.equal(dup2?.messages[0]?.content, 'UNIQUE_DUP_THREAD_TWO');
+
     console.log('PASS: full-message lexical conversation search');
     console.log('PASS: title search and snippets');
     console.log('PASS: project scoping');

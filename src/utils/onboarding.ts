@@ -1,8 +1,9 @@
 /**
  * 5-Stage Interactive Onboarding Tour Utilities
  * Manages account-isolated walkthrough state, stage progression,
- * and server-side synchronization.
+ * and authenticated server-side synchronization without client ID trust.
  */
+import { authenticatedApiFetch, neonAuth } from '../lib/neonAuth';
 
 export const ONBOARDING_STAGES = [
   'intro',
@@ -128,36 +129,75 @@ export function restartOnboarding(userId?: string | null): void {
 }
 
 /**
- * Synchronize onboarding actions with the backend server.
+ * Synchronize onboarding actions with the authenticated backend server.
+ * Ownership is strictly resolved server-side from the HttpOnly BFF session cookie or verified JWT;
+ * client userId headers are never sent or trusted.
  */
 export async function syncOnboardingActionToServer(
   action: 'stage' | 'finish' | 'skip' | 'restart',
   stage?: OnboardingStage,
   userId?: string | null
-): Promise<void> {
+): Promise<boolean> {
+  const targetUser = (userId && typeof userId === 'string') ? userId.trim() : '';
+  if (!targetUser || targetUser.startsWith('guest_')) {
+    return false;
+  }
+  const activeUser = neonAuth.getCurrentUser();
+  if (!activeUser || activeUser.id !== targetUser) {
+    return false;
+  }
+  const epoch = neonAuth.getAuthEpoch();
   try {
-    await fetch('/api/user/onboarding', {
+    const res = await authenticatedApiFetch('/api/user/onboarding', {
       method: 'POST',
+      keepalive: true,
       headers: {
         'Content-Type': 'application/json',
-        ...(userId ? { 'x-user-id': userId } : {})
       },
-      body: JSON.stringify({ action, stage })
+      body: JSON.stringify({ action, ...(stage ? { stage } : {}) })
     });
+    if (!res.ok) return false;
+    if (neonAuth.getAuthEpoch() !== epoch || neonAuth.getCurrentUser()?.id !== targetUser) {
+      return false;
+    }
+    const data = await res.json().catch(() => null);
+    if (data && typeof data.completed === 'boolean') {
+      persistState({
+        completed: Boolean(data.completed),
+        currentStage: ONBOARDING_STAGES.includes(data.currentStage) ? data.currentStage : 'intro',
+        skipped: Boolean(data.skipped)
+      }, targetUser);
+    }
+    return true;
   } catch {
-    // Offline or server not responding; local state is preserved
+    // Offline or unauthenticated; local scoped state remains preserved
+    return false;
   }
 }
 
 /**
- * Fetch remote onboarding state if online and update local cache if remote is more advanced.
+ * Fetch remote onboarding state for the active authenticated principal
+ * and synchronize the user-scoped cache only if the auth epoch matches.
  */
 export async function fetchOnboardingFromServer(userId?: string | null): Promise<OnboardingState | null> {
+  const targetUser = (userId && typeof userId === 'string') ? userId.trim() : '';
+  if (!targetUser || targetUser.startsWith('guest_')) {
+    return null;
+  }
+  const activeUser = neonAuth.getCurrentUser();
+  if (!activeUser || activeUser.id !== targetUser) {
+    return null;
+  }
+  const epoch = neonAuth.getAuthEpoch();
   try {
-    const res = await fetch('/api/user/onboarding', {
-      headers: userId ? { 'x-user-id': userId } : {}
+    const res = await authenticatedApiFetch('/api/user/onboarding', {
+      method: 'GET',
+      cache: 'no-store'
     });
     if (!res.ok) return null;
+    if (neonAuth.getAuthEpoch() !== epoch || neonAuth.getCurrentUser()?.id !== targetUser) {
+      return null;
+    }
     const data = await res.json();
     if (data && typeof data.completed === 'boolean') {
       const state: OnboardingState = {
@@ -165,7 +205,7 @@ export async function fetchOnboardingFromServer(userId?: string | null): Promise
         currentStage: ONBOARDING_STAGES.includes(data.currentStage) ? data.currentStage : 'intro',
         skipped: Boolean(data.skipped)
       };
-      persistState(state, userId);
+      persistState(state, targetUser);
       return state;
     }
     return null;

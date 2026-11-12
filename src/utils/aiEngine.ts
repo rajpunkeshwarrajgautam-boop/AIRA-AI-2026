@@ -46,6 +46,67 @@ async function postChatStream(body: unknown, signal?: AbortSignal): Promise<Resp
 import { createStreamingArtifactDetector } from './artifactParser';
 import { createStreamingArtifactReconciler, createStreamingFenceArtifactDetector } from './streamingArtifactParser';
 
+export const PERSONALIZATION_BOUNDS = {
+  MAX_BIO_CHARS: 500,
+  MAX_CUSTOM_INSTRUCTIONS_CHARS: 2000,
+  MAX_RUNTIME_DIRECTIVE_CHARS: 2000,
+} as const;
+
+function boundText(value: string | undefined, maxChars: number): string {
+  if (!value || typeof value !== 'string') return '';
+  const normalized = value.trim();
+  if (!normalized) return '';
+  if (normalized.length <= maxChars) return normalized;
+  return normalized.slice(0, maxChars).trimEnd() + '... [truncated]';
+}
+
+export function composeSystemPrompt(settings: AppSettings, customPrompt?: string): string {
+  const parts: string[] = [];
+
+  // 1. Response Style Directive (Platform Formatting Preset)
+  const style = settings.responseStyle || 'normal';
+  switch (style) {
+    case 'concise':
+      parts.push('Response Style Directive: Provide concise, direct answers without unnecessary preamble or filler.');
+      break;
+    case 'explanatory':
+      parts.push('Response Style Directive: Provide detailed, pedagogical explanations breaking down concepts step-by-step.');
+      break;
+    case 'academic':
+      parts.push('Response Style Directive: Provide rigorous, academically grounded analysis with analytical depth and formal phrasing.');
+      break;
+    case 'code-first':
+      parts.push('Response Style Directive: Provide dense, production-grade code-first implementations with minimal conversational overhead.');
+      break;
+    case 'normal':
+    default:
+      parts.push('Response Style Directive: Adopt a balanced, clear, and adaptive tone tailored to the question.');
+      break;
+  }
+
+  // 2. Workspace / Caller Mode Directive (Distinct from user custom instructions; deduplicated)
+  const boundedCustomPrompt = boundText(customPrompt, PERSONALIZATION_BOUNDS.MAX_RUNTIME_DIRECTIVE_CHARS);
+
+  // 3. Account-Scoped User Profile Context (Bounded; never leaks across identities)
+  const boundedBio = boundText(settings.userBio, PERSONALIZATION_BOUNDS.MAX_BIO_CHARS);
+  if (boundedBio) {
+    parts.push(`User Profile Context: ${boundedBio}`);
+  }
+
+  // 4. Account-Scoped User Custom Instructions (Bounded; subject to AIRA invariant precedence)
+  const boundedInstructions = boundText(settings.customInstructions, PERSONALIZATION_BOUNDS.MAX_CUSTOM_INSTRUCTIONS_CHARS);
+  if (boundedInstructions) {
+    parts.push(`User Custom Instructions: ${boundedInstructions}`);
+  }
+
+  // 5. Mode / Runtime Directive (Only if non-empty and not already present)
+  if (boundedCustomPrompt && boundedCustomPrompt !== boundedInstructions) {
+    parts.push(boundedCustomPrompt);
+  }
+
+  return parts.join('\n\n');
+}
+
 export async function streamAIResponse(
   prompt: string,
   history: Array<{ role: 'user' | 'assistant'; content: string }>,
@@ -58,8 +119,17 @@ export async function streamAIResponse(
   intent?: string,
   signal?: AbortSignal,
   reconcileArtifacts = false,
+  modeDirective?: string,
 ): Promise<void> {
-  const isThinking = (model === 'claude-3-7-sonnet' && settings.extendedThinking);
+  const isThinking = Boolean(
+    settings.extendedThinking && (
+      model === 'aira-auto' ||
+      model === 'aira-deep' ||
+      model === 'claude-3-7-sonnet' ||
+      model === 'claude-3-opus' ||
+      model.includes('nemotron')
+    )
+  );
   const initiatingMemoryOwner = neonAuth.getCurrentUser()?.id || 'guest';
   const initiatingAuthEpoch = neonAuth.getAuthEpoch();
   const isInitiatingIdentityValid = () => (
@@ -172,20 +242,31 @@ export async function streamAIResponse(
 
   // 1. Try Backend SSE Streaming Server (/api/chat/stream)
   try {
+    const assembledSystemPrompt = composeSystemPrompt(settings, modeDirective);
+    // Avoid duplicating project context if it was accidentally included in customPrompt or systemPrompt
+    const trimmedContextSubgraph = enrichedContext.trim();
+    const dedupedContextSubgraph = (
+      trimmedContextSubgraph &&
+      assembledSystemPrompt &&
+      assembledSystemPrompt.includes(trimmedContextSubgraph)
+    )
+      ? ''
+      : trimmedContextSubgraph;
     const backendRes = await postChatStream({
       prompt,
       history,
       model,
       extendedThinking: isThinking,
+      thinkingBudget: isThinking ? Math.min(Math.max(settings.thinkingBudget || 2048, 1024), 8192) : undefined,
       apiKey: settings.provider === 'anthropic' ? settings.anthropicApiKey : undefined,
-      systemPrompt: settings.customInstructions || undefined,
+      systemPrompt: assembledSystemPrompt || undefined,
       attachments: attachments?.map(a => ({
         name: a.name,
         type: a.type,
         size: a.size,
         content: a.content || ''
       })),
-      contextSubgraph: enrichedContext,
+      contextSubgraph: dedupedContextSubgraph,
       conversationId,
       intent: intent || undefined
     }, signal);
@@ -212,6 +293,14 @@ export async function streamAIResponse(
         let artifactCode = '';
         let currentEvent = 'message';
         let emittedArtifact = false;
+
+        const finishStreamOrFailEmpty = () => {
+          if (!accumulatedResponse.trim() && !emittedArtifact) {
+            wrappedCallbacks.onError('Aira runtime closed the stream without producing a response.');
+            return;
+          }
+          wrappedCallbacks.onComplete();
+        };
 
         while (true) {
           if (signal?.aborted) {
@@ -265,7 +354,7 @@ export async function streamAIResponse(
               const dataStr = line.slice(6).trim();
               if (dataStr === '[DONE]') {
                 if (currentEvent === 'done') {
-                  wrappedCallbacks.onComplete();
+                  finishStreamOrFailEmpty();
                   return;
                 }
                 continue;
@@ -350,7 +439,7 @@ export async function streamAIResponse(
                   wrappedCallbacks.onError(data.error || data.message || 'Aira runtime failed before producing a response');
                   return;
                 } else if (currentEvent === 'done') {
-                  wrappedCallbacks.onComplete();
+                  finishStreamOrFailEmpty();
                   return;
                 }
               } catch {
@@ -366,12 +455,7 @@ export async function streamAIResponse(
           return;
         }
 
-        if (!accumulatedResponse.trim() && !emittedArtifact) {
-          wrappedCallbacks.onError('Aira runtime closed the stream without producing a response.');
-          return;
-        }
-
-        wrappedCallbacks.onComplete();
+        finishStreamOrFailEmpty();
         return;
       }
     } catch (backendError: any) {

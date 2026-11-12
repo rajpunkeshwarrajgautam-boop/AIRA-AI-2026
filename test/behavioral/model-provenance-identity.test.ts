@@ -143,21 +143,32 @@ describe('MISSION: Model Provenance, Runtime Identity & Capability Accuracy', ()
       assert.ok(execution.fallbackReason?.includes('NVIDIA'));
     });
 
-    // Scenario 5: Provider unavailable and fallback paths
-    it('Scenario 5: Fallback path records reason when requested provider is unavailable', () => {
+    // Scenario 5: Registry-aligned primary & fallback path when primary provider is unavailable
+    it('Scenario 5: Registry primary executes directly when available and records fallback reason when unavailable', () => {
       process.env.NODE_ENV = 'production';
-      process.env.NVIDIA_API_KEY = 'nvapi-test-key-mock';
+      process.env.GROQ_API_KEY = 'gsk-test-key-mock';
       delete process.env.ANTHROPIC_API_KEY;
       delete process.env.OPENAI_API_KEY;
+      delete process.env.NVIDIA_API_KEY;
+      delete process.env.GEMINI_API_KEY;
 
-      const router = new ModelRouter();
-      // aira-deep prefers Anthropic, but only NVIDIA is configured
-      const execution = router.resolveExecution('aira-deep', 'RESEARCH');
+      const groqPrimaryRouter = new ModelRouter();
+      // aira-deep prefers Groq per VERIFIED_MODEL_REGISTRY; with Groq configured, no fallback occurs
+      const directExecution = groqPrimaryRouter.resolveExecution('aira-deep', 'RESEARCH');
+      assert.equal(directExecution.provider, 'groq');
+      assert.equal(directExecution.executedModel, 'openai/gpt-oss-120b');
+      assert.equal(directExecution.fallbackOccurred, false);
 
-      assert.equal(execution.provider, 'nvidia');
-      assert.equal(execution.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct');
-      assert.equal(execution.fallbackOccurred, true);
-      assert.ok(execution.fallbackReason);
+      // When registry primary (Groq) is unavailable and only Gemini is configured, fallbackOccurred is true
+      delete process.env.GROQ_API_KEY;
+      process.env.GEMINI_API_KEY = 'gemini-test-key-mock';
+      const fallbackRouter = new ModelRouter();
+      const fallbackExecution = fallbackRouter.resolveExecution('aira-deep', 'RESEARCH');
+
+      assert.equal(fallbackExecution.provider, 'gemini');
+      assert.equal(fallbackExecution.executedModel, 'gemini-3.5-flash-lite');
+      assert.equal(fallbackExecution.fallbackOccurred, true);
+      assert.ok(fallbackExecution.fallbackReason);
     });
 
     // Scenario 6: Upstream model mismatch or missing provenance handling

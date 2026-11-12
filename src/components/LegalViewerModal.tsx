@@ -142,7 +142,7 @@ export const LegalViewerModal: React.FC<LegalViewerModalProps> = ({
                   2. Architectural & AI Disclaimer
                 </h3>
                 <p>
-                  AIRA integrates advanced artificial intelligence models (such as Anthropic Claude 3.7 Sonnet, DeepSeek R1, and NVIDIA Nemotron). While engineered for high accuracy, large language models may occasionally generate inaccurate, incomplete, or unexpected outputs. You remain responsible for verifying and validating generated software code, architectural recommendations, and critical data before deployment to production environments.
+                  AIRA integrates advanced artificial intelligence models (including Groq-accelerated models, Google Gemini, and NVIDIA Nemotron). While engineered for high accuracy, large language models may occasionally generate inaccurate, incomplete, or unexpected outputs. You remain responsible for verifying and validating generated software code, architectural recommendations, and critical data before deployment to production environments.
                 </p>
               </div>
 
@@ -173,7 +173,7 @@ export const LegalViewerModal: React.FC<LegalViewerModalProps> = ({
                   5. Quotas & Subscriptions
                 </h3>
                 <p>
-                  Access to inference models and reasoning budgets is governed by your active account tier (Free, Pro, or Enterprise). Quotas are non-transferable and subject to our fair usage and capacity admission policies.
+                  Access to inference models and reasoning budgets is governed by your active account tier (Guest, Free, Plus, or Pro). Quotas are non-transferable and subject to our fair usage and capacity admission policies.
                 </p>
               </div>
             </div>

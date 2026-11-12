@@ -74,9 +74,9 @@ async function run() {
     console.log('PASS: aira-fast truthfully reports fallback to Nemotron 70B when no fast provider is configured.');
 
     // -------------------------------------------------------------
-    // TEST 3: AIRA Deep route preservation
+    // TEST 3: AIRA Deep & Explicit Vendor Route Preservation
     // -------------------------------------------------------------
-    console.log('\n[TEST 3] AIRA Deep route preservation: never routed to fast provider');
+    console.log('\n[TEST 3] AIRA Deep & Explicit Vendor Route Preservation');
     cleanEnv();
     process.env.GROQ_API_KEY = 'groq-mock-key';
     process.env.NVIDIA_API_KEY = 'nv-mock-key';
@@ -84,10 +84,15 @@ async function run() {
     const multiRouter = new ModelRouter();
     const deepExec = multiRouter.resolveExecution('aira-deep', 'ANSWER');
 
-    assert.equal(deepExec.provider, 'nvidia', 'Deep mode must use NVIDIA Nemotron 70B, not Groq');
-    assert.equal(deepExec.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct');
-    assert.equal(deepExec.fallbackOccurred, true, 'Falls back from Anthropic to NVIDIA when only NVIDIA is configured');
-    console.log('PASS: aira-deep strictly preserved on NVIDIA Nemotron 70B.');
+    assert.equal(deepExec.provider, 'groq', 'Deep mode uses truthful verified provider Groq');
+    assert.equal(deepExec.executedModel, 'openai/gpt-oss-120b');
+    assert.equal(deepExec.fallbackOccurred, false, 'Registry-aligned primary executes directly without fallback');
+
+    const explicitNvExec = multiRouter.resolveExecution('nvidia/llama-3.1-nemotron-70b-instruct', 'ANSWER');
+    assert.equal(explicitNvExec.provider, 'nvidia', 'Explicit Nemotron model must use NVIDIA');
+    assert.equal(explicitNvExec.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct');
+    assert.equal(explicitNvExec.fallbackOccurred, false);
+    console.log('PASS: aira-deep and explicit NVIDIA routes preserved truthfully.');
 
     // -------------------------------------------------------------
     // TEST 4: Auto-prioritization when Groq is available

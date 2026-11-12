@@ -143,6 +143,9 @@ jobs:
       - name: Model provider routing certification
         run: npm run test:model-routing
 
+      - name: Truthful capabilities, account isolation & reasoning certification
+        run: npx tsx --test test/truthful-capabilities-model-architecture.test.ts test/oauth-phase2-certify-sha-guard.test.ts test/gemini-fallback-empty-stream-regression.test.ts
+
       - name: Math typesetting and sanitization regression
         run: npm run test:math-rendering
 
@@ -389,6 +392,9 @@ jobs:
 
       - name: Settings modal responsive acceptance
         run: npm run test:mobile-settings
+
+      - name: Account settings isolation & onboarding lifecycle Playwright E2E
+        run: npx tsx --test test/account-settings-isolation-browser.test.ts
 
       - name: Stop Vite
         if: always()

@@ -273,8 +273,18 @@ async function main() {
         // Form persists through the actual Save action, not just a state assertion.
         await save.click();
         await dialog.waitFor({state:'hidden',timeout:7000});
-        const stored=await page.evaluate(() => JSON.parse(localStorage.getItem('aira_settings_v1')||'{}').userName);
-        assert.equal(stored, 'Responsive check ' + label, label + ' save did not persist');
+        const storageAudit = await page.evaluate(() => {
+          const guestRaw = localStorage.getItem('aira_account_settings_guest');
+          const globalRaw = localStorage.getItem('aira_settings_v1');
+          const guestParsed = guestRaw ? JSON.parse(guestRaw) : null;
+          const globalParsed = globalRaw ? JSON.parse(globalRaw) : {};
+          return {
+            guestUserName: guestParsed?.data?.userName ?? null,
+            globalHasUserName: Object.prototype.hasOwnProperty.call(globalParsed, 'userName'),
+          };
+        });
+        assert.equal(storageAudit.guestUserName, 'Responsive check ' + label, label + ' save did not persist in scoped guest store');
+        assert.equal(storageAudit.globalHasUserName, false, label + ' global device key must not leak account userName');
         assert.equal(errors.length,0,label+' page errors: '+errors.join(' | '));
         const overflow=await page.evaluate(() => document.documentElement.scrollWidth>window.innerWidth+2);
         assert(!overflow,label+' page horizontal overflow');

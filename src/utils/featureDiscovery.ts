@@ -32,7 +32,7 @@ export const FEATURE_GUIDANCE_CATALOG: readonly FeatureGuidanceItem[] = [
     feature: 'reasoning_boosts',
     title: 'Extended Reasoning Models',
     subtitle: 'Deep thinking tokens for complex problems',
-    description: 'Access Claude 3.5 Sonnet and DeepSeek R1 with thinking budgets for difficult algorithms, architecture, and proofs.',
+    description: 'Access NVIDIA Nemotron 70B and extended reasoning modes with thinking budgets for difficult algorithms, architecture, and proofs.',
     samplePrompt: 'Analyze concurrency and race conditions in a distributed payment processor',
     ctaRoute: '#model-select',
     targetMode: 'chat',

@@ -22,6 +22,7 @@ interface HelpCenterModalProps {
   onOpenReportBug?: () => void;
   onOpenShortcuts?: () => void;
   onOpenPrivacyCenter?: () => void;
+  onOpenMotionStudio?: () => void;
 }
 
 interface HelpArticle {
@@ -40,6 +41,7 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
   onOpenReportBug,
   onOpenShortcuts,
   onOpenPrivacyCenter,
+  onOpenMotionStudio,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -85,25 +87,41 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
       actionHandler: onOpenShortcuts
     },
     {
+      id: 'getting-started-motion-showcase',
+      category: 'getting-started',
+      title: 'Feature Showcase & Motion Studio',
+      summary: 'Explore the 30-second motion walkthrough highlighting Groq LPU inference, Nemotron 70B reasoning, and cognitive settings.',
+      content: [
+        'Watch the interactive Video Studio showcasing AIRA\'s verified capabilities.',
+        '• Scene 1: Multi-Model Cognitive Architecture & 128K Context',
+        '• Scene 2: Ultra-Fast Groq LPU with Google Gemini Failover',
+        '• Scene 3: NVIDIA Nemotron 70B Deep Reasoning Traces',
+        '• Scene 4: Account-Scoped Onboarding Tour',
+        '• Scene 5: Cognitive Settings & Enforced Privacy Safeguards'
+      ],
+      actionLabel: 'Launch Video Studio',
+      actionHandler: onOpenMotionStudio
+    },
+    {
       id: 'models-reasoning-budget',
       category: 'models',
-      title: 'Extended Thinking & Reasoning Budgets',
-      summary: 'Configure deep thinking budgets for complex coding, architectural synthesis, and mathematical proofs.',
+      title: 'Output Ceilings & Extended Thinking',
+      summary: 'Configure output token bounds (1,024–8,192) on AIRA Deep for structured architectural synthesis and coding analysis.',
       content: [
-        'When using reasoning-capable models (e.g. Claude 3.7 Sonnet Thinking, DeepSeek R1), toggle Extended Thinking in the model selector.',
-        'You can calibrate the thinking budget from 1,024 up to 64,000 tokens inside Settings > General.',
-        'Reasoning blocks display real-time elapsed duration and expandable step traces.'
+        'On Pro-entitled AIRA Deep runs, toggle Extended Thinking in the model selector or Settings.',
+        'Configure the token ceiling from 1,024 up to 8,192 tokens inside Settings > Model & Reasoning.',
+        'AIRA forwards native effort/budget parameters where the active upstream provider supports them and caps max_tokens on NVIDIA Nemotron 70B.'
       ]
     },
     {
       id: 'models-provider-switching',
       category: 'models',
-      title: 'Model Providers & API Routing',
-      summary: 'Connect direct Anthropic, OpenRouter, or simulated enterprise backend endpoints.',
+      title: 'Model Providers & Operational Routing',
+      summary: 'High-speed multi-provider routing across Groq LPU, Google Gemini, and NVIDIA NIM.',
       content: [
-        'AIRA connects via secure serverless proxy endpoints or client-side BYOK (Bring Your Own Key) architecture.',
-        'Keys are stored locally in encrypted browser storage and never broadcast to third parties.',
-        'Switch models dynamically per conversation without losing context or memory.'
+        'AIRA connects via high-speed server-side inference gateways (Groq LPU, Google Gemini, and NVIDIA NIM).',
+        'AIRA Auto dynamically selects the fastest engine for low-latency queries and deep reasoning for complex analysis.',
+        'Credentials and upstream access are secured behind authenticated server-side boundaries.'
       ]
     },
     {
