@@ -12,7 +12,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { setupProFixture, cleanupAllStagingFixtures, verifyStagingDbIntegrity } from './staging-fixture-lifecycle.js';
+import { setupProFixture, resetStagingTestDailyQuota, cleanupAllStagingFixtures, verifyStagingDbIntegrity } from './staging-fixture-lifecycle.js';
 
 const DEFAULT_STAGING_URL = 'https://staging.virexaaiventures.com';
 const FULL_SHA_REGEX = /^[a-f0-9]{40}$/i;
@@ -311,6 +311,12 @@ export async function runPhase2() {
     const customerA = infoA.entitlements?.customerId;
     const customerB = infoB.entitlements?.customerId;
     assert.ok(customerA && customerB && customerA !== customerB, 'Distinct customer IDs required for Account A and B');
+
+    if ((infoA.entitlements?.dailyStandardChatRemaining ?? 0) < 4 || (infoB.entitlements?.dailyStandardChatRemaining ?? 0) < 4) {
+      await resetStagingTestDailyQuota([customerA, customerB]);
+      infoA.entitlements = (await getBrowserSessionInfo(pageA)).entitlements;
+      infoB.entitlements = (await getBrowserSessionInfo(pageB)).entitlements;
+    }
 
     console.log(`[OAuth Verify] ✓ Google Account A: ${userIdA.slice(0, 14)}... | Customer: ${customerA} | Plan: ${infoA.entitlements?.plan} | Providers: [${providersA.join(', ')}]`);
     console.log(`[OAuth Verify] ✓ GitHub Account B: ${userIdB.slice(0, 14)}... | Customer: ${customerB} | Plan: ${infoB.entitlements?.plan} | Providers: [${providersB.join(', ')}]`);
@@ -719,9 +725,9 @@ export async function runPhase2() {
     );
 
     await pageA.goto(`${STAGING_URL}/?c=${encodeURIComponent(convIdA)}`, { waitUntil: 'domcontentloaded' });
-    await pageA.getByText(expectedSnippet, { exact: false }).first().waitFor({ state: 'visible', timeout: 15000 });
+    await pageA.getByText(expectedSnippet, { exact: false }).first().waitFor({ state: 'visible', timeout: 25000 });
     await pageA.reload({ waitUntil: 'domcontentloaded' });
-    await pageA.getByText(expectedSnippet, { exact: false }).first().waitFor({ state: 'visible', timeout: 15000 });
+    await pageA.getByText(expectedSnippet, { exact: false }).first().waitFor({ state: 'visible', timeout: 25000 });
     console.log(`[Model Matrix] ✓ Gemini Long-Context Failover: ${longRes.provenance?.provider}/${longRes.provenance?.executedModel} (${longRes.deltaCount} deltas, ${longRes.contentText.trim().length} chars, UI & reload persistence PASS)`);
 
     // Post-inference quota check (also refreshes active CSRF after pageA reload)

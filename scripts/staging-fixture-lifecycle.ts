@@ -77,6 +77,23 @@ export async function setupProFixture(customerId: string) {
   }
 }
 
+export async function resetStagingTestDailyQuota(customerIds: string[]) {
+  const db = getStagingDb();
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const updated = await db('entitlement_snapshots')
+      .whereIn('customer_id', customerIds)
+      .andWhere('period_date', today)
+      .update({
+        daily_standard_chat_count: 0,
+        updated_at: Date.now()
+      });
+    console.log(`[Staging Quota Reset] Reset daily_standard_chat_count for ${updated} staging test customer row(s) (${today}).`);
+  } finally {
+    await db.destroy();
+  }
+}
+
 export async function cleanupAllStagingFixtures() {
   const db = getStagingDb();
   try {

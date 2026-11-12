@@ -94,8 +94,10 @@ function App() {
   });
   // Root visits without an active tab session start on a transient welcome draft.
   // When an active session exists (in-tab session or ?c= param), restore it on reload.
+  // Capture initial ?c= or in-tab active chat ID before async BFF session/server hydration runs.
+  const pendingSessionChatIdRef = useRef<string | null>(getSessionActiveChatId());
   const [activeChatId, setActiveChatId] = useState<string>(() => {
-    const sessionChatId = getSessionActiveChatId();
+    const sessionChatId = pendingSessionChatIdRef.current;
     if (sessionChatId) {
       const user = neonAuth.getCurrentUser();
       const stored = loadConversations(user?.id);
@@ -445,9 +447,19 @@ useEffect(() => {
         setIsAuthOpen(true);
       }
     }
-    neonAuth.restoreSession().catch((err) => {
-      console.warn('[App] First-party session restore notice:', err);
-    });
+    neonAuth.restoreSession()
+      .then((restoredSession) => {
+        if (!restoredSession?.user && pendingSessionChatIdRef.current) {
+          const guestConvs = loadConversations();
+          if (!guestConvs.some(c => c.id === pendingSessionChatIdRef.current)) {
+            pendingSessionChatIdRef.current = null;
+            setSessionActiveChatId(null);
+          }
+        }
+      })
+      .catch((err) => {
+        console.warn('[App] First-party session restore notice:', err);
+      });
   }, []);
 
   useEffect(() => {
@@ -498,7 +510,12 @@ useEffect(() => {
         }
 
         setActiveChatId('');
-        setSessionActiveChatId(null);
+        if (currentUserId !== null) {
+          pendingSessionChatIdRef.current = null;
+          setSessionActiveChatId(null);
+        } else if (!pendingSessionChatIdRef.current) {
+          setSessionActiveChatId(null);
+        }
         setActiveArtifact(null);
         setHighlightedMessageId(null);
         conversationSyncVersionsRef.current.clear();
@@ -519,6 +536,10 @@ useEffect(() => {
         const cached = loadConversations(user.id);
         conversationsOwnerRef.current = user.id;
         setConversations(cached);
+        const pendingIdFromCache = pendingSessionChatIdRef.current;
+        if (pendingIdFromCache && cached.some(c => c.id === pendingIdFromCache)) {
+          setActiveChatId(pendingIdFromCache);
+        }
 
         // Immediately load cached projects belonging to this verified user
         const userProjects = loadProjects(user.id);
@@ -531,13 +552,26 @@ useEffect(() => {
           // Discard stale hydration response if user logged out or switched accounts while fetch was in flight
           if (authEpochRef.current !== epoch) return;
 
+          const desiredId = pendingSessionChatIdRef.current;
+          pendingSessionChatIdRef.current = null;
           if (serverConvs && serverConvs.length > 0) {
             conversationsOwnerRef.current = user.id;
             setConversations(serverConvs);
             saveConversations(serverConvs, user.id);
-            setActiveChatId(prev => (serverConvs.some(c => c.id === prev) ? prev : ''));
+            setActiveChatId(prev => {
+              const target = prev || desiredId || '';
+              const exists = Boolean(target && serverConvs.some(c => c.id === target));
+              if (!exists) {
+                setSessionActiveChatId(null);
+                return '';
+              }
+              return target;
+            });
+          } else if (desiredId) {
+            setSessionActiveChatId(null);
           }
         } catch {
+          pendingSessionChatIdRef.current = null;
           // Server fetch failed: cached local state remains active
         }
       } else {
@@ -620,7 +654,11 @@ useEffect(() => {
     }
   }, [settings, currentUserId]);
   useEffect(() => {
-    setSessionActiveChatId(activeChatId || null);
+    if (activeChatId) {
+      setSessionActiveChatId(activeChatId);
+    } else if (!pendingSessionChatIdRef.current) {
+      setSessionActiveChatId(null);
+    }
   }, [activeChatId]);
   useEffect(() => {
     if (activeProjectId) localStorage.setItem('aira_active_project_id_v1', activeProjectId);
