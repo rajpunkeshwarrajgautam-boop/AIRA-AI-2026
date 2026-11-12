@@ -81,8 +81,12 @@ async function dismissBlockingOverlays(page: Page): Promise<void> {
 
 async function signInViaAuthModal(page: Page, email: string, password: string): Promise<void> {
   await dismissBlockingOverlays(page);
-  await page.locator('[data-testid="account-button"]').click();
+  const accountBtn = page.locator('[data-testid="account-button"]');
   const signInBtn = page.locator('[data-testid="account-menu-signin"]');
+  await accountBtn.waitFor({ state: 'visible', timeout: 8000 });
+  if (!(await signInBtn.isVisible().catch(() => false))) {
+    await accountBtn.click();
+  }
   await signInBtn.waitFor({ state: 'visible', timeout: 8000 });
   await signInBtn.click();
 
@@ -99,11 +103,16 @@ async function signInViaAuthModal(page: Page, email: string, password: string): 
 
 async function signOutViaAccountMenu(page: Page): Promise<void> {
   await dismissBlockingOverlays(page);
-  await page.locator('[data-testid="account-button"]').click();
+  const accountBtn = page.locator('[data-testid="account-button"]');
   const logoutBtn = page.locator('[data-testid="account-menu-logout"]');
+  await accountBtn.waitFor({ state: 'visible', timeout: 8000 });
+  if (!(await logoutBtn.isVisible().catch(() => false))) {
+    await accountBtn.click();
+  }
   await logoutBtn.waitFor({ state: 'visible', timeout: 8000 });
   await logoutBtn.click();
-  await page.locator('[data-testid="account-button"]').waitFor({ state: 'visible', timeout: 8000 });
+  await logoutBtn.waitFor({ state: 'detached', timeout: 8000 });
+  await page.locator('[data-testid="account-button"][aria-label*="Sign in"]').waitFor({ state: 'visible', timeout: 8000 });
   await dismissBlockingOverlays(page);
 }
 
