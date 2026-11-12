@@ -37,6 +37,8 @@ import { AdaptiveSynthesizer } from './behavioral/adaptive-synthesizer.js';
 import { ToolRecoveryEngine } from './behavioral/tool-recovery-engine.js';
 import { selectExecutableTool, selectMissionFollowUp } from './tool-selector.js';
 import { compileSupportedMission, validateDurableMission, verifyMissionEvidence, type DurableMissionProgress } from './mission-plan.js';
+import { compileModelMission, validateStoredModelMission, type AnyMissionProgress } from './model-mission.js';
+import { verifyFinalMissionOutcome } from './independent-outcome.js';
 
 export class AgentRuntime extends EventEmitter {
   private eventStreams: Map<string, EventEmitter> = new Map();
@@ -205,6 +207,7 @@ export class AgentRuntime extends EventEmitter {
     // The persisted mission state is exclusively created and advanced by the server.
     const safeContext = { ...(request.context || {}) };
     delete safeContext.__airaMissionV1;
+    delete safeContext.__airaOutcomeVerificationV2;
 
     const run: Run = {
       id: runId,
@@ -368,6 +371,34 @@ export class AgentRuntime extends EventEmitter {
     if (!run) return;
 
     if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)) return;
+
+    // No persisted model-plan tool can ever reach the approval or execution
+    // gateway without passing the server HMAC, scope and exact-call gates.
+    // Recheck on every restart, not only after the tool returned.
+    const stored = run.context?.__airaMissionV1 as AnyMissionProgress | undefined;
+    if (stored?.version === 2) {
+      const step = stored.plan?.steps?.[stored.dispatched - 1];
+      const tool = run.toolCalls[run.toolCalls.length - 1];
+      const definition = tool ? this.toolGateway.getTool(tool.name)?.definition : undefined;
+      const valid = validateStoredModelMission(
+        run.prompt, stored, process.env.AIRA_AGENT_PLAN_SIGNING_KEY || '',
+        this.toolGateway.listDefinitions(), run.principalScopes || []
+      );
+      if (!valid || !step || !tool || stored.currentCallId !== tool.id ||
+          tool.name !== step.toolName ||
+          !isDeepStrictEqual(tool.arguments, step.arguments) ||
+          definition?.permissionLevel !== 'READ' ||
+          (definition?.sideEffectLevel !== 'READ' && definition?.sideEffectLevel !== 'NONE')) {
+        const msg = 'MODEL_MISSION_INTEGRITY_FAILURE: persisted executable plan or tool call was not authorized.';
+        run.content = msg;
+        run.error = msg;
+        run.executionCheckpoint = 'TOOL_FAILED';
+        await this.runRepo.saveRun(run);
+        await this.emitRunEvent(runId, 'content.delta', { delta: msg });
+        await this.transitionRunState(runId, 'FAILED', msg);
+        return;
+      }
+    }
 
     // Checkpoint 0: Capability readiness gate
     if (run.routingDecision?.executionTarget === 'CAPABILITY_NOT_READY') {
@@ -573,7 +604,31 @@ export class AgentRuntime extends EventEmitter {
       const isAgentMission = run.intent === 'AGENT_MISSION';
 
       if (isToolAction || isAgentMission) {
-        const missionPlan = compileSupportedMission(run.prompt);
+        let missionPlan: ReturnType<typeof compileSupportedMission> | import('./model-mission.js').ModelMissionPlan =
+          compileSupportedMission(run.prompt);
+        let planSignature: string | undefined;
+        // The model can propose only when no real deterministic mission matches.
+        // Fail closed rather than inventing an unsupported task if planning fails.
+        if (!missionPlan && isAgentMission && process.env.AIRA_MODEL_MISSIONS_ENABLED === 'true') {
+          try {
+            const proposed = await compileModelMission(
+              run.prompt, this.modelRouter, run.modelPolicy,
+              this.toolGateway.listDefinitions(), run.principalScopes || [],
+              process.env.AIRA_AGENT_PLAN_SIGNING_KEY || ''
+            );
+            missionPlan = proposed.plan;
+            planSignature = proposed.planSignature;
+          } catch (err: any) {
+            const message = 'MODEL_MISSION_PLANNING_FAILED: ' + String(err?.message || err);
+            run.content = message;
+            run.error = message;
+            run.executionCheckpoint = 'TOOL_FAILED';
+            await this.runRepo.saveRun(run);
+            await this.emitRunEvent(runId, 'content.delta', { delta: message });
+            await this.transitionRunState(runId, 'FAILED', message);
+            return;
+          }
+        }
         const firstMissionStep = missionPlan?.steps[0];
         const selected = firstMissionStep
           ? { ok: true as const, name: firstMissionStep.toolName, args: firstMissionStep.arguments }
@@ -617,13 +672,22 @@ export class AgentRuntime extends EventEmitter {
         run.toolCalls.push(toolCall);
         run.stepCount++;
         if (missionPlan) {
-          run.context.__airaMissionV1 = {
-            version: 1,
-            plan: missionPlan,
-            dispatched: 1,
-            verified: [],
-            currentCallId: toolCall.id
-          } satisfies DurableMissionProgress;
+          run.context.__airaMissionV1 = missionPlan.version === 2
+            ? {
+                version: 2,
+                plan: missionPlan,
+                dispatched: 1,
+                verified: [],
+                currentCallId: toolCall.id,
+                planSignature: planSignature || ''
+              }
+            : {
+                version: 1,
+                plan: missionPlan,
+                dispatched: 1,
+                verified: [],
+                currentCallId: toolCall.id
+              } satisfies AnyMissionProgress;
         }
         run.executionCheckpoint = 'TOOL_SELECTED';
         await this.runRepo.saveRun(run);
@@ -843,12 +907,16 @@ export class AgentRuntime extends EventEmitter {
     }
 
     if (run.executionCheckpoint === 'TOOL_COMPLETED' && (run.intent === 'AGENT_MISSION' || run.intent === 'TOOL_ACTION')) {
-      const progress = run.context?.__airaMissionV1 as DurableMissionProgress | undefined;
+      const progress = run.context?.__airaMissionV1 as AnyMissionProgress | undefined;
       if (progress) {
         const lastCall = run.toolCalls[run.toolCalls.length - 1];
         const lastResult = run.toolResults[run.toolResults.length - 1];
         const currentStep = progress.plan?.steps?.[progress.dispatched - 1];
-        const valid = validateDurableMission(run.prompt, progress);
+        const valid = progress.version === 2
+          ? validateStoredModelMission(run.prompt, progress,
+              process.env.AIRA_AGENT_PLAN_SIGNING_KEY || '',
+              this.toolGateway.listDefinitions(), run.principalScopes || [])
+          : validateDurableMission(run.prompt, progress);
         const evidence = currentStep ? verifyMissionEvidence(currentStep, lastResult) :
           { verified: false, reason: 'Missing mission step' };
 
@@ -891,7 +959,8 @@ export class AgentRuntime extends EventEmitter {
 
           const toolDef = this.toolGateway.getTool(nextStep.toolName)?.definition ||
             this.toolRegistry.get(nextStep.toolName)?.definition;
-          if (!toolDef || toolDef.permissionLevel !== 'READ') {
+          if (!toolDef || toolDef.permissionLevel !== 'READ' ||
+              (toolDef.sideEffectLevel !== 'READ' && toolDef.sideEffectLevel !== 'NONE')) {
             const message = 'MISSION_TOOL_UNAVAILABLE: Next mission step is not an available read-only tool.';
             run.error = message;
             run.content = message;
@@ -919,7 +988,31 @@ export class AgentRuntime extends EventEmitter {
           return this.executeRunLoop(runId);
         }
 
-        // All steps have verified tool evidence, now synthesize one final answer.
+        // Independent readback is a separate gate from successful adapter calls.
+        if (progress.version === 2) {
+          const outcome = await verifyFinalMissionOutcome(
+            progress.plan.steps, run.toolCalls, run.toolResults, this.workspaceRoot
+          );
+          run.context.__airaOutcomeVerificationV2 = outcome;
+          await this.runRepo.saveRun(run);
+          await this.emitRunEvent(runId, 'tool.progress', {
+            status: outcome.status,
+            verifiedSteps: outcome.evidence.filter(e => e.verified).length,
+            totalSteps: progress.plan.steps.length
+          });
+          if (outcome.status !== 'COMPLETED_VERIFIED') {
+            const message = 'MISSION_OUTCOME_NOT_VERIFIED: ' +
+              String(outcome.evidence.find(item => !item.verified)?.reason || 'Missing independent evidence');
+            run.error = message;
+            run.content = message;
+            run.executionCheckpoint = 'TOOL_FAILED';
+            await this.runRepo.saveRun(run);
+            await this.emitRunEvent(runId, 'content.delta', { delta: message });
+            await this.transitionRunState(runId, 'FAILED', message);
+            return;
+          }
+        }
+        // All steps and their independently observable postconditions are now verified.
         run.executionCheckpoint = 'SYNTHESIZING';
         await this.runRepo.saveRun(run);
       } else {
@@ -1251,14 +1344,18 @@ CAPABILITY & IDENTITY INVARIANTS:
       const toolDef = this.toolRegistry.get(toolCall?.name)?.definition;
       const idempotencyClass = toolDef?.idempotencyClass || 'NON_IDEMPOTENT';
 
-      // The durable compiler only emits read-only steps. Its exact plan and
+      // Only server-validated read-only plans may replay. Their exact plan and
       // call arguments must match before resuming an interrupted adapter call.
       // Other operations still follow the existing non-idempotent crash fence.
-      const progress = run.context?.__airaMissionV1 as DurableMissionProgress | undefined;
+      const progress = run.context?.__airaMissionV1 as AnyMissionProgress | undefined;
       const step = progress?.plan?.steps?.[progress.dispatched - 1];
       const gatewayDefinition = toolCall ? this.toolGateway.getTool(toolCall.name)?.definition : undefined;
       const replayableMissionRead = Boolean(
-        progress && validateDurableMission(run.prompt, progress) &&
+        progress && (progress.version === 2
+          ? validateStoredModelMission(run.prompt, progress,
+              process.env.AIRA_AGENT_PLAN_SIGNING_KEY || '',
+              this.toolGateway.listDefinitions(), run.principalScopes || [])
+          : validateDurableMission(run.prompt, progress)) &&
         step && toolCall && progress.currentCallId === toolCall.id &&
         step.toolName === toolCall.name &&
         isDeepStrictEqual(step.arguments, toolCall.arguments) &&
