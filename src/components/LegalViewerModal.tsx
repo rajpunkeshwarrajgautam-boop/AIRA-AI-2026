@@ -47,7 +47,7 @@ export const LegalViewerModal: React.FC<LegalViewerModalProps> = ({
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.96, y: 8 }}
         transition={{ duration: 0.18, ease: 'easeOut' }}
-        className="w-full max-w-3xl max-h-[90vh] flex flex-col bg-claude-surface-light dark:bg-[#1a1b1e] border border-claude-border-light dark:border-white/10 rounded-2xl shadow-2xl overflow-hidden"
+        className="w-full max-w-3xl max-h-[90vh] flex flex-col bg-claude-surface-light dark:bg-stone-900 border border-claude-border-light dark:border-white/10 rounded-2xl shadow-2xl overflow-hidden"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-claude-border-light dark:border-white/10 bg-claude-surface2-light/60 dark:bg-white/[0.02]">
@@ -60,7 +60,7 @@ export const LegalViewerModal: React.FC<LegalViewerModalProps> = ({
                 <h2 id="legal-viewer-title" className="text-base font-bold text-claude-text-light dark:text-white tracking-tight">
                   AIRA Operational Legal & Governance Policies
                 </h2>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+                <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
                   Draft
                 </span>
               </div>
@@ -90,7 +90,7 @@ export const LegalViewerModal: React.FC<LegalViewerModalProps> = ({
         </div>
 
         {/* Document Switcher Tabs */}
-        <div className="px-6 py-3 border-b border-claude-border-light dark:border-white/10 bg-claude-surface-light dark:bg-[#18191c] flex items-center gap-2">
+        <div className="px-6 py-3 border-b border-claude-border-light dark:border-white/10 bg-claude-surface-light dark:bg-stone-900 flex items-center gap-2">
           <button
             onClick={() => setActiveDoc('terms')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
@@ -120,7 +120,7 @@ export const LegalViewerModal: React.FC<LegalViewerModalProps> = ({
             <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
             <div className="text-[11px] text-claude-text-light/90 dark:text-white/80 leading-normal">
               <strong className="text-amber-600 dark:text-amber-400 block font-semibold mb-0.5">
-                Draft Operational Policy — Ratification Status
+                Draft Operational Policy: Ratification Status
               </strong>
               This document reflects AIRA&apos;s active operational architecture and data governance practices. Formal external legal counsel review and approval are pending prior to public general release; external review is not currently underway.
             </div>

@@ -127,10 +127,10 @@ export const MultiModalAssetViewer: React.FC<MultiModalAssetViewerProps> = ({
   return (
     <div
       data-testid="multimodal-asset-viewer"
-      className="flex-1 w-full h-full flex flex-col bg-[#141413] text-stone-200 select-none overflow-hidden"
+      className="flex-1 w-full h-full flex flex-col bg-stone-950 text-stone-200 select-none overflow-hidden"
     >
       {/* Top Asset Meta Bar */}
-      <div className="h-9 px-4 flex items-center justify-between border-b border-stone-800 bg-[#18181A] text-xs text-stone-400">
+      <div className="h-9 px-4 flex items-center justify-between border-b border-stone-800 bg-stone-900 text-xs text-stone-400">
         <div className="flex items-center gap-2 min-w-0">
           {file.kind === 'image' && <ImageIcon className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
           {file.kind === 'svg' && <ImageIcon className="w-3.5 h-3.5 text-teal-400 shrink-0" />}
@@ -142,7 +142,7 @@ export const MultiModalAssetViewer: React.FC<MultiModalAssetViewerProps> = ({
             {file.path}
           </span>
           <span className="text-stone-600">•</span>
-          <span className="font-mono text-[10px] text-stone-400 uppercase">
+          <span className="font-mono text-xs text-stone-400">
             {mimeType}
           </span>
           <span className="text-stone-600">•</span>
@@ -254,7 +254,7 @@ export const MultiModalAssetViewer: React.FC<MultiModalAssetViewerProps> = ({
             className="relative flex items-center justify-center max-w-full max-h-full rounded-lg shadow-xl overflow-hidden p-2"
             style={{
               backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.06) 1px, transparent 1px)',
-              backgroundColor: '#1C1C1E',
+              backgroundColor: 'var(--bg-surface-secondary)',
               backgroundSize: '16px 16px',
             }}
           >
@@ -291,7 +291,7 @@ export const MultiModalAssetViewer: React.FC<MultiModalAssetViewerProps> = ({
               className="relative flex items-center justify-center max-w-full max-h-full rounded-lg shadow-xl overflow-auto p-4"
               style={{
                 backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.06) 1px, transparent 1px)',
-                backgroundColor: '#1C1C1E',
+                backgroundColor: 'var(--bg-surface-secondary)',
                 backgroundSize: '16px 16px',
                 transform: `scale(${zoomLevel})`,
                 transformOrigin: 'center center',
@@ -309,7 +309,7 @@ export const MultiModalAssetViewer: React.FC<MultiModalAssetViewerProps> = ({
               />
             </div>
           ) : (
-            <div className="w-full h-full flex flex-col font-mono text-xs overflow-auto bg-[#111113] p-4 rounded-lg border border-stone-800">
+            <div className="w-full h-full flex flex-col font-mono text-xs overflow-auto bg-stone-950 p-4 rounded-lg border border-stone-800">
               <pre className="whitespace-pre overflow-x-auto text-stone-300">
                 <code>{file.content}</code>
               </pre>
@@ -321,7 +321,7 @@ export const MultiModalAssetViewer: React.FC<MultiModalAssetViewerProps> = ({
         {file.kind === 'audio' && (
           <div
             data-testid="audio-preview-stage"
-            className="w-full max-w-md p-6 bg-[#1A1A1D] border border-stone-800 rounded-2xl shadow-2xl flex flex-col gap-4"
+            className="w-full max-w-md p-6 bg-stone-900 border border-stone-800 rounded-2xl shadow-2xl flex flex-col gap-4"
           >
             <div className="flex items-center gap-3">
               <div className="w-12 h-12 rounded-xl bg-purple-500/20 text-purple-400 flex items-center justify-center border border-purple-500/30">
@@ -401,8 +401,7 @@ export const MultiModalAssetViewer: React.FC<MultiModalAssetViewerProps> = ({
             data-testid="video-preview-stage"
             className="max-w-2xl w-full bg-black rounded-xl border border-stone-800 shadow-2xl overflow-hidden flex flex-col"
           >
-            <video
-              src={mediaSource}
+            <video poster="/screenshots/desktop.png" src={mediaSource}
               controls
               playsInline
               preload="metadata"
@@ -418,7 +417,7 @@ export const MultiModalAssetViewer: React.FC<MultiModalAssetViewerProps> = ({
         {file.kind === 'pdf' && !loadError && (
           <div
             data-testid="pdf-preview-stage"
-            className="w-full h-full flex flex-col bg-[#1A1A1D] rounded-xl border border-stone-800 overflow-hidden"
+            className="w-full h-full flex flex-col bg-stone-900 rounded-xl border border-stone-800 overflow-hidden"
           >
             <iframe
               src={mediaSource}
@@ -431,7 +430,7 @@ export const MultiModalAssetViewer: React.FC<MultiModalAssetViewerProps> = ({
       </div>
 
       {/* Safety Notice Footer */}
-      <div className="h-7 px-4 bg-[#111113] border-t border-stone-800/80 flex items-center gap-1.5 text-[10px] text-stone-500">
+      <div className="h-7 px-4 bg-stone-950 border-t border-stone-800/80 flex items-center gap-1.5 text-[10px] text-stone-500">
         <ShieldCheck className="w-3 h-3 text-emerald-400" />
         <span>Vector previews use inert images; documents run in an isolated frame.</span>
       </div>

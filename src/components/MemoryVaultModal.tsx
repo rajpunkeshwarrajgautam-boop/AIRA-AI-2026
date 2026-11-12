@@ -157,7 +157,7 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.95, y: 16 }}
           transition={{ type: 'spring', stiffness: 350, damping: 28 }}
-          className="relative w-full max-w-4xl max-h-[88vh] flex flex-col rounded-2xl bg-claude-surface-light dark:bg-[#1C1B19] border border-claude-border-light dark:border-claude-border-dark shadow-2xl overflow-hidden z-10 font-sans"
+          className="relative w-full max-w-4xl max-h-[88vh] flex flex-col rounded-2xl bg-claude-surface-light dark:bg-stone-900 border border-claude-border-light dark:border-claude-border-dark shadow-2xl overflow-hidden z-10 font-sans"
         >
           {/* Header */}
           <div className="p-5 border-b border-claude-border-light dark:border-claude-border-dark flex items-center justify-between bg-claude-surface2-light/60 dark:bg-black/20">
@@ -170,7 +170,7 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
                   <h2 className="font-serif text-xl font-medium tracking-tight text-claude-text-light dark:text-white">
                     Agent Persistent Memory
                   </h2>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-mono tracking-wide uppercase bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                  <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
                     4-Tier Vault
                   </span>
                 </div>
@@ -183,7 +183,7 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
             <div className="flex items-center space-x-2">
               <button
                 onClick={() => setIsAdding(!isAdding)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-medium flex items-center space-x-1.5 transition-all shadow-sm ${
+                className={`px-3 py-1.5 rounded-xl text-xs font-medium flex items-center space-x-1.5 transition-transform duration-150 motion-reduce:transition-none shadow-sm ${
                   isAdding
                     ? 'bg-claude-surface2-light dark:bg-stone-800 text-claude-text-light dark:text-white'
                     : 'bg-claude-terracotta text-claude-onAccent hover:bg-claude-terracotta-hover active:scale-95'
@@ -203,7 +203,7 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
           </div>
 
           {/* Telemetry & Controls Ribbon */}
-          <div className="px-5 py-3 border-b border-claude-border-light dark:border-claude-border-dark flex flex-wrap items-center justify-between gap-3 text-xs bg-claude-surface-light dark:bg-[#181716]">
+          <div className="px-5 py-3 border-b border-claude-border-light dark:border-claude-border-dark flex flex-wrap items-center justify-between gap-3 text-xs bg-claude-surface-light dark:bg-stone-900">
             {/* Stats Metrics */}
             <div className="flex items-center space-x-4 text-claude-muted-light dark:text-stone-400 font-mono text-[11px]">
               <span className="flex items-center gap-1.5">
@@ -384,7 +384,7 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
                 <button
                   key={tier}
                   onClick={() => setActiveTier(tier)}
-                  className={`px-3 py-1 rounded-lg capitalize whitespace-nowrap transition-all ${
+                  className={`px-3 py-1 rounded-lg capitalize whitespace-nowrap transition-colors duration-150 ${
                     activeTier === tier
                       ? 'bg-claude-surface-light dark:bg-stone-800 text-claude-text-light dark:text-white font-semibold shadow-sm'
                       : 'text-claude-muted-light dark:text-stone-400 hover:text-claude-text-light dark:hover:text-white'
@@ -425,17 +425,17 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
                     layout
                     initial={{ opacity: 0, y: 8 }}
                     animate={{ opacity: 1, y: 0 }}
-                    className={`group p-4 rounded-xl border transition-all ${
+                    className={`group p-4 rounded-xl border transition-colors duration-150 ${
                       mem.isPinned
-                        ? 'bg-claude-surface-light dark:bg-[#201F1D] border-claude-terracotta/30 shadow-sm'
-                        : 'bg-claude-surface-light dark:bg-[#1A1918] border-claude-border-light dark:border-stone-800 hover:border-claude-terracotta/20'
+                        ? 'bg-claude-surface-light dark:bg-stone-900 border-claude-terracotta/30 shadow-sm'
+                        : 'bg-claude-surface-light dark:bg-stone-900 border-claude-border-light dark:border-stone-800 hover:border-claude-terracotta/20'
                     }`}
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex-1 min-w-0">
                         {/* Badges & Meta */}
                         <div className="flex flex-wrap items-center gap-2 mb-1.5">
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono uppercase tracking-wider border ${tierColor}`}>
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize border ${tierColor}`}>
                             {mem.tier}
                           </span>
                           <span className="text-[11px] font-medium text-claude-muted-light dark:text-stone-400 capitalize">

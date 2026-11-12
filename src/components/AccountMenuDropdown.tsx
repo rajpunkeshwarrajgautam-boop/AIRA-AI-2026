@@ -314,7 +314,7 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
       tabIndex={-1}
       aria-orientation="vertical"
       aria-label="Account and user settings menu"
-      className="fixed rounded-2xl bg-claude-surface-light dark:bg-[#1a1b1e] border border-claude-border-light dark:border-white/10 shadow-2xl overflow-hidden z-[100] text-claude-text-light dark:text-white backdrop-blur-xl outline-none"
+      className="fixed rounded-2xl bg-claude-surface-light dark:bg-stone-900 border border-claude-border-light dark:border-white/10 shadow-2xl overflow-hidden z-[100] text-claude-text-light dark:text-white backdrop-blur-xl outline-none"
       style={{
         left: menuPosition?.left ?? 12,
         bottom: menuPosition?.bottom,
@@ -339,7 +339,7 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
             {neonUser ? (
               <div className="p-4 border-b border-claude-border-light dark:border-white/10 bg-claude-surface2-light/40 dark:bg-white/[0.02]">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-claude-terracotta to-[#eb6e4b] text-white font-bold text-sm flex items-center justify-center shrink-0 shadow-sm overflow-hidden">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-claude-terracotta to-aira-blue text-white font-bold text-sm flex items-center justify-center shrink-0 shadow-sm overflow-hidden">
                     {neonUser.image ? (
                       <img src={neonUser.image} alt={neonUser.name || 'User'} className="w-full h-full object-cover" />
                     ) : (
@@ -365,7 +365,7 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
                 <div className="mt-3 flex items-center justify-between gap-2 p-2 rounded-xl bg-claude-surface-light dark:bg-white/5 border border-claude-border-light/60 dark:border-white/10">
                   <div className="flex items-center gap-2 min-w-0">
                     <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-claude-text-light dark:text-white truncate">
+                    <span className="text-xs font-semibold text-claude-text-light dark:text-white truncate">
                       {isBillingLoading ? 'Loading plan...' : (billingPlanName || 'Standard Workspace')}
                     </span>
                   </div>

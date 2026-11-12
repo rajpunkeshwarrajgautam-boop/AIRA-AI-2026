@@ -112,7 +112,7 @@ export const OnboardingWalkthrough: React.FC<OnboardingWalkthroughProps> = ({
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/65 backdrop-blur-md animate-in fade-in duration-200"
     >
       <div
-        className="w-full max-w-2xl flex flex-col rounded-2xl bg-white dark:bg-[#18181b] border border-stone-200 dark:border-white/10 shadow-2xl overflow-hidden transition-all"
+        className="w-full max-w-2xl flex flex-col rounded-2xl bg-white dark:bg-stone-900 border border-stone-200 dark:border-white/10 shadow-2xl overflow-hidden"
         onClick={e => e.stopPropagation()}
       >
         {/* Top Header */}
@@ -122,7 +122,7 @@ export const OnboardingWalkthrough: React.FC<OnboardingWalkthroughProps> = ({
               <Compass className="w-4 h-4" />
             </div>
             <div>
-              <span className="text-xs font-bold uppercase tracking-wider text-aira-blue dark:text-cyan-400">
+              <span className="text-xs font-semibold text-aira-blue dark:text-cyan-400">
                 AIRA Tour
               </span>
               <span className="text-xs text-stone-400 dark:text-stone-500 ml-2">
@@ -167,7 +167,7 @@ export const OnboardingWalkthrough: React.FC<OnboardingWalkthroughProps> = ({
                   Welcome to AIRA
                 </h3>
                 <p className="text-sm font-medium text-stone-500 dark:text-stone-400 mt-1">
-                  The Next-Generation Cognitive Intelligence Workspace
+                  Autonomous Agent Workspace and Multi-Model Intelligence
                 </p>
               </div>
               <p className="text-sm text-stone-600 dark:text-stone-300 leading-relaxed">
@@ -245,7 +245,7 @@ export const OnboardingWalkthrough: React.FC<OnboardingWalkthroughProps> = ({
                 </p>
               </div>
               <p className="text-sm text-stone-600 dark:text-stone-300 leading-relaxed">
-                When a task requires real actions—such as web research, Python calculations, creating multi-file projects, or automated testing—switch to Agent Mode. AIRA breaks down your prompt into explicit waves and executes safely.
+                When a task requires real actions (such as web research, Python calculations, creating multi-file projects, or automated testing), switch to Agent Mode. AIRA breaks down your prompt into explicit waves and executes safely.
               </p>
               <div className="p-4 rounded-xl bg-stone-50 dark:bg-white/[0.03] border border-stone-200/80 dark:border-white/5 space-y-2">
                 <div className="flex items-center gap-2 text-xs font-bold text-stone-800 dark:text-stone-200">
@@ -313,7 +313,7 @@ export const OnboardingWalkthrough: React.FC<OnboardingWalkthroughProps> = ({
               <div className="p-4 rounded-xl bg-stone-50 dark:bg-white/[0.03] border border-stone-200/80 dark:border-white/5 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-stone-800 dark:text-stone-200">
-                    Your Current Plan: <span className="uppercase text-aira-blue dark:text-cyan-400">{userTier}</span>
+                    Your Current Plan: <span className="capitalize text-aira-blue dark:text-cyan-400">{userTier}</span>
                   </span>
                   {onOpenPlanSettings && (
                     <button
@@ -344,7 +344,7 @@ export const OnboardingWalkthrough: React.FC<OnboardingWalkthroughProps> = ({
             data-testid="onboarding-back-btn"
             disabled={stageIndex === 0}
             onClick={handleBack}
-            className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
+            className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold transition-colors duration-150 ${
               stageIndex === 0
                 ? 'opacity-40 cursor-not-allowed text-stone-400 dark:text-stone-600'
                 : 'text-stone-700 dark:text-stone-200 hover:bg-stone-200/60 dark:hover:bg-white/10'
@@ -366,7 +366,7 @@ export const OnboardingWalkthrough: React.FC<OnboardingWalkthroughProps> = ({
                 data-testid={`onboarding-dot-${st}`}
                 onClick={() => jumpToStage(idx)}
                 aria-label={`Jump to stage ${idx + 1}`}
-                className={`transition-all duration-200 rounded-full ${
+                className={`transition-colors duration-150 rounded-full ${
                   idx === stageIndex
                     ? 'w-6 h-2 bg-aira-blue dark:bg-cyan-400'
                     : idx < stageIndex
@@ -383,7 +383,7 @@ export const OnboardingWalkthrough: React.FC<OnboardingWalkthroughProps> = ({
               type="button"
               data-testid="onboarding-next-btn"
               onClick={handleNext}
-              className="inline-flex items-center gap-1.5 px-5 py-2 rounded-xl text-xs font-bold text-white bg-aira-blue hover:bg-aira-blue/90 shadow-sm transition-all"
+              className="inline-flex items-center gap-1.5 px-5 py-2 rounded-xl text-xs font-bold text-white bg-aira-blue hover:bg-aira-blue/90 shadow-sm transition-colors duration-150"
             >
               <span>Next</span>
               <ChevronRight className="w-4 h-4" />
@@ -393,7 +393,7 @@ export const OnboardingWalkthrough: React.FC<OnboardingWalkthroughProps> = ({
               type="button"
               data-testid="onboarding-finish-btn"
               onClick={handleFinish}
-              className="inline-flex items-center gap-1.5 px-5 py-2 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 shadow-sm transition-all"
+              className="inline-flex items-center gap-1.5 px-5 py-2 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 shadow-sm transition-colors duration-150"
             >
               <span>Get Started</span>
               <Sparkles className="w-4 h-4" />

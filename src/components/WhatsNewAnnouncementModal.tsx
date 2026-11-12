@@ -105,7 +105,7 @@ export const WhatsNewAnnouncementModal: React.FC<WhatsNewAnnouncementModalProps>
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
     >
       <div
-        className="w-full max-w-xl max-h-[85vh] flex flex-col rounded-2xl bg-white dark:bg-[#18181b] border border-stone-200 dark:border-white/10 shadow-2xl overflow-hidden transition-all"
+        className="w-full max-w-xl max-h-[85vh] flex flex-col rounded-2xl bg-white dark:bg-stone-900 border border-stone-200 dark:border-white/10 shadow-2xl overflow-hidden"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
@@ -154,7 +154,7 @@ export const WhatsNewAnnouncementModal: React.FC<WhatsNewAnnouncementModalProps>
             /* Single Featured Announcement View */
             <div className="space-y-4" data-testid={`whats-new-item-${activeAnnouncement.id}`}>
               <div className="flex items-center gap-2">
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold tracking-wide uppercase bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
                   {activeAnnouncement.badge || `v${activeAnnouncement.version}`}
                 </span>
                 <span className="text-xs text-stone-400">
@@ -180,8 +180,8 @@ export const WhatsNewAnnouncementModal: React.FC<WhatsNewAnnouncementModalProps>
 
               {activeAnnouncement.features && activeAnnouncement.features.length > 0 && (
                 <div className="p-4 rounded-xl bg-stone-50 dark:bg-white/[0.03] border border-stone-200/60 dark:border-white/5 space-y-2.5">
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">
-                    Key Highlights
+                  <h4 className="text-xs font-semibold text-stone-500 dark:text-stone-400">
+                    Key highlights
                   </h4>
                   <ul className="space-y-2">
                     {activeAnnouncement.features.map((feature, idx) => (
@@ -211,14 +211,14 @@ export const WhatsNewAnnouncementModal: React.FC<WhatsNewAnnouncementModalProps>
                     <div
                       key={announcement.id}
                       data-testid={`whats-new-item-${announcement.id}`}
-                      className="p-4 rounded-xl border border-stone-200/80 dark:border-white/10 bg-stone-50/50 dark:bg-white/[0.02] hover:border-aira-blue/40 dark:hover:border-aira-blue/40 transition-all space-y-3"
+                      className="p-4 rounded-xl border border-stone-200/80 dark:border-white/10 bg-stone-50/50 dark:bg-white/[0.02] hover:border-aira-blue/40 dark:hover:border-aira-blue/40 transition-colors duration-150 space-y-3"
                     >
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-stone-200 dark:bg-white/10 text-stone-700 dark:text-stone-300">
                             v{announcement.version}
                           </span>
-                          <span className="text-xs font-semibold px-2 py-0.5 rounded-full uppercase tracking-wider bg-aira-blue/10 text-aira-blue dark:text-cyan-400">
+                          <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-aira-blue/10 text-aira-blue dark:text-cyan-400">
                             {announcement.category}
                           </span>
                           {announcement.badge && (
@@ -329,7 +329,7 @@ export const WhatsNewAnnouncementModal: React.FC<WhatsNewAnnouncementModalProps>
                 type="button"
                 data-testid="whats-new-cta-btn"
                 onClick={() => handleCtaClick(activeAnnouncement.ctaUrl)}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-white bg-aira-blue hover:bg-aira-blue/90 shadow-sm transition-all"
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-white bg-aira-blue hover:bg-aira-blue/90 shadow-sm transition-colors duration-150"
               >
                 <span>{activeAnnouncement.ctaText}</span>
                 <ChevronRight className="w-3.5 h-3.5" />

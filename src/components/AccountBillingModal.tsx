@@ -167,12 +167,12 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
         initial={{ opacity: 0, scale: 0.96 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.96 }}
-        className="relative w-full max-w-4xl rounded-2xl bg-[#181715] border border-white/10 text-white shadow-2xl overflow-hidden my-6 flex flex-col max-h-[90vh]"
+        className="relative w-full max-w-4xl rounded-2xl bg-aira-navy border border-white/10 text-white shadow-2xl overflow-hidden my-6 flex flex-col max-h-[90vh]"
       >
         {/* Header */}
         <div className="p-5 md:p-6 border-b border-white/10 flex items-center justify-between shrink-0 bg-stone-900/50">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-[#a9583e] flex items-center justify-center text-white font-bold text-sm overflow-hidden">
+            <div className="w-10 h-10 rounded-lg bg-aira-blue flex items-center justify-center text-white font-bold text-sm overflow-hidden">
               {sessionVerified && user?.image ? (
                 <img src={user.image} alt={user.name || 'User'} className="w-full h-full object-cover" />
               ) : sessionVerified && user ? (
@@ -198,7 +198,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
               className="p-2 rounded-xl text-stone-400 hover:text-white hover:bg-white/10 transition-colors"
               title="Refresh Billing Data"
             >
-              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin motion-reduce:animate-none' : ''}`} />
             </button>
             <button
               onClick={onClose}
@@ -213,9 +213,9 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
         <div className="flex border-b border-white/10 bg-black/20 px-6 shrink-0">
           <button
             onClick={() => setActiveTab('overview')}
-            className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-all ${
+            className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-colors duration-150 ${
               activeTab === 'overview'
-                ? 'border-[#cc785c] text-white'
+                ? 'border-claude-terracotta text-white'
                 : 'border-transparent text-stone-400 hover:text-white'
             }`}
           >
@@ -224,9 +224,9 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
           </button>
           <button
             onClick={() => setActiveTab('usage')}
-            className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-all ${
+            className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-colors duration-150 ${
               activeTab === 'usage'
-                ? 'border-[#cc785c] text-white'
+                ? 'border-claude-terracotta text-white'
                 : 'border-transparent text-stone-400 hover:text-white'
             }`}
           >
@@ -235,9 +235,9 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
           </button>
           <button
             onClick={() => setActiveTab('topup')}
-            className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-all ${
+            className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-colors duration-150 ${
               activeTab === 'topup'
-                ? 'border-[#cc785c] text-white'
+                ? 'border-claude-terracotta text-white'
                 : 'border-transparent text-stone-400 hover:text-white'
             }`}
           >
@@ -246,9 +246,9 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
           </button>
           <button
             onClick={() => setActiveTab('security')}
-            className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-all ${
+            className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-colors duration-150 ${
               activeTab === 'security'
-                ? 'border-[#cc785c] text-white'
+                ? 'border-claude-terracotta text-white'
                 : 'border-transparent text-stone-400 hover:text-white'
             }`}
           >
@@ -270,12 +270,9 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
               {/* Active Plan Card */}
               <div className="p-6 rounded-2xl bg-gradient-to-br from-stone-900 to-stone-900/60 border border-white/10 flex flex-col md:flex-row md:items-center justify-between gap-6">
                 <div>
-                  <div className="text-xs uppercase tracking-wider font-semibold text-[#e6a48d] mb-1">
-                    Current Active Tier
-                  </div>
                   <h3 className="text-2xl font-serif text-white flex items-center gap-3">
                     {confirmedBilling.planName}
-                    <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 capitalize">
+                    <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 capitalize font-sans">
                       {confirmedBilling.subscriptionStatus}
                     </span>
                   </h3>
@@ -290,7 +287,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
                       onClose();
                       onOpenPricing();
                     }}
-                    className="px-5 py-2.5 rounded-lg bg-[#a9583e] hover:bg-[#94452e] text-white text-xs font-medium transition-colors flex items-center justify-center gap-2"
+                    className="px-5 py-2.5 rounded-lg bg-aira-blue hover:opacity-90 text-white text-xs font-medium transition-opacity duration-150 flex items-center justify-center gap-2"
                   >
                     <Sparkles className="w-3.5 h-3.5" />
                     Change or Upgrade Plan
@@ -354,7 +351,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
                   </div>
                   <div className="h-2 rounded-full bg-stone-800 overflow-hidden">
                     <div
-                      className="h-full bg-[#cc785c]"
+                      className="h-full bg-claude-terracotta"
                       style={{
                         width: `${confirmedBilling.dailyChatLimit ? Math.min(100, (confirmedBilling.dailyChatsUsed / confirmedBilling.dailyChatLimit) * 100) : 0}%`
                       }}
@@ -372,7 +369,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
                   </div>
                   <div className="h-2 rounded-full bg-stone-800 overflow-hidden">
                     <div
-                      className="h-full bg-[#cc785c]"
+                      className="h-full bg-claude-terracotta"
                       style={{
                         width: `${confirmedBilling.monthlyUnitLimit ? Math.min(100, (confirmedBilling.monthlyUnitsUsed / confirmedBilling.monthlyUnitLimit) * 100) : 0}%`
                       }}
@@ -416,13 +413,13 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
                 <div className="flex items-center p-1 bg-stone-900 rounded-lg border border-white/10">
                   <button
                     onClick={() => setTopUpCurrency('INR')}
-                    className={`px-2.5 py-1 rounded text-xs font-semibold ${topUpCurrency === 'INR' ? 'bg-[#a9583e] text-white' : 'text-stone-400'}`}
+                    className={`px-2.5 py-1 rounded text-xs font-semibold ${topUpCurrency === 'INR' ? 'bg-aira-blue text-white' : 'text-stone-400'}`}
                   >
                     ₹ INR
                   </button>
                   <button
                     onClick={() => setTopUpCurrency('USD')}
-                    className={`px-2.5 py-1 rounded text-xs font-semibold ${topUpCurrency === 'USD' ? 'bg-[#a9583e] text-white' : 'text-stone-400'}`}
+                    className={`px-2.5 py-1 rounded text-xs font-semibold ${topUpCurrency === 'USD' ? 'bg-aira-blue text-white' : 'text-stone-400'}`}
                   >
                     $ USD
                   </button>
@@ -455,10 +452,10 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
                   </div>
                 </div>
 
-                <div className="p-5 rounded-xl bg-gradient-to-b from-[#cc785c]/10 to-stone-900/60 border border-[#cc785c]/30 flex flex-col justify-between">
+                <div className="p-5 rounded-xl bg-gradient-to-b from-claude-terracotta/10 to-stone-900/60 border border-claude-terracotta/30 flex flex-col justify-between">
                   <div>
-                    <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded-full bg-[#cc785c]/20 text-[#e6a48d]">
-                      Most Popular
+                    <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-claude-terracotta/20 text-amber-200">
+                      Most popular
                     </span>
                     <div className="text-xs font-semibold text-stone-300 mt-2">Power Top-Up</div>
                     <div className="text-2xl font-bold text-white mt-1">5,000</div>

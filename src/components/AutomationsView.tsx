@@ -212,14 +212,14 @@ export const AutomationsView: React.FC = () => {
         <div className="flex items-center gap-2.5">
           <button
             onClick={() => fetchAutomations()}
-            className="p-2 rounded-xl border border-claude-border-light dark:border-claude-border-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light transition-all"
+            className="p-2 rounded-xl border border-claude-border-light dark:border-claude-border-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light transition-colors duration-150"
             title="Refresh Automations"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
           <button
             onClick={() => setIsCreateOpen(true)}
-            className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-claude-terracotta hover:bg-[#d97757]/90 text-white font-medium text-xs shadow-sm shadow-claude-terracotta/20 transition-all active:scale-95"
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-claude-terracotta hover:opacity-90 text-white font-medium text-xs shadow-sm shadow-claude-terracotta/20 transition-transform duration-150 motion-reduce:transition-none active:scale-95"
           >
             <Plus className="w-4 h-4" />
             <span>Create Automation</span>
@@ -261,7 +261,7 @@ export const AutomationsView: React.FC = () => {
               <motion.div
                 key={auto.id}
                 layout
-                className={`p-5 rounded-2xl border transition-all ${
+                className={`p-5 rounded-2xl border transition-colors duration-150 ${
                   auto.enabled
                     ? 'bg-claude-surface-light dark:bg-claude-surface-dark border-claude-border-light dark:border-claude-border-dark shadow-sm'
                     : 'bg-claude-surface2-light/40 dark:bg-claude-surface2-dark/40 border-claude-border-light/50 dark:border-claude-border-dark/50 opacity-75'
@@ -306,7 +306,7 @@ export const AutomationsView: React.FC = () => {
                   <div className="flex items-center gap-2 shrink-0 border-t sm:border-t-0 pt-3 sm:pt-0 border-claude-border-light/60 dark:border-claude-border-dark/60">
                     <button
                       onClick={() => handleTriggerNow(auto.id)}
-                      className="p-2 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark hover:bg-claude-terracotta/10 text-claude-text-light hover:text-claude-accentInk transition-all"
+                      className="p-2 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark hover:bg-claude-terracotta/10 text-claude-text-light hover:text-claude-accentInk transition-colors duration-150"
                       title="Trigger Execution Now"
                     >
                       <Play className="w-3.5 h-3.5 fill-current" />
@@ -314,7 +314,7 @@ export const AutomationsView: React.FC = () => {
 
                     <button
                       onClick={() => handleViewRuns(auto)}
-                      className="p-2 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark hover:bg-claude-surface-light text-claude-text-light transition-all"
+                      className="p-2 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark hover:bg-claude-surface-light text-claude-text-light transition-colors duration-150"
                       title="View Run History"
                     >
                       <History className="w-3.5 h-3.5" />
@@ -322,7 +322,7 @@ export const AutomationsView: React.FC = () => {
 
                     <button
                       onClick={() => handleToggleEnable(auto)}
-                      className="p-2 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark hover:bg-claude-surface-light text-claude-text-light transition-all"
+                      className="p-2 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark hover:bg-claude-surface-light text-claude-text-light transition-colors duration-150"
                       title={auto.enabled ? 'Disable Automation' : 'Enable Automation'}
                     >
                       {auto.enabled ? (
@@ -462,7 +462,7 @@ export const AutomationsView: React.FC = () => {
                   <button
                     type="submit"
                     disabled={isSubmitting}
-                    className="px-4 py-1.5 rounded-xl bg-claude-terracotta hover:bg-[#d97757]/90 text-white text-xs font-medium disabled:opacity-50"
+                    className="px-4 py-1.5 rounded-xl bg-claude-terracotta hover:opacity-90 text-white text-xs font-medium disabled:opacity-50"
                   >
                     {isSubmitting ? 'Scheduling...' : 'Save Automation'}
                   </button>

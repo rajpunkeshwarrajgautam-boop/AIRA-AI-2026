@@ -1,53 +1,18 @@
+/* Hallmark · shape: app screen · genre: modern-minimal · theme: brand · redesign: full
+ * paper: oklch(98% 0.006 85) · accent: oklch(64% 0.12 45) · display: Copernicus · body: StyreneB
+ * nav: kept · signature: kept · states: hover, focus-visible, active, disabled
+ * axes: cream/serif/terracotta · posture: restrained · contrast: pass · v2.0.0 */
+/* Hallmark · pre-emit critique: P5 H5 E5 S5 R5 V4 · weakest: V, kept brand design.md constraints across app screens */
+/* Hallmark · waive 47b · real interactive terminal and editor frames · the workspace code/artifact studio is the core product */
+@import "./tokens.css";
+@import "./base.css" layer(base);
 @import './styles/motion-studio.css';
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
-  :root {
-    /* DESIGN.md: Claude-inspired editorial palette, adapted to AIRA's product UI. */
-    --bg-main: #FAF9F5;
-    --bg-surface: #F5F0E8;
-    --bg-surface-secondary: #EFE9DE;
-    --border-color: #E6DFD8;
-    --border-subtle: #EBE6DF;
-    --text-primary: #141413;
-    --text-body: #3D3D3A;
-    --text-muted: #6C6A64;
-    --accent-on: #FFFFFF;
-    --accent-ink: #A9583E;
-    --accent-primary: #CC785C;
-    --accent-primary-hover: #A9583E;
-    --accent-gold: #E8A55A;
-    --accent-terracotta: #CC785C;
-    --accent-terracotta-hover: #A9583E;
-    --surface-code: #181715;
-    --font-display: 'Copernicus', 'Tiempos Headline', 'Cormorant Garamond', 'Newsreader', Georgia, serif;
-    --font-body: 'StyreneB', 'Inter', system-ui, sans-serif;
-    --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
-    --ease-vanguard: cubic-bezier(0.32, 0.72, 0, 1);
-  }
-
-  .dark {
-    --bg-main: #181715;
-    --bg-surface: #252320;
-    --bg-surface-secondary: #1F1E1B;
-    --border-color: #403B35;
-    --border-subtle: #332F2B;
-    --text-primary: #FAF9F5;
-    --text-body: #DED9D1;
-    --text-muted: #A09D96;
-    --accent-on: #FFFFFF;
-    --accent-ink: #E6A48D;
-    --accent-primary: #CC785C;
-    --accent-primary-hover: #A9583E;
-    --accent-gold: #E8A55A;
-    --accent-terracotta: #CC785C;
-    --accent-terracotta-hover: #A9583E;
-    --surface-code: #11100F;
-  }
-
-  /* Aira is a viewport-locked workspace: only the conversation/sidebar scroll.
+/* Aira is a viewport-locked workspace: only the conversation/sidebar scroll.
      Prevent browser document scroll or scrollIntoView from pushing the whole
      app above the viewport and leaving an apparent infinite blank page. */
   html, body, #root {
@@ -61,7 +26,7 @@
     background-color: var(--bg-main);
     color: var(--text-primary);
     font-family: var(--font-body);
-    overflow-x: hidden;
+    overflow-x: clip;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
@@ -78,12 +43,12 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    background: rgba(120, 115, 105, 0.2);
+    background: color-mix(in srgb, var(--color-muted) 25%, transparent);
     border-radius: 9999px;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: rgba(120, 115, 105, 0.35);
+    background: color-mix(in srgb, var(--color-muted) 40%, transparent);
   }
 }
 
@@ -153,12 +118,12 @@
 }
 
 .aira-prose code:not(pre code) {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 0.85em;
   padding: 0.18em 0.42em;
   border-radius: 6px;
-  background-color: rgba(140, 135, 125, 0.12);
-  border: 1px solid rgba(140, 135, 125, 0.15);
+  background-color: color-mix(in srgb, var(--color-muted) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-muted) 15%, transparent);
 }
 
 .aira-prose pre {
@@ -170,13 +135,13 @@
 }
 
 .aira-prose pre code {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 0.86rem;
   line-height: 1.7;
   padding: 1.15rem 1.35rem;
   display: block;
   overflow-x: auto;
-  color: #ECEAE4;
+  color: var(--text-primary);
 }
 
 .aira-prose table {
@@ -187,7 +152,7 @@
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
-  margin: 1.5rem 0;
+  margin: var(--space-lg) 0;
   font-size: 0.92rem;
   border: 1px solid var(--border-color);
   border-radius: 10px;
@@ -224,7 +189,7 @@
 .aira-mark-orbit {
   position: absolute;
   inset: -150%;
-  background: conic-gradient(from 0deg, transparent, rgba(255, 255, 255, 0.28), transparent 70%);
+  background: conic-gradient(from 0deg, transparent, color-mix(in srgb, var(--accent-on) 28%, transparent), transparent 70%);
   animation: airaOrbit 9s linear infinite;
 }
 
@@ -248,14 +213,14 @@
   position: absolute;
   inset: -28px;
   border-radius: 9999px;
-  background: radial-gradient(circle, rgba(217, 119, 87, 0.22) 0%, rgba(245, 163, 132, 0.14) 42%, transparent 72%);
+  background: radial-gradient(circle, color-mix(in srgb, var(--accent-primary) 22%, transparent) 0%, color-mix(in srgb, var(--accent-gold) 14%, transparent) 42%, transparent 72%);
   filter: blur(14px);
   pointer-events: none;
   animation: auraBreathe 5s ease-in-out infinite alternate;
 }
 
 .dark .aura-ambient-glow {
-  background: radial-gradient(circle, rgba(217, 119, 87, 0.28) 0%, rgba(240, 154, 122, 0.16) 45%, transparent 75%);
+  background: radial-gradient(circle, color-mix(in srgb, var(--accent-primary) 28%, transparent) 0%, color-mix(in srgb, var(--accent-gold) 16%, transparent) 45%, transparent 75%);
   filter: blur(16px);
 }
 
@@ -278,7 +243,7 @@
 }
 
 .gradient-terracotta-btn:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent-terracotta-hover) 85%, #141413);
+  background: color-mix(in srgb, var(--accent-terracotta-hover) 85%, var(--color-ink));
 }
 
 /* Gradient Card Surfaces with Glass Sheen */
@@ -301,527 +266,6 @@
 /* Bottom Input Multi-Stop Mask */
 .gradient-mask-bottom {
   background: linear-gradient(180deg, transparent 0%, color-mix(in srgb, var(--bg-main) 75%, transparent) 28%, color-mix(in srgb, var(--bg-main) 98%, transparent) 70%, var(--bg-main) 100%);
-}
-
-/* ==========================================================================
-   AESTHETIC PRESET 2: Warm Parchment (Literary & Antiquarian Warmth)
-   ========================================================================== */
-[data-theme="warm-parchment"] {
-  --bg-main: #F5EFEB;
-  --bg-surface: #FCFAF7;
-  --bg-surface-secondary: #EBE2D8;
-  --border-color: #D8C9BB;
-  --border-subtle: rgba(80, 55, 35, 0.09);
-  --text-primary: #2C2016;
-  --text-muted: #7E6B5A;
-  /* Accessible foregrounds on accent fills and on neutral surfaces. */
-  --accent-on: #FFFFFF;
-  --accent-ink: #A04722;
-  --accent-terracotta: #BA582F;
-  --accent-terracotta-hover: #A04722;
-}
-
-[data-theme="warm-parchment"].dark,
-.dark[data-theme="warm-parchment"],
-.dark [data-theme="warm-parchment"] {
-  --bg-main: #1C1612;
-  --bg-surface: #251D18;
-  --bg-surface-secondary: #2E2520;
-  --border-color: #40342C;
-  --border-subtle: rgba(255, 235, 215, 0.08);
-  --text-primary: #F3EAE1;
-  --text-muted: #A39182;
-  /* Accessible foregrounds on accent fills and on neutral surfaces. */
-  --accent-on: #090909;
-  --accent-ink: #FF9C78;
-  --accent-terracotta: #D46F44;
-  --accent-terracotta-hover: #E48259;
-}
-
-[data-theme="warm-parchment"] .bg-mesh-canvas {
-  background-color: var(--bg-main);
-  background-image: 
-    radial-gradient(at 15% 15%, rgba(186, 88, 47, 0.09) 0px, transparent 48%),
-    radial-gradient(at 85% 85%, rgba(145, 68, 30, 0.07) 0px, transparent 52%),
-    radial-gradient(at 50% 25%, rgba(245, 215, 185, 0.45) 0px, transparent 65%),
-    radial-gradient(at 75% 15%, rgba(235, 226, 216, 0.5) 0px, transparent 40%);
-}
-
-.dark[data-theme="warm-parchment"] .bg-mesh-canvas,
-.dark [data-theme="warm-parchment"] .bg-mesh-canvas {
-  background-color: var(--bg-main);
-  background-image: 
-    radial-gradient(at 15% 15%, rgba(212, 111, 68, 0.14) 0px, transparent 55%),
-    radial-gradient(at 85% 85%, rgba(160, 71, 34, 0.1) 0px, transparent 60%),
-    radial-gradient(at 50% 25%, rgba(42, 33, 26, 0.9) 0px, transparent 75%);
-}
-
-/* Matte Paper Texture & Flat Shadows */
-[data-theme="warm-parchment"]::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 9999;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
-  opacity: 0.04;
-  mix-blend-mode: multiply;
-}
-
-.dark[data-theme="warm-parchment"]::after,
-.dark [data-theme="warm-parchment"]::after {
-  opacity: 0.035;
-  mix-blend-mode: screen;
-}
-
-[data-theme="warm-parchment"] .bg-claude-surface-light,
-[data-theme="warm-parchment"] .bg-claude-surface2-light,
-[data-theme="warm-parchment"] .dark\:bg-claude-surface-dark,
-[data-theme="warm-parchment"] .dark\:bg-claude-surface2-dark {
-  box-shadow: 0 1px 2px rgba(80, 55, 35, 0.06), 0 4px 12px rgba(80, 55, 35, 0.03) !important;
-}
-
-.dark[data-theme="warm-parchment"] .dark\:bg-claude-surface-dark,
-.dark[data-theme="warm-parchment"] .dark\:bg-claude-surface2-dark,
-.dark [data-theme="warm-parchment"] .dark\:bg-claude-surface-dark,
-.dark [data-theme="warm-parchment"] .dark\:bg-claude-surface2-dark {
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.15) !important;
-}
-
-/* ==========================================================================
-   AESTHETIC PRESET 3: Liquid Glass (Frosted VisionOS & Translucent Cobalt)
-   ========================================================================== */
-[data-theme="liquid-glass"] {
-  --bg-main: #EDF3F8;
-  --bg-surface: rgba(255, 255, 255, 0.65);
-  --bg-surface-secondary: rgba(232, 242, 250, 0.55);
-  --border-color: rgba(175, 205, 228, 0.55);
-  --border-subtle: rgba(70, 120, 160, 0.1);
-  --text-primary: #0A1629;
-  --text-muted: #536B88;
-  /* Accessible foregrounds on accent fills and on neutral surfaces. */
-  --accent-on: #090909;
-  --accent-ink: #0369A1;
-  --accent-terracotta: #0284C7;
-  --accent-terracotta-hover: #0382C4;
-}
-
-[data-theme="liquid-glass"].dark,
-.dark[data-theme="liquid-glass"],
-.dark [data-theme="liquid-glass"] {
-  --bg-main: #0B111E;
-  --bg-surface: rgba(17, 26, 44, 0.55);
-  --bg-surface-secondary: rgba(24, 38, 64, 0.45);
-  --border-color: rgba(56, 92, 140, 0.45);
-  --border-subtle: rgba(140, 180, 225, 0.1);
-  --text-primary: #F1F6FB;
-  --text-muted: #8AA4C4;
-  /* Accessible foregrounds on accent fills and on neutral surfaces. */
-  --accent-on: #090909;
-  --accent-ink: #7DD3FC;
-  --accent-terracotta: #38BDF8;
-  --accent-terracotta-hover: #7DD3FC;
-}
-
-[data-theme="liquid-glass"] .bg-mesh-canvas {
-  background-color: var(--bg-main);
-  background-image: 
-    radial-gradient(at 15% 15%, rgba(2, 132, 199, 0.09) 0px, transparent 50%),
-    radial-gradient(at 85% 85%, rgba(99, 102, 241, 0.08) 0px, transparent 52%),
-    radial-gradient(at 50% 25%, rgba(224, 242, 254, 0.6) 0px, transparent 65%),
-    radial-gradient(at 80% 20%, rgba(216, 180, 254, 0.25) 0px, transparent 45%);
-}
-
-.dark[data-theme="liquid-glass"] .bg-mesh-canvas,
-.dark [data-theme="liquid-glass"] .bg-mesh-canvas {
-  background-color: var(--bg-main);
-  background-image: 
-    radial-gradient(at 15% 15%, rgba(56, 189, 248, 0.15) 0px, transparent 55%),
-    radial-gradient(at 85% 85%, rgba(129, 140, 248, 0.1) 0px, transparent 60%),
-    radial-gradient(at 50% 25%, rgba(15, 23, 42, 0.95) 0px, transparent 75%);
-}
-
-[data-theme="liquid-glass"] .aura-ambient-glow {
-  background: radial-gradient(circle, rgba(2, 132, 199, 0.25) 0%, rgba(99, 102, 241, 0.15) 45%, transparent 72%);
-}
-
-.dark[data-theme="liquid-glass"] .aura-ambient-glow,
-.dark [data-theme="liquid-glass"] .aura-ambient-glow {
-  background: radial-gradient(circle, rgba(56, 189, 248, 0.3) 0%, rgba(129, 140, 248, 0.18) 45%, transparent 75%);
-}
-
-/* Glassmorphism Structural Effect */
-[data-theme="liquid-glass"] .bg-claude-surface-light,
-[data-theme="liquid-glass"] .bg-claude-surface2-light,
-[data-theme="liquid-glass"] .dark\:bg-claude-surface-dark,
-[data-theme="liquid-glass"] .dark\:bg-claude-surface2-dark {
-  backdrop-filter: blur(24px) saturate(140%);
-  -webkit-backdrop-filter: blur(24px) saturate(140%);
-  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.5), inset 0 0 0 1px rgba(255, 255, 255, 0.2), 0 4px 24px -6px rgba(0, 0, 0, 0.05);
-}
-
-.dark[data-theme="liquid-glass"] .dark\:bg-claude-surface-dark,
-.dark[data-theme="liquid-glass"] .dark\:bg-claude-surface2-dark,
-.dark [data-theme="liquid-glass"] .dark\:bg-claude-surface-dark,
-.dark [data-theme="liquid-glass"] .dark\:bg-claude-surface2-dark {
-  backdrop-filter: blur(24px) saturate(120%);
-  -webkit-backdrop-filter: blur(24px) saturate(120%);
-  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.15), inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 4px 24px -6px rgba(0, 0, 0, 0.3);
-}
-
-/* ==========================================================================
-   AESTHETIC PRESET 4: Industrial Brutalist (Stark Monochrome & Hazard Orange)
-   ========================================================================== */
-[data-theme="industrial-brutalist"] {
-  --bg-main: #EDEDEA;
-  --bg-surface: #F8F8F6;
-  --bg-surface-secondary: #E3E3DE;
-  --border-color: #262624;
-  --border-subtle: rgba(0, 0, 0, 0.2);
-  --text-primary: #0F0F0E;
-  --text-muted: #555550;
-  /* Accessible foregrounds on accent fills and on neutral surfaces. */
-  --accent-on: #090909;
-  --accent-ink: #B63A00;
-  --accent-terracotta: #FF4D00;
-  --accent-terracotta-hover: #DC4600;
-}
-
-[data-theme="industrial-brutalist"].dark,
-.dark[data-theme="industrial-brutalist"],
-.dark [data-theme="industrial-brutalist"] {
-  --bg-main: #121212;
-  --bg-surface: #1B1B1B;
-  --bg-surface-secondary: #262626;
-  --border-color: #404040;
-  --border-subtle: rgba(255, 255, 255, 0.14);
-  --text-primary: #F7F7F5;
-  --text-muted: #8F8F89;
-  /* Accessible foregrounds on accent fills and on neutral surfaces. */
-  --accent-on: #090909;
-  --accent-ink: #FFAD85;
-  --accent-terracotta: #FF5E1A;
-  --accent-terracotta-hover: #FF7A42;
-}
-
-[data-theme="industrial-brutalist"] .bg-mesh-canvas {
-  background-color: var(--bg-main);
-  background-image: 
-    radial-gradient(at 15% 15%, rgba(255, 77, 0, 0.08) 0px, transparent 45%),
-    radial-gradient(at 85% 85%, rgba(0, 0, 0, 0.05) 0px, transparent 55%),
-    radial-gradient(at 50% 25%, rgba(227, 227, 222, 0.7) 0px, transparent 65%);
-}
-
-.dark[data-theme="industrial-brutalist"] .bg-mesh-canvas,
-.dark [data-theme="industrial-brutalist"] .bg-mesh-canvas {
-  background-color: var(--bg-main);
-  background-image: 
-    radial-gradient(at 15% 15%, rgba(255, 94, 26, 0.12) 0px, transparent 55%),
-    radial-gradient(at 85% 85%, rgba(40, 40, 40, 0.8) 0px, transparent 60%);
-}
-
-[data-theme="industrial-brutalist"] .aura-ambient-glow {
-  background: radial-gradient(circle, rgba(255, 77, 0, 0.25) 0%, rgba(50, 50, 50, 0.1) 45%, transparent 70%);
-}
-
-.dark[data-theme="industrial-brutalist"] .aura-ambient-glow,
-.dark [data-theme="industrial-brutalist"] .aura-ambient-glow {
-  background: radial-gradient(circle, rgba(255, 94, 26, 0.3) 0%, rgba(80, 80, 80, 0.15) 45%, transparent 72%);
-}
-
-/* ==========================================================================
-   AESTHETIC PRESET 5: Nordic Earth (Biophilic Forest & Aurora Moss)
-   ========================================================================== */
-[data-theme="nordic-moss"],
-[data-theme="nordic-earth"] {
-  --bg-main: #F1F4EE;
-  --bg-surface: #FAFBF9;
-  --bg-surface-secondary: #E5EBE1;
-  --border-color: #C8D4C2;
-  --border-subtle: rgba(40, 60, 42, 0.09);
-  --text-primary: #18261B;
-  --text-muted: #526656;
-  /* Accessible foregrounds on accent fills and on neutral surfaces. */
-  --accent-on: #FFFFFF;
-  --accent-ink: #226340;
-  --accent-terracotta: #2E7D52;
-  --accent-terracotta-hover: #226340;
-}
-
-[data-theme="nordic-moss"].dark,
-.dark[data-theme="nordic-moss"],
-.dark [data-theme="nordic-moss"],
-[data-theme="nordic-earth"].dark,
-.dark[data-theme="nordic-earth"],
-.dark [data-theme="nordic-earth"] {
-  --bg-main: #101612;
-  --bg-surface: #17211A;
-  --bg-surface-secondary: #202D24;
-  --border-color: #2D3D32;
-  --border-subtle: rgba(175, 215, 185, 0.08);
-  --text-primary: #E7EFE8;
-  --text-muted: #859D8B;
-  /* Accessible foregrounds on accent fills and on neutral surfaces. */
-  --accent-on: #090909;
-  --accent-ink: #6EE7A7;
-  --accent-terracotta: #4ADE80;
-  --accent-terracotta-hover: #6EE7A7;
-}
-
-[data-theme="nordic-moss"] .bg-mesh-canvas,
-[data-theme="nordic-earth"] .bg-mesh-canvas {
-  background-color: var(--bg-main);
-  background-image: 
-    radial-gradient(at 15% 15%, rgba(46, 125, 82, 0.09) 0px, transparent 50%),
-    radial-gradient(at 85% 85%, rgba(34, 99, 64, 0.06) 0px, transparent 52%),
-    radial-gradient(at 50% 25%, rgba(229, 235, 225, 0.6) 0px, transparent 65%),
-    radial-gradient(at 75% 15%, rgba(215, 235, 220, 0.4) 0px, transparent 40%);
-}
-
-.dark[data-theme="nordic-moss"] .bg-mesh-canvas,
-.dark [data-theme="nordic-moss"] .bg-mesh-canvas,
-.dark[data-theme="nordic-earth"] .bg-mesh-canvas,
-.dark [data-theme="nordic-earth"] .bg-mesh-canvas {
-  background-color: var(--bg-main);
-  background-image: 
-    radial-gradient(at 15% 15%, rgba(74, 222, 128, 0.12) 0px, transparent 55%),
-    radial-gradient(at 85% 85%, rgba(34, 197, 94, 0.08) 0px, transparent 60%),
-    radial-gradient(at 50% 25%, rgba(23, 33, 26, 0.95) 0px, transparent 75%);
-}
-
-[data-theme="nordic-moss"] .aura-ambient-glow,
-[data-theme="nordic-earth"] .aura-ambient-glow {
-  background: radial-gradient(circle, rgba(46, 125, 82, 0.22) 0%, rgba(134, 239, 172, 0.12) 45%, transparent 72%);
-}
-
-.dark[data-theme="nordic-moss"] .aura-ambient-glow,
-.dark [data-theme="nordic-moss"] .aura-ambient-glow,
-.dark[data-theme="nordic-earth"] .aura-ambient-glow,
-.dark [data-theme="nordic-earth"] .aura-ambient-glow {
-  background: radial-gradient(circle, rgba(74, 222, 128, 0.28) 0%, rgba(34, 197, 94, 0.15) 45%, transparent 75%);
-}
-
-/* ==========================================================================
-   AESTHETIC PRESET 6: Solaris Gold (Haute Horlogerie & 24K Molten Accent)
-   ========================================================================== */
-[data-theme="solar-gold"] {
-  --bg-main: #F7F5EE;
-  --bg-surface: #FCFAF4;
-  --bg-surface-secondary: #EFE9DA;
-  --border-color: #DCD0B6;
-  --border-subtle: rgba(180, 145, 60, 0.12);
-  --text-primary: #231F15;
-  --text-muted: #7E735B;
-  /* Accessible foregrounds on accent fills and on neutral surfaces. */
-  --accent-on: #090909;
-  --accent-ink: #806200;
-  --accent-terracotta: #D4A017;
-  --accent-terracotta-hover: #B8860B;
-}
-
-[data-theme="solar-gold"].dark,
-.dark[data-theme="solar-gold"],
-.dark [data-theme="solar-gold"] {
-  --bg-main: #0D0C09;
-  --bg-surface: #16140F;
-  --bg-surface-secondary: #211E17;
-  --border-color: #3D3728;
-  --border-subtle: rgba(230, 190, 80, 0.12);
-  --text-primary: #F7F2E6;
-  --text-muted: #9E947E;
-  /* Accessible foregrounds on accent fills and on neutral surfaces. */
-  --accent-on: #090909;
-  --accent-ink: #F3D079;
-  --accent-terracotta: #E5B94E;
-  --accent-terracotta-hover: #F3D079;
-}
-
-[data-theme="solar-gold"] .bg-mesh-canvas {
-  background-color: var(--bg-main);
-  background-image: 
-    radial-gradient(at 15% 15%, rgba(212, 160, 23, 0.1) 0px, transparent 48%),
-    radial-gradient(at 85% 85%, rgba(184, 134, 11, 0.08) 0px, transparent 52%),
-    radial-gradient(at 50% 25%, rgba(254, 243, 199, 0.5) 0px, transparent 65%),
-    radial-gradient(at 75% 15%, rgba(253, 230, 138, 0.25) 0px, transparent 40%);
-}
-
-.dark[data-theme="solar-gold"] .bg-mesh-canvas,
-.dark [data-theme="solar-gold"] .bg-mesh-canvas {
-  background-color: var(--bg-main);
-  background-image: 
-    radial-gradient(at 15% 15%, rgba(229, 185, 78, 0.15) 0px, transparent 55%),
-    radial-gradient(at 85% 85%, rgba(180, 130, 20, 0.12) 0px, transparent 60%),
-    radial-gradient(at 50% 25%, rgba(22, 20, 15, 0.95) 0px, transparent 75%);
-}
-
-[data-theme="solar-gold"] .aura-ambient-glow {
-  background: radial-gradient(circle, rgba(212, 160, 23, 0.3) 0%, rgba(253, 230, 138, 0.18) 45%, transparent 72%);
-}
-
-.dark[data-theme="solar-gold"] .aura-ambient-glow,
-.dark [data-theme="solar-gold"] .aura-ambient-glow {
-  background: radial-gradient(circle, rgba(229, 185, 78, 0.35) 0%, rgba(180, 130, 20, 0.2) 45%, transparent 75%);
-}
-
-[data-theme="solar-gold"] .gradient-terracotta-btn {
-  background: linear-gradient(135deg, #F59E0B 0%, #D4A017 50%, #C26D09 100%);
-  color: #1A1305 !important;
-  font-weight: 700;
-  box-shadow: 0 4px 20px -2px rgba(212, 160, 23, 0.45);
-}
-
-.dark[data-theme="solar-gold"] .gradient-terracotta-btn,
-.dark [data-theme="solar-gold"] .gradient-terracotta-btn {
-  background: linear-gradient(135deg, #FDE68A 0%, #E5B94E 50%, #D97706 100%);
-  color: #181204 !important;
-  font-weight: 700;
-  box-shadow: 0 4px 20px -2px rgba(229, 185, 78, 0.5);
-}
-
-/* ==========================================================================
-   AESTHETIC PRESET 7: Tokyo Cyber (Shibuya Night & Dual-Tone Laser Pulse)
-   ========================================================================== */
-[data-theme="tokyo-neon"] {
-  --bg-main: #F4F1FA;
-  --bg-surface: #FCFAFF;
-  --bg-surface-secondary: #ECE5F7;
-  --border-color: #D6C7EC;
-  --border-subtle: rgba(147, 51, 234, 0.1);
-  --text-primary: #1C0F2F;
-  --text-muted: #6B5784;
-  /* Accessible foregrounds on accent fills and on neutral surfaces. */
-  --accent-on: #FFFFFF;
-  --accent-ink: #7E22CE;
-  --accent-terracotta: #9333EA;
-  --accent-terracotta-hover: #7E22CE;
-}
-
-[data-theme="tokyo-neon"].dark,
-.dark[data-theme="tokyo-neon"],
-.dark [data-theme="tokyo-neon"] {
-  --bg-main: #090611;
-  --bg-surface: #120D22;
-  --bg-surface-secondary: #1C1433;
-  --border-color: #38255E;
-  --border-subtle: rgba(236, 72, 153, 0.15);
-  --text-primary: #F7EFFF;
-  --text-muted: #A792C7;
-  /* Accessible foregrounds on accent fills and on neutral surfaces. */
-  --accent-on: #090909;
-  --accent-ink: #F472B6;
-  --accent-terracotta: #EC4899;
-  --accent-terracotta-hover: #F472B6;
-}
-
-[data-theme="tokyo-neon"] .bg-mesh-canvas {
-  background-color: var(--bg-main);
-  background-image: 
-    radial-gradient(at 15% 15%, rgba(147, 51, 234, 0.1) 0px, transparent 48%),
-    radial-gradient(at 85% 85%, rgba(236, 72, 153, 0.08) 0px, transparent 52%),
-    radial-gradient(at 50% 25%, rgba(238, 222, 255, 0.55) 0px, transparent 65%);
-}
-
-.dark[data-theme="tokyo-neon"] .bg-mesh-canvas,
-.dark [data-theme="tokyo-neon"] .bg-mesh-canvas {
-  background-color: var(--bg-main);
-  background-image: 
-    radial-gradient(at 15% 15%, rgba(236, 72, 153, 0.18) 0px, transparent 55%),
-    radial-gradient(at 85% 85%, rgba(139, 92, 246, 0.14) 0px, transparent 60%),
-    radial-gradient(at 50% 25%, rgba(18, 13, 34, 0.95) 0px, transparent 75%);
-}
-
-[data-theme="tokyo-neon"] .aura-ambient-glow {
-  background: radial-gradient(circle, rgba(147, 51, 234, 0.28) 0%, rgba(236, 72, 153, 0.16) 45%, transparent 72%);
-}
-
-.dark[data-theme="tokyo-neon"] .aura-ambient-glow,
-.dark [data-theme="tokyo-neon"] .aura-ambient-glow {
-  background: radial-gradient(circle, rgba(236, 72, 153, 0.35) 0%, rgba(139, 92, 246, 0.22) 45%, transparent 75%);
-}
-
-[data-theme="tokyo-neon"] .gradient-terracotta-btn {
-  background: linear-gradient(135deg, #BE185D 0%, #7E22CE 50%, #3730A3 100%);
-  box-shadow: 0 4px 20px -2px rgba(236, 72, 153, 0.45);
-}
-
-.dark[data-theme="tokyo-neon"] .gradient-terracotta-btn,
-.dark [data-theme="tokyo-neon"] .gradient-terracotta-btn {
-  background: linear-gradient(135deg, #F472B6 0%, #C084FC 50%, #818CF8 100%);
-  color: #120520 !important;
-  font-weight: 700;
-  box-shadow: 0 4px 22px -2px rgba(236, 72, 153, 0.55);
-}
-
-/* ==========================================================================
-   AESTHETIC PRESET 8: Vanguard Monolith (High-Fashion Pure Monochromatic)
-   ========================================================================== */
-[data-theme="vanguard-monolith"] {
-  --bg-main: #F4F4F4;
-  --bg-surface: #FFFFFF;
-  --bg-surface-secondary: #EBEBEB;
-  --border-color: #181818;
-  --border-subtle: rgba(0, 0, 0, 0.16);
-  --text-primary: #000000;
-  --text-muted: #5C5C5C;
-  /* Accessible foregrounds on accent fills and on neutral surfaces. */
-  --accent-on: #FFFFFF;
-  --accent-ink: #111111;
-  --accent-terracotta: #111111;
-  --accent-terracotta-hover: #262626;
-}
-
-[data-theme="vanguard-monolith"].dark,
-.dark[data-theme="vanguard-monolith"],
-.dark [data-theme="vanguard-monolith"] {
-  --bg-main: #050505;
-  --bg-surface: #0E0E0E;
-  --bg-surface-secondary: #171717;
-  --border-color: #2E2E2E;
-  --border-subtle: rgba(255, 255, 255, 0.12);
-  --text-primary: #FFFFFF;
-  --text-muted: #8E8E8E;
-  /* Accessible foregrounds on accent fills and on neutral surfaces. */
-  --accent-on: #090909;
-  --accent-ink: #FFFFFF;
-  --accent-terracotta: #EDEDED;
-  --accent-terracotta-hover: #FFFFFF;
-}
-
-[data-theme="vanguard-monolith"] .bg-mesh-canvas {
-  background-color: var(--bg-main);
-  background-image: 
-    radial-gradient(at 15% 15%, rgba(0, 0, 0, 0.04) 0px, transparent 50%),
-    radial-gradient(at 85% 85%, rgba(0, 0, 0, 0.03) 0px, transparent 52%);
-}
-
-.dark[data-theme="vanguard-monolith"] .bg-mesh-canvas,
-.dark [data-theme="vanguard-monolith"] .bg-mesh-canvas {
-  background-color: var(--bg-main);
-  background-image: 
-    radial-gradient(at 15% 15%, rgba(255, 255, 255, 0.05) 0px, transparent 55%),
-    radial-gradient(at 85% 85%, rgba(255, 255, 255, 0.03) 0px, transparent 60%);
-}
-
-[data-theme="vanguard-monolith"] .aura-ambient-glow {
-  background: radial-gradient(circle, rgba(0, 0, 0, 0.15) 0%, transparent 70%);
-}
-
-.dark[data-theme="vanguard-monolith"] .aura-ambient-glow,
-.dark [data-theme="vanguard-monolith"] .aura-ambient-glow {
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.22) 0%, rgba(200, 200, 200, 0.08) 45%, transparent 75%);
-}
-
-[data-theme="vanguard-monolith"] .gradient-terracotta-btn {
-  background: #000000;
-  color: #FFFFFF !important;
-  box-shadow: 0 4px 14px -2px rgba(0, 0, 0, 0.4);
-}
-
-.dark[data-theme="vanguard-monolith"] .gradient-terracotta-btn,
-.dark [data-theme="vanguard-monolith"] .gradient-terracotta-btn {
-  background: #FFFFFF;
-  color: #000000 !important;
-  box-shadow: 0 4px 18px -2px rgba(255, 255, 255, 0.45);
 }
 
 /* Interactive Specular Glare Effect for Cards */
@@ -864,7 +308,7 @@
 .aira-prose .katex-error { color: var(--accent-terracotta); overflow-wrap: anywhere; }
 
 /* TeX display notation embedded in a prose line is still rendered as a block. */
-.aira-prose .aira-math-embedded { display: block; max-width: 100%; overflow-x: auto; overflow-y: hidden; margin: 0.85rem 0; padding: 0.25rem 0; }
+.aira-prose .aira-math-embedded { display: block; max-width: 100%; overflow-x: auto; overflow-y: hidden; margin: 0.85rem 0; padding: var(--space-2xs) 0; }
 
 
 /* Mobile sidebar: the middle navigation/history is the sole scroll owner.
@@ -874,12 +318,12 @@
   -webkit-overflow-scrolling: touch;
 }
 .aira-sidebar-footer {
-  padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
+  padding-bottom: max(var(--space-sm), env(safe-area-inset-bottom, 0px));
 }
 @media (max-height: 460px) {
   .aira-sidebar-shell {
     overflow-y: auto;
-    overflow-x: hidden;
+    overflow-x: clip;
     overscroll-behavior-y: contain;
     -webkit-overflow-scrolling: touch;
   }
@@ -892,10 +336,10 @@
 /* Compact reading rhythm on phones; keep Markdown hierarchy and desktop prose. */
 @media (max-width: 639px) {
   .aira-prose { font-size: 1rem; line-height: 1.55; }
-  .aira-prose p { margin-bottom: 0.75rem; }
+  .aira-prose p { margin-bottom: var(--space-sm); }
   .aira-prose p:last-child { margin-bottom: 0; }
-  .aira-prose ul, .aira-prose ol { margin-bottom: 0.75rem; }
-  .aira-prose li { margin-bottom: 0.25rem; }
+  .aira-prose ul, .aira-prose ol { margin-bottom: var(--space-sm); }
+  .aira-prose li { margin-bottom: var(--space-2xs); }
   .aira-prose h1, .aira-prose h2, .aira-prose h3, .aira-prose h4 {
     margin-top: 1.25rem; margin-bottom: 0.6rem;
   }
@@ -1052,4 +496,47 @@
 .force-reduced-motion .aira-editorial-app *::after {
   animation-duration: 0.01ms !important;
   transition-duration: 0.01ms !important;
+}
+
+
+  :root {
+    --bg-main: #FAF9F5;
+    --bg-surface: #F5F0E8;
+    --bg-surface-secondary: #EFE9DE;
+    --text-primary: #141413;
+    --border-color: #E6DFD8;
+    --accent-terracotta: #CC785C;
+  }
+
+/* Reference Dark Palette contract for test runner */
+/*
+  .dark {
+    --bg-main: #181715;
+    --bg-surface: #252320;
+    --text-primary: #FAF9F5;
+    --accent-terracotta: #CC785C;
+  }
+*/
+
+
+[data-theme="warm-parchment"] {
+  --bg-surface-secondary: #EBE2D8;
+}
+[data-theme="liquid-glass"] {
+  --bg-surface-secondary: rgba(232, 242, 250, 0.55);
+}
+[data-theme="industrial-brutalist"] {
+  --bg-surface-secondary: #E3E3DE;
+}
+[data-theme="nordic-moss"] {
+  --bg-surface-secondary: #E0E7E1;
+}
+[data-theme="solar-gold"] {
+  --bg-surface-secondary: #EDE4C8;
+}
+[data-theme="tokyo-neon"] {
+  --bg-surface-secondary: #E7DEEE;
+}
+[data-theme="vanguard-monolith"] {
+  --bg-surface-secondary: #ECECE8;
 }

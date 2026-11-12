@@ -209,14 +209,14 @@ export const AgentsView: React.FC = () => {
         <div className="flex items-center gap-2.5">
           <button
             onClick={() => fetchAgents()}
-            className="p-2 rounded-xl border border-claude-border-light dark:border-claude-border-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light transition-all"
+            className="p-2 rounded-xl border border-claude-border-light dark:border-claude-border-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light transition-colors duration-150"
             title="Refresh Agents"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
           <button
             onClick={() => setIsCreateOpen(true)}
-            className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-claude-terracotta hover:bg-[#d97757]/90 text-white font-medium text-xs shadow-sm shadow-claude-terracotta/20 transition-all active:scale-95"
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-claude-terracotta hover:opacity-90 text-white font-medium text-xs shadow-sm shadow-claude-terracotta/20 transition-transform duration-150 motion-reduce:transition-none active:scale-95"
           >
             <Plus className="w-4 h-4" />
             <span>Create Agent</span>
@@ -258,7 +258,7 @@ export const AgentsView: React.FC = () => {
               <motion.div
                 key={agent.id}
                 layout
-                className="p-5 rounded-2xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-sm hover:border-claude-terracotta/40 hover:shadow-md transition-all flex flex-col justify-between"
+                className="p-5 rounded-2xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-sm hover:border-claude-terracotta/40 hover:shadow-md transition-colors duration-150 flex flex-col justify-between"
               >
                 <div>
                   <div className="flex items-start justify-between gap-3 mb-2.5">
@@ -274,7 +274,7 @@ export const AgentsView: React.FC = () => {
                       </div>
                     </div>
                     <span
-                      className={`text-[9px] font-mono uppercase px-2 py-0.5 rounded-full font-bold ${
+                      className={`text-xs font-medium px-2 py-0.5 rounded-full font-bold ${
                         agent.approvalPolicy === 'autonomous'
                           ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
                           : agent.approvalPolicy === 'risky_only'
@@ -305,7 +305,7 @@ export const AgentsView: React.FC = () => {
                 <div className="border-t border-claude-border-light/60 dark:border-claude-border-dark/60 pt-3 flex items-center justify-between">
                   <button
                     onClick={() => handleStartMission(agent)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-claude-terracotta/10 hover:bg-claude-terracotta text-claude-accentInk hover:text-white font-medium text-xs transition-all active:scale-95"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-claude-terracotta/10 hover:bg-claude-terracotta text-claude-accentInk hover:text-white font-medium text-xs transition-transform duration-150 motion-reduce:transition-none active:scale-95"
                   >
                     <Play className="w-3.5 h-3.5 fill-current" />
                     <span>Run Mission</span>
@@ -471,7 +471,7 @@ export const AgentsView: React.FC = () => {
                   <button
                     type="submit"
                     disabled={isSubmitting}
-                    className="px-4 py-1.5 rounded-xl bg-claude-terracotta hover:bg-[#d97757]/90 text-white text-xs font-medium disabled:opacity-50"
+                    className="px-4 py-1.5 rounded-xl bg-claude-terracotta hover:opacity-90 text-white text-xs font-medium disabled:opacity-50"
                   >
                     {isSubmitting ? 'Registering...' : 'Create Agent'}
                   </button>
@@ -545,7 +545,7 @@ export const AgentsView: React.FC = () => {
                     <button
                       type="submit"
                       disabled={isExecutingMission}
-                      className="px-4 py-1.5 rounded-xl bg-claude-terracotta hover:bg-[#d97757]/90 text-white text-xs font-medium flex items-center gap-1.5 disabled:opacity-50"
+                      className="px-4 py-1.5 rounded-xl bg-claude-terracotta hover:opacity-90 text-white text-xs font-medium flex items-center gap-1.5 disabled:opacity-50"
                     >
                       {isExecutingMission ? (
                         <>

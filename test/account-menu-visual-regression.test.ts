@@ -100,6 +100,12 @@ async function setupPageWithHistory(page: Page, count: number = 25, options: { a
         },
         token: 'bff_session',
       }));
+      localStorage.setItem('aira_onboarding_usr_test_alex', JSON.stringify({
+        completed: true,
+        skipped: true,
+        currentStage: 'finish',
+      }));
+      localStorage.setItem('aira_dismissed_announcements_usr_test_alex', JSON.stringify(['ann_entitlements_v2']));
     } else {
       localStorage.removeItem('aira_neon_auth_session_v1');
     }
@@ -120,6 +126,12 @@ async function openSidebarIfMobile(page: Page) {
 }
 
 async function openAccountMenu(page: Page) {
+  // Dismiss any lingering overlay dialogs if present
+  const closeOverlayBtn = page.locator('[data-testid="whats-new-modal"] button[aria-label="Close"], [data-testid="onboarding-walkthrough"] button:has-text("Skip")').first();
+  if (await closeOverlayBtn.isVisible().catch(() => false)) {
+    await closeOverlayBtn.click().catch(() => {});
+    await page.waitForTimeout(300);
+  }
   await openSidebarIfMobile(page);
   const accountBtn = page.locator('[data-testid="sidebar-footer"] button[aria-haspopup="menu"]');
   const menu = page.locator('div[role="menu"][aria-label="Account and user settings menu"]');
@@ -248,8 +260,12 @@ async function runTests() {
 
     // Focus must return to the trigger button
     const focusedTag = await page.evaluate(() => document.activeElement?.getAttribute('aria-label'));
-    assert.ok(focusedTag?.includes('workspace and help menu') || focusedTag?.includes('account and help menu'),
-      `Expected focus on account button, got ${focusedTag}`);
+    assert.ok(
+      focusedTag?.includes('workspace and help menu') ||
+      focusedTag?.includes('account and help menu') ||
+      focusedTag?.includes('account and workspace menu'),
+      `Expected focus on account button, got ${focusedTag}`
+    );
     console.log('  PASS: Keyboard navigation (Arrow keys, Escape, focus return) verified.');
 
     // ------------------------------------------------------------------

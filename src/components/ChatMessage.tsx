@@ -77,7 +77,7 @@ export function formatProvenanceBadge(provenance: NonNullable<Message['provenanc
 
   const text = `${providerLabel} · ${modelLabel}${statusSuffix}`;
 
-  const className = `rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider transition-colors ${
+  const className = `rounded-full px-2 py-0.5 text-xs font-medium transition-colors ${
     isFailed
       ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/30'
       : !isVerified
@@ -213,7 +213,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                   </span>
                 );
               })() : message.modelUsed && (
-                <span className="rounded-full bg-claude-surface2-light px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-claude-muted-light dark:bg-claude-surface2-dark dark:text-claude-muted-dark">
+                <span className="rounded-full bg-claude-surface2-light px-2 py-0.5 text-xs font-medium text-claude-muted-light dark:bg-claude-surface2-dark dark:text-claude-muted-dark">
                   {AVAILABLE_MODELS.find(model => model.id === message.modelUsed)?.name}
                 </span>
               )}

@@ -171,7 +171,7 @@ export const WorkspaceFileExplorer: React.FC<WorkspaceFileExplorerProps> = ({
                 {isEntry && (
                   <span
                     title="Designated entrypoint"
-                    className="px-1 py-0.2 bg-amber-500/20 text-amber-400 font-mono text-[9px] rounded uppercase"
+                    className="px-1 py-0.2 bg-amber-500/20 text-amber-400 font-mono text-xs rounded font-medium"
                   >
                     Entry
                   </span>
@@ -196,10 +196,10 @@ export const WorkspaceFileExplorer: React.FC<WorkspaceFileExplorerProps> = ({
     <aside
       data-testid="workspace-file-explorer"
       aria-label="Workspace Project Explorer"
-      className="w-full sm:w-64 border-r border-stone-800 bg-[#161618] flex flex-col h-full shrink-0 select-none overflow-hidden"
+      className="w-full sm:w-64 border-r border-stone-800 bg-stone-900 flex flex-col h-full shrink-0 select-none overflow-hidden"
     >
       {/* Explorer Header */}
-      <div className="p-2.5 border-b border-stone-800/80 flex items-center justify-between gap-2 bg-[#19191B]">
+      <div className="p-2.5 border-b border-stone-800/80 flex items-center justify-between gap-2 bg-stone-900">
         <div className="flex items-center gap-1.5 min-w-0">
           <Layers className="w-3.5 h-3.5 text-claude-terracotta shrink-0" />
           <span className="text-xs font-semibold text-stone-200 truncate tracking-tight">
@@ -241,7 +241,7 @@ export const WorkspaceFileExplorer: React.FC<WorkspaceFileExplorerProps> = ({
       </div>
 
       {/* Search Bar */}
-      <div className="p-2 border-b border-stone-800/60 bg-[#141416]">
+      <div className="p-2 border-b border-stone-800/60 bg-stone-900">
         <div className="relative flex items-center">
           <Search className="w-3 h-3 text-stone-500 absolute left-2 pointer-events-none" />
           <input
@@ -264,7 +264,7 @@ export const WorkspaceFileExplorer: React.FC<WorkspaceFileExplorerProps> = ({
         {matchingFiles ? (
           matchingFiles.length > 0 ? (
             <div className="flex flex-col gap-0.5">
-              <div className="px-2 py-1 text-[10px] text-stone-500 uppercase tracking-wider font-semibold">
+              <div className="px-2 py-1 text-xs text-stone-400 font-medium">
                 Search Results ({matchingFiles.length})
               </div>
               {matchingFiles.map(file => {
@@ -286,7 +286,7 @@ export const WorkspaceFileExplorer: React.FC<WorkspaceFileExplorerProps> = ({
                       <span className="truncate text-[11px]">{file.path}</span>
                     </div>
                     {file.isEntry && (
-                      <span className="px-1 py-0.2 bg-amber-500/20 text-amber-400 text-[9px] rounded uppercase">
+                      <span className="px-1 py-0.2 bg-amber-500/20 text-amber-400 text-xs rounded font-medium">
                         Entry
                       </span>
                     )}
@@ -305,7 +305,7 @@ export const WorkspaceFileExplorer: React.FC<WorkspaceFileExplorerProps> = ({
       </div>
 
       {/* Dependency Graph Summary Toggle */}
-      <div className="border-t border-stone-800 bg-[#141416] p-2">
+      <div className="border-t border-stone-800 bg-stone-900 p-2">
         <button
           type="button"
           data-testid="toggle-dependency-panel"
@@ -324,7 +324,7 @@ export const WorkspaceFileExplorer: React.FC<WorkspaceFileExplorerProps> = ({
         {showDependencyPanel && (
           <div
             data-testid="file-dependency-panel"
-            className="mt-1.5 p-2 bg-[#111113] border border-stone-800/80 rounded text-[10px] font-mono flex flex-col gap-1.5 max-h-36 overflow-y-auto"
+            className="mt-1.5 p-2 bg-stone-950 border border-stone-800/80 rounded text-[10px] font-mono flex flex-col gap-1.5 max-h-36 overflow-y-auto"
           >
             <div className="text-stone-400 font-semibold truncate border-b border-stone-800 pb-1">
               {activeFilePath}
@@ -332,7 +332,7 @@ export const WorkspaceFileExplorer: React.FC<WorkspaceFileExplorerProps> = ({
 
             {activeFileDependencies.length > 0 ? (
               <div className="flex flex-col gap-0.5">
-                <span className="text-stone-500 text-[9px] uppercase font-semibold">Imports:</span>
+                <span className="text-stone-500 text-xs text-stone-400 font-medium">Imports:</span>
                 {activeFileDependencies.map((dep, idx) => (
                   <div
                     key={idx}
@@ -340,7 +340,7 @@ export const WorkspaceFileExplorer: React.FC<WorkspaceFileExplorerProps> = ({
                   >
                     <span className="truncate">{dep.rawSpecifier}</span>
                     <span
-                      className={`text-[8px] px-1 rounded uppercase ${
+                      className={`text-xs px-1 rounded font-medium ${
                         dep.isResolved ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'
                       }`}
                     >
@@ -355,7 +355,7 @@ export const WorkspaceFileExplorer: React.FC<WorkspaceFileExplorerProps> = ({
 
             {activeFileInboundReferences.length > 0 && (
               <div className="flex flex-col gap-0.5 mt-1">
-                <span className="text-stone-500 text-[9px] uppercase font-semibold">Imported By:</span>
+                <span className="text-stone-500 text-xs text-stone-400 font-medium">Imported By:</span>
                 {activeFileInboundReferences.map((ref, idx) => (
                   <div key={idx} className="text-stone-400 truncate pl-1">
                     ← {ref.sourcePath}

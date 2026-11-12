@@ -1756,7 +1756,7 @@ useEffect(() => {
             {(isLoading || isBuilderBusy) && (
               <button
                 onClick={handleCancelExecution}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-rose-500 hover:bg-rose-500/10 active:scale-95 transition-all"
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-rose-500 hover:bg-rose-500/10 active:scale-95 transition-transform duration-150 motion-reduce:transition-none"
                 title="Cancel active execution"
               >
                 Cancel
@@ -1791,7 +1791,7 @@ useEffect(() => {
                 <span className="hidden sm:inline">Artifact Studio</span>
               </button>
             )}
-            {activeConversation && <button onClick={() => handleToggleStar(activeConversation.id)} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-white/5 active:scale-95 transition-all" title={activeConversation.isPinned ? 'Remove bookmark' : 'Bookmark conversation'}><Bookmark className={`w-4 h-4 ${activeConversation.isPinned ? 'fill-aira-blue text-aira-blue' : 'text-claude-muted-light dark:text-claude-muted-dark'}`} /></button>}
+            {activeConversation && <button onClick={() => handleToggleStar(activeConversation.id)} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-white/5 active:scale-95 transition-transform duration-150 motion-reduce:transition-none" title={activeConversation.isPinned ? 'Remove bookmark' : 'Bookmark conversation'}><Bookmark className={`w-4 h-4 ${activeConversation.isPinned ? 'fill-aira-blue text-aira-blue' : 'text-claude-muted-light dark:text-claude-muted-dark'}`} /></button>}
             <button onClick={handleShare} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-white/5">{sharedCopied ? <Check className="w-4 h-4 text-emerald-400" /> : <Share2 className="w-4 h-4 text-claude-muted-light dark:text-claude-muted-dark" />}</button>
           </div>
         </header>
@@ -1813,8 +1813,8 @@ useEffect(() => {
                   id={`message-${message.id}`}
                   key={message.id}
                   className={highlightedMessageId === message.id
-                    ? 'rounded-xl ring-2 ring-aira-blue/35 bg-aira-blue/[0.035] transition-all duration-500'
-                    : 'transition-all duration-500'}
+                    ? 'rounded-xl ring-2 ring-aira-blue/35 bg-aira-blue/[0.035] transition-colors duration-500'
+                    : 'transition-colors duration-500'}
                 >
                   <ChatMessage
                     message={message}

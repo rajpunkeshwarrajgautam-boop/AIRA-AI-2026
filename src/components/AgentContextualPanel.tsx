@@ -274,10 +274,10 @@ export const AgentContextualPanel: React.FC<AgentContextualPanelProps> = ({
         data-testid="agent-contextual-panel"
         className={`${
           isExpanded ? 'fixed inset-y-0 right-0 z-[60] w-full' : 'fixed inset-y-0 right-0 z-50 w-full xl:relative xl:inset-auto xl:z-40 xl:w-[48vw]'
-        } h-[100dvh] min-w-0 flex flex-col bg-claude-surface-light dark:bg-[#111C35] border-l border-claude-border-light dark:border-white/10 shadow-2xl xl:shadow-none flex-shrink-0 transition-colors`}
+        } h-[100dvh] min-w-0 flex flex-col bg-claude-surface-light dark:bg-slate-900 border-l border-claude-border-light dark:border-white/10 shadow-2xl xl:shadow-none flex-shrink-0 transition-colors`}
       >
         {/* Top Header */}
-        <div className="min-h-[56px] px-3 sm:px-4 py-2 flex items-center justify-between border-b border-claude-border-light dark:border-white/10 bg-claude-surface-light/95 dark:bg-[#111C35]/95 backdrop-blur-md select-none">
+        <div className="min-h-[56px] px-3 sm:px-4 py-2 flex items-center justify-between border-b border-claude-border-light dark:border-white/10 bg-claude-surface-light/95 dark:bg-slate-900/95 backdrop-blur-md select-none">
           <div className="flex items-center space-x-2 min-w-0">
             <div className="w-8 h-8 rounded-lg bg-aira-blue/15 text-aira-blue flex items-center justify-center border border-aira-blue/30 shrink-0">
               <Bot className="w-4 h-4" />

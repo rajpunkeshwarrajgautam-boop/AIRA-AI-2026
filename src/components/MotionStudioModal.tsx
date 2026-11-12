@@ -164,11 +164,11 @@ const MainSequence = () => {
         {/* Studio Top Navigation Chrome */}
         <header className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-studio-rule)] bg-[var(--color-studio-paper-2)] select-none">
           <div className="flex items-center space-x-3">
-            <span className="flex items-center space-x-1.5 px-2 py-0.5 text-xs font-medium tracking-wide uppercase bg-[var(--color-studio-paper-3)] border border-[var(--color-studio-rule-2)] text-[var(--color-studio-accent)]">
+            <h1 id="motion-studio-title" className="text-sm font-semibold tracking-tight text-[var(--color-studio-ink)] flex items-center gap-2">
+            <span className="flex items-center space-x-1.5 px-2 py-0.5 text-xs font-medium bg-[var(--color-studio-paper-3)] border border-[var(--color-studio-rule-2)] text-[var(--color-studio-accent)]">
               <Film className="w-3.5 h-3.5" />
               <span>Motion Studio</span>
             </span>
-            <h1 id="motion-studio-title" className="text-sm font-semibold tracking-tight text-[var(--color-studio-ink)]">
               AIRA AI 2026 Feature Showcase
             </h1>
             <span className="hidden sm:inline-block px-1.5 py-0.5 text-[11px] font-mono bg-[var(--color-studio-paper)] border border-[var(--color-studio-rule)] text-[var(--color-studio-muted)]">
@@ -258,7 +258,7 @@ const MainSequence = () => {
             <div className="flex-1 flex flex-col items-center justify-center p-3 sm:p-6 overflow-hidden">
               {/* Motion Canvas Stage */}
               <div
-                className={`relative w-full overflow-hidden border border-[var(--color-studio-rule)] bg-black shadow-2xl flex flex-col justify-between transition-all duration-300 ${
+                className={`relative w-full overflow-hidden border border-[var(--color-studio-rule)] bg-black shadow-2xl flex flex-col justify-between transition-transform duration-300 motion-reduce:transition-none ${
                   aspectRatio === '16:9'
                     ? 'max-w-4xl aspect-video'
                     : aspectRatio === '9:16'
@@ -279,7 +279,7 @@ const MainSequence = () => {
                 {/* Top Scene Marker Header */}
                 <div className="relative z-10 flex items-center justify-between p-4 sm:p-6">
                   <div className="flex items-center space-x-2">
-                    <span className="px-2 py-0.5 text-[11px] font-mono tracking-wider uppercase border border-[var(--color-studio-rule-2)] bg-[var(--color-studio-paper-2)]/90 text-[var(--color-studio-accent)]">
+                    <span className="px-2 py-0.5 text-xs font-mono border border-[var(--color-studio-rule-2)] bg-[var(--color-studio-paper-2)]/90 text-[var(--color-studio-accent)]">
                       {scene.badge}
                     </span>
                     <span className="text-xs font-mono text-[var(--color-studio-muted)]">
@@ -301,12 +301,12 @@ const MainSequence = () => {
                 {/* Animated Core Content Center */}
                 <div className="relative z-10 px-4 sm:px-8 py-2 flex flex-col justify-end">
                   <div className="max-w-xl space-y-2">
-                    <p className="text-xs font-medium tracking-wider uppercase text-[var(--color-studio-muted)]">
-                      {scene.subtitle}
-                    </p>
                     <h2 className="studio-head-display text-2xl sm:text-4xl text-[var(--color-studio-ink)] font-light">
-                      {scene.headline}
-                    </h2>
+                    {scene.headline}
+                  </h2>
+                  <p className="text-xs font-medium text-[var(--color-studio-muted)]">
+                    {scene.subtitle}
+                  </p>
                     <p className="text-xs sm:text-sm text-[var(--color-studio-ink-2)] line-clamp-2 leading-relaxed">
                       {scene.statement}
                     </p>
@@ -317,7 +317,7 @@ const MainSequence = () => {
                     <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-2 pt-3 border-t border-[var(--color-studio-rule)]">
                       {scene.metrics.map((m, i) => (
                         <div key={i} className="flex flex-col">
-                          <span className="text-[10px] font-medium uppercase tracking-wider text-[var(--color-studio-muted)]">
+                          <span className="text-xs font-medium text-[var(--color-studio-muted)]">
                             {m.label}
                           </span>
                           <span className="text-xs sm:text-sm font-semibold text-[var(--color-studio-ink)]">
@@ -332,7 +332,7 @@ const MainSequence = () => {
                 {/* Scene In-Canvas Scrubber Indicator */}
                 <div className="relative z-10 w-full h-1 bg-[var(--color-studio-rule)]">
                   <div
-                    className="h-full bg-[var(--color-studio-accent)] transition-all duration-75"
+                    className="h-full bg-[var(--color-studio-accent)] transition-opacity duration-75"
                     style={{ width: `${progress * 100}%` }}
                   />
                 </div>
@@ -360,7 +360,7 @@ const MainSequence = () => {
                         handleSeekScene(index);
                         setActiveTab('player');
                       }}
-                      className={`text-left border transition-all p-3 flex flex-col space-y-2.5 ${
+                      className={`text-left border transition-colors duration-150 p-3 flex flex-col space-y-2.5 ${
                         currentSceneIndex === index
                           ? 'border-[var(--color-studio-accent)] bg-[var(--color-studio-paper-2)]'
                           : 'border-[var(--color-studio-rule)] bg-[var(--color-studio-paper)] hover:border-[var(--color-studio-rule-2)]'
@@ -375,7 +375,7 @@ const MainSequence = () => {
                         <span className="absolute bottom-1 right-1 px-1 py-0.5 text-[9px] font-mono bg-black/80 text-white">
                           {sc.timecode}
                         </span>
-                        <span className="absolute top-1 left-1 px-1.5 py-0.5 text-[9px] font-mono bg-[var(--color-studio-paper)] text-[var(--color-studio-accent)] uppercase">
+                        <span className="absolute top-1 left-1 px-1.5 py-0.5 text-[9px] font-mono bg-[var(--color-studio-paper)] text-[var(--color-studio-accent)]">
                           {sc.badge}
                         </span>
                       </div>
@@ -506,7 +506,7 @@ const AiraTrailerTimeline = () => {
                   >
                     <div className="w-full h-1.5 bg-[var(--color-studio-paper-3)] border border-[var(--color-studio-rule)] overflow-hidden">
                       <div
-                        className="h-full bg-[var(--color-studio-accent)] transition-all duration-75"
+                        className="h-full bg-[var(--color-studio-accent)] transition-opacity duration-75"
                         style={{ width: `${sceneProgress * 100}%` }}
                       />
                     </div>
@@ -569,7 +569,7 @@ const AiraTrailerTimeline = () => {
               <div className="flex items-center space-x-3">
                 {/* Speed Controls */}
                 <div className="flex items-center space-x-1 text-xs">
-                  <span className="text-[10px] uppercase font-mono text-[var(--color-studio-muted)]">Speed</span>
+                  <span className="text-xs font-mono text-[var(--color-studio-muted)]">Speed</span>
                   {[1, 1.5, 2].map((spd) => (
                     <button
                       key={spd}

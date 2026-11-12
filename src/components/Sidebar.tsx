@@ -344,7 +344,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div className="px-3.5 pt-2 pb-1 space-y-1">
             <button
               onClick={onOpenProjects}
-              className={`w-full flex items-center justify-between px-3.5 py-2 rounded-xl text-[13px] font-semibold transition-all duration-300 ${activeProjectId ? 'bg-claude-surface-light dark:bg-claude-surface-dark text-claude-text-light dark:text-white shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] border border-claude-border-light dark:border-claude-border-dark' : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark border border-transparent'}`}
+              className={`w-full flex items-center justify-between px-3.5 py-2 rounded-xl text-[13px] font-semibold transition-colors duration-150 ${activeProjectId ? 'bg-claude-surface-light dark:bg-claude-surface-dark text-claude-text-light dark:text-white shadow-sm border border-claude-border-light dark:border-claude-border-dark' : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark border border-transparent'}`}
             >
               <span className="flex items-center gap-2.5">
                 <FolderGit2 className="w-4 h-4 text-claude-accentInk" />
@@ -378,7 +378,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     onOpenSearch(searchQuery);
                   }
                 }}
-                className="w-full text-[13px] font-medium pl-10 pr-4 py-2.5 rounded-xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark placeholder-claude-muted-light dark:placeholder-claude-muted-dark focus:outline-none focus:border-claude-terracotta/50 text-claude-text-light dark:text-white transition-all duration-300"
+                className="w-full text-[13px] font-medium pl-10 pr-4 py-2.5 rounded-xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark placeholder-claude-muted-light dark:placeholder-claude-muted-dark focus:outline-none focus:border-claude-terracotta/50 text-claude-text-light dark:text-white transition-colors duration-150"
               />
             </div>
             <button
@@ -394,7 +394,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <motion.div variants={listVariants} initial="hidden" animate="show" className="space-y-6">
               {starred.length > 0 && (
                 <div>
-                  <button onClick={() => setStarredExpanded(!starredExpanded)} className="flex items-center space-x-2 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.15em] text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white w-full transition-colors">
+                  <button onClick={() => setStarredExpanded(!starredExpanded)} className="flex items-center space-x-2 px-3 py-1.5 text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white w-full transition-colors">
                     <motion.div animate={{ rotate: starredExpanded ? 0 : -90 }} transition={{ type: "spring", stiffness: 200, damping: 20 }}>
                       <ChevronDown className="w-3.5 h-3.5" />
                     </motion.div>
@@ -421,7 +421,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               )}
               {grouped.map(group => (
                 <div key={group.title}>
-                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.15em] text-claude-muted-light dark:text-claude-muted-dark">{group.title}</div>
+                  <div className="px-3 py-1.5 text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark">{group.title}</div>
                   <div className="mt-1 space-y-1">{group.list.map(renderChatItem)}</div>
                 </div>
               ))}
@@ -436,7 +436,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 type="button"
                 data-testid="sidebar-plan-badge"
                 onClick={() => onOpenSettings('plan')}
-                className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl bg-claude-surface2-light/60 dark:bg-white/[0.04] border border-claude-border-light/60 dark:border-white/10 hover:border-claude-terracotta/40 transition-all text-left group"
+                className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl bg-claude-surface2-light/60 dark:bg-white/[0.04] border border-claude-border-light/60 dark:border-white/10 hover:border-claude-terracotta/40 transition-colors duration-150 text-left group"
               >
                 <div className="flex items-center gap-2 min-w-0">
                   <span className={`w-2 h-2 rounded-full shrink-0 ${
@@ -462,7 +462,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   aria-expanded={isAccountMenuOpen}
                   aria-label={neonUser ? "Open user account and help menu" : "Sign in to account and workspace menu"}
                   onClick={() => setIsAccountMenuOpen(prev => !prev)}
-                  className="flex w-full min-w-0 items-center space-x-2.5 p-2 rounded-xl hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark border border-claude-border-light/60 dark:border-claude-border-dark/60 transition-all text-left active:scale-[0.98]"
+                  className="flex w-full min-w-0 items-center space-x-2.5 p-2 rounded-xl hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark border border-claude-border-light/60 dark:border-claude-border-dark/60 transition-transform duration-150 motion-reduce:transition-none text-left active:scale-[0.98]"
                 >
                   <div className="w-7 h-7 rounded-[8px] bg-claude-terracotta-hover text-claude-onAccent font-semibold text-xs flex items-center justify-center flex-shrink-0 overflow-hidden">
                     {neonUser?.image ? (
@@ -565,7 +565,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   type="button"
                   aria-label="Open settings"
                   onClick={() => onOpenSettings('general')}
-                  className="p-2 rounded-xl hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark border border-claude-border-light/60 dark:border-claude-border-dark/60 text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light transition-all"
+                  className="p-2 rounded-xl hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark border border-claude-border-light/60 dark:border-claude-border-dark/60 text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light transition-colors duration-150"
                   title="Settings"
                 >
                   <Settings className="w-4 h-4" />

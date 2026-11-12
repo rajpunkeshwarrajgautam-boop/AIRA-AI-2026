@@ -240,14 +240,14 @@ export const LibraryView: React.FC = () => {
         <div className="flex items-center gap-2.5">
           <button
             onClick={() => fetchKnowledgeData()}
-            className="p-2 rounded-xl border border-claude-border-light dark:border-claude-border-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light transition-all"
+            className="p-2 rounded-xl border border-claude-border-light dark:border-claude-border-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light transition-colors duration-150"
             title="Refresh Knowledge Data"
           >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin motion-reduce:animate-none' : ''}`} />
           </button>
           <button
             onClick={() => setIsIngestOpen(true)}
-            className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-claude-terracotta hover:bg-[#d97757]/90 text-white font-medium text-xs shadow-sm shadow-claude-terracotta/20 transition-all active:scale-95"
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-claude-terracotta hover:opacity-90 text-white font-medium text-xs shadow-sm shadow-claude-terracotta/20 transition-transform duration-150 motion-reduce:transition-none active:scale-95"
           >
             <Plus className="w-4 h-4" />
             <span>Ingest Document</span>
@@ -260,7 +260,7 @@ export const LibraryView: React.FC = () => {
         <div className="flex items-center gap-1 p-1 bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark rounded-xl">
           <button
             onClick={() => setActiveTab('sources')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors duration-150 ${
               activeTab === 'sources'
                 ? 'bg-claude-terracotta text-white shadow-sm'
                 : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light'
@@ -270,7 +270,7 @@ export const LibraryView: React.FC = () => {
           </button>
           <button
             onClick={() => setActiveTab('memories')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors duration-150 ${
               activeTab === 'memories'
                 ? 'bg-claude-terracotta text-white shadow-sm'
                 : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light'
@@ -280,7 +280,7 @@ export const LibraryView: React.FC = () => {
           </button>
           <button
             onClick={() => setActiveTab('graph')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors duration-150 ${
               activeTab === 'graph'
                 ? 'bg-claude-terracotta text-white shadow-sm'
                 : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light'
@@ -361,7 +361,7 @@ export const LibraryView: React.FC = () => {
                   searchResults.map((res, i) => (
                     <div
                       key={i}
-                      className="p-4 rounded-xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-sm hover:border-claude-terracotta/40 transition-all"
+                      className="p-4 rounded-xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-sm hover:border-claude-terracotta/40 transition-colors duration-150"
                     >
                       <div className="flex items-center justify-between gap-2 mb-2">
                         <span className="font-medium text-xs text-claude-accentInk">
@@ -389,7 +389,7 @@ export const LibraryView: React.FC = () => {
                 </p>
                 <button
                   onClick={() => setIsIngestOpen(true)}
-                  className="px-4 py-2 rounded-xl bg-claude-terracotta hover:bg-[#d97757]/90 text-white font-medium text-xs shadow-sm transition-all"
+                  className="px-4 py-2 rounded-xl bg-claude-terracotta hover:opacity-90 text-white font-medium text-xs shadow-sm transition-colors duration-150"
                 >
                   Ingest First Document
                 </button>
@@ -400,7 +400,7 @@ export const LibraryView: React.FC = () => {
                   <motion.div
                     key={source.id}
                     layout
-                    className="p-4 rounded-xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-sm hover:border-claude-terracotta/40 hover:shadow-md transition-all flex flex-col justify-between"
+                    className="p-4 rounded-xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-sm hover:border-claude-terracotta/40 hover:shadow-md transition-colors duration-150 flex flex-col justify-between"
                   >
                     <div>
                       <div className="flex items-start justify-between gap-2 mb-2">
@@ -411,7 +411,7 @@ export const LibraryView: React.FC = () => {
                           </h4>
                         </div>
                         <span
-                          className={`text-[9px] font-mono uppercase px-2 py-0.5 rounded-full font-bold ${
+                          className={`text-xs font-medium px-2 py-0.5 rounded-full ${
                             source.isSystem
                               ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20'
                               : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
@@ -473,7 +473,7 @@ export const LibraryView: React.FC = () => {
                         <span className="font-mono text-xs font-bold text-claude-accentInk">
                           {mem.key}
                         </span>
-                        <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light">
+                        <span className="text-xs px-2 py-0.5 rounded bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light">
                           {mem.category}
                         </span>
                         {mem.isSystem && (
@@ -621,7 +621,7 @@ export const LibraryView: React.FC = () => {
                     <button
                       type="submit"
                       disabled={isIngesting}
-                      className="px-4 py-1.5 rounded-xl bg-claude-terracotta hover:bg-[#d97757]/90 text-white text-xs font-medium transition-all disabled:opacity-50"
+                      className="px-4 py-1.5 rounded-xl bg-claude-terracotta hover:opacity-90 text-white text-xs font-medium transition-colors duration-150 disabled:opacity-50"
                     >
                       {isIngesting ? 'Indexing...' : 'Index Document'}
                     </button>

@@ -86,7 +86,7 @@ export const KeyboardShortcutsModal: React.FC<KeyboardShortcutsModalProps> = ({
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.96, y: 8 }}
         transition={{ duration: 0.18, ease: 'easeOut' }}
-        className="w-full max-w-2xl max-h-[90vh] flex flex-col bg-claude-surface-light dark:bg-[#1a1b1e] border border-claude-border-light dark:border-white/10 rounded-2xl shadow-2xl overflow-hidden"
+        className="w-full max-w-2xl max-h-[90vh] flex flex-col bg-claude-surface-light dark:bg-stone-900 border border-claude-border-light dark:border-white/10 rounded-2xl shadow-2xl overflow-hidden"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-claude-border-light dark:border-white/10 bg-claude-surface2-light/60 dark:bg-white/[0.02]">
@@ -116,7 +116,7 @@ export const KeyboardShortcutsModal: React.FC<KeyboardShortcutsModalProps> = ({
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           {sections.map((section) => (
             <div key={section.title}>
-              <h3 className="text-xs font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark mb-3">
+              <h3 className="text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark mb-3">
                 {section.title}
               </h3>
               <div className="space-y-2">

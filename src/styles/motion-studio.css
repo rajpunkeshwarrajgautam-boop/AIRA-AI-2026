@@ -15,8 +15,8 @@
   --color-studio-accent-ink: oklch(16% 0.05 264);
   --color-studio-focus: oklch(84% 0.12 228);
 
-  --font-studio-display: "Mona Sans", ui-sans-serif, system-ui, sans-serif;
-  --font-studio-body: var(--font-studio-display);
+  --font-studio-display: var(--font-body);
+  --font-studio-body: var(--font-body);
   --tracking-studio-display: -0.015em;
   --display-weight: 300;
   --display-stretch: 125%;
@@ -60,7 +60,7 @@
   background: transparent;
   color: var(--color-studio-ink);
   font-weight: 500;
-  padding: 8px 16px;
+  padding: var(--space-xs) var(--space-md);
   transition: background-color var(--dur-studio-short) var(--ease-studio-out), color var(--dur-studio-short) var(--ease-studio-out);
 }
 

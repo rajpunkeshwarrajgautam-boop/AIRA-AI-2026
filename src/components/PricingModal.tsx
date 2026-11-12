@@ -57,7 +57,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className="relative w-full max-w-5xl rounded-3xl bg-[#18181b] border border-white/10 text-white shadow-2xl overflow-hidden my-8"
+        className="relative w-full max-w-5xl rounded-3xl bg-stone-900 border border-white/10 text-white shadow-2xl overflow-hidden my-8"
       >
         {/* Header */}
         <div className="p-6 md:p-8 border-b border-white/10 flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -76,14 +76,14 @@ export const PricingModal: React.FC<PricingModalProps> = ({
               <button
                 type="button"
                 onClick={() => setCurrency('INR')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${currency === 'INR' ? 'bg-[#cc785c] text-white shadow-sm' : 'text-stone-400 hover:text-white'}`}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors duration-150 ${currency === 'INR' ? 'bg-claude-terracotta text-white shadow-sm' : 'text-stone-400 hover:text-white'}`}
               >
                 ₹ INR (India)
               </button>
               <button
                 type="button"
                 onClick={() => setCurrency('USD')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${currency === 'USD' ? 'bg-[#cc785c] text-white shadow-sm' : 'text-stone-400 hover:text-white'}`}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors duration-150 ${currency === 'USD' ? 'bg-claude-terracotta text-white shadow-sm' : 'text-stone-400 hover:text-white'}`}
               >
                 $ USD (Global)
               </button>
@@ -141,9 +141,9 @@ export const PricingModal: React.FC<PricingModalProps> = ({
           </div>
 
           {/* PLUS */}
-          <div className="relative rounded-2xl p-6 border border-orange-500/50 bg-gradient-to-b from-orange-500/5 to-transparent flex flex-col justify-between shadow-[0_0_30px_rgba(204,120,92,0.1)]">
-            <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-0.5 rounded-full bg-[#cc785c] text-white text-[10px] font-bold uppercase tracking-wider shadow-sm">
-              Popular Value
+          <div className="relative rounded-2xl p-6 border border-orange-500/50 bg-gradient-to-b from-orange-500/5 to-transparent flex flex-col justify-between shadow-lg">
+            <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-0.5 rounded-full bg-claude-terracotta text-white text-xs font-semibold shadow-sm">
+              Popular value
             </div>
 
             <div>

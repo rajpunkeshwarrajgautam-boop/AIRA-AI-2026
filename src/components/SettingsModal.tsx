@@ -408,7 +408,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             exit={{ opacity: 0, scale: 0.96, y: 10 }}
             transition={{ type: "spring", stiffness: 350, damping: 28 }}
             style={{ maxHeight: Math.max(0, viewport.height - (viewport.width >= 640 ? 48 : 16)) }}
-            className={`aira-settings-dialog w-full min-w-0 max-w-2xl h-full max-h-full sm:h-auto sm:max-h-[min(90dvh,900px)] rounded-2xl sm:rounded-[1.75rem] border border-claude-border-light dark:border-claude-border-dark bg-claude-surface-light dark:bg-claude-surface-dark shadow-[0_20px_60px_-15px_rgba(0,0,0,0.15)] dark:shadow-[0_20px_60px_-15px_rgba(0,0,0,0.7)] flex flex-col relative z-10 ${compactHeight ? 'overflow-y-auto overscroll-contain' : 'overflow-hidden'}`}
+            className={`aira-settings-dialog w-full min-w-0 max-w-2xl h-full max-h-full sm:h-auto sm:max-h-[min(90dvh,900px)] rounded-2xl sm:rounded-[1.75rem] border border-claude-border-light dark:border-claude-border-dark bg-claude-surface-light dark:bg-claude-surface-dark shadow-2xl dark:shadow-2xl flex flex-col relative z-10 ${compactHeight ? 'overflow-y-auto overscroll-contain' : 'overflow-hidden'}`}
           >
             {/* Header */}
             <header 
@@ -435,7 +435,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={onClose}
-                className="shrink-0 p-2 rounded-xl hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark text-claude-muted-light dark:text-claude-muted-dark transition-colors"
+                className="shrink-0 p-2 rounded-xl hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark text-claude-muted-light dark:text-claude-muted-dark transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99]"
               >
                 <X className="w-5 h-5" />
               </motion.button>
@@ -466,9 +466,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   onClick={() => setActiveTab(tab.id)}
                   id={`aira-settings-tab-${tab.id}`} data-testid={`settings-tab-${tab.id}`}
                   aria-controls="aira-settings-panel"
-                  className={`shrink-0 flex items-center gap-2 px-3 py-2.5 text-xs font-semibold rounded-t-xl transition-all border-b-2 whitespace-nowrap ${
+                  className={`shrink-0 flex items-center gap-2 px-3 py-2.5 text-xs font-semibold rounded-t-xl transition-colors motion-reduce:transition-none border-b-2 whitespace-nowrap ${
                     activeTab === tab.id
-                      ? 'border-claude-terracotta text-claude-accentInk bg-claude-surface-light dark:bg-claude-surface-dark shadow-[0_-2px_10px_-4px_rgba(0,0,0,0.03)]'
+                      ? 'border-claude-terracotta text-claude-accentInk bg-claude-surface-light dark:bg-claude-surface-dark shadow-sm'
                       : 'border-transparent text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white'
                   }`}
                 >
@@ -485,30 +485,30 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               {activeTab === 'general' && (
                 <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
                   <div>
-                    <label htmlFor="aira-settings-name" className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark block mb-2">Display Name</label>
+                    <label htmlFor="aira-settings-name" className="text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark block mb-2">Display Name</label>
                     <input 
                       id="aira-settings-name"
                       value={form.userName} 
                       onChange={e => setForm({ ...form, userName: e.target.value })} 
                       placeholder="Enter your name (e.g. Punkeshwar)" 
-                      className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-medium outline-none focus:border-claude-terracotta focus:shadow-[0_0_0_2px_rgba(217,119,87,0.15)] transition-all placeholder:text-claude-muted-light/50" 
+                      className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-medium outline-none focus:border-claude-terracotta focus:ring-2 focus:ring-claude-terracotta/20 transition-colors motion-reduce:transition-none placeholder:text-claude-muted-light/50" 
                     />
                     <p className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-1">Used to personalize dynamic greetings and conversation synthesis.</p>
                   </div>
 
                   <div>
-                    <label htmlFor="aira-settings-email" className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark block mb-2">Account Email</label>
+                    <label htmlFor="aira-settings-email" className="text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark block mb-2">Account Email</label>
                     <input 
                       id="aira-settings-email"
                       value={form.email || ''} 
                       placeholder="Not signed in"
                       onChange={e => setForm({ ...form, email: e.target.value })} 
-                      className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-medium outline-none focus:border-claude-terracotta transition-all" 
+                      className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-medium outline-none focus:border-claude-terracotta transition-colors motion-reduce:transition-none" 
                     />
                   </div>
 
                   <div>
-                    <label className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark block mb-2">Theme Mode</label>
+                    <label className="text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark block mb-2">Theme Mode</label>
                     <div className="grid grid-cols-3 gap-2.5">
                       {(['light','dark','system'] as const).map(theme => (
                         <button 
@@ -518,7 +518,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             setForm({ ...form, theme });
                             onSaveSettings({ ...settings, ...form, theme });
                           }} 
-                          className={`py-2.5 rounded-xl border text-[13px] font-bold capitalize transition-all ${
+                          className={`py-2.5 rounded-xl border text-[13px] font-bold capitalize transition-colors motion-reduce:transition-none ${
                             form.theme === theme 
                               ? 'border-claude-terracotta bg-claude-terracotta-hover text-claude-onAccent shadow-sm'
                               : 'border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark hover:border-claude-terracotta/40'
@@ -533,7 +533,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   {/* 8 Aesthetic Presets */}
                   <div>
                     <div className="flex items-center justify-between mb-3">
-                      <label className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark block">
+                      <label className="text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark block">
                         Aesthetic Preset & Visual System
                       </label>
                       <span className="text-[10px] font-semibold text-claude-accentInk bg-claude-terracotta/10 px-2 py-0.5 rounded-full">
@@ -554,7 +554,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               setForm({ ...form, aestheticPreset: preset.id });
                               onSaveSettings({ ...settings, ...form, aestheticPreset: preset.id });
                             }}
-                            className={`p-3 rounded-2xl border text-left transition-all relative overflow-hidden flex flex-col justify-between ${
+                            className={`p-3 rounded-2xl border text-left transition-colors motion-reduce:transition-none relative overflow-hidden flex flex-col justify-between ${
                               isSelected
                                 ? 'border-claude-terracotta bg-claude-terracotta/5 dark:bg-claude-terracotta/10 shadow-sm ring-1 ring-claude-terracotta'
                                 : 'border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light dark:bg-claude-surface2-dark/60 hover:border-claude-terracotta/40'
@@ -566,7 +566,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   <span>{preset.name}</span>
                                   {isSelected && <Check className="w-3.5 h-3.5 text-claude-terracotta" />}
                                 </div>
-                                <span className="text-[9px] font-extrabold uppercase tracking-wider text-claude-accentInk">
+                                <span className="text-[11px] font-semibold text-claude-accentInk">
                                   {preset.badge}
                                 </span>
                               </div>
@@ -593,14 +593,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <div className="p-4 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/40 dark:bg-claude-surface2-dark/40 space-y-4">
                     <div className="flex items-center gap-2">
                       <Eye className="w-4 h-4 text-claude-accentInk" />
-                      <span className="text-xs font-bold uppercase tracking-wider text-claude-text-light dark:text-white">
+                      <span className="text-xs font-semibold text-claude-text-light dark:text-white">
                         Accessibility & Motion
                       </span>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
-                        <label className="text-[10px] font-bold uppercase text-claude-muted-light block mb-1">Reduced Motion</label>
+                        <label className="text-xs font-medium text-claude-muted-light block mb-1">Reduced Motion</label>
                         <select
                           aria-label="Reduced Motion" value={form.reducedMotion || 'system'}
                           onChange={e => setForm({ ...form, reducedMotion: e.target.value as any })}
@@ -613,7 +613,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       </div>
 
                       <div>
-                        <label className="text-[10px] font-bold uppercase text-claude-muted-light block mb-1">Font Scale</label>
+                        <label className="text-xs font-medium text-claude-muted-light block mb-1">Font Scale</label>
                         <select
                           aria-label="Font Scale" value={form.fontSize || 'base'}
                           onChange={e => setForm({ ...form, fontSize: e.target.value as any })}
@@ -638,7 +638,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           onChange={e => setForm({ ...form, highContrast: e.target.checked })}
                           className="sr-only peer"
                         />
-                        <div className="w-9 h-5 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-claude-terracotta"></div>
+                        <div className="w-9 h-5 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-transform motion-reduce:after:transition-none peer-checked:bg-claude-terracotta"></div>
                       </label>
                     </div>
                   </div>
@@ -661,15 +661,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <div className="p-4 sm:p-5 rounded-2xl border border-claude-border-light dark:border-claude-border-dark bg-gradient-to-br from-claude-terracotta/10 via-claude-surface2-light/50 dark:via-white/[0.03] to-transparent space-y-4">
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                       <div className="flex items-center gap-3">
-                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-white shadow-sm shrink-0 ${
-                          activePlanId === 'pro'
-                            ? 'bg-gradient-to-br from-purple-500 to-indigo-600'
-                            : activePlanId === 'plus'
-                            ? 'bg-gradient-to-br from-orange-500 to-[#cc785c]'
-                            : activePlanId === 'free'
-                            ? 'bg-gradient-to-br from-emerald-500 to-teal-600'
-                            : 'bg-stone-600'
-                        }`}>
+                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-white shadow-sm shrink-0 ${activePlanId === "pro" ? "bg-aira-blue" : activePlanId === "plus" ? "bg-claude-terracotta" : activePlanId === "free" ? "bg-emerald-600" : "bg-stone-600"}`}>
                           {activePlanId === 'pro' ? <Zap className="w-5 h-5" /> : activePlanId === 'plus' ? <Sparkles className="w-5 h-5" /> : <ShieldCheck className="w-5 h-5" />}
                         </div>
                         <div>
@@ -677,7 +669,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             <h3 className="text-base font-bold text-claude-text-light dark:text-white">
                               {activePlanDef.name}
                             </h3>
-                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider ${
+                            <span className={`px-2 py-0.5 rounded-md text-xs font-medium ${
                               activePlanId === 'guest'
                                 ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20'
                                 : 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
@@ -699,7 +691,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               onClose();
                               onTriggerUpgrade?.('guest_limit');
                             }}
-                            className="px-3.5 py-2 rounded-xl bg-aira-blue text-white text-xs font-bold hover:bg-aira-blue/90 transition-all shadow-sm flex items-center gap-1.5"
+                            className="px-3.5 py-2 rounded-xl bg-aira-blue text-white text-xs font-bold hover:bg-aira-blue/90 transition-colors motion-reduce:transition-none shadow-sm flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99]"
                           >
                             <User className="w-3.5 h-3.5" />
                             <span>Sign in or Create Account</span>
@@ -715,7 +707,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                 onOpenPricing();
                               }
                             }}
-                            className="px-3.5 py-2 rounded-xl bg-claude-terracotta hover:bg-claude-terracotta-hover text-white text-xs font-bold transition-all shadow-sm flex items-center gap-1.5"
+                            className="px-3.5 py-2 rounded-xl bg-claude-terracotta hover:bg-claude-terracotta-hover text-white text-xs font-bold transition-colors motion-reduce:transition-none shadow-sm flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99]"
                           >
                             <Sparkles className="w-3.5 h-3.5" />
                             <span>Upgrade Tier</span>
@@ -744,7 +736,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   {/* Quota Meters & Usage Gauges */}
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
-                      <h4 className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark">
+                      <h4 className="text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark">
                         Allowance Meters & Gauges
                       </h4>
                       <span className="text-[10px] text-claude-muted-light dark:text-claude-muted-dark">
@@ -757,13 +749,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <div className="p-4 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/40 dark:bg-claude-surface2-dark/40 space-y-2">
                         <div className="flex items-center justify-between text-xs">
                           <span className="font-bold text-claude-text-light dark:text-white">Daily Standard Chats</span>
-                          <span className="font-mono font-bold text-claude-accentInk">
-                            {remainingDailyChats} / {dailyChatsLimit} remaining
+                          <span className="font-bold text-claude-accentInk">
+                            <span className="num font-mono">{remainingDailyChats}</span> / <span className="num font-mono">{dailyChatsLimit}</span> remaining
                           </span>
                         </div>
                         <div className="w-full h-2 rounded-full bg-claude-surface-light dark:bg-white/10 overflow-hidden">
                           <div
-                            className={`h-full rounded-full transition-all duration-500 ${
+                            className={`h-full rounded-full transition-colors motion-reduce:transition-none duration-500 ${
                               dailyChatsPct >= 90 ? 'bg-red-500' : dailyChatsPct >= 70 ? 'bg-amber-500' : 'bg-emerald-500'
                             }`}
                             style={{ width: `${dailyChatsPct}%` }}
@@ -785,7 +777,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         </div>
                         <div className="w-full h-2 rounded-full bg-claude-surface-light dark:bg-white/10 overflow-hidden">
                           <div
-                            className="h-full rounded-full bg-aira-blue transition-all duration-500"
+                            className="h-full rounded-full bg-aira-blue transition-colors motion-reduce:transition-none duration-500"
                             style={{ width: `${creditsLimit > 0 ? Math.min(100, Math.round((creditsRemaining / creditsLimit) * 100)) : 0}%` }}
                           />
                         </div>
@@ -799,13 +791,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <div className="p-4 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/40 dark:bg-claude-surface2-dark/40 space-y-2">
                         <div className="flex items-center justify-between text-xs">
                           <span className="font-bold text-claude-text-light dark:text-white">Reasoning Boosts</span>
-                          <span className="font-mono font-bold text-claude-accentInk">
-                            {reasoningBoostsRemaining} / {reasoningBoostsLimit} boosts
+                          <span className="font-bold text-claude-accentInk">
+                            <span className="num font-mono">{reasoningBoostsRemaining}</span> / <span className="num font-mono">{reasoningBoostsLimit}</span> boosts
                           </span>
                         </div>
                         <div className="w-full h-2 rounded-full bg-claude-surface-light dark:bg-white/10 overflow-hidden">
                           <div
-                            className="h-full rounded-full bg-purple-500 transition-all duration-500"
+                            className="h-full rounded-full bg-purple-500 transition-colors motion-reduce:transition-none duration-500"
                             style={{ width: `${reasoningBoostsLimit > 0 ? Math.min(100, Math.round((reasoningBoostsRemaining / reasoningBoostsLimit) * 100)) : 0}%` }}
                           />
                         </div>
@@ -825,7 +817,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         </div>
                         <div className="w-full h-2 rounded-full bg-claude-surface-light dark:bg-white/10 overflow-hidden">
                           <div
-                            className={`h-full rounded-full transition-all duration-500 ${
+                            className={`h-full rounded-full transition-colors motion-reduce:transition-none duration-500 ${
                               isProjectsExceeded ? 'bg-amber-500' : 'bg-teal-500'
                             }`}
                             style={{ width: `${projectLimit === -1 ? 100 : Math.min(100, Math.round((projects.length / (projectLimit || 1)) * 100))}%` }}
@@ -866,7 +858,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   {/* Plan Comparison Cards (Side-by-Side) */}
                   <div className="space-y-3 pt-2">
                     <div className="flex items-center justify-between">
-                      <h4 className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark">
+                      <h4 className="text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark">
                         Plan Comparison Matrix
                       </h4>
                       {onOpenPricing && (
@@ -887,7 +879,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         return (
                           <div
                             key={tierKey}
-                            className={`p-3.5 rounded-xl border flex flex-col justify-between transition-all ${
+                            className={`p-3.5 rounded-xl border flex flex-col justify-between transition-colors motion-reduce:transition-none ${
                               isCurrent
                                 ? 'border-claude-terracotta bg-claude-terracotta/[0.04] shadow-sm'
                                 : 'border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/40 dark:bg-claude-surface2-dark/40 hover:border-claude-terracotta/40'
@@ -897,7 +889,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               <div className="flex items-center justify-between">
                                 <span className="font-bold text-xs text-claude-text-light dark:text-white">{plan.name}</span>
                                 {isCurrent && (
-                                  <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-claude-terracotta/20 text-claude-accentInk">
+                                  <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-claude-terracotta/20 text-claude-accentInk">
                                     Current
                                   </span>
                                 )}
@@ -944,7 +936,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                       onOpenPricing();
                                     }
                                   }}
-                                  className="w-full py-1.5 rounded-lg bg-claude-terracotta hover:bg-claude-terracotta-hover text-white text-[11px] font-bold transition-all shadow-sm"
+                                  className="w-full py-1.5 rounded-lg bg-claude-terracotta hover:bg-claude-terracotta-hover text-white text-[11px] font-bold transition-colors motion-reduce:transition-none shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99]"
                                 >
                                   {tierKey === 'free' ? 'Get Started' : 'View Plan Details (Preview)'}
                                 </button>
@@ -963,12 +955,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               {activeTab === 'reasoning' && (
                 <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
                   <div>
-                    <label htmlFor="aira-settings-default-model" className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark block mb-2">Default Model</label>
+                    <label htmlFor="aira-settings-default-model" className="text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark block mb-2">Default Model</label>
                     <select
                       id="aira-settings-default-model"
                       value={form.activeModel}
                       onChange={e => setForm({ ...form, activeModel: e.target.value as any })}
-                      className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-semibold text-claude-text-light dark:text-white outline-none focus:border-claude-terracotta transition-all"
+                      className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-semibold text-claude-text-light dark:text-white outline-none focus:border-claude-terracotta transition-colors motion-reduce:transition-none"
                     >
                       {AVAILABLE_MODELS.map(m => (
                         <option key={m.id} value={m.id}>
@@ -991,7 +983,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           onChange={e => setForm({ ...form, extendedThinking: e.target.checked })}
                           className="sr-only peer"
                         />
-                        <div className="w-11 h-6 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-claude-terracotta"></div>
+                        <div className="w-11 h-6 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-transform motion-reduce:after:transition-none peer-checked:bg-claude-terracotta"></div>
                       </label>
                     </div>
 
@@ -999,7 +991,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <div className="pt-2 border-t border-claude-border-light/60 dark:border-claude-border-dark/60">
                         <div className="flex justify-between text-xs font-bold mb-1">
                           <span className="text-claude-muted-light dark:text-claude-muted-dark">Output / Reasoning Token Ceiling</span>
-                          <span className="text-claude-accentInk font-mono">{form.thinkingBudget.toLocaleString()} tokens</span>
+                          <span className="text-claude-accentInk font-semibold"><span className="num font-mono">{form.thinkingBudget.toLocaleString()}</span> tokens</span>
                         </div>
                         <input
                           type="range"
@@ -1020,7 +1012,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
 
                   <div>
-                    <label className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark block mb-2">Response Style</label>
+                    <label className="text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark block mb-2">Response Style</label>
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                       {[
                         { id: 'normal', label: 'Balanced & Adaptive' },
@@ -1033,7 +1025,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           key={style.id}
                           type="button"
                           onClick={() => setForm({ ...form, responseStyle: style.id as any })}
-                          className={`p-2.5 rounded-xl border text-xs font-semibold text-left transition-all ${
+                          className={`p-2.5 rounded-xl border text-xs font-semibold text-left transition-colors motion-reduce:transition-none ${
                             form.responseStyle === style.id
                               ? 'border-claude-terracotta bg-claude-terracotta/10 text-claude-accentInk'
                               : 'border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light hover:border-claude-terracotta/40'
@@ -1063,7 +1055,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           onChange={e => setForm({ ...form, persistentMemoryEnabled: e.target.checked })}
                           className="sr-only peer"
                         />
-                        <div className="w-11 h-6 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-claude-terracotta"></div>
+                        <div className="w-11 h-6 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-transform motion-reduce:after:transition-none peer-checked:bg-claude-terracotta"></div>
                       </label>
                     </div>
 
@@ -1071,7 +1063,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <div>
                         <div className="text-xs font-bold text-claude-text-light dark:text-white flex items-center gap-1.5">
                           <span>Automatic Privacy Scrubbing</span>
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-200/50 dark:border-emerald-500/20">
+                          <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-200/50 dark:border-emerald-500/20">
                             Enforced Safeguard
                           </span>
                         </div>
@@ -1094,7 +1086,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             onClose();
                             onOpenMemoryVault();
                           }}
-                          className="px-3 py-1.5 rounded-lg bg-claude-terracotta/10 hover:bg-claude-terracotta/20 text-claude-accentInk font-bold text-xs transition-colors"
+                          className="px-3 py-1.5 rounded-lg bg-claude-terracotta/10 hover:bg-claude-terracotta/20 text-claude-accentInk font-bold text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99]"
                         >
                           Open Memory Vault
                         </button>
@@ -1121,26 +1113,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               {activeTab === 'instructions' && (
                 <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
                   <div>
-                    <label htmlFor="aira-settings-instructions" className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark block mb-2">Custom System Directives</label>
+                    <label htmlFor="aira-settings-instructions" className="text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark block mb-2">Custom System Directives</label>
                     <textarea 
                       id="aira-settings-instructions"
                       rows={5}
                       value={form.customInstructions} 
                       onChange={e => setForm({ ...form, customInstructions: e.target.value })} 
                       placeholder="Directives injected into the top of every conversation context (e.g., prefer functional TypeScript, provide mathematical proof where applicable)..." 
-                      className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-mono outline-none focus:border-claude-terracotta transition-all resize-none" 
+                      className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-mono outline-none focus:border-claude-terracotta transition-colors motion-reduce:transition-none resize-none" 
                     />
                   </div>
 
                   <div>
-                    <label htmlFor="aira-settings-bio" className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark block mb-2">User Context & Bio</label>
+                    <label htmlFor="aira-settings-bio" className="text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark block mb-2">User Context & Bio</label>
                     <textarea 
                       id="aira-settings-bio"
                       rows={3}
                       value={form.userBio || ''} 
                       onChange={e => setForm({ ...form, userBio: e.target.value })} 
                       placeholder="e.g. Senior Principal Architect specializing in distributed systems and React 19."
-                      className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-medium outline-none focus:border-claude-terracotta transition-all resize-none" 
+                      className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-medium outline-none focus:border-claude-terracotta transition-colors motion-reduce:transition-none resize-none" 
                     />
                   </div>
                 </motion.div>
@@ -1161,7 +1153,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         onChange={e => setForm({ ...form, autoOpenArtifacts: e.target.checked })}
                         className="sr-only peer"
                       />
-                      <div className="w-11 h-6 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-claude-terracotta"></div>
+                      <div className="w-11 h-6 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-transform motion-reduce:after:transition-none peer-checked:bg-claude-terracotta"></div>
                     </label>
                   </div>
 
@@ -1170,7 +1162,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <div className="text-xs font-bold text-claude-text-light dark:text-white">Interactive Sandbox Runtime</div>
                       <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">Live execute HTML, SVG, and Tailwind previews inside a secure isolated iframe.</div>
                     </div>
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-2.5 py-1 rounded-md border border-emerald-200/50 dark:border-emerald-500/20">Active</span>
+                    <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-2.5 py-1 rounded-md border border-emerald-200/50 dark:border-emerald-500/20">Active</span>
                   </div>
                 </motion.div>
               )}
@@ -1181,7 +1173,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   {/* Account / Subscription Banner */}
                   <div className="p-4 rounded-2xl border border-claude-terracotta/20 bg-claude-terracotta/5 dark:bg-claude-terracotta/10 flex items-center justify-between">
                     <div>
-                      <div className="text-xs uppercase font-bold tracking-wider text-claude-accentInk">
+                      <div className="text-xs font-semibold text-claude-accentInk">
                         {currentUser ? 'Authenticated Profile' : 'Subscription Plan'}
                       </div>
                       <div className="text-sm font-bold text-claude-text-light dark:text-white mt-0.5">
@@ -1200,7 +1192,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       type="button"
                       data-testid="settings-goto-plan"
                       onClick={() => setActiveTab('plan')}
-                      className="p-3 rounded-xl border border-claude-border-light dark:border-white/10 bg-claude-surface2-light dark:bg-white/5 hover:border-claude-terracotta/50 text-left transition-colors flex items-center gap-2.5"
+                      className="p-3 rounded-xl border border-claude-border-light dark:border-white/10 bg-claude-surface2-light dark:bg-white/5 hover:border-claude-terracotta/50 text-left transition-colors flex items-center gap-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99]"
                     >
                       <CreditCard className="w-4 h-4 text-claude-accentInk shrink-0" />
                       <div>
@@ -1216,7 +1208,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           onClose();
                           onOpenBilling();
                         }}
-                        className="p-3 rounded-xl border border-claude-border-light dark:border-white/10 bg-claude-surface2-light dark:bg-white/5 hover:border-claude-terracotta/50 text-left transition-colors flex items-center gap-2.5"
+                        className="p-3 rounded-xl border border-claude-border-light dark:border-white/10 bg-claude-surface2-light dark:bg-white/5 hover:border-claude-terracotta/50 text-left transition-colors flex items-center gap-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99]"
                       >
                         <CreditCard className="w-4 h-4 text-claude-accentInk shrink-0" />
                         <div>
@@ -1233,7 +1225,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           onClose();
                           onOpenPricing();
                         }}
-                        className="p-3 rounded-xl border border-claude-border-light dark:border-white/10 bg-claude-surface2-light dark:bg-white/5 hover:border-claude-terracotta/50 text-left transition-colors flex items-center gap-2.5"
+                        className="p-3 rounded-xl border border-claude-border-light dark:border-white/10 bg-claude-surface2-light dark:bg-white/5 hover:border-claude-terracotta/50 text-left transition-colors flex items-center gap-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99]"
                       >
                         <Zap className="w-4 h-4 text-claude-accentInk shrink-0" />
                         <div>
@@ -1270,7 +1262,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         onChange={e => setForm({ ...form, telemetryOptOut: e.target.checked })}
                         className="sr-only peer"
                       />
-                      <div className="w-9 h-5 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-claude-terracotta"></div>
+                      <div className="w-9 h-5 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-transform motion-reduce:after:transition-none peer-checked:bg-claude-terracotta"></div>
                     </label>
                   </div>
 
@@ -1284,10 +1276,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
 
                     <div className="space-y-2 pt-2 border-t border-claude-border-light/60 dark:border-white/10">
-                      {/* Product Announcements & What's New */}
+                      {/* Product Announcements & What’s New */}
                       <div className="flex items-center justify-between py-1">
                         <div>
-                          <div className="text-xs font-medium text-claude-text-light dark:text-white">Product Announcements & What's New</div>
+                          <div className="text-xs font-medium text-claude-text-light dark:text-white">Product Announcements & What’s New</div>
                           <div className="text-[10px] text-claude-muted-light">Show popups for major feature releases and platform updates</div>
                         </div>
                         <label className="relative inline-flex items-center cursor-pointer">
@@ -1298,7 +1290,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             onChange={e => setForm({ ...form, announcementsEnabled: e.target.checked })}
                             className="sr-only peer"
                           />
-                          <div className="w-9 h-5 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-claude-terracotta"></div>
+                          <div className="w-9 h-5 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-transform motion-reduce:after:transition-none peer-checked:bg-claude-terracotta"></div>
                         </label>
                       </div>
 
@@ -1316,7 +1308,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             onChange={e => setForm({ ...form, productUpdatesEnabled: e.target.checked })}
                             className="sr-only peer"
                           />
-                          <div className="w-9 h-5 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-claude-terracotta"></div>
+                          <div className="w-9 h-5 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-transform motion-reduce:after:transition-none peer-checked:bg-claude-terracotta"></div>
                         </label>
                       </div>
 
@@ -1324,7 +1316,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <div className="flex items-center justify-between py-1">
                         <div>
                           <div className="text-xs font-medium text-claude-text-light dark:text-white">Tips & Feature Guidance</div>
-                          <div className="text-[10px] text-claude-muted-light">Contextual discovery cards when unlocking new plan features</div>
+                          <div className="text-[10px] text-claude-muted-light">Contextual discovery cards when enabling new plan features</div>
                         </div>
                         <label className="relative inline-flex items-center cursor-pointer">
                           <input
@@ -1334,7 +1326,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             onChange={e => setForm({ ...form, tipsEnabled: e.target.checked })}
                             className="sr-only peer"
                           />
-                          <div className="w-9 h-5 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-claude-terracotta"></div>
+                          <div className="w-9 h-5 bg-claude-surface2-light dark:bg-white/20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-transform motion-reduce:after:transition-none peer-checked:bg-claude-terracotta"></div>
                         </label>
                       </div>
 
@@ -1345,7 +1337,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           type="button"
                           data-testid="settings-reset-announcements"
                           onClick={handleResetAnnouncements}
-                          className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-stone-200/60 dark:bg-white/10 hover:bg-stone-300 dark:hover:bg-white/20 text-claude-text-light dark:text-white transition-colors"
+                          className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-stone-200/60 dark:bg-white/10 hover:bg-stone-300 dark:hover:bg-white/20 text-claude-text-light dark:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99]"
                         >
                           {announcementsReset ? 'Announcements Reset!' : 'Reset Announcements'}
                         </button>
@@ -1363,7 +1355,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       type="button"
                       data-testid="settings-restart-onboarding"
                       onClick={handleRestartOnboarding}
-                      className="px-3 py-1.5 text-xs font-bold rounded-lg bg-aira-blue text-white hover:bg-aira-blue/90 shadow-sm transition-all"
+                      className="px-3 py-1.5 text-xs font-bold rounded-lg bg-aira-blue text-white hover:bg-aira-blue/90 shadow-sm transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99]"
                     >
                       Restart Tour
                     </button>
@@ -1371,13 +1363,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                   {/* Backup & Portability */}
                   <div className="pt-2">
-                    <div className="text-[11px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-claude-muted-dark mb-3">Workspace Backup & Portability</div>
+                    <div className="text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark mb-3">Workspace Backup & Portability</div>
                     <div className="flex gap-3">
                       <motion.button 
                         whileHover={{ scale: 1.02 }} 
                         whileTap={{ scale: 0.98 }} 
                         onClick={exportData} 
-                        className="flex-1 p-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-bold text-claude-text-light dark:text-white flex items-center justify-center gap-2 hover:border-claude-terracotta/50 transition-colors shadow-sm"
+                        className="flex-1 p-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-bold text-claude-text-light dark:text-white flex items-center justify-center gap-2 hover:border-claude-terracotta/50 transition-colors shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99]"
                       >
                         <Download className="w-4 h-4 text-claude-accentInk" />
                         <span>Export Data (JSON)</span>
@@ -1385,7 +1377,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <motion.label 
                         whileHover={{ scale: 1.02 }} 
                         whileTap={{ scale: 0.98 }} 
-                        className="flex-1 p-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-bold text-claude-text-light dark:text-white flex items-center justify-center gap-2 cursor-pointer hover:border-claude-terracotta/50 transition-colors shadow-sm"
+                        className="flex-1 p-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-bold text-claude-text-light dark:text-white flex items-center justify-center gap-2 cursor-pointer hover:border-claude-terracotta/50 transition-colors shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99]"
                       >
                         <Upload className="w-4 h-4 text-claude-accentInk" />
                         <span>Import Backup</span>
@@ -1417,7 +1409,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <div className="pt-4 border-t border-claude-border-light dark:border-claude-border-dark">
                     <button 
                       onClick={() => { if (confirm('Reset all Aira local data, conversations, and projects from this browser? (Local device data only; does not affect server-side accounts)')) onClearAll(); }} 
-                      className="text-xs font-bold text-red-500 hover:text-red-600 transition-colors block w-full text-center p-2 rounded-xl hover:bg-red-50 dark:hover:bg-red-500/10"
+                      className="text-xs font-bold text-red-500 hover:text-red-600 transition-colors block w-full text-center p-2 rounded-xl hover:bg-red-50 dark:hover:bg-red-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99]"
                     >
                       Reset all local workspace data (This device only)
                     </button>
@@ -1439,7 +1431,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <button 
                   type="button" 
                   onClick={onClose} 
-                  className="min-w-0 px-3 py-2.5 rounded-xl text-[13px] font-medium text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white transition-colors"
+                  className="min-w-0 px-3 py-2.5 rounded-xl text-[13px] font-medium text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99]"
                 >
                   Cancel
                 </button>
@@ -1448,7 +1440,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   whileTap={{ scale: 0.98 }} 
                   onClick={save}
                   data-testid="settings-save"
-                  className="min-w-0 justify-center px-3 sm:px-5 py-2.5 rounded-xl bg-claude-terracotta-hover text-claude-onAccent text-[13px] font-bold hover:brightness-90 transition-colors flex items-center gap-1.5 shadow-sm"
+                  className="min-w-0 justify-center px-3 sm:px-5 py-2.5 rounded-xl bg-claude-terracotta-hover text-claude-onAccent text-[13px] font-bold hover:brightness-90 transition-colors flex items-center gap-1.5 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99]"
                 >
                   {saved && <Check className="w-4 h-4" />}
                   {saved ? 'Preferences Saved' : 'Save Changes'}

@@ -242,7 +242,7 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
           exit={{ opacity: 0, scale: 0.95, y: 10 }}
           transition={{ type: 'spring', stiffness: 360, damping: 28 }}
           onClick={(e) => e.stopPropagation()}
-          className="relative w-full max-w-[358px] sm:max-w-lg rounded-2xl sm:rounded-[1.75rem] border border-claude-border-light dark:border-white/10 bg-claude-surface-light dark:bg-[#18181b] shadow-2xl overflow-hidden flex flex-col my-auto text-claude-text-light dark:text-white"
+          className="relative w-full max-w-[358px] sm:max-w-lg rounded-2xl sm:rounded-[1.75rem] border border-claude-border-light dark:border-white/10 bg-claude-surface-light dark:bg-stone-900 shadow-2xl overflow-hidden flex flex-col my-auto text-claude-text-light dark:text-white"
         >
           {/* Header Banner */}
           <div className="relative px-5 sm:px-6 pt-5 pb-4 border-b border-claude-border-light/80 dark:border-white/10 bg-gradient-to-br from-claude-terracotta/10 via-transparent to-transparent">
@@ -252,11 +252,11 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
                   <Sparkles className="w-4 h-4" />
                 </div>
                 <div>
-                  <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-claude-terracotta/15 text-claude-accentInk text-[10px] font-bold uppercase tracking-wider">
-                    <span>Target: {planDef.name}</span>
-                  </div>
-                  <h3 id="upgrade-modal-title" className="text-base sm:text-lg font-bold tracking-tight text-claude-text-light dark:text-white mt-1">
-                    {config.title}
+                  <h3 id="upgrade-modal-title" className="text-base sm:text-lg font-bold tracking-tight text-claude-text-light dark:text-white flex items-center gap-2">
+                    <span>{config.title}</span>
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-claude-terracotta/15 text-claude-accentInk text-xs font-semibold">
+                      Target: {planDef.name}
+                    </span>
                   </h3>
                 </div>
               </div>
@@ -296,7 +296,7 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
 
             {/* Feature Highlights */}
             <div className="space-y-2 pt-1">
-              <div className="text-[10px] font-bold uppercase tracking-wider text-claude-muted-light dark:text-stone-400">
+              <div className="text-xs font-semibold text-claude-muted-light dark:text-stone-400">
                 Unlocked on {planDef.name}:
               </div>
               <div className="grid grid-cols-1 gap-1.5">
@@ -347,7 +347,7 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
               onClick={handlePrimaryAction}
-              className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-claude-terracotta hover:bg-claude-terracotta-hover text-white text-xs font-bold transition-all shadow-md flex items-center justify-center gap-2 order-1 sm:order-2"
+              className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-claude-terracotta hover:bg-claude-terracotta-hover text-white text-xs font-bold transition-colors duration-150 shadow-md flex items-center justify-center gap-2 order-1 sm:order-2"
             >
               <span>{config.ctaText}</span>
               <ArrowRight className="w-3.5 h-3.5" />
