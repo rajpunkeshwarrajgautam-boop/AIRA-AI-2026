@@ -356,6 +356,20 @@ export async function runPhase2() {
     // -----------------------------------------------------------------------
     console.log('\n[Task 4] Executing bidirectional cross-account isolation matrix...');
 
+    // Clean up any leftover test conversations from prior interrupted certification runs
+    await pageA.evaluate(async ({ csrf }) => {
+      const listRes = await fetch('/api/conversations', { credentials: 'include' }).then((r) => r.json().catch(() => ({})));
+      for (const conv of (listRes?.conversations || [])) {
+        if (typeof conv?.id === 'string' && conv.id.startsWith('conv_oauth_a_')) {
+          await fetch(`/api/conversations/${conv.id}`, {
+            method: 'DELETE',
+            headers: { 'X-CSRF-Token': csrf, 'X-AIRA-CSRF-Protection': '1' },
+            credentials: 'include',
+          });
+        }
+      }
+    }, { csrf: csrfA });
+
     const convIdA = `conv_oauth_a_${Date.now()}`;
     const nowA = Date.now();
     const chatCreateA = await pageA.evaluate(async ({ cId, ts, csrf }) => {

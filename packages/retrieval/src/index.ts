@@ -275,7 +275,7 @@ export class ConversationSearchRepository {
         if (equalTimestampAppend && existingMessage) continue;
 
         const messageStorageId =
-          existingMessage?.id || storageId('message', principalId, clientMessageId);
+          existingMessage?.id || storageId('message', principalId, `${conversationStorageId}\0${clientMessageId}`);
 
         const searchExisting = await trx('conversation_search_documents')
           .where({ message_id: messageStorageId, principal_id: principalId })
@@ -332,7 +332,7 @@ export class ConversationSearchRepository {
 
         await trx('conversation_search_documents')
           .insert({
-            id: storageId('search', principalId, clientMessageId),
+            id: searchExisting?.id || storageId('search', principalId, `${conversationStorageId}\0${clientMessageId}`),
             conversation_id: conversationStorageId,
             message_id: messageStorageId,
             principal_id: principalId,
