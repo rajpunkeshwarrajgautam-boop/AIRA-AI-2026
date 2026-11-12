@@ -1045,10 +1045,10 @@ export class ModelRouter {
       const explicitGemini = (process.env.AIRA_GEMINI_MODEL || '').trim().replace(/^["']|["']$/g, '');
       if (explicitGemini) return explicitGemini;
       if (policyModel === 'aira-deep' || requestedModelId === 'aira-deep' || requestedModelId === 'claude-3-opus') {
-        return (process.env.AIRA_GEMINI_DEEP_MODEL || '').trim().replace(/^["']|["']$/g, '') || 'gemini-3.8-flash';
+        return (process.env.AIRA_GEMINI_DEEP_MODEL || '').trim().replace(/^["']|["']$/g, '') || 'gemini-3.5-flash-lite';
       }
       if (policyModel === 'aira-pro' || requestedModelId === 'aira-pro' || requestedModelId === 'claude-3-5-sonnet') {
-        return (process.env.AIRA_GEMINI_PRO_MODEL || '').trim().replace(/^["']|["']$/g, '') || 'gemini-3.8-flash';
+        return (process.env.AIRA_GEMINI_PRO_MODEL || '').trim().replace(/^["']|["']$/g, '') || 'gemini-3.5-flash-lite';
       }
       return 'gemini-3.5-flash-lite';
     }
@@ -1098,7 +1098,7 @@ export class ModelRouter {
   private buildNvidiaFallbackChain(
     policyModel: string,
     requestedModelId: ModelId,
-    extendedThinking: boolean
+    _extendedThinking: boolean
   ): {
     fallbackAdapter: (ModelAdapter & { modelName?: string }) | null;
     tertiaryAdapter: (ModelAdapter & { modelName?: string }) | null;
@@ -1106,16 +1106,16 @@ export class ModelRouter {
     fallbackFirstTokenTimeoutMs: number;
   } {
     const geminiFallbackModel = this.getPlannedModelForProvider('gemini', policyModel, requestedModelId);
-    const fallbackAdapter = this.adapters.has('gemini')
-      ? this.createModelSpecificAdapter('gemini', geminiFallbackModel)
-      : (this.adapters.has('groq')
-        ? this.createModelSpecificAdapter('groq', 'openai/gpt-oss-120b')
+    const fallbackAdapter = this.adapters.has('groq')
+      ? this.createModelSpecificAdapter('groq', 'openai/gpt-oss-120b')
+      : (this.adapters.has('gemini')
+        ? this.createModelSpecificAdapter('gemini', geminiFallbackModel)
         : (this.adapters.has('anthropic')
           ? this.createModelSpecificAdapter('anthropic', 'claude-3-5-haiku')
           : null));
-    const tertiaryAdapter = (fallbackAdapter && fallbackAdapter.provider === 'gemini')
-      ? (this.adapters.has('groq')
-        ? this.createModelSpecificAdapter('groq', 'openai/gpt-oss-120b')
+    const tertiaryAdapter = (fallbackAdapter && fallbackAdapter.provider === 'groq')
+      ? (this.adapters.has('gemini')
+        ? this.createModelSpecificAdapter('gemini', geminiFallbackModel)
         : (this.adapters.has('anthropic')
           ? this.createModelSpecificAdapter('anthropic', 'claude-3-5-haiku')
           : null))
@@ -1124,8 +1124,8 @@ export class ModelRouter {
     return {
       fallbackAdapter,
       tertiaryAdapter,
-      defaultFallbackModel: fallbackAdapter?.modelName || geminiFallbackModel,
-      fallbackFirstTokenTimeoutMs: extendedThinking ? 15000 : 6000
+      defaultFallbackModel: fallbackAdapter?.modelName || 'openai/gpt-oss-120b',
+      fallbackFirstTokenTimeoutMs: 6000
     };
   }
 
@@ -1298,7 +1298,7 @@ export class ModelRouter {
         : requestedModelId.startsWith('gemini-') ? 'gemini'
         : undefined;
       const registryProvider = explicitVendorProvider || (VERIFIED_MODEL_REGISTRY[model]?.provider as SupportedProvider | undefined);
-      const defaultOrder: Array<SupportedProvider> = ['nvidia', 'openai', 'gemini', 'groq', 'anthropic'];
+      const defaultOrder: Array<SupportedProvider> = ['nvidia', 'openai', 'groq', 'gemini', 'anthropic'];
       const providerPreference: Array<SupportedProvider> = registryProvider && defaultOrder.includes(registryProvider)
         ? [registryProvider, ...defaultOrder.filter(p => p !== registryProvider)]
         : defaultOrder;
@@ -1429,13 +1429,12 @@ export class ModelRouter {
             tertiaryAdapter
           });
         }
-      } else if (selectedProvider === 'gemini' && this.adapters.has('groq')) {
-        const groqFallback = this.createModelSpecificAdapter('groq', 'openai/gpt-oss-120b');
-        const flashLiteFallback = this.createModelSpecificAdapter('gemini', 'gemini-3.5-flash-lite');
-        effectiveAdapter = new ResilientModelAdapter(selectedAdapter, flashLiteFallback, this.healthTracker, {
-          firstTokenTimeoutMs: policy.extendedThinking ? 15000 : 10000,
-          fallbackFirstTokenTimeoutMs: 8000,
-          tertiaryAdapter: groqFallback
+      } else if (selectedProvider === 'groq' && this.adapters.has('gemini')) {
+        const geminiModel = this.getPlannedModelForProvider('gemini', model, requestedModelId);
+        const geminiFallback = this.createModelSpecificAdapter('gemini', geminiModel);
+        effectiveAdapter = new ResilientModelAdapter(selectedAdapter, geminiFallback, this.healthTracker, {
+          firstTokenTimeoutMs: 8000,
+          fallbackFirstTokenTimeoutMs: 12000
         });
       }
 

@@ -2157,7 +2157,9 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       })}\n\n`);
     };
 
-    const handler = async (evt: any) => {
+    let sseQueue = Promise.resolve();
+    const processStreamEvent = async (evt: any) => {
+      if (res.writableEnded) return;
       if (evt.type === 'routing.decision') {
         res.write(`event: routing_decision\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'model.provenance') {
@@ -2170,11 +2172,13 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         if (tFirstDelta === null) tFirstDelta = performance.now();
         firstTokenEmitted = true;
         await settleQuotaOnce();
+        if (res.writableEnded) return;
         deltaCount++;
         res.write(`event: content_delta\ndata: ${JSON.stringify({ text: evt.data.delta })}\n\n`);
       } else if (evt.type === 'thinking.delta') {
         firstTokenEmitted = true;
         await settleQuotaOnce();
+        if (res.writableEnded) return;
         thinkingCount++;
         res.write(`event: thinking_delta\ndata: ${JSON.stringify({ thinking: evt.data.delta })}\n\n`);
       } else if (evt.type === 'workflow.created' || evt.type === 'workflow.started') {
@@ -2189,6 +2193,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         res.write(`event: workflow_step_failed\ndata: ${JSON.stringify(evt.data)}\n\n`);
       } else if (evt.type === 'workflow.completed') {
         await settleQuotaOnce();
+        if (res.writableEnded) return;
         await finalizeAndEmitMetrics();
         res.write(`event: workflow_completed\ndata: ${JSON.stringify(evt.data)}\n\n`);
         res.write(`event: done\ndata: [DONE]\n\n`);
@@ -2200,6 +2205,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         res.write(`event: artifact_close\ndata: ${JSON.stringify({ id: evt.data.id })}\n\n`);
       } else if (evt.type === 'approval.required') {
         await releasePermitIfHeld();
+        if (res.writableEnded) return;
         res.write(`event: approval_required\ndata: ${JSON.stringify(evt.data)}\n\n`);
         res.write(`event: done\ndata: [DONE]\n\n`);
         stream.off('event', handler);
@@ -2214,6 +2220,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         if (!firstTokenEmitted) {
           await releaseQuotaIfUnused();
         }
+        if (res.writableEnded) return;
         await finalizeAndEmitMetrics();
         const failure = evt.data?.error || 'Aira runtime failed before producing a response';
         console.error(`[CHAT_STREAM_RUN_FAILED] run_id=${run.id} model=${executedModel}:`, failure);
@@ -2229,6 +2236,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         if (!firstTokenEmitted) {
           await releaseQuotaIfUnused();
         }
+        if (res.writableEnded) return;
         await finalizeAndEmitMetrics();
         res.write(`event: error\ndata: ${JSON.stringify({
           error: evt.data?.error || 'Aira run was cancelled',
@@ -2237,11 +2245,24 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         res.end();
       } else if (evt.type === 'run.completed') {
         await settleQuotaOnce();
+        if (res.writableEnded) return;
         await finalizeAndEmitMetrics();
         res.write(`event: done\ndata: [DONE]\n\n`);
         stream.off('event', handler);
         res.end();
       }
+    };
+
+    const handler = (evt: any) => {
+      if (evt.type === 'content.delta') {
+        if (tFirstDelta === null) tFirstDelta = performance.now();
+        firstTokenEmitted = true;
+      } else if (evt.type === 'thinking.delta') {
+        firstTokenEmitted = true;
+      }
+      sseQueue = sseQueue.then(() => processStreamEvent(evt)).catch((err) => {
+        console.warn('[CHAT_STREAM] SSE serialization error:', err);
+      });
     };
 
     stream.on('event', handler);
