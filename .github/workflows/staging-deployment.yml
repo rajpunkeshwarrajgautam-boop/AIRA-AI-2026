@@ -129,6 +129,36 @@ jobs:
             exit 1
           fi
 
+      # A successful checkout proves source identity, not deployed identity.
+      # Refuse certification when staging.virexaaiventures.com is still on
+      # an earlier deployment (including workflow_dispatch by exact SHA).
+      - name: Attest deployed staging exact candidate SHA
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.candidate_sha || github.sha }}
+        run: |
+          node --input-type=module <<'NODE'
+          const expected = process.env.EXPECTED_SHA ?? '';
+          if (!/^[a-f0-9]{40}$/.test(expected)) {
+            throw new Error('Expected a complete 40-character candidate SHA');
+          }
+          const endpoint = 'https://staging.virexaaiventures.com/api/version';
+          const response = await fetch(endpoint, {
+            headers: { Accept: 'application/json' },
+            redirect: 'error',
+            cache: 'no-store',
+            signal: AbortSignal.timeout(15000)
+          });
+          if (!response.ok) {
+            throw new Error('Staging version check failed (HTTP ' + response.status + ')');
+          }
+          const version = await response.json();
+          if (version.commitSha !== expected) {
+            throw new Error('Staging deployment SHA mismatch: expected ' + expected + ', deployed ' + (version.commitSha ?? 'missing'));
+          }
+          console.log('PASS: deployed staging is serving exact candidate SHA ' + expected);
+          NODE
+
       - name: Staging health & API smoke verification
         run: npx tsx scripts/validate-staging-pipeline.ts smoke
         env:
