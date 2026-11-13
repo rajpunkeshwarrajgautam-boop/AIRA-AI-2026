@@ -116,6 +116,12 @@ jobs:
           test/artifact-sandbox-containment.test.ts
           test/autonomous-api-worker-integration.test.ts
 
+      - name: MCP tenant, operator, SSRF, and entitlement remediation security regression
+        run: >-
+          npx tsx --test
+          test/mcp-security-authorization.test.ts
+          test/audit-remediation-suite.test.ts
+
       - name: Client memory account isolation and storage migration fidelity
         run: >-
           npx tsx --test
