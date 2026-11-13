@@ -377,19 +377,41 @@ test('SEC-02 follow-up: execution-time MCP tool ownership applies even to global
   assert.equal(isMcpToolInvocationAuthorized(platform, { userId: 'admin', roles: ['operator'] }), true);
 });
 
-test('SEC-03 follow-up: public-runtime HTTP MCP egress is disabled without operator-approved host', () => {
-  const oldNodeEnv = process.env.NODE_ENV;
+test('SEC-03 follow-up: production egress stays blocked even with an approved hostname', () => {
+  const priorNodeEnv = process.env.NODE_ENV;
+  const priorVercel = process.env.VERCEL;
   try {
     process.env.NODE_ENV = 'production';
-    assert.throws(() => assertApprovedPublicMcpDestination(new URL('https://service.example/mcp'), ''),
-      (e: any) => e instanceof McpSecurityError && e.code === 'MCP_EGRESS_NOT_APPROVED');
-    assert.throws(() => assertApprovedPublicMcpDestination(new URL('http://service.example/mcp'), 'service.example'),
-      (e: any) => e instanceof McpSecurityError && e.code === 'MCP_EGRESS_NOT_APPROVED');
-    assert.doesNotThrow(() => assertApprovedPublicMcpDestination(new URL('https://service.example/mcp'), 'service.example'));
-    assert.throws(() => assertApprovedPublicMcpDestination(new URL('https://wrong.example/mcp'), 'service.example'),
-      (e: any) => e instanceof McpSecurityError && e.code === 'MCP_EGRESS_NOT_APPROVED');
+    delete process.env.VERCEL;
+    const hosts = ['service.example', 'service.example,other.example'];
+    for (const approvedHosts of hosts) {
+      for (const address of [
+        'https://service.example/mcp',
+        'https://service.example/redirect',
+        'http://service.example/mcp'
+      ]) {
+        assert.throws(
+          () => assertApprovedPublicMcpDestination(new URL(address), approvedHosts),
+          (e: any) => e instanceof McpSecurityError &&
+            e.code === 'MCP_EGRESS_ENFORCEMENT_REQUIRED' &&
+            e.statusCode === 503
+        );
+      }
+    }
+
+    // Vercel public runtime is production even when NODE_ENV is overridden.
+    process.env.NODE_ENV = 'test';
+    process.env.VERCEL = '1';
+    assert.throws(
+      () => assertApprovedPublicMcpDestination(new URL('https://service.example/mcp'), 'service.example'),
+      (e: any) => e instanceof McpSecurityError && e.code === 'MCP_EGRESS_ENFORCEMENT_REQUIRED'
+    );
+    delete process.env.VERCEL;
+    assert.doesNotThrow(() => assertApprovedPublicMcpDestination(new URL('https://service.example/mcp'), ''));
   } finally {
-    if (oldNodeEnv === undefined) delete process.env.NODE_ENV;
-    else process.env.NODE_ENV = oldNodeEnv;
+    if (priorNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = priorNodeEnv;
+    if (priorVercel === undefined) delete process.env.VERCEL;
+    else process.env.VERCEL = priorVercel;
   }
 });
