@@ -1,5 +1,7 @@
 # AIRA AI 2026 — Production Security, Entitlement, and UX Remediation
 
+> **Security containment update (13 Nov 2026, PR #171):** Production/Vercel MCP remote transports now fail closed even when `AIRA_APPROVED_MCP_HOSTS` contains the requested hostname. This intentionally disables public-runtime remote MCP connectivity pending a separately reviewed connection-time egress control with address binding and redirect checks. Local non-production MCP integration remains available. The regression explicitly checks approved-host and Vercel cases. **This is a temporary safe restriction, not full SSRF-safe remote transport support.** New exact-head CI and genuine OAuth-backed staging acceptance remain required; this PR is **DRAFT / NO GO** and production is unchanged.
+>
 > **Independent follow-up / release status (13 Nov 2026): DRAFT — NO GO**
 >
 > The original remediation results below describe Antigravity's earlier implementation and remain as historical evidence. Subsequent independent review found additional MCP platform-resource, process-backed HTTP management, cross-tenant tool-invocation, URL/status disclosure and approval-policy gaps. Corrective commits on PR #171 now fence these paths, make external MCP tools consent-required, and add mandatory Fast CI coverage. The public MCP egress path is fail-closed unless an approved HTTPS host is configured.
