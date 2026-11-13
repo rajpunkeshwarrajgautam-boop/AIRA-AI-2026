@@ -217,7 +217,7 @@ export async function validateMcpUrl(
   try {
     parsed = new URL(urlString.trim());
   } catch {
-    throw new McpSecurityError(`Malformed MCP URL: ${urlString}`, 'MALFORMED_URL', 400);
+    throw new McpSecurityError('Malformed MCP URL.', 'MALFORMED_URL', 400);
   }
 
   // Protocol check
@@ -302,7 +302,7 @@ export async function validateMcpUrl(
   } catch (err: any) {
     if (err instanceof McpSecurityError) throw err;
     throw new McpSecurityError(
-      `DNS validation failed for MCP host '${hostname}': ${err.message}`,
+      'MCP destination DNS validation failed.',
       'DNS_LOOKUP_ERROR',
       400
     );
