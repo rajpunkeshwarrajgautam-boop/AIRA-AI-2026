@@ -3,7 +3,7 @@ import {
   HelpCircle, 
   Search, 
   X, 
-  Sparkles, 
+  Compass, 
   Cpu, 
   Brain, 
   Code2, 
@@ -51,7 +51,7 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
 
   const categories = [
     { id: 'all', label: 'All Topics', icon: HelpCircle },
-    { id: 'getting-started', label: 'Getting Started', icon: Sparkles },
+    { id: 'getting-started', label: 'Getting Started', icon: Compass },
     { id: 'models', label: 'Models & Reasoning', icon: Cpu },
     { id: 'memory', label: 'Memory & Personalization', icon: Brain },
     { id: 'artifacts', label: 'Artifact Studio', icon: Code2 },

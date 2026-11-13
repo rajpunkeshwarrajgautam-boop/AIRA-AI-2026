@@ -11,7 +11,6 @@ import {
   ShieldCheck,
   Zap,
   Layers,
-  Sparkles,
   ExternalLink,
   X,
 } from 'lucide-react';
@@ -211,7 +210,7 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
                 <strong className="font-mono">{stats.totalCount}</strong> Memories
               </span>
               <span className="hidden sm:inline-flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                <Zap className="w-3.5 h-3.5 text-amber-500" />
                 <strong className="font-mono">~{stats.tokensSavedEstimate}</strong> Tokens Saved
               </span>
               <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">

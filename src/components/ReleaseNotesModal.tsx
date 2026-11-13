@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { Sparkles, X, Calendar, CheckCircle2 } from 'lucide-react';
+import { Newspaper, X, Calendar, CheckCircle2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 interface ReleaseNotesModalProps {
@@ -132,7 +132,7 @@ export const ReleaseNotesModal: React.FC<ReleaseNotesModalProps> = ({
         <div className="flex items-center justify-between px-6 py-4 border-b border-claude-border-light dark:border-white/10 bg-claude-surface2-light/60 dark:bg-white/[0.02]">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-lg bg-claude-terracotta/15 border border-claude-terracotta/20 flex items-center justify-center text-claude-accentInk">
-              <Sparkles className="w-5 h-5" />
+              <Newspaper className="w-5 h-5" />
             </div>
             <div>
               <h2 id="release-notes-title" className="text-base font-bold text-claude-text-light dark:text-white tracking-tight">

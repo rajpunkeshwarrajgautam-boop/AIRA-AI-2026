@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Brain, ChevronDown, Cpu, Sparkles } from 'lucide-react';
+import { Brain, ChevronDown, Cpu } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { ThinkingBlock as IThinkingBlock } from '../types';
 
@@ -34,7 +34,7 @@ export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({ thinking }) => {
               ? 'bg-claude-terracotta/10 text-claude-terracotta'
               : 'bg-claude-surface2-light text-claude-muted-light dark:bg-claude-surface2-dark dark:text-claude-muted-dark'
           }`}>
-            {thinking.isStreaming ? <Cpu className="h-3.5 w-3.5" /> : <Sparkles className="h-3.5 w-3.5" />}
+            {thinking.isStreaming ? <Cpu className="h-3.5 w-3.5" /> : <Brain className="h-3.5 w-3.5" />}
             {thinking.isStreaming && (
               <motion.span
                 className="absolute inset-0 rounded-[9px] border border-claude-terracotta/25"

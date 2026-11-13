@@ -24,9 +24,9 @@ export const AVAILABLE_MODELS: ModelInfo[] = [
   },
   {
     id: 'nvidia/llama-3.1-nemotron-70b-instruct',
-    name: 'Nemotron 70B (NVIDIA)',
-    badge: 'NVIDIA',
-    description: 'Experimental NVIDIA NIM 70B model with RLHF alignment (subject to account-level provisioning; automatic failover).',
+    name: 'Nemotron 70B',
+    badge: 'NVIDIA (Exp)',
+    description: 'Experimental NVIDIA NIM 70B model with RLHF alignment (subject to account-level provisioning; automatic failover to Groq/Gemini).',
     supportsThinking: false,
     contextWindow: '128K tokens',
   },
@@ -96,7 +96,7 @@ export const PROMPT_STARTERS = [
     prompt: 'Analyze the files I attach, identify the most important findings, and turn them into a concise decision memo.',
   },
   {
-    icon: 'sparkles',
+    icon: 'bot',
     title: 'Plan an agent mission',
     prompt: 'Break this objective into an autonomous agent mission with steps, tools, checkpoints, and a final deliverable.',
   },

@@ -52,6 +52,7 @@
     "test:behavioral:benchmark": "npx tsx test/behavioral/freshness-benchmark-120.ts",
     "test:behavioral:precedence": "npx tsx test/behavioral/precedence-regression.ts",
     "test:pr118:regression": "npx tsx --test test/pr118-postmerge-remediation-regression.test.ts",
+    "test:product-quality": "npx tsx --test test/product-quality-unslop.test.ts",
     "typecheck": "tsc -b && tsc -p tsconfig.server.json --noEmit && tsc -p api/tsconfig.json --noEmit",
     "typecheck:client": "tsc -b",
     "typecheck:server": "tsc -p tsconfig.server.json --noEmit && tsc -p api/tsconfig.json --noEmit",

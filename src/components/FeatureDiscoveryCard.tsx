@@ -1,5 +1,5 @@
 import React from 'react';
-import { Sparkles, X, ArrowRight, Play, Zap } from 'lucide-react';
+import { X, ArrowRight, Play, Zap } from 'lucide-react';
 import type { FeatureGuidanceItem } from '../utils/featureDiscovery';
 
 export interface FeatureDiscoveryCardProps {

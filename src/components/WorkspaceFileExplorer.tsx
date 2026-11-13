@@ -14,7 +14,6 @@ import {
   ChevronRight,
   ChevronDown,
   Layers,
-  Sparkles,
   FileCheck
 } from 'lucide-react';
 import type {
@@ -313,7 +312,7 @@ export const WorkspaceFileExplorer: React.FC<WorkspaceFileExplorerProps> = ({
           className="w-full flex items-center justify-between px-2 py-1 text-[11px] text-stone-400 hover:text-stone-200 hover:bg-stone-800/50 rounded transition-colors"
         >
           <span className="flex items-center gap-1.5 font-medium">
-            <Sparkles className="w-3 h-3 text-cyan-400" />
+            <Layers className="w-3 h-3 text-cyan-400" />
             File Dependencies
           </span>
           <span className="text-[10px] text-stone-500 font-medium">

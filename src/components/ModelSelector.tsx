@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Brain, Check, ChevronDown, Gauge, Sparkles, Zap, Lock } from 'lucide-react';
+import { Brain, Check, ChevronDown, Gauge, Zap, Lock } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import type { ModelId } from '../types';
 import { AVAILABLE_MODELS } from '../utils/constants';

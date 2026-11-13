@@ -8,7 +8,6 @@ import {
   Globe,
   Zap,
   ShieldCheck,
-  Sparkles,
   CheckCircle2,
   AlertTriangle,
   XCircle,
@@ -44,7 +43,7 @@ const ROLE_METADATA: Record<SpecialistRole, { label: string; icon: React.FC<{ si
   browser: { label: 'Web Navigator', icon: Globe },
   automation: { label: 'Automation', icon: Zap },
   verifier: { label: 'Quality & Security', icon: ShieldCheck },
-  synthesizer: { label: 'Synthesizer', icon: Sparkles }
+  synthesizer: { label: 'Synthesizer', icon: Layers }
 };
 
 function formatDuration(ms?: number): string {

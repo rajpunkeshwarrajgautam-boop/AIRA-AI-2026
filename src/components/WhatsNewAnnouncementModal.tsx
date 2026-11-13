@@ -1,7 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import {
   X,
-  Sparkles,
   ChevronRight,
   CheckCircle,
   Bell,
@@ -112,7 +111,7 @@ export const WhatsNewAnnouncementModal: React.FC<WhatsNewAnnouncementModalProps>
         <div className="flex items-center justify-between px-6 py-4 border-b border-stone-100 dark:border-white/10 bg-stone-50/50 dark:bg-white/[0.02]">
           <div className="flex items-center gap-2.5">
             <div className="p-2 rounded-xl bg-aira-blue/10 text-aira-blue dark:bg-aira-blue/20 dark:text-cyan-400">
-              <Sparkles className="w-5 h-5" />
+              <Bell className="w-5 h-5" />
             </div>
             <div>
               <h2 className="text-base font-bold text-stone-900 dark:text-white">

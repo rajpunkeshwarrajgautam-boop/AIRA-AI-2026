@@ -8,7 +8,6 @@ import {
   CheckCircle2,
   AlertTriangle,
   Clock,
-  Sparkles,
   RefreshCw,
   Cpu,
   ShieldAlert,
