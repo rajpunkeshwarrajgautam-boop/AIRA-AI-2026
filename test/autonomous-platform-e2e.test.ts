@@ -214,8 +214,11 @@ test('5. MCP Integration: registration, discovery, untrusted output tagging, and
     transport: 'streamable_http'
   });
 
-  const connected = await mcpHost.connectServer('server_bad_protocol');
-  assert.equal(connected, false);
+  await assert.rejects(
+    () => mcpHost.connectServer('server_bad_protocol'),
+    (err: any) => err instanceof McpSecurityError &&
+      err.code === 'FORBIDDEN_PROTOCOL' && err.statusCode === 400
+  );
   const statusBad = mcpHost.getServerStatus('server_bad_protocol');
   assert.equal(statusBad?.connected, false);
   assert.equal(statusBad?.lastError, 'MCP_CONNECTION_FAILED', 'Public status must never expose raw transport error details');
