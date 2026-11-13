@@ -122,6 +122,9 @@ jobs:
           test/mcp-security-authorization.test.ts
           test/audit-remediation-suite.test.ts
 
+      - name: Runtime database connectivity readiness and timeout regression
+        run: npx tsx --test test/runtime-database-readiness.test.ts
+
       - name: Client memory account isolation and storage migration fidelity
         run: >-
           npx tsx --test

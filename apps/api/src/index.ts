@@ -47,7 +47,7 @@ import { McpHost, McpSecurityError } from '../../../packages/mcp/src/index.js';
 import { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
 import { validateDurableToolScopes } from '../../../packages/agent-runtime/src/durable/tool-authorization.js';
 import { validateApiStartupConfiguration } from './startup-config.js';
-import { evaluateRuntimeReadiness } from './runtime-readiness.js';
+import { evaluateRuntimeReadiness, createDatabaseReadinessProbe } from './runtime-readiness.js';
 import { AutomationEngine } from '../../../packages/automation/src/index.js';
 import { PostgresAgentRepository, PostgresRunRepository, InMemoryRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
 import { PostgresAutomationRepository, PostgresAutomationRunRepository } from '../../../packages/automation/src/repositories.js';
@@ -324,10 +324,25 @@ export function isMcpOperator(req: Request): boolean {
   );
 }
 
-app.get('/api/health', (_req: Request, res: Response) => {
+// Read-only database probe shared across health and readiness calls. A valid
+// DATABASE_URL proves configuration, not connectivity. Cache short-lived
+// results to avoid opening a new database connection per public health probe.
+const checkDatabaseReadiness = createDatabaseReadinessProbe(
+  () => db.raw('SELECT 1 AS alive'),
+  { cacheMs: 10_000, timeoutMs: 4_000 }
+);
+
+async function getEffectiveRuntimeReadiness() {
+  const base = evaluateRuntimeReadiness(appState, process.env);
+  if (!base.ready || !process.env.DATABASE_URL?.trim()) return base;
+  if (await checkDatabaseReadiness()) return base;
+  return { ready: false, status: 'NOT_READY', reason: 'AGENT_DATABASE_UNREACHABLE' };
+}
+
+app.get('/api/health', async (_req: Request, res: Response) => {
   const providers = modelRouter.listProviders();
-  const readiness = evaluateRuntimeReadiness(appState, process.env);
-  const isDbReady = Boolean(process.env.DATABASE_URL?.trim());
+  const readiness = await getEffectiveRuntimeReadiness();
+  const isDbConfigured = Boolean(process.env.DATABASE_URL?.trim());
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
   res.json({
     status: readiness.ready ? 'HEALTHY' : 'DEGRADED',
@@ -343,12 +358,12 @@ app.get('/api/health', (_req: Request, res: Response) => {
       mcpHost: typeof mcpHost !== 'undefined' ? `INITIALIZED (${mcpHost.getConnectedCount()} connected)` : 'INITIALIZING',
       knowledgeEngine: 'INITIALIZED',
       agentRuntime: readiness.ready ? 'READY' : 'NOT_READY',
-      automationEngine: isDbReady ? 'READY' : 'DISABLED',
+      automationEngine: isDbConfigured && readiness.ready ? 'READY' : 'DISABLED',
       capabilityRegistry: 'READY',
       intentRouter: 'INITIALIZED',
       workflowEngine: 'INITIALIZED',
       conversationSearch: 'INITIALIZED',
-      database: isDbReady ? 'CONFIGURED' : 'UNCONFIGURED'
+      database: !isDbConfigured ? 'UNCONFIGURED' : readiness.reason === 'AGENT_DATABASE_UNREACHABLE' ? 'UNREACHABLE' : readiness.ready ? 'REACHABLE' : 'CONFIGURED'
     },
     productionMockFallback: providers.length === 0 ? 'ACTIVE (dev/test only)' : 'DISABLED',
     version: '2026.2.0',
@@ -388,8 +403,8 @@ const healthTracker = new ProviderHealthTracker();
 const capacityGuard = new PrivateBetaCapacityGuard(undefined, capacityStore, healthTracker);
 const modelRouter = new ModelRouter(healthTracker, capacityGuard);
 
-app.get('/api/ready', (_req: Request, res: Response) => {
-  const readiness = evaluateRuntimeReadiness(appState, process.env);
+app.get('/api/ready', async (_req: Request, res: Response) => {
+  const readiness = await getEffectiveRuntimeReadiness();
   res.status(readiness.ready ? 200 : 503).json({
     status: readiness.status,
     ...(readiness.reason ? { reason: readiness.reason } : {}),
