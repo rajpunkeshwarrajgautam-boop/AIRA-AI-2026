@@ -61,7 +61,15 @@ try {
     'Preview is not the expected project branch alias');
   evidence.preview = preview.origin;
 
-  const version = await request(new URL('/api/version', preview));
+  // Vercel's branch alias may still serve the previous build immediately
+  // after a PR push. Poll the actual deployment identity instead of failing
+  // on the expected, short-lived build/alias propagation race.
+  let version;
+  for (let attempt = 0; attempt < 18; attempt++) {
+    version = await request(new URL('/api/version', preview));
+    if (version.response.status === 200 && version.json?.commitSha === expectedSha) break;
+    if (attempt < 17) await new Promise(resolve => setTimeout(resolve, 10_000));
+  }
   evidence.version = { httpStatus: version.response.status, commitSha: version.json?.commitSha || null };
   assert.equal(version.response.status, 200, 'Preview version endpoint failed');
   assert.equal(version.json?.commitSha, expectedSha, 'Preview SHA mismatch');
@@ -98,8 +106,10 @@ try {
     'BACKEND_READINESS_FAILED');
 
   const mcp = await request(new URL('/api/mcp/servers', preview));
-  evidence.anonymousMcp = { httpStatus: mcp.response.status };
-  record(mcp.response.status === 401, 'ANONYMOUS_MCP_ACCESS_NOT_DENIED');
+  evidence.anonymousMcp = { httpStatus: mcp.response.status, error: mcp.json?.error || null };
+  // A Vercel protection-wall 401 is not proof that AIRA denied MCP access.
+  record(mcp.response.status === 401 && mcp.json?.error === 'AUTHENTICATION_REQUIRED',
+    'ANONYMOUS_MCP_ACCESS_NOT_DENIED');
 
   const headers = {
     csp: Boolean(version.response.headers.get('content-security-policy')),

@@ -62,5 +62,5 @@ jobs:
           name: pr171-deployed-acceptance
           path: |
             artifacts/pr171-preview-acceptance.json
-            test-results/
+            artifacts/pr171-deployed-browser/
           if-no-files-found: warn
