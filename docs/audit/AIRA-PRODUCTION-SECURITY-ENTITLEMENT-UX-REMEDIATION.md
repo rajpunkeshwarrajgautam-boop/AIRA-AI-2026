@@ -1,5 +1,13 @@
 # AIRA AI 2026 — Production Security, Entitlement, and UX Remediation
 
+> **Independent follow-up / release status (13 Nov 2026): DRAFT — NO GO**
+>
+> The original remediation results below describe Antigravity's earlier implementation and remain as historical evidence. Subsequent independent review found additional MCP platform-resource, process-backed HTTP management, cross-tenant tool-invocation, URL/status disclosure and approval-policy gaps. Corrective commits on PR #171 now fence these paths, make external MCP tools consent-required, and add mandatory Fast CI coverage. The public MCP egress path is fail-closed unless an approved HTTPS host is configured.
+>
+> **Certification still incomplete:** an operator-approved host is not proof of connection-time DNS/redirect egress enforcement; live two-account Google/GitHub OAuth-backed Edge staging and all tier-specific end-to-end checks have not been reproduced here. Check the latest PR head and corresponding GitHub Actions before relying on results. No production deployment, database mutation, secret rotation, or billing change was performed during this follow-up. Do not merge until the remaining security and authenticated-acceptance gates are completed. The blanket \"FIXED AND VERIFIED\" and \"release-blocker cleared\" conclusions below are superseded for current release readiness.
+
+---
+
 **Audit Reference Date:** 2026-11-13  
 **Remediation Branch:** `fix/security-entitlement-ux-remediation-20261113`  
 **Remediation Commit SHA:** `ce25f1c`  
