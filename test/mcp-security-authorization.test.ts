@@ -249,7 +249,9 @@ test('SEC-03: MCP Network Access and SSRF Protection', async (t) => {
     ];
 
     const prevNodeEnv = process.env.NODE_ENV;
+    const prevAllowLocal = process.env.AIRA_ALLOW_LOCAL_MCP;
     process.env.NODE_ENV = 'production';
+    process.env.AIRA_ALLOW_LOCAL_MCP = 'true'; // Must not override production safety.
     try {
       for (const url of loopbacks) {
         await assert.rejects(
@@ -262,7 +264,10 @@ test('SEC-03: MCP Network Access and SSRF Protection', async (t) => {
         );
       }
     } finally {
-      process.env.NODE_ENV = prevNodeEnv;
+      if (prevNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = prevNodeEnv;
+      if (prevAllowLocal === undefined) delete process.env.AIRA_ALLOW_LOCAL_MCP;
+      else process.env.AIRA_ALLOW_LOCAL_MCP = prevAllowLocal;
     }
   });
 
