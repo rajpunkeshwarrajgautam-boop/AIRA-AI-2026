@@ -107,8 +107,12 @@ try {
 
   const mcp = await request(new URL('/api/mcp/servers', preview));
   evidence.anonymousMcp = { httpStatus: mcp.response.status, error: mcp.json?.error || null };
-  // A Vercel protection-wall 401 is not proof that AIRA denied MCP access.
-  record(mcp.response.status === 401 && mcp.json?.error === 'AUTHENTICATION_REQUIRED',
+  // The global principal middleware can reject anonymous calls before the
+  // MCP management route. Accept only the API's known structured JSON
+  // denial codes, never an HTML Vercel protection-wall response.
+  record(mcp.response.status === 401 &&
+    mcp.response.headers.get('content-type')?.includes('application/json') &&
+    ['Unauthorized', 'AUTHENTICATION_REQUIRED'].includes(mcp.json?.error),
     'ANONYMOUS_MCP_ACCESS_NOT_DENIED');
 
   const headers = {
