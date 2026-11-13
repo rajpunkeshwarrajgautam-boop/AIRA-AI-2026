@@ -115,6 +115,19 @@ export interface McpOperationOptions {
   isOperator?: boolean;
 }
 
+/** A gateway tool cannot cross user ownership merely because its name is global. */
+export function isMcpToolInvocationAuthorized(
+  config: McpServerConfig | undefined,
+  principal?: { userId?: string; roles?: string[] }
+): boolean {
+  if (!config) return false;
+  const roles = principal?.roles || [];
+  if (config.transport === 'stdio' &&
+      !roles.includes('operator') && !roles.includes('platform_admin')) return false;
+  if (config.isPlatform || config.ownerId === 'platform') return true;
+  return Boolean(principal?.userId && principal.userId === config.ownerId);
+}
+
 export class McpHost {
   private servers: Map<string, McpServerConfig> = new Map();
   private clients: Map<string, Client> = new Map();
@@ -467,13 +480,7 @@ export class McpHost {
           // Registered tools share a process-wide gateway. Check ownership
           // AGAIN when the tool is invoked, not only when it is registered.
           const liveConfig = this.servers.get(serverId);
-          const principalId = _ctx?.principal?.userId;
-          const roles: string[] = _ctx?.principal?.roles || [];
-          const platformStdioDenied = liveConfig?.transport === 'stdio' &&
-            !roles.includes('operator') && !roles.includes('platform_admin');
-          if (!liveConfig ||
-              (!liveConfig.isPlatform && (!principalId || principalId !== liveConfig.ownerId)) ||
-              platformStdioDenied) {
+          if (!isMcpToolInvocationAuthorized(liveConfig, _ctx?.principal)) {
             return {
               toolCallId: 'call_mcp_' + Date.now(),
               output: null,
