@@ -74,7 +74,7 @@ import {
 } from './utils/featureDiscovery';
 import type { Announcement } from '../packages/contracts/src/index';
 import type { PlanTier } from './types/commercial-types';
-import { parseBillingSummary } from './lib/accountBillingTruth';
+import { parseBillingSummary, type EntitlementResolutionState } from './lib/accountBillingTruth';
 import { neonAuth, authenticatedApiFetch } from './lib/neonAuth';
 import { dispatchRunApproval } from './utils/approvalDispatch';
 
@@ -214,12 +214,27 @@ function App() {
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [isMotionStudioOpen, setIsMotionStudioOpen] = useState(false);
   const [upgradeModalTrigger, setUpgradeModalTrigger] = useState<string | null>(null);
+  const [entitlementState, setEntitlementState] = useState<EntitlementResolutionState>(() => neonAuth.getCurrentUser() ? 'pending' : 'guest');
   const [userTier, setUserTier] = useState<PlanTier>(() => neonAuth.getCurrentUser() ? 'free' : 'guest');
 
   const handleTriggerUpgrade = useCallback((trigger: string) => {
     setUpgradeModalTrigger(trigger);
     setIsUpgradeModalOpen(true);
   }, []);
+
+  const handleSelectWorkspaceMode = useCallback((targetMode: WorkspaceMode) => {
+    if (targetMode === 'agent') {
+      if (userTier === 'guest') {
+        handleTriggerUpgrade('agent_requires_account');
+        return;
+      }
+      if (userTier === 'free') {
+        handleTriggerUpgrade('agent_mode');
+        return;
+      }
+    }
+    setWorkspaceMode(targetMode);
+  }, [userTier, handleTriggerUpgrade, setWorkspaceMode]);
 
   const handleOpenSettings = useCallback((tab = 'general') => {
     setSettingsInitialTab(tab);
@@ -251,20 +266,32 @@ function App() {
     const user = neonAuth.getCurrentUser();
     if (!user) {
       setUserTier('guest');
+      setEntitlementState('guest');
       return;
     }
     let active = true;
+    setEntitlementState('pending');
     authenticatedApiFetch('/api/billing/summary')
-      .then(res => res.ok ? res.json() : null)
+      .then(res => {
+        if (!res.ok) {
+          throw new Error(`Billing summary lookup returned HTTP ${res.status}`);
+        }
+        return res.json();
+      })
       .then(data => {
         if (!active || !data) return;
         const parsed = parseBillingSummary(data, user.id);
         if (parsed?.planId) {
           setUserTier(parsed.planId);
+          setEntitlementState(parsed.subscriptionStatus === 'expired' ? 'expired' : 'verified');
+        } else {
+          setEntitlementState('unavailable');
         }
       })
       .catch(() => {
-        // fallback to free
+        if (!active) return;
+        // Do not silently convert billing error into verified free status
+        setEntitlementState('unavailable');
       });
     return () => { active = false; };
   }, [currentUserId]);
@@ -358,9 +385,9 @@ function App() {
     } else if (route === '#onboarding' || route.includes('onboarding')) {
       handleRestartOnboarding();
     } else if (route.includes('agent')) {
-      setWorkspaceMode('agent');
+      handleSelectWorkspaceMode('agent');
     }
-  }, [handleOpenSettings, handleRestartOnboarding]);
+  }, [handleOpenSettings, handleRestartOnboarding, handleSelectWorkspaceMode]);
   const [conversationSearchSeed, setConversationSearchSeed] = useState('');
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [activeArtifact, setActiveArtifact] = useState<Artifact | null>(null);
@@ -1650,7 +1677,7 @@ useEffect(() => {
           settings={settings}
           onUpdateSettings={updateSettings}
           workspaceMode={workspaceMode}
-          onSelectWorkspace={setWorkspaceMode}
+          onSelectWorkspace={handleSelectWorkspaceMode}
           onOpenVisionStudio={() => setIsVisionOpen(true)}
           onOpenPricing={() => setIsPricingOpen(true)}
           onOpenBilling={() => setIsAccountBillingOpen(true)}
@@ -1665,6 +1692,7 @@ useEffect(() => {
           }}
           onOpenReportBug={() => setIsReportBugOpen(true)}
           userTier={userTier}
+          entitlementState={entitlementState}
           onOpenWhatsNew={() => {
             setFocusedAnnouncement(null);
             setIsWhatsNewOpen(true);
@@ -1681,7 +1709,7 @@ useEffect(() => {
         onClose={() => setIsCommandPaletteOpen(false)}
         onNewChat={handleNewChat}
         onSelectChat={handleSelectChat}
-        onSelectWorkspace={setWorkspaceMode}
+        onSelectWorkspace={handleSelectWorkspaceMode}
         onOpenProjects={() => setIsProjectsOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
       />
@@ -1717,10 +1745,10 @@ useEffect(() => {
             )}
             {ADAPTIVE_STUDIO_PREVIEW && (
               <div className="aira-adaptive-mode-toggle" role="group" aria-label="Workspace mode">
-                <button type="button" aria-pressed={workspaceMode === 'chat'} onClick={() => setWorkspaceMode('chat')}>
+                <button type="button" aria-pressed={workspaceMode === 'chat'} onClick={() => handleSelectWorkspaceMode('chat')}>
                   <MessageSquareText size={15} aria-hidden="true" /> Chat
                 </button>
-                <button type="button" aria-pressed={workspaceMode === 'agent'} onClick={() => setWorkspaceMode('agent')}>
+                <button type="button" aria-pressed={workspaceMode === 'agent'} onClick={() => handleSelectWorkspaceMode('agent')}>
                   <Bot size={15} aria-hidden="true" /> Agent
                 </button>
               </div>
@@ -1874,7 +1902,7 @@ useEffect(() => {
                 guidance={activeFeatureGuidance}
                 onDismiss={handleDismissFeatureGuidance}
                 onTryFeature={(prompt, targetMode) => {
-                  if (targetMode) setWorkspaceMode(targetMode);
+                  if (targetMode) handleSelectWorkspaceMode(targetMode);
                   handleSendMessage(prompt, []);
                   handleDismissFeatureGuidance();
                 }}
@@ -1890,7 +1918,7 @@ useEffect(() => {
             currentModel={settings.activeModel}
             extendedThinking={settings.extendedThinking}
             workspaceMode={workspaceMode}
-            onWorkspaceModeChange={setWorkspaceMode}
+            onWorkspaceModeChange={handleSelectWorkspaceMode}
             userTier={userTier}
             onTriggerUpgrade={handleTriggerUpgrade}
           />
@@ -2145,7 +2173,7 @@ useEffect(() => {
           userId={currentUserId}
           userTier={userTier}
           onOpenPlanSettings={() => handleOpenSettings('plan')}
-          onSwitchWorkspaceMode={setWorkspaceMode}
+          onSwitchWorkspaceMode={handleSelectWorkspaceMode}
           onOpenProjects={() => setIsProjectsOpen(true)}
         />
 

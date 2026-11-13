@@ -19,8 +19,13 @@ import { COMMERCIAL_PLANS } from '../types/commercial-types';
 export type UpgradeTrigger =
   | 'guest_limit'
   | 'guest_chat_limit'
+  | 'agent_requires_account'
+  | 'model_requires_account'
   | 'flagship_model'
   | 'free_to_plus_model'
+  | 'pro_model'
+  | 'free_to_pro_model'
+  | 'plus_to_pro_model'
   | 'agent_mode'
   | 'agent'
   | 'free_to_plus_agent'
@@ -61,6 +66,42 @@ interface ModalConfig {
 export function getUpgradeModalConfig(trigger: UpgradeTrigger | null | undefined): ModalConfig {
   const norm = (trigger || '').toLowerCase();
 
+  if (norm === 'agent_requires_account' || norm === 'guest_agent_requires_account') {
+    return {
+      title: 'Sign In to Access Agent Workspace',
+      subtitle: 'Autonomous agents and multi-step missions require an account.',
+      description: 'Create a free account to unlock conversation workspaces, memory records, and explore agent capabilities. Upgrade to Plus to run autonomous execution missions.',
+      recommendedTier: 'free',
+      ctaText: 'Sign In / Create Account',
+      features: [
+        'Persistent account workspaces & conversation history',
+        'Explore autonomous agent planning & tools',
+        'Upgrade to Plus or Pro for autonomous multi-step execution',
+        '15 daily standard chats & memory records',
+      ],
+      showResetTimer: false,
+      upgradeOptions: ['free', 'plus', 'pro'],
+    };
+  }
+
+  if (norm === 'model_requires_account' || norm === 'guest_model_requires_account') {
+    return {
+      title: 'Sign In to Access AIRA Auto',
+      subtitle: 'Dynamic multi-model routing requires a registered account.',
+      description: 'Create a free account to unlock AIRA Auto dynamic routing, persistent chats, and project workspaces.',
+      recommendedTier: 'free',
+      ctaText: 'Sign In / Sign Up Free',
+      features: [
+        'AIRA Auto dynamic model routing',
+        '15 standard chats daily',
+        'Persistent multi-session conversation history',
+        '3 Project workspaces',
+      ],
+      showResetTimer: false,
+      upgradeOptions: ['free', 'plus', 'pro'],
+    };
+  }
+
   if (norm === 'guest_limit' || norm === 'guest_chat_limit') {
     return {
       title: 'Sign In to Keep Chatting',
@@ -77,6 +118,33 @@ export function getUpgradeModalConfig(trigger: UpgradeTrigger | null | undefined
       ],
       showResetTimer: false,
       upgradeOptions: ['free', 'plus', 'pro'],
+    };
+  }
+
+  if (
+    norm === 'pro_model' ||
+    norm === 'free_to_pro_model' ||
+    norm === 'plus_to_pro_model' ||
+    norm === 'pro_only_model' ||
+    norm === 'aira-deep' ||
+    norm === 'claude-3-opus'
+  ) {
+    return {
+      title: 'Unlock AIRA Deep & Pro Intelligence',
+      subtitle: 'AIRA Deep and flagship frontier reasoning require AIRA Pro.',
+      description: 'Upgrade to AIRA Pro for 150 daily chats, 7,500 monthly credits, 200 reasoning boosts, isolated Python sandboxes, and headless browser automation.',
+      recommendedTier: 'pro',
+      ctaText: 'Upgrade to Pro',
+      features: [
+        'AIRA Deep frontier model access',
+        '200 Complimentary Reasoning Boosts & Extended Thinking',
+        '150 Standard Chats / Day with 7,500 monthly credits',
+        'Isolated Python Sandbox code execution',
+        'Headless web browser automation tools',
+        '2 Concurrent inference streams',
+      ],
+      showResetTimer: false,
+      upgradeOptions: ['pro'],
     };
   }
 

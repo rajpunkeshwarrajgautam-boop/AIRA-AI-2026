@@ -26,6 +26,26 @@ const getRequiredTierForModel = (modelId: string): 'free' | 'plus' | 'pro' => {
   return 'pro';
 };
 
+export const resolveModelUpgradeTrigger = (modelId: string, currentTier: PlanTier = 'free'): string | null => {
+  if (isModelAllowedForTier(modelId, currentTier)) {
+    return null;
+  }
+  const reqTier = getRequiredTierForModel(modelId);
+  if (currentTier === 'guest') {
+    if (reqTier === 'free') return 'model_requires_account';
+    if (reqTier === 'plus') return 'free_to_plus_model';
+    return 'pro_model';
+  }
+  if (currentTier === 'free') {
+    if (reqTier === 'plus') return 'free_to_plus_model';
+    return 'pro_model';
+  }
+  if (currentTier === 'plus') {
+    return 'plus_to_pro_model';
+  }
+  return null;
+};
+
 const modelGlyph = (name: string) => {
   if (name.includes('Fast')) return Zap;
   if (name.includes('Deep') || name.includes('Nemotron')) return Brain;
@@ -219,7 +239,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                     onClick={() => {
                       if (!isAllowed) {
                         setIsOpen(false);
-                        onTriggerUpgrade?.(userTier === 'guest' ? 'guest_limit' : 'flagship_model');
+                        const trigger = resolveModelUpgradeTrigger(model.id, userTier);
+                        if (trigger) onTriggerUpgrade?.(trigger);
                         return;
                       }
                       selectModel(model);
@@ -276,7 +297,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                       <Check className="mt-1 h-4 w-4 shrink-0 text-claude-accentInk" />
                     ) : !isAllowed ? (
                       <span className="mt-1 text-[10px] font-semibold text-amber-600 dark:text-amber-400 shrink-0">
-                        Upgrade
+                        {userTier === 'guest' && getRequiredTierForModel(model.id) === 'free' ? 'Sign In' : getRequiredTierForModel(model.id) === 'pro' ? 'Pro' : 'Plus'}
                       </span>
                     ) : null}
                   </button>

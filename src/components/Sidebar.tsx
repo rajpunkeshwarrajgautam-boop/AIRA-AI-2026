@@ -19,6 +19,7 @@ import { ConversationActionsDropdown } from './ConversationActionsDropdown';
 import { AccountMenuDropdown } from './AccountMenuDropdown';
 import { neonAuth, NeonUser } from '../lib/neonAuth';
 import type { PlanTier } from '../types/commercial-types';
+import type { EntitlementResolutionState } from '../lib/accountBillingTruth';
 
 interface SidebarProps {
   conversations: Conversation[];
@@ -55,6 +56,7 @@ interface SidebarProps {
   onOpenLegalViewer?: (doc: 'terms' | 'privacy') => void;
   onOpenReportBug?: () => void;
   userTier?: PlanTier;
+  entitlementState?: EntitlementResolutionState;
   onOpenWhatsNew?: () => void;
   onRestartOnboarding?: () => void;
   onOpenMotionStudio?: () => void;
@@ -146,6 +148,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenLegalViewer,
   onOpenReportBug,
   userTier = 'free',
+  entitlementState = 'verified',
   onOpenWhatsNew,
   onRestartOnboarding,
   onOpenMotionStudio,
@@ -443,10 +446,30 @@ export const Sidebar: React.FC<SidebarProps> = ({
               >
                 <div className="flex items-center gap-2 min-w-0">
                   <span className={`w-2 h-2 rounded-full shrink-0 ${
-                    userTier === 'pro' ? 'bg-purple-500' : userTier === 'plus' ? 'bg-amber-500' : userTier === 'free' ? 'bg-emerald-500' : 'bg-stone-400'
+                    entitlementState === 'pending'
+                      ? 'bg-amber-400 animate-pulse'
+                      : entitlementState === 'unavailable'
+                        ? 'bg-rose-500'
+                        : userTier === 'pro'
+                          ? 'bg-purple-500'
+                          : userTier === 'plus'
+                            ? 'bg-amber-500'
+                            : userTier === 'free'
+                              ? 'bg-emerald-500'
+                              : 'bg-stone-400'
                   }`} />
                   <span className="text-[11px] font-bold text-claude-text-light dark:text-white truncate">
-                    {userTier === 'pro' ? 'AIRA Pro' : userTier === 'plus' ? 'AIRA Plus' : userTier === 'free' ? 'AIRA Free' : 'Guest Workspace'}
+                    {entitlementState === 'pending'
+                      ? 'Resolving plan...'
+                      : entitlementState === 'unavailable'
+                        ? 'Plan Unavailable'
+                        : userTier === 'pro'
+                          ? 'AIRA Pro'
+                          : userTier === 'plus'
+                            ? 'AIRA Plus'
+                            : userTier === 'free'
+                              ? 'AIRA Free'
+                              : 'Guest Workspace'}
                   </span>
                 </div>
                 <span className="text-[10px] font-bold text-claude-accentInk group-hover:underline flex items-center gap-0.5 shrink-0">

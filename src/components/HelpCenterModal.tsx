@@ -90,12 +90,12 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
       id: 'getting-started-motion-showcase',
       category: 'getting-started',
       title: 'Feature Showcase & Motion Studio',
-      summary: 'Explore the 30-second motion walkthrough highlighting Groq LPU inference, Nemotron 70B reasoning, and cognitive settings.',
+      summary: 'Explore the 30-second motion walkthrough highlighting Groq LPU inference, deep reasoning traces, and cognitive settings.',
       content: [
         'Watch the interactive Video Studio showcasing AIRA\'s verified capabilities.',
         '• Scene 1: Multi-Model Cognitive Architecture & 128K Context',
         '• Scene 2: Ultra-Fast Groq LPU with Google Gemini Failover',
-        '• Scene 3: NVIDIA Nemotron 70B Deep Reasoning Traces',
+        '• Scene 3: Deep Reasoning Traces & Adaptive Effort Bounds',
         '• Scene 4: Account-Scoped Onboarding Tour',
         '• Scene 5: Cognitive Settings & Enforced Privacy Safeguards'
       ],
@@ -110,16 +110,16 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
       content: [
         'On Pro-entitled AIRA Deep runs, toggle Extended Thinking in the model selector or Settings.',
         'Configure the token ceiling from 1,024 up to 8,192 tokens inside Settings > Model & Reasoning.',
-        'AIRA forwards native effort/budget parameters where the active upstream provider supports them and caps max_tokens on NVIDIA Nemotron 70B.'
+        'AIRA forwards native effort/budget parameters where the active upstream provider supports them (Groq reasoning_effort) and caps max_tokens on experimental providers.'
       ]
     },
     {
       id: 'models-provider-switching',
       category: 'models',
       title: 'Model Providers & Operational Routing',
-      summary: 'High-speed multi-provider routing across Groq LPU, Google Gemini, and NVIDIA NIM.',
+      summary: 'High-speed multi-provider routing across Groq LPU and Google Gemini, with experimental NVIDIA NIM.',
       content: [
-        'AIRA connects via high-speed server-side inference gateways (Groq LPU, Google Gemini, and NVIDIA NIM).',
+        'AIRA connects via high-speed server-side inference gateways (Groq LPU with automatic Google Gemini failover, and experimental NVIDIA NIM).',
         'AIRA Auto dynamically selects the fastest engine for low-latency queries and deep reasoning for complex analysis.',
         'Credentials and upstream access are secured behind authenticated server-side boundaries.'
       ]
