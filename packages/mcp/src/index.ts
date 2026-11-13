@@ -524,12 +524,15 @@ export class McpHost {
               durationMs: Date.now() - start,
               timestamp: Date.now()
             };
-          } catch (err: any) {
+          } catch {
+            // External MCP SDK errors may embed authorization headers,
+            // credential-bearing endpoint URLs, or remote server details.
+            // Never return transport exception text to the calling account.
             return {
               toolCallId: 'call_mcp_' + Date.now(),
-              output: err.message,
+              output: null,
               isError: true,
-              error: err.message,
+              error: 'MCP_TOOL_EXECUTION_FAILED',
               untrustedExternalData: true,
               durationMs: Date.now() - start,
               timestamp: Date.now()
