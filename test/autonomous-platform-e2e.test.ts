@@ -18,7 +18,7 @@ import {
 import { ToolGateway, InMemoryToolCallRepository } from '../packages/tool-runtime/src/index.js';
 import { BrowserAdapter } from '../packages/tool-runtime/src/adapters/browser-adapter.js';
 import { LocalIsolatedSandboxProvider } from '../packages/builder-runtime/src/local-provider.js';
-import { McpHost } from '../packages/mcp/src/index.js';
+import { McpHost, validateMcpUrl, McpSecurityError } from '../packages/mcp/src/index.js';
 import { BrainV2KnowledgeEngine, InMemoryKnowledgeRepository } from '../packages/knowledge/src/index.js';
 import { generateArtifactSandboxHtml } from '../src/utils/artifactSandbox.js';
 
@@ -218,7 +218,9 @@ test('5. MCP Integration: registration, discovery, untrusted output tagging, and
   assert.equal(connected, false);
   const statusBad = mcpHost.getServerStatus('server_bad_protocol');
   assert.equal(statusBad?.connected, false);
-  assert.ok(statusBad?.lastError?.includes('Only http and https are allowed'));
+  assert.equal(statusBad?.lastError, 'MCP_CONNECTION_FAILED', 'Public status must never expose raw transport error details');
+    await assert.rejects(() => validateMcpUrl('file:///tmp/forbidden'),
+      (err: any) => err instanceof McpSecurityError && err.code === 'FORBIDDEN_PROTOCOL');
 
   // Unregister cleanup
   mcpHost.unregisterServer('server_bad_protocol');
