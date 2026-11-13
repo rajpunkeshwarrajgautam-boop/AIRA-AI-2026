@@ -314,7 +314,7 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
       tabIndex={-1}
       aria-orientation="vertical"
       aria-label="Account and user settings menu"
-      className="fixed rounded-2xl bg-claude-surface-light dark:bg-stone-900 border border-claude-border-light dark:border-white/10 shadow-2xl overflow-hidden z-[100] text-claude-text-light dark:text-white backdrop-blur-xl outline-none"
+      className="fixed rounded-2xl bg-claude-surface-light dark:bg-stone-900 border border-claude-border-light dark:border-white/10 shadow-lg overflow-hidden z-[100] text-claude-text-light dark:text-white backdrop-blur-xl outline-none"
       style={{
         left: menuPosition?.left ?? 12,
         bottom: menuPosition?.bottom,
@@ -564,7 +564,7 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
                 className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left hover:bg-claude-surface2-light dark:hover:bg-white/5 transition-colors group"
               >
                 <Sparkles className="w-4 h-4 text-amber-500 shrink-0" />
-                <span className="flex-1 font-medium">What's New</span>
+                <span className="flex-1 font-medium">What’s New</span>
                 {typeof unreadAnnouncementsCount === 'number' && unreadAnnouncementsCount > 0 && (
                   <span
                     data-testid="account-menu-whats-new-badge"

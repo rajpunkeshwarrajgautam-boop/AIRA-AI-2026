@@ -69,7 +69,7 @@ export const BuilderWorkspace:React.FC<{model:ModelId}> = ({model}) => {
           </div>
         )}
         <p className="mt-2 text-xs text-claude-muted-light dark:text-claude-muted-dark">The owner must configure the sandbox provider, enable the beta and approve your Aira user ID. No sandbox is created until setup is complete.</p>
-        {status&&<p className="mt-2 break-all font-mono text-xs">Your user ID: {status.principalId}</p>}
+        {status&&<p className="mt-2 break-all text-xs">Your user ID: <code className="font-mono">{status.principalId}</code></p>}
         <button onClick={refresh} className="mt-3 min-h-11 text-claude-terracotta underline">Check setup again</button>
       </div>}
       {ready&&status&&(

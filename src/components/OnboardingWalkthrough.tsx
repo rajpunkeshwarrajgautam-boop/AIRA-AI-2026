@@ -112,7 +112,7 @@ export const OnboardingWalkthrough: React.FC<OnboardingWalkthroughProps> = ({
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/65 backdrop-blur-md animate-in fade-in duration-200"
     >
       <div
-        className="w-full max-w-2xl flex flex-col rounded-2xl bg-white dark:bg-stone-900 border border-stone-200 dark:border-white/10 shadow-2xl overflow-hidden"
+        className="w-full max-w-2xl flex flex-col rounded-2xl bg-white dark:bg-stone-900 border border-stone-200 dark:border-white/10 shadow-lg overflow-hidden"
         onClick={e => e.stopPropagation()}
       >
         {/* Top Header */}
@@ -171,7 +171,7 @@ export const OnboardingWalkthrough: React.FC<OnboardingWalkthroughProps> = ({
                 </p>
               </div>
               <p className="text-sm text-stone-600 dark:text-stone-300 leading-relaxed">
-                AIRA combines multi-model conversational intelligence with autonomous agent execution, persistent memory, and live interactive artifact rendering. Let's take a quick 1-minute walkthrough to help you get the most out of your workspace.
+                AIRA combines multi-model conversational intelligence with autonomous agent execution, persistent memory, and live interactive artifact rendering. Let’s take a quick 1-minute walkthrough to help you get the most out of your workspace.
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
                 <div className="p-3.5 rounded-xl border border-stone-200/80 dark:border-white/10 bg-stone-50/50 dark:bg-white/[0.02]">

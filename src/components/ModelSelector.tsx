@@ -172,7 +172,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 5, scale: 0.985 }}
             transition={reducedMotion ? { duration: 0.08 } : { type: 'spring', stiffness: 390, damping: 31 }}
-            className="fixed z-[100] overflow-x-hidden overflow-y-auto overscroll-contain rounded-[18px] border border-claude-border-light p-2 shadow-2xl dark:border-claude-border-dark dark:shadow-2xl"
+            className="fixed z-[100] overflow-x-hidden overflow-y-auto overscroll-contain rounded-[18px] border border-claude-border-light p-2 shadow-lg dark:border-claude-border-dark dark:shadow-lg"
           >
             <div className="flex items-center justify-between px-2.5 pb-2 pt-1.5">
               <div>

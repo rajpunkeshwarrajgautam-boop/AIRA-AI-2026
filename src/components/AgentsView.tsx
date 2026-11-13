@@ -197,8 +197,8 @@ export const AgentsView: React.FC = () => {
               <Bot className="w-4 h-4" />
             </div>
             <h1 className="text-xl font-serif font-medium tracking-tight">Autonomous Agents</h1>
-            <span className="text-xs px-2 py-0.5 rounded-full font-mono bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-              {agents.length} Registered
+            <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+              <span className="font-mono">{agents.length}</span> Registered
             </span>
           </div>
           <p className="text-xs text-claude-muted-light dark:text-claude-muted-dark mt-1">
@@ -236,7 +236,7 @@ export const AgentsView: React.FC = () => {
         {loading ? (
           <div className="flex flex-col items-center justify-center py-20 text-claude-muted-light dark:text-claude-muted-dark">
             <RefreshCw className="w-6 h-6 animate-spin text-claude-accentInk mb-2" />
-            <p className="text-xs">Loading agent definitions...</p>
+            <p className="text-xs">Loading agent definitions…</p>
           </div>
         ) : agents.length === 0 ? (
           <div className="text-center py-20 flex flex-col items-center justify-center">
@@ -293,7 +293,7 @@ export const AgentsView: React.FC = () => {
                   <div className="space-y-1.5 mb-4">
                     <div className="flex items-center gap-1.5 text-[11px] text-claude-muted-light dark:text-claude-muted-dark">
                       <Cpu className="w-3.5 h-3.5 text-claude-accentInk" />
-                      <span className="font-mono">Model: {agent.modelPolicy?.model || 'aira-fast'}</span>
+                      <span>Model: <code className="font-mono">{agent.modelPolicy?.model || 'aira-fast'}</code></span>
                     </div>
                     <div className="flex items-center gap-1.5 text-[11px] text-claude-muted-light dark:text-claude-muted-dark">
                       <Wrench className="w-3.5 h-3.5 text-claude-accentInk" />
@@ -368,7 +368,7 @@ export const AgentsView: React.FC = () => {
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-lg rounded-2xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-2xl p-6"
+              className="w-full max-w-lg rounded-2xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-lg p-6"
             >
               <div className="flex items-center justify-between pb-4 border-b border-claude-border-light dark:border-claude-border-dark">
                 <h3 className="font-serif font-medium text-base">Create Autonomous Agent</h3>
@@ -421,7 +421,7 @@ export const AgentsView: React.FC = () => {
                   <textarea
                     required
                     rows={4}
-                    placeholder="Describe how the agent behaves, reasons, and executes tasks..."
+                    placeholder="Describe how the agent behaves, reasons, and executes tasks…"
                     value={formInstructions}
                     onChange={(e) => setFormInstructions(e.target.value)}
                     className="w-full px-3 py-2 rounded-xl text-xs font-mono bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark focus:outline-none focus:border-claude-terracotta resize-none"
@@ -473,7 +473,7 @@ export const AgentsView: React.FC = () => {
                     disabled={isSubmitting}
                     className="px-4 py-1.5 rounded-xl bg-claude-terracotta hover:opacity-90 text-white text-xs font-medium disabled:opacity-50"
                   >
-                    {isSubmitting ? 'Registering...' : 'Create Agent'}
+                    {isSubmitting ? 'Registering…' : 'Create Agent'}
                   </button>
                 </div>
               </form>
@@ -490,7 +490,7 @@ export const AgentsView: React.FC = () => {
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-xl max-h-[85vh] flex flex-col rounded-2xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-2xl p-6"
+              className="w-full max-w-xl max-h-[85vh] flex flex-col rounded-2xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-lg p-6"
             >
               <div className="flex items-center justify-between pb-4 border-b border-claude-border-light dark:border-claude-border-dark">
                 <div className="flex items-center gap-2">
@@ -515,7 +515,7 @@ export const AgentsView: React.FC = () => {
                     value={missionPrompt}
                     onChange={(e) => setMissionPrompt(e.target.value)}
                     className="w-full px-3 py-2 rounded-xl text-xs font-mono bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark focus:outline-none focus:border-claude-terracotta resize-none"
-                    placeholder="Enter mission prompt..."
+                    placeholder="Enter mission prompt…"
                   />
                 </div>
 
@@ -550,7 +550,7 @@ export const AgentsView: React.FC = () => {
                       {isExecutingMission ? (
                         <>
                           <RefreshCw className="w-3 h-3 animate-spin" />
-                          <span>Running Mission...</span>
+                          <span>Running Mission…</span>
                         </>
                       ) : (
                         <>

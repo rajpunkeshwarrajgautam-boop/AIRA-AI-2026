@@ -423,8 +423,8 @@ export const AgentContextualPanel: React.FC<AgentContextualPanelProps> = ({
                         <div className="font-medium text-claude-text-light dark:text-white truncate">
                           {f.title || f.path.split('/').pop()}
                         </div>
-                        <div className="text-[10px] text-claude-muted-light dark:text-slate-400 font-mono">
-                          {f.path} · {Math.ceil(f.bytes / 1024)} KB
+                        <div className="text-[10px] text-claude-muted-light dark:text-slate-400">
+                          <code className="font-mono">{f.path}</code> · <span>{Math.ceil(f.bytes / 1024)} KB</span>
                         </div>
                       </div>
                       <button
@@ -540,7 +540,7 @@ export const AgentContextualPanel: React.FC<AgentContextualPanelProps> = ({
               <div className="p-3.5 rounded-xl border border-claude-border-light dark:border-white/10 bg-white/40 dark:bg-white/[0.02] space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="font-semibold text-claude-text-light dark:text-white">Sandbox Permissions & Quotas</span>
-                  <span className="text-[10px] font-mono text-aira-gold bg-aira-gold/10 px-1.5 py-0.5 rounded">Gate Enforced</span>
+                  <span className="text-[10px] font-medium text-aira-gold bg-aira-gold/10 px-1.5 py-0.5 rounded">Gate Enforced</span>
                 </div>
 
                 <div className="p-2.5 rounded-lg bg-black/5 dark:bg-black/20 text-[11px] text-claude-muted-light dark:text-slate-300 space-y-1">

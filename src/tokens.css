@@ -61,7 +61,7 @@
   --color-muted: #6C6A64;
   --color-rule: #E6DFD8;
   --color-accent: #CC785C;
-  --color-accent-ink: #FAF9F5;
+  --color-accent-ink: #20120B;
   --color-focus: #CC785C;
 
   --font-display: "Copernicus", "Tiempos Headline", "Cormorant Garamond", "Newsreader", Georgia, serif;
@@ -324,6 +324,7 @@
 
 [data-theme="warm-parchment"] .bg-mesh-canvas {
   background-color: var(--bg-main);
+  color: var(--text-primary);
   background-image: 
     radial-gradient(at 15% 15%, rgba(186, 88, 47, 0.09) 0px, transparent 48%),
     radial-gradient(at 85% 85%, rgba(145, 68, 30, 0.07) 0px, transparent 52%),
@@ -334,6 +335,7 @@
 .dark[data-theme="warm-parchment"] .bg-mesh-canvas,
 .dark [data-theme="warm-parchment"] .bg-mesh-canvas {
   background-color: var(--bg-main);
+  color: var(--text-primary);
   background-image: 
     radial-gradient(at 15% 15%, rgba(212, 111, 68, 0.14) 0px, transparent 55%),
     radial-gradient(at 85% 85%, rgba(160, 71, 34, 0.1) 0px, transparent 60%),
@@ -381,6 +383,7 @@
 
 [data-theme="liquid-glass"] .bg-mesh-canvas {
   background-color: var(--bg-main);
+  color: var(--text-primary);
   background-image: 
     radial-gradient(at 15% 15%, rgba(2, 132, 199, 0.09) 0px, transparent 50%),
     radial-gradient(at 85% 85%, rgba(14, 165, 233, 0.08) 0px, transparent 52%),
@@ -391,6 +394,7 @@
 .dark[data-theme="liquid-glass"] .bg-mesh-canvas,
 .dark [data-theme="liquid-glass"] .bg-mesh-canvas {
   background-color: var(--bg-main);
+  color: var(--text-primary);
   background-image: 
     radial-gradient(at 15% 15%, rgba(56, 189, 248, 0.15) 0px, transparent 55%),
     radial-gradient(at 85% 85%, rgba(14, 165, 233, 0.1) 0px, transparent 60%),
@@ -449,6 +453,7 @@
 
 [data-theme="industrial-brutalist"] .bg-mesh-canvas {
   background-color: var(--bg-main);
+  color: var(--text-primary);
   background-image: 
     radial-gradient(at 15% 15%, rgba(255, 77, 0, 0.08) 0px, transparent 45%),
     radial-gradient(at 85% 85%, rgba(0, 0, 0, 0.05) 0px, transparent 55%),
@@ -458,6 +463,7 @@
 .dark[data-theme="industrial-brutalist"] .bg-mesh-canvas,
 .dark [data-theme="industrial-brutalist"] .bg-mesh-canvas {
   background-color: var(--bg-main);
+  color: var(--text-primary);
   background-image: 
     radial-gradient(at 15% 15%, rgba(255, 94, 26, 0.12) 0px, transparent 55%),
     radial-gradient(at 85% 85%, rgba(40, 40, 40, 0.8) 0px, transparent 60%);
@@ -514,6 +520,7 @@
 [data-theme="nordic-moss"] .bg-mesh-canvas,
 [data-theme="nordic-earth"] .bg-mesh-canvas {
   background-color: var(--bg-main);
+  color: var(--text-primary);
   background-image: 
     radial-gradient(at 15% 15%, rgba(46, 125, 82, 0.09) 0px, transparent 50%),
     radial-gradient(at 85% 85%, rgba(34, 99, 64, 0.06) 0px, transparent 52%),
@@ -526,6 +533,7 @@
 .dark[data-theme="nordic-earth"] .bg-mesh-canvas,
 .dark [data-theme="nordic-earth"] .bg-mesh-canvas {
   background-color: var(--bg-main);
+  color: var(--text-primary);
   background-image: 
     radial-gradient(at 15% 15%, rgba(74, 222, 128, 0.12) 0px, transparent 55%),
     radial-gradient(at 85% 85%, rgba(34, 197, 94, 0.08) 0px, transparent 60%),
@@ -581,6 +589,7 @@
 
 [data-theme="solar-gold"] .bg-mesh-canvas {
   background-color: var(--bg-main);
+  color: var(--text-primary);
   background-image: 
     radial-gradient(at 15% 15%, rgba(212, 160, 23, 0.1) 0px, transparent 48%),
     radial-gradient(at 85% 85%, rgba(184, 134, 11, 0.08) 0px, transparent 52%),
@@ -591,6 +600,7 @@
 .dark[data-theme="solar-gold"] .bg-mesh-canvas,
 .dark [data-theme="solar-gold"] .bg-mesh-canvas {
   background-color: var(--bg-main);
+  color: var(--text-primary);
   background-image: 
     radial-gradient(at 15% 15%, rgba(229, 185, 78, 0.15) 0px, transparent 55%),
     radial-gradient(at 85% 85%, rgba(180, 130, 20, 0.12) 0px, transparent 60%),
@@ -643,6 +653,7 @@
 
 [data-theme="tokyo-neon"] .bg-mesh-canvas {
   background-color: var(--bg-main);
+  color: var(--text-primary);
   background-image: 
     radial-gradient(at 15% 15%, rgba(219, 39, 119, 0.1) 0px, transparent 48%),
     radial-gradient(at 85% 85%, rgba(236, 72, 153, 0.08) 0px, transparent 52%),
@@ -652,6 +663,7 @@
 .dark[data-theme="tokyo-neon"] .bg-mesh-canvas,
 .dark [data-theme="tokyo-neon"] .bg-mesh-canvas {
   background-color: var(--bg-main);
+  color: var(--text-primary);
   background-image: 
     radial-gradient(at 15% 15%, rgba(219, 39, 119, 0.18) 0px, transparent 55%),
     radial-gradient(at 85% 85%, rgba(157, 23, 77, 0.14) 0px, transparent 60%),
@@ -717,6 +729,7 @@
 
 [data-theme="vanguard-monolith"] .bg-mesh-canvas {
   background-color: var(--bg-main);
+  color: var(--text-primary);
   background-image: 
     radial-gradient(at 15% 15%, rgba(0, 0, 0, 0.04) 0px, transparent 50%),
     radial-gradient(at 85% 85%, rgba(0, 0, 0, 0.03) 0px, transparent 52%);
@@ -725,6 +738,7 @@
 .dark[data-theme="vanguard-monolith"] .bg-mesh-canvas,
 .dark [data-theme="vanguard-monolith"] .bg-mesh-canvas {
   background-color: var(--bg-main);
+  color: var(--text-primary);
   background-image: 
     radial-gradient(at 15% 15%, rgba(255, 255, 255, 0.05) 0px, transparent 55%),
     radial-gradient(at 85% 85%, rgba(255, 255, 255, 0.03) 0px, transparent 60%);

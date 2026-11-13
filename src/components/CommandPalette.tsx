@@ -165,7 +165,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={reducedMotion ? { opacity: 0 } : { opacity: 0, y: -8, scale: 0.985 }}
             transition={reducedMotion ? { duration: 0.08 } : { type: 'spring', stiffness: 360, damping: 30 }}
-            className="w-full max-w-[620px] overflow-hidden rounded-[20px] border border-claude-border-light bg-white/95 shadow-2xl backdrop-blur-2xl dark:border-claude-border-dark dark:bg-stone-900/95 dark:shadow-2xl"
+            className="w-full max-w-[620px] overflow-hidden rounded-[20px] border border-claude-border-light bg-white/95 shadow-lg backdrop-blur-2xl dark:border-claude-border-dark dark:bg-stone-900/95 dark:shadow-lg"
           >
             <div className="flex items-center gap-3 border-b border-claude-border-light px-4 dark:border-claude-border-dark">
               <Search className="h-4 w-4 shrink-0 text-claude-muted-light dark:text-claude-muted-dark" />
@@ -228,9 +228,9 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                         <span className="mt-0.5 block truncate text-[11px] text-claude-muted-light dark:text-claude-muted-dark">{item.description}</span>
                       </span>
                       {item.id === 'new-chat' && (
-                        <span className="relative z-10 hidden items-center gap-1 text-[10px] font-mono text-claude-muted-light sm:flex dark:text-claude-muted-dark">
+                        <kbd className="relative z-10 hidden items-center gap-1 text-[10px] font-mono text-claude-muted-light sm:flex dark:text-claude-muted-dark">
                           <Command className="h-3 w-3" /> N
-                        </span>
+                        </kbd>
                       )}
                     </button>
                   ))}

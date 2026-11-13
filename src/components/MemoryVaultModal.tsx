@@ -157,7 +157,7 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.95, y: 16 }}
           transition={{ type: 'spring', stiffness: 350, damping: 28 }}
-          className="relative w-full max-w-4xl max-h-[88vh] flex flex-col rounded-2xl bg-claude-surface-light dark:bg-stone-900 border border-claude-border-light dark:border-claude-border-dark shadow-2xl overflow-hidden z-10 font-sans"
+          className="relative w-full max-w-4xl max-h-[88vh] flex flex-col rounded-2xl bg-claude-surface-light dark:bg-stone-900 border border-claude-border-light dark:border-claude-border-dark shadow-lg overflow-hidden z-10 font-sans"
         >
           {/* Header */}
           <div className="p-5 border-b border-claude-border-light dark:border-claude-border-dark flex items-center justify-between bg-claude-surface2-light/60 dark:bg-black/20">
@@ -205,14 +205,14 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
           {/* Telemetry & Controls Ribbon */}
           <div className="px-5 py-3 border-b border-claude-border-light dark:border-claude-border-dark flex flex-wrap items-center justify-between gap-3 text-xs bg-claude-surface-light dark:bg-stone-900">
             {/* Stats Metrics */}
-            <div className="flex items-center space-x-4 text-claude-muted-light dark:text-stone-400 font-mono text-[11px]">
+            <div className="flex items-center space-x-4 text-claude-muted-light dark:text-stone-400 font-medium text-[11px]">
               <span className="flex items-center gap-1.5">
                 <Layers className="w-3.5 h-3.5 text-claude-accentInk" />
-                <strong>{stats.totalCount}</strong> Memories
+                <strong className="font-mono">{stats.totalCount}</strong> Memories
               </span>
               <span className="hidden sm:inline-flex items-center gap-1.5">
                 <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                <strong>~{stats.tokensSavedEstimate}</strong> Tokens Saved
+                <strong className="font-mono">~{stats.tokensSavedEstimate}</strong> Tokens Saved
               </span>
               <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
                 <ShieldCheck className="w-3.5 h-3.5" />
@@ -442,13 +442,13 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
                             {mem.category}
                           </span>
                           {mem.score !== undefined && (
-                            <span className="text-[10px] font-mono text-claude-accentInk bg-claude-terracotta/10 px-1.5 py-0.2 rounded">
-                              Match: {(mem.score * 100).toFixed(0)}%
+                            <span className="text-[10px] font-medium text-claude-accentInk bg-claude-terracotta/10 px-1.5 py-0.2 rounded">
+                              Match: <span className="font-mono">{(mem.score * 100).toFixed(0)}%</span>
                             </span>
                           )}
                           {mem.accessCount > 0 && (
-                            <span className="text-[10px] font-mono text-claude-muted-light dark:text-stone-500">
-                              Accessed {mem.accessCount}x
+                            <span className="text-[10px] font-medium text-claude-muted-light dark:text-stone-500">
+                              Accessed <span className="font-mono">{mem.accessCount}</span>x
                             </span>
                           )}
                         </div>
@@ -531,7 +531,7 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: 10 }}
-                className="absolute bottom-16 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full bg-stone-900 border border-stone-700 text-white text-xs shadow-xl flex items-center gap-2 pointer-events-none z-50"
+                className="absolute bottom-16 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full bg-stone-900 border border-stone-700 text-white text-xs shadow-md flex items-center gap-2 pointer-events-none z-50"
               >
                 <Zap className="w-3.5 h-3.5 text-claude-accentInk" />
                 <span>{toastMessage}</span>

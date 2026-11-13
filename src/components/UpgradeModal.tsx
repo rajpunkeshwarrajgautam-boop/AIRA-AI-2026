@@ -242,7 +242,7 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
           exit={{ opacity: 0, scale: 0.95, y: 10 }}
           transition={{ type: 'spring', stiffness: 360, damping: 28 }}
           onClick={(e) => e.stopPropagation()}
-          className="relative w-full max-w-[358px] sm:max-w-lg rounded-2xl sm:rounded-[1.75rem] border border-claude-border-light dark:border-white/10 bg-claude-surface-light dark:bg-stone-900 shadow-2xl overflow-hidden flex flex-col my-auto text-claude-text-light dark:text-white"
+          className="relative w-full max-w-[358px] sm:max-w-lg rounded-2xl sm:rounded-[1.75rem] border border-claude-border-light dark:border-white/10 bg-claude-surface-light dark:bg-stone-900 shadow-lg overflow-hidden flex flex-col my-auto text-claude-text-light dark:text-white"
         >
           {/* Header Banner */}
           <div className="relative px-5 sm:px-6 pt-5 pb-4 border-b border-claude-border-light/80 dark:border-white/10 bg-gradient-to-br from-claude-terracotta/10 via-transparent to-transparent">
@@ -284,7 +284,7 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
                 <Clock className="w-4 h-4 shrink-0 text-amber-500" />
                 <span>Daily allowance resets in:</span>
               </div>
-              <span className="font-mono font-bold">{countdown} at 00:00 UTC</span>
+              <span className="font-medium font-bold"><span className="font-mono">{countdown}</span> at <span className="font-mono">00:00</span> UTC</span>
             </div>
           )}
 

@@ -171,7 +171,7 @@ export const WorkspaceFileExplorer: React.FC<WorkspaceFileExplorerProps> = ({
                 {isEntry && (
                   <span
                     title="Designated entrypoint"
-                    className="px-1 py-0.2 bg-amber-500/20 text-amber-400 font-mono text-xs rounded font-medium"
+                    className="px-1 py-0.2 bg-amber-500/20 text-amber-400 text-xs rounded font-medium"
                   >
                     Entry
                   </span>
@@ -316,18 +316,18 @@ export const WorkspaceFileExplorer: React.FC<WorkspaceFileExplorerProps> = ({
             <Sparkles className="w-3 h-3 text-cyan-400" />
             File Dependencies
           </span>
-          <span className="font-mono text-[10px] text-stone-500">
-            {activeFileDependencies.length} out / {activeFileInboundReferences.length} in
+          <span className="text-[10px] text-stone-500 font-medium">
+            <span className="font-mono">{activeFileDependencies.length}</span> out / <span className="font-mono">{activeFileInboundReferences.length}</span> in
           </span>
         </button>
 
         {showDependencyPanel && (
           <div
             data-testid="file-dependency-panel"
-            className="mt-1.5 p-2 bg-stone-950 border border-stone-800/80 rounded text-[10px] font-mono flex flex-col gap-1.5 max-h-36 overflow-y-auto"
+            className="mt-1.5 p-2 bg-stone-950 border border-stone-800/80 rounded text-[10px] flex flex-col gap-1.5 max-h-36 overflow-y-auto"
           >
             <div className="text-stone-400 font-semibold truncate border-b border-stone-800 pb-1">
-              {activeFilePath}
+              <span className="font-mono">{activeFilePath}</span>
             </div>
 
             {activeFileDependencies.length > 0 ? (
@@ -338,7 +338,7 @@ export const WorkspaceFileExplorer: React.FC<WorkspaceFileExplorerProps> = ({
                     key={idx}
                     className="flex items-center justify-between text-stone-300 gap-1 pl-1"
                   >
-                    <span className="truncate">{dep.rawSpecifier}</span>
+                    <span className="truncate font-mono">{dep.rawSpecifier}</span>
                     <span
                       className={`text-xs px-1 rounded font-medium ${
                         dep.isResolved ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'
@@ -358,7 +358,7 @@ export const WorkspaceFileExplorer: React.FC<WorkspaceFileExplorerProps> = ({
                 <span className="text-stone-500 text-xs text-stone-400 font-medium">Imported By:</span>
                 {activeFileInboundReferences.map((ref, idx) => (
                   <div key={idx} className="text-stone-400 truncate pl-1">
-                    ← {ref.sourcePath}
+                    ← <span className="font-mono">{ref.sourcePath}</span>
                   </div>
                 ))}
               </div>

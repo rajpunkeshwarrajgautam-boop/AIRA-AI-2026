@@ -420,8 +420,8 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                       >
                         <ChevronLeft className="h-3 w-3" />
                       </button>
-                      <span className="px-1 font-mono text-[10px] text-claude-text-light dark:text-claude-text-dark" data-testid="artifact-carousel-indicator">
-                        {currentArtifactIndex + 1} of {allArtifacts.length}
+                      <span className="px-1 font-medium text-[10px] text-claude-text-light dark:text-claude-text-dark" data-testid="artifact-carousel-indicator">
+                        <span className="font-mono">{currentArtifactIndex + 1}</span> of <span className="font-mono">{allArtifacts.length}</span>
                       </span>
                       <button
                         type="button"
@@ -783,7 +783,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                   {isGenerating ? (
                     <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center text-claude-muted-light dark:text-claude-muted-dark" aria-live="polite">
                       <span className="h-2.5 w-2.5 rounded-full bg-aira-blue animate-pulse" aria-hidden="true" />
-                      <p className="text-sm font-medium">Generating artifact...</p>
+                      <p className="text-sm font-medium">Generating artifact…</p>
                       <p className="max-w-xs text-xs leading-relaxed">{currentContent.length.toLocaleString()} characters received. The sandbox preview starts when generation completes; select Code to inspect the stream.</p>
                     </div>
                   ) : isMultiModal && selectedFile ? (
@@ -903,7 +903,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                         <div className="text-stone-400 text-xs font-mono">{selectedFile.path} • {selectedFile.kind.toUpperCase()}</div>
                         <div className="text-stone-500 text-[11px]">Binary multi-modal asset ({selectedFile.sizeBytes || selectedFile.content.length} bytes)</div>
                         <div className="mt-3 p-3 bg-stone-950 rounded text-[11px] text-stone-400 break-all text-left max-h-36 overflow-auto border border-stone-800/60">
-                          {selectedFile.content.slice(0, 300)}...
+                          {selectedFile.content.slice(0, 300)}…
                         </div>
                       </div>
                     </div>

@@ -167,7 +167,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
         initial={{ opacity: 0, scale: 0.96 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.96 }}
-        className="relative w-full max-w-4xl rounded-2xl bg-aira-navy border border-white/10 text-white shadow-2xl overflow-hidden my-6 flex flex-col max-h-[90vh]"
+        className="relative w-full max-w-4xl rounded-2xl bg-aira-navy border border-white/10 text-white shadow-lg overflow-hidden my-6 flex flex-col max-h-[90vh]"
       >
         {/* Header */}
         <div className="p-5 md:p-6 border-b border-white/10 flex items-center justify-between shrink-0 bg-stone-900/50">

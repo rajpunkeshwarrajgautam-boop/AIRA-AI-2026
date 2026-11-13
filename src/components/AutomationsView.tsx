@@ -200,8 +200,8 @@ export const AutomationsView: React.FC = () => {
               <Workflow className="w-4 h-4" />
             </div>
             <h1 className="text-xl font-serif font-medium tracking-tight">Workflow Automations</h1>
-            <span className="text-xs px-2 py-0.5 rounded-full font-mono bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-              {automations.filter(a => a.enabled).length} Active
+            <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+              <span className="font-mono">{automations.filter(a => a.enabled).length}</span> Active
             </span>
           </div>
           <p className="text-xs text-claude-muted-light dark:text-claude-muted-dark mt-1">
@@ -239,7 +239,7 @@ export const AutomationsView: React.FC = () => {
         {loading ? (
           <div className="flex flex-col items-center justify-center py-20 text-claude-muted-light dark:text-claude-muted-dark">
             <RefreshCw className="w-6 h-6 animate-spin text-claude-accentInk mb-2" />
-            <p className="text-xs">Loading workflow schedules...</p>
+            <p className="text-xs">Loading workflow schedules…</p>
           </div>
         ) : automations.length === 0 ? (
           <div className="text-center py-20 flex flex-col items-center justify-center">
@@ -291,14 +291,14 @@ export const AutomationsView: React.FC = () => {
                       {auto.objective}
                     </p>
 
-                    <div className="flex flex-wrap items-center gap-4 pt-1 text-[11px] font-mono text-claude-muted-light dark:text-claude-muted-dark">
+                    <div className="flex flex-wrap items-center gap-4 pt-1 text-[11px] font-medium text-claude-muted-light dark:text-claude-muted-dark">
                       <div className="flex items-center gap-1.5">
                         <Calendar className="w-3.5 h-3.5 text-claude-accentInk" />
-                        <span>Schedule: {formatScheduleText(auto.cronExpression)}</span>
+                        <span>Schedule: <span className="font-mono">{formatScheduleText(auto.cronExpression)}</span></span>
                       </div>
                       <div className="flex items-center gap-1.5">
                         <Activity className="w-3.5 h-3.5 text-claude-accentInk" />
-                        <span>Agent: {auto.agentId}</span>
+                        <span>Agent: <code className="font-mono">{auto.agentId}</code></span>
                       </div>
                     </div>
                   </div>
@@ -355,7 +355,7 @@ export const AutomationsView: React.FC = () => {
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-lg rounded-2xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-2xl p-6"
+              className="w-full max-w-lg rounded-2xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-lg p-6"
             >
               <div className="flex items-center justify-between pb-4 border-b border-claude-border-light dark:border-claude-border-dark">
                 <h3 className="font-serif font-medium text-base">Schedule New Automation</h3>
@@ -444,7 +444,7 @@ export const AutomationsView: React.FC = () => {
                   <textarea
                     required
                     rows={4}
-                    placeholder="Describe the tasks and telemetry that this automation executes on trigger..."
+                    placeholder="Describe the tasks and telemetry that this automation executes on trigger…"
                     value={formObjective}
                     onChange={(e) => setFormObjective(e.target.value)}
                     className="w-full px-3 py-2 rounded-xl text-xs font-mono bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark focus:outline-none focus:border-claude-terracotta resize-none"
@@ -464,7 +464,7 @@ export const AutomationsView: React.FC = () => {
                     disabled={isSubmitting}
                     className="px-4 py-1.5 rounded-xl bg-claude-terracotta hover:opacity-90 text-white text-xs font-medium disabled:opacity-50"
                   >
-                    {isSubmitting ? 'Scheduling...' : 'Save Automation'}
+                    {isSubmitting ? 'Scheduling…' : 'Save Automation'}
                   </button>
                 </div>
               </form>
@@ -481,7 +481,7 @@ export const AutomationsView: React.FC = () => {
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-xl max-h-[85vh] flex flex-col rounded-2xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-2xl p-6"
+              className="w-full max-w-xl max-h-[85vh] flex flex-col rounded-2xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-lg p-6"
             >
               <div className="flex items-center justify-between pb-4 border-b border-claude-border-light dark:border-claude-border-dark">
                 <div className="flex items-center gap-2">
@@ -498,7 +498,7 @@ export const AutomationsView: React.FC = () => {
 
               <div className="flex-1 overflow-y-auto py-4 space-y-2.5">
                 {runsLoading ? (
-                  <div className="text-center py-10 text-xs text-claude-muted-light">Loading runs...</div>
+                  <div className="text-center py-10 text-xs text-claude-muted-light">Loading runs…</div>
                 ) : runs.length === 0 ? (
                   <div className="text-center py-10 text-xs text-claude-muted-light">
                     No runs recorded yet for this automation.

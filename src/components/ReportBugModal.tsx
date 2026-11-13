@@ -205,7 +205,7 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.96, y: 8 }}
         transition={{ duration: 0.18, ease: 'easeOut' }}
-        className="w-full max-w-2xl max-h-[90vh] flex flex-col bg-claude-surface-light dark:bg-stone-900 border border-claude-border-light dark:border-white/10 rounded-2xl shadow-2xl overflow-hidden"
+        className="w-full max-w-2xl max-h-[90vh] flex flex-col bg-claude-surface-light dark:bg-stone-900 border border-claude-border-light dark:border-white/10 rounded-2xl shadow-lg overflow-hidden"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-claude-border-light dark:border-white/10 bg-claude-surface2-light/60 dark:bg-white/[0.02]">
@@ -409,11 +409,11 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
                 </div>
 
                 {includeDiagnostics && (
-                  <div className="text-[11px] font-mono text-claude-muted-light dark:text-claude-muted-dark bg-claude-surface-light dark:bg-black/20 p-2.5 rounded-lg border border-claude-border-light/50 dark:border-white/5 space-y-0.5">
-                    <div>Browser / Platform: {diagnostics.platform}</div>
-                    <div>Screen Viewport: {diagnostics.screenSize}</div>
-                    <div>Theme & Preset: {diagnostics.activeTheme} / {diagnostics.aestheticPreset}</div>
-                    <div>Active Model: {diagnostics.activeModel}</div>
+                  <div className="text-[11px] font-medium text-claude-muted-light dark:text-claude-muted-dark bg-claude-surface-light dark:bg-black/20 p-2.5 rounded-lg border border-claude-border-light/50 dark:border-white/5 space-y-0.5">
+                    <div>Browser / Platform: <code className="font-mono">{diagnostics.platform}</code></div>
+                    <div>Screen Viewport: <code className="font-mono">{diagnostics.screenSize}</code></div>
+                    <div>Theme & Preset: <code className="font-mono">{diagnostics.activeTheme} / {diagnostics.aestheticPreset}</code></div>
+                    <div>Active Model: <code className="font-mono">{diagnostics.activeModel}</code></div>
                   </div>
                 )}
               </div>
@@ -448,7 +448,7 @@ export const ReportBugModal: React.FC<ReportBugModalProps> = ({
                   className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-bold transition-colors duration-150 shadow-sm active:scale-98"
                 >
                   {isSubmitting ? (
-                    <span>Recording...</span>
+                    <span>Recording…</span>
                   ) : (
                     <>
                       <Send className="w-3.5 h-3.5" />
