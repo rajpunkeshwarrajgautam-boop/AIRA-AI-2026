@@ -127,7 +127,7 @@ export interface McpOperationOptions {
  * Local integration fixtures remain available outside production.
  */
 export function assertApprovedPublicMcpDestination(
-  url: URL,
+  url?: URL,
   _approvedHosts = process.env.AIRA_APPROVED_MCP_HOSTS || ''
 ): void {
   if (!(process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL))) return;
@@ -424,15 +424,16 @@ export class McpHost {
       } else {
         if (!config.url) throw new Error(`MCP Server with id ${serverId} requires an HTTP URL.`);
 
-        // Security Gate 1: Comprehensive SSRF & DNS Rebinding Validation
+        // Production connections are disabled: reject BEFORE parsing or
+        // resolving caller-supplied hosts, so a disabled route cannot cause
+        // outbound DNS requests or progress to an SDK-managed redirect.
+        assertApprovedPublicMcpDestination();
+
+        // Local/non-production MCP integration fixtures retain SSRF validation.
         const validation = await validateMcpUrl(config.url, {
           allowLocalInDev: process.env.NODE_ENV !== 'production' || process.env.AIRA_ALLOW_LOCAL_MCP === 'true'
         });
         const parsedUrl = validation.safeUrl;
-
-        // An allowlist reduces exposure but does not replace network-layer
-        // connection-time egress enforcement against DNS rebinding.
-        assertApprovedPublicMcpDestination(parsedUrl);
 
         const headers = config.headers || {};
         if (config.transport === 'sse') {
