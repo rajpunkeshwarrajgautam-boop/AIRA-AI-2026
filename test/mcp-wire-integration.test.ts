@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { McpHost } from '../packages/mcp/src/index.js';
+import { McpHost, validateMcpUrl, McpSecurityError } from '../packages/mcp/src/index.js';
 import { createTestMcpServer } from '../packages/mcp/src/test-server.js';
 import { ToolGateway } from '../packages/tool-runtime/src/gateway.js';
 import { InMemoryToolCallRepository } from '../packages/tool-runtime/src/repository.js';
@@ -80,7 +80,9 @@ test('Mission D — Real Wire MCP Server Integration, Tool Discovery, and Securi
     assert.equal(connectResult, false, 'Connection to non-HTTP/HTTPS protocol must fail');
 
     const status = mcpHost.getServerStatus('srv_malicious_proto');
-    assert.ok(status?.lastError?.includes('Only http and https are allowed'));
+    assert.equal(status?.lastError, 'MCP_CONNECTION_FAILED', 'Public status must never expose raw transport error details');
+    await assert.rejects(() => validateMcpUrl('file:///tmp/forbidden'),
+      (err: any) => err instanceof McpSecurityError && err.code === 'FORBIDDEN_PROTOCOL');
   });
 
   await t.test('4. Clean Disconnection, Tool Unregistration, and Teardown', async () => {
