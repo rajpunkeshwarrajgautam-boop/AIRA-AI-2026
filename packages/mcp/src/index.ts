@@ -115,6 +115,22 @@ export interface McpOperationOptions {
   isOperator?: boolean;
 }
 
+/** Fail closed for public HTTP MCP egress until an operator approves a host. */
+export function assertApprovedPublicMcpDestination(
+  url: URL,
+  approvedHosts = process.env.AIRA_APPROVED_MCP_HOSTS || ''
+): void {
+  if (!(process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL))) return;
+  const approved = new Set(approvedHosts.split(',')
+    .map(host => host.trim().toLowerCase()).filter(Boolean));
+  if (url.protocol !== 'https:' || !approved.has(url.hostname.toLowerCase())) {
+    throw new McpSecurityError(
+      'Remote MCP connections are unavailable until the destination is approved by the platform operator.',
+      'MCP_EGRESS_NOT_APPROVED', 403
+    );
+  }
+}
+
 /** A gateway tool cannot cross user ownership merely because its name is global. */
 export function isMcpToolInvocationAuthorized(
   config: McpServerConfig | undefined,
@@ -404,20 +420,9 @@ export class McpHost {
         });
         const parsedUrl = validation.safeUrl;
 
-        // Public runtime egress is fail-closed until approved hosts and
-        // infrastructure network controls are configured. A one-time DNS
-        // lookup alone cannot prevent a later connection-time DNS rebind.
-        const isPublicRuntime = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
-        if (isPublicRuntime) {
-          const approved = new Set((process.env.AIRA_APPROVED_MCP_HOSTS || '')
-            .split(',').map(host => host.trim().toLowerCase()).filter(Boolean));
-          if (parsedUrl.protocol !== 'https:' || !approved.has(parsedUrl.hostname.toLowerCase())) {
-            throw new McpSecurityError(
-              'Remote MCP connections are unavailable until the destination is approved by the platform operator.',
-              'MCP_EGRESS_NOT_APPROVED', 403
-            );
-          }
-        }
+        // An allowlist reduces exposure but does not replace network-layer
+        // connection-time egress enforcement against DNS rebinding.
+        assertApprovedPublicMcpDestination(parsedUrl);
 
         const headers = config.headers || {};
         if (config.transport === 'sse') {
