@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { McpHost, McpSecurityError, validateMcpUrl } from '../packages/mcp/src/index.js';
+import { McpHost, McpSecurityError, validateMcpUrl, isMcpToolInvocationAuthorized, assertApprovedPublicMcpDestination } from '../packages/mcp/src/index.js';
 import { ToolGateway, InMemoryToolCallRepository } from '../packages/tool-runtime/src/index.js';
 
 test('SEC-01 & SEC-02: MCP Management Authorization and Tenant Isolation', async (t) => {
@@ -322,4 +322,69 @@ test('SEC-03: MCP Network Access and SSRF Protection', async (t) => {
     assert.strictEqual(result.safeUrl.hostname, 'api.github.com');
     assert.ok(result.resolvedIps.length > 0);
   });
+});
+
+
+test('SEC-01/02 follow-up: platform MCP resources are operator-only from user-owned management routes', async () => {
+  const host = new McpHost(new ToolGateway(new InMemoryToolCallRepository()));
+  host.registerServer({
+    id: 'platform_managed', name: 'Platform MCP', transport: 'stdio',
+    command: 'node', args: ['--version']
+  }, { ownerId: 'platform', isOperator: true });
+
+  assert.equal(host.listServers('ordinary_user', false).length, 0);
+  assert.equal(host.getServerStatus('platform_managed', { ownerId: 'ordinary_user' }), undefined);
+  assert.throws(() => host.unregisterServer('platform_managed', { ownerId: 'ordinary_user' }),
+    (e: any) => e instanceof McpSecurityError && e.code === 'FORBIDDEN');
+  await assert.rejects(() => host.connectServer('platform_managed', { ownerId: 'ordinary_user' }),
+    (e: any) => e instanceof McpSecurityError && e.code === 'FORBIDDEN');
+  assert.throws(() => host.getServerConfig('platform_managed', { ownerId: 'ordinary_user' }),
+    (e: any) => e instanceof McpSecurityError && e.code === 'FORBIDDEN');
+  assert.throws(() => host.registerServer({
+    id: 'platform_managed', name: 'Replacement', transport: 'streamable_http',
+    url: 'https://public.example/mcp'
+  }, { ownerId: 'ordinary_user', isOperator: false }),
+    (e: any) => e instanceof McpSecurityError && e.code === 'TENANT_ISOLATION_VIOLATION');
+});
+
+test('SEC-02 follow-up: MCP summaries never expose URL userinfo, query secrets or raw paths', () => {
+  const host = new McpHost(new ToolGateway(new InMemoryToolCallRepository()));
+  host.registerServer({
+    id: 'private_url', name: 'Remote', transport: 'streamable_http',
+    url: 'https://username:password@service.example/secret/endpoint?api_key=sensitive#fragment',
+    headers: { Authorization: 'Bearer secret' }
+  }, { ownerId: 'owner_a' });
+  const summary = host.listServers('owner_a')[0];
+  assert.equal(summary.url, 'https://service.example');
+  assert.equal(JSON.stringify(summary).includes('sensitive'), false);
+  assert.equal(JSON.stringify(summary).includes('password'), false);
+  assert.equal(JSON.stringify(summary).includes('Bearer secret'), false);
+  assert.equal(host.listServers('owner_b').length, 0);
+});
+
+test('SEC-02 follow-up: execution-time MCP tool ownership applies even to globally registered names', () => {
+  const tenant = { id: 's', name: 'S', transport: 'streamable_http' as const, ownerId: 'owner_a' };
+  assert.equal(isMcpToolInvocationAuthorized(tenant, { userId: 'owner_a' }), true);
+  assert.equal(isMcpToolInvocationAuthorized(tenant, { userId: 'owner_b' }), false);
+  assert.equal(isMcpToolInvocationAuthorized(tenant), false);
+  const platform = { ...tenant, ownerId: 'platform', isPlatform: true, transport: 'stdio' as const };
+  assert.equal(isMcpToolInvocationAuthorized(platform, { userId: 'customer' }), false);
+  assert.equal(isMcpToolInvocationAuthorized(platform, { userId: 'admin', roles: ['operator'] }), true);
+});
+
+test('SEC-03 follow-up: public-runtime HTTP MCP egress is disabled without operator-approved host', () => {
+  const oldNodeEnv = process.env.NODE_ENV;
+  try {
+    process.env.NODE_ENV = 'production';
+    assert.throws(() => assertApprovedPublicMcpDestination(new URL('https://service.example/mcp'), ''),
+      (e: any) => e instanceof McpSecurityError && e.code === 'MCP_EGRESS_NOT_APPROVED');
+    assert.throws(() => assertApprovedPublicMcpDestination(new URL('http://service.example/mcp'), 'service.example'),
+      (e: any) => e instanceof McpSecurityError && e.code === 'MCP_EGRESS_NOT_APPROVED');
+    assert.doesNotThrow(() => assertApprovedPublicMcpDestination(new URL('https://service.example/mcp'), 'service.example'));
+    assert.throws(() => assertApprovedPublicMcpDestination(new URL('https://wrong.example/mcp'), 'service.example'),
+      (e: any) => e instanceof McpSecurityError && e.code === 'MCP_EGRESS_NOT_APPROVED');
+  } finally {
+    if (oldNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = oldNodeEnv;
+  }
 });
