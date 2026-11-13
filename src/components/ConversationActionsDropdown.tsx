@@ -6,7 +6,8 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 interface ConversationActionsDropdownProps {
   conversationId: string;
   isPinned?: boolean;
-  onToggleStar: () => void;
+  onToggleBookmark?: () => void;
+  onToggleStar?: () => void;
   onRename: () => void;
   onDuplicate: () => void;
   onShare: () => void | Promise<void>;
@@ -26,6 +27,7 @@ const VIEWPORT_GUTTER = 8;
 export const ConversationActionsDropdown: React.FC<ConversationActionsDropdownProps> = ({
   conversationId,
   isPinned,
+  onToggleBookmark,
   onToggleStar,
   onRename,
   onDuplicate,
@@ -123,7 +125,7 @@ export const ConversationActionsDropdown: React.FC<ConversationActionsDropdownPr
       id: 'bookmark',
       label: isPinned ? 'Remove bookmark' : 'Bookmark',
       icon: Bookmark,
-      action: onToggleStar,
+      action: onToggleBookmark || onToggleStar || (() => {}),
     },
     { id: 'share', label: 'Share', icon: Share2, action: onShare },
   ] as const;

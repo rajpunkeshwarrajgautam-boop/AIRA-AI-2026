@@ -856,7 +856,8 @@ useEffect(() => {
   };
 
   const handleRenameChat = (id: string, title: string) => updateConversation(id, c => ({ ...c, title, updatedAt: Date.now() }));
-  const handleToggleStar = (id: string) => updateConversation(id, c => ({ ...c, isPinned: !c.isPinned, updatedAt: Date.now() }));
+  const handleToggleBookmark = (id: string) => updateConversation(id, c => ({ ...c, isPinned: !c.isPinned, updatedAt: Date.now() }));
+  const handleToggleStar = handleToggleBookmark;
 
   const handleDuplicateChat = (id: string) => {
     const source = conversations.find(c => c.id === id);
@@ -1522,7 +1523,11 @@ useEffect(() => {
               if (error.includes('PLAN_MODEL_RESTRICTED')) {
                 handleTriggerUpgrade('flagship_model');
               } else if (error.includes('PLAN_CAPABILITY_RESTRICTED')) {
-                handleTriggerUpgrade('pro_tools_agent');
+                if (error.toLowerCase().includes('sandbox') || error.toLowerCase().includes('browser') || error.toLowerCase().includes('python')) {
+                  handleTriggerUpgrade('plus_to_pro_tool');
+                } else {
+                  handleTriggerUpgrade('agent_mode');
+                }
               } else if (error.includes('429') || error.toLowerCase().includes('quota') || error.toLowerCase().includes('limit')) {
                 handleTriggerUpgrade(userTier === 'guest' ? 'guest_limit' : 'quota_exhausted');
               }
@@ -1626,6 +1631,7 @@ useEffect(() => {
           onNewChat={handleNewChat}
           onDeleteChat={handleDeleteChat}
           onRenameChat={handleRenameChat}
+          onToggleBookmark={handleToggleBookmark}
           onToggleStar={handleToggleStar}
           onDuplicateChat={handleDuplicateChat}
           onShareChat={handleShareChat}

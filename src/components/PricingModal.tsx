@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Check, Sparkles, Shield, Zap, CreditCard, ChevronRight, HelpCircle } from 'lucide-react';
+import { X, Check, Shield, Zap, CreditCard, ChevronRight, HelpCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { COMMERCIAL_PLANS, PlanTier, CurrencyCode } from '../types/commercial-types';
 
@@ -63,7 +63,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
         <div className="p-6 md:p-8 border-b border-white/10 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-orange-500/10 border border-orange-500/20 text-orange-400 text-xs font-semibold mb-2">
-              <Sparkles className="w-3.5 h-3.5" />
+              <Shield className="w-3.5 h-3.5" />
               AIRA AI 2026 Commercial Plans
             </div>
             <h2 className="text-2xl md:text-3xl font-serif font-medium text-white">Choose the plan that fits your ambition</h2>

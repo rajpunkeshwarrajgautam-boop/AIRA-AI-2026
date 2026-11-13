@@ -15,8 +15,8 @@ import {
   CreditCard,
   Keyboard,
   Eye,
-  Sparkles,
   Lock,
+  Layers,
   Zap,
   Clock,
   ArrowRight,
@@ -662,7 +662,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                       <div className="flex items-center gap-3">
                         <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-white shadow-sm shrink-0 ${activePlanId === "pro" ? "bg-aira-blue" : activePlanId === "plus" ? "bg-claude-terracotta" : activePlanId === "free" ? "bg-emerald-600" : "bg-stone-600"}`}>
-                          {activePlanId === 'pro' ? <Zap className="w-5 h-5" /> : activePlanId === 'plus' ? <Sparkles className="w-5 h-5" /> : <ShieldCheck className="w-5 h-5" />}
+                          {activePlanId === 'pro' ? <Zap className="w-5 h-5" /> : activePlanId === 'plus' ? <Layers className="w-5 h-5" /> : <ShieldCheck className="w-5 h-5" />}
                         </div>
                         <div>
                           <div className="flex items-center gap-2">
@@ -701,7 +701,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             type="button"
                             onClick={() => {
                               if (onTriggerUpgrade) {
-                                onTriggerUpgrade(activePlanId === 'free' ? 'flagship_model' : 'pro_tools_agent');
+                                onTriggerUpgrade(activePlanId === 'free' ? 'free_to_plus_model' : 'plus_to_pro_tool');
                               } else if (onOpenPricing) {
                                 onClose();
                                 onOpenPricing();
@@ -709,7 +709,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             }}
                             className="px-3.5 py-2 rounded-xl bg-claude-terracotta hover:bg-claude-terracotta-hover text-white text-xs font-bold transition-colors motion-reduce:transition-none shadow-sm flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99]"
                           >
-                            <Sparkles className="w-3.5 h-3.5" />
+                            <Zap className="w-3.5 h-3.5" />
                             <span>Upgrade Tier</span>
                           </button>
                         ) : (
@@ -930,7 +930,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   type="button"
                                   onClick={() => {
                                     if (onTriggerUpgrade) {
-                                      onTriggerUpgrade(tierKey === 'pro' ? 'pro_tools_agent' : 'flagship_model');
+                                      onTriggerUpgrade(tierKey === 'pro' ? 'plus_to_pro_tool' : 'free_to_plus_model');
                                     } else if (onOpenPricing) {
                                       onClose();
                                       onOpenPricing();

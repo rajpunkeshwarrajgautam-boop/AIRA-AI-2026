@@ -9,7 +9,6 @@ import {
   BrainCircuit,
   FileText,
   Clock,
-  Sparkles,
   RefreshCw,
   AlertCircle,
   Database,

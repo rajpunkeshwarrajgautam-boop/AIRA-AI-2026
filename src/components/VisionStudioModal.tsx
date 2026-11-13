@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { X, Image, Sparkles, Upload, Download, RefreshCw, Wand2, Eye, Sliders, CheckCircle, AlertCircle } from 'lucide-react';
+import { X, Image, Upload, Download, RefreshCw, Wand2, Eye, Sliders, CheckCircle, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { VisionAspectRatio, VisionQuality, VisionResolution } from '../types/commercial-types';
 
@@ -192,7 +192,7 @@ export const VisionStudioModal: React.FC<VisionStudioModalProps> = ({
         <div className="p-5 md:p-6 border-b border-white/10 flex items-center justify-between shrink-0 bg-stone-900/40">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-aira-blue flex items-center justify-center">
-              <Sparkles className="w-5 h-5 text-white" />
+              <Eye className="w-5 h-5 text-white" />
             </div>
             <div>
               <h2 className="text-xl font-medium tracking-tight text-white flex items-center gap-2">

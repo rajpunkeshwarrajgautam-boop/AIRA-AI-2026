@@ -72,7 +72,7 @@ export const VERIFIED_MODEL_REGISTRY: Record<string, ModelCapabilityDescriptor> 
   },
   'nvidia/llama-3.1-nemotron-70b-instruct': {
     id: 'nvidia/llama-3.1-nemotron-70b-instruct',
-    displayName: 'Nemotron 70B (NVIDIA)',
+    displayName: 'Nemotron 70B',
     provider: 'nvidia',
     upstreamModelId: 'nvidia/llama-3.1-nemotron-70b-instruct',
     minTier: 'plus',
@@ -80,7 +80,7 @@ export const VERIFIED_MODEL_REGISTRY: Record<string, ModelCapabilityDescriptor> 
     supportsThinking: false,
     reasoningControl: 'output_cap_only',
     description: 'Experimental NVIDIA NIM integration (subject to account-level function provisioning; automatic Groq/Gemini failover).',
-    badge: 'NVIDIA'
+    badge: 'NVIDIA (Exp)'
   },
   // Backward compatibility migration aliases for historical conversation sessions
   'claude-3-7-sonnet': {

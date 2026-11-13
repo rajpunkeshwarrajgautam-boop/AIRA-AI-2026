@@ -3,7 +3,7 @@ import {
   X,
   CreditCard,
   Shield,
-  Sparkles,
+  Zap,
   RefreshCw,
   LogOut,
   Layers,
@@ -289,7 +289,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
                     }}
                     className="px-5 py-2.5 rounded-lg bg-aira-blue hover:opacity-90 text-white text-xs font-medium transition-opacity duration-150 flex items-center justify-center gap-2"
                   >
-                    <Sparkles className="w-3.5 h-3.5" />
+                    <Zap className="w-3.5 h-3.5" />
                     Change or Upgrade Plan
                   </button>
                 </div>

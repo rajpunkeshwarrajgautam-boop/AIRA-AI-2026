@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Sparkles,
   Zap,
   Shield,
   Bot,
@@ -22,8 +21,17 @@ export type UpgradeTrigger =
   | 'guest_chat_limit'
   | 'flagship_model'
   | 'free_to_plus_model'
+  | 'agent_mode'
+  | 'agent'
+  | 'free_to_plus_agent'
+  | 'autonomous_agents'
+  | 'autonomous_agent'
   | 'pro_tools_agent'
   | 'plus_to_pro_tool'
+  | 'pro_tools_sandbox'
+  | 'pro_tools_browser'
+  | 'python_sandbox'
+  | 'browser_tools'
   | 'quota_exhausted'
   | 'quota_exhaustion'
   | string;
@@ -74,16 +82,15 @@ export function getUpgradeModalConfig(trigger: UpgradeTrigger | null | undefined
 
   if (norm === 'flagship_model' || norm === 'free_to_plus_model') {
     return {
-      title: 'Unlock NVIDIA Nemotron 70B & Advanced Models',
-      subtitle: 'Flagship reasoning and instruction-following models require AIRA Plus or Pro.',
-      description: 'Upgrade to AIRA Plus to run high-fidelity models like NVIDIA Nemotron 70B, deep architectural reasoning, and extended context with 50 chats per day.',
+      title: 'Unlock AIRA Plus & Expanded Models',
+      subtitle: 'High-throughput models and extended daily compute require AIRA Plus or Pro.',
+      description: 'Upgrade to AIRA Plus for 50 chats per day, AIRA Pro model quality, reasoning controls, Vision Studio, and 3,000 monthly credits.',
       recommendedTier: 'plus',
       ctaText: 'Upgrade to Plus',
       features: [
-        '50 Chats/Day',
-        'Reasoning Boosts',
-        'Expanded Models',
-        '3,000 Monthly Premium Credits',
+        '50 Chats/Day with 3,000 monthly credits',
+        'AIRA Pro model quality & reasoning controls',
+        'Experimental NVIDIA Nemotron 70B access',
         'AIRA Vision Studio (Generate & Edit)',
         '10 Projects & 250 Memories',
       ],
@@ -92,21 +99,54 @@ export function getUpgradeModalConfig(trigger: UpgradeTrigger | null | undefined
     };
   }
 
-  if (norm === 'pro_tools_agent' || norm === 'plus_to_pro_tool') {
+  if (
+    norm === 'agent_mode' ||
+    norm === 'agent' ||
+    norm === 'free_to_plus_agent' ||
+    norm === 'autonomous_agents' ||
+    norm === 'autonomous_agent'
+  ) {
     return {
-      title: 'Supercharge with AIRA Pro Tools',
-      subtitle: 'Live sandboxes, browser automation, and autonomous agents require AIRA Pro.',
-      description: 'AIRA Pro gives engineers isolated Python code execution, browser automation tools, autonomous multi-step agents, and 2 concurrent inference streams.',
+      title: 'Unlock Autonomous Agent Missions with Plus',
+      subtitle: 'Multi-step goal execution and workflow automation are available on AIRA Plus.',
+      description: 'Upgrade to AIRA Plus to run autonomous agent missions, save up to 3 custom agents, and enjoy 50 daily chats with verified reasoning.',
+      recommendedTier: 'plus',
+      ctaText: 'Upgrade to Plus',
+      features: [
+        'Autonomous multi-step agent execution',
+        '3 Saved custom agent definitions',
+        '50 Standard Chats / Day',
+        '3,000 Monthly Premium Credits',
+        'AIRA Vision Studio (Generate & Edit)',
+        '10 Project workspaces & 250 Memories',
+      ],
+      showResetTimer: false,
+      upgradeOptions: ['plus', 'pro'],
+    };
+  }
+
+  if (
+    norm === 'pro_tools_sandbox' ||
+    norm === 'pro_tools_browser' ||
+    norm === 'plus_to_pro_tool' ||
+    norm === 'python_sandbox' ||
+    norm === 'browser_tools' ||
+    norm === 'pro_tools_agent'
+  ) {
+    return {
+      title: 'Execute with Live Sandboxes & Browser Tools',
+      subtitle: 'Isolated Python code execution and web browser automation require AIRA Pro.',
+      description: 'AIRA Pro provides isolated Python sandbox runtimes, headless browser tools, up to 20 saved agents, 150 daily chats, and 2 concurrent inference streams.',
       recommendedTier: 'pro',
       ctaText: 'Upgrade to Pro',
       features: [
-        'Browser Automation',
-        'Python Sandbox',
-        'Autonomous Agents',
+        'Isolated Python sandbox code execution',
+        'Headless web browser automation tools',
+        '20 Saved custom agent definitions',
         '150 Standard Chats / Day',
         '7,500 Monthly Premium Credits',
         '200 Complimentary Reasoning Boosts',
-        '2 Concurrent Inference Permits',
+        '2 Concurrent inference streams',
         'Unlimited Projects & Memories',
       ],
       showResetTimer: false,
@@ -249,7 +289,7 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-2.5">
                 <div className="p-2 rounded-xl bg-claude-terracotta text-white shadow-sm shrink-0">
-                  <Sparkles className="w-4 h-4" />
+                  {config.recommendedTier === 'pro' ? <Zap className="w-4 h-4" /> : config.recommendedTier === 'plus' ? <Bot className="w-4 h-4" /> : <Shield className="w-4 h-4" />}
                 </div>
                 <div>
                   <h3 id="upgrade-modal-title" className="text-base sm:text-lg font-bold tracking-tight text-claude-text-light dark:text-white flex items-center gap-2">

@@ -5,7 +5,9 @@ import {
   Settings, 
   HelpCircle, 
   LogOut, 
-  Sparkles, 
+  Zap,
+  Bell,
+  Activity, 
   ChevronRight, 
   ShieldCheck, 
   Sliders, 
@@ -377,7 +379,7 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
                     }}
                     className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-aira-blue/10 hover:bg-aira-blue/20 text-aira-blue dark:text-aira-cyan text-[11px] font-bold transition-colors shrink-0"
                   >
-                    <Sparkles className="w-3 h-3" />
+                    <Zap className="w-3 h-3" />
                     <span>Manage Plan</span>
                   </button>
                 </div>
@@ -419,7 +421,7 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
                     }}
                     className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl border border-claude-border-light dark:border-white/10 text-claude-text-light dark:text-white font-semibold text-[11px] hover:bg-claude-surface2-light dark:hover:bg-white/5 transition-colors"
                   >
-                    <Sparkles className="w-3 h-3 text-claude-accentInk" />
+                    <ShieldCheck className="w-3.5 h-3.5 text-claude-accentInk" />
                     <span>View Plan & Limits</span>
                   </button>
                 </div>
@@ -438,7 +440,7 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
                 }}
                 className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left hover:bg-claude-surface2-light dark:hover:bg-white/5 transition-colors group"
               >
-                <Sparkles className="w-4 h-4 text-claude-muted-light group-hover:text-claude-accentInk transition-colors" />
+                <Activity className="w-4 h-4 text-claude-muted-light group-hover:text-claude-accentInk transition-colors" />
                 <span className="flex-1 font-medium">My Plan & Usage</span>
                 <span className="text-[10px] text-claude-muted-light">Meters</span>
               </button>
@@ -522,7 +524,7 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
                   }}
                   className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left text-aira-blue hover:bg-aira-blue/10 transition-colors font-medium"
                 >
-                  <Sparkles className="w-4 h-4" />
+                  <CreditCard className="w-4 h-4" />
                   <span>View Subscription Plans</span>
                 </button>
               )}
@@ -563,7 +565,7 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
                 }}
                 className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left hover:bg-claude-surface2-light dark:hover:bg-white/5 transition-colors group"
               >
-                <Sparkles className="w-4 h-4 text-amber-500 shrink-0" />
+                <Bell className="w-4 h-4 text-amber-500 shrink-0" />
                 <span className="flex-1 font-medium">What’s New</span>
                 {typeof unreadAnnouncementsCount === 'number' && unreadAnnouncementsCount > 0 && (
                   <span

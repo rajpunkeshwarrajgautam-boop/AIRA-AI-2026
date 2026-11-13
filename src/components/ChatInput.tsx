@@ -266,7 +266,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                     return;
                   }
                   if (userTier === 'free') {
-                    onTriggerUpgrade?.('pro_tools_agent');
+                    onTriggerUpgrade?.('agent_mode');
                     return;
                   }
                   onWorkspaceModeChange('agent');

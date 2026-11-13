@@ -71,6 +71,14 @@ export const MotionStudioModal: React.FC<MotionStudioModalProps> = ({
     setProgress(0);
   }, []);
 
+  const handleTimelineSeek = useCallback((totalSeconds: number) => {
+    const clamped = Math.max(0, Math.min(29.99, totalSeconds));
+    const newSceneIndex = Math.floor(clamped / 5);
+    const newProgress = (clamped % 5) / 5;
+    setCurrentSceneIndex(newSceneIndex);
+    setProgress(newProgress);
+  }, []);
+
   const handlePrevScene = useCallback(() => {
     setCurrentSceneIndex((idx) => (idx - 1 + totalScenes) % totalScenes);
     setProgress(0);
@@ -120,7 +128,7 @@ const MainSequence = () => {
         <SceneFastRouting />
       </Sequence>
       <Sequence from={300} durationInFrames={150}>
-        <SceneNemotronReasoning />
+        <SceneDeepReasoning />
       </Sequence>
       <Sequence from={450} durationInFrames={150}>
         <SceneOnboardingTour />
@@ -163,15 +171,15 @@ const MainSequence = () => {
       >
         {/* Studio Top Navigation Chrome */}
         <header className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-studio-rule)] bg-[var(--color-studio-paper-2)] select-none">
-          <div className="flex items-center space-x-3">
-            <h1 id="motion-studio-title" className="text-sm font-semibold tracking-tight text-[var(--color-studio-ink)] flex items-center gap-2">
-            <span className="flex items-center space-x-1.5 px-2 py-0.5 text-xs font-medium bg-[var(--color-studio-paper-3)] border border-[var(--color-studio-rule-2)] text-[var(--color-studio-accent)]">
+          <div className="flex items-center space-x-3 min-w-0">
+            <span className="flex items-center space-x-1.5 px-2.5 py-1 text-xs font-semibold bg-[var(--color-studio-paper-3)] border border-[var(--color-studio-rule-2)] text-[var(--color-studio-accent)] shrink-0">
               <Film className="w-3.5 h-3.5" />
               <span>Motion Studio</span>
             </span>
+            <h1 id="motion-studio-title" className="text-sm font-semibold tracking-tight text-[var(--color-studio-ink)] whitespace-nowrap truncate">
               AIRA AI 2026 Feature Showcase
             </h1>
-            <span className="hidden sm:inline-block px-1.5 py-0.5 text-[11px] font-mono bg-[var(--color-studio-paper)] border border-[var(--color-studio-rule)] text-[var(--color-studio-muted)]">
+            <span className="hidden sm:inline-block px-2 py-0.5 text-[11px] font-mono bg-[var(--color-studio-paper)] border border-[var(--color-studio-rule)] text-[var(--color-studio-muted)] shrink-0">
               {timecodeString}
             </span>
           </div>
@@ -255,35 +263,35 @@ const MainSequence = () => {
         {/* Studio Content Area */}
         <div className="flex-1 flex flex-col overflow-hidden bg-[var(--color-studio-paper)]">
           {activeTab === 'player' && (
-            <div className="flex-1 flex flex-col items-center justify-center p-3 sm:p-6 overflow-hidden">
+            <div className="flex-1 w-full flex flex-col items-center justify-center p-2 sm:p-4 overflow-hidden min-h-0">
               {/* Motion Canvas Stage */}
               <div
-                className={`relative w-full overflow-hidden border border-[var(--color-studio-rule)] bg-black shadow-lg flex flex-col justify-between transition-transform duration-300 motion-reduce:transition-none ${
+                className={`relative w-full overflow-hidden border border-[var(--color-studio-rule)] bg-black shadow-2xl flex flex-col justify-between transition-transform duration-300 motion-reduce:transition-none ${
                   aspectRatio === '16:9'
-                    ? 'max-w-4xl aspect-video'
+                    ? 'max-w-5xl aspect-video max-h-full'
                     : aspectRatio === '9:16'
-                    ? 'max-w-sm aspect-[9/16]'
-                    : 'max-w-md aspect-square'
+                    ? 'max-w-sm aspect-[9/16] max-h-full'
+                    : 'max-w-xl aspect-square max-h-full'
                 }`}
               >
                 {/* Scene Background Artwork / Visual Screenshot */}
-                <div className="absolute inset-0 z-0">
+                <div className="absolute inset-0 z-0 overflow-hidden bg-black flex items-center justify-center">
                   <img
                     src={scene.screenshotUrl}
                     alt={scene.title}
-                    className="w-full h-full object-cover object-top opacity-35 filter contrast-125 brightness-90 transition-opacity duration-500"
+                    className="w-full h-full object-cover object-top opacity-90 filter contrast-[1.08] brightness-95 transition-opacity duration-300"
                   />
-                  <div className="absolute inset-0 bg-gradient-to-t from-[var(--color-studio-paper)] via-[var(--color-studio-paper)]/75 to-transparent" />
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/40 to-black/30 pointer-events-none" />
                 </div>
 
                 {/* Top Scene Marker Header */}
-                <div className="relative z-10 flex items-center justify-between p-4 sm:p-6">
+                <div className="relative z-10 flex items-center justify-between p-3 sm:p-4 bg-gradient-to-b from-black/80 to-transparent">
                   <div className="flex items-center space-x-2">
-                    <span className="px-2 py-0.5 text-xs font-mono border border-[var(--color-studio-rule-2)] bg-[var(--color-studio-paper-2)]/90 text-[var(--color-studio-accent)]">
+                    <span className="px-2.5 py-0.5 text-xs font-mono font-semibold border border-[var(--color-studio-rule-2)] bg-[var(--color-studio-paper-2)]/90 text-[var(--color-studio-accent)] rounded">
                       {scene.badge}
                     </span>
-                    <span className="text-xs font-medium text-[var(--color-studio-muted)]">
-                      Scene <span className="font-mono">{currentSceneIndex + 1}</span> of <span className="font-mono">{totalScenes}</span>
+                    <span className="text-xs font-medium text-stone-300 bg-black/60 px-2.5 py-0.5 rounded backdrop-blur-sm">
+                      Scene <span className="font-mono text-white">{currentSceneIndex + 1}</span> of <span className="font-mono text-white">{totalScenes}</span>
                     </span>
                   </div>
 
@@ -291,38 +299,40 @@ const MainSequence = () => {
                     href="https://aira-ai-2026.vercel.app"
                     target="_blank"
                     rel="noreferrer"
-                    className="flex items-center space-x-1 text-xs font-medium text-[var(--color-studio-accent)] hover:underline"
+                    className="flex items-center space-x-1.5 text-xs font-medium text-[var(--color-studio-accent)] hover:underline bg-black/60 px-2.5 py-1 rounded backdrop-blur-sm transition-colors"
                   >
                     <span>aira-ai-2026.vercel.app</span>
-                    <ExternalLink className="w-3 h-3" />
+                    <ExternalLink className="w-3.5 h-3.5" />
                   </a>
                 </div>
 
-                {/* Animated Core Content Center */}
-                <div className="relative z-10 px-4 sm:px-8 py-2 flex flex-col justify-end">
-                  <div className="max-w-xl space-y-2">
-                    <h2 className="studio-head-display text-2xl sm:text-4xl text-[var(--color-studio-ink)] font-light">
+                {/* Frosted Glass Lower Third Card */}
+                <div className="relative z-10 p-3 sm:p-5 m-2 sm:m-4 rounded-xl bg-black/85 backdrop-blur-md border border-white/15 shadow-xl space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[10px] sm:text-[11px] font-mono tracking-wider uppercase text-[var(--color-studio-accent)] font-semibold">
+                      {scene.subtitle}
+                    </span>
+                    <span className="text-[11px] font-mono text-stone-400">
+                      {scene.timecode}
+                    </span>
+                  </div>
+                  <h2 className="studio-head-display text-lg sm:text-2xl text-white font-normal leading-snug">
                     {scene.headline}
                   </h2>
-                  <p className="text-xs font-medium text-[var(--color-studio-muted)]">
-                    {scene.subtitle}
+                  <p className="text-xs sm:text-sm text-stone-300 leading-relaxed line-clamp-2">
+                    {scene.statement}
                   </p>
-                    <p className="text-xs sm:text-sm text-[var(--color-studio-ink-2)] line-clamp-2 leading-relaxed">
-                      {scene.statement}
-                    </p>
-                  </div>
 
                   {/* Real Metrics Grid */}
                   {scene.metrics && scene.metrics.length > 0 && (
-                    <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-2 pt-3 border-t border-[var(--color-studio-rule)]">
+                    <div className="pt-2 flex flex-wrap items-center gap-2 border-t border-white/10">
                       {scene.metrics.map((m, i) => (
-                        <div key={i} className="flex flex-col">
-                          <span className="text-xs font-medium text-[var(--color-studio-muted)]">
-                            {m.label}
-                          </span>
-                          <span className="text-xs sm:text-sm font-semibold text-[var(--color-studio-ink)]">
-                            {m.value}
-                          </span>
+                        <div
+                          key={i}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/5 border border-white/10 text-xs"
+                        >
+                          <span className="text-stone-400 font-medium">{m.label}:</span>
+                          <span className="text-white font-mono font-semibold">{m.value}</span>
                         </div>
                       ))}
                     </div>
@@ -330,9 +340,9 @@ const MainSequence = () => {
                 </div>
 
                 {/* Scene In-Canvas Scrubber Indicator */}
-                <div className="relative z-10 w-full h-1 bg-[var(--color-studio-rule)]">
+                <div className="relative z-10 w-full h-1 bg-white/10">
                   <div
-                    className="h-full bg-[var(--color-studio-accent)] transition-opacity duration-75"
+                    className="h-full bg-[var(--color-studio-accent)] transition-all duration-75"
                     style={{ width: `${progress * 100}%` }}
                   />
                 </div>
@@ -341,7 +351,7 @@ const MainSequence = () => {
           )}
 
           {activeTab === 'storyboard' && (
-            <div className="flex-1 p-6 overflow-y-auto">
+            <div className="flex-1 p-4 sm:p-6 pb-16 overflow-y-auto">
               <div className="max-w-5xl mx-auto space-y-6">
                 <div>
                   <h2 className="studio-head-display text-xl text-[var(--color-studio-ink)]">
@@ -440,7 +450,8 @@ export const AIRA_SHOWCASE_COMPOSITION: React.FC = () => {
         canonicalUrl: 'https://aira-ai-2026.vercel.app',
         contextWindow: '128K tokens',
         primaryInferenceEngine: 'Groq LPU (openai/gpt-oss-120b)',
-        reasoningEngine: 'NVIDIA Nemotron 70B (llama-3.1-nemotron-70b-instruct)'
+        failoverEngine: 'Gemini 3.5 Flash-Lite (1M Context)',
+        reasoningEngine: 'Groq Reasoning Effort with Gemini failover (NVIDIA Nemotron 70B experimental)'
       }}
     />
   );
@@ -459,9 +470,9 @@ const AiraTrailerTimeline = () => {
         <SceneCard title="AIRA Fast" headline="Groq LPU & Gemini Failover" badge="Groq LPU" />
       </Sequence>
 
-      {/* Scene 3: NVIDIA Nemotron 70B Calibrated Reasoning (10-15s) */}
+      {/* Scene 3: Deep Reasoning with Calibrated Bounds (10-15s) */}
       <Sequence from={300} durationInFrames={150}>
-        <SceneCard title="Nemotron 70B" headline="Calibrated 1k-8k Tokens" badge="Reasoning" />
+        <SceneCard title="Deep Reasoning" headline="Calibrated Token Bounds & Effort" badge="Reasoning" />
       </Sequence>
 
       {/* Scene 4: Account-Scoped Onboarding Tour (15-20s) */}
@@ -488,10 +499,10 @@ const AiraTrailerTimeline = () => {
         </div>
 
         {/* Studio Bottom Timeline & Transport Strip */}
-        <footer className="border-t border-[var(--color-studio-rule)] bg-[var(--color-studio-paper-2)] p-3 select-none">
-          {/* Timeline Track with Scene Segments */}
-          <div className="max-w-5xl mx-auto space-y-2">
-            <div className="grid grid-cols-6 gap-1.5">
+        <footer className="border-t border-[var(--color-studio-rule)] bg-[var(--color-studio-paper-2)] p-3 sm:p-4 select-none shrink-0">
+          {/* Timeline Track with Scene Segments & Interactive Scrubber */}
+          <div className="max-w-5xl mx-auto space-y-2.5">
+            <div className="grid grid-cols-6 gap-2">
               {SHOWCASE_SCENES.map((sc, idx) => {
                 const isCurrent = currentSceneIndex === idx;
                 const isPassed = currentSceneIndex > idx;
@@ -501,20 +512,24 @@ const AiraTrailerTimeline = () => {
                   <button
                     key={sc.id}
                     onClick={() => handleSeekScene(idx)}
-                    className="group flex flex-col text-left focus-visible:outline-none"
+                    className={`group flex flex-col text-left p-1.5 rounded-lg border transition-all ${
+                      isCurrent
+                        ? 'border-[var(--color-studio-accent)] bg-[var(--color-studio-paper-3)]'
+                        : 'border-[var(--color-studio-rule)] bg-[var(--color-studio-paper)] hover:border-[var(--color-studio-rule-2)]'
+                    }`}
                     aria-label={`Jump to ${sc.title}`}
                   >
-                    <div className="w-full h-1.5 bg-[var(--color-studio-paper-3)] border border-[var(--color-studio-rule)] overflow-hidden">
+                    <div className="w-full h-1.5 bg-black/40 border border-white/5 rounded-full overflow-hidden">
                       <div
-                        className="h-full bg-[var(--color-studio-accent)] transition-opacity duration-75"
+                        className="h-full bg-[var(--color-studio-accent)] transition-all duration-75"
                         style={{ width: `${sceneProgress * 100}%` }}
                       />
                     </div>
-                    <div className="flex items-center justify-between mt-1">
+                    <div className="flex items-center justify-between mt-1 min-w-0">
                       <span
-                        className={`text-[10px] font-mono truncate ${
+                        className={`text-[11px] font-mono truncate ${
                           isCurrent
-                            ? 'text-[var(--color-studio-accent)] font-semibold'
+                            ? 'text-[var(--color-studio-accent)] font-bold'
                             : 'text-[var(--color-studio-muted)] group-hover:text-[var(--color-studio-ink)]'
                         }`}
                       >
@@ -526,12 +541,28 @@ const AiraTrailerTimeline = () => {
               })}
             </div>
 
+            {/* Interactive Timeline Scrubber Slider */}
+            <div className="flex items-center gap-3 px-1">
+              <span className="text-[11px] font-mono text-stone-400">00:00</span>
+              <input
+                type="range"
+                min="0"
+                max="29.99"
+                step="0.05"
+                value={currentTotalSeconds}
+                onChange={(e) => handleTimelineSeek(parseFloat(e.target.value))}
+                aria-label="Timeline scrubber"
+                className="flex-1 h-2 bg-stone-800 rounded-lg appearance-none cursor-pointer accent-[var(--color-studio-accent)]"
+              />
+              <span className="text-[11px] font-mono text-stone-400">00:30</span>
+            </div>
+
             {/* Transport Controls Bar */}
             <div className="flex items-center justify-between pt-1">
               <div className="flex items-center space-x-2">
                 <button
                   onClick={handlePrevScene}
-                  className="p-1.5 text-[var(--color-studio-muted)] hover:text-[var(--color-studio-ink)] transition-colors"
+                  className="p-2 sm:p-2.5 rounded-lg bg-[var(--color-studio-paper-3)] border border-[var(--color-studio-rule)] text-[var(--color-studio-muted)] hover:text-white transition-colors"
                   aria-label="Previous Scene"
                 >
                   <ChevronLeft className="w-4 h-4" />
@@ -539,15 +570,16 @@ const AiraTrailerTimeline = () => {
 
                 <button
                   onClick={handleTogglePlay}
-                  className="p-2 bg-[var(--color-studio-accent)] text-[var(--color-studio-accent-ink)] hover:bg-[var(--color-studio-ink)] transition-colors"
+                  className="p-2 sm:p-2.5 px-3.5 rounded-lg bg-[var(--color-studio-accent)] text-[var(--color-studio-accent-ink)] hover:opacity-90 font-bold transition-all shadow-md flex items-center gap-1.5"
                   aria-label={isPlaying ? 'Pause' : 'Play'}
                 >
                   {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                  <span className="text-xs font-semibold">{isPlaying ? 'Pause' : 'Play'}</span>
                 </button>
 
                 <button
                   onClick={handleNextScene}
-                  className="p-1.5 text-[var(--color-studio-muted)] hover:text-[var(--color-studio-ink)] transition-colors"
+                  className="p-2 sm:p-2.5 rounded-lg bg-[var(--color-studio-paper-3)] border border-[var(--color-studio-rule)] text-[var(--color-studio-muted)] hover:text-white transition-colors"
                   aria-label="Next Scene"
                 >
                   <ChevronRight className="w-4 h-4" />
@@ -555,10 +587,10 @@ const AiraTrailerTimeline = () => {
 
                 <button
                   onClick={handleRestart}
-                  className="p-1.5 text-[var(--color-studio-muted)] hover:text-[var(--color-studio-ink)] transition-colors"
+                  className="p-2 sm:p-2.5 rounded-lg bg-[var(--color-studio-paper-3)] border border-[var(--color-studio-rule)] text-[var(--color-studio-muted)] hover:text-white transition-colors"
                   aria-label="Restart Timeline"
                 >
-                  <RotateCcw className="w-3.5 h-3.5" />
+                  <RotateCcw className="w-4 h-4" />
                 </button>
 
                 <span className="text-xs font-mono text-[var(--color-studio-ink-2)] ml-2">
@@ -574,7 +606,7 @@ const AiraTrailerTimeline = () => {
                     <button
                       key={spd}
                       onClick={() => setPlaybackSpeed(spd)}
-                      className={`px-1.5 py-0.5 text-[11px] font-medium transition-colors ${
+                      className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
                         playbackSpeed === spd
                           ? 'bg-[var(--color-studio-paper-3)] text-[var(--color-studio-accent)] font-bold'
                           : 'text-[var(--color-studio-muted)] hover:text-[var(--color-studio-ink)]'
@@ -588,7 +620,7 @@ const AiraTrailerTimeline = () => {
                 {/* Audio toggle */}
                 <button
                   onClick={() => setIsMuted(!isMuted)}
-                  className="p-1.5 text-[var(--color-studio-muted)] hover:text-[var(--color-studio-ink)] transition-colors"
+                  className="p-2 rounded-lg bg-[var(--color-studio-paper-3)] text-[var(--color-studio-muted)] hover:text-[var(--color-studio-ink)] transition-colors"
                   aria-label={isMuted ? 'Unmute Audio' : 'Mute Audio'}
                 >
                   {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
@@ -598,7 +630,7 @@ const AiraTrailerTimeline = () => {
                   href="https://aira-ai-2026.vercel.app"
                   target="_blank"
                   rel="noreferrer"
-                  className="studio-btn studio-btn-primary text-xs flex items-center space-x-1"
+                  className="studio-btn studio-btn-primary text-xs flex items-center space-x-1.5 px-3 py-1.5 rounded-lg font-bold"
                 >
                   <span>Launch Live</span>
                   <ExternalLink className="w-3 h-3" />

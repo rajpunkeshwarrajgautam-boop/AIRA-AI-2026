@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Sparkles,
   MessageSquare,
   Bot,
   Sliders,
@@ -11,7 +10,8 @@ import {
   Zap,
   Code,
   ShieldCheck,
-  Compass
+  Compass,
+  ArrowRight
 } from 'lucide-react';
 import type { PlanTier } from '../../packages/contracts/src/index';
 import {
@@ -160,7 +160,7 @@ export const OnboardingWalkthrough: React.FC<OnboardingWalkthroughProps> = ({
           {currentStage === 'intro' && (
             <div className="space-y-4 animate-in fade-in duration-300">
               <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-aira-blue/20 to-cyan-500/20 text-aira-blue dark:text-cyan-400 flex items-center justify-center shadow-inner">
-                <Sparkles className="w-7 h-7" />
+                <Compass className="w-7 h-7" />
               </div>
               <div>
                 <h3 className="text-2xl font-bold text-stone-900 dark:text-white">
@@ -396,7 +396,7 @@ export const OnboardingWalkthrough: React.FC<OnboardingWalkthroughProps> = ({
               className="inline-flex items-center gap-1.5 px-5 py-2 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 shadow-sm transition-colors duration-150"
             >
               <span>Get Started</span>
-              <Sparkles className="w-4 h-4" />
+              <ArrowRight className="w-4 h-4" />
             </button>
           )}
         </div>
