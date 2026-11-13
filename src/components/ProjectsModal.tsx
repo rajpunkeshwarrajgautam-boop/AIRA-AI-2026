@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { FolderGit2, Plus, X, Trash2, FileText } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { Project, ProjectDoc } from '../types';
@@ -24,6 +24,15 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
   const [docs, setDocs] = useState<ProjectDoc[]>([]);
   const [docName, setDocName] = useState('');
   const [docContent, setDocContent] = useState('');
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   const addDoc = () => {
     if (!docName.trim() || !docContent.trim()) return;
@@ -88,6 +97,7 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={onClose} 
+                aria-label="Close projects"
                 className="p-2 rounded-xl hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark text-claude-muted-light dark:text-claude-muted-dark transition-colors"
               >
                 <X className="w-5 h-5" />

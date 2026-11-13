@@ -39,6 +39,23 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Aira AI" />
+    <script>
+      (function() {
+        try {
+          var raw = localStorage.getItem('aira_device_preferences_v1') || localStorage.getItem('aira_app_settings_v1');
+          var theme = 'light';
+          var preset = 'linear-precision';
+          if (raw) {
+            var parsed = JSON.parse(raw);
+            if (parsed.theme) theme = parsed.theme;
+            if (parsed.aestheticPreset) preset = parsed.aestheticPreset;
+          }
+          var isDark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          if (isDark) document.documentElement.classList.add('dark');
+          if (preset && preset !== 'default') document.documentElement.dataset.theme = preset;
+        } catch(e) {}
+      })();
+    </script>
 
     <!-- AIRA Brand Identity & Favicon Suite -->
     <link id="aira-favicon" rel="icon" type="image/svg+xml" href="/favicon.svg" />

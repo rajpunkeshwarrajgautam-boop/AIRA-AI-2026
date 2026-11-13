@@ -189,3 +189,20 @@ $ npm run test:product-quality
 ## 8. Final Audit Verdict
 
 **PRODUCTION UX AND FUNCTIONAL AUDIT — COMPLETED AND VERIFIED**
+
+---
+
+## 9. Dated Commercial & Entitlement Correction (2026-11-13)
+
+### A. Authoritative Pricing Status (Preview Mode)
+- **Correction**: Section 4 (Defect 3) of this audit previously cited informal exploratory price tags (`$20/month` for AIRA Plus, `$50/month` for AIRA Pro). 
+- **Contract Reality**: Per the authoritative source of truth in `packages/contracts/src/commercial.ts` and `src/components/PricingModal.tsx`, all paid tiers (`plus`, `pro`) remain in **Preview Mode** with empty price arrays (`prices: []`).
+- **Commercial Checkout**: Commercial payment checkout is disabled pending formal owner attestation and verified merchant gateway integration. No active pricing of $20/mo or $50/mo is currently binding or offered for automated checkout.
+
+### B. Autonomous Agent Quota & Entitlement Boundaries
+- **Correction**: No tier provides "unlimited" autonomous agent execution. All agent compute is strictly metered, rate-limited, and quota-bounded:
+  - **Guest**: No autonomous execution (`allowAutonomous: false`). 5 trial chats/day, 0 credits, 0 saved agents.
+  - **Free**: No autonomous execution (`allowAutonomous: false`). 15 chats/day, 150 monthly units, 100 monthly credits, 5 reasoning boosts, 0 saved agents, 3 projects, 50 memories.
+  - **Plus**: Bounded autonomous missions (`allowAutonomous: true`), quota-limited to 50 chats/day, 700 monthly units, 3,000 monthly credits, 50 reasoning boosts, 3 saved custom agents, 10 projects, 250 memories. Browser automation and Python sandbox tools are strictly disabled (`allowBrowserTools: false`, `allowPythonSandbox: false`).
+  - **Pro**: Advanced agent missions (`allowAutonomous: true`), quota-limited to 150 chats/day, 2,000 monthly units, 7,500 monthly credits, 200 reasoning boosts, 20 saved custom agents, 2 concurrent inferences, with Pro-exclusive browser automation and Python sandbox enabled (`allowBrowserTools: true`, `allowPythonSandbox: true`).
+- **Historical Record**: The historical audit narrative above is preserved in full as originally recorded, and this section serves as the authoritative, dated correction.
