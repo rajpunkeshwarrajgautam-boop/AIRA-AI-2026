@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { McpHost, McpSecurityError, validateMcpUrl, isMcpToolInvocationAuthorized, assertApprovedPublicMcpDestination } from '../packages/mcp/src/index.js';
 import { ToolGateway, InMemoryToolCallRepository } from '../packages/tool-runtime/src/index.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 
 test('SEC-01 & SEC-02: MCP Management Authorization and Tenant Isolation', async (t) => {
   const toolGateway = new ToolGateway(new InMemoryToolCallRepository());
@@ -471,5 +472,56 @@ test('SEC-03: connection policy denials remain errors and never expose transport
     else process.env.NODE_ENV = previousNodeEnv;
     if (previousVercel === undefined) delete process.env.VERCEL;
     else process.env.VERCEL = previousVercel;
+  }
+});
+
+test('MCP execution failures cannot return credential-bearing SDK exception messages', async () => {
+  // Stub the SDK handshake to reach the real registered MCP execution adapter.
+  // No network request is made; the injected exception represents an untrusted
+  // remote SDK error containing a sensitive server URL and authorization value.
+  const clientPrototype = Client.prototype as any;
+  const originalConnect = clientPrototype.connect;
+  const originalListTools = clientPrototype.listTools;
+  const originalCallTool = clientPrototype.callTool;
+  const originalNodeEnv = process.env.NODE_ENV;
+  const originalVercel = process.env.VERCEL;
+  try {
+    process.env.NODE_ENV = 'test';
+    delete process.env.VERCEL;
+    clientPrototype.connect = async () => {};
+    clientPrototype.listTools = async () => ({
+      tools: [{ name: 'thrower', inputSchema: { type: 'object', properties: {} } }]
+    });
+    clientPrototype.callTool = async () => {
+      throw new Error('Remote request failed: https://alice:password@service.example/mcp?token=remote-secret Authorization: Bearer remote-secret');
+    };
+
+    const gateway = new ToolGateway(new InMemoryToolCallRepository());
+    const host = new McpHost(gateway);
+    host.registerServer({
+      id: 'exception_redaction',
+      name: 'Redaction regression fixture',
+      transport: 'streamable_http',
+      url: 'http://127.0.0.1:31337/mcp'
+    }, { ownerId: 'owner_a' });
+    assert.equal(await host.connectServer('exception_redaction', { ownerId: 'owner_a' }), true);
+
+    const tool = gateway.getTool('mcp_exception_redaction_thrower');
+    assert.ok(tool, 'MCP remote tool adapter should be registered');
+    const result = await tool.execute({}, { principal: { userId: 'owner_a' }, runId: 'mcp-test' } as any);
+    assert.equal(result.isError, true);
+    assert.equal(result.error, 'MCP_TOOL_EXECUTION_FAILED');
+    assert.equal(result.output, null);
+    assert.equal(result.untrustedExternalData, true);
+    assert.equal(JSON.stringify(result).includes('remote-secret'), false);
+    assert.equal(JSON.stringify(result).includes('password'), false);
+  } finally {
+    clientPrototype.connect = originalConnect;
+    clientPrototype.listTools = originalListTools;
+    clientPrototype.callTool = originalCallTool;
+    if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = originalNodeEnv;
+    if (originalVercel === undefined) delete process.env.VERCEL;
+    else process.env.VERCEL = originalVercel;
   }
 });
