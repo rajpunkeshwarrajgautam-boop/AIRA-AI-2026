@@ -22,21 +22,21 @@
 
 ## Executive Summary
 
-Eleven findings from the independent production architecture and security audit dated 2026-11-13 were investigated, confirmed, root-caused, corrected, and verified with integration tests. Three findings are classified as **release-blocking security** (SEC-01, SEC-02, SEC-03). All findings are now **FIXED AND VERIFIED**.
+Eleven audit findings have source-level remediation and automated regression coverage. **This is not a completed production certification.** SEC-01 and SEC-02 require genuine deployed and authenticated cross-account acceptance; SEC-03 is currently **INTENTIONALLY RESTRICTED** because public-runtime remote HTTP/SSE MCP connections fail closed pending connection-time egress enforcement. UX/API/OPS/security-header findings still require deployed functional verification. Previous automated test results below are historical evidence, not current-head release approval.
 
 | ID | Category | Severity | Status |
 |----|----------|----------|--------|
-| SEC-01 | Unauthorized MCP stdio command execution | **CRITICAL** | ✅ FIXED AND VERIFIED |
-| SEC-02 | MCP credential exposure and tenant isolation | **HIGH** | ✅ FIXED AND VERIFIED |
-| SEC-03 | MCP SSRF protection incomplete | **HIGH** | ✅ FIXED AND VERIFIED |
-| UX-01 | Guest Agent mode misleading messaging | Medium | ✅ FIXED AND VERIFIED |
-| UX-02 | Model upgrade routing misclassification | Medium | ✅ FIXED AND VERIFIED |
-| UX-03 | Inconsistent Agent entry-point gating | Medium | ✅ FIXED AND VERIFIED |
-| API-01 | Entitlement API hardcoded Pro tier override | Medium | ✅ FIXED AND VERIFIED |
-| UX-04 | Incorrect Help Center and model claims | Low | ✅ FIXED AND VERIFIED |
-| UX-05 | Billing/entitlement loading state silent fallback | Medium | ✅ FIXED AND VERIFIED |
-| OPS-01 | Fake ONLINE health reporting | Medium | ✅ FIXED AND VERIFIED |
-| HARDEN-01 | Missing HTTP security headers | Medium | ✅ FIXED AND VERIFIED |
+| SEC-01 | Unauthorized MCP stdio command execution | **CRITICAL** | **CODE CORRECTED — LIVE ACCEPTANCE PENDING** |
+| SEC-02 | MCP credential exposure and tenant isolation | **HIGH** | **CODE CORRECTED — LIVE ACCEPTANCE PENDING** |
+| SEC-03 | MCP SSRF protection incomplete | **HIGH** | **INTENTIONALLY RESTRICTED — REMOTE MCP DISABLED** |
+| UX-01 | Guest Agent mode misleading messaging | Medium | **CODE CORRECTED — LIVE ACCEPTANCE PENDING** |
+| UX-02 | Model upgrade routing misclassification | Medium | **CODE CORRECTED — LIVE ACCEPTANCE PENDING** |
+| UX-03 | Inconsistent Agent entry-point gating | Medium | **CODE CORRECTED — LIVE ACCEPTANCE PENDING** |
+| API-01 | Entitlement API hardcoded Pro tier override | Medium | **CODE CORRECTED — LIVE ACCEPTANCE PENDING** |
+| UX-04 | Incorrect Help Center and model claims | Low | **CODE CORRECTED — LIVE ACCEPTANCE PENDING** |
+| UX-05 | Billing/entitlement loading state silent fallback | Medium | **CODE CORRECTED — LIVE ACCEPTANCE PENDING** |
+| OPS-01 | Fake ONLINE health reporting | Medium | **CODE CORRECTED — LIVE ACCEPTANCE PENDING** |
+| HARDEN-01 | Missing HTTP security headers | Medium | **CODE CORRECTED — LIVE ACCEPTANCE PENDING** |
 
 ---
 
@@ -62,7 +62,7 @@ Eleven findings from the independent production architecture and security audit 
 ✔ SEC-01: Non-operator (Free, Plus, Pro) cannot register stdio transport
 ✔ SEC-01: Operator can register approved stdio command, but unapproved command is rejected
 ```
-**Verdict: RELEASE-BLOCKER CLEARED.**
+**Verdict: SOURCE CORRECTION PRESENT; LIVE GATE OPEN.**
 
 ---
 
@@ -85,7 +85,7 @@ Eleven findings from the independent production architecture and security audit 
 ```
 ✔ SEC-02: Tenant Isolation — Account A cannot view, update, connect, or delete Account B server
 ```
-**Verdict: RELEASE-BLOCKER CLEARED.**
+**Verdict: SOURCE CORRECTION PRESENT; LIVE GATE OPEN.**
 
 ---
 
@@ -123,7 +123,7 @@ The previous URL validation was a naive string comparison: `parsedUrl.hostname =
 ✔ Rejects dangerous and unsupported URL schemes
 ✔ Accepts valid public HTTPS MCP endpoint
 ```
-**Verdict: RELEASE-BLOCKER CLEARED.**
+**Verdict: SOURCE CORRECTION PRESENT; LIVE GATE OPEN.**
 
 ---
 
@@ -145,7 +145,7 @@ The previous URL validation was a naive string comparison: `parsedUrl.hostname =
 - `resolveModelUpgradeTrigger('aira-auto', 'guest')` → `model_requires_account` ✔
 - `UpgradeModal` renders distinct modal for `agent_requires_account` vs `guest_limit`
 
-**Verdict: FIXED AND VERIFIED.**
+**Verdict: SOURCE CORRECTION PRESENT; LIVE GATE OPEN.**
 
 ---
 
@@ -186,7 +186,7 @@ export const resolveModelUpgradeTrigger = (
 ✔ resolveModelUpgradeTrigger('aira-pro', 'free') === 'free_to_plus_model'
 ✔ resolveModelUpgradeTrigger('aira-deep', 'plus') === 'plus_to_pro_model'
 ```
-**Verdict: FIXED AND VERIFIED.**
+**Verdict: SOURCE CORRECTION PRESENT; LIVE GATE OPEN.**
 
 ---
 
@@ -205,7 +205,7 @@ All entry points (header switcher, composer toggle, keyboard shortcuts, deep lin
 3. Preserves read-only Agent workspace viewing without blocking educational access.
 4. Returns `boolean` indicating whether transition was permitted.
 
-**Verdict: FIXED AND VERIFIED.**
+**Verdict: SOURCE CORRECTION PRESENT; LIVE GATE OPEN.**
 
 ---
 
@@ -241,7 +241,7 @@ export function getMinimumRequiredTierForFeature(feature: string): PlanTier {
 ✔ Autonomous endpoint returns requiredTier: 'plus', error: 'PLAN_CAPABILITY_RESTRICTED'
 ✔ Message includes 'AIRA Plus or higher' (not 'AIRA Pro only')
 ```
-**Verdict: FIXED AND VERIFIED.**
+**Verdict: SOURCE CORRECTION PRESENT; LIVE GATE OPEN.**
 
 ---
 
@@ -257,7 +257,7 @@ HelpCenterModal Scene 3 described "Deep Reasoning Traces" with generic capabilit
 - Scene 3 renamed: "Deep Reasoning Traces & Adaptive Effort Bounds" with accurate description of Groq reasoning effort API and bounded token claims.
 - NVIDIA Nemotron 70B clearly marked as `[EXPERIMENTAL]` with appropriate caveat.
 
-**Verdict: FIXED AND VERIFIED.**
+**Verdict: SOURCE CORRECTION PRESENT; LIVE GATE OPEN.**
 
 ---
 
@@ -277,7 +277,7 @@ HelpCenterModal Scene 3 described "Deep Reasoning Traces" with generic capabilit
 - Billing fetch failure → `unavailable`; sidebar shows "Plan Unavailable" with retry.
 - Backend admission remains fail-closed regardless of frontend state.
 
-**Verdict: FIXED AND VERIFIED.**
+**Verdict: SOURCE CORRECTION PRESENT; LIVE GATE OPEN.**
 
 ---
 
@@ -301,7 +301,7 @@ HelpCenterModal Scene 3 described "Deep Reasoning Traces" with generic capabilit
 ✔ /api/health reports truthful provider status without false ONLINE claims
 ✔ /api/health/diagnostics returns error: 'OPERATOR_ACCESS_REQUIRED'
 ```
-**Verdict: FIXED AND VERIFIED.**
+**Verdict: SOURCE CORRECTION PRESENT; LIVE GATE OPEN.**
 
 ---
 
@@ -339,7 +339,7 @@ Cache-Control: no-store, no-cache, must-revalidate, private  (on /api/*)
    - x-frame-options: DENY ✓
    - x-powered-by: null ✓
 ```
-**Verdict: FIXED AND VERIFIED.**
+**Verdict: SOURCE CORRECTION PRESENT; LIVE GATE OPEN.**
 
 ---
 
@@ -387,31 +387,28 @@ New:     packages/mcp/src/ssrf-protection.ts
 
 ---
 
-## Release Gate Status
+## Release Gate Status — independent continuation (2026-11-13)
 
-| Gate | Status |
-|------|--------|
-| SEC-01 release blocker | ✅ CLEARED |
-| SEC-02 release blocker | ✅ CLEARED |
-| SEC-03 release blocker | ✅ CLEARED |
-| TypeScript compilation | ✅ 0 errors |
-| Production build | ✅ Success |
-| Lint | ✅ 0 errors |
-| Security tests (21 total) | ✅ All pass |
-| Runtime verification (8 core) | ✅ All pass |
-| No DB migrations | ✅ Confirmed |
-| No secret rotation | ✅ Confirmed |
-| No production data mutation | ✅ Confirmed |
-| Branch protection preserved | ✅ Confirmed |
+| Gate | Current disposition |
+|---|---|
+| SEC-01 MCP process-backed route restrictions | Source controls and negative tests added; authenticated staging confirmation outstanding |
+| SEC-02 tenant isolation and configuration secrecy | Source checks and sanitization regressions added; real cross-account acceptance outstanding |
+| SEC-03 SSRF / transport egress | **INTENTIONALLY RESTRICTED** — all production/Vercel HTTP/SSE MCP outbound connections blocked until safe connection-time egress is implemented and independently verified |
+| MCP security denial status / log redaction | Corrected on this PR to preserve 403/503 exceptions and redact transport diagnostics; new regression added |
+| Guest/Free/Plus/Pro behavior | Contract/unit checks present; genuine browser and direct API entitlement matrix pending |
+| Authentication and streaming | Two-account real OAuth-backed staging, persisted SSE, account switching and revoke checks pending |
+| Frontend UX and dark-mode regression | Source and tests present; genuine deployed Edge desktop/mobile walkthrough pending |
+| Production health and security headers | Code changes present; deployed exact-SHA response and OAuth/SSE compatibility pending |
+| CI, disposable PostgreSQL, GitGuardian | Must be checked again against the final exact PR head, not just earlier commit IDs |
+| Deployment | **DRAFT / NO GO** — no merge or production promotion authorized without open gates closing |
 
-> [!IMPORTANT]
-> All three release-blocking security findings (SEC-01, SEC-02, SEC-03) are verified cleared. This PR is eligible for protected release merge under the standing delegation in `AGENTS.md` for code-only, no-migration changes.
+A ready Vercel Preview or green CI is not equivalent to interactive authenticated staging acceptance. This report intentionally preserves earlier source findings and original test logs for history, but does not promote them to final release evidence. No production database migration, billing change, or secret rotation has been requested as part of this continuation.
 
 ---
 
 ## Residual Risks and Known Limitations
 
-1. **DNS rebinding mitigation is application-layer only.** Network-level egress firewall rules on the Vercel/compute infrastructure would provide defense-in-depth. Application validation cannot substitute for network controls if DNS resolves differently at the TCP connection level than at lookup time (time-of-check vs time-of-use gap). Recommend Vercel network egress policies as a follow-up hardening.
+1. **Remote MCP disabled in production.** DNS/IP checks alone cannot close the network time-of-check/time-of-use gap. All remote MCP connections from production/Vercel fail closed until a reviewed connector enforces connection-time address policy and redirect restrictions (or verified network-layer equivalent). Customer remote MCP is unavailable under this containment.
 
 2. **`stdio` transport remains implemented.** Operator-flagged `stdio` capability is preserved for internal platform tooling (e.g., running approved Node/Python MCP servers). If Vercel serverless functions execute these, process isolation is still the Vercel sandbox, not a dedicated worker host. For long-running MCP `stdio` processes, a dedicated non-serverless host is recommended.
 
