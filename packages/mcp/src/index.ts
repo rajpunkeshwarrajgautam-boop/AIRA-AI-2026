@@ -469,10 +469,12 @@ export class McpHost {
           category: 'mcp',
           parameters: t.inputSchema || { type: 'object', properties: {} },
           source: 'mcp',
-          permissionLevel: 'READ',
-          sideEffectLevel: 'READ',
+          // External MCP tool names/descriptions are untrusted and cannot
+          // prove read-only side effects. Default to consent-required WRITE.
+          permissionLevel: 'WRITE',
+          sideEffectLevel: 'WRITE',
           permissionScopes: ['mcp.invoke'],
-          approvalPolicy: 'autonomous',
+          approvalPolicy: 'require_approval',
           executionRuntime: 'LOCAL',
           availability: 'READY',
           adapter: 'mcp',
