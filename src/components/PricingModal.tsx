@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Check, Shield, Zap, CreditCard, ChevronRight, HelpCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { COMMERCIAL_PLANS, PlanTier, CurrencyCode } from '../types/commercial-types';
@@ -19,6 +19,15 @@ export const PricingModal: React.FC<PricingModalProps> = ({
   const [currency, setCurrency] = useState<CurrencyCode>('INR');
   const [loadingPlan, setLoadingPlan] = useState<PlanTier | null>(null);
   const [checkoutNotice, setCheckoutNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -91,6 +100,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
 
             <button
               onClick={onClose}
+              aria-label="Close pricing"
               className="p-2 rounded-xl text-stone-400 hover:text-white hover:bg-white/10 transition-colors"
             >
               <X className="w-5 h-5" />

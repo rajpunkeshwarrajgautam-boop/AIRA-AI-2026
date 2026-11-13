@@ -503,44 +503,4 @@
 }
 
 
-  :root {
-    --bg-main: #FAF9F5;
-    --bg-surface: #F5F0E8;
-    --bg-surface-secondary: #EFE9DE;
-    --text-primary: #141413;
-    --border-color: #E6DFD8;
-    --accent-terracotta: #CC785C;
-  }
 
-/* Reference Dark Palette contract for test runner */
-/*
-  .dark {
-    --bg-main: #181715;
-    --bg-surface: #252320;
-    --text-primary: #FAF9F5;
-    --accent-terracotta: #CC785C;
-  }
-*/
-
-
-[data-theme="warm-parchment"] {
-  --bg-surface-secondary: #EBE2D8;
-}
-[data-theme="liquid-glass"] {
-  --bg-surface-secondary: rgba(232, 242, 250, 0.55);
-}
-[data-theme="industrial-brutalist"] {
-  --bg-surface-secondary: #E3E3DE;
-}
-[data-theme="nordic-moss"] {
-  --bg-surface-secondary: #E0E7E1;
-}
-[data-theme="solar-gold"] {
-  --bg-surface-secondary: #EDE4C8;
-}
-[data-theme="tokyo-neon"] {
-  --bg-surface-secondary: #E7DEEE;
-}
-[data-theme="vanguard-monolith"] {
-  --bg-surface-secondary: #ECECE8;
-}

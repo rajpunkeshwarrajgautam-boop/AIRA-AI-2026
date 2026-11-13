@@ -681,6 +681,9 @@ useEffect(() => {
       else root.classList.remove('reduce-motion', 'force-reduced-motion', 'reduced-motion');
 
       if (settings.fontSize) root.dataset.fontSize = settings.fontSize;
+
+      const metaTheme = document.querySelector('meta[name="theme-color"]:not([media])');
+      if (metaTheme) metaTheme.setAttribute('content', dark ? '#181715' : '#FAF9F5');
     };
     applyTheme();
     systemColor.addEventListener('change', applyTheme);

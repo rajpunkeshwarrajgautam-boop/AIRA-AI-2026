@@ -124,6 +124,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     <div className="relative z-50 inline-block min-w-0" ref={containerRef}>
       <motion.button
         type="button"
+        data-testid="model-selector-button"
         onClick={() => setIsOpen(open => !open)}
         whileTap={reducedMotion ? undefined : { scale: 0.98 }}
         aria-haspopup="listbox"

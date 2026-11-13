@@ -52,17 +52,17 @@
   --z-toast: 500;
   --z-tooltip: 600;
 
-  /* Hallmark Theme Scale */
-  --color-paper: #FAF9F5;
-  --color-paper-2: #F5F0E8;
-  --color-paper-3: #EFE9DE;
-  --color-ink: #141413;
-  --color-ink-2: #3D3D3A;
-  --color-muted: #6C6A64;
-  --color-rule: #E6DFD8;
-  --color-accent: #CC785C;
-  --color-accent-ink: #20120B;
-  --color-focus: #CC785C;
+  /* Hallmark Theme Scale (synced dynamically with active theme & preset) */
+  --color-paper: var(--bg-main, #FAF9F5);
+  --color-paper-2: var(--bg-surface, #F5F0E8);
+  --color-paper-3: var(--bg-surface-secondary, #EFE9DE);
+  --color-ink: var(--text-primary, #141413);
+  --color-ink-2: var(--text-body, #3D3D3A);
+  --color-muted: var(--text-muted, #6C6A64);
+  --color-rule: var(--border-color, #E6DFD8);
+  --color-accent: var(--accent-terracotta, #CC785C);
+  --color-accent-ink: var(--accent-ink, #20120B);
+  --color-focus: var(--accent-terracotta, #CC785C);
 
   --font-display: "Copernicus", "Tiempos Headline", "Cormorant Garamond", "Newsreader", Georgia, serif;
   --font-body: "StyreneB", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -99,7 +99,7 @@
   --ease-vanguard: cubic-bezier(0.32, 0.72, 0, 1);
 }
 
-.dark {
+html.dark, :root.dark, .dark {
   --bg-main: #181715;
   --bg-surface: #252320;
   --bg-surface-secondary: #1F1E1B;
@@ -116,22 +116,98 @@
   --accent-terracotta: #CC785C;
   --accent-terracotta-hover: #A9583E;
   --surface-code: #11100F;
+  --color-paper: #181715;
+  --color-paper-2: #252320;
+  --color-paper-3: #1F1E1B;
+  --color-ink: #FAF9F5;
+  --color-ink-2: #DED9D1;
+  --color-muted: #A09D96;
+  --color-rule: #403B35;
+  --color-accent: #CC785C;
+  --color-accent-ink: #E6A48D;
+  --color-focus: #CC785C;
 }
 
-[data-theme="warm-parchment"] {
+/* ==========================================================================
+   AESTHETIC PRESET 1: Aira Atelier / Linear Precision (Default)
+   ========================================================================== */
+[data-theme="linear-precision"]:not(.dark),
+html:not(.dark)[data-theme="linear-precision"] {
+  --bg-main: #FAF9F5;
+  --bg-surface: #F5F0E8;
+  --bg-surface-secondary: #EFE9DE;
+  --border-color: #E6DFD8;
+  --border-subtle: #EBE6DF;
+  --text-primary: #141413;
+  --text-body: #3D3D3A;
+  --text-muted: #6C6A64;
+  --accent-on: #FAF9F5;
+  --accent-ink: #A9583E;
+  --accent-terracotta: #CC785C;
+  --accent-terracotta-hover: #A9583E;
+  --color-paper: #FAF9F5;
+  --color-paper-2: #F5F0E8;
+  --color-paper-3: #EFE9DE;
+  --color-ink: #141413;
+  --color-ink-2: #3D3D3A;
+  --color-muted: #6C6A64;
+  --color-rule: #E6DFD8;
+}
+
+html.dark[data-theme="linear-precision"],
+:root.dark[data-theme="linear-precision"],
+.dark[data-theme="linear-precision"],
+.dark [data-theme="linear-precision"] {
+  --bg-main: #181715;
+  --bg-surface: #252320;
+  --bg-surface-secondary: #1F1E1B;
+  --border-color: #403B35;
+  --border-subtle: #332F2B;
+  --text-primary: #FAF9F5;
+  --text-body: #DED9D1;
+  --text-muted: #A09D96;
+  --accent-on: #FAF9F5;
+  --accent-ink: #E6A48D;
+  --accent-terracotta: #CC785C;
+  --accent-terracotta-hover: #A9583E;
+  --color-paper: #181715;
+  --color-paper-2: #252320;
+  --color-paper-3: #1F1E1B;
+  --color-ink: #FAF9F5;
+  --color-ink-2: #DED9D1;
+  --color-muted: #A09D96;
+  --color-rule: #403B35;
+}
+
+/* ==========================================================================
+   AESTHETIC PRESET 2: Warm Parchment (Literary & Antiquarian Warmth)
+   ========================================================================== */
+[data-theme="warm-parchment"]:not(.dark),
+html:not(.dark)[data-theme="warm-parchment"] {
   --bg-main: #F5EFEB;
   --bg-surface: #FCFAF7;
   --bg-surface-secondary: #EBE2D8;
   --border-color: #D8C9BB;
   --border-subtle: rgba(80, 55, 35, 0.09);
   --text-primary: #2C2016;
+  --text-body: #4A3A2C;
   --text-muted: #7E6B5A;
   --accent-on: #FAF9F5;
   --accent-ink: #A04722;
   --accent-terracotta: #BA582F;
   --accent-terracotta-hover: #A04722;
+  --color-paper: #F5EFEB;
+  --color-paper-2: #FCFAF7;
+  --color-paper-3: #EBE2D8;
+  --color-ink: #2C2016;
+  --color-ink-2: #4A3A2C;
+  --color-muted: #7E6B5A;
+  --color-rule: #D8C9BB;
 }
 
+html.dark[data-theme="warm-parchment"],
+:root.dark[data-theme="warm-parchment"],
+.dark[data-theme="warm-parchment"],
 .dark [data-theme="warm-parchment"] {
   --bg-main: #1C1612;
   --bg-surface: #251D18;
@@ -139,55 +215,101 @@
   --border-color: #40342C;
   --border-subtle: rgba(255, 235, 215, 0.08);
   --text-primary: #F3EAE1;
+  --text-body: #D9CBBE;
   --text-muted: #A39182;
   --accent-on: #090909;
   --accent-ink: #FF9C78;
   --accent-terracotta: #D46F44;
   --accent-terracotta-hover: #E48259;
+  --color-paper: #1C1612;
+  --color-paper-2: #251D18;
+  --color-paper-3: #2E2520;
+  --color-ink: #F3EAE1;
+  --color-ink-2: #D9CBBE;
+  --color-muted: #A39182;
+  --color-rule: #40342C;
 }
 
-[data-theme="liquid-glass"] {
+/* ==========================================================================
+   AESTHETIC PRESET 3: Liquid Glass (Frosted VisionOS & Translucent Cobalt)
+   ========================================================================== */
+[data-theme="liquid-glass"]:not(.dark),
+html:not(.dark)[data-theme="liquid-glass"] {
   --bg-main: #EDF3F8;
-  --bg-surface: rgba(255, 255, 255, 0.65);
-  --bg-surface-secondary: rgba(232, 242, 250, 0.55);
-  --border-color: rgba(175, 205, 228, 0.55);
-  --border-subtle: rgba(70, 120, 160, 0.1);
+  --bg-surface: rgba(255, 255, 255, 0.75);
+  --bg-surface-secondary: rgba(232, 242, 250, 0.65);
+  --border-color: rgba(175, 205, 228, 0.65);
+  --border-subtle: rgba(70, 120, 160, 0.12);
   --text-primary: #0A1629;
+  --text-body: #1E293B;
   --text-muted: #536B88;
   --accent-on: #090909;
   --accent-ink: #0369A1;
   --accent-terracotta: #0284C7;
   --accent-terracotta-hover: #0382C4;
+  --color-paper: #EDF3F8;
+  --color-paper-2: rgba(255, 255, 255, 0.75);
+  --color-paper-3: rgba(232, 242, 250, 0.65);
+  --color-ink: #0A1629;
+  --color-ink-2: #1E293B;
+  --color-muted: #536B88;
+  --color-rule: rgba(175, 205, 228, 0.65);
 }
 
+html.dark[data-theme="liquid-glass"],
+:root.dark[data-theme="liquid-glass"],
+.dark[data-theme="liquid-glass"],
 .dark [data-theme="liquid-glass"] {
   --bg-main: #0B111E;
-  --bg-surface: rgba(17, 26, 44, 0.55);
-  --bg-surface-secondary: rgba(24, 38, 64, 0.45);
-  --border-color: rgba(56, 92, 140, 0.45);
-  --border-subtle: rgba(140, 180, 225, 0.1);
+  --bg-surface: #111A2C;
+  --bg-surface-secondary: #182640;
+  --border-color: #2D4160;
+  --border-subtle: rgba(140, 180, 225, 0.12);
   --text-primary: #F1F6FB;
+  --text-body: #CBD5E1;
   --text-muted: #8AA4C4;
   --accent-on: #090909;
   --accent-ink: #7DD3FC;
   --accent-terracotta: #38BDF8;
   --accent-terracotta-hover: #7DD3FC;
+  --color-paper: #0B111E;
+  --color-paper-2: #111A2C;
+  --color-paper-3: #182640;
+  --color-ink: #F1F6FB;
+  --color-ink-2: #CBD5E1;
+  --color-muted: #8AA4C4;
+  --color-rule: #2D4160;
 }
 
-[data-theme="industrial-brutalist"] {
+/* ==========================================================================
+   AESTHETIC PRESET 4: Industrial Brutalist (Architectural Matte Grid & Orange)
+   ========================================================================== */
+[data-theme="industrial-brutalist"]:not(.dark),
+html:not(.dark)[data-theme="industrial-brutalist"] {
   --bg-main: #EDEDEA;
   --bg-surface: #F8F8F6;
   --bg-surface-secondary: #E3E3DE;
   --border-color: #262624;
   --border-subtle: rgba(0, 0, 0, 0.2);
   --text-primary: #0F0F0E;
+  --text-body: #262624;
   --text-muted: #555550;
   --accent-on: #090909;
   --accent-ink: #B63A00;
   --accent-terracotta: #FF4D00;
   --accent-terracotta-hover: #DC4600;
+  --color-paper: #EDEDEA;
+  --color-paper-2: #F8F8F6;
+  --color-paper-3: #E3E3DE;
+  --color-ink: #0F0F0E;
+  --color-ink-2: #262624;
+  --color-muted: #555550;
+  --color-rule: #262624;
 }
 
+html.dark[data-theme="industrial-brutalist"],
+:root.dark[data-theme="industrial-brutalist"],
+.dark[data-theme="industrial-brutalist"],
 .dark [data-theme="industrial-brutalist"] {
   --bg-main: #121212;
   --bg-surface: #1B1B1B;
@@ -195,27 +317,56 @@
   --border-color: #404040;
   --border-subtle: rgba(255, 255, 255, 0.14);
   --text-primary: #F7F7F5;
+  --text-body: #D4D4D0;
   --text-muted: #8F8F89;
   --accent-on: #090909;
   --accent-ink: #FFAD85;
   --accent-terracotta: #FF5E1A;
   --accent-terracotta-hover: #FF7A42;
+  --color-paper: #121212;
+  --color-paper-2: #1B1B1B;
+  --color-paper-3: #262626;
+  --color-ink: #F7F7F5;
+  --color-ink-2: #D4D4D0;
+  --color-muted: #8F8F89;
+  --color-rule: #404040;
 }
 
-[data-theme="nordic-earth"] {
+/* ==========================================================================
+   AESTHETIC PRESET 5: Nordic Earth / Nordic Moss (Biophilic Sanctuary)
+   ========================================================================== */
+[data-theme="nordic-moss"]:not(.dark),
+[data-theme="nordic-earth"]:not(.dark),
+html:not(.dark)[data-theme="nordic-moss"],
+html:not(.dark)[data-theme="nordic-earth"] {
   --bg-main: #F1F4EE;
   --bg-surface: #FAFBF9;
   --bg-surface-secondary: #E5EBE1;
   --border-color: #C8D4C2;
   --border-subtle: rgba(40, 60, 42, 0.09);
   --text-primary: #18261B;
+  --text-body: #2C3E30;
   --text-muted: #526656;
   --accent-on: #FAF9F5;
   --accent-ink: #226340;
   --accent-terracotta: #2E7D52;
   --accent-terracotta-hover: #226340;
+  --color-paper: #F1F4EE;
+  --color-paper-2: #FAFBF9;
+  --color-paper-3: #E5EBE1;
+  --color-ink: #18261B;
+  --color-ink-2: #2C3E30;
+  --color-muted: #526656;
+  --color-rule: #C8D4C2;
 }
 
+html.dark[data-theme="nordic-moss"],
+html.dark[data-theme="nordic-earth"],
+:root.dark[data-theme="nordic-moss"],
+:root.dark[data-theme="nordic-earth"],
+.dark[data-theme="nordic-moss"],
+.dark[data-theme="nordic-earth"],
+.dark [data-theme="nordic-moss"],
 .dark [data-theme="nordic-earth"] {
   --bg-main: #101612;
   --bg-surface: #17211A;
@@ -223,27 +374,50 @@
   --border-color: #2D3D32;
   --border-subtle: rgba(175, 215, 185, 0.08);
   --text-primary: #E7EFE8;
+  --text-body: #C5D4C7;
   --text-muted: #859D8B;
   --accent-on: #090909;
   --accent-ink: #6EE7A7;
   --accent-terracotta: #4ADE80;
   --accent-terracotta-hover: #6EE7A7;
+  --color-paper: #101612;
+  --color-paper-2: #17211A;
+  --color-paper-3: #202D24;
+  --color-ink: #E7EFE8;
+  --color-ink-2: #C5D4C7;
+  --color-muted: #859D8B;
+  --color-rule: #2D3D32;
 }
 
-[data-theme="solar-gold"] {
+/* ==========================================================================
+   AESTHETIC PRESET 6: Solaris Gold (Haute Horlogerie 24K Flare)
+   ========================================================================== */
+[data-theme="solar-gold"]:not(.dark),
+html:not(.dark)[data-theme="solar-gold"] {
   --bg-main: #F7F5EE;
   --bg-surface: #FCFAF4;
   --bg-surface-secondary: #EFE9DA;
   --border-color: #DCD0B6;
   --border-subtle: rgba(180, 145, 60, 0.12);
   --text-primary: #231F15;
+  --text-body: #3E3725;
   --text-muted: #7E735B;
   --accent-on: #090909;
   --accent-ink: #806200;
   --accent-terracotta: #D4A017;
   --accent-terracotta-hover: #B8860B;
+  --color-paper: #F7F5EE;
+  --color-paper-2: #FCFAF4;
+  --color-paper-3: #EFE9DA;
+  --color-ink: #231F15;
+  --color-ink-2: #3E3725;
+  --color-muted: #7E735B;
+  --color-rule: #DCD0B6;
 }
 
+html.dark[data-theme="solar-gold"],
+:root.dark[data-theme="solar-gold"],
+.dark[data-theme="solar-gold"],
 .dark [data-theme="solar-gold"] {
   --bg-main: #0D0C09;
   --bg-surface: #16140F;
@@ -251,27 +425,50 @@
   --border-color: #3D3728;
   --border-subtle: rgba(230, 190, 80, 0.12);
   --text-primary: #F7F2E6;
+  --text-body: #D9CEB4;
   --text-muted: #9E947E;
   --accent-on: #090909;
   --accent-ink: #F3D079;
   --accent-terracotta: #E5B94E;
   --accent-terracotta-hover: #F3D079;
+  --color-paper: #0D0C09;
+  --color-paper-2: #16140F;
+  --color-paper-3: #211E17;
+  --color-ink: #F7F2E6;
+  --color-ink-2: #D9CEB4;
+  --color-muted: #9E947E;
+  --color-rule: #3D3728;
 }
 
-[data-theme="tokyo-neon"] {
+/* ==========================================================================
+   AESTHETIC PRESET 7: Tokyo Cyber (Shibuya Night & Scanline Glow)
+   ========================================================================== */
+[data-theme="tokyo-neon"]:not(.dark),
+html:not(.dark)[data-theme="tokyo-neon"] {
   --bg-main: #F4F1FA;
   --bg-surface: #FCFAFF;
   --bg-surface-secondary: #ECE5F7;
   --border-color: #D6C7EC;
   --border-subtle: rgba(147, 51, 234, 0.1);
   --text-primary: #1C0F2F;
+  --text-body: #331C54;
   --text-muted: #6B5784;
   --accent-on: #FAF9F5;
   --accent-ink: #7E22CE;
   --accent-terracotta: #9333EA;
   --accent-terracotta-hover: #7E22CE;
+  --color-paper: #F4F1FA;
+  --color-paper-2: #FCFAFF;
+  --color-paper-3: #ECE5F7;
+  --color-ink: #1C0F2F;
+  --color-ink-2: #331C54;
+  --color-muted: #6B5784;
+  --color-rule: #D6C7EC;
 }
 
+html.dark[data-theme="tokyo-neon"],
+:root.dark[data-theme="tokyo-neon"],
+.dark[data-theme="tokyo-neon"],
 .dark [data-theme="tokyo-neon"] {
   --bg-main: #090611;
   --bg-surface: #120D22;
@@ -279,27 +476,50 @@
   --border-color: #38255E;
   --border-subtle: rgba(236, 72, 153, 0.15);
   --text-primary: #F7EFFF;
+  --text-body: #DACCEB;
   --text-muted: #A792C7;
   --accent-on: #090909;
   --accent-ink: #F472B6;
   --accent-terracotta: #EC4899;
   --accent-terracotta-hover: #F472B6;
+  --color-paper: #090611;
+  --color-paper-2: #120D22;
+  --color-paper-3: #1C1433;
+  --color-ink: #F7EFFF;
+  --color-ink-2: #DACCEB;
+  --color-muted: #A792C7;
+  --color-rule: #38255E;
 }
 
-[data-theme="vanguard-monolith"] {
+/* ==========================================================================
+   AESTHETIC PRESET 8: Vanguard Monolith (High Fashion & Mirror Platinum)
+   ========================================================================== */
+[data-theme="vanguard-monolith"]:not(.dark),
+html:not(.dark)[data-theme="vanguard-monolith"] {
   --bg-main: #F4F4F4;
   --bg-surface: #FAF9F5;
   --bg-surface-secondary: #EBEBEB;
   --border-color: #181818;
   --border-subtle: rgba(0, 0, 0, 0.16);
   --text-primary: #141413;
+  --text-body: #2B2B2A;
   --text-muted: #5C5C5C;
   --accent-on: #FAF9F5;
   --accent-ink: #111111;
   --accent-terracotta: #111111;
   --accent-terracotta-hover: #262626;
+  --color-paper: #F4F4F4;
+  --color-paper-2: #FAF9F5;
+  --color-paper-3: #EBEBEB;
+  --color-ink: #141413;
+  --color-ink-2: #2B2B2A;
+  --color-muted: #5C5C5C;
+  --color-rule: #181818;
 }
 
+html.dark[data-theme="vanguard-monolith"],
+:root.dark[data-theme="vanguard-monolith"],
+.dark[data-theme="vanguard-monolith"],
 .dark [data-theme="vanguard-monolith"] {
   --bg-main: #050505;
   --bg-surface: #0E0E0E;
@@ -307,11 +527,19 @@
   --border-color: #2E2E2E;
   --border-subtle: rgba(255, 255, 255, 0.12);
   --text-primary: #FAF9F5;
+  --text-body: #D4D4D4;
   --text-muted: #8E8E8E;
   --accent-on: #090909;
   --accent-ink: #FAF9F5;
   --accent-terracotta: #EDEDED;
   --accent-terracotta-hover: #FAF9F5;
+  --color-paper: #050505;
+  --color-paper-2: #0E0E0E;
+  --color-paper-3: #171717;
+  --color-ink: #FAF9F5;
+  --color-ink-2: #D4D4D4;
+  --color-muted: #8E8E8E;
+  --color-rule: #2E2E2E;
 }
 
 
