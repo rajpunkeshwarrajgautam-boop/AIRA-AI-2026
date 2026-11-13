@@ -955,15 +955,23 @@ if (isDbConfigured && !process.env.VERCEL) {
 // -----------------------------------------------------------------------
 function resolveMcpCallerUserId(req: Request): string | null {
   const verified = (req as any).managedIdentity as { userId: string } | undefined;
-  const authUserId = req.principal?.userId || verified?.userId || (req as any).user?.id;
-  if (!authUserId || authUserId === 'anonymous' || authUserId.startsWith('guest_') || (req as any).user?.isGuest) {
-    return null;
-  }
+  // MCP management requires a cryptographically verified identity. A generic
+  // req.user fallback is insufficient authority for infrastructure endpoints.
+  const authUserId = req.principal?.userId || verified?.userId;
+  if (!authUserId || authUserId === 'anonymous' || authUserId.startsWith('guest_') ||
+      (req as any).user?.isGuest) return null;
   return authUserId;
 }
 
+function isVerifiedMcpOperator(req: Request): boolean {
+  const principal = req.principal;
+  if (!principal || !resolveMcpCallerUserId(req)) return false;
+  const roles = principal.roles || [];
+  return roles.includes('operator') || roles.includes('platform_admin');
+}
+
 app.get('/api/mcp/servers', (req: Request, res: Response) => {
-  const isOp = isMcpOperator(req);
+  const isOp = isVerifiedMcpOperator(req);
   const authUserId = resolveMcpCallerUserId(req);
   if (!authUserId && !isOp) {
     return res.status(401).json({ error: 'AUTHENTICATION_REQUIRED', message: 'Verified account required to access MCP server management.' });
@@ -973,7 +981,7 @@ app.get('/api/mcp/servers', (req: Request, res: Response) => {
 });
 
 app.get('/api/mcp/servers/status', (req: Request, res: Response) => {
-  const isOp = isMcpOperator(req);
+  const isOp = isVerifiedMcpOperator(req);
   const authUserId = resolveMcpCallerUserId(req);
   if (!authUserId && !isOp) {
     return res.status(401).json({ error: 'AUTHENTICATION_REQUIRED', message: 'Verified account required to access MCP status.' });
@@ -983,7 +991,7 @@ app.get('/api/mcp/servers/status', (req: Request, res: Response) => {
 });
 
 app.post('/api/mcp/servers', async (req: Request, res: Response) => {
-  const isOp = isMcpOperator(req);
+  const isOp = isVerifiedMcpOperator(req);
   const authUserId = resolveMcpCallerUserId(req);
   if (!authUserId && !isOp) {
     return res.status(401).json({ error: 'AUTHENTICATION_REQUIRED', message: 'Verified account required to register MCP servers.' });
@@ -1019,7 +1027,7 @@ app.post('/api/mcp/servers', async (req: Request, res: Response) => {
 });
 
 app.post('/api/mcp/servers/:id/connect', async (req: Request, res: Response) => {
-  const isOp = isMcpOperator(req);
+  const isOp = isVerifiedMcpOperator(req);
   const authUserId = resolveMcpCallerUserId(req);
   if (!authUserId && !isOp) {
     return res.status(401).json({ error: 'AUTHENTICATION_REQUIRED', message: 'Verified account required to connect MCP servers.' });
@@ -1038,7 +1046,7 @@ app.post('/api/mcp/servers/:id/connect', async (req: Request, res: Response) => 
 });
 
 app.post('/api/mcp/servers/:id/disconnect', async (req: Request, res: Response) => {
-  const isOp = isMcpOperator(req);
+  const isOp = isVerifiedMcpOperator(req);
   const authUserId = resolveMcpCallerUserId(req);
   if (!authUserId && !isOp) {
     return res.status(401).json({ error: 'AUTHENTICATION_REQUIRED', message: 'Verified account required to disconnect MCP servers.' });
@@ -1056,7 +1064,7 @@ app.post('/api/mcp/servers/:id/disconnect', async (req: Request, res: Response) 
 });
 
 app.delete('/api/mcp/servers/:id', (req: Request, res: Response) => {
-  const isOp = isMcpOperator(req);
+  const isOp = isVerifiedMcpOperator(req);
   const authUserId = resolveMcpCallerUserId(req);
   if (!authUserId && !isOp) {
     return res.status(401).json({ error: 'AUTHENTICATION_REQUIRED', message: 'Verified account required to delete MCP servers.' });
@@ -1074,7 +1082,7 @@ app.delete('/api/mcp/servers/:id', (req: Request, res: Response) => {
 });
 
 app.get('/api/mcp/servers/:id/tools', (req: Request, res: Response) => {
-  const isOp = isMcpOperator(req);
+  const isOp = isVerifiedMcpOperator(req);
   const authUserId = resolveMcpCallerUserId(req);
   if (!authUserId && !isOp) {
     return res.status(401).json({ error: 'AUTHENTICATION_REQUIRED', message: 'Verified account required to inspect MCP tools.' });
