@@ -129,7 +129,10 @@ export class McpHost {
    */
   private checkOwnership(config: McpServerConfig, ownerId?: string, isOperator = false): boolean {
     if (isOperator) return true;
-    if (config.isPlatform || config.ownerId === 'platform') return true;
+    // Public callers cannot manage platform connections. Legacy internal callers
+    // without a user principal may inspect platform entries, but HTTP routes
+    // always pass a verified ownerId or a verified operator flag.
+    if (config.isPlatform || config.ownerId === 'platform') return !ownerId;
     if (!ownerId) return false;
     return config.ownerId === ownerId;
   }
@@ -251,7 +254,11 @@ export class McpHost {
         results.push({
           id: config.id,
           name: config.name,
-          url: config.url,
+          // A configured path, query, or userinfo can itself contain a token.
+          // A management summary exposes only the origin, never the secret URL.
+          url: config.url ? (() => {
+            try { return new URL(config.url).origin; } catch { return undefined; }
+          })() : undefined,
           transport: config.transport || 'streamable_http',
           hasHeaders: headerNames.length > 0,
           headerNames,
@@ -261,7 +268,7 @@ export class McpHost {
           connected: isConnected,
           toolCount: tools.length,
           tools: tools.map(t => t.name),
-          lastError: this.serverErrors.get(config.id)
+          lastError: this.serverErrors.has(config.id) ? 'MCP_CONNECTION_FAILED' : undefined
         });
       }
     }
@@ -294,7 +301,7 @@ export class McpHost {
       connected: isConnected,
       toolCount: tools.length,
       tools: tools.map(t => t.name),
-      lastError: this.serverErrors.get(serverId),
+      lastError: this.serverErrors.has(serverId) ? 'MCP_CONNECTION_FAILED' : undefined,
       ownerId: config.ownerId
     };
   }
@@ -353,7 +360,9 @@ export class McpHost {
       let transport: any;
 
       if (config.transport === 'stdio') {
-        if (!options.isOperator && !config.isPlatform) {
+        // Platform registration must not imply customer permission to launch
+        // its process. Internal no-principal callers remain supported.
+        if (!options.isOperator && !(config.isPlatform && !options.ownerId)) {
           throw new McpSecurityError(
             'stdio process transport can only be connected by verified operators.',
             'STDIO_CONNECT_FORBIDDEN',
@@ -381,6 +390,21 @@ export class McpHost {
           allowLocalInDev: process.env.NODE_ENV !== 'production' || process.env.AIRA_ALLOW_LOCAL_MCP === 'true'
         });
         const parsedUrl = validation.safeUrl;
+
+        // Public runtime egress is fail-closed until approved hosts and
+        // infrastructure network controls are configured. A one-time DNS
+        // lookup alone cannot prevent a later connection-time DNS rebind.
+        const isPublicRuntime = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
+        if (isPublicRuntime) {
+          const approved = new Set((process.env.AIRA_APPROVED_MCP_HOSTS || '')
+            .split(',').map(host => host.trim().toLowerCase()).filter(Boolean));
+          if (parsedUrl.protocol !== 'https:' || !approved.has(parsedUrl.hostname.toLowerCase())) {
+            throw new McpSecurityError(
+              'Remote MCP connections are unavailable until the destination is approved by the platform operator.',
+              'MCP_EGRESS_NOT_APPROVED', 403
+            );
+          }
+        }
 
         const headers = config.headers || {};
         if (config.transport === 'sse') {
@@ -440,6 +464,26 @@ export class McpHost {
 
         const execAdapter = async (args: any, _ctx: any) => {
           const start = Date.now();
+          // Registered tools share a process-wide gateway. Check ownership
+          // AGAIN when the tool is invoked, not only when it is registered.
+          const liveConfig = this.servers.get(serverId);
+          const principalId = _ctx?.principal?.userId;
+          const roles: string[] = _ctx?.principal?.roles || [];
+          const platformStdioDenied = liveConfig?.transport === 'stdio' &&
+            !roles.includes('operator') && !roles.includes('platform_admin');
+          if (!liveConfig ||
+              (!liveConfig.isPlatform && (!principalId || principalId !== liveConfig.ownerId)) ||
+              platformStdioDenied) {
+            return {
+              toolCallId: 'call_mcp_' + Date.now(),
+              output: null,
+              isError: true,
+              error: 'MCP_TOOL_ACCESS_DENIED',
+              untrustedExternalData: true,
+              durationMs: Date.now() - start,
+              timestamp: Date.now()
+            };
+          }
           try {
             const execResponse = await client.callTool({
               name: t.name,
