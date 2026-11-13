@@ -212,8 +212,8 @@ export const AgentExecutionGraphView: React.FC<AgentExecutionGraphProps> = ({
           <h3 className="text-xs font-semibold text-slate-700 dark:text-slate-300">
             {graph.title}
           </h3>
-          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-claude-terracotta/10 text-claude-accentInk">
-            {graph.completedTasks}/{graph.totalTasks} Tasks
+          <span className="text-[10px] font-medium px-2 py-0.5 rounded bg-claude-terracotta/10 text-claude-accentInk">
+            <span className="font-mono">{graph.completedTasks}/{graph.totalTasks}</span> Tasks
           </span>
         </div>
 
@@ -332,17 +332,17 @@ export const AgentExecutionGraphView: React.FC<AgentExecutionGraphProps> = ({
                     {node.durationMs ? (
                       <span className="font-mono">{formatDuration(node.durationMs)}</span>
                     ) : node.state === 'RUNNING' && node.startedAt ? (
-                      <span className="font-mono text-amber-500">running...</span>
+                      <span className="font-medium text-amber-500">running…</span>
                     ) : null}
                   </div>
 
                   {/* Active Tool telemetry */}
                   {node.activeTool && (
-                    <div className="mt-2 pt-1.5 border-t border-slate-100 dark:border-white/5 flex items-center justify-between text-[10px] font-mono">
-                      <span className="text-amber-500 flex items-center gap-1 truncate">
+                    <div className="mt-2 pt-1.5 border-t border-slate-100 dark:border-white/5 flex items-center justify-between text-[10px]">
+                      <span className="text-amber-500 flex items-center gap-1 truncate font-mono">
                         <Zap size={10} /> {node.activeTool.name}
                       </span>
-                      <span className="text-slate-400">in progress</span>
+                      <span className="text-slate-400 font-medium">in progress</span>
                     </div>
                   )}
 

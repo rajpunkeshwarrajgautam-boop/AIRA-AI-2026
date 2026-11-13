@@ -82,7 +82,7 @@ export const AdaptiveStudioEmptyState: React.FC<AdaptiveStudioEmptyStateProps> =
 
         <div className="flex items-center gap-1.5 pt-2 text-[11px] text-claude-muted-light/80 dark:text-claude-muted-dark/80">
           <ShieldCheck size={13} className="text-emerald-500/80" aria-hidden="true" />
-          <span>Generated content stays in Aira's existing isolated preview runtime.</span>
+          <span>Generated content stays in Aira’s existing isolated preview runtime.</span>
         </div>
       </div>
     </div>

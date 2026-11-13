@@ -157,7 +157,7 @@ const MainSequence = () => {
     >
       <div
         ref={containerRef}
-        className={`w-full max-w-6xl h-[92vh] flex flex-col studio-shell border border-[var(--color-studio-rule)] shadow-2xl overflow-hidden ${
+        className={`w-full max-w-6xl h-[92vh] flex flex-col studio-shell border border-[var(--color-studio-rule)] shadow-lg overflow-hidden ${
           isFullscreen ? 'fixed inset-0 max-w-none h-screen z-50' : ''
         }`}
       >
@@ -258,7 +258,7 @@ const MainSequence = () => {
             <div className="flex-1 flex flex-col items-center justify-center p-3 sm:p-6 overflow-hidden">
               {/* Motion Canvas Stage */}
               <div
-                className={`relative w-full overflow-hidden border border-[var(--color-studio-rule)] bg-black shadow-2xl flex flex-col justify-between transition-transform duration-300 motion-reduce:transition-none ${
+                className={`relative w-full overflow-hidden border border-[var(--color-studio-rule)] bg-black shadow-lg flex flex-col justify-between transition-transform duration-300 motion-reduce:transition-none ${
                   aspectRatio === '16:9'
                     ? 'max-w-4xl aspect-video'
                     : aspectRatio === '9:16'
@@ -282,8 +282,8 @@ const MainSequence = () => {
                     <span className="px-2 py-0.5 text-xs font-mono border border-[var(--color-studio-rule-2)] bg-[var(--color-studio-paper-2)]/90 text-[var(--color-studio-accent)]">
                       {scene.badge}
                     </span>
-                    <span className="text-xs font-mono text-[var(--color-studio-muted)]">
-                      Scene {currentSceneIndex + 1} of {totalScenes}
+                    <span className="text-xs font-medium text-[var(--color-studio-muted)]">
+                      Scene <span className="font-mono">{currentSceneIndex + 1}</span> of <span className="font-mono">{totalScenes}</span>
                     </span>
                   </div>
 
@@ -381,8 +381,8 @@ const MainSequence = () => {
                       </div>
 
                       <div>
-                        <span className="text-[11px] font-mono text-[var(--color-studio-muted)]">
-                          Scene 0{index + 1}
+                        <span className="text-[11px] font-medium text-[var(--color-studio-muted)]">
+                          Scene <span className="font-mono">0{index + 1}</span>
                         </span>
                         <h3 className="text-sm font-medium text-[var(--color-studio-ink)] line-clamp-1">
                           {sc.headline}
@@ -569,12 +569,12 @@ const AiraTrailerTimeline = () => {
               <div className="flex items-center space-x-3">
                 {/* Speed Controls */}
                 <div className="flex items-center space-x-1 text-xs">
-                  <span className="text-xs font-mono text-[var(--color-studio-muted)]">Speed</span>
+                  <span className="text-xs font-medium text-[var(--color-studio-muted)]">Speed</span>
                   {[1, 1.5, 2].map((spd) => (
                     <button
                       key={spd}
                       onClick={() => setPlaybackSpeed(spd)}
-                      className={`px-1.5 py-0.5 text-[11px] font-mono transition-colors ${
+                      className={`px-1.5 py-0.5 text-[11px] font-medium transition-colors ${
                         playbackSpeed === spd
                           ? 'bg-[var(--color-studio-paper-3)] text-[var(--color-studio-accent)] font-bold'
                           : 'text-[var(--color-studio-muted)] hover:text-[var(--color-studio-ink)]'

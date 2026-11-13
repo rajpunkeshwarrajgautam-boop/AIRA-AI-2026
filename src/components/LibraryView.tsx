@@ -228,7 +228,7 @@ export const LibraryView: React.FC = () => {
               <LibraryIcon className="w-4 h-4" />
             </div>
             <h1 className="text-xl font-serif font-medium tracking-tight">Library & Knowledge Base</h1>
-            <span className="text-xs px-2 py-0.5 rounded-full font-mono bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
+            <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
               <ShieldCheck className="w-3 h-3" /> Principal Isolated
             </span>
           </div>
@@ -295,7 +295,7 @@ export const LibraryView: React.FC = () => {
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-claude-muted-light dark:text-claude-muted-dark" />
             <input
               type="text"
-              placeholder="Search documents or semantic chunks..."
+              placeholder="Search documents or semantic chunks…"
               value={searchQuery}
               onChange={(e) => {
                 setSearchQuery(e.target.value);
@@ -331,7 +331,7 @@ export const LibraryView: React.FC = () => {
         {loading ? (
           <div className="flex flex-col items-center justify-center py-20 text-claude-muted-light dark:text-claude-muted-dark">
             <RefreshCw className="w-6 h-6 animate-spin text-claude-accentInk mb-2" />
-            <p className="text-xs">Loading authorized knowledge repository...</p>
+            <p className="text-xs">Loading authorized knowledge repository…</p>
           </div>
         ) : activeTab === 'sources' ? (
           <div>
@@ -367,8 +367,8 @@ export const LibraryView: React.FC = () => {
                         <span className="font-medium text-xs text-claude-accentInk">
                           {res.citation.sourceTitle}
                         </span>
-                        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light">
-                          Relevance {(res.score * 100).toFixed(0)}%
+                        <span className="text-[10px] font-medium px-2 py-0.5 rounded bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light">
+                          Relevance <span className="font-mono">{(res.score * 100).toFixed(0)}%</span>
                         </span>
                       </div>
                       <p className="text-xs leading-relaxed text-claude-text-light/90 dark:text-claude-text-dark/90 font-mono bg-claude-surface2-light/50 dark:bg-black/20 p-2.5 rounded-lg border border-claude-border-light/50 dark:border-claude-border-dark/50">
@@ -477,7 +477,7 @@ export const LibraryView: React.FC = () => {
                           {mem.category}
                         </span>
                         {mem.isSystem && (
-                          <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-600 border border-amber-500/20">
+                          <span className="text-[9px] font-medium px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-600 border border-amber-500/20">
                             system
                           </span>
                         )}
@@ -558,7 +558,7 @@ export const LibraryView: React.FC = () => {
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-lg rounded-2xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-2xl p-6"
+              className="w-full max-w-lg rounded-2xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-lg p-6"
             >
               <div className="flex items-center justify-between pb-4 border-b border-claude-border-light dark:border-claude-border-dark">
                 <h3 className="font-serif font-medium text-base">Ingest New Document</h3>
@@ -598,7 +598,7 @@ export const LibraryView: React.FC = () => {
                   <textarea
                     required
                     rows={8}
-                    placeholder="Enter full document text or markdown..."
+                    placeholder="Enter full document text or markdown…"
                     value={ingestContent}
                     onChange={(e) => setIngestContent(e.target.value)}
                     className="w-full px-3 py-2 rounded-xl text-xs font-mono bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark focus:outline-none focus:border-claude-terracotta resize-none"
@@ -623,7 +623,7 @@ export const LibraryView: React.FC = () => {
                       disabled={isIngesting}
                       className="px-4 py-1.5 rounded-xl bg-claude-terracotta hover:opacity-90 text-white text-xs font-medium transition-colors duration-150 disabled:opacity-50"
                     >
-                      {isIngesting ? 'Indexing...' : 'Index Document'}
+                      {isIngesting ? 'Indexing…' : 'Index Document'}
                     </button>
                   </div>
                 </div>
@@ -641,17 +641,17 @@ export const LibraryView: React.FC = () => {
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-2xl max-h-[85vh] flex flex-col rounded-2xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-2xl p-6"
+              className="w-full max-w-2xl max-h-[85vh] flex flex-col rounded-2xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark shadow-lg p-6"
             >
               <div className="flex items-start justify-between pb-4 border-b border-claude-border-light dark:border-claude-border-dark">
                 <div>
                   <h3 className="font-serif font-medium text-lg">{selectedSource.title}</h3>
                   <div className="flex items-center gap-2 mt-1">
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light">
-                      ID: {selectedSource.id}
+                    <span className="text-[10px] font-medium px-2 py-0.5 rounded bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light">
+                      ID: <code className="font-mono">{selectedSource.id}</code>
                     </span>
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light">
-                      SHA-256: {selectedSource.contentHash.slice(0, 16)}...
+                    <span className="text-[10px] font-medium px-2 py-0.5 rounded bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light">
+                      SHA-256: <code className="font-mono">{selectedSource.contentHash.slice(0, 16)}…</code>
                     </span>
                   </div>
                 </div>

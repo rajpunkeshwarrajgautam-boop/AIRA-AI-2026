@@ -141,7 +141,7 @@ export const ConversationActionsDropdown: React.FC<ConversationActionsDropdownPr
           exit={reducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.96, y: -4 }}
           transition={reducedMotion ? { duration: 0.12 } : { type: 'spring', stiffness: 340, damping: 27, mass: 0.72 }}
           style={{ position: 'fixed', top: position.top, left: position.left, width: MENU_WIDTH }}
-          className="z-[120] rounded-[14px] border border-claude-border-light dark:border-claude-border-dark bg-white/95 dark:bg-stone-900/95 p-1.5 shadow-xl dark:shadow-xl backdrop-blur-xl"
+          className="z-[120] rounded-[14px] border border-claude-border-light dark:border-claude-border-dark bg-white/95 dark:bg-stone-900/95 p-1.5 shadow-lg dark:shadow-lg backdrop-blur-xl"
           onClick={event => event.stopPropagation()}
         >
           <AnimatePresence mode="wait" initial={false}>

@@ -317,7 +317,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                     initial={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 8, scale: 0.97 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 6, scale: 0.98 }}
-                    className="absolute bottom-10 left-0 z-50 w-[220px] rounded-[16px] border border-claude-border-light bg-white/95 p-1.5 shadow-2xl backdrop-blur-xl dark:border-claude-border-dark dark:bg-stone-900/95"
+                    className="absolute bottom-10 left-0 z-50 w-[220px] rounded-[16px] border border-claude-border-light bg-white/95 p-1.5 shadow-lg backdrop-blur-xl dark:border-claude-border-dark dark:bg-stone-900/95"
                   >
                     {STYLE_OPTIONS.map(style => {
                       const selected = style.id === styleMode;

@@ -471,8 +471,8 @@ export const UnifiedWorkspace: React.FC<UnifiedWorkspaceProps> = ({
             )}
           </div>
           {artifact && artifact.versions && artifact.versions.length > 1 && (
-            <span className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/10 text-claude-muted-light dark:text-slate-400">
-              v{selectedVersion}
+            <span className="text-[11px] font-medium px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/10 text-claude-muted-light dark:text-slate-400">
+              v<span className="font-mono">{selectedVersion}</span>
             </span>
           )}
         </div>
@@ -750,12 +750,12 @@ export const UnifiedWorkspace: React.FC<UnifiedWorkspaceProps> = ({
 
         {/* TAB: CODE */}
         {activeTab === 'code' && artifact && (
-          <div className="w-full h-full flex flex-col min-h-0 bg-aira-navy text-aira-porcelain text-xs font-mono">
-            <div className="h-8 px-4 flex items-center justify-between border-b border-white/10 bg-black/20 text-[11px] text-slate-400">
-              <span>{artifact.title} · {artifact.language || 'text'}</span>
-              <span>{currentContent.split('\n').length} lines</span>
+          <div className="w-full h-full flex flex-col min-h-0 bg-aira-navy text-aira-porcelain text-xs">
+            <div className="h-8 px-4 flex items-center justify-between border-b border-white/10 bg-black/20 text-[11px] font-medium text-slate-400">
+              <span>{artifact.title} · <code className="font-mono">{artifact.language || 'text'}</code></span>
+              <span><span className="font-mono">{currentContent.split('\n').length}</span> lines</span>
             </div>
-            <pre className="flex-1 min-h-0 overflow-auto p-4 leading-relaxed whitespace-pre-wrap break-words select-text">
+            <pre className="flex-1 min-h-0 overflow-auto p-4 leading-relaxed whitespace-pre-wrap break-words select-text font-mono">
               <code>{currentContent}</code>
             </pre>
           </div>
@@ -804,8 +804,8 @@ export const UnifiedWorkspace: React.FC<UnifiedWorkspaceProps> = ({
                         <div className="font-medium text-xs text-claude-text-light dark:text-white truncate">
                           {f.title || f.path.split('/').pop()}
                         </div>
-                        <div className="text-[10px] text-claude-muted-light dark:text-slate-400 font-mono">
-                          {f.path} · {Math.ceil(f.bytes / 1024)} KB
+                        <div className="text-[10px] text-claude-muted-light dark:text-slate-400">
+                          <code className="font-mono">{f.path}</code> · <span>{Math.ceil(f.bytes / 1024)} KB</span>
                         </div>
                       </div>
                       <button

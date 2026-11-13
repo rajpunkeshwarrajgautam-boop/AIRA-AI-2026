@@ -349,7 +349,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                     <Calendar className="w-4 h-4" />
                     <span>Pending Scheduled Automation (Inactive Draft)</span>
                   </div>
-                  <span className="text-[10px] font-mono text-amber-700 dark:text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20">
+                  <span className="text-[10px] font-medium text-amber-700 dark:text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20">
                     Scheduler Unavailable
                   </span>
                 </div>
@@ -360,11 +360,11 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                     <p><strong>Timezone:</strong> {message.automationProposal.timezone}</p>
                   )}
                   {message.automationProposal.cronExpression ? (
-                    <p className="text-[10px] font-mono text-claude-muted-light/80 dark:text-slate-400">
-                      <strong>Cadence:</strong> {message.automationProposal.cronExpression}
+                    <p className="text-[10px] text-claude-muted-light/80 dark:text-slate-400">
+                      <strong>Cadence:</strong> <code className="font-mono">{message.automationProposal.cronExpression}</code>
                     </p>
                   ) : (
-                    <p className="text-[10px] font-mono text-claude-muted-light/80 dark:text-slate-400">
+                    <p className="text-[10px] text-claude-muted-light/80 dark:text-slate-400">
                       <strong>Execution:</strong> One-time at-most-once execution
                     </p>
                   )}
@@ -380,7 +380,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                   className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium text-xs transition-colors shadow-sm self-start"
                 >
                   <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>{isConfirmingAutomation ? 'Saving Draft...' : 'Save Automation (Inactive Draft)'}</span>
+                  <span>{isConfirmingAutomation ? 'Saving Draft…' : 'Save Automation (Inactive Draft)'}</span>
                 </button>
               </div>
             )}
@@ -392,8 +392,8 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                     <ImageIcon className="w-4 h-4" />
                     <span>Billable Vision Generation · Authorization Required</span>
                   </div>
-                  <span className="text-[10px] font-mono text-aira-blue bg-aira-blue/10 px-1.5 py-0.5 rounded font-semibold">
-                    {message.visionProposal.estimatedCredits} Credits
+                  <span className="text-[10px] font-semibold text-aira-blue bg-aira-blue/10 px-1.5 py-0.5 rounded">
+                    <span className="font-mono">{message.visionProposal.estimatedCredits}</span> Credits
                   </span>
                 </div>
                 <div className="text-[11px] text-claude-muted-light dark:text-slate-300 space-y-1">

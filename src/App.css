@@ -8,8 +8,8 @@
   font-size: var(--text-md);
   padding: var(--space-xs) var(--space-sm);
   border-radius: var(--radius-card);
-  color: var(--color-accent);
-  background: var(--color-paper-2);
+  color: var(--color-ink);
+  background-color: var(--color-paper-2);
   border: 1px solid transparent;
   transition: border-color var(--dur-short) ease;
   margin-bottom: var(--space-lg);

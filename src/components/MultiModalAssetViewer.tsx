@@ -152,8 +152,8 @@ export const MultiModalAssetViewer: React.FC<MultiModalAssetViewerProps> = ({
           {naturalDimensions && (
             <>
               <span className="text-stone-600">•</span>
-              <span className="font-mono text-[10px] text-stone-400">
-                {naturalDimensions.width} × {naturalDimensions.height} px
+              <span className="text-[10px] text-stone-400">
+                <code className="font-mono">{naturalDimensions.width} × {naturalDimensions.height}</code> px
               </span>
             </>
           )}
@@ -262,7 +262,7 @@ export const MultiModalAssetViewer: React.FC<MultiModalAssetViewerProps> = ({
               src={mediaSource}
               alt={file.name}
               data-testid="multimodal-image-element"
-              loading="lazy"
+              fetchPriority="high"
               decoding="async"
               crossOrigin="anonymous"
               onLoad={e => {
@@ -321,7 +321,7 @@ export const MultiModalAssetViewer: React.FC<MultiModalAssetViewerProps> = ({
         {file.kind === 'audio' && (
           <div
             data-testid="audio-preview-stage"
-            className="w-full max-w-md p-6 bg-stone-900 border border-stone-800 rounded-2xl shadow-2xl flex flex-col gap-4"
+            className="w-full max-w-md p-6 bg-stone-900 border border-stone-800 rounded-2xl shadow-lg flex flex-col gap-4"
           >
             <div className="flex items-center gap-3">
               <div className="w-12 h-12 rounded-xl bg-purple-500/20 text-purple-400 flex items-center justify-center border border-purple-500/30">
@@ -399,7 +399,7 @@ export const MultiModalAssetViewer: React.FC<MultiModalAssetViewerProps> = ({
         {file.kind === 'video' && !loadError && (
           <div
             data-testid="video-preview-stage"
-            className="max-w-2xl w-full bg-black rounded-xl border border-stone-800 shadow-2xl overflow-hidden flex flex-col"
+            className="max-w-2xl w-full bg-black rounded-xl border border-stone-800 shadow-lg overflow-hidden flex flex-col"
           >
             <video poster="/screenshots/desktop.png" src={mediaSource}
               controls

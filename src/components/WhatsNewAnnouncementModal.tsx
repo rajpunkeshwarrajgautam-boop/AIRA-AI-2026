@@ -105,7 +105,7 @@ export const WhatsNewAnnouncementModal: React.FC<WhatsNewAnnouncementModalProps>
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
     >
       <div
-        className="w-full max-w-xl max-h-[85vh] flex flex-col rounded-2xl bg-white dark:bg-stone-900 border border-stone-200 dark:border-white/10 shadow-2xl overflow-hidden"
+        className="w-full max-w-xl max-h-[85vh] flex flex-col rounded-2xl bg-white dark:bg-stone-900 border border-stone-200 dark:border-white/10 shadow-lg overflow-hidden"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
@@ -164,8 +164,8 @@ export const WhatsNewAnnouncementModal: React.FC<WhatsNewAnnouncementModalProps>
                     year: 'numeric'
                   })}
                 </span>
-                <span className="ml-auto text-xs px-2 py-0.5 rounded-md bg-stone-100 dark:bg-white/10 font-mono text-stone-600 dark:text-stone-300">
-                  v{activeAnnouncement.version}
+                <span className="ml-auto text-xs px-2 py-0.5 rounded-md bg-stone-100 dark:bg-white/10 font-medium text-stone-600 dark:text-stone-300">
+                  v<span className="font-mono">{activeAnnouncement.version}</span>
                 </span>
               </div>
 
@@ -215,8 +215,8 @@ export const WhatsNewAnnouncementModal: React.FC<WhatsNewAnnouncementModalProps>
                     >
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
-                          <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-stone-200 dark:bg-white/10 text-stone-700 dark:text-stone-300">
-                            v{announcement.version}
+                          <span className="text-xs font-medium font-bold px-2 py-0.5 rounded bg-stone-200 dark:bg-white/10 text-stone-700 dark:text-stone-300">
+                            v<span className="font-mono">{announcement.version}</span>
                           </span>
                           <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-aira-blue/10 text-aira-blue dark:text-cyan-400">
                             {announcement.category}

@@ -392,7 +392,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.95, y: 15 }}
           transition={{ type: 'spring', duration: 0.35, bounce: 0.15 }}
-          className="relative w-full max-w-md bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark rounded-2xl shadow-2xl overflow-hidden z-10"
+          className="relative w-full max-w-md bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark rounded-2xl shadow-lg overflow-hidden z-10"
         >
           {/* Header */}
           <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-claude-border-light dark:border-claude-border-dark">
@@ -608,7 +608,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
                     {isLoading ? (
                       <>
                         <Loader2 className="w-4 h-4 animate-spin motion-reduce:animate-none" />
-                        <span>Authenticating...</span>
+                        <span>Authenticating…</span>
                       </>
                     ) : (
                       <>
@@ -768,7 +768,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
                     {isLoading ? (
                       <>
                         <Loader2 className="w-4 h-4 animate-spin motion-reduce:animate-none" />
-                        <span>Creating Account...</span>
+                        <span>Creating Account…</span>
                       </>
                     ) : (
                       <>
@@ -1116,14 +1116,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
                   <motion.div
                     initial={{ opacity: 0, height: 0 }}
                     animate={{ opacity: 1, height: 'auto' }}
-                    className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-700 dark:text-emerald-300 space-y-1 font-mono"
+                    className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-700 dark:text-emerald-300 space-y-1"
                   >
                     <div className="font-bold flex items-center space-x-1.5 text-emerald-600 dark:text-emerald-400">
                       <CheckCircle2 className="w-4 h-4" />
                       <span>Live Server Principal Verified</span>
                     </div>
                     <div>Status: {serverVerification.status}</div>
-                    <div>Principal: {serverVerification.userId}</div>
+                    <div>Principal: <code className="font-mono">{serverVerification.userId}</code></div>
                     <div>Provider: {serverVerification.provider}</div>
                   </motion.div>
                 )}

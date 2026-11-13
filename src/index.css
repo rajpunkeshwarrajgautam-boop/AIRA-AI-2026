@@ -109,11 +109,11 @@
 }
 
 .aira-prose blockquote {
-  border-left: 3px solid var(--accent-terracotta);
-  padding-left: 1.25rem;
+  border-left: 1px solid var(--accent-terracotta);
+  padding-left: var(--space-md);
   font-style: italic;
   font-family: var(--font-display);
-  margin: 1.35rem 0;
+  margin: var(--space-md) 0;
   color: var(--text-muted);
 }
 
@@ -206,6 +206,7 @@
 .dark .bg-mesh-canvas {
   background-color: var(--bg-main);
   background-image: none;
+  color: var(--text-primary);
 }
 
 /* Ambient Aura Glow for Aira Cognition Emblem */
@@ -249,6 +250,7 @@
 /* Gradient Card Surfaces with Glass Sheen */
 .gradient-card-surface {
   background: var(--bg-surface);
+  color: var(--text-primary);
   border: 1px solid var(--border-subtle);
   box-shadow: none;
 }
@@ -464,10 +466,12 @@
 
 .aira-editorial-app .aira-sidebar-footer {
   background-color: var(--bg-surface-secondary);
+  color: var(--text-primary);
 }
 
 .aira-editorial-app .aira-composer-card {
   background-color: var(--bg-surface);
+  color: var(--text-primary);
 }
 
 .aira-editorial-app .aira-editorial-greeting .aura-ambient-glow {

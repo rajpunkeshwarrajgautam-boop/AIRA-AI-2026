@@ -213,7 +213,7 @@ export const ConversationSearchOverlay: React.FC<ConversationSearchOverlayProps>
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={reducedMotion ? { opacity: 0 } : { opacity: 0, y: -8, scale: 0.99 }}
             transition={reducedMotion ? { duration: 0.08 } : { type: 'spring', stiffness: 360, damping: 31 }}
-            className="w-full max-w-[720px] overflow-hidden rounded-[22px] border border-claude-border-light bg-white/97 shadow-2xl backdrop-blur-2xl dark:border-claude-border-dark dark:bg-stone-900/97 dark:shadow-2xl"
+            className="w-full max-w-[720px] overflow-hidden rounded-[22px] border border-claude-border-light bg-white/97 shadow-lg backdrop-blur-2xl dark:border-claude-border-dark dark:bg-stone-900/97 dark:shadow-lg"
           >
             <div className="flex items-center gap-3 border-b border-claude-border-light px-4 dark:border-claude-border-dark">
               <Search className="h-4 w-4 shrink-0 text-claude-muted-light dark:text-claude-muted-dark" />

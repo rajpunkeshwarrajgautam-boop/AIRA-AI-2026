@@ -49,8 +49,8 @@ export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({ thinking }) => {
                 {thinking.isStreaming ? 'Aira is reasoning' : 'Reasoning details'}
               </span>
               {thinking.durationSeconds !== undefined && !thinking.isStreaming && (
-                <span className="rounded-md bg-claude-surface2-light px-1.5 py-0.5 font-mono text-[9px] tabular-nums text-claude-muted-light dark:bg-claude-surface2-dark dark:text-claude-muted-dark">
-                  {thinking.durationSeconds.toFixed(1)}s
+                <span className="rounded-md bg-claude-surface2-light px-1.5 py-0.5 text-[9px] font-medium tabular-nums text-claude-muted-light dark:bg-claude-surface2-dark dark:text-claude-muted-dark">
+                  <span className="font-mono">{thinking.durationSeconds.toFixed(1)}</span>s
                 </span>
               )}
             </span>

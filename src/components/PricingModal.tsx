@@ -57,7 +57,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className="relative w-full max-w-5xl rounded-3xl bg-stone-900 border border-white/10 text-white shadow-2xl overflow-hidden my-8"
+        className="relative w-full max-w-5xl rounded-3xl bg-stone-900 border border-white/10 text-white shadow-lg overflow-hidden my-8"
       >
         {/* Header */}
         <div className="p-6 md:p-8 border-b border-white/10 flex flex-col md:flex-row md:items-center justify-between gap-4">
