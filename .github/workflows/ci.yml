@@ -134,6 +134,9 @@ jobs:
       - name: Projects storage synchronous fidelity and thenable deadlock regression
         run: npm run test:projects-storage-regression
 
+      - name: Staging database guard excludes default branch and privileged roles
+        run: npx tsx --test test/staging-db-guard.test.ts
+
       - name: Staging live acceptance fail-closed configuration regression
         run: npx tsx --test test/staging-live-acceptance-config.test.ts
       - name: Post-merge runtime and type safety regression

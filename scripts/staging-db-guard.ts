@@ -2,9 +2,10 @@
  * Non-production staging ONLY. Never execute migrations against a production
  * database or for a Production deployment. This file only exists on staging.
  */
+// Never allow the Neon project's primary/default endpoint here.
+// Staging deploys may run Knex migrations; they MUST target the isolated
+// certification branch and use its dedicated staging runtime role.
 const knownStagingHosts = [
-  'ep-shiny-bird-b3xundyt-pooler.c-4.ap-southeast-1.aws.neon.tech',
-  'ep-shiny-bird-b3xundyt.c-4.ap-southeast-1.aws.neon.tech',
   'ep-twilight-cherry-b3iz2oqv-pooler.c-4.ap-southeast-1.aws.neon.tech',
   'ep-twilight-cherry-b3iz2oqv.c-4.ap-southeast-1.aws.neon.tech'
 ];
@@ -28,7 +29,9 @@ try {
     throw new Error('Invalid database protocol');
   }
   hostname = url.hostname;
-  if (url.pathname !== '/neondb') throw new Error('Unexpected database name');
+  if (url.pathname !== '/neondb' || url.username !== 'aira_staging_runtime') {
+    throw new Error('Unexpected staging database or runtime role');
+  }
 } catch {
   throw new Error('STAGING_DB_GUARD: invalid staging DATABASE_URL');
 }
