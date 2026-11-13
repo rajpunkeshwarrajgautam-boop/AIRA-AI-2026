@@ -82,8 +82,12 @@ test('Mission D — Real Wire MCP Server Integration, Tool Discovery, and Securi
       transport: 'streamable_http'
     });
 
-    const connectResult = await mcpHost.connectServer('srv_malicious_proto');
-    assert.equal(connectResult, false, 'Connection to non-HTTP/HTTPS protocol must fail');
+    await assert.rejects(
+      () => mcpHost.connectServer('srv_malicious_proto'),
+      (err: any) => err instanceof McpSecurityError &&
+        err.code === 'FORBIDDEN_PROTOCOL' && err.statusCode === 400,
+      'Connection to non-HTTP/HTTPS protocol must be rejected with a structured error'
+    );
 
     const status = mcpHost.getServerStatus('srv_malicious_proto');
     assert.equal(status?.lastError, 'MCP_CONNECTION_FAILED', 'Public status must never expose raw transport error details');
