@@ -231,7 +231,8 @@ export async function validateMcpUrl(
 
   // In production, require https unless local dev is explicitly enabled
   const isProd = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
-  const allowLocal = options.allowLocalInDev || process.env.AIRA_ALLOW_LOCAL_MCP === 'true';
+  // A developer override can never weaken the public/production egress boundary.
+  const allowLocal = !isProd && (options.allowLocalInDev || process.env.AIRA_ALLOW_LOCAL_MCP === 'true');
 
   const hostname = parsed.hostname.toLowerCase().trim();
 
@@ -265,7 +266,7 @@ export async function validateMcpUrl(
 
   // Localhost hostname check
   if (hostname === 'localhost' || hostname === 'localhost.localdomain') {
-    if (isProd && !allowLocal) {
+    if (!allowLocal) {
       throw new McpSecurityError(
         'Connecting to localhost MCP endpoints is forbidden in production environments.',
         'SSRF_LOCALHOST_PROHIBITED',
