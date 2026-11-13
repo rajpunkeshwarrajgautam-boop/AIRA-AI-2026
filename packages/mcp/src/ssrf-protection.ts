@@ -223,7 +223,7 @@ export async function validateMcpUrl(
   // Protocol check
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new McpSecurityError(
-      `Forbidden protocol '${parsed.protocol}'. Only http and https MCP transports are permitted.`,
+      `Forbidden protocol '${parsed.protocol}'. Only http and https are allowed for MCP transports.`,
       'FORBIDDEN_PROTOCOL',
       400
     );
