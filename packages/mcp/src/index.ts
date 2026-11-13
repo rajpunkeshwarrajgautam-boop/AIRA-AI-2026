@@ -115,20 +115,30 @@ export interface McpOperationOptions {
   isOperator?: boolean;
 }
 
-/** Fail closed for public HTTP MCP egress until an operator approves a host. */
+/**
+ * Do not connect remote MCP transports from the public API runtime without
+ * connection-time network controls. A hostname allowlist and a DNS check
+ * before fetch are insufficient: the SDK owns DNS resolution and redirects
+ * after validation, allowing DNS rebinding or redirects into private networks.
+ *
+ * Approved host configuration is intentionally NOT an escape hatch. Restore
+ * remote transports only through a separately reviewed, network-restricted
+ * connector with connection-time address pinning and redirect revalidation.
+ * Local integration fixtures remain available outside production.
+ */
 export function assertApprovedPublicMcpDestination(
   url: URL,
-  approvedHosts = process.env.AIRA_APPROVED_MCP_HOSTS || ''
+  _approvedHosts = process.env.AIRA_APPROVED_MCP_HOSTS || ''
 ): void {
   if (!(process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL))) return;
-  const approved = new Set(approvedHosts.split(',')
-    .map(host => host.trim().toLowerCase()).filter(Boolean));
-  if (url.protocol !== 'https:' || !approved.has(url.hostname.toLowerCase())) {
-    throw new McpSecurityError(
-      'Remote MCP connections are unavailable until the destination is approved by the platform operator.',
-      'MCP_EGRESS_NOT_APPROVED', 403
-    );
-  }
+  // Do not echo the URL; it may contain credentials or private paths.
+  void url;
+  void _approvedHosts;
+  throw new McpSecurityError(
+    'Remote MCP connections are disabled until secure connection-time egress enforcement is available.',
+    'MCP_EGRESS_ENFORCEMENT_REQUIRED',
+    503
+  );
 }
 
 /** A gateway tool cannot cross user ownership merely because its name is global. */
