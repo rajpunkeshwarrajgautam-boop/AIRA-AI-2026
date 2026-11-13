@@ -436,14 +436,29 @@ test('SEC-03: connection policy denials remain errors and never expose transport
     await assert.rejects(
       () => host.connectServer('blocked_connection', { ownerId: 'owner_a' }),
       (err: any) => err instanceof McpSecurityError &&
-        err.code === 'SSRF_PRIVATE_IP_PROHIBITED' &&
-        err.statusCode === 403
+        err.code === 'MCP_EGRESS_ENFORCEMENT_REQUIRED' &&
+        err.statusCode === 503
     );
 
     const status = host.getServerStatus('blocked_connection', { ownerId: 'owner_a' });
     assert.equal(status?.connected, false);
     assert.equal(status?.lastError, 'MCP_CONNECTION_FAILED');
     assert.equal(JSON.stringify(host.listServers('owner_a')).includes('should-not-be-logged'), false);
+
+    // Even an unresolvable hostname must be denied by the production policy
+    // before any DNS lookup or transport construction is attempted.
+    host.registerServer({
+      id: 'unresolvable_connection',
+      name: 'Should never resolve',
+      transport: 'sse',
+      url: 'https://cannot-resolve-test.invalid/private'
+    }, { ownerId: 'owner_a' });
+    await assert.rejects(
+      () => host.connectServer('unresolvable_connection', { ownerId: 'owner_a' }),
+      (err: any) => err instanceof McpSecurityError &&
+        err.code === 'MCP_EGRESS_ENFORCEMENT_REQUIRED' &&
+        err.statusCode === 503
+    );
 
     await assert.rejects(
       () => validateMcpUrl('invalid URL with password=should-not-be-logged'),
