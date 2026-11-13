@@ -554,8 +554,16 @@ export class McpHost {
       this.serverTools.set(serverId, registeredDefs);
       return true;
     } catch (err: any) {
-      this.serverErrors.set(serverId, err.message);
-      console.error(`Failed to connect MCP server ${config.name}:`, err.message);
+      // A rejected security boundary is an HTTP error, not a successful
+      // connection attempt with a false result. Do not downgrade a 403/503
+      // from transport policy into a 200 response on the management route.
+      // Never retain raw transport messages, URLs, headers, or credential
+      // material in status summaries or application logs.
+      this.serverErrors.set(serverId, 'MCP_CONNECTION_FAILED');
+      if (err instanceof McpSecurityError) {
+        throw err;
+      }
+      console.error('[MCP] Remote connection failed (details redacted).');
       return false;
     }
   }
