@@ -1004,12 +1004,13 @@ app.post('/api/mcp/servers', async (req: Request, res: Response) => {
 
   const targetTransport = transport || (command ? 'stdio' : 'streamable_http');
 
-  // SEC-01: Prohibit customer APIs from registering stdio
-  if (targetTransport === 'stdio' && !isOp) {
+  // Process-backed MCP execution may be provisioned by trusted internal
+  // startup code only. Never expose interpreter/command launching through
+  // public HTTP routes, including operator-authenticated requests.
+  if (targetTransport === 'stdio') {
     return res.status(403).json({
-      error: 'FORBIDDEN',
-      code: 'STDIO_TRANSPORT_RESTRICTED',
-      message: 'stdio process transport is restricted to verified platform operators. Customer APIs must use streamable_http or sse transports.'
+      error: 'FORBIDDEN', code: 'STDIO_MANAGEMENT_INTERNAL_ONLY',
+      message: 'Process-backed MCP servers cannot be managed through the public API.'
     });
   }
 
@@ -1036,6 +1037,13 @@ app.post('/api/mcp/servers/:id/connect', async (req: Request, res: Response) => 
   const id = getParam(req.params.id);
 
   try {
+    const config = mcpHost.getServerConfig(id, { ownerId: authUserId || undefined, isOperator: isOp });
+    if (config?.transport === 'stdio') {
+      return res.status(403).json({
+        error: 'FORBIDDEN', code: 'STDIO_MANAGEMENT_INTERNAL_ONLY',
+        message: 'Process-backed MCP servers cannot be connected through the public API.'
+      });
+    }
     const success = await mcpHost.connectServer(id, { ownerId: authUserId || undefined, isOperator: isOp });
     const status = mcpHost.getServerStatus(id, { ownerId: authUserId || undefined, isOperator: isOp });
     res.json({ success, status });
