@@ -415,3 +415,46 @@ test('SEC-03 follow-up: production egress stays blocked even with an approved ho
     else process.env.VERCEL = priorVercel;
   }
 });
+
+test('SEC-03: connection policy denials remain errors and never expose transport details', async () => {
+  const host = new McpHost(new ToolGateway(new InMemoryToolCallRepository()));
+  host.registerServer({
+    id: 'blocked_connection',
+    name: 'Blocked test connection',
+    transport: 'streamable_http',
+    url: 'http://127.0.0.1:31337/mcp?credential=should-not-be-logged'
+  }, { ownerId: 'owner_a' });
+
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousVercel = process.env.VERCEL;
+  try {
+    process.env.NODE_ENV = 'production';
+    delete process.env.VERCEL;
+
+    // A fail-closed transport policy must not be downgraded to a 200
+    // management response with success=false.
+    await assert.rejects(
+      () => host.connectServer('blocked_connection', { ownerId: 'owner_a' }),
+      (err: any) => err instanceof McpSecurityError &&
+        err.code === 'SSRF_PRIVATE_IP_PROHIBITED' &&
+        err.statusCode === 403
+    );
+
+    const status = host.getServerStatus('blocked_connection', { ownerId: 'owner_a' });
+    assert.equal(status?.connected, false);
+    assert.equal(status?.lastError, 'MCP_CONNECTION_FAILED');
+    assert.equal(JSON.stringify(host.listServers('owner_a')).includes('should-not-be-logged'), false);
+
+    await assert.rejects(
+      () => validateMcpUrl('invalid URL with password=should-not-be-logged'),
+      (err: any) => err instanceof McpSecurityError &&
+        err.code === 'MALFORMED_URL' &&
+        !err.message.includes('should-not-be-logged')
+    );
+  } finally {
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+    if (previousVercel === undefined) delete process.env.VERCEL;
+    else process.env.VERCEL = previousVercel;
+  }
+});
