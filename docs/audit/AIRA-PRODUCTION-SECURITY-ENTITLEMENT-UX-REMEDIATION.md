@@ -43,7 +43,7 @@ Eleven audit findings have source-level remediation and automated regression cov
 ## Finding SEC-01 — Unauthorized MCP Management and Command Execution
 
 ### Root Cause
-`/api/mcp/servers` lacked authentication middleware and accepted arbitrary `{ command, args, transport: 'stdio' }` payloads. When `/connect` was called, the MCP SDK's `StdioClientTransport` spawned server-side child processes without any role check or ToolGateway authorization gate. Any unauthenticated HTTP caller could potentially spawn arbitrary processes.
+The MCP routes did not have an explicit operator authorization check before accepting `{ command, args, transport: 'stdio' }` configuration. A general `/api` principal middleware existed, so **unauthenticated reachability and actual remote process execution were not established** by source review alone. The verified design flaw was the missing operator/process-management boundary for otherwise authenticated callers.
 
 ### Files Changed
 - `packages/mcp/src/index.ts` — Authorization gates, stdio restriction, command allowlist
@@ -53,7 +53,62 @@ Eleven audit findings have source-level remediation and automated regression cov
 1. All `/api/mcp/*` routes now require authenticated account (guests rejected with 401).
 2. `stdio` transport registration is restricted to verified server-side operators (`isOperator = true`).
 3. Operator stdio enforces a command allowlist: `{ node, npx, tsx, python, python3, uv }` and their `.cmd`/`.exe` variants.
-4. Shell metacharacters (`;`, `&`, `|`, `` ` ``, `$`, `<`, `>`) are rejected in commands and arguments.
+4. Shell metacharacters (`;`, `&`, `|`, `` ` ``, `# AIRA AI 2026 — Production Security, Entitlement, and UX Remediation
+
+> **Security containment update (13 Nov 2026, PR #171):** Production/Vercel MCP remote transports now fail closed even when `AIRA_APPROVED_MCP_HOSTS` contains the requested hostname. This intentionally disables public-runtime remote MCP connectivity pending a separately reviewed connection-time egress control with address binding and redirect checks. Local non-production MCP integration remains available. The regression explicitly checks approved-host and Vercel cases. **This is a temporary safe restriction, not full SSRF-safe remote transport support.** New exact-head CI and genuine OAuth-backed staging acceptance remain required; this PR is **DRAFT / NO GO** and production is unchanged.
+>
+> **Independent follow-up / release status (13 Nov 2026): DRAFT — NO GO**
+>
+> The original remediation results below describe Antigravity's earlier implementation and remain as historical evidence. Subsequent independent review found additional MCP platform-resource, process-backed HTTP management, cross-tenant tool-invocation, URL/status disclosure and approval-policy gaps. Corrective commits on PR #171 now fence these paths, make external MCP tools consent-required, and add mandatory Fast CI coverage. The public MCP egress path is fail-closed unless an approved HTTPS host is configured.
+>
+> **Certification still incomplete:** an operator-approved host is not proof of connection-time DNS/redirect egress enforcement; live two-account Google/GitHub OAuth-backed Edge staging and all tier-specific end-to-end checks have not been reproduced here. Check the latest PR head and corresponding GitHub Actions before relying on results. No production deployment, database mutation, secret rotation, or billing change was performed during this follow-up. Do not merge until the remaining security and authenticated-acceptance gates are completed. The blanket \"FIXED AND VERIFIED\" and \"release-blocker cleared\" conclusions below are superseded for current release readiness.
+
+---
+
+**Audit Reference Date:** 2026-11-13  
+**Remediation Branch:** `fix/security-entitlement-ux-remediation-20261113`  
+**Remediation Commit SHA:** `ce25f1c`  
+**Audited Production Commit:** `f989d9352d581398cbbc4e6a97af34f897387fb2`  
+**Repository:** `rajpunkeshwarrajgautam-boop/AIRA-AI-2026`  
+**Production URL:** https://aira-ai-2026.vercel.app  
+**Engineer:** Principal Software Engineer / Application Security Architect  
+
+---
+
+## Executive Summary
+
+Eleven audit findings have source-level remediation and automated regression coverage. **This is not a completed production certification.** SEC-01 and SEC-02 require genuine deployed and authenticated cross-account acceptance; SEC-03 is currently **INTENTIONALLY RESTRICTED** because public-runtime remote HTTP/SSE MCP connections fail closed pending connection-time egress enforcement. UX/API/OPS/security-header findings still require deployed functional verification. Previous automated test results below are historical evidence, not current-head release approval.
+
+| ID | Category | Severity | Status |
+|----|----------|----------|--------|
+| SEC-01 | Unauthorized MCP stdio command execution | **CRITICAL** | **CODE CORRECTED — LIVE ACCEPTANCE PENDING** |
+| SEC-02 | MCP credential exposure and tenant isolation | **HIGH** | **CODE CORRECTED — LIVE ACCEPTANCE PENDING** |
+| SEC-03 | MCP SSRF protection incomplete | **HIGH** | **INTENTIONALLY RESTRICTED — REMOTE MCP DISABLED** |
+| UX-01 | Guest Agent mode misleading messaging | Medium | **CODE CORRECTED — LIVE ACCEPTANCE PENDING** |
+| UX-02 | Model upgrade routing misclassification | Medium | **CODE CORRECTED — LIVE ACCEPTANCE PENDING** |
+| UX-03 | Inconsistent Agent entry-point gating | Medium | **CODE CORRECTED — LIVE ACCEPTANCE PENDING** |
+| API-01 | Entitlement API hardcoded Pro tier override | Medium | **CODE CORRECTED — LIVE ACCEPTANCE PENDING** |
+| UX-04 | Incorrect Help Center and model claims | Low | **CODE CORRECTED — LIVE ACCEPTANCE PENDING** |
+| UX-05 | Billing/entitlement loading state silent fallback | Medium | **CODE CORRECTED — LIVE ACCEPTANCE PENDING** |
+| OPS-01 | Fake ONLINE health reporting | Medium | **CODE CORRECTED — LIVE ACCEPTANCE PENDING** |
+| HARDEN-01 | Missing HTTP security headers | Medium | **CODE CORRECTED — LIVE ACCEPTANCE PENDING** |
+
+---
+
+## Finding SEC-01 — Unauthorized MCP Management and Command Execution
+
+### Root Cause
+The MCP routes did not have an explicit operator authorization check before accepting `{ command, args, transport: 'stdio' }` configuration. A general `/api` principal middleware existed, so **unauthenticated reachability and actual remote process execution were not established** by source review alone. The verified design flaw was the missing operator/process-management boundary for otherwise authenticated callers.
+
+### Files Changed
+- `packages/mcp/src/index.ts` — Authorization gates, stdio restriction, command allowlist
+- `apps/api/src/index.ts` — Route-level authentication, operator gating, tenant isolation
+
+### Fix Applied
+1. All `/api/mcp/*` routes now require authenticated account (guests rejected with 401).
+2. `stdio` transport registration is restricted to verified server-side operators (`isOperator = true`).
+3. Operator stdio enforces a command allowlist: `{ node, npx, tsx, python, python3, uv }` and their `.cmd`/`.exe` variants.
+, `<`, `>`) are rejected in command values. Arguments are checked for string type; command-specific argument allowlisting is not established by this implementation. Public HTTP routes disallow stdio entirely.
 5. All MCP management operations (register, connect, disconnect, list, delete) validate tenant ownership before execution.
 6. Non-operator customer accounts can only use `streamable_http` or `sse` transports.
 
@@ -112,8 +167,8 @@ The previous URL validation was a naive string comparison: `parsedUrl.hostname =
 4. **Blocked IPv4 ranges**: loopback (127.0.0.0/8), private 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, link-local (169.254.0.0/16), Alibaba metadata (100.100.100.100/32).
 5. **Blocked hostnames**: `localhost`, `metadata.google.internal`, `169.254.169.254`, `metadata.internal`.
 6. **IPv6 checks**: Rejects `::1`, `fc00::/7` (ULA), `fe80::/10` (link-local), `::ffff:0:0/96` (IPv4-mapped).
-7. **Connection-time DNS lookup**: Resolves hostname and validates all returned IPs against blocked ranges at validation time, preventing DNS rebinding.
-8. **Redirect safety**: Callers must re-validate redirected destinations.
+7. **Pre-connection DNS lookup**: Resolves hostname and checks returned IPs. This **does not prevent DNS rebinding at connection time** when the SDK performs subsequent resolution.
+8. **Production containment**: Public-runtime MCP HTTP/SSE connections are disabled before transport creation. Redirect and connection-time enforcement are **not implemented for active production remote MCP**; any future re-enablement must provide both.
 
 ### Test Evidence
 ```
