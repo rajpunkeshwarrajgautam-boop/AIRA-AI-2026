@@ -14,7 +14,10 @@ test('Mission D — Real Wire MCP Server Integration, Tool Discovery, and Securi
     scopes: ['*']
   };
 
-  const toolGateway = new ToolGateway(new InMemoryToolCallRepository());
+  // Controlled integration fixture: the separate ApprovalKernel tests cover
+  // durable consent, while this fixture tests real MCP wire execution after consent.
+  const alreadyApprovedFixture = { isToolCallApproved: async () => true } as any;
+  const toolGateway = new ToolGateway(new InMemoryToolCallRepository(), alreadyApprovedFixture);
   const mcpHost = new McpHost(toolGateway);
 
   const testServer = createTestMcpServer(0);
@@ -41,6 +44,9 @@ test('Mission D — Real Wire MCP Server Integration, Tool Discovery, and Securi
     assert.ok(status.toolCount >= 2);
     assert.ok(status.tools.includes('mcp_srv_calc_real_echo'));
     assert.ok(status.tools.includes('mcp_srv_calc_real_add'));
+    const definition = toolGateway.getTool('mcp_srv_calc_real_add')?.definition;
+    assert.equal(definition?.permissionLevel, 'WRITE');
+    assert.equal(definition?.approvalPolicy, 'require_approval');
   });
 
   await t.test('2. Execute Real Discovered Tools on Live Server with Untrusted Data Tagging', async () => {
