@@ -17,12 +17,14 @@ export function IntroGate({ userId, tone = 'Minimal', fallback, onStart }: Intro
   const [seen, setSeen] = useState<boolean | null>(null);
   const [activeTone, setActiveTone] = useState<IntroTone>(tone);
   const [busy, setBusy] = useState(false);
+  const guestMode = !userId || userId === 'guest' || userId.startsWith('guest_') || !neonAuth.isAuthenticated();
+  const guestStorageKey = `${GUEST_KEY}:${guestMode ? userId || 'anonymous' : 'signed-out'}`;
 
   useEffect(() => {
     let active = true;
     setSeen(null);
-    if (!userId) {
-      try { setSeen(localStorage.getItem(GUEST_KEY) === '1'); }
+    if (guestMode) {
+      try { setSeen(localStorage.getItem(guestStorageKey) === '1'); }
       catch { setSeen(false); }
       return () => { active = false; };
     }
@@ -42,13 +44,13 @@ export function IntroGate({ userId, tone = 'Minimal', fallback, onStart }: Intro
         if (active && epoch === neonAuth.getAuthEpoch() && neonAuth.getCurrentUser()?.id === userId) setSeen(true);
       });
     return () => { active = false; };
-  }, [userId]);
+  }, [userId, guestMode, guestStorageKey]);
 
   const handleStart = async (starter?: StarterId, prompt?: string) => {
     if (busy) return;
     setBusy(true);
     try {
-      if (userId) {
+      if (!guestMode && userId) {
         const epoch = neonAuth.getAuthEpoch();
         const response = await authenticatedApiFetch('/api/me/onboarding', {
           method: 'POST',
@@ -58,7 +60,7 @@ export function IntroGate({ userId, tone = 'Minimal', fallback, onStart }: Intro
         if (!response.ok) throw new Error(`Unable to save onboarding: ${response.status}`);
         if (epoch !== neonAuth.getAuthEpoch() || neonAuth.getCurrentUser()?.id !== userId) return;
       } else {
-        try { localStorage.setItem(GUEST_KEY, '1'); } catch { /* ephemeral guest mode */ }
+        try { localStorage.setItem(guestStorageKey, '1'); } catch { /* ephemeral guest mode */ }
       }
       setSeen(true);
       if (starter && prompt) onStart(starter, prompt);
