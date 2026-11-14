@@ -25,6 +25,17 @@ export async function up(knex: Knex): Promise<void> {
       table.index(['principal_id', 'created_at'], 'idx_workspace_promo_timeline');
     });
   }
+  // One guest identity must map to at most one authenticated account, across instances.
+  if (!(await knex.schema.hasTable('guest_migration_ledger'))) {
+    await knex.schema.createTable('guest_migration_ledger', table => {
+      table.string('guest_principal_id', 160).primary();
+      table.string('target_principal_id', 128).notNullable().references('id').inTable('users').onDelete('RESTRICT');
+      table.integer('migrated_conversation_count').notNullable();
+      table.string('guest_session_proof_hash', 64).notNullable();
+      table.bigInteger('created_at').notNullable();
+      table.index(['target_principal_id', 'created_at'], 'idx_guest_migration_target');
+    });
+  }
 }
 
 /** Rollbacks require an explicit data-retention decision. */
