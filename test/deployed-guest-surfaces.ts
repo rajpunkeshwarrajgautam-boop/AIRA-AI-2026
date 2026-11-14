@@ -126,9 +126,18 @@ try {
         assert(box && box.x >= -2 && box.x + box.width <= width + 2 &&
           box.y >= -2 && box.y + box.height <= height + 2,
           'Projects dialog clipped: ' + JSON.stringify(box));
+        const foreground = await dialog.evaluate(el => {
+          const rect = el.getBoundingClientRect();
+          const point = document.elementFromPoint(rect.left + rect.width / 2,
+            rect.top + Math.min(rect.height / 2, 75));
+          return Boolean(point && el.contains(point));
+        });
+        assert(foreground, 'Projects dialog is underneath a sidebar or another overlay');
       });
       const closeProjects = page.getByRole('button',{name:'Close projects'});
-      if (await closeProjects.isVisible()) await closeProjects.click();
+      if (await closeProjects.isVisible()) await closeProjects.click({ timeout: 3500 });
+      const reopen = page.getByRole('button', { name: 'Open sidebar navigation' });
+      if (await reopen.isVisible()) await reopen.click();
       await record('Settings', async () => {
         await page.getByRole('button', { name: 'Open settings' }).click();
         await page.getByRole('dialog', { name: 'Workspace Settings' })
