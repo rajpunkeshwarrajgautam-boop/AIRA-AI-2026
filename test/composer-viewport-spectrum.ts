@@ -99,12 +99,33 @@ try {
         try {
           const geometry = await page.evaluate(() => {
             const card = document.querySelector('.aira-composer-card') as HTMLElement;
+            const rectangle = (selector: string) => {
+              const element = document.querySelector(selector) as HTMLElement | null;
+              if (!element) return null;
+              const r = element.getBoundingClientRect();
+              return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height };
+            };
+            const greetingScroll = document.querySelector('[data-testid="chat-scroll-region"]') as HTMLElement | null;
+            if (window.innerHeight <= 480 && greetingScroll) greetingScroll.scrollTop = 0;
             const box = card.getBoundingClientRect();
             return {
               height: card.offsetHeight,
               left: box.left, right: box.right, bottom: box.bottom,
               documentWidth: document.documentElement.scrollWidth,
               viewportWidth: window.innerWidth, viewportHeight: window.innerHeight,
+              header: rectangle('.aira-editorial-header'),
+              headerParts: {
+                brand: rectangle('.aira-header-brand'),
+                mode: rectangle('.aira-header-mode'),
+                model: rectangle('[data-testid="model-selector-button"]'),
+                actions: rectangle('.aira-header-actions'),
+              },
+              composerParts: {
+                modes: rectangle('.aira-composer-mode-group'),
+                send: rectangle('button[aria-label="Send message"]'),
+              },
+              greetingTop: rectangle('.aira-editorial-greeting .claude-fade-up')?.top,
+              scrollTop: rectangle('[data-testid="chat-scroll-region"]')?.top,
             };
           });
           result.composerHeight = geometry.height;
@@ -113,6 +134,40 @@ try {
           assert.ok(geometry.documentWidth <= width + 1, 'Root has horizontal scroll');
           if (width < 640) assert.ok(geometry.height <= 145,
             'Empty mobile composer exceeds 145px: ' + geometry.height);
+          // A global no-horizontal-scroll assertion alone misses clipped and
+          // interleaved flex children in an overflow-hidden header.
+          const intersects = (a: {left:number;right:number;top:number;bottom:number},
+                              b: {left:number;right:number;top:number;bottom:number}) =>
+            Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) *
+            Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+          assert.ok(geometry.header, 'Application header missing');
+          const parts = Object.entries(geometry.headerParts)
+            .filter((entry): entry is [string, NonNullable<typeof entry[1]>] => entry[1] !== null);
+          for (let i = 0; i < parts.length; i++) {
+            const [name, rect] = parts[i];
+            assert.ok(rect.left >= -1 && rect.right <= width + 1,
+              'Header ' + name + ' clipped at ' + width + ': ' + JSON.stringify(rect));
+            for (let j = i + 1; j < parts.length; j++) {
+              assert.ok(intersects(rect, parts[j][1]) < 1,
+                'Header interleaving: ' + name + ' / ' + parts[j][0] + ' at ' + width +
+                ': ' + JSON.stringify(geometry.headerParts));
+            }
+          }
+          if (geometry.composerParts.modes && geometry.composerParts.send) {
+            assert.ok(intersects(geometry.composerParts.modes, geometry.composerParts.send) < 1,
+              'Composer mode toggle overlaps send button: ' + JSON.stringify(geometry.composerParts));
+          }
+          if (height <= 480 && geometry.greetingTop !== undefined && geometry.scrollTop !== undefined) {
+            assert.ok(geometry.greetingTop >= geometry.scrollTop - 1,
+              'Greeting clipped above scroll region in short landscape viewport');
+          }
+
+          const headerButtons = page.locator('.aira-editorial-header button:visible');
+          for (const button of await headerButtons.all()) {
+            const rect = await button.boundingBox();
+            assert.ok(rect && rect.width >= 39.5 && rect.height >= 39.5,
+              'Visible header button smaller than 40x40: ' + JSON.stringify(rect));
+          }
 
           const targets = [
             page.getByRole('button', { name: 'Attach documents or images' }),
