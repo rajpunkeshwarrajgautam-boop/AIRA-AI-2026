@@ -75,7 +75,7 @@ export function IntroGate({ userId, tone = 'Minimal', fallback, onStart }: Intro
   const copy = INTRO_COPY[activeTone];
   return (
     <section className="aira-v3-intro" aria-label="Welcome to AIRA">
-      <div className="aira-v3-intro-mark"><AiraMark size="hero" isAnimated={false} /></div>
+      <div className="aira-v3-intro-mark"><AiraMark size="xl" isAnimated={false} /></div>
       <h1>{copy.title}</h1>
       <p>{copy.description}</p>
       <StarterChips disabled={busy} onSelect={(starter, prompt) => void handleStart(starter, prompt)} />
