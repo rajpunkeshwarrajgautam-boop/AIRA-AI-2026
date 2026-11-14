@@ -630,7 +630,7 @@
    space for the full emblem. Show the greeting and subtitle in reading order. */
 @media (max-height: 480px) and (min-width: 640px) {
   .aira-editorial-greeting {
-    padding-block: 0.5rem;
+    padding-block: 0.25rem;
   }
   .aira-editorial-greeting > .claude-fade-up.relative {
     display: none;
