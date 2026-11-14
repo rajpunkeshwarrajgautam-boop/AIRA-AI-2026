@@ -20,7 +20,7 @@ async function waitForVite(): Promise<void> {
 
 async function main() {
   await mkdir('artifacts/workspace-v3-ui', { recursive: true });
-  const child: ChildProcess = spawn('npm', ['run', 'dev', '--', '--host', '127.0.0.1', '--port', String(PORT), '--strictPort'], {
+  const child: ChildProcess = spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', String(PORT), '--strictPort'], {
     env: { ...process.env, VITE_ADAPTIVE_STUDIO_PREVIEW: 'true' },
     shell: process.platform === 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -45,8 +45,16 @@ async function main() {
       if (!geometry.composer || !geometry.feed) throw new Error(`Composer/feed absent at ${width}px`);
       if (geometry.overflow > 2) throw new Error(`Horizontal overflow ${geometry.overflow}px at ${width}px`);
       if (geometry.composer.width > width + 1 || geometry.composer.x < -1) throw new Error(`Composer clipped at ${width}px`);
+      const controls = await page.locator('.aira-composer button:visible').evaluateAll(elements =>
+        elements.map(element => {
+          const rect = element.getBoundingClientRect();
+          return { label: element.getAttribute('aria-label') || element.textContent?.trim() || 'button', w: rect.width, h: rect.height };
+        }));
+      const invalid = controls.filter(control => control.w < 39.5 || control.h < 39.5);
+      if (invalid.length) throw new Error(`Composer touch targets below 40px at ${width}px: ${JSON.stringify(invalid)}`);
       await page.screenshot({ path: `artifacts/workspace-v3-ui/${width}-light.png`, fullPage: true });
     }
+    await page.setViewportSize({ width: 390, height: 740 });
     await page.evaluate(() => document.documentElement.classList.add('dark'));
     await page.screenshot({ path: 'artifacts/workspace-v3-ui/390-dark.png', fullPage: true });
     console.log(`Workspace V3 responsive smoke: ${widths.length} widths, reduced-motion and dark-mode capture passed`);
