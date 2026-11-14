@@ -762,6 +762,8 @@ export function createBffSessionMiddleware(sessionStore: BffSessionStore = bffSe
       (req as any).user = {
         id: identity.userId,
         sessionId: session.id,
+        isGuest: false,
+        tier: 'free',
         roles: ['workspace_user'],
         scopes: ['chat:write', 'runs:read', 'runs:write', 'browser.read', 'files.read']
       };
