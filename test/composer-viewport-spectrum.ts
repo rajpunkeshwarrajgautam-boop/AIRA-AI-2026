@@ -271,6 +271,15 @@ try {
         await page.screenshot({ path: path.join(evidenceDir, evidenceFile), fullPage: false, animations: 'disabled' });
         assert.ok(layoutDiagnostic.main?.width >= 320,
           'Expanded Studio leaves an unusable chat column at ' + width + ': ' + JSON.stringify(layoutDiagnostic));
+        const styleOption = page.locator('.aira-composer-style');
+        assert.equal(await styleOption.isVisible(), false,
+          'Composer style action is visible within an undersized Studio split pane at ' + width);
+        const splitSubtitle = await page.locator('.aira-editorial-greeting p').first().boundingBox();
+        const splitComposer = await composerCard.boundingBox();
+        assert.ok(splitSubtitle && splitComposer &&
+          splitSubtitle.y + splitSubtitle.height <= splitComposer.y + 1,
+          'Split-pane greeting subtitle obscured by composer at ' + width +
+          ': ' + JSON.stringify({ splitSubtitle, splitComposer }));
         assert.deepEqual(intersections, [], 'Expanded Studio interleaves header controls at ' + width
           + ': ' + JSON.stringify(layoutDiagnostic));
       }
