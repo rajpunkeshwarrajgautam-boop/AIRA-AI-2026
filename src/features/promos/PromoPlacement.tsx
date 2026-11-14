@@ -23,7 +23,7 @@ function sessionId() {
   } catch { return ''; }
 }
 
-export function PromoPlacement({ placement, userTier, userId, streaming, onOpenPlans }: PromoPlacementProps) {
+export function PromoPlacement({ placement, userTier, userId, streaming, telemetryEnabled = true, onOpenPlans }: PromoPlacementProps) {
   const [dismissed, setDismissed] = useState(false);
   const key = useMemo(() => `aira_promo_v1:${userId || 'guest'}:${placement}`, [userId, placement]);
   const eligible = (userTier === 'free' || userTier === 'guest') && !streaming;
