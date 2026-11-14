@@ -380,7 +380,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <button
                 type="button"
                 onClick={() => onOpenSearch(searchQuery)}
-                className="absolute left-1.5 z-10 inline-flex items-center justify-center min-h-[32px] min-w-[32px] rounded-md p-1.5 text-claude-muted-light transition-colors hover:text-claude-accentInk dark:text-claude-muted-dark"
+                className="absolute left-1 z-10 inline-flex items-center justify-center min-h-10 min-w-10 sm:min-h-8 sm:min-w-8 rounded-md p-1.5 text-claude-muted-light transition-colors hover:text-claude-accentInk dark:text-claude-muted-dark"
                 title="Search all conversation content"
                 aria-label="Search all conversation content"
               >
@@ -398,13 +398,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     onOpenSearch(searchQuery);
                   }
                 }}
-                className="w-full text-[13px] font-medium pl-10 pr-4 py-2.5 rounded-xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark placeholder-claude-muted-light dark:placeholder-claude-muted-dark focus:outline-none focus:border-claude-terracotta/50 text-claude-text-light dark:text-white transition-colors duration-150"
+                className="w-full text-[13px] font-medium pl-11 pr-4 py-2.5 rounded-xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark placeholder-claude-muted-light dark:placeholder-claude-muted-dark focus:outline-none focus:border-claude-terracotta/50 text-claude-text-light dark:text-white transition-colors duration-150"
               />
             </div>
             <button
               type="button"
               onClick={() => onOpenSearch(searchQuery)}
-              className="mt-1.5 w-full min-h-[28px] flex items-center px-1 text-left text-[10px] font-medium text-claude-muted-light/80 transition-colors hover:text-claude-accentInk dark:text-claude-muted-dark/80"
+              className="mt-1.5 w-full min-h-10 sm:min-h-7 flex items-center px-1 text-left text-[11px] font-medium text-claude-muted-light/80 transition-colors hover:text-claude-accentInk dark:text-claude-muted-dark/80"
             >
               Search inside messages · Enter
             </button>

@@ -213,26 +213,25 @@
 .aura-ambient-glow {
   position: absolute;
   inset: 0;
-  transform: scale(1.35);
   border-radius: 9999px;
   background: radial-gradient(circle, color-mix(in srgb, var(--accent-primary) 22%, transparent) 0%, color-mix(in srgb, var(--accent-gold) 14%, transparent) 42%, transparent 72%);
+  box-shadow: 0 0 45px 16px color-mix(in srgb, var(--accent-primary) 18%, transparent);
   filter: blur(14px);
   pointer-events: none;
-  animation: auraBreathe 5s ease-in-out infinite alternate;
+  animation: auraBreathe 4s ease-in-out infinite alternate;
 }
 
 .dark .aura-ambient-glow {
   background: radial-gradient(circle, color-mix(in srgb, var(--accent-primary) 28%, transparent) 0%, color-mix(in srgb, var(--accent-gold) 16%, transparent) 45%, transparent 75%);
+  box-shadow: 0 0 50px 18px color-mix(in srgb, var(--accent-primary) 24%, transparent);
   filter: blur(16px);
 }
 
 @keyframes auraBreathe {
   0% {
-    transform: scale(1.25);
     opacity: 0.65;
   }
   100% {
-    transform: scale(1.45);
     opacity: 1;
   }
 }
