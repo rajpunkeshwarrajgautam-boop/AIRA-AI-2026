@@ -147,6 +147,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         data-testid="model-selector-button"
         onClick={() => setIsOpen(open => !open)}
         whileTap={reducedMotion ? undefined : { scale: 0.98 }}
+        aria-label={`Choose model: ${activeModelInfo.name}`}
         aria-haspopup="listbox"
         aria-expanded={isOpen}
         onKeyDown={event => {
@@ -160,12 +161,12 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             });
           }
         }}
-        className="group flex min-w-0 max-w-full items-center gap-1 sm:gap-2 rounded-xl px-1.5 sm:px-2.5 py-1.5 text-left transition-colors hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark"
+        className="group flex min-h-10 min-w-10 max-w-full items-center gap-1 sm:gap-2 rounded-xl px-1.5 sm:px-2.5 py-1.5 text-left transition-colors hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark"
       >
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[9px] bg-claude-terracotta/10 text-claude-accentInk">
           <ActiveIcon className="h-3.5 w-3.5" />
         </span>
-        <span className="min-w-0">
+        <span className="aira-model-selector-label min-w-0">
           <span className="flex items-center gap-1.5">
             <span className="block max-w-[88px] min-[375px]:max-w-[116px] sm:max-w-[180px] truncate text-[12px] sm:text-[13px] font-semibold text-claude-text-light dark:text-white">{activeModelInfo.name}</span>
             {extendedThinking && activeModelInfo.supportsThinking && <Brain className="h-3.5 w-3.5 text-claude-accentInk" />}

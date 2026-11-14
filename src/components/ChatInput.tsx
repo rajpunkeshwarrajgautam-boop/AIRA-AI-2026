@@ -234,8 +234,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           className="max-h-[38vh] w-full resize-none bg-transparent px-3 pb-1 pt-3 sm:px-4 sm:pb-2 sm:pt-4 text-base leading-[1.55] text-claude-text-light outline-none focus:outline-none focus-visible:outline-none focus:ring-0 selection:bg-claude-terracotta/20 placeholder:text-claude-muted-light/75 dark:text-claude-text-dark dark:placeholder:text-claude-muted-dark/75"
         />
 
-        <div className="flex min-w-0 items-center justify-between gap-1.5 px-2.5 sm:px-3 pb-1.5 sm:pb-3 pt-1">
-          <div className="flex min-w-0 items-center gap-1.5">
+        <div className="aira-composer-actions flex min-w-0 items-center justify-between gap-1.5 px-2.5 sm:px-3 pb-1.5 sm:pb-3 pt-1">
+          <div className="aira-composer-tools flex min-w-0 items-center gap-1.5">
             <input ref={fileInputRef} type="file" multiple onChange={handleFileUpload} className="hidden" aria-label="Upload document or image attachments" />
             <motion.button
               type="button"
@@ -249,7 +249,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             </motion.button>
 
             {/* Two-segment Chat / Agent Toggle */}
-            <div className="flex items-center p-0.5 rounded-[10px] bg-claude-surface2-light dark:bg-claude-surface2-dark/80 border border-claude-border-light dark:border-claude-border-dark select-none" role="group" aria-label="Execution Mode">
+            <div className="aira-composer-mode-group flex items-center p-0.5 rounded-[10px] bg-claude-surface2-light dark:bg-claude-surface2-dark/80 border border-claude-border-light dark:border-claude-border-dark select-none" role="group" aria-label="Execution Mode">
               <button
                 type="button"
                 onClick={() => onWorkspaceModeChange('chat')}
@@ -304,7 +304,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               </button>
             </div>
 
-            <div className="relative hidden sm:block">
+            <div className="aira-composer-style relative hidden sm:block">
               <button
                 type="button"
                 onClick={() => {
