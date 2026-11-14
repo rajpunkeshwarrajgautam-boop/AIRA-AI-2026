@@ -16,6 +16,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import type { Attachment, ModelId, WorkspaceMode } from '../types';
 import { AVAILABLE_MODELS } from '../utils/constants';
 import type { PlanTier } from '../types/commercial-types';
+import { ModelSelector } from './ModelSelector';
 
 interface ChatInputProps {
   onSendMessage: (text: string, attachments: Attachment[]) => void;
@@ -23,6 +24,8 @@ interface ChatInputProps {
   isLoading: boolean;
   onStop?: () => void;
   currentModel: ModelId;
+  onSelectModel: (model: ModelId) => void;
+  onToggleThinking: (enabled: boolean) => void;
   extendedThinking: boolean;
   workspaceMode: WorkspaceMode;
   onWorkspaceModeChange: (mode: WorkspaceMode) => void;
@@ -51,6 +54,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   repairDraft,
   isLoading,
   currentModel,
+  onSelectModel,
+  onToggleThinking,
   extendedThinking,
   workspaceMode,
   onWorkspaceModeChange,
@@ -163,7 +168,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         layout={!reducedMotion}
         className="aira-composer-card overflow-visible rounded-[16px] border border-claude-border-light bg-claude-surface-light shadow-sm transition-all duration-150 focus-within:border-claude-terracotta focus-within:ring-2 focus-within:ring-claude-terracotta/40 dark:border-claude-border-dark dark:bg-claude-surface-dark dark:shadow-none dark:focus-within:border-claude-terracotta/80 dark:focus-within:ring-claude-terracotta/30"
       >
-        <div className="flex items-center justify-between gap-3 border-b border-claude-border-light/70 px-3 py-1.5 sm:px-4 sm:py-2 dark:border-claude-border-dark/70">
+        <div className="aira-v3-composer-header flex items-center justify-between gap-3 border-b border-claude-border-light/70 px-3 py-1.5 sm:px-4 sm:py-2 dark:border-claude-border-dark/70">
           <div className="flex min-w-0 items-center gap-2">
             <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[8px] bg-claude-terracotta/10 text-claude-accentInk">
               <ModeIcon className="h-3.5 w-3.5" />
@@ -217,6 +222,16 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           )}
         </AnimatePresence>
 
+        <div className="aira-v3-composer-model">
+          <ModelSelector
+            currentModel={currentModel}
+            onSelectModel={onSelectModel}
+            extendedThinking={extendedThinking}
+            onToggleThinking={onToggleThinking}
+            userTier={userTier}
+            onTriggerUpgrade={onTriggerUpgrade}
+          />
+        </div>
         <textarea
           autoFocus={Boolean(repairDraft)}
           ref={textareaRef}
