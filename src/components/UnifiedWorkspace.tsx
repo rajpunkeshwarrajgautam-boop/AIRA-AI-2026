@@ -540,7 +540,7 @@ export const UnifiedWorkspace: React.FC<UnifiedWorkspaceProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded-lg text-claude-muted-light dark:text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 transition-colors"
+            className="flex min-h-10 min-w-10 items-center justify-center rounded-lg text-claude-muted-light dark:text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 transition-colors"
             title="Close workspace"
             aria-label="Close workspace"
             data-testid="workspace-close"
