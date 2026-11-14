@@ -1828,8 +1828,8 @@ useEffect(() => {
                 <span className="hidden sm:inline">Artifact Studio</span>
               </button>
             )}
-            {activeConversation && <button onClick={() => handleToggleStar(activeConversation.id)} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-white/5 active:scale-95 transition-transform duration-150 motion-reduce:transition-none" title={activeConversation.isPinned ? 'Remove bookmark' : 'Bookmark conversation'}><Bookmark className={`w-4 h-4 ${activeConversation.isPinned ? 'fill-aira-blue text-aira-blue' : 'text-claude-muted-light dark:text-claude-muted-dark'}`} /></button>}
-            <button onClick={handleShare} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-white/5">{sharedCopied ? <Check className="w-4 h-4 text-emerald-400" /> : <Share2 className="w-4 h-4 text-claude-muted-light dark:text-claude-muted-dark" />}</button>
+            {activeConversation && <button type="button" aria-label={activeConversation.isPinned ? "Remove bookmark" : "Bookmark conversation"} onClick={() => handleToggleStar(activeConversation.id)} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-white/5 active:scale-95 transition-transform duration-150 motion-reduce:transition-none" title={activeConversation.isPinned ? 'Remove bookmark' : 'Bookmark conversation'}><Bookmark className={`w-4 h-4 ${activeConversation.isPinned ? 'fill-aira-blue text-aira-blue' : 'text-claude-muted-light dark:text-claude-muted-dark'}`} /></button>}
+            <button type="button" aria-label={sharedCopied ? "Conversation link copied" : "Share conversation"} onClick={handleShare} className="p-1.5 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-white/5">{sharedCopied ? <Check className="w-4 h-4 text-emerald-400" /> : <Share2 className="w-4 h-4 text-claude-muted-light dark:text-claude-muted-dark" />}</button>
           </div>
         </header>
 
