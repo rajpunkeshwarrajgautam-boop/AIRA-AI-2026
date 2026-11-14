@@ -235,3 +235,30 @@ html.force-reduced-motion .aira-v3-starter { animation: none !important; transit
 .aira-v3-agent-link { display: block; width: 100%; min-height: 40px; border-radius: var(--radius-card); padding: var(--space-xs) var(--space-sm); text-align: left; font-size: var(--text-sm); color: var(--text-primary); background: transparent; }
 .aira-v3-agent-link:hover { background: var(--bg-surface); }
 .aira-v3-agent-link:focus-visible { outline: 2px solid var(--color-focus); }
+
+.aira-v3-message-region {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+.aira-v3-return-to-latest {
+  position: absolute;
+  bottom: max(14px, env(safe-area-inset-bottom, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  min-height: 40px;
+  padding: 6px 16px;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-pill);
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-card);
+}
+.aira-v3-return-to-latest:focus-visible { outline: 2px solid var(--color-focus); }
