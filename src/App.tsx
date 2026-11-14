@@ -1726,8 +1726,8 @@ useEffect(() => {
       <InlineToast message={toastMessage} />
 
       <main className={`${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-main ' : 'bg-mesh-canvas '}flex-1 min-w-0 min-h-0 h-[100dvh] flex flex-col overflow-hidden w-full max-w-full`}>
-        <header className={`aira-editorial-header ${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-header ' : ''}h-[60px] md:h-[64px] shrink-0 px-3 md:px-6 flex items-center justify-between border-b border-claude-border-light dark:border-claude-border-dark gradient-fade-header relative z-30 bg-claude-bg-light dark:bg-claude-bg-dark`}>
-          <div className="flex flex-1 items-center gap-1 min-w-0">
+        <header className={`aira-editorial-header ${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-header ' : ''}min-h-[60px] h-auto md:h-[64px] shrink-0 px-2 sm:px-3 md:px-6 py-1 md:py-0 flex items-center justify-between border-b border-claude-border-light dark:border-claude-border-dark gradient-fade-header relative z-30 bg-claude-bg-light dark:bg-claude-bg-dark`}>
+          <div className="aira-header-leading flex flex-1 items-center gap-1 min-w-0 max-sm:flex-wrap max-sm:gap-y-1 max-sm:pr-[5.5rem]">
             {!sidebarOpen && (
               <>
                 <button 
@@ -1763,7 +1763,7 @@ useEffect(() => {
             />
             {currentProject && <button onClick={() => setIsProjectsOpen(true)} className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-aira-blue/10 text-aira-blue text-xs max-w-[180px]"><FolderGit2 className="w-3 h-3" /><span className="truncate">{currentProject.name}</span></button>}
           </div>
-          <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
+          <div className="aira-header-actions flex shrink-0 items-center gap-1 sm:gap-1.5 max-sm:absolute max-sm:right-2 max-sm:top-2">
             {workspaceMode === 'agent' && (
               <button
                 onClick={() => {
@@ -1779,7 +1779,7 @@ useEffect(() => {
                     }
                   }
                 }}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+                className={`flex min-h-10 min-w-10 items-center justify-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
                   isStudioOpen
                     ? 'bg-aira-blue text-white'
                     : 'bg-aira-blue/10 text-aira-blue dark:text-aira-silver hover:bg-aira-blue/20'
@@ -1793,7 +1793,7 @@ useEffect(() => {
             {(isLoading || isBuilderBusy) && (
               <button
                 onClick={handleCancelExecution}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-rose-500 hover:bg-rose-500/10 active:scale-95 transition-transform duration-150 motion-reduce:transition-none"
+                className="flex min-h-10 min-w-10 items-center justify-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-rose-500 hover:bg-rose-500/10 active:scale-95 transition-transform duration-150 motion-reduce:transition-none"
                 title="Cancel active execution"
               >
                 Cancel
@@ -1815,7 +1815,7 @@ useEffect(() => {
                     }
                   }
                 }}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+                className={`flex min-h-10 min-w-10 items-center justify-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
                   isStudioOpen
                     ? 'bg-aira-blue text-white shadow-sm'
                     : 'hover:bg-claude-surface2-light dark:hover:bg-white/5 text-claude-text-light dark:text-claude-text-dark'
@@ -1828,8 +1828,8 @@ useEffect(() => {
                 <span className="hidden sm:inline">Artifact Studio</span>
               </button>
             )}
-            {activeConversation && <button type="button" aria-label={activeConversation.isPinned ? "Remove bookmark" : "Bookmark conversation"} onClick={() => handleToggleStar(activeConversation.id)} className="min-h-10 min-w-10 sm:min-h-8 sm:min-w-8 flex items-center justify-center p-2 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-white/5 active:scale-95 transition-transform duration-150 motion-reduce:transition-none" title={activeConversation.isPinned ? 'Remove bookmark' : 'Bookmark conversation'}><Bookmark className={`w-4 h-4 ${activeConversation.isPinned ? 'fill-aira-blue text-aira-blue' : 'text-claude-muted-light dark:text-claude-muted-dark'}`} /></button>}
-            <button type="button" aria-label={sharedCopied ? "Conversation link copied" : "Share conversation"} onClick={handleShare} className="min-h-10 min-w-10 sm:min-h-8 sm:min-w-8 flex items-center justify-center p-2 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-white/5">{sharedCopied ? <Check className="w-4 h-4 text-emerald-400" /> : <Share2 className="w-4 h-4 text-claude-muted-light dark:text-claude-muted-dark" />}</button>
+            {activeConversation && <button type="button" aria-label={activeConversation.isPinned ? "Remove bookmark" : "Bookmark conversation"} onClick={() => handleToggleStar(activeConversation.id)} className="min-h-10 min-w-10 flex items-center justify-center p-2 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-white/5 active:scale-95 transition-transform duration-150 motion-reduce:transition-none" title={activeConversation.isPinned ? 'Remove bookmark' : 'Bookmark conversation'}><Bookmark className={`w-4 h-4 ${activeConversation.isPinned ? 'fill-aira-blue text-aira-blue' : 'text-claude-muted-light dark:text-claude-muted-dark'}`} /></button>}
+            <button type="button" aria-label={sharedCopied ? "Conversation link copied" : "Share conversation"} onClick={handleShare} className="min-h-10 min-w-10 flex items-center justify-center p-2 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-white/5">{sharedCopied ? <Check className="w-4 h-4 text-emerald-400" /> : <Share2 className="w-4 h-4 text-claude-muted-light dark:text-claude-muted-dark" />}</button>
           </div>
         </header>
 
