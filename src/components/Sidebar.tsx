@@ -86,7 +86,7 @@ const ThemeToggle = ({ theme, onChange }: { theme: 'light' | 'dark' | 'system', 
   ] as const;
 
   return (
-    <div className="flex items-center gap-0.5 bg-claude-surface-light p-1 rounded-[10px] border border-claude-border-light dark:border-claude-border-dark relative overflow-hidden">
+    <div className="flex items-center gap-0.5 bg-claude-surface-light dark:bg-claude-surface-dark p-1 rounded-[10px] border border-claude-border-light dark:border-claude-border-dark relative overflow-hidden">
       {options.map(({ id, icon: Icon }) => (
         <button
           key={id}
@@ -94,7 +94,7 @@ const ThemeToggle = ({ theme, onChange }: { theme: 'light' | 'dark' | 'system', 
           aria-label={`Use ${id} theme`}
           aria-pressed={theme === id}
           onClick={() => onChange(id)}
-          className={`relative min-h-10 min-w-10 sm:min-h-8 sm:min-w-8 p-2 rounded-[8px] flex items-center justify-center transition-colors duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-claude-terracotta ${
+          className={`relative min-h-10 min-w-10 p-2 rounded-[8px] flex items-center justify-center transition-colors duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-claude-terracotta ${
             theme === id 
               ? 'text-claude-onAccent'
               : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white'
