@@ -14,9 +14,14 @@ import { reconcileArtifactRevision } from './utils/artifactRevisions';
 import { retrieveRelevantSubgraph } from './utils/knowledgeGraph';
 import { Sidebar } from './components/Sidebar';
 import { ChatMessage } from './components/ChatMessage';
+import { MessageFeed, type MessageFeedHandle } from './features/chat/MessageFeed';
+import { ChatRunState, type ChatPhase } from './features/chat/ChatRunState';
+import { IntroGate } from './features/onboarding/IntroGate';
+import { PromoPlacement } from './features/promos/PromoPlacement';
+import { ResizableWorkspaceFrame } from './features/workspace/ResizableWorkspaceFrame';
+import './styles/workspace-v3.css';
 import { ChatInput } from './components/ChatInput';
 import { GreetingScreen } from './components/GreetingScreen';
-import { ModelSelector } from './components/ModelSelector';
 import { AiraMark } from './components/AiraMark';
 import { CommandPalette } from './components/CommandPalette';
 import { ConversationSearchOverlay } from './components/ConversationSearchOverlay';
@@ -426,7 +431,8 @@ useEffect(() => {
   const approvalSubmissionRef = useRef(false);
   const [executionStatus, setExecutionStatus] = useState<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
-  const chatScrollRef = useRef<HTMLDivElement>(null);
+  const messageFeedRef = useRef<MessageFeedHandle>(null);
+  const [lastResponseFailure, setLastResponseFailure] = useState<{ prompt: string; phase: ChatPhase } | null>(null);
   const conversationSyncVersionsRef = useRef<Map<string, string>>(new Map());
   const initialConversationBackfillRef = useRef(false);
   const authEpochRef = useRef(0);
@@ -722,19 +728,7 @@ useEffect(() => {
     return () => systemColor.removeEventListener('change', applyTheme);
   }, [settings.theme, settings.aestheticPreset, settings.highContrast, settings.reducedMotion, settings.fontSize]);
 
-  // Only scroll the conversation region; scrollIntoView can also move the
-  // document/root viewport and leave a blank page after long conversations.
-  useEffect(() => {
-    const scrollRegion = chatScrollRef.current;
-    if (!scrollRegion) return;
-    // Empty conversations render the greeting, not a message transcript.
-    // Scrolling those to the bottom clips the hero emblem on shorter screens.
-    if (!activeConversation?.messages.length) {
-      scrollRegion.scrollTo({ top: 0, behavior: 'instant' });
-      return;
-    }
-    scrollRegion.scrollTo({ top: scrollRegion.scrollHeight, behavior: 'instant' });
-  }, [activeConversation?.id, activeConversation?.messages.length]);
+  // MessageFeed controls scrolling and preserves reading position.
 
   const updateConversation = (id: string, updater: (c: Conversation) => Conversation) => {
     setConversations(prev => prev.map(c => c.id === id ? updater(c) : c));
@@ -856,20 +850,7 @@ useEffect(() => {
     if (!messageId) return;
 
     setHighlightedMessageId(messageId);
-    window.setTimeout(() => {
-      const scrollRegion = chatScrollRef.current;
-      const target = document.getElementById(`message-${messageId}`);
-      if (!scrollRegion || !target || !scrollRegion.contains(target)) return;
-      const containerRect = scrollRegion.getBoundingClientRect();
-      const targetRect = target.getBoundingClientRect();
-      const targetScrollTop = scrollRegion.scrollTop +
-        targetRect.top - containerRect.top -
-        (scrollRegion.clientHeight - targetRect.height) / 2;
-      scrollRegion.scrollTo({
-        top: Math.max(0, targetScrollTop),
-        behavior: 'smooth'
-      });
-    }, 120);
+    window.setTimeout(() => messageFeedRef.current?.scrollToMessage(messageId), 120);
     window.setTimeout(() => setHighlightedMessageId(current => current === messageId ? null : current), 1800);
   };
 
@@ -1227,6 +1208,7 @@ useEffect(() => {
 
   const handleSendMessage = async (rawText: string, attachments: Attachment[]) => {
     if (isLoading) return;
+    setLastResponseFailure(null);
     userDismissedStudioRef.current = false;
     let conversation = activeConversation;
     if (!conversation) return;
@@ -1534,6 +1516,7 @@ useEffect(() => {
           },
           onComplete: () => {
             if (!isSameRequestIdentity()) return;
+            setLastResponseFailure(null);
             activeAbortControllerRef.current = null;
             activeAssistantMsgIdRef.current = null;
             activeRunIdRef.current = null;
@@ -1551,6 +1534,11 @@ useEffect(() => {
           },
           onError: error => {
             if (!isSameRequestIdentity()) return;
+            const isLimit = /429|quota|limit/i.test(String(error));
+            setLastResponseFailure({
+              prompt: rawText,
+              phase: isLimit ? (userTier === 'guest' ? 'guest-limit' : 'quota-exceeded') : 'error',
+            });
             activeAbortControllerRef.current = null;
             activeAssistantMsgIdRef.current = null;
             activeRunIdRef.current = null;
@@ -1659,7 +1647,7 @@ useEffect(() => {
 
   return (
     <FeatureFlagProvider userTier={userTier}>
-      <div className={`aira-editorial-app ${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-shell ' : ''}${isStudioOpen ? 'has-studio-open ' : ''}h-[100dvh] w-full min-w-0 flex overflow-hidden bg-claude-bg-light dark:bg-claude-bg-dark text-claude-text-light dark:text-claude-text-dark`}>
+      <div className={`aira-editorial-app aira-v3-shell ${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-shell ' : ''}${isStudioOpen ? 'has-studio-open ' : ''}h-[100dvh] w-full min-w-0 flex overflow-hidden bg-claude-bg-light dark:bg-claude-bg-dark text-claude-text-light dark:text-claude-text-dark`}>
         <Sidebar
           conversations={conversations}
           activeChatId={activeChatId}
@@ -1761,14 +1749,6 @@ useEffect(() => {
               </div>
             )}
             </div>
-            <ModelSelector
-              currentModel={settings.activeModel}
-              onSelectModel={model => updateSettings({ activeModel: model })}
-              extendedThinking={settings.extendedThinking}
-              onToggleThinking={enabled => updateSettings({ extendedThinking: enabled })}
-              userTier={userTier}
-              onTriggerUpgrade={handleTriggerUpgrade}
-            />
             {currentProject && <button onClick={() => setIsProjectsOpen(true)} className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-aira-blue/10 text-aira-blue text-xs max-w-[180px]"><FolderGit2 className="w-3 h-3" /><span className="truncate">{currentProject.name}</span></button>}
           </div>
           <div className="aira-header-actions flex shrink-0 items-center gap-1 sm:gap-1.5 max-sm:col-start-2 max-sm:row-start-1 max-sm:justify-self-end max-sm:self-start max-sm:max-w-[50vw] max-sm:flex-wrap">
@@ -1841,49 +1821,48 @@ useEffect(() => {
           </div>
         </header>
 
-        <div ref={chatScrollRef} data-testid="chat-scroll-region" className={`${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-chat-content ' : ''}flex-1 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain flex flex-col`}>
-          {!activeConversation || activeConversation.messages.length === 0 ? (
-            <GreetingScreen 
-              userName={settings.userName} 
-              workspaceMode={workspaceMode} 
-              conversations={conversations}
-              activeProject={currentProject}
-              extendedThinking={settings.extendedThinking}
-              onSelectChat={handleSelectChat}
+        <MessageFeed
+          ref={messageFeedRef}
+          conversationId={activeConversation?.id || 'new'}
+          messages={activeConversation?.messages || []}
+          highlightedMessageId={highlightedMessageId}
+          emptyContent={
+            <IntroGate
+              userId={currentUserId}
+              onStart={(_starter, prompt) => { void handleSendMessage(prompt, []); }}
+              fallback={
+                <GreetingScreen
+                  userName={settings.userName}
+                  workspaceMode={workspaceMode}
+                  conversations={conversations}
+                  activeProject={currentProject}
+                  extendedThinking={settings.extendedThinking}
+                  onSelectChat={handleSelectChat}
+                />
+              }
             />
-          ) : (
-            <div className="flex-1 pb-24 sm:pb-8 space-y-4">
-              {activeConversation.messages.map(message => (
-                <div
-                  id={`message-${message.id}`}
-                  key={message.id}
-                  className={highlightedMessageId === message.id
-                    ? 'rounded-xl ring-2 ring-aira-blue/35 bg-aira-blue/[0.035] transition-colors duration-500'
-                    : 'transition-colors duration-500'}
-                >
-                  <ChatMessage
-                    message={message}
-                    showAgentTimeline={ADAPTIVE_STUDIO_PREVIEW}
-                    userName={settings.userName}
-                    onOpenArtifact={artifact => {
-                      setActiveArtifact(artifact);
-                      setIsStudioOpen(true);
-                      userDismissedStudioRef.current = false;
-                    }}
-                    onSwitchToAgentAndReview={handleSwitchToAgentAndReview}
-                    onConfirmAutomation={handleConfirmAutomation}
-                    onAuthorizeVision={handleAuthorizeVision}
-                    onCancelVisionProposal={handleCancelVisionProposal}
-                    onApprovalDecision={handleApprovalDecision}
-                    isSubmittingApproval={isSubmittingApproval}
-                    isConfirmingAutomation={Boolean(confirmingAutoId)}
-                    isAuthorizingVision={Boolean(authorizingVisionId)}
-                  />
-                </div>
-              ))}
-            </div>
+          }
+          renderMessage={message => (
+            <ChatMessage
+              message={message}
+              showAgentTimeline={ADAPTIVE_STUDIO_PREVIEW}
+              userName={settings.userName}
+              onOpenArtifact={artifact => {
+                setActiveArtifact(artifact);
+                setIsStudioOpen(true);
+                userDismissedStudioRef.current = false;
+              }}
+              onSwitchToAgentAndReview={handleSwitchToAgentAndReview}
+              onConfirmAutomation={handleConfirmAutomation}
+              onAuthorizeVision={handleAuthorizeVision}
+              onCancelVisionProposal={handleCancelVisionProposal}
+              onApprovalDecision={handleApprovalDecision}
+              isSubmittingApproval={isSubmittingApproval}
+              isConfirmingAutomation={Boolean(confirmingAutoId)}
+              isAuthorizingVision={Boolean(authorizingVisionId)}
+            />
           )}
-        </div>
+        />
 
         {/* Persistent Composer (Visible in both Chat Mode and Agent Mode) */}
         <div className={`${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-composer ' : ''}shrink-0 min-w-0 relative z-10 pt-2 sm:pt-4 gradient-mask-bottom`}>
@@ -1918,12 +1897,31 @@ useEffect(() => {
             </div>
           )}
 
+          <ChatRunState
+            phase={lastResponseFailure?.phase || (pendingApproval ? 'agent-paused' : isLoading ? (executionStatus && /tool|workflow|step/i.test(executionStatus) ? 'tool-running' : 'streaming') : 'idle')}
+            detail={lastResponseFailure ? 'Review the prompt before sending again; the previous run may have started.' : executionStatus}
+            onOpenPlans={() => setIsPricingOpen(true)}
+            onReviewRetry={lastResponseFailure ? () => {
+              setRepairDraft({ id: Date.now(), text: lastResponseFailure.prompt });
+              setLastResponseFailure(null);
+            } : undefined}
+          />
+          {(activeConversation?.messages.length ?? 0) === 0 && <PromoPlacement
+            placement="welcome"
+            userTier={userTier}
+            userId={currentUserId}
+            streaming={isLoading || isBuilderBusy}
+            telemetryEnabled={!settings.telemetryOptOut}
+            onOpenPlans={() => setIsPricingOpen(true)}
+          />}
           <ChatInput
-            key={ADAPTIVE_STUDIO_PREVIEW ? (repairDraft?.id ?? 'normal-composer') : 'normal-composer'}
+            key={repairDraft?.id ?? 'normal-composer'}
             onSendMessage={handleSendMessage}
-            repairDraft={ADAPTIVE_STUDIO_PREVIEW ? repairDraft : undefined}
+            repairDraft={repairDraft}
             isLoading={isLoading}
             currentModel={settings.activeModel}
+            onSelectModel={model => updateSettings({ activeModel: model })}
+            onToggleThinking={enabled => updateSettings({ extendedThinking: enabled })}
             extendedThinking={settings.extendedThinking}
             workspaceMode={workspaceMode}
             onWorkspaceModeChange={handleSelectWorkspaceMode}
@@ -1934,6 +1932,11 @@ useEffect(() => {
       </main>
 
       <React.Suspense fallback={null}>
+        {isStudioOpen && (ADAPTIVE_STUDIO_PREVIEW || Boolean(activeArtifact)) && (
+          <ResizableWorkspaceFrame onClose={() => {
+            setIsStudioOpen(false);
+            userDismissedStudioRef.current = true;
+          }}>
         {ADAPTIVE_STUDIO_PREVIEW ? (
           isStudioOpen && (
             <UnifiedWorkspace
@@ -1994,6 +1997,8 @@ useEffect(() => {
               onApproveTask={undefined}
             />
           )
+        )}
+          </ResizableWorkspaceFrame>
         )}
 
         {isProjectsOpen && (
