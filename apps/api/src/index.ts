@@ -94,7 +94,8 @@ function getParam(param: string | string[] | undefined): string {
 }
 
 import { createStagingMaintenanceMiddleware } from './middleware/staging-maintenance.js';
-import { createSessionAuthMiddleware, ensureAuthenticatedSession, SESSION_COOKIE_NAME, verifySessionToken } from './auth/session-auth.js';
+import { createSessionAuthMiddleware, ensureAuthenticatedSession } from './auth/session-auth.js';
+import { verifyGuestMigrationClaim } from './auth/guest-migration-claim.js';
 import { createNeonAuthPrincipalMiddleware } from './auth/neon-auth-principal.js';
 import {
   createBffSessionMiddleware,
@@ -260,27 +261,15 @@ app.get('/api/auth/identity', (req: Request, res: Response) => {
  * never confer ownership. The durable ledger serializes retries across instances.
  */
 const handleGuestLinking = async (req: Request, res: Response) => {
-  const authenticatedUserId = req.principal?.userId;
-  if (!authenticatedUserId || authenticatedUserId === 'anonymous' || isGuestPrincipal(authenticatedUserId)) {
-    return res.status(401).json({ error: 'AUTHENTICATION_REQUIRED', message: 'Verified authenticated account required' });
-  }
-
-  const rawGuestCookie = (req.headers.cookie || '').split(';').map(part => part.trim()).find(part => part.startsWith(`${SESSION_COOKIE_NAME}=`));
-  let signedGuestToken = '';
-  try {
-    signedGuestToken = rawGuestCookie ? decodeURIComponent(rawGuestCookie.slice(SESSION_COOKIE_NAME.length + 1)) : '';
-  } catch {
-    return res.status(400).json({ error: 'INVALID_GUEST_SESSION' });
-  }
-  const signedGuest = signedGuestToken ? verifySessionToken(signedGuestToken) : null;
-  if (!signedGuest || !isGuestPrincipal(signedGuest.uid)) {
-    return res.status(400).json({ error: 'INVALID_GUEST_SESSION', message: 'Valid signed guest session required' });
-  }
-
-  const requestedGuest = req.body?.guestToken ?? req.body?.guestUserId;
-  if (requestedGuest !== undefined && requestedGuest !== signedGuest.uid) {
-    return res.status(403).json({ error: 'GUEST_SESSION_OWNERSHIP_MISMATCH' });
-  }
+  const claim = verifyGuestMigrationClaim({
+    cookieHeader: req.headers.cookie,
+    authenticatedPrincipalId: req.principal?.userId,
+    claimedGuestToken: req.body?.guestToken,
+    claimedGuestUserId: req.body?.guestUserId,
+  });
+  if (!claim.ok) return res.status(claim.httpStatus).json({ error: claim.code });
+  const authenticatedUserId = claim.targetPrincipalId;
+  const guestPrincipalId = claim.guestPrincipalId;
   if (!process.env.DATABASE_URL) {
     return res.status(503).json({ error: 'DATABASE_UNAVAILABLE', message: 'Durable guest migration unavailable' });
   }
@@ -288,9 +277,9 @@ const handleGuestLinking = async (req: Request, res: Response) => {
   try {
     const migratedChatsCount = await db.transaction(async trx => {
       // Transaction-scoped advisory lock is held for the entire claim and transfer.
-      await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [`aira-guest-migration:${signedGuest.uid}`]);
+      await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [`aira-guest-migration:${guestPrincipalId}`]);
       const prior = await trx('guest_migration_ledger')
-        .where({ guest_principal_id: signedGuest.uid })
+        .where({ guest_principal_id: guestPrincipalId })
         .first();
       if (prior) {
         if (prior.target_principal_id !== authenticatedUserId) {
@@ -299,12 +288,12 @@ const handleGuestLinking = async (req: Request, res: Response) => {
         return Number(prior.migrated_conversation_count);
       }
 
-      const result = await conversationSearchRepo.transferGuestData(signedGuest.uid, authenticatedUserId, trx);
+      const result = await conversationSearchRepo.transferGuestData(guestPrincipalId, authenticatedUserId, trx);
       await trx('guest_migration_ledger').insert({
-        guest_principal_id: signedGuest.uid,
+        guest_principal_id: guestPrincipalId,
         target_principal_id: authenticatedUserId,
         migrated_conversation_count: result.transferredConversations,
-        guest_session_proof_hash: crypto.createHash('sha256').update(signedGuest.sid).digest('hex'),
+        guest_session_proof_hash: crypto.createHash('sha256').update(claim.guestSessionId).digest('hex'),
         created_at: Date.now(),
       });
       return result.transferredConversations;
