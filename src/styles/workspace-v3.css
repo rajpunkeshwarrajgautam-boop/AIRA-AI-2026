@@ -458,3 +458,17 @@ html.force-reduced-motion .aira-v3-starter { animation: none !important; transit
   .aira-v3-agent-link { transition: none; }
   .aira-v3-shell .aira-composer-card { transition: none; }
 }
+
+/* Compact mobile composer: 40px controls, a one-line prompt and a <=145px empty card. */
+@media (max-width: 639px) {
+  .aira-v3-shell .aira-v3-composer-model { padding: 0 7px; }
+  .aira-v3-shell .aira-composer textarea {
+    min-height: 40px;
+    padding: 3px 12px;
+    line-height: 1.4;
+  }
+  .aira-v3-shell .aira-composer-card > div.flex.min-w-0.items-center.justify-between {
+    padding-top: 0;
+    padding-bottom: 4px;
+  }
+}
