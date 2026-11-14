@@ -37,6 +37,9 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
   const [billingPrincipalId, setBillingPrincipalId] = useState<string | null>(null);
   const [billingError, setBillingError] = useState<string | null>(null);
   const billingRequestId = useRef(0);
+  const billingDialogRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   const [sessionRefreshCount, setSessionRefreshCount] = useState(0);
   const [identity, setIdentity] = useState<{
     status: 'checking' | 'verified' | 'anonymous' | 'syncing' | 'unavailable';
@@ -159,15 +162,59 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
     setTopUpNotice('Credit top-up checkout is in preview mode. Commercial payments are currently inactive.');
   };
 
+  // Keep keyboard focus inside the open dialog, close with Escape, and
+  // return focus to the previously active control after it closes.
+  useEffect(() => {
+    if (!isOpen) return;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const dialog = billingDialogRef.current;
+    dialog?.focus({ preventScroll: true });
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== 'Tab' || !dialog) return;
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )).filter(element => element.getClientRects().length > 0);
+      if (!focusable.length) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || document.activeElement === dialog)) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      previousFocus?.focus({ preventScroll: true });
+    };
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-md p-4 overflow-y-auto">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-md p-3 sm:p-4 overflow-y-auto">
       <motion.div
         initial={{ opacity: 0, scale: 0.96 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.96 }}
-        className="relative w-full max-w-4xl rounded-2xl bg-aira-navy border border-white/10 text-white shadow-lg overflow-hidden my-6 flex flex-col max-h-[90vh]"
+        ref={billingDialogRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="aira-account-billing-title"
+        className="relative w-full max-w-4xl rounded-2xl bg-aira-navy border border-white/10 text-white shadow-lg overflow-hidden my-2 sm:my-6 flex flex-col max-h-[90dvh]"
       >
         {/* Header */}
         <div className="p-5 md:p-6 border-b border-white/10 flex items-center justify-between shrink-0 bg-stone-900/50">
@@ -182,7 +229,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
               )}
             </div>
             <div>
-              <h2 className="text-xl font-medium tracking-tight text-white flex items-center gap-2">
+              <h2 id="aira-account-billing-title" className="text-xl font-medium tracking-tight text-white flex items-center gap-2">
                 Account & Billing Center
               </h2>
               <p className="text-xs text-stone-400">
@@ -194,6 +241,8 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
           <div className="flex items-center gap-3">
             <button
               onClick={() => void fetchBillingData()}
+              type="button"
+              aria-label="Refresh billing data"
               disabled={loading}
               className="p-2 rounded-xl text-stone-400 hover:text-white hover:bg-white/10 transition-colors"
               title="Refresh Billing Data"
@@ -202,6 +251,8 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
             </button>
             <button
               onClick={onClose}
+              type="button"
+              aria-label="Close Account and Billing Center"
               className="p-2 rounded-xl text-stone-400 hover:text-white hover:bg-white/10 transition-colors"
             >
               <X className="w-5 h-5" />
@@ -210,9 +261,14 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex border-b border-white/10 bg-black/20 px-6 shrink-0">
+        <div role="tablist" aria-label="Billing sections" className="flex shrink-0 overflow-x-auto border-b border-white/10 bg-black/20 px-2 sm:px-6">
           <button
             onClick={() => setActiveTab('overview')}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'overview'}
+            aria-controls="aira-billing-panel"
+            id="aira-billing-tab-overview"
             className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-colors duration-150 ${
               activeTab === 'overview'
                 ? 'border-claude-terracotta text-white'
@@ -224,6 +280,11 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
           </button>
           <button
             onClick={() => setActiveTab('usage')}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'usage'}
+            aria-controls="aira-billing-panel"
+            id="aira-billing-tab-usage"
             className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-colors duration-150 ${
               activeTab === 'usage'
                 ? 'border-claude-terracotta text-white'
@@ -235,6 +296,11 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
           </button>
           <button
             onClick={() => setActiveTab('topup')}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'topup'}
+            aria-controls="aira-billing-panel"
+            id="aira-billing-tab-topup"
             className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-colors duration-150 ${
               activeTab === 'topup'
                 ? 'border-claude-terracotta text-white'
@@ -246,6 +312,11 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
           </button>
           <button
             onClick={() => setActiveTab('security')}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'security'}
+            aria-controls="aira-billing-panel"
+            id="aira-billing-tab-security"
             className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-colors duration-150 ${
               activeTab === 'security'
                 ? 'border-claude-terracotta text-white'
@@ -258,7 +329,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
         </div>
 
         {/* Content Area */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        <div id="aira-billing-panel" role="tabpanel" aria-label="Billing details" className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
           {(activeTab === 'overview' || activeTab === 'usage') && !confirmedBilling && (
             <div role="status" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100 flex items-center justify-between gap-3">
               <span>{loading ? 'Loading your billing information…' : billingError || 'Billing information unavailable.'}</span>

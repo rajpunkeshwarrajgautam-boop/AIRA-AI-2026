@@ -223,6 +223,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           value={inputText}
           onChange={event => setInputText(event.target.value)}
           onKeyDown={handleKeyDown}
+          aria-label="Message Aira"
           placeholder={placeholder}
           rows={1}
           spellCheck={false}
@@ -240,6 +241,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               type="button"
               whileTap={reducedMotion ? undefined : { scale: 0.92 }}
               onClick={() => fileInputRef.current?.click()}
+              aria-label="Attach documents or images"
               title="Add documents or images"
               className="min-h-10 min-w-10 sm:min-h-0 sm:min-w-0 rounded-[9px] p-2 text-claude-muted-light transition-colors hover:bg-claude-surface2-light hover:text-claude-text-light dark:text-claude-muted-dark dark:hover:bg-claude-surface2-dark dark:hover:text-white"
             >
@@ -309,6 +311,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                   setShowStyleMenu(open => !open);
                   setShowModeMenu(false);
                 }}
+                aria-expanded={showStyleMenu}
                 className="flex items-center min-h-10 sm:min-h-0 gap-1.5 rounded-[9px] px-2.5 py-1.5 text-[11px] font-medium text-claude-muted-light transition-colors hover:bg-claude-surface2-light dark:text-claude-muted-dark dark:hover:bg-claude-surface2-dark"
               >
                 <SlidersHorizontal className="h-3.5 w-3.5" />
@@ -354,6 +357,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             type="button"
             onClick={handleSubmit}
             disabled={!canSubmit}
+            aria-label={isLoading ? 'Aira is responding' : 'Send message'}
             whileTap={canSubmit && !reducedMotion ? { scale: 0.9 } : undefined}
             title={isLoading ? 'Aira is responding' : 'Send message (Enter)'}
             className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-[9px] transition-colors ${

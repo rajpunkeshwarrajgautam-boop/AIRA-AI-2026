@@ -248,37 +248,50 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
   };
 
+  // Conversation selection is a native button. Action menus and rename inputs are
+  // siblings, so keyboard focus never enters nested interactive controls.
   const renderChatItem = (c: Conversation) => (
     <motion.div
       variants={itemVariants}
       key={c.id}
-      onClick={() => handleSelectChatMobile(c.id)}
-      className={`group flex items-center px-3 py-2.5 rounded-lg cursor-pointer transition-colors duration-200 relative ${activeChatId === c.id ? 'text-claude-text-light dark:text-white' : 'text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark hover:text-claude-text-light dark:hover:text-white'}`}
+      className={`group relative flex items-center rounded-lg px-1.5 py-0.5 transition-colors duration-150 ${activeChatId === c.id ? 'text-claude-text-light dark:text-white' : 'text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark hover:text-claude-text-light dark:hover:text-white'}`}
     >
       {activeChatId === c.id && (
-        <motion.div 
+        <motion.div
           layoutId="active-chat-indicator"
-          className="absolute inset-0 bg-claude-surface2-light dark:bg-claude-surface2-dark rounded-lg border border-claude-border-light dark:border-claude-border-dark z-0"
-          transition={{ type: "spring", stiffness: 400, damping: 30 }}
+          className="absolute inset-0 z-0 rounded-lg border border-claude-border-light bg-claude-surface2-light dark:border-claude-border-dark dark:bg-claude-surface2-dark"
+          transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+          aria-hidden="true"
         />
       )}
-      <div className="relative z-10 flex items-center w-full min-w-0">
-        <MessageSquareText className="w-4 h-4 flex-shrink-0 mr-3 opacity-70" />
+      <div className="relative z-10 flex w-full min-w-0 items-center">
         {editingChatId === c.id ? (
-          <input
-            autoFocus
-            value={editTitle}
-            onChange={e => setEditTitle(e.target.value)}
-            onClick={e => e.stopPropagation()}
-            onBlur={() => handleSaveRename(c.id)}
-            onKeyDown={e => {
-              if (e.key === 'Enter') handleSaveRename(c.id);
-              if (e.key === 'Escape') setEditingChatId(null);
-            }}
-            className="flex-1 min-w-0 text-[13px] font-medium bg-transparent outline-none border-b border-claude-terracotta"
-          />
+          <div className="flex min-w-0 flex-1 items-center gap-2.5 px-1.5">
+            <MessageSquareText className="h-4 w-4 shrink-0 opacity-70" aria-hidden="true" />
+            <input
+              autoFocus
+              aria-label={`Rename conversation: ${c.title}`}
+              value={editTitle}
+              onChange={event => setEditTitle(event.target.value)}
+              onBlur={() => handleSaveRename(c.id)}
+              onKeyDown={event => {
+                if (event.key === 'Enter') handleSaveRename(c.id);
+                if (event.key === 'Escape') setEditingChatId(null);
+              }}
+              className="min-w-0 flex-1 border-b border-claude-terracotta bg-transparent text-[13px] font-medium focus-visible:outline-offset-2"
+            />
+          </div>
         ) : (
-          <span className="text-[13px] font-medium truncate flex-1 tracking-tight">{c.title}</span>
+          <button
+            type="button"
+            onClick={() => handleSelectChatMobile(c.id)}
+            aria-current={activeChatId === c.id ? 'page' : undefined}
+            aria-label={`Open conversation: ${c.title}`}
+            className="flex min-h-10 min-w-0 flex-1 items-center rounded-md px-1.5 text-left text-[13px] font-medium tracking-tight transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-claude-terracotta"
+          >
+            <MessageSquareText className="mr-2.5 h-4 w-4 shrink-0 opacity-70" aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate">{c.title}</span>
+          </button>
         )}
         <ConversationActionsDropdown
           conversationId={c.id}
@@ -375,6 +388,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </button>
               <input
                 type="text"
+                aria-label="Search workspace conversations"
                 placeholder="Search workspace..."
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
@@ -400,7 +414,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <motion.div variants={listVariants} initial="hidden" animate="show" className="space-y-6">
               {starred.length > 0 && (
                 <div>
-                  <button onClick={() => setStarredExpanded(!starredExpanded)} className="flex items-center space-x-2 px-3 py-1.5 text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white w-full transition-colors">
+                  <button type="button" aria-expanded={starredExpanded} onClick={() => setStarredExpanded(!starredExpanded)} className="flex items-center space-x-2 px-3 py-1.5 text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white w-full transition-colors">
                     <motion.div animate={{ rotate: starredExpanded ? 0 : -90 }} transition={{ type: "spring", stiffness: 200, damping: 20 }}>
                       <ChevronDown className="w-3.5 h-3.5" />
                     </motion.div>
