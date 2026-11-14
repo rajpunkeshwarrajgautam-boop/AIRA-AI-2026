@@ -141,7 +141,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   };
 
   return (
-    <div className="relative z-50 inline-block min-w-0" ref={containerRef}>
+    <div className="relative z-50 inline-block min-w-0 max-sm:col-span-2 max-sm:row-start-2 max-sm:w-full" ref={containerRef}>
       <motion.button
         type="button"
         data-testid="model-selector-button"
@@ -160,7 +160,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             });
           }
         }}
-        className="group flex min-w-0 max-w-full items-center gap-1 sm:gap-2 rounded-xl px-1.5 sm:px-2.5 py-1.5 text-left transition-colors hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark"
+        className="group flex min-h-10 min-w-0 max-w-full items-center gap-1 sm:gap-2 rounded-xl px-1.5 sm:px-2.5 py-1.5 text-left transition-colors hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark"
       >
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[9px] bg-claude-terracotta/10 text-claude-accentInk">
           <ActiveIcon className="h-3.5 w-3.5" />

@@ -362,7 +362,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div data-testid="sidebar-scroll-region" className="aira-sidebar-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain touch-pan-y">
           <div className="px-3.5 pt-2 pb-1 space-y-1">
             <button
-              onClick={onOpenProjects}
+              onClick={() => { onOpenProjects(); handleClose(); }}
               className={`w-full min-h-10 flex items-center justify-between px-3.5 py-2.5 rounded-xl text-[13px] font-semibold transition-colors duration-150 ${activeProjectId ? 'bg-claude-surface-light dark:bg-claude-surface-dark text-claude-text-light dark:text-white shadow-sm border border-claude-border-light dark:border-claude-border-dark' : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark border border-transparent'}`}
             >
               <span className="flex items-center gap-2.5">
