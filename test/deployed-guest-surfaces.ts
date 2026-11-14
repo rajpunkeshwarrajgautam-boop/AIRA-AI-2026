@@ -45,6 +45,10 @@ try {
       } });
     });
     const page = await context.newPage();
+    // Bound every locator action so a blocked overlay cannot exhaust the entire
+    // runner's 35-minute budget. Each failing surface records its own screenshot.
+    page.setDefaultTimeout(3500);
+    page.setDefaultNavigationTimeout(15000);
     const jsErrors = [];
     page.on('pageerror', error => jsErrors.push(error.message));
 
