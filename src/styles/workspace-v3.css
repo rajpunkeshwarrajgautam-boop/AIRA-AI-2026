@@ -262,3 +262,24 @@ html.force-reduced-motion .aira-v3-starter { animation: none !important; transit
   box-shadow: var(--shadow-card);
 }
 .aira-v3-return-to-latest:focus-visible { outline: 2px solid var(--color-focus); }
+
+/* Compact-height introduction: avoid centered overflow when the header wraps at 320px. */
+@media (max-width: 359px) {
+  .aira-v3-chat-empty { justify-content: flex-start; }
+  .aira-v3-intro {
+    flex: 0 0 auto;
+    margin: 0 auto;
+    padding: 10px 12px 16px;
+    gap: 6px;
+  }
+  .aira-v3-intro-mark > * {
+    width: 72px;
+    height: 72px;
+  }
+  .aira-v3-intro h1 { font-size: clamp(1.65rem, 8vw, 2rem); line-height: 1.08; }
+  .aira-v3-intro p { font-size: 0.875rem; }
+  .aira-v3-starters { margin-top: 0; gap: 4px; }
+  .aira-v3-starter { padding: 4px 10px; }
+  .aira-v3-intro-tones { gap: 0; }
+  .aira-v3-intro-tones button { padding-inline: 6px; }
+}
