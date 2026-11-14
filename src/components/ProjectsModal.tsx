@@ -77,11 +77,14 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
             onClick={onClose}
           />
           <motion.div 
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="aira-projects-title"
             initial={{ opacity: 0, scale: 0.95, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 10 }}
             transition={{ type: "spring", stiffness: 300, damping: 25 }}
-            className="w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-[2rem] border border-claude-border-light dark:border-claude-border-dark bg-claude-surface-light dark:bg-claude-surface-dark backdrop-blur-2xl shadow-sm flex flex-col relative z-10"
+            className="w-full max-w-3xl max-h-[85dvh] overflow-hidden rounded-[2rem] border border-claude-border-light dark:border-claude-border-dark bg-claude-surface-light dark:bg-claude-surface-dark backdrop-blur-2xl shadow-sm flex flex-col relative z-10"
           >
             <header className="px-5 sm:px-8 py-4 sm:py-5 border-b border-claude-border-light dark:border-claude-border-dark flex items-center justify-between bg-claude-surface2-light dark:bg-claude-surface2-dark">
               <div className="flex items-center gap-3 sm:gap-4">
@@ -89,7 +92,7 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
                   <FolderGit2 className="w-5 h-5 sm:w-6 sm:h-6" />
                 </div>
                 <div>
-                  <h2 className="font-bold text-base sm:text-lg tracking-tight text-claude-text-light dark:text-white">Aira Projects</h2>
+                  <h2 id="aira-projects-title" className="font-bold text-base sm:text-lg tracking-tight text-claude-text-light dark:text-white">Aira Projects</h2>
                   <p className="text-xs font-medium text-claude-muted-light dark:text-claude-muted-dark mt-0.5">Persistent context for related work</p>
                 </div>
               </div>
@@ -164,14 +167,14 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
                   </motion.div>
                 ) : (
                   <motion.div key="create" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="space-y-5">
-                    <input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Project name" className="w-full px-4 py-3.5 rounded-2xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark outline-none focus:border-claude-terracotta focus:shadow-sm text-sm font-medium transition-colors duration-150" />
-                    <input value={description} onChange={e => setDescription(e.target.value)} placeholder="Description" className="w-full px-4 py-3.5 rounded-2xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark outline-none focus:border-claude-terracotta focus:shadow-sm text-sm font-medium transition-colors duration-150" />
-                    <textarea value={instructions} onChange={e => setInstructions(e.target.value)} rows={4} placeholder="Project instructions for Aira (e.g., 'Always use functional components', 'Focus on SEO')" className="w-full px-4 py-3.5 rounded-2xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark outline-none focus:border-claude-terracotta focus:shadow-sm text-sm font-medium transition-colors duration-150 resize-none" />
+                    <input aria-label="Project name" autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Project name" className="w-full px-4 py-3.5 rounded-2xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark outline-none focus:border-claude-terracotta focus:shadow-sm text-sm font-medium transition-colors duration-150" />
+                    <input aria-label="Project description" value={description} onChange={e => setDescription(e.target.value)} placeholder="Description" className="w-full px-4 py-3.5 rounded-2xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark outline-none focus:border-claude-terracotta focus:shadow-sm text-sm font-medium transition-colors duration-150" />
+                    <textarea aria-label="Project instructions" value={instructions} onChange={e => setInstructions(e.target.value)} rows={4} placeholder="Project instructions for Aira (e.g., 'Always use functional components', 'Focus on SEO')" className="w-full px-4 py-3.5 rounded-2xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark outline-none focus:border-claude-terracotta focus:shadow-sm text-sm font-medium transition-colors duration-150 resize-none" />
                     
                     <div className="p-5 rounded-2xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark space-y-3">
                       <div className="text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark">Add knowledge document</div>
-                      <input value={docName} onChange={e => setDocName(e.target.value)} placeholder="Document title" className="w-full px-3.5 py-2.5 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-medium outline-none focus:border-claude-terracotta/50 transition-colors" />
-                      <textarea value={docContent} onChange={e => setDocContent(e.target.value)} rows={3} placeholder="Paste document content (code, API specs, guidelines)" className="w-full px-3.5 py-2.5 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-medium outline-none focus:border-claude-terracotta/50 transition-colors resize-none font-mono" />
+                      <input aria-label="Document title" value={docName} onChange={e => setDocName(e.target.value)} placeholder="Document title" className="w-full px-3.5 py-2.5 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-medium outline-none focus:border-claude-terracotta/50 transition-colors" />
+                      <textarea aria-label="Document content" value={docContent} onChange={e => setDocContent(e.target.value)} rows={3} placeholder="Paste document content (code, API specs, guidelines)" className="w-full px-3.5 py-2.5 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-medium outline-none focus:border-claude-terracotta/50 transition-colors resize-none font-mono" />
                       <button onClick={addDoc} className="text-[13px] font-bold px-4 py-2 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark hover:bg-claude-border-light dark:hover:bg-claude-border-dark transition-colors inline-flex items-center gap-2">
                         <Plus className="w-4 h-4" /> Add to Knowledge ({docs.length})
                       </button>

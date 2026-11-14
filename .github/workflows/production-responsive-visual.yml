@@ -1,0 +1,93 @@
+name: Production Responsive Visual Certification
+
+on:
+  push:
+    branches: [prod-release]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-responsive-visual-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deployed-production-visual:
+    name: Production Edge visual acceptance (read-only)
+    if: github.ref == 'refs/heads/prod-release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact production release SHA
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Attest canonical production deployment and database readiness
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          node --input-type=module <<'NODE'
+          const expected = process.env.EXPECTED_SHA;
+          if (!/^[a-f0-9]{40}$/.test(expected || '')) throw new Error('Invalid expected production SHA');
+          let matched = false;
+          for (let attempt = 0; attempt < 42; attempt++) {
+            try {
+              const version = await fetch('https://aira-ai-2026.vercel.app/api/version', {
+                cache: 'no-store', signal: AbortSignal.timeout(15000)
+              });
+              if (version.ok && (await version.json()).commitSha === expected) {
+                const health = await fetch('https://aira-ai-2026.vercel.app/api/health', {
+                  cache: 'no-store', signal: AbortSignal.timeout(15000)
+                });
+                if (health.ok) {
+                  const body = await health.json();
+                  if (body.status === 'HEALTHY' && body.readiness === 'READY' &&
+                      body.subsystems?.database === 'REACHABLE' && body.productionMockFallback === 'DISABLED') {
+                    matched = true; break;
+                  }
+                }
+              }
+            } catch (error) {
+              console.log('Deployment not ready: ' + String(error));
+            }
+            await new Promise(resolve => setTimeout(resolve, 10000));
+          }
+          if (!matched) throw new Error('Production is not serving exact SHA with healthy database readiness');
+          console.log('PASS canonical production exact SHA and database readiness: ' + expected);
+          NODE
+
+      - name: Install Playwright Edge
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if npx playwright install --with-deps msedge; then exit 0; fi
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            sleep 5
+          done
+
+      - name: Read-only deployed production responsive Edge matrix
+        env:
+          AIRA_RESPONSIVE_URL: https://aira-ai-2026.vercel.app
+          AIRA_ALLOW_PRODUCTION_READONLY: '1'
+          AIRA_EXPECTED_SHA: ${{ github.sha }}
+          AIRA_RESPONSIVE_EVIDENCE_DIR: artifacts/responsive-viewport-spectrum/production
+          PLAYWRIGHT_CHANNEL: msedge
+        run: npx tsx test/composer-viewport-spectrum.ts
+
+      - name: Upload exact-release production screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aira-responsive-production-${{ github.sha }}
+          path: artifacts/responsive-viewport-spectrum/production/
+          if-no-files-found: warn
+          retention-days: 30

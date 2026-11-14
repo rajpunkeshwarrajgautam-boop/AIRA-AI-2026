@@ -100,6 +100,7 @@ export const WhatsNewAnnouncementModal: React.FC<WhatsNewAnnouncementModalProps>
     <div
       role="dialog"
       aria-modal="true"
+      aria-labelledby="whats-new-modal-title"
       data-testid="whats-new-modal"
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
     >
@@ -114,7 +115,7 @@ export const WhatsNewAnnouncementModal: React.FC<WhatsNewAnnouncementModalProps>
               <Bell className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-stone-900 dark:text-white">
+              <h2 id="whats-new-modal-title" className="text-base font-bold text-stone-900 dark:text-white">
                 {viewMode === 'popup' ? "What's New in AIRA" : "What's New & Updates"}
               </h2>
               <p className="text-xs text-stone-500 dark:text-stone-400">

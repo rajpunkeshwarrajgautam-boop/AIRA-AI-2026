@@ -92,7 +92,7 @@ const ThemeToggle = ({ theme, onChange }: { theme: 'light' | 'dark' | 'system', 
           aria-label={`Use ${id} theme`}
           aria-pressed={theme === id}
           onClick={() => onChange(id)}
-          className={`relative p-2 rounded-[8px] flex items-center justify-center transition-colors duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-claude-terracotta ${
+          className={`relative min-h-10 min-w-10 sm:min-h-8 sm:min-w-8 p-2 rounded-[8px] flex items-center justify-center transition-colors duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-claude-terracotta ${
             theme === id 
               ? 'text-claude-onAccent'
               : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white'
@@ -248,37 +248,50 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
   };
 
+  // Conversation selection is a native button. Action menus and rename inputs are
+  // siblings, so keyboard focus never enters nested interactive controls.
   const renderChatItem = (c: Conversation) => (
     <motion.div
       variants={itemVariants}
       key={c.id}
-      onClick={() => handleSelectChatMobile(c.id)}
-      className={`group flex items-center px-3 py-2.5 rounded-lg cursor-pointer transition-colors duration-200 relative ${activeChatId === c.id ? 'text-claude-text-light dark:text-white' : 'text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark hover:text-claude-text-light dark:hover:text-white'}`}
+      className={`group relative flex items-center rounded-lg px-1.5 py-0.5 transition-colors duration-150 ${activeChatId === c.id ? 'text-claude-text-light dark:text-white' : 'text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark hover:text-claude-text-light dark:hover:text-white'}`}
     >
       {activeChatId === c.id && (
-        <motion.div 
+        <motion.div
           layoutId="active-chat-indicator"
-          className="absolute inset-0 bg-claude-surface2-light dark:bg-claude-surface2-dark rounded-lg border border-claude-border-light dark:border-claude-border-dark z-0"
-          transition={{ type: "spring", stiffness: 400, damping: 30 }}
+          className="absolute inset-0 z-0 rounded-lg border border-claude-border-light bg-claude-surface2-light dark:border-claude-border-dark dark:bg-claude-surface2-dark"
+          transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+          aria-hidden="true"
         />
       )}
-      <div className="relative z-10 flex items-center w-full min-w-0">
-        <MessageSquareText className="w-4 h-4 flex-shrink-0 mr-3 opacity-70" />
+      <div className="relative z-10 flex w-full min-w-0 items-center">
         {editingChatId === c.id ? (
-          <input
-            autoFocus
-            value={editTitle}
-            onChange={e => setEditTitle(e.target.value)}
-            onClick={e => e.stopPropagation()}
-            onBlur={() => handleSaveRename(c.id)}
-            onKeyDown={e => {
-              if (e.key === 'Enter') handleSaveRename(c.id);
-              if (e.key === 'Escape') setEditingChatId(null);
-            }}
-            className="flex-1 min-w-0 text-[13px] font-medium bg-transparent outline-none border-b border-claude-terracotta"
-          />
+          <div className="flex min-w-0 flex-1 items-center gap-2.5 px-1.5">
+            <MessageSquareText className="h-4 w-4 shrink-0 opacity-70" aria-hidden="true" />
+            <input
+              autoFocus
+              aria-label={`Rename conversation: ${c.title}`}
+              value={editTitle}
+              onChange={event => setEditTitle(event.target.value)}
+              onBlur={() => handleSaveRename(c.id)}
+              onKeyDown={event => {
+                if (event.key === 'Enter') handleSaveRename(c.id);
+                if (event.key === 'Escape') setEditingChatId(null);
+              }}
+              className="min-w-0 flex-1 border-b border-claude-terracotta bg-transparent text-[13px] font-medium focus-visible:outline-offset-2"
+            />
+          </div>
         ) : (
-          <span className="text-[13px] font-medium truncate flex-1 tracking-tight">{c.title}</span>
+          <button
+            type="button"
+            onClick={() => handleSelectChatMobile(c.id)}
+            aria-current={activeChatId === c.id ? 'page' : undefined}
+            aria-label={`Open conversation: ${c.title}`}
+            className="flex min-h-10 min-w-0 flex-1 items-center rounded-md px-1.5 text-left text-[13px] font-medium tracking-tight transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-claude-terracotta"
+          >
+            <MessageSquareText className="mr-2.5 h-4 w-4 shrink-0 opacity-70" aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate">{c.title}</span>
+          </button>
         )}
         <ConversationActionsDropdown
           conversationId={c.id}
@@ -330,7 +343,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <div className="font-serif font-normal text-[24px] tracking-tight text-claude-text-light dark:text-claude-text-dark leading-none">Aira</div>
                 </div>
               </div>
-              <button type="button" aria-label="Close sidebar navigation" onClick={handleClose} className="p-1.5 rounded-lg text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark hover:text-claude-text-light dark:hover:text-claude-text-dark transition-colors" title="Close sidebar">
+              <button type="button" aria-label="Close sidebar navigation" onClick={handleClose} className="min-h-10 min-w-10 flex items-center justify-center p-2 rounded-lg text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark hover:text-claude-text-light dark:hover:text-claude-text-dark transition-colors" title="Close sidebar">
                 <PanelLeftClose className="w-4 h-4" />
               </button>
             </div>
@@ -350,7 +363,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div className="px-3.5 pt-2 pb-1 space-y-1">
             <button
               onClick={onOpenProjects}
-              className={`w-full flex items-center justify-between px-3.5 py-2 rounded-xl text-[13px] font-semibold transition-colors duration-150 ${activeProjectId ? 'bg-claude-surface-light dark:bg-claude-surface-dark text-claude-text-light dark:text-white shadow-sm border border-claude-border-light dark:border-claude-border-dark' : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark border border-transparent'}`}
+              className={`w-full min-h-10 flex items-center justify-between px-3.5 py-2.5 rounded-xl text-[13px] font-semibold transition-colors duration-150 ${activeProjectId ? 'bg-claude-surface-light dark:bg-claude-surface-dark text-claude-text-light dark:text-white shadow-sm border border-claude-border-light dark:border-claude-border-dark' : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark border border-transparent'}`}
             >
               <span className="flex items-center gap-2.5">
                 <FolderGit2 className="w-4 h-4 text-claude-accentInk" />
@@ -367,7 +380,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <button
                 type="button"
                 onClick={() => onOpenSearch(searchQuery)}
-                className="absolute left-2.5 z-10 rounded-md p-1 text-claude-muted-light transition-colors hover:text-claude-accentInk dark:text-claude-muted-dark"
+                className="absolute left-1 z-10 inline-flex items-center justify-center min-h-10 min-w-10 sm:min-h-8 sm:min-w-8 rounded-md p-1.5 text-claude-muted-light transition-colors hover:text-claude-accentInk dark:text-claude-muted-dark"
                 title="Search all conversation content"
                 aria-label="Search all conversation content"
               >
@@ -375,6 +388,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </button>
               <input
                 type="text"
+                aria-label="Search workspace conversations"
                 placeholder="Search workspace..."
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
@@ -384,13 +398,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     onOpenSearch(searchQuery);
                   }
                 }}
-                className="w-full text-[13px] font-medium pl-10 pr-4 py-2.5 rounded-xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark placeholder-claude-muted-light dark:placeholder-claude-muted-dark focus:outline-none focus:border-claude-terracotta/50 text-claude-text-light dark:text-white transition-colors duration-150"
+                className="w-full text-[13px] font-medium pl-11 pr-4 py-2.5 rounded-xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark placeholder-claude-muted-light dark:placeholder-claude-muted-dark focus:outline-none focus:border-claude-terracotta/50 text-claude-text-light dark:text-white transition-colors duration-150"
               />
             </div>
             <button
               type="button"
               onClick={() => onOpenSearch(searchQuery)}
-              className="mt-1.5 w-full px-1 text-left text-[10px] font-medium text-claude-muted-light/80 transition-colors hover:text-claude-accentInk dark:text-claude-muted-dark/80"
+              className="mt-1.5 w-full min-h-10 sm:min-h-7 flex items-center px-1 text-left text-[11px] font-medium text-claude-muted-light/80 transition-colors hover:text-claude-accentInk dark:text-claude-muted-dark/80"
             >
               Search inside messages · Enter
             </button>
@@ -400,7 +414,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <motion.div variants={listVariants} initial="hidden" animate="show" className="space-y-6">
               {starred.length > 0 && (
                 <div>
-                  <button onClick={() => setStarredExpanded(!starredExpanded)} className="flex items-center space-x-2 px-3 py-1.5 text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white w-full transition-colors">
+                  <button type="button" aria-expanded={starredExpanded} onClick={() => setStarredExpanded(!starredExpanded)} className="flex items-center space-x-2 px-3 py-1.5 text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white w-full transition-colors">
                     <motion.div animate={{ rotate: starredExpanded ? 0 : -90 }} transition={{ type: "spring", stiffness: 200, damping: 20 }}>
                       <ChevronDown className="w-3.5 h-3.5" />
                     </motion.div>
@@ -442,7 +456,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 type="button"
                 data-testid="sidebar-plan-badge"
                 onClick={() => onOpenSettings('plan')}
-                className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl bg-claude-surface2-light/60 dark:bg-white/[0.04] border border-claude-border-light/60 dark:border-white/10 hover:border-claude-terracotta/40 transition-colors duration-150 text-left group"
+                className="w-full min-h-10 flex items-center justify-between px-3 py-2 rounded-xl bg-claude-surface2-light/60 dark:bg-white/[0.04] border border-claude-border-light/60 dark:border-white/10 hover:border-claude-terracotta/40 transition-colors duration-150 text-left group"
               >
                 <div className="flex items-center gap-2 min-w-0">
                   <span className={`w-2 h-2 rounded-full shrink-0 ${
@@ -591,7 +605,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   type="button"
                   aria-label="Open settings"
                   onClick={() => onOpenSettings('general')}
-                  className="p-2 rounded-xl hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark border border-claude-border-light/60 dark:border-claude-border-dark/60 text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light transition-colors duration-150"
+                  className="min-h-10 min-w-10 sm:min-h-[36px] sm:min-w-[36px] inline-flex items-center justify-center p-2 rounded-xl hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark border border-claude-border-light/60 dark:border-claude-border-dark/60 text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light transition-colors duration-150"
                   title="Settings"
                 >
                   <Settings className="w-4 h-4" />

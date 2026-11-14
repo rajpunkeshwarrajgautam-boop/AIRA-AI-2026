@@ -63,10 +63,13 @@ export const PricingModal: React.FC<PricingModalProps> = ({
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-md p-4 overflow-y-auto">
       <motion.div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="aira-pricing-title"
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className="relative w-full max-w-5xl rounded-3xl bg-stone-900 border border-white/10 text-white shadow-lg overflow-hidden my-8"
+        className="relative my-2 sm:my-8 max-h-[92dvh] w-full max-w-5xl overflow-y-auto rounded-3xl border border-white/10 bg-stone-900 text-white shadow-lg"
       >
         {/* Header */}
         <div className="p-6 md:p-8 border-b border-white/10 flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -75,7 +78,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
               <Shield className="w-3.5 h-3.5" />
               AIRA AI 2026 Commercial Plans
             </div>
-            <h2 className="text-2xl md:text-3xl font-serif font-medium text-white">Choose the plan that fits your ambition</h2>
+            <h2 id="aira-pricing-title" className="text-2xl md:text-3xl font-serif font-medium text-white">Choose the plan that fits your ambition</h2>
             <p className="text-sm text-stone-400 mt-1">Transparent compute allowances, dedicated credit wallets, and zero hidden cutoffs.</p>
           </div>
 
@@ -85,6 +88,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
               <button
                 type="button"
                 onClick={() => setCurrency('INR')}
+                aria-pressed={currency === 'INR'}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors duration-150 ${currency === 'INR' ? 'bg-claude-terracotta text-white shadow-sm' : 'text-stone-400 hover:text-white'}`}
               >
                 ₹ INR (India)
@@ -92,6 +96,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
               <button
                 type="button"
                 onClick={() => setCurrency('USD')}
+                aria-pressed={currency === 'USD'}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors duration-150 ${currency === 'USD' ? 'bg-claude-terracotta text-white shadow-sm' : 'text-stone-400 hover:text-white'}`}
               >
                 $ USD (Global)
