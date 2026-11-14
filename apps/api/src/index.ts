@@ -2217,10 +2217,13 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     }
 
     const clientAbort = new AbortController();
+    let runCreatedForRequest = false;
     res.on('close', async () => {
-      if (!res.writableEnded) clientAbort.abort(new Error('CLIENT_CLOSED'));
-      if (!firstTokenEmitted) {
-        await releaseQuotaIfUnused();
+      // Disconnect while QUEUED: abort admission. After run creation the durable
+      // execution must survive transport interruption for authenticated replay.
+      if (!runCreatedForRequest && !res.writableEnded) {
+        clientAbort.abort(new Error('CLIENT_CLOSED'));
+        if (!firstTokenEmitted) await releaseQuotaIfUnused();
       }
     });
 
@@ -2328,6 +2331,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       await agentRuntime.cancelRun(run.id);
       return res.end();
     }
+    runCreatedForRequest = true;
     tRunCreated = performance.now();
     res.write(`event: run_started\ndata: ${JSON.stringify({ runId: run.id })}\n\n`);
 
@@ -2517,14 +2521,34 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     };
 
     stream.on('event', handler);
-    res.on('close', async () => {
-      if (!firstTokenEmitted) {
-        await releaseQuotaIfUnused();
-      }
+    res.on('close', () => {
       if (res.writableEnded) return;
-      await releasePermitIfHeld();
       stream.off('event', handler);
-      agentRuntime.cancelRun(run.id).catch(() => {});
+
+      // Preserve the existing run on connection loss. Account for quota and
+      // capacity independently of the response stream, without a second POST.
+      let closed = false;
+      const timer = setTimeout(() => { void finishDetached(); }, 10 * 60 * 1000);
+      timer.unref?.();
+      const finishDetached = async () => {
+        if (closed) return;
+        closed = true;
+        clearTimeout(timer);
+        stream.off('event', onDetachedEvent);
+        if (firstTokenEmitted) await settleQuotaOnce();
+        else await releaseQuotaIfUnused();
+        await releasePermitIfHeld();
+      };
+      const onDetachedEvent = (event: any) => {
+        if (event.type === 'content.delta' || event.type === 'thinking.delta') {
+          firstTokenEmitted = true;
+          void settleQuotaOnce();
+        }
+        if (['run.completed', 'run.failed', 'run.cancelled'].includes(event.type)) {
+          void finishDetached();
+        }
+      };
+      stream.on('event', onDetachedEvent);
     });
 
     await withInferenceReservation(modelRouter.capacityGuard, admission, () => agentRuntime.startRun(run.id), clientAbort.signal);
