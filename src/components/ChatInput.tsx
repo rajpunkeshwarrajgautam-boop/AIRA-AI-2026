@@ -160,7 +160,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   return (
     <div className="aira-composer mx-auto w-full min-w-0 max-w-3xl px-[clamp(0.5rem,2vw,1.25rem)] pb-3 sm:pb-5" ref={controlsRef}>
       <motion.div
-        layout
+        layout={!reducedMotion}
         className="aira-composer-card overflow-visible rounded-[16px] border border-claude-border-light bg-claude-surface-light shadow-sm transition-all duration-150 focus-within:border-claude-terracotta focus-within:ring-2 focus-within:ring-claude-terracotta/40 dark:border-claude-border-dark dark:bg-claude-surface-dark dark:shadow-none dark:focus-within:border-claude-terracotta/80 dark:focus-within:ring-claude-terracotta/30"
       >
         <div className="flex items-center justify-between gap-3 border-b border-claude-border-light/70 px-3 py-1.5 sm:px-4 sm:py-2 dark:border-claude-border-dark/70">

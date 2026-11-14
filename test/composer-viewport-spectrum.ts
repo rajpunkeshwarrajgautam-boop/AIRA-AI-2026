@@ -79,6 +79,16 @@ try {
     const group = page.getByRole('group', { name: 'Execution Mode' });
     for (const [width, height] of viewports) {
       await page.setViewportSize({ width, height });
+      // Framer layout transitions can briefly retain the old viewport position.
+      // Require the composer to settle back inside the new viewport promptly,
+      // then assert its geometry below. This is not a relaxed size threshold.
+      await page.waitForFunction(() => {
+        const card = document.querySelector('.aira-composer-card');
+        if (!card) return false;
+        const bounds = card.getBoundingClientRect();
+        return bounds.left >= -1 && bounds.right <= window.innerWidth + 1 &&
+          bounds.bottom <= window.innerHeight + 1;
+      }, undefined, { timeout: 1200 });
       for (const dark of [false, true]) {
         const theme = dark ? 'dark' : 'light';
         await page.evaluate(value => {
@@ -99,7 +109,7 @@ try {
           });
           result.composerHeight = geometry.height;
           assert.ok(geometry.left >= -1 && geometry.right <= width + 1, 'Composer escapes horizontal viewport');
-          assert.ok(geometry.bottom <= height + 1, 'Composer escapes vertical viewport');
+          assert.ok(geometry.bottom <= height + 1, 'Composer escapes vertical viewport: ' + JSON.stringify(geometry));
           assert.ok(geometry.documentWidth <= width + 1, 'Root has horizontal scroll');
           if (width < 640) assert.ok(geometry.height <= 145,
             'Empty mobile composer exceeds 145px: ' + geometry.height);
