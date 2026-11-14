@@ -86,6 +86,12 @@ try {
       await page.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: 60000 });
       await page.getByRole('textbox', { name: 'Message Aira' })
         .waitFor({ state: 'visible', timeout: 25000 });
+      // The header defect is in the adaptive shell. A preview without the
+      // production-matching flag must fail certification rather than skip it.
+      await page.getByRole('group', { name: 'Workspace mode' })
+        .waitFor({ state: 'visible', timeout: 7000 });
+      await page.getByTestId('artifact-studio-launcher')
+        .waitFor({ state: 'visible', timeout: 7000 });
       await page.evaluate('Promise.race([document.fonts.ready, new Promise(resolve => setTimeout(resolve, 2500))])');
       await record('Greeting', async () => {
         const greeting = page.locator('.aira-editorial-greeting');
@@ -149,7 +155,14 @@ try {
       });
       await page.keyboard.press('Escape');
       await record('Account menu', async () => {
-        await page.getByTestId('account-button').click();
+        // Opening Settings closes mobile navigation; reopen it before
+        // targeting the footer account menu.
+        const navOpen = page.getByRole('button', { name: 'Open sidebar navigation' });
+        if (await navOpen.isVisible()) await navOpen.click();
+        const account = page.getByTestId('account-button');
+        await account.waitFor({ state: 'visible', timeout: 6000 });
+        await account.scrollIntoViewIfNeeded();
+        await account.click({ timeout: 5000 });
         await page.getByRole('menu', { name: 'Account and user settings menu' })
           .waitFor({ state: 'visible', timeout: 9000 });
         const menu = await page.getByRole('menu', { name: 'Account and user settings menu' }).boundingBox();
