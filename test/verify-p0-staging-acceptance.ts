@@ -19,6 +19,9 @@ async function runAcceptance() {
   });
   const page = await context.newPage();
 
+  page.on('console', msg => console.log('PAGE LOG:', msg.text()));
+  page.on('pageerror', err => console.log('PAGE ERROR:', err.message));
+
   console.log(`Navigating to ${stagingUrl}...`);
   await page.goto(stagingUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.waitForLoadState('load');
@@ -29,7 +32,8 @@ async function runAcceptance() {
   const usageBtn = page.locator('button:has-text("Usage")').first();
   if (await usageBtn.isVisible()) {
     await usageBtn.click();
-    await page.waitForTimeout(2000);
+    console.log('Clicked Usage button. Waiting for plan verification to resolve...');
+    await page.waitForTimeout(5000);
     const screenshotModal = path.join(outDir, '04_staging_settings_plan_usage.png');
     await page.screenshot({ path: screenshotModal });
     console.log(`Captured Settings Modal: ${screenshotModal}`);
