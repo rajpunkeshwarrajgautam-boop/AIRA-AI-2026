@@ -94,7 +94,7 @@ function getParam(param: string | string[] | undefined): string {
 }
 
 import { createStagingMaintenanceMiddleware } from './middleware/staging-maintenance.js';
-import { createSessionAuthMiddleware, ensureAuthenticatedSession } from './auth/session-auth.js';
+import { createSessionAuthMiddleware, ensureAuthenticatedSession, SESSION_COOKIE_NAME, verifySessionToken } from './auth/session-auth.js';
 import { createNeonAuthPrincipalMiddleware } from './auth/neon-auth-principal.js';
 import {
   createBffSessionMiddleware,
@@ -254,39 +254,76 @@ app.get('/api/auth/identity', (req: Request, res: Response) => {
   });
 });
 
-const linkedGuestTokens = new Map<string, string>();
-
+/**
+ * Guest history migration is authorized by possession of the signed, environment-bound
+ * guest-session cookie AND a verified authenticated principal. Client-supplied IDs
+ * never confer ownership. The durable ledger serializes retries across instances.
+ */
 const handleGuestLinking = async (req: Request, res: Response) => {
+  const authenticatedUserId = req.principal?.userId;
+  if (!authenticatedUserId || authenticatedUserId === 'anonymous' || isGuestPrincipal(authenticatedUserId)) {
+    return res.status(401).json({ error: 'AUTHENTICATION_REQUIRED', message: 'Verified authenticated account required' });
+  }
+
+  const rawGuestCookie = (req.headers.cookie || '').split(';').map(part => part.trim()).find(part => part.startsWith(`${SESSION_COOKIE_NAME}=`));
+  let signedGuestToken = '';
   try {
-    const verified = (req as any).managedIdentity as { userId: string } | undefined;
-    const authUserId = req.principal?.userId || verified?.userId || (req as any).user?.id;
-    if (!authUserId) {
-      return res.status(401).json({ error: 'AUTHENTICATION_REQUIRED', message: 'Verified managed account or authenticated session required to link data' });
-    }
+    signedGuestToken = rawGuestCookie ? decodeURIComponent(rawGuestCookie.slice(SESSION_COOKIE_NAME.length + 1)) : '';
+  } catch {
+    return res.status(400).json({ error: 'INVALID_GUEST_SESSION' });
+  }
+  const signedGuest = signedGuestToken ? verifySessionToken(signedGuestToken) : null;
+  if (!signedGuest || !isGuestPrincipal(signedGuest.uid)) {
+    return res.status(400).json({ error: 'INVALID_GUEST_SESSION', message: 'Valid signed guest session required' });
+  }
 
-    const guestToken = req.body?.guestToken || req.body?.guestUserId || (req as any).guestSession?.id;
-    if (!guestToken || typeof guestToken !== 'string' || !guestToken.trim()) {
-      return res.status(400).json({ error: 'INVALID_GUEST_SESSION', message: 'Guest session token is invalid or expired' });
-    }
+  const requestedGuest = req.body?.guestToken ?? req.body?.guestUserId;
+  if (requestedGuest !== undefined && requestedGuest !== signedGuest.uid) {
+    return res.status(403).json({ error: 'GUEST_SESSION_OWNERSHIP_MISMATCH' });
+  }
+  if (!process.env.DATABASE_URL) {
+    return res.status(503).json({ error: 'DATABASE_UNAVAILABLE', message: 'Durable guest migration unavailable' });
+  }
 
-    if (linkedGuestTokens.has(guestToken)) {
-      return res.status(409).json({ error: 'ALREADY_LINKED', message: 'Guest session already linked to an account' });
-    }
+  try {
+    const migratedChatsCount = await db.transaction(async trx => {
+      // Transaction-scoped advisory lock is held for the entire claim and transfer.
+      await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [`aira-guest-migration:${signedGuest.uid}`]);
+      const prior = await trx('guest_migration_ledger')
+        .where({ guest_principal_id: signedGuest.uid })
+        .first();
+      if (prior) {
+        if (prior.target_principal_id !== authenticatedUserId) {
+          throw Object.assign(new Error('Guest session already linked to another account'), { statusCode: 409 });
+        }
+        return Number(prior.migrated_conversation_count);
+      }
 
-    // Provisional compatibility path. A durable, ownership-validated guest transfer
-    // must replace this before release; do not report failed transfers as success.
-    const result = await conversationSearchRepo.transferGuestData(guestToken, authUserId);
-    const migratedChatsCount = result.transferredConversations;
-    linkedGuestTokens.set(guestToken, authUserId);
-
-    res.json({
-      success: true,
-      linkedUserId: authUserId,
-      migratedChatsCount,
-      message: 'Guest conversation history linked successfully'
+      const result = await conversationSearchRepo.transferGuestData(signedGuest.uid, authenticatedUserId, trx);
+      await trx('guest_migration_ledger').insert({
+        guest_principal_id: signedGuest.uid,
+        target_principal_id: authenticatedUserId,
+        migrated_conversation_count: result.transferredConversations,
+        guest_session_proof_hash: crypto.createHash('sha256').update(signedGuest.sid).digest('hex'),
+        created_at: Date.now(),
+      });
+      return result.transferredConversations;
     });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message || 'Guest linking failed' });
+
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).json({
+      success: true,
+      linkedUserId: authenticatedUserId,
+      transferredConversations: migratedChatsCount,
+      migratedChatsCount,
+      message: 'Guest conversation history linked successfully',
+    });
+  } catch (error: any) {
+    if (error?.statusCode === 409) {
+      return res.status(409).json({ error: 'ALREADY_LINKED_TO_ANOTHER_ACCOUNT' });
+    }
+    console.error('[GUEST_MIGRATION_FAILED]', error?.code || 'DATABASE_TRANSFER_FAILED');
+    return res.status(503).json({ error: 'GUEST_MIGRATION_UNAVAILABLE', message: 'Guest conversations were not migrated. Retry later.' });
   }
 };
 
