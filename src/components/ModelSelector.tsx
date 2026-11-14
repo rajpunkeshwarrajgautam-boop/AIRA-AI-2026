@@ -141,7 +141,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   };
 
   return (
-    <div className="relative z-50 inline-block min-w-0 max-sm:basis-full max-sm:w-full" ref={containerRef}>
+    <div className="relative z-50 inline-block min-w-0 max-sm:col-span-2 max-sm:row-start-2 max-sm:w-full" ref={containerRef}>
       <motion.button
         type="button"
         data-testid="model-selector-button"
