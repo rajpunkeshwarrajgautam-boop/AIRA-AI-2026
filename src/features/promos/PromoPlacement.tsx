@@ -35,7 +35,8 @@ export function PromoPlacement({ placement, userTier, userId, streaming, telemet
     let first = false;
     if (eligible) {
       try {
-        first = sessionStorage.getItem(key) !== 'shown' || grantedKey.current === key;
+        // An already shown placement never returns after a stream hides it.
+        first = sessionStorage.getItem(key) !== 'shown' && grantedKey.current !== key;
         if (first) {
           sessionStorage.setItem(key, 'shown');
           grantedKey.current = key;
