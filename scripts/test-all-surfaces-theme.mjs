@@ -93,14 +93,14 @@ async function verifyAllSurfaces() {
       }
 
       // 7. Workspace Mode Toggle (Agent Studio)
-      const agentBtn = page.locator('.aira-adaptive-mode-toggle button:has-text("Agent")').first();
+      const agentBtn = page.locator('[data-testid="chat-mode-agent-btn"]').first();
       if (await agentBtn.count() > 0) {
         console.log(`  Switching to Agent mode in ${mode}...`);
         await agentBtn.click();
         await page.waitForTimeout(500);
         await page.screenshot({ path: path.join(SCREENSHOT_DIR, `surface_agent_mode_${mode}.png`) });
         // Switch back to Chat
-        const chatBtn = page.locator('.aira-adaptive-mode-toggle button:has-text("Chat")').first();
+        const chatBtn = page.locator('.aira-composer [aria-label="Execution Mode"] button:has-text("Chat")').first();
         if (await chatBtn.count() > 0) {
           await chatBtn.click();
           await page.waitForTimeout(400);
