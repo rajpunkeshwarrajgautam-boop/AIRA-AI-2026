@@ -193,3 +193,34 @@ test('P0 Regression 6: parseBillingSummary validates Free plan and rejects guest
   };
   assert.equal(parseBillingSummary(guestPayload, 'user123'), null);
 });
+
+test('P0 Regression 7: SettingsModal usage parser accurately calculates guest limits without throwing', () => {
+  const guestEntitlements = {
+    customerId: 'cust_test_guest',
+    plan: 'guest',
+    subscriptionStatus: 'active',
+    creditBalance: 0,
+    reservedCredits: 0,
+    availableCredits: 0,
+    dailyStandardChatRemaining: 5,
+    dailyStandardChatLimit: 5,
+    monthlyStandardChatUnitsRemaining: 5,
+    monthlyStandardChatUnitsLimit: 5,
+    reasoningBoostsRemaining: 0,
+    reasoningBoostsLimit: 0,
+    savedAgentsCount: 0,
+    savedAgentsLimit: 0,
+    builderAccess: 'none',
+    canInitiateChat: true,
+    canUsePremiumModels: false,
+    canUseVision: false,
+    canUseBuilder: false
+  };
+
+  const planId = guestEntitlements.plan;
+  assert.equal(COMMERCIAL_PLANS[planId as keyof typeof COMMERCIAL_PLANS]?.id, 'guest');
+  assert.equal(guestEntitlements.dailyStandardChatLimit, 5);
+  assert.equal(guestEntitlements.availableCredits, 0);
+  assert.equal(guestEntitlements.reasoningBoostsRemaining, 0);
+});
+

@@ -31,7 +31,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import type { AppSettings, Conversation, Project } from '../types';
 import { AVAILABLE_MODELS } from '../utils/constants';
-import { neonAuth } from '../lib/neonAuth';
+import { neonAuth, authenticatedApiFetch } from '../lib/neonAuth';
 import { COMMERCIAL_PLANS, PlanTier } from '../types/commercial-types';
 import { resetDismissedAnnouncements } from '../utils/announcements';
 import { agentMemory } from '../utils/agentMemoryEngine';
@@ -221,7 +221,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setUsageError(false);
     setUsageData(null);
     try {
-      const res = await fetch('/api/billing/entitlements', { credentials: 'include' });
+      const res = await authenticatedApiFetch('/api/billing/entitlements');
       if (!res.ok) throw new Error('Unable to verify current entitlements.');
       const entitlements = await res.json();
       const planId = entitlements.plan as PlanTier;
@@ -263,7 +263,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         paymentCollectionDisabled: true,
         billingStatus: planId === 'guest' ? 'Guest Trial Session' : 'Sandbox billing — checkout is unavailable'
       });
-    } catch {
+    } catch (err) {
+      console.warn('[SettingsModal] fetchUsage error:', err);
       // Never fabricate an active plan or quota figures when the API is offline or inconsistent.
       setUsageError(true);
     } finally {
