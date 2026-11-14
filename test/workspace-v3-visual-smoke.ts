@@ -43,6 +43,8 @@ async function main() {
     if (await page.locator('[data-testid="aira-v3-header-context"]').count() !== 1) {
       throw new Error('Conversation context must replace the duplicate header switch');
     }
+    await page.getByRole('button', { name: 'Use light theme' }).click();
+    await page.waitForFunction(() => !document.documentElement.classList.contains('dark'));
     const lightSidebarBackground = await page.locator('.aira-sidebar-shell').first()
       .evaluate(element => getComputedStyle(element).backgroundColor);
     for (const width of widths) {
@@ -82,7 +84,8 @@ async function main() {
       await page.screenshot({ path: `artifacts/workspace-v3-ui/${width}-light.png`, fullPage: true });
     }
     await page.setViewportSize({ width: 1440, height: 900 });
-    await page.evaluate(() => document.documentElement.classList.add('dark'));
+    await page.getByRole('button', { name: 'Use dark theme' }).click();
+    await page.waitForFunction(() => document.documentElement.classList.contains('dark'));
     const darkSidebarBackground = await page.locator('.aira-sidebar-shell').first()
       .evaluate(element => getComputedStyle(element).backgroundColor);
     if (lightSidebarBackground === darkSidebarBackground) {
