@@ -41,10 +41,17 @@ async function main() {
         overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
         composer: document.querySelector('.aira-composer')?.getBoundingClientRect().toJSON(),
         feed: document.querySelector('[data-testid="chat-scroll-region"]')?.getBoundingClientRect().toJSON(),
+        mark: document.querySelector('.aira-v3-intro-mark')?.getBoundingClientRect().toJSON(),
+        tones: document.querySelector('.aira-v3-intro-tones')?.getBoundingClientRect().toJSON(),
       }));
       if (!geometry.composer || !geometry.feed) throw new Error(`Composer/feed absent at ${width}px`);
       if (geometry.overflow > 2) throw new Error(`Horizontal overflow ${geometry.overflow}px at ${width}px`);
       if (geometry.composer.width > width + 1 || geometry.composer.x < -1) throw new Error(`Composer clipped at ${width}px`);
+      if (width <= 359 && geometry.mark && geometry.tones) {
+        if (geometry.mark.top < geometry.feed.top - 1 || geometry.tones.bottom > geometry.feed.bottom + 1) {
+          throw new Error(`Intro mark or tone selector clipped at ${width}px: ${JSON.stringify(geometry)}`);
+        }
+      }
       const controls = await page.locator('.aira-composer button:visible').evaluateAll(elements =>
         elements.map(element => {
           const rect = element.getBoundingClientRect();
