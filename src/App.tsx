@@ -1783,13 +1783,13 @@ useEffect(() => {
               </>
             )}
             {ADAPTIVE_STUDIO_PREVIEW && (
-              <div className="aira-adaptive-mode-toggle" role="group" aria-label="Workspace mode">
-                <button type="button" aria-pressed={workspaceMode === 'chat'} onClick={() => handleSelectWorkspaceMode('chat')}>
-                  <MessageSquareText size={15} aria-hidden="true" /> Chat
-                </button>
-                <button type="button" aria-pressed={workspaceMode === 'agent'} onClick={() => handleSelectWorkspaceMode('agent')}>
-                  <Bot size={15} aria-hidden="true" /> Agent
-                </button>
+              <div className="aira-v3-header-context" data-testid="aira-v3-header-context" aria-label="Current conversation and workspace">
+                <span className="aira-v3-header-title" title={activeConversation?.title || 'New conversation'}>
+                  {activeConversation?.title || 'New conversation'}
+                </span>
+                <span className="aira-v3-header-mode" aria-live="polite">
+                  {workspaceMode === 'agent' ? 'Agent workspace' : 'Chat workspace'}
+                </span>
               </div>
             )}
             </div>
