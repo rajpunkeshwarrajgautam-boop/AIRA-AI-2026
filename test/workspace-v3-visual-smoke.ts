@@ -58,6 +58,15 @@ async function main() {
       if (!geometry.composer || !geometry.feed) throw new Error(`Composer/feed absent at ${width}px`);
       if (geometry.overflow > 2) throw new Error(`Horizontal overflow ${geometry.overflow}px at ${width}px`);
       if (geometry.composer.width > width + 1 || geometry.composer.x < -1) throw new Error(`Composer clipped at ${width}px`);
+      if (width <= 359) {
+        const textarea = await page.locator('textarea[aria-label="Message Aira"]').evaluate(element => {
+          const input = element as HTMLTextAreaElement;
+          return { clientHeight: input.clientHeight, scrollHeight: input.scrollHeight };
+        });
+        if (textarea.scrollHeight > textarea.clientHeight + 2) {
+          throw new Error(`Composer placeholder is vertically clipped at ${width}px: ${JSON.stringify(textarea)}`);
+        }
+      }
       if (width <= 359 && geometry.mark && geometry.tones) {
         if (geometry.mark.top < geometry.feed.top - 1 || geometry.tones.bottom > geometry.feed.bottom + 1) {
           throw new Error(`Intro mark or tone selector clipped at ${width}px: ${JSON.stringify(geometry)}`);
