@@ -35,6 +35,7 @@ export async function resumeRunEvents({ runId, lastEventId, signal, onEvent }: R
   const decoder = new TextDecoder();
   let buffer = '';
   let cursor = lastEventId ?? -1;
+  let terminal: 'COMPLETED' | 'FAILED' | 'CANCELLED' | null = null;
   const processBlock = (block: string) => {
     const lines = block.split('\n');
     let id: number | null = null;
@@ -54,6 +55,9 @@ export async function resumeRunEvents({ runId, lastEventId, signal, onEvent }: R
     try { data = JSON.parse(dataLines.join('\n')); }
     catch { data = dataLines.join('\n'); }
     onEvent({ id, type, data });
+    if (type === 'run.completed') terminal = 'COMPLETED';
+    else if (type === 'run.failed') terminal = 'FAILED';
+    else if (type === 'run.cancelled') terminal = 'CANCELLED';
   };
 
   try {
@@ -70,13 +74,51 @@ export async function resumeRunEvents({ runId, lastEventId, signal, onEvent }: R
         const block = buffer.slice(0, boundary);
         buffer = buffer.slice(boundary + 2);
         processBlock(block);
+        if (terminal) break;
       }
+      if (terminal) { await reader.cancel(); break; }
     }
     buffer += decoder.decode();
     if (buffer.trim()) processBlock(buffer);
-    return cursor;
+    return { cursor, terminal };
   } finally {
     reader.releaseLock();
   }
 }
 
+
+/**
+ * Never reissues POST /api/chat/stream. The replay event log is used to wait
+ * for a terminal state. The final run content comes from the owned GET run
+ * resource, not by appending overlapping persisted and live delta batches.
+ */
+export async function recoverRunResult(
+  runId: string,
+  options: { signal?: AbortSignal; onEvent?: (event: ResumedRunEvent) => void } = {},
+): Promise<{ state: 'COMPLETED' | 'FAILED' | 'CANCELLED'; content: string }> {
+  const result = await resumeRunEvents({
+    runId,
+    signal: options.signal,
+    onEvent: options.onEvent || (() => {}),
+  });
+  const response = await authenticatedApiFetch(`/api/runs/${encodeURIComponent(runId)}`, {
+    method: 'GET',
+    signal: options.signal,
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) throw new Error(`Run recovery failed: HTTP ${response.status}`);
+  const run = await response.json() as { state?: string; content?: string; error?: string };
+  if (!['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state || '')) {
+    throw new Error('Run has not reached a terminal state; retry recovering later');
+  }
+  if (run.state === 'COMPLETED' && (typeof run.content !== 'string' || !run.content.trim())) {
+    throw new Error('Run completed but its authoritative response was unavailable');
+  }
+  // A missing terminal event is acceptable only if the owned durable run has
+  // reached a verified terminal state (for example after relay restart).
+  void result;
+  return {
+    state: run.state as 'COMPLETED' | 'FAILED' | 'CANCELLED',
+    content: typeof run.content === 'string' && run.content ? run.content : String(run.error || 'The run ended without output.'),
+  };
+}
