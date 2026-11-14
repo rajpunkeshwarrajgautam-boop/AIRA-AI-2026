@@ -2,6 +2,8 @@ import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import {
   Plus,
   FolderGit2,
+  Bot,
+  ChevronRight,
   Settings,
   Search,
   ChevronDown,
@@ -382,7 +384,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
               onClick={() => { onSelectWorkspace('agent'); handleClose(); }}
               aria-label="Open agent workspace"
             >
-              Agent runs &amp; workspace
+              <span className="aira-v3-agent-link-leading">
+                <Bot size={16} aria-hidden="true" />
+                <span>Agent workspace</span>
+              </span>
+              <ChevronRight size={15} aria-hidden="true" />
             </button>
           </div>
           <div className="px-4 pt-4 pb-2">
@@ -411,13 +417,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 className="w-full text-[13px] font-medium pl-11 pr-4 py-2.5 rounded-xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark placeholder-claude-muted-light dark:placeholder-claude-muted-dark focus:outline-none focus:border-claude-terracotta/50 text-claude-text-light dark:text-white transition-colors duration-150"
               />
             </div>
-            <button
-              type="button"
-              onClick={() => onOpenSearch(searchQuery)}
-              className="mt-1.5 w-full min-h-10 sm:min-h-7 flex items-center px-1 text-left text-[11px] font-medium text-claude-muted-light/80 transition-colors hover:text-claude-accentInk dark:text-claude-muted-dark/80"
-            >
-              Search inside messages · Enter
-            </button>
+            <p className="aira-v3-search-hint">Search chats and messages · Enter</p>
           </div>
 
           <div className="px-3 pt-3 pb-4">
