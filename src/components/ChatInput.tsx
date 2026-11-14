@@ -70,6 +70,17 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const controlsRef = useRef<HTMLDivElement>(null);
   const reducedMotion = useReducedMotion();
+  const [compactViewport, setCompactViewport] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia('(max-width: 639px)').matches
+  );
+
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 639px)');
+    const onChange = () => setCompactViewport(media.matches);
+    onChange();
+    media.addEventListener('change', onChange);
+    return () => media.removeEventListener('change', onChange);
+  }, []);
 
   const modeInfo = MODE_OPTIONS.find(mode => mode.id === workspaceMode) || MODE_OPTIONS[0];
   const modelInfo = AVAILABLE_MODELS.find(model => model.id === currentModel) || AVAILABLE_MODELS[0];
@@ -111,7 +122,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     agent: 'Describe a multi-step objective, application to build, or automated routine...',
   };
 
-  const placeholder = placeholderMap[workspaceMode] || placeholderMap.chat;
+  const placeholder = compactViewport
+    ? workspaceMode === 'agent'
+      ? 'Describe a task for AIRA…'
+      : 'Ask AIRA anything…'
+    : (placeholderMap[workspaceMode] || placeholderMap.chat);
   const canSubmit = Boolean(inputText.trim() || attachments.length > 0) && !isLoading;
 
   const contextualHint = useMemo(() => {
