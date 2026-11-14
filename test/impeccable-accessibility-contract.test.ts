@@ -70,7 +70,9 @@ test('memory vault modal implements dialog semantics, keyboard dismissal, and la
 test('touch targets and hidden inputs conform to minimum hit targets and accessible labeling', () => {
   const chatInput = source('src/components/ChatInput.tsx');
   assert.match(chatInput, /aria-label="Upload document or image attachments"/);
-  assert.match(chatInput, /min-h-10 sm:min-h-7 flex items-center/);
+  assert.match(chatInput, /min-h-10 flex items-center/, 'Chat/Agent control must stay at least 40px at every breakpoint');
+  assert.doesNotMatch(chatInput, /sm:min-h-(?:0|7)/, 'Composer controls must not shrink at desktop breakpoints');
+  assert.match(chatInput, /px-3 py-1\.5 sm:px-4 sm:py-2/, 'Mobile header spacing should be compact without reducing touch targets');
 
   const settings = source('src/components/SettingsModal.tsx');
   assert.match(settings, /aria-label="Import workspace settings JSON file"/);
