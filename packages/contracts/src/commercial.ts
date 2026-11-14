@@ -666,3 +666,15 @@ export function calculateVisionTariff(
 
   return 15;
 }
+
+/**
+ * Authoritative guest principal classification.
+ * Identifies anonymous sessions, guest identifiers, and legacy anonymous user_ prefixes.
+ * Genuine authenticated accounts use 'neon_user_<id>' or 'usr_<id>'.
+ */
+export function isGuestPrincipal(principalId: unknown): boolean {
+  if (typeof principalId !== 'string') return true;
+  const trimmed = principalId.trim();
+  if (!trimmed || trimmed === 'anonymous' || trimmed === 'guest') return true;
+  return trimmed.startsWith('guest_') || trimmed.startsWith('user_');
+}

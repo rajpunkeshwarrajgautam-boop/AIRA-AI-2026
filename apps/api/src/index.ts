@@ -17,7 +17,8 @@ import {
   isFeatureAllowedForTier,
   getMinimumRequiredTierForFeature,
   getMinimumRequiredTierForModel,
-  PLAN_MODEL_ALLOWLIST
+  PLAN_MODEL_ALLOWLIST,
+  isGuestPrincipal
 } from '../../../packages/contracts/src/index.js';
 import {
   resolveCallerTier,
@@ -858,6 +859,7 @@ const toolRegistry = new ToolRegistry(process.cwd());
 const approvalKernel = new ApprovalKernel(new PostgresApprovalRepository(), new PostgresSessionGrantRepository());
 const toolCallRepo = isDbConfigured ? new PostgresToolCallRepository() : new InMemoryToolCallRepository();
 const resolveCurrentCommercialTier = async (principalId: string) => {
+  if (isGuestPrincipal(principalId)) return 'guest';
   const customer = await commercialBillingService.getOrCreateCustomer(principalId);
   const subscription = await commercialBillingService.getActiveSubscription(customer.id);
   return subscription.planId;
@@ -889,7 +891,7 @@ const agentRuntime = new AgentRuntime(
   toolGateway
 );
 agentRuntime.setEntitlementResolver(async (principalId) => (
-  principalId.startsWith('guest_') ? 'guest' : resolveCurrentCommercialTier(principalId)
+  isGuestPrincipal(principalId) ? 'guest' : resolveCurrentCommercialTier(principalId)
 ));
 agentRuntime.getAutonomousEngine().setEntitlementResolver(resolveCurrentCommercialTier);
 const automationEngine = new AutomationEngine(agentRuntime, autoRepo, autoRunRepo);
@@ -973,7 +975,7 @@ function resolveMcpCallerUserId(req: Request): string | null {
   // MCP management requires a cryptographically verified identity. A generic
   // req.user fallback is insufficient authority for infrastructure endpoints.
   const authUserId = req.principal?.userId || verified?.userId;
-  if (!authUserId || authUserId === 'anonymous' || authUserId.startsWith('guest_') ||
+  if (!authUserId || isGuestPrincipal(authUserId) ||
       (req as any).user?.isGuest) return null;
   return authUserId;
 }

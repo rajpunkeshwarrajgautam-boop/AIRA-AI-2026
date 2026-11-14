@@ -46,7 +46,7 @@ export function createBillingRoutes(): Router {
       res.json({
         principalId: principal.userId,
         planId: entitlements.plan,
-        planName: entitlements.plan === 'pro' ? 'AIRA Pro' : entitlements.plan === 'plus' ? 'AIRA Plus' : 'AIRA Free',
+        planName: COMMERCIAL_PLANS[entitlements.plan]?.name || (entitlements.plan === 'guest' ? 'Guest' : 'AIRA Free'),
         subscriptionStatus: entitlements.subscriptionStatus,
         availableCredits: entitlements.availableCredits,
         lifetimeGranted: entitlements.creditBalance,

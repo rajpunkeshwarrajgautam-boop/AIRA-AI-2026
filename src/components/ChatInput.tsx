@@ -54,7 +54,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   extendedThinking,
   workspaceMode,
   onWorkspaceModeChange,
-  userTier = 'free',
+  userTier = 'guest',
   onTriggerUpgrade,
 }) => {
   const [inputText, setInputText] = useState(repairDraft?.text || '');
@@ -161,7 +161,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     <div className="aira-composer mx-auto w-full min-w-0 max-w-3xl px-3 sm:px-5 pb-3 sm:pb-5" ref={controlsRef}>
       <motion.div
         layout
-        className="aira-composer-card overflow-visible rounded-[16px] border border-claude-border-light bg-claude-surface-light shadow-sm transition-colors focus-within:border-claude-terracotta/50 dark:border-claude-border-dark dark:bg-claude-surface-dark dark:shadow-none"
+        className="aira-composer-card overflow-visible rounded-[16px] border border-claude-border-light bg-claude-surface-light shadow-sm transition-all duration-150 focus-within:border-claude-terracotta focus-within:ring-2 focus-within:ring-claude-terracotta/40 dark:border-claude-border-dark dark:bg-claude-surface-dark dark:shadow-none dark:focus-within:border-claude-terracotta/80 dark:focus-within:ring-claude-terracotta/30"
       >
         <div className="flex items-center justify-between gap-3 border-b border-claude-border-light/70 px-3 py-2 sm:px-4 dark:border-claude-border-dark/70">
           <div className="flex min-w-0 items-center gap-2">
@@ -225,7 +225,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           rows={1}
-          className="max-h-[38vh] w-full resize-none bg-transparent px-3 pb-1 pt-3 sm:px-4 sm:pb-2 sm:pt-4 text-base leading-[1.55] text-claude-text-light outline-none selection:bg-claude-terracotta/20 placeholder:text-claude-muted-light/75 dark:text-claude-text-dark dark:placeholder:text-claude-muted-dark/75"
+          spellCheck={false}
+          autoCapitalize="sentences"
+          autoCorrect="off"
+          data-ms-editor="false"
+          data-gramm="false"
+          className="max-h-[38vh] w-full resize-none bg-transparent px-3 pb-1 pt-3 sm:px-4 sm:pb-2 sm:pt-4 text-base leading-[1.55] text-claude-text-light outline-none focus:outline-none focus-visible:outline-none focus:ring-0 selection:bg-claude-terracotta/20 placeholder:text-claude-muted-light/75 dark:text-claude-text-dark dark:placeholder:text-claude-muted-dark/75"
         />
 
         <div className="flex min-w-0 items-center justify-between gap-1.5 px-2.5 sm:px-3 pb-1.5 sm:pb-3 pt-1">
