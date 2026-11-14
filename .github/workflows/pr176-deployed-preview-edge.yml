@@ -81,6 +81,12 @@ jobs:
           AIRA_SURFACE_EVIDENCE_DIR: artifacts/release176/guest
         run: npx tsx test/deployed-guest-surfaces.ts
 
+      - name: Verify guest BFF protection using anonymous requests
+        if: always()
+        env:
+          AIRA_AUTH_EVIDENCE_DIR: artifacts/release176/guest-auth
+        run: npx tsx test/deployed-guest-auth-boundary.ts
+
       - name: Install X11 native input support
         if: always()
         run: sudo apt-get update -qq && sudo apt-get install -y xdotool xvfb
