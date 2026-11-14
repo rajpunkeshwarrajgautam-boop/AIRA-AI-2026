@@ -565,19 +565,19 @@
   .aira-header-actions { grid-area: actions; gap: 0; }
   .aira-header-mode { grid-area: mode; justify-self: center; }
 
-  .aira-header-model .aira-model-selector-label {
+  .aira-adaptive-shell .aira-header-model .aira-model-selector-label {
     display: none;
   }
 
-  .aira-header-model [data-testid="model-selector-button"] {
+  .aira-adaptive-shell .aira-header-model [data-testid="model-selector-button"] {
     min-width: 40px;
     min-height: 40px;
     justify-content: center;
     padding-inline: 0.25rem;
   }
 
-  .aira-header-model > button,
-  .aira-header-actions button > span {
+  .aira-adaptive-shell .aira-header-model > button,
+  .aira-adaptive-shell .aira-header-actions button > span {
     display: none;
   }
 }
