@@ -375,6 +375,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
           </div>
 
+          <div className="px-3.5 pb-1">
+            <button
+              type="button"
+              className="aira-v3-agent-link"
+              onClick={() => { onSelectWorkspace('agent'); handleClose(); }}
+              aria-label="Open agent workspace"
+            >
+              Agent runs &amp; workspace
+            </button>
+          </div>
           <div className="px-4 pt-4 pb-2">
             <div className="relative flex items-center group">
               <button
