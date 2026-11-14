@@ -240,7 +240,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         throw new Error('Inconsistent entitlement response: unauthenticated session returned non-guest plan.');
       }
       if (!isGuestUser && planId === 'guest') {
-        throw new Error('Inconsistent entitlement response: authenticated session returned guest plan.');
+        // Reconcile: If client state had cached user, but authoritative server returned guest plan,
+        // invalidate stale client session and adopt guest state gracefully instead of permanently crashing.
+        neonAuth.saveSession(null);
+        setCurrentUser(null);
       }
 
       const now = new Date();
