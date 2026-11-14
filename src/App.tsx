@@ -19,6 +19,7 @@ import { ChatRunState, type ChatPhase } from './features/chat/ChatRunState';
 import { IntroGate } from './features/onboarding/IntroGate';
 import { PromoPlacement } from './features/promos/PromoPlacement';
 import { ResizableWorkspaceFrame } from './features/workspace/ResizableWorkspaceFrame';
+import { recoverRunResult } from './features/agents/resumeRunEvents';
 import './styles/workspace-v3.css';
 import { ChatInput } from './components/ChatInput';
 import { GreetingScreen } from './components/GreetingScreen';
@@ -1534,33 +1535,70 @@ useEffect(() => {
           },
           onError: error => {
             if (!isSameRequestIdentity()) return;
-            const isLimit = /429|quota|limit/i.test(String(error));
-            setLastResponseFailure({
-              prompt: rawText,
-              phase: isLimit ? (userTier === 'guest' ? 'guest-limit' : 'quota-exceeded') : 'error',
-            });
-            activeAbortControllerRef.current = null;
-            activeAssistantMsgIdRef.current = null;
-            activeRunIdRef.current = null;
-            setExecutionStatus(null);
-            if (typeof error === 'string') {
-              if (error.includes('PLAN_MODEL_RESTRICTED')) {
+            const runId = activeRunIdRef.current;
+            const errorMessage = String(error);
+            const isLimit = /429|quota|limit/i.test(errorMessage);
+            const reportFailure = (message: string) => {
+              if (!isSameRequestIdentity()) return;
+              setLastResponseFailure({
+                prompt: rawText,
+                phase: isLimit ? (userTier === 'guest' ? 'guest-limit' : 'quota-exceeded') : 'error',
+              });
+              activeAbortControllerRef.current = null;
+              activeAssistantMsgIdRef.current = null;
+              activeRunIdRef.current = null;
+              setExecutionStatus(null);
+              if (errorMessage.includes('PLAN_MODEL_RESTRICTED')) {
                 handleTriggerUpgrade('flagship_model');
-              } else if (error.includes('PLAN_CAPABILITY_RESTRICTED')) {
-                if (error.toLowerCase().includes('sandbox') || error.toLowerCase().includes('browser') || error.toLowerCase().includes('python')) {
-                  handleTriggerUpgrade('plus_to_pro_tool');
-                } else {
-                  handleTriggerUpgrade('agent_mode');
-                }
-              } else if (error.includes('429') || error.toLowerCase().includes('quota') || error.toLowerCase().includes('limit')) {
+              } else if (errorMessage.includes('PLAN_CAPABILITY_RESTRICTED')) {
+                handleTriggerUpgrade(/sandbox|browser|python/i.test(errorMessage) ? 'plus_to_pro_tool' : 'agent_mode');
+              } else if (isLimit) {
                 handleTriggerUpgrade(userTier === 'guest' ? 'guest_limit' : 'quota_exhausted');
               }
+              updateConversation(id, c => ({
+                ...c,
+                messages: c.messages.map(m => m.id === assistantId ? {
+                  ...m, content: m.content ? `${m.content}\n\n*[Recovery unavailable: ${message}]*` : message,
+                  isStreaming: false,
+                } : m),
+              }));
+              setIsLoading(false);
+            };
+
+            // Never create another run or charge another quota reservation.
+            if (runId && !/PLAN_MODEL_RESTRICTED|PLAN_CAPABILITY_RESTRICTED|quota|429|cancelled/i.test(errorMessage)) {
+              setExecutionStatus('Reconnecting to the existing run…');
+              const recoveryAbort = new AbortController();
+              const timeout = window.setTimeout(() => recoveryAbort.abort(), 60000);
+              void recoverRunResult(runId, { signal: recoveryAbort.signal })
+                .then(result => {
+                  if (!isSameRequestIdentity()) return;
+                  updateConversation(id, c => ({
+                    ...c,
+                    messages: c.messages.map(m => m.id === assistantId ? {
+                      ...m,
+                      content: result.content,
+                      isStreaming: false,
+                    } : m),
+                  }));
+                  if (result.state !== 'COMPLETED') {
+                    setLastResponseFailure({ prompt: rawText, phase: 'error' });
+                  } else {
+                    setLastResponseFailure(null);
+                  }
+                  activeAbortControllerRef.current = null;
+                  activeAssistantMsgIdRef.current = null;
+                  activeRunIdRef.current = null;
+                  setExecutionStatus(null);
+                  setIsLoading(false);
+                })
+                .catch(recoveryError => {
+                  reportFailure(String(recoveryError instanceof Error ? recoveryError.message : recoveryError));
+                })
+                .finally(() => window.clearTimeout(timeout));
+              return;
             }
-            updateConversation(id, c => ({
-              ...c,
-              messages: c.messages.map(m => m.id === assistantId ? { ...m, content: `Aira encountered an execution error: ${error}`, isStreaming: false } : m),
-            }));
-            setIsLoading(false);
+            reportFailure(errorMessage);
           },
         },
         projectContext.trim() || undefined,
