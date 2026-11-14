@@ -34,6 +34,17 @@ async function main() {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, reducedMotion: 'reduce' });
     await page.goto(BASE, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('[data-testid="chat-scroll-region"]', { timeout: 20000 });
+    if (await page.locator('.aira-adaptive-mode-toggle').count()) {
+      throw new Error('Duplicate header mode selector must not appear in Workspace V3');
+    }
+    if (await page.locator('.aira-composer [aria-label="Execution Mode"] button').count() !== 2) {
+      throw new Error('Both Chat and Agent controls must remain available in the composer');
+    }
+    if (await page.locator('[data-testid="aira-v3-header-context"]').count() !== 1) {
+      throw new Error('Conversation context must replace the duplicate header switch');
+    }
+    const lightSidebarBackground = await page.locator('.aira-sidebar-shell').first()
+      .evaluate(element => getComputedStyle(element).backgroundColor);
     for (const width of widths) {
       await page.setViewportSize({ width, height: width <= 430 ? 740 : 900 });
       await page.waitForTimeout(200);
@@ -63,6 +74,11 @@ async function main() {
     }
     await page.setViewportSize({ width: 390, height: 740 });
     await page.evaluate(() => document.documentElement.classList.add('dark'));
+    const darkSidebarBackground = await page.locator('.aira-sidebar-shell').first()
+      .evaluate(element => getComputedStyle(element).backgroundColor);
+    if (lightSidebarBackground === darkSidebarBackground) {
+      throw new Error('Sidebar background did not respond to dark mode');
+    }
     await page.screenshot({ path: 'artifacts/workspace-v3-ui/390-dark.png', fullPage: true });
     console.log(`Workspace V3 responsive smoke: ${widths.length} widths, reduced-motion and dark-mode capture passed`);
     await page.close();
