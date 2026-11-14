@@ -97,15 +97,17 @@ try {
         }, dark);
         const result = { width, height, theme, status: 'PASS', composerHeight: 0, message: '', file: '' };
         try {
-          const geometry = await page.evaluate(() => {
-            const card = document.querySelector('.aira-composer-card') as HTMLElement;
-            const rectangle = (selector: string) => {
-              const element = document.querySelector(selector) as HTMLElement | null;
+          // String-evaluated browser JS prevents esbuild's injected __name helper
+          // from leaking into a serialized Playwright page callback.
+          const geometry = await page.evaluate(`(() => {
+            const card = document.querySelector('.aira-composer-card');
+            const rectangle = (selector) => {
+              const element = document.querySelector(selector);
               if (!element) return null;
               const r = element.getBoundingClientRect();
               return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height };
             };
-            const greetingScroll = document.querySelector('[data-testid="chat-scroll-region"]') as HTMLElement | null;
+            const greetingScroll = document.querySelector('[data-testid="chat-scroll-region"]');
             if (window.innerHeight <= 480 && greetingScroll) greetingScroll.scrollTop = 0;
             const box = card.getBoundingClientRect();
             return {
@@ -127,7 +129,7 @@ try {
               greetingTop: rectangle('.aira-editorial-greeting .claude-fade-up')?.top,
               scrollTop: rectangle('[data-testid="chat-scroll-region"]')?.top,
             };
-          });
+          })()`);
           result.composerHeight = geometry.height;
           assert.ok(geometry.left >= -1 && geometry.right <= width + 1, 'Composer escapes horizontal viewport');
           assert.ok(geometry.bottom <= height + 1, 'Composer escapes vertical viewport: ' + JSON.stringify(geometry));
@@ -237,7 +239,27 @@ try {
           }
           return conflicts;
         });
-        assert.deepEqual(intersections, [], 'Expanded Studio interleaves header controls at ' + width);
+        const layoutDiagnostic = await page.evaluate(`(() => {
+          const rect = (selector) => {
+            const el = document.querySelector(selector);
+            if (!el) return null;
+            const r = el.getBoundingClientRect();
+            const style = getComputedStyle(el);
+            return { left: r.left, right: r.right, top: r.top, bottom: r.bottom,
+              width: r.width, height: r.height, display: style.display, position: style.position };
+          };
+          return {
+            main: rect('.aira-main-content'), header: rect('.aira-editorial-header'),
+            brand: rect('.aira-header-brand'), mode: rect('.aira-header-mode'),
+            model: rect('[data-testid="model-selector-button"]'),
+            actions: rect('.aira-header-actions'), studio: rect('[data-testid="unified-workspace"]')
+          };
+        })()`);
+        console.log('EXPANDED STUDIO GEOMETRY ' + width + ': ' + JSON.stringify(layoutDiagnostic));
+        const evidenceFile = 'studio-expanded-' + width + 'x' + height + '.png';
+        await page.screenshot({ path: path.join(evidenceDir, evidenceFile), fullPage: false, animations: 'disabled' });
+        assert.deepEqual(intersections, [], 'Expanded Studio interleaves header controls at ' + width
+          + ': ' + JSON.stringify(layoutDiagnostic));
       }
       const imageName = 'studio-open-' + width + 'x' + height + '.png';
       await page.screenshot({ path: path.join(evidenceDir, imageName), fullPage: false, animations: 'disabled' });
