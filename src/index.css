@@ -212,7 +212,8 @@
 /* Ambient Aura Glow for Aira Cognition Emblem */
 .aura-ambient-glow {
   position: absolute;
-  inset: -28px;
+  inset: 0;
+  transform: scale(1.35);
   border-radius: 9999px;
   background: radial-gradient(circle, color-mix(in srgb, var(--accent-primary) 22%, transparent) 0%, color-mix(in srgb, var(--accent-gold) 14%, transparent) 42%, transparent 72%);
   filter: blur(14px);
@@ -227,11 +228,11 @@
 
 @keyframes auraBreathe {
   0% {
-    transform: scale(0.92);
+    transform: scale(1.25);
     opacity: 0.65;
   }
   100% {
-    transform: scale(1.1);
+    transform: scale(1.45);
     opacity: 1;
   }
 }

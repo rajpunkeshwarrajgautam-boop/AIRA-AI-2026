@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useSyncExternalStore } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useSyncExternalStore } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Brain,
@@ -63,6 +63,19 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3000);
   };
+
+  // Handle ESC key to dismiss modal
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isOpen) {
+        onClose();
+      }
+    };
+    if (isOpen) {
+      window.addEventListener('keydown', handleKeyDown);
+    }
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   const handleCreateMemory = (e: React.FormEvent) => {
     e.preventDefault();
@@ -140,7 +153,12 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
 
   return (
     <AnimatePresence>
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 select-none">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="memory-vault-title"
+        className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 select-none"
+      >
         {/* Backdrop */}
         <motion.div
           initial={{ opacity: 0 }}
@@ -166,7 +184,7 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
               </div>
               <div>
                 <div className="flex items-center space-x-2">
-                  <h2 className="font-serif text-xl font-medium tracking-tight text-claude-text-light dark:text-white">
+                  <h2 id="memory-vault-title" className="font-serif text-xl font-medium tracking-tight text-claude-text-light dark:text-white">
                     Agent Persistent Memory
                   </h2>
                   <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
@@ -227,6 +245,7 @@ export const MemoryVaultModal: React.FC<MemoryVaultModalProps> = ({ isOpen, onCl
                 accept=".json"
                 onChange={handleImportFile}
                 className="hidden"
+                aria-label="Import memory backup JSON file"
               />
               <button
                 onClick={() => fileInputRef.current?.click()}

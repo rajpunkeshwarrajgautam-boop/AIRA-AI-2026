@@ -6,7 +6,7 @@ const source = (path: string) => readFileSync(path, 'utf8');
 
 test('sidebar conversation selection is a native keyboard-accessible button, not a clickable div', () => {
   const sidebar = source('src/components/Sidebar.tsx');
-  const item = sidebar.split('const renderChatItem =')[1]?.split('\n  return (\n    <AnimatePresence>')[0];
+  const item = sidebar.split('const renderChatItem =')[1]?.split(/\r?\n\s*return \(\s*<AnimatePresence>/)[0];
   assert.ok(item, 'conversation rows must exist');
   assert.match(item, /<button[\s\S]*?aria-current=\{activeChatId/);
   assert.match(item, /aria-label=\{`Open conversation:/);
@@ -47,4 +47,38 @@ test('header actions have descriptive, state-aware labels', () => {
   const app = source('src/App.tsx');
   assert.match(app, /aria-label=\{activeConversation\.isPinned \? "Remove bookmark" : "Bookmark conversation"\}/);
   assert.match(app, /aria-label=\{sharedCopied \? "Conversation link copied" : "Share conversation"\}/);
+});
+
+test("what's new announcement modal satisfies dialog semantics and heading labeling", () => {
+  const whatsNew = source('src/components/WhatsNewAnnouncementModal.tsx');
+  assert.match(whatsNew, /role="dialog"/);
+  assert.match(whatsNew, /aria-modal="true"/);
+  assert.match(whatsNew, /aria-labelledby="whats-new-modal-title"/);
+  assert.match(whatsNew, /id="whats-new-modal-title"/);
+});
+
+test('memory vault modal implements dialog semantics, keyboard dismissal, and labeled file input', () => {
+  const vault = source('src/components/MemoryVaultModal.tsx');
+  assert.match(vault, /role="dialog"/);
+  assert.match(vault, /aria-modal="true"/);
+  assert.match(vault, /aria-labelledby="memory-vault-title"/);
+  assert.match(vault, /id="memory-vault-title"/);
+  assert.match(vault, /e\.key === 'Escape'/);
+  assert.match(vault, /aria-label="Import memory backup JSON file"/);
+});
+
+test('touch targets and hidden inputs conform to minimum hit targets and accessible labeling', () => {
+  const chatInput = source('src/components/ChatInput.tsx');
+  assert.match(chatInput, /aria-label="Upload document or image attachments"/);
+  assert.match(chatInput, /min-h-10 sm:min-h-7 flex items-center/);
+
+  const settings = source('src/components/SettingsModal.tsx');
+  assert.match(settings, /aria-label="Import workspace settings JSON file"/);
+  assert.match(settings, /aria-label="Close settings"[\s\S]*?min-h-10/);
+
+  const sidebar = source('src/components/Sidebar.tsx');
+  assert.match(sidebar, /aria-label="Close sidebar navigation"[\s\S]*?min-h-10/);
+  assert.match(sidebar, /data-testid="sidebar-plan-badge"[\s\S]*?min-h-10/);
+  assert.match(sidebar, /aria-label="Open settings"[\s\S]*?min-h-10/);
+  assert.match(sidebar, /aria-label=\{`Use \$\{id\} theme`\}[\s\S]*?min-h-10/);
 });

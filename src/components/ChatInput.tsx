@@ -236,7 +236,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
         <div className="flex min-w-0 items-center justify-between gap-1.5 px-2.5 sm:px-3 pb-1.5 sm:pb-3 pt-1">
           <div className="flex min-w-0 items-center gap-1.5">
-            <input ref={fileInputRef} type="file" multiple onChange={handleFileUpload} className="hidden" />
+            <input ref={fileInputRef} type="file" multiple onChange={handleFileUpload} className="hidden" aria-label="Upload document or image attachments" />
             <motion.button
               type="button"
               whileTap={reducedMotion ? undefined : { scale: 0.92 }}
@@ -254,7 +254,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 type="button"
                 onClick={() => onWorkspaceModeChange('chat')}
                 aria-pressed={workspaceMode === 'chat'}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-[8px] text-[11px] font-semibold transition-colors duration-150 ${
+                className={`min-h-10 sm:min-h-7 flex items-center gap-1.5 px-3 py-1.5 sm:py-1 rounded-[8px] text-[11px] font-semibold transition-colors duration-150 ${
                   workspaceMode === 'chat'
                     ? 'bg-aira-blue text-white shadow-sm'
                     : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white'
@@ -279,7 +279,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                   onWorkspaceModeChange('agent');
                 }}
                 aria-pressed={workspaceMode === 'agent'}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-[8px] text-[11px] font-semibold transition-colors duration-150 ${
+                className={`min-h-10 sm:min-h-7 flex items-center gap-1.5 px-3 py-1.5 sm:py-1 rounded-[8px] text-[11px] font-semibold transition-colors duration-150 ${
                   workspaceMode === 'agent'
                     ? 'bg-aira-blue text-white shadow-sm'
                     : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white'

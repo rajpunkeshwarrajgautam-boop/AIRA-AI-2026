@@ -457,7 +457,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={onClose}
-                className="shrink-0 p-2 rounded-xl hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark text-claude-muted-light dark:text-claude-muted-dark transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99]"
+                className="shrink-0 min-h-10 min-w-10 flex items-center justify-center p-2 rounded-xl hover:bg-claude-surface-light dark:hover:bg-claude-surface-dark text-claude-muted-light dark:text-claude-muted-dark transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99]"
               >
                 <X className="w-5 h-5" />
               </motion.button>
@@ -674,7 +674,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <div role="status" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-claude-text-light dark:text-white">
                       {isUsageLoading ? 'Verifying your plan and usage…' : usageError ? 'Plan and usage are unavailable. No subscription or quota has been verified.' : 'Loading plan information…'}
                       {!isUsageLoading && usageError && (
-                        <button type="button" className="ml-3 font-semibold underline" onClick={() => void fetchUsage()}>Retry</button>
+                        <button type="button" className="ml-3 inline-flex items-center justify-center min-h-[32px] px-2.5 py-1 rounded-md font-semibold underline hover:bg-amber-500/20 transition-colors" onClick={() => void fetchUsage()}>Retry</button>
                       )}
                     </div>
                   )}
@@ -1403,7 +1403,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       >
                         <Upload className="w-4 h-4 text-claude-accentInk" />
                         <span>Import Backup</span>
-                        <input type="file" accept=".json" onChange={importData} className="hidden" />
+                        <input type="file" accept=".json" onChange={importData} className="hidden" aria-label="Import workspace settings JSON file" />
                       </motion.label>
                     </div>
                   </div>

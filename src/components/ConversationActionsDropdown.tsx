@@ -263,7 +263,7 @@ export const ConversationActionsDropdown: React.FC<ConversationActionsDropdownPr
         aria-controls={isOpen ? menuId : undefined}
         onClick={toggleMenu}
         whileTap={reducedMotion ? undefined : { scale: 0.9 }}
-        className={`rounded-lg p-1.5 outline-none transition-colors ${
+        className={`rounded-lg min-h-10 min-w-10 sm:min-h-7 sm:min-w-7 flex items-center justify-center p-1.5 outline-none transition-colors ${
           isOpen
             ? 'bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-text-light dark:text-white'
             : 'hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark'
