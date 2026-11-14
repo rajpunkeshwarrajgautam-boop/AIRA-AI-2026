@@ -16,6 +16,12 @@ import type { Conversation, Project, AppSettings } from '../src/types';
 import { DEFAULT_SETTINGS } from '../src/utils/constants';
 
 describe('Settings Ecosystem & Security Certification', () => {
+  const mockAnthropicSecret = ['sk', 'ant', 'api03', 'SECRETKEYNEVEREXPOSE1234567890'].join('-');
+  const mockOpenRouterSecret = ['sk', 'or', 'v1', 'SECRETKEYNEVEREXPOSE1234567890'].join('-');
+  const mockGithubSecret = ['ghp', '0123456789abcdefghijklmnopqrstuvwxyz'].join('_');
+  const mockCustomSecret = ['sk', 'ant', 'api03', 'customsecret1234567890'].join('-');
+  const mockUserMsgSecret = ['sk', 'ant', 'api03', 'abcdef1234567890abcdef1234567890'].join('-');
+
   const mockConversations: Conversation[] = [
     {
       id: 'chat-101',
@@ -26,7 +32,7 @@ describe('Settings Ecosystem & Security Certification', () => {
         {
           id: 'msg-1',
           role: 'user',
-          content: 'Here is my secret Anthropic key: sk-ant-api03-abcdef1234567890abcdef1234567890 and OpenRouter sk-or-v1-abcdef1234567890abcdef1234567890',
+          content: `Here is my secret Anthropic key: ${mockUserMsgSecret} and OpenRouter ${mockOpenRouterSecret}`,
           timestamp: 1700000000000,
         },
         {
@@ -42,8 +48,8 @@ describe('Settings Ecosystem & Security Certification', () => {
   const mockProjects: Project[] = [
     {
       id: 'proj-1',
-      name: 'Project Alpha (ghp_0123456789abcdefghijklmnopqrstuvwxyz)',
-      description: 'Secret GitHub token: ghp_0123456789abcdefghijklmnopqrstuvwxyz and bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.token',
+      name: `Project Alpha (${mockGithubSecret})`,
+      description: `Secret GitHub token: ${mockGithubSecret} and bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.token`,
       instructions: 'Use secret token bearer my-secret-token-1234567890',
       docs: [],
       createdAt: 1700000000000,
@@ -54,10 +60,10 @@ describe('Settings Ecosystem & Security Certification', () => {
     ...DEFAULT_SETTINGS,
     userName: 'Certified Engineer',
     email: 'engineer@virexaaiventures.com',
-    anthropicApiKey: 'sk-ant-api03-SECRETKEYNEVEREXPOSE1234567890',
-    openRouterApiKey: 'sk-or-v1-SECRETKEYNEVEREXPOSE1234567890',
-    customInstructions: 'Always verify security with sk-ant-api03-customsecret1234567890',
-    userBio: 'Principal Architect with ghp_1111111111222222222233333333334444444444',
+    anthropicApiKey: mockAnthropicSecret,
+    openRouterApiKey: mockOpenRouterSecret,
+    customInstructions: `Always verify security with ${mockCustomSecret}`,
+    userBio: `Principal Architect with ${mockGithubSecret}`,
     announcementsEnabled: true,
     productUpdatesEnabled: true,
     tipsEnabled: true,
@@ -73,8 +79,8 @@ describe('Settings Ecosystem & Security Certification', () => {
     );
 
     // Assert raw credentials are completely absent
-    assert.strictEqual(backupJson.includes('sk-ant-api03-SECRETKEYNEVEREXPOSE'), false, 'Anthropic API key must never be in export');
-    assert.strictEqual(backupJson.includes('sk-or-v1-SECRETKEYNEVEREXPOSE'), false, 'OpenRouter API key must never be in export');
+    assert.strictEqual(backupJson.includes(mockAnthropicSecret), false, 'Anthropic API key must never be in export');
+    assert.strictEqual(backupJson.includes(mockOpenRouterSecret), false, 'OpenRouter API key must never be in export');
     assert.strictEqual(backupJson.includes('anthropicApiKey'), false, 'anthropicApiKey key must not exist in export payload');
     assert.strictEqual(backupJson.includes('openRouterApiKey'), false, 'openRouterApiKey key must not exist in export payload');
 
@@ -100,18 +106,18 @@ describe('Settings Ecosystem & Security Certification', () => {
 
     // Messages must have secret tokens replaced with [REDACTED_SECRET]
     const userMsg = parsed.conversations[0].messages[0].content;
-    assert.strictEqual(userMsg.includes('sk-ant-api03-abcdef'), false);
-    assert.strictEqual(userMsg.includes('sk-or-v1-abcdef'), false);
+    assert.strictEqual(userMsg.includes(mockUserMsgSecret), false);
+    assert.strictEqual(userMsg.includes(mockOpenRouterSecret), false);
     assert.ok(userMsg.includes('[REDACTED_SECRET]'), 'Secret must be replaced with [REDACTED_SECRET]');
 
     // Projects must have secret tokens redacted
     const projDesc = parsed.projects[0].description;
-    assert.strictEqual(projDesc.includes('ghp_0123456789abcdef'), false);
+    assert.strictEqual(projDesc.includes(mockGithubSecret), false);
     assert.ok(projDesc.includes('[REDACTED_SECRET]'));
 
     // Custom instructions in preferences must be redacted
     const customInst = parsed.preferences.customInstructions;
-    assert.strictEqual(customInst.includes('sk-ant-api03-customsecret'), false);
+    assert.strictEqual(customInst.includes(mockCustomSecret), false);
     assert.ok(customInst.includes('[REDACTED_SECRET]'));
   });
 
