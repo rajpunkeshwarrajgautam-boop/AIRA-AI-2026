@@ -1,0 +1,237 @@
+/* Workspace V3: additive styling. All colors resolve through AIRA's active theme. */
+.aira-v3-shell {
+  --v3-rail-width: 272px;
+  --v3-composer-max: 800px;
+  --v3-panel-min: 360px;
+  --v3-panel-max: 760px;
+  background: var(--bg-main);
+  color: var(--text-primary);
+}
+
+.aira-v3-shell .aira-sidebar-shell {
+  background: var(--bg-surface-secondary);
+  border-color: var(--border-color);
+}
+.aira-v3-shell .aira-editorial-header {
+  background: var(--bg-main);
+  border-color: var(--border-color);
+}
+.aira-v3-shell .aira-composer {
+  max-width: var(--v3-composer-max);
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), var(--space-sm));
+}
+.aira-v3-shell .aira-composer-card {
+  background: var(--bg-surface);
+  border-color: var(--border-color);
+  box-shadow: var(--shadow-card);
+  border-radius: var(--radius-card);
+}
+.aira-v3-shell .aira-composer-card:focus-within {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 1px;
+}
+
+.aira-v3-chat-scroll {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  background: var(--bg-main);
+}
+.aira-v3-chat-transcript {
+  width: 100%;
+  padding-bottom: var(--space-lg);
+}
+.aira-v3-chat-empty { display: flex; flex-direction: column; }
+.aira-v3-message-highlight {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -2px;
+  border-radius: var(--radius-card);
+}
+
+.aira-v3-workspace-frame {
+  position: relative;
+  flex: 0 0 var(--workspace-panel-width, 480px);
+  width: var(--workspace-panel-width, 480px);
+  min-width: var(--v3-panel-min);
+  height: 100dvh;
+  min-height: 0;
+  display: flex;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border-color);
+  z-index: 35;
+}
+.aira-v3-workspace-frame > :not(.aira-v3-resize-handle) {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100% !important;
+  max-width: 100% !important;
+  height: 100%;
+}
+.aira-v3-resize-handle {
+  position: absolute;
+  z-index: 2;
+  left: -5px;
+  top: 0;
+  width: 10px;
+  height: 100%;
+  cursor: col-resize;
+  outline-offset: -1px;
+}
+.aira-v3-resize-handle:hover,
+.aira-v3-resize-handle:focus-visible {
+  background: color-mix(in srgb, var(--accent-primary) 24%, transparent);
+  outline-color: var(--color-focus);
+}
+
+.aira-v3-intro {
+  margin: auto;
+  width: min(100%, 760px);
+  min-height: 0;
+  padding: clamp(16px, 4vw, 48px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-md);
+  text-align: center;
+}
+.aira-v3-intro h1 {
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 5vw, 3.25rem);
+  font-weight: 400;
+  line-height: 1.1;
+  letter-spacing: var(--tracking-display);
+  animation: aira-v3-fade-up 220ms var(--ease-out) both;
+}
+.aira-v3-intro p { color: var(--text-muted); max-width: 48ch; }
+.aira-v3-intro-mark { animation: aira-v3-fade-up 220ms var(--ease-out) both; }
+.aira-v3-intro-loading { margin: auto; color: var(--text-muted); }
+.aira-v3-starters {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-xs);
+  margin-top: var(--space-xs);
+}
+.aira-v3-starter {
+  min-height: 40px;
+  padding: var(--space-xs) var(--space-md);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border-radius: var(--radius-pill);
+  transition: transform var(--dur-short) var(--ease-out), opacity var(--dur-short) var(--ease-out);
+  animation: aira-v3-fade-up 220ms var(--ease-out) var(--stagger-delay, 0ms) both;
+}
+.aira-v3-starter:hover { transform: translateY(-2px); }
+.aira-v3-starter:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.aira-v3-starter:disabled { opacity: .55; cursor: wait; }
+@keyframes aira-v3-fade-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.aira-v3-promo {
+  display: flex;
+  gap: var(--space-sm);
+  align-items: center;
+  justify-content: space-between;
+  margin: var(--space-sm);
+  border: 1px solid var(--border-color);
+  background: var(--bg-surface-secondary);
+  color: var(--text-body);
+  padding: var(--space-sm);
+  border-radius: var(--radius-card);
+}
+.aira-v3-promo strong { font-size: var(--text-sm); color: var(--text-primary); }
+.aira-v3-promo p { font-size: var(--text-xs); margin-top: var(--space-2xs); }
+.aira-v3-promo-actions { display: flex; align-items: center; gap: var(--space-xs); flex: 0 0 auto; }
+.aira-v3-promo button {
+  min-height: 40px;
+  min-width: 40px;
+  padding: var(--space-xs);
+  border-radius: var(--radius-card);
+  border: 1px solid var(--border-color);
+}
+.aira-v3-promo button:focus-visible { outline: 2px solid var(--color-focus); }
+
+@media (max-width: 1099px) {
+  .aira-v3-workspace-frame {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    width: 100vw;
+    min-width: 0;
+    height: 100dvh;
+    border-left: none;
+  }
+  .aira-v3-workspace-frame > :not(.aira-v3-resize-handle) { height: 100%; }
+  .aira-v3-chat-scroll { scrollbar-gutter: auto; }
+}
+@media (max-width: 479px) {
+  .aira-v3-promo { flex-direction: column; align-items: start; }
+  .aira-v3-intro { padding: var(--space-md); }
+  .aira-v3-starter { min-height: 40px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .aira-v3-intro h1, .aira-v3-intro-mark, .aira-v3-starter { animation: none; }
+  .aira-v3-starter { transition: none; }
+}
+html.force-reduced-motion .aira-v3-intro h1,
+html.force-reduced-motion .aira-v3-intro-mark,
+html.force-reduced-motion .aira-v3-starter { animation: none !important; transition: none !important; }
+.aira-v3-chat-phase {
+  margin: 0 auto var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
+  max-width: var(--v3-composer-max);
+  width: calc(100% - 2 * var(--space-md));
+  display: flex;
+  gap: var(--space-xs);
+  align-items: center;
+  background: var(--bg-surface-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-card);
+  color: var(--text-body);
+  font-size: var(--text-sm);
+}
+.aira-v3-chat-phase span { flex: 1 1 auto; min-width: 0; }
+.aira-v3-chat-phase small { display: block; color: var(--text-muted); }
+.aira-v3-chat-phase button {
+  display: inline-flex; align-items: center; gap: var(--space-2xs);
+  min-height: 40px; border: 1px solid var(--border-color);
+  padding: var(--space-xs); border-radius: var(--radius-card);
+}
+.aira-v3-spinner { animation: aira-v3-spin 1s linear infinite; }
+@keyframes aira-v3-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .aira-v3-spinner { animation: none; } }
+@media (max-width: 640px) {
+  .aira-v3-shell .aira-composer { padding-bottom: max(env(safe-area-inset-bottom, 0px), 8px); }
+  .aira-v3-shell .aira-composer textarea { max-height: min(28dvh, 180px); }
+  .aira-v3-shell .aira-composer button { min-height: 40px; }
+  .aira-v3-chat-phase { flex-wrap: wrap; }
+}
+.aira-v3-composer-model button { min-height: 40px; }
+.aira-v3-intro-skip {
+  min-height: 40px; border-radius: var(--radius-pill);
+  padding: var(--space-xs) var(--space-md); color: var(--text-muted);
+}
+.aira-v3-intro-tones { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: var(--space-2xs); }
+.aira-v3-intro-tones button {
+  min-height: 40px; border-radius: var(--radius-pill); padding: var(--space-xs) var(--space-sm);
+  color: var(--text-muted); font-size: var(--text-xs);
+}
+.aira-v3-intro-tones button[aria-pressed="true"] { color: var(--accent-ink); background: var(--bg-surface-secondary); }
+.aira-v3-intro-tones button:focus-visible, .aira-v3-intro-skip:focus-visible { outline: 2px solid var(--color-focus); }
+
+
+.aira-v3-composer-model { margin: 0 var(--space-sm); padding-top: var(--space-xs); }
+.aira-v3-composer-model > div { max-width: 100%; }
+.aira-v3-agent-link { display: block; width: 100%; min-height: 40px; border-radius: var(--radius-card); padding: var(--space-xs) var(--space-sm); text-align: left; font-size: var(--text-sm); color: var(--text-primary); background: transparent; }
+.aira-v3-agent-link:hover { background: var(--bg-surface); }
+.aira-v3-agent-link:focus-visible { outline: 2px solid var(--color-focus); }
