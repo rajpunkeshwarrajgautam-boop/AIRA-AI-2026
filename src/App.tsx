@@ -79,7 +79,7 @@ import {
   dismissFeatureGuidance
 } from './utils/featureDiscovery';
 import type { Announcement } from '../packages/contracts/src/index';
-import type { PlanTier } from './types/commercial-types';
+import { isGuestPrincipal, type PlanTier } from './types/commercial-types';
 import { parseBillingSummary, type EntitlementResolutionState } from './lib/accountBillingTruth';
 import { neonAuth, authenticatedApiFetch } from './lib/neonAuth';
 import { dispatchRunApproval } from './utils/approvalDispatch';
@@ -286,6 +286,12 @@ function App() {
       })
       .then(data => {
         if (!active || !data) return;
+        if (data.planId === 'guest' || (data.principalId && isGuestPrincipal(data.principalId))) {
+          setUserTier('guest');
+          setEntitlementState('guest');
+          neonAuth.saveSession(null);
+          return;
+        }
         const parsed = parseBillingSummary(data, user.id);
         if (parsed?.planId) {
           setUserTier(parsed.planId);
