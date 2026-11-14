@@ -593,3 +593,56 @@
     padding-block: clamp(0.75rem, 2.5vh, 1.5rem);
   }
 }
+
+
+/* A 75%-width Studio and a persistent sidebar must share the remaining
+   workspace with a usable chat column. Shrink the Studio's flex basis instead
+   of collapsing the editor to only a few pixels on 1280px desktops. */
+@media (min-width: 1280px) {
+  .aira-adaptive-shell.has-studio-open .aira-adaptive-main {
+    min-width: min(24rem, 50%);
+  }
+  .aira-adaptive-shell.has-studio-open .aira-adaptive-real-studio {
+    flex-shrink: 1;
+    min-width: 0;
+  }
+}
+
+/* Preserve the whole greeting without hiding key text behind the composer. */
+@media (max-width: 359px) and (max-height: 650px) {
+  .aira-editorial-greeting {
+    padding-block: 0.75rem;
+  }
+  .aira-editorial-greeting > .claude-fade-up.relative {
+    margin-bottom: 0.5rem;
+  }
+  .aira-editorial-greeting h1 {
+    font-size: clamp(1.75rem, 8vw, 2rem);
+    margin-bottom: 0.5rem;
+  }
+  .aira-editorial-greeting p {
+    line-height: 1.45;
+    margin-bottom: 0.5rem;
+  }
+}
+
+/* At a 360px-high landscape viewport, the fixed composer leaves insufficient
+   space for the full emblem. Show the greeting and subtitle in reading order. */
+@media (max-height: 480px) and (min-width: 640px) {
+  .aira-editorial-greeting {
+    padding-block: 0.5rem;
+  }
+  .aira-editorial-greeting > .claude-fade-up.relative {
+    display: none;
+  }
+  .aira-editorial-greeting h1 {
+    font-size: clamp(1.5rem, 3vw, 2rem);
+    line-height: 1.15;
+    margin-bottom: 0.25rem;
+  }
+  .aira-editorial-greeting p {
+    font-size: 0.75rem;
+    line-height: 1.35;
+    margin-bottom: 0;
+  }
+}
