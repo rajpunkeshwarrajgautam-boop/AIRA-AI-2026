@@ -484,6 +484,14 @@
   outline-offset: 3px;
 }
 
+/* The chat composer card provides the rounded focus boundary for keyboard and mouse navigation;
+   suppress raw textarea sharp-cornered outline to eliminate duplicate/discordant borders */
+.aira-composer-card textarea:focus,
+.aira-composer-card textarea:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
 .aira-editorial-app ::selection {
   color: var(--text-primary);
   background: color-mix(in srgb, var(--accent-terracotta) 24%, transparent);

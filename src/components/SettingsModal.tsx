@@ -182,6 +182,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const wasOpenRef = useRef(false);
 
   useEffect(() => {
+    const unsubscribe = neonAuth.onAuthStateChange((user) => {
+      setCurrentUser(user);
+    });
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
     if (isOpen && !wasOpenRef.current) {
       setForm({ ...settings });
       setCurrentUser(neonAuth.getCurrentUser());
@@ -202,7 +209,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     billingStatus: string;
   }
 
-  const isGuestUser = userTier === 'guest' || !neonAuth.getCurrentUser();
+  const isGuestUser = userTier === 'guest' || !currentUser;
   const [usageData, setUsageData] = useState<UsageData | null>(null);
   const [isUsageLoading, setIsUsageLoading] = useState(false);
   const [usageError, setUsageError] = useState(false);
@@ -215,7 +222,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       const res = await fetch('/api/billing/entitlements', { credentials: 'include' });
       if (!res.ok) throw new Error('Unable to verify current entitlements.');
       const entitlements = await res.json();
-      const planId = (isGuestUser ? 'guest' : entitlements.plan) as PlanTier;
+      const planId = entitlements.plan as PlanTier;
       if (!Object.prototype.hasOwnProperty.call(COMMERCIAL_PLANS, planId) ||
           !Number.isFinite(entitlements.dailyStandardChatRemaining) ||
           !Number.isFinite(entitlements.dailyStandardChatLimit) ||
@@ -223,10 +230,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           !Number.isFinite(entitlements.reasoningBoostsRemaining)) {
         throw new Error('Invalid entitlement response.');
       }
+
+      // Authoritative consistency check:
+      // If client session is unauthenticated / guest, server MUST classify plan as 'guest'.
+      // If server returned a paid or free subscriber plan for an unauthenticated visitor, fail visibly!
+      if (isGuestUser && planId !== 'guest') {
+        throw new Error('Inconsistent entitlement response: unauthenticated session returned non-guest plan.');
+      }
+      if (!isGuestUser && planId === 'guest') {
+        throw new Error('Inconsistent entitlement response: authenticated session returned guest plan.');
+      }
+
       const now = new Date();
       const tomorrowUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
-      const dailyChatsLimit = isGuestUser ? COMMERCIAL_PLANS.guest.dailyStandardChatLimit : entitlements.dailyStandardChatLimit;
-      const remainingDailyChats = isGuestUser ? Math.min(dailyChatsLimit, Math.max(0, entitlements.dailyStandardChatRemaining)) : entitlements.dailyStandardChatRemaining;
+      const dailyChatsLimit = entitlements.dailyStandardChatLimit;
+      const remainingDailyChats = Math.min(dailyChatsLimit, Math.max(0, entitlements.dailyStandardChatRemaining));
       const dailyChatsUsed = Math.max(0, dailyChatsLimit - remainingDailyChats);
       setUsageData({
         planId,
@@ -234,14 +252,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         dailyChatsUsed,
         dailyChatsLimit,
         remainingDailyChats,
-        monthlyCreditsRemaining: isGuestUser ? 0 : entitlements.availableCredits,
-        reasoningBoostsRemaining: isGuestUser ? 0 : entitlements.reasoningBoostsRemaining,
+        monthlyCreditsRemaining: entitlements.availableCredits,
+        reasoningBoostsRemaining: entitlements.reasoningBoostsRemaining,
         resetAt: tomorrowUtc.toISOString(),
         paymentCollectionDisabled: true,
-        billingStatus: isGuestUser ? 'Guest Trial Session' : 'Sandbox billing — checkout is unavailable'
+        billingStatus: planId === 'guest' ? 'Guest Trial Session' : 'Sandbox billing — checkout is unavailable'
       });
     } catch {
-      // Never fabricate an active plan or quota figures when the API is offline.
+      // Never fabricate an active plan or quota figures when the API is offline or inconsistent.
       setUsageError(true);
     } finally {
       setIsUsageLoading(false);
@@ -254,7 +272,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   }, [isOpen, userTier, fetchUsage]);
 
-  const activePlanId: PlanTier = isGuestUser ? 'guest' : (usageData?.planId || userTier || 'free');
+  const activePlanId: PlanTier = usageData ? usageData.planId : (isGuestUser ? 'guest' : (userTier || 'free'));
   const activePlanDef = COMMERCIAL_PLANS[activePlanId] || COMMERCIAL_PLANS.free;
   const projectLimit = activePlanDef.maxProjects;
   const memoryLimit = activePlanDef.maxMemoryRecords;

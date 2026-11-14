@@ -323,16 +323,18 @@ test('requirePlanTier: blocks guest callers from free, plus, and pro gated endpo
 });
 
 // --------------------------------------------------------------------------
-// 8. SettingsModal Frontend logic verification
+// 8. SettingsModal Frontend logic verification & Inconsistency Gate
 // --------------------------------------------------------------------------
-test('SettingsModal logic: unverified guest never represents active plan as Free subscriber', () => {
+test('SettingsModal logic: unverified guest fails visibly on inconsistent server response and never renders Free tier', () => {
   // Simulate guest user state
   const userTier: PlanTier = 'guest';
   const currentUser = null; // Unauthenticated guest
   const isGuestUser = userTier === 'guest' || !currentUser;
   assert.equal(isGuestUser, true);
 
-  // Even if an API mistakenly returns plan: 'free'
+  // Authoritative consistency validation:
+  // If backend mistakenly returns plan: 'free' for an unauthenticated session,
+  // the frontend must throw an Inconsistent Entitlement Error and show the error card
   const mockBuggyApiResponse = {
     plan: 'free',
     dailyStandardChatLimit: 15,
@@ -341,14 +343,43 @@ test('SettingsModal logic: unverified guest never represents active plan as Free
     reasoningBoostsRemaining: 5,
   };
 
-  // Clamped usageData in SettingsModal
-  const planId = (isGuestUser ? 'guest' : mockBuggyApiResponse.plan) as PlanTier;
-  assert.equal(planId, 'guest', 'Plan ID must be strictly guest');
+  const validateEntitlements = (entitlements: typeof mockBuggyApiResponse, isGuest: boolean) => {
+    const planId = entitlements.plan as PlanTier;
+    if (!Object.prototype.hasOwnProperty.call(COMMERCIAL_PLANS, planId) ||
+        !Number.isFinite(entitlements.dailyStandardChatRemaining) ||
+        !Number.isFinite(entitlements.dailyStandardChatLimit) ||
+        !Number.isFinite(entitlements.availableCredits) ||
+        !Number.isFinite(entitlements.reasoningBoostsRemaining)) {
+      throw new Error('Invalid entitlement response.');
+    }
+    if (isGuest && planId !== 'guest') {
+      throw new Error('Inconsistent entitlement response: unauthenticated session returned non-guest plan.');
+    }
+    if (!isGuest && planId === 'guest') {
+      throw new Error('Inconsistent entitlement response: authenticated session returned guest plan.');
+    }
+    return planId;
+  };
 
-  const activePlanId: PlanTier = isGuestUser ? 'guest' : (planId || userTier || 'free');
-  assert.equal(activePlanId, 'guest', 'Active plan must be guest');
+  // 1. Inconsistent response must throw
+  assert.throws(
+    () => validateEntitlements(mockBuggyApiResponse, isGuestUser),
+    /Inconsistent entitlement response: unauthenticated session returned non-guest plan\./
+  );
 
-  const activePlanDef = COMMERCIAL_PLANS[activePlanId];
+  // 2. Authoritative guest response passes and binds verified values
+  const mockValidGuestResponse = {
+    plan: 'guest',
+    dailyStandardChatLimit: 5,
+    dailyStandardChatRemaining: 5,
+    availableCredits: 0,
+    reasoningBoostsRemaining: 0,
+  };
+
+  const validatedPlanId = validateEntitlements(mockValidGuestResponse, isGuestUser);
+  assert.equal(validatedPlanId, 'guest');
+
+  const activePlanDef = COMMERCIAL_PLANS[validatedPlanId];
   assert.equal(activePlanDef.name, 'Guest');
   assert.equal(activePlanDef.dailyStandardChatLimit, 5);
   assert.equal(activePlanDef.monthlyPremiumCredits, 0);
@@ -356,19 +387,71 @@ test('SettingsModal logic: unverified guest never represents active plan as Free
   assert.equal(activePlanDef.maxProjects, 0);
   assert.equal(activePlanDef.maxMemoryRecords, 0);
 
-  // Verify quotas displayed to guest
-  const dailyChatsLimit = isGuestUser ? COMMERCIAL_PLANS.guest.dailyStandardChatLimit : mockBuggyApiResponse.dailyStandardChatLimit;
-  const remainingDailyChats = isGuestUser
-    ? Math.min(dailyChatsLimit, Math.max(0, mockBuggyApiResponse.dailyStandardChatRemaining))
-    : mockBuggyApiResponse.dailyStandardChatRemaining;
+  // Quotas displayed strictly from authoritative server response
+  const dailyChatsLimit = mockValidGuestResponse.dailyStandardChatLimit;
+  const remainingDailyChats = mockValidGuestResponse.dailyStandardChatRemaining;
   const dailyChatsUsed = Math.max(0, dailyChatsLimit - remainingDailyChats);
-  const monthlyCreditsRemaining = isGuestUser ? 0 : mockBuggyApiResponse.availableCredits;
-  const reasoningBoostsRemaining = isGuestUser ? 0 : mockBuggyApiResponse.reasoningBoostsRemaining;
+  assert.equal(dailyChatsLimit, 5);
+  assert.equal(remainingDailyChats, 5);
+  assert.equal(dailyChatsUsed, 0);
+  assert.equal(mockValidGuestResponse.availableCredits, 0);
+  assert.equal(mockValidGuestResponse.reasoningBoostsRemaining, 0);
+});
 
-  assert.equal(dailyChatsLimit, 5, 'Daily chat limit must be 5');
-  assert.equal(remainingDailyChats, 5, 'Remaining daily chats must be at most 5');
-  assert.equal(dailyChatsUsed, 0, 'Used daily chats must be 0');
-  assert.equal(monthlyCreditsRemaining, 0, 'Monthly credits must be 0 for guest');
-  assert.equal(reasoningBoostsRemaining, 0, 'Reasoning boosts must be 0 for guest');
-  assert.equal(activePlanDef.maxProjects, 0, 'Max projects must be 0 for guest');
+// --------------------------------------------------------------------------
+// 9. CommercialBillingService: Historical & Fresh Guest Credit Exploitation Prevention
+// --------------------------------------------------------------------------
+test('CommercialBillingService: reserveCredits rejects Guest principals even with positive credit balances', async () => {
+  const { commercialBillingService, InsufficientCreditsError } = await import('../apps/api/src/billing/commercial-billing-service.js');
+
+  // Test newly created guest_* identifier
+  const guestId = `guest_${randomUUID()}`;
+  await assert.rejects(
+    async () => {
+      await commercialBillingService.reserveCredits(guestId, 10, 'custom_agent');
+    },
+    (err: any) => {
+      assert(err instanceof InsufficientCreditsError, 'Must throw InsufficientCreditsError');
+      assert.equal(err.availableCredits, 0, 'Available credits for guest must be 0');
+      return true;
+    }
+  );
+
+  // Test legacy user_* anonymous identifier
+  const legacyId = `user_${randomUUID()}`;
+  await assert.rejects(
+    async () => {
+      await commercialBillingService.reserveCredits(legacyId, 25, 'vision_analysis');
+    },
+    (err: any) => {
+      assert(err instanceof InsufficientCreditsError, 'Must throw InsufficientCreditsError');
+      assert.equal(err.availableCredits, 0, 'Available credits for legacy guest must be 0');
+      return true;
+    }
+  );
+
+  // Test anonymous / guest literals
+  await assert.rejects(
+    async () => {
+      await commercialBillingService.reserveCredits('anonymous', 5, 'custom_agent');
+    },
+    (err: any) => {
+      assert(err instanceof InsufficientCreditsError);
+      return true;
+    }
+  );
+
+  // Test grantCredits blocks guest
+  await assert.rejects(
+    async () => {
+      await commercialBillingService.grantCredits(guestId, 50);
+    },
+    /Cannot grant credits to guest principal\./
+  );
+  await assert.rejects(
+    async () => {
+      await commercialBillingService.grantCredits(legacyId, 50);
+    },
+    /Cannot grant credits to guest principal\./
+  );
 });

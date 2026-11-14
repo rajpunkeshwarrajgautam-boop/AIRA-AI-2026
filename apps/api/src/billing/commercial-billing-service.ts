@@ -264,8 +264,8 @@ export class CommercialBillingService {
    * Fetch complete authoritative EntitlementState for a principal.
    */
   async getEntitlements(principalId: string): Promise<EntitlementState> {
-    const isGuest = isGuestPrincipal(principalId);
     const customer = await this.getOrCreateCustomer(principalId);
+    const isGuest = isGuestPrincipal(principalId) || isGuestPrincipal(customer.principalId);
     const sub = await this.getActiveSubscription(customer.id);
     const plan = COMMERCIAL_PLANS[sub.planId] || (isGuest ? COMMERCIAL_PLANS.guest : COMMERCIAL_PLANS.free);
 
@@ -447,7 +447,7 @@ export class CommercialBillingService {
       const paidTier = liveSub && Number(liveSub.current_period_end) > now &&
         (liveSub.plan_id === 'plus' || liveSub.plan_id === 'pro')
         ? liveSub.plan_id as PlanTier : 'free';
-      const effectiveTier: PlanTier = isGuestPrincipal(principalId) ? 'guest' : paidTier;
+      const effectiveTier: PlanTier = (isGuestPrincipal(principalId) || isGuestPrincipal(lockedCustomer.principal_id)) ? 'guest' : paidTier;
       const plan = COMMERCIAL_PLANS[effectiveTier];
       // The plan may expire between the HTTP check and the DB reservation.
       if (!isModelAllowedForTier(modelId, effectiveTier)) {
@@ -643,7 +643,7 @@ export class CommercialBillingService {
         .orderBy('current_period_end', 'desc').first();
       const paidTier: PlanTier = liveSub && (liveSub.plan_id === 'plus' || liveSub.plan_id === 'pro')
         ? liveSub.plan_id as PlanTier : 'free';
-      const tier = isGuestPrincipal(principalId) ? 'guest' : paidTier;
+      const tier = (isGuestPrincipal(principalId) || isGuestPrincipal(lockedCustomer.principal_id)) ? 'guest' : paidTier;
       const plan = COMMERCIAL_PLANS[tier];
       const monthlyUsed = await this.getMonthlyReasoningBoostUsage(customer.id, today, trx);
 
@@ -695,12 +695,29 @@ export class CommercialBillingService {
       throw new Error('Reservation amount must be positive.');
     }
 
+    if (isGuestPrincipal(principalId)) {
+      throw new InsufficientCreditsError(amountCredits, 0);
+    }
+
     const customer = await this.getOrCreateCustomer(principalId);
+    if (isGuestPrincipal(customer.principalId)) {
+      throw new InsufficientCreditsError(amountCredits, 0);
+    }
+
     const now = Date.now();
     const expiresAt = now + 15 * 60 * 1000; // 15 minute TTL
     const reservationId = `res_${crypto.randomUUID().replace(/-/g, '')}`;
 
     return await db.transaction(async (trx) => {
+      const lockedCustomer = await trx('billing_customers')
+        .where({ id: customer.id })
+        .forUpdate()
+        .first();
+
+      if (!lockedCustomer || isGuestPrincipal(lockedCustomer.principal_id) || isGuestPrincipal(principalId)) {
+        throw new InsufficientCreditsError(amountCredits, 0);
+      }
+
       const account = await trx('credit_accounts')
         .where({ customer_id: customer.id })
         .forUpdate()
@@ -896,7 +913,13 @@ export class CommercialBillingService {
     rolloverCap = 7500,
     metadata: Record<string, any> = {}
   ): Promise<{ newBalance: number; grantId: string }> {
+    if (isGuestPrincipal(principalId)) {
+      throw new Error('Cannot grant credits to guest principal.');
+    }
     const customer = await this.getOrCreateCustomer(principalId);
+    if (isGuestPrincipal(customer.principalId)) {
+      throw new Error('Cannot grant credits to guest principal.');
+    }
     const now = Date.now();
     const grantId = `grant_${crypto.randomUUID().replace(/-/g, '')}`;
 
