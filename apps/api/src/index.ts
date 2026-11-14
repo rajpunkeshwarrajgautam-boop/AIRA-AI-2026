@@ -2059,8 +2059,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     const allowedModels = PLAN_MODEL_ALLOWLIST[tier] || [];
 
     if (!isModelAllowedForTier(model, tier)) {
-      const isPlusModel = isModelAllowedForTier(model, 'plus');
-      const requiredTier = isPlusModel ? 'plus' : 'pro';
+      const requiredTier = getMinimumRequiredTierForModel(model);
       return res.status(403).json({
         error: 'PLAN_MODEL_RESTRICTED',
         message: `Model '${model}' requires higher plan tier`,

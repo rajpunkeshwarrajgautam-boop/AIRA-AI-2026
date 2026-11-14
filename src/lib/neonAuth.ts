@@ -532,6 +532,16 @@ export class NeonAuthClient {
           }
 
           return session;
+        } else if (data.status === 'ANONYMOUS' || !data.user) {
+          const hasOAuthCallback = typeof window !== 'undefined' && window.location?.search &&
+            (window.location.search.includes('auth_callback') || window.location.search.includes('auth_success'));
+          if (!hasOAuthCallback) {
+            this.csrfToken = null;
+            if (this.currentSession && this.currentSession.token === 'bff_session') {
+              this.saveSession(null);
+            }
+            return null;
+          }
         }
       }
 

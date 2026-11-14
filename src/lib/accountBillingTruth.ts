@@ -30,7 +30,8 @@ export function classifyServerSession(payload: unknown, cachedPrincipalId: strin
     session.status === 'AUTHENTICATED' &&
     typeof session.user?.id === 'string' &&
     session.user.id.length > 0 &&
-    session.user.id === cachedPrincipalId
+    cachedPrincipalId &&
+    normalizePrincipalSubject(session.user.id) === normalizePrincipalSubject(cachedPrincipalId)
   ) return 'verified';
   return 'mismatch';
 }

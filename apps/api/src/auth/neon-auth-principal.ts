@@ -154,6 +154,8 @@ export function createNeonAuthPrincipalMiddleware() {
       (req as any).user = {
         id: identity.userId,
         sessionId: identity.sessionId,
+        isGuest: false,
+        tier: 'free',
         roles: ['workspace_user'],
         scopes: ['chat:write', 'runs:read', 'runs:write', 'browser.read', 'files.read']
       };
