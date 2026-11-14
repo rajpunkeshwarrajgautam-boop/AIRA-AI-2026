@@ -129,6 +129,24 @@ try {
             assert.ok(rect.x >= -1 && rect.x + rect.width <= width + 1,
               'Composer control lies outside viewport');
           }
+          // Distinct composer buttons must not collide even when the locked
+          // Agent/PLUS control and the Send target share a 320px toolbar.
+          const composerBoxes = [];
+          for (const button of targets) {
+            const box = await button.boundingBox();
+            assert.ok(box, 'Composer action missing from geometry check');
+            composerBoxes.push(box);
+          }
+          for (let i = 0; i < composerBoxes.length; i++) {
+            for (let j = i + 1; j < composerBoxes.length; j++) {
+              const a = composerBoxes[i], b = composerBoxes[j];
+              const intersectWidth = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+              const intersectHeight = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
+              assert.ok(intersectWidth <= 1 || intersectHeight <= 1,
+                'Composer controls overlap: ' + JSON.stringify({ a, b }));
+            }
+          }
+
           // Header controls must stay separate across all tested widths.
           // This catches the formerly interleaved Chat/Agent, Model Selector,
           // Artifact Studio and share icons on small screens.
