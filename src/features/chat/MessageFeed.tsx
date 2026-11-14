@@ -1,5 +1,6 @@
-import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, type ReactNode } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
+import { ArrowDown } from 'lucide-react';
 import type { Message } from '../../types';
 
 export interface MessageFeedHandle { scrollToMessage: (id: string) => void; }
@@ -17,6 +18,7 @@ export const MessageFeed = forwardRef<MessageFeedHandle, MessageFeedProps>(funct
   const scroller = useRef<HTMLDivElement>(null);
   const virtualizer = useRef<VirtuosoHandle>(null);
   const atBottom = useRef(true);
+  const [awayFromBottom, setAwayFromBottom] = useState(false);
   const previousConversation = useRef(conversationId);
   const virtualized = messages.length >= 500;
 
@@ -38,6 +40,7 @@ export const MessageFeed = forwardRef<MessageFeedHandle, MessageFeedProps>(funct
         }
       }
       atBottom.current = false;
+      setAwayFromBottom(true);
     },
   }), [messages, virtualized]);
 
@@ -55,7 +58,26 @@ export const MessageFeed = forwardRef<MessageFeedHandle, MessageFeedProps>(funct
     if (atBottom.current) el.scrollTop = el.scrollHeight;
   }, [conversationId, messages.length, last?.content, last?.thinking?.text, virtualized]);
 
-  useEffect(() => { atBottom.current = true; }, [conversationId]);
+  useEffect(() => {
+    atBottom.current = true;
+    setAwayFromBottom(false);
+  }, [conversationId]);
+
+  const returnToLatest = () => {
+    if (virtualized) {
+      virtualizer.current?.scrollToIndex({ index: messages.length - 1, align: 'end', behavior: 'smooth' });
+    } else if (scroller.current) {
+      scroller.current.scrollTo({ top: scroller.current.scrollHeight, behavior: 'smooth' });
+    }
+    atBottom.current = true;
+    setAwayFromBottom(false);
+  };
+
+  const latestButton = awayFromBottom ? (
+    <button type="button" className="aira-v3-return-to-latest" onClick={returnToLatest}>
+      <ArrowDown size={16} aria-hidden="true" /> Latest
+    </button>
+  ) : null;
 
   const renderRow = (message: Message, index: number) => (
     <div
@@ -73,7 +95,8 @@ export const MessageFeed = forwardRef<MessageFeedHandle, MessageFeedProps>(funct
   }
   if (virtualized) {
     return (
-      <Virtuoso
+      <div className="aira-v3-message-region">
+        <Virtuoso
         key={conversationId}
         ref={virtualizer}
         className="aira-v3-chat-scroll"
@@ -82,13 +105,16 @@ export const MessageFeed = forwardRef<MessageFeedHandle, MessageFeedProps>(funct
         computeItemKey={(_index, message) => message.id}
         initialTopMostItemIndex={Math.max(0, messages.length - 1)}
         atBottomThreshold={96}
-        atBottomStateChange={value => { atBottom.current = value; }}
+        atBottomStateChange={value => { atBottom.current = value; setAwayFromBottom(!value); }}
         followOutput={value => value ? 'auto' : false}
         itemContent={(index, message) => renderRow(message, index)}
-      />
+        />
+        {latestButton}
+      </div>
     );
   }
   return (
+    <div className="aira-v3-message-region">
     <div
       ref={scroller}
       className="aira-v3-chat-scroll"
@@ -96,9 +122,12 @@ export const MessageFeed = forwardRef<MessageFeedHandle, MessageFeedProps>(funct
       onScroll={event => {
         const target = event.currentTarget;
         atBottom.current = target.scrollHeight - target.clientHeight - target.scrollTop <= 96;
+        setAwayFromBottom(!atBottom.current);
       }}
     >
       <div className="aira-v3-chat-transcript">{messages.map(renderRow)}</div>
+    </div>
+    {latestButton}
     </div>
   );
 });
