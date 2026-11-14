@@ -86,6 +86,13 @@ async function main() {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.getByRole('button', { name: 'Use dark theme' }).click();
     await page.waitForFunction(() => document.documentElement.classList.contains('dark'));
+    // The theme tokens change synchronously, but browser-composited surface colors
+    // may still be transitioning. Assert the rendered sidebar settles to a new
+    // color, not just that html has the .dark class.
+    await page.waitForFunction((lightColor) => {
+      const sidebar = document.querySelector<HTMLElement>('.aira-sidebar-shell');
+      return sidebar && getComputedStyle(sidebar).backgroundColor !== lightColor;
+    }, lightSidebarBackground, { timeout: 5000 });
     const darkSidebarBackground = await page.locator('.aira-sidebar-shell').first()
       .evaluate(element => getComputedStyle(element).backgroundColor);
     const themeDiagnostics = await page.evaluate(() => {
