@@ -201,6 +201,61 @@ try {
         persist();
       }
     }
+
+    // Verify actual interactive overlays as well as their closed-state geometry.
+    // Opening Studio here is read-only: no chat, billing or persisted data changes.
+    for (const [width, height] of [[320, 568], [390, 844], [768, 1024], [1280, 720], [1440, 900]]) {
+      await page.setViewportSize({ width, height });
+      await page.getByTestId('model-selector-button').click();
+      const menu = page.getByTestId('model-menu');
+      await menu.waitFor({ state: 'visible' });
+      const menuBox = await menu.boundingBox();
+      assert.ok(menuBox && menuBox.x >= -1 && menuBox.x + menuBox.width <= width + 1,
+        'Model dropdown escapes viewport at ' + width);
+      await page.keyboard.press('Escape');
+      await menu.waitFor({ state: 'hidden' });
+      await page.getByTestId('artifact-studio-launcher').click();
+      const studio = page.getByTestId('unified-workspace');
+      await studio.waitFor({ state: 'visible' });
+      const studioBox = await studio.boundingBox();
+      assert.ok(studioBox && studioBox.x >= -1 && studioBox.x + studioBox.width <= width + 1,
+        'Artifact Studio escapes viewport at ' + width);
+      if (width >= 1280) {
+        await studio.getByTitle('Expand width').click();
+        await page.waitForTimeout(120);
+        const intersections = await page.evaluate(() => {
+          const selectors = ['.aira-header-brand', '.aira-header-mode',
+            '[data-testid="model-selector-button"]', '.aira-header-actions'];
+          const boxes = selectors.map(selector => document.querySelector(selector)?.getBoundingClientRect())
+            .filter((rect): rect is DOMRect => Boolean(rect));
+          const conflicts: string[] = [];
+          for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
+            const a = boxes[i], b = boxes[j];
+            const area = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) *
+              Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+            if (area > 1) conflicts.push(selectors[i] + ' and ' + selectors[j] + ': ' + area);
+          }
+          return conflicts;
+        });
+        assert.deepEqual(intersections, [], 'Expanded Studio interleaves header controls at ' + width);
+      }
+      const imageName = 'studio-open-' + width + 'x' + height + '.png';
+      await page.screenshot({ path: path.join(evidenceDir, imageName), fullPage: false, animations: 'disabled' });
+      await studio.getByTestId('workspace-close').click();
+      await studio.waitFor({ state: 'hidden' });
+      console.log('PASS interactive model menu and Studio layout at ' + width + 'x' + height);
+    }
+
+    // A long draft must grow and scroll within the available workspace height.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await textarea.fill(('Long message and formatting details.\n').repeat(45));
+    const longComposer = await composerCard.boundingBox();
+    assert.ok(longComposer && longComposer.y >= -1 && longComposer.y + longComposer.height <= 845,
+      'Multiline composer pushes controls outside mobile viewport');
+    await page.screenshot({ path: path.join(evidenceDir, 'composer-long-draft-390x844.png'),
+      fullPage: false, animations: 'disabled' });
+    await textarea.fill('');
+    console.log('PASS long-draft mobile composer containment');
   } finally {
     await context.close();
   }
