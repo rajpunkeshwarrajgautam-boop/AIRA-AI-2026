@@ -121,13 +121,19 @@ export function resetDismissedAnnouncements(userId?: string | null): void {
 /**
  * Calculate the count of unread announcements applicable to the given tier.
  */
-export function getUnreadAnnouncementCount(tier: PlanTier = 'free', userId?: string | null): number {
+export function getUnreadAnnouncementCount(
+  tier: PlanTier = 'free',
+  userId?: string | null,
+  options?: { announcementsEnabled?: boolean; productUpdatesEnabled?: boolean }
+): number {
+  if (options?.announcementsEnabled === false) return 0;
   const dismissed = new Set(getDismissedAnnouncementIds(userId));
   const available = getAnnouncementsForTier(tier);
   const now = Date.now();
 
   return available.filter(a => {
     if (dismissed.has(a.id)) return false;
+    if (options?.productUpdatesEnabled === false && a.category === 'model') return false;
     const pubTime = new Date(a.publishedAt).getTime();
     return !isNaN(pubTime) && pubTime <= now;
   }).length;
@@ -140,7 +146,8 @@ export function getUnreadAnnouncementCount(tier: PlanTier = 'free', userId?: str
 export function shouldShowFirstViewPopup(
   tier: PlanTier = 'free',
   userId?: string | null,
-  announcementsEnabled: boolean = true
+  announcementsEnabled: boolean = true,
+  productUpdatesEnabled: boolean = true
 ): Announcement | null {
   if (!announcementsEnabled) return null;
 
@@ -150,8 +157,14 @@ export function shouldShowFirstViewPopup(
   const dismissed = new Set(getDismissedAnnouncementIds(userId));
   const now = Date.now();
 
+  // Filter out model/product updates if disabled by preference
+  const filtered = available.filter(a => {
+    if (a.category === 'model' && !productUpdatesEnabled) return false;
+    return true;
+  });
+
   // Sort available newest first
-  const sorted = [...available]
+  const sorted = [...filtered]
     .filter(a => {
       const pubTime = new Date(a.publishedAt).getTime();
       return !isNaN(pubTime) && pubTime <= now;

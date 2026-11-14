@@ -26,6 +26,7 @@ import {
   CheckCircle2,
   TrendingUp,
   Shield,
+  Sparkles,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { AppSettings, Conversation, Project } from '../types';
@@ -34,6 +35,7 @@ import { neonAuth } from '../lib/neonAuth';
 import { COMMERCIAL_PLANS, PlanTier } from '../types/commercial-types';
 import { resetDismissedAnnouncements } from '../utils/announcements';
 import { agentMemory } from '../utils/agentMemoryEngine';
+import { createWorkspaceBackup, validateAndParseBackup } from '../utils/workspaceBackup';
 
 export interface PresetTheme {
   id: NonNullable<AppSettings['aestheticPreset']>;
@@ -111,7 +113,7 @@ interface SettingsModalProps {
   onSaveSettings: (settings: AppSettings) => void;
   conversations: Conversation[];
   projects: Project[];
-  onImportData: (data: { conversations: Conversation[]; projects: Project[] }) => void;
+  onImportData: (data: { conversations: Conversation[]; projects: Project[]; settings?: Partial<AppSettings> }) => void;
   onClearAll: () => void;
   onOpenMemoryVault?: () => void;
   initialTab?: string;
@@ -347,14 +349,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const exportData = () => {
-    const data = {
-      conversations,
-      projects,
-      settings: form,
-      exportedAt: new Date().toISOString(),
-      version: '2026.1'
-    };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const backupJson = createWorkspaceBackup(conversations, projects, form, currentUser?.id || 'guest');
+    const blob = new Blob([backupJson], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; 
@@ -369,15 +365,30 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     const reader = new FileReader();
     reader.onload = ev => {
       try {
-        const data = JSON.parse(String(ev.target?.result || '{}'));
-        if (Array.isArray(data.conversations)) {
-          onImportData({ conversations: data.conversations, projects: data.projects || [] });
+        const text = String(ev.target?.result || '');
+        const parseResult = validateAndParseBackup(text, conversations, projects);
+        if (!parseResult.valid || !parseResult.data) {
+          alert(`Import failed: ${parseResult.error || 'Invalid Aira backup format.'}`);
+          return;
         }
-      } catch { 
-        alert('Invalid Aira backup file.'); 
+
+        onImportData({
+          conversations: parseResult.data.conversations,
+          projects: parseResult.data.projects,
+          settings: parseResult.data.preferences as any,
+        });
+
+        if (parseResult.data.preferences) {
+          setForm(prev => ({ ...prev, ...parseResult.data!.preferences }));
+        }
+
+        alert(`Successfully imported ${parseResult.data.conversations.length} conversation(s) and ${parseResult.data.projects.length} project(s).`);
+      } catch (err: any) { 
+        alert(`Failed to import backup: ${err.message || 'Invalid JSON format'}`); 
       }
     };
     reader.readAsText(file);
+    e.target.value = '';
   };
 
   const handleResetAnnouncements = () => {
@@ -520,13 +531,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                   <div>
                     <label htmlFor="aira-settings-email" className="text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark block mb-2">Account Email</label>
-                    <input 
-                      id="aira-settings-email"
-                      value={form.email || ''} 
-                      placeholder="Not signed in"
-                      onChange={e => setForm({ ...form, email: e.target.value })} 
-                      className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-medium outline-none focus:border-claude-terracotta transition-colors motion-reduce:transition-none" 
-                    />
+                    <div className="relative">
+                      <input 
+                        id="aira-settings-email"
+                        value={currentUser?.email || 'Not signed in (Guest Workspace)'} 
+                        readOnly
+                        disabled
+                        aria-readonly="true"
+                        title="Account email is bound to your verified authentication identity."
+                        className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light/60 dark:bg-claude-surface2-dark/60 border border-claude-border-light dark:border-claude-border-dark text-[13px] font-medium text-claude-muted-light dark:text-claude-muted-dark outline-none cursor-not-allowed select-none" 
+                      />
+                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold px-2 py-0.5 rounded-full bg-claude-surface2-light dark:bg-white/10 text-claude-muted-light border border-claude-border-light/60 dark:border-white/10">
+                        {currentUser ? 'Verified OAuth' : 'Guest'}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-1">
+                      {currentUser 
+                        ? 'Email is managed through your verified sign-in provider.' 
+                        : 'Sign in with Google or GitHub to link your email and sync workspace history.'}
+                    </p>
                   </div>
 
                   <div>
@@ -750,7 +773,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       </div>
                       <div className="flex items-center gap-2 text-claude-muted-light dark:text-claude-muted-dark sm:justify-end">
                         <Shield className="w-4 h-4 text-emerald-500 shrink-0" />
-                        <span>Billing: <span className="text-claude-text-light dark:text-white font-medium">Sandbox Mode (Isolated)</span></span>
+                        <span>Billing: <span className="text-claude-text-light dark:text-white font-medium">{activePlanId === 'guest' ? 'Guest Trial (No Billing Active)' : (usageData?.billingStatus ? `Billing: ${usageData.billingStatus}` : 'Sandbox Mode (Isolated)')}</span></span>
                       </div>
                     </div>
                   </div>
@@ -1058,6 +1081,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       ))}
                     </div>
                   </div>
+
+                  {form.tipsEnabled !== false && (
+                    <div data-testid="tip-reasoning" className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-800 dark:text-amber-300 flex items-start gap-2.5">
+                      <Sparkles className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+                      <div>
+                        <div className="font-bold">Pro Tip: Extended Reasoning Tokens</div>
+                        <p className="mt-0.5 text-[11px] leading-relaxed opacity-90">
+                          Allocate up to 8,192 thinking tokens on supported models for deep multi-step architecture design, verification proofs, and complex debugging chains.
+                        </p>
+                      </div>
+                    </div>
+                  )}
                 </motion.div>
               )}
 
@@ -1127,6 +1162,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         </p>
                       </div>
                     )}
+
+                    {form.tipsEnabled !== false && (
+                      <div data-testid="tip-memory" className="p-3.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-xs text-blue-800 dark:text-blue-300 flex items-start gap-2.5">
+                        <Database className="w-4 h-4 shrink-0 mt-0.5 text-blue-600 dark:text-blue-400" />
+                        <div>
+                          <div className="font-bold">Pro Tip: Safe Cross-Conversation Memory</div>
+                          <p className="mt-0.5 text-[11px] leading-relaxed opacity-90">
+                            AIRA automatically consolidates important facts across sessions while scrubbing authorization tokens and passwords to maintain continuous, private context.
+                          </p>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </motion.div>
               )}
@@ -1157,6 +1204,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       className="w-full px-4 py-3 rounded-xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[13px] font-medium outline-none focus:border-claude-terracotta transition-colors motion-reduce:transition-none resize-none" 
                     />
                   </div>
+
+                  {form.tipsEnabled !== false && (
+                    <div data-testid="tip-personalization" className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-800 dark:text-emerald-300 flex items-start gap-2.5">
+                      <Sliders className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600 dark:text-emerald-400" />
+                      <div>
+                        <div className="font-bold">Pro Tip: Custom Personality & Coding Style</div>
+                        <p className="mt-0.5 text-[11px] leading-relaxed opacity-90">
+                          Custom directives steer AIRA&apos;s output style across every chat. User context bio lets AIRA tailor explanations to your seniority and tech stack.
+                        </p>
+                      </div>
+                    </div>
+                  )}
                 </motion.div>
               )}
 
@@ -1181,31 +1240,53 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                   <div className="p-4 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/40 dark:bg-claude-surface2-dark/40 flex items-center justify-between">
                     <div>
-                      <div className="text-xs font-bold text-claude-text-light dark:text-white">Interactive Sandbox Runtime</div>
-                      <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">Live execute HTML, SVG, and Tailwind previews inside a secure isolated iframe.</div>
+                      <div className="text-xs font-bold text-claude-text-light dark:text-white">
+                        {activePlanDef.allowPythonSandbox ? 'Interactive Python & Web Sandbox' : 'Interactive Web Sandbox Preview'}
+                      </div>
+                      <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">
+                        {activePlanDef.allowPythonSandbox 
+                          ? 'Execute Python scripts, HTML, SVG, and React components with full isolation.' 
+                          : 'Live execute HTML, SVG, and Tailwind previews inside a secure isolated iframe.'}
+                      </div>
                     </div>
-                    <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-2.5 py-1 rounded-md border border-emerald-200/50 dark:border-emerald-500/20">Active</span>
+                    <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-2.5 py-1 rounded-md border border-emerald-200/50 dark:border-emerald-500/20">
+                      {activePlanDef.allowPythonSandbox ? 'Pro Sandbox Active' : 'Web Sandbox Active'}
+                    </span>
                   </div>
+
+                  {form.tipsEnabled !== false && (
+                    <div data-testid="tip-artifacts" className="p-3.5 rounded-xl bg-purple-500/10 border border-purple-500/20 text-xs text-purple-800 dark:text-purple-300 flex items-start gap-2.5">
+                      <FileCode2 className="w-4 h-4 shrink-0 mt-0.5 text-purple-600 dark:text-purple-400" />
+                      <div>
+                        <div className="font-bold">Pro Tip: Dual-Pane Artifact Studio</div>
+                        <p className="mt-0.5 text-[11px] leading-relaxed opacity-90">
+                          When &apos;Auto-Open Artifact Studio&apos; is enabled, code, SVG diagrams, and HTML mockups open automatically side-by-side with your chat.
+                        </p>
+                      </div>
+                    </div>
+                  )}
                 </motion.div>
               )}
 
-              {/* TAB 6: ACCOUNT & PRIVACY DATA */}
+              {/* TAB 7: ACCOUNT & PRIVACY DATA */}
               {activeTab === 'data' && (
                 <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
                   {/* Account / Subscription Banner */}
                   <div className="p-4 rounded-2xl border border-claude-terracotta/20 bg-claude-terracotta/5 dark:bg-claude-terracotta/10 flex items-center justify-between">
                     <div>
                       <div className="text-xs font-semibold text-claude-accentInk">
-                        {currentUser ? 'Authenticated Profile' : 'Subscription Plan'}
+                        {currentUser ? 'Authenticated Profile' : 'Guest Workspace'}
                       </div>
                       <div className="text-sm font-bold text-claude-text-light dark:text-white mt-0.5">
-                        {currentUser ? `${currentUser.name || 'User'} (${activePlanDef.name} Workspace)` : `${activePlanDef.name} (Trial Workspace)`}
+                        {currentUser ? `${currentUser.name || 'User'} (${activePlanDef.name} Workspace)` : `${activePlanDef.name} (Guest Session)`}
                       </div>
                       <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">
-                        {currentUser ? currentUser.email : '128K token context window with adaptive model routing.'}
+                        {currentUser ? currentUser.email : 'Unauthenticated trial session. Sign in to sync across devices.'}
                       </div>
                     </div>
-                    <span className="text-xs font-bold px-3 py-1 rounded-full bg-claude-terracotta text-claude-onAccent">Active</span>
+                    <span className={`text-xs font-bold px-3 py-1 rounded-full ${currentUser ? 'bg-claude-terracotta text-claude-onAccent' : 'bg-claude-surface2-light dark:bg-claude-surface2-dark text-claude-muted-light border border-claude-border-light dark:border-claude-border-dark'}`}>
+                      {currentUser ? 'Active' : 'Guest'}
+                    </span>
                   </div>
 
                   {/* Actions for Plan, Billing & Pricing */}
@@ -1431,7 +1512,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <div className="pt-4 border-t border-claude-border-light dark:border-claude-border-dark">
                     <button 
                       onClick={() => { if (confirm('Reset all Aira local data, conversations, and projects from this browser? (Local device data only; does not affect server-side accounts)')) onClearAll(); }} 
-                      className="text-xs font-bold text-red-500 hover:text-red-600 transition-colors block w-full text-center p-2 rounded-xl hover:bg-red-50 dark:hover:bg-red-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99]"
+                      className="text-xs font-bold text-red-500 hover:text-red-600 transition-colors flex items-center justify-center w-full min-h-[40px] px-3 py-2.5 rounded-xl hover:bg-red-50 dark:hover:bg-red-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99]"
                     >
                       Reset all local workspace data (This device only)
                     </button>
