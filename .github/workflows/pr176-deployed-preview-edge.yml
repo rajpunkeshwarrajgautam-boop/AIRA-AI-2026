@@ -81,6 +81,17 @@ jobs:
           AIRA_SURFACE_EVIDENCE_DIR: artifacts/release176/guest
         run: npx tsx test/deployed-guest-surfaces.ts
 
+      - name: Install X11 native input support
+        if: always()
+        run: sudo apt-get update -qq && sudo apt-get install -y xdotool xvfb
+
+      - name: Verify real headed Microsoft Edge browser zoom at 200 percent
+        if: always()
+        timeout-minutes: 15
+        env:
+          AIRA_ZOOM_EVIDENCE_DIR: artifacts/release176/native-zoom
+        run: xvfb-run -a --server-args="-screen 0 1920x1200x24" npx tsx test/deployed-edge-native-zoom.ts
+
       - name: Upload exact-SHA screenshots and JSON even when failing
         if: always()
         uses: actions/upload-artifact@v4
