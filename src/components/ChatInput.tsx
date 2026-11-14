@@ -304,7 +304,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               </button>
             </div>
 
-            <div className="relative hidden sm:block">
+            <div className="aira-composer-style relative hidden sm:block">
               <button
                 type="button"
                 onClick={() => {
