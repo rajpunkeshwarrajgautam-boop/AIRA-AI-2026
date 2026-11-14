@@ -1726,8 +1726,9 @@ useEffect(() => {
       <InlineToast message={toastMessage} />
 
       <main className={`${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-main ' : 'bg-mesh-canvas '}flex-1 min-w-0 min-h-0 h-[100dvh] flex flex-col overflow-hidden w-full max-w-full`}>
-        <header className={`aira-editorial-header ${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-header ' : ''}min-h-[60px] h-auto md:h-[64px] shrink-0 px-2 sm:px-3 md:px-6 py-1 md:py-0 flex items-center justify-between border-b border-claude-border-light dark:border-claude-border-dark gradient-fade-header relative z-30 bg-claude-bg-light dark:bg-claude-bg-dark`}>
-          <div className="aira-header-leading flex flex-1 items-center gap-1 min-w-0 max-sm:flex-wrap max-sm:gap-y-1 max-sm:pr-[5.5rem]">
+        <header className={`aira-editorial-header ${ADAPTIVE_STUDIO_PREVIEW ? 'aira-adaptive-header ' : ''}min-h-[60px] h-auto md:h-[64px] shrink-0 px-2 sm:px-3 md:px-6 py-1 md:py-0 flex items-center justify-between max-sm:grid max-sm:grid-cols-[minmax(0,1fr)_auto] max-sm:auto-rows-min max-sm:gap-y-1 border-b border-claude-border-light dark:border-claude-border-dark gradient-fade-header relative z-30 bg-claude-bg-light dark:bg-claude-bg-dark`}>
+          <div className="aira-header-leading flex flex-1 items-center gap-1 min-w-0 max-sm:contents">
+            <div className="aira-header-primary flex min-w-0 items-center gap-1 max-sm:flex-wrap">
             {!sidebarOpen && (
               <>
                 <button 
@@ -1753,6 +1754,7 @@ useEffect(() => {
                 </button>
               </div>
             )}
+            </div>
             <ModelSelector
               currentModel={settings.activeModel}
               onSelectModel={model => updateSettings({ activeModel: model })}
@@ -1763,7 +1765,7 @@ useEffect(() => {
             />
             {currentProject && <button onClick={() => setIsProjectsOpen(true)} className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-aira-blue/10 text-aira-blue text-xs max-w-[180px]"><FolderGit2 className="w-3 h-3" /><span className="truncate">{currentProject.name}</span></button>}
           </div>
-          <div className="aira-header-actions flex shrink-0 items-center gap-1 sm:gap-1.5 max-sm:absolute max-sm:right-2 max-sm:top-2">
+          <div className="aira-header-actions flex shrink-0 items-center gap-1 sm:gap-1.5 max-sm:col-start-2 max-sm:row-start-1 max-sm:justify-self-end max-sm:self-start max-sm:max-w-[50vw] max-sm:flex-wrap">
             {workspaceMode === 'agent' && (
               <button
                 onClick={() => {
