@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUp,
   Bot,
-  Brain,
   Check,
   ChevronDown,
   LoaderCircle,
@@ -73,7 +72,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const reducedMotion = useReducedMotion();
 
   const modeInfo = MODE_OPTIONS.find(mode => mode.id === workspaceMode) || MODE_OPTIONS[0];
-  const ModeIcon = modeInfo.icon;
   const modelInfo = AVAILABLE_MODELS.find(model => model.id === currentModel) || AVAILABLE_MODELS[0];
 
   useEffect(() => {
@@ -168,25 +166,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         layout={!reducedMotion}
         className="aira-composer-card overflow-visible rounded-[16px] border border-claude-border-light bg-claude-surface-light shadow-sm transition-all duration-150 focus-within:border-claude-terracotta focus-within:ring-2 focus-within:ring-claude-terracotta/40 dark:border-claude-border-dark dark:bg-claude-surface-dark dark:shadow-none dark:focus-within:border-claude-terracotta/80 dark:focus-within:ring-claude-terracotta/30"
       >
-        <div className="aira-v3-composer-header flex items-center justify-between gap-3 border-b border-claude-border-light/70 px-3 py-1.5 sm:px-4 sm:py-2 dark:border-claude-border-dark/70">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[8px] bg-claude-terracotta/10 text-claude-accentInk">
-              <ModeIcon className="h-3.5 w-3.5" />
-            </span>
-            <span className="min-w-0">
-              <span className="block text-[11px] font-semibold text-claude-text-light dark:text-white">{modeInfo.label}</span>
-              <span className="hidden sm:block truncate text-[10px] text-claude-muted-light dark:text-claude-muted-dark">{contextualHint}</span>
-            </span>
-          </div>
-          <div className="hidden shrink-0 items-center gap-1.5 text-[10px] text-claude-muted-light sm:flex dark:text-claude-muted-dark">
-            <span className="rounded-md bg-claude-surface2-light px-2 py-1 font-medium dark:bg-claude-surface2-dark">{modelInfo.name}</span>
-            {extendedThinking && modelInfo.supportsThinking && (
-              <span className="flex items-center gap-1 rounded-md bg-claude-terracotta/10 px-2 py-1 font-medium text-claude-accentInk">
-                <Brain className="h-3 w-3" />
-                Deep
-              </span>
-            )}
-          </div>
+        <div className="sr-only" role="status" aria-live="polite">
+          {modeInfo.label} mode. {contextualHint}. Selected model: {modelInfo.name}.
+          {extendedThinking && modelInfo.supportsThinking ? ' Deep thinking enabled.' : ''}
         </div>
 
         <AnimatePresence initial={false}>
