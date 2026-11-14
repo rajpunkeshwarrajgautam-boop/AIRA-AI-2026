@@ -97,7 +97,46 @@ try {
         path: path.join(evidenceDirectory, 'edge-'+viewport.width+'x'+viewport.height+'.png'),
         fullPage: true
       });
-      console.log('PASS '+viewport.width+'x'+viewport.height+': deployed staging chat, math, scroll and viewport');
+      // Impeccable accessibility acceptance on the real deployed UI.
+      const messageBox = page.getByRole('textbox', { name: 'Message Aira' });
+      await messageBox.waitFor({ state: 'visible', timeout: 15000 });
+      assert.ok(await page.getByRole('button', { name: 'Attach documents or images' }).isVisible(),
+        'Composer attachment control needs a visible, named action');
+      assert.ok(await page.getByRole('button', { name: 'Send message' }).count() > 0,
+        'Composer submit action needs a descriptive name');
+      await messageBox.focus();
+      const composerFocus = await page.evaluate(() => {
+        const field = document.querySelector('main textarea') as HTMLTextAreaElement;
+        const card = field?.closest('.aira-composer-card') as HTMLElement | null;
+        return {
+          inputOutline: getComputedStyle(field).outlineStyle,
+          cardBorder: card ? getComputedStyle(card).borderStyle : 'none'
+        };
+      });
+      assert.equal(composerFocus.inputOutline, 'none', 'Textarea must not draw a square-cornered focus border');
+      assert.notEqual(composerFocus.cardBorder, 'none', 'Rounded composer must retain a focus boundary');
+
+      // The mobile drawer is closed by default; explicitly open it before
+      // checking conversation selection and the theme controls.
+      const sidebarOpener = page.getByRole('button', { name: 'Open sidebar navigation' });
+      if (await sidebarOpener.isVisible().catch(() => false)) await sidebarOpener.click();
+      const conversationButton = page.getByRole('button', { name: 'Open conversation: Deployed staging acceptance' });
+      await conversationButton.waitFor({ state: 'visible', timeout: 15000 });
+      await conversationButton.focus();
+      await page.keyboard.press('Enter');
+      assert.ok(new URL(page.url()).searchParams.get('c') === 'staging-deployed-fixture',
+        'Keyboard activation must preserve the selected conversation');
+
+      if (await sidebarOpener.isVisible().catch(() => false)) await sidebarOpener.click();
+      const darkTheme = page.getByRole('button', { name: 'Use dark theme' });
+      await darkTheme.waitFor({ state: 'visible', timeout: 15000 });
+      await darkTheme.click();
+      await page.waitForFunction(() => document.documentElement.classList.contains('dark'));
+      await page.screenshot({
+        path: path.join(evidenceDirectory, 'edge-impeccable-dark-' + viewport.width + 'x' + viewport.height + '.png'),
+        fullPage: true
+      });
+      console.log('PASS '+viewport.width+'x'+viewport.height+': deployed staging chat, math, keyboard navigation, composer focus, theme and viewport');
     } finally { await context.close(); }
   }
 } finally { await browser.close(); }
