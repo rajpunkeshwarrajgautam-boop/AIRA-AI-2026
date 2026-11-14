@@ -2,6 +2,7 @@ import { createBuilderRoutes } from './builder-routes.js';
 import { createBillingRoutes } from './billing-routes.js';
 import { createVisionRoutes } from './vision-routes.js';
 import { createAccountRoutes } from './account-routes.js';
+import { createWorkspaceExperienceRoutes } from './workspace-experience-routes.js';
 import { commercialBillingService, StandardQuotaExceededError, StandardChatReplayError, StandardChatPlanChangedError } from './billing/commercial-billing-service.js';
 import { paymentGatewayService } from './billing/payment-gateway-service.js';
 import 'dotenv/config';
@@ -272,15 +273,11 @@ const handleGuestLinking = async (req: Request, res: Response) => {
       return res.status(409).json({ error: 'ALREADY_LINKED', message: 'Guest session already linked to an account' });
     }
 
+    // Provisional compatibility path. A durable, ownership-validated guest transfer
+    // must replace this before release; do not report failed transfers as success.
+    const result = await conversationSearchRepo.transferGuestData(guestToken, authUserId);
+    const migratedChatsCount = result.transferredConversations;
     linkedGuestTokens.set(guestToken, authUserId);
-
-    let migratedChatsCount = 0;
-    try {
-      const result = await conversationSearchRepo.transferGuestData(guestToken, authUserId);
-      migratedChatsCount = (result as any)?.transferredCount ?? (result as any)?.migratedChatsCount ?? 1;
-    } catch {
-      migratedChatsCount = 1;
-    }
 
     res.json({
       success: true,
@@ -854,6 +851,7 @@ app.get('/api/capacity/status', async (req: Request, res: Response) => {
 
 // Initialize Core Subsystems
 app.use('/api/user', createAccountRoutes());
+app.use('/api', createWorkspaceExperienceRoutes());
 const isDbConfigured = Boolean(process.env.DATABASE_URL?.trim());
 const toolRegistry = new ToolRegistry(process.cwd());
 const approvalKernel = new ApprovalKernel(new PostgresApprovalRepository(), new PostgresSessionGrantRepository());
