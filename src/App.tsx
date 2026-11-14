@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { PanelLeft, Layers, Bookmark, Share2, Check, FolderGit2, Bot, MessageSquareText } from 'lucide-react';
+import { PanelLeft, Layers, Bookmark, Share2, Check, FolderGit2, Bot, MessageSquareText, X } from 'lucide-react';
 import type { Conversation, Message, Artifact, Attachment, Project, AppSettings, WorkspaceMode } from './types';
 import {
   loadConversations, saveConversations, saveActiveChatId,
@@ -1787,6 +1787,7 @@ useEffect(() => {
                     : 'bg-aira-blue/10 text-aira-blue dark:text-aira-silver hover:bg-aira-blue/20'
                 }`}
                 title="Toggle Agent Workspace Panel"
+                aria-label="Toggle Agent Workspace Panel"
               >
                 <Bot className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">Agent Panel</span>
@@ -1795,10 +1796,12 @@ useEffect(() => {
             {(isLoading || isBuilderBusy) && (
               <button
                 onClick={handleCancelExecution}
+                aria-label="Cancel active execution"
                 className="flex min-h-10 min-w-10 items-center justify-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-rose-500 hover:bg-rose-500/10 active:scale-95 transition-transform duration-150 motion-reduce:transition-none"
                 title="Cancel active execution"
               >
-                Cancel
+                <X className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <span>Cancel</span>
               </button>
             )}
             {workspaceMode === 'chat' && (ADAPTIVE_STUDIO_PREVIEW || activeConversation?.messages.some(m => (m.artifacts?.length || 0) > 0)) && (
