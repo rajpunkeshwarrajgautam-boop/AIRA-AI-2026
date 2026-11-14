@@ -18,7 +18,7 @@ import {
   ModelProvenance
 } from '../../contracts/src/index.js';
 import { ModelRouter, PlanRestrictionError, ChatMessageInput, isModelMatch, withInferencePrincipal, type ModelCompletionResult } from '../../model-router/src/index.js';
-import { isModelAllowedForTier, type PlanTier } from '../../contracts/src/commercial.js';
+import { isModelAllowedForTier, type PlanTier, isGuestPrincipal } from '../../contracts/src/commercial.js';
 import { ToolRegistry, ToolGateway, PostgresToolCallRepository, InMemoryToolCallRepository, deriveToolApprovalPolicy } from '../../tool-runtime/src/index.js';
 import { configuredSearchProviders } from '../../tool-runtime/src/search-providers.js';
 import { ApprovalKernel } from '../../approvals/src/index.js';
@@ -401,7 +401,7 @@ export class AgentRuntime extends EventEmitter {
     }
     let resolvedCallerTier = options?.callerTier;
     if (!resolvedCallerTier && this.entitlementResolver && principal?.userId) {
-      resolvedCallerTier = principal.userId.startsWith('guest_')
+      resolvedCallerTier = isGuestPrincipal(principal.userId)
         ? 'guest'
         : await this.entitlementResolver(principal.userId);
     }

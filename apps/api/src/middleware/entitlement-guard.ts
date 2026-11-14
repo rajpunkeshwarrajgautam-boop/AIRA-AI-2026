@@ -8,7 +8,8 @@ import {
   isFeatureAllowedForTier,
   getMinimumRequiredTierForFeature,
   getMinimumRequiredTierForModel,
-  normalizeModelIdentifier
+  normalizeModelIdentifier,
+  isGuestPrincipal
 } from '../../../../packages/contracts/src/index.js';
 import { commercialBillingService } from '../billing/commercial-billing-service.js';
 
@@ -40,8 +41,8 @@ export async function resolveCallerTier(req: Request, _options: { failClosed?: b
   const principal = req.principal;
   const principalId = principal?.userId || (req as any).session?.userId || user?.id;
 
-  // 1. Explicit guest identity detection (session or principal starting with 'guest_')
-  if (principalId && typeof principalId === 'string' && principalId.startsWith('guest_')) {
+  // 1. Explicit guest identity detection (session or principal starting with 'guest_' or legacy anonymous 'user_')
+  if (principalId && typeof principalId === 'string' && isGuestPrincipal(principalId)) {
     return 'guest';
   }
   if (user?.isGuest === true) {

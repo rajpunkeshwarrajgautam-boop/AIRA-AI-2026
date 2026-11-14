@@ -47,7 +47,7 @@ async function run() {
     const bootstrapRes = makeResponse();
     const session = ensureAuthenticatedSession(bootstrapReq, bootstrapRes);
 
-    assert.ok(session.userId.startsWith('user_'), 'bootstrap must issue a trusted user id');
+    assert.ok(session.userId.startsWith('guest_'), 'bootstrap must issue a trusted guest user id');
     assert.ok(session.sessionId.startsWith('session_'), 'bootstrap must issue a trusted session id');
 
     const setCookie = bootstrapRes.headers.get('set-cookie');
@@ -66,6 +66,10 @@ async function run() {
     const trustedUser = (protectedReq as any).user;
     assert.equal(trustedUser.id, session.userId, 'middleware must recover the signed user identity');
     assert.equal(trustedUser.sessionId, session.sessionId, 'middleware must recover the signed session identity');
+    assert.equal(trustedUser.isGuest, true, 'guest session must be explicitly flagged as guest');
+    assert.equal(trustedUser.tier, 'guest', 'guest session must have tier guest');
+    assert.deepEqual(trustedUser.roles, ['guest_user'], 'guest session must only have guest_user role');
+    assert.deepEqual(trustedUser.scopes, ['chat:write'], 'guest session must only have chat:write scope');
 
     const [name, rawToken] = cookiePair(setCookie).split('=');
     const decoded = decodeURIComponent(rawToken);

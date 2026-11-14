@@ -151,7 +151,7 @@ async function main() {
     console.log('[4/10] Verifying database record under guest principal...');
     const dbGuestConv = await db('conversations').where({ client_id: guestChatId }).first();
     assert.ok(dbGuestConv, 'Conversation record must exist in PostgreSQL');
-    assert.ok(dbGuestConv.principal_id.startsWith('user_'), 'Principal ID must be guest UUID format');
+    assert.ok(dbGuestConv.principal_id.startsWith('guest_') || dbGuestConv.principal_id.startsWith('user_'), 'Principal ID must be guest UUID format');
     const guestPrincipalId = dbGuestConv.principal_id;
     console.log(`  ✓ Confirmed PostgreSQL ownership: principal_id=${guestPrincipalId}`);
 

@@ -141,7 +141,7 @@ const approvalRepo = new PostgresApprovalRepository();
 const grantRepo = new PostgresSessionGrantRepository();
 const approvalKernel = new ApprovalKernel(approvalRepo, grantRepo);
 const resolveCurrentCommercialTier = async (principalId: string) => {
-  if (principalId.startsWith('guest_')) return 'guest' as const;
+  if (isGuestPrincipal(principalId)) return 'guest' as const;
   const customer = await commercialBillingService.getOrCreateCustomer(principalId);
   const subscription = await commercialBillingService.getActiveSubscription(customer.id);
   return subscription.planId;
@@ -155,7 +155,8 @@ import {
 } from '../../../packages/agent-runtime/src/specialists/specialist-interface.js';
 import {
   SpecialistRole,
-  CapabilityCategory
+  CapabilityCategory,
+  isGuestPrincipal
 } from '../../../packages/contracts/src/index.js';
 
 class CompositeAnalystSpecialistAgent implements ISpecialistAgent {

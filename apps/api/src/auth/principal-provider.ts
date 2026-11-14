@@ -1,5 +1,5 @@
 import { Request } from 'express';
-import { ExecutionPrincipal, ExecutionPrincipalSchema } from '../../../../packages/contracts/src/index.js';
+import { ExecutionPrincipal, ExecutionPrincipalSchema, isGuestPrincipal } from '../../../../packages/contracts/src/index.js';
 import {
   WorkspaceAuthorityRepository,
   workspaceAuthority
@@ -58,20 +58,20 @@ export class DevPrincipalProvider implements PrincipalProvider {
     }
 
     const workspaceId = await this.workspaceAuthorities.resolveWorkspace(user.id);
-    const isGuest = user.id.startsWith('guest_') || user.isGuest === true;
+    const isGuest = isGuestPrincipal(user.id) || user.isGuest === true;
     const principal = ExecutionPrincipalSchema.parse({
       userId: user.id,
       sessionId: user.sessionId,
       workspaceId,
       // No persisted project membership relation exists, so user/client project values are non-authoritative.
       projectId: undefined,
-      roles: user.roles || (isGuest ? ['guest_user'] : ['workspace_user']),
-      scopes: user.scopes || (isGuest ? ['chat:write'] : ['chat:write', 'runs:read', 'runs:write', 'browser.read', 'files.read']),
+      roles: isGuest ? ['guest_user'] : (user.roles || ['workspace_user']),
+      scopes: isGuest ? ['chat:write'] : (user.scopes || ['chat:write', 'runs:read', 'runs:write', 'browser.read', 'files.read']),
     });
-    if (user.tier) {
-      (principal as any).tier = user.tier;
-    } else if (isGuest) {
+    if (isGuest) {
       (principal as any).tier = 'guest';
+    } else if (user.tier) {
+      (principal as any).tier = user.tier;
     }
     return principal;
   }
