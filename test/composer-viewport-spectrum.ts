@@ -126,7 +126,11 @@ try {
                 modes: rectangle('.aira-composer-mode-group'),
                 send: rectangle('button[aria-label="Send message"]'),
               },
-              greetingTop: rectangle('.aira-editorial-greeting .claude-fade-up')?.top,
+              greetingTop: (() => {
+                const children = Array.from(document.querySelectorAll('.aira-editorial-greeting .claude-fade-up'));
+                return children.find(el => getComputedStyle(el).display !== 'none')
+                  ?.getBoundingClientRect().top;
+              })(),
               scrollTop: rectangle('[data-testid="chat-scroll-region"]')?.top,
             };
           })()`);
@@ -162,6 +166,13 @@ try {
           if (height <= 480 && geometry.greetingTop !== undefined && geometry.scrollTop !== undefined) {
             assert.ok(geometry.greetingTop >= geometry.scrollTop - 1,
               'Greeting clipped above scroll region in short landscape viewport');
+          }
+          if ((width === 320 && height === 568) || (width === 640 && height === 360)) {
+            const subtitleBox = await page.locator('.aira-editorial-greeting p').first().boundingBox();
+            const composerBox = await composerCard.boundingBox();
+            assert.ok(subtitleBox && composerBox && subtitleBox.y + subtitleBox.height <= composerBox.y + 1,
+              'Greeting subtitle obscured by composer: ' +
+              JSON.stringify({ width, height, subtitleBox, composerBox }));
           }
 
           const headerButtons = page.locator('.aira-editorial-header button:visible');
@@ -258,6 +269,8 @@ try {
         console.log('EXPANDED STUDIO GEOMETRY ' + width + ': ' + JSON.stringify(layoutDiagnostic));
         const evidenceFile = 'studio-expanded-' + width + 'x' + height + '.png';
         await page.screenshot({ path: path.join(evidenceDir, evidenceFile), fullPage: false, animations: 'disabled' });
+        assert.ok(layoutDiagnostic.main?.width >= 320,
+          'Expanded Studio leaves an unusable chat column at ' + width + ': ' + JSON.stringify(layoutDiagnostic));
         assert.deepEqual(intersections, [], 'Expanded Studio interleaves header controls at ' + width
           + ': ' + JSON.stringify(layoutDiagnostic));
       }
