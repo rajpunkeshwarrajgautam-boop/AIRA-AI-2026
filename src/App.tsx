@@ -326,12 +326,17 @@ function App() {
       return;
     }
 
-    const popup = shouldShowFirstViewPopup(userTier, currentUserId, settings.announcementsEnabled !== false);
+    const popup = shouldShowFirstViewPopup(
+      userTier,
+      currentUserId,
+      settings.announcementsEnabled !== false,
+      settings.productUpdatesEnabled !== false
+    );
     if (popup) {
       setFocusedAnnouncement(popup);
       setIsWhatsNewOpen(true);
     }
-  }, [userTier, currentUserId, settings.announcementsEnabled]);
+  }, [userTier, currentUserId, settings.announcementsEnabled, settings.productUpdatesEnabled]);
 
   // Check first-login onboarding on initial mount and auth changes
   useEffect(() => {
@@ -1222,6 +1227,7 @@ useEffect(() => {
 
   const handleSendMessage = async (rawText: string, attachments: Attachment[]) => {
     if (isLoading) return;
+    userDismissedStudioRef.current = false;
     let conversation = activeConversation;
     if (!conversation) return;
 
@@ -1433,7 +1439,7 @@ useEffect(() => {
               artifactRevisionsRef.current.set(key, updatedArtifact);
             }
             setActiveArtifact(updatedArtifact);
-            if (!userDismissedStudioRef.current) {
+            if (settings.autoOpenArtifacts !== false && !userDismissedStudioRef.current) {
               setIsStudioOpen(true);
             }
             updateConversation(id, c => ({
@@ -2025,7 +2031,14 @@ useEffect(() => {
             conversations={conversations}
             projects={projects}
             initialTab={settingsInitialTab}
-            onImportData={data => { setConversations(data.conversations); setProjects(data.projects); if (data.conversations[0]) handleSelectChat(data.conversations[0].id); }}
+            onImportData={data => {
+              setConversations(data.conversations);
+              setProjects(data.projects);
+              if (data.settings) {
+                setSettings(prev => ({ ...prev, ...data.settings }));
+              }
+              if (data.conversations[0]) handleSelectChat(data.conversations[0].id);
+            }}
             onClearAll={() => {
               const fresh = { ...INITIAL_CONVERSATION, id: 'chat-' + Date.now(), createdAt: Date.now(), updatedAt: Date.now() };
               clearAccountSettings(currentUserId);
