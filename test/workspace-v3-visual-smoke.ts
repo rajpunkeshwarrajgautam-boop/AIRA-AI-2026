@@ -88,8 +88,24 @@ async function main() {
     await page.waitForFunction(() => document.documentElement.classList.contains('dark'));
     const darkSidebarBackground = await page.locator('.aira-sidebar-shell').first()
       .evaluate(element => getComputedStyle(element).backgroundColor);
+    const themeDiagnostics = await page.evaluate(() => {
+      const root = document.documentElement;
+      const side = document.querySelector<HTMLElement>('.aira-sidebar-shell');
+      const outer = document.querySelector<HTMLElement>('.aira-v3-shell');
+      const styles = side && getComputedStyle(side);
+      return {
+        htmlClass: root.className,
+        dataTheme: root.dataset.theme,
+        rootSurface: getComputedStyle(root).getPropertyValue('--bg-surface-secondary').trim(),
+        shellSurface: outer ? getComputedStyle(outer).getPropertyValue('--bg-surface-secondary').trim() : null,
+        actualSurface: styles?.backgroundColor,
+        otherSurface: getComputedStyle(document.body).backgroundColor,
+        selectorExists: !!side,
+      };
+    });
+    console.log('Dark mode sidebar diagnostic', JSON.stringify({ lightSidebarBackground, darkSidebarBackground, ...themeDiagnostics }));
     if (lightSidebarBackground === darkSidebarBackground) {
-      throw new Error('Desktop sidebar background did not respond to dark mode');
+      throw new Error('Desktop sidebar background did not respond to dark mode: ' + JSON.stringify({ lightSidebarBackground, darkSidebarBackground, ...themeDiagnostics }));
     }
     await page.screenshot({ path: 'artifacts/workspace-v3-ui/1440-dark.png', fullPage: true });
     await page.setViewportSize({ width: 390, height: 740 });
