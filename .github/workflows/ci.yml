@@ -399,10 +399,32 @@ jobs:
       - name: Mobile chat, model menu and welcome regression
         run: npx tsx test/mobile-chat-welcome-responsive.ts
 
+      - name: Start production-equivalent adaptive shell for responsive certification
+        shell: bash
+        run: |
+          set -euo pipefail
+          VITE_ADAPTIVE_STUDIO_PREVIEW=true npm run dev -- --host 127.0.0.1 --port 5174 --strictPort > /tmp/aira-vite-adaptive.log 2>&1 &
+          echo $! > /tmp/aira-vite-adaptive.pid
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:5174/ >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/aira-vite-adaptive.log
+          exit 1
+
       - name: Responsive viewport spectrum with retained visual evidence
         env:
+          AIRA_FRONTEND_TEST_URL: http://127.0.0.1:5174/
           AIRA_RESPONSIVE_EVIDENCE_DIR: artifacts/responsive-viewport-spectrum/local
         run: npx tsx test/composer-viewport-spectrum.ts
+
+      - name: Stop adaptive shell server
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/aira-vite-adaptive.pid ]; then
+            kill "$(cat /tmp/aira-vite-adaptive.pid)" 2>/dev/null || true
+          fi
 
       - name: Upload local responsive visual evidence
         if: always()
