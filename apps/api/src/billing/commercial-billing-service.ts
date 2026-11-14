@@ -5,7 +5,8 @@ import {
   PlanTier,
   EntitlementState,
   calculateVisionTariff,
-  isModelAllowedForTier
+  isModelAllowedForTier,
+  isGuestPrincipal
 } from '../../../../packages/contracts/src/commercial.js';
 
 function parseJsonSafe(val: any): Record<string, any> {
@@ -90,7 +91,7 @@ export class CommercialBillingService {
     const accountId = `cacc_${crypto.randomUUID().replace(/-/g, '')}`;
     const now = Date.now();
     const currency = countryCode.toUpperCase() === 'IN' ? 'INR' : 'USD';
-    const isGuest = principalId.startsWith('guest_');
+    const isGuest = isGuestPrincipal(principalId);
     const initialCredits = isGuest ? 0 : 100;
 
     let created = false;
@@ -181,7 +182,7 @@ export class CommercialBillingService {
     cancelAtPeriodEnd: boolean;
   }> {
     const customer = await db('billing_customers').where({ id: customerId }).first();
-    if (customer && customer.principal_id && customer.principal_id.startsWith('guest_')) {
+    if (customer && customer.principal_id && isGuestPrincipal(customer.principal_id)) {
       return {
         planId: 'guest',
         status: 'active',
@@ -263,7 +264,7 @@ export class CommercialBillingService {
    * Fetch complete authoritative EntitlementState for a principal.
    */
   async getEntitlements(principalId: string): Promise<EntitlementState> {
-    const isGuest = principalId.startsWith('guest_');
+    const isGuest = isGuestPrincipal(principalId);
     const customer = await this.getOrCreateCustomer(principalId);
     const sub = await this.getActiveSubscription(customer.id);
     const plan = COMMERCIAL_PLANS[sub.planId] || (isGuest ? COMMERCIAL_PLANS.guest : COMMERCIAL_PLANS.free);
@@ -291,19 +292,19 @@ export class CommercialBillingService {
 
     return {
       customerId: customer.id,
-      plan: sub.planId,
+      plan: isGuest ? 'guest' : sub.planId,
       subscriptionStatus: sub.status as any,
-      creditBalance: balanceCredits,
-      reservedCredits,
-      availableCredits,
+      creditBalance: isGuest ? 0 : balanceCredits,
+      reservedCredits: isGuest ? 0 : reservedCredits,
+      availableCredits: isGuest ? 0 : availableCredits,
       dailyStandardChatRemaining: dailyRemaining,
       dailyStandardChatLimit: plan.dailyStandardChatLimit,
       monthlyStandardChatUnitsRemaining: monthlyRemaining,
       monthlyStandardChatUnitsLimit: plan.monthlyStandardChatUnits,
-      reasoningBoostsRemaining: reasoningRemaining,
-      reasoningBoostsLimit: plan.complimentaryReasoningBoosts,
+      reasoningBoostsRemaining: isGuest ? 0 : reasoningRemaining,
+      reasoningBoostsLimit: isGuest ? 0 : plan.complimentaryReasoningBoosts,
       savedAgentsCount,
-      savedAgentsLimit: plan.savedAgentsLimit,
+      savedAgentsLimit: isGuest ? 0 : plan.savedAgentsLimit,
       builderAccess: isGuest ? 'none' : plan.builderAccess,
       canInitiateChat: dailyRemaining > 0 && monthlyRemaining > 0,
       canUsePremiumModels: isGuest ? false : (availableCredits >= 10 || reasoningRemaining > 0),
@@ -446,7 +447,7 @@ export class CommercialBillingService {
       const paidTier = liveSub && Number(liveSub.current_period_end) > now &&
         (liveSub.plan_id === 'plus' || liveSub.plan_id === 'pro')
         ? liveSub.plan_id as PlanTier : 'free';
-      const effectiveTier: PlanTier = principalId.startsWith('guest_') ? 'guest' : paidTier;
+      const effectiveTier: PlanTier = isGuestPrincipal(principalId) ? 'guest' : paidTier;
       const plan = COMMERCIAL_PLANS[effectiveTier];
       // The plan may expire between the HTTP check and the DB reservation.
       if (!isModelAllowedForTier(modelId, effectiveTier)) {
@@ -642,7 +643,7 @@ export class CommercialBillingService {
         .orderBy('current_period_end', 'desc').first();
       const paidTier: PlanTier = liveSub && (liveSub.plan_id === 'plus' || liveSub.plan_id === 'pro')
         ? liveSub.plan_id as PlanTier : 'free';
-      const tier = principalId.startsWith('guest_') ? 'guest' : paidTier;
+      const tier = isGuestPrincipal(principalId) ? 'guest' : paidTier;
       const plan = COMMERCIAL_PLANS[tier];
       const monthlyUsed = await this.getMonthlyReasoningBoostUsage(customer.id, today, trx);
 

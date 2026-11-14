@@ -1,6 +1,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 import { resolveDeploymentEnvironment, type DeploymentEnvironment } from '../../../../packages/contracts/src/deployment-environment.js';
+import { isGuestPrincipal } from '../../../../packages/contracts/src/commercial.js';
 
 export const SESSION_COOKIE_NAME = 'aira_session';
 export const SESSION_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30;
@@ -154,16 +155,14 @@ function readSessionPayload(req: Request): VerifiedSessionPayload | null {
 }
 
 function attachUser(req: Request, payload: VerifiedSessionPayload): void {
-  const isGuest = payload.uid.startsWith('guest_') || (payload as any).isGuest === true;
+  const isGuest = isGuestPrincipal(payload.uid) || (payload as any).isGuest === true;
   (req as any).user = {
     id: payload.uid,
     sessionId: payload.sid,
-    isGuest,
-    tier: isGuest ? 'guest' : 'free',
-    roles: isGuest ? ['guest_user'] : ['workspace_user'],
-    scopes: isGuest
-      ? ['chat:write']
-      : ['chat:write', 'runs:read', 'runs:write', 'browser.read', 'files.read'],
+    isGuest: true,
+    tier: 'guest',
+    roles: ['guest_user'],
+    scopes: ['chat:write'],
   };
 }
 
@@ -201,7 +200,7 @@ function createSessionPayload(): SessionPayloadV2 {
     iss: SESSION_ISSUER,
     aud: SESSION_AUDIENCE,
     env: resolveDeploymentEnvironment(),
-    uid: `user_${randomUUID()}`,
+    uid: `guest_${randomUUID()}`,
     sid: `session_${randomUUID()}`,
     iat: now,
     exp: now + SESSION_TOKEN_TTL_SECONDS,

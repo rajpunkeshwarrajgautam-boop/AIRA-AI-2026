@@ -138,7 +138,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onOpenBilling,
   onOpenPricing,
   onOpenShortcuts,
-  userTier = 'free',
+  userTier = 'guest',
   onTriggerUpgrade,
   onRestartOnboarding,
   onResetAnnouncements,
@@ -202,6 +202,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     billingStatus: string;
   }
 
+  const isGuestUser = userTier === 'guest' || !neonAuth.getCurrentUser();
   const [usageData, setUsageData] = useState<UsageData | null>(null);
   const [isUsageLoading, setIsUsageLoading] = useState(false);
   const [usageError, setUsageError] = useState(false);
@@ -214,7 +215,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       const res = await fetch('/api/billing/entitlements', { credentials: 'include' });
       if (!res.ok) throw new Error('Unable to verify current entitlements.');
       const entitlements = await res.json();
-      const planId = entitlements.plan as PlanTier;
+      const planId = (isGuestUser ? 'guest' : entitlements.plan) as PlanTier;
       if (!Object.prototype.hasOwnProperty.call(COMMERCIAL_PLANS, planId) ||
           !Number.isFinite(entitlements.dailyStandardChatRemaining) ||
           !Number.isFinite(entitlements.dailyStandardChatLimit) ||
@@ -224,17 +225,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       }
       const now = new Date();
       const tomorrowUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+      const dailyChatsLimit = isGuestUser ? COMMERCIAL_PLANS.guest.dailyStandardChatLimit : entitlements.dailyStandardChatLimit;
+      const remainingDailyChats = isGuestUser ? Math.min(dailyChatsLimit, Math.max(0, entitlements.dailyStandardChatRemaining)) : entitlements.dailyStandardChatRemaining;
+      const dailyChatsUsed = Math.max(0, dailyChatsLimit - remainingDailyChats);
       setUsageData({
         planId,
         planName: COMMERCIAL_PLANS[planId].name,
-        dailyChatsUsed: Math.max(0, entitlements.dailyStandardChatLimit - entitlements.dailyStandardChatRemaining),
-        dailyChatsLimit: entitlements.dailyStandardChatLimit,
-        remainingDailyChats: entitlements.dailyStandardChatRemaining,
-        monthlyCreditsRemaining: entitlements.availableCredits,
-        reasoningBoostsRemaining: entitlements.reasoningBoostsRemaining,
+        dailyChatsUsed,
+        dailyChatsLimit,
+        remainingDailyChats,
+        monthlyCreditsRemaining: isGuestUser ? 0 : entitlements.availableCredits,
+        reasoningBoostsRemaining: isGuestUser ? 0 : entitlements.reasoningBoostsRemaining,
         resetAt: tomorrowUtc.toISOString(),
         paymentCollectionDisabled: true,
-        billingStatus: 'Sandbox billing — checkout is unavailable'
+        billingStatus: isGuestUser ? 'Guest Trial Session' : 'Sandbox billing — checkout is unavailable'
       });
     } catch {
       // Never fabricate an active plan or quota figures when the API is offline.
@@ -242,7 +246,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     } finally {
       setIsUsageLoading(false);
     }
-  }, []);
+  }, [isGuestUser]);
 
   useEffect(() => {
     if (isOpen) {
@@ -250,7 +254,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   }, [isOpen, userTier, fetchUsage]);
 
-  const activePlanId: PlanTier = usageData?.planId || userTier || 'free';
+  const activePlanId: PlanTier = isGuestUser ? 'guest' : (usageData?.planId || userTier || 'free');
   const activePlanDef = COMMERCIAL_PLANS[activePlanId] || COMMERCIAL_PLANS.free;
   const projectLimit = activePlanDef.maxProjects;
   const memoryLimit = activePlanDef.maxMemoryRecords;
