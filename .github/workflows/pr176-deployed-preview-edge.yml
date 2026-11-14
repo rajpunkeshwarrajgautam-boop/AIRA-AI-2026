@@ -1,0 +1,91 @@
+name: PR 176 Deployed Preview Edge Acceptance
+
+on:
+  pull_request:
+    branches: [prod-release]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aira-pr176-edge-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: true
+
+jobs:
+  visual-preview:
+    name: PR 176 exact-SHA deployed Microsoft Edge acceptance
+    if: github.event_name == 'pull_request' && github.event.pull_request.number == 176 && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      AIRA_RESPONSIVE_URL: https://aira-ai-2026-git-f-1a9f1a-rajpunkeshwarrajgautam-boops-projects.vercel.app/
+      AIRA_EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+      PLAYWRIGHT_CHANNEL: msedge
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Attest actual preview SHA before Edge
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          const url = new URL('/api/version', process.env.AIRA_RESPONSIVE_URL).toString();
+          const expected = process.env.AIRA_EXPECTED_SHA;
+          if (!/^[a-f0-9]{40}$/.test(expected)) throw Error('Missing exact SHA');
+          const secret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+          let matched = false, last = 'not tried';
+          for (let attempt = 0; attempt < 36; attempt++) {
+            try {
+              const response = await fetch(url, {
+                cache:'no-store', signal:AbortSignal.timeout(12000),
+                headers: secret ? {'x-vercel-protection-bypass':secret} : {}
+              });
+              const value = response.ok ? await response.json() : null;
+              last = String(response.status) + ' ' + String(value?.commitSha);
+              if (value?.commitSha === expected) { matched = true; break; }
+            } catch (error) { last = String(error); }
+            await new Promise(resolve => setTimeout(resolve, 10000));
+          }
+          if (!matched) throw Error('Exact candidate preview unavailable: ' + last);
+          console.log('Verified deployed candidate SHA: ' + expected);
+          NODE
+
+      - name: Install real Microsoft Edge
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if npx playwright install --with-deps msedge; then exit 0; fi
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            sleep 5
+          done
+
+      - name: Test deployed preview responsive viewport spectrum in Edge
+        env:
+          AIRA_RESPONSIVE_EVIDENCE_DIR: artifacts/release176/viewport
+        run: npx tsx test/composer-viewport-spectrum.ts
+
+      - name: Test guest screens and scroll in deployed preview Edge
+        env:
+          AIRA_SURFACE_EVIDENCE_DIR: artifacts/release176/guest
+        run: npx tsx test/deployed-guest-surfaces.ts
+
+      - name: Upload exact-SHA screenshots and JSON even when failing
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr176-deployed-edge-${{ github.event.pull_request.head.sha }}
+          path: artifacts/release176/
+          if-no-files-found: warn
+          retention-days: 30
