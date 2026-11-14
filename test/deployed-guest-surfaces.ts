@@ -86,7 +86,7 @@ try {
       await page.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: 60000 });
       await page.getByRole('textbox', { name: 'Message Aira' })
         .waitFor({ state: 'visible', timeout: 25000 });
-      await page.evaluate(() => Promise.race([document.fonts.ready, new Promise<void>(resolve => setTimeout(resolve, 2500))]));
+      await page.evaluate('Promise.race([document.fonts.ready, new Promise(resolve => setTimeout(resolve, 2500))])');
       await record('Greeting', async () => {
         const greeting = page.locator('.aira-editorial-greeting');
         assert(await greeting.isVisible(), 'Greeting not rendered');
