@@ -72,13 +72,15 @@ async function main() {
       if (invalid.length) throw new Error(`Composer touch targets below 40px at ${width}px: ${JSON.stringify(invalid)}`);
       await page.screenshot({ path: `artifacts/workspace-v3-ui/${width}-light.png`, fullPage: true });
     }
-    await page.setViewportSize({ width: 390, height: 740 });
+    await page.setViewportSize({ width: 1440, height: 900 });
     await page.evaluate(() => document.documentElement.classList.add('dark'));
     const darkSidebarBackground = await page.locator('.aira-sidebar-shell').first()
       .evaluate(element => getComputedStyle(element).backgroundColor);
     if (lightSidebarBackground === darkSidebarBackground) {
-      throw new Error('Sidebar background did not respond to dark mode');
+      throw new Error('Desktop sidebar background did not respond to dark mode');
     }
+    await page.screenshot({ path: 'artifacts/workspace-v3-ui/1440-dark.png', fullPage: true });
+    await page.setViewportSize({ width: 390, height: 740 });
     await page.screenshot({ path: 'artifacts/workspace-v3-ui/390-dark.png', fullPage: true });
     console.log(`Workspace V3 responsive smoke: ${widths.length} widths, reduced-motion and dark-mode capture passed`);
     await page.close();
