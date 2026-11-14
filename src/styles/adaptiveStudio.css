@@ -49,6 +49,7 @@
 
 .aira-adaptive-mode-toggle button {
   min-width: 72px;
+  min-height: 40px;
   display: inline-flex;
   justify-content: center;
   align-items: center;
