@@ -32,6 +32,8 @@ jobs:
         run: npm run lint
       - name: Signed guest migration proof regression
         run: npx tsx --test test/workspace-v3-guest-claim.test.ts
+      - name: Staging authentication and model-access P0 regression
+        run: npx tsx --test test/auth-entitlement-model-access-p0.test.ts
       - name: Session and BFF isolation regression
         run: npm run test:session-auth && npm run test:auth-bff
       - name: Database isolation and migration rehearsal
