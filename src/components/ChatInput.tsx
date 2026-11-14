@@ -262,7 +262,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 data-testid="chat-mode-agent-btn"
                 onClick={() => {
                   if (userTier === 'guest') {
-                    onTriggerUpgrade?.('guest_limit');
+                    onTriggerUpgrade?.('agent_requires_account');
                     return;
                   }
                   if (userTier === 'free') {

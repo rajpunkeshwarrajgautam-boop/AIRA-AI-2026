@@ -6,6 +6,8 @@ import {
   VERIFIED_PLAN_MODEL_ALLOWLIST,
   isModelAllowedForTier,
   isFeatureAllowedForTier,
+  getMinimumRequiredTierForFeature,
+  getMinimumRequiredTierForModel,
   normalizeModelIdentifier
 } from '../../../../packages/contracts/src/index.js';
 import { commercialBillingService } from '../billing/commercial-billing-service.js';
@@ -207,13 +209,16 @@ export function requireToolEntitlement(toolExtractor?: (req: Request) => string)
 export function requireCapability(capability: string) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const callerTier = await resolveCallerTier(req, { failClosed: true });
+      const requiredTier = getMinimumRequiredTierForFeature(capability);
+      const isRestricted = requiredTier === 'plus' || requiredTier === 'pro';
+      const callerTier = await resolveCallerTier(req, { failClosed: isRestricted });
       if (!isFeatureAllowedForTier(capability, callerTier)) {
         res.status(403).json({
           error: 'PLAN_CAPABILITY_RESTRICTED',
           capability,
-          message: `Capability '${capability}' is restricted to higher plan tiers.`,
-          requiredTier: 'pro'
+          message: `Capability '${capability}' requires ${requiredTier.toUpperCase()} tier or higher.`,
+          callerTier,
+          requiredTier
         });
         return;
       }

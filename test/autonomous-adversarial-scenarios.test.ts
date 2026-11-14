@@ -279,7 +279,10 @@ test('AIRA AI 2026 — 15 Adversarial Fault Injection & Security Scenarios', asy
   // SCENARIO 7: MCP server returns malicious or malformed content
   // =========================================================================
   await t.test('Scenario 7: MCP server returns untrusted output -> Strictly tagged untrustedExternalData', async () => {
-    const toolGateway = new ToolGateway(new InMemoryToolCallRepository());
+    // Consent is supplied by this isolated adversarial fixture. Production
+    // MCP tools require a durable approval before the adapter is dispatched.
+    const alreadyApprovedFixture = { isToolCallApproved: async () => true } as any;
+    const toolGateway = new ToolGateway(new InMemoryToolCallRepository(), alreadyApprovedFixture);
     const mcpHost = new McpHost(toolGateway);
     const testServer = createTestMcpServer(0);
     const port = await testServer.start();

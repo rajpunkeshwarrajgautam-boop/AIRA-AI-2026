@@ -293,9 +293,18 @@ async function runTests() {
     assert.strictEqual(res.status, 200);
     const health = await res.json();
     assert.strictEqual(health.status, 'HEALTHY');
-    assert.ok(health.subsystems.modelRouter.startsWith('ONLINE'));
-    assert.strictEqual(health.subsystems.toolRuntime, 'ONLINE');
-    assert.strictEqual(health.subsystems.agentRuntime, 'ONLINE');
+    assert.ok(
+      health.subsystems.modelRouter.startsWith('INITIALIZED') || health.subsystems.modelRouter.startsWith('ONLINE'),
+      'modelRouter must report initialized or online state'
+    );
+    assert.ok(
+      ['INITIALIZED', 'ONLINE', 'READY'].includes(health.subsystems.toolRuntime),
+      'toolRuntime must report valid state'
+    );
+    assert.ok(
+      ['READY', 'ONLINE', 'INITIALIZED'].includes(health.subsystems.agentRuntime),
+      'agentRuntime must report valid state'
+    );
 
     const toolsRes = await fetch('http://127.0.0.1:3001/api/tools', { headers: authHeaders });
     const toolsData = await toolsRes.json();

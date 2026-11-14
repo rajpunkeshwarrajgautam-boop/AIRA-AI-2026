@@ -1,0 +1,66 @@
+name: PR 171 Deployed Preview Acceptance
+
+on:
+  pull_request:
+    branches: [prod-release]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  pr171-deployed-acceptance:
+    name: PR 171 deployed Edge and readiness
+    if: github.event.pull_request.number == 171 && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Verify checked-out candidate SHA
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Attest deployed preview, health, authorization, and headers
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/attest-pr171-preview.mjs
+
+      - name: Install Microsoft Edge
+        if: always() && env.STAGING_BASE_URL != ''
+        run: npx playwright install --with-deps msedge
+
+      - name: Deployed Edge desktop and mobile acceptance
+        if: always() && env.STAGING_BASE_URL != ''
+        env:
+          PLAYWRIGHT_CHANNEL: msedge
+        run: npm run test:staging:deployed
+
+      - name: Upload exact-SHA deployed acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr171-deployed-acceptance
+          path: |
+            artifacts/pr171-preview-acceptance.json
+            artifacts/pr171-deployed-browser/
+          if-no-files-found: warn

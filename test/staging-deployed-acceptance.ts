@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { chromium } from 'playwright';
 
 /**
@@ -15,6 +17,8 @@ if (parsed.protocol !== 'https:' || !parsed.hostname.endsWith('.vercel.app') ||
   throw new Error('Staging acceptance requires an immutable HTTPS Vercel Preview URL, never production.');
 }
 const channel = process.env.PLAYWRIGHT_CHANNEL || 'msedge';
+const evidenceDirectory = path.resolve('artifacts/pr171-deployed-browser');
+fs.mkdirSync(evidenceDirectory, { recursive: true });
 let browser;
 try {
   browser = await chromium.launch({ headless: true, channel });
@@ -87,6 +91,12 @@ try {
       await region.evaluate(el => { el.scrollTop=0; });
       const upward=await region.evaluate(el=>el.scrollTop);
       assert.ok(upward<(bounds.scrollerY??0),'Chat must also scroll upwards');
+      // Fresh live-browser evidence. These pages contain only the synthetic
+      // guest chat fixture, never OAuth tokens or signed-in account data.
+      await page.screenshot({
+        path: path.join(evidenceDirectory, 'edge-'+viewport.width+'x'+viewport.height+'.png'),
+        fullPage: true
+      });
       console.log('PASS '+viewport.width+'x'+viewport.height+': deployed staging chat, math, scroll and viewport');
     } finally { await context.close(); }
   }

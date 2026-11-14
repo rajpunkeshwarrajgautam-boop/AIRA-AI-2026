@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { McpHost } from '../packages/mcp/src/index.js';
+import { McpHost, validateMcpUrl, McpSecurityError } from '../packages/mcp/src/index.js';
 import { createTestMcpServer } from '../packages/mcp/src/test-server.js';
 import { ToolGateway } from '../packages/tool-runtime/src/gateway.js';
 import { InMemoryToolCallRepository } from '../packages/tool-runtime/src/repository.js';
@@ -14,7 +14,10 @@ test('Mission D — Real Wire MCP Server Integration, Tool Discovery, and Securi
     scopes: ['*']
   };
 
-  const toolGateway = new ToolGateway(new InMemoryToolCallRepository());
+  // Controlled integration fixture: the separate ApprovalKernel tests cover
+  // durable consent, while this fixture tests real MCP wire execution after consent.
+  const alreadyApprovedFixture = { isToolCallApproved: async () => true } as any;
+  const toolGateway = new ToolGateway(new InMemoryToolCallRepository(), alreadyApprovedFixture);
   const mcpHost = new McpHost(toolGateway);
 
   const testServer = createTestMcpServer(0);
@@ -41,6 +44,9 @@ test('Mission D — Real Wire MCP Server Integration, Tool Discovery, and Securi
     assert.ok(status.toolCount >= 2);
     assert.ok(status.tools.includes('mcp_srv_calc_real_echo'));
     assert.ok(status.tools.includes('mcp_srv_calc_real_add'));
+    const definition = toolGateway.getTool('mcp_srv_calc_real_add')?.definition;
+    assert.equal(definition?.permissionLevel, 'WRITE');
+    assert.equal(definition?.approvalPolicy, 'require_approval');
   });
 
   await t.test('2. Execute Real Discovered Tools on Live Server with Untrusted Data Tagging', async () => {
@@ -76,11 +82,17 @@ test('Mission D — Real Wire MCP Server Integration, Tool Discovery, and Securi
       transport: 'streamable_http'
     });
 
-    const connectResult = await mcpHost.connectServer('srv_malicious_proto');
-    assert.equal(connectResult, false, 'Connection to non-HTTP/HTTPS protocol must fail');
+    await assert.rejects(
+      () => mcpHost.connectServer('srv_malicious_proto'),
+      (err: any) => err instanceof McpSecurityError &&
+        err.code === 'FORBIDDEN_PROTOCOL' && err.statusCode === 400,
+      'Connection to non-HTTP/HTTPS protocol must be rejected with a structured error'
+    );
 
     const status = mcpHost.getServerStatus('srv_malicious_proto');
-    assert.ok(status?.lastError?.includes('Only http and https are allowed'));
+    assert.equal(status?.lastError, 'MCP_CONNECTION_FAILED', 'Public status must never expose raw transport error details');
+    await assert.rejects(() => validateMcpUrl('file:///tmp/forbidden'),
+      (err: any) => err instanceof McpSecurityError && err.code === 'FORBIDDEN_PROTOCOL');
   });
 
   await t.test('4. Clean Disconnection, Tool Unregistration, and Teardown', async () => {

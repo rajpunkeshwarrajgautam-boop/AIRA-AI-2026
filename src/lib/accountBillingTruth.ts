@@ -19,6 +19,8 @@ export interface BillingSummary {
 
 export type ServerSessionState = 'verified' | 'anonymous' | 'mismatch';
 
+export type EntitlementResolutionState = 'guest' | 'pending' | 'verified' | 'unavailable' | 'expired';
+
 /** A cached browser profile cannot verify a server-side session. */
 export function classifyServerSession(payload: unknown, cachedPrincipalId: string | null): ServerSessionState {
   if (!payload || typeof payload !== 'object') return 'mismatch';

@@ -15,6 +15,8 @@ import {
   PlanTier,
   isModelAllowedForTier,
   isFeatureAllowedForTier,
+  getMinimumRequiredTierForFeature,
+  getMinimumRequiredTierForModel,
   PLAN_MODEL_ALLOWLIST
 } from '../../../packages/contracts/src/index.js';
 import {
@@ -41,11 +43,11 @@ import { ToolRegistry, ToolGateway, PostgresToolCallRepository, InMemoryToolCall
 import { ApprovalKernel } from '../../../packages/approvals/src/index.js';
 import { PostgresApprovalRepository, PostgresSessionGrantRepository } from '../../../packages/approvals/src/repositories.js';
 import { BrainV2KnowledgeEngine, PrincipalScope } from '../../../packages/knowledge/src/index.js';
-import { McpHost } from '../../../packages/mcp/src/index.js';
+import { McpHost, McpSecurityError } from '../../../packages/mcp/src/index.js';
 import { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
 import { validateDurableToolScopes } from '../../../packages/agent-runtime/src/durable/tool-authorization.js';
 import { validateApiStartupConfiguration } from './startup-config.js';
-import { evaluateRuntimeReadiness } from './runtime-readiness.js';
+import { evaluateRuntimeReadiness, createDatabaseReadinessProbe } from './runtime-readiness.js';
 import { AutomationEngine } from '../../../packages/automation/src/index.js';
 import { PostgresAgentRepository, PostgresRunRepository, InMemoryRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
 import { PostgresAutomationRepository, PostgresAutomationRunRepository } from '../../../packages/automation/src/repositories.js';
@@ -124,6 +126,20 @@ import { sanitizeUrlForLogging } from './utils/sanitize-url.js';
 export { sanitizeUrlForLogging };
 
 const app = express();
+app.disable('x-powered-by');
+
+// HARDEN-01: Baseline Security Headers Middleware
+app.use((req: Request, res: Response, next: NextFunction) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+  if (req.path.startsWith('/api/') && !res.getHeader('Cache-Control')) {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  }
+  next();
+});
+
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
 
 // Audit 28: Body size limits and strict CORS with credentials
@@ -286,30 +302,92 @@ app.post('/api/auth/link-guest', handleGuestLinking);
 // -----------------------------------------------------------------------
 let appState: 'STARTING' | 'RECOVERING' | 'HEALTHY' | 'FAILED' = 'STARTING';
 
-app.get('/api/health', (_req: Request, res: Response) => {
+export function isMcpOperator(req: Request): boolean {
+  const operatorHeader = req.headers['x-operator-token'];
+  if (
+    process.env.AIRA_OPERATOR_TOKEN &&
+    typeof operatorHeader === 'string' &&
+    operatorHeader.trim().length > 0 &&
+    operatorHeader === process.env.AIRA_OPERATOR_TOKEN
+  ) {
+    return true;
+  }
+  const principal = req.principal;
+  if (!principal) return false;
+  const roles = principal.roles || [];
+  const scopes = principal.scopes || [];
+  return (
+    roles.includes('operator') ||
+    roles.includes('platform_admin') ||
+    scopes.includes('mcp:admin') ||
+    (scopes.includes('*') && roles.includes('dev_user'))
+  );
+}
+
+// Read-only database probe shared across health and readiness calls. A valid
+// DATABASE_URL proves configuration, not connectivity. Cache short-lived
+// results to avoid opening a new database connection per public health probe.
+const checkDatabaseReadiness = createDatabaseReadinessProbe(
+  () => db.raw('SELECT 1 AS alive'),
+  { cacheMs: 10_000, timeoutMs: 4_000 }
+);
+
+async function getEffectiveRuntimeReadiness() {
+  const base = evaluateRuntimeReadiness(appState, process.env);
+  if (!base.ready || !process.env.DATABASE_URL?.trim()) return base;
+  if (await checkDatabaseReadiness()) return base;
+  return { ready: false, status: 'NOT_READY', reason: 'AGENT_DATABASE_UNREACHABLE' };
+}
+
+app.get('/api/health', async (_req: Request, res: Response) => {
   const providers = modelRouter.listProviders();
-  const readiness = evaluateRuntimeReadiness(appState, process.env);
+  const readiness = await getEffectiveRuntimeReadiness();
+  const isDbConfigured = Boolean(process.env.DATABASE_URL?.trim());
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
   res.json({
     status: readiness.ready ? 'HEALTHY' : 'DEGRADED',
     appState,
     readiness: readiness.status,
     ...(readiness.reason ? { readinessReason: readiness.reason } : {}),
+    providers: Object.fromEntries(providers.map(p => [p, 'registered'])),
     subsystems: {
-      modelRouter: `ONLINE (${providers.length} provider(s): ${providers.join(', ') || 'none — mock-dev only'})`,
-      toolRuntime: 'ONLINE',
-      toolGateway: 'ONLINE',
-      approvalKernel: 'ONLINE',
-      mcpHost: 'ONLINE',
-      knowledgeEngine: 'ONLINE',
-      agentRuntime: readiness.ready ? 'ONLINE' : 'NOT_READY',
-      automationEngine: 'ONLINE',
-      capabilityRegistry: 'ONLINE',
-      intentRouter: 'ONLINE',
-      workflowEngine: 'ONLINE',
-      conversationSearch: 'ONLINE'
+      modelRouter: `INITIALIZED (${providers.length} registered provider(s): ${providers.join(', ') || 'none — mock-dev only'})`,
+      toolRuntime: 'INITIALIZED',
+      toolGateway: 'READY',
+      approvalKernel: 'INITIALIZED',
+      mcpHost: typeof mcpHost !== 'undefined' ? `INITIALIZED (${mcpHost.getConnectedCount()} connected)` : 'INITIALIZING',
+      knowledgeEngine: 'INITIALIZED',
+      agentRuntime: readiness.ready ? 'READY' : 'NOT_READY',
+      automationEngine: isDbConfigured && readiness.ready ? 'READY' : 'DISABLED',
+      capabilityRegistry: 'READY',
+      intentRouter: 'INITIALIZED',
+      workflowEngine: 'INITIALIZED',
+      conversationSearch: 'INITIALIZED',
+      database: !isDbConfigured ? 'UNCONFIGURED' : readiness.reason === 'AGENT_DATABASE_UNREACHABLE' ? 'UNREACHABLE' : readiness.ready ? 'REACHABLE' : 'CONFIGURED'
     },
     productionMockFallback: providers.length === 0 ? 'ACTIVE (dev/test only)' : 'DISABLED',
     version: '2026.2.0',
+    timestamp: Date.now()
+  });
+});
+
+app.get('/api/health/diagnostics', (req: Request, res: Response) => {
+  if (!isMcpOperator(req)) {
+    return res.status(403).json({ error: 'OPERATOR_ACCESS_REQUIRED', message: 'Operator credentials required for deep diagnostics.' });
+  }
+  const providers = modelRouter.listProviders();
+  const circuits: Record<string, string> = {};
+  for (const p of providers) {
+    circuits[p] = healthTracker.getCircuitState(p, 'default');
+  }
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  res.json({
+    status: 'OK',
+    uptimeSeconds: Math.floor(process.uptime()),
+    memory: process.memoryUsage(),
+    providers,
+    circuits,
+    mcpConnectedCount: typeof mcpHost !== 'undefined' ? mcpHost.getConnectedCount() : 0,
     timestamp: Date.now()
   });
 });
@@ -325,8 +403,8 @@ const healthTracker = new ProviderHealthTracker();
 const capacityGuard = new PrivateBetaCapacityGuard(undefined, capacityStore, healthTracker);
 const modelRouter = new ModelRouter(healthTracker, capacityGuard);
 
-app.get('/api/ready', (_req: Request, res: Response) => {
-  const readiness = evaluateRuntimeReadiness(appState, process.env);
+app.get('/api/ready', async (_req: Request, res: Response) => {
+  const readiness = await getEffectiveRuntimeReadiness();
   res.status(readiness.ready ? 200 : 503).json({
     status: readiness.status,
     ...(readiness.reason ? { reason: readiness.reason } : {}),
@@ -888,46 +966,160 @@ if (isDbConfigured && !process.env.VERCEL) {
 }
 
 // -----------------------------------------------------------------------
-// Comprehensive MCP Integration
+// Comprehensive MCP Integration (P0 Security: SEC-01, SEC-02, SEC-03)
 // -----------------------------------------------------------------------
-app.get('/api/mcp/servers', (_req: Request, res: Response) => {
-  res.json(mcpHost.listServers());
+function resolveMcpCallerUserId(req: Request): string | null {
+  const verified = (req as any).managedIdentity as { userId: string } | undefined;
+  // MCP management requires a cryptographically verified identity. A generic
+  // req.user fallback is insufficient authority for infrastructure endpoints.
+  const authUserId = req.principal?.userId || verified?.userId;
+  if (!authUserId || authUserId === 'anonymous' || authUserId.startsWith('guest_') ||
+      (req as any).user?.isGuest) return null;
+  return authUserId;
+}
+
+function isVerifiedMcpOperator(req: Request): boolean {
+  const principal = req.principal;
+  if (!principal || !resolveMcpCallerUserId(req)) return false;
+  const roles = principal.roles || [];
+  return roles.includes('operator') || roles.includes('platform_admin');
+}
+
+app.get('/api/mcp/servers', (req: Request, res: Response) => {
+  const isOp = isVerifiedMcpOperator(req);
+  const authUserId = resolveMcpCallerUserId(req);
+  if (!authUserId && !isOp) {
+    return res.status(401).json({ error: 'AUTHENTICATION_REQUIRED', message: 'Verified account required to access MCP server management.' });
+  }
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  res.json(mcpHost.listServers(authUserId || undefined, isOp));
 });
 
-app.get('/api/mcp/servers/status', (_req: Request, res: Response) => {
-  res.json(mcpHost.listAllStatuses());
+app.get('/api/mcp/servers/status', (req: Request, res: Response) => {
+  const isOp = isVerifiedMcpOperator(req);
+  const authUserId = resolveMcpCallerUserId(req);
+  if (!authUserId && !isOp) {
+    return res.status(401).json({ error: 'AUTHENTICATION_REQUIRED', message: 'Verified account required to access MCP status.' });
+  }
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  res.json(mcpHost.listAllStatuses(authUserId || undefined, isOp));
 });
 
-app.post('/api/mcp/servers', (req: Request, res: Response) => {
+app.post('/api/mcp/servers', async (req: Request, res: Response) => {
+  const isOp = isVerifiedMcpOperator(req);
+  const authUserId = resolveMcpCallerUserId(req);
+  if (!authUserId && !isOp) {
+    return res.status(401).json({ error: 'AUTHENTICATION_REQUIRED', message: 'Verified account required to register MCP servers.' });
+  }
+
   const { id, name, url, transport, command, args, headers, env } = req.body || {};
   if (!id || !name) {
     return res.status(400).json({ error: 'id and name are required' });
   }
-  mcpHost.registerServer({ id, name, url, transport, command, args, headers, env });
-  res.json({ success: true, server: mcpHost.getServerStatus(id) });
+
+  const targetTransport = transport || (command ? 'stdio' : 'streamable_http');
+
+  // Process-backed MCP execution may be provisioned by trusted internal
+  // startup code only. Never expose interpreter/command launching through
+  // public HTTP routes, including operator-authenticated requests.
+  if (targetTransport === 'stdio') {
+    return res.status(403).json({
+      error: 'FORBIDDEN', code: 'STDIO_MANAGEMENT_INTERNAL_ONLY',
+      message: 'Process-backed MCP servers cannot be managed through the public API.'
+    });
+  }
+
+  try {
+    mcpHost.registerServer(
+      { id, name, url, transport: targetTransport, command, args, headers, env },
+      { ownerId: authUserId || 'platform', isOperator: isOp }
+    );
+    const status = mcpHost.getServerStatus(id, { ownerId: authUserId || 'platform', isOperator: isOp });
+    res.status(201).json({ success: true, server: status });
+  } catch (err: any) {
+    const statusCode = err instanceof McpSecurityError ? err.statusCode : 400;
+    res.status(statusCode).json({ error: err.message, code: err.code || 'MCP_REGISTRATION_FAILED' });
+  }
 });
 
 app.post('/api/mcp/servers/:id/connect', async (req: Request, res: Response) => {
+  const isOp = isVerifiedMcpOperator(req);
+  const authUserId = resolveMcpCallerUserId(req);
+  if (!authUserId && !isOp) {
+    return res.status(401).json({ error: 'AUTHENTICATION_REQUIRED', message: 'Verified account required to connect MCP servers.' });
+  }
+
   const id = getParam(req.params.id);
+
   try {
-    const success = await mcpHost.connectServer(id);
-    const status = mcpHost.getServerStatus(id);
+    const config = mcpHost.getServerConfig(id, { ownerId: authUserId || undefined, isOperator: isOp });
+    if (config?.transport === 'stdio') {
+      return res.status(403).json({
+        error: 'FORBIDDEN', code: 'STDIO_MANAGEMENT_INTERNAL_ONLY',
+        message: 'Process-backed MCP servers cannot be connected through the public API.'
+      });
+    }
+    const success = await mcpHost.connectServer(id, { ownerId: authUserId || undefined, isOperator: isOp });
+    const status = mcpHost.getServerStatus(id, { ownerId: authUserId || undefined, isOperator: isOp });
     res.json({ success, status });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    const statusCode = err instanceof McpSecurityError ? err.statusCode : 500;
+    res.status(statusCode).json({ error: err.message, code: err.code || 'MCP_CONNECT_FAILED' });
   }
 });
 
 app.post('/api/mcp/servers/:id/disconnect', async (req: Request, res: Response) => {
+  const isOp = isVerifiedMcpOperator(req);
+  const authUserId = resolveMcpCallerUserId(req);
+  if (!authUserId && !isOp) {
+    return res.status(401).json({ error: 'AUTHENTICATION_REQUIRED', message: 'Verified account required to disconnect MCP servers.' });
+  }
+
   const id = getParam(req.params.id);
-  const success = await mcpHost.disconnectServer(id);
-  res.json({ success });
+
+  try {
+    const success = await mcpHost.disconnectServer(id, { ownerId: authUserId || undefined, isOperator: isOp });
+    res.json({ success });
+  } catch (err: any) {
+    const statusCode = err instanceof McpSecurityError ? err.statusCode : 500;
+    res.status(statusCode).json({ error: err.message, code: err.code || 'MCP_DISCONNECT_FAILED' });
+  }
+});
+
+app.delete('/api/mcp/servers/:id', (req: Request, res: Response) => {
+  const isOp = isVerifiedMcpOperator(req);
+  const authUserId = resolveMcpCallerUserId(req);
+  if (!authUserId && !isOp) {
+    return res.status(401).json({ error: 'AUTHENTICATION_REQUIRED', message: 'Verified account required to delete MCP servers.' });
+  }
+
+  const id = getParam(req.params.id);
+
+  try {
+    const success = mcpHost.unregisterServer(id, { ownerId: authUserId || undefined, isOperator: isOp });
+    res.json({ success });
+  } catch (err: any) {
+    const statusCode = err instanceof McpSecurityError ? err.statusCode : 500;
+    res.status(statusCode).json({ error: err.message, code: err.code || 'MCP_DELETE_FAILED' });
+  }
 });
 
 app.get('/api/mcp/servers/:id/tools', (req: Request, res: Response) => {
+  const isOp = isVerifiedMcpOperator(req);
+  const authUserId = resolveMcpCallerUserId(req);
+  if (!authUserId && !isOp) {
+    return res.status(401).json({ error: 'AUTHENTICATION_REQUIRED', message: 'Verified account required to inspect MCP tools.' });
+  }
+
   const id = getParam(req.params.id);
-  const tools = mcpHost.listServerTools(id);
-  res.json({ tools });
+
+  try {
+    const tools = mcpHost.listServerTools(id, { ownerId: authUserId || undefined, isOperator: isOp });
+    res.json({ tools });
+  } catch (err: any) {
+    const statusCode = err instanceof McpSecurityError ? err.statusCode : 500;
+    res.status(statusCode).json({ error: err.message, code: err.code || 'MCP_TOOLS_FAILED' });
+  }
 });
 
 // -----------------------------------------------------------------------
@@ -1023,11 +1215,13 @@ app.post('/api/agent/autonomous/tasks', async (req: Request, res: Response) => {
   }
   const tier = await resolveCallerTier(req);
   if (!isFeatureAllowedForTier('autonomous', tier)) {
+    const requiredTier = getMinimumRequiredTierForFeature('autonomous');
     return res.status(403).json({
       error: 'PLAN_CAPABILITY_RESTRICTED',
       capability: 'autonomous_agents',
-      message: 'Autonomous multi-step agent execution is restricted to AIRA Pro.',
-      requiredTier: 'pro'
+      message: 'Autonomous multi-step agent execution requires AIRA Plus or higher.',
+      callerTier: tier,
+      requiredTier
     });
   }
   try {
@@ -1116,9 +1310,13 @@ app.post('/api/agent/autonomous/tasks/:id/resume', async (req: Request, res: Res
     // never grants an autonomous capability (including to operators/admins).
     const tier = await resolveCallerTier(req);
     if (!isFeatureAllowedForTier('autonomous', tier)) {
+      const requiredTier = getMinimumRequiredTierForFeature('autonomous');
       return res.status(403).json({
-        error: 'PLAN_CAPABILITY_RESTRICTED', capability: 'autonomous_agents',
-        message: 'Current subscription does not allow autonomous execution.', requiredTier: 'plus'
+        error: 'PLAN_CAPABILITY_RESTRICTED',
+        capability: 'autonomous_agents',
+        message: 'Current subscription does not allow autonomous execution. Requires AIRA Plus or higher.',
+        callerTier: tier,
+        requiredTier
       });
     }
     const task = await engine.resumeTask(id);

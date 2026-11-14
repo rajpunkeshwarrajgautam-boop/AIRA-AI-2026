@@ -371,6 +371,34 @@ export function isFeatureAllowedForTier(feature: string, tier: PlanTier): boolea
   }
 }
 
+/**
+ * Resolves the minimum required commercial tier for a given feature/capability.
+ * Evaluates against the authoritative commercial plan matrix.
+ */
+export function getMinimumRequiredTierForFeature(feature: string): PlanTier {
+  const tiers: PlanTier[] = ['guest', 'free', 'plus', 'pro'];
+  for (const tier of tiers) {
+    if (isFeatureAllowedForTier(feature, tier)) {
+      return tier;
+    }
+  }
+  return 'pro';
+}
+
+/**
+ * Resolves the minimum required commercial tier for a given model.
+ * Evaluates against the authoritative model allowlist.
+ */
+export function getMinimumRequiredTierForModel(model: string): PlanTier {
+  const tiers: PlanTier[] = ['guest', 'free', 'plus', 'pro'];
+  for (const tier of tiers) {
+    if (isModelAllowedForTier(model, tier)) {
+      return tier;
+    }
+  }
+  return 'pro';
+}
+
 // ==========================================
 // 2. SUBSCRIPTION LIFECYCLE
 // ==========================================
