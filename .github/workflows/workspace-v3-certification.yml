@@ -36,5 +36,5 @@ jobs:
         run: npm run test:session-auth && npm run test:auth-bff
       - name: Database isolation and migration rehearsal
         run: npm run test:db-isolation && npm run test:migration:031
-      - name: Entitlement and model permissions
-        run: npm run test:integration:entitlements
+      # Database-backed entitlements are certified by the repository's
+      # Disposable PostgreSQL Certification workflow with its isolated DB.
