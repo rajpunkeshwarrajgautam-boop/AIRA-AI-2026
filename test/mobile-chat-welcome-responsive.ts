@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 
 const URL = process.env.AIRA_FRONTEND_TEST_URL || 'http://127.0.0.1:5173/';
-const sizes = [[320, 568], [390, 844], [430, 932], [640, 360], [820, 1180], [1440, 900]];
+const sizes = [[320, 568], [360, 640], [375, 812], [390, 844], [414, 896], [430, 932], [640, 360], [768, 1024], [820, 1180], [1280, 720], [1440, 900], [1920, 1080], [2560, 1440]];
 const presets = ['default', 'warm-parchment', 'liquid-glass', 'linear-precision',
   'industrial-brutalist', 'nordic-moss', 'nordic-earth', 'solar-gold', 'tokyo-neon', 'vanguard-monolith'];
 

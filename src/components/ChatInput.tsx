@@ -158,12 +158,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   };
 
   return (
-    <div className="aira-composer mx-auto w-full min-w-0 max-w-3xl px-3 sm:px-5 pb-3 sm:pb-5" ref={controlsRef}>
+    <div className="aira-composer mx-auto w-full min-w-0 max-w-3xl px-[clamp(0.5rem,2vw,1.25rem)] pb-3 sm:pb-5" ref={controlsRef}>
       <motion.div
         layout
         className="aira-composer-card overflow-visible rounded-[16px] border border-claude-border-light bg-claude-surface-light shadow-sm transition-all duration-150 focus-within:border-claude-terracotta focus-within:ring-2 focus-within:ring-claude-terracotta/40 dark:border-claude-border-dark dark:bg-claude-surface-dark dark:shadow-none dark:focus-within:border-claude-terracotta/80 dark:focus-within:ring-claude-terracotta/30"
       >
-        <div className="flex items-center justify-between gap-3 border-b border-claude-border-light/70 px-3 py-2 sm:px-4 dark:border-claude-border-dark/70">
+        <div className="flex items-center justify-between gap-3 border-b border-claude-border-light/70 px-3 py-1.5 sm:px-4 sm:py-2 dark:border-claude-border-dark/70">
           <div className="flex min-w-0 items-center gap-2">
             <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[8px] bg-claude-terracotta/10 text-claude-accentInk">
               <ModeIcon className="h-3.5 w-3.5" />
@@ -206,7 +206,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                       type="button"
                       aria-label={`Remove ${attachment.name}`}
                       onClick={() => setAttachments(previous => previous.filter(item => item.id !== attachment.id))}
-                      className="rounded-md p-0.5 text-claude-muted-light transition-colors hover:bg-red-50 hover:text-red-500 dark:text-claude-muted-dark dark:hover:bg-red-500/10"
+                      className="flex min-h-10 min-w-10 shrink-0 items-center justify-center rounded-md text-claude-muted-light transition-colors hover:bg-red-50 hover:text-red-500 dark:text-claude-muted-dark dark:hover:bg-red-500/10"
                     >
                       <X className="h-3 w-3" />
                     </button>
@@ -243,7 +243,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               onClick={() => fileInputRef.current?.click()}
               aria-label="Attach documents or images"
               title="Add documents or images"
-              className="min-h-10 min-w-10 sm:min-h-0 sm:min-w-0 rounded-[9px] p-2 text-claude-muted-light transition-colors hover:bg-claude-surface2-light hover:text-claude-text-light dark:text-claude-muted-dark dark:hover:bg-claude-surface2-dark dark:hover:text-white"
+              className="flex min-h-10 min-w-10 shrink-0 items-center justify-center rounded-[9px] p-2 text-claude-muted-light transition-colors hover:bg-claude-surface2-light hover:text-claude-text-light dark:text-claude-muted-dark dark:hover:bg-claude-surface2-dark dark:hover:text-white"
             >
               <Paperclip className="h-4 w-4" />
             </motion.button>
@@ -254,7 +254,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 type="button"
                 onClick={() => onWorkspaceModeChange('chat')}
                 aria-pressed={workspaceMode === 'chat'}
-                className={`min-h-10 sm:min-h-7 flex items-center gap-1.5 px-3 py-1.5 sm:py-1 rounded-[8px] text-[11px] font-semibold transition-colors duration-150 ${
+                className={`min-h-10 flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] text-[11px] font-semibold transition-colors duration-150 ${
                   workspaceMode === 'chat'
                     ? 'bg-aira-blue text-white shadow-sm'
                     : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white'
@@ -279,7 +279,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                   onWorkspaceModeChange('agent');
                 }}
                 aria-pressed={workspaceMode === 'agent'}
-                className={`min-h-10 sm:min-h-7 flex items-center gap-1.5 px-3 py-1.5 sm:py-1 rounded-[8px] text-[11px] font-semibold transition-colors duration-150 ${
+                className={`min-h-10 flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] text-[11px] font-semibold transition-colors duration-150 ${
                   workspaceMode === 'agent'
                     ? 'bg-aira-blue text-white shadow-sm'
                     : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white'
@@ -312,7 +312,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                   setShowModeMenu(false);
                 }}
                 aria-expanded={showStyleMenu}
-                className="flex items-center min-h-10 sm:min-h-0 gap-1.5 rounded-[9px] px-2.5 py-1.5 text-[11px] font-medium text-claude-muted-light transition-colors hover:bg-claude-surface2-light dark:text-claude-muted-dark dark:hover:bg-claude-surface2-dark"
+                className="flex min-h-10 items-center gap-1.5 rounded-[9px] px-2.5 py-1.5 text-[11px] font-medium text-claude-muted-light transition-colors hover:bg-claude-surface2-light dark:text-claude-muted-dark dark:hover:bg-claude-surface2-dark"
               >
                 <SlidersHorizontal className="h-3.5 w-3.5" />
                 <span>{styleMode}</span>
