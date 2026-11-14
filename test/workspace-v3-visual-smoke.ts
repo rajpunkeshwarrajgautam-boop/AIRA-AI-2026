@@ -60,6 +60,10 @@ async function main() {
       if (!geometry.composer || !geometry.feed) throw new Error(`Composer/feed absent at ${width}px`);
       if (geometry.overflow > 2) throw new Error(`Horizontal overflow ${geometry.overflow}px at ${width}px`);
       if (geometry.composer.width > width + 1 || geometry.composer.x < -1) throw new Error(`Composer clipped at ${width}px`);
+      if (width <= 639) {
+        const cardHeight = await page.locator('.aira-composer-card').evaluate(el => el.getBoundingClientRect().height);
+        if (cardHeight > 145) throw new Error(`Empty mobile composer exceeds 145px at ${width}px: ${cardHeight}px`);
+      }
       if (width <= 359) {
         const textarea = await page.locator('textarea[aria-label="Message Aira"]').evaluate(element => {
           const input = element as HTMLTextAreaElement;
