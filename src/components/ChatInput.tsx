@@ -298,7 +298,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                     className="flex items-center gap-0.5 rounded px-1 py-0.2 text-xs font-semibold bg-amber-500/15 text-amber-600 dark:text-amber-400"
                   >
                     <Lock className="w-2 h-2" />
-                    <span>PLUS</span>
+                    <span className="max-[359px]:sr-only">PLUS</span>
                   </span>
                 )}
               </button>
