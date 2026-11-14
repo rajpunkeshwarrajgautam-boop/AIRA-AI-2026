@@ -139,7 +139,7 @@ export const GreetingScreen: React.FC<GreetingScreenProps> = ({
   return (
     <div 
       ref={containerRef} 
-      className="aira-editorial-greeting flex-1 w-full min-w-0 max-w-[760px] mx-auto px-4 sm:px-8 py-6 sm:py-10 md:py-14 flex flex-col items-center justify-center select-none text-center"
+      className="aira-editorial-greeting flex-none min-h-full w-full min-w-0 max-w-[760px] mx-auto px-4 sm:px-8 py-6 sm:py-10 md:py-14 flex flex-col items-center justify-center select-none text-center"
     >
       {/* Toast Notification */}
       {toastMessage && (
