@@ -117,7 +117,7 @@ try {
         await page.getByTestId('unified-workspace')
           .waitFor({ state: 'visible', timeout: 9000 });
         const studio = await page.getByTestId('unified-workspace').boundingBox();
-        assert(studio && studio.left >= -2 && studio.right <= width + 2,
+        assert(studio && studio.x >= -2 && studio.x + studio.width <= width + 2,
           'Studio escapes horizontal viewport: ' + JSON.stringify(studio));
       });
       const closeWorkspace = page.getByTestId('workspace-close');
@@ -165,6 +165,16 @@ try {
         await account.click({ timeout: 5000 });
         await page.getByRole('menu', { name: 'Account and user settings menu' })
           .waitFor({ state: 'visible', timeout: 9000 });
+        // The menu starts hidden at its fallback dimensions. Wait until
+        // the layout effect places it within the visual viewport before
+        // measuring; a permanently clipped menu remains a failure.
+        await page.waitForFunction(() => {
+          const el = document.querySelector('[role="menu"][aria-label="Account and user settings menu"]');
+          if (!el || getComputedStyle(el).opacity !== '1') return false;
+          const r = el.getBoundingClientRect();
+          return r.left >= -2 && r.right <= innerWidth + 2 &&
+            r.top >= -2 && r.bottom <= innerHeight + 2;
+        }, undefined, { timeout: 6000 });
         const menu = await page.getByRole('menu', { name: 'Account and user settings menu' }).boundingBox();
         assert(menu && menu.x >= -2 && menu.x + menu.width <= width + 2 &&
           menu.y >= -2 && menu.y + menu.height <= height + 2,
@@ -172,8 +182,9 @@ try {
       });
       await page.keyboard.press('Escape');
       if (width <= 414) await record('Long composer', async () => {
-        const drawerClose = page.getByRole('button',{name:'Close sidebar navigation'});
-        if (await drawerClose.isVisible()) await drawerClose.click();
+        // Reload a fresh guest composer: do not depend on a closing account
+        // dropdown or mobile sidebar animation from the previous surface.
+        await page.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: 15000 });
         await page.getByRole('textbox', {name:'Message Aira'}).fill(
           'Long composer content to test wrapping and scrolling. '.repeat(35));
         const composer = await page.locator('.aira-composer-card').boundingBox();
