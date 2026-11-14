@@ -50,7 +50,7 @@ try {
         try{
           await page.goto(url.toString(),{waitUntil:'domcontentloaded',timeout:18000});
           await page.getByRole('textbox',{name:'Message Aira'}).waitFor({state:'visible',timeout:12000});
-          await page.evaluate(()=>Promise.race([document.fonts.ready,new Promise<void>(resolve=>setTimeout(resolve,2500))]));
+          await page.evaluate('Promise.race([document.fonts.ready, new Promise(resolve => setTimeout(resolve, 2500))])');
           await page.evaluate(t=>document.documentElement.classList.toggle('dark',t==='dark'),theme);
           const metrics=await page.evaluate(()=>({
             cssWidth:innerWidth,dpr:devicePixelRatio,scale:visualViewport?.scale,
