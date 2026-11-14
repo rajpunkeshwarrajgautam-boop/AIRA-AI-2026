@@ -1789,7 +1789,7 @@ useEffect(() => {
                 title="Toggle Agent Workspace Panel"
               >
                 <Bot className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Agent Panel</span>
+                <span className="hidden md:inline">Agent Panel</span>
               </button>
             )}
             {(isLoading || isBuilderBusy) && (
@@ -1827,7 +1827,7 @@ useEffect(() => {
                 aria-expanded={isStudioOpen}
               >
                 <Layers className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Artifact Studio</span>
+                <span className="hidden md:inline">Artifact Studio</span>
               </button>
             )}
             {activeConversation && <button type="button" aria-label={activeConversation.isPinned ? "Remove bookmark" : "Bookmark conversation"} onClick={() => handleToggleStar(activeConversation.id)} className="min-h-10 min-w-10 flex items-center justify-center p-2 rounded-lg hover:bg-claude-surface2-light dark:hover:bg-white/5 active:scale-95 transition-transform duration-150 motion-reduce:transition-none" title={activeConversation.isPinned ? 'Remove bookmark' : 'Bookmark conversation'}><Bookmark className={`w-4 h-4 ${activeConversation.isPinned ? 'fill-aira-blue text-aira-blue' : 'text-claude-muted-light dark:text-claude-muted-dark'}`} /></button>}
