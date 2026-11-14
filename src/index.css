@@ -601,9 +601,15 @@
   .aira-adaptive-shell .aira-composer-style {
     display: none;
   }
+  .aira-adaptive-shell.has-studio-open .aira-editorial-greeting {
+    padding-block: clamp(0.75rem, 2cqi, 1.5rem);
+  }
   .aira-adaptive-shell.has-studio-open .aira-editorial-greeting h1 {
     font-size: clamp(1.875rem, 7cqi, 2.25rem);
     line-height: 1.15;
+    margin-bottom: 0.5rem;
+  }
+  .aira-adaptive-shell.has-studio-open .aira-editorial-greeting p {
     margin-bottom: 0.5rem;
   }
   .aira-adaptive-shell.has-studio-open .aira-editorial-greeting > .claude-fade-up.relative {
