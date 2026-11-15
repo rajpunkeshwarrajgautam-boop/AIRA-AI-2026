@@ -11,11 +11,11 @@
 main{width:min(650px,100%);border:1px solid #3b3654;border-radius:20px;padding:clamp(20px,4vw,36px);background:#1b1a25}
 small{color:#ad9cde;letter-spacing:.13em;text-transform:uppercase}h1{font-size:clamp(25px,4vw,35px);margin:10px 0}p{color:#c0bcd0;line-height:1.5}
 label{display:block;margin:20px 0 8px;font-weight:600}
-select,textarea,button{font:inherit;border-radius:9px}select,textarea{width:100%;background:#12121a;color:#f1f0f9;border:1px solid #57516c;padding:13px}
+select,textarea,input,button{font:inherit;border-radius:9px}select,textarea,input{width:100%;background:#12121a;color:#f1f0f9;border:1px solid #57516c;padding:13px}
 textarea{resize:vertical;min-height:110px}button{background:#b38bff;color:#16111e;border:0;padding:12px 20px;cursor:pointer;font-weight:700}
 button:disabled{opacity:.5;cursor:not-allowed}.status{padding:12px;border-radius:9px;background:#272336;color:#d5c2ff}
 pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#11111a;border:1px solid #3b3654;border-radius:10px;padding:16px;min-height:90px}
-footer{font-size:13px;margin-top:20px;color:#a7a2b3}a{color:#b38bff}
+footer{font-size:13px;margin-top:20px;color:#a7a2b3}a{color:#b38bff}#auth-panel{border:1px solid #56506f;border-radius:12px;padding:16px;margin:15px 0;background:#23202f}#auth-panel[hidden]{display:none}.auth-actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:12px}.auth-actions a{font-size:13px}
 </style>
 </head>
 <body>
@@ -23,7 +23,13 @@ footer{font-size:13px;margin-top:20px;color:#a7a2b3}a{color:#b38bff}
 <small>Staging experiment · disposable</small>
 <h1>AI Staring trial tester</h1>
 <p>Independent model gateway evaluation. This page does not alter AIRA chat, your subscription, model routing, or conversation history. Responses and token figures are reported by the external provider.</p>
-<div id="status" class="status" role="status">Checking your signed-in session and trial configuration…</div>
+<div id="status" class="status" role="status">Checking the trial configuration…</div>
+<div id="auth-panel">
+<p>Use the temporary trial access code to unlock this tester. This code is separate from your provider API key and your AIRA account password.</p>
+<label for="trial-access">Temporary trial access code</label>
+<input id="trial-access" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your temporary trial code">
+<div class="auth-actions"><button id="unlock" type="button">Unlock tester</button><a href="/?trialSignIn=1">Sign in with an AIRA account instead</a></div>
+</div>
 <label for="model">Advertised model ID</label>
 <select id="model">
 <option value="deepseek-v4-flash">DeepSeek V4 Flash (previously tested)</option>
@@ -37,13 +43,16 @@ footer{font-size:13px;margin-top:20px;color:#a7a2b3}a{color:#b38bff}
 <p><button id="run" type="button" disabled>Run one bounded test</button></p>
 <label for="output">Result</label>
 <pre id="output" aria-live="polite">No request made.</pre>
-<footer>The API key stays in server environment variables and is never sent to the browser. Trial traffic is restricted to an explicitly allowed signed-in account. <a href="/">Return to AIRA</a>.</footer>
+<footer>The API key stays in server environment variables and is never sent to the browser. Trial traffic requires a temporary access code or an explicitly allowed signed-in account. <a href="/">Return to AIRA</a>.</footer>
 </main>
 <script>
 (() => {
 'use strict';
 const $ = id => document.getElementById(id);
 let csrf = null;
+let accessCode = '';
+const authPanel = $('auth-panel');
+const unlock = $('unlock');
 const run = $('run');
 const status = $('status');
 const output = $('output');
@@ -52,30 +61,53 @@ async function readJson(response) {
   try { return JSON.parse(text); } catch { return {code:'INVALID_SERVER_RESPONSE'}; }
 }
 async function initialize() {
+  run.disabled = true;
   try {
-    const sessionResponse = await fetch('/api/auth/session',{credentials:'same-origin',cache:'no-store'});
-    const session = await readJson(sessionResponse);
-    if (session.status !== 'AUTHENTICATED' || !session.csrfToken) {
-      status.textContent = 'Sign in with your AIRA account on this deployment, then reload this page.';
+    // An optional verified AIRA BFF session is supported, but the isolated code
+    // permits a trial without depending on staging OAuth or database credentials.
+    let session = null;
+    try {
+      const sr = await fetch('/api/auth/session',{credentials:'same-origin',cache:'no-store'});
+      session = await readJson(sr);
+    } catch { session = null; }
+    csrf = session?.status === 'AUTHENTICATED' ? (session.csrfToken || null) : null;
+    if (!csrf && !accessCode) {
+      authPanel.hidden = false;
+      status.textContent = 'Enter your temporary trial access code to unlock testing. No AIRA sign-in is required.';
       return;
     }
-    csrf = session.csrfToken;
-    const response = await fetch('/api/experimental/ai-staring/status',{credentials:'same-origin',cache:'no-store'});
+    const headers = accessCode ? {'X-Aira-Trial-Access-Code':accessCode} : {};
+    const response = await fetch('/api/experimental/ai-staring/status',{credentials:'same-origin',cache:'no-store',headers});
     const data = await readJson(response);
     if (!response.ok) {
-      status.textContent = 'Unavailable for this account or deployment (HTTP ' + response.status + ').';
+      if (response.status === 401) accessCode = '';
+      authPanel.hidden = false;
+      status.textContent = response.status === 401 ? 'Invalid access code or unapproved account. Try again.' :
+        'Trial status unavailable (HTTP ' + response.status + ').';
       return;
     }
     status.textContent = data.enabled ?
       'Trial ready. Auto-expiry: ' + data.expiry + '. Wait 10 seconds between calls.' :
       'Trial disabled: ' + data.reason + '. No upstream request will be sent.';
+    authPanel.hidden = data.enabled;
     run.disabled = !data.enabled;
   } catch {
-    status.textContent = 'Could not validate the AIRA session and trial configuration.';
+    status.textContent = 'Could not validate the trial. Check your connection and try again.';
   }
 }
+unlock.addEventListener('click', () => {
+  accessCode = $('trial-access').value.trim();
+  $('trial-access').value = '';
+  if (accessCode.length < 40) {
+    accessCode = '';
+    status.textContent = 'Enter the full temporary trial access code.';
+    return;
+  }
+  initialize();
+});
+$('trial-access').addEventListener('keydown', event => { if (event.key === 'Enter') unlock.click(); });
 run.addEventListener('click', async () => {
-  if (!csrf || run.disabled) return;
+  if ((!csrf && !accessCode) || run.disabled) return;
   run.disabled = true;
   output.textContent = 'Running one model request…';
   try {
@@ -83,7 +115,7 @@ run.addEventListener('click', async () => {
       method:'POST',
       credentials:'same-origin',
       cache:'no-store',
-      headers:{'Content-Type':'application/json','X-CSRF-Token':csrf,'X-Aira-Csrf-Protection':'1'},
+      headers:{'Content-Type':'application/json','X-Aira-Csrf-Protection':'1',...(csrf?{'X-CSRF-Token':csrf}:{}),...(accessCode?{'X-Aira-Trial-Access-Code':accessCode}:{})},
       body:JSON.stringify({model:$('model').value,prompt:$('prompt').value})
     });
     const data = await readJson(response);
