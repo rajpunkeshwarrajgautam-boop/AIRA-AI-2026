@@ -2,6 +2,18 @@ import type { Knex } from 'knex';
 
 /** Backward-compatible schema expansion; do not drop existing onboarding state. */
 export async function up(knex: Knex): Promise<void> {
+  // Release compatibility: production has workflow_runs migration 010 in its
+  // Knex ledger but the artifacts column is absent in the live schema.
+  // Restore the exact additive 010 postcondition without rewriting run data.
+  // Existing staging schemas already have the column, so this is a no-op there.
+  if (!(await knex.schema.hasTable('workflow_runs'))) {
+    throw new Error('workflow_runs table missing; verify migrations 009/010 before workspace rollout');
+  }
+  if (!(await knex.schema.hasColumn('workflow_runs', 'artifacts'))) {
+    await knex.schema.alterTable('workflow_runs', table => {
+      table.jsonb('artifacts').defaultTo('[]');
+    });
+  }
   if (await knex.schema.hasTable('users') && !(await knex.schema.hasColumn('users', 'onboarded_at'))) {
     await knex.schema.alterTable('users', table => {
       table.bigInteger('onboarded_at').nullable();
