@@ -267,7 +267,7 @@ const handleGuestLinking = async (req: Request, res: Response) => {
     claimedGuestToken: req.body?.guestToken,
     claimedGuestUserId: req.body?.guestUserId,
   });
-  if (!claim.ok) return res.status(claim.httpStatus).json({ error: claim.code });
+  if (claim.ok === false) return res.status(claim.httpStatus).json({ error: claim.code });
   const authenticatedUserId = claim.targetPrincipalId;
   const guestPrincipalId = claim.guestPrincipalId;
   if (!process.env.DATABASE_URL) {
