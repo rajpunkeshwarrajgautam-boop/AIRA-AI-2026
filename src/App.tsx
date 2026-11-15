@@ -195,7 +195,9 @@ function App() {
   const [authorizingVisionId, setAuthorizingVisionId] = useState<string | null>(null);
   const [isProjectsOpen, setIsProjectsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isAuthOpen, setIsAuthOpen] = useState(false);
+  const [isAuthOpen, setIsAuthOpen] = useState(() =>
+    typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('trialSignIn') === '1'
+  );
   const [isPricingOpen, setIsPricingOpen] = useState(false);
   const [isVisionOpen, setIsVisionOpen] = useState(false);
   const [isAccountBillingOpen, setIsAccountBillingOpen] = useState(false);
