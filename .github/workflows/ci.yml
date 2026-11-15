@@ -74,6 +74,9 @@ jobs:
       - name: Run database migrations
         run: npm run db:migrate
 
+      - name: Standalone workflow artifacts JSONB reconciliation regression
+        run: npx tsx --test test/migration-032-artifacts-reconciliation.test.ts
+
       - name: Commercial quota ledger and monthly reasoning enforcement (real PostgreSQL)
         run: npx tsx --test test/commercial-credit-ledger.test.ts
 
