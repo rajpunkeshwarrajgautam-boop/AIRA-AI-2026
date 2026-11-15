@@ -84,11 +84,18 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       const topEdge = (viewport?.offsetTop || 0) + 12;
       const rightEdge = leftEdge + (viewport?.width || window.innerWidth) - 24;
       const bottomEdge = topEdge + (viewport?.height || window.innerHeight) - 24;
-      const width = Math.min(380, rightEdge - leftEdge);
-      const top = Math.max(topEdge, Math.min(anchor.bottom + 8, bottomEdge - 100));
+      const width = Math.max(0, Math.min(380, rightEdge - leftEdge));
+      const spaceBelow = Math.max(0, bottomEdge - anchor.bottom - 8);
+      const spaceAbove = Math.max(0, anchor.top - topEdge - 8);
+      // The selector lives in the bottom composer. Prefer opening upward
+      // when the lower viewport would clip model and thinking controls.
+      const openAbove = spaceBelow < 240 && spaceAbove > spaceBelow;
+      const maxHeight = Math.min(420, openAbove ? spaceAbove : spaceBelow);
+      const desiredTop = openAbove ? anchor.top - 8 - maxHeight : anchor.bottom + 8;
+      const top = Math.max(topEdge, Math.min(desiredTop, bottomEdge - maxHeight));
       setMenuBounds({
         left: Math.max(leftEdge, Math.min(anchor.left, rightEdge - width)),
-        top, width, maxHeight: Math.max(0, bottomEdge - top),
+        top, width, maxHeight,
       });
     };
     placeMenu();
