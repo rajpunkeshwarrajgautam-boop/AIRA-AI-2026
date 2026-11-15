@@ -12,12 +12,12 @@
  *      target database (e.g. CI service container or isolated Neon test branch).
  *      Executes real `pg_dump -Fc` to a temporary archive, measures actual byte size with
  *      `fs.statSync`, calculates genuine SHA256 checksum, executes real `pg_restore --clean --if-exists`,
- *      and executes live SQL count queries across all 48 tables to verify empirical row parity.
+ *      and executes live SQL count queries across all 50 tables to verify empirical row parity.
  *    - OFFLINE MODE (--offline / auto-detect when tooling/target DB is absent):
  *      Does NOT fabricate pg_dump archives, synthetic byte counts (e.g. 184,320 bytes), mock SHA256
  *      hashes, or simulated row counts. Honestly reports host environment status and executes a
- *      comprehensive schema AST & migration contract audit across all 31 migration files on disk,
- *      verifying definitions for all 48 tables, relational constraints, indexes, and deploy contracts.
+ *      comprehensive schema AST & migration contract audit across all 32 migration files on disk,
+ *      verifying definitions for all 50 tables, relational constraints, indexes, and deploy contracts.
  * 
  * 2. Strict Security Boundaries:
  *    - Validates target database classification via `database-isolation-guard`.
@@ -60,7 +60,7 @@ function findRepoRoot(startDir: string): string {
 const REPO_ROOT = findRepoRoot(__dirname);
 
 // ============================================================================
-// 1. Authoritative Migration Catalog (31 Migrations: 001 to 031)
+// 1. Authoritative Migration Catalog (32 Migrations: 001 to 032)
 // ============================================================================
 export const EXPECTED_MIGRATIONS = Object.freeze([
   '001_initial_schema.ts',
@@ -93,11 +93,12 @@ export const EXPECTED_MIGRATIONS = Object.freeze([
   '028_approval_resumption_outbox.ts',
   '029_authoritative_approval_resumption_targets.ts',
   '030_principal_workspace_authority.ts',
-  '031_autonomous_agent_tasks.ts'
+  '031_autonomous_agent_tasks.ts',
+  '032_workspace_experience.ts'
 ]);
 
 // ============================================================================
-// 2. Authoritative Table Catalog (48 Total Tables: 46 Application + 2 Knex)
+// 2. Authoritative Table Catalog (50 Total Tables: 48 Application + 2 Knex)
 // ============================================================================
 export const EXPECTED_TABLES = Object.freeze([
   'agents',
@@ -146,6 +147,8 @@ export const EXPECTED_TABLES = Object.freeze([
   'principal_workspace_authorities',
   'autonomous_agent_tasks',
   'durable_browser_sessions',
+  'workspace_promo_events',
+  'guest_migration_ledger',
   'knex_migrations',
   'knex_migrations_lock'
 ]);
@@ -415,7 +418,7 @@ export async function runOfflineContractAudit(): Promise<OfflineAuditResult> {
     }
   }
 
-  // Verify all 48 tables exist in catalog
+  // Verify all 50 tables exist in catalog
   const missingTables = EXPECTED_TABLES.filter(t => !discoveredTables.has(t));
   if (missingTables.length > 0) {
     throw new Error(`SCHEMA_CATALOG_DEFICIT: Tables missing from migration definitions: ${missingTables.join(', ')}`);

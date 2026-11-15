@@ -2,6 +2,7 @@ import { createBuilderRoutes } from './builder-routes.js';
 import { createBillingRoutes } from './billing-routes.js';
 import { createVisionRoutes } from './vision-routes.js';
 import { createAccountRoutes } from './account-routes.js';
+import { createWorkspaceExperienceRoutes } from './workspace-experience-routes.js';
 import { commercialBillingService, StandardQuotaExceededError, StandardChatReplayError, StandardChatPlanChangedError } from './billing/commercial-billing-service.js';
 import { paymentGatewayService } from './billing/payment-gateway-service.js';
 import 'dotenv/config';
@@ -94,6 +95,7 @@ function getParam(param: string | string[] | undefined): string {
 
 import { createStagingMaintenanceMiddleware } from './middleware/staging-maintenance.js';
 import { createSessionAuthMiddleware, ensureAuthenticatedSession } from './auth/session-auth.js';
+import { verifyGuestMigrationClaim } from './auth/guest-migration-claim.js';
 import { createNeonAuthPrincipalMiddleware } from './auth/neon-auth-principal.js';
 import {
   createBffSessionMiddleware,
@@ -265,43 +267,64 @@ app.get('/api/auth/identity', (req: Request, res: Response) => {
   });
 });
 
-const linkedGuestTokens = new Map<string, string>();
-
+/**
+ * Guest history migration is authorized by possession of the signed, environment-bound
+ * guest-session cookie AND a verified authenticated principal. Client-supplied IDs
+ * never confer ownership. The durable ledger serializes retries across instances.
+ */
 const handleGuestLinking = async (req: Request, res: Response) => {
+  const claim = verifyGuestMigrationClaim({
+    cookieHeader: req.headers.cookie,
+    authenticatedPrincipalId: req.principal?.userId,
+    claimedGuestToken: req.body?.guestToken,
+    claimedGuestUserId: req.body?.guestUserId,
+  });
+  if (claim.ok === false) return res.status(claim.httpStatus).json({ error: claim.code });
+  const authenticatedUserId = claim.targetPrincipalId;
+  const guestPrincipalId = claim.guestPrincipalId;
+  if (!process.env.DATABASE_URL) {
+    return res.status(503).json({ error: 'DATABASE_UNAVAILABLE', message: 'Durable guest migration unavailable' });
+  }
+
   try {
-    const verified = (req as any).managedIdentity as { userId: string } | undefined;
-    const authUserId = req.principal?.userId || verified?.userId || (req as any).user?.id;
-    if (!authUserId) {
-      return res.status(401).json({ error: 'AUTHENTICATION_REQUIRED', message: 'Verified managed account or authenticated session required to link data' });
-    }
+    const migratedChatsCount = await db.transaction(async trx => {
+      // Transaction-scoped advisory lock is held for the entire claim and transfer.
+      await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [`aira-guest-migration:${guestPrincipalId}`]);
+      const prior = await trx('guest_migration_ledger')
+        .where({ guest_principal_id: guestPrincipalId })
+        .first();
+      if (prior) {
+        if (prior.target_principal_id !== authenticatedUserId) {
+          throw Object.assign(new Error('Guest session already linked to another account'), { statusCode: 409 });
+        }
+        return Number(prior.migrated_conversation_count);
+      }
 
-    const guestToken = req.body?.guestToken || req.body?.guestUserId || (req as any).guestSession?.id;
-    if (!guestToken || typeof guestToken !== 'string' || !guestToken.trim()) {
-      return res.status(400).json({ error: 'INVALID_GUEST_SESSION', message: 'Guest session token is invalid or expired' });
-    }
-
-    if (linkedGuestTokens.has(guestToken)) {
-      return res.status(409).json({ error: 'ALREADY_LINKED', message: 'Guest session already linked to an account' });
-    }
-
-    linkedGuestTokens.set(guestToken, authUserId);
-
-    let migratedChatsCount = 0;
-    try {
-      const result = await conversationSearchRepo.transferGuestData(guestToken, authUserId);
-      migratedChatsCount = (result as any)?.transferredCount ?? (result as any)?.migratedChatsCount ?? 1;
-    } catch {
-      migratedChatsCount = 1;
-    }
-
-    res.json({
-      success: true,
-      linkedUserId: authUserId,
-      migratedChatsCount,
-      message: 'Guest conversation history linked successfully'
+      const result = await conversationSearchRepo.transferGuestData(guestPrincipalId, authenticatedUserId, trx);
+      await trx('guest_migration_ledger').insert({
+        guest_principal_id: guestPrincipalId,
+        target_principal_id: authenticatedUserId,
+        migrated_conversation_count: result.transferredConversations,
+        guest_session_proof_hash: crypto.createHash('sha256').update(claim.guestSessionId).digest('hex'),
+        created_at: Date.now(),
+      });
+      return result.transferredConversations;
     });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message || 'Guest linking failed' });
+
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).json({
+      success: true,
+      linkedUserId: authenticatedUserId,
+      transferredConversations: migratedChatsCount,
+      migratedChatsCount,
+      message: 'Guest conversation history linked successfully',
+    });
+  } catch (error: any) {
+    if (error?.statusCode === 409) {
+      return res.status(409).json({ error: 'ALREADY_LINKED_TO_ANOTHER_ACCOUNT' });
+    }
+    console.error('[GUEST_MIGRATION_FAILED]', error?.code || 'DATABASE_TRANSFER_FAILED');
+    return res.status(503).json({ error: 'GUEST_MIGRATION_UNAVAILABLE', message: 'Guest conversations were not migrated. Retry later.' });
   }
 };
 
@@ -866,6 +889,7 @@ app.get('/api/capacity/status', async (req: Request, res: Response) => {
 
 // Initialize Core Subsystems
 app.use('/api/user', createAccountRoutes());
+app.use('/api', createWorkspaceExperienceRoutes());
 const isDbConfigured = Boolean(process.env.DATABASE_URL?.trim());
 const toolRegistry = new ToolRegistry(process.cwd());
 const approvalKernel = new ApprovalKernel(new PostgresApprovalRepository(), new PostgresSessionGrantRepository());
@@ -2193,10 +2217,13 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     }
 
     const clientAbort = new AbortController();
+    let runCreatedForRequest = false;
     res.on('close', async () => {
-      if (!res.writableEnded) clientAbort.abort(new Error('CLIENT_CLOSED'));
-      if (!firstTokenEmitted) {
-        await releaseQuotaIfUnused();
+      // Disconnect while QUEUED: abort admission. After run creation the durable
+      // execution must survive transport interruption for authenticated replay.
+      if (!runCreatedForRequest && !res.writableEnded) {
+        clientAbort.abort(new Error('CLIENT_CLOSED'));
+        if (!firstTokenEmitted) await releaseQuotaIfUnused();
       }
     });
 
@@ -2304,6 +2331,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       await agentRuntime.cancelRun(run.id);
       return res.end();
     }
+    runCreatedForRequest = true;
     tRunCreated = performance.now();
     res.write(`event: run_started\ndata: ${JSON.stringify({ runId: run.id })}\n\n`);
 
@@ -2493,14 +2521,34 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     };
 
     stream.on('event', handler);
-    res.on('close', async () => {
-      if (!firstTokenEmitted) {
-        await releaseQuotaIfUnused();
-      }
+    res.on('close', () => {
       if (res.writableEnded) return;
-      await releasePermitIfHeld();
       stream.off('event', handler);
-      agentRuntime.cancelRun(run.id).catch(() => {});
+
+      // Preserve the existing run on connection loss. Account for quota and
+      // capacity independently of the response stream, without a second POST.
+      let closed = false;
+      const timer = setTimeout(() => { void finishDetached(); }, 10 * 60 * 1000);
+      timer.unref?.();
+      const finishDetached = async () => {
+        if (closed) return;
+        closed = true;
+        clearTimeout(timer);
+        stream.off('event', onDetachedEvent);
+        if (firstTokenEmitted) await settleQuotaOnce();
+        else await releaseQuotaIfUnused();
+        await releasePermitIfHeld();
+      };
+      const onDetachedEvent = (event: any) => {
+        if (event.type === 'content.delta' || event.type === 'thinking.delta') {
+          firstTokenEmitted = true;
+          void settleQuotaOnce();
+        }
+        if (['run.completed', 'run.failed', 'run.cancelled'].includes(event.type)) {
+          void finishDetached();
+        }
+      };
+      stream.on('event', onDetachedEvent);
     });
 
     await withInferenceReservation(modelRouter.capacityGuard, admission, () => agentRuntime.startRun(run.id), clientAbort.signal);

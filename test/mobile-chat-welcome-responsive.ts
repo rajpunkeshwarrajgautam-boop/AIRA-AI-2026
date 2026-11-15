@@ -42,7 +42,12 @@ async function main() {
 
       const openHistory = async () => {
         if (width < 1280) await page.getByRole('button', { name: 'Open sidebar navigation' }).click();
-        await page.getByRole('complementary').getByText('Preserved frontend history', { exact: true }).click();
+        // The narrow-screen drawer is an accessible dialog, while the
+        // persistent desktop sidebar is a navigation landmark.
+        const sidebar = width < 1280
+          ? page.getByRole('dialog', { name: 'Workspace navigation' })
+          : page.getByRole('navigation', { name: 'Workspace navigation' });
+        await sidebar.getByRole('button', { name: 'Open conversation: Preserved frontend history' }).click();
         await page.locator('.aira-prose').waitFor();
       };
       await openHistory();

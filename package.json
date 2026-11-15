@@ -89,7 +89,6 @@
     "staging:cutover:plan": "npx tsx scripts/staging-cutover-orchestrator.ts --plan",
     "staging:cutover:audit": "npx tsx scripts/staging-cutover-orchestrator.ts --rehearsal-audit",
     "verify:prod-readiness": "npx tsx scripts/verify-production-release-readiness.ts",
-
     "test:neon-auth-identity": "npx tsx test/neon-auth-identity.test.ts",
     "test:neon-auth-e2e": "npx tsx test/neon-auth-staging-e2e.test.ts",
     "test:auth-security": "npx tsx test/auth-security-authorization.test.ts",
@@ -146,6 +145,7 @@
     "pg": "^8.23.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "react-virtuoso": "^4.18.22",
     "tailwind-merge": "^3.7.0",
     "uuid": "^14.0.2",
     "zod": "^4.6.7"

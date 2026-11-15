@@ -337,6 +337,10 @@ jobs:
           mark_stage 'verify disposable PostgreSQL identity after migration'
           docker exec --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
             "$TEST_CONTAINER" node scripts/ci/assert-disposable-postgres.mjs
+          mark_stage 'rehearse migration 032 schema-drift repair in rolled-back disposable transaction'
+          docker exec --env AIRA_POSTGRES_CERTIFICATION=1 \
+            --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
+            "$TEST_CONTAINER" ./node_modules/.bin/tsx --test test/workspace-v3-postgres-migration-032.test.ts
           mark_stage 'run guarded tool-call schema drift certification'
           docker exec --env AIRA_POSTGRES_CERTIFICATION=1 --env "CI_EXPECTED_POSTGRES_ADDRESSES=$EXPECTED_POSTGRES_ADDRESSES" \
             "$TEST_CONTAINER" npm run test:tool-calls-drift

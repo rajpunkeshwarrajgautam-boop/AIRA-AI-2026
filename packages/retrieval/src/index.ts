@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { db } from '../../db/src/index.js';
+import type { Knex } from 'knex';
 import type { EmbeddingProvider } from './embeddings.js';
 
 export {
@@ -468,13 +469,14 @@ export class ConversationSearchRepository {
 
   async transferGuestData(
     guestPrincipalId: string,
-    targetPrincipalId: string
+    targetPrincipalId: string,
+    transaction?: Knex.Transaction
   ): Promise<{ transferredConversations: number }> {
     if (!guestPrincipalId || !targetPrincipalId || guestPrincipalId === targetPrincipalId) {
       throw new Error('INVALID_TRANSFER_PRINCIPALS');
     }
 
-    return db.transaction(async trx => {
+    const performTransfer = async (trx: Knex.Transaction) => {
       const guestRows = await trx('conversations')
         .where({ principal_id: guestPrincipalId })
         .whereNull('deleted_at');
@@ -505,7 +507,8 @@ export class ConversationSearchRepository {
       }
 
       return { transferredConversations: transferredCount };
-    });
+    };
+    return transaction ? performTransfer(transaction) : db.transaction(performTransfer);
   }
 
   async getVectorCapability(): Promise<VectorCapability> {

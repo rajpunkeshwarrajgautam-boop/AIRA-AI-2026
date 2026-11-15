@@ -72,7 +72,11 @@ test('touch targets and hidden inputs conform to minimum hit targets and accessi
   assert.match(chatInput, /aria-label="Upload document or image attachments"/);
   assert.match(chatInput, /min-h-10 flex items-center/, 'Chat/Agent control must stay at least 40px at every breakpoint');
   assert.doesNotMatch(chatInput, /sm:min-h-(?:0|7)/, 'Composer controls must not shrink at desktop breakpoints');
-  assert.match(chatInput, /px-3 py-1\.5 sm:px-4 sm:py-2/, 'Mobile header spacing should be compact without reducing touch targets');
+  assert.match(chatInput, /role="status" aria-live="polite"/, 'Composer must retain accessible status when redundant header is removed');
+  assert.match(chatInput, /className="aira-v3-composer-model"/, 'Model picker must remain available in the compact composer');
+  const workspaceStyles = source('src/styles/workspace-v3.css');
+  assert.match(workspaceStyles, /\.aira-v3-shell \.aira-v3-composer-model\s*\{[\s\S]*?padding:\s*6px 10px 0/, 'Compact model controls must preserve responsive spacing');
+  assert.match(workspaceStyles, /\.aira-v3-shell \.aira-v3-composer-model button\s*\{\s*min-height:\s*40px/, 'Model controls must retain 40px touch targets');
 
   const settings = source('src/components/SettingsModal.tsx');
   assert.match(settings, /aria-label="Import workspace settings JSON file"/);

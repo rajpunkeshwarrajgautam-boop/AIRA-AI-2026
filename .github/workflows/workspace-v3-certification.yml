@@ -1,0 +1,71 @@
+name: Workspace V3 certification
+on:
+  push:
+    branches:
+      - feat/workspace-v3-staging-20261114
+  pull_request:
+    branches:
+      - staging
+      - prod-release
+permissions:
+  contents: read
+jobs:
+  static-and-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Frontend production build
+        run: npm run build
+      - name: Server TypeScript
+        run: npm run typecheck:server
+      - name: Lint
+        run: npm run lint
+      - name: Signed guest migration proof regression
+        run: npx tsx --test test/workspace-v3-guest-claim.test.ts
+      - name: Staging authentication and model-access P0 regression
+        run: npx tsx --test test/auth-entitlement-model-access-p0.test.ts
+      - name: Session and BFF isolation regression
+        run: npm run test:session-auth && npm run test:auth-bff
+      - name: Workflow artifacts schema drift postcondition
+        run: npx tsx --test test/workspace-v3-workflow-artifacts-drift.test.ts
+      - name: Database isolation and migration rehearsal
+        run: npm run test:db-isolation && npm run test:migration:031
+      # Database-backed entitlements are certified by the repository's
+      # Disposable PostgreSQL Certification workflow with its isolated DB.
+
+  browser-viewport:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Install Chromium for visual checks
+        run: npx playwright install --with-deps chromium
+      - name: Exercise 320px-to-2560px UI and touch targets
+        run: npx tsx test/workspace-v3-visual-smoke.ts
+      - name: Upload actual visual evidence even if tests fail
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspace-v3-viewport-screenshots
+          path: artifacts/workspace-v3-ui/
+          if-no-files-found: warn
+          retention-days: 14

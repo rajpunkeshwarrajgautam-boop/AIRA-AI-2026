@@ -994,3 +994,13 @@ html.dark[data-theme="vanguard-monolith"],
   box-shadow: 0 4px 18px -2px rgba(255, 255, 255, 0.45);
 }
 
+
+/* Workspace-v3 layout tokens; color palette remains controlled by theme presets. */
+:root {
+  --v3-rail-width: 272px;
+  --v3-composer-max: 800px;
+  --v3-panel-min: 360px;
+  --v3-panel-max: 760px;
+  --v3-panel-default: 480px;
+  --v3-focus-outline: var(--color-focus);
+}

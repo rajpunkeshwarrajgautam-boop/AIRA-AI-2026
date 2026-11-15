@@ -2,6 +2,8 @@ import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import {
   Plus,
   FolderGit2,
+  Bot,
+  ChevronRight,
   Settings,
   Search,
   ChevronDown,
@@ -84,7 +86,7 @@ const ThemeToggle = ({ theme, onChange }: { theme: 'light' | 'dark' | 'system', 
   ] as const;
 
   return (
-    <div className="flex items-center gap-0.5 bg-claude-surface-light p-1 rounded-[10px] border border-claude-border-light dark:border-claude-border-dark relative overflow-hidden">
+    <div className="flex items-center gap-0.5 bg-claude-surface-light dark:bg-claude-surface-dark p-1 rounded-[10px] border border-claude-border-light dark:border-claude-border-dark relative overflow-hidden">
       {options.map(({ id, icon: Icon }) => (
         <button
           key={id}
@@ -92,7 +94,7 @@ const ThemeToggle = ({ theme, onChange }: { theme: 'light' | 'dark' | 'system', 
           aria-label={`Use ${id} theme`}
           aria-pressed={theme === id}
           onClick={() => onChange(id)}
-          className={`relative min-h-10 min-w-10 sm:min-h-8 sm:min-w-8 p-2 rounded-[8px] flex items-center justify-center transition-colors duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-claude-terracotta ${
+          className={`relative min-h-10 min-w-10 p-2 rounded-[8px] flex items-center justify-center transition-colors duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-claude-terracotta ${
             theme === id 
               ? 'text-claude-onAccent'
               : 'text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white'
@@ -176,17 +178,72 @@ export const Sidebar: React.FC<SidebarProps> = ({
     return neonAuth.onAuthStateChange((user) => setNeonUser(user));
   }, []);
 
-  // Temporary navigation behaves as a keyboard-accessible drawer.
+  const [isMobileDrawer, setIsMobileDrawer] = useState(() =>
+    typeof window !== 'undefined' && window.innerWidth < 1280
+  );
+
   useEffect(() => {
-    if (!isOpen || (typeof window !== 'undefined' && window.innerWidth >= 1280)) return;
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') handleClose();
+    const query = window.matchMedia('(max-width: 1279px)');
+    const onChange = () => setIsMobileDrawer(query.matches);
+    onChange();
+    query.addEventListener('change', onChange);
+    return () => query.removeEventListener('change', onChange);
+  }, []);
+
+  // Modal only on smaller screens. Keep keyboard focus inside the temporary
+  // navigation and restore focus to the opener when the drawer closes.
+  useEffect(() => {
+    if (!isOpen || !isMobileDrawer) return;
+    const opener = document.activeElement as HTMLElement | null;
+    const drawer = drawerRef.current;
+    const focusableSelector = [
+      'button:not([disabled]):not([tabindex="-1"])',
+      'a[href]:not([tabindex="-1"])',
+      'input:not([disabled]):not([tabindex="-1"])',
+      'select:not([disabled]):not([tabindex="-1"])',
+      'textarea:not([disabled]):not([tabindex="-1"])',
+      '[tabindex]:not([tabindex="-1"])',
+    ].join(', ');
+
+    drawer?.querySelector<HTMLButtonElement>('[aria-label="Close sidebar navigation"]')
+      ?.focus({ preventScroll: true });
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        handleClose();
+        return;
+      }
+      if (event.key !== 'Tab' || !drawer) return;
+      const focusable = Array.from(drawer.querySelectorAll<HTMLElement>(focusableSelector))
+        .filter(element => element.getClientRects().length > 0 && element.getAttribute('aria-hidden') !== 'true');
+      if (!focusable.length) {
+        event.preventDefault();
+        drawer.focus({ preventScroll: true });
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const current = document.activeElement;
+      if (!drawer.contains(current)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && current === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && current === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
-    document.addEventListener('keydown', handleEscape);
-    const closeButton = drawerRef.current?.querySelector<HTMLButtonElement>('[aria-label="Close sidebar navigation"]');
-    closeButton?.focus({ preventScroll: true });
-    return () => document.removeEventListener('keydown', handleEscape);
-  }, [isOpen, handleClose]);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      if (opener?.isConnected && !drawer?.contains(opener)) {
+        opener.focus({ preventScroll: true });
+      }
+    };
+  }, [isOpen, isMobileDrawer, handleClose]);
   const [editingChatId, setEditingChatId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [starredExpanded, setStarredExpanded] = useState(true);
@@ -328,6 +385,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
           key="sidebar-drawer"
           ref={drawerRef}
           data-testid="sidebar-drawer"
+          role={isMobileDrawer ? 'dialog' : 'navigation'}
+          aria-modal={isMobileDrawer ? true : undefined}
+          tabIndex={isMobileDrawer ? -1 : undefined}
           aria-label="Workspace navigation"
           initial={{ x: -320, opacity: 0 }}
           animate={{ x: 0, opacity: 1 }}
@@ -375,6 +435,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
           </div>
 
+          <div className="px-3.5 pb-1">
+            <button
+              type="button"
+              className="aira-v3-agent-link"
+              onClick={() => { onSelectWorkspace('agent'); handleClose(); }}
+              aria-label="Open agent workspace"
+            >
+              <span className="aira-v3-agent-link-leading">
+                <Bot size={16} aria-hidden="true" />
+                <span>Agent workspace</span>
+              </span>
+              <ChevronRight size={15} aria-hidden="true" />
+            </button>
+          </div>
           <div className="px-4 pt-4 pb-2">
             <div className="relative flex items-center group">
               <button
@@ -401,13 +475,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 className="w-full text-[13px] font-medium pl-11 pr-4 py-2.5 rounded-xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-claude-border-dark placeholder-claude-muted-light dark:placeholder-claude-muted-dark focus:outline-none focus:border-claude-terracotta/50 text-claude-text-light dark:text-white transition-colors duration-150"
               />
             </div>
-            <button
-              type="button"
-              onClick={() => onOpenSearch(searchQuery)}
-              className="mt-1.5 w-full min-h-10 sm:min-h-7 flex items-center px-1 text-left text-[11px] font-medium text-claude-muted-light/80 transition-colors hover:text-claude-accentInk dark:text-claude-muted-dark/80"
-            >
-              Search inside messages · Enter
-            </button>
+            <p className="aira-v3-search-hint">Search chats and messages · Enter</p>
           </div>
 
           <div className="px-3 pt-3 pb-4">
