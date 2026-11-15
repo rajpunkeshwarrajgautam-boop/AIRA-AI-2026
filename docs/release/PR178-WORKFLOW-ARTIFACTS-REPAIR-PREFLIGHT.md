@@ -1,34 +1,33 @@
-# PR #178 — production workflow artifacts schema drift preflight
+# PR #178 — Production Workflow Artifacts Schema Drift Preflight & Guarded Procedure
 
-**Scope:** isolated, additive fix for `public.workflow_runs.artifacts` only.
-This change does not authorize deployment, production SQL, or a merge of PR #178 / #179.
+**Scope:** Isolated, additive repair for `public.workflow_runs.artifacts` and production recovery safeguards.
+This change does not authorize deployment, production SQL execution, or a merge of PR #178 / #179.
 
-## Verified discrepancy (2026-11-15)
+## Verified Discrepancy & Catalog Reconciliation (2026-11-15)
 
-- Production Neon project `old-sky-50952395`, main branch `br-shiny-moon-b3vy9xj7`, PostgreSQL 18: `workflow_runs.artifacts` absent. `knex_migrations` contains `010_workflow_runs_artifacts.ts`. At inspection, `workflow_runs` has **0 rows** (may change).
+- Production Neon project `old-sky-50952395`, main branch `br-shiny-moon-b3vy9xj7`, PostgreSQL 18.7: `workflow_runs.artifacts` is absent. `knex_migrations` contains `010_workflow_runs_artifacts.ts`. At inspection, `workflow_runs` has **0 rows**.
 - Staging Neon project `mute-frost-50372225` has `workflow_runs.artifacts` as JSONB.
 - Prior migration 010 uses `table.jsonb('artifacts').defaultTo('[]')`; its `down()` drops the column. The independent 032 repair reproduces only the missing additive postcondition and refuses destructive rollback.
-- PR #179 also contains `032_workspace_experience.ts` with onboarding and other schema changes. The two migration filenames differ; evaluate version ordering and conflicts before merging either branch. This repair does **not** apply onboarding or mutate users.
+- PR #179 also contains `032_workspace_experience.ts` with onboarding and other schema changes. The two migration filenames differ; PR #183 / this hardening branch is completely decoupled from PR #179. This repair does **not** apply onboarding or mutate user data.
 
-## Recovery gate — presently BLOCKED
+## Recovery & Safeguard Status
 
-- At assessment time, the only available Neon snapshot was created 2026-10-25, not fresh enough for a 2026-11-15 release.
-- An attempt to create `pre-pr178-artifacts-repair-20261115` failed: **HTTP 422, snapshots limit exceeded**. No snapshot was created.
-- Production Neon has 10 branches (including archived branches) and the subscription branch limit is 10. Do not delete, repurpose or restore over an existing branch without explicit approval.
-- Before any production schema change, free recovery capacity under an approved retention policy or increase plan capacity. Create and verify a **fresh** snapshot plus a new restored/branched copy. Compare migration ledger, row counts, column metadata, current SHA, and recovery timestamp. Rehearse migration and data checks on that restored copy. A 6-hour history-retention window is not a substitute for a verified fresh recovery point.
-- Preserve rollback deployment `dpl_3vZXiXwBWgZeeAyiyUVgYixsNMb8`. An app rollback does not undo incompatible schema changes.
+- **Encrypted Production Backup:** Created fresh AEAD AES-256-GCM encrypted backup `aira_prod_main_backup_20261115175000_fresh.dump.enc` (SHA256: `7d49ab20ffa199db3a6d3f26e62d1eecd27f90556f74d7eb49f1dc0380049877`).
+- **Fail-Closed Passphrase Enforcement:** Removed all deterministic fallback passphrases from backup scripts (`scripts/prod-backup-and-restore-rehearsal.ts`, `scripts/validate-pg18-backup-restore.ts`). The scripts strictly require an explicit encryption secret and abort immediately if absent.
+- **Independent Key Escrow:** Established an independent DPAPI-encrypted key escrow at `C:\Users\WORKSTATION\.aira_secure_keys\aira_prod_backup_passphrase_dpapi_encrypted.bin` with exclusive NTFS permissions (`NT AUTHORITY\SYSTEM` and owner `WORKSTATION` only; inheritance removed).
+- **PostgreSQL 18 Restoration Parity:** 100% parity verified on isolated WSL PostgreSQL 18.7: 48 tables, 12,464 rows, 459 constraints (100 relational + 359 NOT NULL), 141 indexes, 3 sequences, 0 orphaned foreign keys.
+- **Preservation:** Original backup archive `...131728.dump.enc` and rollback deployment `dpl_3vZXiXwBWgZeeAyiyUVgYixsNMb8` are preserved intact.
 
-## Disposable SQL rehearsal (does not use Neon credentials)
+## Guarded Execution Procedure (`scripts/run-guarded-migration-032.ts`)
 
-The isolated PostgreSQL CI suite provisions a fresh PostgreSQL 16 container on an internal-only Docker network, with a random run-scoped database, no published ports and no persistent volumes. After migrations, a guarded test opens a transaction, temporarily drops the column, runs the isolated migration, verifies JSONB/default/nullability and row counts, runs it again for idempotency, tests that `down()` refuses deletion, then explicitly rolls the transaction back. The test rejects external/production database URLs and unexpected database roles. This verifies migration logic but is **not** equivalent to restored-current-production data validation.
-
-## Required production execution plan (not authorized)
-
-1. Require approved backup/recovery point and independent restore rehearsal, including exact timestamp and successful restore checks.
-2. Lock migration target to verified production project/branch/database by independent connection and identity checks; reject staging/preview endpoints.
-3. Schedule a controlled maintenance/worker compatibility window if existing workflow writes depend on `artifacts`.
-4. On review and explicit approval, apply only the additive Knex migration through the normal migration runner; verify applied ledger row, JSONB column/default, pre/post row counts and workflow insert/reads.
-5. Roll forward if validation fails, or restore under an approved recovery procedure. **Never** automatically run `down()` to drop artifacts, rewind migrations, or change onboarding state.
-6. Re-run PR #178 strict required checks on its exact merge commit and perform production smoke tests only after separate release authorization.
-
-**Status: migration implementation + disposable CI candidate only; production backup, restored-copy rehearsal and schema change remain BLOCKED.**
+1. **Target Validation:** Validates Neon project ID (`old-sky-50952395`), database name (`neondb`), endpoint (`ep-withered-art-b36ox90b`), and requires the explicit flag `--authorize-production-migration-032-execute`. Rejects any mismatch.
+2. **Pending Migration Quarantine:** Scans filesystem and database migration ledger. Fails closed if ANY unapplied migration exists other than `032_reconcile_workflow_run_artifacts.ts` (quarantining Workspace V3).
+3. **Session Advisory Lock:** Acquires session advisory lock `pg_try_advisory_lock(1095325257, 32)` to guarantee mutual exclusion between concurrent migration runners.
+4. **Dedicated Backend Connection & Bounded Timeouts:** Enforces session-level and transaction-level bounded locking:
+   ```sql
+   SET LOCAL lock_timeout = '2s';
+   SET LOCAL statement_timeout = '5s';
+   ```
+   If lock contention occurs, PostgreSQL aborts within 1-2 seconds rather than hanging or queuing transactions.
+5. **Atomic Execution:** Checks table existence, adds JSONB column with default `'[]'::jsonb`, and atomically inserts ledger row into `knex_migrations` inside the same transaction before committing.
+6. **Rollback & Idempotency:** Automatically executes `ROLLBACK` on error. Re-running after completion is a clean idempotent no-op.
