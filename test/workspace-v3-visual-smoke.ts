@@ -154,6 +154,18 @@ async function main() {
     if (await page.locator('[data-testid="sidebar-drawer"]').count()) {
       await page.locator('[data-testid="sidebar-drawer"]').waitFor({ state: 'hidden' });
     }
+    // All three mobile dismissal paths must restore focus to the remounted
+    // trigger. Checking the click paths catches a regression masked by Escape.
+    await openSidebar.click();
+    await closeSidebar.click();
+    await page.waitForFunction(() =>
+      document.activeElement?.getAttribute('aria-label') === 'Open sidebar navigation'
+    );
+    await openSidebar.click();
+    await page.mouse.click(380, 180);
+    await page.waitForFunction(() =>
+      document.activeElement?.getAttribute('aria-label') === 'Open sidebar navigation'
+    );
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.getByRole('button', { name: 'Use dark theme' }).click();
