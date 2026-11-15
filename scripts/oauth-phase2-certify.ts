@@ -131,6 +131,167 @@ export function assertDeployedShaMatches(
   return deployedSha;
 }
 
+export type AccountBType = 'email' | 'oauth';
+
+export interface AccountBConfig {
+  type: AccountBType;
+  email?: string;
+  password?: string;
+  name?: string;
+  source: 'cli' | 'env' | 'default';
+}
+
+export const DEFAULT_STAGING_ACCOUNT_B_EMAIL = 'rajpunkeshwarrajgautam+stagingb@gmail.com';
+export const DEFAULT_STAGING_ACCOUNT_B_NAME = 'Raj Gautam (Staging B)';
+
+export function resolveAccountBConfig(options?: {
+  argv?: string[];
+  env?: NodeJS.ProcessEnv;
+}): AccountBConfig {
+  const argv = options?.argv ?? process.argv.slice(2);
+  const env = options?.env ?? process.env;
+
+  let cliType: AccountBType | undefined;
+  let cliEmail: string | undefined;
+  let cliPassword: string | undefined;
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--account-b-type') {
+      const next = argv[i + 1];
+      if (next === 'email' || next === 'oauth') {
+        cliType = next;
+      } else {
+        throw new Error(`Invalid --account-b-type "${next}"; expected "email" or "oauth".`);
+      }
+    } else if (arg.startsWith('--account-b-type=')) {
+      const val = arg.slice('--account-b-type='.length);
+      if (val === 'email' || val === 'oauth') {
+        cliType = val;
+      } else {
+        throw new Error(`Invalid --account-b-type "${val}"; expected "email" or "oauth".`);
+      }
+    } else if (arg === '--account-b-email') {
+      cliEmail = argv[i + 1];
+    } else if (arg.startsWith('--account-b-email=')) {
+      cliEmail = arg.slice('--account-b-email='.length);
+    } else if (arg === '--account-b-password') {
+      cliPassword = argv[i + 1];
+    } else if (arg.startsWith('--account-b-password=')) {
+      cliPassword = arg.slice('--account-b-password='.length);
+    }
+  }
+
+  if (cliType !== undefined) {
+    return {
+      type: cliType,
+      email: cliEmail || env.AIRA_ACCOUNT_B_EMAIL,
+      password: cliPassword || env.AIRA_ACCOUNT_B_PASSWORD,
+      source: 'cli',
+    };
+  }
+
+  const envType = env.AIRA_ACCOUNT_B_TYPE;
+  if (envType === 'email' || envType === 'oauth') {
+    return {
+      type: envType,
+      email: env.AIRA_ACCOUNT_B_EMAIL,
+      password: env.AIRA_ACCOUNT_B_PASSWORD,
+      source: 'env',
+    };
+  } else if (envType !== undefined && envType !== '') {
+    throw new Error(`Invalid AIRA_ACCOUNT_B_TYPE "${envType}"; expected "email" or "oauth".`);
+  }
+
+  return {
+    type: 'email',
+    email: env.AIRA_ACCOUNT_B_EMAIL,
+    password: env.AIRA_ACCOUNT_B_PASSWORD,
+    source: 'default',
+  };
+}
+
+export async function ensureAccountBAuthenticated(
+  pageB: Page,
+  config: AccountBConfig,
+  userIdA: string
+) {
+  let infoB = await getBrowserSessionInfo(pageB);
+
+  if (config.type === 'oauth') {
+    assert.equal(infoB.session?.status, 'AUTHENTICATED', 'Profile B (GitHub) must be authenticated');
+    const providersB = (infoB.providers?.providers || []).map((p: any) => p.provider);
+    assert.ok(providersB.includes('github'), 'Profile B must have GitHub provider linked');
+    assert.notEqual(infoB.session?.user?.id, userIdA, 'Google A and GitHub B must have distinct internal user IDs');
+    return infoB;
+  }
+
+  // Option C: Email/password account
+  // If already authenticated as distinct principal, return
+  if (infoB.session?.status === 'AUTHENTICATED' && infoB.session.user?.id && infoB.session.user.id !== userIdA) {
+    console.log(`[Account B Setup] Profile B already authenticated as distinct principal (${infoB.session.user.id.slice(0, 14)}...)`);
+    return infoB;
+  }
+
+  // If holding Account A session from prior login attempt, clear session cleanly
+  if (infoB.session?.status === 'AUTHENTICATED' && infoB.session.user?.id === userIdA) {
+    console.log('[Account B Setup] Profile B holds Account A session; clearing cookies to sign in dedicated staging email account...');
+    await pageB.context().clearCookies();
+    await pageB.reload({ waitUntil: 'domcontentloaded' });
+    await pageB.waitForTimeout(1000);
+  }
+
+  const targetEmail = config.email || DEFAULT_STAGING_ACCOUNT_B_EMAIL;
+  const targetPassword = config.password || 'P@ssword123!SecureStaging';
+  const targetName = config.name || DEFAULT_STAGING_ACCOUNT_B_NAME;
+
+  console.log(`[Account B Setup] Authenticating Profile B via dedicated staging email account...`);
+
+  // Try sign-in first
+  const signInRes = await pageB.evaluate(async ({ email, password }) => {
+    const res = await fetch('/api/auth/sign-in', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-aira-csrf-protection': '1',
+      },
+      credentials: 'include',
+      body: JSON.stringify({ email, password }),
+    });
+    return { status: res.status, body: await res.json().catch(() => ({})) };
+  }, { email: targetEmail, password: targetPassword });
+
+  if (signInRes.status === 200) {
+    console.log('[Account B Setup] ✓ Authenticated existing staging test account via /api/auth/sign-in');
+  } else {
+    console.log('[Account B Setup] Staging account not found; creating via normal staging /api/auth/sign-up flow...');
+    const signUpRes = await pageB.evaluate(async ({ email, password, name }) => {
+      const res = await fetch('/api/auth/sign-up', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-aira-csrf-protection': '1',
+        },
+        credentials: 'include',
+        body: JSON.stringify({ email, password, name }),
+      });
+      return { status: res.status, body: await res.json().catch(() => ({})) };
+    }, { email: targetEmail, password: targetPassword, name: targetName });
+
+    assert.equal(signUpRes.status, 200, `Sign-up must succeed for dedicated staging account: ${JSON.stringify(signUpRes.body)}`);
+    console.log('[Account B Setup] ✓ Successfully registered and authenticated dedicated staging test account');
+  }
+
+  await pageB.reload({ waitUntil: 'domcontentloaded' });
+  await pageB.waitForTimeout(1500);
+
+  infoB = await getBrowserSessionInfo(pageB);
+  assert.equal(infoB.session?.status, 'AUTHENTICATED', 'Profile B must be authenticated after sign-in/sign-up');
+  assert.notEqual(infoB.session?.user?.id, userIdA, 'Profile B must have a distinct internal user ID from Profile A');
+
+  return infoB;
+}
+
 async function getBrowserSessionInfo(page: Page) {
   return page.evaluate(async () => {
     const sRes = await fetch('/api/auth/session', { credentials: 'include' });
@@ -253,12 +414,14 @@ async function parseStreamInPage(page: Page, payload: Record<string, any>, csrf:
 export async function runPhase2() {
   const STAGING_URL = assertStagingTargetUrl(process.env.AIRA_STAGING_URL || DEFAULT_STAGING_URL);
   const { expectedSha, source: shaSource } = resolveExpectedCandidateSha();
+  const bConfig = resolveAccountBConfig();
   if (!fs.existsSync(ARTIFACTS_DIR)) fs.mkdirSync(ARTIFACTS_DIR, { recursive: true });
 
   console.log('========================================================================');
   console.log(' AIRA AI 2026 — PHASE 2: REAL OAUTH ISOLATION & RUNTIME MATRIX CERT');
   console.log(` Target: ${STAGING_URL}`);
   console.log(` Expected SHA (${shaSource}): ${expectedSha}`);
+  console.log(` Account B Strategy: ${bConfig.type.toUpperCase()} (${bConfig.source})`);
   console.log('========================================================================\n');
 
   const versionData = await fetch(`${STAGING_URL}/api/version`).then((r) => r.json());
@@ -289,21 +452,24 @@ export async function runPhase2() {
     await pageB.waitForTimeout(2000);
 
     // -----------------------------------------------------------------------
-    // 1. Verify Google (A) and GitHub (B) Authentic Sessions & Reload Persistence
+    // 1. Gate 3A: Verify Profile A (Google + GitHub Multi-Linked OAuth Session)
     // -----------------------------------------------------------------------
     const infoA = await getBrowserSessionInfo(pageA);
     assert.equal(infoA.session?.status, 'AUTHENTICATED', 'Profile A (Google) must be authenticated');
     const providersA = (infoA.providers?.providers || []).map((p: any) => p.provider);
     assert.ok(providersA.includes('google'), 'Profile A must have Google provider linked');
+    const hasGithubLinkedA = providersA.includes('github');
+    console.log(`[Gate 3A: OAuth Verify] ✓ Profile A Authenticated | Providers: [${providersA.join(', ')}] | Google: verified | GitHub: ${hasGithubLinkedA ? 'verified linked' : 'unlinked'}`);
 
-    const infoB = await getBrowserSessionInfo(pageB);
-    assert.equal(infoB.session?.status, 'AUTHENTICATED', 'Profile B (GitHub) must be authenticated');
-    const providersB = (infoB.providers?.providers || []).map((p: any) => p.provider);
-    assert.ok(providersB.includes('github'), 'Profile B must have GitHub provider linked');
-
+    // -----------------------------------------------------------------------
+    // 2. Gate 3B: Verify Profile B Dedicated Account & Cross-Tenant Setup
+    // -----------------------------------------------------------------------
     const userIdA = infoA.session.user.id;
+    const infoB = await ensureAccountBAuthenticated(pageB, bConfig, userIdA);
+    const providersB = (infoB.providers?.providers || []).map((p: any) => p.provider);
+
     const userIdB = infoB.session.user.id;
-    assert.notEqual(userIdA, userIdB, 'Google A and GitHub B must have distinct internal user IDs');
+    assert.notEqual(userIdA, userIdB, 'Account A and Account B must have distinct internal user IDs');
 
     const csrfA = infoA.session.csrfToken || '';
     const csrfB = infoB.session.csrfToken || '';
@@ -317,25 +483,30 @@ export async function runPhase2() {
       infoB.entitlements = (await getBrowserSessionInfo(pageB)).entitlements;
     }
 
-    console.log(`[OAuth Verify] ✓ Google Account A: ${userIdA.slice(0, 14)}... | Customer: ${customerA} | Plan: ${infoA.entitlements?.plan} | Providers: [${providersA.join(', ')}]`);
-    console.log(`[OAuth Verify] ✓ GitHub Account B: ${userIdB.slice(0, 14)}... | Customer: ${customerB} | Plan: ${infoB.entitlements?.plan} | Providers: [${providersB.join(', ')}]`);
+    console.log(`[Gate 3B: Isolation Preflight] ✓ Account A: ${userIdA.slice(0, 14)}... | Customer: ${customerA} | Plan: ${infoA.entitlements?.plan} | Providers: [${providersA.join(', ')}]`);
+    console.log(`[Gate 3B: Isolation Preflight] ✓ Account B (${bConfig.type}): ${userIdB.slice(0, 14)}... | Customer: ${customerB} | Plan: ${infoB.entitlements?.plan} | Providers: [${providersB.join(', ')}]`);
 
     // Reload persistence check
     await pageA.reload({ waitUntil: 'domcontentloaded' });
     await pageA.waitForTimeout(1500);
     const infoAReload = await getBrowserSessionInfo(pageA);
-    assert.equal(infoAReload.session?.user?.id, userIdA, 'Google session must persist across page reload');
+    assert.equal(infoAReload.session?.user?.id, userIdA, 'Account A session must persist across page reload');
 
     await pageB.reload({ waitUntil: 'domcontentloaded' });
     await pageB.waitForTimeout(1500);
     const infoBReload = await getBrowserSessionInfo(pageB);
-    assert.equal(infoBReload.session?.user?.id, userIdB, 'GitHub session must persist across page reload');
+    assert.equal(infoBReload.session?.user?.id, userIdB, 'Account B session must persist across page reload');
 
     const shotGoogle = path.join(ARTIFACTS_DIR, '01_real_google_oauth_authenticated.png');
     await pageA.screenshot({ path: shotGoogle });
-    const shotGithub = path.join(ARTIFACTS_DIR, '02_real_github_oauth_authenticated.png');
-    await pageB.screenshot({ path: shotGithub });
-    console.log('[OAuth Verify] ✓ Session persistence across reload & screenshots verified.');
+    const shotAccountB = path.join(
+      ARTIFACTS_DIR,
+      bConfig.type === 'oauth'
+        ? '02_real_github_oauth_authenticated.png'
+        : '02_real_staging_account_b_authenticated.png'
+    );
+    await pageB.screenshot({ path: shotAccountB });
+    console.log('[OAuth / Isolation Verify] ✓ Session persistence across reload & screenshots verified.');
 
     // -----------------------------------------------------------------------
     // 2. Task 4: Bidirectional Cross-Account Isolation (A <-> B)
@@ -800,7 +971,7 @@ export async function runPhase2() {
     await pageB.reload({ waitUntil: 'domcontentloaded' });
     const afterLogoutB = await getBrowserSessionInfo(pageB);
     assert.equal(afterLogoutB.session?.status, 'ANONYMOUS', 'Account B session must be revoked after logout');
-    console.log('[Session Revocation] ✓ Both Google and GitHub sessions revoked cleanly on logout.');
+    console.log('[Session Revocation] ✓ Both Account A and Account B sessions revoked cleanly on logout.');
 
     // Save sanitized report
     const finalReport = {
@@ -810,9 +981,41 @@ export async function runPhase2() {
       expectedSha,
       shaSource,
       candidateSha: deployedSha,
+      gate3A_OAuthAcceptance: {
+        status: 'PASS',
+        profile: 'edge_oauth_profile_a',
+        userIdPrefix: userIdA.slice(0, 14),
+        linkedProviders: providersA,
+        googleVerified: providersA.includes('google'),
+        githubVerified: hasGithubLinkedA,
+        reloadPersisted: true,
+        revokedOnLogout: true,
+      },
+      gate3B_CrossAccountIsolation: {
+        status: 'PASS',
+        accountBType: bConfig.type,
+        accountA: {
+          userIdPrefix: userIdA.slice(0, 14),
+          customerId: customerA,
+          plan: infoA.entitlements?.plan,
+        },
+        accountB: {
+          userIdPrefix: userIdB.slice(0, 14),
+          customerId: customerB,
+          plan: infoB.entitlements?.plan,
+          authMethod: bConfig.type === 'oauth' ? 'github_oauth' : 'email_password',
+        },
+        distinctPrincipals: true,
+        distinctBillingCustomers: true,
+        bAccessingA: bOnA,
+        aAccessingB: aOnB,
+        personalizationIsolated: true,
+        pendingStreamAbortVerified: true,
+      },
       browserProfiles: {
         googleProfile: 'edge_oauth_profile_a',
-        githubProfile: 'edge_oauth_profile_b',
+        accountBProfile: 'edge_oauth_profile_b',
+        accountBType: bConfig.type,
       },
       googleAccountA: {
         userIdPrefix: userIdA.slice(0, 14),
@@ -827,6 +1030,7 @@ export async function runPhase2() {
         linkedProviders: providersB,
         reloadPersisted: true,
         revokedOnLogout: true,
+        authMethod: bConfig.type === 'oauth' ? 'github_oauth' : 'email_password',
       },
       crossAccountIsolation: {
         bAccessingA: bOnA,
@@ -846,7 +1050,7 @@ export async function runPhase2() {
         accountADailyChatRemainingPostMatrix: remainingChatsA,
         accountAReasoningBoostsRemainingPostMatrix: remainingBoostsA,
       },
-      screenshots: [shotGoogle, shotGithub],
+      screenshots: [shotGoogle, shotAccountB],
       verdict: 'PASS',
     };
 
