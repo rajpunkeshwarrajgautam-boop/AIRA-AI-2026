@@ -176,6 +176,9 @@ jobs:
       - name: Identity transition lifecycle and session revocation regression
         run: npm run test:auth-lifecycle
 
+      - name: PR178 SSE completion contract regression
+        run: npx tsx --test test/pr178-sse-contract.test.ts
+
       - name: First-party BFF session security gateway certification
         run: npm run test:auth-bff
 

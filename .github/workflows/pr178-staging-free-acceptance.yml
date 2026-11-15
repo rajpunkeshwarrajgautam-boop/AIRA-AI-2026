@@ -1,0 +1,47 @@
+name: PR178 Staging Free Acceptance
+on:
+  push:
+    branches:
+      - cert/pr178-evidence-hardening-20261115
+permissions:
+  contents: read
+concurrency:
+  group: pr178-staging-free-acceptance
+  cancel-in-progress: true
+jobs:
+  live-acceptance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: staging
+    env:
+      STAGING_URL: https://staging.virexaaiventures.com
+      CERTIFICATION_OUT_DIR: reports/p0-free-acceptance
+    steps:
+      - name: Checkout isolated certification branch
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check non-production destination
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/cert/pr178-evidence-hardening-20261115"
+          test "$STAGING_URL" = "https://staging.virexaaiventures.com"
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install frozen dependencies
+        run: npm ci
+      - name: Install Microsoft Edge
+        run: npx playwright install --with-deps msedge
+      - name: Certify live staging Free session, SSE, model and logout
+        run: npx tsx test/certify-authenticated-free-staging.ts
+      - name: Upload sanitized assertions only (no screenshots or credentials)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr178-staging-sanitized-certification
+          path: reports/p0-free-acceptance/sanitized-certification.json
+          if-no-files-found: error
