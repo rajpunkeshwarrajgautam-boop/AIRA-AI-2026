@@ -1,0 +1,37 @@
+name: Disposable AI Staring Trial Gate
+
+on:
+  pull_request:
+    branches: [staging]
+    paths:
+      - 'apps/api/src/temporary-ai-staring-trial.ts'
+      - 'apps/api/src/index.ts'
+      - 'public/ai-staring-trial.html'
+      - 'test/ai-staring-trial.test.ts'
+      - '.github/workflows/ai-staring-trial-cert.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  trial-gate:
+    name: Trial isolation and disable regression
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Trial endpoint fail-closed regression
+        run: npx tsx --test test/ai-staring-trial.test.ts
+      - name: Server typecheck
+        run: npm run typecheck:server
