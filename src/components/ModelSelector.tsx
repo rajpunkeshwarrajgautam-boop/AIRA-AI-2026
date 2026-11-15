@@ -90,7 +90,10 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       // The selector lives in the bottom composer. Prefer opening upward
       // when the lower viewport would clip model and thinking controls.
       const openAbove = spaceBelow < 240 && spaceAbove > spaceBelow;
-      const maxHeight = Math.min(420, openAbove ? spaceAbove : spaceBelow);
+      // A resize can temporarily leave the composer trigger outside the visual
+      // viewport. Never size the portaled menu beyond the viewport itself.
+      const viewportHeight = Math.max(0, bottomEdge - topEdge);
+      const maxHeight = Math.min(420, viewportHeight, openAbove ? spaceAbove : spaceBelow);
       const desiredTop = openAbove ? anchor.top - 8 - maxHeight : anchor.bottom + 8;
       const top = Math.max(topEdge, Math.min(desiredTop, bottomEdge - maxHeight));
       setMenuBounds({
