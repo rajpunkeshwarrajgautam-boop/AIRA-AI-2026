@@ -152,6 +152,15 @@ jobs:
       - name: Release wizard and cutover safety gates certification
         run: npm run test:cutover-safety
 
+      - name: Guarded migration CLI argument & environment validator certification
+        run: npm run test:guarded-migration-cli
+
+      - name: Portable recovery escrow crypto certification
+        run: npm run test:portable-escrow
+
+      - name: Fail-safe backup restoration and error propagation certification
+        run: npm run test:failsafe-restore
+
       - name: Staging maintenance barrier certification
         run: npm run test:maintenance-barrier
 

@@ -133,7 +133,8 @@ sudo -u postgres psql -d "${isolatedDbName}" -c "CREATE EXTENSION IF NOT EXISTS 
     // 4. Restore via PostgreSQL 18 pg_restore
     console.log('\n[STEP 4/6] Executing pg_restore (PostgreSQL 18.7)...');
     execWslScript(`#!/bin/bash
-sudo -u postgres pg_restore --clean --if-exists --no-owner --no-privileges -d "${isolatedDbName}" "${tmpDecryptedWslPath}" || true
+set -euo pipefail
+sudo -u postgres pg_restore --no-owner --no-privileges -d "${isolatedDbName}" "${tmpDecryptedWslPath}"
 `, 'PG_RESTORE_18');
     console.log(`  ✓ pg_restore completed.`);
 

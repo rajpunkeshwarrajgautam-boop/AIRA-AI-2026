@@ -174,9 +174,9 @@ sudo -u postgres psql -d "${isolatedDbName}" -c "CREATE EXTENSION IF NOT EXISTS 
     });
 
     console.log(`  - Executing pg_restore into isolated database...`);
-    // pg_restore warnings are expected when restoring into a fresh database without roles
     execWslScript(`#!/bin/bash
-sudo -u postgres pg_restore --clean --if-exists --no-owner --no-privileges -d "${isolatedDbName}" "${tmpDecryptedWslPath}" || true
+set -euo pipefail
+sudo -u postgres pg_restore --no-owner --no-privileges -d "${isolatedDbName}" "${tmpDecryptedWslPath}"
 `, 'PG_RESTORE');
 
     // 7. Verify table and row parity

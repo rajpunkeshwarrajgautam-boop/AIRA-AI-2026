@@ -21,18 +21,142 @@ export interface GuardedMigrationResult {
   durationMs: number;
 }
 
+export type ValidTargetEnvironment = 'production' | 'rehearsal' | 'disposable_test';
+
 export interface GuardedMigrationOptions {
   connectionString: string;
-  targetEnvironment: 'production' | 'rehearsal' | 'disposable_test';
+  targetEnvironment: ValidTargetEnvironment;
   authorizeProductionExecution?: boolean;
   migrationsDir?: string;
   customLockTimeout?: string; // defaults to '2s'
   customStatementTimeout?: string; // defaults to '5s'
 }
 
-const AUTHORIZED_MIGRATION_FILE = '032_reconcile_workflow_run_artifacts.ts';
-const ADVISORY_LOCK_KEY_1 = 1095325257; // 'AIRA' in ASCII
-const ADVISORY_LOCK_KEY_2 = 32;         // Migration 32
+export const AUTHORIZED_MIGRATION_FILE = '032_reconcile_workflow_run_artifacts.ts';
+export const ADVISORY_LOCK_KEY_1 = 1095325257; // 'AIRA' in ASCII
+export const ADVISORY_LOCK_KEY_2 = 32;         // Migration 32
+
+export const CANONICAL_PRODUCTION_ENDPOINT_ID = 'ep-withered-art-b36ox90b';
+export const APPROVED_REHEARSAL_ENDPOINT_ID = 'ep-lively-truth-b3im2z2q';
+
+/**
+ * Strict CLI argument parser enforcing the exact approved contracts:
+ *   --target=production --authorize-production-migration-032-execute
+ *   --target=rehearsal
+ *   --target=disposable_test
+ */
+export function parseGuardedMigrationCliArgs(argv: string[]): {
+  targetEnv: ValidTargetEnvironment;
+  isProdAuth: boolean;
+} {
+  if (!argv || argv.length === 0) {
+    throw new Error(
+      '[CLI_ERROR] Missing required execution target. You must specify exact flags: ' +
+      '--target=production --authorize-production-migration-032-execute | --target=rehearsal | --target=disposable_test'
+    );
+  }
+
+  let targetEnv: ValidTargetEnvironment | undefined;
+  let isProdAuth = false;
+  const seenFlags = new Set<string>();
+
+  for (const arg of argv) {
+    if (typeof arg !== 'string' || !arg.startsWith('--')) {
+      throw new Error(`[CLI_ERROR] Unexpected positional argument "${arg}". Positional arguments are strictly forbidden.`);
+    }
+
+    if (seenFlags.has(arg)) {
+      throw new Error(`[CLI_ERROR] Duplicate argument "${arg}" detected.`);
+    }
+    seenFlags.add(arg);
+
+    if (arg === '--authorize-production-migration-032-execute') {
+      isProdAuth = true;
+    } else if (arg.startsWith('--target=')) {
+      if (targetEnv !== undefined) {
+        throw new Error('[CLI_ERROR] Conflicting or multiple --target arguments specified.');
+      }
+      const val = arg.slice('--target='.length);
+      if (val === 'production' || val === 'rehearsal' || val === 'disposable_test') {
+        targetEnv = val;
+      } else {
+        throw new Error(`[CLI_ERROR] Invalid target environment "${val}". Must be exactly "production", "rehearsal", or "disposable_test".`);
+      }
+    } else {
+      throw new Error(`[CLI_ERROR] Unrecognized flag "${arg}". Allowed flags are --target=<environment> and --authorize-production-migration-032-execute.`);
+    }
+  }
+
+  if (!targetEnv) {
+    throw new Error('[CLI_ERROR] Missing required --target=<environment> flag.');
+  }
+
+  if (targetEnv === 'production') {
+    if (!isProdAuth) {
+      throw new Error(
+        '[CLI_ERROR] Target is "production" but mandatory authorization flag ' +
+        '"--authorize-production-migration-032-execute" was not provided. Production execution is rejected.'
+      );
+    }
+  } else if (isProdAuth) {
+    throw new Error(
+      `[CLI_ERROR] Conflicting options: authorization flag "--authorize-production-migration-032-execute" ` +
+      `is only permitted with --target=production, but target is "${targetEnv}".`
+    );
+  }
+
+  return { targetEnv, isProdAuth };
+}
+
+/**
+ * Validates connection string against expected environment identity before connecting.
+ */
+export function validateTargetConnectionUrl(targetEnv: ValidTargetEnvironment, connStr: string): void {
+  if (!connStr || typeof connStr !== 'string') {
+    throw new Error('[SECURITY_HALT] Connection string is missing or empty.');
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(connStr);
+  } catch {
+    throw new Error('[SECURITY_HALT] Connection string is not a valid parseable PostgreSQL URL.');
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  const dbName = parsed.pathname.replace(/^\//, '');
+  const endpointPrefix = host.split('.')[0].replace('-pooler', '');
+
+  if (targetEnv === 'production') {
+    if (endpointPrefix !== CANONICAL_PRODUCTION_ENDPOINT_ID) {
+      throw new Error(
+        `[SECURITY_HALT] Target endpoint "${endpointPrefix}" does not match canonical Neon production endpoint "${CANONICAL_PRODUCTION_ENDPOINT_ID}".`
+      );
+    }
+    if (!host.endsWith('.neon.tech')) {
+      throw new Error(`[SECURITY_HALT] Production hostname "${host}" must reside on the .neon.tech domain.`);
+    }
+    if (dbName !== 'neondb') {
+      throw new Error(`[SECURITY_HALT] Production database name "${dbName}" does not match canonical production database "neondb".`);
+    }
+  } else if (targetEnv === 'rehearsal') {
+    if (endpointPrefix !== APPROVED_REHEARSAL_ENDPOINT_ID && !host.includes('b3zeg2q2')) {
+      throw new Error(
+        `[SECURITY_HALT] Rehearsal endpoint "${endpointPrefix}" does not match approved rehearsal branch endpoint "${APPROVED_REHEARSAL_ENDPOINT_ID}".`
+      );
+    }
+    if (!host.endsWith('.neon.tech')) {
+      throw new Error(`[SECURITY_HALT] Rehearsal hostname "${host}" must reside on the .neon.tech domain.`);
+    }
+  } else if (targetEnv === 'disposable_test') {
+    const isLocalOrCi = host === '127.0.0.1' || host === 'localhost' || host === 'postgres';
+    if (!isLocalOrCi) {
+      throw new Error(
+        `[SECURITY_HALT] Disposable test target hostname "${host}" is not a recognized local or CI container host (127.0.0.1, localhost, postgres).`
+      );
+    }
+  }
+}
 
 export async function executeGuardedMigration032(options: GuardedMigrationOptions): Promise<GuardedMigrationResult> {
   const startMs = Date.now();
@@ -42,6 +166,14 @@ export async function executeGuardedMigration032(options: GuardedMigrationOption
   console.log('========================================================================');
   console.log(` GUARDED EXECUTION: MIGRATION 032 (${options.targetEnvironment.toUpperCase()})`);
   console.log('========================================================================');
+
+  // Authorization gate check
+  if (options.targetEnvironment === 'production' && !options.authorizeProductionExecution) {
+    throw new Error('[SAFETY_BLOCK] Production execution is NOT authorized. Missing explicit --authorize-production-migration-032-execute flag.');
+  }
+
+  // Pre-connection URL identity check
+  validateTargetConnectionUrl(options.targetEnvironment, options.connectionString);
 
   // 1. Connection and SSL Configuration
   const client = new pg.Client({
@@ -60,7 +192,7 @@ export async function executeGuardedMigration032(options: GuardedMigrationOption
   let advisoryLockAcquired = false;
 
   try {
-    // 2. Validate Target Environment
+    // 2. Validate Target Environment Database Identity Post-Connect
     const identRes = await client.query(`
       SELECT 
         current_database() as db_name, 
@@ -76,14 +208,7 @@ export async function executeGuardedMigration032(options: GuardedMigrationOption
         throw new Error('[SAFETY_BLOCK] Production execution is NOT authorized. Missing explicit --authorize-production-migration-032-execute flag.');
       }
       if (ident.db_name !== 'neondb') {
-        throw new Error(`[SAFETY_BLOCK] Target database "${ident.db_name}" does not match production database "neondb".`);
-      }
-      if (!options.connectionString.includes('ep-withered-art') && !options.connectionString.includes('old-sky-50952395')) {
-        throw new Error('[SAFETY_BLOCK] Connection string does not match Neon Production project "old-sky-50952395". Aborting.');
-      }
-    } else if (options.targetEnvironment === 'rehearsal') {
-      if (!options.connectionString.includes('rehearsal') && !options.connectionString.includes('b3zeg2q2') && !options.connectionString.includes('ep-lively-truth-b3im2z2q')) {
-        throw new Error('[SAFETY_BLOCK] Connection string does not point to approved rehearsal branch.');
+        throw new Error(`[SAFETY_BLOCK] Target database "${ident.db_name}" does not match canonical production database "neondb".`);
       }
     }
 
@@ -96,7 +221,20 @@ export async function executeGuardedMigration032(options: GuardedMigrationOption
     advisoryLockAcquired = true;
     console.log('  ✓ Advisory lock acquired (runner mutual exclusion verified).');
 
-    // 4. Pending Migration Quarantine (Ensure ONLY 032_reconcile_workflow_run_artifacts.ts is pending)
+    // Check Knex migration lock table for concurrent standard migrations
+    const hasKnexLockTable = await client.query(`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'knex_migrations_lock'
+      ) as exists
+    `);
+    if (hasKnexLockTable.rows[0].exists) {
+      const lockStatus = await client.query('SELECT is_locked FROM knex_migrations_lock WHERE index = 1');
+      if (lockStatus.rows.length > 0 && lockStatus.rows[0].is_locked === 1) {
+        throw new Error('[KNEX_LOCK_ACTIVE] Another Knex migration process is holding knex_migrations_lock (is_locked=1). Aborting.');
+      }
+    }
+
+    // 4. Pending Migration Quarantine & Catalog Inspection
     console.log('[3/6] Inspecting Knex migration ledger and filesystem inventory...');
     const hasKnexMigrations = await client.query(`
       SELECT EXISTS (
@@ -110,16 +248,65 @@ export async function executeGuardedMigration032(options: GuardedMigrationOption
     const appliedRows = await client.query('SELECT id, name, batch FROM knex_migrations ORDER BY id');
     const appliedNames = new Set(appliedRows.rows.map(r => r.name));
 
-    // Check if 032 is already applied
+    // Verify filesystem migration inventory
+    const dir = options.migrationsDir || path.resolve(__dirname, '../packages/db/src/migrations');
+    if (!fs.existsSync(dir)) {
+      throw new Error(`[CATALOG_HALT] Migrations directory "${dir}" does not exist. Fail closed.`);
+    }
+
+    const filesOnDisk = fs.readdirSync(dir).filter(f => /^\d+_.+\.ts$/.test(f)).sort();
+    if (filesOnDisk.length === 0) {
+      throw new Error(`[CATALOG_HALT] No migration files found in "${dir}". Fail closed.`);
+    }
+
+    if (!filesOnDisk.includes(AUTHORIZED_MIGRATION_FILE)) {
+      throw new Error(`[CATALOG_HALT] Authorized migration file "${AUTHORIZED_MIGRATION_FILE}" missing from filesystem directory "${dir}". Fail closed.`);
+    }
+
+    // Check for unexpected pending migrations
+    const unappliedFiles = filesOnDisk.filter(f => !appliedNames.has(f));
+    const forbiddenFiles = unappliedFiles.filter(f => f !== AUTHORIZED_MIGRATION_FILE);
+    if (forbiddenFiles.length > 0) {
+      throw new Error(
+        `[MIGRATION_SAFETY_HALT] UNEXPECTED_PENDING_MIGRATION: Detected unapplied migrations outside authorized scope: ` +
+        `${forbiddenFiles.join(', ')}. Workspace V3 and other unreviewed migrations are strictly forbidden from running.`
+      );
+    }
+
+    // Check if 032 is already applied — verify schema integrity rather than blind trust
     if (appliedNames.has(AUTHORIZED_MIGRATION_FILE)) {
-      console.log(`  ✓ Migration "${AUTHORIZED_MIGRATION_FILE}" is ALREADY APPLIED in knex_migrations (idempotent no-op).`);
+      console.log(`  -> Migration "${AUTHORIZED_MIGRATION_FILE}" is recorded in knex_migrations ledger.`);
+      console.log('  -> Verifying schema integrity for recorded migration...');
       
+      const hasWorkflowRunsTable = await client.query(`
+        SELECT EXISTS (
+          SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'workflow_runs'
+        ) as exists
+      `);
+      if (!hasWorkflowRunsTable.rows[0].exists) {
+        throw new Error(
+          '[CORRUPT_SCHEMA_ERROR] knex_migrations ledger records 032 as applied, but "workflow_runs" table is missing from database!'
+        );
+      }
+
       const colCheck = await client.query(`
         SELECT column_name, data_type, column_default, is_nullable
         FROM information_schema.columns
         WHERE table_name = 'workflow_runs' AND column_name = 'artifacts'
       `);
+      if (colCheck.rows.length === 0) {
+        throw new Error(
+          '[CORRUPT_SCHEMA_ERROR] knex_migrations ledger records 032 as applied, but "workflow_runs.artifacts" column is missing!'
+        );
+      }
+      if (colCheck.rows[0].data_type !== 'jsonb') {
+        throw new Error(
+          `[CORRUPT_SCHEMA_ERROR] Column "workflow_runs.artifacts" has data_type "${colCheck.rows[0].data_type}", expected jsonb.`
+        );
+      }
+
       const rowCountRes = await client.query('SELECT count(*)::int as count FROM workflow_runs');
+      console.log(`  ✓ Schema integrity verified: workflow_runs exists with jsonb artifacts column. Row count: ${rowCountRes.rows[0].count}.`);
 
       return {
         target: options.targetEnvironment,
@@ -130,19 +317,6 @@ export async function executeGuardedMigration032(options: GuardedMigrationOption
         columnDetails: colCheck.rows[0],
         durationMs: Date.now() - startMs,
       };
-    }
-
-    // Inspect migration directory to quarantine any other migration
-    const dir = options.migrationsDir || path.resolve(__dirname, '../packages/db/src/migrations');
-    if (fs.existsSync(dir)) {
-      const filesOnDisk = fs.readdirSync(dir).filter(f => /^\d+_.+\.ts$/.test(f)).sort();
-      const unappliedFiles = filesOnDisk.filter(f => !appliedNames.has(f));
-
-      // Strictly verify that NO unapplied file other than AUTHORIZED_MIGRATION_FILE exists
-      const forbiddenFiles = unappliedFiles.filter(f => f !== AUTHORIZED_MIGRATION_FILE);
-      if (forbiddenFiles.length > 0) {
-        throw new Error(`[MIGRATION_SAFETY_HALT] UNEXPECTED_PENDING_MIGRATION: Detected unapplied migrations outside authorized scope: ${forbiddenFiles.join(', ')}. Workspace V3 and other unreviewed migrations are strictly forbidden from running.`);
-      }
     }
 
     // 5. Precondition verification: workflow_runs table
@@ -270,29 +444,33 @@ export async function executeGuardedMigration032(options: GuardedMigrationOption
 
 // CLI Entrypoint
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename)) {
-  const targetEnv = (process.argv[2] || 'disposable_test') as 'production' | 'rehearsal' | 'disposable_test';
-  const connStr = process.env.DATABASE_URL;
-  const isProdAuth = process.argv.includes('--authorize-production-migration-032-execute');
+  try {
+    const { targetEnv, isProdAuth } = parseGuardedMigrationCliArgs(process.argv.slice(2));
+    const connStr = process.env.DATABASE_URL;
 
-  if (!connStr) {
-    console.error('DATABASE_URL environment variable is required.');
+    if (!connStr) {
+      console.error('[CLI_ERROR] DATABASE_URL environment variable is required.');
+      process.exit(1);
+    }
+
+    executeGuardedMigration032({
+      connectionString: connStr,
+      targetEnvironment: targetEnv,
+      authorizeProductionExecution: isProdAuth,
+    })
+      .then(res => {
+        console.log('\n========================================================================');
+        console.log(` RESULT: ${res.status} in ${res.durationMs}ms`);
+        console.log('========================================================================');
+        console.log(JSON.stringify(res, null, 2));
+        process.exit(0);
+      })
+      .catch(err => {
+        console.error('\n✗ Guarded Migration Execution Failed:', err.message);
+        process.exit(1);
+      });
+  } catch (cliErr: any) {
+    console.error('\n✗ Guarded Migration CLI Error:', cliErr.message);
     process.exit(1);
   }
-
-  executeGuardedMigration032({
-    connectionString: connStr,
-    targetEnvironment: targetEnv,
-    authorizeProductionExecution: isProdAuth,
-  })
-    .then(res => {
-      console.log('\n========================================================================');
-      console.log(` RESULT: ${res.status} in ${res.durationMs}ms`);
-      console.log('========================================================================');
-      console.log(JSON.stringify(res, null, 2));
-      process.exit(0);
-    })
-    .catch(err => {
-      console.error('\n✗ Guarded Migration Execution Failed:', err.message);
-      process.exit(1);
-    });
 }

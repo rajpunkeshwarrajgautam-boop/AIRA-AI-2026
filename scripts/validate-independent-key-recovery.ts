@@ -106,7 +106,7 @@ async function main() {
   const restoreScript = `
     set -euo pipefail
     sudo -u postgres createdb "${targetDbName}"
-    sudo -u postgres pg_restore -d "${targetDbName}" --clean --if-exists --no-owner --no-privileges "${wslDumpPath}" || true
+    sudo -u postgres pg_restore -d "${targetDbName}" --no-owner --no-privileges "${wslDumpPath}"
   `;
   execWslScript(restoreScript, 'PG_RESTORE');
   console.log('  ✓ PostgreSQL 18 restoration completed.');

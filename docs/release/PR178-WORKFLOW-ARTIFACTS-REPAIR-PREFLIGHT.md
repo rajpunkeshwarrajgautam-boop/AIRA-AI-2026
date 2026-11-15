@@ -20,14 +20,28 @@ This change does not authorize deployment, production SQL execution, or a merge 
 
 ## Guarded Execution Procedure (`scripts/run-guarded-migration-032.ts`)
 
-1. **Target Validation:** Validates Neon project ID (`old-sky-50952395`), database name (`neondb`), endpoint (`ep-withered-art-b36ox90b`), and requires the explicit flag `--authorize-production-migration-032-execute`. Rejects any mismatch.
-2. **Pending Migration Quarantine:** Scans filesystem and database migration ledger. Fails closed if ANY unapplied migration exists other than `032_reconcile_workflow_run_artifacts.ts` (quarantining Workspace V3).
-3. **Session Advisory Lock:** Acquires session advisory lock `pg_try_advisory_lock(1095325257, 32)` to guarantee mutual exclusion between concurrent migration runners.
-4. **Dedicated Backend Connection & Bounded Timeouts:** Enforces session-level and transaction-level bounded locking:
+### Exact Approved CLI Command Syntax
+```bash
+# Production Execution (strictly requires owner approval + authorization flag)
+npx tsx scripts/run-guarded-migration-032.ts --target=production --authorize-production-migration-032-execute
+
+# Approved Rehearsal Branch Execution
+npx tsx scripts/run-guarded-migration-032.ts --target=rehearsal
+
+# Disposable Test / Isolated CI Execution
+npx tsx scripts/run-guarded-migration-032.ts --target=disposable_test
+```
+
+1. **Strict CLI Argument Validation:** Rejects any positional arguments, unrecognized flags, duplicate flags, conflicting flags, or missing target flags. Positional target specification is forbidden.
+2. **Target Validation & Exact Host Parsing:** Parses the connection URL, strictly extracts hostname and endpoint prefix via `URL.hostname`. Verifies exact equality against production Neon endpoint `ep-withered-art-b36ox90b` (for production) or `ep-lively-truth-b3im2z2q` (for rehearsal). Rejects substring matches and spoofed domains.
+3. **Pending Migration Quarantine & Catalog Fail-Closed:** Scans filesystem and database migration ledger. Fails closed if the migration directory or authorized migration file is missing, or if ANY unapplied migration exists other than `032_reconcile_workflow_run_artifacts.ts` (quarantining Workspace V3).
+4. **Recorded Migration Schema Verification:** If migration 032 is recorded in `knex_migrations`, verifies that `workflow_runs` table exists, `artifacts` column is present, and column data type is `jsonb`. Fails closed with `[CORRUPT_SCHEMA_ERROR]` if recorded without valid schema.
+5. **Session Advisory Lock & Knex Lock Coordination:** Acquires session advisory lock `pg_try_advisory_lock(1095325257, 32)` for mutual exclusion between runners, and checks `knex_migrations_lock` to prevent conflict with standard Knex migrations.
+6. **Dedicated Backend Connection & Bounded Timeouts:** Enforces session-level and transaction-level bounded locking:
    ```sql
    SET LOCAL lock_timeout = '2s';
    SET LOCAL statement_timeout = '5s';
    ```
-   If lock contention occurs, PostgreSQL aborts within 1-2 seconds rather than hanging or queuing transactions.
-5. **Atomic Execution:** Checks table existence, adds JSONB column with default `'[]'::jsonb`, and atomically inserts ledger row into `knex_migrations` inside the same transaction before committing.
-6. **Rollback & Idempotency:** Automatically executes `ROLLBACK` on error. Re-running after completion is a clean idempotent no-op.
+   If lock contention occurs, PostgreSQL aborts within 1-2 seconds with clean rollback.
+7. **Atomic Execution:** Checks table existence, adds JSONB column with default `'[]'::jsonb`, and atomically inserts ledger row into `knex_migrations` inside the same transaction before committing.
+8. **Rollback & Idempotency:** Automatically executes `ROLLBACK` on error. Re-running after completion is a clean idempotent no-op.
