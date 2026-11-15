@@ -10,7 +10,7 @@ import {
 const ENV_KEYS = [
   'VERCEL_ENV', 'VERCEL_GIT_COMMIT_REF', 'AIRA_STAR_TRIAL_ENABLED',
   'AIRA_STAR_TRIAL_API_KEY', 'AIRA_STAR_TRIAL_EXPIRES_AT',
-  'AIRA_STAR_TRIAL_ALLOWED_USER_IDS'
+  'AIRA_STAR_TRIAL_ALLOWED_USER_IDS', 'AIRA_STAR_TRIAL_ACCESS_CODE'
 ] as const;
 const original = Object.fromEntries(ENV_KEYS.map(key => [key, process.env[key]]));
 const originalFetch = globalThis.fetch;
@@ -31,6 +31,7 @@ test('trial routes remain fail-closed, bounded, authenticated, and removable', a
     VERCEL_GIT_COMMIT_REF: AI_STAR_TRIAL_BRANCH,
     AIRA_STAR_TRIAL_ENABLED: 'true',
     AIRA_STAR_TRIAL_API_KEY: 'fixture-' + 'secret',
+    AIRA_STAR_TRIAL_ACCESS_CODE: 'fixture-access-code-' + 'x'.repeat(45),
     AIRA_STAR_TRIAL_ALLOWED_USER_IDS: 'trial-owner,test-owner-two',
     AIRA_STAR_TRIAL_EXPIRES_AT: new Date(Date.now() + 60_000).toISOString()
   });
@@ -57,7 +58,13 @@ test('trial routes remain fail-closed, bounded, authenticated, and removable', a
     assert.equal((await status.json()).enabled, true);
 
     activeUser = 'unlisted-user';
-    assert.equal((await originalFetch(endpoint + '/status')).status, 403);
+    assert.equal((await originalFetch(endpoint + '/status')).status, 401);
+    assert.equal((await originalFetch(endpoint + '/status', {headers: {'X-Aira-Trial-Access-Code':'invalid'}})).status, 401);
+    const accessAuthorized = await originalFetch(endpoint + '/status', {
+      headers:{'X-Aira-Trial-Access-Code':process.env.AIRA_STAR_TRIAL_ACCESS_CODE!}
+    });
+    assert.equal(accessAuthorized.status, 200);
+    assert.equal((await accessAuthorized.json()).enabled,true);
 
     activeUser = 'trial-owner';
     const invalid = await originalFetch(endpoint + '/complete', {
