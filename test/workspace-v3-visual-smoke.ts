@@ -43,6 +43,26 @@ async function main() {
     if (await page.locator('[data-testid="aira-v3-header-context"]').count() !== 1) {
       throw new Error('Conversation context must replace the duplicate header switch');
     }
+    if (await page.locator('[data-testid="model-selector-button"]').count() !== 1 ||
+        await page.locator('.aira-v3-composer-trailing [data-testid="model-selector-button"]').count() !== 1) {
+      throw new Error('Workspace V3 must have one model selector within the composer toolbar');
+    }
+    const welcomeStyle = page.locator('.aira-v3-intro-style-trigger');
+    if (await welcomeStyle.count()) {
+      if (await page.locator('.aira-v3-intro-tones button:visible').count() !== 0) {
+        throw new Error('Welcome tone options should not compete with the main chat action by default');
+      }
+      await welcomeStyle.click();
+      if (await page.locator('.aira-v3-intro-tones button:visible').count() !== 4) {
+        throw new Error('All four welcome tones must remain accessible');
+      }
+      await page.locator('.aira-v3-intro-tones button', { hasText: 'Friendly' }).click();
+      if (!(await welcomeStyle.textContent())?.includes('Friendly')) {
+        throw new Error('Selecting a welcome tone did not update the active style');
+      }
+      await page.locator('.aira-v3-intro-tones button', { hasText: 'Minimal' }).click();
+      await welcomeStyle.click();
+    }
     await page.getByRole('button', { name: 'Use light theme' }).click();
     await page.waitForFunction(() => !document.documentElement.classList.contains('dark'));
     const lightSidebarBackground = await page.locator('.aira-sidebar-shell').first()
