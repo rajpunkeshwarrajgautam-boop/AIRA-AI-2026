@@ -426,7 +426,7 @@ jobs:
           DISPOSABLE_SRC_URL="${REHEARSAL_DB_URL_BASE}/aira_disposable_source"
           DISPOSABLE_TGT_URL="${REHEARSAL_DB_URL_BASE}/aira_disposable_target"
 
-          mark_stage 'migrate aira_disposable_source across all 31 migrations'
+          mark_stage 'migrate aira_disposable_source across all catalogued migrations'
           docker exec --env "DATABASE_URL=$DISPOSABLE_SRC_URL" \
             "$TEST_CONTAINER" npm run db:migrate
 
