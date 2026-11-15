@@ -472,3 +472,85 @@ html.force-reduced-motion .aira-v3-starter { animation: none !important; transit
     padding-bottom: 4px;
   }
 }
+
+/* Consolidated composer toolbar: one model picker, one Chat/Agent switch. */
+.aira-v3-composer-trailing {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+.aira-v3-shell .aira-v3-composer-trailing .aira-v3-composer-model {
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.aira-v3-shell .aira-v3-composer-trailing .aira-v3-composer-model > div {
+  max-width: min(176px, 29vw);
+  min-width: 0;
+}
+.aira-v3-shell .aira-v3-composer-trailing [data-testid="model-selector-button"] {
+  max-width: 100%;
+}
+.aira-v3-intro-style-picker {
+  position: relative;
+  max-width: 100%;
+  color: var(--text-muted);
+}
+.aira-v3-intro-style-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 6px 12px;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  cursor: pointer;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  list-style-position: inside;
+}
+.aira-v3-intro-style-trigger:hover,
+.aira-v3-intro-style-picker[open] .aira-v3-intro-style-trigger {
+  color: var(--text-primary);
+  background: var(--bg-surface-secondary);
+  border-color: var(--border-color);
+}
+.aira-v3-intro-style-trigger:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+.aira-v3-intro-style-picker .aira-v3-intro-tones {
+  padding-top: 4px;
+}
+@media (max-width: 479px) {
+  .aira-v3-shell .aira-v3-composer-trailing .aira-v3-composer-model > div {
+    max-width: 112px;
+  }
+  .aira-v3-shell .aira-v3-composer-trailing [data-testid="model-selector-button"] > span:first-child {
+    display: none;
+  }
+  .aira-v3-shell .aira-v3-composer-trailing [data-testid="model-selector-button"] {
+    gap: 4px;
+    padding-inline: 6px;
+  }
+}
+@media (max-width: 379px) {
+  .aira-v3-shell .aira-composer [aria-label="Execution Mode"] button {
+    min-width: 40px;
+    padding-inline: 8px;
+    justify-content: center;
+  }
+  .aira-v3-shell .aira-composer [aria-label="Execution Mode"] button > span:not([data-testid]) {
+    display: none;
+  }
+  .aira-v3-shell .aira-v3-composer-trailing .aira-v3-composer-model > div {
+    max-width: 100px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .aira-v3-intro-style-trigger { transition: none; }
+}
