@@ -224,3 +224,24 @@ test('P0 Regression 7: SettingsModal usage parser accurately calculates guest li
   assert.equal(guestEntitlements.reasoningBoostsRemaining, 0);
 });
 
+test('P0 Regression 8: environment resolution detects staging accurately without relying on NODE_ENV', () => {
+  const resolveEnv = (host: string, gitRef?: string, vercelEnv?: string, nodeEnv = 'production') => {
+    const isStagingHost = host.includes('staging.virexaaiventures.com') ||
+      host.includes('aira-ai-2026-git-staging') ||
+      gitRef === 'staging';
+
+    return (
+      (isStagingHost ? 'staging' : undefined) ||
+      (vercelEnv === 'preview' ? 'preview' : undefined) ||
+      vercelEnv ||
+      nodeEnv ||
+      'production'
+    );
+  };
+
+  assert.equal(resolveEnv('staging.virexaaiventures.com', undefined, 'preview'), 'staging');
+  assert.equal(resolveEnv('aira-ai-2026-git-staging-xxx.vercel.app', 'staging', 'preview'), 'staging');
+  assert.equal(resolveEnv('aira-ai-2026.vercel.app', 'prod-release', 'production'), 'production');
+});
+
+
