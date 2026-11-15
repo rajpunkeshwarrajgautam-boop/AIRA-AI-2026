@@ -87,6 +87,33 @@ async function main() {
       if (invalid.length) throw new Error(`Composer touch targets below 40px at ${width}px: ${JSON.stringify(invalid)}`);
       await page.screenshot({ path: `artifacts/workspace-v3-ui/${width}-light.png`, fullPage: true });
     }
+    // Mobile navigation is modal while open; keyboard focus must never leak
+    // into the composer and should return to the button that opened it.
+    await page.setViewportSize({ width: 390, height: 740 });
+    const closeSidebar = page.getByRole('button', { name: 'Close sidebar navigation' });
+    if (await closeSidebar.isVisible().catch(() => false)) await closeSidebar.click();
+    const openSidebar = page.getByRole('button', { name: 'Open sidebar navigation' });
+    await openSidebar.click();
+    const mobileDrawer = page.getByRole('dialog', { name: 'Workspace navigation' });
+    await mobileDrawer.waitFor({ state: 'visible' });
+    if (await mobileDrawer.getAttribute('aria-modal') !== 'true') {
+      throw new Error('Mobile navigation must advertise aria-modal=true');
+    }
+    await closeSidebar.focus();
+    await page.keyboard.press('Shift+Tab');
+    const focusStayedInside = await page.evaluate(() => {
+      const dialog = document.querySelector('[data-testid="sidebar-drawer"]');
+      return Boolean(dialog?.contains(document.activeElement));
+    });
+    if (!focusStayedInside) throw new Error('Shift+Tab escaped mobile navigation');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() =>
+      document.activeElement?.getAttribute('aria-label') === 'Open sidebar navigation'
+    );
+    if (await page.locator('[data-testid="sidebar-drawer"]').count()) {
+      await page.locator('[data-testid="sidebar-drawer"]').waitFor({ state: 'hidden' });
+    }
+
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.getByRole('button', { name: 'Use dark theme' }).click();
     await page.waitForFunction(() => document.documentElement.classList.contains('dark'));
