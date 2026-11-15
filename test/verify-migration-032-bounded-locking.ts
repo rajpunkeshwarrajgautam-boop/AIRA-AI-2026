@@ -33,10 +33,16 @@ async function run() {
   console.log(`[1/5] Creating isolated test database "${testDbName}" on WSL PostgreSQL 18...`);
   execSync(`wsl -d Ubuntu-24.04 sudo -u postgres createdb ${testDbName}`, { stdio: 'inherit' });
 
-  const connStr = `postgresql://postgres:rehearsal_test_pass@127.0.0.1:5432/${testDbName}`;
+  const dbConfig = {
+    host: '127.0.0.1',
+    port: 5432,
+    user: 'postgres',
+    password: process.env.PGPASSWORD || 'rehearsal_test_pass',
+    database: testDbName,
+  };
   const db = knex({
     client: 'pg',
-    connection: connStr,
+    connection: dbConfig,
     pool: { min: 1, max: 2 },
   });
 
@@ -75,7 +81,7 @@ async function run() {
     // Create a client that holds an ACCESS EXCLUSIVE lock
     const dbLocker = knex({
       client: 'pg',
-      connection: connStr,
+      connection: dbConfig,
       pool: { min: 1, max: 1 },
     });
 

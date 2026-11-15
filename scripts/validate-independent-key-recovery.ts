@@ -120,7 +120,11 @@ async function main() {
   // 5. Audit parity on restored database
   console.log('\n[5/6] Auditing database schema, table rows, constraints, and referential integrity...');
   const client = new pg.Client({
-    connectionString: `postgresql://postgres:rehearsal_test_pass@127.0.0.1:5432/${targetDbName}`,
+    host: '127.0.0.1',
+    port: 5432,
+    user: 'postgres',
+    password: process.env.PGPASSWORD || 'rehearsal_test_pass',
+    database: targetDbName,
   });
   await client.connect();
 

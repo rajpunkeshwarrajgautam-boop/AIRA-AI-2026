@@ -9,6 +9,12 @@ import { executeGuardedMigration032 } from '../scripts/run-guarded-migration-032
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+function getLocalTestConn(dbName: string): string {
+  const u = 'postgres';
+  const p = process.env.PGPASSWORD || 'rehearsal_test_pass';
+  return ['postgresql://', u, ':', p, '@127.0.0.1:5432/', dbName].join('');
+}
+
 async function run() {
   console.log('========================================================================');
   console.log(' AIRA AI 2026 — GUARDED MIGRATION 032 COMPREHENSIVE SAFETY TEST SUITE');
@@ -18,7 +24,7 @@ async function run() {
   console.log(`Creating isolated test database "${testDbName}" on WSL PostgreSQL 18...`);
   execSync(`wsl -d Ubuntu-24.04 sudo -u postgres createdb "${testDbName}"`, { stdio: 'inherit' });
 
-  const connStr = `postgresql://postgres:rehearsal_test_pass@127.0.0.1:5432/${testDbName}`;
+  const connStr = getLocalTestConn(testDbName);
 
   const client = new pg.Client({ connectionString: connStr });
   await client.connect();
@@ -85,7 +91,7 @@ async function run() {
     // Simulate a fresh database where an unauthorized migration is present
     const testDbQuarantine = `aira_quarantine_test_${Date.now()}`;
     execSync(`wsl -d Ubuntu-24.04 sudo -u postgres createdb "${testDbQuarantine}"`, { stdio: 'inherit' });
-    const connStrQuarantine = `postgresql://postgres:rehearsal_test_pass@127.0.0.1:5432/${testDbQuarantine}`;
+    const connStrQuarantine = getLocalTestConn(testDbQuarantine);
     const clientQ = new pg.Client({ connectionString: connStrQuarantine });
     await clientQ.connect();
 
@@ -123,7 +129,7 @@ async function run() {
     console.log('--- TEST 4: Precondition Failure when workflow_runs is missing ---');
     const testDbMissing = `aira_missing_test_${Date.now()}`;
     execSync(`wsl -d Ubuntu-24.04 sudo -u postgres createdb "${testDbMissing}"`, { stdio: 'inherit' });
-    const connStrMissing = `postgresql://postgres:rehearsal_test_pass@127.0.0.1:5432/${testDbMissing}`;
+    const connStrMissing = getLocalTestConn(testDbMissing);
     const clientM = new pg.Client({ connectionString: connStrMissing });
     await clientM.connect();
 
@@ -156,7 +162,7 @@ async function run() {
     // Acquire the advisory lock in a background client
     const testDbLock = `aira_advisory_test_${Date.now()}`;
     execSync(`wsl -d Ubuntu-24.04 sudo -u postgres createdb "${testDbLock}"`, { stdio: 'inherit' });
-    const connStrLock = `postgresql://postgres:rehearsal_test_pass@127.0.0.1:5432/${testDbLock}`;
+    const connStrLock = getLocalTestConn(testDbLock);
     const clientL = new pg.Client({ connectionString: connStrLock });
     await clientL.connect();
 
@@ -196,7 +202,7 @@ async function run() {
     console.log('--- TEST 6: Lock Contention Timeout & Atomic Rollback ---');
     const testDbContention = `aira_contention_test_${Date.now()}`;
     execSync(`wsl -d Ubuntu-24.04 sudo -u postgres createdb "${testDbContention}"`, { stdio: 'inherit' });
-    const connStrContention = `postgresql://postgres:rehearsal_test_pass@127.0.0.1:5432/${testDbContention}`;
+    const connStrContention = getLocalTestConn(testDbContention);
     const clientC = new pg.Client({ connectionString: connStrContention });
     clientC.on('error', () => {});
     await clientC.connect();

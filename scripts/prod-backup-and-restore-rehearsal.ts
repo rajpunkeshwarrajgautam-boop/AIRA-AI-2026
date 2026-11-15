@@ -181,8 +181,13 @@ sudo -u postgres pg_restore --clean --if-exists --no-owner --no-privileges -d "$
 
     // 7. Verify table and row parity
     console.log(`\n[STEP 7/7] Verifying 100% table and row count parity in isolated database...`);
-    const isolatedConn = `postgresql://postgres:rehearsal_test_pass@127.0.0.1:5432/${isolatedDbName}`;
-    const isoClient = new pg.Client({ connectionString: isolatedConn });
+    const isoClient = new pg.Client({
+      host: '127.0.0.1',
+      port: 5432,
+      user: 'postgres',
+      password: process.env.PGPASSWORD || 'rehearsal_test_pass',
+      database: isolatedDbName,
+    });
     await isoClient.connect();
 
     const restoredRowCounts: Record<string, number> = {};

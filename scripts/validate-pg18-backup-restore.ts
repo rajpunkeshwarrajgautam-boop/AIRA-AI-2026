@@ -139,8 +139,13 @@ sudo -u postgres pg_restore --clean --if-exists --no-owner --no-privileges -d "$
 
     // 5. Connect and deeply verify schema, extensions, constraints, indexes, sequences, and data
     console.log('\n[STEP 5/6] Verifying schema contracts, extensions, constraints, and data integrity...');
-    const connStr = `postgresql://postgres:rehearsal_test_pass@127.0.0.1:5432/${isolatedDbName}`;
-    const client = new pg.Client({ connectionString: connStr });
+    const client = new pg.Client({
+      host: '127.0.0.1',
+      port: 5432,
+      user: 'postgres',
+      password: process.env.PGPASSWORD || 'rehearsal_test_pass',
+      database: isolatedDbName,
+    });
     await client.connect();
 
     // 5.1 Extensions
