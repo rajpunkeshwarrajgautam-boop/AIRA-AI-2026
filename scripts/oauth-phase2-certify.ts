@@ -17,6 +17,12 @@ import {
   assertStagingTargetUrl,
   CERTIFIED_STAGING_ORIGIN,
 } from '../test/helpers/pr178-staging-host-guard.js';
+
+export {
+  assertPr178StagingDestination,
+  assertStagingTargetUrl,
+  CERTIFIED_STAGING_ORIGIN,
+};
 import { setupProFixture, resetStagingTestDailyQuota, cleanupAllStagingFixtures, verifyStagingDbIntegrity } from './staging-fixture-lifecycle.js';
 
 const DEFAULT_STAGING_URL = CERTIFIED_STAGING_ORIGIN;
