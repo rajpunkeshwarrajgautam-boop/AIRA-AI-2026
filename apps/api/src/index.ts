@@ -1,4 +1,5 @@
 import { createBuilderRoutes } from './builder-routes.js';
+import { createAiStaringTrialRouter } from './temporary-ai-staring-trial.js';
 import { createBillingRoutes } from './billing-routes.js';
 import { createVisionRoutes } from './vision-routes.js';
 import { createAccountRoutes } from './account-routes.js';
@@ -577,6 +578,8 @@ app.use('/api/billing', createBillingRoutes());
 app.use('/api/vision', createVisionRoutes());
 app.use('/api/account', createAccountRoutes());
 app.use('/api/builder', createBuilderRoutes(modelRouter));
+// Disposable, preview-branch-only trial. No changes to normal AIRA model routing.
+app.use('/api/experimental/ai-staring', createAiStaringTrialRouter());
 
 // Inference diagnostics are operator actions, not public readiness probes.
 const benchmarkSignal = Symbol('benchmarkSignal');
