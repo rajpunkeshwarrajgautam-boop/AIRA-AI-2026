@@ -36,6 +36,8 @@ jobs:
         run: npx tsx --test test/auth-entitlement-model-access-p0.test.ts
       - name: Session and BFF isolation regression
         run: npm run test:session-auth && npm run test:auth-bff
+      - name: Workflow artifacts schema drift postcondition
+        run: npx tsx --test test/workspace-v3-workflow-artifacts-drift.test.ts
       - name: Database isolation and migration rehearsal
         run: npm run test:db-isolation && npm run test:migration:031
       # Database-backed entitlements are certified by the repository's
