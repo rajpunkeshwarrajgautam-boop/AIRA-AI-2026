@@ -195,6 +195,25 @@ function App() {
   const [cancelBuilderSignal, setCancelBuilderSignal] = useState(0);
   const [isBuilderBusy, setIsBuilderBusy] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window !== 'undefined' ? window.innerWidth >= 1280 : true);
+  // The mobile opener unmounts while the drawer is open. Preserve its identity,
+  // then locate the newly mounted opener after React commits the closed state.
+  const sidebarOpeningControlRef = useRef<HTMLButtonElement | null>(null);
+  const shouldRestoreSidebarFocusRef = useRef(false);
+  useEffect(() => {
+    if (sidebarOpen || !shouldRestoreSidebarFocusRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      const previous = sidebarOpeningControlRef.current;
+      const current = previous?.isConnected
+        ? previous
+        : document.querySelector<HTMLButtonElement>('button[aria-label="Open sidebar navigation"]');
+      if (window.matchMedia('(max-width: 1279px)').matches) {
+        current?.focus({ preventScroll: true });
+      }
+      shouldRestoreSidebarFocusRef.current = false;
+      sidebarOpeningControlRef.current = null;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [sidebarOpen]);
   const pendingAutomationIdsRef = useRef<Set<string>>(new Set());
   const [confirmingAutoId, setConfirmingAutoId] = useState<string | null>(null);
   const pendingVisionOpsRef = useRef<Set<string>>(new Set());
@@ -1770,7 +1789,11 @@ useEffect(() => {
             {!sidebarOpen && (
               <>
                 <button 
-                  onClick={() => setSidebarOpen(true)} 
+                  onClick={(event) => {
+                    sidebarOpeningControlRef.current = event.currentTarget;
+                    shouldRestoreSidebarFocusRef.current = window.matchMedia('(max-width: 1279px)').matches;
+                    setSidebarOpen(true);
+                  }}
                   className="min-h-10 min-w-10 flex items-center justify-center p-2 -ml-1 rounded-lg text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark transition-colors touch-manipulation" 
                   title="Open sidebar"
                   aria-label="Open sidebar navigation"
