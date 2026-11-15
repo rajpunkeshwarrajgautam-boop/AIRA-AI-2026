@@ -12,17 +12,18 @@ Set these Vercel variables with target **Preview**, restricted to Git branch tri
 - AIRA_STAR_TRIAL_API_KEY=(fresh rotated trial key; sensitive or encrypted)
 - AIRA_STAR_TRIAL_ALLOWED_USER_IDS=(comma-separated verified BFF user IDs)
 - AIRA_STAR_TRIAL_EXPIRES_AT=(UTC ISO timestamp within next 7 days)
+- AIRA_STAR_TRIAL_ACCESS_CODE=(40+ character random access code, stored as Sensitive, separate from provider key)
 
 Never set unscoped Preview or Production variables for this experiment. Do not commit credentials.
 
-The static tester is /ai-staring-trial.html on that branch's Vercel Preview URL. Sign in on that same Preview host first. Existing BFF session and CSRF protections apply. Staging-host cookies do not transfer to another host; never bypass authentication to make the test pass.
+The static tester is /ai-staring-trial.html on that branch's Vercel Preview URL. The tester offers a separate ephemeral access-code unlock because this isolated Preview has no branch-specific staging OAuth or DB credentials. Existing BFF and CSRF protections still apply. AIRA regular login is an optional link but should not be relied upon in this preview. Never paste the provider API key into the tester.
 
 ## Safety properties
 
 - Disabled unless VERCEL_ENV=preview and the exact experiment branch matches.
-- Requires verified managed identity plus explicit user allowlist, no guest or spoofed headers.
+- Requires either verified managed identity from the existing AIRA BFF user-ID allowlist or a 40+ character separate branch-scoped trial access code. No fake AIRA principal or client-supplied identity header is trusted.
 - Existing CSRF and origin middleware executes before experimental router.
-- Secret stays on the backend; never sent to browser, logs, URL or responses.
+- Provider API key stays on the backend; never sent to browser, logs, URL or responses. Trial access code is entered by the user in the preview and sent only as a same-origin request header, held in memory while the page is open, never stored in localStorage.
 - Fixed upstream URL and five allowlisted ADVERTISED model IDs; identity not verified.
 - Max prompt 600 chars, max output 160 tokens, 30-second timeout; no tools, streaming, attachments or persistence.
 - Cooldown 10 seconds per allowed user per warm instance. This is NOT a distributed quota.
@@ -33,13 +34,13 @@ The static tester is /ai-staring-trial.html on that branch's Vercel Preview URL.
 ## Complete removal when trial ends
 
 1. Disable or delete AIRA_STAR_TRIAL_ENABLED in the branch-scoped Preview environment.
-2. Delete all four branch-specific AIRA_STAR_TRIAL_* Vercel environment variables.
+2. Delete all five branch-specific AIRA_STAR_TRIAL_* Vercel environment variables.
 3. Delete apps/api/src/temporary-ai-staring-trial.ts.
 4. Delete public/ai-staring-trial.html.
 5. Delete test/ai-staring-trial.test.ts and this document.
-6. Revert the trial import and route registration in apps/api/src/index.ts.
+6. Revert the trial import and route registration in apps/api/src/index.ts, and the trial sign-in deep link in src/App.tsx.
 7. Close the experiment PR unmerged, delete experiment Git branch, remove its Vercel Preview deployment where supported.
-8. Verify the test page and trial route are unavailable and normal chat still works.
+8. Verify the test page and trial route are unavailable and normal chat still works. Ensure the temporary sign-in query parameter behavior is reverted from src/App.tsx.
 9. Revoke the trial API key in the provider dashboard.
 
 No DB migrations or test conversation records are introduced by this module. Deleting the isolated branch and its environment variables removes all AIRA-side functionality. Provider-side billing/usage records remain outside AIRA control.
