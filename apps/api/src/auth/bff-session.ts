@@ -263,7 +263,11 @@ function getAuthBaseUrl(): string {
   const configured = process.env.NEON_AUTH_BASE_URL?.trim();
   if (configured) return configured;
 
-  if (process.env.NODE_ENV === 'production') {
+  const isActualProduction =
+    process.env.VERCEL_ENV === 'production' ||
+    process.env.VERCEL_GIT_COMMIT_REF === 'prod-release';
+
+  if (isActualProduction) {
     throw new Error('NEON_AUTH_BASE_URL is unconfigured in production environment. Refusing to fallback to staging URL.');
   }
 
