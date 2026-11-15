@@ -82,11 +82,14 @@ export function IntroGate({ userId, tone = 'Minimal', fallback, onStart }: Intro
       <button type="button" className="aira-v3-intro-skip" disabled={busy} onClick={() => void handleStart()}>
         Start with a blank chat
       </button>
-      <div className="aira-v3-intro-tones" role="group" aria-label="Welcome message style">
-        {(Object.keys(INTRO_COPY) as IntroTone[]).map(option => (
-          <button key={option} type="button" aria-pressed={activeTone === option} onClick={() => setActiveTone(option)}>{option}</button>
-        ))}
-      </div>
+      <details className="aira-v3-intro-style-picker">
+        <summary className="aira-v3-intro-style-trigger">Welcome style: {activeTone}</summary>
+        <div className="aira-v3-intro-tones" role="group" aria-label="Welcome message style">
+          {(Object.keys(INTRO_COPY) as IntroTone[]).map(option => (
+            <button key={option} type="button" aria-pressed={activeTone === option} onClick={() => setActiveTone(option)}>{option}</button>
+          ))}
+        </div>
+      </details>
     </section>
   );
 }
