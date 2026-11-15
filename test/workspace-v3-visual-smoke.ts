@@ -110,6 +110,27 @@ async function main() {
     // Mobile navigation is modal while open; keyboard focus must never leak
     // into the composer and should return to the button that opened it.
     await page.setViewportSize({ width: 390, height: 740 });
+    // Model menu must remain usable when the composer is pinned to the bottom.
+    await page.locator('[data-testid="model-selector-button"]').click();
+    const modelMenu = page.locator('[data-testid="model-menu"]');
+    await modelMenu.waitFor({ state: 'visible' });
+    const modelMenuGeometry = await modelMenu.evaluate(element => {
+      const rect = element.getBoundingClientRect();
+      const view = window.visualViewport;
+      return {
+        top: rect.top, bottom: rect.bottom, height: rect.height,
+        viewportTop: view?.offsetTop || 0,
+        viewportBottom: (view?.offsetTop || 0) + (view?.height || window.innerHeight),
+      };
+    });
+    if (modelMenuGeometry.top < modelMenuGeometry.viewportTop - 2 ||
+        modelMenuGeometry.bottom > modelMenuGeometry.viewportBottom + 2 ||
+        modelMenuGeometry.height < 160) {
+      throw new Error('Composer model picker is clipped or too short on mobile: ' + JSON.stringify(modelMenuGeometry));
+    }
+    await page.keyboard.press('Escape');
+    await modelMenu.waitFor({ state: 'hidden' });
+
     const closeSidebar = page.getByRole('button', { name: 'Close sidebar navigation' });
     if (await closeSidebar.isVisible().catch(() => false)) await closeSidebar.click();
     const openSidebar = page.getByRole('button', { name: 'Open sidebar navigation' });
