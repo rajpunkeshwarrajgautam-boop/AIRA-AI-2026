@@ -219,16 +219,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           )}
         </AnimatePresence>
 
-        <div className="aira-v3-composer-model">
-          <ModelSelector
-            currentModel={currentModel}
-            onSelectModel={onSelectModel}
-            extendedThinking={extendedThinking}
-            onToggleThinking={onToggleThinking}
-            userTier={userTier}
-            onTriggerUpgrade={onTriggerUpgrade}
-          />
-        </div>
         <textarea
           autoFocus={Boolean(repairDraft)}
           ref={textareaRef}
@@ -365,6 +355,17 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             </div>
           </div>
 
+          <div className="aira-v3-composer-trailing">
+        <div className="aira-v3-composer-model">
+          <ModelSelector
+            currentModel={currentModel}
+            onSelectModel={onSelectModel}
+            extendedThinking={extendedThinking}
+            onToggleThinking={onToggleThinking}
+            userTier={userTier}
+            onTriggerUpgrade={onTriggerUpgrade}
+          />
+        </div>
           <motion.button
             type="button"
             onClick={handleSubmit}
@@ -380,6 +381,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           >
             {isLoading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4 stroke-[2.2]" />}
           </motion.button>
+          </div>
         </div>
       </motion.div>
 
