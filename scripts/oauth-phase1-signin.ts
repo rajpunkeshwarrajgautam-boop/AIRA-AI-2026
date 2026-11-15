@@ -64,16 +64,20 @@ function sanitizeLandedUrl(rawUrl: string): string {
 }
 
 async function getSessionAndProviders(page: Page) {
-  return page.evaluate(async () => {
-    const sRes = await fetch('/api/auth/session', { credentials: 'include' });
-    const session = await sRes.json().catch(() => null);
-    let providers: any = null;
-    if (session?.status === 'AUTHENTICATED' && session?.user) {
-      const pRes = await fetch('/api/auth/providers', { credentials: 'include' });
-      providers = await pRes.json().catch(() => null);
-    }
-    return { sessionStatus: sRes.status, session, providers };
-  });
+  try {
+    return await page.evaluate(async () => {
+      const sRes = await fetch('/api/auth/session', { credentials: 'include' });
+      const session = await sRes.json().catch(() => null);
+      let providers: any = null;
+      if (session?.status === 'AUTHENTICATED' && session?.user) {
+        const pRes = await fetch('/api/auth/providers', { credentials: 'include' });
+        providers = await pRes.json().catch(() => null);
+      }
+      return { sessionStatus: sRes.status, session, providers };
+    });
+  } catch {
+    return { sessionStatus: 0, session: null, providers: null };
+  }
 }
 
 async function initiateOAuthIfNeeded(
@@ -195,8 +199,8 @@ async function waitForOAuthCompletion(
 
   const targetHost = new URL(STAGING_URL).hostname;
   await page.waitForURL(
-    (url) => url.hostname === targetHost,
-    { timeout: 600_000, waitUntil: 'domcontentloaded' }
+    (url) => url.hostname === targetHost && !url.pathname.includes('/callback'),
+    { timeout: 1_200_000, waitUntil: 'domcontentloaded' }
   );
 
   const landed = page.url();
@@ -210,7 +214,7 @@ async function waitForOAuthCompletion(
 
   // Wait briefly for frontend session hydration & poll /api/auth/session
   let check = await getSessionAndProviders(page);
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 30; i++) {
     if (check.session?.status === 'AUTHENTICATED' && check.session?.user) break;
     await page.waitForTimeout(500);
     check = await getSessionAndProviders(page);
@@ -250,7 +254,13 @@ async function main() {
       headless: false,
       channel: 'msedge',
       viewport: { width: 1366, height: 860 },
-      args: ['--window-position=30,30'],
+      ignoreDefaultArgs: ['--enable-automation'],
+      args: [
+        '--window-position=30,30',
+        '--disable-blink-features=AutomationControlled',
+        '--no-sandbox',
+        '--disable-infobars',
+      ],
     });
     const pageA = await contextA.newPage();
 
@@ -258,7 +268,13 @@ async function main() {
       headless: false,
       channel: 'msedge',
       viewport: { width: 1366, height: 860 },
-      args: ['--window-position=480,70'],
+      ignoreDefaultArgs: ['--enable-automation'],
+      args: [
+        '--window-position=480,70',
+        '--disable-blink-features=AutomationControlled',
+        '--no-sandbox',
+        '--disable-infobars',
+      ],
     });
     const pageB = await contextB.newPage();
 
