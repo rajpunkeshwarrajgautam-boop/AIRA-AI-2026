@@ -59,3 +59,17 @@ test('fails closed without workflow_runs and makes no schema changes', async () 
 test('down refuses to delete workflow artifacts', async () => {
   await assert.rejects(down({} as Knex), /expand-only/);
 });
+
+test('sets bounded lock and statement timeouts when raw knex execution is available', async () => {
+  const { knex } = fakeDb(true, true);
+  const rawQueries: string[] = [];
+  (knex as any).raw = async (query: string) => {
+    rawQueries.push(query);
+  };
+  await up(knex);
+  assert.deepEqual(rawQueries, [
+    "SET LOCAL lock_timeout = '2s'",
+    "SET LOCAL statement_timeout = '5s'"
+  ]);
+});
+

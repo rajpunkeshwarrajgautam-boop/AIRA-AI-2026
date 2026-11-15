@@ -11,8 +11,10 @@ import type { Knex } from 'knex';
  * - Expand-only: down() strictly refuses column dropping.
  */
 export async function up(knex: Knex): Promise<void> {
-  await knex.raw("SET LOCAL lock_timeout = '2s'");
-  await knex.raw("SET LOCAL statement_timeout = '5s'");
+  if (typeof knex.raw === 'function') {
+    await knex.raw("SET LOCAL lock_timeout = '2s'");
+    await knex.raw("SET LOCAL statement_timeout = '5s'");
+  }
 
   if (!(await knex.schema.hasTable('workflow_runs'))) {
     throw new Error('workflow_runs is absent; migration 009 must be inspected before proceeding');
