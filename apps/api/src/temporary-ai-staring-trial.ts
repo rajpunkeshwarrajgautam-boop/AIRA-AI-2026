@@ -6,6 +6,7 @@
  * Never route production/normal AIRA chat or background agents through this probe.
  */
 import { Router, type Request } from 'express';
+import { createHash, timingSafeEqual } from 'node:crypto';
 
 export const AI_STAR_TRIAL_BRANCH = 'trial/ai-staring-preview-20261115';
 
@@ -44,6 +45,10 @@ export function getTrialConfiguration(env: TrialEnvironment = process.env, now =
   if (!env.AIRA_STAR_TRIAL_API_KEY?.trim()) {
     return { enabled: false, reason: 'KEY_NOT_CONFIGURED' } as const;
   }
+  const accessCode = env.AIRA_STAR_TRIAL_ACCESS_CODE?.trim() || '';
+  if (accessCode.length < 40 || accessCode.length > 200) {
+    return { enabled: false, reason: 'ACCESS_CODE_NOT_CONFIGURED' } as const;
+  }
   if (!env.AIRA_STAR_TRIAL_ALLOWED_USER_IDS?.trim()) {
     return { enabled: false, reason: 'ALLOWLIST_NOT_CONFIGURED' } as const;
   }
@@ -57,10 +62,22 @@ function allowedUserId(req: Request): string | null {
   // BFF verified identity ONLY. Guest cookies, x-test-user-id, and client headers are insufficient.
   const managed = (req as any).managedIdentity as { userId?: string } | undefined;
   const id = managed?.userId;
-  if (!id || !req.principal?.userId || req.principal.userId !== id) return null;
+  // BFF middleware already verified this identity; the trial router mounts before
+  // the unrelated global principal middleware to support isolated access-code mode.
+  if (!id) return null;
   const allowlist = (process.env.AIRA_STAR_TRIAL_ALLOWED_USER_IDS || '')
     .split(',').map(value => value.trim()).filter(Boolean);
   return allowlist.includes(id) ? id : null;
+}
+
+function validTrialAccessCode(req: Request): boolean {
+  const supplied = req.headers['x-aira-trial-access-code'];
+  const expected = process.env.AIRA_STAR_TRIAL_ACCESS_CODE?.trim() || '';
+  if (typeof supplied !== 'string' || supplied.length < 40 || supplied.length > 200 || expected.length < 40) return false;
+  // Fixed-width digests and constant-time comparison; never print either value.
+  const a = createHash('sha256').update(supplied).digest();
+  const b = createHash('sha256').update(expected).digest();
+  return timingSafeEqual(a, b);
 }
 
 function isTrialBranch(): boolean {
@@ -82,8 +99,11 @@ export function createAiStaringTrialRouter(): Router {
     res.setHeader('Cache-Control', 'no-store, private');
     if (!isTrialBranch()) return res.status(404).json({ code: 'NOT_FOUND' });
     const user = allowedUserId(req);
-    if (!user) return res.status(403).json({ code: 'TRIAL_OWNER_REQUIRED' });
-    res.locals.trialOwnerId = user;
+    const codeAuthorized = validTrialAccessCode(req);
+    if (!user && !codeAuthorized) return res.status(401).json({ code: 'TRIAL_ACCESS_REQUIRED' });
+    // An isolated test credential is intentionally accepted only on this exact
+    // expiring Preview branch. Normal AIRA auth, users and billing are untouched.
+    res.locals.trialOwnerId = user || 'ephemeral-trial-access';
     next();
   });
 
