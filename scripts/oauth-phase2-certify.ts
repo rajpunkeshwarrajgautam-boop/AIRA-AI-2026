@@ -12,14 +12,15 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  assertPr178StagingDestination,
+  assertStagingTargetUrl,
+  CERTIFIED_STAGING_ORIGIN,
+} from '../test/helpers/pr178-staging-host-guard.js';
 import { setupProFixture, resetStagingTestDailyQuota, cleanupAllStagingFixtures, verifyStagingDbIntegrity } from './staging-fixture-lifecycle.js';
 
-const DEFAULT_STAGING_URL = 'https://staging.virexaaiventures.com';
+const DEFAULT_STAGING_URL = CERTIFIED_STAGING_ORIGIN;
 const FULL_SHA_REGEX = /^[a-f0-9]{40}$/i;
-const FORBIDDEN_PROD_HOST_PATTERNS = [
-  /^aira-ai-2026\.vercel\.app$/i,
-  /^prod-release\./i,
-];
 
 const ARTIFACTS_DIR = path.resolve(process.cwd(), 'artifacts/staging-acceptance/pr164');
 const PROFILE_A_DIR = path.resolve(process.cwd(), 'artifacts/staging-acceptance/edge_oauth_profile_a');
@@ -36,27 +37,6 @@ export function assertValidFullSha(value: unknown, sourceLabel = 'candidate SHA'
     );
   }
   return trimmed.toLowerCase();
-}
-
-export function assertStagingTargetUrl(rawUrl: unknown): string {
-  if (typeof rawUrl !== 'string' || !rawUrl.trim()) {
-    throw new Error('Missing staging URL: AIRA_STAGING_URL must be an HTTPS staging origin.');
-  }
-  let parsed: URL;
-  try {
-    parsed = new URL(rawUrl.trim());
-  } catch {
-    throw new Error(`Invalid staging URL "${rawUrl}": unable to parse as URL.`);
-  }
-  if (parsed.protocol !== 'https:') {
-    throw new Error(`Unsafe staging URL "${parsed.origin}": HTTPS is required.`);
-  }
-  if (FORBIDDEN_PROD_HOST_PATTERNS.some((pattern) => pattern.test(parsed.hostname))) {
-    throw new Error(
-      `Refusing to run staging certification against production host "${parsed.hostname}".`
-    );
-  }
-  return parsed.origin;
 }
 
 function readGitHeadShaFromRepo(): string | null {
