@@ -210,6 +210,9 @@ app.use(createCsrfProtectionMiddleware());
 
 // First-party BFF authentication routes
 registerBffRoutes(app);
+// Ephemeral trial-only authenticated access, mounted after BFF/CSRF safeguards.
+// Not part of AIRA model routing and never enabled outside the exact preview branch.
+app.use('/api/experimental/ai-staring', createAiStaringTrialRouter());
 
 // Authoritative deployment identity endpoint for Preview and Release certification
 const versionHandler = (req: Request, res: Response) => {
@@ -578,8 +581,7 @@ app.use('/api/billing', createBillingRoutes());
 app.use('/api/vision', createVisionRoutes());
 app.use('/api/account', createAccountRoutes());
 app.use('/api/builder', createBuilderRoutes(modelRouter));
-// Disposable, preview-branch-only trial. No changes to normal AIRA model routing.
-app.use('/api/experimental/ai-staring', createAiStaringTrialRouter());
+
 
 // Inference diagnostics are operator actions, not public readiness probes.
 const benchmarkSignal = Symbol('benchmarkSignal');
