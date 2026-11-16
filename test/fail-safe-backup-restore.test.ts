@@ -1020,3 +1020,52 @@ test('Fail-Safe Restore: Knex migration ledger verifies id, name, and batch fail
 });
 
 
+
+
+test('Fail-Safe Restore: strict FK catalog rejects catalog-query errors without single-column fallback', async () => {
+  const client = createMockPgClient({
+    tables: ['runs'],
+    rowCounts: { runs: 1 },
+    indexesCount: 0,
+    constraintsBreakdown: [{ contype: 'f', count: 1 }],
+  });
+  const originalQuery = client.query.bind(client);
+  client.query = async (sql: string) => {
+    if (sql.includes("c.contype = 'f'")) {
+      throw new Error('simulated PostgreSQL constraint catalog failure');
+    }
+    return originalQuery(sql);
+  };
+
+  await assert.rejects(
+    () => auditRestoredDatabaseParity(client, {
+      exactTables: ['runs'],
+      exactTotalRows: 1,
+      exactConstraints: { foreignKeys: 1 },
+      verifyReferentialIntegrity: true,
+      strictForeignKeyCatalog: true,
+    }),
+    /RESTORE_VERIFICATION_FAILURE.*FK catalog query failed/
+  );
+});
+
+test('Fail-Safe Restore: strict FK catalog rejects missing composite-key metadata', async () => {
+  const client = createMockPgClient({
+    tables: ['runs'],
+    rowCounts: { runs: 1 },
+    indexesCount: 0,
+    constraintsBreakdown: [{ contype: 'f', count: 1 }],
+  });
+  // A minimal mock returns aggregate counts but no valid per-constraint
+  // column mappings. Production-grade certification must not guess them.
+  await assert.rejects(
+    () => auditRestoredDatabaseParity(client, {
+      exactTables: ['runs'],
+      exactTotalRows: 1,
+      exactConstraints: { foreignKeys: 1 },
+      verifyReferentialIntegrity: true,
+      strictForeignKeyCatalog: true,
+    }),
+    /RESTORE_VERIFICATION_FAILURE.*FK catalog count mismatch/
+  );
+});
