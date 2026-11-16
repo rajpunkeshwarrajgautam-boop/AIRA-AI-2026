@@ -1,0 +1,2767 @@
+{
+  "source": "read-only Neon production constraint catalog",
+  "capturedDate": "2026-11-16",
+  "projectId": "old-sky-50952395",
+  "branchId": "br-shiny-moon-b3vy9xj7",
+  "endpointId": "ep-withered-art-b36ox90b",
+  "postgresVersion": "18.7",
+  "migrationCount": 31,
+  "backupCatalogSha256": "7D49AB20FFA199DB3A6D3F26E62D1EECD27F90556F74D7EB49F1DC0380049877",
+  "note": "This schema catalog was captured from mutable production AFTER the encrypted 2026-11-15 backup. It is independent current-schema evidence, not backup-time row parity or proof no schema changes since backup.",
+  "constraints": [
+    {
+      "table_name": "account_recovery_requests",
+      "constraint_name": "account_recovery_requests_audit_log_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL audit_log"
+    },
+    {
+      "table_name": "account_recovery_requests",
+      "constraint_name": "account_recovery_requests_claimed_email_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL claimed_email"
+    },
+    {
+      "table_name": "account_recovery_requests",
+      "constraint_name": "account_recovery_requests_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "account_recovery_requests",
+      "constraint_name": "account_recovery_requests_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "account_recovery_requests",
+      "constraint_name": "account_recovery_requests_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "account_recovery_requests",
+      "constraint_name": "account_recovery_requests_provider_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL provider"
+    },
+    {
+      "table_name": "account_recovery_requests",
+      "constraint_name": "account_recovery_requests_status_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL status"
+    },
+    {
+      "table_name": "account_recovery_requests",
+      "constraint_name": "account_recovery_requests_updated_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL updated_at"
+    },
+    {
+      "table_name": "agents",
+      "constraint_name": "agents_createdAt_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL \"createdAt\""
+    },
+    {
+      "table_name": "agents",
+      "constraint_name": "agents_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "agents",
+      "constraint_name": "agents_instructions_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL instructions"
+    },
+    {
+      "table_name": "agents",
+      "constraint_name": "agents_name_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL name"
+    },
+    {
+      "table_name": "agents",
+      "constraint_name": "agents_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "agents",
+      "constraint_name": "agents_updatedAt_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL \"updatedAt\""
+    },
+    {
+      "table_name": "approval_resumption_outbox",
+      "constraint_name": "approval_resumption_decision_check",
+      "constraint_type": "c",
+      "definition": "CHECK (((decision)::text = ANY ((ARRAY['ALLOW_ONCE'::character varying, 'ALLOW_SESSION'::character varying, 'ALLOW_ALWAYS_FOR_TOOL'::character varying, 'REJECT'::character varying])::text[])))"
+    },
+    {
+      "table_name": "approval_resumption_outbox",
+      "constraint_name": "approval_resumption_outbox_approval_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (approval_id) REFERENCES approvals(id) ON DELETE RESTRICT"
+    },
+    {
+      "table_name": "approval_resumption_outbox",
+      "constraint_name": "approval_resumption_outbox_approval_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL approval_id"
+    },
+    {
+      "table_name": "approval_resumption_outbox",
+      "constraint_name": "approval_resumption_outbox_approval_id_unique",
+      "constraint_type": "u",
+      "definition": "UNIQUE (approval_id)"
+    },
+    {
+      "table_name": "approval_resumption_outbox",
+      "constraint_name": "approval_resumption_outbox_attempts_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL attempts"
+    },
+    {
+      "table_name": "approval_resumption_outbox",
+      "constraint_name": "approval_resumption_outbox_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "approval_resumption_outbox",
+      "constraint_name": "approval_resumption_outbox_decision_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL decision"
+    },
+    {
+      "table_name": "approval_resumption_outbox",
+      "constraint_name": "approval_resumption_outbox_fencing_token_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL fencing_token"
+    },
+    {
+      "table_name": "approval_resumption_outbox",
+      "constraint_name": "approval_resumption_outbox_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "approval_resumption_outbox",
+      "constraint_name": "approval_resumption_outbox_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "approval_resumption_outbox",
+      "constraint_name": "approval_resumption_outbox_principal_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL principal_id"
+    },
+    {
+      "table_name": "approval_resumption_outbox",
+      "constraint_name": "approval_resumption_outbox_run_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE RESTRICT"
+    },
+    {
+      "table_name": "approval_resumption_outbox",
+      "constraint_name": "approval_resumption_outbox_run_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL run_id"
+    },
+    {
+      "table_name": "approval_resumption_outbox",
+      "constraint_name": "approval_resumption_outbox_state_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL state"
+    },
+    {
+      "table_name": "approval_resumption_outbox",
+      "constraint_name": "approval_resumption_outbox_target_type_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL target_type"
+    },
+    {
+      "table_name": "approval_resumption_outbox",
+      "constraint_name": "approval_resumption_outbox_updated_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL updated_at"
+    },
+    {
+      "table_name": "approval_resumption_outbox",
+      "constraint_name": "approval_resumption_outbox_workflow_run_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(id) ON DELETE RESTRICT"
+    },
+    {
+      "table_name": "approval_resumption_outbox",
+      "constraint_name": "approval_resumption_state_check",
+      "constraint_type": "c",
+      "definition": "CHECK (((state)::text = ANY ((ARRAY['APPROVED_UNCLAIMED'::character varying, 'CLAIMED_NOT_DISPATCHED'::character varying, 'DISPATCHED_UNKNOWN'::character varying, 'COMPLETED_WITH_RESULT'::character varying, 'CANCELLED_REVOKED'::character varying, 'RECOVERABLY_FAILED'::character varying])::text[])))"
+    },
+    {
+      "table_name": "approval_resumption_outbox",
+      "constraint_name": "approval_resumption_target_check",
+      "constraint_type": "c",
+      "definition": "CHECK (((target_type)::text = ANY ((ARRAY['RUN'::character varying, 'WORKFLOW'::character varying])::text[])))"
+    },
+    {
+      "table_name": "approvals",
+      "constraint_name": "approvals_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "approvals",
+      "constraint_name": "approvals_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "approvals",
+      "constraint_name": "approvals_once_state_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL once_state"
+    },
+    {
+      "table_name": "approvals",
+      "constraint_name": "approvals_permission_level_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL permission_level"
+    },
+    {
+      "table_name": "approvals",
+      "constraint_name": "approvals_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "approvals",
+      "constraint_name": "approvals_risk_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL risk"
+    },
+    {
+      "table_name": "approvals",
+      "constraint_name": "approvals_run_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE"
+    },
+    {
+      "table_name": "approvals",
+      "constraint_name": "approvals_run_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL run_id"
+    },
+    {
+      "table_name": "approvals",
+      "constraint_name": "approvals_status_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL status"
+    },
+    {
+      "table_name": "approvals",
+      "constraint_name": "approvals_tool_call_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (tool_call_id) REFERENCES tool_calls(id) ON DELETE CASCADE"
+    },
+    {
+      "table_name": "artifacts",
+      "constraint_name": "artifacts_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "artifacts",
+      "constraint_name": "artifacts_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "artifacts",
+      "constraint_name": "artifacts_name_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL name"
+    },
+    {
+      "table_name": "artifacts",
+      "constraint_name": "artifacts_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "artifacts",
+      "constraint_name": "artifacts_run_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE"
+    },
+    {
+      "table_name": "artifacts",
+      "constraint_name": "artifacts_run_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL run_id"
+    },
+    {
+      "table_name": "artifacts",
+      "constraint_name": "artifacts_type_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL type"
+    },
+    {
+      "table_name": "artifacts",
+      "constraint_name": "artifacts_updated_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL updated_at"
+    },
+    {
+      "table_name": "automation_runs",
+      "constraint_name": "automation_runs_automation_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (automation_id) REFERENCES automations(id) ON DELETE CASCADE"
+    },
+    {
+      "table_name": "automation_runs",
+      "constraint_name": "automation_runs_automation_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL automation_id"
+    },
+    {
+      "table_name": "automation_runs",
+      "constraint_name": "automation_runs_automation_id_scheduled_for_unique",
+      "constraint_type": "u",
+      "definition": "UNIQUE (automation_id, scheduled_for)"
+    },
+    {
+      "table_name": "automation_runs",
+      "constraint_name": "automation_runs_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "automation_runs",
+      "constraint_name": "automation_runs_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "automation_runs",
+      "constraint_name": "automation_runs_scheduled_for_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL scheduled_for"
+    },
+    {
+      "table_name": "automation_runs",
+      "constraint_name": "automation_runs_started_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL started_at"
+    },
+    {
+      "table_name": "automation_runs",
+      "constraint_name": "automation_runs_status_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL status"
+    },
+    {
+      "table_name": "automations",
+      "constraint_name": "automations_agent_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL agent_id"
+    },
+    {
+      "table_name": "automations",
+      "constraint_name": "automations_createdAt_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL \"createdAt\""
+    },
+    {
+      "table_name": "automations",
+      "constraint_name": "automations_cron_expression_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL cron_expression"
+    },
+    {
+      "table_name": "automations",
+      "constraint_name": "automations_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "automations",
+      "constraint_name": "automations_name_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL name"
+    },
+    {
+      "table_name": "automations",
+      "constraint_name": "automations_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "automations",
+      "constraint_name": "automations_updatedAt_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL \"updatedAt\""
+    },
+    {
+      "table_name": "autonomous_agent_tasks",
+      "constraint_name": "autonomous_agent_tasks_artifacts_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL artifacts"
+    },
+    {
+      "table_name": "autonomous_agent_tasks",
+      "constraint_name": "autonomous_agent_tasks_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "autonomous_agent_tasks",
+      "constraint_name": "autonomous_agent_tasks_execution_history_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL execution_history"
+    },
+    {
+      "table_name": "autonomous_agent_tasks",
+      "constraint_name": "autonomous_agent_tasks_fencing_token_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL fencing_token"
+    },
+    {
+      "table_name": "autonomous_agent_tasks",
+      "constraint_name": "autonomous_agent_tasks_objective_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL objective"
+    },
+    {
+      "table_name": "autonomous_agent_tasks",
+      "constraint_name": "autonomous_agent_tasks_observations_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL observations"
+    },
+    {
+      "table_name": "autonomous_agent_tasks",
+      "constraint_name": "autonomous_agent_tasks_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (task_id)"
+    },
+    {
+      "table_name": "autonomous_agent_tasks",
+      "constraint_name": "autonomous_agent_tasks_principal_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL principal_id"
+    },
+    {
+      "table_name": "autonomous_agent_tasks",
+      "constraint_name": "autonomous_agent_tasks_state_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL state"
+    },
+    {
+      "table_name": "autonomous_agent_tasks",
+      "constraint_name": "autonomous_agent_tasks_task_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL task_id"
+    },
+    {
+      "table_name": "autonomous_agent_tasks",
+      "constraint_name": "autonomous_agent_tasks_updated_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL updated_at"
+    },
+    {
+      "table_name": "autonomous_agent_tasks",
+      "constraint_name": "autonomous_agent_tasks_working_memory_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL working_memory"
+    },
+    {
+      "table_name": "autonomous_agent_tasks",
+      "constraint_name": "uq_auto_tasks_idempotency",
+      "constraint_type": "u",
+      "definition": "UNIQUE (principal_id, idempotency_key)"
+    },
+    {
+      "table_name": "bff_sessions",
+      "constraint_name": "bff_sessions_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "bff_sessions",
+      "constraint_name": "bff_sessions_csrf_token_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL csrf_token"
+    },
+    {
+      "table_name": "bff_sessions",
+      "constraint_name": "bff_sessions_expires_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL expires_at"
+    },
+    {
+      "table_name": "bff_sessions",
+      "constraint_name": "bff_sessions_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "bff_sessions",
+      "constraint_name": "bff_sessions_jwt_expires_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL jwt_expires_at"
+    },
+    {
+      "table_name": "bff_sessions",
+      "constraint_name": "bff_sessions_jwt_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL jwt"
+    },
+    {
+      "table_name": "bff_sessions",
+      "constraint_name": "bff_sessions_last_rotated_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL last_rotated_at"
+    },
+    {
+      "table_name": "bff_sessions",
+      "constraint_name": "bff_sessions_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "bff_sessions",
+      "constraint_name": "bff_sessions_session_token_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL session_token"
+    },
+    {
+      "table_name": "bff_sessions",
+      "constraint_name": "bff_sessions_user_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL user_id"
+    },
+    {
+      "table_name": "billing_audit_events",
+      "constraint_name": "billing_audit_events_actor_type_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL actor_type"
+    },
+    {
+      "table_name": "billing_audit_events",
+      "constraint_name": "billing_audit_events_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "billing_audit_events",
+      "constraint_name": "billing_audit_events_event_type_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL event_type"
+    },
+    {
+      "table_name": "billing_audit_events",
+      "constraint_name": "billing_audit_events_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "billing_audit_events",
+      "constraint_name": "billing_audit_events_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "billing_customers",
+      "constraint_name": "billing_customers_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "billing_customers",
+      "constraint_name": "billing_customers_default_currency_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL default_currency"
+    },
+    {
+      "table_name": "billing_customers",
+      "constraint_name": "billing_customers_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "billing_customers",
+      "constraint_name": "billing_customers_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "billing_customers",
+      "constraint_name": "billing_customers_principal_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL principal_id"
+    },
+    {
+      "table_name": "billing_customers",
+      "constraint_name": "billing_customers_principal_id_unique",
+      "constraint_type": "u",
+      "definition": "UNIQUE (principal_id)"
+    },
+    {
+      "table_name": "billing_customers",
+      "constraint_name": "billing_customers_updated_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL updated_at"
+    },
+    {
+      "table_name": "capacity_permits",
+      "constraint_name": "capacity_permits_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "capacity_permits",
+      "constraint_name": "capacity_permits_expires_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL expires_at"
+    },
+    {
+      "table_name": "capacity_permits",
+      "constraint_name": "capacity_permits_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "capacity_permits",
+      "constraint_name": "capacity_permits_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "capacity_permits",
+      "constraint_name": "capacity_permits_principal_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL principal_id"
+    },
+    {
+      "table_name": "capacity_permits",
+      "constraint_name": "capacity_permits_scope_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL scope"
+    },
+    {
+      "table_name": "capacity_rate_log",
+      "constraint_name": "capacity_rate_log_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "capacity_rate_log",
+      "constraint_name": "capacity_rate_log_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "capacity_rate_log",
+      "constraint_name": "capacity_rate_log_principal_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL principal_id"
+    },
+    {
+      "table_name": "capacity_rate_log",
+      "constraint_name": "capacity_rate_log_scope_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL scope"
+    },
+    {
+      "table_name": "capacity_rate_log",
+      "constraint_name": "capacity_rate_log_timestamp_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL \"timestamp\""
+    },
+    {
+      "table_name": "conversation_messages",
+      "constraint_name": "conversation_messages_client_message_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL client_message_id"
+    },
+    {
+      "table_name": "conversation_messages",
+      "constraint_name": "conversation_messages_content_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL content"
+    },
+    {
+      "table_name": "conversation_messages",
+      "constraint_name": "conversation_messages_conversation_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE"
+    },
+    {
+      "table_name": "conversation_messages",
+      "constraint_name": "conversation_messages_conversation_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL conversation_id"
+    },
+    {
+      "table_name": "conversation_messages",
+      "constraint_name": "conversation_messages_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "conversation_messages",
+      "constraint_name": "conversation_messages_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "conversation_messages",
+      "constraint_name": "conversation_messages_metadata_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL metadata"
+    },
+    {
+      "table_name": "conversation_messages",
+      "constraint_name": "conversation_messages_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "conversation_messages",
+      "constraint_name": "conversation_messages_principal_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL principal_id"
+    },
+    {
+      "table_name": "conversation_messages",
+      "constraint_name": "conversation_messages_role_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL role"
+    },
+    {
+      "table_name": "conversation_messages",
+      "constraint_name": "conversation_messages_updated_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL updated_at"
+    },
+    {
+      "table_name": "conversation_search_documents",
+      "constraint_name": "conversation_search_documents_content_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL content"
+    },
+    {
+      "table_name": "conversation_search_documents",
+      "constraint_name": "conversation_search_documents_conversation_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE"
+    },
+    {
+      "table_name": "conversation_search_documents",
+      "constraint_name": "conversation_search_documents_conversation_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL conversation_id"
+    },
+    {
+      "table_name": "conversation_search_documents",
+      "constraint_name": "conversation_search_documents_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "conversation_search_documents",
+      "constraint_name": "conversation_search_documents_embedding_status_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL embedding_status"
+    },
+    {
+      "table_name": "conversation_search_documents",
+      "constraint_name": "conversation_search_documents_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "conversation_search_documents",
+      "constraint_name": "conversation_search_documents_message_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (message_id) REFERENCES conversation_messages(id) ON DELETE CASCADE"
+    },
+    {
+      "table_name": "conversation_search_documents",
+      "constraint_name": "conversation_search_documents_message_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL message_id"
+    },
+    {
+      "table_name": "conversation_search_documents",
+      "constraint_name": "conversation_search_documents_metadata_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL metadata"
+    },
+    {
+      "table_name": "conversation_search_documents",
+      "constraint_name": "conversation_search_documents_normalized_content_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL normalized_content"
+    },
+    {
+      "table_name": "conversation_search_documents",
+      "constraint_name": "conversation_search_documents_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "conversation_search_documents",
+      "constraint_name": "conversation_search_documents_principal_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL principal_id"
+    },
+    {
+      "table_name": "conversation_search_documents",
+      "constraint_name": "conversation_search_documents_role_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL role"
+    },
+    {
+      "table_name": "conversation_search_documents",
+      "constraint_name": "conversation_search_documents_updated_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL updated_at"
+    },
+    {
+      "table_name": "conversation_search_documents",
+      "constraint_name": "uq_conversation_search_message",
+      "constraint_type": "u",
+      "definition": "UNIQUE (message_id)"
+    },
+    {
+      "table_name": "conversations",
+      "constraint_name": "conversations_client_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL client_id"
+    },
+    {
+      "table_name": "conversations",
+      "constraint_name": "conversations_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "conversations",
+      "constraint_name": "conversations_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "conversations",
+      "constraint_name": "conversations_is_pinned_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL is_pinned"
+    },
+    {
+      "table_name": "conversations",
+      "constraint_name": "conversations_metadata_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL metadata"
+    },
+    {
+      "table_name": "conversations",
+      "constraint_name": "conversations_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "conversations",
+      "constraint_name": "conversations_principal_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL principal_id"
+    },
+    {
+      "table_name": "conversations",
+      "constraint_name": "conversations_title_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL title"
+    },
+    {
+      "table_name": "conversations",
+      "constraint_name": "conversations_updated_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL updated_at"
+    },
+    {
+      "table_name": "credit_accounts",
+      "constraint_name": "chk_credit_accounts_balance_positive",
+      "constraint_type": "c",
+      "definition": "CHECK ((balance_credits >= 0))"
+    },
+    {
+      "table_name": "credit_accounts",
+      "constraint_name": "chk_credit_accounts_reserved_positive",
+      "constraint_type": "c",
+      "definition": "CHECK ((reserved_credits >= 0))"
+    },
+    {
+      "table_name": "credit_accounts",
+      "constraint_name": "credit_accounts_balance_credits_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL balance_credits"
+    },
+    {
+      "table_name": "credit_accounts",
+      "constraint_name": "credit_accounts_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "credit_accounts",
+      "constraint_name": "credit_accounts_customer_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (customer_id) REFERENCES billing_customers(id) ON DELETE CASCADE"
+    },
+    {
+      "table_name": "credit_accounts",
+      "constraint_name": "credit_accounts_customer_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL customer_id"
+    },
+    {
+      "table_name": "credit_accounts",
+      "constraint_name": "credit_accounts_customer_id_unique",
+      "constraint_type": "u",
+      "definition": "UNIQUE (customer_id)"
+    },
+    {
+      "table_name": "credit_accounts",
+      "constraint_name": "credit_accounts_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "credit_accounts",
+      "constraint_name": "credit_accounts_lifetime_granted_credits_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL lifetime_granted_credits"
+    },
+    {
+      "table_name": "credit_accounts",
+      "constraint_name": "credit_accounts_lifetime_spent_credits_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL lifetime_spent_credits"
+    },
+    {
+      "table_name": "credit_accounts",
+      "constraint_name": "credit_accounts_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "credit_accounts",
+      "constraint_name": "credit_accounts_reserved_credits_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL reserved_credits"
+    },
+    {
+      "table_name": "credit_accounts",
+      "constraint_name": "credit_accounts_updated_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL updated_at"
+    },
+    {
+      "table_name": "credit_grants",
+      "constraint_name": "credit_grants_account_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (account_id) REFERENCES credit_accounts(id) ON DELETE CASCADE"
+    },
+    {
+      "table_name": "credit_grants",
+      "constraint_name": "credit_grants_account_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL account_id"
+    },
+    {
+      "table_name": "credit_grants",
+      "constraint_name": "credit_grants_amount_credits_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL amount_credits"
+    },
+    {
+      "table_name": "credit_grants",
+      "constraint_name": "credit_grants_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "credit_grants",
+      "constraint_name": "credit_grants_grant_type_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL grant_type"
+    },
+    {
+      "table_name": "credit_grants",
+      "constraint_name": "credit_grants_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "credit_grants",
+      "constraint_name": "credit_grants_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "credit_grants",
+      "constraint_name": "credit_grants_remaining_credits_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL remaining_credits"
+    },
+    {
+      "table_name": "credit_grants",
+      "constraint_name": "credit_grants_rollover_capped_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL rollover_capped"
+    },
+    {
+      "table_name": "credit_reservations",
+      "constraint_name": "credit_reservations_account_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (account_id) REFERENCES credit_accounts(id) ON DELETE CASCADE"
+    },
+    {
+      "table_name": "credit_reservations",
+      "constraint_name": "credit_reservations_account_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL account_id"
+    },
+    {
+      "table_name": "credit_reservations",
+      "constraint_name": "credit_reservations_amount_credits_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL amount_credits"
+    },
+    {
+      "table_name": "credit_reservations",
+      "constraint_name": "credit_reservations_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "credit_reservations",
+      "constraint_name": "credit_reservations_expires_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL expires_at"
+    },
+    {
+      "table_name": "credit_reservations",
+      "constraint_name": "credit_reservations_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "credit_reservations",
+      "constraint_name": "credit_reservations_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "credit_reservations",
+      "constraint_name": "credit_reservations_status_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL status"
+    },
+    {
+      "table_name": "credit_reservations",
+      "constraint_name": "credit_reservations_task_type_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL task_type"
+    },
+    {
+      "table_name": "credit_reservations",
+      "constraint_name": "credit_reservations_updated_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL updated_at"
+    },
+    {
+      "table_name": "credit_transactions",
+      "constraint_name": "credit_transactions_account_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (account_id) REFERENCES credit_accounts(id) ON DELETE CASCADE"
+    },
+    {
+      "table_name": "credit_transactions",
+      "constraint_name": "credit_transactions_account_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL account_id"
+    },
+    {
+      "table_name": "credit_transactions",
+      "constraint_name": "credit_transactions_amount_credits_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL amount_credits"
+    },
+    {
+      "table_name": "credit_transactions",
+      "constraint_name": "credit_transactions_balance_after_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL balance_after"
+    },
+    {
+      "table_name": "credit_transactions",
+      "constraint_name": "credit_transactions_balance_before_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL balance_before"
+    },
+    {
+      "table_name": "credit_transactions",
+      "constraint_name": "credit_transactions_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "credit_transactions",
+      "constraint_name": "credit_transactions_description_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL description"
+    },
+    {
+      "table_name": "credit_transactions",
+      "constraint_name": "credit_transactions_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "credit_transactions",
+      "constraint_name": "credit_transactions_idempotency_key_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL idempotency_key"
+    },
+    {
+      "table_name": "credit_transactions",
+      "constraint_name": "credit_transactions_idempotency_key_unique",
+      "constraint_type": "u",
+      "definition": "UNIQUE (idempotency_key)"
+    },
+    {
+      "table_name": "credit_transactions",
+      "constraint_name": "credit_transactions_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "credit_transactions",
+      "constraint_name": "credit_transactions_transaction_type_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL transaction_type"
+    },
+    {
+      "table_name": "durable_browser_sessions",
+      "constraint_name": "durable_browser_sessions_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "durable_browser_sessions",
+      "constraint_name": "durable_browser_sessions_encrypted_envelope_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL encrypted_envelope"
+    },
+    {
+      "table_name": "durable_browser_sessions",
+      "constraint_name": "durable_browser_sessions_expires_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL expires_at"
+    },
+    {
+      "table_name": "durable_browser_sessions",
+      "constraint_name": "durable_browser_sessions_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (session_key)"
+    },
+    {
+      "table_name": "durable_browser_sessions",
+      "constraint_name": "durable_browser_sessions_principal_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL principal_id"
+    },
+    {
+      "table_name": "durable_browser_sessions",
+      "constraint_name": "durable_browser_sessions_session_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL session_id"
+    },
+    {
+      "table_name": "durable_browser_sessions",
+      "constraint_name": "durable_browser_sessions_session_key_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL session_key"
+    },
+    {
+      "table_name": "durable_browser_sessions",
+      "constraint_name": "durable_browser_sessions_updated_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL updated_at"
+    },
+    {
+      "table_name": "entitlement_snapshots",
+      "constraint_name": "entitlement_snapshots_customer_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (customer_id) REFERENCES billing_customers(id) ON DELETE CASCADE"
+    },
+    {
+      "table_name": "entitlement_snapshots",
+      "constraint_name": "entitlement_snapshots_customer_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL customer_id"
+    },
+    {
+      "table_name": "entitlement_snapshots",
+      "constraint_name": "entitlement_snapshots_daily_standard_chat_count_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL daily_standard_chat_count"
+    },
+    {
+      "table_name": "entitlement_snapshots",
+      "constraint_name": "entitlement_snapshots_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "entitlement_snapshots",
+      "constraint_name": "entitlement_snapshots_last_reset_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL last_reset_at"
+    },
+    {
+      "table_name": "entitlement_snapshots",
+      "constraint_name": "entitlement_snapshots_monthly_reasoning_boost_count_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL monthly_reasoning_boost_count"
+    },
+    {
+      "table_name": "entitlement_snapshots",
+      "constraint_name": "entitlement_snapshots_monthly_standard_chat_count_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL monthly_standard_chat_count"
+    },
+    {
+      "table_name": "entitlement_snapshots",
+      "constraint_name": "entitlement_snapshots_period_date_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL period_date"
+    },
+    {
+      "table_name": "entitlement_snapshots",
+      "constraint_name": "entitlement_snapshots_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "entitlement_snapshots",
+      "constraint_name": "entitlement_snapshots_updated_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL updated_at"
+    },
+    {
+      "table_name": "entitlement_snapshots",
+      "constraint_name": "uniq_entitlement_customer_period",
+      "constraint_type": "u",
+      "definition": "UNIQUE (customer_id, period_date)"
+    },
+    {
+      "table_name": "idempotent_operations",
+      "constraint_name": "idempotent_operations_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "idempotent_operations",
+      "constraint_name": "idempotent_operations_key_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL key"
+    },
+    {
+      "table_name": "idempotent_operations",
+      "constraint_name": "idempotent_operations_locked_until_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL locked_until"
+    },
+    {
+      "table_name": "idempotent_operations",
+      "constraint_name": "idempotent_operations_operation_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL operation_id"
+    },
+    {
+      "table_name": "idempotent_operations",
+      "constraint_name": "idempotent_operations_operation_type_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL operation_type"
+    },
+    {
+      "table_name": "idempotent_operations",
+      "constraint_name": "idempotent_operations_payload_hash_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL payload_hash"
+    },
+    {
+      "table_name": "idempotent_operations",
+      "constraint_name": "idempotent_operations_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (key)"
+    },
+    {
+      "table_name": "idempotent_operations",
+      "constraint_name": "idempotent_operations_principal_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL principal_id"
+    },
+    {
+      "table_name": "idempotent_operations",
+      "constraint_name": "idempotent_operations_status_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL status"
+    },
+    {
+      "table_name": "idempotent_operations",
+      "constraint_name": "idempotent_operations_updated_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL updated_at"
+    },
+    {
+      "table_name": "idempotent_operations",
+      "constraint_name": "uq_idempotent_principal_operation",
+      "constraint_type": "u",
+      "definition": "UNIQUE (principal_id, operation_id)"
+    },
+    {
+      "table_name": "knex_migrations",
+      "constraint_name": "knex_migrations_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "knex_migrations",
+      "constraint_name": "knex_migrations_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "knex_migrations_lock",
+      "constraint_name": "knex_migrations_lock_index_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL index"
+    },
+    {
+      "table_name": "knex_migrations_lock",
+      "constraint_name": "knex_migrations_lock_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (index)"
+    },
+    {
+      "table_name": "knowledge_chunks",
+      "constraint_name": "knowledge_chunks_content_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL content"
+    },
+    {
+      "table_name": "knowledge_chunks",
+      "constraint_name": "knowledge_chunks_hash_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL hash"
+    },
+    {
+      "table_name": "knowledge_chunks",
+      "constraint_name": "knowledge_chunks_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "knowledge_chunks",
+      "constraint_name": "knowledge_chunks_index_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL index"
+    },
+    {
+      "table_name": "knowledge_chunks",
+      "constraint_name": "knowledge_chunks_is_system_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL is_system"
+    },
+    {
+      "table_name": "knowledge_chunks",
+      "constraint_name": "knowledge_chunks_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "knowledge_chunks",
+      "constraint_name": "knowledge_chunks_source_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (source_id) REFERENCES knowledge_sources(id) ON DELETE CASCADE"
+    },
+    {
+      "table_name": "knowledge_chunks",
+      "constraint_name": "knowledge_chunks_source_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL source_id"
+    },
+    {
+      "table_name": "knowledge_edges",
+      "constraint_name": "knowledge_edges_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "knowledge_edges",
+      "constraint_name": "knowledge_edges_is_system_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL is_system"
+    },
+    {
+      "table_name": "knowledge_edges",
+      "constraint_name": "knowledge_edges_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "knowledge_edges",
+      "constraint_name": "knowledge_edges_relation_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL relation"
+    },
+    {
+      "table_name": "knowledge_edges",
+      "constraint_name": "knowledge_edges_source_entity_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (source_entity_id) REFERENCES knowledge_entities(id) ON DELETE CASCADE"
+    },
+    {
+      "table_name": "knowledge_edges",
+      "constraint_name": "knowledge_edges_source_entity_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL source_entity_id"
+    },
+    {
+      "table_name": "knowledge_edges",
+      "constraint_name": "knowledge_edges_target_entity_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (target_entity_id) REFERENCES knowledge_entities(id) ON DELETE CASCADE"
+    },
+    {
+      "table_name": "knowledge_edges",
+      "constraint_name": "knowledge_edges_target_entity_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL target_entity_id"
+    },
+    {
+      "table_name": "knowledge_entities",
+      "constraint_name": "knowledge_entities_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "knowledge_entities",
+      "constraint_name": "knowledge_entities_is_system_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL is_system"
+    },
+    {
+      "table_name": "knowledge_entities",
+      "constraint_name": "knowledge_entities_name_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL name"
+    },
+    {
+      "table_name": "knowledge_entities",
+      "constraint_name": "knowledge_entities_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "knowledge_entities",
+      "constraint_name": "knowledge_entities_type_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL type"
+    },
+    {
+      "table_name": "knowledge_sources",
+      "constraint_name": "knowledge_sources_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "knowledge_sources",
+      "constraint_name": "knowledge_sources_hash_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL hash"
+    },
+    {
+      "table_name": "knowledge_sources",
+      "constraint_name": "knowledge_sources_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "knowledge_sources",
+      "constraint_name": "knowledge_sources_is_system_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL is_system"
+    },
+    {
+      "table_name": "knowledge_sources",
+      "constraint_name": "knowledge_sources_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "knowledge_sources",
+      "constraint_name": "knowledge_sources_type_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL type"
+    },
+    {
+      "table_name": "knowledge_sources",
+      "constraint_name": "knowledge_sources_uri_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL uri"
+    },
+    {
+      "table_name": "knowledge_sources",
+      "constraint_name": "knowledge_sources_visibility_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL visibility"
+    },
+    {
+      "table_name": "mcp_servers",
+      "constraint_name": "mcp_servers_createdAt_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL \"createdAt\""
+    },
+    {
+      "table_name": "mcp_servers",
+      "constraint_name": "mcp_servers_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "mcp_servers",
+      "constraint_name": "mcp_servers_name_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL name"
+    },
+    {
+      "table_name": "mcp_servers",
+      "constraint_name": "mcp_servers_name_unique",
+      "constraint_type": "u",
+      "definition": "UNIQUE (name)"
+    },
+    {
+      "table_name": "mcp_servers",
+      "constraint_name": "mcp_servers_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "mcp_servers",
+      "constraint_name": "mcp_servers_transport_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL transport"
+    },
+    {
+      "table_name": "mcp_servers",
+      "constraint_name": "mcp_servers_updated_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL updated_at"
+    },
+    {
+      "table_name": "mcp_servers",
+      "constraint_name": "mcp_servers_url_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL url"
+    },
+    {
+      "table_name": "memory_records",
+      "constraint_name": "memory_records_content_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL content"
+    },
+    {
+      "table_name": "memory_records",
+      "constraint_name": "memory_records_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "memory_records",
+      "constraint_name": "memory_records_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "memory_records",
+      "constraint_name": "memory_records_is_system_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL is_system"
+    },
+    {
+      "table_name": "memory_records",
+      "constraint_name": "memory_records_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "memory_records",
+      "constraint_name": "memory_records_type_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL type"
+    },
+    {
+      "table_name": "oauth_accounts",
+      "constraint_name": "oauth_accounts_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "oauth_accounts",
+      "constraint_name": "oauth_accounts_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "oauth_accounts",
+      "constraint_name": "oauth_accounts_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "oauth_accounts",
+      "constraint_name": "oauth_accounts_provider_account_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL provider_account_id"
+    },
+    {
+      "table_name": "oauth_accounts",
+      "constraint_name": "oauth_accounts_provider_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL provider"
+    },
+    {
+      "table_name": "oauth_accounts",
+      "constraint_name": "oauth_accounts_updated_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL updated_at"
+    },
+    {
+      "table_name": "oauth_accounts",
+      "constraint_name": "oauth_accounts_user_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+    },
+    {
+      "table_name": "oauth_accounts",
+      "constraint_name": "oauth_accounts_user_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL user_id"
+    },
+    {
+      "table_name": "oauth_accounts",
+      "constraint_name": "uq_oauth_provider_account",
+      "constraint_type": "u",
+      "definition": "UNIQUE (provider, provider_account_id)"
+    },
+    {
+      "table_name": "payment_gateway_events",
+      "constraint_name": "payment_gateway_events_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "payment_gateway_events",
+      "constraint_name": "payment_gateway_events_event_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL event_id"
+    },
+    {
+      "table_name": "payment_gateway_events",
+      "constraint_name": "payment_gateway_events_event_id_unique",
+      "constraint_type": "u",
+      "definition": "UNIQUE (event_id)"
+    },
+    {
+      "table_name": "payment_gateway_events",
+      "constraint_name": "payment_gateway_events_event_type_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL event_type"
+    },
+    {
+      "table_name": "payment_gateway_events",
+      "constraint_name": "payment_gateway_events_gateway_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL gateway"
+    },
+    {
+      "table_name": "payment_gateway_events",
+      "constraint_name": "payment_gateway_events_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "payment_gateway_events",
+      "constraint_name": "payment_gateway_events_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "payment_gateway_events",
+      "constraint_name": "payment_gateway_events_processed_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL processed"
+    },
+    {
+      "table_name": "payment_gateway_events",
+      "constraint_name": "payment_gateway_events_signature_valid_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL signature_valid"
+    },
+    {
+      "table_name": "plan_prices",
+      "constraint_name": "plan_prices_amount_minor_units_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL amount_minor_units"
+    },
+    {
+      "table_name": "plan_prices",
+      "constraint_name": "plan_prices_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "plan_prices",
+      "constraint_name": "plan_prices_currency_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL currency"
+    },
+    {
+      "table_name": "plan_prices",
+      "constraint_name": "plan_prices_display_amount_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL display_amount"
+    },
+    {
+      "table_name": "plan_prices",
+      "constraint_name": "plan_prices_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "plan_prices",
+      "constraint_name": "plan_prices_interval_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL \"interval\""
+    },
+    {
+      "table_name": "plan_prices",
+      "constraint_name": "plan_prices_is_active_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL is_active"
+    },
+    {
+      "table_name": "plan_prices",
+      "constraint_name": "plan_prices_is_tax_inclusive_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL is_tax_inclusive"
+    },
+    {
+      "table_name": "plan_prices",
+      "constraint_name": "plan_prices_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "plan_prices",
+      "constraint_name": "plan_prices_plan_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (plan_id) REFERENCES plans(id) ON DELETE CASCADE"
+    },
+    {
+      "table_name": "plan_prices",
+      "constraint_name": "plan_prices_plan_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL plan_id"
+    },
+    {
+      "table_name": "plan_prices",
+      "constraint_name": "plan_prices_tax_rate_percent_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL tax_rate_percent"
+    },
+    {
+      "table_name": "plan_prices",
+      "constraint_name": "plan_prices_updated_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL updated_at"
+    },
+    {
+      "table_name": "plan_prices",
+      "constraint_name": "uniq_plan_price_currency",
+      "constraint_type": "u",
+      "definition": "UNIQUE (plan_id, currency, \"interval\")"
+    },
+    {
+      "table_name": "plans",
+      "constraint_name": "plans_builder_access_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL builder_access"
+    },
+    {
+      "table_name": "plans",
+      "constraint_name": "plans_complimentary_reasoning_boosts_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL complimentary_reasoning_boosts"
+    },
+    {
+      "table_name": "plans",
+      "constraint_name": "plans_concurrent_inference_limit_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL concurrent_inference_limit"
+    },
+    {
+      "table_name": "plans",
+      "constraint_name": "plans_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "plans",
+      "constraint_name": "plans_daily_standard_chat_limit_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL daily_standard_chat_limit"
+    },
+    {
+      "table_name": "plans",
+      "constraint_name": "plans_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "plans",
+      "constraint_name": "plans_is_active_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL is_active"
+    },
+    {
+      "table_name": "plans",
+      "constraint_name": "plans_monthly_premium_credits_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL monthly_premium_credits"
+    },
+    {
+      "table_name": "plans",
+      "constraint_name": "plans_monthly_standard_chat_units_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL monthly_standard_chat_units"
+    },
+    {
+      "table_name": "plans",
+      "constraint_name": "plans_name_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL name"
+    },
+    {
+      "table_name": "plans",
+      "constraint_name": "plans_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "plans",
+      "constraint_name": "plans_saved_agents_limit_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL saved_agents_limit"
+    },
+    {
+      "table_name": "plans",
+      "constraint_name": "plans_updated_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL updated_at"
+    },
+    {
+      "table_name": "principal_workspace_authorities",
+      "constraint_name": "chk_workspace_authority_revocation_state",
+      "constraint_type": "c",
+      "definition": "CHECK (((((state)::text = 'ACTIVE'::text) AND (revoked_at IS NULL)) OR (((state)::text = 'REVOKED'::text) AND (revoked_at IS NOT NULL))))"
+    },
+    {
+      "table_name": "principal_workspace_authorities",
+      "constraint_name": "chk_workspace_authority_state",
+      "constraint_type": "c",
+      "definition": "CHECK (((state)::text = ANY ((ARRAY['ACTIVE'::character varying, 'REVOKED'::character varying])::text[])))"
+    },
+    {
+      "table_name": "principal_workspace_authorities",
+      "constraint_name": "principal_workspace_authorities_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "principal_workspace_authorities",
+      "constraint_name": "principal_workspace_authorities_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (principal_id)"
+    },
+    {
+      "table_name": "principal_workspace_authorities",
+      "constraint_name": "principal_workspace_authorities_principal_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL principal_id"
+    },
+    {
+      "table_name": "principal_workspace_authorities",
+      "constraint_name": "principal_workspace_authorities_state_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL state"
+    },
+    {
+      "table_name": "principal_workspace_authorities",
+      "constraint_name": "principal_workspace_authorities_updated_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL updated_at"
+    },
+    {
+      "table_name": "principal_workspace_authorities",
+      "constraint_name": "principal_workspace_authorities_workspace_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL workspace_id"
+    },
+    {
+      "table_name": "principal_workspace_authorities",
+      "constraint_name": "principal_workspace_authorities_workspace_id_unique",
+      "constraint_type": "u",
+      "definition": "UNIQUE (workspace_id)"
+    },
+    {
+      "table_name": "run_events",
+      "constraint_name": "run_events_createdAt_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL \"createdAt\""
+    },
+    {
+      "table_name": "run_events",
+      "constraint_name": "run_events_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "run_events",
+      "constraint_name": "run_events_payload_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL payload"
+    },
+    {
+      "table_name": "run_events",
+      "constraint_name": "run_events_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "run_events",
+      "constraint_name": "run_events_run_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE"
+    },
+    {
+      "table_name": "run_events",
+      "constraint_name": "run_events_run_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL run_id"
+    },
+    {
+      "table_name": "run_events",
+      "constraint_name": "run_events_sequence_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL sequence"
+    },
+    {
+      "table_name": "run_events",
+      "constraint_name": "run_events_type_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL type"
+    },
+    {
+      "table_name": "runs",
+      "constraint_name": "runs_createdAt_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL \"createdAt\""
+    },
+    {
+      "table_name": "runs",
+      "constraint_name": "runs_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "runs",
+      "constraint_name": "runs_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "runs",
+      "constraint_name": "runs_principal_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL principal_id"
+    },
+    {
+      "table_name": "runs",
+      "constraint_name": "runs_prompt_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL prompt"
+    },
+    {
+      "table_name": "runs",
+      "constraint_name": "runs_session_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL session_id"
+    },
+    {
+      "table_name": "runs",
+      "constraint_name": "runs_state_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL state"
+    },
+    {
+      "table_name": "runs",
+      "constraint_name": "runs_status_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL status"
+    },
+    {
+      "table_name": "runs",
+      "constraint_name": "runs_updatedAt_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL \"updatedAt\""
+    },
+    {
+      "table_name": "session_grants",
+      "constraint_name": "session_grants_granted_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL granted_at"
+    },
+    {
+      "table_name": "session_grants",
+      "constraint_name": "session_grants_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "session_grants",
+      "constraint_name": "session_grants_permission_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL permission"
+    },
+    {
+      "table_name": "session_grants",
+      "constraint_name": "session_grants_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "session_grants",
+      "constraint_name": "session_grants_principal_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL principal_id"
+    },
+    {
+      "table_name": "session_grants",
+      "constraint_name": "session_grants_risk_ceiling_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL risk_ceiling"
+    },
+    {
+      "table_name": "session_grants",
+      "constraint_name": "session_grants_tool_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL tool"
+    },
+    {
+      "table_name": "specialist_task_events",
+      "constraint_name": "specialist_task_events_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "specialist_task_events",
+      "constraint_name": "specialist_task_events_event_type_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL event_type"
+    },
+    {
+      "table_name": "specialist_task_events",
+      "constraint_name": "specialist_task_events_fencing_token_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL fencing_token"
+    },
+    {
+      "table_name": "specialist_task_events",
+      "constraint_name": "specialist_task_events_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "specialist_task_events",
+      "constraint_name": "specialist_task_events_payload_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL payload"
+    },
+    {
+      "table_name": "specialist_task_events",
+      "constraint_name": "specialist_task_events_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "specialist_task_events",
+      "constraint_name": "specialist_task_events_run_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL run_id"
+    },
+    {
+      "table_name": "specialist_task_events",
+      "constraint_name": "specialist_task_events_task_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (task_id) REFERENCES specialist_tasks(id) ON DELETE CASCADE"
+    },
+    {
+      "table_name": "specialist_task_events",
+      "constraint_name": "specialist_task_events_task_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL task_id"
+    },
+    {
+      "table_name": "specialist_task_events",
+      "constraint_name": "specialist_task_events_to_state_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL to_state"
+    },
+    {
+      "table_name": "specialist_tasks",
+      "constraint_name": "specialist_tasks_attempt_count_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL attempt_count"
+    },
+    {
+      "table_name": "specialist_tasks",
+      "constraint_name": "specialist_tasks_authorization_requirements_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL authorization_requirements"
+    },
+    {
+      "table_name": "specialist_tasks",
+      "constraint_name": "specialist_tasks_backoff_multiplier_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL backoff_multiplier"
+    },
+    {
+      "table_name": "specialist_tasks",
+      "constraint_name": "specialist_tasks_budget_limits_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL budget_limits"
+    },
+    {
+      "table_name": "specialist_tasks",
+      "constraint_name": "specialist_tasks_checkpoints_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL checkpoints"
+    },
+    {
+      "table_name": "specialist_tasks",
+      "constraint_name": "specialist_tasks_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "specialist_tasks",
+      "constraint_name": "specialist_tasks_dependencies_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL dependencies"
+    },
+    {
+      "table_name": "specialist_tasks",
+      "constraint_name": "specialist_tasks_execution_constraints_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL execution_constraints"
+    },
+    {
+      "table_name": "specialist_tasks",
+      "constraint_name": "specialist_tasks_fencing_token_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL fencing_token"
+    },
+    {
+      "table_name": "specialist_tasks",
+      "constraint_name": "specialist_tasks_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "specialist_tasks",
+      "constraint_name": "specialist_tasks_input_payload_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL input_payload"
+    },
+    {
+      "table_name": "specialist_tasks",
+      "constraint_name": "specialist_tasks_max_retries_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL max_retries"
+    },
+    {
+      "table_name": "specialist_tasks",
+      "constraint_name": "specialist_tasks_objective_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL objective"
+    },
+    {
+      "table_name": "specialist_tasks",
+      "constraint_name": "specialist_tasks_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "specialist_tasks",
+      "constraint_name": "specialist_tasks_principal_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL principal_id"
+    },
+    {
+      "table_name": "specialist_tasks",
+      "constraint_name": "specialist_tasks_provenance_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL provenance"
+    },
+    {
+      "table_name": "specialist_tasks",
+      "constraint_name": "specialist_tasks_role_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL role"
+    },
+    {
+      "table_name": "specialist_tasks",
+      "constraint_name": "specialist_tasks_run_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE"
+    },
+    {
+      "table_name": "specialist_tasks",
+      "constraint_name": "specialist_tasks_run_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL run_id"
+    },
+    {
+      "table_name": "specialist_tasks",
+      "constraint_name": "specialist_tasks_state_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL state"
+    },
+    {
+      "table_name": "specialist_tasks",
+      "constraint_name": "specialist_tasks_timeout_ms_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL timeout_ms"
+    },
+    {
+      "table_name": "specialist_tasks",
+      "constraint_name": "specialist_tasks_updated_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL updated_at"
+    },
+    {
+      "table_name": "specialist_tasks",
+      "constraint_name": "specialist_tasks_usage_telemetry_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL usage_telemetry"
+    },
+    {
+      "table_name": "subscriptions",
+      "constraint_name": "subscriptions_amount_minor_units_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL amount_minor_units"
+    },
+    {
+      "table_name": "subscriptions",
+      "constraint_name": "subscriptions_cancel_at_period_end_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL cancel_at_period_end"
+    },
+    {
+      "table_name": "subscriptions",
+      "constraint_name": "subscriptions_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "subscriptions",
+      "constraint_name": "subscriptions_currency_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL currency"
+    },
+    {
+      "table_name": "subscriptions",
+      "constraint_name": "subscriptions_current_period_end_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL current_period_end"
+    },
+    {
+      "table_name": "subscriptions",
+      "constraint_name": "subscriptions_current_period_start_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL current_period_start"
+    },
+    {
+      "table_name": "subscriptions",
+      "constraint_name": "subscriptions_customer_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (customer_id) REFERENCES billing_customers(id) ON DELETE CASCADE"
+    },
+    {
+      "table_name": "subscriptions",
+      "constraint_name": "subscriptions_customer_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL customer_id"
+    },
+    {
+      "table_name": "subscriptions",
+      "constraint_name": "subscriptions_gateway_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL gateway"
+    },
+    {
+      "table_name": "subscriptions",
+      "constraint_name": "subscriptions_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "subscriptions",
+      "constraint_name": "subscriptions_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "subscriptions",
+      "constraint_name": "subscriptions_plan_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (plan_id) REFERENCES plans(id)"
+    },
+    {
+      "table_name": "subscriptions",
+      "constraint_name": "subscriptions_plan_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL plan_id"
+    },
+    {
+      "table_name": "subscriptions",
+      "constraint_name": "subscriptions_price_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (price_id) REFERENCES plan_prices(id)"
+    },
+    {
+      "table_name": "subscriptions",
+      "constraint_name": "subscriptions_price_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL price_id"
+    },
+    {
+      "table_name": "subscriptions",
+      "constraint_name": "subscriptions_status_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL status"
+    },
+    {
+      "table_name": "subscriptions",
+      "constraint_name": "subscriptions_updated_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL updated_at"
+    },
+    {
+      "table_name": "tool_calls",
+      "constraint_name": "tool_calls_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "tool_calls",
+      "constraint_name": "tool_calls_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "tool_calls",
+      "constraint_name": "tool_calls_run_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE"
+    },
+    {
+      "table_name": "tool_calls",
+      "constraint_name": "tool_calls_run_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL run_id"
+    },
+    {
+      "table_name": "tool_calls",
+      "constraint_name": "tool_calls_started_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL started_at"
+    },
+    {
+      "table_name": "tool_calls",
+      "constraint_name": "tool_calls_status_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL status"
+    },
+    {
+      "table_name": "tool_calls",
+      "constraint_name": "tool_calls_tool_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL tool"
+    },
+    {
+      "table_name": "usage_events",
+      "constraint_name": "usage_events_cached_tokens_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL cached_tokens"
+    },
+    {
+      "table_name": "usage_events",
+      "constraint_name": "usage_events_charged_credits_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL charged_credits"
+    },
+    {
+      "table_name": "usage_events",
+      "constraint_name": "usage_events_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "usage_events",
+      "constraint_name": "usage_events_customer_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (customer_id) REFERENCES billing_customers(id) ON DELETE CASCADE"
+    },
+    {
+      "table_name": "usage_events",
+      "constraint_name": "usage_events_customer_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL customer_id"
+    },
+    {
+      "table_name": "usage_events",
+      "constraint_name": "usage_events_estimated_direct_cost_usd_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL estimated_direct_cost_usd"
+    },
+    {
+      "table_name": "usage_events",
+      "constraint_name": "usage_events_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "usage_events",
+      "constraint_name": "usage_events_images_count_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL images_count"
+    },
+    {
+      "table_name": "usage_events",
+      "constraint_name": "usage_events_input_tokens_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL input_tokens"
+    },
+    {
+      "table_name": "usage_events",
+      "constraint_name": "usage_events_output_tokens_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL output_tokens"
+    },
+    {
+      "table_name": "usage_events",
+      "constraint_name": "usage_events_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "usage_events",
+      "constraint_name": "usage_events_provider_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL provider"
+    },
+    {
+      "table_name": "usage_events",
+      "constraint_name": "usage_events_reasoning_tokens_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL reasoning_tokens"
+    },
+    {
+      "table_name": "usage_events",
+      "constraint_name": "usage_events_sandbox_duration_seconds_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL sandbox_duration_seconds"
+    },
+    {
+      "table_name": "usage_events",
+      "constraint_name": "usage_events_search_queries_count_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL search_queries_count"
+    },
+    {
+      "table_name": "usage_events",
+      "constraint_name": "usage_events_task_type_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL task_type"
+    },
+    {
+      "table_name": "users",
+      "constraint_name": "users_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "users",
+      "constraint_name": "users_email_verified_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL email_verified"
+    },
+    {
+      "table_name": "users",
+      "constraint_name": "users_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "users",
+      "constraint_name": "users_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "users",
+      "constraint_name": "users_updated_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL updated_at"
+    },
+    {
+      "table_name": "workflow_definitions",
+      "constraint_name": "workflow_definitions_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "workflow_definitions",
+      "constraint_name": "workflow_definitions_execution_policy_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL execution_policy"
+    },
+    {
+      "table_name": "workflow_definitions",
+      "constraint_name": "workflow_definitions_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "workflow_definitions",
+      "constraint_name": "workflow_definitions_input_schema_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL input_schema"
+    },
+    {
+      "table_name": "workflow_definitions",
+      "constraint_name": "workflow_definitions_name_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL name"
+    },
+    {
+      "table_name": "workflow_definitions",
+      "constraint_name": "workflow_definitions_output_schema_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL output_schema"
+    },
+    {
+      "table_name": "workflow_definitions",
+      "constraint_name": "workflow_definitions_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "workflow_definitions",
+      "constraint_name": "workflow_definitions_steps_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL steps"
+    },
+    {
+      "table_name": "workflow_definitions",
+      "constraint_name": "workflow_definitions_updated_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL updated_at"
+    },
+    {
+      "table_name": "workflow_definitions",
+      "constraint_name": "workflow_definitions_version_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL version"
+    },
+    {
+      "table_name": "workflow_runs",
+      "constraint_name": "workflow_runs_created_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL created_at"
+    },
+    {
+      "table_name": "workflow_runs",
+      "constraint_name": "workflow_runs_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "workflow_runs",
+      "constraint_name": "workflow_runs_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "workflow_runs",
+      "constraint_name": "workflow_runs_principal_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL principal_id"
+    },
+    {
+      "table_name": "workflow_runs",
+      "constraint_name": "workflow_runs_run_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE"
+    },
+    {
+      "table_name": "workflow_runs",
+      "constraint_name": "workflow_runs_run_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL run_id"
+    },
+    {
+      "table_name": "workflow_runs",
+      "constraint_name": "workflow_runs_session_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL session_id"
+    },
+    {
+      "table_name": "workflow_runs",
+      "constraint_name": "workflow_runs_state_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL state"
+    },
+    {
+      "table_name": "workflow_runs",
+      "constraint_name": "workflow_runs_step_attempts_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL step_attempts"
+    },
+    {
+      "table_name": "workflow_runs",
+      "constraint_name": "workflow_runs_step_outputs_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL step_outputs"
+    },
+    {
+      "table_name": "workflow_runs",
+      "constraint_name": "workflow_runs_step_states_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL step_states"
+    },
+    {
+      "table_name": "workflow_runs",
+      "constraint_name": "workflow_runs_updated_at_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL updated_at"
+    },
+    {
+      "table_name": "workflow_runs",
+      "constraint_name": "workflow_runs_workflow_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (workflow_id) REFERENCES workflow_definitions(id) ON DELETE CASCADE"
+    },
+    {
+      "table_name": "workflow_runs",
+      "constraint_name": "workflow_runs_workflow_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL workflow_id"
+    },
+    {
+      "table_name": "workflow_steps",
+      "constraint_name": "workflow_steps_approval_required_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL approval_required"
+    },
+    {
+      "table_name": "workflow_steps",
+      "constraint_name": "workflow_steps_attempt_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL attempt"
+    },
+    {
+      "table_name": "workflow_steps",
+      "constraint_name": "workflow_steps_depends_on_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL depends_on"
+    },
+    {
+      "table_name": "workflow_steps",
+      "constraint_name": "workflow_steps_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL id"
+    },
+    {
+      "table_name": "workflow_steps",
+      "constraint_name": "workflow_steps_name_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL name"
+    },
+    {
+      "table_name": "workflow_steps",
+      "constraint_name": "workflow_steps_pkey",
+      "constraint_type": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table_name": "workflow_steps",
+      "constraint_name": "workflow_steps_side_effect_level_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL side_effect_level"
+    },
+    {
+      "table_name": "workflow_steps",
+      "constraint_name": "workflow_steps_state_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL state"
+    },
+    {
+      "table_name": "workflow_steps",
+      "constraint_name": "workflow_steps_step_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL step_id"
+    },
+    {
+      "table_name": "workflow_steps",
+      "constraint_name": "workflow_steps_workflow_run_id_foreign",
+      "constraint_type": "f",
+      "definition": "FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(id) ON DELETE CASCADE"
+    },
+    {
+      "table_name": "workflow_steps",
+      "constraint_name": "workflow_steps_workflow_run_id_not_null",
+      "constraint_type": "n",
+      "definition": "NOT NULL workflow_run_id"
+    }
+  ]
+}
