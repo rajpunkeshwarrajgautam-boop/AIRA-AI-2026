@@ -1069,3 +1069,23 @@ test('Fail-Safe Restore: strict FK catalog rejects missing composite-key metadat
     /RESTORE_VERIFICATION_FAILURE.*FK catalog count mismatch/
   );
 });
+
+
+test('Fail-Safe Restore: missing sequence type metadata fails closed in exact mode', async () => {
+  const client = createMockPgClient({
+    tables: ['runs'],
+    rowCounts: { runs: 1 },
+    indexesCount: 0,
+    sequences: ['runs_sequence_seq'],
+  });
+  // Minimal client intentionally does not provide pg_sequences rows.
+  await assert.rejects(
+    () => auditRestoredDatabaseParity(client, {
+      exactTables: ['runs'],
+      exactTotalRows: 1,
+      exactSequences: ['runs_sequence_seq'],
+      exactSequencesDetail: [{ sequence_name: 'runs_sequence_seq', data_type: 'bigint' }],
+    }),
+    /RESTORE_VERIFICATION_FAILURE.*Sequence data type mismatch or metadata missing/
+  );
+});
