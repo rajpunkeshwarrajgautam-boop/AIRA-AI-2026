@@ -74,6 +74,8 @@ export interface RestoreParityRequirements {
   expectedMigrations?: readonly string[] | string[];
   expectedMigrationLedger?: readonly ExactMigrationRecord[];
   verifyReferentialIntegrity?: boolean;
+  /** Fail closed if PostgreSQL FK metadata cannot be read or reconciled; mandatory for disaster-recovery certification. */
+  strictForeignKeyCatalog?: boolean;
 }
 
 export interface ConstraintsBreakdown {
@@ -345,11 +347,22 @@ export async function auditRestoredDatabaseParity(
       if (richRes && Array.isArray(richRes.rows) && richRes.rows.length > 0 && richRes.rows.some(isValidFkRow)) {
         fkRows = richRes.rows.filter(isValidFkRow);
       }
-    } catch {
-      // Fallback query if pg_constraint is not supported in minimal mock
+    } catch (catalogError) {
+      if (requirements.strictForeignKeyCatalog) {
+        const detail = catalogError instanceof Error ? catalogError.message : String(catalogError);
+        throw new Error(`[RESTORE_VERIFICATION_FAILURE] PostgreSQL FK catalog query failed: ${detail}`);
+      }
+      // Legacy minimal test clients may lack PostgreSQL catalog support.
     }
 
-    if (fkRows.length === 0) {
+    if (requirements.strictForeignKeyCatalog && requirements.exactConstraints?.foreignKeys !== undefined &&
+        fkRows.length !== requirements.exactConstraints.foreignKeys) {
+      throw new Error(
+        `[RESTORE_VERIFICATION_FAILURE] FK catalog count mismatch: found ${fkRows.length}, expected ${requirements.exactConstraints.foreignKeys}. Refusing single-column metadata fallback.`
+      );
+    }
+
+    if (fkRows.length === 0 && !requirements.strictForeignKeyCatalog) {
       const fallbackFkQuery = `
         SELECT
           tc.constraint_name,
