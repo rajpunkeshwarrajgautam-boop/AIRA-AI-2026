@@ -4,7 +4,7 @@ import test from 'node:test';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { auditRestoredDatabaseParity, RestoreParityRequirements } from '../scripts/fail-safe-restore-auditor.js';
+import { auditRestoredDatabaseParity, areConstraintDefsEquivalent, canonicalizeArrayCastPattern, RestoreParityRequirements } from '../scripts/fail-safe-restore-auditor.js';
 import { validateDisposableDbName } from '../scripts/validate-portable-key-recovery.js';
 import { secureOverwriteAndRemoveFile } from '../scripts/secure-backup-crypto.js';
 
@@ -687,6 +687,103 @@ test('Fail-Safe Restore: Constraint definitions audit verifies pg_get_constraint
         ],
       }),
     /RESTORE_VERIFICATION_FAILURE.*Missing expected constraint "runs_missing_unique" on table "runs"/
+  );
+});
+
+test('Fail-Safe Restore: Constraint equivalence comparator verifies array-cast AST equivalence and fails closed on genuine differences', () => {
+  // Positive: approval_resumption_decision_check
+  const defA = "CHECK (((decision)::text = ANY ((ARRAY['ALLOW_ONCE'::character varying, 'ALLOW_SESSION'::character varying, 'ALLOW_ALWAYS_FOR_TOOL'::character varying, 'REJECT'::character varying])::text[])))";
+  const defB = "CHECK (((decision)::text = ANY (ARRAY[('ALLOW_ONCE'::character varying)::text, ('ALLOW_SESSION'::character varying)::text, ('ALLOW_ALWAYS_FOR_TOOL'::character varying)::text, ('REJECT'::character varying)::text])))";
+  assert.equal(areConstraintDefsEquivalent(defA, defB), true, 'Form A and Form B must be equivalent');
+  assert.equal(areConstraintDefsEquivalent(defB, defA), true, 'Form B and Form A must be equivalent (symmetric)');
+
+  // Positive: approval_resumption_state_check
+  const stateA = "CHECK (((state)::text = ANY ((ARRAY['APPROVED_UNCLAIMED'::character varying, 'CLAIMED_NOT_DISPATCHED'::character varying])::text[])))";
+  const stateB = "CHECK (((state)::text = ANY (ARRAY[('APPROVED_UNCLAIMED'::character varying)::text, ('CLAIMED_NOT_DISPATCHED'::character varying)::text])))";
+  assert.equal(areConstraintDefsEquivalent(stateA, stateB), true, 'State constraints must be equivalent');
+
+  // Negative: Altered literal in array
+  const alteredDef = "CHECK (((decision)::text = ANY ((ARRAY['ALLOW_ONCE'::character varying, 'ALTERED_VALUE'::character varying])::text[])))";
+  assert.equal(areConstraintDefsEquivalent(defA, alteredDef), false, 'Altered literal must fail closed');
+
+  // Negative: Missing literal
+  const missingLiteral = "CHECK (((decision)::text = ANY ((ARRAY['ALLOW_ONCE'::character varying, 'ALLOW_SESSION'::character varying])::text[])))";
+  assert.equal(areConstraintDefsEquivalent(defA, missingLiteral), false, 'Missing literal must fail closed');
+
+  // Negative: Extra literal
+  const extraLiteral = "CHECK (((decision)::text = ANY ((ARRAY['ALLOW_ONCE'::character varying, 'ALLOW_SESSION'::character varying, 'ALLOW_ALWAYS_FOR_TOOL'::character varying, 'REJECT'::character varying, 'EXTRA'::character varying])::text[])))";
+  assert.equal(areConstraintDefsEquivalent(defA, extraLiteral), false, 'Extra literal must fail closed');
+
+  // Negative: Different column
+  const diffColumn = "CHECK (((other_column)::text = ANY ((ARRAY['ALLOW_ONCE'::character varying, 'ALLOW_SESSION'::character varying, 'ALLOW_ALWAYS_FOR_TOOL'::character varying, 'REJECT'::character varying])::text[])))";
+  assert.equal(areConstraintDefsEquivalent(defA, diffColumn), false, 'Different column must fail closed');
+
+  // Negative: Different operator (ALL instead of ANY)
+  const diffOperator = "CHECK (((decision)::text = ALL ((ARRAY['ALLOW_ONCE'::character varying])::text[])))";
+  assert.equal(areConstraintDefsEquivalent(defA, diffOperator), false, 'Different operator must fail closed');
+
+  // Negative: Non-array check constraint definition differences
+  assert.equal(areConstraintDefsEquivalent("CHECK ((balance >= 0))", "CHECK ((balance > 0))"), false);
+});
+
+test('Fail-Safe Restore: auditRestoredDatabaseParity accepts equivalent array-cast constraint definition in live audit', async () => {
+  const client = {
+    query: async (sql: string) => {
+      if (sql.includes('information_schema.tables')) return { rows: [{ table_name: 'approval_resumption_outbox' }] };
+      if (sql.includes('SELECT count(*)::int as cnt FROM "')) return { rows: [{ cnt: 1 }] };
+      if (sql.includes('FROM pg_constraint c') && sql.includes('pg_get_constraintdef')) {
+        return {
+          rows: [
+            {
+              table_name: 'approval_resumption_outbox',
+              constraint_name: 'approval_resumption_decision_check',
+              constraint_type: 'c',
+              // Database returns element-wise cast form (PostgreSQL 18.7 deparsing)
+              definition: "CHECK (((decision)::text = ANY (ARRAY[('ALLOW_ONCE'::character varying)::text, ('ALLOW_SESSION'::character varying)::text, ('ALLOW_ALWAYS_FOR_TOOL'::character varying)::text, ('REJECT'::character varying)::text])))",
+            },
+          ],
+        };
+      }
+      if (sql.includes('FROM pg_constraint c')) return { rows: [{ contype: 'c', count: '1' }] };
+      if (sql.includes('pg_indexes')) return { rows: [{ cnt: 0 }] };
+      if (sql.includes('information_schema.sequences')) return { rows: [] };
+      if (sql.includes('pg_extension')) return { rows: [] };
+      if (sql.includes('information_schema.columns')) return { rows: [] };
+      return { rows: [] };
+    },
+  };
+
+  // 1. Audit passes when expected definition uses whole-array cast form
+  const passRes = await auditRestoredDatabaseParity(client as any, {
+    exactTables: ['approval_resumption_outbox'],
+    exactTotalRows: 1,
+    exactConstraintDefs: [
+      {
+        table_name: 'approval_resumption_outbox',
+        constraint_name: 'approval_resumption_decision_check',
+        constraint_type: 'c',
+        definition: "CHECK (((decision)::text = ANY ((ARRAY['ALLOW_ONCE'::character varying, 'ALLOW_SESSION'::character varying, 'ALLOW_ALWAYS_FOR_TOOL'::character varying, 'REJECT'::character varying])::text[])))",
+      },
+    ],
+  });
+  assert.equal(passRes.verified, true);
+
+  // 2. Audit fails closed when expected definition has different allowed values
+  await assert.rejects(
+    () =>
+      auditRestoredDatabaseParity(client as any, {
+        exactTables: ['approval_resumption_outbox'],
+        exactTotalRows: 1,
+        exactConstraintDefs: [
+          {
+            table_name: 'approval_resumption_outbox',
+            constraint_name: 'approval_resumption_decision_check',
+            constraint_type: 'c',
+            definition: "CHECK (((decision)::text = ANY ((ARRAY['ALLOW_ONCE'::character varying, 'INCORRECT_VALUE'::character varying])::text[])))",
+          },
+        ],
+      }),
+    /RESTORE_VERIFICATION_FAILURE.*Constraint definition mismatch for "approval_resumption_outbox\.approval_resumption_decision_check"/
   );
 });
 

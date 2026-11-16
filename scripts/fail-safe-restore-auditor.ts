@@ -116,6 +116,43 @@ export function normalizeSql(sql: string | null | undefined): string {
 }
 
 /**
+ * Narrowly scoped, parser-aware equivalence normalizer for PostgreSQL constraint definitions.
+ * Canonicalizes scalar array inclusion expressions (e.g. `col = ANY(...)` generated from `col IN (...)`):
+ *   Element-wise cast form: `= ANY (ARRAY[('A'::character varying)::text, ('B'::character varying)::text])`
+ *   Whole-array cast form:  `= ANY ((ARRAY['A'::character varying, 'B'::character varying])::text[])`
+ *
+ * Both expressions are semantically identical in PostgreSQL AST (ScalarArrayOpExpr using text_eq on identical literal elements).
+ * All other constraint definitions remain strictly unmodified and fail-closed.
+ */
+export function areConstraintDefsEquivalent(
+  actual: string | null | undefined,
+  expected: string | null | undefined
+): boolean {
+  if (actual === expected) return true;
+  const normActual = normalizeSql(actual);
+  const normExpected = normalizeSql(expected);
+  if (normActual === normExpected) return true;
+
+  // Narrow canonicalization of element-wise vs whole-array cast in ANY (ARRAY[...])
+  const canonActual = canonicalizeArrayCastPattern(normActual);
+  const canonExpected = canonicalizeArrayCastPattern(normExpected);
+
+  return canonActual === canonExpected;
+}
+
+export function canonicalizeArrayCastPattern(sql: string): string {
+  // Matches: = any (array[('elem1'::character varying)::text, ('elem2'::character varying)::text, ...])
+  // Replaces with: = any ((array['elem1'::character varying, 'elem2'::character varying, ...])::text[])
+  return sql.replace(
+    /=\s*any\s*\(\s*array\[(\s*\([^\]]+?::(?:character varying|varchar|text)\)::text\s*(?:,\s*\([^\]]+?::(?:character varying|varchar|text)\)::text\s*)*)\]\s*\)/g,
+    (_match, inner) => {
+      const stripped = inner.replace(/\(([^)]+?::(?:character varying|varchar|text))\)::text/g, '$1');
+      return `= any ((array[${stripped}])::text[])`;
+    }
+  );
+}
+
+/**
  * Audits a restored PostgreSQL database for complete schema, data, metadata, and referential parity.
  * Verifies exact expected schema, table catalogs, row counts, constraints definitions via pg_get_constraintdef,
  * canonical index definitions via pg_indexes (indexdef), column data types/nullability/defaults/identities,
@@ -306,7 +343,7 @@ export async function auditRestoredDatabaseParity(
           `[RESTORE_VERIFICATION_FAILURE] Constraint type mismatch for "${key}": found "${actual.constraint_type}", expected "${exp.constraint_type}".`
         );
       }
-      if (exp.definition && normalizeSql(actual.definition) !== normalizeSql(exp.definition)) {
+      if (exp.definition && !areConstraintDefsEquivalent(actual.definition, exp.definition)) {
         throw new Error(
           `[RESTORE_VERIFICATION_FAILURE] Constraint definition mismatch for "${key}": found "${actual.definition}", expected "${exp.definition}".`
         );
