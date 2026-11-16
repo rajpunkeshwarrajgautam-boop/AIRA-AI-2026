@@ -1,9 +1,11 @@
-# ADR 0001 / ADR 0004: pgvector Version Compatibility & Production Extension Invariance Policy
+# pgvector compatibility decision — reference
 
-Please refer to canonical ADR at [docs/adr/0004-pgvector-version-compatibility.md](file:///C:/Users/WORKSTATION/AIRA-PR183-MIGRATION-HARDENING/docs/adr/0004-pgvector-version-compatibility.md).
+The canonical release decision is [ADR 0004: pgvector versions in disaster recovery and production](../adr/0004-pgvector-version-compatibility.md).
 
-## Summary
-- **Neon Production Database (`ep-withered-art-b36ox90b`):** PostgreSQL 16/17 with `vector 0.8.6`.
-- **WSL Disaster-Recovery Environment:** PostgreSQL 18.7 with `vector 0.8.7`.
-- **Finding:** Full binary, on-disk, and query compatibility confirmed for `vector(1536)` and cosine distance `<=>`.
-- **Policy:** Production remains on `0.8.6` (no unattended extension update). Parity auditor whitelists `['0.8.6', '0.8.7']` and fails closed on all other versions.
+**Production:** Neon PostgreSQL 18.7 with pgvector 0.8.6 (verified read-only, 2026-11-16).
+
+**Isolated recovery:** PostgreSQL 18.7 with pgvector 0.8.7 (observed restoration). This recovery result does not prove universal binary, index, or query equivalence.
+
+**Security:** pgvector 0.8.7 addresses CVE-2026-103484 in IVFFlat index builds. Production patch assessment requires a separate approved security change; no upgrade is included in PR #178 or PR #184.
+
+For evidence, limitations, authorized version policy, and acceptance gates, use the canonical ADR above. Do not use absolute workstation file links.
