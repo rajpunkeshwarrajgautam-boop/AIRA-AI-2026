@@ -192,6 +192,8 @@ export async function runPortableDisasterRecoveryValidation(options?: {
     if (independentCatalog.branchId !== 'br-shiny-moon-b3vy9xj7' ||
         independentCatalog.backupCatalogSha256 !== EXPECTED_BACKUP_SHA256 ||
         independentCatalog.migrationCount !== 31 ||
+        independentCatalog.identityColumnCount !== 0 ||
+        independentCatalog.generatedColumnCount !== 0 ||
         actualIdentity.length !== expectedIdentity.size ||
         new Set(actualIdentity).size !== expectedIdentity.size ||
         actualIdentity.some((id: string) => !expectedIdentity.has(id))) {
@@ -230,6 +232,8 @@ export async function runPortableDisasterRecoveryValidation(options?: {
         { extname: 'vector', allowedVersions: ['0.8.6', '0.8.7'] },
       ],
       exactColumnCount: authoritativeSnapshot.totalColumns,
+      expectedIdentityColumnCount: independentCatalog.identityColumnCount,
+      expectedGeneratedColumnCount: independentCatalog.generatedColumnCount,
       exactColumns: authoritativeSnapshot.columns,
       expectedMigrations: authoritativeSnapshot.knexMigrations.map((m: any) => m.name),
       expectedMigrationLedger: authoritativeSnapshot.knexMigrations,
