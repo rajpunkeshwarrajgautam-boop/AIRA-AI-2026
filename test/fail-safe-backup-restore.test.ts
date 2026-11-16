@@ -6,8 +6,13 @@ import { auditRestoredDatabaseParity, RestoreParityRequirements } from '../scrip
 function createMockPgClient(data: {
   tables: string[];
   rowCounts: Record<string, number>;
-  constraintsCount: number;
+  constraintsCount?: number;
+  constraintsBreakdown?: { contype: string; count: number }[];
   indexesCount: number;
+  sequences?: string[];
+  extensions?: string[];
+  foreignKeys?: { child_table: string; child_column: string; parent_table: string; parent_column: string }[];
+  orphansCount?: Record<string, number>;
 }) {
   return {
     query: async (sql: string) => {
@@ -19,11 +24,34 @@ function createMockPgClient(data: {
         const tbl = match ? match[1] : '';
         return { rows: [{ cnt: data.rowCounts[tbl] || 0 }] };
       }
+      if (sql.includes('FROM pg_constraint c')) {
+        if (data.constraintsBreakdown) {
+          return { rows: data.constraintsBreakdown.map(b => ({ contype: b.contype, count: String(b.count) })) };
+        }
+        return { rows: [{ contype: 'p', count: String(data.constraintsCount || 0) }] };
+      }
+      if (sql.includes('information_schema.table_constraints') && sql.includes("constraint_type = 'FOREIGN KEY'")) {
+        return { rows: data.foreignKeys || [] };
+      }
       if (sql.includes('information_schema.table_constraints')) {
-        return { rows: [{ cnt: data.constraintsCount }] };
+        return { rows: [{ cnt: data.constraintsCount || 0 }] };
+      }
+      if (sql.includes('NOT EXISTS') && sql.includes('SELECT count(*)::int as orphaned')) {
+        const match = sql.match(/FROM "([^"]+)" c/);
+        const childTable = match ? match[1] : '';
+        const orphans = data.orphansCount && data.orphansCount[childTable] !== undefined
+          ? data.orphansCount[childTable]
+          : 0;
+        return { rows: [{ orphaned: orphans }] };
       }
       if (sql.includes('pg_indexes')) {
         return { rows: [{ cnt: data.indexesCount }] };
+      }
+      if (sql.includes('information_schema.sequences')) {
+        return { rows: (data.sequences || []).map(s => ({ sequence_name: s })) };
+      }
+      if (sql.includes('pg_extension')) {
+        return { rows: (data.extensions || []).map(e => ({ extname: e })) };
       }
       return { rows: [] };
     }
@@ -54,6 +82,119 @@ test('Fail-Safe Restore: verifies clean parity when all requirements are met', a
   assert.equal(result.totalRows, 750);
   assert.equal(result.constraintCount, 30);
   assert.equal(result.indexCount, 15);
+});
+
+test('Fail-Safe Restore: verifies exact tables and exact total rows', async () => {
+  const mockTables = ['users', 'runs', 'workflow_runs'];
+  const mockRows = { users: 10, runs: 20, workflow_runs: 30 };
+  const client = createMockPgClient({
+    tables: mockTables,
+    rowCounts: mockRows,
+    constraintsBreakdown: [
+      { contype: 'p', count: 3 },
+      { contype: 'f', count: 5 },
+      { contype: 'u', count: 2 },
+      { contype: 'c', count: 1 },
+      { contype: 'n', count: 10 },
+    ],
+    indexesCount: 8,
+    sequences: ['seq_users_id'],
+    extensions: ['plpgsql', 'vector'],
+  });
+
+  const reqs: RestoreParityRequirements = {
+    exactTables: ['users', 'runs', 'workflow_runs'],
+    exactTotalRows: 60,
+    exactTableRows: { users: 10, runs: 20, workflow_runs: 30 },
+    exactConstraints: {
+      primaryKeys: 3,
+      foreignKeys: 5,
+      uniqueConstraints: 2,
+      checkConstraints: 1,
+      totalRelationalConstraints: 11,
+    },
+    exactIndexes: 8,
+    exactSequences: ['seq_users_id'],
+    exactExtensions: ['plpgsql', 'vector'],
+  };
+
+  const result = await auditRestoredDatabaseParity(client, reqs);
+  assert.equal(result.verified, true);
+  assert.equal(result.exactParityVerified, true);
+  assert.equal(result.totalRows, 60);
+  assert.equal(result.constraintsBreakdown.primaryKeys, 3);
+  assert.equal(result.constraintsBreakdown.foreignKeys, 5);
+  assert.equal(result.sequenceCount, 1);
+});
+
+test('Fail-Safe Restore: fails closed on unexpected extra table in exact mode', async () => {
+  const client = createMockPgClient({
+    tables: ['users', 'runs', 'workflow_runs', 'hacker_table'],
+    rowCounts: { users: 1, runs: 1, workflow_runs: 1, hacker_table: 1 },
+    indexesCount: 1,
+  });
+
+  const reqs: RestoreParityRequirements = {
+    exactTables: ['users', 'runs', 'workflow_runs'],
+  };
+
+  await assert.rejects(
+    () => auditRestoredDatabaseParity(client, reqs),
+    /RESTORE_VERIFICATION_FAILURE.*Unexpected extra tables found.*hacker_table/
+  );
+});
+
+test('Fail-Safe Restore: fails closed on exact total row count mismatch', async () => {
+  const client = createMockPgClient({
+    tables: ['users', 'runs'],
+    rowCounts: { users: 10, runs: 25 }, // total 35
+    indexesCount: 1,
+  });
+
+  const reqs: RestoreParityRequirements = {
+    exactTotalRows: 50,
+  };
+
+  await assert.rejects(
+    () => auditRestoredDatabaseParity(client, reqs),
+    /RESTORE_VERIFICATION_FAILURE.*Exact total row count mismatch: found 35, expected exactly 50/
+  );
+});
+
+test('Fail-Safe Restore: fails closed on per-table exact row count mismatch', async () => {
+  const client = createMockPgClient({
+    tables: ['users', 'runs'],
+    rowCounts: { users: 10, runs: 15 },
+    indexesCount: 1,
+  });
+
+  const reqs: RestoreParityRequirements = {
+    exactTableRows: { users: 10, runs: 20 },
+  };
+
+  await assert.rejects(
+    () => auditRestoredDatabaseParity(client, reqs),
+    /RESTORE_VERIFICATION_FAILURE.*Exact row count mismatch for table "runs": found 15, expected 20/
+  );
+});
+
+test('Fail-Safe Restore: fails closed when foreign key referential integrity is violated', async () => {
+  const client = createMockPgClient({
+    tables: ['users', 'runs'],
+    rowCounts: { users: 10, runs: 20 },
+    indexesCount: 1,
+    foreignKeys: [{ child_table: 'runs', child_column: 'user_id', parent_table: 'users', parent_column: 'id' }],
+    orphansCount: { runs: 3 }, // 3 orphaned rows
+  });
+
+  const reqs: RestoreParityRequirements = {
+    verifyReferentialIntegrity: true,
+  };
+
+  await assert.rejects(
+    () => auditRestoredDatabaseParity(client, reqs),
+    /RESTORE_REFERENTIAL_INTEGRITY_FAILURE.*Found 3 orphaned records in "runs\.user_id"/
+  );
 });
 
 test('Fail-Safe Restore: fails closed when table count is deficient', async () => {

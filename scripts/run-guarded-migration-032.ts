@@ -190,6 +190,7 @@ export async function executeGuardedMigration032(options: GuardedMigrationOption
   await client.query(`SET statement_timeout = '${stmtTimeout}'`);
 
   let advisoryLockAcquired = false;
+  let knexLockAcquired = false;
 
   try {
     // 2. Validate Target Environment Database Identity Post-Connect
@@ -221,7 +222,7 @@ export async function executeGuardedMigration032(options: GuardedMigrationOption
     advisoryLockAcquired = true;
     console.log('  ✓ Advisory lock acquired (runner mutual exclusion verified).');
 
-    // Check Knex migration lock table for concurrent standard migrations
+    // Check Knex migration lock table and safely coordinate against concurrent standard migrations
     const hasKnexLockTable = await client.query(`
       SELECT EXISTS (
         SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'knex_migrations_lock'
@@ -232,6 +233,15 @@ export async function executeGuardedMigration032(options: GuardedMigrationOption
       if (lockStatus.rows.length > 0 && lockStatus.rows[0].is_locked === 1) {
         throw new Error('[KNEX_LOCK_ACTIVE] Another Knex migration process is holding knex_migrations_lock (is_locked=1). Aborting.');
       }
+      // Atomically acquire the Knex migrations lock so standard knex migrate commands cannot run concurrently
+      const claimRes = await client.query(
+        'UPDATE knex_migrations_lock SET is_locked = 1 WHERE is_locked = 0 AND index = 1 RETURNING is_locked'
+      );
+      if (claimRes.rowCount === 0) {
+        throw new Error('[KNEX_LOCK_ACTIVE] Another Knex migration process acquired knex_migrations_lock concurrently. Aborting.');
+      }
+      knexLockAcquired = true;
+      console.log('  ✓ Knex migrations lock acquired (standard Knex runners coordinated and blocked).');
     }
 
     // 4. Pending Migration Quarantine & Catalog Inspection
@@ -302,6 +312,16 @@ export async function executeGuardedMigration032(options: GuardedMigrationOption
       if (colCheck.rows[0].data_type !== 'jsonb') {
         throw new Error(
           `[CORRUPT_SCHEMA_ERROR] Column "workflow_runs.artifacts" has data_type "${colCheck.rows[0].data_type}", expected jsonb.`
+        );
+      }
+      if (!colCheck.rows[0].column_default || !colCheck.rows[0].column_default.includes('[]')) {
+        throw new Error(
+          `[CORRUPT_SCHEMA_ERROR] Column "workflow_runs.artifacts" default is not '[]'::jsonb (actual: "${colCheck.rows[0].column_default}").`
+        );
+      }
+      if (colCheck.rows[0].is_nullable !== 'YES') {
+        throw new Error(
+          `[CORRUPT_SCHEMA_ERROR] Column "workflow_runs.artifacts" is_nullable is "${colCheck.rows[0].is_nullable}", expected YES.`
         );
       }
 
@@ -377,13 +397,8 @@ export async function executeGuardedMigration032(options: GuardedMigrationOption
       );
       console.log('  ✓ Knex ledger entry inserted atomically.');
 
-      // Commit transaction
-      await client.query('COMMIT');
-      transactionCommitted = true;
-      console.log('  ✓ Transaction committed successfully.');
-
-      // 7. Postcondition Verification
-      console.log('[6/6] Verifying postconditions...');
+      // 7. Postcondition Verification (strictly BEFORE COMMIT)
+      console.log('  -> [Pre-Commit Verification] Verifying JSONB default, schema postconditions, and data integrity...');
       const postColRes = await client.query(`
         SELECT column_name, data_type, column_default, is_nullable
         FROM information_schema.columns
@@ -391,6 +406,18 @@ export async function executeGuardedMigration032(options: GuardedMigrationOption
       `);
       if (postColRes.rows.length === 0 || postColRes.rows[0].data_type !== 'jsonb') {
         throw new Error('[POSTCONDITION_FAILED] Column workflow_runs.artifacts was not created as JSONB.');
+      }
+
+      if (!postColRes.rows[0].column_default || !postColRes.rows[0].column_default.includes('[]')) {
+        throw new Error(
+          `[POSTCONDITION_FAILED] Column workflow_runs.artifacts default is not '[]'::jsonb (actual: "${postColRes.rows[0].column_default}").`
+        );
+      }
+
+      if (postColRes.rows[0].is_nullable !== 'YES') {
+        throw new Error(
+          `[POSTCONDITION_FAILED] Column workflow_runs.artifacts is_nullable is "${postColRes.rows[0].is_nullable}", expected YES.`
+        );
       }
 
       const postRowCountRes = await client.query('SELECT count(*)::int as count FROM workflow_runs');
@@ -405,9 +432,14 @@ export async function executeGuardedMigration032(options: GuardedMigrationOption
         [AUTHORIZED_MIGRATION_FILE]
       );
       if (ledgerCheck.rows.length === 0) {
-        throw new Error('[LEDGER_FAILED] Migration entry was not found in knex_migrations after commit.');
+        throw new Error('[LEDGER_FAILED] Migration entry was not found in knex_migrations before commit.');
       }
       console.log(`  ✓ Ledger confirmed: id=${ledgerCheck.rows[0].id}, batch=${ledgerCheck.rows[0].batch}`);
+
+      // ALL POSTCONDITIONS AND DEFAULT VERIFIED — ATOMIC COMMIT
+      await client.query('COMMIT');
+      transactionCommitted = true;
+      console.log('  ✓ All postconditions verified before COMMIT. Transaction committed successfully.');
 
       return {
         target: options.targetEnvironment,
@@ -432,6 +464,14 @@ export async function executeGuardedMigration032(options: GuardedMigrationOption
       throw txError;
     }
   } finally {
+    if (knexLockAcquired) {
+      try {
+        await client.query('UPDATE knex_migrations_lock SET is_locked = 0 WHERE index = 1');
+        console.log('  ✓ Knex migrations lock released.');
+      } catch (knexUnlockErr: any) {
+        console.error('  ! Failed to release knex_migrations_lock:', knexUnlockErr.message);
+      }
+    }
     if (advisoryLockAcquired) {
       try {
         await client.query('SELECT pg_advisory_unlock($1, $2)', [ADVISORY_LOCK_KEY_1, ADVISORY_LOCK_KEY_2]);

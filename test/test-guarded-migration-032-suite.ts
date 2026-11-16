@@ -483,8 +483,80 @@ async function run() {
       await dropIsolatedTestDb(testDbKnexLock);
     }
 
+    // TEST 11: Knex Lock Coordination (Safe Claim and Automatic Release)
+    console.log('--- TEST 11: Knex Lock Coordination (Safe Claim and Automatic Release) ---');
+    const testDbKnexCoord = `aira_knex_coord_test_${Date.now()}`;
+    const connStrKnexCoord = await createIsolatedTestDb(testDbKnexCoord);
+    const clientCoord = new pg.Client({ connectionString: connStrKnexCoord });
+    await clientCoord.connect();
+
+    try {
+      await clientCoord.query(`
+        CREATE TABLE knex_migrations (id SERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL, batch INTEGER NOT NULL, migration_time TIMESTAMPTZ DEFAULT NOW());
+      `);
+      for (let i = 0; i < priorFiles.length; i++) {
+        await clientCoord.query('INSERT INTO knex_migrations (name, batch) VALUES ($1, $2)', [priorFiles[i], Math.min(7, Math.floor(i / 5) + 1)]);
+      }
+      await clientCoord.query(`
+        CREATE TABLE knex_migrations_lock (index INTEGER PRIMARY KEY, is_locked INTEGER);
+        INSERT INTO knex_migrations_lock (index, is_locked) VALUES (1, 0);
+        CREATE TABLE workflow_runs (id VARCHAR(255) PRIMARY KEY);
+      `);
+
+      const resultCoord = await executeGuardedMigration032({
+        connectionString: connStrKnexCoord,
+        targetEnvironment: 'disposable_test',
+      });
+      assert.equal(resultCoord.status, 'SUCCESS');
+
+      // Verify that the Knex lock was released after execution
+      const postLockCheck = await clientCoord.query('SELECT is_locked FROM knex_migrations_lock WHERE index = 1');
+      assert.equal(postLockCheck.rows[0].is_locked, 0, 'Knex migrations lock must be released (is_locked=0) upon completion');
+      console.log('  ✓ TEST 11 PASSED: Knex migration lock safely claimed during execution and released on completion.\n');
+    } finally {
+      await clientCoord.end();
+      await dropIsolatedTestDb(testDbKnexCoord);
+    }
+
+    // TEST 12: Pre-Commit Postcondition Verification (Default and Nullability)
+    console.log('--- TEST 12: Pre-Commit Postconditions (JSONB Default & Nullability Verified) ---');
+    const testDbPostcond = `aira_postcond_test_${Date.now()}`;
+    const connStrPostcond = await createIsolatedTestDb(testDbPostcond);
+    const clientPost = new pg.Client({ connectionString: connStrPostcond });
+    await clientPost.connect();
+
+    try {
+      await clientPost.query(`
+        CREATE TABLE knex_migrations (id SERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL, batch INTEGER NOT NULL, migration_time TIMESTAMPTZ DEFAULT NOW());
+      `);
+      for (let i = 0; i < priorFiles.length; i++) {
+        await clientPost.query('INSERT INTO knex_migrations (name, batch) VALUES ($1, $2)', [priorFiles[i], Math.min(7, Math.floor(i / 5) + 1)]);
+      }
+      await clientPost.query(`
+        CREATE TABLE workflow_runs (id VARCHAR(255) PRIMARY KEY);
+      `);
+
+      const resPost = await executeGuardedMigration032({
+        connectionString: connStrPostcond,
+        targetEnvironment: 'disposable_test',
+      });
+
+      assert.equal(resPost.status, 'SUCCESS');
+      assert.equal(resPost.columnDetails.data_type, 'jsonb');
+      assert.ok(
+        resPost.columnDetails.column_default && resPost.columnDetails.column_default.includes('[]'),
+        `Column default must contain '[]', got: ${resPost.columnDetails.column_default}`
+      );
+      assert.equal(resPost.columnDetails.is_nullable, 'YES');
+
+      console.log('  ✓ TEST 12 PASSED: Pre-commit postconditions verified JSONB data type, default \'[]\'::jsonb, and nullability.\n');
+    } finally {
+      await clientPost.end();
+      await dropIsolatedTestDb(testDbPostcond);
+    }
+
     console.log('========================================================================');
-    console.log(' ALL 10 GUARDED MIGRATION 032 TESTS PASSED: 100% CERTIFIED');
+    console.log(' ALL 12 GUARDED MIGRATION 032 TESTS PASSED: 100% CERTIFIED');
     console.log('========================================================================\n');
   } finally {
     await client.end();
