@@ -7,7 +7,7 @@
   "postgresVersion": "18.7",
   "migrationCount": 31,
   "backupCatalogSha256": "7D49AB20FFA199DB3A6D3F26E62D1EECD27F90556F74D7EB49F1DC0380049877",
-  "note": "This schema catalog was captured from mutable production AFTER the encrypted 2026-11-15 backup. It is independent current-schema evidence, not backup-time row parity or proof no schema changes since backup.",
+  "note": "This schema catalog was captured from mutable production AFTER the encrypted 2026-11-15 backup. It is independent current-schema evidence, not backup-time row parity or proof no schema changes since backup. Sequence ownership metadata is derived from read-only live Neon catalog; sequence last_value is intentionally not copied because the historical backup is earlier than live production.",
   "constraints": [
     {
       "table_name": "account_recovery_requests",
@@ -2762,6 +2762,26 @@
       "constraint_name": "workflow_steps_workflow_run_id_not_null",
       "constraint_type": "n",
       "definition": "NOT NULL workflow_run_id"
+    }
+  ],
+  "sequenceOwnership": [
+    {
+      "sequence_name": "knex_migrations_id_seq",
+      "data_type": "integer",
+      "owner_table": "knex_migrations",
+      "owner_column": "id"
+    },
+    {
+      "sequence_name": "knex_migrations_lock_index_seq",
+      "data_type": "integer",
+      "owner_table": "knex_migrations_lock",
+      "owner_column": "index"
+    },
+    {
+      "sequence_name": "run_events_sequence_seq",
+      "data_type": "bigint",
+      "owner_table": "run_events",
+      "owner_column": "sequence"
     }
   ]
 }
