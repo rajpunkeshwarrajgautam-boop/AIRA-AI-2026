@@ -1,60 +1,36 @@
-# ADR 0004: pgvector Version Compatibility & Production Extension Invariance Policy
+# ADR 0004: pgvector versions in disaster recovery and production
 
-## Status
-Accepted
+**Status:** Conditional DR compatibility accepted; production extension change requires separate approval  
+**Date:** 2026-11-16
 
-## Date
-2026-11-16
+## Verified environment identities
 
-## Context
-During the disaster recovery and release assurance audit of AIRA AI 2026, an environment difference was identified between the production database managed on Neon and the local/disposable disaster-recovery test environment on WSL Ubuntu 24.04:
-- **Neon Production Database (`ep-withered-art-b36ox90b`):** PostgreSQL 16/17 with `vector 0.8.6`.
-- **WSL Disaster-Recovery Test Environment:** PostgreSQL 18.7 with `vector 0.8.7`.
+Read-only inspection of the Neon production branch `br-shiny-moon-b3vy9xj7` on 2026-11-16 reported **PostgreSQL 18.7**, with `vector` extension **0.8.6**. This supersedes older descriptions of production as PostgreSQL 16/17.
 
-We investigated whether this minor version delta poses any functional, semantic, binary, or schema risks to AIRA AI 2026, and defined an explicit operational policy governing database extension updates.
+The isolated WSL recovery environment reported PostgreSQL **18.7**, with `vector` extension **0.8.7**. A real encrypted backup from 2026-11-15 was successfully authenticated and restored there, and its catalog and historical row-count checks were recorded separately.
 
----
+**Scope of evidence:** successful restoration across these extension versions demonstrates recovery of this specific backup under the tested environment. It does **not** establish general binary/on-disk equivalence for every vector index, identical planner choices, or complete semantic and performance equivalence for all vector queries.
 
-## Architectural & Schema Audit
+The historical backup catalog contains 48 tables and 12,464 rows. A read-only production check on 2026-11-16 found 48 tables and 12,483 rows, with changes in seven tables. These differences must be treated as possible legitimate post-backup activity, not silently called exact current-production parity or proof of restore failure. Historical backup parity must be assessed against authenticated backup-time evidence.
 
-### 1. AIRA pgvector Schema & Queries
-AIRA AI 2026 utilizes `pgvector` for semantic document retrieval and conversational memory:
-- **Migration `014_conversation_search_pgvector.ts`:**
-  - Installs extension: `CREATE EXTENSION IF NOT EXISTS vector;`
-  - Table: `conversation_search_documents`
-  - Column: `embedding vector(1536)` (OpenAI text-embedding-3 / ada-002 dimensions)
-  - Index: Cosine distance index (`vector_cosine_ops`)
-- **Runtime Application Queries (`src/server/search` / `src/server/rag`):**
-  - Cosine distance ranking: `1 - (embedding <=> $query_embedding)`
-  - Exact top-k retrieval bounded by tenant and principal isolation filters.
+## Security and compatibility risk
 
-### 2. Version Delta Analysis (`vector 0.8.6` vs `0.8.7`)
-- `pgvector 0.8.7` is a backward-compatible maintenance bugfix release following `0.8.6`.
-- **On-disk binary format:** Identical. Float array encoding and alignment for `vector(dim)` are 100% binary-compatible between 0.8.6 and 0.8.7.
-- **Index structures:** Both HNSW and IVFFlat index structures created in 0.8.6 read and write identically in 0.8.7.
-- **SQL interface:** The operator class `vector_cosine_ops` and distance operators (`<=>`, `<->`, `<#>`) retain identical signatures and mathematical definitions.
-- **pg_dump / pg_restore:** A binary dump created on PostgreSQL with `vector 0.8.6` restores cleanly on PostgreSQL with `vector 0.8.7` without requiring index rebuilds, schema patches, or data conversions.
+According to the upstream pgvector 0.8.7 release notes, version 0.8.7 fixes a buffer overflow in IVFFlat index builds (CVE-2026-103484) and an `avg` aggregate error when no rows match. The PostgreSQL project advisory notes that the buffer overflow could permit arbitrary code execution and recommends upgrading when possible.
 
----
+Sources:
+- https://github.com/pgvector/pgvector/blob/master/CHANGELOG.md
+- https://www.postgresql.org/about/news/pgvector-087-released-3392/
 
-## Decision
+The production installation at 0.8.6 should therefore receive a **separate, security-reviewed exposure assessment**, covering whether IVFFlat index creation is reachable and whether a controlled patch upgrade is warranted. No upgrade or production data change is authorized by this ADR.
 
-1. **Production Invariance Policy:**
-   - Production Neon database (`ep-withered-art-b36ox90b`) will **REMAIN ON `vector 0.8.6`**.
-   - No `ALTER EXTENSION vector UPDATE;` command will be issued during standard releases or Knex migrations.
-   - Production extension versions must remain invariant unless explicitly authorized by the project owner under a separate maintenance change window.
+## Decision and gates
 
-2. **Auditor Multi-Version Validation Policy:**
-   - The disaster-recovery auditor (`scripts/fail-safe-restore-auditor.ts`) enforces an explicit `allowedVersions: ['0.8.6', '0.8.7']` whitelist for `vector`.
-   - Any unvetted major or minor version (e.g. `0.9.x` or higher) fails closed immediately with `[RESTORE_VERIFICATION_FAILURE]`.
+1. Keep Neon production at its observed `vector 0.8.6` pending separate owner-approved maintenance. Do not run `ALTER EXTENSION vector UPDATE` during this release.
+2. Permit `vector 0.8.7` **only for the isolated PostgreSQL 18 recovery acceptance scenario already exercised**. The auditor may explicitly accept both versions under that documented DR policy; that whitelist is not a universal compatibility guarantee.
+3. Fail closed on unreviewed extension versions, missing extension metadata, or catalog/schema mismatches.
+4. Before proposing a future production extension change, run representative vector insert/search, cosine-distance, index-build and index-scan regression tests, document query-plan changes, check affected indexes, and establish rollback and restoration procedures.
+5. Keep the PR #178 + PR #184 release separate from PR #179 Workspace V3 and from any pgvector production upgrade.
 
-3. **Rehearsal & DR Parity:**
-   - The test and disaster-recovery suites in WSL Ubuntu 24.04 (running `0.8.7`) are certified as 100% semantically and functionally equivalent to production `0.8.6`.
-   - All regression tests, distance calculations, and schema checks pass with zero degradation or semantic variance.
+## Outstanding validation
 
----
-
-## Consequences
-- **Positive:** Production avoids unnecessary database extension mutations during release deployment.
-- **Positive:** Disaster-recovery verification succeeds reproducibly across modern PostgreSQL 18 host environments without brittle strict-version pinning errors.
-- **Guardrail:** Uncontrolled future version drifts are blocked by the strict `allowedVersions` whitelist in `fail-safe-restore-auditor.ts`.
+Deployed authenticated staging acceptance is distinct from GitHub Preview CI and must be evidenced separately. Exact-parity certification must distinguish backup-time catalog evidence from the live mutable production database. Neither this ADR nor successful DR restoration authorizes a protected-branch merge or production deployment.
