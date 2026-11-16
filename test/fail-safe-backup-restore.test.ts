@@ -554,4 +554,469 @@ test('Fail-Safe Restore: secureOverwriteAndRemoveFile overwrites with random byt
   assert.equal(resNonExistent.bytesOverwritten, 0);
 });
 
+test('Fail-Safe Restore: Composite FK handling verifies valid keys, MATCH SIMPLE nullability, and fails closed on orphans or MATCH FULL partial nulls', async () => {
+  // Client simulating composite FK: (tenant_id, user_id) -> users(tenant_id, id)
+  const createFkClient = (opts: { orphans: number; matchType?: string; partialNulls?: number }) => ({
+    query: async (sql: string) => {
+      if (sql.includes('information_schema.tables')) return { rows: [{ table_name: 'runs' }, { table_name: 'users' }] };
+      if (sql.includes('SELECT count(*)::int as cnt FROM "')) return { rows: [{ cnt: 10 }] };
+      if (sql.includes('FROM pg_constraint c') && sql.includes("c.contype = 'f'")) {
+        return {
+          rows: [
+            {
+              constraint_name: 'fk_runs_user',
+              child_table: 'runs',
+              parent_table: 'users',
+              match_type: opts.matchType || 'u',
+              child_columns: ['tenant_id', 'user_id'],
+              parent_columns: ['tenant_id', 'id'],
+              constraint_def: 'FOREIGN KEY (tenant_id, user_id) REFERENCES users(tenant_id, id)',
+            },
+          ],
+        };
+      }
+      if (sql.includes('FROM pg_constraint c')) return { rows: [{ contype: 'f', count: '1' }] };
+      if (sql.includes('partial_nulls')) return { rows: [{ partial_nulls: opts.partialNulls || 0 }] };
+      if (sql.includes('SELECT count(*)::int as orphaned')) return { rows: [{ orphaned: opts.orphans }] };
+      if (sql.includes('pg_indexes')) return { rows: [{ cnt: 0 }] };
+      if (sql.includes('information_schema.sequences')) return { rows: [] };
+      if (sql.includes('pg_extension')) return { rows: [] };
+      if (sql.includes('information_schema.columns')) return { rows: [] };
+      return { rows: [] };
+    },
+  });
+
+  // 1. Clean composite FK passes
+  const validClient = createFkClient({ orphans: 0 });
+  const validRes = await auditRestoredDatabaseParity(validClient as any, {
+    exactTables: ['runs', 'users'],
+    exactTotalRows: 20,
+    verifyReferentialIntegrity: true,
+  });
+  assert.equal(validRes.referentialIntegrityVerified, true);
+
+  // 2. Orphaned composite FK fails closed
+  const orphanClient = createFkClient({ orphans: 2 });
+  await assert.rejects(
+    () =>
+      auditRestoredDatabaseParity(orphanClient as any, {
+        exactTables: ['runs', 'users'],
+        exactTotalRows: 20,
+        verifyReferentialIntegrity: true,
+      }),
+    /RESTORE_REFERENTIAL_INTEGRITY_FAILURE.*Found 2 orphaned records in "runs" \(tenant_id, user_id\) referencing non-existent records in "users" \(tenant_id, id\)/
+  );
+
+  // 3. MATCH FULL with partial nulls fails closed
+  const matchFullClient = createFkClient({ orphans: 0, matchType: 'f', partialNulls: 1 });
+  await assert.rejects(
+    () =>
+      auditRestoredDatabaseParity(matchFullClient as any, {
+        exactTables: ['runs', 'users'],
+        exactTotalRows: 20,
+        verifyReferentialIntegrity: true,
+      }),
+    /RESTORE_REFERENTIAL_INTEGRITY_FAILURE.*violating MATCH FULL on "fk_runs_user"/
+  );
+});
+
+test('Fail-Safe Restore: Constraint definitions audit verifies pg_get_constraintdef and fails closed on mismatch or absence', async () => {
+  const client = {
+    query: async (sql: string) => {
+      if (sql.includes('information_schema.tables')) return { rows: [{ table_name: 'runs' }] };
+      if (sql.includes('SELECT count(*)::int as cnt FROM "')) return { rows: [{ cnt: 5 }] };
+      if (sql.includes('FROM pg_constraint c') && sql.includes('pg_get_constraintdef')) {
+        return {
+          rows: [
+            {
+              table_name: 'runs',
+              constraint_name: 'runs_pkey',
+              constraint_type: 'p',
+              definition: 'PRIMARY KEY (id)',
+            },
+            {
+              table_name: 'runs',
+              constraint_name: 'runs_status_check',
+              constraint_type: 'c',
+              definition: "CHECK ((status = ANY (ARRAY['pending'::text, 'active'::text])))",
+            },
+          ],
+        };
+      }
+      if (sql.includes('FROM pg_constraint c')) return { rows: [{ contype: 'p', count: '1' }, { contype: 'c', count: '1' }] };
+      if (sql.includes('pg_indexes')) return { rows: [{ cnt: 0 }] };
+      if (sql.includes('information_schema.sequences')) return { rows: [] };
+      if (sql.includes('pg_extension')) return { rows: [] };
+      if (sql.includes('information_schema.columns')) return { rows: [] };
+      return { rows: [] };
+    },
+  };
+
+  // 1. Matches expected definitions
+  const validRes = await auditRestoredDatabaseParity(client as any, {
+    exactTables: ['runs'],
+    exactTotalRows: 5,
+    exactConstraintDefs: [
+      { table_name: 'runs', constraint_name: 'runs_pkey', definition: 'PRIMARY KEY (id)' },
+      { table_name: 'runs', constraint_name: 'runs_status_check', definition: "CHECK ((status = ANY (ARRAY['pending'::text, 'active'::text])))" },
+    ],
+  });
+  assert.equal(validRes.verified, true);
+
+  // 2. Mismatched definition fails closed
+  await assert.rejects(
+    () =>
+      auditRestoredDatabaseParity(client as any, {
+        exactTables: ['runs'],
+        exactTotalRows: 5,
+        exactConstraintDefs: [
+          { table_name: 'runs', constraint_name: 'runs_pkey', definition: 'PRIMARY KEY (id, tenant_id)' },
+        ],
+      }),
+    /RESTORE_VERIFICATION_FAILURE.*Constraint definition mismatch for "runs\.runs_pkey"/
+  );
+
+  // 3. Missing constraint fails closed
+  await assert.rejects(
+    () =>
+      auditRestoredDatabaseParity(client as any, {
+        exactTables: ['runs'],
+        exactTotalRows: 5,
+        exactConstraintDefs: [
+          { table_name: 'runs', constraint_name: 'runs_missing_unique', definition: 'UNIQUE (uuid)' },
+        ],
+      }),
+    /RESTORE_VERIFICATION_FAILURE.*Missing expected constraint "runs_missing_unique" on table "runs"/
+  );
+});
+
+test('Fail-Safe Restore: Canonical index definitions audit verifies indexdef from pg_indexes and fails closed on mismatch', async () => {
+  const client = {
+    query: async (sql: string) => {
+      if (sql.includes('information_schema.tables')) return { rows: [{ table_name: 'runs' }] };
+      if (sql.includes('SELECT count(*)::int as cnt FROM "')) return { rows: [{ cnt: 5 }] };
+      if (sql.includes('FROM pg_constraint c')) return { rows: [] };
+      if (sql.includes('pg_indexes')) {
+        if (sql.includes('count(*)')) return { rows: [{ cnt: 1 }] };
+        return {
+          rows: [
+            {
+              tablename: 'runs',
+              indexname: 'idx_runs_created_at',
+              indexdef: 'CREATE INDEX idx_runs_created_at ON public.runs USING btree (created_at)',
+            },
+          ],
+        };
+      }
+      if (sql.includes('information_schema.sequences')) return { rows: [] };
+      if (sql.includes('pg_extension')) return { rows: [] };
+      if (sql.includes('information_schema.columns')) return { rows: [] };
+      return { rows: [] };
+    },
+  };
+
+  // 1. Matches expected canonical index definition
+  const validRes = await auditRestoredDatabaseParity(client as any, {
+    exactTables: ['runs'],
+    exactTotalRows: 5,
+    exactIndexDefs: [
+      {
+        tablename: 'runs',
+        indexname: 'idx_runs_created_at',
+        indexdef: 'CREATE INDEX idx_runs_created_at ON public.runs USING btree (created_at)',
+      },
+    ],
+  });
+  assert.equal(validRes.verified, true);
+
+  // 2. Modified indexdef fails closed
+  await assert.rejects(
+    () =>
+      auditRestoredDatabaseParity(client as any, {
+        exactTables: ['runs'],
+        exactTotalRows: 5,
+        exactIndexDefs: [
+          {
+            tablename: 'runs',
+            indexname: 'idx_runs_created_at',
+            indexdef: 'CREATE INDEX idx_runs_created_at ON public.runs USING hash (created_at)',
+          },
+        ],
+      }),
+    /RESTORE_VERIFICATION_FAILURE.*Index definition mismatch for "runs\.idx_runs_created_at"/
+  );
+});
+
+test('Fail-Safe Restore: Column defaults and identities audit fails closed on discrepancies', async () => {
+  const client = {
+    query: async (sql: string) => {
+      if (sql.includes('information_schema.tables')) return { rows: [{ table_name: 'workflow_runs' }] };
+      if (sql.includes('SELECT count(*)::int as cnt FROM "')) return { rows: [{ cnt: 2 }] };
+      if (sql.includes('FROM pg_constraint c')) return { rows: [] };
+      if (sql.includes('pg_indexes')) return { rows: [{ cnt: 0 }] };
+      if (sql.includes('information_schema.sequences')) return { rows: [] };
+      if (sql.includes('pg_extension')) return { rows: [] };
+      if (sql.includes('information_schema.columns')) {
+        return {
+          rows: [
+            {
+              table_name: 'workflow_runs',
+              column_name: 'artifacts',
+              data_type: 'jsonb',
+              is_nullable: 'YES',
+              column_default: "'[]'::jsonb",
+              is_identity: 'NO',
+              identity_generation: null,
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    },
+  };
+
+  // 1. Clean match
+  const validRes = await auditRestoredDatabaseParity(client as any, {
+    exactTables: ['workflow_runs'],
+    exactTotalRows: 2,
+    exactColumns: [
+      {
+        table_name: 'workflow_runs',
+        column_name: 'artifacts',
+        data_type: 'jsonb',
+        is_nullable: 'YES',
+        column_default: "'[]'::jsonb",
+        is_identity: 'NO',
+      },
+    ],
+  });
+  assert.equal(validRes.verified, true);
+
+  // 2. Mismatched column_default fails closed
+  await assert.rejects(
+    () =>
+      auditRestoredDatabaseParity(client as any, {
+        exactTables: ['workflow_runs'],
+        exactTotalRows: 2,
+        exactColumns: [
+          {
+            table_name: 'workflow_runs',
+            column_name: 'artifacts',
+            column_default: "'{}'::jsonb",
+          },
+        ],
+      }),
+    /RESTORE_VERIFICATION_FAILURE.*Column default mismatch for "workflow_runs\.artifacts"/
+  );
+
+  // 3. Mismatched identity fails closed
+  await assert.rejects(
+    () =>
+      auditRestoredDatabaseParity(client as any, {
+        exactTables: ['workflow_runs'],
+        exactTotalRows: 2,
+        exactColumns: [
+          {
+            table_name: 'workflow_runs',
+            column_name: 'artifacts',
+            is_identity: 'YES',
+          },
+        ],
+      }),
+    /RESTORE_VERIFICATION_FAILURE.*Column identity mismatch for "workflow_runs\.artifacts"/
+  );
+});
+
+test('Fail-Safe Restore: Sequence ownership via pg_depend and sequence values audit fails closed on mismatch', async () => {
+  const client = {
+    query: async (sql: string) => {
+      if (sql.includes('information_schema.tables')) return { rows: [{ table_name: 'knex_migrations' }] };
+      if (sql.includes('SELECT count(*)::int as cnt FROM "')) return { rows: [{ cnt: 31 }] };
+      if (sql.includes('FROM pg_constraint c')) return { rows: [] };
+      if (sql.includes('pg_indexes')) return { rows: [{ cnt: 0 }] };
+      if (sql.includes('information_schema.sequences')) {
+        return { rows: [{ sequence_name: 'knex_migrations_id_seq' }] };
+      }
+      if (sql.includes('FROM pg_class s') && sql.includes('pg_depend')) {
+        return {
+          rows: [
+            {
+              sequence_name: 'knex_migrations_id_seq',
+              owner_table: 'knex_migrations',
+              owner_column: 'id',
+            },
+          ],
+        };
+      }
+      if (sql.includes('FROM pg_sequences')) {
+        return {
+          rows: [
+            {
+              sequence_name: 'knex_migrations_id_seq',
+              data_type: 'integer',
+              last_value: 31,
+            },
+          ],
+        };
+      }
+      if (sql.includes('pg_extension')) return { rows: [] };
+      if (sql.includes('information_schema.columns')) return { rows: [] };
+      return { rows: [] };
+    },
+  };
+
+  // 1. Matches expected ownership and last_value
+  const validRes = await auditRestoredDatabaseParity(client as any, {
+    exactTables: ['knex_migrations'],
+    exactTotalRows: 31,
+    exactSequences: ['knex_migrations_id_seq'],
+    exactSequencesDetail: [
+      {
+        sequence_name: 'knex_migrations_id_seq',
+        owner_table: 'knex_migrations',
+        owner_column: 'id',
+        data_type: 'integer',
+        last_value: 31,
+      },
+    ],
+  });
+  assert.equal(validRes.verified, true);
+
+  // 2. Mismatched owner table fails closed
+  await assert.rejects(
+    () =>
+      auditRestoredDatabaseParity(client as any, {
+        exactTables: ['knex_migrations'],
+        exactTotalRows: 31,
+        exactSequencesDetail: [
+          {
+            sequence_name: 'knex_migrations_id_seq',
+            owner_table: 'runs',
+          },
+        ],
+      }),
+    /RESTORE_VERIFICATION_FAILURE.*Sequence owner table mismatch for "knex_migrations_id_seq": found "knex_migrations", expected "runs"/
+  );
+
+  // 3. Mismatched last_value fails closed
+  await assert.rejects(
+    () =>
+      auditRestoredDatabaseParity(client as any, {
+        exactTables: ['knex_migrations'],
+        exactTotalRows: 31,
+        exactSequencesDetail: [
+          {
+            sequence_name: 'knex_migrations_id_seq',
+            last_value: 20,
+          },
+        ],
+      }),
+    /RESTORE_VERIFICATION_FAILURE.*Sequence last_value mismatch for "knex_migrations_id_seq": found "31", expected "20"/
+  );
+});
+
+test('Fail-Safe Restore: Extension version compatibility policy permits allowed versions and fails closed on unpermitted versions', async () => {
+  const client = (extVersion: string) => ({
+    query: async (sql: string) => {
+      if (sql.includes('information_schema.tables')) return { rows: [{ table_name: 'test_tbl' }] };
+      if (sql.includes('SELECT count(*)::int as cnt FROM "')) return { rows: [{ cnt: 0 }] };
+      if (sql.includes('FROM pg_constraint c')) return { rows: [] };
+      if (sql.includes('pg_indexes')) return { rows: [{ cnt: 0 }] };
+      if (sql.includes('information_schema.sequences')) return { rows: [] };
+      if (sql.includes('pg_extension')) {
+        return {
+          rows: [
+            { extname: 'plpgsql', extversion: '1.0' },
+            { extname: 'vector', extversion: extVersion },
+          ],
+        };
+      }
+      if (sql.includes('information_schema.columns')) return { rows: [] };
+      return { rows: [] };
+    },
+  });
+
+  // 1. Version 0.8.7 (WSL PG18) permitted
+  const res1 = await auditRestoredDatabaseParity(client('0.8.7') as any, {
+    exactTables: ['test_tbl'],
+    exactTotalRows: 0,
+    exactExtensionsDetail: [
+      { extname: 'plpgsql', extversion: '1.0' },
+      { extname: 'vector', allowedVersions: ['0.8.6', '0.8.7'] },
+    ],
+  });
+  assert.equal(res1.verified, true);
+
+  // 2. Version 0.8.6 (Neon prod) permitted
+  const res2 = await auditRestoredDatabaseParity(client('0.8.6') as any, {
+    exactTables: ['test_tbl'],
+    exactTotalRows: 0,
+    exactExtensionsDetail: [
+      { extname: 'vector', allowedVersions: ['0.8.6', '0.8.7'] },
+    ],
+  });
+  assert.equal(res2.verified, true);
+
+  // 3. Unauthorized version 0.9.0 fails closed
+  await assert.rejects(
+    () =>
+      auditRestoredDatabaseParity(client('0.9.0') as any, {
+        exactTables: ['test_tbl'],
+        exactTotalRows: 0,
+        exactExtensionsDetail: [
+          { extname: 'vector', allowedVersions: ['0.8.6', '0.8.7'] },
+        ],
+      }),
+    /RESTORE_VERIFICATION_FAILURE.*Extension "vector" version "0.9.0" is not allowed\. Permitted versions: \[0\.8\.6, 0\.8\.7\]/
+  );
+});
+
+test('Fail-Safe Restore: Knex migration ledger verifies id, name, and batch failing closed on batch mismatch', async () => {
+  const client = {
+    query: async (sql: string) => {
+      if (sql.includes('information_schema.tables')) return { rows: [{ table_name: 'knex_migrations' }] };
+      if (sql.includes('SELECT count(*)::int as cnt FROM "')) return { rows: [{ cnt: 2 }] };
+      if (sql.includes('FROM pg_constraint c')) return { rows: [] };
+      if (sql.includes('pg_indexes')) return { rows: [{ cnt: 0 }] };
+      if (sql.includes('information_schema.sequences')) return { rows: [] };
+      if (sql.includes('pg_extension')) return { rows: [] };
+      if (sql.includes('information_schema.columns')) return { rows: [] };
+      if (sql.includes('SELECT id, name, batch FROM knex_migrations')) {
+        return {
+          rows: [
+            { id: 1, name: '001_initial_schema.ts', batch: 1 },
+            { id: 2, name: '002_certification_schema.ts', batch: 1 },
+          ],
+        };
+      }
+      return { rows: [] };
+    },
+  };
+
+  // 1. Matches id, name, batch
+  const validRes = await auditRestoredDatabaseParity(client as any, {
+    exactTables: ['knex_migrations'],
+    exactTotalRows: 2,
+    expectedMigrationLedger: [
+      { id: 1, name: '001_initial_schema.ts', batch: 1 },
+      { id: 2, name: '002_certification_schema.ts', batch: 1 },
+    ],
+  });
+  assert.equal(validRes.verified, true);
+
+  // 2. Mismatched batch fails closed
+  await assert.rejects(
+    () =>
+      auditRestoredDatabaseParity(client as any, {
+        exactTables: ['knex_migrations'],
+        exactTotalRows: 2,
+        expectedMigrationLedger: [
+          { id: 1, name: '001_initial_schema.ts', batch: 2 },
+          { id: 2, name: '002_certification_schema.ts', batch: 1 },
+        ],
+      }),
+    /RESTORE_VERIFICATION_FAILURE.*Migration batch mismatch for "001_initial_schema\.ts": found 1, expected 2/
+  );
+});
+
 

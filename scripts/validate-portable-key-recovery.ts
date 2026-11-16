@@ -194,11 +194,17 @@ export async function runPortableDisasterRecoveryValidation(options?: {
       },
       exactIndexes: authoritativeSnapshot.totalIndexes,
       exactIndexNames: authoritativeSnapshot.indexes.map((i: any) => i.indexname),
+      exactIndexDefs: authoritativeSnapshot.indexes,
       exactSequences: authoritativeSnapshot.sequences.map((s: any) => s.sequence_name),
       exactExtensions: authoritativeSnapshot.extensions.map((e: any) => e.extname),
+      exactExtensionsDetail: [
+        { extname: 'plpgsql', extversion: '1.0' },
+        { extname: 'vector', allowedVersions: ['0.8.6', '0.8.7'] },
+      ],
       exactColumnCount: authoritativeSnapshot.totalColumns,
       exactColumns: authoritativeSnapshot.columns,
       expectedMigrations: authoritativeSnapshot.knexMigrations.map((m: any) => m.name),
+      expectedMigrationLedger: authoritativeSnapshot.knexMigrations,
       verifyReferentialIntegrity: true,
     };
 
