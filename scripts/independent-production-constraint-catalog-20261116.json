@@ -7,7 +7,7 @@
   "postgresVersion": "18.7",
   "migrationCount": 31,
   "backupCatalogSha256": "7D49AB20FFA199DB3A6D3F26E62D1EECD27F90556F74D7EB49F1DC0380049877",
-  "note": "This schema catalog was captured from mutable production AFTER the encrypted 2026-11-15 backup. It is independent current-schema evidence, not backup-time row parity or proof no schema changes since backup. Sequence ownership metadata is derived from read-only live Neon catalog; sequence last_value is intentionally not copied because the historical backup is earlier than live production.",
+  "note": "This schema catalog was captured from mutable production AFTER the encrypted 2026-11-15 backup. It is independent current-schema evidence, not backup-time row parity or proof no schema changes since backup. Sequence ownership metadata is derived from read-only live Neon catalog; sequence last_value is intentionally not copied because the historical backup is earlier than live production. Live Neon information_schema.columns (read-only, 2026-11-16) contained zero identity and zero generated columns; expected counts are independently captured here.",
   "constraints": [
     {
       "table_name": "account_recovery_requests",
@@ -2783,5 +2783,7 @@
       "owner_table": "run_events",
       "owner_column": "sequence"
     }
-  ]
+  ],
+  "identityColumnCount": 0,
+  "generatedColumnCount": 0
 }
