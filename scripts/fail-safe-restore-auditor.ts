@@ -587,15 +587,18 @@ export async function auditRestoredDatabaseParity(
         }
       }
       const actualVal = valMap.get(exp.sequence_name);
-      if (exp.data_type && actualVal?.data_type && actualVal.data_type !== exp.data_type) {
-        throw new Error(
-          `[RESTORE_VERIFICATION_FAILURE] Sequence data type mismatch for "${exp.sequence_name}": found "${actualVal.data_type}", expected "${exp.data_type}".`
-        );
-      }
-      if (exp.last_value !== undefined && actualVal?.last_value !== undefined) {
-        if (String(actualVal.last_value) !== String(exp.last_value)) {
+      if (exp.data_type) {
+        if (!actualVal || !actualVal.data_type || actualVal.data_type !== exp.data_type) {
           throw new Error(
-            `[RESTORE_VERIFICATION_FAILURE] Sequence last_value mismatch for "${exp.sequence_name}": found "${actualVal.last_value}", expected "${exp.last_value}".`
+            `[RESTORE_VERIFICATION_FAILURE] Sequence data type mismatch or metadata missing for "${exp.sequence_name}": found "${actualVal?.data_type ?? 'MISSING'}", expected "${exp.data_type}".`
+          );
+        }
+      }
+      if (exp.last_value !== undefined) {
+        if (!actualVal || actualVal.last_value === undefined || actualVal.last_value === null ||
+            String(actualVal.last_value) !== String(exp.last_value)) {
+          throw new Error(
+            `[RESTORE_VERIFICATION_FAILURE] Sequence last_value mismatch or metadata missing for "${exp.sequence_name}": found "${actualVal?.last_value ?? 'MISSING'}", expected "${exp.last_value}".`
           );
         }
       }
