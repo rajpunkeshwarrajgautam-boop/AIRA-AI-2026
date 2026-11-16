@@ -29,6 +29,7 @@ graphify-out/
 .neon
 test-results/
 artifacts/
+reports/
 # Local builder browser acceptance screenshots and receipts
 test-results/builder/
 # Isolated acceptance browser profiles
