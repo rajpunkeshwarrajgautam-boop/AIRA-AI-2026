@@ -178,6 +178,32 @@ export async function runPortableDisasterRecoveryValidation(options?: {
       throw new Error(`[DR_VERIFY_ERROR] Authoritative backup catalog snapshot missing at "${snapshotPath}".`);
     }
     const authoritativeSnapshot = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
+    // Independent, read-only production schema evidence captured after the encrypted backup.
+    // Never treat this as a current-production row-count baseline for historical backup data.
+    const independentCatalogPath = path.join(path.dirname(snapshotPath), 'independent-production-constraint-catalog-20261116.json');
+    if (!fs.existsSync(independentCatalogPath)) {
+      throw new Error('[DR_VERIFY_ERROR] Independent production constraint catalog is unavailable.');
+    }
+    const independentCatalog = JSON.parse(fs.readFileSync(independentCatalogPath, 'utf8'));
+    const expectedIdentity = new Set(
+      authoritativeSnapshot.constraintsDetail.map((c: any) => `${c.table_name}.${c.constraint_name}`)
+    );
+    const actualIdentity = independentCatalog.constraints?.map((c: any) => `${c.table_name}.${c.constraint_name}`) || [];
+    if (independentCatalog.branchId !== 'br-shiny-moon-b3vy9xj7' ||
+        independentCatalog.backupCatalogSha256 !== EXPECTED_BACKUP_SHA256 ||
+        independentCatalog.migrationCount !== 31 ||
+        actualIdentity.length !== expectedIdentity.size ||
+        new Set(actualIdentity).size !== expectedIdentity.size ||
+        actualIdentity.some((id: string) => !expectedIdentity.has(id))) {
+      throw new Error('[DR_VERIFY_ERROR] Independent constraint catalog provenance or identity inventory does not match the backup catalog.');
+    }
+    const snapshotSeqNames = new Set(authoritativeSnapshot.sequences.map((s: any) => s.sequence_name));
+    const independentSeqs = independentCatalog.sequenceOwnership || [];
+    if (independentSeqs.length !== snapshotSeqNames.size ||
+        new Set(independentSeqs.map((s: any) => s.sequence_name)).size !== snapshotSeqNames.size ||
+        independentSeqs.some((s: any) => !snapshotSeqNames.has(s.sequence_name))) {
+      throw new Error('[DR_VERIFY_ERROR] Independent sequence ownership inventory differs from the backup catalog.');
+    }
 
     const parityRequirements: RestoreParityRequirements = {
       exactTables: authoritativeSnapshot.tables,
@@ -192,10 +218,12 @@ export async function runPortableDisasterRecoveryValidation(options?: {
         totalRelationalConstraints: 100,
         totalConstraints: 459,
       },
+      exactConstraintDefs: independentCatalog.constraints,
       exactIndexes: authoritativeSnapshot.totalIndexes,
       exactIndexNames: authoritativeSnapshot.indexes.map((i: any) => i.indexname),
       exactIndexDefs: authoritativeSnapshot.indexes,
       exactSequences: authoritativeSnapshot.sequences.map((s: any) => s.sequence_name),
+      exactSequencesDetail: independentSeqs,
       exactExtensions: authoritativeSnapshot.extensions.map((e: any) => e.extname),
       exactExtensionsDetail: [
         { extname: 'plpgsql', extversion: '1.0' },
