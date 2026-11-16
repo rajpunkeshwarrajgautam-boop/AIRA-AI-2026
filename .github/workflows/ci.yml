@@ -74,6 +74,9 @@ jobs:
       - name: Run database migrations
         run: npm run db:migrate
 
+      - name: Standalone workflow artifacts JSONB reconciliation regression
+        run: npx tsx --test test/migration-032-artifacts-reconciliation.test.ts
+
       - name: Commercial quota ledger and monthly reasoning enforcement (real PostgreSQL)
         run: npx tsx --test test/commercial-credit-ledger.test.ts
 
@@ -148,6 +151,15 @@ jobs:
 
       - name: Release wizard and cutover safety gates certification
         run: npm run test:cutover-safety
+
+      - name: Guarded migration CLI argument & environment validator certification
+        run: npm run test:guarded-migration-cli
+
+      - name: Portable recovery escrow crypto certification
+        run: npm run test:portable-escrow
+
+      - name: Fail-safe backup restoration and error propagation certification
+        run: npm run test:failsafe-restore
 
       - name: Staging maintenance barrier certification
         run: npm run test:maintenance-barrier
