@@ -911,7 +911,7 @@ test('Fail-Safe Restore: Sequence ownership via pg_depend and sequence values au
           },
         ],
       }),
-    /RESTORE_VERIFICATION_FAILURE.*Sequence last_value mismatch for "knex_migrations_id_seq": found "31", expected "20"/
+    /RESTORE_VERIFICATION_FAILURE.*Sequence last_value mismatch or metadata missing for "knex_migrations_id_seq": found "31", expected "20"/
   );
 });
 
