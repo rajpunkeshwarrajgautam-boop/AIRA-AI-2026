@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import { auditRestoredDatabaseParity, RestoreParityRequirements } from '../scripts/fail-safe-restore-auditor.js';
+import { validateDisposableDbName } from '../scripts/validate-portable-key-recovery.js';
+import { secureOverwriteAndRemoveFile } from '../scripts/secure-backup-crypto.js';
 
 function createMockPgClient(data: {
   tables: string[];
@@ -45,7 +50,10 @@ function createMockPgClient(data: {
         return { rows: [{ orphaned: orphans }] };
       }
       if (sql.includes('pg_indexes')) {
-        return { rows: [{ cnt: data.indexesCount }] };
+        if (sql.includes('count(*)') || sql.includes('SELECT count(')) {
+          return { rows: [{ cnt: data.indexesCount }] };
+        }
+        return { rows: Array.from({ length: data.indexesCount }, (_, i) => ({ indexname: `idx_${i}` })) };
       }
       if (sql.includes('information_schema.sequences')) {
         return { rows: (data.sequences || []).map(s => ({ sequence_name: s })) };
@@ -314,3 +322,236 @@ test('Fail-Safe Restore: command failure is unsuppressed without || true', () =>
     assert.notEqual(res.status, 0, 'Command failure must yield non-zero exit status');
   }
 });
+
+test('Fail-Safe Restore: exact columns check succeeds on match and fails closed on type/nullability mismatch', async () => {
+  const client = {
+    query: async (sql: string) => {
+      if (sql.includes('information_schema.tables')) {
+        return { rows: [{ table_name: 'workflow_runs' }] };
+      }
+      if (sql.includes('SELECT count(*)::int as cnt FROM "')) {
+        return { rows: [{ cnt: 10 }] };
+      }
+      if (sql.includes('FROM pg_constraint c')) {
+        return { rows: [{ contype: 'p', count: '1' }] };
+      }
+      if (sql.includes('pg_indexes')) {
+        return { rows: [{ indexname: 'workflow_runs_pkey' }] };
+      }
+      if (sql.includes('information_schema.sequences')) {
+        return { rows: [] };
+      }
+      if (sql.includes('pg_extension')) {
+        return { rows: [] };
+      }
+      if (sql.includes('information_schema.columns')) {
+        return {
+          rows: [
+            { table_name: 'workflow_runs', column_name: 'id', data_type: 'uuid', is_nullable: 'NO', column_default: null },
+            { table_name: 'workflow_runs', column_name: 'artifacts', data_type: 'jsonb', is_nullable: 'YES', column_default: "'[]'::jsonb" },
+          ],
+        };
+      }
+      return { rows: [] };
+    },
+  };
+
+  // Valid columns check
+  const validRes = await auditRestoredDatabaseParity(client, {
+    exactTables: ['workflow_runs'],
+    exactTotalRows: 10,
+    exactColumns: [
+      { table_name: 'workflow_runs', column_name: 'id', data_type: 'uuid', is_nullable: 'NO' },
+      { table_name: 'workflow_runs', column_name: 'artifacts', data_type: 'jsonb', is_nullable: 'YES' },
+    ],
+    exactColumnCount: 2,
+  });
+  assert.equal(validRes.columnCount, 2);
+
+  // Missing column
+  await assert.rejects(
+    () =>
+      auditRestoredDatabaseParity(client, {
+        exactTables: ['workflow_runs'],
+        exactTotalRows: 10,
+        exactColumns: [
+          { table_name: 'workflow_runs', column_name: 'missing_col', data_type: 'text' },
+        ],
+      }),
+    /RESTORE_VERIFICATION_FAILURE.*Missing expected column: "workflow_runs\.missing_col"/
+  );
+
+  // Type mismatch
+  await assert.rejects(
+    () =>
+      auditRestoredDatabaseParity(client, {
+        exactTables: ['workflow_runs'],
+        exactTotalRows: 10,
+        exactColumns: [
+          { table_name: 'workflow_runs', column_name: 'artifacts', data_type: 'text' },
+        ],
+      }),
+    /RESTORE_VERIFICATION_FAILURE.*Column type mismatch for "workflow_runs\.artifacts": found "jsonb", expected "text"/
+  );
+});
+
+test('Fail-Safe Restore: migration ledger audit verifies order and fails closed on missing/misordered migrations', async () => {
+  const client = {
+    query: async (sql: string) => {
+      if (sql.includes('information_schema.tables') && sql.includes("table_name = 'knex_migrations'")) {
+        return { rows: [{ table_name: 'knex_migrations' }] };
+      }
+      if (sql.includes('information_schema.tables')) {
+        return { rows: [{ table_name: 'knex_migrations' }] };
+      }
+      if (sql.includes('SELECT count(*)::int as cnt FROM "')) {
+        return { rows: [{ cnt: 3 }] };
+      }
+      if (sql.includes('FROM pg_constraint c')) {
+        return { rows: [{ contype: 'p', count: '1' }] };
+      }
+      if (sql.includes('pg_indexes')) {
+        return { rows: [] };
+      }
+      if (sql.includes('information_schema.sequences')) {
+        return { rows: [] };
+      }
+      if (sql.includes('pg_extension')) {
+        return { rows: [] };
+      }
+      if (sql.includes('information_schema.columns')) {
+        return { rows: [] };
+      }
+      if (sql.includes('SELECT name FROM knex_migrations ORDER BY id')) {
+        return {
+          rows: [
+            { name: '001_initial_schema.ts' },
+            { name: '002_certification_schema.ts' },
+            { name: '003_phase3_2_schema.ts' },
+          ],
+        };
+      }
+      return { rows: [] };
+    },
+  };
+
+  // 1. Matches expected migrations
+  const validRes = await auditRestoredDatabaseParity(client, {
+    exactTables: ['knex_migrations'],
+    exactTotalRows: 3,
+    expectedMigrations: ['001_initial_schema.ts', '002_certification_schema.ts', '003_phase3_2_schema.ts'],
+  });
+  assert.equal(validRes.migrationCount, 3);
+
+  // 2. Fails when migration order is swapped
+  await assert.rejects(
+    () =>
+      auditRestoredDatabaseParity(client, {
+        exactTables: ['knex_migrations'],
+        exactTotalRows: 3,
+        expectedMigrations: ['002_certification_schema.ts', '001_initial_schema.ts', '003_phase3_2_schema.ts'],
+      }),
+    /RESTORE_VERIFICATION_FAILURE.*Migration order\/name mismatch at index 0/
+  );
+
+  // 3. Fails when a migration is missing
+  await assert.rejects(
+    () =>
+      auditRestoredDatabaseParity(client, {
+        exactTables: ['knex_migrations'],
+        exactTotalRows: 3,
+        expectedMigrations: ['001_initial_schema.ts', '002_certification_schema.ts'],
+      }),
+    /RESTORE_VERIFICATION_FAILURE.*Migration ledger count mismatch: found 3, expected 2/
+  );
+});
+
+test('Fail-Safe Restore: index names and sequences audit fails closed on discrepancies', async () => {
+  const client = {
+    query: async (sql: string) => {
+      if (sql.includes('information_schema.tables')) {
+        return { rows: [{ table_name: 'test_tbl' }] };
+      }
+      if (sql.includes('SELECT count(*)::int as cnt FROM "')) {
+        return { rows: [{ cnt: 0 }] };
+      }
+      if (sql.includes('FROM pg_constraint c')) {
+        return { rows: [] };
+      }
+      if (sql.includes('pg_indexes')) {
+        return { rows: [{ indexname: 'idx_test_a' }, { indexname: 'idx_test_b' }] };
+      }
+      if (sql.includes('information_schema.sequences')) {
+        return { rows: [{ sequence_name: 'seq_test_1' }] };
+      }
+      if (sql.includes('pg_extension')) {
+        return { rows: [{ extname: 'plpgsql' }] };
+      }
+      if (sql.includes('information_schema.columns')) {
+        return { rows: [] };
+      }
+      return { rows: [] };
+    },
+  };
+
+  // Missing index name
+  await assert.rejects(
+    () =>
+      auditRestoredDatabaseParity(client, {
+        exactTables: ['test_tbl'],
+        exactTotalRows: 0,
+        exactIndexNames: ['idx_test_a', 'idx_test_missing'],
+      }),
+    /RESTORE_VERIFICATION_FAILURE.*Missing expected index: "idx_test_missing"/
+  );
+
+  // Missing sequence name
+  await assert.rejects(
+    () =>
+      auditRestoredDatabaseParity(client, {
+        exactTables: ['test_tbl'],
+        exactTotalRows: 0,
+        exactSequences: ['seq_test_1', 'seq_test_missing'],
+      }),
+    /RESTORE_VERIFICATION_FAILURE.*Missing expected sequence: "seq_test_missing"/
+  );
+});
+
+test('Fail-Safe Restore: validateDisposableDbName accepts valid disposable names and rejects forbidden targets', () => {
+  // Valid disposable name
+  assert.doesNotThrow(() => validateDisposableDbName('aira_pg18_portable_dr_1794814042990'));
+
+  // Invalid naming format
+  assert.throws(
+    () => validateDisposableDbName('my_test_db'),
+    /DISPOSABLE_DB_GUARD.*Illegal target database name/
+  );
+
+  // Production or staging names
+  assert.throws(
+    () => validateDisposableDbName('aira_pg18_portable_dr_production'),
+    /DISPOSABLE_DB_GUARD.*Illegal target database name/
+  );
+  assert.throws(
+    () => validateDisposableDbName('neondb'),
+    /DISPOSABLE_DB_GUARD.*Illegal target database name/
+  );
+});
+
+test('Fail-Safe Restore: secureOverwriteAndRemoveFile overwrites with random bytes before deletion', () => {
+  const tmpFile = path.join(os.tmpdir(), `aira_shred_test_${Date.now()}.bin`);
+  fs.writeFileSync(tmpFile, 'SENSITIVE_PLAINTEXT_PAYLOAD_12345_SECRET');
+  assert.ok(fs.existsSync(tmpFile));
+
+  const res = secureOverwriteAndRemoveFile(tmpFile);
+  assert.equal(res.success, true);
+  assert.ok(res.bytesOverwritten > 0);
+  assert.equal(fs.existsSync(tmpFile), false);
+
+  // Handles already deleted file cleanly
+  const resNonExistent = secureOverwriteAndRemoveFile(tmpFile);
+  assert.equal(resNonExistent.success, true);
+  assert.equal(resNonExistent.bytesOverwritten, 0);
+});
+
+

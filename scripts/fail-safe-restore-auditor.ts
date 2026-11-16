@@ -1,5 +1,3 @@
-import type pg from 'pg';
-
 export interface ExactConstraintsRequirement {
   primaryKeys?: number;
   foreignKeys?: number;
@@ -8,6 +6,14 @@ export interface ExactConstraintsRequirement {
   notNullConstraints?: number;
   totalRelationalConstraints?: number;
   totalConstraints?: number;
+}
+
+export interface ExactColumnRequirement {
+  table_name: string;
+  column_name: string;
+  data_type?: string;
+  is_nullable?: string;
+  column_default?: string | null;
 }
 
 export interface RestoreParityRequirements {
@@ -21,8 +27,12 @@ export interface RestoreParityRequirements {
   exactTableRows?: Record<string, number>;
   exactConstraints?: ExactConstraintsRequirement;
   exactIndexes?: number;
+  exactIndexNames?: readonly string[] | string[];
   exactSequences?: readonly string[] | string[];
   exactExtensions?: readonly string[] | string[];
+  exactColumns?: readonly ExactColumnRequirement[];
+  exactColumnCount?: number;
+  expectedMigrations?: readonly string[] | string[];
   verifyReferentialIntegrity?: boolean;
 }
 
@@ -42,6 +52,8 @@ export interface RestoreAuditResult {
   constraintCount: number;
   indexCount: number;
   sequenceCount: number;
+  columnCount: number;
+  migrationCount?: number;
   extensions: string[];
   constraintsBreakdown: ConstraintsBreakdown;
   referentialIntegrityVerified: boolean;
@@ -49,14 +61,18 @@ export interface RestoreAuditResult {
   verified: boolean;
 }
 
+export interface MinimalQueryClient {
+  query: (sql: string, params?: any[]) => Promise<{ rows: any[] }>;
+}
+
 /**
  * Audits a restored PostgreSQL database for complete schema and data parity.
  * Verifies exact expected schema, table catalogs, row counts, constraints,
- * indexes, sequences, extensions, and foreign-key referential integrity.
+ * indexes, sequences, extensions, columns, migration ledger, and foreign-key referential integrity.
  * Fails closed if any threshold, exact parity check, or referential integrity check fails.
  */
 export async function auditRestoredDatabaseParity(
-  client: pg.Client,
+  client: MinimalQueryClient,
   requirements: RestoreParityRequirements
 ): Promise<RestoreAuditResult> {
   // 1. Table audit (BASE TABLE in public schema)
@@ -107,7 +123,7 @@ export async function auditRestoredDatabaseParity(
   const actualTableRows: Record<string, number> = {};
   for (const tbl of tables) {
     const rowRes = await client.query(`SELECT count(*)::int as cnt FROM "${tbl}"`);
-    const cnt: number = rowRes.rows[0].cnt;
+    const cnt: number = parseInt(rowRes.rows[0]?.cnt ?? '0', 10);
     actualTableRows[tbl] = cnt;
     totalRows += cnt;
   }
@@ -209,6 +225,7 @@ export async function auditRestoredDatabaseParity(
   if (requirements.verifyReferentialIntegrity) {
     const fkQuery = `
       SELECT
+        tc.constraint_name,
         tc.table_name as child_table,
         kcu.column_name as child_column,
         ccu.table_name as parent_table,
@@ -232,9 +249,10 @@ export async function auditRestoredDatabaseParity(
             SELECT 1 FROM "${fk.parent_table}" p WHERE p."${fk.parent_column}" = c."${fk.child_column}"
           )
       `);
-      if (orphanRes.rows[0].orphaned > 0) {
+      const orphaned = parseInt(orphanRes.rows[0]?.orphaned ?? '0', 10);
+      if (orphaned > 0) {
         throw new Error(
-          `[RESTORE_REFERENTIAL_INTEGRITY_FAILURE] Found ${orphanRes.rows[0].orphaned} orphaned records in "${fk.child_table}.${fk.child_column}" referencing non-existent records in "${fk.parent_table}.${fk.parent_column}".`
+          `[RESTORE_REFERENTIAL_INTEGRITY_FAILURE] Found ${orphaned} orphaned records in "${fk.child_table}.${fk.child_column}" referencing non-existent records in "${fk.parent_table}.${fk.parent_column}".`
         );
       }
     }
@@ -242,10 +260,13 @@ export async function auditRestoredDatabaseParity(
   }
 
   // 5. Index audit
-  const indexRes = await client.query(`
+  const indexCountRes = await client.query(`
     SELECT count(*)::int as cnt FROM pg_indexes WHERE schemaname = 'public'
   `);
-  const indexCount: number = indexRes.rows[0].cnt;
+  let indexCount: number = parseInt(indexCountRes.rows[0]?.cnt ?? '0', 10);
+  if (isNaN(indexCount) || (indexCount === 0 && indexCountRes.rows.length > 1)) {
+    indexCount = indexCountRes.rows.length;
+  }
   if (requirements.minIndexes !== undefined && indexCount < requirements.minIndexes) {
     throw new Error(
       `[RESTORE_VERIFICATION_FAILURE] Deficient index count: found ${indexCount}, expected at least ${requirements.minIndexes}.`
@@ -255,6 +276,18 @@ export async function auditRestoredDatabaseParity(
     throw new Error(
       `[RESTORE_VERIFICATION_FAILURE] Exact index count mismatch: found ${indexCount}, expected ${requirements.exactIndexes}.`
     );
+  }
+  if (requirements.exactIndexNames) {
+    const indexNameRes = await client.query(`
+      SELECT indexname FROM pg_indexes WHERE schemaname = 'public' ORDER BY indexname
+    `);
+    const actualIndexNames = indexNameRes.rows.map((r: any) => r.indexname);
+    const idxSet = new Set(actualIndexNames);
+    for (const idx of requirements.exactIndexNames) {
+      if (!idxSet.has(idx)) {
+        throw new Error(`[RESTORE_VERIFICATION_FAILURE] Missing expected index: "${idx}".`);
+      }
+    }
   }
 
   // 6. Sequence audit
@@ -290,12 +323,79 @@ export async function auditRestoredDatabaseParity(
     }
   }
 
+  // 8. Column parity audit
+  const colRes = await client.query(`
+    SELECT table_name, column_name, data_type, is_nullable, column_default
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+    ORDER BY table_name, ordinal_position
+  `);
+  const actualCols = colRes.rows;
+  if (requirements.exactColumnCount !== undefined && actualCols.length !== requirements.exactColumnCount) {
+    throw new Error(
+      `[RESTORE_VERIFICATION_FAILURE] Exact column count mismatch: found ${actualCols.length}, expected ${requirements.exactColumnCount}.`
+    );
+  }
+  if (requirements.exactColumns) {
+    const actualColMap = new Map<string, any>();
+    for (const c of actualCols) {
+      actualColMap.set(`${c.table_name}.${c.column_name}`, c);
+    }
+    for (const expCol of requirements.exactColumns) {
+      const key = `${expCol.table_name}.${expCol.column_name}`;
+      const actual = actualColMap.get(key);
+      if (!actual) {
+        throw new Error(`[RESTORE_VERIFICATION_FAILURE] Missing expected column: "${key}".`);
+      }
+      if (expCol.data_type && actual.data_type !== expCol.data_type) {
+        throw new Error(
+          `[RESTORE_VERIFICATION_FAILURE] Column type mismatch for "${key}": found "${actual.data_type}", expected "${expCol.data_type}".`
+        );
+      }
+      if (expCol.is_nullable && actual.is_nullable !== expCol.is_nullable) {
+        throw new Error(
+          `[RESTORE_VERIFICATION_FAILURE] Column nullability mismatch for "${key}": found "${actual.is_nullable}", expected "${expCol.is_nullable}".`
+        );
+      }
+    }
+  }
+
+  // 9. Migration ledger audit
+  let migrationCount: number | undefined;
+  if (requirements.expectedMigrations) {
+    const migTableCheck = await client.query(`
+      SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'knex_migrations'
+    `);
+    if (migTableCheck.rows.length === 0) {
+      throw new Error('[RESTORE_VERIFICATION_FAILURE] knex_migrations table missing from restored database.');
+    }
+    const migRes = await client.query(`
+      SELECT name FROM knex_migrations ORDER BY id
+    `);
+    const actualMigs = migRes.rows.map((r: any) => r.name);
+    migrationCount = actualMigs.length;
+    if (actualMigs.length !== requirements.expectedMigrations.length) {
+      throw new Error(
+        `[RESTORE_VERIFICATION_FAILURE] Migration ledger count mismatch: found ${actualMigs.length}, expected ${requirements.expectedMigrations.length}.`
+      );
+    }
+    for (let i = 0; i < requirements.expectedMigrations.length; i++) {
+      if (actualMigs[i] !== requirements.expectedMigrations[i]) {
+        throw new Error(
+          `[RESTORE_VERIFICATION_FAILURE] Migration order/name mismatch at index ${i}: found "${actualMigs[i]}", expected "${requirements.expectedMigrations[i]}".`
+        );
+      }
+    }
+  }
+
   return {
     tableCount: tables.length,
     totalRows,
     constraintCount: totalConstraints > 0 ? totalConstraints : totalRelational,
     indexCount,
     sequenceCount: sequences.length,
+    columnCount: actualCols.length,
+    migrationCount,
     extensions,
     constraintsBreakdown: breakdown,
     referentialIntegrityVerified,
