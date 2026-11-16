@@ -292,3 +292,84 @@ test('Portable Escrow Security: failed envelope write cleans up partial artifact
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('Portable Escrow Security: prevents accidental overwriting of existing recovery envelope', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aira_overwrite_test_'));
+  try {
+    const backupKey = 'test_backup_key_for_overwrite_123';
+    const recoveryPassphrase = 'ultra-strong-passphrase-at-least-16-chars';
+    const envelopeFilename = 'existing_envelope.json';
+
+    // 1. Initial creation succeeds
+    const initial = createPortableRecoveryEnvelope({
+      backupKey,
+      recoveryPassphrase,
+      destinationDir: tmpDir,
+      envelopeFilename,
+      allowSystemDrive: true,
+    });
+    assert.ok(fs.existsSync(initial.envelopePath));
+
+    // 2. Second creation without overwrite flag throws ESCROW_TARGET_ERROR
+    assert.throws(
+      () =>
+        createPortableRecoveryEnvelope({
+          backupKey: 'different_key_material_456789',
+          recoveryPassphrase,
+          destinationDir: tmpDir,
+          envelopeFilename,
+          allowSystemDrive: true,
+          overwrite: false,
+        }),
+      /ESCROW_TARGET_ERROR.*already exists.*Overwriting existing recovery envelopes is forbidden/
+    );
+
+    // Verify original envelope was preserved intact
+    const originalCheck = recoverKeyFromPortableEnvelope(initial.envelopePath, recoveryPassphrase);
+    assert.equal(originalCheck.backupKey, backupKey);
+
+    // 3. Third creation with overwrite: true succeeds
+    const overwritten = createPortableRecoveryEnvelope({
+      backupKey: 'different_key_material_456789',
+      recoveryPassphrase,
+      destinationDir: tmpDir,
+      envelopeFilename,
+      allowSystemDrive: true,
+      overwrite: true,
+    });
+    const updatedCheck = recoverKeyFromPortableEnvelope(overwritten.envelopePath, recoveryPassphrase);
+    assert.equal(updatedCheck.backupKey, 'different_key_material_456789');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Portable Escrow Security: rejects C: and accepts genuine removable drive letter with [Cc]', () => {
+  // Test regex directly
+  const driveRegex = /^[Cc]:\\/;
+  assert.ok(driveRegex.test('C:\\AIRA_ESCROW'));
+  assert.ok(driveRegex.test('c:\\aira_escrow'));
+  assert.ok(!driveRegex.test('E:\\AIRA_RECOVERY_ESCROW'));
+  assert.ok(!driveRegex.test('D:\\AIRA_DATASET'));
+  assert.ok(!driveRegex.test('F:\\BACKUP'));
+
+  // If running on Windows and E: is mounted, verify createPortableRecoveryEnvelope does not classify E: as system drive
+  if (process.platform === 'win32' && fs.existsSync('E:\\')) {
+    const testSubdir = 'E:\\AIRA_RECOVERY_ESCROW_TEST_DIR';
+    fs.mkdirSync(testSubdir, { recursive: true });
+    try {
+      // Without allowSystemDrive: should NOT throw system drive error for E:\
+      const res = createPortableRecoveryEnvelope({
+        backupKey: 'test_removable_drive_key_material_123',
+        recoveryPassphrase: 'ultra-strong-passphrase-at-least-16-chars',
+        destinationDir: testSubdir,
+        envelopeFilename: 'test_drive_envelope.json',
+        allowSystemDrive: false,
+      });
+      assert.ok(fs.existsSync(res.envelopePath));
+      assert.ok(res.envelopePath.startsWith('E:\\'));
+    } finally {
+      fs.rmSync(testSubdir, { recursive: true, force: true });
+    }
+  }
+});

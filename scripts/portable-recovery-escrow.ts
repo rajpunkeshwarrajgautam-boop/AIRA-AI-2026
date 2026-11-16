@@ -31,6 +31,7 @@ export interface CreatePortableEnvelopeOptions {
   destinationDir: string;
   envelopeFilename?: string;
   allowSystemDrive?: boolean;
+  overwrite?: boolean;
 }
 
 /**
@@ -43,7 +44,14 @@ export function createPortableRecoveryEnvelope(options: CreatePortableEnvelopeOp
   envelopePath: string;
   keyFingerprint: string;
 } {
-  const { backupKey, recoveryPassphrase, destinationDir, envelopeFilename = 'aira_portable_recovery_envelope.json', allowSystemDrive } = options;
+  const {
+    backupKey,
+    recoveryPassphrase,
+    destinationDir,
+    envelopeFilename = 'aira_portable_recovery_envelope.json',
+    allowSystemDrive,
+    overwrite = false,
+  } = options;
 
   if (!recoveryPassphrase || typeof recoveryPassphrase !== 'string' || recoveryPassphrase.length < 16) {
     throw new Error('[ESCROW_SECURITY_ERROR] Recovery passphrase must be provided and must be at least 16 characters long.');
@@ -66,7 +74,7 @@ export function createPortableRecoveryEnvelope(options: CreatePortableEnvelopeOp
   const resolvedDest = path.resolve(destinationDir);
   const isWindows = process.platform === 'win32';
   const isSystemDrive = isWindows
-    ? (resolvedDest.toUpperCase().startsWith((process.env.SystemDrive || 'C:').toUpperCase()) || /^[C-c]:\\/.test(resolvedDest))
+    ? (resolvedDest.toUpperCase().startsWith((process.env.SystemDrive || 'C:').toUpperCase()) || /^[Cc]:\\/.test(resolvedDest))
     : (
         resolvedDest === '/' ||
         resolvedDest.startsWith('/home') ||
@@ -83,6 +91,14 @@ export function createPortableRecoveryEnvelope(options: CreatePortableEnvelopeOp
       `[ESCROW_TARGET_ERROR] Configured destination directory "${destinationDir}" resides on the internal system drive. ` +
       'Production recovery escrow must be exported to an external, independently stored removable drive (e.g. E:\\). ' +
       'Pass --allow-local-test-destination only for non-production verification.'
+    );
+  }
+
+  const envelopePath = path.join(destinationDir, envelopeFilename);
+  if (fs.existsSync(envelopePath) && !overwrite) {
+    throw new Error(
+      `[ESCROW_TARGET_ERROR] Recovery envelope already exists at "${envelopePath}". ` +
+      'Overwriting existing recovery envelopes is forbidden to prevent catastrophic loss of recovery keys.'
     );
   }
 
@@ -128,9 +144,10 @@ export function createPortableRecoveryEnvelope(options: CreatePortableEnvelopeOp
     createdAt: new Date().toISOString(),
   };
 
-  const envelopePath = path.join(destinationDir, envelopeFilename);
+  let wroteNewFile = false;
   try {
     fs.writeFileSync(envelopePath, JSON.stringify(metadata, null, 2), { encoding: 'utf8', mode: 0o600 });
+    wroteNewFile = true;
     // Immediate verification of written envelope
     const verifyCheck = recoverKeyFromPortableEnvelope(envelopePath, recoveryPassphrase);
     if (verifyCheck.keyFingerprint !== keyFingerprint) {
@@ -138,7 +155,7 @@ export function createPortableRecoveryEnvelope(options: CreatePortableEnvelopeOp
     }
     return { envelopePath, keyFingerprint };
   } catch (writeErr: any) {
-    if (fs.existsSync(envelopePath)) {
+    if (wroteNewFile && fs.existsSync(envelopePath)) {
       try {
         fs.unlinkSync(envelopePath);
       } catch {}
@@ -217,6 +234,7 @@ export interface PortableEscrowCliArgs {
   verifyOnly?: boolean;
   allowSystemDrive?: boolean;
   allowDisposableTestCredentials?: boolean;
+  overwrite?: boolean;
 }
 
 export function parsePortableEscrowCliArgs(argv: string[]): PortableEscrowCliArgs {
@@ -279,6 +297,8 @@ export function parsePortableEscrowCliArgs(argv: string[]): PortableEscrowCliArg
       result.allowSystemDrive = true;
     } else if (arg === '--allow-disposable-test-credentials') {
       result.allowDisposableTestCredentials = true;
+    } else if (arg === '--overwrite') {
+      result.overwrite = true;
     } else {
       throw new Error(`[CLI_VALIDATION_ERROR] Unrecognized or invalid argument: "${arg}"`);
     }
@@ -465,6 +485,7 @@ Options:
     destinationDir: args.destinationDir,
     envelopeFilename: args.envelopeFilename,
     allowSystemDrive: args.allowSystemDrive,
+    overwrite: args.overwrite,
   });
 
   const stat = fs.statSync(envelopePath);
