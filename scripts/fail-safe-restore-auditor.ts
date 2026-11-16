@@ -29,6 +29,7 @@ export interface ExactColumnRequirement {
   column_default?: string | null;
   is_identity?: string;
   identity_generation?: string | null;
+  is_generated?: string;
 }
 
 export interface ExactSequenceRequirement {
@@ -71,6 +72,8 @@ export interface RestoreParityRequirements {
   exactExtensionsDetail?: readonly ExactExtensionRequirement[];
   exactColumns?: readonly ExactColumnRequirement[];
   exactColumnCount?: number;
+  expectedIdentityColumnCount?: number;
+  expectedGeneratedColumnCount?: number;
   expectedMigrations?: readonly string[] | string[];
   expectedMigrationLedger?: readonly ExactMigrationRecord[];
   verifyReferentialIntegrity?: boolean;
@@ -646,7 +649,7 @@ export async function auditRestoredDatabaseParity(
   // 8. Column parity audit (types, nullability, defaults, identities)
   const colRes = await client.query(`
     SELECT table_name, column_name, data_type, is_nullable, column_default,
-           is_identity, identity_generation
+           is_identity, identity_generation, is_generated
     FROM information_schema.columns
     WHERE table_schema = 'public'
     ORDER BY table_name, ordinal_position
@@ -656,6 +659,18 @@ export async function auditRestoredDatabaseParity(
     throw new Error(
       `[RESTORE_VERIFICATION_FAILURE] Exact column count mismatch: found ${actualCols.length}, expected ${requirements.exactColumnCount}.`
     );
+  }
+  if (requirements.expectedIdentityColumnCount !== undefined) {
+    const found = actualCols.filter((c: any) => c.is_identity === 'YES').length;
+    if (found !== requirements.expectedIdentityColumnCount) {
+      throw new Error(`[RESTORE_VERIFICATION_FAILURE] Identity column count mismatch: found ${found}, expected ${requirements.expectedIdentityColumnCount}.`);
+    }
+  }
+  if (requirements.expectedGeneratedColumnCount !== undefined) {
+    const found = actualCols.filter((c: any) => c.is_generated === 'ALWAYS').length;
+    if (found !== requirements.expectedGeneratedColumnCount) {
+      throw new Error(`[RESTORE_VERIFICATION_FAILURE] Generated column count mismatch: found ${found}, expected ${requirements.expectedGeneratedColumnCount}.`);
+    }
   }
   if (requirements.exactColumns) {
     const actualColMap = new Map<string, any>();
@@ -695,6 +710,11 @@ export async function auditRestoredDatabaseParity(
       if (expCol.identity_generation !== undefined && actual.identity_generation !== expCol.identity_generation) {
         throw new Error(
           `[RESTORE_VERIFICATION_FAILURE] Column identity generation mismatch for "${key}": found "${actual.identity_generation}", expected "${expCol.identity_generation}".`
+        );
+      }
+      if (expCol.is_generated !== undefined && actual.is_generated !== expCol.is_generated) {
+        throw new Error(
+          `[RESTORE_VERIFICATION_FAILURE] Column generated status mismatch for "${key}": found "${actual.is_generated}", expected "${expCol.is_generated}".`
         );
       }
     }
