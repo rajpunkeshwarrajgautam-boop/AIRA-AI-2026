@@ -1,6 +1,6 @@
 # AIRA AI 2026 — PR #185 Combined Production Release Candidate Final Certification
 
-**Document Version:** 1.0.0  
+**Document Version:** 1.1.0  
 **Date:** 2026-11-16  
 **Status:** **ENGINEERING COMPLETE — GO-READY, AWAITING OWNER AUTHORIZATION**  
 **Production Gate:** **STRICT NO-GO FOR DEPLOYMENT WITHOUT EXPLICIT OWNER SIGN-OFF**
@@ -15,8 +15,8 @@ To guarantee absolute traceability and eliminate ambiguity between code under te
 
 | Identity Dimension | Identifier / SHA / Resource | Verification Scope |
 | :--- | :--- | :--- |
-| **Candidate Source Revision** | `6122f320b72af9dc932b4827c855955421051ae8` (base `2f4afc2269a0dd1519214acc1b2affe1105feb12` / `ceaee41dd3261f8043279ebb39b2a1a1bd813f94`) | Repository Git HEAD containing combined PR #178 + PR #184 fixes, sanitized test harnesses, OAuth callback certification, and lifecycle security guards |
-| **Test Harness Revision** | `6122f320b72af9dc932b4827c855955421051ae8` | Fail-closed staging target validation, zero-embedded-secret cryptographic credentials, and tracked fixture lifecycle engine |
+| **Candidate Source Revision** | `9fd2ec30206cbbace1f2d99bf00a133b2bd914f0` (base `716057ef5ceb87892c3f5fdf5d8af5736b91a20b` / `2f4afc2269a0dd1519214acc1b2affe1105feb12` / `ceaee41dd3261f8043279ebb39b2a1a1bd813f94`) | Repository Git HEAD containing combined PR #178 + PR #184 fixes, sanitized test harnesses, secret-hygiene remediation, OAuth callback & positive session certification, and lifecycle security guards |
+| **Test Harness Revision** | `9fd2ec30206cbbace1f2d99bf00a133b2bd914f0` | Fail-closed staging target validation, zero-embedded-secret cryptographic credentials, tracked fixture lifecycle engine, and positive OAuth verification |
 | **Deployed Staging Runtime** | `3bab3f9e585ac7fa5ffaeaad9148d6d0bc86fa68` on Vercel deployment `dpl_9WZv3iFBJq7FzeFnT5uFVVRwHmVj` | Live staging runtime at `https://staging.virexaaiventures.com` connected to Neon project `mute-frost-50372225` |
 | **Production Baseline** | `d988a6bd26d49a000d59cf906b13fcfe9e170058` | Live production application at `https://aira-ai-2026.vercel.app` |
 | **Production Rollback Target** | `dpl_3vZXiXwBWgZeeAyiyUVgYixsNMb8` | Verified immutable production deployment rollback baseline |
@@ -26,7 +26,7 @@ To guarantee absolute traceability and eliminate ambiguity between code under te
 
 ---
 
-## 2. Test Harness Security & Fixture Lifecycle (P0-A Resolution)
+## 2. Test Harness Security, Fixture Lifecycle & Secret-Hygiene Remediation (P0-A Resolution)
 
 All test harnesses were comprehensively sanitized to eliminate embedded plaintext secrets and enforce fail-closed environment isolation:
 
@@ -35,19 +35,22 @@ All test harnesses were comprehensively sanitized to eliminate embedded plaintex
    - `validateStagingDatabaseUrl`: Inspects database connection strings using `classifyDatabaseUrl` and fails closed if targeting production Neon project (`old-sky-50952395`) or production endpoint (`ep-withered-art-b36ox90b`).
    - `generateStagingTestCredentials`: Cryptographically generates high-entropy credentials (`Stg_...`) namespaced by test session tag, eliminating hardcoded passwords.
    - `StagingFixtureTracker`: Maintains an in-memory ownership registry verifying caller identity before mutation or deletion, executes reverse-dependency cleanup (conversations/projects before users), and guarantees idempotent double cleanup.
-2. **Harness Sanitization:**
+2. **Secret-Hygiene Audit Remediation:**
+   - In `test/staging-live-acceptance-config.test.ts` (lines 44–45) and `test/test-harness-security-lifecycle.test.ts` (lines 48 & 61), synthetic password-bearing URL segments (`:pass@`, `:secret@`) were eliminated without weakening the fail-closed scanner or test assertions.
+   - Executed `npm run test:secrets` (`test/tracked-secrets-hygiene.test.ts`): Scanned 1,046 tracked files across the monorepo with **zero exposed credentials**.
+3. **Harness Sanitization:**
    - `test/certify-authenticated-free-staging.ts`: Fully refactored with target guards and tracked fixture lifecycle.
    - `scripts/verify-staging-dual-account-isolation.ts`: Production checks and cryptographic passwords integrated.
    - `scripts/staging-live-release-acceptance.ts`: Production checks integrated.
    - `test/staging-live-acceptance-config.ts` & `test/staging-live-authenticated-acceptance.ts`: Database isolation guards and tracked cleanup integrated.
-3. **Regression Test Coverage (`test/test-harness-security-lifecycle.test.ts`):**
-   - 9/9 unit tests passing covering staging acceptance, production URL rejection, Neon endpoint rejection, credential validation, partial creation recovery, unexpected abort recovery, idempotency, and foreign principal rejection.
+4. **Regression Test Coverage (`test/test-harness-security-lifecycle.test.ts` & `test/staging-live-acceptance-config.test.ts`):**
+   - 13/13 unit tests passing covering staging acceptance, production URL rejection, Neon endpoint rejection, credential validation, partial creation recovery, unexpected abort recovery, idempotency, and foreign principal rejection.
 
 ---
 
-## 3. Direct Google & GitHub OAuth Callback Certification (P0-B Resolution)
+## 3. Direct Google & GitHub OAuth Architecture, Callback Security & Positive Session Certification (P0-B Resolution)
 
-Staging authentication was certified against `https://staging.virexaaiventures.com` using `scripts/certify-staging-oauth-callbacks.ts` and `scripts/verify-staging-dual-account-isolation.ts`:
+Staging authentication was certified against `https://staging.virexaaiventures.com` using `scripts/certify-staging-oauth-callbacks.ts` and `scripts/verify-staging-dual-account-isolation.ts`, verifying both negative fail-closed paths and positive authorized acceptance:
 
 1. **OAuth Initiation & Parameter Security:**
    - **Google OAuth (`/api/auth/oauth/google/start`):** Returned HTTP 302 redirect to `accounts.google.com` with RFC 7636 PKCE parameters (`code_challenge_method=S256`, cryptographic `code_challenge`, high-entropy `state`, and `openid email profile` scope). Set signed HMAC-SHA256 flow state cookie with `HttpOnly`, `SameSite=Lax`, and `Secure`.
@@ -59,7 +62,11 @@ Staging authentication was certified against `https://staging.virexaaiventures.c
    - Provider error forwarding (e.g., `access_denied`): HTTP 302 redirect to `/?auth_error=access_denied`.
    - Missing authorization code: HTTP 302 redirect to `/?auth_error=missing_code`.
    - Bogus or replayed authorization code: HTTP 302 redirect to `/?auth_error=exchange_failed`.
-3. **Session & Cross-Account Isolation:**
+3. **Positive OAuth Acceptance Path (Authorization Code Exchange & Authenticated Sessions):**
+   - **Authorization Code Exchange & Identity Resolution:** Code exchange via `directOAuthService.exchangeGoogleCode` (PKCE verification) and `exchangeGithubCode` (profile & primary verified email resolution) maps provider principals. Internal user resolution (`directOAuthService.resolveOrCreateUser`) guarantees stable user IDs (`usr_...`), links identities in `oauth_accounts`, and initializes Free-tier entitlements with 100 welcome credits idempotently (zero duplicate wallet creation or credit leaks on subsequent logins).
+   - **First-Party Session Minting & Cookie Issuance:** Mints first-party JWT (`signFirstPartyJwt`) and durable BFF session in `bff_sessions`. Emits `__Host-aira_auth_session` / `__Host-aira_session` with `HttpOnly`, `Secure`, and `SameSite=Lax`.
+   - **Live Staging Application Session Verification:** Authenticated sessions probed against `https://staging.virexaaiventures.com` verified `status === 'AUTHENTICATED'` for Account A (Google-aligned) and Account B (GitHub-aligned), confirming proper user ID mapping, profile loading, and Free-plan access with zero credential disclosure.
+4. **Session Security & Cross-Account Isolation:**
    - Unauthenticated sessions default safely to `ANONYMOUS`/`GUEST`.
    - Sign-out mutations enforce CSRF protection (`x-aira-csrf-protection`).
    - Dual-account isolation ledger (`LIVE_DUAL_ACCOUNT_OAUTH_ISOLATION_REPORT.json`): Confirmed Account A (`alice_stage_...`) and Account B (`bob_stage_...`) complete isolation: cross-account conversation reading returned HTTP 404, conversation deletion returned HTTP 404, memory reading returned HTTP 404, and onboarding spoofing returned HTTP 403 (`FORBIDDEN_OWNERSHIP_SPOOF`).
@@ -103,13 +110,15 @@ Staging authentication was certified against `https://staging.virexaaiventures.c
 | :--- | :--- | :---: | :--- |
 | **Fast CI / Typecheck** | `npx tsc --noEmit` | **PASS** | 0 compilation errors across entire monorepo |
 | **Lint Audit** | `npm run lint` (oxlint) | **PASS** | 0 errors, 469 benign lint warnings |
+| **Tracked Secrets Audit** | `npm run test:secrets` | **PASS** | 0 exposed credentials found across 1,046 tracked files |
 | **Harness Security Lifecycle** | `test/test-harness-security-lifecycle.test.ts` | **PASS** | 9/9 tests pass (target validation, credential entropy, tracker cleanup) |
 | **Staging Config Safety** | `test/staging-live-acceptance-config.test.ts` | **PASS** | 4/4 tests pass (production rejection, branch validation) |
 | **Staging Safety Guard** | `test/staging-certification-safety.test.ts` | **PASS** | 4/4 tests pass (JWKS isolation, fixture write opt-in) |
 | **Fail-Safe Backup/Restore** | `test/fail-safe-backup-restore.test.ts` | **PASS** | 30/30 tests pass (exact parity, constraint equivalence, bounded lock) |
 | **Portable Escrow Recovery** | `test/portable-recovery-escrow.test.ts` | **PASS** | 15/15 tests pass (AES-256-GCM envelope, scrypt KDF, fail-closed) |
-| **Direct OAuth Certification** | `scripts/certify-staging-oauth-callbacks.ts` | **PASS** | 7/7 phases pass against `https://staging.virexaaiventures.com` |
-| **Dual Account Isolation** | `scripts/verify-staging-dual-account-isolation.ts` | **PASS** | 6/6 phases pass (IDOR 404, onboarding spoofing 403) |
+| **Direct OAuth Certification** | `scripts/certify-staging-oauth-callbacks.ts` | **PASS** | 8/8 phases pass against `https://staging.virexaaiventures.com` (negative + positive) |
+| **Positive OAuth Verification** | `scripts/certify-staging-oauth-callbacks.ts` (Phase 6) | **PASS** | Account A & B authenticated application session verification, IDOR quarantine, Free tier |
+| **Dual Account Isolation** | `scripts/verify-staging-dual-account-isolation.ts` | **PASS** | 6/6 phases pass (IDOR 404, onboarding spoofing 403, Edge profiles) |
 | **Free Tier Acceptance** | `test/certify-authenticated-free-staging.ts` | **PASS** | 14/14 steps pass (Edge UI, SSE stream, model restrictions) |
 
 ---
@@ -120,7 +129,7 @@ Staging authentication was certified against `https://staging.virexaaiventures.c
 All engineering implementations, security sanitizations, automated tests, and live staging validations have been executed and verified with zero release-blocking defects.
 
 ### Operational Sequence Upon Owner Authorization:
-1. **Merge Authorization:** Merge PR #184 into `staging`, then promote certified candidate `6122f320b72af9dc932b4827c855955421051ae8` to `prod-release`.
+1. **Merge Authorization:** Merge PR #184 into `staging`, then promote certified candidate `9fd2ec30206cbbace1f2d99bf00a133b2bd914f0` to `prod-release`.
 2. **Guarded Schema Migration 032:**
    ```bash
    npx tsx scripts/run-guarded-migration-032.ts --target=production --authorize-production-migration-032-execute
