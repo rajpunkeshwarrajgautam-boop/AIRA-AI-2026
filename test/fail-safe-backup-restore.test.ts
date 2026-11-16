@@ -1089,3 +1089,40 @@ test('Fail-Safe Restore: missing sequence type metadata fails closed in exact mo
     /RESTORE_VERIFICATION_FAILURE.*Sequence data type mismatch or metadata missing/
   );
 });
+
+
+test('Fail-Safe Restore: unexpected identity or generated columns fail exact parity', async () => {
+  const makeClient = (identity: string, generated: string) => {
+    const client = createMockPgClient({
+      tables: ['runs'],
+      rowCounts: { runs: 1 },
+      indexesCount: 0,
+    });
+    const original = client.query.bind(client);
+    client.query = async (sql: string) => {
+      if (sql.includes('FROM information_schema.columns')) {
+        return { rows: [{
+          table_name: 'runs', column_name: 'id', data_type: 'uuid',
+          is_nullable: 'NO', column_default: null,
+          is_identity: identity, identity_generation: null, is_generated: generated,
+        }] };
+      }
+      return original(sql);
+    };
+    return client;
+  };
+  await assert.rejects(
+    () => auditRestoredDatabaseParity(makeClient('YES', 'NEVER'), {
+      exactTables: ['runs'], exactTotalRows: 1, exactColumnCount: 1,
+      expectedIdentityColumnCount: 0, expectedGeneratedColumnCount: 0,
+    }),
+    /RESTORE_VERIFICATION_FAILURE.*Identity column count mismatch/
+  );
+  await assert.rejects(
+    () => auditRestoredDatabaseParity(makeClient('NO', 'ALWAYS'), {
+      exactTables: ['runs'], exactTotalRows: 1, exactColumnCount: 1,
+      expectedIdentityColumnCount: 0, expectedGeneratedColumnCount: 0,
+    }),
+    /RESTORE_VERIFICATION_FAILURE.*Generated column count mismatch/
+  );
+});
