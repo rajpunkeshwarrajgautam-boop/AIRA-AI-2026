@@ -206,6 +206,7 @@ export async function runPortableDisasterRecoveryValidation(options?: {
       expectedMigrations: authoritativeSnapshot.knexMigrations.map((m: any) => m.name),
       expectedMigrationLedger: authoritativeSnapshot.knexMigrations,
       verifyReferentialIntegrity: true,
+      strictForeignKeyCatalog: true,
     };
 
     const clientAdapter = createWslClientAdapter(targetDbName);
