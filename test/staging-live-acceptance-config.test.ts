@@ -41,8 +41,8 @@ test('live acceptance refuses the permanent staging branch and duplicate princip
 
 test('live acceptance refuses production Neon project or endpoint in database URL', () => {
   for (const prodDbUrl of [
-    'postgresql://aira_user:pass@ep-withered-art-b36ox90b.ap-southeast-1.aws.neon.tech/neondb',
-    'postgresql://aira_user:pass@ep-other-123.ap-southeast-1.aws.neon.tech/neondb?project=old-sky-50952395'
+    'postgresql://aira_user@ep-withered-art-b36ox90b.ap-southeast-1.aws.neon.tech/neondb',
+    'postgresql://aira_user@ep-other-123.ap-southeast-1.aws.neon.tech/neondb?project=old-sky-50952395'
   ]) {
     assert.throws(
       () => resolveStagingLiveAcceptanceConfig({ ...valid, STAGING_DATABASE_URL: prodDbUrl }),

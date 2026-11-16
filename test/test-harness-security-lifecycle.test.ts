@@ -44,8 +44,8 @@ test('2. Production URL rejected fail-closed', () => {
 
 test('3. Production Neon endpoint rejected fail-closed', () => {
   const prodDbUrls = [
-    `postgresql://aira_user:secret@${PRODUCTION_NEON_ENDPOINT_ID}.ap-southeast-1.aws.neon.tech/neondb`,
-    `postgresql://aira_user:secret@ep-custom-pooler.ap-southeast-1.aws.neon.tech/neondb?project=${PRODUCTION_NEON_PROJECT_ID}`
+    `postgresql://aira_user@${PRODUCTION_NEON_ENDPOINT_ID}.ap-southeast-1.aws.neon.tech/neondb`,
+    `postgresql://aira_user@ep-custom-pooler.ap-southeast-1.aws.neon.tech/neondb?project=${PRODUCTION_NEON_PROJECT_ID}`
   ];
 
   for (const dbUrl of prodDbUrls) {
@@ -58,7 +58,7 @@ test('3. Production Neon endpoint rejected fail-closed', () => {
 
   // Non-production URL must pass
   assert.doesNotThrow(() => {
-    validateStagingDatabaseUrl('postgresql://aira_test:secret@ep-disposable-qa.ap-southeast-1.aws.neon.tech/neondb');
+    validateStagingDatabaseUrl('postgresql://aira_test@ep-disposable-qa.ap-southeast-1.aws.neon.tech/neondb');
   });
 });
 
