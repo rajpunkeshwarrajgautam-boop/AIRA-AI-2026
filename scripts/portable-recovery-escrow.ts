@@ -67,9 +67,18 @@ export function createPortableRecoveryEnvelope(options: CreatePortableEnvelopeOp
   const isWindows = process.platform === 'win32';
   const isSystemDrive = isWindows
     ? (resolvedDest.toUpperCase().startsWith((process.env.SystemDrive || 'C:').toUpperCase()) || /^[C-c]:\\/.test(resolvedDest))
-    : resolvedDest === '/' || resolvedDest.startsWith('/home') || resolvedDest.startsWith('/usr');
+    : (
+        resolvedDest === '/' ||
+        resolvedDest.startsWith('/home') ||
+        resolvedDest.startsWith('/root') ||
+        resolvedDest.startsWith('/tmp') ||
+        resolvedDest.startsWith('/var') ||
+        resolvedDest.startsWith('/usr') ||
+        resolvedDest.startsWith('/etc') ||
+        (!resolvedDest.startsWith('/media') && !resolvedDest.startsWith('/mnt') && !resolvedDest.startsWith('/Volumes') && !resolvedDest.startsWith('/run/media'))
+      );
 
-  if (isSystemDrive && !allowSystemDrive && process.env.NODE_ENV !== 'test' && process.env.AIRA_TEST_MODE !== '1') {
+  if (isSystemDrive && !allowSystemDrive) {
     throw new Error(
       `[ESCROW_TARGET_ERROR] Configured destination directory "${destinationDir}" resides on the internal system drive. ` +
       'Production recovery escrow must be exported to an external, independently stored removable drive (e.g. E:\\). ' +
@@ -278,9 +287,7 @@ export function parsePortableEscrowCliArgs(argv: string[]): PortableEscrowCliArg
   // Reject raw secrets passed via CLI flags in production mode to prevent shell history leakage
   if (
     passedSecretFlag &&
-    !result.allowDisposableTestCredentials &&
-    process.env.NODE_ENV !== 'test' &&
-    process.env.AIRA_TEST_MODE !== '1'
+    !result.allowDisposableTestCredentials
   ) {
     throw new Error(
       '[SECURITY_VIOLATION] Passing plaintext keys or passphrases via CLI flags (--backup-key, --recovery-passphrase) is strictly forbidden in production to prevent shell history and process table exposure. Use local DPAPI escrow, the interactive non-echoing prompt, or ephemeral environment variables in non-history sessions. For automated tests, specify --allow-disposable-test-credentials.'

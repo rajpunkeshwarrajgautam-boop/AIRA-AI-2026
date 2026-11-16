@@ -249,30 +249,20 @@ test('Portable Escrow Security: rejects plaintext secret flags without explicit 
 });
 
 test('Portable Escrow Security: rejects internal system drive destination in production mode', () => {
-  const origNodeEnv = process.env.NODE_ENV;
-  const origTestMode = process.env.AIRA_TEST_MODE;
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aira_sys_drive_test_'));
   try {
-    delete process.env.NODE_ENV;
-    delete process.env.AIRA_TEST_MODE;
-
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aira_sys_drive_test_'));
-    try {
-      assert.throws(
-        () =>
-          createPortableRecoveryEnvelope({
-            backupKey: 'valid-test-key-material-1234567890',
-            recoveryPassphrase: 'ultra-strong-passphrase-at-least-16-chars',
-            destinationDir: tmpDir,
-            allowSystemDrive: false,
-          }),
-        /ESCROW_TARGET_ERROR.*resides on the internal system drive/
-      );
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+    assert.throws(
+      () =>
+        createPortableRecoveryEnvelope({
+          backupKey: 'valid-test-key-material-1234567890',
+          recoveryPassphrase: 'ultra-strong-passphrase-at-least-16-chars',
+          destinationDir: tmpDir,
+          allowSystemDrive: false,
+        }),
+      /ESCROW_TARGET_ERROR.*resides on the internal system drive/
+    );
   } finally {
-    if (origNodeEnv !== undefined) process.env.NODE_ENV = origNodeEnv;
-    if (origTestMode !== undefined) process.env.AIRA_TEST_MODE = origTestMode;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
 
