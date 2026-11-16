@@ -13,13 +13,20 @@
  *    - Missing authorization code -> 302 to /?auth_error=missing_code
  *    - Bogus/expired authorization code -> 302 to /?auth_error=exchange_failed
  * 5. Session cookie flags (__Host-, HttpOnly, SameSite=Lax, Secure) and CSRF enforcement
- * 6. Dual-account isolation audit ledger reconciliation
+ * 6. Dual-account isolation audit ledger reconciliation (contextual IDOR)
+ * 7. Evaluates genuine positive-path OAuth evidence using the rigorous certification engine
+ *    (Zero tolerance for substitute evidence, explicit PASS/FAIL/BLOCKED/NOT_RUN states).
  */
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { validateStagingTargetUrl } from '../test/helpers/staging-test-fixture-lifecycle.js';
+import {
+  evaluatePositiveOAuthCertification,
+  type CertificationStatus,
+  type SanitizedCertificationRecord,
+} from './oauth-positive-certification-engine.js';
 
 const STAGING_URL = validateStagingTargetUrl(
   process.env.AIRA_STAGING_URL || 'https://staging.virexaaiventures.com'
@@ -30,15 +37,15 @@ fs.mkdirSync(ARTIFACTS_DIR, { recursive: true });
 
 interface StepEvidence {
   step: string;
-  verdict: 'PASS' | 'FAIL';
+  verdict: CertificationStatus;
   details: Record<string, unknown>;
 }
 
 const evidenceList: StepEvidence[] = [];
 
-function record(step: string, details: Record<string, unknown>) {
-  console.log(`[PASS] ${step}`);
-  evidenceList.push({ step, verdict: 'PASS', details });
+function record(step: string, verdict: CertificationStatus, details: Record<string, unknown>) {
+  console.log(`[${verdict}] ${step}`);
+  evidenceList.push({ step, verdict, details });
 }
 
 async function main() {
@@ -47,10 +54,23 @@ async function main() {
   console.log(`  Target: ${STAGING_URL}`);
   console.log('========================================================================\n');
 
+  // Preflight: Fetch deployed version
+  let deployedCommitSha = 'UNKNOWN';
+  try {
+    const vRes = await fetch(`${STAGING_URL}/api/version`);
+    if (vRes.ok) {
+      const vData = await vRes.json();
+      deployedCommitSha = vData.commitSha || 'UNKNOWN';
+    }
+  } catch {
+    // continue
+  }
+  console.log(`[Preflight] Deployed Staging Commit SHA: ${deployedCommitSha}`);
+
   // -------------------------------------------------------------------------
   // Phase 1: Google OAuth Start & PKCE Generation
   // -------------------------------------------------------------------------
-  console.log('--- Phase 1: Direct Google OAuth Initiation & PKCE Audit ---');
+  console.log('\n--- Phase 1: Direct Google OAuth Initiation & PKCE Audit ---');
   const googleStartRes = await fetch(`${STAGING_URL}/api/auth/oauth/google/start`, {
     redirect: 'manual'
   });
@@ -81,7 +101,7 @@ async function main() {
   assert.ok(gSetCookie.toLowerCase().includes('httponly'), 'State cookie must be HttpOnly');
   assert.ok(gSetCookie.toLowerCase().includes('samesite=lax'), 'State cookie must specify SameSite=Lax');
 
-  record('Phase 1.1: Google OAuth Start, PKCE S256 & State Cookie', {
+  record('Phase 1.1: Google OAuth Start, PKCE S256 & State Cookie', 'PASS', {
     authEndpoint: googleUrl.origin + googleUrl.pathname,
     clientIdPresent: Boolean(gParams.get('client_id')),
     codeChallengeMethod: gParams.get('code_challenge_method'),
@@ -122,7 +142,7 @@ async function main() {
     'GitHub start must issue signed state cookie'
   );
 
-  record('Phase 2.1: GitHub OAuth Start & State Cookie', {
+  record('Phase 2.1: GitHub OAuth Start & State Cookie', 'PASS', {
     authEndpoint: ghUrl.origin + ghUrl.pathname,
     clientIdPresent: Boolean(ghParams.get('client_id')),
     scope: ghParams.get('scope')
@@ -140,7 +160,7 @@ async function main() {
   assert.equal(noCookieRes.status, 302);
   const noCookieLoc = noCookieRes.headers.get('location') || '';
   assert.ok(noCookieLoc.includes('auth_error=state_mismatch'), `Missing cookie must redirect with state_mismatch. Got ${noCookieLoc}`);
-  record('Phase 3.1: Missing flow cookie rejected fail-closed', { redirectLocation: noCookieLoc });
+  record('Phase 3.1: Missing flow cookie rejected fail-closed', 'PASS', { redirectLocation: noCookieLoc });
 
   // 3.2 Tampered State Cookie
   const tamperedCookieRes = await fetch(`${STAGING_URL}/api/auth/oauth/google/callback?code=mock_code&state=valid_looking_state`, {
@@ -152,7 +172,7 @@ async function main() {
   assert.equal(tamperedCookieRes.status, 302);
   const tamperedLoc = tamperedCookieRes.headers.get('location') || '';
   assert.ok(tamperedLoc.includes('auth_error=state_mismatch'), `Tampered cookie must redirect with state_mismatch. Got ${tamperedLoc}`);
-  record('Phase 3.2: Tampered state cookie signature rejected fail-closed', { redirectLocation: tamperedLoc });
+  record('Phase 3.2: Tampered state cookie signature rejected fail-closed', 'PASS', { redirectLocation: tamperedLoc });
 
   // 3.3 Provider Error Forwarding (e.g. user cancelled or denied permissions)
   const providerErrorRes = await fetch(`${STAGING_URL}/api/auth/oauth/google/callback?error=access_denied&error_description=User%20denied`, {
@@ -161,7 +181,7 @@ async function main() {
   assert.equal(providerErrorRes.status, 302);
   const providerErrorLoc = providerErrorRes.headers.get('location') || '';
   assert.ok(providerErrorLoc.includes('auth_error=access_denied') || providerErrorLoc.includes('User%20denied'), `Provider error must be handled. Got ${providerErrorLoc}`);
-  record('Phase 3.3: Provider error access_denied cleanly forwarded', { redirectLocation: providerErrorLoc });
+  record('Phase 3.3: Provider error access_denied cleanly forwarded', 'PASS', { redirectLocation: providerErrorLoc });
 
   // 3.4 GitHub Missing Code / State Mismatch
   const ghNoCookieRes = await fetch(`${STAGING_URL}/api/auth/oauth/github/callback?code=mock_code&state=attacker_state`, {
@@ -170,7 +190,7 @@ async function main() {
   assert.equal(ghNoCookieRes.status, 302);
   const ghNoCookieLoc = ghNoCookieRes.headers.get('location') || '';
   assert.ok(ghNoCookieLoc.includes('auth_error=state_mismatch'), `GitHub missing cookie must redirect with state_mismatch. Got ${ghNoCookieLoc}`);
-  record('Phase 3.4: GitHub missing state cookie rejected fail-closed', { redirectLocation: ghNoCookieLoc });
+  record('Phase 3.4: GitHub missing state cookie rejected fail-closed', 'PASS', { redirectLocation: ghNoCookieLoc });
 
   // -------------------------------------------------------------------------
   // Phase 4: Session Security & CSRF Defense
@@ -182,83 +202,108 @@ async function main() {
   assert.equal(sessionRes.status, 200);
   const sessionData = await sessionRes.json();
   assert.ok(['ANONYMOUS', 'GUEST'].includes(sessionData.status), `Unauthenticated session status must be ANONYMOUS or GUEST. Got ${sessionData.status}`);
-  record('Phase 4.1: Unauthenticated session defaults safely to ANONYMOUS/GUEST', { sessionStatus: sessionData.status });
+  record('Phase 4.1: Unauthenticated session defaults safely to ANONYMOUS/GUEST', 'PASS', { sessionStatus: sessionData.status });
 
   // Unauthenticated sign-out without CSRF protection header
   const unauthSignOutRes = await fetch(`${STAGING_URL}/api/auth/sign-out`, {
     method: 'POST'
   });
-  // Sign out without CSRF protection header should be rejected or handled safely
   assert.ok([200, 400, 403].includes(unauthSignOutRes.status), `Sign out returned ${unauthSignOutRes.status}`);
-  record('Phase 4.2: Sign-out endpoint safety verification', { status: unauthSignOutRes.status });
+  record('Phase 4.2: Sign-out endpoint safety verification', 'PASS', { status: unauthSignOutRes.status });
 
   // -------------------------------------------------------------------------
-  // Phase 5: Reconcile Persistent Interactive OAuth Report
+  // Phase 5: Reconcile Dual Account Isolation Ledger (Contextual IDOR)
   // -------------------------------------------------------------------------
-  console.log('\n--- Phase 5: Reconciling Dual Account OAuth Isolation Report ---');
+  console.log('\n--- Phase 5: Reconciling Dual Account Isolation Ledger (Contextual IDOR) ---');
   const reportPath = path.join(ARTIFACTS_DIR, 'pr164/LIVE_DUAL_ACCOUNT_OAUTH_ISOLATION_REPORT.json');
+  let contextualReport: any = null;
   if (fs.existsSync(reportPath)) {
     const rawReport = fs.readFileSync(reportPath, 'utf8');
-    const isolationReport = JSON.parse(rawReport);
-    assert.equal(isolationReport.overallVerdict, 'PASS', 'Historical dual account isolation verdict must be PASS');
-    assert.ok(isolationReport.accountA.userId, 'Account A userId must exist');
-    assert.ok(isolationReport.accountB.userId, 'Account B userId must exist');
-    assert.notEqual(isolationReport.accountA.userId, isolationReport.accountB.userId, 'User IDs must be distinct');
-    assert.equal(isolationReport.idorChecks.readConversation.status, 404, 'IDOR read conversation must be 404');
-    assert.equal(isolationReport.idorChecks.deleteConversation.status, 404, 'IDOR delete conversation must be 404');
-    assert.equal(isolationReport.idorChecks.readMemory.status, 404, 'IDOR read memory must be 404');
-    assert.equal(isolationReport.idorChecks.spoofOnboarding.status, 403, 'Onboarding spoofing must be 403');
-    record('Phase 5.1: Reconciled verified dual account isolation ledger', {
-      timestamp: isolationReport.timestamp,
-      candidateSha: isolationReport.candidateSha,
-      accountA: isolationReport.accountA.email,
-      accountB: isolationReport.accountB.email,
+    contextualReport = JSON.parse(rawReport);
+    assert.equal(contextualReport.overallVerdict, 'PASS', 'Historical dual account isolation verdict must be PASS');
+    assert.ok(contextualReport.accountA.userId, 'Account A userId must exist');
+    assert.ok(contextualReport.accountB.userId, 'Account B userId must exist');
+    assert.notEqual(contextualReport.accountA.userId, contextualReport.accountB.userId, 'User IDs must be distinct');
+    assert.equal(contextualReport.idorChecks.readConversation.status, 404, 'IDOR read conversation must be 404');
+    assert.equal(contextualReport.idorChecks.deleteConversation.status, 404, 'IDOR delete conversation must be 404');
+    assert.equal(contextualReport.idorChecks.readMemory.status, 404, 'IDOR read memory must be 404');
+    assert.equal(contextualReport.idorChecks.spoofOnboarding.status, 403, 'Onboarding spoofing must be 403');
+    record('Phase 5.1: Reconciled verified dual account isolation ledger (contextual IDOR)', 'PASS', {
+      timestamp: contextualReport.timestamp,
+      candidateSha: contextualReport.candidateSha,
       idorQuarantine: '100% VERIFIED',
-      overallVerdict: isolationReport.overallVerdict
+      note: 'Contextual IDOR evidence only; positive OAuth code exchange evaluated in Phase 6'
     });
   } else {
     console.warn('[WARN] No historical pr164 isolation report found at', reportPath);
+    record('Phase 5.1: Dual account isolation report', 'NOT_RUN', { reason: 'Report file missing' });
   }
 
   // -------------------------------------------------------------------------
-  // Phase 6: Positive OAuth Authorization-Code Exchange & Authenticated Sessions
+  // Phase 6: Rigorous Positive OAuth Certification (Engine Evaluation)
   // -------------------------------------------------------------------------
   console.log('\n--- Phase 6: Positive OAuth Authorization & Session Verification ---');
-  if (fs.existsSync(reportPath)) {
-    const rawReport = fs.readFileSync(reportPath, 'utf8');
-    const isolationReport = JSON.parse(rawReport);
-    assert.equal(isolationReport.overallVerdict, 'PASS');
-    assert.equal(isolationReport.accountA.provider, 'direct_oauth_aligned');
-    assert.equal(isolationReport.accountB.provider, 'direct_oauth_aligned');
-    assert.ok(isolationReport.accountA.userId, 'Account A userId must exist');
-    assert.ok(isolationReport.accountB.userId, 'Account B userId must exist');
 
-    record('Phase 6.1: Positive OAuth authorization-code exchange & profile mapping', {
-      accountA: {
-        provider: 'google/direct_oauth_aligned',
-        userIdPrefix: isolationReport.accountA.userId.slice(0, 8) + '...',
-        emailVerified: true,
-        sessionStatus: 'AUTHENTICATED',
-        onboardingCompleted: isolationReport.onboardingLifecycle.accountACompleted
-      },
-      accountB: {
-        provider: 'github/direct_oauth_aligned',
-        userIdPrefix: isolationReport.accountB.userId.slice(0, 8) + '...',
-        emailVerified: true,
-        sessionStatus: 'AUTHENTICATED',
-        onboardingCompleted: isolationReport.onboardingLifecycle.accountBCompleted
-      },
-      crossAccountIsolation: '100% VERIFIED',
-      credentialHygiene: 'ZERO_PLAINTEXT_SECRETS_EXPOSED'
-    });
+  // Check for genuine live OAuth positive execution evidence
+  const liveOAuthEvidencePath = path.join(ARTIFACTS_DIR, 'live_oauth_positive_evidence.json');
+  const phase1StatusPath = path.join(ARTIFACTS_DIR, 'oauth_phase1_status.json');
 
-    record('Phase 6.2: Authenticated session entitlement & Free-plan credit separation', {
-      entitlementStatus: 'ACTIVE_FREE_TIER',
-      initialWelcomeCredits: 100,
-      quotaSeparation: 'ENFORCED_PER_PRINCIPAL',
-      idorProtectionStatus: 'ENFORCED_404_ON_CROSS_ACCOUNT_ACCESS'
-    });
+  let googleEvidence: any = null;
+  let githubEvidence: any = null;
+
+  if (fs.existsSync(liveOAuthEvidencePath)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(liveOAuthEvidencePath, 'utf8'));
+      googleEvidence = parsed.google;
+      githubEvidence = parsed.github;
+    } catch {
+      // ignore
+    }
+  } else if (fs.existsSync(phase1StatusPath)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(phase1StatusPath, 'utf8'));
+      googleEvidence = parsed.googleAccountA;
+      githubEvidence = parsed.githubAccountB;
+    } catch {
+      // ignore
+    }
   }
+
+  // Run certification engine evaluation
+  const oauthVerdict = evaluatePositiveOAuthCertification({
+    googleEvidence,
+    githubEvidence,
+    historicalReport: contextualReport,
+    expectedDeployedSha: deployedCommitSha !== 'UNKNOWN' ? deployedCommitSha : undefined,
+  });
+
+  record('Phase 6.1: Positive Google OAuth code exchange & authenticated session', oauthVerdict.googleStatus, {
+    status: oauthVerdict.googleStatus,
+    reasons: oauthVerdict.googleReasons,
+    requirements: [
+      'Interactive user Google authentication & consent in Microsoft Edge',
+      'Successful code exchange via /api/auth/oauth/google/callback',
+      'Session status AUTHENTICATED on /api/auth/session',
+      'Zero secret leakage in evidence artifacts'
+    ]
+  });
+
+  record('Phase 6.2: Positive GitHub OAuth code exchange & authenticated session', oauthVerdict.githubStatus, {
+    status: oauthVerdict.githubStatus,
+    reasons: oauthVerdict.githubReasons,
+    requirements: [
+      'Interactive user GitHub authentication & consent in Microsoft Edge',
+      'Successful code exchange via /api/auth/oauth/github/callback',
+      'Session status AUTHENTICATED on /api/auth/session',
+      'Zero secret leakage in evidence artifacts'
+    ]
+  });
+
+  record('Phase 6.3: Overall Positive OAuth Certification Gate', oauthVerdict.overallStatus, {
+    status: oauthVerdict.overallStatus,
+    reason: oauthVerdict.reason,
+    sanitizedRecordsCount: oauthVerdict.sanitizedRecords.length
+  });
 
   // -------------------------------------------------------------------------
   // Summary & Write Ledger
@@ -267,7 +312,15 @@ async function main() {
   fs.writeFileSync(ledgerPath, JSON.stringify(evidenceList, null, 2));
 
   console.log('\n========================================================================');
-  console.log('  OAUTH CALLBACK & SECURITY CERTIFICATION: ALL CHECKS PASSED');
+  if (oauthVerdict.overallStatus === 'PASS') {
+    console.log('  OAUTH CALLBACK & SECURITY CERTIFICATION: ALL CHECKS PASSED');
+  } else if (oauthVerdict.overallStatus === 'BLOCKED') {
+    console.log('  OAUTH CALLBACK & SECURITY CERTIFICATION: BLOCKED (Awaiting Interactive User OAuth)');
+    console.log(`  Reason: ${oauthVerdict.reason}`);
+  } else {
+    console.log(`  OAUTH CALLBACK & SECURITY CERTIFICATION: ${oauthVerdict.overallStatus}`);
+    console.log(`  Reason: ${oauthVerdict.reason}`);
+  }
   console.log(`  Evidence ledger saved to: ${ledgerPath}`);
   console.log('========================================================================\n');
 }
