@@ -45,3 +45,63 @@ npx tsx scripts/run-guarded-migration-032.ts --target=disposable_test
    If lock contention occurs, PostgreSQL aborts within 1-2 seconds with clean rollback.
 7. **Pre-Commit Verification & Atomic Execution:** Checks table existence, adds JSONB column with default `'[]'::jsonb`, atomically inserts ledger row, and strictly verifies JSONB data type, `'[]'` default, nullability, and row count **before COMMIT**. If any postcondition fails, the transaction is immediately rolled back.
 8. **Rollback & Idempotency:** Automatically executes `ROLLBACK` on error. Re-running after completion is a clean idempotent no-op.
+
+---
+
+## Safe Knex Migration Lock Recovery Runbook & Operational Protocol
+
+### 1. Fail-Closed Invariants
+- The guarded migration runner strictly requires `knex_migrations_lock` to exist, contain valid columns (`index` and `is_locked`), and contain the required lock row (`index = 1`).
+- The runner **never** automatically clears a lock on failure or unexpected termination. A stale lock remains locked until manual investigation, preventing concurrent migration processes from conflicting.
+- If lock release fails in `finally`, the runner immediately bubbles a fatal operational error `[LOCK_RELEASE_OPERATIONAL_FAILURE]`.
+
+### 2. Manual Lock Inspection & Verification Procedure
+Before clearing any lock, an authorized engineer must execute these four diagnostic steps:
+
+1. **Verify No In-Flight Migration Processes:**
+   ```sql
+   SELECT pid, state, query_start, age(clock_timestamp(), query_start) as duration, query
+   FROM pg_stat_activity
+   WHERE datname = current_database()
+     AND pid <> pg_backend_pid()
+     AND (query ILIKE '%migration%' OR query ILIKE '%workflow_runs%');
+   ```
+   *Requirement:* Ensure 0 active backend workers are executing migration queries. If a stuck process exists, terminate it safely via `SELECT pg_terminate_backend(<pid>);`.
+
+2. **Verify Physical Table & Column Schema:**
+   ```sql
+   SELECT column_name, data_type, column_default, is_nullable
+   FROM information_schema.columns
+   WHERE table_name = 'workflow_runs' AND column_name = 'artifacts';
+   ```
+   *Evaluation:* Determine if `artifacts` column was added or is absent.
+
+3. **Verify Knex Migration Ledger Consistency:**
+   ```sql
+   SELECT id, name, batch, migration_time
+   FROM knex_migrations
+   ORDER BY id DESC
+   LIMIT 5;
+   ```
+   *Evaluation:* Determine if `032_reconcile_workflow_run_artifacts.ts` was recorded or if the transaction cleanly rolled back.
+
+4. **Explicit Authorized Lock Repair (Single-Statement):**
+   *Only* after confirming that no active process is running and schema/ledger state is completely verified:
+   ```sql
+   UPDATE knex_migrations_lock SET is_locked = 0 WHERE index = 1;
+   ```
+
+---
+
+## Portable Off-Device Key Escrow & DR Runbook
+
+1. **Approved Removable Storage Destination:**
+   The portable escrow CLI strictly rejects internal system drives (`C:\`). An external or removable volume (e.g. `E:\AIRA_RECOVERY_ESCROW\`) must be connected.
+2. **Zero-Secret Handling Standard:**
+   Passing raw keys or passphrases via `--backup-key` or `--recovery-passphrase` is rejected in production to prevent exposure in PowerShell history (`Get-History`, `ConsoleHost_history.txt`), process lists, and terminal logs.
+3. **Approved Execution Methods:**
+   - **Interactive Prompt:** Run without flags; script prompts for the recovery passphrase with non-echoing masked characters (`*`).
+   - **Protected Local Store:** Sourced automatically from Windows DPAPI (`tryReadDpapiEscrowKey()`).
+   - **Ephemeral Session Env:** `$env:AIRA_RECOVERY_PASSPHRASE="<passphrase>"` cleared immediately via `Remove-Item env:AIRA_RECOVERY_PASSPHRASE`.
+4. **Envelope Writing & Self-Healing Cleanup:**
+   Every written envelope immediately executes an in-memory decrypt-and-authenticate verification. If write or verification fails, partial or corrupted envelope files are deleted immediately to ensure zero invalid recovery artifacts persist.

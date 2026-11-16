@@ -150,6 +150,11 @@ async function run() {
         batch INTEGER NOT NULL,
         migration_time TIMESTAMPTZ DEFAULT NOW()
       );
+      CREATE TABLE knex_migrations_lock (
+        index INTEGER PRIMARY KEY,
+        is_locked INTEGER
+      );
+      INSERT INTO knex_migrations_lock (index, is_locked) VALUES (1, 0);
     `);
 
     // Insert all prior migrations 001 through 031 matching production baseline
@@ -207,13 +212,16 @@ async function run() {
     try {
       await clientQ.query(`
         CREATE TABLE knex_migrations (id SERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL, batch INTEGER NOT NULL);
+        CREATE TABLE knex_migrations_lock (index INTEGER PRIMARY KEY, is_locked INTEGER);
+        INSERT INTO knex_migrations_lock (index, is_locked) VALUES (1, 0);
         INSERT INTO knex_migrations (name, batch) VALUES ('030_some_prior.ts', 6);
         CREATE TABLE workflow_runs (id VARCHAR(255) PRIMARY KEY);
       `);
 
-      // Mock migration directory with 032_workspace_experience.ts
+      // Mock migration directory with 030_some_prior.ts, 032_reconcile_workflow_run_artifacts.ts, and 032_workspace_experience.ts
       const tmpDir = path.join(os.tmpdir(), `mock_migs_${Date.now()}`);
       fs.mkdirSync(tmpDir, { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, '030_some_prior.ts'), '// prior applied');
       fs.writeFileSync(path.join(tmpDir, '032_reconcile_workflow_run_artifacts.ts'), '// authorized');
       fs.writeFileSync(path.join(tmpDir, '032_workspace_experience.ts'), '// unauthorized');
 
@@ -226,8 +234,8 @@ async function run() {
               migrationsDir: tmpDir,
             });
           },
-          /UNEXPECTED_PENDING_MIGRATION.*032_workspace_experience\.ts/,
-          'Must abort if unauthorized migrations are found pending'
+          /FORBIDDEN_WORKSPACE_V3|UNEXPECTED_PENDING_MIGRATION.*032_workspace_experience\.ts/,
+          'Must abort if unauthorized migrations are found pending or Workspace V3 is detected'
         );
         console.log('  ✓ TEST 3 PASSED: Fails closed when Workspace V3 migration is pending.\n');
       } finally {
@@ -248,6 +256,8 @@ async function run() {
     try {
       await clientM.query(`
         CREATE TABLE knex_migrations (id SERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL, batch INTEGER NOT NULL);
+        CREATE TABLE knex_migrations_lock (index INTEGER PRIMARY KEY, is_locked INTEGER);
+        INSERT INTO knex_migrations_lock (index, is_locked) VALUES (1, 0);
       `);
       for (let i = 0; i < priorFiles.length; i++) {
         await clientM.query('INSERT INTO knex_migrations (name, batch) VALUES ($1, $2)', [priorFiles[i], Math.min(7, Math.floor(i / 5) + 1)]);
@@ -323,6 +333,8 @@ async function run() {
     try {
       await clientC.query(`
         CREATE TABLE knex_migrations (id SERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL, batch INTEGER NOT NULL);
+        CREATE TABLE knex_migrations_lock (index INTEGER PRIMARY KEY, is_locked INTEGER);
+        INSERT INTO knex_migrations_lock (index, is_locked) VALUES (1, 0);
       `);
       for (let i = 0; i < priorFiles.length; i++) {
         await clientC.query('INSERT INTO knex_migrations (name, batch) VALUES ($1, $2)', [priorFiles[i], Math.min(7, Math.floor(i / 5) + 1)]);
@@ -406,6 +418,8 @@ async function run() {
     try {
       await clientCorrupt.query(`
         CREATE TABLE knex_migrations (id SERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL, batch INTEGER NOT NULL);
+        CREATE TABLE knex_migrations_lock (index INTEGER PRIMARY KEY, is_locked INTEGER);
+        INSERT INTO knex_migrations_lock (index, is_locked) VALUES (1, 0);
       `);
       for (let i = 0; i < priorFiles.length; i++) {
         await clientCorrupt.query('INSERT INTO knex_migrations (name, batch) VALUES ($1, $2)', [priorFiles[i], Math.min(7, Math.floor(i / 5) + 1)]);
@@ -528,6 +542,8 @@ async function run() {
     try {
       await clientPost.query(`
         CREATE TABLE knex_migrations (id SERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL, batch INTEGER NOT NULL, migration_time TIMESTAMPTZ DEFAULT NOW());
+        CREATE TABLE knex_migrations_lock (index INTEGER PRIMARY KEY, is_locked INTEGER);
+        INSERT INTO knex_migrations_lock (index, is_locked) VALUES (1, 0);
       `);
       for (let i = 0; i < priorFiles.length; i++) {
         await clientPost.query('INSERT INTO knex_migrations (name, batch) VALUES ($1, $2)', [priorFiles[i], Math.min(7, Math.floor(i / 5) + 1)]);
@@ -555,8 +571,274 @@ async function run() {
       await dropIsolatedTestDb(testDbPostcond);
     }
 
+    // TEST 13: Missing Knex Lock Table Fail-Closed
+    console.log('--- TEST 13: Missing Knex Lock Table Fail-Closed ---');
+    const testDbNoLock = `aira_nolock_test_${Date.now()}`;
+    const connStrNoLock = await createIsolatedTestDb(testDbNoLock);
+    const clientNoLock = new pg.Client({ connectionString: connStrNoLock });
+    await clientNoLock.connect();
+
+    try {
+      await clientNoLock.query(`
+        CREATE TABLE knex_migrations (id SERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL, batch INTEGER NOT NULL, migration_time TIMESTAMPTZ DEFAULT NOW());
+        CREATE TABLE workflow_runs (id VARCHAR(255) PRIMARY KEY);
+      `);
+      for (let i = 0; i < priorFiles.length; i++) {
+        await clientNoLock.query('INSERT INTO knex_migrations (name, batch) VALUES ($1, $2)', [priorFiles[i], Math.min(7, Math.floor(i / 5) + 1)]);
+      }
+
+      await assert.rejects(
+        async () => {
+          await executeGuardedMigration032({
+            connectionString: connStrNoLock,
+            targetEnvironment: 'disposable_test',
+          });
+        },
+        /KNEX_LOCK_TABLE_MISSING.*Table "knex_migrations_lock" does not exist/,
+        'Must fail closed when knex_migrations_lock table is missing'
+      );
+
+      // Verify zero schema changes and zero ledger inserts
+      const cols = await clientNoLock.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'workflow_runs' AND column_name = 'artifacts'");
+      assert.equal(cols.rows.length, 0, 'Zero columns must be modified on lock table failure');
+
+      console.log('  ✓ TEST 13 PASSED: Missing knex_migrations_lock fails closed with zero modifications.\n');
+    } finally {
+      await clientNoLock.end();
+      await dropIsolatedTestDb(testDbNoLock);
+    }
+
+    // TEST 14: Corrupt Knex Lock Table Structure Fail-Closed
+    console.log('--- TEST 14: Corrupt Knex Lock Table Structure Fail-Closed ---');
+    const testDbCorruptLock = `aira_corrupt_lock_${Date.now()}`;
+    const connStrCorruptLock = await createIsolatedTestDb(testDbCorruptLock);
+    const clientCLock = new pg.Client({ connectionString: connStrCorruptLock });
+    await clientCLock.connect();
+
+    try {
+      await clientCLock.query(`
+        CREATE TABLE knex_migrations (id SERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL, batch INTEGER NOT NULL);
+        CREATE TABLE knex_migrations_lock (id INTEGER PRIMARY KEY, unexpected_col TEXT);
+        CREATE TABLE workflow_runs (id VARCHAR(255) PRIMARY KEY);
+      `);
+      for (let i = 0; i < priorFiles.length; i++) {
+        await clientCLock.query('INSERT INTO knex_migrations (name, batch) VALUES ($1, $2)', [priorFiles[i], Math.min(7, Math.floor(i / 5) + 1)]);
+      }
+
+      await assert.rejects(
+        async () => {
+          await executeGuardedMigration032({
+            connectionString: connStrCorruptLock,
+            targetEnvironment: 'disposable_test',
+          });
+        },
+        /KNEX_LOCK_TABLE_CORRUPT.*unexpected structure/,
+        'Must fail closed when knex_migrations_lock structure is corrupt'
+      );
+      console.log('  ✓ TEST 14 PASSED: Corrupt knex_migrations_lock table structure fails closed.\n');
+    } finally {
+      await clientCLock.end();
+      await dropIsolatedTestDb(testDbCorruptLock);
+    }
+
+    // TEST 15: Missing Knex Lock Row (index = 1) Fail-Closed
+    console.log('--- TEST 15: Missing Knex Lock Row (index = 1) Fail-Closed ---');
+    const testDbNoRow = `aira_norow_test_${Date.now()}`;
+    const connStrNoRow = await createIsolatedTestDb(testDbNoRow);
+    const clientNoRow = new pg.Client({ connectionString: connStrNoRow });
+    await clientNoRow.connect();
+
+    try {
+      await clientNoRow.query(`
+        CREATE TABLE knex_migrations (id SERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL, batch INTEGER NOT NULL);
+        CREATE TABLE knex_migrations_lock (index INTEGER PRIMARY KEY, is_locked INTEGER);
+        CREATE TABLE workflow_runs (id VARCHAR(255) PRIMARY KEY);
+      `);
+      for (let i = 0; i < priorFiles.length; i++) {
+        await clientNoRow.query('INSERT INTO knex_migrations (name, batch) VALUES ($1, $2)', [priorFiles[i], Math.min(7, Math.floor(i / 5) + 1)]);
+      }
+
+      await assert.rejects(
+        async () => {
+          await executeGuardedMigration032({
+            connectionString: connStrNoRow,
+            targetEnvironment: 'disposable_test',
+          });
+        },
+        /KNEX_LOCK_ROW_MISSING.*lacks required coordination lock row/,
+        'Must fail closed when index = 1 row is absent'
+      );
+      console.log('  ✓ TEST 15 PASSED: Missing index = 1 row in knex_migrations_lock fails closed.\n');
+    } finally {
+      await clientNoRow.end();
+      await dropIsolatedTestDb(testDbNoRow);
+    }
+
+    // TEST 16: Applied Migration Missing Source File Fail-Closed
+    console.log('--- TEST 16: Applied Migration Missing Source File Fail-Closed ---');
+    const testDbGhost = `aira_ghost_test_${Date.now()}`;
+    const connStrGhost = await createIsolatedTestDb(testDbGhost);
+    const clientGhost = new pg.Client({ connectionString: connStrGhost });
+    await clientGhost.connect();
+
+    try {
+      await clientGhost.query(`
+        CREATE TABLE knex_migrations (id SERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL, batch INTEGER NOT NULL);
+        CREATE TABLE knex_migrations_lock (index INTEGER PRIMARY KEY, is_locked INTEGER);
+        INSERT INTO knex_migrations_lock (index, is_locked) VALUES (1, 0);
+        CREATE TABLE workflow_runs (id VARCHAR(255) PRIMARY KEY);
+      `);
+      for (let i = 0; i < priorFiles.length; i++) {
+        await clientGhost.query('INSERT INTO knex_migrations (name, batch) VALUES ($1, $2)', [priorFiles[i], Math.min(7, Math.floor(i / 5) + 1)]);
+      }
+      // Insert a ghost migration record that does not exist in migrations directory
+      await clientGhost.query("INSERT INTO knex_migrations (name, batch) VALUES ('099_ghost_untracked_migration.ts', 7)");
+
+      await assert.rejects(
+        async () => {
+          await executeGuardedMigration032({
+            connectionString: connStrGhost,
+            targetEnvironment: 'disposable_test',
+          });
+        },
+        /CATALOG_HALT.*Applied migration "099_ghost_untracked_migration\.ts".*has no corresponding source file/,
+        'Must fail closed when applied migration has no source file'
+      );
+      console.log('  ✓ TEST 16 PASSED: Applied migration without source file fails closed.\n');
+    } finally {
+      await clientGhost.end();
+      await dropIsolatedTestDb(testDbGhost);
+    }
+
+    // TEST 17: Duplicate Migration Record in Ledger Fail-Closed
+    console.log('--- TEST 17: Duplicate Migration Record in Ledger Fail-Closed ---');
+    const testDbDup = `aira_dup_test_${Date.now()}`;
+    const connStrDup = await createIsolatedTestDb(testDbDup);
+    const clientDup = new pg.Client({ connectionString: connStrDup });
+    await clientDup.connect();
+
+    try {
+      await clientDup.query(`
+        CREATE TABLE knex_migrations (id SERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL, batch INTEGER NOT NULL);
+        CREATE TABLE knex_migrations_lock (index INTEGER PRIMARY KEY, is_locked INTEGER);
+        INSERT INTO knex_migrations_lock (index, is_locked) VALUES (1, 0);
+        CREATE TABLE workflow_runs (id VARCHAR(255) PRIMARY KEY);
+      `);
+      for (let i = 0; i < priorFiles.length; i++) {
+        await clientDup.query('INSERT INTO knex_migrations (name, batch) VALUES ($1, $2)', [priorFiles[i], Math.min(7, Math.floor(i / 5) + 1)]);
+      }
+      // Insert duplicate migration entry
+      await clientDup.query('INSERT INTO knex_migrations (name, batch) VALUES ($1, 7)', [priorFiles[0]]);
+
+      await assert.rejects(
+        async () => {
+          await executeGuardedMigration032({
+            connectionString: connStrDup,
+            targetEnvironment: 'disposable_test',
+          });
+        },
+        /CATALOG_HALT.*Duplicate migration record detected/,
+        'Must fail closed when duplicate migration record exists'
+      );
+      console.log('  ✓ TEST 17 PASSED: Duplicate migration record in knex_migrations fails closed.\n');
+    } finally {
+      await clientDup.end();
+      await dropIsolatedTestDb(testDbDup);
+    }
+
+    // TEST 18: Workspace V3 Migration 032_workspace_experience.ts Exclusion
+    console.log('--- TEST 18: Workspace V3 Migration 032_workspace_experience.ts Strict Exclusion ---');
+    const testDbV3 = `aira_v3_test_${Date.now()}`;
+    const connStrV3 = await createIsolatedTestDb(testDbV3);
+    const clientV3 = new pg.Client({ connectionString: connStrV3 });
+    await clientV3.connect();
+
+    try {
+      await clientV3.query(`
+        CREATE TABLE knex_migrations (id SERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL, batch INTEGER NOT NULL);
+        CREATE TABLE knex_migrations_lock (index INTEGER PRIMARY KEY, is_locked INTEGER);
+        INSERT INTO knex_migrations_lock (index, is_locked) VALUES (1, 0);
+        CREATE TABLE workflow_runs (id VARCHAR(255) PRIMARY KEY);
+      `);
+
+      const tmpDirV3 = path.join(os.tmpdir(), `mock_v3_migs_${Date.now()}`);
+      fs.mkdirSync(tmpDirV3, { recursive: true });
+      fs.writeFileSync(path.join(tmpDirV3, '032_reconcile_workflow_run_artifacts.ts'), '// authorized');
+      fs.writeFileSync(path.join(tmpDirV3, '032_workspace_experience.ts'), '// forbidden v3');
+
+      try {
+        await assert.rejects(
+          async () => {
+            await executeGuardedMigration032({
+              connectionString: connStrV3,
+              targetEnvironment: 'disposable_test',
+              migrationsDir: tmpDirV3,
+            });
+          },
+          /FORBIDDEN_WORKSPACE_V3.*Workspace V3 migration "032_workspace_experience\.ts" detected/,
+          'Must fail closed when Workspace V3 migration is present'
+        );
+        console.log('  ✓ TEST 18 PASSED: Workspace V3 032_workspace_experience.ts is strictly forbidden from release.\n');
+      } finally {
+        fs.rmSync(tmpDirV3, { recursive: true, force: true });
+      }
+    } finally {
+      await clientV3.end();
+      await dropIsolatedTestDb(testDbV3);
+    }
+
+    // TEST 19: Operational Failure Propagation on Failed Lock Release
+    console.log('--- TEST 19: Operational Failure Propagation on Failed Lock Release ---');
+    const testDbReleaseFail = `aira_relfail_test_${Date.now()}`;
+    const connStrReleaseFail = await createIsolatedTestDb(testDbReleaseFail);
+    const clientRF = new pg.Client({ connectionString: connStrReleaseFail });
+    await clientRF.connect();
+
+    try {
+      await clientRF.query(`
+        CREATE TABLE knex_migrations (id SERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL, batch INTEGER NOT NULL, migration_time TIMESTAMPTZ DEFAULT NOW());
+        CREATE TABLE knex_migrations_lock (index INTEGER PRIMARY KEY, is_locked INTEGER);
+        INSERT INTO knex_migrations_lock (index, is_locked) VALUES (1, 0);
+        CREATE TABLE workflow_runs (id VARCHAR(255) PRIMARY KEY);
+      `);
+      for (let i = 0; i < priorFiles.length; i++) {
+        await clientRF.query('INSERT INTO knex_migrations (name, batch) VALUES ($1, $2)', [priorFiles[i], Math.min(7, Math.floor(i / 5) + 1)]);
+      }
+
+      // Add a trigger on knex_migrations_lock that prevents unlocking (simulating operational failure)
+      await clientRF.query(`
+        CREATE OR REPLACE FUNCTION block_unlock() RETURNS TRIGGER AS $$
+        BEGIN
+          IF NEW.is_locked = 0 THEN
+            RAISE EXCEPTION 'Simulated failure during knex_migrations_lock release';
+          END IF;
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+
+        CREATE TRIGGER trigger_block_unlock
+        BEFORE UPDATE ON knex_migrations_lock
+        FOR EACH ROW EXECUTE FUNCTION block_unlock();
+      `);
+
+      await assert.rejects(
+        async () => {
+          await executeGuardedMigration032({
+            connectionString: connStrReleaseFail,
+            targetEnvironment: 'disposable_test',
+          });
+        },
+        /LOCK_RELEASE_OPERATIONAL_FAILURE.*Failed to release knex_migrations_lock/,
+        'Failed lock release must be reported as operational failure'
+      );
+      console.log('  ✓ TEST 19 PASSED: Failed lock release is reported as operational failure (never hidden).\n');
+    } finally {
+      await clientRF.end();
+      await dropIsolatedTestDb(testDbReleaseFail);
+    }
+
     console.log('========================================================================');
-    console.log(' ALL 12 GUARDED MIGRATION 032 TESTS PASSED: 100% CERTIFIED');
+    console.log(' ALL 19 GUARDED MIGRATION 032 TESTS PASSED: 100% CERTIFIED');
     console.log('========================================================================\n');
   } finally {
     await client.end();

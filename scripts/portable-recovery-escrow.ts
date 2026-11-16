@@ -30,6 +30,7 @@ export interface CreatePortableEnvelopeOptions {
   recoveryPassphrase: string;
   destinationDir: string;
   envelopeFilename?: string;
+  allowSystemDrive?: boolean;
 }
 
 /**
@@ -42,7 +43,7 @@ export function createPortableRecoveryEnvelope(options: CreatePortableEnvelopeOp
   envelopePath: string;
   keyFingerprint: string;
 } {
-  const { backupKey, recoveryPassphrase, destinationDir, envelopeFilename = 'aira_portable_recovery_envelope.json' } = options;
+  const { backupKey, recoveryPassphrase, destinationDir, envelopeFilename = 'aira_portable_recovery_envelope.json', allowSystemDrive } = options;
 
   if (!recoveryPassphrase || typeof recoveryPassphrase !== 'string' || recoveryPassphrase.length < 16) {
     throw new Error('[ESCROW_SECURITY_ERROR] Recovery passphrase must be provided and must be at least 16 characters long.');
@@ -59,6 +60,21 @@ export function createPortableRecoveryEnvelope(options: CreatePortableEnvelopeOp
   const stat = fs.statSync(destinationDir);
   if (!stat.isDirectory()) {
     throw new Error(`[ESCROW_TARGET_ERROR] Destination path "${destinationDir}" is not a directory.`);
+  }
+
+  // Strictly verify destination is not the internal system drive unless explicitly permitted for test
+  const resolvedDest = path.resolve(destinationDir);
+  const isWindows = process.platform === 'win32';
+  const isSystemDrive = isWindows
+    ? (resolvedDest.toUpperCase().startsWith((process.env.SystemDrive || 'C:').toUpperCase()) || /^[C-c]:\\/.test(resolvedDest))
+    : resolvedDest === '/' || resolvedDest.startsWith('/home') || resolvedDest.startsWith('/usr');
+
+  if (isSystemDrive && !allowSystemDrive && process.env.NODE_ENV !== 'test' && process.env.AIRA_TEST_MODE !== '1') {
+    throw new Error(
+      `[ESCROW_TARGET_ERROR] Configured destination directory "${destinationDir}" resides on the internal system drive. ` +
+      'Production recovery escrow must be exported to an external, independently stored removable drive (e.g. E:\\). ' +
+      'Pass --allow-local-test-destination only for non-production verification.'
+    );
   }
 
   const keyBuffer = Buffer.isBuffer(backupKey) ? backupKey : Buffer.from(backupKey.trim(), 'utf8');
@@ -104,9 +120,22 @@ export function createPortableRecoveryEnvelope(options: CreatePortableEnvelopeOp
   };
 
   const envelopePath = path.join(destinationDir, envelopeFilename);
-  fs.writeFileSync(envelopePath, JSON.stringify(metadata, null, 2), { encoding: 'utf8', mode: 0o600 });
-
-  return { envelopePath, keyFingerprint };
+  try {
+    fs.writeFileSync(envelopePath, JSON.stringify(metadata, null, 2), { encoding: 'utf8', mode: 0o600 });
+    // Immediate verification of written envelope
+    const verifyCheck = recoverKeyFromPortableEnvelope(envelopePath, recoveryPassphrase);
+    if (verifyCheck.keyFingerprint !== keyFingerprint) {
+      throw new Error('[ESCROW_INTEGRITY_FAILED] Immediate round-trip envelope verification failed: fingerprint mismatch.');
+    }
+    return { envelopePath, keyFingerprint };
+  } catch (writeErr: any) {
+    if (fs.existsSync(envelopePath)) {
+      try {
+        fs.unlinkSync(envelopePath);
+      } catch {}
+    }
+    throw writeErr;
+  }
 }
 
 /**
@@ -177,10 +206,13 @@ export interface PortableEscrowCliArgs {
   backupKey?: string;
   envelopeFilename?: string;
   verifyOnly?: boolean;
+  allowSystemDrive?: boolean;
+  allowDisposableTestCredentials?: boolean;
 }
 
 export function parsePortableEscrowCliArgs(argv: string[]): PortableEscrowCliArgs {
   const result: PortableEscrowCliArgs = {};
+  let passedSecretFlag = false;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -195,15 +227,31 @@ export function parsePortableEscrowCliArgs(argv: string[]): PortableEscrowCliArg
       result.destinationDir = argv[++i];
     } else if (arg.startsWith('--recovery-passphrase=')) {
       result.recoveryPassphrase = arg.slice('--recovery-passphrase='.length);
+      passedSecretFlag = true;
     } else if (arg === '--recovery-passphrase' && i + 1 < argv.length) {
       result.recoveryPassphrase = argv[++i];
+      passedSecretFlag = true;
+    } else if (arg.startsWith('--disposable-test-passphrase=')) {
+      result.recoveryPassphrase = arg.slice('--disposable-test-passphrase='.length);
+      result.allowDisposableTestCredentials = true;
+    } else if (arg === '--disposable-test-passphrase' && i + 1 < argv.length) {
+      result.recoveryPassphrase = argv[++i];
+      result.allowDisposableTestCredentials = true;
     } else if (arg.startsWith('--recovery-passphrase-env=')) {
       const envName = arg.slice('--recovery-passphrase-env='.length);
       result.recoveryPassphrase = process.env[envName];
     } else if (arg.startsWith('--backup-key=')) {
       result.backupKey = arg.slice('--backup-key='.length);
+      passedSecretFlag = true;
     } else if (arg === '--backup-key' && i + 1 < argv.length) {
       result.backupKey = argv[++i];
+      passedSecretFlag = true;
+    } else if (arg.startsWith('--disposable-test-key=')) {
+      result.backupKey = arg.slice('--disposable-test-key='.length);
+      result.allowDisposableTestCredentials = true;
+    } else if (arg === '--disposable-test-key' && i + 1 < argv.length) {
+      result.backupKey = argv[++i];
+      result.allowDisposableTestCredentials = true;
     } else if (arg.startsWith('--backup-key-env=')) {
       const envName = arg.slice('--backup-key-env='.length);
       result.backupKey = process.env[envName];
@@ -218,9 +266,25 @@ export function parsePortableEscrowCliArgs(argv: string[]): PortableEscrowCliArg
       result.verifyOnly = true;
     } else if (arg.startsWith('--envelope-filename=')) {
       result.envelopeFilename = arg.slice('--envelope-filename='.length);
+    } else if (arg === '--allow-local-test-destination') {
+      result.allowSystemDrive = true;
+    } else if (arg === '--allow-disposable-test-credentials') {
+      result.allowDisposableTestCredentials = true;
     } else {
       throw new Error(`[CLI_VALIDATION_ERROR] Unrecognized or invalid argument: "${arg}"`);
     }
+  }
+
+  // Reject raw secrets passed via CLI flags in production mode to prevent shell history leakage
+  if (
+    passedSecretFlag &&
+    !result.allowDisposableTestCredentials &&
+    process.env.NODE_ENV !== 'test' &&
+    process.env.AIRA_TEST_MODE !== '1'
+  ) {
+    throw new Error(
+      '[SECURITY_VIOLATION] Passing plaintext keys or passphrases via CLI flags (--backup-key, --recovery-passphrase) is strictly forbidden in production to prevent shell history and process table exposure. Use local DPAPI escrow, the interactive non-echoing prompt, or ephemeral environment variables in non-history sessions. For automated tests, specify --allow-disposable-test-credentials.'
+    );
   }
 
   return result;
@@ -253,7 +317,53 @@ export function tryReadDpapiEscrowKey(): string | null {
   return null;
 }
 
-export function runPortableEscrowCli(argv: string[]): void {
+export async function promptSecretNonEchoing(promptMessage: string): Promise<string> {
+  if (!process.stdin.isTTY) {
+    throw new Error(
+      '[ESCROW_SECURITY_ERROR] Non-interactive environment detected. Provide passphrase via AIRA_RECOVERY_PASSPHRASE environment variable.'
+    );
+  }
+
+  return new Promise((resolve, reject) => {
+    process.stdout.write(promptMessage);
+    const stdin = process.stdin;
+    const wasRaw = stdin.isRaw;
+    stdin.setRawMode(true);
+    stdin.resume();
+
+    let secret = '';
+    const onData = (chunk: Buffer) => {
+      const str = chunk.toString();
+      for (const c of str) {
+        if (c === '\r' || c === '\n') {
+          stdin.setRawMode(wasRaw);
+          stdin.removeListener('data', onData);
+          process.stdout.write('\n');
+          resolve(secret);
+          return;
+        } else if (c === '\u0003') { // Ctrl+C
+          stdin.setRawMode(wasRaw);
+          stdin.removeListener('data', onData);
+          process.stdout.write('\n');
+          reject(new Error('[ESCROW_ABORTED] Prompt aborted by user.'));
+          return;
+        } else if (c === '\b' || c === '\x7f') { // Backspace
+          if (secret.length > 0) {
+            secret = secret.slice(0, -1);
+            process.stdout.write('\b \b');
+          }
+        } else {
+          secret += c;
+          process.stdout.write('*');
+        }
+      }
+    };
+
+    stdin.on('data', onData);
+  });
+}
+
+export async function runPortableEscrowCli(argv: string[]): Promise<void> {
   const args = parsePortableEscrowCliArgs(argv);
 
   if (args.destinationDir === '--help') {
@@ -261,30 +371,36 @@ export function runPortableEscrowCli(argv: string[]): void {
 AIRA AI 2026 — Portable Recovery Escrow CLI
 Usage:
   # Create a portable AES-256-GCM recovery envelope in the designated directory:
-  npx tsx scripts/portable-recovery-escrow.ts --destination=<path> [--recovery-passphrase=<pass>] [--backup-key=<key>]
+  npx tsx scripts/portable-recovery-escrow.ts --destination=<path> [--allow-local-test-destination]
 
   # Verify an existing portable recovery envelope:
-  npx tsx scripts/portable-recovery-escrow.ts --verify=<envelope_path> [--recovery-passphrase=<pass>]
+  npx tsx scripts/portable-recovery-escrow.ts --verify=<envelope_path>
 
 Options:
   --destination=<path>              Removable escrow target directory (e.g. E:\\AIRA_RECOVERY_ESCROW)
-  --recovery-passphrase=<pass>      Independent recovery passphrase (>=16 chars; or via AIRA_RECOVERY_PASSPHRASE env)
-  --backup-key=<key>                Source backup encryption key (or via AIRA_BACKUP_ENCRYPTION_KEY or DPAPI)
+  --recovery-passphrase-env=<NAME>  Environment variable containing independent recovery passphrase (>=16 chars)
+  --backup-key-env=<NAME>           Environment variable containing source backup key
   --envelope=<path>                 Path to envelope JSON file for verification
   --verify[=<path>]                 Verify envelope authenticity without exposing secrets
   --envelope-filename=<name>        Custom filename (default: aira_portable_recovery_envelope.json)
+  --allow-local-test-destination    Permit non-removable local system drive destination for tests
+  --allow-disposable-test-credentials Permit disposable test credentials on CLI for automated suites
 `);
     return;
   }
 
-  const recoveryPassphrase =
+  let recoveryPassphrase =
     args.recoveryPassphrase ||
     process.env.AIRA_RECOVERY_PASSPHRASE ||
     '';
 
+  if (!recoveryPassphrase && process.stdin.isTTY) {
+    recoveryPassphrase = await promptSecretNonEchoing('Enter independent recovery passphrase (>=16 chars): ');
+  }
+
   if (!recoveryPassphrase || recoveryPassphrase.length < 16) {
     throw new Error(
-      '[ESCROW_SECURITY_ERROR] Recovery passphrase must be provided via --recovery-passphrase or AIRA_RECOVERY_PASSPHRASE and must be at least 16 characters long.'
+      '[ESCROW_SECURITY_ERROR] Recovery passphrase must be provided (interactive prompt or AIRA_RECOVERY_PASSPHRASE env) and must be at least 16 characters long.'
     );
   }
 
@@ -326,7 +442,7 @@ Options:
       console.log('  -> Sourced backup key from local DPAPI credential store.');
     } else {
       throw new Error(
-        '[ESCROW_SECURITY_ERROR] Backup key not found. Provide via --backup-key, AIRA_BACKUP_ENCRYPTION_KEY, or local DPAPI escrow.'
+        '[ESCROW_SECURITY_ERROR] Backup key not found. Provide via local DPAPI escrow or AIRA_BACKUP_ENCRYPTION_KEY env.'
       );
     }
   }
@@ -341,6 +457,7 @@ Options:
     recoveryPassphrase,
     destinationDir: args.destinationDir,
     envelopeFilename: args.envelopeFilename,
+    allowSystemDrive: args.allowSystemDrive,
   });
 
   const stat = fs.statSync(envelopePath);
@@ -348,24 +465,16 @@ Options:
   console.log(`✓ KDF:                scrypt (N=32768, r=8, p=1, maxmem=128MB)`);
   console.log(`✓ Cipher:             aes-256-gcm (96-bit nonce, 128-bit auth tag)`);
   console.log(`✓ Key Fingerprint:    ${keyFingerprint} (SHA-256)`);
-
-  // Immediate round-trip validation
-  console.log('\nPerforming immediate round-trip recovery verification on written file...');
-  const verifyCheck = recoverKeyFromPortableEnvelope(envelopePath, recoveryPassphrase);
-  if (verifyCheck.keyFingerprint !== keyFingerprint) {
-    throw new Error('[ESCROW_INTEGRITY_FAILED] Round-trip verification failed: fingerprint mismatch.');
-  }
   console.log('✓ Round-trip Check:   100% PASS (envelope successfully decrypted and authenticated).');
   console.log('========================================================================\n');
 }
 
 // CLI Entrypoint
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename)) {
-  try {
-    runPortableEscrowCli(process.argv.slice(2));
-    process.exit(0);
-  } catch (err: any) {
-    console.error('\n✗ Portable Escrow Error:', err.message);
-    process.exit(1);
-  }
+  runPortableEscrowCli(process.argv.slice(2))
+    .then(() => process.exit(0))
+    .catch((err: any) => {
+      console.error('\n✗ Portable Escrow Error:', err.message);
+      process.exit(1);
+    });
 }

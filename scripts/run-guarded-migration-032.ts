@@ -228,21 +228,38 @@ export async function executeGuardedMigration032(options: GuardedMigrationOption
         SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'knex_migrations_lock'
       ) as exists
     `);
-    if (hasKnexLockTable.rows[0].exists) {
-      const lockStatus = await client.query('SELECT is_locked FROM knex_migrations_lock WHERE index = 1');
-      if (lockStatus.rows.length > 0 && lockStatus.rows[0].is_locked === 1) {
-        throw new Error('[KNEX_LOCK_ACTIVE] Another Knex migration process is holding knex_migrations_lock (is_locked=1). Aborting.');
-      }
-      // Atomically acquire the Knex migrations lock so standard knex migrate commands cannot run concurrently
-      const claimRes = await client.query(
-        'UPDATE knex_migrations_lock SET is_locked = 1 WHERE is_locked = 0 AND index = 1 RETURNING is_locked'
-      );
-      if (claimRes.rowCount === 0) {
-        throw new Error('[KNEX_LOCK_ACTIVE] Another Knex migration process acquired knex_migrations_lock concurrently. Aborting.');
-      }
-      knexLockAcquired = true;
-      console.log('  ✓ Knex migrations lock acquired (standard Knex runners coordinated and blocked).');
+    if (!hasKnexLockTable.rows[0].exists) {
+      throw new Error('[KNEX_LOCK_TABLE_MISSING] Table "knex_migrations_lock" does not exist in target database. Fail closed.');
     }
+
+    const lockColsRes = await client.query(`
+      SELECT column_name, data_type FROM information_schema.columns 
+      WHERE table_schema = 'public' AND table_name = 'knex_migrations_lock'
+    `);
+    const lockColNames = new Set(lockColsRes.rows.map(r => r.column_name));
+    if (!lockColNames.has('index') || !lockColNames.has('is_locked')) {
+      throw new Error(
+        `[KNEX_LOCK_TABLE_CORRUPT] Table "knex_migrations_lock" has unexpected structure. Missing required columns "index" and "is_locked" (found: ${Array.from(lockColNames).join(', ')}). Fail closed.`
+      );
+    }
+
+    const lockStatus = await client.query('SELECT index, is_locked FROM knex_migrations_lock WHERE index = 1');
+    if (lockStatus.rows.length === 0) {
+      throw new Error('[KNEX_LOCK_ROW_MISSING] Table "knex_migrations_lock" lacks required coordination lock row (index = 1). Fail closed.');
+    }
+    if (lockStatus.rows[0].is_locked === 1) {
+      throw new Error('[KNEX_LOCK_ACTIVE] Another Knex migration process is holding knex_migrations_lock (is_locked=1). Aborting.');
+    }
+
+    // Atomically acquire the Knex migrations lock so standard knex migrate commands cannot run concurrently
+    const claimRes = await client.query(
+      'UPDATE knex_migrations_lock SET is_locked = 1 WHERE is_locked = 0 AND index = 1 RETURNING is_locked'
+    );
+    if (claimRes.rowCount === 0) {
+      throw new Error('[KNEX_LOCK_ACTIVE] Another Knex migration process acquired knex_migrations_lock concurrently. Aborting.');
+    }
+    knexLockAcquired = true;
+    console.log('  ✓ Knex migrations lock acquired (standard Knex runners coordinated and blocked).');
 
     // 4. Pending Migration Quarantine & Catalog Inspection
     console.log('[3/6] Inspecting Knex migration ledger and filesystem inventory...');
@@ -252,11 +269,25 @@ export async function executeGuardedMigration032(options: GuardedMigrationOption
       ) as exists
     `);
     if (!hasKnexMigrations.rows[0].exists) {
-      throw new Error('[CATALOG_HALT] knex_migrations table missing from target database.');
+      throw new Error('[CATALOG_HALT] knex_migrations table missing from target database. Fail closed.');
     }
 
     const appliedRows = await client.query('SELECT id, name, batch FROM knex_migrations ORDER BY id');
-    const appliedNames = new Set(appliedRows.rows.map(r => r.name));
+    
+    // Check for duplicate migration names or inconsistent records in knex_migrations
+    const seenNames = new Set<string>();
+    for (const row of appliedRows.rows) {
+      if (seenNames.has(row.name)) {
+        throw new Error(`[CATALOG_HALT] Duplicate migration record detected in knex_migrations ledger: "${row.name}". Fail closed.`);
+      }
+      seenNames.add(row.name);
+      if (!row.id || typeof row.batch !== 'number' || row.batch < 0) {
+        throw new Error(
+          `[CATALOG_HALT] Inconsistent migration record detected in knex_migrations ledger: id=${row.id}, name="${row.name}", batch=${row.batch}. Fail closed.`
+        );
+      }
+    }
+    const appliedNames = seenNames;
 
     // Verify filesystem migration inventory
     const dir = options.migrationsDir || path.resolve(__dirname, '../packages/db/src/migrations');
@@ -267,6 +298,22 @@ export async function executeGuardedMigration032(options: GuardedMigrationOption
     const filesOnDisk = fs.readdirSync(dir).filter(f => /^\d+_.+\.ts$/.test(f)).sort();
     if (filesOnDisk.length === 0) {
       throw new Error(`[CATALOG_HALT] No migration files found in "${dir}". Fail closed.`);
+    }
+
+    // Check: Every applied migration in knex_migrations must have a corresponding source file on disk
+    for (const appliedName of appliedNames) {
+      if (!filesOnDisk.includes(appliedName)) {
+        throw new Error(
+          `[CATALOG_HALT] Applied migration "${appliedName}" recorded in knex_migrations has no corresponding source file on disk in "${dir}". Fail closed.`
+        );
+      }
+    }
+
+    // Check: Workspace V3 migration 032_workspace_experience.ts strictly forbidden
+    if (filesOnDisk.includes('032_workspace_experience.ts') || appliedNames.has('032_workspace_experience.ts')) {
+      throw new Error(
+        '[FORBIDDEN_WORKSPACE_V3] Workspace V3 migration "032_workspace_experience.ts" detected in migration set. Workspace V3 is strictly excluded from this release.'
+      );
     }
 
     if (!filesOnDisk.includes(AUTHORIZED_MIGRATION_FILE)) {
@@ -464,21 +511,36 @@ export async function executeGuardedMigration032(options: GuardedMigrationOption
       throw txError;
     }
   } finally {
+    let lockReleaseError: Error | null = null;
     if (knexLockAcquired) {
       try {
-        await client.query('UPDATE knex_migrations_lock SET is_locked = 0 WHERE index = 1');
+        const releaseRes = await client.query('UPDATE knex_migrations_lock SET is_locked = 0 WHERE index = 1 RETURNING is_locked');
+        if (releaseRes.rowCount === 0) {
+          throw new Error('Lock row with index = 1 not found during release.');
+        }
         console.log('  ✓ Knex migrations lock released.');
       } catch (knexUnlockErr: any) {
         console.error('  ! Failed to release knex_migrations_lock:', knexUnlockErr.message);
+        lockReleaseError = new Error(
+          `[LOCK_RELEASE_OPERATIONAL_FAILURE] Failed to release knex_migrations_lock: ${knexUnlockErr.message}. Manual recovery required.`
+        );
       }
     }
     if (advisoryLockAcquired) {
       try {
         await client.query('SELECT pg_advisory_unlock($1, $2)', [ADVISORY_LOCK_KEY_1, ADVISORY_LOCK_KEY_2]);
         console.log('  ✓ Advisory lock released.');
-      } catch {}
+      } catch (advErr: any) {
+        console.error('  ! Failed to release advisory lock:', advErr.message);
+      }
     }
-    await client.end();
+    try {
+      await client.end();
+    } catch {}
+
+    if (lockReleaseError) {
+      throw lockReleaseError;
+    }
   }
 }
 

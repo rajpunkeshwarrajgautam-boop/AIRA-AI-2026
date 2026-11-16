@@ -21,6 +21,7 @@ test('Portable Escrow: creates envelope, recovers key cleanly with valid passphr
       backupKey: rawKey,
       recoveryPassphrase: strongPassphrase,
       destinationDir: tmpDir,
+      allowSystemDrive: true,
     });
 
     assert.ok(fs.existsSync(envelopePath));
@@ -55,6 +56,7 @@ test('Portable Escrow: fails closed on incorrect passphrase', () => {
       backupKey: rawKey,
       recoveryPassphrase: strongPassphrase,
       destinationDir: tmpDir,
+      allowSystemDrive: true,
     });
 
     assert.throws(
@@ -76,6 +78,7 @@ test('Portable Escrow: fails closed on tampered ciphertext', () => {
       backupKey: rawKey,
       recoveryPassphrase: strongPassphrase,
       destinationDir: tmpDir,
+      allowSystemDrive: true,
     });
 
     // Tamper with ciphertext
@@ -125,12 +128,15 @@ test('Portable Escrow: fails closed on weak/short recovery passphrase', () => {
 test('Portable Escrow CLI: parses flags and rejects unrecognized arguments', () => {
   const parsed1 = parsePortableEscrowCliArgs([
     '--destination=C:\\test_escrow',
-    '--recovery-passphrase=strong_passphrase_here',
-    '--backup-key=mock_backup_key_123',
+    '--disposable-test-passphrase=strong_passphrase_here',
+    '--disposable-test-key=mock_backup_key_123',
+    '--allow-local-test-destination',
   ]);
   assert.equal(parsed1.destinationDir, 'C:\\test_escrow');
   assert.equal(parsed1.recoveryPassphrase, 'strong_passphrase_here');
   assert.equal(parsed1.backupKey, 'mock_backup_key_123');
+  assert.equal(parsed1.allowSystemDrive, true);
+  assert.equal(parsed1.allowDisposableTestCredentials, true);
 
   const parsed2 = parsePortableEscrowCliArgs([
     '--destination', 'E:\\AIRA_ESCROW',
@@ -164,6 +170,8 @@ test('Portable Escrow CLI: executes create and verify workflows without leaking 
         `--destination=${tmpDir}`,
         `--recovery-passphrase=${strongPassphrase}`,
         `--backup-key=${rawKey}`,
+        '--allow-local-test-destination',
+        '--allow-disposable-test-credentials',
       ],
       { encoding: 'utf8' }
     );
@@ -187,6 +195,7 @@ test('Portable Escrow CLI: executes create and verify workflows without leaking 
         'scripts/portable-recovery-escrow.ts',
         `--verify=${expectedEnvelope}`,
         `--recovery-passphrase=${strongPassphrase}`,
+        '--allow-disposable-test-credentials',
       ],
       { encoding: 'utf8' }
     );
@@ -204,6 +213,7 @@ test('Portable Escrow CLI: executes create and verify workflows without leaking 
         '--destination=Z:\\NONEXISTENT_DIR_MOUNT_POINT',
         `--recovery-passphrase=${strongPassphrase}`,
         `--backup-key=${rawKey}`,
+        '--allow-disposable-test-credentials',
       ],
       { encoding: 'utf8' }
     );
@@ -213,6 +223,81 @@ test('Portable Escrow CLI: executes create and verify workflows without leaking 
       resFail.stderr.includes('ESCROW_TARGET_ERROR') || resFail.stdout.includes('ESCROW_TARGET_ERROR'),
       'Must report ESCROW_TARGET_ERROR'
     );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Portable Escrow Security: rejects plaintext secret flags without explicit test authorization', () => {
+  assert.throws(
+    () =>
+      parsePortableEscrowCliArgs([
+        '--destination=E:\\ESCROW',
+        '--recovery-passphrase=secret-passphrase-attempt',
+      ]),
+    /SECURITY_VIOLATION.*Passing plaintext keys or passphrases via CLI flags/
+  );
+
+  assert.throws(
+    () =>
+      parsePortableEscrowCliArgs([
+        '--destination=E:\\ESCROW',
+        '--backup-key=secret-key-attempt',
+      ]),
+    /SECURITY_VIOLATION.*Passing plaintext keys or passphrases via CLI flags/
+  );
+});
+
+test('Portable Escrow Security: rejects internal system drive destination in production mode', () => {
+  const origNodeEnv = process.env.NODE_ENV;
+  const origTestMode = process.env.AIRA_TEST_MODE;
+  try {
+    delete process.env.NODE_ENV;
+    delete process.env.AIRA_TEST_MODE;
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aira_sys_drive_test_'));
+    try {
+      assert.throws(
+        () =>
+          createPortableRecoveryEnvelope({
+            backupKey: 'valid-test-key-material-1234567890',
+            recoveryPassphrase: 'ultra-strong-passphrase-at-least-16-chars',
+            destinationDir: tmpDir,
+            allowSystemDrive: false,
+          }),
+        /ESCROW_TARGET_ERROR.*resides on the internal system drive/
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  } finally {
+    if (origNodeEnv !== undefined) process.env.NODE_ENV = origNodeEnv;
+    if (origTestMode !== undefined) process.env.AIRA_TEST_MODE = origTestMode;
+  }
+});
+
+test('Portable Escrow Security: failed envelope write cleans up partial artifacts safely', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aira_cleanup_test_'));
+  try {
+    const envelopePath = path.join(tmpDir, 'corrupted_envelope.json');
+    // Precondition: file does not exist
+    assert.ok(!fs.existsSync(envelopePath));
+
+    // Try creating with empty key to trigger error
+    assert.throws(
+      () =>
+        createPortableRecoveryEnvelope({
+          backupKey: '',
+          recoveryPassphrase: 'ultra-strong-passphrase-at-least-16-chars',
+          destinationDir: tmpDir,
+          envelopeFilename: 'corrupted_envelope.json',
+          allowSystemDrive: true,
+        }),
+      /ESCROW_SECURITY_ERROR/
+    );
+
+    // Verify no corrupted or partial envelope remains on disk
+    assert.ok(!fs.existsSync(envelopePath), 'Partial or corrupt envelope must NOT remain on disk');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
