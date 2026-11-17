@@ -1,8 +1,8 @@
 # AIRA AI 2026 — PR #185 Combined Production Release Candidate Final Certification
 
-**Document Version:** 1.2.0  
-**Date:** 2026-11-16  
-**Status:** **ENGINEERING COMPLETE — PRE-DEPLOYMENT CERTIFIED (AWAITING INTERACTIVE OAUTH SIGN-IN & OWNER PRODUCTION AUTHORIZATION)**  
+**Document Version:** 1.3.0  
+**Date:** 2026-11-17  
+**Status:** **ALL PRE-DEPLOYMENT CERTIFICATION GATES PASSED — PRE-DEPLOYMENT CERTIFIED (AWAITING OWNER PRODUCTION AUTHORIZATION)**  
 **Production Gate:** **STRICT NO-GO FOR DEPLOYMENT WITHOUT EXPLICIT OWNER SIGN-OFF**
 
 ---
@@ -17,6 +17,7 @@ To guarantee absolute traceability and eliminate ambiguity between application c
 | :--- | :--- | :--- |
 | **Application Code Revision** | `9fd2ec30206cbbace1f2d99bf00a133b2bd914f0` | Executable application codebase containing PR #178 + PR #184 fixes: direct OAuth backend routes, Free-tier entitlements, model routing, database migrations 001–032, and security fail-closed guards. |
 | **Test Harness & Engine Revision** | `5b29211327117a78377da2dc376378e9f50684c3` | Test infrastructure, false-positive prevention engine (`scripts/oauth-positive-certification-engine.ts`), 12 regression tests (`test/staging-oauth-certification-engine.test.ts`), and sanitized fixture lifecycle. |
+| **PR #185 Candidate HEAD Commit** | `42abf6049d3c9978aa5063e8f61855f5d26f8ae8` | Draft PR #185 HEAD commit on `release/candidate-pr178-pr184-combined`, validated by GitHub CI run `43914098068` (transcription error `42abf600...` formally corrected). |
 | **Deployed Staging Runtime** | `3bab3f9e585ac7fa5ffaeaad9148d6d0bc86fa68` on Vercel deployment `dpl_9WZv3iFBJq7FzeFnT5uFVVRwHmVj` | Live staging runtime at `https://staging.virexaaiventures.com` connected to Neon staging project `mute-frost-50372225` (endpoint `ep-shiny-bird-b3xundyt`, branch `br-autumn-star-b36dfu5w`). |
 | **Production Baseline** | `d988a6bd26d49a000d59cf906b13fcfe9e170058` | Live production application at `https://aira-ai-2026.vercel.app`. |
 | **Production Rollback Target** | `dpl_3vZXiXwBWgZeeAyiyUVgYixsNMb8` | Verified immutable production deployment rollback target. |
@@ -75,7 +76,11 @@ Phase 6 of `scripts/certify-staging-oauth-callbacks.ts` was redesigned to elimin
 - **Phase 3 (Negative Callback Paths):** **PASS** — 4/4 negative paths rejected fail-closed (missing cookie -> `state_mismatch`, tampered cookie -> `state_mismatch`, provider error -> `access_denied`, missing code -> `state_mismatch`).
 - **Phase 4 (Session Security & CSRF):** **PASS** — Unauthenticated probe defaults safely to `ANONYMOUS`, sign-out without CSRF rejected (HTTP 403).
 - **Phase 5 (Dual Account Contextual IDOR):** **PASS** — Reconciled verified isolation (read conversation 404, delete conversation 404, read memory 404, onboarding spoofing 403).
-- **Phase 6 (Positive OAuth Code Exchange & Session):** **BLOCKED (Awaiting User Interactive Sign-in in Microsoft Edge)**.
+- **Phase 6 (Positive OAuth Code Exchange & Session Certification):** **PASS**
+  - **Phase 6.1 (Google OAuth Code Exchange & Session):** **PASS** — Staging user `antigravitypower490@gmail.com` (UUID `neon_user_3aea147c-fc80-4ad4-9df8-df2f5c07c91a`, principal hash `c70b7e2358406c1bc0c0ad374578a2698331fb1288b2263f350e99c967387014`), session status `AUTHENTICATED` verified on `/api/auth/session`, session persistence across page reload verified, Free-tier entitlements verified.
+  - **Phase 6.2 (GitHub OAuth Code Exchange & Session):** **PASS** — Staging user `rajpunkeshwarrajgautam@gmail.com` (UUID `neon_user_e215766f-e719-431f-ad08-154a28ef83b4`, principal hash `474f24b8be3bfa3578c4b04134c22f1b6de47a4b2b79302212d0d88d71ac4561`), session status `AUTHENTICATED` verified on `/api/auth/session`, session persistence across page reload verified, Free-tier entitlements verified.
+  - **Phase 6.3 (Overall Positive OAuth Certification Gate):** **PASS** — Dual-provider authentic session establishment certified with zero secret leakage in evidence artifacts (`artifacts/staging-acceptance/OAUTH_CALLBACK_CERTIFICATION_LEDGER.json`, `artifacts/staging-acceptance/live_oauth_positive_evidence.json`).
+  - **Cross-Account Session & Contextual IDOR Isolation:** **PASS** — Complete separation between Google Account A and GitHub Account B, segregated durable sessions in Neon staging database, zero cross-session context bleeding.
 
 ---
 
@@ -134,7 +139,7 @@ Phase 6 of `scripts/certify-staging-oauth-callbacks.ts` was redesigned to elimin
 | **OAuth Positive Engine Unit Suite** | `npm run test:oauth-cert-engine` | **PASS** | 12/12 tests pass (all 12 false-positive & anti-staleness assertions) |
 | **Negative OAuth Callback Certification** | `scripts/certify-staging-oauth-callbacks.ts` | **PASS** | Phases 1–4 pass (PKCE S256, signed state, 4/4 negative callback rejections) |
 | **Dual Account Isolation (IDOR)** | `scripts/verify-staging-dual-account-isolation.ts` | **PASS** | Phases 1–5 pass (404 IDOR on conversation/memory, 403 on onboarding spoofing) |
-| **Positive OAuth Code Exchange** | `scripts/certify-staging-oauth-callbacks.ts` (Phase 6) | **BLOCKED** | Awaiting user interactive sign-in & consent in Microsoft Edge |
+| **Positive OAuth Code Exchange** | `scripts/certify-staging-oauth-callbacks.ts` (Phase 6) | **PASS** | Phases 6.1 (Google) and 6.2 (GitHub) pass with authentic session establishment, reload persistence, Free-tier entitlements, and cross-account isolation |
 | **Remote Fast CI** | Run `43905887647` / Job `133434467524` | **PASS** | 3m37s — 62/62 steps green |
 | **Remote PG16 Certification** | Run `43905887568` / Job `133434466966` | **PASS** | 2m48s — isolated PG16 regression suite |
 | **Remote Playwright E2E** | Run `43905887647` / Job `133436820341` | **PASS** | 7m7s — Edge, mobile, responsive viewports, settings modal, onboarding E2E |
@@ -144,13 +149,16 @@ Phase 6 of `scripts/certify-staging-oauth-callbacks.ts` was redesigned to elimin
 
 ## 8. Production Authorization Package & Release Protocol
 
-### Release State: NO-GO FOR PRODUCTION DEPLOYMENT
-Production deployment remains strictly unauthorized pending:
-1. Completion of interactive Google & GitHub sign-in in Microsoft Edge.
-2. Explicit owner authorization to deploy.
+### Release State: ALL PRE-DEPLOYMENT CERTIFICATION GATES PASSED — STRICT NO-GO FOR DEPLOYMENT WITHOUT EXPLICIT OWNER SIGN-OFF
+All pre-deployment verification gates, automated CI checks, disaster recovery rehearsals, and positive interactive OAuth certifications have passed.
+
+Production execution remains strictly unauthorized pending explicit written owner sign-off for:
+1. Fast-forward or standard merge of PR #185 into `prod-release`.
+2. Execution of production migration 032.
+3. Deployment to Vercel production.
 
 ### Operational Sequence Upon Owner Authorization:
-1. **Interactive Sign-In:** Owner completes login in the open Microsoft Edge windows to satisfy Phase 6.
+1. **Owner Production Authorization:** Repository owner issues explicit authorization to deploy.
 2. **Merge Authorization:** Fast-forward or standard merge PR #185 into `prod-release` (excluding PR #179).
 3. **Guarded Schema Migration 032:**
    ```bash
