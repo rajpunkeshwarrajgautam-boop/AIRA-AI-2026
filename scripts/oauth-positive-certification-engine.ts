@@ -211,6 +211,15 @@ export function evaluateProviderEvidence(
     }
   }
 
+  // 5. Require evidence of a newly observed authorization and callback.
+  // Restored sessions or linked-provider labels do not establish a code exchange.
+  if (ev.oauthStartObserved !== true) {
+    reasons.push('OAuth authorization start was not observed for this provider');
+  }
+  if (ev.callbackProcessed !== true) {
+    reasons.push('Successful provider callback was not observed for this provider');
+  }
+
   // 5. Code exchange & error handling
   if (ev.exchangeError) {
     reasons.push(`OAuth authorization-code exchange failed with error: ${ev.exchangeError}`);
