@@ -17,6 +17,7 @@ import { chromium, type BrowserContext, type Page } from 'playwright';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { hashPrincipalIdentifier, type ProviderPositiveEvidence } from './oauth-positive-certification-engine.js';
 
 const STAGING_URL = process.env.AIRA_STAGING_URL || 'https://staging.virexaaiventures.com';
@@ -28,7 +29,7 @@ fs.mkdirSync(PR164_DIR, { recursive: true });
 const PROFILE_A_DIR = path.resolve(ARTIFACTS_DIR, 'edge_oauth_profile_a');
 const PROFILE_B_DIR = path.resolve(ARTIFACTS_DIR, 'edge_oauth_profile_b');
 
-const TEST_HARNESS_SHA = '42abf6049d3c9978aa5063e8f61855f5d26f8ae8';
+const TEST_HARNESS_SHA = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
 const DEPLOYED_STAGING_SHA = '3bab3f9e585ac7fa5ffaeaad9148d6d0bc86fa68';
 const DEPLOYMENT_ID = 'dpl_9WZv3iFBJq7FzeFnT5uFVVRwHmVj';
 const STAGING_DB_IDENTITY = 'neon://mute-frost-50372225/br-autumn-star-b36dfu5w';
