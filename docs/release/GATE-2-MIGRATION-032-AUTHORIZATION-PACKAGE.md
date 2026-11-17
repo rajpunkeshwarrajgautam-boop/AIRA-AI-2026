@@ -1,8 +1,8 @@
 # Gate 2 Migration 032 Authorization Package & Database Recovery Specification
 
 **Target Environment:** Neon Production (`old-sky-50952395`)  
-**Main Branch:** `br-shiny-moon-b3vy9xj7`  
-**Endpoint:** `ep-withered-art-b36ox90b.c-4.ap-southeast-1.aws.neon.tech`  
+**Production Main Branch:** `br-shiny-moon-b3vy9xj7`  
+**Production Endpoint:** `ep-withered-art-b36ox90b.c-4.ap-southeast-1.aws.neon.tech`  
 **Engine:** PostgreSQL 18.7 (a21afb5)  
 **Status:** **LOCKED — AWAITING EXPLICIT WRITTEN OWNER AUTHORIZATION**  
 *(Strict Policy: Zero Production Mutations Without Written Approval)*
@@ -13,9 +13,12 @@
 
 - **Promoted Release Branch:** `release/candidate-pr178-pr184-combined`
 - **Certified Candidate SHA:** `3040b14bdb398a2ac00dd6d85b599cf5eb0a003a`
-- **Promotion Status:** COMPLETE. Verified via GitHub `ls-remote` reference inspection (pure fast-forward, 19 commits ahead, 0 behind).
+- **Promotion Status:** COMPLETE. Verified via GitHub `ls-remote` reference inspection (pure fast-forward, 19 commits ahead, 0 behind prior base `3ec1947a`).
+- **Active Release PR:** PR #185 (`release/candidate-pr178-pr184-combined` -> `prod-release`, state: `DRAFT`, head: `3040b14b`).
+- **Production Code Status:** Production branch `prod-release` remains at `d988a6bd26d49a000d59cf906b13fcfe9e170058` (completely unchanged, verified via `ls-remote`).
+- **Production Vercel Status:** Deployment `dpl_3vZXiXwBWgZeeAyiyUVgYixsNMb8` (`https://aira-ai-2026.vercel.app`, created Nov 14 2026). Zero unauthorized deployments have occurred.
+- **CI / Quality Gates:** All mandatory checks passed on candidate SHA `3040b14b` (Run `44116320686`, Run `44116332554`, Run `44116332711` all green).
 - **Execution Report:** `docs/release/GATE-1-CANDIDATE-PROMOTION-EXECUTION-REPORT.md` (Commit: `ffe6b582aeba875742563b37daa7dfccf0a21709`).
-- **Production Code Status:** Production branch `prod-release` remains at `d988a6bd26d49a000d59cf906b13fcfe9e170058` (completely unchanged).
 
 ---
 
@@ -45,98 +48,121 @@ Authoritative read-only preflight inspection executed directly on production Neo
 - **Guarded Runner:** `scripts/run-guarded-migration-032.ts`
 - **Schema Mutation:**
   ```sql
-  ALTER TABLE workflow_runs ADD COLUMN artifacts JSONB DEFAULT '[]';
+  ALTER TABLE workflow_runs ADD COLUMN artifacts JSONB DEFAULT '[]'::jsonb;
   ```
 - **Safety Properties:**
   1. **Bounded Locking:** `SET LOCAL lock_timeout = '2s'` ensures that if any lock contention occurs on `workflow_runs`, the statement immediately fails closed rather than queuing behind application traffic.
   2. **Bounded Statement Timeout:** `SET LOCAL statement_timeout = '5s'`.
-  3. **Advisory Lock Protection:** Acquires dual session-level advisory locks (`AIRA` ASCII `1095325257`, key `32`) via `pg_try_advisory_lock` to prevent concurrent migration attempts.
-  4. **Idempotency:** Checks `hasColumn('workflow_runs', 'artifacts')` before executing DDL.
-  5. **Expand-Only & Non-Destructive:** Column is nullable with default `[]`. `down()` strictly throws an exception to prohibit dropping data or tables.
+  3. **Advisory Lock Protection:** Acquires session-level advisory locks (`AIRA` ASCII `1095325257`, key `32`) via `pg_try_advisory_lock` to prevent concurrent migration attempts.
+  4. **Knex Migration Lock Table:** Acquires exclusive row lock in `knex_migrations_lock` (`is_locked = 1`).
+  5. **Quarantine & Scope Protection:** Rejects unexpected unapplied migrations; strictly forbids Workspace V3 (`032_workspace_experience.ts`).
+  6. **Idempotency:** Checks `hasColumn('workflow_runs', 'artifacts')` before executing DDL.
+  7. **Expand-Only & Non-Destructive:** Column is nullable with default `[]`. `down()` strictly throws an exception to prohibit dropping data or tables.
+  8. **Pre-Commit Verification:** Verifies column existence, type `jsonb`, default `'[]'`, `is_nullable = YES`, row count preservation, and ledger entry *before* issuing `COMMIT`.
 
 ---
 
-## 4. Production Recovery Checkpoint Procedure
+## 4. Disaster Recovery Assurance, PITR Configuration & Operational Realities
 
-Before invoking the guarded migration runner, a fresh recovery checkpoint must be captured:
-
-### A. Pre-Cutover Checkpoint Creation
-```bash
-neon branches create --project-id old-sky-50952395 --name pre-migration-032-checkpoint
-```
-
-### B. Recovery Checkpoint Integrity Verification
-1. Inspect checkpoint metadata via Neon API:
-   ```bash
-   neon api /projects/old-sky-50952395/branches
-   ```
-2. Verify branch `pre-migration-032-checkpoint` is in `ready` state, parent is `br-shiny-moon-b3vy9xj7`, and parent LSN is recorded.
-
----
-
-## 5. RPO and RTO Specifications & Operational Realities
-
-- **Recovery Point Objective (RPO):** Point-in-time recovery snapshot boundary ($T_0$). Restoring a snapshot branch restores data strictly to $T_0$. Any transaction committed to `main` between $T_0$ and a rollback initiation will **not** be present in the snapshot branch and must be reconciled from application logs or telemetry.
-- **Recovery Time Objective (RTO):** Estimated at **2 to 5 minutes** total cutover time:
+### A. RPO and RTO Specifications
+- **Tested Recovery Timings:** Rehearsal test suite (`test/recovery-migrations-026-031-rehearsal.test.ts`) verified that forward and backward schema transformations execute in `< 50ms` in memory.
+- **Estimated Recovery Timings:**
   - Neon branch metadata initialization: ~10 seconds (instant copy-on-write fork).
   - Vercel `DATABASE_URL` environment variable re-pointing and deployment: ~2 to 4 minutes.
-- **Lock Duration:** Rehearsal-measured at < 50ms on isolated environments. Live production table is currently 40 kB with 0 rows, guaranteeing minimal lock hold time.
+  - Overall Estimated RTO: **2 to 5 minutes** total cutover time.
+- **Recovery Point Objective (RPO) Realities & Limits:**
+  - RPO is strictly the point-in-time recovery snapshot boundary ($T_0$).
+  - Restoring a snapshot branch restores state strictly to $T_0$.
+  - **Crucial Limit:** Any transaction committed to `main` between checkpoint capture ($T_0$) and a rollback decision ($T_1$) will **not** be present in the snapshot branch and must be reconciled from application logs or telemetry.
+  - A pre-migration checkpoint does **not** guarantee zero data loss for writes that occur after $T_0$.
+- **Unknown Operational Behavior:** Full production disaster recovery under live active user traffic has not been executed on production `old-sky-50952395`.
+
+### B. Maintenance Barrier & Write Handling
+- Because `workflow_runs` is currently empty (0 rows, 40 kB), the DDL operation hold time is estimated at `< 50ms`.
+- If high concurrency occurs at cutover time, the `lock_timeout = '2s'` fail-closed boundary prevents transaction queue pileup.
+- For maximum safety during Gate 2 execution, non-essential background worker executions should be paused or run during low-traffic windows.
 
 ---
 
-## 6. Migration Compatibility & Ordering Strategy
+## 5. Historical Neon Preview Credential Investigation (Incident 38868679)
 
-- **Backward Compatibility:** Because `artifacts` is added as a nullable JSONB column with default `[]`, the currently deployed production application (`d988a6bd`) will continue operating normally with zero schema errors.
-- **Forward Compatibility:** The promoted release candidate (`3040b14b`) safely expects `artifacts` to exist and serialize to/from JSON.
-- **Deployment Ordering:** Database Migration 032 must be executed and verified **prior to** Gate 3 production deployment.
+### A. Asset & Infrastructure Identification
+- **Project:** `mute-frost-50372225` (`aira-ai-2026-staging`, separate from production `old-sky-50952395`)
+- **Branch Name:** `pr90-p1-6-7-preview-isolated`
+- **Branch ID:** `br-weathered-tree-b3rf47nh`
+- **Parent Branch:** `br-autumn-star-b36dfu5w` (`main` on staging, LSN: `0/1EA1750`)
+- **Child Branch:** `br-green-snow-b3dsci5u` (`pr92-commercial-platform-isolated`, created 2026-10-19T16:36:26Z)
+- **Endpoint ID:** `ep-steep-tooth-b3y7kgx9` (`ep-steep-tooth-b3y7kgx9.c-4.ap-southeast-1.aws.neon.tech`)
 
----
+### B. Verified Provider State
+1. **Endpoint State:** Provisioned, `idle` (suspended compute since 2026-11-17T14:39:14Z).
+2. **Database Role:** `neondb_owner` exists on branch `br-weathered-tree-b3rf47nh`.
+3. **Password Rotation Metadata:** `created_at` and `updated_at` are both `2026-10-10T08:00:12Z`. No password rotation API call has occurred on this role since creation.
+4. **Credential Usability:** **UNVERIFIED**. Following strict security policy, we do NOT authenticate using historical exposed secrets recovered from Git history.
+5. **Incident Classification:** GitGuardian incident 38868679 was dismissed in the dashboard as a test fixture. Source code was sanitized in commit `1f97c73`.
+6. **Dependency Audit:** Exhaustive search confirmed **0 workflows** in `.github/workflows/`, **0 build scripts** in `package.json`, and **0 Vercel deployments** reference `br-weathered-tree-b3rf47nh` or `ep-steep-tooth-b3y7kgx9`.
+7. **Impact on Production:** **ZERO**. Complete project, VPC, and cluster isolation from production project `old-sky-50952395`.
+8. **Impact on Child Branch (`br-green-snow-b3dsci5u`):** Neon's storage engine uses content-addressed, copy-on-write page layers; deleting a parent branch does not delete or corrupt existing child branches.
 
-## 7. Failure, Abort, and Rollback Criteria
-
-1. **Abort Preconditions:**
-   - Preflight detects endpoint host is not `ep-withered-art-b36ox90b`.
-   - Table `workflow_runs` is absent.
-   - Advisory lock `(1095325257, 32)` cannot be acquired within 2 seconds.
-2. **Rollback Decision Triggers:**
-   - Statement timeout (5s) or lock timeout (2s) is tripped.
-   - Post-migration column verification fails to detect `artifacts`.
-   - Production API error rates on `/api/workflows` spike above 0%.
-3. **Rollback Action:**
-   - Revert connection strings to `pre-migration-032-checkpoint` if schema corruption occurs.
-   - Reconcile post-$T_0$ records from application telemetry.
-
----
-
-## 8. Exact Guarded Migration Execution Command
-
-When authorized, Gate 2 will be executed with the exact guarded CLI command:
+### C. Recommended Remediation & Retirement Command
+Recommend permanent deletion of obsolete staging branch `br-weathered-tree-b3rf47nh` to eliminate residual attack surface.  
+**DO NOT EXECUTE UNTIL EXPLICITLY APPROVED.** (Approval must be granted separately from Gate 2).
 ```bash
-npm run db:migrate:032 -- --target=production --authorize-production-migration-032-execute
+neon branches delete br-weathered-tree-b3rf47nh --project-id mute-frost-50372225
 ```
 
 ---
 
-## 9. Post-Migration Verification Queries
+## 6. Definitive Gate 2 Execution Checklist
 
-Immediately after execution, the runner and release engineer verify:
-```sql
--- 1. Verify ledger advancement
-SELECT name, batch, migration_time FROM knex_migrations WHERE name LIKE '%032%';
+This checklist defines the strict, ordered sequence for Gate 2 execution once explicit authorization is granted:
 
--- 2. Verify column definition
-SELECT column_name, data_type, is_nullable, column_default 
-FROM information_schema.columns 
-WHERE table_name = 'workflow_runs' AND column_name = 'artifacts';
-
--- 3. Verify row integrity
-SELECT count(*) FROM workflow_runs;
-```
+| Step | Action | Description / Command | Authorization Status |
+|:---:|---|---|:---:|
+| **1** | **Reconfirm Target & Candidate** | Verify production project (`old-sky-50952395`), branch (`br-shiny-moon-b3vy9xj7`), endpoint (`ep-withered-art-b36ox90b`), and candidate SHA (`3040b14bdb398a2ac00dd6d85b599cf5eb0a003a`). | **VERIFIED** |
+| **2** | **Recheck Ledger & Schema** | Run read-only query confirming 31 applied migrations, 032 absent, and `workflow_runs.artifacts` absent. | **VERIFIED** |
+| **3** | **Inspect Active Connections** | Confirm active query count on `neondb` is $\le 2$ and no concurrent DDL holds locks on `workflow_runs`. | **VERIFIED** |
+| **4** | **Establish Maintenance / Write Procedure** | Ensure operational window is active and background workflows are quiet. | **READY** |
+| **5** | **Capture Recovery Checkpoint** | Create fresh point-in-time recovery branch on production:<br>`neon branches create --project-id old-sky-50952395 --name pre-migration-032-checkpoint` | **LOCKED (Needs Approval)** |
+| **6** | **Verify Checkpoint Readiness** | Query Neon API to verify `pre-migration-032-checkpoint` is in `ready` state and parent LSN matches current main. | **LOCKED** |
+| **7** | **Execute Guarded Migration** | Run guarded runner command:<br>`npm run db:migrate:032 -- --target=production --authorize-production-migration-032-execute` | **LOCKED (Needs Approval)** |
+| **8** | **Verify Column Definition** | Query schema to verify `workflow_runs.artifacts` exists as nullable JSONB with default `[]`. | **LOCKED** |
+| **9** | **Verify Migration Ledger** | Verify `knex_migrations` contains exactly 32 records, with 032 recorded in latest batch. | **LOCKED** |
+| **10** | **Verify Data Integrity** | Query `workflow_runs` row count and verify zero rows were altered or dropped. | **LOCKED** |
+| **11** | **Inspect Runtime Health** | Inspect backend error logs and connection pool status to confirm zero connection errors. | **LOCKED** |
+| **12** | **Record Final Database State** | Commit final migration execution record and verification output to repository release docs. | **LOCKED** |
+| **13** | **Stop Before Gate 3** | Lock all subsequent actions. Request separate owner authorization for Gate 3 production deployment. | **LOCKED** |
 
 ---
 
-## 10. Gate 2 Approval Request
+## 7. Abort Conditions & Operator Recovery Runbook
 
-Execution stops here. To proceed with Gate 2, the owner must provide explicit written authorization:
+1. **Pre-Execution Abort Conditions:**
+   - Preflight detects endpoint host is not `ep-withered-art-b36ox90b`.
+   - Migration 032 is unexpectedly present in `knex_migrations`.
+   - `workflow_runs` table is absent.
+   - Advisory lock `(1095325257, 32)` or Knex migration lock cannot be acquired within 2 seconds.
+   - Unexpected unapplied migration files detected in repository.
 
+2. **Mid-Execution Rollback Decision Triggers:**
+   - PostgreSQL returns lock timeout (`lock_timeout = '2s'` tripped) or statement timeout (`5s` tripped).
+   - Post-DDL verification check fails to detect column `artifacts` as JSONB.
+   - Row count in `workflow_runs` changes during execution.
+
+3. **Emergency Rollback Procedure:**
+   - The guarded runner automatically issues `ROLLBACK` on any error and releases advisory and Knex locks.
+   - If catastrophic database corruption occurs, point Vercel connection string to recovery checkpoint:
+     `DATABASE_URL=postgresql://neondb_owner:[SECRET]@ep-recovery-[ID].c-4.ap-southeast-1.aws.neon.tech/neondb`
+   - Reconcile any post-$T_0$ application writes from application telemetry.
+
+---
+
+## 8. Separate Authorization Decisions Required
+
+To maintain strict operational boundaries, two separate decisions are required:
+
+### Decision A: Historical Neon Preview Branch Retirement
+> **"Authorize Retirement: Delete obsolete staging preview branch `br-weathered-tree-b3rf47nh` on project `mute-frost-50372225`."**
+
+### Decision B: Gate 2 Production Migration 032 Execution
 > **"Authorize Gate 2: Create pre-cutover recovery checkpoint on Neon project `old-sky-50952395` and execute migration 032 using the guarded runner."**
