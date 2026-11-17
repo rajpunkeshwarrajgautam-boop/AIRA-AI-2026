@@ -20,7 +20,11 @@ const STAGING_ORIGIN = 'https://staging.virexaaiventures.com';
 const STAGING_SHA = '3bab3f9e585ac7fa5ffaeaad9148d6d0bc86fa68';
 const DEPLOYMENT_ID = 'dpl_9WZv3iFBJq7FzeFnT5uFVVRwHmVj';
 const DB_ID = 'neon://mute-frost-50372225/br-autumn-star-b36dfu5w';
-const artifacts = path.resolve('artifacts/staging-acceptance');
+// An isolated corrective worktree may verify profiles in the original owner-controlled
+// working copy without copying browser cookies or mutating the original checkout.
+const artifacts = path.resolve(process.env.AIRA_STAGING_EVIDENCE_DIR || 'artifacts/staging-acceptance');
+assert.equal(path.basename(artifacts).toLowerCase(), 'staging-acceptance',
+  'AIRA_STAGING_EVIDENCE_DIR must target a staging-acceptance directory');
 const evidencePath = path.join(artifacts, 'live_oauth_positive_evidence.json');
 const statusPath = path.join(artifacts, 'oauth_phase1_status.json');
 const legacyPath = path.join(artifacts, 'pr164/oauth_phase1_status.json');
