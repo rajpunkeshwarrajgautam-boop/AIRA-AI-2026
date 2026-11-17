@@ -248,15 +248,17 @@ function buildProviderEvidence(meta: OAuthFlowMetadata): ProviderPositiveEvidenc
     deploymentId: DEPLOYMENT_ID,
     stagingDatabaseIdentity: STAGING_DB_IDENTITY,
     principalHash: meta.principalHash || hashPrincipalIdentifier(meta.userId || meta.userEmail || `${meta.provider}_staging_user`),
-    oauthStartObserved: true,
-    callbackProcessed: true,
-    codeExchangeSucceeded: meta.authenticated,
+    // A restored authenticated session alone does not attest an OAuth start,
+    // callback or provider authorization-code exchange in this execution.
+    oauthStartObserved: Boolean(meta.authorizeHost),
+    callbackProcessed: Boolean(meta.callbackLandedUrl?.includes('?auth_success=1')),
+    codeExchangeSucceeded: false, // Requires independent callback/token-exchange attestation.
     providerIdentityValidated: meta.authenticated,
     principalMapped: meta.authenticated,
     sessionStatus: meta.authenticated ? 'AUTHENTICATED' : 'INVALID',
     sessionObservedEndpoint: '/api/auth/session',
     sessionPersistedOnReload: Boolean(meta.sessionPersistedOnReload),
-    logoutRevocationVerified: true, // Lifecycle verified by test matrix
+    logoutRevocationVerified: false, // Set true only by the separate observed logout/replay verifier.
     freeTierEntitlementsVerified: Boolean(meta.freeTierEntitlementsVerified),
     negativePathVerified: true,
     sanitizedLogReference: 'artifacts/staging-acceptance/oauth_phase1_status.json'
