@@ -48,6 +48,11 @@ function createValidEvidence(provider: 'google' | 'github'): ProviderPositiveEvi
     sessionObservedEndpoint: '/api/auth/session',
     sessionPersistedOnReload: true,
     logoutRevocationVerified: true,
+    logoutProof: {
+      principalMatched: true, providerMatched: true,
+      authenticatedBefore: true, oldCookieAuthorizedBefore: true,
+      signOutStatus: 200, anonymousAfter: true, oldCookieRejectedAfter: true,
+    },
     freeTierEntitlementsVerified: true,
     negativePathVerified: true,
   };
@@ -262,4 +267,26 @@ test('12. No secret material enters logs or certification artifacts', () => {
   const cleanHygiene = validateSanitizedRecord(cleanEvidence);
   assert.equal(cleanHygiene.valid, true);
   assert.equal(cleanHygiene.violations.length, 0);
+});
+
+
+test('13. A preset revocation boolean without observed proof cannot certify OAuth', () => {
+  const forged = { ...createValidEvidence('google'), logoutProof: undefined };
+  const result = evaluateProviderEvidence(forged, { expectedDeployedSha: DEPLOYED_SHA });
+  assert.equal(result.status, 'FAIL');
+  assert.ok(result.reasons.some(r => r.includes('Missing observed authenticated logout')));
+});
+
+test('14. A still-authorized stale BFF cookie fails revocation certification', () => {
+  const forged = createValidEvidence('github');
+  forged.logoutProof = { ...forged.logoutProof!, oldCookieRejectedAfter: false };
+  const result = evaluateProviderEvidence(forged, { expectedDeployedSha: DEPLOYED_SHA });
+  assert.equal(result.status, 'FAIL');
+  assert.ok(result.reasons.some(r => r.includes('rejected replay')));
+});
+
+test('15. Non-200 sign-out cannot satisfy observed revocation proof', () => {
+  const evidence = createValidEvidence('google');
+  evidence.logoutProof = { ...evidence.logoutProof!, signOutStatus: 403 };
+  assert.equal(evaluateProviderEvidence(evidence, { expectedDeployedSha: DEPLOYED_SHA }).status, 'FAIL');
 });

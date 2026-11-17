@@ -15,6 +15,7 @@
  */
 
 import crypto from 'node:crypto';
+import { hasObservedLogoutRevocation, type ObservedLogoutProof } from './oauth-observed-logout-proof.js';
 
 export type CertificationStatus = 'PASS' | 'FAIL' | 'BLOCKED' | 'NOT_RUN';
 
@@ -35,6 +36,7 @@ export interface ProviderPositiveEvidence {
   sessionObservedEndpoint: '/api/auth/session';
   sessionPersistedOnReload: boolean;
   logoutRevocationVerified: boolean;
+  logoutProof?: ObservedLogoutProof;
   freeTierEntitlementsVerified?: boolean;
   negativePathVerified?: boolean;
   sanitizedLogReference?: string;
@@ -209,6 +211,15 @@ export function evaluateProviderEvidence(
     }
   }
 
+  // 5. Require evidence of a newly observed authorization and callback.
+  // Restored sessions or linked-provider labels do not establish a code exchange.
+  if (ev.oauthStartObserved !== true) {
+    reasons.push('OAuth authorization start was not observed for this provider');
+  }
+  if (ev.callbackProcessed !== true) {
+    reasons.push('Successful provider callback was not observed for this provider');
+  }
+
   // 5. Code exchange & error handling
   if (ev.exchangeError) {
     reasons.push(`OAuth authorization-code exchange failed with error: ${ev.exchangeError}`);
@@ -242,8 +253,8 @@ export function evaluateProviderEvidence(
   if (!ev.sessionPersistedOnReload) {
     reasons.push('Session persistence across application reload was not verified');
   }
-  if (!ev.logoutRevocationVerified) {
-    reasons.push('Session logout and server-side revocation was not verified');
+  if (!ev.logoutRevocationVerified || !hasObservedLogoutRevocation(ev.logoutProof)) {
+    reasons.push('Missing observed authenticated logout and rejected replay of the previously valid BFF cookie');
   }
 
   // Determine status
@@ -271,7 +282,7 @@ export function evaluateProviderEvidence(
     internalPrincipalMappingResult: ev.principalMapped ? 'SUCCESS' : status === 'BLOCKED' ? 'BLOCKED' : 'FAILURE',
     applicationSessionStatus: ev.sessionStatus || 'INVALID',
     sessionPersistenceResult: ev.sessionPersistedOnReload ? 'PASS' : status === 'BLOCKED' ? 'BLOCKED' : 'FAIL',
-    logoutAndRevocationResult: ev.logoutRevocationVerified ? 'PASS' : status === 'BLOCKED' ? 'BLOCKED' : 'FAIL',
+    logoutAndRevocationResult: ev.logoutRevocationVerified && hasObservedLogoutRevocation(ev.logoutProof) ? 'PASS' : status === 'BLOCKED' ? 'BLOCKED' : 'FAIL',
     negativePathResults: ev.negativePathVerified ? 'PASS' : 'NOT_TESTED',
     sanitizedLogReference: ev.sanitizedLogReference || 'artifacts/staging-acceptance/OAUTH_POSITIVE_CERTIFICATION.log',
     finalStatus: status,
