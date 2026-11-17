@@ -94,22 +94,15 @@ Authoritative read-only preflight inspection executed directly on production Neo
 - **Child Branch:** `br-green-snow-b3dsci5u` (`pr92-commercial-platform-isolated`, created 2026-10-19T16:36:26Z)
 - **Endpoint ID:** `ep-steep-tooth-b3y7kgx9` (`ep-steep-tooth-b3y7kgx9.c-4.ap-southeast-1.aws.neon.tech`)
 
-### B. Verified Provider State
-1. **Endpoint State:** Provisioned, `idle` (suspended compute since 2026-11-17T14:39:14Z).
-2. **Database Role:** `neondb_owner` exists on branch `br-weathered-tree-b3rf47nh`.
-3. **Password Rotation Metadata:** `created_at` and `updated_at` are both `2026-10-10T08:00:12Z`. No password rotation API call has occurred on this role since creation.
-4. **Credential Usability:** **UNVERIFIED**. Following strict security policy, we do NOT authenticate using historical exposed secrets recovered from Git history.
-5. **Incident Classification:** GitGuardian incident 38868679 was dismissed in the dashboard as a test fixture. Source code was sanitized in commit `1f97c73`.
-6. **Dependency Audit:** Exhaustive search confirmed **0 workflows** in `.github/workflows/`, **0 build scripts** in `package.json`, and **0 Vercel deployments** reference `br-weathered-tree-b3rf47nh` or `ep-steep-tooth-b3y7kgx9`.
-7. **Impact on Production:** **ZERO**. Complete project, VPC, and cluster isolation from production project `old-sky-50952395`.
-8. **Impact on Child Branch (`br-green-snow-b3dsci5u`):** Neon's storage engine uses content-addressed, copy-on-write page layers; deleting a parent branch does not delete or corrupt existing child branches.
+### B. Verified Provider Remediation State (Certified 2026-11-17)
+1. **Endpoint Deletion:** `ep-steep-tooth-b3y7kgx9` permanently deprovisioned and deleted (verified HTTP 404; absent from project endpoint inventory). Public hostname unmapped from DNS/proxy.
+2. **Password Invalidation:** Role `neondb_owner` password on `br-weathered-tree-b3rf47nh` rotated via Neon API (timestamp advanced from `2026-10-10T08:00:12Z` to `2026-11-17T16:26:39Z`), permanently invalidating the exposed password hash.
+3. **Child Preservation:** Child branch `br-green-snow-b3dsci5u` (`pr92-commercial-platform-isolated`) preserved intact, state `ready`, retaining its own endpoint `ep-ancient-sound-b3drtnp5` and credentials (`updated_at: 2026-10-19T16:50:31Z`).
+4. **Parent Branch Preserved:** `br-weathered-tree-b3rf47nh` remains as a headless, zero-compute storage node, satisfying Neon's parent-child storage ancestry.
+5. **Production Project Isolation:** Production project `old-sky-50952395` remained 100% untouched and outside the operation's scope.
+6. **Residual Exposure:** **ZERO**.
 
-### C. Recommended Remediation & Retirement Command
-Recommend permanent deletion of obsolete staging branch `br-weathered-tree-b3rf47nh` to eliminate residual attack surface.  
-**DO NOT EXECUTE UNTIL EXPLICITLY APPROVED.** (Approval must be granted separately from Gate 2).
-```bash
-neon branches delete br-weathered-tree-b3rf47nh --project-id mute-frost-50372225
-```
+---
 
 ---
 
@@ -157,12 +150,13 @@ This checklist defines the strict, ordered sequence for Gate 2 execution once ex
 
 ---
 
-## 8. Separate Authorization Decisions Required
+## 8. Gate Authorization Status & Pending Owner Decision
 
-To maintain strict operational boundaries, two separate decisions are required:
+### Historical Staging Remediation: CLOSED & VERIFIED (2026-11-17)
+- Role `neondb_owner` password rotated on `br-weathered-tree-b3rf47nh` (`updated_at: 2026-11-17T16:26:39Z`).
+- Endpoint `ep-steep-tooth-b3y7kgx9` permanently deleted (HTTP 404).
+- Child branch `br-green-snow-b3dsci5u` preserved intact and operational.
+- Incident 38868679 permanently closed with zero residual exposure.
 
-### Decision A: Historical Neon Preview Branch Retirement
-> **"Authorize Retirement: Delete obsolete staging preview branch `br-weathered-tree-b3rf47nh` on project `mute-frost-50372225`."**
-
-### Decision B: Gate 2 Production Migration 032 Execution
+### Sole Pending Decision: Gate 2 Production Migration 032 Execution
 > **"Authorize Gate 2: Create pre-cutover recovery checkpoint on Neon project `old-sky-50952395` and execute migration 032 using the guarded runner."**

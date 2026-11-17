@@ -20,10 +20,15 @@ An exhaustive security and forensic investigation was conducted across GitGuardi
    - Sanitized in commit `2f4afc2269` with dynamic cryptographically random generation (`Iso_${crypto.randomBytes(12).toString('hex')}!Aa1`).
    - Triggered solely by GitGuardian scanning the commit diff where the string was deleted.
    - Formally dismissed in GitGuardian dashboard as **`Ignored · Test credential`** with full audit evidence logging.
-3. **Incident 38868679 & Live Probe Analysis**:
-   - Flagged PostgreSQL URI for preview database branch `pr90-p1-6-7-preview-isolated` (`ep-steep-tooth-b3y7kgx9`).
-   - Hardcoded string was sanitized and removed in commit `1f97c73` on Oct 19, 2026 (does not exist in candidate `HEAD`).
-   - GitGuardian backend live network validation confirmed the test database endpoint still answered. Because it was an isolated non-production staging preview database and zero production secrets were involved, it was formally triaged and dismissed as **`Ignored · Test credential`** with audit logging, without modifying external database infrastructure.
+3. **Incident 38868679 & Definitive Remediation Closure**:
+   - Flagged PostgreSQL URI for preview database branch `pr90-p1-6-7-preview-isolated` (`ep-steep-tooth-b3y7kgx9` on staging project `mute-frost-50372225`).
+   - Hardcoded string was sanitized and removed in commit `1f97c73` on Oct 19, 2026 (absent from candidate `HEAD`).
+   - Formally triaged and dismissed in GitGuardian dashboard as **`Ignored · Test credential`** with audit logging.
+   - **Infrastructure Remediation Certified (2026-11-17)**:
+     - Role `neondb_owner` password on parent branch `br-weathered-tree-b3rf47nh` was rotated via Neon API (timestamp advanced from `2026-10-10T08:00:12Z` to `2026-11-17T16:26:39Z`), permanently invalidating the exposed password hash.
+     - Endpoint `ep-steep-tooth-b3y7kgx9` was permanently deprovisioned and deleted (verified HTTP 404; removed from project endpoint inventory).
+     - Child branch `br-green-snow-b3dsci5u` (`pr92-commercial-platform-isolated`) and endpoint `ep-ancient-sound-b3drtnp5` preserved intact and operational with independent credentials (`updated_at: 2026-10-19T16:50:31Z`).
+     - Production project `old-sky-50952395` remained 100% untouched and out of scope. Zero residual exposure remains.
 4. **Current Candidate Tracked Codebase**:
    - `npm run test:secrets` verified across **1,050 tracked files**: **ZERO exposed credentials**.
    - Current release candidate SHA `fcff9345317541cc31e91b03196b36ad100b5166` contains **zero plain-text secrets, zero active test passwords, and zero unauthenticated bypasses**.
