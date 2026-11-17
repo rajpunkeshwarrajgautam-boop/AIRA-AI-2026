@@ -62,6 +62,9 @@ jobs:
           fi
           npm run test:secrets
 
+      - name: OAuth evidence integrity and observed logout regression
+        run: npx tsx --test test/staging-oauth-certification-engine.test.ts
+
       - name: Lint
         run: npm run lint
 
