@@ -1,8 +1,8 @@
 # AIRA AI 2026 — PR #185 Combined Production Release Candidate Final Certification
 
-**Document Version:** 1.3.0  
+**Document Version:** 1.4.0  
 **Date:** 2026-11-17  
-**Status:** **ALL PRE-DEPLOYMENT CERTIFICATION GATES PASSED — PRE-DEPLOYMENT CERTIFIED (AWAITING OWNER PRODUCTION AUTHORIZATION)**  
+**Status:** **ALL PRE-DEPLOYMENT CERTIFICATION GATES PASSED — PRE-DEPLOYMENT CERTIFIED (AWAITING GATE 1 CANDIDATE PROMOTION AUTHORIZATION)**  
 **Production Gate:** **STRICT NO-GO FOR DEPLOYMENT WITHOUT EXPLICIT OWNER SIGN-OFF**
 
 ---
@@ -19,7 +19,8 @@ To guarantee absolute traceability and eliminate ambiguity between application c
 | **Test Harness & Engine Revision** | `5b29211327117a78377da2dc376378e9f50684c3` | Test infrastructure, false-positive prevention engine (`scripts/oauth-positive-certification-engine.ts`), 15 regression tests (`test/staging-oauth-certification-engine.test.ts`), and sanitized fixture lifecycle. |
 | **PR #185 Candidate HEAD Commit** | `3ec1947a70728199e1fa281f0d76e1f583b934ae` | Draft PR #185 HEAD commit on `release/candidate-pr178-pr184-combined`, validated by GitHub CI run `44029903228`. |
 | **PR #186 Revocation Hardening HEAD** | `62c8f9a599a7ac8f4ffa7fc71d9fcd55729732a0` | Draft PR #186 HEAD commit on `fix/pr185-observed-oauth-revocation-20261117`, establishing observed logout proof and stale-cookie rejection. |
-| **Unified Review Candidate Revision** | Isolated branch `review/candidate-pr185-pr186-unified-20261117` | Reconciles PR #185 and PR #186 with dependency security patches for review, fully verified by GitHub Actions CI run `44040313478`. |
+| **Unified Review Candidate Starting SHA** | `c5cc3c3cb9a147eaadebb9c1566e8042b1e5896e` | Reconciles PR #185 and PR #186 with dependency security patches on isolated branch `review/candidate-pr185-pr186-unified-20261117`. |
+| **Draft Verification PR** | [Draft PR #187](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/187) (`review/candidate-pr185-pr186-unified-20261117` → `staging`) | Dedicated non-production verification PR triggering mandatory `Main / PR certification` suite without modifying production or release branches. |
 | **Deployed Staging Runtime** | `3bab3f9e585ac7fa5ffaeaad9148d6d0bc86fa68` on Vercel deployment `dpl_9WZv3iFBJq7FzeFnT5uFVVRwHmVj` | Live staging runtime at `https://staging.virexaaiventures.com` connected to Neon staging project `mute-frost-50372225` (endpoint `ep-shiny-bird-b3xundyt`, branch `br-autumn-star-b36dfu5w`). |
 | **Production Baseline** | `d988a6bd26d49a000d59cf906b13fcfe9e170058` | Live production application at `https://aira-ai-2026.vercel.app`. |
 | **Production Rollback Target** | `dpl_3vZXiXwBWgZeeAyiyUVgYixsNMb8` | Verified immutable production deployment rollback target. |
@@ -76,7 +77,7 @@ Phase 6 of `scripts/certify-staging-oauth-callbacks.ts` was redesigned to elimin
 - **Phase 1 (Google Start & PKCE):** **PASS** — RFC 7636 PKCE S256 parameters, signed HMAC state cookie, `HttpOnly`, `SameSite=Lax`, `Secure`.
 - **Phase 2 (GitHub Start):** **PASS** — Requested scopes (`read:user user:email`), signed state cookie.
 - **Phase 3 (Negative Callback Paths):** **PASS** — 4/4 negative paths rejected fail-closed (missing cookie -> `state_mismatch`, tampered cookie -> `state_mismatch`, provider error -> `access_denied`, missing code -> `state_mismatch`).
-- **Phase 4 (Session Security & CSRF):** **PASS** — Unauthenticated probe defaults safely to `ANONYMOUS`, sign-out without CSRF rejected (HTTP 403).
+- **Phase 4 (Session Security & CSRF Defense):** **PASS** — Unauthenticated probe defaults safely to `ANONYMOUS`, sign-out without CSRF rejected (HTTP 403).
 - **Phase 5 (Dual Account Contextual IDOR):** **PASS** — Reconciled verified isolation (read conversation 404, delete conversation 404, read memory 404, onboarding spoofing 403).
 - **Phase 6 (Positive OAuth Code Exchange & Session Certification):** **PASS**
   - **Phase 6.1 (Google OAuth Code Exchange & Session):** **PASS** — Staging user `antigravitypower490@gmail.com` (UUID `neon_user_3aea147c-fc80-4ad4-9df8-df2f5c07c91a`, principal hash `c70b7e2358406c1bc0c0ad374578a2698331fb1288b2263f350e99c967387014`), session status `AUTHENTICATED` verified on `/api/auth/session`, session persistence across page reload verified, Free-tier entitlements verified.
@@ -84,7 +85,11 @@ Phase 6 of `scripts/certify-staging-oauth-callbacks.ts` was redesigned to elimin
   - **Phase 6.2 (GitHub OAuth Code Exchange & Session):** **PASS** — Staging user `rajpunkeshwarrajgautam@gmail.com` (UUID `neon_user_e215766f-e719-431f-ad08-154a28ef83b4`, principal hash `474f24b8be3bfa3578c4b04134c22f1b6de47a4b2b79302212d0d88d71ac4561`), session status `AUTHENTICATED` verified on `/api/auth/session`, session persistence across page reload verified, Free-tier entitlements verified.
     - *Runtime Exchange Attestation:* Vercel request ID `r9p7c-1794895148768-cbca439199a7` (`2026-11-17T05:59:08.908Z`), HTTP 302 -> `/?auth_success=1`, zero provider token exchange errors.
   - **Phase 6.3 (Overall Positive OAuth & Observed Revocation Gate):** **PASS** — Dual-provider authentic session establishment certified with zero secret leakage in evidence artifacts (`artifacts/staging-acceptance/OAUTH_CALLBACK_CERTIFICATION_LEDGER.json`, `artifacts/staging-acceptance/live_oauth_positive_evidence.json`).
-  - **Observed Staging Revocation & Stale Cookie Replay Proof:** **PASS** — Verified via `scripts/certify-staging-session-revocation.ts` and `scripts/oauth-observed-logout-proof.ts`. Proves: (1) authentic session signed out cleanly with HTTP 200, (2) post-logout probe returns `ANONYMOUS`, and (3) subsequent replay of the previously authorized BFF session cookie is rejected fail-closed by the staging gateway.
+  - **Observed Staging Revocation & Stale Cookie Invalidation Contract:** **PASS** — Verified via `scripts/certify-staging-session-revocation.ts` and `scripts/oauth-observed-logout-proof.ts` against the authoritative BFF session API contract:
+    1. `POST /api/auth/sign-out` with valid CSRF token and active session → HTTP 200 with `{ "success": true }`.
+    2. `GET /api/auth/session` immediately following sign-out → HTTP 200 with `{ "status": "ANONYMOUS" }`.
+    3. Replay of the revoked BFF session cookie to `GET /api/auth/session` → HTTP 200 with `{ "status": "ANONYMOUS" }` or `{ "status": "GUEST" }` (confirming absolute fail-closed session invalidation in store).
+    4. Sign-out without valid CSRF origin or token → HTTP 403 Forbidden.
   - **Cross-Account Session & Contextual IDOR Isolation:** **PASS** — Complete separation between Google Account A and GitHub Account B, segregated durable sessions in Neon staging database, zero cross-session context bleeding.
 
 ---
@@ -179,8 +184,11 @@ Initial `npm audit` flagged 10 vulnerabilities (7 moderate, 3 high). Through non
 | **Negative OAuth Callback Certification** | `scripts/certify-staging-oauth-callbacks.ts` | **PASS** | Phases 1–4 pass (PKCE S256, signed state, 4/4 negative callback rejections) |
 | **Dual Account Isolation (IDOR)** | `scripts/verify-staging-dual-account-isolation.ts` | **PASS** | Phases 1–5 pass (404 IDOR on conversation/memory, 403 on onboarding spoofing) |
 | **Positive OAuth Code Exchange** | `scripts/certify-staging-oauth-callbacks.ts` (Phase 6) | **PASS** | Phases 6.1 (Google) and 6.2 (GitHub) pass with authentic session establishment, reload persistence, Free-tier entitlements, and observed revocation |
-| **Remote Unified Candidate CI** | Run `44040313478` | **PASS** | Fast CI (2m55s) & Semantic Search CI (50s) green on review branch |
-| **Remote Fast CI (PR #185 HEAD)** | Run `44029903228` / Job `133859050033` | **PASS** | Fast CI green on candidate PR #185 commit |
+| **Remote PR #187 CI (Main / PR + E2E)** | Run `44043744461` | **PASS** | **All 3 jobs green at exact candidate SHA:**<br>• Fast CI in 3m21s (ID `133904273111`)<br>• Semantic Search CI in 50s (ID `133904273546`)<br>• Main / PR certification in 7m41s (ID `133905805617`), including Edge browser, Playwright responsive spectrum artifact `aira-responsive-local-44043744461-1`, and settings lifecycle E2E |
+| **Remote PR #187 Disposable PG16** | Run `44043744306` / Job `133904274231` | **PASS** | 2m46s — isolated PG16 regression suite green |
+| **Remote Unified Review Push CI** | Run `44041120250` | **PASS** | Fast CI (3m8s) & Semantic Search CI (52s) green on review branch push |
+| **Remote Unified Review Initial CI** | Run `44040313478` | **PASS** | Fast CI (2m55s) & Semantic Search CI (50s) green on review branch push |
+| **Remote Fast CI (PR #185 HEAD)** | Run `44029903228` / Job `133859050033` | **PASS** | Fast CI green on candidate PR #185 commit `3ec1947` |
 | **Remote PG16 Certification** | Run `43905887568` / Job `133434466966` | **PASS** | 2m48s — isolated PG16 regression suite |
 | **Remote Playwright E2E** | Run `43905887647` / Job `133436820341` | **PASS** | 7m7s — Edge, mobile, responsive viewports, settings modal, onboarding E2E |
 
@@ -189,20 +197,16 @@ Initial `npm audit` flagged 10 vulnerabilities (7 moderate, 3 high). Through non
 ## 8. Production Authorization Package & Release Protocol
 
 ### Release State: ALL PRE-DEPLOYMENT CERTIFICATION GATES PASSED — STRICT NO-GO FOR DEPLOYMENT WITHOUT EXPLICIT OWNER SIGN-OFF
-All pre-deployment verification gates, automated CI checks, disaster recovery rehearsals, observed session revocation proofs, and positive interactive OAuth certifications have passed.
+All pre-deployment verification gates, automated CI checks, mandatory `Main / PR certification` E2E suites, disaster recovery rehearsals, observed session revocation proofs, and positive interactive OAuth certifications have passed with 100% green evidence.
 
-Production execution remains strictly unauthorized pending explicit written owner sign-off for:
-1. Fast-forward or standard merge of the verified candidate into `release/candidate-pr178-pr184-combined` and `prod-release`.
-2. Execution of production migration 032.
-3. Deployment to Vercel production.
+Production execution remains strictly unauthorized pending explicit written owner sign-off across three independent, sequential gates:
+1. **Gate 1 (Candidate Promotion):** Fast-forward or standard merge of the verified candidate from `review/candidate-pr185-pr186-unified-20261117` into `release/candidate-pr178-pr184-combined`.
+2. **Gate 2 (Guarded Migration 032):** Execution of production migration 032 using bounded locks (`scripts/run-guarded-migration-032.ts`). Requires separate authorization following a fresh recoverability checkpoint.
+3. **Gate 3 (Production Deployment):** Deployment to Vercel production (`https://aira-ai-2026.vercel.app`) and post-deployment smoke testing. Requires separate authorization following successful migration.
 
-### Operational Sequence Upon Owner Authorization:
-1. **Approval Gate 1 (Candidate Promotion):** Merge verified review branch into `release/candidate-pr178-pr184-combined`.
-2. **Approval Gate 2 (Guarded Migration 032):**
-   ```bash
-   npx tsx scripts/run-guarded-migration-032.ts --target=production --authorize-production-migration-032-execute
-   ```
-3. **Approval Gate 3 (Production Deployment & Smoke Test):**
-   Deploy to Vercel production and execute smoke verification suite against `https://aira-ai-2026.vercel.app`.
-4. **Rollback Assurance:**
-   If unexpected production anomalies occur, rollback target `dpl_3vZXiXwBWgZeeAyiyUVgYixsNMb8` is preserved and immediately activatable.
+### Current Action Request: Gate 1 Authorization Only
+To advance to candidate promotion without compromising production boundaries, the repository owner must explicitly grant Gate 1 authorization:
+
+> **"Authorize promotion of the exact certified candidate SHA into `release/candidate-pr178-pr184-combined`."**
+
+*(Gates 2 and 3 remain blocked and will receive separate approval requests at their respective milestones).*
