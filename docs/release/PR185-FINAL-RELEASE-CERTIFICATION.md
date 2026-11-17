@@ -16,8 +16,10 @@ To guarantee absolute traceability and eliminate ambiguity between application c
 | Identity Dimension | Identifier / SHA / Resource | Verification Scope & Justification |
 | :--- | :--- | :--- |
 | **Application Code Revision** | `9fd2ec30206cbbace1f2d99bf00a133b2bd914f0` | Executable application codebase containing PR #178 + PR #184 fixes: direct OAuth backend routes, Free-tier entitlements, model routing, database migrations 001–032, and security fail-closed guards. |
-| **Test Harness & Engine Revision** | `5b29211327117a78377da2dc376378e9f50684c3` | Test infrastructure, false-positive prevention engine (`scripts/oauth-positive-certification-engine.ts`), 12 regression tests (`test/staging-oauth-certification-engine.test.ts`), and sanitized fixture lifecycle. |
-| **PR #185 Candidate HEAD Commit** | `42abf6049d3c9978aa5063e8f61855f5d26f8ae8` | Draft PR #185 HEAD commit on `release/candidate-pr178-pr184-combined`, validated by GitHub CI run `43914098068` (transcription error `42abf600...` formally corrected). |
+| **Test Harness & Engine Revision** | `5b29211327117a78377da2dc376378e9f50684c3` | Test infrastructure, false-positive prevention engine (`scripts/oauth-positive-certification-engine.ts`), 15 regression tests (`test/staging-oauth-certification-engine.test.ts`), and sanitized fixture lifecycle. |
+| **PR #185 Candidate HEAD Commit** | `3ec1947a70728199e1fa281f0d76e1f583b934ae` | Draft PR #185 HEAD commit on `release/candidate-pr178-pr184-combined`, validated by GitHub CI run `44029903228`. |
+| **PR #186 Revocation Hardening HEAD** | `62c8f9a599a7ac8f4ffa7fc71d9fcd55729732a0` | Draft PR #186 HEAD commit on `fix/pr185-observed-oauth-revocation-20261117`, establishing observed logout proof and stale-cookie rejection. |
+| **Unified Review Candidate Revision** | Isolated branch `review/candidate-pr185-pr186-unified-20261117` | Reconciles PR #185 and PR #186 with dependency security patches for review, fully verified by GitHub Actions CI run `44040313478`. |
 | **Deployed Staging Runtime** | `3bab3f9e585ac7fa5ffaeaad9148d6d0bc86fa68` on Vercel deployment `dpl_9WZv3iFBJq7FzeFnT5uFVVRwHmVj` | Live staging runtime at `https://staging.virexaaiventures.com` connected to Neon staging project `mute-frost-50372225` (endpoint `ep-shiny-bird-b3xundyt`, branch `br-autumn-star-b36dfu5w`). |
 | **Production Baseline** | `d988a6bd26d49a000d59cf906b13fcfe9e170058` | Live production application at `https://aira-ai-2026.vercel.app`. |
 | **Production Rollback Target** | `dpl_3vZXiXwBWgZeeAyiyUVgYixsNMb8` | Verified immutable production deployment rollback target. |
@@ -78,13 +80,18 @@ Phase 6 of `scripts/certify-staging-oauth-callbacks.ts` was redesigned to elimin
 - **Phase 5 (Dual Account Contextual IDOR):** **PASS** — Reconciled verified isolation (read conversation 404, delete conversation 404, read memory 404, onboarding spoofing 403).
 - **Phase 6 (Positive OAuth Code Exchange & Session Certification):** **PASS**
   - **Phase 6.1 (Google OAuth Code Exchange & Session):** **PASS** — Staging user `antigravitypower490@gmail.com` (UUID `neon_user_3aea147c-fc80-4ad4-9df8-df2f5c07c91a`, principal hash `c70b7e2358406c1bc0c0ad374578a2698331fb1288b2263f350e99c967387014`), session status `AUTHENTICATED` verified on `/api/auth/session`, session persistence across page reload verified, Free-tier entitlements verified.
+    - *Runtime Exchange Attestation:* Vercel request ID `r68kl-1794894247643-f6f9fb6aff9b` (`2026-11-17T05:44:07.771Z`), HTTP 302 -> `/?auth_success=1`, zero provider token exchange errors.
   - **Phase 6.2 (GitHub OAuth Code Exchange & Session):** **PASS** — Staging user `rajpunkeshwarrajgautam@gmail.com` (UUID `neon_user_e215766f-e719-431f-ad08-154a28ef83b4`, principal hash `474f24b8be3bfa3578c4b04134c22f1b6de47a4b2b79302212d0d88d71ac4561`), session status `AUTHENTICATED` verified on `/api/auth/session`, session persistence across page reload verified, Free-tier entitlements verified.
-  - **Phase 6.3 (Overall Positive OAuth Certification Gate):** **PASS** — Dual-provider authentic session establishment certified with zero secret leakage in evidence artifacts (`artifacts/staging-acceptance/OAUTH_CALLBACK_CERTIFICATION_LEDGER.json`, `artifacts/staging-acceptance/live_oauth_positive_evidence.json`).
+    - *Runtime Exchange Attestation:* Vercel request ID `r9p7c-1794895148768-cbca439199a7` (`2026-11-17T05:59:08.908Z`), HTTP 302 -> `/?auth_success=1`, zero provider token exchange errors.
+  - **Phase 6.3 (Overall Positive OAuth & Observed Revocation Gate):** **PASS** — Dual-provider authentic session establishment certified with zero secret leakage in evidence artifacts (`artifacts/staging-acceptance/OAUTH_CALLBACK_CERTIFICATION_LEDGER.json`, `artifacts/staging-acceptance/live_oauth_positive_evidence.json`).
+  - **Observed Staging Revocation & Stale Cookie Replay Proof:** **PASS** — Verified via `scripts/certify-staging-session-revocation.ts` and `scripts/oauth-observed-logout-proof.ts`. Proves: (1) authentic session signed out cleanly with HTTP 200, (2) post-logout probe returns `ANONYMOUS`, and (3) subsequent replay of the previously authorized BFF session cookie is rejected fail-closed by the staging gateway.
   - **Cross-Account Session & Contextual IDOR Isolation:** **PASS** — Complete separation between Google Account A and GitHub Account B, segregated durable sessions in Neon staging database, zero cross-session context bleeding.
 
 ---
 
 ## 4. Historical GitGuardian Alert Forensic Disposition (P1 Resolution)
+
+### Status: ACKNOWLEDGED (PENDING OWNER DASHBOARD DISMISSAL)
 
 ### Investigation of Commit `2f4afc2269a0dd1519214acc1b2affe1105feb12`
 1. **Provenance:** In commit `6b3e930227ba1737f2b19c9a09cc49fe69be5561` (Nov 12, 2026), `scripts/verify-staging-dual-account-isolation.ts` was authored to automate dual-account staging acceptance. The author assigned `const pass = 'P@ssword123!SecureStaging';` as a dummy password parameter passed to the staging `/api/auth/sign-up` endpoint for ephemeral test accounts `alice_stage_*@example.com` and `bob_stage_*@example.com`.
@@ -98,8 +105,9 @@ Phase 6 of `scripts/certify-staging-oauth-callbacks.ts` was redesigned to elimin
 4. **GitGuardian Alert Mechanism:**
    - GitGuardian scans all git commit diffs in PR #185. When inspecting commit `2f4afc2`, it flagged the deleted line `-  const pass = 'P@ssword123!SecureStaging';`.
 5. **Current Security Status:**
-   - Active working tree and repository files: **0 exposed secrets** across 1,048 tracked files (`npm run test:secrets` PASS).
-6. **Remaining Action:** Owner may dismiss the historical occurrence in the GitGuardian web dashboard (`https://dashboard.gitguardian.com/workspace/939484/incidents/40155184`) as a resolved synthetic test fixture.
+   - Active working tree and repository files: **0 exposed secrets** across 1,050 tracked files (`npm run test:secrets` PASS).
+6. **Formal Operating Disposition:**
+   - Historical occurrence formally acknowledged with verified synthetic-fixture provenance. Dashboard incident 40155184 remains marked pending until owner performs manual one-click dismissal in the GitGuardian web console.
 
 ---
 
@@ -125,46 +133,76 @@ Phase 6 of `scripts/certify-staging-oauth-callbacks.ts` was redesigned to elimin
 
 ---
 
+## 6.1. Comprehensive Advisory-by-Advisory Dependency Risk Assessment (P1 Resolution)
+
+### Audit Overview
+Initial `npm audit` flagged 10 vulnerabilities (7 moderate, 3 high). Through non-breaking, isolated package-lock updates, 4 vulnerabilities in runtime HTTP utilities were fully remediated. The remaining 6 vulnerabilities reside strictly in dev/build-time tooling.
+
+### Remediated Dependencies (0 Breaking Changes, Fully Verified)
+1. **`@hono/node-server` (2.1.3 → 2.1.8):**
+   - *Advisories Patched:* `GHSA-qv5m-9pm6-hqp3` (Unhandled ECONNRESET WebSocket DoS), `GHSA-jpvv-r467-5p4w` (Reverse proxy backslash path traversal bypass).
+   - *Resolution:* Lockfile upgrade to `2.1.8`.
+2. **`fast-uri` (3.1.8 → 3.1.9):**
+   - *Advisories Patched:* `GHSA-w74x-v6f9-j3xg` (Scheme spoofing), `GHSA-xhq7-xmqj-769h` (Path normalization equivalence), `GHSA-wjr9-j795-jxcr` (Host canonicalization confusion), `GHSA-333x-w4r6-6crp` (Scheme injection).
+   - *Resolution:* Lockfile upgrade to `3.1.9`.
+3. **`hono` (4.13.12 → 4.13.19):**
+   - *Advisories Patched:* `GHSA-4m76-xfj5-7975` (Mount path bypass), `GHSA-h7mg-cq63-vhpq` (RegExpRouter newline bypass), `GHSA-3gg2-335m-rxc6` (CSS template tag XSS), `GHSA-46wx-v44x-9hh2` (CSRF text/ping bypass), `GHSA-4h7h-rv7c-7m2v` (Multipart validator bypass).
+   - *Resolution:* Lockfile upgrade to `4.13.19`.
+4. **`ip-address` (10.7.3 → 10.7.6):**
+   - *Advisories Patched:* `GHSA-rxp7-6hxx-x8q5` (Address6 quadratic parsing DoS).
+   - *Resolution:* Lockfile upgrade to `10.7.6`.
+
+### Advisory-by-Advisory Risk Assessment for Remaining 6 Vulnerabilities
+| Package & Advisory | Severity | CWE / CVSS | Dependency Path | Production / Build Exposure | Compensating Controls & Disposition | Waiver Expiration |
+| :--- | :---: | :---: | :--- | :--- | :--- | :---: |
+| **`vite`**<br>`GHSA-698v-4r3x-3vcv`<br>`GHSA-r825-w8mm-5pxw`<br>`GHSA-587h-7wmj-h5pm` | High | CWE-77, 78, 88 | `vite` (direct devDependency) | **Zero Production Exposure.** Vite is solely used as a build-time bundler (`vite build`). The dev server and `launch-editor` CLI are not included in production or Vercel serverless images. | Precompiled static assets served on Vercel CDN; no server-side Vite execution in staging or production. | 30 Days (Next Vite minor bump) |
+| **`vite`**<br>`GHSA-9jrq-w75r-8gcw`<br>`GHSA-rq7h-c2jc-7f22`<br>`GHSA-vfpm-58rq-9qcg` | Moderate / Low | CWE-22, 80, 200 | `vite` (direct devDependency) | **Zero Production Exposure.** Relates to local development middleware, `server.fs.allow` path checks, and WASM debug queries. | Local development environment only; production traffic never touches Vite dev server. | 30 Days (Next Vite minor bump) |
+| **`e2b` / `undici8`**<br>`GHSA-4qv8-2p9j-2685`<br>`GHSA-xjj6-f33q-929c`<br>`GHSA-4w7w-5xrc-9h26` | High | CWE-20, 248, 400 | `e2b` → `undici8` | **Zero Production Exposure.** `e2b` is an optional agent sandboxing library used in experimental worker harnesses, not on the user request path. | Process timeouts and strict environment sandboxing; undici8 not imported by frontend or serverless endpoints. | 30 Days (Next e2b upstream bump) |
+| **`glob`**<br>`GHSA-3g3m-2fjr-6pw4` | Moderate | CWE-400 | `e2b` → `glob` | **Zero Production Exposure.** Build/test filesystem traversal tool; not callable via external user inputs. | Read-only filesystem boundaries and bounded test timeouts. | 30 Days (Next e2b upstream bump) |
+| **`minimatch`**<br>`GHSA-g3hv-75wg-m249` | Moderate | CWE-400 | `e2b` → `glob` → `minimatch` | **Zero Production Exposure.** Transitive build-time glob matcher. | Bounded regex matching; no user-provided glob pattern parsing in production. | 30 Days (Next e2b upstream bump) |
+| **`re2js`**<br>`GHSA-gg6h-894w-4m9c` | High | CWE-400 (ReDoS) | `re2js` (dev-only parser utility) | **Zero Production Exposure.** Production regex execution relies exclusively on native V8 C++ RegExp with strict length bounds. | Native RegExp timeout guards in Node.js 24 runtime; re2js not reachable from HTTP endpoints. | 30 Days |
+
+---
+
 ## 7. Comprehensive Verification Matrix
 
 | Verification Gate | Command / Target | Result | Evidence / Details |
 | :--- | :--- | :---: | :--- |
 | **Fast CI / Typecheck** | `npx tsc --noEmit` | **PASS** | 0 compilation errors across entire monorepo |
 | **Lint Audit** | `npm run lint` (oxlint) | **PASS** | 0 errors, 470 benign lint warnings |
-| **Tracked Secrets Audit** | `npm run test:secrets` | **PASS** | 0 exposed credentials found across 1,048 tracked files |
+| **Tracked Secrets Audit** | `npm run test:secrets` | **PASS** | 0 exposed credentials found across 1,050 tracked files |
 | **Harness Security Lifecycle** | `test/test-harness-security-lifecycle.test.ts` | **PASS** | 9/9 tests pass (target validation, credential entropy, tracker cleanup) |
 | **Staging Config Safety** | `test/staging-live-acceptance-config.test.ts` | **PASS** | 4/4 tests pass (production rejection, branch validation) |
 | **Fail-Safe Backup/Restore** | `test/fail-safe-backup-restore.test.ts` | **PASS** | 30/30 tests pass (exact parity, constraint equivalence, bounded lock) |
 | **Portable Escrow Recovery** | `test/portable-recovery-escrow.test.ts` | **PASS** | 15/15 tests pass (AES-256-GCM envelope, scrypt KDF, fail-closed) |
-| **OAuth Positive Engine Unit Suite** | `npm run test:oauth-cert-engine` | **PASS** | 12/12 tests pass (all 12 false-positive & anti-staleness assertions) |
+| **OAuth Positive Engine Unit Suite** | `npm run test:oauth-cert-engine` | **PASS** | 15/15 tests pass (includes observed logout & stale BFF cookie replay rejection) |
 | **Negative OAuth Callback Certification** | `scripts/certify-staging-oauth-callbacks.ts` | **PASS** | Phases 1–4 pass (PKCE S256, signed state, 4/4 negative callback rejections) |
 | **Dual Account Isolation (IDOR)** | `scripts/verify-staging-dual-account-isolation.ts` | **PASS** | Phases 1–5 pass (404 IDOR on conversation/memory, 403 on onboarding spoofing) |
-| **Positive OAuth Code Exchange** | `scripts/certify-staging-oauth-callbacks.ts` (Phase 6) | **PASS** | Phases 6.1 (Google) and 6.2 (GitHub) pass with authentic session establishment, reload persistence, Free-tier entitlements, and cross-account isolation |
-| **Remote Fast CI** | Run `43905887647` / Job `133434467524` | **PASS** | 3m37s — 62/62 steps green |
+| **Positive OAuth Code Exchange** | `scripts/certify-staging-oauth-callbacks.ts` (Phase 6) | **PASS** | Phases 6.1 (Google) and 6.2 (GitHub) pass with authentic session establishment, reload persistence, Free-tier entitlements, and observed revocation |
+| **Remote Unified Candidate CI** | Run `44040313478` | **PASS** | Fast CI (2m55s) & Semantic Search CI (50s) green on review branch |
+| **Remote Fast CI (PR #185 HEAD)** | Run `44029903228` / Job `133859050033` | **PASS** | Fast CI green on candidate PR #185 commit |
 | **Remote PG16 Certification** | Run `43905887568` / Job `133434466966` | **PASS** | 2m48s — isolated PG16 regression suite |
 | **Remote Playwright E2E** | Run `43905887647` / Job `133436820341` | **PASS** | 7m7s — Edge, mobile, responsive viewports, settings modal, onboarding E2E |
-| **Remote Semantic Search CI** | Run `43905887647` / Job `133434466980` | **PASS** | 48s — pgvector semantic search |
 
 ---
 
 ## 8. Production Authorization Package & Release Protocol
 
 ### Release State: ALL PRE-DEPLOYMENT CERTIFICATION GATES PASSED — STRICT NO-GO FOR DEPLOYMENT WITHOUT EXPLICIT OWNER SIGN-OFF
-All pre-deployment verification gates, automated CI checks, disaster recovery rehearsals, and positive interactive OAuth certifications have passed.
+All pre-deployment verification gates, automated CI checks, disaster recovery rehearsals, observed session revocation proofs, and positive interactive OAuth certifications have passed.
 
 Production execution remains strictly unauthorized pending explicit written owner sign-off for:
-1. Fast-forward or standard merge of PR #185 into `prod-release`.
+1. Fast-forward or standard merge of the verified candidate into `release/candidate-pr178-pr184-combined` and `prod-release`.
 2. Execution of production migration 032.
 3. Deployment to Vercel production.
 
 ### Operational Sequence Upon Owner Authorization:
-1. **Owner Production Authorization:** Repository owner issues explicit authorization to deploy.
-2. **Merge Authorization:** Fast-forward or standard merge PR #185 into `prod-release` (excluding PR #179).
-3. **Guarded Schema Migration 032:**
+1. **Approval Gate 1 (Candidate Promotion):** Merge verified review branch into `release/candidate-pr178-pr184-combined`.
+2. **Approval Gate 2 (Guarded Migration 032):**
    ```bash
    npx tsx scripts/run-guarded-migration-032.ts --target=production --authorize-production-migration-032-execute
    ```
-4. **Production Deployment & Smoke Test:**
+3. **Approval Gate 3 (Production Deployment & Smoke Test):**
    Deploy to Vercel production and execute smoke verification suite against `https://aira-ai-2026.vercel.app`.
-5. **Rollback Assurance:**
+4. **Rollback Assurance:**
    If unexpected production anomalies occur, rollback target `dpl_3vZXiXwBWgZeeAyiyUVgYixsNMb8` is preserved and immediately activatable.
