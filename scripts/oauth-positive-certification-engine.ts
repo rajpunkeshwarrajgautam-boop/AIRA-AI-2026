@@ -15,6 +15,7 @@
  */
 
 import crypto from 'node:crypto';
+import { hasObservedLogoutRevocation, type ObservedLogoutProof } from './oauth-observed-logout-proof.js';
 
 export type CertificationStatus = 'PASS' | 'FAIL' | 'BLOCKED' | 'NOT_RUN';
 
@@ -35,6 +36,7 @@ export interface ProviderPositiveEvidence {
   sessionObservedEndpoint: '/api/auth/session';
   sessionPersistedOnReload: boolean;
   logoutRevocationVerified: boolean;
+  logoutProof?: ObservedLogoutProof;
   freeTierEntitlementsVerified?: boolean;
   negativePathVerified?: boolean;
   sanitizedLogReference?: string;
@@ -242,8 +244,8 @@ export function evaluateProviderEvidence(
   if (!ev.sessionPersistedOnReload) {
     reasons.push('Session persistence across application reload was not verified');
   }
-  if (!ev.logoutRevocationVerified) {
-    reasons.push('Session logout and server-side revocation was not verified');
+  if (!ev.logoutRevocationVerified || !hasObservedLogoutRevocation(ev.logoutProof)) {
+    reasons.push('Missing observed authenticated logout and rejected replay of the previously valid BFF cookie');
   }
 
   // Determine status
@@ -271,7 +273,7 @@ export function evaluateProviderEvidence(
     internalPrincipalMappingResult: ev.principalMapped ? 'SUCCESS' : status === 'BLOCKED' ? 'BLOCKED' : 'FAILURE',
     applicationSessionStatus: ev.sessionStatus || 'INVALID',
     sessionPersistenceResult: ev.sessionPersistedOnReload ? 'PASS' : status === 'BLOCKED' ? 'BLOCKED' : 'FAIL',
-    logoutAndRevocationResult: ev.logoutRevocationVerified ? 'PASS' : status === 'BLOCKED' ? 'BLOCKED' : 'FAIL',
+    logoutAndRevocationResult: ev.logoutRevocationVerified && hasObservedLogoutRevocation(ev.logoutProof) ? 'PASS' : status === 'BLOCKED' ? 'BLOCKED' : 'FAIL',
     negativePathResults: ev.negativePathVerified ? 'PASS' : 'NOT_TESTED',
     sanitizedLogReference: ev.sanitizedLogReference || 'artifacts/staging-acceptance/OAUTH_POSITIVE_CERTIFICATION.log',
     finalStatus: status,
