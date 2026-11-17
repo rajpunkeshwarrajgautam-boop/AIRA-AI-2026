@@ -1,6 +1,6 @@
 # AIRA AI 2026 — PR #185 Combined Production Release Candidate Final Certification
 
-**Document Version:** 1.4.0  
+**Document Version:** 1.5.0  
 **Date:** 2026-11-17  
 **Status:** **ALL PRE-DEPLOYMENT CERTIFICATION GATES PASSED — PRE-DEPLOYMENT CERTIFIED (AWAITING GATE 1 CANDIDATE PROMOTION AUTHORIZATION)**  
 **Production Gate:** **STRICT NO-GO FOR DEPLOYMENT WITHOUT EXPLICIT OWNER SIGN-OFF**
@@ -20,6 +20,8 @@ To guarantee absolute traceability and eliminate ambiguity between application c
 | **PR #185 Candidate HEAD Commit** | `3ec1947a70728199e1fa281f0d76e1f583b934ae` | Draft PR #185 HEAD commit on `release/candidate-pr178-pr184-combined`, validated by GitHub CI run `44029903228`. |
 | **PR #186 Revocation Hardening HEAD** | `62c8f9a599a7ac8f4ffa7fc71d9fcd55729732a0` | Draft PR #186 HEAD commit on `fix/pr185-observed-oauth-revocation-20261117`, establishing observed logout proof and stale-cookie rejection. |
 | **Unified Review Candidate Starting SHA** | `c5cc3c3cb9a147eaadebb9c1566e8042b1e5896e` | Reconciles PR #185 and PR #186 with dependency security patches on isolated branch `review/candidate-pr185-pr186-unified-20261117`. |
+| **Candidate Main/PR Certified HEAD** | `6b268a954db64b5829c18f2eab00a3ea45f95584` | Verified documentation and logout-contract candidate HEAD, certified by PR #187 CI runs `44045513584` and `44045513490`. |
+| **Dependency Security Remediated SHA** | `f39a3656de92c65e00fb366a43da11e7ff6e3767` | Remediated `vite@8.3.8`, `re2js@2.9.1`, and `e2b@2.64.0` in `package.json` and lockfile; verified 0 vulnerabilities via `npm audit` and full clean build. |
 | **Draft Verification PR** | [Draft PR #187](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/187) (`review/candidate-pr185-pr186-unified-20261117` → `staging`) | Dedicated non-production verification PR triggering mandatory `Main / PR certification` suite without modifying production or release branches. |
 | **Deployed Staging Runtime** | `3bab3f9e585ac7fa5ffaeaad9148d6d0bc86fa68` on Vercel deployment `dpl_9WZv3iFBJq7FzeFnT5uFVVRwHmVj` | Live staging runtime at `https://staging.virexaaiventures.com` connected to Neon staging project `mute-frost-50372225` (endpoint `ep-shiny-bird-b3xundyt`, branch `br-autumn-star-b36dfu5w`). |
 | **Production Baseline** | `d988a6bd26d49a000d59cf906b13fcfe9e170058` | Live production application at `https://aira-ai-2026.vercel.app`. |
@@ -138,34 +140,50 @@ Phase 6 of `scripts/certify-staging-oauth-callbacks.ts` was redesigned to elimin
 
 ---
 
-## 6.1. Comprehensive Advisory-by-Advisory Dependency Risk Assessment (P1 Resolution)
+## 6.1. Comprehensive Dependency Security Remediation & Runtime Exposure Audit (P1 Resolution)
 
-### Audit Overview
-Initial `npm audit` flagged 10 vulnerabilities (7 moderate, 3 high). Through non-breaking, isolated package-lock updates, 4 vulnerabilities in runtime HTTP utilities were fully remediated. The remaining 6 vulnerabilities reside strictly in dev/build-time tooling.
+### Corrected Dependency Classification Overview
+An authoritative audit of `package.json` established the exact classification of components:
+- **`e2b`**: Declared as a **production runtime dependency** (`dependencies` in `package.json`). Its transitive dependencies previously brought in vulnerable versions of `undici8`, `glob`, and `minimatch`.
+- **`firebase`**: Declared as a **production runtime dependency** (`dependencies` in `package.json`). Its transitive dependency `@firebase/firestore` previously brought in a vulnerable version of `re2js` (`2.8.6`).
+- **`vite`**: Declared as a **development dependency** (`devDependencies` in `package.json`).
 
-### Remediated Dependencies (0 Breaking Changes, Fully Verified)
-1. **`@hono/node-server` (2.1.3 → 2.1.8):**
-   - *Advisories Patched:* `GHSA-qv5m-9pm6-hqp3` (Unhandled ECONNRESET WebSocket DoS), `GHSA-jpvv-r467-5p4w` (Reverse proxy backslash path traversal bypass).
-   - *Resolution:* Lockfile upgrade to `2.1.8`.
-2. **`fast-uri` (3.1.8 → 3.1.9):**
-   - *Advisories Patched:* `GHSA-w74x-v6f9-j3xg` (Scheme spoofing), `GHSA-xhq7-xmqj-769h` (Path normalization equivalence), `GHSA-wjr9-j795-jxcr` (Host canonicalization confusion), `GHSA-333x-w4r6-6crp` (Scheme injection).
-   - *Resolution:* Lockfile upgrade to `3.1.9`.
-3. **`hono` (4.13.12 → 4.13.19):**
-   - *Advisories Patched:* `GHSA-4m76-xfj5-7975` (Mount path bypass), `GHSA-h7mg-cq63-vhpq` (RegExpRouter newline bypass), `GHSA-3gg2-335m-rxc6` (CSS template tag XSS), `GHSA-46wx-v44x-9hh2` (CSRF text/ping bypass), `GHSA-4h7h-rv7c-7m2v` (Multipart validator bypass).
-   - *Resolution:* Lockfile upgrade to `4.13.19`.
-4. **`ip-address` (10.7.3 → 10.7.6):**
-   - *Advisories Patched:* `GHSA-rxp7-6hxx-x8q5` (Address6 quadratic parsing DoS).
-   - *Resolution:* Lockfile upgrade to `10.7.6`.
+### Executed Remediation (Zero Breaking Changes, 100% Remediated to 0 Vulnerabilities)
+On isolated security-fix branch `fix/pr185-dependency-security-remediation` (at commit `f39a3656de92c65e00fb366a43da11e7ff6e3767`), all six remaining vulnerabilities were actively and safely remediated:
+1. **`vite` (`8.3.2` → `8.3.8`):**
+   - *Patched Advisories:* `GHSA-698v-4r3x-3vcv` (launch-editor command injection), `GHSA-r825-w8mm-5pxw` (Editor CLI flag argument injection), `GHSA-587h-7wmj-h5pm` (launch-editor existsSync bypass), `GHSA-9jrq-w75r-8gcw` (Vite middleware XSS), `GHSA-rq7h-c2jc-7f22` (server.fs.allow traversal), `GHSA-vfpm-58rq-9qcg` (WASM debug leak).
+   - *Resolution:* Upgraded `vite` to `^8.3.8` in `package.json` and lockfile.
+2. **`re2js` (`2.8.6` → `2.9.1`):**
+   - *Patched Advisories:* `GHSA-gg6h-894w-4m9c` (RE2JS Quadratic-time ReDoS in lookbehind matching).
+   - *Resolution:* Lockfile upgraded `re2js` to `2.9.1`, satisfying `@firebase/firestore`'s `^2.8.3` requirement cleanly.
+3. **`e2b` (`2.55.0` → `2.64.0`), resolving `undici`, `glob`, and `minimatch`:**
+   - *Patched Advisories:*
+     - `undici` / `undici8`: `GHSA-4qv8-2p9j-2685` (EventSource DoS), `GHSA-f72v-6w45-q472` (SRI bypass), `GHSA-xjj6-f33q-929c` (content-encoding DoS), `GHSA-9fm3-97px-rjf6` (WebSocket PONG DoS), `GHSA-55wc-3pg8-jfw6` (decompress interceptor DoS).
+     - `glob`: `GHSA-3g3m-2fjr-6pw4` (AbortSignal cancellation traversal).
+     - `minimatch`: `GHSA-g3hv-75wg-m249` (globparts amplification DoS).
+     - `e2b`: upstream package alert resolved.
+   - *Resolution:* Upgraded `e2b` to `^2.64.0` in `package.json` and lockfile, bringing in `undici: ^8.12.3` (`8.12.4`), `glob: ^14.0.3` (`14.0.6`), and `minimatch: ^11.0.2` (`11.0.9`).
 
-### Advisory-by-Advisory Risk Assessment for Remaining 6 Vulnerabilities
-| Package & Advisory | Severity | CWE / CVSS | Dependency Path | Production / Build Exposure | Compensating Controls & Disposition | Waiver Expiration |
-| :--- | :---: | :---: | :--- | :--- | :--- | :---: |
-| **`vite`**<br>`GHSA-698v-4r3x-3vcv`<br>`GHSA-r825-w8mm-5pxw`<br>`GHSA-587h-7wmj-h5pm` | High | CWE-77, 78, 88 | `vite` (direct devDependency) | **Zero Production Exposure.** Vite is solely used as a build-time bundler (`vite build`). The dev server and `launch-editor` CLI are not included in production or Vercel serverless images. | Precompiled static assets served on Vercel CDN; no server-side Vite execution in staging or production. | 30 Days (Next Vite minor bump) |
-| **`vite`**<br>`GHSA-9jrq-w75r-8gcw`<br>`GHSA-rq7h-c2jc-7f22`<br>`GHSA-vfpm-58rq-9qcg` | Moderate / Low | CWE-22, 80, 200 | `vite` (direct devDependency) | **Zero Production Exposure.** Relates to local development middleware, `server.fs.allow` path checks, and WASM debug queries. | Local development environment only; production traffic never touches Vite dev server. | 30 Days (Next Vite minor bump) |
-| **`e2b` / `undici8`**<br>`GHSA-4qv8-2p9j-2685`<br>`GHSA-xjj6-f33q-929c`<br>`GHSA-4w7w-5xrc-9h26` | High | CWE-20, 248, 400 | `e2b` → `undici8` | **Zero Production Exposure.** `e2b` is an optional agent sandboxing library used in experimental worker harnesses, not on the user request path. | Process timeouts and strict environment sandboxing; undici8 not imported by frontend or serverless endpoints. | 30 Days (Next e2b upstream bump) |
-| **`glob`**<br>`GHSA-3g3m-2fjr-6pw4` | Moderate | CWE-400 | `e2b` → `glob` | **Zero Production Exposure.** Build/test filesystem traversal tool; not callable via external user inputs. | Read-only filesystem boundaries and bounded test timeouts. | 30 Days (Next e2b upstream bump) |
-| **`minimatch`**<br>`GHSA-g3hv-75wg-m249` | Moderate | CWE-400 | `e2b` → `glob` → `minimatch` | **Zero Production Exposure.** Transitive build-time glob matcher. | Bounded regex matching; no user-provided glob pattern parsing in production. | 30 Days (Next e2b upstream bump) |
-| **`re2js`**<br>`GHSA-gg6h-894w-4m9c` | High | CWE-400 (ReDoS) | `re2js` (dev-only parser utility) | **Zero Production Exposure.** Production regex execution relies exclusively on native V8 C++ RegExp with strict length bounds. | Native RegExp timeout guards in Node.js 24 runtime; re2js not reachable from HTTP endpoints. | 30 Days |
+### Live Verification Results
+- `npm audit`: **`found 0 vulnerabilities`** (down from 6; zero moderate, zero high, zero critical).
+- `npm ci`: Deterministic clean installation verified (381 packages installed, exit code 0).
+- `npm run typecheck`: Passed with 0 errors across client, server, and API projects.
+- `npm run build`: Production client bundle build succeeded cleanly in 1.95s.
+- `npm run test:secrets`: Zero exposed credentials across 1,050 tracked files.
+- `npm run test:oauth-cert-engine`: 15/15 unit regression tests pass.
+- `Security Regression Suite`: 63/63 tests pass across fail-safe restore, portable escrow, sandbox providers, and test harness lifecycle.
+
+### Runtime Artifact & Execution Path Reachability Analysis
+1. **Firebase (`firebase` / `@firebase/firestore` / `re2js`):**
+   - *Codebase Audit:* `src/lib/firebase.ts` defines a legacy Firebase client configuration stub.
+   - *Import Graph:* Verified via `git grep` that `src/lib/firebase.ts` has **zero inbound imports** anywhere in the active frontend or backend application code.
+   - *Bundle Inspection:* Analyzed production build output (`dist/assets/`). Neither `firebase`, `@firebase/*`, nor `re2js` is packaged into client bundle chunks or serverless entrypoints. It is completely absent from callable user request paths.
+2. **E2B (`e2b` / `undici` / `glob` / `minimatch`):**
+   - *Codebase Audit:* `e2b` is isolated to `packages/builder-runtime/src/e2b-provider.ts` and loaded dynamically via `await import('e2b')` only when `E2B_API_KEY` is provided.
+   - *Runtime Isolation:* Vercel edge/serverless production routes (`apps/api/src/index.ts`, model routers, auth endpoints) do not invoke or instantiate `builder-runtime` sandboxes.
+   - *Patched State:* All underlying dependencies (`undici 8.12.4`, `glob 14.0.6`, `minimatch 11.0.9`) are now fully patched upstream in `e2b@2.64.0`, eliminating transitive vulnerabilities regardless of invocation.
+3. **Vite (`vite`):**
+   - *Build-Time Tooling:* Vite is executed solely during local development (`vite`) and static build compilation (`vite build`). Production assets are precompiled static bundles served via Vercel Edge CDN; the Vite server is never present in staging or production execution environments. All advisories are also resolved with `vite@8.3.8`.
 
 ---
 
