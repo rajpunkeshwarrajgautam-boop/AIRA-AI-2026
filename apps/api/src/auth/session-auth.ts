@@ -159,10 +159,10 @@ function attachUser(req: Request, payload: VerifiedSessionPayload): void {
   (req as any).user = {
     id: payload.uid,
     sessionId: payload.sid,
-    isGuest: true,
-    tier: 'guest',
-    roles: ['guest_user'],
-    scopes: ['chat:write'],
+    isGuest,
+    tier: isGuest ? 'guest' : 'free',
+    roles: isGuest ? ['guest_user'] : ['workspace_user'],
+    scopes: isGuest ? ['chat:write'] : ['chat:write', 'runs:read', 'runs:write', 'browser.read', 'files.read'],
   };
 }
 

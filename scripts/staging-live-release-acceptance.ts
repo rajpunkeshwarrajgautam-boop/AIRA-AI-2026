@@ -16,6 +16,9 @@ import assert from 'node:assert/strict';
 import knex from 'knex';
 
 const STAGING_URL = process.env.AIRA_STAGING_URL || 'https://staging.virexaaiventures.com';
+if (STAGING_URL.includes('aira-ai-2026.vercel.app')) {
+  throw new Error('[SECURITY FATAL] AIRA_STAGING_URL points to production. Acceptance tests are forbidden against production.');
+}
 const DB_URL = process.env.DATABASE_URL || '';
 
 interface AcceptanceReport {

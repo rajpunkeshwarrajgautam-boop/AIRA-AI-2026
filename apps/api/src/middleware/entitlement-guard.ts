@@ -45,7 +45,7 @@ export async function resolveCallerTier(req: Request, _options: { failClosed?: b
   if (principalId && typeof principalId === 'string' && isGuestPrincipal(principalId)) {
     return 'guest';
   }
-  if (user?.isGuest === true) {
+  if (user?.isGuest === true && (!principal || isGuestPrincipal(principal.userId))) {
     return 'guest';
   }
 
@@ -124,8 +124,7 @@ export function requireEntitledModel(modelExtractor?: (req: Request) => string) 
       const callerTier = await resolveCallerTier(req, { failClosed: isRestrictedModel });
 
       if (!isModelAllowedForTier(model, callerTier)) {
-        const isPlusModel = isModelAllowedForTier(model, 'plus');
-        const requiredTier = isPlusModel ? 'plus' : 'pro';
+        const requiredTier = getMinimumRequiredTierForModel(model);
         const allowedModels = VERIFIED_PLAN_MODEL_ALLOWLIST[callerTier] || PLAN_MODEL_ALLOWLIST[callerTier] || [];
 
         res.status(403).json({

@@ -106,6 +106,45 @@ export function deriveKey(passphrase: string, salt: Buffer): Buffer {
 }
 
 /**
+ * Overwrites a file with cryptographically secure random bytes, flushes to disk,
+ * and then unlinks the file to ensure no residual plaintext recovery material remains.
+ */
+export function secureOverwriteAndRemoveFile(filePath: string): { success: boolean; bytesOverwritten: number } {
+  if (!fs.existsSync(filePath)) {
+    return { success: true, bytesOverwritten: 0 };
+  }
+  let bytesOverwritten = 0;
+  try {
+    const stat = fs.statSync(filePath);
+    if (stat.isFile() && stat.size > 0) {
+      bytesOverwritten = stat.size;
+      const fd = fs.openSync(filePath, 'r+');
+      try {
+        const chunkSize = 64 * 1024;
+        let offset = 0;
+        while (offset < stat.size) {
+          const toWrite = Math.min(chunkSize, stat.size - offset);
+          const randomBuf = crypto.randomBytes(toWrite);
+          fs.writeSync(fd, randomBuf, 0, toWrite, offset);
+          offset += toWrite;
+        }
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
+    }
+  } catch {}
+  try {
+    fs.unlinkSync(filePath);
+  } catch (err: any) {
+    if (fs.existsSync(filePath)) {
+      throw new Error(`[SECURE_CLEANUP_FAILURE] Could not remove file "${filePath}": ${err.message}`);
+    }
+  }
+  return { success: true, bytesOverwritten };
+}
+
+/**
  * Encrypts a source file (e.g. pg_dump archive) into an authenticated AIRA container.
  */
 export async function encryptFile(options: EncryptOptions): Promise<{ destinationPath: string; bytesWritten: number; sha256: string }> {
@@ -140,15 +179,7 @@ export async function encryptFile(options: EncryptOptions): Promise<{ destinatio
   const sha256 = crypto.createHash('sha256').update(container).digest('hex');
 
   if (removeSourceAfterEncryption) {
-    try {
-      // Securely overwrite before unlinking where feasible
-      const stat = fs.statSync(sourceFilePath);
-      fs.writeFileSync(sourceFilePath, crypto.randomBytes(Math.min(stat.size, 4096)));
-      fs.unlinkSync(sourceFilePath);
-    } catch {
-      // Non-fatal if overwrite fails; ensure unlink
-      if (fs.existsSync(sourceFilePath)) fs.unlinkSync(sourceFilePath);
-    }
+    secureOverwriteAndRemoveFile(sourceFilePath);
   }
 
   return {

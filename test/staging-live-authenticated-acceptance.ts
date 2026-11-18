@@ -9,8 +9,17 @@ import {
   STAGING_NEON_PROJECT_ID
 } from '../packages/db/src/security/database-isolation-guard.js';
 import { resolveStagingLiveAcceptanceConfig } from './staging-live-acceptance-config.js';
+import {
+  validateStagingTargetUrl,
+  validateStagingDatabaseUrl,
+  StagingFixtureTracker
+} from './helpers/staging-test-fixture-lifecycle.js';
 
 const config = resolveStagingLiveAcceptanceConfig(process.env);
+validateStagingTargetUrl(config.previewUrl);
+validateStagingDatabaseUrl(config.stagingDatabaseUrl);
+
+const fixtureTracker = new StagingFixtureTracker(`acceptance_${Date.now()}`);
 const PREVIEW_URL = config.previewUrl;
 const VERCEL_BYPASS_SECRET = config.bypassSecret;
 const ISOLATED_BRANCH_ID = config.isolatedBranchId;
@@ -144,6 +153,7 @@ async function main() {
 
   // User A creates conversation fixture
   const convId = `conv_test_${Date.now()}`;
+  fixtureTracker.trackItem(convId, 'conversation', principalA);
   const convSyncRes = await fetch(`${PREVIEW_URL}/api/conversations/sync`, {
     method: 'POST',
     headers: {
@@ -424,14 +434,20 @@ async function main() {
     await browser.close();
   }
 
-  // Cleanup disposable test conversation
-  await fetch(`${PREVIEW_URL}/api/conversations/${convId}`, {
-    method: 'DELETE',
-    headers: {
-      Authorization: `Bearer ${jwtA}`,
-      'x-vercel-protection-bypass': VERCEL_BYPASS_SECRET
+  // Cleanup disposable test fixtures safely via lifecycle tracker
+  await fixtureTracker.cleanup({
+    deleteConversation: async (id, ownerPrincipalId) => {
+      if (ownerPrincipalId !== principalA) return false;
+      const res = await fetch(`${PREVIEW_URL}/api/conversations/${id}`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${jwtA}`,
+          'x-vercel-protection-bypass': VERCEL_BYPASS_SECRET
+        }
+      }).catch(() => null);
+      return res ? res.ok : false;
     }
-  }).catch(() => {});
+  });
 
   console.log('\n========================================================================');
   console.log('  LIVE AUTHENTICATED AGENT ACCEPTANCE: ALL PHASES PASSED (100%)');

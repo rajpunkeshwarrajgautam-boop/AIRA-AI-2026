@@ -25,8 +25,16 @@ function parseSegment<T>(segment: string): T {
 }
 
 function authConfig() {
-  const base = process.env.NEON_AUTH_BASE_URL;
-  const jwks = process.env.NEON_AUTH_JWKS_URL;
+  const isActualProduction =
+    process.env.VERCEL_ENV === 'production' ||
+    process.env.VERCEL_GIT_COMMIT_REF === 'prod-release';
+
+  const defaultBase = isActualProduction
+    ? undefined
+    : 'https://ep-ancient-sound-b3drtnp5.neonauth.c-4.ap-southeast-1.aws.neon.tech/neondb/auth';
+
+  const base = process.env.NEON_AUTH_BASE_URL || defaultBase;
+  const jwks = process.env.NEON_AUTH_JWKS_URL || (base ? `${base}/.well-known/jwks.json` : undefined);
   if (!base || !jwks) throw new Error('NEON_AUTH_NOT_CONFIGURED');
   const authUrl = new URL(base);
   const jwksUrl = new URL(jwks);
@@ -154,6 +162,8 @@ export function createNeonAuthPrincipalMiddleware() {
       (req as any).user = {
         id: identity.userId,
         sessionId: identity.sessionId,
+        isGuest: false,
+        tier: 'free',
         roles: ['workspace_user'],
         scopes: ['chat:write', 'runs:read', 'runs:write', 'browser.read', 'files.read']
       };

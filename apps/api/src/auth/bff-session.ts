@@ -263,7 +263,17 @@ function getAuthBaseUrl(): string {
   const configured = process.env.NEON_AUTH_BASE_URL?.trim();
   if (configured) return configured;
 
-  if (process.env.NODE_ENV === 'production') {
+  const isStaging =
+    process.env.VERCEL_ENV === 'preview' ||
+    process.env.VERCEL_GIT_COMMIT_REF === 'staging' ||
+    process.env.AIRA_ENVIRONMENT === 'staging';
+
+  const isActualProduction =
+    process.env.VERCEL_ENV === 'production' ||
+    process.env.VERCEL_GIT_COMMIT_REF === 'prod-release' ||
+    (process.env.NODE_ENV === 'production' && !isStaging);
+
+  if (isActualProduction) {
     throw new Error('NEON_AUTH_BASE_URL is unconfigured in production environment. Refusing to fallback to staging URL.');
   }
 
@@ -762,6 +772,8 @@ export function createBffSessionMiddleware(sessionStore: BffSessionStore = bffSe
       (req as any).user = {
         id: identity.userId,
         sessionId: session.id,
+        isGuest: false,
+        tier: 'free',
         roles: ['workspace_user'],
         scopes: ['chat:write', 'runs:read', 'runs:write', 'browser.read', 'files.read']
       };

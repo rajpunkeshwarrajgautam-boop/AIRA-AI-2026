@@ -1,0 +1,107 @@
+# PR #178 — Production Workflow Artifacts Schema Drift Preflight & Guarded Procedure
+
+**Scope:** Isolated, additive repair for `public.workflow_runs.artifacts` and production recovery safeguards.
+This change does not authorize deployment, production SQL execution, or a merge of PR #178 / #179.
+
+## Verified Discrepancy & Catalog Reconciliation (2026-11-15)
+
+- Production Neon project `old-sky-50952395`, main branch `br-shiny-moon-b3vy9xj7`, PostgreSQL 18.7: `workflow_runs.artifacts` is absent. `knex_migrations` contains `010_workflow_runs_artifacts.ts`. At inspection, `workflow_runs` has **0 rows**.
+- Staging Neon project `mute-frost-50372225` has `workflow_runs.artifacts` as JSONB.
+- Prior migration 010 uses `table.jsonb('artifacts').defaultTo('[]')`; its `down()` drops the column. The independent 032 repair reproduces only the missing additive postcondition and refuses destructive rollback.
+- PR #179 also contains `032_workspace_experience.ts` with onboarding and other schema changes. The two migration filenames differ; PR #183 / this hardening branch is completely decoupled from PR #179. This repair does **not** apply onboarding or mutate user data.
+
+## Recovery & Safeguard Status
+
+- **Encrypted Production Backup:** Created fresh AEAD AES-256-GCM encrypted backup `aira_prod_main_backup_20261115175000_fresh.dump.enc` (SHA256: `7d49ab20ffa199db3a6d3f26e62d1eecd27f90556f74d7eb49f1dc0380049877`).
+- **Fail-Closed Passphrase Enforcement:** Removed all deterministic fallback passphrases from backup scripts (`scripts/prod-backup-and-restore-rehearsal.ts`, `scripts/validate-pg18-backup-restore.ts`). The scripts strictly require an explicit encryption secret and abort immediately if absent.
+- **Portable Key Escrow Envelope:** Implemented portable AES-256-GCM envelope via `scrypt` (N=32768, r=8, p=1, maxmem=128MB) in `scripts/portable-recovery-escrow.ts`. Sourced from local DPAPI store or environment, encrypted under an independent user passphrase, and exported to off-host storage without writing to `C:\`.
+- **PostgreSQL 18 Restoration Parity:** 100% exact parity verified via `scripts/fail-safe-restore-auditor.ts`: 48 exact tables, 12,464 rows, 459 constraints (100 relational + 359 NOT NULL), 141 indexes, 3 sequences, and 0 orphaned foreign keys.
+- **Preservation:** Original backup archive `...131728.dump.enc` and rollback deployment `dpl_3vZXiXwBWgZeeAyiyUVgYixsNMb8` are preserved intact.
+
+## Guarded Execution Procedure (`scripts/run-guarded-migration-032.ts`)
+
+### Exact Approved CLI Command Syntax
+```bash
+# Production Execution (strictly requires owner approval + authorization flag)
+npx tsx scripts/run-guarded-migration-032.ts --target=production --authorize-production-migration-032-execute
+
+# Approved Rehearsal Branch Execution
+npx tsx scripts/run-guarded-migration-032.ts --target=rehearsal
+
+# Disposable Test / Isolated CI Execution
+npx tsx scripts/run-guarded-migration-032.ts --target=disposable_test
+```
+
+1. **Strict CLI Argument Validation:** Rejects any positional arguments, unrecognized flags, duplicate flags, conflicting flags, or missing target flags. Positional target specification is forbidden.
+2. **Target Validation & Exact Host Parsing:** Parses the connection URL, strictly extracts hostname and endpoint prefix via `URL.hostname`. Verifies exact equality against production Neon endpoint `ep-withered-art-b36ox90b` (for production) or `ep-lively-truth-b3im2z2q` (for rehearsal). Rejects substring matches and spoofed domains.
+3. **Pending Migration Quarantine & Catalog Fail-Closed:** Scans filesystem and database migration ledger. Fails closed if the migration directory or authorized migration file is missing, or if ANY unapplied migration exists other than `032_reconcile_workflow_run_artifacts.ts` (quarantining Workspace V3).
+4. **Recorded Migration Schema Verification:** If migration 032 is recorded in `knex_migrations`, verifies that `workflow_runs` table exists, `artifacts` column is present, and column data type is `jsonb`. Fails closed with `[CORRUPT_SCHEMA_ERROR]` if recorded without valid schema.
+5. **Session Advisory Lock & Knex Lock Coordination:** Acquires session advisory lock `pg_try_advisory_lock(1095325257, 32)` for mutual exclusion between runners, and actively acquires/releases `knex_migrations_lock` to prevent conflict with standard concurrent Knex migrations.
+6. **Dedicated Backend Connection & Bounded Timeouts:** Enforces session-level and transaction-level bounded locking:
+   ```sql
+   SET LOCAL lock_timeout = '2s';
+   SET LOCAL statement_timeout = '5s';
+   ```
+   If lock contention occurs, PostgreSQL aborts within 1-2 seconds with clean rollback.
+7. **Pre-Commit Verification & Atomic Execution:** Checks table existence, adds JSONB column with default `'[]'::jsonb`, atomically inserts ledger row, and strictly verifies JSONB data type, `'[]'` default, nullability, and row count **before COMMIT**. If any postcondition fails, the transaction is immediately rolled back.
+8. **Rollback & Idempotency:** Automatically executes `ROLLBACK` on error. Re-running after completion is a clean idempotent no-op.
+
+---
+
+## Safe Knex Migration Lock Recovery Runbook & Operational Protocol
+
+### 1. Fail-Closed Invariants
+- The guarded migration runner strictly requires `knex_migrations_lock` to exist, contain valid columns (`index` and `is_locked`), and contain the required lock row (`index = 1`).
+- The runner **never** automatically clears a lock on failure or unexpected termination. A stale lock remains locked until manual investigation, preventing concurrent migration processes from conflicting.
+- If lock release fails in `finally`, the runner immediately bubbles a fatal operational error `[LOCK_RELEASE_OPERATIONAL_FAILURE]`.
+
+### 2. Manual Lock Inspection & Verification Procedure
+Before clearing any lock, an authorized engineer must execute these four diagnostic steps:
+
+1. **Verify No In-Flight Migration Processes:**
+   ```sql
+   SELECT pid, state, query_start, age(clock_timestamp(), query_start) as duration, query
+   FROM pg_stat_activity
+   WHERE datname = current_database()
+     AND pid <> pg_backend_pid()
+     AND (query ILIKE '%migration%' OR query ILIKE '%workflow_runs%');
+   ```
+   *Requirement:* Ensure 0 active backend workers are executing migration queries. If a stuck process exists, terminate it safely via `SELECT pg_terminate_backend(<pid>);`.
+
+2. **Verify Physical Table & Column Schema:**
+   ```sql
+   SELECT column_name, data_type, column_default, is_nullable
+   FROM information_schema.columns
+   WHERE table_name = 'workflow_runs' AND column_name = 'artifacts';
+   ```
+   *Evaluation:* Determine if `artifacts` column was added or is absent.
+
+3. **Verify Knex Migration Ledger Consistency:**
+   ```sql
+   SELECT id, name, batch, migration_time
+   FROM knex_migrations
+   ORDER BY id DESC
+   LIMIT 5;
+   ```
+   *Evaluation:* Determine if `032_reconcile_workflow_run_artifacts.ts` was recorded or if the transaction cleanly rolled back.
+
+4. **Explicit Authorized Lock Repair (Single-Statement):**
+   *Only* after confirming that no active process is running and schema/ledger state is completely verified:
+   ```sql
+   UPDATE knex_migrations_lock SET is_locked = 0 WHERE index = 1;
+   ```
+
+---
+
+## Portable Off-Device Key Escrow & DR Runbook
+
+1. **Approved Removable Storage Destination:**
+   The portable escrow CLI strictly rejects internal system drives (`C:\`). An external or removable volume (e.g. `E:\AIRA_RECOVERY_ESCROW\`) must be connected.
+2. **Zero-Secret Handling Standard:**
+   Passing raw keys or passphrases via `--backup-key` or `--recovery-passphrase` is rejected in production to prevent exposure in PowerShell history (`Get-History`, `ConsoleHost_history.txt`), process lists, and terminal logs.
+3. **Approved Execution Methods:**
+   - **Interactive Prompt:** Run without flags; script prompts for the recovery passphrase with non-echoing masked characters (`*`).
+   - **Protected Local Store:** Sourced automatically from Windows DPAPI (`tryReadDpapiEscrowKey()`).
+   - **Ephemeral Session Env:** `$env:AIRA_RECOVERY_PASSPHRASE="<passphrase>"` cleared immediately via `Remove-Item env:AIRA_RECOVERY_PASSPHRASE`.
+4. **Envelope Writing & Self-Healing Cleanup:**
+   Every written envelope immediately executes an in-memory decrypt-and-authenticate verification. If write or verification fails, partial or corrupted envelope files are deleted immediately to ensure zero invalid recovery artifacts persist.

@@ -16,7 +16,7 @@
  *    - OFFLINE MODE (--offline / auto-detect when tooling/target DB is absent):
  *      Does NOT fabricate pg_dump archives, synthetic byte counts (e.g. 184,320 bytes), mock SHA256
  *      hashes, or simulated row counts. Honestly reports host environment status and executes a
- *      comprehensive schema AST & migration contract audit across all 31 migration files on disk,
+ *      comprehensive schema AST & migration contract audit across every explicitly reviewed migration file on disk,
  *      verifying definitions for all 48 tables, relational constraints, indexes, and deploy contracts.
  * 
  * 2. Strict Security Boundaries:
@@ -60,7 +60,7 @@ function findRepoRoot(startDir: string): string {
 const REPO_ROOT = findRepoRoot(__dirname);
 
 // ============================================================================
-// 1. Authoritative Migration Catalog (31 Migrations: 001 to 031)
+// 1. Authoritative Migration Catalog (fail closed on unexpected or missing files)
 // ============================================================================
 export const EXPECTED_MIGRATIONS = Object.freeze([
   '001_initial_schema.ts',
@@ -93,7 +93,8 @@ export const EXPECTED_MIGRATIONS = Object.freeze([
   '028_approval_resumption_outbox.ts',
   '029_authoritative_approval_resumption_targets.ts',
   '030_principal_workspace_authority.ts',
-  '031_autonomous_agent_tasks.ts'
+  '031_autonomous_agent_tasks.ts',
+  '032_reconcile_workflow_run_artifacts.ts'
 ]);
 
 // ============================================================================
@@ -809,7 +810,7 @@ export async function runDisposableRestoreRehearsal(
   console.log('[MODE] OFFLINE MIGRATION & SCHEMA CONTRACT VALIDATION (NON-FACADE)');
   console.log('[STEP 1/5] Auditing local migration directory (packages/db/src/migrations)...');
   const offlineResult = await runOfflineContractAudit();
-  console.log(`  ✓ All ${offlineResult.diskMigrationsCount} migration files verified sequentially on disk (001 to 031).\n`);
+  console.log(`  ✓ All ${offlineResult.diskMigrationsCount} migration files verified against the explicit catalog.\n`);
 
   console.log('[STEP 2/5] Parsing migration definitions for table catalog & schema structures...');
   console.log(`  ✓ ${offlineResult.totalDiscoveredTables} tables discovered and verified against catalog (46 application + 2 knex metadata).`);
@@ -846,7 +847,7 @@ export async function runDisposableRestoreRehearsal(
   console.log('================================================================================');
   console.log(`  - Mode:                OFFLINE CONTRACT AUDIT (Host lacks pg_dump / disposable DB)`);
   console.log(`  - Timestamp:           ${report.timestamp}`);
-  console.log(`  - Migrations Verified: ${report.totalMigrationsVerified} / 31 (PASS)`);
+  console.log(`  - Migrations Verified: ${report.totalMigrationsVerified} / ${EXPECTED_MIGRATIONS.length} (PASS)`);
   console.log(`  - Tables Audited:      ${report.totalTablesAudited} / 48 (PASS)`);
   console.log(`  - Foreign Key Parity:  PASS (${report.foreignKeysVerified} definitions in AST)`);
   console.log(`  - Index Parity:        PASS (${report.indexesVerified} definitions in AST)`);

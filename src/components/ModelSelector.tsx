@@ -26,7 +26,7 @@ const getRequiredTierForModel = (modelId: string): 'free' | 'plus' | 'pro' => {
   return 'pro';
 };
 
-export const resolveModelUpgradeTrigger = (modelId: string, currentTier: PlanTier = 'free'): string | null => {
+export const resolveModelUpgradeTrigger = (modelId: string, currentTier: PlanTier = 'guest'): string | null => {
   if (isModelAllowedForTier(modelId, currentTier)) {
     return null;
   }
@@ -57,7 +57,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   onSelectModel,
   extendedThinking,
   onToggleThinking,
-  userTier = 'free',
+  userTier = 'guest',
   onTriggerUpgrade,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -211,7 +211,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                 const focused = model.id === activeRow;
                 const Icon = modelGlyph(model.name);
                 const requiredTier = getRequiredTierForModel(model.id);
-                const isAllowed = userTier === 'pro' || isModelAllowedForTier(model.id, userTier || 'free');
+                const isAllowed = userTier === 'pro' || isModelAllowedForTier(model.id, userTier || 'guest');
 
                 return (
                   <button

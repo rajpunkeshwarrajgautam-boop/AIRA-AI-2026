@@ -211,13 +211,25 @@ app.use(createCsrfProtectionMiddleware());
 registerBffRoutes(app);
 
 // Authoritative deployment identity endpoint for Preview and Release certification
-const versionHandler = (_req: Request, res: Response) => {
+const versionHandler = (req: Request, res: Response) => {
+  const host = (req.headers['x-forwarded-host'] || req.headers.host || '') as string;
+  const isStagingHost = host.includes('staging.virexaaiventures.com') ||
+    host.includes('aira-ai-2026-git-staging') ||
+    process.env.VERCEL_GIT_COMMIT_REF === 'staging';
+
+  const env = process.env.AIRA_ENVIRONMENT ||
+    (isStagingHost ? 'staging' : undefined) ||
+    (process.env.VERCEL_ENV === 'preview' ? 'preview' : undefined) ||
+    process.env.VERCEL_ENV ||
+    process.env.NODE_ENV ||
+    'production';
+
   res.json({
     status: 'ok',
     version: '1.0.0',
     commitSha: process.env.VERCEL_GIT_COMMIT_SHA || process.env.GITHUB_SHA || process.env.COMMIT_SHA || 'unknown',
     deploymentUrl: process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'unknown',
-    environment: process.env.NODE_ENV || 'production'
+    environment: env
   });
 };
 app.get('/api/version', versionHandler);
@@ -2059,8 +2071,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     const allowedModels = PLAN_MODEL_ALLOWLIST[tier] || [];
 
     if (!isModelAllowedForTier(model, tier)) {
-      const isPlusModel = isModelAllowedForTier(model, 'plus');
-      const requiredTier = isPlusModel ? 'plus' : 'pro';
+      const requiredTier = getMinimumRequiredTierForModel(model);
       return res.status(403).json({
         error: 'PLAN_MODEL_RESTRICTED',
         message: `Model '${model}' requires higher plan tier`,
