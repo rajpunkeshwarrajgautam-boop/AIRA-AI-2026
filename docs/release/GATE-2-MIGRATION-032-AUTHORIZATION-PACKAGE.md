@@ -1,6 +1,6 @@
 # Gate 2 Migration 032 Authorization Package & Database Recovery Specification
 
-> **Post-Approval A state — 2026-11-18 (source-of-truth GitHub verification).** PR #189 merged into `release/candidate-pr178-pr184-combined` at exact merge SHA `4b2074776f790d23fa93fa320a52a4ceed361eeb`. Its original PR HEAD was `415ba39b0de306e38bc92c5e811a217081d0f21d`; the earlier Gate 1 SHA `3040b14bdb398a2ac00dd6d85b599cf5eb0a003a` is historical. New post-merge CI was triggered on `4b2074776f790d23fa93fa320a52a4ceed361eeb`; **certification is pending final check results** until separately verified. Gate 2 remains **NO-GO/LOCKED**: no production recovery checkpoint was created and migration 032 is absent. Nothing in this document authorizes production mutation or Gate 3.
+> **Post-Approval A state — 2026-11-18 (source-of-truth GitHub verification).** PR #189 merged into `release/candidate-pr178-pr184-combined` at exact merge SHA `4b2074776f790d23fa93fa320a52a4ceed361eeb`. Its original PR HEAD was `415ba39b0de306e38bc92c5e811a217081d0f21d`; the earlier Gate 1 SHA `3040b14bdb398a2ac00dd6d85b599cf5eb0a003a` is historical. New post-merge CI was triggered on `4b2074776f790d23fa93fa320a52a4ceed361eeb`; **post-merge exact-SHA certification PASSED**: GitHub Actions pull-request CI run `44333113390` completed `success` on merge SHA `4b2074776f790d23fa93fa320a52a4ceed361eeb` (updated 2026-11-18 15:26:45 UTC). Main / PR certification job `134905086631`, Fast CI, and Semantic Search CI passed; isolated PostgreSQL certification run `44333113399` passed; GitGuardian passed. Deployed staging acceptance remains conditionally skipped under its workflow trigger. The browser job’s E2E server-log upload was skipped, but responsive evidence artifact `aira-responsive-local-44333113390-1` is present. Gate 2 remains **NO-GO/LOCKED**: no production recovery checkpoint was created and migration 032 is absent. Nothing in this document authorizes production mutation or Gate 3.
 
 
 **Target Environment:** Neon Production (`old-sky-50952395`)  
@@ -205,7 +205,7 @@ This checklist defines the strict, ordered sequence for Gate 2 execution once ex
 - **Blocker B (Recovery capacity):** **CAPACITY RESOLVED** by provider `owner.branches_limit=5000` and 10 existing branches. **RESTORE READINESS REMAINS UNVERIFIED**: no fresh production recovery checkpoint or restore validation has been completed. Gate 2 remains NO-GO pending separate explicit approval and operational recovery checks.
 
 ### Gate 2 Release Verdict:
-**GO-READY** for authorized execution.
+**NO-GO / LOCKED for production execution** until a fresh approved checkpoint and recovery procedure are verified; production migration remains absent. Post-merge code certification has passed.
 
-### Sole Pending Decision: Gate 2 Production Migration 032 Execution
-> **"Authorize Gate 2: Merge PR #189 into `release/candidate-pr178-pr184-combined`, create pre-cutover recovery checkpoint on Neon project `old-sky-50952395`, and execute guarded migration 032."**
+### Remaining decision: separate Gate 2 production recovery and migration authorization
+> **Proposed request, not approval:** "Authorize creation and verification of a fresh pre-migration recovery checkpoint and a fresh logical backup on Neon project `old-sky-50952395`, branch `br-shiny-moon-b3vy9xj7`, then execute guarded migration 032 with the existing runner only after every checkpoint, recovery, database-identity, migration-ledger, lock, and data-integrity preflight passes. Abort on any failure. Do not change `prod-release`, Vercel production configuration, or execute Gate 3."
