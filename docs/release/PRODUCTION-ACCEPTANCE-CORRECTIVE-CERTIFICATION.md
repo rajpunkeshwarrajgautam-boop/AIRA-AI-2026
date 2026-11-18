@@ -127,9 +127,15 @@ To lift the remaining `BLOCKED` status and achieve full certification:
    - Supply or authenticate a secondary Google or GitHub account that has **never** been linked to `rajpunkeshwarrajgautam@gmail.com`.
    - The harness will execute a read probe from Account B targeting Account A's workflow run (`wfrun_run_e9eaa9f5-4`) and certify HTTP 403 / 404 non-owner boundary protection.
 2. **Provision Paid Test Account (If Paid Scope is Desired for Release Certification):**
-   - Upgrade a test account to Pro/Enterprise in the production database or billing portal.
+   - Provide an existing legitimately paid, owner-authorized test principal. Never modify production subscription tables or billing state to manufacture a paid test account; paid-tier acceptance stays BLOCKED if none exists.
    - Run model allowlist and elevated quota verification.
 3. **Preserve Production Safety Baseline:**
    - Neon checkpoint `br-orange-art-b3vzajv0` remains preserved.
    - Encrypted backup archive `aira_prod_main_backup_20261118160905.dump.enc` remains preserved.
    - Rollback target `dpl_3vZXiXwBWgZeeAyiyUVgYixsNMb8` remains preserved.
+
+## 6. Post-report security and exact-SHA CI correction (2026-11-18)
+
+The prior remediation SHA `f2806871ba0f7cdf403c2b205b8adf8ce824efee` did **not** pass exact-SHA CI. GitHub Actions run `44369603261` failed in Fast CI at `test:secrets`, identifying a password-bearing PostgreSQL connection URL tracked in `docs/release/GATE-2-MIGRATION-032-AUTHORIZATION-PACKAGE.md`. The URL has been redacted in isolated follow-up commits without printing it. This does not remove the original string from Git history or establish that the credential is revoked. The owner must assess validity, rotate/revoke if needed, audit reuse and affected environments, and arrange appropriate history remediation. No new exact-SHA CI PASS is claimed until confirmed. The reported 14/14 local tests do not replace Fast CI.
+
+Remaining harness limitations: `preDispatchBudgetGuard` estimates prompt tokens by character length and uses a default model rate, so it is not a provider-enforced monetary cap. Free-tier result assembly substitutes `free` and `15` fallback values, so server-authoritative enforcement is not proven by the current harness. These gaps require corrective regression testing before full certification.
