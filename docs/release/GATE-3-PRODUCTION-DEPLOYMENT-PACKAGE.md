@@ -5,7 +5,7 @@
 **Production Git Branch:** `prod-release`  
 **Current Production SHA:** `d988a6bd26d49a000d59cf906b13fcfe9e170058`  
 **Known Good Rollback Deployment:** `dpl_3vZXiXwBWgZeeAyiyUVgYixsNMb8` (Ready, Nov 14 2026)  
-**Target Release Candidate SHA:** `415ba39b1a5e173e6d1c4ea3ee6406e22e5797f7` (PR #189)  
+**Target Release Candidate SHA:** `415ba39b0de306e38bc92c5e811a217081d0f21d` (PR #189)  
 **Status:** **LOCKED — GATED BY GATE 2 SUCCESS & EXPLICIT OWNER DEPLOYMENT APPROVAL**  
 *(Strict Policy: Zero Production Deployments Without Explicit Written Authorization)*
 
