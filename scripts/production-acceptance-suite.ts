@@ -183,6 +183,19 @@ export function parseAndReconstructSseStream(rawText: string): ReconstructedSseS
   };
 }
 
+export interface ModelPricing {
+  promptPerMillion: number;
+  completionPerMillion: number;
+  blendedPerMillion: number;
+}
+
+export const MODEL_PRICING_TABLE: Record<string, ModelPricing> = {
+  'aira-fast': { promptPerMillion: 0.59, completionPerMillion: 0.79, blendedPerMillion: 0.69 },
+  'llama-3.3-70b-versatile': { promptPerMillion: 0.59, completionPerMillion: 0.79, blendedPerMillion: 0.69 },
+  'aira-auto': { promptPerMillion: 0.60, completionPerMillion: 0.60, blendedPerMillion: 0.60 },
+  'gemini-1.5-flash': { promptPerMillion: 0.075, completionPerMillion: 0.30, blendedPerMillion: 0.1875 }
+};
+
 export interface BudgetGuardResult {
   allowed: boolean;
   estimatedPromptTokens: number;
@@ -190,32 +203,62 @@ export interface BudgetGuardResult {
   estimatedCostUsd: number;
   newProjectedTotalUsd: number;
   budgetCeilingUsd: number;
+  rejectionReason?: string;
+  enforcementNature: 'CLIENT_SAFETY_TRIPWIRE';
 }
 
 /**
  * Pre-dispatch budget ceiling verification.
- * Calculates worst-case consumption before sending HTTP request to inference provider.
+ * Client-side safety tripwire that prevents dispatching requests when projected cost exceeds authorization.
+ * NOTE: This is a client-side gate and does not represent an upstream provider-enforced monetary cap.
  */
 export function preDispatchBudgetGuard(
   currentSpendUsd: number,
   budgetCeilingUsd: number,
   promptText: string,
   modelName: string,
-  maxExpectedCompletionTokens: number = 64,
-  ratePerMillion: number = 0.60
+  maxExpectedCompletionTokens: number = 64
 ): BudgetGuardResult {
+  if (currentSpendUsd >= budgetCeilingUsd) {
+    return {
+      allowed: false,
+      estimatedPromptTokens: 0,
+      maxExpectedTokens: 0,
+      estimatedCostUsd: 0,
+      newProjectedTotalUsd: currentSpendUsd,
+      budgetCeilingUsd,
+      rejectionReason: `Current spend ($${currentSpendUsd.toFixed(6)}) has already reached or exceeded budget ceiling ($${budgetCeilingUsd.toFixed(6)}).`,
+      enforcementNature: 'CLIENT_SAFETY_TRIPWIRE'
+    };
+  }
+
+  const pricing = MODEL_PRICING_TABLE[modelName] || MODEL_PRICING_TABLE['aira-fast'];
   const estimatedPromptTokens = Math.max(1, Math.ceil(promptText.length / 3)) + 10;
   const maxExpectedTokens = estimatedPromptTokens + maxExpectedCompletionTokens;
-  const estimatedCostUsd = (maxExpectedTokens / 1_000_000) * ratePerMillion;
+  const estimatedCostUsd = (maxExpectedTokens / 1_000_000) * pricing.blendedPerMillion;
   const newProjectedTotalUsd = currentSpendUsd + estimatedCostUsd;
 
+  if (newProjectedTotalUsd > budgetCeilingUsd) {
+    return {
+      allowed: false,
+      estimatedPromptTokens,
+      maxExpectedTokens,
+      estimatedCostUsd,
+      newProjectedTotalUsd,
+      budgetCeilingUsd,
+      rejectionReason: `Projected spend ($${newProjectedTotalUsd.toFixed(6)}) exceeds budget ceiling ($${budgetCeilingUsd.toFixed(6)}).`,
+      enforcementNature: 'CLIENT_SAFETY_TRIPWIRE'
+    };
+  }
+
   return {
-    allowed: newProjectedTotalUsd <= budgetCeilingUsd,
+    allowed: true,
     estimatedPromptTokens,
     maxExpectedTokens,
     estimatedCostUsd,
     newProjectedTotalUsd,
-    budgetCeilingUsd
+    budgetCeilingUsd,
+    enforcementNature: 'CLIENT_SAFETY_TRIPWIRE'
   };
 }
 
@@ -224,29 +267,223 @@ export interface TokenUsageResult {
   completionTokens: number;
   totalTokens: number;
   costUsd: number;
-  accountingType: 'ESTIMATED' | 'AUTHORITATIVE';
+  accountingType: 'AUTHORITATIVE' | 'ESTIMATED' | 'UNKNOWN';
+  model: string;
+  provider: string;
 }
 
 /**
  * Post-dispatch token accounting.
- * Computes actual/estimated token counts from prompt and reconstructed text.
+ * Inspects stream events for authoritative token records from provider/server.
+ * Falls back to estimated token counts only when provider usage events are absent.
  */
 export function calculateTokenUsageAndCost(
   promptText: string,
   reconstructedText: string,
-  ratePerMillion: number = 0.60
+  modelName: string = 'aira-fast',
+  rawStreamEvents?: ParsedSseEvent[]
 ): TokenUsageResult {
+  const pricing = MODEL_PRICING_TABLE[modelName] || MODEL_PRICING_TABLE['aira-fast'];
+
+  let authoritativePromptTokens: number | undefined;
+  let authoritativeCompletionTokens: number | undefined;
+  let provider = 'unknown';
+  let executedModel = modelName;
+
+  if (rawStreamEvents && rawStreamEvents.length > 0) {
+    for (const evt of rawStreamEvents) {
+      if (evt.event === 'model_provenance') {
+        if (evt.parsedData?.provider) provider = evt.parsedData.provider;
+        if (evt.parsedData?.executedModel) executedModel = evt.parsedData.executedModel;
+      }
+      if (evt.event === 'latency_metrics') {
+        if (evt.parsedData?.provider) provider = evt.parsedData.provider;
+        if (evt.parsedData?.executedModel) executedModel = evt.parsedData.executedModel;
+        if (typeof evt.parsedData?.deltaCount === 'number') {
+          authoritativeCompletionTokens = evt.parsedData.deltaCount;
+        }
+      }
+      if (evt.event === 'usage') {
+        if (typeof evt.parsedData?.promptTokens === 'number') authoritativePromptTokens = evt.parsedData.promptTokens;
+        if (typeof evt.parsedData?.completionTokens === 'number') authoritativeCompletionTokens = evt.parsedData.completionTokens;
+      }
+    }
+  }
+
+  if (authoritativePromptTokens !== undefined && authoritativeCompletionTokens !== undefined) {
+    const totalTokens = authoritativePromptTokens + authoritativeCompletionTokens;
+    const costUsd = ((authoritativePromptTokens * pricing.promptPerMillion) + (authoritativeCompletionTokens * pricing.completionPerMillion)) / 1_000_000;
+    return {
+      promptTokens: authoritativePromptTokens,
+      completionTokens: authoritativeCompletionTokens,
+      totalTokens,
+      costUsd,
+      accountingType: 'AUTHORITATIVE',
+      model: executedModel,
+      provider
+    };
+  }
+
+  if (!reconstructedText && (!rawStreamEvents || rawStreamEvents.length === 0)) {
+    return {
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      costUsd: 0,
+      accountingType: 'UNKNOWN',
+      model: executedModel,
+      provider
+    };
+  }
+
   const promptTokens = Math.max(1, Math.ceil(promptText.length / 3)) + 10;
-  const completionTokens = Math.max(1, Math.ceil(reconstructedText.length / 3));
+  const completionTokens = authoritativeCompletionTokens ?? Math.max(1, Math.ceil(reconstructedText.length / 3));
   const totalTokens = promptTokens + completionTokens;
-  const costUsd = (totalTokens / 1_000_000) * ratePerMillion;
+  const costUsd = (totalTokens / 1_000_000) * pricing.blendedPerMillion;
 
   return {
     promptTokens,
     completionTokens,
     totalTokens,
     costUsd,
-    accountingType: 'ESTIMATED'
+    accountingType: 'ESTIMATED',
+    model: executedModel,
+    provider
+  };
+}
+
+export interface AuthoritativeEntitlementsValidation {
+  valid: boolean;
+  status: 'PASS' | 'FAIL' | 'BLOCKED';
+  planId?: string;
+  dailyChatLimit?: number;
+  availableCredits?: number;
+  reason?: string;
+  details?: any;
+}
+
+/**
+ * Validates that entitlement and billing responses are server-authoritative.
+ * Strictly prohibits silent client-side fallbacks (such as defaulting missing data to 'free' or 15).
+ */
+export function validateServerAuthoritativeEntitlements(
+  entitlements: any,
+  billingSummary: any,
+  expectedPrincipalId?: string
+): AuthoritativeEntitlementsValidation {
+  if (!entitlements && !billingSummary) {
+    return {
+      valid: false,
+      status: 'FAIL',
+      reason: 'Server failed to return authoritative entitlement or billing summary data (both null/undefined). Silent fallback to default plan is strictly prohibited.'
+    };
+  }
+
+  const principalId = billingSummary?.principalId || entitlements?.customerId;
+  if (!principalId) {
+    return {
+      valid: false,
+      status: 'FAIL',
+      reason: 'Server response lacks authoritative principal or customer identifier.'
+    };
+  }
+
+  if (expectedPrincipalId && principalId !== expectedPrincipalId) {
+    return {
+      valid: false,
+      status: 'FAIL',
+      reason: `Principal mismatch: expected '${expectedPrincipalId}', got '${principalId}'.`
+    };
+  }
+
+  const planId = billingSummary?.planId || entitlements?.plan;
+  if (typeof planId !== 'string' || !['free', 'plus', 'pro', 'guest'].includes(planId)) {
+    return {
+      valid: false,
+      status: 'FAIL',
+      reason: `Server returned invalid or missing planId: '${planId}'. Client-side fallback to 'free' is prohibited.`
+    };
+  }
+
+  const dailyChatLimit = billingSummary?.dailyChatLimit ?? entitlements?.dailyStandardChatLimit;
+  if (typeof dailyChatLimit !== 'number' || dailyChatLimit <= 0) {
+    return {
+      valid: false,
+      status: 'FAIL',
+      reason: `Server returned invalid or non-numeric dailyChatLimit: '${dailyChatLimit}'. Client-side fallback to 15 is prohibited.`
+    };
+  }
+
+  const availableCredits = billingSummary?.availableCredits ?? entitlements?.availableCredits;
+  if (typeof availableCredits !== 'number' || availableCredits < 0) {
+    return {
+      valid: false,
+      status: 'FAIL',
+      reason: `Server returned invalid or non-numeric availableCredits: '${availableCredits}'.`
+    };
+  }
+
+  if (entitlements && billingSummary) {
+    if (entitlements.plan && billingSummary.planId && entitlements.plan !== billingSummary.planId) {
+      return {
+        valid: false,
+        status: 'FAIL',
+        reason: `Contradiction detected: entitlements.plan ('${entitlements.plan}') does not match billingSummary.planId ('${billingSummary.planId}').`
+      };
+    }
+  }
+
+  return {
+    valid: true,
+    status: 'PASS',
+    planId,
+    dailyChatLimit,
+    availableCredits,
+    details: {
+      principalId,
+      planId,
+      dailyChatLimit,
+      availableCredits,
+      subscriptionStatus: billingSummary?.subscriptionStatus || entitlements?.subscriptionStatus
+    }
+  };
+}
+
+export interface CancellationVerificationResult {
+  clientAbortStatus: 'PASS' | 'FAIL';
+  serverLeaseStatus: 'PASS' | 'UNVERIFIED/BLOCKED';
+  reason: string;
+}
+
+/**
+ * Distinguishes client-side connection teardown from server-side worker lease termination.
+ * Rejects claims that client AbortError proves upstream server cancellation.
+ */
+export function validateServerSideCancellation(
+  clientAborted: boolean,
+  postAbortRunState?: string,
+  serverTelemetryObserved?: boolean
+): CancellationVerificationResult {
+  if (!clientAborted) {
+    return {
+      clientAbortStatus: 'FAIL',
+      serverLeaseStatus: 'UNVERIFIED/BLOCKED',
+      reason: 'Client AbortController failed to terminate connection cleanly.'
+    };
+  }
+
+  if (serverTelemetryObserved || postAbortRunState === 'CANCELLED') {
+    return {
+      clientAbortStatus: 'PASS',
+      serverLeaseStatus: 'PASS',
+      reason: 'Server-side run cancellation and capacity release confirmed via authoritative execution telemetry.'
+    };
+  }
+
+  return {
+    clientAbortStatus: 'PASS',
+    serverLeaseStatus: 'UNVERIFIED/BLOCKED',
+    reason: 'Client-side connection teardown succeeded, but server-side worker lease release cannot be confirmed without internal server telemetry or a post-abort run state query. Browser AbortError does not prove upstream provider cancellation.'
   };
 }
 
@@ -578,12 +815,24 @@ export async function main() {
     // Phase 2: Entitlements & Tier Resolution
     // -------------------------------------------------------------------------
     console.log('\n--- Phase 2: Entitlements & Tier Verification ---');
-    recordResult('Phase 2a: Free Tier Entitlements Verification', 'PASS', {
-      accountA_tier: accountA.entitlements?.plan || accountA.billingSummary?.planId || 'free',
-      accountB_tier: accountB.entitlements?.plan || accountB.billingSummary?.planId || 'free',
-      dailyChatLimitA: accountA.billingSummary?.dailyChatLimit || 15,
-      dailyChatLimitB: accountB.billingSummary?.dailyChatLimit || 15
-    });
+    const authEntA = validateServerAuthoritativeEntitlements(accountA.entitlements, accountA.billingSummary, accountA.userId);
+    const authEntB = validateServerAuthoritativeEntitlements(accountB.entitlements, accountB.billingSummary, accountB.userId);
+
+    if (authEntA.valid && authEntB.valid) {
+      recordResult('Phase 2a: Free Tier Entitlements Verification', 'PASS', {
+        accountA: authEntA.details,
+        accountB: authEntB.details,
+        verifiedServerAuthoritative: true
+      });
+    } else {
+      recordResult('Phase 2a: Free Tier Entitlements Verification', 'FAIL', {
+        accountA_valid: authEntA.valid,
+        accountA_reason: authEntA.reason,
+        accountB_valid: authEntB.valid,
+        accountB_reason: authEntB.reason,
+        details: 'Server response failed authoritative schema requirements. Silent client fallback to free/15 is prohibited.'
+      });
+    }
 
     recordResult('Phase 2b: Paid Tier Entitlements Acceptance', 'BLOCKED', {
       status: 'BLOCKED',
@@ -635,7 +884,7 @@ export async function main() {
       `Account A reconstructed text must contain 'AIRA_2026_TEST_OK'. Got: '${streamInfoA.reconstructedText}'`
     );
 
-    const usageA = calculateTokenUsageAndCost(testPrompt, streamInfoA.reconstructedText);
+    const usageA = calculateTokenUsageAndCost(testPrompt, streamInfoA.reconstructedText, testModel, streamInfoA.events);
     accumulatedTokens += usageA.totalTokens;
     estimatedTotalSpendUsd += usageA.costUsd;
 
@@ -687,7 +936,7 @@ export async function main() {
       `Account B reconstructed text must contain 'AIRA_2026_TEST_OK'. Got: '${streamInfoB.reconstructedText}'`
     );
 
-    const usageB = calculateTokenUsageAndCost(testPrompt, streamInfoB.reconstructedText);
+    const usageB = calculateTokenUsageAndCost(testPrompt, streamInfoB.reconstructedText, testModel, streamInfoB.events);
     accumulatedTokens += usageB.totalTokens;
     estimatedTotalSpendUsd += usageB.costUsd;
 
@@ -753,14 +1002,16 @@ export async function main() {
     }, { csrfToken: accountA.csrfToken });
 
     assert.ok(abortResult.abortedSuccessfully, 'Stream abort must be handled cleanly on client');
-    const usageAbort = calculateTokenUsageAndCost('Count from 1 to 50 slowly.', '1');
+    const usageAbort = calculateTokenUsageAndCost('Count from 1 to 50 slowly.', '1', 'aira-fast');
     accumulatedTokens += usageAbort.totalTokens;
     estimatedTotalSpendUsd += usageAbort.costUsd;
 
+    const cancelValidation = validateServerSideCancellation(abortResult.abortedSuccessfully);
     recordResult('Phase 4: Controlled SSE Stream Abort', 'PASS', {
       ...abortResult,
-      clientAbortVerified: true,
-      serverWorkerLeaseRelease: 'UNVERIFIED/BLOCKED (Client abort signal cannot directly confirm upstream inference worker lease cancellation without internal server telemetry)'
+      clientAbortStatus: cancelValidation.clientAbortStatus,
+      serverLeaseStatus: cancelValidation.serverLeaseStatus,
+      reason: cancelValidation.reason
     });
 
     // -------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 # AIRA AI 2026 — Production Acceptance & Corrective Certification Report
 
-**Document Version:** 3.0.0 (Hardened & Truthful Certification)  
-**Audit Timestamp:** 2026-11-18T18:30:00Z / 2026-11-19 00:00 IST  
+**Document Version:** 3.1.0 (Hardened & Truthful Certification)  
+**Audit Timestamp:** 2026-11-19T00:15:00Z / 2026-11-19 00:15 IST  
 **Repository:** `rajpunkeshwarrajgautam-boop/AIRA-AI-2026`  
 **Production URL:** `https://aira-ai-2026.vercel.app`  
 **Production HEAD Commit:** `b5a27f391447b68448edf067cdb2ee62a598c264`  
@@ -18,7 +18,7 @@
 
 Following the authorized execution of Gate 2 (guarded migration 032) and Gate 3 (production promotion to `prod-release` on Vercel deployment `dpl_BTiLvhq77siuaz655zZARHdBKuBZ`), comprehensive end-to-end acceptance testing was performed and rigorously audited.
 
-In accordance with strict production engineering integrity rules prohibiting false-positive assertions or synthetic mocks, the acceptance suite (`scripts/production-acceptance-suite.ts`) and regression verification suite (`test/production-acceptance-harness.test.ts`) have been hardened.
+In accordance with strict production engineering integrity rules prohibiting false-positive assertions, silent fallbacks, or synthetic mocks, the acceptance suite (`scripts/production-acceptance-suite.ts`) and regression verification suite (`test/production-acceptance-harness.test.ts`) have been hardened and verified across 27 automated tests.
 
 ### Summary of Certified Subsystems:
 1. **Production Infrastructure & Deployment Baseline:** **PASS**. Exact commit `b5a27f391447b68448edf067cdb2ee62a598c264` is live on `https://aira-ai-2026.vercel.app`. CI run `44346736429` on `prod-release` passed all checks (`Semantic Search CI`, `Fast CI`, `Main / PR certification`). Neon database is at 32 migrations with migration 032 active, `workflow_runs.artifacts` as JSONB default `'[]'::jsonb`, and Knex locks released.
@@ -26,9 +26,9 @@ In accordance with strict production engineering integrity rules prohibiting fal
 3. **Read-Only API Surface & Health:** **PASS**. All security headers (strict CSP, HSTS, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`) and liveness endpoints verified.
 4. **OAuth Authentication & Multi-Provider Linking:** **PASS**. Google OAuth and GitHub OAuth both authenticate successfully in Microsoft Edge with valid HttpOnly session cookies and CSRF tokens. Multi-provider linking is verified.
 5. **Session Reload Persistence:** **PASS**. Authenticated sessions survive full browser reloads.
-6. **Free-Tier Quota & Entitlements:** **PASS**. Quotas resolved server-side for free tier (15 daily chats).
+6. **Free-Tier Quota & Entitlements (Authoritative):** **PASS**. Quotas resolved server-side for free tier (15 daily chats). Silent client-side fallbacks eliminated.
 7. **Bounded Real Model Inference SSE Streaming:** **PASS**. Prompt `"Reply with 'AIRA_2026_TEST_OK' and nothing else"` routed to `aira-fast` emitted full SSE lifecycle (`run_started` -> `routing_decision` -> `model_provenance` -> `content_delta`* -> `done` with `[DONE]`). Content reconstructed and confirmed.
-8. **Controlled SSE Stream Abort (Client-Side):** **PASS**. Client abort via `AbortController` trapped cleanly with zero dangling connections.
+8. **Controlled SSE Stream Abort (Client-Side):** **PASS**. Client abort via `AbortController` trapped cleanly with zero dangling connections. Upstream worker lease release telemetry classified accurately as UNVERIFIED/BLOCKED.
 9. **Autonomous Agent Execution & Migration 032 Schema:** **PASS**. Single-step workflow task executed and verified the `artifacts` JSONB column. Cancellable task entered `WAITING_FOR_APPROVAL` via non-destructive definition and cancelled successfully (HTTP 200, status `CANCELLED`).
 10. **Session Revocation:** **PASS**. Sign-out endpoint invalidates server-side session and returns `ANONYMOUS`.
 11. **Budget Ceiling Compliance:** **PASS**. Consumed 50 tokens (~$0.000030 USD), well within the authorized USD $0.05 limit.
@@ -95,7 +95,7 @@ In accordance with strict production engineering integrity rules prohibiting fal
 | **Phase 1c** | Multi-Provider Account Linking | Multiple OAuth providers link to single account | Verified: User account links both `[google, github]` providers | **PASS** |
 | **Phase 1d** | Distinct-Principal Identification | Test accounts represent distinct user principals | **BLOCKED**: Both profiles resolve to identical user ID (`neon_user_c0fc8caa...`). Cannot certify multi-tenant boundaries. | **BLOCKED** |
 | **Phase 1e** | Session Reload Persistence | Sessions survive browser page reload | Both profiles reloaded; `status: AUTHENTICATED` preserved | **PASS** |
-| **Phase 2a** | Free Tier Entitlements Verification | Resolve plan quotas server-side | Plan tier `free`, daily chat limit 15 verified for primary context | **PASS** |
+| **Phase 2a** | Free Tier Entitlements Verification | Server-authoritative plan validation | Plan tier `free`, daily chat limit 15 verified server-side without silent defaults | **PASS** |
 | **Phase 2b** | Paid Tier Entitlements Acceptance | Validate Pro/Enterprise tier features | **BLOCKED**: No paid test principal provisioned in production. Synthetic mocks prohibited. | **BLOCKED** |
 | **Phase 3a** | Real Model Inference (Account A) | Bounded inference with real provider | Latency 7,729 ms, model `aira-fast`, SSE stream reconstructed with exact content `"AIRA_2026_TEST_OK"` and terminal `[DONE]` | **PASS** |
 | **Phase 3b** | Real Model Inference (Account B) | Bounded inference with real provider | Latency 7,321 ms, model `aira-fast`, SSE stream reconstructed with exact content `"AIRA_2026_TEST_OK"` and terminal `[DONE]` | **PASS** |
@@ -111,7 +111,7 @@ In accordance with strict production engineering integrity rules prohibiting fal
 
 ---
 
-## 5. Harness Remediation Details (6 Key Engineering Fixes)
+## 5. Harness Remediation Details (7 Key Engineering Fixes)
 
 1. **P0 Tenant Isolation Truthfulness:**
    - Modified `scripts/production-acceptance-suite.ts` to compute `validateDistinctPrincipals(accountA.userId, accountB.userId)`.
@@ -124,20 +124,32 @@ In accordance with strict production engineering integrity rules prohibiting fal
    - Asserts exact expected content `"AIRA_2026_TEST_OK"`, verifies `run_started`, and checks for absence of `event: error`.
 4. **P1 Dynamic Pre-Dispatch Budget Guard & Token Accounting:**
    - Removed hardcoded token counts (`trackUsage(14, 4)`).
-   - Added `preDispatchBudgetGuard` before request dispatch.
-   - Computes dynamic token counts and cost tagged as `ESTIMATED`.
+   - Added `preDispatchBudgetGuard` before request dispatch. Tagged as `CLIENT_SAFETY_TRIPWIRE` to clarify it is an internal client tripwire and not an upstream provider monetary cap.
+   - Enhanced `calculateTokenUsageAndCost` with model pricing table and explicit provenance tags: `AUTHORITATIVE`, `ESTIMATED`, and `UNKNOWN`.
 5. **P1 Safe Human-Approval Workflow Definition:**
    - Replaced `sideEffectLevel: 'DESTRUCTIVE'` with `sideEffectLevel: 'READ'` in `createHarmlessApprovalWorkflowDefinition`.
    - Retained `approvalRequired: true` to trigger `WAITING_FOR_APPROVAL` safely without destructive operations.
-6. **P1 Scope Boundary Qualification:**
-   - Explicitly classified paid-tier testing as `BLOCKED (No paid test principal provisioned)`.
-   - Distinguished client-side SSE abort (`PASS`) from upstream worker lease cancellation (`UNVERIFIED/BLOCKED`).
+6. **P1 Server-Authoritative Entitlements (Removal of Silent Defaults):**
+   - Implemented `validateServerAuthoritativeEntitlements`.
+   - Replaced silent client fallbacks (`|| 'free'` and `|| 15`) with strict validation of principal ID, plan tier, numeric chat limits, available credits, and cross-endpoint consistency.
+7. **P1 Server-Side Cancellation Telemetry Verification:**
+   - Implemented `validateServerSideCancellation`.
+   - Distinguishes client connection termination (`PASS`) from upstream worker lease cancellation (`UNVERIFIED/BLOCKED`), requiring internal execution telemetry or a post-abort run state query.
 
 ---
 
-## 6. Regression Test Suite Execution
+## 6. Fast CI Credential Hygiene Audit & Resolution
 
-A dedicated unit and regression test suite was created in `test/production-acceptance-harness.test.ts` to mathematically verify every remediated function in isolation:
+- **Incident Analysis:** GitHub Actions run `44369603261` failed during `Fast CI` on `fix/production-acceptance-certification-hardening`. The security test `test/tracked-secrets-hygiene.test.ts` flagged `docs/release/GATE-2-MIGRATION-032-AUTHORIZATION-PACKAGE.md:199`.
+- **Root Cause:** A documentation example contained an unquoted connection URI placeholder (`DATABASE_URL=postgresql://neondb_owner: <REDACTED> @ep-recovery...`). The static scanner regex matched the user:token@host pattern because the bracketed placeholder token contained no whitespace or quotes.
+- **Redaction Applied:** Commit `9439c48` replaced the URI pattern with `DATABASE_URL=[REDACTED_POSTGRES_CONNECTION_URI]`.
+- **Subsequent CI Verification:** GitHub Actions run `44370817291` completed with `SUCCESS` (`Fast CI` 3m33s, `Semantic Search CI` 49s). Current tracked files pass `npm run test:secrets` with 0 violations.
+
+---
+
+## 7. Regression Test Suite Execution
+
+A dedicated unit and regression test suite was expanded in `test/production-acceptance-harness.test.ts` to mathematically verify every remediated function in isolation:
 
 ```
 ▶ AIRA Production Acceptance Harness Remediation
@@ -160,18 +172,35 @@ A dedicated unit and regression test suite was created in `test/production-accep
   ▶ preDispatchBudgetGuard & calculateTokenUsageAndCost (P1)
     ✔ must permit inference when projected cost is within budget ceiling
     ✔ must reject inference when current spend is already at or near ceiling
-    ✔ must dynamically compute token usage and mark accountingType as ESTIMATED
+    ✔ must reject inference when current spend has already reached ceiling
+    ✔ must dynamically compute token usage and mark accountingType as ESTIMATED when usage events absent
+    ✔ must extract AUTHORITATIVE token accounting when usage events exist
+    ✔ must record UNKNOWN accounting on empty response without events
   ✔ preDispatchBudgetGuard & calculateTokenUsageAndCost (P1)
   ▶ createHarmlessApprovalWorkflowDefinition (P1)
     ✔ must configure non-destructive sideEffectLevel and require human approval
   ✔ createHarmlessApprovalWorkflowDefinition (P1)
+  ▶ validateServerAuthoritativeEntitlements (P1)
+    ✔ must pass when server returns complete, consistent entitlement records
+    ✔ must fail when both entitlements and summary are null (prohibits silent fallback)
+    ✔ must fail when planId is missing or invalid
+    ✔ must fail when dailyChatLimit is non-numeric or missing
+    ✔ must fail when principalId mismatches expected principal
+    ✔ must fail when entitlements and summary report contradictory plans
+  ✔ validateServerAuthoritativeEntitlements (P1)
+  ▶ validateServerSideCancellation (P1)
+    ✔ must return PASS for client and UNVERIFIED/BLOCKED for server when only client abort occurred
+    ✔ must return PASS for both when authoritative post-abort run state is CANCELLED
+    ✔ must return PASS for both when server telemetry was observed
+    ✔ must return FAIL for client when client abort failed
+  ✔ validateServerSideCancellation (P1)
 ✔ AIRA Production Acceptance Harness Remediation
-ℹ tests 14 | suites 6 | pass 14 | fail 0 | cancelled 0 | skipped 0
+ℹ tests 27 | suites 8 | pass 27 | fail 0 | cancelled 0 | skipped 0
 ```
 
 ---
 
-## 7. Action Items to Achieve Full Sign-Off
+## 8. Action Items to Achieve Full Sign-Off
 
 To clear the remaining `BLOCKED` gates and achieve 100% full production certification:
 

@@ -13,6 +13,8 @@ import {
   preDispatchBudgetGuard,
   calculateTokenUsageAndCost,
   validateCrossAccountProbe,
+  validateServerAuthoritativeEntitlements,
+  validateServerSideCancellation,
   createHarmlessApprovalWorkflowDefinition,
   MAX_AUTHORIZED_SPEND_USD
 } from '../scripts/production-acceptance-suite.js';
@@ -198,6 +200,7 @@ describe('AIRA Production Acceptance Harness Remediation', () => {
       assert.equal(guard.allowed, true);
       assert.ok(guard.newProjectedTotalUsd < ceiling);
       assert.ok(guard.estimatedPromptTokens > 0);
+      assert.equal(guard.enforcementNature, 'CLIENT_SAFETY_TRIPWIRE');
     });
 
     it('must reject inference when current spend is already at or near ceiling', () => {
@@ -208,19 +211,49 @@ describe('AIRA Production Acceptance Harness Remediation', () => {
       const guard = preDispatchBudgetGuard(currentSpend, ceiling, prompt, 'aira-fast', 64);
       assert.equal(guard.allowed, false);
       assert.ok(guard.newProjectedTotalUsd > ceiling);
+      assert.ok(guard.rejectionReason?.includes('exceeds budget ceiling'));
     });
 
-    it('must dynamically compute token usage and mark accountingType as ESTIMATED', () => {
+    it('must reject inference when current spend has already reached ceiling', () => {
+      const guard = preDispatchBudgetGuard(0.050000, 0.05, 'test', 'aira-fast');
+      assert.equal(guard.allowed, false);
+      assert.ok(guard.rejectionReason?.includes('already reached or exceeded budget ceiling'));
+    });
+
+    it('must dynamically compute token usage and mark accountingType as ESTIMATED when usage events absent', () => {
       const prompt = "Reply with 'AIRA_2026_TEST_OK' and nothing else";
       const response = 'AIRA_2026_TEST_OK';
 
-      const usage = calculateTokenUsageAndCost(prompt, response, 0.60);
+      const usage = calculateTokenUsageAndCost(prompt, response, 'aira-fast');
 
       assert.ok(usage.promptTokens > 0);
       assert.ok(usage.completionTokens > 0);
       assert.equal(usage.totalTokens, usage.promptTokens + usage.completionTokens);
       assert.ok(usage.costUsd > 0);
       assert.equal(usage.accountingType, 'ESTIMATED');
+    });
+
+    it('must extract AUTHORITATIVE token accounting when usage events exist', () => {
+      const events = [
+        { event: 'model_provenance', data: '', parsedData: { provider: 'groq', executedModel: 'llama-3.3-70b-versatile' } },
+        { event: 'usage', data: '', parsedData: { promptTokens: 14, completionTokens: 4 } }
+      ];
+
+      const usage = calculateTokenUsageAndCost('prompt', 'response', 'aira-fast', events);
+
+      assert.equal(usage.accountingType, 'AUTHORITATIVE');
+      assert.equal(usage.promptTokens, 14);
+      assert.equal(usage.completionTokens, 4);
+      assert.equal(usage.totalTokens, 18);
+      assert.equal(usage.provider, 'groq');
+      assert.equal(usage.model, 'llama-3.3-70b-versatile');
+    });
+
+    it('must record UNKNOWN accounting on empty response without events', () => {
+      const usage = calculateTokenUsageAndCost('', '', 'aira-fast');
+      assert.equal(usage.accountingType, 'UNKNOWN');
+      assert.equal(usage.totalTokens, 0);
+      assert.equal(usage.costUsd, 0);
     });
   });
 
@@ -239,6 +272,105 @@ describe('AIRA Production Acceptance Harness Remediation', () => {
       assert.equal(step.name, 'Read-Only Compliance Pause and Verification');
       assert.equal(step.approvalRequired, true, 'approvalRequired must be true to trigger WAITING_FOR_APPROVAL');
       assert.equal(step.sideEffectLevel, 'READ', 'sideEffectLevel must be READ (never DESTRUCTIVE)');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // P1 Defect 6: Server-Authoritative Entitlements (No Silent Defaults)
+  // ---------------------------------------------------------------------------
+  describe('validateServerAuthoritativeEntitlements (P1)', () => {
+    const validEntitlements = {
+      customerId: 'usr_valid_customer_123',
+      plan: 'free',
+      subscriptionStatus: 'active',
+      dailyStandardChatLimit: 15,
+      availableCredits: 100
+    };
+
+    const validSummary = {
+      principalId: 'usr_valid_customer_123',
+      planId: 'free',
+      subscriptionStatus: 'active',
+      dailyChatLimit: 15,
+      availableCredits: 100
+    };
+
+    it('must pass when server returns complete, consistent entitlement records', () => {
+      const result = validateServerAuthoritativeEntitlements(validEntitlements, validSummary, 'usr_valid_customer_123');
+      assert.equal(result.valid, true);
+      assert.equal(result.status, 'PASS');
+      assert.equal(result.planId, 'free');
+      assert.equal(result.dailyChatLimit, 15);
+      assert.equal(result.availableCredits, 100);
+    });
+
+    it('must fail when both entitlements and summary are null (prohibits silent fallback)', () => {
+      const result = validateServerAuthoritativeEntitlements(null, null);
+      assert.equal(result.valid, false);
+      assert.equal(result.status, 'FAIL');
+      assert.ok(result.reason?.includes('Silent fallback to default plan is strictly prohibited'));
+    });
+
+    it('must fail when planId is missing or invalid', () => {
+      const invalidPlanSummary = { ...validSummary, planId: 'unknown_plan_tier' };
+      const result = validateServerAuthoritativeEntitlements(null, invalidPlanSummary);
+      assert.equal(result.valid, false);
+      assert.equal(result.status, 'FAIL');
+      assert.ok(result.reason?.includes('invalid or missing planId'));
+    });
+
+    it('must fail when dailyChatLimit is non-numeric or missing', () => {
+      const missingLimitSummary = { ...validSummary, dailyChatLimit: undefined };
+      const result = validateServerAuthoritativeEntitlements(null, missingLimitSummary);
+      assert.equal(result.valid, false);
+      assert.equal(result.status, 'FAIL');
+      assert.ok(result.reason?.includes('invalid or non-numeric dailyChatLimit'));
+    });
+
+    it('must fail when principalId mismatches expected principal', () => {
+      const result = validateServerAuthoritativeEntitlements(validEntitlements, validSummary, 'usr_different_user');
+      assert.equal(result.valid, false);
+      assert.equal(result.status, 'FAIL');
+      assert.ok(result.reason?.includes('Principal mismatch'));
+    });
+
+    it('must fail when entitlements and summary report contradictory plans', () => {
+      const conflictingEntitlements = { ...validEntitlements, plan: 'pro' };
+      const result = validateServerAuthoritativeEntitlements(conflictingEntitlements, validSummary);
+      assert.equal(result.valid, false);
+      assert.equal(result.status, 'FAIL');
+      assert.ok(result.reason?.includes('Contradiction detected'));
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // P1 Defect 7: Server-Side Cancellation Telemetry Verification
+  // ---------------------------------------------------------------------------
+  describe('validateServerSideCancellation (P1)', () => {
+    it('must return PASS for client and UNVERIFIED/BLOCKED for server when only client abort occurred', () => {
+      const result = validateServerSideCancellation(true);
+      assert.equal(result.clientAbortStatus, 'PASS');
+      assert.equal(result.serverLeaseStatus, 'UNVERIFIED/BLOCKED');
+      assert.ok(result.reason.includes('Browser AbortError does not prove upstream provider cancellation'));
+    });
+
+    it('must return PASS for both when authoritative post-abort run state is CANCELLED', () => {
+      const result = validateServerSideCancellation(true, 'CANCELLED');
+      assert.equal(result.clientAbortStatus, 'PASS');
+      assert.equal(result.serverLeaseStatus, 'PASS');
+      assert.ok(result.reason.includes('confirmed via authoritative execution telemetry'));
+    });
+
+    it('must return PASS for both when server telemetry was observed', () => {
+      const result = validateServerSideCancellation(true, undefined, true);
+      assert.equal(result.clientAbortStatus, 'PASS');
+      assert.equal(result.serverLeaseStatus, 'PASS');
+    });
+
+    it('must return FAIL for client when client abort failed', () => {
+      const result = validateServerSideCancellation(false);
+      assert.equal(result.clientAbortStatus, 'FAIL');
+      assert.equal(result.serverLeaseStatus, 'UNVERIFIED/BLOCKED');
     });
   });
 
