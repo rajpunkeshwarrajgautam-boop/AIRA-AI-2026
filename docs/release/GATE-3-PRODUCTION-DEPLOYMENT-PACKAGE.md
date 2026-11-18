@@ -1,5 +1,8 @@
 # Gate 3 Production Deployment Certification & Readiness Package
 
+> **POST-RELEASE STATE — 2026-11-18:** This was a pre-release authorization package. PR #185 merged to `prod-release` at `b5a27f391447b68448edf067cdb2ee62a598c264` (16:23:42 UTC); Vercel production deployment `dpl_BTiLvhq77siuaz655zZARHdBKuBZ` is READY and mapped to `aira-ai-2026.vercel.app`. Neon has 32 applied migrations and the new JSONB column. Production CI run `44346736429` completed SUCCESS at 16:35:49 UTC. The old Gate 3 lock and pre-cutover procedure below are **historical**. Seven anonymous-security/health checks do not verify authenticated OAuth, plan quotas, model inference, SSE, or cross-tenant isolation. Restore parity of the local encrypted backup is reported but not independently inspected. See `docs/release/GATE-3-POST-RELEASE-ACCEPTANCE-STATUS-20261118.md` for current evidence.
+
+
 > **2026-11-18 release integration update:** PR #189 was merged into the release-candidate branch at exact commit `4b2074776f790d23fa93fa320a52a4ceed361eeb` (original PR HEAD `415ba39b0de306e38bc92c5e811a217081d0f21d`). Post-merge exact-SHA CI has completed successfully: pull-request CI run `44333113390` on the merged SHA, including Main / PR certification, Fast CI, and Semantic Search; isolated PostgreSQL regression run `44333113399` and GitGuardian also passed. This certifies the code candidate only, not Gate 2 database execution or Gate 3 deployment. Gate 2 is **NO-GO/LOCKED** until a fresh recovery checkpoint is created and verified under separate written authorization and migration 032 succeeds. Gate 3 remains **STRICTLY LOCKED** and requires a separate owner approval. Existing production deployment and `prod-release` are unchanged.
 
 
@@ -119,14 +122,11 @@ If any critical post-deployment failure occurs:
 - Failure of model routing or streaming responses.
 - Database connection errors or connection pool exhaustion.
 
-### Instant Rollback Procedure (< 30 Seconds)
-1. **Rollback Vercel Alias:**
-   Using Vercel CLI or Dashboard, immediately promote known-good deployment `dpl_3vZXiXwBWgZeeAyiyUVgYixsNMb8` to production:
-   ```bash
-   vercel alias set dpl_3vZXiXwBWgZeeAyiyUVgYixsNMb8 aira-ai-2026.vercel.app
-   ```
-2. **Database Backward Compatibility:**
-   Because migration 032 is strictly additive (`ADD COLUMN artifacts JSONB DEFAULT '[]'`), prior code (which does not select or insert `artifacts`) remains 100% compatible with the schema. No database rollback is required for an application-only rollback.
+### Application rollback procedure (duration not guaranteed)
+1. **Restore the Vercel application deployment:**
+   Verify previous deployment `dpl_3vZXiXwBWgZeeAyiyUVgYixsNMb8` remains READY. For a critical production regression, use Vercel's supported rollback/promotion flow under explicit authorization, verify the alias mapping, and measure the actual elapsed time. Neither a sub-30-second nor sub-60-second rollback is guaranteed by available evidence.
+2. **Database compatibility and recovery:**
+   Migration 032 is additive and the previous application is expected to remain compatible. Check live schema contracts and health after any application rollback. A database rollback is **not** required merely to restore older application code. The preserved Neon checkpoint is a distinct pre-migration recovery point; reverting to it would exclude post-checkpoint writes unless reconciled from authoritative durable transaction evidence (WAL/CDC or a verified write ledger). Application access logs and renewed OAuth sessions cannot by themselves reconstruct those writes. Never claim zero data loss or a guaranteed recovery time without measuring the actual procedure.
 3. **Verify Rollback:**
    Confirm `https://aira-ai-2026.vercel.app/api/health` returns 200 on deployment `dpl_3vZXiXwBWgZeeAyiyUVgYixsNMb8`.
 
