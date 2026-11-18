@@ -6,6 +6,7 @@
   "scripts": {
     "db:up": "docker-compose up -d db",
     "db:migrate": "npx tsx packages/db/src/scripts/migrate.ts",
+    "db:migrate:032": "npx tsx scripts/run-guarded-migration-032.ts",
     "dev": "vite",
     "server": "npx tsx apps/api/src/index.ts",
     "test": "npx tsx test/verify-runtime.ts",
