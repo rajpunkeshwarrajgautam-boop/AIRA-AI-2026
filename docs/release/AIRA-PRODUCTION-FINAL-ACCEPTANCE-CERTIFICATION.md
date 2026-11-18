@@ -40,7 +40,7 @@ Following the authorized execution of Gate 2 (migration 032) and Gate 3 (product
 | **`workflow_runs.artifacts`** | Nullable JSONB, default `'[]'::jsonb` | Type: `jsonb`, Nullable: `YES`, Default: `'[]'::jsonb` | **PASS** |
 | **Knex Migration Lock** | Released (`is_locked = 0`) | `is_locked = 0` | **PASS** |
 | **Neon Checkpoint Branch** | `br-orange-art-b3vzajv0` | `pre-migration-032-checkpoint-20261118`, state `ready`, LSN `0/1E912998` | **PASS** |
-| **Preserved Rollback Target** | `dpl_3vZXiXwBWgZeeAyiyUVgYixsNMb8` | Ready in Vercel project `prj_FZLU4vQ1gM3s6aM373vM8Tsz9Wk4` | **PASS** |
+| **Preserved Rollback Target** | `dpl_3vZXiXwBWgZeeAyiyUVgYixsNMb8` | Ready in Vercel project `prj_FZLU4vBIYSsBn28AI6drkpD5WfbH` | **PASS** |
 
 ---
 
@@ -79,8 +79,10 @@ An independent validation of the pre-migration production encrypted backup was e
 | **C2** | Paid-Plan Entitlements | Enforced tier limits, paid model availability, upgrade boundary | No paid test account provisioned; mocks strictly prohibited by release policy | **BLOCKED** |
 | **D1** | Real Model Inference (Account A) | One bounded prompt, provider routing (`groq` / `gemini` / `nvidia`), actual token usage | Health confirms providers registered & mock fallback disabled; write approval pending | **BLOCKED** |
 | **D2** | Real Model Inference (Account B) | One bounded prompt under Account B, independent usage recording | Write approval pending | **BLOCKED** |
-| **D3** | SSE Streaming Lifecycle | Valid SSE event framing, delta tokens, terminal event, cancel/abort handling | `/api/chat/stream` returns HTTP 403 fail-closed for unauthenticated requests | **BLOCKED** |
+| **D3** | SSE Streaming Lifecycle | Valid SSE event framing, delta tokens, terminal event | `/api/chat/stream` returns HTTP 403 fail-closed for unauthenticated requests | **BLOCKED** |
+| **D4** | SSE Stream Cancellation | Client disconnect / abort terminates upstream inference and releases permits | Requires dedicated cancellation test under active stream; cannot infer from completion | **BLOCKED** |
 | **E1** | Autonomous Agent Execution | Bounded single-step task, correct principal ownership, persisted run & artifact | Health confirms tool runtime & approval kernel initialized; write approval pending | **BLOCKED** |
+| **E2** | Task Cancellation & Cleanup | Dedicated cancellable run can be interrupted mid-flight without orphan locks | Requires separately authorized cancellable task | **BLOCKED** |
 | **F1** | Cross-Account Data Isolation | Account B attempts read of Account A conversation/task; returns 401/403/404 | Depends on Account A resources created in D/E | **BLOCKED** |
 | **F2** | Cross-Account SSE Isolation | Account B attempts subscription to Account A stream; rejected fail-closed | Depends on Account A stream active | **BLOCKED** |
 | **S1** | Production Security Headers | CSP, HSTS `max-age=63072000`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` | Headers present and strictly validated on live production URL | **PASS** |
@@ -121,16 +123,34 @@ An independent validation of the pre-migration production encrypted backup was e
 
 ---
 
-## 7. Precise Next Actions for Owner Sign-off
+## 7. Consolidated Authorization Request & Next Actions for Owner Sign-off
 
-To achieve final release closure:
+Before executing any production test writes, the following consolidated authorization scope is submitted for explicit owner approval:
 
-1. **Owner Interactive Sign-in:**
-   - Open `https://aira-ai-2026.vercel.app` in browser.
-   - Complete Google OAuth sign-in (Account A).
-   - In a private/separate profile, complete GitHub OAuth sign-in (Account B).
-2. **Owner Production Write Authorization:**
-   - Authorize 1 prompt each for Account A and Account B (prompt: `"Reply with 'AIRA_2026_TEST_OK' and nothing else"`).
-   - Authorize 1 single-step task run under Account A.
-3. **Execution of Acceptance Tests B1–F2:**
-   - Upon sign-in and authorization, the live acceptance suite will verify real token generation, SSE streaming, task persistence in `workflow_runs`, and cross-account rejection.
+1. **Test Accounts & Sign-in Scope:**
+   - Account A: Google OAuth test principal (Owner signs in via browser).
+   - Account B: GitHub OAuth test principal (Owner signs in via separate browser profile).
+   - Sign-out verification: Both accounts will undergo explicit `/api/auth/signout` to verify session termination.
+
+2. **Inference & Model Routing Scope:**
+   - Maximum inference calls: 2 total (1 for Account A, 1 for Account B).
+   - Prompt text: `"Reply with 'AIRA_2026_TEST_OK' and nothing else"`
+   - Model selection (live verified via `/api/ready/providers`):
+     - Primary: `groq:openai/gpt-oss-120b` or `groq:llama-3.3-70b-versatile` (11 models available, healthy).
+     - Fallback: `gemini:gemini-2.5-flash` or `gemini:gemini-1.5-flash` (50 models available, healthy).
+   - Estimated token consumption: ~14 prompt tokens + ~4 completion tokens = ~18 tokens per request; ~36 to 50 tokens total.
+   - Provider pricing: Groq (~$0.59 / 1M prompt), Gemini (~$0.075 / 1M prompt).
+   - Approved monetary test budget ceiling: Strict maximum cap of **$0.05 USD**.
+
+3. **Agent & Cancellation Execution Scope:**
+   - 1 bounded read-only agent execution under Account A (e.g. string formatting).
+   - 1 separately controlled SSE stream abort test (client abort during generation) to verify permit release.
+   - 1 separately controlled cancellable task test to verify execution cancellation without orphan locks.
+
+4. **Expected Database Effects:**
+   - Maximum ~2 rows in `conversations`, ~4 rows in `conversation_messages`, ~1-2 rows in `workflow_runs`, and ~2 events in `usage_events`. Zero customer tables touched.
+
+5. **Cleanup & Retention:**
+   - Test conversation and task records will be soft-deleted/archived immediately post-verification.
+   - Sessions will be terminated and cookies invalidated.
+   - Checkpoint branch `br-orange-art-b3vzajv0` and encrypted backup remain permanently preserved.

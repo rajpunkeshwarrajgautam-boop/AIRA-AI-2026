@@ -13,7 +13,7 @@
 | **PR #185** | MERGED at 2026-11-18T16:23:42Z (https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/185) | **PASS** |
 | **Production Git HEAD** | `b5a27f391447b68448edf067cdb2ee62a598c264` (`prod-release`) | **PASS** |
 | **Pre-merge candidate commit** | `4b2074776f790d23fa93fa320a52a4ceed361eeb` | **PASS** |
-| **Production Vercel deployment** | `dpl_BTiLvhq77siuaz655zZARHdBKuBZ`: READY, 47s build, commit matches production HEAD | **PASS** |
+| **Production Vercel deployment** | `dpl_BTiLvhq77siuaz655zZARHdBKuBZ` (Project `prj_FZLU4vBIYSsBn28AI6drkpD5WfbH`): READY, 47s build, commit matches production HEAD | **PASS** |
 | **Production alias binding** | `aira-ai-2026.vercel.app` actively assigned to `dpl_BTiLvhq77siuaz655zZARHdBKuBZ` | **PASS** |
 | **Production CI on prod-release** | GitHub Actions run `44346736429`: COMPLETED / SUCCESS at 2026-11-18T16:35:49Z (`Fast CI`, `Semantic Search CI`, `Main / PR certification` passed) | **PASS** |
 | **Visual / Edge acceptance** | Production Edge visual acceptance: SUCCESS; deployed staging acceptance: SKIPPED under staging-only trigger | **PASS** |
@@ -68,16 +68,30 @@ Read-only production security smoke tests (7/7) passed on live deployment `dpl_B
 
 To progress from **BLOCKED** to **COMPLETE** for Item 2 (Phases B through F), the following scoped authorization is submitted for owner approval:
 
-1. **Test Principals:**
+1. **Test Principals & Interactive Sign-in:**
    - Account A: Google OAuth test account (owner signs in directly via browser).
    - Account B: GitHub OAuth test account (owner signs in directly via separate browser profile).
-2. **Operations & Maximum Inference Scope:**
-   - Maximum inference calls: 2 total (1 bounded request per account: prompt `"Reply with 'AIRA_2026_TEST_OK' and nothing else"`).
-   - Target model: `groq:llama-3.3-70b-versatile` or `gemini-1.5-flash` (deterministic, lowest latency and cost).
-   - Maximum agent execution: 1 single-step task (e.g. calculation or read-only text formatting) under Account A.
-3. **Estimated Cost / Credit Cap:**
-   - Under $0.001 total consumption across providers (well within free tier allowances).
-4. **Cleanup Scope:**
+   - Clean session invalidation via `/api/auth/signout` at test conclusion.
+
+2. **Bounded Inference Operations:**
+   - Maximum inference calls: 2 total (1 bounded request per account).
+   - Prompt text: `"Reply with 'AIRA_2026_TEST_OK' and nothing else"`
+   - Model selection (live verified via `/api/ready/providers`):
+     - Primary: `groq:openai/gpt-oss-120b` or `groq:llama-3.3-70b-versatile` (11 models available, healthy).
+     - Fallback: `gemini:gemini-2.5-flash` or `gemini:gemini-1.5-flash` (50 models available, healthy).
+   - Estimated token consumption: ~14 prompt tokens + ~4 completion tokens = ~18 tokens per request; ~36 to 50 tokens total across both accounts.
+   - Provider pricing: Groq (~$0.59 / 1M prompt), Gemini (~$0.075 / 1M prompt).
+   - Approved monetary test budget ceiling: Strict maximum cap of **$0.05 USD**.
+
+3. **Agent Task & Cancellation Scope:**
+   - 1 bounded single-step read-only task under Account A.
+   - 1 separately controlled SSE client disconnect/abort test during token streaming.
+   - 1 separately controlled cancellable task test to verify execution cancellation without orphan locks.
+
+4. **Expected Database Effects:**
+   - Maximum ~2 rows in `conversations`, ~4 rows in `conversation_messages`, ~1-2 rows in `workflow_runs`, and ~2 events in `usage_events`. Zero customer records modified.
+
+5. **Cleanup Scope:**
    - Created test conversation and task records will be archived/soft-deleted post-verification.
    - Session sign-out will be executed for both accounts to revoke active session cookies.
 
