@@ -1,6 +1,6 @@
 # Gate 3 Production Deployment Certification & Readiness Package
 
-> **2026-11-18 release integration update:** PR #189 was merged into the release-candidate branch at exact commit `4b2074776f790d23fa93fa320a52a4ceed361eeb` (original PR HEAD `415ba39b0de306e38bc92c5e811a217081d0f21d`). Post-merge checks must finish and the **merged SHA** must be certified before production readiness claims. Gate 2 is **NO-GO/LOCKED** until a fresh recovery checkpoint is created and verified under separate written authorization and migration 032 succeeds. Gate 3 remains **STRICTLY LOCKED** and requires a separate owner approval. Existing production deployment and `prod-release` are unchanged.
+> **2026-11-18 release integration update:** PR #189 was merged into the release-candidate branch at exact commit `4b2074776f790d23fa93fa320a52a4ceed361eeb` (original PR HEAD `415ba39b0de306e38bc92c5e811a217081d0f21d`). Post-merge exact-SHA CI has completed successfully: pull-request CI run `44333113390` on the merged SHA, including Main / PR certification, Fast CI, and Semantic Search; isolated PostgreSQL regression run `44333113399` and GitGuardian also passed. This certifies the code candidate only, not Gate 2 database execution or Gate 3 deployment. Gate 2 is **NO-GO/LOCKED** until a fresh recovery checkpoint is created and verified under separate written authorization and migration 032 succeeds. Gate 3 remains **STRICTLY LOCKED** and requires a separate owner approval. Existing production deployment and `prod-release` are unchanged.
 
 
 **Target Environment:** Production (`https://aira-ai-2026.vercel.app`)  
@@ -8,7 +8,7 @@
 **Production Git Branch:** `prod-release`  
 **Current Production SHA:** `d988a6bd26d49a000d59cf906b13fcfe9e170058`  
 **Known Good Rollback Deployment:** `dpl_3vZXiXwBWgZeeAyiyUVgYixsNMb8` (Ready, Nov 14 2026)  
-**Target Release Candidate SHA:** `4b2074776f790d23fa93fa320a52a4ceed361eeb` (PR #189 merged; post-merge exact-SHA certification pending)  
+**Target Release Candidate SHA:** `4b2074776f790d23fa93fa320a52a4ceed361eeb` (PR #189 merged; post-merge exact-SHA CI passed)  
 **Status:** **LOCKED — GATED BY GATE 2 SUCCESS & EXPLICIT OWNER DEPLOYMENT APPROVAL**  
 *(Strict Policy: Zero Production Deployments Without Explicit Written Authorization)*
 
@@ -22,9 +22,9 @@ Gate 3 governs the final production deployment and cutover of AIRA AI 2026 to ca
 ```
 [ Gate 1: Candidate Promotion ] ──► COMPLETE (SHA 3040b14b promoted to release/candidate-pr178-pr184-combined)
               │
-[ Blocker Remediation PR #189 ] ──► MERGED into release candidate (SHA 4b2074776f790d23fa93fa320a52a4ceed361eeb; post-merge CI pending)
+[ Blocker Remediation PR #189 ] ──► MERGED into release candidate (SHA 4b2074776f790d23fa93fa320a52a4ceed361eeb; post-merge CI PASSED)
               │
-[ Gate 2: Database Migration 032 ] ──► NO-GO / LOCKED (recovery checkpoint and post-merge certification pending)
+[ Gate 2: Database Migration 032 ] ──► NO-GO / LOCKED (fresh recovery checkpoint, restore-readiness verification, and separate Gate 2 authorization pending)
               │
 [ Gate 3: Production Deployment ] ──► LOCKED (Precondition: Gate 2 must be COMPLETE and verified)
 ```
@@ -43,7 +43,7 @@ Gate 3 cannot be executed until:
 | **Vercel Project** | `prj_FZLU4vBIYSsBn28AI6drkpD5WfbH` | `aira-ai-2026` | Unchanged |
 | **Canonical URL** | `https://aira-ai-2026.vercel.app` | Deployment `dpl_3vZXiXwBWgZeeAyiyUVgYixsNMb8` | New candidate deployment |
 | **Git Production Branch** | `prod-release` | `d988a6bd26d49a000d59cf906b13fcfe9e170058` | Fast-forward to candidate SHA |
-| **Release Candidate SHA** | `release/candidate-pr178-pr184-combined` | `4b2074776f790d23fa93fa320a52a4ceed361eeb` (current integrated release candidate) | Same exact SHA only after required post-merge certification; `3040b14b` is historical Gate 1 base |
+| **Release Candidate SHA** | `release/candidate-pr178-pr184-combined` | `4b2074776f790d23fa93fa320a52a4ceed361eeb` (current integrated release candidate) | `4b2074776f790d23fa93fa320a52a4ceed361eeb` post-merge CI passed; `3040b14b` is historical Gate 1 base. Production promotion remains forbidden without Gate 2 completion and separate owner authorization |
 | **Production Database** | `old-sky-50952395` (Neon) | PostgreSQL 18.7, 31 migrations | 32 migrations (post-Gate 2) |
 | **Database Endpoint** | `ep-withered-art-b36ox90b` | `main` (`br-shiny-moon-b3vy9xj7`) | Unchanged |
 | **Rollback Target** | Vercel Deployment | `dpl_3vZXiXwBWgZeeAyiyUVgYixsNMb8` | Standby instant rollback |
