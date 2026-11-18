@@ -105,7 +105,7 @@ Authoritative provider audit conducted via Neon API against production project `
 - **Account Owner:** `rajpunkeshwarrajgautam@gmail.com` (`raj`)
 - **Organization ID:** `org-broad-butterfly-41820185`
 - **Subscription Type:** `launch_v3` (Neon Launch Plan / Paid tier)
-- **Branch Capacity:** Neon publishes a **5,000-branch paid-plan maximum per project**, not a verified 5,000-branch organization entitlement. The Launch plan includes **10 branches per project**; additional branches are billable at the current published rate ($1.50/branch-month, prorated hourly). Current project usage: 10 branches. Confirm billable creation acceptance and restoration prerequisites before production checkpoint creation.
+- **Branch Capacity (verified 2026-11-18):** Neon `describe_project` for production project `old-sky-50952395` returns `owner.branches_limit = 5000` and `owner.subscription_type = launch_v3`, establishing a 5,000-branch account-specific limit. The project currently has 10 branches (4,990 theoretical remaining). The Launch plan includes 10; additional branches are billable at the published rate of $1.50/branch-month, prorated hourly. A new checkpoint has not yet been created, and restoration remains unverified.
 - **Available Headroom:** 4,900+ branches.
 - **Billing Impact:** $0 additional cost. The 10-branch constraint applies strictly to Free-tier accounts; under `launch_v3`, branch capacity is not constrained to 10.
 
@@ -127,7 +127,7 @@ Authoritative provider audit conducted via Neon API against production project `
 
 ### D. Recovery Options Evaluation
 - **Option A (Neon Point-in-Time Branch Checkpoint):** Creating a dedicated pre-cutover recovery branch (`pre-migration-032-checkpoint`) from `br-shiny-moon-b3vy9xj7`.
-  - *Viability:* Plausible under the Launch paid-plan branch maximum, with incremental billing for the 11th branch. **No new checkpoint or successful restore has yet been verified.**
+  - *Viability:* Provider-reported 5,000-branch limit and current count of 10 confirm available theoretical capacity (4,990). Creation of branch 11 may incur published incremental billing. **No new checkpoint or successful restore has yet been verified.**
   - *Constraint:* Creating a production branch is a protected production mutation requiring owner authorization.
 - **Option B (Independent Neon Snapshot):** Taking a storage-level manual snapshot (`snap-prod-pre-032`).
   - *Viability:* Snapshot restoration may require additional branch and endpoint capacity; test in an authorized non-production environment before relying on this path.
@@ -202,7 +202,7 @@ This checklist defines the strict, ordered sequence for Gate 2 execution once ex
 
 ### Blocker Status Summary:
 - **Blocker A (Missing npm script):** **RESOLVED** via PR #189 (Commit `415ba39b0de306e38bc92c5e811a217081d0f21d`).
-- **Blocker B (Recovery capacity):** **CONDITIONAL**. Launch paid-plan headroom beyond 10 branches is documented but billable; no fresh checkpoint creation or restore test has been verified. Gate 2 remains NO-GO pending recovery acceptance.
+- **Blocker B (Recovery capacity):** **CAPACITY RESOLVED** by provider `owner.branches_limit=5000` and 10 existing branches. **RESTORE READINESS REMAINS UNVERIFIED**: no fresh production recovery checkpoint or restore validation has been completed. Gate 2 remains NO-GO pending separate explicit approval and operational recovery checks.
 
 ### Gate 2 Release Verdict:
 **GO-READY** for authorized execution.
