@@ -196,7 +196,7 @@ This checklist defines the strict, ordered sequence for Gate 2 execution once ex
 3. **Emergency Rollback Procedure:**
    - The guarded runner automatically issues `ROLLBACK` on any error and releases advisory and Knex locks.
    - If catastrophic database corruption occurs, point Vercel connection string to recovery checkpoint:
-     `DATABASE_URL=postgresql://neondb_owner:[SECRET]@ep-recovery-[ID].c-4.ap-southeast-1.aws.neon.tech/neondb`
+     `DATABASE_URL=[REDACTED_POSTGRES_CONNECTION_URI]`
    - Reconcile any post-$T_0$ application writes from application telemetry.
 
 ---
