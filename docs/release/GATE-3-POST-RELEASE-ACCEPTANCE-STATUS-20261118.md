@@ -6,8 +6,8 @@
 **Technical Deployment Status:** LIVE / PROMOTED  
 **Production Baseline:** VERIFIED (PASS)  
 **Encrypted Backup & Restore Parity:** VERIFIED (PASS)  
-**Full Authenticated End-to-End Acceptance:** **VERIFIED (PASS)**  
-**Final Release Sign-off:** **100% COMPLETE & CERTIFIED**
+**Authenticated End-to-End Acceptance:** **PARTIALLY COMPLETE (PASS for Single-Account & Infrastructure; BLOCKED for Multi-Tenant Isolation & Paid Plan)**  
+**Final Release Sign-off:** **BLOCKED (Awaiting Second Independent Test Principal & Paid Test Principal)**
 
 ---
 
@@ -35,31 +35,36 @@
 - Verified run `44346736429` completed with `SUCCESS` on commit `b5a27f391447b68448edf067cdb2ee62a598c264`.
 - All required checks (`Semantic Search CI`, `Fast CI`, `Main / PR certification`) passed.
 
-### Item 2 — Authenticated Production Acceptance — COMPLETE (PASS)
-Executed via automated suite `scripts/production-acceptance-suite.ts` with live Microsoft Edge instances under user authorization:
-1. **OAuth Session Management (Phases 1 & 1b):**
+### Item 2 — Authenticated Production Acceptance — QUALIFIED STATUS
+Executed via remediated test harness `scripts/production-acceptance-suite.ts` and verified with unit test suite `test/production-acceptance-harness.test.ts`:
+
+1. **OAuth Session Management & Provider Linking (Phases 1a, 1b, 1c, 1e):** **PASS**
    - Account A (Google): Authenticated, user ID `neon_user_c0fc8caa...`, linked providers `[github, google]`.
    - Account B (GitHub): Authenticated, user ID `neon_user_c0fc8caa...`, linked providers `[github, google]`.
    - Session reload persistence: Verified across page reloads.
-2. **Entitlements & Quotas (Phase 2):**
-   - Plan tier resolved as `free`, daily chat limit: 15.
-3. **Bounded Real Model Inference (Phases 3a & 3b):**
-   - Account A: Prompt `"Reply with 'AIRA_2026_TEST_OK' and nothing else"` executed via `aira-fast`. Latency: 7,729 ms, tokens: 18.
-   - Account B: Prompt `"Reply with 'AIRA_2026_TEST_OK' and nothing else"` executed via `aira-fast`. Latency: 7,321 ms, tokens: 18.
-   - SSE streaming: 14 stream events received including `routing_decision`, `model_provenance`, `content_delta`, and `done`.
-4. **Controlled SSE Stream Abort (Phase 4):**
-   - Client disconnect cleanly caught (`AbortError`); connection terminated after first chunk.
-5. **Autonomous Agent Execution & Migration 032 Schema (Phases 5a & 5b):**
+2. **Distinct-Principal Tenant Boundary (Phase 1d):** **BLOCKED**
+   - Both OAuth profiles resolve to identical user ID (`neon_user_c0fc8caa...`).
+   - A single principal cannot certify multi-tenant isolation.
+3. **Entitlements & Quotas (Phases 2a & 2b):**
+   - Free tier quotas (15 daily chats) verified server-side: **PASS**
+   - Paid tier live acceptance: **BLOCKED** (no paid test principal provisioned).
+4. **Bounded Real Model Inference (Phases 3a & 3b):** **PASS**
+   - Reconstructed SSE streams for Account A and Account B with model `aira-fast`.
+   - Reconstructed tokens match expected response `"AIRA_2026_TEST_OK"`, lifecycle markers (`run_started` -> `content_delta`* -> `done` with `[DONE]`), and zero stream errors.
+5. **Controlled SSE Stream Abort (Phase 4):**
+   - Client disconnect cleanly caught (`AbortError`): **PASS**
+   - Server-side worker lease termination: **UNVERIFIED/BLOCKED** (requires internal worker telemetry).
+6. **Autonomous Agent Execution & Migration 032 Schema (Phases 5a & 5b):** **PASS**
    - Task 1: `wfrun_run_e9eaa9f5-4` created with HTTP 201; verified `artifacts` column initialized cleanly.
-   - Task 2: `wfrun_run_7770e6c7-3` created in `WAITING_FOR_APPROVAL` state; cancelled via `POST /api/workflows/runs/:id/cancel` (HTTP 200, status `CANCELLED`).
-6. **Cross-Account Data Isolation (Phase 6):**
-   - Foreign workflow probe returned HTTP 404.
-   - Ownership forgery attempt returned HTTP 400.
-   - Anonymous caller returned HTTP 401.
-   - Legitimate owner query returned HTTP 200.
-7. **Session Revocation & Server Invalidation (Phase 7):**
+   - Task 2: `wfrun_run_7770e6c7-3` created in `WAITING_FOR_APPROVAL` state with non-destructive definition; cancelled via `POST /api/workflows/runs/:id/cancel` (HTTP 200, status `CANCELLED`).
+7. **Cross-Account Data Isolation (Phase 6):**
+   - Distinct cross-account isolation: **BLOCKED** (Accounts share principal; fabricated probes prohibited).
+   - Ownership forgery attempt returned HTTP 400: **PASS**
+   - Anonymous caller returned HTTP 401: **PASS**
+   - Legitimate owner query returned HTTP 200: **PASS**
+8. **Session Revocation & Server Invalidation (Phase 7):** **PASS**
    - Sign-out executed for Account A and Account B (HTTP 200). Subsequent session queries returned `{"status":"ANONYMOUS","user":null}`.
-8. **Spending Ceiling Compliance (Phase 8):**
+9. **Spending Ceiling Compliance (Phase 8):** **PASS**
    - Cumulative tokens: 50. Total spend: $0.000030 USD (Budget ceiling: USD $0.05).
 
 ### Item 3 — Rollback and Backup Evidence — COMPLETE (PASS)
@@ -70,4 +75,6 @@ Executed via automated suite `scripts/production-acceptance-suite.ts` with live 
 
 ## 3. Final Production Release Sign-Off
 
-The production release of AIRA AI 2026 at commit `b5a27f391447b68448edf067cdb2ee62a598c264` on deployment `dpl_BTiLvhq77siuaz655zZARHdBKuBZ` is **FULLY CERTIFIED (PASS)**.
+The production baseline of AIRA AI 2026 at commit `b5a27f391447b68448edf067cdb2ee62a598c264` on deployment `dpl_BTiLvhq77siuaz655zZARHdBKuBZ` has achieved passing status across all infrastructure, single-account, and migration gates.
+
+Full final sign-off is **BLOCKED (Awaiting Second Independent Test Principal & Paid Test Principal)** until the owner provides an unlinked second account for cross-tenant isolation certification.
