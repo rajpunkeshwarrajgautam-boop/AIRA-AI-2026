@@ -1,5 +1,8 @@
 # Gate 2 Migration 032 Authorization Package & Database Recovery Specification
 
+> **Post-Approval A state — 2026-11-18 (source-of-truth GitHub verification).** PR #189 merged into `release/candidate-pr178-pr184-combined` at exact merge SHA `4b2074776f790d23fa93fa320a52a4ceed361eeb`. Its original PR HEAD was `415ba39b0de306e38bc92c5e811a217081d0f21d`; the earlier Gate 1 SHA `3040b14bdb398a2ac00dd6d85b599cf5eb0a003a` is historical. New post-merge CI was triggered on `4b2074776f790d23fa93fa320a52a4ceed361eeb`; **certification is pending final check results** until separately verified. Gate 2 remains **NO-GO/LOCKED**: no production recovery checkpoint was created and migration 032 is absent. Nothing in this document authorizes production mutation or Gate 3.
+
+
 **Target Environment:** Neon Production (`old-sky-50952395`)  
 **Production Main Branch:** `br-shiny-moon-b3vy9xj7`  
 **Production Endpoint:** `ep-withered-art-b36ox90b.c-4.ap-southeast-1.aws.neon.tech`  
@@ -11,7 +14,7 @@
 
 ## 1. Verified Release Baseline & Blocker Remediation
 
-- **Promoted Release Branch:** `release/candidate-pr178-pr184-combined`
+- **Promoted Release Branch:** `release/candidate-pr178-pr184-combined` (current merged HEAD: `4b2074776f790d23fa93fa320a52a4ceed361eeb`)
 - **Gate 1 Promoted Base SHA:** `3040b14bdb398a2ac00dd6d85b599cf5eb0a003a`
 - **Actual Verified Corrective Candidate SHA:** `415ba39b0de306e38bc92c5e811a217081d0f21d`
 - **Invalid SHA Audit Trail:** An earlier documentation draft referenced `415ba39b1a5e173e6d1c4ea3ee6406e22e5797f7`. This invalid hash was identified via GitHub HTTP 422 checks query and corrected. The actual Git commit SHA on `origin/fix/gate2-migration-032-cli-readiness` is `415ba39b0de306e38bc92c5e811a217081d0f21d`.
@@ -19,7 +22,7 @@
   * **Gate 1 Promoted Base SHA:** `3040b14bdb398a2ac00dd6d85b599cf5eb0a003a` (unaltered baseline).
   * **PR #189 Corrective Candidate SHA:** `415ba39b0de306e38bc92c5e811a217081d0f21d` (carries the `db:migrate:032` script fix).
 - **Corrective Branch:** `fix/gate2-migration-032-cli-readiness`
-- **Corrective Pull Request:** [PR #189](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/189) (`fix/gate2-migration-032-cli-readiness` -> `release/candidate-pr178-pr184-combined`). State: `OPEN`, `MERGEABLE`.
+- **Corrective Pull Request:** [PR #189](https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/189) (`fix/gate2-migration-032-cli-readiness` -> `release/candidate-pr178-pr184-combined`). State: `MERGED` (2026-11-18; merge commit `4b2074776f790d23fa93fa320a52a4ceed361eeb`).
 - **Blocker A Resolution:** Root `package.json` defines `"db:migrate:032": "npx tsx scripts/run-guarded-migration-032.ts"`.
 - **Focused CLI Regression Coverage:** `test/guarded-migration-cli-validation.test.ts` (13/13 tests pass).
 - **GitHub Actions CI Attestation (Run 44305513120 on SHA 415ba39b0de306e38bc92c5e811a217081d0f21d):**
@@ -102,7 +105,7 @@ Authoritative provider audit conducted via Neon API against production project `
 - **Account Owner:** `rajpunkeshwarrajgautam@gmail.com` (`raj`)
 - **Organization ID:** `org-broad-butterfly-41820185`
 - **Subscription Type:** `launch_v3` (Neon Launch Plan / Paid tier)
-- **Effective Organization Branch Quota:** **5,000 branches** (`project.owner.branches_limit = 5000`).
+- **Branch Capacity:** Neon publishes a **5,000-branch paid-plan maximum per project**, not a verified 5,000-branch organization entitlement. The Launch plan includes **10 branches per project**; additional branches are billable at the current published rate ($1.50/branch-month, prorated hourly). Current project usage: 10 branches. Confirm billable creation acceptance and restoration prerequisites before production checkpoint creation.
 - **Available Headroom:** 4,900+ branches.
 - **Billing Impact:** $0 additional cost. The 10-branch constraint applies strictly to Free-tier accounts; under `launch_v3`, branch capacity is not constrained to 10.
 
@@ -124,10 +127,10 @@ Authoritative provider audit conducted via Neon API against production project `
 
 ### D. Recovery Options Evaluation
 - **Option A (Neon Point-in-Time Branch Checkpoint):** Creating a dedicated pre-cutover recovery branch (`pre-migration-032-checkpoint`) from `br-shiny-moon-b3vy9xj7`.
-  - *Viability:* Fully supported by `launch_v3` (quota: 5,000 branches). Zero deletion of existing branches required.
+  - *Viability:* Plausible under the Launch paid-plan branch maximum, with incremental billing for the 11th branch. **No new checkpoint or successful restore has yet been verified.**
   - *Constraint:* Creating a production branch is a protected production mutation requiring owner authorization.
 - **Option B (Independent Neon Snapshot):** Taking a storage-level manual snapshot (`snap-prod-pre-032`).
-  - *Viability:* Fully supported. Restoring a snapshot creates a new branch (which is permitted under the 5,000 branch quota).
+  - *Viability:* Snapshot restoration may require additional branch and endpoint capacity; test in an authorized non-production environment before relying on this path.
 - **Option C (Certified External PostgreSQL 18.7 Dump):** Logical `pg_dump` of `neondb` prior to cutover.
   - *Viability:* Independent of provider storage layers; provides cold-storage decoupling.
 - **Recommended Dual-Layer Strategy:** Create an instant Neon recovery branch checkpoint (Option A) complemented by a local logical snapshot (Option C) immediately before executing migration 032.
@@ -199,7 +202,7 @@ This checklist defines the strict, ordered sequence for Gate 2 execution once ex
 
 ### Blocker Status Summary:
 - **Blocker A (Missing npm script):** **RESOLVED** via PR #189 (Commit `415ba39b0de306e38bc92c5e811a217081d0f21d`).
-- **Blocker B (Recovery capacity):** **RESOLVED** via provider evidence confirming `launch_v3` quota of 5,000 branches and 6-hour continuous PITR window.
+- **Blocker B (Recovery capacity):** **CONDITIONAL**. Launch paid-plan headroom beyond 10 branches is documented but billable; no fresh checkpoint creation or restore test has been verified. Gate 2 remains NO-GO pending recovery acceptance.
 
 ### Gate 2 Release Verdict:
 **GO-READY** for authorized execution.
