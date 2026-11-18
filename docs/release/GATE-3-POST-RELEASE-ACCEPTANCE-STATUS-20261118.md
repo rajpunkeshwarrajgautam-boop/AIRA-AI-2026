@@ -73,23 +73,22 @@ To progress from **BLOCKED** to **COMPLETE** for Item 2 (Phases B through F), th
    - Account B: GitHub OAuth test account (owner signs in directly via separate browser profile).
    - Clean session invalidation via `/api/auth/signout` at test conclusion.
 
-2. **Bounded Inference Operations:**
-   - Maximum inference calls: 2 total (1 bounded request per account).
-   - Prompt text: `"Reply with 'AIRA_2026_TEST_OK' and nothing else"`
-   - Model selection (live verified via `/api/ready/providers`):
-     - Primary: `groq:openai/gpt-oss-120b` or `groq:llama-3.3-70b-versatile` (11 models available, healthy).
-     - Fallback: `gemini:gemini-2.5-flash` or `gemini:gemini-1.5-flash` (50 models available, healthy).
-   - Estimated token consumption: ~14 prompt tokens + ~4 completion tokens = ~18 tokens per request; ~36 to 50 tokens total across both accounts.
-   - Provider pricing: Groq (~$0.59 / 1M prompt), Gemini (~$0.075 / 1M prompt).
-   - Approved monetary test budget ceiling: Strict maximum cap of **$0.05 USD**.
+2. **Proposed inference operations — NOT AUTHORIZED:**
+   - **Baseline:** At most 2 real-model requests (1 from each isolated, owner-authenticated test account), after approval. Use prompt `Reply with 'AIRA_2026_TEST_OK' and nothing else`.
+   - **Model selection:** Select only a model verified in the production router and accessible for the relevant account at execution time. Preferred candidate: `groq:openai/gpt-oss-120b`, subject to live availability, rate limits and entitlements. Do not assume the registered provider has successfully served inference. `groq:llama-3.3-70b-versatile` was retired on Groq Free/Developer plans on 2026-08-16; `gemini:gemini-1.5-flash` is an obsolete fallback. Use `gemini:gemini-2.5-flash` only after confirming it is available through the configured account and router.
+   - **Published reference prices, not account-specific billing:** Groq GPT-OSS 120B standard $0.15 / 1M input tokens, $0.60 / 1M output tokens (https://console.groq.com/docs/models); Google Gemini 2.5 Flash paid standard $0.30 / 1M text input tokens, $2.50 / 1M output tokens including thinking tokens (https://ai.google.dev/gemini-api/docs/pricing). Recheck before usage, especially provider surcharges and provider-specific free quotas.
+   - **Cost bound:** **USD $0.05 is a PROPOSED owner-approval ceiling, not an approved or technically enforced spending limit.** Prompt token counts and hidden/system/tool/metadata/thinking output are unknown until measured. Before execution, bound inputs, `max_output_tokens`, retries, fallbacks and agent/tool calls; obtain owner approval for the complete maximum call count and provider spend. If enforcement is unavailable, stop and report BLOCKED instead of asserting a hard cap.
+   - **Coverage exception:** An additional SSE-abort generation and a cancellable agent task may consume model tokens and create records beyond the 2 baseline calls. Do not include them inside the 2-call approval without explicit accounting and additional approval. Free/paid quota-exhaustion tests may consume further usage and must have their own approved limits.
 
 3. **Agent Task & Cancellation Scope:**
    - 1 bounded single-step read-only task under Account A.
    - 1 separately controlled SSE client disconnect/abort test during token streaming.
    - 1 separately controlled cancellable task test to verify execution cancellation without orphan locks.
 
-4. **Expected Database Effects:**
-   - Maximum ~2 rows in `conversations`, ~4 rows in `conversation_messages`, ~1-2 rows in `workflow_runs`, and ~2 events in `usage_events`. Zero customer records modified.
+4. **Expected Production Database Effects — estimates only, NOT AUTHORIZED:**
+   - OAuth login, session refresh and sign-out may create or revoke identity/session records. Conversations, messages, usage and credit ledgers, workflow runs, artifacts and cancellation events may be created or modified by test accounts. These are **production customer-data tables**, even when rows are owned by dedicated test principals.
+   - No fixed row count is established by the existing evidence. Obtain endpoint-level write impact and expected cardinality from audited source code; explicitly approve the maximum allowed writes. Never claim `zero customer tables touched`.
+   - Cross-account probes are **read-only negative authorization tests**. Never mutate another tenant's records. Do not delete or archive test rows without separate specific cleanup authorization, validated ownership and retention considerations.
 
 5. **Cleanup Scope:**
    - Created test conversation and task records will be archived/soft-deleted post-verification.
@@ -105,4 +104,4 @@ To progress from **BLOCKED** to **COMPLETE** for Item 2 (Phases B through F), th
 **Independent Backup & Restore Parity:** VERIFIED PASS  
 **Authenticated End-to-End Product Acceptance:** **BLOCKED** (Awaiting Owner Interactive Authentication & Production Write Approval)
 
-The production release remains stable, secure, and operational.
+The production infrastructure is verified live; authenticated end-to-end behavior remains BLOCKED until tested with explicit owner authorization.
