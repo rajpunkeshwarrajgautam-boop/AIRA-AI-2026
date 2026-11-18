@@ -179,7 +179,7 @@ To clear the remaining `BLOCKED` gates and achieve 100% full production certific
    - Provision a second Google or GitHub account that is **not** linked to `rajpunkeshwarrajgautam@gmail.com`.
    - Run cross-account read-only probe from Account B targeting `wfrun_run_e9eaa9f5-4` owned by Account A to certify 403 Forbidden cross-tenant isolation.
 2. **Provision Paid Test Principal (Optional for General Release, Required for Paid Scope):**
-   - Assign Pro/Enterprise tier to an isolated test account in production database or billing portal.
+   - Provide an existing legitimately paid, owner-authorized test principal. Never modify production subscription tables or billing state to manufacture a paid test account; paid-tier acceptance stays BLOCKED if none exists.
    - Run paid model allowlist probe and elevated quota verification.
 3. **Preserve All Safety Resources:**
    - Keep recovery branch `br-orange-art-b3vzajv0` preserved.
