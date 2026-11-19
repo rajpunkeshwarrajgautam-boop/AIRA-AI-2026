@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import http, { type Server } from 'node:http';
 import crypto from 'crypto';
 
+process.env.VERCEL = '1';
 process.env.NODE_ENV = 'test';
 process.env.AIRA_BUILDER_SIGNING_SECRET = '1234567890123456789012345678901234567890';
 

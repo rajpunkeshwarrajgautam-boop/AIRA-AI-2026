@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import http, { type Server } from 'node:http';
 import crypto from 'crypto';
 
+process.env.VERCEL = '1';
 process.env.NODE_ENV = 'test';
 
 const { default: app, agentRuntime, modelRouter } = await import('../apps/api/src/index.js');
 const { commercialBillingService } = await import('../apps/api/src/billing/commercial-billing-service.js');
+const { InMemoryCapacityStore } = await import('../packages/model-router/src/capacity/capacity-store.js');
 const { db } = await import('../packages/db/src/index.js');
 
 describe('Remediation F8 (Part 2): Real HTTP Upstream Cancellation, Quota Refund & Telemetry (Actual Route)', () => {
@@ -14,8 +16,13 @@ describe('Remediation F8 (Part 2): Real HTTP Upstream Cancellation, Quota Refund
   let baseUrl: string;
 
   let origCreateModelSpecificAdapter: any;
+  let origCapacityStore: any;
 
   before(async () => {
+    // Ensure in-memory capacity store for offline unit test execution
+    origCapacityStore = (modelRouter.capacityGuard as any).store;
+    (modelRouter.capacityGuard as any).store = new InMemoryCapacityStore();
+
     // Register streaming mock adapter for groq provider so aira-fast resolves cleanly in test
     const testMockAdapter = {
       name: 'test-stream-adapter',
@@ -72,6 +79,9 @@ describe('Remediation F8 (Part 2): Real HTTP Upstream Cancellation, Quota Refund
   });
 
   after(async () => {
+    if (origCapacityStore) {
+      (modelRouter.capacityGuard as any).store = origCapacityStore;
+    }
     if (origCreateModelSpecificAdapter) {
       (modelRouter as any).createModelSpecificAdapter = origCreateModelSpecificAdapter;
     }

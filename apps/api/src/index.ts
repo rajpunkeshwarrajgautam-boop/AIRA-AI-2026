@@ -3917,7 +3917,7 @@ app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
 // -----------------------------------------------------------------------
 // Start Server
 // -----------------------------------------------------------------------
-if (!process.env.VERCEL && process.env.NODE_ENV !== 'test') {
+if (!process.env.VERCEL) {
   const apiWorkerOwner = `api-worker-${process.pid}-${crypto.randomUUID()}`;
   let approvalOutboxPoll: NodeJS.Timeout | undefined;
   const server = app.listen(PORT, '0.0.0.0', () => {
