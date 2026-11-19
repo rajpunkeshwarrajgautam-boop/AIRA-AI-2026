@@ -129,7 +129,7 @@ async function runIntegration() {
   console.log('--- MIGRATION: Fresh DB for integration tests ---');
   assertAuthorizedDisposableDatabase();
   await new Promise((resolve, reject) => {
-    const script = `import path from 'path'; import { pathToFileURL } from 'url'; async function clean() { const dbModule = await import(pathToFileURL(path.resolve('./packages/db/src/index.ts')).href); const db = dbModule.db; await db.raw('DROP SCHEMA public CASCADE; CREATE SCHEMA public;'); await db.migrate.latest(); console.log('Clean DB migration PASS'); process.exit(0); } clean().catch((err) => { console.error(err); process.exit(1); });`;
+    const script = `import path from 'path'; import { pathToFileURL } from 'url'; async function clean() { const dbModule = await import(pathToFileURL(path.resolve('./packages/db/src/index.ts')).href); const db = dbModule.db; await db.raw('DROP SCHEMA public CASCADE; CREATE SCHEMA public;'); await db.migrate.latest(); const now = Date.now(); await db('billing_customers').insert({ id: 'cust_integration_test', principal_id: 'integration-test-user', email: 'integration-test@aira.local', name: 'Integration Test User', default_currency: 'USD', country_code: 'US', tax_info: {}, created_at: now, updated_at: now }); await db('subscriptions').insert({ id: 'sub_integration_test_plus', customer_id: 'cust_integration_test', plan_id: 'plus', price_id: 'price_plus_usd', status: 'active', gateway: 'manual_grant', currency: 'USD', amount_minor_units: 799, current_period_start: now - 1000, current_period_end: now + 365 * 24 * 60 * 60 * 1000, cancel_at_period_end: false, metadata: { grantReason: 'integration-test' }, created_at: now, updated_at: now }); console.log('Clean DB migration and test subscription seeding PASS'); process.exit(0); } clean().catch((err) => { console.error(err); process.exit(1); });`;
     exec(`npx tsx -e "${script}"`, (err, stdout, stderr) => {
       if (err) { console.error(stderr); return reject(err); }
       console.log('DB Migration complete.');
@@ -157,6 +157,28 @@ async function runIntegration() {
     // TEST 2: Durability & Fail-over
     // -----------------------------------------------------------------------
     console.log('--- TEST 2: Durability & Fail-over ---');
+
+    // Negative assertion: un-entitled Free caller must be denied AGENT_MISSION (P0 entitlement gate)
+    console.log('Asserting un-entitled Free user cannot create AGENT_MISSION run...');
+    const freeRunRes = await fetch(`${BASE_URL}/api/runs`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-test-user-id': 'integration-free-user',
+        'x-test-session-id': 'integration-free-session'
+      },
+      body: JSON.stringify({
+        intent: 'AGENT_MISSION',
+        prompt: 'Un-entitled free autonomous run attempt',
+        modelPolicy: { model: 'mock-deterministic' }
+      })
+    });
+    assert.strictEqual(freeRunRes.status, 403, 'Un-entitled free user must receive HTTP 403 for AGENT_MISSION');
+    const freeErr = await freeRunRes.json();
+    assert.strictEqual(freeErr.error, 'PLAN_MODEL_RESTRICTED', 'Error code must be PLAN_MODEL_RESTRICTED');
+    console.log('Free tier autonomous execution rejection verified (HTTP 403 PLAN_MODEL_RESTRICTED).');
+
+    // Positive execution: entitled Plus principal creates durable run
     const createRunRes = await fetch(`${BASE_URL}/api/runs`, {
       method: 'POST',
       headers: INT_HEADERS,
