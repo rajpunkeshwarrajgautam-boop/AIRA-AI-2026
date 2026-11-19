@@ -1,7 +1,7 @@
 import { createBuilderRoutes } from './builder-routes.js';
 import { createBillingRoutes } from './billing-routes.js';
 import { createVisionRoutes } from './vision-routes.js';
-import { createAccountRoutes } from './account-routes.js';
+import { createAccountRoutes, createAnnouncementRoutes } from './account-routes.js';
 import { commercialBillingService, StandardQuotaExceededError, StandardChatReplayError, StandardChatPlanChangedError } from './billing/commercial-billing-service.js';
 import { paymentGatewayService } from './billing/payment-gateway-service.js';
 import 'dotenv/config';
@@ -564,6 +564,9 @@ app.get('/api/billing/plans', (_req: Request, res: Response) => {
     checkoutAvailable: false
   });
 });
+
+// Announcements delivery and user-isolated dismissal sync (P3 remediation)
+app.use('/api/announcements', createAnnouncementRoutes());
 
 // Enforce ExecutionPrincipal on all /api routes BELOW this point.
 // Routes registered above (health, ready, webhooks, plans) are public infrastructure probes, catalogs, or signature verified.
