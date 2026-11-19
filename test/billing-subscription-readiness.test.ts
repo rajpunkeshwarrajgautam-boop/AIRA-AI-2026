@@ -184,22 +184,88 @@ describe('F1 — Plus/Pro Billing Integration and Subscription Readiness', () =>
   });
 
   describe('Production Gating & Fail-Closed Security', () => {
-    it('fails closed with BILLING_UNAVAILABLE on subscription checkout', async () => {
+    it('fails closed with BILLING_UNAVAILABLE on subscription checkout when disabled', async () => {
       const gateway = new PaymentGatewayService();
 
-      await assert.rejects(
-        async () => {
-          await gateway.createSubscriptionCheckout('usr_buyer_1', 'plus', 'INR');
-        },
-        /BILLING_UNAVAILABLE/
-      );
+      const origBillingEnabled = process.env.AIRA_COMMERCIAL_BILLING_ENABLED;
+      try {
+        delete process.env.AIRA_COMMERCIAL_BILLING_ENABLED;
 
-      await assert.rejects(
-        async () => {
-          await gateway.createSubscriptionCheckout('usr_buyer_2', 'pro', 'USD');
-        },
-        /BILLING_UNAVAILABLE/
-      );
+        await assert.rejects(
+          async () => {
+            await gateway.createSubscriptionCheckout('usr_buyer_1', 'plus', 'INR');
+          },
+          /BILLING_UNAVAILABLE: Live checkout has not been approved or integrated/
+        );
+
+        await assert.rejects(
+          async () => {
+            await gateway.createSubscriptionCheckout('usr_buyer_2', 'pro', 'USD');
+          },
+          /BILLING_UNAVAILABLE: Live checkout has not been approved or integrated/
+        );
+      } finally {
+        if (origBillingEnabled !== undefined) process.env.AIRA_COMMERCIAL_BILLING_ENABLED = origBillingEnabled;
+        else delete process.env.AIRA_COMMERCIAL_BILLING_ENABLED;
+      }
+    });
+
+    it('creates checkout session and links authoritative purchase order when commercial billing toggle is enabled', async () => {
+      const mockDb = createMockBillingDb();
+      const gateway = new PaymentGatewayService();
+      gateway.setDbClient(mockDb);
+
+      const origBillingEnabled = process.env.AIRA_COMMERCIAL_BILLING_ENABLED;
+      const origKeyId = process.env.RAZORPAY_KEY_ID;
+
+      try {
+        process.env.AIRA_COMMERCIAL_BILLING_ENABLED = 'true';
+        delete process.env.RAZORPAY_KEY_ID;
+        delete process.env.CASHFREE_APP_ID;
+        delete process.env.AIRA_TEST_GATEWAY_KEY_ID;
+
+        // Fails closed if credentials are missing even when toggle is enabled
+        await assert.rejects(
+          async () => {
+            await gateway.createSubscriptionCheckout('usr_buyer_1', 'plus', 'INR');
+          },
+          /BILLING_UNAVAILABLE: Gateway credentials not configured/
+        );
+
+        // When gateway credentials are configured
+        process.env.RAZORPAY_KEY_ID = 'rzp_test_key_sample123';
+
+        const checkout = await gateway.createSubscriptionCheckout('usr_buyer_1', 'plus', 'INR');
+        assert.ok(checkout.orderId);
+        assert.equal(checkout.keyId, 'rzp_test_key_sample123');
+        assert.equal(checkout.amount, 39900);
+        assert.equal(checkout.currency, 'INR');
+        assert.match(checkout.checkoutUrl || '', /checkout\.aira\.ai/);
+
+        // Verify authoritative audit ledger event linking order to principal
+        const auditEvent = await mockDb('billing_audit_events').where({ customer_id: 'usr_buyer_1' }).first();
+        assert.ok(auditEvent);
+        assert.equal(auditEvent.event_type, 'CHECKOUT_ORDER_CREATED');
+        assert.equal(auditEvent.actor_id, 'usr_buyer_1');
+
+        const payload = JSON.parse(auditEvent.payload as string);
+        assert.equal(payload.orderId, checkout.orderId);
+        assert.equal(payload.principalId, 'usr_buyer_1');
+        assert.equal(payload.planTier, 'plus');
+        assert.equal(payload.amount, 39900);
+        assert.equal(payload.currency, 'INR');
+        assert.equal(payload.status, 'PENDING_PAYMENT');
+
+        // Test Pro USD checkout
+        const proCheckout = await gateway.createSubscriptionCheckout('usr_buyer_pro', 'pro', 'USD');
+        assert.equal(proCheckout.amount, 1999);
+        assert.equal(proCheckout.currency, 'USD');
+      } finally {
+        if (origBillingEnabled !== undefined) process.env.AIRA_COMMERCIAL_BILLING_ENABLED = origBillingEnabled;
+        else delete process.env.AIRA_COMMERCIAL_BILLING_ENABLED;
+        if (origKeyId !== undefined) process.env.RAZORPAY_KEY_ID = origKeyId;
+        else delete process.env.RAZORPAY_KEY_ID;
+      }
     });
 
     it('ProductionReadinessService audits all 14 mandatory production payment gates', () => {

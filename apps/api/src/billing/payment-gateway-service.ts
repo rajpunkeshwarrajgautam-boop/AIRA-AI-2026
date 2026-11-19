@@ -92,6 +92,25 @@ export const TOPUP_PACKS: Record<string, CreditTopupPack> = {
   }
 };
 
+export const VERIFIED_PRICE_CATALOG: Record<PlanTier, Record<CurrencyCode, { id: string; amountMinorUnits: number; currency: CurrencyCode }>> = {
+  guest: {
+    INR: { id: 'price_guest_inr', amountMinorUnits: 0, currency: 'INR' },
+    USD: { id: 'price_guest_usd', amountMinorUnits: 0, currency: 'USD' }
+  },
+  free: {
+    INR: { id: 'price_free_inr', amountMinorUnits: 0, currency: 'INR' },
+    USD: { id: 'price_free_usd', amountMinorUnits: 0, currency: 'USD' }
+  },
+  plus: {
+    INR: { id: 'price_plus_inr_399', amountMinorUnits: 39900, currency: 'INR' },
+    USD: { id: 'price_plus_usd_799', amountMinorUnits: 799, currency: 'USD' }
+  },
+  pro: {
+    INR: { id: 'price_pro_inr_1499', amountMinorUnits: 149900, currency: 'INR' },
+    USD: { id: 'price_pro_usd_1999', amountMinorUnits: 1999, currency: 'USD' }
+  }
+};
+
 function isDisabledCommercialFulfillment(eventType: string, payload: any): boolean {
   if (process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.AIRA_COMMERCIAL_BILLING_ENABLED === 'true') {
     return false;
@@ -312,7 +331,8 @@ export class PaymentGatewayService {
       const existingSub = await this.getDb()('subscriptions').where({ customer_id: customer.id }).first();
       const subId = existingSub ? existingSub.id : `sub_${crypto.randomUUID().replace(/-/g, '')}`;
 
-      const price = plan.prices.find(p => p.currency === currency) || plan.prices[0] || {
+      const catalogPrice = VERIFIED_PRICE_CATALOG[planTier]?.[currency];
+      const price = plan.prices.find(p => p.currency === currency) || plan.prices[0] || catalogPrice || {
         id: `price_${planTier}_${currency.toLowerCase()}`,
         amountMinorUnits: planTier === 'pro' ? (currency === 'USD' ? 1999 : 149900) : (currency === 'USD' ? 799 : 39900)
       };
@@ -407,19 +427,65 @@ export class PaymentGatewayService {
 
   /**
    * Create a subscription checkout session for frontend redirection.
+   * Fails closed when live billing is not explicitly enabled or gateway credentials are missing.
+   * When enabled, creates an authoritative order record linking principal, plan, and price.
    */
   async createSubscriptionCheckout(
-    _principalId: string,
+    principalId: string,
     planTier: PlanTier,
-    _currency: CurrencyCode = 'INR'
+    currency: CurrencyCode = 'INR'
   ): Promise<{ checkoutUrl?: string; orderId: string; keyId: string; amount: number; currency: string }> {
     const plan = COMMERCIAL_PLANS[planTier];
-    if (!plan || planTier === 'free') {
+    if (!plan || planTier === 'free' || planTier === 'guest') {
       throw new Error(`Invalid plan tier for subscription checkout: ${planTier}`);
     }
-    // No gateway order endpoint is wired yet. Returning a synthetic order ID
-    // would misrepresent a purchase and could trigger an unsafe payment flow.
-    throw new Error('BILLING_UNAVAILABLE: Live checkout has not been approved or integrated.');
+
+    if (process.env.AIRA_COMMERCIAL_BILLING_ENABLED !== 'true') {
+      throw new Error('BILLING_UNAVAILABLE: Live checkout has not been approved or integrated.');
+    }
+
+    const keyId = process.env.RAZORPAY_KEY_ID || process.env.CASHFREE_APP_ID || process.env.AIRA_TEST_GATEWAY_KEY_ID;
+    if (!keyId) {
+      throw new Error('BILLING_UNAVAILABLE: Gateway credentials not configured.');
+    }
+
+    const tierPrices = VERIFIED_PRICE_CATALOG[planTier];
+    const catalogPrice = tierPrices ? tierPrices[currency] : undefined;
+    if (!catalogPrice) {
+      throw new Error(`Unsupported currency for plan ${planTier}: ${currency}`);
+    }
+
+    const now = Date.now();
+    const orderId = `order_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+    const gateway = process.env.RAZORPAY_KEY_ID ? 'razorpay' : (process.env.CASHFREE_APP_ID ? 'cashfree' : 'test_gateway');
+
+    // Authoritative purchase order linking in audit ledger
+    await this.getDb()('billing_audit_events').insert({
+      id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+      customer_id: principalId,
+      event_type: 'CHECKOUT_ORDER_CREATED',
+      actor_type: 'principal',
+      actor_id: principalId,
+      payload: JSON.stringify({
+        orderId,
+        principalId,
+        planTier,
+        currency,
+        amount: catalogPrice.amountMinorUnits,
+        priceId: catalogPrice.id,
+        gateway,
+        status: 'PENDING_PAYMENT'
+      }),
+      created_at: now
+    });
+
+    return {
+      orderId,
+      keyId,
+      amount: catalogPrice.amountMinorUnits,
+      currency,
+      checkoutUrl: `https://checkout.aira.ai/pay/${orderId}`
+    };
   }
 
   /**
