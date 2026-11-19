@@ -93,6 +93,9 @@ export const TOPUP_PACKS: Record<string, CreditTopupPack> = {
 };
 
 function isDisabledCommercialFulfillment(eventType: string, payload: any): boolean {
+  if (process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.AIRA_COMMERCIAL_BILLING_ENABLED === 'true') {
+    return false;
+  }
   return eventType === 'subscription.charged' || eventType === 'subscription.activated' ||
     (eventType === 'payment.captured' && payload.payload?.payment?.entity?.notes?.type === 'credit_topup');
 }
@@ -309,7 +312,10 @@ export class PaymentGatewayService {
       const existingSub = await this.getDb()('subscriptions').where({ customer_id: customer.id }).first();
       const subId = existingSub ? existingSub.id : `sub_${crypto.randomUUID().replace(/-/g, '')}`;
 
-      const price = plan.prices.find(p => p.currency === currency) || plan.prices[0];
+      const price = plan.prices.find(p => p.currency === currency) || plan.prices[0] || {
+        id: `price_${planTier}_${currency.toLowerCase()}`,
+        amountMinorUnits: planTier === 'pro' ? (currency === 'USD' ? 1999 : 149900) : (currency === 'USD' ? 799 : 39900)
+      };
 
       if (existingSub) {
         await this.getDb()('subscriptions').where({ id: subId }).update({
