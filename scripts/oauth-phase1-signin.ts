@@ -6,21 +6,32 @@
  *   - Profile B: Genuine GitHub OAuth via AIRA's UI (#signin-github-btn)
  *
  * Never captures or logs passwords, OAuth authorization codes, cookies, or secrets.
+ * Strictly locked to certified staging origin: https://staging.virexaaiventures.com
  */
 
 import { chromium, type BrowserContext, type Page } from 'playwright';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import {
+  assertPr178StagingDestination,
+  assertAllowedOAuthNavigation,
+  CERTIFIED_STAGING_ORIGIN,
+} from '../test/helpers/pr178-staging-host-guard.js';
 
-const STAGING_URL = process.env.AIRA_STAGING_URL || 'https://staging.virexaaiventures.com';
+// Strictly validated staging destination
+const STAGING_URL = assertPr178StagingDestination(
+  process.env.AIRA_STAGING_URL || CERTIFIED_STAGING_ORIGIN
+);
+
 const ARTIFACTS_DIR = path.resolve(process.cwd(), 'artifacts/staging-acceptance/pr164');
 if (!fs.existsSync(ARTIFACTS_DIR)) fs.mkdirSync(ARTIFACTS_DIR, { recursive: true });
 
 const PROFILE_A_DIR = path.resolve(process.cwd(), 'artifacts/staging-acceptance/edge_oauth_profile_a');
 const PROFILE_B_DIR = path.resolve(process.cwd(), 'artifacts/staging-acceptance/edge_oauth_profile_b');
 
-interface OAuthFlowMetadata {
+interface SanitizedOAuthMetadata {
   provider: 'google' | 'github';
   authorizeHost?: string;
   clientId?: string;
@@ -30,31 +41,50 @@ interface OAuthFlowMetadata {
   alreadySignedIn: boolean;
   callbackLandedUrl?: string;
   authenticated: boolean;
-  userId?: string;
-  userEmail?: string;
-  userName?: string;
+  userIdPrefix?: string;
+  userIdHash?: string;
+  userEmailHash?: string;
   linkedProviders?: string[];
   error?: string;
 }
 
-async function getSessionAndProviders(page: Page) {
-  return page.evaluate(async () => {
-    const sRes = await fetch('/api/auth/session', { credentials: 'include' });
-    const session = await sRes.json().catch(() => null);
-    let providers: any = null;
-    if (session?.status === 'AUTHENTICATED' && session?.user) {
-      const pRes = await fetch('/api/auth/providers', { credentials: 'include' });
-      providers = await pRes.json().catch(() => null);
+function sanitizeLandedUrl(rawUrl: string): string {
+  try {
+    const url = new URL(rawUrl);
+    const allowed = new Set(['auth_success', 'auth_error']);
+    const cleanParams = new URLSearchParams();
+    for (const [k, v] of url.searchParams.entries()) {
+      if (allowed.has(k)) cleanParams.set(k, v);
     }
-    return { sessionStatus: sRes.status, session, providers };
-  });
+    const q = cleanParams.toString() ? `?${cleanParams.toString()}` : '';
+    return `${url.origin}${url.pathname}${q}`;
+  } catch {
+    return 'invalid_url';
+  }
+}
+
+async function getSessionAndProviders(page: Page) {
+  try {
+    return await page.evaluate(async () => {
+      const sRes = await fetch('/api/auth/session', { credentials: 'include' });
+      const session = await sRes.json().catch(() => null);
+      let providers: any = null;
+      if (session?.status === 'AUTHENTICATED' && session?.user) {
+        const pRes = await fetch('/api/auth/providers', { credentials: 'include' });
+        providers = await pRes.json().catch(() => null);
+      }
+      return { sessionStatus: sRes.status, session, providers };
+    });
+  } catch {
+    return { sessionStatus: 0, session: null, providers: null };
+  }
 }
 
 async function initiateOAuthIfNeeded(
   page: Page,
   provider: 'google' | 'github'
-): Promise<OAuthFlowMetadata> {
-  const meta: OAuthFlowMetadata = {
+): Promise<SanitizedOAuthMetadata> {
+  const meta: SanitizedOAuthMetadata = {
     provider,
     alreadySignedIn: false,
     authenticated: false,
@@ -71,11 +101,14 @@ async function initiateOAuthIfNeeded(
   if (initial.session?.status === 'AUTHENTICATED' && existingProviders.includes(provider)) {
     meta.alreadySignedIn = true;
     meta.authenticated = true;
-    meta.userId = initial.session.user?.id;
-    meta.userEmail = initial.session.user?.email;
-    meta.userName = initial.session.user?.name;
+    const uid = initial.session.user?.id || '';
+    meta.userIdPrefix = uid.slice(0, 14);
+    meta.userIdHash = crypto.createHash('sha256').update(uid).digest('hex').slice(0, 16);
+    if (initial.session.user?.email) {
+      meta.userEmailHash = crypto.createHash('sha256').update(initial.session.user.email).digest('hex').slice(0, 16);
+    }
     meta.linkedProviders = existingProviders;
-    console.log(`[${provider.toUpperCase()}] Profile already authenticated via ${provider} (User ID: ${meta.userId?.slice(0, 8)}...)`);
+    console.log(`[${provider.toUpperCase()}] Profile already authenticated via ${provider} (User: ${meta.userIdPrefix}...)`);
     return meta;
   }
 
@@ -123,9 +156,12 @@ async function initiateOAuthIfNeeded(
   const oauthBtnSelector = provider === 'google' ? '#signin-google-btn' : '#signin-github-btn';
   await page.locator(oauthBtnSelector).waitFor({ state: 'visible', timeout: 5000 });
 
-  // Capture authorize request redirect URL safely (never log secrets)
+  // Guard navigation to ensure only authorized IdP is targeted
   const navPromise = page.waitForURL(
-    (url) => url.hostname.includes('google.com') || url.hostname.includes('github.com'),
+    (url) => {
+      assertAllowedOAuthNavigation(url.href, provider);
+      return url.hostname.includes('google.com') || url.hostname.includes('github.com');
+    },
     { timeout: 20_000 }
   );
   await page.locator(oauthBtnSelector).click();
@@ -149,7 +185,7 @@ async function initiateOAuthIfNeeded(
     meta.statePrefix = state.startsWith('github.') ? 'github....' : state.slice(0, 8) + '...';
   }
 
-  console.log(`[${provider.toUpperCase()}] Browser navigated to ${meta.authorizeHost} (client_id=${meta.clientId}, redirect_uri=${meta.redirectUri})`);
+  console.log(`[${provider.toUpperCase()}] Browser navigated to ${meta.authorizeHost} (client_id=${meta.clientId})`);
   console.log(`[${provider.toUpperCase()}] >>> WAITING FOR INTERACTIVE USER LOGIN & CONSENT IN MICROSOFT EDGE WINDOW <<<`);
 
   return meta;
@@ -157,28 +193,28 @@ async function initiateOAuthIfNeeded(
 
 async function waitForOAuthCompletion(
   page: Page,
-  meta: OAuthFlowMetadata
-): Promise<OAuthFlowMetadata> {
+  meta: SanitizedOAuthMetadata
+): Promise<SanitizedOAuthMetadata> {
   if (meta.alreadySignedIn && meta.authenticated) return meta;
 
   const targetHost = new URL(STAGING_URL).hostname;
   await page.waitForURL(
-    (url) => url.hostname === targetHost,
-    { timeout: 600_000, waitUntil: 'domcontentloaded' }
+    (url) => url.hostname === targetHost && !url.pathname.includes('/callback'),
+    { timeout: 1_200_000, waitUntil: 'domcontentloaded' }
   );
 
-  const landed = new URL(page.url());
-  const redactedLanded = `${landed.origin}${landed.pathname}${landed.searchParams.has('auth_success') ? '?auth_success=' + landed.searchParams.get('auth_success') : landed.searchParams.has('auth_error') ? '?auth_error=' + landed.searchParams.get('auth_error') : ''}`;
-  meta.callbackLandedUrl = redactedLanded;
+  const landed = page.url();
+  meta.callbackLandedUrl = sanitizeLandedUrl(landed);
 
-  if (landed.searchParams.has('auth_error')) {
-    meta.error = landed.searchParams.get('auth_error') || 'unknown_error';
+  const landedParsed = new URL(landed);
+  if (landedParsed.searchParams.has('auth_error')) {
+    meta.error = landedParsed.searchParams.get('auth_error') || 'unknown_error';
     throw new Error(`[${meta.provider.toUpperCase()}] OAuth returned error: ${meta.error}`);
   }
 
   // Wait briefly for frontend session hydration & poll /api/auth/session
   let check = await getSessionAndProviders(page);
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 30; i++) {
     if (check.session?.status === 'AUTHENTICATED' && check.session?.user) break;
     await page.waitForTimeout(500);
     check = await getSessionAndProviders(page);
@@ -189,15 +225,18 @@ async function waitForOAuthCompletion(
     : [];
 
   meta.authenticated = check.session?.status === 'AUTHENTICATED' && Boolean(check.session?.user);
-  meta.userId = check.session?.user?.id;
-  meta.userEmail = check.session?.user?.email;
-  meta.userName = check.session?.user?.name;
+  const uid = check.session?.user?.id || '';
+  meta.userIdPrefix = uid.slice(0, 14);
+  meta.userIdHash = crypto.createHash('sha256').update(uid).digest('hex').slice(0, 16);
+  if (check.session?.user?.email) {
+    meta.userEmailHash = crypto.createHash('sha256').update(check.session.user.email).digest('hex').slice(0, 16);
+  }
   meta.linkedProviders = linked;
 
   assert.equal(meta.authenticated, true, `${meta.provider} OAuth must yield an authenticated session`);
   assert.ok(linked.includes(meta.provider), `Linked providers must include ${meta.provider}`);
 
-  console.log(`[${meta.provider.toUpperCase()}] ✓ Authenticated session verified! User=${meta.userId?.slice(0, 8)}... Providers=[${linked.join(', ')}]`);
+  console.log(`[${meta.provider.toUpperCase()}] ✓ Authenticated session verified! User=${meta.userIdPrefix}... Providers=[${linked.join(', ')}]`);
   return meta;
 }
 
@@ -215,7 +254,13 @@ async function main() {
       headless: false,
       channel: 'msedge',
       viewport: { width: 1366, height: 860 },
-      args: ['--window-position=30,30'],
+      ignoreDefaultArgs: ['--enable-automation'],
+      args: [
+        '--window-position=30,30',
+        '--disable-blink-features=AutomationControlled',
+        '--no-sandbox',
+        '--disable-infobars',
+      ],
     });
     const pageA = await contextA.newPage();
 
@@ -223,7 +268,13 @@ async function main() {
       headless: false,
       channel: 'msedge',
       viewport: { width: 1366, height: 860 },
-      args: ['--window-position=480,70'],
+      ignoreDefaultArgs: ['--enable-automation'],
+      args: [
+        '--window-position=480,70',
+        '--disable-blink-features=AutomationControlled',
+        '--no-sandbox',
+        '--disable-infobars',
+      ],
     });
     const pageB = await contextB.newPage();
 

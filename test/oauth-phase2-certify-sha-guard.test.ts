@@ -7,6 +7,8 @@ import {
   assertStagingTargetUrl,
   resolveExpectedCandidateSha,
   assertDeployedShaMatches,
+  resolveAccountBConfig,
+  DEFAULT_STAGING_ACCOUNT_B_EMAIL,
 } from '../scripts/oauth-phase2-certify.js';
 
 const VALID_SHA_A = '0123456789abcdef0123456789abcdef01234567';
@@ -136,4 +138,53 @@ test('oauth-phase2-certify source code contains no hardcoded 40-character commit
   );
   const shaLiterals = scriptSrc.match(/\b[a-f0-9]{40}\b/gi) ?? [];
   assert.deepEqual(shaLiterals, [], `Unexpected hardcoded 40-char SHA(s): ${shaLiterals.join(', ')}`);
+});
+
+test('resolveAccountBConfig defaults to email with default source when no flags provided', () => {
+  const config = resolveAccountBConfig({ argv: [], env: {} });
+  assert.equal(config.type, 'email');
+  assert.equal(config.source, 'default');
+});
+
+test('resolveAccountBConfig parses --account-b-type CLI flags', () => {
+  const oauthConfig = resolveAccountBConfig({ argv: ['--account-b-type=oauth'], env: {} });
+  assert.equal(oauthConfig.type, 'oauth');
+  assert.equal(oauthConfig.source, 'cli');
+
+  const emailConfig = resolveAccountBConfig({ argv: ['--account-b-type', 'email'], env: {} });
+  assert.equal(emailConfig.type, 'email');
+  assert.equal(emailConfig.source, 'cli');
+
+  assert.throws(
+    () => resolveAccountBConfig({ argv: ['--account-b-type=invalid'], env: {} }),
+    /Invalid --account-b-type/i
+  );
+});
+
+test('resolveAccountBConfig parses custom email and password flags', () => {
+  const customConfig = resolveAccountBConfig({
+    argv: [
+      '--account-b-type=email',
+      '--account-b-email=custom-test@virexaaiventures.com',
+      '--account-b-password=mock-account-b-pass'
+    ],
+    env: {}
+  });
+  assert.equal(customConfig.type, 'email');
+  assert.equal(customConfig.email, 'custom-test@virexaaiventures.com');
+  assert.equal(customConfig.password, 'mock-account-b-pass');
+});
+
+test('resolveAccountBConfig resolves from environment variable AIRA_ACCOUNT_B_TYPE', () => {
+  const envConfig = resolveAccountBConfig({
+    argv: [],
+    env: { AIRA_ACCOUNT_B_TYPE: 'oauth' }
+  });
+  assert.equal(envConfig.type, 'oauth');
+  assert.equal(envConfig.source, 'env');
+
+  assert.throws(
+    () => resolveAccountBConfig({ argv: [], env: { AIRA_ACCOUNT_B_TYPE: 'bogus' } }),
+    /Invalid AIRA_ACCOUNT_B_TYPE/i
+  );
 });
