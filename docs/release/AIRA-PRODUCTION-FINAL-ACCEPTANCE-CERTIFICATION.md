@@ -1,7 +1,7 @@
 # AIRA AI 2026 — Production Acceptance & Corrective Certification Report
 
-**Document Version:** 3.4.0 (Authoritative Certification Baseline — Scoped Free-Tier Release Closure)  
-**Audit Timestamp:** 2026-11-19T07:00:00Z / 2026-11-19 12:30 IST  
+**Document Version:** 3.5.0 (Authoritative Certification Baseline — Scoped Free-Tier Release Owner Approved)  
+**Audit Timestamp:** 2026-11-19T07:15:00Z / 2026-11-19 12:45 IST  
 **Repository:** `rajpunkeshwarrajgautam-boop/AIRA-AI-2026`  
 **Production URL:** `https://aira-ai-2026.vercel.app`  
 **Production HEAD Commit:** `b5a27f391447b68448edf067cdb2ee62a598c264`  
@@ -12,7 +12,7 @@
 **Neon Recovery Checkpoint:** `br-orange-art-b3vzajv0` (LSN `0/1E912998`)  
 **Production CI Run:** `44346736429` (PASS)  
 **Remediation CI Run:** `44465413722` (PASS)  
-**Certification Status:** **SCOPED PASS FOR FREE TIER (Pending Owner Risk Acceptance of Qualified Streaming Reliability Risk; Paid Tier Excluded)**
+**Certification Status:** **SCOPED FREE-TIER PRODUCTION RELEASE — OWNER APPROVED (Owner Risk Acceptance Granted on 19 November 2026; Paid Tier, Autonomous Workflows & Builder Studio Excluded)**
 
 ---
 
@@ -52,9 +52,9 @@ In accordance with strict production engineering integrity rules prohibiting fal
    - *Resource and lease telemetry:* **UNVERIFIED** (No edge-observable lease release telemetry).
    - *Operational Impact:* If a Free-tier user aborts streaming mid-flight, client rendering halts immediately, but the upstream LLM provider may continue computing to completion, consuming provider budget/quota.
    - *Follow-up Owner:* AI Runtime Lead.
-   - *Status:* **PENDING OWNER RISK ACCEPTANCE** of this qualified streaming reliability risk.
+   - *Status:* **OWNER RISK ACCEPTANCE GRANTED (19 November 2026)**. The repository owner explicitly accepted the documented residual risk of unverified upstream LLM provider cancellation and resource-release telemetry for the current Free-tier production release. The limitation remains an active documented risk and is not reclassified as a verified PASS.
 
-**Final Certification Verdict: SCOPED FREE-TIER PRODUCTION RELEASE: CERTIFIED (PASS) — PENDING OWNER ACCEPTANCE OF QUALIFIED UPSTREAM TELEMETRY RISK ✅**
+**Final Certification Verdict: SCOPED FREE-TIER PRODUCTION RELEASE — OWNER APPROVED ✅ (Paid Subscriptions, Autonomous Workflows & Builder Studio Strictly Excluded)**
 
 ---
 
@@ -116,7 +116,7 @@ In accordance with strict production engineering integrity rules prohibiting fal
 | **Phase 2b** | Paid Tier Entitlements Acceptance | Validate Pro/Enterprise tier features | **EXCLUDED / NOT CERTIFIED**: No paid test principal provisioned in production. Zero-mock policy enforced; excluded from Free-tier release scope. | **EXCLUDED (Non-Free Scope)** |
 | **Phase 3a** | Real Model Inference (Account A) | Bounded inference with real provider | Latency 7,729 ms, model `aira-fast`, SSE stream reconstructed with exact content `"AIRA_2026_TEST_OK"` and terminal `[DONE]` | **PASS** |
 | **Phase 3b** | Real Model Inference (Account B) | Bounded inference with real provider | Latency 7,321 ms, model `aira-fast`, SSE stream reconstructed with exact content `"AIRA_2026_TEST_OK"` and terminal `[DONE]` | **PASS** |
-| **Phase 4** | Controlled SSE Stream Abort | Client aborts stream mid-flight | Client connection termination: PASS; Backend abort propagation: SOURCE/TEST-SUPPORTED; Application worker cleanup: SOURCE/TEST-SUPPORTED; Upstream provider termination: UNVERIFIED; Lease telemetry: UNVERIFIED. Qualified reliability risk pending owner acceptance. | **PASS (Client) / QUALIFIED (Upstream Telemetry)** |
+| **Phase 4** | Controlled SSE Stream Abort | Client aborts stream mid-flight | Client connection termination: PASS; Backend abort propagation: SOURCE/TEST-SUPPORTED; Application worker cleanup: SOURCE/TEST-SUPPORTED; Upstream provider termination: UNVERIFIED; Lease telemetry: UNVERIFIED. Qualified reliability risk; formal owner risk acceptance granted 19 November 2026. | **PASS (Client) / QUALIFIED (Upstream Telemetry — Owner Accepted)** |
 | **Phase 5a** | Single-Step Workflow Task (Migration 032) | Create workflow run and verify artifacts column | Run `wfrun_run_e9eaa9f5-4` created (HTTP 201); JSONB `artifacts` column initialized cleanly (owned by `a5c94966...`) | **PASS** |
 | **Phase 5b** | Workflow Task Cancellation | Cancel human-approval pending workflow | Run `wfrun_run_7770e6c7-3` created with harmless definition (`sideEffectLevel: 'READ'`); cancelled via `POST /api/workflows/runs/:id/cancel` (HTTP 200, `CANCELLED`, owned by `a5c94966...`) | **PASS** |
 | **Phase 6.1** | Distinct Cross-Account Conversation Isolation | Authenticated non-owner attempts to read another user's conversation | Account A (`ab6d4e8c...`) existing conversation queried by Account A returned HTTP 200; queried by Account B (`20b32d76...`) returned HTTP 404 (Not Found). `accessDenied: true`, `privateDataReturned: false`. Zero cross-tenant data leakage. | **PASS** |
@@ -251,8 +251,8 @@ A dedicated unit and regression test suite was expanded in `test/production-acce
    - Account A (Normal Edge, `ab6d4e8c...`): HTTP 200 on owned conversation.
    - Account B (Edge InPrivate, `20b32d76...`): HTTP 404 on Account A's conversation (`accessDenied: true`, `privateDataReturned: false`).
    - Historical workflow owner (`a5c94966...`) distinguished as separate third principal.
-2. **Upstream Inference Cancellation Telemetry:** **QUALIFIED RELIABILITY RISK**
-   - Retained as explicitly documented Free-tier streaming reliability risk pending formal owner risk acceptance. Follow-up owner: AI Runtime Lead.
+2. **Upstream Inference Cancellation Telemetry:** **QUALIFIED RELIABILITY RISK (OWNER ACCEPTED)**
+   - The repository owner explicitly granted risk acceptance on 19 November 2026 for the Free-tier release. Retained as an active documented streaming reliability risk; provider cancellation and telemetry tracked under Milestone 3. Follow-up owner: AI Runtime Lead.
 3. **Preserve Production Safety Baseline:**
    - Keep recovery branch `br-orange-art-b3vzajv0` preserved.
    - Keep encrypted archive `aira_prod_main_backup_20261118160905.dump.enc` preserved.
@@ -263,3 +263,11 @@ The following items remain separate future milestones and do not gate or delay t
 1. **Milestone 1 — Paid-Plan Production Acceptance:** Provisioning an authorized, legitimately paid production test principal to certify Pro/Enterprise model allowlists and elevated quotas.
 2. **Milestone 2 — Multi-Tenant Workflow & Artifact Isolation:** Conducting live distinct-account read probes against `/api/workflows/runs/:id` and Builder Studio multi-file artifacts before enabling autonomous agent workflows or workspace builder features.
 3. **Milestone 3 — Upstream Inference Cancellation Telemetry:** Implementing internal worker telemetry and provider `AbortSignal` propagation to certify provider resource release upon client disconnect.
+
+### C. Formal Owner Risk Acceptance Record
+- **Decision Date:** 19 November 2026
+- **Decision:** APPROVED
+- **Scope:** Limited strictly to existing deployed Free-tier production functionality (`b5a27f391447b68448edf067cdb2ee62a598c264`, `dpl_BTiLvhq77siuaz655zZARHdBKuBZ`).
+- **Accepted Risk:** Unverified upstream LLM provider cancellation and resource-release telemetry. The limitation remains documented and is not reclassified as a verified PASS.
+- **Exclusions:** Paid subscriptions, autonomous agent capabilities, Builder Studio, and their outstanding production acceptance requirements remain strictly excluded.
+- **Release Determination:** **SCOPED FREE-TIER PRODUCTION RELEASE — OWNER APPROVED.**

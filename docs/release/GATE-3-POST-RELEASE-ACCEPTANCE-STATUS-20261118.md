@@ -7,7 +7,7 @@
 **Production Baseline:** VERIFIED (PASS)  
 **Encrypted Backup & Restore Parity:** VERIFIED (PASS)  
 **Authenticated End-to-End Acceptance:** **CERTIFIED FOR FREE TIER (Conversation Isolation PASS; Paid Plan Excluded; Server Cancellation Qualified)**  
-**Final Release Sign-off:** **SCOPED PASS FOR FREE TIER (Pending Owner Risk Acceptance of Qualified Streaming Reliability Risk; Paid Plan Excluded)**
+**Final Release Sign-off:** **SCOPED FREE-TIER PRODUCTION RELEASE — OWNER APPROVED (Owner Risk Acceptance Granted on 19 November 2026; Paid Plan Excluded)**
 
 ---
 
@@ -57,7 +57,7 @@ Executed via remediated test harness `scripts/production-acceptance-suite.ts` an
    - Client connection termination: **PASS** (Client disconnect cleanly caught via `AbortController`, `AbortError` handled cleanly).
    - Backend abort propagation: **SOURCE/TEST-SUPPORTED** (`req.on('close')` fires, listener unregisters, response ends cleanly).
    - Application worker cleanup: **SOURCE/TEST-SUPPORTED** (Worker listener detachment handled).
-   - Upstream provider termination & lease telemetry: **UNVERIFIED — QUALIFIED RELIABILITY RISK** (No edge telemetry confirming upstream LLM process termination; pending formal owner risk acceptance). Follow-up owner: AI Runtime Lead.
+   - Upstream provider termination & lease telemetry: **UNVERIFIED — QUALIFIED RELIABILITY RISK (OWNER ACCEPTED 19 November 2026)**. The repository owner explicitly accepted this residual risk for the scoped Free-tier release. The limitation remains an active documented risk and is not reclassified as a verified PASS. Follow-up owner: AI Runtime Lead.
 6. **Autonomous Agent Execution & Migration 032 Schema (Phases 5a & 5b):** **PASS**
    - Task 1: `wfrun_run_e9eaa9f5-4` created with HTTP 201; verified `artifacts` column initialized cleanly (owned by historical workflow principal `a5c94966...`).
    - Task 2: `wfrun_run_7770e6c7-3` created in `WAITING_FOR_APPROVAL` state with non-destructive definition; cancelled via `POST /api/workflows/runs/:id/cancel` (HTTP 200, status `CANCELLED`, owned by historical workflow principal `a5c94966...`).
@@ -82,10 +82,17 @@ Executed via remediated test harness `scripts/production-acceptance-suite.ts` an
 
 The production baseline of AIRA AI 2026 at commit `b5a27f391447b68448edf067cdb2ee62a598c264` on deployment `dpl_BTiLvhq77siuaz655zZARHdBKuBZ` has achieved passing status across all infrastructure, database migration 032, encrypted backup restore parity, and Free-tier acceptance gates.
 
-Final release sign-off verdict: **SCOPED PASS FOR FREE TIER (Pending Owner Risk Acceptance of Qualified Streaming Reliability Risk; Paid Plan Excluded) ✅**
+Final release sign-off verdict: **SCOPED FREE-TIER PRODUCTION RELEASE — OWNER APPROVED ✅ (Owner Risk Acceptance Granted on 19 November 2026; Paid Plan & Builder Excluded)**
+
+### Formal Owner Risk Acceptance Record
+- **Decision Date:** 19 November 2026
+- **Decision:** APPROVED
+- **Scope:** Limited strictly to existing deployed Free-tier production functionality (`b5a27f391447b68448edf067cdb2ee62a598c264`, `dpl_BTiLvhq77siuaz655zZARHdBKuBZ`).
+- **Accepted Risk:** Unverified upstream LLM provider cancellation and resource-release telemetry. The limitation remains documented and is not reclassified as a verified PASS.
+- **Exclusions:** Paid subscriptions, autonomous agent capabilities, Builder Studio, and their outstanding production acceptance requirements remain strictly excluded.
+- **Release Determination:** **SCOPED FREE-TIER PRODUCTION RELEASE — OWNER APPROVED.**
 
 Separate future release milestones (prerequisites for future paid/autonomous expansion):
 1. **Milestone 1 — Paid-Plan Acceptance:** Retained exclusion (requires legitimate paid test principal; currently EXCLUDED from Free-tier scope).
 2. **Milestone 2 — Multi-Tenant Workflow & Artifact Isolation:** Mandatory prerequisite before enabling autonomous agent workflows or Builder Studio for paid tiers.
 3. **Milestone 3 — Upstream Inference Cancellation Telemetry:** Requires internal worker execution telemetry and provider AbortSignal propagation to confirm upstream model process termination upon client abort.
-3. **Server-Side SSE Cancellation Telemetry:** Requires internal worker execution telemetry to confirm upstream model process termination upon client abort.

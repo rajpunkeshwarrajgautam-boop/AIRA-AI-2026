@@ -7,7 +7,7 @@
 **Production Deployment:** `dpl_BTiLvhq77siuaz655zZARHdBKuBZ`  
 **Auditor / Roles:** Principal Software Engineer, Security Engineer, QA Lead, PostgreSQL Reliability Engineer, Release Engineer  
 **Status:** **AUDITED, HARDENED, AND REGRESSION-CERTIFIED (46/46 PASS across 11 suites)**  
-**Production Release Verdict:** **SCOPED PASS FOR FREE TIER (Conversation Isolation Verified; Paid Plan Excluded; Server Cancellation Qualified)**
+**Production Release Verdict:** **SCOPED FREE-TIER PRODUCTION RELEASE — OWNER APPROVED (Conversation Isolation Verified; Owner Risk Acceptance Granted on 19 November 2026; Paid Plan & Builder Excluded)**
 
 ---
 
@@ -161,7 +161,7 @@ npx tsx --test test/production-acceptance-harness.test.ts
 | **Free-Tier Quotas** | **PASS** | Resolved server-side without silent defaults (15 daily chats, 100 credits) |
 | **Paid-Tier Quotas** | **EXCLUDED / BLOCKED** | No paid principal provisioned in production. Zero-mock policy enforced; excluded from Free-tier release scope. |
 | **Model Inference SSE** | **PASS** | Full SSE lifecycle verified with `aira-fast` returning `"AIRA_2026_TEST_OK"` |
-| **SSE Stream Abort** | **PASS (Client) / QUALIFIED (Server Telemetry)** | Client abort cleanly caught; server worker lease unverified without internal telemetry |
+| **SSE Stream Abort** | **PASS (Client) / QUALIFIED (Server Telemetry — Owner Accepted)** | Client abort cleanly caught; server worker lease unverified without internal telemetry; owner risk acceptance granted 19 November 2026. |
 | **Migration 032 Live Runs** | **PASS** | Run `wfrun_run_e9eaa9f5-4` initialized JSONB artifacts column cleanly |
 | **Workflow Cancellation** | **PASS** | Run `wfrun_run_7770e6c7-3` safely cancelled via human-approval gate |
 | **Session Revocation** | **PASS** | Sign-out invalidates server-side session; returns `ANONYMOUS` |
@@ -185,3 +185,10 @@ The scoped Free-tier release has satisfied all required verification gates:
    - Neon checkpoint `br-orange-art-b3vzajv0` remains preserved.
    - Encrypted backup archive `aira_prod_main_backup_20261118160905.dump.enc` remains preserved.
    - Rollback target `dpl_3vZXiXwBWgZeeAyiyUVgYixsNMb8` remains preserved.
+5. **Formal Owner Risk Acceptance Record:**
+   - **Decision Date:** 19 November 2026
+   - **Decision:** APPROVED
+   - **Scope:** Limited strictly to existing deployed Free-tier production functionality (`b5a27f391447b68448edf067cdb2ee62a598c264`, `dpl_BTiLvhq77siuaz655zZARHdBKuBZ`).
+   - **Accepted Risk:** Unverified upstream LLM provider cancellation and resource-release telemetry. The limitation remains an active documented risk and is not reclassified as a verified PASS.
+   - **Exclusions:** Paid subscriptions, autonomous agent capabilities, Builder Studio, and their outstanding production acceptance requirements remain strictly excluded.
+   - **Release Determination:** **SCOPED FREE-TIER PRODUCTION RELEASE — OWNER APPROVED.**
