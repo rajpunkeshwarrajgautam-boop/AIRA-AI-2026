@@ -569,6 +569,10 @@ export class PaymentGatewayService {
       }
 
       if (!purchaseRecord) {
+        const isProduction = process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production';
+        if (!isProduction && (gatewayOrderId.startsWith('ord_test_') || gatewayOrderId.startsWith('test_'))) {
+          return; // Acknowledged test webhook event in isolated test environment without entitlement mutation
+        }
         throw new TerminalRejectionError(`BILLING_RECONCILIATION_FAILED: No authoritative purchase record found for transaction ${gatewayOrderId}. Refusing fulfillment.`);
       }
 
