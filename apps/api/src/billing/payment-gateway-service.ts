@@ -148,12 +148,85 @@ export function isPriceApprovedForProduction(tier: PlanTier, currency: CurrencyC
   return plan.prices.some(p => p.currency === currency && p.amountMinorUnits > 0);
 }
 
-function isDisabledCommercialFulfillment(eventType: string, payload: any): boolean {
-  if (process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.AIRA_COMMERCIAL_BILLING_ENABLED === 'true') {
-    return false;
+export class TerminalRejectionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TerminalRejectionError';
   }
-  return eventType === 'subscription.charged' || eventType === 'subscription.activated' ||
-    (eventType === 'payment.captured' && payload.payload?.payment?.entity?.notes?.type === 'credit_topup');
+}
+
+export function isTerminalError(err: any): boolean {
+  return (
+    err instanceof TerminalRejectionError ||
+    err?.name === 'TerminalRejectionError' ||
+    err?.message?.startsWith('FRAUD_CHECK_FAILED') ||
+    err?.message?.startsWith('BILLING_RECONCILIATION_FAILED') ||
+    err?.message?.startsWith('FORBIDDEN_WEBHOOK') ||
+    err?.message?.startsWith('INVALID_STATE_TRANSITION')
+  );
+}
+
+export const PAID_FULFILLMENT_EVENTS = new Set([
+  // Razorpay
+  'subscription.charged',
+  'subscription.activated',
+  'subscription.renewed',
+  'order.paid',
+  'payment.captured',
+  'invoice.paid',
+  // Cashfree
+  'ORDER_PAID',
+  'PAYMENT_SUCCESS_WEBHOOK',
+  'PAYMENT_SUCCESS',
+  'SUBSCRIPTION_PAYMENT_SUCCESS',
+  'SUBSCRIPTION_ACTIVATED',
+  'SUBSCRIPTION_CHARGED',
+  'SUBSCRIPTION_STATUS_CHANGE'
+]);
+
+export const SAFE_RECONCILIATION_EVENTS = new Set([
+  // Razorpay
+  'subscription.cancelled',
+  'subscription.halted',
+  'subscription.pending',
+  'subscription.paused',
+  'payment.failed',
+  'refund.processed',
+  'refund.created',
+  'refund.speed_processed',
+  // Cashfree
+  'SUBSCRIPTION_CANCELLED',
+  'SUBSCRIPTION_HALTED',
+  'PAYMENT_FAILED_WEBHOOK',
+  'REFUND_SUCCESS'
+]);
+
+export function assertCommercialFulfillmentAllowed(eventType: string, gateway: string, payload: any): void {
+  // 1. Safe reconciliation (cancellations, halts, refunds) is always permitted
+  if (SAFE_RECONCILIATION_EVENTS.has(eventType)) {
+    return;
+  }
+
+  // 2. Paid fulfillment requires strict kill switch enforcement
+  const isPaidFulfillment = PAID_FULFILLMENT_EVENTS.has(eventType);
+  if (!isPaidFulfillment) {
+    // Unrecognized / unsupported event attempting activation: fail-closed
+    throw new TerminalRejectionError(`BILLING_RECONCILIATION_FAILED: Unsupported or unverified webhook event class '${eventType}'. Refusing fulfillment.`);
+  }
+
+  // 3. Centralized fail-closed check
+  const isProduction = process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production';
+  const isIsolatedTest = (process.env.NODE_ENV === 'test' || process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true') && !isProduction;
+
+  if (isProduction) {
+    if (process.env.AIRA_COMMERCIAL_BILLING_ENABLED !== 'true') {
+      throw new Error('BILLING_UNAVAILABLE: Commercial billing fulfillment is currently disabled in production. Paid entitlements cannot be granted.');
+    }
+  } else {
+    if (!isIsolatedTest && process.env.AIRA_COMMERCIAL_BILLING_ENABLED !== 'true') {
+      throw new Error('BILLING_UNAVAILABLE: Paid fulfillment requires verified commercial billing activation or isolated test harness.');
+    }
+  }
 }
 
 export class PaymentGatewayService {
@@ -247,7 +320,7 @@ export class PaymentGatewayService {
   }
 
   /**
-   * Process Razorpay Webhook Event idempotently.
+   * Process Razorpay Webhook Event idempotently with durable lifecycle and atomic state transitions.
    */
   async processRazorpayWebhook(rawBody: string, signature: string): Promise<{ status: string; eventId: string; duplicate?: boolean }> {
     const verification = this.verifyRazorpayWebhook(rawBody, signature);
@@ -258,43 +331,12 @@ export class PaymentGatewayService {
     const payload = JSON.parse(rawBody);
     const eventId = payload.event_id || payload.id || `evt_${crypto.randomUUID().replace(/-/g, '')}`;
     const eventType = payload.event;
-    const now = Date.now();
 
-    // A disabled paid event must not be recorded as PROCESSED on retry.
-    // Decline it before inserting a deduplication row.
-    if (isDisabledCommercialFulfillment(eventType, payload)) {
-      throw new Error('BILLING_UNAVAILABLE: Paid fulfillment requires verified payment reconciliation.');
-    }
-
-    // Deduplication check in payment_gateway_events
-    const existing = await this.getDb()('payment_gateway_events').where({ event_id: eventId }).first();
-    if (existing) {
-      return { status: 'ALREADY_PROCESSED', eventId, duplicate: true };
-    }
-
-    await this.getDb()('payment_gateway_events').insert({
-      id: `pge_${crypto.randomUUID().replace(/-/g, '')}`,
-      gateway: 'razorpay',
-      event_id: eventId,
-      event_type: eventType,
-      signature_valid: true,
-      processed: false,
-      payload: JSON.stringify(payload),
-      created_at: now
-    });
-
-    try {
-      await this.handleGatewayEvent('razorpay', eventType, payload);
-      await this.getDb()('payment_gateway_events').where({ event_id: eventId }).update({ processed: true });
-      return { status: 'PROCESSED', eventId, duplicate: false };
-    } catch (err: any) {
-      await this.getDb()('payment_gateway_events').where({ event_id: eventId }).update({ error: err.message });
-      throw err;
-    }
+    return await this.executeWebhookTransaction('razorpay', eventId, eventType, rawBody, payload);
   }
 
   /**
-   * Process Cashfree Webhook Event idempotently.
+   * Process Cashfree Webhook Event idempotently with durable lifecycle and atomic state transitions.
    */
   async processCashfreeWebhook(rawBody: string, signature: string, timestamp: string): Promise<{ status: string; eventId: string; duplicate?: boolean }> {
     const verification = this.verifyCashfreeWebhook(rawBody, signature, timestamp);
@@ -305,60 +347,202 @@ export class PaymentGatewayService {
     const payload = JSON.parse(rawBody);
     const eventId = payload.event_id || payload.data?.order?.order_id || payload.data?.payment?.cf_payment_id || payload.id || `evt_cf_${crypto.randomUUID().replace(/-/g, '')}`;
     const eventType = payload.type || payload.event || 'cashfree.webhook';
-    const now = Date.now();
 
-    if (isDisabledCommercialFulfillment(eventType, payload)) {
-      throw new Error('BILLING_UNAVAILABLE: Paid fulfillment requires verified payment reconciliation.');
+    return await this.executeWebhookTransaction('cashfree', eventId, eventType, rawBody, payload);
+  }
+
+  /**
+   * Centralized webhook transaction engine with durable lifecycle states:
+   * RECEIVED -> PROCESSING -> PROCESSED | RETRYABLE_FAILURE | TERMINAL_FAILURE
+   */
+  private async executeWebhookTransaction(
+    gateway: 'razorpay' | 'cashfree',
+    eventId: string,
+    eventType: string,
+    _rawBody: string,
+    payload: any
+  ): Promise<{ status: string; eventId: string; duplicate?: boolean }> {
+    // 1. Centralized fail-closed commercial fulfillment kill switch
+    assertCommercialFulfillmentAllowed(eventType, gateway, payload);
+
+    const now = Date.now();
+    const database = this.getDb();
+    const hasTransaction = typeof (database as any).transaction === 'function';
+
+    if (!hasTransaction) {
+      return await this.executeWebhookWithMockDb(gateway, eventId, eventType, payload);
     }
 
-    // Deduplication check in payment_gateway_events
+    return await (database as Knex).transaction(async (trx) => {
+      const eventRowId = `pge_${crypto.randomUUID().replace(/-/g, '')}`;
+
+      // Insert event record if not already present
+      await trx('payment_gateway_events')
+        .insert({
+          id: eventRowId,
+          gateway,
+          event_id: eventId,
+          event_type: eventType,
+          signature_valid: true,
+          processed: false,
+          error: 'PROCESSING',
+          payload: JSON.stringify({
+            ...payload,
+            _lifecycle: { state: 'PROCESSING', attempts: 1, lastAttemptAt: now }
+          }),
+          created_at: now
+        })
+        .onConflict('event_id')
+        .ignore();
+
+      // Acquire exclusive row lock on payment_gateway_events
+      const record = await trx('payment_gateway_events')
+        .where({ event_id: eventId })
+        .forUpdate()
+        .first();
+
+      if (!record) {
+        throw new Error(`Failed to acquire event lock for ${eventId}`);
+      }
+
+      // If already successfully processed, return idempotent response
+      if (record.processed) {
+        return { status: 'ALREADY_PROCESSED', eventId, duplicate: true };
+      }
+
+      let lifecycle: any = {};
+      try {
+        const parsed = typeof record.payload === 'string' ? JSON.parse(record.payload) : record.payload;
+        lifecycle = parsed?._lifecycle || {};
+      } catch {}
+
+      // Reject retry if event terminally failed (e.g. fraud, tampered amount)
+      if (lifecycle.state === 'TERMINAL_FAILURE' || record.error?.startsWith('TERMINAL_FAILURE')) {
+        throw new TerminalRejectionError(`TERMINAL_FAILURE: Webhook event ${eventId} was terminally rejected: ${record.error}`);
+      }
+
+      // Check concurrent worker lock lease (30 second timeout)
+      if (lifecycle.state === 'PROCESSING' && record.id !== eventRowId && (now - (lifecycle.lastAttemptAt || 0)) < 30000) {
+        return { status: 'CONCURRENTLY_PROCESSING', eventId, duplicate: true };
+      }
+
+      const attempts = (lifecycle.attempts || 0) + 1;
+      const currentPayload = typeof record.payload === 'string' ? JSON.parse(record.payload) : (record.payload || {});
+      currentPayload._lifecycle = { state: 'PROCESSING', attempts, lastAttemptAt: now };
+
+      await trx('payment_gateway_events')
+        .where({ event_id: eventId })
+        .update({
+          error: 'PROCESSING',
+          payload: JSON.stringify(currentPayload)
+        });
+
+      try {
+        await this.handleGatewayEvent(gateway, eventType, payload, trx);
+
+        currentPayload._lifecycle.state = 'PROCESSED';
+        await trx('payment_gateway_events')
+          .where({ event_id: eventId })
+          .update({
+            processed: true,
+            error: null,
+            payload: JSON.stringify(currentPayload)
+          });
+
+        return { status: 'PROCESSED', eventId, duplicate: false };
+      } catch (err: any) {
+        const isTerminal = isTerminalError(err);
+        currentPayload._lifecycle.state = isTerminal ? 'TERMINAL_FAILURE' : 'RETRYABLE_FAILURE';
+        currentPayload._lifecycle.terminalReason = isTerminal ? err.message : undefined;
+
+        await trx('payment_gateway_events')
+          .where({ event_id: eventId })
+          .update({
+            processed: false,
+            error: `${isTerminal ? 'TERMINAL_FAILURE' : 'RETRYABLE_FAILURE'}: ${err.message}`,
+            payload: JSON.stringify(currentPayload)
+          });
+
+        throw err;
+      }
+    });
+  }
+
+  /**
+   * Fallback execution path for mock database client harnesses.
+   */
+  private async executeWebhookWithMockDb(
+    gateway: 'razorpay' | 'cashfree',
+    eventId: string,
+    eventType: string,
+    payload: any
+  ): Promise<{ status: string; eventId: string; duplicate?: boolean }> {
+    const now = Date.now();
     const existing = await this.getDb()('payment_gateway_events').where({ event_id: eventId }).first();
-    if (existing) {
+    if (existing && (existing as any).processed) {
       return { status: 'ALREADY_PROCESSED', eventId, duplicate: true };
     }
 
-    await this.getDb()('payment_gateway_events').insert({
-      id: `pge_${crypto.randomUUID().replace(/-/g, '')}`,
-      gateway: 'cashfree',
-      event_id: eventId,
-      event_type: eventType,
-      signature_valid: true,
-      processed: false,
-      payload: JSON.stringify(payload),
-      created_at: now
-    });
+    if (existing && (existing as any).error?.startsWith('TERMINAL_FAILURE')) {
+      throw new TerminalRejectionError(`TERMINAL_FAILURE: Webhook event ${eventId} was terminally rejected: ${(existing as any).error}`);
+    }
+
+    if (!existing) {
+      await this.getDb()('payment_gateway_events').insert({
+        id: `pge_${crypto.randomUUID().replace(/-/g, '')}`,
+        gateway,
+        event_id: eventId,
+        event_type: eventType,
+        signature_valid: true,
+        processed: false,
+        error: 'PROCESSING',
+        payload: JSON.stringify(payload),
+        created_at: now
+      });
+    }
 
     try {
-      await this.handleGatewayEvent('cashfree', eventType, payload);
-      await this.getDb()('payment_gateway_events').where({ event_id: eventId }).update({ processed: true });
+      await this.handleGatewayEvent(gateway, eventType, payload, this.getDb());
+      await this.getDb()('payment_gateway_events').where({ event_id: eventId }).update({ processed: true, error: null });
       return { status: 'PROCESSED', eventId, duplicate: false };
     } catch (err: any) {
-      await this.getDb()('payment_gateway_events').where({ event_id: eventId }).update({ error: err.message });
+      const isTerminal = isTerminalError(err);
+      await this.getDb()('payment_gateway_events').where({ event_id: eventId }).update({
+        processed: false,
+        error: `${isTerminal ? 'TERMINAL_FAILURE' : 'RETRYABLE_FAILURE'}: ${err.message}`
+      });
       throw err;
     }
   }
 
   /**
    * Internal gateway event handler for subscriptions, renewals, cancellations, top-ups.
+   * Operates strictly within the provided database transaction for atomicity.
    */
-  private async handleGatewayEvent(gateway: string, eventType: string, payload: any): Promise<void> {
+  private async handleGatewayEvent(gateway: string, eventType: string, payload: any, trx: any): Promise<void> {
     const now = Date.now();
 
-    // Commercial activation is intentionally disabled until a verified gateway
-    // order, approved price and paid amount/currency can be reconciled atomically.
-    // Signed merchant notes alone are not proof of a purchased subscription.
-    if (isDisabledCommercialFulfillment(eventType, payload)) {
-      throw new Error('BILLING_UNAVAILABLE: Paid fulfillment awaits approved pricing and verified payment reconciliation.');
-    }
+    // Re-verify commercial fulfillment policy within handler
+    assertCommercialFulfillmentAllowed(eventType, gateway, payload);
 
-    if (eventType === 'subscription.charged' || eventType === 'subscription.activated' || eventType === 'order.paid' || (eventType === 'payment.captured' && payload.payload?.payment?.entity?.notes?.type !== 'credit_topup')) {
-      const subEntity = payload.payload?.subscription?.entity || payload.subscription || {};
+    if (
+      eventType === 'subscription.charged' ||
+      eventType === 'subscription.activated' ||
+      eventType === 'subscription.renewed' ||
+      eventType === 'order.paid' ||
+      eventType === 'ORDER_PAID' ||
+      eventType === 'PAYMENT_SUCCESS_WEBHOOK' ||
+      eventType === 'SUBSCRIPTION_PAYMENT_SUCCESS' ||
+      (eventType === 'payment.captured' && payload.payload?.payment?.entity?.notes?.type !== 'credit_topup')
+    ) {
+      const subEntity = payload.payload?.subscription?.entity || payload.subscription || payload.data?.subscription || {};
       const paymentEntity = payload.payload?.payment?.entity || payload.payment || payload.data?.payment || {};
       const orderEntity = payload.payload?.order?.entity || payload.order || payload.data?.order || {};
 
       const gatewayOrderId = subEntity.id ||
         paymentEntity.order_id ||
         orderEntity.id ||
+        orderEntity.order_id ||
         paymentEntity.subscription_id ||
         subEntity.notes?.purchase_id ||
         paymentEntity.notes?.purchase_id ||
@@ -366,38 +550,62 @@ export class PaymentGatewayService {
         paymentEntity.notes?.order_id;
 
       if (!gatewayOrderId) {
-        throw new Error('BILLING_RECONCILIATION_FAILED: Missing gateway order/subscription identifier in webhook payload.');
+        throw new TerminalRejectionError('BILLING_RECONCILIATION_FAILED: Missing gateway order/subscription identifier in webhook payload.');
       }
 
-      // Query authoritative pre-existing purchase record from database
-      const purchaseRecord = await this.getDb()('subscriptions')
-        .where({ gateway_subscription_id: gatewayOrderId })
-        .first() || await this.getDb()('subscriptions').where({ id: gatewayOrderId }).first();
+      // Query authoritative pre-existing purchase record with row-level lock
+      let purchaseQuery = trx('subscriptions').where({ gateway_subscription_id: gatewayOrderId });
+      if (typeof purchaseQuery.forUpdate === 'function') {
+        purchaseQuery = purchaseQuery.forUpdate();
+      }
+      let purchaseRecord = await purchaseQuery.first();
 
       if (!purchaseRecord) {
-        throw new Error(`BILLING_RECONCILIATION_FAILED: No authoritative purchase record found for transaction ${gatewayOrderId}. Refusing fulfillment.`);
+        let fallbackQuery = trx('subscriptions').where({ id: gatewayOrderId });
+        if (typeof fallbackQuery.forUpdate === 'function') {
+          fallbackQuery = fallbackQuery.forUpdate();
+        }
+        purchaseRecord = await fallbackQuery.first();
       }
 
-      // Webhook payload validation against pre-existing purchase record:
-      // 1. Currency verification
-      const receivedCurrency = (subEntity.currency || paymentEntity.currency || orderEntity.currency || purchaseRecord.currency).toUpperCase();
-      if (receivedCurrency !== purchaseRecord.currency) {
-        throw new Error(`FRAUD_CHECK_FAILED: Currency mismatch. Expected ${purchaseRecord.currency}, received ${receivedCurrency}`);
+      if (!purchaseRecord) {
+        throw new TerminalRejectionError(`BILLING_RECONCILIATION_FAILED: No authoritative purchase record found for transaction ${gatewayOrderId}. Refusing fulfillment.`);
       }
 
-      // 2. Amount verification
-      const receivedAmount = Number(subEntity.amount || paymentEntity.amount || orderEntity.amount || 0);
-      if (receivedAmount > 0 && Number(purchaseRecord.amount_minor_units) > 0 && receivedAmount !== Number(purchaseRecord.amount_minor_units)) {
-        throw new Error(`FRAUD_CHECK_FAILED: Amount mismatch. Expected ${purchaseRecord.amount_minor_units}, received ${receivedAmount}`);
+      // Validate state transition: never reactivate a cancelled subscription without a new checkout order
+      if (purchaseRecord.status === 'cancelled') {
+        throw new TerminalRejectionError(`INVALID_STATE_TRANSITION: Cannot activate or renew cancelled subscription ${purchaseRecord.id}.`);
       }
 
-      // 3. Deduplication / Idempotent state transition
-      if (purchaseRecord.status === 'active') {
-        // Already fulfilled and active, do not grant duplicate credits
-        return;
+      // Validate payment state
+      if (paymentEntity.status && paymentEntity.status !== 'captured' && paymentEntity.status !== 'paid') {
+        throw new TerminalRejectionError(`BILLING_RECONCILIATION_FAILED: Razorpay payment status is '${paymentEntity.status}', expected 'captured' or 'paid'.`);
+      }
+      if (paymentEntity.payment_status && paymentEntity.payment_status !== 'SUCCESS') {
+        throw new TerminalRejectionError(`BILLING_RECONCILIATION_FAILED: Cashfree payment status is '${paymentEntity.payment_status}', expected 'SUCCESS'.`);
       }
 
-      // 4. Derive customer and principal strictly from verified purchase record
+      // 1. Currency verification (strict uppercase match)
+      const receivedCurrency = (subEntity.currency || paymentEntity.currency || orderEntity.currency || '').toUpperCase();
+      if (!receivedCurrency || receivedCurrency !== purchaseRecord.currency.toUpperCase()) {
+        throw new TerminalRejectionError(`FRAUD_CHECK_FAILED: Currency mismatch. Expected ${purchaseRecord.currency}, received ${receivedCurrency}`);
+      }
+
+      // 2. Exact minor-unit amount verification (no zero or missing fallbacks)
+      const receivedAmount = subEntity.amount !== undefined ? Number(subEntity.amount)
+        : paymentEntity.amount !== undefined ? Number(paymentEntity.amount)
+        : orderEntity.amount !== undefined ? Number(orderEntity.amount)
+        : (orderEntity.order_amount !== undefined ? Math.round(Number(orderEntity.order_amount) * 100) : null);
+
+      if (receivedAmount === null || receivedAmount <= 0 || !Number.isInteger(receivedAmount)) {
+        throw new TerminalRejectionError(`FRAUD_CHECK_FAILED: Received invalid or non-integer minor-unit payment amount: ${receivedAmount}`);
+      }
+
+      const expectedAmount = Number(purchaseRecord.amount_minor_units);
+      if (expectedAmount <= 0 || receivedAmount !== expectedAmount) {
+        throw new TerminalRejectionError(`FRAUD_CHECK_FAILED: Amount mismatch. Expected ${expectedAmount}, received ${receivedAmount}`);
+      }
+
       let meta: any = {};
       try {
         meta = typeof purchaseRecord.metadata === 'string' ? JSON.parse(purchaseRecord.metadata) : (purchaseRecord.metadata || {});
@@ -408,15 +616,63 @@ export class PaymentGatewayService {
       const customerId = purchaseRecord.customer_id;
 
       if (!principalId) {
-        throw new Error(`BILLING_RECONCILIATION_FAILED: Purchase record ${purchaseRecord.id} lacks verified principalId.`);
+        throw new TerminalRejectionError(`BILLING_RECONCILIATION_FAILED: Purchase record ${purchaseRecord.id} lacks verified principalId.`);
       }
 
       const plan = COMMERCIAL_PLANS[planTier] || COMMERCIAL_PLANS.plus;
-      const periodStart = subEntity.current_start ? subEntity.current_start * 1000 : now;
-      const periodEnd = subEntity.current_end ? subEntity.current_end * 1000 : now + 30 * 24 * 60 * 60 * 1000;
+      const periodStart = subEntity.current_start ? Number(subEntity.current_start) * 1000 : now;
+      const periodEnd = subEntity.current_end ? Number(subEntity.current_end) * 1000 : now + 30 * 24 * 60 * 60 * 1000;
 
-      // Update purchase record to active
-      await this.getDb()('subscriptions').where({ id: purchaseRecord.id }).update({
+      // 3. Idempotent fulfillment vs Renewal logic
+      if (purchaseRecord.status === 'active') {
+        const isNewRenewalPeriod = periodEnd > Number(purchaseRecord.current_period_end);
+        if (!isNewRenewalPeriod) {
+          // Already fulfilled for this exact billing cycle: return cleanly without duplicate credit grants
+          return;
+        }
+
+        // Legitimate Renewal: update billing period and grant new cycle credits
+        await trx('subscriptions').where({ id: purchaseRecord.id }).update({
+          current_period_start: periodStart,
+          current_period_end: periodEnd,
+          cancel_at_period_end: false,
+          updated_at: now
+        });
+
+        if (!this.customDbClient) {
+          await commercialBillingService.grantCredits(
+            principalId,
+            plan.monthlyPremiumCredits,
+            'subscription_monthly',
+            periodEnd,
+            plan.monthlyPremiumCredits * 2,
+            { gatewayOrderId, eventType, purchaseId: purchaseRecord.id, isRenewal: true },
+            trx
+          );
+        }
+
+        await trx('billing_audit_events').insert({
+          id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+          customer_id: customerId,
+          event_type: 'SUBSCRIPTION_RENEWED',
+          actor_type: 'gateway_webhook',
+          actor_id: gatewayOrderId,
+          payload: JSON.stringify({
+            purchaseId: purchaseRecord.id,
+            principalId,
+            planTier,
+            periodStart,
+            periodEnd,
+            amount: expectedAmount
+          }),
+          created_at: now
+        });
+
+        return;
+      }
+
+      // Initial Activation (transition from pending -> active)
+      await trx('subscriptions').where({ id: purchaseRecord.id }).update({
         status: 'active',
         current_period_start: periodStart,
         current_period_end: periodEnd,
@@ -424,20 +680,19 @@ export class PaymentGatewayService {
         updated_at: now
       });
 
-      // Grant monthly plan credits with capped rollover to verified principal
       if (!this.customDbClient) {
         await commercialBillingService.grantCredits(
           principalId,
           plan.monthlyPremiumCredits,
           'subscription_monthly',
           periodEnd,
-          plan.monthlyPremiumCredits * 2, // Maximum 2x monthly rollover cap
-          { gatewayOrderId, eventType, purchaseId: purchaseRecord.id }
+          plan.monthlyPremiumCredits * 2,
+          { gatewayOrderId, eventType, purchaseId: purchaseRecord.id },
+          trx
         );
       }
 
-      // Audit event
-      await this.getDb()('billing_audit_events').insert({
+      await trx('billing_audit_events').insert({
         id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
         customer_id: customerId,
         event_type: 'SUBSCRIPTION_ACTIVATED',
@@ -454,37 +709,124 @@ export class PaymentGatewayService {
         }),
         created_at: now
       });
+      return;
     }
 
-    if (eventType === 'subscription.cancelled' || eventType === 'subscription.halted') {
-      const subEntity = payload.payload?.subscription?.entity || payload.subscription || {};
-      const gatewaySubId = subEntity.id;
+    if (
+      eventType === 'subscription.cancelled' ||
+      eventType === 'subscription.halted' ||
+      eventType === 'SUBSCRIPTION_CANCELLED' ||
+      eventType === 'SUBSCRIPTION_HALTED'
+    ) {
+      const subEntity = payload.payload?.subscription?.entity || payload.subscription || payload.data?.subscription || {};
+      const gatewaySubId = subEntity.id || payload.data?.subscription?.subscription_id;
       if (gatewaySubId) {
-        await this.getDb()('subscriptions').where({ gateway_subscription_id: gatewaySubId }).update({
+        await trx('subscriptions').where({ gateway_subscription_id: gatewaySubId }).update({
           status: 'cancelled',
           cancelled_at: now,
           cancel_at_period_end: false,
           updated_at: now
         });
       }
+      return;
     }
 
-    if (eventType === 'payment.captured' && payload.payload?.payment?.entity?.notes?.type === 'credit_topup') {
-      const paymentEntity = payload.payload.payment.entity;
-      const principalId = paymentEntity.notes.principal_id;
-      const packId = paymentEntity.notes.pack_id;
+    if (
+      (eventType === 'payment.captured' && payload.payload?.payment?.entity?.notes?.type === 'credit_topup') ||
+      (eventType === 'ORDER_PAID' && payload.data?.order?.order_tags?.type === 'credit_topup')
+    ) {
+      const paymentEntity = payload.payload?.payment?.entity || payload.payment || payload.data?.payment || {};
+      const orderEntity = payload.payload?.order?.entity || payload.order || payload.data?.order || {};
+      const gatewayOrderId = paymentEntity.order_id || orderEntity.id || paymentEntity.id;
+
+      if (!gatewayOrderId) {
+        throw new TerminalRejectionError('BILLING_RECONCILIATION_FAILED: Missing order identifier for credit top-up.');
+      }
+
+      let purchaseQuery = trx('subscriptions').where({ gateway_subscription_id: gatewayOrderId });
+      if (typeof purchaseQuery.forUpdate === 'function') {
+        purchaseQuery = purchaseQuery.forUpdate();
+      }
+      let purchaseRecord = await purchaseQuery.first();
+
+      if (!purchaseRecord) {
+        let fallbackQuery = trx('subscriptions').where({ id: gatewayOrderId });
+        if (typeof fallbackQuery.forUpdate === 'function') {
+          fallbackQuery = fallbackQuery.forUpdate();
+        }
+        purchaseRecord = await fallbackQuery.first();
+      }
+
+      if (!purchaseRecord) {
+        throw new TerminalRejectionError(`BILLING_RECONCILIATION_FAILED: No pre-existing verified purchase record found for credit top-up ${gatewayOrderId}. Refusing fulfillment.`);
+      }
+
+      if (paymentEntity.status && paymentEntity.status !== 'captured' && paymentEntity.status !== 'paid') {
+        throw new TerminalRejectionError(`BILLING_RECONCILIATION_FAILED: Top-up payment status is '${paymentEntity.status}', expected 'captured'.`);
+      }
+
+      const receivedCurrency = (paymentEntity.currency || orderEntity.currency || '').toUpperCase();
+      if (!receivedCurrency || receivedCurrency !== purchaseRecord.currency.toUpperCase()) {
+        throw new TerminalRejectionError(`FRAUD_CHECK_FAILED: Currency mismatch for top-up. Expected ${purchaseRecord.currency}, received ${receivedCurrency}`);
+      }
+
+      const receivedAmount = Number(paymentEntity.amount || orderEntity.amount || 0);
+      const expectedAmount = Number(purchaseRecord.amount_minor_units);
+      if (receivedAmount <= 0 || receivedAmount !== expectedAmount) {
+        throw new TerminalRejectionError(`FRAUD_CHECK_FAILED: Amount mismatch for top-up. Expected ${expectedAmount}, received ${receivedAmount}`);
+      }
+
+      if (purchaseRecord.status === 'active') {
+        return; // Prevent duplicate top-up credit grants
+      }
+
+      let meta: any = {};
+      try {
+        meta = typeof purchaseRecord.metadata === 'string' ? JSON.parse(purchaseRecord.metadata) : (purchaseRecord.metadata || {});
+      } catch {}
+
+      const principalId = meta.principalId;
+      const packId = meta.packId || paymentEntity.notes?.pack_id;
       const pack = TOPUP_PACKS[packId];
 
-      if (principalId && pack) {
+      if (!principalId || !pack) {
+        throw new TerminalRejectionError(`BILLING_RECONCILIATION_FAILED: Invalid top-up metadata or unapproved packId: ${packId}`);
+      }
+
+      await trx('subscriptions').where({ id: purchaseRecord.id }).update({
+        status: 'active',
+        updated_at: now
+      });
+
+      if (!this.customDbClient) {
         await commercialBillingService.grantCredits(
           principalId,
           pack.credits,
           'purchased_topup',
-          undefined, // Purchased top-ups do not expire monthly!
-          0, // No rollover cap for purchased top-ups
-          { paymentId: paymentEntity.id, packId: pack.id }
+          undefined,
+          0,
+          { paymentId: gatewayOrderId, packId: pack.id, purchaseId: purchaseRecord.id },
+          trx
         );
       }
+
+      await trx('billing_audit_events').insert({
+        id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+        customer_id: purchaseRecord.customer_id,
+        event_type: 'CREDIT_TOPUP_FULFILLED',
+        actor_type: 'gateway_webhook',
+        actor_id: gatewayOrderId,
+        payload: JSON.stringify({
+          purchaseId: purchaseRecord.id,
+          principalId,
+          packId: pack.id,
+          credits: pack.credits,
+          amount: receivedAmount,
+          currency: receivedCurrency
+        }),
+        created_at: now
+      });
+      return;
     }
   }
 

@@ -3388,16 +3388,6 @@ app.post('/api/agents', async (req: Request, res: Response) => {
     });
   }
 
-  const existingAgents = await agentRepo.listAgents(verifiedUserId);
-  if (existingAgents.length >= plan.savedAgentsLimit) {
-    return res.status(403).json({
-      error: 'AGENT_LIMIT_EXCEEDED',
-      message: `Maximum agent limit (${plan.savedAgentsLimit}) reached for your plan.`,
-      callerTier,
-      limit: plan.savedAgentsLimit
-    });
-  }
-
   const { name, instructions, modelPolicy, tools, memoryScopes, approvalPolicy, maxSteps, timeoutPolicy } = req.body;
   if (!name || !instructions) {
     return res.status(400).json({ error: 'name and instructions are required.' });
@@ -3418,8 +3408,34 @@ app.post('/api/agents', async (req: Request, res: Response) => {
     createdAt: now,
     updatedAt: now
   } as any;
-  await agentRepo.saveAgent(agent, verifiedUserId);
-  res.status(201).json(agent);
+
+  try {
+    if (typeof (agentRepo as any).createAgentWithQuota === 'function') {
+      await (agentRepo as any).createAgentWithQuota(agent, verifiedUserId, plan.savedAgentsLimit);
+    } else {
+      const existingAgents = await agentRepo.listAgents(verifiedUserId);
+      if (existingAgents.length >= plan.savedAgentsLimit) {
+        return res.status(403).json({
+          error: 'AGENT_LIMIT_EXCEEDED',
+          message: `Maximum agent limit (${plan.savedAgentsLimit}) reached for your plan.`,
+          callerTier,
+          limit: plan.savedAgentsLimit
+        });
+      }
+      await agentRepo.saveAgent(agent, verifiedUserId);
+    }
+    res.status(201).json(agent);
+  } catch (err: any) {
+    if (err.name === 'AgentLimitExceededError' || err.message?.includes('Maximum agent limit')) {
+      return res.status(403).json({
+        error: 'AGENT_LIMIT_EXCEEDED',
+        message: `Maximum agent limit (${plan.savedAgentsLimit}) reached for your plan.`,
+        callerTier,
+        limit: plan.savedAgentsLimit
+      });
+    }
+    throw err;
+  }
 });
 
 app.get('/api/agents', async (req: Request, res: Response) => {

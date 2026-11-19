@@ -83,6 +83,21 @@ jobs:
       - name: Commercial quota ledger and monthly reasoning enforcement (real PostgreSQL)
         run: npx tsx --test test/commercial-credit-ledger.test.ts
 
+      - name: Commercial billing, webhook lifecycle, and security matrix (F1-F4)
+        run: npx tsx --test test/billing-remediation-security-matrix.test.ts
+
+      - name: Staging target validation and fail-closed isolation (F5)
+        run: npx tsx --test test/staging-target-validation-security.test.ts
+
+      - name: OAuth privacy, non-reversible identifiers and evidence hygiene (F6)
+        run: npx tsx --test test/oauth-evidence-privacy.test.ts
+
+      - name: Saved-agent quota concurrency and atomic plan limits (F7)
+        run: npx tsx --test test/agent-quota-concurrency.test.ts
+
+      - name: Real HTTP multi-tenant isolation and upstream cancellation (F8)
+        run: npx tsx --test test/multi-tenant-http-isolation.test.ts test/provider-cancellation-http.test.ts
+
       - name: Verify deploy database contract (lexical fallback)
         env:
           AIRA_SEMANTIC_SEARCH: 'false'

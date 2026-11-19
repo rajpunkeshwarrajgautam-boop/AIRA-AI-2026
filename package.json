@@ -40,6 +40,7 @@
     "test:automation-policy-b": "npx tsx --test test/automation-policy-b.test.ts",
     "test:aira-backend-correctness": "npx tsx --test test/aira-backend-correctness.test.ts",
     "test:idempotency:postgres": "npx tsx --test test/postgres-durable-idempotency.test.ts",
+    "test:remediations": "npx tsx --test test/billing-remediation-security-matrix.test.ts test/staging-target-validation-security.test.ts test/oauth-evidence-privacy.test.ts test/agent-quota-concurrency.test.ts test/multi-tenant-http-isolation.test.ts test/provider-cancellation-http.test.ts",
     "test:vision-billing": "npx tsx --test test/vision-billing-integrity.test.ts test/commercial-vision-tariffs.test.ts",
     "test:browser": "npx tsx test/browser-execution-suite.ts",
     "test:browser:authorization": "npx tsx --test test/browser-authorization.test.ts",

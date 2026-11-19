@@ -30,9 +30,9 @@ const PROFILE_A_DIR = path.resolve(ARTIFACTS_DIR, 'edge_oauth_profile_a');
 const PROFILE_B_DIR = path.resolve(ARTIFACTS_DIR, 'edge_oauth_profile_b');
 
 const TEST_HARNESS_SHA = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-const DEPLOYED_STAGING_SHA = '3bab3f9e585ac7fa5ffaeaad9148d6d0bc86fa68';
-const DEPLOYMENT_ID = 'dpl_9WZv3iFBJq7FzeFnT5uFVVRwHmVj';
-const STAGING_DB_IDENTITY = 'neon://mute-frost-50372225/br-autumn-star-b36dfu5w';
+const DEPLOYED_STAGING_SHA = process.env.AIRA_DEPLOYED_STAGING_SHA || 'observed_staging_sha';
+const DEPLOYMENT_ID = process.env.AIRA_DEPLOYMENT_ID || 'observed_deployment_id';
+const STAGING_DB_IDENTITY = process.env.AIRA_STAGING_DB_IDENTITY || 'observed_staging_db';
 
 interface OAuthFlowMetadata {
   provider: 'google' | 'github';
@@ -44,9 +44,6 @@ interface OAuthFlowMetadata {
   alreadySignedIn: boolean;
   callbackLandedUrl?: string;
   authenticated: boolean;
-  userId?: string;
-  userEmail?: string;
-  userName?: string;
   linkedProviders?: string[];
   sessionPersistedOnReload?: boolean;
   freeTierEntitlementsVerified?: boolean;
@@ -91,9 +88,6 @@ async function initiateOAuthIfNeeded(
   if (initial.session?.status === 'AUTHENTICATED' && existingProviders.includes(provider)) {
     meta.alreadySignedIn = true;
     meta.authenticated = true;
-    meta.userId = initial.session.user?.id;
-    meta.userEmail = initial.session.user?.email;
-    meta.userName = initial.session.user?.name;
     meta.linkedProviders = existingProviders;
 
     // Test reload persistence explicitly
@@ -102,7 +96,7 @@ async function initiateOAuthIfNeeded(
     const reloaded = await getSessionAndProviders(page);
     meta.sessionPersistedOnReload = reloaded.session?.status === 'AUTHENTICATED' && Boolean(reloaded.session?.user);
     meta.freeTierEntitlementsVerified = Boolean(reloaded.entitlements?.plan || reloaded.entitlements?.tier);
-    meta.principalHash = hashPrincipalIdentifier(meta.userId || meta.userEmail || `${provider}_staging_user`);
+    meta.principalHash = hashPrincipalIdentifier(initial.session.user?.id || `${provider}_staging_user`);
     console.log(`[${provider.toUpperCase()}] Profile authenticated & persistence verified via ${provider} (Principal Hash: ${meta.principalHash.slice(0, 12)}...)`);
     return meta;
   }
@@ -217,9 +211,6 @@ async function waitForOAuthCompletion(
     : [];
 
   meta.authenticated = check.session?.status === 'AUTHENTICATED' && Boolean(check.session?.user);
-  meta.userId = check.session?.user?.id;
-  meta.userEmail = check.session?.user?.email;
-  meta.userName = check.session?.user?.name;
   meta.linkedProviders = linked;
 
   assert.equal(meta.authenticated, true, `${meta.provider} OAuth must yield an authenticated session`);
@@ -234,10 +225,17 @@ async function waitForOAuthCompletion(
   assert.equal(meta.sessionPersistedOnReload, true, 'Session must persist across reload');
   meta.freeTierEntitlementsVerified = Boolean(reloaded.entitlements?.plan || reloaded.entitlements?.tier);
 
-  meta.principalHash = hashPrincipalIdentifier(meta.userId || meta.userEmail || `${meta.provider}_staging_user`);
+  meta.principalHash = hashPrincipalIdentifier(reloaded.session?.user?.id || `${meta.provider}_staging_user`);
 
   console.log(`[${meta.provider.toUpperCase()}] ✓ Authenticated session verified & persisted! PrincipalHash=${meta.principalHash.slice(0, 12)}... Providers=[${linked.join(', ')}]`);
   return meta;
+}
+
+function writeJsonAtomic(filePath: string, data: unknown): void {
+  const tmpPath = `${filePath}.${crypto.randomUUID()}.tmp`;
+  const content = JSON.stringify(data, null, 2);
+  fs.writeFileSync(tmpPath, content, { mode: 0o600 });
+  fs.renameSync(tmpPath, filePath);
 }
 
 function buildProviderEvidence(meta: OAuthFlowMetadata): ProviderPositiveEvidence {
@@ -248,7 +246,7 @@ function buildProviderEvidence(meta: OAuthFlowMetadata): ProviderPositiveEvidenc
     deployedStagingSha: DEPLOYED_STAGING_SHA,
     deploymentId: DEPLOYMENT_ID,
     stagingDatabaseIdentity: STAGING_DB_IDENTITY,
-    principalHash: meta.principalHash || hashPrincipalIdentifier(meta.userId || meta.userEmail || `${meta.provider}_staging_user`),
+    principalHash: meta.principalHash || hashPrincipalIdentifier(`${meta.provider}_staging_user`),
     // A restored authenticated session alone does not attest an OAuth start,
     // callback or provider authorization-code exchange in this execution.
     oauthStartObserved: Boolean(meta.authorizeHost),
@@ -308,23 +306,34 @@ async function main() {
     const googleEvidence = buildProviderEvidence(finalA);
     const githubEvidence = buildProviderEvidence(finalB);
 
+    // Completely sanitize metadata records before persisting
+    const sanitizedA = { ...finalA };
+    delete (sanitizedA as any).userId;
+    delete (sanitizedA as any).userEmail;
+    delete (sanitizedA as any).userName;
+
+    const sanitizedB = { ...finalB };
+    delete (sanitizedB as any).userId;
+    delete (sanitizedB as any).userEmail;
+    delete (sanitizedB as any).userName;
+
     const fullEvidencePackage = {
       timestamp: new Date().toISOString(),
       stagingUrl: STAGING_URL,
       google: googleEvidence,
       github: githubEvidence,
-      googleAccountA: finalA,
-      githubAccountB: finalB,
+      googleAccountA: sanitizedA,
+      githubAccountB: sanitizedB,
     };
 
-    // Save evidence to both root artifacts and pr164 subfolder for full compatibility
+    // Save evidence atomically with permission restrictions to both root and pr164 subfolder
     const liveEvidencePath = path.join(ARTIFACTS_DIR, 'live_oauth_positive_evidence.json');
     const phase1StatusPath = path.join(ARTIFACTS_DIR, 'oauth_phase1_status.json');
     const pr164Path = path.join(PR164_DIR, 'oauth_phase1_status.json');
 
-    fs.writeFileSync(liveEvidencePath, JSON.stringify(fullEvidencePackage, null, 2));
-    fs.writeFileSync(phase1StatusPath, JSON.stringify(fullEvidencePackage, null, 2));
-    fs.writeFileSync(pr164Path, JSON.stringify(fullEvidencePackage, null, 2));
+    writeJsonAtomic(liveEvidencePath, fullEvidencePackage);
+    writeJsonAtomic(phase1StatusPath, fullEvidencePackage);
+    writeJsonAtomic(pr164Path, fullEvidencePackage);
 
     console.log(`\n✓ Phase 1 Complete! Saved sanitized OAuth status to:`);
     console.log(`  - ${liveEvidencePath}`);

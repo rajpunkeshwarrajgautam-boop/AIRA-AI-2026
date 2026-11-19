@@ -3,6 +3,7 @@ import { db } from '../../db/src/index.js';
 
 export interface AgentRepository {
   saveAgent(agent: AgentDefinition, principalId?: string): Promise<void>;
+  createAgentWithQuota?(agent: AgentDefinition, principalId: string, limit: number): Promise<void>;
   getAgent(id: string, principalId?: string): Promise<AgentDefinition | undefined>;
   listAgents(principalId?: string): Promise<AgentDefinition[]>;
   deleteAgent(id: string, principalId?: string): Promise<boolean>;
@@ -44,6 +45,44 @@ export class PostgresAgentRepository implements AgentRepository {
       createdAt: Date.now(),
       updatedAt: Date.now()
     }).onConflict('id').merge();
+  }
+
+  async createAgentWithQuota(agent: AgentDefinition, principalId: string, limit: number): Promise<void> {
+    await db.transaction(async (trx) => {
+      // Advisory xact lock on hashed principalId strictly serializes quota check and insertion
+      // across multiple API instances without creating global table locks.
+      try {
+        await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [`agent_quota_${principalId}`]);
+      } catch {}
+
+      const countRow = await trx('agents')
+        .where({ principal_id: principalId })
+        .count<{ count: string | number }>('id as count')
+        .first();
+
+      const currentCount = Number(countRow?.count || 0);
+      if (currentCount >= limit) {
+        const err = new Error(`Maximum agent limit (${limit}) reached for your plan.`);
+        err.name = 'AgentLimitExceededError';
+        throw err;
+      }
+
+      await trx('agents').insert({
+        id: agent.id,
+        principal_id: principalId,
+        name: agent.name,
+        description: agent.description || '',
+        instructions: agent.instructions,
+        modelPolicy: JSON.stringify(agent.modelPolicy),
+        tools: JSON.stringify(agent.tools),
+        memoryScopes: JSON.stringify(agent.memoryScopes),
+        approvalPolicy: agent.approvalPolicy,
+        maxSteps: agent.maxSteps,
+        timeoutPolicy: JSON.stringify({ maxMs: agent.timeoutMs }),
+        createdAt: (agent as any).createdAt || Date.now(),
+        updatedAt: (agent as any).updatedAt || Date.now()
+      });
+    });
   }
 
   async getAgent(id: string, principalId?: string): Promise<AgentDefinition | undefined> {
@@ -99,6 +138,29 @@ export class PostgresAgentRepository implements AgentRepository {
 
 export class InMemoryAgentRepository implements AgentRepository {
   private agents: Map<string, { agent: AgentDefinition; principalId?: string | null }> = new Map();
+  private userQuotaLocks: Map<string, Promise<void>> = new Map();
+
+  async createAgentWithQuota(agent: AgentDefinition, principalId: string, limit: number): Promise<void> {
+    while (this.userQuotaLocks.has(principalId)) {
+      await this.userQuotaLocks.get(principalId);
+    }
+    let release!: () => void;
+    const lock = new Promise<void>((res) => { release = res; });
+    this.userQuotaLocks.set(principalId, lock);
+
+    try {
+      const existing = await this.listAgents(principalId);
+      if (existing.length >= limit) {
+        const err = new Error(`Maximum agent limit (${limit}) reached for your plan.`);
+        err.name = 'AgentLimitExceededError';
+        throw err;
+      }
+      await this.saveAgent(agent, principalId);
+    } finally {
+      this.userQuotaLocks.delete(principalId);
+      release();
+    }
+  }
 
   async saveAgent(agent: AgentDefinition, principalId?: string): Promise<void> {
     const owner = principalId || agent.principalId || null;
