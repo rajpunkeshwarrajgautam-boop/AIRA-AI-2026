@@ -1,7 +1,7 @@
 # AIRA AI 2026 — Production Acceptance & Corrective Certification Report
 
-**Document Version:** 3.3.0 (Authoritative Certification Baseline — Scoped Free-Tier Release)  
-**Audit Timestamp:** 2026-11-19T06:45:00Z / 2026-11-19 12:15 IST  
+**Document Version:** 3.4.0 (Authoritative Certification Baseline — Scoped Free-Tier Release Closure)  
+**Audit Timestamp:** 2026-11-19T07:00:00Z / 2026-11-19 12:30 IST  
 **Repository:** `rajpunkeshwarrajgautam-boop/AIRA-AI-2026`  
 **Production URL:** `https://aira-ai-2026.vercel.app`  
 **Production HEAD Commit:** `b5a27f391447b68448edf067cdb2ee62a598c264`  
@@ -10,7 +10,9 @@
 **Preserved Rollback Deployment ID:** `dpl_3vZXiXwBWgZeeAyiyUVgYixsNMb8` (Commit `d988a6bd26d49a000d59cf906b13fcfe9e170058`)  
 **Neon Production Database:** `old-sky-50952395` / branch `br-shiny-moon-b3vy9xj7`  
 **Neon Recovery Checkpoint:** `br-orange-art-b3vzajv0` (LSN `0/1E912998`)  
-**Certification Status:** **SCOPED PASS (Free-Tier Production Release Certified; Paid Tier Excluded; Server Cancellation Qualified)**
+**Production CI Run:** `44346736429` (PASS)  
+**Remediation CI Run:** `44465413722` (PASS)  
+**Certification Status:** **SCOPED PASS FOR FREE TIER (Pending Owner Risk Acceptance of Qualified Streaming Reliability Risk; Paid Tier Excluded)**
 
 ---
 
@@ -29,18 +31,30 @@ In accordance with strict production engineering integrity rules prohibiting fal
 6. **Free-Tier Quota & Entitlements (Authoritative):** **PASS**. Quotas resolved server-side for free tier (15 daily chats). Silent client-side fallbacks eliminated.
 7. **Bounded Real Model Inference SSE Streaming:** **PASS**. Prompt `"Reply with 'AIRA_2026_TEST_OK' and nothing else"` routed to `aira-fast` emitted full SSE lifecycle (`run_started` -> `routing_decision` -> `model_provenance` -> `content_delta`* -> `done` with `[DONE]`). Content reconstructed and confirmed.
 8. **Controlled SSE Stream Abort (Client-Side):** **PASS**. Client abort via `AbortController` trapped cleanly with zero dangling connections. Upstream worker lease release telemetry classified accurately as UNVERIFIED/BLOCKED.
-9. **Autonomous Agent Execution & Migration 032 Schema:** **PASS**. Single-step workflow task executed and verified the `artifacts` JSONB column. Cancellable task entered `WAITING_FOR_APPROVAL` via non-destructive definition and cancelled successfully (HTTP 200, status `CANCELLED`).
-10. **Distinct-Principal Cross-Account Conversation Isolation:** **PASS**. Authorized production test completed by repository owner using two distinct Google accounts in separate Microsoft Edge contexts (Account A sanitized principal: `sha256:a5c94966a76a1044c50f2dc127d77cf5a6f26554fbbd9f586a981d8449aa5665` / short `a5c94966...`; Account B sanitized principal: `sha256:3d7a84c2e910f51b6201e749826d9c721b0e51532f814987de58a01bf28489c6` / short `3d7a84c2...`). Legitimate owner retrieval of Account A's existing conversation returned HTTP 200 with full conversation payload; Account B querying that exact conversation ID returned HTTP 404 (Not Found) with `accessDenied: true` and `privateDataReturned: false`. Verified zero cross-tenant conversation or metadata leakage.
+9. **Autonomous Agent Execution & Migration 032 Schema:** **PASS**. Single-step workflow task executed and verified the `artifacts` JSONB column. Cancellable task entered `WAITING_FOR_APPROVAL` via non-destructive definition and cancelled successfully (HTTP 200, status `CANCELLED`). Owned by historical single-principal test user (sanitized prefix: `a5c94966...`).
+10. **Distinct-Principal Cross-Account Conversation Isolation:** **PASS**. Authorized production test completed by repository owner using two authenticated, distinct Google accounts in separate Microsoft Edge contexts:
+    - **Account A (Normal Edge):** Authenticated; sanitized principal hash prefix `ab6d4e8c...`; conversation listing HTTP 200; reading owned conversation HTTP 200.
+    - **Account B (Edge InPrivate):** Authenticated; sanitized principal hash prefix `20b32d76...`; requesting Account A's exact conversation returned **HTTP 404 Not Found** with `accessDenied: true` and `privateDataReturned: false`.
+    - **Historical Workflow Owner:** Sanitized principal hash prefix `a5c94966...` is a third principal and is distinguished from both browser test accounts.
+    - Verified zero cross-tenant conversation or metadata leakage.
 11. **Session Revocation:** **PASS**. Sign-out endpoint invalidates server-side session and returns `ANONYMOUS`.
 12. **Budget Ceiling Compliance:** **PASS**. Consumed 50 tokens (~$0.000030 USD), well within the authorized USD $0.05 limit.
 
 ### Release Scope Qualifications & Future Non-Free Requirements:
 1. **Free-Tier Release Scope Certification:** **CERTIFIED (PASS)**. The production baseline satisfies all required gates for Free-tier production deployment, including verified cross-account conversation boundary enforcement.
-2. **Workflow & Artifact Isolation Scope Qualification:** **QUALIFIED / NON-BLOCKING FOR FREE TIER**. Distinct-principal conversation isolation is certified. In accordance with strict release engineering standards, conversation isolation is NOT misclassified as proof of workflow run (`/api/workflows/runs/:id`) or multi-file artifact isolation. Under AIRA's authoritative commercial contract (`packages/contracts/src/commercial.ts`), the Free tier strictly configures `allowAutonomous: false` and `builderAccess: 'none'`, excluding autonomous workflows and workspace artifact generation from the Free-tier release surface. Therefore, separate cross-tenant workflow and artifact coverage is non-mandatory for the defined Free-tier scope. Live distinct-account testing of workflow run and artifact isolation remains a mandatory release gate before certifying any future release of Pro/Enterprise tiers or autonomous agent mode.
-3. **Paid-Plan Acceptance:** **EXCLUDED / BLOCKED (Awaiting Paid Test Principal)**. Retained exclusion. No paid test principal has been provisioned in production. In accordance with zero-mock policies, paid tier live acceptance cannot be certified until a legitimate paid test account is provided.
-4. **Server-Side Upstream Worker Lease Cancellation:** **UNVERIFIED / QUALIFIED**. Retained qualification. Client-side abort via `AbortController` is certified PASS with clean error handling and zero dangling connections; upstream worker process lease termination remains unverified across the public HTTP edge.
+2. **Workflow & Artifact Isolation Scope Qualification:** **NOT CERTIFIED (Excluded from Free-Tier Release Scope)**. Real conversation isolation does NOT prove workflow run (`/api/workflows/runs/:id`) or multi-file artifact isolation. Under AIRA's authoritative commercial contract (`packages/contracts/src/commercial.ts`), the Free tier strictly configures `allowAutonomous: false` and `builderAccess: 'none'`, and Builder routes enforce `service.status(req.principal!)` returning HTTP 403 Forbidden. Autonomous agent workflows and workspace artifacts are strictly inaccessible to Free-tier users and are excluded from this release. Live distinct-account isolation testing on `/api/workflows/runs/:id` and artifact endpoints remains a mandatory requirement before releasing paid or autonomous tiers.
+3. **Paid-Plan Acceptance:** **EXCLUDED from Free-Tier Release (Not Certified)**. Retained exclusion. No paid test principal has been provisioned in production. In accordance with zero-mock policies, paid tier live acceptance cannot be certified until a legitimate paid test account is provided.
+4. **Server-Side Upstream Worker Lease Cancellation:** **UNVERIFIED — QUALIFIED RELIABILITY RISK**. The release distinguishes 5 cancellation levels:
+   - *Client connection termination:* **PASS** (Client `AbortController.abort()` cleanly caught, `AbortError` handled, socket closed, zero dangling client connections).
+   - *Backend abort propagation:* **SOURCE/TEST-SUPPORTED** (`req.on('close')` fires, unregisters `stream.off('event', onLiveEvent)`, `res.end()` called).
+   - *Application-side worker and permit cleanup:* **SOURCE/TEST-SUPPORTED** (Worker listener detachment handled).
+   - *Upstream provider termination:* **UNVERIFIED** (No proof upstream LLM provider ceases token generation upon client disconnect; source code tracing cannot prove provider-side termination).
+   - *Resource and lease telemetry:* **UNVERIFIED** (No edge-observable lease release telemetry).
+   - *Operational Impact:* If a Free-tier user aborts streaming mid-flight, client rendering halts immediately, but the upstream LLM provider may continue computing to completion, consuming provider budget/quota.
+   - *Follow-up Owner:* AI Runtime Lead.
+   - *Status:* **PENDING OWNER RISK ACCEPTANCE** of this qualified streaming reliability risk.
 
-**Final Certification Verdict: SCOPED FREE-TIER PRODUCTION RELEASE: CERTIFIED (PASS) ✅**
+**Final Certification Verdict: SCOPED FREE-TIER PRODUCTION RELEASE: CERTIFIED (PASS) — PENDING OWNER ACCEPTANCE OF QUALIFIED UPSTREAM TELEMETRY RISK ✅**
 
 ---
 
@@ -54,6 +68,7 @@ In accordance with strict production engineering integrity rules prohibiting fal
 | **Vercel Project ID** | `prj_FZLU4vBIYSsBn28AI6drkpD5WfbH` | `prj_FZLU4vBIYSsBn28AI6drkpD5WfbH` (Verified via Vercel CLI) | **PASS** |
 | **Production Domain Alias** | `aira-ai-2026.vercel.app` | Points to `dpl_BTiLvhq77siuaz655zZARHdBKuBZ` | **PASS** |
 | **Production CI Run** | `44346736429` on `prod-release` | SUCCESS (`Fast CI`, `Semantic Search CI`, `Main / PR certification` passed) | **PASS** |
+| **Remediation CI Run** | `44465413722` on `fix/production-acceptance-certification-hardening` | SUCCESS (`Fast CI`, `Semantic Search CI` passed, 0 secrets violations) | **PASS** |
 | **Neon PostgreSQL Project** | `old-sky-50952395` | Connected (`ap-southeast-1`) | **PASS** |
 | **Neon Production Branch** | `br-shiny-moon-b3vy9xj7` | PostgreSQL 18.7 (a21afb5) | **PASS** |
 | **Migration Ledger Count** | Exactly 32 migrations | 32 migrations in `knex_migrations` | **PASS** |
@@ -92,20 +107,20 @@ In accordance with strict production engineering integrity rules prohibiting fal
 
 | Test ID | Test Category & Description | Expected Behavior | Observed Result / Status | Verdict |
 |---|---|---|---|---|
-| **Phase 1a** | OAuth Authentication (Google) | Authenticate Profile A via Google | Authenticated; principal hash `sha256:a5c94966...`; valid session cookie & CSRF token | **PASS** |
-| **Phase 1b** | OAuth Authentication (GitHub) | Authenticate Profile B via GitHub | Authenticated; principal hash `sha256:a5c94966...`; valid session cookie & CSRF token | **PASS** |
-| **Phase 1c** | Multi-Provider Account Linking | Multiple OAuth providers link to single account | Verified: User account links both `[google, github]` providers | **PASS** |
-| **Phase 1d** | Distinct-Principal Identification | Test accounts represent distinct user principals | Verified: Owner authenticated two distinct Google accounts in separate Microsoft Edge contexts (Account A: `sha256:a5c94966...`, Account B: `sha256:3d7a84c2...`). `isDistinctUser = true`. | **PASS** |
+| **Phase 1a** | OAuth Authentication (Google) | Authenticate Profile A via Google | Authenticated; historical test principal prefix `a5c94966...`; valid session cookie & CSRF token | **PASS** |
+| **Phase 1b** | OAuth Authentication (GitHub) | Authenticate Profile B via GitHub | Authenticated; historical test principal prefix `a5c94966...`; valid session cookie & CSRF token | **PASS** |
+| **Phase 1c** | Multi-Provider Account Linking | Multiple OAuth providers link to single account | Verified: Historical test user account links both `[google, github]` providers | **PASS** |
+| **Phase 1d** | Distinct-Principal Identification | Test accounts represent distinct user principals | Verified: Owner authenticated two independent Google accounts in separate Microsoft Edge contexts: Account A (Normal Edge: `ab6d4e8c...`) and Account B (Edge InPrivate: `20b32d76...`). Distinct principals confirmed (`isDistinctUser = true`). Historical workflow owner (`a5c94966...`) distinguished as separate third principal. | **PASS** |
 | **Phase 1e** | Session Reload Persistence | Sessions survive browser page reload | Both profiles reloaded; `status: AUTHENTICATED` preserved | **PASS** |
 | **Phase 2a** | Free Tier Entitlements Verification | Server-authoritative plan validation | Plan tier `free`, daily chat limit 15 verified server-side without silent defaults | **PASS** |
-| **Phase 2b** | Paid Tier Entitlements Acceptance | Validate Pro/Enterprise tier features | **EXCLUDED / BLOCKED**: No paid test principal provisioned in production. Zero-mock policy enforced; excluded from Free-tier release scope. | **BLOCKED (Non-Free Scope)** |
+| **Phase 2b** | Paid Tier Entitlements Acceptance | Validate Pro/Enterprise tier features | **EXCLUDED / NOT CERTIFIED**: No paid test principal provisioned in production. Zero-mock policy enforced; excluded from Free-tier release scope. | **EXCLUDED (Non-Free Scope)** |
 | **Phase 3a** | Real Model Inference (Account A) | Bounded inference with real provider | Latency 7,729 ms, model `aira-fast`, SSE stream reconstructed with exact content `"AIRA_2026_TEST_OK"` and terminal `[DONE]` | **PASS** |
 | **Phase 3b** | Real Model Inference (Account B) | Bounded inference with real provider | Latency 7,321 ms, model `aira-fast`, SSE stream reconstructed with exact content `"AIRA_2026_TEST_OK"` and terminal `[DONE]` | **PASS** |
-| **Phase 4** | Controlled SSE Stream Abort | Client aborts stream mid-flight | Client `AbortController.abort()` executed after first chunk; `AbortError` handled cleanly. Server worker lease release: UNVERIFIED/QUALIFIED. | **PASS (Client)** / **QUALIFIED (Server Telemetry)** |
-| **Phase 5a** | Single-Step Workflow Task (Migration 032) | Create workflow run and verify artifacts column | Run `wfrun_run_e9eaa9f5-4` created (HTTP 201); JSONB `artifacts` column initialized cleanly | **PASS** |
-| **Phase 5b** | Workflow Task Cancellation | Cancel human-approval pending workflow | Run `wfrun_run_7770e6c7-3` created with harmless definition (`sideEffectLevel: 'READ'`); cancelled via `POST /api/workflows/runs/:id/cancel` (HTTP 200, `CANCELLED`) | **PASS** |
-| **Phase 6.1** | Distinct Cross-Account Conversation Isolation | Authenticated non-owner attempts to read another user's conversation | Account A's existing conversation queried by Account A returned HTTP 200; queried by Account B returned HTTP 404 (Not Found). `accessDenied: true`, `privateDataReturned: false`. Zero cross-tenant conversation or metadata leakage. | **PASS** |
-| **Phase 6.1a** | Workflow & Artifact Cross-Account Isolation | Authenticated non-owner attempts to read another user's workflow runs / artifacts | Workflow runs (`/api/workflows/runs/:id`) and builder artifacts not tested with distinct accounts. Non-blocking for Free tier (`allowAutonomous: false`, `builderAccess: 'none'`); required prerequisite for future paid/agent release. | **QUALIFIED (Non-Free Prerequisite)** |
+| **Phase 4** | Controlled SSE Stream Abort | Client aborts stream mid-flight | Client connection termination: PASS; Backend abort propagation: SOURCE/TEST-SUPPORTED; Application worker cleanup: SOURCE/TEST-SUPPORTED; Upstream provider termination: UNVERIFIED; Lease telemetry: UNVERIFIED. Qualified reliability risk pending owner acceptance. | **PASS (Client) / QUALIFIED (Upstream Telemetry)** |
+| **Phase 5a** | Single-Step Workflow Task (Migration 032) | Create workflow run and verify artifacts column | Run `wfrun_run_e9eaa9f5-4` created (HTTP 201); JSONB `artifacts` column initialized cleanly (owned by `a5c94966...`) | **PASS** |
+| **Phase 5b** | Workflow Task Cancellation | Cancel human-approval pending workflow | Run `wfrun_run_7770e6c7-3` created with harmless definition (`sideEffectLevel: 'READ'`); cancelled via `POST /api/workflows/runs/:id/cancel` (HTTP 200, `CANCELLED`, owned by `a5c94966...`) | **PASS** |
+| **Phase 6.1** | Distinct Cross-Account Conversation Isolation | Authenticated non-owner attempts to read another user's conversation | Account A (`ab6d4e8c...`) existing conversation queried by Account A returned HTTP 200; queried by Account B (`20b32d76...`) returned HTTP 404 (Not Found). `accessDenied: true`, `privateDataReturned: false`. Zero cross-tenant data leakage. | **PASS** |
+| **Phase 6.1a** | Workflow & Artifact Cross-Account Isolation | Authenticated non-owner attempts to read another user's workflow runs / artifacts | Workflow runs (`/api/workflows/runs/:id`) and builder artifacts not tested with distinct accounts. Excluded from Free tier (`allowAutonomous: false`, `builderAccess: 'none'`); required prerequisite for future paid/agent release. | **NOT CERTIFIED (Non-Free Prerequisite)** |
 | **Phase 6.2** | Ownership Forgery Defense | Client attempts to forge `principalId` in POST body | `POST /api/workflows/runs` rejected forgery with HTTP 400 (Bad Request) | **PASS** |
 | **Phase 6.3** | Anonymous Resource Protection | Unauthenticated client queries workflow run | `GET /api/workflows/runs/wfrun_run_e9eaa9f5-4` returned HTTP 401 (Unauthorized) | **PASS** |
 | **Phase 6.4** | Legitimate Owner Access | Authenticated owner queries own workflow run | `GET /api/workflows/runs/wfrun_run_e9eaa9f5-4` returned HTTP 200 with full run data | **PASS** |
@@ -228,18 +243,23 @@ A dedicated unit and regression test suite was expanded in `test/production-acce
 
 ---
 
-## 8. Action Items to Achieve Full Sign-Off
+## 8. Action Items & Separate Future Release Milestones
 
-The scoped Free-tier release criteria have been successfully certified:
-
-1. **Provide Independent Second Test Account for Conversation Isolation:** **COMPLETE (PASS)**
-   - Owner completed authorized production verification across two distinct Google accounts in separate Microsoft Edge contexts.
-   - Certified HTTP 404 access denial (`accessDenied: true`, `privateDataReturned: false`) targeting Account A's existing conversation from Account B with zero cross-tenant conversation or metadata leakage.
-2. **Provision Paid Test Principal (Prerequisite for Future Paid-Tier Certification):**
-   - Retained prerequisite. Required only when expanding release scope beyond Free tier. Never modify production subscription tables or billing state to manufacture a paid test account; paid-tier acceptance stays BLOCKED until a legitimate paid principal is provided.
-3. **Multi-Tenant Workflow & Artifact Isolation (Prerequisite for Future Autonomous/Paid Scope):**
-   - Distinct-account verification of `/api/workflows/runs/:id` and Builder Studio multi-file artifacts remains a mandatory prerequisite before enabling autonomous agent workflows or workspace builder features.
-4. **Preserve All Safety Resources:**
+### A. Free-Tier Certification Closure
+1. **Real Cross-Account Conversation Isolation:** **COMPLETE (PASS)**
+   - Owner completed authorized production verification across two authenticated, distinct Google accounts in separate Microsoft Edge contexts.
+   - Account A (Normal Edge, `ab6d4e8c...`): HTTP 200 on owned conversation.
+   - Account B (Edge InPrivate, `20b32d76...`): HTTP 404 on Account A's conversation (`accessDenied: true`, `privateDataReturned: false`).
+   - Historical workflow owner (`a5c94966...`) distinguished as separate third principal.
+2. **Upstream Inference Cancellation Telemetry:** **QUALIFIED RELIABILITY RISK**
+   - Retained as explicitly documented Free-tier streaming reliability risk pending formal owner risk acceptance. Follow-up owner: AI Runtime Lead.
+3. **Preserve Production Safety Baseline:**
    - Keep recovery branch `br-orange-art-b3vzajv0` preserved.
    - Keep encrypted archive `aira_prod_main_backup_20261118160905.dump.enc` preserved.
    - Keep rollback deployment `dpl_3vZXiXwBWgZeeAyiyUVgYixsNMb8` preserved.
+
+### B. Separate Future Release Milestones (Not Part of Free-Tier Release Scope)
+The following items remain separate future milestones and do not gate or delay this Free-tier closure:
+1. **Milestone 1 — Paid-Plan Production Acceptance:** Provisioning an authorized, legitimately paid production test principal to certify Pro/Enterprise model allowlists and elevated quotas.
+2. **Milestone 2 — Multi-Tenant Workflow & Artifact Isolation:** Conducting live distinct-account read probes against `/api/workflows/runs/:id` and Builder Studio multi-file artifacts before enabling autonomous agent workflows or workspace builder features.
+3. **Milestone 3 — Upstream Inference Cancellation Telemetry:** Implementing internal worker telemetry and provider `AbortSignal` propagation to certify provider resource release upon client disconnect.
