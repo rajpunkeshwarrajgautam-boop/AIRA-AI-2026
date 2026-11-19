@@ -248,6 +248,10 @@ export class AgentRuntime extends EventEmitter {
     return this.workflowRepo;
   }
 
+  public setWorkflowRepository(repo: WorkflowRepository): void {
+    this.workflowRepo = repo;
+  }
+
   public getWorkflowCompiler(): WorkflowCompiler {
     return this.workflowCompiler;
   }

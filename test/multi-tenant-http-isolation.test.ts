@@ -9,6 +9,7 @@ process.env.AIRA_BUILDER_SIGNING_SECRET = '1234567890123456789012345678901234567
 
 const { default: app, agentRuntime, setAgentRepository, getAgentRepository } = await import('../apps/api/src/index.js');
 const { InMemoryAgentRepository } = await import('../packages/agent-runtime/src/repositories.js');
+const { InMemoryWorkflowRepository } = await import('../packages/agent-runtime/src/workflow-repositories.js');
 const { db } = await import('../packages/db/src/index.js');
 const { signTicket } = await import('../packages/builder-runtime/src/security.js');
 type WorkspaceTicketDraft = import('../packages/builder-runtime/src/security.js').WorkspaceTicketDraft;
@@ -16,6 +17,8 @@ type WorkspaceTicketDraft = import('../packages/builder-runtime/src/security.js'
 describe('Remediation F8 (Part 1): Real HTTP Multi-Tenant & Artifact Isolation (Actual Routes)', () => {
   let server: Server;
   let baseUrl: string;
+  let origWfRepo: any;
+  let origAgentRepo: any;
 
   const userA = {
     userId: 'usr_alpha_99',
@@ -46,17 +49,11 @@ describe('Remediation F8 (Part 1): Real HTTP Multi-Tenant & Artifact Isolation (
   before(async () => {
     process.env.AIRA_BUILDER_SIGNING_SECRET = '1234567890123456789012345678901234567890';
 
-    let hasPostgres = false;
-    try {
-      await db.raw('SELECT 1');
-      hasPostgres = true;
-    } catch {
-      hasPostgres = false;
-    }
+    origWfRepo = agentRuntime.getWorkflowRepository();
+    agentRuntime.setWorkflowRepository(new InMemoryWorkflowRepository());
 
-    if (!hasPostgres) {
-      setAgentRepository(new InMemoryAgentRepository());
-    }
+    origAgentRepo = getAgentRepository();
+    setAgentRepository(new InMemoryAgentRepository());
 
     // Mount actual production Express application on ephemeral local port
     await new Promise<void>((resolve) => {
@@ -69,6 +66,12 @@ describe('Remediation F8 (Part 1): Real HTTP Multi-Tenant & Artifact Isolation (
   });
 
   after(async () => {
+    if (origWfRepo) {
+      agentRuntime.setWorkflowRepository(origWfRepo);
+    }
+    if (origAgentRepo) {
+      setAgentRepository(origAgentRepo);
+    }
     if (server) {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
