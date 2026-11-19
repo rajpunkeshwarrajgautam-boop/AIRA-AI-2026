@@ -216,11 +216,13 @@ export function assertCommercialFulfillmentAllowed(eventType: string, gateway: s
 
   // 3. Centralized fail-closed check
   const isProduction = process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production';
-  const isIsolatedTest = (process.env.NODE_ENV === 'test' || process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true') && !isProduction;
+  const isStaging = process.env.VERCEL_ENV === 'preview' || process.env.AIRA_ENVIRONMENT === 'staging';
+  const isIsolatedTest = (process.env.NODE_ENV === 'test' || process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true') && !isProduction && !isStaging;
 
-  if (isProduction) {
+  if (isProduction || isStaging) {
     if (process.env.AIRA_COMMERCIAL_BILLING_ENABLED !== 'true') {
-      throw new Error('BILLING_UNAVAILABLE: Commercial billing fulfillment is currently disabled in production. Paid entitlements cannot be granted.');
+      const envName = isProduction ? 'production' : 'staging';
+      throw new Error(`BILLING_UNAVAILABLE: Commercial billing fulfillment is currently disabled in ${envName}. Paid entitlements cannot be granted.`);
     }
   } else {
     if (!isIsolatedTest && process.env.AIRA_COMMERCIAL_BILLING_ENABLED !== 'true') {
@@ -354,6 +356,9 @@ export class PaymentGatewayService {
   /**
    * Centralized webhook transaction engine with durable lifecycle states:
    * RECEIVED -> PROCESSING -> PROCESSED | RETRYABLE_FAILURE | TERMINAL_FAILURE
+   *
+   * Crucial durability invariant: State machine persistence on `payment_gateway_events`
+   * must survive failed fulfillment transactions without committing partial business entitlements.
    */
   private async executeWebhookTransaction(
     gateway: 'razorpay' | 'cashfree',
@@ -373,99 +378,113 @@ export class PaymentGatewayService {
       return await this.executeWebhookWithMockDb(gateway, eventId, eventType, payload);
     }
 
-    return await (database as Knex).transaction(async (trx) => {
-      const eventRowId = `pge_${crypto.randomUUID().replace(/-/g, '')}`;
+    const knex = database as Knex;
+    const eventRowId = `pge_${crypto.randomUUID().replace(/-/g, '')}`;
 
-      // Insert event record if not already present
-      await trx('payment_gateway_events')
-        .insert({
-          id: eventRowId,
-          gateway,
-          event_id: eventId,
-          event_type: eventType,
-          signature_valid: true,
-          processed: false,
-          error: 'PROCESSING',
-          payload: JSON.stringify({
-            ...payload,
-            _lifecycle: { state: 'PROCESSING', attempts: 1, lastAttemptAt: now }
-          }),
-          created_at: now
-        })
-        .onConflict('event_id')
-        .ignore();
+    // 1. Durable event registration outside business fulfillment transaction
+    await knex('payment_gateway_events')
+      .insert({
+        id: eventRowId,
+        gateway,
+        event_id: eventId,
+        event_type: eventType,
+        signature_valid: true,
+        processed: false,
+        error: 'PROCESSING',
+        payload: JSON.stringify({
+          ...payload,
+          _lifecycle: { state: 'PROCESSING', attempts: 1, lastAttemptAt: now }
+        }),
+        created_at: now
+      })
+      .onConflict('event_id')
+      .ignore();
 
-      // Acquire exclusive row lock on payment_gateway_events
-      const record = await trx('payment_gateway_events')
-        .where({ event_id: eventId })
-        .forUpdate()
-        .first();
+    // 2. Fetch existing record to inspect durable state
+    const record = await knex('payment_gateway_events')
+      .where({ event_id: eventId })
+      .first();
 
-      if (!record) {
-        throw new Error(`Failed to acquire event lock for ${eventId}`);
-      }
+    if (!record) {
+      throw new Error(`Failed to acquire event lock for ${eventId}`);
+    }
 
-      // If already successfully processed, return idempotent response
-      if (record.processed) {
-        return { status: 'ALREADY_PROCESSED', eventId, duplicate: true };
-      }
+    // If already successfully processed, return idempotent response
+    if (record.processed) {
+      return { status: 'ALREADY_PROCESSED', eventId, duplicate: true };
+    }
 
-      let lifecycle: any = {};
-      try {
-        const parsed = typeof record.payload === 'string' ? JSON.parse(record.payload) : record.payload;
-        lifecycle = parsed?._lifecycle || {};
-      } catch {}
+    let lifecycle: any = {};
+    try {
+      const parsed = typeof record.payload === 'string' ? JSON.parse(record.payload) : record.payload;
+      lifecycle = parsed?._lifecycle || {};
+    } catch {}
 
-      // Reject retry if event terminally failed (e.g. fraud, tampered amount)
-      if (lifecycle.state === 'TERMINAL_FAILURE' || record.error?.startsWith('TERMINAL_FAILURE')) {
-        throw new TerminalRejectionError(`TERMINAL_FAILURE: Webhook event ${eventId} was terminally rejected: ${record.error}`);
-      }
+    // Reject retry immediately if event terminally failed (e.g. fraud, tampered amount)
+    if (lifecycle.state === 'TERMINAL_FAILURE' || record.error?.startsWith('TERMINAL_FAILURE')) {
+      throw new TerminalRejectionError(`TERMINAL_FAILURE: Webhook event ${eventId} was terminally rejected: ${record.error}`);
+    }
 
-      // Check concurrent worker lock lease (30 second timeout)
-      if (lifecycle.state === 'PROCESSING' && record.id !== eventRowId && (now - (lifecycle.lastAttemptAt || 0)) < 30000) {
-        return { status: 'CONCURRENTLY_PROCESSING', eventId, duplicate: true };
-      }
+    // Check concurrent worker lock lease (30 second timeout)
+    if (
+      record.error === 'PROCESSING' &&
+      record.id !== eventRowId &&
+      (now - (lifecycle.lastAttemptAt || 0)) < 30000
+    ) {
+      return { status: 'CONCURRENTLY_PROCESSING', eventId, duplicate: true };
+    }
 
-      const attempts = (lifecycle.attempts || 0) + 1;
-      const currentPayload = typeof record.payload === 'string' ? JSON.parse(record.payload) : (record.payload || {});
-      currentPayload._lifecycle = { state: 'PROCESSING', attempts, lastAttemptAt: now };
+    const attempts = (lifecycle.attempts || 0) + 1;
+    const currentPayload = typeof record.payload === 'string' ? JSON.parse(record.payload) : (record.payload || {});
+    currentPayload._lifecycle = { state: 'PROCESSING', attempts, lastAttemptAt: now };
 
-      await trx('payment_gateway_events')
+    await knex('payment_gateway_events')
+      .where({ event_id: eventId })
+      .update({
+        error: 'PROCESSING',
+        payload: JSON.stringify(currentPayload)
+      });
+
+    // 3. Execute business fulfillment inside an isolated transaction
+    let fulfillmentError: any = null;
+    try {
+      await knex.transaction(async (trx) => {
+        await this.handleGatewayEvent(gateway, eventType, payload, trx);
+      });
+    } catch (err: any) {
+      fulfillmentError = err;
+    }
+
+    // 4. Update durable lifecycle state OUTSIDE the rolled-back business transaction
+    if (fulfillmentError) {
+      const isTerminal = isTerminalError(fulfillmentError);
+      currentPayload._lifecycle.state = isTerminal ? 'TERMINAL_FAILURE' : 'RETRYABLE_FAILURE';
+      currentPayload._lifecycle.terminalReason = isTerminal ? fulfillmentError.message : undefined;
+      currentPayload._lifecycle.lastError = fulfillmentError.message;
+
+      await knex('payment_gateway_events')
         .where({ event_id: eventId })
         .update({
-          error: 'PROCESSING',
+          processed: false,
+          error: `${isTerminal ? 'TERMINAL_FAILURE' : 'RETRYABLE_FAILURE'}: ${fulfillmentError.message}`,
           payload: JSON.stringify(currentPayload)
         });
 
-      try {
-        await this.handleGatewayEvent(gateway, eventType, payload, trx);
+      throw fulfillmentError;
+    }
 
-        currentPayload._lifecycle.state = 'PROCESSED';
-        await trx('payment_gateway_events')
-          .where({ event_id: eventId })
-          .update({
-            processed: true,
-            error: null,
-            payload: JSON.stringify(currentPayload)
-          });
+    // Fulfillment succeeded: record PROCESSED state
+    currentPayload._lifecycle.state = 'PROCESSED';
+    currentPayload._lifecycle.processedAt = Date.now();
+    await knex('payment_gateway_events')
+      .where({ event_id: eventId })
+      .update({
+        processed: true,
+        error: null,
+        payload: JSON.stringify(currentPayload)
+      });
 
-        return { status: 'PROCESSED', eventId, duplicate: false };
-      } catch (err: any) {
-        const isTerminal = isTerminalError(err);
-        currentPayload._lifecycle.state = isTerminal ? 'TERMINAL_FAILURE' : 'RETRYABLE_FAILURE';
-        currentPayload._lifecycle.terminalReason = isTerminal ? err.message : undefined;
-
-        await trx('payment_gateway_events')
-          .where({ event_id: eventId })
-          .update({
-            processed: false,
-            error: `${isTerminal ? 'TERMINAL_FAILURE' : 'RETRYABLE_FAILURE'}: ${err.message}`,
-            payload: JSON.stringify(currentPayload)
-          });
-
-        throw err;
-      }
-    });
+    return { status: 'PROCESSED', eventId, duplicate: false };
   }
 
   /**
@@ -478,17 +497,32 @@ export class PaymentGatewayService {
     payload: any
   ): Promise<{ status: string; eventId: string; duplicate?: boolean }> {
     const now = Date.now();
-    const existing = await this.getDb()('payment_gateway_events').where({ event_id: eventId }).first();
+    const dbClient = this.getDb();
+    const existing = await dbClient('payment_gateway_events').where({ event_id: eventId }).first();
     if (existing && (existing as any).processed) {
       return { status: 'ALREADY_PROCESSED', eventId, duplicate: true };
     }
 
-    if (existing && (existing as any).error?.startsWith('TERMINAL_FAILURE')) {
+    let lifecycle: any = {};
+    try {
+      const parsed = typeof (existing as any)?.payload === 'string' ? JSON.parse((existing as any).payload) : (existing as any)?.payload;
+      lifecycle = parsed?._lifecycle || {};
+    } catch {}
+
+    if (existing && ((existing as any).error?.startsWith('TERMINAL_FAILURE') || lifecycle.state === 'TERMINAL_FAILURE')) {
       throw new TerminalRejectionError(`TERMINAL_FAILURE: Webhook event ${eventId} was terminally rejected: ${(existing as any).error}`);
     }
 
+    if (existing && (existing as any).error === 'PROCESSING' && (now - (lifecycle.lastAttemptAt || 0)) < 30000) {
+      return { status: 'CONCURRENTLY_PROCESSING', eventId, duplicate: true };
+    }
+
+    const attempts = (lifecycle.attempts || 0) + 1;
+    const currentPayload = typeof (existing as any)?.payload === 'string' ? JSON.parse((existing as any).payload) : ((existing as any)?.payload || payload);
+    currentPayload._lifecycle = { state: 'PROCESSING', attempts, lastAttemptAt: now };
+
     if (!existing) {
-      await this.getDb()('payment_gateway_events').insert({
+      await dbClient('payment_gateway_events').insert({
         id: `pge_${crypto.randomUUID().replace(/-/g, '')}`,
         gateway,
         event_id: eventId,
@@ -496,20 +530,35 @@ export class PaymentGatewayService {
         signature_valid: true,
         processed: false,
         error: 'PROCESSING',
-        payload: JSON.stringify(payload),
+        payload: JSON.stringify(currentPayload),
         created_at: now
+      });
+    } else {
+      await dbClient('payment_gateway_events').where({ event_id: eventId }).update({
+        error: 'PROCESSING',
+        payload: JSON.stringify(currentPayload)
       });
     }
 
     try {
-      await this.handleGatewayEvent(gateway, eventType, payload, this.getDb());
-      await this.getDb()('payment_gateway_events').where({ event_id: eventId }).update({ processed: true, error: null });
+      await this.handleGatewayEvent(gateway, eventType, payload, dbClient);
+      currentPayload._lifecycle.state = 'PROCESSED';
+      currentPayload._lifecycle.processedAt = Date.now();
+      await dbClient('payment_gateway_events').where({ event_id: eventId }).update({
+        processed: true,
+        error: null,
+        payload: JSON.stringify(currentPayload)
+      });
       return { status: 'PROCESSED', eventId, duplicate: false };
     } catch (err: any) {
       const isTerminal = isTerminalError(err);
-      await this.getDb()('payment_gateway_events').where({ event_id: eventId }).update({
+      currentPayload._lifecycle.state = isTerminal ? 'TERMINAL_FAILURE' : 'RETRYABLE_FAILURE';
+      currentPayload._lifecycle.terminalReason = isTerminal ? err.message : undefined;
+      currentPayload._lifecycle.lastError = err.message;
+      await dbClient('payment_gateway_events').where({ event_id: eventId }).update({
         processed: false,
-        error: `${isTerminal ? 'TERMINAL_FAILURE' : 'RETRYABLE_FAILURE'}: ${err.message}`
+        error: `${isTerminal ? 'TERMINAL_FAILURE' : 'RETRYABLE_FAILURE'}: ${err.message}`,
+        payload: JSON.stringify(currentPayload)
       });
       throw err;
     }
@@ -530,16 +579,27 @@ export class PaymentGatewayService {
       eventType === 'subscription.activated' ||
       eventType === 'subscription.renewed' ||
       eventType === 'order.paid' ||
+      eventType === 'invoice.paid' ||
       eventType === 'ORDER_PAID' ||
       eventType === 'PAYMENT_SUCCESS_WEBHOOK' ||
+      eventType === 'PAYMENT_SUCCESS' ||
       eventType === 'SUBSCRIPTION_PAYMENT_SUCCESS' ||
+      eventType === 'SUBSCRIPTION_ACTIVATED' ||
+      eventType === 'SUBSCRIPTION_CHARGED' ||
+      (eventType === 'SUBSCRIPTION_STATUS_CHANGE' && (payload.data?.subscription?.subscription_status === 'ACTIVE' || payload.data?.subscription?.status === 'ACTIVE')) ||
       (eventType === 'payment.captured' && payload.payload?.payment?.entity?.notes?.type !== 'credit_topup')
     ) {
-      const subEntity = payload.payload?.subscription?.entity || payload.subscription || payload.data?.subscription || {};
+      const subEntity = payload.payload?.subscription?.entity || payload.payload?.invoice?.entity || payload.subscription || payload.data?.subscription || {};
+      const invoiceEntity = payload.payload?.invoice?.entity || payload.invoice || {};
       const paymentEntity = payload.payload?.payment?.entity || payload.payment || payload.data?.payment || {};
       const orderEntity = payload.payload?.order?.entity || payload.order || payload.data?.order || {};
 
       const gatewayOrderId = subEntity.id ||
+        subEntity.subscription_id ||
+        payload.data?.subscription?.subscription_id ||
+        invoiceEntity.subscription_id ||
+        invoiceEntity.order_id ||
+        invoiceEntity.id ||
         paymentEntity.order_id ||
         orderEntity.id ||
         orderEntity.order_id ||
@@ -570,7 +630,8 @@ export class PaymentGatewayService {
 
       if (!purchaseRecord) {
         const isProduction = process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production';
-        if (!isProduction && (gatewayOrderId.startsWith('ord_test_') || gatewayOrderId.startsWith('test_'))) {
+        const isStaging = process.env.VERCEL_ENV === 'preview' || process.env.AIRA_ENVIRONMENT === 'staging';
+        if (!isProduction && !isStaging && (gatewayOrderId.startsWith('ord_test_') || gatewayOrderId.startsWith('test_'))) {
           return; // Acknowledged test webhook event in isolated test environment without entitlement mutation
         }
         throw new TerminalRejectionError(`BILLING_RECONCILIATION_FAILED: No authoritative purchase record found for transaction ${gatewayOrderId}. Refusing fulfillment.`);
@@ -585,18 +646,23 @@ export class PaymentGatewayService {
       if (paymentEntity.status && paymentEntity.status !== 'captured' && paymentEntity.status !== 'paid') {
         throw new TerminalRejectionError(`BILLING_RECONCILIATION_FAILED: Razorpay payment status is '${paymentEntity.status}', expected 'captured' or 'paid'.`);
       }
+      if (invoiceEntity.status && invoiceEntity.status !== 'paid') {
+        throw new TerminalRejectionError(`BILLING_RECONCILIATION_FAILED: Razorpay invoice status is '${invoiceEntity.status}', expected 'paid'.`);
+      }
       if (paymentEntity.payment_status && paymentEntity.payment_status !== 'SUCCESS') {
         throw new TerminalRejectionError(`BILLING_RECONCILIATION_FAILED: Cashfree payment status is '${paymentEntity.payment_status}', expected 'SUCCESS'.`);
       }
 
       // 1. Currency verification (strict uppercase match)
-      const receivedCurrency = (subEntity.currency || paymentEntity.currency || orderEntity.currency || '').toUpperCase();
+      const receivedCurrency = (subEntity.currency || invoiceEntity.currency || paymentEntity.currency || orderEntity.currency || '').toUpperCase();
       if (!receivedCurrency || receivedCurrency !== purchaseRecord.currency.toUpperCase()) {
         throw new TerminalRejectionError(`FRAUD_CHECK_FAILED: Currency mismatch. Expected ${purchaseRecord.currency}, received ${receivedCurrency}`);
       }
 
       // 2. Exact minor-unit amount verification (no zero or missing fallbacks)
       const receivedAmount = subEntity.amount !== undefined ? Number(subEntity.amount)
+        : invoiceEntity.amount_paid !== undefined ? Number(invoiceEntity.amount_paid)
+        : invoiceEntity.amount !== undefined ? Number(invoiceEntity.amount)
         : paymentEntity.amount !== undefined ? Number(paymentEntity.amount)
         : orderEntity.amount !== undefined ? Number(orderEntity.amount)
         : (orderEntity.order_amount !== undefined ? Math.round(Number(orderEntity.order_amount) * 100) : null);
@@ -720,7 +786,8 @@ export class PaymentGatewayService {
       eventType === 'subscription.cancelled' ||
       eventType === 'subscription.halted' ||
       eventType === 'SUBSCRIPTION_CANCELLED' ||
-      eventType === 'SUBSCRIPTION_HALTED'
+      eventType === 'SUBSCRIPTION_HALTED' ||
+      (eventType === 'SUBSCRIPTION_STATUS_CHANGE' && (payload.data?.subscription?.subscription_status === 'CANCELLED' || payload.data?.subscription?.subscription_status === 'HALTED' || payload.data?.subscription?.status === 'CANCELLED' || payload.data?.subscription?.status === 'HALTED'))
     ) {
       const subEntity = payload.payload?.subscription?.entity || payload.subscription || payload.data?.subscription || {};
       const gatewaySubId = subEntity.id || payload.data?.subscription?.subscription_id;
@@ -737,7 +804,9 @@ export class PaymentGatewayService {
 
     if (
       (eventType === 'payment.captured' && payload.payload?.payment?.entity?.notes?.type === 'credit_topup') ||
-      (eventType === 'ORDER_PAID' && payload.data?.order?.order_tags?.type === 'credit_topup')
+      (eventType === 'ORDER_PAID' && (payload.data?.order?.order_tags?.type === 'credit_topup' || payload.data?.payment?.payment_notes?.type === 'credit_topup')) ||
+      (eventType === 'PAYMENT_SUCCESS' && (payload.data?.order?.order_tags?.type === 'credit_topup' || payload.data?.payment?.payment_notes?.type === 'credit_topup')) ||
+      (eventType === 'PAYMENT_SUCCESS_WEBHOOK' && (payload.data?.order?.order_tags?.type === 'credit_topup' || payload.data?.payment?.payment_notes?.type === 'credit_topup'))
     ) {
       const paymentEntity = payload.payload?.payment?.entity || payload.payment || payload.data?.payment || {};
       const orderEntity = payload.payload?.order?.entity || payload.order || payload.data?.order || {};
@@ -832,6 +901,13 @@ export class PaymentGatewayService {
       });
       return;
     }
+
+    if (SAFE_RECONCILIATION_EVENTS.has(eventType)) {
+      return; // Safe non-mutating events (payment.failed, refunds, pauses) acknowledged without state mutation
+    }
+
+    // Fail-closed fallback: Any recognized paid event that did not match an explicit handler must be terminally rejected
+    throw new TerminalRejectionError(`BILLING_RECONCILIATION_FAILED: Unhandled paid event type '${eventType}' in fulfillment engine.`);
   }
 
   /**

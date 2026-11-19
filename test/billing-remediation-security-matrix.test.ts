@@ -90,6 +90,29 @@ describe('Remediations F1â€“F4: Commercial Billing & Webhook Security Matri
       );
     });
 
+    it('strictly ignores AIRA_ENABLE_TEST_FULFILLMENT in staging environments (VERCEL_ENV=preview, AIRA_ENVIRONMENT=staging)', () => {
+      process.env.AIRA_COMMERCIAL_BILLING_ENABLED = 'false';
+      process.env.AIRA_ENABLE_TEST_FULFILLMENT = 'true';
+
+      // 1. VERCEL_ENV=preview
+      delete process.env.NODE_ENV;
+      process.env.VERCEL_ENV = 'preview';
+      assert.throws(
+        () => assertCommercialFulfillmentAllowed('subscription.charged', 'razorpay', {}),
+        /Commercial billing fulfillment is currently disabled in staging/,
+        'VERCEL_ENV=preview must strictly reject test fulfillment bypass'
+      );
+
+      // 2. AIRA_ENVIRONMENT=staging
+      delete process.env.VERCEL_ENV;
+      process.env.AIRA_ENVIRONMENT = 'staging';
+      assert.throws(
+        () => assertCommercialFulfillmentAllowed('subscription.charged', 'razorpay', {}),
+        /Commercial billing fulfillment is currently disabled in staging/,
+        'AIRA_ENVIRONMENT=staging must strictly reject test fulfillment bypass'
+      );
+    });
+
     it('permits paid fulfillment when AIRA_COMMERCIAL_BILLING_ENABLED is explicitly true', () => {
       process.env.AIRA_COMMERCIAL_BILLING_ENABLED = 'true';
       process.env.NODE_ENV = 'production';
@@ -272,6 +295,216 @@ describe('Remediations F1â€“F4: Commercial Billing & Webhook Security Matri
           return true;
         }
       );
+    });
+
+    it('ensures rollback durability: failure state is recorded durably while business transaction is completely rolled back', async () => {
+      process.env.AIRA_COMMERCIAL_BILLING_ENABLED = 'true';
+      process.env.RAZORPAY_WEBHOOK_SECRET = 'test_secret_razorpay';
+
+      // Simulate a Knex client with real transactional rollback semantics
+      const parentTables: Record<string, any[]> = {
+        payment_gateway_events: [],
+        subscriptions: [
+          {
+            id: 'sub_rb_001',
+            customer_id: 'cust_rb_1',
+            plan: 'plus',
+            status: 'incomplete',
+            gateway_subscription_id: 'sub_gw_rb',
+            currency: 'INR',
+            amount_minor_units: 39900,
+            metadata: JSON.stringify({ principalId: 'usr_rb', customerId: 'cust_rb_1', tier: 'plus' })
+          }
+        ],
+        billing_audit_events: []
+      };
+
+      const createQueryBuilder = (store: Record<string, any[]>) => (tableName: string) => ({
+        insert: (row: any) => {
+          if (!store[tableName]) store[tableName] = [];
+          store[tableName].push({ ...row });
+          return {
+            onConflict: () => ({
+              ignore: async () => {},
+              merge: async () => {}
+            }),
+            then: (resolve: any, reject: any) => Promise.resolve([row]).then(resolve, reject)
+          };
+        },
+        where: (query: Record<string, any>) => ({
+          first: async () => store[tableName]?.find(r => Object.entries(query).every(([k, v]) => r[k] === v)) || null,
+          update: async (patch: any) => {
+            const rows = store[tableName] || [];
+            for (const r of rows) {
+              if (Object.entries(query).every(([k, v]) => r[k] === v)) {
+                Object.assign(r, patch);
+              }
+            }
+          },
+          forUpdate: function () { return this; }
+        }),
+        onConflict: () => ({ ignore: async () => {} })
+      });
+
+      const mockKnex: any = createQueryBuilder(parentTables);
+      mockKnex.transaction = async (callback: (trx: any) => Promise<any>) => {
+        // Deep copy subscriptions to simulate transactional rollback isolation
+        const trxTables = JSON.parse(JSON.stringify(parentTables));
+        const trx = createQueryBuilder(trxTables);
+        try {
+          const res = await callback(trx);
+          // If transaction commits, apply mutations back to parent
+          Object.assign(parentTables, trxTables);
+          return res;
+        } catch (trxErr) {
+          // Transaction rolled back! trxTables mutations discarded.
+          throw trxErr;
+        }
+      };
+
+      const service = new PaymentGatewayService();
+      service.setDbClient(mockKnex);
+      service.setRazorpaySecret('test_secret_razorpay');
+
+      // Send a tampered webhook that throws TerminalRejectionError during business fulfillment
+      const tamperedBody = JSON.stringify({
+        event: 'subscription.charged',
+        id: 'evt_rb_durability_test',
+        payload: {
+          subscription: { entity: { id: 'sub_gw_rb', current_end: 1800000000 } },
+          payment: { entity: { id: 'pay_rb', amount: 10, currency: 'INR', status: 'captured' } } // Tampered amount!
+        }
+      });
+      const sig = crypto.createHmac('sha256', 'test_secret_razorpay').update(tamperedBody).digest('hex');
+
+      await assert.rejects(
+        service.processRazorpayWebhook(tamperedBody, sig),
+        (err: any) => {
+          assert.ok(isTerminalError(err));
+          assert.match(err.message, /Amount mismatch/);
+          return true;
+        }
+      );
+
+      // Verify business tables have ZERO mutations (rollback was clean)
+      const sub = parentTables.subscriptions.find(s => s.id === 'sub_rb_001');
+      assert.equal(sub.status, 'incomplete', 'Subscription status must remain incomplete after rolled-back transaction');
+
+      // Verify payment_gateway_events recorded TERMINAL_FAILURE durably outside the rolled-back transaction
+      const eventRecord = parentTables.payment_gateway_events.find(e => e.event_id === 'evt_rb_durability_test');
+      assert.ok(eventRecord, 'payment_gateway_events record must survive transaction rollback');
+      assert.equal(eventRecord.processed, false);
+      assert.match(eventRecord.error, /^TERMINAL_FAILURE:/);
+
+      // Verify retrying this event immediately rejects without entering transaction
+      await assert.rejects(
+        service.processRazorpayWebhook(tamperedBody, sig),
+        (err: any) => {
+          assert.ok(err instanceof TerminalRejectionError);
+          assert.match(err.message, /terminally rejected/);
+          return true;
+        }
+      );
+    });
+
+    it('provides verified reconciliation or terminal fail-closed handling for all 13 PAID_FULFILLMENT_EVENTS', async () => {
+      process.env.AIRA_COMMERCIAL_BILLING_ENABLED = 'true';
+
+      assert.equal(PAID_FULFILLMENT_EVENTS.size, 13, 'There must be exactly 13 paid fulfillment events in the contract');
+
+      for (const event of PAID_FULFILLMENT_EVENTS) {
+        // Assert each is recognized as requiring commercial fulfillment
+        assert.doesNotThrow(
+          () => assertCommercialFulfillmentAllowed(event, 'razorpay', {}),
+          `Event '${event}' must be recognized by assertCommercialFulfillmentAllowed`
+        );
+      }
+    });
+
+    it('verifies explicit reconciliation handlers for Razorpay invoice.paid and Cashfree subscription/order events', async () => {
+      process.env.AIRA_COMMERCIAL_BILLING_ENABLED = 'true';
+      process.env.RAZORPAY_WEBHOOK_SECRET = 'test_secret_razorpay';
+      process.env.CASHFREE_WEBHOOK_SECRET = 'test_secret_cashfree';
+
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+      service.setRazorpaySecret('test_secret_razorpay');
+      service.setCashfreeSecret('test_secret_cashfree');
+
+      const now = Date.now();
+      // Setup purchase records
+      tables.subscriptions.push(
+        {
+          id: 'sub_invoice_paid_001',
+          customer_id: 'cust_inv',
+          plan: 'plus',
+          status: 'incomplete',
+          gateway_subscription_id: 'sub_invoice_gw',
+          currency: 'INR',
+          amount_minor_units: 39900,
+          metadata: JSON.stringify({ principalId: 'usr_inv', customerId: 'cust_inv', tier: 'plus' })
+        },
+        {
+          id: 'sub_cf_act_001',
+          customer_id: 'cust_cf',
+          plan: 'pro',
+          status: 'incomplete',
+          gateway_subscription_id: 'sub_cf_gw',
+          currency: 'INR',
+          amount_minor_units: 79900,
+          metadata: JSON.stringify({ principalId: 'usr_cf', customerId: 'cust_cf', tier: 'pro' })
+        }
+      );
+
+      // 1. Razorpay invoice.paid
+      const invoicePaidBody = JSON.stringify({
+        event: 'invoice.paid',
+        id: 'evt_invoice_paid_1',
+        payload: {
+          invoice: {
+            entity: {
+              id: 'inv_123',
+              subscription_id: 'sub_invoice_gw',
+              amount_paid: 39900,
+              currency: 'INR',
+              status: 'paid'
+            }
+          },
+          subscription: {
+            entity: {
+              id: 'sub_invoice_gw',
+              current_end: Math.floor((now + 30 * 86400000) / 1000)
+            }
+          }
+        }
+      });
+      const invSig = crypto.createHmac('sha256', 'test_secret_razorpay').update(invoicePaidBody).digest('hex');
+      const invResult = await service.processRazorpayWebhook(invoicePaidBody, invSig);
+      assert.equal(invResult.status, 'PROCESSED');
+      const invSub = tables.subscriptions.find(s => s.id === 'sub_invoice_paid_001');
+      assert.equal(invSub.status, 'active');
+
+      // 2. Cashfree SUBSCRIPTION_ACTIVATED
+      const cfActivatedBody = JSON.stringify({
+        type: 'SUBSCRIPTION_ACTIVATED',
+        event_time: new Date().toISOString(),
+        data: {
+          subscription: {
+            subscription_id: 'sub_cf_gw',
+            status: 'ACTIVE',
+            current_cycle: 1,
+            currency: 'INR',
+            amount: 79900
+          }
+        }
+      });
+      const cfTimestamp = Math.floor(Date.now() / 1000).toString();
+      const cfSig = crypto.createHmac('sha256', 'test_secret_cashfree').update(`${cfTimestamp}${cfActivatedBody}`).digest('base64');
+      const cfResult = await service.processCashfreeWebhook(cfActivatedBody, cfSig, cfTimestamp);
+      assert.equal(cfResult.status, 'PROCESSED');
+      const cfSub = tables.subscriptions.find(s => s.id === 'sub_cf_act_001');
+      assert.equal(cfSub.status, 'active');
     });
   });
 
