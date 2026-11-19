@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../../../packages/db/src/index.js';
 import { commercialBillingService } from './billing/commercial-billing-service.js';
+import { getAnnouncementsForTier, PlanTier } from '../../../packages/contracts/src/index.js';
 
 const ONBOARDING_STAGES = [
   'intro',
@@ -27,7 +28,7 @@ export function resetOnboardingStoreForTesting(): void {
 
 function getAuthenticatedNonGuestUserId(req: Request): string | null {
   const principal = req.principal;
-  const userId = principal?.userId;
+  const userId = principal?.userId || (req as any).managedIdentity?.userId || (req as any).user?.id;
   if (!userId || userId === 'anonymous' || userId.startsWith('guest_')) {
     return null;
   }
@@ -389,6 +390,251 @@ export function createAccountRoutes(): Router {
       success: true,
       message: 'Email address has been verified successfully.'
     });
+  });
+
+  // Mount announcement endpoints under /api/account/announcements as well
+  router.use('/announcements', createAnnouncementRoutes());
+
+  return router;
+}
+
+// -----------------------------------------------------------------------
+// ANNOUNCEMENTS PERSISTENCE & ROUTING (P3 INTEGRATION REMEDIATION)
+// -----------------------------------------------------------------------
+
+const inMemoryDismissedAnnouncements = new Map<string, string[]>();
+
+export function resetAnnouncementStoreForTesting(): void {
+  inMemoryDismissedAnnouncements.clear();
+}
+
+export async function getDismissedAnnouncementIdsForUser(userId: string | null, req: Request): Promise<string[]> {
+  if (!userId) {
+    const guestKey = (req as any).user?.sessionId || (req.principal as any)?.sessionId || (req.headers['x-session-id'] as string) || req.ip || 'guest';
+    return inMemoryDismissedAnnouncements.get(guestKey) || [];
+  }
+
+  const isDbConfigured = Boolean(process.env.DATABASE_URL?.trim());
+  if (isDbConfigured) {
+    try {
+      const recordId = `announcements:${userId}`;
+      const row = await db('memory_records')
+        .where({ id: recordId, principal_id: userId, type: 'announcements_dismissed', is_system: false })
+        .first();
+      if (row) {
+        let ids: string[] = [];
+        try {
+          if (row.context) {
+            const ctx = typeof row.context === 'string' ? JSON.parse(row.context) : row.context;
+            if (Array.isArray(ctx.dismissedIds)) ids = ctx.dismissedIds;
+          }
+          if (ids.length === 0 && row.content) {
+            const parsed = JSON.parse(row.content);
+            if (Array.isArray(parsed)) ids = parsed;
+          }
+        } catch {
+          ids = [];
+        }
+        return ids.filter((id): id is string => typeof id === 'string');
+      }
+    } catch (err) {
+      console.warn('[Announcements] Failed to query dismissed announcements from DB:', err);
+    }
+  }
+
+  return inMemoryDismissedAnnouncements.get(userId) || [];
+}
+
+export async function persistDismissedAnnouncement(userId: string | null, announcementId: string, req: Request): Promise<string[]> {
+  const existing = await getDismissedAnnouncementIdsForUser(userId, req);
+  const set = new Set(existing);
+  set.add(announcementId);
+  const updated = Array.from(set);
+
+  if (!userId) {
+    const guestKey = (req as any).user?.sessionId || (req.principal as any)?.sessionId || (req.headers['x-session-id'] as string) || req.ip || 'guest';
+    inMemoryDismissedAnnouncements.set(guestKey, updated);
+    return updated;
+  }
+
+  const isDbConfigured = Boolean(process.env.DATABASE_URL?.trim());
+  if (isDbConfigured) {
+    try {
+      const recordId = `announcements:${userId}`;
+      const now = Date.now();
+      const workspaceId = req.principal?.workspaceId || (req as any).user?.workspaceId || 'default';
+      const payload = { dismissedIds: updated, updatedAt: now };
+
+      await db('memory_records').insert({
+        id: recordId,
+        principal_id: userId,
+        workspace_id: workspaceId,
+        type: 'announcements_dismissed',
+        agent_id: 'announcements_system',
+        content: JSON.stringify(updated),
+        context: JSON.stringify(payload),
+        is_system: false,
+        created_at: now
+      }).onConflict('id').merge({
+        workspace_id: workspaceId,
+        content: JSON.stringify(updated),
+        context: JSON.stringify(payload)
+      });
+      inMemoryDismissedAnnouncements.set(userId, updated);
+      return updated;
+    } catch (err) {
+      console.warn('[Announcements] Failed to persist dismissed announcement to DB, falling back to memory:', err);
+    }
+  }
+
+  inMemoryDismissedAnnouncements.set(userId, updated);
+  return updated;
+}
+
+export async function clearDismissedAnnouncements(userId: string | null, req: Request): Promise<void> {
+  if (!userId) {
+    const guestKey = (req as any).user?.sessionId || (req.principal as any)?.sessionId || (req.headers['x-session-id'] as string) || req.ip || 'guest';
+    inMemoryDismissedAnnouncements.delete(guestKey);
+    return;
+  }
+  const isDbConfigured = Boolean(process.env.DATABASE_URL?.trim());
+  if (isDbConfigured) {
+    try {
+      await db('memory_records')
+        .where({ id: `announcements:${userId}`, principal_id: userId, type: 'announcements_dismissed' })
+        .delete();
+    } catch (err) {
+      console.warn('[Announcements] Failed to clear dismissed announcements from DB:', err);
+    }
+  }
+  inMemoryDismissedAnnouncements.delete(userId);
+}
+
+export function createAnnouncementRoutes(): Router {
+  const router = Router();
+
+  /**
+   * Protected/Public: Dismiss an announcement.
+   * Derives ownership strictly from the verified server principal, rejecting client spoofing.
+   * Handles guests safely in-memory / client-side storage without server error.
+   */
+  router.post('/dismiss', async (req: Request, res: Response) => {
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+      return res.status(400).json({ error: 'INVALID_REQUEST', message: 'Request body must be a valid JSON object.' });
+    }
+
+    const rawId = (req.body as any).id;
+    if (!rawId || typeof rawId !== 'string' || !rawId.trim()) {
+      return res.status(400).json({ error: 'MISSING_ANNOUNCEMENT_ID', message: 'Announcement id is required and must be a non-empty string.' });
+    }
+    const announcementId = rawId.trim();
+
+    const userId = getAuthenticatedNonGuestUserId(req);
+    const suppliedHeaderId = typeof req.headers['x-user-id'] === 'string' ? req.headers['x-user-id'].trim() : '';
+
+    if (userId && suppliedHeaderId && suppliedHeaderId !== userId) {
+      return res.status(403).json({
+        error: 'FORBIDDEN_OWNERSHIP_SPOOF',
+        message: 'Caller may not specify or forge user identity.'
+      });
+    }
+
+    try {
+      const updated = await persistDismissedAnnouncement(userId, announcementId, req);
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(200).json({
+        success: true,
+        isGuest: !userId,
+        userId: userId || undefined,
+        dismissedId: announcementId,
+        dismissedIds: updated
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        error: 'ANNOUNCEMENT_DISMISS_FAILED',
+        message: err?.message || 'Failed to persist announcement dismissal.'
+      });
+    }
+  });
+
+  /**
+   * Protected/Public: Retrieve announcements and user-scoped unread count & dismissed state.
+   */
+  router.get('/', async (req: Request, res: Response) => {
+    const userId = getAuthenticatedNonGuestUserId(req);
+    const suppliedHeaderId = typeof req.headers['x-user-id'] === 'string' ? req.headers['x-user-id'].trim() : '';
+
+    if (userId && suppliedHeaderId && suppliedHeaderId !== userId) {
+      return res.status(403).json({
+        error: 'FORBIDDEN_OWNERSHIP_SPOOF',
+        message: 'Caller may not specify or forge user identity.'
+      });
+    }
+
+    let tier: PlanTier = 'free';
+    if (userId) {
+      try {
+        const entitlements = await commercialBillingService.getEntitlements(userId);
+        tier = entitlements.plan || 'free';
+      } catch {
+        tier = 'free';
+      }
+    } else {
+      tier = 'guest';
+    }
+
+    try {
+      const dismissedIds = await getDismissedAnnouncementIdsForUser(userId, req);
+      const dismissedSet = new Set(dismissedIds);
+      const available = getAnnouncementsForTier(tier);
+      const now = Date.now();
+      const activeAnnouncements = available.filter(a => {
+        const pubTime = new Date(a.publishedAt).getTime();
+        return !isNaN(pubTime) && pubTime <= now;
+      });
+      const unreadCount = activeAnnouncements.filter(a => !dismissedSet.has(a.id)).length;
+
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(200).json({
+        announcements: activeAnnouncements,
+        unreadCount,
+        dismissedIds
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        error: 'ANNOUNCEMENT_FETCH_FAILED',
+        message: err?.message || 'Failed to fetch announcements.'
+      });
+    }
+  });
+
+  /**
+   * Protected/Public: Reset all dismissed announcements.
+   */
+  router.post('/reset', async (req: Request, res: Response) => {
+    const userId = getAuthenticatedNonGuestUserId(req);
+    const suppliedHeaderId = typeof req.headers['x-user-id'] === 'string' ? req.headers['x-user-id'].trim() : '';
+
+    if (userId && suppliedHeaderId && suppliedHeaderId !== userId) {
+      return res.status(403).json({
+        error: 'FORBIDDEN_OWNERSHIP_SPOOF',
+        message: 'Caller may not specify or forge user identity.'
+      });
+    }
+
+    try {
+      await clearDismissedAnnouncements(userId, req);
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(200).json({
+        success: true,
+        dismissedIds: []
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        error: 'ANNOUNCEMENT_RESET_FAILED',
+        message: err?.message || 'Failed to reset dismissed announcements.'
+      });
+    }
   });
 
   return router;

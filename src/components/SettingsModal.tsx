@@ -26,7 +26,7 @@ import {
   CheckCircle2,
   TrendingUp,
   Shield,
-  Sparkles,
+  Lightbulb,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { AppSettings, Conversation, Project } from '../types';
@@ -1088,7 +1088,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                   {form.tipsEnabled !== false && (
                     <div data-testid="tip-reasoning" className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-800 dark:text-amber-300 flex items-start gap-2.5">
-                      <Sparkles className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+                      <Lightbulb className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
                       <div>
                         <div className="font-bold">Pro Tip: Extended Reasoning Tokens</div>
                         <p className="mt-0.5 text-[11px] leading-relaxed opacity-90">
