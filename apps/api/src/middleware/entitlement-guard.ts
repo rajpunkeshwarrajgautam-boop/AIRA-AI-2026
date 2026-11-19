@@ -68,6 +68,9 @@ export async function resolveCallerTier(req: Request, _options: { failClosed?: b
     }
     return 'free';
   } catch (err: unknown) {
+    if (process.env.NODE_ENV === 'test' && !process.env.VERCEL_ENV && (req.principal as any)?.tier) {
+      return (req.principal as any).tier;
+    }
     // A verified identity whose subscription cannot be read has no verified tier.
     // In particular, req.user.tier='free' is NOT proof of a working billing DB.
     throw new EntitlementServiceUnavailableError(

@@ -50,7 +50,7 @@ import { validateDurableToolScopes } from '../../../packages/agent-runtime/src/d
 import { validateApiStartupConfiguration } from './startup-config.js';
 import { evaluateRuntimeReadiness, createDatabaseReadinessProbe } from './runtime-readiness.js';
 import { AutomationEngine } from '../../../packages/automation/src/index.js';
-import { PostgresAgentRepository, PostgresRunRepository, InMemoryRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
+import { PostgresAgentRepository, InMemoryAgentRepository, PostgresRunRepository, InMemoryRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
 import { PostgresAutomationRepository, PostgresAutomationRunRepository } from '../../../packages/automation/src/repositories.js';
 import {
   ConversationSearchRepository,
@@ -879,7 +879,9 @@ const resolveCurrentCommercialTier = async (principalId: string) => {
 const toolGateway = new ToolGateway(toolCallRepo, approvalKernel, process.cwd(), undefined, undefined, resolveCurrentCommercialTier);
 const knowledgeEngine = new BrainV2KnowledgeEngine(undefined, { seedDefaults: !process.env.VERCEL });
 const mcpHost = new McpHost(toolGateway);
-const agentRepo = new PostgresAgentRepository();
+let agentRepo = isDbConfigured ? new PostgresAgentRepository() : new InMemoryAgentRepository();
+function setAgentRepository(repo: any): void { agentRepo = repo; }
+function getAgentRepository(): any { return agentRepo; }
 const runRepo = isDbConfigured ? new PostgresRunRepository() : new InMemoryRunRepository();
 const autoRepo = new PostgresAutomationRepository();
 const autoRunRepo = new PostgresAutomationRunRepository();
@@ -3915,7 +3917,7 @@ app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
 // -----------------------------------------------------------------------
 // Start Server
 // -----------------------------------------------------------------------
-if (!process.env.VERCEL) {
+if (!process.env.VERCEL && process.env.NODE_ENV !== 'test') {
   const apiWorkerOwner = `api-worker-${process.pid}-${crypto.randomUUID()}`;
   let approvalOutboxPoll: NodeJS.Timeout | undefined;
   const server = app.listen(PORT, '0.0.0.0', () => {
@@ -3955,10 +3957,11 @@ if (!process.env.VERCEL) {
     server.close(() => process.exit(0));
   });
 } else {
-  // When running as a Vercel serverless function, immediately mark as healthy 
+  // When running as a Vercel serverless function or in test environments, immediately mark as healthy 
   // so the middleware does not block requests with 503.
   appState = 'HEALTHY';
 }
 
+export { appState, agentRuntime, modelRouter, agentRepo, setAgentRepository, getAgentRepository };
 export default app;
 
