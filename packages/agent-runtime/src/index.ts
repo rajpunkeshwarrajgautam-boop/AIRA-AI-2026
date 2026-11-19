@@ -18,7 +18,7 @@ import {
   ModelProvenance
 } from '../../contracts/src/index.js';
 import { ModelRouter, PlanRestrictionError, ChatMessageInput, isModelMatch, withInferencePrincipal, type ModelCompletionResult } from '../../model-router/src/index.js';
-import { isModelAllowedForTier, type PlanTier, isGuestPrincipal } from '../../contracts/src/commercial.js';
+import { isModelAllowedForTier, isFeatureAllowedForTier, type PlanTier, isGuestPrincipal } from '../../contracts/src/commercial.js';
 import { ToolRegistry, ToolGateway, PostgresToolCallRepository, InMemoryToolCallRepository, deriveToolApprovalPolicy } from '../../tool-runtime/src/index.js';
 import { configuredSearchProviders } from '../../tool-runtime/src/search-providers.js';
 import { ApprovalKernel } from '../../approvals/src/index.js';
@@ -441,6 +441,16 @@ export class AgentRuntime extends EventEmitter {
 
     const requestedPolicy = request.modelPolicy;
     const requestedRawModel = requestedPolicy?.model || 'aira-auto';
+
+    // Authoritative autonomous capability gate: WORKFLOW and AGENT_MISSION intents require PLUS tier or higher
+    if ((request.intent === 'WORKFLOW' || request.intent === 'AGENT_MISSION') && callerTier && !isFeatureAllowedForTier('autonomous', callerTier)) {
+      throw new PlanRestrictionError(
+        `Autonomous execution mode requires PLUS tier or higher (caller tier '${callerTier}').`,
+        callerTier,
+        request.intent
+      );
+    }
+
     const execution = this.modelRouter.resolveExecution(
       requestedRawModel,
       routingDecision.intent,

@@ -1,5 +1,8 @@
 import assert from 'assert';
 import { randomUUID } from 'node:crypto';
+import './setup-isolated-neon.js';
+import { db } from '../packages/db/src/index.js';
+import { commercialBillingService } from '../apps/api/src/billing/commercial-billing-service.js';
 import { PostgresWorkspaceAuthorityRepository, workspaceAuthority } from '../packages/agent-runtime/src/workspace-authority.js';
 import { ModelRouter } from '../packages/model-router/src/index.js';
 import { ToolRegistry } from '../packages/tool-runtime/src/index.js';
@@ -314,29 +317,82 @@ async function runTests() {
     const sourcesData = await sourcesRes.json();
     assert.ok(sourcesData.sources.length >= 1);
 
-    // Test API creation of agent and execution
-    const agentRes = await fetch('http://127.0.0.1:3001/api/agents', {
+    // 1. Verify Free-tier caller is denied saved-agent creation (HTTP 403)
+    const freeAgentRes = await fetch('http://127.0.0.1:3001/api/agents', {
       method: 'POST',
       headers: authHeaders,
+      body: JSON.stringify({
+        name: 'Free Tier Test Agent',
+        instructions: 'Test instructions',
+        modelPolicy: { model: 'mock-deterministic' }
+      })
+    });
+    assert.strictEqual(freeAgentRes.status, 403, `Free tier caller must receive HTTP 403, got ${freeAgentRes.status}`);
+    const freeAgentData = await freeAgentRes.json();
+    assert.strictEqual(freeAgentData.error, 'PLAN_CAPABILITY_RESTRICTED');
+    assert.strictEqual(freeAgentData.capability, 'saved_agents');
+    assert.strictEqual(freeAgentData.callerTier, 'free');
+    assert.strictEqual(freeAgentData.requiredTier, 'plus');
+
+    // 2. Setup an appropriately entitled test principal (Plus tier) with active subscription in PostgreSQL
+    const entitledPrincipalId = `runtime_plus_${randomUUID()}`;
+    const entitledSessionId = `runtime_session_plus_${randomUUID()}`;
+    await workspaceAuthority.resolveWorkspace(entitledPrincipalId);
+    const customer = await commercialBillingService.getOrCreateCustomer(entitledPrincipalId);
+    const now = Date.now();
+    const testSubId = `sub_${randomUUID().replace(/-/g, '')}`;
+
+    await db('subscriptions').insert({
+      id: testSubId,
+      customer_id: customer.id,
+      plan_id: 'plus',
+      price_id: 'price_plus_usd',
+      status: 'active',
+      gateway: 'manual_grant',
+      currency: 'USD',
+      amount_minor_units: 799,
+      current_period_start: now - 1000,
+      current_period_end: now + 30 * 24 * 60 * 60 * 1000,
+      cancel_at_period_end: false,
+      metadata: JSON.stringify({ testFixture: true, principalId: entitledPrincipalId }),
+      created_at: now,
+      updated_at: now
+    });
+
+    const entitledAuthHeaders = {
+      'x-test-user-id': entitledPrincipalId,
+      'x-test-session-id': entitledSessionId,
+      'Content-Type': 'application/json'
+    };
+
+    // 3. Test API creation of agent and execution with entitled principal
+    const agentRes = await fetch('http://127.0.0.1:3001/api/agents', {
+      method: 'POST',
+      headers: entitledAuthHeaders,
       body: JSON.stringify({
         name: 'Test Agent API',
         instructions: 'Test instructions',
         modelPolicy: { model: 'mock-deterministic' }
       })
     });
+    assert.strictEqual(agentRes.status, 201, `Entitled caller agent creation must return HTTP 201, got ${agentRes.status}`);
     const agent = await agentRes.json();
-    assert.ok(agent.id.startsWith('agent_'));
+    assert.ok(agent && typeof agent.id === 'string' && agent.id.startsWith('agent_'));
 
     const agentRunRes = await fetch(`http://127.0.0.1:3001/api/agents/${agent.id}/run`, {
       method: 'POST',
-      headers: authHeaders,
+      headers: entitledAuthHeaders,
       body: JSON.stringify({ prompt: 'test prompt API' })
     });
+    assert.ok(
+      [200, 201].includes(agentRunRes.status),
+      `Entitled caller agent run must return HTTP 200 or 201, got ${agentRunRes.status}`
+    );
     const agentRun = await agentRunRes.json();
-    if (!agentRunRes.ok) {
-      console.error('API Error Response:', agentRun);
-    }
-    assert.ok(agentRun.runId?.startsWith('run_'));
+    assert.ok(agentRun && typeof agentRun.runId === 'string' && agentRun.runId.startsWith('run_'));
+
+    // Clean up test fixture subscription
+    await db('subscriptions').where({ id: testSubId }).del();
 
     process.stdout.write('PASS: Live API Server endpoints and Postgres Database persistence verified\n');
   }

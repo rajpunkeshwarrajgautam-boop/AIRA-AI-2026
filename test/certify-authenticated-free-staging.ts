@@ -2,8 +2,16 @@ import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import {
+  validateStagingTargetUrl,
+  validateStagingDatabaseUrl,
+  generateStagingTestCredentials,
+  StagingFixtureTracker
+} from './helpers/staging-test-fixture-lifecycle.js';
 
-const STAGING_URL = process.env.STAGING_URL || 'https://staging.virexaaiventures.com';
+const STAGING_URL = validateStagingTargetUrl(process.env.STAGING_URL || 'https://staging.virexaaiventures.com');
+validateStagingDatabaseUrl(process.env.DATABASE_URL);
+
 const OUT_DIR = process.env.CERTIFICATION_OUT_DIR || path.join(process.cwd(), 'reports', 'p0-free-acceptance');
 fs.mkdirSync(OUT_DIR, { recursive: true });
 
@@ -23,9 +31,11 @@ async function runAuthenticatedFreeAcceptance() {
 
   // Steps 1 & 2: Supported authentication flow (Sign Up / Sign In)
   console.log('\n--- Steps 1 & 2: Authenticate Free Test Account & Establish BFF Session ---');
-  const testEmail = `staging.free.p0.${Date.now()}@virexaaiventures.com`;
-  const testPassword = 'P0_Free_SecurePassword2026!#';
-  const testName = 'Free Tier QA Engineer';
+  const creds = generateStagingTestCredentials('free_p0', process.env.STAGING_TEST_PASSWORD);
+  const testEmail = creds.email;
+  const testPassword = creds.password;
+  const testName = creds.name;
+  const tracker = new StagingFixtureTracker(creds.sessionTag);
 
   const signUpRes = await fetch(`${STAGING_URL}/api/auth/sign-up`, {
     method: 'POST',
@@ -43,6 +53,7 @@ async function runAuthenticatedFreeAcceptance() {
   const signUpData = await signUpRes.json();
   assert.equal(signUpData.status, 'AUTHENTICATED');
   assert.ok(signUpData.user?.id, 'User ID must be present');
+  tracker.trackItem(signUpData.user.id, 'user', signUpData.user.id, { email: testEmail });
   const csrfToken = signUpData.csrfToken;
   assert.ok(csrfToken, 'CSRF token must be returned by BFF gateway');
   console.log('PASS: Successfully authenticated user via BFF gateway (sanitized user confirmed, CSRF token issued)');
@@ -271,6 +282,9 @@ async function runAuthenticatedFreeAcceptance() {
   console.log('PASS: Session successfully revoked on sign-out');
 
   await browser.close();
+  const cleanupRes = await tracker.cleanup();
+  console.log(`Cleaned up test session fixtures: ${cleanupRes.succeeded.length} removed, ${cleanupRes.skipped.length} skipped`);
+
   console.log('\n========================================================================');
   console.log('  ALL 14 ACCEPTANCE STEPS COMPLETED AND CERTIFIED ON STAGING!');
   console.log('========================================================================\n');

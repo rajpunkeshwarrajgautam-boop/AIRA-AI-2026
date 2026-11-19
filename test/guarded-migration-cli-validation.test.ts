@@ -104,3 +104,34 @@ test('Preflight URL: validates disposable_test and restricts to local/CI hosts',
     /not a recognized local or CI container host/
   );
 });
+
+test('package.json: defines db:migrate:032 invoking guarded runner scripts/run-guarded-migration-032.ts', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const pkgPath = path.resolve(process.cwd(), 'package.json');
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+  assert.equal(
+    pkg.scripts['db:migrate:032'],
+    'npx tsx scripts/run-guarded-migration-032.ts',
+    'Root package.json must define db:migrate:032 invoking scripts/run-guarded-migration-032.ts'
+  );
+});
+
+test('CLI process invocation: fails closed when invoked without mandatory flags', async () => {
+  const { execSync } = await import('node:child_process');
+  
+  // 1. No arguments: exits 1 with CLI_ERROR
+  assert.throws(() => {
+    execSync('npm run db:migrate:032', { stdio: 'pipe' });
+  }, (err: any) => {
+    return err.status === 1 && err.stderr.toString().includes('[CLI_ERROR] Missing required execution target');
+  });
+
+  // 2. Production target without auth flag: exits 1 with CLI_ERROR
+  assert.throws(() => {
+    execSync('npm run db:migrate:032 -- --target=production', { stdio: 'pipe' });
+  }, (err: any) => {
+    return err.status === 1 && err.stderr.toString().includes('mandatory authorization flag "--authorize-production-migration-032-execute" was not provided');
+  });
+});
+

@@ -358,6 +358,10 @@ export function isFeatureAllowedForTier(feature: string, tier: PlanTier): boolea
     case 'complimentaryreasoningboosts':
       return typeof plan.complimentaryReasoningBoosts === 'number' && plan.complimentaryReasoningBoosts > 0;
 
+    case 'savedagents':
+    case 'savedagentslimit':
+      return typeof plan.savedAgentsLimit === 'number' && plan.savedAgentsLimit > 0;
+
     case 'credits':
     case 'premiumcredits':
     case 'monthlypremiumcredits':

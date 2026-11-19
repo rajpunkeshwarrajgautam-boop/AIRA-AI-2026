@@ -1,4 +1,5 @@
 import { STAGING_NEON_BRANCH_ID } from '../packages/db/src/security/database-isolation-guard.js';
+import { validateStagingDatabaseUrl } from './helpers/staging-test-fixture-lifecycle.js';
 
 export interface StagingLiveAcceptanceConfig {
   previewUrl: string;
@@ -47,6 +48,9 @@ export function resolveStagingLiveAcceptanceConfig(env: NodeJS.ProcessEnv): Stag
   if (!['postgres:', 'postgresql:'].includes(dbUrl.protocol) || !dbUrl.hostname) {
     throw new Error('STAGING_DATABASE_URL must be a PostgreSQL URL');
   }
+
+  // Enforce strict fail-closed database isolation check against production Neon project/endpoint
+  validateStagingDatabaseUrl(stagingDatabaseUrl);
 
   const userAEmail = required(env, 'STAGING_AUTH_TEST_USER_A_EMAIL');
   const userAPassword = required(env, 'STAGING_AUTH_TEST_USER_A_PASSWORD');

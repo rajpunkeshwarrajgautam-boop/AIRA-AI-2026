@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import path from 'node:path';
-import type { ExecutionPrincipal } from '../../contracts/src/index.js';
+import type { ExecutionPrincipal, PlanTier } from '../../contracts/src/index.js';
+import { isFeatureAllowedForTier } from '../../contracts/src/commercial.js';
 import { resolveDeploymentEnvironment } from '../../contracts/src/deployment-environment.js';
 
 export interface WorkspaceTicket {
@@ -140,9 +141,11 @@ export function safeRelativePath(value: string, allowRoot = false): string {
   return result;
 }
 
-export function builderAccess(principal: ExecutionPrincipal): BuilderAccessStatus {
+export function builderAccess(principal: ExecutionPrincipal, callerTier?: PlanTier): BuilderAccessStatus {
   const enabled = process.env.AIRA_BUILDER_ENABLED === 'true';
-  const allowed = (process.env.AIRA_BUILDER_ALLOWED_USER_IDS || '').split(',').map(s => s.trim()).filter(Boolean).includes(principal.userId);
+  const allowedByUser = (process.env.AIRA_BUILDER_ALLOWED_USER_IDS || '').split(',').map(s => s.trim()).filter(Boolean).includes(principal.userId);
+  const tierEntitled = callerTier ? isFeatureAllowedForTier('builder', callerTier) : true;
+  const allowed = allowedByUser && tierEntitled;
 
   const sandboxProvider = process.env.AIRA_SANDBOX_PROVIDER || 'lightning';
   let sandboxProviderConfigured = false;
@@ -177,7 +180,9 @@ export function builderAccess(principal: ExecutionPrincipal): BuilderAccessStatu
   let reason = 'Ready';
   if (!enabled) {
     reason = 'Builder is disabled. Ask the owner to complete the sandbox setup.';
-  } else if (!allowed) {
+  } else if (callerTier && !tierEntitled) {
+    reason = 'Builder requires an AIRA Plus or Pro subscription in addition to owner authorization.';
+  } else if (!allowedByUser) {
     reason = 'Builder is limited to owner-approved users. Ask the owner to allow your user ID.';
   } else if (!configured) {
     reason = !sandboxProviderConfigured

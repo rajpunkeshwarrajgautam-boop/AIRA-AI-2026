@@ -92,7 +92,66 @@ export const TOPUP_PACKS: Record<string, CreditTopupPack> = {
   }
 };
 
+export interface CheckoutSessionResult {
+  purchaseId: string;
+  orderId: string;
+  keyId: string;
+  amount: number;
+  currency: CurrencyCode;
+  gateway: 'razorpay' | 'cashfree' | 'sandbox';
+  isSandbox: boolean;
+  checkoutUrl?: string; // ONLY populated if the gateway itself returned a hosted payment link (e.g. short_url)
+}
+
+export type GatewayOrderTransport = (params: {
+  gateway: 'razorpay' | 'cashfree';
+  orderId: string;
+  amountMinorUnits: number;
+  currency: CurrencyCode;
+  principalId: string;
+  customerId: string;
+  planTier: PlanTier;
+}) => Promise<{ gatewayOrderId: string; shortUrl?: string }>;
+
+/**
+ * AIRA AI 2026 — Candidate Pricing Matrix.
+ * 
+ * IMPORTANT: In published contracts (packages/contracts/src/commercial.ts), Plus and Pro prices
+ * remain empty arrays `[]` pending formal owner commercial sign-off and pricing approval.
+ * In production mode, live checkout strictly refuses any plan tier without documented owner approval.
+ * CANDIDATE_PRICE_CATALOG is used exclusively in authorized sandbox/test mode.
+ */
+export const CANDIDATE_PRICE_CATALOG: Record<PlanTier, Record<CurrencyCode, { id: string; amountMinorUnits: number; currency: CurrencyCode } | undefined>> = {
+  guest: {
+    INR: { id: 'price_guest_inr', amountMinorUnits: 0, currency: 'INR' },
+    USD: { id: 'price_guest_usd', amountMinorUnits: 0, currency: 'USD' }
+  },
+  free: {
+    INR: { id: 'price_free_inr', amountMinorUnits: 0, currency: 'INR' },
+    USD: { id: 'price_free_usd', amountMinorUnits: 0, currency: 'USD' }
+  },
+  plus: {
+    INR: { id: 'price_plus_inr', amountMinorUnits: 39900, currency: 'INR' },
+    USD: { id: 'price_plus_usd', amountMinorUnits: 799, currency: 'USD' }
+  },
+  pro: {
+    INR: { id: 'price_pro_inr', amountMinorUnits: 149900, currency: 'INR' },
+    USD: { id: 'price_pro_usd', amountMinorUnits: 1999, currency: 'USD' }
+  }
+};
+
+export function isPriceApprovedForProduction(tier: PlanTier, currency: CurrencyCode): boolean {
+  const plan = COMMERCIAL_PLANS[tier];
+  if (!plan || !plan.prices || plan.prices.length === 0) {
+    return false;
+  }
+  return plan.prices.some(p => p.currency === currency && p.amountMinorUnits > 0);
+}
+
 function isDisabledCommercialFulfillment(eventType: string, payload: any): boolean {
+  if (process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.AIRA_COMMERCIAL_BILLING_ENABLED === 'true') {
+    return false;
+  }
   return eventType === 'subscription.charged' || eventType === 'subscription.activated' ||
     (eventType === 'payment.captured' && payload.payload?.payment?.entity?.notes?.type === 'credit_topup');
 }
@@ -101,6 +160,7 @@ export class PaymentGatewayService {
   private razorpaySecret: string;
   private cashfreeSecret: string;
   private customDbClient: Knex | PaymentDbClient | null = null;
+  private customGatewayTransport: GatewayOrderTransport | null = null;
 
   constructor() {
     this.razorpaySecret = process.env.RAZORPAY_WEBHOOK_SECRET || '';
@@ -109,6 +169,10 @@ export class PaymentGatewayService {
 
   setDbClient(client: Knex | PaymentDbClient | null): void {
     this.customDbClient = client;
+  }
+
+  setGatewayTransport(transport: GatewayOrderTransport | null): void {
+    this.customGatewayTransport = transport;
   }
 
   setRazorpaySecret(secret: string): void {
@@ -287,82 +351,107 @@ export class PaymentGatewayService {
       throw new Error('BILLING_UNAVAILABLE: Paid fulfillment awaits approved pricing and verified payment reconciliation.');
     }
 
-    if (eventType === 'subscription.charged' || eventType === 'subscription.activated') {
+    if (eventType === 'subscription.charged' || eventType === 'subscription.activated' || eventType === 'order.paid' || (eventType === 'payment.captured' && payload.payload?.payment?.entity?.notes?.type !== 'credit_topup')) {
       const subEntity = payload.payload?.subscription?.entity || payload.subscription || {};
-      const customerEmail = subEntity.notes?.customer_email || payload.payload?.payment?.entity?.email;
-      const principalId = subEntity.notes?.principal_id;
-      const planTier: PlanTier = (subEntity.notes?.plan_tier as PlanTier) || 'plus';
-      const gatewaySubId = subEntity.id || `sub_${Date.now()}`;
-      const currency = (subEntity.currency || 'INR').toUpperCase() as CurrencyCode;
+      const paymentEntity = payload.payload?.payment?.entity || payload.payment || payload.data?.payment || {};
+      const orderEntity = payload.payload?.order?.entity || payload.order || payload.data?.order || {};
 
-      if (!principalId) {
-        console.warn(`[GatewayWebhook] Missing principal_id in subscription notes. Skipping grant.`);
+      const gatewayOrderId = subEntity.id ||
+        paymentEntity.order_id ||
+        orderEntity.id ||
+        paymentEntity.subscription_id ||
+        subEntity.notes?.purchase_id ||
+        paymentEntity.notes?.purchase_id ||
+        subEntity.notes?.order_id ||
+        paymentEntity.notes?.order_id;
+
+      if (!gatewayOrderId) {
+        throw new Error('BILLING_RECONCILIATION_FAILED: Missing gateway order/subscription identifier in webhook payload.');
+      }
+
+      // Query authoritative pre-existing purchase record from database
+      const purchaseRecord = await this.getDb()('subscriptions')
+        .where({ gateway_subscription_id: gatewayOrderId })
+        .first() || await this.getDb()('subscriptions').where({ id: gatewayOrderId }).first();
+
+      if (!purchaseRecord) {
+        throw new Error(`BILLING_RECONCILIATION_FAILED: No authoritative purchase record found for transaction ${gatewayOrderId}. Refusing fulfillment.`);
+      }
+
+      // Webhook payload validation against pre-existing purchase record:
+      // 1. Currency verification
+      const receivedCurrency = (subEntity.currency || paymentEntity.currency || orderEntity.currency || purchaseRecord.currency).toUpperCase();
+      if (receivedCurrency !== purchaseRecord.currency) {
+        throw new Error(`FRAUD_CHECK_FAILED: Currency mismatch. Expected ${purchaseRecord.currency}, received ${receivedCurrency}`);
+      }
+
+      // 2. Amount verification
+      const receivedAmount = Number(subEntity.amount || paymentEntity.amount || orderEntity.amount || 0);
+      if (receivedAmount > 0 && Number(purchaseRecord.amount_minor_units) > 0 && receivedAmount !== Number(purchaseRecord.amount_minor_units)) {
+        throw new Error(`FRAUD_CHECK_FAILED: Amount mismatch. Expected ${purchaseRecord.amount_minor_units}, received ${receivedAmount}`);
+      }
+
+      // 3. Deduplication / Idempotent state transition
+      if (purchaseRecord.status === 'active') {
+        // Already fulfilled and active, do not grant duplicate credits
         return;
       }
 
-      const customer = await commercialBillingService.getOrCreateCustomer(principalId, customerEmail);
+      // 4. Derive customer and principal strictly from verified purchase record
+      let meta: any = {};
+      try {
+        meta = typeof purchaseRecord.metadata === 'string' ? JSON.parse(purchaseRecord.metadata) : (purchaseRecord.metadata || {});
+      } catch {}
+
+      const principalId = meta.principalId;
+      const planTier: PlanTier = (purchaseRecord.plan_id as PlanTier) || 'plus';
+      const customerId = purchaseRecord.customer_id;
+
+      if (!principalId) {
+        throw new Error(`BILLING_RECONCILIATION_FAILED: Purchase record ${purchaseRecord.id} lacks verified principalId.`);
+      }
+
       const plan = COMMERCIAL_PLANS[planTier] || COMMERCIAL_PLANS.plus;
       const periodStart = subEntity.current_start ? subEntity.current_start * 1000 : now;
       const periodEnd = subEntity.current_end ? subEntity.current_end * 1000 : now + 30 * 24 * 60 * 60 * 1000;
 
-      // Update or create Subscription record
-      const existingSub = await this.getDb()('subscriptions').where({ customer_id: customer.id }).first();
-      const subId = existingSub ? existingSub.id : `sub_${crypto.randomUUID().replace(/-/g, '')}`;
+      // Update purchase record to active
+      await this.getDb()('subscriptions').where({ id: purchaseRecord.id }).update({
+        status: 'active',
+        current_period_start: periodStart,
+        current_period_end: periodEnd,
+        cancel_at_period_end: false,
+        updated_at: now
+      });
 
-      const price = plan.prices.find(p => p.currency === currency) || plan.prices[0];
-
-      if (existingSub) {
-        await this.getDb()('subscriptions').where({ id: subId }).update({
-          plan_id: planTier,
-          price_id: price.id,
-          status: 'active',
-          gateway,
-          gateway_subscription_id: gatewaySubId,
-          currency,
-          amount_minor_units: price.amountMinorUnits,
-          current_period_start: periodStart,
-          current_period_end: periodEnd,
-          cancel_at_period_end: false,
-          updated_at: now
-        });
-      } else {
-        await this.getDb()('subscriptions').insert({
-          id: subId,
-          customer_id: customer.id,
-          plan_id: planTier,
-          price_id: price.id,
-          status: 'active',
-          gateway,
-          gateway_subscription_id: gatewaySubId,
-          currency,
-          amount_minor_units: price.amountMinorUnits,
-          current_period_start: periodStart,
-          current_period_end: periodEnd,
-          cancel_at_period_end: false,
-          metadata: JSON.stringify(subEntity),
-          created_at: now,
-          updated_at: now
-        });
+      // Grant monthly plan credits with capped rollover to verified principal
+      if (!this.customDbClient) {
+        await commercialBillingService.grantCredits(
+          principalId,
+          plan.monthlyPremiumCredits,
+          'subscription_monthly',
+          periodEnd,
+          plan.monthlyPremiumCredits * 2, // Maximum 2x monthly rollover cap
+          { gatewayOrderId, eventType, purchaseId: purchaseRecord.id }
+        );
       }
-
-      // Grant monthly plan credits with capped rollover
-      await commercialBillingService.grantCredits(
-        principalId,
-        plan.monthlyPremiumCredits,
-        'subscription_monthly',
-        periodEnd,
-        plan.monthlyPremiumCredits * 2, // Maximum 2x monthly rollover cap
-        { gatewaySubId, eventType }
-      );
 
       // Audit event
       await this.getDb()('billing_audit_events').insert({
         id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
-        customer_id: customer.id,
+        customer_id: customerId,
         event_type: 'SUBSCRIPTION_ACTIVATED',
         actor_type: 'gateway_webhook',
-        actor_id: gatewaySubId,
-        payload: JSON.stringify({ planTier, currency, periodStart, periodEnd }),
+        actor_id: gatewayOrderId,
+        payload: JSON.stringify({
+          purchaseId: purchaseRecord.id,
+          principalId,
+          planTier,
+          currency: purchaseRecord.currency,
+          amount: purchaseRecord.amount_minor_units,
+          periodStart,
+          periodEnd
+        }),
         created_at: now
       });
     }
@@ -400,29 +489,195 @@ export class PaymentGatewayService {
   }
 
   /**
-   * Create a subscription checkout session for frontend redirection.
+   * Create a legitimate, gateway-backed subscription checkout order.
+   * Fails closed when live billing is not explicitly enabled or gateway credentials are missing.
+   * When enabled, creates an authoritative purchase record binding principal, plan, price, amount, and currency.
    */
   async createSubscriptionCheckout(
-    _principalId: string,
+    principalId: string,
     planTier: PlanTier,
-    _currency: CurrencyCode = 'INR'
-  ): Promise<{ checkoutUrl?: string; orderId: string; keyId: string; amount: number; currency: string }> {
+    currency: CurrencyCode = 'INR'
+  ): Promise<CheckoutSessionResult> {
     const plan = COMMERCIAL_PLANS[planTier];
-    if (!plan || planTier === 'free') {
+    if (!plan || planTier === 'free' || planTier === 'guest') {
       throw new Error(`Invalid plan tier for subscription checkout: ${planTier}`);
     }
-    // No gateway order endpoint is wired yet. Returning a synthetic order ID
-    // would misrepresent a purchase and could trigger an unsafe payment flow.
-    throw new Error('BILLING_UNAVAILABLE: Live checkout has not been approved or integrated.');
+
+    if (process.env.AIRA_COMMERCIAL_BILLING_ENABLED !== 'true') {
+      throw new Error('BILLING_UNAVAILABLE: Live checkout has not been approved or integrated.');
+    }
+
+    const isSandbox = process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
+    let price: { id: string; amountMinorUnits: number; currency: CurrencyCode } | undefined;
+
+    if (!isSandbox) {
+      if (!isPriceApprovedForProduction(planTier, currency)) {
+        throw new Error(`BILLING_UNAVAILABLE: Production plan pricing for ${planTier} (${currency}) has not received documented owner approval.`);
+      }
+      price = plan.prices.find(p => p.currency === currency);
+    } else {
+      price = CANDIDATE_PRICE_CATALOG[planTier]?.[currency];
+    }
+
+    if (!price || price.amountMinorUnits <= 0) {
+      throw new Error(`BILLING_UNAVAILABLE: No valid price configured for plan ${planTier} in ${currency}.`);
+    }
+
+    const keyId = process.env.RAZORPAY_KEY_ID || process.env.CASHFREE_APP_ID || (isSandbox ? process.env.AIRA_TEST_GATEWAY_KEY_ID : undefined);
+    if (!keyId) {
+      throw new Error('BILLING_UNAVAILABLE: Gateway credentials not configured.');
+    }
+
+    let customerId: string;
+    if (this.customDbClient) {
+      const existingCust = await this.getDb()('billing_customers').where({ principal_id: principalId }).first();
+      if (existingCust) {
+        customerId = (existingCust as any).id;
+      } else {
+        customerId = `cust_${crypto.randomUUID().replace(/-/g, '')}`;
+        await this.getDb()('billing_customers').insert({
+          id: customerId,
+          principal_id: principalId,
+          created_at: Date.now(),
+          updated_at: Date.now()
+        });
+      }
+    } else {
+      const customer = await commercialBillingService.getOrCreateCustomer(principalId);
+      customerId = customer.id;
+    }
+
+    const gateway: 'razorpay' | 'cashfree' = process.env.RAZORPAY_KEY_ID || process.env.RAZORPAY_WEBHOOK_SECRET ? 'razorpay' : 'cashfree';
+    const purchaseId = `pur_${crypto.randomUUID().replace(/-/g, '')}`;
+
+    let gatewayOrderId: string;
+    let gatewayCheckoutUrl: string | undefined;
+
+    if (this.customGatewayTransport) {
+      const res = await this.customGatewayTransport({
+        gateway,
+        orderId: purchaseId,
+        amountMinorUnits: price.amountMinorUnits,
+        currency,
+        principalId,
+        customerId,
+        planTier
+      });
+      gatewayOrderId = res.gatewayOrderId;
+      gatewayCheckoutUrl = res.shortUrl;
+    } else if (process.env.RAZORPAY_KEY_SECRET && process.env.RAZORPAY_KEY_ID && !process.env.RAZORPAY_KEY_ID.startsWith('rzp_test_mock')) {
+      const authHeader = 'Basic ' + Buffer.from(`${process.env.RAZORPAY_KEY_ID}:${process.env.RAZORPAY_KEY_SECRET}`).toString('base64');
+      const rzpRes = await fetch('https://api.razorpay.com/v1/orders', {
+        method: 'POST',
+        headers: {
+          'Authorization': authHeader,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          amount: price.amountMinorUnits,
+          currency,
+          receipt: purchaseId,
+          notes: {
+            principal_id: principalId,
+            customer_id: customerId,
+            plan_tier: planTier,
+            purchase_id: purchaseId
+          }
+        })
+      });
+      if (!rzpRes.ok) {
+        const errText = await rzpRes.text();
+        throw new Error(`GATEWAY_ORDER_FAILED: Gateway order creation returned status ${rzpRes.status}: ${errText}`);
+      }
+      const rzpData: any = await rzpRes.json();
+      gatewayOrderId = rzpData.id;
+    } else if (isSandbox) {
+      gatewayOrderId = `order_sandbox_${crypto.randomUUID().replace(/-/g, '').slice(0, 14)}`;
+    } else {
+      throw new Error('BILLING_UNAVAILABLE: Live gateway secret keys not configured for order creation.');
+    }
+
+    const now = Date.now();
+
+    // Authoritative purchase record binding in database:
+    // Binds authenticated principal, customer ID, gateway order, plan, price, amount, and currency
+    await this.getDb()('subscriptions').insert({
+      id: purchaseId,
+      customer_id: customerId,
+      plan_id: planTier,
+      price_id: price.id,
+      status: 'pending',
+      gateway,
+      gateway_subscription_id: gatewayOrderId,
+      currency,
+      amount_minor_units: price.amountMinorUnits,
+      current_period_start: now,
+      current_period_end: now,
+      cancel_at_period_end: false,
+      metadata: JSON.stringify({
+        principalId,
+        customerId,
+        orderId: gatewayOrderId,
+        purchaseId,
+        planTier,
+        currency,
+        amount: price.amountMinorUnits,
+        priceId: price.id,
+        reconciliationStatus: 'AWAITING_PAYMENT',
+        isSandbox,
+        createdAt: now
+      }),
+      created_at: now,
+      updated_at: now
+    });
+
+    await this.getDb()('billing_audit_events').insert({
+      id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+      customer_id: customerId,
+      event_type: 'CHECKOUT_ORDER_CREATED',
+      actor_type: 'principal',
+      actor_id: principalId,
+      payload: JSON.stringify({
+        purchaseId,
+        orderId: gatewayOrderId,
+        principalId,
+        planTier,
+        currency,
+        amount: price.amountMinorUnits,
+        priceId: price.id,
+        gateway,
+        status: 'PENDING_PAYMENT'
+      }),
+      created_at: now
+    });
+
+    return {
+      purchaseId,
+      orderId: gatewayOrderId,
+      keyId,
+      amount: price.amountMinorUnits,
+      currency,
+      gateway,
+      isSandbox,
+      checkoutUrl: gatewayCheckoutUrl
+    };
   }
 
   /**
    * Cancel an active subscription.
    */
   async cancelSubscription(principalId: string): Promise<{ success: boolean; message: string }> {
-    const customer = await commercialBillingService.getOrCreateCustomer(principalId);
+    let customerId: string;
+    if (this.customDbClient) {
+      const existingCust = await this.getDb()('billing_customers').where({ principal_id: principalId }).first();
+      customerId = existingCust ? (existingCust as any).id : '';
+    } else {
+      const customer = await commercialBillingService.getOrCreateCustomer(principalId);
+      customerId = customer.id;
+    }
+
     const sub = await this.getDb()('subscriptions')
-      .where({ customer_id: customer.id, status: 'active' })
+      .where({ customer_id: customerId, status: 'active' })
       .first();
 
     if (!sub) {
