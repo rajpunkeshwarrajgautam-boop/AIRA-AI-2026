@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import type { Knex } from 'knex';
 import { db } from '../../../../packages/db/src/index.js';
 import {
   COMMERCIAL_PLANS,
@@ -911,7 +912,8 @@ export class CommercialBillingService {
     grantType = 'subscription_monthly',
     expiresAt?: number,
     rolloverCap = 7500,
-    metadata: Record<string, any> = {}
+    metadata: Record<string, any> = {},
+    outerTrx?: Knex.Transaction | Knex
   ): Promise<{ newBalance: number; grantId: string }> {
     if (isGuestPrincipal(principalId)) {
       throw new Error('Cannot grant credits to guest principal.');
@@ -923,7 +925,7 @@ export class CommercialBillingService {
     const now = Date.now();
     const grantId = `grant_${crypto.randomUUID().replace(/-/g, '')}`;
 
-    return await db.transaction(async (trx) => {
+    const execute = async (trx: any) => {
       const account = await trx('credit_accounts')
         .where({ customer_id: customer.id })
         .forUpdate()
@@ -972,14 +974,19 @@ export class CommercialBillingService {
         amount_credits: allowedGrant,
         balance_before: currentBalance,
         balance_after: newBalance,
-        idempotency_key: `grant_${grantId}`,
+        idempotency_key: metadata.idempotencyKey || `grant_${grantId}`,
         description: `Credit Grant (${grantType})`,
         metadata: JSON.stringify({ grantId, requestedAmount: amountCredits, allowedGrant, ...metadata }),
         created_at: now
       });
 
       return { newBalance, grantId };
-    });
+    };
+
+    if (outerTrx) {
+      return await execute(outerTrx);
+    }
+    return await db.transaction(execute);
   }
 
   /**

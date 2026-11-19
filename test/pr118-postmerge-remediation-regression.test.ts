@@ -65,12 +65,16 @@ test('PR #118 Remediation Gate 2: Cashfree webhook HMAC verification, deduplicat
   // The production gateway must not fall back to a known webhook signing secret.
   // Supply a test-only key before constructing this isolated instance.
   const previousSecret = process.env.CASHFREE_WEBHOOK_SECRET;
+  const previousFulfillment = process.env.AIRA_ENABLE_TEST_FULFILLMENT;
   const secret = `ci_cashfree_${crypto.randomBytes(32).toString('hex')}`;
   process.env.CASHFREE_WEBHOOK_SECRET = secret;
+  process.env.AIRA_ENABLE_TEST_FULFILLMENT = 'true';
   const gateway = new PaymentGatewayService();
   t.after(() => {
     if (previousSecret === undefined) delete process.env.CASHFREE_WEBHOOK_SECRET;
     else process.env.CASHFREE_WEBHOOK_SECRET = previousSecret;
+    if (previousFulfillment === undefined) delete process.env.AIRA_ENABLE_TEST_FULFILLMENT;
+    else process.env.AIRA_ENABLE_TEST_FULFILLMENT = previousFulfillment;
   });
 
   let hasRealDb = false;

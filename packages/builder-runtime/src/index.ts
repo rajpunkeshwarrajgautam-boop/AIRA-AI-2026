@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { ExecutionPrincipal } from '../../contracts/src/index.js';
+import type { ExecutionPrincipal, PlanTier } from '../../contracts/src/index.js';
 import { resolveDeploymentEnvironment } from '../../contracts/src/deployment-environment.js';
 import { ModelRouter, isModelMatch, type ChatMessageInput } from '../../model-router/src/index.js';
 import { BuilderActionSchema, type BuilderRequest, type BuilderEvent, type BuilderFile } from './contracts.js';
@@ -41,8 +41,8 @@ export class BuilderService {
     private factory: SandboxFactory = new MultiProviderSandboxFactory()
   ) {}
 
-  status(principal: ExecutionPrincipal): BuilderStatusResponse {
-    const access = builderAccess(principal);
+  status(principal: ExecutionPrincipal, callerTier?: PlanTier): BuilderStatusResponse {
+    const access = builderAccess(principal, callerTier);
     const providerConfigured = this.router.listProviders().length > 0;
     const ready = access.enabled && access.allowed && access.configured && providerConfigured;
     let reason = access.reason;
@@ -59,9 +59,9 @@ export class BuilderService {
     };
   }
 
-  async run(input: BuilderRequest, principal: ExecutionPrincipal, send: (event: BuilderEvent) => void, disconnect: AbortSignal) {
+  async run(input: BuilderRequest, principal: ExecutionPrincipal, send: (event: BuilderEvent) => void, disconnect: AbortSignal, callerTier?: PlanTier) {
     if (input.allowExecution !== true) throw new Error('Explicit sandbox-execution consent is required.');
-    const status = this.status(principal);
+    const status = this.status(principal, callerTier);
     if (!status.ready) throw new Error(status.reason === 'Ready' ? 'Configure a real model provider before using Builder.' : status.reason);
 
     // Safeguard: single active mission per user on this worker

@@ -25,7 +25,7 @@ export interface ValidatedStagingEnvironment {
 
 /**
  * Validates that the target HTTP/HTTPS URL is a genuine staging or preview deployment,
- * and strictly rejects production targets fail-closed.
+ * and strictly rejects production targets, lookalikes, unapproved ports, and userinfo fail-closed.
  */
 export function validateStagingTargetUrl(rawUrl: string): string {
   if (!rawUrl || typeof rawUrl !== 'string' || !rawUrl.trim()) {
@@ -40,32 +40,58 @@ export function validateStagingTargetUrl(rawUrl: string): string {
     throw new Error(`[SECURITY FATAL] Target URL is malformed: "${trimmed}". Fail-closed.`);
   }
 
+  // 1. Userinfo credentials rejection
+  if (parsed.username || parsed.password) {
+    throw new Error('[SECURITY FATAL] URL containing userinfo credentials is strictly rejected. Fail-closed.');
+  }
+
   const host = parsed.hostname.toLowerCase();
 
-  // 1. Unconditional production rejection
+  // 2. Unconditional production rejection (exact match, aliases, and subdomains)
   if (
     host === PRODUCTION_CANONICAL_HOST.toLowerCase() ||
-    host.includes('aira-ai-2026.vercel.app') ||
-    host.includes('aira-ai-2026-git-prod') ||
+    host === 'aira-ai-2026.vercel.app' ||
     host === 'virexaaiventures.com' ||
-    host === 'www.virexaaiventures.com'
+    host === 'www.virexaaiventures.com' ||
+    host.endsWith('.aira-ai-2026.vercel.app') ||
+    host.startsWith('aira-ai-2026-git-prod') ||
+    host.includes('production')
   ) {
     throw new Error(`[SECURITY FATAL] Target URL "${trimmed}" targets PRODUCTION. Staging tests are forbidden against production.`);
   }
 
-  // 2. Protocol check
+  // 3. Localhost development support with separate explicit controls
   const isLocal = host === 'localhost' || host === '127.0.0.1';
-  if (!isLocal && parsed.protocol !== 'https:') {
+  if (isLocal) {
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error(`[SECURITY FATAL] Invalid protocol "${parsed.protocol}" for local target. Fail-closed.`);
+    }
+    const localPort = parsed.port ? parseInt(parsed.port, 10) : (parsed.protocol === 'https:' ? 443 : 80);
+    if (isNaN(localPort) || localPort <= 0 || localPort > 65535) {
+      throw new Error(`[SECURITY FATAL] Invalid local port "${parsed.port}". Fail-closed.`);
+    }
+    return parsed.origin;
+  }
+
+  // 4. Remote targets: must use HTTPS strictly
+  if (parsed.protocol !== 'https:') {
     throw new Error(`[SECURITY FATAL] Remote target URL "${trimmed}" must use HTTPS. Fail-closed.`);
   }
 
-  // 3. Staging/preview format check
-  const isStagingDomain = host === STAGING_CANONICAL_DOMAIN.toLowerCase() || host.endsWith(`.${STAGING_CANONICAL_DOMAIN.toLowerCase()}`);
-  const isVercelPreview = /^aira-ai-2026-[a-z0-9]+-[a-z0-9-]+\.vercel\.app$/.test(host) ||
-                          host.includes('git-staging') ||
-                          host.includes('preview');
+  // 5. Port restriction on remote targets (standard 443 only)
+  if (parsed.port && parsed.port !== '443') {
+    throw new Error(`[SECURITY FATAL] Remote target URL contains unapproved port "${parsed.port}". Only standard HTTPS (443) is allowed.`);
+  }
 
-  if (!isLocal && !isStagingDomain && !isVercelPreview) {
+  // 6. Strict approved-origin validation (no loose substring matching)
+  const isExactStaging = host === STAGING_CANONICAL_DOMAIN.toLowerCase();
+  
+  // Scoped Vercel preview format: aira-ai-2026-<hash>-<team>.vercel.app (minimum 8 hash chars)
+  const isScopedVercelPreview = /^aira-ai-2026-[a-z0-9]{8,}-[a-z0-9-]+\.vercel\.app$/.test(host) &&
+                                !host.includes('prod') &&
+                                !host.includes('production');
+
+  if (!isExactStaging && !isScopedVercelPreview) {
     throw new Error(`[SECURITY FATAL] Target host "${host}" is not recognized as a valid staging or preview domain. Fail-closed.`);
   }
 
@@ -73,14 +99,28 @@ export function validateStagingTargetUrl(rawUrl: string): string {
 }
 
 /**
- * Validates that the database connection string is NOT pointing to the production Neon project or endpoint.
+ * Validates that the database connection string is an authorized test/staging database
+ * and strictly verifies that it does not point to production Neon projects, pooled endpoints, or unverified targets.
  */
-export function validateStagingDatabaseUrl(databaseUrl?: string): void {
+export function validateStagingDatabaseUrl(
+  databaseUrl?: string,
+  options: { requireDisposable?: boolean } = {}
+): void {
   if (!databaseUrl || typeof databaseUrl !== 'string' || !databaseUrl.trim()) {
-    return; // Optional if test only hits HTTP API
+    if (options.requireDisposable) {
+      throw new Error('[SECURITY FATAL] Disposable database URL is required for database operations. Fail-closed.');
+    }
+    return;
   }
 
   const trimmed = databaseUrl.trim();
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(trimmed);
+  } catch {
+    throw new Error('[SECURITY FATAL] Target database URL is malformed. Fail-closed.');
+  }
+
   const classification = classifyDatabaseUrl(trimmed);
 
   if (classification.isProduction) {
@@ -99,6 +139,65 @@ export function validateStagingDatabaseUrl(databaseUrl?: string): void {
       `or project (${PRODUCTION_NEON_PROJECT_ID}). Fail-closed.`
     );
   }
+
+  // Reject shared production connection poolers
+  if (parsedUrl.hostname.includes('pooler') && !parsedUrl.hostname.includes('localhost') && !parsedUrl.hostname.includes('127.0.0.1')) {
+    if (options.requireDisposable) {
+      throw new Error('[SECURITY FATAL] Pooled endpoint detected on non-local database. Destructive test operations require an isolated disposable database.');
+    }
+  }
+
+  if (options.requireDisposable) {
+    const isLocalDocker = parsedUrl.hostname === 'localhost' || parsedUrl.hostname === '127.0.0.1' || parsedUrl.hostname === 'postgres';
+    const isExplicitDisposableBranch = trimmed.includes('disposable') || trimmed.includes('test-branch') || trimmed.includes('ci-disposable');
+    if (!isLocalDocker && !isExplicitDisposableBranch) {
+      throw new Error(`[SECURITY FATAL] Database "${parsedUrl.hostname}" is not verified as an authorized disposable database target.`);
+    }
+  }
+}
+
+/**
+ * Validates redirect destination to prevent open-redirect vulnerabilities during OAuth or authentication tests.
+ */
+export function validateRedirectTargetUrl(redirectUrl: string, allowedOrigins: string[] = []): string {
+  if (!redirectUrl || typeof redirectUrl !== 'string' || !redirectUrl.trim()) {
+    throw new Error('[SECURITY FATAL] Redirect URL is empty. Fail-closed.');
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(redirectUrl.trim());
+  } catch {
+    throw new Error(`[SECURITY FATAL] Malformed redirect URL: "${redirectUrl}". Fail-closed.`);
+  }
+
+  if (parsed.username || parsed.password) {
+    throw new Error('[SECURITY FATAL] Redirect URL contains userinfo. Fail-closed.');
+  }
+
+  const origin = parsed.origin.toLowerCase();
+  const defaultAllowed = [
+    'https://' + STAGING_CANONICAL_DOMAIN.toLowerCase(),
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'http://localhost:5173',
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:3001',
+    'http://127.0.0.1:5173'
+  ];
+
+  const allAllowed = new Set([...defaultAllowed, ...allowedOrigins.map(o => o.toLowerCase())]);
+  const isAllowed = allAllowed.has(origin) || (
+    origin.endsWith('.vercel.app') &&
+    /^https:\/\/aira-ai-2026-[a-z0-9]{8,}-[a-z0-9-]+\.vercel\.app$/.test(origin) &&
+    !origin.includes('prod')
+  );
+
+  if (!isAllowed) {
+    throw new Error(`[SECURITY FATAL] Unapproved redirect destination "${origin}". Fail-closed.`);
+  }
+
+  return origin;
 }
 
 export interface GeneratedTestCredentials {

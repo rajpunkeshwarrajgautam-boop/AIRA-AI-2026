@@ -50,7 +50,7 @@ import { validateDurableToolScopes } from '../../../packages/agent-runtime/src/d
 import { validateApiStartupConfiguration } from './startup-config.js';
 import { evaluateRuntimeReadiness, createDatabaseReadinessProbe } from './runtime-readiness.js';
 import { AutomationEngine } from '../../../packages/automation/src/index.js';
-import { PostgresAgentRepository, PostgresRunRepository, InMemoryRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
+import { PostgresAgentRepository, InMemoryAgentRepository, PostgresRunRepository, InMemoryRunRepository } from '../../../packages/agent-runtime/src/repositories.js';
 import { PostgresAutomationRepository, PostgresAutomationRunRepository } from '../../../packages/automation/src/repositories.js';
 import {
   ConversationSearchRepository,
@@ -879,7 +879,9 @@ const resolveCurrentCommercialTier = async (principalId: string) => {
 const toolGateway = new ToolGateway(toolCallRepo, approvalKernel, process.cwd(), undefined, undefined, resolveCurrentCommercialTier);
 const knowledgeEngine = new BrainV2KnowledgeEngine(undefined, { seedDefaults: !process.env.VERCEL });
 const mcpHost = new McpHost(toolGateway);
-const agentRepo = new PostgresAgentRepository();
+let agentRepo = isDbConfigured ? new PostgresAgentRepository() : new InMemoryAgentRepository();
+function setAgentRepository(repo: any): void { agentRepo = repo; }
+function getAgentRepository(): any { return agentRepo; }
 const runRepo = isDbConfigured ? new PostgresRunRepository() : new InMemoryRunRepository();
 const autoRepo = new PostgresAutomationRepository();
 const autoRunRepo = new PostgresAutomationRunRepository();
@@ -1139,7 +1141,7 @@ app.get('/api/mcp/servers/:id/tools', (req: Request, res: Response) => {
 // -----------------------------------------------------------------------
 // Python Sandbox Execution (Isolated local workspace with credential scrubbing)
 // -----------------------------------------------------------------------
-app.post('/api/sandbox/python/execute', async (req: Request, res: Response) => {
+app.post('/api/sandbox/python/execute', requireCapability('pythonsandbox'), async (req: Request, res: Response) => {
   const { code, files, timeoutMs } = req.body || {};
   if (!code || typeof code !== 'string') {
     return res.status(400).json({ error: 'code string is required' });
@@ -1162,13 +1164,13 @@ app.post('/api/sandbox/python/execute', async (req: Request, res: Response) => {
 // -----------------------------------------------------------------------
 // Persistent Browser Sessions & Automation
 // -----------------------------------------------------------------------
-app.get('/api/browser/sessions', (req: Request, res: Response) => {
+app.get('/api/browser/sessions', requireCapability('browsertools'), (req: Request, res: Response) => {
   const browserAdapter = toolGateway.getBrowserAdapter();
   const sessions = browserAdapter.listSessions(req.principal!);
   res.json({ sessions });
 });
 
-app.post('/api/browser/sessions/:id/restart', async (req: Request, res: Response) => {
+app.post('/api/browser/sessions/:id/restart', requireCapability('browsertools'), async (req: Request, res: Response) => {
   const browserAdapter = toolGateway.getBrowserAdapter();
   try {
     await browserAdapter.restartSession(req.principal!);
@@ -1178,7 +1180,7 @@ app.post('/api/browser/sessions/:id/restart', async (req: Request, res: Response
   }
 });
 
-app.post('/api/browser/sessions/:id/close', async (req: Request, res: Response) => {
+app.post('/api/browser/sessions/:id/close', requireCapability('browsertools'), async (req: Request, res: Response) => {
   const browserAdapter = toolGateway.getBrowserAdapter();
   try {
     await browserAdapter.closeSession(req.principal!);
@@ -2081,6 +2083,18 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
       });
     }
 
+    if (intent === 'WORKFLOW' || intent === 'AGENT_MISSION') {
+      if (!isFeatureAllowedForTier('autonomous', tier)) {
+        return res.status(403).json({
+          error: 'PLAN_CAPABILITY_RESTRICTED',
+          capability: 'autonomous',
+          message: 'Autonomous execution mode requires PLUS tier or higher.',
+          callerTier: tier,
+          requiredTier: 'plus'
+        });
+      }
+    }
+
     const promptText = prompt || (Array.isArray(messages)
       ? [...messages].reverse().find((m: any) => m.role === 'user')?.content || ''
       : '');
@@ -2193,8 +2207,13 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
     }
 
     const clientAbort = new AbortController();
+    let cancellationLogged = false;
+    let tCancelledStart = 0;
     res.on('close', async () => {
-      if (!res.writableEnded) clientAbort.abort(new Error('CLIENT_CLOSED'));
+      if (!res.writableEnded) {
+        tCancelledStart = performance.now();
+        clientAbort.abort(new Error('CLIENT_CLOSED'));
+      }
       if (!firstTokenEmitted) {
         await releaseQuotaIfUnused();
       }
@@ -2446,13 +2465,22 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         stream.off('event', handler);
         res.end();
       } else if (evt.type === 'run.cancelled') {
+        const tCancelEvent = performance.now();
         if (!firstTokenEmitted) {
           await releaseQuotaIfUnused();
+        }
+        await releasePermitIfHeld();
+        const cleanupMs = tCancelledStart ? Math.round(tCancelEvent - tCancelledStart) : 0;
+        if (!cancellationLogged) {
+          cancellationLogged = true;
+          console.log(`event=chat_cancellation request_id=${req.headers['x-request-id'] || run.id} run_id=${run.id} model=${executedModel} provider=${executedProvider} abort_reason=${evt.data?.reason || 'CLIENT_CLOSED'} permit_released=true quota_released=${!firstTokenEmitted} cleanup_ms=${cleanupMs} status=LOCAL_CANCELLED_UPSTREAM_UNVERIFIED`);
         }
         if (res.writableEnded) return;
         await finalizeAndEmitMetrics();
         res.write(`event: error\ndata: ${JSON.stringify({
           error: evt.data?.error || 'Aira run was cancelled',
+          code: 'RUN_CANCELLED',
+          status: 'LOCAL_CANCELLED_UPSTREAM_UNVERIFIED'
         })}\n\n`);
         stream.off('event', handler);
         res.end();
@@ -2494,13 +2522,24 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
 
     stream.on('event', handler);
     res.on('close', async () => {
+      const tClose = performance.now();
+      const cleanupStart = tCancelledStart || tClose;
       if (!firstTokenEmitted) {
         await releaseQuotaIfUnused();
       }
       if (res.writableEnded) return;
       await releasePermitIfHeld();
       stream.off('event', handler);
-      agentRuntime.cancelRun(run.id).catch(() => {});
+      try {
+        await agentRuntime.cancelRun(run.id);
+      } catch (cancelErr) {
+        console.warn('[CHAT_STREAM] Error cancelling run on close:', cancelErr);
+      }
+      const cleanupMs = Math.round(performance.now() - cleanupStart);
+      if (!cancellationLogged) {
+        cancellationLogged = true;
+        console.log(`event=chat_cancellation request_id=${req.headers['x-request-id'] || run.id} run_id=${run.id} model=${executedModel} provider=${executedProvider} abort_reason=CLIENT_CLOSED permit_released=true quota_released=${!firstTokenEmitted} cleanup_ms=${cleanupMs} status=LOCAL_CANCELLED_UPSTREAM_UNVERIFIED`);
+      }
     });
 
     await withInferenceReservation(modelRouter.capacityGuard, admission, () => agentRuntime.startRun(run.id), clientAbort.signal);
@@ -3339,6 +3378,18 @@ app.post('/api/agents', async (req: Request, res: Response) => {
     });
   }
 
+  const callerTier = await resolveCallerTier(req);
+  const plan = COMMERCIAL_PLANS[callerTier] || COMMERCIAL_PLANS.free;
+  if (!plan.savedAgentsLimit || plan.savedAgentsLimit <= 0) {
+    return res.status(403).json({
+      error: 'PLAN_CAPABILITY_RESTRICTED',
+      capability: 'saved_agents',
+      message: 'Creating custom agents requires AIRA Plus or Pro plan.',
+      callerTier,
+      requiredTier: 'plus'
+    });
+  }
+
   const { name, instructions, modelPolicy, tools, memoryScopes, approvalPolicy, maxSteps, timeoutPolicy } = req.body;
   if (!name || !instructions) {
     return res.status(400).json({ error: 'name and instructions are required.' });
@@ -3359,8 +3410,34 @@ app.post('/api/agents', async (req: Request, res: Response) => {
     createdAt: now,
     updatedAt: now
   } as any;
-  await agentRepo.saveAgent(agent, verifiedUserId);
-  res.status(201).json(agent);
+
+  try {
+    if (typeof (agentRepo as any).createAgentWithQuota === 'function') {
+      await (agentRepo as any).createAgentWithQuota(agent, verifiedUserId, plan.savedAgentsLimit);
+    } else {
+      const existingAgents = await agentRepo.listAgents(verifiedUserId);
+      if (existingAgents.length >= plan.savedAgentsLimit) {
+        return res.status(403).json({
+          error: 'AGENT_LIMIT_EXCEEDED',
+          message: `Maximum agent limit (${plan.savedAgentsLimit}) reached for your plan.`,
+          callerTier,
+          limit: plan.savedAgentsLimit
+        });
+      }
+      await agentRepo.saveAgent(agent, verifiedUserId);
+    }
+    res.status(201).json(agent);
+  } catch (err: any) {
+    if (err.name === 'AgentLimitExceededError' || err.message?.includes('Maximum agent limit')) {
+      return res.status(403).json({
+        error: 'AGENT_LIMIT_EXCEEDED',
+        message: `Maximum agent limit (${plan.savedAgentsLimit}) reached for your plan.`,
+        callerTier,
+        limit: plan.savedAgentsLimit
+      });
+    }
+    throw err;
+  }
 });
 
 app.get('/api/agents', async (req: Request, res: Response) => {
@@ -3416,7 +3493,7 @@ app.delete('/api/agents/:id', async (req: Request, res: Response) => {
   res.status(204).send();
 });
 
-app.post('/api/agents/:id/run', async (req: Request, res: Response) => {
+app.post('/api/agents/:id/run', requireCapability('autonomous'), async (req: Request, res: Response) => {
   const verifiedUserId = req.principal?.userId;
   if (!verifiedUserId) {
     return res.status(401).json({ error: 'Unauthorized: missing verified principal' });
@@ -3685,7 +3762,25 @@ app.get('/api/workflows/runs/:id', async (req: Request, res: Response) => {
   }
 });
 
-app.post('/api/workflows/runs', async (req: Request, res: Response) => {
+app.get('/api/workflows/runs/:id/artifacts', async (req: Request, res: Response) => {
+  try {
+    const wfRepo = agentRuntime.getWorkflowRepository();
+    const wfRun = await wfRepo.getWorkflowRun(getParam(req.params.id));
+    if (!wfRun || wfRun.principalId !== req.principal!.userId) {
+      return res.status(404).json({ error: `Workflow run "${getParam(req.params.id)}" not found.` });
+    }
+    const steps = await wfRepo.getWorkflowSteps(wfRun.id);
+    const artifacts = steps
+      .filter((s: any) => s.output && (s.output.artifacts || s.output.artifact))
+      .flatMap((s: any) => s.output.artifacts || [s.output.artifact])
+      .filter(Boolean);
+    res.json({ workflowRunId: wfRun.id, artifacts });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/workflows/runs', requireCapability('autonomous'), async (req: Request, res: Response) => {
   try {
     const { prompt, definition, principalId, userId } = req.body || {};
     if (principalId && principalId !== req.principal?.userId) {
@@ -3862,10 +3957,11 @@ if (!process.env.VERCEL) {
     server.close(() => process.exit(0));
   });
 } else {
-  // When running as a Vercel serverless function, immediately mark as healthy 
+  // When running as a Vercel serverless function or in test environments, immediately mark as healthy 
   // so the middleware does not block requests with 503.
   appState = 'HEALTHY';
 }
 
+export { appState, agentRuntime, modelRouter, agentRepo, setAgentRepository, getAgentRepository };
 export default app;
 

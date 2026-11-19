@@ -85,6 +85,9 @@ const FORBIDDEN_SECRET_KEY_PATTERNS = [
   /authorization_code/i,
   /session_cookie/i,
   /api[_-]?key/i,
+  /user_?email/i,
+  /user_?name/i,
+  /(?:^|_)email$/i,
 ];
 
 const KNOWN_SECRET_VALUE_PATTERNS = [
@@ -94,6 +97,7 @@ const KNOWN_SECRET_VALUE_PATTERNS = [
   /AIza[0-9A-Za-z-_]{35}/, // Google API key
   /ya29\.[0-9A-Za-z-_]+/, // Google access token
   /sk_live_[0-9a-zA-Z]{24}/, // Stripe / API key
+  /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/, // Plaintext email address
 ];
 
 /**
@@ -143,10 +147,11 @@ export function validateSanitizedRecord(obj: unknown, path = ''): { valid: boole
 }
 
 /**
- * Creates a non-reversible cryptographic hash for principal reporting.
+ * Creates a non-reversible cryptographic pseudonymous identifier for principal reporting using keyed HMAC.
  */
-export function hashPrincipalIdentifier(identifier: string, salt = 'aira_auth_salt_2026'): string {
-  return crypto.createHash('sha256').update(`${salt}:${identifier}`).digest('hex');
+export function hashPrincipalIdentifier(identifier: string, keyOverride?: string): string {
+  const key = keyOverride || process.env.AIRA_EVIDENCE_HMAC_KEY || 'aira_auth_salt_2026';
+  return crypto.createHmac('sha256', key).update(identifier).digest('hex');
 }
 
 /**
