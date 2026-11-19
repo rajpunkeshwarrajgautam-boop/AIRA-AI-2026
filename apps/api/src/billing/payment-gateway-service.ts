@@ -446,10 +446,21 @@ export class PaymentGatewayService {
       });
 
     // 3. Execute business fulfillment inside an isolated transaction
+    // Atomically commit business mutations AND payment_gateway_events.processed inside trx
     let fulfillmentError: any = null;
     try {
       await knex.transaction(async (trx) => {
         await this.handleGatewayEvent(gateway, eventType, payload, trx);
+
+        currentPayload._lifecycle.state = 'PROCESSED';
+        currentPayload._lifecycle.processedAt = Date.now();
+        await trx('payment_gateway_events')
+          .where({ event_id: eventId })
+          .update({
+            processed: true,
+            error: null,
+            payload: JSON.stringify(currentPayload)
+          });
       });
     } catch (err: any) {
       fulfillmentError = err;
@@ -472,17 +483,6 @@ export class PaymentGatewayService {
 
       throw fulfillmentError;
     }
-
-    // Fulfillment succeeded: record PROCESSED state
-    currentPayload._lifecycle.state = 'PROCESSED';
-    currentPayload._lifecycle.processedAt = Date.now();
-    await knex('payment_gateway_events')
-      .where({ event_id: eventId })
-      .update({
-        processed: true,
-        error: null,
-        payload: JSON.stringify(currentPayload)
-      });
 
     return { status: 'PROCESSED', eventId, duplicate: false };
   }
@@ -594,6 +594,22 @@ export class PaymentGatewayService {
       const paymentEntity = payload.payload?.payment?.entity || payload.payment || payload.data?.payment || {};
       const orderEntity = payload.payload?.order?.entity || payload.order || payload.data?.order || {};
 
+      const actualPaymentId = paymentEntity.id ||
+        paymentEntity.cf_payment_id ||
+        payload.data?.payment?.cf_payment_id ||
+        payload.data?.payment?.payment_id ||
+        invoiceEntity.payment_id;
+
+      const cycleNumber = subEntity.paid_count !== undefined ? Number(subEntity.paid_count)
+        : subEntity.current_cycle !== undefined ? Number(subEntity.current_cycle)
+        : payload.data?.subscription?.current_cycle !== undefined ? Number(payload.data?.subscription?.current_cycle)
+        : undefined;
+
+      const explicitPeriodStart = subEntity.current_start ? Number(subEntity.current_start) * 1000
+        : (invoiceEntity.billing_start ? Number(invoiceEntity.billing_start) * 1000 : undefined);
+      const explicitPeriodEnd = subEntity.current_end ? Number(subEntity.current_end) * 1000
+        : (invoiceEntity.billing_end ? Number(invoiceEntity.billing_end) * 1000 : undefined);
+
       const gatewayOrderId = subEntity.id ||
         subEntity.subscription_id ||
         payload.data?.subscription?.subscription_id ||
@@ -690,25 +706,84 @@ export class PaymentGatewayService {
       }
 
       const plan = COMMERCIAL_PLANS[planTier] || COMMERCIAL_PLANS.plus;
-      const periodStart = subEntity.current_start ? Number(subEntity.current_start) * 1000 : now;
-      const periodEnd = subEntity.current_end ? Number(subEntity.current_end) * 1000 : now + 30 * 24 * 60 * 60 * 1000;
+
+      // Deterministic fulfillment operation ID based on immutable gateway evidence
+      const fulfillmentOpId = actualPaymentId
+        ? `${gateway}:sub:${purchaseRecord.id}:pay:${actualPaymentId}`
+        : cycleNumber !== undefined
+        ? `${gateway}:sub:${purchaseRecord.id}:cycle:${cycleNumber}`
+        : explicitPeriodEnd !== undefined
+        ? `${gateway}:sub:${purchaseRecord.id}:period:${explicitPeriodEnd}`
+        : `${gateway}:sub:${purchaseRecord.id}:act:${gatewayOrderId}`;
+
+      // Check durable idempotency table before any state modification
+      try {
+        const existingOp = await trx('idempotent_operations')
+          .where({ principal_id: principalId, operation_id: fulfillmentOpId })
+          .first();
+        if (existingOp && existingOp.status === 'COMPLETED') {
+          return;
+        }
+      } catch {}
 
       // 3. Idempotent fulfillment vs Renewal logic
       if (purchaseRecord.status === 'active') {
-        const isNewRenewalPeriod = periodEnd > Number(purchaseRecord.current_period_end);
-        if (!isNewRenewalPeriod) {
-          // Already fulfilled for this exact billing cycle: return cleanly without duplicate credit grants
+        // Fast duplicate check against previously recorded payment ID
+        if (actualPaymentId && (actualPaymentId === meta.lastPaymentId || actualPaymentId === meta.initialPaymentId)) {
           return;
         }
 
-        // Legitimate Renewal: update billing period and grant new cycle credits
+        // Fast duplicate check against previously fulfilled cycle number
+        if (cycleNumber !== undefined && cycleNumber <= (meta.fulfilledCycle || 1)) {
+          return;
+        }
+
+        // Fast duplicate check against previously recorded billing period end
+        if (explicitPeriodEnd !== undefined && explicitPeriodEnd <= Number(purchaseRecord.current_period_end)) {
+          return;
+        }
+
+        // Authoritative renewal evidence verification
+        const hasRenewalEvidence = Boolean(
+          (explicitPeriodEnd && explicitPeriodEnd > Number(purchaseRecord.current_period_end)) ||
+          (cycleNumber !== undefined && cycleNumber > (meta.fulfilledCycle || 1)) ||
+          (actualPaymentId && actualPaymentId !== meta.lastPaymentId && actualPaymentId !== meta.initialPaymentId)
+        );
+
+        const isClaimedRenewalEvent = Boolean(
+          eventType === 'subscription.renewed' ||
+          eventType === 'subscription.charged' ||
+          eventType === 'SUBSCRIPTION_CHARGED' ||
+          eventType === 'SUBSCRIPTION_PAYMENT_SUCCESS'
+        );
+
+        if (!hasRenewalEvidence) {
+          if (isClaimedRenewalEvent) {
+            throw new TerminalRejectionError('BILLING_RECONCILIATION_FAILED: Subscription renewal event lacks authoritative cycle or payment evidence.');
+          }
+          // Generic webhook event (e.g. redelivered order.paid) on already active subscription: idempotent no-op
+          return;
+        }
+
+        // Legitimate Renewal: anchor period strictly to previous current_period_end (never Date.now() + 30 days)
+        const periodStart = explicitPeriodStart || Number(purchaseRecord.current_period_end);
+        const periodEnd = explicitPeriodEnd || (Number(purchaseRecord.current_period_end) + 30 * 24 * 60 * 60 * 1000);
+
+        const newFulfilledCycle = cycleNumber !== undefined ? cycleNumber : ((meta.fulfilledCycle || 1) + 1);
+        meta.fulfilledCycle = newFulfilledCycle;
+        if (actualPaymentId) {
+          meta.lastPaymentId = actualPaymentId;
+        }
+
         await trx('subscriptions').where({ id: purchaseRecord.id }).update({
           current_period_start: periodStart,
           current_period_end: periodEnd,
           cancel_at_period_end: false,
+          metadata: JSON.stringify(meta),
           updated_at: now
         });
 
+        const renewalGrantId = `grant_${fulfillmentOpId}`;
         if (!this.customDbClient) {
           await commercialBillingService.grantCredits(
             principalId,
@@ -716,10 +791,38 @@ export class PaymentGatewayService {
             'subscription_monthly',
             periodEnd,
             plan.monthlyPremiumCredits * 2,
-            { gatewayOrderId, eventType, purchaseId: purchaseRecord.id, isRenewal: true },
+            {
+              gatewayOrderId,
+              eventType,
+              purchaseId: purchaseRecord.id,
+              isRenewal: true,
+              cycleNumber: newFulfilledCycle,
+              actualPaymentId,
+              idempotencyKey: renewalGrantId
+            },
             trx
           );
         }
+
+        try {
+          let ins = trx('idempotent_operations').insert({
+            key: `${principalId}:${fulfillmentOpId}`,
+            principal_id: principalId,
+            operation_id: fulfillmentOpId,
+            operation_type: 'subscription_renewal',
+            payload_hash: '',
+            status: 'COMPLETED',
+            response_status: 200,
+            response_body: JSON.stringify({ status: 'FULFILLED', purchaseId: purchaseRecord.id, cycle: newFulfilledCycle }),
+            locked_until: 0,
+            created_at: now,
+            updated_at: now
+          });
+          if (ins && typeof ins.onConflict === 'function') {
+            ins = ins.onConflict(['principal_id', 'operation_id']).ignore();
+          }
+          await ins;
+        } catch {}
 
         await trx('billing_audit_events').insert({
           id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
@@ -733,7 +836,9 @@ export class PaymentGatewayService {
             planTier,
             periodStart,
             periodEnd,
-            amount: expectedAmount
+            amount: expectedAmount,
+            cycleNumber: newFulfilledCycle,
+            actualPaymentId
           }),
           created_at: now
         });
@@ -742,25 +847,63 @@ export class PaymentGatewayService {
       }
 
       // Initial Activation (transition from pending -> active)
+      const initialPeriodStart = explicitPeriodStart || now;
+      const initialPeriodEnd = explicitPeriodEnd || (initialPeriodStart + 30 * 24 * 60 * 60 * 1000);
+
+      meta.fulfilledCycle = cycleNumber || 1;
+      if (actualPaymentId) {
+        meta.initialPaymentId = actualPaymentId;
+        meta.lastPaymentId = actualPaymentId;
+      }
+
       await trx('subscriptions').where({ id: purchaseRecord.id }).update({
         status: 'active',
-        current_period_start: periodStart,
-        current_period_end: periodEnd,
+        current_period_start: initialPeriodStart,
+        current_period_end: initialPeriodEnd,
         cancel_at_period_end: false,
+        metadata: JSON.stringify(meta),
         updated_at: now
       });
 
+      const initialGrantId = `grant_${fulfillmentOpId}`;
       if (!this.customDbClient) {
         await commercialBillingService.grantCredits(
           principalId,
           plan.monthlyPremiumCredits,
           'subscription_monthly',
-          periodEnd,
+          initialPeriodEnd,
           plan.monthlyPremiumCredits * 2,
-          { gatewayOrderId, eventType, purchaseId: purchaseRecord.id },
+          {
+            gatewayOrderId,
+            eventType,
+            purchaseId: purchaseRecord.id,
+            actualPaymentId,
+            cycleNumber: meta.fulfilledCycle,
+            idempotencyKey: initialGrantId
+          },
           trx
         );
       }
+
+      try {
+        let ins = trx('idempotent_operations').insert({
+          key: `${principalId}:${fulfillmentOpId}`,
+          principal_id: principalId,
+          operation_id: fulfillmentOpId,
+          operation_type: 'subscription_activation',
+          payload_hash: '',
+          status: 'COMPLETED',
+          response_status: 200,
+          response_body: JSON.stringify({ status: 'FULFILLED', purchaseId: purchaseRecord.id, cycle: meta.fulfilledCycle }),
+          locked_until: 0,
+          created_at: now,
+          updated_at: now
+        });
+        if (ins && typeof ins.onConflict === 'function') {
+          ins = ins.onConflict(['principal_id', 'operation_id']).ignore();
+        }
+        await ins;
+      } catch {}
 
       await trx('billing_audit_events').insert({
         id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
@@ -774,8 +917,9 @@ export class PaymentGatewayService {
           planTier,
           currency: purchaseRecord.currency,
           amount: purchaseRecord.amount_minor_units,
-          periodStart,
-          periodEnd
+          periodStart: initialPeriodStart,
+          periodEnd: initialPeriodEnd,
+          actualPaymentId
         }),
         created_at: now
       });
@@ -849,10 +993,6 @@ export class PaymentGatewayService {
         throw new TerminalRejectionError(`FRAUD_CHECK_FAILED: Amount mismatch for top-up. Expected ${expectedAmount}, received ${receivedAmount}`);
       }
 
-      if (purchaseRecord.status === 'active') {
-        return; // Prevent duplicate top-up credit grants
-      }
-
       let meta: any = {};
       try {
         meta = typeof purchaseRecord.metadata === 'string' ? JSON.parse(purchaseRecord.metadata) : (purchaseRecord.metadata || {});
@@ -866,11 +1006,28 @@ export class PaymentGatewayService {
         throw new TerminalRejectionError(`BILLING_RECONCILIATION_FAILED: Invalid top-up metadata or unapproved packId: ${packId}`);
       }
 
+      const actualPaymentId = paymentEntity.id || paymentEntity.cf_payment_id || payload.data?.payment?.cf_payment_id || payload.data?.payment?.payment_id;
+      const topupFulfillmentOpId = actualPaymentId ? `${gateway}:topup:pay:${actualPaymentId}` : `${gateway}:topup:${purchaseRecord.id}`;
+
+      try {
+        const existingTopupOp = await trx('idempotent_operations')
+          .where({ principal_id: principalId, operation_id: topupFulfillmentOpId })
+          .first();
+        if (existingTopupOp && existingTopupOp.status === 'COMPLETED') {
+          return;
+        }
+      } catch {}
+
+      if (purchaseRecord.status === 'active') {
+        return; // Prevent duplicate top-up credit grants
+      }
+
       await trx('subscriptions').where({ id: purchaseRecord.id }).update({
         status: 'active',
         updated_at: now
       });
 
+      const topupGrantId = `grant_${topupFulfillmentOpId}`;
       if (!this.customDbClient) {
         await commercialBillingService.grantCredits(
           principalId,
@@ -878,10 +1035,30 @@ export class PaymentGatewayService {
           'purchased_topup',
           undefined,
           0,
-          { paymentId: gatewayOrderId, packId: pack.id, purchaseId: purchaseRecord.id },
+          { paymentId: gatewayOrderId, packId: pack.id, purchaseId: purchaseRecord.id, actualPaymentId, idempotencyKey: topupGrantId },
           trx
         );
       }
+
+      try {
+        let ins = trx('idempotent_operations').insert({
+          key: `${principalId}:${topupFulfillmentOpId}`,
+          principal_id: principalId,
+          operation_id: topupFulfillmentOpId,
+          operation_type: 'credit_topup',
+          payload_hash: '',
+          status: 'COMPLETED',
+          response_status: 200,
+          response_body: JSON.stringify({ status: 'FULFILLED', packId: pack.id, credits: pack.credits }),
+          locked_until: 0,
+          created_at: now,
+          updated_at: now
+        });
+        if (ins && typeof ins.onConflict === 'function') {
+          ins = ins.onConflict(['principal_id', 'operation_id']).ignore();
+        }
+        await ins;
+      } catch {}
 
       await trx('billing_audit_events').insert({
         id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,

@@ -974,7 +974,7 @@ export class CommercialBillingService {
         amount_credits: allowedGrant,
         balance_before: currentBalance,
         balance_after: newBalance,
-        idempotency_key: `grant_${grantId}`,
+        idempotency_key: metadata.idempotencyKey || `grant_${grantId}`,
         description: `Credit Grant (${grantType})`,
         metadata: JSON.stringify({ grantId, requestedAmount: amountCredits, allowedGrant, ...metadata }),
         created_at: now
