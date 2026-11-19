@@ -813,7 +813,7 @@ export class AgentRuntime extends EventEmitter {
       }
 
       try {
-        const pLower = run.prompt.toLowerCase();
+        const pLower = (run.prompt || '').toLowerCase();
         let cronExpr = '0 9 * * 1';
         let name = 'Scheduled Automation';
 
@@ -827,7 +827,7 @@ export class AgentRuntime extends EventEmitter {
           cronExpr = '0 * * * *';
           name = 'Hourly Update';
         } else {
-          name = `Automation: ${run.prompt.slice(0, 36)}`;
+          name = `Automation: ${(run.prompt || '').slice(0, 36)}`;
         }
 
         const autoDef = await this.automationEngine.createAutomation({
@@ -837,7 +837,7 @@ export class AgentRuntime extends EventEmitter {
           trigger: 'CRON',
           cronExpression: cronExpr,
           agentId: 'agent-default',
-          objective: run.prompt,
+          objective: run.prompt || '',
           conditions: {},
           approvalPolicy: 'autonomous'
         });
@@ -874,7 +874,7 @@ export class AgentRuntime extends EventEmitter {
           roles: ['user'],
           workspaceId: run.workspaceId || undefined
         };
-        const wfDef = await this.workflowCompiler.compile(run.prompt, principal);
+        const wfDef = await this.workflowCompiler.compile(run.prompt || '', principal);
         wfRun = await this.workflowEngine.createWorkflowRun(wfDef, run, principal);
         run.executionCheckpoint = 'WORKFLOW_RUNNING';
         await this.saveRun(run);
@@ -903,25 +903,27 @@ export class AgentRuntime extends EventEmitter {
     
     // Checkpoint 1: Knowledge Search Context
     if (!run.executionCheckpoint) {
+      const promptText = run.prompt || '';
+      const pLower = promptText.toLowerCase();
       const isResearchIntent = run.intent === 'RESEARCH';
       const isAgentMissionWithResearch = run.intent === 'AGENT_MISSION' && (
-        run.prompt.toLowerCase().includes('latest') ||
-        run.prompt.toLowerCase().includes('recent') ||
-        run.prompt.toLowerCase().includes('compare the sources') ||
-        run.prompt.toLowerCase().includes('sources') ||
-        run.prompt.toLowerCase().includes('research')
+        pLower.includes('latest') ||
+        pLower.includes('recent') ||
+        pLower.includes('compare the sources') ||
+        pLower.includes('sources') ||
+        pLower.includes('research')
       );
 
       if (isResearchIntent || isAgentMissionWithResearch) {
         const detectedSubject = run.routingDecision?.metadata?.detectedSubject;
         const topic = run.routingDecision?.metadata?.topic;
-        const researchPrompt = detectedSubject && topic === 'FINANCIAL' && !/\b(?:share|stock|price|quote|trading)\b/i.test(run.prompt)
+        const researchPrompt = detectedSubject && topic === 'FINANCIAL' && !/\b(?:share|stock|price|quote|trading)\b/i.test(promptText)
           ? `${detectedSubject} current share price stock quote premarket regular market timestamp`
-          : detectedSubject && topic === 'WEATHER' && !/\b(?:weather|forecast|temperature)\b/i.test(run.prompt)
+          : detectedSubject && topic === 'WEATHER' && !/\b(?:weather|forecast|temperature)\b/i.test(promptText)
           ? `${detectedSubject} weather today current conditions forecast`
-          : detectedSubject && topic === 'BOX_OFFICE' && !/\b(?:box\s+office|gross|collection)\b/i.test(run.prompt)
+          : detectedSubject && topic === 'BOX_OFFICE' && !/\b(?:box\s+office|gross|collection)\b/i.test(promptText)
           ? `${detectedSubject} box office worldwide gross Box Office Mojo The Numbers`
-          : run.prompt;
+          : promptText;
 
         const researchResult = await this.researchService.executeResearch({
           prompt: researchPrompt,
@@ -959,7 +961,7 @@ export class AgentRuntime extends EventEmitter {
         }
       } else if (run.intent === 'RESEARCH' || run.context?.knowledgeSearchRequested) {
         const scope = run.principalId ? { principalId: run.principalId, workspaceId: run.workspaceId || undefined, isSystem: false } : undefined;
-        const knowledgeResults = await this.knowledgeEngine.search(run.prompt, 3, scope);
+        const knowledgeResults = await this.knowledgeEngine.search(promptText, 3, scope);
         run.citations = knowledgeResults.map(r => r.citation);
       } else {
         run.citations = [];
@@ -979,12 +981,14 @@ export class AgentRuntime extends EventEmitter {
       const isAgentMission = run.intent === 'AGENT_MISSION';
 
       if (isToolAction || isAgentMission) {
+        const promptText = run.prompt || '';
+        const pLower = promptText.toLowerCase();
         if (
-          run.prompt.toLowerCase().includes('mouse click') ||
-          run.prompt.toLowerCase().includes('desktop screen') ||
-          run.prompt.toLowerCase().includes('desktop coordinate') ||
-          run.prompt.toLowerCase().includes('computer use') ||
-          run.prompt.toLowerCase().includes('os control')
+          pLower.includes('mouse click') ||
+          pLower.includes('desktop screen') ||
+          pLower.includes('desktop coordinate') ||
+          pLower.includes('computer use') ||
+          pLower.includes('os control')
         ) {
           const msg = 'COMPUTER_USE_NOT_AVAILABLE: Native desktop and OS control runtime is not available in the current environment. Browser-based navigation is supported via browser tools.';
           run.content = msg;
@@ -996,66 +1000,66 @@ export class AgentRuntime extends EventEmitter {
         }
 
         let selectedToolName = 'web_search';
-        let selectedArgs: Record<string, unknown> = { query: run.prompt };
+        let selectedArgs: Record<string, unknown> = { query: promptText };
 
-        const urlMatch = run.prompt.match(/https?:\/\/[^\s"'<>]+/);
-        if (urlMatch && run.prompt.toLowerCase().includes('screenshot')) {
+        const urlMatch = promptText.match(/https?:\/\/[^\s"'<>]+/);
+        if (urlMatch && pLower.includes('screenshot')) {
           selectedToolName = 'browser_screenshot';
           selectedArgs = { url: urlMatch[0] };
         } else if (urlMatch) {
           selectedToolName = 'browser_navigate';
           selectedArgs = { url: urlMatch[0] };
-        } else if (run.prompt.toLowerCase().includes('form') && (run.prompt.toLowerCase().includes('populate') || run.prompt.toLowerCase().includes('fill') || run.prompt.toLowerCase().includes('submit'))) {
+        } else if (pLower.includes('form') && (pLower.includes('populate') || pLower.includes('fill') || pLower.includes('submit'))) {
           selectedToolName = 'browser_type';
           selectedArgs = { selector: 'form input', text: 'AIRA 2026 Test' };
-        } else if (run.prompt.toLowerCase().includes('github') && run.prompt.toLowerCase().includes('commit')) {
+        } else if (pLower.includes('github') && pLower.includes('commit')) {
           selectedToolName = 'repo_git_log';
           selectedArgs = { count: 1 };
         } else if (
-          isAgentMission && (run.prompt.toLowerCase().includes('workspace') || run.prompt.toLowerCase().includes('inspect'))
+          isAgentMission && (pLower.includes('workspace') || pLower.includes('inspect'))
         ) {
-          const fileMatch = run.prompt.match(/(?:read|inspect|structure|analyze|view)\s+([a-zA-Z0-9_\-./\\]+\.[a-zA-Z0-9]+)/i);
-          const targetPath = fileMatch ? fileMatch[1].trim() : (run.prompt.toLowerCase().includes('src/app.tsx') ? 'src/App.tsx' : 'package.json');
+          const fileMatch = promptText.match(/(?:read|inspect|structure|analyze|view)\s+([a-zA-Z0-9_\-./\\]+\.[a-zA-Z0-9]+)/i);
+          const targetPath = fileMatch ? fileMatch[1].trim() : (pLower.includes('src/app.tsx') ? 'src/App.tsx' : 'package.json');
           selectedToolName = 'file_system_read';
           selectedArgs = { filePath: targetPath };
-        } else if (run.prompt.toLowerCase().includes('git status') || run.prompt.toLowerCase().includes('repo status')) {
+        } else if (pLower.includes('git status') || pLower.includes('repo status')) {
           selectedToolName = 'repo_git_status';
           selectedArgs = {};
-        } else if (extractCalculatorExpression(run.prompt)) {
-          const calcExpr = extractCalculatorExpression(run.prompt);
+        } else if (extractCalculatorExpression(promptText)) {
+          const calcExpr = extractCalculatorExpression(promptText);
           selectedToolName = 'calculator';
           selectedArgs = { expression: calcExpr };
         } else if (
           run.routingDecision?.sideEffectLevel === 'DESTRUCTIVE' ||
-          run.prompt.toLowerCase().includes('shell') ||
-          run.prompt.toLowerCase().includes('run command') ||
-          run.prompt.toLowerCase().includes('rm -rf') ||
-          run.prompt.toLowerCase().includes('delete') ||
-          run.prompt.toLowerCase().includes('drop')
+          pLower.includes('shell') ||
+          pLower.includes('run command') ||
+          pLower.includes('rm -rf') ||
+          pLower.includes('delete') ||
+          pLower.includes('drop')
         ) {
           selectedToolName = 'system_shell';
-          selectedArgs = { command: run.prompt };
+          selectedArgs = { command: promptText };
         } else if (
-          run.prompt.toLowerCase().includes('list') &&
-          (run.prompt.toLowerCase().includes('src/') || run.prompt.toLowerCase().includes('files in') || run.prompt.toLowerCase().includes('directory'))
+          pLower.includes('list') &&
+          (pLower.includes('src/') || pLower.includes('files in') || pLower.includes('directory'))
         ) {
-          const dirMatch = run.prompt.match(/(?:list|files in|directory)\s+([a-zA-Z0-9_\-./\\]+)/i);
+          const dirMatch = promptText.match(/(?:list|files in|directory)\s+([a-zA-Z0-9_\-./\\]+)/i);
           selectedToolName = 'file_system_list';
           selectedArgs = { directoryPath: dirMatch ? dirMatch[1].trim() : 'src' };
         } else if (
-          run.prompt.toLowerCase().includes('read') ||
-          run.prompt.toLowerCase().includes('inspect') ||
-          run.prompt.toLowerCase().includes('structure') ||
-          run.prompt.toLowerCase().includes('analyze')
+          pLower.includes('read') ||
+          pLower.includes('inspect') ||
+          pLower.includes('structure') ||
+          pLower.includes('analyze')
         ) {
-          const fileMatch = run.prompt.match(/(?:read|inspect|structure|analyze|view)\s+([a-zA-Z0-9_\-./\\]+\.[a-zA-Z0-9]+)/i);
-          const targetPath = fileMatch ? fileMatch[1].trim() : (run.prompt.toLowerCase().includes('src/app.tsx') ? 'src/App.tsx' : 'package.json');
+          const fileMatch = promptText.match(/(?:read|inspect|structure|analyze|view)\s+([a-zA-Z0-9_\-./\\]+\.[a-zA-Z0-9]+)/i);
+          const targetPath = fileMatch ? fileMatch[1].trim() : (pLower.includes('src/app.tsx') ? 'src/App.tsx' : 'package.json');
           selectedToolName = 'file_system_read';
           selectedArgs = { filePath: targetPath };
-        } else if (run.prompt.toLowerCase().includes('hang safe')) {
+        } else if (pLower.includes('hang safe')) {
           selectedToolName = 'hang_safe';
           selectedArgs = {};
-        } else if (run.prompt.toLowerCase().includes('hang unsafe')) {
+        } else if (pLower.includes('hang unsafe')) {
           selectedToolName = 'hang_unsafe';
           selectedArgs = {};
         }
@@ -1315,7 +1319,7 @@ export class AgentRuntime extends EventEmitter {
         // Bounded iterative loop for AGENT_MISSION (up to 3 steps)
         // Strictly condition repository tool selection on explicit repository intent AND principal authorization.
         // Calculator missions or non-repository missions must never request repository tools.
-        const isRepoMission = isRepositoryIntent(run.prompt);
+        const isRepoMission = isRepositoryIntent(run.prompt || '');
         const hasRepoScope = (run.principalScopes || []).includes('repo.read') || (run.principalScopes || []).includes('*');
 
         if (run.intent === 'AGENT_MISSION' && isRepoMission && hasRepoScope && run.stepCount < 3) {
@@ -1372,12 +1376,12 @@ export class AgentRuntime extends EventEmitter {
 
       const explicitlyRequestsMemorySearch = Boolean(
         run.context?.knowledgeSearchRequested ||
-        /\b(?:remember|recall|previous conversation|earlier conversation|last time|what did I say|past session)\b/i.test(run.prompt)
+        /\b(?:remember|recall|previous conversation|earlier conversation|last time|what did I say|past session)\b/i.test(run.prompt || '')
       );
 
       if (!isFastNormalChat || explicitlyRequestsMemorySearch) {
         try {
-          const priorRuns = await this.runRepo.searchRunsForPrincipal(run.principalId, run.prompt, 4);
+          const priorRuns = await this.runRepo.searchRunsForPrincipal(run.principalId, run.prompt || '', 4);
           const otherRuns = priorRuns.filter(r => r.id !== runId && r.state === 'COMPLETED' && r.content);
           if (otherRuns.length > 0) {
             durablePastHistory = otherRuns.map(r => {
@@ -1394,13 +1398,13 @@ export class AgentRuntime extends EventEmitter {
       const adaptiveSynthesizer = new AdaptiveSynthesizer();
 
       const resolvedInstructions = instructionResolver.resolve({
-        userPrompt: run.prompt,
+        userPrompt: run.prompt || '',
         activeProjectId: run.projectId || undefined,
         activeUserId: run.principalId,
         customInstructions: run.systemPrompt
       });
 
-      const writingProfile = adaptiveSynthesizer.deriveProfile(run.prompt, resolvedInstructions);
+      const writingProfile = adaptiveSynthesizer.deriveProfile(run.prompt || '', resolvedInstructions);
       const systemDirective = adaptiveSynthesizer.buildSystemDirective(writingProfile);
 
       const isAgentMode = run.intent === 'AGENT_MISSION' || run.intent === 'WORKFLOW';
@@ -1416,7 +1420,7 @@ export class AgentRuntime extends EventEmitter {
 
       const composedPromptResult = this.promptComposer.compose({
         mode: promptMode,
-        userPrompt: run.prompt,
+        userPrompt: run.prompt || '',
         customInstructions: run.systemPrompt,
         activeProjectId: run.projectId || undefined,
         authorizedTools: authorizedToolList
@@ -1433,7 +1437,7 @@ export class AgentRuntime extends EventEmitter {
           content: buildDurableHistorySystemMessage(
             run.principalId,
             durablePastHistory,
-            run.prompt
+            run.prompt || ''
           )
         });
       }
@@ -1503,7 +1507,7 @@ CAPABILITY & IDENTITY INVARIANTS:
         });
       }
       
-      messages.push({ role: 'user', content: run.prompt });
+      messages.push({ role: 'user', content: run.prompt || '' });
       // TOOL_ACTION web searches must use the same guarded synthesis as RESEARCH.
       const executedSearchEvidence = verifiedSearchCitationsFromToolResults(run.toolCalls, run.toolResults);
       const liveEvidence = verifiedWebCitations([...(run.citations || []), ...executedSearchEvidence]);
@@ -1778,16 +1782,17 @@ CAPABILITY & IDENTITY INVARIANTS:
         await this.emitRunEvent(runId, 'artifact.created', artifact);
       } else if (run.intent === 'AGENT_MISSION') {
         const artId = `art_mission_${Date.now()}`;
+        const pText = run.prompt || '';
         const artifact: Artifact = {
           id: artId,
           runId,
-          title: `Mission Report: ${run.prompt.slice(0, 36)}`,
+          title: `Mission Report: ${pText.slice(0, 36)}`,
           type: 'text/markdown',
-          content: `# Mission Execution Summary\n\n**Objective**: ${run.prompt}\n\n**Outcome**: ${run.content}\n\n**Status**: COMPLETED`,
+          content: `# Mission Execution Summary\n\n**Objective**: ${pText}\n\n**Outcome**: ${run.content}\n\n**Status**: COMPLETED`,
           version: 1,
           versions: [{
             version: 1,
-            content: `# Mission Execution Summary\n\n**Objective**: ${run.prompt}\n\n**Outcome**: ${run.content}\n\n**Status**: COMPLETED`,
+            content: `# Mission Execution Summary\n\n**Objective**: ${pText}\n\n**Outcome**: ${run.content}\n\n**Status**: COMPLETED`,
             timestamp: Date.now()
           }]
         };

@@ -50,10 +50,8 @@ export class PostgresAgentRepository implements AgentRepository {
   async createAgentWithQuota(agent: AgentDefinition, principalId: string, limit: number): Promise<void> {
     await db.transaction(async (trx) => {
       // Advisory xact lock on hashed principalId strictly serializes quota check and insertion
-      // across multiple API instances without creating global table locks.
-      try {
-        await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [`agent_quota_${principalId}`]);
-      } catch {}
+      // across multiple API instances without creating global table locks. Fail closed on error.
+      await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [`agent_quota_${principalId}`]);
 
       const countRow = await trx('agents')
         .where({ principal_id: principalId })

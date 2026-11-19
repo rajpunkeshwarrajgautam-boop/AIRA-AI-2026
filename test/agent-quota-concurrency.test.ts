@@ -1,7 +1,8 @@
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'crypto';
-import { InMemoryAgentRepository } from '../packages/agent-runtime/src/repositories.js';
+import { InMemoryAgentRepository, PostgresAgentRepository } from '../packages/agent-runtime/src/repositories.js';
+import { db } from '../packages/db/src/index.js';
 import type { AgentDefinition } from '../packages/agent-runtime/src/types.js';
 
 describe('Remediation F7: Saved-Agent Quota Concurrency & Atomic Limits', () => {
@@ -114,5 +115,76 @@ describe('Remediation F7: Saved-Agent Quota Concurrency & Atomic Limits', () => 
     assert.equal(remaining.length, quotaLimit);
     assert.ok(remaining.some(a => a.id === agent3.id));
     assert.ok(!remaining.some(a => a.id === agent1.id));
+  });
+
+  it('PostgreSQL integration: strictly limits concurrent bursts with advisory locks and per-principal isolation', async () => {
+    let hasPostgres = false;
+    try {
+      await db.raw('SELECT 1');
+      hasPostgres = true;
+    } catch {
+      hasPostgres = false;
+    }
+
+    if (!hasPostgres) {
+      if (process.env.CI === 'true') {
+        throw new Error('Real PostgreSQL must be accessible in CI for quota concurrency certification.');
+      }
+      console.log('  [SKIP] Live PostgreSQL not reachable locally; skipping PostgreSQL quota concurrency test.');
+      return;
+    }
+
+    const pgRepo = new PostgresAgentRepository();
+    const principalA = `usr_test_a_${crypto.randomUUID().slice(0, 8)}`;
+    const principalB = `usr_test_b_${crypto.randomUUID().slice(0, 8)}`;
+    const limitA = 3;
+    const limitB = 2;
+    const burstCount = 15;
+
+    try {
+      // Launch 15 concurrent creations for User A and 15 for User B simultaneously
+      const batchA = Array.from({ length: burstCount }, (_, i) =>
+        pgRepo.createAgentWithQuota(makeAgentDef(principalA, `PG Agent A-${i}`), principalA, limitA)
+      );
+      const batchB = Array.from({ length: burstCount }, (_, i) =>
+        pgRepo.createAgentWithQuota(makeAgentDef(principalB, `PG Agent B-${i}`), principalB, limitB)
+      );
+
+      const [resultsA, resultsB] = await Promise.all([
+        Promise.allSettled(batchA),
+        Promise.allSettled(batchB)
+      ]);
+
+      const succeededA = resultsA.filter(r => r.status === 'fulfilled');
+      const failedA = resultsA.filter(r => r.status === 'rejected');
+      const succeededB = resultsB.filter(r => r.status === 'fulfilled');
+      const failedB = resultsB.filter(r => r.status === 'rejected');
+
+      assert.equal(succeededA.length, limitA, `Principal A must have exactly ${limitA} creations succeed out of ${burstCount}`);
+      assert.equal(failedA.length, burstCount - limitA, `Principal A must have exactly ${burstCount - limitA} creations rejected`);
+      assert.equal(succeededB.length, limitB, `Principal B must have exactly ${limitB} creations succeed out of ${burstCount}`);
+      assert.equal(failedB.length, burstCount - limitB, `Principal B must have exactly ${burstCount - limitB} creations rejected`);
+
+      for (const rej of [...failedA, ...failedB]) {
+        if (rej.status === 'rejected') {
+          assert.equal((rej.reason as any).name, 'AgentLimitExceededError');
+          assert.match((rej.reason as any).message, /Maximum agent limit/);
+        }
+      }
+
+      // Assert database agents table persists exactly 3 and 2 rows
+      const dbRowsA = await db('agents').where({ principal_id: principalA });
+      const dbRowsB = await db('agents').where({ principal_id: principalB });
+
+      assert.equal(dbRowsA.length, limitA, `Database table agents must persist exactly ${limitA} rows for Principal A`);
+      assert.equal(dbRowsB.length, limitB, `Database table agents must persist exactly ${limitB} rows for Principal B`);
+    } finally {
+      // Clean up test data
+      await db('agents').whereIn('principal_id', [principalA, principalB]).delete().catch(() => {});
+    }
+  });
+
+  after(async () => {
+    await db.destroy().catch(() => {});
   });
 });
