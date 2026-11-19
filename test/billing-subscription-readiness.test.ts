@@ -214,12 +214,15 @@ describe('F1 — Plus/Pro Billing Integration and Subscription Readiness', () =>
       const mockDb = createMockBillingDb();
       const gateway = new PaymentGatewayService();
       gateway.setDbClient(mockDb);
+      gateway.setRazorpaySecret(testSecret);
 
       const origBillingEnabled = process.env.AIRA_COMMERCIAL_BILLING_ENABLED;
+      const origTestFulfillment = process.env.AIRA_ENABLE_TEST_FULFILLMENT;
       const origKeyId = process.env.RAZORPAY_KEY_ID;
 
       try {
         process.env.AIRA_COMMERCIAL_BILLING_ENABLED = 'true';
+        process.env.AIRA_ENABLE_TEST_FULFILLMENT = 'true';
         delete process.env.RAZORPAY_KEY_ID;
         delete process.env.CASHFREE_APP_ID;
         delete process.env.AIRA_TEST_GATEWAY_KEY_ID;
@@ -237,13 +240,24 @@ describe('F1 — Plus/Pro Billing Integration and Subscription Readiness', () =>
 
         const checkout = await gateway.createSubscriptionCheckout('usr_buyer_1', 'plus', 'INR');
         assert.ok(checkout.orderId);
+        assert.ok(checkout.purchaseId);
         assert.equal(checkout.keyId, 'rzp_test_key_sample123');
         assert.equal(checkout.amount, 39900);
         assert.equal(checkout.currency, 'INR');
-        assert.match(checkout.checkoutUrl || '', /checkout\.aira\.ai/);
+        assert.equal(checkout.isSandbox, true);
+        // Invariant: No synthetic checkout URL presented as real
+        assert.equal(checkout.checkoutUrl, undefined);
+
+        // Verify authoritative database purchase record linking
+        const purchaseRecord = await mockDb('subscriptions').where({ id: checkout.purchaseId }).first();
+        assert.ok(purchaseRecord);
+        assert.equal(purchaseRecord.status, 'pending');
+        assert.equal(purchaseRecord.gateway_subscription_id, checkout.orderId);
+        assert.equal(purchaseRecord.amount_minor_units, 39900);
+        assert.equal(purchaseRecord.currency, 'INR');
 
         // Verify authoritative audit ledger event linking order to principal
-        const auditEvent = await mockDb('billing_audit_events').where({ customer_id: 'usr_buyer_1' }).first();
+        const auditEvent = await mockDb('billing_audit_events').where({ customer_id: purchaseRecord.customer_id }).first();
         assert.ok(auditEvent);
         assert.equal(auditEvent.event_type, 'CHECKOUT_ORDER_CREATED');
         assert.equal(auditEvent.actor_id, 'usr_buyer_1');
@@ -260,9 +274,126 @@ describe('F1 — Plus/Pro Billing Integration and Subscription Readiness', () =>
         const proCheckout = await gateway.createSubscriptionCheckout('usr_buyer_pro', 'pro', 'USD');
         assert.equal(proCheckout.amount, 1999);
         assert.equal(proCheckout.currency, 'USD');
+        assert.equal(proCheckout.isSandbox, true);
+        assert.equal(proCheckout.checkoutUrl, undefined);
+
+        // Test production pricing gating: in production mode, unapproved pricing fails closed
+        const origNodeEnv = process.env.NODE_ENV;
+        const origTestFulfillment = process.env.AIRA_ENABLE_TEST_FULFILLMENT;
+        try {
+          process.env.NODE_ENV = 'production';
+          delete process.env.AIRA_ENABLE_TEST_FULFILLMENT;
+
+          await assert.rejects(
+            async () => {
+              await gateway.createSubscriptionCheckout('usr_buyer_prod', 'plus', 'INR');
+            },
+            /BILLING_UNAVAILABLE: Production plan pricing for plus \(INR\) has not received documented owner approval/
+          );
+        } finally {
+          process.env.NODE_ENV = origNodeEnv;
+          if (origTestFulfillment !== undefined) process.env.AIRA_ENABLE_TEST_FULFILLMENT = origTestFulfillment;
+        }
+
+        // Test legitimate webhook reconciliation against authoritative purchase record
+        const webhookEventId = `evt_recon_${Date.now()}`;
+        const webhookPayload = {
+          event_id: webhookEventId,
+          event: 'subscription.charged',
+          payload: {
+            subscription: {
+              entity: {
+                id: checkout.orderId,
+                currency: 'INR',
+                amount: 39900
+              }
+            }
+          }
+        };
+        const rawBody = JSON.stringify(webhookPayload);
+        const signature = crypto.createHmac('sha256', testSecret).update(rawBody).digest('hex');
+
+        // Fulfillment reconciles with pre-existing pending purchase record
+        const reconResult = await gateway.processRazorpayWebhook(rawBody, signature);
+        assert.equal(reconResult.status, 'PROCESSED');
+
+        // Verify purchase record status transitioned to 'active'
+        const updatedPurchase = await mockDb('subscriptions').where({ id: checkout.purchaseId }).first();
+        assert.ok(updatedPurchase);
+        assert.equal(updatedPurchase.status, 'active');
+
+        // Test un-reconciled webhook (missing purchase record) is rejected
+        const fakeOrderId = `order_unreconciled_${Date.now()}`;
+        const badPayload = {
+          event_id: `evt_bad_${Date.now()}`,
+          event: 'subscription.charged',
+          payload: {
+            subscription: {
+              entity: {
+                id: fakeOrderId,
+                currency: 'INR',
+                amount: 39900
+              }
+            }
+          }
+        };
+        const badRaw = JSON.stringify(badPayload);
+        const badSig = crypto.createHmac('sha256', testSecret).update(badRaw).digest('hex');
+
+        await assert.rejects(
+          async () => {
+            await gateway.processRazorpayWebhook(badRaw, badSig);
+          },
+          /BILLING_RECONCILIATION_FAILED: No authoritative purchase record found/
+        );
+
+        // Test currency fraud detection
+        const fraudOrderId = `order_fraud_${Date.now()}`;
+        await mockDb('subscriptions').insert({
+          id: `pur_fraud_1`,
+          customer_id: 'cust_fraud_1',
+          plan_id: 'plus',
+          price_id: 'price_plus_inr',
+          status: 'pending',
+          gateway: 'razorpay',
+          gateway_subscription_id: fraudOrderId,
+          currency: 'INR',
+          amount_minor_units: 39900,
+          current_period_start: Date.now(),
+          current_period_end: Date.now(),
+          cancel_at_period_end: false,
+          metadata: JSON.stringify({ principalId: 'usr_fraud_target' }),
+          created_at: Date.now(),
+          updated_at: Date.now()
+        });
+
+        const fraudCurrencyPayload = {
+          event_id: `evt_fraud_curr_${Date.now()}`,
+          event: 'subscription.charged',
+          payload: {
+            subscription: {
+              entity: {
+                id: fraudOrderId,
+                currency: 'USD', // Fraudulent currency injection
+                amount: 39900
+              }
+            }
+          }
+        };
+        const fraudRaw = JSON.stringify(fraudCurrencyPayload);
+        const fraudSig = crypto.createHmac('sha256', testSecret).update(fraudRaw).digest('hex');
+
+        await assert.rejects(
+          async () => {
+            await gateway.processRazorpayWebhook(fraudRaw, fraudSig);
+          },
+          /FRAUD_CHECK_FAILED: Currency mismatch/
+        );
       } finally {
         if (origBillingEnabled !== undefined) process.env.AIRA_COMMERCIAL_BILLING_ENABLED = origBillingEnabled;
         else delete process.env.AIRA_COMMERCIAL_BILLING_ENABLED;
+        if (origTestFulfillment !== undefined) process.env.AIRA_ENABLE_TEST_FULFILLMENT = origTestFulfillment;
+        else delete process.env.AIRA_ENABLE_TEST_FULFILLMENT;
         if (origKeyId !== undefined) process.env.RAZORPAY_KEY_ID = origKeyId;
         else delete process.env.RAZORPAY_KEY_ID;
       }
