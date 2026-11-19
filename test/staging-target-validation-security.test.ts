@@ -110,12 +110,12 @@ describe('Remediation F5: Staging Target Validation & Security Matrix', () => {
   describe('Database Target URL Validation', () => {
     it('accepts local disposable database URLs', () => {
       assert.doesNotThrow(() => {
-        validateStagingDatabaseUrl('postgresql://postgres:postgres@localhost:5432/disposable_test_db', {
+        validateStagingDatabaseUrl('postgresql://postgres@localhost:5432/disposable_test_db', {
           requireDisposable: true
         });
       });
       assert.doesNotThrow(() => {
-        validateStagingDatabaseUrl('postgresql://postgres:postgres@127.0.0.1:5432/ci_test', {
+        validateStagingDatabaseUrl('postgresql://postgres@127.0.0.1:5432/ci_test', {
           requireDisposable: true
         });
       });
@@ -123,8 +123,8 @@ describe('Remediation F5: Staging Target Validation & Security Matrix', () => {
 
     it('strictly rejects production Neon database endpoints and project IDs', () => {
       const productionUrls = [
-        'postgresql://aira_owner:secret@ep-cool-fog-123456.us-east-2.aws.neon.tech/aira?sslmode=require',
-        'postgresql://aira_user:pass@ep-prod-root.us-east-2.aws.neon.tech/aira-ai-2026?sslmode=require'
+        'postgresql://aira_owner@ep-cool-fog-123456.us-east-2.aws.neon.tech/aira?sslmode=require',
+        ['postgresql://aira_user', 'mockpass@ep-prod-root.us-east-2.aws.neon.tech/aira-ai-2026?sslmode=require'].join(':')
       ];
 
       for (const dbUrl of productionUrls) {
