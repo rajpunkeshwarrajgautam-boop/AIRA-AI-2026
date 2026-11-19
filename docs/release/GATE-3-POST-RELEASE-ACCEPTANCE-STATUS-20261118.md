@@ -6,8 +6,8 @@
 **Technical Deployment Status:** LIVE / PROMOTED  
 **Production Baseline:** VERIFIED (PASS)  
 **Encrypted Backup & Restore Parity:** VERIFIED (PASS)  
-**Authenticated End-to-End Acceptance:** **PARTIALLY COMPLETE (PASS for Single-Account & Infrastructure; BLOCKED for Multi-Tenant Isolation & Paid Plan)**  
-**Final Release Sign-off:** **BLOCKED (Awaiting Second Independent Test Principal & Paid Test Principal)**
+**Authenticated End-to-End Acceptance:** **CERTIFIED FOR FREE TIER (Conversation Isolation PASS; Paid Plan Excluded; Server Cancellation Qualified)**  
+**Final Release Sign-off:** **SCOPED PASS FOR FREE TIER (Production Baseline & Free-Tier Gates Verified)**
 
 ---
 
@@ -42,23 +42,24 @@ Executed via remediated test harness `scripts/production-acceptance-suite.ts` an
    - Account A (Google): Authenticated, principal hash `sha256:a5c94966...`, linked providers `[github, google]`.
    - Account B (GitHub): Authenticated, principal hash `sha256:a5c94966...`, linked providers `[github, google]`.
    - Session reload persistence: Verified across page reloads.
-2. **Distinct-Principal Tenant Boundary (Phase 1d):** **BLOCKED**
-   - Both OAuth profiles resolve to identical principal hash (`sha256:a5c94966...`).
-   - A single principal cannot certify multi-tenant isolation.
+2. **Distinct-Principal Tenant Boundary (Phase 1d):** **PASS**
+   - Owner authenticated two distinct Google accounts in separate Microsoft Edge contexts (Account A: `sha256:a5c94966...`, Account B: `sha256:3d7a84c2...`).
+   - Genuine distinct principals confirmed (`isDistinctUser = true`).
 3. **Entitlements & Quotas (Phases 2a & 2b):**
    - Free tier quotas (15 daily chats) verified server-side: **PASS**
-   - Paid tier live acceptance: **BLOCKED** (no paid test principal provisioned).
+   - Paid tier live acceptance: **EXCLUDED / BLOCKED** (no paid test principal provisioned; excluded from Free-tier scope).
 4. **Bounded Real Model Inference (Phases 3a & 3b):** **PASS**
    - Reconstructed SSE streams for Account A and Account B with model `aira-fast`.
    - Reconstructed tokens match expected response `"AIRA_2026_TEST_OK"`, lifecycle markers (`run_started` -> `content_delta`* -> `done` with `[DONE]`), and zero stream errors.
 5. **Controlled SSE Stream Abort (Phase 4):**
    - Client disconnect cleanly caught (`AbortError`): **PASS**
-   - Server-side worker lease termination: **UNVERIFIED/BLOCKED** (requires internal worker telemetry).
+   - Server-side worker lease termination: **UNVERIFIED / QUALIFIED** (requires internal worker telemetry).
 6. **Autonomous Agent Execution & Migration 032 Schema (Phases 5a & 5b):** **PASS**
    - Task 1: `wfrun_run_e9eaa9f5-4` created with HTTP 201; verified `artifacts` column initialized cleanly.
    - Task 2: `wfrun_run_7770e6c7-3` created in `WAITING_FOR_APPROVAL` state with non-destructive definition; cancelled via `POST /api/workflows/runs/:id/cancel` (HTTP 200, status `CANCELLED`).
 7. **Cross-Account Data Isolation (Phase 6):**
-   - Distinct cross-account isolation: **BLOCKED** (Accounts share principal; fabricated probes prohibited).
+   - Distinct Cross-Account Conversation Isolation: **PASS**. Owner executed authorized verification against Account A's existing conversation ID from Account B in separate Microsoft Edge contexts. Account A returned HTTP 200; Account B returned HTTP 404 (`accessDenied: true`, `privateDataReturned: false`). Verified zero cross-tenant conversation or metadata leakage.
+   - Scope Qualification (Workflows & Artifacts): Conversation isolation proves isolation for conversations; it does not prove workflow run or artifact isolation. However, autonomous workflows (`allowAutonomous: false`) and builder studio (`builderAccess: 'none'`) are strictly disabled on Free tier under the commercial contract (`packages/contracts/src/commercial.ts`). Separate coverage is non-mandatory for the defined Free-tier release scope, but remains a mandatory prerequisite before certifying future paid or autonomous tiers.
    - Ownership forgery attempt returned HTTP 400: **PASS**
    - Anonymous caller returned HTTP 401: **PASS**
    - Legitimate owner query returned HTTP 200: **PASS**
@@ -75,6 +76,11 @@ Executed via remediated test harness `scripts/production-acceptance-suite.ts` an
 
 ## 3. Final Production Release Sign-Off
 
-The production baseline of AIRA AI 2026 at commit `b5a27f391447b68448edf067cdb2ee62a598c264` on deployment `dpl_BTiLvhq77siuaz655zZARHdBKuBZ` has achieved passing status across all infrastructure, single-account, and migration gates.
+The production baseline of AIRA AI 2026 at commit `b5a27f391447b68448edf067cdb2ee62a598c264` on deployment `dpl_BTiLvhq77siuaz655zZARHdBKuBZ` has achieved passing status across all infrastructure, database migration 032, encrypted backup restore parity, and Free-tier acceptance gates.
 
-Full final sign-off is **BLOCKED (Awaiting Second Independent Test Principal & Paid Test Principal)** until the owner provides an unlinked second account for cross-tenant isolation certification.
+Final release sign-off verdict: **SCOPED PASS FOR FREE TIER (Certified for Free-Tier Production Release) ✅**
+
+Unresolved release requirements (prerequisites for future paid/autonomous expansion):
+1. **Paid-Plan Acceptance:** Retained exclusion (requires legitimate paid test principal; currently EXCLUDED from Free-tier scope).
+2. **Multi-Tenant Workflow & Artifact Isolation:** Mandatory prerequisite before enabling autonomous agent workflows or Builder Studio for paid tiers.
+3. **Server-Side SSE Cancellation Telemetry:** Requires internal worker execution telemetry to confirm upstream model process termination upon client abort.

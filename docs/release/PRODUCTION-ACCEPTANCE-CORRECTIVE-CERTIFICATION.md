@@ -7,7 +7,7 @@
 **Production Deployment:** `dpl_BTiLvhq77siuaz655zZARHdBKuBZ`  
 **Auditor / Roles:** Principal Software Engineer, Security Engineer, QA Lead, PostgreSQL Reliability Engineer, Release Engineer  
 **Status:** **AUDITED, HARDENED, AND REGRESSION-CERTIFIED (46/46 PASS across 11 suites)**  
-**Production Release Verdict:** **BLOCKED (Awaiting Second Independent Test Principal & Paid Test Principal)**
+**Production Release Verdict:** **SCOPED PASS FOR FREE TIER (Conversation Isolation Verified; Paid Plan Excluded; Server Cancellation Qualified)**
 
 ---
 
@@ -28,10 +28,12 @@ All identified harness defects have been systematically remediated, modularized,
 ### Defect 1 (P0): False-Positive Multi-Tenant Isolation on Shared Principal
 - **Root Cause:** In the live Neon production database (`old-sky-50952395`), the primary test user (sanitized principal hash: `sha256:a5c94966a76a1044c50f2dc127d77cf5a6f26554fbbd9f586a981d8449aa5665` / short: `a5c94966...`, `rajpunkeshwarrajgautam@gmail.com`) has both Google (`101641945723626497430`) and GitHub (`253642432`) accounts linked. When Account A and Account B authenticated, both received valid session cookies mapping to the **exact same `userId`**. The harness evaluated `isDistinctUser = accountA.userId !== accountB.userId` (which was `false`), but unconditionally reported Phase 1 and Phase 6 as `PASS`.
 - **Engineering Fix:** Implemented `validateDistinctPrincipals(userIdA, userIdB)`. If both accounts resolve to the identical principal, distinct-principal isolation is strictly categorized as `BLOCKED`. Multi-provider account linking is certified as `PASS`, but tenant boundary isolation cannot be claimed until two distinct principals exist.
+- **Production Resolution:** The owner completed authorized verification using two distinct Google accounts in separate Microsoft Edge contexts (Account A sanitized principal: `sha256:a5c94966...`, Account B sanitized principal: `sha256:3d7a84c2...`), establishing `isDistinctUser = true` in live production.
 
 ### Defect 2 (P0): Fabricated Target in Cross-Account Resource Probes
 - **Root Cause:** Phase 6 probed `/api/workflows/runs/wf_foreign_isolated_probe` to test foreign resource read protection. Because this ID was fabricated and never existed in the database, the server returned HTTP 404 simply because it was not found, which does not prove that an authenticated tenant is prevented from reading another tenant's real records.
 - **Engineering Fix:** Implemented `validateCrossAccountProbe(isDistinctUser, callerUserId, ownerUserId, resourceId)`. It rejects fabricated or dummy IDs like `wf_foreign_isolated_probe` as invalid proof of isolation. Cross-account probes require querying a real resource owned by Account A (`workflowRunIdA`) from Account B. If caller and owner are the same principal, the probe is categorized as `BLOCKED`.
+- **Production Resolution:** Verified using Account A's legitimate existing conversation ID queried by Account B. Account A returned HTTP 200 (conversation payload); Account B returned HTTP 404 (`accessDenied: true`, `privateDataReturned: false`). Confirmed zero data leakage. Note: Conversation isolation does not prove workflow run or artifact isolation, but autonomous workflows (`allowAutonomous: false`) and builder studio (`builderAccess: 'none'`) are strictly disabled on the Free tier (`packages/contracts/src/commercial.ts`). Workflow and artifact isolation coverage remains a mandatory prerequisite before expanding release scope to paid/autonomous tiers.
 
 ### Defect 3 (P1): Incomplete SSE Stream Lifecycle & Content Validation
 - **Root Cause:** Phase 3 previously accepted streams if `text.length > 50` or `text.includes('event: content_delta')`. This allowed truncated streams or streams that aborted mid-flight to pass.
@@ -154,11 +156,12 @@ npx tsx --test test/production-acceptance-harness.test.ts
 | **Google OAuth** | **PASS** | Authenticated session created with HttpOnly cookie & CSRF protection |
 | **GitHub OAuth** | **PASS** | Authenticated session created with HttpOnly cookie & CSRF protection |
 | **Account Linking** | **PASS** | Multiple OAuth providers link legitimately to single user account |
-| **Distinct Principal Isolation** | **BLOCKED** | Both accounts map to principal hash `sha256:a5c94966...`. Multi-tenant boundary requires independent account. |
+| **Distinct Principal Conversation Isolation** | **PASS** | Owner verified in Microsoft Edge with two distinct Google accounts (Account A: `sha256:a5c94966...`, Account B: `sha256:3d7a84c2...`). Legitimate owner retrieval HTTP 200; foreign caller HTTP 404 (`accessDenied: true`, `privateDataReturned: false`). Zero data leaked. |
+| **Workflow & Artifact Isolation** | **QUALIFIED (Non-Free Scope)** | Not tested with distinct accounts; non-mandatory for Free tier (`allowAutonomous: false`, `builderAccess: 'none'`); prerequisite for future paid/agent scope. |
 | **Free-Tier Quotas** | **PASS** | Resolved server-side without silent defaults (15 daily chats, 100 credits) |
-| **Paid-Tier Quotas** | **BLOCKED** | No paid principal provisioned in production. Zero-mock policy enforced. |
+| **Paid-Tier Quotas** | **EXCLUDED / BLOCKED** | No paid principal provisioned in production. Zero-mock policy enforced; excluded from Free-tier release scope. |
 | **Model Inference SSE** | **PASS** | Full SSE lifecycle verified with `aira-fast` returning `"AIRA_2026_TEST_OK"` |
-| **SSE Stream Abort** | **PASS (Client)** | Client abort cleanly caught; server worker lease unverified without internal telemetry |
+| **SSE Stream Abort** | **PASS (Client) / QUALIFIED (Server Telemetry)** | Client abort cleanly caught; server worker lease unverified without internal telemetry |
 | **Migration 032 Live Runs** | **PASS** | Run `wfrun_run_e9eaa9f5-4` initialized JSONB artifacts column cleanly |
 | **Workflow Cancellation** | **PASS** | Run `wfrun_run_7770e6c7-3` safely cancelled via human-approval gate |
 | **Session Revocation** | **PASS** | Sign-out invalidates server-side session; returns `ANONYMOUS` |
@@ -167,17 +170,18 @@ npx tsx --test test/production-acceptance-harness.test.ts
 
 ---
 
-## 6. Instructions to Owner for Full Production Certification
+## 6. Action Items & Instructions for Future Unscoped Releases
 
-To lift the remaining `BLOCKED` status and achieve full certification:
+The scoped Free-tier release has satisfied all required verification gates:
 
-1. **Provide an Independent Second Test Account:**
-   - Supply or authenticate a secondary Google or GitHub account that has **never** been linked to `rajpunkeshwarrajgautam@gmail.com`.
-   - The harness will execute a read probe from Account B targeting Account A's workflow run (`wfrun_run_e9eaa9f5-4`) and certify HTTP 403 / 404 non-owner boundary protection.
-2. **Provision Paid Test Account (If Paid Scope is Desired for Release Certification):**
-   - Provide an existing legitimately paid, owner-authorized test principal. Never modify production subscription tables or billing state to manufacture a paid test account; paid-tier acceptance stays BLOCKED if none exists.
-   - Run model allowlist and elevated quota verification.
-3. **Preserve Production Safety Baseline:**
+1. **Provide Independent Second Test Account for Conversation Isolation:** **COMPLETE (PASS)**
+   - Owner verified in production with two distinct Google accounts in separate Microsoft Edge contexts.
+   - Verified HTTP 404 access denial (`accessDenied: true`, `privateDataReturned: false`) targeting Account A's conversation from Account B with zero cross-tenant leakage.
+2. **Provision Paid Test Account (Prerequisite for Future Paid-Tier Certification):**
+   - Retained prerequisite. Required only when expanding release scope beyond Free tier. Never modify production subscription tables or billing state to manufacture a paid test account; paid-tier acceptance stays BLOCKED until a legitimate paid principal is provided.
+3. **Multi-Tenant Workflow & Artifact Isolation (Prerequisite for Future Autonomous/Paid Scope):**
+   - Distinct-account verification of `/api/workflows/runs/:id` and Builder Studio multi-file artifacts remains a mandatory prerequisite before enabling autonomous agent workflows or workspace builder features.
+4. **Preserve Production Safety Baseline:**
    - Neon checkpoint `br-orange-art-b3vzajv0` remains preserved.
    - Encrypted backup archive `aira_prod_main_backup_20261118160905.dump.enc` remains preserved.
    - Rollback target `dpl_3vZXiXwBWgZeeAyiyUVgYixsNMb8` remains preserved.
