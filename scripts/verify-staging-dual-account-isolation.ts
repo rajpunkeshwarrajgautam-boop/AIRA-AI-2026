@@ -16,8 +16,12 @@ import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
 const STAGING_URL = process.env.AIRA_STAGING_URL || 'https://staging.virexaaiventures.com';
+if (STAGING_URL.includes('aira-ai-2026.vercel.app')) {
+  throw new Error('[SECURITY FATAL] AIRA_STAGING_URL points to production. Acceptance tests are forbidden against production.');
+}
 const ARTIFACTS_DIR = path.resolve(process.cwd(), 'artifacts/staging-acceptance/pr164');
 if (!fs.existsSync(ARTIFACTS_DIR)) {
   fs.mkdirSync(ARTIFACTS_DIR, { recursive: true });
@@ -39,9 +43,9 @@ async function runDualAccountAcceptance() {
   // Step 1: Establish Account A and Account B via Staging Neon Auth
   console.log('\n[1/6] Establishing Account A and Account B authenticated principals...');
   const ts = Date.now();
-  const emailA = `alice_stage_${ts}@example.com`;
-  const emailB = `bob_stage_${ts}@example.com`;
-  const pass = 'P@ssword123!SecureStaging';
+  const emailA = process.env.STAGING_TEST_USER_A_EMAIL || `alice_stage_${ts}_${crypto.randomBytes(4).toString('hex')}@example.com`;
+  const emailB = process.env.STAGING_TEST_USER_B_EMAIL || `bob_stage_${ts}_${crypto.randomBytes(4).toString('hex')}@example.com`;
+  const pass = process.env.STAGING_TEST_PASSWORD || `Iso_${crypto.randomBytes(12).toString('hex')}!Aa1`;
 
   // Sign up Account A
   const signUpResA = await fetch(`${STAGING_URL}/api/auth/sign-up`, {

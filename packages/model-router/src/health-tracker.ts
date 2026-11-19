@@ -83,7 +83,9 @@ export class ProviderHealthTracker {
   }
 
   private getKey(provider: string, model: string): string {
-    return `${provider.toLowerCase().trim()}:${model.toLowerCase().trim()}`;
+    const prov = String(provider || 'unknown').toLowerCase().trim();
+    const mod = String(model || 'unknown').toLowerCase().trim();
+    return `${prov}:${mod}`;
   }
 
   private getOrCreateRecord(provider: string, model: string): InternalRecord {

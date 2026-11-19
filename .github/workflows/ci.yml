@@ -62,6 +62,9 @@ jobs:
           fi
           npm run test:secrets
 
+      - name: OAuth evidence integrity and observed logout regression
+        run: npx tsx --test test/staging-oauth-certification-engine.test.ts
+
       - name: Lint
         run: npm run lint
 
@@ -79,6 +82,21 @@ jobs:
 
       - name: Commercial quota ledger and monthly reasoning enforcement (real PostgreSQL)
         run: npx tsx --test test/commercial-credit-ledger.test.ts
+
+      - name: Commercial billing, webhook lifecycle, and security matrix (F1-F4)
+        run: npx tsx --test test/billing-remediation-security-matrix.test.ts
+
+      - name: Staging target validation and fail-closed isolation (F5)
+        run: npx tsx --test test/staging-target-validation-security.test.ts
+
+      - name: OAuth privacy, non-reversible identifiers and evidence hygiene (F6)
+        run: npx tsx --test test/oauth-evidence-privacy.test.ts
+
+      - name: Saved-agent quota concurrency and atomic plan limits (F7)
+        run: npx tsx --test test/agent-quota-concurrency.test.ts
+
+      - name: Real HTTP multi-tenant isolation and upstream cancellation (F8)
+        run: npx tsx --test test/multi-tenant-http-isolation.test.ts test/provider-cancellation-http.test.ts
 
       - name: Verify deploy database contract (lexical fallback)
         env:
@@ -456,7 +474,7 @@ jobs:
     name: Deployed staging acceptance
     # Fail-closed staging-only gate. NEVER runs for main/production.
     if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
-    needs: [fast, semantic-search, certify]
+    needs: [fast, semantic-search, certify, payment-durability]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -531,3 +549,49 @@ jobs:
           path: artifacts/responsive-viewport-spectrum/staging/
           if-no-files-found: warn
 
+  payment-durability:
+    name: Payment durability (real PostgreSQL 18, T1-T10)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: postgres://aira:aira@127.0.0.1:5432/aira_test_db
+      NODE_ENV: test
+      CI: 'true'
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: aira
+          POSTGRES_PASSWORD: aira
+          POSTGRES_DB: aira_test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U aira -d aira_test_db"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify disposable database identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${DATABASE_URL##*/}" = "aira_test_db"
+
+      - name: Migrate isolated PostgreSQL 18 database
+        run: npm run db:migrate
+
+      - name: Payment durability, renewal idempotency, and crash recovery (T1-T10)
+        run: npx tsx --test test/payment-durability-postgres.test.ts

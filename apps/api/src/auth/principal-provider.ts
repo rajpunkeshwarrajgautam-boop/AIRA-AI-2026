@@ -36,7 +36,7 @@ export class DevPrincipalProvider implements PrincipalProvider {
 
       if (testUserId && testSessionId) {
         const workspaceId = await this.workspaceAuthorities.resolveWorkspace(testUserId);
-        return ExecutionPrincipalSchema.parse({
+        const parsedPrincipal = ExecutionPrincipalSchema.parse({
           userId: testUserId,
           sessionId: testSessionId,
           workspaceId,
@@ -44,6 +44,11 @@ export class DevPrincipalProvider implements PrincipalProvider {
           roles: ['dev_user'],
           scopes: ['*'],
         });
+        const testTier = req.headers['x-test-tier'] as string;
+        if (testTier) {
+          (parsedPrincipal as any).tier = testTier;
+        }
+        return parsedPrincipal;
       }
     }
 

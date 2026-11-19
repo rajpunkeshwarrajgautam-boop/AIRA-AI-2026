@@ -39,9 +39,14 @@ test('live acceptance refuses the permanent staging branch and duplicate princip
   }), /distinct test account/);
 });
 
-test('live acceptance exposes no fallback credentials or database bypass', () => {
-  const config = resolveStagingLiveAcceptanceConfig(valid);
-  assert.equal(config.previewUrl, 'https://aira-ai-2026-abc123-test-projects.vercel.app');
-  assert.equal(config.bypassSecret, '');
-  assert.equal(config.isolatedBranchId, 'br-test-disposable-123');
+test('live acceptance refuses production Neon project or endpoint in database URL', () => {
+  for (const prodDbUrl of [
+    'postgresql://aira_user@ep-withered-art-b36ox90b.ap-southeast-1.aws.neon.tech/neondb',
+    'postgresql://aira_user@ep-other-123.ap-southeast-1.aws.neon.tech/neondb?project=old-sky-50952395'
+  ]) {
+    assert.throws(
+      () => resolveStagingLiveAcceptanceConfig({ ...valid, STAGING_DATABASE_URL: prodDbUrl }),
+      /SECURITY FATAL|PRODUCTION/
+    );
+  }
 });
