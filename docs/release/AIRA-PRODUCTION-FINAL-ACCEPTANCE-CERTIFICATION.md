@@ -1,7 +1,7 @@
 # AIRA AI 2026 — Production Acceptance & Corrective Certification Report
 
-**Document Version:** 3.1.0 (Hardened & Truthful Certification)  
-**Audit Timestamp:** 2026-11-19T00:15:00Z / 2026-11-19 00:15 IST  
+**Document Version:** 3.2.0 (Authoritative Certification Baseline)  
+**Audit Timestamp:** 2026-11-19T00:15:00Z / 2026-11-19 05:45 IST  
 **Repository:** `rajpunkeshwarrajgautam-boop/AIRA-AI-2026`  
 **Production URL:** `https://aira-ai-2026.vercel.app`  
 **Production HEAD Commit:** `b5a27f391447b68448edf067cdb2ee62a598c264`  
@@ -18,7 +18,7 @@
 
 Following the authorized execution of Gate 2 (guarded migration 032) and Gate 3 (production promotion to `prod-release` on Vercel deployment `dpl_BTiLvhq77siuaz655zZARHdBKuBZ`), comprehensive end-to-end acceptance testing was performed and rigorously audited.
 
-In accordance with strict production engineering integrity rules prohibiting false-positive assertions, silent fallbacks, or synthetic mocks, the acceptance suite (`scripts/production-acceptance-suite.ts`) and regression verification suite (`test/production-acceptance-harness.test.ts`) have been hardened and verified across 27 automated tests.
+In accordance with strict production engineering integrity rules prohibiting false-positive assertions, silent fallbacks, or synthetic mocks, the acceptance suite (`scripts/production-acceptance-suite.ts`) and regression verification suite (`test/production-acceptance-harness.test.ts`) have been hardened and verified across 46 automated tests across 11 suites.
 
 ### Summary of Certified Subsystems:
 1. **Production Infrastructure & Deployment Baseline:** **PASS**. Exact commit `b5a27f391447b68448edf067cdb2ee62a598c264` is live on `https://aira-ai-2026.vercel.app`. CI run `44346736429` on `prod-release` passed all checks (`Semantic Search CI`, `Fast CI`, `Main / PR certification`). Neon database is at 32 migrations with migration 032 active, `workflow_runs.artifacts` as JSONB default `'[]'::jsonb`, and Knex locks released.
@@ -34,7 +34,7 @@ In accordance with strict production engineering integrity rules prohibiting fal
 11. **Budget Ceiling Compliance:** **PASS**. Consumed 50 tokens (~$0.000030 USD), well within the authorized USD $0.05 limit.
 
 ### Remaining Release-Blocking Certification Items:
-1. **Distinct-Principal Cross-Tenant Isolation:** **BLOCKED**. Both provided test accounts (Google and GitHub) resolve to the identical Neon user ID (`neon_user_c0fc8caa-a796-482c-9db8-c54e09e8a2b8`). A single user principal cannot certify cross-tenant resource isolation. Probing non-existent resources (`wf_foreign_isolated_probe`) only proves 404 Not Found, not tenant boundary isolation.
+1. **Distinct-Principal Cross-Tenant Isolation:** **BLOCKED**. Both provided test accounts (Google and GitHub) resolve to the identical Neon user ID (sanitized hash: `sha256:a5c94966a76a1044c50f2dc127d77cf5a6f26554fbbd9f586a981d8449aa5665` / short: `a5c94966...`). A single user principal cannot certify cross-tenant resource isolation. Probing non-existent resources (`wf_foreign_isolated_probe`) only proves 404 Not Found, not tenant boundary isolation.
 2. **Paid-Plan Acceptance:** **BLOCKED**. No paid test principal has been provisioned in production. In accordance with zero-mock policies, paid tier live acceptance cannot be certified until a paid test account is provided.
 3. **Server-Side Upstream Worker Lease Cancellation:** **UNVERIFIED/BLOCKED**. Requires internal worker telemetry to confirm upstream model provider process termination on client abort.
 
@@ -90,10 +90,10 @@ In accordance with strict production engineering integrity rules prohibiting fal
 
 | Test ID | Test Category & Description | Expected Behavior | Observed Result / Status | Verdict |
 |---|---|---|---|---|
-| **Phase 1a** | OAuth Authentication (Google) | Authenticate Profile A via Google | Authenticated; user ID `neon_user_c0fc8caa...`; valid session cookie & CSRF token | **PASS** |
-| **Phase 1b** | OAuth Authentication (GitHub) | Authenticate Profile B via GitHub | Authenticated; user ID `neon_user_c0fc8caa...`; valid session cookie & CSRF token | **PASS** |
+| **Phase 1a** | OAuth Authentication (Google) | Authenticate Profile A via Google | Authenticated; principal hash `sha256:a5c94966...`; valid session cookie & CSRF token | **PASS** |
+| **Phase 1b** | OAuth Authentication (GitHub) | Authenticate Profile B via GitHub | Authenticated; principal hash `sha256:a5c94966...`; valid session cookie & CSRF token | **PASS** |
 | **Phase 1c** | Multi-Provider Account Linking | Multiple OAuth providers link to single account | Verified: User account links both `[google, github]` providers | **PASS** |
-| **Phase 1d** | Distinct-Principal Identification | Test accounts represent distinct user principals | **BLOCKED**: Both profiles resolve to identical user ID (`neon_user_c0fc8caa...`). Cannot certify multi-tenant boundaries. | **BLOCKED** |
+| **Phase 1d** | Distinct-Principal Identification | Test accounts represent distinct user principals | **BLOCKED**: Both profiles resolve to identical principal hash (`sha256:a5c94966...`). Cannot certify multi-tenant boundaries. | **BLOCKED** |
 | **Phase 1e** | Session Reload Persistence | Sessions survive browser page reload | Both profiles reloaded; `status: AUTHENTICATED` preserved | **PASS** |
 | **Phase 2a** | Free Tier Entitlements Verification | Server-authoritative plan validation | Plan tier `free`, daily chat limit 15 verified server-side without silent defaults | **PASS** |
 | **Phase 2b** | Paid Tier Entitlements Acceptance | Validate Pro/Enterprise tier features | **BLOCKED**: No paid test principal provisioned in production. Synthetic mocks prohibited. | **BLOCKED** |
@@ -193,9 +193,34 @@ A dedicated unit and regression test suite was expanded in `test/production-acce
     ✔ must return PASS for both when authoritative post-abort run state is CANCELLED
     ✔ must return PASS for both when server telemetry was observed
     ✔ must return FAIL for client when client abort failed
+    ✔ must return FAIL for server when post-abort run state remains RUNNING or PENDING
   ✔ validateServerSideCancellation (P1)
+  ▶ validateAuthorizationResponse (P0)
+    ✔ must accept HTTP 401 or 403 on unauthenticated probes
+    ✔ must fail when unauthenticated probe returns HTTP 200 or 201 (data exposure defect)
+    ✔ must block cross-account certification when target resource does not exist
+    ✔ must accept HTTP 403 or 404 when target resource exists and foreign caller is denied
+    ✔ must fail when cross-account probe returns HTTP 200 on foreign resource (data leakage)
+    ✔ must accept HTTP 400 or 403 when principal forgery in payload is rejected
+    ✔ must fail when ownership forgery returns HTTP 200 or 201 (forgery accepted)
+    ✔ must accept HTTP 200 for legitimate owner access
+    ✔ must fail when legitimate owner is denied access
+  ✔ validateAuthorizationResponse (P0)
+  ▶ validateWorkflowCancellation (P1)
+    ✔ must pass when workflow transitions from WAITING_FOR_APPROVAL to CANCELLED via HTTP 200
+    ✔ must pass when workflow transitions from RUNNING to CANCELLED via HTTP 200
+    ✔ must fail when attempting to cancel an already COMPLETED workflow
+    ✔ must fail when cancel endpoint returns non-200 HTTP status
+    ✔ must fail when workflow does not reach CANCELLED state
+  ✔ validateWorkflowCancellation (P1)
+  ▶ Harness Edge-Case Hardening
+    ✔ must reject cross-account probes with empty or dummy resource IDs
+    ✔ must fail server-authoritative entitlements when availableCredits is negative or non-numeric
+    ✔ must extract AUTHORITATIVE usage from latency_metrics deltaCount
+    ✔ must assert enforcementNature is explicitly CLIENT_SAFETY_TRIPWIRE on budget guard
+  ✔ Harness Edge-Case Hardening
 ✔ AIRA Production Acceptance Harness Remediation
-ℹ tests 27 | suites 8 | pass 27 | fail 0 | cancelled 0 | skipped 0
+ℹ tests 46 | suites 11 | pass 46 | fail 0 | cancelled 0 | skipped 0
 ```
 
 ---

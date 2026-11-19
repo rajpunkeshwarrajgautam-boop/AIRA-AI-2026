@@ -6,7 +6,7 @@
 **Production Commit:** `b5a27f391447b68448edf067cdb2ee62a598c264`  
 **Production Deployment:** `dpl_BTiLvhq77siuaz655zZARHdBKuBZ`  
 **Auditor / Roles:** Principal Software Engineer, Security Engineer, QA Lead, PostgreSQL Reliability Engineer, Release Engineer  
-**Status:** **AUDITED, HARDENED, AND REGRESSION-CERTIFIED (27/27 PASS)**  
+**Status:** **AUDITED, HARDENED, AND REGRESSION-CERTIFIED (46/46 PASS across 11 suites)**  
 **Production Release Verdict:** **BLOCKED (Awaiting Second Independent Test Principal & Paid Test Principal)**
 
 ---
@@ -17,16 +17,16 @@ This report establishes the authoritative engineering audit and corrective remed
 
 In the prior session, the acceptance script executed against live production (`https://aira-ai-2026.vercel.app`) and reported an unqualified `PASS`. However, deep audit of the harness code and database evidence revealed critical assertion gaps, false-positive isolation classifications, silent fallbacks for entitlements, and loose validation logic that violated zero-mock and evidence-based production engineering standards.
 
-Additionally, Fast CI run `44369603261` failed due to a static regex match on a placeholder database URL in `docs/release/GATE-2-MIGRATION-032-AUTHORIZATION-PACKAGE.md`. This was remediated via redaction in commit `9439c48`, and subsequent CI run `44370817291` passed all checks.
+Additionally, Fast CI run `44369603261` failed due to a static regex match on a placeholder database URL in `docs/release/GATE-2-MIGRATION-032-AUTHORIZATION-PACKAGE.md`. This was remediated via redaction in commit `9439c48`, and subsequent CI runs `44370817291` and `44372788623` passed all checks.
 
-All identified harness defects have been systematically remediated, modularized, and validated with a comprehensive 27-test regression suite (`test/production-acceptance-harness.test.ts`).
+All identified harness defects have been systematically remediated, modularized, and validated with a comprehensive 46-test regression suite (`test/production-acceptance-harness.test.ts`).
 
 ---
 
 ## 2. Inventory of Remediated Defects
 
 ### Defect 1 (P0): False-Positive Multi-Tenant Isolation on Shared Principal
-- **Root Cause:** In the live Neon production database (`old-sky-50952395`), the primary test user `neon_user_c0fc8caa-a796-482c-9db8-c54e09e8a2b8` (`rajpunkeshwarrajgautam@gmail.com`) has both Google (`101641945723626497430`) and GitHub (`253642432`) accounts linked. When Account A and Account B authenticated, both received valid session cookies mapping to the **exact same `userId`**. The harness evaluated `isDistinctUser = accountA.userId !== accountB.userId` (which was `false`), but unconditionally reported Phase 1 and Phase 6 as `PASS`.
+- **Root Cause:** In the live Neon production database (`old-sky-50952395`), the primary test user (sanitized principal hash: `sha256:a5c94966a76a1044c50f2dc127d77cf5a6f26554fbbd9f586a981d8449aa5665` / short: `a5c94966...`, `rajpunkeshwarrajgautam@gmail.com`) has both Google (`101641945723626497430`) and GitHub (`253642432`) accounts linked. When Account A and Account B authenticated, both received valid session cookies mapping to the **exact same `userId`**. The harness evaluated `isDistinctUser = accountA.userId !== accountB.userId` (which was `false`), but unconditionally reported Phase 1 and Phase 6 as `PASS`.
 - **Engineering Fix:** Implemented `validateDistinctPrincipals(userIdA, userIdB)`. If both accounts resolve to the identical principal, distinct-principal isolation is strictly categorized as `BLOCKED`. Multi-provider account linking is certified as `PASS`, but tenant boundary isolation cannot be claimed until two distinct principals exist.
 
 ### Defect 2 (P0): Fabricated Target in Cross-Account Resource Probes
@@ -154,7 +154,7 @@ npx tsx --test test/production-acceptance-harness.test.ts
 | **Google OAuth** | **PASS** | Authenticated session created with HttpOnly cookie & CSRF protection |
 | **GitHub OAuth** | **PASS** | Authenticated session created with HttpOnly cookie & CSRF protection |
 | **Account Linking** | **PASS** | Multiple OAuth providers link legitimately to single user account |
-| **Distinct Principal Isolation** | **BLOCKED** | Both accounts map to `neon_user_c0fc8caa...`. Multi-tenant boundary requires independent account. |
+| **Distinct Principal Isolation** | **BLOCKED** | Both accounts map to principal hash `sha256:a5c94966...`. Multi-tenant boundary requires independent account. |
 | **Free-Tier Quotas** | **PASS** | Resolved server-side without silent defaults (15 daily chats, 100 credits) |
 | **Paid-Tier Quotas** | **BLOCKED** | No paid principal provisioned in production. Zero-mock policy enforced. |
 | **Model Inference SSE** | **PASS** | Full SSE lifecycle verified with `aira-fast` returning `"AIRA_2026_TEST_OK"` |
@@ -163,7 +163,7 @@ npx tsx --test test/production-acceptance-harness.test.ts
 | **Workflow Cancellation** | **PASS** | Run `wfrun_run_7770e6c7-3` safely cancelled via human-approval gate |
 | **Session Revocation** | **PASS** | Sign-out invalidates server-side session; returns `ANONYMOUS` |
 | **Spending Ceiling** | **PASS** | Consumed 50 tokens (~$0.000030 USD), well below USD $0.05 limit |
-| **Tracked Secrets Hygiene** | **PASS** | 0 exposed credentials across 1,059 tracked files; CI run `44370817291` PASS |
+| **Tracked Secrets Hygiene** | **PASS** | 0 exposed credentials across 1,059 tracked files; CI runs `44370817291` & `44372788623` PASS |
 
 ---
 

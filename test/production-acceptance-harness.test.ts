@@ -16,6 +16,8 @@ import {
   validateServerAuthoritativeEntitlements,
   validateServerSideCancellation,
   createHarmlessApprovalWorkflowDefinition,
+  validateAuthorizationResponse,
+  validateWorkflowCancellation,
   MAX_AUTHORIZED_SPEND_USD
 } from '../scripts/production-acceptance-suite.js';
 
@@ -371,6 +373,187 @@ describe('AIRA Production Acceptance Harness Remediation', () => {
       const result = validateServerSideCancellation(false);
       assert.equal(result.clientAbortStatus, 'FAIL');
       assert.equal(result.serverLeaseStatus, 'UNVERIFIED/BLOCKED');
+    });
+
+    it('must return FAIL for server when post-abort run state remains RUNNING or PENDING', () => {
+      const resRunning = validateServerSideCancellation(true, 'RUNNING');
+      assert.equal(resRunning.clientAbortStatus, 'PASS');
+      assert.equal(resRunning.serverLeaseStatus, 'FAIL');
+      assert.ok(resRunning.reason.includes('failed to cancel'));
+
+      const resPending = validateServerSideCancellation(true, 'PENDING');
+      assert.equal(resPending.clientAbortStatus, 'PASS');
+      assert.equal(resPending.serverLeaseStatus, 'FAIL');
+      assert.ok(resPending.reason.includes('failed to cancel'));
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // P0: Authorization Response Validation Across Contexts
+  // ---------------------------------------------------------------------------
+  describe('validateAuthorizationResponse (P0)', () => {
+    it('must accept HTTP 401 or 403 on unauthenticated probes', () => {
+      const res401 = validateAuthorizationResponse(401, 'ANONYMOUS_PROBE');
+      assert.equal(res401.valid, true);
+      assert.equal(res401.status, 'PASS');
+
+      const res403 = validateAuthorizationResponse(403, 'ANONYMOUS_PROBE');
+      assert.equal(res403.valid, true);
+      assert.equal(res403.status, 'PASS');
+    });
+
+    it('must fail when unauthenticated probe returns HTTP 200 or 201 (data exposure defect)', () => {
+      const res200 = validateAuthorizationResponse(200, 'ANONYMOUS_PROBE');
+      assert.equal(res200.valid, false);
+      assert.equal(res200.status, 'FAIL');
+      assert.ok(res200.reason.includes('CRITICAL SECURITY DEFECT'));
+    });
+
+    it('must block cross-account certification when target resource does not exist', () => {
+      const res = validateAuthorizationResponse(404, 'CROSS_ACCOUNT_PROBE', false);
+      assert.equal(res.valid, false);
+      assert.equal(res.status, 'BLOCKED');
+      assert.ok(res.reason.includes('Cannot certify tenant boundary against non-existent resource'));
+    });
+
+    it('must accept HTTP 403 or 404 when target resource exists and foreign caller is denied', () => {
+      const res403 = validateAuthorizationResponse(403, 'CROSS_ACCOUNT_PROBE', true);
+      assert.equal(res403.valid, true);
+      assert.equal(res403.status, 'PASS');
+
+      const res404 = validateAuthorizationResponse(404, 'CROSS_ACCOUNT_PROBE', true);
+      assert.equal(res404.valid, true);
+      assert.equal(res404.status, 'PASS');
+    });
+
+    it('must fail when cross-account probe returns HTTP 200 on foreign resource (data leakage)', () => {
+      const res200 = validateAuthorizationResponse(200, 'CROSS_ACCOUNT_PROBE', true);
+      assert.equal(res200.valid, false);
+      assert.equal(res200.status, 'FAIL');
+      assert.ok(res200.reason.includes('CRITICAL SECURITY DEFECT: Foreign tenant resource returned HTTP 200'));
+    });
+
+    it('must accept HTTP 400 or 403 when principal forgery in payload is rejected', () => {
+      const res400 = validateAuthorizationResponse(400, 'OWNERSHIP_FORGERY');
+      assert.equal(res400.valid, true);
+      assert.equal(res400.status, 'PASS');
+
+      const res403 = validateAuthorizationResponse(403, 'OWNERSHIP_FORGERY');
+      assert.equal(res403.valid, true);
+      assert.equal(res403.status, 'PASS');
+    });
+
+    it('must fail when ownership forgery returns HTTP 200 or 201 (forgery accepted)', () => {
+      const res201 = validateAuthorizationResponse(201, 'OWNERSHIP_FORGERY');
+      assert.equal(res201.valid, false);
+      assert.equal(res201.status, 'FAIL');
+      assert.ok(res201.reason.includes('CRITICAL SECURITY DEFECT: Backend accepted forged principal identity'));
+    });
+
+    it('must accept HTTP 200 for legitimate owner access', () => {
+      const res200 = validateAuthorizationResponse(200, 'LEGITIMATE_OWNER');
+      assert.equal(res200.valid, true);
+      assert.equal(res200.status, 'PASS');
+    });
+
+    it('must fail when legitimate owner is denied access', () => {
+      const res403 = validateAuthorizationResponse(403, 'LEGITIMATE_OWNER');
+      assert.equal(res403.valid, false);
+      assert.equal(res403.status, 'FAIL');
+      assert.ok(res403.reason.includes('Legitimate owner access denied'));
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // P1: Workflow Cancellation Lifecycle Validation
+  // ---------------------------------------------------------------------------
+  describe('validateWorkflowCancellation (P1)', () => {
+    it('must pass when workflow transitions from WAITING_FOR_APPROVAL to CANCELLED via HTTP 200', () => {
+      const res = validateWorkflowCancellation('WAITING_FOR_APPROVAL', 200, 'CANCELLED');
+      assert.equal(res.valid, true);
+      assert.equal(res.status, 'PASS');
+      assert.ok(res.reason.includes('successfully transitioned'));
+    });
+
+    it('must pass when workflow transitions from RUNNING to CANCELLED via HTTP 200', () => {
+      const res = validateWorkflowCancellation('RUNNING', 200, 'CANCELLED');
+      assert.equal(res.valid, true);
+      assert.equal(res.status, 'PASS');
+    });
+
+    it('must fail when attempting to cancel an already COMPLETED workflow', () => {
+      const res = validateWorkflowCancellation('COMPLETED', 200, 'CANCELLED');
+      assert.equal(res.valid, false);
+      assert.equal(res.status, 'FAIL');
+      assert.ok(res.reason.includes('cannot be cancelled from terminal state'));
+    });
+
+    it('must fail when cancel endpoint returns non-200 HTTP status', () => {
+      const res = validateWorkflowCancellation('WAITING_FOR_APPROVAL', 500, 'WAITING_FOR_APPROVAL');
+      assert.equal(res.valid, false);
+      assert.equal(res.status, 'FAIL');
+      assert.ok(res.reason.includes('returned HTTP 500'));
+    });
+
+    it('must fail when workflow does not reach CANCELLED state', () => {
+      const res = validateWorkflowCancellation('WAITING_FOR_APPROVAL', 200, 'RUNNING');
+      assert.equal(res.valid, false);
+      assert.equal(res.status, 'FAIL');
+      assert.ok(res.reason.includes('failed to reach CANCELLED state'));
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Additional Edge-Case Hardening
+  // ---------------------------------------------------------------------------
+  describe('Harness Edge-Case Hardening', () => {
+    it('must reject cross-account probes with empty or dummy resource IDs', () => {
+      const resDummy = validateCrossAccountProbe(true, 'usr_a', 'usr_b', 'dummy_run_123');
+      assert.equal(resDummy.valid, false);
+      assert.equal(resDummy.status, 'BLOCKED');
+
+      const resEmpty = validateCrossAccountProbe(true, 'usr_a', 'usr_b', '');
+      assert.equal(resEmpty.valid, false);
+      assert.equal(resEmpty.status, 'BLOCKED');
+    });
+
+    it('must fail server-authoritative entitlements when availableCredits is negative or non-numeric', () => {
+      const validSummary = {
+        principalId: 'usr_valid_customer_123',
+        planId: 'free',
+        dailyChatLimit: 15,
+        availableCredits: -5
+      };
+      const resNeg = validateServerAuthoritativeEntitlements(null, validSummary);
+      assert.equal(resNeg.valid, false);
+      assert.equal(resNeg.status, 'FAIL');
+      assert.ok(resNeg.reason?.includes('invalid or non-numeric availableCredits'));
+
+      const resNaN = validateServerAuthoritativeEntitlements(null, { ...validSummary, availableCredits: 'unlimited' as any });
+      assert.equal(resNaN.valid, false);
+      assert.equal(resNaN.status, 'FAIL');
+    });
+
+    it('must extract AUTHORITATIVE usage from latency_metrics deltaCount', () => {
+      const events = [
+        { event: 'model_provenance', data: '', parsedData: { provider: 'groq', executedModel: 'llama-3.3-70b-versatile' } },
+        { event: 'latency_metrics', data: '', parsedData: { provider: 'groq', executedModel: 'llama-3.3-70b-versatile', deltaCount: 16 } },
+        { event: 'usage', data: '', parsedData: { promptTokens: 20 } }
+      ];
+      const usage = calculateTokenUsageAndCost('test prompt', 'response', 'aira-fast', events);
+      assert.equal(usage.accountingType, 'AUTHORITATIVE');
+      assert.equal(usage.promptTokens, 20);
+      assert.equal(usage.completionTokens, 16);
+      assert.equal(usage.totalTokens, 36);
+      assert.equal(usage.provider, 'groq');
+    });
+
+    it('must assert enforcementNature is explicitly CLIENT_SAFETY_TRIPWIRE on budget guard', () => {
+      const guard = preDispatchBudgetGuard(0, 0.05, 'Test prompt for client tripwire assertion', 'aira-fast', 32);
+      assert.equal(guard.allowed, true);
+      assert.equal(guard.enforcementNature, 'CLIENT_SAFETY_TRIPWIRE');
+      assert.ok(guard.estimatedPromptTokens > 0);
+      assert.ok(guard.maxExpectedTokens > guard.estimatedPromptTokens);
     });
   });
 

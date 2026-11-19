@@ -39,11 +39,11 @@
 Executed via remediated test harness `scripts/production-acceptance-suite.ts` and verified with unit test suite `test/production-acceptance-harness.test.ts`:
 
 1. **OAuth Session Management & Provider Linking (Phases 1a, 1b, 1c, 1e):** **PASS**
-   - Account A (Google): Authenticated, user ID `neon_user_c0fc8caa...`, linked providers `[github, google]`.
-   - Account B (GitHub): Authenticated, user ID `neon_user_c0fc8caa...`, linked providers `[github, google]`.
+   - Account A (Google): Authenticated, principal hash `sha256:a5c94966...`, linked providers `[github, google]`.
+   - Account B (GitHub): Authenticated, principal hash `sha256:a5c94966...`, linked providers `[github, google]`.
    - Session reload persistence: Verified across page reloads.
 2. **Distinct-Principal Tenant Boundary (Phase 1d):** **BLOCKED**
-   - Both OAuth profiles resolve to identical user ID (`neon_user_c0fc8caa...`).
+   - Both OAuth profiles resolve to identical principal hash (`sha256:a5c94966...`).
    - A single principal cannot certify multi-tenant isolation.
 3. **Entitlements & Quotas (Phases 2a & 2b):**
    - Free tier quotas (15 daily chats) verified server-side: **PASS**

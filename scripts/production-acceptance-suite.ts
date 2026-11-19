@@ -451,7 +451,7 @@ export function validateServerAuthoritativeEntitlements(
 
 export interface CancellationVerificationResult {
   clientAbortStatus: 'PASS' | 'FAIL';
-  serverLeaseStatus: 'PASS' | 'UNVERIFIED/BLOCKED';
+  serverLeaseStatus: 'PASS' | 'FAIL' | 'UNVERIFIED/BLOCKED';
   reason: string;
 }
 
@@ -469,6 +469,14 @@ export function validateServerSideCancellation(
       clientAbortStatus: 'FAIL',
       serverLeaseStatus: 'UNVERIFIED/BLOCKED',
       reason: 'Client AbortController failed to terminate connection cleanly.'
+    };
+  }
+
+  if (postAbortRunState === 'RUNNING' || postAbortRunState === 'PENDING') {
+    return {
+      clientAbortStatus: 'PASS',
+      serverLeaseStatus: 'FAIL',
+      reason: `Server-side task failed to cancel; post-abort run state remains '${postAbortRunState}'.`
     };
   }
 
@@ -546,6 +554,152 @@ export function createHarmlessApprovalWorkflowDefinition(workflowId?: string) {
         input: {}
       }
     ]
+  };
+}
+
+export interface AuthorizationResponseValidation {
+  valid: boolean;
+  status: 'PASS' | 'FAIL' | 'BLOCKED';
+  reason: string;
+}
+
+/**
+ * Validates HTTP authorization responses across distinct probe contexts.
+ * Prohibits interpreting 404 on fabricated targets as proof of authorization,
+ * requires 401/403 for unauthorized calls, and flags data leakage on 200/201.
+ */
+export function validateAuthorizationResponse(
+  httpStatus: number,
+  context: 'ANONYMOUS_PROBE' | 'CROSS_ACCOUNT_PROBE' | 'OWNERSHIP_FORGERY' | 'LEGITIMATE_OWNER',
+  resourceExists: boolean = true
+): AuthorizationResponseValidation {
+  switch (context) {
+    case 'ANONYMOUS_PROBE': {
+      if (httpStatus === 401 || httpStatus === 403) {
+        return {
+          valid: true,
+          status: 'PASS',
+          reason: `Unauthenticated access rejected with HTTP ${httpStatus}.`
+        };
+      }
+      if (httpStatus === 200 || httpStatus === 201) {
+        return {
+          valid: false,
+          status: 'FAIL',
+          reason: `CRITICAL SECURITY DEFECT: Unauthenticated request returned HTTP ${httpStatus} exposing protected resource data.`
+        };
+      }
+      return {
+        valid: false,
+        status: 'FAIL',
+        reason: `Unexpected status HTTP ${httpStatus} on unauthenticated probe.`
+      };
+    }
+    case 'CROSS_ACCOUNT_PROBE': {
+      if (!resourceExists) {
+        return {
+          valid: false,
+          status: 'BLOCKED',
+          reason: 'Cannot certify tenant boundary against non-existent resource. HTTP 404 indicates missing data, not access control enforcement.'
+        };
+      }
+      if (httpStatus === 403 || httpStatus === 404) {
+        return {
+          valid: true,
+          status: 'PASS',
+          reason: `Cross-tenant access successfully denied with HTTP ${httpStatus}.`
+        };
+      }
+      if (httpStatus === 200 || httpStatus === 201) {
+        return {
+          valid: false,
+          status: 'FAIL',
+          reason: `CRITICAL SECURITY DEFECT: Foreign tenant resource returned HTTP ${httpStatus} leaking cross-tenant data.`
+        };
+      }
+      return {
+        valid: false,
+        status: 'FAIL',
+        reason: `Unexpected status HTTP ${httpStatus} on cross-account probe.`
+      };
+    }
+    case 'OWNERSHIP_FORGERY': {
+      if (httpStatus === 400 || httpStatus === 403) {
+        return {
+          valid: true,
+          status: 'PASS',
+          reason: `Ownership forgery in request payload rejected with HTTP ${httpStatus}.`
+        };
+      }
+      if (httpStatus === 200 || httpStatus === 201) {
+        return {
+          valid: false,
+          status: 'FAIL',
+          reason: `CRITICAL SECURITY DEFECT: Backend accepted forged principal identity in request body (HTTP ${httpStatus}).`
+        };
+      }
+      return {
+        valid: false,
+        status: 'FAIL',
+        reason: `Unexpected status HTTP ${httpStatus} on ownership forgery attempt.`
+      };
+    }
+    case 'LEGITIMATE_OWNER': {
+      if (httpStatus === 200 || httpStatus === 201) {
+        return {
+          valid: true,
+          status: 'PASS',
+          reason: `Legitimate owner access confirmed with HTTP ${httpStatus}.`
+        };
+      }
+      return {
+        valid: false,
+        status: 'FAIL',
+        reason: `Legitimate owner access denied with HTTP ${httpStatus}.`
+      };
+    }
+  }
+}
+
+export interface WorkflowCancellationValidation {
+  valid: boolean;
+  status: 'PASS' | 'FAIL';
+  reason: string;
+}
+
+/**
+ * Validates workflow cancellation lifecycle, ensuring valid transition to CANCELLED state.
+ */
+export function validateWorkflowCancellation(
+  initialState: string,
+  cancelHttpStatus: number,
+  finalState: string
+): WorkflowCancellationValidation {
+  if (['COMPLETED', 'FAILED'].includes(initialState)) {
+    return {
+      valid: false,
+      status: 'FAIL',
+      reason: `Workflow cannot be cancelled from terminal state '${initialState}'.`
+    };
+  }
+  if (cancelHttpStatus !== 200) {
+    return {
+      valid: false,
+      status: 'FAIL',
+      reason: `Workflow cancellation endpoint returned HTTP ${cancelHttpStatus} (expected 200).`
+    };
+  }
+  if (finalState !== 'CANCELLED') {
+    return {
+      valid: false,
+      status: 'FAIL',
+      reason: `Workflow failed to reach CANCELLED state (current state: '${finalState}').`
+    };
+  }
+  return {
+    valid: true,
+    status: 'PASS',
+    reason: `Workflow successfully transitioned from ${initialState} to CANCELLED via HTTP ${cancelHttpStatus}.`
   };
 }
 
