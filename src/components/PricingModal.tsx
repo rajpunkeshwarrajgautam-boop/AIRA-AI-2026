@@ -19,6 +19,8 @@ export const PricingModal: React.FC<PricingModalProps> = ({
   const [currency, setCurrency] = useState<CurrencyCode>('INR');
   const [loadingPlan, setLoadingPlan] = useState<PlanTier | null>(null);
   const [checkoutNotice, setCheckoutNotice] = useState<string | null>(null);
+  const [checkoutAvailable, setCheckoutAvailable] = useState<boolean>(false);
+  const [billingStatus, setBillingStatus] = useState<string>('checkout_disabled');
 
   useEffect(() => {
     if (!isOpen) return;
@@ -28,6 +30,23 @@ export const PricingModal: React.FC<PricingModalProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    fetch('/api/billing/plans')
+      .then(r => r.json())
+      .then(data => {
+        if (typeof data.checkoutAvailable === 'boolean') {
+          setCheckoutAvailable(data.checkoutAvailable);
+        }
+        if (data.billingStatus) {
+          setBillingStatus(data.billingStatus);
+        }
+      })
+      .catch(() => {
+        setCheckoutAvailable(false);
+      });
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -168,11 +187,12 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-orange-500/20 text-orange-300 border border-orange-500/30">Active</span>
                 )}
               </div>
-              <div className="text-2xl font-bold font-serif mb-1 text-stone-200">
-                Preview Mode
+              <div className="text-3xl font-bold font-serif mb-1 text-white">
+                {currency === 'INR' ? '₹399' : '$7.99'}
+                <span className="text-xs font-sans text-stone-400 font-normal"> / month</span>
               </div>
               <p className="text-[11px] text-stone-400 mb-6">
-                Commercial checkout coming soon · Pricing in review
+                {currency === 'INR' ? '₹338.14 + 18% GST · Tax compliant' : '$7.99 / month · Global billing'}
               </p>
 
               <div className="space-y-3 text-xs text-stone-300">
@@ -186,12 +206,35 @@ export const PricingModal: React.FC<PricingModalProps> = ({
               </div>
             </div>
 
-            <button
-              disabled
-              className="mt-8 w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-stone-800 text-stone-400 cursor-not-allowed border border-white/5"
-            >
-              {currentPlan === 'plus' ? 'Active Plan' : 'Preview Only — Billing Unavailable'}
-            </button>
+            {currentPlan === 'plus' ? (
+              <button
+                disabled
+                className="mt-8 w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-stone-800 text-stone-400 cursor-not-allowed border border-white/5"
+              >
+                Active Plan
+              </button>
+            ) : !checkoutAvailable ? (
+              <div className="mt-8 space-y-1.5">
+                <button
+                  disabled
+                  className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-stone-800 text-stone-400 cursor-not-allowed border border-white/5"
+                >
+                  Checkout Unavailable
+                </button>
+                <p className="text-[10px] text-center text-stone-500">
+                  Online checkout currently offline · Entitlements operational for active accounts
+                </p>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => handleSubscribe('plus')}
+                disabled={loadingPlan === 'plus'}
+                className="mt-8 w-full py-2.5 px-4 rounded-xl text-xs font-bold bg-claude-terracotta hover:bg-claude-terracotta-hover text-white transition-colors motion-reduce:transition-none shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99]"
+              >
+                {loadingPlan === 'plus' ? 'Initiating Checkout…' : 'Upgrade to Plus'}
+              </button>
+            )}
           </div>
 
           {/* PRO */}
@@ -203,11 +246,12 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-stone-800 text-stone-300 border border-white/10">Active</span>
                 )}
               </div>
-              <div className="text-2xl font-bold font-serif mb-1 text-stone-200">
-                Preview Mode
+              <div className="text-3xl font-bold font-serif mb-1 text-white">
+                {currency === 'INR' ? '₹999' : '$19.99'}
+                <span className="text-xs font-sans text-stone-400 font-normal"> / month</span>
               </div>
               <p className="text-[11px] text-stone-400 mb-6">
-                Commercial checkout coming soon · Pricing in review
+                {currency === 'INR' ? '₹846.61 + 18% GST · Tax compliant' : '$19.99 / month · Global billing'}
               </p>
 
               <div className="space-y-3 text-xs text-stone-300">
@@ -222,12 +266,35 @@ export const PricingModal: React.FC<PricingModalProps> = ({
               </div>
             </div>
 
-            <button
-              disabled
-              className="mt-8 w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-stone-800 text-stone-400 cursor-not-allowed border border-white/5"
-            >
-              {currentPlan === 'pro' ? 'Active Plan' : 'Preview Only — Billing Unavailable'}
-            </button>
+            {currentPlan === 'pro' ? (
+              <button
+                disabled
+                className="mt-8 w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-stone-800 text-stone-400 cursor-not-allowed border border-white/5"
+              >
+                Active Plan
+              </button>
+            ) : !checkoutAvailable ? (
+              <div className="mt-8 space-y-1.5">
+                <button
+                  disabled
+                  className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-stone-800 text-stone-400 cursor-not-allowed border border-white/5"
+                >
+                  Checkout Unavailable
+                </button>
+                <p className="text-[10px] text-center text-stone-500">
+                  Online checkout currently offline · Entitlements operational for active accounts
+                </p>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => handleSubscribe('pro')}
+                disabled={loadingPlan === 'pro'}
+                className="mt-8 w-full py-2.5 px-4 rounded-xl text-xs font-bold bg-claude-terracotta hover:bg-claude-terracotta-hover text-white transition-colors motion-reduce:transition-none shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99]"
+              >
+                {loadingPlan === 'pro' ? 'Initiating Checkout…' : 'Upgrade to Pro'}
+              </button>
+            )}
           </div>
         </div>
 

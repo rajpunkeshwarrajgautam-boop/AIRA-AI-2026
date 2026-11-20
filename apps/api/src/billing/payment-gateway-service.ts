@@ -135,7 +135,7 @@ export const CANDIDATE_PRICE_CATALOG: Record<PlanTier, Record<CurrencyCode, { id
     USD: { id: 'price_plus_usd', amountMinorUnits: 799, currency: 'USD' }
   },
   pro: {
-    INR: { id: 'price_pro_inr', amountMinorUnits: 149900, currency: 'INR' },
+    INR: { id: 'price_pro_inr', amountMinorUnits: 99900, currency: 'INR' },
     USD: { id: 'price_pro_usd', amountMinorUnits: 1999, currency: 'USD' }
   }
 };

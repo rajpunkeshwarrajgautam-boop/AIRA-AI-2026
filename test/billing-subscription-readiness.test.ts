@@ -277,7 +277,12 @@ describe('F1 — Plus/Pro Billing Integration and Subscription Readiness', () =>
         assert.equal(proCheckout.isSandbox, true);
         assert.equal(proCheckout.checkoutUrl, undefined);
 
-        // Test production pricing gating: in production mode, unapproved pricing fails closed
+        // Test Pro INR checkout (reconciled to 99900 paise / ₹999 inclusive of GST)
+        const proInrCheckout = await gateway.createSubscriptionCheckout('usr_buyer_pro_inr', 'pro', 'INR');
+        assert.equal(proInrCheckout.amount, 99900);
+        assert.equal(proInrCheckout.currency, 'INR');
+
+        // Test production pricing gating: in production mode, unapproved currency fails closed
         const origNodeEnv = process.env.NODE_ENV;
         const origTestFulfillment = process.env.AIRA_ENABLE_TEST_FULFILLMENT;
         try {
@@ -286,9 +291,17 @@ describe('F1 — Plus/Pro Billing Integration and Subscription Readiness', () =>
 
           await assert.rejects(
             async () => {
+              await gateway.createSubscriptionCheckout('usr_buyer_prod', 'plus', 'EUR' as any);
+            },
+            /BILLING_UNAVAILABLE: Production plan pricing for plus \(EUR\) has not received documented owner approval/
+          );
+
+          // In production mode without live gateway secrets or mock transport, checkout fails closed securely
+          await assert.rejects(
+            async () => {
               await gateway.createSubscriptionCheckout('usr_buyer_prod', 'plus', 'INR');
             },
-            /BILLING_UNAVAILABLE: Production plan pricing for plus \(INR\) has not received documented owner approval/
+            /BILLING_UNAVAILABLE: Live gateway secret keys not configured for order creation/
           );
         } finally {
           process.env.NODE_ENV = origNodeEnv;

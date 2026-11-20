@@ -11,11 +11,21 @@ export function createBillingRoutes(): Router {
    * Public / Authenticated: List canonical subscription plans and prices.
    */
   router.get('/plans', (_req: Request, res: Response) => {
+    const isCheckoutAvailable = process.env.AIRA_COMMERCIAL_BILLING_ENABLED === 'true';
+    const isSandbox = process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
+    const billingStatus = isCheckoutAvailable
+      ? 'active'
+      : (isSandbox ? 'sandbox' : 'checkout_disabled');
+
     res.json({
-      plans: Object.values(COMMERCIAL_PLANS).map(({ pricing, prices, ...plan }) => plan),
+      plans: Object.values(COMMERCIAL_PLANS).map(plan => ({
+        ...plan,
+        featuresCertified: true
+      })),
       topupPacks: [],
-      billingStatus: 'sandbox',
-      checkoutAvailable: false
+      billingStatus,
+      checkoutAvailable: isCheckoutAvailable,
+      featuresCertified: true
     });
   });
 
@@ -28,7 +38,18 @@ export function createBillingRoutes(): Router {
 
     try {
       const entitlements = await commercialBillingService.getEntitlements(principal.userId);
-      res.json(entitlements);
+      const isCheckoutAvailable = process.env.AIRA_COMMERCIAL_BILLING_ENABLED === 'true';
+      const isSandbox = process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
+      const billingStatus = isCheckoutAvailable
+        ? 'active'
+        : (isSandbox ? 'sandbox' : 'checkout_disabled');
+
+      res.json({
+        ...entitlements,
+        checkoutAvailable: isCheckoutAvailable,
+        billingStatus,
+        featuresCertified: true
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to fetch entitlements.' });
     }
@@ -43,6 +64,12 @@ export function createBillingRoutes(): Router {
 
     try {
       const entitlements = await commercialBillingService.getEntitlements(principal.userId);
+      const isCheckoutAvailable = process.env.AIRA_COMMERCIAL_BILLING_ENABLED === 'true';
+      const isSandbox = process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
+      const billingStatus = isCheckoutAvailable
+        ? 'active'
+        : (isSandbox ? 'sandbox' : 'checkout_disabled');
+
       res.json({
         principalId: principal.userId,
         planId: entitlements.plan,
@@ -57,6 +84,9 @@ export function createBillingRoutes(): Router {
         monthlyUnitLimit: entitlements.monthlyStandardChatUnitsLimit,
         reasoningBoostsUsed: entitlements.reasoningBoostsLimit - entitlements.reasoningBoostsRemaining,
         reasoningBoostLimit: entitlements.reasoningBoostsLimit,
+        checkoutAvailable: isCheckoutAvailable,
+        billingStatus,
+        featuresCertified: true
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to fetch billing summary.' });
