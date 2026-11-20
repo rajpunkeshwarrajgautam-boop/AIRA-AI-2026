@@ -680,4 +680,257 @@ describe('Invoice Concurrency, Tax Matrix & Failure Handling Integrity Suite', (
       assert.equal(res.taxComplianceStatus, 'PROVISIONAL_PENDING_GSTIN_VERIFICATION');
     });
   });
+
+  describe('7. Fencing & Credit Note Unconditional Verification', () => {
+    it('rejects missing, empty, or whitespace owner token in finalizeInvoiceClaimCas', async () => {
+      const { dbClient } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+
+      const dummyInv = {
+        invoiceNumber: 'INV-2026-0001',
+        date: '2026-11-20',
+        plan: 'AIRA Plus',
+        currency: 'INR',
+        totalAmount: 399,
+        taxableBase: 338.14,
+        gstAmount: 60.86,
+        sacCode: '998431',
+        supplierName: 'Virexa',
+        status: 'Paid',
+        pdfDownloadAvailable: false
+      };
+
+      await assert.rejects(
+        () => service.finalizeInvoiceClaimCas({
+          trx: dbClient,
+          cycleBindingKey: 'key_1',
+          ownerToken: '',
+          generation: 1,
+          invoiceRecord: dummyInv as any
+        }),
+        /INVALID_FENCING_PARAMETERS.*ownerToken/
+      );
+
+      await assert.rejects(
+        () => service.finalizeInvoiceClaimCas({
+          trx: dbClient,
+          cycleBindingKey: 'key_1',
+          ownerToken: '   ',
+          generation: 1,
+          invoiceRecord: dummyInv as any
+        }),
+        /INVALID_FENCING_PARAMETERS.*ownerToken/
+      );
+    });
+
+    it('rejects nonpositive, non-integer, or missing generation in finalizeInvoiceClaimCas', async () => {
+      const { dbClient } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+
+      const dummyInv = {
+        invoiceNumber: 'INV-2026-0001',
+        date: '2026-11-20',
+        plan: 'AIRA Plus',
+        currency: 'INR',
+        totalAmount: 399,
+        taxableBase: 338.14,
+        gstAmount: 60.86,
+        sacCode: '998431',
+        supplierName: 'Virexa',
+        status: 'Paid',
+        pdfDownloadAvailable: false
+      };
+
+      await assert.rejects(
+        () => service.finalizeInvoiceClaimCas({
+          trx: dbClient,
+          cycleBindingKey: 'key_1',
+          ownerToken: 'wkr_valid',
+          generation: 0,
+          invoiceRecord: dummyInv as any
+        }),
+        /INVALID_FENCING_PARAMETERS.*generation/
+      );
+
+      await assert.rejects(
+        () => service.finalizeInvoiceClaimCas({
+          trx: dbClient,
+          cycleBindingKey: 'key_1',
+          ownerToken: 'wkr_valid',
+          generation: -1,
+          invoiceRecord: dummyInv as any
+        }),
+        /INVALID_FENCING_PARAMETERS.*generation/
+      );
+
+      await assert.rejects(
+        () => service.finalizeInvoiceClaimCas({
+          trx: dbClient,
+          cycleBindingKey: 'key_1',
+          ownerToken: 'wkr_valid',
+          generation: 1.5,
+          invoiceRecord: dummyInv as any
+        }),
+        /INVALID_FENCING_PARAMETERS.*generation/
+      );
+    });
+
+    it('throws STALE_WORKER_FENCING_LOST when affected rows is not 1 in finalizeInvoiceClaimCas', async () => {
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+
+      // Seed idempotent_operations with generation 2
+      tables.idempotent_operations.push({
+        key: 'key_cas_test',
+        status: 'IN_PROGRESS',
+        owner_token: 'wkr_new',
+        generation: 2
+      });
+
+      const dummyInv = {
+        invoiceNumber: 'INV-2026-0001',
+        date: '2026-11-20',
+        plan: 'AIRA Plus',
+        currency: 'INR',
+        totalAmount: 399,
+        taxableBase: 338.14,
+        gstAmount: 60.86,
+        sacCode: '998431',
+        supplierName: 'Virexa',
+        status: 'Paid',
+        pdfDownloadAvailable: false
+      };
+
+      // Stale worker attempts to finalize with generation 1
+      await assert.rejects(
+        () => service.finalizeInvoiceClaimCas({
+          trx: dbClient,
+          cycleBindingKey: 'key_cas_test',
+          ownerToken: 'wkr_stale',
+          generation: 1,
+          invoiceRecord: dummyInv as any
+        }),
+        /STALE_WORKER_FENCING_LOST/
+      );
+    });
+
+    it('rejects credit note verification when any of the 6 dimensions is missing', () => {
+      const service = new PaymentGatewayService();
+      const existingCn = {
+        customer_id: 'cust_1',
+        refund_id: 'ref_1',
+        subscription_id: 'sub_1',
+        currency: 'INR',
+        refund_amount: 399,
+        original_invoice_number: 'INV-2026-0001'
+      };
+
+      assert.throws(
+        () => service.verifyCreditNoteDimensions(existingCn, {
+          refundId: 'ref_1',
+          subscriptionId: 'sub_1',
+          customerId: 'cust_1',
+          currency: 'INR',
+          refundAmount: 399,
+          originalInvoiceNumber: ''
+        }),
+        /INVALID_VERIFICATION_PARAMETERS/
+      );
+    });
+
+    it('rejects mismatched original invoice number in credit note verification', () => {
+      const service = new PaymentGatewayService();
+      const existingCn = {
+        customer_id: 'cust_1',
+        refund_id: 'ref_1',
+        subscription_id: 'sub_1',
+        currency: 'INR',
+        refund_amount: 399,
+        original_invoice_number: 'INV-2026-ORIGINAL'
+      };
+
+      assert.throws(
+        () => service.verifyCreditNoteDimensions(existingCn, {
+          refundId: 'ref_1',
+          subscriptionId: 'sub_1',
+          customerId: 'cust_1',
+          currency: 'INR',
+          refundAmount: 399,
+          originalInvoiceNumber: 'INV-2026-DIFFERENT'
+        }),
+        /CREDIT_NOTE_DIMENSION_MISMATCH.*original_invoice_number/
+      );
+    });
+  });
+
+  describe('8. Commit-Atomic Credit Note Reconciliation Lifecycle', () => {
+    it('does not emit CREDIT_NOTE_RECONCILED when no prior pending reconciliation record exists', async () => {
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+
+      await service.clearCreditNotePendingReconciliation({
+        trx: dbClient,
+        customerId: 'cust_normal',
+        subscriptionId: 'sub_normal',
+        refundId: 'ref_normal_01',
+        creditNoteNumber: 'CN-2026-0001',
+        now: Date.now()
+      });
+
+      const reconciledEvents = tables.billing_audit_events.filter(e => e.event_type === 'CREDIT_NOTE_RECONCILED');
+      assert.equal(reconciledEvents.length, 0, 'No CREDIT_NOTE_RECONCILED event without prior pending record');
+    });
+
+    it('emits CREDIT_NOTE_RECONCILED within transaction when durable pending record exists and deduplicates', async () => {
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+
+      const now = Date.now();
+      // Seed pending record
+      tables.billing_audit_events.push({
+        id: 'bae_pending_01',
+        customer_id: 'cust_reconciled',
+        event_type: 'CREDIT_NOTE_PENDING_RECONCILIATION',
+        actor_type: 'system',
+        actor_id: 'pending_ref_rec_01',
+        payload: JSON.stringify({
+          subscriptionId: 'sub_reconciled',
+          refundId: 'ref_rec_01',
+          status: 'PENDING_RECONCILIATION'
+        }),
+        created_at: now - 5000
+      });
+
+      // First call emits CREDIT_NOTE_RECONCILED
+      await service.clearCreditNotePendingReconciliation({
+        trx: dbClient,
+        customerId: 'cust_reconciled',
+        subscriptionId: 'sub_reconciled',
+        refundId: 'ref_rec_01',
+        creditNoteNumber: 'CN-2026-0002',
+        now
+      });
+
+      const events1 = tables.billing_audit_events.filter(e => e.event_type === 'CREDIT_NOTE_RECONCILED');
+      assert.equal(events1.length, 1, 'Exactly one CREDIT_NOTE_RECONCILED emitted on resolution');
+
+      // Duplicate call deduplicates
+      await service.clearCreditNotePendingReconciliation({
+        trx: dbClient,
+        customerId: 'cust_reconciled',
+        subscriptionId: 'sub_reconciled',
+        refundId: 'ref_rec_01',
+        creditNoteNumber: 'CN-2026-0002',
+        now: now + 100
+      });
+
+      const events2 = tables.billing_audit_events.filter(e => e.event_type === 'CREDIT_NOTE_RECONCILED');
+      assert.equal(events2.length, 1, 'Duplicate call must be deduplicated by refund ID');
+    });
+  });
 });

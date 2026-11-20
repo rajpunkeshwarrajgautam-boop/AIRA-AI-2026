@@ -1,10 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fork } from 'node:child_process';
+import { fork, execSync, spawn, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execSync } from 'node:child_process';
 import knex, { type Knex } from 'knex';
+
+// Prevent WSL idle-shutdown while Node executes test suites against WSL PostgreSQL clusters
+let wslKeepAlive: ChildProcess | null = null;
+try {
+  wslKeepAlive = spawn('wsl', ['-d', 'Ubuntu-24.04', 'sleep', '600'], { stdio: 'ignore' });
+  process.on('exit', () => {
+    try { wslKeepAlive?.kill(); } catch {}
+  });
+  process.on('beforeExit', () => {
+    try { wslKeepAlive?.kill(); } catch {}
+  });
+} catch {}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -784,33 +795,39 @@ for (const engine of ENGINES) {
       const refundIdFail = `rf_fail_test_${now}`;
       const subRecordFail = await db('subscriptions').where({ id: subIdFail }).first();
 
-      // Execute transaction where credit note generation fails (simulating DB error)
+      // Execute transaction where credit note generation fails (simulating failure via debugHookBeforeCommit)
       let txnThrew = false;
       try {
-        await db.transaction(async (trx) => {
-          // Update status in business transaction
-          await trx('subscriptions').where({ id: subIdFail }).update({
-            status: 'refunded',
-            updated_at: now
-          });
-
-          // Simulate non-uniqueness database error inside issueDurableCreditNote
-          await paymentGatewayService.issueDurableCreditNote({
-            trx: {
-              ...trx,
-              schema: { hasTable: async () => true },
-              raw: async (sql: string) => {
-                if (sql.includes('SAVEPOINT')) return;
-                return trx.raw(sql);
+        await paymentGatewayService.handleSubscriptionRefund({
+          gateway: 'razorpay',
+          subRecord: subRecordFail,
+          refundPayload: {
+            event: 'refund.processed',
+            payload: {
+              payment: {
+                entity: {
+                  id: initialPayFail,
+                  order_id: `sub_rzp_fail_${now}`,
+                  amount: 39900,
+                  currency: 'INR',
+                  status: 'refunded'
+                }
+              },
+              refund: {
+                entity: {
+                  id: refundIdFail,
+                  payment_id: initialPayFail,
+                  amount: 39900,
+                  currency: 'INR',
+                  status: 'processed'
+                }
               }
-            },
-            subRecord: { ...subRecordFail, id: 'sub_invalid_nonexistent' },
-            refundEntity: { id: refundIdFail },
-            refundAmount: 399.00,
-            isPartialRefund: false,
-            gateway: 'razorpay',
-            now
-          });
+            }
+          },
+          now,
+          debugHookBeforeCommit: async ({ refundId }) => {
+            throw new Error(`INJECTED_ROLLBACK_BEFORE_COMMIT:${refundId}`);
+          }
         });
       } catch (err: any) {
         txnThrew = true;

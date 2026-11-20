@@ -1896,7 +1896,8 @@ export class PaymentGatewayService {
 
   /**
    * Atomically and safely finalizes an invoice claim in idempotent_operations using CAS.
-   * Enforces status = 'IN_PROGRESS', matching owner_token, and matching generation.
+   * Strictly enforces non-empty ownerToken, positive integer generation, status = 'IN_PROGRESS',
+   * and requires an explicit database affected-row count of exactly 1.
    * Throws STALE_WORKER_FENCING_LOST if the worker lost ownership.
    */
   public async finalizeInvoiceClaimCas(params: {
@@ -1907,19 +1908,27 @@ export class PaymentGatewayService {
     invoiceRecord: InvoiceRecord;
     now?: number;
   }): Promise<void> {
-    const now = params.now || Date.now();
-    const whereClause: Record<string, any> = {
-      key: params.cycleBindingKey,
-      status: 'IN_PROGRESS'
-    };
-    if (params.ownerToken) {
-      whereClause.owner_token = params.ownerToken;
+    if (!params.ownerToken || typeof params.ownerToken !== 'string' || params.ownerToken.trim().length === 0) {
+      throw new Error('INVALID_FENCING_PARAMETERS: ownerToken is required, non-empty string');
     }
-    if (params.generation !== undefined && params.generation !== null) {
-      whereClause.generation = params.generation;
+    if (
+      params.generation === undefined ||
+      params.generation === null ||
+      typeof params.generation !== 'number' ||
+      !Number.isInteger(params.generation) ||
+      params.generation <= 0
+    ) {
+      throw new Error(`INVALID_FENCING_PARAMETERS: generation must be a positive integer, received: ${params.generation}`);
     }
 
-    const query = params.trx('idempotent_operations').where(whereClause);
+    const now = params.now || Date.now();
+    const query = params.trx('idempotent_operations').where({
+      key: params.cycleBindingKey,
+      status: 'IN_PROGRESS',
+      owner_token: params.ownerToken.trim(),
+      generation: params.generation
+    });
+
     const affected = await query.update({
       status: 'COMPLETED',
       response_status: 200,
@@ -1928,19 +1937,20 @@ export class PaymentGatewayService {
       updated_at: now
     });
 
-    if (affected !== undefined && affected !== null) {
-      const count = Array.isArray(affected) ? affected.length : Number(affected);
-      if (Number.isFinite(count) && count !== 1) {
-        throw new Error(
-          `STALE_WORKER_FENCING_LOST: Worker lost ownership lease (token: ${params.ownerToken}, gen: ${params.generation}) before finalization`
-        );
-      }
+    if (affected === undefined || affected === null) {
+      throw new Error('FENCING_VERIFICATION_FAILED: Database returned null or undefined affected row count');
+    }
+    const count = Array.isArray(affected) ? affected.length : Number(affected);
+    if (!Number.isFinite(count) || count !== 1) {
+      throw new Error(
+        `STALE_WORKER_FENCING_LOST: Worker lost ownership lease (token: ${params.ownerToken}, gen: ${params.generation}) before finalization (affected rows: ${count})`
+      );
     }
   }
 
   /**
    * Persists CREDIT_NOTE_PENDING_RECONCILIATION out-of-band on an independent commit boundary.
-   * Ensures the pending reconciliation event survives transaction rollbacks on the main business transaction.
+   * Checks persistence to ensure a failed writer does not silently report durable recovery.
    */
   public async recordCreditNotePendingReconciliationOutOfBand(params: {
     customerId: string;
@@ -1950,12 +1960,13 @@ export class PaymentGatewayService {
     gateway: string;
     error: string;
     now?: number;
-  }): Promise<void> {
+  }): Promise<boolean> {
     const now = params.now || Date.now();
     const dbClient = this.getDb();
+    const id = `bae_${crypto.randomUUID().replace(/-/g, '')}`;
     try {
       await dbClient('billing_audit_events').insert({
-        id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+        id,
         customer_id: params.customerId,
         event_type: 'CREDIT_NOTE_PENDING_RECONCILIATION',
         actor_type: 'system',
@@ -1970,15 +1981,25 @@ export class PaymentGatewayService {
         }),
         created_at: now
       });
+
+      const check = await dbClient('billing_audit_events').where({ id }).first();
+      if (!check) {
+        throw new Error('FAILURE_EVIDENCE_PERSISTENCE_FAILED: Failed to verify inserted pending reconciliation event');
+      }
+      return true;
     } catch (err: any) {
       console.error('[Billing] Failed to persist out-of-band CREDIT_NOTE_PENDING_RECONCILIATION:', err?.message || err);
+      throw new Error(`FAILURE_EVIDENCE_PERSISTENCE_FAILED: ${err?.message || err}`);
     }
   }
 
   /**
-   * Persists CREDIT_NOTE_RECONCILED out-of-band when a previously pending credit note is successfully reconciled.
+   * Persists CREDIT_NOTE_RECONCILED within the enclosing refund transaction.
+   * Emits CREDIT_NOTE_RECONCILED only when an existing durable pending record genuinely transitions to successfully reconciled.
+   * Deduplicates by refund identity and rolls back cleanly with the enclosing transaction on failure.
    */
   public async clearCreditNotePendingReconciliation(params: {
+    trx: any;
     customerId: string;
     subscriptionId: string;
     refundId: string;
@@ -1986,28 +2007,137 @@ export class PaymentGatewayService {
     now?: number;
   }): Promise<void> {
     const now = params.now || Date.now();
-    const dbClient = this.getDb();
-    try {
-      await dbClient('billing_audit_events').insert({
-        id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+    const trx = params.trx;
+
+    // 1. Check if a durable pending reconciliation record exists
+    const pendingQuery = trx('billing_audit_events')
+      .where({
         customer_id: params.customerId,
-        event_type: 'CREDIT_NOTE_RECONCILED',
-        actor_type: 'system',
-        actor_id: params.creditNoteNumber,
-        payload: JSON.stringify({
-          subscriptionId: params.subscriptionId,
-          refundId: params.refundId,
-          creditNoteNumber: params.creditNoteNumber,
-          reconciledAt: now,
-          status: 'RECONCILED'
-        }),
-        created_at: now
+        event_type: 'CREDIT_NOTE_PENDING_RECONCILIATION'
       });
+    const pendingRows = typeof pendingQuery.select === 'function' ? await pendingQuery.select('*') : (await pendingQuery || []);
+    const pendingRecord = (pendingRows || []).find((r: any) => {
+      if (r.actor_id === `pending_${params.refundId}` || r.actor_id === params.refundId) {
+        return true;
+      }
+      try {
+        const p = typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload;
+        return p?.refundId === params.refundId;
+      } catch {
+        return false;
+      }
+    });
+
+    if (!pendingRecord) {
+      // No prior pending reconciliation record exists; nothing to reconcile.
+      return;
+    }
+
+    // 2. Deduplicate: check if CREDIT_NOTE_RECONCILED was already emitted for this refund
+    const reconciledQuery = trx('billing_audit_events')
+      .where({
+        customer_id: params.customerId,
+        event_type: 'CREDIT_NOTE_RECONCILED'
+      });
+    const reconciledRows = typeof reconciledQuery.select === 'function' ? await reconciledQuery.select('*') : (await reconciledQuery || []);
+    const existingReconciled = (reconciledRows || []).find((r: any) => {
+      if (r.actor_id === params.creditNoteNumber || r.actor_id === params.refundId) {
+        return true;
+      }
+      try {
+        const p = typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload;
+        return p?.refundId === params.refundId || p?.creditNoteNumber === params.creditNoteNumber;
+      } catch {
+        return false;
+      }
+    });
+
+    if (existingReconciled) {
+      return;
+    }
+
+    // 3. Persist CREDIT_NOTE_RECONCILED within the transaction
+    await trx('billing_audit_events').insert({
+      id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+      customer_id: params.customerId,
+      event_type: 'CREDIT_NOTE_RECONCILED',
+      actor_type: 'system',
+      actor_id: params.creditNoteNumber,
+      payload: JSON.stringify({
+        subscriptionId: params.subscriptionId,
+        refundId: params.refundId,
+        creditNoteNumber: params.creditNoteNumber,
+        reconciledAt: now,
+        status: 'RECONCILED'
+      }),
+      created_at: now
+    });
+  }
+
+  /**
+   * Resolves the authoritative original invoice number from relational billing_invoices,
+   * audit events, or idempotent bindings before accepting a refund replay as reconciled.
+   */
+  public async resolveAuthoritativeOriginalInvoice(
+    trx: any,
+    subRecord: any
+  ): Promise<string | undefined> {
+    // 1. Relational billing_invoices table (most authoritative)
+    try {
+      const hasInvoicesTable = typeof trx.schema?.hasTable === 'function'
+        ? await trx.schema.hasTable('billing_invoices')
+        : false;
+      if (hasInvoicesTable) {
+        const invRow = await trx('billing_invoices')
+          .where({ subscription_id: subRecord.id })
+          .orderBy('created_at', 'asc')
+          .first();
+        if (invRow?.invoice_number) {
+          return invRow.invoice_number;
+        }
+      }
     } catch {}
+
+    // 2. Billing audit events
+    try {
+      const q = trx('billing_audit_events').where({
+        customer_id: subRecord.customer_id,
+        event_type: 'TAX_INVOICE_ISSUED'
+      });
+      const rows = typeof q.select === 'function' ? await q.select('*') : (await q || []);
+      const match = (rows || []).find((r: any) => {
+        try {
+          const p = typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload;
+          return p?.subscriptionId === subRecord.id;
+        } catch { return false; }
+      });
+      if (match) {
+        const p = typeof match.payload === 'string' ? JSON.parse(match.payload) : match.payload;
+        if (p?.invoiceNumber || match.actor_id) {
+          return p?.invoiceNumber || match.actor_id;
+        }
+      }
+    } catch {}
+
+    // 3. Idempotent operations binding
+    try {
+      const invBinding = await trx('idempotent_operations').where({
+        key: `inv_binding:${subRecord.customer_id}:${subRecord.id}:cycle:1`
+      }).first();
+      if (invBinding?.response_body) {
+        const parsed = JSON.parse(invBinding.response_body);
+        if (parsed?.invoiceNumber) {
+          return parsed.invoiceNumber;
+        }
+      }
+    } catch {}
+
+    return undefined;
   }
 
   /**
    * Validates all 6 dimensions of an existing credit note against refund parameters.
+   * Unconditionally requires refund ID, customer ID, subscription ID, currency, amount, and original invoice linkage.
    */
   public verifyCreditNoteDimensions(existingCn: any, expected: {
     refundId: string;
@@ -2015,8 +2145,19 @@ export class PaymentGatewayService {
     customerId: string;
     currency: string;
     refundAmount: number;
-    originalInvoiceNumber?: string;
+    originalInvoiceNumber: string;
   }): void {
+    if (
+      !expected.refundId ||
+      !expected.subscriptionId ||
+      !expected.customerId ||
+      !expected.currency ||
+      expected.refundAmount === undefined ||
+      expected.refundAmount === null ||
+      !expected.originalInvoiceNumber
+    ) {
+      throw new Error('INVALID_VERIFICATION_PARAMETERS: All 6 dimensions must be provided for credit note verification');
+    }
     if (existingCn.customer_id !== expected.customerId) {
       throw new Error(`CREDIT_NOTE_TENANT_MISMATCH: Existing credit note customer ${existingCn.customer_id} does not match refund customer ${expected.customerId}`);
     }
@@ -2033,9 +2174,9 @@ export class PaymentGatewayService {
       throw new Error(`CREDIT_NOTE_AMOUNT_MISMATCH: Existing credit note amount ${existingCn.refund_amount} does not match refund amount ${expected.refundAmount}`);
     }
     if (
-      expected.originalInvoiceNumber &&
       expected.originalInvoiceNumber !== 'UNRESOLVED_ORIGINAL_INVOICE' &&
       existingCn.original_invoice_number &&
+      existingCn.original_invoice_number !== 'UNRESOLVED_ORIGINAL_INVOICE' &&
       existingCn.original_invoice_number !== expected.originalInvoiceNumber
     ) {
       throw new Error(`CREDIT_NOTE_DIMENSION_MISMATCH: Existing original_invoice_number ${existingCn.original_invoice_number} does not match ${expected.originalInvoiceNumber}`);
@@ -2109,8 +2250,15 @@ export class PaymentGatewayService {
     // 3. Atomically acquire cycle-level distributed lease in idempotent_operations with owner token & generation
     let acquiredLease = false;
     const leaseDuration = params.leaseDurationMs || 30000;
+    const isPostgres = typeof params.trx?.raw === 'function';
+    const inTransaction = isPostgres && (Boolean(params.trx.isTransaction) || typeof params.trx.commit === 'function');
+
+    if (inTransaction) {
+      await params.trx.raw('SAVEPOINT sp_lease_acquire');
+    }
+
     try {
-      await params.trx('idempotent_operations').insert({
+      let ins = params.trx('idempotent_operations').insert({
         key: cycleBindingKey,
         principal_id: params.principalId || params.customerId,
         operation_id: `inv_binding_${params.purchaseRecord.id}_cycle_${cycle}`,
@@ -2125,9 +2273,40 @@ export class PaymentGatewayService {
         created_at: params.now,
         updated_at: params.now
       });
-      acquiredLease = true;
-    } catch {
-      acquiredLease = false;
+      if (typeof ins.onConflict === 'function') {
+        ins = ins.onConflict('key').ignore();
+      }
+      const res = await ins;
+      if (inTransaction) {
+        await params.trx.raw('RELEASE SAVEPOINT sp_lease_acquire');
+      }
+
+      if (res && res.rowCount !== undefined) {
+        acquiredLease = res.rowCount === 1;
+      } else if (Array.isArray(res)) {
+        acquiredLease = res.length > 0;
+      } else {
+        acquiredLease = true;
+      }
+    } catch (insertErr: any) {
+      if (inTransaction) {
+        try {
+          await params.trx.raw('ROLLBACK TO SAVEPOINT sp_lease_acquire');
+        } catch {}
+      }
+
+      const isContention = insertErr?.code === '23505' ||
+        String(insertErr?.message).includes('unique') ||
+        String(insertErr?.message).includes('duplicate') ||
+        String(insertErr?.message).includes('conflict');
+
+      if (isContention) {
+        acquiredLease = false;
+      } else {
+        // Propagate unrelated PostgreSQL errors!
+        // Do not treat connectivity, timeout or constraint-integrity failures as ordinary contention!
+        throw insertErr;
+      }
     }
 
     if (acquiredLease) {
@@ -2151,42 +2330,24 @@ export class PaymentGatewayService {
           if (existingBinding && existingBinding.status === 'COMPLETED' && existingBinding.response_body) {
             return JSON.parse(existingBinding.response_body);
           }
-        } catch {}
+        } catch (bindErr: any) {
+          if (bindErr?.code === '57014' || String(bindErr?.message).includes('timeout')) throw bindErr;
+        }
 
         // Check relational billing_invoices table first if available
+        let preExistingInvRow: any = null;
         try {
           const hasInvTable = typeof params.trx.schema?.hasTable === 'function'
             ? await params.trx.schema.hasTable('billing_invoices')
             : false;
           if (hasInvTable) {
-            const existingInv = await params.trx('billing_invoices')
+            preExistingInvRow = await params.trx('billing_invoices')
               .where({ subscription_id: params.purchaseRecord.id, cycle_number: cycle })
               .first();
-            if (existingInv) {
-              const mapped = this.mapBillingInvoiceRow(existingInv);
-              return mapped;
-            }
           }
-        } catch {}
-
-        // Check billing_audit_events for completed invoice
-        try {
-          const auditQuery = params.trx('billing_audit_events').where({
-            customer_id: params.customerId,
-            event_type: 'TAX_INVOICE_ISSUED'
-          });
-          const rows: any[] = typeof auditQuery.select === 'function' ? await auditQuery.select('*') : (await auditQuery || []);
-          const matched = (rows || []).find((ev: any) => {
-            try {
-              const p = typeof ev.payload === 'string' ? JSON.parse(ev.payload) : ev.payload;
-              return p?.subscriptionId === params.purchaseRecord.id && (p?.cycleNumber || 1) === cycle;
-            } catch { return false; }
-          });
-          if (matched) {
-            const parsed = typeof matched.payload === 'string' ? JSON.parse(matched.payload) : matched.payload;
-            return parsed;
-          }
-        } catch {}
+        } catch (invErr: any) {
+          if (invErr?.code === '57014' || String(invErr?.message).includes('timeout')) throw invErr;
+        }
 
         // Check if existing lease is expired (previous worker crashed, stalled, or timed out)
         const now = Date.now();
@@ -2215,9 +2376,26 @@ export class PaymentGatewayService {
               currentOwnerToken = newOwnerToken;
               currentGeneration = newGen;
               shouldTakeOverLease = true;
+
+              // If an invoice exists but its claim remains IN_PROGRESS:
+              // Complete the claim with the original invoice and return it (never leave claim stranded!)
+              if (preExistingInvRow) {
+                const mapped = this.mapBillingInvoiceRow(preExistingInvRow);
+                await this.finalizeInvoiceClaimCas({
+                  trx: params.trx,
+                  cycleBindingKey,
+                  ownerToken: currentOwnerToken,
+                  generation: currentGeneration,
+                  invoiceRecord: mapped,
+                  now
+                });
+                return mapped;
+              }
               break;
             }
-          } catch {}
+          } catch (fenceErr: any) {
+            if (fenceErr?.code === '57014' || String(fenceErr?.message).includes('timeout')) throw fenceErr;
+          }
         }
 
         await new Promise((r) => setTimeout(r, 50));
@@ -2263,7 +2441,9 @@ export class PaymentGatewayService {
             preExistingInvoice = this.mapBillingInvoiceRow(invRow);
           }
         }
-      } catch {}
+      } catch (checkErr: any) {
+        if (checkErr?.code === '57014' || String(checkErr?.message).includes('timeout')) throw checkErr;
+      }
 
       if (!preExistingInvoice) {
         try {
@@ -2280,7 +2460,9 @@ export class PaymentGatewayService {
           if (matched) {
             preExistingInvoice = typeof matched.payload === 'string' ? JSON.parse(matched.payload) : matched.payload;
           }
-        } catch {}
+        } catch (auditErr: any) {
+          if (auditErr?.code === '57014' || String(auditErr?.message).includes('timeout')) throw auditErr;
+        }
       }
 
       if (preExistingInvoice) {
@@ -2302,6 +2484,9 @@ export class PaymentGatewayService {
       for (let attempt = 0; attempt < 5; attempt++) {
         invoiceNumber = await this.allocateInvoiceNumber(params.trx, 2026);
         const claimKey = `inv_num:${invoiceNumber}`;
+        if (inTransaction) {
+          await params.trx.raw('SAVEPOINT sp_inv_claim');
+        }
         try {
           let insClaim = params.trx('idempotent_operations').insert({
             key: claimKey,
@@ -2316,12 +2501,28 @@ export class PaymentGatewayService {
             created_at: params.now,
             updated_at: params.now
           });
-          await insClaim;
-          claimed = true;
-          break;
-        } catch {
-          // Unique constraint violation on claimKey => collision, loop to next sequence number
-          continue;
+          if (typeof insClaim.onConflict === 'function') {
+            insClaim = insClaim.onConflict('key').ignore();
+          }
+          const res = await insClaim;
+          if (inTransaction) {
+            await params.trx.raw('RELEASE SAVEPOINT sp_inv_claim');
+          }
+          if (res && res.rowCount !== undefined ? res.rowCount === 1 : true) {
+            claimed = true;
+            break;
+          }
+        } catch (claimErr: any) {
+          if (inTransaction) {
+            try {
+              await params.trx.raw('ROLLBACK TO SAVEPOINT sp_inv_claim');
+            } catch {}
+          }
+          const isCollision = claimErr?.code === '23505' || String(claimErr?.message).includes('unique') || String(claimErr?.message).includes('duplicate');
+          if (isCollision) {
+            continue;
+          }
+          throw claimErr;
         }
       }
 
@@ -2488,15 +2689,18 @@ export class PaymentGatewayService {
           .where({ refund_id: String(refundId) })
           .first();
         if (existingCn) {
+          const originalInvoiceNumber = (await this.resolveAuthoritativeOriginalInvoice(params.trx, params.subRecord)) || existingCn.original_invoice_number || 'UNRESOLVED_ORIGINAL_INVOICE';
           this.verifyCreditNoteDimensions(existingCn, {
             refundId: String(refundId),
             subscriptionId: params.subRecord.id,
             customerId: params.subRecord.customer_id,
             currency: params.subRecord.currency || 'INR',
-            refundAmount: params.refundAmount
+            refundAmount: params.refundAmount,
+            originalInvoiceNumber
           });
 
           await this.clearCreditNotePendingReconciliation({
+            trx: params.trx,
             customerId: params.subRecord.customer_id,
             subscriptionId: params.subRecord.id,
             refundId: String(refundId),
@@ -2512,7 +2716,7 @@ export class PaymentGatewayService {
         }
       }
     } catch (err: any) {
-      if (err?.message?.includes('MISMATCH')) throw err;
+      if (err?.message?.includes('MISMATCH') || err?.message?.includes('INVALID_VERIFICATION')) throw err;
     }
 
     // Check idempotent_operations binding
@@ -2526,6 +2730,9 @@ export class PaymentGatewayService {
 
     // 2. Allocate credit note sequence number
     let creditNoteNumber = '';
+    const isPostgres = typeof params.trx?.raw === 'function';
+    const inTransaction = isPostgres && (Boolean(params.trx.isTransaction) || typeof params.trx.commit === 'function');
+
     for (let attempt = 0; attempt < 10; attempt++) {
       creditNoteNumber = await this.allocateCreditNoteNumber(params.trx, 2026);
 
@@ -2543,8 +2750,11 @@ export class PaymentGatewayService {
       } catch {}
 
       const claimKey = `cn_num:${creditNoteNumber}`;
+      if (inTransaction) {
+        await params.trx.raw('SAVEPOINT sp_cn_claim');
+      }
       try {
-        await params.trx('idempotent_operations').insert({
+        let ins = params.trx('idempotent_operations').insert({
           key: claimKey,
           principal_id: 'system:billing',
           operation_id: `claim_${creditNoteNumber}`,
@@ -2557,71 +2767,33 @@ export class PaymentGatewayService {
           created_at: params.now,
           updated_at: params.now
         });
-        break;
-      } catch {
-        continue;
+        if (typeof ins.onConflict === 'function') {
+          ins = ins.onConflict('key').ignore();
+        }
+        const res = await ins;
+        if (inTransaction) {
+          await params.trx.raw('RELEASE SAVEPOINT sp_cn_claim');
+        }
+        if (res && res.rowCount !== undefined ? res.rowCount === 1 : true) {
+          break;
+        }
+      } catch (cnClaimErr: any) {
+        if (inTransaction) {
+          try {
+            await params.trx.raw('ROLLBACK TO SAVEPOINT sp_cn_claim');
+          } catch {}
+        }
+        const isCollision = cnClaimErr?.code === '23505' || String(cnClaimErr?.message).includes('unique') || String(cnClaimErr?.message).includes('duplicate');
+        if (isCollision) {
+          continue;
+        }
+        throw cnClaimErr;
       }
     }
 
     // 3. Find original issued invoice number from relational table, audit events, or bindings
-    let originalInvoiceNumber: string | undefined;
-    try {
-      const hasInvoicesTable = typeof params.trx.schema?.hasTable === 'function'
-        ? await params.trx.schema.hasTable('billing_invoices')
-        : false;
-      if (hasInvoicesTable) {
-        const invRow = await params.trx('billing_invoices')
-          .where({ subscription_id: params.subRecord.id })
-          .orderBy('created_at', 'asc')
-          .first();
-        if (invRow) {
-          originalInvoiceNumber = invRow.invoice_number;
-        }
-      }
-    } catch {}
-
-    if (!originalInvoiceNumber) {
-      try {
-        const q = params.trx('billing_audit_events').where({
-          customer_id: params.subRecord.customer_id,
-          event_type: 'TAX_INVOICE_ISSUED'
-        });
-        let rows: any[] = [];
-        if (typeof q.select === 'function') {
-          rows = await q.select('*');
-        } else if (Array.isArray(q)) {
-          rows = q;
-        }
-        const match = (rows || []).find((r: any) => {
-          try {
-            const p = typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload;
-            return p?.subscriptionId === params.subRecord.id;
-          } catch { return false; }
-        });
-        if (match) {
-          const p = typeof match.payload === 'string' ? JSON.parse(match.payload) : match.payload;
-          originalInvoiceNumber = p?.invoiceNumber || match.actor_id;
-        }
-      } catch {}
-    }
-
-    if (!originalInvoiceNumber) {
-      try {
-        const invBinding = await params.trx('idempotent_operations').where({
-          key: `inv_binding:${params.subRecord.customer_id}:${params.subRecord.id}:cycle:1`
-        }).first();
-        if (invBinding && invBinding.response_body) {
-          const parsed = JSON.parse(invBinding.response_body);
-          originalInvoiceNumber = parsed?.invoiceNumber;
-        }
-      } catch {}
-    }
-
-    // Never manufacture invoice numbers from subscription identifiers!
-    const isUnresolved = !originalInvoiceNumber;
-    if (isUnresolved) {
-      originalInvoiceNumber = 'UNRESOLVED_ORIGINAL_INVOICE';
-    }
+    let originalInvoiceNumber: string = (await this.resolveAuthoritativeOriginalInvoice(params.trx, params.subRecord)) || 'UNRESOLVED_ORIGINAL_INVOICE';
+    const isUnresolved = originalInvoiceNumber === 'UNRESOLVED_ORIGINAL_INVOICE';
 
     let principalId = params.subRecord.principal_id;
     if (!principalId && params.subRecord.customer_id) {
@@ -2712,6 +2884,7 @@ export class PaymentGatewayService {
             });
 
             await this.clearCreditNotePendingReconciliation({
+              trx: params.trx,
               customerId: params.subRecord.customer_id,
               subscriptionId: params.subRecord.id,
               refundId: String(refundId),
@@ -2789,6 +2962,7 @@ export class PaymentGatewayService {
     });
 
     await this.clearCreditNotePendingReconciliation({
+      trx: params.trx,
       customerId: params.subRecord.customer_id,
       subscriptionId: params.subRecord.id,
       refundId: String(refundId),
@@ -2811,16 +2985,21 @@ export class PaymentGatewayService {
     subRecord: any;
     refundPayload: any;
     now?: number;
+    debugHookBeforeCommit?: (info: { refundId: string; creditNoteNumber?: string }) => Promise<void> | void;
   }): Promise<void> {
     const now = params.now || Date.now();
     const dbClient = this.getDb();
     const hasTransaction = typeof (dbClient as any).transaction === 'function';
 
+    const payload = params.refundPayload;
+    const paymentEntity = payload.payload?.payment?.entity || payload.payment || payload.data?.payment || {};
+    const refundEntity = payload.payload?.refund?.entity || payload.refund || payload.data?.refund || {};
+    const refundAmount = Number(refundEntity.amount || payload.data?.refund?.refund_amount || 0);
+    const refundId = String(refundEntity.id || refundEntity.cf_refund_id || `ref_${now}`);
+
+    let creditNoteResult: any = null;
+
     const executeRefund = async (trx: any) => {
-      const payload = params.refundPayload;
-      const paymentEntity = payload.payload?.payment?.entity || payload.payment || payload.data?.payment || {};
-      const refundEntity = payload.payload?.refund?.entity || payload.refund || payload.data?.refund || {};
-      const refundAmount = Number(refundEntity.amount || payload.data?.refund?.refund_amount || 0);
       const totalAmountMinor = Number(params.subRecord.amount_minor_units) || 0;
       const isPartialRefund = refundAmount > 0 && refundAmount < totalAmountMinor;
 
@@ -2831,7 +3010,7 @@ export class PaymentGatewayService {
           : (params.subRecord.metadata || {});
       } catch {}
 
-      meta.refundId = refundEntity.id || refundEntity.cf_refund_id || `ref_${now}`;
+      meta.refundId = refundId;
       meta.refundAmount = refundAmount;
       meta.refundedAt = now;
 
@@ -2859,7 +3038,7 @@ export class PaymentGatewayService {
           created_at: now
         });
 
-        await this.issueDurableCreditNote({
+        creditNoteResult = await this.issueDurableCreditNote({
           trx,
           subRecord: params.subRecord,
           refundEntity,
@@ -2891,7 +3070,7 @@ export class PaymentGatewayService {
           created_at: now
         });
 
-        await this.issueDurableCreditNote({
+        creditNoteResult = await this.issueDurableCreditNote({
           trx,
           subRecord: params.subRecord,
           refundEntity,
@@ -2901,14 +3080,36 @@ export class PaymentGatewayService {
           now
         });
       }
+
+      if (params.debugHookBeforeCommit) {
+        await params.debugHookBeforeCommit({
+          refundId,
+          creditNoteNumber: creditNoteResult?.creditNoteNumber
+        });
+      }
     };
 
-    if (hasTransaction) {
-      await (dbClient as Knex).transaction(async (trx) => {
-        await executeRefund(trx);
+    try {
+      if (hasTransaction) {
+        await (dbClient as Knex).transaction(async (trx) => {
+          await executeRefund(trx);
+        });
+      } else {
+        await executeRefund(dbClient);
+      }
+    } catch (refundErr: any) {
+      // The transaction has rolled back!
+      // Out-of-band failure evidence persistence through a separate commit boundary:
+      await this.recordCreditNotePendingReconciliationOutOfBand({
+        customerId: params.subRecord.customer_id,
+        subscriptionId: params.subRecord.id,
+        refundId,
+        refundAmount: Number(refundAmount || params.subRecord.amount_minor_units),
+        gateway: params.gateway,
+        error: refundErr?.message || String(refundErr),
+        now
       });
-    } else {
-      await executeRefund(dbClient);
+      throw refundErr;
     }
   }
 
