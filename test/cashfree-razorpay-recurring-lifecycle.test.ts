@@ -481,6 +481,7 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
         current_period_start: now,
         current_period_end: now + 20 * 86400000,
         cancel_at_period_end: false,
+        metadata: JSON.stringify({ customerState: '07' }),
         created_at: now,
         updated_at: now
       });
@@ -590,6 +591,7 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
         current_period_start: now,
         current_period_end: now + 15 * 86400000,
         cancel_at_period_end: false,
+        metadata: JSON.stringify({ customerState: '07' }),
         created_at: now,
         updated_at: now
       });
@@ -654,6 +656,7 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
         current_period_start: now,
         current_period_end: now + 10 * 86400000,
         cancel_at_period_end: false,
+        metadata: JSON.stringify({ customerState: '07' }),
         created_at: now,
         updated_at: now
       });
@@ -869,6 +872,7 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
         current_period_start: now,
         current_period_end: now + 30 * 86400000,
         cancel_at_period_end: false,
+        metadata: JSON.stringify({ customerState: '07' }),
         created_at: now,
         updated_at: now
       });
@@ -994,6 +998,7 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
         current_period_start: Date.now(),
         current_period_end: Date.now() + 30 * 86400000,
         cancel_at_period_end: false,
+        metadata: JSON.stringify({ customerState: '07' }),
         created_at: Date.now(),
         updated_at: Date.now()
       });

@@ -7,6 +7,7 @@ import {
   CurrencyCode
 } from '../../../../packages/contracts/src/commercial.js';
 import { commercialBillingService } from './commercial-billing-service.js';
+import { taxDeterminationService, TaxDeterminationResult } from './tax-determination.js';
 
 export interface WebhookVerificationResult {
   valid: boolean;
@@ -54,7 +55,14 @@ export interface InvoiceRecord {
   sacCode: string;
   supplierName: string;
   supplierGstin?: string;
-  taxComplianceStatus?: 'COMPLIANT' | 'PROVISIONAL_PENDING_GSTIN';
+  taxComplianceStatus?:
+    | 'COMPLIANT'
+    | 'COMPLIANT_ZERO_RATED_EXPORT'
+    | 'PROVISIONAL_PENDING_GSTIN'
+    | 'PROVISIONAL_PENDING_PLACE_OF_SUPPLY'
+    | 'PROVISIONAL_PENDING_GSTIN_VERIFICATION'
+    | 'PROVISIONAL_PENDING_GSTIN_AND_POS'
+    | 'PROVISIONAL_PENDING_RECONCILIATION';
   placeOfSupply?: string;
   status: string;
   pdfDownloadAvailable?: boolean;
@@ -301,10 +309,48 @@ export class PaymentGatewayService {
   private cashfreeSecret: string;
   private customDbClient: Knex | PaymentDbClient | null = null;
   private customGatewayTransport: GatewayOrderTransport | null = null;
+  private memoryInvoiceCounter: number = 0;
+  private memoryCreditNoteCounter: number = 0;
 
   constructor() {
     this.razorpaySecret = process.env.RAZORPAY_WEBHOOK_SECRET || '';
     this.cashfreeSecret = process.env.CASHFREE_WEBHOOK_SECRET || '';
+  }
+
+  /**
+   * Allocates sequential, collision-free invoice number.
+   * If PostgreSQL is available, utilizes native non-blocking sequence `billing_invoice_number_seq`.
+   * Otherwise falls back to synchronized monotonic memory counter.
+   */
+  async allocateInvoiceNumber(trx?: any, year: number = 2026): Promise<string> {
+    const isPg = trx && typeof trx.raw === 'function' && trx.client?.config?.client === 'pg';
+    if (isPg) {
+      try {
+        await trx.raw('CREATE SEQUENCE IF NOT EXISTS billing_invoice_number_seq START WITH 1');
+        const res = await trx.raw("SELECT nextval('billing_invoice_number_seq') AS seq");
+        const seq = res?.rows?.[0]?.seq || 1;
+        return `INV-${year}-${String(seq).padStart(4, '0')}`;
+      } catch {}
+    }
+    this.memoryInvoiceCounter++;
+    return `INV-${year}-${String(this.memoryInvoiceCounter).padStart(4, '0')}`;
+  }
+
+  /**
+   * Allocates sequential, collision-free credit note number.
+   */
+  async allocateCreditNoteNumber(trx?: any, year: number = 2026): Promise<string> {
+    const isPg = trx && typeof trx.raw === 'function' && trx.client?.config?.client === 'pg';
+    if (isPg) {
+      try {
+        await trx.raw('CREATE SEQUENCE IF NOT EXISTS billing_credit_note_number_seq START WITH 1');
+        const res = await trx.raw("SELECT nextval('billing_credit_note_number_seq') AS seq");
+        const seq = res?.rows?.[0]?.seq || 1;
+        return `CN-${year}-${String(seq).padStart(4, '0')}`;
+      } catch {}
+    }
+    this.memoryCreditNoteCounter++;
+    return `CN-${year}-${String(this.memoryCreditNoteCounter).padStart(4, '0')}`;
   }
 
   setDbClient(client: Knex | PaymentDbClient | null): void {
@@ -927,7 +973,43 @@ export class PaymentGatewayService {
             cycleNumber: newFulfilledCycle,
             now
           });
-        } catch {}
+        } catch (invErr: any) {
+          const correlationId = `rec_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+          const sanitizedError = (invErr?.message || 'INVOICE_GENERATION_FAILED').replace(/[\r\n\t]/g, ' ').slice(0, 255);
+          try {
+            await trx('billing_audit_events').insert({
+              id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+              customer_id: customerId,
+              event_type: 'TAX_INVOICE_PENDING_RECONCILIATION',
+              actor_type: 'system',
+              actor_id: purchaseRecord.id,
+              payload: JSON.stringify({
+                errorCode: 'INVOICE_GENERATION_FAILED',
+                errorMessage: sanitizedError,
+                correlationId,
+                purchaseId: purchaseRecord.id,
+                cycleNumber: newFulfilledCycle,
+                paymentId: actualPaymentId,
+                gateway,
+                amount: expectedAmount,
+                planTier
+              }),
+              created_at: now
+            });
+          } catch {}
+          try {
+            const existingMeta = typeof purchaseRecord.metadata === 'string' ? JSON.parse(purchaseRecord.metadata) : (purchaseRecord.metadata || {});
+            await trx('subscriptions').where({ id: purchaseRecord.id }).update({
+              metadata: JSON.stringify({
+                ...existingMeta,
+                invoice_status: 'PENDING_RECONCILIATION',
+                invoice_error: sanitizedError,
+                invoice_correlation_id: correlationId
+              }),
+              updated_at: now
+            });
+          } catch {}
+        }
 
         return;
       }
@@ -1023,7 +1105,43 @@ export class PaymentGatewayService {
           cycleNumber: meta.fulfilledCycle,
           now
         });
-      } catch {}
+      } catch (invErr: any) {
+        const correlationId = `rec_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+        const sanitizedError = (invErr?.message || 'INVOICE_GENERATION_FAILED').replace(/[\r\n\t]/g, ' ').slice(0, 255);
+        try {
+          await trx('billing_audit_events').insert({
+            id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+            customer_id: customerId,
+            event_type: 'TAX_INVOICE_PENDING_RECONCILIATION',
+            actor_type: 'system',
+            actor_id: purchaseRecord.id,
+            payload: JSON.stringify({
+              errorCode: 'INVOICE_GENERATION_FAILED',
+              errorMessage: sanitizedError,
+              correlationId,
+              purchaseId: purchaseRecord.id,
+              cycleNumber: meta.fulfilledCycle,
+              paymentId: actualPaymentId,
+              gateway,
+              amount: purchaseRecord.amount_minor_units,
+              planTier
+            }),
+            created_at: now
+          });
+        } catch {}
+        try {
+          const existingMeta = typeof purchaseRecord.metadata === 'string' ? JSON.parse(purchaseRecord.metadata) : (purchaseRecord.metadata || {});
+          await trx('subscriptions').where({ id: purchaseRecord.id }).update({
+            metadata: JSON.stringify({
+              ...existingMeta,
+              invoice_status: 'PENDING_RECONCILIATION',
+              invoice_error: sanitizedError,
+              invoice_correlation_id: correlationId
+            }),
+            updated_at: now
+          });
+        } catch {}
+      }
 
       return;
     }
@@ -1753,7 +1871,8 @@ export class PaymentGatewayService {
   }
 
   /**
-   * Issues an immutable durable tax invoice into billing_audit_events and idempotent_operations.
+   * Issues an immutable durable tax invoice with PostgreSQL sequence / atomic monotonic allocation,
+   * database-level uniqueness enforcement in idempotent_operations, and audit event persistence.
    */
   private async issueDurableInvoice(params: {
     trx: any;
@@ -1767,64 +1886,101 @@ export class PaymentGatewayService {
     cycleNumber?: number;
     now: number;
   }): Promise<InvoiceRecord | null> {
-    try {
-      const cycle = params.cycleNumber || 1;
-      const opId = `invoice_${params.purchaseRecord.id}_cycle_${cycle}`;
-      const idemKey = `${params.principalId}:tax_invoice:${params.gateway}:${params.purchaseRecord.id}:${cycle}`;
+    const cycle = params.cycleNumber || 1;
+    const cycleBindingKey = `inv_binding:${params.customerId}:${params.purchaseRecord.id}:cycle:${cycle}`;
 
-      // Check if invoice was already issued in billing_audit_events for this subscription and cycle
-      try {
-        const auditQuery = params.trx('billing_audit_events').where({
-          customer_id: params.customerId,
-          event_type: 'TAX_INVOICE_ISSUED'
+    // 1. Check if invoice was already bound in idempotent_operations
+    try {
+      const bindingQuery = params.trx('idempotent_operations').where({ key: cycleBindingKey });
+      const existingBinding = typeof bindingQuery.first === 'function' ? await bindingQuery.first() : null;
+      if (existingBinding && existingBinding.status === 'COMPLETED' && existingBinding.response_body) {
+        return JSON.parse(existingBinding.response_body);
+      }
+    } catch {}
+
+    // 2. Check if invoice was already issued in billing_audit_events for this subscription and cycle
+    try {
+      const auditQuery = params.trx('billing_audit_events').where({
+        customer_id: params.customerId,
+        event_type: 'TAX_INVOICE_ISSUED'
+      });
+      let existingAudit: any[] = [];
+      if (typeof auditQuery.select === 'function') {
+        existingAudit = await auditQuery.select('*');
+      } else if (typeof auditQuery.first === 'function') {
+        const f = await auditQuery.first();
+        existingAudit = f ? [f] : [];
+      } else if (Array.isArray(auditQuery)) {
+        existingAudit = auditQuery;
+      }
+      if (Array.isArray(existingAudit) && existingAudit.length > 0) {
+        const matched = existingAudit.find((ev: any) => {
+          try {
+            const p = typeof ev.payload === 'string' ? JSON.parse(ev.payload) : ev.payload;
+            return p?.subscriptionId === params.purchaseRecord.id && (p?.cycleNumber || 1) === cycle;
+          } catch { return false; }
         });
-        let existingAudit: any[] = [];
-        if (typeof auditQuery.select === 'function') {
-          existingAudit = await auditQuery.select('*');
-        } else if (typeof auditQuery.first === 'function') {
-          const f = await auditQuery.first();
-          existingAudit = f ? [f] : [];
+        if (matched) {
+          return typeof matched.payload === 'string' ? JSON.parse(matched.payload) : matched.payload;
         }
-        if (Array.isArray(existingAudit) && existingAudit.length > 0) {
-          const matched = existingAudit.find((ev: any) => {
+      }
+    } catch {}
+
+    // 3. Atomically acquire cycle-level distributed lease in idempotent_operations
+    let acquiredLease = false;
+    try {
+      await params.trx('idempotent_operations').insert({
+        key: cycleBindingKey,
+        principal_id: params.principalId || params.customerId,
+        operation_id: `inv_binding_${params.purchaseRecord.id}_cycle_${cycle}`,
+        operation_type: 'tax_invoice_binding',
+        payload_hash: params.actualPaymentId || params.gatewayOrderId || '',
+        status: 'IN_PROGRESS',
+        response_status: 200,
+        response_body: '',
+        locked_until: params.now + 30000,
+        created_at: params.now,
+        updated_at: params.now
+      });
+      acquiredLease = true;
+    } catch {
+      acquiredLease = false;
+    }
+
+    if (!acquiredLease) {
+      // Another concurrent worker acquired the lease; wait and retrieve the completed invoice
+      for (let attempt = 0; attempt < 20; attempt++) {
+        await new Promise((r) => setTimeout(r, 50));
+        try {
+          const bindingQuery = params.trx('idempotent_operations').where({ key: cycleBindingKey });
+          const existingBinding = typeof bindingQuery.first === 'function' ? await bindingQuery.first() : null;
+          if (existingBinding && existingBinding.status === 'COMPLETED' && existingBinding.response_body) {
+            return JSON.parse(existingBinding.response_body);
+          }
+        } catch {}
+
+        try {
+          const auditQuery = params.trx('billing_audit_events').where({
+            customer_id: params.customerId,
+            event_type: 'TAX_INVOICE_ISSUED'
+          });
+          const rows: any[] = typeof auditQuery.select === 'function' ? await auditQuery.select('*') : (await auditQuery || []);
+          const matched = (rows || []).find((ev: any) => {
             try {
               const p = typeof ev.payload === 'string' ? JSON.parse(ev.payload) : ev.payload;
               return p?.subscriptionId === params.purchaseRecord.id && (p?.cycleNumber || 1) === cycle;
             } catch { return false; }
           });
           if (matched) {
-            try {
-              return typeof matched.payload === 'string' ? JSON.parse(matched.payload) : matched.payload;
-            } catch { return null; }
+            return typeof matched.payload === 'string' ? JSON.parse(matched.payload) : matched.payload;
           }
-        }
-      } catch {}
+        } catch {}
+      }
+      throw new Error(`INVOICE_CYCLE_CONTENTION: Concurrent invoice generation in progress for cycle ${cycle}`);
+    }
 
-      // Calculate sequential invoice sequence number
-      let count = 0;
-      try {
-        const allInvoicesQuery = params.trx('billing_audit_events').where({ event_type: 'TAX_INVOICE_ISSUED' });
-        if (typeof allInvoicesQuery.select === 'function') {
-          const allRows = await allInvoicesQuery.select('*');
-          count = Array.isArray(allRows) ? allRows.length : 0;
-        }
-      } catch {}
-
-      const invoiceSeq = count + 1;
-      const invoiceNumber = `INV-2026-${String(invoiceSeq).padStart(4, '0')}`;
-
-      // Calculate tax and pricing
-      const totalMinor = Number(params.purchaseRecord.amount_minor_units) || 0;
-      const total = Math.round((totalMinor / 100) * 100) / 100;
-      const isINR = (params.purchaseRecord.currency || 'INR').toUpperCase() === 'INR';
-      const isExport = !isINR;
-
-      let taxableBase = 0;
-      let gstAmount = 0;
-      let cgstAmount: number | undefined;
-      let sgstAmount: number | undefined;
-      let igstAmount: number | undefined;
-
+    try {
+      // 4. Perform statutory tax determination
       let meta: any = {};
       try {
         meta = typeof params.purchaseRecord.metadata === 'string'
@@ -1832,29 +1988,51 @@ export class PaymentGatewayService {
           : (params.purchaseRecord.metadata || {});
       } catch {}
 
-      const placeOfSupply = (meta.customerState || meta.billingState || meta.state || meta.placeOfSupply || '07').toString().trim().toUpperCase();
+      const taxResult = taxDeterminationService.determineTax({
+        amountMinorUnits: Number(params.purchaseRecord.amount_minor_units) || 0,
+        currency: params.purchaseRecord.currency,
+        customerCountry: meta.customerCountry || meta.country,
+        customerState: meta.customerState || meta.billingState || meta.state,
+        placeOfSupply: meta.placeOfSupply,
+        lutNumber: meta.lutNumber || process.env.AIRA_LUT_NUMBER,
+        lutAvailable: meta.lutAvailable !== undefined ? meta.lutAvailable : (process.env.AIRA_LUT_AVAILABLE ? process.env.AIRA_LUT_AVAILABLE === 'true' : undefined),
+        supplierGstin: process.env.AIRA_SUPPLIER_GSTIN,
+        supplierGstinVerified: process.env.AIRA_SUPPLIER_GSTIN_VERIFIED ? process.env.AIRA_SUPPLIER_GSTIN_VERIFIED === 'true' : undefined
+      });
 
-      if (isExport) {
-        taxableBase = total;
-        gstAmount = 0;
-      } else {
-        taxableBase = Math.round((total / 1.18) * 100) / 100;
-        gstAmount = Math.round((total - taxableBase) * 100) / 100;
-
-        const isDelhi = placeOfSupply === '07' || placeOfSupply === 'DELHI' || placeOfSupply === 'DL' || placeOfSupply === 'NEW DELHI';
-        if (isDelhi) {
-          cgstAmount = Math.round((gstAmount / 2) * 100) / 100;
-          sgstAmount = Math.round((gstAmount - cgstAmount) * 100) / 100;
-          igstAmount = undefined;
-        } else {
-          cgstAmount = undefined;
-          sgstAmount = undefined;
-          igstAmount = gstAmount;
+      // 5. Allocate invoice sequence number and claim database-level uniqueness
+      let invoiceNumber = '';
+      let claimed = false;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        invoiceNumber = await this.allocateInvoiceNumber(params.trx, 2026);
+        const claimKey = `inv_num:${invoiceNumber}`;
+        try {
+          let insClaim = params.trx('idempotent_operations').insert({
+            key: claimKey,
+            principal_id: 'system:billing',
+            operation_id: `claim_${invoiceNumber}`,
+            operation_type: 'invoice_number_claim',
+            payload_hash: crypto.createHash('sha256').update(`${params.customerId}_${params.purchaseRecord.id}_${cycle}`).digest('hex'),
+            status: 'COMPLETED',
+            response_status: 200,
+            response_body: JSON.stringify({ invoiceNumber, customerId: params.customerId, subscriptionId: params.purchaseRecord.id, cycle }),
+            locked_until: 0,
+            created_at: params.now,
+            updated_at: params.now
+          });
+          await insClaim;
+          claimed = true;
+          break;
+        } catch {
+          // Unique constraint violation on claimKey => collision, loop to next sequence number
+          continue;
         }
       }
 
-      const supplierGstin = process.env.AIRA_SUPPLIER_GSTIN || undefined;
-      const isGstinVerified = Boolean(supplierGstin && supplierGstin.trim().length === 15);
+      if (!claimed) {
+        throw new Error(`FAILED_TO_CLAIM_UNIQUE_INVOICE_NUMBER: Exceeded allocation retries for cycle ${cycle}`);
+      }
+
       const dateStr = new Date(params.now).toISOString().split('T')[0];
       const planName = COMMERCIAL_PLANS[params.planTier]?.name || (params.planTier === 'pro' ? 'AIRA Pro' : 'AIRA Plus');
 
@@ -1863,43 +2041,31 @@ export class PaymentGatewayService {
         date: dateStr,
         plan: planName,
         currency: (params.purchaseRecord.currency || 'INR').toUpperCase(),
-        totalAmount: total,
-        taxableBase,
-        gstAmount,
-        cgstAmount,
-        sgstAmount,
-        igstAmount,
-        sacCode: '998431',
-        supplierName: 'Virexa AI Ventures Private Limited',
-        supplierGstin,
-        taxComplianceStatus: isGstinVerified ? 'COMPLIANT' : 'PROVISIONAL_PENDING_GSTIN',
-        placeOfSupply,
+        totalAmount: taxResult.totalAmount,
+        taxableBase: taxResult.taxableBase,
+        gstAmount: taxResult.gstAmount,
+        cgstAmount: taxResult.cgstAmount,
+        sgstAmount: taxResult.sgstAmount,
+        igstAmount: taxResult.igstAmount,
+        sacCode: taxResult.sacCode,
+        supplierName: taxResult.supplierName,
+        supplierGstin: taxResult.supplierGstin,
+        taxComplianceStatus: taxResult.taxComplianceStatus as any,
+        placeOfSupply: taxResult.placeOfSupply,
         status: 'Paid',
         pdfDownloadAvailable: false
       };
 
-      // Record in idempotent_operations table
+      // 6. Update cycle binding to COMPLETED with stored invoice payload in idempotent_operations
       try {
-        let ins = params.trx('idempotent_operations').insert({
-          key: idemKey,
-          principal_id: params.principalId,
-          operation_id: opId,
-          operation_type: 'tax_invoice',
-          payload_hash: params.actualPaymentId || params.gatewayOrderId || '',
+        await params.trx('idempotent_operations').where({ key: cycleBindingKey }).update({
           status: 'COMPLETED',
-          response_status: 200,
           response_body: JSON.stringify(invoiceRecord),
-          locked_until: 0,
-          created_at: params.now,
-          updated_at: params.now
+          updated_at: Date.now()
         });
-        if (ins && typeof ins.onConflict === 'function') {
-          ins = ins.onConflict(['principal_id', 'operation_id']).ignore();
-        }
-        await ins;
       } catch {}
 
-      // Persist durable tax invoice in billing_audit_events
+      // 7. Persist durable tax invoice in billing_audit_events
       await params.trx('billing_audit_events').insert({
         id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
         customer_id: params.customerId,
@@ -1917,13 +2083,18 @@ export class PaymentGatewayService {
       });
 
       return invoiceRecord;
-    } catch {
-      return null;
+    } catch (execErr) {
+      // On failure, remove in-progress lease so retries can proceed
+      try {
+        await params.trx('idempotent_operations').where({ key: cycleBindingKey, status: 'IN_PROGRESS' }).delete();
+      } catch {}
+      throw execErr;
     }
   }
 
   /**
    * Issues a linked credit note in billing_audit_events upon refund settlement.
+   * Never manufactures invoice numbers from subscription IDs.
    */
   private async issueDurableCreditNote(params: {
     trx: any;
@@ -1934,106 +2105,203 @@ export class PaymentGatewayService {
     gateway: 'razorpay' | 'cashfree' | string;
     now: number;
   }): Promise<void> {
+    const refundId = params.refundEntity?.id || params.refundEntity?.cf_refund_id || `ref_${params.now}`;
+    const cnBindingKey = `cn_binding:${params.subRecord.id}:refund:${refundId}`;
+
+    // 1. Check if credit note was already issued for this refund
     try {
-      let count = 0;
+      const bindingQuery = params.trx('idempotent_operations').where({ key: cnBindingKey });
+      const existing = typeof bindingQuery.first === 'function' ? await bindingQuery.first() : null;
+      if (existing) return;
+    } catch {}
+
+    // 2. Allocate credit note sequence number
+    let creditNoteNumber = '';
+    for (let attempt = 0; attempt < 5; attempt++) {
+      creditNoteNumber = await this.allocateCreditNoteNumber(params.trx, 2026);
+      const claimKey = `cn_num:${creditNoteNumber}`;
       try {
-        const q = params.trx('billing_audit_events').where({ event_type: 'CREDIT_NOTE_ISSUED' });
-        if (typeof q.select === 'function') {
-          const rows = await q.select('*');
-          count = Array.isArray(rows) ? rows.length : 0;
-        }
-      } catch {}
-
-      const noteSeq = count + 1;
-      const creditNoteNumber = `CN-2026-${String(noteSeq).padStart(4, '0')}`;
-
-      let originalInvoiceNumber: string | undefined;
-      try {
-        const q = params.trx('billing_audit_events').where({
-          customer_id: params.subRecord.customer_id,
-          event_type: 'TAX_INVOICE_ISSUED'
-        });
-        if (typeof q.select === 'function') {
-          const rows = await q.select('*');
-          const match = (rows || []).find((r: any) => {
-            try {
-              const p = typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload;
-              return p?.subscriptionId === params.subRecord.id;
-            } catch { return false; }
-          });
-          if (match) {
-            try {
-              const p = typeof match.payload === 'string' ? JSON.parse(match.payload) : match.payload;
-              originalInvoiceNumber = p?.invoiceNumber || match.actor_id;
-            } catch {}
-          }
-        }
-      } catch {}
-
-      if (!originalInvoiceNumber) {
-        const shortId = (params.subRecord.id || '').replace(/^pur_/, '').toUpperCase().slice(0, 8);
-        originalInvoiceNumber = `INV-2026-${shortId}`;
-      }
-
-      let principalId = params.subRecord.principal_id;
-      if (!principalId && params.subRecord.customer_id) {
-        try {
-          const cust = await params.trx('billing_customers').where({ id: params.subRecord.customer_id }).first();
-          principalId = cust ? (cust as any).principal_id : params.subRecord.customer_id;
-        } catch {}
-      }
-
-      const refundId = params.refundEntity?.id || params.refundEntity?.cf_refund_id || `ref_${params.now}`;
-
-      try {
-        let ins = params.trx('idempotent_operations').insert({
-          key: `${principalId || params.subRecord.customer_id}:credit_note:${refundId}`,
-          principal_id: principalId || params.subRecord.customer_id,
-          operation_id: `cn_${params.subRecord.id}_${params.now}`,
-          operation_type: 'credit_note',
+        await params.trx('idempotent_operations').insert({
+          key: claimKey,
+          principal_id: 'system:billing',
+          operation_id: `claim_${creditNoteNumber}`,
+          operation_type: 'credit_note_number_claim',
           payload_hash: String(params.refundAmount),
           status: 'COMPLETED',
           response_status: 200,
-          response_body: JSON.stringify({ creditNoteNumber, originalInvoiceNumber }),
+          response_body: JSON.stringify({ creditNoteNumber, subscriptionId: params.subRecord.id, refundId }),
           locked_until: 0,
           created_at: params.now,
           updated_at: params.now
         });
-        if (ins && typeof ins.onConflict === 'function') {
-          ins = ins.onConflict(['principal_id', 'operation_id']).ignore();
-        }
-        await ins;
-      } catch {}
+        break;
+      } catch {
+        continue;
+      }
+    }
 
-      await params.trx('billing_audit_events').insert({
-        id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+    // 3. Find original issued invoice number from durable audit events or bindings
+    let originalInvoiceNumber: string | undefined;
+    try {
+      const q = params.trx('billing_audit_events').where({
         customer_id: params.subRecord.customer_id,
-        event_type: 'CREDIT_NOTE_ISSUED',
-        actor_type: 'system',
-        actor_id: creditNoteNumber,
-        payload: JSON.stringify({
-          creditNoteNumber,
-          originalInvoiceNumber,
-          date: new Date(params.now).toISOString().split('T')[0],
-          subscriptionId: params.subRecord.id,
-          refundAmount: params.refundAmount,
-          totalAmountMinor: params.subRecord.amount_minor_units,
-          isPartialRefund: params.isPartialRefund,
-          currency: (params.subRecord.currency || 'INR').toUpperCase(),
-          supplierName: 'Virexa AI Ventures Private Limited',
-          supplierGstin: process.env.AIRA_SUPPLIER_GSTIN || undefined,
-          status: params.isPartialRefund ? 'Partially Refunded' : 'Refunded',
-          refundId,
-          gateway: params.gateway
-        }),
-        created_at: params.now
+        event_type: 'TAX_INVOICE_ISSUED'
       });
+      let rows: any[] = [];
+      if (typeof q.select === 'function') {
+        rows = await q.select('*');
+      } else if (Array.isArray(q)) {
+        rows = q;
+      }
+      const match = (rows || []).find((r: any) => {
+        try {
+          const p = typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload;
+          return p?.subscriptionId === params.subRecord.id;
+        } catch { return false; }
+      });
+      if (match) {
+        try {
+          const p = typeof match.payload === 'string' ? JSON.parse(match.payload) : match.payload;
+          originalInvoiceNumber = p?.invoiceNumber || match.actor_id;
+        } catch {}
+      }
     } catch {}
+
+    // 4. If still missing, check idempotent operations cycle 1 binding
+    if (!originalInvoiceNumber) {
+      try {
+        const invBinding = await params.trx('idempotent_operations').where({
+          key: `inv_binding:${params.subRecord.customer_id}:${params.subRecord.id}:cycle:1`
+        }).first();
+        if (invBinding && invBinding.response_body) {
+          const parsed = JSON.parse(invBinding.response_body);
+          originalInvoiceNumber = parsed?.invoiceNumber;
+        }
+      } catch {}
+    }
+
+    // Never manufacture invoice numbers from subscription identifiers!
+    const isUnresolved = !originalInvoiceNumber;
+    if (isUnresolved) {
+      originalInvoiceNumber = 'UNRESOLVED_ORIGINAL_INVOICE';
+    }
+
+    let principalId = params.subRecord.principal_id;
+    if (!principalId && params.subRecord.customer_id) {
+      try {
+        const cust = await params.trx('billing_customers').where({ id: params.subRecord.customer_id }).first();
+        principalId = cust ? (cust as any).principal_id : params.subRecord.customer_id;
+      } catch {}
+    }
+
+    // Record binding
+    try {
+      let ins = params.trx('idempotent_operations').insert({
+        key: cnBindingKey,
+        principal_id: principalId || params.subRecord.customer_id,
+        operation_id: `cn_${params.subRecord.id}_${refundId}`,
+        operation_type: 'credit_note_binding',
+        payload_hash: String(params.refundAmount),
+        status: 'COMPLETED',
+        response_status: 200,
+        response_body: JSON.stringify({ creditNoteNumber, originalInvoiceNumber, isUnresolved }),
+        locked_until: 0,
+        created_at: params.now,
+        updated_at: params.now
+      });
+      if (ins && typeof ins.onConflict === 'function') {
+        ins = ins.onConflict(['principal_id', 'operation_id']).ignore();
+      }
+      await ins;
+    } catch {}
+
+    await params.trx('billing_audit_events').insert({
+      id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+      customer_id: params.subRecord.customer_id,
+      event_type: 'CREDIT_NOTE_ISSUED',
+      actor_type: 'system',
+      actor_id: creditNoteNumber,
+      payload: JSON.stringify({
+        creditNoteNumber,
+        originalInvoiceNumber,
+        date: new Date(params.now).toISOString().split('T')[0],
+        subscriptionId: params.subRecord.id,
+        refundAmount: params.refundAmount,
+        totalAmountMinor: params.subRecord.amount_minor_units,
+        isPartialRefund: params.isPartialRefund,
+        currency: (params.subRecord.currency || 'INR').toUpperCase(),
+        supplierName: 'Virexa AI Ventures Private Limited',
+        supplierGstin: process.env.AIRA_SUPPLIER_GSTIN || undefined,
+        status: isUnresolved
+          ? 'PENDING_RECONCILIATION'
+          : (params.isPartialRefund ? 'Partially Refunded' : 'Refunded'),
+        refundId,
+        gateway: params.gateway
+      }),
+      created_at: params.now
+    });
+  }
+
+  /**
+   * Reconciles unissued invoices from TAX_INVOICE_PENDING_RECONCILIATION events.
+   */
+  async reconcilePendingInvoices(limit: number = 50): Promise<{ reconciled: number; failed: number }> {
+    const dbClient = this.getDb();
+    let pendingEvents: any[] = [];
+    try {
+      const q: any = dbClient('billing_audit_events').where({ event_type: 'TAX_INVOICE_PENDING_RECONCILIATION' });
+      if (typeof q.select === 'function') {
+        pendingEvents = (await q.select('*')) || [];
+      } else {
+        pendingEvents = (await q) || [];
+      }
+    } catch {
+      return { reconciled: 0, failed: 0 };
+    }
+
+    let reconciled = 0;
+    let failed = 0;
+
+    for (const ev of (pendingEvents || []).slice(0, limit)) {
+      try {
+        const p = typeof ev.payload === 'string' ? JSON.parse(ev.payload) : ev.payload;
+        if (!p?.purchaseId) continue;
+
+        const sub = await dbClient('subscriptions').where({ id: p.purchaseId }).first();
+        if (!sub) { failed++; continue; }
+
+        const cust = await dbClient('billing_customers').where({ id: ev.customer_id }).first();
+        const principalId = cust ? (cust as any).principal_id : ev.customer_id;
+
+        const inv = await this.issueDurableInvoice({
+          trx: dbClient,
+          customerId: ev.customer_id,
+          principalId,
+          purchaseRecord: sub,
+          planTier: (sub as any).plan_id,
+          gateway: p.gateway || 'razorpay',
+          actualPaymentId: p.paymentId,
+          gatewayOrderId: p.gatewayOrderId,
+          cycleNumber: p.cycleNumber || 1,
+          now: Date.now()
+        });
+
+        if (inv) {
+          reconciled++;
+        } else {
+          failed++;
+        }
+      } catch {
+        failed++;
+      }
+    }
+
+    return { reconciled, failed };
   }
 
   /**
    * Generates GST-compliant, sequential tax invoices for reconciled subscription payments.
-   * Prioritizes immutable durable audit events in billing_audit_events with credit note cross-referencing.
+   * Fail-closed on missing or mismatched principal accounts.
    */
   async getInvoices(principalId: string): Promise<InvoiceRecord[]> {
     try {
@@ -2046,6 +2314,7 @@ export class PaymentGatewayService {
         customerId = customer?.id || null;
       }
 
+      // Fail-closed on unauthorized or missing customer
       if (!customerId) return [];
 
       const dbClient = this.getDb();
@@ -2067,44 +2336,59 @@ export class PaymentGatewayService {
         }
       } catch {}
 
-      if (Array.isArray(invoiceAuditEvents) && invoiceAuditEvents.length > 0) {
-        let creditNoteEvents: any[] = [];
+      // Check pending reconciliation audit events
+      let pendingAuditEvents: any[] = [];
+      try {
+        let pendingQuery: any = dbClient('billing_audit_events').where({
+          customer_id: customerId,
+          event_type: 'TAX_INVOICE_PENDING_RECONCILIATION'
+        });
+        if (typeof pendingQuery.select === 'function') {
+          pendingAuditEvents = (await pendingQuery.select('*')) || [];
+        } else {
+          pendingAuditEvents = (await pendingQuery) || [];
+        }
+      } catch {}
+
+      // Credit notes
+      let creditNoteEvents: any[] = [];
+      try {
+        const cnQuery: any = dbClient('billing_audit_events').where({
+          customer_id: customerId,
+          event_type: 'CREDIT_NOTE_ISSUED'
+        });
+        if (typeof cnQuery.select === 'function') {
+          creditNoteEvents = (await cnQuery.select('*')) || [];
+        } else {
+          creditNoteEvents = (await cnQuery) || [];
+        }
+      } catch {}
+
+      const creditNotesByInvoice = new Map<string, any>();
+      for (const cnEv of creditNoteEvents || []) {
         try {
-          const cnQuery: any = dbClient('billing_audit_events').where({
-            customer_id: customerId,
-            event_type: 'CREDIT_NOTE_ISSUED'
-          });
-          if (typeof cnQuery.select === 'function') {
-            creditNoteEvents = (await cnQuery.select('*')) || [];
-          } else {
-            creditNoteEvents = (await cnQuery) || [];
+          const cnPayload = typeof cnEv.payload === 'string' ? JSON.parse(cnEv.payload) : cnEv.payload;
+          if (cnPayload?.originalInvoiceNumber) {
+            creditNotesByInvoice.set(cnPayload.originalInvoiceNumber, cnPayload);
+          }
+          if (cnPayload?.subscriptionId) {
+            creditNotesByInvoice.set(`sub_${cnPayload.subscriptionId}`, cnPayload);
           }
         } catch {}
+      }
 
-        const creditNotesByInvoice = new Map<string, any>();
-        for (const cnEv of creditNoteEvents || []) {
-          try {
-            const cnPayload = typeof cnEv.payload === 'string' ? JSON.parse(cnEv.payload) : cnEv.payload;
-            if (cnPayload?.originalInvoiceNumber) {
-              creditNotesByInvoice.set(cnPayload.originalInvoiceNumber, cnPayload);
-            }
-            if (cnPayload?.subscriptionId) {
-              creditNotesByInvoice.set(`sub_${cnPayload.subscriptionId}`, cnPayload);
-            }
-          } catch {}
-        }
+      const invoices: InvoiceRecord[] = [];
+      const issuedSubscriptionCycles = new Set<string>();
 
-        const supplierGstin = process.env.AIRA_SUPPLIER_GSTIN || undefined;
+      // Sort descending by created_at
+      invoiceAuditEvents.sort((a, b) => Number(b.created_at || 0) - Number(a.created_at || 0));
 
-        // Sort descending by created_at
-        invoiceAuditEvents.sort((a, b) => Number(b.created_at || 0) - Number(a.created_at || 0));
-
-        return invoiceAuditEvents.map((ev) => {
-          let p: any = {};
-          try {
-            p = typeof ev.payload === 'string' ? JSON.parse(ev.payload) : ev.payload;
-          } catch {}
-
+      for (const ev of invoiceAuditEvents || []) {
+        try {
+          const p = typeof ev.payload === 'string' ? JSON.parse(ev.payload) : ev.payload;
+          if (p?.subscriptionId) {
+            issuedSubscriptionCycles.add(`${p.subscriptionId}_${p.cycleNumber || 1}`);
+          }
           const linkedCn = creditNotesByInvoice.get(p.invoiceNumber) || (p.subscriptionId ? creditNotesByInvoice.get(`sub_${p.subscriptionId}`) : null);
 
           let status = p.status || 'Paid';
@@ -2112,11 +2396,8 @@ export class PaymentGatewayService {
             status = linkedCn.isPartialRefund ? 'Partially Refunded' : 'Refunded';
           }
 
-          const currentGstin = supplierGstin || p.supplierGstin || undefined;
-          const currentCompliant = Boolean(currentGstin && currentGstin.trim().length === 15);
-
-          return {
-            invoiceNumber: p.invoiceNumber || ev.actor_id || `INV-2026-${(ev.id || '').slice(0, 8)}`,
+          invoices.push({
+            invoiceNumber: p.invoiceNumber || ev.actor_id,
             date: p.date || new Date(Number(ev.created_at) || Date.now()).toISOString().split('T')[0],
             plan: p.plan || 'AIRA Subscription',
             currency: (p.currency || 'INR').toUpperCase(),
@@ -2128,15 +2409,44 @@ export class PaymentGatewayService {
             igstAmount: p.igstAmount !== undefined ? Number(p.igstAmount) : undefined,
             sacCode: p.sacCode || '998431',
             supplierName: p.supplierName || 'Virexa AI Ventures Private Limited',
-            supplierGstin: currentGstin,
-            taxComplianceStatus: currentCompliant ? 'COMPLIANT' : 'PROVISIONAL_PENDING_GSTIN',
-            placeOfSupply: p.placeOfSupply,
+            supplierGstin: p.supplierGstin || process.env.AIRA_SUPPLIER_GSTIN || undefined,
+            taxComplianceStatus: p.taxComplianceStatus || 'COMPLIANT',
+            placeOfSupply: p.placeOfSupply || 'UNKNOWN',
             status,
             pdfDownloadAvailable: false,
             creditNoteNumber: linkedCn?.creditNoteNumber,
             refundAmount: linkedCn?.refundAmount ? Number(linkedCn.refundAmount) : undefined
-          };
-        });
+          });
+        } catch {}
+      }
+
+      // Add truthful entry for any pending reconciliation events not yet fulfilled
+      for (const pev of pendingAuditEvents || []) {
+        try {
+          const pp = typeof pev.payload === 'string' ? JSON.parse(pev.payload) : pev.payload;
+          const key = `${pp.purchaseId}_${pp.cycleNumber || 1}`;
+          if (!issuedSubscriptionCycles.has(key)) {
+            invoices.push({
+              invoiceNumber: 'INV-PENDING-RECONCILIATION',
+              date: new Date(Number(pev.created_at) || Date.now()).toISOString().split('T')[0],
+              plan: pp.planTier === 'pro' ? 'AIRA Pro' : 'AIRA Plus',
+              currency: 'INR',
+              totalAmount: Math.round(((Number(pp.amount) || 0) / 100) * 100) / 100,
+              taxableBase: 0,
+              gstAmount: 0,
+              sacCode: '998431',
+              supplierName: 'Virexa AI Ventures Private Limited',
+              taxComplianceStatus: 'PROVISIONAL_PENDING_RECONCILIATION' as any,
+              placeOfSupply: 'UNKNOWN',
+              status: 'Pending Reconciliation',
+              pdfDownloadAvailable: false
+            });
+          }
+        } catch {}
+      }
+
+      if (invoices.length > 0) {
+        return invoices;
       }
 
       // Fallback: Query subscriptions table for legacy / mock rows without audit events
@@ -2151,58 +2461,28 @@ export class PaymentGatewayService {
         subs = await query.select('*');
       }
 
-      const paidSubs = (subs || []).filter(s => s && (s.status === 'active' || s.status === 'cancelled' || s.status === 'refunded'));
-
-      const supplierGstin = process.env.AIRA_SUPPLIER_GSTIN || undefined;
-      const isGstinVerified = Boolean(supplierGstin && supplierGstin.trim().length === 15);
+      const paidSubs = (subs || []).filter(s => s && s.customer_id === customerId && (s.status === 'active' || s.status === 'cancelled' || s.status === 'refunded'));
 
       return paidSubs.map((sub, index) => {
-        const totalMinor = Number(sub.amount_minor_units) || 0;
-        const total = Math.round((totalMinor / 100) * 100) / 100;
-        const isINR = (sub.currency || 'INR').toUpperCase() === 'INR';
-        const isExport = !isINR;
+        let meta: any = {};
+        try {
+          meta = typeof sub.metadata === 'string' ? JSON.parse(sub.metadata) : (sub.metadata || {});
+        } catch {}
 
-        let taxableBase = 0;
-        let gstAmount = 0;
-        let cgstAmount: number | undefined;
-        let sgstAmount: number | undefined;
-        let igstAmount: number | undefined;
-        let placeOfSupply: string | undefined;
-
-        if (isExport) {
-          // Zero-rated export under Letter of Undertaking (LUT)
-          taxableBase = total;
-          gstAmount = 0;
-        } else {
-          // 18% GST calculation (SAC 998431: Information Technology & Software Services)
-          // Total = Base * 1.18 => Base = Total / 1.18
-          taxableBase = Math.round((total / 1.18) * 100) / 100;
-          gstAmount = Math.round((total - taxableBase) * 100) / 100;
-
-          let meta: any = {};
-          try {
-            meta = typeof sub.metadata === 'string' ? JSON.parse(sub.metadata) : (sub.metadata || {});
-          } catch {}
-
-          placeOfSupply = (meta.customerState || meta.billingState || meta.state || meta.placeOfSupply || '07').toString().trim().toUpperCase();
-          const isDelhi = placeOfSupply === '07' || placeOfSupply === 'DELHI' || placeOfSupply === 'DL' || placeOfSupply === 'NEW DELHI';
-
-          if (isDelhi) {
-            // Intra-state supply (Delhi -> Delhi): 9% CGST + 9% SGST
-            cgstAmount = Math.round((gstAmount / 2) * 100) / 100;
-            sgstAmount = Math.round((gstAmount - cgstAmount) * 100) / 100;
-            igstAmount = undefined;
-          } else {
-            // Inter-state supply: 18% IGST
-            cgstAmount = undefined;
-            sgstAmount = undefined;
-            igstAmount = gstAmount;
-          }
-        }
+        const taxResult = taxDeterminationService.determineTax({
+          amountMinorUnits: Number(sub.amount_minor_units) || 0,
+          currency: sub.currency,
+          customerCountry: meta.customerCountry || meta.country,
+          customerState: meta.customerState || meta.billingState || meta.state,
+          placeOfSupply: meta.placeOfSupply,
+          lutNumber: meta.lutNumber || process.env.AIRA_LUT_NUMBER,
+          lutAvailable: meta.lutAvailable !== undefined ? meta.lutAvailable : (process.env.AIRA_LUT_AVAILABLE ? process.env.AIRA_LUT_AVAILABLE === 'true' : undefined),
+          supplierGstin: process.env.AIRA_SUPPLIER_GSTIN,
+          supplierGstinVerified: process.env.AIRA_SUPPLIER_GSTIN_VERIFIED ? process.env.AIRA_SUPPLIER_GSTIN_VERIFIED === 'true' : undefined
+        });
 
         const dateStr = new Date(Number(sub.created_at) || Date.now()).toISOString().split('T')[0];
-        const shortId = (sub.id || '').replace(/^pur_/, '').toUpperCase().slice(0, 8) || `${1001 + index}`;
-        const invoiceNumber = `INV-2026-${shortId}`;
+        const invoiceNumber = `INV-2026-LEGACY-${String(index + 1).padStart(4, '0')}`;
         const planName = COMMERCIAL_PLANS[sub.plan_id as PlanTier]?.name || (sub.plan_id === 'pro' ? 'AIRA Pro' : 'AIRA Plus');
 
         return {
@@ -2210,17 +2490,17 @@ export class PaymentGatewayService {
           date: dateStr,
           plan: planName,
           currency: (sub.currency || 'INR').toUpperCase(),
-          totalAmount: total,
-          taxableBase,
-          gstAmount,
-          cgstAmount,
-          sgstAmount,
-          igstAmount,
-          sacCode: '998431',
-          supplierName: 'Virexa AI Ventures Private Limited',
-          supplierGstin,
-          taxComplianceStatus: isGstinVerified ? 'COMPLIANT' : 'PROVISIONAL_PENDING_GSTIN',
-          placeOfSupply,
+          totalAmount: taxResult.totalAmount,
+          taxableBase: taxResult.taxableBase,
+          gstAmount: taxResult.gstAmount,
+          cgstAmount: taxResult.cgstAmount,
+          sgstAmount: taxResult.sgstAmount,
+          igstAmount: taxResult.igstAmount,
+          sacCode: taxResult.sacCode,
+          supplierName: taxResult.supplierName,
+          supplierGstin: taxResult.supplierGstin,
+          taxComplianceStatus: taxResult.taxComplianceStatus as any,
+          placeOfSupply: taxResult.placeOfSupply,
           status: sub.status === 'refunded' ? 'Refunded' : 'Paid',
           pdfDownloadAvailable: false
         };
