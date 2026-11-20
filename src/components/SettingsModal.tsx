@@ -208,6 +208,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     reasoningBoostsRemaining: number;
     resetAt: string;
     paymentCollectionDisabled: boolean;
+    checkoutAvailable: boolean;
     billingStatus: string;
   }
 
@@ -251,6 +252,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       const dailyChatsLimit = entitlements.dailyStandardChatLimit;
       const remainingDailyChats = Math.min(dailyChatsLimit, Math.max(0, entitlements.dailyStandardChatRemaining));
       const dailyChatsUsed = Math.max(0, dailyChatsLimit - remainingDailyChats);
+      const checkoutAvailable = Boolean(entitlements.checkoutAvailable);
+      const serverBillingStatus = entitlements.billingStatus || (planId === 'guest' ? 'Guest Trial Session' : (checkoutAvailable ? 'Active' : 'Sandbox billing — checkout is unavailable'));
       setUsageData({
         planId,
         planName: COMMERCIAL_PLANS[planId].name,
@@ -260,8 +263,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         monthlyCreditsRemaining: entitlements.availableCredits,
         reasoningBoostsRemaining: entitlements.reasoningBoostsRemaining,
         resetAt: tomorrowUtc.toISOString(),
-        paymentCollectionDisabled: true,
-        billingStatus: planId === 'guest' ? 'Guest Trial Session' : 'Sandbox billing — checkout is unavailable'
+        paymentCollectionDisabled: !checkoutAvailable,
+        checkoutAvailable,
+        billingStatus: serverBillingStatus
       });
     } catch (err) {
       console.warn('[SettingsModal] fetchUsage error:', err);
@@ -921,6 +925,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       )}
                     </div>
 
+                    {usageData && !usageData.checkoutAvailable && (
+                      <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-700 dark:text-amber-300">
+                        <Shield className="w-3.5 h-3.5 shrink-0 text-amber-500" />
+                        <span>Commercial checkout is currently offline · Plan features, quotas and entitlements are fully operational for entitled accounts.</span>
+                      </div>
+                    )}
+
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                       {(['guest', 'free', 'plus', 'pro'] as const).map(tierKey => {
                         const plan = COMMERCIAL_PLANS[tierKey];
@@ -944,9 +955,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                 )}
                               </div>
                               <div className="text-base font-bold font-serif text-claude-text-light dark:text-white">
-                                {tierKey === 'guest' || tierKey === 'free' ? 'Free' : 'Preview'}
+                                {tierKey === 'guest' || tierKey === 'free'
+                                  ? 'Free'
+                                  : `₹${plan.pricing?.INR || (tierKey === 'plus' ? 399 : 999)}`}
                                 <span className="text-[10px] font-sans font-normal text-claude-muted-light">
-                                  {tierKey === 'guest' || tierKey === 'free' ? ' /mo' : ' (In Review)'}
+                                  {tierKey === 'guest' || tierKey === 'free'
+                                    ? ' /mo'
+                                    : ' /mo (incl. GST)'}
                                 </span>
                               </div>
                               <div className="space-y-1.5 text-[11px] text-claude-muted-light dark:text-claude-muted-dark border-t border-claude-border-light/60 dark:border-white/5 pt-2">
@@ -987,7 +1002,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   }}
                                   className="w-full py-1.5 rounded-lg bg-claude-terracotta hover:bg-claude-terracotta-hover text-white text-[11px] font-bold transition-colors motion-reduce:transition-none shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99]"
                                 >
-                                  {tierKey === 'free' ? 'Get Started' : 'View Plan Details (Preview)'}
+                                  {tierKey === 'free'
+                                    ? 'Get Started'
+                                    : (usageData?.checkoutAvailable
+                                      ? `Upgrade to ${plan.name}`
+                                      : 'View Plan Details')}
                                 </button>
                               )}
                             </div>
