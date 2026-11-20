@@ -11,7 +11,9 @@ function createMockDb() {
     credit_transactions: [],
     payment_gateway_events: [],
     billing_audit_events: [],
-    idempotent_operations: []
+    idempotent_operations: [],
+    billing_invoices: [],
+    billing_credit_notes: []
   };
 
   const dbClient: any = (tableName: string) => {
@@ -22,14 +24,34 @@ function createMockDb() {
 
     const builder: any = {
       _whereClauses: [] as any[],
-      where: (query: Record<string, any>) => {
-        builder._whereClauses.push(query);
+      where: (queryOrCol: any, opOrVal?: any, val?: any) => {
+        if (typeof queryOrCol === 'string') {
+          if (val === undefined) {
+            builder._whereClauses.push({ [queryOrCol]: opOrVal });
+          } else {
+            builder._whereClauses.push({ [queryOrCol]: { op: opOrVal, val } });
+          }
+        } else if (typeof queryOrCol === 'object') {
+          builder._whereClauses.push(queryOrCol);
+        }
         return builder;
+      },
+      andWhere: (queryOrCol: any, opOrVal?: any, val?: any) => {
+        return builder.where(queryOrCol, opOrVal, val);
       },
       select: async () => {
         return tableData.filter((row) => {
           return builder._whereClauses.every((clause: Record<string, any>) => {
-            return Object.entries(clause).every(([k, v]) => row[k] === v);
+            return Object.entries(clause).every(([k, v]) => {
+              if (v && typeof v === 'object' && 'op' in v) {
+                if (v.op === '<=') return Number(row[k]) <= Number(v.val);
+                if (v.op === '>=') return Number(row[k]) >= Number(v.val);
+                if (v.op === '<') return Number(row[k]) < Number(v.val);
+                if (v.op === '>') return Number(row[k]) > Number(v.val);
+                if (v.op === '=') return row[k] === v.val;
+              }
+              return row[k] === v;
+            });
           });
         });
       },
@@ -41,11 +63,22 @@ function createMockDb() {
         return builder;
       },
       insert: async (record: any) => {
+        if (dbClient._failInserts && dbClient._failInserts[tableName]) {
+          throw new Error(`SIMULATED_DB_WRITE_FAILURE: ${tableName} write failure simulation`);
+        }
         // Enforce Primary Key uniqueness on 'key' for idempotent_operations
         if (tableName === 'idempotent_operations') {
           const keyExists = tableData.some(r => r.key === record.key);
           if (keyExists) {
             throw new Error(`UNIQUE_CONSTRAINT_VIOLATION: duplicate key value violates unique constraint "idempotent_operations_pkey" (Key: ${record.key})`);
+          }
+        }
+        if (tableName === 'billing_credit_notes') {
+          const refundExists = tableData.some(r => r.refund_id === record.refund_id);
+          if (refundExists) {
+            const err: any = new Error(`duplicate key value violates unique constraint "uq_billing_credit_notes_refund"`);
+            err.code = '23505';
+            throw err;
           }
         }
         tableData.push({ ...record });
@@ -74,6 +107,10 @@ function createMockDb() {
     };
 
     return builder;
+  };
+
+  dbClient.schema = {
+    hasTable: async (name: string) => Boolean(tables[name])
   };
 
   dbClient.raw = async (sql: string) => {
@@ -188,6 +225,95 @@ describe('Invoice Concurrency, Tax Matrix & Failure Handling Integrity Suite', (
       const auditInvoices = tables.billing_audit_events.filter(e => e.event_type === 'TAX_INVOICE_ISSUED');
       assert.equal(auditInvoices.length, 1, 'Only exactly 1 tax invoice audit event may be recorded per cycle');
     });
+
+    it('fences out stale Worker A when its lease expires and Worker B takes over (CAS generation fencing)', async () => {
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+
+      const customerId = 'cust_stale_fence_test';
+      const principalId = 'usr_stale_fence_test';
+      const subId = 'sub_stale_fence_01';
+      tables.billing_customers.push({ id: customerId, principal_id: principalId });
+
+      const subRecord = {
+        id: subId,
+        customer_id: customerId,
+        plan_id: 'plus',
+        status: 'active',
+        currency: 'INR',
+        amount_minor_units: 39900,
+        created_at: Date.now(),
+        updated_at: Date.now()
+      };
+
+      const now = Date.now();
+      const cycleBindingKey = `inv_binding:${customerId}:${subId}:cycle:1`;
+
+      // Step 1: Worker A acquires the initial lease with generation 1 and token 'worker_a'
+      tables.idempotent_operations.push({
+        key: cycleBindingKey,
+        principal_id: principalId,
+        operation_id: `inv_binding_${subId}_cycle_1`,
+        operation_type: 'tax_invoice_binding',
+        payload_hash: 'pay_1',
+        status: 'IN_PROGRESS',
+        response_status: 200,
+        response_body: '',
+        owner_token: 'worker_a',
+        generation: 1,
+        locked_until: now - 1000, // Lease has expired while Worker A was paused!
+        created_at: now - 35000,
+        updated_at: now - 35000
+      });
+
+      // Step 2: Worker B notices expired lease, takes over via CAS, bumping generation to 2, and completes issuance
+      const workerBInvoice = await service.issueDurableInvoice({
+        trx: dbClient,
+        customerId,
+        principalId,
+        purchaseRecord: subRecord,
+        planTier: 'plus',
+        gateway: 'razorpay',
+        actualPaymentId: 'pay_b_takeover',
+        cycleNumber: 1,
+        now,
+        workerToken: 'worker_b'
+      });
+
+      assert.ok(workerBInvoice);
+      assert.match(workerBInvoice.invoiceNumber, /^INV-2026-\d{4,}$/);
+
+      // Verify idempotent_operations now has generation 2, COMPLETED, and response_body
+      const opRecord = tables.idempotent_operations.find(r => r.key === cycleBindingKey);
+      assert.ok(opRecord);
+      assert.equal(opRecord.status, 'COMPLETED');
+      assert.equal(opRecord.generation, 2);
+      assert.equal(opRecord.owner_token, 'worker_b');
+
+      // Step 3: Stale Worker A resumes and attempts to finalize using its stale lease (token: 'worker_a', gen: 1)
+      // Attempting to finalize with stale credentials must be rejected by CAS
+      const finalizeStale = await dbClient('idempotent_operations')
+        .where({
+          key: cycleBindingKey,
+          status: 'IN_PROGRESS',
+          owner_token: 'worker_a',
+          generation: 1
+        })
+        .update({
+          status: 'COMPLETED',
+          response_body: 'STALE_OVERWRITE_PAYLOAD',
+          locked_until: 0,
+          updated_at: Date.now()
+        });
+
+      assert.equal(finalizeStale, 0, 'Stale Worker A must affect 0 rows and be completely fenced out');
+
+      // Step 4: Verify exactly one audit event exists in total
+      const auditEvents = tables.billing_audit_events.filter(e => e.event_type === 'TAX_INVOICE_ISSUED');
+      assert.equal(auditEvents.length, 1, 'Exactly one invoice audit event must exist');
+      assert.equal(JSON.parse(auditEvents[0].payload).invoiceNumber, workerBInvoice.invoiceNumber);
+    });
   });
 
   describe('3. Outbox Failure Handling & Reconciliation', () => {
@@ -291,6 +417,98 @@ describe('Invoice Concurrency, Tax Matrix & Failure Handling Integrity Suite', (
       assert.equal(payload.originalInvoiceNumber, 'UNRESOLVED_ORIGINAL_INVOICE');
       assert.equal(payload.status, 'PENDING_RECONCILIATION');
       assert.ok(payload.creditNoteNumber.startsWith('CN-2026-'));
+    });
+
+    it('verifies existing credit note on uniqueness conflict and rejects tenant/amount mismatch', async () => {
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+
+      const customerId = 'cust_cn_tenant_test';
+      const principalId = 'usr_cn_tenant_test';
+      tables.billing_customers.push({ id: customerId, principal_id: principalId });
+
+      const subRecord = {
+        id: 'sub_cn_conflict_01',
+        customer_id: customerId,
+        principal_id: principalId,
+        amount_minor_units: 39900,
+        currency: 'INR'
+      };
+
+      // Seed pre-existing credit note with different customer
+      tables.billing_credit_notes.push({
+        id: 'cn_exist_01',
+        credit_note_number: 'CN-2026-0001',
+        original_invoice_number: 'INV-2026-0001',
+        customer_id: 'cust_attacker',
+        subscription_id: 'sub_other',
+        refund_id: 'rfnd_conflict_01',
+        refund_amount: 39900,
+        currency: 'INR',
+        is_partial_refund: false,
+        supplier_name: 'Virexa AI Ventures Private Limited',
+        status: 'Refunded',
+        gateway: 'razorpay',
+        created_at: Date.now(),
+        updated_at: Date.now()
+      });
+
+      // Simulating uniqueness conflict with mismatched customer must fail closed
+      await assert.rejects(
+        () => service.issueDurableCreditNote({
+          trx: dbClient,
+          subRecord,
+          refundEntity: { id: 'rfnd_conflict_01' },
+          refundAmount: 39900,
+          isPartialRefund: false,
+          gateway: 'razorpay',
+          now: Date.now()
+        }),
+        /CREDIT_NOTE_TENANT_MISMATCH/
+      );
+    });
+
+    it('records CREDIT_NOTE_PENDING_RECONCILIATION and does not emit CREDIT_NOTE_ISSUED on DB failure', async () => {
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+
+      const customerId = 'cust_cn_db_err';
+      const principalId = 'usr_cn_db_err';
+      tables.billing_customers.push({ id: customerId, principal_id: principalId });
+
+      const subRecord = {
+        id: 'sub_cn_db_fail',
+        customer_id: customerId,
+        principal_id: principalId,
+        amount_minor_units: 39900,
+        currency: 'INR'
+      };
+
+      // Mock DB failure on billing_credit_notes insert
+      dbClient._failInserts = { billing_credit_notes: true };
+
+      await assert.rejects(
+        () => service.issueDurableCreditNote({
+          trx: dbClient,
+          subRecord,
+          refundEntity: { id: 'rfnd_db_err_01' },
+          refundAmount: 39900,
+          isPartialRefund: false,
+          gateway: 'razorpay',
+          now: Date.now()
+        }),
+        /SIMULATED_DB_WRITE_FAILURE/
+      );
+
+      // Verify that CREDIT_NOTE_ISSUED was NOT emitted
+      const issuedEvents = tables.billing_audit_events.filter(e => e.event_type === 'CREDIT_NOTE_ISSUED');
+      assert.equal(issuedEvents.length, 0, 'No CREDIT_NOTE_ISSUED event may be recorded when persistence fails');
+
+      // Verify truthful CREDIT_NOTE_PENDING_RECONCILIATION was recorded
+      const pendingEvents = tables.billing_audit_events.filter(e => e.event_type === 'CREDIT_NOTE_PENDING_RECONCILIATION');
+      assert.equal(pendingEvents.length, 1, 'Exactly one CREDIT_NOTE_PENDING_RECONCILIATION event must be recorded');
     });
   });
 

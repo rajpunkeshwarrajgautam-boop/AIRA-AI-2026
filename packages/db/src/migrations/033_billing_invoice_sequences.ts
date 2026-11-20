@@ -37,8 +37,8 @@ export async function up(knex: Knex): Promise<void> {
     await knex.schema.createTable('billing_invoices', (table) => {
       table.string('id', 64).primary();
       table.string('invoice_number', 64).notNullable().unique('uq_billing_invoices_number');
-      table.string('customer_id', 64).notNullable().references('id').inTable('billing_customers').onDelete('CASCADE');
-      table.string('subscription_id', 64).notNullable().references('id').inTable('subscriptions').onDelete('CASCADE');
+      table.string('customer_id', 64).notNullable().references('id').inTable('billing_customers').onDelete('RESTRICT');
+      table.string('subscription_id', 64).notNullable().references('id').inTable('subscriptions').onDelete('RESTRICT');
       table.integer('cycle_number').notNullable().defaultTo(1);
       table.string('billing_event_id', 128).notNullable().unique('uq_billing_invoices_event');
       table.string('plan_tier', 32).notNullable();
@@ -52,7 +52,7 @@ export async function up(knex: Knex): Promise<void> {
       table.string('sac_code', 16).notNullable().defaultTo('998431');
       table.string('supplier_name', 255).notNullable().defaultTo('Virexa AI Ventures Private Limited');
       table.string('supplier_gstin', 32);
-      table.string('tax_compliance_status', 64).notNullable().defaultTo('COMPLIANT');
+      table.string('tax_compliance_status', 64).notNullable().defaultTo('UNVERIFIED');
       table.string('place_of_supply', 32).notNullable().defaultTo('UNKNOWN');
       table.string('status', 32).notNullable().defaultTo('Paid');
       table.string('gateway', 32).notNullable();
@@ -73,8 +73,8 @@ export async function up(knex: Knex): Promise<void> {
       table.string('id', 64).primary();
       table.string('credit_note_number', 64).notNullable().unique('uq_billing_credit_notes_number');
       table.string('original_invoice_number', 64);
-      table.string('customer_id', 64).notNullable().references('id').inTable('billing_customers').onDelete('CASCADE');
-      table.string('subscription_id', 64).notNullable().references('id').inTable('subscriptions').onDelete('CASCADE');
+      table.string('customer_id', 64).notNullable().references('id').inTable('billing_customers').onDelete('RESTRICT');
+      table.string('subscription_id', 64).notNullable().references('id').inTable('subscriptions').onDelete('RESTRICT');
       table.string('refund_id', 128).notNullable().unique('uq_billing_credit_notes_refund');
       table.decimal('refund_amount', 12, 2).notNullable();
       table.string('currency', 8).notNullable().defaultTo('INR');
@@ -91,14 +91,54 @@ export async function up(knex: Knex): Promise<void> {
       table.index(['original_invoice_number'], 'idx_billing_credit_notes_invoice');
     });
   }
+
+  // 4. Add distributed fencing columns to idempotent_operations if absent
+  if (await knex.schema.hasTable('idempotent_operations')) {
+    const hasOwnerToken = await knex.schema.hasColumn('idempotent_operations', 'owner_token');
+    if (!hasOwnerToken) {
+      await knex.schema.alterTable('idempotent_operations', (table) => {
+        table.string('owner_token', 64).nullable();
+        table.bigInteger('generation').notNullable().defaultTo(0);
+        table.index(['key', 'owner_token', 'generation'], 'idx_idempotent_fencing');
+      });
+    }
+  }
 }
 
 export async function down(knex: Knex): Promise<void> {
-  const isPg = typeof knex.raw === 'function' && knex.client?.config?.client === 'pg';
+  // Financial records must be retained per statutory standards (GST / Companies Act).
+  // Rollback of tables containing tax invoices, credit notes, or numbering sequences is blocked to prevent data destruction.
+  const hasInvoices = await knex.schema.hasTable('billing_invoices');
+  if (hasInvoices) {
+    const invoiceCount = await knex('billing_invoices').count('* as count').first();
+    const count = Number(invoiceCount?.count || 0);
+    if (count > 0) {
+      throw new Error(
+        `ROLLBACK_BLOCKED: billing_invoices contains ${count} statutory tax invoice record(s). Destruction of financial audit trails is prohibited. Use forward migration or administrative archiving.`
+      );
+    }
+  }
+  const hasCreditNotes = await knex.schema.hasTable('billing_credit_notes');
+  if (hasCreditNotes) {
+    const cnCount = await knex('billing_credit_notes').count('* as count').first();
+    const count = Number(cnCount?.count || 0);
+    if (count > 0) {
+      throw new Error(
+        `ROLLBACK_BLOCKED: billing_credit_notes contains ${count} credit note record(s). Destruction of financial audit trails is prohibited.`
+      );
+    }
+  }
+
+  if (process.env.ALLOW_DESTRUCTIVE_FINANCIAL_ROLLBACK !== 'true') {
+    throw new Error(
+      'ROLLBACK_BLOCKED: Migration 033 introduces immutable financial sequences and document tables. Rollback is prohibited by default to preserve auditability. Set ALLOW_DESTRUCTIVE_FINANCIAL_ROLLBACK=true to override in disposable test environments.'
+    );
+  }
 
   await knex.schema.dropTableIfExists('billing_credit_notes');
   await knex.schema.dropTableIfExists('billing_invoices');
 
+  const isPg = typeof knex.raw === 'function' && knex.client?.config?.client === 'pg';
   if (isPg) {
     try {
       await knex.raw('DROP SEQUENCE IF EXISTS billing_credit_note_number_seq');

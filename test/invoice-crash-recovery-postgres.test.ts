@@ -10,25 +10,61 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const workerPath = path.resolve(__dirname, 'helpers/standalone-billing-worker.ts');
 
+const host = process.env.PGHOST || '127.0.0.1';
+const user = process.env.PGUSER || 'postgres';
+const password = process.env.PGPASSWORD || 'rehearsal_test_pass';
+
+async function createDisposableDatabase(port: number, dbName: string): Promise<void> {
+  try {
+    const adminDb = knex({
+      client: 'pg',
+      connection: { connectionString: `postgres://${user}:${password}@${host}:${port}/postgres` }
+    });
+    await adminDb.raw(`CREATE DATABASE "${dbName}"`);
+    await adminDb.destroy();
+  } catch (err) {
+    try {
+      execSync(`wsl -d Ubuntu-24.04 sudo -u postgres createdb -p ${port} ${dbName}`);
+    } catch {
+      throw err;
+    }
+  }
+}
+
+async function dropDisposableDatabase(port: number, dbName: string): Promise<void> {
+  try {
+    const adminDb = knex({
+      client: 'pg',
+      connection: { connectionString: `postgres://${user}:${password}@${host}:${port}/postgres` }
+    });
+    await adminDb.raw(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`);
+    await adminDb.destroy();
+  } catch {
+    try {
+      execSync(`wsl -d Ubuntu-24.04 sudo -u postgres dropdb -p ${port} ${dbName}`);
+    } catch {}
+  }
+}
+
 interface EngineConfig {
   version: '16' | '18';
   port: number;
 }
 
 const ENGINES: EngineConfig[] = [
-  { version: '16', port: 5433 },
-  { version: '18', port: 5432 }
+  { version: '16', port: Number(process.env.PGPORT_16 || 5433) },
+  { version: '18', port: Number(process.env.PGPORT_18 || 5432) }
 ];
 
 for (const engine of ENGINES) {
   test.describe(`PostgreSQL ${engine.version} — Durable Invoice-Claim Recovery, Fencing & Constraint Suite`, () => {
     const testDbName = `aira_test_rec_pg${engine.version}_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-    const connStr = `postgres://postgres:rehearsal_test_pass@127.0.0.1:${engine.port}/${testDbName}`;
+    const connStr = `postgres://${user}:${password}@${host}:${engine.port}/${testDbName}`;
     let db: Knex;
 
     test.before(async () => {
-      // 1. Create isolated disposable database via WSL
-      execSync(`wsl -d Ubuntu-24.04 sudo -u postgres createdb -p ${engine.port} ${testDbName}`);
+      // 1. Create isolated disposable database
+      await createDisposableDatabase(engine.port, testDbName);
 
       // 2. Connect via Knex
       db = knex({
@@ -104,9 +140,7 @@ for (const engine of ENGINES) {
       if (db) {
         await db.destroy();
       }
-      try {
-        execSync(`wsl -d Ubuntu-24.04 sudo -u postgres dropdb -p ${engine.port} ${testDbName}`);
-      } catch {}
+      await dropDisposableDatabase(engine.port, testDbName);
     });
 
     test(`[PG${engine.version}] GATE 1: Worker crash mid-claim -> Lease expiration -> Worker 2 fences & issues exactly 1 invoice`, async () => {
@@ -419,6 +453,158 @@ for (const engine of ENGINES) {
         duplicateCnThrew = err?.code === '23505' || String(err).includes('unique');
       }
       assert.strictEqual(duplicateCnThrew, true, 'Duplicate credit_note_number must be rejected by PostgreSQL UNIQUE constraint');
+    });
+
+    test(`[PG${engine.version}] GATE 4: Stale Worker Fencing -> Worker A paused -> Worker B takeover & completion -> Worker A resumes & is rejected`, async () => {
+      const cycleBindingKey = 'inv_binding:cust_rec_test_1:sub_rec_test_1:cycle:3';
+      const paymentId = `pay_cycle3_${Date.now()}`;
+
+      // Worker A starts and claims cycle 3 with a short lease (800ms)
+      const workerA = fork(workerPath, [], {
+        execArgv: ['--import', 'tsx'],
+        env: { ...process.env, DATABASE_URL: connStr }
+      });
+
+      const workerAToken = await new Promise<string>((resolve, reject) => {
+        workerA.on('message', (msg: any) => {
+          if (msg?.status === 'CLAIM_ACQUIRED') resolve(msg.ownerToken);
+          else if (msg?.status === 'ERROR') reject(new Error(msg.error));
+        });
+        workerA.send({
+          action: 'PAUSE_AFTER_CLAIM',
+          cycleBindingKey,
+          principalId: 'principal_rec_test_1',
+          purchaseId: 'sub_rec_test_1',
+          cycle: 3,
+          paymentId,
+          leaseMs: 800,
+          workerToken: 'worker_a_paused'
+        });
+      });
+
+      assert.strictEqual(workerAToken, 'worker_a_paused');
+
+      // Verify claim exists with owner Worker A and generation 1
+      const claimRowA = await db('idempotent_operations').where({ key: cycleBindingKey }).first();
+      assert.strictEqual(claimRowA.status, 'IN_PROGRESS');
+      assert.strictEqual(claimRowA.owner_token, 'worker_a_paused');
+      assert.strictEqual(Number(claimRowA.generation), 1);
+
+      // Wait for Worker A lease to expire (900ms)
+      await new Promise((r) => setTimeout(r, 900));
+
+      // Worker B restarts and processes cycle 3
+      const workerB = fork(workerPath, [], {
+        execArgv: ['--import', 'tsx'],
+        env: { ...process.env, DATABASE_URL: connStr }
+      });
+
+      const workerBResult = await new Promise<any>((resolve) => {
+        workerB.on('message', (msg: any) => {
+          if (msg?.status === 'SUCCESS') resolve(msg.invoice);
+          else if (msg?.status === 'ERROR') resolve(msg);
+        });
+        workerB.send({
+          action: 'PROCESS_CYCLE',
+          customerId: 'cust_rec_test_1',
+          principalId: 'principal_rec_test_1',
+          purchaseRecord: {
+            id: 'sub_rec_test_1',
+            customer_id: 'cust_rec_test_1',
+            plan_id: 'plus',
+            currency: 'INR',
+            amount_minor_units: 39900,
+            metadata: JSON.stringify({ customerState: '07', country: 'IN' })
+          },
+          cycleNumber: 3,
+          actualPaymentId: paymentId,
+          gateway: 'razorpay',
+          workerToken: 'worker_b_takeover'
+        });
+      });
+
+      assert.ok(workerBResult?.invoiceNumber, 'Worker B must successfully issue the invoice');
+      assert.match(workerBResult.invoiceNumber, /^INV-2026-\d{4}$/);
+
+      // Verify claim in DB now has generation >= 2, status COMPLETED
+      const claimRowB = await db('idempotent_operations').where({ key: cycleBindingKey }).first();
+      assert.strictEqual(claimRowB.status, 'COMPLETED');
+      assert.strictEqual(Number(claimRowB.locked_until), 0);
+      assert.strictEqual(claimRowB.owner_token, 'worker_b_takeover');
+      assert.ok(Number(claimRowB.generation) >= 2, `Generation must be >= 2, was ${claimRowB.generation}`);
+
+      // Now resume Worker A: Worker A attempts to finalize with stale token and generation 1
+      const workerAFinalizeResult = await new Promise<any>((resolve) => {
+        workerA.on('message', (msg: any) => {
+          if (msg?.status === 'SUCCESS' || msg?.status === 'FENCING_REJECTED' || msg?.status === 'ERROR') {
+            resolve(msg);
+          }
+        });
+        workerA.send({
+          action: 'RESUME_FINALIZATION',
+          customerId: 'cust_rec_test_1',
+          principalId: 'principal_rec_test_1',
+          purchaseRecord: {
+            id: 'sub_rec_test_1',
+            customer_id: 'cust_rec_test_1',
+            plan_id: 'plus',
+            currency: 'INR',
+            amount_minor_units: 39900,
+            metadata: JSON.stringify({ customerState: '07', country: 'IN' })
+          },
+          cycleNumber: 3,
+          actualPaymentId: paymentId,
+          gateway: 'razorpay'
+        });
+      });
+
+      assert.strictEqual(
+        workerAFinalizeResult.status,
+        'FENCING_REJECTED',
+        'Stale Worker A must be rejected by fencing CAS check'
+      );
+      assert.ok(
+        workerAFinalizeResult.error.includes('STALE_WORKER_FENCING_LOST') ||
+        workerAFinalizeResult.error.includes('INVOICE_CYCLE_CONTENTION') ||
+        workerAFinalizeResult.error.includes('fencing'),
+        `Error must identify fencing violation: ${workerAFinalizeResult.error}`
+      );
+
+      // Verify DB: exactly ONE invoice for cycle 3
+      const invoicesCycle3 = await db('billing_invoices').where({ subscription_id: 'sub_rec_test_1', cycle_number: 3 });
+      assert.strictEqual(invoicesCycle3.length, 1, 'Exactly ONE invoice must exist for cycle 3');
+      assert.strictEqual(invoicesCycle3[0].invoice_number, workerBResult.invoiceNumber);
+    });
+
+    test(`[PG${engine.version}] GATE 5: Migration 033 safe rollback guard blocks destructive deletion of financial documents`, async () => {
+      const migration033 = await import('../packages/db/src/migrations/033_billing_invoice_sequences.js');
+
+      // Verify financial records currently exist in database
+      const invCount = await db('billing_invoices').count('* as count').first();
+      assert.ok(Number(invCount?.count || 0) > 0, 'Invoices must exist in database');
+
+      // Attempt down() without ALLOW_DESTRUCTIVE_FINANCIAL_ROLLBACK
+      delete process.env.ALLOW_DESTRUCTIVE_FINANCIAL_ROLLBACK;
+      let rollbackBlocked = false;
+      let rollbackError = '';
+      try {
+        await migration033.down(db);
+      } catch (err: any) {
+        rollbackBlocked = true;
+        rollbackError = err.message;
+      }
+
+      assert.strictEqual(rollbackBlocked, true, 'Migration 033 down() must fail closed when financial records exist');
+      assert.ok(
+        rollbackError.includes('ROLLBACK_BLOCKED'),
+        `Error must cite ROLLBACK_BLOCKED: ${rollbackError}`
+      );
+
+      // Verify tables still exist and were NOT dropped
+      const invTableStillExists = await db.schema.hasTable('billing_invoices');
+      const cnTableStillExists = await db.schema.hasTable('billing_credit_notes');
+      assert.strictEqual(invTableStillExists, true, 'billing_invoices table must NOT be dropped');
+      assert.strictEqual(cnTableStillExists, true, 'billing_credit_notes table must NOT be dropped');
     });
   });
 }

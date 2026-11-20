@@ -27,19 +27,50 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
       idempotent_operations: [],
       credit_accounts: [],
       credit_transactions: [],
-      credit_grants: []
+      credit_grants: [],
+      billing_invoices: [],
+      billing_credit_notes: []
     };
 
     const dbClient: any = (tableName: string) => {
       let filterQuery: Record<string, any> = {};
+      let whereOps: Array<{ column: string; op: string; val: any }> = [];
       let whereInFilter: { column: string; values: any[] } | null = null;
       let orderCol: string | null = null;
       let orderDir: string = 'asc';
 
+      const matchRow = (r: any): boolean => {
+        const matchesObj = Object.entries(filterQuery).every(([k, v]) => r[k] === v);
+        if (!matchesObj) return false;
+        if (whereInFilter && !whereInFilter.values.includes(r[whereInFilter.column])) {
+          return false;
+        }
+        for (const opClause of whereOps) {
+          const colVal = r[opClause.column];
+          if (opClause.op === '<=' && !(Number(colVal) <= Number(opClause.val))) return false;
+          if (opClause.op === '>=' && !(Number(colVal) >= Number(opClause.val))) return false;
+          if (opClause.op === '<' && !(Number(colVal) < Number(opClause.val))) return false;
+          if (opClause.op === '>' && !(Number(colVal) > Number(opClause.val))) return false;
+          if (opClause.op === '=' && colVal !== opClause.val) return false;
+        }
+        return true;
+      };
+
       const builder: any = {
-        where: (query: Record<string, any>) => {
-          Object.assign(filterQuery, query);
+        where: (queryOrCol: any, opOrVal?: any, val?: any) => {
+          if (typeof queryOrCol === 'string') {
+            if (val === undefined) {
+              filterQuery[queryOrCol] = opOrVal;
+            } else {
+              whereOps.push({ column: queryOrCol, op: opOrVal, val });
+            }
+          } else if (typeof queryOrCol === 'object') {
+            Object.assign(filterQuery, queryOrCol);
+          }
           return builder;
+        },
+        andWhere: (queryOrCol: any, opOrVal?: any, val?: any) => {
+          return builder.where(queryOrCol, opOrVal, val);
         },
         whereIn: (column: string, values: any[]) => {
           whereInFilter = { column, values };
@@ -53,43 +84,34 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
         },
         first: async () => {
           const rows = tables[tableName] || [];
-          return rows.find(r => {
-            const matchesObj = Object.entries(filterQuery).every(([k, v]) => r[k] === v);
-            if (!matchesObj) return false;
-            if (whereInFilter) {
-              return whereInFilter.values.includes(r[whereInFilter.column]);
-            }
-            return true;
-          }) || null;
+          return rows.find(matchRow) || null;
         },
         select: async () => {
           const rows = tables[tableName] || [];
-          return rows.filter(r => {
-            const matchesObj = Object.entries(filterQuery).every(([k, v]) => r[k] === v);
-            if (!matchesObj) return false;
-            if (whereInFilter) {
-              return whereInFilter.values.includes(r[whereInFilter.column]);
-            }
-            return true;
-          });
+          return rows.filter(matchRow);
         },
         update: async (patch: Record<string, any>) => {
           const rows = tables[tableName] || [];
+          let updatedCount = 0;
           for (const r of rows) {
-            const matchesObj = Object.entries(filterQuery).every(([k, v]) => r[k] === v);
-            const matchesIn = !whereInFilter || whereInFilter.values.includes(r[whereInFilter.column]);
-            if (matchesObj && matchesIn) {
+            if (matchRow(r)) {
               Object.assign(r, patch);
+              updatedCount++;
             }
           }
+          return updatedCount;
         },
         delete: async () => {
           const rows = tables[tableName] || [];
+          let deletedCount = 0;
           tables[tableName] = rows.filter(r => {
-            const matchesObj = Object.entries(filterQuery).every(([k, v]) => r[k] === v);
-            const matchesIn = !whereInFilter || whereInFilter.values.includes(r[whereInFilter.column]);
-            return !(matchesObj && matchesIn);
+            if (matchRow(r)) {
+              deletedCount++;
+              return false;
+            }
+            return true;
           });
+          return deletedCount;
         }
       };
 
@@ -102,8 +124,20 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
         insert: async (record: Record<string, any>) => {
           if (!tables[tableName]) tables[tableName] = [];
           tables[tableName].push({ ...record });
+          return [record];
         }
       };
+    };
+
+    dbClient.schema = {
+      hasTable: async (name: string) => Boolean(tables[name])
+    };
+
+    dbClient.raw = async (sql: string) => {
+      if (sql.includes('nextval')) {
+        return { rows: [{ seq: 1 }] };
+      }
+      return { rows: [] };
     };
 
     return { dbClient, tables };

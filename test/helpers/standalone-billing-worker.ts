@@ -31,6 +31,8 @@ process.on('message', async (msg: any) => {
         response_status: 200,
         response_body: '',
         locked_until: now + (leaseMs || 1500),
+        owner_token: msg.workerToken || `worker_${process.pid}`,
+        generation: 1,
         created_at: now,
         updated_at: now
       });
@@ -56,6 +58,8 @@ process.on('message', async (msg: any) => {
         response_status: 200,
         response_body: '',
         locked_until: now + (leaseMs || 1500),
+        owner_token: msg.workerToken || `worker_${process.pid}`,
+        generation: 1,
         created_at: now,
         updated_at: now
       });
@@ -92,8 +96,65 @@ process.on('message', async (msg: any) => {
       if (process.send) process.send({ status: 'ERROR', error: err.message });
       process.exit(1);
     }
+  } else if (msg?.action === 'PAUSE_AFTER_CLAIM') {
+    const { cycleBindingKey, principalId, purchaseId, cycle, paymentId, leaseMs, workerToken } = msg;
+    const now = Date.now();
+    const token = workerToken || `worker_${process.pid}_${now}`;
+    try {
+      await db('idempotent_operations').insert({
+        key: cycleBindingKey,
+        principal_id: principalId,
+        operation_id: `inv_binding_${purchaseId}_cycle_${cycle}`,
+        operation_type: 'tax_invoice_binding',
+        payload_hash: paymentId || '',
+        status: 'IN_PROGRESS',
+        response_status: 200,
+        response_body: '',
+        locked_until: now + (leaseMs || 1000),
+        owner_token: token,
+        generation: 1,
+        created_at: now,
+        updated_at: now
+      });
+      if (process.send) process.send({ status: 'CLAIM_ACQUIRED', ownerToken: token, pid: process.pid });
+
+      // Wait for resume message
+      process.on('message', async (resumeMsg: any) => {
+        if (resumeMsg?.action === 'RESUME_FINALIZATION') {
+          try {
+            // Worker A attempts to finalize its claim with its stale owner_token and generation 1
+            const finalizeQuery = db('idempotent_operations')
+              .where({ key: cycleBindingKey, owner_token: token, generation: 1 });
+            const affected = await finalizeQuery.update({
+              status: 'COMPLETED',
+              response_status: 200,
+              response_body: JSON.stringify({ invoiceNumber: 'INV-STALE-WORKER-A' }),
+              locked_until: 0,
+              updated_at: Date.now()
+            });
+
+            if (affected !== 1) {
+              throw new Error(
+                `STALE_WORKER_FENCING_LOST: Worker ${token} (gen 1) lost ownership to a newer worker before finalization`
+              );
+            }
+
+            if (process.send) process.send({ status: 'SUCCESS', pid: process.pid });
+            await db.destroy();
+            process.exit(0);
+          } catch (err: any) {
+            if (process.send) process.send({ status: 'FENCING_REJECTED', error: err.message, pid: process.pid });
+            await db.destroy();
+            process.exit(1);
+          }
+        }
+      });
+    } catch (err: any) {
+      if (process.send) process.send({ status: 'ERROR', error: err.message });
+      process.exit(1);
+    }
   } else if (msg?.action === 'PROCESS_CYCLE') {
-    const { customerId, principalId, purchaseRecord, cycleNumber, actualPaymentId, gateway } = msg;
+    const { customerId, principalId, purchaseRecord, cycleNumber, actualPaymentId, gateway, workerToken } = msg;
     try {
       paymentGatewayService.setDbClient(db);
       const invoice = await paymentGatewayService.issueDurableInvoice({
@@ -106,7 +167,8 @@ process.on('message', async (msg: any) => {
         actualPaymentId,
         gatewayOrderId: `order_${actualPaymentId}`,
         cycleNumber,
-        now: Date.now()
+        now: Date.now(),
+        workerToken: workerToken || `worker_${process.pid}_${Date.now()}`
       });
       if (process.send) process.send({ status: 'SUCCESS', invoice, pid: process.pid });
       await db.destroy();
