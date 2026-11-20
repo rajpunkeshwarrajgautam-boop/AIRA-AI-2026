@@ -1010,6 +1010,238 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
       assert.equal(invWithGstin[0].taxComplianceStatus, 'COMPLIANT');
       assert.equal(invWithGstin[0].supplierGstin, '07AAACV2026E1Z5');
     });
+
+    it('issues durable sequential tax invoice into billing_audit_events upon subscription activation webhook and retrieves it', async () => {
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+      const secret = 'test_rzp_webhook_secret_2026';
+      service.setRazorpaySecret(secret);
+
+      const customerId = 'cust_durable_01';
+      const principalId = 'usr_durable_01';
+      const subId = 'pur_sub_durable_01';
+      const rzpSubId = 'sub_rzp_durable_01';
+
+      tables.billing_customers.push({ id: customerId, principal_id: principalId });
+      tables.subscriptions.push({
+        id: subId,
+        customer_id: customerId,
+        plan_id: 'plus',
+        status: 'pending',
+        gateway: 'razorpay',
+        gateway_subscription_id: rzpSubId,
+        currency: 'INR',
+        amount_minor_units: 99900,
+        current_period_start: 0,
+        current_period_end: 0,
+        cancel_at_period_end: false,
+        metadata: JSON.stringify({ principalId, customerId, planTier: 'plus', customerState: '07' }),
+        created_at: Date.now(),
+        updated_at: Date.now()
+      });
+
+      const body = JSON.stringify({
+        event: 'subscription.charged',
+        payload: {
+          subscription: {
+            entity: {
+              id: rzpSubId,
+              plan_id: 'plan_plus_test',
+              status: 'active',
+              current_start: Math.floor(Date.now() / 1000),
+              current_end: Math.floor(Date.now() / 1000) + 30 * 86400,
+              paid_count: 1
+            }
+          },
+          payment: {
+            entity: {
+              id: 'pay_durable_101',
+              order_id: 'order_rzp_101',
+              amount: 99900,
+              currency: 'INR',
+              status: 'captured'
+            }
+          }
+        }
+      });
+      const sig = crypto.createHmac('sha256', secret).update(body).digest('hex');
+
+      const res = await service.processRazorpayWebhook(body, sig);
+      assert.equal(res.status, 'PROCESSED');
+
+      // Verify durable invoice emitted in billing_audit_events
+      const invoiceEvents = tables.billing_audit_events.filter(e => e.event_type === 'TAX_INVOICE_ISSUED');
+      assert.equal(invoiceEvents.length, 1);
+      assert.equal(invoiceEvents[0].actor_id, 'INV-2026-0001');
+
+      // Verify retrieval via getInvoices
+      const invoices = await service.getInvoices(principalId);
+      assert.equal(invoices.length, 1);
+      assert.equal(invoices[0].invoiceNumber, 'INV-2026-0001');
+      assert.equal(invoices[0].totalAmount, 999);
+      assert.equal(invoices[0].taxableBase, 846.61);
+      assert.equal(invoices[0].gstAmount, 152.39);
+      assert.equal(invoices[0].cgstAmount, 76.19);
+      assert.equal(invoices[0].sgstAmount, 76.2);
+      assert.equal(invoices[0].status, 'Paid');
+      assert.equal(invoices[0].sacCode, '998431');
+    });
+
+    it('enforces idempotency on durable tax invoice issuance for duplicate webhooks', async () => {
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+      const secret = 'test_rzp_webhook_secret_2026';
+      service.setRazorpaySecret(secret);
+
+      const customerId = 'cust_durable_idem';
+      const principalId = 'usr_durable_idem';
+      const subId = 'pur_sub_durable_idem';
+      const rzpSubId = 'sub_rzp_durable_idem';
+
+      tables.billing_customers.push({ id: customerId, principal_id: principalId });
+      tables.subscriptions.push({
+        id: subId,
+        customer_id: customerId,
+        plan_id: 'pro',
+        status: 'pending',
+        gateway: 'razorpay',
+        gateway_subscription_id: rzpSubId,
+        currency: 'INR',
+        amount_minor_units: 199900,
+        current_period_start: 0,
+        current_period_end: 0,
+        cancel_at_period_end: false,
+        metadata: JSON.stringify({ principalId, customerId, planTier: 'pro', customerState: '29' }), // Karnataka
+        created_at: Date.now(),
+        updated_at: Date.now()
+      });
+
+      const body = JSON.stringify({
+        event: 'subscription.charged',
+        payload: {
+          subscription: {
+            entity: {
+              id: rzpSubId,
+              plan_id: 'plan_pro_test',
+              status: 'active',
+              current_start: Math.floor(Date.now() / 1000),
+              current_end: Math.floor(Date.now() / 1000) + 30 * 86400,
+              paid_count: 1
+            }
+          },
+          payment: {
+            entity: {
+              id: 'pay_durable_idem_01',
+              order_id: 'order_rzp_idem_01',
+              amount: 199900,
+              currency: 'INR',
+              status: 'captured'
+            }
+          }
+        }
+      });
+      const sig = crypto.createHmac('sha256', secret).update(body).digest('hex');
+
+      // First webhook
+      const res1 = await service.processRazorpayWebhook(body, sig);
+      assert.equal(res1.status, 'PROCESSED');
+      // Retry webhook with same payload
+      const res2 = await service.processRazorpayWebhook(body, sig);
+      assert.equal(res2.status, 'ALREADY_PROCESSED');
+
+      const invoiceEvents = tables.billing_audit_events.filter(e => e.event_type === 'TAX_INVOICE_ISSUED');
+      assert.equal(invoiceEvents.length, 1, 'Duplicate webhooks must not create duplicate invoices');
+
+      const invoices = await service.getInvoices(principalId);
+      assert.equal(invoices.length, 1);
+      assert.equal(invoices[0].igstAmount, 304.93);
+    });
+
+    it('issues durable credit note upon refund webhook and links it to original invoice', async () => {
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+      const secret = 'test_rzp_webhook_secret_2026';
+      service.setRazorpaySecret(secret);
+
+      const customerId = 'cust_durable_ref';
+      const principalId = 'usr_durable_ref';
+      const subId = 'pur_sub_durable_ref';
+      const rzpSubId = 'sub_rzp_durable_ref';
+      const paymentId = 'pay_durable_ref_01';
+
+      tables.billing_customers.push({ id: customerId, principal_id: principalId });
+      tables.subscriptions.push({
+        id: subId,
+        customer_id: customerId,
+        plan_id: 'plus',
+        status: 'pending',
+        gateway: 'razorpay',
+        gateway_subscription_id: rzpSubId,
+        currency: 'INR',
+        amount_minor_units: 99900,
+        current_period_start: 0,
+        current_period_end: 0,
+        cancel_at_period_end: false,
+        metadata: JSON.stringify({ principalId, customerId, planTier: 'plus', customerState: '07' }),
+        created_at: Date.now(),
+        updated_at: Date.now()
+      });
+
+      // 1. Activate subscription and issue invoice
+      const actBody = JSON.stringify({
+        event: 'subscription.charged',
+        payload: {
+          subscription: {
+            entity: {
+              id: rzpSubId,
+              status: 'active',
+              current_start: Math.floor(Date.now() / 1000),
+              current_end: Math.floor(Date.now() / 1000) + 30 * 86400,
+              paid_count: 1
+            }
+          },
+          payment: {
+            entity: { id: paymentId, order_id: rzpSubId, amount: 99900, currency: 'INR', status: 'captured' }
+          }
+        }
+      });
+      const actSig = crypto.createHmac('sha256', secret).update(actBody).digest('hex');
+      const actRes = await service.processRazorpayWebhook(actBody, actSig);
+      assert.equal(actRes.status, 'PROCESSED');
+
+      // Invoices prior to refund
+      const initialInvoices = await service.getInvoices(principalId);
+      assert.equal(initialInvoices[0].status, 'Paid');
+      const invoiceNumber = initialInvoices[0].invoiceNumber;
+
+      // 2. Process refund webhook
+      const refBody = JSON.stringify({
+        event: 'refund.processed',
+        payload: {
+          payment: { entity: { id: paymentId, order_id: rzpSubId } },
+          refund: { entity: { id: 'rfnd_durable_01', payment_id: paymentId, amount: 99900, status: 'processed' } }
+        }
+      });
+      const refSig = crypto.createHmac('sha256', secret).update(refBody).digest('hex');
+      const refRes = await service.processRazorpayWebhook(refBody, refSig);
+      assert.equal(refRes.status, 'PROCESSED');
+
+      // Verify CREDIT_NOTE_ISSUED in billing_audit_events
+      const creditNoteEvents = tables.billing_audit_events.filter(e => e.event_type === 'CREDIT_NOTE_ISSUED');
+      assert.equal(creditNoteEvents.length, 1);
+      assert.equal(creditNoteEvents[0].actor_id, 'CN-2026-0001');
+      const cnPayload = JSON.parse(creditNoteEvents[0].payload);
+      assert.equal(cnPayload.originalInvoiceNumber, invoiceNumber);
+
+      // Verify invoice retrieval shows updated Refunded status and linked Credit Note number
+      const updatedInvoices = await service.getInvoices(principalId);
+      assert.equal(updatedInvoices[0].status, 'Refunded');
+      assert.equal(updatedInvoices[0].creditNoteNumber, 'CN-2026-0001');
+      assert.equal(updatedInvoices[0].refundAmount, 99900);
+    });
   });
 
   // =========================================================================
