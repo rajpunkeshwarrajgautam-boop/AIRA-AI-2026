@@ -420,9 +420,10 @@ for (const engine of ENGINES) {
 
       // 3. UNIQUE constraint on billing_credit_notes (credit_note_number)
       const now = Date.now();
+      const uniqueTestCnNumber = `CN-2026-UQ-${now}`;
       await db('billing_credit_notes').insert({
         id: `cn_1_${now}`,
-        credit_note_number: 'CN-2026-0001',
+        credit_note_number: uniqueTestCnNumber,
         customer_id: 'cust_rec_test_1',
         subscription_id: 'sub_rec_test_1',
         refund_id: 'rf_unique_1',
@@ -438,7 +439,7 @@ for (const engine of ENGINES) {
       try {
         await db('billing_credit_notes').insert({
           id: `cn_2_${now}`,
-          credit_note_number: 'CN-2026-0001', // duplicate
+          credit_note_number: uniqueTestCnNumber, // duplicate
           customer_id: 'cust_rec_test_1',
           subscription_id: 'sub_rec_test_1',
           refund_id: 'rf_unique_2',
@@ -455,14 +456,22 @@ for (const engine of ENGINES) {
       assert.strictEqual(duplicateCnThrew, true, 'Duplicate credit_note_number must be rejected by PostgreSQL UNIQUE constraint');
     });
 
-    test(`[PG${engine.version}] GATE 4: Stale Worker Fencing -> Worker A paused -> Worker B takeover & completion -> Worker A resumes & is rejected`, async () => {
+    test(`[PG${engine.version}] GATE 4: Stale Worker Fencing -> Worker A paused in service -> Worker B takeover & completion -> Worker A resumes & is rejected`, async () => {
       const cycleBindingKey = 'inv_binding:cust_rec_test_1:sub_rec_test_1:cycle:3';
       const paymentId = `pay_cycle3_${Date.now()}`;
 
-      // Worker A starts and claims cycle 3 with a short lease (800ms)
+      // Worker A starts and executes real issueDurableInvoice with short lease (800ms) and pause (1600ms)
       const workerA = fork(workerPath, [], {
         execArgv: ['--import', 'tsx'],
         env: { ...process.env, DATABASE_URL: connStr }
+      });
+
+      const workerAPromise = new Promise<any>((resolve) => {
+        workerA.on('message', (msg: any) => {
+          if (msg?.status === 'SUCCESS' || msg?.status === 'FENCING_REJECTED' || msg?.status === 'ERROR') {
+            resolve(msg);
+          }
+        });
       });
 
       const workerAToken = await new Promise<string>((resolve, reject) => {
@@ -471,14 +480,23 @@ for (const engine of ENGINES) {
           else if (msg?.status === 'ERROR') reject(new Error(msg.error));
         });
         workerA.send({
-          action: 'PAUSE_AFTER_CLAIM',
-          cycleBindingKey,
+          action: 'PROCESS_CYCLE_WITH_PAUSE',
+          customerId: 'cust_rec_test_1',
           principalId: 'principal_rec_test_1',
-          purchaseId: 'sub_rec_test_1',
-          cycle: 3,
-          paymentId,
+          purchaseRecord: {
+            id: 'sub_rec_test_1',
+            customer_id: 'cust_rec_test_1',
+            plan_id: 'plus',
+            currency: 'INR',
+            amount_minor_units: 39900,
+            metadata: JSON.stringify({ customerState: '07', country: 'IN' })
+          },
+          cycleNumber: 3,
+          actualPaymentId: paymentId,
+          gateway: 'razorpay',
+          workerToken: 'worker_a_paused',
           leaseMs: 800,
-          workerToken: 'worker_a_paused'
+          pauseMs: 1600
         });
       });
 
@@ -533,35 +551,13 @@ for (const engine of ENGINES) {
       assert.strictEqual(claimRowB.owner_token, 'worker_b_takeover');
       assert.ok(Number(claimRowB.generation) >= 2, `Generation must be >= 2, was ${claimRowB.generation}`);
 
-      // Now resume Worker A: Worker A attempts to finalize with stale token and generation 1
-      const workerAFinalizeResult = await new Promise<any>((resolve) => {
-        workerA.on('message', (msg: any) => {
-          if (msg?.status === 'SUCCESS' || msg?.status === 'FENCING_REJECTED' || msg?.status === 'ERROR') {
-            resolve(msg);
-          }
-        });
-        workerA.send({
-          action: 'RESUME_FINALIZATION',
-          customerId: 'cust_rec_test_1',
-          principalId: 'principal_rec_test_1',
-          purchaseRecord: {
-            id: 'sub_rec_test_1',
-            customer_id: 'cust_rec_test_1',
-            plan_id: 'plus',
-            currency: 'INR',
-            amount_minor_units: 39900,
-            metadata: JSON.stringify({ customerState: '07', country: 'IN' })
-          },
-          cycleNumber: 3,
-          actualPaymentId: paymentId,
-          gateway: 'razorpay'
-        });
-      });
+      // Now wait for Worker A to resume inside issueDurableInvoice and attempt finalization
+      const workerAFinalizeResult = await workerAPromise;
 
       assert.strictEqual(
         workerAFinalizeResult.status,
         'FENCING_REJECTED',
-        'Stale Worker A must be rejected by fencing CAS check'
+        'Stale Worker A must be rejected by fencing CAS check inside issueDurableInvoice'
       );
       assert.ok(
         workerAFinalizeResult.error.includes('STALE_WORKER_FENCING_LOST') ||
@@ -605,6 +601,320 @@ for (const engine of ENGINES) {
       const cnTableStillExists = await db.schema.hasTable('billing_credit_notes');
       assert.strictEqual(invTableStillExists, true, 'billing_invoices table must NOT be dropped');
       assert.strictEqual(cnTableStillExists, true, 'billing_credit_notes table must NOT be dropped');
+    });
+
+    test(`[PG${engine.version}] GATE 6: Real PostgreSQL Credit-Note Savepoint, Rollback & Out-of-Band Reconciliation Suite`, async () => {
+      // 1. Seed a dedicated test subscription for refund verification
+      const now = Date.now();
+      const subId = `sub_rf_test_${now}`;
+      const customerId = 'cust_rec_test_1';
+      const initialPaymentId = `pay_rf_init_${now}`;
+      const originalInvoiceNumber = `INV-2026-RF-${now}`;
+
+      await db('subscriptions').insert({
+        id: subId,
+        customer_id: customerId,
+        plan_id: 'plus',
+        price_id: 'price_plus_inr',
+        status: 'active',
+        gateway: 'razorpay',
+        gateway_subscription_id: `sub_rzp_rf_${now}`,
+        currency: 'INR',
+        amount_minor_units: 39900,
+        current_period_start: now,
+        current_period_end: now + 30 * 86400000,
+        cancel_at_period_end: false,
+        metadata: JSON.stringify({
+          customerState: '07',
+          country: 'IN',
+          initialPaymentId,
+          lastPaymentId: initialPaymentId
+        }),
+        created_at: now,
+        updated_at: now
+      });
+
+      await db('billing_invoices').insert({
+        id: `inv_rf_seed_${now}`,
+        invoice_number: originalInvoiceNumber,
+        customer_id: customerId,
+        subscription_id: subId,
+        cycle_number: 1,
+        billing_event_id: initialPaymentId,
+        plan_tier: 'plus',
+        currency: 'INR',
+        total_amount: 399.00,
+        taxable_base: 338.14,
+        gst_amount: 60.86,
+        sac_code: '998431',
+        supplier_name: 'Virexa AI Ventures Private Limited',
+        status: 'Paid',
+        gateway: 'razorpay',
+        created_at: now,
+        updated_at: now
+      });
+
+      // Import paymentGatewayService directly in test
+      const { paymentGatewayService } = await import('../apps/api/src/billing/payment-gateway-service.js');
+      paymentGatewayService.setDbClient(db);
+
+      const refundId1 = `rf_pg_test_1_${now}`;
+      const refundPayload1 = {
+        event: 'refund.processed',
+        payload: {
+          payment: {
+            entity: {
+              id: initialPaymentId,
+              order_id: `sub_rzp_rf_${now}`,
+              amount: 39900,
+              currency: 'INR',
+              status: 'refunded'
+            }
+          },
+          refund: {
+            entity: {
+              id: refundId1,
+              payment_id: initialPaymentId,
+              amount: 39900,
+              currency: 'INR',
+              status: 'processed'
+            }
+          }
+        }
+      };
+
+      const subRecord1 = await db('subscriptions').where({ id: subId }).first();
+
+      // Step A: Process genuine refund
+      await paymentGatewayService.handleSubscriptionRefund({
+        gateway: 'razorpay',
+        subRecord: subRecord1,
+        refundPayload: refundPayload1,
+        now
+      });
+
+      // Verify credit note was created in relational billing_credit_notes
+      const cnRows1 = await db('billing_credit_notes').where({ refund_id: refundId1 });
+      assert.strictEqual(cnRows1.length, 1, 'Exactly one credit note must be created in billing_credit_notes');
+      assert.match(cnRows1[0].credit_note_number, /^CN-2026-\d{4}$/, 'Credit note number must follow sequential format');
+      assert.strictEqual(cnRows1[0].original_invoice_number, originalInvoiceNumber, 'Must link to original invoice');
+      assert.strictEqual(cnRows1[0].status, 'Refunded');
+
+      // Verify linked invoice status was updated to Refunded
+      const invAfterRefund1 = await db('billing_invoices').where({ invoice_number: originalInvoiceNumber }).first();
+      assert.strictEqual(invAfterRefund1?.status, 'Refunded', 'Original invoice status must update to Refunded');
+
+      // Step B: Duplicate refund delivery (Savepoint idempotency without PostgreSQL transaction abort)
+      await paymentGatewayService.handleSubscriptionRefund({
+        gateway: 'razorpay',
+        subRecord: await db('subscriptions').where({ id: subId }).first(),
+        refundPayload: refundPayload1,
+        now: now + 100
+      });
+
+      // Still exactly 1 credit note row
+      const cnRowsAfterDup = await db('billing_credit_notes').where({ refund_id: refundId1 });
+      assert.strictEqual(cnRowsAfterDup.length, 1, 'Duplicate delivery must not insert duplicate credit note');
+
+      // Step C: Verify 6-dimension mismatch rejection on conflicting duplicate
+      let mismatchError = '';
+      try {
+        paymentGatewayService.verifyCreditNoteDimensions(cnRows1[0], {
+          refundId: refundId1,
+          subscriptionId: subId,
+          customerId: 'cust_different_tenant', // Tenant mismatch!
+          currency: 'INR',
+          refundAmount: 399.00,
+          originalInvoiceNumber
+        });
+      } catch (err: any) {
+        mismatchError = err.message;
+      }
+      assert.ok(mismatchError.includes('TENANT_MISMATCH'), `Must throw tenant mismatch error: ${mismatchError}`);
+
+      // Step D: Failure Injection & Out-of-Band Reconciliation Survival
+      // Setup second subscription to test transactional rollback with out-of-band persistence
+      const subIdFail = `sub_rf_fail_${now}`;
+      const initialPayFail = `pay_fail_${now}`;
+      const invNumberFail = `INV-2026-FAIL-${now}`;
+
+      await db('subscriptions').insert({
+        id: subIdFail,
+        customer_id: customerId,
+        plan_id: 'plus',
+        price_id: 'price_plus_inr',
+        status: 'active',
+        gateway: 'razorpay',
+        gateway_subscription_id: `sub_rzp_fail_${now}`,
+        currency: 'INR',
+        amount_minor_units: 39900,
+        current_period_start: now,
+        current_period_end: now + 30 * 86400000,
+        cancel_at_period_end: false,
+        metadata: JSON.stringify({
+          customerState: '07',
+          country: 'IN',
+          initialPaymentId: initialPayFail,
+          lastPaymentId: initialPayFail
+        }),
+        created_at: now,
+        updated_at: now
+      });
+
+      await db('billing_invoices').insert({
+        id: `inv_fail_seed_${now}`,
+        invoice_number: invNumberFail,
+        customer_id: customerId,
+        subscription_id: subIdFail,
+        cycle_number: 1,
+        billing_event_id: initialPayFail,
+        plan_tier: 'plus',
+        currency: 'INR',
+        total_amount: 399.00,
+        taxable_base: 338.14,
+        gst_amount: 60.86,
+        sac_code: '998431',
+        supplier_name: 'Virexa AI Ventures Private Limited',
+        status: 'Paid',
+        gateway: 'razorpay',
+        created_at: now,
+        updated_at: now
+      });
+
+      const refundIdFail = `rf_fail_test_${now}`;
+      const subRecordFail = await db('subscriptions').where({ id: subIdFail }).first();
+
+      // Execute transaction where credit note generation fails (simulating DB error)
+      let txnThrew = false;
+      try {
+        await db.transaction(async (trx) => {
+          // Update status in business transaction
+          await trx('subscriptions').where({ id: subIdFail }).update({
+            status: 'refunded',
+            updated_at: now
+          });
+
+          // Simulate non-uniqueness database error inside issueDurableCreditNote
+          await paymentGatewayService.issueDurableCreditNote({
+            trx: {
+              ...trx,
+              schema: { hasTable: async () => true },
+              raw: async (sql: string) => {
+                if (sql.includes('SAVEPOINT')) return;
+                return trx.raw(sql);
+              }
+            },
+            subRecord: { ...subRecordFail, id: 'sub_invalid_nonexistent' },
+            refundEntity: { id: refundIdFail },
+            refundAmount: 399.00,
+            isPartialRefund: false,
+            gateway: 'razorpay',
+            now
+          });
+        });
+      } catch (err: any) {
+        txnThrew = true;
+      }
+
+      assert.strictEqual(txnThrew, true, 'Injected credit note failure must throw and roll back transaction');
+
+      // OPEN A FRESH INDEPENDENT DATABASE CONNECTION to verify state post-rollback
+      const freshDb = knex({
+        client: 'pg',
+        connection: { connectionString: connStr, ssl: false },
+        pool: { min: 1, max: 1 }
+      });
+
+      try {
+        // 1. Verify business transaction rolled back: subscriptions status is still 'active' (NOT 'refunded')
+        const subAfterRollback = await freshDb('subscriptions').where({ id: subIdFail }).first();
+        assert.strictEqual(subAfterRollback?.status, 'active', 'Subscription status must NOT be refunded after rollback');
+
+        // 2. Verify zero false CREDIT_NOTE_ISSUED events exist for this refund
+        const falseIssuedEvents = await freshDb('billing_audit_events').where({
+          customer_id: customerId,
+          event_type: 'CREDIT_NOTE_ISSUED'
+        });
+        const matchedFalse = (falseIssuedEvents || []).filter((e: any) => {
+          try {
+            const p = typeof e.payload === 'string' ? JSON.parse(e.payload) : e.payload;
+            return p?.refundId === refundIdFail;
+          } catch { return false; }
+        });
+        assert.strictEqual(matchedFalse.length, 0, 'Zero false CREDIT_NOTE_ISSUED events must exist');
+
+        // 3. Verify CREDIT_NOTE_PENDING_RECONCILIATION survived transaction rollback via out-of-band commit!
+        const pendingEvents = await freshDb('billing_audit_events').where({
+          customer_id: customerId,
+          event_type: 'CREDIT_NOTE_PENDING_RECONCILIATION'
+        });
+        const matchedPending = (pendingEvents || []).filter((e: any) => {
+          try {
+            const p = typeof e.payload === 'string' ? JSON.parse(e.payload) : e.payload;
+            return p?.refundId === refundIdFail;
+          } catch { return false; }
+        });
+        assert.ok(matchedPending.length >= 1, 'CREDIT_NOTE_PENDING_RECONCILIATION must survive transaction rollback out-of-band');
+
+        // Step E: Replay/redelivery of refund succeeds and clears pending state with CREDIT_NOTE_RECONCILED
+        const validRefundPayload = {
+          event: 'refund.processed',
+          payload: {
+            payment: {
+              entity: {
+                id: initialPayFail,
+                order_id: `sub_rzp_fail_${now}`,
+                amount: 39900,
+                currency: 'INR',
+                status: 'refunded'
+              }
+            },
+            refund: {
+              entity: {
+                id: refundIdFail,
+                payment_id: initialPayFail,
+                amount: 39900,
+                currency: 'INR',
+                status: 'processed'
+              }
+            }
+          }
+        };
+
+        await paymentGatewayService.handleSubscriptionRefund({
+          gateway: 'razorpay',
+          subRecord: await freshDb('subscriptions').where({ id: subIdFail }).first(),
+          refundPayload: validRefundPayload,
+          now: now + 500
+        });
+
+        // Verify credit note now successfully created
+        const cnFailResolved = await freshDb('billing_credit_notes').where({ refund_id: refundIdFail }).first();
+        assert.ok(cnFailResolved, 'Credit note must be created upon retry');
+        assert.strictEqual(cnFailResolved.original_invoice_number, invNumberFail, 'Must link to original invoice');
+
+        // Verify CREDIT_NOTE_RECONCILED was emitted out-of-band
+        const reconciledEvents = await freshDb('billing_audit_events').where({
+          customer_id: customerId,
+          event_type: 'CREDIT_NOTE_RECONCILED'
+        });
+        const matchedReconciled = (reconciledEvents || []).filter((e: any) => {
+          try {
+            const p = typeof e.payload === 'string' ? JSON.parse(e.payload) : e.payload;
+            return p?.refundId === refundIdFail;
+          } catch { return false; }
+        });
+        assert.ok(matchedReconciled.length >= 1, 'CREDIT_NOTE_RECONCILED event must be emitted upon successful resolution');
+
+        // Verify invoice marked Refunded and subscription marked refunded
+        const invFailFinal = await freshDb('billing_invoices').where({ invoice_number: invNumberFail }).first();
+        assert.strictEqual(invFailFinal?.status, 'Refunded');
+
+        const subFailFinal = await freshDb('subscriptions').where({ id: subIdFail }).first();
+        assert.strictEqual(subFailFinal?.status, 'refunded');
+      } finally {
+        await freshDb.destroy();
+      }
     });
   });
 }

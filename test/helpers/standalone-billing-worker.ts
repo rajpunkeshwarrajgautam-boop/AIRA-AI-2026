@@ -96,6 +96,60 @@ process.on('message', async (msg: any) => {
       if (process.send) process.send({ status: 'ERROR', error: err.message });
       process.exit(1);
     }
+  } else if (msg?.action === 'PROCESS_CYCLE_WITH_PAUSE') {
+    const { customerId, principalId, purchaseRecord, cycleNumber, actualPaymentId, gateway, workerToken, leaseMs, pauseMs } = msg;
+    try {
+      paymentGatewayService.setDbClient(db);
+      const invoice = await paymentGatewayService.issueDurableInvoice({
+        trx: db,
+        customerId,
+        principalId,
+        purchaseRecord,
+        planTier: purchaseRecord.plan_id || 'plus',
+        gateway: gateway || 'razorpay',
+        actualPaymentId,
+        gatewayOrderId: `order_${actualPaymentId}`,
+        cycleNumber,
+        now: Date.now(),
+        workerToken: workerToken || `worker_${process.pid}_${Date.now()}`,
+        leaseDurationMs: leaseMs || 800,
+        debugHookAfterLeaseAcquired: async ({ ownerToken }) => {
+          if (process.send) process.send({ status: 'CLAIM_ACQUIRED', ownerToken, pid: process.pid });
+        },
+        debugPauseMsAfterLease: pauseMs || 1600
+      });
+      if (process.send) process.send({ status: 'SUCCESS', invoice, pid: process.pid });
+      await db.destroy();
+      process.exit(0);
+    } catch (err: any) {
+      if (process.send) {
+        if (err.message?.includes('STALE_WORKER_FENCING_LOST') || err.message?.includes('INVOICE_CYCLE_CONTENTION')) {
+          process.send({ status: 'FENCING_REJECTED', error: err.message, pid: process.pid });
+        } else {
+          process.send({ status: 'ERROR', error: err.message, pid: process.pid });
+        }
+      }
+      await db.destroy();
+      process.exit(1);
+    }
+  } else if (msg?.action === 'PROCESS_REFUND') {
+    const { gateway, subRecord, refundPayload } = msg;
+    try {
+      paymentGatewayService.setDbClient(db);
+      await paymentGatewayService.handleSubscriptionRefund({
+        gateway,
+        subRecord,
+        refundPayload,
+        now: Date.now()
+      });
+      if (process.send) process.send({ status: 'SUCCESS', pid: process.pid });
+      await db.destroy();
+      process.exit(0);
+    } catch (err: any) {
+      if (process.send) process.send({ status: 'ERROR', error: err.message, pid: process.pid });
+      await db.destroy();
+      process.exit(1);
+    }
   } else if (msg?.action === 'PAUSE_AFTER_CLAIM') {
     const { cycleBindingKey, principalId, purchaseId, cycle, paymentId, leaseMs, workerToken } = msg;
     const now = Date.now();
