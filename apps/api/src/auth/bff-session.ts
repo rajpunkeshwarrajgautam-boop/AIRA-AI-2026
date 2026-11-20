@@ -41,22 +41,45 @@ export interface BffServerSession {
 // Retained for backward-compatible test fixtures if needed
 export type BffSessionPayload = BffServerSession;
 
+export interface BffSessionStoreOptions {
+  memoryOnly?: boolean;
+  serverless?: boolean;
+}
+
 export class BffSessionStore {
   private client: Knex;
   private timer: NodeJS.Timeout | null = null;
   private memorySessions: Map<string, BffServerSession> = new Map();
   private isMemoryOnly: boolean;
+  private isServerless: boolean;
 
-  constructor(customClient?: Knex, options: { memoryOnly?: boolean } = {}) {
+  constructor(customClient?: Knex, options: BffSessionStoreOptions = {}) {
     this.client = customClient || db;
     this.isMemoryOnly = options.memoryOnly === true || (!process.env.DATABASE_URL?.trim() && !customClient);
-    // Periodic sweep for expired sessions every 10 minutes
-    this.timer = setInterval(() => {
-      this.pruneExpired().catch((err) => {
-        console.warn('[BffSessionStore] Periodic prune notice:', err?.message || err);
-      });
-    }, 10 * 60 * 1000);
-    if (this.timer.unref) this.timer.unref();
+    this.isServerless = options.serverless !== undefined
+      ? Boolean(options.serverless)
+      : (process.env.VERCEL === '1' || Boolean(process.env.VERCEL) || Boolean(process.env.VERCEL_ENV) || (process.env.NODE_ENV === 'production' && !process.env.LONG_RUNNING_PROCESS));
+
+    // Periodic sweep for expired sessions every 10 minutes in persistent environments.
+    // In serverless environments (Vercel functions), background interval timers cause connection-pool
+    // timeouts (KnexTimeoutError) during cold starts and container suspension.
+    // Query-time lazy expiration and manual pruning handle serverless session cleanup safely.
+    if (!this.isServerless) {
+      this.timer = setInterval(() => {
+        this.pruneExpired().catch((err) => {
+          console.warn('[BffSessionStore] Periodic prune notice:', err?.message || err);
+        });
+      }, 10 * 60 * 1000);
+      if (this.timer.unref) this.timer.unref();
+    }
+  }
+
+  public getTimer(): NodeJS.Timeout | null {
+    return this.timer;
+  }
+
+  public isServerlessMode(): boolean {
+    return this.isServerless;
   }
 
   public async get(sessionId: string): Promise<BffServerSession | null> {
