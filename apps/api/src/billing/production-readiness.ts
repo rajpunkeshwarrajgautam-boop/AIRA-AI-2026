@@ -60,6 +60,8 @@ export class ProductionReadinessService {
     const hasWebhookSecret = Boolean(process.env.RAZORPAY_WEBHOOK_SECRET || process.env.CASHFREE_WEBHOOK_SECRET);
     const hasSupplierGstin = Boolean(process.env.AIRA_SUPPLIER_GSTIN && process.env.AIRA_SUPPLIER_GSTIN.trim().length === 15);
     const hasSupplierGstinVerified = Boolean(hasSupplierGstin && process.env.AIRA_SUPPLIER_GSTIN_VERIFIED === 'true');
+    const hasFinanceTaxSignOff = process.env.AIRA_FINANCE_TAX_SIGNOFF === 'true';
+    const isTaxCompliant = hasSupplierGstinVerified && hasFinanceTaxSignOff;
     const emergencyDisabled = process.env.AIRA_BILLING_EMERGENCY_DISABLE === 'true' || process.env.AIRA_COMMERCIAL_BILLING_ENABLED !== 'true';
 
     const gates: GateResult[] = [
@@ -166,35 +168,41 @@ export class ProductionReadinessService {
         id: 'GATE_08_GST_TAX_COMPLIANCE',
         name: 'GST Tax Calculation & Classification (SAC 998431)',
         category: 'TAX',
-        status: hasSupplierGstinVerified ? 'VERIFIED' : 'PENDING_OWNER_ACTION',
-        verificationCondition: '18% GST tax calculation and SAC 998431 classification logic active with verified supplier GSTIN.',
+        status: isTaxCompliant ? 'VERIFIED' : 'PENDING_OWNER_ACTION',
+        verificationCondition: '18% GST tax calculation and SAC 998431 classification logic active with verified supplier GSTIN and formal Finance sign-off.',
         evidenceSource: 'apps/api/src/billing/tax-determination.ts',
-        evidence: hasSupplierGstinVerified
-          ? `18% GST tax calculation and SAC 998431 classification logic active with verified supplier GSTIN: ${process.env.AIRA_SUPPLIER_GSTIN}.`
-          : '18% GST calculation and SAC 998431 classification logic active in sandbox. Official supplier GSTIN pending owner configuration via AIRA_SUPPLIER_GSTIN and AIRA_SUPPLIER_GSTIN_VERIFIED=true.',
+        evidence: isTaxCompliant
+          ? `18% GST tax calculation and SAC 998431 classification logic active with verified supplier GSTIN: ${process.env.AIRA_SUPPLIER_GSTIN} and formal Finance sign-off.`
+          : (hasSupplierGstinVerified
+              ? 'Supplier GSTIN verified; formal Finance sign-off (AIRA_FINANCE_TAX_SIGNOFF=true) required for statutory tax classification and LUT export treatment.'
+              : '18% GST calculation and SAC 998431 classification active in sandbox. Supplier GSTIN verification and formal Finance sign-off pending owner configuration.'),
         evidenceTimestampOrCommit: commitSha,
-        requiredConfiguration: 'AIRA_SUPPLIER_GSTIN, AIRA_SUPPLIER_GSTIN_VERIFIED=true, AIRA_SUPPLIER_STATE=07',
-        failureReason: hasSupplierGstinVerified ? undefined : 'AIRA_SUPPLIER_GSTIN not verified in production.',
+        requiredConfiguration: 'AIRA_SUPPLIER_GSTIN, AIRA_SUPPLIER_GSTIN_VERIFIED=true, AIRA_FINANCE_TAX_SIGNOFF=true, AIRA_SUPPLIER_STATE=07',
+        failureReason: isTaxCompliant ? undefined : (!hasSupplierGstinVerified ? 'AIRA_SUPPLIER_GSTIN not verified in production.' : 'Formal Finance sign-off pending.'),
         responsibleOwner: 'Repository Owner / Finance Lead',
-        remediationBlocker: hasSupplierGstinVerified ? undefined : 'Configure AIRA_SUPPLIER_GSTIN and AIRA_SUPPLIER_GSTIN_VERIFIED=true in production environment.',
-        remediationSteps: 'Obtain active 15-character GST registration number for Virexa AI Ventures Private Limited and configure in environment.'
+        remediationBlocker: isTaxCompliant
+          ? undefined
+          : (!hasSupplierGstinVerified
+              ? 'Configure AIRA_SUPPLIER_GSTIN and AIRA_SUPPLIER_GSTIN_VERIFIED=true in production environment.'
+              : 'Execute formal Finance tax review and set AIRA_FINANCE_TAX_SIGNOFF=true before commercial activation.'),
+        remediationSteps: 'Obtain active 15-character GST registration number for Virexa AI Ventures Private Limited, obtain Finance review for SAC classification, and set configuration.'
       },
       {
         id: 'GATE_09_INVOICE_COMPLIANCE',
         name: 'Sequential Compliant Tax Invoicing & Concurrency Integrity',
         category: 'TAX',
-        status: hasSupplierGstinVerified ? 'VERIFIED' : 'PENDING_OWNER_ACTION',
-        verificationCondition: 'Sequential invoice numbering with database-level uniqueness, atomic sequences, and immutable audit persistence.',
-        evidenceSource: 'apps/api/src/billing/payment-gateway-service.ts & test/invoice-concurrency-integrity.test.ts',
-        evidence: hasSupplierGstinVerified
-          ? 'Automated invoice generation active with sequential numbers, customer details, SAC 998431, and verified GST tax filing capability.'
-          : 'Sequential invoice generation implemented with split CGST/SGST/IGST, atomic sequences, and SAC 998431. Official tax filing requires AIRA_SUPPLIER_GSTIN.',
+        status: isTaxCompliant ? 'VERIFIED' : 'PENDING_OWNER_ACTION',
+        verificationCondition: 'Sequential invoice numbering with database-level uniqueness, atomic sequences, relational document tables, and formal Finance sign-off.',
+        evidenceSource: 'apps/api/src/billing/payment-gateway-service.ts, packages/db/src/migrations/033_billing_invoice_sequences.ts & test/invoice-concurrency-integrity.test.ts',
+        evidence: isTaxCompliant
+          ? 'Automated invoice generation active with sequential numbers, customer details, SAC 998431, relational billing_invoices table, and verified GST tax filing capability.'
+          : 'Sequential invoice generation implemented with split CGST/SGST/IGST, atomic sequences, relational billing_invoices table, and SAC 998431. Official tax filing requires verified supplier GSTIN and formal Finance sign-off.',
         evidenceTimestampOrCommit: commitSha,
-        requiredConfiguration: 'AIRA_SUPPLIER_GSTIN, AIRA_SUPPLIER_GSTIN_VERIFIED=true',
-        failureReason: hasSupplierGstinVerified ? undefined : 'Invoices provisional until supplier GSTIN is configured and verified.',
+        requiredConfiguration: 'AIRA_SUPPLIER_GSTIN, AIRA_SUPPLIER_GSTIN_VERIFIED=true, AIRA_FINANCE_TAX_SIGNOFF=true',
+        failureReason: isTaxCompliant ? undefined : 'Invoices provisional until supplier GSTIN is configured and verified with formal Finance sign-off.',
         responsibleOwner: 'Database & Payments Engineer',
-        remediationBlocker: hasSupplierGstinVerified ? undefined : 'Awaiting verified GSTIN before marking invoices legally compliant for tax filing.',
-        remediationSteps: 'Configure AIRA_SUPPLIER_GSTIN in production environment.'
+        remediationBlocker: isTaxCompliant ? undefined : 'Awaiting verified GSTIN and formal Finance sign-off before marking invoices legally compliant for tax filing.',
+        remediationSteps: 'Configure AIRA_SUPPLIER_GSTIN and AIRA_FINANCE_TAX_SIGNOFF=true in production environment.'
       },
       {
         id: 'GATE_10_REFUND_DISPUTE_PROCEDURES',
@@ -217,7 +225,7 @@ export class ProductionReadinessService {
         evidenceSource: 'packages/db/src/migrations/020_commercial_billing_tables.ts & apps/api/src/billing/commercial-billing-service.ts',
         evidence: 'PostgreSQL row-level locks, CHECK constraints (balance >= 0), and capacity guard sliding window rate tracking prevent ledger overdrafts.',
         evidenceTimestampOrCommit: commitSha,
-        requiredConfiguration: 'Neon PostgreSQL 18 with 32 applied migrations',
+        requiredConfiguration: 'Neon PostgreSQL 18 with 33 applied migrations',
         responsibleOwner: 'Principal Security & Database Architect'
       },
       {

@@ -44,6 +44,7 @@
     "test:vision-billing": "npx tsx --test test/vision-billing-integrity.test.ts test/commercial-vision-tariffs.test.ts",
     "test:recurring-subscriptions": "npx tsx --test test/cashfree-razorpay-recurring-lifecycle.test.ts",
     "test:invoice-concurrency": "npx tsx --test test/invoice-concurrency-integrity.test.ts",
+    "test:invoice-crash-recovery": "npx tsx --test test/invoice-crash-recovery-postgres.test.ts",
     "test:browser": "npx tsx test/browser-execution-suite.ts",
     "test:browser:authorization": "npx tsx --test test/browser-authorization.test.ts",
     "test:reality": "npx tsx test/capability-reality-audit-suite.ts",

@@ -319,36 +319,64 @@ export class PaymentGatewayService {
 
   /**
    * Allocates sequential, collision-free invoice number.
-   * If PostgreSQL is available, utilizes native non-blocking sequence `billing_invoice_number_seq`.
-   * Otherwise falls back to synchronized monotonic memory counter.
+   * Utilizes native PostgreSQL sequence `billing_invoice_number_seq` (created via Migration 033).
+   * Outside isolated tests, fails closed if native PostgreSQL sequence is unavailable.
    */
   async allocateInvoiceNumber(trx?: any, year: number = 2026): Promise<string> {
-    const isPg = trx && typeof trx.raw === 'function' && trx.client?.config?.client === 'pg';
+    const isPg = trx && typeof trx.raw === 'function' && (trx.client?.config?.client === 'pg' || typeof trx.client === 'object');
     if (isPg) {
       try {
-        await trx.raw('CREATE SEQUENCE IF NOT EXISTS billing_invoice_number_seq START WITH 1');
         const res = await trx.raw("SELECT nextval('billing_invoice_number_seq') AS seq");
-        const seq = res?.rows?.[0]?.seq || 1;
-        return `INV-${year}-${String(seq).padStart(4, '0')}`;
-      } catch {}
+        const rawSeq = res?.rows?.[0]?.seq ?? res?.[0]?.seq;
+        if (rawSeq !== undefined && rawSeq !== null) {
+          const seq = Number(rawSeq);
+          return `INV-${year}-${String(seq).padStart(4, '0')}`;
+        }
+      } catch (err: any) {
+        const isTestEnv = process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST) || Boolean(this.customDbClient);
+        if (!isTestEnv) {
+          throw new Error(`INVOICE_SEQUENCE_UNAVAILABLE: Native PostgreSQL billing_invoice_number_seq sequence failed: ${err?.message || err}`);
+        }
+      }
     }
+
+    const isTestEnv = process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST) || Boolean(this.customDbClient);
+    if (!isTestEnv) {
+      throw new Error('INVOICE_SEQUENCE_UNAVAILABLE: Native PostgreSQL billing_invoice_number_seq sequence required outside isolated tests');
+    }
+
     this.memoryInvoiceCounter++;
     return `INV-${year}-${String(this.memoryInvoiceCounter).padStart(4, '0')}`;
   }
 
   /**
    * Allocates sequential, collision-free credit note number.
+   * Utilizes native PostgreSQL sequence `billing_credit_note_number_seq` (created via Migration 033).
+   * Outside isolated tests, fails closed if native PostgreSQL sequence is unavailable.
    */
   async allocateCreditNoteNumber(trx?: any, year: number = 2026): Promise<string> {
-    const isPg = trx && typeof trx.raw === 'function' && trx.client?.config?.client === 'pg';
+    const isPg = trx && typeof trx.raw === 'function' && (trx.client?.config?.client === 'pg' || typeof trx.client === 'object');
     if (isPg) {
       try {
-        await trx.raw('CREATE SEQUENCE IF NOT EXISTS billing_credit_note_number_seq START WITH 1');
         const res = await trx.raw("SELECT nextval('billing_credit_note_number_seq') AS seq");
-        const seq = res?.rows?.[0]?.seq || 1;
-        return `CN-${year}-${String(seq).padStart(4, '0')}`;
-      } catch {}
+        const rawSeq = res?.rows?.[0]?.seq ?? res?.[0]?.seq;
+        if (rawSeq !== undefined && rawSeq !== null) {
+          const seq = Number(rawSeq);
+          return `CN-${year}-${String(seq).padStart(4, '0')}`;
+        }
+      } catch (err: any) {
+        const isTestEnv = process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST) || Boolean(this.customDbClient);
+        if (!isTestEnv) {
+          throw new Error(`CREDIT_NOTE_SEQUENCE_UNAVAILABLE: Native PostgreSQL billing_credit_note_number_seq sequence failed: ${err?.message || err}`);
+        }
+      }
     }
+
+    const isTestEnv = process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST) || Boolean(this.customDbClient);
+    if (!isTestEnv) {
+      throw new Error('CREDIT_NOTE_SEQUENCE_UNAVAILABLE: Native PostgreSQL billing_credit_note_number_seq sequence required outside isolated tests');
+    }
+
     this.memoryCreditNoteCounter++;
     return `CN-${year}-${String(this.memoryCreditNoteCounter).padStart(4, '0')}`;
   }
@@ -1948,17 +1976,44 @@ export class PaymentGatewayService {
     }
 
     if (!acquiredLease) {
-      // Another concurrent worker acquired the lease; wait and retrieve the completed invoice
+      // Lease exists. Inspect existing lease for completion, bounded polling, or crash recovery / fencing
+      let shouldTakeOverLease = false;
+
       for (let attempt = 0; attempt < 20; attempt++) {
-        await new Promise((r) => setTimeout(r, 50));
+        let existingBinding: any = null;
         try {
           const bindingQuery = params.trx('idempotent_operations').where({ key: cycleBindingKey });
-          const existingBinding = typeof bindingQuery.first === 'function' ? await bindingQuery.first() : null;
+          existingBinding = typeof bindingQuery.first === 'function' ? await bindingQuery.first() : null;
           if (existingBinding && existingBinding.status === 'COMPLETED' && existingBinding.response_body) {
             return JSON.parse(existingBinding.response_body);
           }
         } catch {}
 
+        // Check relational billing_invoices table first if available
+        try {
+          const hasInvTable = typeof params.trx.schema?.hasTable === 'function'
+            ? await params.trx.schema.hasTable('billing_invoices')
+            : false;
+          if (hasInvTable) {
+            const existingInv = await params.trx('billing_invoices')
+              .where({ subscription_id: params.purchaseRecord.id, cycle_number: cycle })
+              .first();
+            if (existingInv) {
+              const mapped = this.mapBillingInvoiceRow(existingInv);
+              try {
+                await params.trx('idempotent_operations').where({ key: cycleBindingKey }).update({
+                  status: 'COMPLETED',
+                  response_body: JSON.stringify(mapped),
+                  locked_until: 0,
+                  updated_at: Date.now()
+                });
+              } catch {}
+              return mapped;
+            }
+          }
+        } catch {}
+
+        // Check billing_audit_events for completed invoice
         try {
           const auditQuery = params.trx('billing_audit_events').where({
             customer_id: params.customerId,
@@ -1972,11 +2027,46 @@ export class PaymentGatewayService {
             } catch { return false; }
           });
           if (matched) {
-            return typeof matched.payload === 'string' ? JSON.parse(matched.payload) : matched.payload;
+            const parsed = typeof matched.payload === 'string' ? JSON.parse(matched.payload) : matched.payload;
+            try {
+              await params.trx('idempotent_operations').where({ key: cycleBindingKey }).update({
+                status: 'COMPLETED',
+                response_body: JSON.stringify(parsed),
+                locked_until: 0,
+                updated_at: Date.now()
+              });
+            } catch {}
+            return parsed;
           }
         } catch {}
+
+        // Check if existing lease is expired (previous worker crashed or timed out)
+        const now = Date.now();
+        if (existingBinding && existingBinding.status === 'IN_PROGRESS' && Number(existingBinding.locked_until) <= now) {
+          // Lease expired! Atomically fence out the previous dead worker
+          try {
+            let fenceUpdate = params.trx('idempotent_operations')
+              .where({ key: cycleBindingKey, status: 'IN_PROGRESS' })
+              .andWhere('locked_until', '<=', now)
+              .update({
+                locked_until: now + 30000,
+                payload_hash: params.actualPaymentId || params.gatewayOrderId || '',
+                updated_at: now
+              });
+            const affected = await fenceUpdate;
+            if (affected > 0) {
+              shouldTakeOverLease = true;
+              break;
+            }
+          } catch {}
+        }
+
+        await new Promise((r) => setTimeout(r, 50));
       }
-      throw new Error(`INVOICE_CYCLE_CONTENTION: Concurrent invoice generation in progress for cycle ${cycle}`);
+
+      if (!shouldTakeOverLease) {
+        throw new Error(`INVOICE_CYCLE_CONTENTION: Concurrent invoice generation in progress for cycle ${cycle}`);
+      }
     }
 
     try {
@@ -1999,6 +2089,53 @@ export class PaymentGatewayService {
         supplierGstin: process.env.AIRA_SUPPLIER_GSTIN,
         supplierGstinVerified: process.env.AIRA_SUPPLIER_GSTIN_VERIFIED ? process.env.AIRA_SUPPLIER_GSTIN_VERIFIED === 'true' : undefined
       });
+
+      // Crash-recovery check: Did the crashed worker already persist an invoice in billing_invoices or audit events?
+      let preExistingInvoice: InvoiceRecord | null = null;
+      try {
+        const hasInvTable = typeof params.trx.schema?.hasTable === 'function'
+          ? await params.trx.schema.hasTable('billing_invoices')
+          : false;
+        if (hasInvTable) {
+          const invRow = await params.trx('billing_invoices')
+            .where({ subscription_id: params.purchaseRecord.id, cycle_number: cycle })
+            .first();
+          if (invRow) {
+            preExistingInvoice = this.mapBillingInvoiceRow(invRow);
+          }
+        }
+      } catch {}
+
+      if (!preExistingInvoice) {
+        try {
+          const auditRows = await params.trx('billing_audit_events').where({
+            customer_id: params.customerId,
+            event_type: 'TAX_INVOICE_ISSUED'
+          });
+          const matched = (auditRows || []).find((ev: any) => {
+            try {
+              const p = typeof ev.payload === 'string' ? JSON.parse(ev.payload) : ev.payload;
+              return p?.subscriptionId === params.purchaseRecord.id && (p?.cycleNumber || 1) === cycle;
+            } catch { return false; }
+          });
+          if (matched) {
+            preExistingInvoice = typeof matched.payload === 'string' ? JSON.parse(matched.payload) : matched.payload;
+          }
+        } catch {}
+      }
+
+      if (preExistingInvoice) {
+        // Complete the cycle binding with the recovered invoice
+        try {
+          await params.trx('idempotent_operations').where({ key: cycleBindingKey }).update({
+            status: 'COMPLETED',
+            response_body: JSON.stringify(preExistingInvoice),
+            locked_until: 0,
+            updated_at: Date.now()
+          });
+        } catch {}
+        return preExistingInvoice;
+      }
 
       // 5. Allocate invoice sequence number and claim database-level uniqueness
       let invoiceNumber = '';
@@ -2056,11 +2193,58 @@ export class PaymentGatewayService {
         pdfDownloadAvailable: false
       };
 
+      // Persist in relational billing_invoices table if table exists (enforces database-level uniqueness)
+      try {
+        const hasInvoicesTable = typeof params.trx.schema?.hasTable === 'function'
+          ? await params.trx.schema.hasTable('billing_invoices')
+          : false;
+        if (hasInvoicesTable) {
+          await params.trx('billing_invoices').insert({
+            id: `inv_${crypto.randomUUID().replace(/-/g, '')}`,
+            invoice_number: invoiceNumber,
+            customer_id: params.customerId,
+            subscription_id: params.purchaseRecord.id,
+            cycle_number: cycle,
+            billing_event_id: params.actualPaymentId || params.gatewayOrderId || `event_${invoiceNumber}`,
+            plan_tier: params.planTier,
+            currency: invoiceRecord.currency,
+            total_amount: invoiceRecord.totalAmount,
+            taxable_base: invoiceRecord.taxableBase,
+            gst_amount: invoiceRecord.gstAmount,
+            cgst_amount: invoiceRecord.cgstAmount ?? null,
+            sgst_amount: invoiceRecord.sgstAmount ?? null,
+            igst_amount: invoiceRecord.igstAmount ?? null,
+            sac_code: invoiceRecord.sacCode,
+            supplier_name: invoiceRecord.supplierName,
+            supplier_gstin: invoiceRecord.supplierGstin ?? null,
+            tax_compliance_status: invoiceRecord.taxComplianceStatus,
+            place_of_supply: invoiceRecord.placeOfSupply,
+            status: invoiceRecord.status,
+            gateway: params.gateway,
+            pdf_download_available: invoiceRecord.pdfDownloadAvailable,
+            metadata: JSON.stringify({}),
+            created_at: params.now,
+            updated_at: params.now
+          });
+        }
+      } catch (err: any) {
+        if (err?.code === '23505') { // PostgreSQL unique_violation
+          const existingInv = await params.trx('billing_invoices')
+            .where({ subscription_id: params.purchaseRecord.id, cycle_number: cycle })
+            .first();
+          if (existingInv) {
+            return this.mapBillingInvoiceRow(existingInv);
+          }
+        }
+        throw err;
+      }
+
       // 6. Update cycle binding to COMPLETED with stored invoice payload in idempotent_operations
       try {
         await params.trx('idempotent_operations').where({ key: cycleBindingKey }).update({
           status: 'COMPLETED',
           response_body: JSON.stringify(invoiceRecord),
+          locked_until: 0,
           updated_at: Date.now()
         });
       } catch {}
@@ -2084,10 +2268,6 @@ export class PaymentGatewayService {
 
       return invoiceRecord;
     } catch (execErr) {
-      // On failure, remove in-progress lease so retries can proceed
-      try {
-        await params.trx('idempotent_operations').where({ key: cycleBindingKey, status: 'IN_PROGRESS' }).delete();
-      } catch {}
       throw execErr;
     }
   }
@@ -2215,6 +2395,35 @@ export class PaymentGatewayService {
       await ins;
     } catch {}
 
+    // Persist in relational billing_credit_notes table if available
+    try {
+      const hasCreditNotesTable = typeof params.trx.schema?.hasTable === 'function'
+        ? await params.trx.schema.hasTable('billing_credit_notes')
+        : false;
+      if (hasCreditNotesTable) {
+        await params.trx('billing_credit_notes').insert({
+          id: `cn_${crypto.randomUUID().replace(/-/g, '')}`,
+          credit_note_number: creditNoteNumber,
+          original_invoice_number: originalInvoiceNumber,
+          customer_id: params.subRecord.customer_id,
+          subscription_id: params.subRecord.id,
+          refund_id: String(refundId),
+          refund_amount: params.refundAmount,
+          currency: (params.subRecord.currency || 'INR').toUpperCase(),
+          is_partial_refund: params.isPartialRefund,
+          supplier_name: 'Virexa AI Ventures Private Limited',
+          supplier_gstin: process.env.AIRA_SUPPLIER_GSTIN || null,
+          status: isUnresolved
+            ? 'PENDING_RECONCILIATION'
+            : (params.isPartialRefund ? 'Partially Refunded' : 'Refunded'),
+          gateway: params.gateway,
+          metadata: JSON.stringify({}),
+          created_at: params.now,
+          updated_at: params.now
+        });
+      }
+    } catch {}
+
     await params.trx('billing_audit_events').insert({
       id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
       customer_id: params.subRecord.customer_id,
@@ -2240,6 +2449,31 @@ export class PaymentGatewayService {
       }),
       created_at: params.now
     });
+  }
+
+  /**
+   * Maps a relational billing_invoices database row to an InvoiceRecord.
+   */
+  public mapBillingInvoiceRow(row: any): InvoiceRecord {
+    return {
+      invoiceNumber: row.invoice_number,
+      date: new Date(Number(row.created_at) || Date.now()).toISOString().split('T')[0],
+      plan: row.plan_tier === 'pro' ? 'AIRA Pro' : 'AIRA Plus',
+      currency: (row.currency || 'INR').toUpperCase(),
+      totalAmount: Number(row.total_amount) || 0,
+      taxableBase: Number(row.taxable_base) || 0,
+      gstAmount: Number(row.gst_amount) || 0,
+      cgstAmount: row.cgst_amount !== null && row.cgst_amount !== undefined ? Number(row.cgst_amount) : undefined,
+      sgstAmount: row.sgst_amount !== null && row.sgst_amount !== undefined ? Number(row.sgst_amount) : undefined,
+      igstAmount: row.igst_amount !== null && row.igst_amount !== undefined ? Number(row.igst_amount) : undefined,
+      sacCode: row.sac_code || '998431',
+      supplierName: row.supplier_name || 'Virexa AI Ventures Private Limited',
+      supplierGstin: row.supplier_gstin || undefined,
+      taxComplianceStatus: row.tax_compliance_status || 'COMPLIANT',
+      placeOfSupply: row.place_of_supply || 'UNKNOWN',
+      status: row.status || 'Paid',
+      pdfDownloadAvailable: Boolean(row.pdf_download_available)
+    };
   }
 
   /**
@@ -2318,6 +2552,23 @@ export class PaymentGatewayService {
       if (!customerId) return [];
 
       const dbClient = this.getDb();
+
+      // Check relational billing_invoices table first if available
+      try {
+        const hasInvTable = typeof (dbClient as any).schema?.hasTable === 'function'
+          ? await (dbClient as any).schema.hasTable('billing_invoices')
+          : false;
+        if (hasInvTable) {
+          let invQuery: any = (dbClient as any)('billing_invoices').where({ customer_id: customerId });
+          if (typeof invQuery.orderBy === 'function') {
+            invQuery = invQuery.orderBy('created_at', 'desc');
+          }
+          const invRows = typeof invQuery.select === 'function' ? await invQuery.select('*') : (await invQuery || []);
+          if (Array.isArray(invRows) && invRows.length > 0) {
+            return invRows.map((r: any) => this.mapBillingInvoiceRow(r));
+          }
+        }
+      } catch {}
 
       // Check durable issued invoices in billing_audit_events first
       let invoiceAuditEvents: any[] = [];
