@@ -276,11 +276,57 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   }, [isGuestUser]);
 
+  const [invoices, setInvoices] = useState<any[]>([]);
+  const [isLoadingInvoices, setIsLoadingInvoices] = useState(false);
+  const [isCancellingSub, setIsCancellingSub] = useState(false);
+  const [cancelMessage, setCancelMessage] = useState<string | null>(null);
+
+  const fetchInvoices = useCallback(async () => {
+    if (isGuestUser) return;
+    setIsLoadingInvoices(true);
+    try {
+      const res = await authenticatedApiFetch('/api/billing/invoices');
+      if (res.ok) {
+        const data = await res.json();
+        setInvoices(data.invoices || []);
+      }
+    } catch {
+      setInvoices([]);
+    } finally {
+      setIsLoadingInvoices(false);
+    }
+  }, [isGuestUser]);
+
+  const handleCancelSubscription = async () => {
+    if (!window.confirm('Are you sure you want to cancel your recurring subscription? Your entitlements will remain active until the end of the current billing cycle.')) {
+      return;
+    }
+    setIsCancellingSub(true);
+    try {
+      const res = await authenticatedApiFetch('/api/billing/subscription/cancel', {
+        method: 'POST'
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setCancelMessage(data.message || 'Subscription cancellation scheduled at period end.');
+        await fetchUsage();
+        await fetchInvoices();
+      } else {
+        alert(data.error || data.message || 'Failed to cancel subscription.');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Error communicating with billing server.');
+    } finally {
+      setIsCancellingSub(false);
+    }
+  };
+
   useEffect(() => {
     if (isOpen) {
       void fetchUsage();
+      void fetchInvoices();
     }
-  }, [isOpen, userTier, fetchUsage]);
+  }, [isOpen, userTier, fetchUsage, fetchInvoices]);
 
   const activePlanId: PlanTier = usageData ? usageData.planId : (isGuestUser ? 'guest' : (userTier || 'free'));
   const activePlanDef = COMMERCIAL_PLANS[activePlanId] || COMMERCIAL_PLANS.free;
@@ -1015,6 +1061,92 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       })}
                     </div>
                   </div>
+
+                  {/* Active Subscription Management & Cancellation */}
+                  {(activePlanId === 'plus' || activePlanId === 'pro') && (
+                    <div className="p-4 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/40 dark:bg-claude-surface2-dark/40 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h4 className="text-xs font-bold text-claude-text-light dark:text-white">
+                            Active Subscription Management
+                          </h4>
+                          <p className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">
+                            Recurring plan renewal via e-mandate. Cancellation stops renewal at the end of your billing cycle.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleCancelSubscription}
+                          disabled={isCancellingSub}
+                          className="px-3 py-1.5 rounded-lg border border-red-500/30 hover:bg-red-500/10 text-red-600 dark:text-red-400 text-xs font-semibold transition-colors disabled:opacity-50"
+                        >
+                          {isCancellingSub ? 'Processing...' : 'Cancel Subscription'}
+                        </button>
+                      </div>
+                      {cancelMessage && (
+                        <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-300 text-xs">
+                          {cancelMessage}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Tax-Compliant Invoices & Billing History */}
+                  {!isGuestUser && (
+                    <div className="space-y-3 pt-2">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark">
+                          Billing History & GST Invoices
+                        </h4>
+                        <span className="text-[10px] text-claude-muted-light dark:text-claude-muted-dark">
+                          SAC 998431 · 18% GST Compliant
+                        </span>
+                      </div>
+
+                      {isLoadingInvoices ? (
+                        <div className="p-4 rounded-xl border border-claude-border-light dark:border-claude-border-dark text-xs text-claude-muted-light dark:text-claude-muted-dark text-center">
+                          Loading invoices...
+                        </div>
+                      ) : invoices.length === 0 ? (
+                        <div className="p-4 rounded-xl border border-dashed border-claude-border-light dark:border-claude-border-dark text-xs text-claude-muted-light dark:text-claude-muted-dark text-center space-y-1">
+                          <p className="font-medium">No billing history or invoices yet.</p>
+                          <p className="text-[10px]">When you purchase a subscription or credits, tax-compliant invoices will appear here.</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {invoices.map((inv: any, idx: number) => (
+                            <div
+                              key={inv.invoiceNumber || idx}
+                              className="p-3 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/30 dark:bg-claude-surface2-dark/30 flex items-center justify-between text-xs"
+                            >
+                              <div className="space-y-0.5">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-mono font-bold text-claude-text-light dark:text-white">{inv.invoiceNumber}</span>
+                                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-medium">
+                                    {inv.status}
+                                  </span>
+                                </div>
+                                <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark">
+                                  {inv.plan} · {inv.date} · SAC {inv.sacCode}
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <div className="font-mono font-bold text-claude-text-light dark:text-white">
+                                  {inv.currency === 'INR' ? '₹' : '$'}{inv.totalAmount.toFixed(2)}
+                                </div>
+                                <div className="text-[10px] text-claude-muted-light dark:text-claude-muted-dark">
+                                  Incl. {inv.currency === 'INR' ? '₹' : '$'}{inv.gstAmount.toFixed(2)} GST
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                          <p className="text-[10px] text-claude-muted-light dark:text-claude-muted-dark text-right">
+                            Supplier: Virexa AI Ventures Private Limited
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
                   </>)}
                 </motion.div>
               )}

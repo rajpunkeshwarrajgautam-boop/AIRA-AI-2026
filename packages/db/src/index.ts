@@ -11,9 +11,18 @@ const connectionString = process.env.DATABASE_URL || 'postgres://aira:aira@local
 const isServerless = process.env.VERCEL === '1' || process.env.NODE_ENV === 'production';
 
 export function resolveEffectiveDatabaseUrl(rawUrl: string, isServerless: boolean): string {
-  if (!isServerless) return rawUrl;
   try {
     const parsed = new URL(rawUrl);
+
+    // Prepare for pg-connection-string v3.0 / pg v9: explicitly set sslmode=verify-full
+    // when sslmode=require is configured on Neon or remote PostgreSQL, preserving strict certificate
+    // and hostname verification without runtime deprecation warnings.
+    if (parsed.searchParams.get('sslmode') === 'require') {
+      parsed.searchParams.set('sslmode', 'verify-full');
+    }
+
+    if (!isServerless) return parsed.toString();
+
     const host = parsed.hostname;
     if (host.endsWith('.neon.tech') && !host.includes('-pooler')) {
       const parts = host.split('.');
@@ -23,7 +32,7 @@ export function resolveEffectiveDatabaseUrl(rawUrl: string, isServerless: boolea
         return parsed.toString();
       }
     }
-    return rawUrl;
+    return parsed.toString();
   } catch {
     return rawUrl;
   }
@@ -35,7 +44,7 @@ export const db = knex({
   client: 'pg',
   connection: {
     connectionString: effectiveConnectionString,
-    ssl: effectiveConnectionString.includes('neon.tech') || effectiveConnectionString.includes('sslmode=require')
+    ssl: effectiveConnectionString.includes('neon.tech') || effectiveConnectionString.includes('sslmode=require') || effectiveConnectionString.includes('sslmode=verify-full')
       ? { rejectUnauthorized: true }
       : false,
   },
@@ -186,7 +195,7 @@ export async function runMigrations(options: RunMigrationsOptions = {}) {
     client: 'pg',
     connection: {
       connectionString: targetConnStr,
-      ssl: targetConnStr.includes('neon.tech') || targetConnStr.includes('sslmode=require')
+      ssl: targetConnStr.includes('neon.tech') || targetConnStr.includes('sslmode=require') || targetConnStr.includes('sslmode=verify-full')
         ? { rejectUnauthorized: true }
         : false,
     },
