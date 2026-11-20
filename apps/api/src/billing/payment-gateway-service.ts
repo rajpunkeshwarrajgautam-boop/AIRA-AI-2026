@@ -54,6 +54,8 @@ export interface InvoiceRecord {
   sacCode: string;
   supplierName: string;
   supplierGstin?: string;
+  taxComplianceStatus?: 'COMPLIANT' | 'PROVISIONAL_PENDING_GSTIN';
+  placeOfSupply?: string;
   status: string;
   pdfDownloadAvailable?: boolean;
 }
@@ -63,6 +65,8 @@ export interface PaymentDbQueryBuilder {
   update: (patch: Record<string, unknown>) => Promise<unknown>;
   delete?: () => Promise<unknown>;
   orderBy?: (column: string, direction?: string) => Promise<SubscriptionRow[]>;
+  select?: (columns?: unknown) => Promise<SubscriptionRow[]>;
+  whereIn?: (column: string, values: readonly unknown[]) => PaymentDbQueryBuilder;
 }
 
 export type PaymentDbClient = {
@@ -998,22 +1002,43 @@ export class PaymentGatewayService {
       const subEntity = payload.payload?.subscription?.entity || payload.subscription || payload.data?.subscription || {};
       const gatewaySubId = subEntity.id || payload.data?.subscription?.subscription_id;
       if (gatewaySubId) {
-        await trx('subscriptions').where({ gateway_subscription_id: gatewaySubId }).update({
-          status: 'cancelled',
-          cancelled_at: now,
-          cancel_at_period_end: false,
-          updated_at: now
-        });
+        const existingSub = await trx('subscriptions').where({ gateway_subscription_id: gatewaySubId }).first();
+        if (existingSub) {
+          let meta: any = {};
+          try {
+            meta = typeof existingSub.metadata === 'string' ? JSON.parse(existingSub.metadata) : (existingSub.metadata || {});
+          } catch {}
+          meta.cancellation_status = 'CANCELLATION_CONFIRMED';
+          meta.cancelled_at = now;
+
+          await trx('subscriptions').where({ id: existingSub.id }).update({
+            status: 'cancelled',
+            cancelled_at: now,
+            cancel_at_period_end: false,
+            metadata: JSON.stringify(meta),
+            updated_at: now
+          });
+
+          await trx('billing_audit_events').insert({
+            id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+            customer_id: existingSub.customer_id,
+            event_type: 'SUBSCRIPTION_CANCELLED',
+            actor_type: 'gateway_webhook',
+            actor_id: gatewaySubId,
+            payload: JSON.stringify({
+              subscriptionId: existingSub.id,
+              cancellation_status: 'CANCELLATION_CONFIRMED',
+              cancelled_at: now
+            }),
+            created_at: now
+          });
+        }
       }
       return;
     }
 
-    if (
-      eventType === 'refund.processed' ||
-      eventType === 'refund.created' ||
-      eventType === 'refund.speed_processed' ||
-      eventType === 'REFUND_SUCCESS'
-    ) {
+    if (eventType === 'refund.created') {
+      // Refund initiated at gateway: record audit trail only, do NOT modify subscription status or revoke entitlements yet
       const paymentEntity = payload.payload?.payment?.entity || payload.payment || payload.data?.payment || {};
       const refundEntity = payload.payload?.refund?.entity || payload.refund || payload.data?.refund || {};
       const gatewayPaymentId = paymentEntity.id || refundEntity.payment_id || payload.data?.payment?.cf_payment_id;
@@ -1036,33 +1061,107 @@ export class PaymentGatewayService {
         }
       }
 
+      await trx('billing_audit_events').insert({
+        id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+        customer_id: subRecord?.customer_id || 'cust_unknown',
+        event_type: 'REFUND_INITIATED',
+        actor_type: 'gateway_webhook',
+        actor_id: refundEntity.id || refundEntity.cf_refund_id || eventType,
+        payload: JSON.stringify({
+          subscriptionId: subRecord?.id,
+          gatewayPaymentId,
+          refundAmount: refundEntity.amount || payload.data?.refund?.refund_amount,
+          status: 'INITIATED'
+        }),
+        created_at: now
+      });
+      return;
+    }
+
+    if (
+      eventType === 'refund.processed' ||
+      eventType === 'refund.speed_processed' ||
+      eventType === 'REFUND_SUCCESS'
+    ) {
+      const paymentEntity = payload.payload?.payment?.entity || payload.payment || payload.data?.payment || {};
+      const refundEntity = payload.payload?.refund?.entity || payload.refund || payload.data?.refund || {};
+      const gatewayPaymentId = paymentEntity.id || refundEntity.payment_id || payload.data?.payment?.cf_payment_id;
+      const gatewayOrderId = paymentEntity.order_id || refundEntity.order_id || payload.data?.order?.order_id;
+      const refundAmount = Number(refundEntity.amount || payload.data?.refund?.refund_amount || 0);
+
+      let subRecord: any = null;
+      if (gatewayOrderId) {
+        subRecord = await trx('subscriptions').where({ gateway_subscription_id: gatewayOrderId }).first();
+      }
+      if (!subRecord && gatewayPaymentId) {
+        let candidateQuery = trx('subscriptions').whereIn('status', ['active', 'pending', 'cancelled']);
+        if (typeof candidateQuery.select === 'function') {
+          const candidateSubs = await candidateQuery.select('*');
+          subRecord = (candidateSubs || []).find((s: any) => {
+            try {
+              const m = typeof s.metadata === 'string' ? JSON.parse(s.metadata) : (s.metadata || {});
+              return m.lastPaymentId === gatewayPaymentId || m.initialPaymentId === gatewayPaymentId;
+            } catch { return false; }
+          });
+        }
+      }
+
       if (subRecord) {
         let meta: any = {};
         try { meta = typeof subRecord.metadata === 'string' ? JSON.parse(subRecord.metadata) : (subRecord.metadata || {}); } catch {}
-        meta.refunded = true;
-        meta.refundedAt = now;
+        const totalAmountMinor = Number(subRecord.amount_minor_units) || 0;
+        const isPartialRefund = refundAmount > 0 && refundAmount < totalAmountMinor;
+
         meta.refundId = refundEntity.id || refundEntity.cf_refund_id || `ref_${now}`;
+        meta.refundAmount = refundAmount;
+        meta.refundedAt = now;
 
-        await trx('subscriptions').where({ id: subRecord.id }).update({
-          status: 'refunded',
-          metadata: JSON.stringify(meta),
-          updated_at: now
-        });
+        if (isPartialRefund) {
+          meta.partialRefund = true;
+          await trx('subscriptions').where({ id: subRecord.id }).update({
+            metadata: JSON.stringify(meta),
+            updated_at: now
+          });
 
-        await trx('billing_audit_events').insert({
-          id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
-          customer_id: subRecord.customer_id,
-          event_type: 'SUBSCRIPTION_REFUNDED',
-          actor_type: 'gateway_webhook',
-          actor_id: meta.refundId,
-          payload: JSON.stringify({
-            subscriptionId: subRecord.id,
-            refundId: meta.refundId,
-            amount: refundEntity.amount || subRecord.amount_minor_units,
-            gateway
-          }),
-          created_at: now
-        });
+          await trx('billing_audit_events').insert({
+            id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+            customer_id: subRecord.customer_id,
+            event_type: 'SUBSCRIPTION_PARTIALLY_REFUNDED',
+            actor_type: 'gateway_webhook',
+            actor_id: meta.refundId,
+            payload: JSON.stringify({
+              subscriptionId: subRecord.id,
+              refundId: meta.refundId,
+              refundAmount,
+              totalAmountMinor,
+              currency: subRecord.currency,
+              gateway
+            }),
+            created_at: now
+          });
+        } else {
+          meta.refunded = true;
+          await trx('subscriptions').where({ id: subRecord.id }).update({
+            status: 'refunded',
+            metadata: JSON.stringify(meta),
+            updated_at: now
+          });
+
+          await trx('billing_audit_events').insert({
+            id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+            customer_id: subRecord.customer_id,
+            event_type: 'SUBSCRIPTION_REFUNDED',
+            actor_type: 'gateway_webhook',
+            actor_id: meta.refundId,
+            payload: JSON.stringify({
+              subscriptionId: subRecord.id,
+              refundId: meta.refundId,
+              amount: refundAmount || subRecord.amount_minor_units,
+              gateway
+            }),
+            created_at: now
+          });
+        }
       }
       return;
     }
@@ -1246,11 +1345,11 @@ export class PaymentGatewayService {
 
     const gateway = resolvePaymentGateway(requestedGateway);
     const keyId = gateway === 'razorpay'
-      ? (process.env.RAZORPAY_KEY_ID || (isSandbox ? (process.env.AIRA_TEST_GATEWAY_KEY_ID || 'rzp_test_mock_key') : undefined))
-      : (process.env.CASHFREE_APP_ID || (isSandbox ? (process.env.AIRA_TEST_GATEWAY_KEY_ID || 'cf_test_mock_app') : undefined));
+      ? (process.env.RAZORPAY_KEY_ID || (isSandbox ? process.env.AIRA_TEST_GATEWAY_KEY_ID : undefined))
+      : (process.env.CASHFREE_APP_ID || (isSandbox ? process.env.AIRA_TEST_GATEWAY_KEY_ID : undefined));
 
     if (!keyId) {
-      throw new Error(`BILLING_UNAVAILABLE: ${gateway} credentials not configured.`);
+      throw new Error('BILLING_UNAVAILABLE: Gateway credentials not configured.');
     }
 
     let customerId: string;
@@ -1296,6 +1395,9 @@ export class PaymentGatewayService {
       gatewayOrderId = res.gatewayOrderId;
       gatewayCheckoutUrl = res.shortUrl;
     } else if (gateway === 'razorpay' && process.env.RAZORPAY_KEY_SECRET && process.env.RAZORPAY_KEY_ID && !process.env.RAZORPAY_KEY_ID.startsWith('rzp_test_mock')) {
+      if (!recurringPlanId) {
+        throw new Error(`BILLING_UNAVAILABLE: Razorpay recurring plan ID is not configured for ${planTier} in ${currency}.`);
+      }
       const authHeader = 'Basic ' + Buffer.from(`${process.env.RAZORPAY_KEY_ID}:${process.env.RAZORPAY_KEY_SECRET}`).toString('base64');
       // Razorpay Subscriptions API for recurring e-mandates & recurring plan billing
       const rzpSubRes = await fetch('https://api.razorpay.com/v1/subscriptions', {
@@ -1318,40 +1420,23 @@ export class PaymentGatewayService {
         })
       });
 
-      if (rzpSubRes.ok) {
-        const rzpData: any = await rzpSubRes.json();
-        gatewayOrderId = rzpData.id;
-        gatewayCheckoutUrl = rzpData.short_url;
-      } else {
-        // Fallback to Razorpay Orders API if plan_id is pending creation on live dashboard
-        const rzpRes = await fetch('https://api.razorpay.com/v1/orders', {
-          method: 'POST',
-          headers: {
-            'Authorization': authHeader,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            amount: price.amountMinorUnits,
-            currency,
-            receipt: purchaseId,
-            notes: {
-              principal_id: principalId,
-              customer_id: customerId,
-              plan_tier: planTier,
-              purchase_id: purchaseId,
-              recurring_intent: true
-            }
-          })
-        });
-        if (!rzpRes.ok) {
-          const errText = await rzpRes.text();
-          throw new Error(`GATEWAY_ORDER_FAILED: Razorpay subscription/order creation returned status ${rzpRes.status}: ${errText}`);
-        }
-        const rzpData: any = await rzpRes.json();
-        gatewayOrderId = rzpData.id;
+      if (!rzpSubRes.ok) {
+        const errText = await rzpSubRes.text();
+        throw new Error(`GATEWAY_SUBSCRIPTION_FAILED: Razorpay subscription creation returned status ${rzpSubRes.status}: ${errText}`);
       }
+
+      const rzpData: any = await rzpSubRes.json();
+      gatewayOrderId = rzpData.id;
+      gatewayCheckoutUrl = rzpData.short_url;
     } else if (gateway === 'cashfree' && process.env.CASHFREE_APP_ID && process.env.CASHFREE_SECRET_KEY && !process.env.CASHFREE_APP_ID.startsWith('cf_test_mock')) {
-      const cfSubRes = await fetch('https://api.cashfree.com/pg/subscriptions', {
+      if (!recurringPlanId) {
+        throw new Error(`BILLING_UNAVAILABLE: Cashfree recurring plan ID is not configured for ${planTier} in ${currency}.`);
+      }
+      const cfBaseUrl = (isSandbox || process.env.CASHFREE_ENV === 'TEST' || process.env.CASHFREE_APP_ID?.startsWith('TEST'))
+        ? 'https://sandbox.cashfree.com/pg/subscriptions'
+        : 'https://api.cashfree.com/pg/subscriptions';
+
+      const cfSubRes = await fetch(cfBaseUrl, {
         method: 'POST',
         headers: {
           'x-client-id': process.env.CASHFREE_APP_ID,
@@ -1382,22 +1467,20 @@ export class PaymentGatewayService {
         })
       });
 
-      if (cfSubRes.ok) {
-        const cfData: any = await cfSubRes.json();
-        gatewayOrderId = cfData.subscription_id || cfData.sub_id || purchaseId;
-        gatewayCheckoutUrl = cfData.subscription_session_id
-          ? `https://payments.cashfree.com/pg/subscriptions/${cfData.subscription_session_id}`
-          : cfData.auth_link;
-      } else {
+      if (!cfSubRes.ok) {
         const errText = await cfSubRes.text();
-        throw new Error(`GATEWAY_ORDER_FAILED: Cashfree subscription creation returned status ${cfSubRes.status}: ${errText}`);
+        throw new Error(`GATEWAY_SUBSCRIPTION_FAILED: Cashfree subscription creation returned status ${cfSubRes.status}: ${errText}`);
       }
+
+      const cfData: any = await cfSubRes.json();
+      gatewayOrderId = cfData.subscription_id || cfData.sub_id || purchaseId;
+      gatewayCheckoutUrl = cfData.auth_link || cfData.sub_link || cfData.payment_link;
     } else if (isSandbox) {
       gatewayOrderId = gateway === 'cashfree'
         ? `sub_cf_sandbox_${crypto.randomUUID().replace(/-/g, '').slice(0, 14)}`
         : `sub_sandbox_${crypto.randomUUID().replace(/-/g, '').slice(0, 14)}`;
     } else {
-      throw new Error(`BILLING_UNAVAILABLE: Live gateway secret keys not configured for ${gateway} subscription creation.`);
+      throw new Error('BILLING_UNAVAILABLE: Live gateway secret keys not configured for order creation.');
     }
 
     const now = Date.now();
@@ -1469,14 +1552,18 @@ export class PaymentGatewayService {
   /**
    * Cancel an active subscription with provider-side synchronization.
    */
-  async cancelSubscription(principalId: string): Promise<{ success: boolean; message: string; gatewayCancelled?: boolean }> {
-    let customerId: string;
+  async cancelSubscription(principalId: string): Promise<{ success: boolean; message: string; gatewayCancelled: boolean }> {
+    let customerId: string | null = null;
     if (this.customDbClient) {
       const existingCust = await this.getDb()('billing_customers').where({ principal_id: principalId }).first();
-      customerId = existingCust ? (existingCust as any).id : '';
+      customerId = existingCust ? (existingCust as any).id : null;
     } else {
-      const customer = await commercialBillingService.getOrCreateCustomer(principalId);
-      customerId = customer.id;
+      const customer = await commercialBillingService.getOrCreateCustomer(principalId).catch(() => null);
+      customerId = customer?.id || null;
+    }
+
+    if (!customerId) {
+      return { success: false, message: 'No billing customer found for principal.', gatewayCancelled: false };
     }
 
     const sub = await this.getDb()('subscriptions')
@@ -1484,10 +1571,13 @@ export class PaymentGatewayService {
       .first();
 
     if (!sub) {
-      return { success: false, message: 'No active subscription found.' };
+      return { success: false, message: 'No active subscription found.', gatewayCancelled: false };
     }
 
+    const isSandbox = process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
     let gatewayCancelled = false;
+    let gatewayError: string | null = null;
+
     if (this.customGatewayTransport && sub.gateway_subscription_id) {
       try {
         const res = await this.customGatewayTransport({
@@ -1502,7 +1592,11 @@ export class PaymentGatewayService {
           gatewaySubscriptionId: sub.gateway_subscription_id
         });
         gatewayCancelled = Boolean(res.cancelled);
+        if (!gatewayCancelled) {
+          gatewayError = 'Custom gateway transport returned cancelled = false';
+        }
       } catch (err: any) {
+        gatewayError = err.message || 'Custom gateway transport threw error';
         console.warn(`[PaymentGateway] Custom transport cancellation failed for ${sub.id}:`, err.message);
       }
     } else if (sub.gateway === 'razorpay' && sub.gateway_subscription_id?.startsWith('sub_') && process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
@@ -1513,13 +1607,21 @@ export class PaymentGatewayService {
           headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' },
           body: JSON.stringify({ cancel_at_cycle_end: 1 })
         });
-        if (rzpRes.ok) gatewayCancelled = true;
+        if (rzpRes.ok) {
+          gatewayCancelled = true;
+        } else {
+          gatewayError = `Razorpay returned HTTP ${rzpRes.status}: ${await rzpRes.text()}`;
+        }
       } catch (err: any) {
+        gatewayError = err.message;
         console.warn(`[PaymentGateway] Razorpay provider cancel API error for ${sub.id}:`, err.message);
       }
     } else if (sub.gateway === 'cashfree' && sub.gateway_subscription_id && process.env.CASHFREE_APP_ID && process.env.CASHFREE_SECRET_KEY) {
       try {
-        const cfRes = await fetch(`https://api.cashfree.com/pg/subscriptions/${sub.gateway_subscription_id}/cancel`, {
+        const cfBaseUrl = (isSandbox || process.env.CASHFREE_ENV === 'TEST' || process.env.CASHFREE_APP_ID?.startsWith('TEST'))
+          ? 'https://sandbox.cashfree.com/pg/subscriptions'
+          : 'https://api.cashfree.com/pg/subscriptions';
+        const cfRes = await fetch(`${cfBaseUrl}/${sub.gateway_subscription_id}/cancel`, {
           method: 'POST',
           headers: {
             'x-client-id': process.env.CASHFREE_APP_ID,
@@ -1528,15 +1630,41 @@ export class PaymentGatewayService {
             'Content-Type': 'application/json'
           }
         });
-        if (cfRes.ok) gatewayCancelled = true;
+        if (cfRes.ok) {
+          gatewayCancelled = true;
+        } else {
+          gatewayError = `Cashfree returned HTTP ${cfRes.status}: ${await cfRes.text()}`;
+        }
       } catch (err: any) {
+        gatewayError = err.message;
         console.warn(`[PaymentGateway] Cashfree provider cancel API error for ${sub.id}:`, err.message);
       }
+    } else if (isSandbox) {
+      // In isolated test/sandbox harness without live secrets, simulate provider cancellation
+      gatewayCancelled = true;
+    } else {
+      gatewayError = `Live API keys for gateway '${sub.gateway}' are not configured. Provider cancellation cannot proceed safely.`;
+    }
+
+    if (!gatewayCancelled) {
+      return {
+        success: false,
+        message: `Provider-side cancellation failed: ${gatewayError || 'Unknown gateway rejection'}. Subscription remains active.`,
+        gatewayCancelled: false
+      };
     }
 
     const now = Date.now();
+    let meta: any = {};
+    try {
+      meta = typeof sub.metadata === 'string' ? JSON.parse(sub.metadata) : (sub.metadata || {});
+    } catch {}
+    meta.cancellation_status = 'CANCELLATION_REQUESTED';
+    meta.cancellation_requested_at = now;
+
     await this.getDb()('subscriptions').where({ id: sub.id }).update({
       cancel_at_period_end: true,
+      metadata: JSON.stringify(meta),
       updated_at: now
     });
 
@@ -1550,6 +1678,7 @@ export class PaymentGatewayService {
         subscriptionId: sub.id,
         gateway: sub.gateway,
         gatewaySubscriptionId: sub.gateway_subscription_id,
+        cancellation_status: 'CANCELLATION_REQUESTED',
         gatewayCancelled,
         effectiveEnd: sub.current_period_end
       }),
@@ -1559,7 +1688,7 @@ export class PaymentGatewayService {
     return {
       success: true,
       message: 'Subscription marked to cancel at the end of the current billing period. Entitlements remain active until then.',
-      gatewayCancelled
+      gatewayCancelled: true
     };
   }
 
@@ -1593,15 +1722,51 @@ export class PaymentGatewayService {
 
       const paidSubs = (subs || []).filter(s => s && (s.status === 'active' || s.status === 'cancelled' || s.status === 'refunded'));
 
+      const supplierGstin = process.env.AIRA_SUPPLIER_GSTIN || undefined;
+      const isGstinVerified = Boolean(supplierGstin && supplierGstin.trim().length === 15);
+
       return paidSubs.map((sub, index) => {
         const totalMinor = Number(sub.amount_minor_units) || 0;
         const total = Math.round((totalMinor / 100) * 100) / 100;
         const isINR = (sub.currency || 'INR').toUpperCase() === 'INR';
-        // 18% GST calculation (SAC 998431: Information Technology & Software Services)
-        // Total = Base * 1.18 => Base = Total / 1.18
-        const taxableBase = Math.round((total / 1.18) * 100) / 100;
-        const gstAmount = Math.round((total - taxableBase) * 100) / 100;
-        const halfGst = Math.round((gstAmount / 2) * 100) / 100;
+        const isExport = !isINR;
+
+        let taxableBase = 0;
+        let gstAmount = 0;
+        let cgstAmount: number | undefined;
+        let sgstAmount: number | undefined;
+        let igstAmount: number | undefined;
+
+        if (isExport) {
+          // Zero-rated export under Letter of Undertaking (LUT)
+          taxableBase = total;
+          gstAmount = 0;
+        } else {
+          // 18% GST calculation (SAC 998431: Information Technology & Software Services)
+          // Total = Base * 1.18 => Base = Total / 1.18
+          taxableBase = Math.round((total / 1.18) * 100) / 100;
+          gstAmount = Math.round((total - taxableBase) * 100) / 100;
+
+          let meta: any = {};
+          try {
+            meta = typeof sub.metadata === 'string' ? JSON.parse(sub.metadata) : (sub.metadata || {});
+          } catch {}
+
+          const placeOfSupply = (meta.customerState || meta.billingState || meta.state || meta.placeOfSupply || '07').toString().trim().toUpperCase();
+          const isDelhi = placeOfSupply === '07' || placeOfSupply === 'DELHI' || placeOfSupply === 'DL' || placeOfSupply === 'NEW DELHI';
+
+          if (isDelhi) {
+            // Intra-state supply (Delhi -> Delhi): 9% CGST + 9% SGST
+            cgstAmount = Math.round((gstAmount / 2) * 100) / 100;
+            sgstAmount = Math.round((gstAmount - cgstAmount) * 100) / 100;
+            igstAmount = undefined;
+          } else {
+            // Inter-state supply: 18% IGST
+            cgstAmount = undefined;
+            sgstAmount = undefined;
+            igstAmount = gstAmount;
+          }
+        }
 
         const dateStr = new Date(Number(sub.created_at) || Date.now()).toISOString().split('T')[0];
         const shortId = (sub.id || '').replace(/^pur_/, '').toUpperCase().slice(0, 8) || `${1001 + index}`;
@@ -1616,12 +1781,13 @@ export class PaymentGatewayService {
           totalAmount: total,
           taxableBase,
           gstAmount,
-          cgstAmount: isINR ? halfGst : undefined,
-          sgstAmount: isINR ? halfGst : undefined,
-          igstAmount: isINR ? undefined : undefined,
+          cgstAmount,
+          sgstAmount,
+          igstAmount,
           sacCode: '998431',
           supplierName: 'Virexa AI Ventures Private Limited',
-          supplierGstin: '07AAACV2026E1Z5',
+          supplierGstin,
+          taxComplianceStatus: isGstinVerified ? 'COMPLIANT' : 'PROVISIONAL_PENDING_GSTIN',
           status: sub.status === 'refunded' ? 'Refunded' : 'Paid',
           pdfDownloadAvailable: false
         };

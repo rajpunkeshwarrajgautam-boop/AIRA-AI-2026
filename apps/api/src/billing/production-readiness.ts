@@ -47,6 +47,7 @@ export class ProductionReadinessService {
     const isProd = process.env.NODE_ENV === 'production';
     const hasLiveRazorpay = Boolean(process.env.RAZORPAY_KEY_ID && !process.env.RAZORPAY_KEY_ID.startsWith('rzp_test_'));
     const hasWebhookSecret = Boolean(process.env.RAZORPAY_WEBHOOK_SECRET || process.env.CASHFREE_WEBHOOK_SECRET);
+    const hasSupplierGstin = Boolean(process.env.AIRA_SUPPLIER_GSTIN && process.env.AIRA_SUPPLIER_GSTIN.trim().length === 15);
     const emergencyDisabled = process.env.AIRA_BILLING_EMERGENCY_DISABLE === 'true';
 
     const gates: GateResult[] = [
@@ -109,15 +110,21 @@ export class ProductionReadinessService {
         id: 'GATE_08_GST_TAX_COMPLIANCE',
         name: 'GST Tax Calculation & Classification (SAC 998431)',
         category: 'TAX',
-        status: 'VERIFIED',
-        evidence: '18% GST tax calculation and SAC 998431 classification logic verified in sandbox billing models.'
+        status: hasSupplierGstin ? 'VERIFIED' : 'PENDING_OWNER_ACTION',
+        evidence: hasSupplierGstin
+          ? `18% GST tax calculation and SAC 998431 classification logic active with verified supplier GSTIN: ${process.env.AIRA_SUPPLIER_GSTIN}.`
+          : '18% GST calculation and SAC 998431 classification logic active in sandbox. Official supplier GSTIN pending owner configuration via AIRA_SUPPLIER_GSTIN.',
+        remediationBlocker: hasSupplierGstin ? undefined : 'Configure AIRA_SUPPLIER_GSTIN in production environment.'
       },
       {
         id: 'GATE_09_INVOICE_COMPLIANCE',
         name: 'Sequential Compliant Tax Invoicing',
         category: 'TAX',
-        status: 'VERIFIED',
-        evidence: 'Automated invoice generation with sequential numbers, customer details, SAC code, and split CGST/SGST/IGST.'
+        status: hasSupplierGstin ? 'VERIFIED' : 'PENDING_OWNER_ACTION',
+        evidence: hasSupplierGstin
+          ? 'Automated invoice generation active with sequential numbers, customer details, SAC 998431, and verified GST tax filing capability.'
+          : 'Sequential invoice generation implemented with split CGST/SGST/IGST and SAC 998431. Official tax filing requires AIRA_SUPPLIER_GSTIN.',
+        remediationBlocker: hasSupplierGstin ? undefined : 'Awaiting verified GSTIN before marking invoices legally compliant for tax filing.'
       },
       {
         id: 'GATE_10_REFUND_DISPUTE_PROCEDURES',

@@ -557,6 +557,238 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
       const audit = tables.billing_audit_events.find(a => a.event_type === 'SUBSCRIPTION_REFUNDED');
       assert.ok(audit);
     });
+
+    it('handles cancellation state machine: records CANCELLATION_REQUESTED then CANCELLATION_CONFIRMED on webhook', async () => {
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+      const secret = 'test_rzp_webhook_secret_2026';
+      service.setRazorpaySecret(secret);
+
+      service.setGatewayTransport(async (params) => {
+        if (params.action === 'cancel_subscription') {
+          return { gatewayOrderId: params.orderId, cancelled: true };
+        }
+        return { gatewayOrderId: 'test' };
+      });
+
+      const now = Date.now();
+      const customerId = 'cust_cancel_flow_01';
+      const principalId = 'usr_cancel_flow_01';
+      const gatewaySubId = 'sub_rzp_cancel_flow_target';
+
+      tables.billing_customers.push({ id: customerId, principal_id: principalId });
+      tables.subscriptions.push({
+        id: 'pur_sub_cancel_flow_01',
+        customer_id: customerId,
+        plan_id: 'plus',
+        status: 'active',
+        gateway: 'razorpay',
+        gateway_subscription_id: gatewaySubId,
+        currency: 'INR',
+        amount_minor_units: 39900,
+        current_period_start: now,
+        current_period_end: now + 15 * 86400000,
+        cancel_at_period_end: false,
+        created_at: now,
+        updated_at: now
+      });
+
+      // 1. Principal initiates cancellation -> CANCELLATION_REQUESTED
+      const res = await service.cancelSubscription(principalId);
+      assert.equal(res.success, true);
+      assert.equal(res.gatewayCancelled, true);
+
+      const requestedSub = tables.subscriptions.find(s => s.id === 'pur_sub_cancel_flow_01');
+      assert.equal(requestedSub.cancel_at_period_end, true);
+      const requestedMeta = JSON.parse(requestedSub.metadata);
+      assert.equal(requestedMeta.cancellation_status, 'CANCELLATION_REQUESTED');
+
+      // 2. Gateway delivers subscription.cancelled webhook -> CANCELLATION_CONFIRMED & status: 'cancelled'
+      const cancelWebhookPayload = {
+        event: 'subscription.cancelled',
+        payload: {
+          subscription: {
+            entity: {
+              id: gatewaySubId,
+              status: 'cancelled'
+            }
+          }
+        }
+      };
+      const rawBody = JSON.stringify(cancelWebhookPayload);
+      const signature = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+
+      const hookRes = await service.processRazorpayWebhook(rawBody, signature);
+      assert.equal(hookRes.status, 'PROCESSED');
+
+      const confirmedSub = tables.subscriptions.find(s => s.id === 'pur_sub_cancel_flow_01');
+      assert.equal(confirmedSub.status, 'cancelled');
+      const confirmedMeta = JSON.parse(confirmedSub.metadata);
+      assert.equal(confirmedMeta.cancellation_status, 'CANCELLATION_CONFIRMED');
+    });
+
+    it('fails closed and refuses to cancel if provider gateway cancellation returns failure', async () => {
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+
+      service.setGatewayTransport(async () => {
+        return { gatewayOrderId: 'sub_fail', cancelled: false };
+      });
+
+      const now = Date.now();
+      const customerId = 'cust_fail_cancel';
+      const principalId = 'usr_fail_cancel';
+
+      tables.billing_customers.push({ id: customerId, principal_id: principalId });
+      tables.subscriptions.push({
+        id: 'pur_sub_fail_cancel',
+        customer_id: customerId,
+        plan_id: 'plus',
+        status: 'active',
+        gateway: 'razorpay',
+        gateway_subscription_id: 'sub_rzp_failing',
+        currency: 'INR',
+        amount_minor_units: 39900,
+        current_period_start: now,
+        current_period_end: now + 10 * 86400000,
+        cancel_at_period_end: false,
+        created_at: now,
+        updated_at: now
+      });
+
+      const res = await service.cancelSubscription(principalId);
+      assert.equal(res.success, false);
+      assert.equal(res.gatewayCancelled, false);
+
+      const sub = tables.subscriptions.find(s => s.id === 'pur_sub_fail_cancel');
+      assert.equal(sub.cancel_at_period_end, false, 'cancel_at_period_end must not be marked true on provider failure');
+    });
+
+    it('handles refund.created as REFUND_INITIATED audit event without revoking subscription status', async () => {
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+      const secret = 'test_rzp_webhook_secret_2026';
+      service.setRazorpaySecret(secret);
+
+      const now = Date.now();
+      const subId = 'pur_sub_init_ref';
+      const gatewaySubId = 'sub_rzp_init_target';
+
+      tables.subscriptions.push({
+        id: subId,
+        customer_id: 'cust_init_ref',
+        plan_id: 'plus',
+        status: 'active',
+        gateway: 'razorpay',
+        gateway_subscription_id: gatewaySubId,
+        currency: 'INR',
+        amount_minor_units: 39900,
+        current_period_start: now,
+        current_period_end: now + 30 * 86400000,
+        cancel_at_period_end: false,
+        metadata: JSON.stringify({ principalId: 'usr_init_ref', lastPaymentId: 'pay_init_ref' }),
+        created_at: now,
+        updated_at: now
+      });
+
+      const refundCreatedPayload = {
+        event: 'refund.created',
+        payload: {
+          refund: {
+            entity: {
+              id: 'rfnd_created_01',
+              payment_id: 'pay_init_ref',
+              amount: 39900
+            }
+          },
+          payment: {
+            entity: {
+              id: 'pay_init_ref',
+              order_id: gatewaySubId
+            }
+          }
+        }
+      };
+
+      const rawBody = JSON.stringify(refundCreatedPayload);
+      const signature = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+
+      const hookRes = await service.processRazorpayWebhook(rawBody, signature);
+      assert.equal(hookRes.status, 'PROCESSED');
+
+      const sub = tables.subscriptions.find(s => s.id === subId);
+      assert.equal(sub.status, 'active', 'Subscription must remain active on refund.created (not yet settled)');
+
+      const audit = tables.billing_audit_events.find(a => a.event_type === 'REFUND_INITIATED');
+      assert.ok(audit, 'Audit trail must record REFUND_INITIATED');
+    });
+
+    it('distinguishes partial from full refund: partial refund updates metadata without setting status to refunded', async () => {
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+      const secret = 'test_rzp_webhook_secret_2026';
+      service.setRazorpaySecret(secret);
+
+      const now = Date.now();
+      const subId = 'pur_sub_partial_ref';
+      const gatewaySubId = 'sub_rzp_partial_target';
+
+      tables.subscriptions.push({
+        id: subId,
+        customer_id: 'cust_partial_ref',
+        plan_id: 'plus',
+        status: 'active',
+        gateway: 'razorpay',
+        gateway_subscription_id: gatewaySubId,
+        currency: 'INR',
+        amount_minor_units: 39900,
+        current_period_start: now,
+        current_period_end: now + 30 * 86400000,
+        cancel_at_period_end: false,
+        metadata: JSON.stringify({ principalId: 'usr_partial_ref', lastPaymentId: 'pay_partial_ref' }),
+        created_at: now,
+        updated_at: now
+      });
+
+      // Partial refund of 10000 paise (out of 39900)
+      const partialPayload = {
+        event: 'refund.processed',
+        payload: {
+          refund: {
+            entity: {
+              id: 'rfnd_part_01',
+              payment_id: 'pay_partial_ref',
+              amount: 10000
+            }
+          },
+          payment: {
+            entity: {
+              id: 'pay_partial_ref',
+              order_id: gatewaySubId
+            }
+          }
+        }
+      };
+
+      const rawBody = JSON.stringify(partialPayload);
+      const signature = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+
+      const hookRes = await service.processRazorpayWebhook(rawBody, signature);
+      assert.equal(hookRes.status, 'PROCESSED');
+
+      const sub = tables.subscriptions.find(s => s.id === subId);
+      assert.equal(sub.status, 'active', 'Partial refund must not cancel or revoke active subscription status');
+      const meta = JSON.parse(sub.metadata);
+      assert.equal(meta.partialRefund, true);
+      assert.equal(meta.refundAmount, 10000);
+
+      const audit = tables.billing_audit_events.find(a => a.event_type === 'SUBSCRIPTION_PARTIALLY_REFUNDED');
+      assert.ok(audit, 'Audit trail must record SUBSCRIPTION_PARTIALLY_REFUNDED');
+    });
   });
 
   // =========================================================================
@@ -661,6 +893,122 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
       assert.equal(inv.cgstAmount, 30.43);
       assert.equal(inv.sgstAmount, 30.43);
       assert.ok(inv.invoiceNumber.startsWith('INV-2026-'));
+    });
+
+    it('calculates 18% IGST for inter-state customer transactions outside Delhi', async () => {
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+
+      const customerId = 'cust_inv_ka';
+      const principalId = 'usr_invoice_ka';
+      tables.billing_customers.push({ id: customerId, principal_id: principalId });
+
+      const now = Date.now();
+      tables.subscriptions.push({
+        id: 'pur_inv_ka_01',
+        customer_id: customerId,
+        plan_id: 'pro',
+        status: 'active',
+        gateway: 'cashfree',
+        currency: 'INR',
+        amount_minor_units: 99900, // ₹999
+        current_period_start: now,
+        current_period_end: now + 30 * 86400000,
+        cancel_at_period_end: false,
+        metadata: JSON.stringify({ customerState: 'Karnataka' }),
+        created_at: now,
+        updated_at: now
+      });
+
+      const invoices = await service.getInvoices(principalId);
+      assert.equal(invoices.length, 1);
+      const inv = invoices[0];
+
+      // 999 / 1.18 = 846.61
+      // gst = 999 - 846.61 = 152.39 (all IGST for Karnataka inter-state)
+      assert.equal(inv.totalAmount, 999.00);
+      assert.equal(inv.taxableBase, 846.61);
+      assert.equal(inv.gstAmount, 152.39);
+      assert.equal(inv.igstAmount, 152.39);
+      assert.equal(inv.cgstAmount, undefined);
+      assert.equal(inv.sgstAmount, undefined);
+    });
+
+    it('calculates 0% export under LUT for international USD subscriptions', async () => {
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+
+      const customerId = 'cust_inv_usd';
+      const principalId = 'usr_invoice_usd';
+      tables.billing_customers.push({ id: customerId, principal_id: principalId });
+
+      const now = Date.now();
+      tables.subscriptions.push({
+        id: 'pur_inv_usd_01',
+        customer_id: customerId,
+        plan_id: 'pro',
+        status: 'active',
+        gateway: 'razorpay',
+        currency: 'USD',
+        amount_minor_units: 1999, // $19.99
+        current_period_start: now,
+        current_period_end: now + 30 * 86400000,
+        cancel_at_period_end: false,
+        metadata: JSON.stringify({ country: 'US' }),
+        created_at: now,
+        updated_at: now
+      });
+
+      const invoices = await service.getInvoices(principalId);
+      assert.equal(invoices.length, 1);
+      const inv = invoices[0];
+
+      assert.equal(inv.currency, 'USD');
+      assert.equal(inv.totalAmount, 19.99);
+      assert.equal(inv.taxableBase, 19.99);
+      assert.equal(inv.gstAmount, 0);
+      assert.equal(inv.cgstAmount, undefined);
+      assert.equal(inv.sgstAmount, undefined);
+      assert.equal(inv.igstAmount, undefined);
+    });
+
+    it('tracks official GSTIN verification state via AIRA_SUPPLIER_GSTIN', async () => {
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+
+      const customerId = 'cust_gstin_check';
+      const principalId = 'usr_gstin_check';
+      tables.billing_customers.push({ id: customerId, principal_id: principalId });
+
+      tables.subscriptions.push({
+        id: 'pur_gstin_01',
+        customer_id: customerId,
+        plan_id: 'plus',
+        status: 'active',
+        gateway: 'razorpay',
+        currency: 'INR',
+        amount_minor_units: 39900,
+        current_period_start: Date.now(),
+        current_period_end: Date.now() + 30 * 86400000,
+        cancel_at_period_end: false,
+        created_at: Date.now(),
+        updated_at: Date.now()
+      });
+
+      // 1. Without AIRA_SUPPLIER_GSTIN configured
+      delete process.env.AIRA_SUPPLIER_GSTIN;
+      const invWithoutGstin = await service.getInvoices(principalId);
+      assert.equal(invWithoutGstin[0].taxComplianceStatus, 'PROVISIONAL_PENDING_GSTIN');
+      assert.equal(invWithoutGstin[0].supplierGstin, undefined);
+
+      // 2. With valid 15-character GSTIN configured
+      process.env.AIRA_SUPPLIER_GSTIN = '07AAACV2026E1Z5';
+      const invWithGstin = await service.getInvoices(principalId);
+      assert.equal(invWithGstin[0].taxComplianceStatus, 'COMPLIANT');
+      assert.equal(invWithGstin[0].supplierGstin, '07AAACV2026E1Z5');
     });
   });
 
