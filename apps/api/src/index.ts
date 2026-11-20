@@ -557,11 +557,21 @@ app.post('/api/billing/webhook/cashfree', async (req: Request, res: Response) =>
 
 // Public commercial plan definitions and pricing catalog (accessible to guests and landing pages)
 app.get('/api/billing/plans', (_req: Request, res: Response) => {
+  const isCheckoutAvailable = process.env.AIRA_COMMERCIAL_BILLING_ENABLED === 'true';
+  const isSandbox = process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
+  const billingStatus = isCheckoutAvailable
+    ? 'active'
+    : (isSandbox ? 'sandbox' : 'checkout_disabled');
+
   res.json({
-    plans: Object.values(COMMERCIAL_PLANS).map(({ pricing, prices, ...plan }) => plan),
+    plans: Object.values(COMMERCIAL_PLANS).map(plan => ({
+      ...plan,
+      featuresCertified: true
+    })),
     topupPacks: [],
-    billingStatus: 'sandbox',
-    checkoutAvailable: false
+    billingStatus,
+    checkoutAvailable: isCheckoutAvailable,
+    featuresCertified: true
   });
 });
 
