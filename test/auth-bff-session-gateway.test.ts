@@ -26,6 +26,7 @@ import {
   handleBffSignOut,
   bffSessionStore,
   BffServerSession,
+  BffSessionStore,
   generateSessionId,
   generateCsrfToken,
   BFF_COOKIE_NAME_DEV
@@ -538,6 +539,72 @@ async function testProductionFailClosedProviderUrl() {
   }
 }
 
+async function testServerlessBffSessionPruning() {
+  console.log('Testing: Serverless BFF session pruning & background timer protection...');
+
+  // 1. Explicit serverless mode: No timer should be scheduled
+  const serverlessStore = new BffSessionStore(undefined, { memoryOnly: true, serverless: true });
+  assert.equal(serverlessStore.isServerlessMode(), true, 'Store must reflect serverless mode');
+  assert.equal(serverlessStore.getTimer(), null, 'Serverless store must NOT schedule a background timer');
+
+  // Verify query-time lazy expiration works in serverless mode
+  const expiredSession: BffServerSession = {
+    id: generateSessionId(),
+    userId: 'usr_serverless_expired',
+    sessionToken: 'tok_test',
+    jwt: 'jwt_test',
+    jwtExpiresAt: Date.now() - 10000,
+    csrfToken: 'csrf_test',
+    createdAt: Date.now() - 60000,
+    expiresAt: Date.now() - 5000,
+    lastRotatedAt: Date.now() - 60000
+  };
+  await serverlessStore.set(expiredSession);
+  const fetchedExpired = await serverlessStore.get(expiredSession.id);
+  assert.equal(fetchedExpired, null, 'Expired session must return null on lazy access');
+  assert.equal(await serverlessStore.size(), 0, 'Expired session must be purged on access');
+
+  // Verify manual pruning works in serverless mode
+  const sessionToPrune: BffServerSession = {
+    id: generateSessionId(),
+    userId: 'usr_serverless_manual_prune',
+    sessionToken: 'tok_test_2',
+    jwt: 'jwt_test_2',
+    jwtExpiresAt: Date.now() - 10000,
+    csrfToken: 'csrf_test_2',
+    createdAt: Date.now() - 60000,
+    expiresAt: Date.now() - 5000,
+    lastRotatedAt: Date.now() - 60000
+  };
+  await serverlessStore.set(sessionToPrune);
+  const prunedCount = await serverlessStore.pruneExpired();
+  assert.equal(prunedCount, 1, 'Manual pruneExpired must succeed in serverless mode');
+
+  // 2. Non-serverless mode: Timer SHOULD be scheduled and stop() must clear it
+  const persistentStore = new BffSessionStore(undefined, { memoryOnly: true, serverless: false });
+  assert.equal(persistentStore.isServerlessMode(), false, 'Store must reflect non-serverless mode');
+  assert.notEqual(persistentStore.getTimer(), null, 'Persistent store must schedule a background timer');
+  persistentStore.stop();
+  assert.equal(persistentStore.getTimer(), null, 'stop() must clear background timer');
+
+  // 3. Environment auto-detection: VERCEL=1 must trigger serverless mode automatically
+  const prevVercel = process.env.VERCEL;
+  try {
+    process.env.VERCEL = '1';
+    const autoDetectedStore = new BffSessionStore(undefined, { memoryOnly: true });
+    assert.equal(autoDetectedStore.isServerlessMode(), true, 'VERCEL=1 must auto-detect serverless mode');
+    assert.equal(autoDetectedStore.getTimer(), null, 'Auto-detected serverless store must NOT schedule a background timer');
+  } finally {
+    if (prevVercel !== undefined) {
+      process.env.VERCEL = prevVercel;
+    } else {
+      delete process.env.VERCEL;
+    }
+  }
+
+  console.log('  ✓ Serverless BFF session pruning & timer protection verified');
+}
+
 async function main() {
   console.log('\n=== AIRA AI 2026 — FIRST-PARTY BFF SESSION SECURITY SUITE ===\n');
 
@@ -549,8 +616,9 @@ async function main() {
     await testBffMiddlewarePrincipalBindingWithoutBearerHeader();
     await testBffSignOutRevocation();
     await testProductionFailClosedProviderUrl();
+    await testServerlessBffSessionPruning();
 
-    console.log('\nALL 7 FIRST-PARTY BFF SESSION SECURITY CHECKS PASSED!\n');
+    console.log('\nALL 8 FIRST-PARTY BFF SESSION SECURITY CHECKS PASSED!\n');
     process.exit(0);
   } catch (err) {
     console.error('\nFAILED BFF SESSION SECURITY CHECK:', err);

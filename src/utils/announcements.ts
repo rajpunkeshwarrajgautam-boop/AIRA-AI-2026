@@ -9,7 +9,7 @@ import {
 /**
  * Announcement Storage & Delivery Utilities
  * Manages user-isolated dismissal state, unread badge calculation,
- * and first-view popup evaluation.
+ * first-view popup evaluation, and resilient offline/online synchronization.
  */
 
 const LEGACY_STORAGE_KEY = 'aira_seen_announcements';
@@ -17,6 +17,54 @@ const LEGACY_STORAGE_KEY = 'aira_seen_announcements';
 export function getAnnouncementStorageKey(userId?: string | null): string {
   const scope = (userId && typeof userId === 'string' && userId.trim()) ? userId.trim() : 'guest';
   return `aira_dismissed_announcements_${scope}`;
+}
+
+export function getPendingStorageKey(userId?: string | null): string {
+  const scope = (userId && typeof userId === 'string' && userId.trim()) ? userId.trim() : 'guest';
+  return `aira_pending_announcements_sync_${scope}`;
+}
+
+export function getPendingAnnouncementSyncIds(userId?: string | null): string[] {
+  if (typeof window === 'undefined' || !window.localStorage) return [];
+  try {
+    const raw = window.localStorage.getItem(getPendingStorageKey(userId));
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed.filter((id): id is string => typeof id === 'string');
+    }
+  } catch {}
+  return [];
+}
+
+export function addPendingAnnouncementSync(id: string, userId?: string | null): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  const key = getPendingStorageKey(userId);
+  const existing = new Set(getPendingAnnouncementSyncIds(userId));
+  existing.add(id);
+  try {
+    window.localStorage.setItem(key, JSON.stringify(Array.from(existing)));
+  } catch {}
+}
+
+export function removePendingAnnouncementSync(id: string, userId?: string | null): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  const key = getPendingStorageKey(userId);
+  const existing = new Set(getPendingAnnouncementSyncIds(userId));
+  existing.delete(id);
+  try {
+    if (existing.size === 0) {
+      window.localStorage.removeItem(key);
+    } else {
+      window.localStorage.setItem(key, JSON.stringify(Array.from(existing)));
+    }
+  } catch {}
+}
+
+export function clearPendingAnnouncementSync(userId?: string | null): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  try {
+    window.localStorage.removeItem(getPendingStorageKey(userId));
+  } catch {}
 }
 
 /**
@@ -83,10 +131,13 @@ export function dismissAnnouncement(id: string, userId?: string | null): void {
     console.warn('[Announcements] Failed to write dismissed announcement to localStorage:', err);
   }
 
-  // Best-effort asynchronous server sync
+  // Queue for resilient background server synchronization
+  addPendingAnnouncementSync(id, userId);
+
+  // Asynchronous server synchronization with resilient queue clearing on success
   void (async () => {
     try {
-      await fetch('/api/announcements/dismiss', {
+      const res = await fetch('/api/announcements/dismiss', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -94,8 +145,11 @@ export function dismissAnnouncement(id: string, userId?: string | null): void {
         },
         body: JSON.stringify({ id })
       });
+      if (res.ok) {
+        removePendingAnnouncementSync(id, userId);
+      }
     } catch {
-      // Offline or server unavailable - local persistence already succeeded
+      // Offline or network error: item remains safely queued in pending sync for next hydration
     }
   })();
 }
@@ -110,12 +164,28 @@ export function resetDismissedAnnouncements(userId?: string | null): void {
   const isGuest = !userId || typeof userId !== 'string' || !userId.trim();
   try {
     window.localStorage.removeItem(primaryKey);
+    clearPendingAnnouncementSync(userId);
     if (isGuest) {
       window.localStorage.removeItem(LEGACY_STORAGE_KEY);
     }
   } catch (err) {
     console.warn('[Announcements] Failed to clear dismissed announcements:', err);
   }
+
+  // Best-effort remote server reset
+  void (async () => {
+    try {
+      await fetch('/api/announcements/reset', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(userId ? { 'x-user-id': userId } : {})
+        }
+      });
+    } catch {
+      // Local reset succeeded
+    }
+  })();
 }
 
 /**
@@ -201,4 +271,67 @@ export async function fetchAnnouncementsFromServer(
   } catch {
     return null;
   }
+}
+
+/**
+ * Synchronize announcements between local storage and authoritative server state.
+ * - Hydrates server-persisted dismissals into localStorage.
+ * - Merges locally dismissed announcements with server state without data loss.
+ * - Reconciles any pending offline dismissals with the server.
+ * - Returns updated announcements, unread count, and dismissed IDs.
+ */
+export async function syncAnnouncementsWithServer(
+  userId?: string | null
+): Promise<{ announcements: Announcement[]; unreadCount: number; dismissedIds: string[] } | null> {
+  const isGuest = !userId || typeof userId !== 'string' || !userId.trim();
+  const serverData = await fetchAnnouncementsFromServer(userId);
+  if (!serverData) return null;
+
+  const primaryKey = getAnnouncementStorageKey(userId);
+  const localDismissed = getDismissedAnnouncementIds(userId);
+  const serverDismissed = serverData.dismissedIds;
+
+  // Union merge of local and remote state
+  const mergedSet = new Set([...serverDismissed, ...localDismissed]);
+  const mergedList = Array.from(mergedSet);
+
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      window.localStorage.setItem(primaryKey, JSON.stringify(mergedList));
+      if (isGuest) {
+        window.localStorage.setItem(LEGACY_STORAGE_KEY, JSON.stringify(mergedList));
+      }
+    } catch {}
+  }
+
+  // For authenticated accounts, reconcile local dismissals that have not yet reached the server
+  if (!isGuest) {
+    const missingOnServer = localDismissed.filter(id => !serverDismissed.includes(id));
+    const pendingIds = Array.from(new Set([...getPendingAnnouncementSyncIds(userId), ...missingOnServer]));
+
+    for (const pendingId of pendingIds) {
+      try {
+        const res = await fetch('/api/announcements/dismiss', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(userId ? { 'x-user-id': userId } : {})
+          },
+          body: JSON.stringify({ id: pendingId })
+        });
+        if (res.ok) {
+          removePendingAnnouncementSync(pendingId, userId);
+        }
+      } catch {
+        // Preserved in pending queue for future retry
+      }
+    }
+  }
+
+  const unreadCount = serverData.announcements.filter(a => !mergedSet.has(a.id)).length;
+  return {
+    announcements: serverData.announcements,
+    unreadCount,
+    dismissedIds: mergedList
+  };
 }

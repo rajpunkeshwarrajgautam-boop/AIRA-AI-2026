@@ -60,7 +60,8 @@ import { OnboardingWalkthrough } from './components/OnboardingWalkthrough';
 import { FeatureDiscoveryCard } from './components/FeatureDiscoveryCard';
 import {
   shouldShowFirstViewPopup,
-  getUnreadAnnouncementCount
+  getUnreadAnnouncementCount,
+  syncAnnouncementsWithServer
 } from './utils/announcements';
 import {
   getOnboardingState,
@@ -318,6 +319,13 @@ function App() {
   // Synchronize unread announcements badge count whenever userTier or currentUserId changes
   useEffect(() => {
     setUnreadAnnouncementsCount(getUnreadAnnouncementCount(userTier, currentUserId));
+    if (currentUserId && !currentUserId.startsWith('guest_') && userTier !== 'guest') {
+      void syncAnnouncementsWithServer(currentUserId).then(result => {
+        if (result) {
+          setUnreadAnnouncementsCount(result.unreadCount);
+        }
+      });
+    }
   }, [userTier, currentUserId]);
 
   // Check first-view popup on initial mount and when user identity transitions
