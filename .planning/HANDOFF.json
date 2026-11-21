@@ -1,76 +1,43 @@
-{
-  "version": "1.0",
-  "timestamp": "2026-11-21T05:10:00.000Z",
-  "phase": "PR-196",
-  "phase_name": "final-financial-integrity-payment-correctness-remediation",
-  "phase_dir": ".planning",
-  "status": "active",
-  "pr_number": 196,
-  "pr_url": "https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/196",
-  "branch": "feat/cashfree-razorpay-subscriptions-20261120",
-  "head_sha": "2825fbc8906f789b702f72ab0f2b75555fa480c5",
-  "completed_tasks": [
-    {
-      "id": 1,
-      "name": "P0-1: PostgreSQL Lease Acquisition Result Handling & Fail-Closed Guard",
-      "status": "done",
-      "details": "Used .onConflict('key').ignore().returning('key') with strict array-length check for cycle lease, invoice claims, and credit note claims. Enforced RELATIONAL_INVOICES_TABLE_REQUIRED and RELATIONAL_CREDIT_NOTES_TABLE_REQUIRED outside tests."
+﻿{
+  "schema": "handoff/v2",
+  "updated_at": "2026-11-21T06:32:40Z",
+  "pr": {
+    "number": 196,
+    "url": "https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/196",
+    "branch": "feat/cashfree-razorpay-subscriptions-20261120",
+    "target": "prod-release",
+    "state": "OPEN",
+    "is_draft": false
+  },
+  "certified_sha": "0ba41ee692001f6923f17ef14dd60060cb2a8b7e",
+  "previous_production_sha": "f429d90a1f4322a0d362956fb9e55a38cb3b5508",
+  "ci": {
+    "run_id": "44875214096",
+    "run_url": "https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/actions/runs/44875214096",
+    "gates": {
+      "fast_ci": "SUCCESS",
+      "payment_durability_pg18": "SUCCESS",
+      "semantic_search_ci": "SUCCESS",
+      "disposable_pg16_cert": "SUCCESS",
+      "main_pr_certification": "SUCCESS",
+      "gitguardian": "SUCCESS",
+      "vercel_preview": "SUCCESS"
     },
-    {
-      "id": 2,
-      "name": "P0-2: Gateway Refund Amount Normalization (Razorpay & Cashfree)",
-      "status": "done",
-      "details": "Implemented parseNormalizedRefundPayload returning integer minor units and decimal major units. Enforced positive amounts, currency matching, cumulative partial refund limits, and duplicate webhook idempotency."
-    },
-    {
-      "id": 3,
-      "name": "P0-3: Multi-Cycle Subscription Authoritative Invoice Linking & Unresolved Failsafe",
-      "status": "done",
-      "details": "Updated resolveAuthoritativeOriginalInvoice to link by payment ID and cycle number without defaulting to earliest invoice. Set originalInvoiceNumber = 'UNRESOLVED_ORIGINAL_INVOICE' and prevented spurious CREDIT_NOTE_RECONCILED events."
-    },
-    {
-      "id": 4,
-      "name": "P0-4: Atomic Reconciliation & Removal of Custom DB Bypass",
-      "status": "done",
-      "details": "Removed Boolean(this.customDbClient) from isTestEnv so custom DB clients do not enable in-memory fallbacks or bypass relational table checks."
-    },
-    {
-      "id": 5,
-      "name": "Real PostgreSQL 16 & 18 Multi-Engine Verification Matrix",
-      "status": "done",
-      "details": "Executed all 14 gates in test/invoice-crash-recovery-postgres.test.ts across real PG16 (:5433) and PG18 (:5432) clusters. 14/14 PASS."
-    },
-    {
-      "id": 6,
-      "name": "Full Local Verification Matrix",
-      "status": "done",
-      "details": "typecheck (PASS), test:secrets (PASS), test:release-auth:unit (PASS), test:recurring-subscriptions (PASS), test:invoice-concurrency (PASS), test:invoice-crash-recovery (PASS), test:remediations (PASS), build (PASS)."
-    }
+    "all_mandatory_green": true
+  },
+  "release_verdict": "GO_FOR_CODE_ONLY_MERGE",
+  "commercial_billing": "NO_GO_UNTIL_KYC",
+  "aira_commercial_billing_enabled": false,
+  "next_steps": [
+    "Merge PR #196 via protected branch route (ruleset 25079946 enforced)",
+    "Confirm Vercel production deployment SHA matches 0ba41ee692001f6923f17ef14dd60060cb2a8b7e",
+    "Verify production health at https://aira-ai-2026.vercel.app",
+    "Commercial activation: owner submits KYC to Razorpay/Cashfree, sets AIRA_COMMERCIAL_BILLING_ENABLED=true"
   ],
-  "remaining_tasks": [
-    {
-      "id": 7,
-      "name": "Resolve GitHub Actions account billing lock to allow remote CI runner execution",
-      "status": "blocked_external"
-    }
-  ],
-  "blockers": [
-    {
-      "description": "GitHub Actions account billing issue (HTTP 403 on runner allocation: 'The job was not started because your account is locked due to a billing issue.')",
-      "type": "external_infrastructure"
-    },
-    {
-      "description": "HOLD THE MERGE: PR #196 must not be merged into prod-release autonomously.",
-      "type": "policy_governance"
-    },
-    {
-      "description": "ZERO PRODUCTION DB MIGRATIONS: Migration 033 must not be executed on production Neon PostgreSQL.",
-      "type": "safety_boundary"
-    },
-    {
-      "description": "FAIL-CLOSED LIVE BILLING: AIRA_COMMERCIAL_BILLING_ENABLED=false strictly enforced.",
-      "type": "safety_boundary"
-    }
-  ],
-  "certification_artifact": "C:\\Users\\WORKSTATION\\.gemini\antigravity\\brain\\9a10239e-9af0-4b68-9196-9678b4e3c76d\\AIRA-PR196-FINAL-CERTIFICATION.md"
+  "do_not": [
+    "Force-push or direct-push to prod-release",
+    "Set AIRA_COMMERCIAL_BILLING_ENABLED=true without owner KYC",
+    "Run migration 033 manually on production database",
+    "Rotate secrets without explicit authorization"
+  ]
 }
