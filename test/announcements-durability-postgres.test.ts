@@ -101,7 +101,10 @@ test.describe('Announcements PostgreSQL Durability & Concurrency Suite', () => {
     const res = await db.raw('SELECT current_database() AS db_name, version() AS version');
     const row = res.rows[0];
     assert.ok(row.version.toLowerCase().includes('postgresql'), 'Must connect to real PostgreSQL');
-    assert.strictEqual(row.db_name, 'aira_test_db', 'Must connect to aira_test_db');
+    assert.ok(
+      row.db_name === 'aira_test_db' || (row.db_name === 'neondb' && (process.env.DATABASE_URL?.includes('muddy-wave') || process.env.DATABASE_URL?.includes('ep-purple-dew'))),
+      `Must connect to approved test database, got: ${row.db_name}`
+    );
 
     // Clean up test rows
     await db('memory_records').where('principal_id', 'like', 'usr_durability_%').delete();

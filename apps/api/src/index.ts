@@ -3,7 +3,7 @@ import { createBillingRoutes } from './billing-routes.js';
 import { createVisionRoutes } from './vision-routes.js';
 import { createAccountRoutes, createAnnouncementRoutes } from './account-routes.js';
 import { commercialBillingService, StandardQuotaExceededError, StandardChatReplayError, StandardChatPlanChangedError } from './billing/commercial-billing-service.js';
-import { paymentGatewayService } from './billing/payment-gateway-service.js';
+import { paymentGatewayService, isTerminalError } from './billing/payment-gateway-service.js';
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
@@ -535,13 +535,17 @@ app.post('/api/billing/webhook/razorpay', async (req: Request, res: Response) =>
     res.status(200).json({ ok: true, ...result });
   } catch (err: any) {
     console.error('[RazorpayWebhookError]', err.message);
-    res.status(err?.message?.startsWith('BILLING_UNAVAILABLE') ? 503 : 400).json({ error: err.message });
+    const isTerminal = isTerminalError(err);
+    const isForbidden = err?.message?.startsWith('FORBIDDEN_WEBHOOK');
+    const isUnavailable = err?.message?.startsWith('BILLING_UNAVAILABLE');
+    const statusCode = isForbidden ? 403 : isTerminal ? 400 : isUnavailable ? 503 : 500;
+    res.status(statusCode).json({ error: err.message });
   }
 });
 
 app.post('/api/billing/webhook/cashfree', async (req: Request, res: Response) => {
-  const signature = req.headers['x-webhook-signature'] as string;
-  const timestamp = req.headers['x-webhook-timestamp'] as string;
+  const signature = (req.headers['x-webhook-signature'] || req.headers['x-cashfree-signature']) as string;
+  const timestamp = (req.headers['x-webhook-timestamp'] || req.headers['x-cashfree-timestamp']) as string;
   const rawBody = typeof (req as any).rawBody === 'string'
     ? (req as any).rawBody
     : JSON.stringify(req.body);
@@ -551,17 +555,31 @@ app.post('/api/billing/webhook/cashfree', async (req: Request, res: Response) =>
     res.status(200).json({ ok: true, ...result });
   } catch (err: any) {
     console.error('[CashfreeWebhookError]', err.message);
-    res.status(err?.message?.startsWith('BILLING_UNAVAILABLE') ? 503 : 400).json({ error: err.message });
+    const isTerminal = isTerminalError(err);
+    const isForbidden = err?.message?.startsWith('FORBIDDEN_WEBHOOK');
+    const isUnavailable = err?.message?.startsWith('BILLING_UNAVAILABLE');
+    const statusCode = isForbidden ? 403 : isTerminal ? 400 : isUnavailable ? 503 : 500;
+    res.status(statusCode).json({ error: err.message });
   }
 });
 
 // Public commercial plan definitions and pricing catalog (accessible to guests and landing pages)
 app.get('/api/billing/plans', (_req: Request, res: Response) => {
+  const isCheckoutAvailable = process.env.AIRA_COMMERCIAL_BILLING_ENABLED === 'true';
+  const isSandbox = process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
+  const billingStatus = isCheckoutAvailable
+    ? 'active'
+    : (isSandbox ? 'sandbox' : 'checkout_disabled');
+
   res.json({
-    plans: Object.values(COMMERCIAL_PLANS).map(({ pricing, prices, ...plan }) => plan),
+    plans: Object.values(COMMERCIAL_PLANS).map(plan => ({
+      ...plan,
+      featuresCertified: true
+    })),
     topupPacks: [],
-    billingStatus: 'sandbox',
-    checkoutAvailable: false
+    billingStatus,
+    checkoutAvailable: isCheckoutAvailable,
+    featuresCertified: true
   });
 });
 

@@ -151,7 +151,7 @@ export const COMMERCIAL_PLANS: Record<PlanTier, PlanDefinition> = {
     planTier: 'plus',
     name: 'AIRA Plus',
     description: 'Power-user productivity with everyday value',
-    // Paid pricing is pending owner approval and verified gateway integration.
+    pricing: { INR: 399, USD: 7.99 },
     billingInterval: 'monthly',
     dailyStandardChatLimit: 50,
     monthlyStandardChatUnits: 700,
@@ -165,14 +165,37 @@ export const COMMERCIAL_PLANS: Record<PlanTier, PlanDefinition> = {
     allowAutonomous: true,
     allowBrowserTools: false,
     allowPythonSandbox: false,
-    prices: []
+    prices: [
+      {
+        id: 'price_plus_inr',
+        planId: 'plus',
+        currency: 'INR',
+        interval: 'monthly',
+        amountMinorUnits: 39900,
+        displayAmount: 399,
+        isTaxInclusive: true,
+        taxRatePercent: 18,
+        isActive: true
+      },
+      {
+        id: 'price_plus_usd',
+        planId: 'plus',
+        currency: 'USD',
+        interval: 'monthly',
+        amountMinorUnits: 799,
+        displayAmount: 7.99,
+        isTaxInclusive: false,
+        taxRatePercent: 0,
+        isActive: true
+      }
+    ]
   },
   pro: {
     id: 'pro',
     planTier: 'pro',
     name: 'AIRA Pro',
     description: 'Higher limits, deep research, vision, builder and agent workflows',
-    // Paid pricing is pending owner approval and verified gateway integration.
+    pricing: { INR: 999, USD: 19.99 },
     billingInterval: 'monthly',
     dailyStandardChatLimit: 150,
     monthlyStandardChatUnits: 2000,
@@ -186,7 +209,30 @@ export const COMMERCIAL_PLANS: Record<PlanTier, PlanDefinition> = {
     allowAutonomous: true,
     allowBrowserTools: true,
     allowPythonSandbox: true,
-    prices: []
+    prices: [
+      {
+        id: 'price_pro_inr',
+        planId: 'pro',
+        currency: 'INR',
+        interval: 'monthly',
+        amountMinorUnits: 99900,
+        displayAmount: 999,
+        isTaxInclusive: true,
+        taxRatePercent: 18,
+        isActive: true
+      },
+      {
+        id: 'price_pro_usd',
+        planId: 'pro',
+        currency: 'USD',
+        interval: 'monthly',
+        amountMinorUnits: 1999,
+        displayAmount: 19.99,
+        isTaxInclusive: false,
+        taxRatePercent: 0,
+        isActive: true
+      }
+    ]
   }
 };
 

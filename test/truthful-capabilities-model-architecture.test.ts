@@ -715,7 +715,8 @@ test('Truthful Capabilities & Model Architecture Suite', async (t) => {
     assert.equal(COMMERCIAL_PLANS.plus.complimentaryReasoningBoosts, 50);
     assert.equal(COMMERCIAL_PLANS.plus.maxProjects, 10);
     assert.equal(COMMERCIAL_PLANS.plus.maxMemoryRecords, 250);
-    assert.deepEqual(COMMERCIAL_PLANS.plus.prices, []);
+    assert.equal(COMMERCIAL_PLANS.plus.prices.length, 2);
+    assert.equal(COMMERCIAL_PLANS.plus.prices.find(p => p.currency === 'INR')?.amountMinorUnits, 39900);
 
     assert.equal(COMMERCIAL_PLANS.pro.dailyStandardChatLimit, 150);
     assert.equal(COMMERCIAL_PLANS.pro.monthlyStandardChatUnits, 2000);
@@ -723,7 +724,8 @@ test('Truthful Capabilities & Model Architecture Suite', async (t) => {
     assert.equal(COMMERCIAL_PLANS.pro.complimentaryReasoningBoosts, 200);
     assert.equal(COMMERCIAL_PLANS.pro.maxProjects, -1);
     assert.equal(COMMERCIAL_PLANS.pro.maxMemoryRecords, -1);
-    assert.deepEqual(COMMERCIAL_PLANS.pro.prices, []);
+    assert.equal(COMMERCIAL_PLANS.pro.prices.length, 2);
+    assert.equal(COMMERCIAL_PLANS.pro.prices.find(p => p.currency === 'INR')?.amountMinorUnits, 99900);
 
     assert.equal(isModelAllowedForTier('aira-fast', 'free'), true);
     assert.equal(isModelAllowedForTier('aira-pro', 'free'), false);

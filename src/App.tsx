@@ -2155,6 +2155,7 @@ useEffect(() => {
         <PricingModal
           isOpen={isPricingOpen}
           onClose={() => setIsPricingOpen(false)}
+          currentPlan={userTier}
         />
 
         <VisionStudioModal
