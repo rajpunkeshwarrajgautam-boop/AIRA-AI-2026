@@ -9,6 +9,7 @@ import knex, { type Knex } from 'knex';
 let wslKeepAlive: ChildProcess | null = null;
 try {
   wslKeepAlive = spawn('wsl', ['-d', 'Ubuntu-24.04', 'sleep', '600'], { stdio: 'ignore' });
+  wslKeepAlive.unref();
   process.on('exit', () => {
     try { wslKeepAlive?.kill(); } catch {}
   });
