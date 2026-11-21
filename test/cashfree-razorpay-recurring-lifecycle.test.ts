@@ -821,7 +821,8 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
       assert.equal(sub.status, 'active', 'Partial refund must not cancel or revoke active subscription status');
       const meta = JSON.parse(sub.metadata);
       assert.equal(meta.partialRefund, true);
-      assert.equal(meta.refundAmount, 10000);
+      assert.equal(meta.refundAmount, 100);
+      assert.equal(meta.refundAmountMinorUnits, 10000);
 
       const audit = tables.billing_audit_events.find(a => a.event_type === 'SUBSCRIPTION_PARTIALLY_REFUNDED');
       assert.ok(audit, 'Audit trail must record SUBSCRIPTION_PARTIALLY_REFUNDED');
@@ -1279,7 +1280,7 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
       const updatedInvoices = await service.getInvoices(principalId);
       assert.equal(updatedInvoices[0].status, 'Refunded');
       assert.equal(updatedInvoices[0].creditNoteNumber, 'CN-2026-0001');
-      assert.equal(updatedInvoices[0].refundAmount, 99900);
+      assert.equal(updatedInvoices[0].refundAmount, 999);
     });
   });
 

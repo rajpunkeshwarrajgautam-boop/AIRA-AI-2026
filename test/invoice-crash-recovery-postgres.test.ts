@@ -933,5 +933,182 @@ for (const engine of ENGINES) {
         await freshDb.destroy();
       }
     });
+
+    test(`[PG${engine.version}] GATE 7: Multi-Cycle Subscription Credit Note Linking & Amount Normalization`, async () => {
+      const now = Date.now();
+      const customerId = `cust_mc_${now}`;
+      const subId = `sub_mc_${now}`;
+
+      await db('billing_customers').insert({
+        id: customerId,
+        principal_id: `principal_mc_${now}`,
+        email: `billing-mc-${now}@aira.test`,
+        name: 'AIRA Multi-Cycle Tester',
+        default_currency: 'INR',
+        country_code: 'IN',
+        tax_info: JSON.stringify({ state: '07' }),
+        created_at: now,
+        updated_at: now
+      });
+
+      await db('subscriptions').insert({
+        id: subId,
+        customer_id: customerId,
+        plan_id: 'pro',
+        price_id: 'price_pro_inr',
+        status: 'active',
+        gateway: 'cashfree',
+        gateway_subscription_id: `cf_sub_mc_${now}`,
+        currency: 'INR',
+        amount_minor_units: 39900,
+        current_period_start: now,
+        current_period_end: now + 30 * 86400000,
+        cancel_at_period_end: false,
+        metadata: JSON.stringify({ currentCycle: 3 }),
+        created_at: now,
+        updated_at: now
+      });
+
+      // Insert 3 invoices in PostgreSQL for the 3 billing cycles
+      const invNum1 = `INV-2026-MC1-${now}`;
+      const invNum2 = `INV-2026-MC2-${now}`;
+      const invNum3 = `INV-2026-MC3-${now}`;
+
+      await db('billing_invoices').insert([
+        {
+          id: `inv_mc_1_${now}`,
+          invoice_number: invNum1,
+          customer_id: customerId,
+          subscription_id: subId,
+          cycle_number: 1,
+          billing_event_id: `pay_mc_c1_${now}`,
+          plan_tier: 'pro',
+          currency: 'INR',
+          total_amount: 399.00,
+          taxable_base: 338.14,
+          gst_amount: 60.86,
+          sac_code: '998431',
+          supplier_name: 'Virexa AI Ventures Private Limited',
+          status: 'Paid',
+          gateway: 'cashfree',
+          created_at: now - 60000,
+          updated_at: now - 60000
+        },
+        {
+          id: `inv_mc_2_${now}`,
+          invoice_number: invNum2,
+          customer_id: customerId,
+          subscription_id: subId,
+          cycle_number: 2,
+          billing_event_id: `pay_mc_c2_${now}`,
+          plan_tier: 'pro',
+          currency: 'INR',
+          total_amount: 399.00,
+          taxable_base: 338.14,
+          gst_amount: 60.86,
+          sac_code: '998431',
+          supplier_name: 'Virexa AI Ventures Private Limited',
+          status: 'Paid',
+          gateway: 'cashfree',
+          created_at: now - 30000,
+          updated_at: now - 30000
+        },
+        {
+          id: `inv_mc_3_${now}`,
+          invoice_number: invNum3,
+          customer_id: customerId,
+          subscription_id: subId,
+          cycle_number: 3,
+          billing_event_id: `pay_mc_c3_${now}`,
+          plan_tier: 'pro',
+          currency: 'INR',
+          total_amount: 399.00,
+          taxable_base: 338.14,
+          gst_amount: 60.86,
+          sac_code: '998431',
+          supplier_name: 'Virexa AI Ventures Private Limited',
+          status: 'Paid',
+          gateway: 'cashfree',
+          created_at: now,
+          updated_at: now
+        }
+      ]);
+
+      const { paymentGatewayService } = await import('../apps/api/src/billing/payment-gateway-service.js');
+      paymentGatewayService.setDbClient(db);
+
+      // Refund Payment 2 with Cashfree format (decimal major units: 399.00)
+      const cfRefundId = `cfrf_mc2_${now}`;
+      const subRecord = await db('subscriptions').where({ id: subId }).first();
+
+      await paymentGatewayService.handleSubscriptionRefund({
+        gateway: 'cashfree',
+        subRecord,
+        refundPayload: {
+          data: {
+            order: { order_id: `cf_sub_mc_${now}` },
+            payment: { cf_payment_id: `pay_mc_c2_${now}` },
+            refund: {
+              cf_refund_id: cfRefundId,
+              cf_payment_id: `pay_mc_c2_${now}`,
+              refund_amount: 399.00,
+              refund_currency: 'INR'
+            }
+          }
+        },
+        now
+      });
+
+      // Verify in real PostgreSQL: credit note exists and is linked to Invoice 2, NEVER Invoice 1 or 3
+      const cnRow = await db('billing_credit_notes').where({ refund_id: cfRefundId }).first();
+      assert.ok(cnRow, 'Credit note row must exist in PostgreSQL');
+      assert.strictEqual(cnRow.original_invoice_number, invNum2, 'Credit note MUST link to Invoice 2');
+      assert.strictEqual(Number(cnRow.refund_amount), 399.00);
+      assert.strictEqual(cnRow.status, 'Refunded');
+
+      // Verify that invoice 2 is Refunded, while 1 and 3 remain Paid in PostgreSQL
+      const inv1 = await db('billing_invoices').where({ invoice_number: invNum1 }).first();
+      const inv2 = await db('billing_invoices').where({ invoice_number: invNum2 }).first();
+      const inv3 = await db('billing_invoices').where({ invoice_number: invNum3 }).first();
+
+      assert.strictEqual(inv1?.status, 'Paid', 'Invoice 1 must remain Paid');
+      assert.strictEqual(inv2?.status, 'Refunded', 'Invoice 2 must be Refunded');
+      assert.strictEqual(inv3?.status, 'Paid', 'Invoice 3 must remain Paid');
+
+      // Verify second refund with unresolved payment ID results in PENDING_RECONCILIATION
+      const unmatchRefundId = `cfrf_unmatch_${now}`;
+      const unmatchSub = await db('subscriptions').where({ id: subId }).first();
+
+      const unmatchCnResult = await paymentGatewayService.issueDurableCreditNote({
+        trx: db,
+        subRecord: unmatchSub,
+        refundEntity: {
+          cf_refund_id: unmatchRefundId,
+          cf_payment_id: `pay_unmatched_id_${now}`
+        },
+        refundAmount: 100.00,
+        refundAmountMinorUnits: 10000,
+        isPartialRefund: true,
+        gateway: 'cashfree',
+        now: now + 1000
+      });
+
+      assert.ok(unmatchCnResult);
+      assert.strictEqual(unmatchCnResult.originalInvoiceNumber, 'UNRESOLVED_ORIGINAL_INVOICE');
+      assert.strictEqual(unmatchCnResult.status, 'PENDING_RECONCILIATION');
+
+      // Verify no CREDIT_NOTE_RECONCILED event in PostgreSQL
+      const recEvents = await db('billing_audit_events').where({
+        customer_id: customerId,
+        event_type: 'CREDIT_NOTE_RECONCILED'
+      });
+      const unmatchRec = (recEvents || []).find((e: any) => {
+        try {
+          const p = typeof e.payload === 'string' ? JSON.parse(e.payload) : e.payload;
+          return p?.refundId === unmatchRefundId;
+        } catch { return false; }
+      });
+      assert.strictEqual(unmatchRec, undefined, 'Must not emit CREDIT_NOTE_RECONCILED when original invoice is unresolved');
+    });
   });
 }

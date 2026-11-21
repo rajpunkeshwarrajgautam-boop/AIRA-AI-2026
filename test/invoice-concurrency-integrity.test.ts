@@ -1,5 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+
+process.env.NODE_ENV = 'test';
+delete process.env.AIRA_ENVIRONMENT;
+
 import { PaymentGatewayService, PaymentDbClient } from '../apps/api/src/billing/payment-gateway-service.js';
 import { taxDeterminationService } from '../apps/api/src/billing/tax-determination.js';
 
@@ -101,8 +105,17 @@ function createMockDb() {
       },
       onConflict: (_cols: any) => {
         return {
-          ignore: () => builder
+          ignore: () => {
+            const retObj: any = {
+              returning: (_col?: any) => builder,
+              then: (resolve: any, reject: any) => builder.then(resolve, reject)
+            };
+            return retObj;
+          }
         };
+      },
+      then: (resolve: any, reject: any) => {
+        return builder.select().then(resolve, reject);
       }
     };
 
@@ -931,6 +944,569 @@ describe('Invoice Concurrency, Tax Matrix & Failure Handling Integrity Suite', (
 
       const events2 = tables.billing_audit_events.filter(e => e.event_type === 'CREDIT_NOTE_RECONCILED');
       assert.equal(events2.length, 1, 'Duplicate call must be deduplicated by refund ID');
+    });
+  });
+
+  describe('9. Gateway Refund Amount Normalization & Validation (Razorpay & Cashfree)', () => {
+    it('normalizes Razorpay minor units and Cashfree decimal major units to exact minor units', () => {
+      const service = new PaymentGatewayService();
+
+      // Razorpay: amount is 39900 paise for ₹399.00
+      const rzpNorm = service.parseNormalizedRefundPayload('razorpay', {
+        payload: {
+          refund: {
+            entity: {
+              id: 'rfnd_rzp_full_01',
+              payment_id: 'pay_rzp_01',
+              amount: 39900,
+              currency: 'INR'
+            }
+          }
+        }
+      });
+      assert.equal(rzpNorm.refundAmountMinor, 39900);
+      assert.equal(rzpNorm.refundAmountMajor, 399.00);
+      assert.equal(rzpNorm.currency, 'INR');
+      assert.equal(rzpNorm.refundId, 'rfnd_rzp_full_01');
+      assert.equal(rzpNorm.paymentId, 'pay_rzp_01');
+
+      // Cashfree: refund_amount is 399.00 for ₹399.00
+      const cfNorm = service.parseNormalizedRefundPayload('cashfree', {
+        data: {
+          refund: {
+            cf_refund_id: 'cfrfnd_full_01',
+            cf_payment_id: 'cfpay_01',
+            refund_amount: 399.00,
+            refund_currency: 'INR'
+          }
+        }
+      });
+      assert.equal(cfNorm.refundAmountMinor, 39900);
+      assert.equal(cfNorm.refundAmountMajor, 399.00);
+      assert.equal(cfNorm.currency, 'INR');
+      assert.equal(cfNorm.refundId, 'cfrfnd_full_01');
+      assert.equal(cfNorm.paymentId, 'cfpay_01');
+    });
+
+    it('normalizes partial refunds from Razorpay and Cashfree without floating point drift', () => {
+      const service = new PaymentGatewayService();
+
+      // Razorpay partial: ₹100.00 = 10000 paise
+      const rzpPartial = service.parseNormalizedRefundPayload('razorpay', {
+        payload: {
+          refund: {
+            entity: {
+              id: 'rfnd_rzp_part_01',
+              amount: 10000,
+              currency: 'INR'
+            }
+          }
+        }
+      });
+      assert.equal(rzpPartial.refundAmountMinor, 10000);
+      assert.equal(rzpPartial.refundAmountMajor, 100.00);
+
+      // Cashfree partial: ₹100.00 = '100.00'
+      const cfPartial = service.parseNormalizedRefundPayload('cashfree', {
+        data: {
+          refund: {
+            cf_refund_id: 'cfrfnd_part_01',
+            refund_amount: '100.00',
+            refund_currency: 'INR'
+          }
+        }
+      });
+      assert.equal(cfPartial.refundAmountMinor, 10000);
+      assert.equal(cfPartial.refundAmountMajor, 100.00);
+    });
+
+    it('normalizes USD transactions correctly', () => {
+      const service = new PaymentGatewayService();
+
+      // $20.00 = 2000 cents
+      const rzpUsd = service.parseNormalizedRefundPayload('razorpay', {
+        payload: {
+          refund: {
+            entity: {
+              id: 'rfnd_rzp_usd_01',
+              amount: 2000,
+              currency: 'USD'
+            }
+          }
+        }
+      });
+      assert.equal(rzpUsd.refundAmountMinor, 2000);
+      assert.equal(rzpUsd.refundAmountMajor, 20.00);
+      assert.equal(rzpUsd.currency, 'USD');
+
+      const cfUsd = service.parseNormalizedRefundPayload('cashfree', {
+        data: {
+          refund: {
+            cf_refund_id: 'cfrfnd_usd_01',
+            refund_amount: 20.00,
+            refund_currency: 'USD'
+          }
+        }
+      });
+      assert.equal(cfUsd.refundAmountMinor, 2000);
+      assert.equal(cfUsd.refundAmountMajor, 20.00);
+      assert.equal(cfUsd.currency, 'USD');
+    });
+
+    it('rejects invalid or nonpositive refund amounts', () => {
+      const service = new PaymentGatewayService();
+
+      assert.throws(
+        () => service.parseNormalizedRefundPayload('razorpay', {
+          payload: { refund: { entity: { amount: 0 } } }
+        }),
+        /INVALID_REFUND_AMOUNT/
+      );
+
+      assert.throws(
+        () => service.parseNormalizedRefundPayload('cashfree', {
+          data: { refund: { refund_amount: -50 } }
+        }),
+        /INVALID_REFUND_AMOUNT/
+      );
+
+      assert.throws(
+        () => service.parseNormalizedRefundPayload('razorpay', {
+          payload: { refund: { entity: { amount: 'not_a_number' } } }
+        }),
+        /INVALID_REFUND_AMOUNT/
+      );
+    });
+
+    it('rejects refund when refund currency does not match subscription currency', async () => {
+      const { dbClient } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+
+      const subRecord = {
+        id: 'sub_curr_test',
+        customer_id: 'cust_curr',
+        currency: 'INR',
+        amount_minor_units: 39900,
+        status: 'active',
+        metadata: '{}'
+      };
+
+      await assert.rejects(
+        () => service.handleSubscriptionRefund({
+          gateway: 'razorpay',
+          subRecord,
+          refundPayload: {
+            payload: {
+              refund: {
+                entity: {
+                  id: 'rfnd_usd_on_inr',
+                  amount: 2000,
+                  currency: 'USD'
+                }
+              }
+            }
+          }
+        }),
+        /REFUND_CURRENCY_MISMATCH/
+      );
+    });
+
+    it('tracks cumulative partial refunds and enforces cumulative amount limit', async () => {
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+
+      const subRecord = {
+        id: 'sub_cumul_01',
+        customer_id: 'cust_cumul',
+        currency: 'INR',
+        amount_minor_units: 39900, // ₹399.00 total settled
+        status: 'active',
+        metadata: '{}'
+      };
+      tables.subscriptions.push(subRecord);
+
+      // Partial refund 1: ₹100.00 (10000 minor units)
+      await service.handleSubscriptionRefund({
+        gateway: 'cashfree',
+        subRecord,
+        refundPayload: {
+          data: {
+            refund: {
+              cf_refund_id: 'cfrfnd_p1',
+              refund_amount: 100.00,
+              refund_currency: 'INR'
+            }
+          }
+        }
+      });
+
+      let updatedSub = tables.subscriptions.find(s => s.id === 'sub_cumul_01');
+      let meta = JSON.parse(updatedSub.metadata);
+      assert.equal(meta.cumulativeRefundedMinorUnits, 10000);
+      assert.equal(meta.partialRefund, true);
+      assert.equal(updatedSub.status, 'active');
+
+      // Partial refund 2: ₹100.00 (10000 minor units)
+      subRecord.metadata = updatedSub.metadata;
+      await service.handleSubscriptionRefund({
+        gateway: 'cashfree',
+        subRecord,
+        refundPayload: {
+          data: {
+            refund: {
+              cf_refund_id: 'cfrfnd_p2',
+              refund_amount: 100.00,
+              refund_currency: 'INR'
+            }
+          }
+        }
+      });
+
+      updatedSub = tables.subscriptions.find(s => s.id === 'sub_cumul_01');
+      meta = JSON.parse(updatedSub.metadata);
+      assert.equal(meta.cumulativeRefundedMinorUnits, 20000);
+      assert.equal(meta.partialRefund, true);
+
+      // Partial refund 3: ₹250.00 (25000 minor units) -> 20000 + 25000 = 45000 > 39900!
+      subRecord.metadata = updatedSub.metadata;
+      await assert.rejects(
+        () => service.handleSubscriptionRefund({
+          gateway: 'cashfree',
+          subRecord,
+          refundPayload: {
+            data: {
+              refund: {
+                cf_refund_id: 'cfrfnd_p3_excessive',
+                refund_amount: 250.00,
+                refund_currency: 'INR'
+              }
+            }
+          }
+        }),
+        /REFUND_EXCEEDS_SETTLED_AMOUNT/
+      );
+
+      // Verify no changes to cumulative amount after rejected refund
+      updatedSub = tables.subscriptions.find(s => s.id === 'sub_cumul_01');
+      meta = JSON.parse(updatedSub.metadata);
+      assert.equal(meta.cumulativeRefundedMinorUnits, 20000);
+    });
+
+    it('handles duplicate refund webhook idempotently without duplicating credit notes or cumulative amounts', async () => {
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+
+      const subRecord = {
+        id: 'sub_idemp_01',
+        customer_id: 'cust_idemp',
+        currency: 'INR',
+        amount_minor_units: 39900,
+        status: 'active',
+        metadata: '{}'
+      };
+      tables.subscriptions.push(subRecord);
+
+      const refundPayload = {
+        payload: {
+          refund: {
+            entity: {
+              id: 'rfnd_idemp_01',
+              amount: 15000,
+              currency: 'INR'
+            }
+          }
+        }
+      };
+
+      // First webhook delivery
+      await service.handleSubscriptionRefund({
+        gateway: 'razorpay',
+        subRecord,
+        refundPayload
+      });
+
+      let updatedSub = tables.subscriptions.find(s => s.id === 'sub_idemp_01');
+      let meta = JSON.parse(updatedSub.metadata);
+      assert.equal(meta.cumulativeRefundedMinorUnits, 15000);
+      assert.equal(meta.processedRefundIds.length, 1);
+      const creditNotesCount1 = tables.billing_credit_notes.length;
+      assert.equal(creditNotesCount1, 1);
+
+      // Second identical webhook delivery (replay/retry)
+      subRecord.metadata = updatedSub.metadata;
+      await service.handleSubscriptionRefund({
+        gateway: 'razorpay',
+        subRecord,
+        refundPayload
+      });
+
+      updatedSub = tables.subscriptions.find(s => s.id === 'sub_idemp_01');
+      meta = JSON.parse(updatedSub.metadata);
+      assert.equal(meta.cumulativeRefundedMinorUnits, 15000, 'Cumulative amount must not increase on duplicate webhook');
+      assert.equal(meta.processedRefundIds.length, 1, 'processedRefundIds must not duplicate ID');
+      const creditNotesCount2 = tables.billing_credit_notes.length;
+      assert.equal(creditNotesCount2, 1, 'No duplicate credit note row created');
+    });
+  });
+
+  describe('10. Multi-Cycle Subscription Authoritative Invoice Linking & Unresolved Failsafe', () => {
+    it('correctly links refund of payment 2 to invoice 2 in a 3-cycle subscription, never invoice 1 or 3', async () => {
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+
+      const subRecord = {
+        id: 'sub_multi_cycles_3',
+        customer_id: 'cust_subscriber_3',
+        currency: 'INR',
+        amount_minor_units: 39900,
+        current_cycle: 3,
+        status: 'active'
+      };
+
+      // Seed 3 invoices for the 3 billing cycles
+      tables.billing_invoices.push(
+        {
+          id: 'inv_row_1',
+          invoice_number: 'INV-2026-0001',
+          customer_id: 'cust_subscriber_3',
+          subscription_id: 'sub_multi_cycles_3',
+          cycle_number: 1,
+          billing_event_id: 'pay_cycle_1_id',
+          currency: 'INR',
+          total_amount: 399,
+          status: 'Paid',
+          created_at: 1000
+        },
+        {
+          id: 'inv_row_2',
+          invoice_number: 'INV-2026-0002',
+          customer_id: 'cust_subscriber_3',
+          subscription_id: 'sub_multi_cycles_3',
+          cycle_number: 2,
+          billing_event_id: 'pay_cycle_2_id',
+          currency: 'INR',
+          total_amount: 399,
+          status: 'Paid',
+          created_at: 2000
+        },
+        {
+          id: 'inv_row_3',
+          invoice_number: 'INV-2026-0003',
+          customer_id: 'cust_subscriber_3',
+          subscription_id: 'sub_multi_cycles_3',
+          cycle_number: 3,
+          billing_event_id: 'pay_cycle_3_id',
+          currency: 'INR',
+          total_amount: 399,
+          status: 'Paid',
+          created_at: 3000
+        }
+      );
+
+      // Refund Payment 2 specifically
+      const cnResult = await service.issueDurableCreditNote({
+        trx: dbClient,
+        subRecord,
+        refundEntity: {
+          id: 'rfnd_payment_2',
+          payment_id: 'pay_cycle_2_id'
+        },
+        refundAmount: 399,
+        refundAmountMinorUnits: 39900,
+        isPartialRefund: false,
+        gateway: 'razorpay',
+        now: 4000
+      });
+
+      assert.ok(cnResult, 'Credit note issued');
+      assert.equal(cnResult.originalInvoiceNumber, 'INV-2026-0002', 'Must link to Invoice 2, NEVER Invoice 1 or 3');
+      assert.equal(cnResult.status, 'Refunded');
+
+      // Verify that invoice 2 was updated to Refunded while invoice 1 and 3 remained Paid
+      const inv1 = tables.billing_invoices.find(i => i.invoice_number === 'INV-2026-0001');
+      const inv2 = tables.billing_invoices.find(i => i.invoice_number === 'INV-2026-0002');
+      const inv3 = tables.billing_invoices.find(i => i.invoice_number === 'INV-2026-0003');
+
+      assert.equal(inv1.status, 'Paid', 'Cycle 1 invoice must remain Paid');
+      assert.equal(inv2.status, 'Refunded', 'Cycle 2 invoice must transition to Refunded');
+      assert.equal(inv3.status, 'Paid', 'Cycle 3 invoice must remain Paid');
+    });
+
+    it('marks credit note PENDING_RECONCILIATION and does not emit CREDIT_NOTE_RECONCILED when payment ID cannot be matched among multiple invoices', async () => {
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+
+      const subRecord = {
+        id: 'sub_ambiguous_invoices',
+        customer_id: 'cust_ambig',
+        currency: 'INR',
+        amount_minor_units: 39900,
+        current_cycle: 2,
+        status: 'active'
+      };
+
+      // Seed 2 invoices
+      tables.billing_invoices.push(
+        {
+          id: 'inv_row_a1',
+          invoice_number: 'INV-2026-0010',
+          customer_id: 'cust_ambig',
+          subscription_id: 'sub_ambiguous_invoices',
+          cycle_number: 1,
+          billing_event_id: 'pay_real_1',
+          currency: 'INR',
+          total_amount: 399,
+          status: 'Paid',
+          created_at: 1000
+        },
+        {
+          id: 'inv_row_a2',
+          invoice_number: 'INV-2026-0011',
+          customer_id: 'cust_ambig',
+          subscription_id: 'sub_ambiguous_invoices',
+          cycle_number: 2,
+          billing_event_id: 'pay_real_2',
+          currency: 'INR',
+          total_amount: 399,
+          status: 'Paid',
+          created_at: 2000
+        }
+      );
+
+      // Refund with completely unknown payment ID
+      const cnResult = await service.issueDurableCreditNote({
+        trx: dbClient,
+        subRecord,
+        refundEntity: {
+          id: 'rfnd_unmatchable',
+          payment_id: 'pay_unknown_or_missing'
+        },
+        refundAmount: 399,
+        refundAmountMinorUnits: 39900,
+        isPartialRefund: false,
+        gateway: 'cashfree',
+        now: 5000
+      });
+
+      assert.ok(cnResult);
+      assert.equal(cnResult.originalInvoiceNumber, 'UNRESOLVED_ORIGINAL_INVOICE');
+      assert.equal(cnResult.status, 'PENDING_RECONCILIATION');
+
+      // Verify no CREDIT_NOTE_RECONCILED was emitted
+      const reconciledEvents = tables.billing_audit_events.filter(e => e.event_type === 'CREDIT_NOTE_RECONCILED');
+      assert.equal(reconciledEvents.length, 0, 'Must NOT emit CREDIT_NOTE_RECONCILED when original invoice is unresolved');
+    });
+
+    it('enforces tenant isolation and prevents cross-customer invoice linking', async () => {
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+
+      // Invoice exists for Customer A
+      tables.billing_invoices.push({
+        id: 'inv_cust_a',
+        invoice_number: 'INV-2026-0099',
+        customer_id: 'cust_A',
+        subscription_id: 'sub_shared_id',
+        cycle_number: 1,
+        billing_event_id: 'pay_common_event',
+        currency: 'INR',
+        total_amount: 399,
+        status: 'Paid',
+        created_at: 1000
+      });
+
+      // Customer B attempts refund on a sub with same sub ID
+      const subRecordB = {
+        id: 'sub_shared_id',
+        customer_id: 'cust_B',
+        currency: 'INR'
+      };
+
+      const resolved = await service.resolveAuthoritativeOriginalInvoice(dbClient, subRecordB, {
+        paymentId: 'pay_common_event'
+      });
+
+      assert.equal(resolved, undefined, 'Must reject cross-tenant invoice resolution');
+    });
+  });
+
+  describe('11. Mandatory Relational Tables Fail-Closed Production Guard', () => {
+    it('throws RELATIONAL_INVOICES_TABLE_REQUIRED outside test environments when billing_invoices is missing', async () => {
+      const prevNodeEnv = process.env.NODE_ENV;
+      const prevAiraEnv = process.env.AIRA_ENVIRONMENT;
+
+      try {
+        process.env.NODE_ENV = 'production';
+        process.env.AIRA_ENVIRONMENT = 'production';
+
+        const { dbClient, tables } = createMockDb();
+        delete tables.billing_invoices; // Remove table
+        dbClient.schema = {
+          hasTable: async (name: string) => name !== 'billing_invoices'
+        };
+
+        const service = new PaymentGatewayService();
+        service.setDbClient(dbClient);
+
+        await assert.rejects(
+          () => service.issueDurableInvoice({
+            trx: dbClient,
+            customerId: 'cust_prod_01',
+            principalId: 'p_prod_01',
+            purchaseRecord: { id: 'sub_prod_01', amount_minor_units: 39900, currency: 'INR' },
+            planTier: 'plus',
+            gateway: 'razorpay',
+            now: Date.now()
+          }),
+          /RELATIONAL_INVOICES_TABLE_REQUIRED/
+        );
+      } finally {
+        process.env.NODE_ENV = prevNodeEnv || 'test';
+        if (prevAiraEnv) process.env.AIRA_ENVIRONMENT = prevAiraEnv;
+        else delete process.env.AIRA_ENVIRONMENT;
+      }
+    });
+
+    it('throws RELATIONAL_CREDIT_NOTES_TABLE_REQUIRED outside test environments when billing_credit_notes is missing', async () => {
+      const prevNodeEnv = process.env.NODE_ENV;
+      const prevAiraEnv = process.env.AIRA_ENVIRONMENT;
+
+      try {
+        process.env.NODE_ENV = 'production';
+        process.env.AIRA_ENVIRONMENT = 'production';
+
+        const { dbClient, tables } = createMockDb();
+        delete tables.billing_credit_notes; // Remove table
+        dbClient.schema = {
+          hasTable: async (name: string) => name !== 'billing_credit_notes'
+        };
+
+        const service = new PaymentGatewayService();
+        service.setDbClient(dbClient);
+
+        await assert.rejects(
+          () => service.issueDurableCreditNote({
+            trx: dbClient,
+            subRecord: { id: 'sub_prod_02', customer_id: 'cust_prod_02', currency: 'INR', amount_minor_units: 39900 },
+            refundEntity: { id: 'ref_prod_02' },
+            refundAmount: 399,
+            isPartialRefund: false,
+            gateway: 'razorpay',
+            now: Date.now()
+          }),
+          /RELATIONAL_CREDIT_NOTES_TABLE_REQUIRED/
+        );
+      } finally {
+        process.env.NODE_ENV = prevNodeEnv || 'test';
+        if (prevAiraEnv) process.env.AIRA_ENVIRONMENT = prevAiraEnv;
+        else delete process.env.AIRA_ENVIRONMENT;
+      }
     });
   });
 });
