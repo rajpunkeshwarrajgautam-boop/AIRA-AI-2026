@@ -1,22 +1,16 @@
 /**
- * AIRA AI 2026 — Staging Sandbox Rehearsal Security Regression Test Suite
+ * AIRA AI 2026 — Staging Sandbox Rehearsal Security Regression Test Suite (Remediated Revision 2.0)
  *
- * Verifies all 12 security invariants and fail-closed barriers of the staging-only
- * sandbox rehearsal mechanism (AIRA_STAGING_SANDBOX_REHEARSAL_ENABLED).
- *
- * Certified Invariants:
+ * Verifies all security invariants, fail-closed boundaries, and P0/P1 remediations:
  * 1. Disabled by default
- * 2. Strict rejection in production
- * 3. Strict rejection on unauthorized Git branches
- * 4. Strict rejection for mismatched Vercel project IDs
- * 5. Strict rejection for production or untrusted Neon databases
- * 6. Critical panic rejection for live gateway credentials (rzp_live_*)
- * 7. Rejection of real customer accounts / restriction to synthetic accounts
- * 8. Ordinary checkout remains disabled when rehearsal is inactive
- * 9. Cryptographic webhook verification remains mandatory
- * 10. Sandbox financial record tagging and separation
- * 11. Fail-closed behavior on missing configuration
- * 12. Statutory invoice sequence gap auditing
+ * 2. Production fence & commercial billing mutual exclusion
+ * 3. Infrastructure & Git branch fencing (Vercel preview, project ID, staging branch)
+ * 4. Database identity & Neon guard (strict fail-closed on missing DB, prod DB, PR #92 DB)
+ * 5. Test gateway credential hardening (Razorpay test key, Cashfree TEST App ID, mock alias rejection)
+ * 6. Authoritative synthetic principal enrollment (rejection of weak IDs, prefixes, client flags)
+ * 7. End-to-end rehearsal checkout flow & metadata tagging
+ * 8. Webhook integrity & forgery prevention (verification against persisted DB records)
+ * 9. Statutory invoice sequence gap audit (gap detection, verified gapless, query failure, unsupported storage)
  */
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
@@ -27,8 +21,13 @@ import {
   validateTestGatewayCredentials,
   validateStagingDatabaseIdentity,
   assertStagingSandboxRehearsalAllowed,
+  enrollSyntheticTestPrincipalForTesting,
+  resetEnrolledSyntheticTestPrincipalsForTesting,
+  DEFAULT_ENROLLED_SYNTHETIC_TEST_PRINCIPALS,
   AUTHORIZED_VERCEL_PROJECT_ID,
-  AUTHORIZED_STAGING_GIT_BRANCH
+  AUTHORIZED_STAGING_GIT_BRANCH,
+  AUTHORIZED_STAGING_NEON_PROJECT_ID,
+  AUTHORIZED_STAGING_NEON_ENDPOINT
 } from '../apps/api/src/billing/staging-sandbox-rehearsal-guard.js';
 import { paymentGatewayService } from '../apps/api/src/billing/payment-gateway-service.js';
 import {
@@ -41,25 +40,33 @@ import {
 describe('Staging Sandbox Rehearsal Security & Isolation Matrix', () => {
   const origEnv = { ...process.env };
 
+  const validStagingDbUrl = `postgresql://aira_staging_user:secret@${AUTHORIZED_STAGING_NEON_ENDPOINT}.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require`;
+
   beforeEach(() => {
     process.env = { ...origEnv };
     delete process.env.AIRA_STAGING_SANDBOX_REHEARSAL_ENABLED;
     delete process.env.AIRA_COMMERCIAL_BILLING_ENABLED;
+    delete process.env.VERCEL;
     delete process.env.VERCEL_ENV;
     delete process.env.VERCEL_PROJECT_ID;
     delete process.env.VERCEL_GIT_COMMIT_REF;
     delete process.env.AIRA_ENVIRONMENT;
+    delete process.env.AIRA_TEST_HARNESS_REHEARSAL;
+    delete process.env.AIRA_STAGING_REHEARSAL_ENROLLED_PRINCIPALS;
     delete process.env.RAZORPAY_KEY_ID;
     delete process.env.CASHFREE_APP_ID;
     delete process.env.CASHFREE_ENV;
+    delete process.env.DATABASE_URL;
+    resetEnrolledSyntheticTestPrincipalsForTesting();
   });
 
   afterEach(() => {
     process.env = { ...origEnv };
+    resetEnrolledSyntheticTestPrincipalsForTesting();
   });
 
   // =========================================================================
-  // 1. DEFAULT BEHAVIOR: DISABLED
+  // 1. DISABLED BY DEFAULT
   // =========================================================================
   describe('1. Disabled by Default', () => {
     it('is disabled when AIRA_STAGING_SANDBOX_REHEARSAL_ENABLED is unset', () => {
@@ -81,7 +88,7 @@ describe('Staging Sandbox Rehearsal Security & Isolation Matrix', () => {
   });
 
   // =========================================================================
-  // 2. PRODUCTION ENFORCEMENT & IMMUNITY
+  // 2. PRODUCTION ENFORCEMENT & COMMERCIAL BILLING MUTUAL EXCLUSION
   // =========================================================================
   describe('2. Production Fence & Anti-Crossover', () => {
     it('strictly rejects rehearsal when VERCEL_ENV is production', () => {
@@ -96,7 +103,7 @@ describe('Staging Sandbox Rehearsal Security & Isolation Matrix', () => {
       );
     });
 
-    it('rejects rehearsal if AIRA_COMMERCIAL_BILLING_ENABLED is true (no mixing)', () => {
+    it('rejects rehearsal if AIRA_COMMERCIAL_BILLING_ENABLED is true (strict mutual exclusion)', () => {
       process.env.AIRA_STAGING_SANDBOX_REHEARSAL_ENABLED = 'true';
       process.env.AIRA_COMMERCIAL_BILLING_ENABLED = 'true';
       process.env.VERCEL_ENV = 'preview';
@@ -110,30 +117,32 @@ describe('Staging Sandbox Rehearsal Security & Isolation Matrix', () => {
   });
 
   // =========================================================================
-  // 3. GIT BRANCH & VERCEL PROJECT INTEGRITY
+  // 3. INFRASTRUCTURE & GIT BRANCH FENCING
   // =========================================================================
   describe('3. Infrastructure & Git Branch Fencing', () => {
     it('strictly rejects rehearsal on wrong branch (e.g. main or prod-release)', () => {
       process.env.AIRA_STAGING_SANDBOX_REHEARSAL_ENABLED = 'true';
       process.env.VERCEL_ENV = 'preview';
+      process.env.VERCEL_PROJECT_ID = AUTHORIZED_VERCEL_PROJECT_ID;
       process.env.VERCEL_GIT_COMMIT_REF = 'main';
 
       assert.equal(isStagingSandboxRehearsalActive(), false);
       assert.throws(
-        () => assertStagingSandboxRehearsalAllowed({ gateway: 'razorpay' }),
-        /SECURITY_VIOLATION: Staging rehearsal is restricted to branch 'staging'/
+        () => assertStagingSandboxRehearsalAllowed({ gateway: 'razorpay', databaseUrl: validStagingDbUrl }),
+        /SECURITY_VIOLATION: Staging rehearsal is strictly restricted to branch 'staging'/
       );
     });
 
     it('strictly rejects rehearsal on arbitrary PR branch', () => {
       process.env.AIRA_STAGING_SANDBOX_REHEARSAL_ENABLED = 'true';
       process.env.VERCEL_ENV = 'preview';
+      process.env.VERCEL_PROJECT_ID = AUTHORIZED_VERCEL_PROJECT_ID;
       process.env.VERCEL_GIT_COMMIT_REF = 'feat/unauthorized-branch';
 
       assert.equal(isStagingSandboxRehearsalActive(), false);
       assert.throws(
-        () => assertStagingSandboxRehearsalAllowed({ gateway: 'razorpay' }),
-        /SECURITY_VIOLATION: Staging rehearsal is restricted to branch 'staging'/
+        () => assertStagingSandboxRehearsalAllowed({ gateway: 'razorpay', databaseUrl: validStagingDbUrl }),
+        /SECURITY_VIOLATION: Staging rehearsal is strictly restricted to branch 'staging'/
       );
     });
 
@@ -145,20 +154,39 @@ describe('Staging Sandbox Rehearsal Security & Isolation Matrix', () => {
 
       assert.equal(isStagingSandboxRehearsalActive(), false);
       assert.throws(
-        () => assertStagingSandboxRehearsalAllowed({ gateway: 'razorpay' }),
+        () => assertStagingSandboxRehearsalAllowed({ gateway: 'razorpay', databaseUrl: validStagingDbUrl }),
+        /SECURITY_VIOLATION: Vercel project ID mismatch/
+      );
+    });
+
+    it('fails closed when deployed on Vercel with missing VERCEL_PROJECT_ID or VERCEL_GIT_COMMIT_REF', () => {
+      process.env.AIRA_STAGING_SANDBOX_REHEARSAL_ENABLED = 'true';
+      process.env.VERCEL = '1';
+      process.env.VERCEL_ENV = 'preview';
+      // Missing project ID
+      assert.equal(isStagingSandboxRehearsalActive(), false);
+      assert.throws(
+        () => assertStagingSandboxRehearsalAllowed({ gateway: 'razorpay', databaseUrl: validStagingDbUrl }),
         /SECURITY_VIOLATION: Vercel project ID mismatch/
       );
     });
   });
 
   // =========================================================================
-  // 4. DATABASE INTEGRITY & CROSSOVER PREVENTIONS
+  // 4. DATABASE IDENTITY & NEON GUARD
   // =========================================================================
   describe('4. Database Classification & Neon Guard', () => {
+    it('fails closed when database identity is missing (empty or unset DATABASE_URL)', () => {
+      assert.throws(
+        () => validateStagingDatabaseIdentity({ databaseUrl: '' }),
+        /REHEARSAL_SECURITY_VIOLATION: Missing database identity/
+      );
+    });
+
     it('panics and aborts if connected database is Production Neon (old-sky-50952395)', () => {
       const prodDbUrl = `postgresql://user:pass@${PRODUCTION_NEON_ENDPOINT_ID}.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require`;
       assert.throws(
-        () => validateStagingDatabaseIdentity(prodDbUrl),
+        () => validateStagingDatabaseIdentity({ databaseUrl: prodDbUrl }),
         /CRITICAL_SECURITY_VIOLATION: Connected database is PRODUCTION/
       );
     });
@@ -166,24 +194,33 @@ describe('Staging Sandbox Rehearsal Security & Isolation Matrix', () => {
     it('panics and aborts if connected database is Commercial PR #92 branch', () => {
       const pr92Url = `postgresql://user:pass@ep-ancient-sound-b3drtnp5.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require`;
       assert.throws(
-        () => validateStagingDatabaseIdentity(pr92Url),
+        () => validateStagingDatabaseIdentity({ databaseUrl: pr92Url }),
         /CRITICAL_SECURITY_VIOLATION: Connected database is Commercial PR #92 branch/
       );
     });
 
-    it('permits authorized Staging Neon database (mute-frost-50372225)', () => {
-      const stagingDbUrl = `postgresql://user:pass@${STAGING_NEON_ENDPOINT_ID}.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require`;
-      assert.doesNotThrow(() => validateStagingDatabaseIdentity(stagingDbUrl));
+    it('permits authorized Staging Neon database (mute-frost-50372225 / ep-twilight-cherry-b3iz2oqv)', () => {
+      assert.doesNotThrow(() => validateStagingDatabaseIdentity({ databaseUrl: validStagingDbUrl }));
     });
 
-    it('permits local test database during automated test execution', () => {
+    it('strictly forbids local test database URLs in deployed staging rehearsal', () => {
+      process.env.VERCEL = '1';
+      process.env.VERCEL_ENV = 'preview';
       const localDbUrl = 'postgresql://aira:aira@127.0.0.1:5432/aira_db';
-      assert.doesNotThrow(() => validateStagingDatabaseIdentity(localDbUrl));
+      assert.throws(
+        () => validateStagingDatabaseIdentity({ databaseUrl: localDbUrl }),
+        /SECURITY_VIOLATION: Local or test database URLs are strictly forbidden in deployed staging rehearsal/
+      );
+    });
+
+    it('permits local test database exclusively in explicit local test fixtures', () => {
+      const localDbUrl = 'postgresql://aira:aira@127.0.0.1:5432/aira_db';
+      assert.doesNotThrow(() => validateStagingDatabaseIdentity({ databaseUrl: localDbUrl, isLocalTestFixture: true }));
     });
   });
 
   // =========================================================================
-  // 5. TEST GATEWAY CREDENTIAL INTEGRITY
+  // 5. TEST GATEWAY CREDENTIAL HARDENING
   // =========================================================================
   describe('5. Test Gateway Credential Hardening', () => {
     it('throws critical violation if live Razorpay key (rzp_live_*) is detected', () => {
@@ -204,7 +241,15 @@ describe('Staging Sandbox Rehearsal Security & Isolation Matrix', () => {
 
     it('permits valid test-mode Razorpay key (rzp_test_*)', () => {
       process.env.RAZORPAY_KEY_ID = 'rzp_test_validKey123';
-      assert.doesNotThrow(() => validateTestGatewayCredentials('razorpay'));
+      assert.doesNotThrow(() => validateTestGatewayCredentials('razorpay', { isLocalTestFixture: true }));
+    });
+
+    it('rejects mock credential aliases (rzp_test_mock) outside local test fixtures', () => {
+      process.env.RAZORPAY_KEY_ID = 'rzp_test_mock';
+      assert.throws(
+        () => validateTestGatewayCredentials('razorpay', { isLocalTestFixture: false }),
+        /SECURITY_VIOLATION: Mock Razorpay credentials \(rzp_test_mock\) are strictly forbidden/
+      );
     });
 
     it('throws critical violation if production Cashfree environment or live App ID is detected', () => {
@@ -212,65 +257,86 @@ describe('Staging Sandbox Rehearsal Security & Isolation Matrix', () => {
       process.env.CASHFREE_ENV = 'PROD';
       assert.throws(
         () => validateTestGatewayCredentials('cashfree'),
-        /CRITICAL_SECURITY_VIOLATION: Production Cashfree credentials detected/
+        /CRITICAL_SECURITY_VIOLATION: Production Cashfree credentials or production environment detected/
       );
     });
 
-    it('permits valid test-mode Cashfree App ID (TEST*)', () => {
-      process.env.CASHFREE_APP_ID = 'TEST_1234567890';
+    it('permits valid test-mode Cashfree App ID (TEST*) with CASHFREE_ENV=TEST', () => {
+      process.env.CASHFREE_APP_ID = 'TEST1234567890';
       process.env.CASHFREE_ENV = 'TEST';
-      assert.doesNotThrow(() => validateTestGatewayCredentials('cashfree'));
+      assert.doesNotThrow(() => validateTestGatewayCredentials('cashfree', { isLocalTestFixture: true }));
+    });
+
+    it('rejects Cashfree App ID if CASHFREE_ENV is not TEST', () => {
+      process.env.CASHFREE_APP_ID = 'TEST1234567890';
+      process.env.CASHFREE_ENV = 'OTHER';
+      assert.throws(
+        () => validateTestGatewayCredentials('cashfree'),
+        /SECURITY_VIOLATION: CASHFREE_ENV must be explicitly 'TEST'/
+      );
     });
   });
 
   // =========================================================================
-  // 6. SYNTHETIC PRINCIPAL RESTRICTION
+  // 6. AUTHORITATIVE SYNTHETIC PRINCIPAL ENROLLMENT
   // =========================================================================
-  describe('6. Synthetic Principal Authorization Gate', () => {
-    it('rejects ordinary real customer accounts without synthetic prefix or internal domain', () => {
-      const realUser = { userId: 'usr_real_alice', email: 'alice@corporate.com' };
-      assert.equal(isAuthorizedSyntheticTestPrincipal(realUser), false);
+  describe('6. Authoritative Synthetic Principal Enrollment', () => {
+    it('strictly rejects weak identifiers and un-enrolled accounts', () => {
+      assert.equal(isAuthorizedSyntheticTestPrincipal({ userId: 'admin' }), false);
+      assert.equal(isAuthorizedSyntheticTestPrincipal({ userId: 'account_1' }), false);
+      assert.equal(isAuthorizedSyntheticTestPrincipal({ userId: 'usr_test_qa_lead' }), false);
+      assert.equal(isAuthorizedSyntheticTestPrincipal({ userId: 'test_user@example.com' }), false);
+      assert.equal(isAuthorizedSyntheticTestPrincipal({ userId: 'any_arbitrary_user', isSynthetic: true }), false);
+      assert.equal(isAuthorizedSyntheticTestPrincipal({ userId: 'usr_real_alice', email: 'alice@corporate.com' }), false);
+    });
 
+    it('permits pre-enrolled authorized synthetic test accounts', () => {
+      for (const principal of DEFAULT_ENROLLED_SYNTHETIC_TEST_PRINCIPALS) {
+        assert.equal(isAuthorizedSyntheticTestPrincipal({ userId: principal }), true);
+      }
+    });
+
+    it('permits dynamically enrolled synthetic test accounts via programmatic test helper', () => {
+      const tempPrincipal = 'temp_synth_operator_2026';
+      assert.equal(isAuthorizedSyntheticTestPrincipal({ userId: tempPrincipal }), false);
+      enrollSyntheticTestPrincipalForTesting(tempPrincipal);
+      assert.equal(isAuthorizedSyntheticTestPrincipal({ userId: tempPrincipal }), true);
+    });
+
+    it('permits accounts enrolled via AIRA_STAGING_REHEARSAL_ENROLLED_PRINCIPALS environment variable', () => {
+      process.env.AIRA_STAGING_REHEARSAL_ENROLLED_PRINCIPALS = 'env_synth_user_1,env_synth_user_2';
+      assert.equal(isAuthorizedSyntheticTestPrincipal({ userId: 'env_synth_user_1' }), true);
+      assert.equal(isAuthorizedSyntheticTestPrincipal({ userId: 'env_synth_user_2' }), true);
+      assert.equal(isAuthorizedSyntheticTestPrincipal({ userId: 'env_synth_user_3' }), false);
+    });
+
+    it('assertStagingSandboxRehearsalAllowed throws REHEARSAL_UNAUTHORIZED for un-enrolled accounts', () => {
       process.env.AIRA_STAGING_SANDBOX_REHEARSAL_ENABLED = 'true';
-      process.env.VERCEL_ENV = 'preview';
-      process.env.VERCEL_GIT_COMMIT_REF = AUTHORIZED_STAGING_GIT_BRANCH;
-      process.env.VERCEL_PROJECT_ID = AUTHORIZED_VERCEL_PROJECT_ID;
+      process.env.AIRA_TEST_HARNESS_REHEARSAL = 'true';
       process.env.RAZORPAY_KEY_ID = 'rzp_test_key123';
 
       assert.throws(
-        () => assertStagingSandboxRehearsalAllowed({ gateway: 'razorpay', principal: realUser }),
-        /REHEARSAL_UNAUTHORIZED: Staging sandbox checkout is restricted exclusively to authorized synthetic test accounts/
+        () => assertStagingSandboxRehearsalAllowed({
+          gateway: 'razorpay',
+          principal: { userId: 'unauthorized_customer_123' },
+          databaseUrl: validStagingDbUrl,
+          isLocalTestFixture: true
+        }),
+        /REHEARSAL_UNAUTHORIZED/
       );
-    });
-
-    it('permits synthetic test accounts with aira.internal email', () => {
-      const syntheticUser = { userId: 'usr_real_looking_id', email: 'test_lead@aira.internal' };
-      assert.equal(isAuthorizedSyntheticTestPrincipal(syntheticUser), true);
-    });
-
-    it('permits synthetic accounts with test_ or synthetic_ prefix', () => {
-      assert.equal(isAuthorizedSyntheticTestPrincipal({ userId: 'synthetic_operator_1' }), true);
-      assert.equal(isAuthorizedSyntheticTestPrincipal({ userId: 'usr_test_qa_lead' }), true);
-      assert.equal(isAuthorizedSyntheticTestPrincipal({ userId: 'sandbox_user_99' }), true);
-    });
-
-    it('permits principals with explicit isSynthetic flag', () => {
-      assert.equal(isAuthorizedSyntheticTestPrincipal({ userId: 'any_uid', isSynthetic: true }), true);
     });
   });
 
   // =========================================================================
-  // 7. CHECKOUT & ENTITLEMENT ISOLATION
+  // 7. END-TO-END REHEARSAL CHECKOUT FLOW
   // =========================================================================
   describe('7. End-to-End Rehearsal Checkout Flow', () => {
     it('allows subscription checkout creation when all rehearsal invariants are satisfied', async () => {
       process.env.AIRA_STAGING_SANDBOX_REHEARSAL_ENABLED = 'true';
-      process.env.VERCEL_ENV = 'preview';
-      process.env.VERCEL_GIT_COMMIT_REF = AUTHORIZED_STAGING_GIT_BRANCH;
-      process.env.VERCEL_PROJECT_ID = AUTHORIZED_VERCEL_PROJECT_ID;
+      process.env.AIRA_TEST_HARNESS_REHEARSAL = 'true';
       process.env.RAZORPAY_KEY_ID = 'rzp_test_key123';
+      process.env.DATABASE_URL = validStagingDbUrl;
 
-      // Set mock db and transport for unit verification
       const subscriptions: any[] = [];
       const mockDb = ((table: string) => {
         return {
@@ -279,7 +345,7 @@ describe('Staging Sandbox Rehearsal Security & Isolation Matrix', () => {
             return [row];
           },
           where: () => ({
-            first: async () => ({ id: 'cust_synthetic_1', principal_id: 'synthetic_user_1' })
+            first: async () => ({ id: 'cust_synthetic_1', principal_id: 'usr_synth_plus_2026' })
           })
         };
       }) as any;
@@ -292,11 +358,11 @@ describe('Staging Sandbox Rehearsal Security & Isolation Matrix', () => {
 
       try {
         const result = await paymentGatewayService.createSubscriptionCheckout(
-          'synthetic_user_1',
+          'usr_synth_plus_2026',
           'plus',
           'INR',
           'razorpay',
-          { userId: 'synthetic_user_1', isSynthetic: true }
+          { userId: 'usr_synth_plus_2026', isSynthetic: true }
         );
 
         assert.equal(result.gateway, 'razorpay');
@@ -317,11 +383,10 @@ describe('Staging Sandbox Rehearsal Security & Isolation Matrix', () => {
     });
 
     it('rejects checkout creation when rehearsal is disabled and commercial billing is false', async () => {
-      // Rehearsal flag absent
       assert.rejects(
         async () => {
           await paymentGatewayService.createSubscriptionCheckout(
-            'synthetic_user_1',
+            'usr_synth_plus_2026',
             'plus',
             'INR',
             'razorpay'
@@ -333,11 +398,168 @@ describe('Staging Sandbox Rehearsal Security & Isolation Matrix', () => {
   });
 
   // =========================================================================
-  // 8. STATUTORY INVOICE SEQUENCE AUDIT (GAP DETECTION)
+  // 8. WEBHOOK INTEGRITY & FORGERY DEFENSE
   // =========================================================================
-  describe('8. Statutory Invoice Sequence Gap Audit', () => {
+  describe('8. Webhook Integrity & Rehearsal Verification', () => {
+    it('rejects fulfillment when commercial billing is false and subscription is not rehearsal or owner is not synthetic', async () => {
+      // In this scenario, attacker sends a forged webhook with notes claiming principal_id is synthetic,
+      // but the database record has is_sandbox: false or owner is real
+      process.env.AIRA_STAGING_SANDBOX_REHEARSAL_ENABLED = 'true';
+      process.env.AIRA_TEST_HARNESS_REHEARSAL = 'true';
+      process.env.RAZORPAY_KEY_ID = 'rzp_test_validKey123';
+      process.env.DATABASE_URL = validStagingDbUrl;
+
+      const mockDb = ((table: string) => {
+        return {
+          where: () => ({
+            first: async () => {
+              if (table === 'subscriptions') {
+                return {
+                  id: 'sub_real_attack',
+                  customer_id: 'cust_real',
+                  plan_tier: 'plus',
+                  currency: 'INR',
+                  amount_minor_units: 39900,
+                  is_sandbox: false, // NOT SANDBOX!
+                  metadata: JSON.stringify({ principalId: 'usr_real_victim' })
+                };
+              }
+              return null;
+            }
+          })
+        };
+      }) as any;
+
+      paymentGatewayService.setDbClient(mockDb);
+
+      try {
+        await assert.rejects(
+          async () => {
+            await (paymentGatewayService as any).handleGatewayEvent(
+              'razorpay',
+              'subscription.charged',
+              {
+                subscription: { id: 'sub_real_attack', currency: 'INR', amount: 39900 },
+                payment: { id: 'pay_test_attack_123', status: 'captured', currency: 'INR', amount: 39900 },
+                notes: { principal_id: 'usr_synth_plus_2026' } // Forged notes!
+              },
+              mockDb
+            );
+          },
+          /REHEARSAL_SECURITY_VIOLATION/
+        );
+      } finally {
+        paymentGatewayService.setDbClient(null);
+      }
+    });
+
+    it('rejects fulfillment when subscription owner is not an enrolled synthetic test account', async () => {
+      process.env.AIRA_STAGING_SANDBOX_REHEARSAL_ENABLED = 'true';
+      process.env.AIRA_TEST_HARNESS_REHEARSAL = 'true';
+      process.env.RAZORPAY_KEY_ID = 'rzp_test_validKey123';
+      process.env.DATABASE_URL = validStagingDbUrl;
+
+      const mockDb = ((table: string) => {
+        return {
+          where: () => ({
+            first: async () => {
+              if (table === 'subscriptions') {
+                return {
+                  id: 'sub_synth_but_real_owner',
+                  customer_id: 'cust_real',
+                  plan_tier: 'plus',
+                  currency: 'INR',
+                  amount_minor_units: 39900,
+                  is_sandbox: true,
+                  metadata: JSON.stringify({ principalId: 'usr_real_alice', rehearsal: true, is_sandbox: true })
+                };
+              }
+              return null;
+            }
+          })
+        };
+      }) as any;
+
+      paymentGatewayService.setDbClient(mockDb);
+
+      try {
+        await assert.rejects(
+          async () => {
+            await (paymentGatewayService as any).handleGatewayEvent(
+              'razorpay',
+              'subscription.charged',
+              {
+                subscription: { id: 'sub_synth_but_real_owner', currency: 'INR', amount: 39900 },
+                payment: { id: 'pay_test_attack_456', status: 'captured', currency: 'INR', amount: 39900 }
+              },
+              mockDb
+            );
+          },
+          /REHEARSAL_UNAUTHORIZED/
+        );
+      } finally {
+        paymentGatewayService.setDbClient(null);
+      }
+    });
+
+    it('successfully processes rehearsal webhook fulfillment when subscription is tagged as rehearsal and owner is enrolled synthetic account', async () => {
+      process.env.AIRA_STAGING_SANDBOX_REHEARSAL_ENABLED = 'true';
+      process.env.AIRA_TEST_HARNESS_REHEARSAL = 'true';
+      process.env.RAZORPAY_KEY_ID = 'rzp_test_validKey123';
+      process.env.DATABASE_URL = validStagingDbUrl;
+
+      const mockDb = ((table: string) => {
+        return {
+          where: () => ({
+            first: async () => {
+              if (table === 'subscriptions') {
+                return {
+                  id: 'sub_synth_valid',
+                  customer_id: 'cust_synth',
+                  plan_tier: 'plus',
+                  currency: 'INR',
+                  amount_minor_units: 39900,
+                  status: 'active',
+                  is_sandbox: true,
+                  metadata: JSON.stringify({
+                    principalId: 'usr_synth_plus_2026',
+                    rehearsal: true,
+                    is_sandbox: true,
+                    lastPaymentId: 'pay_test_synth_123'
+                  })
+                };
+              }
+              return null;
+            }
+          })
+        };
+      }) as any;
+
+      paymentGatewayService.setDbClient(mockDb);
+
+      try {
+        await assert.doesNotReject(async () => {
+          await (paymentGatewayService as any).handleGatewayEvent(
+            'razorpay',
+            'subscription.charged',
+            {
+              subscription: { id: 'sub_synth_valid', currency: 'INR', amount: 39900 },
+              payment: { id: 'pay_test_synth_123', status: 'captured', currency: 'INR', amount: 39900 }
+            },
+            mockDb
+          );
+        });
+      } finally {
+        paymentGatewayService.setDbClient(null);
+      }
+    });
+  });
+
+  // =========================================================================
+  // 9. STATUTORY INVOICE SEQUENCE AUDIT (GAP DETECTION)
+  // =========================================================================
+  describe('9. Statutory Invoice Sequence Gap Audit', () => {
     it('identifies uncommitted draft sequence gaps when sequences are consumed without completed invoices', async () => {
-      // Mock PostgreSQL sequence where last_value is 5, but only invoices 1, 2, and 4 exist (gap at 3 and 5)
       const mockTrx = {
         raw: async (sql: string) => {
           if (sql.includes('billing_invoice_number_seq')) {
@@ -359,13 +581,14 @@ describe('Staging Sandbox Rehearsal Security & Isolation Matrix', () => {
       };
 
       const audit = await paymentGatewayService.auditInvoiceSequenceGaps(mockTrx, 2026);
+      assert.equal(audit.status, 'AUDIT_GAP_DETECTED');
       assert.equal(audit.currentSeq, 5);
       assert.equal(audit.recordedInvoicesCount, 3);
       assert.equal(audit.isGapless, false);
       assert.deepEqual(audit.voidOrMissing, ['INV-2026-0003', 'INV-2026-0005']);
     });
 
-    it('reports gapless true when all allocated numbers match recorded invoices', async () => {
+    it('reports AUDIT_VERIFIED_GAPLESS when all allocated numbers match recorded invoices', async () => {
       const mockTrx = {
         raw: async (sql: string) => {
           if (sql.includes('billing_invoice_number_seq')) {
@@ -387,10 +610,32 @@ describe('Staging Sandbox Rehearsal Security & Isolation Matrix', () => {
       };
 
       const audit = await paymentGatewayService.auditInvoiceSequenceGaps(mockTrx, 2026);
+      assert.equal(audit.status, 'AUDIT_VERIFIED_GAPLESS');
       assert.equal(audit.currentSeq, 3);
       assert.equal(audit.recordedInvoicesCount, 3);
       assert.equal(audit.isGapless, true);
       assert.deepEqual(audit.voidOrMissing, []);
+    });
+
+    it('returns AUDIT_QUERY_FAILED with isGapless: false when query throws an error', async () => {
+      const failingTrx = {
+        raw: async () => {
+          throw new Error('Connection terminated unexpectedly');
+        }
+      };
+
+      const audit = await paymentGatewayService.auditInvoiceSequenceGaps(failingTrx, 2026);
+      assert.equal(audit.status, 'AUDIT_QUERY_FAILED');
+      assert.equal(audit.isGapless, false);
+      assert.match(audit.error || '', /Connection terminated unexpectedly/);
+    });
+
+    it('returns AUDIT_UNSUPPORTED_STORAGE with isGapless: false when trx does not support raw SQL', async () => {
+      const nonPgTrx = {}; // no raw method
+
+      const audit = await paymentGatewayService.auditInvoiceSequenceGaps(nonPgTrx, 2026);
+      assert.equal(audit.status, 'AUDIT_UNSUPPORTED_STORAGE');
+      assert.equal(audit.isGapless, false);
     });
   });
 });

@@ -10,7 +10,8 @@ import { commercialBillingService } from './commercial-billing-service.js';
 import { taxDeterminationService, TaxDeterminationResult } from './tax-determination.js';
 import {
   isStagingSandboxRehearsalActive,
-  assertStagingSandboxRehearsalAllowed
+  assertStagingSandboxRehearsalAllowed,
+  isAuthorizedSyntheticTestPrincipal
 } from './staging-sandbox-rehearsal-guard.js';
 
 export interface WebhookVerificationResult {
@@ -311,12 +312,12 @@ export function assertCommercialFulfillmentAllowed(eventType: string, gateway: s
   if (isProduction || isStaging) {
     if (process.env.AIRA_COMMERCIAL_BILLING_ENABLED !== 'true') {
       if (isStaging && isStagingSandboxRehearsalActive()) {
-        const principalId = payload?.notes?.principal_id || payload?.data?.subscription_notes?.principal_id || payload?.subscription_notes?.principal_id;
+        // Enforce rehearsal infrastructure and gateway credentials without trusting client/payload notes.
+        // Webhook authorization is strictly anchored to the persisted DB purchase record.
         assertStagingSandboxRehearsalAllowed({
-          gateway: rehearsalGateway,
-          principal: principalId ? { userId: principalId } : null
+          gateway: rehearsalGateway
         });
-        return; // Rehearsal fulfillment permitted for authenticated sandbox webhook
+        return; // Rehearsal infrastructure verified; account-level verification occurs during record resolution
       }
       const envName = isProduction ? 'production' : 'staging';
       throw new Error(`BILLING_UNAVAILABLE: Commercial billing fulfillment is currently disabled in ${envName}. Paid entitlements cannot be granted.`);
@@ -413,20 +414,30 @@ export class PaymentGatewayService {
    * Audit PostgreSQL invoice sequence allocation against recorded invoices.
    * Identifies uncommitted draft sequence gaps caused by aborted transactions,
    * satisfying statutory GST audit and cancellation ledger requirements (CGST Rule 46(b)).
+   *
+   * Differentiates:
+   * - AUDIT_VERIFIED_GAPLESS: Sequence inspected, all numbers accounted for
+   * - AUDIT_GAP_DETECTED: Sequence consumed without matching invoice record
+   * - AUDIT_QUERY_FAILED: Database error, table missing, query failure (NEVER returns isGapless: true)
+   * - AUDIT_UNSUPPORTED_STORAGE: Client does not support PostgreSQL sequence inspection
    */
   async auditInvoiceSequenceGaps(trx?: any, year: number = 2026): Promise<{
+    status: 'AUDIT_VERIFIED_GAPLESS' | 'AUDIT_GAP_DETECTED' | 'AUDIT_QUERY_FAILED' | 'AUDIT_UNSUPPORTED_STORAGE';
     currentSeq: number;
     recordedInvoicesCount: number;
     voidOrMissing: string[];
     isGapless: boolean;
+    error?: string;
   }> {
     const isPg = trx && typeof trx.raw === 'function';
     if (!isPg) {
       return {
+        status: 'AUDIT_UNSUPPORTED_STORAGE',
         currentSeq: this.memoryInvoiceCounter,
         recordedInvoicesCount: this.memoryInvoiceCounter,
         voidOrMissing: [],
-        isGapless: true
+        isGapless: false,
+        error: 'Storage client does not support PostgreSQL sequence inspection'
       };
     }
 
@@ -434,7 +445,13 @@ export class PaymentGatewayService {
       const seqRes = await trx.raw("SELECT last_value, is_called FROM billing_invoice_number_seq");
       const row = seqRes?.rows?.[0] || seqRes?.[0];
       if (!row || !row.is_called) {
-        return { currentSeq: 0, recordedInvoicesCount: 0, voidOrMissing: [], isGapless: true };
+        return {
+          status: 'AUDIT_VERIFIED_GAPLESS',
+          currentSeq: 0,
+          recordedInvoicesCount: 0,
+          voidOrMissing: [],
+          isGapless: true
+        };
       }
       const currentSeq = Number(row.last_value);
       const invoicesRes = await trx.raw("SELECT invoice_number FROM billing_invoices WHERE invoice_number LIKE ?", [`INV-${year}-%`]);
@@ -455,14 +472,23 @@ export class PaymentGatewayService {
         }
       }
 
+      const isGapless = voidOrMissing.length === 0;
       return {
+        status: isGapless ? 'AUDIT_VERIFIED_GAPLESS' : 'AUDIT_GAP_DETECTED',
         currentSeq,
         recordedInvoicesCount: presentNumbers.size,
         voidOrMissing,
-        isGapless: voidOrMissing.length === 0
+        isGapless
       };
-    } catch {
-      return { currentSeq: 0, recordedInvoicesCount: 0, voidOrMissing: [], isGapless: true };
+    } catch (err: any) {
+      return {
+        status: 'AUDIT_QUERY_FAILED',
+        currentSeq: 0,
+        recordedInvoicesCount: 0,
+        voidOrMissing: [],
+        isGapless: false,
+        error: `Audit query execution failed: ${err?.message || 'Unknown database error'}`
+      };
     }
   }
 
@@ -1019,6 +1045,21 @@ export class PaymentGatewayService {
 
       if (!principalId) {
         throw new TerminalRejectionError(`BILLING_RECONCILIATION_FAILED: Purchase record ${purchaseRecord.id} lacks verified principalId.`);
+      }
+
+      // STAGING REHEARSAL WEBHOOK SECURITY VERIFICATION:
+      // If commercial billing is disabled, fulfillment is only permitted if the persisted subscription
+      // was created in rehearsal mode AND its owner is an enrolled synthetic test account.
+      if (process.env.AIRA_COMMERCIAL_BILLING_ENABLED !== 'true') {
+        if (isStagingSandboxRehearsalActive()) {
+          const isRehearsalRecord = purchaseRecord.is_sandbox === true || meta.rehearsal === true || meta.is_sandbox === true;
+          if (!isRehearsalRecord) {
+            throw new TerminalRejectionError(`REHEARSAL_SECURITY_VIOLATION: Webhook received for non-rehearsal subscription ${purchaseRecord.id} while commercial billing is disabled.`);
+          }
+          if (!isAuthorizedSyntheticTestPrincipal({ userId: principalId })) {
+            throw new TerminalRejectionError(`REHEARSAL_UNAUTHORIZED: Staging rehearsal fulfillment rejected: subscription owner '${principalId}' is not an enrolled synthetic test account.`);
+          }
+        }
       }
 
       const plan = COMMERCIAL_PLANS[planTier] || COMMERCIAL_PLANS.plus;
