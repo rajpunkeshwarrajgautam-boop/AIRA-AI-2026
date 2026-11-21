@@ -1,44 +1,48 @@
 {
   "schema": "handoff/v2",
-  "updated_at": "2026-11-21T08:31:48.266Z",
-  "phase": "GATE-3-LOCAL-INTEGRATION-REHEARSAL",
-  "integrated_sources": {
-    "staging_commit": "6499bfb5b8e6e8a508afebd5232afc04e8519f03",
-    "staging_pr": 193,
-    "candidate_commit": "29b66870c36fa57bf9bbb63f71b9953e0d8be0f3",
-    "candidate_pr": 196
+  "updated_at": "2026-11-21T17:31:00.000Z",
+  "phase": "GATE-4-STAGING-SANDBOX-REHEARSAL-REMEDIATION-REVISION-3",
+  "staging_baseline": {
+    "commit": "11fd44f7cb4e88ea54677df43d476a5c3e0d79bb",
+    "pr": 197,
+    "status": "MERGED",
+    "vercel_deployment_id": "dpl_28YF2qiNiEWP8vDFPapE1qPnkhnY",
+    "host": "https://staging.virexaaiventures.com",
+    "migration_033": "APPLIED"
   },
-  "pr": {
+  "rehearsal_pr": {
+    "number": 198,
+    "url": "https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/198",
+    "branch": "feat/staging-sandbox-rehearsal-20261121",
+    "target": "staging",
+    "state": "OPEN",
+    "is_draft": true,
+    "commit_sha": "74ac08e07938dd5493acf24e2b7cf7a7cbfe9866",
+    "revision": "3.0"
+  },
+  "candidate_pr_production": {
     "number": 196,
     "url": "https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/196",
     "branch": "feat/cashfree-razorpay-subscriptions-20261120",
     "target": "prod-release",
+    "head_sha": "29b66870c36fa57bf9bbb63f71b9953e0d8be0f3",
     "state": "OPEN",
-    "is_draft": false
+    "status": "STRICT_HOLD"
   },
-  "certified_sha": "0ba41ee692001f6923f17ef14dd60060cb2a8b7e",
-  "previous_production_sha": "f429d90a1f4322a0d362956fb9e55a38cb3b5508",
-  "ci": {
-    "run_id": "44875214096",
-    "gates": {
-      "fast_ci": "SUCCESS",
-      "payment_durability_pg18": "SUCCESS",
-      "semantic_search_ci": "SUCCESS",
-      "disposable_pg16_cert": "SUCCESS",
-      "main_pr_certification": "SUCCESS",
-      "gitguardian": "SUCCESS",
-      "vercel_preview": "SUCCESS"
-    },
-    "all_mandatory_green": true
+  "verification": {
+    "rehearsal_security_tests": "54_PASS_0_FAIL",
+    "recurring_subscriptions_tests": "25_PASS_0_FAIL",
+    "remediations_tests": "53_PASS_0_FAIL",
+    "invoice_concurrency_tests": "35_PASS_0_FAIL",
+    "entitlements_integration_tests": "20_PASS_0_FAIL",
+    "billing_subscription_readiness_tests": "9_PASS_0_FAIL",
+    "commercial_payment_webhooks_tests": "4_PASS_0_FAIL_1_SKIP",
+    "total_automated_pass": "200_PASS_0_FAIL_1_SKIP",
+    "typecheck": "SUCCESS_0_ERRORS",
+    "production_build": "SUCCESS"
   },
-  "staging_maintenance": {
-    "pr193_sha": "ee552fc503b50b39e0248cc0a0dc606416fdd543",
-    "verified_guest_isolation": true,
-    "advisory_concurrency": true,
-    "session_pruning_guard": true
-  },
-  "release_verdict": "GATE_3_LOCAL_INTEGRATION_REHEARSED",
-  "commercial_billing": "NO_GO_UNTIL_KYC",
+  "release_verdict": "GATE_4_BLOCKED_PENDING_EXTERNAL_SANDBOX",
+  "commercial_billing": "STRICT_HOLD",
   "aira_commercial_billing_enabled": false,
-  "status": "rehearsal_complete_pending_gate3_auth"
+  "aira_staging_sandbox_rehearsal_enabled": "IMPLEMENTED_ISOLATED"
 }

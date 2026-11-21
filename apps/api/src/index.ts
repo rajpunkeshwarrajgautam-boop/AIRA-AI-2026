@@ -28,6 +28,7 @@ import {
   requireCapability,
   EntitlementServiceUnavailableError
 } from './middleware/entitlement-guard.js';
+import { isStagingSandboxRehearsalActive } from './billing/staging-sandbox-rehearsal-guard.js';
 import {
   ModelRouter,
   PlanRestrictionError,
@@ -566,10 +567,11 @@ app.post('/api/billing/webhook/cashfree', async (req: Request, res: Response) =>
 // Public commercial plan definitions and pricing catalog (accessible to guests and landing pages)
 app.get('/api/billing/plans', (_req: Request, res: Response) => {
   const isCheckoutAvailable = process.env.AIRA_COMMERCIAL_BILLING_ENABLED === 'true';
-  const isSandbox = process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
+  const isRehearsal = isStagingSandboxRehearsalActive();
+  const isSandbox = isRehearsal || process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
   const billingStatus = isCheckoutAvailable
     ? 'active'
-    : (isSandbox ? 'sandbox' : 'checkout_disabled');
+    : (isRehearsal ? 'sandbox_rehearsal' : (isSandbox ? 'sandbox' : 'checkout_disabled'));
 
   res.json({
     plans: Object.values(COMMERCIAL_PLANS).map(plan => ({
@@ -578,7 +580,7 @@ app.get('/api/billing/plans', (_req: Request, res: Response) => {
     })),
     topupPacks: [],
     billingStatus,
-    checkoutAvailable: isCheckoutAvailable,
+    checkoutAvailable: isCheckoutAvailable || isRehearsal,
     featuresCertified: true
   });
 });

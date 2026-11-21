@@ -8,6 +8,13 @@ import {
 } from '../../../../packages/contracts/src/commercial.js';
 import { commercialBillingService } from './commercial-billing-service.js';
 import { taxDeterminationService, TaxDeterminationResult } from './tax-determination.js';
+import {
+  isStagingSandboxRehearsalActive,
+  assertStagingSandboxRehearsalAllowed,
+  assertStagingSandboxRehearsalAllowedAsync,
+  isAuthorizedSyntheticTestPrincipal,
+  isProductionRuntime
+} from './staging-sandbox-rehearsal-guard.js';
 
 export interface WebhookVerificationResult {
   valid: boolean;
@@ -299,17 +306,30 @@ export function assertCommercialFulfillmentAllowed(eventType: string, gateway: s
   }
 
   // 3. Centralized fail-closed check
-  const isProduction = process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production';
+  const isProduction = isProductionRuntime();
   const isStaging = process.env.VERCEL_ENV === 'preview' || process.env.AIRA_ENVIRONMENT === 'staging';
   const isIsolatedTest = (process.env.NODE_ENV === 'test' || process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true') && !isProduction && !isStaging;
+  const rehearsalGateway: 'razorpay' | 'cashfree' | undefined = (gateway === 'razorpay' || gateway === 'cashfree') ? gateway : undefined;
 
   if (isProduction || isStaging) {
     if (process.env.AIRA_COMMERCIAL_BILLING_ENABLED !== 'true') {
+      if (isStaging && isStagingSandboxRehearsalActive()) {
+        // Enforce rehearsal infrastructure and gateway credentials without trusting client/payload notes.
+        // Webhook authorization is strictly anchored to the persisted DB purchase record.
+        assertStagingSandboxRehearsalAllowed({
+          gateway: rehearsalGateway
+        });
+        return; // Rehearsal infrastructure verified; account-level verification occurs during record resolution
+      }
       const envName = isProduction ? 'production' : 'staging';
       throw new Error(`BILLING_UNAVAILABLE: Commercial billing fulfillment is currently disabled in ${envName}. Paid entitlements cannot be granted.`);
     }
   } else {
     if (!isIsolatedTest && process.env.AIRA_COMMERCIAL_BILLING_ENABLED !== 'true') {
+      if (isStagingSandboxRehearsalActive()) {
+        assertStagingSandboxRehearsalAllowed({ gateway: rehearsalGateway });
+        return;
+      }
       throw new Error('BILLING_UNAVAILABLE: Paid fulfillment requires verified commercial billing activation or isolated test harness.');
     }
   }
@@ -390,6 +410,140 @@ export class PaymentGatewayService {
 
     this.memoryCreditNoteCounter++;
     return `CN-${year}-${String(this.memoryCreditNoteCounter).padStart(4, '0')}`;
+  }
+
+  /**
+   * Audit PostgreSQL invoice sequence allocation against recorded invoices.
+   * Identifies uncommitted draft sequence gaps caused by aborted transactions,
+   * satisfying statutory GST audit and cancellation ledger requirements (CGST Rule 46(b)).
+   *
+   * Differentiates:
+   * - AUDIT_VERIFIED_GAPLESS: Sequence inspected, all numbers accounted for
+   * - AUDIT_GAP_DETECTED: Sequence consumed without matching invoice record
+   * - AUDIT_QUERY_FAILED: Database error, table missing, query failure (NEVER returns isGapless: true)
+   * - AUDIT_INCOMPLETE_EVIDENCE: Sequence row missing, uncalled sequence with existing invoices, or invalid sequence
+   * - AUDIT_UNSUPPORTED_STORAGE: Client does not support PostgreSQL sequence inspection
+   */
+  async auditInvoiceSequenceGaps(trx?: any, year: number = 2026): Promise<{
+    status: 'AUDIT_VERIFIED_GAPLESS' | 'AUDIT_GAP_DETECTED' | 'AUDIT_QUERY_FAILED' | 'AUDIT_UNSUPPORTED_STORAGE' | 'AUDIT_INCOMPLETE_EVIDENCE';
+    currentSeq: number;
+    recordedInvoicesCount: number;
+    voidOrMissing: string[];
+    duplicates?: string[];
+    isGapless: boolean;
+    error?: string;
+  }> {
+    const isPg = trx && typeof trx.raw === 'function';
+    if (!isPg) {
+      return {
+        status: 'AUDIT_UNSUPPORTED_STORAGE',
+        currentSeq: this.memoryInvoiceCounter,
+        recordedInvoicesCount: this.memoryInvoiceCounter,
+        voidOrMissing: [],
+        isGapless: false,
+        error: 'Storage client does not support PostgreSQL sequence inspection'
+      };
+    }
+
+    try {
+      const seqRes = await trx.raw("SELECT last_value, is_called FROM billing_invoice_number_seq");
+      const row = seqRes?.rows?.[0] || seqRes?.[0];
+      if (!row) {
+        return {
+          status: 'AUDIT_INCOMPLETE_EVIDENCE',
+          currentSeq: 0,
+          recordedInvoicesCount: 0,
+          voidOrMissing: [],
+          isGapless: false,
+          error: 'Sequence record missing from billing_invoice_number_seq'
+        };
+      }
+
+      const invoicesRes = await trx.raw("SELECT invoice_number FROM billing_invoices WHERE invoice_number LIKE ?", [`INV-${year}-%`]);
+      const rows = invoicesRes?.rows || invoicesRes || [];
+
+      if (!row.is_called) {
+        if (rows.length === 0) {
+          return {
+            status: 'AUDIT_VERIFIED_GAPLESS',
+            currentSeq: 0,
+            recordedInvoicesCount: 0,
+            voidOrMissing: [],
+            isGapless: true
+          };
+        } else {
+          return {
+            status: 'AUDIT_INCOMPLETE_EVIDENCE',
+            currentSeq: 0,
+            recordedInvoicesCount: rows.length,
+            voidOrMissing: [],
+            isGapless: false,
+            error: 'Sequence is uncalled but invoices already exist in series'
+          };
+        }
+      }
+
+      const currentSeq = Number(row.last_value);
+      if (isNaN(currentSeq) || currentSeq <= 0) {
+        return {
+          status: 'AUDIT_INCOMPLETE_EVIDENCE',
+          currentSeq: isNaN(currentSeq) ? 0 : currentSeq,
+          recordedInvoicesCount: rows.length,
+          voidOrMissing: [],
+          isGapless: false,
+          error: `Invalid sequence counter value: ${row.last_value}`
+        };
+      }
+
+      const presentNumbers = new Set<number>();
+      const duplicates: string[] = [];
+      const seenNumbers = new Set<number>();
+
+      for (const r of rows) {
+        const invNum = r.invoice_number || '';
+        const numStr = invNum.split('-').pop();
+        if (numStr) {
+          const n = parseInt(numStr, 10);
+          if (!isNaN(n)) {
+            if (seenNumbers.has(n)) {
+              duplicates.push(invNum);
+            }
+            seenNumbers.add(n);
+            presentNumbers.add(n);
+          }
+        }
+      }
+
+      const voidOrMissing: string[] = [];
+      for (let i = 1; i <= currentSeq; i++) {
+        if (!presentNumbers.has(i)) {
+          voidOrMissing.push(`INV-${year}-${String(i).padStart(4, '0')}`);
+        }
+      }
+
+      const hasGaps = voidOrMissing.length > 0;
+      const hasDuplicates = duplicates.length > 0;
+      const isGapless = !hasGaps && !hasDuplicates;
+
+      return {
+        status: isGapless ? 'AUDIT_VERIFIED_GAPLESS' : 'AUDIT_GAP_DETECTED',
+        currentSeq,
+        recordedInvoicesCount: presentNumbers.size,
+        voidOrMissing,
+        duplicates: hasDuplicates ? duplicates : undefined,
+        isGapless,
+        error: hasDuplicates ? `Duplicate invoice numbers detected: ${duplicates.join(', ')}` : (hasGaps ? `Missing invoice sequence numbers: ${voidOrMissing.join(', ')}` : undefined)
+      };
+    } catch (err: any) {
+      return {
+        status: 'AUDIT_QUERY_FAILED',
+        currentSeq: 0,
+        recordedInvoicesCount: 0,
+        voidOrMissing: [],
+        isGapless: false,
+        error: `Audit query execution failed: ${err?.message || 'Unknown database error'}`
+      };
+    }
   }
 
   setDbClient(client: Knex | PaymentDbClient | null): void {
@@ -887,7 +1041,7 @@ export class PaymentGatewayService {
       }
 
       if (!purchaseRecord) {
-        const isProduction = process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production';
+        const isProduction = isProductionRuntime();
         const isStaging = process.env.VERCEL_ENV === 'preview' || process.env.AIRA_ENVIRONMENT === 'staging';
         if (!isProduction && !isStaging && (gatewayOrderId.startsWith('ord_test_') || gatewayOrderId.startsWith('test_'))) {
           return; // Acknowledged test webhook event in isolated test environment without entitlement mutation
@@ -945,6 +1099,27 @@ export class PaymentGatewayService {
 
       if (!principalId) {
         throw new TerminalRejectionError(`BILLING_RECONCILIATION_FAILED: Purchase record ${purchaseRecord.id} lacks verified principalId.`);
+      }
+
+      // STAGING REHEARSAL WEBHOOK SECURITY VERIFICATION:
+      // If commercial billing is disabled, fulfillment is only permitted if the persisted subscription
+      // was created in rehearsal mode AND its owner is an enrolled synthetic test account.
+      if (process.env.AIRA_COMMERCIAL_BILLING_ENABLED !== 'true') {
+        if (isStagingSandboxRehearsalActive()) {
+          const isRehearsalRecord = purchaseRecord.is_sandbox === true || meta.rehearsal === true || meta.isSandbox === true || meta.is_sandbox === true;
+          if (!isRehearsalRecord) {
+            throw new TerminalRejectionError(`REHEARSAL_SECURITY_VIOLATION: Webhook received for non-rehearsal subscription ${purchaseRecord.id} while commercial billing is disabled.`);
+          }
+          if (!isAuthorizedSyntheticTestPrincipal({ userId: principalId })) {
+            throw new TerminalRejectionError(`REHEARSAL_UNAUTHORIZED: Staging rehearsal fulfillment rejected: subscription owner '${principalId}' is not an enrolled synthetic test account.`);
+          }
+          // Live database session verification on the active transaction executing fulfillment
+          await assertStagingSandboxRehearsalAllowedAsync({
+            gateway: (gateway === 'razorpay' || gateway === 'cashfree') ? gateway : undefined,
+            principal: { userId: principalId },
+            clientOrTrx: trx
+          });
+        }
       }
 
       const plan = COMMERCIAL_PLANS[planTier] || COMMERCIAL_PLANS.plus;
@@ -1549,18 +1724,31 @@ export class PaymentGatewayService {
     principalId: string,
     planTier: PlanTier,
     currency: CurrencyCode = 'INR',
-    requestedGateway?: 'razorpay' | 'cashfree'
+    requestedGateway?: 'razorpay' | 'cashfree',
+    principalContext?: { userId: string; email?: string; isSynthetic?: boolean }
   ): Promise<CheckoutSessionResult> {
     const plan = COMMERCIAL_PLANS[planTier];
     if (!plan || planTier === 'free' || planTier === 'guest') {
       throw new Error(`Invalid plan tier for subscription checkout: ${planTier}`);
     }
 
+    const isRehearsal = isStagingSandboxRehearsalActive();
     if (process.env.AIRA_COMMERCIAL_BILLING_ENABLED !== 'true') {
-      throw new Error('BILLING_UNAVAILABLE: Live checkout has not been approved or integrated.');
+      if (isRehearsal) {
+        if (principalContext && principalContext.userId && principalContext.userId !== principalId) {
+          throw new Error('SECURITY_VIOLATION: Principal ID mismatch between route parameter and authenticated session context.');
+        }
+        await assertStagingSandboxRehearsalAllowedAsync({
+          gateway: requestedGateway || 'razorpay',
+          principal: principalContext || { userId: principalId },
+          clientOrTrx: this.getDb()
+        });
+      } else {
+        throw new Error('BILLING_UNAVAILABLE: Live checkout has not been approved or integrated.');
+      }
     }
 
-    const isSandbox = process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
+    const isSandbox = isRehearsal || process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
     let price: { id: string; amountMinorUnits: number; currency: CurrencyCode } | undefined;
 
     if (!isSandbox) {
@@ -1717,58 +1905,80 @@ export class PaymentGatewayService {
     }
 
     const now = Date.now();
+    const database = this.getDb();
+    const hasTransaction = typeof (database as any).transaction === 'function';
 
-    // Authoritative purchase record binding in database:
-    // Binds authenticated principal, customer ID, gateway order, plan, price, amount, and currency
-    await this.getDb()('subscriptions').insert({
-      id: purchaseId,
-      customer_id: customerId,
-      plan_id: planTier,
-      price_id: price.id,
-      status: 'pending',
-      gateway,
-      gateway_subscription_id: gatewayOrderId,
-      currency,
-      amount_minor_units: price.amountMinorUnits,
-      current_period_start: now,
-      current_period_end: now,
-      cancel_at_period_end: false,
-      metadata: JSON.stringify({
-        principalId,
-        customerId,
-        orderId: gatewayOrderId,
-        purchaseId,
-        planTier,
-        currency,
-        amount: price.amountMinorUnits,
-        priceId: price.id,
-        reconciliationStatus: 'AWAITING_PAYMENT',
-        isSandbox,
-        createdAt: now
-      }),
-      created_at: now,
-      updated_at: now
-    });
+    const persistCheckoutRecords = async (clientOrTrx: any) => {
+      // In rehearsal mode, verify live database session identity directly on the connection/transaction performing the write
+      if (isRehearsal) {
+        await assertStagingSandboxRehearsalAllowedAsync({
+          gateway: requestedGateway || 'razorpay',
+          principal: principalContext || { userId: principalId },
+          clientOrTrx
+        });
+      }
 
-    await this.getDb()('billing_audit_events').insert({
-      id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
-      customer_id: customerId,
-      event_type: 'CHECKOUT_ORDER_CREATED',
-      actor_type: 'principal',
-      actor_id: principalId,
-      payload: JSON.stringify({
-        purchaseId,
-        orderId: gatewayOrderId,
-        principalId,
-        planTier,
-        currency,
-        amount: price.amountMinorUnits,
-        priceId: price.id,
+      // Authoritative purchase record binding in database:
+      // Binds authenticated principal, customer ID, gateway order, plan, price, amount, and currency
+      await clientOrTrx('subscriptions').insert({
+        id: purchaseId,
+        customer_id: customerId,
+        plan_id: planTier,
+        price_id: price.id,
+        status: 'pending',
         gateway,
-        status: 'PENDING_PAYMENT'
-      }),
-      created_at: now
-    });
+        gateway_subscription_id: gatewayOrderId,
+        currency,
+        amount_minor_units: price.amountMinorUnits,
+        current_period_start: now,
+        current_period_end: now,
+        cancel_at_period_end: false,
+        metadata: JSON.stringify({
+          principalId,
+          customerId,
+          orderId: gatewayOrderId,
+          purchaseId,
+          planTier,
+          currency,
+          amount: price.amountMinorUnits,
+          priceId: price.id,
+          reconciliationStatus: 'AWAITING_PAYMENT',
+          isSandbox,
+          rehearsal: isRehearsal,
+          createdAt: now
+        }),
+        created_at: now,
+        updated_at: now
+      });
+
+      await clientOrTrx('billing_audit_events').insert({
+        id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+        customer_id: customerId,
+        event_type: 'CHECKOUT_ORDER_CREATED',
+        actor_type: 'principal',
+        actor_id: principalId,
+        payload: JSON.stringify({
+          purchaseId,
+          orderId: gatewayOrderId,
+          principalId,
+          planTier,
+          currency,
+          amount: price.amountMinorUnits,
+          priceId: price.id,
+          gateway,
+          status: 'PENDING_PAYMENT'
+        }),
+        created_at: now
+      });
+    };
+
+    if (hasTransaction) {
+      await (database as Knex).transaction(async (trx) => {
+        await persistCheckoutRecords(trx);
+      });
+    } else {
+      await persistCheckoutRecords(database);
+    }
 
     return {
       purchaseId,
@@ -2707,12 +2917,12 @@ export class PaymentGatewayService {
               sac_code: invoiceRecord.sacCode,
               supplier_name: invoiceRecord.supplierName,
               supplier_gstin: invoiceRecord.supplierGstin ?? null,
-              tax_compliance_status: invoiceRecord.taxComplianceStatus,
+              tax_compliance_status: isStagingSandboxRehearsalActive() ? 'SANDBOX_REHEARSAL' : invoiceRecord.taxComplianceStatus,
               place_of_supply: invoiceRecord.placeOfSupply,
               status: invoiceRecord.status,
               gateway: params.gateway,
               pdf_download_available: invoiceRecord.pdfDownloadAvailable,
-              metadata: JSON.stringify({}),
+              metadata: JSON.stringify(isStagingSandboxRehearsalActive() ? { is_sandbox: true, rehearsal: true } : {}),
               created_at: params.now,
               updated_at: params.now
             });
